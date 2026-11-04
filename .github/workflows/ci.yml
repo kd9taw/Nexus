@@ -934,6 +934,95 @@ jobs:
             ${{ runner.temp }}/spectrum-harness/pixels/
           if-no-files-found: ignore
 
+  # The desktop layout probes (`scripts/browser-probe --desktop <name>`, ui/probe/), every one of them.
+  #
+  # Each probe serves the app's own source with ui/'s Vite config and drives headless Chrome over it
+  # at real window sizes, asserting what jsdom cannot see: a control on screen, topmost, not pushed to
+  # a second line, nothing scrolling sideways; and each runs a planted control that must come back
+  # red, so a green is one that could have failed. They need ui/'s and remote/'s node_modules (the
+  # Chrome launcher in remote/test/browser-runtime.mjs imports `ws`) and a Chrome; no UI build, no
+  # Rust, and no network once Chrome is in place. Until this job they ran only when somebody
+  # remembered to, and a red one reached main that way: the profile picker's top-bar row.
+  #
+  # Chrome is PINNED, not the runner's: the image moves its Chrome weekly, and a layout probe that
+  # changes verdict with no change of ours is a probe somebody deletes. Chrome for Testing at the
+  # version the probes were proved green on locally, from Google's bucket, checked against the
+  # SHA-256 of that file (whose MD5 matched the bucket's own x-goog-hash), cached by version. Bumping
+  # it is a deliberate step: new version, new checksum, all shards green.
+  #
+  # Unpacking it also takes care of Chrome's cold start: browser-runtime.mjs gives each start 30 s,
+  # which a cold runner has exceeded reading its own Chrome (34.6 s at worst, see CHROME_COLD_START_MS),
+  # and the files just written or restored are in the page cache when the first probe starts.
+  #
+  # The probes are dealt round-robin over the matrix from scripts/browser-probe's DESKTOP_ALL, which
+  # is ordered slowest first so the two halves come out even (each 5.6 to 7.4 minutes on four cores
+  # of the development box, pinned Chrome, 2026-11-04). The count is stated twice, as the matrix
+  # length and as --desktop-shard's <of>, and scripts/gates.test.mjs holds the two equal. In series within a shard: each probe starts its own
+  # Vite server and Chrome, and two on four cores would race each other's frames. A red does not stop
+  # the shard; the end of the step names every red one.
+  desktop-probes:
+    name: Desktop layout probes (shard ${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            ui/package-lock.json
+            remote/package-lock.json
+      - name: Install UI and Remote dependencies
+        run: |
+          npm --prefix ui ci
+          npm --prefix remote ci
+      - name: Cache the pinned Chrome for Testing
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/chrome-for-testing/156.0.8078.73
+          key: chrome-for-testing-156.0.8078.73-linux64
+      # python3 unpacks it, as the street-map step's rclone, because not every box has unzip. Its
+      # zipfile drops the permission bits, so the two programs a headless start runs get theirs back
+      # (the archive's other executables are shared libraries, or the setuid sandbox --no-sandbox skips).
+      - name: Chrome for Testing 156.0.8078.73, checked against its SHA-256
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/chrome-for-testing/156.0.8078.73"
+          if [ ! -x "$dir/chrome-linux64/chrome" ]; then
+            curl -fsSLo "$RUNNER_TEMP/chrome-linux64.zip" https://storage.googleapis.com/chrome-for-testing-public/156.0.8078.73/linux64/chrome-linux64.zip
+            echo "c51c24f0126534aaf6d21d1f85b8e243934b3951989dbb59a1f8aab8e32b20c1  $RUNNER_TEMP/chrome-linux64.zip" | sha256sum -c -
+            python3 -m zipfile -e "$RUNNER_TEMP/chrome-linux64.zip" "$dir"
+            chmod +x "$dir/chrome-linux64/chrome" "$dir/chrome-linux64/chrome_crashpad_handler"
+            rm -f "$RUNNER_TEMP/chrome-linux64.zip"
+          fi
+          "$dir/chrome-linux64/chrome" --version
+      # The fonts are the runner's, and the probes measure text: printed so a red that only CI sees
+      # can be told from a font that differs from the box the probe was written on.
+      - name: Every desktop probe of this shard, in real Chrome
+        env:
+          CHROME_BIN: ${{ runner.temp }}/chrome-for-testing/156.0.8078.73/chrome-linux64/chrome
+          DESKTOP_PROBE_ARTIFACTS: ${{ runner.temp }}/desktop-probes
+        run: |
+          fc-match sans-serif
+          fc-match monospace
+          scripts/browser-probe --desktop-shard ${{ matrix.shard }} 2
+      # Only on failure, as the browser sweep's: each red probe's log and the last picture of each of
+      # its pages (a green probe's are removed as it passes).
+      - name: The red probes' logs and pictures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-probes-shard-${{ matrix.shard }}-failure
+          path: ${{ runner.temp }}/desktop-probes/
+          if-no-files-found: ignore
+
   # The downloadable manual's EPUB must stay valid — a doc change that breaks it should go
   # red here, on the push, not be discovered on a Kindle after release. Builds the EPUB only
   # (no Chrome/PDF) and runs the official W3C epubcheck, which exits non-zero on any error.
