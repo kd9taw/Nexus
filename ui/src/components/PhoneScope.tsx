@@ -88,6 +88,7 @@ import {
 } from '../spectrum/overlays'
 import { usePrivilegeSpans } from '../spectrum/usePrivilegeSpans'
 import { drawScaleStrip, scaleStripHeight, scopeScaleTicks, SCALE_MIN_GAP_PX } from '../freqScale'
+import { PALETTE_ROLES } from '../features/paletteRoles'
 import { useWaterfallPalette } from '../waterfallPalette'
 import { useNightActive } from '../useNight'
 import { useSkinActive } from '../useSkin'
@@ -484,6 +485,8 @@ export function PhoneScope({
   const keyDialRef = useRef<{ hz: number; at: number } | null>(null)
   /** Redraw only the overlay — a gesture or a mark's prop between two sweeps, or while paused. */
   const overlayRef = useRef<(() => void) | null>(null)
+  /** Read the display well's inks again and redraw the overlays and the marks (the theme's tokens moved). */
+  const repaintInksRef = useRef<(() => void) | null>(null)
   const pitchRef = useRef(pitchHz)
   const cwPitchRefRef = useRef(cwPitchRefDial)
   const interactiveRef = useRef(interactive)
@@ -590,6 +593,21 @@ export function PhoneScope({
   /** May a spot's tag be clicked now: the cockpit's tuning gate (CAT up, not transmitting), a host that
    *  works spots, and not the click-only Remote scope. */
   const spotsClickable = () => interactiveRef.current && onSpotRef.current != null && onBeginClickRef.current == null
+
+  // THE INKS FOLLOW THE PAGE'S COLOUR ATTRIBUTES, NOT THE THEME PROP. The app sets `data-theme` on
+  // <html> in an effect that runs after this scope has already redrawn for the new `theme` prop, so
+  // the marks (the width scale's well ground and ink) and the overlays (band-edge tint, tags) were read
+  // in the OLD theme's tokens, and nothing moved afterwards to draw them again: they kept the old
+  // colours until some unrelated change. Night, a built-in skin and the colour roles retune the same
+  // tokens through attributes of their own. Each change of one of those attributes reads the inks again.
+  useEffect(() => {
+    const mo = new MutationObserver(() => repaintInksRef.current?.())
+    mo.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme', 'data-night', 'data-skin', ...PALETTE_ROLES.map((r) => r.attr)],
+    })
+    return () => mo.disconnect()
+  }, [])
 
   useLayoutEffect(() => {
     lutRef.current = bakeLut(resolveColormap(palette, theme, night, skin))
@@ -1063,6 +1081,14 @@ export function PhoneScope({
       hitsRef.current = { w: devW, h: devH, hits: out.hits }
     }
     overlaysSyncRef.current = syncOverlays
+    repaintInksRef.current = () => {
+      if (!(devW > 0 && devH > 0)) return
+      inks = null
+      overlaysKey = ''
+      marksKey = ''
+      syncOverlays()
+      syncMarks()
+    }
 
     /** Everything the marks last drew from, as one string; '' = draw them again. */
     let marksKey = ''

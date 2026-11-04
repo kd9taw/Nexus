@@ -188,3 +188,27 @@ describe('the colour legend stays off the scale', () => {
     expect(css(legend, 'overflow')).toBe('hidden')
   })
 })
+
+describe('a legend squeezed to no bar is hidden, not left as a lone "0"', () => {
+  // At 175 % on a short waterfall the legend, held off the scale, kept only its top tick: a "0" in the
+  // corner that reads like a frequency. With its colour bar under 12 px it is hidden whole.
+  beforeAll(() => loadSheets())
+  const withBar = async (h: number) => {
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('wf-legend-bar') ? h : 0
+    })
+    const { container } = render(<Waterfall transmitting={false} rxOffsetHz={1500} txOffsetHz={1000} theme="dark" />)
+    await frames(60)
+    return container.querySelector('.wf-legend')!
+  }
+  it('a 4 px bar: the legend is hidden through the cascade', async () => {
+    const legend = await withBar(4)
+    expect(legend.hasAttribute('data-squeezed')).toBe(true)
+    expect(css(legend, 'visibility')).toBe('hidden')
+  })
+  it('control: a full 56 px bar shows the legend', async () => {
+    const legend = await withBar(56)
+    expect(legend.hasAttribute('data-squeezed')).toBe(false)
+    expect(css(legend, 'visibility')).not.toBe('hidden')
+  })
+})

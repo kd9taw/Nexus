@@ -71,6 +71,8 @@ const ZERO_KEY = 'nexus.waterfall.zero'
  *  after the mode's own, so a span chosen before each mode had its own keeps opening as it did;
  *  nothing writes it, so it can never again carry a pick from one mode into another. */
 const ZOOM_KEY = 'nexus.waterfall.zoom'
+/** The least colour bar, layout px, the legend is shown with (see `legendBarRef`). */
+const LEGEND_BAR_MIN_PX = 12
 /** PER-SURFACE: FT's span (the Operate cockpit and its torn-off copy), the `zoomKey` default. */
 const FT_ZOOM_KEY = 'nexus.waterfall.ft.zoom'
 /** PER-SURFACE: 2D scroll vs 3D stacked-spectrum (3DSS) view. A torn-off 3D display next to a
@@ -539,6 +541,9 @@ export function Waterfall({
   const lutRef = useRef<Uint8ClampedArray>(lutFor(resolveColormap(palette, theme, night, skin), contrastCurve))
   // live legend readout (updated directly, no React re-render at 8 Hz)
   const dbLabelRef = useRef<HTMLSpanElement>(null)
+  /** The legend's colour bar: under `LEGEND_BAR_MIN_PX` tall (a short waterfall, the legend held off
+   *  the scale) the legend is hidden whole rather than left as a lone "0" that reads as a frequency. */
+  const legendBarRef = useRef<HTMLDivElement>(null)
   // The picture is the spectrum renderer's (ui/src/spectrum). It keeps every row as DATA, the
   // flattened values at the feed's own resolution, each with its own frequency span and the range it
   // was drawn in, and draws through WebGL2 or canvas-2D from that history: a palette, zoom, resize,
@@ -784,6 +789,8 @@ export function Waterfall({
       cssW = Math.max(1, rect.width)
       cssH = Math.max(1, rect.height)
       textScale = overlayTextScale(rect.width, canvas.offsetWidth)
+      const bar = legendBarRef.current
+      if (bar) bar.parentElement?.toggleAttribute('data-squeezed', bar.clientHeight < LEGEND_BAR_MIN_PX)
       const { dW, dH } = measure(entry)
       // Keep the draw scale fresh even when the pixel size is unchanged.
       scaleX = dW / cssW
@@ -1584,7 +1591,7 @@ export function Waterfall({
           title={t('waterfall.legend.title')}
         >
           <span className="wf-legend-tick">0</span>
-          <div className="wf-legend-bar" style={{ background: legendGradient }} />
+          <div ref={legendBarRef} className="wf-legend-bar" style={{ background: legendGradient }} />
           <span className="wf-legend-tick">
             <span ref={dbLabelRef}>−40</span>
           </span>

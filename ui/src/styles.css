@@ -18120,6 +18120,11 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   max-height: calc(100% - 30px);
   overflow: hidden;
 }
+/* Squeezed to no bar at all (Waterfall's `legendBarRef`): hidden whole, so a clipped tick never
+   stands alone in the corner reading like a frequency. */
+.wf-legend[data-squeezed] {
+  visibility: hidden;
+}
 .wf-legend-bar {
   width: 8px;
   height: 56px;

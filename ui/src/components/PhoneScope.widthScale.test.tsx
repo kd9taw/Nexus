@@ -12,6 +12,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
 import { PhoneScope } from './PhoneScope'
+import type { SpectrumScene } from '../spectrum'
+
+/** Every scene the scope hands its renderer: the real renderer, its `draw` watched. */
+const scenes = vi.hoisted(() => [] as SpectrumScene[])
+vi.mock('../spectrum', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../spectrum')>()
+  return {
+    ...real,
+    createSpectrumRenderer: (...a: Parameters<typeof real.createSpectrumRenderer>) => {
+      const r = real.createSpectrumRenderer(...a)
+      const draw = r.draw.bind(r)
+      r.draw = (scene: SpectrumScene) => {
+        scenes.push(scene)
+        draw(scene)
+      }
+      return r
+    },
+  }
+})
 
 vi.setConfig({ testTimeout: 15_000 })
 
@@ -41,6 +60,7 @@ beforeEach(() => {
   seq = 0
   served = AUDIO_ROW
   marks = []
+  scenes.length = 0
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] })
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(performance.now()), 16))
   vi.stubGlobal('cancelAnimationFrame', clearTimeout)
@@ -176,4 +196,65 @@ describe('the strip sits under everything, and the MHz above it', () => {
       expect(last[1] + last[0].length * 6).toBeLessThanOrEqual(W)
     }
   })
+})
+
+describe('the picture leaves the strip to the scale', () => {
+  // The renderer is told to stop its rows above the strip (`layout.stripH`), so no waterfall row — the
+  // newest, when the flow puts it at the bottom — is ever drawn under the numbers.
+  it('the scene’s strip is the strip’s own height whenever one is drawn', async () => {
+    await scope({ sideband: 'USB', carrierCentered: true, viewLoHz: 0, viewHiHz: 2700, dialHz: 14_200_000 })
+    const ground = marks.find((o) => o.op === 'fillRect' && o.args[1] === TOP && o.args[0] === 0)
+    expect(ground, 'the strip is drawn').toBeTruthy()
+    expect(scenes.length, 'control: the picture was drawn').toBeGreaterThan(0)
+    const last = scenes[scenes.length - 1]
+    expect(last.mode).toBe('2d')
+    expect(last.layout.stripH).toBe(ground!.args[3])
+    expect(last.layout.stripH).toBe(H - TOP)
+  })
+})
+
+describe('the scale’s spacing follows the text size', () => {
+  // At a 175–200 % UI zoom the labels are drawn twice the size, so the ticks must stand further apart:
+  // the scope hands the text scale to the scale's room rule, not a fixed 48 px.
+  it('at text scale 2 Phone’s Full steps out from 500 to 1000 Hz, with the strip and labels twice the size', async () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('ph-scope-canvas') ? W / 2 : 0
+    })
+    await scope({ sideband: 'USB', carrierCentered: true, viewLoHz: 0, viewHiHz: 5000, dialHz: 14_200_000 })
+    const top = H - 36
+    const labels = marks.filter((o) => o.op === 'fillText' && o.args[2] === top + 18).map((o) => o.args[0])
+    expect(labels).toEqual(['0', '1000', '2000', '3000', '4000', '5000'])
+  })
+  it('control: at text scale 1 the same view keeps 500 Hz', async () => {
+    await scope({ sideband: 'USB', carrierCentered: true, viewLoHz: 0, viewHiHz: 5000, dialHz: 14_200_000 })
+    expect(strip().length).toBe(11)
+  })
+})
+
+describe('the strip follows the theme', () => {
+  // The app sets `data-theme` on <html> in an effect that runs AFTER the scope has redrawn for the new
+  // theme prop, so a strip painted then read the OLD theme's well inks and kept them: the marks are
+  // drawn again only when what they are drawn from moves, and nothing moved after the attribute did.
+  // Night and a built-in skin retune the same tokens through attributes of their own; in the app their
+  // hooks also re-render the scope after the attribute, but the scope answers the attribute itself, so
+  // it does not depend on that order.
+  for (const [attr, value] of [['data-theme', 'light'], ['data-night', '1'], ['data-skin', 'amber']] as const) {
+    it(`repaints in the new well inks once ${attr} changes, even with nothing else moving`, async () => {
+      const props = { sideband: 'USB', carrierCentered: true, viewLoHz: 0, viewHiHz: 2700, dialHz: 14_200_000 }
+      served = AUDIO_ROW
+      const ui = render(<PhoneScope transmitting={false} theme="dark" active interactive onTune={() => {}} {...props} />)
+      await draw()
+      const inkOf = () => marks.filter((o) => o.op === 'fillText' && o.args[2] === TOP + 9).map((o) => o.fill)
+      expect(inkOf()[0]).toBe(INK)
+      // The host's prop moves first (the scope redraws, the page still in the old theme's tokens)…
+      if (attr === 'data-theme') ui.rerender(<PhoneScope transmitting={false} theme="light" active interactive onTune={() => {}} {...props} />)
+      await draw()
+      // …then the page's attribute, and with it the token.
+      document.documentElement.style.setProperty('--well-ink', '#a0a0a0')
+      document.documentElement.setAttribute(attr, value)
+      await draw()
+      expect(new Set(inkOf())).toEqual(new Set(['#a0a0a0']))
+      document.documentElement.removeAttribute(attr)
+    })
+  }
 })
