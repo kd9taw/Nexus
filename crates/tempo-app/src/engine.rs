@@ -1988,6 +1988,12 @@ const CW_REFUSED_CW_PRIVILEGES: &str = "CW not sent: where it would key is outsi
      license's CW privileges, so it was dropped.";
 /// …and when the operator LEFT the CW screen with words still to go
 /// ([`Engine::set_operating_mode_with_reset`]): dropped, not keyed from the screen they went to.
+/// The CW cockpit's warning line when CW is refused because the chosen Serial keyline or WinKeyer
+/// has no port set (#434): nothing keys, and nothing keys through another keyer instead.
+const CW_NO_KEYLINE_PORT: &str = "CW not sent: Serial keyline is your keyer, but no port is set. \
+     Pick the keyline serial port in Settings ▸ CW.";
+const CW_NO_WINKEYER_PORT: &str = "CW not sent: WinKeyer is your keyer, but no port is set. \
+     Pick the WinKeyer port in Settings ▸ CW.";
 const CW_LEFT_SECTION: &str = "CW stopped: you left the CW screen, so what was still to go was \
      dropped. Send it again when you are ready.";
 
@@ -12739,6 +12745,7 @@ impl Engine {
         }
         // Said in the strip's own line, so the CW cockpit's warning line does not say it twice.
         if let Some(why) = self.cw_message_refusal(&expanded) {
+            tempo_core::applog::info("tx", &format!("CW not keyed by Enter: {why}"));
             return Err(why);
         }
         tempo_core::applog::info("tx", &format!("CW over queued by Enter: {expanded:?}"));
@@ -12754,8 +12761,14 @@ impl Engine {
     /// the words before it have keyed, and by then Enter Sends Message has logged the contact with
     /// its exchange cut short. So every word is asked here, before any is queued, and the keyer
     /// still checks each word it is handed. The other keyers put no text inside a radio command,
-    /// and their messages go as before.
+    /// and their messages go as before. Before either, a keyline or WinKeyer with no port
+    /// ([`Self::cw_keyer_port_refusal`]) refuses any message at all.
     fn cw_message_refusal(&self, expanded: &str) -> Option<String> {
+        if !expanded.trim().is_empty() {
+            if let Some(why) = self.cw_keyer_port_refusal() {
+                return Some(why.to_string());
+            }
+        }
         if !self.cw_cat_keyer() {
             return None;
         }
@@ -12978,6 +12991,8 @@ impl Engine {
             Some(("transmit is off", CW_REFUSED_TX_OFF))
         } else if let Some(why) = self.connection_tx_refusal() {
             Some((why, why))
+        } else if let Some(why) = self.cw_keyer_port_refusal() {
+            Some(("the chosen keyer has no port set", why))
         } else if !self.tx_allowed() {
             Some((
                 "the dial is outside the licence's privileges",
@@ -13089,12 +13104,30 @@ impl Engine {
     }
 
     /// True if CW keys on the RADIO'S OWN keyer (the CAT keyer, `rig.send_morse`): the keyer the
-    /// radio loop hands a word to when no other takes it, so a WinKeyer or a key line chosen with
-    /// no port set ([`Self::cw_winkeyer_port`], [`Self::cw_serial_key_port`]) keys there too.
+    /// radio loop hands a word to when no other takes it. A WinKeyer or a key line chosen with no
+    /// port set ([`Self::cw_winkeyer_port`], [`Self::cw_serial_key_port`]) counts here too, but
+    /// is never handed a word: [`Self::cw_keyer_port_refusal`] refuses it first.
     fn cw_cat_keyer(&self) -> bool {
         !self.cw_soundcard()
             && self.cw_winkeyer_port().is_none()
             && self.cw_serial_key_port().is_none()
+    }
+
+    /// ⛔ Why CW may not key at all: the chosen keyer is a Serial keyline or a WinKeyer and its port
+    /// box is blank (#434). Such a word used to fall through to the radio's CAT keyer, a keyer the
+    /// operator never chose, with nothing said; now it is refused at the send and at keying time
+    /// ([`Self::poll_cw_word`]), and keys through no other path. `None` for every other case.
+    fn cw_keyer_port_refusal(&self) -> Option<&'static str> {
+        use crate::settings::CwKeyerBackend;
+        match self.settings.cw_keyer {
+            CwKeyerBackend::Serial if self.cw_serial_key_port().is_none() => {
+                Some(CW_NO_KEYLINE_PORT)
+            }
+            CwKeyerBackend::WinKeyer if self.cw_winkeyer_port().is_none() => {
+                Some(CW_NO_WINKEYER_PORT)
+            }
+            _ => None,
+        }
     }
 
     /// The WinKeyer serial port when the CW keyer backend is WinKeyer and a port is set —
@@ -47242,6 +47275,127 @@ mod tests {
             e.cw_keyer_error().is_some(),
             "the next refusal is noticed again"
         );
+    }
+
+    /// ⛔ #434: a Serial keyline or a WinKeyer picked with its port box blank REFUSES CW, and
+    /// keys through nothing else. It used to fall to the radio's own CAT keyer without a word, so
+    /// the screen said "sending" over a keyer the operator never chose. Refused at the send (an
+    /// F-key's and Enter's), nothing armed or queued, and at keying time for what was queued
+    /// before the port was cleared. The CW screen's warning line says where to pick the port.
+    #[test]
+    fn a_keyline_or_winkeyer_with_no_port_refuses_cw_and_keys_nothing_else() {
+        for (backend, says) in [
+            ("serial", "Pick the keyline serial port in Settings ▸ CW"),
+            ("winkeyer", "Pick the WinKeyer port in Settings ▸ CW"),
+        ] {
+            for blank in ["", "   "] {
+                let mut e = Engine::new("KD9TAW", "EN52", 0);
+                e.set_license_class("extra");
+                e.set_operating_mode("cw", false);
+                e.set_frequency(7.030, "40m", "CW");
+                e.settings.cw_key_port = blank.into();
+                e.settings.winkeyer_port = blank.into();
+                e.set_cw_keyer(backend, 600.0);
+                e.send_cw("TEST");
+                assert_eq!(e.poll_cw_one(), None, "{backend} {blank:?}: nothing keys");
+                assert!(
+                    e.cw_keyer_error().is_some_and(|w| w.contains(says)),
+                    "{backend} {blank:?}: the CW screen says where: {:?}",
+                    e.cw_keyer_error()
+                );
+                let enter = e.send_cw_armed("TEST");
+                assert!(
+                    enter.as_ref().is_err_and(|w| w.contains(says)),
+                    "{backend} {blank:?}: Enter is refused too: {enter:?}"
+                );
+                assert_eq!(e.poll_cw_one(), None, "{backend} {blank:?}: nothing queued");
+
+                // ⛔ After Stop TX, the refused F-key send writes nothing of the transmit state:
+                // the latch stays down with its stop hold, and the Stop TX the loop has not yet
+                // taken (the CW abort, the slot-TX abort) is still pending. A send that keys
+                // re-arms all of this; a refused one must not.
+                e.halt_tx();
+                e.send_cw("TEST");
+                assert_eq!(
+                    (
+                        e.tx_enabled(),
+                        e.tx_stop_hold,
+                        e.take_cw_abort(),
+                        e.take_slot_tx_abort()
+                    ),
+                    (false, true, true, true),
+                    "{backend} {blank:?}: (TX on, the stop hold, the CW abort, the slot-TX abort)"
+                );
+                assert_eq!(e.poll_cw_one(), None, "{backend} {blank:?}: nothing keys");
+
+                // Queued with the port set, then the port cleared: dropped at keying time.
+                let mut e = Engine::new("KD9TAW", "EN52", 0);
+                e.set_license_class("extra");
+                e.set_operating_mode("cw", false);
+                e.set_frequency(7.030, "40m", "CW");
+                e.settings.cw_key_port = "COM5".into();
+                e.settings.winkeyer_port = "COM6".into();
+                e.set_cw_keyer(backend, 600.0);
+                e.send_cw("CQ TEST");
+                assert_eq!(e.poll_cw_one().as_deref(), Some("CQ"));
+                e.settings.cw_key_port = blank.into();
+                e.settings.winkeyer_port = blank.into();
+                assert_eq!(
+                    e.poll_cw_one(),
+                    None,
+                    "{backend} {blank:?}: the rest is dropped"
+                );
+                assert!(e.cw_keyer_error().is_some_and(|w| w.contains(says)));
+                e.settings.cw_key_port = "COM5".into();
+                e.settings.winkeyer_port = "COM6".into();
+                assert_eq!(e.poll_cw_one(), None, "{backend}: dropped, never held");
+            }
+        }
+    }
+
+    /// The control for the refusal above: with the port set, and on the keyers that have no
+    /// port, CW keys as it always did, and the loop is handed the port it keys on.
+    #[test]
+    fn cw_with_its_keyer_port_set_keys_as_before() {
+        for backend in ["serial", "winkeyer", "cat", "soundcard"] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_license_class("extra");
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.030, "40m", "CW");
+            e.settings.cw_key_port = "COM5".into();
+            e.settings.winkeyer_port = "COM6".into();
+            e.set_cw_keyer(backend, 600.0);
+            e.send_cw("TEST");
+            assert_eq!(e.poll_cw_one().as_deref(), Some("TEST"), "{backend}");
+            assert_eq!(e.cw_keyer_error(), None, "{backend}");
+            assert!(e.send_cw_armed("TEST").is_ok(), "{backend}: Enter");
+            assert_eq!(e.poll_cw_one().as_deref(), Some("TEST"), "{backend}: Enter");
+            assert_eq!(
+                (e.cw_serial_key_port(), e.cw_winkeyer_port()),
+                match backend {
+                    "serial" => (Some("COM5".into()), None),
+                    "winkeyer" => (None, Some("COM6".into())),
+                    _ => (None, None),
+                },
+                "{backend}: the port the loop keys on"
+            );
+        }
+        // The keyers with no port never refuse for one.
+        for backend in ["cat", "soundcard"] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_license_class("extra");
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.030, "40m", "CW");
+            e.settings.cw_key_port = String::new();
+            e.settings.winkeyer_port = String::new();
+            e.set_cw_keyer(backend, 600.0);
+            e.send_cw("TEST");
+            assert_eq!(
+                e.poll_cw_one().as_deref(),
+                Some("TEST"),
+                "{backend}, no ports"
+            );
+        }
     }
 
     /// ⭐ THE PADDLE'S STOP IS NOT STOP TX (operator ruling, 2026-10-12: the paddle wins). When the
