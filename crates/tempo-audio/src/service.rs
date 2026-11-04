@@ -611,6 +611,11 @@ mod scope_rate_log_tests {
             scope_rate_worth_logging(Some(&last), soon, &rate(9.6, 0, "slow")),
             "speed"
         );
+        let not_yet = t0 + Duration::from_secs(59);
+        assert!(
+            !scope_rate_worth_logging(Some(&last), not_yet, &rate(9.6, 0, "fast")),
+            "59 s with nothing changed: no line yet"
+        );
         let later = t0 + Duration::from_secs(60);
         assert!(
             scope_rate_worth_logging(Some(&last), later, &rate(9.6, 0, "fast")),
@@ -9607,47 +9612,6 @@ impl RadioLoop {
                     for sweep in d.take_scope_rows() {
                         crate::civ::scope::publish_sweep(&self.spectrum_feed, sweep);
                     }
-                    // MEASURE IT: the sweeps a second this radio really sends, and how many never
-                    // reached a scope on screen. Once a window (`SweepMeter::WINDOW`), with the
-                    // radio's scope SPEED read alongside: one short `27 1A` read, never while
-                    // keyed (the stream, and so this, is off then). Read only; the speed is the
-                    // operator's to set on the radio.
-                    if streaming {
-                        let c = d.scope_counts();
-                        let dropped = c.dropped + self.spectrum_feed.rf_dropped();
-                        let now = std::time::Instant::now();
-                        if let Some(rate) = self.scope_meter.sample(now, c.assembled, dropped) {
-                            let stats = tempo_app::dto::ScopeRate {
-                                sweeps_per_sec: rate.sweeps_per_sec,
-                                dropped: rate.dropped,
-                                speed: d.scope_speed().map(|s| s.as_str().to_string()),
-                            };
-                            if scope_rate_worth_logging(
-                                self.scope_rate_logged.as_ref(),
-                                now,
-                                &stats,
-                            ) {
-                                tempo_core::applog::info(
-                                    "cat",
-                                    &format!(
-                                        "CI-V scope stream: {:.1} sweeps/s, {} dropped since it \
-                                         came on, radio scope SPEED {} ({})",
-                                        stats.sweeps_per_sec,
-                                        stats.dropped,
-                                        stats.speed.as_deref().unwrap_or("did not answer"),
-                                        if self.applied.is_icom_lan() {
-                                            "network".to_string()
-                                        } else {
-                                            format!("{} baud", self.applied.baud)
-                                        },
-                                    ),
-                                );
-                                self.scope_rate_logged = Some((now, stats.clone()));
-                            }
-                            engine_lock(engine).set_scope_rate(Some(stats));
-                            self.scope_rate_shown = true;
-                        }
-                    }
                 } else {
                     // DATA mode (FT8/FT4) with no RF scope pane, or the operator's audio waterfall:
                     // drop any stale native row so the audio FFT takes over immediately (no ~1 s
@@ -9656,9 +9620,45 @@ impl RadioLoop {
                     self.spectrum_feed.clear_rf();
                     let _ = d.take_scope_rows();
                 }
-                // Not streaming: the next measurement starts afresh. Kept on the snapshot through
-                // an over (the stream pauses while keyed), cleared when the stream is off for good.
-                if !streaming {
+                // MEASURE IT: the sweeps a second this radio really sends, and how many never
+                // reached a scope on screen. Once a window (`SweepMeter::WINDOW`), with the
+                // radio's scope SPEED read alongside: one short `27 1A` read, ONLY while the stream
+                // runs, so never while keyed. Read only; the speed is the operator's to set on the
+                // radio. Not streaming: the next measurement starts afresh, and the snapshot keeps
+                // the last one through an over (the stream pauses while keyed) and drops it when
+                // the stream is off for good.
+                if streaming {
+                    let c = d.scope_counts();
+                    let dropped = c.dropped + self.spectrum_feed.rf_dropped();
+                    let now = std::time::Instant::now();
+                    if let Some(rate) = self.scope_meter.sample(now, c.assembled, dropped) {
+                        let stats = tempo_app::dto::ScopeRate {
+                            sweeps_per_sec: rate.sweeps_per_sec,
+                            dropped: rate.dropped,
+                            speed: d.scope_speed().map(|s| s.as_str().to_string()),
+                        };
+                        if scope_rate_worth_logging(self.scope_rate_logged.as_ref(), now, &stats) {
+                            tempo_core::applog::info(
+                                "cat",
+                                &format!(
+                                    "CI-V scope stream: {:.1} sweeps/s, {} dropped since it \
+                                     came on, radio scope SPEED {} ({})",
+                                    stats.sweeps_per_sec,
+                                    stats.dropped,
+                                    stats.speed.as_deref().unwrap_or("did not answer"),
+                                    if self.applied.is_icom_lan() {
+                                        "network".to_string()
+                                    } else {
+                                        format!("{} baud", self.applied.baud)
+                                    },
+                                ),
+                            );
+                            self.scope_rate_logged = Some((now, stats.clone()));
+                        }
+                        engine_lock(engine).set_scope_rate(Some(stats));
+                        self.scope_rate_shown = true;
+                    }
+                } else {
                     self.scope_meter.reset();
                     self.scope_rate_logged = None;
                     if !keyed_now && std::mem::take(&mut self.scope_rate_shown) {

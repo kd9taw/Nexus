@@ -329,15 +329,17 @@ struct FeedRows {
     rf: Option<(SpectrumFrame, Instant)>,
     /// Whether `rf` has been handed to an in-order reader yet (see [`FeedRows::rf_next_after`]).
     rf_shown: bool,
-    /// The RF frames published before `rf`, oldest first, at most [`SpectrumFeed::RF_BACKLOG`]:
+    /// Whether a scope was reading when `rf` was published: see [`RfEntry::watched`].
+    rf_watched: bool,
+    /// The CI-V frames published before `rf`, oldest first, at most [`SpectrumFeed::RF_BACKLOG`]:
     /// what lets a reader that polls between two publishes still draw each one, in order, rather
-    /// than only the newest. See [`FeedRows::rf_next_after`].
+    /// than only the newest. See [`FeedRows::rf_next_after`]. Empty for any other source.
     rf_prev: VecDeque<RfEntry>,
     /// When an in-order reader last read the RF slot: frames are counted as dropped only while
     /// someone is drawing them.
     rf_read_at: Option<Instant>,
-    /// RF frames that left the backlog without ever being drawn while a reader was drawing:
-    /// pushed out by newer ones, or stepped over by a reader that fell behind.
+    /// CI-V frames that left the backlog undrawn although a scope was reading when they were
+    /// published: pushed out by newer ones, or stepped over by a reader that fell behind.
     rf_dropped: u64,
     /// The span the on-screen rig scope is actually showing, and the row computed over it.
     /// See [`SpectrumFeed::scope_row`] — this is the second slot, not a second feed.
@@ -402,30 +404,40 @@ impl FeedRows {
         self.rf_prev.clear();
     }
 
-    /// Make `frame` the newest RF frame; the one it replaces joins the backlog, and a full backlog
-    /// lets its oldest go, counted as dropped if no reader had drawn it while one was reading.
+    /// Make `frame` the newest RF frame.
+    ///
+    /// ONLY A CI-V SCOPE KEEPS A BACKLOG. Its sweeps come a few to some fifteen a second, slower
+    /// than a scope polls, so every one can be drawn; the frame `frame` replaces joins the backlog,
+    /// and a full backlog lets its oldest go, counted as dropped if a scope was reading when it was
+    /// published and none drew it. Every other source (a Flex, TCI or Yaesu panadapter, an IQ
+    /// receiver) publishes at or above the poll rate, where drawing in order would only add lag, so
+    /// it stays latest-wins: the slot holds its newest frame and nothing behind it.
     fn push_rf(&mut self, frame: SpectrumFrame) {
-        if let Some((old, at)) = self.rf.take() {
+        let reading = self
+            .rf_read_at
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(1));
+        if frame.source != "civ" {
+            self.rf_prev.clear();
+        } else if let Some((old, at)) = self.rf.take() {
             let shown = std::mem::replace(&mut self.rf_shown, false);
             self.rf_prev.push_back(RfEntry {
                 frame: old,
                 at,
                 shown,
+                watched: self.rf_watched,
             });
             if self.rf_prev.len() > SpectrumFeed::RF_BACKLOG {
                 let gone = self
                     .rf_prev
                     .pop_front()
                     .expect("over the bound, so not empty");
-                let reading = self
-                    .rf_read_at
-                    .is_some_and(|at| at.elapsed() < Duration::from_secs(1));
-                if !gone.shown && reading {
+                if !gone.shown && gone.watched {
                     self.rf_dropped += 1;
                 }
             }
         }
         self.rf_shown = false;
+        self.rf_watched = reading;
         self.rf = Some((frame, Instant::now()));
     }
 
@@ -435,10 +447,12 @@ impl FeedRows {
     /// that ran late) draws each one rather than only the newest; and the newest for a reader that
     /// has drawn nothing yet (`last_seq` 0), which starts at the live picture, not the backlog.
     ///
-    /// A reader that fell more than [`SpectrumFeed::RF_CATCHUP`] behind the newest frame steps
-    /// over the frames older than that, so a slow reader stays near the live picture instead of
-    /// trailing it by a growing backlog. Frames nobody draws are counted when they leave
-    /// (`rf_dropped`).
+    /// A reader whose oldest undrawn frame is more than [`SpectrumFeed::RF_CATCHUP`] older than the
+    /// newest JUMPS TO THE NEWEST, so a reader polling slower than the radio sweeps comes back to
+    /// the live picture instead of trailing it. Frames it jumps over are counted when they leave
+    /// the backlog (`rf_dropped`). The age is the PUBLISH time: a burst the radio loop published at
+    /// once after a long tick (at most [`SpectrumFeed::RF_BACKLOG`] sweeps, about a second of the
+    /// radio's fastest output) is drawn in full, in order.
     fn rf_next_after(&mut self, last_seq: u64) -> Option<SpectrumFrame> {
         let (newest_seq, newest_at) = self.rf.as_ref().map(|(f, at)| (f.seq, *at))?;
         if newest_seq <= last_seq {
@@ -446,11 +460,11 @@ impl FeedRows {
         }
         self.rf_read_at = Some(Instant::now());
         if last_seq != 0 {
-            if let Some(e) = self.rf_prev.iter_mut().find(|e| {
-                e.frame.seq > last_seq && newest_at.duration_since(e.at) <= SpectrumFeed::RF_CATCHUP
-            }) {
-                e.shown = true;
-                return Some(e.frame.clone());
+            if let Some(e) = self.rf_prev.iter_mut().find(|e| e.frame.seq > last_seq) {
+                if newest_at.duration_since(e.at) <= SpectrumFeed::RF_CATCHUP {
+                    e.shown = true;
+                    return Some(e.frame.clone());
+                }
             }
         }
         self.rf_shown = true;
@@ -465,6 +479,9 @@ struct RfEntry {
     at: Instant,
     /// Whether an in-order reader has been handed it.
     shown: bool,
+    /// Whether a scope was reading when it was published. A frame published while no scope was on
+    /// screen is never a drop: nobody was there to miss it.
+    watched: bool,
 }
 
 /// A standing request from the rig scope for a row over ITS window rather than the full
@@ -1006,18 +1023,18 @@ impl SpectrumFeed {
         Some(frame)
     }
 
-    /// How many RF frames wait behind the newest for a reader that has not drawn them yet: a
-    /// little over a second of a radio's scope at its fastest, a fraction of one for an IQ
-    /// panadapter. Bounded, so a feed nobody reads holds a fixed few frames.
+    /// How many CI-V sweeps wait behind the newest for a reader that has not drawn them yet: a
+    /// little over a second of a radio's scope at its fastest. Bounded, so a feed nobody reads holds
+    /// a fixed few frames. Other RF sources keep none (see `FeedRows::push_rf`).
     pub const RF_BACKLOG: usize = 15;
 
-    /// How far behind the newest RF frame a reader may draw. A reader polling slower than the
-    /// radio sweeps (the reduced-motion poll) steps over the older frames rather than trailing
-    /// the live picture by a growing delay; one polling faster never meets it.
+    /// How far behind the newest CI-V sweep a reader may draw. A reader whose next sweep is older
+    /// than this (the reduced-motion poll against a fast scope) jumps to the newest rather than
+    /// trailing the live picture; one polling faster than the radio sweeps never meets it.
     pub const RF_CATCHUP: Duration = Duration::from_millis(300);
 
-    /// RF frames that left the backlog without ever being drawn while a scope was drawing them,
-    /// since the feed started. Diagnostics read two of these apart.
+    /// CI-V sweeps that left the backlog undrawn although a scope was reading when they were
+    /// published, since the feed started. Diagnostics read two of these apart.
     pub fn rf_dropped(&self) -> u64 {
         self.rows.lock().map(|g| g.rf_dropped).unwrap_or(0)
     }
@@ -66992,6 +67009,138 @@ mod tests {
             let _ = feed.rf_frame_after(next.seq);
         }
         assert_eq!(feed.rf_dropped(), 1, "the one sweep never drawn");
+    }
+
+    /// Publish `n` frames from a FAST panadapter (a Flex pan, 30 fps), each `v` high.
+    fn flex_frame(feed: &SpectrumFeed, v: f32) {
+        let mut s = spec(14_000_000.0, 14_200_000.0, "flex");
+        s.row = vec![v; 64];
+        feed.publish_rf_frame(s, SpectrumScale::Relative, Some(0));
+    }
+
+    /// ⭐ A FAST PANADAPTER IS DRAWN LIVE, as before the CI-V backlog. A Flex pan at 30 fps and a scope
+    /// polling a little slower (25 Hz, one frame a poll, as the UI draws): every poll draws the NEWEST
+    /// frame, 0 behind. Only a CI-V scope, whose sweeps come slower than the poll, keeps a backlog;
+    /// for a source at or above the poll rate drawing in order would only add lag.
+    #[test]
+    fn a_fast_panadapter_is_drawn_live_by_a_slightly_slower_poll() {
+        let feed = SpectrumFeed::default();
+        flex_frame(&feed, 0.0);
+        let mut last = feed.rf_frame_after(0).expect("live").seq;
+        let t0 = Instant::now();
+        let (mut next_pub, mut next_poll) = (t0, t0);
+        let mut n = 0u32;
+        let mut behind = Vec::new();
+        while t0.elapsed() < Duration::from_millis(1500) {
+            let now = Instant::now();
+            if now >= next_pub {
+                n += 1;
+                flex_frame(&feed, n as f32);
+                next_pub += Duration::from_micros(33_333);
+            }
+            if now >= next_poll {
+                if let Some(f) = feed.rf_frame_after(last) {
+                    last = f.seq;
+                    behind.push(n as f32 - f.bins[0]);
+                }
+                next_poll += Duration::from_millis(40);
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            behind.len() >= 20,
+            "premise: the poll drew ({})",
+            behind.len()
+        );
+        assert!(
+            behind.iter().all(|b| *b == 0.0),
+            "frames behind the newest at each poll: {behind:?}"
+        );
+        assert_eq!(feed.rf_dropped(), 0, "a latest-wins source drops nothing");
+    }
+
+    /// ⭐ A CI-V READER MORE THAN [`SpectrumFeed::RF_CATCHUP`] BEHIND JUMPS TO THE LIVE SWEEP, not to
+    /// the oldest sweep still inside the window: a backlog spanning well over the window, read once,
+    /// hands out the newest; and the reader is then live (nothing newer is waiting).
+    #[test]
+    fn a_civ_reader_more_than_the_catchup_behind_jumps_to_the_newest() {
+        let feed = SpectrumFeed::default();
+        civ_sweep(&feed, 0.0);
+        let first = feed.rf_frame_after(0).expect("drawn");
+        for i in 1..=5 {
+            civ_sweep(&feed, i as f32);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let next = feed.rf_frame_after(first.seq).expect("live");
+        assert_eq!(
+            next.bins[0], 5.0,
+            "the newest, not the oldest inside the window"
+        );
+        assert_eq!(
+            feed.rf_frame_after(next.seq),
+            None,
+            "and nothing is left behind it"
+        );
+        // Inside the window, the reader still draws every sweep in order.
+        for i in 6..=8 {
+            civ_sweep(&feed, i as f32);
+        }
+        let mut got = Vec::new();
+        let mut last = next.seq;
+        while let Some(f) = feed.rf_frame_after(last) {
+            last = f.seq;
+            got.push(f.bins[0]);
+        }
+        assert_eq!(got, vec![6.0, 7.0, 8.0]);
+    }
+
+    /// Sweeps published while no scope was reading are not drops, even once a scope opens and they
+    /// leave the backlog. The scope starts at the newest and misses nothing after it.
+    #[test]
+    fn sweeps_published_before_any_reader_are_not_drops() {
+        let feed = SpectrumFeed::default();
+        for i in 0..5 {
+            civ_sweep(&feed, i as f32); // nobody reading
+        }
+        let mut last = feed.rf_frame_after(0).expect("a scope opens").seq;
+        for i in 5..25 {
+            civ_sweep(&feed, i as f32);
+            while let Some(f) = feed.rf_frame_after(last) {
+                last = f.seq;
+            }
+        }
+        assert_eq!(feed.rf_dropped(), 0);
+    }
+
+    /// A sweep a scope drew from the backlog is never a drop when it later leaves it; only the
+    /// undrawn ones are counted.
+    #[test]
+    fn a_sweep_drawn_from_the_backlog_is_never_counted_as_dropped() {
+        let feed = SpectrumFeed::default();
+        civ_sweep(&feed, 0.0);
+        let mut last = feed.rf_frame_after(0).expect("drawn").seq;
+        for i in 1..=3 {
+            civ_sweep(&feed, i as f32);
+        }
+        let mut drawn = Vec::new();
+        while let Some(f) = feed.rf_frame_after(last) {
+            last = f.seq;
+            drawn.push(f.bins[0]);
+        }
+        assert_eq!(
+            drawn,
+            vec![1.0, 2.0, 3.0],
+            "two from the backlog, then the newest"
+        );
+        // The reader stops; 18 more push the first six frames out: four drawn, two not.
+        for i in 4..=21 {
+            civ_sweep(&feed, i as f32);
+        }
+        assert_eq!(
+            feed.rf_dropped(),
+            2,
+            "only sweeps 4 and 5, which nobody drew"
+        );
     }
 
     #[test]

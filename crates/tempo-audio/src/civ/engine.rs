@@ -1697,7 +1697,7 @@ mod tests {
     }
 
     /// One IC-9700 sweep over USB, as the radio bursts it: the header frame, then 475 points in
-    /// ten frames of 50 and one of 25 (A7508-3EX-4, `27 00`). Every point is `level`, so a test
+    /// ten frames of 50 and one of 25 (A7508-3EX-2, `27 00`). Every point is `level`, so a test
     /// can tell sweeps apart by their height.
     fn sweep_bytes(level: u8) -> Vec<u8> {
         let bcd = |v: usize| (((v / 10) << 4) | (v % 10)) as u8;

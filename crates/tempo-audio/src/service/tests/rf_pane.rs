@@ -781,3 +781,176 @@ fn rf_pane_ptt_latency_measurement() {
         println!("samples: {path}");
     }
 }
+
+/// The daemon under the scene, for its scope queue and counters.
+fn native(s: &Scene) -> &CivDaemon {
+    s.state
+        .rigctld_proc
+        .as_ref()
+        .and_then(CatDaemon::native)
+        .expect("the scene's native daemon")
+}
+
+/// The `27 1A` (scope SPEED) frames on the wire so far, as their data bytes.
+fn speed_frames(s: &Scene) -> Vec<Vec<u8>> {
+    s.wire
+        .lock()
+        .unwrap()
+        .log
+        .iter()
+        .filter(|(_, c, d)| *c == 0x27 && d.first() == Some(&0x1A))
+        .map(|(_, _, d)| d.clone())
+        .collect()
+}
+
+/// ⭐ EVERY SWEEP REACHES THE SCOPE, THROUGH THE REAL RADIO LOOP. A 12-sweep-a-second IC-9700 and a
+/// loop whose ticks are 150 ms apart (a tick held up by CAT): about two sweeps complete between two
+/// ticks, every one of them is published, and an in-order reader draws all but the few at the
+/// edges. The snapshot carries the measured rate with the radio's SPEED, the wire carries only
+/// `27 1A 00` reads, and when the stream stops the measurement leaves the snapshot entirely.
+#[test]
+fn every_sweep_reaches_an_in_order_scope_through_the_radio_loop() {
+    let mut s = Scene::new(12.0, 0.5, false);
+    let mut last = 0u64;
+    let mut drawn = 0u64;
+    let end = Instant::now() + Duration::from_millis(6500);
+    while Instant::now() < end {
+        s.step(now_unix_ms());
+        std::thread::sleep(Duration::from_millis(150));
+        while let Some(f) = s.feed.rf_frame_after(last) {
+            if f.bins.is_empty() {
+                break;
+            }
+            assert!(f.seq > last, "in order, no repeat: {} after {last}", f.seq);
+            last = f.seq;
+            drawn += 1;
+        }
+    }
+    let c = native(&s).scope_counts();
+    assert!(
+        s.sweeps() > 50,
+        "premise: the radio streamed ({})",
+        s.sweeps()
+    );
+    // The first sweeps (the reader starts at the newest) and those still queued or in flight when
+    // the loop stops are not drawn, and a loaded box makes the last tick longer: so at least 80 %,
+    // where publishing one sweep a tick draws well under half (about two sweeps complete a tick).
+    assert!(
+        drawn * 10 >= c.assembled * 8,
+        "every sweep drawn: assembled {}, drawn {drawn}",
+        c.assembled
+    );
+    assert_eq!(c.dropped, 0, "nothing dropped on the way from the radio");
+    let snap = s.engine.lock().unwrap().snapshot();
+    let rate = snap
+        .radio
+        .scope_rate
+        .clone()
+        .expect("scopeRate while streaming");
+    assert_eq!(
+        rate.speed.as_deref(),
+        Some("mid"),
+        "the fixture's SPEED register"
+    );
+    assert!(
+        rate.sweeps_per_sec > 9.0 && rate.sweeps_per_sec < 15.0,
+        "{rate:?}"
+    );
+    assert_eq!(
+        rate.dropped, 0,
+        "a scope that drew everything saw no drop: {rate:?}"
+    );
+    let reads = speed_frames(&s);
+    assert!(!reads.is_empty(), "SPEED was read");
+    assert!(
+        reads.iter().all(|d| d == &vec![0x1A, 0x00]),
+        "reads only, never a value: {reads:?}"
+    );
+
+    choose_waterfall_source(&s, "audio");
+    s.run(600, false);
+    let snap = s.engine.lock().unwrap().snapshot();
+    assert!(
+        snap.radio.scope_rate.is_none(),
+        "cleared when the stream stops"
+    );
+    let json = serde_json::to_value(&snap.radio).unwrap();
+    assert!(
+        json.get("scopeRate").is_none(),
+        "absent, so every other snapshot is byte-identical"
+    );
+}
+
+/// A STAND-DOWN LEAVES NO SWEEP QUEUED. Sweeps that complete while the loop is held up, and those
+/// still on the line when the stream is switched off, are of the picture being left: none may wait
+/// in the engine's queue to be drawn, stale, when the radio's scope is chosen again.
+#[test]
+fn a_stand_down_leaves_no_sweep_queued_behind_it() {
+    let mut s = Scene::new(12.0, 0.5, false);
+    s.run(1500, false);
+    assert!(s.sweeps() > 5, "premise: the radio streamed");
+    // A held tick: several sweeps complete with nobody taking them.
+    std::thread::sleep(Duration::from_millis(400));
+    choose_waterfall_source(&s, "audio");
+    s.run(800, false);
+    assert_eq!(
+        s.wave_commands().last(),
+        Some(&false),
+        "premise: the stream was switched off"
+    );
+    let left = native(&s).take_scope_rows();
+    assert!(
+        left.is_empty(),
+        "{} sweeps of the old picture were left queued",
+        left.len()
+    );
+}
+
+/// THE SPEED IS NEVER READ WHILE KEYED, and the snapshot keeps the last measurement through the
+/// over. Phone with the stream running long enough for a measurement, then the operator's PTT held
+/// for longer than a measuring window: no `27 1A` goes out while keyed, and scopeRate stays.
+#[test]
+fn the_scope_speed_is_never_read_while_keyed_and_the_rate_is_kept_through_the_over() {
+    let mut s = Scene::new(12.0, 0.5, false);
+    s.run(6000, false);
+    assert!(
+        s.engine
+            .lock()
+            .unwrap()
+            .snapshot()
+            .radio
+            .scope_rate
+            .is_some(),
+        "premise: measured while streaming"
+    );
+    let before = speed_frames(&s).len();
+    assert!(before > 0, "premise: SPEED read while streaming");
+    {
+        let mut e = s.engine.lock().unwrap();
+        e.set_tx_enabled(true);
+        e.set_ptt(true);
+    }
+    s.run(500, false);
+    assert!(s.wire.lock().unwrap().keyed, "premise: the radio is keyed");
+    let keyed_at = speed_frames(&s).len();
+    s.run(6000, false);
+    assert!(s.wire.lock().unwrap().keyed, "premise: still keyed");
+    assert_eq!(
+        speed_frames(&s).len(),
+        keyed_at,
+        "SPEED was read while the radio was keyed"
+    );
+    assert!(
+        s.engine
+            .lock()
+            .unwrap()
+            .snapshot()
+            .radio
+            .scope_rate
+            .is_some(),
+        "the last measurement is kept through the over"
+    );
+    s.engine.lock().unwrap().set_ptt(false);
+    s.run(300, false);
+    assert!(!s.wire.lock().unwrap().keyed, "unkeyed after the test");
+}
