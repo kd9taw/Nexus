@@ -21238,7 +21238,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // `best_working_frequency` for a row on the SAME band and does not QSY when
             // there is none). Nexus moves to the mode's own channel instead, the first one
             // on a band a radio here is set for (#184), else the plan's first entry
-            // (MSK144 → 6 m 50.260, FST4 → 2200 m). Operator-confirmed.
+            // (MSK144 → 6 m 50.260, FST4 → 2200 m).
             //
             // ⚠️ Scoped to the SPECIALTY modes only. For the FT8↔FT4↔FT2 family a
             // flip is a timing change and the operator expects to STAY on band —

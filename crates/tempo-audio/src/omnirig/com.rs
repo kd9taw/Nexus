@@ -77,9 +77,6 @@ pub struct OmniRigCom {
     rig: IDispatch,
     ids: RigIds,
     slot: RigSlot,
-    /// The one VFO-A selection [`super::pin_vfo_a`] calls for is still to be made: set at connect
-    /// when the rig file cannot read the VFO, cleared once it is sent (#161).
-    vfo_pin_pending: std::cell::Cell<bool>,
     /// LAST field on purpose — `CoUninitialize` must run after both interfaces are released.
     _apartment: Apartment,
 }
@@ -271,28 +268,13 @@ impl OmniRigCom {
             tx: dispid(&rig, "Tx")?,
             split: dispid(&rig, "Split")?,
         };
-        let com = OmniRigCom {
+        Ok(OmniRigCom {
             _server: server,
             rig,
             ids,
             slot,
-            vfo_pin_pending: std::cell::Cell::new(false),
             _apartment: apartment,
-        };
-        // #161: WSJT-X selects VFO A once at start on a rig file that cannot read the VFO
-        // (`super::pin_vfo_a`). Decided here, at connect, from the rig file's params; SENT here
-        // only if OmniRig already has the radio online, else before the first dial write, which
-        // is behind the online gate. Nexus does not wait at connect for OmniRig's first poll.
-        let pin = super::pin_vfo_a(
-            com.read_opt(com.ids.vfo, "the VFO selection"),
-            com.read_opt(com.ids.readable, "the readable parameters"),
-            com.read_opt(com.ids.writeable, "the writable parameters"),
-        );
-        com.vfo_pin_pending.set(pin);
-        if pin && com.status().is_ok_and(|(st, _)| st.online()) {
-            com.pin_vfo_a_if_pending();
-        }
-        Ok(com)
+        })
     }
 
     fn get_i32(&self, id: i32, what: &str) -> Result<i32, OmniError> {
@@ -302,17 +284,6 @@ impl OmniRigCom {
     /// An optional property's value, `None` when it is absent or would not read.
     fn read_opt(&self, id: Option<i32>, what: &str) -> Option<i32> {
         id.and_then(|id| self.get_i32(id, what).ok())
-    }
-
-    /// Send the one VFO-A selection if it is still pending (see `vfo_pin_pending`). A failed put is
-    /// not retried: the dial write that follows then refuses or lands as it would have.
-    fn pin_vfo_a_if_pending(&self) {
-        if !self.vfo_pin_pending.replace(false) {
-            return;
-        }
-        if let Some(id) = self.ids.vfo {
-            let _ = put_prop_i32(&self.rig, id, param::PM_VFOA, "the VFO selection");
-        }
     }
 
     /// Is the radio receiving on VFO B, per OmniRig's `Vfo`? Unreadable is A.
@@ -385,9 +356,6 @@ impl OmniRigClient for OmniRigCom {
                 "{hz} Hz is outside the range OmniRig can carry (its dial is a 32-bit Hz value)"
             ))
         })?;
-        // Only reached behind the backend's online gate, so this is where a VFO-A selection that
-        // could not be sent at connect goes out, before the write it is for.
-        self.pin_vfo_a_if_pending();
         let writeable = self.read_opt(self.ids.writeable, "the writable parameters");
         let ids = super::DialIds {
             freq: self.ids.freq,
@@ -423,6 +391,22 @@ impl OmniRigClient for OmniRigCom {
 
     fn split(&self) -> Result<bool, OmniError> {
         Ok(self.get_i32(self.ids.split, "the split state")? == param::PM_SPLITON)
+    }
+
+    fn vfo_params(&self) -> Option<super::VfoParams> {
+        Some(super::VfoParams {
+            vfo: self.read_opt(self.ids.vfo, "the VFO selection"),
+            readable: self.read_opt(self.ids.readable, "the readable parameters"),
+            writeable: self.read_opt(self.ids.writeable, "the writable parameters"),
+        })
+    }
+
+    fn select_vfo_a(&self) -> Result<(), OmniError> {
+        let id = self
+            .ids
+            .vfo
+            .ok_or_else(|| OmniError::Com("OmniRig has no Vfo property here".into()))?;
+        put_prop_i32(&self.rig, id, param::PM_VFOA, "the VFO selection")
     }
 
     fn set_split(&self, on: bool) -> Result<(), OmniError> {

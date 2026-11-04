@@ -441,7 +441,6 @@ pub(crate) fn pick_dial_write(writeable: Option<i32>, vfo_b: bool) -> Option<Dia
 
 /// The VFO params a rig file may read (`ReadableParams`): any of them means it can say which VFO
 /// the radio is on.
-#[cfg(any(windows, test))]
 const VFO_PARAMS: i32 = param::PM_VFOAA
     | param::PM_VFOAB
     | param::PM_VFOBA
@@ -452,14 +451,13 @@ const VFO_PARAMS: i32 = param::PM_VFOAA
 /// ⭐ ISSUE #161 — SELECT VFO A ONCE, on a rig file that cannot say which VFO the radio is on.
 /// Without it, [`vfo_is_b`] reads "unknown" as A and a dial set writes `FreqA` while the radio may
 /// be on B, moving the VFO the operator is not listening on. WSJT-X 3.0.2
-/// `Transceiver/OmniRigTransceiver.cpp` `do_start` (lines 229-235) does exactly this: when `Vfo`
+/// `Transceiver/OmniRigTransceiver.cpp` `do_start` (lines 228-235) does exactly this: when `Vfo`
 /// reads `PM_UNKNOWN` and both `PM_VFOA` and `PM_VFOB` are writable, `SetVfo(PM_VFOA)`
 /// ("start with VFO A (probably MAIN) on rigs that we can't query VFO but can set explicitly").
 ///
 /// One condition narrower than WSJT-X, on purpose: when `ReadableParams` says the rig file CAN
 /// read the VFO, an unknown `Vfo` only means OmniRig has not polled yet, so nothing is forced.
 /// `vfo` is `None` when the property would not read over COM, which is not "unknown": nothing.
-#[cfg(any(windows, test))]
 pub(crate) fn pin_vfo_a(vfo: Option<i32>, readable: Option<i32>, writeable: Option<i32>) -> bool {
     let ab = param::PM_VFOA | param::PM_VFOB;
     vfo == Some(param::PM_UNKNOWN)
@@ -532,6 +530,23 @@ pub trait OmniRigClient {
     fn set_ptt(&self, on: bool) -> Result<(), OmniError>;
     fn split(&self) -> Result<bool, OmniError>;
     fn set_split(&self, on: bool) -> Result<(), OmniError>;
+    /// OmniRig's `Vfo`, `ReadableParams` and `WriteableParams`, for the one VFO-A selection
+    /// ([`pin_vfo_a`]). `None` for a client without them, which never selects a VFO.
+    fn vfo_params(&self) -> Option<VfoParams> {
+        None
+    }
+    /// Select VFO A (`Vfo = PM_VFOA`). Only ever called as [`OmniBackend`]'s one VFO-A selection.
+    fn select_vfo_a(&self) -> Result<(), OmniError> {
+        Err(OmniError::Com("this client cannot select a VFO".into()))
+    }
+}
+
+/// What [`OmniRigClient::vfo_params`] reads: each field `None` when that property would not read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VfoParams {
+    pub vfo: Option<i32>,
+    pub readable: Option<i32>,
+    pub writeable: Option<i32>,
 }
 
 /// Build the real COM client for `slot`, or say honestly why we cannot.
@@ -718,6 +733,9 @@ pub struct OmniBackend {
     /// dial write takes. The rigctld answer can only say `RPRT -1`, so the radio loop reads the
     /// reason here ([`OmniDaemon::dial_refusal`]).
     dial_refusal: Mutex<Option<String>>,
+    /// The one VFO-A selection ([`Self::select_vfo_a_once`]) is decided: sent, found not needed,
+    /// or failed. Until then it is tried before each dial write.
+    vfo_a_settled: AtomicBool,
 }
 
 impl OmniBackend {
@@ -728,6 +746,45 @@ impl OmniBackend {
             tx_intent,
             last_mode: Mutex::new(None),
             dial_refusal: Mutex::new(None),
+            vfo_a_settled: AtomicBool::new(false),
+        }
+    }
+
+    /// ⭐ #161 — WHEN THE RIG FILE CANNOT READ THE VFO, SELECT VFO A ONCE, AS WSJT-X DOES
+    /// ([`pin_vfo_a`]; WSJT-X 3.0.2 `OmniRigTransceiver.cpp` `do_start`, lines 228-235), so the
+    /// `FreqA` writes that follow land on the VFO the operator is on.
+    ///
+    /// Tried at connect and before each dial write until it is settled, and judged afresh each
+    /// time from OmniRig's live `Vfo` and params, so a VFO OmniRig has read since is left alone.
+    ///
+    /// ⚠️ NEVER DURING AN OVER. Not while Nexus intends to transmit, and not unless the radio reads
+    /// un-keyed (an unreadable PTT counts as keyed). A dial write from any shim client — another
+    /// program's included — can arrive mid-over, and a VFO selection there could move the TX VFO.
+    /// It then stays pending and goes before the next dial write after the unkey. Nor while
+    /// OmniRig does not have the radio online, when its `Vfo` reads unknown for every rig file.
+    fn select_vfo_a_once(&self) {
+        if self.vfo_a_settled.load(Ordering::Relaxed) || self.tx_intent.load(Ordering::Relaxed) {
+            return;
+        }
+        // Ok(true) = settled; Ok(false) = not now.
+        let settled = self.link.call(|c| {
+            if !c.status().is_ok_and(|(st, _)| st.online()) {
+                return Ok(false);
+            }
+            let Some(p) = c.vfo_params() else {
+                return Ok(true);
+            };
+            if !matches!(c.ptt(), Ok(false)) {
+                return Ok(false);
+            }
+            if pin_vfo_a(p.vfo, p.readable, p.writeable) {
+                // A failed selection is not retried: the dial write refuses or lands as it would.
+                let _ = c.select_vfo_a();
+            }
+            Ok(true)
+        });
+        if matches!(settled, Ok(true)) {
+            self.vfo_a_settled.store(true, Ordering::Relaxed);
         }
     }
 
@@ -825,7 +882,13 @@ impl RigBackend for OmniBackend {
 
     /// The dial write, behind [`OmniBackend::write_gate`]. A COM write that fails is a refusal.
     fn try_set_freq(&self, hz: u64) -> Result<(), SetFault> {
+        // A refusal at the gate has its own cause: never let an older reason stand in for it.
+        *self
+            .dial_refusal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         self.write_gate()?;
+        self.select_vfo_a_once();
         let result = self.link.call(move |c| c.set_freq_hz(hz));
         *self
             .dial_refusal
@@ -931,6 +994,8 @@ impl OmniDaemon {
         listener.set_nonblocking(true)?;
         let tx_intent = Arc::new(AtomicBool::new(false));
         let backend = Arc::new(OmniBackend::new(link, slot, tx_intent.clone()));
+        // At connect, as WSJT-X does, when OmniRig already has the radio online.
+        backend.select_vfo_a_once();
         let served: Arc<dyn RigBackend> = backend.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let tcp_thread = {
@@ -1117,9 +1182,9 @@ pub(crate) mod tests {
         assert!(!vfo_is_b(None));
     }
 
-    /// #161, the operator's ruling: as WSJT-X's `OmniRigTransceiver::do_start` does, a rig file
-    /// that cannot read the VFO but can select A and B is put on VFO A once, so the FreqA writes
-    /// that follow land on the VFO the operator is on. Never when the VFO can be read.
+    /// #161: when the rig file cannot read the VFO but can select A and B, VFO A is selected once,
+    /// as WSJT-X's `OmniRigTransceiver::do_start` does, so the FreqA writes that follow land on the
+    /// VFO the operator is on. Never when the VFO can be read.
     #[test]
     fn vfo_a_is_selected_only_when_the_rig_file_cannot_read_the_vfo() {
         use param::*;
@@ -1144,6 +1209,12 @@ pub(crate) mod tests {
             Some(PM_FREQA | PM_VFOAA | PM_VFOBB),
             Some(both)
         ));
+        // …and the same when what it reads is the plain VFO A / VFO B pair.
+        assert!(!pin_vfo_a(
+            Some(PM_UNKNOWN),
+            Some(PM_VFOA | PM_VFOB),
+            Some(both)
+        ));
         // A and B not both selectable (WSJT-X's condition): nothing.
         assert!(!pin_vfo_a(
             Some(PM_UNKNOWN),
@@ -1155,7 +1226,7 @@ pub(crate) mod tests {
         assert!(!pin_vfo_a(None, Some(0), Some(both)));
     }
 
-    /// SHOULD-2: the COM property each dial choice writes, and the order the dial is read in.
+    /// #161: the COM property each dial choice writes, and the order the dial is read in.
     /// Distinct ids, so swapping FreqA and FreqB anywhere goes red.
     #[test]
     fn the_dial_writes_and_reads_the_property_of_the_vfo_it_chose() {
@@ -1184,14 +1255,19 @@ pub(crate) mod tests {
         assert_eq!(pick_dial_hz(Some(0), x, y), Some(7_074_000));
     }
 
-    /// NIT-1: OmniRig's own reason a dial write was refused reaches the operator, not just a bare
-    /// refusal, and a later write that takes clears it.
+    /// #161: OmniRig's own reason a dial write was refused reaches the operator, not just a bare
+    /// refusal. A later write that takes clears it, and so does a later refusal at the online
+    /// gate, which has a different cause.
     #[test]
     fn a_refused_dial_write_keeps_its_reason() {
-        struct NoDial(Arc<AtomicBool>);
+        struct NoDial(Arc<AtomicBool>, Arc<AtomicBool>);
         impl OmniRigClient for NoDial {
             fn status(&self) -> Result<(OmniStatus, String), OmniError> {
-                Ok((OmniStatus::Online, String::new()))
+                if self.1.load(Ordering::Relaxed) {
+                    Ok((OmniStatus::Online, String::new()))
+                } else {
+                    Ok((OmniStatus::PortBusy, String::new()))
+                }
             }
             fn freq_hz(&self) -> Result<u64, OmniError> {
                 Ok(14_074_000)
@@ -1223,19 +1299,97 @@ pub(crate) mod tests {
             }
         }
         let takes = Arc::new(AtomicBool::new(false));
-        let t = takes.clone();
+        let online = Arc::new(AtomicBool::new(true));
+        let (t, o) = (takes.clone(), online.clone());
         let (link, _w) = OmniWorker::start(Box::new(move || {
-            Ok(Box::new(NoDial(t)) as Box<dyn OmniRigClient>)
+            Ok(Box::new(NoDial(t, o)) as Box<dyn OmniRigClient>)
         }))
         .unwrap();
         let b = OmniBackend::new(link, RigSlot::Rig1, Arc::new(AtomicBool::new(false)));
         assert_eq!(b.try_set_freq(7_074_000), Err(SetFault::Refused));
         let why = b.dial_refusal().expect("the reason is kept");
-        assert!(why.contains(NO_DIAL_COMMAND), "{why}");
+        assert_eq!(why, NO_DIAL_COMMAND, "shown as it is, with no prefix");
+        // The port is then taken by another program: refused at the gate, for that reason, so
+        // the rig file's sentence must not stand in for it.
+        online.store(false, Ordering::Relaxed);
+        assert_eq!(b.try_set_freq(7_074_000), Err(SetFault::Refused));
+        assert_eq!(
+            b.dial_refusal(),
+            None,
+            "a gate refusal clears the old reason"
+        );
+        online.store(true, Ordering::Relaxed);
+        assert_eq!(b.try_set_freq(7_074_000), Err(SetFault::Refused));
         // A write that takes clears it.
         takes.store(true, Ordering::Relaxed);
         assert_eq!(b.try_set_freq(7_074_000), Ok(()));
         assert_eq!(b.dial_refusal(), None);
+    }
+
+    /// #161: the one VFO-A selection is never sent while the radio is keyed. A client of the shim
+    /// sending `F` during an over (Nexus's own or another program's) must not change the VFO
+    /// mid-transmission; the selection waits for the unkey and then goes once, before the dial
+    /// write it is for. It is re-judged at sending time, so a VFO OmniRig has since read is left.
+    #[test]
+    fn the_vfo_a_selection_never_goes_out_during_an_over() {
+        use param::*;
+        let unknown = VfoParams {
+            vfo: Some(PM_UNKNOWN),
+            readable: Some(PM_FREQA | PM_FREQB),
+            writeable: Some(PM_FREQA | PM_FREQB | PM_VFOA | PM_VFOB),
+        };
+        let mock = Arc::new(MockOmni::online());
+        *mock.vfo_params.lock().unwrap() = Some(unknown);
+        *mock.ptt.lock().unwrap() = true; // an over is on the air
+        let m = mock.clone();
+        let (link, _w) =
+            OmniWorker::start(Box::new(move || Ok(Box::new(m) as Box<dyn OmniRigClient>))).unwrap();
+        let b = OmniBackend::new(link, RigSlot::Rig1, Arc::new(AtomicBool::new(false)));
+
+        assert_eq!(reply("F 7074000", &b), "RPRT 0\n");
+        let calls = mock.calls.lock().unwrap().clone();
+        assert!(
+            !calls.iter().any(|c| c == "select_vfo_a"),
+            "no VFO selection while keyed: {calls:?}"
+        );
+
+        // Unkeyed: the selection goes out once, BEFORE the dial write it is for.
+        *mock.ptt.lock().unwrap() = false;
+        mock.calls.lock().unwrap().clear();
+        assert_eq!(reply("F 7075000", &b), "RPRT 0\n");
+        assert_eq!(
+            *mock.calls.lock().unwrap(),
+            ["select_vfo_a", "set_freq 7075000"],
+            "selected once, then written"
+        );
+        mock.calls.lock().unwrap().clear();
+        assert_eq!(reply("F 7076000", &b), "RPRT 0\n");
+        assert_eq!(
+            *mock.calls.lock().unwrap(),
+            ["set_freq 7076000"],
+            "only once"
+        );
+
+        // Nexus's own over (tx_intent) holds it too, even before the radio reads keyed.
+        let mock = Arc::new(MockOmni::online());
+        *mock.vfo_params.lock().unwrap() = Some(unknown);
+        let m = mock.clone();
+        let (link, _w) =
+            OmniWorker::start(Box::new(move || Ok(Box::new(m) as Box<dyn OmniRigClient>))).unwrap();
+        let intent = Arc::new(AtomicBool::new(true));
+        let b = OmniBackend::new(link, RigSlot::Rig1, intent.clone());
+        assert_eq!(reply("F 7074000", &b), "RPRT 0\n");
+        assert_eq!(*mock.calls.lock().unwrap(), ["set_freq 7074000"]);
+
+        // Re-judged at sending time: OmniRig has since read the radio on VFO B. Left alone.
+        intent.store(false, Ordering::Relaxed);
+        *mock.vfo_params.lock().unwrap() = Some(VfoParams {
+            vfo: Some(PM_VFOB),
+            ..unknown
+        });
+        mock.calls.lock().unwrap().clear();
+        assert_eq!(reply("F 7075000", &b), "RPRT 0\n");
+        assert_eq!(*mock.calls.lock().unwrap(), ["set_freq 7075000"]);
     }
 
     /// The whole COM boundary, faked. Everything above the [`OmniRigClient`] trait is real
@@ -1249,6 +1403,8 @@ pub(crate) mod tests {
         pub mode: StdMutex<Option<OmniMode>>,
         pub ptt: StdMutex<bool>,
         pub split: StdMutex<bool>,
+        /// What `vfo_params` answers; `None` = a client without the VFO properties.
+        pub vfo_params: StdMutex<Option<VfoParams>>,
         /// Every call that reached the COM boundary, in order — so a test can prove a
         /// refusal never touched the radio.
         pub calls: StdMutex<Vec<String>>,
@@ -1262,6 +1418,7 @@ pub(crate) mod tests {
                 mode: StdMutex::new(Some(OmniMode::SsbU)),
                 ptt: StdMutex::new(false),
                 split: StdMutex::new(false),
+                vfo_params: StdMutex::new(None),
                 calls: StdMutex::new(Vec::new()),
             }
         }
@@ -1300,6 +1457,13 @@ pub(crate) mod tests {
         }
         fn split(&self) -> Result<bool, OmniError> {
             Ok(*self.split.lock().unwrap())
+        }
+        fn vfo_params(&self) -> Option<VfoParams> {
+            *self.vfo_params.lock().unwrap()
+        }
+        fn select_vfo_a(&self) -> Result<(), OmniError> {
+            self.note("select_vfo_a");
+            Ok(())
         }
         fn set_split(&self, on: bool) -> Result<(), OmniError> {
             self.note(&format!("set_split {on}"));
