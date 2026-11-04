@@ -69,6 +69,9 @@ export async function jttyAutoArm(): Promise<any> { return jtty }
 export async function jttyArm(): Promise<any> { return jtty }
 export async function jttySetBand(lo: number, hi: number): Promise<any> { return { ...jtty, lowHz: lo, highHz: hi } }
 export async function getSstvState(): Promise<any> { return sstv }
+// The live meters as the backend sends them (`MeterReadout`): no tone heard is null, never absent. The
+// generated `[]`/`{}` default left `cwToneHz` undefined, which the CW zero-beat readout drew as "-NaN Hz".
+export async function getMeters(): Promise<any> { return { rxLevel: 0, smeterDb: null, cwToneHz: null } }
 export async function getSpectrumRow(): Promise<any> {
   const row = Array.from({ length: 512 }, (_, i) => 0.1 + 0.05 * Math.random() + ((i > 190 && i < 194) || (i > 300 && i < 303) ? 0.6 : 0))
   return { row, loHz: 0, hiHz: 4000, source: 'audio' }
