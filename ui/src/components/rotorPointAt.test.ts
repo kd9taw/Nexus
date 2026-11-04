@@ -110,6 +110,25 @@ describe('a point ends the tracker steering the mast, and only that', () => {
     expect(await run(pass('prepositioning'), null)).toEqual(['stop', 'point short'])
   })
 
+  it('a pass that lost its rotor while it was steering is stopped, though its badge reads armed', async () => {
+    expect(await run({ name: 'SO-50', state: 'armed', rotorLost: true }, null)).toEqual(['stop', 'point short'])
+  })
+
+  it('a state that cannot be read is taken as steering: the stop is made', async () => {
+    const order: string[] = []
+    vi.mocked(getSatTrackStatus).mockRejectedValue(new Error('offline'))
+    vi.mocked(getMoonStatus).mockResolvedValue(null as never)
+    vi.mocked(stopSatTrack).mockImplementation(async () => {
+      order.push('stop')
+    })
+    mockedPoint.mockImplementation(async () => {
+      order.push('point')
+      return TO_GRID
+    })
+    rotorPointAt()('EC1DD')
+    await vi.waitFor(() => expect(order).toEqual(['stop', 'point']))
+  })
+
   it('a Moon follow is stopped first', async () => {
     expect(await run(null, following, true)).toEqual(['stop', 'point long'])
   })

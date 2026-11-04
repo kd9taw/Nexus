@@ -231,6 +231,12 @@ pub(crate) fn is_local(host: &str) -> bool {
 /// as a whole token only, so a host called `rot` never eats `rotctld`.
 pub(crate) fn mask_port(text: &str, port: &str) -> String {
     let port = port.trim();
+    // An empty port number (`203.0.113.9:`) is no port number: the host alone is masked.
+    // (Not when the whole box is an IPv6 address, which may end in `::`.)
+    let port = match port.strip_suffix(':') {
+        Some(p) if port.parse::<std::net::IpAddr>().is_err() => p,
+        _ => port,
+    };
     let serial = port.is_empty()
         || port.starts_with('/')
         || port.starts_with("\\\\.\\")
@@ -479,6 +485,7 @@ mod tests {
         for (port, want) in [
             ("203.0.113.9:4001", line("a network address:4001")),
             ("203.0.113.9", line("a network address")),
+            ("203.0.113.9:", line("a network address:")),
             (" 203.0.113.9:4001 ", line("a network address:4001")),
             ("rot.example.net", line("a network address")),
             ("rot:4001", line("a network address:4001")),

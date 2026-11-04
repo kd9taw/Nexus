@@ -40,14 +40,26 @@ export function pointedTo(pointed: PointedAt): string {
 }
 
 /** Stop the tracker steering the mast, if one is: a Moon follow, or a pass prepositioning or
- *  tracking. An armed pass is left armed. A read that fails is taken as "nothing steering", and the
- *  station's own point still ends a tracker that is. */
+ *  tracking. An armed pass is left armed — unless it lost its rotor, which a pass can only do by
+ *  steering it: one that lost it while prepositioning reads "armed" until AOS, and takes the mast
+ *  back off the station within 15 s once the rotator answers. A read that fails cannot tell, so
+ *  the stop is made, as it always was before a tracker's state was asked (the Needed board's Go
+ *  has no station-side check behind it). */
 export async function stopSteeringTracker(): Promise<void> {
+  let unknown = false
   const [sat, moon] = await Promise.all([
-    getSatTrackStatus().catch(() => null),
-    getMoonStatus(null).catch(() => null),
+    getSatTrackStatus().catch(() => {
+      unknown = true
+      return null
+    }),
+    getMoonStatus(null).catch(() => {
+      unknown = true
+      return null
+    }),
   ])
-  if ((sat != null && sat.state !== 'armed') || moon?.track != null) await stopSatTrack()
+  const steering =
+    unknown || (sat != null && (sat.state !== 'armed' || sat.rotorLost === true)) || moon?.track != null
+  if (steering) await stopSatTrack()
 }
 
 /** The strip's `onPointAt` for a cockpit. */

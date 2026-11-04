@@ -17088,11 +17088,20 @@ fn moon_drives_elevation(limits: Option<&tempo_audio::rotator::Limits>) -> bool 
 
 /// Is a tracker steering the mast right now — a Moon follow, or a pass prepositioning or tracking?
 /// An ARMED pass (waiting for AOS, the rotor left to the operator) is not.
+///
+/// ⚠️ **Nor is a pass that lost its rotor ARMED, whatever its badge says.** A pass whose rotator
+/// stopped answering while it prepositioned publishes "armed" until AOS (it has no mast to slew),
+/// and its re-probe takes the mast back within 15 s once the rotator answers — off the station a
+/// point just turned it to. `rotor_lost` can only be set by commands the pass sent, so a pass that
+/// carries it has been steering, and is treated as steering.
 fn tracker_steering() -> bool {
     moon_track_now().is_some()
         || SAT_TRACK
             .lock()
-            .map(|g| g.as_ref().is_some_and(|t| t.state != "armed"))
+            .map(|g| {
+                g.as_ref()
+                    .is_some_and(|t| t.state != "armed" || t.rotor_lost)
+            })
             .unwrap_or(false)
 }
 
@@ -23992,6 +24001,43 @@ fn external_rotctld_note(was: Option<&str>, now: Option<&str>) -> Option<String>
     }
 }
 
+/// The two copies of "rotctld exited" (the Connections log's, verbatim, and the diagnostic log's,
+/// with a network address in the Port box `port` masked), with Hamlib's own words (`said`).
+fn rotctld_exited_lines(port: &str, said: &[String]) -> (String, String) {
+    let screen = tempo_audio::service::with_daemon_error(
+        "rotctld exited — the rotator is not under control. Restarting it.".to_string(),
+        said,
+    );
+    let diag = tempo_audio::rotator::mask_port(&screen, port);
+    (screen, diag)
+}
+
+/// The two copies of "rotctld launched" (or, for model 3, "PstRotatorAz link up"): the
+/// Connections log's, verbatim, and the diagnostic log's, with a network address in the Port box
+/// (for PstRotatorAz, its UDP target) masked.
+fn rotctld_launched_lines(params: &RotctldParams, pst: bool) -> (String, String) {
+    let port = params.3;
+    let screen = if pst {
+        format!(
+            "PstRotatorAz link up (UDP to {}, rotctld :{port})",
+            if params.1.is_empty() {
+                tempo_audio::pstrotator::DEFAULT_TARGET
+            } else {
+                &params.1
+            }
+        )
+    } else {
+        format!(
+            "rotctld launched (model {} on {} @ {}, :{port})",
+            params.0,
+            if params.1.is_empty() { "-" } else { &params.1 },
+            params.2
+        )
+    };
+    let diag = tempo_audio::rotator::mask_port(&screen, &params.1);
+    (screen, diag)
+}
+
 /// The two copies of "rotctld could not start", with Hamlib's own words (`said`): the Connections
 /// log's, on screen only and verbatim, and the diagnostic log's, which is built to be sent to a
 /// stranger and so has a network address in the Port box masked (`tempo_audio::rotator::mask_port`).
@@ -24052,10 +24098,7 @@ fn reconcile_rotctld(
         (Some((true, true)), true) => RotctldSync::Running, // running, with the right params
         (was, true) => {
             if let (Some((_, false)), Some((proc, old))) = (was, g.as_mut()) {
-                let line = tempo_audio::service::with_daemon_error(
-                    "rotctld exited — the rotator is not under control. Restarting it.".to_string(),
-                    &proc.said(),
-                );
+                let (screen, diag) = rotctld_exited_lines(&old.1, &proc.said());
                 // The diagnostic log's copy, at most once a minute: a daemon that comes up and
                 // dies on every 5 s retry is one line and a count there, not a line per retry.
                 tempo_core::applog::throttled(
@@ -24063,9 +24106,9 @@ fn reconcile_rotctld(
                     "rotator",
                     "rotctld-exited",
                     std::time::Duration::from_secs(60),
-                    &tempo_audio::rotator::mask_port(&line, &old.1),
+                    &diag,
                 );
-                conn_log("Rotator", "error", line);
+                conn_log("Rotator", "error", screen);
             }
             let slot = &mut *g;
             *slot = None; // kill-on-drop reaps a stale daemon first
@@ -24082,7 +24125,6 @@ fn reconcile_rotctld(
             }
             match spawn(params.0, &params.1, params.2, params.3) {
                 Ok(mut proc) => {
-                    let port = params.3;
                     // Give it the moment it takes to fail. A rotctld that cannot open the port
                     // is gone in tens of milliseconds; one that comes up is still here after a
                     // quarter second and this costs a settings save that long, once.
@@ -24092,31 +24134,16 @@ fn reconcile_rotctld(
                         std::thread::sleep(std::time::Duration::from_millis(25));
                     }
                     if proc.is_alive() {
-                        let what = if let RotDaemon::PstRotator(_) = proc {
-                            format!(
-                                "PstRotatorAz link up (UDP to {}, rotctld :{port})",
-                                if params.1.is_empty() {
-                                    tempo_audio::pstrotator::DEFAULT_TARGET
-                                } else {
-                                    &params.1
-                                }
-                            )
-                        } else {
-                            format!(
-                                "rotctld launched (model {} on {} @ {}, :{port})",
-                                params.0,
-                                if params.1.is_empty() { "-" } else { &params.1 },
-                                params.2
-                            )
-                        };
+                        let pst = matches!(proc, RotDaemon::PstRotator(_));
+                        let (screen, diag) = rotctld_launched_lines(&params, pst);
                         tempo_core::applog::throttled(
                             tempo_core::applog::Level::Info,
                             "rotator",
                             "rotctld-started",
                             std::time::Duration::from_secs(60),
-                            &tempo_audio::rotator::mask_port(&what, &params.1),
+                            &diag,
                         );
-                        conn_log("Rotator", "info", what);
+                        conn_log("Rotator", "info", screen);
                         *slot = Some((proc, params));
                         owner.failing = None;
                         RotctldSync::Started
@@ -24252,6 +24279,30 @@ mod rotctld_supervisor_tests {
             failing: None,
             external: None,
         }
+    }
+
+    #[test]
+    fn the_diagnostic_copies_of_launched_and_exited_mask_a_network_port_box() {
+        let params = (603, "203.0.113.9:4001".to_string(), 9600, 4533);
+        let (screen, diag) = rotctld_launched_lines(&params, false);
+        assert!(screen.contains("203.0.113.9:4001"), "{screen}");
+        assert_eq!(
+            diag,
+            "rotctld launched (model 603 on a network address:4001 @ 9600, :4533)"
+        );
+        // PstRotatorAz's UDP target on another computer.
+        let (_, diag) = rotctld_launched_lines(&(3, "203.0.113.9:12000".into(), 0, 4533), true);
+        assert!(!diag.contains("203.0.113.9"), "{diag}");
+        let said = vec!["network_open: 203.0.113.9 refused".to_string()];
+        let (screen, diag) = rotctld_exited_lines("203.0.113.9:4001", &said);
+        assert!(
+            screen.contains("203.0.113.9"),
+            "the screen keeps it: {screen}"
+        );
+        assert!(!diag.contains("203.0.113.9"), "{diag}");
+        // The control: a serial port stays.
+        let (_, diag) = rotctld_launched_lines(&(603, "COM4".into(), 9600, 4533), false);
+        assert!(diag.contains("on COM4 @ 9600"), "{diag}");
     }
 
     #[test]
@@ -25617,10 +25668,14 @@ mod point_at_call_tests {
     #[test]
     fn a_point_at_call_ends_a_steering_pass_and_leaves_an_armed_one_armed() {
         let _alone = crate::sat_track_alone();
-        for (state, ends) in [
-            ("armed", false),
-            ("prepositioning", true),
-            ("tracking", true),
+        // (state, rotor lost, does a point end it?) A pass that lost its rotor while it
+        // prepositioned publishes "armed" with `rotor_lost`, and it was steering: it ends.
+        for (state, lost, ends) in [
+            ("armed", false, false),
+            ("prepositioning", false, true),
+            ("tracking", false, true),
+            ("armed", true, true),
+            ("tracking", true, true),
         ] {
             let (addr, _sent) = rotctld();
             let mut eng = Engine::with_settings(tempo_app::settings::Settings {
@@ -25645,6 +25700,7 @@ mod point_at_call_tests {
             test_live_sat_track("SO-50");
             if let Some(b) = SAT_TRACK.lock().unwrap().as_mut() {
                 b.state = state.into();
+                b.rotor_lost = lost;
             }
             tauri::async_runtime::block_on(point_at_call(&engine, "EC1DD".into(), None))
                 .expect("the point went out");
@@ -25653,7 +25709,7 @@ mod point_at_call_tests {
             assert_eq!(
                 (live, held),
                 (!ends, !ends),
-                "a point while the pass is {state}"
+                "a point while the pass is {state}, rotor lost: {lost}"
             );
         }
     }
@@ -25665,6 +25721,9 @@ mod point_at_call_tests {
     #[cfg(feature = "radio")]
     #[test]
     fn the_bearing_the_box_shows_is_the_one_point_turns_the_antenna_to() {
+        // A point disarms a tracker that is steering, through the process-wide badge: alone, so
+        // it never takes another test's Moon follow or pass (`sat_track_alone`).
+        let _alone = crate::sat_track_alone();
         use propagation::geo::{haversine_km, maidenhead_to_latlon};
         let (addr, sent) = rotctld();
         let mut eng = Engine::with_settings(tempo_app::settings::Settings {
