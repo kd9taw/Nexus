@@ -20,7 +20,7 @@ import { installCatalog, setLocale, t } from '../i18n'
 import { RU } from '../i18n/ru'
 import { PhoneCockpit } from './PhoneCockpit'
 import type { RadioStatus, Tier } from '../types'
-import { cw, jtty, panelsWith, phone, psk, rtty, settle, snap, stopsOnScreen, type Case } from './stop-line.testkit'
+import { cw, jtty, panelsWith, phone, psk, rtty, settle, snap, sstv, stopsOnScreen, type Case } from './stop-line.testkit'
 
 // The api answers the stop-line sweeps share (stop-line.api.testkit.ts says why).
 // …plus the version the top bar prints beside its name (the shared answers have none for it).
@@ -131,6 +131,21 @@ describe('the compact dock: every transmit and stop control stays in the dock or
       expect(inDock != null, `${c.cockpit} ${vp}: meters in the dock`).toBe(!WIDE.has(vp))
       if (inStrip) expect(inStrip.classList.contains('strip'), 'the two-row strip variant').toBe(true)
       cleanup()
+    }
+  })
+
+  // SSTV carries the picture in the audio, so overdrive past ALC wrecks the image at the far end: its
+  // strip shows the same read-only meters, ALC among them, from md up. Below md SSTV has no dock row
+  // for them, and nothing else moves.
+  it.each(SIZES)('SSTV at %s: the read-only meters, ALC among them, stand in the strip from md up', async (vp) => {
+    at(vp)
+    await mount(sstv)
+    const inStrip = document.querySelector('.cockpit-txstrip .cockpit-txstrip-meters .ph-txmeters')
+    expect(inStrip != null, `SSTV ${vp}: meters in the strip`).toBe(WIDE.has(vp))
+    if (inStrip) {
+      expect(inStrip.classList.contains('strip'), 'the two-row strip variant').toBe(true)
+      expect([...inStrip.querySelectorAll('.ph-txmeter-label')].map((l) => l.textContent)).toContain('ALC')
+      expect(inStrip.querySelector('button, input, select'), 'a readout: nothing in it to press').toBeNull()
     }
   })
 

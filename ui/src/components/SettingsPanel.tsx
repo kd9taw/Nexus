@@ -269,6 +269,7 @@ import { PalettePicker } from './PalettePicker'
 import { SettingsColours } from './SettingsColours'
 import type { PaletteRoleId, PaletteSelection } from '../features/paletteRoles'
 import { LiveLevelMeter, LiveRxLevelDb } from './LiveMeters'
+import { TxMeters } from './TxMeters'
 import { WatchlistPanel } from './WatchlistPanel'
 import { MiniSpectrum } from './MiniSpectrum'
 import { SettingsGroup, SettingsOpenTarget } from './SettingsGroup'
@@ -7652,6 +7653,17 @@ export function SettingsPanel({
                   )}
                 </span>
               </label>
+
+              {/* THE TX METERS BESIDE THE DRIVE (#461): set the drive against the radio's ALC without
+                  leaving Settings. The cockpits' read-only TxMeters (`pinned`: live while keyed, the
+                  last readings held between overs), nothing in it to press. Only for the radio in
+                  use, the one they measure: under another radio's Drive they would be the wrong
+                  radio's ALC. */}
+              {radio && !editingOtherRadio && (
+                <div className="settings-field">
+                  <TxMeters radio={radio} pinned />
+                </div>
+              )}
 
               <div className="settings-field">
                 <span className="settings-label">
