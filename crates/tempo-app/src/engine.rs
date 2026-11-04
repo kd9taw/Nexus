@@ -20346,6 +20346,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
         if held.prop_mode.as_deref() == Some("SAT") {
             held.sat_name = None;
+            // The satellite's uplink goes with the satellite: the stamp's leg split is undone,
+            // and the contact keeps the frequency it was heard on (#163).
+            tempo_core::logbook::unsplit_satellite_legs(held);
         }
         held.prop_mode = Some(picked.clone()).filter(|m| !m.is_empty());
         self.settings.log_prop_mode = picked;
@@ -55286,6 +55289,81 @@ mod tests {
         assert_eq!(logged.prop_mode, None);
         assert!((logged.freq_mhz - 14.074).abs() < 1e-9);
         assert_eq!(logged.freq_rx_mhz, None);
+    }
+
+    /// #163 review: Log Check must judge a satellite contact's band against its RECEIVE leg. FREQ
+    /// is now the uplink (145.850) while the band is the downlink (70cm), and a check of FREQ
+    /// against the band called every new satellite contact a mismatch and offered to "fix" it onto
+    /// the uplink band — moving it in awards, Needed, B4 and dupes, and dropping its BAND_RX.
+    #[test]
+    fn log_check_does_not_flag_a_satellite_contact_logged_with_both_legs() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut rec = e.qso_record("W1AW".into(), None, None);
+        rec.band = "70cm".into();
+        rec.mode = "FM".into();
+        rec.freq_mhz = 436.795;
+        rec.freq_rx_mhz = None;
+        e.log_qso(rec);
+        let r = e.stored_log()[0].as_ref().clone();
+        assert!((r.freq_mhz - 145.85).abs() < 1e-9, "fixture: both legs");
+        let probs = crate::logtools::problems_of(&r, &|_, _| None, now_unix_secs());
+        assert!(
+            !probs
+                .iter()
+                .any(|p| p.kind == crate::logtools::ProblemKind::BandFreq),
+            "a satellite contact is not a band/frequency mismatch: {probs:?}"
+        );
+        // CONTROL: a terrestrial contact whose frequency really is off its band is still flagged.
+        let mut wrong = r.clone();
+        wrong.freq_rx_mhz = None;
+        wrong.freq_mhz = 14.074;
+        let probs = crate::logtools::problems_of(&wrong, &|_, _| None, now_unix_secs());
+        assert!(probs
+            .iter()
+            .any(|p| p.kind == crate::logtools::ProblemKind::BandFreq));
+    }
+
+    /// #163 review: the operator taking SAT off a contact in the popup takes the satellite's
+    /// uplink with it. The stamp wrote FREQ = the bird's uplink and moved the heard frequency to
+    /// FREQ_RX; a contact that is not a satellite one has only the frequency it was heard on.
+    #[test]
+    fn taking_sat_off_in_the_popup_puts_back_the_heard_frequency() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut rec = e.qso_record("W1AW".into(), None, None);
+        rec.band = "70cm".into();
+        rec.mode = "FM".into();
+        rec.freq_mhz = 436.795;
+        rec.freq_rx_mhz = None;
+        e.stamp_satellite(&mut rec);
+        assert_eq!(rec.prop_mode.as_deref(), Some("SAT"));
+        assert!((rec.freq_mhz - 145.85).abs() < 1e-9, "fixture: split");
+        e.take_popup_prop_mode(&mut rec, Some(""));
+        assert_eq!(rec.prop_mode, None);
+        assert!(
+            (rec.freq_mhz - 436.795).abs() < 1e-9,
+            "FREQ is the heard one: {}",
+            rec.freq_mhz
+        );
+        assert_eq!(rec.freq_rx_mhz, None);
+        // Another propagation mode in its place does the same.
+        let mut rec2 = rec.clone();
+        rec2.freq_mhz = 145.85;
+        rec2.freq_rx_mhz = Some(436.795);
+        rec2.prop_mode = Some("SAT".into());
+        rec2.sat_name = Some("SO-50".into());
+        e.take_popup_prop_mode(&mut rec2, Some("ES"));
+        assert!((rec2.freq_mhz - 436.795).abs() < 1e-9);
+        assert_eq!(rec2.freq_rx_mhz, None);
     }
 
     /// #163 — A SPLIT CONTACT LOGS BOTH FREQUENCIES; A SATELLITE CONTACT IS LEFT ALONE.

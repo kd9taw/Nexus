@@ -1115,15 +1115,25 @@ pub fn problems_of(
             want.filter(|_| !confirmed).map(|n| Some(n.to_string())),
         );
     }
-    if r.freq_mhz.is_finite() && r.freq_mhz > 0.0 {
-        let by_freq = crate::bandplan::band_for_dial(r.freq_mhz);
+    // The band is judged against the RECEIVE leg (#163): a satellite contact's FREQ is its uplink
+    // and its band the downlink, FREQ_RX, which it is counted on. And against the band it is
+    // counted on (`counted_band`): a row an older build imported holds the uplink as its band
+    // with BAND_RX parked. A contact with one frequency is judged as before.
+    let heard = r
+        .freq_rx_mhz
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(r.freq_mhz);
+    if heard.is_finite() && heard > 0.0 {
+        let by_freq = crate::bandplan::band_for_dial(heard);
         if r.band.trim().is_empty() {
             add(
                 ProblemKind::NoBand,
                 Some(Field::Band),
                 by_freq.map(|b| Some(b.to_string())),
             );
-        } else if let Some(b) = by_freq.filter(|b| !same_band(b, r.band.trim())) {
+        } else if let Some(b) =
+            by_freq.filter(|b| !same_band(b, tempo_core::logbook::counted_band(r).trim()))
+        {
             add(
                 ProblemKind::BandFreq,
                 Some(Field::Band),

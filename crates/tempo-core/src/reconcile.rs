@@ -81,11 +81,7 @@ type Key = (String, String, &'static str, u64);
 /// passthrough, and it is that band the row is matched on here, so LoTW's confirmation still
 /// finds the contact.
 fn match_band(r: &QsoRecord) -> String {
-    r.extra
-        .iter()
-        .find(|(k, v)| k == "BAND_RX" && !v.trim().is_empty())
-        .map_or(r.band.as_str(), |(_, v)| v.trim())
-        .to_ascii_lowercase()
+    crate::logbook::counted_band(r).to_ascii_lowercase()
 }
 
 fn key(r: &QsoRecord) -> Key {

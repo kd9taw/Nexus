@@ -3380,6 +3380,8 @@ pub(crate) fn sat_tagged(rec: &mut QsoRecord, sat_name: Option<&str>) -> bool {
                 .is_some_and(|p| p.trim().eq_ignore_ascii_case("SAT"))
             {
                 rec.prop_mode = None;
+                // …and the bird's uplink goes with the bird (#163).
+                unsplit_satellite_legs(rec);
             }
         }
     }
@@ -4547,7 +4549,10 @@ type DedupKey = (String, String, String, u64);
 fn dedup_key(r: &QsoRecord) -> DedupKey {
     (
         r.call.to_ascii_uppercase(),
-        r.band.to_ascii_lowercase(),
+        // The band the contact is COUNTED on ([`counted_band`]): a satellite contact an older
+        // build imported (uplink as its band, BAND_RX parked) and the same row read now (mapped
+        // onto its downlink) are one contact, so a re-import or a restore finds it.
+        counted_band(r).to_ascii_lowercase(),
         dedup_mode(&r.mode),
         r.when_unix,
     )
@@ -5550,6 +5555,32 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
     // sideband in MODE included ([`canonical`]).
     canonical::contact(&mut rec);
     Some(rec)
+}
+
+/// #163: the band a contact is COUNTED on — its receive leg. The record's band, except on a row
+/// an older build imported from another logger before the reader mapped BAND_RX: that one holds
+/// the uplink as its band with BAND_RX parked in the passthrough, and the parked BAND_RX is the
+/// band it is the same contact on. The one rule dedup, reconcile and Log Check share, so a legacy
+/// row and the same row read now are never two contacts.
+pub fn counted_band(r: &QsoRecord) -> &str {
+    r.extra
+        .iter()
+        .find(|(k, v)| k == "BAND_RX" && !v.trim().is_empty())
+        .map_or(r.band.as_str(), |(_, v)| v.trim())
+}
+
+/// #163: undo the satellite stamp's leg split on a contact that is no longer a satellite one —
+/// FREQ back to the downlink it was heard on (FREQ_RX), FREQ_RX gone — so it does not go out as a
+/// cross-band contact on an uplink the operator never used. Only the split this build makes (the
+/// receive leg on the record's band, the transmit leg on another); a same-band split and a row
+/// another logger wrote with its own legs are left as they are.
+pub fn unsplit_satellite_legs(rec: &mut QsoRecord) {
+    if cross_band_tx_band(rec).is_none() || rec.extra.iter().any(|(k, _)| k == "BAND_RX") {
+        return;
+    }
+    if let Some(rx) = rec.freq_rx_mhz.take() {
+        rec.freq_mhz = rx;
+    }
 }
 
 /// #163: the band a parsed contact is counted on — the RECEIVE leg. BAND as before, except for
@@ -8762,6 +8793,31 @@ mod tests {
         let out = adif_record(r);
         assert_eq!(tags(&out, "BAND"), ["2m"], "{out}");
         assert_eq!(tags(&out, "BAND_RX"), ["70cm"], "{out}");
+    }
+
+    /// #163 review: untagging a satellite contact in the Logbook takes the bird's uplink with it —
+    /// FREQ back to the downlink it was heard on, FREQ_RX gone — so it does not go out as a
+    /// terrestrial cross-band contact on a frequency the operator never used. A row an older build
+    /// imported with the uplink as its band (BAND_RX parked) is another logger's claim, and keeps
+    /// its frequencies.
+    #[test]
+    fn untagging_a_satellite_contact_puts_back_the_heard_frequency() {
+        let mut r = so50();
+        assert!(sat_tagged(&mut r, None));
+        assert_eq!(
+            (r.prop_mode.as_deref(), r.sat_name.as_deref()),
+            (None, None)
+        );
+        assert!((r.freq_mhz - 436.795).abs() < 1e-9, "{}", r.freq_mhz);
+        assert_eq!(r.freq_rx_mhz, None);
+        assert!(tags(&adif_record(&r), "BAND_RX").is_empty());
+
+        let mut legacy = so50();
+        legacy.band = "2m".into();
+        legacy.extra = vec![("BAND_RX".into(), "70cm".into())];
+        assert!(sat_tagged(&mut legacy, None));
+        assert!((legacy.freq_mhz - 145.85).abs() < 1e-9);
+        assert_eq!(legacy.freq_rx_mhz, Some(436.795));
     }
 
     #[test]
