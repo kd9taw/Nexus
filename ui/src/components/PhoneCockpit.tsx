@@ -597,8 +597,8 @@ const PHONE_DEFAULT_SPAN = SPANS.find((sp) => sp.id === 'full') ?? SPANS[0]
  *  compared on `id` for the same reason SPANS is.
  *
  *  THESE CHIPS ARE THE ONE CONTROL THAT SETS THE RADIO'S SPAN (CW's RF_SPANS says why): the Rig
- *  scope pane's own span row, which could leave the radio on a span no chip named, is gone, and its
- *  ±50k and ±100k are here. */
+ *  scope pane's own span row, which could leave the radio on a span no chip named, is gone, and every
+ *  span it offered is here (±2.5k to ±250k; a Flex pan's 1M and 2M as ±500k and ±1M, `only: 'flex'`). */
 const RF_SPANS = [
   {
     id: 'band',
@@ -613,6 +613,29 @@ const RF_SPANS = [
     hi: 1e9,
     label: () => t('phone.rfZoom.full.label'),
     title: () => t('phone.rfZoom.full.title'),
+  },
+  {
+    id: '±1M',
+    lo: -1_000_000,
+    hi: 1_000_000,
+    label: () => '±1M',
+    title: () => t('phone.rfZoom.span.title', { khz: 1000 }),
+    only: 'flex',
+  },
+  {
+    id: '±500k',
+    lo: -500_000,
+    hi: 500_000,
+    label: () => '±500k',
+    title: () => t('phone.rfZoom.span.title', { khz: 500 }),
+    only: 'flex',
+  },
+  {
+    id: '±250k',
+    lo: -250_000,
+    hi: 250_000,
+    label: () => '±250k',
+    title: () => t('phone.rfZoom.span.title', { khz: 250 }),
   },
   {
     id: '±100k',
@@ -648,6 +671,13 @@ const RF_SPANS = [
     hi: 5_000,
     label: () => '±5k',
     title: () => t('phone.rfZoom.span.title', { khz: 5 }),
+  },
+  {
+    id: '±2.5k',
+    lo: -2_500,
+    hi: 2_500,
+    label: () => '±2.5k',
+    title: () => t('phone.rfZoom.span.title', { khz: 2.5 }),
   },
 ] as const
 
@@ -879,7 +909,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
   const [span, setSpan] = useState<(typeof SPANS)[number]>(
     () => SPANS.find((sp) => sp.id === surfaceGet(PHONE_SCOPE_SPAN_KEY)) ?? PHONE_DEFAULT_SPAN,
   )
-  const [rfSpan, setRfSpanState] = useState<(typeof RF_SPANS)[number]>(() => {
+  const [rfSpanPick, setRfSpanState] = useState<(typeof RF_SPANS)[number]>(() => {
     const id = loadRfSpan('phone', RF_SPANS.map((sp) => sp.id), 'band')
     return RF_SPANS.find((sp) => sp.id === id) ?? RF_SPANS[0]
   })
@@ -922,6 +952,12 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
   // The RF window the chosen span draws, absolute Hz: the band's for Band (null off every band, which
   // then draws as Full), the dial's ± for the ± chips, none for Full.
   const dialHzNow = snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null
+  // The spans this source offers: every rung the old rig-span buttons had, and for a Flex pan its 1M and 2M
+  // too. A stored pick the source does not offer (±1M kept from a Flex, then an Icom) is drawn as the
+  // default, and stays stored for the radio that offers it.
+  const rfOffered = RF_SPANS.filter((sp) => !('only' in sp) || sp.only === scopeFeed?.source)
+  const rfSpan =
+    rfOffered.find((sp) => sp.id === rfSpanPick.id) ?? rfOffered.find((sp) => sp.id === 'band') ?? rfOffered[0]
   const bandFit = rfSpan.id === 'band' ? bandWindow(dialHzNow) : null
   const rfWant =
     rfSpan.id === 'band'
@@ -3310,7 +3346,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
 
             // Native RF panadapter: RF-width zoom around the dial (not audio-passband slices).
             <div className="ph-span" role="group" aria-label={t('phone.rfZoom.aria')}>
-              {RF_SPANS.map((sp) => (
+              {rfOffered.map((sp) => (
                 <button
                   key={sp.id}
                   type="button"

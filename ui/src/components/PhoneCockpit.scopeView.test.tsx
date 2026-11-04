@@ -169,8 +169,8 @@ describe('the Phone scope on a radio with its own scope', () => {
     expect(screen.queryAllByTitle(/scope span to|panadapter bandwidth to/)).toEqual([])
     expect(screen.getByRole('slider', { name: 'Scope reference level (dB)' })).toBeTruthy()
     const z = within(screen.getByRole('group', { name: 'Panadapter zoom' }))
-    expect(z.getByRole('button', { name: '±100k' })).toBeTruthy()
-    expect(z.getByRole('button', { name: '±50k' })).toBeTruthy()
+    // Every span the old rig-span row offered, and no Flex-only span on an Icom.
+    expect(z.getAllByRole('button').map((b) => b.textContent)).toEqual(['Band', 'Full', '±250k', '±100k', '±50k', '±25k', '±10k', '±5k', '±2.5k'])
   })
 
   it('the slow-scope hint on an Icom only, and never a command to the radio', async () => {

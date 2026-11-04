@@ -196,6 +196,14 @@ const AGC_CHIPS = [
   { id: 'off', labelKey: 'cw.rxDsp.agc.off' },
 ] as const satisfies readonly { id: string; labelKey: MessageKey }[]
 
+/** The effective window height (CSS px) from which CW's Both view stacks its two scopes; below it they
+ *  stand side by side. 1366×768 at 100 % is ~690 px; at 175 % it is 439. */
+const STACK_MIN_EFF_H = 560
+
+/** How long after the station was last seen on the air the scope strip's default may change (ms):
+ *  the tail of a CW over that the snapshot does not see. */
+const STRIP_UNKEY_HOLD_MS = 1000
+
 /** RF-zoom presets for a native panadapter (mirror of the Phone cockpit, Band and the asking
  *  included: see its RF_SPANS). The ± labels are measurements and stay written here; `Band` and
  *  `Full` are words. Both and every title resolve when the row RENDERS (a module constant would
@@ -205,13 +213,10 @@ const AGC_CHIPS = [
  *  THESE CHIPS ARE THE ONE CONTROL THAT SETS THE RADIO'S SPAN. A second row of rig-span chips
  *  (±2.5k…±250k for an Icom, 50k…2M for a Flex pan) used to command the radio beside them, and the two
  *  could disagree: a rig-span click stood until the next band or chip change re-asked, with the chip
- *  still lit for a span the radio was no longer on. Its ±50k and ±100k live on here; its widest is
- *  what Band asks on the wide bands. A CW scope opens on ±25k: CW work is close in, and Band on 2 m
+ *  still lit for a span the radio was no longer on. Every span that row offered lives on here
+ *  (±2.5k to ±250k, and a Flex pan's 1M and 2M as ±500k and ±1M, `only: 'flex'`), so none is reachable
+ *  only through Band. A CW scope opens on ±25k: CW work is close in, and Band on 2 m
  *  asks an Icom for ±500 kHz, where a CW signal is under one point wide. */
-/** The effective window height (CSS px) from which CW's Both view stacks its two scopes; below it they
- *  stand side by side. 1366×768 at 100 % is ~690 px; at 175 % it is 439. */
-const STACK_MIN_EFF_H = 560
-
 const RF_SPANS = [
   {
     id: 'band',
@@ -226,6 +231,29 @@ const RF_SPANS = [
     hi: 1e9,
     label: () => t('cw.rfZoom.full.label'),
     title: () => t('cw.rfZoom.full.title'),
+  },
+  {
+    id: '±1M',
+    lo: -1_000_000,
+    hi: 1_000_000,
+    label: () => '±1M',
+    title: () => t('cw.rfZoom.span.title', { khz: 1000 }),
+    only: 'flex',
+  },
+  {
+    id: '±500k',
+    lo: -500_000,
+    hi: 500_000,
+    label: () => '±500k',
+    title: () => t('cw.rfZoom.span.title', { khz: 500 }),
+    only: 'flex',
+  },
+  {
+    id: '±250k',
+    lo: -250_000,
+    hi: 250_000,
+    label: () => '±250k',
+    title: () => t('cw.rfZoom.span.title', { khz: 250 }),
   },
   {
     id: '±100k',
@@ -261,6 +289,13 @@ const RF_SPANS = [
     hi: 5_000,
     label: () => '±5k',
     title: () => t('cw.rfZoom.span.title', { khz: 5 }),
+  },
+  {
+    id: '±2.5k',
+    lo: -2_500,
+    hi: 2_500,
+    label: () => '±2.5k',
+    title: () => t('cw.rfZoom.span.title', { khz: 2.5 }),
   },
 ] as const
 
@@ -711,8 +746,19 @@ export function CwCockpit({
   const onAirNow =
     snap.radio.transmitting || !!snap.radio.txBusyReason || snap.radio.tuning === true || snap.radio.rigKeyed === true
   const [tallStrip, setTallStrip] = useState(false)
+  // When the station was last seen on the air. The snapshot cannot see the last element of a CW
+  // over (the keyer's tail after the send returns), so the change also waits out a second after it.
+  const lastOnAirAt = useRef(0)
+  if (onAirNow) lastOnAirAt.current = Date.now()
   useEffect(() => {
-    if (!onAirNow && tallStrip !== rigScope) setTallStrip(rigScope)
+    if (onAirNow || tallStrip === rigScope) return
+    const wait = lastOnAirAt.current + STRIP_UNKEY_HOLD_MS - Date.now()
+    if (wait <= 0) {
+      setTallStrip(rigScope)
+      return
+    }
+    const id = window.setTimeout(() => setTallStrip(rigScope), wait)
+    return () => window.clearTimeout(id)
   }, [onAirNow, rigScope, tallStrip])
   // The scope's spot tags: Band Activity's set (CW spots on this band), each with its mark.
   const scopeTags = useMemo(
@@ -774,7 +820,7 @@ export function CwCockpit({
       .then((s) => onSnap?.(s))
       .catch(showWhenDriving)
   }
-  const [rfSpan, setRfSpanState] = useState<(typeof RF_SPANS)[number]>(() => {
+  const [rfSpanPick, setRfSpanState] = useState<(typeof RF_SPANS)[number]>(() => {
     const id = loadRfSpan('cw', RF_SPANS.map((sp) => sp.id), '±25k')
     return RF_SPANS.find((sp) => sp.id === id) ?? RF_SPANS[0]
   })
@@ -787,6 +833,12 @@ export function CwCockpit({
   const [scopeSweep, setScopeSweep] = useState<TaggedSweep | null>(null)
   // The RF window the chosen span draws, and the sweep asked of the radio for it (as Phone's).
   const dialHzNow = snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null
+  // The spans this source offers: every rung the old rig-span buttons had, and for a Flex pan its 1M and 2M
+  // too. A stored pick the source does not offer (±1M kept from a Flex, then an Icom) is drawn as the
+  // default, and stays stored for the radio that offers it.
+  const rfOffered = RF_SPANS.filter((sp) => !('only' in sp) || sp.only === scopeFeed?.source)
+  const rfSpan =
+    rfOffered.find((sp) => sp.id === rfSpanPick.id) ?? rfOffered.find((sp) => sp.id === '±25k') ?? rfOffered[0]
   const bandFit = rfSpan.id === 'band' ? bandWindow(dialHzNow) : null
   const rfWant =
     rfSpan.id === 'band'
@@ -1276,17 +1328,17 @@ export function CwCockpit({
           title={rfSpan.title()}
           value={rfSpan.id}
           onChange={(e) => {
-            const sp = RF_SPANS.find((x) => x.id === e.target.value)
+            const sp = rfOffered.find((x) => x.id === e.target.value)
             if (sp) setRfSpan(sp)
           }}
         >
-          {RF_SPANS.map((sp) => (
+          {rfOffered.map((sp) => (
             <option key={sp.id} value={sp.id}>
               {sp.label()}
             </option>
           ))}
         </select>
-      ) : RF_SPANS.map((sp) => (
+      ) : rfOffered.map((sp) => (
         <button
           key={sp.id}
           type="button"
@@ -2882,6 +2934,9 @@ export function CwCockpit({
       <PaneSeam
         // Remounted when the default changes, so the new default is read (a stored height still wins).
         key={tallStrip ? 'rig-scope' : 'audio'}
+        // The default here depends on the radio (25 % or 40 %), so a Reset forgets the stored height
+        // rather than storing the default in force: the next radio opens on its own default.
+        resetClears
         axis="y"
         varName="--cw-scope-h"
         strip={scopeRef}

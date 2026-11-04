@@ -97,10 +97,13 @@ vi.mock('./PhoneScope', () => ({
   },
 }))
 // The scope's divider records the default height it was handed (its own clamping is PaneSeam's tests').
-const { seamDefaults } = vi.hoisted(() => ({ seamDefaults: [] as (number | null)[] }))
+const { seamDefaults, seamResetClears } = vi.hoisted(() => ({ seamDefaults: [] as (number | null)[], seamResetClears: [] as (boolean | undefined)[] }))
 vi.mock('./PaneSeam', () => ({
-  PaneSeam: (p: { defaultPct: number | null; varName?: string }) => {
-    if (p.varName === '--cw-scope-h') seamDefaults.push(p.defaultPct)
+  PaneSeam: (p: { defaultPct: number | null; varName?: string; resetClears?: boolean }) => {
+    if (p.varName === '--cw-scope-h') {
+      seamDefaults.push(p.defaultPct)
+      seamResetClears.push(p.resetClears)
+    }
     return <div className="pane-splitter horizontal" />
   },
 }))
@@ -177,6 +180,7 @@ const spanCalls = () => vi.mocked(api.setScopeSpan).mock.calls.length + vi.mocke
 describe('the CW scope on a radio with its own scope', () => {
   beforeEach(() => {
     seamDefaults.length = 0
+    seamResetClears.length = 0
     // A window tall enough for the halves to stack (useViewport publishes --vh-eff; jsdom has none).
     document.documentElement.style.setProperty('--vh-eff', '900px')
     vi.mocked(api.setScopeSpan).mockClear()
@@ -374,8 +378,37 @@ describe('the CW scope on a radio with its own scope', () => {
     r.rerender(cockpit({ transmitting: true, rigKeyed: true }))
     expect(lastDefault()).toBe(25)
     r.rerender(cockpit({ transmitting: false }))
+    // Not yet: the tail of a CW over is not in the snapshot, so it waits out a second after the unkey.
+    expect(lastDefault()).toBe(25)
+    await act(async () => {
+      await new Promise((res) => setTimeout(res, 1100))
+    })
     expect(lastDefault()).toBe(40)
+    // Its Reset forgets the stored height rather than storing the 40 (PaneSeam `resetClears`).
+    expect(seamResetClears[seamResetClears.length - 1]).toBe(true)
   })
+
+  for (const [what, over] of [
+    ['a Tune carrier', { tuning: true }],
+    ['the radio reading back its own PTT', { rigKeyed: true }],
+    ['a transmission still being set up', { txBusyReason: 'sending' }],
+  ] as const) {
+    it(`holds the strip's default while on the air by ${what} alone, then a second after`, async () => {
+      const lastDefault = () => seamDefaults[seamDefaults.length - 1]
+      const cockpit = (o: Record<string, unknown>) => (
+        <CwCockpit snap={makeSnap(o)} theme="dark" onWorkSpot={() => {}} spots={[]} />
+      )
+      const r = await renderCw({ ...over })
+      radioScopeSeen()
+      expect(lastDefault()).toBe(25)
+      r.rerender(cockpit({}))
+      expect(lastDefault()).toBe(25)
+      await act(async () => {
+        await new Promise((res) => setTimeout(res, 1100))
+      })
+      expect(lastDefault()).toBe(40)
+    })
+  }
 
   it('the stacked halves are compact, each toolbar in its pane head, and the span chips ride the radio pane', async () => {
     await renderCw()
@@ -427,6 +460,43 @@ describe('the CW scope on a radio with its own scope', () => {
     fireEvent.change(select, { target: { value: '±10k' } })
     expect(localStorage.getItem('nexus.cw.rfSpan')).toBe('±10k')
     expect([propsOf('rf').viewLoHz, propsOf('rf').viewHiHz]).toEqual([-10_000, 10_000])
+  })
+
+  it('the one span control offers every span the old rig-span buttons did, per source', async () => {
+    const chips = () =>
+      within(screen.getByRole('group', { name: 'Panadapter zoom' }))
+        .getAllByRole('button')
+        .map((b) => b.textContent)
+    await renderCw()
+    radioScopeSeen('civ')
+    expect(chips()).toEqual(['Band', 'Full', '±250k', '±100k', '±50k', '±25k', '±10k', '±5k', '±2.5k'])
+    // ±2.5k (zero-in) is asked of an Icom as its own rung.
+    const sweep = propsOf('rf').onSweep as Report
+    act(() => sweep('civ', 14_025_000, 14_075_000))
+    fireEvent.click(within(screen.getByRole('group', { name: 'Panadapter zoom' })).getByRole('button', { name: '±2.5k' }))
+    act(() => sweep('civ', 14_025_000, 14_075_000))
+    expect(vi.mocked(api.setScopeSpan).mock.calls).toEqual([[2_500]])
+    cleanup()
+    // A Flex pan adds its 1M and 2M (±500k, ±1M), asked as the pan's whole bandwidth. (A fresh window:
+    // the ±2.5k picked above is stored, and a Flex would be asked for it.)
+    localStorage.clear()
+    await renderCw()
+    radioScopeSeen('flex')
+    expect(chips()).toEqual(['Band', 'Full', '±1M', '±500k', '±250k', '±100k', '±50k', '±25k', '±10k', '±5k', '±2.5k'])
+    act(() => (propsOf('rf').onSweep as Report)('flex', 14_025_000, 14_075_000))
+    fireEvent.click(within(screen.getByRole('group', { name: 'Panadapter zoom' })).getByRole('button', { name: '±1M' }))
+    act(() => (propsOf('rf').onSweep as Report)('flex', 14_025_000, 14_075_000))
+    expect(vi.mocked(api.setFlexPanSpan).mock.calls).toEqual([[2_000_000]])
+  })
+
+  it("a stored span this source does not offer draws as the default and stays stored for the radio that does", async () => {
+    localStorage.setItem('nexus.cw.rfSpan', '±1M')
+    await renderCw()
+    radioScopeSeen('civ')
+    const z = within(screen.getByRole('group', { name: 'Panadapter zoom' }))
+    expect(z.getByRole('button', { name: '±25k' }).getAttribute('aria-pressed')).toBe('true')
+    expect([propsOf('rf').viewLoHz, propsOf('rf').viewHiHz]).toEqual([-25_000, 25_000])
+    expect(localStorage.getItem('nexus.cw.rfSpan')).toBe('±1M')
   })
 })
 
