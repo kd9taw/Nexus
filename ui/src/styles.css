@@ -8078,9 +8078,14 @@ select optgroup {
   border-radius: 999px;
   padding: 3px;
 }
+/* A BUTTON LOOKS PRESSABLE (#455). TX Off, Tune and ATU were bare words — no face, no outline — so
+   in the dark theme they read like the status lights beside them. Every .op-btn now wears a raised
+   face and an outline 3:1 against what it sits on, and the outline goes to the accent on hover. A
+   status indicator wears neither (`.op-btn.readonly`, the header chips). ButtonsVsIndicators
+   .test.tsx computes both halves in every theme. */
 .op-btn {
-  border: 1px solid transparent;
-  background: transparent;
+  border: 1px solid var(--text-faint);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
   color: var(--text-dim);
   font-size: calc(12px * var(--text-scale));
   font-weight: 700;
@@ -8091,14 +8096,31 @@ select optgroup {
 }
 .op-btn:hover {
   color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+/* A button that cannot be pressed says so, as a disabled settings switch does. */
+.op-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.op-btn:disabled:hover {
+  color: var(--text-dim);
+  border-color: var(--text-faint);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 .op-btn.monitor.on {
   background: color-mix(in srgb, var(--rx) 18%, transparent);
-  border-color: color-mix(in srgb, var(--rx) 45%, transparent);
-  color: var(--state-good);
+  /* At full strength, so the lit latch keeps a button's 3:1 outline (#455; a 45 % mix was 2.25:1 in
+     the light theme). */
+  border-color: var(--rx);
+  /* The green a step toward the theme's ink, so the word reads 4.5:1 on the green tint (the light
+     theme's plain green was 3.68:1 on it). */
+  color: color-mix(in srgb, var(--state-good) 70%, var(--text));
 }
+/* TX Off in the buttons' own ink: the faint ink read under 4.5:1 on the button's face. */
 .op-btn.monitor:not(.on) {
-  color: var(--text-faint);
+  color: var(--text-dim);
 }
 /* ATU ON (#344): the radio reports its tuner in line. Lit like Hold Tx's latch, from variables
    both themes define. The menu that switches it out is anchored on an empty span inside the
@@ -8106,7 +8128,8 @@ select optgroup {
 .op-btn.atu.on {
   background: color-mix(in srgb, var(--accent) 22%, var(--bg-elev));
   color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  /* The accent at full strength: a button's 3:1 outline while lit (#455). */
+  border-color: var(--accent);
 }
 /* The anchor sits on the button's bottom-left corner, so the menu opens below (or, without room, above)
    the strip's row and never over Stop TX beside it (measured by `scripts/browser-probe --desktop atu`). */
@@ -8255,7 +8278,7 @@ select optgroup {
 .op-btn.hold.on {
   background: color-mix(in srgb, var(--accent) 22%, var(--bg-elev));
   color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-color: var(--accent);
 }
 
 .tier-toggle {
@@ -10457,13 +10480,15 @@ select optgroup {
   gap: var(--space-4);
   flex-wrap: wrap;
 }
+/* A READ-ONLY badge, so it wears no outline (#455): an accent outline on an accent tint is what a lit
+   toggle button wears. The tint stays; the transparent border keeps the badge's box. */
 .cw-mode-badge {
   font-weight: 800;
   font-size: var(--fs-label);
   letter-spacing: 0.08em;
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   padding: 3px 10px;
 }
@@ -19923,9 +19948,6 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-dim);
   margin-top: 2px;
 }
-.roam-enable .op-btn {
-  border-color: var(--border);
-}
 
 /* role / status pill */
 .roam-chip {
@@ -19981,9 +20003,6 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   flex-wrap: wrap;
   gap: var(--space-2);
   margin: var(--space-2) 0 var(--space-3);
-}
-.roam-controls .op-btn {
-  border: 1px solid var(--border);
 }
 .roam-controls .op-btn:disabled {
   opacity: 0.4;
@@ -21385,9 +21404,20 @@ button.cq-skiptx1.on {
 .cq-txctl .op-btn.atu {
   min-width: 7em;
 }
-/* The latch's READ-ONLY twin (Phone, CW): the same box, nothing to press. */
-.cq-txctl .op-btn.readonly {
+/* The latch's READ-ONLY twin (Phone, CW): the same box, nothing to press, so it looks like the
+   status it is (#455): no outline and no face, lit or not. Armed, it keeps the green word on a
+   tint, a lamp rather than a key. The buttons' hover does not reach it. */
+.cq-txctl .op-btn.monitor.readonly,
+.cq-txctl .op-btn.monitor.readonly:hover {
   cursor: default;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-faint);
+}
+.cq-txctl .op-btn.monitor.readonly.on,
+.cq-txctl .op-btn.monitor.readonly.on:hover {
+  background: color-mix(in srgb, var(--rx) 18%, transparent);
+  color: color-mix(in srgb, var(--state-good) 70%, var(--text));
 }
 /* The TX state after the cluster on the other screens' strips: Operate's colours, carried by the
    cap itself because those strips wear no rx/tx wash of their own. */
@@ -29870,23 +29900,25 @@ button.sat-chip:disabled {
   gap: var(--space-2);
   align-items: end;
 }
-/* Muted dashed placeholder pill (band slot etc.) — reads as "not wired yet". */
+/* The band READOUT a header shows when it has no band picker: plain dim words, no outline, so it is
+   not mistaken for a button (#455; it was a dashed pill). The transparent border keeps its box. */
 .cockpit-ph-pill {
   font-size: var(--fs-label);
   font-weight: 700;
   color: var(--text-dim);
-  border: 1px dashed var(--border);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   padding: 3px 10px;
 }
-/* FSK/AFSK keying-backend indicator beside the RTTY mode badge. */
+/* FSK/AFSK keying-backend indicator beside the RTTY mode badge. An indicator, so no outline and no
+   raised face (#455): those are a button's. */
 .rtty-backend-pill {
   font-size: var(--fs-label);
   font-weight: 700;
   letter-spacing: 0.06em;
   color: var(--text-dim);
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 999px;
   padding: 2px 10px;
   margin-left: var(--space-2);
