@@ -269,6 +269,7 @@ import { PalettePicker } from './PalettePicker'
 import { SettingsColours } from './SettingsColours'
 import type { PaletteRoleId, PaletteSelection } from '../features/paletteRoles'
 import { LiveLevelMeter, LiveRxLevelDb } from './LiveMeters'
+import { TxMeters } from './TxMeters'
 import { WatchlistPanel } from './WatchlistPanel'
 import { MiniSpectrum } from './MiniSpectrum'
 import { SettingsGroup, SettingsOpenTarget } from './SettingsGroup'
@@ -2131,13 +2132,13 @@ export function SettingsPanel({
     )
   }
 
-  // True while the form edits a radio that is NOT the one in use. Its RX Gain and Tx Power then edit
+  // True while the form edits a radio that is NOT the one in use. Its RX Gain and Drive then edit
   // the form only, and Save stores them on that radio: `set_rx_gain` / `set_tx_level` take no radio,
   // so applying them live would change the radio in use. Keyed on the LIVE active radio, as the
   // satellite VFO map's guard is, because that is the radio the two verbs act on.
   const editingOtherRadio = editingRadioId != null && editingRadioId !== (activeRadioId ?? form?.activeRadio)
-  // …and the hint both sliders show then, in place of their own: those call Tx Power the cockpit
-  // Pwr's control and say the RX Level meter answers RX Gain, which holds for the radio in use only.
+  // …and the hint both sliders show then, in place of their own: those call Drive the cockpit
+  // Drive slider's twin and say the RX Level meter answers RX Gain, which holds for the radio in use only.
   const otherRadioLevelHint = (
     <T
       k="settings.audio.multiRadio.levelHint"
@@ -2160,7 +2161,7 @@ export function SettingsPanel({
     void setRxGain(value).catch(() => pushToast(t('settings.audio.rxGain.failed'), 'error'))
   }
 
-  // Apply TX drive (Pwr) to the LIVE radio, the SAME value as the cockpit "Pwr" slider —
+  // Apply the TX drive to the LIVE radio, the SAME value as the cockpit "Drive" slider —
   // set_tx_level persists + updates the snapshot, so the cockpit reflects it immediately.
   // Throttled to ~16 Hz while dragging (not gated entirely on release): set_tx_level writes
   // the whole settings.json to disk on every call, so applying on every onChange tick would
@@ -2175,7 +2176,7 @@ export function SettingsPanel({
     void setTxLevel(value).catch(() => pushToast(t('settings.audio.txPower.failed'), 'error'))
   }
 
-  // Keep the Tx Power slider in step with the cockpit "Pwr" control — both are the SAME value
+  // Keep the Drive slider in step with the cockpit "Drive" control — both are the SAME value
   // (radio.txLevel). When the cockpit changes it, mirror the live value into the form so the slider
   // tracks it (previously the form was a stale copy, so cockpit→Settings never showed). setForm
   // directly (not updateNum) so this live-sync never spuriously marks the form dirty.
@@ -7682,6 +7683,17 @@ export function SettingsPanel({
                 </span>
               </label>
 
+              {/* THE TX METERS BESIDE THE DRIVE (#461): set the drive against the radio's ALC without
+                  leaving Settings. The cockpits' read-only TxMeters (`pinned`: live while keyed, the
+                  last readings held between overs), nothing in it to press. Only for the radio in
+                  use, the one they measure: under another radio's Drive they would be the wrong
+                  radio's ALC. */}
+              {radio && !editingOtherRadio && (
+                <div className="settings-field">
+                  <TxMeters radio={radio} pinned />
+                </div>
+              )}
+
               <div className="settings-field">
                 <span className="settings-label">
                   {t('settings.audio.rxLevel.label')}{' '}
@@ -9658,7 +9670,7 @@ export function SettingsPanel({
               <div className="settings-grid">
                 {/* ⚠️ The beacon toggle is a CONFIGURATION control, not a transmit control: it
                     chooses whether the station announces itself, and it can neither key, unkey
-                    nor stop anything. Same reading as Tx Power's drive slider — nothing in this
+                    nor stop anything. Same reading as the Drive slider — nothing in this
                     sub-group is on any cockpit's stop-line census. */}
                 <div className="settings-field">
                   <label className="settings-toggle">

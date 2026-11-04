@@ -10,6 +10,8 @@ import { useEscStop } from '../useEscStop'
 import type { AppSnapshot, BandChannel, Js8InboxEntry, Js8InboxState, Js8Origin, Js8Speed, Js8State, Js8Switch, Js8Unarmed, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
+import { TxMeters } from './TxMeters'
+import { useCompactChrome } from '../features/compactChrome'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
 import { PaneSeam } from './PaneSeam'
@@ -291,6 +293,7 @@ export function Js8Cockpit({
   const labels = { ...js8PanelLabels(), ...boxLabels(entries) }
   // The Stats pane where the record says nothing: on where there is room (CallStatsPane `withStatsRoom`).
   const statsRoom = useStatsRoom()
+  const chrome = useCompactChrome()
   const host = panels
     ? panelHost(withStatsRoom(panels, statsRoom), {
         menu: JS8_MENU,
@@ -1785,6 +1788,9 @@ export function Js8Cockpit({
               .then((s) => onSnap?.(s))
               .catch((e) => pushToast(String(e), 'error'))
           }
+          // md and up, the read-only TX meters beside the cluster (SSTV's and Phone's arrangement):
+          // the header's Drive slider is set against the radio's ALC, so the ALC reads here.
+          meters={chrome.wide ? <TxMeters radio={snap.radio} strip /> : undefined}
         />
       )}
 

@@ -13,6 +13,8 @@ import { Waterfall } from './Waterfall'
 import { RfScopePane } from './RfScopePane'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
+import { TxMeters } from './TxMeters'
+import { useCompactChrome } from '../features/compactChrome'
 import { FrequencyControl } from './FrequencyControl'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
@@ -582,6 +584,10 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // CockpitPaneFrame with ROLES — the composer is fit="content" (a drop zone cannot use
   // surplus height), the gallery fills — so the old seam/share machinery is meaningless
   // here and was removed with the 50/50 `.sstv-lower` split (census #10).
+  // md and up the TX strip carries the read-only TX meters in its empty right side (Phone's and CW's
+  // compact dock, `.cockpit-txstrip-meters`): SSTV carries the picture in the audio, so the ALC beside
+  // the RF power and Tune is what keeps an overdriven picture off the air. Below md there is no room.
+  const chrome = useCompactChrome()
   const host = panels ? panelHost(panels, { menu: SSTV_PANEL_IDS, side: [], main: 'gallery', labels: sstvPanelLabels(), shipsHidden: SSTV_PANELS.defaultRemoved }) : null
   // No panel record (a render without a host): every pane at its vocabulary's default — shown,
   // except the RF scope pane, which ships hidden (`defaultRemoved`).
@@ -1705,12 +1711,13 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
         <CockpitHeader
           snap={snap}
           onSnap={onSnap}
-          // DRIVE. SSTV shipped with only the TX-enable latch, so an operator had no drive
-          // control, no Tune to set it against, and no Stop TX in the place every other
-          // cockpit puts one (operator, 2026-08-04). Drive matters more here than anywhere:
-          // SSTV carries the picture in the AUDIO, so overdriving past ALC does not just
-          // splatter, it visibly wrecks the image at the far end. The latch, Tune, the ATU
-          // and Stop TX are in the TX strip under the stage.
+          // RF POWER (the radio's output over CAT, `setRfPower`; labelled "RF power", never the
+          // audio drive's "Drive"). SSTV shipped with only the TX-enable latch, so an operator had
+          // no power control, no Tune to set it against, and no Stop TX in the place every other
+          // cockpit puts one (operator, 2026-08-04). It matters more here than anywhere: SSTV
+          // carries the picture in the AUDIO, so overdriving past ALC does not just splatter, it
+          // visibly wrecks the image at the far end. The latch, Tune, the ATU and Stop TX are in
+          // the TX strip under the stage.
           power={{
             value: txPower,
             unit: '%',
@@ -2003,6 +2010,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
               .catch((e) => pushToast(String(e), 'error'))
           }
           onStopTx={() => { void haltTx() }}
+          meters={chrome.wide ? <TxMeters radio={snap.radio} strip /> : undefined}
         />
       )}
 

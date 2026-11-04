@@ -457,7 +457,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     // for the modes added in #264.
     keywords: ['slow scan', 'slow-scan', 'television', 'picture', 'image', 'photo', 'scottie',
       'martin', 'robot', 'pd120', 'iss', 'ariss', '145.800', '14.230', 'gallery',
-      'fsk id', 'fsk', 'callsign id', 'ident', 'id burst', 'wraase', 'pasokon'],
+      'fsk id', 'fsk', 'callsign id', 'ident', 'id burst', 'wraase', 'pasokon', 'rf power',
+      'transmit power', 'sstv power'],
   },
   {
     id: 'aprs',

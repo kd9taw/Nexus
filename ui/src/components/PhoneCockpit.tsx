@@ -2392,7 +2392,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
               unit: false,
             })}
 
-            {/* RF GAIN — receive front-end gain. Not the header's Pwr slider, which is
+            {/* RF GAIN — receive front-end gain. Not the header's RF power slider, which is
                 transmit power; they are `RF` and `RFPOWER` to Hamlib for that reason. */}
             {show('RF') && (
             <div className="ph-chain-item" data-chain="RF">

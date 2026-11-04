@@ -8046,7 +8046,7 @@ export const EN = {
   'settings.backup.reset.failed': 'Could not reset the configuration',
 
   'settings.audio.rxGain.failed': 'Could not apply RX gain',
-  'settings.audio.txPower.failed': 'Could not set TX power',
+  'settings.audio.txPower.failed': 'Could not set the drive',
   // What one sound-card option READS when the saved device is not among the ones we offer.
   // The device NAME is the OS's, and it is never translated — only the note after it is.
   'settings.audio.device.notInList': '{{device}} — saved, not in the list',
@@ -8701,10 +8701,10 @@ export const EN = {
   // ⚠️ TX POWER IS THE DRIVE-LEVEL SLIDER, NOT A TRANSMIT CONTROL. It sets how hard the sound
   // card feeds the rig; it cannot key, unkey or stop anything, and it is on no cockpit's
   // stop-line census. Same reading as PTT Method above — the words moved, the path did not.
-  'settings.audio.txPower.label': 'Tx Power',
+  'settings.audio.txPower.label': 'Drive',
   'settings.audio.txPower.aria': 'Transmit drive level',
   'settings.audio.txPower.hint':
-    "The audio <b>drive</b> into the rig — the SAME control as the cockpit <b>Pwr</b> slider (they always match now). Trim down until your rig's ALC is just zero. This is <em>not</em> the rig's RF watts — set those on the radio.",
+    "The audio <b>drive</b> into the rig — the SAME control as the cockpit <b>Drive</b> slider (they always match now). Trim down until your rig's ALC is just zero. This is <em>not</em> the rig's RF power — set that on the radio, or with the <b>RF power</b> slider on the Phone, RTTY, PSK and SSTV screens.",
   'settings.audio.rxLevel.label': 'RX Level',
   'settings.audio.rxLevel.meter': 'RX audio level',
   'settings.audio.rxLevel.hint':
@@ -8730,7 +8730,7 @@ export const EN = {
     'Set it so your voice drives the radio without ALC on the peaks. Your voice is not played back to you.',
   // Under BOTH sliders above, in place of their own hints, while the form edits a radio that is not
   // the one in use: the sliders then set that radio's stored levels and act on nothing live, so
-  // "the SAME control as the cockpit Pwr" and "the meter responds" are not true there. `{{radio}}`
+  // "the SAME control as the cockpit Drive" and "the meter responds" are not true there. `{{radio}}`
   // is that radio's name, as in the multi-radio banner.
   'settings.audio.multiRadio.levelHint':
     '<b>Save</b> stores this for <b>{{radio}}</b>, and it takes effect when that radio is in use; the radio in use now does not change.',
@@ -9500,7 +9500,7 @@ export const EN = {
 
   // Station Housekeeping. ⚠️ The beacon toggle is a CONFIGURATION control, not a transmit
   // control — it chooses whether the station announces itself, and it can neither key nor
-  // unkey anything. Same reading as Tx Power's drive slider; nothing here is on
+  // unkey anything. Same reading as the Drive slider; nothing here is on
   // any cockpit's stop-line census. The watts placeholder ("e.g. 100") is a power value and
   // stays in the component, as the example addresses in Rig & CAT do.
   'settings.digital.housekeeping.title': 'Station Housekeeping',
@@ -10107,14 +10107,14 @@ export const EN = {
   'settings.sstv.txMode.auto': 'Automatic — Scottie 1 on HF, PD-120 on 2 m (ARISS)',
   'settings.sstv.txMode.hint':
     'This is the mode the SSTV screen starts on; you can still change it there for one picture. <b>Automatic</b> follows the band: HF gets Scottie 1 (the NA calling-frequency convention — Martin 1 is the EU one), 2 m gets PD-120, which is what ARISS transmits.',
-  'settings.sstv.txPower.label': 'Transmit power',
-  'settings.sstv.txPower.aria': 'SSTV transmit power percent',
+  'settings.sstv.txPower.label': 'RF power',
+  'settings.sstv.txPower.aria': 'SSTV RF power percent',
   'settings.sstv.fskId.label':
     'Send my callsign after each picture',
   'settings.sstv.fskId.hint':
     'Adds the FSK callsign burst other SSTV software reads and shows under the received picture — the same one Nexus shows you under yours. Off by default: it adds about {{seconds}} seconds of key-down to every transmission. Your callsign is still drawn into the picture either way.',
   'settings.sstv.txPower.hint':
-    'The drive the SSTV screen starts on, and the level an image is sent at. Leave it blank and Nexus never touches your power. SSTV is up to 290 seconds of continuous key-down at full duty, so most operators run it well below their SSB drive. Your Phone power cap still applies on top of this.',
+    'The RF power the SSTV screen starts on, and the power an image is sent at. Leave it blank and Nexus never touches your power. SSTV is up to 290 seconds of continuous key-down at full duty, so most operators run it well below their SSB power. Your Phone power cap still applies on top of this.',
   'settings.sstv.callsignNote':
     'Your callsign is burned into the top-left of every picture you transmit, and there is no switch for it: an SSTV over is one long carrier of picture-only audio, so the picture is the identification ({{rule}}). Send is refused until you have set a callsign in Settings ▸ Station. If a picture already shows your call — a pre-made QSO card — tick “My picture already shows my callsign” in the SSTV screen: that is per-picture on purpose and resets with every new image.',
 
@@ -11963,8 +11963,8 @@ export const EN = {
 
   // A CONFIGURATION control on the transmit path is not a transmit control — the batch-13
   // ruling, where the drive slider moved and Prove TX did not.
-  'operate.header.power.label': 'Pwr',
-  'operate.header.power.title': "TX drive (Pwr) — trim down until your rig's ALC is just zero",
+  'operate.header.power.label': 'Drive',
+  'operate.header.power.title': "TX audio drive — trim down until your rig's ALC is just zero",
 
   // The DXpedition Hound toggle. `Hound` is WSJT-X's role name and stays in the code (it is
   // the button's whole label); only its explanation is words. One title serves both states —
@@ -12432,7 +12432,7 @@ export const EN = {
     'True FSK — data bits on the serial keyline, rig in RTTY mode (its narrow RTTY filters work). Change the backend in Settings → RTTY.',
   'rtty.header.backend.afsk.title':
     'AFSK — soundcard tones through the rig in LSB (soundcard-clocked, the robust default). Change the backend in Settings → RTTY.',
-  'rtty.header.power.label': 'Power',
+  'rtty.header.power.label': 'RF power',
   'rtty.header.power.title':
     'RF output power — RTTY keys the carrier for the whole over, so most rigs want well under their SSB rating',
   'rtty.header.band.title': "Showing the rig's current band",
@@ -12590,7 +12590,7 @@ export const EN = {
   'psk.panel.waterfall': 'Waterfall',
   'psk.panel.stream': 'Decoded Text',
   'psk.header.mode.aria': 'PSK sub-mode',
-  'psk.header.power.label': 'Power',
+  'psk.header.power.label': 'RF power',
   'psk.header.power.title':
     'RF output power — key Tune and wind it back until the ALC stops moving; overdriven PSK splatters',
   'psk.mode.failed': 'PSK mode switch refused',
@@ -13283,7 +13283,7 @@ export const EN = {
   'sstv.manualRx.failed': 'Could not start the receiver in that mode',
   // A CONFIGURATION control on the transmit path is not a transmit control (the batch-13
   // ruling): the drive slider moved, Stop did not.
-  'sstv.header.power.label': 'Power',
+  'sstv.header.power.label': 'RF power',
   'sstv.header.power.title': 'RF output power — set it against a Tune carrier, below ALC',
   'sstv.header.mode.title':
     'Detected SSTV mode — fills in (Martin / Scottie / Robot / PD) when the receiver hears a VIS header',
@@ -13951,7 +13951,7 @@ export const EN = {
   // sideband only. "USB" is a mode name.
   'phone.mode.usbOnly': '60 m allows only USB phone',
   'phone.mode.failed': 'Could not set mode',
-  'phone.header.power.label': 'Power',
+  'phone.header.power.label': 'RF power',
   'phone.header.power.title': 'RF output power',
   // The mic-is-dead warning: native Flex DAX transmit audio is a RADIO-WIDE setting, so this
   // screen is the only one that can say the physical microphone is disconnected.
@@ -14251,7 +14251,7 @@ export const EN = {
   'shell.lane.radioConfig.message': 'RADIO CONFIG',
   'shell.lane.txPowerZero.message': 'NO RF POWER',
   'shell.lane.txPowerZero.detail':
-    'The radio reports 0% power and transmit is armed — it will key and put nothing on the air. Check the Pwr slider, and the rig\u2019s own power for THIS mode: Yaesu rigs keep a separate level for SSB, DATA, CW and AM.',
+    'The radio reports 0% power and transmit is armed — it will key and put nothing on the air. Check the rig\u2019s own power for THIS mode (Yaesu rigs keep a separate level for SSB, DATA, CW and AM), or the RF power slider on the Phone, RTTY, PSK or SSTV screen.',
   'shell.lane.recording.message': 'RECORDING',
   // Parsec presence mode stopped a transmission while the operator was away; the lane keeps it
   // until they transmit again. `{{what}}` is a list of the `.what.*` entries below.
@@ -14525,7 +14525,7 @@ export const EN = {
   'shell.aprs.tune.failed': 'Could not tune to APRS',
   'shell.tx.enable.failed': 'Could not enable transmit',
   'shell.tx.mute.failed': 'Could not mute transmit',
-  'shell.tx.level.failed': 'Could not set TX level',
+  'shell.tx.level.failed': 'Could not set the drive',
   'shell.tune.failed': 'Could not toggle tune',
   'shell.proveTx.failed': 'Could not key the transmitter',
   'shell.halt.failed': 'Could not stop transmit',
@@ -14717,9 +14717,9 @@ export const EN = {
   'tempo.header.tier.fast.title': 'TempoFast — fast conversational tier',
   'tempo.header.tier.deep.title': 'TempoDeep — robust weak-signal tier (15 s)',
   // TX drive: a CONFIGURATION control on the transmit path, not a transmit control (the
-  // batch-13 ruling — Tx Power moved, Prove TX did not).
-  'tempo.header.power.label': 'Pwr',
-  'tempo.header.power.title': "TX drive (Pwr) — trim down until your rig's ALC is just zero",
+  // batch-13 ruling — the drive slider moved, Prove TX did not).
+  'tempo.header.power.label': 'Drive',
+  'tempo.header.power.title': "TX audio drive — trim down until your rig's ALC is just zero",
   'tempo.header.cqRun.aria': 'CQ run',
   'tempo.header.cqRun.off': '📢 Call CQ',
   'tempo.header.cqRun.off.title':

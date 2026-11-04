@@ -467,7 +467,7 @@ describe('SstvView TX panel', () => {
 
   it('a drag of the power slider wins over the Settings drive for the rest of the session', async () => {
     render(<SstvView snap={snap} txPowerPct={40} />)
-    const slider = screen.getByLabelText('Power') as HTMLInputElement
+    const slider = screen.getByLabelText('RF power') as HTMLInputElement
     fireEvent.change(slider, { target: { value: '25' } })
     expect(setRfPower).toHaveBeenCalledWith(0.25)
     setRfPower.mockClear()
