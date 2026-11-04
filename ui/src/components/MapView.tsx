@@ -757,6 +757,18 @@ function rgbOf(c: string): [number, number, number] | null {
 // Each halo's own luminance: the alpha (0.9) is the same on both, so it does not move the choice.
 const Y_HALO_DARK = relLuminance(rgbOf(MARKER_HALO)!)
 const Y_HALO_LIGHT = relLuminance(rgbOf(LABEL_HALO_LIGHT)!)
+/** HOW THE NIGHT SIDE IS SHADED on a basemap whose land is `land`: three stacked twilight caps, each
+ *  laid at `alpha` (times the layer's opacity) in `ink`. On a light map (Atlas, the light themes) it is
+ *  NIGHT_INK at 0.2, as it always was. A dark map's land is already near the bottom of the scale, so the
+ *  same near-black barely showed there (Midnight's night land stood 0.046 OKLab lightness off its day
+ *  land): a dark map shades in black at 0.3 a cap, about twice the step, and still light enough
+ *  that the coasts, the grid and the rings under it stand off the night land. features/mapStyle.test.ts
+ *  holds both, and everything drawn over the night side, on Dark and every dark built-in theme. */
+export function nightShadeFor(land: string): { ink: string; alpha: number } {
+  const c = rgbOf(land)
+  return c && relLuminance(c) < 0.1 ? { ink: NIGHT_DARK_INK, alpha: 0.3 } : { ink: NIGHT_INK, alpha: 0.2 }
+}
+const NIGHT_DARK_INK = 'rgb(0, 0, 0)'
 /** The halo for a label lettered in `ink`. An ink it cannot read keeps MARKER_HALO, as every label did. */
 function labelHalo(ink: string): string {
   const c = rgbOf(ink)
@@ -2637,9 +2649,11 @@ export function MapView({
     // spots/openings so stations stay bright on the dark side.
     if (layers.daynight.visible) {
       const term = terminator(skyMs)
-      ctx.fillStyle = NIGHT_INK
+      // A dark basemap shades its night deeper (`nightShadeFor`); Street is MapLibre's map, shaded as before.
+      const shade = kind === 'street' ? nightShadeFor('') : nightShadeFor(baseInk(kind === 'globe' ? '--map-land-globe' : '--map-land'))
+      ctx.fillStyle = shade.ink
       for (const cap of term.caps) {
-        ctx.globalAlpha = layers.daynight.opacity * 0.2 // stacks: ~0.2 twilight → ~0.6 core
+        ctx.globalAlpha = layers.daynight.opacity * shade.alpha // stacks: twilight → core
         ctx.beginPath()
         path(cap)
         ctx.fill()

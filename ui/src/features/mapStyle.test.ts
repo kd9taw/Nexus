@@ -18,6 +18,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   MODES,
   SKIN_MODES,
+  oklab,
+  skinBaseModes,
   baseTheme,
   contrast,
   expandWith,
@@ -43,7 +45,7 @@ import {
   saveMapStyle,
   useMapStyle,
 } from './mapStyle'
-import { BAND_COLOR, GETTING_OUT, GREYLINE_INK, NIGHT_INK, PATH_RX, needColor } from '../components/MapView'
+import { BAND_COLOR, GETTING_OUT, GREYLINE_INK, NIGHT_INK, PATH_RX, needColor, nightShadeFor } from '../components/MapView'
 import type { NeedTag } from '../types'
 
 beforeEach(() => localStorage.clear())
@@ -208,23 +210,36 @@ const rgbOf = (c: string): Rgb => {
 /** What a marker can land on: the flat map's land, the globe's land, the sea and the globe's lit sea. */
 const GROUNDS = (p: Readonly<Record<MapToken, string>>) =>
   (['--map-land', '--map-land-globe', '--map-ocean', '--map-ocean-lit'] as const).map((t) => [t, hex(p[t])] as const)
-/** The night side: the greyline's near-black at its core alpha (0.2 × three caps ≈ 0.6). */
-const night = (c: Rgb) => over(c, rgbOf(NIGHT_INK), 0.6)
+/** The night side as the map shades it over `c` on the map `p` (MapView `nightShadeFor`): its ink at
+ *  `caps` stacked twilight caps (three at the core, astronomical night; one at the civil-twilight edge). */
+function night(c: Rgb, p: Readonly<Record<MapToken, string>> = DARK_MAP, caps = 3): Rgb {
+  const shade = nightShadeFor(p['--map-land'])
+  return over(c, rgbOf(shade.ink), 1 - (1 - shade.alpha) ** caps)
+}
+/** OKLab lightness: the perceptual step. WCAG's ratio adds a 0.05 flare to both sides, so it calls two
+ *  near-blacks the same however far apart they look; the night side is judged by its lightness step. */
+const okL = (c: Rgb) => oklab(c)[0]
+/** Every dark map: Dark, and each dark built-in theme's own. */
+const DARK_MAPS: Array<[string, Readonly<Record<MapToken, string>>]> = [
+  ['Dark', DARK_MAP],
+  ...SKINS.flatMap((s) => (s.map ? [[s.id, s.map] as [string, Readonly<Record<MapToken, string>>]] : [])),
+]
 
 function inkOf(tokens: Map<string, string>, t: string): Rgb | null {
   const raw = tokens.get(t)
   return raw === undefined ? null : toRgb(expandWith(tokens, raw), [0, 0, 0])
 }
 /** Every marker ink under 3:1 (WCAG's floor for a graphic) on any ground, as a message. */
-function markerFaults(palette: Readonly<Record<MapToken, string>>, mode: Mode, tokens: Map<string, string>): string[] {
+function markerFaults(palette: Readonly<Record<MapToken, string>>, mode: Mode, tokens: Map<string, string>, shaded = false): string[] {
   const out: string[] = []
+  const grounds = GROUNDS(palette).map(([g, bg]) => [shaded ? `night ${g}` : g, shaded ? night(bg, palette) : bg] as const)
   for (const t of MARKER_TOKENS) {
     const ink = inkOf(tokens, t)
     if (!ink) {
       out.push(`${mode}: ${t} is not declared`)
       continue
     }
-    for (const [g, bg] of GROUNDS(palette)) {
+    for (const [g, bg] of grounds) {
       const r = contrast(ink, bg)
       if (r < 3) out.push(`${mode}: ${t} on ${g} = ${r.toFixed(2)}:1`)
     }
@@ -307,5 +322,64 @@ describe('everything drawn over Dark reads', () => {
 
   it('NEGATIVE CONTROL — the light theme’s own inks would not read on Dark (why the map reads the well)', () => {
     expect(markerFaults(DARK_MAP, 'light', rootTokensFrom(RULES, 'light')).length).toBeGreaterThan(0)
+  })
+})
+
+describe('the night side shows on a dark map, and everything over it still reads', () => {
+  const today = (c: Rgb, caps = 3) => over(c, rgbOf(NIGHT_INK), 1 - (1 - 0.2) ** caps)
+  const LANDS = ['--map-land', '--map-land-globe'] as const
+
+  it('Atlas and the light themes keep the shading they had', () => {
+    expect(nightShadeFor(STANDARD_MAP['--map-land'])).toEqual({ ink: NIGHT_INK, alpha: 0.2 })
+    expect(nightShadeFor(STANDARD_MAP['--map-land-globe'])).toEqual({ ink: NIGHT_INK, alpha: 0.2 })
+    // A token that is not a plain hex keeps it too.
+    expect(nightShadeFor('')).toEqual({ ink: NIGHT_INK, alpha: 0.2 })
+  })
+
+  it.each(DARK_MAPS)('%s: the night land is a visible step darker than the day land, at the core and at the twilight edge', (_n, p) => {
+    for (const t of LANDS) {
+      const day = hex(p[t])
+      const core = okL(day) - okL(night(day, p))
+      const edge = okL(day) - okL(night(day, p, 1))
+      // Half again the step it had at least, everywhere. The flat map's land (its darkest, Midnight's, had
+      // 0.046) is held to 0.075 too; the globe's is a deliberate step darker, so it has less to give.
+      const floor = t === '--map-land' ? 0.075 : 0
+      expect(core, `${t} core`).toBeGreaterThanOrEqual(Math.max(floor, 1.5 * (okL(day) - okL(today(day)))))
+      expect(edge, `${t} edge`).toBeGreaterThanOrEqual(Math.max(t === '--map-land' ? 0.03 : 0, 1.5 * (okL(day) - okL(today(day, 1)))))
+    }
+  })
+
+  it.each(DARK_MAPS)('%s: the coasts, borders, grid and rings (drawn under the shading) still stand off the night land', (_n, p) => {
+    for (const t of LANDS) {
+      const step = okL(night(hex(p['--map-coast']), p)) - okL(night(hex(p[t]), p))
+      expect(step, t).toBeGreaterThanOrEqual(0.1)
+    }
+  })
+
+  it.each(DARK_MAPS)('%s: the greyline line, the arcs, the band and need colours read on the night side', (_n, p) => {
+    const needs: NeedTag[] = ['NewEntity', 'NewIota', 'NewZone', 'NewBand', 'NewMode', 'Confirm']
+    const fixed: Record<string, string> = { GETTING_OUT, PATH_RX, ...BAND_COLOR }
+    for (const n of needs) fixed[n] = needColor(n)!
+    const faults: string[] = []
+    for (const [g, bg] of GROUNDS(p)) {
+      const dark = night(bg, p)
+      if (contrast(rgbOf(GREYLINE_INK), dark) < 4.5) faults.push(`greyline on night ${g}`)
+      for (const [name, c] of Object.entries(fixed)) {
+        const r = contrast(hex(c), dark)
+        if (r < 3) faults.push(`${name} ${c} on night ${g} = ${r.toFixed(2)}:1`)
+      }
+    }
+    expect(faults).toEqual([])
+  })
+
+  it('every marker and label ink reads on the night side: the dark palette on Dark in every mode, each dark theme’s own in its modes', () => {
+    const faults = ALL_MODES.flatMap((m) => markerFaults(DARK_MAP, m, tokensAt(RULES, m, WELL), true))
+    for (const s of SKINS.filter((x) => x.map)) {
+      for (const b of skinBaseModes(s.id)) {
+        const m = `${b} skin=${s.id}` as Mode
+        faults.push(...markerFaults(s.map!, m, rootTokensFrom(RULES, m), true))
+      }
+    }
+    expect(faults).toEqual([])
   })
 })
