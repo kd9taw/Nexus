@@ -393,6 +393,7 @@ impl AppState {
                 scope_span_refused: None,
                 scope_mode_code: None,
                 scope_fix_start_mhz: None,
+                scope_rate: None,
                 radio_config_warning: None,
                 tx_power_zero: false,
                 recording_warning: None,

@@ -324,7 +324,21 @@ use tempo_core::{channel, spectrum, tempo_fast, tx};
 #[derive(Default)]
 struct FeedRows {
     audio: Option<RowAverage>,
+    /// The NEWEST RF frame and when it was published. Everything that asks "what is the RF
+    /// picture now" reads this one; the frames before it wait in `rf_prev`.
     rf: Option<(SpectrumFrame, Instant)>,
+    /// Whether `rf` has been handed to an in-order reader yet (see [`FeedRows::rf_next_after`]).
+    rf_shown: bool,
+    /// The RF frames published before `rf`, oldest first, at most [`SpectrumFeed::RF_BACKLOG`]:
+    /// what lets a reader that polls between two publishes still draw each one, in order, rather
+    /// than only the newest. See [`FeedRows::rf_next_after`].
+    rf_prev: VecDeque<RfEntry>,
+    /// When an in-order reader last read the RF slot: frames are counted as dropped only while
+    /// someone is drawing them.
+    rf_read_at: Option<Instant>,
+    /// RF frames that left the backlog without ever being drawn while a reader was drawing:
+    /// pushed out by newer ones, or stepped over by a reader that fell behind.
+    rf_dropped: u64,
     /// The span the on-screen rig scope is actually showing, and the row computed over it.
     /// See [`SpectrumFeed::scope_row`] — this is the second slot, not a second feed.
     scope_req: Option<ScopeReq>,
@@ -380,6 +394,77 @@ impl FeedRows {
             bins: row.row,
         }
     }
+
+    /// Empty the RF slot: the newest frame and its backlog. A deliberate clear (the source
+    /// changed or stood down), so nothing in it counts as dropped.
+    fn clear_rf(&mut self) {
+        self.rf = None;
+        self.rf_prev.clear();
+    }
+
+    /// Make `frame` the newest RF frame; the one it replaces joins the backlog, and a full backlog
+    /// lets its oldest go, counted as dropped if no reader had drawn it while one was reading.
+    fn push_rf(&mut self, frame: SpectrumFrame) {
+        if let Some((old, at)) = self.rf.take() {
+            let shown = std::mem::replace(&mut self.rf_shown, false);
+            self.rf_prev.push_back(RfEntry {
+                frame: old,
+                at,
+                shown,
+            });
+            if self.rf_prev.len() > SpectrumFeed::RF_BACKLOG {
+                let gone = self
+                    .rf_prev
+                    .pop_front()
+                    .expect("over the bound, so not empty");
+                let reading = self
+                    .rf_read_at
+                    .is_some_and(|at| at.elapsed() < Duration::from_secs(1));
+                if !gone.shown && reading {
+                    self.rf_dropped += 1;
+                }
+            }
+        }
+        self.rf_shown = false;
+        self.rf = Some((frame, Instant::now()));
+    }
+
+    /// ⭐ EVERY RF FRAME, IN ORDER: the frame to hand a reader that last drew `last_seq`, given that
+    /// the newest RF frame is fresh and newer than that. The oldest frame it has not drawn, so a
+    /// reader polling between two publishes (a tick that published several sweeps at once, a poll
+    /// that ran late) draws each one rather than only the newest; and the newest for a reader that
+    /// has drawn nothing yet (`last_seq` 0), which starts at the live picture, not the backlog.
+    ///
+    /// A reader that fell more than [`SpectrumFeed::RF_CATCHUP`] behind the newest frame steps
+    /// over the frames older than that, so a slow reader stays near the live picture instead of
+    /// trailing it by a growing backlog. Frames nobody draws are counted when they leave
+    /// (`rf_dropped`).
+    fn rf_next_after(&mut self, last_seq: u64) -> Option<SpectrumFrame> {
+        let (newest_seq, newest_at) = self.rf.as_ref().map(|(f, at)| (f.seq, *at))?;
+        if newest_seq <= last_seq {
+            return None;
+        }
+        self.rf_read_at = Some(Instant::now());
+        if last_seq != 0 {
+            if let Some(e) = self.rf_prev.iter_mut().find(|e| {
+                e.frame.seq > last_seq && newest_at.duration_since(e.at) <= SpectrumFeed::RF_CATCHUP
+            }) {
+                e.shown = true;
+                return Some(e.frame.clone());
+            }
+        }
+        self.rf_shown = true;
+        self.rf.as_ref().map(|(f, _)| f.clone())
+    }
+}
+
+/// One RF frame in the backlog ([`FeedRows::rf_prev`]).
+struct RfEntry {
+    frame: SpectrumFrame,
+    /// When it was published.
+    at: Instant,
+    /// Whether an in-order reader has been handed it.
+    shown: bool,
 }
 
 /// A standing request from the rig scope for a row over ITS window rather than the full
@@ -641,7 +726,7 @@ impl SpectrumFeed {
                 return;
             }
             let frame = g.stamp(row, scale, slice);
-            g.rf = Some((frame, Instant::now()));
+            g.push_rf(frame);
         }
     }
     /// Drop the native row so the audio FFT takes over immediately (DATA mode / scope off).
@@ -650,7 +735,7 @@ impl SpectrumFeed {
     pub fn clear_rf(&self) {
         if let Ok(mut g) = self.rows.lock() {
             if g.rf_owner.is_none() {
-                g.rf = None;
+                g.clear_rf();
             }
         }
     }
@@ -662,7 +747,7 @@ impl SpectrumFeed {
         if let Ok(mut g) = self.rows.lock() {
             if g.rf_owner != owner {
                 g.rf_owner = owner;
-                g.rf = None;
+                g.clear_rf();
             }
         }
     }
@@ -674,7 +759,7 @@ impl SpectrumFeed {
                 .as_ref()
                 .is_some_and(|(frame, _)| frame.source == source)
             {
-                g.rf = None;
+                g.clear_rf();
             }
         }
     }
@@ -904,7 +989,37 @@ impl SpectrumFeed {
                 bins: row.row,
             });
         };
-        (frame.bins.is_empty() || frame.seq > last_seq).then_some(frame)
+        if frame.bins.is_empty() {
+            return Some(frame);
+        }
+        if frame.seq <= last_seq {
+            return None;
+        }
+        // The radio's own panadapter answers IN ORDER, every sweep: see `FeedRows::rf_next_after`.
+        // Any other slot's frame (the narrow scope row, the audio row) is a running mean, whose
+        // newest is the only one there is.
+        if let Ok(mut g) = self.rows.lock() {
+            if g.rf.as_ref().is_some_and(|(f, _)| f.seq == frame.seq) {
+                return g.rf_next_after(last_seq);
+            }
+        }
+        Some(frame)
+    }
+
+    /// How many RF frames wait behind the newest for a reader that has not drawn them yet: a
+    /// little over a second of a radio's scope at its fastest, a fraction of one for an IQ
+    /// panadapter. Bounded, so a feed nobody reads holds a fixed few frames.
+    pub const RF_BACKLOG: usize = 15;
+
+    /// How far behind the newest RF frame a reader may draw. A reader polling slower than the
+    /// radio sweeps (the reduced-motion poll) steps over the older frames rather than trailing
+    /// the live picture by a growing delay; one polling faster never meets it.
+    pub const RF_CATCHUP: Duration = Duration::from_millis(300);
+
+    /// RF frames that left the backlog without ever being drawn while a scope was drawing them,
+    /// since the feed started. Diagnostics read two of these apart.
+    pub fn rf_dropped(&self) -> u64 {
+        self.rows.lock().map(|g| g.rf_dropped).unwrap_or(0)
     }
 
     /// [`Self::scope_row`], as the frame the winning slot holds.
@@ -998,23 +1113,22 @@ impl SpectrumFeed {
         let mut g = self.rows.lock().ok()?;
         g.rf_req = Some(Instant::now());
         let held = held && Self::hold_is_young(g.tx_hold_since);
-        match &g.rf {
-            Some((frame, at))
-                if !frame.bins.is_empty() && (held || at.elapsed() < Self::RF_PANE_STALE) =>
-            {
-                (frame.seq > last_seq).then(|| frame.clone())
-            }
-            _ => Some(SpectrumFrame {
-                seq: 0,
-                t_ms: now_unix_millis(),
-                source: String::new(),
-                lo_hz: 0.0,
-                hi_hz: 0.0,
-                scale: SpectrumScale::Relative,
-                slice: None,
-                bins: Vec::new(),
-            }),
+        let live = g.rf.as_ref().is_some_and(|(frame, at)| {
+            !frame.bins.is_empty() && (held || at.elapsed() < Self::RF_PANE_STALE)
+        });
+        if live {
+            return g.rf_next_after(last_seq);
         }
+        Some(SpectrumFrame {
+            seq: 0,
+            t_ms: now_unix_millis(),
+            source: String::new(),
+            lo_hz: 0.0,
+            hi_hz: 0.0,
+            scale: SpectrumScale::Relative,
+            slice: None,
+            bins: Vec::new(),
+        })
     }
 
     /// How long one scope's RF window counts towards [`Self::rf_view`] after the poll that asked
@@ -4994,6 +5108,8 @@ pub struct Engine {
     scope_error: Option<String>,
     /// See `RadioStatus::scope_span_refused`.
     scope_span_refused: Option<String>,
+    /// See `RadioStatus::scope_rate`.
+    scope_rate: Option<crate::dto::ScopeRate>,
     /// See `RadioStatus::scope_mode_code`.
     scope_mode_code: Option<u32>,
     /// See `RadioStatus::scope_fix_start_mhz`.
@@ -7578,6 +7694,7 @@ impl Engine {
             freedv: crate::freedv::FreedvDto::default(),
             scope_error: None,
             scope_span_refused: None,
+            scope_rate: None,
             scope_mode_code: None,
             scope_fix_start_mhz: None,
             recording_warning: None,
@@ -28685,6 +28802,11 @@ contact yourself."
     pub fn set_scope_span_refused(&mut self, note: Option<String>) {
         self.scope_span_refused = note;
     }
+    /// Record what the radio's own scope stream measured, or `None` while it is not running —
+    /// see `RadioStatus::scope_rate`. The radio loop writes it.
+    pub fn set_scope_rate(&mut self, stats: Option<crate::dto::ScopeRate>) {
+        self.scope_rate = stats;
+    }
 
     /// Say (or stop saying) what is wrong on the station's audio-error line. Every writer names the
     /// kind of problem beside its sentence, so the status lane can head it with true words: one
@@ -30763,6 +30885,7 @@ contact yourself."
         s.radio.amp = self.amp_live(self.settings.active_radio).cloned();
         s.radio.scope_error = self.scope_error.clone();
         s.radio.scope_span_refused = self.scope_span_refused.clone();
+        s.radio.scope_rate = self.scope_rate.clone();
         s.radio.scope_mode_code = self.scope_mode_code;
         s.radio.scope_fix_start_mhz = self.scope_fix_start_mhz;
         s.radio.recording_warning = self.recording_warning.clone();
@@ -66765,6 +66888,110 @@ mod tests {
             feed.rf_frame_after(drawn.seq).is_some(),
             "key-up: the next sweep"
         );
+    }
+
+    /// ⭐ EVERY SWEEP PUBLISHED BETWEEN TWO POLLS IS DRAWN, IN ORDER. The radio loop publishes
+    /// every CI-V sweep that completed during a tick at once, and a scope that read only the
+    /// newest frame drew one of them. Both readers of the RF slot (the cockpit scope's poll and the
+    /// RF pane's) are handed the oldest sweep they have not drawn, then the next, then nothing new.
+    #[test]
+    fn every_sweep_published_between_two_polls_is_drawn_in_order() {
+        type Poll = fn(&SpectrumFeed, u64) -> Option<SpectrumFrame>;
+        let polls: [(&str, Poll); 2] = [
+            ("scope", scope_poll),
+            ("rf pane", |f: &SpectrumFeed, s| f.rf_frame_after(s)),
+        ];
+        for (name, poll) in polls {
+            let feed = SpectrumFeed::default();
+            civ_sweep(&feed, 0.1);
+            let first = poll(&feed, 0).expect("the first sweep");
+            for v in [0.2, 0.3, 0.4] {
+                civ_sweep(&feed, v);
+            }
+            let mut drawn = Vec::new();
+            let mut last = first.seq;
+            while let Some(f) = poll(&feed, last) {
+                drawn.push(f.bins[0]);
+                last = f.seq;
+                assert!(drawn.len() <= 3, "{name}: no sweep twice");
+            }
+            assert_eq!(
+                drawn,
+                vec![0.2, 0.3, 0.4],
+                "{name}: each sweep, oldest first"
+            );
+            assert_eq!(feed.rf_dropped(), 0, "{name}: nothing dropped");
+        }
+    }
+
+    /// A reader that has drawn nothing yet starts at the LIVE picture, not at the backlog.
+    #[test]
+    fn a_reader_that_has_drawn_nothing_starts_at_the_newest_sweep() {
+        let feed = SpectrumFeed::default();
+        for v in [0.1, 0.2, 0.3] {
+            civ_sweep(&feed, v);
+        }
+        assert_eq!(scope_poll(&feed, 0).expect("live").bins[0], 0.3);
+        assert_eq!(feed.rf_frame_after(0).expect("live").bins[0], 0.3);
+    }
+
+    /// BOUNDED BACK-PRESSURE, COUNTED. The backlog holds [`SpectrumFeed::RF_BACKLOG`] sweeps
+    /// behind the newest; one more pushes the oldest out, counted as dropped when no scope drew it
+    /// while a scope was drawing. A sweep a scope already drew, or one published while no scope
+    /// was reading at all, is not a drop.
+    #[test]
+    fn a_full_rf_backlog_drops_its_oldest_and_counts_the_undrawn() {
+        // Nobody reading: the backlog stays bounded and nothing is called a drop.
+        let feed = SpectrumFeed::default();
+        for _ in 0..40 {
+            civ_sweep(&feed, 0.5);
+        }
+        assert_eq!(feed.rf_dropped(), 0, "no scope on screen, no drop");
+
+        // A scope drawing, then a burst it cannot keep up with.
+        let feed = SpectrumFeed::default();
+        civ_sweep(&feed, 0.0);
+        let first = feed.rf_frame_after(0).expect("drawn");
+        let burst = SpectrumFeed::RF_BACKLOG + 5;
+        for i in 1..=burst {
+            civ_sweep(&feed, i as f32 / 100.0);
+        }
+        // 1 + burst published, the newest and RF_BACKLOG behind it kept: five left, the first
+        // of them drawn, so four drops.
+        assert_eq!(feed.rf_dropped(), 4);
+        let next = feed.rf_frame_after(first.seq).expect("the oldest kept");
+        assert_eq!(next.bins[0], 5.0 / 100.0, "sweeps 1-4 are gone, 5 is next");
+        let mut n = 1;
+        let mut last = next.seq;
+        while let Some(f) = feed.rf_frame_after(last) {
+            last = f.seq;
+            n += 1;
+        }
+        assert_eq!(
+            n,
+            SpectrumFeed::RF_BACKLOG + 1,
+            "every kept sweep drawn once"
+        );
+    }
+
+    /// A reader that fell more than [`SpectrumFeed::RF_CATCHUP`] behind steps over the old sweeps
+    /// to the live one, and the sweep it stepped over is counted when it leaves the backlog.
+    #[test]
+    fn a_reader_that_fell_behind_steps_to_the_live_sweep() {
+        let feed = SpectrumFeed::default();
+        civ_sweep(&feed, 0.1);
+        let first = feed.rf_frame_after(0).expect("drawn");
+        civ_sweep(&feed, 0.2);
+        feed.backdate_rf_for_test(SpectrumFeed::RF_CATCHUP + Duration::from_millis(200));
+        civ_sweep(&feed, 0.3);
+        let next = feed.rf_frame_after(first.seq).expect("live");
+        assert_eq!(next.bins[0], 0.3, "the stale sweep is stepped over");
+        assert_eq!(feed.rf_frame_after(next.seq), None);
+        for _ in 0..SpectrumFeed::RF_BACKLOG {
+            civ_sweep(&feed, 0.5);
+            let _ = feed.rf_frame_after(next.seq);
+        }
+        assert_eq!(feed.rf_dropped(), 1, "the one sweep never drawn");
     }
 
     #[test]

@@ -8,7 +8,8 @@
 //!    when the operator touches the front panel; they fold into the shared [`CivState`]
 //!    (instant dial tracking, no polling).
 //! 3. **Scope waveform** (`27`) — routed to the [`ScopeAssembler`]; each completed sweep
-//!    lands in a latest-wins slot the radio loop drains into the waterfall.
+//!    joins a short bounded queue ([`SCOPE_QUEUE_MAX`]) the radio loop drains, in order, into
+//!    the waterfall. A full queue drops its OLDEST sweep and counts it ([`ScopeCounts`]).
 //!
 //! The engine is generic over [`CivIo`] (`Read + Write`), so the whole protocol path is
 //! unit-tested against an in-memory fake radio — only the constructor that opens a real
@@ -40,6 +41,43 @@ pub const REQUEST_DEADLINE: Duration = Duration::from_millis(300);
 /// Read chunk timeout the loop expects `CivIo` reads to observe (the real port is opened
 /// with this; the loop just treats timeouts as "no data").
 pub const READ_TIMEOUT: Duration = Duration::from_millis(30);
+/// How many completed scope sweeps wait for the radio loop before the oldest is dropped.
+///
+/// ⭐ EVERY SWEEP, NOT THE LATEST. This used to be a one-sweep latest-wins slot the radio loop
+/// took once per tick, so every sweep that completed while a tick was busy (its blocking CAT polls
+/// share this bus) was overwritten unseen and the waterfall moved in steps. Sixteen is about a
+/// second of an IC-9700's fastest output at 115200 baud, far longer than any tick, and small
+/// enough that a loop that stopped draining holds a bounded few kilobytes, never a growing queue.
+pub const SCOPE_QUEUE_MAX: usize = 16;
+
+/// The scope stream's counters since the engine started: what the radio's sweeps did on their
+/// way to the waterfall. Diagnostics turn two readings of them into sweeps per second.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScopeCounts {
+    /// Complete sweeps assembled from the radio's `27 00` bursts.
+    pub assembled: u64,
+    /// Sweeps pushed out of a full queue ([`SCOPE_QUEUE_MAX`]) before the radio loop took them.
+    pub dropped: u64,
+}
+
+/// The queue between the engine thread (which fills it) and the radio loop (which drains it).
+#[derive(Default)]
+struct ScopeQueue {
+    sweeps: std::collections::VecDeque<ScopeSweep>,
+    counts: ScopeCounts,
+}
+
+impl ScopeQueue {
+    /// Queue one completed sweep; a full queue drops its oldest, counted.
+    fn push(&mut self, sweep: ScopeSweep) {
+        self.counts.assembled += 1;
+        if self.sweeps.len() >= SCOPE_QUEUE_MAX {
+            self.sweeps.pop_front();
+            self.counts.dropped += 1;
+        }
+        self.sweeps.push_back(sweep);
+    }
+}
 
 /// What reply resolves a request.
 #[derive(Debug, Clone, Copy)]
@@ -136,7 +174,7 @@ impl CivHandle {
 /// queued then goes out once first (see the end of `engine_loop`).
 pub struct CivEngine {
     handle: CivHandle,
-    scope_row: Arc<Mutex<Option<ScopeSweep>>>,
+    scope_row: Arc<Mutex<ScopeQueue>>,
     scope_enabled: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     alive: Arc<AtomicBool>,
@@ -161,7 +199,7 @@ impl CivEngine {
     ) -> CivEngine {
         let (tx, rx) = mpsc::channel::<CivRequest>();
         let state = Arc::new(Mutex::new(CivState::default()));
-        let scope_row = Arc::new(Mutex::new(None));
+        let scope_row = Arc::new(Mutex::new(ScopeQueue::default()));
         let scope_enabled = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let alive = Arc::new(AtomicBool::new(true));
@@ -208,9 +246,26 @@ impl CivEngine {
         self.handle.clone()
     }
 
-    /// Take the newest completed scope sweep, if one arrived since the last take.
+    /// Take the OLDEST completed scope sweep still waiting, if any.
     pub fn take_scope_row(&self) -> Option<ScopeSweep> {
-        self.scope_row.lock().ok().and_then(|mut s| s.take())
+        self.scope_row
+            .lock()
+            .ok()
+            .and_then(|mut q| q.sweeps.pop_front())
+    }
+
+    /// Take every completed scope sweep still waiting, oldest first — the radio loop's drain, so
+    /// a tick that ran long publishes each sweep that arrived during it, in order.
+    pub fn take_scope_rows(&self) -> Vec<ScopeSweep> {
+        self.scope_row
+            .lock()
+            .map(|mut q| q.sweeps.drain(..).collect())
+            .unwrap_or_default()
+    }
+
+    /// The scope stream's counters since this engine started.
+    pub fn scope_counts(&self) -> ScopeCounts {
+        self.scope_row.lock().map(|q| q.counts).unwrap_or_default()
     }
 
     /// Enable/disable the radio's scope waveform stream. The engine sends the CI-V
@@ -297,7 +352,7 @@ fn engine_loop(
     deadline: Duration,
     rx: mpsc::Receiver<CivRequest>,
     state: Arc<Mutex<CivState>>,
-    scope_row: Arc<Mutex<Option<ScopeSweep>>>,
+    scope_row: Arc<Mutex<ScopeQueue>>,
     scope_enabled: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     alive: Arc<AtomicBool>,
@@ -395,8 +450,8 @@ fn engine_loop(
             // a guess.
             if f.cmd == 0x27 && f.data.first() == Some(&0x00) {
                 if let Some(sweep) = assembler.push(&f) {
-                    if let Ok(mut slot) = scope_row.lock() {
-                        *slot = Some(sweep); // latest wins
+                    if let Ok(mut q) = scope_row.lock() {
+                        q.push(sweep); // every sweep, in order; a full queue drops its oldest
                     }
                 }
                 continue;
@@ -515,6 +570,9 @@ pub(crate) mod tests_support {
         /// what Nexus does with a refusal. The rule here is the field report's, not a reading of
         /// Icom's CI-V document; what the tests assert is the handling of a NAK.
         pub scope_fixed: bool,
+        /// Scope SWEEP SPEED (`27 1A`): `00` FAST, `01` MID, `02` SLOW (IC-9700 CI-V Reference
+        /// Guide A7508-3EX-2, printed p. 25). Answered to a read; Nexus never writes it.
+        pub scope_speed: u8,
         /// ATTENUATOR (`0x11`) — THE RAW WIRE BYTE, not a decoded dB, deliberately. The
         /// real register is BCD decibels, so a fixture that decoded on the way in would
         /// accept a raw-hex encoder and hand a test back the number it asked for: 12 dB
@@ -1083,9 +1141,10 @@ pub(crate) mod tests_support {
             // daemon sent — so every test agreed with the bug and an IC-7300 refused every span,
             // reference level and Center/Fixed write in the field. Reads are `27 14 00` (len 2);
             // writes are `27 14 00 <mode>` (3), `27 15 00 <5 BCD>` (7), `27 19 00 <2 BCD> <sign>` (5).
-            (0x27, Some(sub @ (0x14 | 0x15 | 0x19))) => {
+            (0x27, Some(sub @ (0x14 | 0x15 | 0x19 | 0x1A))) => {
                 match (sub, data.len()) {
                     (0x14, 2) => Some((0x27, vec![0x14, 0x00, u8::from(r.scope_fixed)])),
+                    (0x1A, 2) => Some((0x27, vec![0x1A, 0x00, r.scope_speed])),
                     (0x14, 3) => {
                         r.scope_fixed = data[2] == 0x01;
                         None
@@ -1207,6 +1266,7 @@ pub(crate) mod tests_support {
                         nak_satmode_set: 0,
                         drop_satmode_reads: 0,
                         scope_fixed: false,
+                        scope_speed: 0x01, // MID
                         att_raw: 0,
                         funcs: std::collections::BTreeMap::new(),
                         levels: std::collections::BTreeMap::new(),
@@ -1607,6 +1667,161 @@ mod tests {
             assert!(Instant::now() < deadline, "transceive folded into state");
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// One IC-9700 sweep over USB, as the radio bursts it: the header frame, then 475 points in
+    /// ten frames of 50 and one of 25 (A7508-3EX-4, `27 00`). Every point is `level`, so a test
+    /// can tell sweeps apart by their height.
+    fn sweep_bytes(level: u8) -> Vec<u8> {
+        let bcd = |v: usize| (((v / 10) << 4) | (v % 10)) as u8;
+        let points = [level; 475];
+        let chunks: Vec<&[u8]> = points.chunks(50).collect();
+        let total = chunks.len() + 1;
+        let frame = |seq: usize, body: &[u8]| {
+            let mut data = vec![0x00, 0x00, bcd(seq), bcd(total)];
+            data.extend_from_slice(body);
+            Frame {
+                to: 0xE0,
+                from: 0xA2,
+                cmd: 0x27,
+                data,
+            }
+            .to_bytes()
+        };
+        let mut header = vec![0x00]; // centre mode
+        header.extend_from_slice(&freq_to_bcd(144_174_000));
+        header.extend_from_slice(&freq_to_bcd(25_000));
+        header.push(0x00); // in range
+        let mut bytes = frame(1, &header);
+        for (i, c) in chunks.iter().enumerate() {
+            bytes.extend(frame(i + 2, c));
+        }
+        bytes
+    }
+
+    /// Waits up to 3 s for the engine to have assembled `n` sweeps.
+    fn wait_assembled(eng: &CivEngine, n: u64) -> ScopeCounts {
+        let until = Instant::now() + Duration::from_secs(3);
+        while eng.scope_counts().assembled < n && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        eng.scope_counts()
+    }
+
+    /// ⭐ EVERY SWEEP THAT COMPLETES BETWEEN TWO TAKES IS KEPT, IN ORDER. The radio loop takes
+    /// sweeps once per tick, and a tick that waits on CAT can see several arrive. They used to share
+    /// one latest-wins slot, so all but the last were lost and the waterfall moved in steps.
+    #[test]
+    fn every_sweep_between_two_takes_is_kept_in_order() {
+        let (radio, push) = FakeRadio::new(0xA2);
+        let eng = CivEngine::start(Box::new(radio), 0xA2, Some(IcomModel::Ic9700));
+        let levels = [16u8, 32, 48, 64, 80];
+        for l in levels {
+            push.lock().unwrap().extend(sweep_bytes(l));
+        }
+        let counts = wait_assembled(&eng, 5);
+        assert_eq!(
+            counts,
+            ScopeCounts {
+                assembled: 5,
+                dropped: 0
+            }
+        );
+        let got: Vec<f32> = eng.take_scope_rows().iter().map(|s| s.row[0]).collect();
+        let want: Vec<f32> = levels.iter().map(|l| f32::from(*l) / 160.0).collect();
+        assert_eq!(got, want, "all five, oldest first");
+        assert!(eng.take_scope_rows().is_empty(), "each sweep is taken once");
+        assert_eq!(eng.take_scope_row(), None);
+    }
+
+    /// BOUNDED: a loop that stops taking never grows the queue. A full queue drops its OLDEST
+    /// sweep, counts it, and keeps the newest [`SCOPE_QUEUE_MAX`] in order.
+    #[test]
+    fn a_full_scope_queue_drops_its_oldest_and_counts_them() {
+        let (radio, push) = FakeRadio::new(0xA2);
+        let eng = CivEngine::start(Box::new(radio), 0xA2, Some(IcomModel::Ic9700));
+        let n = SCOPE_QUEUE_MAX + 4;
+        for i in 0..n {
+            push.lock().unwrap().extend(sweep_bytes(i as u8));
+        }
+        let counts = wait_assembled(&eng, n as u64);
+        assert_eq!(
+            counts,
+            ScopeCounts {
+                assembled: n as u64,
+                dropped: 4
+            }
+        );
+        let got: Vec<f32> = eng.take_scope_rows().iter().map(|s| s.row[0]).collect();
+        let want: Vec<f32> = (4..n).map(|i| i as f32 / 160.0).collect();
+        assert_eq!(got, want, "the newest sixteen, oldest first");
+        // The oldest-first single take, for a caller that takes one at a time.
+        push.lock().unwrap().extend(sweep_bytes(100));
+        push.lock().unwrap().extend(sweep_bytes(120));
+        wait_assembled(&eng, n as u64 + 2);
+        assert_eq!(eng.take_scope_row().map(|s| s.row[0]), Some(100.0 / 160.0));
+        assert_eq!(eng.take_scope_row().map(|s| s.row[0]), Some(120.0 / 160.0));
+    }
+
+    /// The median and the worst of `n` key-up round trips through the engine.
+    fn keying_latency(h: &CivHandle, n: usize) -> (Duration, Duration) {
+        let mut t: Vec<Duration> = (0..n)
+            .map(|_| {
+                let t0 = Instant::now();
+                // The fake answers `1C 00` with NG, which resolves the request like an ack: the
+                // round trip is what is measured, not the answer.
+                let _ = h.transact(set_ptt(0xA2, false), Expect::Ack);
+                t0.elapsed()
+            })
+            .collect();
+        t.sort();
+        (t[n / 2], t[n - 1])
+    }
+
+    /// ⭐ KEYING NEVER WAITS BEHIND THE SCOPE. CAT and keying share the CI-V link with the scope
+    /// stream, and the stream is the bulk of what the radio sends. Under a flood far denser than an
+    /// IC-9700 can send at 115200 baud (a whole sweep every 10 ms, nobody taking them), a key-up's
+    /// round trip stays where it is on a quiet bus, and every one is answered well inside the
+    /// request deadline. The queue stays bounded through it, its drops counted.
+    #[test]
+    fn keying_latency_does_not_change_under_a_scope_flood() {
+        let (radio, push) = FakeRadio::new(0xA2);
+        let eng = CivEngine::start(Box::new(radio), 0xA2, Some(IcomModel::Ic9700));
+        let h = eng.handle();
+        let (quiet_median, _) = keying_latency(&h, 40);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let flood = {
+            let (stop, push) = (stop.clone(), push.clone());
+            std::thread::spawn(move || {
+                let sweep = sweep_bytes(80);
+                while !stop.load(Ordering::Relaxed) {
+                    push.lock().unwrap().extend_from_slice(&sweep);
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            })
+        };
+        wait_assembled(&eng, 20);
+        let (flood_median, flood_worst) = keying_latency(&h, 40);
+        stop.store(true, Ordering::Relaxed);
+        flood.join().unwrap();
+
+        let counts = eng.scope_counts();
+        assert!(counts.assembled >= 20, "the flood was real: {counts:?}");
+        assert!(counts.dropped > 0, "and nobody took it: {counts:?}");
+        assert!(
+            eng.take_scope_rows().len() <= SCOPE_QUEUE_MAX,
+            "bounded under the flood"
+        );
+        assert!(
+            flood_median <= quiet_median + Duration::from_millis(10),
+            "a key-up's round trip moved under the flood: quiet {quiet_median:?}, flood \
+             {flood_median:?}"
+        );
+        assert!(
+            flood_worst < REQUEST_DEADLINE,
+            "every key-up answered inside the deadline: worst {flood_worst:?}"
+        );
     }
 
     /// The dial `push` folds into the state of an engine started for `model` at `addr`, once

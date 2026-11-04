@@ -1747,6 +1747,20 @@ pub struct SlotOverDropped {
     pub count: u32,
 }
 
+/// The radio's own scope stream, measured: see [`RadioStatus::scope_rate`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScopeRate {
+    /// Complete sweeps a second over the last measuring window (a few seconds).
+    pub sweeps_per_sec: f32,
+    /// Sweeps that never reached a scope on screen since the stream started: pushed out of a full
+    /// queue on their way from the radio, or out of the backlog a scope draws from.
+    pub dropped: u64,
+    /// The radio's scope SWEEP SPEED as read from it: `"fast"`, `"mid"` or `"slow"`. `None` when
+    /// the radio did not answer the read. Nexus only reads it, never sets it.
+    pub speed: Option<String>,
+}
+
 /// Current radio / slot-timing status.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -2262,6 +2276,12 @@ pub struct RadioStatus {
     /// not: stating a start and seeing the waterfall stay on sound-card audio has two very
     /// different causes, and the control should say which side of it we are on.
     pub scope_fix_start_mhz: Option<f64>,
+    /// The radio's own scope stream (an Icom's CI-V `27 00` waveform), MEASURED where it arrives:
+    /// how many sweeps a second it really sends, how many never reached the waterfall, and the
+    /// scope SPEED the radio is set to. ABSENT unless that stream is running, so every other
+    /// snapshot is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_rate: Option<ScopeRate>,
     /// Set when two enabled radios are configured on the SAME serial COM port — the
     /// monitor radio's CAT can't open the busy port and shows a confusing red pill.
     /// A config warning (self-clears once the ports differ); surfaced in the status lane.

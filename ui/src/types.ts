@@ -2178,6 +2178,18 @@ export interface RadioStatus {
   scopeModeCode?: number | null
   /** The FIX start the operator stated, in MHz — null until they do. */
   scopeFixStartMhz?: number | null
+  /**
+   * The radio's own scope stream (an Icom's CI-V waveform), measured where it arrives. Absent
+   * unless that stream is running; kept through an over, when the stream pauses.
+   */
+  scopeRate?: {
+    /** Complete sweeps a second over the last few seconds. */
+    sweepsPerSec: number
+    /** Sweeps that never reached a scope on screen since the stream started. */
+    dropped: number
+    /** The radio's scope SWEEP SPEED as read from it; null when it did not answer. Read only. */
+    speed: 'fast' | 'mid' | 'slow' | null
+  } | null
   /** Set when two radios are on the same serial COM port (explains a red pill). */
   radioConfigWarning?: string | null
   /** The radio reports essentially no RF power while transmit is armed — it will key and put
