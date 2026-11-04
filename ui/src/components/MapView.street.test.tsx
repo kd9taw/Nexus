@@ -9,7 +9,7 @@
 // scale. Drawing is checked in a real browser.
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MapView } from './MapView'
+import { MapView, NIGHT_INK } from './MapView'
 import { bandLabelForMhz } from '../band'
 import { gridToLatLon } from '../grid'
 import type { OtaMapSpot, Station } from '../types'
@@ -440,5 +440,42 @@ describe('MapView on Street — the street-scale rules', () => {
 
     act(() => streetProps().onCamera?.(camera(ME.lon, ME.lat, 6)))
     expect(document.querySelectorAll('.map-layer.street-dim')).toHaveLength(0)
+  })
+})
+
+// THE NIGHT SIDE ON STREET IS NOT THE BASEMAP'S. A dark basemap shades its night deeper (MapView
+// `nightShadeFor`), and the Dark pick paints whatever projection is shown; but on Street the land is
+// MapLibre's tiles, in the UI theme, so the greyline keeps the standard shading there.
+describe('MapView on Street — the night side', () => {
+  /** Every fill, with the colour and the alpha it was laid at. */
+  let fills: Array<{ ink: unknown; alpha: unknown }> = []
+  beforeEach(() => {
+    fills = []
+    const state: Record<string | symbol, unknown> = {}
+    const ctx: object = new Proxy(state, {
+      get: (t, k) => {
+        if (k in t) return t[k]
+        if (k === 'measureText') return () => ({ width: 10 })
+        return () => {
+          if (k === 'fill') fills.push({ ink: t.fillStyle, alpha: t.globalAlpha })
+          return { addColorStop() {} }
+        }
+      },
+      set: (t, k, v) => {
+        t[k] = v
+        return true
+      },
+    })
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as CanvasRenderingContext2D)
+  })
+  const laid = (ink: string, alpha: number) => fills.filter((f) => f.ink === ink && f.alpha === alpha).length
+
+  it('with the Dark map style picked, Street is shaded as before, not in a dark basemap’s black', async () => {
+    localStorage.setItem('nexus.map.style', 'dark')
+    await mountStreet()
+    fills = []
+    act(() => streetProps().onCamera?.(camera(ME.lon, ME.lat, 4)))
+    expect(laid(NIGHT_INK, 0.2), 'the standard night caps').toBeGreaterThan(0)
+    expect(laid('rgb(0, 0, 0)', 0.3), 'a dark basemap’s night caps').toBe(0)
   })
 })
