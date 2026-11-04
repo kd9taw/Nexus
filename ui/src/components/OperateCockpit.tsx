@@ -150,7 +150,7 @@ interface Props {
   /** Toggle a call on the persistent blocklist (api.setBlockedCalls — the narrow write).
    * When absent, Alt-double-click falls back to the session-only dimming set. */
   onToggleBlocked?: (call: string) => void
-  /** Set the TX audio drive level (0.0–1.0) — the Pwr slider. */
+  /** Set the TX audio drive level (0.0–1.0) — the Drive slider. */
   onSetTxLevel: (level: number) => void
   /** Band plan (channel select) shown in the header — FT8/FT4 freq+band moved
    * out of the global TopBar into the cockpit header. */

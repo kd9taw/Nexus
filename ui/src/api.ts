@@ -3599,7 +3599,7 @@ export async function setTxEnabled(enabled: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_tx_enabled', { enabled })
 }
 
-/** Set the TX audio drive level (0.0–1.0) — the "Pwr" slider. Returns the snapshot. */
+/** Set the TX audio drive level (0.0–1.0) — the "Drive" slider. Returns the snapshot. */
 export async function setTxLevel(level: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_tx_level', { level })
 }

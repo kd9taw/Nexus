@@ -29,7 +29,7 @@ watering holes — eleven channels from 160 m (1.838) through 6 m (50.290), with
 hole just below the FT8 cluster at 14.074. The list is filtered by license class per band, so
 a band where your class holds no digital privileges never appears.
 
-On the right: **⊞ Panels**, a **Power** slider, **Tune**, an **ATU** button when your rig
+On the right: **⊞ Panels**, an **RF power** slider, **Tune**, an **ATU** button when your rig
 reports a tuner, the **TX On / TX Off** latch, **Stop TX** and the CAT pill. The latch is this
 cockpit's Enable-Tx — the top bar's TX cluster is hidden behind the digital chrome here, so
 without it a send would sit at "TX is off" with no way to arm from this screen.
@@ -165,7 +165,7 @@ tells you.
 The procedure is the reason Tune and Power sit in this header:
 
 1. Press **Tune** to key a steady carrier.
-2. Wind **Power** back until the rig's ALC meter barely moves.
+2. Wind **RF power** back until the rig's ALC meter barely moves.
 3. Press **Tune** again to stop.
 
 Nexus keys at a modest drive by default and the dock repeats the reminder, but the setting is

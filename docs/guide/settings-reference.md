@@ -617,9 +617,10 @@ target to copy.*
 - **Live input spectrum** — what the selected input hears, live. "Band noise
   should show as a moving floor. Confirms the RIGHT device before you leave
   Settings." Flat means no audio on that input.
-- **Tx Power** — the audio **drive** into the rig, the same control as the
-  cockpit **Pwr** slider (they always match). "Trim down until your rig's ALC is
-  just zero. This is *not* the rig's RF watts — set those on the radio." On a Yaesu
+- **Drive** — the audio **drive** into the rig, the same control as the
+  cockpit **Drive** slider (they always match). "Trim down until your rig's ALC is
+  just zero. This is *not* the rig's RF power — set that on the radio, or with the
+  **RF power** slider on the Phone, RTTY, PSK and SSTV screens." On a Yaesu
   that turns its power down with the ALC, such as the FT-991A, the ALC reads above
   zero whenever the power is below full, so set the drive at full power.
 - **RX Level** — a live dB meter like WSJT-X. "Aim for around 30 dB. Anything
@@ -628,7 +629,7 @@ target to copy.*
   meter responds as you release the slider. Leave at ×1.0 unless the meter reads
   low (under ~15 dB) — FT8 decodes on a small signal, so you rarely need much."
 
-While you **Edit** a radio that is not the one in use, Tx Power and RX Gain are
+While you **Edit** a radio that is not the one in use, Drive and RX Gain are
 that radio's own levels: moving them changes nothing on the radio in use,
 **Save** stores them on the radio you are editing, and it uses them once it
 becomes the active radio.
@@ -1246,8 +1247,8 @@ All Decoder settings drive the *native* decoder. On a WSJT-X UDP source
   contact as its power (ADIF TX_PWR), and unlocks the Journey miles-per-watt &
   QRP feats." It also feeds the P.533 link budget. Leave blank if unknown, and
   contacts are logged with no power. This is what you actually run, for the
-  record — it commands nothing; the rig's power lives on the cockpit **Pwr**
-  slider.
+  record — it commands nothing; the rig's power lives on the radio, or on the **RF power**
+  slider of the Phone, RTTY, PSK and SSTV screens.
 
 Units used to be the last field in this row; it is now on the Station tab under
 [Operator & Radio](#operator--radio).
@@ -1730,10 +1731,10 @@ it well below their SSB drive.*
   there for one picture. **Automatic** follows the band: HF gets Scottie 1 (the
   NA calling-frequency convention — Martin 1 is the EU one), 2 m gets PD-120,
   which is what ARISS transmits. Pick one of the 15 modes to always start there.
-- **Transmit power** — the drive the SSTV screen starts on, and the level an
+- **RF power** — the RF power the SSTV screen starts on, and the power an
   image is sent at. Leave it blank and Nexus never touches your power. SSTV is up
   to 290 seconds of continuous key-down at full duty, so most operators run it
-  well below their SSB drive. Your Phone power cap still applies on top of this.
+  well below their SSB power. Your Phone power cap still applies on top of this.
 
 Your callsign is burned into the top-left of every picture you transmit and there
 is no switch for it: an SSTV over is one long carrier of picture-only audio, so

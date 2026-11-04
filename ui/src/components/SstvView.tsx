@@ -1705,12 +1705,13 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
         <CockpitHeader
           snap={snap}
           onSnap={onSnap}
-          // DRIVE. SSTV shipped with only the TX-enable latch, so an operator had no drive
-          // control, no Tune to set it against, and no Stop TX in the place every other
-          // cockpit puts one (operator, 2026-08-04). Drive matters more here than anywhere:
-          // SSTV carries the picture in the AUDIO, so overdriving past ALC does not just
-          // splatter, it visibly wrecks the image at the far end. The latch, Tune, the ATU
-          // and Stop TX are in the TX strip under the stage.
+          // RF POWER (the radio's output over CAT, `setRfPower`; labelled "RF power", never the
+          // audio drive's "Drive"). SSTV shipped with only the TX-enable latch, so an operator had
+          // no power control, no Tune to set it against, and no Stop TX in the place every other
+          // cockpit puts one (operator, 2026-08-04). It matters more here than anywhere: SSTV
+          // carries the picture in the AUDIO, so overdriving past ALC does not just splatter, it
+          // visibly wrecks the image at the far end. The latch, Tune, the ATU and Stop TX are in
+          // the TX strip under the stage.
           power={{
             value: txPower,
             unit: '%',
