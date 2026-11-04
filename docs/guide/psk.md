@@ -162,7 +162,7 @@ splatters into the operators either side of you as **IMD**. The cruel part is th
 perfectly clean on your own waterfall while it happens. You will not know unless somebody
 tells you.
 
-The procedure is the reason Tune and Power sit in this header:
+The procedure is the reason Tune and RF power sit in this header:
 
 1. Press **Tune** to key a steady carrier.
 2. Wind **RF power** back until the rig's ALC meter barely moves.

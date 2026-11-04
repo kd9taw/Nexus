@@ -12,9 +12,12 @@
 //   - an indicator draws NO outline (its border paints nothing over its own face), does not react to
 //     the pointer, and never shows a pointer cursor. It may keep a tint: a tint is not a boundary.
 //
-// Each element is RENDERED (CockpitTxStrip, CockpitHeader with the chips a cockpit hands it) and
-// placed in App's chain (.app › .shell › the cockpit's main), and every value is the cascade WINNER
-// on that chain (cssCascade), never the presence of a declaration. What it cannot see: jsdom never
+// Each element is RENDERED (CockpitTxStrip, CockpitHeader with the chips a cockpit hands it, and the
+// top bar's TX cluster, which shares `.op-btn`) and placed in App's chain (.app › .shell › the
+// cockpit's main, or the top bar's own place under .app), and every value is the cascade WINNER
+// on that chain (cssCascade), never the presence of a declaration. Every theme is swept: each base mode
+// under every colour-role set, and every gallery theme in each of its base's modes (SKIN_MODES), as
+// StopTx.contrast.test.tsx sweeps the Stop TX. What it cannot see: jsdom never
 // lays out, so the before/after look is in the change's real-Chrome screenshots.
 import { describe, it, expect, vi, beforeAll } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
@@ -22,8 +25,10 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { CockpitTxStrip } from './CockpitTxStrip'
 import { CockpitHeader } from './CockpitHeader'
+import { TopBar } from './TopBar'
 import {
-  MODES,
+  MODES as BASE_AND_SENTINEL_MODES,
+  SKIN_MODES,
   chainOf,
   contrast,
   expandWith,
@@ -39,7 +44,15 @@ import {
 } from '../cssCascade'
 import type { AppSnapshot, RadioStatus } from '../types'
 
-vi.mock('../api', () => ({ setFrequency: vi.fn(() => Promise.resolve(null)), haltTx: vi.fn() }))
+/** Every base mode under every colour-role set, and every gallery theme in each of its modes. */
+const MODES: readonly Mode[] = [...new Set<Mode>([...BASE_AND_SENTINEL_MODES, ...SKIN_MODES])]
+
+vi.mock('../api', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>()
+  const auto: Record<string, unknown> = {}
+  for (const k of Object.keys(actual)) auto[k] = typeof actual[k] === 'function' ? vi.fn(async () => null) : actual[k]
+  return { ...auto, appVersion: vi.fn(async () => '0.0.0') }
+})
 vi.mock('../toast', () => ({ pushToast: vi.fn(), withErrorToast: vi.fn() }))
 vi.mock('../useWheelTune', () => ({ useWheelTune: () => undefined }))
 
@@ -54,16 +67,19 @@ const ABOVE: El[] = [
   { tag: 'main', classes: ['layout', 'single', 'rtty-cockpit'], attrs: {} },
 ]
 
+/** Above the top bar: it is a child of `.app` itself. */
+const TOP: El[] = [{ tag: 'div', classes: ['app'], attrs: {} }]
+
 interface Item {
   name: string
   chain: El[]
 }
 /** Every element matching `sel` in what `mount` renders, named by its words, on App's chain. */
-function collect(mount: () => void, sel: string, label: string): Item[] {
+function collect(mount: () => void, sel: string, label: string, above: El[] = ABOVE): Item[] {
   mount()
   const out = [...document.body.querySelectorAll(sel)].map((e) => ({
     name: `${label} "${e.textContent!.trim()}"`,
-    chain: [...ABOVE, ...chainOf(e).slice(1)],
+    chain: [...above, ...chainOf(e).slice(1)],
   }))
   cleanup()
   return out
@@ -80,10 +96,22 @@ beforeAll(() => {
   } as unknown as typeof ResizeObserver
   const armsHere = (r: RadioStatus) => () =>
     render(<CockpitTxStrip radio={r} onSetTxEnabled={noop} onTune={noop} onAtuTune={noop} onStopTx={noop} hold={{ on: r.txEnabled, onChange: noop }} />)
+  const topBar = (r: RadioStatus) => () =>
+    render(
+      <TopBar
+        mycall="KD9TAW" mygrid="EN61" radio={r} link={{ tier: 'FT8' } as never} bandPlan={[]}
+        onSetFrequency={noop} onSetTxEnabled={noop} onSetTune={noop} onHaltTx={noop} onSetTxEven={noop}
+        onSetTxCycleAuto={noop} onSetHoldTxFreq={noop} tier="FT8" onTierChange={noop} onOpenGuide={noop}
+      />,
+    )
   const armsItself = (r: RadioStatus) => () => render(<CockpitTxStrip radio={r} onTune={noop} onStopTx={noop} />)
   LIVE = [
     ...collect(armsHere(R({})), '.cq-txctl button', 'strip button (unlit)'),
     ...collect(armsHere(R({ txEnabled: true, atu: true })), '.cq-txctl button.on', 'strip button (lit)'),
+    // The top bar (every view that is not a cockpit) draws the same `.op-btn`s in its own place, a
+    // direct child of `.app` (App's chain, as StopTx.contrast.test.tsx places it).
+    ...collect(topBar(R({})), '.op-btn', 'top bar button (unlit)', TOP),
+    ...collect(topBar(R({ txEnabled: true, holdTxFreq: true })), '.op-btn.on', 'top bar button (lit)', TOP),
   ]
   DISABLED = collect(armsHere(R({ txAllowed: false })), '.cq-txctl button:disabled', 'strip button (disabled)')
   const header = () =>
@@ -213,7 +241,15 @@ describe('buttons look pressable and status indicators do not, in every theme', 
       'strip button (lit) "TX On"',
       'strip button (lit) "ATU ON"',
       'strip button (lit) "Hold Tx"',
+      'top bar button (unlit) "TX Off"',
+      'top bar button (unlit) "Tune"',
+      'top bar button (unlit) "Stop TX"',
+      'top bar button (unlit) "Hold Tx"',
+      'top bar button (lit) "TX On"',
+      'top bar button (lit) "Hold Tx"',
     ])
+    // Every gallery theme is in the sweep, not only the sentinel ones.
+    for (const m of SKIN_MODES) expect(MODES).toContain(m)
     expect(DISABLED.map((i) => i.name)).toEqual(['strip button (disabled) "Tune"', 'strip button (disabled) "ATU"'])
     expect(INDICATORS.map((i) => i.name)).toEqual([
       'read-only latch (off) "TX Off"',

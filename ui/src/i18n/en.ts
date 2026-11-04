@@ -9495,7 +9495,7 @@ export const EN = {
 
   // Station Housekeeping. ⚠️ The beacon toggle is a CONFIGURATION control, not a transmit
   // control — it chooses whether the station announces itself, and it can neither key nor
-  // unkey anything. Same reading as Tx Power's drive slider; nothing here is on
+  // unkey anything. Same reading as the Drive slider; nothing here is on
   // any cockpit's stop-line census. The watts placeholder ("e.g. 100") is a power value and
   // stays in the component, as the example addresses in Rig & CAT do.
   'settings.digital.housekeeping.title': 'Station Housekeeping',
@@ -14236,7 +14236,7 @@ export const EN = {
   'shell.lane.radioConfig.message': 'RADIO CONFIG',
   'shell.lane.txPowerZero.message': 'NO RF POWER',
   'shell.lane.txPowerZero.detail':
-    'The radio reports 0% power and transmit is armed — it will key and put nothing on the air. Check the RF power slider, and the rig\u2019s own power for THIS mode: Yaesu rigs keep a separate level for SSB, DATA, CW and AM.',
+    'The radio reports 0% power and transmit is armed — it will key and put nothing on the air. Check the rig\u2019s own power for THIS mode (Yaesu rigs keep a separate level for SSB, DATA, CW and AM), or the RF power slider on the Phone, RTTY, PSK or SSTV screen.',
   'shell.lane.recording.message': 'RECORDING',
   // Parsec presence mode stopped a transmission while the operator was away; the lane keeps it
   // until they transmit again. `{{what}}` is a list of the `.what.*` entries below.
@@ -14510,7 +14510,7 @@ export const EN = {
   'shell.aprs.tune.failed': 'Could not tune to APRS',
   'shell.tx.enable.failed': 'Could not enable transmit',
   'shell.tx.mute.failed': 'Could not mute transmit',
-  'shell.tx.level.failed': 'Could not set TX level',
+  'shell.tx.level.failed': 'Could not set the drive',
   'shell.tune.failed': 'Could not toggle tune',
   'shell.proveTx.failed': 'Could not key the transmitter',
   'shell.halt.failed': 'Could not stop transmit',
@@ -14702,7 +14702,7 @@ export const EN = {
   'tempo.header.tier.fast.title': 'TempoFast — fast conversational tier',
   'tempo.header.tier.deep.title': 'TempoDeep — robust weak-signal tier (15 s)',
   // TX drive: a CONFIGURATION control on the transmit path, not a transmit control (the
-  // batch-13 ruling — Tx Power moved, Prove TX did not).
+  // batch-13 ruling — the drive slider moved, Prove TX did not).
   'tempo.header.power.label': 'Drive',
   'tempo.header.power.title': "TX audio drive — trim down until your rig's ALC is just zero",
   'tempo.header.cqRun.aria': 'CQ run',
