@@ -376,6 +376,59 @@ pub fn hamlib_atu_start_tune_value(model: u32) -> u8 {
     }
 }
 
+/// The `L AGC <n>` value to send this radio for the Hamlib AGC enum `hamlib` (#403): the enum
+/// itself for every model but the Yaesu FTX-1, which gets its own `GT` code.
+///
+/// Hamlib's enum (`include/hamlib/rig.h`, `enum agc_level_e`): OFF 0, SUPERFAST 1, FAST 2, SLOW 3,
+/// USER 4, MEDIUM 5, AUTO 6. rigctld passes `L AGC <n>` through as that int (`rigctl_parse.c`
+/// `set_level`, `sscanf("%d")`), and the other Yaesus' `newcat_set_level` turns it into the
+/// radio's code (`newcat.c:4136`: OFF→`GT00`, FAST→`GT01`, MEDIUM→`GT02`, SLOW→`GT03`,
+/// AUTO→`GT04`). Hamlib 4.7.1's FTX-1 backend does not: `ftx1_set_level` hands the int straight
+/// to `ftx1_set_agc` (`ftx1/ftx1_func.c:360`), which writes `"GT%d%d;"` with it as P2
+/// (`ftx1/ftx1_audio.c:631`). So FAST went out as `GT02` (the radio's MID) and MEDIUM/AUTO as
+/// `GT05`/`GT06`, which are not set values.
+///
+/// Yaesu's FTX-1 CAT manual (2508-C, `GT` AGC FUNCTION), Set P2: 0 OFF, 1 FAST, 2 MID, 3 SLOW,
+/// 4 AUTO. This sends those codes, so Hamlib's pass-through puts the right one on the wire.
+/// ⚠️ Recheck when the bundled Hamlib changes: a Hamlib that maps the enum itself would make this
+/// a double translation.
+pub fn hamlib_agc_to_wire(model: u32, hamlib: u8) -> u8 {
+    if model != FTX1 {
+        return hamlib;
+    }
+    match hamlib {
+        2 => 1,         // FAST
+        5 => 2,         // MEDIUM → MID
+        6 => 4,         // AUTO
+        other => other, // OFF 0 and SLOW 3 are the same number on both sides
+    }
+}
+
+/// The Hamlib AGC enum for the `l AGC` reply `wire` from this radio: the reply itself for every
+/// model but the FTX-1, whose reply is its own `GT` code ([`hamlib_agc_to_wire`] has the
+/// sources). `None` when the FTX-1 answers a code its manual does not define.
+///
+/// `ftx1_get_agc` (`ftx1/ftx1_audio.c:636`) returns the answer's P3 unchanged. The manual's
+/// Answer P3 is 0 OFF, 1 FAST, 2 MID, 3 SLOW, 4 AUTO-FAST, 5 AUTO-MID, 6 AUTO-SLOW; the three
+/// AUTO answers all read as AUTO, as `newcat_get_level` reads them for the other Yaesus
+/// (`newcat.c:5902`).
+pub fn hamlib_agc_from_wire(model: u32, wire: u8) -> Option<u8> {
+    if model != FTX1 {
+        return Some(wire);
+    }
+    Some(match wire {
+        0 => 0,     // OFF
+        1 => 2,     // FAST
+        2 => 5,     // MID → MEDIUM
+        3 => 3,     // SLOW
+        4..=6 => 6, // AUTO-FAST / AUTO-MID / AUTO-SLOW → AUTO
+        _ => return None,
+    })
+}
+
+/// `RIG_MODEL_FTX1`, `RIG_MAKE_MODEL(RIG_YAESU, 51)` in `include/hamlib/riglist.h`.
+const FTX1: u32 = 1051;
+
 /// Does Hamlib WRITE this radio's power to answer a READ of it (`get_level RFPOWER`)? (#381)
 ///
 /// ⚠️ A READ THAT WRITES. `rigs/kenwood/kenwood.c`, `kenwood_get_level`: the `RIG_LEVEL_RFPOWER`

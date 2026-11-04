@@ -18,7 +18,8 @@ impl Rig {
                 if !raw.is_finite() || raw.fract() != 0.0 || !(0.0..=6.0).contains(&raw) {
                     return None;
                 }
-                let raw = raw as u8;
+                // `raw` is the Hamlib enum from here on: the FTX-1 answers its own code (#403).
+                let raw = crate::rigmodels::hamlib_agc_from_wire(self.hamlib_model, raw as u8)?;
                 AgcSpeed::from_hamlib(raw).map(|speed| (ReceiverDsp::Agc(speed), Some(raw)))
             }),
         };
@@ -40,9 +41,11 @@ impl Rig {
                     ReceiverDsp::Function { func, .. },
                     ReceiverDsp::Function { func: target, on },
                 ) if func == target => super::super::func_line(func.token(), u8::from(on)),
-                (ReceiverDsp::Agc(_), ReceiverDsp::Agc(speed)) => {
-                    super::super::level_line("AGC", &speed.hamlib_value().to_string())
-                }
+                (ReceiverDsp::Agc(_), ReceiverDsp::Agc(speed)) => super::super::level_line(
+                    "AGC",
+                    &crate::rigmodels::hamlib_agc_to_wire(self.hamlib_model, speed.hamlib_value())
+                        .to_string(),
+                ),
                 _ => return Err(Reason::InvalidAction),
             };
             if self.control.is_none() {

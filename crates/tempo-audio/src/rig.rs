@@ -725,7 +725,8 @@ pub struct Rig {
     /// [`crate::rigmodels::hamlib_never_send`]. Empty by default.
     never_send: &'static [(HamlibVerb, &'static str)],
     /// The Hamlib model number of the radio on this link (`0` = none named), for a mode write's
-    /// width ([`tuning::hamlib_mode_width`]). Set where the link is opened.
+    /// width ([`tuning::hamlib_mode_width`]) and the FTX-1's AGC codes
+    /// ([`crate::rigmodels::hamlib_agc_to_wire`]). Set where the link is opened.
     hamlib_model: u32,
     #[cfg(test)]
     before_remote_write: Option<Box<dyn FnOnce() + Send>>,
@@ -2593,13 +2594,17 @@ impl Rig {
         parse_dump_state_db_lists(&reply)
     }
 
-    /// Set the AGC time constant by Hamlib enum int (FAST=2, MEDIUM=5, SLOW=3, OFF=0).
+    /// Set the AGC time constant by Hamlib enum int (FAST=2, MEDIUM=5, SLOW=3, OFF=0). The FTX-1
+    /// is sent its own code instead ([`crate::rigmodels::hamlib_agc_to_wire`], #403).
     pub fn set_agc(&mut self, hamlib_val: u8) -> std::io::Result<()> {
-        self.cat(&level_line("AGC", &hamlib_val.to_string()))
+        let wire = crate::rigmodels::hamlib_agc_to_wire(self.hamlib_model, hamlib_val);
+        self.cat(&level_line("AGC", &wire.to_string()))
     }
-    /// Read the AGC time constant (Hamlib `AGC`) as its enum int; `None` if unsupported/no reply.
+    /// Read the AGC time constant (Hamlib `AGC`) as its enum int; `None` if unsupported/no reply,
+    /// or an FTX-1 answer its manual does not define ([`crate::rigmodels::hamlib_agc_from_wire`]).
     pub fn read_agc(&mut self) -> Option<u8> {
-        self.read_meter_f32("AGC").map(|v| v.round() as u8)
+        let wire = self.read_meter_f32("AGC").map(|v| v.round() as u8)?;
+        crate::rigmodels::hamlib_agc_from_wire(self.hamlib_model, wire)
     }
     /// Set the rig's internal CW keyer speed in WPM (Hamlib `KEYSPD`).
     pub fn set_keyspd(&mut self, wpm: u32) -> std::io::Result<()> {
