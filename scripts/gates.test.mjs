@@ -106,6 +106,31 @@ test('the browser shard matrix and the shard count it passes agree', () => {
   );
 });
 
+// The desktop probes are dealt over a matrix the same way (scripts/browser-probe --desktop-shard
+// <n> <of> takes index % of == n), with the same two statements of one count and the same
+// silent failure if they drift: a matrix of three passing <of> 2 runs shard 0 twice and a matrix
+// of two passing <of> 3 runs a third of the probes in no job.
+test('the desktop probe shard matrix and the shard count it passes agree', () => {
+  const yaml = fs.readFileSync(CI, 'utf8');
+  const start = yaml.indexOf('\n  desktop-probes:');
+  assert.ok(start >= 0, 'ci.yml must have the desktop-probes job');
+  const rest = yaml.slice(start + 1);
+  const next = rest.search(/\n  [A-Za-z0-9_-]+:\n/);
+  const job = next < 0 ? rest : rest.slice(0, next);
+  const matrix = job.match(/shard:\s*\[([^\]]*)\]/);
+  assert.ok(matrix, 'desktop-probes must declare a `shard:` matrix');
+  const shards = matrix[1].split(',').map(v => Number(v.trim()));
+  const runs = [...job.matchAll(/--desktop-shard\s+\$\{\{\s*matrix\.shard\s*\}\}\s+(\d+)/g)];
+  assert.equal(runs.length, 1, 'desktop-probes must run `scripts/browser-probe --desktop-shard ${{ matrix.shard }} <of>` once');
+  assert.equal(
+    shards.length,
+    Number(runs[0][1]),
+    `the matrix declares ${shards.length} shard(s) but passes --desktop-shard <of> ${runs[0][1]} — ` +
+      'probes would run in no job, or twice',
+  );
+  assert.deepEqual(shards, shards.map((_, index) => index), 'shards must be 0..n-1 with no gaps');
+});
+
 test('a step added to the workflow appears in --list, with no edit to the script', () => {
   const original = fs.readFileSync(CI, 'utf8');
 
