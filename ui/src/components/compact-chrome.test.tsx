@@ -20,7 +20,8 @@ import { installCatalog, setLocale, t } from '../i18n'
 import { RU } from '../i18n/ru'
 import { PhoneCockpit } from './PhoneCockpit'
 import type { RadioStatus, Tier } from '../types'
-import { cw, jtty, panelsWith, phone, psk, rtty, settle, snap, sstv, stopsOnScreen, type Case } from './stop-line.testkit'
+import { cw, js8, jtty, panelsWith, phone, psk, rtty, settle, snap, sstv, stopsOnScreen, type Case } from './stop-line.testkit'
+import { TempoHeader } from './TempoHeader'
 
 // The api answers the stop-line sweeps share (stop-line.api.testkit.ts says why).
 // …plus the version the top bar prints beside its name (the shared answers have none for it).
@@ -134,20 +135,32 @@ describe('the compact dock: every transmit and stop control stays in the dock or
     }
   })
 
-  // SSTV carries the picture in the audio, so overdrive past ALC wrecks the image at the far end: its
-  // strip shows the same read-only meters, ALC among them, from md up. Below md SSTV has no dock row
-  // for them, and nothing else moves.
-  it.each(SIZES)('SSTV at %s: the read-only meters, ALC among them, stand in the strip from md up', async (vp) => {
-    at(vp)
-    await mount(sstv)
-    const inStrip = document.querySelector('.cockpit-txstrip .cockpit-txstrip-meters .ph-txmeters')
-    expect(inStrip != null, `SSTV ${vp}: meters in the strip`).toBe(WIDE.has(vp))
-    if (inStrip) {
-      expect(inStrip.classList.contains('strip'), 'the two-row strip variant').toBe(true)
-      expect([...inStrip.querySelectorAll('.ph-txmeter-label')].map((l) => l.textContent)).toContain('ALC')
-      expect(inStrip.querySelector('button, input, select'), 'a readout: nothing in it to press').toBeNull()
-    }
-  })
+  // An ALC readout wherever the level is set: SSTV (it carries the picture in the audio, so overdrive
+  // past ALC wrecks the image at the far end) and the two Drive sliders without one, JS8's and
+  // Tempo's. Their strips show the same read-only meters, ALC among them, from md up. Below md these
+  // screens have no dock row for them, and nothing else moves.
+  const tempo = {
+    cockpit: 'Tempo',
+    render: () =>
+      render(
+        <TempoHeader snap={snap} tier="TempoFast" onTierChange={() => {}} bandPlan={[]} onSetFrequency={() => {}}
+          onSetTxLevel={() => {}} onToggleCqRun={() => {}} onResumeCqRun={() => {}} onSetTxEnabled={() => {}}
+          onSetTune={() => {}} onAtuTune={() => {}} onHaltTx={() => {}} onSetHoldTxFreq={() => {}} />,
+      ),
+  } as unknown as Case<any>
+  for (const c of [sstv, js8, tempo]) {
+    it.each(SIZES)(`${c.cockpit} at %s: the read-only meters, ALC among them, stand in the strip from md up`, async (vp) => {
+      at(vp)
+      await mount(c)
+      const inStrip = document.querySelector('.cockpit-txstrip .cockpit-txstrip-meters .ph-txmeters')
+      expect(inStrip != null, `${c.cockpit} ${vp}: meters in the strip`).toBe(WIDE.has(vp))
+      if (inStrip) {
+        expect(inStrip.classList.contains('strip'), 'the two-row strip variant').toBe(true)
+        expect([...inStrip.querySelectorAll('.ph-txmeter-label')].map((l) => l.textContent)).toContain('ALC')
+        expect(inStrip.querySelector('button, input, select'), 'a readout: nothing in it to press').toBeNull()
+      }
+    })
+  }
 
   it('in the strip the meters keep their four slots before the first over (Phone sets COMP, PROC and TX bandwidth there)', async () => {
     at('lg')
