@@ -1828,6 +1828,7 @@ export const EN = {
   'contactCard.field.remove': 'Remove {{tag}} on save',
   'contactCard.field.keep': 'Keep {{tag}}',
   'contactCard.freqRx': 'RX freq (MHz)',
+  'contactCard.via': "Logged via",
   'contactCard.recent': 'Recent contacts with this call',
   'contactCard.recent.qsl': 'QSL',
   'contactCard.recent.open': 'Open this contact on the card',
@@ -9356,11 +9357,16 @@ export const EN = {
   'settings.transmit.foreignPtt.label': 'Other programs may key transmit',
   'settings.transmit.foreignPtt.hint':
     'On: a shared program (WSJT-X, VarAC) can key the rig, exactly as it could when it owned the CAT cable — every Nexus transmit safeguard still applies. Off: shared programs tune and read but never transmit.',
-  'settings.transmit.freedv.log.label': "FreeDV contacts into the log",
+  'settings.transmit.freedv.log.label': "Accept contacts other programs log",
   'settings.transmit.freedv.log.hint':
-    "FreeDV's own app can hand each contact you log in it to Nexus: in FreeDV, turn on QSO Logging and give it the address shown here. Each one lands in the log as a FreeDV contact, and only under your own station call: one FreeDV logs under another call is refused, and the reason shows here. Only for this computer, and receive only: nothing FreeDV sends here can key or tune the radio.",
-  'settings.transmit.freedv.logPort.label': "FreeDV logging port",
+    "Other programs can hand each contact they log to Nexus at the address shown here: FreeDV (turn on its QSO Logging), WSJT-X, JTDX or MSHV (their secondary UDP server), N1MM (its contact broadcast), or anything that sends ADIF over UDP. Each lands in your log only under your own station call: one logged under another call is refused, and the reason shows here. Receive only: nothing sent here can key or tune the radio.",
+  'settings.transmit.freedv.logPort.label': "Contact port",
   'settings.transmit.freedv.logPort.off': "Not listening: port 0 turns it off.",
+  'settings.transmit.freedv.lan.label': "Accept from devices on my network",
+  'settings.transmit.freedv.lan.hint': "For a device or another computer on your own network, such as the S.A.T. satellite tracker: on the S.A.T., set QSO LOG TYPE to Log4OM or HRD, QSO LOG IP to this computer's address, and the port to the contact port above. Only private network addresses are taken, never one from the internet. Windows may ask once whether Nexus may use the network. Anything on your network that can send to this port can log contacts, and they go to your logging services: turn this on only on a network you trust.",
+  'settings.transmit.freedv.peer.label': "Only from this address",
+  'settings.transmit.freedv.peer.hint': "Optional: the one network address allowed to send contacts (the S.A.T.'s, for example). Leave it empty to take any device on your network. This computer is always allowed.",
+  'settings.transmit.freedv.last': "Last contact: {{call}} from {{program}} at {{time}}",
   'settings.transmit.freedv.heard.label': "Calls FreeDV hears",
   'settings.transmit.freedv.heard.hint':
     "Lists the calls FreeDV decodes (FreeDV 2.4 and later) in the Phone screen's FreeDV pane. Only the FreeDV on this computer is listened to. Windows may ask once whether Nexus may use the network.",
@@ -14433,6 +14439,9 @@ export const EN = {
     'Nexus could not read one of its files, so it kept that file, untouched, at {{path}}, and started a new one. Nothing was deleted.',
   'shell.keptFile.keptInPlace':
     'Nexus could not read {{path}} and could not move it aside, so it has left the file where it is and will not write over it. Nothing was deleted. Move or repair the file, then restart Nexus.',
+  'shell.intake.logged': "Logged {{call}} from {{program}}",
+  'shell.intake.device.network': "a device on your network",
+  'shell.intake.device.local': "this computer",
   'shell.keptFile.settingsKeptInPlace':
     'Nexus could not read your settings at {{path}} and could not move that file aside, so it started from the default settings and will not save any setting over that file. Nothing was deleted. Move or repair the file, then restart Nexus.',
   // Quitting while the logbook still has changes on their way to disk: Nexus keeps the main

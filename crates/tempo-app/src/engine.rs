@@ -145,6 +145,8 @@ mod kept_files_tests;
 /// The cockpit's drive and RX gain survive a later Settings save, and a save of another radio.
 #[cfg(test)]
 mod live_level_tests;
+/// A contact another program logged: its stamps and its uploads, never the log funnel.
+mod log_intake;
 #[cfg(test)]
 mod lotw_location_tests;
 mod mode_entry;

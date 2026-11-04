@@ -2692,7 +2692,21 @@ pub struct Settings {
     pub freedv_log: bool,
     /// UDP port on 127.0.0.1 for FreeDV's logged contacts. 2239, NOT 2237: 2237 is where Nexus
     /// sends its own WSJT-X telemetry and where GridTracker and JTAlert listen. 0 = not listening.
+    ///
+    /// Since the contact port takes every program's logged contacts ([`crate::log_intake`]), this
+    /// switch and port are "Accept contacts other programs log": the persisted names stay, so a
+    /// FreeDV operator's settings mean what they meant. A port Nexus itself sends to (its WSJT-X
+    /// UDP, HRD or N1MM target) is refused with a sentence rather than bound.
     pub freedv_log_port: u16,
+    /// "Accept from devices on my network": bind the contact port on every adapter, and take
+    /// contacts from private network addresses as well as this computer (the S.A.T. satellite
+    /// tracker, a second PC). OFF by default: Windows asks once whether Nexus may use the network,
+    /// and the port is this computer's alone until the operator says otherwise. A public address
+    /// is never taken ([`crate::log_intake::Admission`]).
+    pub log_intake_lan: bool,
+    /// The one network address allowed to send contacts while [`Self::log_intake_lan`] is on
+    /// (the S.A.T.'s); empty = any private address. This computer is always allowed.
+    pub log_intake_peer: String,
     /// Listen for FreeDV's callsign broadcast (FreeDV 2.4) and list the calls it hears in the
     /// Phone screen's FreeDV pane ([`crate::freedv`]). OFF by default: the listener joins
     /// FreeDV's group on every adapter (dropping anything not from this computer), and Windows
@@ -6689,6 +6703,8 @@ impl Default for Settings {
             sdrconnect_follow: default_sdrconnect_follow(),
             freedv_log: true,
             freedv_log_port: crate::freedv::DEFAULT_LOG_PORT,
+            log_intake_lan: false,
+            log_intake_peer: String::new(),
             freedv_heard: false,
             freedv_heard_port: crate::freedv::DEFAULT_HEARD_PORT,
             flex_radio_ip: String::new(),

@@ -208,6 +208,7 @@ import { clearCallHistory, getCallHistoryStatus, getScpStatus, importCallHistory
 import type { CallHistoryStatus, ScpStatus } from '../types'
 import { CONTEST_LISTS_CHANGED } from '../features/contestLists'
 import { fmtUtc } from '../features/logQuery'
+import { programLabel } from '../features/logIntake'
 import { EsmRolePicker } from './EsmRolePicker'
 import {
   CW_BUILT_IN_ROLES,
@@ -8922,7 +8923,7 @@ export function SettingsPanel({
             <div className="settings-field" data-testid="freedv-settings">
               <span className="settings-label">{t('settings.transmit.freedv.log.label')}</span>
               <div className="rig-share-row">
-                <button
+                <button disabled={locked('freedvLog')} data-setting="freedvLog"
                   type="button"
                   role="switch"
                   aria-checked={form.freedvLog ?? true}
@@ -8940,17 +8941,27 @@ export function SettingsPanel({
                   <span className="settings-hint">{t('settings.transmit.freedv.logPort.off')}</span>
                 )}
                 {(form.freedvLog ?? true) && !freedv?.logError && (form.freedvLogPort ?? 2239) !== 0 && (
-                  <code className="rig-share-addr mono">127.0.0.1:{form.freedvLogPort ?? 2239}</code>
+                  <code className="rig-share-addr mono">{form.logIntakeLan ? '0.0.0.0' : '127.0.0.1'}:{form.freedvLogPort ?? 2239}</code>
                 )}
               </div>
+              {setAtStation('freedvLog')}
               <span className="settings-hint">{t('settings.transmit.freedv.log.hint')}</span>
+              {(form.freedvLog ?? true) && freedv?.intakeProgram && freedv.intakeUnix != null && (
+                <span className="settings-hint" role="status" data-testid="intake-last">
+                  {t('settings.transmit.freedv.last', {
+                    program: programLabel(freedv.intakeProgram),
+                    call: freedv.intakeCall ?? '',
+                    time: fmtUtc(freedv.intakeUnix),
+                  })}
+                </span>
+              )}
               {(form.freedvLog ?? true) && freedv?.notice && (
                 <span className="settings-hint" role="status">{freedv.notice}</span>
               )}
               {(form.freedvLog ?? true) && (
                 <label className="settings-field">
                   <span className="settings-label">{t('settings.transmit.freedv.logPort.label')}</span>
-                  <input
+                  <input disabled={locked('freedvLogPort')} data-setting="freedvLogPort"
                     className="settings-input"
                     type="number"
                     inputMode="numeric"
@@ -8959,7 +8970,45 @@ export function SettingsPanel({
                     onChange={(e) => update('freedvLogPort', e.target.value)}
                     autoComplete="off"
                   />
+                  {setAtStation('freedvLogPort')}
                 </label>
+              )}
+              {/* Off by default: the port is this computer's alone until the operator lets in the
+                  devices on their own network (private addresses only, `tempo_app::log_intake`). */}
+              {(form.freedvLog ?? true) && (
+                <>
+                  <span className="settings-label">{t('settings.transmit.freedv.lan.label')}</span>
+                  <div className="rig-share-row">
+                    <button disabled={locked('logIntakeLan')} data-setting="logIntakeLan"
+                      type="button"
+                      role="switch"
+                      aria-checked={form.logIntakeLan ?? false}
+                      aria-label={t('settings.transmit.freedv.lan.label')}
+                      className={`toggle${form.logIntakeLan ? ' on' : ''}`}
+                      onClick={() => updateBool('logIntakeLan', !form.logIntakeLan)}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </div>
+                  {setAtStation('logIntakeLan')}
+                  <span className="settings-hint">{t('settings.transmit.freedv.lan.hint')}</span>
+                  {form.logIntakeLan && (
+                    <label className="settings-field">
+                      <span className="settings-label">{t('settings.transmit.freedv.peer.label')}</span>
+                      <input disabled={locked('logIntakePeer')} data-setting="logIntakePeer"
+                        className="settings-input mono"
+                        type="text"
+                        value={form.logIntakePeer ?? ''}
+                        placeholder="192.168.1.40"
+                        onChange={(e) => update('logIntakePeer', e.target.value)}
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                      {setAtStation('logIntakePeer')}
+                      <span className="settings-hint">{t('settings.transmit.freedv.peer.hint')}</span>
+                    </label>
+                  )}
+                </>
               )}
               <span className="settings-label">{t('settings.transmit.freedv.heard.label')}</span>
               <div className="rig-share-row">

@@ -39605,6 +39605,29 @@ mod upload_record_tests {
         &src[start..start + len]
     }
 
+    /// ⛔ A contact another program logged into Nexus (its `APP_NEXUS_VIA` mark) is pushed to no
+    /// DXKeeper, which may be the program that sent it; the operator's own contact is, while the
+    /// push is on, and nothing is while it is off.
+    #[test]
+    fn a_contact_another_program_logged_is_not_pushed_to_dxkeeper() {
+        let dxk = ("127.0.0.1".to_string(), 52000u16, false);
+        let mut mine = tempo_core::logbook::parse_adif(
+            "<CALL:5>W1ABC<QSO_DATE:8>20261014<TIME_ON:4>0102<BAND:3>20m<MODE:2>CW<EOR>",
+        )
+        .pop()
+        .unwrap();
+        assert_eq!(
+            crate::dxkeeper_target_for(Some(&dxk), &mine),
+            Some(dxk.clone())
+        );
+        assert_eq!(crate::dxkeeper_target_for(None, &mine), None);
+        mine.extra.push((
+            tempo_app::log_intake::VIA_FIELD.to_string(),
+            "WSJT-X".to_string(),
+        ));
+        assert_eq!(crate::dxkeeper_target_for(Some(&dxk), &mine), None);
+    }
+
     /// Every service push sends the contact `upload_record` makes of its row, and the DXKeeper
     /// push the contact `log_queries::sent` makes, so each names `COUNTRY` by the DXCC number; and
     /// the launch wires the station's resolver of that country. These reach the keychain, the
@@ -40876,6 +40899,18 @@ fn hrd_send_connected(addr: &str, bytes: &[u8]) -> bool {
 /// (`adif_record_own_logger`).
 fn dxkeeper_adif(rec: &tempo_core::logbook::QsoRecord) -> String {
     tempo_core::logbook::adif_record_own_logger(&log_queries::sent(rec.clone()))
+}
+
+/// Where the upload worker pushes `rec` in DXKeeper (`dxk`, the push's host, base port and uploads
+/// switch while it is on): nowhere for a contact another program logged into Nexus
+/// (`tempo_app::log_intake::from_another_program`), since DXKeeper may be the program that sent it
+/// and it would come back in.
+fn dxkeeper_target_for(
+    dxk: Option<&(String, u16, bool)>,
+    rec: &tempo_core::logbook::QsoRecord,
+) -> Option<(String, u16, bool)> {
+    dxk.filter(|_| !tempo_app::log_intake::from_another_program(rec))
+        .cloned()
 }
 
 fn dxkeeper_push_async(host: String, base_port: u16, uploads: bool, adif: String) {
@@ -46620,6 +46655,16 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
     // held has already done it, before it waited on anything; the second run finds the loop gone
     // and returns at once, and sweeps any daemon started since.
     stop_the_radio();
+    // The contact port's listeners log what they hold (a contact another program logged, still
+    // in its 2 s wait for the fuller second message) and let go: before the log's last flush
+    // below, so it is in the log the quit writes. Bounded: a listener lets go within a quarter
+    // second.
+    if !tempo_app::log_intake::stop_for_quit(std::time::Duration::from_secs(2)) {
+        tempo_core::applog::warn(
+            "log-intake",
+            "a contact listener did not stop in time at the quit",
+        );
+    }
     // Programs on JS8Call's API hear that the station is closing, as JS8Call tells them. After the
     // unkey, and bounded: it never delays taking the transmitter off the air.
     js8_api::closing();
@@ -48443,7 +48488,9 @@ fn start_on_the_logbook(
                 // acknowledges, so there is no success to distinguish from failure and
                 // nothing meaningful to retry. A failed connect almost always just means
                 // DXLab is not running. Fire it and move on.
-                if let Some((host, base, uploads)) = dxk.clone() {
+                // …but never a contact another program logged into Nexus (`tempo_app::log_intake`):
+                // DXKeeper may be the program that sent it, and it would come back in.
+                if let Some((host, base, uploads)) = dxkeeper_target_for(dxk.as_ref(), &rec) {
                     // ⭐ THE PRIVATE NOTE RIDES ALONG HERE, deliberately — the one outbound
                     // call site that does. DXKeeper is the operator's OWN logging software on
                     // their OWN machine (the comment above says it: a failed connect just means
@@ -48610,16 +48657,19 @@ fn start_on_the_logbook(
     // cross-platform resource dir is available — the DeepCW model ships as a bundled
     // resource, and resolving it by hand from the exe path only worked on Windows.
 
-    // FreeDV's own app beside Nexus, RECEIVE ONLY: its logged contacts (127.0.0.1 alone) and,
-    // when the operator asks for them, the calls it hears. The manager follows the settings once
-    // a second; nothing it reads can key or tune the radio (`tempo_app::freedv`).
+    // The contact port, RECEIVE ONLY: the contacts FreeDV and other programs log (127.0.0.1
+    // alone unless "Accept from devices on my network" is on, `tempo_app::log_intake`) and, when
+    // the operator asks for them, the calls FreeDV hears. The manager follows the settings once a
+    // second; nothing it reads can key or tune the radio (`tempo_app::freedv`).
     {
         let freedv_engine = engine.clone();
         let note: tempo_app::freedv::Note =
             std::sync::Arc::new(|level, msg| conn_log("FreeDV", level, msg));
+        let intake_note: tempo_app::freedv::Note =
+            std::sync::Arc::new(|level, msg| conn_log("Other programs", level, msg));
         let spawned = std::thread::Builder::new()
             .name("nexus-freedv".into())
-            .spawn(move || tempo_app::freedv::run(freedv_engine, note));
+            .spawn(move || tempo_app::freedv::run(freedv_engine, note, intake_note));
         if let Err(e) = spawned {
             tempo_core::applog::error(
                 "freedv",

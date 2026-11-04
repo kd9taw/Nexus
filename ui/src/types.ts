@@ -5590,8 +5590,16 @@ export interface Settings {
   /** Listen on 127.0.0.1:`freedvLogPort` for the contacts FreeDV's own app logs, and put each
    *  in the log as a FreeDV contact (`tempo_app::freedv`). ON by default; receive only. */
   freedvLog?: boolean
-  /** UDP port for FreeDV's logged contacts (2239; 2237 is Nexus's own telemetry). */
+  /** UDP port for FreeDV's logged contacts (2239; 2237 is Nexus's own telemetry). Since the port
+   *  takes every program's logged contacts (`tempo_app::log_intake`), `freedvLog` /
+   *  `freedvLogPort` are "Accept contacts other programs log". */
   freedvLogPort?: number
+  /** "Accept from devices on my network": bind the contact port on every adapter and take
+   *  contacts from private network addresses too. OFF by default. */
+  logIntakeLan?: boolean
+  /** The one network address allowed to send contacts while `logIntakeLan` is on; empty = any
+   *  private address. */
+  logIntakePeer?: string
   /** List the calls FreeDV hears (its callsign broadcast) in the Phone FreeDV pane. OFF by
    *  default: it joins FreeDV's group, so Windows may ask once about the network. */
   freedvHeard?: boolean
@@ -6661,6 +6669,15 @@ export interface FreedvState {
   heardError: string | null
   /** The calls FreeDV heard this session, newest first. */
   heard: FreedvHeard[]
+  /** The contact port is bound on every adapter ("Accept from devices on my network"). */
+  logLan?: boolean
+  /** The program the last contact added through the contact port came from (FreeDV, WSJT-X,
+   *  N1MM, a network device's address), its call and when. */
+  intakeProgram?: string | null
+  intakeCall?: string | null
+  intakeUnix?: number | null
+  /** Moves once per contact added through the contact port: the shell toasts each. */
+  intakeTick?: number
 }
 
 /** One call FreeDV heard. */
