@@ -21,7 +21,7 @@
 //
 // WHAT IS IN IT: the look — the theme choice and the built-in theme riding on it (`skin`, null for
 // the standard one), High contrast, Night (Off / On / Auto), text size, density, motion, the five
-// colour roles, the two waterfall palettes and the Logbook globe.
+// colour roles, the two waterfall palettes, the Logbook globe and the TX meters' look (Bars or Needle).
 // WHAT IS NOT, deliberately: FIELD MODE, a situation rather than a preference (useFieldMode.ts:
 // "a backup restoring 'outdoors' onto an indoor session would be wrong more often than right"),
 // and UI SCALE, a fact about this computer's screen, per window and clamped to its monitor.
@@ -36,6 +36,7 @@ import type { NightChoice } from '../useNight'
 import type { TextSize } from '../useTextSize'
 import type { ThemeChoice } from '../useTheme'
 import { WATERFALL_PALETTES } from '../waterfall'
+import { TX_METER_STYLES, type TxMeterStyle } from '../txMeterStyle'
 import { PALETTE_ROLES, type PaletteRoleId } from './paletteRoles'
 import { RETIRED_SKINS, skinOf, type SkinId } from './skins'
 
@@ -55,6 +56,8 @@ export interface Appearance {
   waterfallPalette: string
   ftWaterfallPalette: string
   logbookGlobe: boolean
+  /** How the TX meters are drawn (txMeterStyle.ts). */
+  txMeterStyle: TxMeterStyle
 }
 
 /** The section's name in the bundle. */
@@ -117,5 +120,6 @@ export function appearanceIn(bundle: string): Partial<Appearance> | null {
   if (oneOf(PALETTES, r.waterfallPalette)) out.waterfallPalette = r.waterfallPalette
   if (oneOf(PALETTES, r.ftWaterfallPalette)) out.ftWaterfallPalette = r.ftWaterfallPalette
   if (typeof r.logbookGlobe === 'boolean') out.logbookGlobe = r.logbookGlobe
+  if (oneOf(TX_METER_STYLES, r.txMeterStyle)) out.txMeterStyle = r.txMeterStyle
   return out
 }

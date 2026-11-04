@@ -10,6 +10,8 @@ import type { RadioStatus } from '../types'
 import { isOnAir } from '../types'
 import { t } from '../i18n'
 import { fmtTempC, useUnits } from '../units'
+import { useTxMeterStyle } from '../txMeterStyle'
+import { NEEDLE_KEYS, TxNeedles, type NeedleKey, type NeedleRow } from './TxNeedles'
 import { useFocusReturn } from '../focusReturn'
 import { Dialog } from './ui/Dialog'
 
@@ -221,6 +223,18 @@ export function TxMeters({
   // (`overJudged`). Has the rig keyed since this panel mounted (`keyedOnce`)? The Operate cell gives
   // every meter its slot from that moment on (below).
   const units = useUnits()
+  // #343: Settings ▸ Workspace ▸ TX meters. Needle draws PO, ALC and SWR as needles (TxNeedles) in
+  // place of their bars; COMP and the temperatures stay bars. Bars is the default.
+  const needle = useTxMeterStyle() === 'needle'
+  // The radio's ALC zone as it came with the last ALC reading. The engine sends the zone with each
+  // ALC reading and clears both on unkey, and an over's first polls read other meters before ALC,
+  // so the live value says "default scale" between overs and for the start of each over. The bars
+  // never see that (their held rows were zoned while live); the needle face, which draws the zone
+  // as arcs at every moment, keeps it here. ⚠️ It belongs in `useTxMeterMemory` beside the rest
+  // (with TxNeedles' held peaks), so the larger dialog sharing the cell's memory has it too; that
+  // move is a follow-up of its own. Until then the dialog draws the default arcs until it reads ALC.
+  const alcZone = useRef(1)
+  if (radio.txAlc != null) alcZone.current = radio.txAlcZone ?? 1
   // The processor level while a drag is in flight: the marker follows the pointer at once.
   const [dragPct, setDragPct] = useState<number | null>(null)
   // The level last set here, held on the marker until the radio's reported level moves. Mid-over
@@ -499,11 +513,22 @@ export function TxMeters({
   }
   return (
     <div
-      className={`ph-txmeters${variant}${!live && pin ? ' idle' : ''}`}
+      className={`ph-txmeters${variant}${!live && pin ? ' idle' : ''}${needle ? ' needle' : ''}`}
       role="group"
       aria-label={t('meters.tx.aria')}
     >
-      {shown.map((r) => {
+      {needle && (
+        <TxNeedles
+          rows={rows.filter((r): r is NeedleRow => isNeedle(r.key))}
+          live={live}
+          swrVerified={radio.swrScaleVerified === true}
+          alcZoneTop={alcZone.current}
+          unreported={overJudged.current ? NEEDLE_KEYS.filter((k) => !seen.current.has(k)) : []}
+        />
+      )}
+      {/* With needles, Operate's fixed-width cell has room for the three faces only, so its COMP slot
+          goes (FT does not use the speech processor); everywhere else COMP stays a bar beside them. */}
+      {shown.filter((r) => !needle || (!isNeedle(r.key) && !(r.key === 'comp' && inline && !strip))).map((r) => {
         const slider = r.key === 'comp' && levelPct != null
         const hasCtl = r.key === 'comp' && (slider || procOn != null || bwSteps.length > 1)
         return (
@@ -569,6 +594,8 @@ export function TxMeters({
     </div>
   )
 }
+
+const isNeedle = (k: MeterKey): k is NeedleKey => (NEEDLE_KEYS as readonly string[]).includes(k)
 
 /** #446: OPERATE'S TELEMETRY CELL, WHICH OPENS LARGER. The cell (`.cq-telemetry`) is fixed-width
  *  chrome, so its bars are small; a click on it, or Enter or Space with it focused, opens a dialog

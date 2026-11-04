@@ -13189,6 +13189,27 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: calc(18px * var(--text-scale));
   min-width: 4.5em;
 }
+/* The needle faces (#343) at the dialog's size too. The cockpit hosts share one 5em face, sized to the
+   TX strip's buttons; the dialog is opened to read the meters, so its faces take the room it has and
+   their name and value grow as the bars' do. They still wrap onto a second line on a narrow window. */
+.txmeters-large .ph-txneedle {
+  width: 12em;
+}
+.txmeters-large .ph-txneedle-label {
+  font-size: calc(14px * var(--text-scale));
+}
+.txmeters-large .ph-txneedle-value {
+  font-size: calc(16px * var(--text-scale));
+}
+/* Beside faces that large, COMP and the temperatures take a line of their own, at the dialog's bar size. */
+.txmeters-large .ph-txmeters.needle .ph-txmeter {
+  flex: 1 1 100%;
+}
+/* The dialog's own spacing around the meters, which the dock's one-box rule would otherwise take. */
+.txmeters-large .ph-txmeters.needle {
+  padding: var(--space-2) 0;
+  gap: var(--space-3);
+}
 .txmeters-actions {
   display: flex;
   justify-content: flex-end;
@@ -13264,6 +13285,148 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: calc(10px * var(--text-scale));
   color: var(--text-dim);
   padding: 1px var(--space-1);
+}
+/* THE NEEDLE METERS (#343, components/TxNeedles.tsx): PO, ALC and SWR as analog faces, in place of
+   their bars, when Settings ▸ Workspace ▸ TX meters is Needle. Each face is a display well: a dial
+   (an SVG whose viewBox is the dial's own shape, so it scales with the face) over a band carrying the
+   meter's name and value, laid over the dial's lower half (the needle's pivot sits under it).
+
+   THE FACE'S SIZE IS ITS WIDTH, ONE SIZE IN EVERY HOST; its height is the dial's, from the dial's
+   aspect ratio, so the whole face is in em and follows --ui-zoom and the text size as the bars' type
+   does. It never changes with the TX cycle: the faces are drawn from the first moment the bars'
+   slots would be, at rest until a reading arrives, and the bars' compact/full switch does not reach
+   them. The size is the strip's: no taller than its buttons (measured in Chrome at 1920×1080 and
+   1366×768), and narrow enough that its COMP row keeps the room it has beside the bars.
+   - The dock (Phone and CW below md): the faces and the bars left (COMP, the temperatures) share
+     one wrapping line instead of the bars' grid, so the bottom-anchored dock grows by the faces'
+     extra height over a bar row and no more.
+   - Operate's cell (`inline`): the faces take the first row of its grid.
+   - The TX strip (`strip`): the faces take a first column across both of its rows. */
+.ph-txmeters.needle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  /* ONE BOX THROUGH THE TX CYCLE. The bars' container takes `.pinned`'s compact padding between
+     overs and the full one while keyed; the dock is bottom-anchored, so with needles that 2 px
+     swing moved Stop TX on every key and unkey. The faces never change size, so the box doesn't. */
+  padding: 2px var(--space-2);
+  gap: 2px var(--space-3);
+}
+/* Before the first reading the hint shares the faces' line, as it shares the bars' grid, instead of
+   wrapping onto a line of its own that the first reading would then take away. */
+.ph-txmeters.needle .ph-txmeters-hint {
+  flex: 1 1 150px;
+  min-width: 0;
+}
+.ph-txmeters.needle .ph-txmeter {
+  flex: 1 1 150px;
+}
+.ph-txmeters.needle .ph-txmeter.has-ctl {
+  flex-basis: 300px;
+}
+.ph-txmeters.inline.needle {
+  display: grid;
+  /* …and the one box above is the dock's: Operate's cell and the TX strip own their spacing
+     (`.ph-txmeters.inline`), with needles as with bars. */
+  padding: 0;
+  gap: 1px var(--space-2);
+}
+.ph-txmeters.needle .ph-txneedles {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--space-1);
+  min-width: 0;
+}
+.ph-txneedle {
+  flex: none;
+  width: 5em;
+  min-width: 0;
+}
+.ph-txneedle-face {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.ph-txneedle-dial {
+  position: relative;
+  aspect-ratio: 100 / 38;
+}
+.ph-txneedle-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.ph-txneedle-scale,
+.ph-txneedle-tick {
+  fill: none;
+  stroke: var(--text-dim);
+  stroke-width: 1.2;
+}
+.ph-txneedle-zone {
+  fill: none;
+  stroke-width: 3;
+}
+.ph-txneedle-peak {
+  fill: none;
+  /* The Cyan role: a signal colour no theme retunes, so in every theme and skin it stays apart from
+     the needle's ink (styles-wells.test.ts measures the pair). */
+  stroke: var(--alert-info);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+.ph-txneedle-needle {
+  stroke: var(--text);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+.ph-txneedle-band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1);
+  padding: 0 3px;
+  line-height: 1.15;
+  background: var(--bg-elev);
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+}
+.ph-txneedle-label {
+  font-family: var(--font-mono);
+  font-size: calc(10px * var(--text-scale));
+  font-weight: 800;
+  color: var(--text-dim);
+}
+.ph-txneedle-value {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.74rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The strip's two rows: the faces take both, in a first column of their own width; COMP and the
+   temperatures fill the columns after it as they do beside the bars. */
+.ph-txmeters.inline.strip.needle {
+  grid-template-columns: max-content;
+}
+.ph-txmeters.inline.strip.needle .ph-txneedles {
+  grid-column: auto;
+  grid-row: 1 / -1;
+  flex-wrap: nowrap;
+}
+/* Between overs the needle rests and the marker holds the last over's peak, dimmed like the bars. */
+.ph-txmeters.idle .ph-txneedle-value,
+.ph-txmeters.idle .ph-txneedle-label,
+.ph-txmeters.idle .ph-txneedle-peak {
+  opacity: 0.55;
 }
 /* THE TRANSMIT CONTRACT — the dock's top line (2026-09-20). ONE LINE, ALWAYS: `nowrap` is
    not tidiness, it is the whole reason this sits where it does. The dock is bottom-anchored,
