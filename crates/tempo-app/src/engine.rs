@@ -21228,14 +21228,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.source_kind == SourceKind::Native && self.sat_dial_owner.is_none() {
             // ⭐ FALL BACK TO THE MODE'S PRIMARY CHANNEL when the current band has
             // none. The tier-aware plans are not all all-band: MSK144 and Q65 are
-            // VHF+ only, FST4/FST4W are 2200/630/160 m only. `find()` therefore
+            // VHF+ only, FST4 is 2200/630/160 m only. `find()` therefore
             // MISSES for the common case — an operator sitting on 20 m FT8 clicks
             // MSK144 — and the whole QSY used to be a silent no-op: tier, decoder
             // and slot clock all moved to MSK144 while the radio stayed on 14.074.
             // The mode then decodes an FT8 watering hole forever and reads as
-            // broken, which is how this was found. WSJT-X moves you to the new
-            // mode's own frequency in exactly this situation; the first plan entry
-            // is that mode's calling channel (MSK144 → 6 m 50.260, FST4 → 2200 m).
+            // broken, which is how this was found. ⚠️ NEXUS DIFFERS FROM WSJT-X HERE, ON
+            // PURPOSE: WSJT-X leaves the dial alone (`MainWindow::switch_mode` asks
+            // `best_working_frequency` for a row on the SAME band and does not QSY when
+            // there is none). Nexus moves to the mode's own channel instead, the first one
+            // on a band a radio here is set for (#184), else the plan's first entry
+            // (MSK144 → 6 m 50.260, FST4 → 2200 m). Operator-confirmed.
             //
             // ⚠️ Scoped to the SPECIALTY modes only. For the FT8↔FT4↔FT2 family a
             // flip is a timing change and the operator expects to STAY on band —
@@ -73623,12 +73626,13 @@ mod tests {
             "FST4 lands on 160 m, the one FST4 band a radio here is set for, got {}",
             e.settings.dial_mhz
         );
+        // FST4W carries WSJT-X's whole table, 20 m included, so from 20 m it stays on 20 m.
         e.set_tier(Tier::Ft8);
         e.set_frequency(14.074, "20m", "USB");
         e.set_tier(Tier::Fst4w);
         assert!(
-            (e.settings.dial_mhz - 1.8368).abs() < 1e-9,
-            "FST4W the same, got {}",
+            (e.settings.dial_mhz - 14.0956).abs() < 1e-9,
+            "FST4W has a 20 m channel, got {}",
             e.settings.dial_mhz
         );
 
