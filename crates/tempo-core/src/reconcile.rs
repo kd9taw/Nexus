@@ -304,31 +304,46 @@ fn pair_report_by<R: Borrow<QsoRecord>>(
     // band it is counted on, its own BAND under a parked BAND_RX, the transmit band of a
     // cross-band pair), and each row looked up by each of its own — so a confirmation finds its
     // contact whichever side carries BAND_RX, as it found it by its one BAND before BAND_RX was
-    // read.
-    let mut buckets: HashMap<Key, Vec<usize>> = HashMap::new();
+    // read. Each bucket entry says whether it is the contact's COUNTED band.
+    //
+    // ⚠️ A TWIN NEVER PAIRS ACROSS KINDS. A satellite contact is known on its uplink band too, so a
+    // terrestrial contact on that band (a 2m simplex QSO beside an SO-50 one) would otherwise pair
+    // with it: a 2m eQSL confirming the satellite contact, a QRZ book's 2m QSO swallowed by it. A
+    // pair met on the counted band of both sides is the pair BAND alone always made, whatever the
+    // kinds; one met through a twin band on either side must be satellite with satellite or
+    // terrestrial with terrestrial (`is_sat`).
+    let mut buckets: HashMap<Key, Vec<(usize, bool)>> = HashMap::new();
     for (i, r) in local.iter().enumerate() {
         let (call, _, mc, day) = key(r.borrow());
-        for band in crate::logbook::known_bands(r.borrow()) {
+        for (n, band) in crate::logbook::known_bands(r.borrow())
+            .into_iter()
+            .enumerate()
+        {
             buckets
                 .entry((call.clone(), band, mc, day))
                 .or_default()
-                .push(i);
+                .push((i, n == 0));
         }
     }
     let mut candidates = Vec::new();
     for (j, inc) in incoming.iter().enumerate() {
         let (call, _, mc, day) = key(inc);
         let mut seen = std::collections::HashSet::new();
-        for band in crate::logbook::known_bands(inc) {
+        for (n, band) in crate::logbook::known_bands(inc).into_iter().enumerate() {
             for d in [day.wrapping_sub(1), day, day + 1] {
                 let Some(bucket) = buckets.get(&(call.clone(), band.clone(), mc, d)) else {
                     continue;
                 };
-                for &i in bucket {
+                for &(i, counted) in bucket {
+                    let local_row = local[i].borrow();
+                    let same_kind = is_sat(local_row) == is_sat(inc);
+                    if !(same_kind || counted && n == 0) {
+                        continue;
+                    }
                     if !seen.insert(i) {
                         continue;
                     }
-                    if let Some(near) = closeness(local[i].borrow(), inc) {
+                    if let Some(near) = closeness(local_row, inc) {
                         if admits(i, j) {
                             candidates.push((near, j, i));
                         }

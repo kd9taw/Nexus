@@ -4228,7 +4228,7 @@ fn past_satellite_uploads_with_the_downlink_band_are_offered_and_rewritten() {
         "nothing changed by asking"
     );
 
-    let (fixed, durability) = fix_sat_bands(&engine, &ids);
+    let (fixed, durability) = fix_sat_bands(&engine, &ids, 1_800_000_000);
     assert_eq!(fixed.expect("made"), vec![id]);
     durability.wait(DURABLE_WAIT).expect("on disk");
     let after = stored_row(&d, id);
@@ -4248,9 +4248,50 @@ fn past_satellite_uploads_with_the_downlink_band_are_offered_and_rewritten() {
     let rows = engine_lock(&engine).log_rows();
     assert!(station::lotw_sat_band_fixes(&rows).unwrap().is_empty());
 
-    // A re-upload that never reached TQSL leaves it owed, for the ordinary upload.
-    sat_band_fix_not_sent(&engine, &[id], 1_800_000_000)
-        .wait(DURABLE_WAIT)
-        .expect("on disk");
+    // Owed to the ordinary upload until the re-upload stamps it.
     assert!(station::owed_to_lotw(&stored_row(&d, id)));
+}
+
+/// #163 (fourth review): the corrected rewrite is owed to LoTW from the moment it is made, in the
+/// same change. If the re-upload never stamps it — the app closed while TQSL ran, a later run of a
+/// multi-location batch that never started, the operator editing it mid-run, the rewrite stopping
+/// part-way — the ordinary Upload to LoTW still sends it. It is never left rewritten and still
+/// marked sent, owed nowhere.
+#[test]
+fn a_rewritten_satellite_contact_is_owed_to_lotw_until_its_upload_stamps_it() {
+    use tempo_core::logbook::{adif_record_own_log, parse_adif, UploadStatus};
+    let mut r = parse_adif(
+        "<EOH>\n<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:6>010000<BAND:4>70cm<MODE:2>FM<EOR>\n",
+    )
+    .remove(0);
+    r.freq_mhz = 436.795;
+    r.prop_mode = Some("SAT".into());
+    r.sat_name = Some("SO-50".into());
+    r.upload.lotw = Some(UploadStatus {
+        outcome: UploadOutcome::Accepted,
+        when_unix: 1_704_000_000,
+        detail: None,
+    });
+    let d = Dir::new("sat-fix-owed");
+    std::fs::write(d.log(), adif_header() + &adif_record_own_log(&r)).unwrap();
+    let e = engine_on_store(&d);
+    flush(&e);
+    let engine = Arc::new(Mutex::new(e));
+    let rows = engine_lock(&engine).log_rows();
+    let ids = station::lotw_sat_band_fixes(&rows).unwrap();
+    assert_eq!(ids.len(), 1);
+    let (fixed, durability) = fix_sat_bands(&engine, &ids, 1_800_000_000);
+    assert_eq!(fixed.unwrap(), ids);
+    durability.wait(DURABLE_WAIT).unwrap();
+    // …and the upload never stamps it.
+    let row = stored_row(&d, ids[0]);
+    assert!((row.freq_mhz - 145.85).abs() < 1e-9, "rewritten");
+    assert!(
+        station::owed_to_lotw(&row),
+        "owed to the ordinary upload: {:?}",
+        row.upload.lotw
+    );
+    // And never offered a second time: it is the next upload's now.
+    let rows = engine_lock(&engine).log_rows();
+    assert!(station::lotw_sat_band_fixes(&rows).unwrap().is_empty());
 }

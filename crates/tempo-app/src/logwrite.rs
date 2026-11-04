@@ -445,10 +445,23 @@ pub fn mark_lotw_uploaded_all(
 /// downlink), each by id, planned with the Engine lock released and made under it, through the
 /// edit's one implementation. A contact that is no longer one to fix as the plan reads it — a
 /// confirmation arrived, the operator changed it — is left alone. Answers the ids rewritten.
+///
+/// ⚠️ OWED IN THE SAME CHANGE. The row's LoTW stamp is the OLD, downlink-only upload's, and the
+/// rewrite takes the row out of the offer; were the stamp left, any way the re-upload ends without
+/// stamping it — the app closed while TQSL runs, a later run of a multi-location batch that never
+/// starts, an edit mid-run, this loop stopping part-way — would leave it marked sent and offered
+/// nowhere. So the same change stamps it not sent (`when_unix`): the re-upload's own stamp moves it
+/// on, and if that never comes the ordinary Upload to LoTW sends it.
 pub fn fix_sat_bands(
     engine: &Mutex<Engine>,
     ids: &[RecordId],
+    when_unix: i64,
 ) -> (Result<Vec<RecordId>, String>, Durability) {
+    let owed = UploadStatus {
+        outcome: tempo_core::logbook::UploadOutcome::Rejected,
+        when_unix,
+        detail: Some(tempo_core::logbook::UploadDetail::Unclassified),
+    };
     let (mut fixed, mut durability) = (Vec::new(), Durability::default());
     for &id in ids {
         let (out, d) = change_row(
@@ -460,10 +473,17 @@ pub fn fix_sat_bands(
                     tempo_core::lotw_sat_fix::sat_band_fixed(row).and_then(|rec| {
                         station::ops_on(
                             row,
-                            &[LogOp::Edit {
-                                id,
-                                rec: Box::new(rec),
-                            }],
+                            &[
+                                LogOp::Edit {
+                                    id,
+                                    rec: Box::new(rec),
+                                },
+                                LogOp::Stamp {
+                                    id,
+                                    service: UploadService::Lotw,
+                                    status: owed.clone(),
+                                },
+                            ],
                         )
                     }),
                 )
@@ -478,42 +498,6 @@ pub fn fix_sat_bands(
         }
     }
     (Ok(fixed), durability)
-}
-
-/// #163: stamp the rewritten satellite contacts `ids` as NOT on LoTW in their corrected form,
-/// for a re-upload that never reached TQSL (no TQSL, no Station Location): they are owed again,
-/// and the ordinary Upload to LoTW sends them. A contact changed since is left as it is.
-pub fn sat_band_fix_not_sent(
-    engine: &Mutex<Engine>,
-    ids: &[RecordId],
-    when_unix: i64,
-) -> Durability {
-    let status = UploadStatus {
-        outcome: tempo_core::logbook::UploadOutcome::Rejected,
-        when_unix,
-        detail: Some(tempo_core::logbook::UploadDetail::Unclassified),
-    };
-    let mut durability = Durability::default();
-    for &id in ids {
-        let (_, d) = change_row(
-            engine,
-            id,
-            "lotw satellite band fix not sent",
-            |_, row| {
-                Ok(station::ops_on(
-                    row,
-                    &[LogOp::Stamp {
-                        id,
-                        service: UploadService::Lotw,
-                        status: status.clone(),
-                    }],
-                ))
-            },
-            |_, _| (),
-        );
-        durability = durability.and(d);
-    }
-    durability
 }
 
 /// How many contacts one change of the "already uploaded" declaration stamps: a bound on what one

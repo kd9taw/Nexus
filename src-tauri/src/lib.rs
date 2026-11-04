@@ -37990,8 +37990,9 @@ async fn lotw_sat_band_fixes(state: State<'_, SharedEngine>) -> Result<Vec<Strin
 /// #163: the operator took the offer — rewrite the satellite contacts `ids` into the corrected
 /// shape (FREQ the nominal uplink, FREQ_RX the downlink; their band, which they are counted on,
 /// unchanged) and upload them to LoTW through the ordinary TQSL batch, which stamps them as any
-/// upload does. Never run without the operator's click. A re-upload that cannot reach TQSL at all
-/// (no TQSL, no Station Location) leaves them owed, so the ordinary upload sends them.
+/// upload does. Never run without the operator's click. The rewrite stamps them not sent in the
+/// same change, so a re-upload that never stamps them — no TQSL, a run that never starts, the app
+/// closed mid-run — leaves them owed, and the ordinary upload sends them.
 #[tauri::command]
 async fn lotw_fix_sat_bands(
     state: State<'_, SharedEngine>,
@@ -38003,7 +38004,9 @@ async fn lotw_fix_sat_bands(
         .collect::<Result<_, _>>()?;
     let engine = Arc::clone(&state);
     let report = tokio::task::spawn_blocking(move || {
-        let (fixed, durability) = tempo_app::logwrite::fix_sat_bands(&engine, &ids);
+        // Rewritten AND stamped not sent in one change, so a re-upload that never stamps them
+        // leaves them owed to the ordinary upload (`fix_sat_bands`).
+        let (fixed, durability) = tempo_app::logwrite::fix_sat_bands(&engine, &ids, now_unix());
         let fixed = fixed?;
         if durability.turned_back(tempo_app::logstore::DURABLE_WAIT) {
             return Err(tempo_app::station::LOG_BUSY.to_string());
@@ -38011,14 +38014,7 @@ async fn lotw_fix_sat_bands(
         durability
             .wait(tempo_app::logstore::DURABLE_WAIT)
             .map_err(durability_failed)?;
-        match lotw_upload_batch(&engine, LotwPick::Ids(fixed.clone()), true) {
-            Ok(report) => Ok(report),
-            Err(e) => {
-                let _ = tempo_app::logwrite::sat_band_fix_not_sent(&engine, &fixed, now_unix())
-                    .wait(tempo_app::logstore::DURABLE_WAIT);
-                Err(e)
-            }
-        }
+        lotw_upload_batch(&engine, LotwPick::Ids(fixed), true)
     })
     .await
     .map_err(|e| format!("LoTW upload task failed: {e}"))?;

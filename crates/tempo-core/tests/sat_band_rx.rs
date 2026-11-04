@@ -256,3 +256,63 @@ fn a_confirmation_finds_its_contact_by_either_band_it_is_known_by() {
         0
     );
 }
+
+// ---- Adopted from the fourth review: a satellite contact's uplink band is a twin, and a twin
+// never pairs across kinds. A 2m simplex confirmation is not the SO-50 contact's, and a 2m
+// simplex QSO in a QRZ book is not swallowed by it (nor the reverse).
+
+/// This build's satellite stamp shape: band = downlink, FREQ = uplink, FREQ_RX = downlink.
+const SAT_STAMP: &str =
+    "<MODE:2>FM<BAND:4>70cm<FREQ:7>145.850<FREQ_RX:7>436.795<PROP_MODE:3>SAT<SAT_NAME:5>SO-50";
+const TERR_2M: &str = "<MODE:2>FM<BAND:2>2m<FREQ:7>146.520";
+const LOTW_SAT: &str = "<MODE:2>FM<BAND:2>2M<BAND_RX:4>70CM<FREQ:9>145.85000<FREQ_RX:9>436.79500\
+<PROP_MODE:3>SAT<SAT_NAME:5>SO-50";
+
+fn at(body: &str, secs: u64) -> QsoRecord {
+    let mut r = held(body);
+    r.when_unix = T + secs;
+    r.time_known = true;
+    r
+}
+fn rows_at(rows: &[(&str, u64)]) -> Vec<QsoRecord> {
+    let mut s = String::from("<EOH>\n");
+    for (b, secs) in rows {
+        let t = T + secs - 1_704_067_200;
+        s.push_str(&format!(
+            "<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:6>{:02}{:02}{:02}{b}<QSL_RCVD:1>Y<EOR>\n",
+            t / 3600,
+            t / 60 % 60,
+            t % 60
+        ));
+    }
+    parse_adif(&s)
+}
+fn confirmed(r: &QsoRecord) -> bool {
+    let q = &r.qsl_rcvd;
+    q.card || q.lotw || q.eqsl || q.qrz
+}
+
+#[test]
+fn a_terrestrial_2m_confirmation_never_confirms_a_satellite_contact() {
+    let mut log = vec![at(SAT_STAMP, 0)];
+    let s = tempo_core::reconcile::reconcile(&mut log, &rows_at(&[(TERR_2M, 600)]));
+    assert_eq!(s.matched, 0);
+}
+
+#[test]
+fn a_qrz_book_never_merges_a_satellite_and_a_terrestrial_contact() {
+    let mut log = vec![at(SAT_STAMP, 0)];
+    let (added, _) = tempo_core::reconcile::merge_and_add(&mut log, rows_at(&[(TERR_2M, 600)]));
+    assert_eq!(added.len(), 1, "the 2m simplex QSO is its own contact");
+    let mut log = vec![at(TERR_2M, 0)];
+    let (added, _) = tempo_core::reconcile::merge_and_add(&mut log, rows_at(&[(LOTW_SAT, 600)]));
+    assert_eq!(added.len(), 1, "the SO-50 QSO is its own contact");
+}
+
+#[test]
+fn with_both_logged_each_confirmation_lands_on_its_own() {
+    let mut log = vec![at(SAT_STAMP, 0), at(TERR_2M, 600)];
+    let s = tempo_core::reconcile::reconcile(&mut log, &rows_at(&[(TERR_2M, 600), (LOTW_SAT, 0)]));
+    assert_eq!(s.matched, 2);
+    assert!(confirmed(&log[0]) && confirmed(&log[1]));
+}

@@ -18,12 +18,17 @@
 use crate::logbook::{query, QsoRecord};
 
 /// (LoTW designator, downlink band, nominal uplink MHz) — the passband or channel centre the
-/// satellite stamp itself would have written as FREQ, from AMSAT's published frequencies. Only
-/// CROSS-BAND birds: a same-band bird (the ISS's 2 m voice and APRS) went to LoTW on the right band.
+/// satellite stamp itself would have written as FREQ. Only CROSS-BAND birds: a same-band bird
+/// (the ISS's 2 m voice and APRS) went to LoTW on the right band.
+///
+/// Every value is AMSAT's: the FM summary (amsat.org/fm-satellite-frequency-summary — SO-50,
+/// AO-91, PO-101, the ISS repeater) and the linear summary
+/// (amsat.org/linear-satellite-frequency-summary — RS-44, FO-29, AO-7 A and B, QO-100 NB), checked
+/// against those pages on 2026-11-04; each is pinned by a test. A bird this table cannot cite
+/// (AO-92, decayed and no longer listed) is left out: an unknown bird is never offered.
 const NOMINAL_UPLINKS: &[(&str, &str, f64)] = &[
     ("SO-50", "70cm", 145.850),
     ("AO-91", "2m", 435.250),
-    ("AO-92", "2m", 435.350),
     ("PO-101", "2m", 437.500),
     ("RS-44", "70cm", 145.965),
     ("FO-29", "70cm", 145.950),
@@ -132,6 +137,39 @@ mod tests {
             sat_band_fix(&old_upload("AO-7", "2m", 145.95)),
             Some(432.150)
         );
+    }
+
+    /// Every entry of the table, pinned: the uplink an old upload of that bird goes again with, and
+    /// the band it goes to LoTW under.
+    #[test]
+    fn every_bird_in_the_table_goes_again_on_its_uplink_band() {
+        for (sat, down_band, down, up, up_band) in [
+            ("SO-50", "70cm", 436.795, 145.850, "2m"),
+            ("AO-91", "2m", 145.960, 435.250, "70cm"),
+            ("PO-101", "2m", 145.900, 437.500, "70cm"),
+            ("RS-44", "70cm", 435.640, 145.965, "2m"),
+            ("FO-29", "70cm", 435.850, 145.950, "2m"),
+            ("AO-7", "10m", 29.450, 145.900, "2m"),
+            ("AO-7", "2m", 145.950, 432.150, "70cm"),
+            ("ARISS", "70cm", 437.800, 145.990, "2m"),
+            ("QO-100", "3cm", 10489.750, 2400.250, "13cm"),
+        ] {
+            let r = old_upload(sat, down_band, down);
+            assert_eq!(sat_band_fix(&r), Some(up), "{sat} on {down_band}");
+            let out = adif_record(&sat_band_fixed(&r).unwrap());
+            let band = format!("<BAND:{}>{up_band}", up_band.len());
+            let band_rx = format!("<BAND_RX:{}>{down_band}", down_band.len());
+            assert!(
+                out.contains(&band) && out.contains(&band_rx),
+                "{sat}: {out}"
+            );
+        }
+        assert_eq!(
+            NOMINAL_UPLINKS.len(),
+            9,
+            "a new bird gets its row above too"
+        );
+        assert_eq!(nominal_uplink_mhz("AO-92", "2m"), None, "uncited, left out");
     }
 
     #[test]
