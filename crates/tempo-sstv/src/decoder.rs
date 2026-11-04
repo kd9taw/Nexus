@@ -11,7 +11,7 @@ use crate::error::Result;
 use crate::image::SstvImage;
 use crate::modespec::SstvMode;
 use crate::resample::Resampler;
-use crate::sync::{find_sync, SyncTracker, SYNC_PROBE_STRIDE};
+use crate::sync::{find_sync, frame_skip_corrections, SyncTracker, SYNC_PROBE_STRIDE};
 
 /// One observable event emitted by [`SstvDecoder::process`].
 #[derive(Clone, Debug)]
@@ -818,6 +818,10 @@ impl SstvDecoder {
         let result = find_sync(&d.has_sync, work_rate, d.spec);
         let rate = result.adjusted_rate_hz;
         let skip = result.skip_samples;
+        // #422 — each radio frame (a PD pair, or one line) is then read from
+        // where its OWN sync pulse is, not only where the straight-line fit
+        // puts it: audio lost mid-picture otherwise shears every line after it.
+        let corr = frame_skip_corrections(&d.has_sync, rate, skip, d.spec);
 
         let line_pixels = d.spec.line_pixels as usize;
         match d.spec.channel_layout {
@@ -836,7 +840,7 @@ impl SstvDecoder {
                         d.spec,
                         pair,
                         &d.audio,
-                        skip,
+                        skip + corr[pair as usize],
                         pair_seconds,
                         rate,
                         &mut d.image,
@@ -872,7 +876,7 @@ impl SstvDecoder {
                         d.mode,
                         line,
                         &d.audio,
-                        skip,
+                        skip + corr[line as usize],
                         line_seconds_offset,
                         rate,
                         &mut d.image,
@@ -902,7 +906,7 @@ impl SstvDecoder {
                         d.spec,
                         line,
                         &d.audio,
-                        skip,
+                        skip + corr[line as usize],
                         line_seconds_offset,
                         rate,
                         &mut d.image,

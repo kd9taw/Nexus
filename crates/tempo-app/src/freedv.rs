@@ -472,13 +472,84 @@ fn bind_message(what: &str, addr: &str, e: &std::io::Error, sender: &str) -> Str
     }
 }
 
+/// The lease file a window holds while it listens on contact port `port`, in `dir`: the
+/// machine-local config folder every Nexus window of this install shares, as the cluster share
+/// keeps its login lease there (never the data folder, which can be a network share).
+fn port_lease_path(dir: &std::path::Path, port: u16) -> std::path::PathBuf {
+    dir.join(format!("contact-port-{port}.lock"))
+}
+
+/// Take this window's lease on contact port `port` while it listens there: an advisory lock the
+/// OS lets go of when the window's process ends, however it ends. `None` when it cannot be made;
+/// the window still listens, and another window refused the port then reads it as another
+/// program's, as before.
+pub(crate) fn take_port_lease(dir: &std::path::Path, port: u16) -> Option<std::fs::File> {
+    let _ = std::fs::create_dir_all(dir);
+    let file = std::fs::File::create(port_lease_path(dir, port)).ok()?;
+    file.try_lock().ok()?;
+    Some(file)
+}
+
+/// Is contact port `port` held by another Nexus window of this install, by its lease? Only a
+/// lock that is really held says so; a missing or free lease file, or a folder that cannot be
+/// read, is "no" (the refusal stays the error it was).
+pub(crate) fn port_held_by_a_window(dir: &std::path::Path, port: u16) -> bool {
+    let Ok(file) = std::fs::File::open(port_lease_path(dir, port)) else {
+        return false;
+    };
+    match file.try_lock() {
+        Ok(()) => {
+            let _ = file.unlock();
+            false
+        }
+        Err(std::fs::TryLockError::WouldBlock) => true,
+        Err(_) => false,
+    }
+}
+
+/// What a refused contact port is, as (level, sentence). Held by another Nexus window
+/// (`by_a_window`, a port in use): no fault, that window takes the contacts (#431). Anything
+/// else: the error, in the words it always had.
+fn log_refusal(addr: &str, e: &std::io::Error, by_a_window: bool) -> (&'static str, String) {
+    if by_a_window && e.kind() == std::io::ErrorKind::AddrInUse {
+        (
+            "info",
+            format!(
+                "Contacts from other programs on {addr} are taken by the other Nexus window, \
+                 which listens on that port, so this window leaves it to it"
+            ),
+        )
+    } else {
+        (
+            "error",
+            bind_message(
+                "Contacts from other programs",
+                addr,
+                e,
+                "the program that sends them",
+            ),
+        )
+    }
+}
+
 /// Run both listeners for as long as the app runs, following the settings once a second: the
 /// contact port (`freedv_log` / `freedv_log_port`, bound on every adapter while `log_intake_lan`
 /// is on, refused on a port Nexus sends to: [`crate::log_intake::wanted`]) for FreeDV's contacts
 /// and every other program's, and `freedv_heard` / `freedv_heard_port` for heard calls. Port 0 is
 /// "not listening". FreeDV's lines go to `note`, every other program's to `intake_note`.
-pub fn run(engine: Arc<Mutex<Engine>>, note: Note, intake_note: Note) {
+///
+/// `windows` is the folder every Nexus window of this install shares (`None` in a test): the
+/// window listening on the contact port holds a lease there, so another window refused the port
+/// says so as INFO, not as an error ([`log_refusal`]). Who listens does not change.
+pub fn run(
+    engine: Arc<Mutex<Engine>>,
+    note: Note,
+    intake_note: Note,
+    windows: Option<std::path::PathBuf>,
+) {
     let mut log = Slot::default();
+    // This window's lease on the contact port it listens on, while it does.
+    let mut lease: Option<(u16, std::fs::File)> = None;
     let mut heard = Slot::default();
     // The running contact listener's bind (every adapter or 127.0.0.1) and its thread.
     let mut log_lan = false;
@@ -533,6 +604,18 @@ pub fn run(engine: Arc<Mutex<Engine>>, note: Note, intake_note: Note) {
             log_thread = started;
             log_lan = lan;
         }
+        // The lease follows the listener: taken on the port it listens on, let go when it stops.
+        // HERE, before a refusal is judged below: a window whose own rebind failed (127.0.0.1 to
+        // every adapter, refused by another program) listens nowhere, and its own lease must be
+        // gone by then, or the refusal would read as "the other Nexus window" (#431). Right after
+        // the bind, too, so a second window starting at the same moment finds the lease.
+        let listening = log.running.as_ref().map(|r| r.port);
+        if lease.as_ref().map(|(p, _)| *p) != listening {
+            lease = None;
+            if let (Some(port), Some(dir)) = (listening, windows.as_deref()) {
+                lease = take_port_lease(dir, port).map(|f| (port, f));
+            }
+        }
         let addr = |port: u16| {
             if lan {
                 format!("port {port} on every network adapter")
@@ -552,15 +635,17 @@ pub fn run(engine: Arc<Mutex<Engine>>, note: Note, intake_note: Note) {
                 f.log_error = Some(why.clone());
             }
             if let Some(Err((port, err))) = &changed {
-                let msg = bind_message(
-                    "Contacts from other programs",
-                    &addr(*port),
-                    err,
-                    "the program that sends them",
-                );
-                f.log_error = Some(msg.clone());
-                tempo_core::applog::error("freedv", &msg);
-                note("error", msg);
+                let by_a_window = windows
+                    .as_deref()
+                    .is_some_and(|dir| port_held_by_a_window(dir, *port));
+                let (level, msg) = log_refusal(&addr(*port), err, by_a_window);
+                if level == "error" {
+                    f.log_error = Some(msg.clone());
+                    tempo_core::applog::error("freedv", &msg);
+                } else {
+                    tempo_core::applog::info("freedv", &msg);
+                }
+                note(level, msg);
             }
         }
         if clash != clash_said {
