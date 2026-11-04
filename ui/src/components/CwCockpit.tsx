@@ -2132,6 +2132,8 @@ export function CwCockpit({
         // App unmounts this cockpit on a page switch; the contact in its strip waits for it. A call
         // it puts back reaches His Call through `onCallChange`, as a typed one does.
         draft="cw"
+        // #438: a long contact whose call went in early restarts its start time here.
+        startButton
         onResumeContest={onResumeContest}
       />
       {/* Inside the log pane, under the form: it takes only the room the form leaves (RecentQsosPane). */}

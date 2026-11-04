@@ -27,6 +27,8 @@ const ROTOR_EZ: RotatorState = { azDeg: 123, reading: 'position', elDeg: null, e
 const api = vi.hoisted(() => ({
   readRotator: vi.fn((): Promise<number | null> => Promise.resolve(123)),
   readRotatorState: vi.fn((): Promise<RotatorState | null> => Promise.resolve(null)),
+  getMoonStatus: vi.fn(async () => null),
+  startMoonTrack: vi.fn(async () => ({ state: 'following', elevation: true, azDeg: null, elDeg: null })),
   pointRotator: vi.fn((..._args: number[]) => Promise.resolve()),
   pointRotatorElevation: vi.fn((..._args: number[]) => Promise.resolve()),
   stopRotator: vi.fn(() => Promise.resolve()),

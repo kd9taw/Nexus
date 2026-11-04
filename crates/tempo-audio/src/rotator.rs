@@ -28,6 +28,8 @@ use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
+mod watch;
+
 /// Per-read window. Bounds one wait, never the whole reply — the deadlines below do that.
 const READ_WINDOW: Duration = Duration::from_millis(500);
 
@@ -43,7 +45,7 @@ const READ_WINDOW: Duration = Duration::from_millis(500);
 /// value was 800 ms — shorter than Hamlib's own budget for every curated model but two, so a
 /// slow-but-working rotator read as done as well.
 ///
-/// 3 500 ms covers ONE FULL ATTEMPT of every curated backend (the longest single `timeout` is
+/// 4 000 ms covers ONE FULL ATTEMPT of every curated backend (the longest single `timeout` is
 /// the Prosistel's 3 000 ms) and the entire retry budget of the GS-232, SPID and EasyComm
 /// families. It deliberately does NOT cover the rotorez family's or the Prosistel's last
 /// retries: a 12 s block would stall the satellite track's 3 s tick — and hence its Doppler —
@@ -51,12 +53,27 @@ const READ_WINDOW: Duration = Duration::from_millis(500);
 /// `TrackDriver::MISS_LIMIT`: five consecutive silences before the mast is given up, and one
 /// success forgives them all, so an intermittent controller that answers on Hamlib's third
 /// retry costs a miss, not the pass.
-const CMD_DEADLINE_MS: u64 = 3_500;
+///
+/// ⚠️ **Sized for a rotator reached over the internet, too (2026-11-03).** It was 3 500 ms. A
+/// GS-232 `W` reads no reply, so the move itself is quick; what a move waits for is rotctld's ONE
+/// command lock, held by whichever position read is in flight. That read is Hamlib's GS-232 worst
+/// case — 1 800 ms at its own defaults (`4 × (400 + 50)`, what an External rotctld runs), 2 100 ms
+/// under the integrated daemon's `-C` ([`crate::rigctld_proc::rotctld_args`]), 2 600 ms for a SPID
+/// — and an External rotctld across the internet adds its round trip on top. 4 000 ms keeps a
+/// half-second round trip inside the budget for every one of those.
+const CMD_DEADLINE_MS: u64 = 4_000;
 
-/// The same for a position READ. Shorter on purpose: a lost poll costs one "—" on screen and
-/// is retried two seconds later, while a long block piles background reads up behind each other
-/// (the strip and the pane both poll at 2 s).
-const POLL_DEADLINE_MS: u64 = 1_500;
+/// The same for a position READ.
+///
+/// ⚠️ **It was 1 500 ms, shorter than Hamlib's own answer time** (2026-11-03, a tester's GS-232A
+/// and GS-232B rotators "losing connection" over the internet). Hamlib's GS-232 backends answer
+/// `p` only after up to `retry + 1` attempts of `timeout + post_write_delay` each: 1 800 ms at the
+/// bundled defaults. Every read Hamlib rescued on its last attempt reached the operator as "not
+/// answering". 3 000 ms covers that budget and the integrated daemon's `-C` one (2 100 ms for a
+/// GS-232, 2 600 ms for a SPID) with room for an internet round trip to an External rotctld.
+/// The polls are single-flight, so a longer wait slows a dead rotator's polls down rather than
+/// piling them up.
+const POLL_DEADLINE_MS: u64 = 3_000;
 
 /// Cap on the TCP connect itself. Without one, an external rotctld on an unreachable host
 /// stalls for the OS SYN timeout (~75 s on Linux, ~21 s on Windows) inside a 2 s poll.
@@ -142,7 +159,23 @@ fn exchange(
     deadline_ms: u64,
     done: impl Fn(&str) -> bool,
 ) -> std::io::Result<String> {
-    let mut s = connect(addr)?;
+    let started = Instant::now();
+    let (result, connected) = match connect(addr) {
+        Ok(s) => (converse(s, line, deadline_ms, done), true),
+        Err(e) => (Err(e), false),
+    };
+    let heard = watch::heard(&result, connected, deadline_ms);
+    watch::note(addr, line, heard, started.elapsed());
+    result
+}
+
+/// [`exchange`] once the connection is up: write the line, read the answer.
+fn converse(
+    mut s: TcpStream,
+    line: &str,
+    deadline_ms: u64,
+    done: impl Fn(&str) -> bool,
+) -> std::io::Result<String> {
     s.write_all(line.as_bytes())?;
     let deadline = Instant::now() + Duration::from_millis(deadline_ms);
     let mut out = Vec::with_capacity(64);
@@ -210,10 +243,63 @@ fn command(addr: &str, line: &str) -> std::io::Result<()> {
     if rprt == "RPRT 0" {
         return Ok(());
     }
-    Err(std::io::Error::other(format!(
-        "the rotator refused {:?}: {rprt}",
-        line.trim()
-    )))
+    Err(std::io::Error::other(Refused {
+        code: rprt_code(rprt),
+        text: format!("the rotator refused {:?}: {rprt}", line.trim()),
+    }))
+}
+
+/// The number in an `RPRT <n>` line.
+fn rprt_code(rprt: &str) -> Option<i32> {
+    rprt.strip_prefix("RPRT")?.trim().parse().ok()
+}
+
+/// A set command rotctld ANSWERED with a non-zero `RPRT`: carried inside the `io::Error` so a
+/// caller can ask which code it was ([`refusal_code`]) without parsing the message. Its text is
+/// the message the error always had.
+#[derive(Debug)]
+struct Refused {
+    code: Option<i32>,
+    text: String,
+}
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl std::error::Error for Refused {}
+
+/// The `RPRT` code a set command was refused with, or `None` for any other failure (no answer,
+/// a closed connection, a reply that was not an `RPRT` line).
+pub fn refusal_code(e: &std::io::Error) -> Option<i32> {
+    e.get_ref()?.downcast_ref::<Refused>()?.code
+}
+
+/// Did the daemon ANSWER that the command is not one this rotator takes? Hamlib's frontend
+/// refuses a position outside the declared range with `RPRT -1` (an elevation on a mount whose
+/// declared elevation range is empty), and a backend with no such function answers `-4` or `-11`.
+///
+/// ⚠️ **`RPRT -5` and `RPRT -6` are NOT this**: they are Hamlib's own timeout and I/O error,
+/// what a controller that did not answer looks like through rotctld. The satellite track used to
+/// read every non-zero `RPRT` as "elevation refused" and dropped a G-5500's elevation for a
+/// minute after one slow round trip.
+pub fn says_unsupported(e: &std::io::Error) -> bool {
+    matches!(refusal_code(e), Some(-1 | -4 | -11))
+}
+
+/// How the diagnostic log writes a rotctld address: as it is when it is on this computer, and as
+/// "a remote rotctld" and its port when it is not (the log is built to be sent to a stranger).
+pub fn link_label(addr: &str) -> String {
+    watch::label(addr)
+}
+
+/// A diagnostic-log line that names the rotator's Port box, with the box's host masked when it is a
+/// network address off this computer (a serial device and the port number stay). The log is built
+/// to be sent to a stranger, and a serial server's address is the operator's.
+pub fn mask_port(text: &str, port: &str) -> String {
+    watch::mask_port(text, port)
 }
 
 /// Point the rotator at `az_deg` via rotctld at `addr` (host:port). `Ok` only on `RPRT 0`.
@@ -542,6 +628,9 @@ mod tests {
         Silent,
         /// Accept the connection and close it without a word.
         Hangup,
+        /// Answer with this text after a pause of this many milliseconds — a slow link, or a
+        /// Hamlib backend still retrying.
+        Late(u64, &'static str),
     }
 
     /// A rotctld on loopback that plays one script, and hands back the line it was sent.
@@ -573,6 +662,10 @@ mod tests {
                 // Hold the socket open, saying nothing, until the client gives up.
                 Behave::Silent => std::thread::sleep(Duration::from_secs(6)),
                 Behave::Hangup => {}
+                Behave::Late(ms, text) => {
+                    std::thread::sleep(Duration::from_millis(ms));
+                    let _ = s.write_all(text.as_bytes());
+                }
             }
             let _ = s.flush();
             std::thread::sleep(Duration::from_millis(50));
@@ -650,6 +743,46 @@ mod tests {
             e.to_string().contains("baud"),
             "the error names the likeliest cause: {e}"
         );
+    }
+
+    #[test]
+    fn a_position_hamlib_answers_on_its_last_retry_is_a_position_not_a_miss() {
+        // A GS-232A/B backend answers `p` only after up to four attempts of 400 + 50 ms each
+        // (Hamlib's defaults): 1 800 ms. The read deadline was 1 500 ms, so every read Hamlib
+        // rescued on its last attempt reached the operator as "not answering" — on an internet
+        // link, often. 2 400 ms is that budget plus a round trip across the internet.
+        let (addr, _rx) = stage(Behave::Late(2_400, "123.0\n45.0\n"));
+        assert_eq!(
+            read_position(&addr).expect("a late answer is still an answer"),
+            (123.0, Some(45.0))
+        );
+        // …and a move that waits its turn behind such a read is still a move.
+        let (addr, _rx) = stage(Behave::Late(3_400, "RPRT 0\n"));
+        assert!(point(&addr, 10.0).is_ok());
+    }
+
+    #[test]
+    fn a_refusal_carries_its_code_and_only_some_codes_mean_unsupported() {
+        for (reply, code, unsupported) in [
+            ("RPRT -1\n", -1, true),
+            ("RPRT -4\n", -4, true),
+            ("RPRT -11\n", -11, true),
+            // Hamlib's own timeout and I/O error: the controller did not answer rotctld.
+            ("RPRT -5\n", -5, false),
+            ("RPRT -6\n", -6, false),
+        ] {
+            let (addr, _rx) = stage(Behave::Say(reply));
+            let e = point_azel(&addr, 10.0, 20.0).expect_err("a refusal");
+            assert_eq!(refusal_code(&e), Some(code), "{reply:?}");
+            assert_eq!(says_unsupported(&e), unsupported, "{reply:?}");
+            // The message is the one it always was.
+            assert!(e.to_string().contains(reply.trim()), "{e}");
+        }
+        // No answer at all is no refusal.
+        let (addr, _rx) = stage(Behave::Hangup);
+        let e = point_azel(&addr, 10.0, 20.0).expect_err("a hang-up");
+        assert_eq!(refusal_code(&e), None);
+        assert!(!says_unsupported(&e));
     }
 
     #[test]

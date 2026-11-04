@@ -58,6 +58,10 @@ vi.mock('../api', () => ({
   setFilterWidth: vi.fn(async () => ({})),
   openPanelWindow: vi.fn(async () => {}),
   pointRotatorAtCall: vi.fn(async () => 47),
+  // rotorPointAt asks whether a tracker is steering the mast, and ends one that is, before it points.
+  stopSatTrack: vi.fn(async () => {}),
+  getSatTrackStatus: vi.fn(async () => null),
+  getMoonStatus: vi.fn(async () => null),
   // LogEntry's, rendered for real.
   contestIMoved: vi.fn(async () => ({})),
   contestLogManual: vi.fn(async () => ({})),

@@ -56,14 +56,13 @@ import { withErrorToast } from '../toast'
 import { fmtDistanceKm, useUnits } from '../units'
 import { t } from '../i18n'
 import { lookupCall } from '../callsign'
+import { TX_AVOID } from '../features/txSurfaces'
 
 // ---- where the card may never stand ----------------------------------------------------------
 
-/** Every transmit surface the card keeps off: the TX strip under each cockpit's scope, the TX dock,
- *  FT's QSO strip (its Stop TX and sequencer), SSTV's pinned transmit bar, and any Stop button
- *  wherever it is drawn (the top bar's cluster, the log confirm). A hidden keep-alive cockpit's copies
- *  have no box and drop out. */
-export const TX_AVOID = '.cockpit-txstrip, .cockpit-txdock, .cockpit-qso, .sstv-tx-bar, .op-controls, .op-btn.stop'
+/** Every transmit surface the card keeps off (features/txSurfaces.ts; the pop-up column keeps off
+ *  the same ones). */
+export { TX_AVOID }
 
 export interface Box {
   left: number

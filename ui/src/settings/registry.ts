@@ -287,6 +287,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'foreign ptt', 'wsjt-x share', 'n1mm share',
       // FreeDV's own app beside Nexus: its logged contacts and the calls it hears.
       'freedv', 'freedv log', 'qso logging', 'digital voice',
+      // The same port takes the contacts other programs log (WSJT-X, N1MM, the S.A.T. tracker).
+      'accept contacts', 'contact port', 'log intake', 's.a.t.', 'adif over udp',
       // The high-SWR cutoff. NOT the bare word 'swr' — that belongs to the amplifier
       // section's own SWR read-out, and one term cannot land the operator on two sections.
       'high swr', 'swr cutoff', 'stop on swr', 'antenna fault',

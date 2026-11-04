@@ -229,7 +229,7 @@ describe('zoomRange (waterfall span/zoom)', () => {
   })
 
   it('clamps to the high edge without shrinking the span', () => {
-    const { lo, hi } = zoomRange(3800, 1000) // would end past F_MAX
+    const { lo, hi } = zoomRange(4800, 1000) // would end past F_MAX
     expect(hi).toBe(WF_F_MAX)
     expect(hi - lo).toBe(1000)
   })
@@ -1536,7 +1536,7 @@ describe('zoomWindow — a slice that holds still (#164) without going stale (#1
     const low = zoomWindow(w, 100, 1000)
     expect(low.lo).toBe(WF_F_MIN)
     expect(low.hi - low.lo).toBe(1000)
-    const high = zoomWindow(w, 3950, 1000)
+    const high = zoomWindow(w, 4950, 1000)
     expect(high.hi).toBe(WF_F_MAX)
     expect(high.hi - high.lo).toBe(1000)
   })

@@ -53,6 +53,8 @@ vi.mock('../api', async (importOriginal) => {
     getSettings: vi.fn(async () => ({ rotatorModel: 202, rotatorHost: '' })),
     readRotator: vi.fn(async () => 180),
     readRotatorState: vi.fn(async () => null),
+    getMoonStatus: vi.fn(async () => null),
+    startMoonTrack: vi.fn(async () => ({ state: 'following', elevation: true, azDeg: null, elDeg: null })),
     getDeclination: vi.fn(async () => null),
     getSatTrackStatus: vi.fn(async () => null),
     // The POTA/SOTA box's own reads (it self-fetches, as its screen does).

@@ -145,6 +145,8 @@ mod kept_files_tests;
 /// The cockpit's drive and RX gain survive a later Settings save, and a save of another radio.
 #[cfg(test)]
 mod live_level_tests;
+/// A contact another program logged: its stamps and its uploads, never the log funnel.
+mod log_intake;
 #[cfg(test)]
 mod lotw_location_tests;
 mod mode_entry;
@@ -2799,10 +2801,22 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
     }
 }
 
-/// Default waterfall resolution (display bins). 512 over the 0–4000 Hz span ≈ 7.8 Hz/bin — ~3×
-/// finer than the old 120-bin/22.5 Hz bank, over a wider band. The row is resampled from a
-/// Hann-windowed 2048-point FFT (see `tempo_core::spectrum`).
-pub const SPECTRUM_BINS: usize = 512;
+/// Default waterfall resolution (display bins). 640 over the 0–5000 Hz span = 7.8125 Hz/bin — ~3×
+/// finer than the old 120-bin/22.5 Hz bank. The row is resampled from a Hann-windowed 2048-point
+/// FFT (see `tempo_core::spectrum`).
+///
+/// It was 512 over 0–4000, the same 7.8125 Hz per bin. The span grew to 5000 Hz so the audio
+/// waterfalls reach as high as the reference FT program's wide graph does (it computes to 5000 Hz
+/// at the same 12 kHz rate), and the bin count grew WITH it so the resolution did not move: every
+/// bin below 4000 Hz covers exactly the frequencies it always did (pinned by
+/// `the_row_for_a_known_input_is_byte_stable` in tempo-audio's rxdsp, whose old 512-bin reference is
+/// now the row's first 512 bins). DISPLAY ONLY: no decoder reads this row, and the FT TX-offset
+/// bounds (`tx_offset_bounds`, 200–4000) are a separate fact that did not move with it.
+pub const SPECTRUM_BINS: usize = 640;
+/// The top of the audio waterfall row, Hz (the bottom is 0). See [`SPECTRUM_BINS`]. Under the
+/// 6 kHz Nyquist of the 12 kHz analysis rate, with the capture resampler's anti-alias roll-off
+/// still above it.
+pub const SPECTRUM_HI_HZ: f32 = 5000.0;
 
 /// The engine's current operating mode (holds the active sequencer).
 ///
@@ -34756,9 +34770,9 @@ contact yourself."
     fn compute_spectrum(audio: &[f32]) -> Spectrum {
         // Widened from 200–2900: shows the full SSB/DATA passband (incl. wide DATA modes) and the
         // filter-slope shelf; the percentile AGC + gain/zero absorb the quiet edges. The 6 kHz
-        // Nyquist (12 kHz capture) caps the top; 4000 covers every voice/data passband in use.
+        // Nyquist (12 kHz capture) caps the top; the span is the rx-dsp row's (`SPECTRUM_HI_HZ`).
         const LO_HZ: f32 = 0.0;
-        const HI_HZ: f32 = 4000.0;
+        const HI_HZ: f32 = SPECTRUM_HI_HZ;
         let row = if audio.is_empty() {
             Vec::new()
         } else {
@@ -84616,5 +84630,45 @@ mod band_change_ends_ft_contact_tests {
                 "band change {change_band}: resent to W9ABC {resent}"
             );
         }
+    }
+}
+
+/// The fallback waterfall row (the Companion/UDP path, no local capture) spans the same 0–5000 Hz
+/// at the same 7.8125 Hz per bin as the rx-dsp row, so a waterfall draws the same axis whichever
+/// path fed it.
+#[cfg(test)]
+mod spectrum_span_tests {
+    use super::*;
+
+    fn tone(hz: f32) -> Vec<f32> {
+        (0..2048)
+            .map(|i| (std::f32::consts::TAU * hz * i as f32 / tempo_fast::SAMPLE_RATE).sin() * 0.5)
+            .collect()
+    }
+
+    fn peak(row: &[f32]) -> usize {
+        row.iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .map(|(i, _)| i)
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn the_fallback_row_reaches_5000_hz_at_the_same_resolution() {
+        let s = Engine::compute_spectrum(&tone(4500.0));
+        assert_eq!((s.lo_hz, s.hi_hz), (0.0, 5000.0));
+        assert_eq!(s.row.len(), SPECTRUM_BINS);
+        assert_eq!(
+            s.hi_hz / s.row.len() as f64,
+            7.8125,
+            "the bins kept their width"
+        );
+        let want = (4500.0 / 7.8125) as usize;
+        assert!(
+            peak(&s.row).abs_diff(want) <= 2,
+            "a 4500 Hz tone peaks near bin {want}, got {}",
+            peak(&s.row)
+        );
     }
 }

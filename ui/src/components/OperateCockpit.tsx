@@ -65,7 +65,7 @@ import { TX_SPLIT_MAX, TX_SPLIT_MIN } from '../features/paneSeam'
 import { buildHighlightMap, OperateDecodes } from './OperateDecodes'
 import { DecodeHistory, type DecodeSort } from '../decodeHistory'
 import { OperateQsoStrip } from './OperateQsoStrip'
-import { TxMeters, TX_METERS_WHEN } from './TxMeters'
+import { TxMetersCell, TX_METERS_WHEN } from './TxMeters'
 import { SpotDialog } from './SpotDialog'
 import { DEFAULT_ROSTER_SORT, OperateRoster, type RosterSort } from './OperateRoster'
 import { RecallPanel } from './RecallPanel'
@@ -1988,6 +1988,8 @@ export function OperateCockpit({
                   onPopOut={popOutWaterfall}
                   fixedWindow={tier === 'WSPR' ? WSPR_WATERFALL_WINDOW : undefined}
                   transmitting={snap.radio.transmitting}
+                  passbandHz={snap.radio.filterWidthHz ?? null}
+                  passbandMode={snap.radio.rigMode || snap.radio.sideband}
                   rxOffsetHz={snap.radio.rxOffsetHz}
                   txOffsetHz={snap.radio.txOffsetHz}
                   theme={theme}
@@ -2138,8 +2140,9 @@ export function OperateCockpit({
           // gone (the operator's "eating up a whole line" complaint) — the same
           // pinned semantics (live while keyed, last readings dimmed between overs)
           // now render into the strip's fixed-width telemetry cell, so the FT TX
-          // cycle still cannot bounce the layout. Still a ⊞ Panels entry.
-          telemetry={shown('txmeters') ? <TxMeters radio={snap.radio} inline /> : undefined}
+          // cycle still cannot bounce the layout. Still a ⊞ Panels entry. #446: the cell opens
+          // the same live meters at full size in a dialog (TxMetersCell), a readout as the cell is.
+          telemetry={shown('txmeters') ? <TxMetersCell radio={snap.radio} /> : undefined}
         />
 
         {/* data-cols collapses the grid to ONE column once the main cell or the whole

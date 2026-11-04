@@ -10,6 +10,18 @@
 // (`b8dcda7dd`). A difference here is a change to where the station transmits. Never re-record the
 // file to make a change pass; find out why the number moved.
 //
+// ONE RE-DERIVATION, 2026-11-03, and why: the audio row grew to 0–5000 Hz and the Full view with it
+// (operator decision). That moves exactly two things in this matrix, and nothing else: the Full view's
+// axis (200–4000 → 200–5000 Hz, every Full value), and each zoom window at the RX step 3990 Hz, which
+// used to be pushed down against the old 4000 Hz top and now centres on the marker (2 kHz: 2990–4990,
+// not 2000–4000). Std, WSPR and every other step are byte-identical. The new values were NOT recorded
+// from the component: they were computed by an independent restatement of the window rules and the
+// click mapping (`zoomRange`/`zoomWindow` and `lo + x/width × (hi − lo)`, rounded), which was first
+// checked to reproduce the whole b8dcda7dd recording with the old 4000 Hz top, value for value. Where
+// the station TRANSMITS is still the engine's: it clamps every offset to 200–4000 Hz
+// (`tx_offset_bounds`), so a click above 4000 Hz in the wider views sets 4000, as the engine has always
+// done with any value past its bounds.
+//
 // The matrix: every view the picker offers plus WSPR's fixed sub-band, the RX marker walked across
 // the passband in an order that makes a zoomed window hold still and then page (the "pan" a zoom
 // does, issue #164), two canvas boxes (one offset from the page's left edge, at an odd width),
@@ -170,12 +182,15 @@ describe('the recording itself', () => {
     // can check by hand (Std is 200-3000 Hz, WSPR's sub-band 1400-1600 Hz), so the file cannot be a
     // table of anything else.
     const std = golden.views.findIndex((v) => v.name === 'Std')
+    const full = golden.views.findIndex((v) => v.name === 'Full')
     const wspr = golden.views.findIndex((v) => v.name === 'WSPR')
     expect(golden.views[wspr].fixed, 'the recording used WSPR’s own sub-band').toEqual(WSPR_WATERFALL_WINDOW)
     golden.boxes.forEach((_, b) =>
       golden.rxPath.forEach((_, s) =>
         golden.fractions.forEach((f, i) => {
           expect(golden.hz[std][b][s][i]).toBe(Math.round(200 + f * 2800))
+          // Full is the whole 200–5000 Hz passband (re-derived 2026-11-03, see the header).
+          expect(golden.hz[full][b][s][i]).toBe(Math.round(200 + f * 4800))
           expect(golden.hz[wspr][b][s][i]).toBe(Math.round(1400 + f * 200))
         }),
       ),
