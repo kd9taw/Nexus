@@ -10,6 +10,10 @@
 //!    detect slant, adjust the rate to cancel it, then locate line 0's
 //!    `Skip` via 8-tap convolution on the column-summed sync image.
 //!    Equivalent of slowrx's `sync.c::FindSync` (lines 18-133).
+//! 3. [`frame_skip_corrections`] — a Nexus addition with no slowrx
+//!    counterpart (#422): re-find every line's own pulse near where the fit
+//!    predicts it and correct the line by a running median, so audio missing
+//!    mid-picture, or a residual slant, no longer shears the rest of it.
 //!
 //! Slowrx is offline-batch (read-all → first `GetVideo` populates
 //! `HasSync[]` → `FindSync` adjusts → second `GetVideo` rereads cached
@@ -438,6 +442,233 @@ fn skip_seconds_for(xmax: i32, spec: ModeSpec) -> f64 {
     raw + spec.skip_correction_seconds()
 }
 
+/// How many radio frames either side of a frame [`frame_skip_corrections`]
+/// looks at: a 15-frame running median. Wide enough that a minority of frames
+/// whose pulse was missed or mis-read (a static crash, a QSB dip, a picture
+/// detail that happens to sit near 1200 Hz) cannot move it; narrow enough that
+/// a real jump is followed from the frame it happens on, because a median
+/// keeps a step where it is instead of smearing it.
+const FRAME_TRACK_RADIUS: usize = 7;
+
+/// How many frames apart [`residual_drift`] reads the drift across.
+const DRIFT_SPAN_FRAMES: usize = 8;
+
+/// Where line `y`'s sync pulse ENDS, in working-rate samples, if the picture
+/// ran exactly on the whole-picture fit `(rate_hz, skip_samples)`.
+///
+/// `skip_samples` is the start of line 0 as the line decoders use it
+/// ([`crate::mode_scottie::decode_line`] and friends add their channel
+/// offsets to it), so the pulse sits where each family's line layout puts it:
+/// at the start of the line for every `LineStart` mode, and after the second
+/// colour channel for Scottie (`2·septr + 2·chan_len` — the same offset
+/// `mode_scottie::decode_line` reads the red channel after).
+#[allow(clippy::cast_precision_loss)]
+fn predicted_sync_end(spec: ModeSpec, rate_hz: f64, skip_samples: i64, y: usize) -> f64 {
+    let sync_start = match spec.sync_position {
+        crate::modespec::SyncPosition::LineStart => 0.0,
+        crate::modespec::SyncPosition::Scottie => {
+            2.0 * spec.septr_seconds + 2.0 * f64::from(spec.line_pixels) * spec.pixel_seconds
+        }
+    };
+    skip_samples as f64
+        + rate_hz * ((y as f64) * spec.line_seconds + sync_start + spec.sync_seconds)
+}
+
+/// For every radio frame, how far (working-rate samples) its own sync pulse
+/// sits from where the whole-picture fit predicts it, or `None` where no
+/// pulse could be made out.
+///
+/// The search covers half a line either side of the prediction — every
+/// position a line's pulse can be in — and scores each candidate falling edge
+/// on the `has_sync` track as "a pulse's length of sync before it, none after
+/// it, none before the pulse": a template of the pulse itself rather than
+/// [`find_falling_edge`]'s 8-tap kernel, because one line has none of the
+/// column sum's averaging to lean on. Ties go to the candidate nearest the
+/// prediction, so a clean picture reads as on time. A score under half the
+/// pulse length is no pulse at all.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
+fn frame_sync_offsets(
+    has_sync: &[bool],
+    rate_hz: f64,
+    skip_samples: i64,
+    spec: ModeSpec,
+    frames: usize,
+) -> Vec<Option<f64>> {
+    let stride = SYNC_PROBE_STRIDE as f64;
+    let mut prefix = Vec::with_capacity(has_sync.len() + 1);
+    let mut acc = 0_i64;
+    prefix.push(acc);
+    for &b in has_sync {
+        acc += i64::from(b);
+        prefix.push(acc);
+    }
+    let n = has_sync.len() as i64;
+    // Sync probes in `[a, b)`, reading nothing outside the track.
+    let count = |a: i64, b: i64| -> i64 {
+        let (a, b) = (a.clamp(0, n), b.clamp(0, n));
+        if b > a {
+            prefix[b as usize] - prefix[a as usize]
+        } else {
+            0
+        }
+    };
+    let pulse = ((spec.sync_seconds * rate_hz / stride).round() as i64).max(2);
+    let half_line = ((spec.line_seconds * rate_hz / stride) / 2.0).floor() as i64;
+    (0..frames)
+        .map(|y| {
+            let edge = predicted_sync_end(spec, rate_hz, skip_samples, y);
+            let at = edge / stride;
+            let centre = at.round() as i64;
+            let mut best: Option<(i64, i64)> = None; // (score, probe index)
+            for j in (centre - half_line)..(centre + half_line) {
+                let score =
+                    count(j - pulse, j) - count(j, j + pulse) - count(j - 2 * pulse, j - pulse);
+                let better = best.is_none_or(|(bs, bj)| {
+                    score > bs || (score == bs && (j as f64 - at).abs() < (bj as f64 - at).abs())
+                });
+                if better {
+                    best = Some((score, j));
+                }
+            }
+            match best {
+                Some((score, j)) if score * 2 >= pulse => Some((j as f64) * stride - edge),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// The steady drift (samples per frame) left in the per-frame offsets by a
+/// fit whose rate is slightly off, or 0 when the offsets do not agree on one.
+///
+/// Read across [`DRIFT_SPAN_FRAMES`] frames rather than frame to frame, so
+/// the probe track's few-sample jitter is divided down; a median, so the few
+/// spans that straddle a gap are outvoted. Trusted only when most spans agree
+/// with it to within `tol` over the span — offsets that are mostly noise give
+/// no drift at all rather than a made-up one.
+#[allow(clippy::cast_precision_loss)]
+fn residual_drift(raw: &[Option<f64>], tol: f64) -> f64 {
+    let span = DRIFT_SPAN_FRAMES;
+    let mut slopes: Vec<f64> = (0..raw.len().saturating_sub(span))
+        .filter_map(|y| Some((raw[y + span]? - raw[y]?) / span as f64))
+        .collect();
+    if slopes.len() < 5 {
+        return 0.0;
+    }
+    slopes.sort_by(f64::total_cmp);
+    let median = slopes[slopes.len() / 2];
+    let per_frame_tol = tol / span as f64;
+    let agree = slopes
+        .iter()
+        .filter(|v| (**v - median).abs() <= per_frame_tol)
+        .count();
+    if agree * 2 > slopes.len() {
+        median
+    } else {
+        0.0
+    }
+}
+
+/// Per-radio-frame corrections (working-rate samples) to add to
+/// [`SyncResult::skip_samples`], so each line is read from where ITS OWN sync
+/// pulse says it is (#422).
+///
+/// ## Why the whole-picture fit is not enough
+///
+/// [`find_sync`] is slowrx's: one straight line through every sync pulse in
+/// the picture, i.e. one rate and one start for the whole capture. That is
+/// right only while the capture is one unbroken stretch of audio at a steady
+/// rate, and a receive path does not promise that. Measured on synthetic
+/// pictures, against `find_sync` alone:
+///
+/// - **Audio missing from the middle of the picture** — any amount, 20 ms
+///   to 2 s — has no straight line through it. The fit lands on one side of
+///   the gap or in between, and every line on the other side is read from
+///   the wrong place: on Wraase SC-2 180, Martin 1, Scottie 1, PD-120 and
+///   Pasokon P7 more than half of all rows came out wrong, top of the
+///   picture included. Worse, `find_falling_edge`'s slowrx slip-wrap moves
+///   the start half a line whenever the larger part's pulse falls in the
+///   back half of the line, so a whole segment comes out with its colour
+///   channels sheared half a line sideways — the shape of the pictures in
+///   the field report.
+/// - **A sound-card clock a few hundred ppm off, under band noise**: the
+///   Hough fit's half-degree steps leave a residual slant, enough to tear
+///   a large share of the rows of PD-120, Pasokon P7 and Robot 36 at 300 ppm.
+///
+/// QSSTV and MMSSTV survive both because they keep re-locking to each line's
+/// sync as the picture comes in. This is the same idea applied after the
+/// fact: measure every line's pulse ([`frame_sync_offsets`]), take a running
+/// median over [`FRAME_TRACK_RADIUS`] frames either side, and correct the
+/// line by that.
+///
+/// ## What it cannot move
+///
+/// A median is only trusted where most of its window agrees with it (within
+/// half a sync pulse). Where the pulses cannot be made out — deep noise, a
+/// fade, a gap — the last trusted correction is kept, and before any it is 0:
+/// exactly the whole-picture fit. A picture too noisy for per-line pulses
+/// therefore decodes precisely as it did before this existed.
+///
+/// A gap is only known modulo one line: the pulse after it is found, not how
+/// many lines went missing. Rows below a gap longer than half a line are
+/// placed against the nearest pulse, so the picture stays straight and the
+/// lost lines are simply not there (the bottom rows are read from whatever
+/// audio follows).
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+pub(crate) fn frame_skip_corrections(
+    has_sync: &[bool],
+    rate_hz: f64,
+    skip_samples: i64,
+    spec: ModeSpec,
+) -> Vec<i64> {
+    // One entry per radio frame: a PD frame carries two image rows.
+    let frames = match spec.channel_layout {
+        crate::modespec::ChannelLayout::PdYcbcr => spec.image_lines / 2,
+        crate::modespec::ChannelLayout::RobotYuv
+        | crate::modespec::ChannelLayout::RgbSequential
+        | crate::modespec::ChannelLayout::SequentialRgb => spec.image_lines,
+    } as usize;
+    let raw = frame_sync_offsets(has_sync, rate_hz, skip_samples, spec, frames);
+    // "Agrees" = within half a sync pulse, and never tighter than the probe
+    // track's own resolution (two strides).
+    let tol = (spec.sync_seconds * rate_hz / 2.0).max(2.0 * SYNC_PROBE_STRIDE as f64);
+    // The fit's leftover rate error is a steady drift down the picture. Take
+    // it out first, or the median — exact on a step, and on a ramp only where
+    // its window is centred — lags it at the top and bottom of the picture
+    // and either side of every gap.
+    let drift = residual_drift(&raw, tol);
+    let mut out = Vec::with_capacity(frames);
+    let mut held: Option<f64> = None;
+    for y in 0..frames {
+        let lo = y.saturating_sub(FRAME_TRACK_RADIUS);
+        let hi = (y + FRAME_TRACK_RADIUS + 1).min(frames);
+        let mut window: Vec<f64> = (lo..hi)
+            .filter_map(|i| raw[i].map(|v| v - drift * i as f64))
+            .collect();
+        if window.len() >= 3 {
+            window.sort_by(f64::total_cmp);
+            let median = window[window.len() / 2];
+            let agree = window
+                .iter()
+                .filter(|v| (**v - median).abs() <= tol)
+                .count();
+            if agree * 2 > hi - lo {
+                held = Some(median);
+            }
+        }
+        // Until some window is trusted this is the whole-picture fit, as
+        // before; once one is, a stretch with no readable pulses keeps its
+        // correction and its drift.
+        out.push(held.map_or(0, |h| (h + drift * y as f64).round() as i64));
+    }
+    out
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -742,5 +973,153 @@ mod tests {
         // slip-wrap. Pre-fix and post-fix agree.
         let xmax = falling_edge_from_x_acc(&x_acc);
         assert_eq!(xmax, 104, "mid-array edge detection unchanged by A6 fix");
+    }
+
+    // ---- #422: per-frame re-anchoring -------------------------------------
+
+    /// A sync track with one pulse per line of `spec`, line `y` starting at
+    /// `start(y)` working-rate samples.
+    fn track_with_starts(spec: ModeSpec, start: &dyn Fn(usize) -> f64) -> Vec<bool> {
+        let rate = f64::from(WORKING_SAMPLE_RATE_HZ);
+        let stride = SYNC_PROBE_STRIDE as f64;
+        let lines = spec.image_lines as usize;
+        let total = ((lines as f64 + 1.0) * spec.line_seconds * rate / stride) as usize;
+        let mut track = vec![false; total];
+        for y in 0..lines {
+            let a = (start(y) / stride).round() as usize;
+            let b = ((start(y) + spec.sync_seconds * rate) / stride).round() as usize;
+            for slot in track.iter_mut().take(b.min(total)).skip(a) {
+                *slot = true;
+            }
+        }
+        track
+    }
+
+    fn line_samples(spec: ModeSpec) -> f64 {
+        spec.line_seconds * f64::from(WORKING_SAMPLE_RATE_HZ)
+    }
+
+    /// Negative control: a picture already where the fit says it is gets no
+    /// correction anywhere — clean decodes are left as they were.
+    #[test]
+    fn frame_corrections_leave_an_on_time_picture_alone() {
+        let spec = modespec::for_mode(crate::modespec::SstvMode::Martin1);
+        let rate = f64::from(WORKING_SAMPLE_RATE_HZ);
+        let l = line_samples(spec);
+        let track = track_with_starts(spec, &|y| y as f64 * l);
+        let c = frame_skip_corrections(&track, rate, 0, spec);
+        let worst = c.iter().map(|v| v.abs()).max().unwrap();
+        assert!(
+            worst <= SYNC_PROBE_STRIDE as i64,
+            "worst correction {worst}"
+        );
+    }
+
+    /// The report's shape: audio lost at line 100, so every later pulse comes
+    /// early by the gap. The correction is a clean step at exactly that line.
+    #[test]
+    fn frame_corrections_step_at_a_gap() {
+        let spec = modespec::for_mode(crate::modespec::SstvMode::WraaseSc2180);
+        let rate = f64::from(WORKING_SAMPLE_RATE_HZ);
+        let l = line_samples(spec);
+        let gap = 1103.0; // 0.1 s
+        let track = track_with_starts(spec, &|y| y as f64 * l - if y >= 100 { gap } else { 0.0 });
+        let c = frame_skip_corrections(&track, rate, 0, spec);
+        let tol = 2 * SYNC_PROBE_STRIDE as i64;
+        for (y, v) in c.iter().enumerate() {
+            let want = if y >= 100 { -gap as i64 } else { 0 };
+            assert!(
+                (v - want).abs() <= tol,
+                "line {y}: correction {v}, want {want}"
+            );
+        }
+    }
+
+    /// A pulse more than half a line away is the next line's: a gap longer
+    /// than half a line is corrected to the nearest pulse (modulo one line).
+    #[test]
+    fn frame_corrections_take_a_long_gap_modulo_one_line() {
+        let spec = modespec::for_mode(crate::modespec::SstvMode::Scottie1);
+        let rate = f64::from(WORKING_SAMPLE_RATE_HZ);
+        let l = line_samples(spec);
+        let gap = 0.8 * l;
+        // Scottie's pulse sits mid-line; the track helper places it at the
+        // start, which is the same thing shifted by a constant.
+        let mid = predicted_sync_end(spec, rate, 0, 0) - spec.sync_seconds * rate;
+        let track = track_with_starts(spec, &|y| {
+            mid + y as f64 * l - if y >= 60 { gap } else { 0.0 }
+        });
+        let c = frame_skip_corrections(&track, rate, 0, spec);
+        let tol = 2 * SYNC_PROBE_STRIDE as i64;
+        let want_after = (l - gap).round() as i64; // the next line's pulse, 0.2 line late
+        assert!(c[..60].iter().all(|v| v.abs() <= tol), "{:?}", &c[..60]);
+        assert!(
+            c[60..].iter().all(|v| (v - want_after).abs() <= tol),
+            "{:?}",
+            &c[60..80]
+        );
+    }
+
+    /// A handful of lines whose pulse was mis-read (static, a picture detail
+    /// near 1200 Hz) are outvoted by their neighbours.
+    #[test]
+    fn frame_corrections_ignore_scattered_misreads() {
+        let spec = modespec::for_mode(crate::modespec::SstvMode::Martin1);
+        let rate = f64::from(WORKING_SAMPLE_RATE_HZ);
+        let l = line_samples(spec);
+        let bad = [7_usize, 40, 41, 130, 200];
+        let track = track_with_starts(spec, &|y| {
+            y as f64 * l + if bad.contains(&y) { 0.37 * l } else { 0.0 }
+        });
+        let c = frame_skip_corrections(&track, rate, 0, spec);
+        let worst = c.iter().map(|v| v.abs()).max().unwrap();
+        assert!(
+            worst <= SYNC_PROBE_STRIDE as i64,
+            "worst correction {worst}"
+        );
+    }
+
+    /// A leftover rate error from the fit is a drift; it is followed to the
+    /// top and bottom edges of the picture, not just in the middle.
+    #[test]
+    fn frame_corrections_follow_a_drift_to_both_edges() {
+        let spec = modespec::for_mode(crate::modespec::SstvMode::Pd120);
+        let rate = f64::from(WORKING_SAMPLE_RATE_HZ);
+        let l = line_samples(spec);
+        let frames = (spec.image_lines / 2) as usize;
+        let track = track_with_starts(spec, &|y| y as f64 * l + 150.0 - 1.3 * y as f64);
+        let c = frame_skip_corrections(&track, rate, 0, spec);
+        assert_eq!(c.len(), frames, "one correction per PD frame (two rows)");
+        let tol = 2 * SYNC_PROBE_STRIDE as i64;
+        for (y, v) in c.iter().enumerate() {
+            let want = (150.0 - 1.3 * y as f64).round() as i64;
+            assert!(
+                (v - want).abs() <= tol,
+                "frame {y}: correction {v}, want {want}"
+            );
+        }
+    }
+
+    /// No pulses, or pulses that are pure noise, move nothing: the decode is
+    /// exactly the whole-picture fit, as before this existed.
+    #[test]
+    fn frame_corrections_are_zero_without_readable_pulses() {
+        let spec = modespec::for_mode(crate::modespec::SstvMode::Scottie1);
+        let rate = f64::from(WORKING_SAMPLE_RATE_HZ);
+        let frames = spec.image_lines as usize;
+        let n =
+            (f64::from(spec.image_lines) * line_samples(spec) / SYNC_PROBE_STRIDE as f64) as usize;
+        let c = frame_skip_corrections(&vec![false; n], rate, 0, spec);
+        assert_eq!(c.len(), frames);
+        assert!(c.iter().all(|v| *v == 0));
+        let mut x = 0x1234_5678_u32;
+        let noise: Vec<bool> = (0..n)
+            .map(|_| {
+                x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                x >> 28 == 0 // ~1 probe in 16 "hears" sync
+            })
+            .collect();
+        let c = frame_skip_corrections(&noise, rate, 0, spec);
+        assert!(c.iter().all(|v| *v == 0), "{:?}", &c[..20]);
     }
 }
