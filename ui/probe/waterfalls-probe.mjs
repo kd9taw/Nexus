@@ -157,12 +157,23 @@ const realSrc = await readFile(REAL_API, 'utf8')
 const stubSrc = await readFile(STUB_SRC, 'utf8')
 const names = [...realSrc.matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1])
 const own = new Set([...stubSrc.matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1]))
+// Every export that answers the app's snapshot answers the stub's own `snapshot`, not `{}`: the cockpits
+// hand that answer straight to the app's state, and a `{}` there is a snapshot with no `radio`, which
+// takes the whole page down (`snap.radio` read on undefined). The radio-scope setters a native RF feed
+// calls are the first to hit it. Read off each signature, never crossing into the next export.
+const snapshotNames = new Set(
+  [...realSrc.matchAll(/^export (?:async )?function (\w+)\((?:(?!\nexport )[\s\S])*?\)\s*:\s*Promise<AppSnapshot>\s*\{/gm)].map((m) => m[1]),
+)
 const stubCode =
   stubSrc +
   `\nexport * from ${JSON.stringify(REAL_API)}\n` +
   names
     .filter((n) => !own.has(n))
-    .map((n) => `export async function ${n}(..._a: unknown[]): Promise<any> { return (globalThis as any).__DEFAULT_ARR ? [] : {} }`)
+    .map((n) =>
+      snapshotNames.has(n)
+        ? `export async function ${n}(..._a: unknown[]): Promise<any> { return snapshot }`
+        : `export async function ${n}(..._a: unknown[]): Promise<any> { return (globalThis as any).__DEFAULT_ARR ? [] : {} }`,
+    )
     .join('\n')
 const swap = {
   name: 'waterfalls-probe-api',

@@ -11,6 +11,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react'
 import { getSpectrumRow } from '../api'
 import { sampleLut, type ColormapName } from '../colormaps'
+import { drawScaleStrip, scaleStripHeight, scaleTicks, SCALE_MIN_GAP_PX } from '../freqScale'
 import {
   agcRange,
   applyGainZero,
@@ -70,6 +71,8 @@ const ZERO_KEY = 'nexus.waterfall.zero'
  *  after the mode's own, so a span chosen before each mode had its own keeps opening as it did;
  *  nothing writes it, so it can never again carry a pick from one mode into another. */
 const ZOOM_KEY = 'nexus.waterfall.zoom'
+/** The least colour bar, layout px, the legend is shown with (see `legendBarRef`). */
+const LEGEND_BAR_MIN_PX = 12
 /** PER-SURFACE: FT's span (the Operate cockpit and its torn-off copy), the `zoomKey` default. */
 const FT_ZOOM_KEY = 'nexus.waterfall.ft.zoom'
 /** PER-SURFACE: 2D scroll vs 3D stacked-spectrum (3DSS) view. A torn-off 3D display next to a
@@ -538,6 +541,9 @@ export function Waterfall({
   const lutRef = useRef<Uint8ClampedArray>(lutFor(resolveColormap(palette, theme, night, skin), contrastCurve))
   // live legend readout (updated directly, no React re-render at 8 Hz)
   const dbLabelRef = useRef<HTMLSpanElement>(null)
+  /** The legend's colour bar: under `LEGEND_BAR_MIN_PX` tall (a short waterfall, the legend held off
+   *  the scale) the legend is hidden whole rather than left as a lone "0" that reads as a frequency. */
+  const legendBarRef = useRef<HTMLDivElement>(null)
   // The picture is the spectrum renderer's (ui/src/spectrum). It keeps every row as DATA, the
   // flattened values at the feed's own resolution, each with its own frequency span and the range it
   // was drawn in, and draws through WebGL2 or canvas-2D from that history: a palette, zoom, resize,
@@ -744,7 +750,7 @@ export function Waterfall({
     // scale. Refreshed in resize() from the canvas box — see `overlayTextScale` for why the
     // transform alone does not carry the zoom on Chromium.
     let textScale = 1
-    const axisHFor = (h: number) => Math.round((h < 160 ? 14 : 18) * textScale)
+    const axisHFor = (h: number) => scaleStripHeight(h, textScale)
     /** What the renderer draws, read off the refs. No trace: the waterfall fills the canvas above the
      *  frequency-axis strip, which stays the palette floor under the overlay's axis. */
     const scene = (): SpectrumScene => ({
@@ -783,6 +789,8 @@ export function Waterfall({
       cssW = Math.max(1, rect.width)
       cssH = Math.max(1, rect.height)
       textScale = overlayTextScale(rect.width, canvas.offsetWidth)
+      const bar = legendBarRef.current
+      if (bar) bar.parentElement?.toggleAttribute('data-squeezed', bar.clientHeight < LEGEND_BAR_MIN_PX)
       const { dW, dH } = measure(entry)
       // Keep the draw scale fresh even when the pixel size is unchanged.
       scaleX = dW / cssW
@@ -1026,25 +1034,22 @@ export function Waterfall({
       // Part of the dark display in either theme (styles.css DISPLAY WELLS) — it used to turn
       // pale in the light theme, a light band across the bottom of a dark picture. The alphas
       // are the old strip's: the ground lets a trace of the floor through, the scale is dimmed.
-      octx.globalAlpha = 0.92
-      octx.fillStyle = ink.ground
-      octx.fillRect(0, wfH, W, AXIS_H)
-      octx.globalAlpha = 0.7
-      octx.fillStyle = ink.scale
-      octx.font = `${10 * textScale}px system-ui, sans-serif`
-      octx.textBaseline = 'middle'
+      // The strip is the one every waterfall and scope draws (`freqScale.ts`): audio hertz at a step
+      // the span and the room choose — 500 Hz on Std and Full, finer when zoomed in, wider apart on
+      // a narrow pane or a large text size.
       const vlo = viewLoRef.current
       const vhi = viewHiRef.current
-      // Sparser labels when narrow; finer when zoomed in (a small window needs ticks).
-      const span = vhi - vlo
-      const labelStep = span <= 800 ? 200 : span <= 1600 ? 500 : W < 280 ? 1000 : 500
-      const first = Math.ceil(vlo / labelStep) * labelStep
-      for (let f = first; f <= vhi; f += labelStep) {
-        const x = freqToX(f, W, vlo, vhi)
-        octx.fillRect(x, wfH, 1, 4)
-        octx.fillText(`${f}`, Math.min(W - 26 * textScale, x + 2), wfH + AXIS_H / 2)
-      }
-      octx.globalAlpha = 1
+      drawScaleStrip(octx, {
+        w: W,
+        top: wfH,
+        h: AXIS_H,
+        marks: scaleTicks(vlo, vhi, W, SCALE_MIN_GAP_PX * textScale).map((f) => ({ x: freqToX(f, W, vlo, vhi), label: `${f}` })),
+        ground: ink.ground,
+        ink: ink.scale,
+        fontPx: 10 * textScale,
+        gfx: 1,
+        text: textScale,
+      })
 
       // (No per-decode callsign labels on the waterfall — WSJT-X keeps the
       // spectrum clean; callsigns live in the Band Activity list. Only the
@@ -1586,7 +1591,7 @@ export function Waterfall({
           title={t('waterfall.legend.title')}
         >
           <span className="wf-legend-tick">0</span>
-          <div className="wf-legend-bar" style={{ background: legendGradient }} />
+          <div ref={legendBarRef} className="wf-legend-bar" style={{ background: legendGradient }} />
           <span className="wf-legend-tick">
             <span ref={dbLabelRef}>−40</span>
           </span>
