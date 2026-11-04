@@ -399,12 +399,26 @@ pub(crate) fn pair_lotw<R: Borrow<QsoRecord>>(
         .iter()
         .map(|r| lotw_pairing_call(r, settings_call))
         .collect();
+    // #163: and a SATELLITE contact pairs only with a satellite row, a terrestrial one only with a
+    // terrestrial row — LoTW's own rule (it matches PROP_MODE=SAT against SAT). A satellite
+    // contact is counted on its downlink band, so without this a SAT confirmation could land on a
+    // terrestrial contact with the same station on that band.
+    let sat_local: Vec<bool> = local.iter().map(|r| is_sat(r.borrow())).collect();
+    let sat_row: Vec<bool> = incoming.iter().map(is_sat).collect();
     pair_report_by(local, incoming, |i, j| {
-        match (&made_under[i], &named_on[j]) {
-            (Some(contact), Some(row)) => contact == row,
-            _ => true,
-        }
+        sat_local[i] == sat_row[j]
+            && match (&made_under[i], &named_on[j]) {
+                (Some(contact), Some(row)) => contact == row,
+                _ => true,
+            }
     })
+}
+
+/// Whether `r` says it was worked through a satellite (ADIF `PROP_MODE=SAT`).
+fn is_sat(r: &QsoRecord) -> bool {
+    r.prop_mode
+        .as_deref()
+        .is_some_and(|p| p.trim().eq_ignore_ascii_case("SAT"))
 }
 
 /// Whether `row` is the Settings call's ([`lotw_own_call`]): what LoTW's downloads held while they
@@ -990,6 +1004,56 @@ mod tests {
             assert_eq!(s.matched, 1, "the confirmation found its contact: {row}");
             assert!(s.orphans.is_empty(), "{row}");
         }
+    }
+
+    /// #163: LoTW pairs a satellite contact only with a satellite contact (PROP_MODE=SAT on both
+    /// sides), and so does its confirmation here. A SAT confirmation keyed on the downlink band
+    /// (70cm) must not land on a terrestrial 70cm contact with the same station; a terrestrial
+    /// confirmation must not land on a satellite contact; each lands on its own kind.
+    #[test]
+    fn a_lotw_satellite_confirmation_pairs_only_with_a_satellite_contact() {
+        let sat_row = "<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:6>011000<MODE:2>FM<BAND:2>2M\
+            <FREQ:9>145.85000<BAND_RX:4>70CM<FREQ_RX:9>436.79500<PROP_MODE:3>SAT<SAT_NAME:5>SO-50\
+            <QSL_RCVD:1>Y<EOR>";
+        let ter_row = "<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:6>011000<MODE:2>FM<BAND:4>70CM\
+            <FREQ:7>446.000<QSL_RCVD:1>Y<EOR>";
+        let report = |row: &str| crate::logbook::parse_adif(&format!("<EOH>{row}"));
+        let at = report(sat_row)[0].when_unix;
+        let terrestrial = || {
+            let mut t = rec("W1AW", "70cm", "FM", 0);
+            t.when_unix = at;
+            t.freq_mhz = 446.0;
+            t
+        };
+        let satellite = || {
+            let mut t = terrestrial();
+            t.freq_mhz = 145.85;
+            t.freq_rx_mhz = Some(436.795);
+            t.prop_mode = Some("SAT".into());
+            t.sat_name = Some("SO-50".into());
+            t
+        };
+        let matched = |local: QsoRecord, row: &str| {
+            let mut log = vec![local];
+            reconcile_lotw(&mut log, &report(row), None).matched
+        };
+        assert_eq!(
+            matched(terrestrial(), sat_row),
+            0,
+            "SAT confirmation, terrestrial contact"
+        );
+        assert_eq!(
+            matched(satellite(), ter_row),
+            0,
+            "terrestrial confirmation, SAT contact"
+        );
+        // CONTROLS: each kind still finds its own.
+        assert_eq!(matched(satellite(), sat_row), 1, "SAT with SAT");
+        assert_eq!(
+            matched(terrestrial(), ter_row),
+            1,
+            "terrestrial with terrestrial"
+        );
     }
 
     #[test]
