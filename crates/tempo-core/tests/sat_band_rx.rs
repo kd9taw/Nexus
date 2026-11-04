@@ -99,3 +99,36 @@ fn a_parked_band_rx_is_never_written_twice() {
     let out = adif_record(&r);
     assert_eq!(tags(&out, "BAND_RX"), ["70cm"], "{out}");
 }
+
+/// A held row with a parked BAND_RX is still the same contact as a restatement that carries BAND
+/// alone — another logger's export of the satellite contact without BAND_RX, or a terrestrial row
+/// whose stray BAND_RX disagrees with its band. Dedup finds the held row by its band as well as by
+/// the band it is counted on.
+#[test]
+fn a_parked_band_rx_row_still_dedupes_against_a_band_only_restatement() {
+    let sat = "<EOH>\n<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:6>010000<MODE:2>FM\
+<BAND:2>2m<FREQ:7>145.850<PROP_MODE:3>SAT<SAT_NAME:5>SO-50<EOR>\n";
+    assert_eq!(
+        reimport_adds(vec![legacy_foreign()], sat),
+        (0, 1),
+        "satellite"
+    );
+
+    let mut stray = base("W1AW", "20m", "SSB");
+    stray.extra = vec![("BAND_RX".into(), "40m".into())];
+    let plain =
+        "<EOH>\n<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:6>010000<BAND:3>20m<MODE:3>SSB<EOR>\n";
+    assert_eq!(
+        reimport_adds(vec![stray], plain),
+        (0, 1),
+        "terrestrial stray BAND_RX"
+    );
+
+    // CONTROL: a different band is a different contact.
+    let other =
+        "<EOH>\n<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:6>010000<BAND:3>40m<MODE:2>FM<EOR>\n";
+    assert_eq!(
+        reimport_adds(vec![base("W1AW", "20m", "FM")], other),
+        (1, 0)
+    );
+}

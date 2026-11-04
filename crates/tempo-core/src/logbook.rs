@@ -1480,6 +1480,11 @@ impl Logbook {
             std::collections::HashMap::with_capacity(self.records.len());
         for (i, r) in self.records.iter().enumerate() {
             held.entry(dedup_key(r)).or_insert(i);
+            // A row whose parked BAND_RX makes its counted band differ from its band is found
+            // by either: a restatement mapped onto BAND_RX, or one carrying BAND alone (#163).
+            if let Some(k) = band_twin_key(r) {
+                held.entry(k).or_insert(i);
+            }
         }
         let mut held_ids: std::collections::HashSet<RecordId> =
             self.records.iter().filter_map(|r| r.id).collect();
@@ -1541,6 +1546,9 @@ impl Logbook {
                     held_ids.insert(id);
                     rec.id = Some(id);
                     prepare(&mut rec);
+                    if let Some(k) = band_twin_key(&rec) {
+                        held.entry(k).or_insert(self.records.len());
+                    }
                     held.insert(key, self.records.len());
                     added.push(rec.clone());
                     self.records.push(rec);
@@ -4558,6 +4566,18 @@ fn dedup_key(r: &QsoRecord) -> DedupKey {
     )
 }
 
+/// [`dedup_key`] on the record's own BAND, when that differs from the band it is counted on (a
+/// parked BAND_RX, [`counted_band`]) — the second key such a row is found by, so a restatement
+/// that carries BAND alone (another logger's export without BAND_RX) is the same contact too.
+fn band_twin_key(r: &QsoRecord) -> Option<DedupKey> {
+    let mut k = dedup_key(r);
+    let band = r.band.to_ascii_lowercase();
+    (k.1 != band).then(|| {
+        k.1 = band;
+        k
+    })
+}
+
 /// Canonical mode SPELLING for [`dedup_key`] — the sideband names USB and LSB are
 /// spellings of one mode, not modes of their own. ADIF says phone is `MODE=SSB` with
 /// the sideband as a SUBMODE, but plenty of loggers write USB/LSB in the MODE field,
@@ -5569,11 +5589,18 @@ pub fn counted_band(r: &QsoRecord) -> &str {
         .map_or(r.band.as_str(), |(_, v)| v.trim())
 }
 
-/// #163: undo the satellite stamp's leg split on a contact that is no longer a satellite one —
-/// FREQ back to the downlink it was heard on (FREQ_RX), FREQ_RX gone — so it does not go out as a
-/// cross-band contact on an uplink the operator never used. Only the split this build makes (the
-/// receive leg on the record's band, the transmit leg on another); a same-band split and a row
-/// another logger wrote with its own legs are left as they are.
+/// #163: undo a cross-band leg split on a contact that is no longer a satellite one — FREQ back
+/// to the downlink it was heard on (FREQ_RX), FREQ_RX gone — so it does not go out as a cross-band
+/// contact on an uplink the operator never used.
+///
+/// What it does and does not reach, exactly:
+/// - A CROSS-BAND split in this build's shape (the receive leg on the record's band, the transmit
+///   leg on another) is undone. That is the stamp's own split, and ALSO a satellite row this build
+///   imported from another logger (mapped onto its downlink), which on the record cannot be told
+///   from it: that logger's real uplink is dropped, and a re-import does not bring it back.
+/// - A row an older build imported (uplink as its band, BAND_RX parked) keeps its legs.
+/// - A SAME-BAND split is left as it is, the stamp's included (a U/U channel's made-up uplink
+///   stays in FREQ); the band does not move.
 pub fn unsplit_satellite_legs(rec: &mut QsoRecord) {
     if cross_band_tx_band(rec).is_none() || rec.extra.iter().any(|(k, _)| k == "BAND_RX") {
         return;

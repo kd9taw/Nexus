@@ -55328,6 +55328,62 @@ mod tests {
             .any(|p| p.kind == crate::logtools::ProblemKind::BandFreq));
     }
 
+    /// #163 review: Log Check pairs each frequency with its own band. A row whose BAND_RX is
+    /// parked and which carries no FREQ_RX (the reader left it unmapped) has FREQ on its band and
+    /// is not a mismatch; judging FREQ against the parked BAND_RX flagged it with a "fix" that
+    /// changed nothing. A legacy foreign row with FREQ_RX is judged on the band it is counted on.
+    #[test]
+    fn log_check_pairs_each_frequency_with_its_own_band() {
+        let parse = |t: &str| {
+            tempo_core::logbook::parse_adif(&format!(
+                "<EOH>\n<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:4>0100{t}<EOR>\n"
+            ))
+            .remove(0)
+        };
+        let band_freq = |r: &QsoRecord| {
+            // Log Check judges stored rows, which carry an id.
+            let mut r = r.clone();
+            r.id = Some(tempo_core::logbook::Minter::default().mint());
+            crate::logtools::problems_of(&r, &|_, _| None, now_unix_secs())
+                .into_iter()
+                .filter(|p| p.kind == crate::logtools::ProblemKind::BandFreq)
+                .count()
+        };
+        let unmapped = parse(
+            "<MODE:2>FM<BAND:2>2m<BAND_RX:4>70cm<FREQ:7>145.850<PROP_MODE:3>SAT<SAT_NAME:5>SO-50",
+        );
+        assert_eq!(unmapped.band, "2m", "fixture: not mapped");
+        assert_eq!(band_freq(&unmapped), 0, "FREQ is on its own band");
+
+        let mut legacy =
+            parse("<MODE:2>FM<BAND:2>2m<FREQ:7>145.850<FREQ_RX:7>436.795<PROP_MODE:3>SAT<SAT_NAME:5>SO-50");
+        legacy.extra.push(("BAND_RX".into(), "70cm".into()));
+        assert_eq!(
+            band_freq(&legacy),
+            0,
+            "FREQ_RX is on the band it is counted on"
+        );
+
+        // CONTROL: FREQ off its band, with no receive leg, is still a mismatch.
+        let wrong = parse("<MODE:3>SSB<BAND:3>40m<FREQ:6>14.250");
+        assert_eq!(band_freq(&wrong), 1);
+    }
+
+    /// #451: the SSTV screen's own tune never arms Phone's Enable-TX latch; the operator's pick of
+    /// the same channel arms it as it always has.
+    #[test]
+    fn the_sstv_open_tune_never_arms_tx() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        assert!(!e.tx_enabled(), "fixture: unarmed");
+        assert!(e.sstv_tune_on_open(14.230, "20m", "USB"));
+        assert!(!e.tx_enabled(), "the app's own tune armed TX");
+        let mut c = Engine::new("KD9TAW", "EN52", 0);
+        c.set_license_class("extra");
+        c.sstv_tune(14.230, "20m", "USB");
+        assert!(c.tx_enabled(), "CONTROL: the operator's pick arms");
+    }
+
     /// #163 review: the operator taking SAT off a contact in the popup takes the satellite's
     /// uplink with it. The stamp wrote FREQ = the bird's uplink and moved the heard frequency to
     /// FREQ_RX; a contact that is not a satellite one has only the frequency it was heard on.

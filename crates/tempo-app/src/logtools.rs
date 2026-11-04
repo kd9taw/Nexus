@@ -1115,14 +1115,15 @@ pub fn problems_of(
             want.filter(|_| !confirmed).map(|n| Some(n.to_string())),
         );
     }
-    // The band is judged against the RECEIVE leg (#163): a satellite contact's FREQ is its uplink
-    // and its band the downlink, FREQ_RX, which it is counted on. And against the band it is
-    // counted on (`counted_band`): a row an older build imported holds the uplink as its band
-    // with BAND_RX parked. A contact with one frequency is judged as before.
-    let heard = r
-        .freq_rx_mhz
-        .filter(|v| v.is_finite() && *v > 0.0)
-        .unwrap_or(r.freq_mhz);
+    // Each frequency is judged against its own band (#163). FREQ_RX, when there is one, is the
+    // receive leg, and the band a contact is counted on (`counted_band`) is the receive leg's: a
+    // satellite contact's FREQ is its uplink. Without FREQ_RX, FREQ against the record's band, as
+    // before — a parked BAND_RX with no FREQ_RX beside it is not this check's to judge.
+    let rx = r.freq_rx_mhz.filter(|v| v.is_finite() && *v > 0.0);
+    let (heard, judged_band) = match rx {
+        Some(rx) => (rx, tempo_core::logbook::counted_band(r)),
+        None => (r.freq_mhz, r.band.as_str()),
+    };
     if heard.is_finite() && heard > 0.0 {
         let by_freq = crate::bandplan::band_for_dial(heard);
         if r.band.trim().is_empty() {
@@ -1131,9 +1132,7 @@ pub fn problems_of(
                 Some(Field::Band),
                 by_freq.map(|b| Some(b.to_string())),
             );
-        } else if let Some(b) =
-            by_freq.filter(|b| !same_band(b, tempo_core::logbook::counted_band(r).trim()))
-        {
+        } else if let Some(b) = by_freq.filter(|b| !same_band(b, judged_band.trim())) {
             add(
                 ProblemKind::BandFreq,
                 Some(Field::Band),
