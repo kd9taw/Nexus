@@ -13146,6 +13146,17 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  /* ONE BOX THROUGH THE TX CYCLE. The bars' container takes `.pinned`'s compact padding between
+     overs and the full one while keyed; the dock is bottom-anchored, so with needles that 2 px
+     swing moved Stop TX on every key and unkey. The faces never change size, so the box doesn't. */
+  padding: 2px var(--space-2);
+  gap: 2px var(--space-3);
+}
+/* Before the first reading the hint shares the faces' line, as it shares the bars' grid, instead of
+   wrapping onto a line of its own that the first reading would then take away. */
+.ph-txmeters.needle .ph-txmeters-hint {
+  flex: 1 1 150px;
+  min-width: 0;
 }
 .ph-txmeters.needle .ph-txmeter {
   flex: 1 1 150px;

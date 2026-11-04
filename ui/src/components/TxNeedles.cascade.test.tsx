@@ -97,6 +97,25 @@ describe('the dock: the faces and the bars left share a line, wrapping only when
     expect(win(container.querySelector('.ph-txmeter')!, 'flex')).toBe('1 1 150px')
   })
 
+  it('the dock’s box is the same keyed and between overs, so a bottom-anchored dock never moves Stop TX', () => {
+    // The bars' container switches its compact/full variant with the TX cycle (`.pinned` comes and
+    // goes); with needles the faces are one size, and the container's own padding and gap must not
+    // follow that switch either.
+    const { group, next } = mount('dock', KEYED)
+    const keyed = { padding: win(group, 'padding'), gap: win(group, 'gap') }
+    next(IDLE)
+    expect(group.className).toContain('idle')
+    expect({ padding: win(group, 'padding'), gap: win(group, 'gap') }).toEqual(keyed)
+  })
+
+  it('before the first reading, the dock’s hint shares the faces’ line instead of a line of its own', () => {
+    const { container } = mount('dock', IDLE)
+    const hint = container.querySelector('.ph-txmeters-hint')!
+    expect(hint).not.toBeNull()
+    expect(win(hint, 'flex')).toBe('1 1 150px')
+    expect(win(hint, 'min-width')).toBe('0')
+  })
+
   it('the control: with bars the dock is the bars’ grid', () => {
     const { group } = mount('dock', KEYED, false)
     expect(win(group, 'display')).toBe('grid')

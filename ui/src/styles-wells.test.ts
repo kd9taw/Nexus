@@ -34,6 +34,7 @@ import { PhoneScope } from './components/PhoneScope'
 import { ZeroBeat } from './components/ZeroBeat'
 import {
   MODES,
+  SKIN_MODES,
   baseTheme,
   chainOf,
   contrast,
@@ -82,7 +83,9 @@ const sheet = (name: string) =>
   readFileSync(resolve(process.cwd(), 'src', name), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
 const RULES = parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css'))
 const ROOT = Object.fromEntries(MODES.map((m) => [m, rootTokensFrom(RULES, m)])) as Record<Mode, Map<string, string>>
-const rootValue = (mode: Mode, token: string) => expandWith(ROOT[mode], `var(${token})`).trim()
+/** A mode outside MODES (the needle faces walk every built-in theme, SKIN_MODES) resolves on demand. */
+const rootOf = (mode: Mode) => (ROOT[mode] ??= rootTokensFrom(RULES, mode))
+const rootValue = (mode: Mode, token: string) => expandWith(rootOf(mode), `var(${token})`).trim()
 
 /** The built-in theme (features/skins.ts) a mode carries, if any. */
 const skinOf = (mode: Mode) => SKINS.find((s) => s.id === rolesOf(mode).skin)
@@ -418,7 +421,10 @@ describe('what an instrument paints is dark, and what it paints on it reads', ()
 })
 
 describe('the needle faces: every mark reads on the face, and the peak mark is not the needle', () => {
-  const withStrokes = INSTRUMENTS.filter((i) => i.strokes).flatMap((i) => MODES.map((m) => [i.name, m, i] as const))
+  // Every built-in theme, not only MODES' sentinel skins: Amber LCD and Green LCD are where a theme's
+  // accent sits next to its ink, and the peak mark was once the accent.
+  const STROKE_MODES = [...new Set([...MODES, ...SKIN_MODES])]
+  const withStrokes = INSTRUMENTS.filter((i) => i.strokes).flatMap((i) => STROKE_MODES.map((m) => [i.name, m, i] as const))
   it.each(withStrokes)('%s in %s', (_n, mode, i) => {
     const { display, strokes } = rendered(i)
     const face = surfaceOf(display, mode, tokensOf(mode, display))
