@@ -18530,8 +18530,27 @@ impl Transport {
             // says why, or dials again once it no longer does).
             || self.tci_target() != o.tci_target()
             || self.tci_dials_nexus_by_name() != o.tci_dials_nexus_by_name()
-            || self.broker_self_port != o.broker_self_port
+            // Where the CAT broker is, compared only where it is in the way (#431): a broker that
+            // stepped aside to another port (in a second radio window, at every launch) moved
+            // nothing this link talks to, and rebuilding killed and restarted its rigctld.
+            || self.broker_in_the_way() != o.broker_in_the_way()
             || self.address_refusal != o.address_refusal
+    }
+
+    /// Where Nexus's own CAT broker (`broker_self_port`) is in this link's way: on its rigctld TCP
+    /// Port, which [`open_cat`] then refuses as a self-collision, and on its NET rigctl address on
+    /// this computer, which [`net_rigctld_shared_directly`] then does not share. These are the only
+    /// places the opener reads the broker's port, so a move that changes neither changes nothing
+    /// the link does. (A broker on the address is also an [`AddressRefusal`], compared beside it.)
+    fn broker_in_the_way(&self) -> (bool, bool) {
+        let on = |port: u16| self.broker_self_port == Some(port);
+        let address = tempo_app::settings::net_rigctl_addr_here(
+            self.rig_model,
+            &self.rig_conn,
+            &self.rig_addr,
+        )
+        .is_some_and(|(_, port)| on(port));
+        (on(self.rigctld_port), address)
     }
 
     /// Is CAT for this radio Nexus's own Icom network client? The rule lives in tempo-app
@@ -24440,6 +24459,44 @@ mod tests {
         let mut s = test_settings();
         s.tx_audio_source = String::new();
         assert!(!base.rig_differs(&Transport::from_settings(&s)));
+    }
+
+    /// #431: the CAT broker stepping aside to another port rebuilds a radio's CAT only where the
+    /// broker was, or now is, in its way: on its rigctld TCP Port, or on its NET rigctl address on
+    /// this computer. A second radio window's broker steps aside at every launch (the first
+    /// window has the Sharing port), and the rebuild killed and restarted that radio's rigctld.
+    #[test]
+    fn the_broker_stepping_aside_rebuilds_only_a_radio_it_is_in_the_way_of() {
+        let moved = |s: &Settings, from: Option<u16>, to: Option<u16>| {
+            Transport::from_station(s, from).rig_differs(&Transport::from_station(s, to))
+        };
+        let mut serial = test_settings();
+        serial.cat_broker = true;
+        serial.cat_broker_port = 4532;
+        serial.rigctld_port = 4534;
+        let mut net = serial.clone();
+        net.rig_model = 2;
+        net.rig_conn = "network".to_string();
+        net.rig_addr = "127.0.0.1:4547".to_string();
+        assert_eq!(
+            [
+                // Nexus's own rigctld on 4534: the broker binds 4547, or moves on from there.
+                moved(&serial, None, Some(4547)),
+                moved(&serial, Some(4547), Some(4548)),
+                // …or is back on the Sharing port, not bound yet.
+                moved(&serial, Some(4547), None),
+                // CONTROLS: the broker onto the rigctld's port, and off it again.
+                moved(&serial, None, Some(4534)),
+                moved(&serial, Some(4534), Some(4547)),
+                // CONTROLS: a NET rigctl radio's address here, with the broker moving onto it and
+                // off it (#165: the radio connects once sharing has moved).
+                moved(&net, None, Some(4547)),
+                moved(&net, Some(4547), Some(4548)),
+                // …and a move nowhere near its address.
+                moved(&net, Some(4548), Some(4549)),
+            ],
+            [false, false, false, true, true, true, true, false]
+        );
     }
 
     #[test]
