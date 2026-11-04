@@ -56,9 +56,11 @@ import {
   subscribeSnapshot,
 } from './api'
 import { withErrorToast, pushToast, dismissToast, setPopupNotifications, setPopupMinSeconds } from './toast'
+import { setPopupCorner } from './features/popupCorner'
 import { contestStartWarning } from './features/contestLocation'
 import { keptFileMessage } from './features/keptFiles'
 import { flexVoiceNeedsDax } from './features/flexDaxNote'
+import { phoneTuneNeedsRearSource } from './features/yaesuTuneNote'
 import { useActivationNotices } from './useActivationNotices'
 import { t } from './i18n'
 import { resolveUnits, setUnitsMirror } from './units'
@@ -1447,6 +1449,10 @@ function App() {
   useEffect(() => {
     setPopupMinSeconds(settings?.popupMinSecs ?? 0)
   }, [settings?.popupMinSecs])
+  // #445: and which corner they stand in. Absent, or a corner this build does not know, is bottom right.
+  useEffect(() => {
+    setPopupCorner(settings?.popupCorner)
+  }, [settings?.popupCorner])
   // The active FD event's ruleset FACTS (banned modes + assistance policy) for the
   // warn-only advisories. get_fd_ruleset reads settings.fd_event itself (and works with
   // the master switch off), so the fetch just re-runs when the configured event changes —
@@ -3625,6 +3631,7 @@ function App() {
     <PhoneCockpit
       esmSetting={esmSettingFor('phone')}
       flexDaxNote={settings ? flexVoiceNeedsDax(settings) : false}
+      yaesuTuneNote={settings ? phoneTuneNeedsRearSource(settings) : false}
       onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.phone}

@@ -37,6 +37,12 @@ export interface CockpitTxStripProps {
    *  readout and never a control that keys or stops anything: the screen's send area stays in its
    *  dock. Omitted: the strip is exactly what it was. */
   meters?: ReactNode
+  /** A screen's own line beside Tune (Phone's newcat Yaesu note, #441): text only, drawn last and
+   *  only where Tune is, after RadioTuneNote, so it never moves a control or the TX state. */
+  tuneNote?: ReactNode
+  /** A screen's own small marker right after the cluster (Phone's ⓘ for the Tune note, #441): after
+   *  Stop TX, never between the controls, so Tune, ATU and Stop TX keep their places on every screen. */
+  tuneHint?: ReactNode
 }
 
 /**
@@ -58,7 +64,7 @@ export interface CockpitTxStripProps {
  * the header's did: in RTTY and SSTV the latch is a STOP (set_tx_enabled(false) arms the mode's
  * abort) and must stay a button through their overs, which `radio.transmitting` never marks.
  */
-export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtuBypass, onStopTx, hold, meters }: CockpitTxStripProps) {
+export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtuBypass, onStopTx, hold, meters, tuneNote, tuneHint }: CockpitTxStripProps) {
   const onAir = isOnAir(radio)
   // THE SIGN WAITS WITH AN ARMED OVER (the operator's pick "Header ON AIR waits too",
   // 2026-09-28; the sign moved here from the header with the rest of the strip). A streamed
@@ -182,6 +188,7 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
           </button>
         )}
       </div>
+      {onTune && tuneHint}
       {/* The ON AIR sign reads the arbiter (`isOnAir`), never the FT slot flag alone, so a voice
           over, CW, RTTY, a tune or a key held at the radio all light it; an over armed through the
           stream lights it once the voice keys it (`lit`, above). Paint only. */}
@@ -205,6 +212,7 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
       {/* What the radio reports beside Tune while Tune is the Flex radio's own carrier: the last
           child, on a line of its own, so it never moves the controls or the TX state. */}
       {onTune && <RadioTuneNote radio={radio} />}
+      {onTune && tuneNote}
     </div>
   )
 }

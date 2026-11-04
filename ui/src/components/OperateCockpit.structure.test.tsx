@@ -586,6 +586,14 @@ describe('TX meters: a fixed strip cell, never a body row', () => {
     expect(tx.container.querySelector('.cq-telemetry')).not.toBeNull()
   })
 
+  it('#446: the cell is the opener of the larger meters, and the dialog is not mounted until asked', () => {
+    const { container } = renderCockpit({})
+    const opener = container.querySelector('.cq-telemetry > .txmeters-open[role="button"]')
+    expect(opener, 'the cell does not open the larger meters').not.toBeNull()
+    expect(opener!.querySelector('.ph-txmeters.inline')).not.toBeNull()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
+
   it("removing the 'txmeters' panel removes the cell entirely", () => {
     const { container } = renderCockpit({ txmeters: 'removed' })
     expect(container.querySelector('.cq-telemetry')).toBeNull()

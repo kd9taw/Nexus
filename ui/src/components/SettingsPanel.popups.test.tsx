@@ -184,3 +184,32 @@ describe('the pop-up dwell in Settings (#321)', () => {
     expect(lastSaved().popupMinSecs).toBe(0)
   })
 })
+
+describe('the pop-up corner in Settings (#445)', () => {
+  const corner = () => screen.getByRole('combobox', { name: 'Pop-up corner' }) as HTMLSelectElement
+
+  it('sits beside the switch, on bottom right from a settings file without it', async () => {
+    const label = await openAlerts()
+    expect(corner().closest('fieldset')).toBe(label.closest('fieldset'))
+    expect(corner().value, 'an old settings file moved the pop-ups').toBe('bottom-right')
+    expect(Array.from(corner().options, (o) => o.value)).toEqual(['bottom-right', 'bottom-left', 'top-right', 'top-left'])
+  })
+
+  it('writes the chosen corner, and bottom right when put back', async () => {
+    await openAlerts()
+    fireEvent.change(corner(), { target: { value: 'top-left' } })
+    clickSave()
+    await waitFor(() => expect(api.get('setSettings')).toHaveBeenCalled())
+    expect(lastSaved().popupCorner, 'top left never reached the saved document').toBe('top-left')
+    fireEvent.change(corner(), { target: { value: 'bottom-right' } })
+    clickSave()
+    await waitFor(() => expect(api.get('setSettings').mock.calls.length).toBeGreaterThan(1))
+    expect(lastSaved().popupCorner).toBe('bottom-right')
+  })
+
+  it('shows a stored corner it does not know as bottom right', async () => {
+    api.get('getSettings').mockImplementation(() => Promise.resolve({ ...(settingsDoc() as object), popupCorner: 'middle' }))
+    await openAlerts()
+    expect(corner().value).toBe('bottom-right')
+  })
+})

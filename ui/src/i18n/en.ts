@@ -2645,6 +2645,10 @@ export const EN = {
   'logEntry.lookup.label': 'Lookup',
   'logEntry.lookup.title':
     'Look up name + QTH in the callbook — QRZ first, then HamQTH (grid/state need a QRZ subscription)',
+  'logEntry.start.label': 'Start',
+  'logEntry.start.title': 'Start this contact now: its start time (TIME_ON) becomes the current time. For a long contact whose call went in early. Log still stamps the end time.',
+  'logEntry.start.setLabel': 'Start {{time}}',
+  'logEntry.start.setTitle': 'This contact now starts at {{time}} UTC. Press again to restart it.',
   'logEntry.rstSent.label': 'Sent',
   'logEntry.rstSent.title': 'Signal report you SENT them',
   'logEntry.rstRcvd.label': 'Rcvd',
@@ -5000,7 +5004,7 @@ export const EN = {
   'settings.alerts.legend': 'Alerts',
   'settings.alerts.popups.label': 'Pop-up notifications',
   'settings.alerts.popups.hint':
-    'The messages in the bottom-right corner. Turned off, confirmations such as Logged QSO and alerts such as a new DXCC, a station calling you, a band opening or space weather stop popping up. Sounds are not affected. Errors, notices about transmitting, the radio or the log, and any message with a button, such as Stop alarm, still pop up.',
+    'The messages in the corner of the window (Pop-up corner, below, picks which). Turned off, confirmations such as Logged QSO and alerts such as a new DXCC, a station calling you, a band opening or space weather stop popping up. Sounds are not affected. Errors, notices about transmitting, the radio or the log, and any message with a button, such as Stop alarm, still pop up.',
   // #321. The pop-up's own time is set where it is raised (4 s for most, longer for errors and
   // alerts); the choice can only make a pop-up stay longer, never shorter.
   'settings.alerts.popupDwell.label': 'Keep pop-ups up for at least',
@@ -5008,6 +5012,12 @@ export const EN = {
   'settings.alerts.popupDwell.secs': '{{secs}} seconds',
   'settings.alerts.popupDwell.hint':
     'Most pop-ups go after 4 seconds, errors after 12. Pick a longer time if you look away and miss them. A pop-up that stays until you close it still does.',
+  'settings.alerts.popupCorner.label': 'Pop-up corner',
+  'settings.alerts.popupCorner.bottomRight': 'Bottom right',
+  'settings.alerts.popupCorner.bottomLeft': 'Bottom left',
+  'settings.alerts.popupCorner.topRight': 'Top right',
+  'settings.alerts.popupCorner.topLeft': 'Top left',
+  'settings.alerts.popupCorner.hint': 'Which corner of the window the pop-ups appear in. Bottom right is where they have always been. They keep clear of the transmit controls, and use the room higher up when the bottom has none.',
   'settings.alerts.myCall.label': 'My call',
   'settings.alerts.myCall.hint': 'Beep + flash when someone directs a call at you.',
   'settings.alerts.confirmTier.label': 'Confirmation opportunities',
@@ -13800,6 +13810,8 @@ export const EN = {
   //
   // `absent` has no per-control wording on purpose: it collapses into `phone.chain.absent`
   // at the pane's foot, so an IC-7300 does not open to four grey rows.
+  'phone.tune.usbAudioNote': 'Tune sends its tone over USB audio. If the radio keys with no power, set its SSB MOD SOURCE menu to REAR (USB).',
+  'phone.tune.usbAudioNote.aria': 'About Tune on this radio',
   'phone.unavail.mark': 'not reported',
   'phone.unavail.noCat':
     '{{plate}} needs CAT control — this radio is set up for VOX or serial PTT only. Add rig ' +
@@ -15013,6 +15025,10 @@ export const EN = {
   // `{{when}}` is `TX_METERS_WHEN`, the one string the ⊞ Panels menu shows for this panel —
   // interpolated rather than repeated so the panel and the menu cannot drift. It is still
   // written in `TxMeters.tsx`; see the note there for why it has not moved yet.
+  'meters.tx.enlarge.aria': 'Show the transmit meters larger',
+  'meters.tx.enlarge.title': 'Transmit meters',
+  'meters.tx.enlarge.desc': 'The same live readings as the TX strip, larger. Escape stops transmitting, as everywhere on this screen; Close only closes this.',
+  'meters.tx.enlarge.close': 'Close',
   'meters.tx.idle': 'TX meters — {{when}}',
   // A meter the radio stayed silent about THROUGH an over — so it is one this radio does not
   // report, as against the blank rows before the first over, which the line above answers.
