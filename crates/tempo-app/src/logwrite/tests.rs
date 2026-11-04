@@ -4176,3 +4176,81 @@ fn a_corrected_call_saved_with_card_fields_is_queued_with_them() {
         "the connectors get the same"
     );
 }
+
+/// #163: the satellite contacts that went to LoTW with only their downlink band are found in the
+/// store, and only they; taking the offer rewrites them into the corrected shape, which the
+/// re-upload signs as BAND = the uplink's band. A confirmed one, an unsent one and a bird Nexus
+/// does not know are never offered, and nothing changes until the offer is taken.
+#[test]
+fn past_satellite_uploads_with_the_downlink_band_are_offered_and_rewritten() {
+    use tempo_core::logbook::{adif_record_own_log, parse_adif, UploadStatus};
+    let row = |call: &str, sat: &str, band: &str, down: f64| {
+        let mut r = parse_adif(&format!(
+            "<EOH>\n<CALL:{}>{call}<QSO_DATE:8>20240101<TIME_ON:6>010000<BAND:{}>{band}<MODE:2>FM<EOR>\n",
+            call.len(),
+            band.len()
+        ))
+        .remove(0);
+        r.freq_mhz = down;
+        r.prop_mode = Some("SAT".into());
+        r.sat_name = Some(sat.into());
+        r.upload.lotw = Some(UploadStatus {
+            outcome: UploadOutcome::Accepted,
+            when_unix: 1_704_000_000,
+            detail: None,
+        });
+        r
+    };
+    let offered = row("W1AW", "SO-50", "70cm", 436.795);
+    let mut confirmed = row("K1ABC", "SO-50", "70cm", 436.795);
+    confirmed.qsl_rcvd.lotw = true;
+    let mut unsent = row("N0CALL", "SO-50", "70cm", 436.795);
+    unsent.upload.lotw = None;
+    let unknown = row("W2XYZ", "XW-2A", "2m", 145.67);
+    let mut text = adif_header();
+    for r in [&offered, &confirmed, &unsent, &unknown] {
+        text.push_str(&adif_record_own_log(r));
+    }
+    let d = Dir::new("sat-band-fix");
+    std::fs::write(d.log(), text).unwrap();
+    let e = engine_on_store(&d);
+    flush(&e);
+    let engine = Arc::new(Mutex::new(e));
+
+    let rows = engine_lock(&engine).log_rows();
+    let ids = station::lotw_sat_band_fixes(&rows).expect("the store reads");
+    assert_eq!(ids.len(), 1, "only the unconfirmed, sent, known bird");
+    let id = ids[0];
+    assert_eq!(stored_row(&d, id).call, "W1AW");
+    assert_eq!(
+        stored_row(&d, id).freq_rx_mhz,
+        None,
+        "nothing changed by asking"
+    );
+
+    let (fixed, durability) = fix_sat_bands(&engine, &ids);
+    assert_eq!(fixed.expect("made"), vec![id]);
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let after = stored_row(&d, id);
+    assert_eq!(after.band, "70cm", "still counted on the downlink");
+    assert!(
+        (after.freq_mhz - 145.85).abs() < 1e-9,
+        "FREQ the uplink: {}",
+        after.freq_mhz
+    );
+    assert_eq!(after.freq_rx_mhz, Some(436.795));
+    let out = adif_record(&after);
+    assert!(
+        out.contains("<BAND:2>2m") && out.contains("<BAND_RX:4>70cm"),
+        "{out}"
+    );
+    // Fixed, it is offered no more.
+    let rows = engine_lock(&engine).log_rows();
+    assert!(station::lotw_sat_band_fixes(&rows).unwrap().is_empty());
+
+    // A re-upload that never reached TQSL leaves it owed, for the ordinary upload.
+    sat_band_fix_not_sent(&engine, &[id], 1_800_000_000)
+        .wait(DURABLE_WAIT)
+        .expect("on disk");
+    assert!(station::owed_to_lotw(&stored_row(&d, id)));
+}

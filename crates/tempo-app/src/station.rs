@@ -518,6 +518,46 @@ pub fn lotw_unsent(rows: &crate::logstore::LogRows) -> Result<Vec<QsoRecord>, St
     Ok(whole.into_iter().filter(owed_to_lotw).collect())
 }
 
+/// What [`lotw_sat_band_fixes`] reads of each contact: what [`tempo_core::lotw_sat_fix::sat_band_fix`]
+/// asks — the satellite tag, the band and both frequencies, whether its time is known, the
+/// confirmations (`award_confirmed` is read from them) and the upload stamps.
+const SAT_BAND_FIX: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::sqlite::Narrow {
+    columns: &[
+        "band",
+        "freq_mhz",
+        "freq_rx_mhz",
+        "prop_mode",
+        "sat_name",
+        "time_known",
+        "qsl_card_rcvd_raw",
+        "lotw_rcvd_raw",
+        "eqsl_rcvd_raw",
+        "qrz_status_raw",
+    ],
+    uploads: true,
+};
+
+/// #163: the past satellite contacts that went to LoTW with the wrong band — the downlink's — and
+/// can go again corrected ([`tempo_core::lotw_sat_fix::sat_band_fix`]), by id, in log order. What
+/// the LoTW controls offer; nothing is changed or sent until the operator takes the offer.
+///
+/// ⚠️ It reads the store: never under the Engine lock, as [`lotw_unsent`].
+pub fn lotw_sat_band_fixes(rows: &crate::logstore::LogRows) -> Result<Vec<RecordId>, String> {
+    use std::ops::ControlFlow;
+    use tempo_core::logbook::sqlite::{Order, Scope};
+    let mut ids = Vec::new();
+    rows.each(SAT_BAND_FIX, Scope::All, Order::Log, &mut |r| {
+        if let Some(id) =
+            r.id.filter(|_| tempo_core::lotw_sat_fix::sat_band_fix(r).is_some())
+        {
+            ids.push(id);
+        }
+        ControlFlow::Continue(())
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(ids)
+}
+
 /// The contacts `ids` names, whole and read from the store, in the order `ids` names them — what
 /// a LoTW batch chosen by id signs, as the log in memory answered the same ids: a contact the log
 /// no longer holds is left out, and one named twice is there twice.

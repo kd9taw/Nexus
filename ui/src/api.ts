@@ -2447,6 +2447,18 @@ export async function uploadLotwReportByIds(ids: string[]): Promise<UploadReport
   return invoke<UploadReport>('upload_lotw_report', { indices: null, ids })
 }
 
+/** #163: the ids of the past satellite QSOs that went to LoTW with the wrong band (the downlink's)
+ *  and can go again corrected. Asks only; changes nothing. */
+export async function lotwSatBandFixes(): Promise<string[]> {
+  return invoke<string[]>('lotw_sat_band_fixes')
+}
+
+/** #163: correct those satellite QSOs (each bird's uplink filled in) and re-upload them to LoTW
+ *  through TQSL — only ever on the operator's click. Answers as an ordinary LoTW upload does. */
+export async function lotwFixSatBands(ids: string[]): Promise<UploadReport> {
+  return invoke<UploadReport>('lotw_fix_sat_bands', { ids })
+}
+
 /** Ask the engine one of the UI's log questions (SPEC-2 v3 C17a): a page of the Logbook, where a
  *  row sits in it, one call's history, an entity's slots, a roster's summary, the band map's
  *  worked calls, the squares and bands worked, the statistics, the LoTW backlog. The answer is

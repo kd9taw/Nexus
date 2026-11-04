@@ -356,6 +356,8 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("logbook_save_choice",            RunsHere,    "This computer's own quit-time question."),
     ("lookup_park",                    RunsAtShack, "The shack's park list."),
     ("lookup_park_live",               RunsAtShack, "A park lookup from the shack."),
+    ("lotw_fix_sat_bands",             RunsAtShack, "Corrects the shack's past satellite contacts and re-uploads them with its own TQSL."),
+    ("lotw_sat_band_fixes",            RunsAtShack, "Reads which of the shack's satellite contacts went to LoTW with the wrong band."),
     ("lotw_sat_names",                 RunsAtShack, "The satellite names the shack's logbook accepts."),
     ("lotw_test_connection",           RunsAtShack, "The LoTW Test: spends the stored password at the shack on a read; answers ok or an error, never the password."),
     ("mark_lotw_uploaded",             RunsAtShack, "Marks contacts in the shack's logbook."),

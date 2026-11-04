@@ -1610,6 +1610,15 @@ export const EN = {
   'logbook.lotw.upload.label': 'Upload to LoTW',
   'logbook.lotw.upload.labelCount': 'Upload to LoTW ({{count}})',
   'logbook.lotw.upload.busy': 'Uploading…',
+  // #163: the one-click corrected re-upload of past satellite QSOs. LoTW, TQSL, QSO and the band
+  // names are invariant tokens.
+  'logbook.lotw.satFix.label': 'Fix satellite uploads ({{count}})',
+  'logbook.lotw.satFix.title':
+    'These satellite QSOs went to LoTW with the downlink band, from before Nexus logged the uplink, so LoTW cannot match them. Click to re-upload them corrected.',
+  'logbook.lotw.satFix.confirm.title': 'Re-upload satellite QSOs to LoTW?',
+  'logbook.lotw.satFix.confirm.body':
+    'Satellite QSOs to correct: {{count}}. They went to LoTW with the downlink band, and LoTW matches a satellite QSO on the uplink band, so they cannot confirm. Nexus fills in each satellite’s uplink and uploads a corrected copy through TQSL. LoTW keeps the old record, which matches nothing and does no harm.',
+  'logbook.lotw.satFix.confirm.label': 'Re-upload corrected',
   'logbook.lotw.upload.title':
     'Sign + upload your un-uploaded QSOs to LoTW via TQSL (set your Station Location in Settings)',
   // A second statement appended to the title above, with its own count — see the import

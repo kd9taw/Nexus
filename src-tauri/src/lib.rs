@@ -37373,6 +37373,67 @@ async fn upload_lotw_report_impl(
         .map_err(|e| format!("LoTW upload task failed: {e}"))?
 }
 
+/// #163: the past satellite contacts that went to LoTW with the wrong band (the downlink's) and
+/// can go again corrected, by id — what the LoTW controls offer as one batch. Read off the store
+/// with the Engine lock released; changes nothing.
+#[tauri::command]
+async fn lotw_sat_band_fixes(state: State<'_, SharedEngine>) -> Result<Vec<String>, String> {
+    let rows = engine_lock(&state).log_rows();
+    tokio::task::spawn_blocking(move || {
+        tempo_app::station::lotw_sat_band_fixes(&rows)
+            .map(|ids| ids.iter().map(ToString::to_string).collect())
+    })
+    .await
+    .map_err(|e| format!("logbook task failed: {e}"))?
+}
+
+/// #163: the operator took the offer — rewrite the satellite contacts `ids` into the corrected
+/// shape (FREQ the nominal uplink, FREQ_RX the downlink; their band, which they are counted on,
+/// unchanged) and upload them to LoTW through the ordinary TQSL batch, which stamps them as any
+/// upload does. Never run without the operator's click. A re-upload that cannot reach TQSL at all
+/// (no TQSL, no Station Location) leaves them owed, so the ordinary upload sends them.
+#[tauri::command]
+async fn lotw_fix_sat_bands(
+    state: State<'_, SharedEngine>,
+    ids: Vec<String>,
+) -> Result<UploadReportDto, String> {
+    let ids: Vec<tempo_core::logbook::RecordId> = ids
+        .iter()
+        .map(|id| id.parse().map_err(|()| format!("'{id}' names no contact.")))
+        .collect::<Result<_, _>>()?;
+    let engine = Arc::clone(&state);
+    let report = tokio::task::spawn_blocking(move || {
+        let (fixed, durability) = tempo_app::logwrite::fix_sat_bands(&engine, &ids);
+        let fixed = fixed?;
+        if durability.turned_back(tempo_app::logstore::DURABLE_WAIT) {
+            return Err(tempo_app::station::LOG_BUSY.to_string());
+        }
+        durability
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .map_err(durability_failed)?;
+        match lotw_upload_batch(&engine, LotwPick::Ids(fixed.clone()), true) {
+            Ok(report) => Ok(report),
+            Err(e) => {
+                let _ = tempo_app::logwrite::sat_band_fix_not_sent(&engine, &fixed, now_unix())
+                    .wait(tempo_app::logstore::DURABLE_WAIT);
+                Err(e)
+            }
+        }
+    })
+    .await
+    .map_err(|e| format!("LoTW upload task failed: {e}"))?;
+    conn_logged(
+        "LoTW",
+        |r| {
+            format!(
+                "satellite re-upload — {} QSO(s), outcome: {}",
+                r.dispatched, r.outcome
+            )
+        },
+        report,
+    )
+}
+
 /// The contacts an upload to LoTW signs.
 #[derive(Debug, PartialEq)]
 enum LotwPick {
@@ -50057,6 +50118,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         download_lotw_report,
         reset_lotw_cursor,
         upload_lotw_report,
+        lotw_sat_band_fixes,
+        lotw_fix_sat_bands,
         mark_lotw_uploaded,
         set_eqsl_password,
         clear_eqsl_password,

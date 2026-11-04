@@ -10,7 +10,7 @@ import { oneLineTyped } from '../typedInput'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import type { Activation, ImportStats, LogExport, LoggedActivation, LoggedQso, UploadStatus } from '../types'
+import type { Activation, ImportStats, LogExport, LoggedActivation, LoggedQso, UploadReport, UploadStatus } from '../types'
 import { ContactCard, type CardContact } from './ContactCard'
 import { Menu, type MenuEntry } from './ui/Menu'
 import { RecentlyDeleted } from './RecentlyDeleted'
@@ -101,6 +101,8 @@ import {
   syncLotwReport,
   uploadLotwReport,
   uploadLotwReportByIds,
+  lotwSatBandFixes,
+  lotwFixSatBands,
   downloadEqslReport,
   getSettings,
 } from '../api'
@@ -701,12 +703,53 @@ export function Logbook({
   const { unsent: unsentLotw, timeless: timelessLotw } =
     useLogAnswer(LOTW_BACKLOG, logTick) ?? emptyAnswer(LOTW_BACKLOG)
 
+  // #163: the past satellite QSOs that went to LoTW with the wrong band, offered as one batch to
+  // re-upload corrected — asked once per change to the log. Nothing is changed or sent until the
+  // operator takes the offer. A station that cannot answer (an older one) offers nothing.
+  const [satFixIds, setSatFixIds] = useState<string[]>([])
+  useEffect(() => {
+    let live = true
+    // Through a promise so that even a synchronous throw is a refusal, not a crash of the view.
+    Promise.resolve()
+      .then(() => lotwSatBandFixes())
+      .then((ids) => {
+        if (live) setSatFixIds(Array.isArray(ids) ? ids : [])
+      })
+      .catch(() => {
+        if (live) setSatFixIds([])
+      })
+    return () => {
+      live = false
+    }
+  }, [logTick])
+  const onFixSatBands = async () => {
+    const ids = satFixIds
+    if (ids.length === 0) return
+    const yes = await confirmDialog({
+      title: t('logbook.lotw.satFix.confirm.title'),
+      body: t('logbook.lotw.satFix.confirm.body', { count: ids.length }),
+      confirmLabel: t('logbook.lotw.satFix.confirm.label'),
+    })
+    if (!yes) return
+    setUploading(true)
+    const r = await withErrorToast(() => lotwFixSatBands(ids), t('logbook.lotw.upload.failed'))
+    setUploading(false)
+    if (r) reportLotwUpload(r)
+    load()
+  }
+
   // Sign + upload the unsent batch to LoTW via the operator's TQSL.
   const onUploadLotw = async () => {
     setUploading(true)
     const r = await withErrorToast(() => uploadLotwReport(), t('logbook.lotw.upload.failed'))
     setUploading(false)
     if (!r) return
+    reportLotwUpload(r)
+    load()
+  }
+
+  // What a LoTW upload answered, said: the batch upload's and the satellite re-upload's.
+  const reportLotwUpload = (r: UploadReport) => {
     const n = r.dispatched
     if (r.outcome === 'none') pushToast(t('logbook.lotw.upload.nothingNew'), 'info')
     else if (r.outcome === 'pending')
@@ -733,7 +776,6 @@ export function Logbook({
     // an upload count that does not clear reads as an upload that failed.
     const skipped = lotwSkipNote(r)
     if (skipped) pushToast(skipped, 'info', LOTW_SKIP_TOAST_MS)
-    load()
   }
 
   const onMarkLotwUploaded = async () => {
@@ -2686,6 +2728,17 @@ export function Logbook({
                 ? t('logbook.lotw.upload.labelCount', { count: unsentLotw })
                 : t('logbook.lotw.upload.label')}
           </button>
+          {satFixIds.length > 0 && (
+            <button
+              type="button"
+              className="export-btn"
+              onClick={() => void onFixSatBands()}
+              disabled={uploading}
+              title={t('logbook.lotw.satFix.title')}
+            >
+              {t('logbook.lotw.satFix.label', { count: satFixIds.length })}
+            </button>
+          )}
           <button
             type="button"
             className="export-btn"
