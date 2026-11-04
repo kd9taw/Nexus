@@ -5597,7 +5597,9 @@ pub fn counted_band(r: &QsoRecord) -> &str {
 /// - A CROSS-BAND split in this build's shape (the receive leg on the record's band, the transmit
 ///   leg on another) is undone. That is the stamp's own split, and ALSO a satellite row this build
 ///   imported from another logger (mapped onto its downlink), which on the record cannot be told
-///   from it: that logger's real uplink is dropped, and a re-import does not bring it back.
+///   from it: that logger's real uplink is dropped, and a re-import does not bring it back. That
+///   is the intended behaviour (operator decision, 2026-11-05): a contact that is no longer a
+///   satellite one has only the frequency it was heard on.
 /// - A row an older build imported (uplink as its band, BAND_RX parked) keeps its legs.
 /// - A SAME-BAND split is left as it is, the stamp's included (a U/U channel's made-up uplink
 ///   stays in FREQ); the band does not move.
