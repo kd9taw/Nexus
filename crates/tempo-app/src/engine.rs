@@ -21361,7 +21361,21 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let stay_on_miss = matches!(tier, Tier::Ft8 | Tier::Ft4 | Tier::Ft2 | Tier::Js8);
         plan.iter()
             .find(|c| c.band.eq_ignore_ascii_case(band))
-            .or_else(|| if stay_on_miss { None } else { plan.first() })
+            .or_else(|| {
+                if stay_on_miss {
+                    return None;
+                }
+                // #184: the mode's first channel a radio in the shack is set for, so an HF rig
+                // set to 160 m–4 m picking FST4 lands on 160 m, not 2200 m. A radio with no bands
+                // set covers everything, so a one-radio station still gets the first channel;
+                // `first()` stays the answer when no radio claims any of them.
+                plan.iter()
+                    .find(|c| {
+                        self.settings
+                            .any_radio_covers(&crate::bandplan::canonical_band(&c.band))
+                    })
+                    .or_else(|| plan.first())
+            })
             .filter(|ch| (ch.dial_mhz - dial_mhz).abs() > 0.0005)
             .cloned()
     }
@@ -73579,6 +73593,54 @@ mod tests {
         assert!(
             e.settings.dial_mhz > 30.0,
             "MSK144 from HF still moves to its VHF calling channel, got {}",
+            e.settings.dial_mhz
+        );
+    }
+
+    /// #184: an HF rig set to 160 m–4 m and a dual-bander set to 2 m/70 cm. Picking FST4 from
+    /// 20 m FT8 sent the dial to 2200 m, a band neither radio is set for, because the fallback
+    /// took the mode's FIRST channel. It now takes the first channel a radio in the shack covers.
+    #[test]
+    fn a_specialty_mode_falls_back_to_a_channel_a_radio_covers() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        let hf: Vec<String> = [
+            "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m",
+        ]
+        .iter()
+        .map(|b| b.to_string())
+        .collect();
+        e.set_radio_bands(0, hf);
+        let vhf = e.add_radio();
+        e.set_radio_bands(vhf, vec!["2m".into(), "70cm".into()]);
+        e.set_active_radio(0);
+        e.set_tier(Tier::Ft8);
+        e.set_frequency(14.074, "20m", "USB");
+
+        e.set_tier(Tier::Fst4);
+        assert!(
+            (e.settings.dial_mhz - 1.839).abs() < 1e-9,
+            "FST4 lands on 160 m, the one FST4 band a radio here is set for, got {}",
+            e.settings.dial_mhz
+        );
+        e.set_tier(Tier::Ft8);
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_tier(Tier::Fst4w);
+        assert!(
+            (e.settings.dial_mhz - 1.8368).abs() < 1e-9,
+            "FST4W the same, got {}",
+            e.settings.dial_mhz
+        );
+
+        // CONTROL: one radio with no bands set covers everything, so the mode's first channel
+        // stays the answer (FST4 → 2200 m), as before.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_tier(Tier::Fst4);
+        assert!(
+            (e.settings.dial_mhz - 0.136).abs() < 1e-9,
+            "a catch-all radio keeps FST4's first channel, got {}",
             e.settings.dial_mhz
         );
     }
