@@ -81,6 +81,15 @@ const START_TIMEOUT: Duration = Duration::from_secs(20);
 /// writing down, because "unknown is zero" is the natural guess and it is wrong here.
 pub mod param {
     pub const PM_UNKNOWN: i32 = 0x0000_0001;
+    pub const PM_FREQ: i32 = 0x0000_0002;
+    pub const PM_FREQA: i32 = 0x0000_0004;
+    pub const PM_FREQB: i32 = 0x0000_0008;
+    pub const PM_VFOAA: i32 = 0x0000_0080;
+    pub const PM_VFOAB: i32 = 0x0000_0100;
+    pub const PM_VFOBA: i32 = 0x0000_0200;
+    pub const PM_VFOBB: i32 = 0x0000_0400;
+    pub const PM_VFOA: i32 = 0x0000_0800;
+    pub const PM_VFOB: i32 = 0x0000_1000;
     pub const PM_SPLITON: i32 = 0x0000_8000;
     pub const PM_SPLITOFF: i32 = 0x0001_0000;
     pub const PM_RX: i32 = 0x0020_0000;
@@ -356,31 +365,74 @@ impl OmniMode {
 ///   never defines the command leaves behind, and the value every property holds before the
 ///   radio has answered. A negative is not one either.
 /// * **`Freq` wins when it has a value**, because a rig file that defines `pmFreq` means it.
-/// * **Then `FreqA`, then `FreqB`.** A before B because A is the receive VFO in OmniRig's split
-///   model and this answer means "the dial".
+/// * **Then the per-VFO properties, the radio's own VFO first.** The caller passes them in that
+///   order: `FreqA, FreqB`, or `FreqB, FreqA` when OmniRig's `Vfo` says B ([`vfo_is_b`]).
 /// * **Nothing usable answers `None`**, which the caller turns into an error rather than a 0 Hz
 ///   dial: `Rig::read_freq` rejects 0, so the operator sees a CAT fault instead of a green pill
 ///   reading 0.000 MHz.
 ///
-/// ⚠️ **A KNOWN LIMIT, AND IT NEEDS A RIG TO SETTLE.** On a radio parked on VFO B whose file
-/// reports BOTH, `FreqA` may hold a stale number and win here. Reading it correctly means
-/// OmniRig's `Vfo` property, whose parameter constants are not confirmed against the type library
-/// on this machine and which many rig files do not implement either — so it is deliberately not
-/// guessed at. There are no OmniRig rig files on the machine this was written on; the ORDER below
-/// is tested, the behaviour against a real rig file is not.
+/// ⚠️ The `Vfo` reading is only as good as the rig file: one that does not implement it reads
+/// as A. There are no OmniRig rig files on the machine this was written on; the ORDER is tested,
+/// the behaviour against a real rig file is not.
 /// Compiled for Windows (where [`com`] calls it) and for tests (where the rule is pinned). On a
 /// non-Windows release build there is no OmniRig client to ask, so there is nothing to choose.
 #[cfg(any(windows, test))]
 pub(crate) fn pick_dial_hz(
     freq: Option<i32>,
-    freq_a: Option<i32>,
-    freq_b: Option<i32>,
+    first_vfo: Option<i32>,
+    second_vfo: Option<i32>,
 ) -> Option<u64> {
-    [freq, freq_a, freq_b]
+    [freq, first_vfo, second_vfo]
         .into_iter()
         .flatten()
         .find(|&hz| hz > 0)
         .map(|hz| hz as u64)
+}
+
+/// Which frequency property a dial set writes. See [`pick_dial_write`].
+#[cfg(any(windows, test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DialWrite {
+    Freq,
+    FreqA,
+    FreqB,
+}
+
+/// Does OmniRig's `Vfo` reading (`None` = unreadable) say the radio receives on VFO B? `VfoB`,
+/// `VfoBB` and `VfoBA` (receive B, transmit A) do; everything else, unreadable included, is A, as
+/// WSJT-X's OmniRig driver assumes.
+#[cfg(any(windows, test))]
+pub(crate) fn vfo_is_b(vfo: Option<i32>) -> bool {
+    vfo.is_some_and(|v| v & (param::PM_VFOB | param::PM_VFOBB | param::PM_VFOBA) != 0)
+}
+
+/// ⭐ ISSUE #161 — WHICH PROPERTY A DIAL SET WRITES. OmniRig takes a `Freq` write the rig file
+/// has no `pmFreq` write command for, sends nothing to the radio and returns success (its
+/// `TRig.AddWriteCommand` logs "Write command not supported" and exits), so on a rig file with
+/// only `pmFreqA`/`pmFreqB` every band change silently did nothing and the picker snapped back.
+///
+/// `writeable` is the rig object's `WriteableParams` bitmask (`None` = it would not read);
+/// `vfo_b` is [`vfo_is_b`]. The rule is WSJT-X's `OmniRigTransceiver::do_frequency`, in order:
+///
+/// * **`Freq` when the rig file writes it** — today's write, unchanged for every rig that worked.
+///   An unreadable mask keeps it too: no new guess where OmniRig says nothing.
+/// * **Else the VFO the radio is on**: `FreqB` on VFO B, `FreqA` otherwise, when writable.
+/// * **Else `None`, a refusal.** Never the other VFO's property: that would move a frequency the
+///   operator did not ask to move.
+#[cfg(any(windows, test))]
+pub(crate) fn pick_dial_write(writeable: Option<i32>, vfo_b: bool) -> Option<DialWrite> {
+    let Some(w) = writeable else {
+        return Some(DialWrite::Freq);
+    };
+    if w & param::PM_FREQ != 0 {
+        Some(DialWrite::Freq)
+    } else if vfo_b && w & param::PM_FREQB != 0 {
+        Some(DialWrite::FreqB)
+    } else if !vfo_b && w & param::PM_FREQA != 0 {
+        Some(DialWrite::FreqA)
+    } else {
+        None
+    }
 }
 
 /// **The COM boundary.** Everything Nexus asks of OmniRig, and nothing else.
@@ -926,6 +978,48 @@ pub(crate) mod tests {
         assert_eq!(pick_dial_hz(None, None, None), None);
         // A negative is not a frequency either (OmniRig's dial is a signed 32-bit Hz value).
         assert_eq!(pick_dial_hz(Some(-1), None, None), None);
+    }
+
+    /// ⭐ ISSUE #161 — a band change on an OmniRig rig whose file has no writable `pmFreq` never
+    /// reached the radio: OmniRig accepts a `Freq` write it has no command for, sends nothing and
+    /// reports success, so the next poll read the old dial back and the band picker snapped to it.
+    /// The rule is WSJT-X's (`OmniRigTransceiver::do_frequency`): `Freq` when the rig file writes
+    /// it, else the VFO the radio is on, else refuse out loud.
+    #[test]
+    fn a_dial_set_goes_to_the_property_the_rig_file_can_write() {
+        use param::*;
+        // THE REPORTED CASE: per-VFO commands only, radio on VFO A (or OmniRig not saying).
+        let per_vfo = PM_FREQA | PM_FREQB | PM_VFOA | PM_VFOB;
+        assert_eq!(
+            pick_dial_write(Some(per_vfo), false),
+            Some(DialWrite::FreqA)
+        );
+        // …on VFO B, the B property, so the VFO the operator is listening on moves.
+        assert_eq!(pick_dial_write(Some(per_vfo), true), Some(DialWrite::FreqB));
+
+        // CONTROL: a rig file that writes plain `Freq` keeps today's write, whatever the VFO.
+        let plain = PM_FREQ | PM_FREQA | PM_FREQB;
+        assert_eq!(pick_dial_write(Some(plain), false), Some(DialWrite::Freq));
+        assert_eq!(pick_dial_write(Some(plain), true), Some(DialWrite::Freq));
+        // …and so does a server whose WriteableParams cannot be read: no new guess.
+        assert_eq!(pick_dial_write(None, true), Some(DialWrite::Freq));
+
+        // NEVER THE OTHER VFO. On B with only FreqA writable (or on A with only FreqB), writing
+        // would move a frequency the operator did not ask to move: refuse instead.
+        assert_eq!(pick_dial_write(Some(PM_FREQA), true), None);
+        assert_eq!(pick_dial_write(Some(PM_FREQB), false), None);
+        // Nothing writable at all is a refusal, not a silent success.
+        assert_eq!(pick_dial_write(Some(PM_VFOA | PM_SPLITON), false), None);
+
+        // Which VFO: OmniRig's `Vfo` reads one of the VFO params; any "receive on B" form is B.
+        for b in [PM_VFOB, PM_VFOBB, PM_VFOBA] {
+            assert!(vfo_is_b(Some(b)), "{b:#x} receives on VFO B");
+        }
+        for a in [PM_VFOA, PM_VFOAA, PM_VFOAB, PM_UNKNOWN] {
+            assert!(!vfo_is_b(Some(a)), "{a:#x} is not VFO B");
+        }
+        // Unreadable is A, as WSJT-X assumes.
+        assert!(!vfo_is_b(None));
     }
 
     /// The whole COM boundary, faked. Everything above the [`OmniRigClient`] trait is real

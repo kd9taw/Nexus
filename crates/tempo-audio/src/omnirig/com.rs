@@ -59,6 +59,10 @@ struct RigIds {
     /// the way a mis-typed required name deliberately does.
     freq_a: Option<i32>,
     freq_b: Option<i32>,
+    /// `WriteableParams` and `Vfo`, for which frequency property a set writes (issue #161).
+    /// Optional for the same reason: a server without them keeps the plain `Freq` read and write.
+    writeable: Option<i32>,
+    vfo: Option<i32>,
     mode: i32,
     tx: i32,
     split: i32,
@@ -256,6 +260,8 @@ impl OmniRigCom {
             freq: dispid(&rig, "Freq")?,
             freq_a: dispid(&rig, "FreqA").ok(),
             freq_b: dispid(&rig, "FreqB").ok(),
+            writeable: dispid(&rig, "WriteableParams").ok(),
+            vfo: dispid(&rig, "Vfo").ok(),
             mode: dispid(&rig, "Mode")?,
             tx: dispid(&rig, "Tx")?,
             split: dispid(&rig, "Split")?,
@@ -271,6 +277,16 @@ impl OmniRigCom {
 
     fn get_i32(&self, id: i32, what: &str) -> Result<i32, OmniError> {
         as_i32(&get_prop(&self.rig, id, what)?, what)
+    }
+
+    /// An optional property's value, `None` when it is absent or would not read.
+    fn read_opt(&self, id: Option<i32>, what: &str) -> Option<i32> {
+        id.and_then(|id| self.get_i32(id, what).ok())
+    }
+
+    /// Is the radio receiving on VFO B, per OmniRig's `Vfo`? Unreadable is A.
+    fn on_vfo_b(&self) -> bool {
+        super::vfo_is_b(self.read_opt(self.ids.vfo, "the VFO selection"))
     }
 }
 
@@ -300,20 +316,20 @@ impl OmniRigClient for OmniRigCom {
     /// green pill reading 0.000 MHz. That is the existing contract; what changes is only that
     /// "the rig file has no `pmFreq`" stops looking like it.
     ///
-    /// ⚠️ **A KNOWN LIMIT, AND IT NEEDS A RIG TO SETTLE.** A is preferred over B because A is the
-    /// receive VFO on OmniRig's own split model, and this call means "the dial". On a rig sitting
-    /// on VFO B whose file reports both, `FreqA` may hold a stale number and win. Fixing that
-    /// properly means reading OmniRig's `Vfo` property, whose parameter constants are not
-    /// confirmed here against the type library and are themselves unimplemented by many rig
-    /// files — so it is deliberately NOT guessed at. There are no OmniRig rig files on the
-    /// machine this was written on; nothing about this function is proven anywhere but a bench.
+    /// **The VFO the radio is on comes first** (issue #161): when OmniRig's `Vfo` says B, `FreqB`
+    /// is tried before `FreqA`, the same VFO [`Self::set_freq_hz`] writes, so a set on VFO B is
+    /// not read back off a stale A and snapped away. `Vfo` unreadable or unimplemented by the rig
+    /// file is A, as WSJT-X assumes. The `Vfo` constants are read off `OmniRig_TLB.pas`; the
+    /// behaviour against a real rig file is a bench step.
     fn freq_hz(&self) -> Result<u64, OmniError> {
         // A property that cannot be READ is the same as one that is not there: try the next.
-        let read = |id: Option<i32>, what: &str| id.and_then(|id| self.get_i32(id, what).ok());
+        let a = self.read_opt(self.ids.freq_a, "VFO A's frequency");
+        let b = self.read_opt(self.ids.freq_b, "VFO B's frequency");
+        let (first, second) = if self.on_vfo_b() { (b, a) } else { (a, b) };
         super::pick_dial_hz(
-            read(Some(self.ids.freq), "the dial frequency"),
-            read(self.ids.freq_a, "VFO A's frequency"),
-            read(self.ids.freq_b, "VFO B's frequency"),
+            self.read_opt(Some(self.ids.freq), "the dial frequency"),
+            first,
+            second,
         )
         .ok_or_else(|| {
             OmniError::Com(
@@ -324,20 +340,12 @@ impl OmniRigClient for OmniRigCom {
         })
     }
 
-    /// ⚠️ **THE WRITE STILL TARGETS `Freq` ALONE, AND THE READ ABOVE NO LONGER DOES.** Named
-    /// here because the asymmetry is the next thing a bench will find, and a silent one would be
-    /// worse than the bug it sits beside: on exactly the rig files [`Self::freq_hz`] was widened
-    /// for — the ones that define only `pmFreqA`/`pmFreqB` — the dial now READS correctly while
-    /// every QSY, band change and spot click writes a property OmniRig may not back, so the
-    /// radio would look alive and ignore every set.
-    ///
-    /// NOT guessed at, deliberately. Writing `FreqA` needs to know which VFO the radio is on,
-    /// which needs OmniRig's `Vfo` property, whose parameter constants are not confirmed against
-    /// the type library on this machine — and writing the wrong VFO moves a frequency the
-    /// operator did not ask to move, which is worse than a set that does nothing. There is no
-    /// OmniRig here to ask. **Bench step:** on such a rig file, confirm whether a dial set from
-    /// Nexus reaches the radio; if it does not, this is the next fix and it needs `Vfo` read off
-    /// a real installation first.
+    /// ⭐ ISSUE #161 — **the property the rig file can write**, by [`super::pick_dial_write`]:
+    /// `Freq` when the file has `pmFreq`, else `FreqA`/`FreqB` for the VFO the radio is on. A
+    /// `Freq` write the file has no command for is accepted by OmniRig and never sent, so writing
+    /// it regardless made every band change on such a rig a silent no-op. When nothing fits, the
+    /// set is refused out loud rather than reported as done. The rule is WSJT-X's; the behaviour
+    /// against a real rig file is a bench step.
     fn set_freq_hz(&self, hz: u64) -> Result<(), OmniError> {
         // OmniRig's `Freq` is a 32-bit signed integer of Hz, so ~2.147 GHz is its ceiling —
         // above every amateur allocation it can drive. Refuse rather than wrap.
@@ -346,7 +354,21 @@ impl OmniRigClient for OmniRigCom {
                 "{hz} Hz is outside the range OmniRig can carry (its dial is a 32-bit Hz value)"
             ))
         })?;
-        put_prop_i32(&self.rig, self.ids.freq, v, "the dial frequency")
+        let writeable = self.read_opt(self.ids.writeable, "the writable parameters");
+        let (id, what) = match super::pick_dial_write(writeable, self.on_vfo_b()) {
+            Some(super::DialWrite::Freq) => (Some(self.ids.freq), "the dial frequency"),
+            Some(super::DialWrite::FreqA) => (self.ids.freq_a, "VFO A's frequency"),
+            Some(super::DialWrite::FreqB) => (self.ids.freq_b, "VFO B's frequency"),
+            None => (None, ""),
+        };
+        let Some(id) = id else {
+            return Err(OmniError::Com(
+                "OmniRig's rig file for this radio has no command to set the frequency of the \
+                 VFO the radio is on"
+                    .to_string(),
+            ));
+        };
+        put_prop_i32(&self.rig, id, v, what)
     }
 
     fn mode(&self) -> Result<Option<OmniMode>, OmniError> {
