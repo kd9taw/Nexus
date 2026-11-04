@@ -47237,6 +47237,24 @@ mod tests {
                 );
                 assert_eq!(e.poll_cw_one(), None, "{backend} {blank:?}: nothing queued");
 
+                // ⛔ After Stop TX, the refused F-key send writes nothing of the transmit state:
+                // the latch stays down with its stop hold, and the Stop TX the loop has not yet
+                // taken (the CW abort, the slot-TX abort) is still pending. A send that keys
+                // re-arms all of this; a refused one must not.
+                e.halt_tx();
+                e.send_cw("TEST");
+                assert_eq!(
+                    (
+                        e.tx_enabled(),
+                        e.tx_stop_hold,
+                        e.take_cw_abort(),
+                        e.take_slot_tx_abort()
+                    ),
+                    (false, true, true, true),
+                    "{backend} {blank:?}: (TX on, the stop hold, the CW abort, the slot-TX abort)"
+                );
+                assert_eq!(e.poll_cw_one(), None, "{backend} {blank:?}: nothing keys");
+
                 // Queued with the port set, then the port cleared: dropped at keying time.
                 let mut e = Engine::new("KD9TAW", "EN52", 0);
                 e.set_license_class("extra");
