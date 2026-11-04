@@ -30,8 +30,16 @@ const SIZES = [
 ]
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-const PRESS = `(() => { if (document.querySelectorAll('.vk-slot').length !== 7) return false
-  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F1', bubbles: true })); return true })()`
+// F1, pressed until the note is up. Seven slots on screen do not mean F1 plays yet: the keyer's
+// key handler is re-subscribed with the slot list in an effect that runs AFTER the render that
+// drew the slots, and an F1 in between reaches the old handler, which has no slot 1 and drops it.
+// One press, sent the moment the slots appeared, was lost that way on a slow runner (CI, and here
+// on one core): the note never came, so the probe said "never drew", or its control saw nothing
+// planted and said the check could not fail. So the probe presses again until the note shows.
+const PRESS = `(() => { if (document.querySelector('.vk-flex-dax-note')) return true
+  if (document.querySelectorAll('.vk-slot').length === 7)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F1', bubbles: true }))
+  return false })()`
 
 const MEASURE = `(() => {
   const topmostIn = (el) => {
