@@ -2252,6 +2252,67 @@ fn started_before_the_operators_rigctld_on_the_sharing_port_the_radio_connects_o
     );
 }
 
+/// ⭐ #431: SHARING STEPPING ASIDE IS NOT A NEW RADIO. With two radios in two windows the first
+/// window's broker has the Sharing port, so the second window's steps aside to the next free one a
+/// moment after its radio connected. That move rebuilt the second radio's CAT at every launch: its
+/// link let go and its rigctld was killed and started again, though nothing it talks to had moved.
+/// Here the radio is on a rigctld nowhere near either port, and the CAT status says whether its
+/// link was opened again: a reopen says what the open found, where a kept link stays confirmed.
+#[test]
+fn sharing_stepping_aside_leaves_a_radio_it_was_never_in_the_way_of_connected() {
+    let wf = FakeWfview::start(true);
+    let (engine, _) = station(&wf.addr, free_port());
+    let settings = {
+        let mut e = engine.lock().unwrap();
+        e.rename_radio(0, "Orion");
+        let mut s = e.settings().clone();
+        s.cat_broker = true;
+        s.cat_broker_port = free_port();
+        e.apply_settings(s);
+        e.settings().clone()
+    };
+    let cfg = RadioConfig {
+        rig_model: settings.rig_model,
+        ..RadioConfig::default()
+    };
+    let applied = Transport::from_settings(&settings);
+    let (mut rig, daemon, probe) = open_rig(&applied, true);
+    engine
+        .lock()
+        .unwrap()
+        .set_cat_status(probe.ok, probe.detail);
+    let mut state = RadioLoop::new(applied, daemon, &cfg);
+    state.after_the_launch_open(&rig, probe.ok);
+    let mut now = 1_000.0;
+    let mut step = |state: &mut RadioLoop, rig: &mut Rig| {
+        now += 1_000.0;
+        state
+            .step(
+                &engine,
+                &mut MockBackend::new(),
+                rig,
+                &no_sinks(),
+                now,
+                &mut mock_reopen_audio(),
+                &mut |t: &Transport, coexist: bool| open_rig(t, coexist),
+                &mut StationSinks::new(),
+            )
+            .unwrap();
+        engine.lock().unwrap().snapshot().radio.cat_detail.clone()
+    };
+    let connected = step(&mut state, &mut rig);
+    // CONTROL: a tick with nothing changed reopens nothing.
+    let steady = step(&mut state, &mut rig);
+    // The other window holds the Sharing port: this one's broker serves on the next free port.
+    engine.lock().unwrap().set_cat_share_port(Some(free_port()));
+    let moved = step(&mut state, &mut rig);
+    assert_eq!(
+        (steady, moved),
+        (connected.clone(), connected),
+        "the radio keeps its link"
+    );
+}
+
 /// #165, for a radio the monitor reads: the FT-991A's address is the Sharing port's number. The
 /// monitor refuses it while the broker may be there (not yet bound, or serving there) and opens it
 /// once the broker reports serving on another port. The values are the refusal, per broker report.

@@ -384,6 +384,70 @@ fn a_refused_bind_is_said_once_and_a_new_port_is_tried_at_once() {
     );
 }
 
+/// #431: with two radios in two windows, the first window has the contact port and the second
+/// is refused it at every launch. That is no fault: the other window takes the contacts, and the
+/// second says so once, as INFO. A port held by anything else (no window's lease on it) is still
+/// the ERROR it was, in the same words. Each value is (held by a window, level, sentence).
+#[test]
+fn a_contact_port_another_nexus_window_holds_is_info_not_an_error() {
+    let dir = std::env::temp_dir().join(format!(
+        "nexus-contact-lease-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let refused = |port: u16| {
+        let err = bind_log(port).expect_err("the port is held");
+        let by = port_held_by_a_window(&dir, port);
+        let (level, said) = log_refusal(&format!("127.0.0.1:{port}"), &err, by);
+        (by, level, said, err)
+    };
+    // The first window listens and holds its lease on the port.
+    let first = bind_log(0).unwrap();
+    let ours = first.local_addr().unwrap().port();
+    let lease = take_port_lease(&dir, ours).expect("the listening window takes its lease");
+    let (by, level, said, _) = refused(ours);
+    assert_eq!(
+        (by, level, said),
+        (
+            true,
+            "info",
+            format!(
+                "Contacts from other programs on 127.0.0.1:{ours} are taken by the other Nexus \
+                 window, which listens on that port, so this window leaves it to it"
+            )
+        )
+    );
+    // CONTROL: another program holds a port, with no window's lease on it.
+    let foreign = bind_log(0).unwrap();
+    let theirs = foreign.local_addr().unwrap().port();
+    let (by, level, said, err) = refused(theirs);
+    assert_eq!(
+        (by, level, said),
+        (
+            false,
+            "error",
+            bind_message(
+                "Contacts from other programs",
+                &format!("127.0.0.1:{theirs}"),
+                &err,
+                "the program that sends them"
+            )
+        )
+    );
+    // CONTROL: only a port in use is another window's; any other refusal stays the error.
+    let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+    assert_eq!(log_refusal("127.0.0.1:2239", &denied, true).0, "error");
+    // CONTROL: the first window has gone (its lease with it), something else still holds the port.
+    drop(lease);
+    assert!(!port_held_by_a_window(&dir, ours));
+    drop(first);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn the_defaults_listen_for_contacts_on_2239_and_not_for_heard_calls() {
     let s = crate::settings::Settings::default();
@@ -401,5 +465,79 @@ fn the_defaults_listen_for_contacts_on_2239_and_not_for_heard_calls() {
             old.freedv_heard_port
         ),
         (true, 2239, false, 7177)
+    );
+}
+
+/// #431: a window's OWN lease never reads as "the other Nexus window". The window listens on
+/// 127.0.0.1:P and holds its lease; "Accept from devices on my network" is switched on, so it lets
+/// go of 127.0.0.1:P and binds every adapter on P; a foreign program on 127.0.0.2:P refuses that.
+/// No window listens then, so the refusal is the foreign program's and stays the ERROR. Through
+/// the real manager (`run`) with the shared folder, which also pins that it takes the lease.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_windows_own_lease_never_reads_as_another_window_on_a_lan_rebind() {
+    use crate::engine::{engine_lock, Engine};
+    use crate::settings::Settings;
+    let dir = std::env::temp_dir().join(format!("nexus-rv-lease-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let port = {
+        let s = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        s.local_addr().unwrap().port()
+    };
+    let e = Arc::new(Mutex::new(Engine::new("K2DEF", "FN31", 0)));
+    let set = |f: &dyn Fn(&mut Settings)| {
+        let mut g = engine_lock(&e);
+        let mut s = g.settings().clone();
+        f(&mut s);
+        g.apply_settings(s);
+    };
+    set(&|s| {
+        s.freedv_log = true;
+        s.freedv_log_port = port;
+        s.log_intake_lan = false;
+    });
+    let said: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    let s2 = Arc::clone(&said);
+    let note: Note = Arc::new(move |l, m| s2.lock().unwrap().push((l.to_string(), m)));
+    let (e2, n1, n2, d2) = (
+        Arc::clone(&e),
+        Arc::clone(&note),
+        Arc::clone(&note),
+        dir.clone(),
+    );
+    std::thread::spawn(move || run(e2, n1, n2, Some(d2)));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !port_held_by_a_window(&dir, port) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        port_held_by_a_window(&dir, port),
+        "premise: the window took its lease"
+    );
+    let _foreign = std::net::UdpSocket::bind(("127.0.0.2", port)).unwrap();
+    set(&|s| s.log_intake_lan = true);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let refusal = loop {
+        let got = said
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, m)| m.contains("cannot listen") || m.contains("other Nexus window"))
+            .cloned();
+        if let Some(r) = got {
+            break r;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no refusal said: {:?}",
+            said.lock().unwrap()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    set(&|s| s.freedv_log = false);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        refusal.0, "error",
+        "the foreign refusal was labelled: {refusal:?}"
     );
 }
