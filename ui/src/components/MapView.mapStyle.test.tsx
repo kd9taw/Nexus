@@ -27,7 +27,7 @@ vi.mock('../api', () => ({
   getPotaActivator: vi.fn(async () => ({ calls: [], parks: [] })),
 }))
 
-import { MapView } from './MapView'
+import { MapView, NIGHT_INK } from './MapView'
 import { PALETTE_EVENT } from '../usePaletteRoles'
 import { MAP_TOKENS, SKINS, STANDARD_MAP } from '../features/skins'
 import { DARK_MAP } from '../features/mapStyle'
@@ -45,6 +45,8 @@ class RO {
 
 /** Every fill and stroke colour any canvas was handed, in order. */
 let inks: string[] = []
+/** Every fill, with the colour and the alpha it was laid at. */
+let fills: Array<{ ink: unknown; alpha: unknown }> = []
 function recordingContext(canvas: HTMLCanvasElement) {
   const store: Record<string | symbol, unknown> = {}
   return new Proxy(store, {
@@ -52,6 +54,7 @@ function recordingContext(canvas: HTMLCanvasElement) {
       if (k in t) return t[k]
       if (k === 'canvas') return canvas
       return () => {
+        if (k === 'fill') fills.push({ ink: t.fillStyle, alpha: t.globalAlpha })
         if (k === 'measureText') return { width: 0 }
         return { addColorStop: (_at: number, colour: unknown) => void (typeof colour === 'string' && inks.push(colour)) }
       }
@@ -69,6 +72,7 @@ let sheet: HTMLStyleElement | null = null
 beforeEach(() => {
   localStorage.clear()
   inks = []
+  fills = []
   ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = RO
   ;(globalThis as unknown as { Path2D: unknown }).Path2D = class {
     moveTo() {}
@@ -241,5 +245,30 @@ describe('a Dark map paints its markers in the dark palette', () => {
     await open()
     expect(inks).toContain(WELL)
     expect(inks).not.toContain(PAGE)
+  })
+})
+
+describe('the night side is shaded deeper on a dark map', () => {
+  const caps = (ink: string, alpha: number) => fills.filter((f) => f.ink === ink && f.alpha === alpha).length
+
+  it('Atlas shades it as it always did', async () => {
+    await open()
+    expect(caps(NIGHT_INK, 0.2)).toBeGreaterThan(0)
+    expect(caps('rgb(0, 0, 0)', 0.3)).toBe(0)
+  })
+
+  it('Dark shades it in black, a step deeper', async () => {
+    localStorage.setItem('nexus.map.style', 'dark')
+    await open()
+    expect(caps('rgb(0, 0, 0)', 0.3)).toBeGreaterThan(0)
+    expect(caps(NIGHT_INK, 0.2)).toBe(0)
+  })
+
+  it('a dark built-in theme’s own map does too', async () => {
+    const slate = SKINS.find((s) => s.id === 'slate')!.map!
+    for (const [t, v] of Object.entries(slate)) root.style.setProperty(t, v)
+    root.setAttribute('data-skin', 'slate')
+    await open()
+    expect(caps('rgb(0, 0, 0)', 0.3)).toBeGreaterThan(0)
   })
 })
