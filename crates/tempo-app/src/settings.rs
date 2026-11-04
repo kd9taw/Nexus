@@ -2429,6 +2429,7 @@ pub struct Settings {
     /// on the waterfall — a net still moves both for the session (`Engine::rtty_center_hz`).
     /// The low tone rather than "the mark": which of the two is mark depends on the sideband
     /// and Reverse ([`Settings::rtty_tone_swap`]), and a stored mark would swap with them.
+    /// READ IT THROUGH [`Settings::rtty_low_tone`], which applies its 300–2700 Hz range.
     #[serde(default = "default_rtty_low_tone_hz")]
     pub rtty_low_tone_hz: u32,
     /// Reverse the mark/space sense (TX tones + RX demod): the "work an upside-down
@@ -4329,6 +4330,13 @@ fn default_rtty_shift_hz() -> u32 {
 fn default_rtty_low_tone_hz() -> u32 {
     2125
 }
+
+/// The range a saved RTTY low tone is used in, Hz: 2700 + the widest shift offered (850) still
+/// tops out inside the passband a net reaches. The Settings box (`RTTY_LOW_TONE_HZ_MIN/MAX` in
+/// `SettingsPanel.tsx`) offers exactly this range; `SettingsPanel.rttysignal.test.tsx` reads these
+/// two lines and fails if the copies drift.
+pub const RTTY_LOW_TONE_HZ_MIN: u32 = 300;
+pub const RTTY_LOW_TONE_HZ_MAX: u32 = 2700;
 
 /// The bounds [`Settings::rtty_seq_config`] clamps to, and the range the Settings controls
 /// offer. Named here so the control and the chokepoint cannot disagree about what is legal.
@@ -8190,6 +8198,9 @@ impl Settings {
         if !hb_networking_saved {
             s.choose_js8_hb_networking_for_old_settings();
         }
+        // A saved RTTY low tone outside its range (a hand-edited file, or one written before the
+        // Settings box was bounded) is repaired to the standard here, so the file does not keep it.
+        s.rtty_low_tone_hz = s.rtty_low_tone();
         // Migration (2026-09-16): the default list was the ve7cc + wa9pie PAIR, and both died
         // on the same day — every default-config install lost its only SSB/phone sources at
         // once. A list that is still exactly that pair is the shipped default, not a choice,
@@ -8563,6 +8574,17 @@ impl Settings {
     pub fn rtty_afsk_usb(&self) -> bool {
         !self.rtty_backend.eq_ignore_ascii_case("fsk")
             && self.rtty_afsk_sideband.trim().eq_ignore_ascii_case("usb")
+    }
+
+    /// The saved RTTY low tone, if it is inside [`RTTY_LOW_TONE_HZ_MIN`]–[`RTTY_LOW_TONE_HZ_MAX`];
+    /// otherwise the 2125 standard. Every reader goes through here, so a junk value from any
+    /// writer (a hand-edited file, a Remote write-back) never moves RTTY to the passband's edge.
+    pub fn rtty_low_tone(&self) -> u32 {
+        if (RTTY_LOW_TONE_HZ_MIN..=RTTY_LOW_TONE_HZ_MAX).contains(&self.rtty_low_tone_hz) {
+            self.rtty_low_tone_hz
+        } else {
+            default_rtty_low_tone_hz()
+        }
     }
 
     /// The mark/space swap TX and RX both apply: the operator's Reverse, XOR the upper
@@ -11461,6 +11483,37 @@ mod tests {
         };
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!((back.rtty_low_tone_hz, back.rtty_baud), (1275, 50.0));
+    }
+
+    /// The saved RTTY low tone is valid only inside 300–2700 Hz (both tones of the widest shift
+    /// stay inside the passband); anything else — a cleared box saved as 0, a hand-edited file —
+    /// reads as the 2125 standard, at the getter AND on load, so the file is repaired too.
+    #[test]
+    fn an_out_of_range_rtty_low_tone_reads_and_loads_as_2125() {
+        for (stored, want) in [
+            (0, 2125),
+            (299, 2125),
+            (2701, 2125),
+            (9000, 2125),
+            (300, 300),
+            (1275, 1275),
+            (2700, 2700),
+        ] {
+            let s = Settings {
+                rtty_low_tone_hz: stored,
+                ..Settings::default()
+            };
+            assert_eq!(s.rtty_low_tone(), want, "getter, stored {stored}");
+            let dir = scratch_dir_ready("rtty_low_tone");
+            let path = dir.join("settings.json");
+            std::fs::write(&path, serde_json::to_string(&s).unwrap()).unwrap();
+            assert_eq!(
+                Settings::load(&path).rtty_low_tone_hz,
+                want,
+                "loaded, stored {stored}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]

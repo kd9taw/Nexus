@@ -19861,6 +19861,7 @@ mod tests {
     mod late_key;
     mod omnirig_coverage;
     mod pc_mic;
+    mod psk63_keying;
     mod ptt_lines;
     mod readback_coverage;
     mod receive_source;

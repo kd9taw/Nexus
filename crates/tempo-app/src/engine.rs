@@ -8114,7 +8114,7 @@ impl Engine {
         // save — a latched over re-keys on the new pair rather than splicing (the radio loop's
         // `RttyStream::key_cfg` carries the centre), and the privilege gate judges the new pair
         // (`rtty_tx_mark_hz`) on its next per-tick check.
-        let rtty_home_moved = s.rtty_low_tone_hz != self.settings.rtty_low_tone_hz;
+        let rtty_home_moved = s.rtty_low_tone() != self.settings.rtty_low_tone();
         self.settings = s;
         if rtty_home_moved {
             self.rtty_center = None;
@@ -26311,11 +26311,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
             .unwrap_or_else(|| self.rtty_home_center_hz())
     }
 
-    /// The centre of the saved tone pair, [`Settings::rtty_low_tone_hz`] + shift/2, clamped
+    /// The centre of the saved tone pair, [`Settings::rtty_low_tone`] + shift/2, clamped
     /// into the same 300–3700 Hz passband a net is ([`Self::rtty_net`]), so a hand-edited
     /// settings file cannot put the pair outside what a click could reach.
     fn rtty_home_center_hz(&self) -> f32 {
-        (self.settings.rtty_low_tone_hz as f32 + self.rtty_shift_hz() as f32 / 2.0)
+        (self.settings.rtty_low_tone() as f32 + self.rtty_shift_hz() as f32 / 2.0)
             .clamp(300.0, 3700.0)
     }
 

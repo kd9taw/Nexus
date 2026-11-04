@@ -1402,7 +1402,10 @@ Comma-separated chip lists for the quick text you fire from each surface:
   session; changing this setting moves them back onto it. It is the *low* tone
   rather than "mark" because which of the two is mark depends on the sideband and
   Reverse. True FSK keys the rig's own tones, but the decoder still listens here,
-  so set it to the tones your rig's RTTY mode puts out.- **Reverse (swap mark/space)** — swaps mark and space on TX and in the RX
+  so set it to the tones your rig's RTTY mode puts out.
+  It takes 300 to 2700 Hz, which keeps both tones inside the passband at any
+  shift; a cleared or out-of-range entry is not taken, and the box keeps the last
+  tone you gave it.- **Reverse (swap mark/space)** — swaps mark and space on TX and in the RX
   decoder, to work a station sending upside down. Not for running USB: pick the
   AFSK sideband instead, which keeps the sense right on its own.
 

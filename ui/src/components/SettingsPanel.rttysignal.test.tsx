@@ -6,7 +6,9 @@
 // controls: what they offer, read and save.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, within, waitFor } from '@testing-library/react'
-import { SettingsPanel } from './SettingsPanel'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { SettingsPanel, RTTY_LOW_TONE_HZ_MIN, RTTY_LOW_TONE_HZ_MAX } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 
@@ -150,4 +152,69 @@ describe('Settings ▸ Digital ▸ RTTY ▸ the saved tone pair', () => {
     const fs = await openRtty({ rttyBackend: 'fsk', rttyLowToneHz: 1275 })
     expect(inputFor(fs, 'Low tone (Hz)')!.value).toBe('1275')
   })
+})
+
+// The box cannot save junk: a cleared or out-of-range entry keeps the last valid tone, and a
+// stored value outside the range loads (and saves) as the 2125 standard. 300–2700 keeps both
+// tones of the widest shift (850) inside the passband the engine nets in.
+describe('Settings ▸ Digital ▸ RTTY ▸ Low tone — never saves junk', () => {
+  async function saveAfter(stored: Record<string, unknown>, ...typed: string[]) {
+    const fs = await openRtty(stored)
+    const box = inputFor(fs, 'Low tone (Hz)')!
+    for (const v of typed) fireEvent.change(box, { target: { value: v } })
+    // A real click on Save moves focus off the box first; jsdom's click does not.
+    fireEvent.blur(box)
+    await clickSave()
+    await waitFor(() => expect(api.get('setSettings')).toHaveBeenCalled())
+    return (api.get('setSettings').mock.calls.at(-1)![0] as { rttyLowToneHz?: number }).rttyLowToneHz
+  }
+
+  it('offers exactly the valid range', async () => {
+    const box = inputFor(await openRtty({}), 'Low tone (Hz)')!
+    expect([box.min, box.max]).toEqual(['300', '2700'])
+  })
+
+  it('a cleared box saves the last valid tone, never 0', async () => {
+    expect(await saveAfter({ rttyLowToneHz: 1275 }, '')).toBe(1275)
+    cleanup()
+    expect(await saveAfter({}, '1500', '')).toBe(1500)
+  })
+
+  it('an out-of-range or junk entry is not taken', async () => {
+    expect(await saveAfter({ rttyLowToneHz: 1275 }, '5000')).toBe(1275)
+    cleanup()
+    expect(await saveAfter({ rttyLowToneHz: 1275 }, '100')).toBe(1275)
+    cleanup()
+    expect(await saveAfter({ rttyLowToneHz: 1275 }, '-5')).toBe(1275)
+    cleanup()
+    // CONTROL: the range edges are taken.
+    expect(await saveAfter({}, '2700')).toBe(2700)
+  })
+
+  it('the box shows the last valid tone once you leave it', async () => {
+    const box = inputFor(await openRtty({ rttyLowToneHz: 1275 }), 'Low tone (Hz)')!
+    fireEvent.change(box, { target: { value: '' } })
+    expect(box.value, 'clearing to type a new number is allowed').toBe('')
+    fireEvent.blur(box)
+    expect(box.value).toBe('1275')
+  })
+
+  it('a stored value outside the range loads and saves as 2125', async () => {
+    for (const bad of [0, 9000, 299, 2701]) {
+      const fs = await openRtty({ rttyLowToneHz: bad })
+      expect(inputFor(fs, 'Low tone (Hz)')!.value, String(bad)).toBe('2125')
+      await clickSave()
+      await waitFor(() => expect(api.get('setSettings')).toHaveBeenCalled())
+      expect((api.get('setSettings').mock.calls.at(-1)![0] as { rttyLowToneHz?: number }).rttyLowToneHz, String(bad)).toBe(2125)
+      cleanup()
+      api.get('setSettings').mockClear()
+    }
+  })
+})
+
+it('the box offers the range the engine uses (settings.rs holds the other copy)', async () => {
+  const rust = readFileSync(join(__dirname, '../../../crates/tempo-app/src/settings.rs'), 'utf8')
+  expect(rust).toContain(`pub const RTTY_LOW_TONE_HZ_MIN: u32 = ${RTTY_LOW_TONE_HZ_MIN};`)
+  expect(rust).toContain(`pub const RTTY_LOW_TONE_HZ_MAX: u32 = ${RTTY_LOW_TONE_HZ_MAX};`)
+  expect(rust).toContain('fn default_rtty_low_tone_hz() -> u32 {\n    2125\n}')
 })

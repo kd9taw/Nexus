@@ -181,9 +181,20 @@ fn a_net_holds_until_a_save_moves_the_saved_pair() {
     );
 }
 
-/// A hand-edited settings file cannot put the pair outside the passband a net could reach.
+/// A saved low tone outside 300–2700 Hz (a cleared box, a hand-edited file, a Remote write) is
+/// not used: RTTY sits on the 2125/2295 standard instead of a pair at the passband's edge.
 #[test]
-fn a_saved_pair_is_clamped_into_the_passband() {
-    assert_eq!(saved_pair(10).rtty_center_hz(), 300.0);
-    assert_eq!(saved_pair(9000).rtty_center_hz(), 3700.0);
+fn an_out_of_range_saved_tone_falls_back_to_the_standard_pair() {
+    for bad in [0, 10, 2701, 9000] {
+        let e = saved_pair(bad);
+        assert_eq!(e.rtty_center_hz(), 2210.0, "stored {bad}");
+        assert_eq!(
+            e.rtty_tx_mark_hz(),
+            2125.0,
+            "what the gate judges, stored {bad}"
+        );
+    }
+    // CONTROL: the range edges are used as saved.
+    assert_eq!(saved_pair(300).rtty_center_hz(), 385.0);
+    assert_eq!(saved_pair(2700).rtty_center_hz(), 2785.0);
 }
