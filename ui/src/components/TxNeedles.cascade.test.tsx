@@ -108,6 +108,37 @@ describe('the dock: the faces and the bars left share a line, wrapping only when
     expect({ padding: win(group, 'padding'), gap: win(group, 'gap') }).toEqual(keyed)
   })
 
+  it.each(['cell', 'strip'] as const)(
+    'that box is the dock’s alone: in %s the container keeps the spacing its host gives the bars',
+    (host) => {
+      const box = (needle: boolean) => {
+        const { group } = mount(host, KEYED, needle)
+        const out = { padding: win(group, 'padding'), gap: win(group, 'gap') }
+        cleanup()
+        localStorage.clear()
+        return out
+      }
+      expect(box(true)).toEqual(box(false))
+    },
+  )
+
+  it('and the larger dialog (#446) keeps its own spacing around the faces', () => {
+    const box = (needle: boolean) => {
+      if (needle) localStorage.setItem(TX_METER_STYLE_KEY, 'needle')
+      const { container } = render(
+        <div className="txmeters-large">
+          <TxMeters radio={KEYED} pinned />
+        </div>,
+      )
+      const group = container.querySelector('.ph-txmeters')!
+      const out = { padding: win(group, 'padding'), gap: win(group, 'gap') }
+      cleanup()
+      localStorage.clear()
+      return out
+    }
+    expect(box(true)).toEqual(box(false))
+  })
+
   it('before the first reading, the dock’s hint shares the faces’ line instead of a line of its own', () => {
     const { container } = mount('dock', IDLE)
     const hint = container.querySelector('.ph-txmeters-hint')!

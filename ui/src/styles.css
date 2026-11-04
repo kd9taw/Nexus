@@ -13190,6 +13190,11 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .txmeters-large .ph-txmeters.needle .ph-txmeter {
   flex: 1 1 100%;
 }
+/* The dialog's own spacing around the meters, which the dock's one-box rule would otherwise take. */
+.txmeters-large .ph-txmeters.needle {
+  padding: var(--space-2) 0;
+  gap: var(--space-3);
+}
 .txmeters-actions {
   display: flex;
   justify-content: flex-end;
@@ -13306,6 +13311,10 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .ph-txmeters.inline.needle {
   display: grid;
+  /* …and the one box above is the dock's: Operate's cell and the TX strip own their spacing
+     (`.ph-txmeters.inline`), with needles as with bars. */
+  padding: 0;
+  gap: 1px var(--space-2);
 }
 .ph-txmeters.needle .ph-txneedles {
   grid-column: 1 / -1;
