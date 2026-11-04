@@ -7619,7 +7619,15 @@ impl RadioLoop {
                 if silent && rig.has_control() {
                     self.freq_misses = self.freq_misses.saturating_add(1);
                 }
-                let brief = dial_failure_brief(&e);
+                // OmniRig's own reason for a refused dial (#161: the rig file has no command for
+                // the VFO the radio is on). The rigctld answer only says RPRT -1.
+                let omni_why = (!silent)
+                    .then(|| self.rigctld_proc.as_ref().and_then(CatDaemon::omni))
+                    .flatten()
+                    .and_then(crate::omnirig::OmniDaemon::dial_refusal);
+                let brief = omni_why
+                    .clone()
+                    .unwrap_or_else(|| dial_failure_brief(&e).to_string());
                 self.dial_fail_count += 1;
                 if self.dial_fail_count < DIAL_SET_MAX_TRIES {
                     let tries = format!("({}/{DIAL_SET_MAX_TRIES})", self.dial_fail_count);
@@ -7666,10 +7674,7 @@ impl RadioLoop {
                         still_on.unwrap_or_default()
                     )
                 } else {
-                    format!(
-                        "the radio refused {mhz:.4} MHz — it does not cover that frequency{}",
-                        still_on.unwrap_or_default()
-                    )
+                    refused_dial_words(mhz, omni_why.as_deref(), &still_on.unwrap_or_default())
                 })
             }
         }
@@ -19131,6 +19136,17 @@ fn alias_for(
     Some(first)
 }
 
+/// The give-up sentence for a dial the radio refused. `why` is the backend's own reason when it
+/// has one (OmniRig's, #161); without it the refusal is read as the radio not covering the dial.
+fn refused_dial_words(mhz: f64, why: Option<&str>, still_on: &str) -> String {
+    match why {
+        Some(why) => format!("the radio refused {mhz:.4} MHz — {why}{still_on}"),
+        None => {
+            format!("the radio refused {mhz:.4} MHz — it does not cover that frequency{still_on}")
+        }
+    }
+}
+
 fn dial_failure_brief(e: &std::io::Error) -> &'static str {
     use std::io::ErrorKind::*;
     if crate::rig::cat_unreachable(e) {
@@ -22498,6 +22514,23 @@ mod tests {
         // A silent daemon adds nothing at all: no trailing "Hamlib said:" with an empty tail.
         assert_eq!(with_daemon_error(ours.clone(), &[]), ours);
         assert_eq!(with_daemon_error(ours.clone(), &["   ".to_string()]), ours);
+    }
+
+    /// #161: OmniRig's reason for a refused dial is the sentence, not "does not cover".
+    #[test]
+    fn a_refused_dial_says_omnirigs_reason_when_there_is_one() {
+        let why = crate::omnirig::NO_DIAL_COMMAND;
+        let s = refused_dial_words(7.074, Some(why), "; still on 14.0740 MHz");
+        assert!(
+            s.contains(why) && s.ends_with("still on 14.0740 MHz"),
+            "{s}"
+        );
+        assert!(!s.contains("does not cover"), "{s}");
+        // CONTROL: no reason keeps the coverage sentence.
+        assert_eq!(
+            refused_dial_words(144.39, None, ""),
+            "the radio refused 144.3900 MHz — it does not cover that frequency"
+        );
     }
 
     /// #165: a radio model (an FTDX10) on Connection Network at 127.0.0.1:4532, where the

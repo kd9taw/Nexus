@@ -695,8 +695,10 @@ pub fn fst4_band_plan() -> Vec<BandChannel> {
 }
 
 /// FST4W beacon frequencies: WSJT-X's whole FST4W table, row for row (#184). Source: WSJT-X
-/// `models/FrequencyList.cpp` at commit d679c9345 (github.com/WSJTX/wsjtx), the `Modes::FST4W`
-/// rows at lines 60, 66, 69, 107, 148, 187, 229, 270, 277, 286, 293, 306-307, 317 and 330. 14
+/// release v3.0.2 (github.com/WSJTX/wsjtx, the WSJT development team's own repository),
+/// `models/FrequencyList.cpp`, the `Modes::FST4W` rows at lines 60, 66, 69, 107, 148, 187, 229,
+/// 270, 277, 286, 293, 306-307, 317 and 330. The HF/VHF rows came in with WSJT-X 3.0 (commit
+/// 2506a3e1e); 2.7.0 and the SourceForge-era mirrors of it carry only the first three. 14
 /// frequencies; WSJT-X lists 50.293 twice (Regions 2 and 3 only) and 70.091 for Region 1 only,
 /// which the notes say. Every dial is shared with WSPR ([`wspr_band_plan`]) except 160 m (1.8368
 /// against WSPR's 1.8366). Listing a channel is not a permission: the transmit gate judges each.

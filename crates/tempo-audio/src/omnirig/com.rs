@@ -62,6 +62,7 @@ struct RigIds {
     /// `WriteableParams` and `Vfo`, for which frequency property a set writes (issue #161).
     /// Optional for the same reason: a server without them keeps the plain `Freq` read and write.
     writeable: Option<i32>,
+    readable: Option<i32>,
     vfo: Option<i32>,
     mode: i32,
     tx: i32,
@@ -76,6 +77,9 @@ pub struct OmniRigCom {
     rig: IDispatch,
     ids: RigIds,
     slot: RigSlot,
+    /// The one VFO-A selection [`super::pin_vfo_a`] calls for is still to be made: set at connect
+    /// when the rig file cannot read the VFO, cleared once it is sent (#161).
+    vfo_pin_pending: std::cell::Cell<bool>,
     /// LAST field on purpose — `CoUninitialize` must run after both interfaces are released.
     _apartment: Apartment,
 }
@@ -261,18 +265,34 @@ impl OmniRigCom {
             freq_a: dispid(&rig, "FreqA").ok(),
             freq_b: dispid(&rig, "FreqB").ok(),
             writeable: dispid(&rig, "WriteableParams").ok(),
+            readable: dispid(&rig, "ReadableParams").ok(),
             vfo: dispid(&rig, "Vfo").ok(),
             mode: dispid(&rig, "Mode")?,
             tx: dispid(&rig, "Tx")?,
             split: dispid(&rig, "Split")?,
         };
-        Ok(OmniRigCom {
+        let com = OmniRigCom {
             _server: server,
             rig,
             ids,
             slot,
+            vfo_pin_pending: std::cell::Cell::new(false),
             _apartment: apartment,
-        })
+        };
+        // #161: WSJT-X selects VFO A once at start on a rig file that cannot read the VFO
+        // (`super::pin_vfo_a`). Decided here, at connect, from the rig file's params; SENT here
+        // only if OmniRig already has the radio online, else before the first dial write, which
+        // is behind the online gate. Nexus does not wait at connect for OmniRig's first poll.
+        let pin = super::pin_vfo_a(
+            com.read_opt(com.ids.vfo, "the VFO selection"),
+            com.read_opt(com.ids.readable, "the readable parameters"),
+            com.read_opt(com.ids.writeable, "the writable parameters"),
+        );
+        com.vfo_pin_pending.set(pin);
+        if pin && com.status().is_ok_and(|(st, _)| st.online()) {
+            com.pin_vfo_a_if_pending();
+        }
+        Ok(com)
     }
 
     fn get_i32(&self, id: i32, what: &str) -> Result<i32, OmniError> {
@@ -282,6 +302,17 @@ impl OmniRigCom {
     /// An optional property's value, `None` when it is absent or would not read.
     fn read_opt(&self, id: Option<i32>, what: &str) -> Option<i32> {
         id.and_then(|id| self.get_i32(id, what).ok())
+    }
+
+    /// Send the one VFO-A selection if it is still pending (see `vfo_pin_pending`). A failed put is
+    /// not retried: the dial write that follows then refuses or lands as it would have.
+    fn pin_vfo_a_if_pending(&self) {
+        if !self.vfo_pin_pending.replace(false) {
+            return;
+        }
+        if let Some(id) = self.ids.vfo {
+            let _ = put_prop_i32(&self.rig, id, param::PM_VFOA, "the VFO selection");
+        }
     }
 
     /// Is the radio receiving on VFO B, per OmniRig's `Vfo`? Unreadable is A.
@@ -325,7 +356,7 @@ impl OmniRigClient for OmniRigCom {
         // A property that cannot be READ is the same as one that is not there: try the next.
         let a = self.read_opt(self.ids.freq_a, "VFO A's frequency");
         let b = self.read_opt(self.ids.freq_b, "VFO B's frequency");
-        let (first, second) = if self.on_vfo_b() { (b, a) } else { (a, b) };
+        let (first, second) = super::dial_read_order(self.on_vfo_b(), a, b);
         super::pick_dial_hz(
             self.read_opt(Some(self.ids.freq), "the dial frequency"),
             first,
@@ -354,21 +385,21 @@ impl OmniRigClient for OmniRigCom {
                 "{hz} Hz is outside the range OmniRig can carry (its dial is a 32-bit Hz value)"
             ))
         })?;
+        // Only reached behind the backend's online gate, so this is where a VFO-A selection that
+        // could not be sent at connect goes out, before the write it is for.
+        self.pin_vfo_a_if_pending();
         let writeable = self.read_opt(self.ids.writeable, "the writable parameters");
-        let (id, what) = match super::pick_dial_write(writeable, self.on_vfo_b()) {
-            Some(super::DialWrite::Freq) => (Some(self.ids.freq), "the dial frequency"),
-            Some(super::DialWrite::FreqA) => (self.ids.freq_a, "VFO A's frequency"),
-            Some(super::DialWrite::FreqB) => (self.ids.freq_b, "VFO B's frequency"),
-            None => (None, ""),
+        let ids = super::DialIds {
+            freq: self.ids.freq,
+            freq_a: self.ids.freq_a,
+            freq_b: self.ids.freq_b,
         };
-        let Some(id) = id else {
-            return Err(OmniError::Com(
-                "OmniRig's rig file for this radio has no command to set the frequency of the \
-                 VFO the radio is on"
-                    .to_string(),
-            ));
+        let Some(id) = super::pick_dial_write(writeable, self.on_vfo_b())
+            .and_then(|choice| super::dial_write_id(choice, ids))
+        else {
+            return Err(OmniError::RigFileCannot(super::NO_DIAL_COMMAND.to_string()));
         };
-        put_prop_i32(&self.rig, id, v, what)
+        put_prop_i32(&self.rig, id, v, "the dial frequency")
     }
 
     fn mode(&self) -> Result<Option<OmniMode>, OmniError> {
