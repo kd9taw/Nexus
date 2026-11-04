@@ -132,3 +132,127 @@ fn a_parked_band_rx_row_still_dedupes_against_a_band_only_restatement() {
         (1, 0)
     );
 }
+
+// ---- Adopted from the third data-integrity review: the reverse direction, one file in both
+// orders, a confirmation by either band, and which held row an upgrade lands on.
+
+const HDR: &str = "<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:6>010000";
+const SAT_BANDONLY: &str = "<MODE:2>FM<BAND:2>2m<FREQ:7>145.850<PROP_MODE:3>SAT<SAT_NAME:5>SO-50";
+const SAT_PARKED: &str =
+    "<MODE:2>FM<BAND:2>2m<BAND_RX:4>70cm<FREQ:7>145.850<PROP_MODE:3>SAT<SAT_NAME:5>SO-50";
+const SAT_MAPPED: &str = "<MODE:2>FM<BAND:2>2m<BAND_RX:4>70cm<FREQ:7>145.850<FREQ_RX:7>436.795\
+<PROP_MODE:3>SAT<SAT_NAME:5>SO-50";
+
+fn held(body: &str) -> QsoRecord {
+    let mut r = parse_adif(&format!("<EOH>\n{HDR}{body}<EOR>\n")).remove(0);
+    r.when_unix = T;
+    r
+}
+fn one(body: &str) -> String {
+    format!("<EOH>\n{HDR}{body}<EOR>\n")
+}
+
+#[test]
+fn an_incoming_row_with_a_parked_band_rx_dedupes_against_a_held_band_only_row() {
+    assert_eq!(
+        reimport_adds(vec![held(SAT_BANDONLY)], &one(SAT_PARKED)),
+        (0, 1),
+        "satellite"
+    );
+    assert_eq!(
+        reimport_adds(
+            vec![held("<BAND:3>20m<MODE:3>SSB<FREQ:6>14.250")],
+            &one("<BAND:3>20m<BAND_RX:3>40m<MODE:3>SSB<FREQ:6>14.250")
+        ),
+        (0, 1),
+        "terrestrial stray BAND_RX"
+    );
+    // A TQSL-shaped restatement the reader maps onto its downlink is still the held row another
+    // logger wrote with its uplink as BAND.
+    assert_eq!(
+        reimport_adds(vec![held(SAT_BANDONLY)], &one(SAT_MAPPED)),
+        (0, 1),
+        "mapped"
+    );
+    // CONTROL: a different band is a different contact.
+    assert_eq!(
+        reimport_adds(
+            vec![held("<BAND:3>20m<MODE:3>SSB")],
+            &one("<BAND:3>15m<MODE:3>SSB")
+        ),
+        (1, 0)
+    );
+}
+
+#[test]
+fn one_file_holding_both_shapes_of_a_contact_adds_it_once_in_either_order() {
+    for (first, second) in [(SAT_PARKED, SAT_BANDONLY), (SAT_BANDONLY, SAT_PARKED)] {
+        let t = format!("<EOH>\n{HDR}{first}<EOR>\n{HDR}{second}<EOR>\n");
+        let mut lb = Logbook::new();
+        let (added, skipped, _) = lb.import_adif(&t);
+        assert_eq!(
+            (added.len(), skipped, lb.records().len()),
+            (1, 1, 1),
+            "{first} then {second}"
+        );
+    }
+}
+
+#[test]
+fn an_upgrade_lands_on_the_held_row_that_is_on_that_band_not_on_a_twin() {
+    // Two held rows, same call, second and mode: a satellite row with a parked BAND_RX (counted on
+    // 70cm, known on 2m too) and a real 2m simplex contact. A 2m confirmation is the 2m contact's.
+    let mut lb = Logbook::new();
+    lb.add(held(SAT_PARKED));
+    lb.add(held("<MODE:2>FM<BAND:2>2m<FREQ:7>146.520"));
+    let (added, skipped, merged) =
+        lb.import_adif(&one("<MODE:2>FM<BAND:2>2m<FREQ:7>146.520<QSL_RCVD:1>Y"));
+    assert_eq!((added.len(), skipped, merged), (0, 1, 1));
+    let real = lb
+        .records()
+        .iter()
+        .find(|r| r.extra.is_empty())
+        .unwrap()
+        .clone();
+    let twin = lb
+        .records()
+        .iter()
+        .find(|r| !r.extra.is_empty())
+        .unwrap()
+        .clone();
+    assert!(real.qsl_rcvd.card, "the 2m contact took it");
+    assert!(!twin.qsl_rcvd.card, "the satellite row did not");
+}
+
+fn report(body: &str) -> Vec<QsoRecord> {
+    parse_adif(&format!("<EOH>\n{HDR}{body}<QSL_RCVD:1>Y<EOR>\n"))
+}
+
+#[test]
+fn a_confirmation_finds_its_contact_by_either_band_it_is_known_by() {
+    use tempo_core::reconcile::reconcile;
+    let mut log = vec![held("<BAND:3>20m<BAND_RX:3>40m<MODE:3>SSB<FREQ:6>14.250")];
+    assert_eq!(
+        reconcile(&mut log, &report("<BAND:3>20m<MODE:3>SSB")).matched,
+        1,
+        "stray BAND_RX"
+    );
+    for body in [
+        "<MODE:2>FM<BAND:2>2m<BAND_RX:4>70cm<PROP_MODE:3>SAT<SAT_NAME:5>SO-50",
+        SAT_MAPPED,
+    ] {
+        let mut log = vec![held(SAT_BANDONLY)];
+        assert_eq!(reconcile(&mut log, &report(body)).matched, 1, "{body}");
+    }
+    // CONTROLS: a plain row still matches its plain report, and another band does not.
+    let mut log = vec![held("<BAND:3>20m<MODE:3>SSB<FREQ:6>14.250")];
+    assert_eq!(
+        reconcile(&mut log, &report("<BAND:3>20M<MODE:3>USB")).matched,
+        1
+    );
+    let mut log = vec![held("<BAND:3>20m<MODE:3>SSB")];
+    assert_eq!(
+        reconcile(&mut log, &report("<BAND:3>40m<MODE:3>SSB")).matched,
+        0
+    );
+}

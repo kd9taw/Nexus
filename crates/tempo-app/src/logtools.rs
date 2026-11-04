@@ -1133,10 +1133,12 @@ pub fn problems_of(
                 by_freq.map(|b| Some(b.to_string())),
             );
         } else if let Some(b) = by_freq.filter(|b| !same_band(b, judged_band.trim())) {
+            // No fix that changes nothing: on a row whose parked BAND_RX the frequencies disagree
+            // with, the band the frequency names can be the band the row already has.
             add(
                 ProblemKind::BandFreq,
                 Some(Field::Band),
-                (!confirmed).then(|| Some(b.to_string())),
+                (!confirmed && !same_band(b, r.band.trim())).then(|| Some(b.to_string())),
             );
         }
     }

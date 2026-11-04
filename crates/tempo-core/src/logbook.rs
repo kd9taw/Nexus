@@ -1480,9 +1480,12 @@ impl Logbook {
             std::collections::HashMap::with_capacity(self.records.len());
         for (i, r) in self.records.iter().enumerate() {
             held.entry(dedup_key(r)).or_insert(i);
-            // A row whose parked BAND_RX makes its counted band differ from its band is found
-            // by either: a restatement mapped onto BAND_RX, or one carrying BAND alone (#163).
-            if let Some(k) = band_twin_key(r) {
+        }
+        // …then under the other bands a row is known by ([`known_bands`], #163): the BAND of a
+        // row whose BAND_RX is parked, the transmit band of a mapped cross-band one. In a pass of
+        // their own, so a row's own key always wins over another row's twin.
+        for (i, r) in self.records.iter().enumerate() {
+            for k in twin_keys(r) {
                 held.entry(k).or_insert(i);
             }
         }
@@ -1512,9 +1515,13 @@ impl Logbook {
                 k
             });
             let key = dedup_key(&rec);
+            let twins = twin_keys(&rec);
             let hit = legacy_twin
                 .and_then(|t| held.get(&t).copied())
-                .or_else(|| held.get(&key).copied());
+                .or_else(|| held.get(&key).copied())
+                // The incoming row by every other band it is known by too: the same contact
+                // whichever side carries the parked BAND_RX, or the mapped cross-band pair.
+                .or_else(|| twins.iter().find_map(|t| held.get(t).copied()));
             match hit {
                 Some(_) if !upgrade => skipped += 1,
                 Some(i) => {
@@ -1546,7 +1553,7 @@ impl Logbook {
                     held_ids.insert(id);
                     rec.id = Some(id);
                     prepare(&mut rec);
-                    if let Some(k) = band_twin_key(&rec) {
+                    for k in twins {
                         held.entry(k).or_insert(self.records.len());
                     }
                     held.insert(key, self.records.len());
@@ -4566,16 +4573,19 @@ fn dedup_key(r: &QsoRecord) -> DedupKey {
     )
 }
 
-/// [`dedup_key`] on the record's own BAND, when that differs from the band it is counted on (a
-/// parked BAND_RX, [`counted_band`]) — the second key such a row is found by, so a restatement
-/// that carries BAND alone (another logger's export without BAND_RX) is the same contact too.
-fn band_twin_key(r: &QsoRecord) -> Option<DedupKey> {
-    let mut k = dedup_key(r);
-    let band = r.band.to_ascii_lowercase();
-    (k.1 != band).then(|| {
-        k.1 = band;
-        k
-    })
+/// [`dedup_key`] under each band in [`known_bands`] other than the one it is counted on — the
+/// other keys a row is found by, and looks for its twin by.
+fn twin_keys(r: &QsoRecord) -> Vec<DedupKey> {
+    let own = dedup_key(r);
+    known_bands(r)
+        .into_iter()
+        .filter(|b| *b != own.1)
+        .map(|b| {
+            let mut k = own.clone();
+            k.1 = b;
+            k
+        })
+        .collect()
 }
 
 /// Canonical mode SPELLING for [`dedup_key`] — the sideband names USB and LSB are
@@ -5587,6 +5597,26 @@ pub fn counted_band(r: &QsoRecord) -> &str {
         .iter()
         .find(|(k, v)| k == "BAND_RX" && !v.trim().is_empty())
         .map_or(r.band.as_str(), |(_, v)| v.trim())
+}
+
+/// #163: every band a contact is the same contact on, lower-cased, the band it is counted on
+/// ([`counted_band`]) first: also its own BAND when a parked BAND_RX makes the two differ, and the
+/// transmit band of a cross-band record ([`cross_band_tx_band`]: a satellite contact, or another
+/// logger's TQSL-shaped row mapped onto its downlink) — the band a source that writes BAND alone
+/// gives it. Dedup and reconcile both find a contact by any of these, in either direction, as they
+/// found it by its one BAND before BAND_RX was read.
+pub fn known_bands(r: &QsoRecord) -> Vec<String> {
+    let mut bands = vec![counted_band(r).to_ascii_lowercase()];
+    let mut push = |b: String| {
+        if !bands.contains(&b) {
+            bands.push(b);
+        }
+    };
+    push(r.band.trim().to_ascii_lowercase());
+    if let Some(tx) = cross_band_tx_band(r) {
+        push(tx.to_ascii_lowercase());
+    }
+    bands
 }
 
 /// #163: undo a cross-band leg split on a contact that is no longer a satellite one — FREQ back

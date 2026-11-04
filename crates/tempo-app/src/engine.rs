@@ -55367,6 +55367,19 @@ mod tests {
         // CONTROL: FREQ off its band, with no receive leg, is still a mismatch.
         let wrong = parse("<MODE:3>SSB<BAND:3>40m<FREQ:6>14.250");
         assert_eq!(band_freq(&wrong), 1);
+
+        // A parked BAND_RX whose FREQ_RX disagrees with it is a real inconsistency and is flagged,
+        // but never with a "fix" that sets the band it already has.
+        let mut odd = parse("<MODE:2>FM<BAND:2>2m<FREQ:7>145.850<FREQ_RX:7>145.900");
+        odd.extra.push(("BAND_RX".into(), "70cm".into()));
+        let mut o = odd.clone();
+        o.id = Some(tempo_core::logbook::Minter::default().mint());
+        let fixes: Vec<_> = crate::logtools::problems_of(&o, &|_, _| None, now_unix_secs())
+            .into_iter()
+            .filter(|p| p.kind == crate::logtools::ProblemKind::BandFreq)
+            .map(|p| p.fix.map(|c| c.value))
+            .collect();
+        assert_eq!(fixes, vec![None], "flagged, with no no-op fix: {fixes:?}");
     }
 
     /// #451: the SSTV screen's own tune never arms Phone's Enable-TX latch; the operator's pick of

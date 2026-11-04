@@ -300,18 +300,38 @@ fn pair_report_by<R: Borrow<QsoRecord>>(
     incoming: &[QsoRecord],
     admits: impl Fn(usize, usize) -> bool,
 ) -> Vec<Option<usize>> {
-    let buckets = build_buckets(local);
+    // #163: every contact under each band it is known by ([`crate::logbook::known_bands`]: the
+    // band it is counted on, its own BAND under a parked BAND_RX, the transmit band of a
+    // cross-band pair), and each row looked up by each of its own — so a confirmation finds its
+    // contact whichever side carries BAND_RX, as it found it by its one BAND before BAND_RX was
+    // read.
+    let mut buckets: HashMap<Key, Vec<usize>> = HashMap::new();
+    for (i, r) in local.iter().enumerate() {
+        let (call, _, mc, day) = key(r.borrow());
+        for band in crate::logbook::known_bands(r.borrow()) {
+            buckets
+                .entry((call.clone(), band, mc, day))
+                .or_default()
+                .push(i);
+        }
+    }
     let mut candidates = Vec::new();
     for (j, inc) in incoming.iter().enumerate() {
-        let (call, band, mc, day) = key(inc);
-        for d in [day.wrapping_sub(1), day, day + 1] {
-            let Some(bucket) = buckets.get(&(call.clone(), band.clone(), mc, d)) else {
-                continue;
-            };
-            for &i in bucket {
-                if let Some(near) = closeness(local[i].borrow(), inc) {
-                    if admits(i, j) {
-                        candidates.push((near, j, i));
+        let (call, _, mc, day) = key(inc);
+        let mut seen = std::collections::HashSet::new();
+        for band in crate::logbook::known_bands(inc) {
+            for d in [day.wrapping_sub(1), day, day + 1] {
+                let Some(bucket) = buckets.get(&(call.clone(), band.clone(), mc, d)) else {
+                    continue;
+                };
+                for &i in bucket {
+                    if !seen.insert(i) {
+                        continue;
+                    }
+                    if let Some(near) = closeness(local[i].borrow(), inc) {
+                        if admits(i, j) {
+                            candidates.push((near, j, i));
+                        }
                     }
                 }
             }
