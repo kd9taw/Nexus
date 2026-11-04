@@ -1131,6 +1131,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           // scroll solid black for all of it, which field reports (2026-08-17) read as a dead
           // waterfall. See the prop's doc in Waterfall.tsx.
           transmitting={snap?.radio.transmitting ?? false}
+          passbandHz={snap?.radio.filterWidthHz ?? null}
+          passbandMode={snap?.radio.rigMode || snap?.radio.sideband}
           // #230: our OWN keyed state — `radio.transmitting` is the slot-TX indicator and stays
           // false through an RTTY over, including a latched one.
           // …and a TUNE carrier holds it just the same: the backend's hold is

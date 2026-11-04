@@ -496,6 +496,22 @@ export const DIGITAL_WATERFALL_RANGE: 'parked' | 'auto' = 'parked'
 export const WF_FLATTEN_SEGMENTS = 16
 
 /**
+ * The audio range `flattenRow`'s baseline is FITTED over, Hz: 0–4000, the row it was designed and
+ * measured on. Bins above it (the row reaches 5000 Hz) are flattened with the top segment's anchor,
+ * held flat, and decide nothing.
+ *
+ * ⚠️ WHY THE FIT DID NOT GROW WITH THE ROW. The dead-segment rule measures a segment against the
+ * MEDIAN of all sixteen, so it holds only while most of the fitted span is live passband. Over
+ * 0–4000 a 2.4 kHz SSB filter is 60 % live; over 0–5000 it is 48 %, the median lands in the
+ * stopband, the stopband stops counting as dead, and the baseline ramps across the cliff.
+ * Measured on a modelled 2.4 kHz filter (`waterfall.span.test.ts`): its 40 dB stopband came out
+ * 29.8 dB deep fitted over 0–5000, against 39.9 over 0–4000 — the filter edge washing out exactly
+ * where the wider row was meant to show it. Fitting the same 0–4000 keeps every bin below 4000 Hz
+ * flattened exactly as before (pinned against the unwidened row) and the stopband 39.8 dB deep.
+ */
+export const WF_FLATTEN_FIT_HZ = 4000
+
+/**
  * Percentile of each segment taken as that segment's noise level. WSJT-X's `npct`
  * (`flat4.f90:13`), and the whole reason a baseline can be fitted through a band full of
  * stations: a rank statistic this low is unmoved until a segment is >90% occupied, where a mean
@@ -599,24 +615,27 @@ export const WF_FLATTEN_MAX_DB = 10
  * Non-finite bins are ignored when estimating and passed through unchanged; a row too short to
  * segment, or one with no live segment at all, is copied through untouched.
  */
-export function flattenRow(row: ArrayLike<number>, out: Float32Array): void {
+export function flattenRow(row: ArrayLike<number>, out: Float32Array, fitBins?: number): void {
   const n = Math.min(row.length, out.length)
+  // The bins the baseline is FITTED over (see `WF_FLATTEN_FIT_HZ`); every bin past them takes the
+  // last segment's anchor, the flat hold step 4 already gives a row's outer edge.
+  const nFit = fitBins != null && fitBins > 0 ? Math.min(n, Math.floor(fitBins)) : n
   const nseg = WF_FLATTEN_SEGMENTS
   const copy = () => {
     for (let i = 0; i < n; i++) out[i] = row[i]
   }
   // Too short to estimate 16 percentiles worth believing (8 samples each) — pass it through.
-  if (n < nseg * 8) {
+  if (nFit < nseg * 8) {
     copy()
     return
   }
-  const segLen = n / nseg
+  const segLen = nFit / nseg
   const anchors = new Float64Array(nseg)
   const centers = new Float64Array(nseg)
   const scratch = new Float64Array(Math.ceil(2 * segLen) + 2)
   const live: boolean[] = new Array(nseg).fill(false)
   const segLo = (g: number) => Math.round(g * segLen)
-  const segHi = (g: number) => (g === nseg - 1 ? n : Math.round((g + 1) * segLen))
+  const segHi = (g: number) => (g === nseg - 1 ? nFit : Math.round((g + 1) * segLen))
   /** The `WF_FLATTEN_PCT` percentile of the finite bins in `[ia, ib)`, or NaN if there are none. */
   const anchorOver = (ia: number, ib: number): number => {
     let m = 0
@@ -665,7 +684,7 @@ export function flattenRow(row: ArrayLike<number>, out: Float32Array): void {
   for (let g = 0; g < nseg; g++) {
     if (!live[g]) continue
     const ia = g > 0 && live[g - 1] ? Math.round((g - 0.5) * segLen) : segLo(g)
-    const ib = g < nseg - 1 && live[g + 1] ? Math.min(n, Math.round((g + 1.5) * segLen)) : segHi(g)
+    const ib = g < nseg - 1 && live[g + 1] ? Math.min(nFit, Math.round((g + 1.5) * segLen)) : segHi(g)
     const a = anchorOver(ia, ib)
     if (Number.isFinite(a)) anchors[g] = a
   }
@@ -884,17 +903,25 @@ export function themeColormap(theme: string): ColormapName {
   }
 }
 
-/** Audio passband shown on the waterfall (matches the engine's 4 kHz spectrum span, so
- * stations calling above ~2.9 kHz are visible + clickable, not off the top edge). */
+/** Audio passband shown on the waterfall (matches the engine's 0–5000 Hz spectrum row,
+ * `SPECTRUM_HI_HZ`, so stations calling above ~2.9 kHz are visible + clickable, not off the top
+ * edge, and the radio's filter and the stopband above it show in Full).
+ *
+ * It was 4000. The row now reaches 5000 Hz at the same 7.8 Hz bins, the reach of the reference FT
+ * program's wide graph, so every Full view (the waterfalls', CW's and Phone's) does too. DISPLAY
+ * ONLY: the FT TX/RX offsets stay inside the engine's own 200–4000 Hz bounds (`tx_offset_bounds`),
+ * which did not move — a click above 4000 Hz is clamped there exactly as it always was. Above
+ * about 4500 Hz the picture also shows the capture path's anti-alias roll-off (the same 4.5 kHz
+ * filter every decoder's input has), not only the radio's. */
 export const WF_F_MIN = 200
-export const WF_F_MAX = 4000
+export const WF_F_MAX = 5000
 /** The default resting view: the WSJT-X-familiar 0–3 kHz window. FT8/FT4 (and RTTY/SSTV)
  * activity clusters here, so the wider 200–4000 passband made the default view feel sparse;
  * the top of the band stays one click away via the "Full" option. */
 export const WF_STD_HI = 3000
 
 /** A zoom view window for the waterfall. `spanHz === 0` → the default "Std" 0–3 kHz view
- * (a FIXED window, not RX-centered); `spanHz < 0` or ≥ the full passband → "Full" 0–4 kHz;
+ * (a FIXED window, not RX-centered); `spanHz < 0` or ≥ the full passband → "Full" 0–5 kHz;
  * any positive value → a `spanHz`-wide window centered on `centerHz`, clamped inside the
  * passband so it never runs off either edge (the displaced half is taken from the other). */
 export function zoomRange(centerHz: number, spanHz: number): { lo: number; hi: number } {
@@ -1183,13 +1210,22 @@ export function cwScopeWindow(
 }
 
 /** The CW audio scope's span chips. `filter` is `cwScopeWindow` — the rig's filter plus its skirt,
- *  centred on the pitch — and stays the default: it is the zero-beating view. `std` and `full` are the
- *  waterfalls' own fixed Std (200–3000 Hz) and Full (200–4000 Hz) views, for seeing the band. */
+ *  centred on the pitch — the zero-beating view. `std` and `full` are the waterfalls' own fixed Std
+ *  (200–3000 Hz) and Full (200–5000 Hz) views, for seeing the band.
+ *
+ *  ⭐ STD IS THE DEFAULT (operator decision, 2026-11-03; Filter was the default before). Every
+ *  audio view opens on the mode's useful audio range, never on the radio's filter: the filter is
+ *  drawn as edges on that range (PhoneScope's passband box), and the Filter chip stays for
+ *  zero-beating. */
 export const CW_AUDIO_SPANS = ['filter', 'std', 'full'] as const
 export type CwAudioSpan = (typeof CW_AUDIO_SPANS)[number]
-/** A stored CW span, or Filter for anything else (missing, blocked, stale, foreign). */
+/** A stored CW span, or Std for anything else (missing, blocked, stale, foreign).
+ *
+ *  A STORED `filter` IS KEPT. The chip is written only when the operator presses one (never on
+ *  open), so a stored `filter` is somebody's choice, not a default that was saved; it is honoured
+ *  like any other pick. Only a window that never pressed a chip opens at Std. */
 export function coerceCwAudioSpan(v: string | null): CwAudioSpan {
-  return CW_AUDIO_SPANS.find((x) => x === v) ?? 'filter'
+  return CW_AUDIO_SPANS.find((x) => x === v) ?? 'std'
 }
 /** The audio window the CW scope shows at a span. */
 export function cwAudioView(
@@ -1203,7 +1239,7 @@ export function cwAudioView(
 }
 
 /** Waterfall view options for the picker. 0 = the default "Std" 0–3 kHz view (WSJT-X-like);
- * -1 = "Full" 0–4 kHz; the rest are `spanHz`-wide windows zoomed around the RX marker. */
+ * -1 = "Full" 0–5 kHz; the rest are `spanHz`-wide windows zoomed around the RX marker. */
 export const WATERFALL_ZOOMS: { value: number; label: string }[] = [
   { value: 0, label: 'Std' },
   { value: -1, label: 'Full' },
@@ -1213,9 +1249,9 @@ export const WATERFALL_ZOOMS: { value: number; label: string }[] = [
   { value: 600, label: '600 Hz' },
 ]
 
-/** The RTTY waterfall's span buttons. The audio row the waterfall draws spans 0–4000 Hz (512
+/** The RTTY waterfall's span buttons. The audio row the waterfall draws spans 0–5000 Hz (640
  *  bins, 7.8 Hz each), so no span wider than that exists to offer: the buttons run 1 and 2 kHz
- *  windows round the decoder, then the 200–3000 Hz Std view and the 200–4000 Hz Full view, labelled
+ *  windows round the decoder, then the 200–3000 Hz Std view and the 200–5000 Hz Full view, labelled
  *  by the edge each reaches. Every value is one of `WATERFALL_ZOOMS`, so a button and the zoom
  *  select (the other surfaces) persist the same span under the same key. `widthHz` is the window
  *  each shows. */
@@ -1223,7 +1259,7 @@ export const RTTY_WATERFALL_SPANS: { value: number; label: string; widthHz: numb
   { value: 1000, label: '1k', widthHz: 1000 },
   { value: 2000, label: '2k', widthHz: 2000 },
   { value: 0, label: '3k', widthHz: WF_STD_HI - WF_F_MIN },
-  { value: -1, label: '4k', widthHz: WF_F_MAX - WF_F_MIN },
+  { value: -1, label: '5k', widthHz: WF_F_MAX - WF_F_MIN },
 ]
 
 /** The RTTY waterfall's speed buttons: milliseconds per drawn row (the `rowMs` prop). Fast is the

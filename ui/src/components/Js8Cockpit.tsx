@@ -1720,6 +1720,8 @@ export function Js8Cockpit({
           theme={theme}
           active={active}
           transmitting={snap?.radio.transmitting ?? false}
+          passbandHz={snap?.radio.filterWidthHz ?? null}
+          passbandMode={snap?.radio.rigMode || snap?.radio.sideband}
           // #230: JS8 paints no dark band either, so its held picture says so — including
           // under a tune carrier, which holds it the same way (see RttyCockpit's note).
           keyed={sending || (snap?.radio.tuning ?? false)}

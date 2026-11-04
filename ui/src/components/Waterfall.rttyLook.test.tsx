@@ -227,13 +227,13 @@ describe('the span buttons', () => {
     expect(localStorage.getItem('nexus.waterfall.rtty.zoom')).toBe('1000')
     // 1 kHz round the decoder at 1500: 1000–2000 Hz, so 1600 Hz is 60 % across.
     expect(leftOf()).toBeCloseTo(60, 6)
-    fireEvent.click(btn('4k'))
+    fireEvent.click(btn('5k'))
     expect(localStorage.getItem('nexus.waterfall.rtty.zoom')).toBe('-1')
-    expect(leftOf()).toBeCloseTo((1400 / 3800) * 100, 6)
+    expect(leftOf()).toBeCloseTo((1400 / 4800) * 100, 6)
     cleanup()
     render(<Waterfall {...base} spanChoices={RTTY_WATERFALL_SPANS} zoomKey="nexus.waterfall.rtty.zoom" tags={[tag]} />)
-    expect(screen.getByRole('button', { name: '4k' }).getAttribute('aria-pressed')).toBe('true')
-    expect(leftOf()).toBeCloseTo((1400 / 3800) * 100, 6)
+    expect(screen.getByRole('button', { name: '5k' }).getAttribute('aria-pressed')).toBe('true')
+    expect(leftOf()).toBeCloseTo((1400 / 4800) * 100, 6)
   })
 
   it('every button value is one the zoom select also offers (one persisted vocabulary)', async () => {

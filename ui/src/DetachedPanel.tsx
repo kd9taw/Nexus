@@ -696,6 +696,8 @@ function DetachedPanelBody({ panel }: { panel: string }) {
       <DetachedShell className="detached-waterfall">
         <Waterfall
           transmitting={snap?.radio.transmitting ?? false}
+          passbandHz={snap?.radio.filterWidthHz ?? null}
+          passbandMode={snap?.radio.rigMode || snap?.radio.sideband}
           rxOffsetHz={snap?.radio.rxOffsetHz ?? 1500}
           txOffsetHz={snap?.radio.txOffsetHz ?? 1500}
           theme={theme}

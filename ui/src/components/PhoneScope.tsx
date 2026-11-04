@@ -69,6 +69,7 @@ import {
   keyStepHz,
   notchOnAxis,
   passbandOnAxis,
+  noiseFloorWindowHz,
   stepPassband,
   widthForEdge,
   type AxisKind,
@@ -844,7 +845,26 @@ export function PhoneScope({
       // row the rig's SSB stopband is a 40 dB cliff across a sixth of the row and more, which drags
       // a mean far below the passband noise and lights the whole passband — the bright slab above,
       // by another road. The median is what that header measures as barely moved by it.
-      const floor = agcRange(visible, WF_FLOOR_PCT).floor
+      //
+      // ⭐ ON AN AUDIO ROW THE MEDIAN IS TAKEN INSIDE THE RADIO'S PASSBAND when one is reported and in
+      // view (`noiseFloorWindowHz`): a window wider than the filter is mostly its stopband, and the
+      // median of that is the stopband's level, not the receiver's noise. A native RF row has no
+      // stopband and keeps the window.
+      let floorBins: ArrayLike<number> = visible
+      if (!isRfScopeSource(src)) {
+        const pb = passbandOnAxis(axisKind(false), passbandRef.current ?? 0)
+        const fw = noiseFloorWindowHz({ lo: winLo, hi: winHi }, pb, view.mirrored, (8 * span) / nb)
+        if (fw.lo !== winLo || fw.hi !== winHi) {
+          const fLo = Math.max(0, Math.floor(((fw.lo - rowLo) / span) * (nb - 1)))
+          const fHi = Math.min(nb, Math.ceil(((fw.hi - rowLo) / span) * (nb - 1)) + 1)
+          if (fHi - fLo >= 8) {
+            const sub = new Float64Array(fHi - fLo)
+            for (let i = 0; i < sub.length; i++) sub[i] = row[fLo + i]
+            floorBins = sub
+          }
+        }
+      }
+      const floor = agcRange(floorBins, WF_FLOOR_PCT).floor
       // Frozen while keyed, same reason as the FT waterfall: the muted receiver drags the
       // noise estimate to digital silence and key-up clamps the panel until the EMA recovers.
       if (!txRef.current) {
