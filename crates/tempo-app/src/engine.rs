@@ -11385,6 +11385,28 @@ impl Engine {
         self.sstv_tune_with_arming(dial_mhz, band, mode, true);
     }
 
+    /// The SSTV screen's own tune on opening (#451, Settings ▸ Digital ▸ SSTV ▸ tune to the band's
+    /// SSTV frequency when SSTV opens): [`Self::sstv_tune`] — Phone claimed, the FM hold — but the
+    /// APP's tune, not the operator's, and one that never arms Phone's Enable-TX latch. It declares machinery
+    /// provenance ([`Self::machinery_tune`]'s), so the channel never enters the per-(band, mode)
+    /// dial memory and the operator's own dial it displaces is banked: with the switch on, every
+    /// visit would otherwise have written 14.230 over their 20 m Phone dial.
+    ///
+    /// Refused — false, nothing tuned — while a satellite pass owns the dial (Doppler steers it,
+    /// and a retune here would end the pass's hold) and for the ISS downlink, which is a
+    /// receive-only space channel and never "this band's" SSTV frequency.
+    pub fn sstv_tune_on_open(&mut self, dial_mhz: f64, band: &str, mode: &str) -> bool {
+        let iss = crate::bandplan::sstv_band_plan()
+            .iter()
+            .any(|c| c.band == "2m" && (c.dial_mhz - dial_mhz).abs() < 0.0015);
+        if self.sat_dial_owner.is_some() || iss {
+            return false;
+        }
+        // Never the Enable-TX latch: a tune the app makes on its own arms nothing.
+        self.sstv_tune_as(dial_mhz, band, mode, false, DialOrigin::Machinery);
+        true
+    }
+
     /// [`Self::sstv_tune`], arming Phone's Enable-TX latch on the way in only with `arm_manual`:
     /// a computer driving this station passes false, as Remote's entry does.
     pub fn sstv_tune_with_arming(
@@ -11394,6 +11416,19 @@ impl Engine {
         mode: &str,
         arm_manual: bool,
     ) {
+        self.sstv_tune_as(dial_mhz, band, mode, arm_manual, DialOrigin::Operator);
+    }
+
+    /// The body of [`Self::sstv_tune_with_arming`] and [`Self::sstv_tune_on_open`], which differ
+    /// only in who the dial is declared to belong to.
+    fn sstv_tune_as(
+        &mut self,
+        dial_mhz: f64,
+        band: &str,
+        mode: &str,
+        arm_manual: bool,
+        origin: DialOrigin,
+    ) {
         self.set_operating_mode_with_arming("phone", false, arm_manual);
         // An FM channel is held in FM below, so the pick routes on FM: the radio it lands on is
         // the one then commanded FM, as a repeater tune's is. It routed on Phone's own class and,
@@ -11402,7 +11437,7 @@ impl Engine {
         if mode.eq_ignore_ascii_case("fm") && dial_mhz >= 29.0 {
             self.route_intent = Some(crate::settings::RouteMode::Fm);
         }
-        self.set_frequency(dial_mhz, band, mode);
+        self.tune_dial(dial_mhz, band, mode, origin);
         // A cockpit sideband override describes the section being LEFT, not this channel
         // (work_spot's rule) — without this a stale Phone-cockpit FM pick would key FM
         // onto an SSB image frequency.
@@ -43584,6 +43619,66 @@ mod tests {
             "Phone returns to the operator's 14.240, NOT the 14.225 segment default — got {}",
             e.settings().dial_mhz
         );
+    }
+
+    /// #451: OPENING SSTV WITH "TUNE ON OPEN" IS THE APP'S TUNE, NOT THE OPERATOR'S. With the
+    /// switch on, every visit to the SSTV screen tunes 14.230; through `sstv_tune` (the operator's
+    /// own pick) that wrote 14.230 into Phone's 20 m memory, and a Phone → SSTV → CW → Phone trip
+    /// came back on 14.230 instead of the operator's 14.250. The open-path verb declares
+    /// machinery provenance: the operator's dial is banked and 14.230 never is.
+    #[test]
+    fn the_sstv_open_tune_never_takes_the_operators_phone_dial() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(14.250, "20m", "USB"); // the operator's own SSB dial
+        assert!(
+            e.sstv_tune_on_open(14.230, "20m", "USB"),
+            "the open tune ran"
+        );
+        assert!(
+            (e.settings().dial_mhz - 14.230).abs() < 1e-9,
+            "and SSTV is on its channel"
+        );
+        e.set_operating_mode("cw", true);
+        e.set_operating_mode("phone", true);
+        assert!(
+            (e.settings().dial_mhz - 14.250).abs() < 1e-9,
+            "Phone returns to the operator's 14.250, not SSTV's 14.230 — got {}",
+            e.settings().dial_mhz
+        );
+
+        // CONTROL: the operator's own pick of the same channel IS theirs, as it always was.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(14.250, "20m", "USB");
+        e.sstv_tune(14.230, "20m", "USB");
+        e.set_operating_mode("cw", true);
+        e.set_operating_mode("phone", true);
+        assert!((e.settings().dial_mhz - 14.230).abs() < 1e-9);
+    }
+
+    /// #451: the open tune never parks on the ISS downlink and never moves a dial a satellite pass
+    /// owns (Doppler steers it, and an operator-path retune would end the pass's hold).
+    #[test]
+    fn the_sstv_open_tune_refuses_the_iss_downlink_and_a_pass_owned_dial() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_frequency(146.520, "2m", "FM");
+        assert!(
+            !e.sstv_tune_on_open(145.800, "2m", "FM"),
+            "never the ISS downlink"
+        );
+        assert!((e.settings().dial_mhz - 146.520).abs() < 1e-9);
+
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_frequency(14.074, "20m", "USB");
+        e.sat_dial_owner = Some(("SO-50".into(), 0));
+        assert!(
+            !e.sstv_tune_on_open(14.230, "20m", "USB"),
+            "not while a pass owns the dial"
+        );
+        assert!((e.settings().dial_mhz - 14.074).abs() < 1e-9);
     }
 
     #[test]

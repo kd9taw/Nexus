@@ -3113,6 +3113,17 @@ export async function sstvTune(
   return invoke<AppSnapshot>('sstv_tune', { dialMhz, band, mode })
 }
 
+/** #451: the SSTV screen's own tune on opening — `sstvTune` as the APP's tune, so the channel is
+ * never remembered as the operator's Phone dial (theirs is banked). The engine refuses the ISS
+ * downlink and a dial a satellite pass owns, and then tunes nothing. */
+export async function sstvTuneOnOpen(
+  dialMhz: number,
+  band: string,
+  mode: string,
+): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('sstv_tune_on_open', { dialMhz, band, mode })
+}
+
 /** Park the dial on one of the APP's OWN fixed channels (the ISS SSTV auto-arm's 145.800 FM).
  * An FM channel is held in FM, as the SSTV strip's pick of it is, and routed on FM, as a
  * repeater tune is (neither while a satellite pass owns the dial). The per-(band, mode) dial

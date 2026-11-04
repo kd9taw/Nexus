@@ -5,8 +5,10 @@
 // Opening SSTV leaves the dial where the last screen had it (FT8 at 14.074, CW at 14.030), and
 // the screen says where images appear and offers the channel in its band picker. With Settings ▸
 // Digital ▸ SSTV ▸ "Tune to the band's SSTV frequency when SSTV opens" on (it is OFF by default),
-// each entry to the screen also tunes there, through the same call a pick in the band picker
-// makes: the band's own SSTV channel, or 20 m's when the band has none and the radio is on HF.
+// each entry to the screen also tunes there, through `sstvTuneOnOpen`: the band picker's claim of
+// Phone and QSY, declared the app's tune so the operator's own Phone dial is never overwritten
+// (the engine's test pins that). The band's own SSTV channel, or 20 m's when the band has none and
+// the radio is on HF.
 //
 // What it must NOT do: move the dial with the option off; move a dial already on an SSTV
 // channel (an overflow, the ISS downlink the pass auto-arm parked on); move it while the radio is
@@ -117,6 +119,12 @@ describe('which channel the screen tunes to on opening', () => {
     expect(sstvChannelOnOpen(PLAN, 145.8)).toBeNull()
   })
 
+  it('never the ISS downlink: 2 m is left alone — simplex, FT8, a Doppler-shifted downlink', () => {
+    expect(sstvChannelOnOpen(PLAN, 146.52)).toBeNull()
+    expect(sstvChannelOnOpen(PLAN, 144.174)).toBeNull()
+    expect(sstvChannelOnOpen(PLAN, 145.8034)).toBeNull()
+  })
+
   it('nothing on a VHF/UHF band with no SSTV channel, and nothing with no plan', () => {
     expect(sstvChannelOnOpen(PLAN, 432.1)).toBeNull()
     expect(sstvChannelOnOpen([], 14.074)).toBeNull()
@@ -124,26 +132,26 @@ describe('which channel the screen tunes to on opening', () => {
 })
 
 describe('the SSTV screen opening with the option', () => {
-  it('tunes once on entry, through the band picker’s own call, when the option is on', async () => {
+  it('tunes once on entry, through the app’s own open tune, when the option is on', async () => {
     const onSetFrequency = vi.fn()
-    const { rerender } = render(<SstvView snap={snapAt(14.074)} active tuneOnOpen onSetFrequency={onSetFrequency} />)
+    const { rerender } = render(<SstvView snap={snapAt(14.074)} active tuneOnOpen onTuneOnOpen={onSetFrequency} />)
     await settle()
     expect(onSetFrequency).toHaveBeenCalledTimes(1)
     expect(onSetFrequency).toHaveBeenCalledWith(14.23, '20m', 'USB')
     // The same visit: a poll, a re-render, the dial not yet reported moved — no second tune.
-    rerender(<SstvView snap={snapAt(14.074)} active tuneOnOpen onSetFrequency={onSetFrequency} />)
+    rerender(<SstvView snap={snapAt(14.074)} active tuneOnOpen onTuneOnOpen={onSetFrequency} />)
     await settle()
     expect(onSetFrequency).toHaveBeenCalledTimes(1)
   })
 
   it('tunes again on the next entry', async () => {
     const onSetFrequency = vi.fn()
-    const { rerender } = render(<SstvView snap={snapAt(14.074)} active tuneOnOpen onSetFrequency={onSetFrequency} />)
+    const { rerender } = render(<SstvView snap={snapAt(14.074)} active tuneOnOpen onTuneOnOpen={onSetFrequency} />)
     await settle()
-    rerender(<SstvView snap={snapAt(7.074)} active={false} tuneOnOpen onSetFrequency={onSetFrequency} />)
+    rerender(<SstvView snap={snapAt(7.074)} active={false} tuneOnOpen onTuneOnOpen={onSetFrequency} />)
     await settle()
     expect(onSetFrequency, 'not while hidden').toHaveBeenCalledTimes(1)
-    rerender(<SstvView snap={snapAt(7.074)} active tuneOnOpen onSetFrequency={onSetFrequency} />)
+    rerender(<SstvView snap={snapAt(7.074)} active tuneOnOpen onTuneOnOpen={onSetFrequency} />)
     await settle()
     expect(onSetFrequency).toHaveBeenCalledTimes(2)
     expect(onSetFrequency).toHaveBeenLastCalledWith(7.171, '40m', 'LSB')
@@ -151,38 +159,38 @@ describe('the SSTV screen opening with the option', () => {
 
   it('does nothing with the option off — the default', async () => {
     const onSetFrequency = vi.fn()
-    render(<SstvView snap={snapAt(14.074)} active onSetFrequency={onSetFrequency} />)
+    render(<SstvView snap={snapAt(14.074)} active onTuneOnOpen={onSetFrequency} />)
     await settle()
-    render(<SstvView snap={snapAt(14.074)} active tuneOnOpen={false} onSetFrequency={onSetFrequency} />)
+    render(<SstvView snap={snapAt(14.074)} active tuneOnOpen={false} onTuneOnOpen={onSetFrequency} />)
     await settle()
     expect(onSetFrequency).not.toHaveBeenCalled()
   })
 
   it('waits for the settings at startup, then tunes; switching it on during a visit waits for the next entry', async () => {
     const onSetFrequency = vi.fn()
-    const first = render(<SstvView snap={snapAt(14.074)} active tuneOnOpen={undefined} onSetFrequency={onSetFrequency} />)
+    const first = render(<SstvView snap={snapAt(14.074)} active tuneOnOpen={undefined} onTuneOnOpen={onSetFrequency} />)
     await settle()
     expect(onSetFrequency, 'the answer is not in yet').not.toHaveBeenCalled()
-    first.rerender(<SstvView snap={snapAt(14.074)} active tuneOnOpen onSetFrequency={onSetFrequency} />)
+    first.rerender(<SstvView snap={snapAt(14.074)} active tuneOnOpen onTuneOnOpen={onSetFrequency} />)
     await settle()
     expect(onSetFrequency).toHaveBeenCalledWith(14.23, '20m', 'USB')
     first.unmount()
 
     const later = vi.fn()
-    const { rerender } = render(<SstvView snap={snapAt(14.074)} active tuneOnOpen={false} onSetFrequency={later} />)
+    const { rerender } = render(<SstvView snap={snapAt(14.074)} active tuneOnOpen={false} onTuneOnOpen={later} />)
     await settle()
-    rerender(<SstvView snap={snapAt(14.074)} active tuneOnOpen onSetFrequency={later} />)
+    rerender(<SstvView snap={snapAt(14.074)} active tuneOnOpen onTuneOnOpen={later} />)
     await settle()
     expect(later, 'this visit opened with it off').not.toHaveBeenCalled()
-    rerender(<SstvView snap={snapAt(14.074)} active={false} tuneOnOpen onSetFrequency={later} />)
-    rerender(<SstvView snap={snapAt(14.074)} active tuneOnOpen onSetFrequency={later} />)
+    rerender(<SstvView snap={snapAt(14.074)} active={false} tuneOnOpen onTuneOnOpen={later} />)
+    rerender(<SstvView snap={snapAt(14.074)} active tuneOnOpen onTuneOnOpen={later} />)
     await settle()
     expect(later).toHaveBeenCalledTimes(1)
   })
 
   it('does nothing while the screen is hidden', async () => {
     const onSetFrequency = vi.fn()
-    render(<SstvView snap={snapAt(14.074)} active={false} tuneOnOpen onSetFrequency={onSetFrequency} />)
+    render(<SstvView snap={snapAt(14.074)} active={false} tuneOnOpen onTuneOnOpen={onSetFrequency} />)
     await settle()
     expect(onSetFrequency).not.toHaveBeenCalled()
   })
@@ -190,21 +198,31 @@ describe('the SSTV screen opening with the option', () => {
   it('does not move a radio that is transmitting or sending a tune carrier, and does not come back for it', async () => {
     const onSetFrequency = vi.fn()
     const { rerender } = render(
-      <SstvView snap={snapAt(14.074, { transmitting: true })} active tuneOnOpen onSetFrequency={onSetFrequency} />,
+      <SstvView snap={snapAt(14.074, { transmitting: true })} active tuneOnOpen onTuneOnOpen={onSetFrequency} />,
     )
     await settle()
-    rerender(<SstvView snap={snapAt(14.074)} active tuneOnOpen onSetFrequency={onSetFrequency} />)
+    rerender(<SstvView snap={snapAt(14.074)} active tuneOnOpen onTuneOnOpen={onSetFrequency} />)
     await settle()
     expect(onSetFrequency, 'the entry passed while the radio was keyed').not.toHaveBeenCalled()
-    rerender(<SstvView snap={snapAt(14.074, { tuning: true })} active={false} tuneOnOpen onSetFrequency={onSetFrequency} />)
-    rerender(<SstvView snap={snapAt(14.074, { tuning: true })} active tuneOnOpen onSetFrequency={onSetFrequency} />)
+    rerender(<SstvView snap={snapAt(14.074, { tuning: true })} active={false} tuneOnOpen onTuneOnOpen={onSetFrequency} />)
+    rerender(<SstvView snap={snapAt(14.074, { tuning: true })} active tuneOnOpen onTuneOnOpen={onSetFrequency} />)
     await settle()
     expect(onSetFrequency).not.toHaveBeenCalled()
   })
 
+  it('does not move a 2 m dial, wherever on 2 m it is', async () => {
+    for (const dial of [146.52, 144.174, 145.8034]) {
+      const onTuneOnOpen = vi.fn()
+      const { unmount } = render(<SstvView snap={snapAt(dial)} active tuneOnOpen onTuneOnOpen={onTuneOnOpen} />)
+      await settle()
+      expect(onTuneOnOpen, String(dial)).not.toHaveBeenCalled()
+      unmount()
+    }
+  })
+
   it('does not move a dial already on an SSTV channel', async () => {
     const onSetFrequency = vi.fn()
-    render(<SstvView snap={snapAt(14.236)} active tuneOnOpen onSetFrequency={onSetFrequency} />)
+    render(<SstvView snap={snapAt(14.236)} active tuneOnOpen onTuneOnOpen={onSetFrequency} />)
     await settle()
     expect(onSetFrequency).not.toHaveBeenCalled()
   })

@@ -28830,6 +28830,27 @@ fn sstv_tune(
     Ok(eng.snapshot())
 }
 
+/// The SSTV screen's tune on opening (#451, Settings ▸ Digital ▸ SSTV, off by default): the strip
+/// pick's claim of Phone and QSY, as the APP's tune — `Engine::sstv_tune_on_open` declares
+/// machinery provenance, so the channel never becomes the operator's remembered Phone dial, and
+/// it refuses the ISS downlink and a dial a satellite pass owns. It never arms Phone's Enable-TX
+/// latch, so it takes no `afar`. Persists like `sstv_tune`.
+#[tauri::command(async)]
+fn sstv_tune_on_open(
+    state: State<'_, SharedEngine>,
+    dial_mhz: f64,
+    band: String,
+    mode: String,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    if eng.sstv_tune_on_open(dial_mhz, &band, &mode) {
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: failed to persist frequency: {e}")
+        });
+    }
+    Ok(eng.snapshot())
+}
+
 /// Park the dial on one of the APP's OWN fixed channels — the ISS SSTV auto-arm's 145.800 FM.
 /// An FM channel is held in FM, as the SSTV strip's pick of it is, and routed on FM, as a
 /// repeater tune is (`Engine::tune_channel`; neither while a satellite pass owns the dial). The
@@ -49777,6 +49798,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         dxcc_entity_locations,
         set_frequency,
         sstv_tune,
+        sstv_tune_on_open,
         pick_band,
         tune_channel,
         set_operating_mode,

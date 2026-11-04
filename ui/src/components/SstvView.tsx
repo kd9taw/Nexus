@@ -205,8 +205,11 @@ interface Props {
   active?: boolean
   /** QSY to a band-plan channel (the shared App setFrequency path). */
   onSetFrequency?: (dialMhz: number, band: string, mode: string) => void
+  /** The app's own tune on opening (`sstvTuneOnOpen`: machinery provenance, so the channel is
+   *  never remembered as the operator's Phone dial). Absent ⇒ no tune on opening. */
+  onTuneOnOpen?: (dialMhz: number, band: string, mode: string) => void
   /** Settings ▸ Digital ▸ SSTV ▸ tune to the band's SSTV frequency when SSTV opens (#451, default
-   *  off): each entry tunes to [`sstvChannelOnOpen`]'s channel through `onSetFrequency`. Undefined
+   *  off): each entry tunes to [`sstvChannelOnOpen`]'s channel through `onTuneOnOpen`. Undefined
    *  = not known yet (the settings still loading): an entry waits for the answer. */
   tuneOnOpen?: boolean
   /** Arm/disarm TX (WSJT-X "Enable Tx") — the header pill becomes the arm control, since the
@@ -426,7 +429,8 @@ export function sstvChannelForDial(plan: BandChannel[], dialMhz?: number): BandC
  * rows are a pick away in the band picker). A band with none (30 m), or a dial off the bands,
  * goes to 20 m's, the worldwide SSTV calling frequency — but only from HF: a VHF/UHF band with no
  * SSTV row is left alone, since 14.230 is not that band's frequency and the radio may not cover
- * it.
+ * it. 2 m is left alone too: its own row is the ISS downlink (145.800), which is never tuned
+ * here, and the engine refuses it and any dial a satellite pass owns (`sstv_tune_on_open`).
  *
  * Null when the dial is ALREADY on an SSTV channel — within [`ON_CHANNEL_MHZ`] of any plan row:
  * an overflow the operator picked, or 145.800 where the ISS pass auto-arm parked it. Opening the
@@ -437,6 +441,9 @@ export function sstvChannelOnOpen(plan: BandChannel[], dialMhz?: number): BandCh
   if (plan.some((c) => Math.abs(c.dialMhz - dialMhz) < ON_CHANNEL_MHZ)) return null
   const band = bandLabelForMhz(dialMhz)
   const own = band ? plan.find((c) => c.band === band) : undefined
+  // NEVER THE ISS DOWNLINK: 2 m's own row is 145.800, a receive-only space channel, and never
+  // where 2 m SSTV is. A band whose own row is a downlink is left alone, like one with none.
+  if (own && Math.abs(own.dialMhz - ISS_SSTV_MHZ) < ON_CHANNEL_MHZ) return null
   if (own) return own
   if (dialMhz >= HF_TOP_MHZ) return null
   return plan.find((c) => c.band === '20m') ?? null
@@ -608,7 +615,7 @@ function ReceivedThumb({entry}: {entry:SstvGalleryEntry}) {
  * receiver keeps listening while the operator is on another section.
  * txState=false: nothing here transmits.
  */
-export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, tuneOnOpen, onSetTxEnabled, wheelSensitivity, txModeDefault, txFskId, txPowerPct, panels, onOpenSettings, holdDataSubmode }: Props) {
+export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, onTuneOnOpen, tuneOnOpen, onSetTxEnabled, wheelSensitivity, txModeDefault, txFskId, txPowerPct, panels, onOpenSettings, holdDataSubmode }: Props) {
   // Deleting a received picture is permanent and it is the operator's only copy, so a browser may
   // do it only while the station advertises its gallery verb.
   // Panels (Phase 3): the RX canvas + the TX bar are pinned chrome (never panels); only the
@@ -747,8 +754,9 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // #451: TUNE TO THE BAND'S SSTV FREQUENCY ON ENTRY, when the operator has asked for it
   // (`tuneOnOpen`, off by default — opening a screen otherwise asserts nothing about the dial).
   // Once per entry, on the rising edge of `active` like the receiver's arm above, and decided
-  // the first time the plan and a snapshot are both in hand. Through `onSetFrequency`, the band
-  // picker's own call, so the rig lands exactly as a pick of that channel lands it.
+  // the first time the plan and a snapshot are both in hand. Through `onTuneOnOpen`: the band
+  // picker's own claim of Phone and QSY, so the rig lands as a pick of that channel lands it, but
+  // declared the app's tune, so the operator's own Phone dial is kept and this one never is.
   //
   // ⚠️ A radio transmitting or sending a tune carrier is never moved, and that entry is spent:
   // the screen does not come back and retune it when the carrier drops, minutes later, under an
@@ -763,7 +771,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     if (tuneEntry.current !== 'pending') return
     if (tuneOnOpen === undefined) return // the settings have not said yet
     // Off at entry: this visit is not one to tune on, even if the option is switched on during it.
-    if (!tuneOnOpen || !onSetFrequency) {
+    if (!tuneOnOpen || !onTuneOnOpen) {
       tuneEntry.current = 'done'
       return
     }
@@ -771,8 +779,8 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     tuneEntry.current = 'done'
     if (entryRadio.transmitting || entryRadio.tuning) return
     const to = sstvChannelOnOpen(plan, entryRadio.dialMhz)
-    if (to) onSetFrequency(to.dialMhz, to.band, to.mode)
-  }, [active, tuneOnOpen, onSetFrequency, plan, entryRadio])
+    if (to) onTuneOnOpen(to.dialMhz, to.band, to.mode)
+  }, [active, tuneOnOpen, onTuneOnOpen, plan, entryRadio])
 
   // Commit a typed dial from the shared header readout; rejects out-of-plan
   // frequencies with a toast (same as the other cockpits).
