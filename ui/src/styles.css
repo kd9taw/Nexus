@@ -1415,6 +1415,16 @@ button.nb-chip:hover {
   stroke-width: 1;
   stroke-dasharray: 3 3;
 }
+/* A stale reading (features/rotorLiveness): the last bearing the rotator reported, kept through a missed
+   poll or two, drawn in the dim ink so it does not read as live. */
+.rotor-needle.stale {
+  stroke: var(--text-dim);
+}
+.rotor-az.stale,
+.rotor-el.stale,
+.rotor-aim-off.stale {
+  color: var(--text-dim);
+}
 /* The station's bearing (line 2's call; RotorPane's header): told from the needle and the dashed target
    needle by its shape, dotted with a bug on the rim, and by its colour, the amber role in either theme.
    Drawn under both needles, and never a click's target, so a click on it slews as the rose does.
@@ -1525,6 +1535,21 @@ button.nb-chip:hover {
 .rotor-aim-point:hover {
   border-color: var(--accent);
 }
+/* The Moon's line (EME): where it stands, Follow / Stop following, the follow's state and the EME window with
+   line 2's station. Under the controls for the reason line 2 is: above them it would move ■ STOP. */
+.rotor-moon {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+.rotor-moon-at {
+  white-space: nowrap;
+}
+.rotor-moon-state,
+.rotor-moon-window {
+  color: var(--text-dim);
+}
 .rotor-hint {
   margin: 0;
   font-size: var(--fs-micro);
@@ -1585,6 +1610,7 @@ button.nb-chip:hover {
   grid-column: 2;
 }
 .dash-boxes .pane-body .rotor-aim,
+.dash-boxes .pane-body .rotor-moon,
 .dash-boxes .pane-body .rotor-slewing,
 .dash-boxes .pane-body .rotor-hint {
   grid-column: 1 / -1;

@@ -26,6 +26,8 @@ const G5500: RotatorState = { azDeg: 123, reading: 'position', elDeg: 45, elRang
 const api = vi.hoisted(() => ({
   readRotator: vi.fn((): Promise<number | null> => Promise.resolve(123)),
   readRotatorState: vi.fn((): Promise<RotatorState | null> => Promise.resolve(null)),
+  getMoonStatus: vi.fn(async () => null),
+  startMoonTrack: vi.fn(async () => ({ state: 'following', elevation: true, azDeg: null, elDeg: null })),
   pointRotator: vi.fn((..._args: number[]) => Promise.resolve()),
   pointRotatorElevation: vi.fn((..._args: number[]) => Promise.resolve()),
   pointRotatorAtCall: vi.fn((_call: string, _longPath?: boolean): Promise<PointedAt> => Promise.reject(new Error('unset'))),
@@ -193,6 +195,21 @@ describe('"N° off" on line 2: the short way round from the live heading to the 
     })
   }
 
+  it('while the reading is stale, "N° off" is drawn stale too: it is from the last reading, not a live one', async () => {
+    let n = 0
+    api.readRotatorState.mockImplementation(() =>
+      Promise.resolve(n++ === 0 ? { ...G5500, azDeg: 350 } : { azDeg: null, reading: 'notAnswering' }),
+    )
+    api.rotatorBearingToCall.mockImplementation(() => Promise.resolve(at(10)))
+    render(<RotorPane entryCall="EC1DD" />)
+    await waitFor(() => expect(off()?.textContent).toBe(t('rotor.pane.aim.off', { deg: 20 })))
+    // The control: live, it is not stale.
+    expect(off()!.classList.contains('stale')).toBe(false)
+    await waitFor(() => expect(document.querySelector('.rotor-az.stale')).not.toBeNull(), { timeout: 4_000 })
+    expect(off()!.classList.contains('stale')).toBe(true)
+    expect(off()!.getAttribute('title')).toBe(t('rotor.pane.stale'))
+  })
+
   it('from the two whole numbers the pane shows, so the three agree: 350°T and 10° read 20° off, not 21', async () => {
     api.readRotatorState.mockImplementation(() => Promise.resolve({ ...G5500, azDeg: 349.6 }))
     api.rotatorBearingToCall.mockImplementation(() => Promise.resolve(at(10.4)))
@@ -217,8 +234,10 @@ describe('"N° off" on line 2: the short way round from the live heading to the 
       await waitFor(() => expect(line()?.getAttribute('transform')).toBe('rotate(227.4 74 74)'))
       expect(screen.queryByText('—°T')).not.toBeNull()
       expect(off()).toBeNull()
-      // Nor anywhere else on line 2: the call, the bearing and distance, and Point.
-      expect(document.querySelector('.rotor-aim')!.textContent).toBe('→ EC1DD 227° (1531 km)' + t('rotor.pane.aim.point.label'))
+      // Nor anywhere else on line 2: the call, the bearing and distance, Point, and LP (#338).
+      expect(document.querySelector('.rotor-aim')!.textContent).toBe(
+        '→ EC1DD 227° (1531 km)' + t('rotor.pane.aim.point.label') + 'LP',
+      )
     })
   }
 })

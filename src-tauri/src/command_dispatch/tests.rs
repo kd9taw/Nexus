@@ -235,8 +235,10 @@ fn a_shack_only_command_is_refused_at_both_ends() {
     // The operator's rulings of 2026-10-07 by name: a settings restore and a factory reset, a
     // whole-log purge and the Connections log stay at the shack. The clock's repair waits on an
     // administrator prompt on the shack's own screen. A whole run's undo can delete as much of the
-    // log as a purge (an import's undo), so it stays at the shack with it.
+    // log as a purge (an import's undo), so it stays at the shack with it. Following the Moon turns
+    // the mast on its own for hours, with nobody from afar bound to it, so it starts at the shack.
     for name in [
+        "start_moon_track",
         "import_settings_bundle",
         "reset_settings",
         "purge_log",
