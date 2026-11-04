@@ -112,6 +112,8 @@ mod cw_whole_message_tests;
 pub mod decoder_screens;
 mod field_day_display;
 /// WSJT-X's mid-over message switch for FT8 and FT4 (`m_restart`).
+/// The FT modes' TX drive, remembered per band and mode and brought back between overs.
+mod ft_drive;
 /// When an FT8/FT4 contact is logged by itself, offered in the confirm popup, or left for Log QSO.
 #[cfg(test)]
 mod ft_log_offer_tests;
@@ -4720,6 +4722,9 @@ pub struct Engine {
     /// Until when the radio loop holds the key on a deadline of its own — a voice-keyer message
     /// or an APRS frame it is still playing — see [`Self::observe_loop_tx_hold`]. `None` = none.
     loop_tx_hold_until: Option<Instant>,
+    /// The band, FT mode and radio the FT drive last settled on ([`Self::settle_ft_drive`]):
+    /// `None` until the first radio-loop tick, and while the station is on no FT mode.
+    ft_drive_at: Option<ft_drive::FtDriveSlot>,
     /// The turn the app takes to change a saved key a notice can ask about — see
     /// [`Self::key_changes`].
     key_changes: Arc<Mutex<()>>,
@@ -7506,6 +7511,7 @@ impl Engine {
             rig_keyed: false,
             cw_keying_until: None,
             loop_tx_hold_until: None,
+            ft_drive_at: None,
             key_changes: Arc::default(),
             rig_tx_swr: None,
             swr_over_count: 0,
@@ -22685,6 +22691,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// profile (`get_settings` mirrors it into the flat fields every save is built on, and
     /// `update_radio_profile` mirrors it into the fields the radio loop reads), so a profile left
     /// at the old drive was the drive the next save of anything put back over this one.
+    ///
+    /// On an FT mode it is also remembered for the band and mode, and brought back there
+    /// (`engine/ft_drive.rs`). This is the operator's own pick and the memory's one writer; a
+    /// restore goes around it.
     pub fn set_tx_level(&mut self, level: f32) {
         let level = level.clamp(0.0, 1.0);
         self.settings.tx_level = level;
@@ -22692,6 +22702,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if let Some(p) = self.settings.radios.iter_mut().find(|p| p.id == active) {
             p.tx_level = level;
         }
+        self.remember_ft_drive(level);
     }
 
     /// Set the MSK144 T/R period (s) — the cockpit's narrow write. Clamped to the mode's

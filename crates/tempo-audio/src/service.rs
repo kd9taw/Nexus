@@ -8417,6 +8417,18 @@ impl RadioLoop {
                 // mutable take_* calls that follow don't fight the settings borrow. APRS forces
                 // simplex here (see `fm_repeater_config`) so a beacon never keys through a shift.
                 let fm = eng.fm_repeater_config();
+                // The FT drive last used on this band and mode comes back here, BEFORE `want` is
+                // read, so the level reaches the backend this tick, ahead of any key below. Never
+                // while this loop holds the key (an over, a voice message, a tune carrier, the
+                // operator's PTT) or a radio handoff is not done: it waits for the first tick after
+                // the unkey (`tempo_app` `engine/ft_drive.rs`).
+                eng.settle_ft_drive(
+                    !can_retune
+                        || self.holds_tx()
+                        || self.voice_until_ms.is_some()
+                        || self.flex_voice_until_ms.is_some()
+                        || self.voice_tee_until_ms.is_some(),
+                );
                 let mut want = Transport::from_station(eng.settings(), eng.cat_share_port());
                 self.cat_port_configured.clone_from(&want.serial_port);
                 self.apply_port_alias(&mut want);
@@ -19919,6 +19931,7 @@ mod tests {
     mod failed_unkey;
     mod filter_width;
     mod flex_audio;
+    mod ft_drive;
     mod ft_midover;
     mod ft_residual;
     mod ft_streaming;
