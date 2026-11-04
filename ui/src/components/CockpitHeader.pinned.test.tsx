@@ -54,6 +54,26 @@ describe('a pinned cockpit header stays at the top of its shell', () => {
     })
   }
 
+  // ⊞ Panels' menu renders INSIDE the header. At the header's 4 the strip and the dock (4, later) painted
+  // over the open menu; while it is open the header stands at 5, and closed it is back at 4.
+  it('a menu open in a pinned header lifts it over the strip; closed, it is back under it; unpinned, never', async () => {
+    const head = mount('rtty-cockpit', true)
+    const flush = () => new Promise((r) => setTimeout(r, 0))
+    const pop = document.createElement('div')
+    pop.className = 'panels-menu-pop'
+    head.querySelector('.ch-identity')!.appendChild(pop)
+    await flush()
+    expect(head.getAttribute('data-menu'), 'the open menu was not seen').toBe('open')
+    expect(Number(css(head, 'z-index'))).toBe(5)
+    head.setAttribute('data-pin', 'off')
+    expect(css(head, 'z-index'), 'an unpinned header was lifted: a static flex item still stacks').toBe('auto')
+    head.setAttribute('data-pin', 'on')
+    pop.remove()
+    await flush()
+    expect(head.getAttribute('data-menu')).toBeNull()
+    expect(Number(css(head, 'z-index')), 'closed, the header must be back under the strip and the dock').toBe(4)
+  })
+
   it('the control: an unpinned header (FT, Phone, CW, JS8, JTTY) is not sticky', () => {
     const head = mount('cw-cockpit', false)
     expect(head.classList.contains('cockpit-header-pinned')).toBe(false)

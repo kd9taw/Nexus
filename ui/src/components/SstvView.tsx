@@ -1529,6 +1529,12 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   const ownStop = useRef(false)
   const sendImage = async () => {
     if (!packed || sending) return
+    // WHAT THESE PIXELS SAY, TAKEN WITH THEM. `packed` is the raster of the click; the affirmation
+    // that travels with it (below) and the preset calls it carries must be the same click's, not
+    // whatever a picture loaded during the awaits below has set since — a remembered card landing
+    // while the mode switch is pending would otherwise send THESE pixels with ITS tick.
+    const idCarried = idInImageRef.current || overlayCarriesId()
+    const overlayCalls = overlaysRef.current.flatMap((o) => (o.call ? [o.call] : []))
     // ⚠️ NO CALLSIGN, NO TRANSMISSION. The picture IS the identification here, so an
     // empty call is not a cosmetic gap. The backend refuses the same way and is the
     // authority — this is the half that says so before the operator clicks.
@@ -1617,8 +1623,8 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
         packed.width,
         packed.height,
         packed.slug,
-        idInImageRef.current || overlayCarriesId(),
-        overlaysRef.current.flatMap((o) => (o.call ? [o.call] : [])),
+        idCarried,
+        overlayCalls,
       )
     }, t('sstv.tx.send.failed')).then((s) => {
       if (s) {

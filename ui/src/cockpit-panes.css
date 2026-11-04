@@ -562,6 +562,15 @@
      1366×768 / 175 %); the extra pixel lies outside the scrollport, which clips it. */
   box-shadow: 0 calc(-1 * var(--space-4) - 1px) 0 var(--bg);
 }
+/* …LIFTED ONE STEP while a menu it opens is open (CockpitHeader `data-menu="open"`, ⊞ Panels): the
+   menu (z 70 inside the header's context) hung over the strip and the dock at the header's 4, and
+   half its items were under them. Pinned, the header's own box never overlaps the strip or the dock
+   (it pins only where all three fit), so the lift lets only the open menu paint over them, and only
+   while the operator has it open. BEFORE the unpinned rule below, at the same specificity, so an
+   unpinned header is never lifted (a static flex item's z-index still stacks). */
+.cockpit-header-pinned[data-menu='open'] {
+  z-index: 5;
+}
 /* …UNPINNED where the header, the strip and the dock do not all fit (see above). Static: it scrolls
    away with the scope, it parks over nothing, and the strip's top offset falls back to 0. */
 .cockpit-header-pinned[data-pin='off'] {

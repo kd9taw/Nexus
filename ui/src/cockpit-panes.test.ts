@@ -97,8 +97,9 @@ const STYLES_RULES = parseStylesRules(STYLES)
  *  attribute (`[data-cols=…]` or `[data-flow=…]`). Anything else — a descendant, a
  *  combinator, a second class, a tag, an id, a pseudo — is a specificity gradient, i.e.
  *  a future cascade war. */
-// `[data-pin='off']`: the pinned header's one state, written by the TX strip (CockpitTxStrip decidePin).
-const FLAT = /^\.[a-z][a-z0-9-]*(\[data-(cols='[123]'|flow='(stack|fill)'|pin='off')\])?$/
+// `[data-pin='off']`: the pinned header's one state, written by the TX strip (CockpitTxStrip decidePin);
+// `[data-menu='open']`: the pinned header while a menu it opens is open (CockpitHeader).
+const FLAT = /^\.[a-z][a-z0-9-]*(\[data-(cols='[123]'|flow='(stack|fill)'|pin='off'|menu='open')\])?$/
 
 /** (classes+attributes, ids) — flat rules are all (0,1,0) or (0,2,0). */
 function specificity(sel: string): number {
@@ -1018,6 +1019,15 @@ describe('panes are sized by the grid, never by themselves', () => {
     expect(/(?:^|;)\s*z-index\s*:\s*auto\s*(?:;|$)/.test(off[0].body), 'a static header at z 4 still paints over a dock').toBe(true)
     // It comes AFTER the pinned rule (same specificity, so source order decides).
     expect(RULES.indexOf(off[0])).toBeGreaterThan(RULES.indexOf(r[0]))
+    // THE MENU LIFT: one step over the strip and the dock while a menu the header opens is open, so the
+    // menu is never under them; and BEFORE the unpinned rule, so an unpinned header is never lifted.
+    const lift = RULES.filter((x) => x.selector === ".cockpit-header-pinned[data-menu='open']")
+    expect(lift.length, "no .cockpit-header-pinned[data-menu='open'] rule").toBe(1)
+    const liftZ = Number(/(?:^|;)\s*z-index\s*:\s*(-?\d+)/.exec(lift[0].body)![1])
+    expect(liftZ).toBeGreaterThan(z(RULES, '.cockpit-txstrip'))
+    expect(liftZ).toBeGreaterThan(z(RULES, '.cockpit-txdock'))
+    expect(RULES.indexOf(lift[0]), 'the lift would outrank the unpinned rule').toBeLessThan(RULES.indexOf(off[0]))
+    expect(RULES.indexOf(lift[0])).toBeGreaterThan(RULES.indexOf(r[0]))
     // Not a size: the header stays exactly as tall as what it holds (cockpit-header-crush.test.tsx).
     for (const p of ['height', 'min-height', 'max-height', 'flex', 'overflow', 'overflow-y']) expect(decl(p), p).toBeNull()
   })

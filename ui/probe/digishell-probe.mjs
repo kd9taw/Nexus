@@ -15,7 +15,14 @@
 //      pinned, which is that shell's own matter, not this probe's.)
 //   3. WHERE THE HEADER IS PINNED, ITS CONTROLS ARE ON SCREEN AT THE END of the scroll (#457), and the page itself
 //      never scrolls.
-// THE CONTROL, run every time: the header forced to stick on top (z 9) at 900×600 / 175 % must make check 1 fail.
+//   Checks 1 and 2 hold at the top, a quarter, half and three quarters of the way down, and at the end.
+//   4. THE ⊞ PANELS MENU, OPENED FROM THE HEADER at the top and at the end of the scroll: every item of it that is on
+//      screen is the topmost thing where it stands (a pinned header is a stacking context at the strip's and the
+//      dock's level, so its menu hung under them until the header lifts while it is open). Items below the window
+//      are printed, not failed (the menu is that tall at 175 % on a small window everywhere). CLOSED again, the
+//      header carries no lift and check 1 holds once more.
+// THE CONTROLS, run every time: the header forced to stick on top (z 9) at 900×600 / 175 % must make check 1 fail,
+// and the lift taken away (the header held at 4 with its menu open) at 1366×768 / 150 % on RTTY must make check 4 fail.
 //
 // exit: 0 every check held · 1 a red, or a control that could not fail · 2 the page never drew a screen
 import { createServer } from 'vite'
@@ -31,11 +38,13 @@ const STUB_SRC = join(UI, 'probe', 'waterfalls-api.ts')
 const STUB_API = join(UI, 'probe', '__digishell-api.ts')
 /** [window W, H, pinned UI scale or null for the app's own fit]. */
 const SIZES = [
-  [900, 600, '175'], [700, 800, '175'], [1366, 768, '175'], [1366, 768, '150'], [1920, 1080, '150'], [1200, 750, null],
+  [900, 600, '175'], [700, 800, '175'], [1024, 768, '175'], [1280, 720, '175'], [1366, 768, '175'], [1366, 768, '150'],
+  [1920, 1080, '150'], [1200, 750, null],
 ]
 const VIEWS = [['SSTV', 'sstv', 'main.sstv-view'], ['RTTY', 'rtty', 'main.rtty-cockpit'], ['PSK', 'psk', 'main.psk-cockpit']]
 const FEATURES = JSON.stringify({ profile: 'custom', enabled: { rtty: true, psk: true, sstv: true } })
 const PLANT = ".cockpit-header-pinned, .cockpit-header-pinned[data-pin='off'] { position: sticky !important; top: 0 !important; z-index: 9 !important }"
+const NO_LIFT = ".cockpit-header-pinned[data-menu='open'] { z-index: 4 !important }"
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const measure = (sel) => `(() => {
@@ -66,6 +75,8 @@ const measure = (sel) => `(() => {
       headReach: hc.filter((b) => { const a = at(b); return a.on && a.top }).length + '/' + hc.length,
     }
   }
+  const max = Math.max(0, shell.scrollHeight - shell.clientHeight)
+  const sweep = [0.25, 0.5, 0.75].map((f) => { shell.scrollTop = Math.round(max * f); return { at: Math.round(f * 100) + ' %', ...pos() } })
   shell.scrollTop = 0
   const top = pos()
   shell.scrollTop = shell.scrollHeight
@@ -77,8 +88,41 @@ const measure = (sel) => `(() => {
     pin: head.getAttribute('data-pin'),
     valve: Math.max(0, Math.round(shell.scrollHeight - shell.clientHeight)),
     page: Math.max(0, se.scrollHeight - se.clientHeight),
-    top, end,
+    top, end, sweep,
   }
+})()`
+
+/** Open ⊞ Panels from the header with the shell at `where` ('top' | 'end'), read every item, close it again. */
+const menuCheck = (sel, where) => `(async () => {
+  const shell = document.querySelector(${JSON.stringify(sel)})
+  const head = shell.querySelector(':scope > .cockpit-header')
+  const btn = head.querySelector('.panels-menu-btn')
+  if (!btn) return { none: true }
+  shell.scrollTop = ${JSON.stringify(where)} === 'end' ? shell.scrollHeight : 0
+  await new Promise((r) => setTimeout(r, 150))
+  btn.click()
+  await new Promise((r) => setTimeout(r, 300))
+  const pop = head.querySelector('.panels-menu-pop')
+  if (!pop) return { opened: false }
+  const items = [...pop.querySelectorAll('button, input, label')].filter((e) => e.getBoundingClientRect().height > 0)
+  const rows = items.map((b) => {
+    const q = b.getBoundingClientRect()
+    if (q.bottom > innerHeight + 0.5 || q.top < -0.5 || q.left + q.width / 2 < 0 || q.left + q.width / 2 > innerWidth) return 'off'
+    // Outside the shell's own scrollport the menu is CLIPPED by it (a header that has scrolled away
+    // opens its menu there), which is the shell's scroll, not a cover.
+    const sb = shell.getBoundingClientRect()
+    if (q.top + q.height / 2 < sb.top || q.top + q.height / 2 > sb.bottom) return 'clipped'
+    const t = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2)
+    if (t && (t === b || b.contains(t) || pop.contains(t))) return 'ok'
+    return t && t.closest('.cockpit-txstrip') ? 'strip' : t && t.closest('.cockpit-txdock, .sstv-tx-bar') ? 'dock' : 'other:' + (t ? String(t.className).split(' ')[0] || t.tagName : 'none')
+  })
+  const lifted = head.getAttribute('data-menu')
+  btn.click()
+  await new Promise((r) => setTimeout(r, 300))
+  const closedMenu = head.getAttribute('data-menu')
+  shell.scrollTop = 0
+  return { opened: true, n: rows.length, ok: rows.filter((r) => r === 'ok').length, off: rows.filter((r) => r === 'off').length,
+    clipped: rows.filter((r) => r === 'clipped').length, covered: rows.filter((r) => r !== 'ok' && r !== 'off' && r !== 'clipped'), lifted, closedMenu, pin: head.getAttribute('data-pin') }
 })()`
 
 // THE API SWAP — the waterfalls probe's, verbatim in shape.
@@ -117,7 +161,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function measureAt(route, sel, [W, H, scale], css = null) {
+async function measureAt(route, sel, [W, H, scale], css = null, menus = true) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -147,6 +191,12 @@ async function measureAt(route, sel, [W, H, scale], css = null) {
       if (last && JSON.stringify(m) === JSON.stringify(last)) break
       last = m
     }
+    if (menus) {
+      m.menuTop = await evaluate(menuCheck(sel, 'top'))
+      m.menuEnd = await evaluate(menuCheck(sel, 'end'))
+      // CLOSED AGAIN: the header must be back under the strip and the dock.
+      m.after = await evaluate(measure(sel))
+    }
     return m
   } finally {
     await browser.call('Target.closeTarget', { targetId })
@@ -157,9 +207,19 @@ const tagOf = ([W, H, s]) => `${W}×${H} ${s ? `${s} %` : 'fit'}`
 function reds(name, m) {
   const out = []
   if (m.page > 0) out.push(`${name}: the page scrolls ${m.page} px`)
-  for (const [where, p] of [['top', m.top], ['end', m.end]]) {
-    if (p.coveredByHeader.length) out.push(`${name}, scrolled to the ${where}: the header covers ${p.coveredByHeader.join(', ')}`)
-    if (p.stopsReachable.length === 0) out.push(`${name}, scrolled to the ${where}: no stop control reachable (${p.stops.join(', ') || 'none found'})`)
+  const positions = [['the top', m.top], ...m.sweep.map((p) => [p.at, p]), ['the end', m.end],
+    ...(m.after ? [['the top, the menu closed again', m.after.top], ['the end, the menu closed again', m.after.end]] : [])]
+  for (const [where, p] of positions) {
+    if (p.coveredByHeader.length) out.push(`${name}, scrolled to ${where}: the header covers ${p.coveredByHeader.join(', ')}`)
+    if (p.stopsReachable.length === 0) out.push(`${name}, scrolled to ${where}: no stop control reachable (${p.stops.join(', ') || 'none found'})`)
+  }
+  for (const [where, mc] of [['the top', m.menuTop], ['the end', m.menuEnd]]) {
+    if (!mc || mc.none) continue
+    if (!mc.opened) out.push(`${name}: ⊞ Panels did not open with the shell at ${where}`)
+    else {
+      if (mc.covered.length) out.push(`${name}, ⊞ Panels open at ${where}: ${mc.covered.length} of its items covered (${mc.covered.join(', ')})`)
+      if (mc.closedMenu != null) out.push(`${name}: ⊞ Panels closed, but the header still carries its lift`)
+    }
   }
   if (m.pin === 'on') {
     const [r, n] = m.end.headReach.split('/').map(Number)
@@ -184,17 +244,23 @@ try {
         throw new Error('no screen')
       }
       const info = (p) => `stops ${p.stopsReachable.join('+') || '—'}${p.coveredOther.length ? `, covered by other than the header: ${p.coveredOther.join(', ')}` : ''}`
-      console.log(`digishell-probe: ${name.padEnd(22)} header ${m.pin === 'on' ? 'pinned' : 'unpinned'} (${m.vp}), scrolls ${m.valve} px · top: ${info(m.top)} · end: ${info(m.end)}, header ${m.end.headReach}`)
+      const menu = (mc) => (mc?.opened ? `${mc.ok}/${mc.n} on screen and topmost${mc.off ? `, ${mc.off} outside the window` : ''}${mc.clipped ? `, ${mc.clipped} clipped by the scroll` : ''}` : 'not opened')
+      console.log(`digishell-probe: ${name.padEnd(22)} header ${m.pin === 'on' ? 'pinned' : 'unpinned'} (${m.vp}), scrolls ${m.valve} px · top: ${info(m.top)} · end: ${info(m.end)}, header ${m.end.headReach} · ⊞ Panels at top ${menu(m.menuTop)}, at end ${menu(m.menuEnd)}`)
       for (const r of reds(name, m)) red(r)
     }
   }
   // THE CONTROL.
   const size = [900, 600, '175']
-  const m = await measureAt('sstv', 'main.sstv-view', size, PLANT)
+  const m = await measureAt('sstv', 'main.sstv-view', size, PLANT, false)
   const caught = m ? reds(`SSTV at ${tagOf(size)} (planted)`, m).filter((r) => r.includes('the header covers')) : []
   if (caught.length === 0) red('CONTROL FAILED — a header forced to stick on top covered nothing the probe could see; check 1 cannot fail')
   else console.log(`digishell-probe: CONTROL — ${caught[0]} (caught)`)
-  if (code === 0) console.log('digishell-probe: PASS — no header covers a transmit control, a stop control is reachable at the top and the end of every screen at every size, a pinned header stays on screen, and the control was caught')
+  const size2 = [1366, 768, '150']
+  const m2 = await measureAt('rtty', 'main.rtty-cockpit', size2, NO_LIFT)
+  const caught2 = m2 ? reds(`RTTY at ${tagOf(size2)} (lift removed)`, m2).filter((r) => r.includes('items covered')) : []
+  if (caught2.length === 0) red('CONTROL FAILED — a header held under the strip with its menu open covered no item; check 4 cannot fail')
+  else console.log(`digishell-probe: CONTROL — ${caught2[0]} (caught)`)
+  if (code === 0) console.log('digishell-probe: PASS — no header covers a transmit control, a stop control is reachable at every scroll position of every screen at every size, a pinned header stays on screen, every on-screen item of an open ⊞ Panels menu is reachable, and both controls were caught')
   process.exitCode = process.exitCode || code
 } catch (e) {
   if (!process.exitCode) {
