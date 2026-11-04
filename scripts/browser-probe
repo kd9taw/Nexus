@@ -49,6 +49,14 @@ usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
        scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|logwaiting|topbar|header|rttyfit|firstrun|journeys|clublog|aprsmap|logbook|profiles
+       scripts/browser-probe --desktop-shard <n> <of>
+
+  --desktop-shard <n> <of>
+                        every --desktop scenario of shard <n> of <of>, one after another,
+                        exactly as the desktop-probes CI job runs them: a red does not stop
+                        the rest, and the end names every red. <of> 1 runs them all.
+                        DESKTOP_PROBE_ARTIFACTS=<dir> keeps each red scenario's log and the
+                        last picture of each of its pages there (a green one's are removed).
 
   --scenario <pattern>  matched against the suite's test NAMES (node --test
                         --test-name-pattern). Default 'stream'. The names are built
@@ -209,10 +217,20 @@ exit: 0 the scenario passed · 1 it failed · 2 usage, or the pattern matched no
 USAGE
 }
 
+# Every --desktop scenario, and the ONLY list that admits one: a name missing here is refused by
+# --desktop as well, so a new probe cannot be runnable by hand and missing from the desktop-probes CI
+# job, which deals this list round-robin over its shards with --desktop-shard. Slowest first, so the
+# deal balances (local seconds on 2026-11-04: topbar 96, waterfalls 92, logbook 67, header 62,
+# journeys 42, rttyfit 39, the rest 7-27); keep a new probe near its cost when you add it.
+DESKTOP_ALL=(topbar waterfalls logbook header journeys rttyfit profiles firstrun radiosetup contestlog
+  logwaiting spots atu radioswitch jtty activation clublog aprsmap callcard voicenote rotor contactcard txmeters)
+
 SCENARIO='stream'
 SHARD=''
 BUILD=1
 DESKTOP=''
+DSHARD=''
+DSHARDS=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --scenario) [ $# -ge 2 ] || { usage; exit 2; }; SCENARIO="$2"; shift 2 ;;
@@ -220,7 +238,10 @@ while [ $# -gt 0 ]; do
                 case "$SHARD" in 0|1) ;; *) echo "browser-probe: --shard takes 0 or 1 (CI runs two)" >&2; exit 2 ;; esac ;;
     --no-build) BUILD=0; shift ;;
     --desktop)  [ $# -ge 2 ] || { usage; exit 2; }; DESKTOP="$2"; shift 2
-                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|logwaiting|topbar|header|rttyfit|firstrun|journeys|clublog|aprsmap|logbook|profiles) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty, waterfalls, txmeters, radioswitch, radiosetup, logwaiting, topbar, header, rttyfit, firstrun, journeys, clublog, aprsmap, logbook or profiles" >&2; exit 2 ;; esac ;;
+                case " ${DESKTOP_ALL[*]} " in *" $DESKTOP "*) ;; *) echo "browser-probe: --desktop takes one of: ${DESKTOP_ALL[*]}" >&2; exit 2 ;; esac ;;
+    --desktop-shard) [ $# -ge 3 ] || { usage; exit 2; }; DSHARD="$2"; DSHARDS="$3"; shift 3
+                case "$DSHARD/$DSHARDS" in *[!0-9/]*|/*|*/) echo "browser-probe: --desktop-shard takes two numbers, <n> <of>" >&2; exit 2 ;; esac
+                [ "$DSHARDS" -ge 1 ] && [ "$DSHARD" -lt "$DSHARDS" ] || { echo "browser-probe: --desktop-shard $DSHARD $DSHARDS: need 0 <= n < of" >&2; exit 2; } ;;
     -h|--help)  usage; exit 0 ;;
     *)          echo "browser-probe: unknown argument '$1'" >&2; usage; exit 2 ;;
   esac
@@ -232,8 +253,54 @@ ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)" || {
 SUITE="$ROOT/remote/test/browser.test.mjs"
 [ -f "$SUITE" ] || { echo "browser-probe: cannot find $SUITE" >&2; exit 2; }
 
-command -v google-chrome >/dev/null 2>&1 || command -v google-chrome-stable >/dev/null 2>&1 || {
-  echo "browser-probe: no google-chrome on PATH — this probe drives a REAL browser" >&2; exit 2; }
+# CHROME_BIN is the Chrome every probe launches when it is set (remote/test/browser-runtime.mjs); CI
+# sets it to its pinned Chrome for Testing, and then that one must exist, not one on PATH.
+if [ -n "${CHROME_BIN:-}" ]; then
+  [ -x "$CHROME_BIN" ] || { echo "browser-probe: CHROME_BIN=$CHROME_BIN is not an executable" >&2; exit 2; }
+else
+  command -v google-chrome >/dev/null 2>&1 || command -v google-chrome-stable >/dev/null 2>&1 || {
+    echo "browser-probe: no google-chrome on PATH — this probe drives a REAL browser" >&2; exit 2; }
+fi
+
+# CI's desktop shard: this script once per scenario, in series (each probe starts its own Vite server
+# and Chrome, so two at once on a 4-core runner would race each other's frames). A red does not stop
+# the shard: the run must name every red scenario, not the first. Ten minutes each is six times the
+# slowest probe's local time; a probe past it is hung, and is ended (exit 124) so the rest still run.
+if [ -n "$DSHARD" ]; then
+  ART="${DESKTOP_PROBE_ARTIFACTS:-}"
+  [ -z "$ART" ] || mkdir -p "$ART" || exit 2
+  mine=()
+  for i in "${!DESKTOP_ALL[@]}"; do [ $((i % DSHARDS)) = "$DSHARD" ] && mine+=("${DESKTOP_ALL[$i]}"); done
+  [ ${#mine[@]} -gt 0 ] || { echo "browser-probe: desktop shard $DSHARD of $DSHARDS selects no scenario" >&2; exit 2; }
+  echo "browser-probe: desktop shard $DSHARD of $DSHARDS: ${#mine[@]} of ${#DESKTOP_ALL[@]} scenarios (${mine[*]}) against $("${CHROME_BIN:-google-chrome}" --version 2>/dev/null || echo Chrome)"
+  red=()
+  for s in "${mine[@]}"; do
+    t0=$SECONDS
+    echo "::group::browser-probe --desktop $s"
+    if [ -n "$ART" ]; then
+      # The pictures: browser-runtime.mjs captures every open page as the probe stops its Chrome.
+      mkdir -p "$ART/$s"
+      NEXUS_PROBE_SHOTS="$ART/$s" LOGBOOK_PROBE_SHOTS="$ART/$s" timeout 600 "$0" --desktop "$s" 2>&1 | tee "$ART/$s/probe.log"
+      rc=${PIPESTATUS[0]}
+    else
+      timeout 600 "$0" --desktop "$s"; rc=$?
+    fi
+    echo "::endgroup::"
+    if [ "$rc" = 0 ]; then
+      echo "browser-probe: $s passed in $((SECONDS - t0)) s"
+      [ -z "$ART" ] || rm -rf "${ART:?}/$s"
+    else
+      echo "::error::browser-probe --desktop $s went red (exit $rc) after $((SECONDS - t0)) s" >&2
+      red+=("$s")
+    fi
+  done
+  if [ ${#red[@]} -gt 0 ]; then
+    echo "browser-probe: desktop shard $DSHARD of $DSHARDS: ${#red[@]} of ${#mine[@]} RED: ${red[*]}" >&2
+    exit 1
+  fi
+  echo "browser-probe: desktop shard $DSHARD of $DSHARDS: PASS — all ${#mine[@]} scenarios, in $SECONDS s"
+  exit 0
+fi
 
 # A desktop box: the app's own source, served by its own Vite config, so there is nothing to build.
 if [ -n "$DESKTOP" ]; then
