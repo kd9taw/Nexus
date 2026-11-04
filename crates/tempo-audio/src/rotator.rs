@@ -306,9 +306,10 @@ pub fn mask_port(text: &str, port: &str) -> String {
     watch::mask_port(text, port)
 }
 
-/// How many answers in a row from the rotctld at `addr` said the controller behind it is not
-/// there (`RPRT -5` or `RPRT -6`): `0` once one did not, `None` when rotctld has answered nothing
-/// since [`forget_controller`]. rotctld not answering at all does not count either way.
+/// How many answers in a row from the rotctld at `addr` were `RPRT -6`, an I/O error on its port to
+/// the controller: `0` once one was any other answer, `None` when rotctld has answered nothing since
+/// [`forget_controller`]. rotctld not answering at all, and `RPRT -5`, count neither way: a
+/// controller that is switched off answers `-5` as a link that may still heal does.
 ///
 /// ⚠️ **What a dropped network link looks like** (measured on rotctld 4.6.5's GS-232B backend with
 /// `127.0.0.1:<port>` in its `-r`): once the TCP connection under rotctld is gone, by a hang-up or

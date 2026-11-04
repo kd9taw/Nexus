@@ -23964,15 +23964,21 @@ fn rotctld_tick(
         .as_mut()
         .is_some_and(|(proc, _)| proc.is_alive());
     if want && running {
-        return restart_if_stuck(owner, st, spawn, std::time::Instant::now());
+        return restart_if_stuck(
+            owner,
+            st,
+            spawn,
+            std::time::Instant::now(),
+            tempo_audio::rotator::controller_streak,
+        );
     }
     owner.stuck = StuckLink::new();
     want.then(|| reconcile_rotctld(owner, st, spawn))
 }
 
-/// Answers in a row of `RPRT -5`/`RPRT -6` from the integrated rotctld that make its network link
-/// stuck ([`StuckLink`]): three polls, about six seconds with a Rotor box open. One or two are a
-/// slow or lossy link, which the Rotor box's grace and a pass's miss limit absorb.
+/// Answers in a row of `RPRT -6` from the integrated rotctld that make its network link stuck
+/// ([`StuckLink`]): three polls, about six seconds with a Rotor box open. `RPRT -5` never counts
+/// (`tempo_audio::rotator::controller_streak` says why).
 const STUCK_AFTER: u32 = 3;
 /// The wait after a restart of a stuck rotctld before the next one, doubling each time it is still
 /// stuck, up to [`STUCK_RETRY_MAX`].
@@ -23989,9 +23995,15 @@ const STUCK_RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(300)
 /// there until Nexus was restarted. A new rotctld opens a new connection.
 ///
 /// The rules, pure with the clock passed in: the first restart after [`STUCK_AFTER`] answers in a
-/// row; another one only after [`STUCK_RETRY_FIRST`], doubling to [`STUCK_RETRY_MAX`], so a
-/// controller that is simply switched off behind a working serial server costs a restart every
-/// five minutes, not one per tick; and the episode ends at the first good answer.
+/// row; another one only after [`STUCK_RETRY_FIRST`], doubling to [`STUCK_RETRY_MAX`], so a far end
+/// that accepts the connection and drops it again costs a restart every five minutes, not one per
+/// tick; and the episode ends at the first good answer. A controller that is merely switched off
+/// is never restarted for: rotctld answers it `RPRT -5`, which does not count.
+///
+/// ⚠️ **The backoff only covers a new rotctld that CONNECTS.** One whose far end refuses the
+/// connection exits at once, and one whose far end drops everything sits in `connect` until the
+/// computer's TCP gives up (measured: about 134 s on Linux) and then exits. Either way the dead
+/// daemon is the supervisor's ordinary business ([`ROTCTLD_RETRY`]), and this episode is over.
 #[derive(Debug, Default)]
 struct StuckLink {
     /// Restarts this episode, and when the last one was.
@@ -24058,57 +24070,74 @@ fn network_port(port: &str) -> bool {
 }
 
 /// Restart the running integrated rotctld when its link to a network Port box is stuck
-/// ([`StuckLink`]). Hamlib's own rotctld only: the PstRotatorAz link is Nexus's own and holds no
-/// connection.
+/// ([`StuckLink`]). `streak` is asked for the daemon's address: in the app,
+/// `tempo_audio::rotator::controller_streak`.
+///
+/// Only Hamlib's own rotctld, and only one whose Port box is a network address: both read from the
+/// RUNNING daemon and the params it was started with, not from settings that may have been edited
+/// since. A serial port does not get stuck the way a TCP connection does, and the PstRotatorAz
+/// link is Nexus's own, holds no connection, and keeps its UDP target in the same Port box.
 fn restart_if_stuck(
     owner: &mut RotctldOwner,
     st: &Settings,
     spawn: impl FnOnce(u32, &str, u32, u16) -> std::io::Result<RotDaemon>,
     now: std::time::Instant,
+    streak: impl FnOnce(&str) -> Option<u32>,
 ) -> Option<RotctldSync> {
-    let hamlib = matches!(owner.daemon, Some((RotDaemon::Hamlib(_), _)));
-    if !hamlib || !network_port(&st.rotator_port) {
+    let (daemon, params) = owner.daemon.as_ref()?;
+    let hamlib = matches!(daemon, RotDaemon::Hamlib(_));
+    let (port, addr) = (params.1.clone(), format!("127.0.0.1:{}", params.3));
+    if !(hamlib && network_port(&port)) {
         owner.stuck = StuckLink::new();
         return None;
     }
-    let addr = format!("127.0.0.1:{}", rotctld_port_for(st));
-    match owner
-        .stuck
-        .decide(tempo_audio::rotator::controller_streak(&addr), now)
-    {
+    match owner.stuck.decide(streak(&addr), now) {
         StuckCall::Wait => None,
         StuckCall::Recovered { restarts } => {
-            let line = format!(
-                "rotctld is talking to the rotator at {} again, after {restarts} restart{}.",
-                st.rotator_port.trim(),
-                if restarts == 1 { "" } else { "s" }
-            );
-            tempo_core::applog::info(
-                "rotator",
-                &tempo_audio::rotator::mask_port(&line, &st.rotator_port),
-            );
-            conn_log("Rotator", "info", line);
+            let (screen, diag) = rotctld_reconnect_lines(&port, Some(restarts));
+            tempo_core::applog::info("rotator", &diag);
+            conn_log("Rotator", "info", screen);
             None
         }
         StuckCall::Restart { first } => {
             if first {
-                let line = format!(
-                    "rotctld lost its network connection to the rotator at {}: it answered {}                      commands in a row with an I/O error or a timeout, and Hamlib does not                      connect again on its own. Restarting rotctld; while it stays down, Nexus                      tries again after {} s, then less and less often.",
-                    st.rotator_port.trim(),
-                    STUCK_AFTER,
-                    STUCK_RETRY_FIRST.as_secs()
-                );
-                tempo_core::applog::warn(
-                    "rotator",
-                    &tempo_audio::rotator::mask_port(&line, &st.rotator_port),
-                );
-                conn_log("Rotator", "warn", line);
+                let (screen, diag) = rotctld_reconnect_lines(&port, None);
+                tempo_core::applog::warn("rotator", &diag);
+                conn_log("Rotator", "warn", screen);
             }
             owner.daemon = None; // kill-on-drop
             tempo_audio::rotator::forget_controller(&addr);
             Some(reconcile_rotctld(owner, st, spawn))
         }
     }
+}
+
+/// The two copies of the stuck-link lines for the Port box `port`: the first restart of an episode
+/// (`restarts` `None`) and the link answering again after `restarts` restarts. The Connections
+/// log's, verbatim, and the diagnostic log's, with the host masked
+/// (`tempo_audio::rotator::mask_port`). Pure, so the wording and the masking are tests.
+fn rotctld_reconnect_lines(port: &str, restarts: Option<u32>) -> (String, String) {
+    let port = port.trim();
+    let screen = match restarts {
+        None => format!(
+            "rotctld lost its network connection to the rotator at {port}: it answered {} \
+             commands in a row with an I/O error, and Hamlib does not connect again on its own, \
+             so Nexus is restarting rotctld. If the new rotctld connects and the connection \
+             fails again, Nexus restarts it after {} s, then at longer and longer intervals, up \
+             to {} minutes apart. If it cannot connect at all, it stops, and Nexus starts it \
+             again as it does any rotctld that stops (it checks every {} s).",
+            STUCK_AFTER,
+            STUCK_RETRY_FIRST.as_secs(),
+            STUCK_RETRY_MAX.as_secs() / 60,
+            ROTCTLD_RETRY.as_secs()
+        ),
+        Some(n) => format!(
+            "rotctld is talking to the rotator at {port} again, after {n} restart{}.",
+            if n == 1 { "" } else { "s" }
+        ),
+    };
+    let diag = tempo_audio::rotator::mask_port(&screen, port);
+    (screen, diag)
 }
 
 fn sync_rotctld_owned(owner: &mut RotctldOwner, st: &Settings) -> RotctldSync {
@@ -24250,7 +24279,12 @@ fn reconcile_rotctld(
     // same reason the CAT daemon's rebuild is: while it is dead there is no rotator channel to
     // race, no motion is in flight (the mast stopped when the daemon did), and a fresh one is
     // the only route back. It cannot run away, either: a save, a radio switch and startup call
-    // this, and the supervisor calls it every ROTCTLD_RETRY only while the daemon is down.
+    // this, and the supervisor calls it every ROTCTLD_RETRY while the daemon is down. The one
+    // time the supervisor calls it with a daemon that was LIVE is [`restart_if_stuck`], which has
+    // already killed it: a rotctld whose network link answers only `RPRT -6`, so nothing it was
+    // sent could reach the controller anyway, and that restart is backed off ([`StuckLink`]). A
+    // `P` the controller took before the link dropped is a go-to that ends at its target; the
+    // kill sends the controller nothing.
     let running = g.as_mut().map(|(proc, p)| (*p == params, proc.is_alive()));
     match (running, want) {
         (Some((true, true)), true) => RotctldSync::Running, // running, with the right params
@@ -24965,6 +24999,134 @@ mod rotctld_supervisor_tests {
         }
     }
 
+    fn free_port() -> u16 {
+        TcpListener::bind("127.0.0.1:0")
+            .expect("a loopback port")
+            .local_addr()
+            .expect("its port")
+            .port()
+    }
+
+    /// One guard case: `daemon` running as the integrated rotator daemon, recorded as started with
+    /// the Port box `port`, and three `RPRT -6` answers in a row. Whether the supervisor restarted
+    /// it, after checking that what it left alone is still there and that nothing was spawned.
+    fn restarted_for_a_stuck_link(daemon: RotDaemon, model: u32, port: &str, tcp: u16) -> bool {
+        let st = station(tcp, 1); // a restart starts Hamlib's dummy: no serial line needed
+        let mut owner = owner();
+        owner.daemon = Some((daemon, (model, port.to_string(), 9600, tcp)));
+        let spawned = Cell::new(0);
+        let spawn = |m: u32, p: &str, b: u32, t: u16| {
+            spawned.set(spawned.get() + 1);
+            spawn_rotator_daemon(m, p, b, t)
+        };
+        let streak = |addr: &str| {
+            assert_eq!(
+                addr,
+                format!("127.0.0.1:{tcp}"),
+                "the running daemon's address"
+            );
+            Some(STUCK_AFTER)
+        };
+        match restart_if_stuck(&mut owner, &st, spawn, std::time::Instant::now(), streak) {
+            None => {
+                assert_eq!(spawned.get(), 0, "{port}: nothing started");
+                let Some((left, params)) = owner.daemon.as_mut() else {
+                    panic!("{port}: the daemon was taken away");
+                };
+                assert!(left.is_alive(), "{port}: still running");
+                assert_eq!(params.1, port);
+                false
+            }
+            Some(sync) => {
+                assert_eq!(sync, RotctldSync::Started, "{port}");
+                assert_eq!(spawned.get(), 1, "{port}");
+                true
+            }
+        }
+    }
+
+    #[test]
+    fn a_rotctld_on_a_serial_port_is_never_restarted_for_io_errors() {
+        if !rotctld_here() {
+            return;
+        }
+        let hamlib = |tcp| {
+            RotDaemon::Hamlib(
+                tempo_audio::rigctld_proc::spawn_rotctld(1, "", 9600, tcp).expect("rotctld"),
+            )
+        };
+        // A serial port does not get stuck the way a TCP connection does: left alone.
+        for serial in ["COM5", "/dev/ttyUSB0"] {
+            let tcp = free_port();
+            assert!(!restarted_for_a_stuck_link(hamlib(tcp), 603, serial, tcp));
+        }
+        // The same daemon with an IPv4 address in the Port box is restarted.
+        let tcp = free_port();
+        assert!(restarted_for_a_stuck_link(
+            hamlib(tcp),
+            603,
+            "192.168.1.50:4001",
+            tcp
+        ));
+    }
+
+    #[test]
+    fn a_pstrotatoraz_link_is_never_restarted_for_io_errors() {
+        if !rotctld_here() {
+            return;
+        }
+        // Its UDP target sits in the same Port box, and is an IPv4 address and a port.
+        let (target, tcp, link) = (0..5)
+            .find_map(|_| {
+                let (udp, tcp) = (free_port(), free_port());
+                let target = format!("127.0.0.1:{udp}");
+                tempo_audio::pstrotator::PstRotatorLink::start(&target, tcp)
+                    .ok()
+                    .map(|link| (target, tcp, link))
+            })
+            .expect("a PstRotatorAz link on a free port pair");
+        assert!(
+            network_port(&target),
+            "the guard is the daemon's kind, not the box"
+        );
+        assert!(!restarted_for_a_stuck_link(
+            RotDaemon::PstRotator(link),
+            tempo_audio::pstrotator::MODEL,
+            &target,
+            tcp
+        ));
+        // Hamlib's rotctld with that same Port box is restarted.
+        let tcp = free_port();
+        let rotctld = tempo_audio::rigctld_proc::spawn_rotctld(1, "", 9600, tcp).expect("rotctld");
+        assert!(restarted_for_a_stuck_link(
+            RotDaemon::Hamlib(rotctld),
+            603,
+            &target,
+            tcp
+        ));
+    }
+
+    #[test]
+    fn the_diagnostic_copies_of_the_reconnect_lines_mask_a_network_port_box() {
+        for restarts in [None, Some(1), Some(3)] {
+            let (screen, diag) = rotctld_reconnect_lines(" 203.0.113.9:4001 ", restarts);
+            assert!(
+                screen.contains("203.0.113.9:4001"),
+                "the screen keeps it: {screen}"
+            );
+            assert!(!diag.contains("203.0.113.9"), "{diag}");
+            assert!(diag.contains("a network address:4001"), "{diag}");
+            // A string literal broken across lines without its `\` keeps the indentation.
+            assert!(!screen.contains("  "), "a run of spaces: {screen:?}");
+        }
+        assert!(rotctld_reconnect_lines("203.0.113.9:4001", Some(1))
+            .0
+            .ends_with("after 1 restart."));
+        assert!(rotctld_reconnect_lines("203.0.113.9:4001", Some(3))
+            .0
+            .ends_with("after 3 restarts."));
+    }
+
     #[test]
     fn a_stuck_link_is_restarted_after_three_answers_then_less_and_less_often() {
         use std::time::{Duration, Instant};
@@ -25080,6 +25242,11 @@ mod rotctld_supervisor_tests {
         assert_eq!(
             rotctld_tick(&mut owner, &st, spawn),
             Some(RotctldSync::Started)
+        );
+        assert_eq!(
+            tempo_audio::rotator::controller_streak(&addr),
+            None,
+            "the new rotctld is counted afresh, not charged the old one's errors"
         );
         assert_eq!(
             tempo_audio::rotator::read_position(&addr)

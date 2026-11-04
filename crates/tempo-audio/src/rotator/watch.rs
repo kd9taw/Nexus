@@ -314,9 +314,15 @@ pub(crate) fn note(addr: &str, line: &str, heard: Heard, elapsed: Duration) {
     }
 }
 
-/// Did rotctld answer that the CONTROLLER behind it is not there (`RPRT -5`, Hamlib's timeout, or
-/// `RPRT -6`, an I/O error on its port)? `None` when rotctld itself did not answer, which says
-/// nothing about the controller: rotctld down, or Nexus's own deadline.
+/// Did rotctld answer that its own port to the controller is broken (`RPRT -6`, an I/O error)?
+/// `Some(false)` for any other answer; `None` for no evidence either way: rotctld itself did not
+/// answer (rotctld down, or Nexus's own deadline), or it answered `RPRT -5`.
+///
+/// ⚠️ **`RPRT -5` is not evidence of a broken link** (measured on rotctld 4.6.5, GS-232B on a network
+/// Port box): a controller that is switched off and a link that has just gone quiet both answer it,
+/// identically, after the same 2.1 s, and a quiet link that comes back heals the same rotctld by
+/// itself. Only once the computer's TCP gives up on the connection does rotctld answer `RPRT -6`,
+/// and from then on it answers nothing else, even after the link is back.
 pub(crate) fn controller_failed(result: &std::io::Result<String>) -> Option<bool> {
     let text = result.as_ref().ok()?;
     let code = text
@@ -324,10 +330,14 @@ pub(crate) fn controller_failed(result: &std::io::Result<String>) -> Option<bool
         .map(str::trim)
         .find(|l| l.starts_with("RPRT"))
         .and_then(super::rprt_code);
-    Some(matches!(code, Some(-5 | -6)))
+    match code {
+        Some(-6) => Some(true),
+        Some(-5) => None,
+        _ => Some(false),
+    }
 }
 
-/// Per rotctld address: how many answers in a row said the controller is not there, `0` once one
+/// Per rotctld address: how many answers in a row were `RPRT -6`, `0` once one
 /// did not. No entry until rotctld answers something after a [`forget_controller`].
 static CONTROLLER: Mutex<Option<HashMap<String, u32>>> = Mutex::new(None);
 
@@ -582,10 +592,12 @@ mod tests {
     }
 
     #[test]
-    fn only_rotctlds_own_timeout_and_io_answers_count_against_the_controller() {
+    fn only_rotctlds_io_error_counts_against_the_link() {
         let answer = |t: &str| controller_failed(&Ok(t.to_string()));
         assert_eq!(answer("RPRT -6\n"), Some(true));
-        assert_eq!(answer("RPRT -5\n"), Some(true));
+        // Hamlib's timeout is no evidence either way: a controller that is switched off answers it
+        // exactly as a link that has only just gone quiet does, and that link may still heal.
+        assert_eq!(answer("RPRT -5\n"), None);
         assert_eq!(answer("123.000000\n45.000000\n"), Some(false));
         assert_eq!(answer("RPRT 0\n"), Some(false));
         // A refusal is the controller answering no.

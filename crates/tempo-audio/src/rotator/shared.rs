@@ -118,7 +118,12 @@ impl<T: Clone> Shared<T> {
         let started = Instant::now();
         st.in_flight = Some(started);
         drop(st);
+        // Clears `in_flight` and wakes the waiters however `read` ends: a read that unwound would
+        // otherwise leave every later poll of this rotator waiting for an answer that never lands.
+        // The waiters then find no answer and read for themselves.
+        let in_flight = InFlight(&slot);
         let result = read();
+        std::mem::forget(in_flight);
         let mut st = slot.state.lock().unwrap_or_else(|e| e.into_inner());
         st.in_flight = None;
         st.last = Some(Done {
@@ -131,6 +136,18 @@ impl<T: Clone> Shared<T> {
         drop(st);
         slot.changed.notify_all();
         result
+    }
+}
+
+/// A read in flight on its slot; dropped only when the read unwinds (see [`Shared::get`]).
+struct InFlight<'a, T>(&'a Slot<T>);
+
+impl<T> Drop for InFlight<'_, T> {
+    fn drop(&mut self) {
+        let mut st = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+        st.in_flight = None;
+        drop(st);
+        self.0.changed.notify_all();
     }
 }
 
@@ -274,6 +291,39 @@ mod tests {
         assert_eq!(fresh.join().unwrap().unwrap().0, 1.0);
         assert_eq!(poll.unwrap().0, 1.0);
         assert_eq!(probe.total.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_read_that_panics_does_not_wedge_the_rotator() {
+        // Every later poll would wait on the condvar for a read that will never land.
+        let shared: Arc<Shared<Position>> = Arc::new(Shared::new());
+        let probe = Probe::new();
+        let first = {
+            let shared = shared.clone();
+            std::thread::spawn(move || {
+                shared.get("a:1", Want::Joined, || {
+                    std::thread::sleep(Duration::from_millis(200));
+                    panic!("a read that unwinds")
+                })
+            })
+        };
+        std::thread::sleep(Duration::from_millis(50));
+        // One poll joins the doomed read; one arrives after it.
+        let (tx, rx) = std::sync::mpsc::channel();
+        for wait in [0, 300] {
+            let (shared, probe, tx) = (shared.clone(), probe.clone(), tx.clone());
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(wait));
+                let _ = tx.send(shared.get("a:1", Want::Joined, || probe.read(0)).is_ok());
+            });
+        }
+        assert!(first.join().is_err(), "the first read panicked");
+        for _ in 0..2 {
+            let answered = rx
+                .recv_timeout(Duration::from_secs(3))
+                .expect("a poll after the panic still answers");
+            assert!(answered);
+        }
     }
 
     #[test]
