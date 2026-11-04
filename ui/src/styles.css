@@ -5258,6 +5258,17 @@ body.resizing-row {
   background: transparent;
   color: var(--text);
 }
+/* The Map style row (MapStylePick): its select beside the row's words, taking the rest of the row. */
+.map-style-pick {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-label);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+}
 
 
 /* Logbook header action buttons (Import ADIF / Log QSO). */

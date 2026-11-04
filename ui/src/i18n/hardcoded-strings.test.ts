@@ -232,6 +232,7 @@ const MIGRATED = [
   'components/MapView.tsx',
   'components/MapLayersPanel.tsx',
   'components/MapPicker.tsx',
+  'components/MapStylePick.tsx',
   'components/MapLegend.tsx',
   'components/Globe3D.tsx',
   'components/QsoGlobe.tsx',
