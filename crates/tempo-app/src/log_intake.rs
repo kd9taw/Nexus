@@ -29,9 +29,9 @@
 //! fields and values; [`RateLimit`] per source and in total. A refusal of a source, a rate or a
 //! size is said once in the connection log when it starts, not once per datagram.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -475,11 +475,16 @@ pub struct Gate {
     alive: RateLimit,
     /// A QSO Logged (type 5) waiting [`HOLD`] for its Logged ADIF (type 12).
     held: Option<Held>,
-    said: HashSet<String>,
+    /// Each refusal said, by key, with when it last came (said or not).
+    said: HashMap<String, Instant>,
     admission: Admission,
     admission_read: Option<Instant>,
     last_added: Option<(String, String, Instant)>,
 }
+
+/// How long a refusal must be quiet before it is said again: a sender that alternates a refused
+/// datagram with a good one gets one line, not one per pair.
+pub const REARM: Duration = Duration::from_secs(60);
 
 /// The most refusals remembered as said; past it, a new one is not said (the connection log keeps
 /// what it has, and a flood of addresses cannot flood it).
@@ -523,7 +528,7 @@ impl Gate {
             limit: RateLimit::new(Instant::now()),
             alive: RateLimit::new(Instant::now()),
             held: None,
-            said: HashSet::new(),
+            said: HashMap::new(),
             admission: Admission {
                 lan: false,
                 pin: None,
@@ -534,16 +539,30 @@ impl Gate {
         }
     }
 
-    /// Say `line` once while `key` stays refused ([`Self::clear`] lets it be said again).
-    fn once(&mut self, key: String, note: &Note, line: String) {
-        if self.said.len() < SAID_KEPT && self.said.insert(key) {
+    /// Say `line` once while `key` keeps being refused; again only after it has been quiet for
+    /// [`REARM`] ([`Self::rearm`]).
+    fn once(&mut self, key: String, note: &Note, line: String, now: Instant) {
+        if let Some(at) = self.said.get_mut(&key) {
+            *at = now;
+            return;
+        }
+        if self.said.len() < SAID_KEPT {
+            self.said.insert(key, now);
             tempo_core::applog::warn("log-intake", &line);
             note("error", line);
         }
     }
 
-    fn clear(&mut self, key: &str) {
-        self.said.remove(key);
+    /// `key` read well at `now`: said again next time only when it has been refused nothing for
+    /// [`REARM`]. A good read alone is not enough, or an alternating sender is said every pair.
+    fn rearm(&mut self, key: &str, now: Instant) {
+        if self
+            .said
+            .get(key)
+            .is_some_and(|at| now.saturating_duration_since(*at) >= REARM)
+        {
+            self.said.remove(key);
+        }
     }
 }
 
@@ -586,6 +605,7 @@ pub fn take_datagram(
             format!("source {ip}"),
             note,
             format!("A datagram from {ip} on the contact port was not read: {why}"),
+            now,
         );
         return;
     }
@@ -593,10 +613,10 @@ pub fn take_datagram(
     match tempo_net::freedv::read_log_datagram(bytes) {
         tempo_net::freedv::LogIntake::Contact(_) => {
             if !gate.limit.take(ip, now) {
-                gate.once(rate_key, note, rate_line(ip));
+                gate.once(rate_key, note, rate_line(ip), now);
                 return;
             }
-            gate.clear(&rate_key);
+            gate.rearm(&rate_key, now);
             crate::freedv::take_log_datagram(engine, bytes, freedv_note);
             return;
         }
@@ -623,6 +643,7 @@ pub fn take_datagram(
                     "{ip} sent a datagram with more than {MAX_RECORDS} contacts or more fields \
                      than a contact has, so it was not read"
                 ),
+                now,
             );
             return;
         }
@@ -635,21 +656,22 @@ pub fn take_datagram(
                     "{who} ({ip}) sent a contact Nexus could not read (its time is not in UTC, \
                      or the datagram is damaged), so it was not logged"
                 ),
+                now,
             );
             return;
         }
         Intake::Own | Intake::Ignored => return,
     };
-    gate.clear(&size_key);
-    gate.clear(&format!("unreadable {ip}"));
+    gate.rearm(&size_key, now);
+    gate.rearm(&format!("unreadable {ip}"), now);
     // The program's own name for itself, or what it is when it gave none: never its address.
     let sender = Sender::of(program, ip);
     for fields in records {
         if !gate.limit.take(ip, now) {
-            gate.once(rate_key.clone(), note, rate_line(ip));
+            gate.once(rate_key.clone(), note, rate_line(ip), now);
             return;
         }
-        gate.clear(&rate_key);
+        gate.rearm(&rate_key, now);
         take_contact(engine, &fields, &sender, format, gate, note, now);
     }
 }
@@ -836,42 +858,81 @@ pub fn serve_within(
     note: Note,
     bound: usize,
 ) {
-    serve_with(
-        sock,
-        engine,
-        shutdown,
-        freedv_note,
-        note,
-        bound,
-        &QUITTING,
-        &SERVING,
-    );
+    serve_with(sock, engine, shutdown, freedv_note, note, bound, &LISTENERS);
 }
 
-/// The app is quitting: every contact listener stops ([`stop_for_quit`]).
-static QUITTING: AtomicBool = AtomicBool::new(false);
-/// How many contact listeners are running, the final flush included.
-static SERVING: AtomicUsize = AtomicUsize::new(0);
+/// The app's contact listeners, as the quit and the self-update reach them.
+static LISTENERS: Listeners = Listeners::new();
+
+/// What reaches every running contact listener from outside it: the quit, and a request to log
+/// what each holds now.
+pub(crate) struct Listeners {
+    /// The app is quitting: every listener stops ([`stop_for_quit`]).
+    quit: AtomicBool,
+    /// How many listeners are running, the final flush included.
+    serving: AtomicUsize,
+    /// Flushes asked for ([`flush_for_update`]), and how many listener answers they have had.
+    flush_asked: AtomicU64,
+    flush_answers: AtomicUsize,
+}
+
+impl Listeners {
+    pub(crate) const fn new() -> Self {
+        Self {
+            quit: AtomicBool::new(false),
+            serving: AtomicUsize::new(0),
+            flush_asked: AtomicU64::new(0),
+            flush_answers: AtomicUsize::new(0),
+        }
+    }
+
+    /// Stop every listener, and wait at most `wait` until each has logged what it holds and let
+    /// go. `true` when every one did in time.
+    pub(crate) fn stop(&self, wait: Duration) -> bool {
+        self.quit.store(true, Ordering::SeqCst);
+        let until = Instant::now() + wait;
+        while self.serving.load(Ordering::SeqCst) > 0 && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        self.serving.load(Ordering::SeqCst) == 0
+    }
+
+    /// Have every listener log what it holds now, and keep listening; wait at most `wait` for
+    /// each to answer. `true` when every one did in time.
+    pub(crate) fn flush(&self, wait: Duration) -> bool {
+        let before = self.flush_answers.load(Ordering::SeqCst);
+        let running = self.serving.load(Ordering::SeqCst);
+        self.flush_asked.fetch_add(1, Ordering::SeqCst);
+        let answered = || {
+            self.flush_answers
+                .load(Ordering::SeqCst)
+                .saturating_sub(before)
+        };
+        let until = Instant::now() + wait;
+        while answered() < running && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        answered() >= running
+    }
+}
 
 /// ★ A quit stops every contact listener and waits, at most `wait`, until each has logged what it
 /// holds (a type 5 still in its [`HOLD`]) and let go: called by the quit before the log's last
 /// flush, so a contact logged in WSJT-X a moment before the quit is in the log the quit writes.
 /// `true` when every listener let go in time.
 pub fn stop_for_quit(wait: Duration) -> bool {
-    stop_listeners(&QUITTING, &SERVING, wait)
+    LISTENERS.stop(wait)
 }
 
-/// [`stop_for_quit`] on a quit flag and a count of its own (a test's).
-pub(crate) fn stop_listeners(quit: &AtomicBool, serving: &AtomicUsize, wait: Duration) -> bool {
-    quit.store(true, Ordering::SeqCst);
-    let until = Instant::now() + wait;
-    while serving.load(Ordering::SeqCst) > 0 && Instant::now() < until {
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    serving.load(Ordering::SeqCst) == 0
+/// ★ The Windows self-update, whose installer ends the process without the quit: every contact
+/// listener logs what it holds now, before the update's log flush, and KEEPS LISTENING, as a
+/// failed install must leave a working station behind. Waits at most `wait`; `true` when every
+/// listener answered in time.
+pub fn flush_for_update(wait: Duration) -> bool {
+    LISTENERS.flush(wait)
 }
 
-/// [`serve_within`] on a quit flag and a count of its own (a test's).
+/// [`serve_within`] reached by `listeners` (a test's own, or the app's).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn serve_with(
     sock: UdpSocket,
@@ -880,8 +941,7 @@ pub(crate) fn serve_with(
     freedv_note: Note,
     note: Note,
     bound: usize,
-    quit: &AtomicBool,
-    serving: &AtomicUsize,
+    listeners: &Listeners,
 ) {
     /// Counts this listener as running until it has let go, its last flush included.
     struct Serving<'a>(&'a AtomicUsize);
@@ -890,12 +950,19 @@ pub(crate) fn serve_with(
             self.0.fetch_sub(1, Ordering::SeqCst);
         }
     }
-    serving.fetch_add(1, Ordering::SeqCst);
-    let _serving = Serving(serving);
+    let mut flushed = listeners.flush_asked.load(Ordering::SeqCst);
+    listeners.serving.fetch_add(1, Ordering::SeqCst);
+    let _serving = Serving(&listeners.serving);
     let _ = sock.set_read_timeout(Some(Duration::from_millis(250)));
     let mut buf = vec![0u8; bound + 1];
     let mut gate = Gate::new();
-    while !shutdown.load(Ordering::Relaxed) && !quit.load(Ordering::SeqCst) {
+    while !shutdown.load(Ordering::Relaxed) && !listeners.quit.load(Ordering::SeqCst) {
+        let asked = listeners.flush_asked.load(Ordering::SeqCst);
+        if asked != flushed {
+            flush_held(&engine, &mut gate, &note, Instant::now() + HOLD);
+            flushed = asked;
+            listeners.flush_answers.fetch_add(1, Ordering::SeqCst);
+        }
         let Ok((n, from)) = sock.recv_from(&mut buf) else {
             flush_held(&engine, &mut gate, &note, Instant::now());
             continue;

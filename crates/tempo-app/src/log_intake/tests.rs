@@ -950,38 +950,38 @@ fn the_pair_supersedes_at_once_and_counts_once() {
 }
 
 /// (Second review.) The real listener on a socket: a lone type 5 is logged by the quiet tick with
-/// no other traffic; one held when the listener stops is logged by the stop; and one held at a
-/// quit is logged before the quit lets go of the listener ([`stop_listeners`]).
+/// no other traffic; one held when the listener stops is logged by the stop; one held at a quit
+/// is logged before the quit lets go of the listener ([`Listeners::stop`]); and (third review)
+/// one held at the Windows self-update is logged by its flush ([`Listeners::flush`]) while the
+/// listener KEEPS listening, as a failed install leaves a working station.
 #[test]
-fn the_listener_flushes_on_its_quiet_tick_on_stop_and_at_a_quit() {
-    use std::sync::atomic::AtomicUsize;
+fn the_listener_flushes_on_its_quiet_tick_on_stop_at_a_quit_and_at_an_update() {
     #[derive(PartialEq)]
     enum End {
         Quiet,
         Stop,
         Quit,
+        Update,
     }
     let run = |end: End| {
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
         let addr = sock.local_addr().unwrap();
         let e = Arc::new(Mutex::new(Engine::new("K2DEF", "FN31", 0)));
         let sd = Arc::new(AtomicBool::new(false));
-        let quit = Arc::new(AtomicBool::new(false));
-        let serving = Arc::new(AtomicUsize::new(0));
+        let listeners = Arc::new(Listeners::new());
         let n: Note = Arc::new(|_, _| {});
         let t = {
-            let (e, sd, quit, serving, n1, n2) = (
+            let (e, sd, l, n1, n2) = (
                 Arc::clone(&e),
                 Arc::clone(&sd),
-                Arc::clone(&quit),
-                Arc::clone(&serving),
+                Arc::clone(&listeners),
                 Arc::clone(&n),
                 Arc::clone(&n),
             );
-            std::thread::spawn(move || serve_with(sock, e, sd, n1, n2, 4096, &quit, &serving))
+            std::thread::spawn(move || serve_with(sock, e, sd, n1, n2, 4096, &l))
         };
         let until = Instant::now() + Duration::from_secs(5);
-        while serving.load(Ordering::SeqCst) == 0 && Instant::now() < until {
+        while listeners.serving.load(Ordering::SeqCst) == 0 && Instant::now() < until {
             std::thread::sleep(Duration::from_millis(5));
         }
         let tx = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -998,10 +998,29 @@ fn the_listener_flushes_on_its_quiet_tick_on_stop_and_at_a_quit() {
             End::Quit => {
                 assert!(e.stored_log().is_empty(), "still held");
                 assert!(
-                    stop_listeners(&quit, &serving, Duration::from_secs(5)),
+                    listeners.stop(Duration::from_secs(5)),
                     "the listener let go in time"
                 );
                 assert_eq!(e.stored_log().len(), 1, "logged before the quit goes on");
+            }
+            End::Update => {
+                assert!(e.stored_log().is_empty(), "still held");
+                assert!(listeners.flush(Duration::from_secs(5)), "it answered");
+                assert_eq!(e.stored_log().len(), 1, "logged before the update goes on");
+                assert_eq!(
+                    listeners.serving.load(Ordering::SeqCst),
+                    1,
+                    "still listening"
+                );
+                // CONTROL: it still takes contacts.
+                tx.send_to(&encode_qso_logged("JTDX", &lone("W1XYZ")), addr)
+                    .unwrap();
+                std::thread::sleep(HOLD + Duration::from_millis(900));
+                assert_eq!(
+                    e.stored_log().len(),
+                    2,
+                    "a failed install leaves it working"
+                );
             }
         }
         let logged = e.stored_log().len();
@@ -1011,4 +1030,34 @@ fn the_listener_flushes_on_its_quiet_tick_on_stop_and_at_a_quit() {
     assert_eq!(run(End::Quiet), 1, "the quiet tick flushes");
     assert_eq!(run(End::Stop), 1, "the stop flushes");
     assert_eq!(run(End::Quit), 1, "the quit flushes");
+    assert_eq!(run(End::Update), 2, "the update flushes and listens on");
+}
+
+/// (Third review.) A sender that alternates an unreadable contact with a good one gets ONE line,
+/// not one per pair: a refusal is said again only after it has been quiet for [`REARM`]. CONTROL:
+/// once it has been, the next is said.
+#[test]
+fn an_alternating_sender_is_said_once_until_it_has_been_quiet() {
+    let mut st = Station::new();
+    let mut cut = encode_qso_logged("WSJT-X", &qso("K2DEF", "K1ABC"));
+    cut.truncate(40);
+    for i in 0..10 {
+        st.send(&cut);
+        st.send(&ft8_at(&format!("W{i}ABC"), WHEN + i64::from(i) * 1000).into_bytes());
+    }
+    let said = |st: &Station| {
+        st.lines()
+            .iter()
+            .filter(|(_, l)| l.contains("could not read"))
+            .count()
+    };
+    assert_eq!(st.calls().len(), 10, "the good ones go in");
+    assert_eq!(said(&st), 1, "{:?}", st.lines());
+    // Quiet for longer than the re-arm: the next is said.
+    for at in st.gate.said.values_mut() {
+        *at = Instant::now().checked_sub(REARM * 2).unwrap();
+    }
+    st.send(&ft8_at("W9XYZ", WHEN + 99_000).into_bytes());
+    st.send(&cut);
+    assert_eq!(said(&st), 2, "{:?}", st.lines());
 }
