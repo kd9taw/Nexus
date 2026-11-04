@@ -28,7 +28,10 @@ use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
+mod shared;
 mod watch;
+
+pub use shared::{fresh_position, latest_limits, latest_position};
 
 /// Per-read window. Bounds one wait, never the whole reply — the deadlines below do that.
 const READ_WINDOW: Duration = Duration::from_millis(500);

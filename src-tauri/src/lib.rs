@@ -16415,7 +16415,9 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
         // from the controller, so it is no evidence the controller is there.
         if rotor_lost && driver.reprobe_due() {
             if let Some(a) = addr.as_deref() {
-                if tempo_audio::rotator::read_position(a).is_ok() {
+                // Shared with the polls (`latest_position`): a pane poll already in flight
+                // answers this too, rather than a second read queueing behind it.
+                if tempo_audio::rotator::latest_position(a).is_ok() {
                     driver.answered();
                     lag = tempo_core::rotator::LagWatch::default();
                     rotor_lost = false;
@@ -16637,11 +16639,14 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
         // while the antenna stays put, and every surface in the app was drawing the commanded
         // pair. The rule is "far AND not moving", never "far" — a legitimate slew to AOS is
         // 180° of gap and takes a G-5500 half a minute (`LagWatch`). Once per episode, to the
-        // connection log, which is where support asks the operator to look.
+        // connection log, which is where support asks the operator to look. A read that leaves
+        // AFTER the `P` (`fresh_position`): a poll already in flight may have left before it, so
+        // it is waited for, never taken.
         if outcome != RotOutcome::Failed {
-            if let (Some((caz, _)), Ok((meas_az, _))) =
-                (driver.last_cmd(), tempo_audio::rotator::read_position(addr))
-            {
+            if let (Some((caz, _)), Ok((meas_az, _))) = (
+                driver.last_cmd(),
+                tempo_audio::rotator::fresh_position(addr),
+            ) {
                 if let Some(gap) = lag.observe(caz, meas_az) {
                     conn_log(
                         "Rotator",
@@ -17163,7 +17168,9 @@ fn run_moon_track(run: MoonRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()) {
             return; // a newer owner, or a Stop: it halts the mast itself
         }
         let t = clock();
-        if rotor_lost && driver.reprobe_due() && tempo_audio::rotator::read_position(&addr).is_ok()
+        if rotor_lost
+            && driver.reprobe_due()
+            && tempo_audio::rotator::latest_position(&addr).is_ok()
         {
             driver.answered();
             rotor_lost = false;
@@ -25915,9 +25922,12 @@ struct RotatorStateDto {
 
 /// Read the rotator at `addr` for [`RotatorStateDto`]: its position first, and what its backend
 /// declares only when it answered, so a daemon that is not there costs one connection, as it
-/// always did.
+/// always did. Both reads are shared with every other poll of this rotator
+/// (`tempo_audio::rotator::latest_position`): rotctld runs one command at a time for all of its
+/// clients, and the strip, the pane and the Needed panel each asking for themselves queued up
+/// there over a slow link, with a STOP waiting behind the queue.
 fn rotator_state(addr: &str) -> RotatorStateDto {
-    let (az_deg, el, reading) = match tempo_audio::rotator::read_position(addr) {
+    let (az_deg, el, reading) = match tempo_audio::rotator::latest_position(addr) {
         Ok((az, el)) => (Some(az), el, "position"),
         Err(e) if e.kind() == std::io::ErrorKind::Unsupported => (None, None, "noPosition"),
         Err(_) => {
@@ -25929,7 +25939,7 @@ fn rotator_state(addr: &str) -> RotatorStateDto {
             }
         }
     };
-    let el_range = tempo_audio::rotator::read_limits(addr)
+    let el_range = tempo_audio::rotator::latest_limits(addr)
         .ok()
         .map(|declared| {
             declared
@@ -25943,6 +25953,14 @@ fn rotator_state(addr: &str) -> RotatorStateDto {
         el_deg: el.filter(|_| el_range != Some(None)),
         el_range,
     }
+}
+
+/// The rotor strip's and the Needed panel's poll: the azimuth alone, `None` on any failure.
+/// Shared with every other poll of this rotator (`tempo_audio::rotator::latest_position`).
+fn rotator_azimuth(addr: &str) -> Option<f64> {
+    tempo_audio::rotator::latest_position(addr)
+        .ok()
+        .map(|(az, _)| az)
 }
 
 /// The Rotor pane's poll ([`RotatorStateDto`]); `None` when no rotator is configured.
@@ -25976,7 +25994,7 @@ async fn read_rotator(state: State<'_, SharedEngine>) -> Result<Option<f64>, Str
         let Some(host) = host else {
             return Ok(None); // no rotator configured — the pane shows its hint
         };
-        tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::read_azimuth(&host))
+        tauri::async_runtime::spawn_blocking(move || rotator_azimuth(&host))
             .await
             .map_err(|e| e.to_string())
     }
@@ -25984,6 +26002,155 @@ async fn read_rotator(state: State<'_, SharedEngine>) -> Result<Option<f64>, Str
     {
         let _ = state;
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod rotator_poll_tests {
+    //! Every surface that shows where the rotator points (the rotor strip in each cockpit, the
+    //! Rotor pane, the Needed panel) polls it, and rotctld runs ONE command at a time for all its
+    //! clients. Over a slow link those polls queued behind each other at rotctld, and a STOP waited
+    //! behind the whole queue. These tests stage a rotctld that works the same way (one command at
+    //! a time, in the order they arrive) and hold the polls to one position read in flight.
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::time::{Duration, Instant};
+
+    /// What the stand-in saw: position reads waiting or running at once (the most), and in all.
+    #[derive(Default)]
+    struct Seen {
+        reads_now: AtomicUsize,
+        reads_most: AtomicUsize,
+        reads: AtomicUsize,
+    }
+
+    /// A rotctld on loopback that answers each connection's one command in arrival order, one at a
+    /// time, as rotctld's single command lock does: a `p` takes `read_ms` (a controller across a
+    /// slow link); `\dump_state` and `S` answer at once.
+    fn one_at_a_time_rotctld(read_ms: u64) -> (String, Arc<Seen>) {
+        use std::io::{BufRead, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let addr = l.local_addr().expect("its address").to_string();
+        let seen = Arc::new(Seen::default());
+        let (queue, work) = std::sync::mpsc::channel::<(String, std::net::TcpStream)>();
+        let worker_seen = seen.clone();
+        std::thread::spawn(move || {
+            for (cmd, mut sock) in work {
+                let reply = match cmd.as_str() {
+                    "p" => {
+                        std::thread::sleep(Duration::from_millis(read_ms));
+                        worker_seen.reads_now.fetch_sub(1, Ordering::SeqCst);
+                        "123.000000\n45.000000\n"
+                    }
+                    "\\dump_state" => {
+                        "1\n603\nmin_az=-180.000000\nmax_az=450.000000\nmin_el=0.000000\n\
+                         max_el=180.000000\nsouth_zero=0\nrot_type=AzEl\ndone\n"
+                    }
+                    _ => "RPRT 0\n",
+                };
+                let _ = sock.write_all(reply.as_bytes());
+            }
+        });
+        let accept_seen = seen.clone();
+        std::thread::spawn(move || {
+            for sock in l.incoming() {
+                let Ok(sock) = sock else { return };
+                let (queue, seen) = (queue.clone(), accept_seen.clone());
+                std::thread::spawn(move || {
+                    let mut line = String::new();
+                    let Ok(read) = sock.try_clone() else { return };
+                    if std::io::BufReader::new(read).read_line(&mut line).is_err() {
+                        return;
+                    }
+                    let cmd = line.trim().to_string();
+                    if cmd == "p" {
+                        let now = seen.reads_now.fetch_add(1, Ordering::SeqCst) + 1;
+                        seen.reads_most.fetch_max(now, Ordering::SeqCst);
+                        seen.reads.fetch_add(1, Ordering::SeqCst);
+                    }
+                    let _ = queue.send((cmd, sock));
+                });
+            }
+        });
+        (addr, seen)
+    }
+
+    /// `n` strip/Needed polls and `n` pane polls, all asking at the same moment.
+    fn polls(addr: &str, n: usize) -> Vec<std::thread::JoinHandle<()>> {
+        let go = Arc::new(Barrier::new(2 * n));
+        (0..2 * n)
+            .map(|i| {
+                let (addr, go) = (addr.to_string(), go.clone());
+                std::thread::spawn(move || {
+                    go.wait();
+                    if i % 2 == 0 {
+                        assert_eq!(rotator_azimuth(&addr), Some(123.0));
+                    } else {
+                        assert_eq!(rotator_state(&addr).az_deg, Some(123.0));
+                    }
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_surface_polling_at_once_puts_one_read_in_flight() {
+        let (addr, seen) = one_at_a_time_rotctld(300);
+        for p in polls(&addr, 4) {
+            p.join().expect("a poll");
+        }
+        assert_eq!(
+            seen.reads_most.load(Ordering::SeqCst),
+            1,
+            "position reads waiting at rotctld at once"
+        );
+        assert_eq!(
+            seen.reads.load(Ordering::SeqCst),
+            1,
+            "eight polls, one read"
+        );
+    }
+
+    #[test]
+    fn a_stop_waits_behind_one_read_at_most_never_a_queue_of_them() {
+        const READ_MS: u64 = 400;
+        let (addr, seen) = one_at_a_time_rotctld(READ_MS);
+        let busy = polls(&addr, 3);
+        // The polls are at rotctld; the operator presses STOP.
+        std::thread::sleep(Duration::from_millis(100));
+        let pressed = Instant::now();
+        tempo_audio::rotator::stop(&addr).expect("RPRT 0");
+        let waited = pressed.elapsed();
+        for p in busy {
+            p.join().expect("a poll");
+        }
+        assert!(
+            waited < Duration::from_millis(READ_MS + 300),
+            "STOP took {waited:?} behind {} position reads",
+            seen.reads.load(Ordering::SeqCst)
+        );
+    }
+
+    #[test]
+    fn a_track_that_steered_reads_again_rather_than_taking_a_poll_in_flight() {
+        // A poll is in flight when the track asks where the mast went: the track waits for it,
+        // then reads for itself, so the answer is not one from before its `P`. Never two reads
+        // at rotctld at once.
+        let (addr, seen) = one_at_a_time_rotctld(300);
+        let poll = {
+            let addr = addr.clone();
+            std::thread::spawn(move || rotator_azimuth(&addr))
+        };
+        std::thread::sleep(Duration::from_millis(100));
+        tempo_audio::rotator::fresh_position(&addr).expect("a position");
+        assert_eq!(poll.join().expect("the poll"), Some(123.0));
+        assert_eq!(
+            seen.reads.load(Ordering::SeqCst),
+            2,
+            "the poll's read and its own"
+        );
+        assert_eq!(seen.reads_most.load(Ordering::SeqCst), 1, "one at a time");
     }
 }
 
