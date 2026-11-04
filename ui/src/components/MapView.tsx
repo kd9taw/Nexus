@@ -113,6 +113,8 @@ import { t, type MessageKey } from '../i18n'
 import { StateBlock } from './StateBlock'
 import { usePaletteKey } from '../usePaletteRoles'
 import { STANDARD_MAP, STANDARD_SKY, type MapToken, type SkyToken } from '../features/skins'
+import { mapPaletteFor, useMapStyle } from '../features/mapStyle'
+import { MapStylePick } from './MapStylePick'
 import { MOON_DISC, SUN_DISC, drawMoon, drawSun } from '../features/skyGlyphs'
 import { bandRings, flareFootprint, sunWarmth, warmSunInk, XRAY_LIVE_SECS, type FlareNoaa } from '../flareNow'
 import { FlareChip } from './prop/FlareChip'
@@ -504,7 +506,7 @@ function rarityRing(r: import('../types').GridRarity | null | undefined): string
 
 /** Need tier → a dot color (matches the decode/roster palette). `null` = no
  * specific need (fall back to worked/SNR coloring). */
-function needColor(tag: NeedTag | undefined): string | null {
+export function needColor(tag: NeedTag | undefined): string | null {
   // Matches the shared --need-* palette (styles.css) so the map, roster, and
   // decode feed speak ONE color language for what's needed.
   switch (tag) {
@@ -720,6 +722,11 @@ const MAP_ATMO = 'rgba(104, 168, 226, 0.55)' // atmosphere glow at the limb
  *  than the standard basemap's --map-ocean-deep so it separates even from the globe's own limb.
  *  Exported for the 3-D globe's sun and moon, which are the same glyphs (features/skyGlyphs). */
 export const MARKER_HALO = 'rgba(2, 7, 12, 0.9)'
+/** The greyline's night side, a near-black laid over the basemap in stacked twilight caps, and the
+ *  day/night line in warm gold (the twice-daily greyline DX window). Exported for the map-style
+ *  contrast guard (features/mapStyle.test.ts): both must read on every basemap. */
+export const NIGHT_INK = 'rgb(4, 8, 20)'
+export const GREYLINE_INK = 'rgba(255, 200, 110, 0.9)'
 /** The aurora oval's equatorward edge: the aurora layer's high-probability green, so the line
  *  reads as the oval's own. */
 const AURORA_EDGE_INK = 'rgb(120, 230, 140)'
@@ -824,7 +831,7 @@ export function placeHoverCard(o: {
 
 // Per-band spot colors (low bands cool → high bands warm), so the live-spot
 // firehose reads by band at a glance. "Heard me" spots override to green.
-const BAND_COLOR: Record<string, string> = {
+export const BAND_COLOR: Record<string, string> = {
   '160m': '#7c5cff',
   '80m': '#5c7cff',
   '40m': '#3aa0ff',
@@ -842,14 +849,14 @@ const BAND_COLOR: Record<string, string> = {
   '23cm': '#944dff',
 }
 const bandColor = (b: string): string => BAND_COLOR[b] ?? '#8aa0b0'
-const GETTING_OUT = '#3ddc6a' // a station that heard ME
+export const GETTING_OUT = '#3ddc6a' // a station that heard ME
 
 // TX/RX path lines (`features/mapPaths.ts` decides WHICH stations earn one). TX reuses
 // GETTING_OUT so "green = they heard me" means one thing on dots and lines alike; RX is a
 // quiet cool grey-blue because it is the bigger, less newsworthy set and must recede under
 // the spots it connects. The two DASH patterns are a redundant, CVD-safe channel — the same
 // habit as the station dots encoding SNR as size on top of color.
-const PATH_RX = '#8fb8d8'
+export const PATH_RX = '#8fb8d8'
 const PATH_TX_DASH = [5, 4] // dashes — "getting out"
 const PATH_RX_DASH = [1, 3] // dots — "hearing"
 
@@ -868,13 +875,23 @@ function fadeStop(hex: string): string {
 // worst during a big opening when the frame budget is already gone. The values
 // are pure theme tokens, so the cache empties when the theme changes (below).
 const cssVarCache = new Map<string, string>()
-export function invalidateCssVarCache(): void {
+/** Where the tokens are read: <html>, or the map's display-well probe while it paints a Dark map
+ *  (features/mapStyle: a Dark map's markers are the dark palette's, in either UI theme). Set by each
+ *  draw, right after it empties the cache, and every read below happens inside that draw. */
+let cssVarScope: Element | null = null
+export function invalidateCssVarCache(scope: Element | null = null): void {
   cssVarCache.clear()
+  cssVarScope = scope
 }
 function cssVar(name: string, fallback = '#888'): string {
   const hit = cssVarCache.get(name)
   if (hit !== undefined) return hit
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
+  // The scope inherits every token it does not declare, so a browser answers from it alone; the root
+  // is asked as well for a DOM that does not inherit custom properties (jsdom).
+  const v =
+    (cssVarScope && getComputedStyle(cssVarScope).getPropertyValue(name).trim()) ||
+    getComputedStyle(document.documentElement).getPropertyValue(name).trim() ||
+    fallback
   cssVarCache.set(name, v)
   return v
 }
@@ -1036,6 +1053,13 @@ export function MapView({
   // The key also moves with Night and with a built-in theme, which retune the base map's own
   // tokens (a dark theme's basemap, the grid's --border-soft), so the base cache is keyed on it too.
   const colourRoles = usePaletteKey()
+  // THE MAP STYLE (Map layers ▸ Map style; features/mapStyle): this window's pick paints the basemap
+  // in its own palette, and no pick leaves it to the theme's tokens, as before. A Dark map reads its
+  // marker inks from `inkWellRef`, a display well (the dark palette), so the light theme's dark inks
+  // never land on dark land. The 3-D globe does not read it.
+  const [mapStyle, setMapStyle] = useMapStyle()
+  const stylePalette = mapPaletteFor(mapStyle)
+  const inkWellRef = useRef<HTMLSpanElement>(null)
   // Opening-pulse tick: the main nowMs clock is a 60 s greyline tick, far too
   // coarse to animate the heat pulse (it froze the sine). Run a 1 s tick ONLY
   // while the heat layer is on AND an opening is actually detected — an idle map
@@ -1826,7 +1850,10 @@ export function MapView({
     // Empty the cssVar memo BEFORE any token is read: each draw then resolves
     // each token exactly once (the point of the memo), and the first frame
     // after a theme switch can never paint from the old theme's cache.
-    invalidateCssVarCache()
+    // A Dark map is read from the well (see `inkWellRef`); Street is MapLibre's map, in the UI theme.
+    invalidateCssVarCache(mapStyle === 'dark' && kind !== 'street' ? inkWellRef.current : null)
+    /** A basemap ink: the picked style's, or the theme's token where nothing is picked. */
+    const baseInk = (token: MapToken) => stylePalette?.[token] ?? mapInk(token)
     const canvas = canvasRef.current
     const { w, h } = size
     if (!canvas || w === 0 || h === 0 || !me) return
@@ -2005,15 +2032,15 @@ export function MapView({
             gcy,
             gR * 1.02,
           )
-          sea.addColorStop(0, mapInk('--map-ocean-lit'))
-          sea.addColorStop(0.55, mapInk('--map-ocean'))
-          sea.addColorStop(1, mapInk('--map-ocean-deep'))
+          sea.addColorStop(0, baseInk('--map-ocean-lit'))
+          sea.addColorStop(0.55, baseInk('--map-ocean'))
+          sea.addColorStop(1, baseInk('--map-ocean-deep'))
           ctx.fillStyle = sea
         } else {
-          ctx.fillStyle = mapInk('--map-ocean')
+          ctx.fillStyle = baseInk('--map-ocean')
         }
         ctx.fill()
-        ctx.strokeStyle = mapInk('--map-rim')
+        ctx.strokeStyle = baseInk('--map-rim')
         ctx.lineWidth = 1
         ctx.stroke()
 
@@ -2029,13 +2056,13 @@ export function MapView({
           map: basemapAt(scaleFor(ppd)),
           region: visibleRegion(kind, proj, w, h),
           inks: {
-            land: mapInk(isGlobe ? '--map-land-globe' : '--map-land'),
-            water: mapInk('--map-ocean'),
+            land: baseInk(isGlobe ? '--map-land-globe' : '--map-land'),
+            water: baseInk('--map-ocean'),
             // The rim's blue: a step from the sea in every theme (lighter on a dark map, deeper on
             // a light one), so a river one pixel wide still reads against the land.
-            river: mapInk('--map-rim'),
-            coast: mapInk('--map-coast'),
-            state: mapInk('--map-state'),
+            river: baseInk('--map-rim'),
+            coast: baseInk('--map-coast'),
+            state: baseInk('--map-state'),
           },
           pxPerDeg: ppd,
           coast: layers.coast.visible ? layers.coast.opacity : 0,
@@ -2102,7 +2129,7 @@ export function MapView({
         ctx.globalAlpha = layers.grid.opacity * 0.6
         ctx.beginPath()
         path(graticule())
-        ctx.strokeStyle = mapInk('--map-coast')
+        ctx.strokeStyle = baseInk('--map-coast')
         ctx.lineWidth = 0.5
         ctx.stroke()
       }
@@ -2206,7 +2233,7 @@ export function MapView({
         ctx.globalAlpha = 1
       }
     }
-    const baseDeps = [kind, w, h, dpr, view, streetView, me, focusLL, theme, colourRoles, reliefReady, basemapRev, stars, layers.relief, layers.coast, layers.states, layers.grid, layers.gridLabels, layers.cqzones, layers.coverage, cqzones, coverageDim, coverageGridGeo, workedZones]
+    const baseDeps = [kind, w, h, dpr, view, streetView, me, focusLL, theme, colourRoles, mapStyle, reliefReady, basemapRev, stars, layers.relief, layers.coast, layers.states, layers.grid, layers.gridLabels, layers.cqzones, layers.coverage, cqzones, coverageDim, coverageGridGeo, workedZones]
     const cache = baseRef.current
     const base = cache.canvas ?? (cache.canvas = document.createElement('canvas'))
     if (
@@ -2591,7 +2618,7 @@ export function MapView({
     if (layers.rings.visible && kind !== 'world') {
       ctx.globalAlpha = layers.rings.opacity
       // The map's line ink, like the grid: the rings lie on the basemap, not on a UI surface.
-      ctx.strokeStyle = mapInk('--map-coast')
+      ctx.strokeStyle = baseInk('--map-coast')
       ctx.setLineDash([3, 3])
       ctx.lineWidth = 0.75
       for (const km of RINGS_KM) {
@@ -2610,7 +2637,7 @@ export function MapView({
     // spots/openings so stations stay bright on the dark side.
     if (layers.daynight.visible) {
       const term = terminator(skyMs)
-      ctx.fillStyle = 'rgb(4, 8, 20)' // near-black night
+      ctx.fillStyle = NIGHT_INK
       for (const cap of term.caps) {
         ctx.globalAlpha = layers.daynight.opacity * 0.2 // stacks: ~0.2 twilight → ~0.6 core
         ctx.beginPath()
@@ -2620,7 +2647,7 @@ export function MapView({
       ctx.globalAlpha = layers.daynight.opacity * 0.85
       ctx.beginPath()
       path(term.line)
-      ctx.strokeStyle = 'rgba(255, 200, 110, 0.9)' // greyline glow (prime DX zone)
+      ctx.strokeStyle = GREYLINE_INK
       ctx.lineWidth = 1.1
       ctx.stroke()
       ctx.globalAlpha = 1
@@ -3338,7 +3365,7 @@ export function MapView({
     // cssVar memo is emptied at the top of this effect).
     void theme
     void colourRoles
-  }, [me, myQth, myGrid, showQth, kind, streetView, streetScale, devScale, markerScale, colorBy, pathMode, outlook, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, auroraOn, auroraPic, pca, capPic, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, skyMs, scrubHour, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, flareFoot, flareRings, ringLabels, hoverKey, focusSat, placedMyParks, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec, aprsTracks, aprsTrailMin, aprsLabels, followAt, focusLL])
+  }, [me, myQth, myGrid, showQth, kind, streetView, streetScale, devScale, markerScale, colorBy, pathMode, outlook, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, auroraOn, auroraPic, pca, capPic, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, mapStyle, stylePalette, nowMs, skyMs, scrubHour, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, flareFoot, flareRings, ringLabels, hoverKey, focusSat, placedMyParks, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec, aprsTracks, aprsTrailMin, aprsLabels, followAt, focusLL])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
@@ -4232,6 +4259,7 @@ export function MapView({
               something on a 2 m packet map (APRS_LAYER_CHOICES). */}
           {embedded?.aprs && (
             <MapLayersPanel className="map-layers" title={t('map.layers.head')} narrow={size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX}>
+              <MapStylePick pick={mapStyle} onPick={setMapStyle} />
               {APRS_LAYER_CHOICES.map((k) => (
                 <div
                   className={`map-layer${streetScale && WORLD_SCALE_LAYERS.includes(k) ? ' street-dim' : ''}`}
@@ -4264,6 +4292,7 @@ export function MapView({
               title={t('map.layers.head')}
               narrow={prop != null && size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX}
             >
+              <MapStylePick pick={mapStyle} onPick={setMapStyle} />
               {(Object.keys(layers) as LayerKey[]).map((k) => (
                 // At street scale the world-scale fields show no detail: dimmed, saying why. Their
                 // state is the operator's and is never touched here.
@@ -4451,6 +4480,8 @@ export function MapView({
               activeBand={focusBand}
             />
           )}
+          {/* The dark palette's scope, never shown: a Dark map reads its marker inks here (`inkWellRef`). */}
+          <span ref={inkWellRef} className="well" hidden />
         </div>
       </div>
     </div>
