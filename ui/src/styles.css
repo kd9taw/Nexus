@@ -13131,31 +13131,42 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    (an SVG whose viewBox is the dial's own shape, so it scales with the face) over a band carrying the
    meter's name and value, laid over the dial's lower half (the needle's pivot sits under it).
 
-   THE FACE'S SIZE IS ITS WIDTH, set per host here; its height is the dial's, from the dial's aspect
-   ratio, so the whole face is in em and follows --ui-zoom and the text size as the bars' type does. It never changes with the TX cycle: the faces are drawn from the
-   first moment the bars' slots would be, at rest until a reading arrives.
-   - The dock (Phone and CW below md, `pinned`): the faces get the meters' first row to themselves,
-     at the same size keyed or not (the bars' compact/full switch does not reach them).
-   - Operate's cell (`inline`) and the TX strip's (`strip`) keep their compact type, and the faces
-     are no taller than the strip's buttons (measured in Chrome at 1920×1080 and 1366×768), and
-     narrow enough that the strip's COMP row keeps the room it has beside the bars. */
+   THE FACE'S SIZE IS ITS WIDTH, ONE SIZE IN EVERY HOST; its height is the dial's, from the dial's
+   aspect ratio, so the whole face is in em and follows --ui-zoom and the text size as the bars' type
+   does. It never changes with the TX cycle: the faces are drawn from the first moment the bars'
+   slots would be, at rest until a reading arrives, and the bars' compact/full switch does not reach
+   them. The size is the strip's: no taller than its buttons (measured in Chrome at 1920×1080 and
+   1366×768), and narrow enough that its COMP row keeps the room it has beside the bars.
+   - The dock (Phone and CW below md): the faces and the bars left (COMP, the temperatures) share
+     one wrapping line instead of the bars' grid, so the bottom-anchored dock grows by the faces'
+     extra height over a bar row and no more.
+   - Operate's cell (`inline`): the faces take the first row of its grid.
+   - The TX strip (`strip`): the faces take a first column across both of its rows. */
+.ph-txmeters.needle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.ph-txmeters.needle .ph-txmeter {
+  flex: 1 1 150px;
+}
+.ph-txmeters.needle .ph-txmeter.has-ctl {
+  flex-basis: 300px;
+}
+.ph-txmeters.inline.needle {
+  display: grid;
+}
 .ph-txmeters.needle .ph-txneedles {
   grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1) var(--space-2);
+  gap: 2px var(--space-1);
   min-width: 0;
 }
 .ph-txneedle {
   flex: none;
-  width: 8em;
-  min-width: 0;
-}
-.ph-txmeters.inline .ph-txneedle {
   width: 5em;
-}
-.ph-txmeters.inline .ph-txneedles {
-  gap: 2px var(--space-1);
+  min-width: 0;
 }
 .ph-txneedle-face {
   position: relative;
@@ -13187,7 +13198,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .ph-txneedle-peak {
   fill: none;
-  stroke: var(--accent);
+  /* The Cyan role: a signal colour no theme retunes, so in every theme and skin it stays apart from
+     the needle's ink (styles-wells.test.ts measures the pair). */
+  stroke: var(--alert-info);
   stroke-width: 2.4;
   stroke-linecap: round;
 }
@@ -13195,9 +13208,6 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   stroke: var(--text);
   stroke-width: 1.6;
   stroke-linecap: round;
-  transform-box: view-box;
-  transform-origin: 50px 63px;
-  transition: transform 120ms linear;
 }
 .ph-txneedle-band {
   position: absolute;
@@ -13216,22 +13226,16 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .ph-txneedle-label {
   font-family: var(--font-mono);
-  font-size: calc(11px * var(--text-scale));
+  font-size: calc(10px * var(--text-scale));
   font-weight: 800;
   color: var(--text-dim);
 }
 .ph-txneedle-value {
   color: var(--text);
   font-variant-numeric: tabular-nums;
-  font-size: 0.86rem;
+  font-size: 0.74rem;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.ph-txmeters.inline .ph-txneedle-label {
-  font-size: calc(10px * var(--text-scale));
-}
-.ph-txmeters.inline .ph-txneedle-value {
-  font-size: 0.74rem;
 }
 /* The strip's two rows: the faces take both, in a first column of their own width; COMP and the
    temperatures fill the columns after it as they do beside the bars. */

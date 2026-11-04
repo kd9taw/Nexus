@@ -87,22 +87,39 @@ describe('the TX strip: the faces take a first column across both rows, and neve
   })
 })
 
-describe('the dock and Operate’s cell: the faces take the first row', () => {
-  it.each(['dock', 'cell'] as const)('%s: a full-width row that wraps on a narrow window', (host) => {
-    const { needles } = mount(host, KEYED)
+describe('the dock: the faces and the bars left share a line, wrapping only when the window is narrow', () => {
+  it('the dock lays the faces and COMP out in one wrapping row, not in the bars’ grid', () => {
+    const { group, needles, container } = mount('dock', KEYED)
+    expect(win(group, 'display')).toBe('flex')
+    expect(win(group, 'flex-wrap')).toBe('wrap')
+    expect(win(needles, 'flex-wrap')).toBe('wrap')
+    // COMP takes the share a dock bar takes in the bars' grid, beside the faces.
+    expect(win(container.querySelector('.ph-txmeter')!, 'flex')).toBe('1 1 150px')
+  })
+
+  it('the control: with bars the dock is the bars’ grid', () => {
+    const { group } = mount('dock', KEYED, false)
+    expect(win(group, 'display')).toBe('grid')
+  })
+})
+
+describe('Operate’s cell: the faces take the first row of its grid', () => {
+  it('a full-width row that wraps on a narrow window', () => {
+    const { group, needles } = mount('cell', KEYED)
+    expect(win(group, 'display')).toBe('grid')
     expect(win(needles, 'grid-column')).toBe('1 / -1')
     expect(win(needles, 'flex-wrap')).toBe('wrap')
   })
 })
 
 describe('a face’s size is its host’s, and the TX cycle does not touch it', () => {
-  it('compact in the strip and in Operate’s cell, larger in the dock', () => {
+  it('one compact size in every host: no taller than the strip’s buttons, and the dock grows least', () => {
     const widths = (['strip', 'cell', 'dock'] as const).map((h) => {
       const w = win(mount(h, KEYED).face, 'width')
       cleanup()
       return w
     })
-    expect(widths).toEqual(['5em', '5em', '8em'])
+    expect(widths).toEqual(['5em', '5em', '5em'])
   })
 
   it.each(['dock', 'cell', 'strip'] as const)('%s: the same width keyed and between overs', (host) => {
@@ -131,10 +148,15 @@ describe('the dial is drawn to its own shape', () => {
     expect(win(svg, 'inset')).toBe('0')
   })
 
-  it('the needle turns about the pivot it is drawn from', () => {
+  it('the needle turns about the pivot it is drawn from, by the SVG attribute every webview reads alike', () => {
     const { container } = mount('dock', KEYED)
     const line = container.querySelector('.ph-txneedle-needle')!
-    expect(win(line, 'transform-origin')).toBe(`${line.getAttribute('x1')}px ${line.getAttribute('y1')}px`)
-    expect(win(line, 'transform-box')).toBe('view-box')
+    const m = /^rotate\((-?[\d.]+) (-?[\d.]+) (-?[\d.]+)\)$/.exec(line.getAttribute('transform') ?? '')
+    expect(m, line.getAttribute('transform') ?? 'no transform attribute').not.toBeNull()
+    expect([m![2], m![3]]).toEqual([line.getAttribute('x1'), line.getAttribute('y1')])
+    expect((line as SVGElement).style.transform).toBe('')
+    // No CSS transform competes with the attribute (a CSS one would win over it, engine by engine).
+    expect(win(line, 'transform')).toBeNull()
+    expect(win(line, 'transform-origin')).toBeNull()
   })
 })

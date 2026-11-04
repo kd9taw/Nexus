@@ -184,6 +184,24 @@ describe('the faces read what the bars read', () => {
     expect(hot.getAttribute('style')).toContain('--state-weak')
   })
 
+  it('the ALC zone holds between overs and into the next over until ALC is read again', () => {
+    // The engine sends the radio's ALC zone with each ALC reading and clears both on unkey; a new
+    // over's first polls read SWR or power before ALC. The face keeps the zone its last ALC reading
+    // came with, as the bars keep theirs in the held rows.
+    needleOn()
+    const hotFrom = (c: HTMLElement) =>
+      Number(face(c, 'alc').querySelector('.ph-txneedle-zone[data-zone="hot"]')!.getAttribute('data-from'))
+    const { container, rerender } = render(<TxMeters radio={keyed({ txAlc: 0.48, txAlcZone: 0.5 })} pinned />)
+    expect(hotFrom(container)).toBeCloseTo(0.475)
+    rerender(<TxMeters radio={idle} pinned />)
+    expect(hotFrom(container)).toBeCloseTo(0.475)
+    rerender(<TxMeters radio={keyed({ txSwr: 1.2 })} pinned />)
+    expect(hotFrom(container)).toBeCloseTo(0.475)
+    // The control: an ALC reading that comes without a zone is on the default scale.
+    rerender(<TxMeters radio={keyed({ txAlc: 0.3 })} pinned />)
+    expect(hotFrom(container)).toBeCloseTo(0.95)
+  })
+
   it('an unverified SWR scale paints no zone, and the face says SWR?', () => {
     needleOn()
     const { container } = render(<TxMeters radio={keyed({ txSwr: 2.5, swrScaleVerified: false })} pinned />)

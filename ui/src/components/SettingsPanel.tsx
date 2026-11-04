@@ -1293,6 +1293,7 @@ export function SettingsPanel({
   const [logbookGlobe, setLogbookGlobe] = useLogbookGlobe()
   // Browser-local like the globe: whether resting the pointer on a call opens its station card.
   const [callCardHover, setCallCardHover] = useCallCardHover()
+  // Browser-local too (txMeterStyle.ts): how the TX meters are drawn.
   const txMeterStyle = useTxMeterStyle()
   // APPEARANCE IN THE BACKUP (features/appearanceBackup.ts). The look on screen, as the backup
   // carries it: what this host wires, both waterfall palettes and the Logbook globe — and, by
@@ -1304,6 +1305,7 @@ export function SettingsPanel({
       waterfallPalette: getWaterfallPalette(),
       ftWaterfallPalette: getWaterfallPalette(FT_PALETTE_SCOPE),
       logbookGlobe,
+      txMeterStyle,
     }
     if (theme) a.theme = theme
     if (onSkinChange) a.skin = skin
@@ -1334,6 +1336,7 @@ export function SettingsPanel({
     if (a.waterfallPalette) setWaterfallPalette(a.waterfallPalette)
     if (a.ftWaterfallPalette) setWaterfallPalette(a.ftWaterfallPalette, FT_PALETTE_SCOPE)
     if (a.logbookGlobe !== undefined) setLogbookGlobe(a.logbookGlobe)
+    if (a.txMeterStyle) setTxMeterStyle(a.txMeterStyle)
   }
   const [form, setForm] = useState<Settings | null>(null)
   // From a computer driving the station, the read names the settings a save from there keeps as

@@ -5,8 +5,9 @@ import { useEffect, useState } from 'react'
 //
 // BARS BY DEFAULT, so nothing changes for anyone until they pick Needle.
 //
-// PER MACHINE, bare localStorage, APP-GLOBAL — the classification of nexus-density and the local
-// clock: it is how this screen draws an instrument, not a fact about the station, and every window
+// PER MACHINE, bare localStorage, APP-GLOBAL — the classification of nexus-density: it is how this
+// screen draws an instrument, not a fact about the station (and, like density, it rides in the
+// backup's appearance section, features/appearanceBackup.ts), and every window
 // (a popped-out panel too) reads the one value. Read synchronously by the meters themselves through
 // `useTxMeterStyle()`, so no prop threads through the three cockpits.
 //
@@ -15,6 +16,8 @@ import { useEffect, useState } from 'react'
 // the default too.
 
 export type TxMeterStyle = 'bars' | 'needle'
+/** Every look a build knows, for a backup restore to check against (features/appearanceBackup.ts). */
+export const TX_METER_STYLES: readonly TxMeterStyle[] = ['bars', 'needle']
 export const TX_METER_STYLE_KEY = 'nexus-txmeter-style'
 const CHANGED = 'nexus-txmeter-style-changed'
 

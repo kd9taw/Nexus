@@ -200,6 +200,14 @@ export function TxMeters({
   // #343: Settings ▸ Workspace ▸ TX meters. Needle draws PO, ALC and SWR as needles (TxNeedles) in
   // place of their bars; COMP and the temperatures stay bars. Bars is the default.
   const needle = useTxMeterStyle() === 'needle'
+  // The radio's ALC zone as it came with the last ALC reading. The engine sends the zone with each
+  // ALC reading and clears both on unkey, and an over's first polls read other meters before ALC,
+  // so the live value says "default scale" between overs and for the start of each over. The bars
+  // never see that (their held rows were zoned while live); the needle face, which draws the zone
+  // as arcs at every moment, keeps it here. ⚠️ When `useTxMeterMemory` (#446) is on main, this
+  // belongs in that shared memory with the rest, so a second panel of the same radio has it too.
+  const alcZone = useRef(1)
+  if (radio.txAlc != null) alcZone.current = radio.txAlcZone ?? 1
   // The processor level while a drag is in flight: the marker follows the pointer at once.
   const [dragPct, setDragPct] = useState<number | null>(null)
   // The level last set here, held on the marker until the radio's reported level moves. Mid-over
@@ -487,7 +495,7 @@ export function TxMeters({
           rows={rows.filter((r): r is NeedleRow => isNeedle(r.key))}
           live={live}
           swrVerified={radio.swrScaleVerified === true}
-          alcZoneTop={radio.txAlcZone ?? 1}
+          alcZoneTop={alcZone.current}
           unreported={overJudged.current ? NEEDLE_KEYS.filter((k) => !seen.current.has(k)) : []}
         />
       )}

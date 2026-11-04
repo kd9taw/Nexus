@@ -18,6 +18,7 @@ import { LOGBOOK_GLOBE_KEY } from '../features/logbookGlobe'
 import { FT_PALETTE_SCOPE, WF_PALETTE_KEY } from '../waterfallPalette'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import { EN } from '../i18n'
+import { TX_METER_STYLE_KEY } from '../txMeterStyle'
 
 // THE BUDGET (2026-10-09). The slowest case here, "a built-in theme travels with its base: backed up as it…", takes
 // 0.34 s and 0.25 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
@@ -173,6 +174,7 @@ describe('Backup & reset carries the appearance', () => {
   it('Back up saves the look on screen beside the station’s bundle', async () => {
     localStorage.setItem(WF_PALETTE_KEY, 'cividis')
     localStorage.setItem(LOGBOOK_GLOBE_KEY, 'off')
+    localStorage.setItem(TX_METER_STYLE_KEY, 'needle')
     renderPanel(setters())
     fireEvent.click(await screen.findByRole('button', { name: EN['settings.transmit.backup.action'] }))
     await waitFor(() => expect(api.get('saveTextToDownloads')).toHaveBeenCalled())
@@ -190,6 +192,7 @@ describe('Backup & reset carries the appearance', () => {
       waterfallPalette: 'cividis',
       ftWaterfallPalette: 'turbo',
       logbookGlobe: false,
+      txMeterStyle: 'needle',
     })
   })
 
@@ -210,6 +213,7 @@ describe('Backup & reset carries the appearance', () => {
         waterfallPalette: 'viridis',
         ftWaterfallPalette: 'cividis',
         logbookGlobe: false,
+        txMeterStyle: 'needle',
       },
     })
     const { container } = renderPanel(s)
@@ -228,6 +232,7 @@ describe('Backup & reset carries the appearance', () => {
     expect(localStorage.getItem(WF_PALETTE_KEY)).toBe('viridis')
     expect(localStorage.getItem(`${WF_PALETTE_KEY}.${FT_PALETTE_SCOPE}`)).toBe('cividis')
     expect(localStorage.getItem(LOGBOOK_GLOBE_KEY)).toBe('off')
+    expect(localStorage.getItem(TX_METER_STYLE_KEY)).toBe('needle')
     // Field mode and UI scale are never restored.
     expect(s.setFieldMode).not.toHaveBeenCalled()
     expect(s.setScaleMode).not.toHaveBeenCalled()

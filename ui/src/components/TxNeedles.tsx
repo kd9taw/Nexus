@@ -182,6 +182,8 @@ export function TxNeedles({
                     <path key={f} className="ph-txneedle-tick" d={radial(R - 4, R + 0.5, f)} />
                   ))}
                   {held && <path className="ph-txneedle-peak" data-frac={peak.toFixed(3)} d={radial(R - 7, R + 2.5, peak)} />}
+                  {/* Turned by the SVG attribute, not a CSS transform: the attribute's pivot is
+                      read alike by every webview Nexus ships in (WebView2, WebKitGTK, WKWebView). */}
                   <line
                     className="ph-txneedle-needle"
                     data-frac={needle.toFixed(3)}
@@ -189,7 +191,7 @@ export function TxNeedles({
                     y1={CY}
                     x2={CX}
                     y2={CY - R - 2}
-                    style={{ transform: `rotate(${needleAngle(needle).toFixed(2)}deg)` }}
+                    transform={`rotate(${needleAngle(needle).toFixed(2)} ${CX} ${CY})`}
                   />
                 </svg>
               </div>
