@@ -157,6 +157,12 @@ describe('Settings ▸ Digital ▸ RTTY ▸ the saved tone pair', () => {
 // The box cannot save junk: a cleared or out-of-range entry keeps the last valid tone, and a
 // stored value outside the range loads (and saves) as the 2125 standard. 300–2700 keeps both
 // tones of the widest shift (850) inside the passband the engine nets in.
+/** The settings object the latest save sent. */
+function lastSaved(): unknown {
+  const calls = api.get('setSettings').mock.calls
+  return calls[calls.length - 1][0]
+}
+
 describe('Settings ▸ Digital ▸ RTTY ▸ Low tone — never saves junk', () => {
   async function saveAfter(stored: Record<string, unknown>, ...typed: string[]) {
     const fs = await openRtty(stored)
@@ -166,7 +172,7 @@ describe('Settings ▸ Digital ▸ RTTY ▸ Low tone — never saves junk', () =
     fireEvent.blur(box)
     await clickSave()
     await waitFor(() => expect(api.get('setSettings')).toHaveBeenCalled())
-    return (api.get('setSettings').mock.calls.at(-1)![0] as { rttyLowToneHz?: number }).rttyLowToneHz
+    return (lastSaved() as { rttyLowToneHz?: number }).rttyLowToneHz
   }
 
   it('offers exactly the valid range', async () => {
@@ -205,7 +211,7 @@ describe('Settings ▸ Digital ▸ RTTY ▸ Low tone — never saves junk', () =
       expect(inputFor(fs, 'Low tone (Hz)')!.value, String(bad)).toBe('2125')
       await clickSave()
       await waitFor(() => expect(api.get('setSettings')).toHaveBeenCalled())
-      expect((api.get('setSettings').mock.calls.at(-1)![0] as { rttyLowToneHz?: number }).rttyLowToneHz, String(bad)).toBe(2125)
+      expect((lastSaved() as { rttyLowToneHz?: number }).rttyLowToneHz, String(bad)).toBe(2125)
       cleanup()
       api.get('setSettings').mockClear()
     }
