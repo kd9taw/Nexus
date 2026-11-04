@@ -16,6 +16,8 @@ vi.mock('../../api', async (importOriginal) => {
     ...auto,
     getSettings: vi.fn(async () => ({ rotatorModel: 0, rotatorHost: '' })),
     readRotatorState: vi.fn(async () => null),
+    getMoonStatus: vi.fn(async () => null),
+    startMoonTrack: vi.fn(async () => ({ state: 'following', elevation: true, azDeg: null, elDeg: null })),
     getOpeningsLog: vi.fn(async () => []),
     getContests: vi.fn(async () => []),
     getGettingOut: vi.fn(async () => ({

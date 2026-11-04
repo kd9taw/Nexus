@@ -348,6 +348,9 @@ const SHARED = [
   // The Flex DAX note in the voice keyer (features/flexDaxNote), dismissed once for this computer like
   // the work-in hint above.
   'nexus.phone.flexDaxNote',
+  // Phone's Tune note on a Yaesu with USB audio (features/yaesuTuneNote), dismissed once for this
+  // computer like the Flex DAX note above.
+  'nexus.phone.yaesuTuneNote',
   'nexus.freqMarkers.changed',
   'nexus.waterfall.detached',
   'nexus.waterfall.gain',

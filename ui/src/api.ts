@@ -402,6 +402,18 @@ export async function getSatTrackStatus(): Promise<import('./types').SatTrackSta
   return invoke<import('./types').SatTrackStatus | null>('sat_track_status')
 }
 
+/** Where the Moon stands from the station, and the rotator's Moon follow (`moon_status`); null when
+ *  the station's grid is not set. `dxGrid` also asks for the next EME window with that grid. */
+export async function getMoonStatus(dxGrid?: string | null): Promise<import('./types').MoonStatus | null> {
+  return invoke<import('./types').MoonStatus | null>('moon_status', { dxGrid: dxGrid ?? null })
+}
+
+/** Turn the rotator to follow the Moon (`start_moon_track`). It ends with stopSatTrack — the one
+ *  Stop for whatever tracker owns the mast — or when a pass is armed. */
+export async function startMoonTrack(): Promise<import('./types').MoonTrack> {
+  return invoke<import('./types').MoonTrack>('start_moon_track')
+}
+
 /** Put the radio under Doppler control for one transponder on `name`; `null`
  * clears the selection and hands the dial back to the operator.
  *

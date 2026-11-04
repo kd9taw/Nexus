@@ -1109,6 +1109,10 @@ pub fn rotctld_args(model: u32, port: &str, baud: u32, tcp_port: u16) -> Vec<Str
         args.push(port.to_string());
         args.push("-s".to_string());
         args.push(baud.to_string());
+        if let Some(conf) = rotctld_link_conf(model) {
+            args.push("-C".to_string());
+            args.push(conf.to_string());
+        }
     }
     // Loopback-only, same defect class as rigctld_args: the wildcard default exposed
     // rotator control to the LAN. Every consumer of this daemon is on this machine.
@@ -1117,6 +1121,49 @@ pub fn rotctld_args(model: u32, port: &str, baud: u32, tcp_port: u16) -> Vec<Str
     args.push("-t".to_string());
     args.push(tcp_port.to_string());
     args
+}
+
+/// The serial timing the integrated rotctld runs a backend with, where Hamlib's own is too
+/// short for a controller reached across a network: `-C timeout=1000,retry=1`.
+///
+/// ⭐ **Why (2026-11-03, a tester's GS-232A and GS-232B rotators "losing connection" over the
+/// internet).** Hamlib gives the EasyComm (2xx), GS-232 (6xx) and SPID (9xx) backends a 200–400 ms
+/// serial timeout and three retries, sized for a cable. Behind a serial-over-IP redirector, or a
+/// controller's own network port in the Port box, the controller's answer arrives a round trip
+/// later. Measured against rotctld 4.6.5's GS-232B backend on a pseudo-terminal whose stand-in
+/// answers `C2` late: past a 400 ms round trip each read times out, flushes and writes `C2` again,
+/// and the late answers then land on LATER reads — a read returns the answer to an earlier `C2`,
+/// so the position runs a read behind, and the controller is sent up to three-quarters more
+/// commands than Nexus asked for. With a 1 000 ms timeout every read up to an 800 ms round trip
+/// got its own answer, one `C2` each.
+///
+/// Safe on a cable: a controller that answers in tens of milliseconds never reaches either
+/// number. What changes there is only how long a controller that is OFF takes to be called
+/// silent: `(1 + 1) × (1 000 + post_write_delay)`, 2.1 s for a GS-232 and 2.6 s for a SPID,
+/// against Hamlib's 1.8 s and 2.8 s (on the backends that use the retry, below); Nexus's read
+/// deadline covers both (`rotator.rs`).
+///
+/// ⚠️ **The `retry` half reaches only some of these backends** (read in Hamlib's source): the
+/// `gs232a.c`/`gs232b.c` models (601, 603, 605, 606 and their axis variants 609–612) and the SPIDs
+/// use the port's retry; EasyComm's transaction takes its retry from the model's own caps and does
+/// not retry a failed read at all; and the `gs232.c` family (602 GS-232 Generic, 604, 607, 608) sets
+/// the port's retry to 0 on its first position read. For those two only the timeout changes, and
+/// that is the half that helps: a dead GS-232 Generic is called silent after 1.0 s instead of 0.4 s.
+/// (Edge: a 602 that answers without a carriage return is switched by Hamlib to three retries, and
+/// with the 1 s timeout a dead read there takes 4 s, past Nexus's 3 s read deadline: a miss, which
+/// the grace absorbs.)
+///
+/// One retry, not three, where it applies, because three would make a dead controller's budget
+/// 4.2 s, past every tick that waits on it. Measured with 15 % of the answers lost and a jittered 240–980 ms round
+/// trip, this missed one read in twenty, which the Rotor pane's grace and the pass's miss limit
+/// both absorb.
+///
+/// Only these three families: every other curated backend already waits 1 000 ms or more
+/// (rotorez 1 500, M2 1 000, Prosistel 3 000), and `-C timeout` would SHORTEN it. The dummy
+/// (model 1) and the PstRotatorAz link have no serial line at all, and with no port there is no
+/// serial line to time.
+pub fn rotctld_link_conf(model: u32) -> Option<&'static str> {
+    matches!(model / 100, 2 | 6 | 9).then_some("timeout=1000,retry=1")
 }
 
 /// The bundled `rotctld` (ships beside rigctld in the Hamlib bundle), then the same
@@ -1138,6 +1185,18 @@ fn resolve_rotctld() -> std::ffi::OsString {
     }
 }
 
+/// The diagnostic log's line for a rotctld spawn. The log is built to be sent to a stranger, so a
+/// network address in the Port box goes in masked (`rotator::mask_port`); a serial port stays.
+fn rotctld_spawn_line(model: u32, port: &str, baud: u32, tcp_port: u16, bin: &str) -> String {
+    crate::rotator::mask_port(
+        &format!(
+            "rotctld for model {model} on {} @ {baud} baud (tcp {tcp_port}) — {bin}",
+            if port.is_empty() { "(NO PORT)" } else { port },
+        ),
+        port,
+    )
+}
+
 /// Spawn `rotctld` for a ROTATOR `model` on `port`@`baud`, listening on
 /// `tcp_port` — the rotator twin of [`spawn_rigctld`], with the same
 /// kill-on-drop + Windows job-object lifetime guarantees (reuses
@@ -1152,11 +1211,7 @@ pub fn spawn_rotctld(
     let rot_bin = resolve_rotctld();
     tempo_core::applog::info(
         "proc",
-        &format!(
-            "rotctld for model {model} on {} @ {baud} baud (tcp {tcp_port}) — {}",
-            if port.is_empty() { "(NO PORT)" } else { port },
-            rot_bin.to_string_lossy()
-        ),
+        &rotctld_spawn_line(model, port, baud, tcp_port, &rot_bin.to_string_lossy()),
     );
     let mut cmd = tempo_core::process::command(rot_bin);
     cmd.args(&args);
@@ -2041,6 +2096,10 @@ mod tests {
                 "COM7",
                 "-s",
                 "9600",
+                // The GS-232A's serial timing, sized for a controller across a network
+                // (`rotctld_link_conf`).
+                "-C",
+                "timeout=1000,retry=1",
                 "-T",
                 "127.0.0.1",
                 "-t",
@@ -2052,6 +2111,46 @@ mod tests {
             rotctld_args(1, "", 9600, 4533),
             vec!["-vvv", "-m", "1", "-T", "127.0.0.1", "-t", "4533"]
         );
+    }
+
+    #[test]
+    fn the_spawn_line_masks_a_network_port_box_and_keeps_a_serial_one() {
+        let bin = "/usr/bin/rotctld";
+        for port in ["203.0.113.9:4001", "203.0.113.9", "rot.example.net"] {
+            let line = rotctld_spawn_line(603, port, 9600, 4533, bin);
+            assert!(!line.contains(port), "{line}");
+            assert!(
+                line.contains("/usr/bin/rotctld"),
+                "the binary is not a host: {line}"
+            );
+        }
+        assert_eq!(
+            rotctld_spawn_line(603, "COM4", 9600, 4533, bin),
+            "rotctld for model 603 on COM4 @ 9600 baud (tcp 4533) — /usr/bin/rotctld"
+        );
+    }
+
+    #[test]
+    fn only_the_backends_whose_own_timeout_is_short_get_the_network_timing() {
+        // EasyComm, GS-232 and SPID: Hamlib's 200–400 ms, sized for a cable.
+        for model in [202, 204, 601, 602, 603, 605, 606, 607, 901, 902, 903] {
+            assert_eq!(
+                rotctld_link_conf(model),
+                Some("timeout=1000,retry=1"),
+                "{model}"
+            );
+        }
+        // Every other curated backend already waits a second or more, and `-C timeout` would
+        // shorten it; the dummy and PstRotatorAz have no serial line.
+        for model in [1, 3, 401, 403, 404, 405, 406, 1001, 1701, 1703] {
+            assert_eq!(rotctld_link_conf(model), None, "{model}");
+            assert!(
+                !rotctld_args(model, "COM7", 9600, 4533).contains(&"-C".to_string()),
+                "{model}"
+            );
+        }
+        // No port, no serial line to time.
+        assert!(!rotctld_args(603, "", 9600, 4533).contains(&"-C".to_string()));
     }
 
     /// The shared missing-Hamlib composer, driven with the platform as data so both branches

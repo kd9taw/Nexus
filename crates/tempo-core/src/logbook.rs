@@ -439,6 +439,11 @@ pub fn fill_extra(r: &mut QsoRecord, name: &str, value: String) -> bool {
 /// list ([`edited`]): the operator has said what it is.
 pub const SELF_FILLED_FIELD: &str = "APP_NEXUS_SELF_FILLED";
 
+/// The program a contact came in from, when another program logged it into Nexus (the contact
+/// port, `tempo_app::log_intake`). Nexus's own bookkeeping: kept in the operator's own log and
+/// files, and withheld from everything Nexus sends off the machine ([`Audience::Outbound`]).
+pub const VIA_FIELD: &str = "APP_NEXUS_VIA";
+
 /// The fields Nexus fills in itself and marks ([`mark_self_filled`]): the only names in a
 /// [`SELF_FILLED_FIELD`] list the LoTW upload honours. The list rides files the operator imports,
 /// so a name outside these strips nothing.
@@ -3910,12 +3915,14 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         // service's business ([`SELF_FILLED_FIELD`]); nor is which fields a callbook filled
         // ([`callbook::CALLBOOK_FILLED_FIELD`], [`callbook::MAP_ONLY_GRID_FIELD`]).
         // Nor the path Nexus graded for a new contact ([`path_stamp`]): the model's opinion,
-        // not the operator's antenna data, and no service's business.
+        // not the operator's antenna data, and no service's business. Nor which program a
+        // contact came in from ([`VIA_FIELD`]): Nexus's own bookkeeping.
         if audience == Audience::Outbound
             && (k == SELF_FILLED_FIELD
                 || k == callbook::CALLBOOK_FILLED_FIELD
                 || k == offer::OFFER_HELD_FIELD
                 || k == callbook::MAP_ONLY_GRID_FIELD
+                || k == VIA_FIELD
                 || path_stamp::is_path_field(k))
         {
             continue;
@@ -5858,6 +5865,29 @@ impl LogAppendReceipt {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod via_field_tests {
+    use super::*;
+
+    /// ⛔ Which program a contact came in from (`APP_NEXUS_VIA`) is Nexus's own bookkeeping: it is
+    /// kept in the operator's own log and files, and goes to no service. CONTROL: the rest of the
+    /// record goes as it did.
+    #[test]
+    fn the_via_mark_stays_in_the_own_log_and_goes_to_no_service() {
+        let mut r = parse_adif(
+            "<CALL:5>W1ABC<QSO_DATE:8>20261014<TIME_ON:4>0102<BAND:3>20m<MODE:2>CW\
+             <APP_NEXUS_VIA:6>WSJT-X<EOR>",
+        )
+        .pop()
+        .unwrap();
+        r.id = None;
+        assert!(adif_record_own_log(&r).contains("<APP_NEXUS_VIA:6>WSJT-X"));
+        let out = adif_record(&r);
+        assert!(!out.contains("APP_NEXUS_VIA"), "{out}");
+        assert!(out.contains("<CALL:5>W1ABC"), "CONTROL: {out}");
     }
 }
 

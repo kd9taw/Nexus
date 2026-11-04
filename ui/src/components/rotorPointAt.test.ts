@@ -9,11 +9,16 @@
 // gets nothing back (the station resolves the bearing) and its toast is unchanged.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { rotorPointAt, pointedTo } from './rotorPointAt'
-import { pointRotatorAtCall } from '../api'
+import { getMoonStatus, getSatTrackStatus, pointRotatorAtCall, stopSatTrack } from '../api'
 import { pushToast } from '../toast'
 import type { PointedAt } from '../types'
 
-vi.mock('../api', () => ({ pointRotatorAtCall: vi.fn() }))
+vi.mock('../api', () => ({
+  pointRotatorAtCall: vi.fn(),
+  stopSatTrack: vi.fn(() => Promise.resolve()),
+  getSatTrackStatus: vi.fn(async () => null),
+  getMoonStatus: vi.fn(async () => null),
+}))
 vi.mock('../toast', () => ({ pushToast: vi.fn() }))
 
 const mockedPoint = vi.mocked(pointRotatorAtCall)
@@ -78,5 +83,59 @@ describe('a failed point-at-call keeps each path’s own words', () => {
     rotorPointAt()('EC1DD')
     await vi.waitFor(() => expect(mockedToast).toHaveBeenCalledTimes(1))
     expect(mockedToast.mock.calls.map((call) => call[0])).toEqual(['Rotator: no rotator'])
+  })
+})
+
+describe('a point ends the tracker steering the mast, and only that', () => {
+  const run = async (sat: unknown, moon: unknown, longPath = false) => {
+    const order: string[] = []
+    vi.mocked(getSatTrackStatus).mockResolvedValue(sat as never)
+    vi.mocked(getMoonStatus).mockResolvedValue(moon as never)
+    vi.mocked(stopSatTrack).mockImplementation(async () => {
+      order.push('stop')
+    })
+    mockedPoint.mockImplementation(async (_c: string, lp?: boolean) => {
+      order.push(lp ? 'point long' : 'point short')
+      return TO_GRID
+    })
+    rotorPointAt()('EC1DD', longPath)
+    await vi.waitFor(() => expect(order.some((o) => o.startsWith('point'))).toBe(true))
+    return order
+  }
+  const pass = (state: string) => ({ name: 'SO-50', state })
+  const following = { azDeg: 100, elDeg: 20, track: { state: 'following' }, window: null }
+
+  it('a pass that is steering is stopped first, then the point goes, on both paths', async () => {
+    expect(await run(pass('tracking'), null, true)).toEqual(['stop', 'point long'])
+    expect(await run(pass('prepositioning'), null)).toEqual(['stop', 'point short'])
+  })
+
+  it('a pass that lost its rotor while it was steering is stopped, though its badge reads armed', async () => {
+    expect(await run({ name: 'SO-50', state: 'armed', rotorLost: true }, null)).toEqual(['stop', 'point short'])
+  })
+
+  it('a state that cannot be read is taken as steering: the stop is made', async () => {
+    const order: string[] = []
+    vi.mocked(getSatTrackStatus).mockRejectedValue(new Error('offline'))
+    vi.mocked(getMoonStatus).mockResolvedValue(null as never)
+    vi.mocked(stopSatTrack).mockImplementation(async () => {
+      order.push('stop')
+    })
+    mockedPoint.mockImplementation(async () => {
+      order.push('point')
+      return TO_GRID
+    })
+    rotorPointAt()('EC1DD')
+    await vi.waitFor(() => expect(order).toEqual(['stop', 'point']))
+  })
+
+  it('a Moon follow is stopped first', async () => {
+    expect(await run(null, following, true)).toEqual(['stop', 'point long'])
+  })
+
+  it('an ARMED pass, waiting for AOS with the rotor left to you for HF, stays armed', async () => {
+    expect(await run(pass('armed'), null)).toEqual(['point short'])
+    // …and with nothing tracking at all, nothing is stopped either.
+    expect(await run(null, { azDeg: 100, elDeg: 20, track: null, window: null })).toEqual(['point short'])
   })
 })

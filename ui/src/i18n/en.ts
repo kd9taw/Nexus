@@ -1837,6 +1837,7 @@ export const EN = {
   'contactCard.field.remove': 'Remove {{tag}} on save',
   'contactCard.field.keep': 'Keep {{tag}}',
   'contactCard.freqRx': 'RX freq (MHz)',
+  'contactCard.via': "Logged via",
   'contactCard.recent': 'Recent contacts with this call',
   'contactCard.recent.qsl': 'QSL',
   'contactCard.recent.open': 'Open this contact on the card',
@@ -2654,6 +2655,10 @@ export const EN = {
   'logEntry.lookup.label': 'Lookup',
   'logEntry.lookup.title':
     'Look up name + QTH in the callbook — QRZ first, then HamQTH (grid/state need a QRZ subscription)',
+  'logEntry.start.label': 'Start',
+  'logEntry.start.title': 'Start this contact now: its start time (TIME_ON) becomes the current time. For a long contact whose call went in early. Log still stamps the end time.',
+  'logEntry.start.setLabel': 'Start {{time}}',
+  'logEntry.start.setTitle': 'This contact now starts at {{time}} UTC. Press again to restart it.',
   'logEntry.rstSent.label': 'Sent',
   'logEntry.rstSent.title': 'Signal report you SENT them',
   'logEntry.rstRcvd.label': 'Rcvd',
@@ -5009,7 +5014,7 @@ export const EN = {
   'settings.alerts.legend': 'Alerts',
   'settings.alerts.popups.label': 'Pop-up notifications',
   'settings.alerts.popups.hint':
-    'The messages in the bottom-right corner. Turned off, confirmations such as Logged QSO and alerts such as a new DXCC, a station calling you, a band opening or space weather stop popping up. Sounds are not affected. Errors, notices about transmitting, the radio or the log, and any message with a button, such as Stop alarm, still pop up.',
+    'The messages in the corner of the window (Pop-up corner, below, picks which). Turned off, confirmations such as Logged QSO and alerts such as a new DXCC, a station calling you, a band opening or space weather stop popping up. Sounds are not affected. Errors, notices about transmitting, the radio or the log, and any message with a button, such as Stop alarm, still pop up.',
   // #321. The pop-up's own time is set where it is raised (4 s for most, longer for errors and
   // alerts); the choice can only make a pop-up stay longer, never shorter.
   'settings.alerts.popupDwell.label': 'Keep pop-ups up for at least',
@@ -5017,6 +5022,12 @@ export const EN = {
   'settings.alerts.popupDwell.secs': '{{secs}} seconds',
   'settings.alerts.popupDwell.hint':
     'Most pop-ups go after 4 seconds, errors after 12. Pick a longer time if you look away and miss them. A pop-up that stays until you close it still does.',
+  'settings.alerts.popupCorner.label': 'Pop-up corner',
+  'settings.alerts.popupCorner.bottomRight': 'Bottom right',
+  'settings.alerts.popupCorner.bottomLeft': 'Bottom left',
+  'settings.alerts.popupCorner.topRight': 'Top right',
+  'settings.alerts.popupCorner.topLeft': 'Top left',
+  'settings.alerts.popupCorner.hint': 'Which corner of the window the pop-ups appear in. Bottom right is where they have always been. They keep clear of the transmit controls, and use the room higher up when the bottom has none.',
   'settings.alerts.myCall.label': 'My call',
   'settings.alerts.myCall.hint': 'Beep + flash when someone directs a call at you.',
   'settings.alerts.confirmTier.label': 'Confirmation opportunities',
@@ -8628,7 +8639,7 @@ export const EN = {
   'settings.rigControl.yaesuScope.title':
     "Read the FT-710's own spectrum over its internal USB-SPI bridge instead of the sound card",
   'settings.rigControl.yaesuScope.hint':
-    "Draws the radio's own band scope instead of the sound card's 4 kHz slice. Needs <b>SCU-LAN10 enabled in the radio's EX menu</b>, and a build that carries FTDI's LibFT4222 — which is not bundled, because it is closed source and Nexus is GPL-3.0-only. If either is missing the app says which, rather than leaving the panel empty.",
+    "Draws the radio's own band scope instead of the sound card's 5 kHz slice. Needs <b>SCU-LAN10 enabled in the radio's EX menu</b>, and a build that carries FTDI's LibFT4222 — which is not bundled, because it is closed source and Nexus is GPL-3.0-only. If either is missing the app says which, rather than leaving the panel empty.",
   'settings.rigControl.flexAudio.label': 'Flex native DAX audio (Beta)',
   'settings.rigControl.flexAudio.hint':
     'Carry this FlexRadio\'s audio over the network (VITA-49 DAX) instead of the "DAX Audio RX" / "DAX TX" sound devices, which are <b>invisible under Remote Desktop</b>. <b>Needs Flex native client (Beta) on.</b> With SmartSDR CAT this does nothing: audio stays on the sound devices, and the setting is kept for the client. On the client, the decoders read receive audio straight from the radio, and <b>digital modes</b> and the Remote stream\'s voice transmit over DAX. Phone at the shack keeps the radio\'s own mic, so the voice keyer can\'t play there. Turning this off or disconnecting puts your own DAX setting back, and Nexus never changes it while SmartSDR\'s DAX is connected. <b>Beta, unverified on hardware:</b> if decodes or transmit stop, turn it back off. Save to apply.',
@@ -9355,11 +9366,16 @@ export const EN = {
   'settings.transmit.foreignPtt.label': 'Other programs may key transmit',
   'settings.transmit.foreignPtt.hint':
     'On: a shared program (WSJT-X, VarAC) can key the rig, exactly as it could when it owned the CAT cable — every Nexus transmit safeguard still applies. Off: shared programs tune and read but never transmit.',
-  'settings.transmit.freedv.log.label': "FreeDV contacts into the log",
+  'settings.transmit.freedv.log.label': "Accept contacts other programs log",
   'settings.transmit.freedv.log.hint':
-    "FreeDV's own app can hand each contact you log in it to Nexus: in FreeDV, turn on QSO Logging and give it the address shown here. Each one lands in the log as a FreeDV contact, and only under your own station call: one FreeDV logs under another call is refused, and the reason shows here. Only for this computer, and receive only: nothing FreeDV sends here can key or tune the radio.",
-  'settings.transmit.freedv.logPort.label': "FreeDV logging port",
+    "Other programs can hand each contact they log to Nexus at the address shown here: FreeDV (turn on its QSO Logging), WSJT-X, JTDX or MSHV (their secondary UDP server), N1MM (its contact broadcast), or anything that sends ADIF over UDP. Each lands in your log only under your own station call: one logged under another call is refused, and the reason shows here. Receive only: nothing sent here can key or tune the radio.",
+  'settings.transmit.freedv.logPort.label': "Contact port",
   'settings.transmit.freedv.logPort.off': "Not listening: port 0 turns it off.",
+  'settings.transmit.freedv.lan.label': "Accept from devices on my network",
+  'settings.transmit.freedv.lan.hint': "For a device or another computer on your own network, such as the S.A.T. satellite tracker: on the S.A.T., set QSO LOG TYPE to Log4OM or HRD, QSO LOG IP to this computer's address, and the port to the contact port above. Only private network addresses are taken, never one from the internet. Windows may ask once whether Nexus may use the network. Anything on your network that can send to this port can log contacts, and they go to your logging services: turn this on only on a network you trust.",
+  'settings.transmit.freedv.peer.label': "Only from this address",
+  'settings.transmit.freedv.peer.hint': "Optional: the one network address allowed to send contacts (the S.A.T.'s, for example). Leave it empty to take any device on your network. This computer is always allowed.",
+  'settings.transmit.freedv.last': "Last contact: {{call}} from {{program}} at {{time}}",
   'settings.transmit.freedv.heard.label': "Calls FreeDV hears",
   'settings.transmit.freedv.heard.hint':
     "Lists the calls FreeDV decodes (FreeDV 2.4 and later) in the Phone screen's FreeDV pane. Only the FreeDV on this computer is listened to. Windows may ask once whether Nexus may use the network.",
@@ -13814,6 +13830,8 @@ export const EN = {
   //
   // `absent` has no per-control wording on purpose: it collapses into `phone.chain.absent`
   // at the pane's foot, so an IC-7300 does not open to four grey rows.
+  'phone.tune.usbAudioNote': 'Tune sends its tone over USB audio. If the radio keys with no power, set its SSB MOD SOURCE menu to REAR (USB).',
+  'phone.tune.usbAudioNote.aria': 'About Tune on this radio',
   'phone.unavail.mark': 'not reported',
   'phone.unavail.noCat':
     '{{plate}} needs CAT control — this radio is set up for VOX or serial PTT only. Add rig ' +
@@ -14042,6 +14060,13 @@ export const EN = {
   'phone.scope.audio.title':
     'Receiver AUDIO spectrum on your rig’s axis: the centre line is your dial, and the passband sits on the side your sideband is on (USB above, LSB below) — the other half is quiet because an SSB receiver only hears one side. Not a band-wide RF panadapter, so a voice fills the passband rather than sliding across it as you tune.',
   'phone.scope.audio.sub': 'RX audio',
+  // The Phone audio scope's notes under its span chips, the CW scope's own: `{{hz}}` is the radio's
+  // filter width; the <link> runs open Settings at the place they name.
+  'phone.scope.filterLimit': "Showing your radio's {{hz}} Hz filter — widen it on the radio to see more.",
+  'phone.scope.nativeHint.civOff':
+    'Your Icom can show its own wide scope here: turn on <link>Native Icom CI-V in Settings ▸ Radio ▸ Rig & CAT ▸ Advanced</link>.',
+  'phone.scope.nativeHint.baud':
+    "Your Icom's own wide scope needs 115,200 baud: set it in <link>Settings ▸ Radio ▸ Rig & CAT</link>, and the radio's CI-V USB Baud Rate to match.",
   'phone.scope.splitter.label': 'scope height',
   'phone.scope.span.aria': 'Bandscope span',
   'phone.span.auto.label': 'Auto',
@@ -14435,6 +14460,9 @@ export const EN = {
     'Nexus could not read one of its files, so it kept that file, untouched, at {{path}}, and started a new one. Nothing was deleted.',
   'shell.keptFile.keptInPlace':
     'Nexus could not read {{path}} and could not move it aside, so it has left the file where it is and will not write over it. Nothing was deleted. Move or repair the file, then restart Nexus.',
+  'shell.intake.logged': "Logged {{call}} from {{program}}",
+  'shell.intake.device.network': "a device on your network",
+  'shell.intake.device.local': "this computer",
   'shell.keptFile.settingsKeptInPlace':
     'Nexus could not read your settings at {{path}} and could not move that file aside, so it started from the default settings and will not save any setting over that file. Nothing was deleted. Move or repair the file, then restart Nexus.',
   // Quitting while the logbook still has changes on their way to disk: Nexus keeps the main
@@ -14880,7 +14908,7 @@ export const EN = {
   'waterfall.hint': 'left = RX · right / Shift = TX · {{mod}} = both',
   'waterfall.zoom.aria': 'Waterfall zoom span',
   'waterfall.zoom.title':
-    'Waterfall view — Std (0–3 kHz, WSJT-X-like), Full (0–4 kHz), or zoom in around the RX marker',
+    'Waterfall view — Std (0–3 kHz, WSJT-X-like), Full (0–5 kHz), or zoom in around the RX marker',
   'waterfall.span.aria': 'Waterfall span',
   'waterfall.span.title': 'Show {{hz}} Hz of the passband',
   'waterfall.gain.title': 'Gain — contrast (how punchy strong signals look). Center = auto.',
@@ -15027,6 +15055,10 @@ export const EN = {
   // `{{when}}` is `TX_METERS_WHEN`, the one string the ⊞ Panels menu shows for this panel —
   // interpolated rather than repeated so the panel and the menu cannot drift. It is still
   // written in `TxMeters.tsx`; see the note there for why it has not moved yet.
+  'meters.tx.enlarge.aria': 'Show the transmit meters larger',
+  'meters.tx.enlarge.title': 'Transmit meters',
+  'meters.tx.enlarge.desc': 'The same live readings as the TX strip, larger. Escape stops transmitting, as everywhere on this screen; Close only closes this.',
+  'meters.tx.enlarge.close': 'Close',
   'meters.tx.idle': 'TX meters — {{when}}',
   // A meter the radio stayed silent about THROUGH an over — so it is one this radio does not
   // report, as against the blank rows before the first over, which the line above answers.
@@ -15213,6 +15245,34 @@ export const EN = {
   // running (a tester read "Error 61" here). Shown as the hint and as the readout's tooltip.
   'rotor.pane.notAnswering':
     "The rotator controller isn't answering. Is it switched on and plugged in? Nexus keeps trying to reach it.",
+  'rotor.pane.stale':
+    'Last reading: the rotator did not answer the latest poll. Nexus keeps asking.',
+  'rotor.pane.moon.at':
+    'Moon {{az}}° · {{el}}°',
+  'rotor.pane.moon.at.title':
+    'Where the Moon is from your station: azimuth from true north and elevation, without refraction',
+  'rotor.pane.moon.follow':
+    'Follow the Moon',
+  'rotor.pane.moon.follow.title':
+    'Turn the rotator to the Moon and keep it there as the Moon moves (the elevation too, on a rotator that has one). It holds while the Moon is below the horizon, and stops when you press Stop following or ■ STOP, move the rotator yourself, or start a satellite pass.',
+  'rotor.pane.moon.stop':
+    'Stop following',
+  'rotor.pane.moon.following':
+    'Following the Moon',
+  'rotor.pane.moon.following.azOnly':
+    'Following the Moon (azimuth only: this rotator has no elevation axis)',
+  'rotor.pane.moon.below':
+    'The Moon is below the horizon: the antenna stays put until it rises',
+  'rotor.pane.moon.lost':
+    'The rotator stopped answering: Nexus keeps asking it and follows again when it answers',
+  'rotor.pane.moon.failed':
+    'Could not follow the Moon: {{error}}',
+  'rotor.pane.moon.window.now':
+    'EME window with {{call}}: open now, until {{end}}Z',
+  'rotor.pane.moon.window.next':
+    'Next EME window with {{call}}: {{start}}–{{end}}Z',
+  'rotor.pane.moon.window.none':
+    'No EME window with {{call}} in the next 48 hours',
   'rotor.pane.slew.failed': 'Rotator: {{error}}',
   // The elevation, on a rotator whose backend declares an elevation axis (the Yaesu G-5500 on a
   // GS-232B: 0–180°). `{{min}}` and `{{max}}` are the range that backend declares, in degrees.
@@ -15224,6 +15284,8 @@ export const EN = {
   'rotor.pane.aim.title': 'Bearing and distance to {{call}}, short path ({{to}})',
   'rotor.pane.aim.point.label': 'Point',
   'rotor.pane.aim.point.title': 'Point the antenna at {{call}}, short path',
+  'rotor.pane.aim.pointLong.title':
+    'Point the antenna at {{call}} the long way round (reciprocal heading)',
   'rotor.pane.aim.unknown': 'location unknown',
   'rotor.pane.aim.noGrid': 'set your grid in Settings for a bearing',
   // How far the antenna's live heading is from line 2's bearing, the short way round: `{{deg}}` is

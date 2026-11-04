@@ -20,6 +20,7 @@
 // string comes from the catalog; ADIF field names, band, mode, RST and the QSL letters are wire
 // formats and shown as they are.
 import './ContactCard.css'
+import { viaOf } from '../features/logIntake'
 import { useId, useMemo, useState, useSyncExternalStore } from 'react'
 import type { FieldEdit, QsoEdit, RowAnswer, RowRef } from '../api'
 import { qrzLookup } from '../api'
@@ -348,6 +349,8 @@ function CardBody({
     fact(t('contactCard.freqRx'), q.freqRxMhz),
     fact(t('qso.detail.propMode'), q.propMode),
     fact(t('qso.detail.satName'), q.satName),
+    // The program the contact came in from, when another program logged it (`tempo_app::log_intake`).
+    fact(t('contactCard.via'), viaOf(q.extra)),
     fact(
       t('qso.detail.qsl.received'),
       [rcvd?.card && t('qso.detail.qsl.card'), rcvd?.lotw && 'LoTW', rcvd?.eqsl && 'eQSL', rcvd?.qrz && 'QRZ'].filter(Boolean).join(' · '),

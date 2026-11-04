@@ -28,6 +28,7 @@ pub mod fdbridge;
 pub mod fdevent;
 pub mod freedv;
 pub mod keyboard;
+pub mod log_intake;
 pub mod logexport;
 pub mod logfill;
 pub mod loghistory;
