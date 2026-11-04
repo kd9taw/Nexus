@@ -454,6 +454,11 @@ pub const STATION_KEYS: &[&str] = &[
     "nexus.sats.alarms",
     "nexus.sats.alarms.fired",
     "nexus.sats.chasing",
+    // ⚠️ Every entry here is part of this build's Remote contract (`contract_text` prints each as a
+    // `station <key>` line; `wire::contract()` digests it). Adding one, as this key was added, moves
+    // the digest: a station and a computer on different builds get the clean updateStation /
+    // updateComputer / otherBuild refusal rather than a half-served pair. PROTOCOL_VERSION and the
+    // message shapes do not change.
     "nexus.sats.transponders",
     "nexus.watchlist",
 ];

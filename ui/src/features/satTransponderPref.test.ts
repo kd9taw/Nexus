@@ -197,3 +197,27 @@ describe('load validation', () => {
     expect(ISS().map(isWorkableTp)).toEqual([false, true, false, false, true])
   })
 })
+
+describe('the identity and the load check are pinned', () => {
+  it('mode is part of the identity: same frequencies, other mode, is another transponder', () => {
+    const fm = tx({ description: 'FM voice', uplinkLowHz: 145_990_000, downlinkLowHz: 437_800_000, mode: 'FM' })
+    const pkt = tx({ description: 'Packet', uplinkLowHz: 145_990_000, downlinkLowHz: 437_800_000, mode: 'AFSK' })
+    toggleSatTpFavorite('ISS', pkt)
+    expect(resolveSatTp('ISS', [fm, pkt], satTpPrefs())).toEqual({ index: 1, source: 'favorite', gone: null })
+    // …and with only the FM row listed, the saved packet one is gone, never taken for it.
+    expect(resolveSatTp('ISS', [fm], satTpPrefs())).toEqual({ index: null, source: null, gone: 'Packet' })
+  })
+
+  it('drops a ref when any one frequency is not a positive number, the rest of it valid', () => {
+    const good = { up: 145_990_000, down: 437_800_000, mode: 'FM', label: 'FM voice' }
+    for (const field of ['up', 'down'] as const) {
+      for (const bad of ['145990000', -145_990_000, 0, true, {}, []]) {
+        memStore.setItem(KEY, JSON.stringify({ ISS: { fav: { ...good, [field]: bad } } }))
+        expect(satTpPrefs(), `${field} = ${JSON.stringify(bad)}`).toEqual({})
+      }
+    }
+    // CONTROL: the same ref, untouched, is kept; and a null leg (a downlink-only listing) is allowed.
+    memStore.setItem(KEY, JSON.stringify({ ISS: { fav: good, last: { ...good, up: null } } }))
+    expect(satTpPrefs()).toEqual({ ISS: { fav: good, last: { ...good, up: null } } })
+  })
+})

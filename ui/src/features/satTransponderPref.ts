@@ -12,8 +12,10 @@
 // IDENTITY. A transponder is named by its uplink, its downlink and its mode, never by its place
 // in the SatNOGS list: the list reorders and gains entries, and an index that pointed at the FM
 // repeater yesterday can point at a different uplink today. (SatNOGS has a per-transmitter uuid,
-// but the app does not carry it to the screen.) Two rows with the same uplink, downlink and mode
-// put the radio in the same place, so taking the first of them is the same pick.
+// but the app does not carry it to the screen.) Mode is part of the identity: two rows on the same
+// frequencies in different modes are different transponders. Two rows that match on all three are
+// taken as one, and the first is picked; the per-leg modes and the inverting flag are not compared
+// (no listed bird differs only there today).
 //
 // WORKABLE ONLY. Only an alive transponder or repeater can be saved or resolved — the same rule
 // as the auto-pick. A saved one that SatNOGS no longer lists as working resolves to nothing,
