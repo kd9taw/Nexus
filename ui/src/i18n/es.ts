@@ -2819,6 +2819,7 @@ export const ES: PartialCatalog = {
   "js8.panel.offsets.dt.title": "DT — el desfase de tiempo de la estación respecto al reloj de los periodos, en milisegundos. Negativo es adelantado.",
   "js8.header.power.label": "Excitación",
   "js8.header.power.title": "Nivel de audio de TX — ajústalo para que el ALC del equipo apenas se mueva; JS8 es de envolvente constante, pero una tarjeta de sonido saturada sigue produciendo splatter",
+  "js8.header.txOffset.held": "El desplazamiento de TX no se mueve mientras un mensaje espera para salir o está saliendo, como en JS8Call. Para moverlo durante el envío, activa Ajustes ▸ Digital ▸ JS8 ▸ Permitir cambiar el desplazamiento de TX durante el envío.",
   "js8.header.speed.title": "JS8 — modo de teclado compatible con JS8Call sobre la forma de onda de FT8",
   "js8.header.speed.aria": "Velocidad de transmisión",
   "js8.header.speed.chip.title": "Transmitir en {{speed}} (periodos de {{period}} s). En recepción se decodifican todas las velocidades marcadas en Ajustes ▸ Digital ▸ JS8, sea cual sea esta.",

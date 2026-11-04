@@ -6336,6 +6336,7 @@ export const ZH_HANT: PartialCatalog = {
   "js8.panel.offsets.dt.title": "DT — 傳送方相對時隙時鐘的時間差，單位毫秒。負值表示偏早。",
   "js8.header.power.label": "驅動力",
   "js8.header.power.title": "發射音訊驅動力 — 調至電台 ALC 幾乎不動；JS8 雖是恆包絡模式，但過驅的音效卡仍會產生雜散",
+  "js8.header.txOffset.held": "訊息等待傳送或正在送出時，TX 偏移保持不動，與 JS8Call 相同。若要在傳送期間移動它，請開啟 設定 ▸ 數字 ▸ JS8 ▸ 傳送期間允許更改 TX 偏移。",
   "js8.header.speed.title": "JS8 — 基於 FT8 波形、相容 JS8Call 的鍵盤模式",
   "js8.header.speed.aria": "發射速率",
   "js8.header.speed.chip.title": "以 {{speed}} 發射（{{period}} 秒週期）。接收時會解碼 設定 ▸ 數字 ▸ JS8 中勾選的所有速率，與本設定無關。",

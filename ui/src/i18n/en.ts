@@ -12769,6 +12769,8 @@ export const EN = {
   'js8.header.power.label': 'Drive',
   'js8.header.power.title':
     'TX audio drive — set it so the rig’s ALC barely moves; JS8 is a constant-envelope mode, but an overdriven sound card still splatters',
+  'js8.header.txOffset.held':
+    'The TX offset stays put while a message waits to go or goes out, as in JS8Call. To move it while sending, turn on Settings ▸ Digital ▸ JS8 ▸ Allow TX offset changes while sending.',
   'js8.header.speed.title': 'JS8 — JS8Call-compatible keyboard mode on FT8’s waveform',
   'js8.header.speed.aria': 'Transmit speed',
   'js8.header.speed.chip.title':

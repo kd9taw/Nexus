@@ -6925,6 +6925,7 @@ Click for internet feed controls.","{{detail}}
 "5","js8.panel.offsets.dt.title","DT — the sender’s time delta against the slot clock, in milliseconds. Negative is early.","DT — 傳送方相對時隙時鐘的時間差，單位毫秒。負值表示偏早。","DT",""
 "5","js8.header.power.label","Drive","驅動力","",""
 "5","js8.header.power.title","TX audio drive — set it so the rig’s ALC barely moves; JS8 is a constant-envelope mode, but an overdriven sound card still splatters","發射音訊驅動力 — 調至電台 ALC 幾乎不動；JS8 雖是恆包絡模式，但過驅的音效卡仍會產生雜散","ALC | JS8 | TX",""
+"5","js8.header.txOffset.held","The TX offset stays put while a message waits to go or goes out, as in JS8Call. To move it while sending, turn on Settings ▸ Digital ▸ JS8 ▸ Allow TX offset changes while sending.","訊息等待傳送或正在送出時，TX 偏移保持不動，與 JS8Call 相同。若要在傳送期間移動它，請開啟 設定 ▸ 數字 ▸ JS8 ▸ 傳送期間允許更改 TX 偏移。","TX | JS8Call | JS8","Filled by the maintainer, pending translator review."
 "5","js8.header.speed.title","JS8 — JS8Call-compatible keyboard mode on FT8’s waveform","JS8 — 基於 FT8 波形、相容 JS8Call 的鍵盤模式","JS8Call | FT8 | JS8",""
 "5","js8.header.speed.aria","Transmit speed","發射速率","",""
 "5","js8.header.speed.chip.title","Transmit at {{speed}} ({{period}} s periods). Receiving decodes every speed ticked in Settings ▸ Digital ▸ JS8, whatever this is set to.","以 {{speed}} 發射（{{period}} 秒週期）。接收時會解碼 設定 ▸ 數字 ▸ JS8 中勾選的所有速率，與本設定無關。","{{speed}} | {{period}} | JS8",""

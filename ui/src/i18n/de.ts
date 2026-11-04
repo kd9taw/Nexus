@@ -8680,6 +8680,7 @@ export const DE: PartialCatalog = {
   "js8.panel.offsets.dt.title": "DT — der Zeitversatz der Gegenstation gegenüber dem Slot-Takt, in Millisekunden. Negativ heißt zu früh.",
   "js8.header.power.label": "Aussteuerung",
   "js8.header.power.title": "Sendeaudio-Aussteuerung — so einstellen, dass die ALC des Funkgeräts kaum ausschlägt; JS8 hat eine konstante Hüllkurve, aber eine übersteuerte Soundkarte spritzt trotzdem",
+  "js8.header.txOffset.held": "Der TX-Offset bleibt stehen, solange eine Nachricht auf das Senden wartet oder gesendet wird, wie in JS8Call. Um ihn beim Senden zu verschieben, schalte Einstellungen ▸ Digital ▸ JS8 ▸ TX-Offset beim Senden ändern erlauben ein.",
   "js8.header.speed.title": "JS8 — JS8Call-kompatible Tastatur-Betriebsart auf der FT8-Wellenform",
   "js8.header.speed.aria": "Sendegeschwindigkeit",
   "js8.header.speed.chip.title": "Mit {{speed}} senden ({{period}} s Perioden). Empfangen wird jede in Einstellungen ▸ Digital ▸ JS8 angehakte Geschwindigkeit, unabhängig von dieser Wahl.",

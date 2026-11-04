@@ -6334,6 +6334,7 @@ export const ZH: PartialCatalog = {
   "js8.panel.offsets.dt.title": "DT — 发送方相对时隙时钟的时间差，单位毫秒。负值表示偏早。",
   "js8.header.power.label": "驱动力",
   "js8.header.power.title": "发射音频驱动力 — 调至电台 ALC 几乎不动；JS8 虽是恒包络模式，但过驱的声卡仍会产生杂散",
+  "js8.header.txOffset.held": "消息等待发送或正在发出时，TX 偏移保持不动，与 JS8Call 相同。若要在发送期间移动它，请打开 设置 ▸ 数字 ▸ JS8 ▸ 发送期间允许更改 TX 偏移。",
   "js8.header.speed.title": "JS8 — 基于 FT8 波形、兼容 JS8Call 的键盘模式",
   "js8.header.speed.aria": "发射速率",
   "js8.header.speed.chip.title": "以 {{speed}} 发射（{{period}} 秒周期）。接收时会解码 设置 ▸ 数字 ▸ JS8 中勾选的所有速率，与本设置无关。",

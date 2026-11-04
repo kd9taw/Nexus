@@ -2819,6 +2819,7 @@ export const FR: PartialCatalog = {
   "js8.panel.offsets.dt.title": "DT — l’écart de temps de la station par rapport à l’horloge des périodes, en millisecondes. Négatif = en avance.",
   "js8.header.power.label": "Niveau",
   "js8.header.power.title": "Niveau audio TX — réglez-le pour que l’ALC de l’émetteur bouge à peine ; JS8 est à enveloppe constante, mais une carte son saturée fait quand même du splatter",
+  "js8.header.txOffset.held": "Le décalage TX reste en place tant qu’un message attend de partir ou part, comme dans JS8Call. Pour le déplacer pendant l’envoi, activez Réglages ▸ Numérique ▸ JS8 ▸ Autoriser le changement du décalage TX pendant l’envoi.",
   "js8.header.speed.title": "JS8 — mode clavier compatible JS8Call sur la forme d’onde FT8",
   "js8.header.speed.aria": "Vitesse d’émission",
   "js8.header.speed.chip.title": "Émettre en {{speed}} (périodes de {{period}} s). En réception, toutes les vitesses cochées dans Réglages ▸ Numérique ▸ JS8 sont décodées, quel que soit ce choix.",

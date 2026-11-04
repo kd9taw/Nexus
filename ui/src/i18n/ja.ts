@@ -8170,6 +8170,7 @@ export const JA: PartialCatalog = {
   "js8.panel.offsets.dt.title": "DT — 送信局のスロット時計からの時間のずれ（ミリ秒）。負の値は早すぎることを表します。",
   "js8.header.power.label": "ドライブ",
   "js8.header.power.title": "送信オーディオのドライブ — 無線機の ALC がほとんど振れない位置に。JS8 は定包絡線ですが、サウンドカードが過大入力だとスプラッタは出ます",
+  "js8.header.txOffset.held": "メッセージが送信待ちまたは送信中の間、TX オフセットは JS8Call と同じく動きません。送信中に動かすには、設定 ▸ デジタル ▸ JS8 ▸ 送信中の TX オフセット変更を許可 をオンにしてください。",
   "js8.header.speed.title": "JS8 — FT8 の波形を使う JS8Call 互換のキーボードモード",
   "js8.header.speed.aria": "送信速度",
   "js8.header.speed.chip.title": "{{speed}} で送信（周期 {{period}} 秒）。受信は設定 ▸ デジタル ▸ JS8 でチェックした全速度をデコードします。",

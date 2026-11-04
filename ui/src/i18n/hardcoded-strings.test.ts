@@ -612,6 +612,9 @@ const MIGRATED = [
   // worked and working-now — is ONE entry per row with each clause interpolated whole,
   // carrying its own separator, rather than six variant sentences or a glued string.
   'components/OperateCockpit.tsx',
+  // The Rx/Tx Hz entry, moved out of OperateCockpit when JS8 took it too (#448); its Rx/Tx/Hz
+  // tokens moved with it.
+  'components/DfField.tsx',
   'components/OperateDecodes.tsx',
   'components/OperateRoster.tsx',
   'components/TxPanel.tsx',

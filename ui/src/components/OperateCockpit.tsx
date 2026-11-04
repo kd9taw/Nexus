@@ -35,7 +35,6 @@ import { useLogAnswer } from '../features/logSource'
 import { contestDupe } from '../features/contestDupe'
 import { bandLabelForMhz } from '../band'
 import {
-  clampOffsetHz,
   cqDirFromText,
   cqSuggestionFromText,
   genStdMessages,
@@ -55,6 +54,7 @@ import { qrzLookup, resolveEntity } from '../api'
 import { pushToast, withErrorToast } from '../toast'
 import { SplitControl } from './SplitControl'
 import { RotorStrip } from './RotorStrip'
+import { DfField, DF_RX, DF_TX } from './DfField'
 import { pointedTo } from './rotorPointAt'
 import { FastGraph } from './FastGraph'
 import { Waterfall, type WaterfallTag } from './Waterfall'
@@ -295,11 +295,6 @@ const SOURCE_COMPANION = 'Companion'
  *  belongs inside a translatable sentence — it is interpolated in, like a frequency. */
 const DEFAULT_COMPANION_ADDR = '127.0.0.1:2237'
 
-/** The two audio-offset spinners: WSJT-X's Rx/Tx Hz fields. `Rx`/`Tx` are direction tokens
- *  that also read out in each field's accessible name, and `Hz` is a unit symbol. */
-const DF_RX = 'Rx'
-const DF_TX = 'Tx'
-const HZ_UNIT = 'Hz'
 
 /** Is this saved special-op value Hound? `superhound` is a RETIRED alias that the engine
  *  treats as plain Hound (settings.rs), so a settings file carrying it reads as Hound ON —
@@ -2638,66 +2633,5 @@ function OperateRecall({
       paneTitle={paneTitle}
       grip={grip}
     />
-  )
-}
-
-/**
- * A compact labeled DF (audio offset) entry: tracks the snapshot value while
- * idle, commits on Enter/blur (rounded + clamped 200–4000 Hz), and reverts on
- * garbage input. Enter just blurs — the single commit happens in onBlur.
- */
-function DfField({
-  label,
-  hz,
-  onCommit,
-}: {
-  label: string
-  hz: number
-  onCommit: (hz: number) => void
-}) {
-  const [text, setText] = useState(() => String(Math.round(hz)))
-  const [editing, setEditing] = useState(false)
-  const editingRef = useRef(editing)
-  editingRef.current = editing
-  // Track the live prop ONLY when it actually changes — keying the effect on
-  // `editing` too made the blur's clamped value flash back to the stale prop
-  // for the IPC round-trip (commit sets text + editing in the same render).
-  useEffect(() => {
-    if (!editingRef.current) setText(String(Math.round(hz)))
-  }, [hz])
-  const commit = () => {
-    setEditing(false)
-    const n = Number(text)
-    if (text.trim() !== '' && Number.isFinite(n)) {
-      const clamped = clampOffsetHz(n)
-      setText(String(clamped))
-      if (clamped !== Math.round(hz)) onCommit(clamped)
-    } else {
-      setText(String(Math.round(hz))) // revert garbage
-    }
-  }
-  return (
-    <label className="df-field" title={t('operate.header.df.title', { label })}>
-      <span className="df-label">{label}</span>
-      <input
-        type="number"
-        inputMode="numeric"
-        min={200}
-        max={4000}
-        step={1}
-        value={text}
-        aria-label={t('operate.header.df.aria', { label })}
-        onFocus={() => setEditing(true)}
-        onChange={(e) => setText(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault()
-            ;(e.target as HTMLInputElement).blur()
-          }
-        }}
-      />
-      <span className="df-unit">{HZ_UNIT}</span>
-    </label>
   )
 }
