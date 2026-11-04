@@ -864,7 +864,7 @@ impl SpectrumFeed {
         hi_hz: f32,
         win: impl Into<spectrum::ScopeAnalysis>,
     ) -> Option<Spectrum> {
-        self.scope_frame(lo_hz, hi_hz, win.into())
+        self.scope_frame(lo_hz, hi_hz, win.into(), false)
             .map(Spectrum::from)
     }
 
@@ -890,7 +890,41 @@ impl SpectrumFeed {
         last_seq: u64,
         fallback: impl FnOnce() -> Spectrum,
     ) -> Option<SpectrumFrame> {
-        let Some(frame) = self.scope_frame(lo_hz, hi_hz, win.into()) else {
+        Self::frame_after(
+            self.scope_frame(lo_hz, hi_hz, win.into(), false),
+            last_seq,
+            fallback,
+        )
+    }
+
+    /// [`Self::scope_frame_after`] for the AUDIO VIEW that the CW and Phone cockpits draw under
+    /// the radio's own scope: the audio row over `lo_hz..hi_hz`, never the RF row, and the
+    /// request for that window stands while a native RF row is fresh. The radio's scope is
+    /// already on screen in its own pane (`rf_frame_after`), so here the audio FFT IS the
+    /// picture someone is looking at. Nothing here reaches the radio.
+    pub fn audio_scope_frame_after(
+        &self,
+        lo_hz: f32,
+        hi_hz: f32,
+        win: impl Into<spectrum::ScopeAnalysis>,
+        last_seq: u64,
+        fallback: impl FnOnce() -> Spectrum,
+    ) -> Option<SpectrumFrame> {
+        Self::frame_after(
+            self.scope_frame(lo_hz, hi_hz, win.into(), true),
+            last_seq,
+            fallback,
+        )
+    }
+
+    /// The answer both scope reads give for the frame their slot chose (`None`: nothing was ever
+    /// published, so `fallback` computes one), given the last frame the caller drew.
+    fn frame_after(
+        frame: Option<SpectrumFrame>,
+        last_seq: u64,
+        fallback: impl FnOnce() -> Spectrum,
+    ) -> Option<SpectrumFrame> {
+        let Some(frame) = frame else {
             let row = fallback();
             return Some(SpectrumFrame {
                 seq: 0,
@@ -907,12 +941,14 @@ impl SpectrumFeed {
         (frame.bins.is_empty() || frame.seq > last_seq).then_some(frame)
     }
 
-    /// [`Self::scope_row`], as the frame the winning slot holds.
+    /// [`Self::scope_row`], as the frame the winning slot holds. `audio_only` is the audio view's
+    /// read ([`Self::audio_scope_frame_after`]): a live RF row neither wins nor drops the request.
     fn scope_frame(
         &self,
         lo_hz: f32,
         hi_hz: f32,
         win: spectrum::ScopeAnalysis,
+        audio_only: bool,
     ) -> Option<SpectrumFrame> {
         let sane = hi_hz > lo_hz
             && lo_hz >= 0.0
@@ -922,10 +958,10 @@ impl SpectrumFeed {
             let mut g = self.rows.lock().ok()?;
             // A live native row means the scope is not drawing the audio FFT at all — drop the
             // request so the producer stops paying for a row nobody will show.
-            let rf_live = g
-                .rf
-                .as_ref()
-                .is_some_and(|(s, at)| at.elapsed() < Duration::from_secs(1) && !s.bins.is_empty());
+            let rf_live = !audio_only
+                && g.rf.as_ref().is_some_and(|(s, at)| {
+                    at.elapsed() < Duration::from_secs(1) && !s.bins.is_empty()
+                });
             // A WINDOW-LENGTH CHANGE MUST DROP THE ACCUMULATED AVERAGE. `RowAverage::push`
             // restarts on span, bin count and source; two window lengths share all three, so
             // without this a Fast->Sharp switch would fold an 85 ms picture and a 341 ms one
@@ -952,7 +988,11 @@ impl SpectrumFeed {
                 }
             }
         }
-        self.frame()
+        if audio_only {
+            self.audio_frame()
+        } else {
+            self.frame()
+        }
     }
 
     /// How long the RF scope pane's request stands after the read that renewed it. The scope span
@@ -65997,6 +66037,75 @@ mod tests {
             None,
             "and no narrow row is requested for it — that FFT would be for a picture nobody shows"
         );
+    }
+
+    /// THE AUDIO VIEW UNDER A LIVE RADIO SCOPE. The CW and Phone cockpits can draw the radio's
+    /// scope and the sound-card audio view at once, one above the other. The audio view asks for
+    /// its narrow window while a native RF row is fresh, and it must get that window. It must not
+    /// get the RF row (that is the pane above it), and it must not get the full row in its place.
+    #[test]
+    fn the_audio_view_keeps_its_window_while_the_radio_scope_streams() {
+        let feed = SpectrumFeed::default();
+        feed.publish_audio(spec(0.0, 4000.0, "audio"));
+        feed.publish_rf(spec(14_000_000.0, 14_100_000.0, "civ"));
+
+        // Control: the rig scope's own read still hands out the RF row and asks for nothing.
+        let rf = feed
+            .scope_frame_after(300.0, 1100.0, spectrum::WindowN::Balanced, 0, || {
+                unreachable!("published")
+            })
+            .expect("a frame");
+        assert_eq!(
+            rf.source, "civ",
+            "control: the rig scope read prefers the RF row"
+        );
+        assert_eq!(
+            feed.scope_request(),
+            None,
+            "control: and requests no audio window"
+        );
+
+        // The audio view: never the RF row, and its request stands although RF is live.
+        let first = feed
+            .audio_scope_frame_after(300.0, 1100.0, spectrum::WindowN::Balanced, 0, || {
+                unreachable!("published")
+            })
+            .expect("a frame");
+        assert_eq!(
+            first.source, "audio",
+            "the audio view never draws the RF row"
+        );
+        assert_eq!(
+            first.hi_hz, 4000.0,
+            "answered wide until the window is produced"
+        );
+        assert_eq!(
+            feed.scope_request(),
+            Some((300.0, 1100.0, spectrum::WindowN::Balanced.into())),
+            "the request stands while RF is live, so the producer computes the window"
+        );
+        feed.publish_scope(spec(300.0, 1100.0, "audio"));
+        let narrow = feed
+            .audio_scope_frame_after(300.0, 1100.0, spectrum::WindowN::Balanced, 0, || {
+                unreachable!("published")
+            })
+            .expect("a frame");
+        assert_eq!(
+            (narrow.lo_hz, narrow.hi_hz),
+            (300.0, 1100.0),
+            "then the narrow window"
+        );
+        assert_eq!(narrow.source, "audio");
+        // Nothing newer than the frame drawn: nothing, as the rig scope read does.
+        assert!(feed
+            .audio_scope_frame_after(
+                300.0,
+                1100.0,
+                spectrum::WindowN::Balanced,
+                narrow.seq,
+                || unreachable!("published")
+            )
+            .is_none());
     }
 
     /// A WINDOW-LENGTH CHANGE MUST DROP THE ACCUMULATED AVERAGE — and nothing else can catch it.

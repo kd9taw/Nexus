@@ -5613,6 +5613,21 @@ export async function getScopeFrame(
 }
 
 /**
+ * The AUDIO VIEW's poll, drawn under the radio's own scope in the CW and Phone cockpits: the audio
+ * row over `loHz..hiHz` newer than `lastSeq`, never the radio's RF row (that one has its own pane,
+ * `getRfFrame`). The window request stands while the radio's scope streams, so the narrow CW window
+ * and HiDef still work beside it. Null and the empty frame mean what they mean for `getScopeFrame`.
+ */
+export async function getAudioScopeFrame(
+  loHz: number,
+  hiHz: number,
+  window: ScopeAnalysis | undefined,
+  lastSeq: number,
+): Promise<SpectrumFrameWire | null> {
+  return invoke<SpectrumFrameWire | null>('get_scope_frame', { loHz, hiHz, window, lastSeq, audioOnly: true })
+}
+
+/**
  * The RF scope pane's poll: the radio's own panadapter frame newer than `lastSeq` (0 = none drawn
  * yet), null when the radio has not swept since, or an EMPTY frame (no bins) when no panadapter is
  * streaming. Never the audio FFT — the pane sits beside the cockpit's audio waterfall, and a copy of

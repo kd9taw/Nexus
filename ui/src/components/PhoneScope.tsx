@@ -34,8 +34,9 @@
 // snaps onto the signal in the passband; [ ] the width; ↑/↓ scroll back while paused), and none of
 // them is Esc or Space, which belong to the cockpit's stop and its PTT.
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { ReactNode } from 'react'
-import { getRfFrame, getScopeFrame } from '../api'
+import { getAudioScopeFrame, getRfFrame, getScopeFrame } from '../api'
 import type { SpectrumFrameWire, SpotRow } from '../types'
 import {
   applyGainZero,
@@ -95,6 +96,7 @@ import { axisOf, rendererFrame } from '../spectrum/scale'
 import { LogRecursiveAverager } from '../spectrum/scaleAverage'
 import { scopeAnalysis, useScaleSettings } from '../spectrum/scaleSettings'
 import { ScaleStrip } from '../spectrum/ScaleStrip'
+import { SweepRate } from '../spectrum/sweepRate'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { t } from '../i18n'
 import { WheelRange } from './WheelRange'
@@ -292,8 +294,23 @@ interface Props {
    *  'rf' is the RF scope pane of the digital cockpits: the radio's panadapter ONLY (`getRfFrame`),
    *  and while none streams it says so rather than drawing the audio FFT, which the cockpit's own
    *  waterfall already shows. Its poll is also the pane's request for the stream (see getRfFrame).
+   *  'audio' is the audio view the CW and Phone cockpits draw under (or instead of) the radio's own
+   *  scope: the audio FFT over the scope's window ONLY (`getAudioScopeFrame`), never the RF row,
+   *  so the narrow CW window and HiDef keep working while the radio's scope streams beside it.
    *  Fixed for the scope's life: the loop reads it once. */
-  feed?: 'scope' | 'rf'
+  feed?: 'scope' | 'rf' | 'audio'
+  /** Reports, about once a second, how many sweeps a second the radio's own scope is delivering
+   *  to this scope (`spectrum/sweepRate.ts`), or null while it cannot say (no RF sweeps, or not
+   *  yet a window's worth). A measurement of what arrives, never a reading or a setting of the
+   *  radio's SPEED. */
+  onSweepRate?: (perSecond: number | null) => void
+  /** A COMPACT scope (the halves of CW's Both view): the toolbar row keeps the host's controls,
+   *  HiDef and ⚙; the S-meter is not drawn, and G, Z, the source badge, the ▲dB readout and the
+   *  3D / pause / flow buttons move behind ⚙. */
+  compact?: boolean
+  /** Where the toolbar row goes instead of above the picture: an element in the host's pane head.
+   *  Null/absent = its own row, as always. */
+  toolbarHost?: HTMLElement | null
   /** Spot tags (`spectrum/overlays.ts` `scopeSpots`): BandMap's set for this scope — its mode on its
    *  band, each with its mark — drawn above the trace with BandMap's fade and collision rules.
    *  Absent = no tags. */
@@ -368,6 +385,9 @@ export function PhoneScope({
   wheelSliders = false,
   cockpit = 'phone',
   feed = 'scope',
+  onSweepRate,
+  compact = false,
+  toolbarHost = null,
   spots = null,
   onSpot,
   privilegeMode = null,
@@ -378,6 +398,7 @@ export function PhoneScope({
   // The RF pane starts out saying the radio's scope is not there yet: it is only once a sweep lands.
   const [scopeAvailable, setScopeAvailable] = useState(feed !== 'rf')
   const rfOnly = feed === 'rf'
+  const audioOnly = feed === 'audio'
   // Master palette shared with the FT8 waterfall + all scopes ('auto' = theme-driven, and Amber
   // CRT at night — useNight.ts).
   const [palette] = useWaterfallPalette()
@@ -401,6 +422,7 @@ export function PhoneScope({
   const onFeedRef = useRef(onFeed)
   const rfViewRef = useRef(rfViewHz)
   const onSweepRef = useRef(onSweep)
+  const onSweepRateRef = useRef(onSweepRate)
   const lutRef = useRef<Uint8ClampedArray>(bakeLut(resolveColormap(palette, theme, night, skin)))
   // The picture's host: the renderer puts its canvas here, under the overlay canvas. Retained
   // history lives in the renderer's ring (the DATA at each row's native resolution, with its own
@@ -425,8 +447,6 @@ export function PhoneScope({
   /** What the row is asked to be computed with: the window, or the CW scope's HiDef. */
   const analysisRef = useRef(scopeAnalysis(cockpit, scale))
   analysisRef.current = scopeAnalysis(cockpit, scale)
-  /** The CW scope's HiDef/Fast switch: the CW cockpit's audio scope only. */
-  const hiDefSwitch = cockpit === 'cw' && !rfOnly
   /** The ⚙ strip (window, averaging, detector, slow-scope look): shown on demand. */
   const [gear, setGear] = useState(false)
   const gearId = useId()
@@ -445,6 +465,10 @@ export function PhoneScope({
   // Lifted out of the draw loop (updated only when it changes) so the badge can render it.
   const [source, setSource] = useState('')
   const sourceRef = useRef('')
+  /** The CW scope's HiDef/Fast switch: the CW cockpit's audio scope only. Read off the LIVE
+   *  source, not the feed: the rig scope draws the radio's RF row whenever one streams, and HiDef
+   *  is an audio analysis that does nothing to it. */
+  const hiDefSwitch = cockpit === 'cw' && !rfOnly && !isRfScopeSource(source)
   // The live Δ readout: the strongest signal's height above the noise floor.
   const [spanDb, setSpanDb] = useState<number | null>(null)
   const spanDbRef = useRef<number | null>(null)
@@ -545,6 +569,7 @@ export function PhoneScope({
   onFeedRef.current = onFeed
   rfViewRef.current = rfViewHz
   onSweepRef.current = onSweep
+  onSweepRateRef.current = onSweepRate
   onTuneRef.current = onTune
   onBeginClickRef.current = onBeginClick
   filterWidthRef.current = filterWidthHz
@@ -660,6 +685,10 @@ export function PhoneScope({
     let agcInit = false
     let lastFeed = '' // last onFeed-reported "source:lo:hi" (fire only on change)
     let lastSweep = '' // last onSweep-reported "source:lo:hi" (fire only on change)
+    // The radio scope's sweeps as they arrive, and the rate last reported (onSweepRate).
+    const sweepRate = new SweepRate()
+    let lastRateAt = 0
+    let lastRate: number | null = null
     // The AGC window, reused. `row.slice(vLo, vHi)` allocated a fresh array 20x/second for a
     // read-only percentile scan. Float64Array, not Float32Array: `row` arrives from JSON as
     // doubles and narrowing it would nudge the AGC floor for no benefit (see agcScratch).
@@ -793,6 +822,8 @@ export function PhoneScope({
         setSource(src)
       }
       if (wire.seq > 0) lastSeq = wire.seq
+      // A sweep of the radio's own scope: counted for the rate the cockpit's hint reads.
+      if (wire.seq > 0 && isRfScopeSource(src)) sweepRate.sweep(performance.now())
       // Data-driven capture extent (DTO); fall back to the legacy constants for
       // older backends that don't report it.
       const rowLo = wire.loHz ?? 200
@@ -1365,10 +1396,12 @@ export function PhoneScope({
         //
         // On a native RF row the poll also carries the ABSOLUTE window this scope wants drawn
         // (`wantedRf`): an SDR's IQ panadapter computes its rows over it, finer than its whole span.
-        const want = rfOnly ? null : wantedRf()
+        const want = rfOnly || audioOnly ? null : wantedRf()
         wire = rfOnly
           ? await getRfFrame(lastSeq)
-          : want
+          : audioOnly
+            ? await getAudioScopeFrame(viewLoRef.current, viewHiRef.current, analysisRef.current, lastSeq)
+            : want
             ? await getScopeFrame(viewLoRef.current, viewHiRef.current, analysisRef.current, lastSeq, want)
             : await getScopeFrame(viewLoRef.current, viewHiRef.current, analysisRef.current, lastSeq)
       } catch {
@@ -1434,6 +1467,16 @@ export function PhoneScope({
       // Give up on a fetch that never settles, so the scope resumes polling instead of sitting
       // frozen but mounted. Before the claim, so the freed latch is usable now.
       latch.abandonIfStuck(now)
+      // The sweep rate, once a second, to a host that reads it, and only when it changed.
+      if (now - lastRateAt >= 1000) {
+        lastRateAt = now
+        const r = sweepRate.perSecond(performance.now())
+        const shown = r == null ? null : Math.round(r * 10) / 10
+        if (shown !== lastRate) {
+          lastRate = shown
+          onSweepRateRef.current?.(shown)
+        }
+      }
       if (acc >= rowMs) {
         const myGen = latch.begin(now)
         if (myGen !== null) {
@@ -1973,158 +2016,185 @@ export function PhoneScope({
             // band painted the same colour as hot (see the note on TxMeters' ZONE_COLOR).
             'var(--alert-warning)'
           : 'var(--state-good)'
+  // The source badge and the dynamic-range readout, and the 3D / pause / flow buttons: in the toolbar
+  // row, or, on a COMPACT scope (the halves of CW's Both view), behind ⚙ with the rest of the set-once
+  // controls, so the row is short enough to sit in the pane's head and the half is mostly picture.
+  const sourceReadouts = (
+    <>
+      {(source === 'flex' || source === 'civ') && (
+        <span
+          className="ph-scope-src"
+          title={
+            source === 'flex' ? t('scope.source.flex.title') : t('scope.source.civ.title')
+          }
+        >
+          {source === 'flex' ? FLEX_RF : CIV_RF}
+        </span>
+      )}
+      {/* The number stands in a field of its own, as wide as the widest it prints
+          (styles.css `.ph-scope-dyn-val`), so nothing after the chip moves when it changes. */}
+      {spanDb != null && (
+        <span
+          className="ph-scope-dyn"
+          title={t('scope.dynamic.title')}
+        >
+          ▲<span className="ph-scope-dyn-val">{spanDb}</span> {DB}
+        </span>
+      )}
+    </>
+  )
+  const viewButtons = (
+    <>
+      <button
+        type="button"
+        className={`ph-scope-btn${dss ? ' on' : ''}`}
+        aria-pressed={dss}
+        title={dss ? t('scope.dss.on.title') : t('scope.dss.off.title')}
+        onClick={() => {
+          const next = !dss
+          setDss(next)
+          dssRef.current = next
+          surfaceSet(PHSCOPE_DSS_KEY, next ? '1' : '0')
+          rebuildRef.current?.()
+        }}
+      >
+        {dss ? '▤' : '◭'}
+      </button>
+      <button
+        type="button"
+        className={`ph-scope-btn${paused ? ' on' : ''}`}
+        aria-pressed={paused}
+        title={paused ? t('scope.pause.resume.title') : t('scope.pause.title')}
+        onClick={() => {
+          const next = !paused
+          setPaused(next)
+          pausedRef.current = next
+          if (!next) offsetRef.current = 0
+          rebuildRef.current?.()
+        }}
+      >
+        {paused ? '▶' : '⏸'}
+      </button>
+      <button
+        type="button"
+        className={`ph-scope-btn${!newestAtTop ? ' on' : ''}`}
+        aria-pressed={!newestAtTop}
+        title={newestAtTop ? t('scope.flow.down.title') : t('scope.flow.up.title')}
+        onClick={() => {
+          const next = !newestAtTop
+          setNewestAtTop(next)
+          newestAtTopRef.current = next
+          surfaceSet(PHSCOPE_FLOW_KEY, next ? 'down' : 'up')
+          rebuildRef.current?.()
+        }}
+      >
+        {newestAtTop ? t('scope.flow.down.label') : t('scope.flow.up.label')}
+      </button>
+    </>
+  )
+  // G and Z: in the row, or behind ⚙ on a compact scope.
+  const gainZero = (
+    <>
+      <label className="ph-scope-gz" title={t('scope.gain.title')}>
+        G
+        <WheelRange
+          wheelStep={wheelSliders ? 0.05 : undefined}
+          type="range"
+          min={-1}
+          max={1}
+          step={0.05}
+          value={scale.gain}
+          onChange={(e) => setScale({ gain: Number(e.target.value) })}
+          aria-label={t('scope.gain.aria')}
+        />
+      </label>
+      <label className="ph-scope-gz" title={t('scope.zero.title')}>
+        Z
+        <WheelRange
+          wheelStep={wheelSliders ? 0.05 : undefined}
+          type="range"
+          min={-1}
+          max={1}
+          step={0.05}
+          value={scale.zero}
+          onChange={(e) => setScale({ zero: Number(e.target.value) })}
+          aria-label={t('scope.zero.aria')}
+        />
+      </label>
+    </>
+  )
+  // THE TOOLBAR ROW, in its own row or, where the host gives it a place (`toolbarHost`, a compact
+  // scope's pane head), portaled there, so it costs the picture no row at all.
+  const toolbar = (
+    <div
+      className="ph-scope-smeter"
+      title={
+        sm
+          ? t('scope.smeter.title', { reading: sm.label, db: smeterDb ?? 0 })
+          : transmitting
+            ? t('scope.smeter.title.tx')
+            : t('scope.smeter.title.none')
+      }
+    >
+      {/* ⚠️ ONLY THESE THREE ARE THE S-METER. The strip they sit in is `ph-scope-smeter` but
+          it also carries the RF-source badge, the dynamic-range readout and the G/Z gain
+          control — hiding the strip would take those with it, which is a different and much
+          worse change than the one asked for. Phone hides the reading because its analog
+          meter shows the same number on the same screen; CW keeps it. */}
+      {toolbarStart}
+      {!hideSmeter && !compact && (
+        <>
+          <span className="ph-scope-smeter-label">S</span>
+          {/* A display well (styles.css DISPLAY WELLS): the bar only — the strip around it
+              carries controls and stays on the frame. */}
+          <div className="ph-scope-smeter-track well">
+            <div
+              className="ph-scope-smeter-fill"
+              style={{ width: sm ? `${Math.round(sm.frac * 100)}%` : '0%', background: smColor }}
+            />
+          </div>
+          <span className="ph-scope-smeter-label ph-scope-smeter-value">{sm ? sm.label : '—'}</span>
+        </>
+      )}
+      {!compact && sourceReadouts}
+      {!compact && gainZero}
+      {/* The CW scope's HiDef/Fast switch, in the row rather than behind ⚙: it is the one
+          choice between a narrow carrier and an immediate picture, and it is made on the air. */}
+      {hiDefSwitch && (
+        <button
+          type="button"
+          className={`ph-scope-btn${scale.hiDef ? ' on' : ''}`}
+          aria-pressed={scale.hiDef}
+          title={scale.hiDef ? t('scope.hidef.on.title') : t('scope.hidef.off.title')}
+          onClick={() => setScale({ hiDef: !scale.hiDef })}
+        >
+          {scale.hiDef ? t('scope.hidef.label') : t('scope.fast.label')}
+        </button>
+      )}
+      {/* The ⚙ strip's toggle: the analysis window, averaging, detector and slow-scope look are
+          set once and left, so they sit one click away instead of crowding this row. */}
+      <button
+        type="button"
+        className={`ph-scope-btn${gear ? ' on' : ''}`}
+        aria-expanded={gear}
+        aria-controls={gearId}
+        aria-label={t('scope.gear.aria')}
+        title={t('scope.gear.title')}
+        onClick={() => setGear(!gear)}
+      >
+        ⚙
+      </button>
+      {!compact && viewButtons}
+    </div>
+  )
   return (
     <div className="ph-scope">
-      <div
-        className="ph-scope-smeter"
-        title={
-          sm
-            ? t('scope.smeter.title', { reading: sm.label, db: smeterDb ?? 0 })
-            : transmitting
-              ? t('scope.smeter.title.tx')
-              : t('scope.smeter.title.none')
-        }
-      >
-        {/* ⚠️ ONLY THESE THREE ARE THE S-METER. The strip they sit in is `ph-scope-smeter` but
-            it also carries the RF-source badge, the dynamic-range readout and the G/Z gain
-            control — hiding the strip would take those with it, which is a different and much
-            worse change than the one asked for. Phone hides the reading because its analog
-            meter shows the same number on the same screen; CW keeps it. */}
-        {toolbarStart}
-        {!hideSmeter && (
-          <>
-            <span className="ph-scope-smeter-label">S</span>
-            {/* A display well (styles.css DISPLAY WELLS): the bar only — the strip around it
-                carries controls and stays on the frame. */}
-            <div className="ph-scope-smeter-track well">
-              <div
-                className="ph-scope-smeter-fill"
-                style={{ width: sm ? `${Math.round(sm.frac * 100)}%` : '0%', background: smColor }}
-              />
-            </div>
-            <span className="ph-scope-smeter-label ph-scope-smeter-value">{sm ? sm.label : '—'}</span>
-          </>
-        )}
-        {(source === 'flex' || source === 'civ') && (
-          <span
-            className="ph-scope-src"
-            title={
-              source === 'flex' ? t('scope.source.flex.title') : t('scope.source.civ.title')
-            }
-          >
-            {source === 'flex' ? FLEX_RF : CIV_RF}
-          </span>
-        )}
-        {/* The number stands in a field of its own, as wide as the widest it prints
-            (styles.css `.ph-scope-dyn-val`), so nothing after the chip moves when it changes. */}
-        {spanDb != null && (
-          <span
-            className="ph-scope-dyn"
-            title={t('scope.dynamic.title')}
-          >
-            ▲<span className="ph-scope-dyn-val">{spanDb}</span> {DB}
-          </span>
-        )}
-        <label className="ph-scope-gz" title={t('scope.gain.title')}>
-          G
-          <WheelRange
-            wheelStep={wheelSliders ? 0.05 : undefined}
-            type="range"
-            min={-1}
-            max={1}
-            step={0.05}
-            value={scale.gain}
-            onChange={(e) => setScale({ gain: Number(e.target.value) })}
-            aria-label={t('scope.gain.aria')}
-          />
-        </label>
-        <label className="ph-scope-gz" title={t('scope.zero.title')}>
-          Z
-          <WheelRange
-            wheelStep={wheelSliders ? 0.05 : undefined}
-            type="range"
-            min={-1}
-            max={1}
-            step={0.05}
-            value={scale.zero}
-            onChange={(e) => setScale({ zero: Number(e.target.value) })}
-            aria-label={t('scope.zero.aria')}
-          />
-        </label>
-        {/* The CW scope's HiDef/Fast switch, in the row rather than behind ⚙: it is the one
-            choice between a narrow carrier and an immediate picture, and it is made on the air. */}
-        {hiDefSwitch && (
-          <button
-            type="button"
-            className={`ph-scope-btn${scale.hiDef ? ' on' : ''}`}
-            aria-pressed={scale.hiDef}
-            title={scale.hiDef ? t('scope.hidef.on.title') : t('scope.hidef.off.title')}
-            onClick={() => setScale({ hiDef: !scale.hiDef })}
-          >
-            {scale.hiDef ? t('scope.hidef.label') : t('scope.fast.label')}
-          </button>
-        )}
-        {/* The ⚙ strip's toggle: the analysis window, averaging, detector and slow-scope look are
-            set once and left, so they sit one click away instead of crowding this row. */}
-        <button
-          type="button"
-          className={`ph-scope-btn${gear ? ' on' : ''}`}
-          aria-expanded={gear}
-          aria-controls={gearId}
-          aria-label={t('scope.gear.aria')}
-          title={t('scope.gear.title')}
-          onClick={() => setGear(!gear)}
-        >
-          ⚙
-        </button>
-        <button
-          type="button"
-          className={`ph-scope-btn${dss ? ' on' : ''}`}
-          aria-pressed={dss}
-          title={dss ? t('scope.dss.on.title') : t('scope.dss.off.title')}
-          onClick={() => {
-            const next = !dss
-            setDss(next)
-            dssRef.current = next
-            surfaceSet(PHSCOPE_DSS_KEY, next ? '1' : '0')
-            rebuildRef.current?.()
-          }}
-        >
-          {dss ? '▤' : '◭'}
-        </button>
-        <button
-          type="button"
-          className={`ph-scope-btn${paused ? ' on' : ''}`}
-          aria-pressed={paused}
-          title={paused ? t('scope.pause.resume.title') : t('scope.pause.title')}
-          onClick={() => {
-            const next = !paused
-            setPaused(next)
-            pausedRef.current = next
-            if (!next) offsetRef.current = 0
-            rebuildRef.current?.()
-          }}
-        >
-          {paused ? '▶' : '⏸'}
-        </button>
-        <button
-          type="button"
-          className={`ph-scope-btn${!newestAtTop ? ' on' : ''}`}
-          aria-pressed={!newestAtTop}
-          title={newestAtTop ? t('scope.flow.down.title') : t('scope.flow.up.title')}
-          onClick={() => {
-            const next = !newestAtTop
-            setNewestAtTop(next)
-            newestAtTopRef.current = next
-            surfaceSet(PHSCOPE_FLOW_KEY, next ? 'down' : 'up')
-            rebuildRef.current?.()
-          }}
-        >
-          {newestAtTop ? t('scope.flow.down.label') : t('scope.flow.up.label')}
-        </button>
-      </div>
+      {toolbarHost ? createPortal(toolbar, toolbarHost) : toolbar}
       {gear && (
         <div className="ph-scope-gear" id={gearId}>
+          {compact && gainZero}
+          {compact && sourceReadouts}
+          {compact && viewButtons}
           {/* No analysis window on the RF pane: its rows are the radio's own sweep, not an FFT here. */}
           {/* Nor while HiDef is on: the window is Fast's, and HiDef does not use it. */}
           <ScaleStrip settings={scale} onChange={setScale} windowControl={!rfOnly && !(hiDefSwitch && scale.hiDef)} />

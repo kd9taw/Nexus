@@ -1599,3 +1599,77 @@ describe('the pane region’s column dividers stack under the dock and the TX st
     })
   }
 })
+
+describe("CW's Both view: the radio's scope and the audio view stacked inside the strip (2026-11-04)", () => {
+  // `.scope-stack` (cockpit-panes.css) holds two FILL CockpitPaneFrames inside `.ph-scope-panel`. The
+  // strip's height must stay the divider's: the stack is the strip's grower in place of the one
+  // `.ph-scope`, with basis 0 and no floor, and each frame's body is the scroller its scope's floor
+  // sits in. Computed across both sheets, ordered as main.tsx imports them, for the reason the RF
+  // pane test above gives.
+  const panes = parseRules(
+    readFileSync(fileURLToPath(new URL('./cockpit-panes.css', import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''),
+  ).map((r) => ({ ...r, order: r.order + 1_000_000 }))
+  const winner = <T,>(chain: Array<Set<string>>, blockValue: (body: string) => T | null) => {
+    let win: { value: T; selector: string; spec: number; order: number } | null = null
+    for (const r of [...RULES, ...panes]) {
+      if (r.media !== null || !matchesChain(r.selector, chain)) continue
+      const v = blockValue(r.body)
+      if (v === null) continue
+      const spec = specificity(r.selector)
+      if (!win || spec > win.spec || (spec === win.spec && r.order >= win.order)) {
+        win = { value: v, selector: r.selector, spec, order: r.order }
+      }
+    }
+    return win
+  }
+  const blockBasis = (body: string): string | null => {
+    let v: string | null = null
+    for (const decl of body.split(';')) {
+      let m = /^\s*flex-basis\s*:\s*(\S+)\s*$/.exec(decl)
+      if (m) {
+        v = m[1]
+        continue
+      }
+      m = /^\s*flex\s*:\s*\S+\s+\S+\s+(\S+)\s*$/.exec(decl)
+      if (m) v = m[1]
+    }
+    return v
+  }
+  const strip = [...shellChain('cw-cockpit'), new Set(['ph-scope-panel'])]
+  const stack = [...strip, new Set(['scope-stack'])]
+  const body = [...stack, new Set(['pane-frame']), new Set(['pane-body'])]
+
+  it('the stack is a column that grows into the strip from a zero basis, with no floor of its own', () => {
+    expect(winner(stack, blockFlexDirection)?.value).toBe('column')
+    expect(winner(stack, blockGrow)?.value).toBe(1)
+    expect(['0', '0px', '0%']).toContain(winner(stack, blockBasis)?.value)
+    const floor = winner(stack, blockLonghand('min-height'))
+    expect(floor?.value, `the stack's floor comes from \`${floor?.selector}\``).toBe('0')
+  })
+
+  it('the strip itself still takes its height from the divider (grow 0), stack or not', () => {
+    expect(winner(strip, blockGrow)?.value).toBe(0)
+  })
+
+  it("each frame's body in the stack scrolls, so the scope's readable floor never pushes the strip", () => {
+    const scrolls = winner(body, (b) => blockOverflowY(b))
+    expect(scrolls?.value, `overflow-y from \`${scrolls?.selector}\``).toMatch(/^(auto|scroll)$/)
+    // The floor is there, and it is the one under that scroller.
+    expect(winner([...body, new Set(['rf-scope'])], blockLonghand('min-height'))?.value).not.toBeNull()
+  })
+
+  it('on a short window the halves stand side by side, and may shrink below their toolbars', () => {
+    const beside = [...strip, new Set(['scope-stack', 'scope-stack--beside'])]
+    const dir = winner(beside, blockFlexDirection)
+    expect(dir?.value, `direction from \`${dir?.selector}\``).toBe('row')
+    expect(winner(beside, blockLonghand('min-width'))?.value).toBe('0')
+    // It is still the strip's grower from a zero basis with no floor.
+    expect(winner(beside, blockGrow)?.value).toBe(1)
+    expect(winner(beside, blockLonghand('min-height'))?.value).toBe('0')
+  })
+
+  it('control: without the stack the strip holds the one scope as before (no stack rule reaches it)', () => {
+    expect(winner([...strip, new Set(['ph-scope'])], blockGrow)?.value).toBe(1)
+    expect(winner([...strip, new Set(['ph-scope'])], blockLonghand('min-height'))?.value).toBe('0')
+  })
+})

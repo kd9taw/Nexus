@@ -128,13 +128,20 @@ import { PASSBAND_LIMITS } from '../spectrum/markers'
 import { scopeSpots } from '../spectrum/scopeSpots'
 import {
   bandWindow,
+  isRadioScopeSource,
   loadRfSpan,
+  loadScopeView,
   onlyPart,
+  PHONE_SCOPE_VIEWS,
   saveRfSpan,
+  saveScopeView,
   sweepFor,
   useSpanAsk,
+  type ScopeView,
   type TaggedSweep,
 } from '../spectrum/rfSpan'
+import { scopeIsSlow } from '../spectrum/sweepRate'
+import { ScopeViewChips } from './ScopeViewChips'
 import { useRegionCols } from '../useRegionCols'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
@@ -587,7 +594,11 @@ const PHONE_DEFAULT_SPAN = SPANS.find((sp) => sp.id === 'full') ?? SPANS[0]
  *  it is drawn at the source's own resolution rather than cropped out of a wider sweep.
  *
  *  The ± faces are measurements and stay written here; 'Full' and 'Band' are words. Keyed and
- *  compared on `id` for the same reason SPANS is. */
+ *  compared on `id` for the same reason SPANS is.
+ *
+ *  THESE CHIPS ARE THE ONE CONTROL THAT SETS THE RADIO'S SPAN (CW's RF_SPANS says why): the Rig
+ *  scope pane's own span row, which could leave the radio on a span no chip named, is gone, and its
+ *  ±50k and ±100k are here. */
 const RF_SPANS = [
   {
     id: 'band',
@@ -602,6 +613,20 @@ const RF_SPANS = [
     hi: 1e9,
     label: () => t('phone.rfZoom.full.label'),
     title: () => t('phone.rfZoom.full.title'),
+  },
+  {
+    id: '±100k',
+    lo: -100_000,
+    hi: 100_000,
+    label: () => '±100k',
+    title: () => t('phone.rfZoom.span.title', { khz: 100 }),
+  },
+  {
+    id: '±50k',
+    lo: -50_000,
+    hi: 50_000,
+    label: () => '±50k',
+    title: () => t('phone.rfZoom.span.title', { khz: 50 }),
   },
   {
     id: '±25k',
@@ -649,30 +674,6 @@ const YAESU_SPANS = [
   { label: '200k', halfHz: 100_000 },
   { label: '500k', halfHz: 250_000 },
   { label: '1M', halfHz: 500_000 },
-] as const
-
-/** RIG scope-span presets (native Icom CI-V only) — these change the RADIO's real panadapter
- *  sweep width via CI-V 27 15 (± half-width in Hz), from the rig's own span table. Unlike the
- *  client-side RF zoom above, this commands the hardware. */
-const RIG_SPANS = [
-  { label: '±2.5k', hz: 2_500 },
-  { label: '±5k', hz: 5_000 },
-  { label: '±10k', hz: 10_000 },
-  { label: '±25k', hz: 25_000 },
-  { label: '±50k', hz: 50_000 },
-  { label: '±100k', hz: 100_000 },
-  { label: '±250k', hz: 250_000 },
-] as const
-
-/** FlexRadio pan BANDWIDTH presets (full span, not ± half-width) — command the SmartSDR
- *  panadapter's real width via `display pan set … bw=`. */
-const FLEX_SPANS = [
-  { label: '50k', hz: 50_000 },
-  { label: '100k', hz: 100_000 },
-  { label: '200k', hz: 200_000 },
-  { label: '500k', hz: 500_000 },
-  { label: '1M', hz: 1_000_000 },
-  { label: '2M', hz: 2_000_000 },
 ] as const
 
 /** #384: how far one wheel notch moves a Phone slider (`WheelRange`). 2 % on a 0–100 % level:
@@ -899,6 +900,25 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
   // framing (the "RX audio" label and the audio-Hz span chips) so the operator sees ONE unambiguous
   // display — the panadapter — instead of RF spectrum wrapped in audio-passband chrome.
   const nativeRf = scopeFeed != null && isRfScopeSource(scopeFeed.source)
+  // THE RADIO'S OWN SCOPE, ONCE SEEN, for this radio (CW's twin says why): only then does the view
+  // chip show, RF (the default) or Audio, kept per window and validated on load (`loadScopeView`).
+  const [rigScopeOf, setRigScopeOf] = useState<{ radio: number | undefined } | null>(null)
+  const rigScope = rigScopeOf != null && rigScopeOf.radio === snap.activeRadioId
+  const [scopeView, setScopeViewState] = useState<ScopeView>(() => loadScopeView('phone'))
+  // How fast the radio's scope is sweeping, as measured where it is drawn (PhoneScope `onSweepRate`).
+  const [sweepRate, setSweepRate] = useState<number | null>(null)
+  const setScopeView = (v: ScopeView) => {
+    setScopeViewState(v)
+    saveScopeView('phone', v)
+    setScopeFeed(null)
+    setSweepRate(null)
+  }
+  // AUDIO: the sound-card view alone, which never gives way to the radio's scope (`feed='audio'`).
+  const audioOnlyView = rigScope && scopeView === 'audio'
+  const noteFeed = (source: string, loHz: number, hiHz: number) => {
+    setScopeFeed({ source, loHz, hiHz })
+    if (isRadioScopeSource(source) && !rigScope) setRigScopeOf({ radio: snap.activeRadioId })
+  }
   // The RF window the chosen span draws, absolute Hz: the band's for Band (null off every band, which
   // then draws as Full), the dial's ± for the ± chips, none for Full.
   const dialHzNow = snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null
@@ -929,8 +949,8 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
     [spots, snap.radio.band, needByCall, typeByCall],
   )
   // The FT-710 is the one native scope whose SPAN this app can command over plain CAT, so its
-  // control row is the rig's own ladder rather than a client-side crop. Icom/Flex keep the crop:
-  // their hardware span already has its own row (RIG_SPANS / FLEX_SPANS) further down.
+  // control row is the rig's own ladder. Icom/Flex take the RF span chips, which ask the radio for
+  // the sweep that holds the chosen window (`useSpanAsk`).
   // TWO DIFFERENT QUESTIONS, and conflating them cost the operator the only way out of FIX.
   //
   // `yaesuScope` — does this radio have a scope Nexus is talking to? True as soon as the mode code
@@ -970,6 +990,9 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
   const civScope = scopeFeed?.source === 'civ'
   // FlexRadio SmartSDR panadapter — its own span/ref command path (display pan set …).
   const flexScope = scopeFeed?.source === 'flex'
+  // A quiet hint while the radio's scope is slow: its SPEED read back where the station reports it,
+  // else the rate measured here (`scopeIsSlow`, the one rule). SPEED is never sent to the radio.
+  const slowScope = scopeIsSlow(snap.radio.scopeRate, scopeFeed?.source, sweepRate)
   const [flexRefDbm, setFlexRefDbm] = useState(-80)
   const changeFlexRef = (dbm: number) => {
     setFlexRefDbm(dbm)
@@ -2230,33 +2253,15 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
   // One element per strip (layout L3): ⊞ Arrange places each where the operator put it.
   const rigscopePane = (
     <>
-      {/* Rig scope controls (native Icom CI-V only) — drive the RADIO's real panadapter: span
-          changes the hardware sweep width, ref sets weak-signal visibility. Distinct from the
-          view-zoom chips on the scope itself, which only zoom what's already streamed. */}
+      {/* Rig scope controls (native Icom CI-V only) — drive the RADIO's real panadapter: ref sets
+          weak-signal visibility. The radio's span is the scope's own span chips (RF_SPANS), the one
+          control that sets it, so it is not offered a second time here. */}
       {hasRigScopePane && civScope && (
         <CockpitPaneFrame title={t('phone.pane.rigscope.title')} paneId="rigscope" fit="content" {...closeProps('rigscope')}>
           <div className="ph-rigscope" role="group" aria-label={t('phone.rigScope.aria')}>
             <span className="ph-rigscope-lbl" title={t('phone.rigScope.title')}>
               {t('phone.rigScope.label')}
             </span>
-            <div className="ph-span">
-              {RIG_SPANS.map((sp) => (
-                <button
-                  key={sp.label}
-                  type="button"
-                  className="theme-chip"
-                  title={t('phone.rigScope.span.title', { span: sp.label })}
-                  /* #275: a failure here was swallowed, matching the backend's own swallow —
-                     between them a span button on an IC-7300 in Fixed mode did nothing with no
-                     explanation anywhere. The rig's OWN refusal arrives a tick later in
-                     `radio.scopeSpanRefused` (the status lane); this catch is the nearer half,
-                     the command itself failing. */
-                  onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(showWhenDriving)}
-                >
-                  {sp.label}
-                </button>
-              ))}
-            </div>
             <label className="ph-rigscope-ref" title={t('phone.rigScope.ref.title')}>
               <span>{t('phone.scope.ref.label')}</span>
               <WheelRange wheelStep={5}
@@ -2274,26 +2279,14 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
         </CockpitPaneFrame>
       )}
 
-      {/* FlexRadio SmartSDR panadapter controls — command the Flex pan's real bandwidth + ref. */}
+      {/* FlexRadio SmartSDR panadapter controls — the Flex pan's reference level. Its bandwidth is
+          the scope's own span chips, as for an Icom. */}
       {hasRigScopePane && flexScope && (
         <CockpitPaneFrame title={t('phone.pane.rigscope.title')} paneId="rigscope" fit="content" {...closeProps('rigscope')}>
           <div className="ph-rigscope" role="group" aria-label={t('phone.flexPan.aria')}>
             <span className="ph-rigscope-lbl" title={t('phone.flexPan.title')}>
               {t('phone.flexPan.label')}
             </span>
-            <div className="ph-span">
-              {FLEX_SPANS.map((sp) => (
-                <button
-                  key={sp.label}
-                  type="button"
-                  className="theme-chip"
-                  title={t('phone.flexPan.span.title', { span: sp.label })}
-                  onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(showWhenDriving)}
-                >
-                  {sp.label}
-                </button>
-              ))}
-            </div>
             <label className="ph-rigscope-ref" title={t('phone.flexPan.ref.title')}>
               <span>{t('phone.scope.ref.label')}</span>
               <WheelRange wheelStep={5}
@@ -3262,6 +3255,9 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
               </span>
             )
           })()}
+          {/* THE VIEW CHIP: the radio's scope or the audio view, on a radio whose own scope has been
+              seen here. A display choice; it sends the radio nothing. */}
+          {rigScope && <ScopeViewChips views={PHONE_SCOPE_VIEWS} value={scopeView} onChange={setScopeView} />}
           {/* No 'Colors' label: PalettePicker is a <select> that already carries
               aria-label="Waterfall color palette (applies to all modes)" and the matching
               tooltip, so the word was the third statement of the same thing on one row. */}
@@ -3333,6 +3329,11 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
                   {t('phone.rfZoom.band.partial')}
                 </span>
               )}
+              {slowScope && (
+                <span className="ph-scope-sub" role="status">
+                  {t('scope.slow.hint')}
+                </span>
+              )}
             </div>
           ) : (
             <div className="ph-span" role="group" aria-label={t('phone.scope.span.aria')}>
@@ -3368,6 +3369,10 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
             </div>
           )}
           <PhoneScope
+            // The Audio view reads the audio only, so the radio's scope never replaces it; the feed
+            // is fixed for a scope's life, so the key remounts it when the view changes.
+            key={audioOnlyView ? 'audio' : 'scope'}
+            feed={audioOnlyView ? 'audio' : 'scope'}
             hideSmeter
             wheelSliders
             active={active}
@@ -3379,9 +3384,10 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
             carrierCentered={!nativeRf}
             sideband={commandedMode}
             dialHz={snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null}
-            onFeed={(source, loHz, hiHz) => setScopeFeed({ source, loHz, hiHz })}
+            onFeed={noteFeed}
             rfViewHz={nativeRf && !yaesuRf ? bandFit : null}
             onSweep={(source, loHz, hiHz) => setScopeSweep({ loHz, hiHz, radio: snap.activeRadioId, source })}
+            onSweepRate={audioOnlyView ? undefined : setSweepRate}
             onTune={onScopeTune}
             filterWidthHz={filterHz ?? 2400}
             passbandHz={filterHz}

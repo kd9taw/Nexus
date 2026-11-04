@@ -13607,14 +13607,12 @@ export const EN = {
   'cw.rigScope.aria': 'Rig scope control',
   'cw.rigScope.label': 'Rig\u00a0scope',
   'cw.rigScope.title': "These command the radio's own scope, not just the on-screen zoom",
-  'cw.rigScope.span.title': "Set the radio's scope span to {{span}}",
   'cw.rigScope.ref.title': 'Scope reference level — lower to lift weak signals out of the noise',
   'cw.rigScope.ref.aria': 'Scope reference level (dB)',
   'cw.flexPan.aria': 'Flex panadapter control',
   'cw.flexPan.label': 'Flex\u00a0pan',
   'cw.flexPan.title':
     "These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom",
-  'cw.flexPan.span.title': 'Set the Flex panadapter bandwidth to {{span}}',
   'cw.flexPan.ref.title':
     'Panadapter reference level (dBm) — lower to lift weak signals out of the noise',
   'cw.flexPan.ref.aria': 'Flex panadapter reference level (dBm)',
@@ -14079,7 +14077,6 @@ export const EN = {
   'phone.rigScope.aria': 'Rig scope control',
   'phone.rigScope.label': 'Rig\u00a0scope',
   'phone.rigScope.title': "These command the radio's own scope, not just the on-screen zoom",
-  'phone.rigScope.span.title': "Set the radio's scope span to {{span}}",
   'phone.rigScope.ref.title':
     'Scope reference level — lower to lift weak signals out of the noise',
   'phone.rigScope.ref.aria': 'Scope reference level (dB)',
@@ -14087,7 +14084,6 @@ export const EN = {
   'phone.flexPan.label': 'Flex\u00a0pan',
   'phone.flexPan.title':
     "These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom",
-  'phone.flexPan.span.title': 'Set the Flex panadapter bandwidth to {{span}}',
   'phone.flexPan.ref.title':
     'Panadapter reference level (dBm) — lower to lift weak signals out of the noise',
   'phone.flexPan.ref.aria': 'Flex panadapter reference level (dBm)',
@@ -14987,6 +14983,16 @@ export const EN = {
   // the chip it shows while the radio sends it no panadapter.
   'rfScope.title': 'RF scope',
   'scope.rf.none': 'No scope data from the radio',
+  // The CW and Phone scope head's view chip (components/ScopeViewChips): the radio's own scope, the
+  // sound-card audio, or (CW) both stacked. And the hint shown while the radio's scope sweeps slowly.
+  'scope.view.aria': 'What the scope shows',
+  'scope.view.rf.label': 'RF',
+  'scope.view.rf.title': "The radio's own scope: the band around your dial",
+  'scope.view.audio.label': 'Audio',
+  'scope.view.audio.title': "The sound-card audio: what came through the radio's filter, in fine detail",
+  'scope.view.both.label': 'Both',
+  'scope.view.both.title': "The radio's scope for the band, with the audio view under it for the detail inside the filter",
+  'scope.slow.hint': "Set the radio's scope SPEED to FAST for a smoother scope",
   // The scope's ⚙ strip (`spectrum/ScaleStrip.tsx`). The window widths (47/23/12 Hz) and the
   // averaging times (50 ms … 2 s) are measurements and stay in the component.
   'scope.strip.aria': 'Scope display settings',

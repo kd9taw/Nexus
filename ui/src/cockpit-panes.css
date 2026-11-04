@@ -945,6 +945,28 @@
 .cockpit-col--quiet { display: none; }
 .ph-scope-panel--quiet { display: none; }
 
+/* THE STACKED SCOPES (CW's Both view, components/CwCockpit): inside the scope strip, the radio's own
+   scope over the sound-card audio view, each a FILL CockpitPaneFrame (weight 1). This box is the
+   strip's grower in place of the one `.ph-scope`: basis 0 and min-height 0, so the strip's height is
+   still the divider's and nothing here can push it taller; the two frames split it by their weights.
+   Each frame's body scrolls (`.pane-body`), so the scope's readable floor inside it (styles.css
+   `.pane-body > .rf-scope`) never needs this box to grow. */
+.scope-stack {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  gap: var(--space-1);
+}
+/* ON A SHORT WINDOW (an effective height under CwCockpit's STACK_MIN_EFF_H) the two stand side by side,
+   each the strip's whole height and half its width: stacked there, each was a sliver of picture under its
+   head. The frames' fill flex then shares the WIDTH; min-width 0 lets a half narrower than its toolbar wrap
+   that toolbar rather than push the strip wider than the window. */
+.scope-stack--beside {
+  flex-direction: row;
+  min-width: 0;
+}
+
 /* THE DASHBOARD RAIL (components/DashRail) — a column of Connect boxes beside the operating cockpit:
    the third child of App's `.shell`, after the navigation rail and the cockpit, and never inside a
    cockpit shell, so it adds no child kind to one and no pane of one sits in it.
