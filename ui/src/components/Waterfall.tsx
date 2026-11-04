@@ -11,6 +11,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react'
 import { getSpectrumRow } from '../api'
 import { sampleLut, type ColormapName } from '../colormaps'
+import { drawScaleStrip, scaleStripHeight, scaleTicks, SCALE_MIN_GAP_PX } from '../freqScale'
 import {
   agcRange,
   applyGainZero,
@@ -744,7 +745,7 @@ export function Waterfall({
     // scale. Refreshed in resize() from the canvas box — see `overlayTextScale` for why the
     // transform alone does not carry the zoom on Chromium.
     let textScale = 1
-    const axisHFor = (h: number) => Math.round((h < 160 ? 14 : 18) * textScale)
+    const axisHFor = (h: number) => scaleStripHeight(h, textScale)
     /** What the renderer draws, read off the refs. No trace: the waterfall fills the canvas above the
      *  frequency-axis strip, which stays the palette floor under the overlay's axis. */
     const scene = (): SpectrumScene => ({
@@ -1026,25 +1027,22 @@ export function Waterfall({
       // Part of the dark display in either theme (styles.css DISPLAY WELLS) — it used to turn
       // pale in the light theme, a light band across the bottom of a dark picture. The alphas
       // are the old strip's: the ground lets a trace of the floor through, the scale is dimmed.
-      octx.globalAlpha = 0.92
-      octx.fillStyle = ink.ground
-      octx.fillRect(0, wfH, W, AXIS_H)
-      octx.globalAlpha = 0.7
-      octx.fillStyle = ink.scale
-      octx.font = `${10 * textScale}px system-ui, sans-serif`
-      octx.textBaseline = 'middle'
+      // The strip is the one every waterfall and scope draws (`freqScale.ts`): audio hertz at a step
+      // the span and the room choose — 500 Hz on Std and Full, finer when zoomed in, wider apart on
+      // a narrow pane or a large text size.
       const vlo = viewLoRef.current
       const vhi = viewHiRef.current
-      // Sparser labels when narrow; finer when zoomed in (a small window needs ticks).
-      const span = vhi - vlo
-      const labelStep = span <= 800 ? 200 : span <= 1600 ? 500 : W < 280 ? 1000 : 500
-      const first = Math.ceil(vlo / labelStep) * labelStep
-      for (let f = first; f <= vhi; f += labelStep) {
-        const x = freqToX(f, W, vlo, vhi)
-        octx.fillRect(x, wfH, 1, 4)
-        octx.fillText(`${f}`, Math.min(W - 26 * textScale, x + 2), wfH + AXIS_H / 2)
-      }
-      octx.globalAlpha = 1
+      drawScaleStrip(octx, {
+        w: W,
+        top: wfH,
+        h: AXIS_H,
+        marks: scaleTicks(vlo, vhi, W, SCALE_MIN_GAP_PX * textScale).map((f) => ({ x: freqToX(f, W, vlo, vhi), label: `${f}` })),
+        ground: ink.ground,
+        ink: ink.scale,
+        fontPx: 10 * textScale,
+        gfx: 1,
+        text: textScale,
+      })
 
       // (No per-decode callsign labels on the waterfall — WSJT-X keeps the
       // spectrum clean; callsigns live in the Band Activity list. Only the

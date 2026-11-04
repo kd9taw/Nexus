@@ -18114,6 +18114,11 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: color-mix(in srgb, var(--bg) 62%, transparent);
   pointer-events: none;
   user-select: none;
+  /* Never down over the frequency scale: on a short waterfall (a large UI zoom, a dragged-down
+     strip) the legend stops 6px above the scale's strip (its 18px, which the UI zoom scales with
+     it), its bar giving up height first, and anything that still cannot fit is clipped. */
+  max-height: calc(100% - 30px);
+  overflow: hidden;
 }
 .wf-legend-bar {
   width: 8px;

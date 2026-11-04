@@ -87,6 +87,7 @@ import {
   type ScopeSpot,
 } from '../spectrum/overlays'
 import { usePrivilegeSpans } from '../spectrum/usePrivilegeSpans'
+import { drawScaleStrip, scaleStripHeight, scopeScaleTicks, SCALE_MIN_GAP_PX } from '../freqScale'
 import { useWaterfallPalette } from '../waterfallPalette'
 import { useNightActive } from '../useNight'
 import { useSkinActive } from '../useSkin'
@@ -716,6 +717,13 @@ export function PhoneScope({
     // while the scope around it grows. `overlayTextScale` recovers the zoom from rect ÷ layout
     // width, and reads 1 on an engine that already carries it (see its own doc comment).
     let textScale = 1
+    /** The width scale's strip at the foot of the picture, device px (`freqScale.ts`): the FT
+     *  waterfall's 18 px (14 on a short scope), following the text size. None on a canvas under two
+     *  strips tall, which has no picture to spare for it (and a box not laid out yet measures 1 px). */
+    const stripDevH = () => {
+      const css = scaleStripHeight(cssH, textScale)
+      return cssH >= 2 * css ? Math.round(css * scaleY) : 0
+    }
 
     /** A frame as the drawn axis wants it: a MIRRORED axis (LSB on the carrier-centred one) reads
      *  the row backwards, so the frame is stored and drawn mirrored — bins reversed, span negated —
@@ -960,7 +968,7 @@ export function PhoneScope({
      *  where it was drawn has nothing to draw (`poll`). */
     const sceneKeyOf = () =>
       [view.loHz, view.hiHz, view.mirrored, newestAtTopRef.current, dssRef.current, scaleRef.current.detector,
-        devW, devH, scaleY].join('|')
+        devW, devH, scaleY, textScale].join('|')
     let drawnScene = ''
     let drawnLut: Uint8ClampedArray | null = null
 
@@ -984,7 +992,9 @@ export function PhoneScope({
         view: { loHz: view.loHz, hiHz: view.hiHz },
         lut: lutRef.current,
         // 3D maximize hides the trace so the stacked-spectrum hill uses the full panel.
-        layout: { traceH: dssOn ? 0 : Math.max(1, Math.round(devH * TRACE_FRAC)), stripH: 0, lineWidth: Math.max(1, scaleY) },
+        // The width scale's strip at the foot is left the palette floor (`stripDevH`), so no row is
+        // ever drawn under it — the newest one included, when the flow puts it at the bottom.
+        layout: { traceH: dssOn ? 0 : Math.max(1, Math.round(devH * TRACE_FRAC)), stripH: dssOn ? 0 : stripDevH(), lineWidth: Math.max(1, scaleY) },
         detector: scaleRef.current.detector,
         mode: dssOn ? 'dss' : '2d',
         offsetRows: pausedNow ? offsetRef.current : 0,
@@ -1065,7 +1075,7 @@ export function PhoneScope({
       const key = [devW, devH, scaleY, textScale, dssRef.current, newest?.src ?? null, view.loHz, view.hiHz,
         view.markerAtHz, carrierCenteredRef.current, sidebandRef.current, dialRef.current, pitchRef.current,
         cwPitchRefRef.current, sub ? `${sub.dialHz}/${sub.sideband}/${sub.widthHz}` : '-', shownWidth(),
-        canEditPassband(), notchRef.current].join('|')
+        canEditPassband(), notchRef.current, `${themeRef.current}|${nightRef.current}|${skinRef.current}`].join('|')
       if (key === marksKey) return
       marksKey = key
       drawOverlay()
@@ -1229,6 +1239,9 @@ export function PhoneScope({
       // sideband. It returns null where there is no honest answer (an audio row with the dial
       // unknown, an AM/FM baseband, where a click does not tune either), and then nothing is
       // drawn — a wrong number on a scale someone tunes by is worse than a blank one.
+      //
+      // It stands just above the width strip (below), which holds the other question: how wide.
+      const footY = devH - stripDevH()
       {
         const ticks = axisTicks(lo, hi, 6)
         // Ticks under a kilohertz apart (CW's 300–800 Hz window; Phone's at a 2.4 kHz width) put the
@@ -1247,8 +1260,8 @@ export function PhoneScope({
           ctx.strokeStyle = 'rgba(255, 255, 255, 0.20)'
           ctx.lineWidth = Math.max(1, scaleY)
           ctx.beginPath()
-          ctx.moveTo(tx, devH - 10 * scaleY)
-          ctx.lineTo(tx, devH)
+          ctx.moveTo(tx, footY - 10 * scaleY)
+          ctx.lineTo(tx, footY)
           ctx.stroke()
           ctx.fillStyle = 'rgba(255, 255, 255, 0.55)'
           ctx.font = `${Math.max(8, Math.round(9 * textPx))}px system-ui, sans-serif`
@@ -1266,7 +1279,7 @@ export function PhoneScope({
           // where the nudge pushes the last label back over its neighbour (a phone-width CW scope at 20 m
           // or 2 m, 2026-10-05). A scale with room for every label draws them all, where it always has.
           if (lx < clearFrom) continue
-          ctx.fillText(label, lx, devH - 2 * textPx)
+          ctx.fillText(label, lx, footY - 2 * textPx)
           clearFrom = lx + w + 3 * textPx
         }
       }
@@ -1284,6 +1297,36 @@ export function PhoneScope({
         ctx.lineTo(mx, devH)
         ctx.stroke()
         ctx.setLineDash([])
+      }
+
+      // ---- The width scale: how wide, along the foot, as on every waterfall ----------------
+      //
+      // The FT waterfall reads 500, 1000 … 3000 along its foot; this scope read only the MHz above,
+      // so neither a signal's width nor the span shown could be read off it. The strip is the FT
+      // waterfall's own (`freqScale.ts`): audio hertz on an audio feed (on Phone's carrier-centred
+      // axis, the pitch each point is heard at, from the dial out; on CW, the unit the pitch is set
+      // in, so the dashed pitch line stands on its own number), and on a radio's RF panadapter the
+      // offset from the dial, as the radio's own scope prints it. Drawn LAST, so every line above —
+      // the dial, the pitch, the passband and its edges, the notch — stops at its top and no mark is
+      // drawn through a number. The picture under it is the palette floor (`stripDevH` in `draw`).
+      // Its ground and ink are the display well's, read off the overlays' canvas (a well).
+      const sh = stripDevH()
+      if (sh > 0) {
+        const wellInks = overlays ? readOverlayInks(overlays) : null
+        drawScaleStrip(ctx, {
+          w: Wd,
+          top: devH - sh,
+          h: sh,
+          marks: scopeScaleTicks(axis, lo, hi, Wd / scaleY, SCALE_MIN_GAP_PX * textScale).map((t) => ({
+            x: Math.round(xOf(t.at)),
+            label: t.label,
+          })),
+          ground: wellInks?.ground || '#000000',
+          ink: wellInks?.ink || '#ffffff',
+          fontPx: Math.max(8, Math.round(10 * textPx)),
+          gfx: Math.max(1, scaleY),
+          text: textPx,
+        })
       }
     }
 
