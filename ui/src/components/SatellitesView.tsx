@@ -74,6 +74,13 @@ import {
 import { SAT_ICON_RECTS, SAT_ICON_TILT_DEG } from '../features/satIcon'
 import { satAlarmMap, toggleSatAlarm, setSatAlarmLead } from '../features/satAlarm'
 import {
+  isWorkableTp,
+  rememberSatTp,
+  resolveSatTp,
+  satTpPrefs,
+  toggleSatTpFavorite,
+} from '../features/satTransponderPref'
+import {
   DISCOVERY_ROW_CAP,
   modePillWord,
   passAdmission,
@@ -2252,6 +2259,9 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
   // Past TP_ALIVE_CAP workable transmitters, the rest are behind "show all N";
   // reset per bird alongside showDead.
   const [tpAll, setTpAll] = useState(false)
+  // The per-bird remembered transponder and ★ favorite (features/satTransponderPref):
+  // read once here, re-read after each write this section makes.
+  const [tpPrefs, setTpPrefs] = useState(satTpPrefs)
   const railRef = useRef<HTMLDivElement>(null)
   const pickerRef = useRef<HTMLDivElement>(null)
   // THE TWO COLUMNS' SPLIT (layout L7): the divider between the planning column and the pass
@@ -2278,9 +2288,14 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
     const box = pickerRef.current
     if (box == null) return
     box.scrollIntoView?.({ block: 'nearest' })
+    // Nothing held (the first radio, None, is the checked one): the operator's saved row
+    // (★ / last used) when there is one, so the one click left is right under the focus.
+    const first = box.querySelector<HTMLInputElement>('input[type="radio"]')
+    const checked = box.querySelector<HTMLInputElement>('input[type="radio"]:checked')
     const target =
-      box.querySelector<HTMLInputElement>('input[type="radio"]:checked') ??
-      box.querySelector<HTMLInputElement>('input[type="radio"]')
+      checked != null && checked !== first
+        ? checked
+        : (box.querySelector<HTMLInputElement>('input[data-pref]') ?? checked ?? first)
     target?.focus?.({ preventScroll: true })
   }, [])
   // "Work this pass" wants the rail scrolled into view once it exists.
@@ -2400,6 +2415,8 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
   useEffect(() => {
     setShowDead(false) // both collapses are per bird
     setTpAll(false)
+    // Another window, or a computer driving this station, may have saved a choice since.
+    setTpPrefs(satTpPrefs())
     if (!selected) {
       setDetail(null)
       return
@@ -2778,15 +2795,30 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
   // hides the selection is a chooser that reads as "None", and the wire index
   // is the RAW list index, so nothing about the cap reaches the backend.
   const aliveRows = useMemo(() => tpRows.filter((r) => r.t.alive), [tpRows])
+  // The saved choice for this bird: the ★ favorite, else the row picked last. Only ever a
+  // workable row; `gone` names a saved one SatNOGS no longer lists as working.
+  const tpPref = useMemo(
+    () => (detail == null ? null : resolveSatTp(detail.name, detail.transmitters, tpPrefs)),
+    [detail, tpPrefs],
+  )
+  const prefIndex = tpPref?.index ?? null
+  // The held card and the saved card are always in the shown set, even past the cap, each
+  // taking one of the cap's slots from the end of the head: a chooser that hides the selection
+  // reads as "None", and one that hides the favorite sends the operator to "show all" on every
+  // pass — the very thing saving it is for. Shown in list order.
   const aliveShown = useMemo(() => {
     if (tpAll || aliveRows.length <= TP_ALIVE_CAP) return aliveRows
     const head = aliveRows.slice(0, TP_ALIVE_CAP)
-    if (heldIndex != null && !head.some((r) => r.aliveIndex === heldIndex)) {
-      const heldRow = aliveRows.find((r) => r.aliveIndex === heldIndex)
-      if (heldRow) return [...head.slice(0, TP_ALIVE_CAP - 1), heldRow]
-    }
-    return head
-  }, [tpAll, aliveRows, heldIndex])
+    const pinned = aliveRows.filter(
+      (r) =>
+        r.aliveIndex != null &&
+        (r.aliveIndex === heldIndex || r.aliveIndex === prefIndex) &&
+        !head.includes(r),
+    )
+    if (pinned.length === 0) return head
+    const keep = head.slice(0, TP_ALIVE_CAP - pinned.length)
+    return aliveRows.filter((r) => keep.includes(r) || pinned.includes(r))
+  }, [tpAll, aliveRows, heldIndex, prefIndex])
   // Will a pick actually move the radio? The downlink follows any pick unless
   // the operator switched correction off (or mapped their one VFO to the
   // uplink), so saying nothing here would leave a live control looking dead.
@@ -2997,16 +3029,37 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
             setVfoMap(s.satVfoMap ?? 'off')
           })
           .catch(() => {})
+        return true
       })
-      .catch((e) =>
+      .catch((e) => {
         pushToast(
           t('sat.toast.transponder.failed', { error: `${e instanceof Error ? e.message : e}` }),
           'error',
-        ),
-      )
+        )
+        return false
+      })
       .finally(() => {
         pickBusy.current = false
       })
+  }
+  /** The operator picked `index` in the chooser: send it, and once the engine took it,
+   * remember it as this bird's last pick. Only a chooser click is remembered — never an auto
+   * pick, never Lock on's re-send — so "the last one" is always one the operator chose. */
+  const pickFromChooser = (d: SatDetail, index: number) => {
+    const tx = d.transmitters[index]
+    if (tx == null) return
+    void pickTransponder(d.name, index, tx.description).then((ok) => {
+      if (!ok) return
+      rememberSatTp(d.name, tx)
+      setTpPrefs(satTpPrefs())
+    })
+  }
+  /** ★ the row as this bird's favorite, or clear it. Stored only: it tunes nothing. */
+  const toggleTpFavorite = (d: SatDetail, index: number) => {
+    const tx = d.transmitters[index]
+    if (tx == null) return
+    toggleSatTpFavorite(d.name, tx)
+    setTpPrefs(satTpPrefs())
   }
 
   // Live mirrors of the two Settings ▸ Radio switches the readiness rail can
@@ -3107,11 +3160,17 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
             .then(() => {
               const alreadyHeld = held != null && held.name === d.name
               if (alreadyHeld || dialOptOut.has(d.name)) return
-              const alive = d.transmitters.map((t, i) => ({ t, i })).filter((x) => x.t.alive)
-              const workable = alive.filter(
-                (x) => x.t.kind === 'Transponder' || x.t.kind === 'Transceiver',
-              )
-              const pick = workable[0] ?? null
+              const workable = d.transmitters
+                .map((t, i) => ({ t, i }))
+                .filter((x) => isWorkableTp(x.t))
+              // The operator's saved choice for this bird first (★ favorite, else the
+              // last pick), and only while it is listed as workable; else the first
+              // workable row, as always. Read from storage NOW, not the render's copy.
+              const saved = resolveSatTp(d.name, d.transmitters, satTpPrefs()).index
+              const pick =
+                (saved != null ? workable.find((x) => x.i === saved) : undefined) ??
+                workable[0] ??
+                null
               // Land the pick BEFORE the arm: the arm's initial DTO — and the
               // consent toast built from it — must describe the pass as it will
               // actually run (its `mode` label needs the held transponder).
@@ -3948,9 +4007,9 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
                             type="radio"
                             name="sat-transponder"
                             checked={heldIndex === aliveIndex}
+                            data-pref={prefIndex === aliveIndex ? '' : undefined}
                             onChange={() =>
-                              aliveIndex != null &&
-                              pickTransponder(detail.name, aliveIndex, tx.description)
+                              aliveIndex != null && pickFromChooser(detail, aliveIndex)
                             }
                             aria-label={t('sat.transponder.card.aria', {
                               description: tx.description,
@@ -3989,7 +4048,36 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
                             {heldIndex === aliveIndex && tuned?.auto && (
                               <span className="sat-tp-auto">{t('sat.transponder.auto')}</span>
                             )}
+                            {tpPref?.source === 'last' && prefIndex === aliveIndex && (
+                              <span className="sat-tp-last" title={t('sat.transponder.last.title')}>
+                                {t('sat.transponder.last')}
+                              </span>
+                            )}
                           </span>
+                          {/* ★ THE FAVORITE — stored, never sent: starring a row tunes
+                              nothing. A button inside the card's label, so its click is
+                              kept from reaching the radio input (preventDefault). Only a
+                              workable row can be the one "Work this pass" picks. */}
+                          {aliveIndex != null && isWorkableTp(tx) && (
+                            <button
+                              type="button"
+                              className={`sat-star sat-tp-fav${tpPref?.source === 'favorite' && prefIndex === aliveIndex ? ' on' : ''}`}
+                              aria-pressed={tpPref?.source === 'favorite' && prefIndex === aliveIndex}
+                              aria-label={t('sat.transponder.fav.aria', { description: tx.description })}
+                              title={
+                                tpPref?.source === 'favorite' && prefIndex === aliveIndex
+                                  ? t('sat.transponder.fav.on.title')
+                                  : t('sat.transponder.fav.off.title')
+                              }
+                              onClick={(e) => {
+                                e.preventDefault()
+                                e.stopPropagation()
+                                toggleTpFavorite(detail, aliveIndex)
+                              }}
+                            >
+                              {tpPref?.source === 'favorite' && prefIndex === aliveIndex ? '★' : '☆'}
+                            </button>
+                          )}
                         </label>
                       ))}
                     {!tpAll && aliveRows.length > TP_ALIVE_CAP && (
@@ -4040,6 +4128,14 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
                         </button>
                       ))}
                   </div>
+                  {/* A saved transponder SatNOGS no longer lists as working: one quiet
+                      line, and the usual pick stands. It stays saved, so it is found again
+                      if it comes back. */}
+                  {tpPref?.gone && (
+                    <div className="sat-tp-state" data-testid="sat-tp-pref-gone">
+                      {t('sat.transponder.pref.gone', { label: tpPref.gone })}
+                    </div>
+                  )}
                   {/* Display only — the engine owns the command. With a live
                       track the ENGINE's declared answer (DTO txMode) is the
                       only thing phrased as a command; when it says nothing, so

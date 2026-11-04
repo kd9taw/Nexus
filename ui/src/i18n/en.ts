@@ -7081,6 +7081,12 @@ export const EN = {
   // invariant token and `bd` is read off the catalog the way MHz is: the same in every language.
   'sat.transponder.baud': '{{baud}} bd',
   'sat.transponder.auto': 'picked for you — change it here if this is not the one',
+  'sat.transponder.fav.aria': 'Favorite transponder: {{description}}',
+  'sat.transponder.fav.on.title': 'Your favorite on this bird: “Work this pass” picks it first. Click to clear the star.',
+  'sat.transponder.fav.off.title': 'Make this your favorite on this bird: “Work this pass” picks it first. Starring does not tune the radio.',
+  'sat.transponder.last': 'last used',
+  'sat.transponder.last.title': 'The one you picked last time on this bird. “Work this pass” picks it unless you star a favorite.',
+  'sat.transponder.pref.gone': '“{{label}}”, the transponder you saved for this bird, is not listed as working now. “Work this pass” picks the usual one.',
   'sat.transponder.showAll': 'show all {{count}} ▾',
   'sat.transponder.showAll.title': 'Show every workable transmitter SatNOGS lists for this bird',
   'sat.transponder.dead': 'reported dead (SatNOGS) — not workable',
