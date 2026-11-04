@@ -604,6 +604,18 @@ pub fn run(
             log_thread = started;
             log_lan = lan;
         }
+        // The lease follows the listener: taken on the port it listens on, let go when it stops.
+        // HERE, before a refusal is judged below: a window whose own rebind failed (127.0.0.1 to
+        // every adapter, refused by another program) listens nowhere, and its own lease must be
+        // gone by then, or the refusal would read as "the other Nexus window" (#431). Right after
+        // the bind, too, so a second window starting at the same moment finds the lease.
+        let listening = log.running.as_ref().map(|r| r.port);
+        if lease.as_ref().map(|(p, _)| *p) != listening {
+            lease = None;
+            if let (Some(port), Some(dir)) = (listening, windows.as_deref()) {
+                lease = take_port_lease(dir, port).map(|f| (port, f));
+            }
+        }
         let addr = |port: u16| {
             if lan {
                 format!("port {port} on every network adapter")
@@ -634,14 +646,6 @@ pub fn run(
                     tempo_core::applog::info("freedv", &msg);
                 }
                 note(level, msg);
-            }
-        }
-        // The lease follows the listener: taken on the port it listens on, let go when it stops.
-        let listening = log.running.as_ref().map(|r| r.port);
-        if lease.as_ref().map(|(p, _)| *p) != listening {
-            lease = None;
-            if let (Some(port), Some(dir)) = (listening, windows.as_deref()) {
-                lease = take_port_lease(dir, port).map(|f| (port, f));
             }
         }
         if clash != clash_said {
