@@ -507,11 +507,12 @@ spot so you can work it from wherever you are.
   fixed text — there is no Settings surface and no in-cockpit editor for them.
   No shipped exchange sends a contest serial either;
   casual and Field Day are the two schemas.
-- **Netting the waterfall moves the receiver only.** Your transmitted tones are
-  fixed — AFSK always keys 2125 Hz mark with space at mark plus your shift — so
-  clicking a station 400 Hz away lets you copy them but does not move your
-  transmission onto them. Use the VFO for that. There is no TX marker on this
-  waterfall at all, only M and S.
+- **A waterfall net lasts for the session.** Clicking a station moves the
+  decoder and your AFSK tones onto it, but the next start comes back to the tone
+  pair saved in
+  [Settings ▸ Digital ▸ RTTY ▸ Low tone](settings-reference.md#rtty) (2125/2295
+  unless you change it). To always start on, say, 1275/1445, save it there.
+  There is no TX marker on this waterfall, only M and S.
 - **One signal at a time.** A single demodulator sits on a single tone pair, so
   two stations in the passband do not decode into two columns and the second one
   does not decode at all. This is a receiver, not a skimmer.
@@ -533,7 +534,7 @@ spot so you can work it from wherever you are.
   block. Every decoded character still prints in order; only the fade is
   smoothed, and only on copy already too broken for per-character fading to mean
   much.
-- **Baud and shift are picked from lists**, not typed: 45.45 or 75 baud;
+- **Baud and shift are picked from lists**, not typed: 45.45, 50 or 75 baud;
   170, 425 or 850 Hz shift. The band plan is HF only — 160 m through 10 m, with
   no VHF RTTY channel.
 - **The scope has no splitter and no pop-out.** It takes its share of the window

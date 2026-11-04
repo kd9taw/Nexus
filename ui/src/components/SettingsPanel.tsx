@@ -10473,6 +10473,7 @@ export function SettingsPanel({
                   onChange={(e) => updateNum('rttyBaud', Number(e.target.value))}
                 >
                   <option value="45.45">{t('settings.rtty.baud.hf')}</option>
+                  <option value="50">{t('settings.rtty.baud.eu')}</option>
                   <option value="75">{t('settings.rtty.baud.vhf')}</option>
                 </select>
                 <span className="settings-hint">{t('settings.rtty.baud.hint')}</span>
@@ -10491,6 +10492,23 @@ export function SettingsPanel({
                   <option value="850">850</option>
                 </select>
                 <span className="settings-hint">{t('settings.rtty.shift.hint')}</span>
+              </label>
+              {/* The saved tone pair, by its LOW tone: which of the two is mark swaps with the
+                  sideband and Reverse, so a "mark" box would mean different tones on different
+                  rigs. Offered on true FSK too — the decoder still listens on the pair. The
+                  engine clamps the pair's centre into 300–3700 Hz, as a waterfall net is. */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.rtty.lowTone.label')}</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  min={300}
+                  max={3500}
+                  step={5}
+                  value={String(form.rttyLowToneHz ?? 2125)}
+                  onChange={(e) => updateNum('rttyLowToneHz', Number(e.target.value))}
+                />
+                <span className="settings-hint">{t('settings.rtty.lowTone.hint')}</span>
               </label>
               <div className="settings-field">
                 <label className="settings-toggle">

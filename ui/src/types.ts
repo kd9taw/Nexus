@@ -2422,7 +2422,7 @@ export interface PskState {
   signal: boolean
   /** Audio center (Hz) the decoder is netted on (the waterfall cursor). */
   centerHz: number
-  /** Selected sub-mode slug ('psk31' | 'qpsk31') — engine truth for the
+  /** Selected sub-mode slug ('psk31' | 'qpsk31' | 'psk63') — engine truth for the
    * cockpit's selector. Optional: absent reads as 'psk31' (the default). */
   mode?: string
   /** QPSK sideband-reverse (LSB) toggle state. Optional: absent = normal. */
@@ -5194,10 +5194,13 @@ export interface Settings {
   /** Serial port for the FSK keying line (e.g. the FTDX10's USB Enhanced COM).
    * Empty = the CAT serial port. */
   rttyFskPort?: string
-  /** RTTY baud rate — true 45.45 by default (never 45); 75 is the other common rate. */
+  /** RTTY baud rate — true 45.45 by default (never 45); 50 and 75 are the other rates offered. */
   rttyBaud?: number
   /** RTTY mark/space shift in Hz (170 = the HF standard). TX + RX demod both. */
   rttyShiftHz?: number
+  /** The saved RTTY tone pair's LOWER tone (Hz; 2125 = 2125/2295). Where the decoder and the
+   * AFSK transmitter sit until a waterfall net; a change re-homes both onto it. */
+  rttyLowToneHz?: number
   /** Reverse the mark/space sense (TX tones + RX demod) — for copying an
    * upside-down station. The sideband is `rttyAfskSideband`'s job. */
   rttyReverse?: boolean

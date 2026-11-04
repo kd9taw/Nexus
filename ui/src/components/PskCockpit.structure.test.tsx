@@ -352,12 +352,12 @@ describe('PSK view-entry auto-arm (the APRS/SSTV pattern, operator ruling 2026-0
 describe('PSK sub-mode selector + QPSK sideband reverse (Keyboard Modes Phase 3)', () => {
   const pskSetMode = api.pskSetMode as ReturnType<typeof vi.fn>
 
-  it('the selector lists both modes, renders the engine truth, and PSK31 is the default', async () => {
+  it('the selector lists every mode, renders the engine truth, and PSK31 is the default', async () => {
     // `mode` absent from the poll (older engine / fresh state) reads as psk31.
     await renderCockpit()
     const sel = document.querySelector('.psk-mode-select') as HTMLSelectElement
     expect(sel, 'no sub-mode selector').not.toBeNull()
-    expect(Array.from(sel.options).map((o) => o.value)).toEqual(['psk31', 'qpsk31'])
+    expect(Array.from(sel.options).map((o) => o.value)).toEqual(['psk31', 'qpsk31', 'psk63'])
     expect(sel.value).toBe('psk31')
     cleanup()
     // The selector renders what the ENGINE says, not local state.
@@ -365,6 +365,13 @@ describe('PSK sub-mode selector + QPSK sideband reverse (Keyboard Modes Phase 3)
     await renderCockpit()
     const sel2 = document.querySelector('.psk-mode-select') as HTMLSelectElement
     expect(sel2.value).toBe('qpsk31')
+    cleanup()
+    // PSK63: its own badge rate, and no Rev toggle (BPSK does not care about the sideband).
+    state.current = { ...state.current, mode: 'psk63', reverse: false }
+    await renderCockpit()
+    expect((document.querySelector('.psk-mode-select') as HTMLSelectElement).value).toBe('psk63')
+    expect(document.querySelector('.cw-mode-badge')?.textContent).toContain('PSK63 · 62.5')
+    expect(document.querySelector('.psk-rev')).toBeNull()
   })
 
   it('changing the selector asks the ENGINE (which may refuse mid-transmission)', async () => {

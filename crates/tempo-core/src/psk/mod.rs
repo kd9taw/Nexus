@@ -24,6 +24,10 @@
 //! Viterbi decoder the demodulator forks into at the slicer when
 //! [`PskModeKind::Qpsk31`] is selected, and the QPSK transmit stream over the
 //! same shaped-boundary generator.
+//!
+//! BPSK63 ([`PskModeKind::Bpsk63`]) is BPSK31 at twice the symbol rate
+//! (62.5 Bd): the same demodulator decimating by half as much, and the same
+//! modulator at [`PskModeKind::baud`].
 
 pub mod demod;
 pub mod modulator;
@@ -31,8 +35,10 @@ pub mod qpsk;
 pub mod varicode;
 
 pub use demod::{
-    PskConfig, PskDemod, PskDemodulator, PskModeKind, AFC_CLAMP_HZ, BAUD, SAMPLE_RATE,
+    PskConfig, PskDemod, PskDemodulator, PskModeKind, AFC_CLAMP_HZ, BAUD, BAUD_63, SAMPLE_RATE,
 };
-pub use modulator::{bpsk_samples, psk_over_bits, PskStream, PskTxConfig, TX_DRIVE};
+pub use modulator::{
+    bpsk_samples, psk_over_bits, psk_over_bits_for, PskStream, PskTxConfig, TX_DRIVE,
+};
 pub use qpsk::{qpsk_over_bits, qpsk_samples, QpskStream};
 pub use varicode::{encode_bits, VaricodeDecoder, VARICODE};

@@ -2414,14 +2414,23 @@ pub struct Settings {
     /// fallback the RTS/DTR PTT line uses).
     #[serde(default)]
     pub rtty_fsk_port: String,
-    /// RTTY baud rate — true 45.45 by default (never integerized to 45); 75.0 is the
-    /// other common amateur rate. Drives the TX bit clock AND the RX demodulator.
+    /// RTTY baud rate — true 45.45 by default (never integerized to 45); 50 and 75 are
+    /// the other amateur rates the Settings list offers. Drives the TX bit clock AND the
+    /// RX demodulator.
     #[serde(default = "default_rtty_baud")]
     pub rtty_baud: f64,
     /// RTTY mark/space shift in Hz (170 = the HF standard). Drives the TX tone pair
     /// (AFSK space = 2125 + shift) AND the RX demodulator.
     #[serde(default = "default_rtty_shift_hz")]
     pub rtty_shift_hz: u32,
+    /// The LOWER audio tone of the AFSK/decoder tone pair (Hz); the other sits `rtty_shift_hz`
+    /// above it. 2125 (the 2125/2295 standard) by default; 1275 puts a 170 Hz pair at
+    /// 1275/1445. It is where the decoder AND the AFSK transmitter sit until the operator nets
+    /// on the waterfall — a net still moves both for the session (`Engine::rtty_center_hz`).
+    /// The low tone rather than "the mark": which of the two is mark depends on the sideband
+    /// and Reverse ([`Settings::rtty_tone_swap`]), and a stored mark would swap with them.
+    #[serde(default = "default_rtty_low_tone_hz")]
+    pub rtty_low_tone_hz: u32,
     /// Reverse the mark/space sense (TX tones + RX demod): the "work an upside-down
     /// station" control. The sideband is NOT this field's job — that is
     /// [`Settings::rtty_afsk_sideband`], which swaps the tones itself, so a rig on USB keeps
@@ -4314,6 +4323,11 @@ fn default_rtty_baud() -> f64 {
 
 fn default_rtty_shift_hz() -> u32 {
     170
+}
+
+/// The standard AFSK pair's lower tone, 2125 Hz (2125/2295 at 170 shift).
+fn default_rtty_low_tone_hz() -> u32 {
+    2125
 }
 
 /// The bounds [`Settings::rtty_seq_config`] clamps to, and the range the Settings controls
@@ -6642,6 +6656,7 @@ impl Default for Settings {
             rtty_fsk_port: String::new(),         // "" = the CAT serial port
             rtty_baud: default_rtty_baud(),       // true 45.45, never 45
             rtty_shift_hz: default_rtty_shift_hz(), // 170 Hz — the HF standard
+            rtty_low_tone_hz: default_rtty_low_tone_hz(), // 2125 — the 2125/2295 pair
             rtty_reverse: false,
             rtty_afsk_sideband: default_rtty_afsk_sideband(), // "lsb" — the RTTY convention
             ai_cw_enabled: true,
@@ -11428,6 +11443,26 @@ mod tests {
 
     /// A settings file from before the AFSK sideband loads on LSB, and a USB pick round-trips
     /// under its camelCase wire key.
+    /// The saved RTTY tone pair: a settings file from before it reads as the 2125 standard, and
+    /// a 1275 Hz pair survives a save and a load under its camelCase wire key.
+    #[test]
+    fn rtty_low_tone_defaults_to_2125_and_round_trips() {
+        let mut v = serde_json::to_value(Settings::default()).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .remove("rttyLowToneHz")
+            .expect("the wire key");
+        let old: Settings = serde_json::from_value(v).unwrap();
+        assert_eq!(old.rtty_low_tone_hz, 2125);
+        let s = Settings {
+            rtty_low_tone_hz: 1275,
+            rtty_baud: 50.0,
+            ..Settings::default()
+        };
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!((back.rtty_low_tone_hz, back.rtty_baud), (1275, 50.0));
+    }
+
     #[test]
     fn rtty_afsk_sideband_defaults_to_lsb_and_round_trips() {
         let mut v = serde_json::to_value(Settings::default()).unwrap();

@@ -408,8 +408,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     id: 'rtty',
     label: 'RTTY',
     tab: 'digital',
-    keywords: ['rtty', 'baudot', 'fsk', 'afsk', 'shift', 'baud', '45.45', '170', 'reverse',
-      'mark', 'space', 'sideband', 'usb', 'lsb', 'upside down', 'auto arm', 'start receiving', 'not decoding', 'macro',
+    keywords: ['rtty', 'baudot', 'fsk', 'afsk', 'shift', 'baud', '45.45', '50 baud', '170', 'reverse',
+      'mark', 'space', 'low tone', 'tone pair', '1275', '2125', 'sideband', 'usb', 'lsb', 'upside down', 'auto arm', 'start receiving', 'not decoding', 'macro',
       // #304 asked for a "timer" and neither the control nor this section is called one.
       // The rest are what the cadence is called out loud — the reporter wrote "cq, 15s rx,
       // cq", not "listen window".
@@ -420,7 +420,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     id: 'psk',
     label: 'PSK',
     tab: 'digital',
-    keywords: ['psk31', 'bpsk', 'varicode', 'keyboard', 'ragchew', 'warble', '14.070',
+    keywords: ['psk31', 'psk63', 'bpsk', 'varicode', 'keyboard', 'ragchew', 'warble', '14.070',
       'afc', 'auto arm', 'start receiving', 'narrow band', 'digipan',
       // JTTY, the Keyboard section's other modem, keeps its one setting here.
       'jtty', 'wsjt-x keyboard', '14.090'],

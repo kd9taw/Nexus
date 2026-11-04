@@ -1,7 +1,8 @@
 # PSK
 
 The PSK cockpit is a keyboard station for the classic narrow-band phase-shift modes:
-**PSK31** and **QPSK31**, both at 31.25 baud in about 60 Hz of spectrum. It gives you a live
+**PSK31** and **QPSK31**, both at 31.25 baud in about 60 Hz of spectrum, and **PSK63**, PSK31 at
+twice the speed (62.5 baud) in about 120 Hz. It gives you a live
 decoder with per-character confidence, a waterfall you click to net onto a signal, four F-key
 macros and a type-and-send bar, a continuous-TX latch that lets you type straight into a
 transmission the way a teleprinter operator does, and a log strip for the contact when it is
@@ -17,8 +18,8 @@ there — or take **Everything (expert)**, which includes it.
 
 ## The tour
 
-**The header.** Left to right: a mode badge reading **PSK31 · 31.25 Bd** or
-**QPSK31 · 31.25 Bd**, then the sub-mode selector, and — on QPSK31 only — a **Rev** toggle
+**The header.** Left to right: a mode badge reading **PSK31 · 31.25 Bd**,
+**QPSK31 · 31.25 Bd** or **PSK63 · 62.5 Bd**, then the sub-mode selector, and — on QPSK31 only — a **Rev** toggle
 (see [Which one, and when](#which-one-and-when)). A **TX ▲** pill appears while an over is on
 the air.
 
@@ -183,6 +184,12 @@ rotations mirror on LSB, where BPSK's 0/180° shifts do not care. That is what t
 toggle is for — if a QPSK31 station warbles but prints garbage, click **Rev** and try again.
 Normal is USB, the convention this section uses throughout.
 
+**PSK63** is PSK31's modulation and alphabet at twice the symbol rate: twice the typing speed,
+about twice the bandwidth, and about 3 dB less sensitive. Both ends have to be on it — a PSK31
+decoder prints nothing from a PSK63 signal, and the other way round — so if a trace looks twice
+as wide as its neighbours and will not print, try PSK63. Like PSK31 it does not care about the
+sideband, so it has no **Rev** toggle. A contact made on it logs as PSK63.
+
 ## Honest limits
 
 - **One signal at a time.** The decoder follows the cursor. There is no decode-everything
@@ -197,6 +204,9 @@ Normal is USB, the convention this section uses throughout.
   the ragchew (receive)". That wording is left over from the phase when the decoder shipped
   ahead of the transmitter. PSK31 and QPSK31 both transmit in 1.10.3 — **Send**, the macros
   and the continuous latch on this screen all key the rig.
+- **PSK63 is proven against Nexus's own transmitter only.** The rate is the standard one
+  (62.5 baud, PSK31's doubled), and the loopback tests copy it end to end, but it has not yet
+  been checked on the air against another program.
 - **QPSK31's absolute rotation sense is not bench-confirmed.** Loopback proves Nexus agrees
   with itself, which is not the same as agreeing with the rest of the world. If you work a
   QPSK31 station with another program and the polarity is backwards, the **Rev** toggle is the

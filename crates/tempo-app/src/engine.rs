@@ -5448,15 +5448,15 @@ pub const RTTY_SCOPE_WANTED_FOR: Duration = Duration::from_secs(1);
 /// PSK31 decoded-character ring cap — the RTTY sizing (PSK31 copies even slower,
 /// ~4 chars/s, so 4000 chars is comfortably tens of minutes of transcript).
 const PSK_TEXT_CAP: usize = 4000;
-/// AFSK RTTY mark tone (Hz) — mirrors `tempo_audio::rtty_afsk::MARK_HZ` (tempo-app can't
-/// depend on tempo-audio); used only to judge where the AFSK emission lands vs the dial.
-/// The STANDARD AFSK mark tone, and now only the basis for the DEFAULT centre.
+/// The STANDARD AFSK mark tone (Hz), 2125 — the default of [`Settings::rtty_low_tone_hz`], and
+/// kept here for the tests that reason about the standard pair. Nothing outside them reads it.
 ///
 /// ⚠️ NOT WHAT THE PRIVILEGE GATE JUDGES — that is `Engine::rtty_tx_mark_hz`, which follows the
-/// operator's netted centre. Judging this constant was correct until 1.9.0 made the transmitter
-/// follow the net; afterwards it could be wrong by ~1.9 kHz and APPROVE a transmission landing
-/// outside a privileged segment. If you find yourself reaching for it in a gate, you want
-/// `rtty_tx_mark_hz`.
+/// operator's netted centre and saved tone pair. Judging this constant was correct until 1.9.0
+/// made the transmitter follow the net; afterwards it could be wrong by ~1.9 kHz and APPROVE a
+/// transmission landing outside a privileged segment. If you find yourself reaching for it in a
+/// gate, you want `rtty_tx_mark_hz`.
+#[cfg(test)]
 const RTTY_AFSK_MARK_HZ: f64 = 2125.0;
 /// Cap on the armed RTTY/SSTV audio drain buffers (~10 s at 12 kHz). The decode
 /// threads normally empty these every ~100 ms; the cap only bites if a thread
@@ -8108,7 +8108,18 @@ impl Engine {
             contest_was.mycall.clone(),
             contest_was.contest_entry_class.clone(),
         );
+        // A save that moves the saved RTTY tone pair (`rtty_low_tone_hz`) re-homes the decoder
+        // and the AFSK transmitter onto it, dropping the session's waterfall net: the operator
+        // just said where RTTY lives. It is a tone change like a shift or baud change in the same
+        // save — a latched over re-keys on the new pair rather than splicing (the radio loop's
+        // `RttyStream::key_cfg` carries the centre), and the privilege gate judges the new pair
+        // (`rtty_tx_mark_hz`) on its next per-tick check.
+        let rtty_home_moved = s.rtty_low_tone_hz != self.settings.rtty_low_tone_hz;
         self.settings = s;
+        if rtty_home_moved {
+            self.rtty_center = None;
+            self.request_rtty_afc_reset();
+        }
         // A settings save can carry a new position id.
         self.sync_log_posid();
         // Restore the engine-owned pending Cloudlog key captured above (see that comment). Prefer a
@@ -10761,6 +10772,7 @@ impl Engine {
             crate::settings::KeyboardModem::Psk => match self.psk_mode {
                 tempo_core::psk::PskModeKind::Bpsk31 => "PSK31",
                 tempo_core::psk::PskModeKind::Qpsk31 => "QPSK31",
+                tempo_core::psk::PskModeKind::Bpsk63 => "PSK63",
             },
         }
     }
@@ -26289,11 +26301,22 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     /// The audio center (Hz) the RTTY demod nets around — the mark/space midpoint.
-    /// Un-netted resolves to the nominal 2125 Hz mark (`2125 + shift/2`), so an
-    /// un-netted decoder sits on today's 2125/2295 pair at any shift. RX only.
+    /// Un-netted resolves to the SAVED tone pair ([`Self::rtty_home_center_hz`]), so an
+    /// un-netted decoder sits on the operator's pair (2125/2295 by default) at any shift.
+    ///
+    /// ⚠️ NOT RX-ONLY: the AFSK transmitter and the privilege gate
+    /// (`rtty_tx_mark_hz`) read this too — see [`Self::rtty_net`].
     pub fn rtty_center_hz(&self) -> f32 {
         self.rtty_center
-            .unwrap_or(RTTY_AFSK_MARK_HZ as f32 + self.rtty_shift_hz() as f32 / 2.0)
+            .unwrap_or_else(|| self.rtty_home_center_hz())
+    }
+
+    /// The centre of the saved tone pair, [`Settings::rtty_low_tone_hz`] + shift/2, clamped
+    /// into the same 300–3700 Hz passband a net is ([`Self::rtty_net`]), so a hand-edited
+    /// settings file cannot put the pair outside what a click could reach.
+    fn rtty_home_center_hz(&self) -> f32 {
+        (self.settings.rtty_low_tone_hz as f32 + self.rtty_shift_hz() as f32 / 2.0)
+            .clamp(300.0, 3700.0)
     }
 
     /// Net the RTTY decoder onto a new audio center (Hz) — a waterfall click or a
@@ -38374,6 +38397,25 @@ mod tests {
         // A no-op set does not thrash the demod.
         e.set_psk_mode(PskModeKind::Qpsk31, true).unwrap();
         assert!(!e.take_psk_afc_reset(), "a no-op switch rebuilt the demod");
+    }
+
+    #[test]
+    fn psk63_is_a_sub_mode_that_logs_as_psk63_and_switches_like_the_others() {
+        use tempo_core::psk::PskModeKind;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.settings.keyboard_modem = crate::settings::KeyboardModem::Psk;
+        assert_eq!(e.keyboard_mode_name(), "PSK31", "control: the default");
+        e.set_psk_mode(PskModeKind::Bpsk63, false).unwrap();
+        assert_eq!(e.psk_mode(), (PskModeKind::Bpsk63, false));
+        assert!(e.take_psk_afc_reset(), "the switch rebuilds the RX demod");
+        assert_eq!(
+            e.keyboard_mode_name(),
+            "PSK63",
+            "the ADIF mode a contact logs"
+        );
+        // …and is refused mid-over exactly as a QPSK switch is.
+        let mut e = psk_latched_engine();
+        assert!(e.set_psk_mode(PskModeKind::Bpsk63, false).is_err());
     }
 
     #[test]
