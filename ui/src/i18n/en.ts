@@ -10078,6 +10078,9 @@ export const EN = {
   'settings.sstv.rxAutoArm.label': 'Start receiving when SSTV opens',
   'settings.sstv.rxAutoArm.hint':
     'The SSTV screen starts the decoder as soon as you open it, so a picture on the band decodes without arming anything. Turn this off to arm the receiver by hand (the Arm button in the SSTV header). Stopping the receiver yourself is already remembered for the rest of the session.',
+  'settings.sstv.tuneOnOpen.label': 'Tune to the band’s SSTV frequency when SSTV opens',
+  'settings.sstv.tuneOnOpen.hint':
+    'Opening the SSTV screen tunes the radio to the SSTV calling frequency of the band you are on, or to {{freq}} on {{band}} from an HF band that has none. The dial stays where it is when it is already on an SSTV frequency, while you transmit, and on a VHF or UHF band that has none. With this off, the screen leaves the dial alone, and the band picker in its header tunes to any SSTV frequency.',
   'settings.sstv.issAutoArm.label': 'ISS SSTV auto-arm',
   'settings.sstv.issAutoArm.hint':
     "Auto-arm SSTV for ISS passes — tunes {{freq}} FM and arms the decoder when the ISS is overhead while the SSTV or Satellites screen is open, restores your dial at LOS. On any other screen it only tells you the ISS is up and leaves your radio alone. If your radio can't receive {{freq}} MHz, it tells you once a session and does nothing else. Off by default. A pass arm is an explicit act, so it works whether or not the switch above is on.",

@@ -6386,6 +6386,8 @@ export const JA: PartialCatalog = {
   "settings.sstv.receiving.title": "受信",
   "settings.sstv.rxAutoArm.label": "SSTVを開いたら受信開始",
   "settings.sstv.rxAutoArm.hint": "SSTV画面を開くと同時にデコーダーが動き出し、バンド上の画像は何もアームしなくてもデコードされます。オフにすると受信のアームは手動になります（SSTVヘッダーのアームボタン）。自分で受信を停止した場合は、そのセッション中は記憶されます。",
+  "settings.sstv.tuneOnOpen.label": "SSTV を開いたときにバンドの SSTV 周波数に合わせる",
+  "settings.sstv.tuneOnOpen.hint": "SSTV 画面を開くと、いまいるバンドの SSTV 呼び出し周波数に無線機を合わせます。SSTV 周波数のない HF バンドからは {{band}} の {{freq}} に合わせます。ダイヤルがすでに SSTV 周波数にあるとき、送信中、SSTV 周波数のない VHF/UHF バンドではダイヤルを動かしません。オフのときは画面はダイヤルをそのままにし、ヘッダーのバンド選択から任意の SSTV 周波数に合わせられます。",
   "settings.sstv.issAutoArm.label": "ISS SSTV自動アーム",
   "settings.sstv.issAutoArm.hint": "ISSのパスに合わせてSSTVを自動アームします — SSTVまたは衛星の画面を開いている間にISSが上空に来ると{{freq}} FMにチューニングしてデコーダーをアームし、LOSでダイヤルを元に戻します。ほかの画面ではISSが上空にあることを知らせるだけで、無線機には触れません。無線機が{{freq}} MHzを受信できない場合は、セッションごとに一度だけ知らせ、それ以外は何もしません。デフォルトはオフ。パスのアームは明示的な動作なので、上のスイッチのオン／オフにかかわらず機能します。",
   "settings.sstv.transmitting.title": "送信",

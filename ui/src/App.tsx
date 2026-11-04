@@ -4511,6 +4511,9 @@ function App() {
                 onSnap={setSnap}
                 active={effectiveView === 'sstv'}
                 onSetFrequency={handleSstvTune}
+                // #451. Undefined until the settings have loaded, so an entry at startup waits for
+                // the answer instead of being spent as "off".
+                tuneOnOpen={settings ? settings.sstvTuneOnOpen === true : undefined}
                 onSetTxEnabled={handleSetTxEnabled}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 txModeDefault={settings?.sstvDefaultTxMode}

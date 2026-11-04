@@ -5987,6 +5987,9 @@ export interface Settings {
    * behaviour), so an ABSENT key must read as on — `!== false`, never `!!`. The gate
    * is in the engine; the ISS pass arm is an explicit act and is unaffected. */
   sstvRxAutoArm?: boolean
+  /** #451: opening the SSTV view tunes to the band's SSTV frequency (off by default; an absent
+   * key reads as off). The view decides the channel (`sstvChannelOnOpen`). */
+  sstvTuneOnOpen?: boolean
   /** The transmit mode the SSTV screen starts on: a `sstvModes.ts` slug, or 'auto'
    * for the band-aware pick. Named `default` because `SstvState.txMode` is the live
    * "mode currently going out" and the two must not be confusable. */

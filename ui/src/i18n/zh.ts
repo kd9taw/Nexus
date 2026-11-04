@@ -9221,6 +9221,8 @@ export const ZH: PartialCatalog = {
   "settings.sstv.receiving.title": "接收",
   "settings.sstv.rxAutoArm.label": "打开 SSTV 时开始接收",
   "settings.sstv.rxAutoArm.hint": "SSTV 界面一打开就启动解码器，因此波段上的图片无需任何启用即可解码。关闭此项则需手动启用接收（SSTV 标题栏中的“启用”按钮）。你自己停止接收机的状态会在本次会话内记住。",
+  "settings.sstv.tuneOnOpen.label": "打开 SSTV 时调到本波段的 SSTV 频率",
+  "settings.sstv.tuneOnOpen.hint": "打开 SSTV 界面时，电台会调到当前波段的 SSTV 呼叫频率；所在 HF 波段没有 SSTV 频率时，调到 {{band}} 的 {{freq}}。若频率已在 SSTV 频率上、正在发射，或所在 VHF/UHF 波段没有 SSTV 频率，则不动频率。关闭时，界面不改动频率，可用其标题栏的波段选择调到任一 SSTV 频率。",
   "settings.sstv.issAutoArm.label": "ISS SSTV 自动启用",
   "settings.sstv.issAutoArm.hint": "为 ISS 过境自动启用 SSTV — 当 SSTV 或卫星界面打开且 ISS 在头顶时，调谐到 {{freq}} FM 并启用解码器，LOS 时恢复你的频率。在其他界面上，它只会告诉你 ISS 已升起，不动你的电台。若你的电台无法接收 {{freq}} MHz，每次会话只提示一次，别的不做。默认关闭。过境启用属于显式动作，因此无论上方开关是否开启都有效。",
   "settings.sstv.transmitting.title": "发射",

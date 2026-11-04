@@ -3455,6 +3455,13 @@ pub struct Settings {
     /// arm is unaffected — that path calls `set_sstv_armed`, an explicit act.
     #[serde(default = "default_true")]
     pub sstv_rx_auto_arm: bool,
+    /// Whether opening the SSTV view tunes to the band's SSTV frequency (#451): the band's own
+    /// calling channel, or 20 m's from an HF band with none. Off by default — opening a screen
+    /// otherwise asserts nothing about the dial, and an upgrade must not start moving anyone's
+    /// radio. The choice of channel, and the cases that leave the dial alone (already on an SSTV
+    /// channel, transmitting, a VHF/UHF band with none), are the view's (`sstvChannelOnOpen`);
+    /// the tune itself is the band picker's own `sstv_tune`. The engine never reads it.
+    pub sstv_tune_on_open: bool,
     /// The transmit mode the SSTV screen starts on: a `SSTV_TX_MODES` slug, or "auto"
     /// for the band-aware pick (HF → Scottie 1, the NA calling-frequency convention;
     /// 2 m → PD-120, which is what ARISS transmits).
@@ -6776,6 +6783,7 @@ impl Default for Settings {
             qsy_cadence: tempo_core::qsy::DEFAULT_CADENCE,
             iss_sstv_auto_arm: false,
             sstv_rx_auto_arm: true,
+            sstv_tune_on_open: false,
             sstv_default_tx_mode: default_sstv_default_tx_mode(),
             sstv_tx_power_pct: None,
             sstv_tx_fsk_id: false,
@@ -13047,6 +13055,25 @@ mod tests {
             off.sstv_tx_fsk_id,
             "an operator who switched it on keeps it on"
         );
+    }
+
+    /// #451 — "Tune to the band's SSTV frequency when SSTV opens" moves the dial on entering a
+    /// screen, so it ships OFF and an upgrader's file without the key reads OFF: nobody's radio
+    /// starts moving because they updated. An operator who turns it on keeps it on.
+    #[test]
+    fn sstv_tune_on_open_is_off_unless_the_operator_turns_it_on() {
+        assert!(!Settings::default().sstv_tune_on_open, "off by default");
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(
+            json.contains("\"sstvTuneOnOpen\":false"),
+            "missing wire key sstvTuneOnOpen in {json}"
+        );
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(!old.sstv_tune_on_open, "a file from before the key is off");
+        let on: Settings = serde_json::from_str(r#"{"sstvTuneOnOpen":true}"#).unwrap();
+        assert!(on.sstv_tune_on_open);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert!(back.sstv_tune_on_open, "and it survives a save");
     }
 
     /// The PSK section's one field, on the exact wire key the UI hand-writes —

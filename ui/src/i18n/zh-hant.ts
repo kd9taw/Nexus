@@ -9223,6 +9223,8 @@ export const ZH_HANT: PartialCatalog = {
   "settings.sstv.receiving.title": "接收",
   "settings.sstv.rxAutoArm.label": "開啟 SSTV 時開始接收",
   "settings.sstv.rxAutoArm.hint": "SSTV 介面一開啟就啟動解碼器，因此波段上的圖片無需任何啟用即可解碼。關閉此項則需手動啟用接收（SSTV 標題欄中的「啟用」按鈕）。你自己停止接收機的狀態會在本次工作階段內記住。",
+  "settings.sstv.tuneOnOpen.label": "開啟 SSTV 時調到本波段的 SSTV 頻率",
+  "settings.sstv.tuneOnOpen.hint": "開啟 SSTV 畫面時，電台會調到目前波段的 SSTV 呼叫頻率；所在 HF 波段沒有 SSTV 頻率時，調到 {{band}} 的 {{freq}}。若頻率已在 SSTV 頻率上、正在發射，或所在 VHF/UHF 波段沒有 SSTV 頻率，則不動頻率。關閉時，畫面不改動頻率，可用其標題列的波段選擇調到任一 SSTV 頻率。",
   "settings.sstv.issAutoArm.label": "ISS SSTV 自動啟用",
   "settings.sstv.issAutoArm.hint": "為 ISS 過境自動啟用 SSTV — 當 SSTV 或衛星介面開啟且 ISS 在頭頂時，調諧到 {{freq}} FM 並啟用解碼器，LOS 時恢復你的頻率。在其他介面上，它只會告訴你 ISS 已升起，不動你的電台。若你的電台無法接收 {{freq}} MHz，每次工作階段只提示一次，別的不做。預設關閉。過境啟用屬於顯式動作，因此無論上方開關是否開啟都有效。",
   "settings.sstv.transmitting.title": "發射",
