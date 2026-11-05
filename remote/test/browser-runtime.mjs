@@ -1,7 +1,7 @@
 // Private headless Chrome profiles for compiled Remote verification only.
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import WebSocket from 'ws'
@@ -90,11 +90,39 @@ export async function chrome(switches = [], startupMs = 30_000) {
       if (value.id) { const promise=pending.get(value.id); if(promise){pending.delete(value.id);clearTimeout(promise.timer);value.error?promise.reject(new Error(`Browser protocol command failed: ${promise.method} (${value.error.code}): ${value.error.message}`)):promise.resolve(value.result)} }
       else listeners.get(value.method)?.(value.params, value.sessionId)
     })
-    const call = (method,params={},sessionId) => new Promise((resolve,reject) => {
+    const send = (method,params={},sessionId) => new Promise((resolve,reject) => {
       const id=++next, timer=setTimeout(()=>{pending.delete(id);reject(new Error(`Browser command timed out: ${method}`))},10000)
       pending.set(id,{resolve,reject,timer,method});ws.send(JSON.stringify({id,method,params,sessionId}))
     })
+    // NEXUS_PROBE_SHOTS=<dir> (the desktop-probes CI job, through scripts/browser-probe --desktop-shard):
+    // every page the caller attached to is pictured as it stands when the caller closes it, and at
+    // stop() if still open, so a red probe leaves what its pages last showed. Through the CALLER'S
+    // session, because its window size (Emulation.setDeviceMetricsOverride) belongs to that session: a
+    // fresh one pictures the default 780 px window, blank. Brought to the front first, because a
+    // headless tab behind another draws no frame and its capture waits out the 10 s (measured). Best
+    // effort: a picture that cannot be taken never turns the probe's own verdict.
+    const shotsDir = process.env.NEXUS_PROBE_SHOTS
+    const attached = new Map()
+    let shot = 0
+    const picture = async targetId => {
+      const sessionId = attached.get(targetId); attached.delete(targetId)
+      try {
+        const { targetInfo } = await send('Target.getTargetInfo', { targetId })
+        await send('Page.bringToFront', {}, sessionId)
+        const { data } = await send('Page.captureScreenshot', { format: 'png' }, sessionId)
+        const name = (new URL(targetInfo.url).pathname.split('/').pop() || 'page').replace(/[^\w.-]/g, '_')
+        await mkdir(shotsDir, { recursive: true })
+        await writeFile(join(shotsDir, `${String(++shot).padStart(3, '0')}-${name}.png`), Buffer.from(data, 'base64'))
+      } catch (error) { console.error(`browser-runtime: no picture of ${targetId}: ${error.message}`) }
+    }
+    const call = !shotsDir ? send : async (method, params = {}, sessionId) => {
+      if (method === 'Target.closeTarget' && attached.has(params.targetId)) await picture(params.targetId)
+      const result = await send(method, params, sessionId)
+      if (method === 'Target.attachToTarget' && !sessionId) attached.set(params.targetId, result.sessionId)
+      return result
+    }
     return { call, on: (method, fn) => listeners.set(method,fn), profile, async stop() {
+      for (const targetId of [...attached.keys()]) await picture(targetId)
       await call('Browser.close').catch(()=>{}); ws.close()
       await Promise.race([exit,sleep(2000)])
       await teardown()
