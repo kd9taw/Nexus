@@ -955,8 +955,8 @@ jobs:
   # and the files just written or restored are in the page cache when the first probe starts.
   #
   # The probes are dealt round-robin over the matrix from scripts/browser-probe's DESKTOP_ALL, which
-  # is ordered slowest first so the two halves come out even (each 5.6 to 7.4 minutes on four cores
-  # of the development box, pinned Chrome, 2026-11-04). The count is stated twice, as the matrix
+  # is ordered slowest first so the two halves come out even (9.2 and 12.9 minutes on CI, 2026-11-04, before
+  # digishell grew by about three). The count is stated twice, as the matrix
   # length and as --desktop-shard's <of>, and scripts/gates.test.mjs holds the two equal. In series within a shard: each probe starts its own
   # Vite server and Chrome, and two on four cores would race each other's frames. A red does not stop
   # the shard; the end of the step names every red one.

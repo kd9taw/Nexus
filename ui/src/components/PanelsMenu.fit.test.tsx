@@ -162,6 +162,14 @@ describe('up and down: the clip ancestors and the parked dock bound it, and noth
     expect(shift(pop)[1]).toBeCloseTo(0, 6)
   })
 
+  it('with usable room on both sides it still opens toward the larger', () => {
+    // Below 198 px, above 286 px, both over the floor.
+    layout(350, { left: 100, width: 200, height: 504 })
+    const pop = open()
+    expect(pop.hasAttribute('data-up'), 'it opened toward the smaller room').toBe(true)
+    expect(cap(pop)).toBeCloseTo((350 - 7 - 50 - EDGE) / ZOOM, 6)
+  })
+
   it('a button at or below the top of the parked dock: it opens up and lifts, its bottom on the dock’s top', () => {
     // ⊞ under the dock, or in the padding band below the keep row, at scroll 0: what a keyboard opens it from.
     layout(610, { left: 100, width: 200, height: 300 })
@@ -271,10 +279,17 @@ describe('the side is latched at open: scrolling never jumps it over the button 
   })
 
   it('the menu’s own scroll survives a refit', () => {
+    // A refit measures the bare menu, which is taller and has less to scroll: the browser clamps its scrollTop.
     layout(100, { left: 100, width: 200, height: 504 })
     const pop = open()
-    pop.scrollTop = 40
+    let top = 40
+    Object.defineProperty(pop, 'scrollTop', { configurable: true, get: () => top, set: (v: number) => { top = v } })
+    const measured = pop.getBoundingClientRect.bind(pop)
+    pop.getBoundingClientRect = () => {
+      if (!pop.style.maxHeight) top = 0
+      return measured()
+    }
     fireEvent.scroll(document.querySelector('main')!)
-    expect(pop.scrollTop).toBe(40)
+    expect(pop.scrollTop, 'the operator lost their place in the menu').toBe(40)
   })
 })
