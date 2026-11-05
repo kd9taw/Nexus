@@ -469,6 +469,9 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
             let md = eng.rig_mode_effective();
             let (sent, vfo_b_written) =
                 write_rig_split(rig, dial, tx_dial, &md, split_writes_budget_ms(rig));
+            // A refused over is let go of at the loop's next quiet point
+            // (`Rig::split_refused_at_key`), as it was when its halt alone let go.
+            rig.split_refused_at_key |= sent.is_err();
             SplitApply {
                 // Engaged once the radio took split on (or got it and never answered), or VFO B
                 // was written (the loop puts back the radio's own split and its VFO B). Only a
@@ -594,13 +597,19 @@ pub(crate) fn rig_split_confirmed_for(rig: &Rig, dial: u64, tx_dial: u64, md: &s
 #[cfg_attr(not(feature = "device"), allow(dead_code))] // the radio loop (service.rs, device)
 pub(crate) const SPLIT_PRESET_BUDGET_MS: u64 = 1_000;
 
+/// How long (ms) the engine's dial must stay put after a change of band before the radio loop
+/// pre-sets for it: a band button pressed twice, or a read that lags the write, writes once.
+#[cfg_attr(not(feature = "device"), allow(dead_code))] // the radio loop (service.rs, device)
+pub(crate) const SPLIT_PRESET_SETTLE_MS: f64 = 300.0;
+
 /// The least time (ms) to the next slot boundary at which the radio loop starts a pre-set: its
-/// budget plus the longest CAT deadline, and a little over.
+/// budget plus the longest CAT deadline, and a little over. Counted from the moment of the
+/// decision, not the tick's start, and never on a tick that had to open the CAT link.
 #[cfg_attr(not(feature = "device"), allow(dead_code))] // the radio loop (service.rs, device)
 pub(crate) const SPLIT_PRESET_LEAD_MS: f64 = 4_000.0;
 
 /// Put Split Operation = Rig's TX dial `tx_dial` and TX mode `md` on the radio for the RX dial
-/// `dial` while the station receives, after the dial changed, so the next over finds them
+/// `dial` while the station receives, after a change of band, so the next over finds them
 /// confirmed and its key sends only split on last ([`apply_tx_dial_shift`]). WSJT-X 3.0.2 does the
 /// same: `MainWindow::band_changed` calls `setRig` and then `setXIT` (`widgets/mainwindow.cpp:12117-
 /// 12118`), and `setXIT` sends the TX dial to the radio while it is only monitoring
@@ -608,7 +617,7 @@ pub(crate) const SPLIT_PRESET_LEAD_MS: f64 = 4_000.0;
 /// (`Transceiver/HamlibTransceiver.cpp:947-1033`: split on, TX dial and mode, split on last).
 ///
 /// ⛔ ONLY AT A QUIET POINT, which the radio loop decides (`RadioLoop::preset_rig_split_due`):
-/// nothing keyed, no over, tune or PTT of its own, no over about to start. `Err` leaves nothing
+/// nothing keyed, no over, tune or PTT of its own, the next boundary far enough off. `Err` leaves nothing
 /// confirmed, so the over's key writes everything again under [`SPLIT_WRITES_BUDGET_MS`], which
 /// stays the guard at the key. The `bool` is whether the radio took split on or VFO B was written,
 /// so the loop holds the split (and lets go of it) as after an over that engaged it.
