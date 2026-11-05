@@ -325,7 +325,7 @@ type MenuSide = 'up' | 'down'
  *  Phone's only stop button, measured).
  *  · ACROSS, the rule that holds it: the menu's x range never takes in the stop button's, at any scroll, because x
  *    does not change with scroll. Anchored if that is clear. Otherwise shifted past the button on whichever side
- *    fits; if neither fits, narrowed (past the sheet's min-width) into the larger gap. Inside the window always, 4 px
+ *    fits; if neither fits, narrowed (past the sheet's min-width) into the larger gap. Inside the scrollport always, 4 px
  *    (× the zoom) from the edge it was shifted to, by a `translate`, so nothing else moves. The sheet caps its width.
  *  · UP AND DOWN it is bounded only by the window, the ancestors that clip it (the cockpit shell scrolls) and the top
  *    of the parked dock. It may stand over the rest of the TX strip; the stop's column is clear. Where its height
@@ -338,7 +338,7 @@ type MenuSide = 'up' | 'down'
  *  · WITH LESS THAN THAT ON BOTH SIDES it takes the whole span, over its own button: a click outside closes it.
  *  Rendered px over layout px is the UI zoom: the lengths are applied inside the zoomed tree, so they are divided by
  *  it. Reset and re-measured each time, keeping the operator's place in the menu's scroll. */
-function fitMenu(pop: HTMLElement, btn: HTMLElement, side: { current: MenuSide | null }, slip = 0): void {
+function fitMenu(pop: HTMLElement, btn: HTMLElement, side: { current: MenuSide | null }): void {
   const kept = pop.scrollTop
   pop.style.translate = ''
   pop.style.maxHeight = ''
@@ -351,25 +351,34 @@ function fitMenu(pop: HTMLElement, btn: HTMLElement, side: { current: MenuSide |
   const edge = 4 * zoom
   let top = 0
   let bottom = window.innerHeight
+  let left = 0
+  let right = window.innerWidth
   let clip: HTMLElement | null = null
   for (let e = pop.parentElement; e; e = e.parentElement) {
     if (getComputedStyle(e).overflowY === 'visible') continue
     const q = e.getBoundingClientRect()
     top = Math.max(top, q.top)
     bottom = Math.min(bottom, q.bottom)
+    // Its CLIENT box across, inside its scrollbar: past that the menu gives the shell a horizontal scrollbar, the
+    // scrollport loses its height, and the parked keep row rises under the menu (PSK at 900×600 at 175 %, measured).
+    if (e.clientWidth > 0 && e.offsetWidth > 0) {
+      const z = q.width / e.offsetWidth
+      left = Math.max(left, q.left + e.clientLeft * z)
+      right = Math.min(right, q.left + (e.clientLeft + e.clientWidth) * z)
+    }
     clip ??= e
   }
   const cockpit: Element | null = pop.closest('main') ?? clip
 
   // ACROSS. Every stop button's column, as one.
   const stops = cockpit ? Array.from(cockpit.querySelectorAll<HTMLElement>(STOP_BUTTON)).map((el) => el.getBoundingClientRect()).filter((q) => q.width > 0) : []
-  let dx = r.left < edge ? edge - r.left : r.right > window.innerWidth - edge ? Math.max(edge - r.left, window.innerWidth - edge - r.right) : 0
+  let dx = r.left < left + edge ? left + edge - r.left : r.right > right - edge ? Math.max(left + edge - r.left, right - edge - r.right) : 0
   if (stops.length > 0) {
     const stopL = Math.min(...stops.map((q) => q.left))
     const stopR = Math.max(...stops.map((q) => q.right))
     if (r.left + dx < stopR + edge && r.right + dx > stopL - edge) {
-      const gapR = window.innerWidth - edge - stopR - edge
-      const gapL = stopL - edge - edge
+      const gapR = right - edge - stopR - edge
+      const gapL = stopL - edge - (left + edge)
       if (gapR < r.width && gapL < r.width) {
         pop.style.minWidth = '0px'
         pop.style.width = `${Math.max(gapR, gapL) / zoom}px`
@@ -382,12 +391,12 @@ function fitMenu(pop: HTMLElement, btn: HTMLElement, side: { current: MenuSide |
   // UP AND DOWN.
   for (const el of cockpit ? Array.from(cockpit.querySelectorAll<HTMLElement>(PARKED_DOCK)) : []) {
     const q = el.getBoundingClientRect()
-    if (q.height > 0 && getComputedStyle(el).position === 'sticky') bottom = Math.min(bottom, q.top + slip)
+    if (q.height > 0 && getComputedStyle(el).position === 'sticky') bottom = Math.min(bottom, q.top)
   }
   const b = btn.getBoundingClientRect()
   const gap = Math.max(0, r.top - b.bottom)
-  const downFrom = b.bottom + slip + gap
-  const upFrom = b.top + slip - gap
+  const downFrom = b.bottom + gap
+  const upFrom = b.top - gap
   const anchorTop = Math.max(downFrom, top + edge)
   const anchorBottom = Math.min(upFrom, bottom - edge)
   const below = bottom - edge - anchorTop
@@ -419,9 +428,4 @@ function fitMenu(pop: HTMLElement, btn: HTMLElement, side: { current: MenuSide |
   }
   if (dx !== 0 || dy !== 0) pop.style.translate = `${dx / zoom}px ${dy / zoom}px`
   if (pop.scrollTop !== kept) pop.scrollTop = kept
-  // THE SLIP. The menu counts in the shell's scrollable overflow, so at the end of the shell's scroll the bare menu
-  // measured above and the fitted one lay the scrolled content out at different heights (10 layout px at 900×600 at
-  // 175 %, measured): what was measured is not where it stands now. Once, with the difference added to what scrolls.
-  const moved = btn.getBoundingClientRect().top - b.top
-  if (slip === 0 && Math.abs(moved) > 0.5) fitMenu(pop, btn, side, moved)
 }

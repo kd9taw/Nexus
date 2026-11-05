@@ -26,7 +26,7 @@
 //      menu, not covered. And (4b) the menu's box stays inside the window and the shell's
 //      scrollport (it opened downward at 0.7 × the window whatever room was below the button, and ran past the window
 //      at 150–175 %: CW at 1280×720, 617–1121 px, measured); (4c) a menu shifted sideways stands exactly
-//      4 px × the UI zoom from the window's edge or from the stop control's; (4d) every item, brought to the middle of the menu by its own scroll, is
+//      4 px × the UI zoom from the scrollport's edge or from the stop control's; (4d) every item, brought to the middle of the menu by its own scroll, is
 //      the topmost thing where it stands. Items below the window are printed, not failed (the menu is that
 //      tall at 175 % on a small window everywhere). CLOSED again, the header carries no lift and check 1 holds.
 //   5. EVERY STOP CONTROL AND SEND ARE ON SCREEN AND TOPMOST, the menu closed: each of Stop TX (strip), Esc/Stop
@@ -177,7 +177,9 @@ const menuCheck = (sel, where, at = 0) => `(async () => {
   if (parseFloat(pop.style.translate || '0') !== 0) {
     const zoom = pq.width / pop.offsetWidth
     const stops = [...shell.querySelectorAll('.op-btn.stop')].map((b) => b.getBoundingClientRect()).filter((q) => q.width > 0)
-    const gaps = [pq.left, innerWidth - pq.right, ...stops.flatMap((q) => [q.left - pq.right, pq.left - q.right])]
+    const sb = shell.getBoundingClientRect()
+    const clientRight = sb.left + (shell.clientLeft + shell.clientWidth) * (sb.width / shell.offsetWidth)
+    const gaps = [pq.left - sb.left, clientRight - pq.right, ...stops.flatMap((q) => [q.left - pq.right, pq.left - q.right])]
     if (!gaps.some((g) => Math.abs(g - 4 * zoom) < 1)) clampEdge = 'gaps ' + gaps.map((g) => g.toFixed(1)).join(', ') + ', expected ' + (4 * zoom).toFixed(1)
   }
   const items = [...pop.querySelectorAll('button, input, label')].filter((e) => e.getBoundingClientRect().height > 0)

@@ -92,6 +92,23 @@ describe('across: inside the window, and the stop button’s column is never the
     expect(shift(pop)[0], 'the shift is not in layout px: at 175 % it overshoots the edge').toBeCloseTo(107 / ZOOM, 6)
   })
 
+  it('its right bound is the scrollport’s, inside the shell’s scrollbar, not the window’s', () => {
+    // 7 px past the shell's client box, under its vertical scrollbar, the menu gave the shell a HORIZONTAL scrollbar
+    // too: the scrollport lost 10 layout px and the parked keep row rose under the menu, over Esc/Stop (measured, PSK
+    // at 900×600 at 175 %).
+    layout(100, { left: 495, width: 195, height: 200 })
+    const client = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('shell') ? 390 : 0 // 682.5 window px, of 700
+    })
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      const b = boxOf(this)
+      return b ? b.width / ZOOM : 0
+    })
+    const pop = open({ strip: false })
+    expect(shift(pop)[0], 'the menu stands under the shell’s scrollbar').toBeCloseTo((682.5 - EDGE - 690) / ZOOM, 6)
+    client.mockRestore()
+  })
+
   it('that clears the stop button and fits is left alone: no shift, no width, no cap, opening down', () => {
     layout(100, { left: 100, width: 200, height: 200 }, { 'op-btn': STOP })
     const pop = open()
@@ -189,21 +206,6 @@ describe('up and down: the clip ancestors and the parked dock bound it, and noth
     const pop = open()
     expect(pop.hasAttribute('data-up')).toBe(false)
     expect(shift(pop)[1]).toBeCloseTo((50 + EDGE - (-40 + 45)) / ZOOM, 6)
-  })
-})
-
-describe('a fit that moves the scrolled content is measured against where it ends up', () => {
-  it('measured bare, the content stood lower than it stands fitted: the menu is placed for the fitted layout', () => {
-    // The menu counts in the shell's scrollable overflow. At the end of the shell's scroll the bare menu fitMenu measures
-    // and the fitted one lay the content out 10 layout px apart (900×600 at 175 %: the menu that far above the
-    // scrollport, measured, and a refit reproduced it). Modelled: bare, the button and the dock are 17 px lower.
-    layout(420, { left: 100, width: 200, height: 504 })
-    const fitted = () => !!document.querySelector<HTMLElement>('.panels-menu-pop')?.style.maxHeight
-    const y = () => 420 - (fitted() ? 17 : 0)
-    Object.defineProperty(boxes['panels-menu-btn'], 'top', { get: y })
-    Object.defineProperty(boxes['panels-menu-pop'], 'top', { get: () => y() + 45 })
-    const pop = open()
-    expect(cap(pop), 'the menu is sized for the bare layout').toBeCloseTo((403 - 7 - 50 - EDGE) / ZOOM, 6)
   })
 })
 
