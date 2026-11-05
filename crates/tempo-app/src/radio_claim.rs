@@ -131,9 +131,13 @@ fn serial_endpoint(port: &str) -> Option<String> {
     if port.is_empty() {
         return None;
     }
-    let is_com = port.len() > 3
-        && port[..3].eq_ignore_ascii_case("com")
-        && port[3..].chars().all(|c| c.is_ascii_digit());
+    // The name is whatever settings.json holds, so byte 3 may fall inside a character (`СОМ4`): that
+    // name is no COM port, and it is an ordinary endpoint below.
+    let is_com = port.split_at_checked(3).is_some_and(|(com, number)| {
+        com.eq_ignore_ascii_case("com")
+            && !number.is_empty()
+            && number.chars().all(|c| c.is_ascii_digit())
+    });
     Some(if is_com {
         format!("serial:{}", port.to_ascii_uppercase())
     } else {
@@ -609,6 +613,56 @@ mod tests {
             rig_addr: addr.into(),
             ..RadioProfile::default()
         }
+    }
+
+    /// A port name is whatever settings.json holds, and a restored backup or a hand edit can hold
+    /// any text. The claim runs at startup, so a name that panicked here stopped Nexus before its
+    /// window, at every launch. `СОМ4` is Cyrillic: it reads like COM4 and is not that port.
+    #[test]
+    fn a_port_name_in_any_letters_is_an_endpoint_and_never_a_panic() {
+        let com4 = serial_endpoint("COM4");
+        for port in [r"СОМ4", r"ком4", r"\\.\СОМ4", r"\\.\ком4"] {
+            let endpoint = serial_endpoint(port);
+            assert!(endpoint.is_some(), "{port} names a port");
+            assert_ne!(endpoint, com4, "{port} is not COM4");
+        }
+        // Each width of character, at each of the first positions, so that byte 3 falls inside it
+        // wherever it can.
+        for c in ['é', 'м', '€', '📻'] {
+            for at in 0..=5 {
+                let mut port = String::from("COM45");
+                port.insert(at, c);
+                let endpoint = serial_endpoint(&port);
+                assert_eq!(endpoint, Some(format!("serial:{port}")), "kept as written");
+                assert_ne!(endpoint, com4, "{port} is not COM4");
+            }
+        }
+        // A name like that still takes and gives back a claim: the lock file is named in hex.
+        let dir = temp_dir("non-ascii-port");
+        let claims = Claims::new(dir.clone());
+        let endpoint = serial_endpoint("СОМ4").unwrap();
+        claims.claim(&endpoint).unwrap();
+        assert!(claims.holds(&endpoint));
+    }
+
+    /// The Windows spellings of an ASCII port stay one endpoint, and every other ASCII name stays
+    /// as it is written.
+    #[test]
+    fn an_ascii_port_name_keeps_its_endpoint() {
+        for (port, want) in [
+            ("com10", "serial:COM10"),
+            (r"\\.\COM10", "serial:COM10"),
+            ("COM4", "serial:COM4"),
+            ("  com4 ", "serial:COM4"),
+            ("/dev/ttyUSB0", "serial:/dev/ttyUSB0"),
+            ("com", "serial:com"),
+            ("COMX", "serial:COMX"),
+            ("com4x", "serial:com4x"),
+        ] {
+            assert_eq!(serial_endpoint(port).as_deref(), Some(want), "{port}");
+        }
+        assert_eq!(serial_endpoint("   "), None);
+        assert_eq!(serial_endpoint(r"\\.\"), None);
     }
 
     /// What conflicts is the port, not the roster: two profiles naming one COM port (in any
