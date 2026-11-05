@@ -97,6 +97,38 @@ describe('a STRIP divider', () => {
     expect(pct(target)).toBe('22%')
   })
 
+  it('a reset of a strip whose default changes with the station (`resetClears`) stores nothing, and the next default stands', () => {
+    const run = (resetClears: boolean, defaultPct: number) => {
+      const target = document.createElement('div')
+      const strip = document.createElement('section')
+      target.appendChild(strip)
+      document.body.appendChild(target)
+      rectOf(target, () => ({ height: 1000 }))
+      const view = render(
+        <PaneSeam axis="y" varName="--h" strip={{ current: strip }} storageKey="nexus.split.test.h" min={100} max={420} defaultPct={defaultPct} resetClears={resetClears} label="test height" />,
+      )
+      const sep = view.getByRole('separator', { name: 'test height' })
+      return { target, sep, done: () => { view.unmount(); target.remove() } }
+    }
+    localStorage.setItem('nexus.split.test.h', '30')
+    // A radio with a scope (default 40): the operator's 30 is kept; Reset gives the 40 back and stores nothing.
+    let r = run(true, 40)
+    expect(pct(r.target)).toBe('30%')
+    fireEvent.keyDown(r.sep, { key: 'Backspace' })
+    expect(pct(r.target)).toBe('40%')
+    expect(localStorage.getItem('nexus.split.test.h')).toBe('')
+    r.done()
+    // Then a radio without one (default 25) opens on its own default, not on the 40 the Reset was under.
+    r = run(true, 25)
+    expect(pct(r.target)).toBe('25%')
+    r.done()
+    // Control: without `resetClears` the Reset stores the default in force, as every other strip does.
+    r = run(false, 40)
+    fireEvent.keyDown(r.sep, { key: 'Backspace' })
+    expect(localStorage.getItem('nexus.split.test.h')).toBe('40')
+    r.done()
+  })
+
   it('a strip that must leave its container a share stops at `maxShare` of it (Connect’s bottom strip, layout L7)', () => {
     const run = (maxShare?: number) => {
       localStorage.setItem('nexus.split.test.h', '80')

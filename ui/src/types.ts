@@ -1821,6 +1821,9 @@ export interface TxHold {
   leftSecs?: number
 }
 
+/** The radio scope's delivery rate (`RadioStatus.scopeRate`). */
+export type ScopeRate = { sweepsPerSec: number; dropped: number; speed: 'slow' | 'mid' | 'fast' | null }
+
 export interface RadioStatus {
   dialMhz: number
   band: string
@@ -2174,6 +2177,13 @@ export interface RadioStatus {
    * rejected (#275: an IC-7300 with its scope in Fixed mode rejects a span).
    */
   scopeSpanRefused?: string | null
+  /**
+   * How fast the radio's own scope reaches Nexus: sweeps a second, sweeps dropped, and the radio's
+   * scope SPEED setting where it can be read (null when it cannot). null = no rig scope streaming.
+   * Absent from a station that does not report it yet; the scope's slow hint then falls back to the
+   * rate it measures itself (`spectrum/sweepRate.ts` `scopeIsSlow`).
+   */
+  scopeRate?: ScopeRate | null
   /** The rig scope's MODE code (`SS` P3) as read back, or null before one is known. */
   scopeModeCode?: number | null
   /** The FIX start the operator stated, in MHz — null until they do. */

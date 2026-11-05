@@ -685,6 +685,8 @@ const MIGRATED = [
   'components/FrequencyReadout.tsx',
   'components/TuningStrip.tsx',
   'components/PhoneScope.tsx',
+  // The CW and Phone scope head's RF / Audio / Both chip (2026-11-04), born migrated.
+  'components/ScopeViewChips.tsx',
   'components/RfScopePane.tsx',
   'components/RttyTuningScope.tsx',
   'components/Waterfall.tsx',

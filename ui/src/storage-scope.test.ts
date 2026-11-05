@@ -31,6 +31,10 @@ export const PER_SURFACE = [
   // its own. The main window's spelling is the bare key an earlier build kept for the whole station.
   'nexus.cw.rfSpan',
   'nexus.phone.rfSpan',
+  // The scope view chip (RF / Audio / Both in CW, RF / Audio in Phone; spectrum/rfSpan.ts): what THIS
+  // window's scope draws, per window like the span chips beside it.
+  'nexus.cw.scopeView',
+  'nexus.phone.scopeView',
   'nexus-ui-scale-mode',
   // APRS's body (layout L7): the station list column's width and the side the map stands on —
   // statements about THIS window's shape, like Connect's rail widths and Operate's rail side.

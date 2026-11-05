@@ -17731,6 +17731,10 @@ fn get_scope_row(
 /// native panadapter row: the standing request an IQ panadapter zooms its rows to
 /// (`SpectrumFeed::request_rf_view`). Absent from an older UI or a Remote page, and then nothing
 /// is asked.
+///
+/// `audio_only` is the AUDIO VIEW the CW and Phone cockpits draw under the radio's own scope
+/// (`SpectrumFeed::audio_scope_frame_after`): the audio row over the window, never the RF row,
+/// whose own pane reads `get_rf_frame`. Absent or false, the read is the rig scope's, as before.
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
 fn get_scope_frame(
@@ -17740,6 +17744,7 @@ fn get_scope_frame(
     last_seq: u64,
     rf_lo_hz: Option<f64>,
     rf_hi_hz: Option<f64>,
+    audio_only: Option<bool>,
     feed: State<'_, tempo_app::engine::SpectrumFeed>,
     state: State<'_, SharedEngine>,
 ) -> Result<Option<tempo_app::dto::SpectrumFrame>, String> {
@@ -17751,6 +17756,11 @@ fn get_scope_frame(
         .as_deref()
         .and_then(tempo_core::spectrum::ScopeAnalysis::from_tag)
         .unwrap_or_default();
+    if audio_only == Some(true) {
+        return Ok(
+            feed.audio_scope_frame_after(lo_hz, hi_hz, win, last_seq, || spectrum_fallback(&state))
+        );
+    }
     Ok(feed.scope_frame_after(lo_hz, hi_hz, win, last_seq, || spectrum_fallback(&state)))
 }
 
