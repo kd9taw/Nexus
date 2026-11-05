@@ -4686,6 +4686,66 @@ fn lenient_esm_role_sets<'de, D: serde::Deserializer<'de>>(
     })
 }
 
+/// [`RadioProfile::ft_drive`] read ENTRY BY ENTRY: a level that is not a number in the slider's
+/// range (0–1), or one filed under a blank key, is dropped; a value that is not a map at all loads
+/// empty. Every way in (the settings file, a settings backup, the Remote's copy) parses through
+/// here, so no stored drive can reach the radio loop out of range, and a bad entry never costs the
+/// settings file around it.
+///
+/// ⛔ DROPPED, NOT CLAMPED. The slider and [`RadioProfile::remember_ft_drive`] never store a level
+/// outside 0–1, so one here is corrupt or hand-edited, and clamping `9.0` would make it full drive.
+/// Dropped, the band's other entry or the drive the station already has is used instead.
+fn lenient_ft_drive<'de, D: serde::Deserializer<'de>>(
+    de: D,
+) -> Result<std::collections::BTreeMap<String, f32>, D::Error> {
+    Ok(match serde_json::Value::deserialize(de)? {
+        serde_json::Value::Object(levels) => levels
+            .into_iter()
+            .filter(|(key, _)| !key.trim().is_empty())
+            .filter_map(|(key, level)| {
+                let level = level.as_f64()? as f32;
+                ft_drive_in_range(level).then_some((key, level))
+            })
+            .collect(),
+        _ => Default::default(),
+    })
+}
+
+/// Whether `level` is one the drive slider can set: a finite number from 0 to 1.
+fn ft_drive_in_range(level: f32) -> bool {
+    (0.0..=1.0).contains(&level)
+}
+
+/// The key of a band+mode entry in [`RadioProfile::ft_drive`] (`"20m/FT8"`); the band's own entry
+/// is the bare band.
+fn ft_drive_key(band: &str, mode: &str) -> String {
+    format!("{band}/{mode}")
+}
+
+impl RadioProfile {
+    /// Remember `level` as the operator's drive on `band` in FT mode `mode`: for that band+mode,
+    /// and as the band's last FT drive (the fallback for a mode never driven there). Clamped to
+    /// the slider's range.
+    pub fn remember_ft_drive(&mut self, band: &str, mode: &str, level: f32) {
+        let level = level.clamp(0.0, 1.0);
+        self.ft_drive.insert(ft_drive_key(band, mode), level);
+        self.ft_drive.insert(band.to_string(), level);
+    }
+
+    /// The drive last set on `band` in FT mode `mode`, else the band's last drive in any FT mode,
+    /// else `None` (nothing to restore: the drive stays as it is). An entry out of the slider's
+    /// range counts as none, as on load ([`lenient_ft_drive`]).
+    pub fn ft_drive_for(&self, band: &str, mode: &str) -> Option<f32> {
+        let valid = |key: &str| {
+            self.ft_drive
+                .get(key)
+                .copied()
+                .filter(|&l| ft_drive_in_range(l))
+        };
+        valid(&ft_drive_key(band, mode)).or_else(|| valid(band))
+    }
+}
+
 /// A list loaded ENTRY BY ENTRY: each entry that parses is kept, each one that does not is
 /// dropped, and a value that is not a list at all loads empty.
 ///
@@ -5272,6 +5332,22 @@ pub struct RadioProfile {
     /// follow-up, not dead code to remove.
     #[serde(default)]
     pub yaesu_fix_starts: std::collections::BTreeMap<String, f64>,
+    /// The FT modes' TX drive (`tx_level`) as the operator last set it, per BAND and MODE, for this
+    /// radio: `{"20m/FT8": 0.42, "20m": 0.42}`. A band+mode entry is the level last set there; a
+    /// bare band entry is the level last set on that band in ANY FT mode, the fallback for a mode
+    /// never driven there. An amplifier is rarely flat across the bands, so the drive that is
+    /// right on 20 m is wrong on 6 m, and this brings each band's back without the operator
+    /// re-trimming it. Per radio, because the amplifier is wired to a radio.
+    ///
+    /// ONE WRITER, [`crate::engine::Engine::set_tx_level`] — the operator's own slider move. The
+    /// restore never writes it, so a restored level is never taken for an operator's pick.
+    /// Applied by `Engine::settle_ft_drive`, and never while the radio is on the air.
+    ///
+    /// Read LENIENTLY ([`lenient_ft_drive`]): a level that is not a number in the slider's 0–1
+    /// range is dropped, never clamped, so a hand edit gone wrong costs that entry and can never
+    /// turn into full drive.
+    #[serde(default, deserialize_with = "lenient_ft_drive")]
+    pub ft_drive: std::collections::BTreeMap<String, f32>,
     /// Opt-in to THIS radio's native FlexRadio DAX audio (BOTH directions — see
     /// [`Settings::flex_native_audio`]). Per-radio, as above.
     #[serde(default)]
@@ -5707,6 +5783,7 @@ impl Default for RadioProfile {
             flex_native_pan: false,
             yaesu_rf_scope: false,
             yaesu_fix_starts: Default::default(),
+            ft_drive: Default::default(),
             flex_native_audio: false,
             flex_native_cat: false,
             flex_native_unbenched: false,
@@ -7149,6 +7226,7 @@ impl Settings {
             // dual-representation problem the flat fields already are.
             yaesu_rf_scope: false,
             yaesu_fix_starts: Default::default(),
+            ft_drive: Default::default(),
             flex_native_audio: self.flex_native_audio,
             flex_native_cat: self.flex_native_cat,
             flex_native_unbenched: self.flex_native_unbenched,
@@ -9696,7 +9774,7 @@ mod tests {
 
     #[test]
     fn every_per_radio_field_is_reachable_through_the_patch() {
-        const NOT_EDITABLE: [&str; 7] = [
+        const NOT_EDITABLE: [&str; 8] = [
             "id",
             "name",
             "enabled",
@@ -9704,6 +9782,10 @@ mod tests {
             "lastDialMhz",
             "lastBand",
             "lastSideband",
+            // The FT drive memory: written by the drive slider (`Engine::set_tx_level`), never by
+            // a form. The patch applies onto the stored profile, so an Edit leaves it as it is
+            // (`a_radio_edit_keeps_the_ft_drive_memory`).
+            "ftDrive",
         ];
         let profile = serde_json::to_value(RadioProfile::default()).expect("profile serializes");
         let patch = serde_json::to_value(RadioProfilePatch {
@@ -10209,6 +10291,20 @@ mod tests {
             };
             assert!(!omni.swr_scale_is_verified(), "model {m} over OmniRig");
         }
+    }
+
+    /// A radio's Edit saves through the patch, which carries no FT drive memory: the memory the
+    /// drive slider wrote stays as it was, and the drive the form states is still applied.
+    #[test]
+    fn a_radio_edit_keeps_the_ft_drive_memory() {
+        let mut p = RadioProfile::default();
+        p.remember_ft_drive("20m", "FT8", 0.3);
+        let kept = p.ft_drive.clone();
+        let mut edit = patch_of(&p);
+        edit.tx_level = 0.7;
+        edit.apply_to(&mut p);
+        assert_eq!(p.ft_drive, kept);
+        assert_eq!(p.tx_level, 0.7, "CONTROL: the rest of the edit");
     }
 
     /// Helper for the patch test above: the patch a Save would build from a profile.
@@ -19027,6 +19123,94 @@ mod tests {
             serde_json::from_str(r#"{"id":0,"name":"FT-710","rigModel":1049}"#)
                 .expect("an older per-radio block still parses");
         assert!(profile.yaesu_fix_starts.is_empty());
+    }
+
+    /// The FT drive memory survives the settings file, and a file that holds a bad entry costs
+    /// that entry only: a level out of the slider's range, one that is not a number and one under
+    /// a blank key are dropped, and a memory that is not a map loads empty.
+    /// Read through `Settings::load`, the way a launch reads it.
+    #[test]
+    fn the_ft_drive_memory_is_validated_on_load() {
+        let dir =
+            std::env::temp_dir().join(format!("tempo_settings_ftdrive_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let mut s = Settings::default();
+        s.mycall = "K1ABC".into();
+        s.radios = vec![RadioProfile {
+            id: 0,
+            ..RadioProfile::default()
+        }];
+        s.active_radio = 0;
+        s.radios[0].remember_ft_drive("20m", "FT8", 0.42);
+        let mut v = serde_json::to_value(&s).expect("settings serialize");
+        let drive = &mut v["radios"][0]["ftDrive"];
+        drive["6m/FT8"] = serde_json::json!(3.5);
+        drive["6m"] = serde_json::json!(-1.0);
+        drive["40m/FT8"] = serde_json::json!("loud");
+        drive[" "] = serde_json::json!(0.3);
+        drive["15m/FT4"] = serde_json::json!(null);
+        std::fs::write(&path, serde_json::to_string(&v).unwrap()).unwrap();
+
+        let back = Settings::load(&path);
+        assert_eq!(back.mycall, s.mycall, "the file loaded, not set aside");
+        let p = &back.radios[0];
+        assert_eq!(
+            p.ft_drive.get("20m/FT8"),
+            Some(&0.42),
+            "a good entry is kept"
+        );
+        assert_eq!(p.ft_drive.get("20m"), Some(&0.42), "with the band's own");
+        assert_eq!(
+            p.ft_drive.get("6m/FT8"),
+            None,
+            "above full scale: dropped, never clamped to full drive"
+        );
+        assert_eq!(p.ft_drive.get("6m"), None, "below zero: dropped");
+        assert_eq!(p.ft_drive.get("40m/FT8"), None, "not a number: dropped");
+        assert_eq!(p.ft_drive.get("15m/FT4"), None, "null: dropped");
+        assert_eq!(p.ft_drive.len(), 2, "a blank key is dropped");
+
+        // A memory that is not a map loads empty, and the radio with it.
+        v["radios"][0]["ftDrive"] = serde_json::json!([0.5]);
+        std::fs::write(&path, serde_json::to_string(&v).unwrap()).unwrap();
+        let back = Settings::load(&path);
+        assert!(back.radios[0].ft_drive.is_empty());
+        assert_eq!(back.radios.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The band+mode level wins; the band's last FT level is the fallback; a band never driven
+    /// has none. A level is clamped as it is remembered, and a stored one out of range (put there
+    /// past the loader) counts as none: never full drive.
+    #[test]
+    fn the_ft_drive_lookup_falls_back_to_the_band_only() {
+        let mut p = RadioProfile::default();
+        assert_eq!(p.ft_drive_for("20m", "FT8"), None, "nothing saved");
+        p.remember_ft_drive("20m", "FT8", 0.3);
+        p.remember_ft_drive("20m", "FT4", 0.6);
+        assert_eq!(p.ft_drive_for("20m", "FT8"), Some(0.3));
+        assert_eq!(p.ft_drive_for("20m", "FT4"), Some(0.6));
+        assert_eq!(
+            p.ft_drive_for("20m", "FST4"),
+            Some(0.6),
+            "the band's last FT drive"
+        );
+        assert_eq!(p.ft_drive_for("40m", "FT8"), None, "never another band's");
+        p.remember_ft_drive("6m", "FT8", 2.0);
+        assert_eq!(p.ft_drive_for("6m", "FT8"), Some(1.0));
+        p.ft_drive.insert("20m/FT8".into(), 9.0);
+        assert_eq!(
+            p.ft_drive_for("20m", "FT8"),
+            Some(0.6),
+            "an out-of-range entry is passed over for the band's"
+        );
+        p.ft_drive.insert("20m".into(), f32::NAN);
+        assert_eq!(
+            p.ft_drive_for("20m", "FT8"),
+            None,
+            "and with none valid, none"
+        );
     }
 }
 

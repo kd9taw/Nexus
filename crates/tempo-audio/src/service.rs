@@ -552,6 +552,78 @@ fn link_carries_the_scope(t: &Transport) -> bool {
     t.is_icom_lan() || t.baud >= 115_200
 }
 
+/// Is this scope-rate measurement worth a line in the diagnostic log, given the last one written?
+/// The log is sent in by operators, so it stays readable: the first measurement after the stream
+/// comes on, then at most once a minute, except straight away on a change worth reading: the rate
+/// moving by more than one sweep a second, any new drop, or a different SPEED on the radio.
+fn scope_rate_worth_logging(
+    last: Option<&(std::time::Instant, tempo_app::dto::ScopeRate)>,
+    now: std::time::Instant,
+    rate: &tempo_app::dto::ScopeRate,
+) -> bool {
+    let Some((at, prev)) = last else {
+        return true;
+    };
+    now.saturating_duration_since(*at) >= std::time::Duration::from_secs(60)
+        || (rate.sweeps_per_sec - prev.sweeps_per_sec).abs() > 1.0
+        || rate.dropped > prev.dropped
+        || rate.speed != prev.speed
+}
+
+#[cfg(test)]
+mod scope_rate_log_tests {
+    use super::scope_rate_worth_logging;
+    use std::time::{Duration, Instant};
+    use tempo_app::dto::ScopeRate;
+
+    fn rate(sweeps_per_sec: f32, dropped: u64, speed: &str) -> ScopeRate {
+        ScopeRate {
+            sweeps_per_sec,
+            dropped,
+            speed: Some(speed.into()),
+        }
+    }
+
+    /// THE DIAGNOSTIC LOG STAYS READABLE: the first reading, then once a minute, and straight away
+    /// only on a change worth a line (more than 1 sweep/s, a new drop, another SPEED).
+    #[test]
+    fn a_scope_rate_line_is_written_once_a_minute_or_on_a_real_change() {
+        let t0 = Instant::now();
+        let last = (t0, rate(9.6, 0, "fast"));
+        assert!(
+            scope_rate_worth_logging(None, t0, &rate(9.6, 0, "fast")),
+            "first"
+        );
+        let soon = t0 + Duration::from_secs(5);
+        assert!(
+            !scope_rate_worth_logging(Some(&last), soon, &rate(10.4, 0, "fast")),
+            "jitter"
+        );
+        assert!(
+            scope_rate_worth_logging(Some(&last), soon, &rate(8.4, 0, "fast")),
+            "rate moved"
+        );
+        assert!(
+            scope_rate_worth_logging(Some(&last), soon, &rate(9.6, 1, "fast")),
+            "a drop"
+        );
+        assert!(
+            scope_rate_worth_logging(Some(&last), soon, &rate(9.6, 0, "slow")),
+            "speed"
+        );
+        let not_yet = t0 + Duration::from_secs(59);
+        assert!(
+            !scope_rate_worth_logging(Some(&last), not_yet, &rate(9.6, 0, "fast")),
+            "59 s with nothing changed: no line yet"
+        );
+        let later = t0 + Duration::from_secs(60);
+        assert!(
+            scope_rate_worth_logging(Some(&last), later, &rate(9.6, 0, "fast")),
+            "a minute"
+        );
+    }
+}
+
 /// When the radio loop next tries a radio on the Icom network connection whose open failed:
 /// when the retry ladder allows (`crate::icomlan::registry`), never while the radio waits for
 /// the operator, and on the ordinary reopen backoff (`default_at`) when the ladder has nothing to
@@ -4804,6 +4876,13 @@ struct RadioLoop {
     /// WITHOUT the engine mutex — that mutex is held across this loop's own blocking CAT at the
     /// slot boundary, which is what starved the panadapter along with the audio row.
     spectrum_feed: tempo_app::engine::SpectrumFeed,
+    /// The active radio's native scope stream, measured: sweeps per second and drops, for
+    /// Diagnostics (`RadioStatus::scope_rate`) and the diagnostic log.
+    scope_meter: crate::civ::scope::SweepMeter,
+    /// Whether the snapshot carries a measurement now, so it is cleared once, not every tick.
+    scope_rate_shown: bool,
+    /// The measurement last written to the diagnostic log, and when: see `scope_rate_worth_logging`.
+    scope_rate_logged: Option<(std::time::Instant, tempo_app::dto::ScopeRate)>,
     /// The wait-free tee the rx-dsp thread drains. Republished on every audio (re)open.
     rx_tap: Arc<crate::rxtap::RxTap>,
     /// The live meter bus. The rx-dsp thread writes the RX level; THIS loop writes the CAT
@@ -5167,6 +5246,9 @@ impl RadioLoop {
             tuner_seen: false,
             atu_tune_started_at: None,
             spectrum_feed: cfg.spectrum_feed.clone(),
+            scope_meter: Default::default(),
+            scope_rate_shown: false,
+            scope_rate_logged: None,
             rx_tap: cfg.rx_tap.clone(),
             meter_feed: cfg.meter_feed.clone(),
             level_supported: [None; N_LEVELS],
@@ -8418,6 +8500,18 @@ impl RadioLoop {
                 // mutable take_* calls that follow don't fight the settings borrow. APRS forces
                 // simplex here (see `fm_repeater_config`) so a beacon never keys through a shift.
                 let fm = eng.fm_repeater_config();
+                // The FT drive last used on this band and mode comes back here, BEFORE `want` is
+                // read, so the level reaches the backend this tick, ahead of any key below. Never
+                // while this loop holds the key (an over, a voice message, a tune carrier, the
+                // operator's PTT) or a radio handoff is not done: it waits for the first tick after
+                // the unkey (`tempo_app` `engine/ft_drive.rs`).
+                eng.settle_ft_drive(
+                    !can_retune
+                        || self.holds_tx()
+                        || self.voice_until_ms.is_some()
+                        || self.flex_voice_until_ms.is_some()
+                        || self.voice_tee_until_ms.is_some(),
+                );
                 let mut want = Transport::from_station(eng.settings(), eng.cat_share_port());
                 self.cat_port_configured.clone_from(&want.serial_port);
                 self.apply_port_alias(&mut want);
@@ -9472,9 +9566,8 @@ impl RadioLoop {
                 // waterfall draws the sound card's audio, as on the Hamlib path.
                 let stand_down = self.applied.scope_to_audio
                     || (self.scope_yields_to_audio_waterfall() && !self.spectrum_feed.rf_wanted());
-                d.set_scope_enabled(
-                    link_carries_the_scope(&self.applied) && !keyed_now && !stand_down,
-                );
+                let streaming = link_carries_the_scope(&self.applied) && !keyed_now && !stand_down;
+                d.set_scope_enabled(streaming);
                 // Tell the broker we're on the air, so its disconnect fail-safe unkey stands down
                 // while WE'RE transmitting — a transient reconnect of Nexus's own Rig must never
                 // steal the over (the native-CI-V PTT flicker). Cleared the moment TX ends.
@@ -9568,16 +9661,69 @@ impl RadioLoop {
                 // mutex, so the Icom panadapter was starved by the very hold that starved the
                 // audio row (the boundary CAT block downstream of this loop's engine.lock()).
                 if !stand_down {
-                    // TAKEN, so a sweep is published once: one sweep, one frame.
-                    if let Some(sweep) = d.take_scope_row() {
+                    // TAKEN, so a sweep is published once: one sweep, one frame. EVERY sweep that
+                    // completed since the last tick, oldest first: a tick that waited on CAT used
+                    // to publish only the newest, and the rest never reached the waterfall.
+                    for sweep in d.take_scope_rows() {
                         crate::civ::scope::publish_sweep(&self.spectrum_feed, sweep);
                     }
                 } else {
                     // DATA mode (FT8/FT4) with no RF scope pane, or the operator's audio waterfall:
                     // drop any stale native row so the audio FFT takes over immediately (no ~1 s
-                    // window where the last civ row still wins).
+                    // window where the last civ row still wins). Sweeps still queued are of the
+                    // picture being left: dropped, so none is drawn when the scope comes back.
                     self.spectrum_feed.clear_rf();
+                    let _ = d.take_scope_rows();
                 }
+                // MEASURE IT: the sweeps a second this radio really sends, and how many never
+                // reached a scope on screen. Once a window (`SweepMeter::WINDOW`), with the
+                // radio's scope SPEED read alongside: one short `27 1A` read, ONLY while the stream
+                // runs, so never while keyed. Read only; the speed is the operator's to set on the
+                // radio. Not streaming: the next measurement starts afresh, and the snapshot keeps
+                // the last one through an over (the stream pauses while keyed) and drops it when
+                // the stream is off for good.
+                if streaming {
+                    let c = d.scope_counts();
+                    let dropped = c.dropped + self.spectrum_feed.rf_dropped();
+                    let now = std::time::Instant::now();
+                    if let Some(rate) = self.scope_meter.sample(now, c.assembled, dropped) {
+                        let stats = tempo_app::dto::ScopeRate {
+                            sweeps_per_sec: rate.sweeps_per_sec,
+                            dropped: rate.dropped,
+                            speed: d.scope_speed().map(|s| s.as_str().to_string()),
+                        };
+                        if scope_rate_worth_logging(self.scope_rate_logged.as_ref(), now, &stats) {
+                            tempo_core::applog::info(
+                                "cat",
+                                &format!(
+                                    "CI-V scope stream: {:.1} sweeps/s, {} dropped since it \
+                                     came on, radio scope SPEED {} ({})",
+                                    stats.sweeps_per_sec,
+                                    stats.dropped,
+                                    stats.speed.as_deref().unwrap_or("did not answer"),
+                                    if self.applied.is_icom_lan() {
+                                        "network".to_string()
+                                    } else {
+                                        format!("{} baud", self.applied.baud)
+                                    },
+                                ),
+                            );
+                            self.scope_rate_logged = Some((now, stats.clone()));
+                        }
+                        engine_lock(engine).set_scope_rate(Some(stats));
+                        self.scope_rate_shown = true;
+                    }
+                } else {
+                    self.scope_meter.reset();
+                    self.scope_rate_logged = None;
+                    if !keyed_now && std::mem::take(&mut self.scope_rate_shown) {
+                        engine_lock(engine).set_scope_rate(None);
+                    }
+                }
+            } else if std::mem::take(&mut self.scope_rate_shown) {
+                // No native CI-V radio any more: its measurement goes with it.
+                self.scope_meter.reset();
+                engine_lock(engine).set_scope_rate(None);
             }
             // The OmniRig shim's half of the same fail-safe publish. It has no scope stream to
             // gate, so this is the whole of its per-tick work: tell the broker whether Nexus is
@@ -19921,6 +20067,7 @@ mod tests {
     mod failed_unkey;
     mod filter_width;
     mod flex_audio;
+    mod ft_drive;
     mod ft_midover;
     mod ft_residual;
     mod ft_streaming;
