@@ -1123,6 +1123,30 @@ export const RTTY_AUTO_REPEATS_MAX = 10
 export const RTTY_AUTO_REPEATS_DEFAULT = 3
 
 /**
+ * The saved RTTY tone pair's low tone: the range it is used in and the standard it falls back to.
+ * A SECOND COPY of `RTTY_LOW_TONE_HZ_MIN/MAX` in `settings.rs` (`Settings::rtty_low_tone`), checked
+ * by `SettingsPanel.rttysignal.test.tsx`. 2700 + the widest shift (850) stays inside the passband.
+ */
+export const RTTY_LOW_TONE_HZ_MIN = 300
+export const RTTY_LOW_TONE_HZ_MAX = 2700
+export const RTTY_LOW_TONE_HZ_DEFAULT = 2125
+
+/** `v` if it is a low tone the engine uses, else the 2125 standard — what the engine reads. */
+export function validLowTone(v: unknown): number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= RTTY_LOW_TONE_HZ_MIN && v <= RTTY_LOW_TONE_HZ_MAX
+    ? v
+    : RTTY_LOW_TONE_HZ_DEFAULT
+}
+
+/** A loaded form whose stored low tone is outside the range carries the standard instead, so the
+ *  box shows what the engine uses and the next Save writes it (a missing key stays missing). */
+function withValidLowTone(s: Settings): Settings {
+  return s.rttyLowToneHz === undefined || s.rttyLowToneHz === validLowTone(s.rttyLowToneHz)
+    ? s
+    : { ...s, rttyLowToneHz: RTTY_LOW_TONE_HZ_DEFAULT }
+}
+
+/**
  * APRS's own wire formats, shown as examples or written into a frame.
  *
  * `ssid` is a callsign, `path` is a digipeater path the packet carries verbatim, and `isHost`
@@ -1144,6 +1168,10 @@ const SSTV_ID_RULE = '§97.119(b)(4)'
 /** The ISS SSTV downlink, in MHz. A dial reading: formatted invariantly, never written into
  *  a sentence (`i18n/index.ts`, the invariant-token rule). */
 const ISS_SSTV_MHZ = 145.8
+/** 20 m's SSTV calling frequency and its band, where the SSTV screen tunes on opening from an HF
+ *  band with no SSTV channel (#451). Dial readings and band names, interpolated into the hint. */
+const SSTV_20M_MHZ = 14.23
+const SSTV_20M_BAND = '20m'
 
 /**
  * Tokens the panel prints beside a number or stores as a `<select>` value, where the row has
@@ -1249,7 +1277,7 @@ export function SettingsPanel({
       // values, so a restore looks like it did nothing — and the stale form is still live, so the
       // next Save writes the old values straight back over the restored ones.
       const fresh = await getSettings()
-      setForm(fresh)
+      setForm(withValidLowTone(fresh))
       setEditingRadioId(fresh.activeRadio)
       dirtyRef.current = false
       savedRef.current = fresh
@@ -1284,7 +1312,7 @@ export function SettingsPanel({
     )
     if (snap) {
       const fresh = await getSettings()
-      setForm(fresh)
+      setForm(withValidLowTone(fresh))
       setEditingRadioId(fresh.activeRadio)
       dirtyRef.current = false
       savedRef.current = fresh
@@ -1342,6 +1370,9 @@ export function SettingsPanel({
     if (a.txMeterStyle) setTxMeterStyle(a.txMeterStyle)
   }
   const [form, setForm] = useState<Settings | null>(null)
+  // The RTTY Low tone box's text while it is being edited (null = show the form's value): lets the
+  // operator clear it to type a new number while only a valid tone ever reaches the form.
+  const [lowToneText, setLowToneText] = useState<string | null>(null)
   // From a computer driving the station, the read names the settings a save from there keeps as
   // the station has them (`stationOnlySettings`): each shows here read-only, and says so, instead
   // of taking an edit the save would quietly put back. At the station the read names none.
@@ -2017,7 +2048,7 @@ export function SettingsPanel({
     lastActiveRef.current = activeRadioId
     void getSettings()
       .then((s) => {
-        setForm(s)
+        setForm(withValidLowTone(s))
         dirtyRef.current = false
       savedRef.current = s
         setEditingRadioId(activeRadioId) // form now mirrors the (new) active radio
@@ -2031,7 +2062,7 @@ export function SettingsPanel({
     getSettings()
       .then((s) => {
         if (mounted) {
-          setForm(s)
+          setForm(withValidLowTone(s))
           dirtyRef.current = false
       savedRef.current = s
           setStatus('idle')
@@ -10514,6 +10545,7 @@ export function SettingsPanel({
                   onChange={(e) => updateNum('rttyBaud', Number(e.target.value))}
                 >
                   <option value="45.45">{t('settings.rtty.baud.hf')}</option>
+                  <option value="50">{t('settings.rtty.baud.eu')}</option>
                   <option value="75">{t('settings.rtty.baud.vhf')}</option>
                 </select>
                 <span className="settings-hint">{t('settings.rtty.baud.hint')}</span>
@@ -10532,6 +10564,31 @@ export function SettingsPanel({
                   <option value="850">850</option>
                 </select>
                 <span className="settings-hint">{t('settings.rtty.shift.hint')}</span>
+              </label>
+              {/* The saved tone pair, by its LOW tone: which of the two is mark swaps with the
+                  sideband and Reverse, so a "mark" box would mean different tones on different
+                  rigs. Offered on true FSK too — the decoder still listens on the pair. The
+                  engine clamps the pair's centre into 300–3700 Hz, as a waterfall net is. */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.rtty.lowTone.label')}</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  min={RTTY_LOW_TONE_HZ_MIN}
+                  max={RTTY_LOW_TONE_HZ_MAX}
+                  step={5}
+                  value={lowToneText ?? String(validLowTone(form.rttyLowToneHz ?? RTTY_LOW_TONE_HZ_DEFAULT))}
+                  onChange={(e) => {
+                    // Cleared, junk or out of range: shown while typing, never stored — the form
+                    // keeps the last valid tone, and leaving the box shows it again.
+                    const raw = e.target.value
+                    setLowToneText(raw)
+                    const n = Number(raw)
+                    if (raw.trim() !== '' && validLowTone(n) === n) updateNum('rttyLowToneHz', n)
+                  }}
+                  onBlur={() => setLowToneText(null)}
+                />
+                <span className="settings-hint">{t('settings.rtty.lowTone.hint')}</span>
               </label>
               <div className="settings-field">
                 <label className="settings-toggle">
@@ -11088,6 +11145,21 @@ export function SettingsPanel({
                   </button>
                 </label>
                 <span className="settings-hint">{t('settings.sstv.rxAutoArm.hint')}</span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.sstv.tuneOnOpen.label')}</span>
+                  <button disabled={locked('sstvTuneOnOpen')}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.sstvTuneOnOpen === true}
+                    className={`toggle${form.sstvTuneOnOpen === true ? ' on' : ''}`}
+                    onClick={() => updateBool('sstvTuneOnOpen', form.sstvTuneOnOpen !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.sstv.tuneOnOpen.hint', { freq: SSTV_20M_MHZ.toFixed(3), band: SSTV_20M_BAND })}</span>
               </div>
               <div className="settings-field">
                 <label className="settings-toggle">

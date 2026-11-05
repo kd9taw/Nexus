@@ -2465,6 +2465,18 @@ export async function uploadLotwReportByIds(ids: string[]): Promise<UploadReport
   return invoke<UploadReport>('upload_lotw_report', { indices: null, ids })
 }
 
+/** #163: the ids of the past satellite QSOs that went to LoTW with the wrong band (the downlink's)
+ *  and can go again corrected. Asks only; changes nothing. */
+export async function lotwSatBandFixes(): Promise<string[]> {
+  return invoke<string[]>('lotw_sat_band_fixes')
+}
+
+/** #163: correct those satellite QSOs (each bird's uplink filled in) and re-upload them to LoTW
+ *  through TQSL — only ever on the operator's click. Answers as an ordinary LoTW upload does. */
+export async function lotwFixSatBands(ids: string[]): Promise<UploadReport> {
+  return invoke<UploadReport>('lotw_fix_sat_bands', { ids })
+}
+
 /** Ask the engine one of the UI's log questions (SPEC-2 v3 C17a): a page of the Logbook, where a
  *  row sits in it, one call's history, an entity's slots, a roster's summary, the band map's
  *  worked calls, the squares and bands worked, the statistics, the LoTW backlog. The answer is
@@ -3129,6 +3141,17 @@ export async function sstvTune(
   mode: string,
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('sstv_tune', { dialMhz, band, mode })
+}
+
+/** #451: the SSTV screen's own tune on opening — `sstvTune` as the APP's tune, so the channel is
+ * never remembered as the operator's Phone dial (theirs is banked). The engine refuses the ISS
+ * downlink and a dial a satellite pass owns, and then tunes nothing. */
+export async function sstvTuneOnOpen(
+  dialMhz: number,
+  band: string,
+  mode: string,
+): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('sstv_tune_on_open', { dialMhz, band, mode })
 }
 
 /** Park the dial on one of the APP's OWN fixed channels (the ISS SSTV auto-arm's 145.800 FM).
@@ -4496,7 +4519,7 @@ export async function pskNet(hz: number): Promise<PskState> {
   return invoke<PskState>('psk_net', { hz })
 }
 
-/** Select the PSK sub-mode ('psk31' | 'qpsk31') + the QPSK sideband-reverse
+/** Select the PSK sub-mode ('psk31' | 'qpsk31' | 'psk63') + the QPSK sideband-reverse
  * polarity — the cockpit's selector and Reverse toggle. The engine refuses a
  * switch while any PSK transmission is active (returns why); a change
  * re-acquires the RX demodulator on the new mode. */
@@ -4911,7 +4934,8 @@ export async function sstvSend(
   height: number,
   mode: string,
   /** #50: the operator affirms THIS picture already shows their callsign (a pre-made QSO
-   *  card), so the ID plate is skipped rather than drawn over it. Per-image, never sticky. */
+   *  card), so the ID plate is skipped rather than drawn over it. Per-image: the view remembers
+   *  it for that same picture only (by content, features/sstvIdInImage), never for another. */
   idInImage?: boolean,
   /** The station calls the picture's preset text carries (`OverlayItem.call`): the backend
    *  refuses the picture when one is not the station's call now. */
@@ -5616,6 +5640,21 @@ export async function getScopeFrame(
       ? { loHz, hiHz, window, lastSeq, rfLoHz: rfView.loHz, rfHiHz: rfView.hiHz }
       : { loHz, hiHz, window, lastSeq },
   )
+}
+
+/**
+ * The AUDIO VIEW's poll, drawn under the radio's own scope in the CW and Phone cockpits: the audio
+ * row over `loHz..hiHz` newer than `lastSeq`, never the radio's RF row (that one has its own pane,
+ * `getRfFrame`). The window request stands while the radio's scope streams, so the narrow CW window
+ * and HiDef still work beside it. Null and the empty frame mean what they mean for `getScopeFrame`.
+ */
+export async function getAudioScopeFrame(
+  loHz: number,
+  hiHz: number,
+  window: ScopeAnalysis | undefined,
+  lastSeq: number,
+): Promise<SpectrumFrameWire | null> {
+  return invoke<SpectrumFrameWire | null>('get_scope_frame', { loHz, hiHz, window, lastSeq, audioOnly: true })
 }
 
 /**

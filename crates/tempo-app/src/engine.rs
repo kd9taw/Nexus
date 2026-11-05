@@ -867,7 +867,7 @@ impl SpectrumFeed {
         hi_hz: f32,
         win: impl Into<spectrum::ScopeAnalysis>,
     ) -> Option<Spectrum> {
-        self.scope_frame(lo_hz, hi_hz, win.into())
+        self.scope_frame(lo_hz, hi_hz, win.into(), false)
             .map(Spectrum::from)
     }
 
@@ -893,7 +893,41 @@ impl SpectrumFeed {
         last_seq: u64,
         fallback: impl FnOnce() -> Spectrum,
     ) -> Option<SpectrumFrame> {
-        let Some(frame) = self.scope_frame(lo_hz, hi_hz, win.into()) else {
+        Self::frame_after(
+            self.scope_frame(lo_hz, hi_hz, win.into(), false),
+            last_seq,
+            fallback,
+        )
+    }
+
+    /// [`Self::scope_frame_after`] for the AUDIO VIEW that the CW and Phone cockpits draw under
+    /// the radio's own scope: the audio row over `lo_hz..hi_hz`, never the RF row, and the
+    /// request for that window stands while a native RF row is fresh. The radio's scope is
+    /// already on screen in its own pane (`rf_frame_after`), so here the audio FFT IS the
+    /// picture someone is looking at. Nothing here reaches the radio.
+    pub fn audio_scope_frame_after(
+        &self,
+        lo_hz: f32,
+        hi_hz: f32,
+        win: impl Into<spectrum::ScopeAnalysis>,
+        last_seq: u64,
+        fallback: impl FnOnce() -> Spectrum,
+    ) -> Option<SpectrumFrame> {
+        Self::frame_after(
+            self.scope_frame(lo_hz, hi_hz, win.into(), true),
+            last_seq,
+            fallback,
+        )
+    }
+
+    /// The answer both scope reads give for the frame their slot chose (`None`: nothing was ever
+    /// published, so `fallback` computes one), given the last frame the caller drew.
+    fn frame_after(
+        frame: Option<SpectrumFrame>,
+        last_seq: u64,
+        fallback: impl FnOnce() -> Spectrum,
+    ) -> Option<SpectrumFrame> {
+        let Some(frame) = frame else {
             let row = fallback();
             return Some(SpectrumFrame {
                 seq: 0,
@@ -910,12 +944,14 @@ impl SpectrumFeed {
         (frame.bins.is_empty() || frame.seq > last_seq).then_some(frame)
     }
 
-    /// [`Self::scope_row`], as the frame the winning slot holds.
+    /// [`Self::scope_row`], as the frame the winning slot holds. `audio_only` is the audio view's
+    /// read ([`Self::audio_scope_frame_after`]): a live RF row neither wins nor drops the request.
     fn scope_frame(
         &self,
         lo_hz: f32,
         hi_hz: f32,
         win: spectrum::ScopeAnalysis,
+        audio_only: bool,
     ) -> Option<SpectrumFrame> {
         let sane = hi_hz > lo_hz
             && lo_hz >= 0.0
@@ -925,10 +961,10 @@ impl SpectrumFeed {
             let mut g = self.rows.lock().ok()?;
             // A live native row means the scope is not drawing the audio FFT at all — drop the
             // request so the producer stops paying for a row nobody will show.
-            let rf_live = g
-                .rf
-                .as_ref()
-                .is_some_and(|(s, at)| at.elapsed() < Duration::from_secs(1) && !s.bins.is_empty());
+            let rf_live = !audio_only
+                && g.rf.as_ref().is_some_and(|(s, at)| {
+                    at.elapsed() < Duration::from_secs(1) && !s.bins.is_empty()
+                });
             // A WINDOW-LENGTH CHANGE MUST DROP THE ACCUMULATED AVERAGE. `RowAverage::push`
             // restarts on span, bin count and source; two window lengths share all three, so
             // without this a Fast->Sharp switch would fold an 85 ms picture and a 341 ms one
@@ -955,7 +991,11 @@ impl SpectrumFeed {
                 }
             }
         }
-        self.frame()
+        if audio_only {
+            self.audio_frame()
+        } else {
+            self.frame()
+        }
     }
 
     /// How long the RF scope pane's request stands after the read that renewed it. The scope span
@@ -5459,15 +5499,15 @@ pub const RTTY_SCOPE_WANTED_FOR: Duration = Duration::from_secs(1);
 /// PSK31 decoded-character ring cap — the RTTY sizing (PSK31 copies even slower,
 /// ~4 chars/s, so 4000 chars is comfortably tens of minutes of transcript).
 const PSK_TEXT_CAP: usize = 4000;
-/// AFSK RTTY mark tone (Hz) — mirrors `tempo_audio::rtty_afsk::MARK_HZ` (tempo-app can't
-/// depend on tempo-audio); used only to judge where the AFSK emission lands vs the dial.
-/// The STANDARD AFSK mark tone, and now only the basis for the DEFAULT centre.
+/// The STANDARD AFSK mark tone (Hz), 2125 — the default of [`Settings::rtty_low_tone_hz`], and
+/// kept here for the tests that reason about the standard pair. Nothing outside them reads it.
 ///
 /// ⚠️ NOT WHAT THE PRIVILEGE GATE JUDGES — that is `Engine::rtty_tx_mark_hz`, which follows the
-/// operator's netted centre. Judging this constant was correct until 1.9.0 made the transmitter
-/// follow the net; afterwards it could be wrong by ~1.9 kHz and APPROVE a transmission landing
-/// outside a privileged segment. If you find yourself reaching for it in a gate, you want
-/// `rtty_tx_mark_hz`.
+/// operator's netted centre and saved tone pair. Judging this constant was correct until 1.9.0
+/// made the transmitter follow the net; afterwards it could be wrong by ~1.9 kHz and APPROVE a
+/// transmission landing outside a privileged segment. If you find yourself reaching for it in a
+/// gate, you want `rtty_tx_mark_hz`.
+#[cfg(test)]
 const RTTY_AFSK_MARK_HZ: f64 = 2125.0;
 /// Cap on the armed RTTY/SSTV audio drain buffers (~10 s at 12 kHz). The decode
 /// threads normally empty these every ~100 ms; the cap only bites if a thread
@@ -8119,7 +8159,18 @@ impl Engine {
             contest_was.mycall.clone(),
             contest_was.contest_entry_class.clone(),
         );
+        // A save that moves the saved RTTY tone pair (`rtty_low_tone_hz`) re-homes the decoder
+        // and the AFSK transmitter onto it, dropping the session's waterfall net: the operator
+        // just said where RTTY lives. It is a tone change like a shift or baud change in the same
+        // save — a latched over re-keys on the new pair rather than splicing (the radio loop's
+        // `RttyStream::key_cfg` carries the centre), and the privilege gate judges the new pair
+        // (`rtty_tx_mark_hz`) on its next per-tick check.
+        let rtty_home_moved = s.rtty_low_tone() != self.settings.rtty_low_tone();
         self.settings = s;
+        if rtty_home_moved {
+            self.rtty_center = None;
+            self.request_rtty_afc_reset();
+        }
         // A settings save can carry a new position id.
         self.sync_log_posid();
         // Restore the engine-owned pending Cloudlog key captured above (see that comment). Prefer a
@@ -10772,6 +10823,7 @@ impl Engine {
             crate::settings::KeyboardModem::Psk => match self.psk_mode {
                 tempo_core::psk::PskModeKind::Bpsk31 => "PSK31",
                 tempo_core::psk::PskModeKind::Qpsk31 => "QPSK31",
+                tempo_core::psk::PskModeKind::Bpsk63 => "PSK63",
             },
         }
     }
@@ -11410,6 +11462,28 @@ impl Engine {
         self.sstv_tune_with_arming(dial_mhz, band, mode, true);
     }
 
+    /// The SSTV screen's own tune on opening (#451, Settings ▸ Digital ▸ SSTV ▸ tune to the band's
+    /// SSTV frequency when SSTV opens): [`Self::sstv_tune`] — Phone claimed, the FM hold — but the
+    /// APP's tune, not the operator's, and one that never arms Phone's Enable-TX latch. It declares machinery
+    /// provenance ([`Self::machinery_tune`]'s), so the channel never enters the per-(band, mode)
+    /// dial memory and the operator's own dial it displaces is banked: with the switch on, every
+    /// visit would otherwise have written 14.230 over their 20 m Phone dial.
+    ///
+    /// Refused — false, nothing tuned — while a satellite pass owns the dial (Doppler steers it,
+    /// and a retune here would end the pass's hold) and for the ISS downlink, which is a
+    /// receive-only space channel and never "this band's" SSTV frequency.
+    pub fn sstv_tune_on_open(&mut self, dial_mhz: f64, band: &str, mode: &str) -> bool {
+        let iss = crate::bandplan::sstv_band_plan()
+            .iter()
+            .any(|c| c.band == "2m" && (c.dial_mhz - dial_mhz).abs() < 0.0015);
+        if self.sat_dial_owner.is_some() || iss {
+            return false;
+        }
+        // Never the Enable-TX latch: a tune the app makes on its own arms nothing.
+        self.sstv_tune_as(dial_mhz, band, mode, false, DialOrigin::Machinery);
+        true
+    }
+
     /// [`Self::sstv_tune`], arming Phone's Enable-TX latch on the way in only with `arm_manual`:
     /// a computer driving this station passes false, as Remote's entry does.
     pub fn sstv_tune_with_arming(
@@ -11419,6 +11493,19 @@ impl Engine {
         mode: &str,
         arm_manual: bool,
     ) {
+        self.sstv_tune_as(dial_mhz, band, mode, arm_manual, DialOrigin::Operator);
+    }
+
+    /// The body of [`Self::sstv_tune_with_arming`] and [`Self::sstv_tune_on_open`], which differ
+    /// only in who the dial is declared to belong to.
+    fn sstv_tune_as(
+        &mut self,
+        dial_mhz: f64,
+        band: &str,
+        mode: &str,
+        arm_manual: bool,
+        origin: DialOrigin,
+    ) {
         self.set_operating_mode_with_arming("phone", false, arm_manual);
         // An FM channel is held in FM below, so the pick routes on FM: the radio it lands on is
         // the one then commanded FM, as a repeater tune's is. It routed on Phone's own class and,
@@ -11427,7 +11514,7 @@ impl Engine {
         if mode.eq_ignore_ascii_case("fm") && dial_mhz >= 29.0 {
             self.route_intent = Some(crate::settings::RouteMode::Fm);
         }
-        self.set_frequency(dial_mhz, band, mode);
+        self.tune_dial(dial_mhz, band, mode, origin);
         // A cockpit sideband override describes the section being LEFT, not this channel
         // (work_spot's rule) — without this a stale Phone-cockpit FM pick would key FM
         // onto an SSB image frequency.
@@ -18200,8 +18287,11 @@ impl Engine {
         let Some(name) = Self::lotw_sat_name(&st.label) else {
             return;
         };
-        let f_hz = if rec.freq_mhz > 0.0 {
-            (rec.freq_mhz * 1e6) as i64
+        // The RECEIVE leg is what sits in the downlink passband: FREQ_RX when the record carries
+        // one (a same-band pass logged split, whose FREQ is the uplink), FREQ otherwise.
+        let rx_mhz = rec.freq_rx_mhz.unwrap_or(rec.freq_mhz);
+        let f_hz = if rx_mhz > 0.0 {
+            (rx_mhz * 1e6) as i64
         } else {
             (self.settings.dial_mhz * 1e6) as i64
         };
@@ -18210,6 +18300,21 @@ impl Engine {
         if centre > 0 && (f_hz - centre).abs() <= guard {
             rec.prop_mode = Some("SAT".into());
             rec.sat_name = Some(name.to_string());
+            // #163: BOTH LEGS. A contact through the bird arrives with one frequency, the
+            // downlink it was heard on; it is logged as ADIF and TQSL mean it — FREQ the uplink
+            // we transmitted on (the same place in the passband, without Doppler), FREQ_RX the
+            // downlink. The record's band stays the downlink, the band Nexus counts it on; the
+            // ADIF writer sends BAND from FREQ and BAND_RX from the band
+            // (`logbook::cross_band_tx_band`). A record that already carries a receive leg, one
+            // with no frequency, and a simplex channel or a beacon are left as they are.
+            if rec.freq_rx_mhz.is_none() && rec.freq_mhz > 0.0 {
+                let up = tempo_core::doppler::nominal_uplink_hz(&st.transponder, f_hz as u64)
+                    .filter(|&up| up as i64 != f_hz);
+                if let Some(up) = up {
+                    rec.freq_rx_mhz = Some(rec.freq_mhz);
+                    rec.freq_mhz = up as f64 / 1e6;
+                }
+            }
         }
     }
 
@@ -20345,6 +20450,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
         if held.prop_mode.as_deref() == Some("SAT") {
             held.sat_name = None;
+            // The satellite's uplink goes with the satellite: the stamp's leg split is undone,
+            // and the contact keeps the frequency it was heard on (#163).
+            tempo_core::logbook::unsplit_satellite_legs(held);
         }
         held.prop_mode = Some(picked.clone()).filter(|m| !m.is_empty());
         self.settings.log_prop_mode = picked;
@@ -26344,11 +26452,22 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     /// The audio center (Hz) the RTTY demod nets around — the mark/space midpoint.
-    /// Un-netted resolves to the nominal 2125 Hz mark (`2125 + shift/2`), so an
-    /// un-netted decoder sits on today's 2125/2295 pair at any shift. RX only.
+    /// Un-netted resolves to the SAVED tone pair ([`Self::rtty_home_center_hz`]), so an
+    /// un-netted decoder sits on the operator's pair (2125/2295 by default) at any shift.
+    ///
+    /// ⚠️ NOT RX-ONLY: the AFSK transmitter and the privilege gate
+    /// (`rtty_tx_mark_hz`) read this too — see [`Self::rtty_net`].
     pub fn rtty_center_hz(&self) -> f32 {
         self.rtty_center
-            .unwrap_or(RTTY_AFSK_MARK_HZ as f32 + self.rtty_shift_hz() as f32 / 2.0)
+            .unwrap_or_else(|| self.rtty_home_center_hz())
+    }
+
+    /// The centre of the saved tone pair, [`Settings::rtty_low_tone`] + shift/2, clamped
+    /// into the same 300–3700 Hz passband a net is ([`Self::rtty_net`]), so a hand-edited
+    /// settings file cannot put the pair outside what a click could reach.
+    fn rtty_home_center_hz(&self) -> f32 {
+        (self.settings.rtty_low_tone() as f32 + self.rtty_shift_hz() as f32 / 2.0)
+            .clamp(300.0, 3700.0)
     }
 
     /// Net the RTTY decoder onto a new audio center (Hz) — a waterfall click or a
@@ -26883,12 +27002,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     /// May the operator's class key the Keyboard section's EMISSION at `dial`? USB always (the
-    /// section's convention): the WHOLE of [`Self::keyboard_span_hz`] inside ONE privileged data
-    /// range ([`crate::privileges::tx_span_allowed`], the data-frame rule FT8, JS8 and RTTY are
-    /// judged by): PSK31's narrow signal at the tuned audio offset (one point), or JTTY's four
+    /// section's convention): the WHOLE of [`Self::keyboard_emission_span_hz`] inside ONE
+    /// privileged data range ([`crate::privileges::tx_span_allowed`], the data-frame rule FT8, JS8
+    /// and RTTY are judged by): PSK's occupied width about the tuned audio offset, or JTTY's four
     /// tones from its Tx offset up.
     fn psk_emission_ok(&self, dial: f64) -> bool {
-        let (lo, hi) = self.keyboard_span_hz();
+        let (lo, hi) = self.keyboard_emission_span_hz();
         crate::privileges::tx_span_allowed(
             self.settings.license_class,
             dial + lo / 1_000_000.0,
@@ -26909,6 +27028,29 @@ Pick the one you operate from on the Contesting tab in Settings.",
             let c = self.psk_center_hz() as f64;
             (c, c)
         }
+    }
+
+    /// What the licence gates judge ([`Self::psk_emission_ok`], [`Self::keyboard_emission_allowed`]):
+    /// [`Self::keyboard_span_hz`] widened to the signal's OCCUPIED width — PSK's centre ± one
+    /// symbol rate of its sub-mode ([`tempo_core::psk::PskModeKind::baud`]: ±31.25 Hz for PSK31
+    /// and QPSK31, ±62.5 Hz for PSK63). JTTY's span is its own and is judged as it was.
+    ///
+    /// ⭐ JUDGED ACROSS ITS WIDTH, NOT AT ONE POINT. Judging the centre alone let a signal netted
+    /// within half its width of a segment edge put its sidebands across that edge. Measured on
+    /// the shaped waveform the −26 dB width is ±27 Hz for PSK31 and ±54 Hz for PSK63, and the 99 %
+    /// power width ±22.5 / ±45 Hz; ±baud covers the −26 dB points with 4–8 Hz to spare and scales
+    /// with the sub-mode from the one rate both directions key by.
+    ///
+    /// ⚠️ NOT [`Self::keyboard_span_hz`] ITSELF: its low edge is the frequency a contact LOGS
+    /// ([`Self::logged_signal_offset`]), which stays the netted centre. And it can only ever
+    /// refuse more: the widened span contains the point that was judged before.
+    fn keyboard_emission_span_hz(&self) -> (f64, f64) {
+        let (lo, hi) = self.keyboard_span_hz();
+        if self.jtty_section() {
+            return (lo, hi);
+        }
+        let half = f64::from(self.psk_mode.baud());
+        (lo - half, hi + half)
     }
 
     // ----- RTTY transmit — operator-initiated, mirroring the CW send path. -----
@@ -29794,7 +29936,7 @@ contact yourself."
             // RTTY: judge the real mark/space RF span per keying backend (AFSK tones
             // below the LSB dial; FSK shift below the RTTY-mode dial) — both edges.
             OperatingMode::Rtty => self.rtty_emission_ok(dial),
-            // Keyboard (PSK31): a ~60 Hz signal at the tuned audio offset
+            // Keyboard (PSK): its occupied width about the tuned audio offset
             // above the always-USB dial.
             OperatingMode::Keyboard => self.psk_emission_ok(dial),
         }
@@ -29891,14 +30033,14 @@ contact yourself."
 
     /// May the operator's class key a KEYBOARD-mode emission (PSK31's, or JTTY's while it is the
     /// modem) from the transmit dial `dial`, with the transmitting VFO commanded `word`? The span
-    /// [`Self::keyboard_span_hz`] sits on the side the WORD names — where
+    /// [`Self::keyboard_emission_span_hz`] sits on the side the WORD names — where
     /// [`Self::psk_emission_ok`] judges it above the dial always, by the section's USB
     /// convention. The whole span must lie in one privileged range, as there.
     ///
     /// A word that names no side adds nothing, so, like [`Self::digital_emission_allowed`], this
     /// can only ever refuse more than the gate did before it knew the commanded word.
     fn keyboard_emission_allowed(&self, dial: f64, word: &str) -> bool {
-        let (lo, hi) = self.keyboard_span_hz();
+        let (lo, hi) = self.keyboard_emission_span_hz();
         let (lo, hi) = (lo / 1_000_000.0, hi / 1_000_000.0);
         let span = |a: f64, b: f64| {
             crate::privileges::tx_span_allowed(
@@ -34410,10 +34552,11 @@ contact yourself."
     /// sitting inside the bird's DOWNLINK passband, so it would silently stop matching and
     /// those contacts would lose their LoTW satellite credit outright.
     ///
-    /// Doing it properly means setting `BAND` from the transmit leg and adding `BAND_RX` — and
-    /// `band` is the key every award, needs and B4 path in Nexus reads, which is a far larger
-    /// change than #163. Satellites wait for one that does BAND and BAND_RX together,
-    /// deliberately, rather than getting half of it now.
+    /// A satellite contact's two legs are written where the satellite itself is known, by the
+    /// stamp in [`Self::log_qso`] ([`Self::stamp_satellite`]): FREQ the nominal uplink, FREQ_RX
+    /// the downlink, with `band` kept the downlink (the key every award, needs and B4 path reads)
+    /// and the ADIF writer sending BAND from FREQ and BAND_RX from the band. A record this builds
+    /// still carries the downlink alone, which is what that stamp's passband gate reads.
     ///
     /// Keyed on the BANDS rather than on "is a transponder held" for two reasons: the
     /// satellite hold OUTLIVES THE PASS (an FM hold is never released), so asking `sat_tune`
@@ -38492,6 +38635,25 @@ mod tests {
         // A no-op set does not thrash the demod.
         e.set_psk_mode(PskModeKind::Qpsk31, true).unwrap();
         assert!(!e.take_psk_afc_reset(), "a no-op switch rebuilt the demod");
+    }
+
+    #[test]
+    fn psk63_is_a_sub_mode_that_logs_as_psk63_and_switches_like_the_others() {
+        use tempo_core::psk::PskModeKind;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.settings.keyboard_modem = crate::settings::KeyboardModem::Psk;
+        assert_eq!(e.keyboard_mode_name(), "PSK31", "control: the default");
+        e.set_psk_mode(PskModeKind::Bpsk63, false).unwrap();
+        assert_eq!(e.psk_mode(), (PskModeKind::Bpsk63, false));
+        assert!(e.take_psk_afc_reset(), "the switch rebuilds the RX demod");
+        assert_eq!(
+            e.keyboard_mode_name(),
+            "PSK63",
+            "the ADIF mode a contact logs"
+        );
+        // …and is refused mid-over exactly as a QPSK switch is.
+        let mut e = psk_latched_engine();
+        assert!(e.set_psk_mode(PskModeKind::Bpsk63, false).is_err());
     }
 
     #[test]
@@ -43697,6 +43859,66 @@ mod tests {
             "Phone returns to the operator's 14.240, NOT the 14.225 segment default — got {}",
             e.settings().dial_mhz
         );
+    }
+
+    /// #451: OPENING SSTV WITH "TUNE ON OPEN" IS THE APP'S TUNE, NOT THE OPERATOR'S. With the
+    /// switch on, every visit to the SSTV screen tunes 14.230; through `sstv_tune` (the operator's
+    /// own pick) that wrote 14.230 into Phone's 20 m memory, and a Phone → SSTV → CW → Phone trip
+    /// came back on 14.230 instead of the operator's 14.250. The open-path verb declares
+    /// machinery provenance: the operator's dial is banked and 14.230 never is.
+    #[test]
+    fn the_sstv_open_tune_never_takes_the_operators_phone_dial() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(14.250, "20m", "USB"); // the operator's own SSB dial
+        assert!(
+            e.sstv_tune_on_open(14.230, "20m", "USB"),
+            "the open tune ran"
+        );
+        assert!(
+            (e.settings().dial_mhz - 14.230).abs() < 1e-9,
+            "and SSTV is on its channel"
+        );
+        e.set_operating_mode("cw", true);
+        e.set_operating_mode("phone", true);
+        assert!(
+            (e.settings().dial_mhz - 14.250).abs() < 1e-9,
+            "Phone returns to the operator's 14.250, not SSTV's 14.230 — got {}",
+            e.settings().dial_mhz
+        );
+
+        // CONTROL: the operator's own pick of the same channel IS theirs, as it always was.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(14.250, "20m", "USB");
+        e.sstv_tune(14.230, "20m", "USB");
+        e.set_operating_mode("cw", true);
+        e.set_operating_mode("phone", true);
+        assert!((e.settings().dial_mhz - 14.230).abs() < 1e-9);
+    }
+
+    /// #451: the open tune never parks on the ISS downlink and never moves a dial a satellite pass
+    /// owns (Doppler steers it, and an operator-path retune would end the pass's hold).
+    #[test]
+    fn the_sstv_open_tune_refuses_the_iss_downlink_and_a_pass_owned_dial() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_frequency(146.520, "2m", "FM");
+        assert!(
+            !e.sstv_tune_on_open(145.800, "2m", "FM"),
+            "never the ISS downlink"
+        );
+        assert!((e.settings().dial_mhz - 146.520).abs() < 1e-9);
+
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_frequency(14.074, "20m", "USB");
+        e.sat_dial_owner = Some(("SO-50".into(), 0));
+        assert!(
+            !e.sstv_tune_on_open(14.230, "20m", "USB"),
+            "not while a pass owns the dial"
+        );
+        assert!((e.settings().dial_mhz - 14.074).abs() < 1e-9);
     }
 
     #[test]
@@ -55367,6 +55589,246 @@ mod tests {
         );
     }
 
+    /// #163 — A SATELLITE CONTACT IS LOGGED WITH BOTH LEGS, AND GOES TO LOTW AS TQSL READS ONE.
+    ///
+    /// A contact through a held bird arrives at the log with the downlink it was heard on. The
+    /// stamp that names the satellite writes the uplink too: FREQ the uplink at the same place in
+    /// the passband (no Doppler; mirrored on an inverting bird), FREQ_RX the downlink. The
+    /// record's band stays the downlink, the band awards, Needed, B4 and dupes count it on, and
+    /// the LoTW upload carries BAND = the uplink's band and BAND_RX = the downlink's.
+    #[test]
+    fn a_satellite_contact_logs_both_legs_and_uploads_the_uplink_band() {
+        // SO-50, an FM channel: 145.850 up, 436.795 down.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut rec = e.qso_record("W1AW".into(), None, None);
+        rec.band = "70cm".into();
+        rec.mode = "FM".into();
+        rec.freq_mhz = 436.795;
+        rec.freq_rx_mhz = None;
+        e.log_qso(rec);
+        let logged = e.stored_log()[0].as_ref().clone();
+        assert_eq!(
+            logged.sat_name.as_deref(),
+            Some("SO-50"),
+            "the stamp applied"
+        );
+        assert_eq!(logged.band, "70cm", "counted on the downlink, as before");
+        assert!(
+            (logged.freq_mhz - 145.85).abs() < 1e-9,
+            "FREQ is the uplink: {}",
+            logged.freq_mhz
+        );
+        assert_eq!(logged.freq_rx_mhz, Some(436.795), "FREQ_RX the downlink");
+
+        let lotw = crate::station::lotw_batch_adif(&[logged], false, "K2DEF", "FN31");
+        for want in [
+            "<BAND:2>2m",
+            "<BAND_RX:4>70cm",
+            "<FREQ:10>145.850000",
+            "<FREQ_RX:10>436.795000",
+            "<PROP_MODE:3>SAT",
+            "<SAT_NAME:5>SO-50",
+        ] {
+            assert!(lotw.contains(want), "LoTW upload lacks {want}: {lotw}");
+        }
+        assert_eq!(lotw.matches("<BAND:").count(), 1, "one BAND: {lotw}");
+
+        // An inverting linear bird (RS-44-class): 10 kHz up the downlink passband is 10 kHz DOWN
+        // the uplink one.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_sat_transponder(Some((
+            "RS-44 & BREEZE-KM R/B|linear".into(),
+            0,
+            tempo_core::doppler::Transponder {
+                uplink_centre_hz: 145_965_000,
+                downlink_centre_hz: 435_640_000,
+                invert: true,
+                half_width_hz: 30_000,
+            },
+        )));
+        let mut rec = e.qso_record("W1AW".into(), None, None);
+        rec.band = "70cm".into();
+        rec.mode = "CW".into();
+        rec.freq_mhz = 435.650;
+        rec.freq_rx_mhz = None;
+        e.log_qso(rec);
+        let logged = &e.stored_log()[0];
+        assert_eq!(logged.sat_name.as_deref(), Some("RS-44"));
+        assert!(
+            (logged.freq_mhz - 145.955).abs() < 1e-9,
+            "mirrored: {}",
+            logged.freq_mhz
+        );
+        assert_eq!(logged.freq_rx_mhz, Some(435.650));
+
+        // NEGATIVE CONTROL: a 20 m contact made with the bird still held is not a satellite
+        // contact, and keeps its one frequency.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut rec = e.qso_record("W1AW".into(), None, None);
+        rec.band = "20m".into();
+        rec.freq_mhz = 14.074;
+        rec.freq_rx_mhz = None;
+        e.log_qso(rec);
+        let logged = &e.stored_log()[0];
+        assert_eq!(logged.prop_mode, None);
+        assert!((logged.freq_mhz - 14.074).abs() < 1e-9);
+        assert_eq!(logged.freq_rx_mhz, None);
+    }
+
+    /// #163 review: Log Check must judge a satellite contact's band against its RECEIVE leg. FREQ
+    /// is now the uplink (145.850) while the band is the downlink (70cm), and a check of FREQ
+    /// against the band called every new satellite contact a mismatch and offered to "fix" it onto
+    /// the uplink band — moving it in awards, Needed, B4 and dupes, and dropping its BAND_RX.
+    #[test]
+    fn log_check_does_not_flag_a_satellite_contact_logged_with_both_legs() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut rec = e.qso_record("W1AW".into(), None, None);
+        rec.band = "70cm".into();
+        rec.mode = "FM".into();
+        rec.freq_mhz = 436.795;
+        rec.freq_rx_mhz = None;
+        e.log_qso(rec);
+        let r = e.stored_log()[0].as_ref().clone();
+        assert!((r.freq_mhz - 145.85).abs() < 1e-9, "fixture: both legs");
+        let probs = crate::logtools::problems_of(&r, &|_, _| None, now_unix_secs());
+        assert!(
+            !probs
+                .iter()
+                .any(|p| p.kind == crate::logtools::ProblemKind::BandFreq),
+            "a satellite contact is not a band/frequency mismatch: {probs:?}"
+        );
+        // CONTROL: a terrestrial contact whose frequency really is off its band is still flagged.
+        let mut wrong = r.clone();
+        wrong.freq_rx_mhz = None;
+        wrong.freq_mhz = 14.074;
+        let probs = crate::logtools::problems_of(&wrong, &|_, _| None, now_unix_secs());
+        assert!(probs
+            .iter()
+            .any(|p| p.kind == crate::logtools::ProblemKind::BandFreq));
+    }
+
+    /// #163 review: Log Check pairs each frequency with its own band. A row whose BAND_RX is
+    /// parked and which carries no FREQ_RX (the reader left it unmapped) has FREQ on its band and
+    /// is not a mismatch; judging FREQ against the parked BAND_RX flagged it with a "fix" that
+    /// changed nothing. A legacy foreign row with FREQ_RX is judged on the band it is counted on.
+    #[test]
+    fn log_check_pairs_each_frequency_with_its_own_band() {
+        let parse = |t: &str| {
+            tempo_core::logbook::parse_adif(&format!(
+                "<EOH>\n<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:4>0100{t}<EOR>\n"
+            ))
+            .remove(0)
+        };
+        let band_freq = |r: &QsoRecord| {
+            // Log Check judges stored rows, which carry an id.
+            let mut r = r.clone();
+            r.id = Some(tempo_core::logbook::Minter::default().mint());
+            crate::logtools::problems_of(&r, &|_, _| None, now_unix_secs())
+                .into_iter()
+                .filter(|p| p.kind == crate::logtools::ProblemKind::BandFreq)
+                .count()
+        };
+        let unmapped = parse(
+            "<MODE:2>FM<BAND:2>2m<BAND_RX:4>70cm<FREQ:7>145.850<PROP_MODE:3>SAT<SAT_NAME:5>SO-50",
+        );
+        assert_eq!(unmapped.band, "2m", "fixture: not mapped");
+        assert_eq!(band_freq(&unmapped), 0, "FREQ is on its own band");
+
+        let mut legacy =
+            parse("<MODE:2>FM<BAND:2>2m<FREQ:7>145.850<FREQ_RX:7>436.795<PROP_MODE:3>SAT<SAT_NAME:5>SO-50");
+        legacy.extra.push(("BAND_RX".into(), "70cm".into()));
+        assert_eq!(
+            band_freq(&legacy),
+            0,
+            "FREQ_RX is on the band it is counted on"
+        );
+
+        // CONTROL: FREQ off its band, with no receive leg, is still a mismatch.
+        let wrong = parse("<MODE:3>SSB<BAND:3>40m<FREQ:6>14.250");
+        assert_eq!(band_freq(&wrong), 1);
+
+        // A parked BAND_RX whose FREQ_RX disagrees with it is a real inconsistency and is flagged,
+        // but never with a "fix" that sets the band it already has.
+        let mut odd = parse("<MODE:2>FM<BAND:2>2m<FREQ:7>145.850<FREQ_RX:7>145.900");
+        odd.extra.push(("BAND_RX".into(), "70cm".into()));
+        let mut o = odd.clone();
+        o.id = Some(tempo_core::logbook::Minter::default().mint());
+        let fixes: Vec<_> = crate::logtools::problems_of(&o, &|_, _| None, now_unix_secs())
+            .into_iter()
+            .filter(|p| p.kind == crate::logtools::ProblemKind::BandFreq)
+            .map(|p| p.fix.map(|c| c.value))
+            .collect();
+        assert_eq!(fixes, vec![None], "flagged, with no no-op fix: {fixes:?}");
+    }
+
+    /// #451: the SSTV screen's own tune never arms Phone's Enable-TX latch; the operator's pick of
+    /// the same channel arms it as it always has.
+    #[test]
+    fn the_sstv_open_tune_never_arms_tx() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        assert!(!e.tx_enabled(), "fixture: unarmed");
+        assert!(e.sstv_tune_on_open(14.230, "20m", "USB"));
+        assert!(!e.tx_enabled(), "the app's own tune armed TX");
+        let mut c = Engine::new("KD9TAW", "EN52", 0);
+        c.set_license_class("extra");
+        c.sstv_tune(14.230, "20m", "USB");
+        assert!(c.tx_enabled(), "CONTROL: the operator's pick arms");
+    }
+
+    /// #163 review: the operator taking SAT off a contact in the popup takes the satellite's
+    /// uplink with it. The stamp wrote FREQ = the bird's uplink and moved the heard frequency to
+    /// FREQ_RX; a contact that is not a satellite one has only the frequency it was heard on.
+    #[test]
+    fn taking_sat_off_in_the_popup_puts_back_the_heard_frequency() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut rec = e.qso_record("W1AW".into(), None, None);
+        rec.band = "70cm".into();
+        rec.mode = "FM".into();
+        rec.freq_mhz = 436.795;
+        rec.freq_rx_mhz = None;
+        e.stamp_satellite(&mut rec);
+        assert_eq!(rec.prop_mode.as_deref(), Some("SAT"));
+        assert!((rec.freq_mhz - 145.85).abs() < 1e-9, "fixture: split");
+        e.take_popup_prop_mode(&mut rec, Some(""));
+        assert_eq!(rec.prop_mode, None);
+        assert!(
+            (rec.freq_mhz - 436.795).abs() < 1e-9,
+            "FREQ is the heard one: {}",
+            rec.freq_mhz
+        );
+        assert_eq!(rec.freq_rx_mhz, None);
+        // Another propagation mode in its place does the same.
+        let mut rec2 = rec.clone();
+        rec2.freq_mhz = 145.85;
+        rec2.freq_rx_mhz = Some(436.795);
+        rec2.prop_mode = Some("SAT".into());
+        rec2.sat_name = Some("SO-50".into());
+        e.take_popup_prop_mode(&mut rec2, Some("ES"));
+        assert!((rec2.freq_mhz - 436.795).abs() < 1e-9);
+        assert_eq!(rec2.freq_rx_mhz, None);
+    }
+
     /// #163 — A SPLIT CONTACT LOGS BOTH FREQUENCIES; A SATELLITE CONTACT IS LEFT ALONE.
     ///
     /// Both inputs already existed and were thrown away at the log boundary: the rig split TX
@@ -66272,6 +66734,75 @@ mod tests {
             None,
             "and no narrow row is requested for it — that FFT would be for a picture nobody shows"
         );
+    }
+
+    /// THE AUDIO VIEW UNDER A LIVE RADIO SCOPE. The CW and Phone cockpits can draw the radio's
+    /// scope and the sound-card audio view at once, one above the other. The audio view asks for
+    /// its narrow window while a native RF row is fresh, and it must get that window. It must not
+    /// get the RF row (that is the pane above it), and it must not get the full row in its place.
+    #[test]
+    fn the_audio_view_keeps_its_window_while_the_radio_scope_streams() {
+        let feed = SpectrumFeed::default();
+        feed.publish_audio(spec(0.0, 4000.0, "audio"));
+        feed.publish_rf(spec(14_000_000.0, 14_100_000.0, "civ"));
+
+        // Control: the rig scope's own read still hands out the RF row and asks for nothing.
+        let rf = feed
+            .scope_frame_after(300.0, 1100.0, spectrum::WindowN::Balanced, 0, || {
+                unreachable!("published")
+            })
+            .expect("a frame");
+        assert_eq!(
+            rf.source, "civ",
+            "control: the rig scope read prefers the RF row"
+        );
+        assert_eq!(
+            feed.scope_request(),
+            None,
+            "control: and requests no audio window"
+        );
+
+        // The audio view: never the RF row, and its request stands although RF is live.
+        let first = feed
+            .audio_scope_frame_after(300.0, 1100.0, spectrum::WindowN::Balanced, 0, || {
+                unreachable!("published")
+            })
+            .expect("a frame");
+        assert_eq!(
+            first.source, "audio",
+            "the audio view never draws the RF row"
+        );
+        assert_eq!(
+            first.hi_hz, 4000.0,
+            "answered wide until the window is produced"
+        );
+        assert_eq!(
+            feed.scope_request(),
+            Some((300.0, 1100.0, spectrum::WindowN::Balanced.into())),
+            "the request stands while RF is live, so the producer computes the window"
+        );
+        feed.publish_scope(spec(300.0, 1100.0, "audio"));
+        let narrow = feed
+            .audio_scope_frame_after(300.0, 1100.0, spectrum::WindowN::Balanced, 0, || {
+                unreachable!("published")
+            })
+            .expect("a frame");
+        assert_eq!(
+            (narrow.lo_hz, narrow.hi_hz),
+            (300.0, 1100.0),
+            "then the narrow window"
+        );
+        assert_eq!(narrow.source, "audio");
+        // Nothing newer than the frame drawn: nothing, as the rig scope read does.
+        assert!(feed
+            .audio_scope_frame_after(
+                300.0,
+                1100.0,
+                spectrum::WindowN::Balanced,
+                narrow.seq,
+                || unreachable!("published")
+            )
+            .is_none());
     }
 
     /// A WINDOW-LENGTH CHANGE MUST DROP THE ACCUMULATED AVERAGE — and nothing else can catch it.
@@ -79958,6 +80489,10 @@ mod digital_side_licence_tests {
         /// The carrier on the side the transmit VFO's commanded word names; `None` for a word
         /// that names no side (FM).
         commanded: Option<bool>,
+        /// Away from a pass, in Keyboard and RTTY: the verdict before PSK was judged across its
+        /// occupied width, PSK at ONE point at its centre ([`Soundcard::old_as_a_point`]), which
+        /// is RTTY's own `stored`. `None` everywhere else.
+        point: Option<bool>,
         case: String,
     }
 
@@ -80055,6 +80590,7 @@ mod digital_side_licence_tests {
                                     stored: side_allows(class, tx, off, stored_lsb),
                                     commanded: named_side(word)
                                         .map(|lsb| side_allows(class, tx, off, lsb)),
+                                    point: None,
                                     case,
                                 });
                             }
@@ -80096,6 +80632,7 @@ mod digital_side_licence_tests {
                                 got: e.tx_allowed(),
                                 stored,
                                 commanded: Some(stored),
+                                point: None,
                                 case,
                             });
                         }
@@ -80196,8 +80733,8 @@ mod digital_side_licence_tests {
     /// table alone.
     #[derive(Clone, Copy, Debug)]
     enum Soundcard {
-        /// PSK31: one narrow signal at the netted centre; the old model put it ABOVE the dial
-        /// always, by the section's USB convention.
+        /// PSK31: its occupied width, the netted centre ± the sub-mode's symbol rate; the old
+        /// model put it ABOVE the dial always, by the section's USB convention.
         Psk,
         /// RTTY by AFSK: the mark/space pair from `mark` to `mark + shift` off the dial; the old
         /// model took the side the rig reports or, failing that, the dial's own word, and both
@@ -80327,14 +80864,33 @@ mod digital_side_licence_tests {
         }
 
         /// May `class` key this section's signal from transmit dial `tx` (MHz) on the side `lsb`
-        /// names? PSK31 one point at the centre, CW one at the pitch; AFSK both edges of the
-        /// mark/space span.
+        /// names? PSK both edges of its occupied width, the centre ± the sub-mode's baud; CW one
+        /// point at the pitch; AFSK both edges of the mark/space span.
         fn side_ok(self, e: &Engine, class: LicenseClass, tx: f64, lsb: bool) -> bool {
+            self.side_judged(e, class, tx, lsb, true)
+        }
+
+        /// [`Self::side_ok`], with PSK judged across its width (`wide`) or, as it was before, at
+        /// one point at its centre.
+        fn side_judged(
+            self,
+            e: &Engine,
+            class: LicenseClass,
+            tx: f64,
+            lsb: bool,
+            wide: bool,
+        ) -> bool {
             let allow = |f: f64| crate::privileges::tx_allowed(class, f, self.mode());
             match self {
                 Soundcard::Psk => {
                     let c = f64::from(e.psk_center_hz()) / 1e6;
-                    allow(if lsb { tx - c } else { tx + c })
+                    let c = if lsb { tx - c } else { tx + c };
+                    let half = if wide {
+                        f64::from(e.psk_mode().0.baud()) / 1e6
+                    } else {
+                        0.0
+                    };
+                    allow(c - half) && allow(c + half)
                 }
                 Soundcard::CwTone | Soundcard::CwKeyer => {
                     let p = f64::from(e.cw_pitch_hz()) / 1e6;
@@ -80370,6 +80926,15 @@ mod digital_side_licence_tests {
                 Soundcard::CwTone | Soundcard::CwKeyer => {
                     crate::privileges::tx_allowed(class, tx, self.mode())
                 }
+            }
+        }
+
+        /// [`Self::old`] as it was before PSK was judged across its width: PSK at one point at its
+        /// centre, above the dial. Every other section's `old`.
+        fn old_as_a_point(self, e: &Engine, class: LicenseClass, tx: f64, dial_word: &str) -> bool {
+            match self {
+                Soundcard::Psk => self.side_judged(e, class, tx, false, false),
+                _ => self.old(e, class, tx, dial_word),
             }
         }
 
@@ -80622,6 +81187,7 @@ mod digital_side_licence_tests {
                                     got: e.tx_allowed(),
                                     stored: sc.old(&e, class, tx, dial_word),
                                     commanded: sc.commanded(&e, class, tx, tx_word),
+                                    point: None,
                                     case,
                                 });
                             }
@@ -80673,6 +81239,7 @@ mod digital_side_licence_tests {
                                 got: e.tx_allowed(),
                                 stored: sc.old(&e, class, dial, word),
                                 commanded: sc.commanded(&e, class, dial, word),
+                                point: Some(sc.old_as_a_point(&e, class, dial, word)),
                                 case,
                             });
                         }
@@ -80686,17 +81253,278 @@ mod digital_side_licence_tests {
     /// Away from a pass Keyboard and RTTY are judged exactly as they were, at every data edge,
     /// for every class and centre, while the rig reports nothing (for when it reports the other
     /// side, see [`rtty_judges_the_commanded_side_even_when_the_rig_reports_the_other`]).
+    ///
+    /// ⚠️ RE-PINNED ON PURPOSE, FOR PSK ONLY: PSK is judged across its occupied width now (the
+    /// netted centre ± the sub-mode's baud, [`Engine::keyboard_emission_span_hz`]), not at one
+    /// point at its centre. So its verdict CHANGES wherever that centre sits within one baud of a
+    /// data edge — in this sweep, a centre exactly ON an edge — from allowed to refused: the half
+    /// of the signal on the far side of that edge is outside (the lower half at the bottom of a
+    /// segment, the upper half at the top of one). Those changes are counted and pinned below,
+    /// each is a refusal where the point allowed, and every other verdict, PSK's and RTTY's, is
+    /// still what it was.
     #[test]
     fn away_from_a_pass_psk_and_rtty_are_judged_as_they_were() {
         let v = soundcard_terrestrial_verdicts();
         let (moved, first) = first_cases(v.iter().filter(|r| r.got != r.stored), 20);
         assert_eq!(moved, 0, "verdicts moved away from a pass: {first:#?}");
+        let (rtty_moved, first) = first_cases(
+            v.iter()
+                .filter(|r| !r.case.starts_with("Psk ") && Some(r.got) != r.point),
+            20,
+        );
+        assert_eq!(rtty_moved, 0, "RTTY verdicts moved: {first:#?}");
+        let widened: Vec<&Verdict> = v
+            .iter()
+            .filter(|r| r.point.is_some_and(|p| p != r.got))
+            .collect();
+        let (not_a_psk_refusal, first) = first_cases(
+            widened
+                .iter()
+                .copied()
+                .filter(|r| !(r.case.starts_with("Psk ") && r.point == Some(true) && !r.got)),
+            20,
+        );
+        assert_eq!(
+            not_a_psk_refusal, 0,
+            "the width may only refuse PSK where its centre was allowed: {first:#?}"
+        );
+        assert_eq!(
+            widened.len(),
+            WIDENED_PSK_VERDICTS,
+            "PSK verdicts the width refuses: {:#?}",
+            widened.iter().map(|r| r.case.as_str()).collect::<Vec<_>>()
+        );
         let allowed = v.iter().filter(|r| r.stored).count();
         assert!(
             allowed > 1_000 && v.len() - allowed > 1_000,
             "the sweep must straddle the edges: {allowed} allowed of {}",
             v.len()
         );
+    }
+
+    /// How many of [`away_from_a_pass_psk_and_rtty_are_judged_as_they_were`]'s PSK verdicts the
+    /// occupied width turns from allowed to refused: each a centre exactly on a data edge.
+    const WIDENED_PSK_VERDICTS: usize = 84;
+
+    /// A General in the Keyboard section keying `mode`, netted at 1000 Hz, TX armed.
+    fn psk_station(mode: tempo_core::psk::PskModeKind) -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.settings.license_class = LicenseClass::General;
+        e.set_operating_mode("keyboard", false);
+        e.set_psk_mode(mode, false)
+            .expect("unkeyed: the sub-mode is taken");
+        e.psk_net(1_000.0);
+        e
+    }
+
+    /// A General's 20 m data segment, from 14.025 up to (not including) 14.150 MHz.
+    const DATA_20M: (f64, f64) = (14.025, 14.150);
+
+    /// Each sub-mode with its symbol rate, the closest whole-Hz distance from a segment edge at
+    /// which its centre keeps the whole signal inside (`inside`), and the farthest at which the
+    /// edge is inside its width (`across`): ±31.25 Hz for PSK31 and QPSK31, ±62.5 Hz for PSK63.
+    /// Each rate is a literal, so a wrong [`tempo_core::psk::PskModeKind::baud`] — the one input
+    /// the gate and the sweeps' model share — fails here for every sub-mode.
+    const PSK_WIDTHS: [(tempo_core::psk::PskModeKind, f32, f64, f64); 3] = [
+        (tempo_core::psk::PskModeKind::Bpsk31, 31.25, 32.0, 31.0),
+        (tempo_core::psk::PskModeKind::Qpsk31, 31.25, 32.0, 31.0),
+        (tempo_core::psk::PskModeKind::Bpsk63, 62.5, 63.0, 62.0),
+    ];
+
+    /// ⭐ PSK IS JUDGED ACROSS ITS OCCUPIED WIDTH, at the top and the bottom of a segment, on
+    /// either side of the dial. A General's 20 m data runs 14.025–14.150: PSK31 netted 31 Hz
+    /// inside an edge puts its signal 0.25 Hz across it and is refused, 32 Hz inside is allowed;
+    /// PSK63 the same at 62 and 63 Hz. The centre itself is inside in every case, so each refusal
+    /// is the width's. Comfortably inside, both are allowed, and the frequency a contact logs is
+    /// still the netted centre.
+    #[test]
+    fn psk_is_judged_across_its_occupied_width_at_both_edges_on_both_sides() {
+        let (general, kb) = (LicenseClass::General, OperatingMode::Keyboard);
+        let (bottom, top) = DATA_20M;
+        for (mode, baud, inside, across) in PSK_WIDTHS {
+            let mut e = psk_station(mode);
+            assert_eq!(e.psk_mode().0.baud(), baud, "precondition: {mode:?}'s rate");
+            assert_eq!(e.psk_center_hz(), 1_000.0, "precondition: the centre");
+            for (centre, want, at) in [
+                (top - inside / 1e6, true, "just inside the top"),
+                (top - across / 1e6, false, "across the top"),
+                (bottom + inside / 1e6, true, "just inside the bottom"),
+                (bottom + across / 1e6, false, "across the bottom"),
+            ] {
+                assert!(
+                    crate::privileges::tx_allowed(general, centre, kb),
+                    "precondition, {mode:?} {at}: the centre {centre:.6} itself is inside"
+                );
+                for (word, dial) in [("PKTUSB", centre - 0.001), ("PKTLSB", centre + 0.001)] {
+                    assert_eq!(
+                        e.keyboard_emission_allowed(dial, word),
+                        want,
+                        "{mode:?} {at}, centre {centre:.6}, {word} dial {dial:.6}"
+                    );
+                }
+                // The section's own USB side, end to end through the gate the cockpit reads.
+                let dial = centre - 0.001;
+                assert_eq!(
+                    e.psk_emission_ok(dial),
+                    want,
+                    "{mode:?} {at}: USB convention"
+                );
+                e.set_frequency(dial, "20m", "USB");
+                assert_eq!(
+                    e.tx_mode_effective(),
+                    "PKTUSB",
+                    "precondition, {mode:?} {at}"
+                );
+                assert_eq!(
+                    e.tx_allowed(),
+                    want,
+                    "{mode:?} {at}: tx_allowed, dial {dial:.6}"
+                );
+            }
+
+            // Comfortably inside: unchanged, on either side.
+            e.set_frequency(14.070, "20m", "USB");
+            assert!(e.tx_allowed(), "{mode:?}: 14.071 is well inside");
+            assert!(
+                e.keyboard_emission_allowed(14.072, "PKTLSB"),
+                "{mode:?}: LSB inside"
+            );
+
+            // The gate judges the centre ± one baud; the logged frequency is still the netted
+            // centre, not the gate's widened low edge.
+            let half = f64::from(baud);
+            assert_eq!(
+                e.keyboard_emission_span_hz(),
+                (1_000.0 - half, 1_000.0 + half),
+                "{mode:?}: the gate judges the centre ± one baud"
+            );
+            assert_eq!(
+                e.keyboard_span_hz(),
+                (1_000.0, 1_000.0),
+                "{mode:?}: the signal's own span is the centre"
+            );
+            assert_eq!(
+                e.logged_signal_offset(),
+                (0.001, false),
+                "{mode:?}: a contact logs dial + the netted centre"
+            );
+        }
+    }
+
+    /// ⛔ A PSK SIGNAL WHOSE WIDTH CROSSES AN EDGE NEVER REACHES PTT, AND A REFUSAL NEVER ARMS THE
+    /// LATCH. Netted 31 Hz (PSK31) or 62 Hz (PSK63) under the top of a General's 20 m data, a send
+    /// is refused up front with nothing queued for the radio loop to key, and continuous TX stays
+    /// down. An over queued just inside, then netted 1 Hz up into that width, is dropped at the
+    /// poll — the last step before the loop keys — instead of keyed. The control: just inside,
+    /// both key.
+    #[test]
+    fn a_psk_signal_across_an_edge_is_refused_before_ptt_and_never_latches() {
+        let top = DATA_20M.1;
+        for (mode, _, inside, across) in PSK_WIDTHS {
+            let mut e = psk_station(mode);
+            assert!(e.tx_enabled, "precondition, {mode:?}: TX is armed");
+            e.set_frequency(top - across / 1e6 - 0.001, "20m", "USB");
+            assert!(
+                !e.tx_allowed(),
+                "{mode:?}: netted {across} Hz under the top, the signal crosses it"
+            );
+            let err = e.psk_send_text("cq cq").unwrap_err();
+            assert!(
+                err.contains("outside your license privileges"),
+                "{mode:?}: the send says why: {err}"
+            );
+            assert!(e.psk_queue.is_empty(), "{mode:?}: nothing queued");
+            assert_eq!(
+                e.poll_psk_one(),
+                None,
+                "{mode:?}: nothing for the loop to key"
+            );
+            assert!(
+                e.set_psk_latched(true).is_err(),
+                "{mode:?}: the latch is refused"
+            );
+            assert!(!e.psk_latched(), "{mode:?}: a refusal never arms the latch");
+            assert!(
+                e.psk_type("cq").is_err(),
+                "{mode:?}: no typing into a latch that is down"
+            );
+
+            // Control: just inside, a send keys and the latch arms.
+            e.set_frequency(top - inside / 1e6 - 0.001, "20m", "USB");
+            assert!(e.tx_allowed(), "control, {mode:?}: just inside the top");
+            e.psk_send_text("cq cq").unwrap();
+            assert_eq!(
+                e.poll_psk_one().as_deref(),
+                Some("cq cq"),
+                "control, {mode:?}"
+            );
+            e.set_psk_latched(true).unwrap();
+            assert!(e.psk_latched(), "control, {mode:?}: the latch arms");
+            e.psk_stop();
+
+            // Queued just inside, then netted 1 Hz up: the width is across, the over drops.
+            e.psk_send_text("de w9xyz").unwrap();
+            e.psk_net(1_000.0 + (inside - across) as f32);
+            assert!(
+                !e.tx_allowed(),
+                "precondition, {mode:?}: netted across the top"
+            );
+            assert_eq!(
+                e.poll_psk_one(),
+                None,
+                "{mode:?}: the netted-up over never keys"
+            );
+            assert_eq!(
+                e.psk_state().keyer_error.as_deref(),
+                Some(PSK_REFUSED_PRIVILEGES),
+                "{mode:?}: the cockpit says it was dropped"
+            );
+        }
+    }
+
+    /// ⛔ A LATCHED STREAM NETTED INTO THE WIDTH IS DROPPED ON ITS NEXT TICK. Continuous TX up just
+    /// inside the top of a General's 20 m data, then the waterfall netted 1 Hz up so the edge is
+    /// inside the signal's width: the next stream tick ([`Engine::poll_psk_stream`], the only path
+    /// from the latch to the transmitter) hands the loop nothing to send, drops the latch with
+    /// what was typed, and raises the abort that flushes the audio and releases PTT.
+    #[test]
+    fn a_latched_psk_stream_netted_into_the_width_is_dropped() {
+        let top = DATA_20M.1;
+        for (mode, _, inside, across) in PSK_WIDTHS {
+            let mut e = psk_station(mode);
+            e.set_frequency(top - inside / 1e6 - 0.001, "20m", "USB");
+            assert!(
+                e.tx_allowed(),
+                "precondition, {mode:?}: just inside the top"
+            );
+            e.set_psk_latched(true).unwrap();
+            assert_eq!(
+                e.poll_psk_stream(2),
+                PskStreamTick::Diddle,
+                "control, {mode:?}: the latched stream runs just inside"
+            );
+            e.psk_type("cq cq").unwrap();
+            e.psk_net(1_000.0 + (inside - across) as f32);
+            assert!(
+                !e.tx_allowed(),
+                "precondition, {mode:?}: netted across the top"
+            );
+            assert_eq!(
+                e.poll_psk_stream(2),
+                PskStreamTick::Idle,
+                "{mode:?}: nothing more is keyed once the width is across"
+            );
+            assert!(!e.psk_latched(), "{mode:?}: the latch is dropped");
+            assert!(
+                e.take_psk_abort(),
+                "{mode:?}: the loop is told to flush and unkey"
+            );
+            assert_eq!(
+                e.poll_psk_stream(2),
+                PskStreamTick::Idle,
+                "{mode:?}: what was typed never keys"
+            );
+        }
     }
 
     /// ⛔ THE INVARIANT FOR KEYBOARD AND RTTY: knowing the commanded side only ever refuses MORE,

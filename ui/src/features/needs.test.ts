@@ -793,7 +793,7 @@ describe('a row opens the screen of its own mode', () => {
   it('opens the PSK screen on the row’s own sub-mode only where the screen has it', () => {
     expect(pskSubmode(row('PSK31'))).toBe('psk31')
     expect(pskSubmode(row('QPSK31'))).toBe('qpsk31')
-    expect(pskSubmode(row('PSK63'))).toBeNull()
+    expect(pskSubmode(row('PSK63'))).toBe('psk63')
     expect(pskSubmode(row('PSK125'))).toBeNull()
   })
 

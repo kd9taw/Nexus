@@ -60,6 +60,8 @@ export const DURABLE_KEYS: readonly string[] = [
   'nexus.dxped.chasing',
   'nexus.sats.alarms',
   'nexus.sats.alarms.fired',
+  // The transponder picked last on each bird, and its ★ favorite (features/satTransponderPref).
+  'nexus.sats.transponders',
   'nexus.dxped.alarms',
   'nexus.dxped.alarms.fired',
   'nexus.profiles',
@@ -118,6 +120,7 @@ export const STATION_KEYS: readonly string[] = [
   'nexus.sats.alarms',
   'nexus.sats.alarms.fired',
   'nexus.sats.chasing',
+  'nexus.sats.transponders',
   'nexus.watchlist',
 ]
 

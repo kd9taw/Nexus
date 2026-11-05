@@ -243,6 +243,20 @@ mod tests {
     }
 
     #[test]
+    fn schedule_at_50_baud_keys_20_ms_bits_and_150_ms_characters() {
+        // The true-FSK keyline at 50 Bd: a 20 ms bit, the 1.5-bit stop 30 ms, a character
+        // 150 ms — and the 100th character exactly on 100 × 150 ms.
+        let s = fsk_schedule(&[false; 5], 50.0);
+        assert!(
+            (s.events[1].0 - 120.0).abs() < 1e-9,
+            "start + 5 data = 6 × 20 ms"
+        );
+        assert!((s.total_ms - 150.0).abs() < 1e-9);
+        let s = fsk_schedule(&[true; 500], 50.0);
+        assert!((s.total_ms - 100.0 * 150.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn schedule_empty_stream_is_silent() {
         let s = fsk_schedule(&[], BAUD_45);
         assert!(s.events.is_empty());

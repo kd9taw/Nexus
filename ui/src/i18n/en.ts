@@ -1610,6 +1610,15 @@ export const EN = {
   'logbook.lotw.upload.label': 'Upload to LoTW',
   'logbook.lotw.upload.labelCount': 'Upload to LoTW ({{count}})',
   'logbook.lotw.upload.busy': 'Uploading…',
+  // #163: the one-click corrected re-upload of past satellite QSOs. LoTW, TQSL, QSO and the band
+  // names are invariant tokens.
+  'logbook.lotw.satFix.label': 'Fix satellite uploads ({{count}})',
+  'logbook.lotw.satFix.title':
+    'These satellite QSOs went to LoTW with the downlink band, from before Nexus logged the uplink, so LoTW cannot match them. Click to re-upload them corrected.',
+  'logbook.lotw.satFix.confirm.title': 'Re-upload satellite QSOs to LoTW?',
+  'logbook.lotw.satFix.confirm.body':
+    'Satellite QSOs to correct: {{count}}. They went to LoTW with the downlink band, and LoTW matches a satellite QSO on the uplink band, so they cannot confirm. Nexus fills in each satellite’s uplink and uploads a corrected copy through TQSL. LoTW keeps the old record, which matches nothing and does no harm.',
+  'logbook.lotw.satFix.confirm.label': 'Re-upload corrected',
   'logbook.lotw.upload.title':
     'Sign + upload your un-uploaded QSOs to LoTW via TQSL (set your Station Location in Settings)',
   // A second statement appended to the title above, with its own count — see the import
@@ -2052,6 +2061,8 @@ export const EN = {
   'logbook.upload.waiting': 'Sent, no answer yet',
   'logbook.upload.failed': 'Refused',
   'logbook.upload.none': 'Not uploaded',
+  // #163: a satellite contact the one-click LoTW fix corrected and has not sent yet.
+  'logbook.upload.resend': 'Corrected, not sent yet',
   'logbook.upload.title': '{{state}}, {{date}}',
   'logbook.field.iota.label': 'IOTA',
   'logbook.field.iota.title':
@@ -7086,6 +7097,12 @@ export const EN = {
   // invariant token and `bd` is read off the catalog the way MHz is: the same in every language.
   'sat.transponder.baud': '{{baud}} bd',
   'sat.transponder.auto': 'picked for you — change it here if this is not the one',
+  'sat.transponder.fav.aria': 'Favorite transponder: {{description}}',
+  'sat.transponder.fav.on.title': 'Your favorite on this bird: “Work this pass” picks it first. Click to clear the star.',
+  'sat.transponder.fav.off.title': 'Make this your favorite on this bird: “Work this pass” picks it first. Starring does not tune the radio.',
+  'sat.transponder.last': 'last used',
+  'sat.transponder.last.title': 'The one you picked last time on this bird. “Work this pass” picks it unless you star a favorite.',
+  'sat.transponder.pref.gone': '“{{label}}”, the transponder you saved for this bird, is not listed as working now. “Work this pass” picks the usual one.',
   'sat.transponder.showAll': 'show all {{count}} ▾',
   'sat.transponder.showAll.title': 'Show every workable transmitter SatNOGS lists for this bird',
   'sat.transponder.dead': 'reported dead (SatNOGS) — not workable',
@@ -9801,12 +9818,16 @@ export const EN = {
   'settings.rtty.signal.title': 'Signal',
   'settings.rtty.baud.label': 'Baud rate',
   'settings.rtty.baud.hf': '45.45 — the HF standard',
+  'settings.rtty.baud.eu': '50 — used in parts of Europe',
   'settings.rtty.baud.vhf': '75 — VHF / some nets',
   'settings.rtty.baud.hint':
     'Drives the TX bit clock and the RX demodulator (true 45.45, never rounded to 45).',
   'settings.rtty.shift.label': 'Shift (Hz)',
   'settings.rtty.shift.hf': '170 — the HF standard',
   'settings.rtty.shift.hint': 'Mark/space spacing — the TX tone pair and the RX demodulator both.',
+  'settings.rtty.lowTone.label': 'Low tone (Hz)',
+  'settings.rtty.lowTone.hint':
+    'Where the decoder and the AFSK transmitter sit until you click the waterfall: this tone, and this plus the shift. 2125 gives the standard 2125/2295; 1275 gives 1275/1445. A waterfall click still moves both for the session; changing this moves them back here.',
   'settings.rtty.reverse.label': 'Reverse (swap mark/space)',
   'settings.rtty.reverse.hint':
     'Swaps mark and space on TX and in the RX decoder, to work a station sending upside down. Not for running USB: pick the AFSK sideband instead, which keeps the sense right on its own.',
@@ -10099,6 +10120,9 @@ export const EN = {
   'settings.sstv.rxAutoArm.label': 'Start receiving when SSTV opens',
   'settings.sstv.rxAutoArm.hint':
     'The SSTV screen starts the decoder as soon as you open it, so a picture on the band decodes without arming anything. Turn this off to arm the receiver by hand (the Arm button in the SSTV header). Stopping the receiver yourself is already remembered for the rest of the session.',
+  'settings.sstv.tuneOnOpen.label': 'Tune to the band’s SSTV frequency when SSTV opens',
+  'settings.sstv.tuneOnOpen.hint':
+    'Opening the SSTV screen tunes the radio to the SSTV calling frequency of the band you are on, or to {{freq}} on {{band}} from an HF band that has none. The dial stays where it is when it is already on an SSTV frequency, while you transmit, and on a VHF or UHF band that has none. With this off, the screen leaves the dial alone, and the band picker in its header tunes to any SSTV frequency.',
   'settings.sstv.issAutoArm.label': 'ISS SSTV auto-arm',
   'settings.sstv.issAutoArm.hint':
     "Auto-arm SSTV for ISS passes — tunes {{freq}} FM and arms the decoder when the ISS is overhead while the SSTV or Satellites screen is open, restores your dial at LOS. On any other screen it only tells you the ISS is up and leaves your radio alone. If your radio can't receive {{freq}} MHz, it tells you once a session and does nothing else. Off by default. A pass arm is an explicit act, so it works whether or not the switch above is on.",
@@ -12800,6 +12824,8 @@ export const EN = {
   'js8.header.power.label': 'Drive',
   'js8.header.power.title':
     'TX audio drive — set it so the rig’s ALC barely moves; JS8 is a constant-envelope mode, but an overdriven sound card still splatters',
+  'js8.header.txOffset.held':
+    'The TX offset stays put while a message waits to go or goes out, as in JS8Call. To move it while sending, turn on Settings ▸ Digital ▸ JS8 ▸ Allow TX offset changes while sending.',
   'js8.header.speed.title': 'JS8 — JS8Call-compatible keyboard mode on FT8’s waveform',
   'js8.header.speed.aria': 'Transmit speed',
   'js8.header.speed.chip.title':
@@ -13622,14 +13648,12 @@ export const EN = {
   'cw.rigScope.aria': 'Rig scope control',
   'cw.rigScope.label': 'Rig\u00a0scope',
   'cw.rigScope.title': "These command the radio's own scope, not just the on-screen zoom",
-  'cw.rigScope.span.title': "Set the radio's scope span to {{span}}",
   'cw.rigScope.ref.title': 'Scope reference level — lower to lift weak signals out of the noise',
   'cw.rigScope.ref.aria': 'Scope reference level (dB)',
   'cw.flexPan.aria': 'Flex panadapter control',
   'cw.flexPan.label': 'Flex\u00a0pan',
   'cw.flexPan.title':
     "These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom",
-  'cw.flexPan.span.title': 'Set the Flex panadapter bandwidth to {{span}}',
   'cw.flexPan.ref.title':
     'Panadapter reference level (dBm) — lower to lift weak signals out of the noise',
   'cw.flexPan.ref.aria': 'Flex panadapter reference level (dBm)',
@@ -14094,7 +14118,6 @@ export const EN = {
   'phone.rigScope.aria': 'Rig scope control',
   'phone.rigScope.label': 'Rig\u00a0scope',
   'phone.rigScope.title': "These command the radio's own scope, not just the on-screen zoom",
-  'phone.rigScope.span.title': "Set the radio's scope span to {{span}}",
   'phone.rigScope.ref.title':
     'Scope reference level — lower to lift weak signals out of the noise',
   'phone.rigScope.ref.aria': 'Scope reference level (dB)',
@@ -14102,7 +14125,6 @@ export const EN = {
   'phone.flexPan.label': 'Flex\u00a0pan',
   'phone.flexPan.title':
     "These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom",
-  'phone.flexPan.span.title': 'Set the Flex panadapter bandwidth to {{span}}',
   'phone.flexPan.ref.title':
     'Panadapter reference level (dBm) — lower to lift weak signals out of the noise',
   'phone.flexPan.ref.aria': 'Flex panadapter reference level (dBm)',
@@ -15002,6 +15024,16 @@ export const EN = {
   // the chip it shows while the radio sends it no panadapter.
   'rfScope.title': 'RF scope',
   'scope.rf.none': 'No scope data from the radio',
+  // The CW and Phone scope head's view chip (components/ScopeViewChips): the radio's own scope, the
+  // sound-card audio, or (CW) both stacked. And the hint shown while the radio's scope sweeps slowly.
+  'scope.view.aria': 'What the scope shows',
+  'scope.view.rf.label': 'RF',
+  'scope.view.rf.title': "The radio's own scope: the band around your dial",
+  'scope.view.audio.label': 'Audio',
+  'scope.view.audio.title': "The sound-card audio: what came through the radio's filter, in fine detail",
+  'scope.view.both.label': 'Both',
+  'scope.view.both.title': "The radio's scope for the band, with the audio view under it for the detail inside the filter",
+  'scope.slow.hint': "Set the radio's scope SPEED to FAST for a smoother scope",
   // The scope's ⚙ strip (`spectrum/ScaleStrip.tsx`). The window widths (47/23/12 Hz) and the
   // averaging times (50 ms … 2 s) are measurements and stay in the component.
   'scope.strip.aria': 'Scope display settings',

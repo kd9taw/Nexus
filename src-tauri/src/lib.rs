@@ -132,6 +132,8 @@ mod remote_service;
 /// The Stations on this network window: the Connect to my station… window, on the PC an operator
 /// works from (Windows only). The page in it reaches no command — see the module header.
 mod remote_window;
+#[cfg(test)]
+mod sat_fix_tests;
 /// "Spot me": the operator's own activation to pota.app and the DX cluster, for the desktop and
 /// the Remote page alike.
 mod self_spot;
@@ -16427,7 +16429,9 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
         // from the controller, so it is no evidence the controller is there.
         if rotor_lost && driver.reprobe_due() {
             if let Some(a) = addr.as_deref() {
-                if tempo_audio::rotator::read_position(a).is_ok() {
+                // Shared with the polls (`latest_position`): a pane poll already in flight
+                // answers this too, rather than a second read queueing behind it.
+                if tempo_audio::rotator::latest_position(a).is_ok() {
                     driver.answered();
                     lag = tempo_core::rotator::LagWatch::default();
                     rotor_lost = false;
@@ -16649,11 +16653,14 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
         // while the antenna stays put, and every surface in the app was drawing the commanded
         // pair. The rule is "far AND not moving", never "far" — a legitimate slew to AOS is
         // 180° of gap and takes a G-5500 half a minute (`LagWatch`). Once per episode, to the
-        // connection log, which is where support asks the operator to look.
+        // connection log, which is where support asks the operator to look. A read that leaves
+        // AFTER the `P` (`fresh_position`): a poll already in flight may have left before it, so
+        // it is waited for, never taken.
         if outcome != RotOutcome::Failed {
-            if let (Some((caz, _)), Ok((meas_az, _))) =
-                (driver.last_cmd(), tempo_audio::rotator::read_position(addr))
-            {
+            if let (Some((caz, _)), Ok((meas_az, _))) = (
+                driver.last_cmd(),
+                tempo_audio::rotator::fresh_position(addr),
+            ) {
                 if let Some(gap) = lag.observe(caz, meas_az) {
                     conn_log(
                         "Rotator",
@@ -17175,7 +17182,9 @@ fn run_moon_track(run: MoonRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()) {
             return; // a newer owner, or a Stop: it halts the mast itself
         }
         let t = clock();
-        if rotor_lost && driver.reprobe_due() && tempo_audio::rotator::read_position(&addr).is_ok()
+        if rotor_lost
+            && driver.reprobe_due()
+            && tempo_audio::rotator::latest_position(&addr).is_ok()
         {
             driver.answered();
             rotor_lost = false;
@@ -17722,6 +17731,10 @@ fn get_scope_row(
 /// native panadapter row: the standing request an IQ panadapter zooms its rows to
 /// (`SpectrumFeed::request_rf_view`). Absent from an older UI or a Remote page, and then nothing
 /// is asked.
+///
+/// `audio_only` is the AUDIO VIEW the CW and Phone cockpits draw under the radio's own scope
+/// (`SpectrumFeed::audio_scope_frame_after`): the audio row over the window, never the RF row,
+/// whose own pane reads `get_rf_frame`. Absent or false, the read is the rig scope's, as before.
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
 fn get_scope_frame(
@@ -17731,6 +17744,7 @@ fn get_scope_frame(
     last_seq: u64,
     rf_lo_hz: Option<f64>,
     rf_hi_hz: Option<f64>,
+    audio_only: Option<bool>,
     feed: State<'_, tempo_app::engine::SpectrumFeed>,
     state: State<'_, SharedEngine>,
 ) -> Result<Option<tempo_app::dto::SpectrumFrame>, String> {
@@ -17742,6 +17756,11 @@ fn get_scope_frame(
         .as_deref()
         .and_then(tempo_core::spectrum::ScopeAnalysis::from_tag)
         .unwrap_or_default();
+    if audio_only == Some(true) {
+        return Ok(
+            feed.audio_scope_frame_after(lo_hz, hi_hz, win, last_seq, || spectrum_fallback(&state))
+        );
+    }
     Ok(feed.scope_frame_after(lo_hz, hi_hz, win, last_seq, || spectrum_fallback(&state)))
 }
 
@@ -19243,6 +19262,50 @@ mod contest_session_tests {
                 Some(serde_json::json!("1.5"))
             ),
             "CONTROL: at the station"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ THE TRANSPONDER CHOSEN ON EACH SATELLITE IS THE STATION'S, AND GOES WITH ITS BACKUP: the
+    /// last pick and the ★ favorite per bird (`nexus.sats.transponders`, the UI's
+    /// satTransponderPref) are in a backup made from afar, and restoring that backup lands the
+    /// backup's choice over the station's current one, as the ★ birds beside it do. CONTROL: made
+    /// at the station, it goes too.
+    #[test]
+    fn the_transponder_choices_go_with_a_backup_made_from_afar() {
+        const KEY: &str = "nexus.sats.transponders";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("bundle-sat-tp", 0);
+        let mut ui = with_station_keys_set(&engine, "PLANTED");
+        ui.insert(KEY.into(), r#"{"ISS":{"fav":{"up":145990000}}}"#.into());
+        let carried = |afar| {
+            let text = settings_bundle(&engine, ui.clone(), afar).unwrap();
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            (text, v["uiState"].get(KEY).cloned())
+        };
+        let (afar, from_afar) = carried(Some(&FROM_AFAR));
+        assert_eq!(
+            from_afar,
+            Some(serde_json::json!(r#"{"ISS":{"fav":{"up":145990000}}}"#))
+        );
+        assert_eq!(carried(None).1, from_afar, "CONTROL: at the station");
+        let mut station_ui = std::collections::BTreeMap::new();
+        station_ui.insert(KEY.to_string(), r#"{"ISS":{"last":{"up":1}}}"#.to_string());
+        let mut saved = None;
+        restore_settings_bundle(
+            &engine,
+            afar,
+            || station_ui,
+            |ui| {
+                saved = Some(ui);
+                true
+            },
+            no_key_change,
+        )
+        .unwrap();
+        assert_eq!(
+            saved.unwrap().get(KEY).map(String::as_str),
+            Some(r#"{"ISS":{"fav":{"up":145990000}}}"#),
+            "the backup's choice lands"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -23817,11 +23880,14 @@ struct RotctldOwner {
     /// starts and stops being used and is quiet otherwise. That rotctld is not Nexus's process,
     /// so these two lines are its whole lifecycle as far as this log can see.
     external: Option<String>,
+    /// The restarts of a running rotctld whose network link is stuck ([`StuckLink`]).
+    stuck: StuckLink,
 }
 static ROTCTLD: Mutex<RotctldOwner> = Mutex::new(RotctldOwner {
     daemon: None,
     failing: None,
     external: None,
+    stuck: StuckLink::new(),
 });
 
 /// What one reconcile of the integrated rotctld did — so the supervisor's rules can be held to
@@ -23952,8 +24018,9 @@ fn supervise_rotctld(engine: SharedEngine) {
     }
 }
 
-/// One supervisor tick: reconcile only when a daemon is wanted and is not running, so a healthy
-/// daemon costs one lock and one `try_wait`. `None` when there was nothing to do.
+/// One supervisor tick: reconcile when a daemon is wanted and is not running, and restart a
+/// running one whose network link is stuck ([`restart_if_stuck`]), so a healthy daemon costs one
+/// lock, one `try_wait` and one look at a counter. `None` when there was nothing to do.
 fn rotctld_tick(
     owner: &mut RotctldOwner,
     st: &Settings,
@@ -23964,7 +24031,181 @@ fn rotctld_tick(
         .daemon
         .as_mut()
         .is_some_and(|(proc, _)| proc.is_alive());
-    (want && !running).then(|| reconcile_rotctld(owner, st, spawn))
+    if want && running {
+        return restart_if_stuck(
+            owner,
+            st,
+            spawn,
+            std::time::Instant::now(),
+            tempo_audio::rotator::controller_streak,
+        );
+    }
+    owner.stuck = StuckLink::new();
+    want.then(|| reconcile_rotctld(owner, st, spawn))
+}
+
+/// Answers in a row of `RPRT -6` from the integrated rotctld that make its network link stuck
+/// ([`StuckLink`]): three polls, about six seconds with a Rotor box open. `RPRT -5` never counts
+/// (`tempo_audio::rotator::controller_streak` says why).
+const STUCK_AFTER: u32 = 3;
+/// The wait after a restart of a stuck rotctld before the next one, doubling each time it is still
+/// stuck, up to [`STUCK_RETRY_MAX`].
+const STUCK_RETRY_FIRST: std::time::Duration = std::time::Duration::from_secs(30);
+const STUCK_RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Restarts of a running integrated rotctld whose link to a network Port box is stuck.
+///
+/// ⭐ **Hamlib never reconnects a network port** (2026-11-04, rotators reached over the internet).
+/// With `a.b.c.d:port` in the Port box (a serial server, or a controller's own network port)
+/// rotctld opens that TCP connection once, when it opens the rotator. When a NAT, the ISP or the
+/// serial server drops it, rotctld stays up and answers every command `RPRT -6` (measured on
+/// rotctld 4.6.5), and the supervisor, which restarted only a rotctld that had EXITED, left it
+/// there until Nexus was restarted. A new rotctld opens a new connection.
+///
+/// The rules, pure with the clock passed in: the first restart after [`STUCK_AFTER`] answers in a
+/// row; another one only after [`STUCK_RETRY_FIRST`], doubling to [`STUCK_RETRY_MAX`], so a far end
+/// that accepts the connection and drops it again costs a restart every five minutes, not one per
+/// tick; and the episode ends at the first good answer. A controller that is merely switched off
+/// is never restarted for: rotctld answers it `RPRT -5`, which does not count.
+///
+/// ⚠️ **The backoff only covers a new rotctld that CONNECTS.** One whose far end refuses the
+/// connection exits at once, and one whose far end drops everything sits in `connect` until the
+/// computer's TCP gives up (measured: about 134 s on Linux) and then exits. Either way the dead
+/// daemon is the supervisor's ordinary business ([`ROTCTLD_RETRY`]), and this episode is over.
+#[derive(Debug, Default)]
+struct StuckLink {
+    /// Restarts this episode, and when the last one was.
+    restarts: u32,
+    last: Option<std::time::Instant>,
+}
+
+/// What [`StuckLink::decide`] says to do.
+#[derive(Debug, PartialEq, Eq)]
+enum StuckCall {
+    Wait,
+    /// Restart rotctld; `first` is the episode's first restart (the one the log says).
+    Restart {
+        first: bool,
+    },
+    /// The link answers again after this many restarts (said once).
+    Recovered {
+        restarts: u32,
+    },
+}
+
+impl StuckLink {
+    const fn new() -> Self {
+        StuckLink {
+            restarts: 0,
+            last: None,
+        }
+    }
+
+    /// `streak` is [`tempo_audio::rotator::controller_streak`] for the integrated rotctld.
+    fn decide(&mut self, streak: Option<u32>, now: std::time::Instant) -> StuckCall {
+        match streak {
+            Some(0) if self.restarts > 0 => {
+                let restarts = self.restarts;
+                *self = StuckLink::new();
+                StuckCall::Recovered { restarts }
+            }
+            Some(n) if n >= STUCK_AFTER => {
+                let wait = STUCK_RETRY_FIRST
+                    .saturating_mul(1 << self.restarts.saturating_sub(1).min(8))
+                    .min(STUCK_RETRY_MAX);
+                if self.last.is_some_and(|t| now.duration_since(t) < wait) {
+                    return StuckCall::Wait;
+                }
+                self.restarts += 1;
+                self.last = Some(now);
+                StuckCall::Restart {
+                    first: self.restarts == 1,
+                }
+            }
+            _ => StuckCall::Wait,
+        }
+    }
+}
+
+/// Is the rotator's Port box an address Hamlib opens as a TCP connection rather than a serial
+/// port? Hamlib does that only for a literal IPv4 address and a port number (`a.b.c.d:port`); a
+/// host name is taken as a serial device, and rotctld exits on it, which the supervisor already
+/// handles.
+fn network_port(port: &str) -> bool {
+    port.trim().rsplit_once(':').is_some_and(|(host, number)| {
+        host.parse::<std::net::Ipv4Addr>().is_ok() && number.parse::<u16>().is_ok()
+    })
+}
+
+/// Restart the running integrated rotctld when its link to a network Port box is stuck
+/// ([`StuckLink`]). `streak` is asked for the daemon's address: in the app,
+/// `tempo_audio::rotator::controller_streak`.
+///
+/// Only Hamlib's own rotctld, and only one whose Port box is a network address: both read from the
+/// RUNNING daemon and the params it was started with, not from settings that may have been edited
+/// since. A serial port does not get stuck the way a TCP connection does, and the PstRotatorAz
+/// link is Nexus's own, holds no connection, and keeps its UDP target in the same Port box.
+fn restart_if_stuck(
+    owner: &mut RotctldOwner,
+    st: &Settings,
+    spawn: impl FnOnce(u32, &str, u32, u16) -> std::io::Result<RotDaemon>,
+    now: std::time::Instant,
+    streak: impl FnOnce(&str) -> Option<u32>,
+) -> Option<RotctldSync> {
+    let (daemon, params) = owner.daemon.as_ref()?;
+    let hamlib = matches!(daemon, RotDaemon::Hamlib(_));
+    let (port, addr) = (params.1.clone(), format!("127.0.0.1:{}", params.3));
+    if !(hamlib && network_port(&port)) {
+        owner.stuck = StuckLink::new();
+        return None;
+    }
+    match owner.stuck.decide(streak(&addr), now) {
+        StuckCall::Wait => None,
+        StuckCall::Recovered { restarts } => {
+            let (screen, diag) = rotctld_reconnect_lines(&port, Some(restarts));
+            tempo_core::applog::info("rotator", &diag);
+            conn_log("Rotator", "info", screen);
+            None
+        }
+        StuckCall::Restart { first } => {
+            if first {
+                let (screen, diag) = rotctld_reconnect_lines(&port, None);
+                tempo_core::applog::warn("rotator", &diag);
+                conn_log("Rotator", "warn", screen);
+            }
+            owner.daemon = None; // kill-on-drop
+            tempo_audio::rotator::forget_controller(&addr);
+            Some(reconcile_rotctld(owner, st, spawn))
+        }
+    }
+}
+
+/// The two copies of the stuck-link lines for the Port box `port`: the first restart of an episode
+/// (`restarts` `None`) and the link answering again after `restarts` restarts. The Connections
+/// log's, verbatim, and the diagnostic log's, with the host masked
+/// (`tempo_audio::rotator::mask_port`). Pure, so the wording and the masking are tests.
+fn rotctld_reconnect_lines(port: &str, restarts: Option<u32>) -> (String, String) {
+    let port = port.trim();
+    let screen = match restarts {
+        None => format!(
+            "rotctld lost its network connection to the rotator at {port}: it answered {} \
+             commands in a row with an I/O error, and Hamlib does not connect again on its own, \
+             so Nexus is restarting rotctld. If the new rotctld connects and the connection \
+             fails again, Nexus restarts it after {} s, then at longer and longer intervals, up \
+             to {} minutes apart. If it cannot connect at all, it stops, and Nexus starts it \
+             again as it does any rotctld that stops (it checks every {} s).",
+            STUCK_AFTER,
+            STUCK_RETRY_FIRST.as_secs(),
+            STUCK_RETRY_MAX.as_secs() / 60,
+            ROTCTLD_RETRY.as_secs()
+        ),
+        Some(n) => format!(
+            "rotctld is talking to the rotator at {port} again, after {n} restart{}.",
+            if n == 1 { "" } else { "s" }
+        ),
+    };
+    let diag = tempo_audio::rotator::mask_port(&screen, port);
+    (screen, diag)
 }
 
 fn sync_rotctld_owned(owner: &mut RotctldOwner, st: &Settings) -> RotctldSync {
@@ -24106,7 +24347,12 @@ fn reconcile_rotctld(
     // same reason the CAT daemon's rebuild is: while it is dead there is no rotator channel to
     // race, no motion is in flight (the mast stopped when the daemon did), and a fresh one is
     // the only route back. It cannot run away, either: a save, a radio switch and startup call
-    // this, and the supervisor calls it every ROTCTLD_RETRY only while the daemon is down.
+    // this, and the supervisor calls it every ROTCTLD_RETRY while the daemon is down. The one
+    // time the supervisor calls it with a daemon that was LIVE is [`restart_if_stuck`], which has
+    // already killed it: a rotctld whose network link answers only `RPRT -6`, so nothing it was
+    // sent could reach the controller anyway, and that restart is backed off ([`StuckLink`]). A
+    // `P` the controller took before the link dropped is a go-to that ends at its target; the
+    // kill sends the controller nothing.
     let running = g.as_mut().map(|(proc, p)| (*p == params, proc.is_alive()));
     match (running, want) {
         (Some((true, true)), true) => RotctldSync::Running, // running, with the right params
@@ -24292,6 +24538,7 @@ mod rotctld_supervisor_tests {
             daemon: None,
             failing: None,
             external: None,
+            stuck: StuckLink::new(),
         }
     }
 
@@ -24754,6 +25001,347 @@ mod rotctld_supervisor_tests {
         );
         let wire = serde_json::to_value(&busy).expect("json");
         assert_eq!(wire.get("elRange"), None, "{wire}");
+    }
+
+    /// A GS-232B controller on the network, as a serial server or the controller's own network
+    /// port gives one: it answers `C2` with its position on every connection it accepts, and
+    /// `drop_link` hangs up on every connection it holds (a NAT, the ISP or the serial server
+    /// dropping it) while it goes on listening.
+    struct NetworkController {
+        port: u16,
+        accepted: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        held: std::sync::Arc<Mutex<Vec<std::net::TcpStream>>>,
+    }
+
+    impl NetworkController {
+        fn start() -> NetworkController {
+            use std::io::{Read, Write};
+            use std::sync::atomic::Ordering;
+            let l = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+            let port = l.local_addr().expect("its port").port();
+            let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let held = std::sync::Arc::new(Mutex::new(Vec::<std::net::TcpStream>::new()));
+            let (count, keep) = (accepted.clone(), held.clone());
+            std::thread::spawn(move || {
+                for sock in l.incoming() {
+                    let Ok(mut sock) = sock else { return };
+                    count.fetch_add(1, Ordering::SeqCst);
+                    if let Ok(copy) = sock.try_clone() {
+                        keep.lock().expect("the held list").push(copy);
+                    }
+                    std::thread::spawn(move || {
+                        let mut pending = Vec::new();
+                        let mut buf = [0u8; 256];
+                        while let Ok(n) = sock.read(&mut buf) {
+                            if n == 0 {
+                                return;
+                            }
+                            pending.extend_from_slice(&buf[..n]);
+                            while let Some(end) = pending.iter().position(|&b| b == b'\r') {
+                                let cmd =
+                                    String::from_utf8_lossy(&pending[..end]).trim().to_string();
+                                pending.drain(..=end);
+                                if cmd == "C2" && sock.write_all(b"AZ=123  EL=045\r\n").is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+            NetworkController {
+                port,
+                accepted,
+                held,
+            }
+        }
+
+        fn drop_link(&self) {
+            for s in self.held.lock().expect("the held list").drain(..) {
+                let _ = s.shutdown(std::net::Shutdown::Both);
+            }
+        }
+
+        fn accepted(&self) -> usize {
+            self.accepted.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    fn free_port() -> u16 {
+        TcpListener::bind("127.0.0.1:0")
+            .expect("a loopback port")
+            .local_addr()
+            .expect("its port")
+            .port()
+    }
+
+    /// One guard case: `daemon` running as the integrated rotator daemon, recorded as started with
+    /// the Port box `port`, and three `RPRT -6` answers in a row. Whether the supervisor restarted
+    /// it, after checking that what it left alone is still there and that nothing was spawned.
+    fn restarted_for_a_stuck_link(daemon: RotDaemon, model: u32, port: &str, tcp: u16) -> bool {
+        let st = station(tcp, 1); // a restart starts Hamlib's dummy: no serial line needed
+        let mut owner = owner();
+        owner.daemon = Some((daemon, (model, port.to_string(), 9600, tcp)));
+        let spawned = Cell::new(0);
+        let spawn = |m: u32, p: &str, b: u32, t: u16| {
+            spawned.set(spawned.get() + 1);
+            spawn_rotator_daemon(m, p, b, t)
+        };
+        let streak = |addr: &str| {
+            assert_eq!(
+                addr,
+                format!("127.0.0.1:{tcp}"),
+                "the running daemon's address"
+            );
+            Some(STUCK_AFTER)
+        };
+        match restart_if_stuck(&mut owner, &st, spawn, std::time::Instant::now(), streak) {
+            None => {
+                assert_eq!(spawned.get(), 0, "{port}: nothing started");
+                let Some((left, params)) = owner.daemon.as_mut() else {
+                    panic!("{port}: the daemon was taken away");
+                };
+                assert!(left.is_alive(), "{port}: still running");
+                assert_eq!(params.1, port);
+                false
+            }
+            Some(sync) => {
+                assert_eq!(sync, RotctldSync::Started, "{port}");
+                assert_eq!(spawned.get(), 1, "{port}");
+                true
+            }
+        }
+    }
+
+    #[test]
+    fn a_rotctld_on_a_serial_port_is_never_restarted_for_io_errors() {
+        if !rotctld_here() {
+            return;
+        }
+        let hamlib = |tcp| {
+            RotDaemon::Hamlib(
+                tempo_audio::rigctld_proc::spawn_rotctld(1, "", 9600, tcp).expect("rotctld"),
+            )
+        };
+        // A serial port does not get stuck the way a TCP connection does: left alone.
+        for serial in ["COM5", "/dev/ttyUSB0"] {
+            let tcp = free_port();
+            assert!(!restarted_for_a_stuck_link(hamlib(tcp), 603, serial, tcp));
+        }
+        // The same daemon with an IPv4 address in the Port box is restarted.
+        let tcp = free_port();
+        assert!(restarted_for_a_stuck_link(
+            hamlib(tcp),
+            603,
+            "192.168.1.50:4001",
+            tcp
+        ));
+    }
+
+    #[test]
+    fn a_pstrotatoraz_link_is_never_restarted_for_io_errors() {
+        if !rotctld_here() {
+            return;
+        }
+        // Its UDP target sits in the same Port box, and is an IPv4 address and a port.
+        let (target, tcp, link) = (0..5)
+            .find_map(|_| {
+                let (udp, tcp) = (free_port(), free_port());
+                let target = format!("127.0.0.1:{udp}");
+                tempo_audio::pstrotator::PstRotatorLink::start(&target, tcp)
+                    .ok()
+                    .map(|link| (target, tcp, link))
+            })
+            .expect("a PstRotatorAz link on a free port pair");
+        assert!(
+            network_port(&target),
+            "the guard is the daemon's kind, not the box"
+        );
+        assert!(!restarted_for_a_stuck_link(
+            RotDaemon::PstRotator(link),
+            tempo_audio::pstrotator::MODEL,
+            &target,
+            tcp
+        ));
+        // Hamlib's rotctld with that same Port box is restarted.
+        let tcp = free_port();
+        let rotctld = tempo_audio::rigctld_proc::spawn_rotctld(1, "", 9600, tcp).expect("rotctld");
+        assert!(restarted_for_a_stuck_link(
+            RotDaemon::Hamlib(rotctld),
+            603,
+            &target,
+            tcp
+        ));
+    }
+
+    #[test]
+    fn the_diagnostic_copies_of_the_reconnect_lines_mask_a_network_port_box() {
+        for restarts in [None, Some(1), Some(3)] {
+            let (screen, diag) = rotctld_reconnect_lines(" 203.0.113.9:4001 ", restarts);
+            assert!(
+                screen.contains("203.0.113.9:4001"),
+                "the screen keeps it: {screen}"
+            );
+            assert!(!diag.contains("203.0.113.9"), "{diag}");
+            assert!(diag.contains("a network address:4001"), "{diag}");
+            // A string literal broken across lines without its `\` keeps the indentation.
+            assert!(!screen.contains("  "), "a run of spaces: {screen:?}");
+        }
+        assert!(rotctld_reconnect_lines("203.0.113.9:4001", Some(1))
+            .0
+            .ends_with("after 1 restart."));
+        assert!(rotctld_reconnect_lines("203.0.113.9:4001", Some(3))
+            .0
+            .ends_with("after 3 restarts."));
+    }
+
+    #[test]
+    fn a_stuck_link_is_restarted_after_three_answers_then_less_and_less_often() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let mut stuck = StuckLink::new();
+        // One or two are a slow link; nothing answered yet is no evidence.
+        assert_eq!(stuck.decide(Some(1), at(0)), StuckCall::Wait);
+        assert_eq!(stuck.decide(Some(2), at(5)), StuckCall::Wait);
+        assert_eq!(stuck.decide(None, at(10)), StuckCall::Wait);
+        assert_eq!(
+            stuck.decide(Some(3), at(10)),
+            StuckCall::Restart { first: true }
+        );
+        // Still stuck after the restart: 30 s, then 60 s, then 120 s…
+        assert_eq!(stuck.decide(Some(3), at(39)), StuckCall::Wait);
+        assert_eq!(
+            stuck.decide(Some(3), at(40)),
+            StuckCall::Restart { first: false }
+        );
+        assert_eq!(stuck.decide(Some(5), at(99)), StuckCall::Wait);
+        assert_eq!(
+            stuck.decide(Some(5), at(100)),
+            StuckCall::Restart { first: false }
+        );
+        assert_eq!(stuck.decide(Some(5), at(219)), StuckCall::Wait);
+        assert_eq!(
+            stuck.decide(Some(5), at(220)),
+            StuckCall::Restart { first: false }
+        );
+        assert_eq!(stuck.decide(Some(5), at(459)), StuckCall::Wait);
+        assert_eq!(
+            stuck.decide(Some(5), at(460)),
+            StuckCall::Restart { first: false }
+        );
+        // …and never more than five minutes apart.
+        let mut last = 460;
+        for _ in 0..6 {
+            last += 300;
+            assert_eq!(stuck.decide(Some(9), at(last - 1)), StuckCall::Wait);
+            assert_eq!(
+                stuck.decide(Some(9), at(last)),
+                StuckCall::Restart { first: false }
+            );
+        }
+        // The first good answer ends the episode, said once; the next drop is a new one.
+        assert_eq!(
+            stuck.decide(Some(0), at(last + 1)),
+            StuckCall::Recovered { restarts: 11 }
+        );
+        assert_eq!(stuck.decide(Some(0), at(last + 2)), StuckCall::Wait);
+        assert_eq!(
+            stuck.decide(Some(3), at(last + 3)),
+            StuckCall::Restart { first: true }
+        );
+    }
+
+    #[test]
+    fn only_an_ip_address_and_port_in_the_port_box_is_a_network_link() {
+        for net in ["192.168.1.50:4001", " 10.0.0.2:23 ", "127.0.0.1:4001"] {
+            assert!(network_port(net), "{net}");
+        }
+        // Serial ports, a host name (Hamlib takes it for a serial device, and rotctld exits),
+        // an address with no port, and IPv6, which Hamlib does not open as a network port.
+        for serial in [
+            "",
+            "COM5",
+            "/dev/ttyUSB0",
+            "\\\\.\\COM12",
+            "rotor.local:4001",
+            "192.168.1.50",
+            "192.168.1.50:",
+            "[::1]:4001",
+        ] {
+            assert!(!network_port(serial), "{serial}");
+        }
+    }
+
+    #[test]
+    fn a_rotctld_whose_network_link_dropped_is_restarted_and_reconnects() {
+        if !rotctld_here() {
+            return;
+        }
+        // Measured on rotctld 4.6.5: once the TCP connection under it is gone, rotctld stays up
+        // and answers every command `RPRT -6`, and never connects again. Only a new rotctld does.
+        let controller = NetworkController::start();
+        let spot = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let port = spot.local_addr().expect("its port").port();
+        drop(spot);
+        let mut st = station(port, 603);
+        st.rotator_port = format!("127.0.0.1:{}", controller.port);
+        st.rotator_baud = 9600;
+        let addr = format!("127.0.0.1:{port}");
+        let mut owner = owner();
+        assert_eq!(sync_rotctld_owned(&mut owner, &st), RotctldSync::Started);
+        let spawn = spawn_rotator_daemon;
+        assert_eq!(
+            tempo_audio::rotator::read_position(&addr)
+                .expect("a position")
+                .0,
+            123.0
+        );
+        // Healthy: the supervisor leaves it alone.
+        assert_eq!(rotctld_tick(&mut owner, &st, spawn), None);
+        assert_eq!(controller.accepted(), 1);
+
+        controller.drop_link();
+        for _ in 0..3 {
+            let e = tempo_audio::rotator::read_position(&addr).expect_err("the link is down");
+            assert!(e.to_string().contains("RPRT -6"), "{e}");
+        }
+        // The process is alive and stuck. The supervisor starts a new one, which connects again.
+        assert_eq!(
+            rotctld_tick(&mut owner, &st, spawn),
+            Some(RotctldSync::Started)
+        );
+        assert_eq!(
+            tempo_audio::rotator::controller_streak(&addr),
+            None,
+            "the new rotctld is counted afresh, not charged the old one's errors"
+        );
+        assert_eq!(
+            tempo_audio::rotator::read_position(&addr)
+                .expect("answering again")
+                .0,
+            123.0
+        );
+        assert_eq!(controller.accepted(), 2, "the new rotctld connected again");
+        // It answered, so the episode is over and the next tick leaves it alone.
+        assert_eq!(rotctld_tick(&mut owner, &st, spawn), None);
+        assert!(owner.stuck.last.is_none(), "the episode is over");
+
+        // Fewer than three I/O errors are a slow link, not a stuck one.
+        controller.drop_link();
+        for _ in 0..2 {
+            let _ = tempo_audio::rotator::read_position(&addr);
+        }
+        assert_eq!(rotctld_tick(&mut owner, &st, spawn), None);
+        assert_eq!(controller.accepted(), 2);
+        // The third makes it stuck again: a new episode, restarted at once.
+        let _ = tempo_audio::rotator::read_position(&addr);
+        assert_eq!(
+            rotctld_tick(&mut owner, &st, spawn),
+            Some(RotctldSync::Started)
+        );
+        assert!(tempo_audio::rotator::read_position(&addr).is_ok());
+        assert_eq!(controller.accepted(), 3);
     }
 }
 /// What an operator is told when a rotator command reaches no rotctld at all, in place of the
@@ -25927,9 +26515,12 @@ struct RotatorStateDto {
 
 /// Read the rotator at `addr` for [`RotatorStateDto`]: its position first, and what its backend
 /// declares only when it answered, so a daemon that is not there costs one connection, as it
-/// always did.
+/// always did. Both reads are shared with every other poll of this rotator
+/// (`tempo_audio::rotator::latest_position`): rotctld runs one command at a time for all of its
+/// clients, and the strip, the pane and the Needed panel each asking for themselves queued up
+/// there over a slow link, with a STOP waiting behind the queue.
 fn rotator_state(addr: &str) -> RotatorStateDto {
-    let (az_deg, el, reading) = match tempo_audio::rotator::read_position(addr) {
+    let (az_deg, el, reading) = match tempo_audio::rotator::latest_position(addr) {
         Ok((az, el)) => (Some(az), el, "position"),
         Err(e) if e.kind() == std::io::ErrorKind::Unsupported => (None, None, "noPosition"),
         Err(_) => {
@@ -25941,7 +26532,7 @@ fn rotator_state(addr: &str) -> RotatorStateDto {
             }
         }
     };
-    let el_range = tempo_audio::rotator::read_limits(addr)
+    let el_range = tempo_audio::rotator::latest_limits(addr)
         .ok()
         .map(|declared| {
             declared
@@ -25955,6 +26546,14 @@ fn rotator_state(addr: &str) -> RotatorStateDto {
         el_deg: el.filter(|_| el_range != Some(None)),
         el_range,
     }
+}
+
+/// The rotor strip's and the Needed panel's poll: the azimuth alone, `None` on any failure.
+/// Shared with every other poll of this rotator (`tempo_audio::rotator::latest_position`).
+fn rotator_azimuth(addr: &str) -> Option<f64> {
+    tempo_audio::rotator::latest_position(addr)
+        .ok()
+        .map(|(az, _)| az)
 }
 
 /// The Rotor pane's poll ([`RotatorStateDto`]); `None` when no rotator is configured.
@@ -25988,7 +26587,7 @@ async fn read_rotator(state: State<'_, SharedEngine>) -> Result<Option<f64>, Str
         let Some(host) = host else {
             return Ok(None); // no rotator configured — the pane shows its hint
         };
-        tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::read_azimuth(&host))
+        tauri::async_runtime::spawn_blocking(move || rotator_azimuth(&host))
             .await
             .map_err(|e| e.to_string())
     }
@@ -25996,6 +26595,155 @@ async fn read_rotator(state: State<'_, SharedEngine>) -> Result<Option<f64>, Str
     {
         let _ = state;
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod rotator_poll_tests {
+    //! Every surface that shows where the rotator points (the rotor strip in each cockpit, the
+    //! Rotor pane, the Needed panel) polls it, and rotctld runs ONE command at a time for all its
+    //! clients. Over a slow link those polls queued behind each other at rotctld, and a STOP waited
+    //! behind the whole queue. These tests stage a rotctld that works the same way (one command at
+    //! a time, in the order they arrive) and hold the polls to one position read in flight.
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::time::{Duration, Instant};
+
+    /// What the stand-in saw: position reads waiting or running at once (the most), and in all.
+    #[derive(Default)]
+    struct Seen {
+        reads_now: AtomicUsize,
+        reads_most: AtomicUsize,
+        reads: AtomicUsize,
+    }
+
+    /// A rotctld on loopback that answers each connection's one command in arrival order, one at a
+    /// time, as rotctld's single command lock does: a `p` takes `read_ms` (a controller across a
+    /// slow link); `\dump_state` and `S` answer at once.
+    fn one_at_a_time_rotctld(read_ms: u64) -> (String, Arc<Seen>) {
+        use std::io::{BufRead, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let addr = l.local_addr().expect("its address").to_string();
+        let seen = Arc::new(Seen::default());
+        let (queue, work) = std::sync::mpsc::channel::<(String, std::net::TcpStream)>();
+        let worker_seen = seen.clone();
+        std::thread::spawn(move || {
+            for (cmd, mut sock) in work {
+                let reply = match cmd.as_str() {
+                    "p" => {
+                        std::thread::sleep(Duration::from_millis(read_ms));
+                        worker_seen.reads_now.fetch_sub(1, Ordering::SeqCst);
+                        "123.000000\n45.000000\n"
+                    }
+                    "\\dump_state" => {
+                        "1\n603\nmin_az=-180.000000\nmax_az=450.000000\nmin_el=0.000000\n\
+                         max_el=180.000000\nsouth_zero=0\nrot_type=AzEl\ndone\n"
+                    }
+                    _ => "RPRT 0\n",
+                };
+                let _ = sock.write_all(reply.as_bytes());
+            }
+        });
+        let accept_seen = seen.clone();
+        std::thread::spawn(move || {
+            for sock in l.incoming() {
+                let Ok(sock) = sock else { return };
+                let (queue, seen) = (queue.clone(), accept_seen.clone());
+                std::thread::spawn(move || {
+                    let mut line = String::new();
+                    let Ok(read) = sock.try_clone() else { return };
+                    if std::io::BufReader::new(read).read_line(&mut line).is_err() {
+                        return;
+                    }
+                    let cmd = line.trim().to_string();
+                    if cmd == "p" {
+                        let now = seen.reads_now.fetch_add(1, Ordering::SeqCst) + 1;
+                        seen.reads_most.fetch_max(now, Ordering::SeqCst);
+                        seen.reads.fetch_add(1, Ordering::SeqCst);
+                    }
+                    let _ = queue.send((cmd, sock));
+                });
+            }
+        });
+        (addr, seen)
+    }
+
+    /// `n` strip/Needed polls and `n` pane polls, all asking at the same moment.
+    fn polls(addr: &str, n: usize) -> Vec<std::thread::JoinHandle<()>> {
+        let go = Arc::new(Barrier::new(2 * n));
+        (0..2 * n)
+            .map(|i| {
+                let (addr, go) = (addr.to_string(), go.clone());
+                std::thread::spawn(move || {
+                    go.wait();
+                    if i % 2 == 0 {
+                        assert_eq!(rotator_azimuth(&addr), Some(123.0));
+                    } else {
+                        assert_eq!(rotator_state(&addr).az_deg, Some(123.0));
+                    }
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_surface_polling_at_once_puts_one_read_in_flight() {
+        let (addr, seen) = one_at_a_time_rotctld(300);
+        for p in polls(&addr, 4) {
+            p.join().expect("a poll");
+        }
+        assert_eq!(
+            seen.reads_most.load(Ordering::SeqCst),
+            1,
+            "position reads waiting at rotctld at once"
+        );
+        assert_eq!(
+            seen.reads.load(Ordering::SeqCst),
+            1,
+            "eight polls, one read"
+        );
+    }
+
+    #[test]
+    fn a_stop_waits_behind_one_read_at_most_never_a_queue_of_them() {
+        const READ_MS: u64 = 400;
+        let (addr, seen) = one_at_a_time_rotctld(READ_MS);
+        let busy = polls(&addr, 3);
+        // The polls are at rotctld; the operator presses STOP.
+        std::thread::sleep(Duration::from_millis(100));
+        let pressed = Instant::now();
+        tempo_audio::rotator::stop(&addr).expect("RPRT 0");
+        let waited = pressed.elapsed();
+        for p in busy {
+            p.join().expect("a poll");
+        }
+        assert!(
+            waited < Duration::from_millis(READ_MS + 300),
+            "STOP took {waited:?} behind {} position reads",
+            seen.reads.load(Ordering::SeqCst)
+        );
+    }
+
+    #[test]
+    fn a_track_that_steered_reads_again_rather_than_taking_a_poll_in_flight() {
+        // A poll is in flight when the track asks where the mast went: the track waits for it,
+        // then reads for itself, so the answer is not one from before its `P`. Never two reads
+        // at rotctld at once.
+        let (addr, seen) = one_at_a_time_rotctld(300);
+        let poll = {
+            let addr = addr.clone();
+            std::thread::spawn(move || rotator_azimuth(&addr))
+        };
+        std::thread::sleep(Duration::from_millis(100));
+        tempo_audio::rotator::fresh_position(&addr).expect("a position");
+        assert_eq!(poll.join().expect("the poll"), Some(123.0));
+        assert_eq!(
+            seen.reads.load(Ordering::SeqCst),
+            2,
+            "the poll's read and its own"
+        );
+        assert_eq!(seen.reads_most.load(Ordering::SeqCst), 1, "one at a time");
     }
 }
 
@@ -26686,6 +27434,7 @@ fn psk_state_dto(eng: &Engine) -> PskStateDto {
         mode: match s.mode {
             tempo_core::psk::PskModeKind::Bpsk31 => "psk31",
             tempo_core::psk::PskModeKind::Qpsk31 => "qpsk31",
+            tempo_core::psk::PskModeKind::Bpsk63 => "psk63",
         },
         reverse: s.reverse,
         text: s.text,
@@ -27530,7 +28279,7 @@ fn psk_net(state: State<'_, SharedEngine>, hz: f32) -> Result<PskStateDto, Strin
     Ok(psk_state_dto(&eng))
 }
 
-/// Select the PSK sub-mode ("psk31" | "qpsk31") and the QPSK sideband-reverse
+/// Select the PSK sub-mode ("psk31" | "qpsk31" | "psk63") and the QPSK sideband-reverse
 /// polarity — the cockpit's selector and Reverse toggle (Keyboard Modes
 /// Phase 3). The engine refuses a switch while any PSK transmission is
 /// active (a mid-over switch would garble the far end's copy) and returns
@@ -27544,6 +28293,7 @@ fn psk_set_mode(
     let kind = match mode.as_str() {
         "psk31" => tempo_core::psk::PskModeKind::Bpsk31,
         "qpsk31" => tempo_core::psk::PskModeKind::Qpsk31,
+        "psk63" => tempo_core::psk::PskModeKind::Bpsk63,
         other => return Err(format!("unknown PSK mode {other:?}")),
     };
     let mut eng = engine_lock(&state);
@@ -29439,6 +30189,27 @@ fn sstv_tune(
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist frequency: {e}")
     });
+    Ok(eng.snapshot())
+}
+
+/// The SSTV screen's tune on opening (#451, Settings ▸ Digital ▸ SSTV, off by default): the strip
+/// pick's claim of Phone and QSY, as the APP's tune — `Engine::sstv_tune_on_open` declares
+/// machinery provenance, so the channel never becomes the operator's remembered Phone dial, and
+/// it refuses the ISS downlink and a dial a satellite pass owns. It never arms Phone's Enable-TX
+/// latch, so it takes no `afar`. Persists like `sstv_tune`.
+#[tauri::command(async)]
+fn sstv_tune_on_open(
+    state: State<'_, SharedEngine>,
+    dial_mhz: f64,
+    band: String,
+    mode: String,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    if eng.sstv_tune_on_open(dial_mhz, &band, &mode) {
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: failed to persist frequency: {e}")
+        });
+    }
     Ok(eng.snapshot())
 }
 
@@ -37962,6 +38733,63 @@ async fn upload_lotw_report_impl(
     tokio::task::spawn_blocking(move || lotw_upload_batch(&engine, pick, true))
         .await
         .map_err(|e| format!("LoTW upload task failed: {e}"))?
+}
+
+/// #163: the past satellite contacts that went to LoTW with the wrong band (the downlink's) and
+/// can go again corrected, by id — what the LoTW controls offer as one batch. Read off the store
+/// with the Engine lock released; changes nothing.
+#[tauri::command]
+async fn lotw_sat_band_fixes(state: State<'_, SharedEngine>) -> Result<Vec<String>, String> {
+    let rows = engine_lock(&state).log_rows();
+    tokio::task::spawn_blocking(move || {
+        tempo_app::station::lotw_sat_band_fixes(&rows)
+            .map(|ids| ids.iter().map(ToString::to_string).collect())
+    })
+    .await
+    .map_err(|e| format!("logbook task failed: {e}"))?
+}
+
+/// #163: the operator took the offer — rewrite the satellite contacts `ids` into the corrected
+/// shape (FREQ the nominal uplink, FREQ_RX the downlink; their band, which they are counted on,
+/// unchanged) and upload them to LoTW through the ordinary TQSL batch, which stamps them as any
+/// upload does. Never run without the operator's click. The rewrite stamps them not sent in the
+/// same change, so a re-upload that never stamps them — no TQSL, a run that never starts, the app
+/// closed mid-run — leaves them owed, and the ordinary upload sends them.
+#[tauri::command]
+async fn lotw_fix_sat_bands(
+    state: State<'_, SharedEngine>,
+    ids: Vec<String>,
+) -> Result<UploadReportDto, String> {
+    let ids: Vec<tempo_core::logbook::RecordId> = ids
+        .iter()
+        .map(|id| id.parse().map_err(|()| format!("'{id}' names no contact.")))
+        .collect::<Result<_, _>>()?;
+    let engine = Arc::clone(&state);
+    let report = tokio::task::spawn_blocking(move || {
+        // Rewritten AND stamped not sent in one change, so a re-upload that never stamps them
+        // leaves them owed to the ordinary upload (`fix_sat_bands`).
+        let (fixed, durability) = tempo_app::logwrite::fix_sat_bands(&engine, &ids, now_unix());
+        let fixed = fixed?;
+        if durability.turned_back(tempo_app::logstore::DURABLE_WAIT) {
+            return Err(tempo_app::station::LOG_BUSY.to_string());
+        }
+        durability
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .map_err(durability_failed)?;
+        lotw_upload_batch(&engine, LotwPick::Ids(fixed), true)
+    })
+    .await
+    .map_err(|e| format!("LoTW upload task failed: {e}"))?;
+    conn_logged(
+        "LoTW",
+        |r| {
+            format!(
+                "satellite re-upload — {} QSO(s), outcome: {}",
+                r.dispatched, r.outcome
+            )
+        },
+        report,
+    )
 }
 
 /// The contacts an upload to LoTW signs.
@@ -50451,6 +51279,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         dxcc_entity_locations,
         set_frequency,
         sstv_tune,
+        sstv_tune_on_open,
         pick_band,
         tune_channel,
         set_operating_mode,
@@ -50709,6 +51538,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         download_lotw_report,
         reset_lotw_cursor,
         upload_lotw_report,
+        lotw_sat_band_fixes,
+        lotw_fix_sat_bands,
         mark_lotw_uploaded,
         set_eqsl_password,
         clear_eqsl_password,

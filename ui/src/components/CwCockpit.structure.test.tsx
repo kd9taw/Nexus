@@ -740,7 +740,9 @@ describe('the scope divider answers the keyboard (PaneSeam)', () => {
     expect(sep.getAttribute('aria-valuenow')).toBe('346')
     fireEvent.keyDown(sep, { key: 'Backspace' })
     expect(shell().style.getPropertyValue('--cw-scope-h')).toBe('25%')
-    expect(localStorage.getItem('nexus.split.cw.scope')).toBe('25')
+    // Reset forgets the stored height rather than storing 25: CW's default depends on the radio (40 %
+    // once its own scope is seen), so a stored default would be read as a chosen height (`resetClears`).
+    expect(localStorage.getItem('nexus.split.cw.scope')).toBe('')
   })
 
   it('a height dragged under the old 13 % default is the operator’s and is kept exactly — the new default never replaces it', async () => {

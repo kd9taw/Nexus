@@ -225,6 +225,10 @@ export interface StripSeamProps {
    *  container. Absent: the flex container. A function, not a ref: it is read from the divider's
    *  first layout effect, which runs before an ANCESTOR's ref is attached. */
   defaultOf?: () => HTMLElement | null
+  /** A Reset clears the stored size instead of storing the default: for a strip whose DEFAULT
+   *  changes with the station (CW's scope strip, 25 % or 40 % by whether the radio has a scope), so
+   *  a reset under one default is not kept as a chosen height under the other. */
+  resetClears?: boolean
 }
 
 /** The container's CONTENT box along the axis, in CSS px: a flex item's % basis resolves against
@@ -311,7 +315,7 @@ function layoutBox(el: HTMLElement | null): HTMLElement | null {
   return b
 }
 
-function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, label, after = false, maxShare = 0.9, className, defaultOf }: StripSeamProps) {
+function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, label, after = false, maxShare = 0.9, className, defaultOf, resetClears = false }: StripSeamProps) {
   // The variable lives on the strip's PARENT, so it inherits to the strip whatever box the strip is
   // laid out in; the box it is measured against is the flex container its % basis resolves in — the
   // same element, unless the parent generates no box (`layoutBox`).
@@ -492,7 +496,8 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
         // '' reads back as "never set" (parseSplitPct), which is what a sheet-sized default is — and
         // what a default measured against another box (`defaultOf`) must be: stored, it would read
         // back as a share of the container.
-        surfaceSet(storageKey, defaultPct == null || defaultOf ? '' : String(defaultPct))
+        // A default that changes with the station (`resetClears`) is never stored either.
+        surfaceSet(storageKey, defaultPct == null || defaultOf || resetClears ? '' : String(defaultPct))
         fit()
       }}
       drag={(e) => {

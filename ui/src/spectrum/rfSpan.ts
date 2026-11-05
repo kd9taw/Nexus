@@ -216,3 +216,40 @@ export function saveRfSpan(cockpit: 'phone' | 'cw', id: string): void {
   if (cockpit === 'phone') surfaceSet(PHONE_RF_SPAN_KEY, id)
   else surfaceSet(CW_RF_SPAN_KEY, id)
 }
+
+/** THE SCOPE VIEW CHIP: what the CW and Phone scopes draw on a radio whose own scope Nexus draws
+ *  (an Icom over native CI-V, a Yaesu over its LAN scope link, a FlexRadio). `rf` is the radio's
+ *  scope, `audio` the sound-card audio view, and `both` (CW only) the radio's scope as the wide view
+ *  with the audio view under it, for the detail inside the radio's filter. */
+export type ScopeView = 'rf' | 'audio' | 'both'
+export const CW_SCOPE_VIEWS = ['rf', 'audio', 'both'] as const satisfies readonly ScopeView[]
+export const PHONE_SCOPE_VIEWS = ['rf', 'audio'] as const satisfies readonly ScopeView[]
+
+/** The sources whose rows are a radio's own scope, the ones the view chip applies to. TCI and
+ *  SDRconnect are an SDR's IQ, zoomed through the rig scope's own poll, and keep the one view. */
+export function isRadioScopeSource(source: string | null | undefined): boolean {
+  return source === 'civ' || source === 'flex' || source === 'yaesu'
+}
+
+/** Where the view chip's pick is kept: per cockpit and PER WINDOW, as the span chips are (a pop-out
+ *  reads the main window's until it picks its own). Static literals for the storage-scope test. */
+const CW_SCOPE_VIEW_KEY = 'nexus.cw.scopeView'
+const PHONE_SCOPE_VIEW_KEY = 'nexus.phone.scopeView'
+
+/** This window's view for `cockpit`, VALIDATED: a stored value the cockpit does not offer (Both in
+ *  Phone, a typo, an older build's word) opens on the default. CW opens on Both, Phone on the radio's
+ *  scope. Storage-safe: `surfaceGet` reads a refused store as nothing stored. */
+export function loadScopeView(cockpit: 'phone' | 'cw'): ScopeView {
+  if (cockpit === 'cw') {
+    const v = surfaceGet(CW_SCOPE_VIEW_KEY)
+    return CW_SCOPE_VIEWS.find((id) => id === v) ?? 'both'
+  }
+  const v = surfaceGet(PHONE_SCOPE_VIEW_KEY)
+  return PHONE_SCOPE_VIEWS.find((id) => id === v) ?? 'rf'
+}
+
+/** Keep `view` as this window's for `cockpit`. Never touches another window's record. */
+export function saveScopeView(cockpit: 'phone' | 'cw', view: ScopeView): void {
+  if (cockpit === 'phone') surfaceSet(PHONE_SCOPE_VIEW_KEY, view)
+  else surfaceSet(CW_SCOPE_VIEW_KEY, view)
+}

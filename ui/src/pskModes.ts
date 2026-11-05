@@ -30,6 +30,12 @@ export const PSK_MODES: PskMode[] = [
       'Four-phase PSK31 with error correction (rate-1/2 K=5 code + soft Viterbi) — same speed, ' +
       'rides flutter and static crashes BPSK cannot; sideband-sensitive (see the Rev toggle)',
   },
+  {
+    slug: 'psk63',
+    name: 'PSK63',
+    baud: 62.5,
+    hint: 'BPSK at 62.5 Bd — PSK31 at twice the speed in about twice the bandwidth (~120 Hz)',
+  },
 ]
 
 export const PSK_MODE_BY_SLUG: Record<string, PskMode> = Object.fromEntries(

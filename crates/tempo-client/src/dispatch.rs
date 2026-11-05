@@ -439,10 +439,10 @@ const UI_STATE: &[&str] = &["ui_state_load", "ui_state_save"];
 // --- The one mixed store -------------------------------------------------------------------------
 
 /// The keys of `ui-state.json` that hold the station's own data: its memory channels, its watch
-/// list, the satellite and DXpedition chase sets and their alarms, and its settings profiles. They
-/// live at the shack. Every other key (the UI scale's cap, the rail's order, which modes the rail
-/// shows, the main window's pane layout) belongs to the computer the operator sits at and stays
-/// there. This is `DURABLE_KEYS` in `ui/src/features/durableStore.ts` split in two, and a test fails
+/// list, the satellite and DXpedition chase sets and their alarms, the transponder chosen on each
+/// satellite, and its settings profiles. They live at the shack. Every other key (the UI scale's
+/// cap, the rail's order, which modes the rail shows, the main window's pane layout) belongs to
+/// the computer the operator sits at and stays there. This is `DURABLE_KEYS` in `ui/src/features/durableStore.ts` split in two, and a test fails
 /// on a durable key that is in neither half.
 pub const STATION_KEYS: &[&str] = &[
     "nexus.dxped.alarms",
@@ -454,6 +454,12 @@ pub const STATION_KEYS: &[&str] = &[
     "nexus.sats.alarms",
     "nexus.sats.alarms.fired",
     "nexus.sats.chasing",
+    // ⚠️ Every entry here is part of this build's Remote contract (`contract_text` prints each as a
+    // `station <key>` line; `wire::contract()` digests it). Adding one, as this key was added, moves
+    // the digest: a station and a computer on different builds get the clean updateStation /
+    // updateComputer / otherBuild refusal rather than a half-served pair. PROTOCOL_VERSION and the
+    // message shapes do not change.
+    "nexus.sats.transponders",
     "nexus.watchlist",
 ];
 

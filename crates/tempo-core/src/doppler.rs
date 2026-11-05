@@ -163,6 +163,25 @@ pub fn tuning(t: &Transponder, state: DopplerState, range_rate_km_s: f64) -> Tun
     }
 }
 
+/// The nominal UPLINK paired with a DOWNLINK frequency: the same place in the passband, mirrored
+/// on an inverting transponder, with no Doppler — what a log records as the transmit leg of a
+/// satellite contact made at `downlink_hz` (#163). The position is held inside the passband, as
+/// [`tuning`] holds it; a channel's is its uplink. `None` for a beacon (no uplink) and a simplex
+/// channel (one frequency, nothing to pair).
+pub fn nominal_uplink_hz(t: &Transponder, downlink_hz: u64) -> Option<u64> {
+    if t.uplink_centre_hz == 0 || t.is_simplex() {
+        return None;
+    }
+    let offset = clamp_offset(
+        downlink_hz as i64 - t.downlink_centre_hz as i64,
+        t.half_width_hz,
+    );
+    Some(add_offset(
+        t.uplink_centre_hz,
+        if t.invert { -offset } else { offset },
+    ))
+}
+
 /// Both legs of a SIMPLEX channel, each fully corrected, for a radio that RETUNES between
 /// receiving and transmitting rather than holding one dial for both.
 ///

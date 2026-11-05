@@ -5,7 +5,10 @@
 //!      complex baseband — a single quadrature oscillator, f64 phase.
 //!   2. **Decimate ×24 to 500 Hz** (16 samples per symbol at 31.25 Bd) through a
 //!      481-tap windowed-sinc anti-alias lowpass, computed polyphase-style only
-//!      at the output rate.
+//!      at the output rate. BPSK63 runs at twice the symbol rate, so it
+//!      decimates ×12 to 1 kHz instead — still 16 samples per symbol — through
+//!      a wider anti-alias cutoff; everything from the matched filter on is the
+//!      same code in symbol units (see [`PskModeKind::baud`]).
 //!   3. **Matched filter**: a one-symbol (16-tap) raised-cosine window — the RX
 //!      twin of PSK31's cosine-shaped TX reversals.
 //!   4. **16-phase symbol sync**: the symbol-lag differential `d = z·conj(z₋₁ₛ)`
@@ -46,10 +49,19 @@ pub const SAMPLE_RATE: f32 = 12_000.0;
 /// PSK31 symbol rate: 31.25 Bd exactly (8000/256, the G3PLX derivation).
 pub const BAUD: f32 = 31.25;
 
-/// Decimation factor: 12 kHz → 500 Hz.
+/// PSK63 symbol rate: 62.5 Bd exactly — twice PSK31's. fldigi's PSK modem
+/// (src/psk/psk.cxx) runs every PSK mode at an 8000 Hz sample rate and sets
+/// `symbollen = 256` for PSK31 and `symbollen = 128` for PSK63, so PSK63 is
+/// 8000/128 = 62.5 Bd (not 8000/126 ≈ 63.5: the "63" in the name is rounding,
+/// as the "31" is in PSK31). Same varicode, same cosine-shaped reversals, twice
+/// the speed and about twice the occupied bandwidth (~120 Hz).
+pub const BAUD_63: f32 = 62.5;
+
+/// Decimation factor for 31.25 Bd: 12 kHz → 500 Hz. 62.5 Bd decimates by half
+/// this (12 kHz → 1 kHz), so both run [`SYM_SPS`] samples per symbol.
 const DECIM: usize = 24;
 
-/// Samples per symbol at the decimated rate: 500 / 31.25.
+/// Samples per symbol at the decimated rate: 500 / 31.25 (and 1000 / 62.5).
 const SYM_SPS: usize = 16;
 
 /// Anti-alias FIR length (windowed sinc, Hamming). At 481 taps the transition
@@ -58,11 +70,14 @@ const SYM_SPS: usize = 16;
 /// across the 250 Hz output Nyquist arrives attenuated below the slicer floor.
 const FIR_LEN: usize = 481;
 
-/// Anti-alias cutoff (Hz): signal main lobe (±31 Hz) + the full AFC clamp
-/// (±25 Hz) with margin.
+/// Anti-alias cutoff (Hz) at 31.25 Bd: signal main lobe (±31 Hz) + the full
+/// AFC clamp (±25 Hz) with margin. Scaled by the symbol rate for BPSK63
+/// (200 Hz: its ±62.5 Hz main lobe + the clamp, well inside the 500 Hz output
+/// Nyquist of its 1 kHz decimated rate).
 const FIR_CUTOFF_HZ: f64 = 100.0;
 
-/// AFC measurement window: 0.5 s of 500 Hz samples per update.
+/// AFC measurement window at 31.25 Bd: 0.5 s of 500 Hz samples per update.
+/// Counted in decimated samples, so at 62.5 Bd the same 0.5 s is twice this.
 const AFC_BLOCK: usize = 250;
 
 /// AFC hard clamp (Hz) — the spec'd envelope around the tuned frequency.
@@ -108,6 +123,32 @@ pub enum PskModeKind {
     Bpsk31,
     /// QPSK31 — same baud and varicode behind a rate-1/2 K=5 code.
     Qpsk31,
+    /// BPSK63 — BPSK31's modulation and varicode at twice the symbol rate
+    /// ([`BAUD_63`]).
+    Bpsk63,
+}
+
+impl PskModeKind {
+    /// The sub-mode's symbol rate (Bd) — the TX bit clock and the RX symbol
+    /// timing both read this, so the two directions cannot disagree.
+    pub fn baud(self) -> f32 {
+        match self {
+            Self::Bpsk31 | Self::Qpsk31 => BAUD,
+            Self::Bpsk63 => BAUD_63,
+        }
+    }
+
+    /// Input samples per decimated sample: keeps [`SYM_SPS`] samples per
+    /// symbol at either rate (24 at 31.25 Bd, 12 at 62.5 Bd).
+    fn decim(self) -> usize {
+        (DECIM as f32 * BAUD / self.baud()).round() as usize
+    }
+
+    /// How many times PSK31's symbol rate this is (1 or 2) — the scale for
+    /// everything sized in Hz or in decimated samples.
+    fn rate_scale(self) -> usize {
+        DECIM / self.decim()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -157,9 +198,10 @@ fn decayavg(avg: f32, input: f32, weight: f32) -> f32 {
     }
 }
 
-/// Windowed-sinc lowpass (Hamming), unity DC gain — the ×24 anti-alias filter.
-fn design_fir() -> Vec<f32> {
-    let fc = FIR_CUTOFF_HZ / SAMPLE_RATE as f64; // cycles/sample
+/// Windowed-sinc lowpass (Hamming), unity DC gain — the anti-alias filter
+/// ahead of the decimator, its cutoff in Hz.
+fn design_fir(cutoff_hz: f64) -> Vec<f32> {
+    let fc = cutoff_hz / SAMPLE_RATE as f64; // cycles/sample
     let c = (FIR_LEN - 1) as f64 / 2.0;
     let mut taps = Vec::with_capacity(FIR_LEN);
     let mut sum = 0.0f64;
@@ -206,6 +248,9 @@ pub struct PskDemodulator {
     ring: Vec<Complex32>,
     ring_pos: usize,
     decim_count: usize,
+    // Decimation factor and AFC block length for the sub-mode's symbol rate.
+    decim: usize,
+    afc_block: usize,
     // Matched filter ring (decimated rate).
     mf_taps: [f32; SYM_SPS],
     mf_ring: [Complex32; SYM_SPS],
@@ -240,10 +285,12 @@ impl PskDemodulator {
         Self {
             cfg,
             nco_phase: 0.0,
-            fir: design_fir(),
+            fir: design_fir(FIR_CUTOFF_HZ * cfg.mode.rate_scale() as f64),
             ring: vec![Complex32::new(0.0, 0.0); FIR_LEN],
             ring_pos: 0,
             decim_count: 0,
+            decim: cfg.mode.decim(),
+            afc_block: AFC_BLOCK * cfg.mode.rate_scale(),
             mf_taps: matched_taps(),
             mf_ring: [Complex32::new(0.0, 0.0); SYM_SPS],
             mf_pos: 0,
@@ -312,16 +359,16 @@ impl PskDemodulator {
         if self.cfg.afc {
             let sq = m * m;
             let (v, fold) = match self.cfg.mode {
-                PskModeKind::Bpsk31 => (sq, 2.0f32),
+                PskModeKind::Bpsk31 | PskModeKind::Bpsk63 => (sq, 2.0f32),
                 PskModeKind::Qpsk31 => (sq * sq, 4.0),
             };
             let w = v * self.afc_prev.conj();
             self.afc_prev = v;
             self.afc_acc += w;
             self.afc_count += 1;
-            if self.afc_count >= AFC_BLOCK {
+            if self.afc_count >= self.afc_block {
                 let folded_omega = self.afc_acc.im.atan2(self.afc_acc.re); // rad/sample, ×fold
-                let delta_hz = folded_omega / fold * (SAMPLE_RATE / DECIM as f32)
+                let delta_hz = folded_omega / fold * (SAMPLE_RATE / self.decim as f32)
                     / (2.0 * std::f32::consts::PI);
                 // Slew-limited proportional walk; the offset integrates.
                 let step = (AFC_GAIN * delta_hz).clamp(-AFC_MAX_STEP_HZ, AFC_MAX_STEP_HZ);
@@ -373,7 +420,9 @@ impl PskDemodulator {
                     0.0
                 };
                 let (q_inst, sq_open, sq_close) = match self.cfg.mode {
-                    PskModeKind::Bpsk31 => (cos2, SQUELCH_OPEN, SQUELCH_CLOSE),
+                    PskModeKind::Bpsk31 | PskModeKind::Bpsk63 => {
+                        (cos2, SQUELCH_OPEN, SQUELCH_CLOSE)
+                    }
                     PskModeKind::Qpsk31 => (
                         2.0 * cos2 * cos2 - 1.0,
                         QPSK_SQUELCH_OPEN,
@@ -462,7 +511,7 @@ impl crate::textmode::TextDemod for PskDemodulator {
             self.ring[self.ring_pos] = z;
             self.ring_pos = (self.ring_pos + 1) % FIR_LEN;
             self.decim_count += 1;
-            if self.decim_count == DECIM {
+            if self.decim_count == self.decim {
                 self.decim_count = 0;
                 let mut y = Complex32::new(0.0, 0.0);
                 for (i, t) in self.fir.iter().enumerate() {
@@ -884,6 +933,121 @@ mod tests {
             demod.signal_present(),
             "10 s of TX idle did not open the far end's squelch"
         );
+    }
+
+    // ----- BPSK63 — the SHIPPING modulator at 62.5 Bd through the SHIPPING
+    // demodulator in its 63 sub-mode, against the definition: 8000/128 = 62.5 Bd,
+    // i.e. exactly 192 samples a symbol at the 12 kHz modem rate. -----
+
+    /// A one-shot BPSK63 over exactly as the radio loop renders it.
+    fn tx_over_63(text: &str, center_hz: f32) -> Vec<f32> {
+        use crate::psk::modulator::{bpsk_samples, psk_over_bits_for, PskTxConfig};
+        let cfg = PskTxConfig::for_mode(center_hz, PskModeKind::Bpsk63);
+        let mut audio = vec![0.0f32; 1200];
+        audio.extend(bpsk_samples(
+            &psk_over_bits_for(text, PskModeKind::Bpsk63),
+            &cfg,
+        ));
+        audio.extend(vec![0.0f32; 2400]);
+        audio
+    }
+
+    fn psk63_cfg() -> PskConfig {
+        PskConfig {
+            mode: PskModeKind::Bpsk63,
+            ..PskConfig::default()
+        }
+    }
+
+    #[test]
+    fn psk63_is_62_5_baud() {
+        assert_eq!(PskModeKind::Bpsk63.baud(), 62.5);
+        assert_eq!(PskModeKind::Bpsk63.baud(), 8000.0 / 128.0);
+        assert_eq!(PskModeKind::Bpsk31.baud(), 8000.0 / 256.0);
+        assert_eq!(PskModeKind::Qpsk31.baud(), BAUD);
+        assert_eq!(SAMPLE_RATE / PskModeKind::Bpsk63.baud(), 192.0);
+    }
+
+    #[test]
+    fn psk63_tx_to_rx_loopback_decodes_verbatim() {
+        let cfg = psk63_cfg();
+        for msg in [MSG, "Name is Op, QTH: Madison [EN53] = 5w @ dipole; hw? k"] {
+            let text = text_of(&decode_all(
+                &mut PskDemodulator::new(cfg),
+                &tx_over_63(msg, cfg.center_hz),
+            ));
+            assert!(text.contains(msg), "PSK63 loopback copy: {text:?}");
+        }
+        // Off the 1 kHz default too: the netted centre is where it transmits.
+        let cfg = PskConfig {
+            center_hz: 1500.0,
+            ..psk63_cfg()
+        };
+        let text = text_of(&decode_all(
+            &mut PskDemodulator::new(cfg),
+            &tx_over_63(MSG, 1500.0),
+        ));
+        assert!(text.contains(MSG), "PSK63 at 1500 Hz: {text:?}");
+    }
+
+    #[test]
+    fn psk63_and_psk31_do_not_copy_each_other() {
+        // NEGATIVE CONTROLS: the rate is real. A PSK31 decoder on a PSK63
+        // signal, or a PSK63 decoder on a PSK31 one, must not print the text.
+        let text = text_of(&decode_all(
+            &mut PskDemodulator::new(PskConfig::default()),
+            &tx_over_63(MSG, 1000.0),
+        ));
+        assert!(accuracy(MSG, &text) < 0.5, "PSK31 copied PSK63: {text:?}");
+        let text = text_of(&decode_all(
+            &mut PskDemodulator::new(psk63_cfg()),
+            &tx_over(MSG),
+        ));
+        assert!(accuracy(MSG, &text) < 0.5, "PSK63 copied PSK31: {text:?}");
+    }
+
+    #[test]
+    fn psk63_holds_copy_in_noise() {
+        // Twice the bandwidth costs 3 dB against PSK31's −8 dB point: −5 dB in
+        // 3 kHz is PSK31's −8 in Eb/N0 terms.
+        let cfg = psk63_cfg();
+        let mut audio = tx_over_63(MSG, cfg.center_hz);
+        add_awgn(&mut audio, -5.0, 0x9E3779B97F4A7C15);
+        let text = text_of(&decode_all(&mut PskDemodulator::new(cfg), &audio));
+        let acc = accuracy(MSG, &text);
+        assert!(acc >= 0.8, "PSK63 -5 dB accuracy {acc} ({text:?})");
+    }
+
+    #[test]
+    fn psk63_afc_pulls_in_and_noise_stays_silent() {
+        use crate::psk::modulator::{bpsk_samples, PskTxConfig};
+        let cfg = psk63_cfg();
+        let mut demod = PskDemodulator::new(cfg);
+        // A +20 Hz mistune, rendered 20 Hz above where the decoder sits, behind
+        // the same 3 s of idle the PSK31 AFC tests give it: the slew limit is
+        // the same Hz per second at either rate, so it needs the same time.
+        let mut bits = vec![false; 192];
+        bits.extend(encode_bits(MSG));
+        bits.extend(std::iter::repeat_n(false, 64));
+        let air = bpsk_samples(&bits, &PskTxConfig::for_mode(1020.0, PskModeKind::Bpsk63));
+        let text = text_of(&decode_all(&mut demod, &air));
+        assert!(
+            (demod.afc_offset_hz() - 20.0).abs() < 5.0,
+            "PSK63 AFC should walk to ≈+20 Hz, got {}",
+            demod.afc_offset_hz()
+        );
+        assert!(accuracy(MSG, &text) >= 0.8, "off-tune PSK63: {text:?}");
+        for seed in [0x0123456789ABCDEFu64, 0x2545F4914F6CDD1D] {
+            let chars = decode_all(
+                &mut PskDemodulator::new(psk63_cfg()),
+                &white_noise(5.0, 0.2, seed),
+            );
+            assert!(
+                chars.len() <= 3,
+                "PSK63 noise printed {:?}",
+                text_of(&chars)
+            );
+        }
     }
 
     #[test]

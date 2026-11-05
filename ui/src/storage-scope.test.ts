@@ -31,6 +31,10 @@ export const PER_SURFACE = [
   // its own. The main window's spelling is the bare key an earlier build kept for the whole station.
   'nexus.cw.rfSpan',
   'nexus.phone.rfSpan',
+  // The scope view chip (RF / Audio / Both in CW, RF / Audio in Phone; spectrum/rfSpan.ts): what THIS
+  // window's scope draws, per window like the span chips beside it.
+  'nexus.cw.scopeView',
+  'nexus.phone.scopeView',
   'nexus-ui-scale-mode',
   // APRS's body (layout L7): the station list column's width and the side the map stands on —
   // statements about THIS window's shape, like Connect's rail widths and Operate's rail side.
@@ -196,6 +200,9 @@ export const PER_SURFACE = [
 /** Keys that describe the STATION or the PERSON and must never be scoped. Listed rather
  *  than inferred so a failure names the key that leaked. */
 const SHARED = [
+  // SSTV's "My picture already shows my callsign", remembered per picture by the hash of its bytes
+  // (features/sstvIdInImage): a fact about a picture, so the same in every window.
+  'nexus.sstv.idInImage',
   // Spot me's last comment for each mode on the Spots board (SpotsSpotMe): what the operator says about
   // themselves on a mode, the same whichever window's board they spot from.
   'nexus.spotMe.comments',
@@ -333,6 +340,10 @@ const SHARED = [
   // is: per-surface, a second window would find "never seeded" and star ten
   // birds on top of whatever the operator had settled on.
   'nexus.sats.seeded',
+  // The transponder picked last on each bird and its ★ favorite (features/satTransponderPref).
+  // SHARED and durable, like the ★ set: which one this operator works on a bird is the station's,
+  // not a window's.
+  'nexus.sats.transponders',
   // Which received picture the viewer pop-out is showing. SHARED on purpose and it is the
   // whole mechanism: the main window writes it and the viewer's `storage` listener follows,
   // so clicking a second thumbnail re-points the window that is already open instead of

@@ -73,10 +73,21 @@ pub fn mode_class(mode: &str) -> &'static str {
 const MATCH_WINDOW_SECS: u64 = 30 * 60;
 
 type Key = (String, String, &'static str, u64);
+
+/// #163: the band a row is matched on — the band a contact is COUNTED on, its receive leg. A
+/// satellite contact goes to LoTW with BAND = the uplink and BAND_RX = the downlink, and Nexus
+/// counts it on the downlink. The reader maps BAND_RX back to the band where the row's
+/// frequencies say which is which; a row that carries the two bands alone keeps BAND_RX in its
+/// passthrough, and it is that band the row is matched on here, so LoTW's confirmation still
+/// finds the contact.
+fn match_band(r: &QsoRecord) -> String {
+    crate::logbook::counted_band(r).to_ascii_lowercase()
+}
+
 fn key(r: &QsoRecord) -> Key {
     (
         r.call.to_ascii_uppercase(),
-        r.band.to_ascii_lowercase(),
+        match_band(r),
         mode_class(&r.mode),
         r.when_unix / 86_400,
     )
@@ -122,7 +133,7 @@ fn fmt_day(unix: u64) -> String {
 fn exact_key(r: &QsoRecord) -> Key {
     (
         r.call.to_ascii_uppercase(),
-        r.band.to_ascii_lowercase(),
+        match_band(r),
         mode_class(&r.mode),
         r.when_unix,
     )
@@ -289,18 +300,53 @@ fn pair_report_by<R: Borrow<QsoRecord>>(
     incoming: &[QsoRecord],
     admits: impl Fn(usize, usize) -> bool,
 ) -> Vec<Option<usize>> {
-    let buckets = build_buckets(local);
+    // #163: every contact under each band it is known by ([`crate::logbook::known_bands`]: the
+    // band it is counted on, its own BAND under a parked BAND_RX, the transmit band of a
+    // cross-band pair), and each row looked up by each of its own — so a confirmation finds its
+    // contact whichever side carries BAND_RX, as it found it by its one BAND before BAND_RX was
+    // read. Each bucket entry says whether it is the contact's COUNTED band.
+    //
+    // ⚠️ A TWIN NEVER PAIRS ACROSS KINDS. A satellite contact is known on its uplink band too, so a
+    // terrestrial contact on that band (a 2m simplex QSO beside an SO-50 one) would otherwise pair
+    // with it: a 2m eQSL confirming the satellite contact, a QRZ book's 2m QSO swallowed by it. A
+    // pair met on the counted band of both sides is the pair BAND alone always made, whatever the
+    // kinds; one met through a twin band on either side must be satellite with satellite or
+    // terrestrial with terrestrial (`is_sat`).
+    let mut buckets: HashMap<Key, Vec<(usize, bool)>> = HashMap::new();
+    for (i, r) in local.iter().enumerate() {
+        let (call, _, mc, day) = key(r.borrow());
+        for (n, band) in crate::logbook::known_bands(r.borrow())
+            .into_iter()
+            .enumerate()
+        {
+            buckets
+                .entry((call.clone(), band, mc, day))
+                .or_default()
+                .push((i, n == 0));
+        }
+    }
     let mut candidates = Vec::new();
     for (j, inc) in incoming.iter().enumerate() {
-        let (call, band, mc, day) = key(inc);
-        for d in [day.wrapping_sub(1), day, day + 1] {
-            let Some(bucket) = buckets.get(&(call.clone(), band.clone(), mc, d)) else {
-                continue;
-            };
-            for &i in bucket {
-                if let Some(near) = closeness(local[i].borrow(), inc) {
-                    if admits(i, j) {
-                        candidates.push((near, j, i));
+        let (call, _, mc, day) = key(inc);
+        let mut seen = std::collections::HashSet::new();
+        for (n, band) in crate::logbook::known_bands(inc).into_iter().enumerate() {
+            for d in [day.wrapping_sub(1), day, day + 1] {
+                let Some(bucket) = buckets.get(&(call.clone(), band.clone(), mc, d)) else {
+                    continue;
+                };
+                for &(i, counted) in bucket {
+                    let local_row = local[i].borrow();
+                    let same_kind = is_sat(local_row) == is_sat(inc);
+                    if !(same_kind || counted && n == 0) {
+                        continue;
+                    }
+                    if !seen.insert(i) {
+                        continue;
+                    }
+                    if let Some(near) = closeness(local_row, inc) {
+                        if admits(i, j) {
+                            candidates.push((near, j, i));
+                        }
                     }
                 }
             }
@@ -388,12 +434,26 @@ pub(crate) fn pair_lotw<R: Borrow<QsoRecord>>(
         .iter()
         .map(|r| lotw_pairing_call(r, settings_call))
         .collect();
+    // #163: and a SATELLITE contact pairs only with a satellite row, a terrestrial one only with a
+    // terrestrial row — LoTW's own rule (it matches PROP_MODE=SAT against SAT). A satellite
+    // contact is counted on its downlink band, so without this a SAT confirmation could land on a
+    // terrestrial contact with the same station on that band.
+    let sat_local: Vec<bool> = local.iter().map(|r| is_sat(r.borrow())).collect();
+    let sat_row: Vec<bool> = incoming.iter().map(is_sat).collect();
     pair_report_by(local, incoming, |i, j| {
-        match (&made_under[i], &named_on[j]) {
-            (Some(contact), Some(row)) => contact == row,
-            _ => true,
-        }
+        sat_local[i] == sat_row[j]
+            && match (&made_under[i], &named_on[j]) {
+                (Some(contact), Some(row)) => contact == row,
+                _ => true,
+            }
     })
+}
+
+/// Whether `r` says it was worked through a satellite (ADIF `PROP_MODE=SAT`).
+fn is_sat(r: &QsoRecord) -> bool {
+    r.prop_mode
+        .as_deref()
+        .is_some_and(|p| p.trim().eq_ignore_ascii_case("SAT"))
 }
 
 /// Whether `row` is the Settings call's ([`lotw_own_call`]): what LoTW's downloads held while they
@@ -955,6 +1015,80 @@ mod tests {
         assert_eq!(n, 1);
         assert_eq!(lotw_outcome(&log[0]), Some(UploadOutcome::Accepted));
         assert_eq!(log[0].upload.lotw.as_ref().unwrap().when_unix, 99);
+    }
+
+    /// #163: a satellite contact goes to LoTW with BAND = its uplink band and BAND_RX = its
+    /// downlink, and Nexus counts it on the downlink. LoTW's confirmation comes back in that shape,
+    /// and must still land on the contact — whether the row carries the two frequencies (the
+    /// reader maps BAND_RX back to the band) or only the two bands.
+    #[test]
+    fn a_lotw_satellite_confirmation_lands_on_the_downlink_band_contact() {
+        for row in [
+            "<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:4>0100<MODE:2>FM<BAND:2>2m<BAND_RX:4>70cm\
+             <FREQ:7>145.850<FREQ_RX:7>436.795<PROP_MODE:3>SAT<SAT_NAME:5>SO-50<QSL_RCVD:1>Y<EOR>",
+            "<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:4>0100<MODE:2>FM<BAND:2>2m<BAND_RX:4>70cm\
+             <PROP_MODE:3>SAT<SAT_NAME:5>SO-50<QSL_RCVD:1>Y<EOR>",
+        ] {
+            let report = crate::logbook::parse_adif(&format!("<EOH>{row}"));
+            let mut ours = rec("W1AW", "70cm", "FM", 0);
+            ours.when_unix = report[0].when_unix;
+            ours.freq_mhz = 145.85;
+            ours.freq_rx_mhz = Some(436.795);
+            let mut log = vec![ours];
+            let s = reconcile(&mut log, &report);
+            assert_eq!(s.matched, 1, "the confirmation found its contact: {row}");
+            assert!(s.orphans.is_empty(), "{row}");
+        }
+    }
+
+    /// #163: LoTW pairs a satellite contact only with a satellite contact (PROP_MODE=SAT on both
+    /// sides), and so does its confirmation here. A SAT confirmation keyed on the downlink band
+    /// (70cm) must not land on a terrestrial 70cm contact with the same station; a terrestrial
+    /// confirmation must not land on a satellite contact; each lands on its own kind.
+    #[test]
+    fn a_lotw_satellite_confirmation_pairs_only_with_a_satellite_contact() {
+        let sat_row = "<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:6>011000<MODE:2>FM<BAND:2>2M\
+            <FREQ:9>145.85000<BAND_RX:4>70CM<FREQ_RX:9>436.79500<PROP_MODE:3>SAT<SAT_NAME:5>SO-50\
+            <QSL_RCVD:1>Y<EOR>";
+        let ter_row = "<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:6>011000<MODE:2>FM<BAND:4>70CM\
+            <FREQ:7>446.000<QSL_RCVD:1>Y<EOR>";
+        let report = |row: &str| crate::logbook::parse_adif(&format!("<EOH>{row}"));
+        let at = report(sat_row)[0].when_unix;
+        let terrestrial = || {
+            let mut t = rec("W1AW", "70cm", "FM", 0);
+            t.when_unix = at;
+            t.freq_mhz = 446.0;
+            t
+        };
+        let satellite = || {
+            let mut t = terrestrial();
+            t.freq_mhz = 145.85;
+            t.freq_rx_mhz = Some(436.795);
+            t.prop_mode = Some("SAT".into());
+            t.sat_name = Some("SO-50".into());
+            t
+        };
+        let matched = |local: QsoRecord, row: &str| {
+            let mut log = vec![local];
+            reconcile_lotw(&mut log, &report(row), None).matched
+        };
+        assert_eq!(
+            matched(terrestrial(), sat_row),
+            0,
+            "SAT confirmation, terrestrial contact"
+        );
+        assert_eq!(
+            matched(satellite(), ter_row),
+            0,
+            "terrestrial confirmation, SAT contact"
+        );
+        // CONTROLS: each kind still finds its own.
+        assert_eq!(matched(satellite(), sat_row), 1, "SAT with SAT");
+        assert_eq!(
+            matched(terrestrial(), ter_row),
+            1,
+            "terrestrial with terrestrial"
+        );
     }
 
     #[test]

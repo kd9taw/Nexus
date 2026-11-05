@@ -2414,14 +2414,24 @@ pub struct Settings {
     /// fallback the RTS/DTR PTT line uses).
     #[serde(default)]
     pub rtty_fsk_port: String,
-    /// RTTY baud rate — true 45.45 by default (never integerized to 45); 75.0 is the
-    /// other common amateur rate. Drives the TX bit clock AND the RX demodulator.
+    /// RTTY baud rate — true 45.45 by default (never integerized to 45); 50 and 75 are
+    /// the other amateur rates the Settings list offers. Drives the TX bit clock AND the
+    /// RX demodulator.
     #[serde(default = "default_rtty_baud")]
     pub rtty_baud: f64,
     /// RTTY mark/space shift in Hz (170 = the HF standard). Drives the TX tone pair
     /// (AFSK space = 2125 + shift) AND the RX demodulator.
     #[serde(default = "default_rtty_shift_hz")]
     pub rtty_shift_hz: u32,
+    /// The LOWER audio tone of the AFSK/decoder tone pair (Hz); the other sits `rtty_shift_hz`
+    /// above it. 2125 (the 2125/2295 standard) by default; 1275 puts a 170 Hz pair at
+    /// 1275/1445. It is where the decoder AND the AFSK transmitter sit until the operator nets
+    /// on the waterfall — a net still moves both for the session (`Engine::rtty_center_hz`).
+    /// The low tone rather than "the mark": which of the two is mark depends on the sideband
+    /// and Reverse ([`Settings::rtty_tone_swap`]), and a stored mark would swap with them.
+    /// READ IT THROUGH [`Settings::rtty_low_tone`], which applies its 300–2700 Hz range.
+    #[serde(default = "default_rtty_low_tone_hz")]
+    pub rtty_low_tone_hz: u32,
     /// Reverse the mark/space sense (TX tones + RX demod): the "work an upside-down
     /// station" control. The sideband is NOT this field's job — that is
     /// [`Settings::rtty_afsk_sideband`], which swaps the tones itself, so a rig on USB keeps
@@ -3469,6 +3479,13 @@ pub struct Settings {
     /// arm is unaffected — that path calls `set_sstv_armed`, an explicit act.
     #[serde(default = "default_true")]
     pub sstv_rx_auto_arm: bool,
+    /// Whether opening the SSTV view tunes to the band's SSTV frequency (#451): the band's own
+    /// calling channel, or 20 m's from an HF band with none. Off by default — opening a screen
+    /// otherwise asserts nothing about the dial, and an upgrade must not start moving anyone's
+    /// radio. The choice of channel, and the cases that leave the dial alone (already on an SSTV
+    /// channel, transmitting, a VHF/UHF band with none), are the view's (`sstvChannelOnOpen`);
+    /// the tune itself is the band picker's own `sstv_tune`. The engine never reads it.
+    pub sstv_tune_on_open: bool,
     /// The transmit mode the SSTV screen starts on: a `SSTV_TX_MODES` slug, or "auto"
     /// for the band-aware pick (HF → Scottie 1, the NA calling-frequency convention;
     /// 2 m → PD-120, which is what ARISS transmits).
@@ -4315,6 +4332,18 @@ fn default_rtty_baud() -> f64 {
 fn default_rtty_shift_hz() -> u32 {
     170
 }
+
+/// The standard AFSK pair's lower tone, 2125 Hz (2125/2295 at 170 shift).
+fn default_rtty_low_tone_hz() -> u32 {
+    2125
+}
+
+/// The range a saved RTTY low tone is used in, Hz: 2700 + the widest shift offered (850) still
+/// tops out inside the passband a net reaches. The Settings box (`RTTY_LOW_TONE_HZ_MIN/MAX` in
+/// `SettingsPanel.tsx`) offers exactly this range; `SettingsPanel.rttysignal.test.tsx` reads these
+/// two lines and fails if the copies drift.
+pub const RTTY_LOW_TONE_HZ_MIN: u32 = 300;
+pub const RTTY_LOW_TONE_HZ_MAX: u32 = 2700;
 
 /// The bounds [`Settings::rtty_seq_config`] clamps to, and the range the Settings controls
 /// offer. Named here so the control and the chokepoint cannot disagree about what is legal.
@@ -6642,6 +6671,7 @@ impl Default for Settings {
             rtty_fsk_port: String::new(),         // "" = the CAT serial port
             rtty_baud: default_rtty_baud(),       // true 45.45, never 45
             rtty_shift_hz: default_rtty_shift_hz(), // 170 Hz — the HF standard
+            rtty_low_tone_hz: default_rtty_low_tone_hz(), // 2125 — the 2125/2295 pair
             rtty_reverse: false,
             rtty_afsk_sideband: default_rtty_afsk_sideband(), // "lsb" — the RTTY convention
             ai_cw_enabled: true,
@@ -6846,6 +6876,7 @@ impl Default for Settings {
             qsy_cadence: tempo_core::qsy::DEFAULT_CADENCE,
             iss_sstv_auto_arm: false,
             sstv_rx_auto_arm: true,
+            sstv_tune_on_open: false,
             sstv_default_tx_mode: default_sstv_default_tx_mode(),
             sstv_tx_power_pct: None,
             sstv_tx_fsk_id: false,
@@ -8175,6 +8206,9 @@ impl Settings {
         if !hb_networking_saved {
             s.choose_js8_hb_networking_for_old_settings();
         }
+        // A saved RTTY low tone outside its range (a hand-edited file, or one written before the
+        // Settings box was bounded) is repaired to the standard here, so the file does not keep it.
+        s.rtty_low_tone_hz = s.rtty_low_tone();
         // Migration (2026-09-16): the default list was the ve7cc + wa9pie PAIR, and both died
         // on the same day — every default-config install lost its only SSB/phone sources at
         // once. A list that is still exactly that pair is the shipped default, not a choice,
@@ -8548,6 +8582,17 @@ impl Settings {
     pub fn rtty_afsk_usb(&self) -> bool {
         !self.rtty_backend.eq_ignore_ascii_case("fsk")
             && self.rtty_afsk_sideband.trim().eq_ignore_ascii_case("usb")
+    }
+
+    /// The saved RTTY low tone, if it is inside [`RTTY_LOW_TONE_HZ_MIN`]–[`RTTY_LOW_TONE_HZ_MAX`];
+    /// otherwise the 2125 standard. Every reader goes through here, so a junk value from any
+    /// writer (a hand-edited file, a Remote write-back) never moves RTTY to the passband's edge.
+    pub fn rtty_low_tone(&self) -> u32 {
+        if (RTTY_LOW_TONE_HZ_MIN..=RTTY_LOW_TONE_HZ_MAX).contains(&self.rtty_low_tone_hz) {
+            self.rtty_low_tone_hz
+        } else {
+            default_rtty_low_tone_hz()
+        }
     }
 
     /// The mark/space swap TX and RX both apply: the operator's Reverse, XOR the upper
@@ -11428,6 +11473,57 @@ mod tests {
 
     /// A settings file from before the AFSK sideband loads on LSB, and a USB pick round-trips
     /// under its camelCase wire key.
+    /// The saved RTTY tone pair: a settings file from before it reads as the 2125 standard, and
+    /// a 1275 Hz pair survives a save and a load under its camelCase wire key.
+    #[test]
+    fn rtty_low_tone_defaults_to_2125_and_round_trips() {
+        let mut v = serde_json::to_value(Settings::default()).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .remove("rttyLowToneHz")
+            .expect("the wire key");
+        let old: Settings = serde_json::from_value(v).unwrap();
+        assert_eq!(old.rtty_low_tone_hz, 2125);
+        let s = Settings {
+            rtty_low_tone_hz: 1275,
+            rtty_baud: 50.0,
+            ..Settings::default()
+        };
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!((back.rtty_low_tone_hz, back.rtty_baud), (1275, 50.0));
+    }
+
+    /// The saved RTTY low tone is valid only inside 300–2700 Hz (both tones of the widest shift
+    /// stay inside the passband); anything else — a cleared box saved as 0, a hand-edited file —
+    /// reads as the 2125 standard, at the getter AND on load, so the file is repaired too.
+    #[test]
+    fn an_out_of_range_rtty_low_tone_reads_and_loads_as_2125() {
+        for (stored, want) in [
+            (0, 2125),
+            (299, 2125),
+            (2701, 2125),
+            (9000, 2125),
+            (300, 300),
+            (1275, 1275),
+            (2700, 2700),
+        ] {
+            let s = Settings {
+                rtty_low_tone_hz: stored,
+                ..Settings::default()
+            };
+            assert_eq!(s.rtty_low_tone(), want, "getter, stored {stored}");
+            let dir = scratch_dir_ready("rtty_low_tone");
+            let path = dir.join("settings.json");
+            std::fs::write(&path, serde_json::to_string(&s).unwrap()).unwrap();
+            assert_eq!(
+                Settings::load(&path).rtty_low_tone_hz,
+                want,
+                "loaded, stored {stored}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
     #[test]
     fn rtty_afsk_sideband_defaults_to_lsb_and_round_trips() {
         let mut v = serde_json::to_value(Settings::default()).unwrap();
@@ -13118,6 +13214,25 @@ mod tests {
             off.sstv_tx_fsk_id,
             "an operator who switched it on keeps it on"
         );
+    }
+
+    /// #451 — "Tune to the band's SSTV frequency when SSTV opens" moves the dial on entering a
+    /// screen, so it ships OFF and an upgrader's file without the key reads OFF: nobody's radio
+    /// starts moving because they updated. An operator who turns it on keeps it on.
+    #[test]
+    fn sstv_tune_on_open_is_off_unless_the_operator_turns_it_on() {
+        assert!(!Settings::default().sstv_tune_on_open, "off by default");
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(
+            json.contains("\"sstvTuneOnOpen\":false"),
+            "missing wire key sstvTuneOnOpen in {json}"
+        );
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(!old.sstv_tune_on_open, "a file from before the key is off");
+        let on: Settings = serde_json::from_str(r#"{"sstvTuneOnOpen":true}"#).unwrap();
+        assert!(on.sstv_tune_on_open);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert!(back.sstv_tune_on_open, "and it survives a save");
     }
 
     /// The PSK section's one field, on the exact wire key the UI hand-writes —

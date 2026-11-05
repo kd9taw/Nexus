@@ -1821,6 +1821,9 @@ export interface TxHold {
   leftSecs?: number
 }
 
+/** The radio scope's delivery rate (`RadioStatus.scopeRate`). */
+export type ScopeRate = { sweepsPerSec: number; dropped: number; speed: 'slow' | 'mid' | 'fast' | null }
+
 export interface RadioStatus {
   dialMhz: number
   band: string
@@ -2174,6 +2177,13 @@ export interface RadioStatus {
    * rejected (#275: an IC-7300 with its scope in Fixed mode rejects a span).
    */
   scopeSpanRefused?: string | null
+  /**
+   * How fast the radio's own scope reaches Nexus: sweeps a second, sweeps dropped, and the radio's
+   * scope SPEED setting where it can be read (null when it cannot). null = no rig scope streaming.
+   * Absent from a station that does not report it yet; the scope's slow hint then falls back to the
+   * rate it measures itself (`spectrum/sweepRate.ts` `scopeIsSlow`).
+   */
+  scopeRate?: ScopeRate | null
   /** The rig scope's MODE code (`SS` P3) as read back, or null before one is known. */
   scopeModeCode?: number | null
   /** The FIX start the operator stated, in MHz — null until they do. */
@@ -2422,7 +2432,7 @@ export interface PskState {
   signal: boolean
   /** Audio center (Hz) the decoder is netted on (the waterfall cursor). */
   centerHz: number
-  /** Selected sub-mode slug ('psk31' | 'qpsk31') — engine truth for the
+  /** Selected sub-mode slug ('psk31' | 'qpsk31' | 'psk63') — engine truth for the
    * cockpit's selector. Optional: absent reads as 'psk31' (the default). */
   mode?: string
   /** QPSK sideband-reverse (LSB) toggle state. Optional: absent = normal. */
@@ -3261,7 +3271,8 @@ export interface UploadStatus {
   whenUnix: number
   /**
    * The failure CLASS as a token — "credentials" | "cert" | "station-location" | "record" |
-   * "partial" | "unclassified" | "declared" | "account-dates" | "qth-nickname" — not prose. It
+   * "partial" | "unclassified" | "declared" | "account-dates" | "qth-nickname" | "resend" (not a
+   * failure: corrected, not sent yet) — not prose. It
    * rides `log.adi`, which is what TQSL signs and uploads to ARRL, so it is never the service's
    * own words; anything else is dropped on the way back into Rust. Render it through a label of
    * your own, not verbatim.
@@ -5204,10 +5215,13 @@ export interface Settings {
   /** Serial port for the FSK keying line (e.g. the FTDX10's USB Enhanced COM).
    * Empty = the CAT serial port. */
   rttyFskPort?: string
-  /** RTTY baud rate — true 45.45 by default (never 45); 75 is the other common rate. */
+  /** RTTY baud rate — true 45.45 by default (never 45); 50 and 75 are the other rates offered. */
   rttyBaud?: number
   /** RTTY mark/space shift in Hz (170 = the HF standard). TX + RX demod both. */
   rttyShiftHz?: number
+  /** The saved RTTY tone pair's LOWER tone (Hz; 2125 = 2125/2295). Where the decoder and the
+   * AFSK transmitter sit until a waterfall net; a change re-homes both onto it. */
+  rttyLowToneHz?: number
   /** Reverse the mark/space sense (TX tones + RX demod) — for copying an
    * upside-down station. The sideband is `rttyAfskSideband`'s job. */
   rttyReverse?: boolean
@@ -6025,6 +6039,9 @@ export interface Settings {
    * behaviour), so an ABSENT key must read as on — `!== false`, never `!!`. The gate
    * is in the engine; the ISS pass arm is an explicit act and is unaffected. */
   sstvRxAutoArm?: boolean
+  /** #451: opening the SSTV view tunes to the band's SSTV frequency (off by default; an absent
+   * key reads as off). The view decides the channel (`sstvChannelOnOpen`). */
+  sstvTuneOnOpen?: boolean
   /** The transmit mode the SSTV screen starts on: a `sstvModes.ts` slug, or 'auto'
    * for the band-aware pick. Named `default` because `SstvState.txMode` is the live
    * "mode currently going out" and the two must not be confusable. */

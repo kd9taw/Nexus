@@ -49,6 +49,7 @@ import { pushToast, withErrorToast } from '../toast'
 import { pollSingleFlight } from '../singleFlight'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
 import { usePinnedScroll } from '../usePinnedScroll'
+import { useRegionCols } from '../useRegionCols'
 import { confidenceRuns } from '../transcript'
 import { PSK_MODES, PSK_MODE_BY_SLUG } from '../pskModes'
 import { t } from '../i18n'
@@ -598,11 +599,14 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   // App re-renders unconditionally and this cockpit stays mounted).
   const runs = useMemo(() => confidenceRuns(text_rx, psk?.charConf ?? []), [text_rx, psk?.charConf])
   const streamPin = usePinnedScroll<HTMLDivElement>()
+  // The one pane region: one column group, so it fills at every width (see the region below).
+  const { ref: panesRef } = useRegionCols<HTMLDivElement>(1, true)
 
   return (
     <main className="layout single psk-cockpit">
       {snap && (
         <CockpitHeader
+          pinned
           snap={snap}
           onSnap={onSnap}
           power={{
@@ -726,7 +730,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           convention), and a click NETS THE DECODER (pskNet — engine RX state), never the
           rig. Its divider (layout L6, RTTY's) sits under it and sets its height, stored per
           surface; hiding the strip takes the divider with it and hands the height to the pane
-          frames below, the shell's growers. */}
+          region below, the shell's grower. */}
       {psk && shown('scope') && (
         <>
         <Waterfall
@@ -799,8 +803,14 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
         </div>
       )}
 
+      {/* THE PANE REGION — RTTY's: the shell contract's one `.cockpit-panes` region with a single
+          column (the RF scope pane, the stream, the log strip, the Stats pane, in the order they always
+          stood). One column group, so it fills at every width (useRegionCols `oneGroup`), and the
+          region, not the shell, takes the deficit until its own floor. */}
+      <div className="cockpit-panes" ref={panesRef}>
+      <div className="cockpit-col">
       {/* THE RF SCOPE PANE — RTTY's placement and reasons: the radio's own panadapter, hidden until
-          ticked, a bare fill frame first under the TX strip, display only (THE STOP LINE). */}
+          ticked, a fill frame first in the region under the TX strip, display only (THE STOP LINE). */}
       {shown('rfScope') && (
         <RfScopePane
           closeProps={closeProps('rfScope')}
@@ -812,8 +822,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
         />
       )}
 
-      {/* THE DECODED STREAM — RTTY's region-less shape: a bare CockpitPaneFrame as a shell
-          child, transcript scrolling inside. Every control in the head is a DECODER control
+      {/* THE DECODED STREAM — a fill frame in the region's column, transcript scrolling inside. Every control in the head is a DECODER control
           (arm / re-acquire / clear) — none touches PTT.
           NO `weight`, deliberately: since #159 there is a second fill frame below it (the log
           strip), and the share that matters is declared THERE, measured. See that frame. */}
@@ -900,7 +909,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           exists — RTTY looks similar and is NOT the model: it logs through its auto-sequencer
           and has no strip.
 
-          NOT ⊞-REMOVABLE, and it renders as the shell's second bare pane frame. `paneId` is a
+          NOT ⊞-REMOVABLE, and it renders as the region column's frame after the stream. `paneId` is a
           test/pop-out handle, not a vocabulary id: PSK's vocabulary is {scope, stream}, so
           this pane has no menu entry and no ✕ (CockpitPaneFrame: "a pane with no id in the
           view's vocabulary stays put"). It hosts no stop control either — every one of those
@@ -939,6 +948,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           onCommit={(stream) => panels.setShares({ stream })}
           onReset={() => panels.setShares({ stream: null })}
           label={t('psk.seam.streamLog.label')}
+          className="in-column"
         />
       )}
       {snap && (
@@ -1019,6 +1029,8 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
       {snap && shown('stats') && (
         <CallStatsFrame close={closeProps('stats')} call={statsCall} band={snap.radio.band} mode={mode.name} logTick={snap.logTick} />
       )}
+      </div>
+      </div>
 
       {/* TX DOCK — the macros (each a one-click transmit), the continuous-TX latch, Stop
           and the compose bar, pinned OUTSIDE any pane so nothing can scroll them out of

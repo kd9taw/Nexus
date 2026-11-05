@@ -2,9 +2,9 @@
 //
 // PSK COCKPIT SHELL STRUCTURE (Keyboard Modes Phase 2 — RX + TX).
 //
-// PSK follows RTTY's region-less shape of the pane-grid contract: one operator-content
-// block (the decoded stream) through CockpitPaneFrame, deliberately NO pane region, and
-// — since Phase 2 — the pinned .cockpit-txdock hosting every transmit control (macros,
+// PSK follows RTTY's shape of the cockpit shell contract (2026-11-04): a PINNED header, the
+// waterfall, the TX strip, ONE pane region with a single column (the stream and the log strip
+// through CockpitPaneFrame, filling at every width), and — since Phase 2 — the pinned .cockpit-txdock hosting every transmit control (macros,
 // the continuous-TX latch, Esc/Stop, the compose bar, the ALC drive hint). THE STOP LINE
 // is no longer held "by construction" (the Phase 1 no-TX census is gone, as that census's
 // own header demanded): it is held the way RTTY holds it — Stop TX + the TX-enable latch
@@ -64,8 +64,8 @@ vi.mock('../toast', () => ({
 // Rev toggle live there (selector-adjacent), and the Phase 3 tests below pin
 // them. Everything else about the header stays stubbed out.
 vi.mock('./CockpitHeader', () => ({
-  CockpitHeader: (p: { modeIndicator?: ReactNode }) => (
-    <header className="cockpit-header">{p.modeIndicator}</header>
+  CockpitHeader: (p: { modeIndicator?: ReactNode; pinned?: boolean }) => (
+    <header className={p.pinned ? 'cockpit-header cockpit-header-pinned' : 'cockpit-header'}>{p.modeIndicator}</header>
   ),
 }))
 // The RF scope pane's picture is a renderer canvas jsdom cannot draw; its frame and place are what
@@ -154,13 +154,14 @@ describe('PskCockpit pane shell', () => {
     // the transcript — the frames come after the strip, so a pane can never push the strip down.
     await renderCockpit({ panels: fakePanels() })
     const shell = document.querySelector('main.layout.single.psk-cockpit')!
-    const frames = Array.from(shell.querySelectorAll(':scope > .pane-frame')).map((f) => f.getAttribute('data-pane'))
+    const frames = Array.from(shell.querySelectorAll(':scope > .cockpit-panes > .cockpit-col > .pane-frame')).map((f) => f.getAttribute('data-pane'))
     // …and the Stats pane, ticked too (it ships hidden here): the LAST frame, under the log strip. (The Recent
     // contacts pane, ticked too, stands inside the log strip's frame, not beside it.)
     expect(frames).toEqual(['rfScope', 'stream', 'log', 'stats'])
     const strip = shell.querySelector(':scope > .cockpit-txstrip')!
     expect(strip.previousElementSibling?.matches('.pane-splitter'), 'the TX strip left its place under the scope').toBe(true)
-    expect(strip.nextElementSibling?.getAttribute('data-pane'), 'the RF scope pane is not first under the TX strip').toBe('rfScope')
+    expect(strip.nextElementSibling?.matches('.cockpit-panes'), 'the pane region is not directly under the TX strip').toBe(true)
+    expect(shell.querySelector('.cockpit-col')!.firstElementChild?.getAttribute('data-pane'), 'the RF scope pane is not first in the region').toBe('rfScope')
     const pane = shell.querySelector('[data-pane="rfScope"]')!
     expect(pane.getAttribute('data-fit'), 'a scope can use the height it is given: a fill frame').toBe('fill')
     expect(pane.querySelector('[data-testid="rfscope-stub"]')?.getAttribute('data-feed')).toBe('rf')
@@ -185,7 +186,7 @@ describe('PskCockpit pane shell', () => {
     const shell = document.querySelector('main.layout.single.psk-cockpit')!
     expect(shell).not.toBeNull()
     // `.pane-splitter`: the transcript | log strip divider (layout L6), with a record — see its block.
-    const ALLOWED = ['.cockpit-header', '.waterfall-wrap', '.cw-keyer-warn', '.pane-frame', '.pane-splitter', '.cockpit-txstrip', '.cockpit-txdock']
+    const ALLOWED = ['.cockpit-header', '.waterfall-wrap', '.cw-keyer-warn', '.pane-splitter', '.cockpit-txstrip', '.cockpit-panes', '.cockpit-txdock']
     for (const el of Array.from(shell.children)) {
       expect(
         ALLOWED.some((s) => el.matches(s)),
@@ -194,8 +195,10 @@ describe('PskCockpit pane shell', () => {
     }
     expect(document.querySelector('.cw-keyer-warn'), 'warn banner did not render — census untested').not.toBeNull()
     // Named, not just counted: a count alone goes green on the stream frame rendering twice.
-    const frames = Array.from(shell.querySelectorAll(':scope > .pane-frame'))
+    expect(shell.querySelectorAll(':scope > .pane-frame').length, 'a frame is a shell child again').toBe(0)
+    const frames = Array.from(shell.querySelectorAll(':scope > .cockpit-panes > .cockpit-col > .pane-frame'))
     expect(frames.map((f) => f.getAttribute('data-pane'))).toEqual(['stream', 'log'])
+    expect(shell.querySelectorAll(':scope > .cockpit-panes').length).toBe(1)
     expect(shell.querySelectorAll(':scope > .cockpit-txdock').length).toBe(1)
     // THE TX STRIP (2026-10-01): exactly one, a shell child directly under the scope (after
     // its divider), holding the stop controls the header used to hold — and the header none.
@@ -222,10 +225,17 @@ describe('PskCockpit pane shell', () => {
     expect(pane!.querySelector('.rtty-arm')).not.toBeNull()
   })
 
-  it('introduces no pane region (one content pane cannot fill a multi-track template)', async () => {
+  it('one pane region with ONE column, filling at every width; the header is pinned', async () => {
+    // jsdom measures every region at 0 px wide: a region that could stack would stamp 'stack' here.
     await renderCockpit()
-    expect(document.querySelectorAll('.cockpit-panes').length).toBe(0)
-    expect(document.querySelectorAll('.cockpit-col').length).toBe(0)
+    const shell = document.querySelector('main.layout.single.psk-cockpit')!
+    const regions = shell.querySelectorAll(':scope > .cockpit-panes')
+    expect(regions.length, 'not exactly one pane region').toBe(1)
+    expect(regions[0].querySelectorAll(':scope > .cockpit-col').length, 'more than the one column').toBe(1)
+    expect([regions[0].getAttribute('data-cols'), regions[0].getAttribute('data-flow')]).toEqual(['1', 'fill'])
+    const head = shell.firstElementChild!
+    expect(head.classList.contains('cockpit-header'), 'the header is not the first shell child').toBe(true)
+    expect(head.classList.contains('cockpit-header-pinned'), 'the header is not pinned: it scrolls away with the scope').toBe(true)
   })
 
   it('every transmit control lives in the pinned TX dock — never inside a pane', async () => {
@@ -352,12 +362,12 @@ describe('PSK view-entry auto-arm (the APRS/SSTV pattern, operator ruling 2026-0
 describe('PSK sub-mode selector + QPSK sideband reverse (Keyboard Modes Phase 3)', () => {
   const pskSetMode = api.pskSetMode as ReturnType<typeof vi.fn>
 
-  it('the selector lists both modes, renders the engine truth, and PSK31 is the default', async () => {
+  it('the selector lists every mode, renders the engine truth, and PSK31 is the default', async () => {
     // `mode` absent from the poll (older engine / fresh state) reads as psk31.
     await renderCockpit()
     const sel = document.querySelector('.psk-mode-select') as HTMLSelectElement
     expect(sel, 'no sub-mode selector').not.toBeNull()
-    expect(Array.from(sel.options).map((o) => o.value)).toEqual(['psk31', 'qpsk31'])
+    expect(Array.from(sel.options).map((o) => o.value)).toEqual(['psk31', 'qpsk31', 'psk63'])
     expect(sel.value).toBe('psk31')
     cleanup()
     // The selector renders what the ENGINE says, not local state.
@@ -365,6 +375,13 @@ describe('PSK sub-mode selector + QPSK sideband reverse (Keyboard Modes Phase 3)
     await renderCockpit()
     const sel2 = document.querySelector('.psk-mode-select') as HTMLSelectElement
     expect(sel2.value).toBe('qpsk31')
+    cleanup()
+    // PSK63: its own badge rate, and no Rev toggle (BPSK does not care about the sideband).
+    state.current = { ...state.current, mode: 'psk63', reverse: false }
+    await renderCockpit()
+    expect((document.querySelector('.psk-mode-select') as HTMLSelectElement).value).toBe('psk63')
+    expect(document.querySelector('.cw-mode-badge')?.textContent).toContain('PSK63 · 62.5')
+    expect(document.querySelector('.psk-rev')).toBeNull()
   })
 
   it('changing the selector asks the ENGINE (which may refuse mid-transmission)', async () => {
@@ -414,7 +431,7 @@ describe('PSK sub-mode selector + QPSK sideband reverse (Keyboard Modes Phase 3)
     await renderCockpit()
     const shell = document.querySelector('main.layout.single.psk-cockpit')!
     // `.pane-splitter`: the transcript | log strip divider (layout L6), with a record — see its block.
-    const ALLOWED = ['.cockpit-header', '.waterfall-wrap', '.cw-keyer-warn', '.pane-frame', '.pane-splitter', '.cockpit-txstrip', '.cockpit-txdock']
+    const ALLOWED = ['.cockpit-header', '.waterfall-wrap', '.cw-keyer-warn', '.pane-splitter', '.cockpit-txstrip', '.cockpit-panes', '.cockpit-txdock']
     for (const el of Array.from(shell.children)) {
       expect(
         ALLOWED.some((s) => el.matches(s)),
@@ -443,7 +460,7 @@ describe('PSK: the divider between the transcript and the log strip', () => {
     })
     return r
   }
-  const pane = (id: string) => document.querySelector<HTMLElement>(`main.psk-cockpit > [data-pane="${id}"]`)!
+  const pane = (id: string) => document.querySelector<HTMLElement>(`main.psk-cockpit > .cockpit-panes > .cockpit-col > [data-pane="${id}"]`)!
   const divider = () => screen.queryByRole('separator', { name: 'Decoded text / Log' })
   const stored = () => JSON.parse(localStorage.getItem(panelStorageKey('psk')) ?? '{"share":{}}')
   const box = (el: HTMLElement, top: number, h: number) => {
@@ -457,6 +474,7 @@ describe('PSK: the divider between the transcript and the log strip', () => {
     expect(sep, 'no divider between the transcript and the log').not.toBeNull()
     expect(sep!.previousElementSibling).toBe(pane('stream'))
     expect(sep!.nextElementSibling).toBe(pane('log'))
+    expect(sep!.classList.contains('in-column'), 'the divider gives back the shell’s gap, not its column’s').toBe(true)
     cleanup()
     await renderCockpit()
     expect(divider(), 'no record (the Remote observer): no divider').toBeNull()
@@ -574,7 +592,7 @@ describe('the Stats pane under the log strip', () => {
     cleanup()
     await renderCockpit({ panels: fakePanels() })
     const shell = document.querySelector('main.layout.single.psk-cockpit')!
-    const stats = shell.querySelector(':scope > [data-pane="stats"]')!
+    const stats = shell.querySelector(':scope > .cockpit-panes > .cockpit-col > [data-pane="stats"]')!
     expect(stats.getAttribute('data-fit')).toBe('content')
     expect(stats.previousElementSibling?.getAttribute('data-pane'), 'not directly under the log strip').toBe('log')
     expect(getCallStats).not.toHaveBeenCalled()

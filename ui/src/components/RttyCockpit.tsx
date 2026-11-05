@@ -31,6 +31,7 @@ import { FrequencyControl } from './FrequencyControl'
 import { Waterfall } from './Waterfall'
 import { RfScopePane } from './RfScopePane'
 import { RttyTuningScope } from './RttyTuningScope'
+import { useRegionCols } from '../useRegionCols'
 import {
   atuBypass,
   atuTune,
@@ -990,11 +991,14 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // scroll-back impossible — the pane reset to the bottom before the operator
   // could re-read a callsign. Pinned follows new copy; scrolled-up reads.
   const streamPin = usePinnedScroll<HTMLDivElement>()
+  // The one pane region: one column group, so it fills at every width (see the region below).
+  const { ref: panesRef } = useRegionCols<HTMLDivElement>(1, true)
 
   return (
     <main className="layout single rtty-cockpit">
       {snap && (
         <CockpitHeader
+          pinned
           snap={snap}
           onSnap={onSnap}
           power={{
@@ -1094,7 +1098,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           dock) intact — one kind is conditional, as `stream` already was. Its divider (layout
           L6) sits under it and sets its height (`--rtty-wf-h`, stored per surface), the scope
           dividers' kind; hiding the strip takes the divider with it and hands the height to the
-          pane frames below, the shell's growers, and the stored height stays for its return.
+          pane region below, the shell's grower, and the stored height stays for its return.
 
           It hosts no stop control — the cursors and click-to-net are the tuning aid. A net moves
           the decoder AND the AFSK transmit tone (the transmitter follows the netted centre since
@@ -1230,9 +1234,17 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         </div>
       )}
 
+      {/* THE PANE REGION — the cockpit shell contract's ONE region (CW's and JTTY's `.cockpit-panes`),
+          holding a single column: the RF scope pane, the transcript, the log strip and the Stats pane,
+          in that order, as they always stood. One column group, so the region FILLS at every width
+          (useRegionCols `oneGroup`): its fill panes split the height, its column is the scroller, and
+          the region — not the shell — takes the deficit until its own floor. The header (pinned), the
+          waterfall strip, the TX strip and the dock stay shell children, so no pane can move them. */}
+      <div className="cockpit-panes" ref={panesRef}>
+      <div className="cockpit-col">
       {/* THE RF SCOPE PANE — the radio's own panadapter, hidden until ticked (RF_SCOPE_PANEL_ID).
-          A bare fill frame like the transcript's, the first under the TX strip, so it can never push
-          the strip down; display only, it hosts no stop control and no sender (THE STOP LINE). */}
+          A fill frame like the transcript's, the first in the region under the TX strip, so it can
+          never push the strip down; display only, it hosts no stop control and no sender (THE STOP LINE). */}
       {shown('rfScope') && (
         <RfScopePane
           closeProps={closeProps('rfScope')}
@@ -1244,11 +1256,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         />
       )}
 
-      {/* THE ONE CONTENT PANE. RTTY adopts CockpitPaneFrame (per-pane scroll, the shipped
-          thin scrollbar) but deliberately NO .cockpit-panes region: with a single content
-          block every column template leaves a track empty, which is the dead space this
-          rebuild deletes rather than relocates. The frame is the shell's grower
-          (`.rtty-cockpit > .pane-frame`, styles.css) and the transcript scrolls inside it.
+      {/* THE TRANSCRIPT. A fill frame in the region's one column (per-pane scroll, the shipped
+          thin scrollbar); it shares the column's height with the log strip by weight and the
+          divider between them, and the transcript scrolls inside it.
 
           THIS PANE HOSTS A STOP CONTROL, and that is allowed. The "Auto on" toggle below,
           clicked off, is rttySetAuto(false) → seq.abort() + Engine::rtty_stop(): the queue is
@@ -1390,7 +1400,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           actually on the air, so the export emits RTTY/RY rather than the FT tier the engine
           would otherwise fill in.
 
-          NOT ⊞-REMOVABLE, and it renders as the shell's second bare pane frame. `paneId` is a
+          NOT ⊞-REMOVABLE, and it renders as the region column's frame after the transcript. `paneId` is a
           test/pop-out handle, not a vocabulary id: RTTY's vocabulary is {stream}, so this pane
           has no menu entry and no ✕. It hosts NO stop control — the four that hold the stop
           line up (Stop TX, the dock's Esc/Stop macro, the TX-enable latch, the sequencer's
@@ -1398,7 +1408,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
 
           `titled={false}` and `weight={1.5}`: PSK's ruling and PSK's MEASUREMENT, which apply
           here unchanged because the two shells share one declaration in styles.css
-          (`.layout.single.rtty-cockpit, .layout.single.psk-cockpit`), floor knob included.
+          (`.layout.single.rtty-cockpit, .layout.single.psk-cockpit`) and one region shape.
           The strip needs 296 px of pane height to put its Log button on screen; an even 1:1
           split gives 292 px at 1920×1080 and misses it by four pixels, and `fit="content"`
           (488 px with a recall card open) drives the SHELL onto its deficit valve in the
@@ -1424,6 +1434,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           onCommit={(stream) => panels.setShares({ stream })}
           onReset={() => panels.setShares({ stream: null })}
           label={t('rtty.seam.streamLog.label')}
+          className="in-column"
         />
       )}
       {snap && (
@@ -1484,6 +1495,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       {snap && shown('stats') && (
         <CallStatsFrame close={closeProps('stats')} call={statsCall} band={snap.radio.band} mode={RTTY} logTick={snap.logTick} />
       )}
+      </div>
+      </div>
 
       {/* TX DOCK — the auto-sequencer row, the macros (each one a one-click transmit), the
           continuous-TX latch, Stop and the compose bar, pinned OUTSIDE any pane so nothing
