@@ -287,7 +287,8 @@ describe('the macro editor', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
       expect(seen, 'the key focus returned to was not brought into view').toContain('BUTTON')
       // …and kept in sight where the room is shorter than the key (the keyboard's Esc comes this way too).
-      expect(vi.mocked(keepInSight).mock.calls.at(-1)?.[0], 'the key can stay behind the keep row').toBe(document.activeElement)
+      const kept = vi.mocked(keepInSight).mock.calls
+      expect(kept[kept.length - 1]?.[0], 'the key can stay behind the keep row').toBe(document.activeElement)
     } finally {
       Element.prototype.scrollIntoView = was
     }
