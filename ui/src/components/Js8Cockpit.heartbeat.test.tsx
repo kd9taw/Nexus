@@ -235,6 +235,21 @@ describe('HB’s menu: send one now, start or stop the timer', () => {
     expect(spies.js8Arm).toHaveBeenLastCalledWith('hb', false)
   })
 
+  it('its first item is brought into view as it opens: folded, the menu is in the flow, and opened under the keep row', async () => {
+    const seen: Array<[string, unknown]> = []
+    const was = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = function (this: Element, arg?: boolean | ScrollIntoViewOptions) {
+      seen.push([this.getAttribute('role') ?? '', arg])
+    }
+    try {
+      await renderCockpit(base())
+      fireEvent.click(q('.js8-hb-menu-btn')!)
+      expect(seen, 'the menu opened wherever it landed').toEqual([['menuitem', { block: 'nearest' }]])
+    } finally {
+      Element.prototype.scrollIntoView = was
+    }
+  })
+
   it('the dock is lifted while the menu stands on it, and set down when it closes', async () => {
     await renderCockpit(base())
     const dock = q('.cockpit-txdock')!

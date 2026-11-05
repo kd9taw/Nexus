@@ -351,7 +351,7 @@ function decideFold(shell: HTMLElement, strip: HTMLElement, dock: HTMLElement): 
  *  button out from under the pointer before its release. The parked surfaces hold their own focus. */
 function centreIfBehind(shell: HTMLElement, strip: HTMLElement, dock: HTMLElement, el: HTMLElement): void {
   const keep = dock.getAttribute('data-fold') === 'on' ? keepRow(dock) : undefined
-  if (!keep || document.activeElement !== el || keep.contains(el) || strip.contains(el) || el.closest('.panels-menu-pop')) return
+  if (!keep || keep.contains(el) || strip.contains(el) || el.closest('.panels-menu-pop')) return
   const q = el.getBoundingClientRect()
   const s = strip.getBoundingClientRect()
   const k = keep.getBoundingClientRect()
@@ -359,6 +359,15 @@ function centreIfBehind(shell: HTMLElement, strip: HTMLElement, dock: HTMLElemen
   if (cy < k.top && (cy < s.top || cy > s.bottom)) return
   if (k.top <= s.bottom || shell.offsetHeight === 0) return
   shell.scrollTop += (cy - (s.bottom + k.top) / 2) / (shell.getBoundingClientRect().height / shell.offsetHeight)
+}
+
+/** The same, for something opened rather than focused (JS8's heartbeat menu): where it scrolls with a folded dock's
+ *  rows, its centre is not left behind the keep row or the strip. */
+export function keepInSight(el: HTMLElement): void {
+  const shell = el.closest('main')
+  const strip = shell?.querySelector<HTMLElement>(':scope > .cockpit-txstrip')
+  const dock = shell && Array.from(shell.children).find(isDock)
+  if (shell && strip && dock) centreIfBehind(shell, strip, dock, el)
 }
 
 /** The cockpit shell the strip stands in: its parent — or, where layout wrappers stand between them
@@ -423,7 +432,11 @@ function useDockClearance(ref: RefObject<HTMLDivElement | null>) {
     if (head || keep) observer?.observe(shell)
     const onFocus = (e: FocusEvent) => {
       const el = e.target
-      if (dock && el instanceof HTMLElement && el.matches(':focus-visible')) requestAnimationFrame(() => centreIfBehind(shell, strip, dock, el))
+      if (dock && el instanceof HTMLElement && el.matches(':focus-visible')) {
+        requestAnimationFrame(() => {
+          if (document.activeElement === el) centreIfBehind(shell, strip, dock, el)
+        })
+      }
     }
     shell.addEventListener('focusin', onFocus)
     return () => {
