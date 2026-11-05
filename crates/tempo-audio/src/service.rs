@@ -7298,7 +7298,7 @@ impl RadioLoop {
     /// Rig, a cluster SPLIT-on-Work owns VFO B, the band has changed since split was turned on, the
     /// station left the digital screens (a phone or CW transmission must never go out of VFO B on
     /// the last FT TX dial), or the mode is one Split Operation does not apply to (anything but
-    /// FT8/FT4). WSJT-X holds split between overs (`Transceiver/TransceiverBase.cpp:160-171`,
+    /// FT8, FT4 and FT2). WSJT-X holds split between overs (`Transceiver/TransceiverBase.cpp:160-171`,
     /// `widgets/mainwindow.cpp:12378-12387`); these are the points where Nexus lets go of it. The
     /// radio changing and Nexus stopping let go where they happen.
     ///
@@ -7428,16 +7428,29 @@ impl RadioLoop {
     /// ⛔ ONLY AT A QUIET POINT. Never with a carrier up: no over, tune or PTT of this loop's, nothing
     /// keyed by this loop or read as keyed at the radio, and at least
     /// [`crate::slot::SPLIT_PRESET_LEAD_MS`] to the next slot boundary, counted from where the tick
-    /// is now (`lead_ms`), so the writes are done before any key. Never on a tick that opened the CAT
+    /// is now (`lead_ms`), so writes started clear of a boundary are done before it.
+    ///
+    /// ⚠️ A BOUNDARY'S OWN TICK HAS THE WHOLE SLOT AHEAD, so a pre-set owed as this station's own slot
+    /// starts runs ahead of its key on that tick: a band change in the last 4.3 s or so before it
+    /// (the lead and the settle), with TX on by then. The key comes late by the writes' length, up
+    /// to about 4 s on a 2.5 s link. FT8's and FT4's overs stay on the slot clock and lose leading
+    /// symbols: a slow-link FT4 over can lose so many that it does not decode. Before the pre-set
+    /// such a radio was refused at the key instead.
+    ///
+    /// Never on a tick that opened the CAT
     /// link (`reconnected`: it may have spent a connect timeout) or with the link closed, on a radio
     /// this loop does not own or with no control channel, or while a split release or a Fake It
     /// write-back is owed. A first over waiting to key does not stop it: if that over is due on
     /// this tick it keys on a later one, after the writes.
     ///
     /// ⛔ ONLY WHERE AN OVER WOULD WRITE SPLIT ITSELF: Split Operation is Rig, the station is on the
-    /// digital screens in a mode Split Operation applies to (FT8/FT4), no cluster SPLIT-on-Work owns
-    /// VFO B, and the over would shift the dial or the split is already held (an over in
-    /// 1500-1999 Hz with no split held writes none). Fake It and None never pre-set.
+    /// digital screens in a mode Split Operation applies to (FT8, FT4, FT2), no cluster
+    /// SPLIT-on-Work owns VFO B, and the over would shift the dial or the split is already held (an
+    /// over in 1500-1999 Hz with no split held writes none). Fake It and None never pre-set.
+    ///
+    /// FT2 HOLDS SPLIT BUT NEVER PRE-SETS: its 3.75 s slot is shorter than the lead, so the lead is
+    /// never met, and its key writes everything inside its budget. A radio slow to move VFO B can
+    /// still be refused at the first over after a band change.
     fn preset_rig_split_due(
         &mut self,
         eng: &Engine,
@@ -15208,7 +15221,8 @@ impl RadioLoop {
         // ⭐ SPLIT OPERATION = RIG'S TX DIAL GOES ON THE RADIO WHILE IT RECEIVES, AFTER THE DIAL
         // CHANGES, as WSJT-X writes it from `setXIT` on a band change, so the next over's key finds
         // it confirmed and sends only split on last. ⚠️ OUTSIDE THE ENGINE LOCK, as the release
-        // retry above: a slow radio takes its time here, while nothing is due to key.
+        // retry above: a slow radio takes its time here. Writes on an own boundary's tick make that
+        // key wait (`Self::preset_rig_split_due`).
         // The lead to the next boundary from where the tick is NOW: CAT earlier in the tick (the
         // polls, a retune, the release retry above) has already spent some of it.
         let lead_ms =
