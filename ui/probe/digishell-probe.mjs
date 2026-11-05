@@ -22,7 +22,12 @@
 //      the topmost thing where it stands (a pinned header is a stacking context at the strip's and the dock's level,
 //      so its menu hung under them until the header lifts while it is open), EVERY item is inside the window from
 //      left to right (at 700×800 at 175 % the menu hung off the window's left edge, measured), and a stop control
-//      is still reachable with the menu open. (Items covered are a red on SSTV, RTTY and PSK only: see `reds`.) Items below the window are printed, not failed (the menu is that
+//      is still reachable with the menu open from a button the pointer can click. An item outside the menu's OWN scrollport is scrolled out of view in the
+//      menu, not covered. Where the button can be clicked: (4b) the menu's box stays inside the window and the shell's
+//      scrollport (it opened downward at 0.7 × the window whatever room was below the button, and ran past the window
+//      at 150–175 %: CW at 1280×720, 617–1121 px, measured); (4c) a menu shifted into the window stands exactly
+//      4 px × the UI zoom from its edge; (4d) every item, brought to the middle of the menu by its own scroll, is
+//      the topmost thing where it stands. Items below the window are printed, not failed (the menu is that
 //      tall at 175 % on a small window everywhere). CLOSED again, the header carries no lift and check 1 holds.
 //   5. EVERY STOP CONTROL AND SEND ARE ON SCREEN AND TOPMOST, the menu closed: each of Stop TX (strip), Esc/Stop
 //      (RTTY/PSK), Stop (SSTV's bar) and the dock's Send (CW/RTTY/PSK) or PTT (Phone). On a small window at a large
@@ -37,7 +42,8 @@
 // THE CONTROLS, run every time: the header forced to stick on top (z 9) at 900×600 / 175 % must make check 1 fail;
 // the lift taken away (the header held at 4 with its menu open) at 1366×768 / 150 % on RTTY must make check 4 fail;
 // the dock's fold taken away at 900×600 / 175 % on RTTY must make check 5 fail; and the menu's clamp into the window
-// taken away at 700×800 / 175 % on RTTY must make check 4 fail.
+// taken away at 700×800 / 175 % on RTTY must make check 4 fail; and the menu's sizing taken away (0.7 × the window,
+// downward) at 1366×768 / 150 % on CW must make check 4b fail.
 //
 // exit: 0 every check held · 1 a red, or a control that could not fail · 2 the page never drew a screen
 import { createServer } from 'vite'
@@ -57,14 +63,15 @@ const SIZES = [
   [1920, 1080, '150'], [1200, 750, null],
 ]
 /** CW and Phone at the sizes where their docks were taller than the room left (and two that fit, and the fit). */
-const SMALL = [[900, 600, '175'], [700, 800, '175'], [1024, 768, '175'], [1280, 720, '175'], [1200, 750, null]]
+const SMALL = [[900, 600, '175'], [700, 800, '175'], [1024, 768, '175'], [1280, 720, '175'], [1366, 768, '150'], [1200, 750, null]]
 const VIEWS = [['SSTV', 'sstv', 'main.sstv-view', SIZES, true], ['RTTY', 'rtty', 'main.rtty-cockpit', SIZES, true],
-  ['PSK', 'psk', 'main.psk-cockpit', SIZES, true], ['CW', 'cw', 'main.cw-cockpit', SMALL, false], ['Phone', 'phone', 'main.phone-cockpit', SMALL, false]]
+  ['PSK', 'psk', 'main.psk-cockpit', SIZES, true], ['CW', 'cw', 'main.cw-cockpit', SMALL, true], ['Phone', 'phone', 'main.phone-cockpit', SMALL, true]]
 const FEATURES = JSON.stringify({ profile: 'custom', enabled: { rtty: true, psk: true, sstv: true } })
 const PLANT = ".cockpit-header-pinned, .cockpit-header-pinned[data-pin='off'] { position: sticky !important; top: 0 !important; z-index: 9 !important }"
 const NO_LIFT = ".cockpit-header-pinned[data-menu='open'] { z-index: 4 !important }"
 const NO_FOLD = ".cockpit-txdock[data-fold='on'] { display: flex !important } .cockpit-txdock-keep[data-fold='on'] { position: static !important; padding: 0 !important; border: 0 !important }"
 const NO_CLAMP = '.panels-menu-pop { translate: none !important }'
+const NO_FIT = ".panels-menu-pop { max-height: calc(0.7 * var(--vh-eff, 100vh)) !important; top: 100% !important; bottom: auto !important }"
 /** The dock's send control: Send on the keyboard docks, PTT on Phone's. */
 const SEND = '.cw-send-btn, .ph-ptt'
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -140,10 +147,26 @@ const menuCheck = (sel, where, at = 0) => `(async () => {
   if (!btn) return { none: true }
   shell.scrollTop = ${JSON.stringify(where)} === 'end' ? shell.scrollHeight : ${JSON.stringify(where)} === 'reach' ? ${Number(at)} : 0
   await new Promise((r) => setTimeout(r, 150))
+  // Where the operator can click the button (on screen and topmost), the menu it opens is held to checks 4b–4d.
+  const bq = btn.getBoundingClientRect()
+  const bt = bq.bottom <= innerHeight + 0.5 && bq.top >= -0.5 ? document.elementFromPoint(bq.left + bq.width / 2, bq.top + bq.height / 2) : null
+  const clickable = bt != null && (bt === btn || btn.contains(bt))
   btn.click()
   await new Promise((r) => setTimeout(r, 300))
   const pop = head.querySelector('.panels-menu-pop')
   if (!pop) return { opened: false }
+  const sb0 = shell.getBoundingClientRect()
+  const pq = pop.getBoundingClientRect()
+  // 4b. The menu's box stays inside the window and inside the shell's scrollport (which clips it).
+  const boxOut = clickable && (pq.top < Math.max(0, sb0.top) - 0.5 || pq.bottom > Math.min(innerHeight, sb0.bottom) + 0.5)
+    ? Math.round(pq.top) + '–' + Math.round(pq.bottom) + ' against ' + Math.round(Math.max(0, sb0.top)) + '–' + Math.round(Math.min(innerHeight, sb0.bottom)) : null
+  // 4c. Where it was shifted into the window, its edge stands exactly 4 px (× the UI zoom) from the window's edge.
+  let clampEdge = null
+  if (pop.style.translate) {
+    const zoom = pq.width / pop.offsetWidth
+    const ok = Math.abs(pq.left - 4 * zoom) < 1 || Math.abs(innerWidth - pq.right - 4 * zoom) < 1
+    if (!ok) clampEdge = 'left ' + pq.left.toFixed(1) + ', right gap ' + (innerWidth - pq.right).toFixed(1) + ', expected ' + (4 * zoom).toFixed(1)
+  }
   const items = [...pop.querySelectorAll('button, input, label')].filter((e) => e.getBoundingClientRect().height > 0)
   // Inside the window from left to right, every item, wherever the shell is scrolled.
   const offx = items.filter((b) => { const q = b.getBoundingClientRect(); return q.left < -0.5 || q.right > innerWidth + 0.5 }).length
@@ -155,8 +178,14 @@ const menuCheck = (sel, where, at = 0) => `(async () => {
     const t = document.elementFromPoint(q.left + q.width / 2, q.top + Math.min(q.height / 2, 6))
     return t != null && (t === b || b.contains(t))
   }).length
+  // The menu's own scrollport: an item outside it is scrolled out of view INSIDE the menu, never a cover.
+  // (client sizes are layout px, rects are window px: the ratio is the UI zoom)
+  const pz = pop.offsetHeight > 0 ? pq.height / pop.offsetHeight : 1
+  const pc = { top: pq.top + pop.clientTop * pz, bottom: pq.top + (pop.clientTop + pop.clientHeight) * pz }
   const rows = items.map((b) => {
     const q = b.getBoundingClientRect()
+    // Not wholly inside it: part-scrolled at its edge (check 4d brings each one to the middle and tests it there).
+    if (q.top < pc.top - 0.5 || q.bottom > pc.bottom + 0.5) return 'inmenu'
     if (q.bottom > innerHeight + 0.5 || q.top < -0.5 || q.left + q.width / 2 < 0 || q.left + q.width / 2 > innerWidth) return 'off'
     // Outside the shell's own scrollport the menu is CLIPPED by it (a header that has scrolled away
     // opens its menu there), which is the shell's scroll, not a cover.
@@ -166,13 +195,30 @@ const menuCheck = (sel, where, at = 0) => `(async () => {
     if (t && (t === b || b.contains(t) || pop.contains(t))) return 'ok'
     return t && t.closest('.cockpit-txstrip') ? 'strip' : t && t.closest('.cockpit-txdock, .sstv-tx-bar') ? 'dock' : 'other:' + (t ? String(t.className).split(' ')[0] || t.tagName : 'none')
   })
+  // 4d. EVERY item can be reached by the menu's own scroll: brought to the middle of the menu, it is on screen,
+  // inside the shell's scrollport, and the topmost thing where it stands.
+  const unreached = []
+  if (clickable) {
+    for (const b of items) {
+      const q0 = b.getBoundingClientRect()
+      const p0 = pop.getBoundingClientRect()
+      pop.scrollTop = Math.max(0, (q0.top - p0.top + q0.height / 2) / pz - pop.clientTop + pop.scrollTop - pop.clientHeight / 2)
+      const q = b.getBoundingClientRect()
+      const sb = shell.getBoundingClientRect()
+      const cx = q.left + q.width / 2, cy = q.top + q.height / 2
+      const inside = cy >= Math.max(0, sb.top) && cy <= Math.min(innerHeight, sb.bottom) && cx >= 0 && cx <= innerWidth
+      const t = inside ? document.elementFromPoint(cx, cy) : null
+      if (!(t && (t === b || b.contains(t) || pop.contains(t)))) unreached.push((b.textContent || b.tagName).replace(/\s+/g, ' ').trim().slice(0, 18))
+    }
+    pop.scrollTop = 0
+  }
   const lifted = head.getAttribute('data-menu')
   btn.click()
   await new Promise((r) => setTimeout(r, 300))
   const closedMenu = head.getAttribute('data-menu')
   shell.scrollTop = 0
-  return { opened: true, offx, stopsOpen, n: rows.length, ok: rows.filter((r) => r === 'ok').length, off: rows.filter((r) => r === 'off').length,
-    clipped: rows.filter((r) => r === 'clipped').length, covered: rows.filter((r) => r !== 'ok' && r !== 'off' && r !== 'clipped'), lifted, closedMenu, pin: head.getAttribute('data-pin') }
+  return { opened: true, clickable, boxOut, clampEdge, unreached, offx, stopsOpen, n: rows.length, ok: rows.filter((r) => r === 'ok').length, off: rows.filter((r) => r === 'off').length,
+    clipped: rows.filter((r) => r === 'clipped').length, inmenu: rows.filter((r) => r === 'inmenu').length, covered: rows.filter((r) => r !== 'ok' && r !== 'off' && r !== 'clipped' && r !== 'inmenu'), lifted, closedMenu, pin: head.getAttribute('data-pin') }
 })()`
 
 // THE API SWAP — the waterfalls probe's, verbatim in shape.
@@ -256,9 +302,8 @@ async function measureAt(route, sel, [W, H, scale], css = null, menus = true) {
 }
 
 const tagOf = ([W, H, s]) => `${W}×${H} ${s ? `${s} %` : 'fit'}`
-/** `cover`: whether an open menu's items covered by the strip or the dock are a red. They are on the three screens
- *  whose header pins (SSTV, RTTY, PSK: the lift is theirs). On CW and Phone the menu's lower items stand under the
- *  dock at every size, the 1200×750 fit included, on the base tree as well: printed, a matter of its own. */
+/** `cover`: whether an open menu's items covered by the strip or the dock are a red — on every screen now. (CW's and
+ *  Phone's "covered" items were items scrolled out of view inside the menu's own scroll, which is `inmenu`.) */
 function reds(name, m, cover = true) {
   const out = []
   if (m.page > 0) out.push(`${name}: the page scrolls ${m.page} px`)
@@ -278,7 +323,10 @@ function reds(name, m, cover = true) {
     else {
       if (cover && mc.covered.length) out.push(`${name}, ⊞ Panels open at ${where}: ${mc.covered.length} of its items covered (${mc.covered.join(', ')})`)
       if (mc.offx) out.push(`${name}, ⊞ Panels open at ${where}: ${mc.offx} of its items off the window's left or right edge`)
-      if (mc.stopsOpen === 0) out.push(`${name}, ⊞ Panels open at ${where}: no stop control reachable`)
+      if (mc.boxOut) out.push(`${name}, ⊞ Panels open at ${where}: the menu runs past the window or the scrollport (${mc.boxOut})`)
+      if (mc.clampEdge) out.push(`${name}, ⊞ Panels open at ${where}: shifted into the window, but not to its 4 px edge (${mc.clampEdge})`)
+      if (mc.unreached?.length) out.push(`${name}, ⊞ Panels open at ${where}: ${mc.unreached.length} items not reachable by the menu's own scroll (${mc.unreached.join(', ')})`)
+      if (mc.clickable && mc.stopsOpen === 0) out.push(`${name}, ⊞ Panels open at ${where}: no stop control reachable`)
       if (mc.closedMenu != null) out.push(`${name}: ⊞ Panels closed, but the header still carries its lift`)
     }
   }
@@ -305,7 +353,7 @@ try {
         throw new Error('no screen')
       }
       const info = (p) => `stops ${p.stopsReachable.join('+') || '—'}${p.coveredOther.length ? `, covered by other than the header: ${p.coveredOther.join(', ')}` : ''}`
-      const menu = (mc) => (mc?.opened ? `${mc.ok}/${mc.n} on screen and topmost${mc.off ? `, ${mc.off} outside the window` : ''}${mc.clipped ? `, ${mc.clipped} clipped by the scroll` : ''}${mc.covered.length ? `, ${mc.covered.length} covered` : ''}` : 'not opened')
+      const menu = (mc) => (mc?.opened ? `${mc.ok}/${mc.n} on screen and topmost${mc.off ? `, ${mc.off} outside the window` : ''}${mc.clipped ? `, ${mc.clipped} clipped by the scroll` : ''}${mc.inmenu ? `, ${mc.inmenu} in the menu's scroll` : ''}${mc.covered.length ? `, ${mc.covered.length} covered` : ''}` : 'not opened')
       console.log(`digishell-probe: ${name.padEnd(22)} header ${m.pin === 'on' ? 'pinned' : 'unpinned'} (${m.vp}), dock ${m.fold === 'on' ? 'folded' : 'whole'}, scrolls ${m.valve} px · top: ${info(m.top)} · end: ${info(m.end)}, header ${m.end.headReach} · ⊞ button reachable ${m.reach == null ? 'n/a' : m.reach < 0 ? 'NEVER' : `from scroll ${m.reach}`} · ⊞ Panels at top ${menu(m.menuTop)}, at end ${menu(m.menuEnd)}${m.menuReach ? `, at its button ${menu(m.menuReach)}` : ''}`)
       for (const r of reds(name, m, cover)) red(r)
     }
@@ -331,7 +379,12 @@ try {
   const caught4 = m4 ? reds(`RTTY at ${tagOf(size4)} (clamp removed)`, m4).filter((r) => r.includes('off the window')) : []
   if (caught4.length === 0) red('CONTROL FAILED — an unclamped ⊞ Panels menu stayed inside the window; check 4 cannot see an overhang')
   else console.log(`digishell-probe: CONTROL — ${caught4[0]} (caught)`)
-  if (code === 0) console.log('digishell-probe: PASS — no header covers a transmit control, every stop control and Send/PTT is on screen and topmost at every scroll position of every screen at every size, ⊞ Panels can be clicked, a pinned header stays on screen, every on-screen item of an open ⊞ Panels menu is reachable and inside the window, and all four controls were caught')
+  const size5 = [1366, 768, '150']
+  const m5 = await measureAt('cw', 'main.cw-cockpit', size5, NO_FIT)
+  const caught5 = m5 ? reds(`CW at ${tagOf(size5)} (menu sizing removed)`, m5).filter((r) => r.includes('runs past')) : []
+  if (caught5.length === 0) red('CONTROL FAILED — a ⊞ Panels menu sized at 0.7 × the window, opening downward, stayed inside it; check 4b cannot fail')
+  else console.log(`digishell-probe: CONTROL — ${caught5[0]} (caught)`)
+  if (code === 0) console.log('digishell-probe: PASS — no header covers a transmit control, every stop control and Send/PTT is on screen and topmost at every scroll position of every screen at every size, ⊞ Panels can be clicked, a pinned header stays on screen, every on-screen item of an open ⊞ Panels menu is reachable and inside the window, and all five controls were caught')
   process.exitCode = process.exitCode || code
 } catch (e) {
   if (!process.exitCode) {

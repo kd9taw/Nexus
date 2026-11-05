@@ -11,7 +11,9 @@
 // dock and its keep row (Send / PTT / Esc/Stop) carry `data-fold="on"`, the keep row alone parks, and the
 // strip clears the keep row instead of the dock. jsdom loads no sheet and lays nothing out: the `sticky`s
 // are injected and the heights stubbed. A folded dock has no box (`display: contents`), so the stub reports
-// 0 for it while it carries the attribute — which is exactly what the decision must never read.
+// 0 for it while it carries the attribute — which is exactly what the decision must never read. And as in
+// Chrome, the keep row's folded padding and border (BAND) count in the dock's height while the keep row
+// is folded: the decision unfolds only the dock to measure it, which is the anti-flap band.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import { CockpitTxStrip, FOLD_ROOM_EM, PIN_ROOM_EM } from './CockpitTxStrip'
@@ -29,6 +31,10 @@ const STRIP_H = 40
 const DOCK_H = 200
 const KEEP_H = 50
 const HEAD_H = 90
+/** The keep row's folded padding and border, in the dock's height while the keep row is folded (Chrome: 7–8 px). */
+const BAND = 8
+/** An extra dock row (a sequencer row, say) and its height. */
+const EXTRA_H = 100
 /** Strip + whole dock + the room the fold leaves: the smallest room that parks the dock whole. */
 const FITS = STRIP_H + DOCK_H + FOLD_ROOM_EM * EM
 
@@ -48,7 +54,11 @@ beforeEach(() => {
     return this.tagName === 'MAIN' ? shellH : 0
   })
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
-    if (this.classList.contains('cockpit-txdock')) return this.getAttribute('data-fold') === 'on' ? 0 : DOCK_H
+    if (this.classList.contains('cockpit-txdock')) {
+      if (this.getAttribute('data-fold') === 'on') return 0
+      const keepFolded = this.querySelector('.cockpit-txdock-keep')?.getAttribute('data-fold') === 'on'
+      return DOCK_H + (keepFolded ? BAND : 0) + (this.querySelector('.cw-extra') ? EXTRA_H : 0)
+    }
     if (this.classList.contains('cockpit-txdock-keep')) return KEEP_H
     if (this.classList.contains('cockpit-txstrip')) return STRIP_H
     if (this.classList.contains('cockpit-header')) return HEAD_H
@@ -62,12 +72,13 @@ afterEach(() => {
   sheet = null
 })
 
-function Shell({ keep = true, dial = 7.04, header = false, dockClass = 'cockpit-txdock' }: { keep?: boolean; dial?: number; header?: boolean; dockClass?: string }) {
+function Shell({ keep = true, dial = 7.04, header = false, dockClass = 'cockpit-txdock', extra = false }: { keep?: boolean; dial?: number; header?: boolean; dockClass?: string; extra?: boolean }) {
   return (
     <main className="layout single cw-cockpit">
       {header && <div className="cockpit-header cockpit-header-pinned" data-pin="on" />}
       <CockpitTxStrip radio={{ ...radio, dialMhz: dial }} onSetTxEnabled={() => {}} onTune={() => {}} onStopTx={() => {}} />
       <div className={dockClass}>
+        {extra && <div className="cw-extra" />}
         <div className="cw-macros" />
         <div className={keep ? 'cw-send cockpit-txdock-keep' : 'cw-send'} />
       </div>
@@ -168,5 +179,75 @@ describe('the dock folds only where it does not fit whole', () => {
     expect(document.querySelector('.cockpit-header')!.getAttribute('data-pin'), 'the header pinned against a folded dock').toBe('off')
     r.rerender(<Shell header dial={7.041} />)
     expect(document.querySelector('.cockpit-header')!.getAttribute('data-pin')).toBe('off')
+  })
+})
+
+describe('the fold keeps its decision, and is re-measured when what it reads changes', () => {
+  it('the band: folded, it unfolds only once the window has grown the keep row’s folded padding more', () => {
+    injectSheet(SHEET)
+    shellH = FITS - 1
+    const r = render(<Shell />)
+    expect(dock().getAttribute('data-fold')).toBe('on')
+    // The height that parks an unfolded dock whole does not unfold a folded one: its keep row still counts.
+    shellH = FITS
+    r.rerender(<Shell dial={7.041} />)
+    expect(dock().getAttribute('data-fold'), 'no band: at the fold height it would fold and unfold by turns').toBe('on')
+    shellH = FITS + BAND - 1
+    r.rerender(<Shell dial={7.042} />)
+    expect(dock().getAttribute('data-fold')).toBe('on')
+    shellH = FITS + BAND
+    r.rerender(<Shell dial={7.043} />)
+    expect(dock().getAttribute('data-fold'), 'past the band it stays folded').toBeNull()
+  })
+
+  it('a render that changes nothing it reads does not unfold the dock to measure it again', () => {
+    injectSheet(SHEET)
+    shellH = FITS - 1
+    const r = render(<Shell />)
+    expect(dock().getAttribute('data-fold')).toBe('on')
+    const watch = new MutationObserver(() => {})
+    watch.observe(dock(), { attributes: true, attributeFilter: ['data-fold'] })
+    for (let i = 1; i <= 5; i++) r.rerender(<Shell dial={7.04 + i / 1000} />)
+    expect(watch.takeRecords().length, 'the folded dock was unfolded and refolded on renders that changed nothing').toBe(0)
+    // …but a shell of another height is measured again (and here, folded again: still too small).
+    shellH = FITS - 2
+    r.rerender(<Shell dial={7.05} />)
+    expect(watch.takeRecords().length, 'a new shell height was not re-measured').toBeGreaterThan(0)
+    expect(dock().getAttribute('data-fold')).toBe('on')
+    watch.disconnect()
+  })
+
+  it('the dock’s own rows changing is re-measured: a row that goes away can unfold it', () => {
+    injectSheet(SHEET)
+    shellH = FITS + 20 // the plain dock fits; with the extra row it does not
+    const r = render(<Shell extra />)
+    expect(dock().getAttribute('data-fold')).toBe('on')
+    r.rerender(<Shell />)
+    expect(dock().getAttribute('data-fold'), 'the dock lost a row and stayed folded on a stale measurement').toBeNull()
+    r.rerender(<Shell extra />)
+    expect(dock().getAttribute('data-fold')).toBe('on')
+  })
+
+  it('a shell that resizes with no render re-decides through the observer, header or not (CW, Phone)', () => {
+    // Every render re-applies, which hides a missing observer; here nothing renders: only the observer can.
+    const observers: Array<{ cb: ResizeObserverCallback; targets: Element[] }> = []
+    vi.stubGlobal('ResizeObserver', class {
+      targets: Element[] = []
+      constructor(cb: ResizeObserverCallback) { observers.push({ cb, targets: this.targets }) }
+      observe(el: Element) { this.targets.push(el) }
+      unobserve() {}
+      disconnect() {}
+    })
+    injectSheet(SHEET)
+    shellH = 900
+    render(<Shell />)
+    expect(dock().getAttribute('data-fold')).toBeNull()
+    const main = document.querySelector('main')!
+    const o = observers.find((x) => x.targets.includes(main))
+    expect(o, 'the shell is not observed without a pinned header: a shrinking window never folds the dock').toBeDefined()
+    shellH = FITS - 1
+    o!.cb([], {} as ResizeObserver)
+    expect(dock().getAttribute('data-fold')).toBe('on')
+    vi.unstubAllGlobals()
   })
 })

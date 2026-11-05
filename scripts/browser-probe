@@ -189,10 +189,11 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         strip or dock control, every stop control and Send/PTT is on screen and
                         topmost, every strip and dock control and ⊞ Panels can be clicked at
                         some scroll position, a pinned header's controls stay on screen, and the
-                        ⊞ Panels menu opened from the header is reachable and inside the window;
-                        a header forced on top, a menu lift taken away, a dock that does not fold
-                        and a menu that is not clamped must be caught (ui/probe/digishell-probe.mjs;
-                        it builds nothing)
+                        ⊞ Panels menu opened from the header stays inside the window with every
+                        item reachable by its own scroll; a header forced on top, a menu lift
+                        taken away, a dock that does not fold, a menu that is not clamped and a
+                        menu that is not sized must be caught (ui/probe/digishell-probe.mjs; it
+                        builds nothing)
   --desktop firstrun    a fresh install's first-run wizard in the real app, at 1024×768 and
                         1920×1080: the About-you question and its answers on screen, Finish
                         writes the answer, the Getting started guide then the first-contact

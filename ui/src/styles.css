@@ -20484,6 +20484,14 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   /* …and never wider than the window it is clamped into (PanelsMenu shifts it back inside). */
   max-width: calc(var(--vw-eff, 100vw) - 2 * var(--space-2));
 }
+/* …OPENING UPWARD where there is more room above the button than below it and the menu does not fit below
+   (PanelsMenu `fitMenu`, which also sets its max-height to that room). */
+.panels-menu-pop[data-up] {
+  top: auto;
+  bottom: 100%;
+  margin-top: 0;
+  margin-bottom: var(--space-1);
+}
 .panels-menu-item {
   display: flex;
   flex-direction: column;
@@ -30549,7 +30557,7 @@ button.sat-chip:disabled {
    came to 908 px on a 700 px window at 175 %, and Send stood wholly off its right edge (measured). Where the
    line is too narrow the last items take a line of their own at the right. Before it wraps, the text box
    keeps 8em and RTTY's TX line 5em (below their natural widths), so the row stays one line wherever those
-   fit: from 1024×768 at 175 % up (measured), where the dock is no taller than it was.
+   fit: from 1024×768 at 175 % up (measured).
    RTTY's and PSK's row also carries the stops (the TX latch and Esc/Stop, `.rtty-send-stops`) at its right
    end, because the keep row is the row that stays parked. */
 .cw-send-wrap {

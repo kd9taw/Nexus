@@ -154,23 +154,30 @@ export function PanelsMenu({ items, onToggle, onUndo, canUndo, undoNote, onReset
 
   // INSIDE THE WINDOW. The popover hangs from the button's right edge (`right: 0`), so where the
   // button sits near the left of a narrow window it hung off the window's left edge: at 700×800 at
-  // 175 % only one of RTTY's nine entries could be reached (measured). Once it is laid out, it is
-  // shifted back by exactly the overhang, on either side; the sheet caps its width at the window's.
-  // A `translate`, so nothing else moves. Rendered px over layout px is the UI zoom, which the shift
-  // must be divided by because it is applied inside the zoomed tree. Every render while open, so a
-  // menu whose entries change width stays clamped.
+  // 175 % only one of RTTY's nine entries could be reached (measured). And it opened DOWNWARD at the
+  // sheet's 0.7 × the window, whatever room was left below the button, so where the button sits low
+  // (a cockpit header at 150–175 %) the box ran past the window and its last entries could not be
+  // reached by its own scroll: CW at 1280×720 at 175 %, 617–1121 px on a 720 px window (measured).
+  // `fitMenu` runs once it is laid out, on every render while open, and whenever anything scrolls or
+  // the window resizes (the button moves with its shell's scroll): see its own comment.
   const popRef = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
-    const pop = popRef.current
-    if (!open || !pop) return
-    pop.style.translate = ''
-    const r = pop.getBoundingClientRect()
-    if (r.width === 0 || pop.offsetWidth === 0) return
-    const zoom = r.width / pop.offsetWidth
-    const edge = 4 * zoom
-    const dx = r.left < edge ? edge - r.left : r.right > window.innerWidth - edge ? Math.max(edge - r.left, window.innerWidth - edge - r.right) : 0
-    if (dx !== 0) pop.style.translate = `${dx / zoom}px 0`
+    if (open && popRef.current && btnRef.current) fitMenu(popRef.current, btnRef.current)
   })
+  useEffect(() => {
+    if (!open) return
+    const refit = (e: Event) => {
+      const pop = popRef.current
+      // The menu's own scroll moves nothing of the box.
+      if (pop && btnRef.current && e.target !== pop) fitMenu(pop, btnRef.current)
+    }
+    document.addEventListener('scroll', refit, true)
+    window.addEventListener('resize', refit)
+    return () => {
+      document.removeEventListener('scroll', refit, true)
+      window.removeEventListener('resize', refit)
+    }
+  }, [open])
 
   // Hidden by the OPERATOR — an entry unticked in the stock layout is not (see `shipsHidden`).
   const hidden = items.filter((i) => i.state === 'removed' && !i.shipsHidden).length
@@ -298,4 +305,68 @@ export function PanelsMenu({ items, onToggle, onUndo, canUndo, undoNote, onReset
       )}
     </div>
   )
+}
+
+/** The cockpit's PARKED STOP SURFACES (cockpit-panes.css): the TX dock (or, folded, its keep row) is never under
+ *  the menu, and the TX strip is not wherever that still leaves the menu MIN_MENU_EM of room. */
+const PARKED_DOCK = '.cockpit-txdock, .cockpit-txdock-keep, .sstv-tx-bar'
+const PARKED_STRIP = '.cockpit-txstrip'
+const MIN_MENU_EM = 8
+
+/** FIT THE OPEN ⊞ POPOVER INTO THE ROOM IT HAS: the window, every ancestor that clips it (the cockpit
+ *  shell scrolls, so it clips the menu at its own edges), and the parked stop surfaces above.
+ *  · Across: shifted back inside by exactly its overhang, 4 px (× the zoom) from the edge it overhung; a
+ *    `translate`, so nothing else moves. The sheet caps its width at the window's.
+ *  · Down: where its whole height fits below the button it opens down as it always has. Where it does not,
+ *    it opens toward the side with more room (`data-up` opens it upward, styles.css) and its `max-height`
+ *    is that room, so the box stays inside and every entry is reachable by the menu's own scroll.
+ *  Rendered px over layout px is the UI zoom: the lengths are applied inside the zoomed tree, so they are
+ *  divided by it. Reset and re-measured each time, keeping the operator's place in the menu's scroll. */
+function fitMenu(pop: HTMLElement, btn: HTMLElement): void {
+  const kept = pop.scrollTop
+  pop.style.translate = ''
+  pop.style.maxHeight = ''
+  pop.removeAttribute('data-up')
+  const r = pop.getBoundingClientRect()
+  if (r.width === 0 || pop.offsetWidth === 0) return
+  const zoom = r.width / pop.offsetWidth
+  const edge = 4 * zoom
+  const dx = r.left < edge ? edge - r.left : r.right > window.innerWidth - edge ? Math.max(edge - r.left, window.innerWidth - edge - r.right) : 0
+  if (dx !== 0) pop.style.translate = `${dx / zoom}px 0`
+  let top = 0
+  let bottom = window.innerHeight
+  let clip: HTMLElement | null = null
+  for (let e = pop.parentElement; e; e = e.parentElement) {
+    if (getComputedStyle(e).overflowY === 'visible') continue
+    const q = e.getBoundingClientRect()
+    top = Math.max(top, q.top)
+    bottom = Math.min(bottom, q.bottom)
+    clip ??= e
+  }
+  const b = btn.getBoundingClientRect()
+  // A parked surface wholly below the button bounds the room below it, one wholly above bounds the room above.
+  const bound = (sel: string, t0: number, b0: number): [number, number] => {
+    let t = t0
+    let bt = b0
+    for (const el of clip ? Array.from(clip.querySelectorAll<HTMLElement>(sel)) : []) {
+      const q = el.getBoundingClientRect()
+      if (q.height === 0 || q.bottom <= t0 || q.top >= b0) continue
+      if (q.top >= b.bottom) bt = Math.min(bt, q.top)
+      else if (q.bottom <= b.top) t = Math.max(t, q.bottom)
+    }
+    return [t, bt]
+  }
+  ;[top, bottom] = bound(PARKED_DOCK, top, bottom)
+  const em = (parseFloat(getComputedStyle(pop).fontSize) || 16) * zoom
+  const [st, sb] = bound(PARKED_STRIP, top, bottom)
+  const gap = Math.max(0, r.top - b.bottom)
+  const room = (t: number, bt: number) => [bt - b.bottom - gap - edge, b.top - t - gap - edge]
+  const [sBelow, sAbove] = room(st, sb)
+  const [below, above] = Math.max(sBelow, sAbove) >= MIN_MENU_EM * em ? [sBelow, sAbove] : room(top, bottom)
+  if (r.height > below) {
+    const up = above > below
+    if (up) pop.setAttribute('data-up', '')
+    pop.style.maxHeight = `${Math.max(0, Math.min(r.height, up ? above : below)) / zoom}px`
+  }
+  pop.scrollTop = kept
 }

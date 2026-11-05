@@ -274,8 +274,7 @@ function decidePin(shell: HTMLElement, head: HTMLElement, strip: HTMLElement, do
 
 /** How much of the shell's scrollport must stay free between the strip and a dock parked WHOLE, in the
  *  shell's em, before the dock folds. Two: the height of the header's ⊞ Panels button with room to
- *  spare, so scrolling brings it out between the parked surfaces where a pointer can reach it. The
- *  tightest window that parks its dock whole today (PSK at 1280×720 at 175 %) leaves 2.2em (measured). */
+ *  spare, so scrolling brings it out between the parked surfaces where a pointer can reach it. */
 export const FOLD_ROOM_EM = 2
 
 /** THE DOCK'S KEEP ROW: the dock child that parks at the bottom while the dock is folded (Send, PTT,
@@ -289,19 +288,40 @@ const keepRow = (dock: HTMLElement): HTMLElement | undefined =>
  *  where the strip, the whole dock and FOLD_ROOM_EM are taller than the shell's scrollport (inside its
  *  padding, where sticky boxes park). Returns the dock's UNFOLDED height, which is also what the pin
  *  decision reads. Folded, the dock has no box at all (`display: contents`), so it is unfolded for this
- *  one measurement and folded again before the frame is painted: the decision never reads a height
- *  that folding changes, so it cannot flap. A shell with no height (a keep-alive host under `[hidden]`,
- *  or jsdom) leaves the state as it is. The keep row carries the same attribute: that is what parks it. */
+ *  one measurement and folded again before the frame is painted. A shell with no height (a keep-alive
+ *  host under `[hidden]`, or jsdom) leaves the state as it is. The keep row carries the same attribute:
+ *  that is what parks it.
+ *  A HYSTERESIS BAND, ON PURPOSE. Only the dock is unfolded for the measurement; the keep row keeps its
+ *  folded padding and border, so a folded dock measures that much taller (7–8 layout px, measured) than
+ *  it does unfolded. The window must therefore grow that much more to unfold it than it shrank to fold it
+ *  (CW at 900 px wide: folds at 776 px tall, unfolds at 792). That is the anti-flap: at no height can
+ *  unfolding make it fit and folding make it not.
+ *  RE-MEASURED ONLY WHEN SOMETHING IT READS HAS CHANGED. The strip renders on every snapshot (several a
+ *  second), and a folded dock's measurement is two attribute writes and two forced layouts. So a folded
+ *  dock keeps the decision until the shell's size or zoom, its padding or font, the strip's height or the
+ *  dock's rows (their number, classes and sizes) change; then it is measured again. */
+const foldMemo = new WeakMap<HTMLElement, { key: string; natural: number }>()
+function foldKey(shell: HTMLElement, strip: HTMLElement, dock: HTMLElement, cs: CSSStyleDeclaration): string {
+  const rows = Array.from(dock.children, (c) =>
+    c instanceof HTMLElement ? `${c.className}:${c.offsetWidth}x${c.offsetHeight}` : c.tagName,
+  )
+  return [shell.clientWidth, shell.clientHeight, shell.getBoundingClientRect().height, cs.paddingTop, cs.paddingBottom,
+    cs.fontSize, strip.offsetHeight, ...rows].join('|')
+}
 function decideFold(shell: HTMLElement, strip: HTMLElement, dock: HTMLElement): number {
   const keep = keepRow(dock)
   const was = dock.getAttribute('data-fold') === 'on'
-  if (was) dock.removeAttribute('data-fold')
-  const natural = dock.offsetHeight
-  if (shell.clientHeight === 0) {
-    if (was) dock.setAttribute('data-fold', 'on')
-    return natural
-  }
+  if (shell.clientHeight === 0) return was ? (foldMemo.get(dock)?.natural ?? 0) : dock.offsetHeight
   const cs = getComputedStyle(shell)
+  let natural: number
+  const memo = was ? foldMemo.get(dock) : undefined
+  const key = was ? foldKey(shell, strip, dock, cs) : ''
+  if (memo && memo.key === key) {
+    natural = memo.natural
+  } else {
+    if (was) dock.removeAttribute('data-fold')
+    natural = dock.offsetHeight
+  }
   const em = parseFloat(cs.fontSize) || 16
   const room = shell.clientHeight - (parseFloat(cs.paddingTop) || 0) - (parseFloat(cs.paddingBottom) || 0)
   const fold =
@@ -309,10 +329,14 @@ function decideFold(shell: HTMLElement, strip: HTMLElement, dock: HTMLElement): 
     getComputedStyle(dock).position === 'sticky' &&
     strip.offsetHeight + natural + FOLD_ROOM_EM * em > room
   if (fold) {
-    dock.setAttribute('data-fold', 'on')
-    keep.setAttribute('data-fold', 'on')
+    if (dock.getAttribute('data-fold') !== 'on') dock.setAttribute('data-fold', 'on')
+    if (keep.getAttribute('data-fold') !== 'on') keep.setAttribute('data-fold', 'on')
+    // Keyed on the FOLDED layout, the one the next render reads.
+    foldMemo.set(dock, { key: foldKey(shell, strip, dock, cs), natural })
   } else {
+    dock.removeAttribute('data-fold')
     keep?.removeAttribute('data-fold')
+    foldMemo.delete(dock)
   }
   return natural
 }
