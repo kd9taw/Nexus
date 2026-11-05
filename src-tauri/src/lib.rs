@@ -63196,9 +63196,9 @@ mod tests {
     }
 
     /// The FT drive the operator set per band and mode is a station setting: a settings backup
-    /// carries each radio's, and a restore brings it back. A backup hand-edited to a level the
-    /// slider cannot reach restores clamped into the slider's range, and an entry that is not a
-    /// level is dropped, never the backup.
+    /// carries each radio's, and a restore brings it back. In a backup hand-edited to a level the
+    /// slider cannot reach, that entry is dropped (never clamped to full drive), as is one that is
+    /// not a level; the backup still restores.
     #[test]
     fn a_backup_carries_the_ft_drive_per_band_and_mode() {
         let mut s = tempo_app::settings::Settings {
@@ -63223,7 +63223,15 @@ mod tests {
         drive["40m/FT8"] = serde_json::json!("max");
         let restored = super::settings_from_bundle(bundle["settings"].clone()).unwrap();
         assert_eq!(restored.mycall, "W9XYZ", "the backup restores");
-        assert_eq!(restored.radios[0].ft_drive_for("20m", "FT8"), Some(1.0));
+        assert!(
+            !restored.radios[0].ft_drive.contains_key("20m/FT8"),
+            "out of range: dropped, never clamped to full drive"
+        );
+        assert_eq!(
+            restored.radios[0].ft_drive_for("20m", "FT8"),
+            Some(0.30),
+            "the band's own drive stands in"
+        );
         assert!(!restored.radios[0].ft_drive.contains_key("40m/FT8"));
     }
 

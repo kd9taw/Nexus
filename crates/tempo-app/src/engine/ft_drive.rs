@@ -276,6 +276,9 @@ mod tests {
         assert!((drive(&e) - 0.20).abs() < 1e-6);
     }
 
+    /// A restore really changes the drive here (20 m FT4, never driven, takes 20 m's 0.30 over the
+    /// live 0.80), and still writes nothing to the memory: no "20m/FT4" entry appears and 20 m's
+    /// own is untouched. A restore made through the operator's slider path would write both.
     #[test]
     fn a_restore_is_not_saved_as_the_operators_pick() {
         let mut e = station();
@@ -284,12 +287,63 @@ mod tests {
         e.settle_ft_drive(false);
         e.set_tx_level(0.80); // 6 m FT8
         let before = profile(&e).ft_drive.clone();
-        qsy(&mut e, 14.074, "20m");
-        e.settle_ft_drive(false); // 0.30 comes back
+        // From 6 m FT8 straight to 20 m FT4, settled once.
         e.set_tier(Tier::Ft4);
-        e.settle_ft_drive(false); // FT4 on 20 m: the band's fallback, 0.30
-        assert_eq!(profile(&e).ft_drive, before, "no restore wrote the memory");
+        qsy(&mut e, 14.074, "20m");
+        assert!(
+            e.settle_ft_drive(false),
+            "premise: the restore changed the drive"
+        );
+        assert!((drive(&e) - 0.30).abs() < 1e-6, "premise: 20 m's fallback");
         assert!(!profile(&e).ft_drive.contains_key("20m/FT4"));
+        assert_eq!(profile(&e).ft_drive, before, "no restore wrote the memory");
+    }
+
+    /// The radio loop's word that it still holds the key on a deadline of its own (a voice
+    /// message or an APRS frame it plays, `observe_loop_tx_hold`) holds a restore off, though
+    /// nothing else says the radio is on the air; the restore lands once that hold ends.
+    #[test]
+    fn a_hold_the_loop_reported_keeps_the_drive_until_it_ends() {
+        let mut e = station();
+        e.set_tx_level(0.30); // 20 m
+        qsy(&mut e, 50.313, "6m");
+        e.settle_ft_drive(false);
+        e.set_tx_level(0.80); // 6 m
+        qsy(&mut e, 14.074, "20m");
+        e.observe_loop_tx_hold(Some(5_000.0));
+        assert!(!e.on_air(), "premise: nothing else says on the air");
+        assert!(!e.settle_ft_drive(false));
+        assert!(
+            (drive(&e) - 0.80).abs() < 1e-6,
+            "the held over keeps its level"
+        );
+        e.observe_loop_tx_hold(None);
+        assert!(
+            e.settle_ft_drive(false),
+            "the hold ended: 20 m's drive comes back"
+        );
+        assert!((drive(&e) - 0.30).abs() < 1e-6);
+    }
+
+    /// A stored level the slider cannot set (a corrupt or hand-edited entry that got past the
+    /// loader) is passed over, never clamped to full drive: with nothing else saved for the band,
+    /// the drive stays where it is.
+    #[test]
+    fn an_out_of_range_stored_level_keeps_the_current_drive() {
+        let mut e = station();
+        e.set_tx_level(0.30); // 20 m FT8
+        qsy(&mut e, 50.313, "6m");
+        e.settle_ft_drive(false);
+        let id = e.settings.active_radio;
+        let p = e.settings.radios.iter_mut().find(|p| p.id == id).unwrap();
+        p.ft_drive.insert("20m/FT8".into(), 9.0);
+        p.ft_drive.insert("20m".into(), -1.0);
+        qsy(&mut e, 14.074, "20m");
+        assert!(!e.settle_ft_drive(false), "nothing valid to restore");
+        assert!(
+            (drive(&e) - 0.30).abs() < 1e-6,
+            "the drive stays, never full"
+        );
     }
 
     #[test]

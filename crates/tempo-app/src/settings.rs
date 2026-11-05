@@ -4657,11 +4657,15 @@ fn lenient_esm_role_sets<'de, D: serde::Deserializer<'de>>(
     })
 }
 
-/// [`RadioProfile::ft_drive`] read ENTRY BY ENTRY: a level that is not a finite number, or one
-/// filed under a blank key, is dropped; a level outside the slider's range (0–1) is clamped into
-/// it; a value that is not a map at all loads empty. Every way in (the settings file, a settings
-/// backup, the Remote's copy) parses through here, so no stored drive can reach the radio loop
-/// out of range, and a bad entry never costs the settings file around it.
+/// [`RadioProfile::ft_drive`] read ENTRY BY ENTRY: a level that is not a number in the slider's
+/// range (0–1), or one filed under a blank key, is dropped; a value that is not a map at all loads
+/// empty. Every way in (the settings file, a settings backup, the Remote's copy) parses through
+/// here, so no stored drive can reach the radio loop out of range, and a bad entry never costs the
+/// settings file around it.
+///
+/// ⛔ DROPPED, NOT CLAMPED. The slider and [`RadioProfile::remember_ft_drive`] never store a level
+/// outside 0–1, so one here is corrupt or hand-edited, and clamping `9.0` would make it full drive.
+/// Dropped, the band's other entry or the drive the station already has is used instead.
 fn lenient_ft_drive<'de, D: serde::Deserializer<'de>>(
     de: D,
 ) -> Result<std::collections::BTreeMap<String, f32>, D::Error> {
@@ -4670,12 +4674,17 @@ fn lenient_ft_drive<'de, D: serde::Deserializer<'de>>(
             .into_iter()
             .filter(|(key, _)| !key.trim().is_empty())
             .filter_map(|(key, level)| {
-                let level = level.as_f64().filter(|l| l.is_finite())? as f32;
-                Some((key, level.clamp(0.0, 1.0)))
+                let level = level.as_f64()? as f32;
+                ft_drive_in_range(level).then_some((key, level))
             })
             .collect(),
         _ => Default::default(),
     })
+}
+
+/// Whether `level` is one the drive slider can set: a finite number from 0 to 1.
+fn ft_drive_in_range(level: f32) -> bool {
+    (0.0..=1.0).contains(&level)
 }
 
 /// The key of a band+mode entry in [`RadioProfile::ft_drive`] (`"20m/FT8"`); the band's own entry
@@ -4695,14 +4704,16 @@ impl RadioProfile {
     }
 
     /// The drive last set on `band` in FT mode `mode`, else the band's last drive in any FT mode,
-    /// else `None` (nothing to restore: the drive stays as it is).
+    /// else `None` (nothing to restore: the drive stays as it is). An entry out of the slider's
+    /// range counts as none, as on load ([`lenient_ft_drive`]).
     pub fn ft_drive_for(&self, band: &str, mode: &str) -> Option<f32> {
-        self.ft_drive
-            .get(&ft_drive_key(band, mode))
-            .or_else(|| self.ft_drive.get(band))
-            .copied()
-            .filter(|l| l.is_finite())
-            .map(|l| l.clamp(0.0, 1.0))
+        let valid = |key: &str| {
+            self.ft_drive
+                .get(key)
+                .copied()
+                .filter(|&l| ft_drive_in_range(l))
+        };
+        valid(&ft_drive_key(band, mode)).or_else(|| valid(band))
     }
 }
 
@@ -5303,9 +5314,9 @@ pub struct RadioProfile {
     /// restore never writes it, so a restored level is never taken for an operator's pick.
     /// Applied by `Engine::settle_ft_drive`, and never while the radio is on the air.
     ///
-    /// Read LENIENTLY ([`lenient_ft_drive`]): a level that is not a finite number is dropped and
-    /// one outside the slider's 0–1 range is clamped, so a hand edit gone wrong costs that entry
-    /// and can never drive harder than full scale.
+    /// Read LENIENTLY ([`lenient_ft_drive`]): a level that is not a number in the slider's 0–1
+    /// range is dropped, never clamped, so a hand edit gone wrong costs that entry and can never
+    /// turn into full drive.
     #[serde(default, deserialize_with = "lenient_ft_drive")]
     pub ft_drive: std::collections::BTreeMap<String, f32>,
     /// Opt-in to THIS radio's native FlexRadio DAX audio (BOTH directions — see
@@ -19000,11 +19011,11 @@ mod tests {
     }
 
     /// The FT drive memory survives the settings file, and a file that holds a bad entry costs
-    /// that entry only: a level out of the slider's range is clamped into it, one that is not a
-    /// number or sits under a blank key is dropped, and a memory that is not a map loads empty.
+    /// that entry only: a level out of the slider's range, one that is not a number and one under
+    /// a blank key are dropped, and a memory that is not a map loads empty.
     /// Read through `Settings::load`, the way a launch reads it.
     #[test]
-    fn the_ft_drive_memory_is_validated_and_clamped_on_load() {
+    fn the_ft_drive_memory_is_validated_on_load() {
         let dir =
             std::env::temp_dir().join(format!("tempo_settings_ftdrive_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -19037,13 +19048,13 @@ mod tests {
         assert_eq!(p.ft_drive.get("20m"), Some(&0.42), "with the band's own");
         assert_eq!(
             p.ft_drive.get("6m/FT8"),
-            Some(&1.0),
-            "clamped to full scale"
+            None,
+            "above full scale: dropped, never clamped to full drive"
         );
-        assert_eq!(p.ft_drive.get("6m"), Some(&0.0), "clamped to zero");
+        assert_eq!(p.ft_drive.get("6m"), None, "below zero: dropped");
         assert_eq!(p.ft_drive.get("40m/FT8"), None, "not a number: dropped");
         assert_eq!(p.ft_drive.get("15m/FT4"), None, "null: dropped");
-        assert_eq!(p.ft_drive.len(), 4, "a blank key is dropped");
+        assert_eq!(p.ft_drive.len(), 2, "a blank key is dropped");
 
         // A memory that is not a map loads empty, and the radio with it.
         v["radios"][0]["ftDrive"] = serde_json::json!([0.5]);
@@ -19055,7 +19066,8 @@ mod tests {
     }
 
     /// The band+mode level wins; the band's last FT level is the fallback; a band never driven
-    /// has none. A level is clamped as it is remembered.
+    /// has none. A level is clamped as it is remembered, and a stored one out of range (put there
+    /// past the loader) counts as none: never full drive.
     #[test]
     fn the_ft_drive_lookup_falls_back_to_the_band_only() {
         let mut p = RadioProfile::default();
@@ -19072,6 +19084,18 @@ mod tests {
         assert_eq!(p.ft_drive_for("40m", "FT8"), None, "never another band's");
         p.remember_ft_drive("6m", "FT8", 2.0);
         assert_eq!(p.ft_drive_for("6m", "FT8"), Some(1.0));
+        p.ft_drive.insert("20m/FT8".into(), 9.0);
+        assert_eq!(
+            p.ft_drive_for("20m", "FT8"),
+            Some(0.6),
+            "an out-of-range entry is passed over for the band's"
+        );
+        p.ft_drive.insert("20m".into(), f32::NAN);
+        assert_eq!(
+            p.ft_drive_for("20m", "FT8"),
+            None,
+            "and with none valid, none"
+        );
     }
 }
 

@@ -26,6 +26,23 @@ impl Station {
     /// A station calling CQ in FT8 on 20 m at drive 0.30, whose operator last drove 6 m FT8 at
     /// 0.80: both picks made with the drive slider, as the cockpit makes them.
     fn new() -> Station {
+        Station::with(
+            |_| {},
+            |e| {
+                e.set_frequency(50.313, "6m", "USB");
+                e.set_tx_level(0.80);
+                e.set_frequency(14.074, "20m", "USB");
+                e.set_tx_level(0.30);
+                e.start_cq(None).expect("Call CQ");
+                // The snappy first over is drained, so the slot boundary keys it.
+                let _ = e.take_immediate_tx();
+            },
+        )
+    }
+
+    /// The station in FT8 with `settings` as its file loads them, then `setup` done on the engine
+    /// before the loop's first tick.
+    fn with(configure: impl FnOnce(&mut Settings), setup: impl FnOnce(&mut Engine)) -> Station {
         let on_air = Arc::new(AtomicBool::new(false));
         let ptt = Arc::clone(&on_air);
         let peer = retuning_peer(14_074_000, "PKTUSB", move |line, radio| {
@@ -45,18 +62,13 @@ impl Station {
             ..Settings::default()
         };
         settings.ensure_radio_profiles();
+        configure(&mut settings);
         let engine = Arc::new(Mutex::new(Engine::with_settings(settings)));
         {
             let mut e = engine.lock().unwrap();
             e.set_license_class("extra");
             e.set_tier(Tier::Ft8);
-            e.set_frequency(50.313, "6m", "USB");
-            e.set_tx_level(0.80);
-            e.set_frequency(14.074, "20m", "USB");
-            e.set_tx_level(0.30);
-            e.start_cq(None).expect("Call CQ");
-            // The snappy first over is drained, so the slot boundary keys it.
-            let _ = e.take_immediate_tx();
+            setup(&mut e);
         }
         let slot = ((now_unix_ms() + 10_000.0) / 30_000.0).ceil() * 30_000.0;
         Station {
@@ -151,5 +163,99 @@ fn a_band_change_mid_over_brings_the_drive_back_only_after_the_unkey() {
     assert!(
         (s.drive() - 0.80).abs() < 1e-6,
         "6 m's drive is the live one"
+    );
+}
+
+/// ⛔ THE RESTORE RUNS BEFORE THE TICK READS THE DRIVE. Nexus launches on 20 m FT8 with a stale
+/// drive (0.30) beside the 20 m FT8 drive the operator last set (0.80), and its first tick is the
+/// one that keys the first over. The 0.80 must reach the audio before the over's first sample and
+/// the level must not change again inside the over. Restored after the tick has read the drive,
+/// the over would start at 0.30 and switch to 0.80 partway through. Tried with the first tick at
+/// several points of the slot's first half second.
+#[test]
+fn a_restore_on_the_keying_tick_lands_before_the_overs_first_sample() {
+    for first_tick in [0.0, 20.0, 100.0, 500.0] {
+        let mut s = Station::with(
+            |st| {
+                st.tx_level = 0.30;
+                st.radios[0].tx_level = 0.30;
+                st.radios[0].remember_ft_drive("20m", "FT8", 0.80);
+            },
+            |e| {
+                e.set_frequency(14.074, "20m", "USB");
+                e.start_cq(None).expect("Call CQ");
+                let _ = e.take_immediate_tx();
+            },
+        );
+        s.t = s.slot + first_tick;
+        for _ in 0..300 {
+            s.tick();
+        }
+        let at = &s.backend.tx_level_at;
+        assert_eq!(s.keys(), 1, "{first_tick}: premise: the over keyed");
+        assert!(
+            !s.backend.played.is_empty(),
+            "{first_tick}: premise: the over played"
+        );
+        assert!(
+            at.iter().any(|(l, _)| (l - 0.80).abs() < 1e-6),
+            "{first_tick}: the 20 m drive was never restored: {at:?}"
+        );
+        assert!(
+            at.iter().all(|&(_, played)| played == 0),
+            "{first_tick}: the drive changed after the over's audio was queued: {at:?}"
+        );
+    }
+}
+
+/// ⛔ THE LOOP'S OWN WORD THAT IT HOLDS THE KEY IS ENOUGH. A key the loop holds on a deadline of
+/// its own (`tx_until_ms`: an APRS frame or a voice message it plays) is told to the engine only
+/// after the tick that keyed it, so on that tick the engine sees nothing on the air. The loop's
+/// argument alone must hold the restore off then. CONTROL: the same band change with nothing held
+/// is restored on the first tick.
+#[test]
+fn a_key_only_the_loop_holds_keeps_the_drive() {
+    let idle = || {
+        Station::with(
+            |_| {},
+            |e| {
+                e.set_frequency(50.313, "6m", "USB");
+                e.set_tx_level(0.80);
+                e.set_frequency(14.074, "20m", "USB");
+                e.set_tx_level(0.30);
+            },
+        )
+    };
+    // CONTROL: nothing held.
+    let mut s = idle();
+    s.tick();
+    s.engine.lock().unwrap().set_frequency(50.313, "6m", "USB");
+    s.tick();
+    assert!(
+        (s.drive() - 0.80).abs() < 1e-6,
+        "control: an idle band change brings 6 m's drive back"
+    );
+
+    let mut s = idle();
+    s.tick();
+    s.engine.lock().unwrap().set_frequency(50.313, "6m", "USB");
+    // The loop holds the key on its own deadline; the engine has not been told.
+    s.state.tx_until_ms = Some(s.t + 5_000.0);
+    assert!(
+        !s.engine.lock().unwrap().on_air(),
+        "premise: the engine sees nothing on the air"
+    );
+    s.tick();
+    assert!(
+        (s.drive() - 0.30).abs() < 1e-6,
+        "the drive changed under a key the loop held"
+    );
+    assert!(
+        s.backend
+            .tx_level_calls
+            .iter()
+            .all(|l| (l - 0.80).abs() > 1e-6),
+        "the 6 m drive reached the audio under the key: {:?}",
+        s.backend.tx_level_calls
     );
 }
