@@ -3212,3 +3212,109 @@ fn fake_it_none_and_a_mode_without_split_put_nothing_on_the_radio_after_a_band_c
         assert_eq!(wrote, Vec::<&str>::new(), "{what}: {rx:?}");
     }
 }
+
+// ── What stands between a held split and a key out of VFO B ──────────────────────────────────
+// TX off no longer lets go of the split, so these are what still does, or what keeps VFO B from
+// being written.
+
+/// ⛔ SWITCHING RADIO THROUGH THE POOL LETS GO OF THE SPLIT THROUGH THE OUTGOING LINK. Split held
+/// with TX off, the operator picks a radio the pool already holds: the old radio gets `S 0 VFOA`
+/// before the loop adopts the new one, and is left out of split. Otherwise a later key on the old
+/// radio, the hand mic or a phone over, would go out of VFO B on the last TX dial.
+#[test]
+fn switching_radio_through_the_pool_with_split_held_lets_go_through_the_outgoing_link() {
+    let mut b = held_and_tx_off();
+    let _ = b.step_to_cycle_ms(17_000.0);
+    let (cat, _, _) = mock_logging_rigctld();
+    let (pool, id) = {
+        let mut e = b.engine.lock().unwrap();
+        let id = e.add_radio();
+        let profile = e.settings().radios.iter().find(|p| p.id == id).unwrap();
+        let monitor = live_monitor(id, Transport::from_profile(profile), &cat);
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![monitor]));
+        (pool, id)
+    };
+    b.engine.lock().unwrap().set_active_radio(id);
+    let before = b.radio.sent().len();
+    let mut last_active = 0u32;
+    let pending = AtomicBool::new(false);
+    handoff_if_switched(
+        &b.engine,
+        &pool,
+        &mut b.rig,
+        &mut b.state,
+        &mut last_active,
+        &pending,
+    );
+    assert_eq!(last_active, id, "premise: switched");
+    assert!(
+        pool.lock().unwrap().iter().any(|c| c.id == 0),
+        "premise: the old radio's link went to the pool, not closed"
+    );
+    let writes: Vec<String> = b.radio.sent()[before..]
+        .iter()
+        .filter(|l| !l.ends_with('?'))
+        .cloned()
+        .collect();
+    assert!(
+        writes.iter().any(|l| l == "S 0 VFOA"),
+        "not let go: {writes:?}"
+    );
+    assert!(
+        !b.radio.vfos.lock().unwrap().split,
+        "the outgoing radio left in split: {writes:?}"
+    );
+}
+
+/// ⛔ A CLUSTER SPLIT-ON-WORK ENDS THE HOLD, SO NOTHING OF SPLIT OPERATION'S TOUCHES ITS VFO B. Set
+/// while Split Operation's split is held, with TX off: the cluster's TX dial goes on VFO B, and a
+/// tune then keys with nothing written, leaving it there. If the hold stood, the tune would put VFO
+/// B back on the RX dial for Split Operation and overwrite the cluster's frequency.
+#[test]
+fn a_cluster_split_on_work_set_while_held_is_not_overwritten_by_a_tune() {
+    let mut b = held_and_tx_off();
+    let _ = b.step_to_cycle_ms(17_000.0);
+    b.engine.lock().unwrap().request_split(Some(14.080));
+    let set = b.ticks(100);
+    // Read out of its lock first: a failed assert holding it poisons it for the mock's thread.
+    let vfo_b = b.radio.vfos.lock().unwrap().b;
+    assert_eq!(
+        vfo_b, 14_080_000,
+        "premise: the cluster split went to the radio: {set:?}"
+    );
+    b.engine.lock().unwrap().set_tune(true);
+    let tune = b.ticks(5);
+    assert!(b.radio.keyed(), "premise: the tune keyed: {tune:?}");
+    let vfo_b = b.radio.vfos.lock().unwrap().b;
+    assert_eq!(
+        vfo_b, 14_080_000,
+        "VFO B moved off the cluster split: {tune:?}"
+    );
+}
+
+/// ⛔ NO PRE-SET ON A TICK THAT OPENED THE CAT LINK: opening it may already have cost a connect
+/// timeout out of the lead to the next boundary. The pre-set is held off across the band change,
+/// then the link is dropped as it comes due: the tick that reopens it writes no TX dial, and the
+/// next one does.
+#[test]
+fn a_tick_that_reopens_the_cat_link_does_not_pre_set_and_the_next_does() {
+    let mut b = held_and_tx_off();
+    let _ = b.step_to_cycle_ms(17_000.0);
+    b.state.handed_over = Some(u32::MAX);
+    let _ = b.qsy_to_40m(|_| {});
+    let _ = b.ticks(50);
+    b.state.handed_over = None;
+    b.rig.reconnect_for_test();
+    assert!(!b.rig.connection_open(), "premise: the link closed");
+    let reopening = b.ticks(1);
+    assert!(b.rig.connection_open(), "premise: the tick reopened it");
+    assert!(
+        !reopening.iter().any(|l| l == "I 7073500"),
+        "pre-set on the tick that reopened the link: {reopening:?}"
+    );
+    let next = b.ticks(1);
+    assert!(
+        next.iter().any(|l| l == "I 7073500"),
+        "CONTROL: the next tick pre-sets: {next:?}"
+    );
+}
