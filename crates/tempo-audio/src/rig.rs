@@ -678,6 +678,10 @@ pub struct Rig {
     /// (`slot::apply_tx_dial_shift`), the radio loop sends the release again at quiet points, and
     /// the radio's split is never read as the operator's own.
     pub(crate) split_release_pending: bool,
+    /// A slot over's Split Operation = Rig writes were refused (or not answered, or late) at its
+    /// key, so it keyed nothing and TX halted: the radio loop lets go of the split at its next quiet
+    /// point, as after any over, though TX turned off alone no longer lets go of it.
+    pub(crate) split_refused_at_key: bool,
     /// The TX dial and TX mode the radio last confirmed (`RPRT 0`) for Nexus's held Rig split on this
     /// connection, so an over whose split writes change nothing sends none of them. Forgotten by
     /// anything that may have moved VFO B or the dial: a new or dropped connection
@@ -907,6 +911,7 @@ impl Rig {
             keyed: false,
             tx_split_held: false,
             split_release_pending: false,
+            split_refused_at_key: false,
             split_confirmed: None,
             slow_transport: false,
             network_chain: false,
@@ -1067,6 +1072,13 @@ impl Rig {
     /// the first of them opened).
     pub(crate) fn connection_drops(&self) -> u64 {
         self.connection_drops
+    }
+
+    /// Whether a connection to the control channel is open now: the next command goes out on it
+    /// without first having to connect (up to `CAT_CONNECT_TIMEOUT`).
+    #[cfg_attr(not(feature = "device"), allow(dead_code))] // the radio loop (service.rs, device)
+    pub(crate) fn connection_open(&self) -> bool {
+        self.stream.is_some()
     }
 
     /// Send one command line and read its COMPLETE (newline-terminated) reply.

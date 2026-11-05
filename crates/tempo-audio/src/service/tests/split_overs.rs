@@ -599,6 +599,12 @@ struct Vfos {
     refuse_i: bool,
     /// The TX dial (`I`) taken, and answered this many ms late.
     i_delay_ms: u64,
+    /// A radio slow to take VFO B to another band: an `I` that moves it off its band is taken,
+    /// and answered this many ms late; one inside the band is answered at once.
+    slow_band_change_ms: u64,
+    /// The operator turning the radio's knob: each dial read (`f`) first moves VFO A to the last
+    /// of these, until none is left.
+    knob: Vec<u64>,
 }
 
 struct Hamlib {
@@ -679,6 +685,9 @@ fn hamlib_bench_on(engine: Arc<Mutex<Engine>>, dial: u64, own_split: Option<u64>
             }
             "i" => Some(format!("{}\n", v.b)),
             "f" => {
+                if let Some(k) = v.knob.pop() {
+                    radio.dial = k;
+                }
                 let hz = v.stale.take().unwrap_or(radio.dial);
                 if hz != FT8_DIAL {
                     v.reads_off_the_channel += 1;
@@ -705,7 +714,11 @@ fn hamlib_bench_on(engine: Arc<Mutex<Engine>>, dial: u64, own_split: Option<u64>
                 if v.i_delay_ms > 0 {
                     std::thread::sleep(std::time::Duration::from_millis(v.i_delay_ms));
                 }
-                v.b = line[2..].trim().parse().unwrap();
+                let hz = line[2..].trim().parse().unwrap();
+                if v.slow_band_change_ms > 0 && !crate::rig::tuning::same_named_band(v.b, hz) {
+                    std::thread::sleep(std::time::Duration::from_millis(v.slow_band_change_ms));
+                }
+                v.b = hz;
                 ok()
             }
             _ if line.starts_with("X ") => {
@@ -771,7 +784,7 @@ fn through_hamlib_rig_split_is_engaged_before_the_first_key_and_held_between_ove
 /// transmitted, VFO B on the dial (a quick split): the receive-time split read takes that as the
 /// operator's own split. Nexus holds its split between overs, as WSJT-X does, so VFO B stays on the
 /// TX dial across them; the operator's own split, VFO B and all, is put back when Nexus lets go
-/// (here, TX turned off).
+/// (here, Split Operation set to None).
 #[test]
 fn through_hamlib_a_radio_already_in_split_gets_its_own_vfo_b_back_when_nexus_lets_go() {
     let mut b = hamlib_bench(SplitMode::Rig, 1441.0, Some(FT8_DIAL));
@@ -792,7 +805,7 @@ fn through_hamlib_a_radio_already_in_split_gets_its_own_vfo_b_back_when_nexus_le
         14_073_500,
         "held on the TX dial"
     );
-    b.engine.lock().unwrap().set_tx_enabled(false);
+    let_go_by_split_none(&mut b);
     let writes = b.ticks(3);
     assert_eq!(
         writes,
@@ -1245,13 +1258,16 @@ fn through_hamlib_rig_split_is_put_on_before_every_over_and_held_across_overs() 
     assert_eq!((v.split, v.b), (true, 14_073_500), "held in split");
 }
 
-/// What lets go of a held Rig split, each on its own: the band changing, TX turned off, Split
-/// Operation changed. Each sends `S 0 VFOA` (no split of the radio's own to put back) while the
-/// station receives, before anything keys. The control: none of them, and nothing is written.
+/// What lets go of a held Rig split, each on its own: the band changing, Split Operation changed,
+/// a mode Split Operation does not apply to. Each sends `S 0 VFOA` (no split of the radio's own to
+/// put back) while the station receives, before anything keys. TX turned off is not one of them,
+/// as in WSJT-X, which keeps split on while it only monitors
+/// (`widgets/mainwindow.cpp:12378-12387`): nothing is written and the radio stays in split. The
+/// control: nothing changes, nothing written.
 #[test]
-fn through_hamlib_a_held_rig_split_is_let_go_when_the_band_tx_or_split_mode_changes() {
+fn through_hamlib_a_held_rig_split_is_let_go_when_the_band_or_split_mode_changes_not_tx_off() {
     type Change = fn(&mut Engine);
-    let cases: [(&str, Option<Change>); 4] = [
+    let cases: [(&str, Option<Change>, bool); 5] = [
         (
             // TX turned on again after the band change's own halt: the band alone lets go.
             "the band changes",
@@ -1259,8 +1275,8 @@ fn through_hamlib_a_held_rig_split_is_let_go_when_the_band_tx_or_split_mode_chan
                 e.set_frequency(7.074, "40m", "USB");
                 e.set_tx_enabled(true);
             }),
+            true,
         ),
-        ("TX is turned off", Some(|e| e.set_tx_enabled(false))),
         (
             "Split Operation is set to None",
             Some(|e| {
@@ -1268,10 +1284,21 @@ fn through_hamlib_a_held_rig_split_is_let_go_when_the_band_tx_or_split_mode_chan
                 s.split_mode = SplitMode::None;
                 e.apply_settings(s);
             }),
+            true,
         ),
-        ("control: nothing changes", None),
+        (
+            "a mode Split Operation does not apply to",
+            Some(|e| e.set_tier(Tier::TempoFast)),
+            true,
+        ),
+        (
+            "TX is turned off: held",
+            Some(|e| e.set_tx_enabled(false)),
+            false,
+        ),
+        ("control: nothing changes", None, false),
     ];
-    for (what, change) in cases {
+    for (what, change, lets_go) in cases {
         let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
         let _ = b.overs(1);
         assert!(b.radio.vfos.lock().unwrap().split, "{what}: premise, held");
@@ -1285,15 +1312,15 @@ fn through_hamlib_a_held_rig_split_is_let_go_when_the_band_tx_or_split_mode_chan
             .map(String::as_str)
             .filter(|l| l.starts_with(['S', 'T']))
             .collect();
-        match change {
-            Some(_) => {
+        match lets_go {
+            true => {
                 assert_eq!(sent, ["S 0 VFOA"], "{what}: wire {writes:?}");
                 assert!(
                     !b.radio.vfos.lock().unwrap().split,
                     "{what}: still in split"
                 );
             }
-            None => {
+            false => {
                 assert_eq!(sent, Vec::<&str>::new(), "{what}: wire {writes:?}");
                 assert!(b.radio.vfos.lock().unwrap().split, "{what}: let go");
             }
@@ -1345,9 +1372,9 @@ fn through_hamlib_a_held_rig_split_is_let_go_when_the_radio_changes() {
     assert!(!b.rig.tx_split_held, "the new link believes split is on");
 }
 
-/// A split release the radio does not take is still owed. TX turned off after a held Rig split,
-/// the radio refusing `S 0` (`RPRT -9`): nothing keys while it is owed, even with TX turned on
-/// again at the next own boundary (the over is refused with the split reason and TX halts); the
+/// A split release the radio does not take is still owed. Split Operation set to None after a held
+/// Rig split, the radio refusing `S 0` (`RPRT -9`): nothing keys while it is owed, even at the next
+/// own boundary with TX on (the over is refused with the split reason and TX halts); the
 /// receive-time split read, which now finds the radio in split, never takes that for the
 /// operator's own split; and once the radio takes `S 0` again, a retry at a quiet point lets go.
 #[test]
@@ -1356,14 +1383,14 @@ fn through_hamlib_a_refused_split_release_is_retried_at_quiet_points_and_nothing
     let _ = b.overs(1);
     assert!(b.radio.vfos.lock().unwrap().split, "premise: held");
     b.radio.vfos.lock().unwrap().refuse_split_off = true;
-    b.engine.lock().unwrap().set_tx_enabled(false);
+    let_go_by_split_none(&mut b);
     let first = b.ticks(3);
     assert_eq!(first, ["S 0 VFOA"], "premise: the release, refused");
     assert!(
         b.rig.split_release_pending,
         "the refused release is not owed"
     );
-    // TX on again just before the next own boundary: the over is refused, never keyed.
+    // The next own boundary, TX still on: the over is refused, never keyed.
     b.engine.lock().unwrap().set_tx_enabled(true);
     let across = b.ticks(20);
     assert!(
@@ -1785,10 +1812,11 @@ fn a_ptt_press_refused_for_the_split_is_not_tried_again_while_it_is_held() {
     );
 }
 
-/// A hold that has ended (TX turned off) is let go before a tune keys (the tune is the one key
-/// that needs no TX latch): `S 0 VFOA`, then the key, from VFO A. Nothing writes VFO B.
+/// TX turned off holds the split, as WSJT-X does, so a tune then (the tune is the one key that
+/// needs no TX latch) keys as with any held split: VFO B back on the RX dial first, then the key.
+/// Split stays on.
 #[test]
-fn a_tune_after_tx_is_turned_off_keys_after_the_split_is_let_go() {
+fn a_tune_after_tx_is_turned_off_keys_with_vfo_b_back_on_the_rx_dial() {
     let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
     let _ = b.overs(1);
     {
@@ -1800,11 +1828,11 @@ fn a_tune_after_tx_is_turned_off_keys_after_the_split_is_let_go() {
     let sent = split_and_keys(&writes);
     assert_eq!(sent.len(), 2, "wire {writes:?}");
     assert_eq!(
-        sent[0], "S 0 VFOA",
-        "split not let go before the key: {writes:?}"
+        sent[0], "I 14074000",
+        "VFO B not back on the RX dial before the key: {writes:?}"
     );
     assert!(is_key(sent[1]), "the tune did not key: {writes:?}");
-    assert!(!b.radio.vfos.lock().unwrap().split, "still in split");
+    assert!(b.radio.vfos.lock().unwrap().split, "split let go");
 }
 
 /// What a key that is not a slot over finds on the first tick after the hold ends, before the quiet
@@ -1936,17 +1964,17 @@ fn a_key_whose_split_release_the_radio_refuses_keys_nothing_until_the_release_is
     }
 }
 
-/// ⛔ A RELEASE STILL OWED REFUSES A TUNE TOO. TX turned off after a held over, the radio refusing
-/// `S 0`: the release is owed, split may still be on with VFO B on the shifted TX dial. A tune
-/// (the one key that needs no TX latch) keys nothing while it is owed and its line names Split
-/// Operation; it used to key out of VFO B. The control: once the radio takes the release, a tune
-/// keys from VFO A.
+/// ⛔ A RELEASE STILL OWED REFUSES A TUNE TOO. Split Operation set to None after a held over, the
+/// radio refusing `S 0`: the release is owed, split may still be on with VFO B on the shifted TX
+/// dial. A tune (the one key that needs no TX latch) keys nothing while it is owed and its line
+/// names Split Operation; it used to key out of VFO B. The control: once the radio takes the
+/// release, a tune keys from VFO A.
 #[test]
 fn a_tune_while_a_split_release_is_owed_keys_nothing() {
     let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
     let _ = b.overs(1);
     b.radio.vfos.lock().unwrap().refuse_split_off = true;
-    b.engine.lock().unwrap().set_tx_enabled(false);
+    let_go_by_split_none(&mut b);
     let first = b.ticks(3);
     assert_eq!(first, ["S 0 VFOA"], "premise: the release, refused");
     assert!(b.rig.split_release_pending, "premise: owed");
@@ -2216,7 +2244,7 @@ fn through_hamlib_a_release_answered_not_available_counts_as_done() {
     let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
     let _ = b.overs(1);
     b.radio.vfos.lock().unwrap().split_off_unavailable = true;
-    b.engine.lock().unwrap().set_tx_enabled(false);
+    let_go_by_split_none(&mut b);
     assert_eq!(b.ticks(3), ["S 0 VFOA"], "premise: the release");
     assert!(!b.rig.split_release_pending, "owed after RPRT -11");
 }
@@ -2277,8 +2305,9 @@ fn through_hamlib_a_tx_vfo_that_needs_split_on_gets_split_on_first_and_every_ove
         },
         (true, 14_073_500)
     );
-    b.engine.lock().unwrap().set_tx_enabled(false);
+    let_go_by_split_none(&mut b);
     assert_eq!(b.ticks(3), ["S 0 VFOA"], "premise: the release");
+    save_settings(&mut b, |s| s.split_mode = SplitMode::Rig);
     {
         let mut e = b.engine.lock().unwrap();
         e.set_tx_enabled(true);
@@ -2319,7 +2348,7 @@ fn through_hamlib_an_owed_release_is_retried_without_the_engine_lock() {
         v.refuse_split_off = true;
         v.split_off_lock_probe = Some(b.engine.clone());
     }
-    b.engine.lock().unwrap().set_tx_enabled(false);
+    let_go_by_split_none(&mut b);
     let _ = b.ticks(300);
     let v = b.radio.vfos.lock().unwrap();
     let retries = &v.split_off_lock_free[1..];
@@ -2627,6 +2656,12 @@ fn through_hamlib_test_cat_keeps_an_owed_split_release() {
     }
 }
 
+/// Let go of a held Rig split while the station receives: Split Operation set to None. (TX turned
+/// off no longer lets go of it, as in WSJT-X.)
+fn let_go_by_split_none<R: Radio>(b: &mut Bench<R>) {
+    save_settings(b, |s| s.split_mode = SplitMode::None);
+}
+
 fn save_settings<R: Radio>(b: &mut Bench<R>, edit: impl FnOnce(&mut Settings)) {
     let mut e = b.engine.lock().unwrap();
     let mut s = e.settings().clone();
@@ -2734,4 +2769,552 @@ fn a_radio_handoff_asks_the_new_radio_whether_its_split_read_is_native() {
         "premise: the handoff reset ran"
     );
     assert_eq!(state.split_detect, None, "the last radio's answer kept");
+}
+
+// ── Split Operation = Rig's TX dial put on the radio at a band change, while it receives ───────
+// WSJT-X 3.0.2 writes the TX dial when the band changes, while it is only monitoring and whether
+// or not TX is enabled: `MainWindow::band_changed` calls `setRig` and then `setXIT`
+// (`widgets/mainwindow.cpp:12117-12118`), and `setXIT` sends `transceiver_tx_frequency` whenever
+// split is on and it is monitoring (`:12378-12387`), through the same
+// `HamlibTransceiver::do_tx_frequency` an over goes through (`Transceiver/HamlibTransceiver.cpp:
+// 947-1033`). It writes nothing when the radio's own dial moves (`handle_transceiver_update`,
+// `:12511-12545`). Nexus lets go of its split at a band change (the TX dial is the old band's) and
+// takes the new band's TX dial at once, TX on or off, so the first over after TX is armed again
+// finds VFO B there.
+
+/// The 40 m FT8 dial, and the TX dial a 1441 Hz offset puts VFO B on there.
+const FT8_40M_DIAL: u64 = 7_074_000;
+const FT8_40M_TX_DIAL: u64 = 7_073_500;
+
+/// The split, TX VFO and key writes among `writes`, in order.
+fn split_writes(writes: &[String]) -> Vec<&str> {
+    writes
+        .iter()
+        .map(String::as_str)
+        .filter(|l| l.starts_with(['S', 'I', 'X', 'T']))
+        .collect()
+}
+
+/// What the band change itself and the second after it write with the split held: the 20 m split
+/// let go, then the 40 m TX dial and its mode taken, split on first and last.
+const BAND_CHANGE_PRESET: [&str; 5] = [
+    "S 0 VFOA",
+    "S 1 VFOB",
+    "I 7073500",
+    "X PKTUSB -1",
+    "S 1 VFOB",
+];
+
+impl<R: Radio> Bench<R> {
+    /// Step to `at_ms` into the 30 s cycle (the bench's own slots start at 0), the next time it
+    /// comes.
+    fn step_to_cycle_ms(&mut self, at_ms: f64) -> Vec<String> {
+        let mut writes = Vec::new();
+        while !(at_ms..at_ms + 20.0).contains(&self.t.rem_euclid(30_000.0)) {
+            writes.extend(self.ticks(1));
+        }
+        writes
+    }
+
+    /// The band changed to 40 m FT8 (which halts TX, as it does), with `at_change` done in the same
+    /// moment; then a second of receiving. Returns the writes of both.
+    fn qsy_to_40m(&mut self, at_change: impl FnOnce(&mut Engine)) -> Vec<String> {
+        {
+            let mut e = self.engine.lock().unwrap();
+            e.set_frequency(7.074, "40m", "USB");
+            at_change(&mut e);
+        }
+        self.ticks(50)
+    }
+
+    /// Call CQ with TX on, as the button does: the snappy first-over request is left pending, to
+    /// key at once in this station's own slot or at its next boundary.
+    fn call_cq_now(&mut self) {
+        let mut e = self.engine.lock().unwrap();
+        e.set_tx_enabled(true);
+        e.start_cq(None).expect("Call CQ");
+    }
+
+    /// Up to `n` ticks, stopping on the one that keys; the writes.
+    fn ticks_to_key(&mut self, n: usize) -> Vec<String> {
+        let mut writes = Vec::new();
+        for _ in 0..n {
+            writes.extend(self.ticks(1));
+            if self.radio.keyed() {
+                break;
+            }
+        }
+        writes
+    }
+}
+
+/// A radio that takes 800 ms to move VFO B to another band, behind a link that waits for it.
+fn slow_band_change_bench(split: SplitMode) -> Bench<Hamlib> {
+    let mut b = hamlib_bench(split, 1441.0, None);
+    b.rig.test_reply_deadline_ms = Some(2_000);
+    b.radio.vfos.lock().unwrap().slow_band_change_ms = 800;
+    b
+}
+
+/// A 20 m over with Rig split, then TX turned off (the split held, as WSJT-X holds it), on a radio
+/// slow to move VFO B across bands.
+fn held_and_tx_off() -> Bench<Hamlib> {
+    let mut b = slow_band_change_bench(SplitMode::Rig);
+    let _ = b.overs(1);
+    b.engine.lock().unwrap().set_tx_enabled(false);
+    assert_eq!(
+        b.ticks(3),
+        Vec::<String>::new(),
+        "premise: TX off writes nothing"
+    );
+    assert!(b.radio.vfos.lock().unwrap().split, "premise: held");
+    b
+}
+
+/// ⭐ THE BAND CHANGE'S FIRST OVER KEYS ON A RADIO SLOW TO MOVE VFO B, WHENEVER CALL CQ IS PRESSED.
+/// The band changes 2 s into either period, TX off (the band change halts it in any case), and
+/// the 40 m TX dial goes to the radio within the next second, while it receives. Call CQ a second
+/// later leaves its first over pending as the button does: in the station's own period it keys at
+/// once, in the other at the next own boundary. Either way VFO B is already on 40 m and the key
+/// keys: no slow cross-band `I`, no refusal, TX still on.
+/// Before, each of these keyed nothing and halted TX: the over wrote `S 1 VFOB, I 7073500` at its
+/// key, took 800 ms, and was refused.
+#[test]
+fn a_band_change_in_either_period_puts_the_tx_dial_on_the_radio_and_the_called_over_keys() {
+    for (what, at_ms) in [("own period", 2_000.0), ("other period", 17_000.0)] {
+        let mut b = held_and_tx_off();
+        let _ = b.step_to_cycle_ms(at_ms);
+        let change = b.qsy_to_40m(|_| {});
+        assert!(
+            !b.engine.lock().unwrap().tx_enabled(),
+            "{what}: premise: TX off"
+        );
+        assert_eq!(
+            split_writes(&change),
+            BAND_CHANGE_PRESET,
+            "{what}: the 40 m TX dial not put on the radio at the band change"
+        );
+        b.call_cq_now();
+        assert!(
+            b.engine.lock().unwrap().peek_immediate_tx(),
+            "{what}: premise: the first over pending"
+        );
+        assert_eq!(
+            b.radio.vfos.lock().unwrap().b,
+            FT8_40M_TX_DIAL,
+            "{what}: VFO B not on 40 m before the over"
+        );
+        let key = b.ticks_to_key(800);
+        assert!(b.radio.keyed(), "{what}: the over did not key: {key:?}");
+        // Call CQ's own mode write (`M`) forgets what the radio confirmed for VFO B, so the key
+        // may send the TX dial and mode again; VFO B is already on 40 m, so the radio takes them
+        // at once and the key goes out inside its 500 ms.
+        let key = split_writes(&key);
+        assert_eq!(
+            key[key.len() - 2..],
+            ["S 1 VFOB", "T 1"],
+            "{what}: the over's key: {key:?}"
+        );
+        assert!(
+            key.iter()
+                .all(|l| matches!(*l, "I 7073500" | "X PKTUSB -1" | "S 1 VFOB" | "T 1")),
+            "{what}: the over's key: {key:?}"
+        );
+        assert!(b.engine.lock().unwrap().tx_enabled(), "{what}: TX halted");
+        let v = b.radio.vfos.lock().unwrap();
+        assert_eq!((v.split, v.b), (true, FT8_40M_TX_DIAL), "{what}");
+        drop(v);
+        assert_eq!(b.dial(), FT8_40M_DIAL, "{what}");
+    }
+}
+
+/// ⛔ NOTHING IS PUT ON THE RADIO UNDER A CARRIER. The band changes on the tick an over keys: no
+/// split, TX dial or mode write goes out while it is keyed; the band change ends the over, and the
+/// 40 m TX dial goes after the unkey, while the station receives.
+#[test]
+fn a_band_change_during_an_over_is_put_on_the_radio_only_after_the_unkey() {
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    let _ = b.overs(1);
+    b.slot = (b.t / 30_000.0).ceil() * 30_000.0;
+    let engine = b.engine.clone();
+    let overs = b.overs_with(1, |_| {
+        engine.lock().unwrap().set_frequency(7.074, "40m", "USB");
+    });
+    eprintln!("band change during the over: {:?}", overs[0]);
+    let everywhere = b
+        .radio
+        .sent()
+        .iter()
+        .filter(|l| l.starts_with(['I', 'X']))
+        .count();
+    // The first over's I and X, and this one's recorded writes.
+    let recorded = 2 + overs
+        .iter()
+        .flat_map(|o| o.key.iter().chain(&o.unkey).chain(&o.rx))
+        .filter(|l| l.starts_with(['I', 'X']))
+        .count();
+    assert_eq!(
+        everywhere,
+        recorded,
+        "a TX dial or mode written while the over was keyed: {:?}",
+        b.radio.sent()
+    );
+    assert_eq!(
+        split_writes(&overs[0].rx),
+        BAND_CHANGE_PRESET,
+        "the 40 m TX dial, after the unkey"
+    );
+}
+
+/// ⛔ NOTHING IS PUT ON THE RADIO UNDER A TUNE CARRIER. The band changes and Tune is pressed in
+/// the same moment: while the tune carrier is up nothing writes split, VFO B or its mode; the 40 m
+/// TX dial goes once the tune ends.
+#[test]
+fn a_pre_set_due_during_a_tune_waits_for_the_tune_to_end() {
+    let mut b = held_and_tx_off();
+    let _ = b.step_to_cycle_ms(17_000.0);
+    let tuning = b.qsy_to_40m(|e| e.set_tune(true));
+    assert!(b.radio.keyed(), "premise: the tune keyed: {tuning:?}");
+    assert!(
+        !tuning
+            .iter()
+            .any(|l| l.starts_with("S 1") || l.starts_with('I') || l.starts_with('X')),
+        "written under the tune carrier: {tuning:?}"
+    );
+    b.engine.lock().unwrap().set_tune(false);
+    let after = b.ticks(100);
+    assert!(!b.radio.keyed(), "premise: the tune ended");
+    let at = after.iter().position(|l| l == "T 0");
+    let preset = after.iter().position(|l| l == "I 7073500");
+    assert!(
+        matches!((at, preset), (Some(a), Some(p)) if p > a),
+        "the TX dial not written after the tune ended: {after:?}"
+    );
+}
+
+/// ⛔ NO PRE-SET INSIDE THE LAST SECONDS BEFORE A BOUNDARY. The band changes 3 s before the next
+/// boundary: nothing goes until that boundary has passed, then the 40 m TX dial goes.
+#[test]
+fn a_band_change_just_before_a_boundary_pre_sets_after_it() {
+    let mut b = held_and_tx_off();
+    let _ = b.step_to_cycle_ms(12_000.0);
+    let mut before = b.qsy_to_40m(|_| {});
+    before.extend(b.step_to_cycle_ms(14_960.0));
+    assert!(
+        !before.iter().any(|l| l == "I 7073500"),
+        "written inside the lead to the boundary: {before:?}"
+    );
+    let after = b.ticks(100);
+    assert!(
+        after.iter().any(|l| l == "I 7073500"),
+        "not written after the boundary: {after:?}"
+    );
+}
+
+/// The band button pressed twice in quick succession (40 m, then 30 m 100 ms later): one pre-set,
+/// for the band it settled on.
+#[test]
+fn two_band_changes_inside_the_settle_pre_set_once_for_the_last() {
+    let mut b = held_and_tx_off();
+    let _ = b.step_to_cycle_ms(17_000.0);
+    b.engine.lock().unwrap().set_frequency(7.074, "40m", "USB");
+    let mut writes = b.ticks(5);
+    b.engine.lock().unwrap().set_frequency(10.136, "30m", "USB");
+    writes.extend(b.ticks(300));
+    let tx_dials: Vec<&String> = writes.iter().filter(|l| l.starts_with("I ")).collect();
+    assert_eq!(tx_dials, ["I 10135500"], "{writes:?}");
+}
+
+/// ⛔ THE RADIO'S KNOB WRITES NOTHING, AS IN WSJT-X. Split held on 20 m, TX on, receiving: ten dial
+/// reads 100 Hz apart (the operator turning the knob) send no split, TX dial or mode write at all.
+/// A band change then sends exactly one pre-set.
+#[test]
+fn a_turning_knob_pre_sets_nothing_and_a_band_change_pre_sets_once() {
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    let _ = b.overs(1);
+    let _ = b.step_to_cycle_ms(17_000.0);
+    b.radio.vfos.lock().unwrap().knob = (1..=10).rev().map(|i| FT8_DIAL + 100 * i).collect();
+    let spin = b.ticks(250);
+    assert!(
+        b.radio.vfos.lock().unwrap().knob.is_empty(),
+        "premise: every knob step read"
+    );
+    assert_eq!(
+        b.dial(),
+        FT8_DIAL + 1_000,
+        "premise: the dial followed the knob"
+    );
+    assert_eq!(
+        split_writes(&spin),
+        Vec::<&str>::new(),
+        "written to the radio while the knob turned"
+    );
+    let _ = b.step_to_cycle_ms(17_000.0);
+    let change = b.qsy_to_40m(|_| {});
+    let more = b.ticks(250);
+    let presets = change
+        .iter()
+        .chain(&more)
+        .filter(|l| l.starts_with("I "))
+        .count();
+    assert_eq!(presets, 1, "{change:?} {more:?}");
+}
+
+/// ⛔ A CLUSTER SPLIT-ON-WORK OWNS VFO B: with one set at the band change, nothing of Split
+/// Operation's is put on the radio. The control is the band change with none
+/// (`a_band_change_in_either_period_puts_the_tx_dial_on_the_radio_and_the_called_over_keys`).
+#[test]
+fn a_cluster_split_on_work_keeps_vfo_b_from_the_pre_set() {
+    let mut b = held_and_tx_off();
+    let _ = b.step_to_cycle_ms(17_000.0);
+    let mut rx = b.qsy_to_40m(|e| e.request_split(Some(7.080)));
+    rx.extend(b.ticks(300));
+    eprintln!("receive {rx:?}");
+    assert!(
+        !rx.iter().any(|l| l == "I 7073500" || l.starts_with("X ")),
+        "Split Operation wrote VFO B under the cluster split: {rx:?}"
+    );
+    assert!(
+        rx.iter().any(|l| l == "I 7080000"),
+        "premise: the cluster split went to the radio: {rx:?}"
+    );
+    assert_eq!(
+        b.radio.vfos.lock().unwrap().b,
+        7_080_000,
+        "VFO B moved off the cluster split"
+    );
+}
+
+/// ⛔ A PRE-SET THE RADIO DOES NOT TAKE LEAVES THE KEY'S GUARD AS IT WAS. The radio refuses the TX
+/// dial at the band change: it is tried once more, never a third time, and nothing is taken as
+/// confirmed (the split the first try turned on is held). The radio then takes it, but slowly,
+/// at the key: the over writes the TX dial again there, misses its 500 ms, and nothing keys, TX
+/// halted.
+#[test]
+fn a_pre_set_the_radio_refuses_is_tried_once_more_and_the_key_still_guards() {
+    let mut b = held_and_tx_off();
+    let _ = b.step_to_cycle_ms(17_000.0);
+    b.radio.vfos.lock().unwrap().refuse_i = true;
+    let mut rx = b.qsy_to_40m(|_| {});
+    rx.extend(b.ticks(300));
+    eprintln!("receive {rx:?}");
+    let tries = rx.iter().filter(|l| *l == "I 7073500").count();
+    assert_eq!(tries, 2, "one try and one more: {rx:?}");
+    assert_eq!(
+        b.rig.split_confirmed, None,
+        "a refused pre-set taken as confirmed"
+    );
+    b.radio.vfos.lock().unwrap().refuse_i = false;
+    b.call_cq_now();
+    let key = b.ticks(800);
+    // The split the first try turned on is held, so the key's writes begin at the TX dial.
+    let key = split_writes(&key);
+    assert_eq!(key.first(), Some(&"I 7073500"), "the key's writes: {key:?}");
+    assert!(
+        !key.iter().any(|l| is_key(l)),
+        "keyed past the budget: {key:?}"
+    );
+    assert!(!b.engine.lock().unwrap().tx_enabled(), "TX not halted");
+}
+
+/// ⛔ NO PRE-SET WHILE A SPLIT RELEASE IS OWED. The radio refuses the 20 m split's release at the
+/// band change: while it is owed, nothing turns split on again or writes VFO B (the release
+/// retries are all that goes out). The control: once the radio takes the release, the 40 m TX
+/// dial goes.
+#[test]
+fn no_pre_set_goes_while_a_split_release_is_owed() {
+    let mut b = held_and_tx_off();
+    let _ = b.step_to_cycle_ms(17_000.0);
+    b.radio.vfos.lock().unwrap().refuse_split_off = true;
+    let mut owed = b.qsy_to_40m(|_| {});
+    owed.extend(b.ticks(300));
+    assert!(b.rig.split_release_pending, "premise: owed");
+    assert!(
+        split_writes(&owed).iter().all(|l| *l == "S 0 VFOA"),
+        "written while the release is owed: {owed:?}"
+    );
+    b.radio.vfos.lock().unwrap().refuse_split_off = false;
+    let after = b.ticks(1_500);
+    assert!(
+        after.iter().any(|l| l == "I 7073500"),
+        "CONTROL: the release taken, the TX dial goes: {after:?}"
+    );
+}
+
+/// ⛔ NO PRE-SET OFF THE DIGITAL SCREENS. On the Phone screens with TX armed and the tier still FT8,
+/// a band change writes no split, TX dial or mode: a phone transmission must never go out of
+/// VFO B. The control is the same band change on the digital screens.
+#[test]
+fn a_band_change_on_the_phone_screens_puts_nothing_on_vfo_b() {
+    for (what, section, presets) in [
+        ("Phone", "phone", false),
+        ("control: Digital", "digital", true),
+    ] {
+        let mut b = held_and_tx_off();
+        b.engine.lock().unwrap().set_operating_mode(section, false);
+        b.engine.lock().unwrap().set_tx_enabled(true);
+        let _ = b.step_to_cycle_ms(17_000.0);
+        let mut rx = b.qsy_to_40m(|e| e.set_tx_enabled(true));
+        rx.extend(b.ticks(300));
+        let wrote = split_writes(&rx)
+            .into_iter()
+            .any(|l| l.starts_with("S 1") || l.starts_with('I') || l.starts_with('X'));
+        assert_eq!(wrote, presets, "{what}: {rx:?}");
+    }
+}
+
+/// ⛔ NO PRE-SET ON A RADIO THIS LOOP HAS NOT BEEN HANDED: the active radio switched and the loop
+/// has not taken it over yet. Nothing goes to VFO B; the control, once the loop holds the radio
+/// again, is the pre-set.
+#[test]
+fn no_pre_set_goes_to_a_radio_the_loop_does_not_hold() {
+    let mut b = held_and_tx_off();
+    let _ = b.step_to_cycle_ms(17_000.0);
+    b.state.handed_over = Some(u32::MAX);
+    let mut rx = b.qsy_to_40m(|_| {});
+    rx.extend(b.ticks(200));
+    assert!(
+        !rx.iter().any(|l| l == "I 7073500" || l.starts_with("X ")),
+        "written to a radio not handed over: {rx:?}"
+    );
+    b.state.handed_over = None;
+    let after = b.ticks(1_500);
+    assert!(
+        after.iter().any(|l| l == "I 7073500"),
+        "CONTROL: held again, the TX dial goes: {after:?}"
+    );
+}
+
+/// Fake It and None move nothing at a band change, as before: no split, TX dial or mode write.
+/// And Split Operation = Rig in a mode it does not apply to (Nexus's own fast tier) pre-sets
+/// nothing either.
+#[test]
+fn fake_it_none_and_a_mode_without_split_put_nothing_on_the_radio_after_a_band_change() {
+    type Setup = fn(&mut Engine);
+    let cases: [(&str, SplitMode, Setup); 3] = [
+        ("Fake It", SplitMode::FakeIt, |_| {}),
+        ("None", SplitMode::None, |_| {}),
+        ("Rig, fast tier", SplitMode::Rig, |e| {
+            e.set_tier(Tier::TempoFast)
+        }),
+    ];
+    for (what, split, setup) in cases {
+        let mut b = slow_band_change_bench(split);
+        let _ = b.overs(1);
+        setup(&mut b.engine.lock().unwrap());
+        let _ = b.step_to_cycle_ms(17_000.0);
+        let mut rx = b.qsy_to_40m(|_| {});
+        rx.extend(b.ticks(300));
+        let wrote: Vec<&str> = split_writes(&rx)
+            .into_iter()
+            .filter(|l| !l.starts_with('T') && *l != "S 0 VFOA")
+            .collect();
+        assert_eq!(wrote, Vec::<&str>::new(), "{what}: {rx:?}");
+    }
+}
+
+// ── What stands between a held split and a key out of VFO B ──────────────────────────────────
+// TX off no longer lets go of the split, so these are what still does, or what keeps VFO B from
+// being written.
+
+/// ⛔ SWITCHING RADIO THROUGH THE POOL LETS GO OF THE SPLIT THROUGH THE OUTGOING LINK. Split held
+/// with TX off, the operator picks a radio the pool already holds: the old radio gets `S 0 VFOA`
+/// before the loop adopts the new one, and is left out of split. Otherwise a later key on the old
+/// radio, the hand mic or a phone over, would go out of VFO B on the last TX dial.
+#[test]
+fn switching_radio_through_the_pool_with_split_held_lets_go_through_the_outgoing_link() {
+    let mut b = held_and_tx_off();
+    let _ = b.step_to_cycle_ms(17_000.0);
+    let (cat, _, _) = mock_logging_rigctld();
+    let (pool, id) = {
+        let mut e = b.engine.lock().unwrap();
+        let id = e.add_radio();
+        let profile = e.settings().radios.iter().find(|p| p.id == id).unwrap();
+        let monitor = live_monitor(id, Transport::from_profile(profile), &cat);
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![monitor]));
+        (pool, id)
+    };
+    b.engine.lock().unwrap().set_active_radio(id);
+    let before = b.radio.sent().len();
+    let mut last_active = 0u32;
+    let pending = AtomicBool::new(false);
+    handoff_if_switched(
+        &b.engine,
+        &pool,
+        &mut b.rig,
+        &mut b.state,
+        &mut last_active,
+        &pending,
+    );
+    assert_eq!(last_active, id, "premise: switched");
+    assert!(
+        pool.lock().unwrap().iter().any(|c| c.id == 0),
+        "premise: the old radio's link went to the pool, not closed"
+    );
+    let writes: Vec<String> = b.radio.sent()[before..]
+        .iter()
+        .filter(|l| !l.ends_with('?'))
+        .cloned()
+        .collect();
+    assert!(
+        writes.iter().any(|l| l == "S 0 VFOA"),
+        "not let go: {writes:?}"
+    );
+    assert!(
+        !b.radio.vfos.lock().unwrap().split,
+        "the outgoing radio left in split: {writes:?}"
+    );
+}
+
+/// ⛔ A CLUSTER SPLIT-ON-WORK ENDS THE HOLD, SO NOTHING OF SPLIT OPERATION'S TOUCHES ITS VFO B. Set
+/// while Split Operation's split is held, with TX off: the cluster's TX dial goes on VFO B, and a
+/// tune then keys with nothing written, leaving it there. If the hold stood, the tune would put VFO
+/// B back on the RX dial for Split Operation and overwrite the cluster's frequency.
+#[test]
+fn a_cluster_split_on_work_set_while_held_is_not_overwritten_by_a_tune() {
+    let mut b = held_and_tx_off();
+    let _ = b.step_to_cycle_ms(17_000.0);
+    b.engine.lock().unwrap().request_split(Some(14.080));
+    let set = b.ticks(100);
+    // Read out of its lock first: a failed assert holding it poisons it for the mock's thread.
+    let vfo_b = b.radio.vfos.lock().unwrap().b;
+    assert_eq!(
+        vfo_b, 14_080_000,
+        "premise: the cluster split went to the radio: {set:?}"
+    );
+    b.engine.lock().unwrap().set_tune(true);
+    let tune = b.ticks(5);
+    assert!(b.radio.keyed(), "premise: the tune keyed: {tune:?}");
+    let vfo_b = b.radio.vfos.lock().unwrap().b;
+    assert_eq!(
+        vfo_b, 14_080_000,
+        "VFO B moved off the cluster split: {tune:?}"
+    );
+}
+
+/// ⛔ NO PRE-SET ON A TICK THAT OPENED THE CAT LINK: opening it may already have cost a connect
+/// timeout out of the lead to the next boundary. The pre-set is held off across the band change,
+/// then the link is dropped as it comes due: the tick that reopens it writes no TX dial, and the
+/// next one does.
+#[test]
+fn a_tick_that_reopens_the_cat_link_does_not_pre_set_and_the_next_does() {
+    let mut b = held_and_tx_off();
+    let _ = b.step_to_cycle_ms(17_000.0);
+    b.state.handed_over = Some(u32::MAX);
+    let _ = b.qsy_to_40m(|_| {});
+    let _ = b.ticks(50);
+    b.state.handed_over = None;
+    b.rig.reconnect_for_test();
+    assert!(!b.rig.connection_open(), "premise: the link closed");
+    let reopening = b.ticks(1);
+    assert!(b.rig.connection_open(), "premise: the tick reopened it");
+    assert!(
+        !reopening.iter().any(|l| l == "I 7073500"),
+        "pre-set on the tick that reopened the link: {reopening:?}"
+    );
+    let next = b.ticks(1);
+    assert!(
+        next.iter().any(|l| l == "I 7073500"),
+        "CONTROL: the next tick pre-sets: {next:?}"
+    );
 }
