@@ -45,10 +45,10 @@ own explanation, so you can read the others before you switch:
   [Settings ▸ Radio](settings-reference.md#radio) and this path uses plain SSB for
   you, exactly as it does for FT8.
 
-  On a Yaesu FTX-1, CAT keying is flagged as **unproven** where you pick it: its
-  Hamlib backend sends a different keying command from the one other radios use and
-  reports success either way, so if nothing goes out Nexus cannot tell you. It is a
-  notice, not a block.
+  On a Yaesu FT-710 or FTX-1, CAT keying is flagged as **unproven** where you pick it:
+  its Hamlib backend may send a keying command the radio doesn't accept and reports
+  success either way, so if nothing goes out Nexus cannot tell you. It is a notice, not
+  a block. If CW doesn't go out, use the Serial keyline, WinKeyer, or Soundcard keyer.
 
 **The CW decoder.** The **AI** decoder is the default: a neural net (the DeepCW
 model by e04) reads the whole 400–1200 Hz window rather than one pitch, which is
@@ -235,10 +235,10 @@ leaving you guessing:
 - **Soundcard** — "the rig didn't accept PTT". Audio-routing faults cannot be
   detected here: a tone that plays locally while the rig is in plain SSB on a
   data-input interface radiates nothing, and looks identical to a good send.
-- On a **Yaesu FTX-1**, CAT keying is flagged **unproven** where you pick it: its
-  Hamlib backend sends a different keying command from the one other radios use
-  and reports success either way, so a silent failure cannot be reported. It is a
-  notice, not a block.
+- On a **Yaesu FT-710 or FTX-1**, CAT keying is flagged **unproven** where you pick it:
+  its Hamlib backend may send a keying command the radio doesn't accept and reports
+  success either way, so a silent failure cannot be reported. It is a notice, not a
+  block. If CW doesn't go out, use the Serial keyline, WinKeyer, or Soundcard keyer.
 
 ### Call CQ and work an answer
 

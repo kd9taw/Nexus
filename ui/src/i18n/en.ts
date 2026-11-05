@@ -9727,7 +9727,7 @@ export const EN = {
   'settings.cw.keyer.hint':
     "How Nexus sends CW. <b>CAT</b> uses the rig's internal keyer, but older rigs (e.g. IC-756PRO III) don't support it. <b>Serial keyline</b> toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal — a clean method that needs only a keying cable). <b>WinKeyer</b> drives a K1EL.<b>Soundcard</b> keys an audio tone — a workaround; set drive so ALC reads zero. <b>It takes your radio out of CW</b> into a data mode (DATA-U/DATA-L, so the tone reaches the transmitter instead of the mic jack); pick any other keyer and CW mode comes straight back. Also switchable live from the CW cockpit.",
   'settings.cw.keyer.unproven':
-    "CAT CW keying is <b>unproven on this radio</b>. Its Hamlib backend sends a different keying command from the one other radios use, and it reports success either way — so if nothing is transmitted, Nexus cannot tell you. If CW doesn't go out, use the Serial keyline, WinKeyer, or Soundcard keyer.",
+    "CAT CW keying is <b>unproven on this radio</b>. Its Hamlib backend may send a keying command this radio doesn't accept, and it reports success either way — so if nothing is transmitted, Nexus cannot tell you. If CW doesn't go out, use the Serial keyline, WinKeyer, or Soundcard keyer.",
   'settings.cw.keyer.flexCatStop':
     "On a Flex over <b>SmartSDR CAT</b>, Esc stops Nexus at once, but the radio may finish the word it is sending: SmartSDR CAT has no documented CW stop, so Nexus hands the radio one word at a time. For a stop that cuts mid-word, choose the <b>WinKeyer</b> keyer on SmartSDR CAT's WinKeyer port, or use the <b>Flex native client</b>.",
   'settings.cw.pitch.label': 'Sidetone pitch (Hz)',

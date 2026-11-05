@@ -614,13 +614,15 @@ pub fn portless_rig_models() -> Vec<u32> {
 /// Models where the **CAT CW keyer is unproven and cannot report its own failure** — so the
 /// operator is told BEFORE he spends an evening on it, rather than watching a radio not key.
 ///
-/// Today that is the Yaesu FTX-1 (1051) alone. The measurement behind it, and the sharp limit on
-/// what it claims, are written out on
-/// `tests::the_ftx1_is_flagged_because_its_cat_keyer_cannot_report_its_own_failure` — read that
+/// Today that is the Yaesu FTX-1 (1051) and FT-710 (1049). The evidence behind each, and the sharp
+/// limit on what it claims, are written out on
+/// `tests::the_ftx1_is_flagged_because_its_cat_keyer_cannot_report_its_own_failure` and
+/// `tests::the_ft710_is_flagged_because_its_manual_has_no_trigger_hamlib_sends_it` — read those
 /// before adding a model here. The short version: the FTX-1 has its own Beta Hamlib backend that
-/// emits a different `send_morse` wire form from the newcat one every other modern Yaesu uses,
-/// and it returns `RPRT 0` whether or not the radio did anything. Nexus has no second source of
-/// truth — the CAT keyer sends and the rig keys itself, so there is no PTT of ours to check.
+/// emits a different `send_morse` wire form from the newcat one every other modern Yaesu uses, the
+/// FT-710 is sent that newcat form but its manual does not list the trigger, and both return
+/// `RPRT 0` whether or not the radio did anything. Nexus has no second source of truth — the CAT
+/// keyer sends and the rig keys itself, so there is no PTT of ours to check.
 ///
 /// **This is a NOTICE, never a block.** The keyer stays selectable and keeps working if it works:
 /// the flag is unproven, not broken, and an operator whose radio keys fine must not be stopped.
@@ -632,7 +634,7 @@ pub fn portless_rig_models() -> Vec<u32> {
 /// not keep a copy for that reason too: membership here changes as backends are fixed upstream,
 /// and a stale TypeScript duplicate would warn about a radio that had started working.
 pub fn cat_cw_unproven_rig_models() -> Vec<u32> {
-    vec![1051]
+    vec![1049, 1051]
 }
 
 /// Recognise a CAT server that **names itself** in the greeting it sends on connect, and
@@ -1070,12 +1072,11 @@ mod tests {
             "the FTX-1 (1051) is the model the field report names"
         );
 
-        // NARROW, deliberately. The newcat Yaesus emit the two-command form that works, and
+        // NARROW, deliberately. These newcat Yaesus emit the two-command form that works, and
         // flagging a backend that keys fine trains the operator to ignore the notice.
         for (m, who) in [
             (1042u32, "FTDX10"),
             (1035, "FT-991/991A"),
-            (1049, "FT-710"),
             (1036, "FT-891"),
             (3073, "Icom IC-7300"),
             (2037, "Kenwood TS-590SG"),
@@ -1095,6 +1096,20 @@ mod tests {
                 "model {m} is flagged but not in the catalog"
             );
         }
+    }
+
+    /// The FT-710 is on the shared newcat backend, so its case is not the FTX-1's: Hamlib sends it
+    /// the same `KM1<TEXT>;` then `KY6;` as the others. But Yaesu's FT-710 CAT reference (rev
+    /// 2306-C, page 14) defines `KY P1 P2;` with P1 `0` or `1` and P2 `0` to `5`, so `KY6;` is not in
+    /// its table. Hamlib never reads the answer to `KY`, so `b <text>` returns `RPRT 0` either way,
+    /// and two field reports describe an FT-710 that showed sending with nothing on the air.
+    ///
+    /// ⚠️ NOT PROVEN BROKEN. The firmware might accept an undocumented `KY6;`, and no bench has
+    /// settled it, so this is the same claim as the FTX-1's: UNPROVEN, and cannot report its own
+    /// failure.
+    #[test]
+    fn the_ft710_is_flagged_because_its_manual_has_no_trigger_hamlib_sends_it() {
+        assert!(cat_cw_unproven_rig_models().contains(&1049));
     }
 
     /// The CAT port names the slice Nexus operates (audit #1014/#1026).

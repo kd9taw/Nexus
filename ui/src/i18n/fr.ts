@@ -7592,7 +7592,7 @@ export const FR: PartialCatalog = {
   "settings.cw.keyer.label": "Mode de manipulation",
   "settings.cw.keyer.serial": "Ligne série (DTR/RTS) — manipule la prise KEY de la radio",
   "settings.cw.keyer.soundcard": "Carte son — tonalité audio via un mode data (contournement)",
-  "settings.cw.keyer.unproven": "La manipulation CW par CAT <b>n'est pas éprouvée sur cette radio</b>. Son backend Hamlib envoie une commande de manipulation différente de celle utilisée sur les autres radios, et il annonce un succès dans les deux cas — donc si rien n'est émis, Nexus ne peut pas vous le dire. Si le CW ne sort pas, utilisez la ligne série, le WinKeyer ou la carte son.",
+  "settings.cw.keyer.unproven": "La manipulation CW par CAT <b>n'est pas éprouvée sur cette radio</b>. Son backend Hamlib peut envoyer une commande de manipulation que cette radio n'accepte pas, et il annonce un succès dans les deux cas — donc si rien n'est émis, Nexus ne peut pas vous le dire. Si le CW ne sort pas, utilisez la ligne série, le WinKeyer ou la carte son.",
   "settings.cw.keyer.title": "Manipulateur",
   "settings.cw.keyer.winkeyer": "WinKeyer — manipulateur matériel K1EL",
   "settings.cw.legend": "CW",

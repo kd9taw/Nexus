@@ -211,10 +211,22 @@ describe('CAT keying that cannot report its own failure says so up front', () =>
   })
 
   /**
+   * The list holds radios for different reasons. "A different command from other radios" is true
+   * of one and false of another, which sends what the others do; "may" is what is known of both,
+   * and a caution that said more would be claiming a fault nobody has proven.
+   */
+  it('claims only what is known of every radio on the list, and says what to use instead', () => {
+    const s = EN['settings.cw.keyer.unproven'] as string
+    expect(s).not.toMatch(/different keying command/i)
+    expect(s).toMatch(/may send a keying command this radio doesn't accept/i)
+    expect(s).toMatch(/use the Serial keyline/i)
+  })
+
+  /**
    * THE COPY MUST NOT NAME A MANUFACTURER, and this is a catalog check rather than a render
    * check because that is where it would rot. The flag list is keyed on rig MODEL
-   * (`rigmodels::cat_cw_unproven_rig_models`); today's single entry happening to be a Yaesu is
-   * a fact about the entry, not about the rule. Copy that says "other Yaesus" becomes a lie the
+   * (`rigmodels::cat_cw_unproven_rig_models`); today's entries happening to be Yaesus is a
+   * fact about the entries, not about the rule. Copy that says "other Yaesus" becomes a lie the
    * moment a non-Yaesu is flagged — and nothing would catch it, because the sentence lives in
    * four TypeScript catalogs and the list lives in Rust, so the two drift in silence.
    */

@@ -9020,7 +9020,7 @@ export const ZH: PartialCatalog = {
   "settings.cw.keyer.winkeyer": "WinKeyer — K1EL 硬件键控器",
   "settings.cw.keyer.soundcard": "声卡 — 经数据模式发送音频音调（变通方案）",
   "settings.cw.keyer.hint": "Nexus 如何发送 CW。<b>CAT</b> 使用电台内部键控器，但较老的电台（如 IC-756PRO III）不支持。<b>串口键控线</b>把 DTR/RTS 翻转送入电台的 KEY 插孔（电台处于 CW 模式，由电台整形信号 — 干净的方法，只需一根键控线）。<b>WinKeyer</b> 驱动 K1EL 硬件。<b>声卡</b>键控一个音频音调 — 属于变通方案；请调整驱动力使 ALC 读数为零。<b>它会把你的电台带离 CW</b>，进入数据模式（DATA-U/DATA-L，好让音调到达发射机而不是麦克风插孔）；选择其他任何键控器，CW 模式会立刻恢复。也可在 CW 操作台中实时切换。",
-  "settings.cw.keyer.unproven": "CAT CW 键控在<b>这部电台上尚未验证</b>。其 Hamlib 后端发送的键控命令与其他电台使用的不同，而无论成败它都会报成功 — 所以如果没有发出任何信号，Nexus 无法告诉你。若 CW 发不出去，请改用串口键控线、WinKeyer 或声卡键控。",
+  "settings.cw.keyer.unproven": "CAT CW 键控在<b>这部电台上尚未验证</b>。其 Hamlib 后端可能发送这部电台不接受的键控命令，而无论成败它都会报成功 — 所以如果没有发出任何信号，Nexus 无法告诉你。若 CW 发不出去，请改用串口键控线、WinKeyer 或声卡键控。",
   "settings.cw.keyer.flexCatStop": "在通过 <b>SmartSDR CAT</b> 连接的 Flex 上，Esc 会立即让 Nexus 停止，但电台可能把正在发送的那个词发完：SmartSDR CAT 没有公开的 CW 停止指令，因此 Nexus 一次只交给电台一个词。若需要能中途截断的停止，请在 SmartSDR CAT 的 WinKeyer 端口上选择 <b>WinKeyer</b> 键控器，或使用 <b>Flex 原生客户端</b>。",
   "settings.cw.pitch.label": "侧音音高（Hz）",
   "settings.cw.pitch.hint": "CW 音调音高（300–1200 Hz）— 影响声卡键控音调与 CW 频谱中的零拍标记。",

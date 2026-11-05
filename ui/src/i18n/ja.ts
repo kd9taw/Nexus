@@ -6107,7 +6107,7 @@ export const JA: PartialCatalog = {
   "settings.cw.keyer.winkeyer": "WinKeyer — K1ELハードウェアキーヤー",
   "settings.cw.keyer.soundcard": "サウンドカード — データモード経由のオーディオトーン（代替手段）",
   "settings.cw.keyer.hint": "NexusがCWを送出する方法です。<b>CAT</b>は無線機内蔵のキーヤーを使いますが、古い無線機（例：IC-756PRO III）は非対応です。<b>シリアルキーライン</b>はDTR/RTSで無線機のKEYジャックをキーイングします（無線機はCWのままで、波形整形も無線機側 — クリーンな方法で、キーイングケーブルだけで済みます）。<b>WinKeyer</b>はK1ELを駆動します。<b>サウンドカード</b>はオーディオトーンをキーイングする代替手段で、ALCが振れないようドライブを調整してください。<b>無線機をCWから外して</b>データモード（DATA-U/DATA-L。トーンをマイクジャックではなく送信部へ通すため）に切り替えます。他のキーヤーを選べばすぐCWモードに戻ります。CWコックピットからライブで切り替えることもできます。",
-  "settings.cw.keyer.unproven": "この無線機ではCATによるCWキーイングは<b>未検証</b>です。Hamlibバックエンドが他の無線機と異なるキーイングコマンドを送るうえ、成否にかかわらず成功と報告するため、実際に送信されていなくてもNexusには分かりません。CWが出ない場合は、シリアルキーライン・WinKeyer・サウンドカードキーヤーを使ってください。",
+  "settings.cw.keyer.unproven": "この無線機ではCATによるCWキーイングは<b>未検証</b>です。Hamlibバックエンドがこの無線機の受け付けないキーイングコマンドを送る可能性があるうえ、成否にかかわらず成功と報告するため、実際に送信されていなくてもNexusには分かりません。CWが出ない場合は、シリアルキーライン・WinKeyer・サウンドカードキーヤーを使ってください。",
   "settings.cw.keyer.flexCatStop": "<b>SmartSDR CAT</b>経由のFlexでは、EscでNexusはすぐ止まりますが、無線機は送信中の単語を最後まで送ることがあります。SmartSDR CATには文書化されたCW停止がないため、Nexusは無線機に1語ずつ渡します。単語の途中で止めるには、SmartSDR CATのWinKeyerポートで<b>WinKeyer</b>キーヤーを選ぶか、<b>Flexネイティブクライアント</b>を使ってください。",
   "settings.cw.pitch.label": "サイドトーンピッチ（Hz）",
   "settings.cw.pitch.hint": "CWトーンのピッチ（300–1200 Hz） — サウンドカードキーヤーのトーンとCWスコープのゼロインマーカーに使われます。",
