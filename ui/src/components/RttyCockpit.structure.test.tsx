@@ -269,6 +269,23 @@ describe('RttyCockpit pane shell', () => {
     expect(pane.compareDocumentPosition(dock!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('the dock’s keep row is one direct dock child holding Send, Esc/Stop and the latch', async () => {
+    // THE KEEP ROW (2026-11-05): the one dock row that stays parked when the dock folds on a small window at a
+    // large zoom (cockpit-panes.css `.cockpit-txdock[data-fold='on']`, CockpitTxStrip decideFold). Exactly one,
+    // a DIRECT dock child (a sticky box never leaves its containing block), and it holds this screen's Send and its
+    // dock stops: folded, everything else in the dock scrolls with the panes.
+    await renderCockpit()
+    const dock = document.querySelector('.cockpit-txdock')!
+    const keeps = dock.querySelectorAll('.cockpit-txdock-keep')
+    expect(keeps.length, 'not exactly one keep row').toBe(1)
+    expect(keeps[0].parentElement, 'the keep row is not a direct dock child').toBe(dock)
+    for (const sel of ['.cw-send-btn', '.rtty-stop', '.rtty-tx-latch', '.cw-type']) {
+      expect(keeps[0].querySelector(sel), `${sel} is not in the keep row: folded, it would scroll away`).not.toBeNull()
+    }
+    // The keys are not: they are what scrolls when the dock folds.
+    expect(keeps[0].querySelector('.rtty-macros')).toBeNull()
+  })
+
   it("⊞ Panels 'removed' hides the stream pane and nothing else", async () => {
     await renderCockpit({ panels: fakePanels(['stream']) })
     expect(document.querySelector('[data-pane="stream"]')).toBeNull()

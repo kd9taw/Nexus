@@ -319,6 +319,21 @@ describe('CwCockpit pane-grid shell', () => {
     expect(region.compareDocumentPosition(dock!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('the dock’s keep row is one direct dock child holding Send', async () => {
+    // THE KEEP ROW (2026-11-05): the one dock row that stays parked when the dock folds on a small window at a
+    // large zoom (cockpit-panes.css `.cockpit-txdock[data-fold='on']`, CockpitTxStrip decideFold). Exactly one,
+    // a DIRECT dock child (a sticky box never leaves its containing block), and it holds Send and the text it sends
+    // (CW's stop controls are the strip's Stop TX and the Esc key).
+    await renderCockpit()
+    const dock = document.querySelector('.cockpit-txdock')!
+    const keeps = dock.querySelectorAll('.cockpit-txdock-keep')
+    expect(keeps.length, 'not exactly one keep row').toBe(1)
+    expect(keeps[0].parentElement, 'the keep row is not a direct dock child').toBe(dock)
+    expect(keeps[0].querySelector('.cw-send-btn'), 'Send is not in the keep row: folded, it would scroll away').not.toBeNull()
+    expect(keeps[0].querySelector('.cw-type')).not.toBeNull()
+    expect(keeps[0].querySelector('.cw-macro'), 'a macro key parks with the keep row').toBeNull()
+  })
+
   it("⊞ Panels 'removed' still hides exactly the pane it names", async () => {
     await renderCockpit({ panels: fakePanels(['decode']) })
     expect(document.querySelector('[data-pane="decode"]')).toBeNull()

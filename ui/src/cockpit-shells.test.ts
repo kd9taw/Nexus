@@ -1019,7 +1019,7 @@ describe('every stop and send control keeps its floor when --touch drops (comput
   // stretches to that row's height (`.cw-send`: the keyboard docks' compose rows). Each one is listed with
   // the floor its winning declarations resolve to at each density, evaluated here; a control that is not
   // listed does not read the token (measured base → tip in Chrome: PTT, Stop TX, TX On, Tune, RTTY/PSK
-  // Esc Stop, the F-keys, SSTV's Stop and Send, APRS's and the FT strip's controls are unchanged).
+  // Esc Stop then in their fixed rows, the F-keys, SSTV's Stop and Send, APRS's and the FT strip's controls are unchanged).
   const evalLen = (v: string, touch: number): number => {
     const js = v
       .replace(/var\(--touch\)/g, `${touch}px`)
@@ -1041,6 +1041,11 @@ describe('every stop and send control keeps its floor when --touch drops (comput
   // [name, chain, property, floor at Standard (30), at Comfortable (44), at Touch (48)] — the pre-pass sizes.
   const FLOORS: Array<[string, Array<Set<string>>, string, number, number, number]> = [
     ['JTTY’s Esc Stop (in the send row)', [...sendRow('jtty-cockpit'), new Set(['cw-macro', 'rtty-stop', 'jtty-stop'])], 'min-height', 44, 44, 48],
+    // RTTY's and PSK's latch and Esc Stop joined their send rows (the dock's keep row, 2026-11-05).
+    ...(['rtty-cockpit', 'psk-cockpit'] as const).flatMap((shell): Array<[string, Array<Set<string>>, string, number, number, number]> => [
+      [`${shell}’s Esc Stop (in the send row)`, [...sendRow(shell), new Set(['rtty-send-stops']), new Set(['cw-macro', 'rtty-stop', 'send-row-stop'])], 'min-height', 44, 44, 48],
+      [`${shell}’s TX latch (in the send row)`, [...sendRow(shell), new Set(['rtty-send-stops']), new Set(['cw-macro', 'rtty-tx-latch', 'send-row-stop'])], 'min-height', 44, 44, 48],
+    ]),
     // Send keeps its AREA instead (76×44 → ≥104 wide at the 30 px row; the operator's accepted trade).
     ...(['cw-cockpit', 'rtty-cockpit', 'psk-cockpit', 'jtty-cockpit', 'js8-cockpit'] as const).map(
       (shell): [string, Array<Set<string>>, string, number, number, number] => [

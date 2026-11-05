@@ -184,12 +184,16 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         screen, with a planted margin that must be caught
                         (ui/probe/rttyfit-probe.mjs; it builds nothing)
   --desktop digishell   the SSTV, RTTY and PSK screens in the real app, from 900×600 and 700×800
-                        at 175 % up to 1920×1080, at five scroll positions top to end: nothing in
-                        the cockpit header covers a TX strip or dock control, a stop control is
-                        on screen and topmost, a pinned header's controls stay on screen, and
-                        every on-screen item of the ⊞ Panels menu opened from the header is
-                        reachable; a header forced on top and a menu lift taken away must be
-                        caught (ui/probe/digishell-probe.mjs; it builds nothing)
+                        at 175 % up to 1920×1080, and CW, Phone, JS8 and JTTY at the small sizes, at
+                        seven scroll positions top to end: nothing in the cockpit header covers a
+                        TX strip or dock control, every stop control and Send/PTT is on screen and
+                        topmost, every strip and dock control and ⊞ Panels can be clicked at
+                        some scroll position, a pinned header's controls stay on screen, and the
+                        ⊞ Panels menu stays inside the window with every item reachable by its own
+                        scroll and never stands over the stop button (a 9 × 5 grid across it, also
+                        on Operate): opened by real clicks and by real Tab + Enter, and with the
+                        shell walked while it is open. Seven planted faults must be caught
+                        (ui/probe/digishell-probe.mjs; it builds nothing)
   --desktop firstrun    a fresh install's first-run wizard in the real app, at 1024×768 and
                         1920×1080: the About-you question and its answers on screen, Finish
                         writes the answer, the Getting started guide then the first-contact
@@ -234,9 +238,9 @@ USAGE
 # Every --desktop scenario, and the ONLY list that admits one: a name missing here is refused by
 # --desktop as well, so a new probe cannot be runnable by hand and missing from the desktop-probes CI
 # job, which deals this list round-robin over its shards with --desktop-shard. Slowest first, so the
-# deal balances (local seconds on 2026-11-04: topbar 96, digishell 93, waterfalls 92, logbook 67, header 62,
-# journeys 42, rttyfit 39, the rest 7-27); keep a new probe near its cost when you add it.
-DESKTOP_ALL=(toastcorner topbar digishell waterfalls logbook header journeys rttyfit profiles firstrun radiosetup contestlog
+# deal balances (local seconds on 2026-11-05: toastcorner 299, digishell 330, topbar 96, waterfalls 92, logbook 67,
+# header 62, journeys 42, rttyfit 39, the rest 7-27); keep a new probe near its cost when you add it.
+DESKTOP_ALL=(toastcorner digishell topbar waterfalls logbook header journeys rttyfit profiles firstrun radiosetup contestlog
   logwaiting spots atu radioswitch jtty activation clublog aprsmap callcard voicenote rotor contactcard txmeters)
 
 SCENARIO='stream'
@@ -278,7 +282,7 @@ fi
 
 # CI's desktop shard: this script once per scenario, in series (each probe starts its own Vite server
 # and Chrome, so two at once on a 4-core runner would race each other's frames). A red does not stop
-# the shard: the run must name every red scenario, not the first. Ten minutes each is six times the
+# the shard: the run must name every red scenario, not the first. Ten minutes each is twice the
 # slowest probe's local time; a probe past it is hung, and is ended (exit 124) so the rest still run.
 if [ -n "$DSHARD" ]; then
   ART="${DESKTOP_PROBE_ARTIFACTS:-}"

@@ -20481,6 +20481,16 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
      itself, so the footer the operator needs after a mis-tick is always reachable. */
   max-height: calc(0.7 * var(--vh-eff, 100vh));
   overflow-y: auto;
+  /* …and never wider than the window it is clamped into (PanelsMenu shifts it back inside). */
+  max-width: calc(var(--vw-eff, 100vw) - 2 * var(--space-2));
+}
+/* …OPENING UPWARD where there is more room above the button than below it and the menu does not fit below
+   (PanelsMenu `fitMenu`, which also sets its max-height to that room). */
+.panels-menu-pop[data-up] {
+  top: auto;
+  bottom: 100%;
+  margin-top: 0;
+  margin-bottom: var(--space-1);
 }
 .panels-menu-item {
   display: flex;
@@ -30541,7 +30551,35 @@ button.sat-chip:disabled {
 .rtty-macro-slot:focus-within .rtty-macro-edit {
   opacity: 1;
 }
-/* The fixed row: Call box and set switch at the left, TX and Esc/Stop together at the right. */
+/* THE KEYBOARD DOCKS' SEND ROWS WRAP (`.cw-send-wrap`: CW, RTTY, PSK). Each is its dock's keep row, the one
+   row that stays parked when the dock folds on a small window at a large zoom (cockpit-panes.css
+   `.cockpit-txdock[data-fold='on']`), so nothing in it may leave the window: CW's His Call, text box and Send
+   came to 908 px on a 700 px window at 175 %, and Send stood wholly off its right edge (measured). Where the
+   line is too narrow the last items take a line of their own at the right. Before it wraps, the text box
+   keeps 8em and RTTY's TX line 5em (below their natural widths), so the row stays one line wherever those
+   fit: from 1024×768 at 175 % up (measured).
+   RTTY's and PSK's row also carries the stops (the TX latch and Esc/Stop, `.rtty-send-stops`) at its right
+   end, because the keep row is the row that stays parked. */
+.cw-send-wrap {
+  flex-wrap: wrap;
+}
+.cw-send-wrap > .cw-type {
+  min-width: min(8em, 100%);
+}
+.cw-send-wrap > .rtty-txline {
+  min-width: min(5em, 100%);
+}
+.cw-send-wrap > .cw-send-btn {
+  margin-left: auto;
+}
+.rtty-send-stops {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+/* The fixed row: Call box and set switch. */
 .rtty-dock-row {
   display: flex;
   flex-wrap: wrap;
@@ -30563,7 +30601,10 @@ button.sat-chip:disabled {
    element), and `left` is the key's offset in it, clamped by the component. Opaque, because it
    sits over the transcript and the log. */
 .rtty-macro-editor {
-  position: absolute;
+  /* Out of flow on the dock's top edge — except while the dock is FOLDED (cockpit-panes.css sets
+     `--cockpit-txdock-float: static` there): a folded dock has no box to stand on, so the editor joins
+     the flow above the send row and scrolls with the keys it edits. */
+  position: var(--cockpit-txdock-float, absolute);
   bottom: calc(100% + var(--space-1));
   z-index: 3;
   box-sizing: border-box;
@@ -30832,7 +30873,9 @@ button.sat-chip:disabled {
   padding: 0 var(--space-1);
 }
 .js8-hb-menu {
-  position: absolute;
+  /* Off the dock's top edge, except while the dock is FOLDED: a folded dock has no box to stand on, so the
+     menu joins the flow beside its button, as the macro editor does (`--cockpit-txdock-float`, cockpit-panes.css). */
+  position: var(--cockpit-txdock-float, absolute);
   bottom: calc(100% + var(--space-1));
   z-index: 3;
   display: flex;
@@ -31266,6 +31309,12 @@ button.sat-chip:disabled {
    at 1920×1040: 56×44 before the pass, 56×34 with the 30 px row, 56×44 with this floor.
    cockpit-shells.test.ts pins it with every other stop and send control's floor. */
 .jtty-stop {
+  min-height: max(var(--touch), 44px);
+}
+/* RTTY'S AND PSK'S TX LATCH AND Esc/Stop STAND IN THE SEND ROW too (`.rtty-send-stops`, the dock's keep row), so
+   they take JTTY's floor: a stop control in a compose row never has less than the 44 px it had before the
+   1080p pass (48 under Touch). cockpit-shells.test.ts pins it with every other stop and send control's floor. */
+.send-row-stop {
   min-height: max(var(--touch), 44px);
 }
 /* SSTV Arm toggle (header) — armed state must read at a glance. */

@@ -109,8 +109,8 @@ describe('the compact dock: every transmit and stop control stays in the dock or
   it('the compose rows that follow --touch hold only the controls whose floors are pinned (rendered census)', async () => {
     // `.cw-send` rows stretch their buttons to the row's height, and the row follows `--touch`; every button
     // standing in one must be one whose floor cockpit-shells.test.ts pins (Send's width, JTTY's Esc Stop's
-    // height). A new stop or send control dropped into one would shrink unseen; this names it.
-    const PINNED = ['cw-send-btn', 'jtty-stop']
+    // height, RTTY's and PSK's latch and Esc Stop's height since they joined the send row). A new stop or send control dropped into one would shrink unseen; this names it.
+    const PINNED = ['cw-send-btn', 'jtty-stop', 'send-row-stop']
     for (const c of [cw, rtty, psk, jtty]) {
       at('lg')
       await mount(c)

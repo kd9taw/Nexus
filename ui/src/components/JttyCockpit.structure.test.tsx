@@ -156,6 +156,22 @@ describe('the JTTY shell is the census: header, scope, TX strip, ONE pane region
   })
 })
 
+describe('the dock’s keep row', () => {
+  it('is one direct dock child holding Send and Esc/Stop', async () => {
+    // THE KEEP ROW: the one dock row still parked when the dock folds on a small window at a large zoom
+    // (cockpit-panes.css `.cockpit-txdock[data-fold='on']`, CockpitTxStrip decideFold). JTTY had none, so its dock parked
+    // whole over Stop TX at 900×600 and 700×800 at 175 % and left ⊞ Panels 26–35 px of room up to 1024×768 (measured).
+    await mount()
+    const dock = document.querySelector('.cockpit-txdock')!
+    const keeps = dock.querySelectorAll('.cockpit-txdock-keep')
+    expect(keeps.length, 'not exactly one keep row').toBe(1)
+    expect(keeps[0].parentElement, 'the keep row is not a direct dock child').toBe(dock)
+    expect(keeps[0].querySelector('.cw-send-btn'), 'Send is not in the keep row: folded, it would scroll away').not.toBeNull()
+    expect(keeps[0].querySelector('.jtty-stop'), 'Esc/Stop is not in the keep row: folded, it would scroll away').not.toBeNull()
+    expect(keeps[0].querySelector('.jtty-macros'), 'the keys park with the keep row').toBeNull()
+  })
+})
+
 describe('the region’s tiers (useRegionCols stamps them; the columns follow)', () => {
   it('three tracks: All Decodes | QSO Frequency | the log, WSJT-X’s two panes side by side', async () => {
     await mount()
