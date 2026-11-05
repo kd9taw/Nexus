@@ -255,6 +255,71 @@ mod tests {
         text
     }
 
+    /// What the radio loop's one-shot AFSK path keys for `text` on engine `e`: the tones from
+    /// `tone_pair(rtty_center_hz, shift, reverse)` at `rtty_baud`, the framed Baudot stream —
+    /// the same construction as `service.rs`, read from the same engine getters.
+    fn keyed_by(e: &Engine, text: &str) -> Vec<f32> {
+        let (mark, space) = tone_pair(
+            e.rtty_center_hz(),
+            e.rtty_shift_hz() as f32,
+            e.rtty_reverse(),
+        );
+        let cfg = AfskConfig {
+            mark_hz: mark,
+            space_hz: space,
+            baud: e.rtty_baud(),
+            ..AfskConfig::default()
+        };
+        let mut codes = vec![LTRS; 4];
+        codes.extend(BaudotEncoder::new(true).encode(text));
+        codes.extend([LTRS, LTRS]);
+        let mut audio = vec![0.0f32; 1200];
+        audio.extend(afsk_char_samples(&code_bits(&codes), &cfg));
+        audio.extend(vec![0.0f32; 2400]);
+        audio
+    }
+
+    /// 50 BAUD ON A SAVED 1275/1445 PAIR, END TO END: a station saved at 50 Bd with its low
+    /// tone at 1275 keys a 50 Bd over on 1275/1445 (the bit clock measured on the waveform),
+    /// and its own decoder — built from the same settings — copies it verbatim. The controls:
+    /// the same audio through a 45.45 Bd decoder, and through a decoder on the standard
+    /// 2125/2295 pair, do not copy, so the rate and the tones are both real.
+    #[test]
+    fn fifty_baud_on_a_saved_1275_pair_keys_and_copies_end_to_end() {
+        let station = |baud: f64, low: u32| {
+            let mut e = engine("lsb");
+            let mut s = e.settings().clone();
+            s.rtty_baud = baud;
+            s.rtty_low_tone_hz = low;
+            e.apply_settings(s);
+            e
+        };
+        let e = station(50.0, 1275);
+        assert_eq!(e.rtty_baud(), 50.0);
+        let st = e.rtty_state();
+        assert_eq!((st.mark_hz, st.space_hz), (1275.0, 1445.0));
+
+        let audio = keyed_by(&e, MSG);
+        // 12000 / 50 = 240 samples a bit, 7.5 bits a framed character.
+        let chars = 4 + BaudotEncoder::new(true).encode(MSG).len() + 2;
+        assert_eq!(
+            audio.len(),
+            1200 + chars * 1800 + 2400,
+            "the 50 Bd bit clock"
+        );
+
+        let text = copy(&e, &audio);
+        assert!(text.contains(MSG), "50 Bd 1275/1445 copy: {text:?}");
+        assert!(
+            !copy(&station(45.45, 1275), &audio).contains(MSG),
+            "a 45.45 Bd decoder copied 50 Bd"
+        );
+        assert!(
+            !copy(&station(50.0, 2125), &audio).contains(MSG),
+            "a 2125 decoder copied 1275"
+        );
+    }
+
     /// The AFSK sideband set to USB, the decoder copies a USB-sense signal. The control: the same
     /// audio through the LSB default does not copy, so the setting is what made the difference.
     #[test]

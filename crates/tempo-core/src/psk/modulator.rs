@@ -33,7 +33,7 @@
 //! the two can never disagree; `chunking_is_invisible` pins that any split of
 //! the same bits renders sample-for-sample the same audio.
 
-use super::demod::{BAUD, SAMPLE_RATE};
+use super::demod::{PskModeKind, BAUD, SAMPLE_RATE};
 use super::varicode::encode_bits;
 use std::f64::consts::PI;
 
@@ -52,7 +52,8 @@ pub const PREAMBLE_IDLE_BITS: usize = 48;
 pub const POSTAMBLE_IDLE_BITS: usize = 32;
 
 /// TX generator settings. `Default` is the shipping configuration: the 1 kHz
-/// PSK31 audio convention at the 12 kHz app modem rate, 31.25 Bd.
+/// PSK31 audio convention at the 12 kHz app modem rate, 31.25 Bd. BPSK63 is
+/// the same generator at [`PskModeKind::baud`] — see [`PskTxConfig::for_mode`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PskTxConfig {
     /// Tuned audio offset (Hz) — TX transmits where the demod is netted, the
@@ -72,13 +73,34 @@ impl Default for PskTxConfig {
     }
 }
 
+impl PskTxConfig {
+    /// The shipping configuration for `mode` at `center_hz`: the symbol rate is
+    /// the sub-mode's own, the one the demodulator times its symbols by.
+    pub fn for_mode(center_hz: f32, mode: PskModeKind) -> Self {
+        Self {
+            center_hz,
+            baud: mode.baud(),
+            ..Self::default()
+        }
+    }
+}
+
 /// The wire bits of one one-shot PSK31 over: idle preamble (the key-up the
 /// far end acquires on), the varicode text, idle postamble. Fed to
 /// [`bpsk_samples`] by the radio loop's send-and-done path.
 pub fn psk_over_bits(text: &str) -> Vec<bool> {
-    let mut bits = vec![false; PREAMBLE_IDLE_BITS];
+    psk_over_bits_for(text, PskModeKind::Bpsk31)
+}
+
+/// [`psk_over_bits`] for a BPSK sub-mode: the idle preamble and postamble keep
+/// the same AIR TIME at any symbol rate (twice the bits at 62.5 Bd), because
+/// what the far end needs to acquire — sync, a full AFC block, the squelch
+/// opening — is measured in seconds, not in symbols.
+pub fn psk_over_bits_for(text: &str, mode: PskModeKind) -> Vec<bool> {
+    let scale = (mode.baud() / BAUD).round().max(1.0) as usize;
+    let mut bits = vec![false; PREAMBLE_IDLE_BITS * scale];
     bits.extend(encode_bits(text));
-    bits.extend(std::iter::repeat_n(false, POSTAMBLE_IDLE_BITS));
+    bits.extend(std::iter::repeat_n(false, POSTAMBLE_IDLE_BITS * scale));
     bits
 }
 
@@ -327,6 +349,27 @@ mod tests {
         // bit that decides its end shape).
         let mut s = PskStream::new(cfg);
         assert_eq!(s.chunk(&[true; 10], false).len(), 10 * 384);
+    }
+
+    #[test]
+    fn the_psk63_symbol_clock_is_exact_and_its_preamble_keeps_its_air_time() {
+        // 62.5 Bd at 12 kHz is exactly 192 samples a symbol — half PSK31's.
+        let cfg = PskTxConfig::for_mode(1000.0, PskModeKind::Bpsk63);
+        assert_eq!(cfg.baud, 62.5);
+        for n in [1usize, 5, 31, 100] {
+            let audio = bpsk_samples(&vec![false; n], &cfg);
+            assert_eq!(audio.len(), (n + 1) * 192, "n={n}");
+        }
+        // The idle around the text is twice the bits, so the same seconds.
+        let text = encode_bits("cq").len();
+        assert_eq!(
+            psk_over_bits_for("cq", PskModeKind::Bpsk63).len(),
+            2 * (PREAMBLE_IDLE_BITS + POSTAMBLE_IDLE_BITS) + text
+        );
+        assert_eq!(
+            psk_over_bits("cq"),
+            psk_over_bits_for("cq", PskModeKind::Bpsk31)
+        );
     }
 
     #[test]

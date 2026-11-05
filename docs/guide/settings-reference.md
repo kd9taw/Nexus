@@ -1393,11 +1393,20 @@ Comma-separated chip lists for the quick text you fire from each surface:
 
 **Signal**
 
-- **Baud rate** — 45.45 (the HF standard) or 75. Drives the TX bit clock and the
-  RX demodulator — true 45.45, never rounded to 45.
+- **Baud rate** — 45.45 (the HF standard), 50 (used in parts of Europe) or 75.
+  Drives the TX bit clock and the RX demodulator — true 45.45, never rounded to 45.
 - **Shift (Hz)** — 170 (the HF standard), 425 or 850. The TX tone pair and the RX
   demodulator both.
-- **Reverse (swap mark/space)** — swaps mark and space on TX and in the RX
+- **Low tone (Hz)** — where the decoder and the AFSK transmitter sit until you
+  click the waterfall: this tone and this plus the shift. 2125 gives the standard
+  2125/2295; 1275 gives 1275/1445. A waterfall click still moves both for the
+  session; changing this setting moves them back onto it. It is the *low* tone
+  rather than "mark" because which of the two is mark depends on the sideband and
+  Reverse. True FSK keys the rig's own tones, but the decoder still listens here,
+  so set it to the tones your rig's RTTY mode puts out.
+  It takes 300 to 2700 Hz, which keeps both tones inside the passband at any
+  shift; a cleared or out-of-range entry is not taken, and the box keeps the last
+  tone you gave it.- **Reverse (swap mark/space)** — swaps mark and space on TX and in the RX
   decoder, to work a station sending upside down. Not for running USB: pick the
   AFSK sideband instead, which keeps the sense right on its own.
 
@@ -1429,7 +1438,7 @@ PSK31 receive needs no setup: open the PSK screen, tune a watering hole
 prints. The click nets the *decoder* — it never moves the rig — and a
 slew-limited AFC (never more than ±25 Hz) rides small drift for you.
 
-PSK31 and QPSK31 both **transmit as well as receive** in this build. Nothing about
+PSK31, QPSK31 and PSK63 all **transmit as well as receive** in this build. Nothing about
 sending lives on this tab, which is why there is only one control here: you type and send
 from the [PSK cockpit](psk.md), and its dock carries the macros, the continuous-TX latch
 and its own Stop. An over is capped at 500 characters — about two to three

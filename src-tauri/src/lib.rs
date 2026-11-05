@@ -27422,6 +27422,7 @@ fn psk_state_dto(eng: &Engine) -> PskStateDto {
         mode: match s.mode {
             tempo_core::psk::PskModeKind::Bpsk31 => "psk31",
             tempo_core::psk::PskModeKind::Qpsk31 => "qpsk31",
+            tempo_core::psk::PskModeKind::Bpsk63 => "psk63",
         },
         reverse: s.reverse,
         text: s.text,
@@ -28266,7 +28267,7 @@ fn psk_net(state: State<'_, SharedEngine>, hz: f32) -> Result<PskStateDto, Strin
     Ok(psk_state_dto(&eng))
 }
 
-/// Select the PSK sub-mode ("psk31" | "qpsk31") and the QPSK sideband-reverse
+/// Select the PSK sub-mode ("psk31" | "qpsk31" | "psk63") and the QPSK sideband-reverse
 /// polarity — the cockpit's selector and Reverse toggle (Keyboard Modes
 /// Phase 3). The engine refuses a switch while any PSK transmission is
 /// active (a mid-over switch would garble the far end's copy) and returns
@@ -28280,6 +28281,7 @@ fn psk_set_mode(
     let kind = match mode.as_str() {
         "psk31" => tempo_core::psk::PskModeKind::Bpsk31,
         "qpsk31" => tempo_core::psk::PskModeKind::Qpsk31,
+        "psk63" => tempo_core::psk::PskModeKind::Bpsk63,
         other => return Err(format!("unknown PSK mode {other:?}")),
     };
     let mut eng = engine_lock(&state);

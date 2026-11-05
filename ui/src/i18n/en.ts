@@ -9807,12 +9807,16 @@ export const EN = {
   'settings.rtty.signal.title': 'Signal',
   'settings.rtty.baud.label': 'Baud rate',
   'settings.rtty.baud.hf': '45.45 — the HF standard',
+  'settings.rtty.baud.eu': '50 — used in parts of Europe',
   'settings.rtty.baud.vhf': '75 — VHF / some nets',
   'settings.rtty.baud.hint':
     'Drives the TX bit clock and the RX demodulator (true 45.45, never rounded to 45).',
   'settings.rtty.shift.label': 'Shift (Hz)',
   'settings.rtty.shift.hf': '170 — the HF standard',
   'settings.rtty.shift.hint': 'Mark/space spacing — the TX tone pair and the RX demodulator both.',
+  'settings.rtty.lowTone.label': 'Low tone (Hz)',
+  'settings.rtty.lowTone.hint':
+    'Where the decoder and the AFSK transmitter sit until you click the waterfall: this tone, and this plus the shift. 2125 gives the standard 2125/2295; 1275 gives 1275/1445. A waterfall click still moves both for the session; changing this moves them back here.',
   'settings.rtty.reverse.label': 'Reverse (swap mark/space)',
   'settings.rtty.reverse.hint':
     'Swaps mark and space on TX and in the RX decoder, to work a station sending upside down. Not for running USB: pick the AFSK sideband instead, which keeps the sense right on its own.',

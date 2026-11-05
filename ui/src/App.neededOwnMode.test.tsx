@@ -31,6 +31,7 @@ const fx = vi.hoisted(() => {
       need('W1PSK', { exactMode: 'PSK31' }),
       need('W2QPK', { exactMode: 'QPSK31' }),
       need('W3PSX', { exactMode: 'PSK63' }),
+      need('W4PSY', { exactMode: 'PSK125' }),
       // A POTA activation in FT4: the class as its label, FT4 beside it, the spot's own frequency.
       need('K4POT', {
         exactMode: 'FT4', freqMhz: 14.0815, tags: ['NewPark', 'Pota'], park: { program: 'POTA', reference: 'US-0004' },
@@ -242,9 +243,17 @@ describe('a Needed row opens the screen of its own mode', () => {
     expect(keyed(out.calls)).toEqual([])
   }, BUDGET)
 
-  it('a PSK63 row opens the PSK screen on the sub-mode it is on: the screen has no PSK63', async () => {
+  it('a PSK63 row opens the PSK screen on PSK63', async () => {
     const out = await work('W3PSX')
     expect(out.works).toEqual([['keyboard', 14.07, '20m', 'W3PSX', undefined]])
+    expect(out.view).toBe('psk')
+    expect(vi.mocked(api.pskSetMode).mock.calls).toEqual([['psk63', true]])
+    expect(keyed(out.calls)).toEqual([])
+  }, BUDGET)
+
+  it('a PSK125 row opens the PSK screen on the sub-mode it is on: the screen has no PSK125', async () => {
+    const out = await work('W4PSY')
+    expect(out.works).toEqual([['keyboard', 14.07, '20m', 'W4PSY', undefined]])
     expect(out.view).toBe('psk')
     expect(api.pskSetMode).not.toHaveBeenCalled()
     expect(keyed(out.calls)).toEqual([])

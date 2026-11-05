@@ -3564,7 +3564,8 @@ enum PskGen {
 impl PskGen {
     fn new(cfg: tempo_core::psk::PskTxConfig, mode: (tempo_core::psk::PskModeKind, bool)) -> Self {
         match mode.0 {
-            tempo_core::psk::PskModeKind::Bpsk31 => {
+            // BPSK63 is the BPSK stream at its own symbol rate (`cfg.baud`).
+            tempo_core::psk::PskModeKind::Bpsk31 | tempo_core::psk::PskModeKind::Bpsk63 => {
                 Self::Bpsk(tempo_core::psk::PskStream::new(cfg))
             }
             tempo_core::psk::PskModeKind::Qpsk31 => {
@@ -12758,10 +12759,15 @@ impl RadioLoop {
         // machinery unkeys. Idle between keystrokes is CONTINUOUS REVERSALS — the PSK31
         // idle that holds the far end's sync — never silence under a held PTT.
         {
-            let psk_baud = tempo_core::psk::BAUD as f64;
             let ready = now >= self.psk_busy_until && self.may_key();
             let (abort, msg, stream_tick, center_hz, psk_mode) = {
                 let mut eng = engine_lock(engine);
+                // Sub-mode + QPSK reverse — engine truth, one read per tick so the
+                // one-shot, the stream and the look-ahead budget all key the same
+                // mode. The budget is in character times at the sub-mode's own rate,
+                // so at 62.5 Bd the stuck-carrier bound halves with the character.
+                let psk_mode = eng.psk_mode();
+                let psk_baud = psk_mode.0.baud() as f64;
                 // Keep the cockpit's sending indicator honest each tick (the
                 // latched stream keeps it true through the look-ahead, like RTTY).
                 eng.set_psk_sending(now < self.psk_busy_until);
@@ -12797,11 +12803,10 @@ impl RadioLoop {
                     },
                     stream_tick,
                     eng.psk_center_hz(),
-                    // Sub-mode + QPSK reverse — engine truth, one read per
-                    // tick so the one-shot and the stream key the same mode.
-                    eng.psk_mode(),
+                    psk_mode,
                 )
             };
+            let psk_baud = psk_mode.0.baud() as f64;
             if abort {
                 // Stop mid-over: dump the queued audio and unkey immediately.
                 // Same shared-transmitter care as RTTY's abort: the cut fires
@@ -12857,10 +12862,7 @@ impl RadioLoop {
                     {
                         self.psk_stream = Some(PskTxStream {
                             gen: PskGen::new(
-                                tempo_core::psk::PskTxConfig {
-                                    center_hz,
-                                    ..tempo_core::psk::PskTxConfig::default()
-                                },
+                                tempo_core::psk::PskTxConfig::for_mode(center_hz, psk_mode.0),
                                 psk_mode,
                             ),
                             center_hz,
@@ -12930,13 +12932,13 @@ impl RadioLoop {
                 // through the SAME TX audio output the FT8 modem uses — one
                 // route, so the operator's tx_level / drive / ALC discipline
                 // applies unchanged.
-                let cfg = tempo_core::psk::PskTxConfig {
-                    center_hz,
-                    ..tempo_core::psk::PskTxConfig::default()
-                };
+                let cfg = tempo_core::psk::PskTxConfig::for_mode(center_hz, psk_mode.0);
                 let buf = match psk_mode.0 {
-                    tempo_core::psk::PskModeKind::Bpsk31 => {
-                        tempo_core::psk::bpsk_samples(&tempo_core::psk::psk_over_bits(&text), &cfg)
+                    tempo_core::psk::PskModeKind::Bpsk31 | tempo_core::psk::PskModeKind::Bpsk63 => {
+                        tempo_core::psk::bpsk_samples(
+                            &tempo_core::psk::psk_over_bits_for(&text, psk_mode.0),
+                            &cfg,
+                        )
                     }
                     tempo_core::psk::PskModeKind::Qpsk31 => tempo_core::psk::qpsk_samples(
                         &tempo_core::psk::qpsk_over_bits(&text),
@@ -19934,6 +19936,7 @@ mod tests {
     mod late_key;
     mod omnirig_coverage;
     mod pc_mic;
+    mod psk63_keying;
     mod ptt_lines;
     mod readback_coverage;
     mod receive_source;
