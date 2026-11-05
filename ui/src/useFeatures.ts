@@ -55,6 +55,17 @@ export function readEnabledModes(): { cw: boolean; phone: boolean; psk: boolean;
   }
 }
 
+/** Is this section on? [`readEnabledModes`]'s read for one id, for a window with no hook state of
+ * its own: the Memories pop-out asking whether a memory's recorded screen can be opened. */
+export function readFeatureOn(id: FeatureId): boolean {
+  try {
+    const raw = durableGet(STORAGE_KEY)
+    return (raw != null ? normalizeState(JSON.parse(raw)) : defaultState()).enabled[id] !== false
+  } catch {
+    return defaultState().enabled[id] !== false
+  }
+}
+
 function persist(state: FeatureState): void {
   try {
     durableSet(STORAGE_KEY, JSON.stringify(state))

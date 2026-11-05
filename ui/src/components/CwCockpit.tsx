@@ -2454,6 +2454,7 @@ export function CwCockpit({
         <MemoryStrip
           dialMhz={snap.radio.dialMhz}
           mode="CW"
+          screen="cw"
           onRecall={onRecallMemory}
           onManage={onOpenMemories}
         />

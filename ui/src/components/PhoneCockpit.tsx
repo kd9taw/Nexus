@@ -2906,6 +2906,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
         <MemoryStrip
           dialMhz={snap.radio.dialMhz}
           mode={commandedMode}
+          screen="phone"
           onRecall={onRecallMemory}
           onManage={onOpenMemories}
         />

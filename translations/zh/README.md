@@ -4,7 +4,7 @@ Nexus 是业余无线电的“一个窗口搞定全部”程序：CAT 控制电�
 
 程序目前支持英语、德语、西班牙语、法语、日语和俄语。加上简体中文，中文操作员就能用母语上机。
 
-**状态：已完成。** `nexus-zh-translation.csv` 共 **10,971 行，全部填写（100%）**，对应 **10,290 条**界面文案 + 5 条启动页文字。其中 382 行是维护者为新增文案补的译文（`notes` 列写着 “Filled by the maintainer, pending translator review.”），等待译者复核。
+**状态：已完成。** `nexus-zh-translation.csv` 共 **10,976 行，全部填写（100%）**，对应 **10,295 条**界面文案 + 5 条启动页文字。其中 387 行是维护者为新增文案补的译文（`notes` 列写着 “Filled by the maintainer, pending translator review.”），等待译者复核。
 
 ---
 
@@ -115,9 +115,9 @@ logbook.import.imported::other,Imported {{count}} QSOs     → 已导入 {{count
 | 2 | 366 | 首次启动：向导、入门指引、启动页。 |
 | 3 | 2,119 | 操作面：FT8/FT4 界面、日志簿、spot 列表、Needed 面板、瀑布图。 |
 | 4 | 589 | 设置：音频、电台、连接、通知、备份。 |
-| 5 | 4,197 | CW、话音、RTTY、PSK、SSTV、APRS、JS8、卫星、奖项、地图。 |
+| 5 | 4,202 | CW、话音、RTTY、PSK、SSTV、APRS、JS8、卫星、奖项、地图。 |
 | 6 | 2,563 | 进阶：电台深度控制、旋转器、远程访问。 |
-| | **10,971** | 另含 5 行启动页文字（`splashscreen.` 前缀）。 |
+| | **10,976** | 另含 5 行启动页文字（`splashscreen.` 前缀）。 |
 
 ---
 
