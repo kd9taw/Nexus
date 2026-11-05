@@ -16,6 +16,7 @@ import {
   parkNameText,
   renderedColumns,
   uploadMark,
+  uploadWord,
   visibleColumns,
   withColumnMoved,
   withColumnShown,
@@ -24,6 +25,7 @@ import {
   type LogColumnsSaved,
 } from './logColumns'
 import type { LoggedQso } from '../types'
+import { t } from '../i18n'
 
 /** `.logbook-row`'s template before the model (styles.css, 59aeae99e). */
 const OLD_COMPACT = 'minmax(96px, 1fr) 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr minmax(84px, 1fr) minmax(64px, 0.6fr) 0.9fr 0.7fr 1.4fr minmax(80px, 80px)'
@@ -370,5 +372,16 @@ describe('the satellite columns (#423) and the park name (#437)', () => {
       expect(at({ theirProgram: 'SOTA', theirRef: 'K-0005' })).toBeNull()
       expect(at({ theirProgram: 'SOTA', theirRef: 'W7A/MN-001', myProgram: 'POTA', myRef: 'US-1234' })).toBeNull()
     })
+  })
+})
+
+// #163: a satellite contact the one-click LoTW fix corrected and has not sent yet is its own state —
+// "Corrected, not sent yet" — never a refused upload, and it sorts with the contacts not uploaded.
+describe('a corrected contact not sent yet', () => {
+  it('is its own mark, not a failure', () => {
+    expect(uploadMark({ outcome: 'rejected', whenUnix: 1, detail: 'resend' })).toBe('resend')
+    expect(uploadWord('resend')).toBe(t('logbook.upload.resend'))
+    expect(uploadMark({ outcome: 'rejected', whenUnix: 1, detail: 'unclassified' })).toBe('failed')
+    expect(uploadMark({ outcome: 'rejected', whenUnix: 1 })).toBe('failed')
   })
 })

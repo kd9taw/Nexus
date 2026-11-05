@@ -1168,6 +1168,10 @@ const SSTV_ID_RULE = '§97.119(b)(4)'
 /** The ISS SSTV downlink, in MHz. A dial reading: formatted invariantly, never written into
  *  a sentence (`i18n/index.ts`, the invariant-token rule). */
 const ISS_SSTV_MHZ = 145.8
+/** 20 m's SSTV calling frequency and its band, where the SSTV screen tunes on opening from an HF
+ *  band with no SSTV channel (#451). Dial readings and band names, interpolated into the hint. */
+const SSTV_20M_MHZ = 14.23
+const SSTV_20M_BAND = '20m'
 
 /**
  * Tokens the panel prints beside a number or stores as a `<select>` value, where the row has
@@ -11141,6 +11145,21 @@ export function SettingsPanel({
                   </button>
                 </label>
                 <span className="settings-hint">{t('settings.sstv.rxAutoArm.hint')}</span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.sstv.tuneOnOpen.label')}</span>
+                  <button disabled={locked('sstvTuneOnOpen')}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.sstvTuneOnOpen === true}
+                    className={`toggle${form.sstvTuneOnOpen === true ? ' on' : ''}`}
+                    onClick={() => updateBool('sstvTuneOnOpen', form.sstvTuneOnOpen !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.sstv.tuneOnOpen.hint', { freq: SSTV_20M_MHZ.toFixed(3), band: SSTV_20M_BAND })}</span>
               </div>
               <div className="settings-field">
                 <label className="settings-toggle">

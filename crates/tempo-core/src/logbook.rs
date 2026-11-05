@@ -131,8 +131,10 @@ pub struct QsoRecord {
     /// frequency, and writing a second field equal to the first is not extra information, it
     /// is a false claim of split operation that every logger the export reaches will believe.
     ///
-    /// ⚠️ Populated for TERRESTRIAL split only — see `Engine::log_frequencies`, which owns the
-    /// rule and the reason satellites are excluded.
+    /// Populated for a same-band split (`Engine::log_frequencies`) and for a satellite contact,
+    /// whose downlink it holds while FREQ holds the uplink (`Engine::stamp_satellite`). On a
+    /// cross-band record [`band`](Self::band) stays the RECEIVE leg; the ADIF writer sends BAND
+    /// from FREQ and BAND_RX from the band ([`cross_band_tx_band`]).
     pub freq_rx_mhz: Option<f64>,
     /// Mode / tier label ("TempoFast" | "TempoDeep" | "FT8" | "CW" | "SSB" | "FM" …). A phone
     /// contact's sideband is not a mode here: it is held as `SSB` with the sideband as its
@@ -968,11 +970,15 @@ pub enum UploadDetail {
     /// Nickname is missing (two of the call's accounts cover the contact's date) or matches none
     /// of them. The fix is the nickname in Settings, spelled as eQSL's My Profile page spells it.
     QthNickname,
+    /// Not a failure (#163): a satellite contact the one-click LoTW fix corrected — its uplink
+    /// filled in — and has not sent yet. Owed to LoTW, so Upload to LoTW sends it; the Logbook
+    /// shows it as its own state, and "why isn't this confirmed?" says so, never "bounced".
+    Resend,
 }
 
 impl UploadDetail {
     /// Every class, for exhaustive walks (the round-trip and allow-list tests).
-    pub const ALL: [UploadDetail; 9] = [
+    pub const ALL: [UploadDetail; 10] = [
         UploadDetail::Credentials,
         UploadDetail::CallsignCertificate,
         UploadDetail::StationLocation,
@@ -982,6 +988,7 @@ impl UploadDetail {
         UploadDetail::OperatorDeclared,
         UploadDetail::AccountDates,
         UploadDetail::QthNickname,
+        UploadDetail::Resend,
     ];
 
     /// The token written to ADIF. Short and stable — the sentences may be re-worded, the
@@ -997,6 +1004,7 @@ impl UploadDetail {
             UploadDetail::OperatorDeclared => "declared",
             UploadDetail::AccountDates => "account-dates",
             UploadDetail::QthNickname => "qth-nickname",
+            UploadDetail::Resend => "resend",
         }
     }
 
@@ -1047,6 +1055,10 @@ impl UploadDetail {
                 "The QTH Nickname is missing or matches none of your eQSL accounts, so eQSL \
                  could not tell where this contact belongs. Enter it in Settings exactly as My \
                  Profile at eqsl.cc spells it, capitals included, then upload again."
+            }
+            UploadDetail::Resend => {
+                "Corrected for LoTW (its satellite uplink filled in) and not sent yet — Upload \
+                 to LoTW sends it."
             }
         }
     }
@@ -1484,6 +1496,14 @@ impl Logbook {
         for (i, r) in self.records.iter().enumerate() {
             held.entry(dedup_key(r)).or_insert(i);
         }
+        // …then under the other bands a row is known by ([`known_bands`], #163): the BAND of a
+        // row whose BAND_RX is parked, the transmit band of a mapped cross-band one. In a pass of
+        // their own, so a row's own key always wins over another row's twin.
+        for (i, r) in self.records.iter().enumerate() {
+            for k in twin_keys(r) {
+                held.entry(k).or_insert(i);
+            }
+        }
         let mut held_ids: std::collections::HashSet<RecordId> =
             self.records.iter().filter_map(|r| r.id).collect();
         let mut added = Vec::new();
@@ -1510,9 +1530,13 @@ impl Logbook {
                 k
             });
             let key = dedup_key(&rec);
+            let twins = twin_keys(&rec);
             let hit = legacy_twin
                 .and_then(|t| held.get(&t).copied())
-                .or_else(|| held.get(&key).copied());
+                .or_else(|| held.get(&key).copied())
+                // The incoming row by every other band it is known by too: the same contact
+                // whichever side carries the parked BAND_RX, or the mapped cross-band pair.
+                .or_else(|| twins.iter().find_map(|t| held.get(t).copied()));
             match hit {
                 Some(_) if !upgrade => skipped += 1,
                 Some(i) => {
@@ -1544,6 +1568,9 @@ impl Logbook {
                     held_ids.insert(id);
                     rec.id = Some(id);
                     prepare(&mut rec);
+                    for k in twins {
+                        held.entry(k).or_insert(self.records.len());
+                    }
                     held.insert(key, self.records.len());
                     added.push(rec.clone());
                     self.records.push(rec);
@@ -3383,6 +3410,8 @@ pub(crate) fn sat_tagged(rec: &mut QsoRecord, sat_name: Option<&str>) -> bool {
                 .is_some_and(|p| p.trim().eq_ignore_ascii_case("SAT"))
             {
                 rec.prop_mode = None;
+                // …and the bird's uplink goes with the bird (#163).
+                unsplit_satellite_legs(rec);
             }
         }
     }
@@ -3576,6 +3605,33 @@ pub fn adif_record(r: &QsoRecord) -> String {
     adif_record_for(r, Audience::Outbound)
 }
 
+/// #163: the BAND a record goes out under when it is a CROSS-BAND split — a satellite contact,
+/// whose uplink and downlink are on different bands — or `None` for every other record, which
+/// writes its own band as BAND as it always has.
+///
+/// ADIF pairs BAND with FREQ (the logging station's TRANSMIT frequency) and BAND_RX with FREQ_RX
+/// (its receive frequency); TQSL checks each pair, and LoTW matches a satellite contact on its
+/// uplink band. Inside Nexus the record's [`band`](QsoRecord::band) is the RECEIVE leg, the band
+/// awards, Needed, B4 and dupes count it on, and nothing there changes: the writer takes BAND
+/// from FREQ and writes the record's band as BAND_RX, and [`parse_adif`] maps BAND_RX back.
+///
+/// Only when that is provably what the record holds: a receive leg on the record's own band, and
+/// a transmit leg on another band of the table. A row an older build imported with the uplink as
+/// its band (BAND_RX parked in `extra`), a same-band split, an off-table uplink — `None`, written
+/// exactly as before.
+fn cross_band_tx_band(r: &QsoRecord) -> Option<&'static str> {
+    let rx = r.freq_rx_mhz.filter(|v| v.is_finite() && *v > 0.0)?;
+    if !(r.freq_mhz.is_finite() && r.freq_mhz > 0.0) || r.band.is_empty() {
+        return None;
+    }
+    let tx_band = query::ui_band_for_mhz(r.freq_mhz);
+    let rx_band = query::ui_band_for_mhz(rx);
+    (!tx_band.is_empty()
+        && !tx_band.eq_ignore_ascii_case(&r.band)
+        && rx_band.eq_ignore_ascii_case(&r.band))
+    .then_some(tx_band)
+}
+
 /// The shared body of the two public serializers. PRIVATE on purpose: a third public name
 /// taking the audience as an argument is a third thing for the next person to pick wrong.
 fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
@@ -3617,7 +3673,15 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
     // transverter shot, a satellite leg above the table) carries band = "", and
     // `<BAND:0>` with an empty value is exactly the malformed field LoTW/TQSL reject —
     // FREQ below still identifies the RF. Same absent-not-guessed rule as FREQ.
-    if !r.band.is_empty() {
+    //
+    // #163: A CROSS-BAND SPLIT — a satellite contact — goes out as TQSL and LoTW read one: BAND
+    // the band of FREQ (the uplink, what we transmitted on) and BAND_RX the record's own band (the
+    // downlink, which is the band Nexus counts the contact on). See [`cross_band_tx_band`].
+    let tx_band = cross_band_tx_band(r);
+    if let Some(tx) = tx_band {
+        out.push_str(&field("BAND", tx));
+        out.push_str(&field("BAND_RX", &r.band));
+    } else if !r.band.is_empty() {
         out.push_str(&field("BAND", &r.band));
     }
     // FREQ only when we actually have one. Imported QSOs (QRZ/LoTW give BAND, not frequency)
@@ -3851,6 +3915,10 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
     let sideband_written = ssb_sideband(r).is_some();
     for (k, v) in &r.extra {
         if sideband_written && k == "SUBMODE" {
+            continue;
+        }
+        // Written beside BAND above; a passthrough copy would be a second one.
+        if tx_band.is_some() && k == "BAND_RX" {
             continue;
         }
         // Which own-station fields Nexus filled itself is for its own LoTW upload, never a
@@ -4513,10 +4581,28 @@ type DedupKey = (String, String, String, u64);
 fn dedup_key(r: &QsoRecord) -> DedupKey {
     (
         r.call.to_ascii_uppercase(),
-        r.band.to_ascii_lowercase(),
+        // The band the contact is COUNTED on ([`counted_band`]): a satellite contact an older
+        // build imported (uplink as its band, BAND_RX parked) and the same row read now (mapped
+        // onto its downlink) are one contact, so a re-import or a restore finds it.
+        counted_band(r).to_ascii_lowercase(),
         dedup_mode(&r.mode),
         r.when_unix,
     )
+}
+
+/// [`dedup_key`] under each band in [`known_bands`] other than the one it is counted on — the
+/// other keys a row is found by, and looks for its twin by.
+fn twin_keys(r: &QsoRecord) -> Vec<DedupKey> {
+    let own = dedup_key(r);
+    known_bands(r)
+        .into_iter()
+        .filter(|b| *b != own.1)
+        .map(|b| {
+            let mut k = own.clone();
+            k.1 = b;
+            k
+        })
+        .collect()
 }
 
 /// Canonical mode SPELLING for [`dedup_key`] — the sideband names USB and LSB are
@@ -5408,7 +5494,7 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
             .remove("STATE")
             .map(|s| s.trim().to_ascii_uppercase())
             .filter(|s| !s.is_empty()),
-        band: f.remove("BAND").unwrap_or_default(),
+        band: receive_band(f),
         freq_mhz: f.remove("FREQ").and_then(|s| s.parse().ok()).unwrap_or(0.0),
         // Absent (every log written before this existed, and every simplex contact) ⇒ `None`,
         // never a zero: a 0.0 here would read as "worked split on 0 MHz". A zero or negative
@@ -5516,6 +5602,94 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
     // sideband in MODE included ([`canonical`]).
     canonical::contact(&mut rec);
     Some(rec)
+}
+
+/// #163: the band a contact is COUNTED on — its receive leg. The record's band, except on a row
+/// an older build imported from another logger before the reader mapped BAND_RX: that one holds
+/// the uplink as its band with BAND_RX parked in the passthrough, and the parked BAND_RX is the
+/// band it is the same contact on. The one rule dedup, reconcile and Log Check share, so a legacy
+/// row and the same row read now are never two contacts.
+pub fn counted_band(r: &QsoRecord) -> &str {
+    r.extra
+        .iter()
+        .find(|(k, v)| k == "BAND_RX" && !v.trim().is_empty())
+        .map_or(r.band.as_str(), |(_, v)| v.trim())
+}
+
+/// #163: every band a contact is the same contact on, lower-cased, the band it is counted on
+/// ([`counted_band`]) first: also its own BAND when a parked BAND_RX makes the two differ, and the
+/// transmit band of a cross-band record ([`cross_band_tx_band`]: a satellite contact, or another
+/// logger's TQSL-shaped row mapped onto its downlink) — the band a source that writes BAND alone
+/// gives it. Dedup and reconcile both find a contact by any of these, in either direction, as they
+/// found it by its one BAND before BAND_RX was read.
+pub fn known_bands(r: &QsoRecord) -> Vec<String> {
+    let mut bands = vec![counted_band(r).to_ascii_lowercase()];
+    let mut push = |b: String| {
+        if !bands.contains(&b) {
+            bands.push(b);
+        }
+    };
+    push(r.band.trim().to_ascii_lowercase());
+    if let Some(tx) = cross_band_tx_band(r) {
+        push(tx.to_ascii_lowercase());
+    }
+    bands
+}
+
+/// #163: undo a cross-band leg split on a contact that is no longer a satellite one — FREQ back
+/// to the downlink it was heard on (FREQ_RX), FREQ_RX gone — so it does not go out as a cross-band
+/// contact on an uplink the operator never used.
+///
+/// What it does and does not reach, exactly:
+/// - A CROSS-BAND split in this build's shape (the receive leg on the record's band, the transmit
+///   leg on another) is undone. That is the stamp's own split, and ALSO a satellite row this build
+///   imported from another logger (mapped onto its downlink), which on the record cannot be told
+///   from it: that logger's real uplink is dropped, and a re-import does not bring it back. That
+///   is the intended behaviour (operator decision, 2026-11-05): a contact that is no longer a
+///   satellite one has only the frequency it was heard on.
+/// - A row an older build imported (uplink as its band, BAND_RX parked) keeps its legs.
+/// - A SAME-BAND split is left as it is, the stamp's included (a U/U channel's made-up uplink
+///   stays in FREQ); the band does not move.
+pub fn unsplit_satellite_legs(rec: &mut QsoRecord) {
+    if cross_band_tx_band(rec).is_none() || rec.extra.iter().any(|(k, _)| k == "BAND_RX") {
+        return;
+    }
+    if let Some(rx) = rec.freq_rx_mhz.take() {
+        rec.freq_mhz = rx;
+    }
+}
+
+/// #163: the band a parsed contact is counted on — the RECEIVE leg. BAND as before, except for
+/// a cross-band split written as TQSL writes one (BAND/FREQ the uplink, BAND_RX/FREQ_RX the
+/// downlink): then BAND_RX, consumed, which is how Nexus holds its own satellite contacts and the
+/// exact inverse of the writer ([`cross_band_tx_band`]). Mapped only when each band is the band
+/// of its own frequency, so the writer rebuilds BAND from FREQ and the record goes back out as it
+/// came; otherwise BAND_RX stays in the passthrough, as it always has. Reads `f` before the
+/// fields are consumed.
+fn receive_band(f: &mut std::collections::HashMap<String, String>) -> String {
+    let band = f.remove("BAND").unwrap_or_default();
+    let mhz = |k: &str| {
+        f.get(k)
+            .and_then(|s| s.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0)
+    };
+    let of = |v: Option<f64>| v.map(query::ui_band_for_mhz).unwrap_or("");
+    let (tx, rx) = (of(mhz("FREQ")), of(mhz("FREQ_RX")));
+    let band_rx = f
+        .get("BAND_RX")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let mapped = !band_rx.is_empty()
+        && !band_rx.eq_ignore_ascii_case(band.trim())
+        && !tx.is_empty()
+        && tx.eq_ignore_ascii_case(band.trim())
+        && rx.eq_ignore_ascii_case(&band_rx);
+    if mapped {
+        f.remove("BAND_RX");
+        band_rx
+    } else {
+        band
+    }
 }
 
 /// Parse an ADIF credit list (`CREDIT_GRANTED`/`CREDIT_SUBMITTED`): comma-separated
@@ -8649,6 +8823,140 @@ mod tests {
         let old = parse_adif(legacy);
         assert_eq!(old[0].freq_rx_mhz, None);
         assert!((old[0].freq_mhz - 14.074).abs() < 1e-9, "FREQ still reads");
+    }
+
+    /// #163 — A CROSS-BAND SATELLITE CONTACT GOES OUT AS TQSL AND LOTW READ ONE: `FREQ` and `BAND`
+    /// the uplink (what we transmitted on), `FREQ_RX` and `BAND_RX` the downlink. Inside Nexus the
+    /// record's `band` stays the downlink, the band the contact is counted on for awards, Needed,
+    /// B4 and dupes, so the writer takes `BAND` from `FREQ` and writes the record's band as
+    /// `BAND_RX`, and the reader maps `BAND_RX` back. Round trip both ways, byte for byte.
+    fn so50() -> QsoRecord {
+        let mut r = rec("W1AW", "70cm", 1_700_000_000);
+        r.mode = "FM".into();
+        r.freq_mhz = 145.85;
+        r.freq_rx_mhz = Some(436.795);
+        r.prop_mode = Some("SAT".into());
+        r.sat_name = Some("SO-50".into());
+        r
+    }
+    fn tags<'a>(out: &'a str, name: &str) -> Vec<&'a str> {
+        let open = format!("<{name}:");
+        out.match_indices(&open)
+            .map(|(i, _)| {
+                let rest = &out[i + open.len()..];
+                let (len, tail) = rest.split_once('>').unwrap();
+                &tail[..len.parse::<usize>().unwrap()]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_cross_band_satellite_contact_exports_band_from_the_uplink_and_band_rx_from_the_downlink() {
+        let out = adif_record(&so50());
+        assert_eq!(tags(&out, "BAND"), ["2m"], "BAND is the uplink's: {out}");
+        assert_eq!(
+            tags(&out, "BAND_RX"),
+            ["70cm"],
+            "BAND_RX the downlink's: {out}"
+        );
+        assert_eq!(tags(&out, "FREQ"), ["145.850000"], "{out}");
+        assert_eq!(tags(&out, "FREQ_RX"), ["436.795000"], "{out}");
+
+        // …and it reads back as the contact Nexus holds: counted on the downlink band.
+        let back = &parse_adif(&(adif_header() + &out))[0];
+        assert_eq!(back.band, "70cm", "the internal band is the downlink");
+        assert!((back.freq_mhz - 145.85).abs() < 1e-9);
+        assert_eq!(back.freq_rx_mhz, Some(436.795));
+        assert!(
+            !back
+                .extra
+                .iter()
+                .any(|(k, _)| k == "BAND_RX" || k == "BAND"),
+            "BAND_RX is consumed, not parked: {:?}",
+            back.extra
+        );
+        assert_eq!(adif_record(back), out, "and it writes back byte for byte");
+    }
+
+    #[test]
+    fn another_loggers_satellite_contact_imports_on_its_downlink_band_and_exports_unchanged() {
+        // As TQSL, SatPC32-fed loggers and LoTW itself write one: BAND/FREQ up, BAND_RX/FREQ_RX down.
+        let foreign = "<EOH>\n<CALL:4>W1AW<QSO_DATE:8>20231114<TIME_ON:4>1200<MODE:2>FM\
+             <BAND:2>2m<BAND_RX:4>70cm<FREQ:7>145.850<FREQ_RX:7>436.795\
+             <PROP_MODE:3>SAT<SAT_NAME:5>SO-50<EOR>\n";
+        let r = &parse_adif(foreign)[0];
+        assert_eq!(
+            r.band, "70cm",
+            "counted where Nexus counts its own satellite contacts"
+        );
+        let out = adif_record(r);
+        assert_eq!(tags(&out, "BAND"), ["2m"], "{out}");
+        assert_eq!(tags(&out, "BAND_RX"), ["70cm"], "{out}");
+    }
+
+    /// #163 review: untagging a satellite contact in the Logbook takes the bird's uplink with it —
+    /// FREQ back to the downlink it was heard on, FREQ_RX gone — so it does not go out as a
+    /// terrestrial cross-band contact on a frequency the operator never used. A row an older build
+    /// imported with the uplink as its band (BAND_RX parked) is another logger's claim, and keeps
+    /// its frequencies.
+    #[test]
+    fn untagging_a_satellite_contact_puts_back_the_heard_frequency() {
+        let mut r = so50();
+        assert!(sat_tagged(&mut r, None));
+        assert_eq!(
+            (r.prop_mode.as_deref(), r.sat_name.as_deref()),
+            (None, None)
+        );
+        assert!((r.freq_mhz - 436.795).abs() < 1e-9, "{}", r.freq_mhz);
+        assert_eq!(r.freq_rx_mhz, None);
+        assert!(tags(&adif_record(&r), "BAND_RX").is_empty());
+
+        let mut legacy = so50();
+        legacy.band = "2m".into();
+        legacy.extra = vec![("BAND_RX".into(), "70cm".into())];
+        assert!(sat_tagged(&mut legacy, None));
+        assert!((legacy.freq_mhz - 145.85).abs() < 1e-9);
+        assert_eq!(legacy.freq_rx_mhz, Some(436.795));
+    }
+
+    #[test]
+    fn a_band_rx_the_writer_could_not_rebuild_is_left_as_it_came() {
+        // No FREQ to take BAND from: mapping BAND_RX in would lose the uplink band on the way out.
+        // The row stays as it was before this change, and goes out exactly as it came in.
+        let no_freq = "<EOH>\n<CALL:4>W1AW<QSO_DATE:8>20231114<MODE:2>FM\
+             <BAND:2>2m<BAND_RX:4>70cm<PROP_MODE:3>SAT<SAT_NAME:5>SO-50<EOR>\n";
+        let r = &parse_adif(no_freq)[0];
+        assert_eq!(r.band, "2m");
+        let out = adif_record(r);
+        assert_eq!(tags(&out, "BAND"), ["2m"], "{out}");
+        assert_eq!(
+            tags(&out, "BAND_RX"),
+            ["70cm"],
+            "once, from the passthrough: {out}"
+        );
+
+        // A row an older build imported is held that way too (BAND_RX parked in `extra`, the band
+        // the uplink's): it writes out exactly as before, BAND and BAND_RX once each.
+        let mut legacy = so50();
+        legacy.band = "2m".into();
+        legacy.extra = vec![("BAND_RX".into(), "70cm".into())];
+        let out = adif_record(&legacy);
+        assert_eq!(tags(&out, "BAND"), ["2m"], "{out}");
+        assert_eq!(tags(&out, "BAND_RX"), ["70cm"], "{out}");
+
+        // A same-band split (a pile-up UP 2) has one band: no BAND_RX, as before.
+        let mut split = rec("W1AW", "20m", 1_700_000_000);
+        split.freq_mhz = 14.027;
+        split.freq_rx_mhz = Some(14.025);
+        let out = adif_record(&split);
+        assert_eq!(tags(&out, "BAND"), ["20m"], "{out}");
+        assert!(tags(&out, "BAND_RX").is_empty(), "{out}");
+        // …and one whose uplink is off the band table keeps the record's band alone.
+        let mut far = so50();
+        far.freq_mhz = 47_088.0;
+        let out = adif_record(&far);
+        assert_eq!(tags(&out, "BAND"), ["70cm"], "{out}");
+        assert!(tags(&out, "BAND_RX").is_empty(), "{out}");
     }
 
     /// An ordinary field edit must not silently turn a SPLIT contact into a simplex one.

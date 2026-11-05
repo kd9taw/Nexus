@@ -29,6 +29,7 @@ import { LogEntry } from './LogEntry'
 import { CallStatsFrame, useStatsRoom, withStatsRoom } from './CallStatsPane'
 import { RecentQsosFrame } from './RecentQsosPane'
 import { RotorStrip } from './RotorStrip'
+import { DfField, DF_RX, DF_TX } from './DfField'
 import { Js8HbButton, Js8HbNetChip, js8HbAckRateBlockedNote, js8HbAckSuppressedTitle, js8HbShown } from './Js8Heartbeat'
 import { Js8WaterfallControls, js8CentreFilterItem, js8FilterShade } from './Js8WaterfallControls'
 import { rotorPointAt } from './rotorPointAt'
@@ -1220,11 +1221,14 @@ export function Js8Cockpit({
       .then((sn) => onSnap?.(sn))
       .catch(() => {})
   }
+  /** JS8Call holds the TX offset while a message waits to go or goes out, unless the operator
+   *  allows the move (`js8_refuses_tx_offset_move` is the engine's same rule). */
+  const offsetLocked = queued && !txOffsetWhileSending
   const jump = (hz: number | null, speed: Js8Speed | null): Js8Jump => ({
     hz,
     speed,
     current: js8?.speed ?? null,
-    offsetLocked: queued && !txOffsetWhileSending,
+    offsetLocked,
     centreFilter: hz != null ? js8CentreFilterItem(js8?.controls?.filter, hz, setJs8) : null,
     onJump: jumpTo,
     onSpeed: (sp) => setSpeed(JS8_SPEEDS[sp].idx),
@@ -1664,6 +1668,37 @@ export function Js8Cockpit({
             )
           }
           onCommitDial={onSetFrequency ? commitDial : undefined}
+          // #448: THE TYPED Rx/Tx OFFSETS, FT8/FT4's Rx/Tx Hz fields (WSJT-X's spinners), right of
+          // the readout with the header's other tuning affordances. Each moves its own offset, as the
+          // waterfall's click and right-click do. The engine clamps and holds; the Tx field stands
+          // disabled where the engine would hold the TX offset (`offsetLocked`, the menus' jump
+          // rule), so a typed value it ignored cannot sit in the box as taken. Nothing here keys.
+          frequencyExtras={
+            <div className="cockpit-offsets" role="group" aria-label={t('operate.header.offsets.aria')}>
+              <DfField
+                key="rx"
+                label={DF_RX}
+                hz={snap.radio.rxOffsetHz}
+                onCommit={(hz) => {
+                  void setRxOffset(hz)
+                    .then((s) => onSnap?.(s))
+                    .catch(() => {})
+                }}
+              />
+              <DfField
+                key="tx"
+                label={DF_TX}
+                hz={snap.radio.txOffsetHz}
+                disabled={offsetLocked}
+                title={offsetLocked ? t('js8.header.txOffset.held') : undefined}
+                onCommit={(hz) => {
+                  void setTxOffset(hz)
+                    .then((s) => onSnap?.(s))
+                    .catch(() => {})
+                }}
+              />
+            </div>
+          }
           digitTune={onSetFrequency != null}
           wheelSensitivity={wheelSensitivity}
           actions={

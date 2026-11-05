@@ -315,6 +315,9 @@ mod vec_bodies {
                             .is_some_and(|p| p.trim().eq_ignore_ascii_case("SAT"))
                         {
                             rec.prop_mode = None;
+                            // ⚠️ AMENDED, not verbatim (2026-11-04): the bird's uplink goes with
+                            // the bird — the stamp's leg split is undone.
+                            crate::logbook::unsplit_satellite_legs(rec);
                         }
                     }
                 }

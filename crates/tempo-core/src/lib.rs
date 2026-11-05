@@ -36,6 +36,7 @@ pub mod keep_aside;
 pub mod logbook;
 pub mod login_check;
 pub mod lotw;
+pub mod lotw_sat_fix;
 pub mod lotw_upload;
 pub mod message;
 pub mod pota;

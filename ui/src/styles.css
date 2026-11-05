@@ -19599,6 +19599,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--state-good);
 }
 .log-upload.waiting,
+.log-upload.resend,
 .log-upload.none {
   color: var(--text-faint);
 }

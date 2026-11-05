@@ -3261,7 +3261,8 @@ export interface UploadStatus {
   whenUnix: number
   /**
    * The failure CLASS as a token — "credentials" | "cert" | "station-location" | "record" |
-   * "partial" | "unclassified" | "declared" | "account-dates" | "qth-nickname" — not prose. It
+   * "partial" | "unclassified" | "declared" | "account-dates" | "qth-nickname" | "resend" (not a
+   * failure: corrected, not sent yet) — not prose. It
    * rides `log.adi`, which is what TQSL signs and uploads to ARRL, so it is never the service's
    * own words; anything else is dropped on the way back into Rust. Render it through a label of
    * your own, not verbatim.
@@ -6028,6 +6029,9 @@ export interface Settings {
    * behaviour), so an ABSENT key must read as on — `!== false`, never `!!`. The gate
    * is in the engine; the ISS pass arm is an explicit act and is unaffected. */
   sstvRxAutoArm?: boolean
+  /** #451: opening the SSTV view tunes to the band's SSTV frequency (off by default; an absent
+   * key reads as off). The view decides the channel (`sstvChannelOnOpen`). */
+  sstvTuneOnOpen?: boolean
   /** The transmit mode the SSTV screen starts on: a `sstvModes.ts` slug, or 'auto'
    * for the band-aware pick. Named `default` because `SstvState.txMode` is the live
    * "mode currently going out" and the two must not be confusable. */

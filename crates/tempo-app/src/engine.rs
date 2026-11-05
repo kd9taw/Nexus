@@ -11422,6 +11422,28 @@ impl Engine {
         self.sstv_tune_with_arming(dial_mhz, band, mode, true);
     }
 
+    /// The SSTV screen's own tune on opening (#451, Settings ▸ Digital ▸ SSTV ▸ tune to the band's
+    /// SSTV frequency when SSTV opens): [`Self::sstv_tune`] — Phone claimed, the FM hold — but the
+    /// APP's tune, not the operator's, and one that never arms Phone's Enable-TX latch. It declares machinery
+    /// provenance ([`Self::machinery_tune`]'s), so the channel never enters the per-(band, mode)
+    /// dial memory and the operator's own dial it displaces is banked: with the switch on, every
+    /// visit would otherwise have written 14.230 over their 20 m Phone dial.
+    ///
+    /// Refused — false, nothing tuned — while a satellite pass owns the dial (Doppler steers it,
+    /// and a retune here would end the pass's hold) and for the ISS downlink, which is a
+    /// receive-only space channel and never "this band's" SSTV frequency.
+    pub fn sstv_tune_on_open(&mut self, dial_mhz: f64, band: &str, mode: &str) -> bool {
+        let iss = crate::bandplan::sstv_band_plan()
+            .iter()
+            .any(|c| c.band == "2m" && (c.dial_mhz - dial_mhz).abs() < 0.0015);
+        if self.sat_dial_owner.is_some() || iss {
+            return false;
+        }
+        // Never the Enable-TX latch: a tune the app makes on its own arms nothing.
+        self.sstv_tune_as(dial_mhz, band, mode, false, DialOrigin::Machinery);
+        true
+    }
+
     /// [`Self::sstv_tune`], arming Phone's Enable-TX latch on the way in only with `arm_manual`:
     /// a computer driving this station passes false, as Remote's entry does.
     pub fn sstv_tune_with_arming(
@@ -11431,6 +11453,19 @@ impl Engine {
         mode: &str,
         arm_manual: bool,
     ) {
+        self.sstv_tune_as(dial_mhz, band, mode, arm_manual, DialOrigin::Operator);
+    }
+
+    /// The body of [`Self::sstv_tune_with_arming`] and [`Self::sstv_tune_on_open`], which differ
+    /// only in who the dial is declared to belong to.
+    fn sstv_tune_as(
+        &mut self,
+        dial_mhz: f64,
+        band: &str,
+        mode: &str,
+        arm_manual: bool,
+        origin: DialOrigin,
+    ) {
         self.set_operating_mode_with_arming("phone", false, arm_manual);
         // An FM channel is held in FM below, so the pick routes on FM: the radio it lands on is
         // the one then commanded FM, as a repeater tune's is. It routed on Phone's own class and,
@@ -11439,7 +11474,7 @@ impl Engine {
         if mode.eq_ignore_ascii_case("fm") && dial_mhz >= 29.0 {
             self.route_intent = Some(crate::settings::RouteMode::Fm);
         }
-        self.set_frequency(dial_mhz, band, mode);
+        self.tune_dial(dial_mhz, band, mode, origin);
         // A cockpit sideband override describes the section being LEFT, not this channel
         // (work_spot's rule) — without this a stale Phone-cockpit FM pick would key FM
         // onto an SSB image frequency.
@@ -18212,8 +18247,11 @@ impl Engine {
         let Some(name) = Self::lotw_sat_name(&st.label) else {
             return;
         };
-        let f_hz = if rec.freq_mhz > 0.0 {
-            (rec.freq_mhz * 1e6) as i64
+        // The RECEIVE leg is what sits in the downlink passband: FREQ_RX when the record carries
+        // one (a same-band pass logged split, whose FREQ is the uplink), FREQ otherwise.
+        let rx_mhz = rec.freq_rx_mhz.unwrap_or(rec.freq_mhz);
+        let f_hz = if rx_mhz > 0.0 {
+            (rx_mhz * 1e6) as i64
         } else {
             (self.settings.dial_mhz * 1e6) as i64
         };
@@ -18222,6 +18260,21 @@ impl Engine {
         if centre > 0 && (f_hz - centre).abs() <= guard {
             rec.prop_mode = Some("SAT".into());
             rec.sat_name = Some(name.to_string());
+            // #163: BOTH LEGS. A contact through the bird arrives with one frequency, the
+            // downlink it was heard on; it is logged as ADIF and TQSL mean it — FREQ the uplink
+            // we transmitted on (the same place in the passband, without Doppler), FREQ_RX the
+            // downlink. The record's band stays the downlink, the band Nexus counts it on; the
+            // ADIF writer sends BAND from FREQ and BAND_RX from the band
+            // (`logbook::cross_band_tx_band`). A record that already carries a receive leg, one
+            // with no frequency, and a simplex channel or a beacon are left as they are.
+            if rec.freq_rx_mhz.is_none() && rec.freq_mhz > 0.0 {
+                let up = tempo_core::doppler::nominal_uplink_hz(&st.transponder, f_hz as u64)
+                    .filter(|&up| up as i64 != f_hz);
+                if let Some(up) = up {
+                    rec.freq_rx_mhz = Some(rec.freq_mhz);
+                    rec.freq_mhz = up as f64 / 1e6;
+                }
+            }
         }
     }
 
@@ -20357,6 +20410,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
         if held.prop_mode.as_deref() == Some("SAT") {
             held.sat_name = None;
+            // The satellite's uplink goes with the satellite: the stamp's leg split is undone,
+            // and the contact keeps the frequency it was heard on (#163).
+            tempo_core::logbook::unsplit_satellite_legs(held);
         }
         held.prop_mode = Some(picked.clone()).filter(|m| !m.is_empty());
         self.settings.log_prop_mode = picked;
@@ -34444,10 +34500,11 @@ contact yourself."
     /// sitting inside the bird's DOWNLINK passband, so it would silently stop matching and
     /// those contacts would lose their LoTW satellite credit outright.
     ///
-    /// Doing it properly means setting `BAND` from the transmit leg and adding `BAND_RX` — and
-    /// `band` is the key every award, needs and B4 path in Nexus reads, which is a far larger
-    /// change than #163. Satellites wait for one that does BAND and BAND_RX together,
-    /// deliberately, rather than getting half of it now.
+    /// A satellite contact's two legs are written where the satellite itself is known, by the
+    /// stamp in [`Self::log_qso`] ([`Self::stamp_satellite`]): FREQ the nominal uplink, FREQ_RX
+    /// the downlink, with `band` kept the downlink (the key every award, needs and B4 path reads)
+    /// and the ADIF writer sending BAND from FREQ and BAND_RX from the band. A record this builds
+    /// still carries the downlink alone, which is what that stamp's passband gate reads.
     ///
     /// Keyed on the BANDS rather than on "is a transponder held" for two reasons: the
     /// satellite hold OUTLIVES THE PASS (an FM hold is never released), so asking `sat_tune`
@@ -43750,6 +43807,66 @@ mod tests {
             "Phone returns to the operator's 14.240, NOT the 14.225 segment default — got {}",
             e.settings().dial_mhz
         );
+    }
+
+    /// #451: OPENING SSTV WITH "TUNE ON OPEN" IS THE APP'S TUNE, NOT THE OPERATOR'S. With the
+    /// switch on, every visit to the SSTV screen tunes 14.230; through `sstv_tune` (the operator's
+    /// own pick) that wrote 14.230 into Phone's 20 m memory, and a Phone → SSTV → CW → Phone trip
+    /// came back on 14.230 instead of the operator's 14.250. The open-path verb declares
+    /// machinery provenance: the operator's dial is banked and 14.230 never is.
+    #[test]
+    fn the_sstv_open_tune_never_takes_the_operators_phone_dial() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(14.250, "20m", "USB"); // the operator's own SSB dial
+        assert!(
+            e.sstv_tune_on_open(14.230, "20m", "USB"),
+            "the open tune ran"
+        );
+        assert!(
+            (e.settings().dial_mhz - 14.230).abs() < 1e-9,
+            "and SSTV is on its channel"
+        );
+        e.set_operating_mode("cw", true);
+        e.set_operating_mode("phone", true);
+        assert!(
+            (e.settings().dial_mhz - 14.250).abs() < 1e-9,
+            "Phone returns to the operator's 14.250, not SSTV's 14.230 — got {}",
+            e.settings().dial_mhz
+        );
+
+        // CONTROL: the operator's own pick of the same channel IS theirs, as it always was.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(14.250, "20m", "USB");
+        e.sstv_tune(14.230, "20m", "USB");
+        e.set_operating_mode("cw", true);
+        e.set_operating_mode("phone", true);
+        assert!((e.settings().dial_mhz - 14.230).abs() < 1e-9);
+    }
+
+    /// #451: the open tune never parks on the ISS downlink and never moves a dial a satellite pass
+    /// owns (Doppler steers it, and an operator-path retune would end the pass's hold).
+    #[test]
+    fn the_sstv_open_tune_refuses_the_iss_downlink_and_a_pass_owned_dial() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_frequency(146.520, "2m", "FM");
+        assert!(
+            !e.sstv_tune_on_open(145.800, "2m", "FM"),
+            "never the ISS downlink"
+        );
+        assert!((e.settings().dial_mhz - 146.520).abs() < 1e-9);
+
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_frequency(14.074, "20m", "USB");
+        e.sat_dial_owner = Some(("SO-50".into(), 0));
+        assert!(
+            !e.sstv_tune_on_open(14.230, "20m", "USB"),
+            "not while a pass owns the dial"
+        );
+        assert!((e.settings().dial_mhz - 14.074).abs() < 1e-9);
     }
 
     #[test]
@@ -55382,6 +55499,246 @@ mod tests {
             next.to_uppercase().starts_with("CQ"),
             "back to CQ after the single answer, got {next:?}"
         );
+    }
+
+    /// #163 — A SATELLITE CONTACT IS LOGGED WITH BOTH LEGS, AND GOES TO LOTW AS TQSL READS ONE.
+    ///
+    /// A contact through a held bird arrives at the log with the downlink it was heard on. The
+    /// stamp that names the satellite writes the uplink too: FREQ the uplink at the same place in
+    /// the passband (no Doppler; mirrored on an inverting bird), FREQ_RX the downlink. The
+    /// record's band stays the downlink, the band awards, Needed, B4 and dupes count it on, and
+    /// the LoTW upload carries BAND = the uplink's band and BAND_RX = the downlink's.
+    #[test]
+    fn a_satellite_contact_logs_both_legs_and_uploads_the_uplink_band() {
+        // SO-50, an FM channel: 145.850 up, 436.795 down.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut rec = e.qso_record("W1AW".into(), None, None);
+        rec.band = "70cm".into();
+        rec.mode = "FM".into();
+        rec.freq_mhz = 436.795;
+        rec.freq_rx_mhz = None;
+        e.log_qso(rec);
+        let logged = e.stored_log()[0].as_ref().clone();
+        assert_eq!(
+            logged.sat_name.as_deref(),
+            Some("SO-50"),
+            "the stamp applied"
+        );
+        assert_eq!(logged.band, "70cm", "counted on the downlink, as before");
+        assert!(
+            (logged.freq_mhz - 145.85).abs() < 1e-9,
+            "FREQ is the uplink: {}",
+            logged.freq_mhz
+        );
+        assert_eq!(logged.freq_rx_mhz, Some(436.795), "FREQ_RX the downlink");
+
+        let lotw = crate::station::lotw_batch_adif(&[logged], false, "K2DEF", "FN31");
+        for want in [
+            "<BAND:2>2m",
+            "<BAND_RX:4>70cm",
+            "<FREQ:10>145.850000",
+            "<FREQ_RX:10>436.795000",
+            "<PROP_MODE:3>SAT",
+            "<SAT_NAME:5>SO-50",
+        ] {
+            assert!(lotw.contains(want), "LoTW upload lacks {want}: {lotw}");
+        }
+        assert_eq!(lotw.matches("<BAND:").count(), 1, "one BAND: {lotw}");
+
+        // An inverting linear bird (RS-44-class): 10 kHz up the downlink passband is 10 kHz DOWN
+        // the uplink one.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_sat_transponder(Some((
+            "RS-44 & BREEZE-KM R/B|linear".into(),
+            0,
+            tempo_core::doppler::Transponder {
+                uplink_centre_hz: 145_965_000,
+                downlink_centre_hz: 435_640_000,
+                invert: true,
+                half_width_hz: 30_000,
+            },
+        )));
+        let mut rec = e.qso_record("W1AW".into(), None, None);
+        rec.band = "70cm".into();
+        rec.mode = "CW".into();
+        rec.freq_mhz = 435.650;
+        rec.freq_rx_mhz = None;
+        e.log_qso(rec);
+        let logged = &e.stored_log()[0];
+        assert_eq!(logged.sat_name.as_deref(), Some("RS-44"));
+        assert!(
+            (logged.freq_mhz - 145.955).abs() < 1e-9,
+            "mirrored: {}",
+            logged.freq_mhz
+        );
+        assert_eq!(logged.freq_rx_mhz, Some(435.650));
+
+        // NEGATIVE CONTROL: a 20 m contact made with the bird still held is not a satellite
+        // contact, and keeps its one frequency.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut rec = e.qso_record("W1AW".into(), None, None);
+        rec.band = "20m".into();
+        rec.freq_mhz = 14.074;
+        rec.freq_rx_mhz = None;
+        e.log_qso(rec);
+        let logged = &e.stored_log()[0];
+        assert_eq!(logged.prop_mode, None);
+        assert!((logged.freq_mhz - 14.074).abs() < 1e-9);
+        assert_eq!(logged.freq_rx_mhz, None);
+    }
+
+    /// #163 review: Log Check must judge a satellite contact's band against its RECEIVE leg. FREQ
+    /// is now the uplink (145.850) while the band is the downlink (70cm), and a check of FREQ
+    /// against the band called every new satellite contact a mismatch and offered to "fix" it onto
+    /// the uplink band — moving it in awards, Needed, B4 and dupes, and dropping its BAND_RX.
+    #[test]
+    fn log_check_does_not_flag_a_satellite_contact_logged_with_both_legs() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut rec = e.qso_record("W1AW".into(), None, None);
+        rec.band = "70cm".into();
+        rec.mode = "FM".into();
+        rec.freq_mhz = 436.795;
+        rec.freq_rx_mhz = None;
+        e.log_qso(rec);
+        let r = e.stored_log()[0].as_ref().clone();
+        assert!((r.freq_mhz - 145.85).abs() < 1e-9, "fixture: both legs");
+        let probs = crate::logtools::problems_of(&r, &|_, _| None, now_unix_secs());
+        assert!(
+            !probs
+                .iter()
+                .any(|p| p.kind == crate::logtools::ProblemKind::BandFreq),
+            "a satellite contact is not a band/frequency mismatch: {probs:?}"
+        );
+        // CONTROL: a terrestrial contact whose frequency really is off its band is still flagged.
+        let mut wrong = r.clone();
+        wrong.freq_rx_mhz = None;
+        wrong.freq_mhz = 14.074;
+        let probs = crate::logtools::problems_of(&wrong, &|_, _| None, now_unix_secs());
+        assert!(probs
+            .iter()
+            .any(|p| p.kind == crate::logtools::ProblemKind::BandFreq));
+    }
+
+    /// #163 review: Log Check pairs each frequency with its own band. A row whose BAND_RX is
+    /// parked and which carries no FREQ_RX (the reader left it unmapped) has FREQ on its band and
+    /// is not a mismatch; judging FREQ against the parked BAND_RX flagged it with a "fix" that
+    /// changed nothing. A legacy foreign row with FREQ_RX is judged on the band it is counted on.
+    #[test]
+    fn log_check_pairs_each_frequency_with_its_own_band() {
+        let parse = |t: &str| {
+            tempo_core::logbook::parse_adif(&format!(
+                "<EOH>\n<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:4>0100{t}<EOR>\n"
+            ))
+            .remove(0)
+        };
+        let band_freq = |r: &QsoRecord| {
+            // Log Check judges stored rows, which carry an id.
+            let mut r = r.clone();
+            r.id = Some(tempo_core::logbook::Minter::default().mint());
+            crate::logtools::problems_of(&r, &|_, _| None, now_unix_secs())
+                .into_iter()
+                .filter(|p| p.kind == crate::logtools::ProblemKind::BandFreq)
+                .count()
+        };
+        let unmapped = parse(
+            "<MODE:2>FM<BAND:2>2m<BAND_RX:4>70cm<FREQ:7>145.850<PROP_MODE:3>SAT<SAT_NAME:5>SO-50",
+        );
+        assert_eq!(unmapped.band, "2m", "fixture: not mapped");
+        assert_eq!(band_freq(&unmapped), 0, "FREQ is on its own band");
+
+        let mut legacy =
+            parse("<MODE:2>FM<BAND:2>2m<FREQ:7>145.850<FREQ_RX:7>436.795<PROP_MODE:3>SAT<SAT_NAME:5>SO-50");
+        legacy.extra.push(("BAND_RX".into(), "70cm".into()));
+        assert_eq!(
+            band_freq(&legacy),
+            0,
+            "FREQ_RX is on the band it is counted on"
+        );
+
+        // CONTROL: FREQ off its band, with no receive leg, is still a mismatch.
+        let wrong = parse("<MODE:3>SSB<BAND:3>40m<FREQ:6>14.250");
+        assert_eq!(band_freq(&wrong), 1);
+
+        // A parked BAND_RX whose FREQ_RX disagrees with it is a real inconsistency and is flagged,
+        // but never with a "fix" that sets the band it already has.
+        let mut odd = parse("<MODE:2>FM<BAND:2>2m<FREQ:7>145.850<FREQ_RX:7>145.900");
+        odd.extra.push(("BAND_RX".into(), "70cm".into()));
+        let mut o = odd.clone();
+        o.id = Some(tempo_core::logbook::Minter::default().mint());
+        let fixes: Vec<_> = crate::logtools::problems_of(&o, &|_, _| None, now_unix_secs())
+            .into_iter()
+            .filter(|p| p.kind == crate::logtools::ProblemKind::BandFreq)
+            .map(|p| p.fix.map(|c| c.value))
+            .collect();
+        assert_eq!(fixes, vec![None], "flagged, with no no-op fix: {fixes:?}");
+    }
+
+    /// #451: the SSTV screen's own tune never arms Phone's Enable-TX latch; the operator's pick of
+    /// the same channel arms it as it always has.
+    #[test]
+    fn the_sstv_open_tune_never_arms_tx() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        assert!(!e.tx_enabled(), "fixture: unarmed");
+        assert!(e.sstv_tune_on_open(14.230, "20m", "USB"));
+        assert!(!e.tx_enabled(), "the app's own tune armed TX");
+        let mut c = Engine::new("KD9TAW", "EN52", 0);
+        c.set_license_class("extra");
+        c.sstv_tune(14.230, "20m", "USB");
+        assert!(c.tx_enabled(), "CONTROL: the operator's pick arms");
+    }
+
+    /// #163 review: the operator taking SAT off a contact in the popup takes the satellite's
+    /// uplink with it. The stamp wrote FREQ = the bird's uplink and moved the heard frequency to
+    /// FREQ_RX; a contact that is not a satellite one has only the frequency it was heard on.
+    #[test]
+    fn taking_sat_off_in_the_popup_puts_back_the_heard_frequency() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut rec = e.qso_record("W1AW".into(), None, None);
+        rec.band = "70cm".into();
+        rec.mode = "FM".into();
+        rec.freq_mhz = 436.795;
+        rec.freq_rx_mhz = None;
+        e.stamp_satellite(&mut rec);
+        assert_eq!(rec.prop_mode.as_deref(), Some("SAT"));
+        assert!((rec.freq_mhz - 145.85).abs() < 1e-9, "fixture: split");
+        e.take_popup_prop_mode(&mut rec, Some(""));
+        assert_eq!(rec.prop_mode, None);
+        assert!(
+            (rec.freq_mhz - 436.795).abs() < 1e-9,
+            "FREQ is the heard one: {}",
+            rec.freq_mhz
+        );
+        assert_eq!(rec.freq_rx_mhz, None);
+        // Another propagation mode in its place does the same.
+        let mut rec2 = rec.clone();
+        rec2.freq_mhz = 145.85;
+        rec2.freq_rx_mhz = Some(436.795);
+        rec2.prop_mode = Some("SAT".into());
+        rec2.sat_name = Some("SO-50".into());
+        e.take_popup_prop_mode(&mut rec2, Some("ES"));
+        assert!((rec2.freq_mhz - 436.795).abs() < 1e-9);
+        assert_eq!(rec2.freq_rx_mhz, None);
     }
 
     /// #163 — A SPLIT CONTACT LOGS BOTH FREQUENCIES; A SATELLITE CONTACT IS LEFT ALONE.

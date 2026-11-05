@@ -132,6 +132,8 @@ mod remote_service;
 /// The Stations on this network window: the Connect to my station… window, on the PC an operator
 /// works from (Windows only). The page in it reaches no command — see the module header.
 mod remote_window;
+#[cfg(test)]
+mod sat_fix_tests;
 /// "Spot me": the operator's own activation to pota.app and the DX cluster, for the desktop and
 /// the Remote page alike.
 mod self_spot;
@@ -30180,6 +30182,27 @@ fn sstv_tune(
     Ok(eng.snapshot())
 }
 
+/// The SSTV screen's tune on opening (#451, Settings ▸ Digital ▸ SSTV, off by default): the strip
+/// pick's claim of Phone and QSY, as the APP's tune — `Engine::sstv_tune_on_open` declares
+/// machinery provenance, so the channel never becomes the operator's remembered Phone dial, and
+/// it refuses the ISS downlink and a dial a satellite pass owns. It never arms Phone's Enable-TX
+/// latch, so it takes no `afar`. Persists like `sstv_tune`.
+#[tauri::command(async)]
+fn sstv_tune_on_open(
+    state: State<'_, SharedEngine>,
+    dial_mhz: f64,
+    band: String,
+    mode: String,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    if eng.sstv_tune_on_open(dial_mhz, &band, &mode) {
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: failed to persist frequency: {e}")
+        });
+    }
+    Ok(eng.snapshot())
+}
+
 /// Park the dial on one of the APP's OWN fixed channels — the ISS SSTV auto-arm's 145.800 FM.
 /// An FM channel is held in FM, as the SSTV strip's pick of it is, and routed on FM, as a
 /// repeater tune is (`Engine::tune_channel`; neither while a satellite pass owns the dial). The
@@ -38700,6 +38723,63 @@ async fn upload_lotw_report_impl(
     tokio::task::spawn_blocking(move || lotw_upload_batch(&engine, pick, true))
         .await
         .map_err(|e| format!("LoTW upload task failed: {e}"))?
+}
+
+/// #163: the past satellite contacts that went to LoTW with the wrong band (the downlink's) and
+/// can go again corrected, by id — what the LoTW controls offer as one batch. Read off the store
+/// with the Engine lock released; changes nothing.
+#[tauri::command]
+async fn lotw_sat_band_fixes(state: State<'_, SharedEngine>) -> Result<Vec<String>, String> {
+    let rows = engine_lock(&state).log_rows();
+    tokio::task::spawn_blocking(move || {
+        tempo_app::station::lotw_sat_band_fixes(&rows)
+            .map(|ids| ids.iter().map(ToString::to_string).collect())
+    })
+    .await
+    .map_err(|e| format!("logbook task failed: {e}"))?
+}
+
+/// #163: the operator took the offer — rewrite the satellite contacts `ids` into the corrected
+/// shape (FREQ the nominal uplink, FREQ_RX the downlink; their band, which they are counted on,
+/// unchanged) and upload them to LoTW through the ordinary TQSL batch, which stamps them as any
+/// upload does. Never run without the operator's click. The rewrite stamps them not sent in the
+/// same change, so a re-upload that never stamps them — no TQSL, a run that never starts, the app
+/// closed mid-run — leaves them owed, and the ordinary upload sends them.
+#[tauri::command]
+async fn lotw_fix_sat_bands(
+    state: State<'_, SharedEngine>,
+    ids: Vec<String>,
+) -> Result<UploadReportDto, String> {
+    let ids: Vec<tempo_core::logbook::RecordId> = ids
+        .iter()
+        .map(|id| id.parse().map_err(|()| format!("'{id}' names no contact.")))
+        .collect::<Result<_, _>>()?;
+    let engine = Arc::clone(&state);
+    let report = tokio::task::spawn_blocking(move || {
+        // Rewritten AND stamped not sent in one change, so a re-upload that never stamps them
+        // leaves them owed to the ordinary upload (`fix_sat_bands`).
+        let (fixed, durability) = tempo_app::logwrite::fix_sat_bands(&engine, &ids, now_unix());
+        let fixed = fixed?;
+        if durability.turned_back(tempo_app::logstore::DURABLE_WAIT) {
+            return Err(tempo_app::station::LOG_BUSY.to_string());
+        }
+        durability
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .map_err(durability_failed)?;
+        lotw_upload_batch(&engine, LotwPick::Ids(fixed), true)
+    })
+    .await
+    .map_err(|e| format!("LoTW upload task failed: {e}"))?;
+    conn_logged(
+        "LoTW",
+        |r| {
+            format!(
+                "satellite re-upload — {} QSO(s), outcome: {}",
+                r.dispatched, r.outcome
+            )
+        },
+        report,
+    )
 }
 
 /// The contacts an upload to LoTW signs.
@@ -51189,6 +51269,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         dxcc_entity_locations,
         set_frequency,
         sstv_tune,
+        sstv_tune_on_open,
         pick_band,
         tune_channel,
         set_operating_mode,
@@ -51447,6 +51528,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         download_lotw_report,
         reset_lotw_cursor,
         upload_lotw_report,
+        lotw_sat_band_fixes,
+        lotw_fix_sat_bands,
         mark_lotw_uploaded,
         set_eqsl_password,
         clear_eqsl_password,

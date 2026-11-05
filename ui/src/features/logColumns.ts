@@ -415,7 +415,9 @@ export function contestExchange(q: LoggedQso, side: 'sent' | 'rcvd'): string | n
   return serial != null ? String(serial) : null
 }
 
-export type UploadMark = 'done' | 'waiting' | 'failed' | 'none'
+/** `resend` (#163): a satellite contact the one-click LoTW fix corrected and has not sent yet —
+ *  owed to LoTW, its own state, never a failure. */
+export type UploadMark = 'done' | 'waiting' | 'failed' | 'resend' | 'none'
 
 /** An upload mark in words, for a tooltip and the detail view. */
 export function uploadWord(m: UploadMark): string {
@@ -426,6 +428,8 @@ export function uploadWord(m: UploadMark): string {
       return t('logbook.upload.waiting')
     case 'failed':
       return t('logbook.upload.failed')
+    case 'resend':
+      return t('logbook.upload.resend')
     case 'none':
       return t('logbook.upload.none')
   }
@@ -436,6 +440,7 @@ export function uploadMark(s: UploadStatus | undefined): UploadMark {
   if (!s) return 'none'
   if (s.outcome === 'accepted' || s.outcome === 'duplicate') return 'done'
   if (s.outcome === 'pending') return 'waiting'
+  if (s.detail === 'resend') return 'resend'
   return 'failed'
 }
 

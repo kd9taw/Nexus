@@ -229,8 +229,14 @@ fn a_sat_shaped_adif_keeps_sat_name_prop_mode_freq_rx_and_gets_its_bands() {
     let r = &log[0];
     assert_eq!(r.sat_name.as_deref(), Some("SO-50"));
     assert_eq!(r.prop_mode.as_deref(), Some("SAT"));
-    assert_eq!(r.band, "2m", "the uplink's band");
+    // #163 (operator ruling, option A): a satellite contact is held on its DOWNLINK band, the band
+    // awards, Needed, B4 and dupes count it on; the export still says BAND = the uplink's.
+    assert_eq!(r.band, "70cm", "counted on the downlink's band");
     let adif = tempo_core::logbook::adif_record_own_log(r);
+    assert!(
+        adif.contains("<BAND:2>2m"),
+        "the uplink's band goes out as BAND: {adif}"
+    );
     assert!(adif.contains("<FREQ_RX:10>436.795000"), "{adif}");
     assert!(adif.contains("<BAND_RX:4>70cm"), "{adif}");
     // No program name: this computer, never its address.
