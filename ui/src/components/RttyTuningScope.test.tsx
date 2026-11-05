@@ -7,7 +7,7 @@
 // already repeating stops the moment an over starts — before its next step can move the tone.
 // Everything is asserted BY VALUE (the exact hertz asked for, the exact words shown).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, act, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, act, fireEvent, waitFor } from '@testing-library/react'
 import * as api from '../api'
 import type { RttyScope } from '../types'
 import {
@@ -69,7 +69,12 @@ describe('the picture has a text twin', () => {
     getRttyScope.mockResolvedValue(frame(-20))
     const { container } = render(<RttyTuningScope {...base} />)
     expect(await screen.findByRole('img', { name: 'Tuning scope: Signal 20 Hz low' })).toBeTruthy()
-    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe('Signal 20 Hz low')
+    // The picture's name comes from the render; the status line follows in the effect React runs
+    // just after that commit. On a slow runner the scheduler can yield between the two, so the
+    // line is awaited too — it must still arrive, with these exact words.
+    await waitFor(() =>
+      expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe('Signal 20 Hz low'),
+    )
     expect(screen.getByText('M 2125')).toBeTruthy()
   })
 
