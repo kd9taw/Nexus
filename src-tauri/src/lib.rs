@@ -19247,6 +19247,50 @@ mod contest_session_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ★ THE TRANSPONDER CHOSEN ON EACH SATELLITE IS THE STATION'S, AND GOES WITH ITS BACKUP: the
+    /// last pick and the ★ favorite per bird (`nexus.sats.transponders`, the UI's
+    /// satTransponderPref) are in a backup made from afar, and restoring that backup lands the
+    /// backup's choice over the station's current one, as the ★ birds beside it do. CONTROL: made
+    /// at the station, it goes too.
+    #[test]
+    fn the_transponder_choices_go_with_a_backup_made_from_afar() {
+        const KEY: &str = "nexus.sats.transponders";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("bundle-sat-tp", 0);
+        let mut ui = with_station_keys_set(&engine, "PLANTED");
+        ui.insert(KEY.into(), r#"{"ISS":{"fav":{"up":145990000}}}"#.into());
+        let carried = |afar| {
+            let text = settings_bundle(&engine, ui.clone(), afar).unwrap();
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            (text, v["uiState"].get(KEY).cloned())
+        };
+        let (afar, from_afar) = carried(Some(&FROM_AFAR));
+        assert_eq!(
+            from_afar,
+            Some(serde_json::json!(r#"{"ISS":{"fav":{"up":145990000}}}"#))
+        );
+        assert_eq!(carried(None).1, from_afar, "CONTROL: at the station");
+        let mut station_ui = std::collections::BTreeMap::new();
+        station_ui.insert(KEY.to_string(), r#"{"ISS":{"last":{"up":1}}}"#.to_string());
+        let mut saved = None;
+        restore_settings_bundle(
+            &engine,
+            afar,
+            || station_ui,
+            |ui| {
+                saved = Some(ui);
+                true
+            },
+            no_key_change,
+        )
+        .unwrap();
+        assert_eq!(
+            saved.unwrap().get(KEY).map(String::as_str),
+            Some(r#"{"ISS":{"fav":{"up":145990000}}}"#),
+            "the backup's choice lands"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ★ RESTORING A BACKUP KEEPS THE STATION'S OWN STORED KEYS: its Club Log and Cloudlog keys,
     /// and each saved profile's of the same name, whether the backup's profile has them blank or
     /// leaves them out, made at the station or from afar, while the rest of the backup lands. A

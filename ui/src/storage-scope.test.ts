@@ -333,6 +333,10 @@ const SHARED = [
   // is: per-surface, a second window would find "never seeded" and star ten
   // birds on top of whatever the operator had settled on.
   'nexus.sats.seeded',
+  // The transponder picked last on each bird and its ★ favorite (features/satTransponderPref).
+  // SHARED and durable, like the ★ set: which one this operator works on a bird is the station's,
+  // not a window's.
+  'nexus.sats.transponders',
   // Which received picture the viewer pop-out is showing. SHARED on purpose and it is the
   // whole mechanism: the main window writes it and the viewer's `storage` listener follows,
   // so clicking a second thumbnail re-points the window that is already open instead of

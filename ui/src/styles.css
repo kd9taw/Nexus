@@ -27398,6 +27398,14 @@ button.sat-chip:disabled {
 .sat-tp-auto {
   color: var(--accent);
 }
+/* The row's ★ favorite: the .sat-star toggle (same gold, both themes), at the card's end. */
+.sat-tp-fav {
+  margin-left: auto;
+}
+/* "last used": a quiet word on the row the operator picked last time. */
+.sat-tp-last {
+  color: var(--text-dim);
+}
 .sat-tp-deadmark {
   color: var(--text-dim);
 }
