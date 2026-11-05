@@ -805,27 +805,38 @@ fn speed_frames(s: &Scene) -> Vec<Vec<u8>> {
 
 /// ⭐ EVERY SWEEP REACHES THE SCOPE, THROUGH THE REAL RADIO LOOP. A 12-sweep-a-second IC-9700 and a
 /// loop whose ticks are 150 ms apart (a tick held up by CAT): about two sweeps complete between two
-/// ticks, every one of them is published, and an in-order reader draws all but the few at the
-/// edges. The snapshot carries the measured rate with the radio's SPEED, the wire carries only
+/// ticks, every one of them is published, and a scope polling one frame every 33 ms on its own
+/// thread, as the UI does, draws all but the few at the edges. The snapshot carries the measured rate with the radio's SPEED, the wire carries only
 /// `27 1A 00` reads, and when the stream stops the measurement leaves the snapshot entirely.
 #[test]
 fn every_sweep_reaches_an_in_order_scope_through_the_radio_loop() {
     let mut s = Scene::new(12.0, 0.5, false);
-    let mut last = 0u64;
-    let mut drawn = 0u64;
+    // The scope, on its own thread as the UI is: one frame every 33 ms, whatever the loop does.
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let scope = {
+        let (feed, stop) = (s.feed.clone(), stop.clone());
+        std::thread::spawn(move || {
+            let (mut last, mut drawn) = (0u64, 0u64);
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Some(f) = feed.rf_frame_after(last) {
+                    if !f.bins.is_empty() {
+                        assert!(f.seq > last, "in order, no repeat: {} after {last}", f.seq);
+                        last = f.seq;
+                        drawn += 1;
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(33));
+            }
+            drawn
+        })
+    };
     let end = Instant::now() + Duration::from_millis(6500);
     while Instant::now() < end {
         s.step(now_unix_ms());
         std::thread::sleep(Duration::from_millis(150));
-        while let Some(f) = s.feed.rf_frame_after(last) {
-            if f.bins.is_empty() {
-                break;
-            }
-            assert!(f.seq > last, "in order, no repeat: {} after {last}", f.seq);
-            last = f.seq;
-            drawn += 1;
-        }
     }
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let drawn = scope.join().expect("the scope thread");
     let c = native(&s).scope_counts();
     assert!(
         s.sweeps() > 50,

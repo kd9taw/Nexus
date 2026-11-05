@@ -341,6 +341,10 @@ struct FeedRows {
     /// CI-V frames that left the backlog undrawn although a scope was reading when they were
     /// published: pushed out by newer ones, or stepped over by a reader that fell behind.
     rf_dropped: u64,
+    /// The RF frames handed out lately, each with when a reader holding it last polled: a reader
+    /// names the last frame it drew, so this tells how long ago it last polled, which is how a reader slower than the radio is told
+    /// apart (see [`SpectrumFeed::RF_SLOW_READER`]). At most [`SpectrumFeed::RF_BACKLOG`] + 1.
+    rf_handed: VecDeque<(u64, Instant)>,
     /// The span the on-screen rig scope is actually showing, and the row computed over it.
     /// See [`SpectrumFeed::scope_row`] — this is the second slot, not a second feed.
     scope_req: Option<ScopeReq>,
@@ -455,20 +459,51 @@ impl FeedRows {
     /// radio's fastest output) is drawn in full, in order.
     fn rf_next_after(&mut self, last_seq: u64) -> Option<SpectrumFrame> {
         let (newest_seq, newest_at) = self.rf.as_ref().map(|(f, at)| (f.seq, *at))?;
+        let now = Instant::now();
         if newest_seq <= last_seq {
+            // Nothing new, but the reader POLLED: a fast scope waiting between two slow sweeps
+            // must not look like a slow one when the next sweep arrives.
+            if let Some(h) = self
+                .rf_handed
+                .iter_mut()
+                .rev()
+                .find(|(seq, _)| *seq == last_seq)
+            {
+                h.1 = now;
+            }
             return None;
         }
-        self.rf_read_at = Some(Instant::now());
-        if last_seq != 0 {
-            if let Some(e) = self.rf_prev.iter_mut().find(|e| e.frame.seq > last_seq) {
-                if newest_at.duration_since(e.at) <= SpectrumFeed::RF_CATCHUP {
+        self.rf_read_at = Some(now);
+        // A reader that last read more than RF_SLOW_READER ago polls slower than a CI-V scope
+        // sweeps (the reduced-motion poll): it thins by choice, so it is handed the live sweep,
+        // never one from the backlog it would only trail.
+        let slow = self
+            .rf_handed
+            .iter()
+            .rev()
+            .find(|(seq, _)| *seq == last_seq)
+            .is_some_and(|(_, at)| now.duration_since(*at) > SpectrumFeed::RF_SLOW_READER);
+        let next = if last_seq != 0 && !slow {
+            self.rf_prev
+                .iter_mut()
+                .find(|e| e.frame.seq > last_seq)
+                .filter(|e| newest_at.duration_since(e.at) <= SpectrumFeed::RF_CATCHUP)
+                .map(|e| {
                     e.shown = true;
-                    return Some(e.frame.clone());
-                }
-            }
+                    e.frame.clone()
+                })
+        } else {
+            None
+        };
+        let frame = next.or_else(|| {
+            self.rf_shown = true;
+            self.rf.as_ref().map(|(f, _)| f.clone())
+        })?;
+        self.rf_handed.push_back((frame.seq, now));
+        if self.rf_handed.len() > SpectrumFeed::RF_BACKLOG + 1 {
+            self.rf_handed.pop_front();
         }
-        self.rf_shown = true;
-        self.rf.as_ref().map(|(f, _)| f.clone())
+        Some(frame)
     }
 }
 
@@ -1009,18 +1044,16 @@ impl SpectrumFeed {
         if frame.bins.is_empty() {
             return Some(frame);
         }
-        if frame.seq <= last_seq {
-            return None;
-        }
-        // The radio's own panadapter answers IN ORDER, every sweep: see `FeedRows::rf_next_after`.
-        // Any other slot's frame (the narrow scope row, the audio row) is a running mean, whose
-        // newest is the only one there is.
+        // The radio's own panadapter answers IN ORDER, every CI-V sweep: see
+        // `FeedRows::rf_next_after`, which also notes a poll that found nothing new. Any other
+        // slot's frame (the narrow scope row, the audio row) is a running mean, whose newest is the
+        // only one there is.
         if let Ok(mut g) = self.rows.lock() {
             if g.rf.as_ref().is_some_and(|(f, _)| f.seq == frame.seq) {
                 return g.rf_next_after(last_seq);
             }
         }
-        Some(frame)
+        (frame.seq > last_seq).then_some(frame)
     }
 
     /// How many CI-V sweeps wait behind the newest for a reader that has not drawn them yet: a
@@ -1032,6 +1065,11 @@ impl SpectrumFeed {
     /// than this (the reduced-motion poll against a fast scope) jumps to the newest rather than
     /// trailing the live picture; one polling faster than the radio sweeps never meets it.
     pub const RF_CATCHUP: Duration = Duration::from_millis(300);
+
+    /// A reader that last read longer ago than this is slower than a CI-V scope sweeps, and is
+    /// handed the newest sweep on every read: the reduced-motion poll (120 ms) is, the normal one
+    /// (33 ms, a little more with a busy UI) is not.
+    pub const RF_SLOW_READER: Duration = Duration::from_millis(80);
 
     /// CI-V sweeps that left the backlog undrawn although a scope was reading when they were
     /// published, since the feed started. Diagnostics read two of these apart.
@@ -67092,6 +67130,77 @@ mod tests {
             got.push(f.bins[0]);
         }
         assert_eq!(got, vec![6.0, 7.0, 8.0]);
+    }
+
+    /// ⭐ REDUCED MOTION DRAWS THE LIVE SWEEP, as before the backlog. A CI-V scope at 12 sweeps a
+    /// second and a scope polling every 120 ms (the reduced-motion poll, slower than the radio):
+    /// every poll draws the NEWEST sweep, never one from the backlog. Thinning is that reader's
+    /// choice; trailing the radio is not.
+    #[test]
+    fn a_reduced_motion_reader_draws_the_newest_civ_sweep() {
+        let feed = SpectrumFeed::default();
+        civ_sweep(&feed, 0.0);
+        let mut last = feed.rf_frame_after(0).expect("live").seq;
+        let t0 = Instant::now();
+        let (mut next_pub, mut next_poll) = (t0, t0 + Duration::from_millis(120));
+        let mut n = 0u32;
+        let mut behind = Vec::new();
+        while t0.elapsed() < Duration::from_millis(2000) {
+            let now = Instant::now();
+            if now >= next_pub {
+                n += 1;
+                civ_sweep(&feed, n as f32);
+                next_pub += Duration::from_micros(83_333);
+            }
+            if now >= next_poll {
+                if let Some(f) = feed.rf_frame_after(last) {
+                    last = f.seq;
+                    behind.push(n as f32 - f.bins[0]);
+                }
+                next_poll += Duration::from_millis(120);
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            behind.len() >= 10,
+            "premise: the poll drew ({})",
+            behind.len()
+        );
+        assert!(
+            behind.iter().all(|b| *b == 0.0),
+            "sweeps behind the newest at each reduced-motion poll: {behind:?}"
+        );
+    }
+
+    /// A FAST SCOPE WAITING BETWEEN SLOW SWEEPS IS STILL FAST. A radio on its Slow SPEED sends a
+    /// sweep every few hundred ms; a scope polling every 30 ms finds nothing new in between, and a
+    /// burst published after a long tick must still be drawn in order, not skipped as if that scope
+    /// were a slow reader. Through both readers.
+    #[test]
+    fn a_fast_scope_between_slow_sweeps_still_draws_a_burst_in_order() {
+        type Poll = fn(&SpectrumFeed, u64) -> Option<SpectrumFrame>;
+        let polls: [(&str, Poll); 2] = [
+            ("scope", scope_poll),
+            ("rf pane", |f: &SpectrumFeed, s| f.rf_frame_after(s)),
+        ];
+        for (name, poll) in polls {
+            let feed = SpectrumFeed::default();
+            civ_sweep(&feed, 0.0);
+            let mut last = poll(&feed, 0).expect("live").seq;
+            for _ in 0..8 {
+                std::thread::sleep(Duration::from_millis(30));
+                assert_eq!(poll(&feed, last), None, "{name}: nothing new");
+            }
+            for v in [1.0, 2.0, 3.0] {
+                civ_sweep(&feed, v);
+            }
+            let mut got = Vec::new();
+            while let Some(f) = poll(&feed, last) {
+                last = f.seq;
+                got.push(f.bins[0]);
+            }
+            assert_eq!(got, vec![1.0, 2.0, 3.0], "{name}: the burst, in order");
+        }
     }
 
     /// Sweeps published while no scope was reading are not drops, even once a scope opens and they
