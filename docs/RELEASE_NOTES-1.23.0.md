@@ -52,15 +52,6 @@ same goes for that computer's free text and grid changes.
   network address, not 127.0.0.1. Or leave the switch off and list one 127.0.0.1 address per logger, with commas:
   `127.0.0.1:2237, 127.0.0.1:2238`.
 - **A logger on this computer sending from 127.0.0.1 works as it did.**
-- **With the switch on, anyone who can reach this computer over the network can turn TX on and send under your call,**
-  because a UDP sender's address can be faked. Stop TX and a tripped watchdog still refuse them, but each accepted answer
-  restarts the watchdog's clock. Turn it on only on a network you trust.
-- **Still accepted with the switch off:** Stop TX, and a contact logged as ADIF from the computer named in your UDP Address
-  (or from any sender, if that address is a multicast group).
-- **Whichever way the switch is set, keep this computer's UDP port on a network you trust, and never forward it from the
-  internet.** Nexus can go only by the address a request says it came from.
-- Each ignored request puts a line in the diagnostic log, at most one a minute, with the sender's address and the setting to
-  change. A backup, a profile or a save from a remote computer cannot change the switch.
 
 ### Check this first if you use Split Operation = Rig
 
@@ -124,8 +115,6 @@ new band's TX dial instead. This is what WSJT-X does, but it is new for Nexus op
   the radio.
 - **Outside the US,** band picks park inside what every IARU region allows, spots are classed by the Region 1 band plan,
   and an amber "Outside band plan" chip appears in Phone. The chip is advice only. Nothing is blocked by it.
-- **Treat a settings backup like a program.** Restore only one you made yourself or got from someone you trust, and look over
-  your transmit settings afterwards.
 - **"New grid" on the roster** counts only a grid the station sent you, or one you logged for it before.
 
 ## Operating FT8, FT4 and FT2
@@ -153,41 +142,33 @@ new band's TX dial instead. This is what WSJT-X does, but it is new for Nexus op
     can key a whole FT2 over in the other station's period. Turn TX off before you change to FT2.
   - All of these timings come from a simulated radio, not a real one.
 - **A station shown in brackets is the same station as without them** for previous contacts, B4 and the dupe badges.
-- **Band Activity and Rx Frequency fill in the periods they missed** when a pane comes back, in italics. Periods the
-  station no longer holds are marked. These rows are only shown: they raise no alert and change nothing Nexus sends.
+- **Band Activity and Rx Frequency fill in the periods they missed** when a pane comes back, in italics. They raise no
+  alert and change nothing Nexus sends.
 - **FST4W lists all of WSJT-X's frequencies,** and picking FST4 from another band lands on a band your radios are set for.
 - **Field Day: a reply to your old call still completes the contact** after you add /P.
 - **See the FT8 meters larger:** click the small meters cell in the TX strip.
 
 ## Scopes and waterfalls
 
-- **CW shows the radio's scope and the audio view together** on a radio whose scope Nexus draws (Icom over CI-V USB, Yaesu
-  over its LAN scope link, FlexRadio). A new RF / Audio / Both chip switches views without moving anything below the
-  scope. Phone gets RF / Audio.
-- **An Icom's own scope draws every sweep it sends.** With an Icom on Native Icom CI-V at 115,200 baud, or on the Icom
-  network connection, the CW and Phone scope and the RF scope pane used to show only the newest sweep each time Nexus got
-  round to it, so the waterfall moved in steps. Now the sweeps reach the screen in order. If the screen falls behind, it
-  skips ahead to the live picture rather than lag. Settings ▸ Radio ▸ Rig & CAT ▸ Advanced ▸ Radio scope stream shows
-  sweeps a second, how many were not drawn, and the radio's scope SPEED, which Nexus reads and never changes.
+- **CW shows the radio's scope and the audio view together** on an Icom over CI-V USB, a Yaesu over its LAN scope link or a
+  FlexRadio. An RF / Audio / Both chip switches views. Phone gets RF / Audio.
+- **An Icom's own scope draws every sweep it sends,** on Native Icom CI-V at 115,200 baud or the Icom network connection, so
+  the waterfall no longer moves in steps. Settings ▸ Radio ▸ Rig & CAT ▸ Advanced ▸ Radio scope stream shows sweeps a second,
+  how many were not drawn, and the radio's scope SPEED, which Nexus never changes.
 
-  **This has only been tested against a simulated radio, not a real Icom. Please check it on yours.**
-  - *What you should see:* a waterfall that moves steadily and stays with the radio, and a "not drawn" figure that stays
-    at or near 0.
-  - *What to look for:* the waterfall trailing the radio or jumping; "not drawn" climbing steadily on a computer that is
-    not busy; CW elements, PTT, frequency or meters slower while the scope runs. Try the radio's scope SPEED at Fast,
-    Mid and Slow.
+  **This has only been tested against a simulated radio, not a real Icom. Please check it on yours,** with the radio's scope
+  SPEED at Fast, Mid and Slow. Look for the waterfall trailing the radio or jumping, "not drawn" climbing on a computer that
+  is not busy, or CW, PTT, frequency or meters slower while the scope runs.
   - *If the scope misbehaves:* Settings ▸ Radio ▸ Rig & CAT ▸ Advanced ▸ **Waterfall source ▸ Audio (sound card)**, then
-    Save. The radio stops sending its scope, Native Icom CI-V stays connected for CAT, and every waterfall draws the sound
-    card, as on Hamlib. It is set per radio, and picking **Radio's scope** turns it back on.
-  - *If keying or CAT still misbehaves on USB:* turn off Native Icom CI-V in the same place, which goes back to Hamlib. On
-    the Icom network connection that switch is always on, so Waterfall source is the way back there.
-  - The Audio chip above the scope changes only what you see; the radio keeps sending. No setting brings back the old
-    newest-sweep-only drawing.
+    Save. The radio stops sending its scope, CAT stays connected, and every waterfall draws the sound card. It is set per
+    radio, and **Radio's scope** turns it back on. The Audio chip above the scope only changes what you see.
+  - *If keying or CAT still misbehaves on USB:* turn off Native Icom CI-V in the same place. On the Icom network connection
+    that switch is always on, so Waterfall source is the way back there.
 - **An Icom's scope comes back after you switch the radio off and on,** without restarting Nexus. Needs a check on an
   IC-7300 or IC-9700.
 - **A hint when the radio's scope is slow,** below four sweeps a second or with its SPEED on SLOW.
-- **Every audio waterfall reaches 5 kHz,** and the picture's black point follows the radio's filter, so a wide view keeps
-  a dark background. Nothing changes in what any decoder hears or where you can transmit.
+- **Every audio waterfall reaches 5 kHz,** and a wide view keeps a dark background. Decoding and where you can transmit do
+  not change.
 - **A frequency scale under every waterfall and scope,** with steps that follow the span.
 - **The radio's filter edge is marked** on USB, LSB and their data modes, at 1.8 kHz or wider. The CW and Phone scopes
   also say when the filter is all they can show, and how to get the wide view.
@@ -195,17 +176,9 @@ new band's TX dial instead. This is what WSJT-X does, but it is new for Nexus op
 ## Transmit meters
 
 - **Needle TX meters with peak hold.** Settings ▸ Appearance ▸ Workspace ▸ TX meters picks Bars (still the default) or
-  Needle. Needle draws power, ALC and SWR as analog faces, from the same readings as the bars, with a peak mark that holds
-  the highest reading for a second. Between overs the mark shows the last over's peak. The choice applies wherever Nexus
-  shows the transmit meters:
-  - the FT8 and other FT-mode screens, including the larger meters window;
-  - Phone;
-  - CW;
-  - SSTV, JS8 and Tempo, on any window but the smallest;
-  - Settings ▸ Radio ▸ Audio, under the Drive slider.
-
-  RTTY, PSK and JTTY show no transmit meters. Compression and the temperatures stay bars beside the needles; the FT strip's
-  small cell has room only for the three faces, so its compression reading is in the larger window.
+  Needle. Needle draws power, ALC and SWR as analog faces, with a peak mark that holds
+  the highest reading for a second. It applies on the FT screens and their larger meters window, Phone, CW, Settings ▸
+  Radio ▸ Audio, and SSTV, JS8 and Tempo on any window but the smallest. RTTY, PSK and JTTY show no transmit meters.
 - **ALC beside the drive** in SSTV, JS8, Tempo and Settings ▸ Radio ▸ Audio, so you can set Drive against the radio's ALC.
 - **Buttons look like buttons, and status lights do not,** on every operating screen's transmit strip and the top bar.
 - **With an amplifier, a contact logs the amplifier's power,** the highest it reported during the contact. In Standby, it
@@ -214,13 +187,10 @@ new band's TX dial instead. This is what WSJT-X does, but it is new for Nexus op
 
 ## Small windows
 
-- **The transmit panel folds where it does not fit.** On CW, Phone, RTTY, PSK, JS8 and JTTY, a small window at a high zoom
-  (900×600 or 700×800 at 175 %, and a few others such as PSK and JTTY at 1280×720) used to have a panel taller than the
-  screen, covering TX On/Off, Tune and Stop TX and pushing Send off the window. Now the macro keys and meters scroll with
-  the rest of the screen, and only the row with Send or PTT stays at the bottom. Stop TX and Send stay on screen at every
-  scroll position.
-- **The ⊞ Panels menu stays inside the window and never covers Stop TX.** It stands beside Stop TX, opens upward if there
-  is more room there, and scrolls so that every entry can be reached.
+- **The transmit panel folds where it does not fit.** On CW, Phone, RTTY, PSK, JS8 and JTTY, on a small window at a high zoom,
+  the macro keys and meters now scroll with the screen and only the row with Send or PTT stays at the bottom, so Stop TX and
+  Send stay on screen.
+- **The ⊞ Panels menu stays inside the window and never covers Stop TX.**
 - **CW's Send no longer runs off a narrow window.**
 - **While the panel is folded, Tab keeps the focused key out from behind the bottom row.** JTTY's notice or refusal stays on
   screen in about two lines (hover over it or click it for the whole text), and JS8's heartbeat menu opens in sight.
@@ -228,7 +198,8 @@ new band's TX dial instead. This is what WSJT-X does, but it is new for Nexus op
 
 **Known limits on a small window, while the panel is folded:**
 
-- **A second click on a macro's ✎ pencil can send that macro.** This is on CW, at a window about 800 px wide or less at 175 %, when the pencil is just under the parked Send row, partly showing. The editor opens out of sight, so nothing seems to
+- **A second click on a macro's ✎ pencil can send that macro.** This is on CW, at a window about 800 px wide or less at
+  175 %, when the pencil is just under the parked Send row, partly showing. The editor opens out of sight, so nothing seems to
   happen, and a second click at the same spot 500 ms or later can land on **Send once**. Don't click a pencil there twice:
   scroll until it is fully in view. Stop TX and Esc/Stop stay clear, so you can always stop it.
 - **The same second click can land on Reset this button,** on CW, RTTY and PSK at similar sizes. It does not ask first, so it
@@ -239,23 +210,19 @@ new band's TX dial instead. This is what WSJT-X does, but it is new for Nexus op
 
 - **Other programs can log contacts into Nexus.** Settings ▸ Radio ▸ Transmit limits & sharing ▸ Accept contacts other
   programs log. Each contact is logged only under your own call, and is not written twice if you also logged it in Nexus
-  within five minutes. Turn on "Accept from devices on my network" for something like the S.A.T. tracker, on a network you
-  trust. N1MM's edits and deletes are not read yet.
+  within five minutes. Turn on "Accept from devices on my network" for something like the S.A.T. tracker. N1MM's edits
+  and deletes are not read yet.
 - **Companion mode:** a contact WSJT-X or JTDX logs now reaches your log, and Nexus no longer hears its own decodes back.
-- **Satellite contacts go to LoTW with the uplink band,** with both frequencies recorded. Inside Nexus a satellite contact
-  still counts on its downlink band.
+- **Satellite contacts go to LoTW with the uplink band.** Inside Nexus they still count on their downlink band.
 - **Fix satellite uploads (N)** appears beside Upload to LoTW when past uploads went out with the wrong band. Nothing is
   changed or sent until you click.
 - **Every satellite LoTW accepts can be picked,** and more satellites are tagged automatically on a pass.
 - **A LoTW satellite confirmation lands only on a satellite contact.**
-- **"My station" profiles:** call, grid, state, county, zones, IOTA, park, power, rig and antenna, picked from your
-  callsign in the top bar, only between contacts. Each can name its TQSL Station Location. A profile under another
-  licensee's call does not transmit while a licence class is set.
-- **LoTW signing from the ADIF location** sends the grid and place stored on each contact.
+- **"My station" profiles,** picked from your callsign in the top bar, only between contacts. Each can name its TQSL Station
+  Location. A profile under another licensee's call does not transmit while a licence class is set.
 - **Satellite, Propagation and Park name columns** in the Logbook. Turn them on under Columns.
 - **A Start button** on the CW and Phone log line for long contacts.
-- **WWFF** spots on the POTA/SOTA board, with hunt, the log strip, export and the Awards page. A remote station's board
-  shows POTA and SOTA only.
+- **WWFF** spots on the POTA/SOTA board, with hunt, logging, export and the Awards page.
 - **FreeDV contacts reach QRZ, Club Log, eQSL and your other services,** and a FreeDV station is its own "New mode" on the
   Needed board.
 
@@ -265,15 +232,13 @@ new band's TX dial instead. This is what WSJT-X does, but it is new for Nexus op
 - **PSK63 on the PSK screen,** to receive and transmit, with the same TX switch, licence check, Stop and watchdog as PSK31.
 - **12 or 16 macro keys on CW, RTTY and PSK.** 8 stays the default.
 - **Type the JS8 offsets exactly,** in Rx and Tx Hz boxes in the header.
-- **SSTV:** every line is read from its own sync pulse, so lost audio no longer shears the picture. SSTV can tune to the
-  band's SSTV frequency when it opens (off by default), and remembers "My picture already shows my callsign" per picture.
-- **FreeDV on the Phone screen:** a pane showing whether FreeDV is talking to Nexus, its last contact, and the calls
-  FreeDV 2.4 hears. FreeDV's channels are in the band plan.
+- **SSTV:** lost audio no longer shears the picture. It can tune to the band's SSTV frequency when it opens (off by default),
+  and remembers "My picture already shows my callsign" per picture.
+- **FreeDV pane on the Phone screen:** its last contact and the calls FreeDV 2.4 hears.
 
 ## Licence checks and split
 
-- **Tune is refused where its tone would be outside your privileges,** and the note beside it says why.
-- **The ATU tune-up, an APRS beacon and the voice keyer are judged where they actually transmit.**
+- **Tune, the ATU tune-up, an APRS beacon and the voice keyer are judged where they actually transmit.**
 - **Split Operation = Rig: Tune, CW, PTT, an APRS beacon and the ATU go out on your dial between FT overs.** RTTY, PSK,
   JTTY, the voice keyer, SSTV and the Remote and computer microphones wait for split to be let go. If the radio does not
   confirm, nothing keys and the status line says why.
@@ -284,10 +249,10 @@ new band's TX dial instead. This is what WSJT-X does, but it is new for Nexus op
 
 ## Radios and CAT
 
-- **Two radios in two windows:** one cluster login between them, the picker no longer takes a radio's CAT with it, and the
-  second window no longer restarts its radio's rigctld as it opens.
+- **Two radios in two windows:** one cluster login between them, and the radio picker or a second window opening no
+  longer upsets a radio's CAT.
 - **NET rigctl to another computer:** Tune and PTT key on time, and a key Nexus gave up on is taken straight back off.
-- **OmniRig:** a band change reaches a radio whose rig file sets the frequency only per VFO.
+- **OmniRig:** a band change now reaches more radios.
 - **Serial handshake = Hardware works** on radios such as the TS-480SAT, and is refused where RTS keys your transmitter.
 - **Test CAT's baud search no longer keys an interface that keys on RTS.**
 - **An Icom on Native CI-V goes back to the filter you had in each mode.** Needs a check on a real Icom.
@@ -297,9 +262,9 @@ new band's TX dial instead. This is what WSJT-X does, but it is new for Nexus op
 - **The FT-710 now shows the "CAT CW keying is unproven" notice.** With the CAT keyer on this radio, Nexus can show sending
   with nothing on the air. It is a notice only: the keyer stays selectable and keys as before. If CW doesn't go out, use the
   Serial keyline, WinKeyer or Soundcard keyer.
-- **A port name with non-English letters no longer stops Nexus from starting.** A name such as a Cyrillic `СОМ4`, from a
-  restored backup or an edited settings file, crashed Nexus at every launch. Nexus now starts, but treats it as its own port,
-  not COM4, so pick the radio's real port in Settings.
+- **A port name with non-English letters no longer stops Nexus from starting.** A name such as a Cyrillic `СОМ4` in your
+  settings crashed Nexus at every launch. Nexus now starts, but the radio will not connect until you pick its real port in
+  Settings.
 - **A radio pointed at your own rigctld says which setting to change.**
 - **The diagnostic log says who keyed your radio, and how.** Nothing about keying changed.
 
@@ -308,31 +273,26 @@ new band's TX dial instead. This is what WSJT-X does, but it is new for Nexus op
 - **PTT never keys the radio if its voice has no way out,** and a held PTT that sent nothing says why.
 - **Settings says what the radio must be set to:** SSB MOD SOURCE on REAR (USB), on radios such as the FTDX10.
 - **A note beside Tune** for the same setting on the FT-991/991A, FT-710, FTDX10 and FTDX101.
-- **Linux:** a headphone DAC named after your radio's codec works with Play receive audio here, and the monitor keeps off
-  the radio's codec after a reboot swaps card names. Needs a check on a Linux station.
+- **Linux:** a headphone DAC named after your radio's codec works with Play receive audio here. Needs a check on a Linux
+  station.
 - **Windows:** a sound device renamed after a USB change can be picked again in one click.
 
 ## Rotator
 
 - **Follow the Moon (EME).** It moves the rotator only: no transmitting, tuning or Doppler.
 - **LP on the Rotor box,** beside Point.
-- **A slow or lossy link no longer calls the rotator gone.** The boxes share one position read, so ■ STOP waits behind one
-  read at most.
+- **A slow or lossy link no longer calls the rotator gone,** and ■ STOP no longer queues behind the other boxes.
 - **A rotator with an IP address in its Port box reconnects** after the network drops it.
-- **A satellite pass takes the rotator back** when it answers again, and one slow reply no longer drops the pass to azimuth
-  only.
+- **A satellite pass takes the rotator back** when it answers again.
 
 ## Map and space weather
 
 - **A dark map, whatever the theme,** with the night side shaded, on the Flat map, 2-D Globe and Beam map.
-- **What a flare or a proton event does to your path, right now.** Every figure says where it came from and when. They are
-  estimates laid over the propagation model, and they change no model numbers or logged grades.
-- **Replay the last six hours of the sun and a flare.**
+- **What a flare or a proton event does to your path, right now,** with every figure saying where it came from and when.
+  They are estimates, and they change no model numbers or logged grades.
+- **Replay the last six hours of the sun and a flare,** and see NOAA's active regions on a small sun disc.
 - **The polar caps and aurora oval, with their edges,** drawn only from current readings.
-- **NOAA's active regions** on a small sun disc.
 - **The Kp says whether it was measured or estimated.**
-- **Space-weather chips on a narrow map:** two, and "+N more".
-- **One sun for the whole station.** The sun, grey line, sunrise and propagation model use one more precise position.
 
 ## Finding stations
 
@@ -344,9 +304,8 @@ new band's TX dial instead. This is what WSJT-X does, but it is new for Nexus op
 
 ## Language
 
-- **Nexus in Chinese, Simplified and Traditional (Taiwan wording).** Pick one in Settings ▸ Appearance ▸ Language, or Nexus
-  picks it up from a Chinese system language. Every screen is translated. On Linux, Chinese needs a
-  CJK font installed.
+- **Nexus in Chinese, Simplified and Traditional (Taiwan wording).** Every screen is translated. Pick one in Settings ▸
+  Appearance ▸ Language. On Linux, Chinese needs a CJK font installed.
 
 ## Known issues
 
@@ -358,9 +317,9 @@ These have not been confirmed on a radio, or only against a simulated one. Pleas
 - The FTX-1's AGC speeds.
 - Whether CAT CW keys an FT-710 at all. The notice is there because nobody has settled it.
 - The early split write after a band change, and every timing quoted for it above.
-- The new request switch with real loggers, on this computer and on another one.
 - A port name with non-English letters on a real Windows port.
 - A headphone DAC named after the radio's codec, on a Linux station with both cards plugged in.
+- RTTY at 50 baud and PSK63 against real fldigi.
 
 The small-window limits, the split limits and the FT2 limit above are known and still open.
 
