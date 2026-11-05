@@ -87,6 +87,8 @@
 | Waterfall | 瀑布图 | 60 |
 | Panadapter | 全景 | 39 |
 | Orbital elements / element set（CelesTrak TLE 的根数，行业标准叫法，不写「星历」「轨道参数」） | 轨道根数（繁體：軌道根數） | 46 |
+| Needed / need（侧栏那一块：仍在空中、尚未通联的；不写「缺项」） | 需求（繁體：需求） | 45 |
+| Conditions（地图 + 实时频点 + 开通 + 预报那一页；曾名 Connect） | 传播（繁體：傳播） | 20 |
 | Contest | 竞赛 | 197 |
 | Activation | 激活 | 85 |
 | Split | 异频 | — |
