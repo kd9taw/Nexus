@@ -45,6 +45,8 @@ if you want several apps to hear Nexus at once.
 decode to call that station), HaltTx (stop transmitting, optionally auto-only),
 FreeText (stage or send a free-text message), Clear, Replay, Location (a GPS feeder
 updating your grid), and HighlightCallsign (row coloring sent by a logger such as JTAlert).
+Reply, FreeText and Location are taken only from this computer (loopback) unless
+**Accept requests from other computers** (`wsjtx_udp_accept_other_computers`, off by default) is on.
 
 > The message-type numbers follow WSJT-X's canonical `NetworkMessage.hpp` exactly
 > (HaltTx = 8, FreeText = 9, …). This matters: an off-by-one here once made a real

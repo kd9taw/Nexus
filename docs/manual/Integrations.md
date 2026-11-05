@@ -56,6 +56,8 @@ With the **WSJT-X UDP API** switch on, JTAlert connects to port `2237` exactly a
 
 To reach a logger on a different machine, change the **UDP Address** (`wsjtx_udp_addr`) in Settings from `127.0.0.1:2237` to the logger's IP. Nexus sends to that address and binds its inbound receive on an OS-assigned ephemeral port (`0.0.0.0:0`), not on a fixed port 2237. Inbound control datagrams from JTAlert/GridTracker are received on that ephemeral port (the source port of Nexus's outgoing packets).
 
+A logger on another computer can follow along but can't answer a station, send or fill in free text, or change your grid until you turn on **Accept requests from other computers**, beside the **UDP Address** under **Settings › Services › Integrations & Feeds** (off by default). Each ignored request gets a line in the diagnostic log, at most one a minute. It can always stop TX. With that switch on, anyone who can reach this computer over the network can turn TX on and send under your call, because a UDP sender's address can be faked. Stop TX and the watchdog still hold. A logger on this computer that sends from loopback never needs the switch; one reached through a multicast address may answer from this computer's own network address, and then it does.
+
 ---
 
 ## Companion Mode

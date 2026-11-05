@@ -2091,6 +2091,13 @@ the decode-log switches continue to the right.*
 
 - **WSJT-X UDP API** + **UDP Address** — "for JTAlert / GridTracker / loggers"
   (default `127.0.0.1:2237`).
+- **Accept requests from other computers** — off by default. Off, a program on
+  another computer can't answer a station (a double-click in its decode list), send
+  or fill in free text, or change your grid, though it can still stop TX. Programs on
+  this computer are not affected. On, anyone who can reach this computer over the
+  network can turn TX on and send under your call, because a UDP sender's address
+  can be faked. Stop TX and the watchdog still hold. Set at the station only: a save
+  from a remote computer, a backup or a profile never changes it.
 - **Ham Radio Deluxe logging** + **HRD UDP Address** — push each QSO to HRD
   Logbook over its QSO-Forwarding UDP port (default `127.0.0.1:2333`). HRD must
   be running, and don't also run JTAlert/QSO Relay into HRD or you'll double-log.

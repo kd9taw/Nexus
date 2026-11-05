@@ -9,7 +9,11 @@
 
 use crate::wsjtx::{self, Decode, Inbound, QsoLogged, Status};
 use std::io;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{IpAddr, SocketAddr, UdpSocket};
+
+// A door for tests only: a shipped build reads each sender's address from the socket, always.
+#[cfg(all(feature = "udp-source-sim", not(debug_assertions)))]
+compile_error!("`udp-source-sim` is test support: a release build must not turn it on");
 
 /// The sender id ("key") Tempo announces itself with.
 pub const APP_ID: &str = "Tempo";
@@ -24,6 +28,42 @@ pub struct WsjtxServer {
     /// so [`WsjtxServer::poll`] is unaffected by the target count.
     targets: Vec<SocketAddr>,
     id: String,
+    /// What a test reads each sender's address as ([`WsjtxServer::read_sources_as`]).
+    #[cfg(any(test, feature = "udp-source-sim"))]
+    sim_source: Option<IpAddr>,
+}
+
+/// ⛔ Whether a request this station has already admitted ([`WsjtxServer::poll_from`]) is refused
+/// because it comes from another computer: it could arm or key the transmitter, choose what the
+/// next over says, or change what the station sends, and the operator has not said such requests
+/// may come from off this computer (`accept_from_other_computers`). The operator's own loggers on
+/// this computer send from loopback and are never refused here. The match has no wildcard: a new
+/// message type must say which it is.
+///
+/// - **Reply** works a station and arms TX. **FreeText** chooses the next over, or fills Tx 5
+///   ready for one, sent or not. **Location** moves the grid the station's messages carry.
+/// - **HaltTx** only ever stops. **Clear** blanks panes, **HighlightCallsign** colours rows, and
+///   **Replay** re-sends decodes to the operator's own targets, at a bounded rate.
+/// - **Decode**, **QsoLogged** and **Other** do nothing here; `Other` includes Close,
+///   SwitchConfiguration and Configure, which Nexus does not act on from anyone.
+/// - **LoggedAdif** goes to the log's import. It reaches no transmit path.
+pub fn refused_from_other_computer(
+    inbound: &Inbound,
+    from: IpAddr,
+    accept_from_other_computers: bool,
+) -> bool {
+    let shapes_a_transmission = match inbound {
+        Inbound::Reply { .. } | Inbound::FreeText { .. } | Inbound::Location { .. } => true,
+        Inbound::HaltTx { .. }
+        | Inbound::Clear { .. }
+        | Inbound::Replay { .. }
+        | Inbound::HighlightCallsign { .. }
+        | Inbound::Decode { .. }
+        | Inbound::QsoLogged { .. }
+        | Inbound::LoggedAdif { .. }
+        | Inbound::Other { .. } => false,
+    };
+    shapes_a_transmission && !accept_from_other_computers && !from.is_loopback()
 }
 
 impl WsjtxServer {
@@ -67,7 +107,17 @@ impl WsjtxServer {
             socket,
             targets,
             id: APP_ID.to_string(),
+            #[cfg(any(test, feature = "udp-source-sim"))]
+            sim_source: None,
         })
+    }
+
+    /// Test support: read every inbound datagram as sent from `source`, at the source check and
+    /// in what [`WsjtxServer::poll_from`] returns. A test box may have no address but loopback,
+    /// and a sender's address cannot be set from a test's own socket.
+    #[cfg(any(test, feature = "udp-source-sim"))]
+    pub fn read_sources_as(&mut self, source: IpAddr) {
+        self.sim_source = Some(source);
     }
 
     /// The local address the socket is bound to (useful in tests to learn the
@@ -153,14 +203,22 @@ impl WsjtxServer {
     ///   not a valid WSJT-X frame (silently ignored),
     /// - `Err(_)` only on a genuine socket error.
     pub fn poll(&self) -> io::Result<Option<Inbound>> {
+        Ok(self.poll_from()?.map(|(inbound, _)| inbound))
+    }
+
+    /// [`WsjtxServer::poll`], with the address the datagram came from, for
+    /// [`refused_from_other_computer`] to read.
+    pub fn poll_from(&self) -> io::Result<Option<(Inbound, IpAddr)>> {
         let mut buf = [0u8; 4096];
         match self.socket.recv_from(&mut buf) {
             Ok((n, from)) => {
-                // Only accept control from loopback or the configured peer.
-                // Inbound Reply / FreeText-with-send ARM the transmitter, so
-                // this socket must never be steerable by an arbitrary host —
-                // WSJT-X's own trust model is localhost. A datagram from any
-                // other source is dropped before it is even parsed.
+                #[cfg(any(test, feature = "udp-source-sim"))]
+                let from = SocketAddr::new(self.sim_source.unwrap_or(from.ip()), from.port());
+                // Only accept control from loopback or the configured peer. A datagram
+                // from any other source is dropped before it is even parsed. This check
+                // is not what lets a request shape a transmission: a source it admits can
+                // be forged on a LAN and is anyone at all under a multicast target, so
+                // [`refused_from_other_computer`] rules on what is admitted here.
                 //
                 // Multicast is the exception: when the target is a group the
                 // operator explicitly joined, inbound datagrams arrive sourced
@@ -176,7 +234,7 @@ impl WsjtxServer {
                         .iter()
                         .any(|t| t.ip().is_multicast() || from.ip() == t.ip());
                 if allowed {
-                    Ok(wsjtx::parse_inbound(&buf[..n]))
+                    Ok(wsjtx::parse_inbound(&buf[..n]).map(|inbound| (inbound, from.ip())))
                 } else {
                     Ok(None)
                 }
@@ -198,8 +256,10 @@ impl WsjtxServer {
     /// as it kept sending, which starves every Tauri command behind it. Bounding
     /// the batch bounds the tick. Nothing is dropped here: the remainder stays
     /// in the socket buffer for the next tick, milliseconds later.
-    pub fn drain(&self, max: usize) -> impl Iterator<Item = Inbound> + '_ {
-        (0..max).map_while(|_| self.poll().ok().flatten())
+    ///
+    /// Each comes with the address it came from ([`WsjtxServer::poll_from`]).
+    pub fn drain(&self, max: usize) -> impl Iterator<Item = (Inbound, IpAddr)> + '_ {
+        (0..max).map_while(|_| self.poll_from().ok().flatten())
     }
 }
 
@@ -214,7 +274,7 @@ pub const INBOUND_PER_TICK: usize = 64;
 mod tests {
     use super::*;
     use crate::qds::QdsWriter;
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::net::Ipv4Addr;
 
     fn loopback(port: u16) -> SocketAddr {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
@@ -498,5 +558,192 @@ mod tests {
             }
             other => panic!("expected Reply, got {other:?}"),
         }
+    }
+
+    /// One message of each type the station can be sent, a Reply and FreeText first.
+    fn each_message() -> Vec<(&'static str, Inbound, bool)> {
+        let id = || "Logger".to_string();
+        vec![
+            (
+                "Reply",
+                Inbound::Reply {
+                    id: id(),
+                    time_ms: 0,
+                    snr: 0,
+                    delta_time: 0.0,
+                    delta_freq: 1500,
+                    mode: "~".into(),
+                    message: "CQ W1AW FN31".into(),
+                    low_confidence: false,
+                    modifiers: 0,
+                },
+                true,
+            ),
+            (
+                "FreeText with send",
+                Inbound::FreeText {
+                    id: id(),
+                    text: "TNX 73".into(),
+                    send: true,
+                },
+                true,
+            ),
+            (
+                "FreeText without send",
+                Inbound::FreeText {
+                    id: id(),
+                    text: "TNX 73".into(),
+                    send: false,
+                },
+                true,
+            ),
+            (
+                "Location",
+                Inbound::Location {
+                    id: id(),
+                    location: "JO22".into(),
+                },
+                true,
+            ),
+            (
+                "HaltTx",
+                Inbound::HaltTx {
+                    id: id(),
+                    auto_only: false,
+                },
+                false,
+            ),
+            (
+                "Clear",
+                Inbound::Clear {
+                    id: id(),
+                    window: 2,
+                },
+                false,
+            ),
+            ("Replay", Inbound::Replay { id: id() }, false),
+            (
+                "HighlightCallsign",
+                Inbound::HighlightCallsign {
+                    id: id(),
+                    call: "W1AW".into(),
+                    bg: None,
+                    fg: None,
+                    highlight_last: false,
+                },
+                false,
+            ),
+            (
+                "Close",
+                Inbound::Other {
+                    id: id(),
+                    message_type: wsjtx::msg_type::CLOSE,
+                },
+                false,
+            ),
+            (
+                "SwitchConfiguration",
+                Inbound::Other {
+                    id: id(),
+                    message_type: wsjtx::msg_type::SWITCH_CONFIGURATION,
+                },
+                false,
+            ),
+            (
+                "Configure",
+                Inbound::Other {
+                    id: id(),
+                    message_type: wsjtx::msg_type::CONFIGURE,
+                },
+                false,
+            ),
+        ]
+    }
+
+    /// ⛔ From another computer, with the setting off, what shapes a transmission is refused and
+    /// nothing else is. With the setting on nothing is, and from loopback nothing ever is.
+    #[test]
+    fn only_a_request_that_shapes_a_transmission_is_refused_from_another_computer() {
+        let lan: IpAddr = "192.168.1.20".parse().unwrap();
+        for (name, message, shapes) in each_message() {
+            assert_eq!(
+                refused_from_other_computer(&message, lan, false),
+                shapes,
+                "{name} from another computer, the setting off"
+            );
+            assert!(
+                !refused_from_other_computer(&message, lan, true),
+                "{name} from another computer, the setting on"
+            );
+            for local in ["127.0.0.1", "127.0.0.2", "::1"] {
+                assert!(
+                    !refused_from_other_computer(&message, local.parse().unwrap(), false),
+                    "{name} from {local}, the setting off"
+                );
+            }
+        }
+    }
+
+    /// A datagram of `kind`, framed as a logger frames it, with nothing after the sender's id.
+    fn bare_datagram(kind: u32) -> Vec<u8> {
+        let mut w = QdsWriter::new();
+        w.put_u32(wsjtx::MAGIC)
+            .put_u32(wsjtx::SCHEMA)
+            .put_u32(kind)
+            .put_utf8(Some("Logger"));
+        w.into_bytes()
+    }
+
+    /// Close, SwitchConfiguration and Configure reach nothing: each parses as `Other`, which the
+    /// radio loop does not act on, from any source.
+    #[test]
+    fn close_and_the_configuration_requests_are_not_acted_on() {
+        for kind in [
+            wsjtx::msg_type::CLOSE,
+            wsjtx::msg_type::SWITCH_CONFIGURATION,
+            wsjtx::msg_type::CONFIGURE,
+        ] {
+            assert!(
+                matches!(
+                    wsjtx::parse_inbound(&bare_datagram(kind)),
+                    Some(Inbound::Other { .. })
+                ),
+                "message type {kind}"
+            );
+        }
+    }
+
+    /// Whether a HaltTx read as sent from `source` is admitted by a server sending to `targets`,
+    /// and the address it is reported with.
+    fn admitted_from(source: &str, targets: &[&str]) -> Option<IpAddr> {
+        let targets: Vec<SocketAddr> = targets.iter().map(|t| t.parse().unwrap()).collect();
+        let mut server = WsjtxServer::new_multi(loopback(0), targets).unwrap();
+        server.read_sources_as(source.parse().unwrap());
+        let sender = UdpSocket::bind(loopback(0)).unwrap();
+        sender
+            .send_to(&halt_tx_datagram(), server.local_addr().unwrap())
+            .unwrap();
+        for _ in 0..100 {
+            if let Some((_, from)) = server.poll_from().unwrap() {
+                return Some(from);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        None
+    }
+
+    /// The source check as it has always been, which the refusal above sits behind: loopback, a
+    /// target's address, or anyone at all under a multicast target. A stranger under a unicast
+    /// target is dropped.
+    #[test]
+    fn the_source_check_admits_loopback_a_target_and_anyone_under_multicast() {
+        let lan = "192.168.1.20";
+        let unicast = ["192.168.1.20:2237"];
+        let group = ["239.255.0.1:2237"];
+        let local = Some("127.0.0.1".parse().unwrap());
+        assert_eq!(admitted_from("127.0.0.1", &unicast), local);
+        assert_eq!(admitted_from(lan, &unicast), Some(lan.parse().unwrap()));
+        assert_eq!(admitted_from(lan, &group), Some(lan.parse().unwrap()));
+        assert_eq!(admitted_from("192.168.1.99", &unicast), None);
     }
 }

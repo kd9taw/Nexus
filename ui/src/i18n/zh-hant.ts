@@ -3269,6 +3269,8 @@ export const ZH_HANT: PartialCatalog = {
   "settings.integrations.wsjtxUdp.hint": "用於 JTAlert / GridTracker / 日誌記錄器 — 以及 FT8 競賽計分器。可多個同時使用：用逗號分隔地址。",
   "settings.integrations.udpAddr.label": "UDP 地址",
   "settings.integrations.udpAddr.hint": "UDP 推送的 host:port",
+  "settings.integrations.wsjtxUdpAccept.label": "接受來自其他電腦的請求",
+  "settings.integrations.wsjtxUdpAccept.hint": "關閉：其他電腦上的程式不能應答電台、傳送或填寫自由文字，也不能更改您的網格，但仍可停止 TX。本電腦上的程式始終可以執行這些操作。開啟：任何能透過網路存取本電腦的人都能開啟 TX 並以您的呼號發射，因為 UDP 傳送方位址可以偽造。Stop TX（停止發射）和 TX 看門狗仍然有效。",
   "settings.integrations.hrdLogging.label": "Ham Radio Deluxe 日誌",
   "settings.integrations.hrdLogging.hint": "透過 HRD 的 QSO 轉發 UDP 連線埠將每筆 QSO 推送到 HRD Logbook（HRD 必須執行；不要同時讓 JTAlert/QSO Relay 也寫入 HRD，否則會重複記錄）",
   "settings.integrations.hrdAddr.label": "HRD UDP 地址",

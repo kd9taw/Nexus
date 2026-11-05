@@ -59,6 +59,11 @@ icom-sim = []
 # bench has confirmed, so it is test support only: nothing that ships turns it on, and a release
 # build refuses to compile with it.
 flex-unbenched = []
+# Lets a test read every inbound WSJT-X datagram as sent from an address of its choosing
+# (`WsjtxServer::read_sources_as`), for tempo-audio's radio-loop tests of a request from another
+# computer: a test box may have no address but loopback. Test support only: nothing that ships turns
+# it on, and a release build refuses to compile with it.
+udp-source-sim = []
 
 [dev-dependencies]
 # The SmartSDR simulator, for the Flex session's fault suites (`flex::sim_tests`). Test support from

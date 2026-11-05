@@ -12901,6 +12901,29 @@ export function SettingsPanel({
                 <div className="settings-field">
                   <label className="settings-toggle">
                     <span className="settings-label">
+                      {t('settings.integrations.wsjtxUdpAccept.label')}
+                    </span>
+                    <button
+                      disabled={locked('wsjtxUdpAcceptOtherComputers') || !form.wsjtxUdp}
+                      data-setting="wsjtxUdpAcceptOtherComputers"
+                      type="button"
+                      role="switch"
+                      aria-checked={form.wsjtxUdpAcceptOtherComputers === true}
+                      className={`toggle${form.wsjtxUdpAcceptOtherComputers ? ' on' : ''}`}
+                      onClick={() =>
+                        updateBool('wsjtxUdpAcceptOtherComputers', !form.wsjtxUdpAcceptOtherComputers)
+                      }
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  {setAtStation('wsjtxUdpAcceptOtherComputers')}
+                  <span className="settings-hint">{t('settings.integrations.wsjtxUdpAccept.hint')}</span>
+                </div>
+
+                <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">
                       {t('settings.integrations.hrdLogging.label')}
                     </span>
                     <button

@@ -2877,6 +2877,13 @@ pub struct Settings {
     /// OR MANY, comma-separated — `127.0.0.1:2237, 129.212.188.3:2237` feeds a local tool and
     /// a remote contest scorer at once, which WSJT-X's single sink cannot.
     pub wsjtx_udp_addr: String,
+    /// ⛔ Take a Reply, a FreeText or a Location from another computer
+    /// (`tempo_net::server::refused_from_other_computer`). OFF by default: a program on this
+    /// computer sends from loopback and needs no leave, one off it can then not arm TX, choose
+    /// what goes out or move the grid. A UDP source address can be forged, so this trusts
+    /// whoever can reach the port. Never moved by a save from afar, a restore or a profile.
+    #[serde(default)]
+    pub wsjtx_udp_accept_other_computers: bool,
     /// Append every decode to a WSJT-X-format `ALL.TXT` decode log in the app data dir —
     /// the running record loggers/GridTracker tail.
     ///
@@ -6843,6 +6850,7 @@ impl Default for Settings {
             active_station_profile: String::new(),
             wsjtx_udp: false,
             wsjtx_udp_addr: "127.0.0.1:2237".to_string(),
+            wsjtx_udp_accept_other_computers: false,
             write_all_txt: true,
             diag_debug_log: false,
             hrd_logging: false,
@@ -15164,6 +15172,23 @@ mod tests {
             back.split_detect_enabled,
             "a stored value survives a save and a load"
         );
+    }
+
+    /// ⛔ Other computers' WSJT-X requests stay refused until the operator says otherwise: off on a
+    /// new install and on a settings file written before the switch existed.
+    #[test]
+    fn other_computers_wsjtx_requests_are_refused_unless_turned_on() {
+        let new = Settings::default();
+        assert!(!new.wsjtx_udp_accept_other_computers);
+        let mut stored = serde_json::to_value(&new).unwrap();
+        let fields = stored.as_object_mut().unwrap();
+        assert_eq!(
+            fields.remove("wsjtxUdpAcceptOtherComputers"),
+            Some(serde_json::json!(false)),
+            "the name on the wire"
+        );
+        let old: Settings = serde_json::from_value(stored).unwrap();
+        assert!(!old.wsjtx_udp_accept_other_computers);
     }
 
     #[test]

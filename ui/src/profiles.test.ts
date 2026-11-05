@@ -309,6 +309,17 @@ describe('mergeProfile — the local logger pushes never import', () => {
     expect(merged.n1mmAddr).toBe('127.0.0.1:12060')
     expect(merged.wsjtxUdp).toBe(true)
   })
+
+  // What lets another computer arm TX is the station's alone, whichever way a profile says.
+  it('never moves the leave for other computers to send WSJT-X requests', () => {
+    for (const [station, profile] of [[false, true], [true, false]]) {
+      const merged = mergeProfile(
+        { mycall: 'KD9TAW', wsjtxUdpAcceptOtherComputers: station } as unknown as Settings,
+        { wsjtxUdpAcceptOtherComputers: profile } as unknown as Settings,
+      )
+      expect(merged.wsjtxUdpAcceptOtherComputers).toBe(station)
+    }
+  })
 })
 
 // CONTEST MODE KEPT EVERY STORED KEY. The switch was renamed from "Field Day mode" in words only:

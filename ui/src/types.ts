@@ -5782,6 +5782,9 @@ export interface Settings {
   wsjtxUdp: boolean
   /** Address:port for the WSJT-X UDP API. */
   wsjtxUdpAddr: string
+  /** Take a Reply, FreeText or Location from another computer ("Accept requests from other
+   * computers"). Off by default; programs on this computer are never asked for it. */
+  wsjtxUdpAcceptOtherComputers?: boolean
   /** Append every decode to a WSJT-X-format ALL.TXT decode log (loggers/GridTracker tail it). */
   writeAllTxt: boolean
   /** Write the DEBUG tier to the diagnostic log. Off by default; a session switch, not a

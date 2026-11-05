@@ -6529,6 +6529,8 @@ export const JA: PartialCatalog = {
   "settings.integrations.wsjtxUdp.hint": "JTAlert / GridTracker / 各種ロガー向け",
   "settings.integrations.udpAddr.label": "UDPアドレス",
   "settings.integrations.udpAddr.hint": "UDPフィードのhost:port",
+  "settings.integrations.wsjtxUdpAccept.label": "他のコンピューターからのリクエストを受け付ける",
+  "settings.integrations.wsjtxUdpAccept.hint": "オフ：他のコンピューターのプログラムは、局への応答、フリーテキストの送信や入力、グリッドの変更ができません（TX の停止はできます）。このコンピューターのプログラムは常にこれらを行えます。オン：UDP の送信元アドレスは偽装できるため、ネットワークでこのコンピューターに届く人は誰でも TX をオンにしてあなたのコールサインで送信できます。Stop TX とウォッチドッグは引き続き有効です。",
   "settings.integrations.hrdLogging.label": "Ham Radio Deluxeロギング",
   "settings.integrations.hrdLogging.hint": "各QSOをQSO-Forwarding UDPポート経由でHRD Logbookに送ります（HRDの起動が必要。JTAlert/QSO RelayからHRDへの転送を併用すると二重記録になります）",
   "settings.integrations.hrdAddr.label": "HRD UDPアドレス",

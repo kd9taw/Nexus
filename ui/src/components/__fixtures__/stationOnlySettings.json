@@ -4,6 +4,7 @@
   "cqPauseSecs",
   "wsjtxUdp",
   "wsjtxUdpAddr",
+  "wsjtxUdpAcceptOtherComputers",
   "catBroker",
   "catBrokerPtt",
   "js8ApiTcp",

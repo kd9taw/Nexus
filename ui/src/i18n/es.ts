@@ -7930,6 +7930,8 @@ export const ES: PartialCatalog = {
   "settings.integrations.spotSources.title": "Fuentes de spots",
   "settings.integrations.udpAddr.hint": "host:puerto del feed UDP",
   "settings.integrations.udpAddr.label": "Dirección UDP",
+  "settings.integrations.wsjtxUdpAccept.label": "Aceptar solicitudes de otros ordenadores",
+  "settings.integrations.wsjtxUdpAccept.hint": "Desactivado: un programa en otro ordenador no puede responder a una estación, enviar ni rellenar texto libre, ni cambiar tu locator, aunque sí puede detener TX. Los programas de este ordenador siempre pueden hacerlo. Activado: cualquiera que alcance este ordenador por la red puede activar TX y transmitir con tu indicativo, porque la dirección de origen de UDP se puede falsificar. Stop TX y el watchdog siguen actuando.",
   "settings.integrations.wsjtxUdp.hint": "para JTAlert / GridTracker / loggers",
   "settings.js8.legend": "JS8",
   "settings.js8.receiving.title": "Velocidad y recepción",

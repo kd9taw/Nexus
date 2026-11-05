@@ -3661,6 +3661,8 @@
 "4","settings.integrations.wsjtxUdp.hint","for JTAlert / GridTracker / loggers — and FT8 contest scorers. Several at once: separate addresses with a comma.","用於 JTAlert / GridTracker / 日誌記錄器 — 以及 FT8 競賽計分器。可多個同時使用：用逗號分隔地址。","GridTracker | FT8",""
 "4","settings.integrations.udpAddr.label","UDP Address","UDP 地址","UDP",""
 "4","settings.integrations.udpAddr.hint","host:port for the UDP feed","UDP 推送的 host:port","UDP",""
+"4","settings.integrations.wsjtxUdpAccept.label","Accept requests from other computers","接受來自其他電腦的請求","","Filled by the maintainer, pending translator review."
+"4","settings.integrations.wsjtxUdpAccept.hint","Off: a program on another computer can't answer a station, send or fill in free text, or change your grid, though it can still stop TX. Programs on this computer can always do these. On: anyone who can reach this computer over the network can turn TX on and send under your call, because a UDP sender's address can be faked. Stop TX and the watchdog still hold.","關閉：其他電腦上的程式不能應答電台、傳送或填寫自由文字，也不能更改您的網格，但仍可停止 TX。本電腦上的程式始終可以執行這些操作。開啟：任何能透過網路存取本電腦的人都能開啟 TX 並以您的呼號發射，因為 UDP 傳送方位址可以偽造。Stop TX（停止發射）和 TX 看門狗仍然有效。","TX | UDP | Stop TX","Filled by the maintainer, pending translator review."
 "4","settings.integrations.hrdLogging.label","Ham Radio Deluxe logging","Ham Radio Deluxe 日誌","",""
 "4","settings.integrations.hrdLogging.hint","push each QSO to HRD Logbook over its QSO-Forwarding UDP port (HRD must be running; don't also run JTAlert/QSO Relay into HRD or you'll double-log)","透過 HRD 的 QSO 轉發 UDP 連線埠將每筆 QSO 推送到 HRD Logbook（HRD 必須執行；不要同時讓 JTAlert/QSO Relay 也寫入 HRD，否則會重複記錄）","HRD | QSO | UDP",""
 "4","settings.integrations.hrdAddr.label","HRD UDP Address","HRD UDP 地址","HRD | UDP",""
