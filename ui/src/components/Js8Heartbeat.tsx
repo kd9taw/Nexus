@@ -20,6 +20,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { t } from '../i18n'
 import { HB_NET } from '../js8Vocab'
+import { keepInSight, revealAfterPress } from './CockpitTxStrip'
 import type { Js8Presence } from '../types'
 
 const MENU_GLYPH = '▾'
@@ -152,6 +153,16 @@ export function Js8HbButton({
     const dock = root?.offsetParent as HTMLElement | null | undefined
     if (!open || !root || !dock || !menuRef.current) return
     setLeft(Math.max(0, Math.min(root.offsetLeft, dock.clientWidth - menuRef.current.offsetWidth)))
+  }, [open])
+  // While the dock is folded the menu is in the flow, among rows that scroll, so it can open behind the parked keep row
+  // (900×600 at 175 %, measured). Its first item is brought into view; the room there can be shorter than the item.
+  useLayoutEffect(() => {
+    const first = menuRef.current?.firstElementChild
+    if (!open || !(first instanceof HTMLElement)) return
+    revealAfterPress(first, () => {
+      first.scrollIntoView?.({ block: 'nearest' })
+      keepInSight(first)
+    })
   }, [open])
   // Unmounted with the menu open (heartbeat networking off, Turbo): the dock goes back down.
   useEffect(() => () => openChange.current?.(false), [])

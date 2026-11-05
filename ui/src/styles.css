@@ -21583,9 +21583,12 @@ button.cq-skiptx1.on {
    covers the scrollport's first rows, so anything scrolled to the START — `scrollIntoView`, a focus
    moving into the log form — would land under it (the hosted RTTY call field at 1024×768, 175 %).
    The strip writes its own height on its shell (`--cockpit-txstrip-h`); a shell without one pads
-   nothing. */
+   nothing. …and clear of a FOLDED dock's parked keep row, whose height the strip writes too
+   (`--cockpit-txdock-keep-h`, set only while folded): Tab through the macro keys stopped behind it, and
+   Enter sent a key the operator could not see (RTTY at 900×600 at 175 %: 15 of 18 controls, measured). */
 .layout.single {
   scroll-padding-top: var(--cockpit-txstrip-h, 0px);
+  scroll-padding-bottom: var(--cockpit-txdock-keep-h, 0px);
 }
 .cq-txctl .op-btn {
   display: inline-flex;
@@ -30257,6 +30260,31 @@ button.sat-chip:disabled {
   font-size: var(--fs-label);
   color: var(--text-dim);
   padding: 0 var(--space-1);
+}
+/* JTTY'S NOTICE OR REFUSAL, in the keep row so it stays parked while the dock is folded. In flow it takes a line of its
+   own under the send row, where the how-to hint stands. FOLDED IT IS AN OVERLAY on the row's top edge (cockpit-panes.css
+   sets `--cockpit-txdock-reason-pos`): in flow it would grow the row, and the row is bottom-anchored, so Send and Esc/Stop
+   would move up under the pointer as the refusal arrived. Where the strip parks directly above the row the overlay reaches
+   it, so it keeps to the column right of Stop TX, which holds no control (`--cockpit-txdock-reason-left`, CockpitTxStrip).
+   Opaque. */
+.jtty-dock-reason {
+  flex: 0 0 100%;
+  /* In flow, the dock's gap above it rather than the send row's bigger one (`.cockpit-txdock`'s stepped length), so a
+     refusal replacing the hint moves nothing above it: the line stands exactly where the hint stood. */
+  margin-top: calc(max(var(--space-1), min(var(--space-2), (var(--vh-eff, 100vh) - 1100px) * 100)) - var(--space-2));
+  position: var(--cockpit-txdock-reason-pos, static);
+  bottom: 100%;
+  left: var(--cockpit-txdock-reason-left, 0px);
+  right: 0;
+  background: var(--panel);
+  /* CLAMPED WHILE FOLDED to the lines the strip writes, so the keys keep their room; the whole text is in its tooltip and
+     the toast a click on it raises (JttyCockpit). It takes that click itself: a notice that hides a key may not pass a
+     click to it. */
+  display: var(--cockpit-txdock-reason-display, block);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--cockpit-txdock-reason-lines, none);
+  overflow: var(--cockpit-txdock-reason-overflow, visible);
+  cursor: help;
 }
 /* (`.rtty-cockpit > .cw-macros` / `> .cw-send { flex: 0 0 auto }` deleted with the pane
    rebuild — the child combinator stopped matching once the rows moved inside the pinned

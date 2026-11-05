@@ -10,6 +10,7 @@
 //     `stop-line.test.tsx` against the real header, not here.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen, waitFor } from '@testing-library/react'
+import { keepInSight } from './CockpitTxStrip'
 import { RttyCockpit } from './RttyCockpit'
 import * as api from '../api'
 import * as toast from '../toast'
@@ -37,6 +38,10 @@ const IDLE = {
   heardCq: null,
 } as unknown as RttyState
 
+vi.mock('./CockpitTxStrip', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./CockpitTxStrip')>()),
+  keepInSight: vi.fn(),
+}))
 vi.mock('../api', () => ({
   getRttyState: vi.fn(),
   getLicensedBandPlan: vi.fn(async () => []),
@@ -265,6 +270,28 @@ describe('the macro editor', () => {
     expect(onMacrosSaved).toHaveBeenCalledWith(
       expect.objectContaining({ rttyProfiles: [{ name: 'everyday', macros: [{ key: 'F1', label: 'CQ', text: 'CQ CQ DE {MYCALL} K' }] }] }),
     )
+  })
+
+  it('its field, and the key it returns to, are brought into view (the dock folded, both scroll with the panes)', async () => {
+    const seen: string[] = []
+    const was = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = function (this: Element, arg?: boolean | ScrollIntoViewOptions) {
+      expect(arg, 'not the layout contract’s nearest').toEqual({ block: 'nearest' })
+      seen.push(this.tagName)
+    }
+    try {
+      await renderCockpit()
+      fireEvent.click(editOf('F1')!)
+      expect(seen, 'the editor’s field was not brought into view').toContain('INPUT')
+      seen.length = 0
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      expect(seen, 'the key focus returned to was not brought into view').toContain('BUTTON')
+      // …and kept in sight where the room is shorter than the key (the keyboard's Esc comes this way too).
+      const kept = vi.mocked(keepInSight).mock.calls
+      expect(kept[kept.length - 1]?.[0], 'the key can stay behind the keep row').toBe(document.activeElement)
+    } finally {
+      Element.prototype.scrollIntoView = was
+    }
   })
 
   it('Cancel closes it and saves nothing', async () => {

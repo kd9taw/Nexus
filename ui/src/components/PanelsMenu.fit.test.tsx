@@ -59,7 +59,7 @@ function layout(btnTop: number, pop: { left: number; width: number; height: numb
     ...extra,
   }
 }
-function open({ dockSticky = true, strip = true }: { dockSticky?: boolean; strip?: boolean } = {}) {
+function open({ dockSticky = true, strip = true, keep = false }: { dockSticky?: boolean; strip?: boolean; keep?: boolean } = {}) {
   render(
     <main className="shell" style={{ overflowY: 'auto' }}>
       <div className="head">
@@ -70,7 +70,9 @@ function open({ dockSticky = true, strip = true }: { dockSticky?: boolean; strip
           <button type="button" className="op-btn stop">Stop TX</button>
         </div>
       )}
-      <div className="cockpit-txdock" style={{ position: dockSticky ? 'sticky' : 'static' }} />
+      <div className="cockpit-txdock" style={{ position: dockSticky ? 'sticky' : 'static' }}>
+        {keep && <div className="cockpit-txdock-keep" style={{ position: 'sticky' }} />}
+      </div>
     </main>,
   )
   fireEvent.click(document.querySelector('.panels-menu-btn')!)
@@ -107,6 +109,15 @@ describe('across: inside the window, and the stop button’s column is never the
     const pop = open({ strip: false })
     expect(shift(pop)[0], 'the menu stands under the shell’s scrollbar').toBeCloseTo((682.5 - EDGE - 690) / ZOOM, 6)
     client.mockRestore()
+  })
+
+  it('its left bound is the scrollport’s too: a shell standing beside a rail clips it there', () => {
+    layout(100, { left: 100, width: 150, height: 200 }, { shell: { ...SHELL, left: 150, width: 550 } })
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('shell') ? 550 / ZOOM : 0
+    })
+    const pop = open({ strip: false })
+    expect(shift(pop)[0], 'the menu hangs out of the shell’s left edge').toBeCloseTo((150 + EDGE - 100) / ZOOM, 6)
   })
 
   it('that clears the stop button and fits is left alone: no shift, no width, no cap, opening down', () => {
@@ -193,6 +204,17 @@ describe('up and down: the clip ancestors and the parked dock bound it, and noth
     const pop = open()
     expect(pop.hasAttribute('data-up')).toBe(true)
     expect(shift(pop)[1], 'the menu stands on the dock, over its stop controls').toBeCloseTo((600 - EDGE - (610 - 7)) / ZOOM, 6)
+  })
+
+  it('a FOLDED dock bounds it by its parked keep row, which holds Esc/Stop', () => {
+    // Folded, the dock has no box (`display: contents`). Bound by nothing, the menu stood 100 % over RTTY's and JTTY's
+    // Esc/Stop at 900×600 at 175 %, measured with this bound taken away.
+    layout(100, { left: 100, width: 200, height: 504 }, {
+      'cockpit-txdock': { top: 0, left: 0, width: 0, height: 0 },
+      'cockpit-txdock-keep': { top: 500, left: 0, width: 700, height: 156 },
+    })
+    const pop = open({ keep: true })
+    expect(cap(pop), 'the menu stands on the parked keep row').toBeCloseTo((500 - EDGE - 145) / ZOOM, 6)
   })
 
   it('a dock that is not parked (an observer’s, static) bounds nothing', () => {

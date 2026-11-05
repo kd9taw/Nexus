@@ -628,8 +628,9 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   }
 
   // The line under the dock: the transmitter's notice, else why a send would be refused right now
-  // (the engine's words), else how to send.
-  const dockHint = tx?.notice ?? tx?.refusal ?? t('jtty.compose.hint')
+  // (the engine's words), else how to send. The first two stand in the keep row, because the operator
+  // must be able to see why a send was refused while the dock is folded and its other rows scroll away.
+  const dockReason = tx?.notice ?? tx?.refusal ?? null
 
   const lines = jtty?.lines ?? []
   const allLines = useMemo(() => jttyAllPane(lines), [lines])
@@ -1200,10 +1201,15 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             <span className="cw-macro-key">{ESC_KEY}</span>
             <span className="cw-macro-label">{t('jtty.stop.label')}</span>
           </button>
+          {dockReason && (
+            <div className="psk-drive-hint jtty-dock-reason" role="status" title={dockReason} onClick={() => pushToast(dockReason, 'info')}>
+              {dockReason}
+            </div>
+          )}
         </div>
-        {dockHint && (
+        {!dockReason && (
           <div className="psk-drive-hint" role="status">
-            {dockHint}
+            {t('jtty.compose.hint')}
           </div>
         )}
       </div>

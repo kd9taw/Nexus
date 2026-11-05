@@ -231,6 +231,9 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
  *    zoom Chrome applies `scroll-padding` unzoomed (measured: at 175 % a 42 px offsetHeight padded
  *    42 screen px under a 74 px strip), and more padding than the strip only scrolls a target a
  *    little lower.
+ *  · `--cockpit-txdock-keep-h` on the SHELL, while the dock is folded: the keep row's height, which the shell's
+ *    `scroll-padding-bottom` reads so a focus or a `scrollIntoView` never lands behind the parked row. RENDERED, for the
+ *    strip's reason: with offsetHeight (89 px for RTTY's 156 px row at 175 %) it cleared CW and PSK by luck and not RTTY.
  *  Re-read on every render as well as on a resize. */
 const isDock = (c: Element): c is HTMLElement =>
   c instanceof HTMLElement && (c.classList.contains('cockpit-txdock') || c.classList.contains('sstv-tx-bar'))
@@ -341,6 +344,70 @@ function decideFold(shell: HTMLElement, strip: HTMLElement, dock: HTMLElement): 
   return natural
 }
 
+/** The focus a Tab moves follows its keydown at once; this only allows for a loaded machine. */
+const TAB_FOCUS_MS = 100
+/** What a press holds the shell for. */
+const PRESS_HOLDS = 'input, select, textarea, button, label, [tabindex]'
+const PRESS_HOLD_MAX_MS = 1000
+const LABEL_HOLD_MS = 100
+
+/** Below this many layout px of column, a notice on the parked row gets a third line. */
+const REASON_NARROW_PX = 160
+
+/** What is parked at the bottom, from its top edge down: the keep row, and a notice standing on it (JTTY's, out of flow on
+ *  its top edge, in the row's `[role=status]`), which hides what is under it just as the row does. */
+function parkedTop(keep: HTMLElement): { top: number; height: number } {
+  const k = keep.getBoundingClientRect()
+  const reason = keep.querySelector<HTMLElement>(':scope > [role="status"]')?.getBoundingClientRect()
+  return reason && reason.height > 0 && reason.top < k.top ? { top: reason.top, height: k.bottom - reason.top } : { top: k.top, height: k.height }
+}
+
+/** When a pointer last pressed in a shell, for what a click opens. */
+let lastPressAt = -Infinity
+/** The longest gap a double click's second press can follow its first (Windows' default). */
+const DOUBLE_CLICK_MS = 500
+/** Run `reveal`, which scrolls the shell to show something a click or a key just opened or returned to. After a pointer's
+ *  click it waits out the second press of a double click, which would otherwise land on whatever the scroll put under the
+ *  pointer, a macro key among them. By keyboard there is no second press, so it runs at once. If the operator has scrolled
+ *  the shell in that gap, or `el` has gone, it does not run: the operator's scroll is theirs. */
+export function revealAfterPress(el: HTMLElement, reveal: () => void): void {
+  const since = performance.now() - lastPressAt
+  if (since >= DOUBLE_CLICK_MS) {
+    reveal()
+    return
+  }
+  const shell = el.closest('main')
+  const from = shell?.scrollTop
+  setTimeout(() => {
+    if (el.isConnected && shell?.scrollTop === from) reveal()
+  }, DOUBLE_CLICK_MS - since)
+}
+
+/** A FOCUSED CONTROL THE PADDING COULD NOT CLEAR. Where the room between the strip and the keep row is shorter than the
+ *  control (JS8 at 900×600 at 175 %: 22 px for its 38 px buttons), no `scroll-padding` fits it and Chrome top-aligns it,
+ *  its centre behind the keep row, so Enter would send a key the operator cannot see. Its centre is brought to the middle
+ *  of that room instead, after the browser's own reveal. The parked surfaces hold their own focus. */
+function centreIfBehind(shell: HTMLElement, strip: HTMLElement, dock: HTMLElement, el: HTMLElement): void {
+  const keep = dock.getAttribute('data-fold') === 'on' ? keepRow(dock) : undefined
+  if (!keep || keep.contains(el) || strip.contains(el) || el.closest('.panels-menu-pop')) return
+  const q = el.getBoundingClientRect()
+  const s = strip.getBoundingClientRect()
+  const parked = parkedTop(keep).top
+  const cy = q.top + q.height / 2
+  if (cy < parked && (cy < s.top || cy > s.bottom)) return
+  if (parked <= s.bottom || shell.offsetHeight === 0) return
+  shell.scrollTop += (cy - (s.bottom + parked) / 2) / (shell.getBoundingClientRect().height / shell.offsetHeight)
+}
+
+/** The same, for something opened rather than focused (JS8's heartbeat menu): where it scrolls with a folded dock's
+ *  rows, its centre is not left behind the keep row or the strip. */
+export function keepInSight(el: HTMLElement): void {
+  const shell = el.closest('main')
+  const strip = shell?.querySelector<HTMLElement>(':scope > .cockpit-txstrip')
+  const dock = shell && Array.from(shell.children).find(isDock)
+  if (shell && strip && dock) centreIfBehind(shell, strip, dock, el)
+}
+
 /** The cockpit shell the strip stands in: its parent — or, where layout wrappers stand between them
  *  (Phone's stage and the left side's row, 2026-10-03), the nearest ancestor holding the dock, up to
  *  the cockpit's own `<main>`. With no dock that far up, the parent, as before. */
@@ -366,6 +433,27 @@ function useDockClearance(ref: RefObject<HTMLDivElement | null>) {
     const keep = dock?.getAttribute('data-fold') === 'on' ? keepRow(dock) : undefined
     strip.style.setProperty('--cockpit-txstrip-bottom',
       dock && getComputedStyle(dock).position === 'sticky' ? `${keep ? keep.offsetHeight : dock.offsetHeight}px` : '0px')
+    if (keep) shell.style.setProperty('--cockpit-txdock-keep-h', `${Math.ceil(parkedTop(keep).height)}px`)
+    else shell.style.removeProperty('--cockpit-txdock-keep-h')
+    // A notice standing on the parked row's top edge (JTTY's) keeps clear of Stop TX: the column to its right.
+    const stop = strip.querySelector<HTMLElement>('.op-btn.stop')
+    if (keep && stop && keep.offsetWidth > 0) {
+      const k = keep.getBoundingClientRect()
+      const z = k.width / keep.offsetWidth
+      const s = stop.getBoundingClientRect()
+      keep.style.setProperty('--cockpit-txdock-reason-left', `${Math.max(0, s.right - k.left) / z + 4}px`)
+      // About two lines, so the room left for what scrolls stays usable; three in a narrow column, or even "TX is off"
+      // is cut. The whole text is in the notice's tooltip and the toast its click raises.
+      keep.style.setProperty('--cockpit-txdock-reason-lines', (k.right - s.right) / z < REASON_NARROW_PX ? '3' : '2')
+      // Its height, once it is clamped to those lines (the sheet applies them before this reads).
+      const reason = keep.querySelector<HTMLElement>(':scope > [role="status"]')
+      if (reason) keep.style.setProperty('--cockpit-txdock-reason-room', `${reason.offsetHeight}px`)
+      else keep.style.removeProperty('--cockpit-txdock-reason-room')
+    } else if (dock) {
+      keepRow(dock)?.style.removeProperty('--cockpit-txdock-reason-left')
+      keepRow(dock)?.style.removeProperty('--cockpit-txdock-reason-lines')
+      keepRow(dock)?.style.removeProperty('--cockpit-txdock-reason-room')
+    }
     // Only where something is pinned above: every other cockpit's strip keeps exactly the inline style
     // it always had (the sheet's fallback is 0), so their documents are unchanged.
     if (head) strip.style.setProperty('--cockpit-txstrip-top', `${head.offsetHeight}px`)
@@ -392,9 +480,70 @@ function useDockClearance(ref: RefObject<HTMLDivElement | null>) {
     // The pin and fold decisions are against the shell's own height: a shorter window may unpin the
     // header or fold the dock without any of the parked surfaces changing size.
     if (head || keep) observer?.observe(shell)
+    // ONLY A REAL TAB CENTRES. `:focus-visible` was not enough: it matches a text field on a mouse press, so a press re-centred
+    // the field under the held pointer and a double click's second press reached a sender (21 send calls, measured), and
+    // focusin fires again on a window regain, so the screen jumped under the next click. The focus Tab moves follows its
+    // keydown within this task; nothing else counts.
+    let tabAt = -Infinity
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Tab') tabAt = e.timeStamp
+    }
+    const onFocus = (e: FocusEvent) => {
+      const el = e.target
+      if (dock && el instanceof HTMLElement && e.timeStamp - tabAt < TAB_FOCUS_MS) {
+        requestAnimationFrame(() => {
+          if (document.activeElement === el) centreIfBehind(shell, strip, dock, el)
+        })
+      }
+    }
+    // A PRESS MOVES NOTHING WHILE THE DOCK IS FOLDED. Chrome reveals a field or a <select> on a mouse press, honouring the
+    // shell's scroll padding, so the keys moved under the pointer: 87 px on a <select>, 102 px on a field even before the
+    // padding (measured). The scroll is held where the press found it until the release. A press on the shell itself is on
+    // its scrollbar, and only a control can take focus; a label's focus comes with its click, just after the release.
+    let pinnedAt: number | null = null
+    let letGo = 0
+    const unpin = () => {
+      pinnedAt = null
+      clearTimeout(letGo)
+    }
+    const hold = () => {
+      if (pinnedAt !== null && shell.scrollTop !== pinnedAt) shell.scrollTop = pinnedAt
+    }
+    const onPress = (e: PointerEvent) => {
+      lastPressAt = performance.now()
+      const t = e.target
+      if (dock?.getAttribute('data-fold') !== 'on' || !(t instanceof Element) || t === shell || !t.closest(PRESS_HOLDS)) return
+      pinnedAt = shell.scrollTop
+      clearTimeout(letGo)
+      // A <select>'s native list can swallow the release.
+      letGo = window.setTimeout(unpin, PRESS_HOLD_MAX_MS)
+      labelHeld = t.closest('label') != null
+    }
+    let labelHeld = false
+    const onRelease = () => {
+      if (pinnedAt === null) return
+      hold()
+      clearTimeout(letGo)
+      if (labelHeld) letGo = window.setTimeout(unpin, LABEL_HOLD_MS)
+      else unpin()
+    }
+    window.addEventListener('keydown', onKey, true)
+    shell.addEventListener('focusin', onFocus)
+    shell.addEventListener('pointerdown', onPress, true)
+    shell.addEventListener('scroll', hold)
+    window.addEventListener('pointerup', onRelease, true)
+    window.addEventListener('pointercancel', onRelease, true)
     return () => {
       observer?.disconnect()
+      unpin()
+      window.removeEventListener('keydown', onKey, true)
+      shell.removeEventListener('focusin', onFocus)
+      shell.removeEventListener('pointerdown', onPress, true)
+      shell.removeEventListener('scroll', hold)
+      window.removeEventListener('pointerup', onRelease, true)
+      window.removeEventListener('pointercancel', onRelease, true)
       shell.style.removeProperty('--cockpit-txstrip-h')
+      shell.style.removeProperty('--cockpit-txdock-keep-h')
     }
     // `apply` reads only refs and the DOM; the observer is set up once per mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps

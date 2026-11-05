@@ -11,8 +11,9 @@
 // engine gives these columns is the browser check's, since jsdom lays nothing out.
 //
 // jsdom has no layout, so the region's width is stubbed the way useRegionCols.test.tsx does.
+import { pushToast } from '../toast'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, act } from '@testing-library/react'
+import { render, cleanup, act, fireEvent } from '@testing-library/react'
 import type { ReactNode, Ref } from 'react'
 import { JttyCockpit } from './JttyCockpit'
 import type { AppSnapshot, JttyState } from '../types'
@@ -153,6 +154,36 @@ describe('the JTTY shell is the census: header, scope, TX strip, ONE pane region
       expect(pane!.classList.contains('pane-frame'), `"${id}" is not a pane frame`).toBe(true)
       expect(pane!.parentElement?.matches('.cockpit-panes > .cockpit-col'), `"${id}" is not a pane in a region column`).toBe(true)
     }
+  })
+})
+
+describe('why a send was refused stays on screen', () => {
+  // While folded the dock's rows scroll with the panes, and JTTY's line under the send row was on screen at 6 of about 85
+  // positions (1024×768 and 1280×720 at 175 %, measured; main always shows it). The notice and the refusal therefore
+  // stand in the keep row, which stays parked; the standing how-to hint is advice, and scrolls.
+  const tx = (over: object) => ({ refusal: null, txHz: 1500, serial: 1, sending: false, live: false, left: 0, pending: '', notice: null, ...over })
+  const reason = () => document.querySelector('.cockpit-txdock-keep [role="status"]')
+  it('a refusal stands in the keep row', async () => {
+    await mount(jtty({ tx: tx({ refusal: 'TX is off — enable TX first' }) } as never))
+    expect(reason()?.textContent, 'the refusal can scroll away while the dock is folded').toBe('TX is off — enable TX first')
+    expect(document.querySelectorAll('.cockpit-txdock [role="status"]').length, 'said twice').toBe(1)
+  })
+  it('the whole text can be read: a tooltip, and a click says it in a toast', async () => {
+    const long = 'JTTY keyer: the rig did not accept PTT, so nothing was sent and what was queued was dropped.'
+    await mount(jtty({ tx: tx({ notice: long }) } as never))
+    expect(reason()?.getAttribute('title'), 'clamped while folded, the rest could not be read').toBe(long)
+    fireEvent.click(reason()!)
+    expect(vi.mocked(pushToast)).toHaveBeenCalledWith(long, 'info')
+  })
+
+  it('so does the transmitter’s notice, before a refusal', async () => {
+    await mount(jtty({ tx: tx({ notice: 'Queue complete', refusal: 'TX is off' }) } as never))
+    expect(reason()?.textContent).toBe('Queue complete')
+  })
+  it('the control: the how-to hint is not in the keep row, where it would take the parked room', async () => {
+    await mount(jtty({ tx: tx({}) } as never))
+    expect(reason()).toBeNull()
+    expect(document.querySelector('.cockpit-txdock > [role="status"]')).not.toBeNull()
   })
 })
 

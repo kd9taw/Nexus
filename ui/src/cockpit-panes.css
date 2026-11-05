@@ -471,6 +471,9 @@
 .cockpit-txdock[data-fold='on'] {
   display: contents;
   --cockpit-txdock-float: static;
+  --cockpit-txdock-reason-pos: absolute;
+  --cockpit-txdock-reason-display: -webkit-box;
+  --cockpit-txdock-reason-overflow: hidden;
 }
 /* THE KEEP ROW, while the dock is folded (the strip writes `data-fold="on"` on it as well): sticky at
    the bottom of the shell's scrollport, as the dock was, above the dividers like the dock, and opaque,
@@ -481,6 +484,10 @@
    beacon row or PSK's drive hint, would lift it that far at the end of the scroll, onto the strip's Stop TX (measured,
    JS8 at 900×600 at 175 %). The order is the shell's because a folded dock's rows are shell rows. */
 .cockpit-txdock-keep[data-fold='on'] {
+  /* The room a notice standing on the row takes (JTTY's refusal, out of flow; the strip writes its height): the shell's
+     scroll ends that much later, or the last row above the keep row could never come out from under the words. Parked, the
+     row does not move. */
+  margin-top: var(--cockpit-txdock-reason-room, 0px);
   order: 1;
   position: sticky;
   bottom: 0;

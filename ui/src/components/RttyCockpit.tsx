@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, KeyboardMacroProfile, RttyState, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
-import { CockpitTxStrip } from './CockpitTxStrip'
+import { CockpitTxStrip, keepInSight, revealAfterPress } from './CockpitTxStrip'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PaneSeam } from './PaneSeam'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
@@ -845,9 +845,15 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     setConfirmSetReset(false)
     // The caret goes back to the key the editor was opened from, not to the top of the page.
     if (key) {
-      dockRef.current
-        ?.querySelector<HTMLElement>(`[data-rtty-macro="${key}"] .cw-macro`)
-        ?.focus({ preventScroll: true })
+      const back = dockRef.current?.querySelector<HTMLElement>(`[data-rtty-macro="${key}"] .cw-macro`)
+      back?.focus({ preventScroll: true })
+      // While the dock is folded the key scrolls with the panes: it may be off screen or behind the keep row.
+      if (back) {
+        revealAfterPress(back, () => {
+          back.scrollIntoView?.({ block: 'nearest' })
+          keepInSight(back)
+        })
+      }
     }
   }
   const saveMacroSets = async (profiles: KeyboardMacroProfile[], activeSet: string): Promise<boolean> => {

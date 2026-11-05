@@ -13,6 +13,7 @@
 // dock shows and which verb each control calls.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
+import { keepInSight } from './CockpitTxStrip'
 import { Js8Cockpit } from './Js8Cockpit'
 import { t } from '../i18n'
 import type { AppSnapshot, Js8Presence, Js8State } from '../types'
@@ -61,6 +62,10 @@ const spies = vi.hoisted(() => ({
   js8Arm: vi.fn(),
   js8HeartbeatNow: vi.fn(),
   js8SelectCall: vi.fn(),
+}))
+vi.mock('./CockpitTxStrip', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./CockpitTxStrip')>()),
+  keepInSight: vi.fn(),
 }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
@@ -233,6 +238,34 @@ describe('HB’s menu: send one now, start or stop the timer', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: t('js8.dock.hb.menu.stop') }))
     await settle()
     expect(spies.js8Arm).toHaveBeenLastCalledWith('hb', false)
+  })
+
+  it('its first item is brought into view as it opens: folded, the menu is in the flow, and opened under the keep row', async () => {
+    const seen: Array<[string, unknown]> = []
+    const was = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = function (this: Element, arg?: boolean | ScrollIntoViewOptions) {
+      seen.push([this.getAttribute('role') ?? '', arg])
+    }
+    try {
+      await renderCockpit(base())
+      fireEvent.click(q('.js8-hb-menu-btn')!)
+      expect(seen, 'the menu opened wherever it landed').toEqual([['menuitem', { block: 'nearest' }]])
+    } finally {
+      Element.prototype.scrollIntoView = was
+    }
+  })
+
+  it('…and it is kept in sight where the room is shorter than the item', async () => {
+    const was = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = () => {}
+    try {
+      vi.mocked(keepInSight).mockClear()
+      await renderCockpit(base())
+      fireEvent.click(q('.js8-hb-menu-btn')!)
+      expect(vi.mocked(keepInSight).mock.calls.map(([e]) => (e as HTMLElement).getAttribute('role')), 'the menu’s first item can stay behind the keep row').toEqual(['menuitem'])
+    } finally {
+      Element.prototype.scrollIntoView = was
+    }
   })
 
   it('the dock is lifted while the menu stands on it, and set down when it closes', async () => {

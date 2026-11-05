@@ -1110,6 +1110,34 @@ describe('a TX dock that does not fit folds, and only its keep row parks', () =>
     expect(setters).toEqual([".cockpit-txdock[data-fold='on']"])
   })
 
+  it('JTTY’s refusal is an overlay on the parked keep row while folded, so showing it moves no stop; in its line otherwise', () => {
+    const pos = classWinner('jtty-dock-reason', blockDecl('position'))
+    expect(pos?.value, 'the reason no longer reads the fold').toBe('var(--cockpit-txdock-reason-pos, static)')
+    expect(blockVar('--cockpit-txdock-reason-pos')(one(RULES, ".cockpit-txdock[data-fold='on']").body), 'folded, a reason in flow grows the keep row and moves Send and Esc/Stop').toBe('absolute')
+    expect(classWinner('jtty-dock-reason', blockDecl('bottom'))?.value, 'it does not stand on the row’s top edge').toBe('100%')
+    // The strip parks directly above the keep row at some scrolls: the overlay keeps to the column right of Stop TX.
+    expect(classWinner('jtty-dock-reason', blockDecl('left'))?.value, 'it can stand over Stop TX').toBe('var(--cockpit-txdock-reason-left, 0px)')
+    expect(classWinner('jtty-dock-reason', blockDecl('background'))?.value, 'the panes show through it').toBe('var(--panel)')
+    // It hides what is under it, so it takes its own clicks: with `pointer-events: none` a click on the words went to the
+    // hidden key behind them, and called it (measured).
+    expect(classWinner('jtty-dock-reason', blockDecl('pointer-events')), 'a click on the words reaches a key the operator cannot see').toBeNull()
+    // Clamped while folded, to the lines the strip writes; the whole text is in its tooltip and a click's toast.
+    const fold = one(RULES, ".cockpit-txdock[data-fold='on']").body
+    expect(classWinner('jtty-dock-reason', blockDecl('display'))?.value).toBe('var(--cockpit-txdock-reason-display, block)')
+    expect(blockVar('--cockpit-txdock-reason-display')(fold), 'folded, it is not clamped').toBe('-webkit-box')
+    expect(classWinner('jtty-dock-reason', blockDecl('-webkit-line-clamp'))?.value).toBe('var(--cockpit-txdock-reason-lines, none)')
+    expect(classWinner('jtty-dock-reason', blockDecl('overflow'))?.value).toBe('var(--cockpit-txdock-reason-overflow, visible)')
+    expect(blockVar('--cockpit-txdock-reason-overflow')(fold)).toBe('hidden')
+    // The shell's scroll ends that much later, or the row above the keep row never comes out from under the words.
+    expect(blockDecl('margin-top')(one(RULES, ".cockpit-txdock-keep[data-fold='on']").body)).toBe('var(--cockpit-txdock-reason-room, 0px)')
+    // In flow, the dock's own gap above it, not the send row's: a refusal replacing the hint moves nothing.
+    const dockGap = blockDecl('gap')(one(RULES, '.cockpit-txdock').body)
+    const sendGap = classWinner('cw-send', blockDecl('gap'))?.value
+    expect(classWinner('jtty-dock-reason', blockDecl('margin-top'))?.value, 'Send and Esc/Stop shift as a refusal arrives').toBe(`calc(${dockGap} - ${sendGap})`)
+    // Its own line when it is in flow, under the send row as main draws it.
+    expect(classWinner('jtty-dock-reason', blockDecl('flex'))?.value).toBe('0 0 100%')
+  })
+
   it('the keyboard docks’ send rows wrap rather than leave the window, and their stops never shrink', () => {
     // CW's His Call, text box and Send came to 908 px on a 700 px window at 175 %: Send stood off the edge.
     expect(classWinner('cw-send-wrap', blockDecl('flex-wrap'))?.value).toBe('wrap')
