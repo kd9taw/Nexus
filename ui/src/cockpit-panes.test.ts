@@ -99,7 +99,8 @@ const STYLES_RULES = parseStylesRules(STYLES)
  *  a future cascade war. */
 // `[data-pin='off']`: the pinned header's one state, written by the TX strip (CockpitTxStrip decidePin);
 // `[data-menu='open']`: the pinned header while a menu it opens is open (CockpitHeader).
-const FLAT = /^\.[a-z][a-z0-9-]*(\[data-(cols='[123]'|flow='(stack|fill)'|pin='off'|menu='open')\])?$/
+// `[data-fold='on']`: a TX dock that does not fit whole, and its keep row (CockpitTxStrip decideFold).
+const FLAT = /^\.[a-z][a-z0-9-]*(\[data-(cols='[123]'|flow='(stack|fill)'|pin='off'|menu='open'|fold='on')\])?$/
 
 /** (classes+attributes, ids) — flat rules are all (0,1,0) or (0,2,0). */
 function specificity(sel: string): number {
@@ -255,7 +256,10 @@ describe('the fence: styles.css never names a structural class', () => {
     'ch-overflow', 'ch-overflow-panel', 'ch-overflow-open', 'cw-wpm-compact',
     // The My station picker in the top bar (2026-11-03): it stands over the callsign, out of the bar's
     // line; a styles.css margin or width on it would put it back in the line and wrap the bar.
-    'mycall-picker', 'station-profile-picker']) {
+    'mycall-picker', 'station-profile-picker',
+    // The TX dock's keep row (2026-11-05): parked alone while the dock is folded. A styles.css position, offset or
+    // background on it would park it, or unpark it, from the sheet that cannot see the fold.
+    'cockpit-txdock-keep']) {
     it(`styles.css declares no .${cls} rule`, () => {
       const hits = STYLES_RULES
         .map((r) => r.selector)
@@ -1046,6 +1050,70 @@ describe('panes are sized by the grid, never by themselves', () => {
     const lifted = z(RULES, '.cockpit-txdock-editing')
     expect(lifted).toBeGreaterThan(z(STYLES_RULES, '.pane-splitter'))
     expect(lifted).toBeGreaterThan(z(RULES, '.cockpit-txdock'))
+  })
+})
+
+// THE FOLDED DOCK (2026-11-05). On a small window at a large zoom the whole dock was taller than the shell's
+// scrollport and, parked at the bottom, covered Stop TX in the strip and pushed Send out of the window (measured,
+// 900×600 and 700×800 at 175 %). Where it does not fit, the strip folds it (CockpitTxStrip.fold.test.tsx): the dock
+// stops being a box, its rows scroll with the panes, and its keep row parks alone. Computed from both sheets.
+describe('a TX dock that does not fit folds, and only its keep row parks', () => {
+  const one = (rules: Rule[], selector: string) => {
+    const r = rules.filter((x) => x.selector === selector)
+    expect(r.length, `exactly one ${selector} rule`).toBe(1)
+    return r[0]
+  }
+  const zOf = (rules: Rule[], selector: string) => Number(blockDecl('z-index')(one(rules, selector).body))
+
+  it('folded, the dock generates no box, so its rows are the shell’s and scroll with the panes', () => {
+    const fold = one(RULES, ".cockpit-txdock[data-fold='on']")
+    expect(blockDecl('display')(fold.body), 'a folded dock that is still a box parks whole, over Stop TX').toBe('contents')
+    // It outranks the base dock rule by its attribute, whatever their order.
+    expect(specificity(fold.selector)).toBeGreaterThan(specificity('.cockpit-txdock'))
+    // …and only there: the base dock is still a pinned, unshrinkable flex box.
+    expect(blockDecl('display')(one(RULES, '.cockpit-txdock').body)).toBe('flex')
+    expect(blockDecl('position')(one(RULES, '.cockpit-txdock').body)).toBe('sticky')
+  })
+
+  it('the keep row parks at the bottom, opaque, at the dock’s level and with the dock’s padding', () => {
+    const keep = one(RULES, ".cockpit-txdock-keep[data-fold='on']")
+    const d = blockDecl
+    expect(d('position')(keep.body), 'a folded keep row scrolls away with Send and Esc/Stop').toBe('sticky')
+    expect(d('bottom')(keep.body)).toBe('0')
+    expect(d('background')(keep.body), 'the panes would show through the parked row').toBe('var(--panel)')
+    expect(zOf(RULES, ".cockpit-txdock-keep[data-fold='on']"), 'not at the dock’s own level').toBe(zOf(RULES, '.cockpit-txdock'))
+    expect(zOf(RULES, ".cockpit-txdock-keep[data-fold='on']")).toBeGreaterThan(zOf(STYLES_RULES, '.pane-splitter'))
+    // Folding moves no control of the row by a pixel: a pointer held on PTT while the dock folds stays on it.
+    expect(d('padding')(keep.body), 'the keep row’s controls jump when the dock folds').toBe(d('padding')(one(RULES, '.cockpit-txdock').body))
+    // Not a size.
+    for (const p of ['height', 'min-height', 'max-height', 'flex']) expect(d(p)(keep.body), p).toBeNull()
+  })
+
+  it('unfolded, nothing restyles the keep row: inside the parked dock it is the row it always was', () => {
+    const bare = [...RULES, ...STYLES_RULES]
+      .map((r) => r.selector)
+      .filter((sel) => /\.cockpit-txdock-keep(?![a-z0-9-])/.test(sel) && sel !== ".cockpit-txdock-keep[data-fold='on']")
+    expect(bare).toEqual([])
+  })
+
+  it('the macro editor stands on the dock’s edge, and joins the flow while the dock has no edge', () => {
+    // styles.css owns the editor; its position reads the custom property only the folded dock sets.
+    const pos = classWinner('rtty-macro-editor', blockDecl('position'))
+    expect(pos?.value, 'the editor no longer reads the fold').toBe('var(--cockpit-txdock-float, absolute)')
+    expect(blockVar('--cockpit-txdock-float')(one(RULES, ".cockpit-txdock[data-fold='on']").body)).toBe('static')
+    // Nothing else sets it: unfolded, the fallback (absolute) stands.
+    const setters = [...RULES, ...STYLES_RULES].filter((r) => blockVar('--cockpit-txdock-float')(r.body) !== null).map((r) => r.selector)
+    expect(setters).toEqual([".cockpit-txdock[data-fold='on']"])
+  })
+
+  it('the keyboard docks’ send rows wrap rather than leave the window, and their stops never shrink', () => {
+    // CW's His Call, text box and Send came to 908 px on a 700 px window at 175 %: Send stood off the edge.
+    expect(classWinner('cw-send-wrap', blockDecl('flex-wrap'))?.value).toBe('wrap')
+    // The stops (TX latch and Esc/Stop, RTTY and PSK) are a fixed group at the row's right end.
+    expect(classWinner('rtty-send-stops', blockDecl('flex'))?.value, 'the stops are a shrink victim').toBe('0 0 auto')
+    expect(classWinner('rtty-send-stops', blockDecl('margin-left'))?.value).toBe('auto')
+    // …and the send row itself is still never a shrink victim in the dock's column.
+    expect(classWinner('cw-send', blockDecl('flex'))?.value).toBe('0 0 auto')
   })
 })
 

@@ -450,6 +450,41 @@
 .cockpit-txdock-editing {
   z-index: 5;
 }
+/* …FOLDED where it does not fit (`data-fold="on"`, written by the TX strip: CockpitTxStrip decideFold).
+   On a small window at a large zoom (900×600 and 700×800 at 175 %) the whole dock was taller than the
+   shell's scrollport: 337 px of RTTY dock and 391 of PSK against 313 (measured). Parked whole it could
+   not fit beside the strip, so it painted over the strip's TX On/Off, Tune and Stop TX at every scroll
+   position, pushed Send below the window at the top of the scroll, and hid the header's ⊞ Panels from
+   the pointer. Capping it with a scroller inside does not fit either: the strip, Esc/Stop with the
+   latch, Send, one row of keys and the ⊞ button's own height come to more than RTTY's 265 px.
+   So it FOLDS: the dock stops being a box (`display: contents`), its rows become shell rows that
+   scroll with the panes, and only its KEEP ROW (`.cockpit-txdock-keep` below — the row with Send,
+   PTT, Esc/Stop and the latch) parks at the bottom. What scrolls between the strip and the keep row
+   is the scope, the panes, the header and, at the end of the scroll, the macro keys at full size.
+   Nothing is hidden, nothing gets smaller, and the stop surfaces are the strip and the keep row.
+   The strip folds the dock only where its WHOLE height, the strip's and FOLD_ROOM_EM do not fit;
+   everywhere else (every window from 1024×768 at 175 % up, measured) this rule never applies.
+   `--cockpit-txdock-float: static` is read by the macro editor (styles.css `.rtty-macro-editor`):
+   folded, the dock is no containing block, so the editor joins the flow above the keep row instead of
+   standing on a dock edge that is not there. */
+.cockpit-txdock[data-fold='on'] {
+  display: contents;
+  --cockpit-txdock-float: static;
+}
+/* THE KEEP ROW, while the dock is folded (the strip writes `data-fold="on"` on it as well): sticky at
+   the bottom of the shell's scrollport, as the dock was, above the dividers like the dock, and opaque,
+   because the panes scroll under it. It takes the dock's own padding, so folding moves none of its
+   controls by a pixel: a pointer held on PTT while the meters above it grow on key-down (and fold the
+   dock) stays on PTT. Unfolded it has no rule here at all: inside the parked dock it is exactly the
+   row it always was. */
+.cockpit-txdock-keep[data-fold='on'] {
+  position: sticky;
+  bottom: 0;
+  z-index: 4;
+  padding: max(var(--space-1), min(var(--space-2), (var(--vh-eff, 100vh) - 1100px) * 100)) var(--space-2);
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
 
 /* THE MACRO BANK — a keyboard dock of 12 or 16 macro keys (Settings ▸ CW / RTTY / PSK ▸ Macro keys;
    8, the default, is the dock as it always was and wears none of these). The keys stand in GROUPS OF

@@ -3089,7 +3089,7 @@ export function CwCockpit({
           />
         )}
 
-        <div className="cw-send">
+        <div className="cw-send cw-send-wrap cockpit-txdock-keep">
           {/* THE TURN CUE's lamp, first on the row in a slot of its own width, so what it says
               never moves His Call or Send. A readout: no click, and it sends nothing. */}
           {cueLamp && <CwTurnLamp lamp={cueLamp} window={cue?.window ?? null} />}

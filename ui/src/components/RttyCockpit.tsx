@@ -1606,8 +1606,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         ))}
       </MacroBank>
 
-      {/* THE FIXED ROW: the Call box, the set switch, and — at the right, together, outside
-          every pane and outside the editable set — the continuous-TX latch and Esc/Stop. */}
+      {/* THE FIXED ROW: the Call box and the set switch (the latch and Esc/Stop stand in the send
+          row below, the dock's keep row). */}
       <div className="rtty-dock-row">
         <input
           className="settings-input rtty-hiscall"
@@ -1636,42 +1636,6 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             preview={esm.preview}
           />
         )}
-        {/* ⚠️ NOT MIGRATED — the continuous-TX latch is a transmit-path control, and its
-            tooltip is the wording that states what clicking it off does NOT do (it lets
-            what was typed finish keying). Label and tooltips move with the stop line. */}
-        <button
-          type="button"
-          className={`cw-macro rtty-tx-latch${latched ? ' on' : ''}`}
-          aria-pressed={latched}
-          onClick={toggleLatch}
-          title={
-            latched
-              ? 'Continuous TX ON — the transmitter stays keyed and idles on diddle; type and it goes out as you type. Click to stop transmitting once what you have typed has gone out. (Stop TX or Esc cuts immediately.)'
-              : 'Continuous TX — key up and stay keyed, then type into the live transmission, instead of pressing Enter for every line'
-          }
-        >
-          <span className="cw-macro-key">TX</span>
-          <span className="cw-macro-label">{latched ? 'On air' : 'Continuous'}</span>
-        </button>
-        {/* ⚠️ NOT MIGRATED — the Esc/Stop macro is on RTTY's stop-line census and is found
-            by ACCESSIBLE NAME by components/stop-line.test.tsx (/^esc\s*stop$/i). Both spans
-            and the tooltip move in the transmit-path batch, with that sweep re-run. */}
-        <button
-          type="button"
-          className="cw-macro rtty-stop"
-          onClick={stop}
-          // `sending || latched`, NOT `sending` alone. `sending` is stamped by the
-          // radio loop from the audio actually in flight, so it is false for the
-          // tick between the latch going up and the first chunk being keyed — and
-          // false for good if the FSK keyline never opens. This control is on
-          // RTTY's stop-line census; a census stop control that is mounted and
-          // disabled is the same loss as one that is gone.
-          disabled={!(sending || latched)}
-          title="Stop RTTY — abort the transmission in progress, drop anything queued, unkey"
-        >
-          <span className="cw-macro-key">Esc</span>
-          <span className="cw-macro-label">Stop</span>
-        </button>
       </div>
       </div>
 
@@ -1694,7 +1658,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         />
       )}
 
-      <div className="cw-send">
+      <div className="cw-send cw-send-wrap cockpit-txdock-keep">
         {/* THE TX LINE (#379): what this station is sending, at the bottom of the cockpit —
             in the compose row, so the dock gains no height. Display only; see RttyTxLine. */}
         <RttyTxLine rtty={rtty} />
@@ -1740,6 +1704,50 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         >
           {t('rtty.compose.send.label')}
         </button>
+        {/* THE STOPS — the continuous-TX latch and Esc/Stop, together at the right end of the send row,
+            outside every pane and outside the editable set. In the send row, not beside the keys,
+            because this is the dock's KEEP ROW: on a small window at a large zoom the dock folds and
+            this row alone stays parked at the bottom (cockpit-panes.css `.cockpit-txdock[data-fold]`),
+            so Esc/Stop and the latch must be in it. The row wraps them onto a line of their own where
+            it is narrow. */}
+        <span className="rtty-send-stops">
+          {/* ⚠️ NOT MIGRATED — the continuous-TX latch is a transmit-path control, and its
+              tooltip is the wording that states what clicking it off does NOT do (it lets
+              what was typed finish keying). Label and tooltips move with the stop line. */}
+          <button
+            type="button"
+            className={`cw-macro rtty-tx-latch send-row-stop${latched ? ' on' : ''}`}
+            aria-pressed={latched}
+            onClick={toggleLatch}
+            title={
+              latched
+                ? 'Continuous TX ON — the transmitter stays keyed and idles on diddle; type and it goes out as you type. Click to stop transmitting once what you have typed has gone out. (Stop TX or Esc cuts immediately.)'
+                : 'Continuous TX — key up and stay keyed, then type into the live transmission, instead of pressing Enter for every line'
+            }
+          >
+            <span className="cw-macro-key">TX</span>
+            <span className="cw-macro-label">{latched ? 'On air' : 'Continuous'}</span>
+          </button>
+          {/* ⚠️ NOT MIGRATED — the Esc/Stop macro is on RTTY's stop-line census and is found
+              by ACCESSIBLE NAME by components/stop-line.test.tsx (/^esc\s*stop$/i). Both spans
+              and the tooltip move in the transmit-path batch, with that sweep re-run. */}
+          <button
+            type="button"
+            className="cw-macro rtty-stop send-row-stop"
+            onClick={stop}
+            // `sending || latched`, NOT `sending` alone. `sending` is stamped by the
+            // radio loop from the audio actually in flight, so it is false for the
+            // tick between the latch going up and the first chunk being keyed — and
+            // false for good if the FSK keyline never opens. This control is on
+            // RTTY's stop-line census; a census stop control that is mounted and
+            // disabled is the same loss as one that is gone.
+            disabled={!(sending || latched)}
+            title="Stop RTTY — abort the transmission in progress, drop anything queued, unkey"
+          >
+            <span className="cw-macro-key">Esc</span>
+            <span className="cw-macro-label">Stop</span>
+          </button>
+        </span>
       </div>
       </div>
     </main>

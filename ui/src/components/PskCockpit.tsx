@@ -1075,8 +1075,8 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
         ))}
       </MacroBank>
 
-      {/* THE FIXED ROW: the Call box, the set switch, and — at the right, together, outside
-          every pane and outside the editable set — the continuous-TX latch and Esc/Stop. */}
+      {/* THE FIXED ROW: the Call box and the set switch (the latch and Esc/Stop stand in the send
+          row below, the dock's keep row). */}
       <div className="rtty-dock-row psk-dock-row">
         <input
           className="settings-input rtty-hiscall"
@@ -1095,39 +1095,6 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           onSwitch={switchMacroSet}
           onReset={resetMacroSet}
         />
-        {/* ⚠️ NOT MIGRATED — the continuous-TX latch is a transmit-path control, and its
-            tooltip is the wording that states what clicking it off does NOT do (it lets
-            what was typed finish keying). Label and tooltips move with the stop line. */}
-        <button
-          type="button"
-          className={`cw-macro rtty-tx-latch psk-tx-latch${latched ? ' on' : ''}`}
-          aria-pressed={latched}
-          onClick={toggleLatch}
-          title={
-            latched
-              ? 'Continuous TX ON — the transmitter stays keyed and idles on PSK reversals; type and it goes out as you type. Click to stop transmitting once what you have typed has gone out. (Stop TX or Esc cuts immediately.)'
-              : 'Continuous TX — key up and stay keyed, then type into the live transmission (the classic PSK31 ragchew flow), instead of pressing Enter for every line'
-          }
-        >
-          <span className="cw-macro-key">TX</span>
-          <span className="cw-macro-label">{latched ? 'On air' : 'Continuous'}</span>
-        </button>
-        {/* ⚠️ NOT MIGRATED — the Esc/Stop macro is on PSK's stop-line census and is found by
-            ACCESSIBLE NAME by components/stop-line.test.tsx (/^esc\s*stop$/i). Both spans and
-            the tooltip move in the transmit-path batch, with that sweep re-run. */}
-        <button
-          type="button"
-          className="cw-macro rtty-stop psk-stop"
-          onClick={stop}
-          // `sending || latched`, NOT `sending` alone — RTTY's rule: this is on
-          // the PSK stop-line census, and it must be live from the instant the
-          // latch goes up, before the first chunk is keyed.
-          disabled={!(sending || latched)}
-          title="Stop PSK — abort the transmission in progress, drop anything queued, unkey"
-        >
-          <span className="cw-macro-key">Esc</span>
-          <span className="cw-macro-label">Stop</span>
-        </button>
       </div>
       </div>
 
@@ -1150,7 +1117,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
         />
       )}
 
-      <div className="cw-send">
+      <div className="cw-send cw-send-wrap cockpit-txdock-keep">
         <input
           ref={composeRef}
           className="settings-input cw-type"
@@ -1187,6 +1154,43 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
         >
           {t('psk.compose.send.label')}
         </button>
+        {/* THE STOPS — the latch and Esc/Stop at the right end of the send row, RTTY's arrangement and
+            reason: this is the dock's keep row, the one row still parked while the dock is folded. */}
+        <span className="rtty-send-stops">
+          {/* ⚠️ NOT MIGRATED — the continuous-TX latch is a transmit-path control, and its
+              tooltip is the wording that states what clicking it off does NOT do (it lets
+              what was typed finish keying). Label and tooltips move with the stop line. */}
+          <button
+            type="button"
+            className={`cw-macro rtty-tx-latch psk-tx-latch send-row-stop${latched ? ' on' : ''}`}
+            aria-pressed={latched}
+            onClick={toggleLatch}
+            title={
+              latched
+                ? 'Continuous TX ON — the transmitter stays keyed and idles on PSK reversals; type and it goes out as you type. Click to stop transmitting once what you have typed has gone out. (Stop TX or Esc cuts immediately.)'
+                : 'Continuous TX — key up and stay keyed, then type into the live transmission (the classic PSK31 ragchew flow), instead of pressing Enter for every line'
+            }
+          >
+            <span className="cw-macro-key">TX</span>
+            <span className="cw-macro-label">{latched ? 'On air' : 'Continuous'}</span>
+          </button>
+          {/* ⚠️ NOT MIGRATED — the Esc/Stop macro is on PSK's stop-line census and is found by
+              ACCESSIBLE NAME by components/stop-line.test.tsx (/^esc\s*stop$/i). Both spans and
+              the tooltip move in the transmit-path batch, with that sweep re-run. */}
+          <button
+            type="button"
+            className="cw-macro rtty-stop psk-stop send-row-stop"
+            onClick={stop}
+            // `sending || latched`, NOT `sending` alone — RTTY's rule: this is on
+            // the PSK stop-line census, and it must be live from the instant the
+            // latch goes up, before the first chunk is keyed.
+            disabled={!(sending || latched)}
+            title="Stop PSK — abort the transmission in progress, drop anything queued, unkey"
+          >
+            <span className="cw-macro-key">Esc</span>
+            <span className="cw-macro-label">Stop</span>
+          </button>
+        </span>
       </div>
 
       {/* THE DRIVE HINT (the plan's ALC sentence): PSK31's shaped envelope IS the

@@ -220,7 +220,8 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
 /** THE STICKY EDGES' PLACEMENT INPUTS, measured because CSS cannot read a sibling's box.
  *  · `--cockpit-txstrip-bottom` on the strip: the dock's height. The dock is sticky at `bottom: 0`,
  *    so a strip parked at 0 would park UNDER it — Stop TX covered by the PTT row, the exact defect
- *    at the 150–175 % pins. A dock that is not sticky clears nothing.
+ *    at the 150–175 % pins. A dock that is not sticky clears nothing. A FOLDED dock (decideFold below)
+ *    parks only its keep row, so the strip clears the keep row's height.
  *  · `--cockpit-txstrip-top` on the strip: the height of a PINNED header (`.cockpit-header-pinned`,
  *    sticky at `top: 0` — SSTV, RTTY, PSK). A strip parked at 0 would park OVER it and cover the
  *    dial and the band; it parks right under it instead. A header that is not sticky clears nothing.
@@ -263,12 +264,57 @@ export const PIN_ROOM_EM = 6
  *  only while its padding, its height, the strip's and the dock's leave PIN_ROOM_EM of the scrollport
  *  free, and otherwise unpinned (`"off"`: it scrolls, as every other cockpit's header does). The
  *  decision reads the header's height, which pinning does not change, so it cannot flap. */
-function decidePin(shell: HTMLElement, head: HTMLElement, strip: HTMLElement, dock: HTMLElement | undefined): void {
+function decidePin(shell: HTMLElement, head: HTMLElement, strip: HTMLElement, dockH: number): void {
   const cs = getComputedStyle(shell)
   const em = parseFloat(cs.fontSize) || 16
-  const need = (parseFloat(cs.paddingTop) || 0) + head.offsetHeight + strip.offsetHeight + (dock?.offsetHeight ?? 0) + PIN_ROOM_EM * em
+  const need = (parseFloat(cs.paddingTop) || 0) + head.offsetHeight + strip.offsetHeight + dockH + PIN_ROOM_EM * em
   const pin = need <= shell.clientHeight ? 'on' : 'off'
   if (head.getAttribute('data-pin') !== pin) head.setAttribute('data-pin', pin)
+}
+
+/** How much of the shell's scrollport must stay free between the strip and a dock parked WHOLE, in the
+ *  shell's em, before the dock folds. Two: the height of the header's ⊞ Panels button with room to
+ *  spare, so scrolling brings it out between the parked surfaces where a pointer can reach it. The
+ *  tightest window that parks its dock whole today (PSK at 1280×720 at 175 %) leaves 2.2em (measured). */
+export const FOLD_ROOM_EM = 2
+
+/** THE DOCK'S KEEP ROW: the dock child that parks at the bottom while the dock is folded (Send, PTT,
+ *  Esc/Stop and the latch). A dock without one never folds (JS8, JTTY, an observer's dock). */
+const keepRow = (dock: HTMLElement): HTMLElement | undefined =>
+  Array.from(dock.children).find(
+    (c): c is HTMLElement => c instanceof HTMLElement && c.classList.contains('cockpit-txdock-keep'),
+  )
+
+/** FOLD THE DOCK ONLY WHERE IT DOES NOT FIT WHOLE (`.cockpit-txdock[data-fold='on']`, cockpit-panes.css):
+ *  where the strip, the whole dock and FOLD_ROOM_EM are taller than the shell's scrollport (inside its
+ *  padding, where sticky boxes park). Returns the dock's UNFOLDED height, which is also what the pin
+ *  decision reads. Folded, the dock has no box at all (`display: contents`), so it is unfolded for this
+ *  one measurement and folded again before the frame is painted: the decision never reads a height
+ *  that folding changes, so it cannot flap. A shell with no height (a keep-alive host under `[hidden]`,
+ *  or jsdom) leaves the state as it is. The keep row carries the same attribute: that is what parks it. */
+function decideFold(shell: HTMLElement, strip: HTMLElement, dock: HTMLElement): number {
+  const keep = keepRow(dock)
+  const was = dock.getAttribute('data-fold') === 'on'
+  if (was) dock.removeAttribute('data-fold')
+  const natural = dock.offsetHeight
+  if (shell.clientHeight === 0) {
+    if (was) dock.setAttribute('data-fold', 'on')
+    return natural
+  }
+  const cs = getComputedStyle(shell)
+  const em = parseFloat(cs.fontSize) || 16
+  const room = shell.clientHeight - (parseFloat(cs.paddingTop) || 0) - (parseFloat(cs.paddingBottom) || 0)
+  const fold =
+    keep != null &&
+    getComputedStyle(dock).position === 'sticky' &&
+    strip.offsetHeight + natural + FOLD_ROOM_EM * em > room
+  if (fold) {
+    dock.setAttribute('data-fold', 'on')
+    keep.setAttribute('data-fold', 'on')
+  } else {
+    keep?.removeAttribute('data-fold')
+  }
+  return natural
 }
 
 /** The cockpit shell the strip stands in: its parent — or, where layout wrappers stand between them
@@ -288,11 +334,14 @@ function useDockClearance(ref: RefObject<HTMLDivElement | null>) {
     const shell = strip && shellOf(strip)
     if (!strip || !shell) return
     const dock = Array.from(shell.children).find(isDock)
+    const dockH = dock ? decideFold(shell, strip, dock) : 0
     const candidate = pinCandidate(shell, strip)
-    if (candidate) decidePin(shell, candidate, strip, dock)
+    if (candidate) decidePin(shell, candidate, strip, dockH)
     const head = pinnedAbove(shell, strip)
+    // What is parked at the bottom: the whole dock, or — folded — its keep row alone.
+    const keep = dock?.getAttribute('data-fold') === 'on' ? keepRow(dock) : undefined
     strip.style.setProperty('--cockpit-txstrip-bottom',
-      dock && getComputedStyle(dock).position === 'sticky' ? `${dock.offsetHeight}px` : '0px')
+      dock && getComputedStyle(dock).position === 'sticky' ? `${keep ? keep.offsetHeight : dock.offsetHeight}px` : '0px')
     // Only where something is pinned above: every other cockpit's strip keeps exactly the inline style
     // it always had (the sheet's fallback is 0), so their documents are unchanged.
     if (head) strip.style.setProperty('--cockpit-txstrip-top', `${head.offsetHeight}px`)
@@ -312,11 +361,13 @@ function useDockClearance(ref: RefObject<HTMLDivElement | null>) {
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(apply)
     observer?.observe(strip)
     if (dock) observer?.observe(dock)
-    if (head) {
-      observer?.observe(head)
-      // The pin decision is against the shell's own height: a shorter window may unpin it.
-      observer?.observe(shell)
-    }
+    // Folded, the dock has no box to observe; its keep row is what the strip clears.
+    const keep = dock && keepRow(dock)
+    if (keep) observer?.observe(keep)
+    if (head) observer?.observe(head)
+    // The pin and fold decisions are against the shell's own height: a shorter window may unpin the
+    // header or fold the dock without any of the parked surfaces changing size.
+    if (head || keep) observer?.observe(shell)
     return () => {
       observer?.disconnect()
       shell.style.removeProperty('--cockpit-txstrip-h')

@@ -310,6 +310,18 @@ describe('PhoneCockpit pane-grid shell', () => {
     expect(region.compareDocumentPosition(dock) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('the dock’s keep row is one direct dock child holding PTT', () => {
+    // THE KEEP ROW (2026-11-05): the one dock row that stays parked when the dock folds on a small window at a
+    // large zoom (cockpit-panes.css `.cockpit-txdock[data-fold='on']`, CockpitTxStrip decideFold). Exactly one,
+    // a DIRECT dock child (a sticky box never leaves its containing block), and it holds PTT (Phone's dock stop).
+    renderCockpit()
+    const dock = document.querySelector('.cockpit-txdock')!
+    const keeps = dock.querySelectorAll('.cockpit-txdock-keep')
+    expect(keeps.length, 'not exactly one keep row').toBe(1)
+    expect(keeps[0].parentElement, 'the keep row is not a direct dock child').toBe(dock)
+    expect(keeps[0].querySelector('.ph-ptt'), 'PTT is not in the keep row: folded, it would scroll away').not.toBeNull()
+  })
+
   it('the PTT hint owns no line of the pinned dock, and its sentence is on the button', () => {
     // DENSITY (2026-08-04). `.ph-ptt-hint` was `flex-basis: 100%` — a whole line of its own
     // inside the PINNED dock, so it cost its ~19px at EVERY window size and no scroller could

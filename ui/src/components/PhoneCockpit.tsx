@@ -3606,7 +3606,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
           the Field Day chip shares the row. All of it moves in the transmit-path batch, with
           the stop-line sweeps re-run. The TOASTS this row's handler raises did move (see
           `key` above): a toast is not a control, and no sweep can see one. */}
-      <div className="ph-ptt-row">
+      <div className="ph-ptt-row cockpit-txdock-keep">
         {fdExchange && (
           <span
             className="ph-fd-give"

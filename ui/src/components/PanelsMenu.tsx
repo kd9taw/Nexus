@@ -70,7 +70,7 @@
 // those move with the cockpit. What is here is the menu itself — the ⊞ button, the popover,
 // the popped-out tag, the dashboard rail's row, and Undo / Reset. No vocabulary ID passes
 // through this file as prose, so nothing here can rename one.
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { t } from '../i18n'
 import type { PanelState } from '../features/panelState'
 import { useDashRailSwitch } from './dashRailSwitch'
@@ -152,6 +152,26 @@ export function PanelsMenu({ items, onToggle, onUndo, canUndo, undoNote, onReset
     return () => document.removeEventListener('pointerdown', onDown)
   }, [open])
 
+  // INSIDE THE WINDOW. The popover hangs from the button's right edge (`right: 0`), so where the
+  // button sits near the left of a narrow window it hung off the window's left edge: at 700×800 at
+  // 175 % only one of RTTY's nine entries could be reached (measured). Once it is laid out, it is
+  // shifted back by exactly the overhang, on either side; the sheet caps its width at the window's.
+  // A `translate`, so nothing else moves. Rendered px over layout px is the UI zoom, which the shift
+  // must be divided by because it is applied inside the zoomed tree. Every render while open, so a
+  // menu whose entries change width stays clamped.
+  const popRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const pop = popRef.current
+    if (!open || !pop) return
+    pop.style.translate = ''
+    const r = pop.getBoundingClientRect()
+    if (r.width === 0 || pop.offsetWidth === 0) return
+    const zoom = r.width / pop.offsetWidth
+    const edge = 4 * zoom
+    const dx = r.left < edge ? edge - r.left : r.right > window.innerWidth - edge ? Math.max(edge - r.left, window.innerWidth - edge - r.right) : 0
+    if (dx !== 0) pop.style.translate = `${dx / zoom}px 0`
+  })
+
   // Hidden by the OPERATOR — an entry unticked in the stock layout is not (see `shipsHidden`).
   const hidden = items.filter((i) => i.state === 'removed' && !i.shipsHidden).length
   return (
@@ -169,6 +189,7 @@ export function PanelsMenu({ items, onToggle, onUndo, canUndo, undoNote, onReset
       </button>
       {open && (
         <div
+          ref={popRef}
           className="panels-menu-pop"
           role="group"
           aria-label={t('panels.popover.aria')}
