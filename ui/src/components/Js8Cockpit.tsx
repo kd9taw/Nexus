@@ -1897,7 +1897,7 @@ export function Js8Cockpit({
           queue — a SENDER-class control (it empties the queue; a frame already keyed
           finishes) that must never enter the stop-line sweep. */}
       <div className={`cockpit-txdock${hbMenuOpen ? ' cockpit-txdock-editing' : ''}`}>
-        <div className="js8-dock-row js8-compose-row" role="group" aria-label={t('js8.dock.aria')}>
+        <div className="js8-dock-row js8-compose-row cockpit-txdock-keep" role="group" aria-label={t('js8.dock.aria')}>
           <input
             className="settings-input rtty-hiscall js8-to"
             list="js8-to-list"

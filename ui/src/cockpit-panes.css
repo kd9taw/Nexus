@@ -477,8 +477,11 @@
    because the panes scroll under it. It takes the dock's own padding, so folding moves none of its
    controls by a pixel: a pointer held on PTT while the meters above it grow on key-down (and fold the
    dock) stays on PTT. Unfolded it has no rule here at all: inside the parked dock it is exactly the
-   row it always was. */
+   row it always was. LAST IN THE SHELL (`order`), whatever its place in the dock: a dock row below it, JS8's
+   beacon row or PSK's drive hint, would lift it that far at the end of the scroll, onto the strip's Stop TX (measured,
+   JS8 at 900×600 at 175 %). The order is the shell's because a folded dock's rows are shell rows. */
 .cockpit-txdock-keep[data-fold='on'] {
+  order: 1;
   position: sticky;
   bottom: 0;
   z-index: 4;

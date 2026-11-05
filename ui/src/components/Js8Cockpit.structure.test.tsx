@@ -296,6 +296,21 @@ describe('Js8Cockpit pane shell', () => {
     expect(region.compareDocumentPosition(dock!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('the dock’s keep row is one direct dock child holding Send and the text it sends', async () => {
+    // THE KEEP ROW: the one dock row still parked when the dock folds on a small window at a large zoom
+    // (cockpit-panes.css `.cockpit-txdock[data-fold='on']`, CockpitTxStrip decideFold). JS8 had none, so its dock
+    // parked whole over Stop TX at every scroll position at 900×600 and 700×800 at 175 % (measured). Exactly one, a DIRECT
+    // dock child (a sticky box never leaves its containing block). JS8's stop button is the strip's Stop TX.
+    await renderCockpit()
+    const dock = document.querySelector('.cockpit-txdock')!
+    const keeps = dock.querySelectorAll('.cockpit-txdock-keep')
+    expect(keeps.length, 'not exactly one keep row').toBe(1)
+    expect(keeps[0].parentElement, 'the keep row is not a direct dock child').toBe(dock)
+    expect(keeps[0].querySelector('.js8-send'), 'Send is not in the keep row: folded, it would scroll away').not.toBeNull()
+    expect(keeps[0].querySelector('.js8-compose')).not.toBeNull()
+    expect(keeps[0].querySelector('.js8-hb'), 'the beacon row parks with the keep row').toBeNull()
+  })
+
   it('the speed chips render in the header and ask the ENGINE for a speed change', async () => {
     await renderCockpit()
     const chips = Array.from(document.querySelectorAll('.cockpit-header .js8-speed-chip'))

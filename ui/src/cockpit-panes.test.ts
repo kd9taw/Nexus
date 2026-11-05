@@ -1080,6 +1080,8 @@ describe('a TX dock that does not fit folds, and only its keep row parks', () =>
     const d = blockDecl
     expect(d('position')(keep.body), 'a folded keep row scrolls away with Send and Esc/Stop').toBe('sticky')
     expect(d('bottom')(keep.body)).toBe('0')
+    // Last in the shell: a dock row below it (JS8's beacon row) lifts it onto Stop TX at the end of the scroll.
+    expect(Number(d('order')(keep.body)), 'a dock row can stand below the parked row').toBeGreaterThan(0)
     expect(d('background')(keep.body), 'the panes would show through the parked row').toBe('var(--panel)')
     expect(zOf(RULES, ".cockpit-txdock-keep[data-fold='on']"), 'not at the dock’s own level').toBe(zOf(RULES, '.cockpit-txdock'))
     expect(zOf(RULES, ".cockpit-txdock-keep[data-fold='on']")).toBeGreaterThan(zOf(STYLES_RULES, '.pane-splitter'))
@@ -1100,6 +1102,8 @@ describe('a TX dock that does not fit folds, and only its keep row parks', () =>
     // styles.css owns the editor; its position reads the custom property only the folded dock sets.
     const pos = classWinner('rtty-macro-editor', blockDecl('position'))
     expect(pos?.value, 'the editor no longer reads the fold').toBe('var(--cockpit-txdock-float, absolute)')
+    // JS8's heartbeat menu stands on the same edge, and its keep row folds the same way.
+    expect(classWinner('js8-hb-menu', blockDecl('position'))?.value, 'the heartbeat menu no longer reads the fold').toBe('var(--cockpit-txdock-float, absolute)')
     expect(blockVar('--cockpit-txdock-float')(one(RULES, ".cockpit-txdock[data-fold='on']").body)).toBe('static')
     // Nothing else sets it: unfolded, the fallback (absolute) stands.
     const setters = [...RULES, ...STYLES_RULES].filter((r) => blockVar('--cockpit-txdock-float')(r.body) !== null).map((r) => r.selector)

@@ -1,4 +1,4 @@
-// The SSTV, RTTY and PSK shells — and CW's and Phone's at the small sizes — in real Chrome, for what jsdom cannot see:
+// The SSTV, RTTY and PSK shells — and CW's, Phone's, JS8's and JTTY's at the small sizes — in real Chrome, for what jsdom cannot see:
 // `scripts/browser-probe --desktop digishell`.
 //
 // The three screens pin their cockpit header (the mode, the dial, the band, ⊞ Panels, power, CAT) so it stays in the
@@ -43,7 +43,7 @@
 //      at scroll 0 (a keyboard operator opens it from a button the pointer cannot reach, under a sticky surface); and
 //      at every step of a walk of the shell with the menu open. Each of those opens is also at least SHORTEST_MENU_PX
 //      tall (or as tall as the whole menu), inside the window, and every item is topmost under the menu's own scroll.
-//      Run on JS8, JTTY and Operate as well.
+//      Run on Operate as well.
 //   7. EVERY CONTROL OF THE STRIP AND THE DOCK CAN BE CLICKED at some scroll position (the same 6 px search): a folded
 //      dock's macro keys scroll with the panes, and each must come out between the parked surfaces.
 // THE CONTROLS, run every time: the header forced to stick on top (z 9) at 900×600 / 175 % must make check 1 fail;
@@ -73,10 +73,11 @@ const SIZES = [
 /** CW and Phone at the sizes where their docks were taller than the room left (and two that fit, and the fit). */
 const SMALL = [[900, 600, '175'], [700, 800, '175'], [1024, 768, '175'], [1280, 720, '175'], [1366, 768, '150'], [1200, 750, null]]
 const VIEWS = [['SSTV', 'sstv', 'main.sstv-view', SIZES, true], ['RTTY', 'rtty', 'main.rtty-cockpit', SIZES, true],
-  ['PSK', 'psk', 'main.psk-cockpit', SIZES, true], ['CW', 'cw', 'main.cw-cockpit', SMALL, true], ['Phone', 'phone', 'main.phone-cockpit', SMALL, true]]
+  ['PSK', 'psk', 'main.psk-cockpit', SIZES, true], ['CW', 'cw', 'main.cw-cockpit', SMALL, true], ['Phone', 'phone', 'main.phone-cockpit', SMALL, true],
+  ['JS8', 'js8', 'main.js8-cockpit', SMALL, true], ['JTTY', 'jtty', 'main.jtty-cockpit', SMALL, true]]
 const FEATURES = JSON.stringify({ profile: 'custom', enabled: { rtty: true, psk: true, sstv: true, js8: true, jtty: true } })
-/** Check 8's other screens, with no pinned-header checks of their own to run (Operate has no `.cockpit-txstrip`). */
-const COVER_ONLY = [['JS8', 'js8', 'main.js8-cockpit'], ['JTTY', 'jtty', 'main.jtty-cockpit'], ['Operate', 'operate', 'main.operate-cockpit']]
+/** Check 8's other screen, which has none of the rest to run (Operate has no `.cockpit-txstrip`). */
+const COVER_ONLY = [['Operate', 'operate', 'main.operate-cockpit']]
 const COVER_SIZES = [[900, 600, '175'], [700, 800, '175'], [1024, 768, '175'], [1280, 720, '175'], [1366, 768, '150']]
 /** The shortest a menu with more to show may be, in window px: 26 px showed less than one entry (measured). */
 const SHORTEST_MENU_PX = 60

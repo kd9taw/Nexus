@@ -30873,7 +30873,9 @@ button.sat-chip:disabled {
   padding: 0 var(--space-1);
 }
 .js8-hb-menu {
-  position: absolute;
+  /* Off the dock's top edge, except while the dock is FOLDED: a folded dock has no box to stand on, so the
+     menu joins the flow beside its button, as the macro editor does (`--cockpit-txdock-float`, cockpit-panes.css). */
+  position: var(--cockpit-txdock-float, absolute);
   bottom: calc(100% + var(--space-1));
   z-index: 3;
   display: flex;
