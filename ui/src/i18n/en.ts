@@ -10323,7 +10323,7 @@ export const EN = {
   'settings.integrations.udpAddr.hint': 'host:port for the UDP feed',
   'settings.integrations.wsjtxUdpAccept.label': 'Accept requests from other computers',
   'settings.integrations.wsjtxUdpAccept.hint':
-    "Off: a program on another computer can't answer a station, send or fill in free text, or change your grid, though it can still stop TX. Programs on this computer can always do these. On: anyone who can reach this computer over the network can turn TX on and send under your call, because a UDP sender's address can be faked. Stop TX and the watchdog still hold.",
+    "Off: a program can answer a station, send or fill in free text, or change your grid only if it sends from this computer's 127.0.0.1. Any other program can still stop TX. That includes a program on this computer reached through a multicast address: to keep it without this switch, list one 127.0.0.1 address per program, with commas (127.0.0.1:2237, 127.0.0.1:2238). On: anyone who can reach this computer over the network can turn TX on and send under your call, because a UDP sender's address can be faked. Stop TX and a tripped watchdog still refuse them, but each accepted answer restarts the watchdog's clock, as in WSJT-X.",
   'settings.integrations.hrdLogging.label': 'Ham Radio Deluxe logging',
   'settings.integrations.hrdLogging.hint':
     "push each QSO to HRD Logbook over its QSO-Forwarding UDP port (HRD must be running; don't also run JTAlert/QSO Relay into HRD or you'll double-log)",

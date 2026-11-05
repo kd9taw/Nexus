@@ -6530,7 +6530,7 @@ export const JA: PartialCatalog = {
   "settings.integrations.udpAddr.label": "UDPアドレス",
   "settings.integrations.udpAddr.hint": "UDPフィードのhost:port",
   "settings.integrations.wsjtxUdpAccept.label": "他のコンピューターからのリクエストを受け付ける",
-  "settings.integrations.wsjtxUdpAccept.hint": "オフ：他のコンピューターのプログラムは、局への応答、フリーテキストの送信や入力、グリッドの変更ができません（TX の停止はできます）。このコンピューターのプログラムは常にこれらを行えます。オン：UDP の送信元アドレスは偽装できるため、ネットワークでこのコンピューターに届く人は誰でも TX をオンにしてあなたのコールサインで送信できます。Stop TX とウォッチドッグは引き続き有効です。",
+  "settings.integrations.wsjtxUdpAccept.hint": "オフ：局への応答、フリーテキストの送信や入力、グリッドの変更ができるのは、このコンピューターの 127.0.0.1 から送信するプログラムだけです。その他のプログラムも TX の停止はできます。マルチキャストアドレス経由で接続する、このコンピューター上のプログラムも対象です。このスイッチなしで使うには、プログラムごとに 127.0.0.1 のアドレスをコンマで区切って指定してください（127.0.0.1:2237, 127.0.0.1:2238）。オン：UDP の送信元アドレスは偽装できるため、ネットワークでこのコンピューターに届く人は誰でも TX をオンにしてあなたのコールサインで送信できます。Stop TX と作動済みのウォッチドッグは引き続きこれを拒否しますが、受け付けた応答のたびにウォッチドッグの時間は再スタートします（WSJT-X と同じです）。",
   "settings.integrations.hrdLogging.label": "Ham Radio Deluxeロギング",
   "settings.integrations.hrdLogging.hint": "各QSOをQSO-Forwarding UDPポート経由でHRD Logbookに送ります（HRDの起動が必要。JTAlert/QSO RelayからHRDへの転送を併用すると二重記録になります）",
   "settings.integrations.hrdAddr.label": "HRD UDPアドレス",

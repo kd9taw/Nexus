@@ -2232,7 +2232,8 @@ fn send_logged_contact(server: &WsjtxServer, qso: &WsjtxQso, adif_record: &str) 
     let _ = server.send_logged_adif(adif_record);
 }
 
-/// A WSJT-X request refused because it came from another computer, in the diagnostic log: one line
+/// A WSJT-X request refused because it did not come from loopback, in the diagnostic log (its
+/// sender may be another computer, or a logger here reached through a multicast address): one line
 /// a minute at most, however many arrive, carrying the count of the rest. The sender chooses how
 /// often this runs and the words it sends, so the line quotes none of them.
 fn note_udp_request_refused(request: &WsjtxInbound, from: std::net::IpAddr) {
@@ -2248,8 +2249,9 @@ fn note_udp_request_refused(request: &WsjtxInbound, from: std::net::IpAddr) {
         "wsjtx-udp-other-computer",
         Duration::from_secs(60),
         &format!(
-            "ignored a {name} from {from}, another computer. To let it in, turn on Accept requests \
-             from other computers in Settings > Services > Integrations & Feeds"
+            "ignored a {name} from {from}: it did not come from this computer's loopback address. \
+             To let it in, turn on Accept requests from other computers in Settings > Services > \
+             Integrations & Feeds"
         ),
     );
 }

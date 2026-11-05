@@ -5783,7 +5783,7 @@ export interface Settings {
   /** Address:port for the WSJT-X UDP API. */
   wsjtxUdpAddr: string
   /** Take a Reply, FreeText or Location from another computer ("Accept requests from other
-   * computers"). Off by default; programs on this computer are never asked for it. */
+   * computers"). Off by default; a program sending from loopback never needs it. */
   wsjtxUdpAcceptOtherComputers?: boolean
   /** Append every decode to a WSJT-X-format ALL.TXT decode log (loggers/GridTracker tail it). */
   writeAllTxt: boolean

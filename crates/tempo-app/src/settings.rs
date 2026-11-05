@@ -2878,9 +2878,9 @@ pub struct Settings {
     /// a remote contest scorer at once, which WSJT-X's single sink cannot.
     pub wsjtx_udp_addr: String,
     /// ⛔ Take a Reply, a FreeText or a Location from another computer
-    /// (`tempo_net::server::refused_from_other_computer`). OFF by default: a program on this
-    /// computer sends from loopback and needs no leave, one off it can then not arm TX, choose
-    /// what goes out or move the grid. A UDP source address can be forged, so this trusts
+    /// (`tempo_net::server::refused_from_other_computer`). OFF by default: a program sending from
+    /// loopback needs no leave, and any other can then not arm TX, choose what goes out or move
+    /// the grid. A UDP source address can be forged, so this trusts
     /// whoever can reach the port. Never moved by a save from afar, a restore or a profile.
     #[serde(default)]
     pub wsjtx_udp_accept_other_computers: bool,

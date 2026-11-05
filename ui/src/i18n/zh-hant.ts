@@ -3270,7 +3270,7 @@ export const ZH_HANT: PartialCatalog = {
   "settings.integrations.udpAddr.label": "UDP 地址",
   "settings.integrations.udpAddr.hint": "UDP 推送的 host:port",
   "settings.integrations.wsjtxUdpAccept.label": "接受來自其他電腦的請求",
-  "settings.integrations.wsjtxUdpAccept.hint": "關閉：其他電腦上的程式不能應答電台、傳送或填寫自由文字，也不能更改您的網格，但仍可停止 TX。本電腦上的程式始終可以執行這些操作。開啟：任何能透過網路存取本電腦的人都能開啟 TX 並以您的呼號發射，因為 UDP 傳送方位址可以偽造。Stop TX（停止發射）和 TX 看門狗仍然有效。",
+  "settings.integrations.wsjtxUdpAccept.hint": "關閉：只有從本電腦的 127.0.0.1 傳送的程式才能應答電台、傳送或填寫自由文字、更改您的網格。其他程式仍可停止 TX。這也包括本電腦上透過多點傳送位址連線的程式：如要不開此開關而繼續使用，請為每個程式列出一個 127.0.0.1 位址，以逗號分隔（127.0.0.1:2237, 127.0.0.1:2238）。開啟：任何能透過網路存取本電腦的人都能開啟 TX 並以您的呼號發射，因為 UDP 傳送方位址可以偽造。Stop TX（停止發射）和已觸發的 TX 看門狗仍會拒絕它們，但每次被接受的應答都會重新開始看門狗計時，與 WSJT-X 相同。",
   "settings.integrations.hrdLogging.label": "Ham Radio Deluxe 日誌",
   "settings.integrations.hrdLogging.hint": "透過 HRD 的 QSO 轉發 UDP 連線埠將每筆 QSO 推送到 HRD Logbook（HRD 必須執行；不要同時讓 JTAlert/QSO Relay 也寫入 HRD，否則會重複記錄）",
   "settings.integrations.hrdAddr.label": "HRD UDP 地址",

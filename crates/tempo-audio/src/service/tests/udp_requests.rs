@@ -364,6 +364,7 @@ fn a_halt_tx_from_another_computer_still_stops() {
 /// the setting off, as they always have been.
 #[test]
 fn a_clear_from_another_computer_is_still_taken() {
+    let _modem = super::remote_radio::selection::selection_test_lock();
     let engine = station();
     deliver_from_another_computer(&engine, &[clear_datagram(2)]);
     let s = engine.lock().unwrap().snapshot();
@@ -429,7 +430,7 @@ fn a_refused_request_is_one_line_in_the_diagnostic_log() {
     );
     let lines: Vec<&str> = log
         .lines()
-        .filter(|l| l.contains("another computer"))
+        .filter(|l| l.contains("did not come from this computer's loopback address"))
         .collect();
     assert_eq!(lines.len(), 1, "one line for the flood:\n{log}");
     for word in [

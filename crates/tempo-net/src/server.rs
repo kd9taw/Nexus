@@ -36,8 +36,9 @@ pub struct WsjtxServer {
 /// ⛔ Whether a request this station has already admitted ([`WsjtxServer::poll_from`]) is refused
 /// because it comes from another computer: it could arm or key the transmitter, choose what the
 /// next over says, or change what the station sends, and the operator has not said such requests
-/// may come from off this computer (`accept_from_other_computers`). The operator's own loggers on
-/// this computer send from loopback and are never refused here. The match has no wildcard: a new
+/// may come from off this computer (`accept_from_other_computers`). A logger sending from loopback
+/// is never refused here; one on this computer reached through a multicast address sends from a
+/// network address, and cannot be told from another computer. The match has no wildcard: a new
 /// message type must say which it is.
 ///
 /// - **Reply** works a station and arms TX. **FreeText** chooses the next over, or fills Tx 5
@@ -46,7 +47,8 @@ pub struct WsjtxServer {
 ///   **Replay** re-sends decodes to the operator's own targets, at a bounded rate.
 /// - **Decode**, **QsoLogged** and **Other** do nothing here; `Other` includes Close,
 ///   SwitchConfiguration and Configure, which Nexus does not act on from anyone.
-/// - **LoggedAdif** goes to the log's import. It reaches no transmit path.
+/// - **LoggedAdif** goes to the log's import, kept on purpose from any admitted source: it reaches
+///   no transmit path.
 pub fn refused_from_other_computer(
     inbound: &Inbound,
     from: IpAddr,
@@ -634,6 +636,38 @@ mod tests {
                 false,
             ),
             (
+                "Decode",
+                Inbound::Decode {
+                    id: id(),
+                    new: true,
+                    time_ms: 0,
+                    snr: 0,
+                    delta_time: 0.0,
+                    delta_freq: 1500,
+                    mode: "~".into(),
+                    message: "CQ W1AW FN31".into(),
+                    low_confidence: false,
+                    off_air: false,
+                },
+                false,
+            ),
+            (
+                "QsoLogged",
+                Inbound::QsoLogged {
+                    id: id(),
+                    qso: Box::default(),
+                },
+                false,
+            ),
+            (
+                "LoggedAdif",
+                Inbound::LoggedAdif {
+                    id: id(),
+                    adif: "<call:4>W1AW<eor>".into(),
+                },
+                false,
+            ),
+            (
                 "Close",
                 Inbound::Other {
                     id: id(),
@@ -682,6 +716,22 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A logged contact from another computer is kept on purpose, with the setting off: it adds to
+    /// the log and reaches no transmit path, so the rule on what shapes a transmission leaves it
+    /// be. Changing this is a decision about the log, not a tidy-up of this rule.
+    #[test]
+    fn a_logged_contact_from_another_computer_is_deliberately_kept() {
+        let adif = Inbound::LoggedAdif {
+            id: "Logger".into(),
+            adif: "<call:4>W1AW<eor>".into(),
+        };
+        assert!(!refused_from_other_computer(
+            &adif,
+            "192.168.1.20".parse().unwrap(),
+            false
+        ));
     }
 
     /// A datagram of `kind`, framed as a logger frames it, with nothing after the sender's id.
