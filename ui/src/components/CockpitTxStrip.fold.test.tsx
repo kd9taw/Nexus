@@ -397,6 +397,23 @@ describe('a focused control is never left behind the parked keep row', () => {
     expect(main().scrollTop, 'Tab stops behind the notice').toBeCloseTo(500 + (270 - 208.5) / 1.75, 3)
   })
 
+  it('the shell’s scroll ends the notice’s height later, in layout px, or the last row stays under the words', () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('cockpit-txdock-keep') ? 852 / 1.75 : 0
+    })
+    boxes['cockpit-txdock-keep'] = { ...box(300, 156), left: 24, right: 876, width: 852 }
+    boxes['op-btn'] = { ...box(100, 52), left: 339, right: 497, width: 158 }
+    const height = vi.mocked(Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')!.get!)
+    const real = height.getMockImplementation()!
+    height.mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('the-reason') ? 28 : real.call(this)
+    })
+    injectSheet(SHEET)
+    shellH = FITS - 1
+    render(<Shell reason />)
+    expect(document.querySelector<HTMLElement>('.cockpit-txdock-keep')!.style.getPropertyValue('--cockpit-txdock-reason-room')).toBe('28px')
+  })
+
   it('a notice gets 2 lines, or 3 in a column under 160 layout px', () => {
     vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
       return this.classList.contains('cockpit-txdock-keep') ? 852 / 1.75 : 0

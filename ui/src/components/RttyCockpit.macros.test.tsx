@@ -10,6 +10,7 @@
 //     `stop-line.test.tsx` against the real header, not here.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen, waitFor } from '@testing-library/react'
+import { keepInSight } from './CockpitTxStrip'
 import { RttyCockpit } from './RttyCockpit'
 import * as api from '../api'
 import * as toast from '../toast'
@@ -37,6 +38,10 @@ const IDLE = {
   heardCq: null,
 } as unknown as RttyState
 
+vi.mock('./CockpitTxStrip', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./CockpitTxStrip')>()),
+  keepInSight: vi.fn(),
+}))
 vi.mock('../api', () => ({
   getRttyState: vi.fn(),
   getLicensedBandPlan: vi.fn(async () => []),
@@ -281,6 +286,8 @@ describe('the macro editor', () => {
       seen.length = 0
       fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
       expect(seen, 'the key focus returned to was not brought into view').toContain('BUTTON')
+      // …and kept in sight where the room is shorter than the key (the keyboard's Esc comes this way too).
+      expect(vi.mocked(keepInSight).mock.calls.at(-1)?.[0], 'the key can stay behind the keep row').toBe(document.activeElement)
     } finally {
       Element.prototype.scrollIntoView = was
     }

@@ -534,7 +534,8 @@ function focusReds(name, m) {
   if (m.refusal) {
     if (m.refusal.shown < m.refusal.n) out.push(`${name}: JTTY's refusal is on screen at only ${m.refusal.shown} of ${m.refusal.n} scroll positions`)
     if (m.refusal.over > 0) out.push(`${name}: JTTY's refusal stands over the stop button at ${m.refusal.over} positions`)
-    if (m.refusal.moved > 0) out.push(`${name}: a refusal showing moved a stop or Send at ${m.refusal.moved} positions`)
+    // Folded, a refusal is an overlay and may move nothing. Unfolded, this 2-line string grows the dock as it does on any tree.
+    if (m.fold === 'on' && m.refusal.moved > 0) out.push(`${name}: a refusal showing moved a stop or Send at ${m.refusal.moved} positions`)
   }
   return out
 }
@@ -771,7 +772,7 @@ try {
   if (caught8.length === 0) red('CONTROL FAILED — a keep row planted over the whole shell hid no focused control; check 9 cannot fail')
   else console.log(`digishell-probe: CONTROL — ${caught8[0].slice(0, 110)} (caught)`)
   const size9 = [900, 600, '175']
-  const m9 = await measureAt('jtty', 'main.jtty-cockpit', size9, null, false, true, false, "addEventListener('pointerdown', () => requestAnimationFrame(() => { shell.scrollTop += 60 }), true); addEventListener('focus', () => { shell.scrollTop += 60 })")
+  const m9 = await measureAt('jtty', 'main.jtty-cockpit', size9, null, false, true, false, "addEventListener('pointerup', () => setTimeout(() => { shell.scrollTop += 60 }, 0), true); addEventListener('focus', () => { shell.scrollTop += 60 })")
   const caught9 = m9 ? pinReds(`JTTY at ${tagOf(size9)} (a press and a regain planted to scroll)`, m9) : []
   for (const what of ['a press moved', 'a window regain moved']) {
     const c = caught9.find((r) => r.includes(what))
