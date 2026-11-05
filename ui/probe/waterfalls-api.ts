@@ -48,6 +48,12 @@ export async function uiStateLoad(): Promise<any> { return {} }
 export async function getAllSpots(): Promise<any> { return [] }
 export async function getNeedAlerts(): Promise<any> { return [] }
 export async function getPropagation(): Promise<any> { return null }
+// The path and band outlooks are a PathPrediction or null; the generated `{}` / `[]` default has no
+// `bands`, and Connect's panes read `outlook?.bands`, so it crashed Connect in every probe.
+export async function getPathOutlook(): Promise<any> { return null }
+export async function getBandOutlook(): Promise<any> { return null }
+export async function getGettingOut(): Promise<any> { return { count: 0, maxKm: 0, reports: [] } }
+export async function getKc2gMuf(): Promise<any> { return [] }
 export async function getFeedHealth(): Promise<any> { return null }
 export async function getXrayNow(): Promise<any> { return null }
 export async function getDxpedWindows(): Promise<any> { return [] }
@@ -69,6 +75,9 @@ export async function jttyAutoArm(): Promise<any> { return jtty }
 export async function jttyArm(): Promise<any> { return jtty }
 export async function jttySetBand(lo: number, hi: number): Promise<any> { return { ...jtty, lowHz: lo, highHz: hi } }
 export async function getSstvState(): Promise<any> { return sstv }
+// The live meters as the backend sends them (`MeterReadout`): no tone heard is null, never absent. The
+// generated `[]`/`{}` default left `cwToneHz` undefined, which the CW zero-beat readout drew as "-NaN Hz".
+export async function getMeters(): Promise<any> { return { rxLevel: 0, smeterDb: null, cwToneHz: null } }
 export async function getSpectrumRow(): Promise<any> {
   const row = Array.from({ length: 512 }, (_, i) => 0.1 + 0.05 * Math.random() + ((i > 190 && i < 194) || (i > 300 && i < 303) ? 0.6 : 0))
   return { row, loHz: 0, hiHz: 4000, source: 'audio' }
@@ -78,8 +87,20 @@ export async function cwDecode(): Promise<any> {
     workedCall: null, rst: null, name: null, turn: null }
 }
 let seq = 0
-export async function getScopeFrame(lo: number, hi: number): Promise<any> {
+const audioFrame = (lo: number, hi: number) => {
   const bins = Array.from({ length: 512 }, (_, i) => 0.25 + 0.15 * Math.random() + (i % 64 < 3 ? 0.5 : 0))
   return { seq: ++seq, tMs: Date.now(), source: 'audio', loHz: lo, hiHz: hi, scale: { kind: 'relative' }, bins }
 }
-export async function getRfFrame(): Promise<any> { return null }
+// A RADIO WITH ITS OWN SCOPE, when the page's storage says so (`probe.rigScope`): an Icom CI-V sweep of
+// ±25 kHz round the dial, for CW's rule that such a radio's scope strip opens at 40 %.
+const rigScope = () => localStorage.getItem('probe.rigScope') === '1'
+const rfFrame = () => {
+  const dial = snapshot.radio.dialMhz * 1e6
+  const bins = Array.from({ length: 475 }, () => 0.2 + 0.1 * Math.random())
+  return { seq: ++seq, tMs: Date.now(), source: 'civ', loHz: dial - 25_000, hiHz: dial + 25_000, scale: { kind: 'relative' }, bins }
+}
+export async function getScopeFrame(lo: number, hi: number): Promise<any> { return rigScope() ? rfFrame() : audioFrame(lo, hi) }
+export async function getAudioScopeFrame(lo: number, hi: number): Promise<any> { return audioFrame(lo, hi) }
+export async function getRfFrame(): Promise<any> { return rigScope() ? rfFrame() : null }
+// The scope span the cockpit asks of a radio scope answers the snapshot, as the backend does.
+export async function setScopeSpan(): Promise<any> { return snapshot }

@@ -29,6 +29,7 @@ import {
   resumeChatCq as apiResumeChatCq,
   setFrequency as apiSetFrequency,
   sstvTune as apiSstvTune,
+  sstvTuneOnOpen as apiSstvTuneOnOpen,
   setBlockedCalls as apiSetBlockedCalls,
   js8SetRxBlocklist,
   js8SetGroups,
@@ -2058,6 +2059,17 @@ function App() {
     },
     [],
   )
+
+  // #451: the SSTV screen's tune on opening — the app's tune, never remembered as the
+  // operator's Phone dial (`sstv_tune_on_open`).
+  const handleSstvTuneOnOpen = useCallback((dialMhz: number, band: string, mode: string) => {
+    void withErrorToast(
+      () => apiSstvTuneOnOpen(dialMhz, band, mode),
+      t('shell.frequency.failed'),
+    ).then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [])
 
   // The app parking the dial on one of its OWN channels (the ISS SSTV auto-arm's 145.800 FM).
   // A dedicated verb, not handleSetFrequency: the backend records who authored a dial write,
@@ -4535,6 +4547,10 @@ function App() {
                 onSnap={setSnap}
                 active={effectiveView === 'sstv'}
                 onSetFrequency={handleSstvTune}
+                // #451. Undefined until the settings have loaded, so an entry at startup waits for
+                // the answer instead of being spent as "off".
+                tuneOnOpen={settings ? settings.sstvTuneOnOpen === true : undefined}
+                onTuneOnOpen={handleSstvTuneOnOpen}
                 onSetTxEnabled={handleSetTxEnabled}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 txModeDefault={settings?.sstvDefaultTxMode}

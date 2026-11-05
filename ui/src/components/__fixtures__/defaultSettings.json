@@ -72,6 +72,7 @@
   "rttyFskPort": "",
   "rttyBaud": 45.45,
   "rttyShiftHz": 170,
+  "rttyLowToneHz": 2125,
   "rttyReverse": false,
   "rttyAfskSideband": "lsb",
   "aiCwEnabled": true,

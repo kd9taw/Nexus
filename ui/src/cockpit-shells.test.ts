@@ -555,19 +555,84 @@ describe('the SSTV stamp has a real percentage base and the shell has real floor
     '.layout.single.psk-cockpit',
     '.layout.single.sstv-view',
   ]) {
-    it(`${shell} sets the fill-frame floor knob (--cockpit-fill-min, em units)`, () => {
-      // Region-less cockpits: the bare fill frame's inline `min-height:
-      // var(--cockpit-fill-min, 0)` is the ONLY floor channel a sheet cannot outrank —
-      // `.rtty-cockpit > .pane-frame { min-height: 10em }` shipped dead against the
-      // frame's inline `min-height: 0`. cockpit-panes.test.ts fences who may set it.
-      const v = finalDecl(shell, '--cockpit-fill-min')
-      expect(v, `${shell}: --cockpit-fill-min not set — its fill frame floors at 0`).not.toBeNull()
-      // An em length, or RTTY's short-cockpit knob over one (`var(--rtty-fill-floor, 10em)`, set in
-      // cockpit-panes.css `.rtty-cockpit`): the stock em value stands wherever nothing sets the knob, as on
-      // PSK and SSTV, which share this rule.
-      expect(/^(\d+(\.\d+)?em|var\(--rtty-fill-floor, \d+(\.\d+)?em\))$/.test(v!), `${shell} --cockpit-fill-min is \`${v}\``).toBe(true)
+    it(`${shell} no longer sets the fill-frame floor knob: its frames are in a pane region`, () => {
+      // While these cockpits were region-less, their bare fill frames' inline `min-height:
+      // var(--cockpit-fill-min, 0)` was floored from the shell. Since 2026-11-04 the frames stand in
+      // the shell's one `.cockpit-panes` region, whose bounded flow sets the yielding floor itself
+      // (cockpit-panes.css); a shell value would only be dead weight inherited past it.
+      expect(finalDecl(shell, '--cockpit-fill-min')).toBeNull()
     })
   }
+})
+
+// THE PINNED HEADER (SSTV, RTTY, PSK — 2026-11-04). On a short or zoomed window these shells' deficit
+// valve scrolls, and the header (mode, dial, band, ⊞ Panels, power, CAT) scrolled out of the window with
+// the scope, while only the TX strip and the dock stayed. CockpitHeader `pinned` adds
+// `.cockpit-header-pinned` (cockpit-panes.css, loaded after this sheet): sticky at the top of the shell's
+// scrollport. COMPUTED over both sheets in load order, against the header's real chain in each shell, so a
+// later or heavier styles.css rule that took position, top, the background or the stacking back would
+// turn this red — the dead-fix mechanism this file exists for.
+const PANES_RULES = parseRules(
+  readFileSync(fileURLToPath(new URL('./cockpit-panes.css', import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''),
+)
+function winningAcross<T>(chain: Array<Set<string>>, blockValue: (body: string) => T | null): { value: T; selector: string } | null {
+  let win: { value: T; selector: string; spec: number; order: number } | null = null
+  const all = [...RULES, ...PANES_RULES.map((r) => ({ ...r, order: r.order + RULES.length + 1 }))]
+  for (const r of all) {
+    if (r.media !== null || !matchesChain(r.selector, chain)) continue
+    const v = blockValue(r.body)
+    if (v === null) continue
+    const spec = specificity(r.selector)
+    if (!win || spec > win.spec || (spec === win.spec && r.order >= win.order)) win = { value: v, selector: r.selector, spec, order: r.order }
+  }
+  return win && { value: win.value, selector: win.selector }
+}
+const declOf = (prop: string) => (body: string) => {
+  let v: string | null = null
+  for (const d of body.split(';')) {
+    const m = new RegExp(`^\\s*${prop}\\s*:\\s*([^]*?)\\s*$`).exec(d)
+    if (m) v = m[1].replace(/\s+/g, ' ')
+  }
+  return v
+}
+describe('SSTV, RTTY and PSK pin their header: it never scrolls out of the window', () => {
+  for (const shell of ['sstv-view', 'rtty-cockpit', 'psk-cockpit']) {
+    const head = [...shellChain(shell), new Set(['cockpit-header', 'cockpit-header-pinned'])]
+    it(`.${shell}: the header resolves sticky at top 0, opaque, never stacked over the strip`, () => {
+      expect(winningAcross(head, declOf('position'))?.value).toBe('sticky')
+      expect(winningAcross(head, declOf('top'))?.value).toBe('0')
+      expect(winningAcross(head, declOf('background'))?.value).toBe('var(--bg)')
+      const strip = [...shellChain(shell), new Set(['cockpit-txstrip'])]
+      // The strip wins any overlap (equal z, later sibling): a broken parking hides the dial, not Stop TX.
+      expect(Number(winningAcross(head, declOf('z-index'))?.value)).toBeLessThanOrEqual(Number(winningAcross(strip, declOf('z-index'))?.value))
+      // The strip parks UNDER it, at the height the strip measures.
+      expect(winningAcross(strip, declOf('top'))?.value).toBe('var(--cockpit-txstrip-top, 0px)')
+      // …and the dock (SSTV's TX bar or `.cockpit-txdock`) is no lower than the header either: Send and
+      // Stop win any overlap.
+      const dock = [...shellChain(shell), new Set([shell === 'sstv-view' ? 'sstv-tx-bar' : 'cockpit-txdock'])]
+      expect(Number(winningAcross(head, declOf('z-index'))?.value)).toBeLessThanOrEqual(Number(winningAcross(dock, declOf('z-index'))?.value))
+    })
+    it(`.${shell}: the band the header's shadow covers is exactly the shell's top padding`, () => {
+      // A sticky box parks inside its scroller's padding, so the shell's top padding stays open above
+      // the header and content scrolled through it in view. The shadow lifts the header's box by the
+      // padding the shell actually computes; a different padding would leave a band or cover the header.
+      const pad = winningAcross(shellChain(shell), declOf('padding'))?.value
+      expect(pad, 'the shell declares no padding').toBeTruthy()
+      const top = pad!.split(' ')[0]
+      // (One pixel more, for a shell edge on a subpixel; it lies outside the scrollport.)
+      expect(winningAcross(head, declOf('box-shadow'))?.value).toBe(`0 calc(-1 * ${top} - 1px) 0 var(--bg)`)
+      expect(winningAcross(shellChain(shell), declOf('padding-top')), 'a padding-top longhand would move the band').toBeNull()
+    })
+    it(`.${shell}: the header is still a direct shell child the valve scrolls past, and the shell still scrolls`, () => {
+      // Sticky needs a scrolling ancestor to stick in: the shell's own valve.
+      expect(winningOverflowY(shellChain(shell), null)?.value).toBe('auto')
+    })
+  }
+  it('the control: every other cockpit header is not pinned by any rule (FT, Phone, CW, JS8, JTTY keep theirs)', () => {
+    for (const shell of ['phone-cockpit', 'cw-cockpit', 'js8-cockpit', 'jtty-cockpit', 'operate-cockpit']) {
+      expect(winningAcross([...shellChain(shell), new Set(['cockpit-header'])], declOf('position')), shell).toBeNull()
+    }
+  })
 })
 
 /** Final flex-shrink a block computes (longhand + shorthand, in-block order). */
@@ -1598,4 +1663,78 @@ describe('the pane region’s column dividers stack under the dock and the TX st
       }
     })
   }
+})
+
+describe("CW's Both view: the radio's scope and the audio view stacked inside the strip (2026-11-04)", () => {
+  // `.scope-stack` (cockpit-panes.css) holds two FILL CockpitPaneFrames inside `.ph-scope-panel`. The
+  // strip's height must stay the divider's: the stack is the strip's grower in place of the one
+  // `.ph-scope`, with basis 0 and no floor, and each frame's body is the scroller its scope's floor
+  // sits in. Computed across both sheets, ordered as main.tsx imports them, for the reason the RF
+  // pane test above gives.
+  const panes = parseRules(
+    readFileSync(fileURLToPath(new URL('./cockpit-panes.css', import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''),
+  ).map((r) => ({ ...r, order: r.order + 1_000_000 }))
+  const winner = <T,>(chain: Array<Set<string>>, blockValue: (body: string) => T | null) => {
+    let win: { value: T; selector: string; spec: number; order: number } | null = null
+    for (const r of [...RULES, ...panes]) {
+      if (r.media !== null || !matchesChain(r.selector, chain)) continue
+      const v = blockValue(r.body)
+      if (v === null) continue
+      const spec = specificity(r.selector)
+      if (!win || spec > win.spec || (spec === win.spec && r.order >= win.order)) {
+        win = { value: v, selector: r.selector, spec, order: r.order }
+      }
+    }
+    return win
+  }
+  const blockBasis = (body: string): string | null => {
+    let v: string | null = null
+    for (const decl of body.split(';')) {
+      let m = /^\s*flex-basis\s*:\s*(\S+)\s*$/.exec(decl)
+      if (m) {
+        v = m[1]
+        continue
+      }
+      m = /^\s*flex\s*:\s*\S+\s+\S+\s+(\S+)\s*$/.exec(decl)
+      if (m) v = m[1]
+    }
+    return v
+  }
+  const strip = [...shellChain('cw-cockpit'), new Set(['ph-scope-panel'])]
+  const stack = [...strip, new Set(['scope-stack'])]
+  const body = [...stack, new Set(['pane-frame']), new Set(['pane-body'])]
+
+  it('the stack is a column that grows into the strip from a zero basis, with no floor of its own', () => {
+    expect(winner(stack, blockFlexDirection)?.value).toBe('column')
+    expect(winner(stack, blockGrow)?.value).toBe(1)
+    expect(['0', '0px', '0%']).toContain(winner(stack, blockBasis)?.value)
+    const floor = winner(stack, blockLonghand('min-height'))
+    expect(floor?.value, `the stack's floor comes from \`${floor?.selector}\``).toBe('0')
+  })
+
+  it('the strip itself still takes its height from the divider (grow 0), stack or not', () => {
+    expect(winner(strip, blockGrow)?.value).toBe(0)
+  })
+
+  it("each frame's body in the stack scrolls, so the scope's readable floor never pushes the strip", () => {
+    const scrolls = winner(body, (b) => blockOverflowY(b))
+    expect(scrolls?.value, `overflow-y from \`${scrolls?.selector}\``).toMatch(/^(auto|scroll)$/)
+    // The floor is there, and it is the one under that scroller.
+    expect(winner([...body, new Set(['rf-scope'])], blockLonghand('min-height'))?.value).not.toBeNull()
+  })
+
+  it('on a short window the halves stand side by side, and may shrink below their toolbars', () => {
+    const beside = [...strip, new Set(['scope-stack', 'scope-stack--beside'])]
+    const dir = winner(beside, blockFlexDirection)
+    expect(dir?.value, `direction from \`${dir?.selector}\``).toBe('row')
+    expect(winner(beside, blockLonghand('min-width'))?.value).toBe('0')
+    // It is still the strip's grower from a zero basis with no floor.
+    expect(winner(beside, blockGrow)?.value).toBe(1)
+    expect(winner(beside, blockLonghand('min-height'))?.value).toBe('0')
+  })
+
+  it('control: without the stack the strip holds the one scope as before (no stack rule reaches it)', () => {
+    expect(winner([...strip, new Set(['ph-scope'])], blockGrow)?.value).toBe(1)
+    expect(winner([...strip, new Set(['ph-scope'])], blockLonghand('min-height'))?.value).toBe('0')
+  })
 })

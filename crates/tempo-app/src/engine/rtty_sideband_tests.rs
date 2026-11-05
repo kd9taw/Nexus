@@ -93,3 +93,108 @@ fn fsk_ignores_the_afsk_sideband() {
         assert!(!e.rtty_reverse(), "{side}");
     }
 }
+
+/// A station with a saved tone pair: the low tone in Settings, nothing netted.
+fn saved_pair(low: u32) -> Engine {
+    let mut e = station("lsb", false);
+    let mut s = e.settings().clone();
+    s.rtty_low_tone_hz = low;
+    e.apply_settings(s);
+    e
+}
+
+/// THE SAVED TONE PAIR IS WHERE RTTY SITS: the decoder's cursors, the AFSK transmitter's tones
+/// and the privilege gate all read the one centre, and un-netted it is the saved pair.
+#[test]
+fn a_saved_1275_pair_is_where_the_decoder_and_the_transmitter_sit() {
+    // CONTROL: nothing saved is the 2125/2295 standard, as before the setting existed.
+    let e = station("lsb", false);
+    let st = e.rtty_state();
+    assert_eq!((st.mark_hz, st.space_hz), (2125.0, 2295.0));
+
+    let e = saved_pair(1275);
+    assert_eq!(e.rtty_center_hz(), 1360.0);
+    let st = e.rtty_state();
+    assert_eq!((st.mark_hz, st.space_hz), (1275.0, 1445.0), "the cursors");
+    assert_eq!(
+        emitted(&e),
+        (-1275.0, -1445.0),
+        "the AFSK tones, below the dial on LSB"
+    );
+    assert_eq!(
+        e.rtty_tx_mark_hz(),
+        1275.0,
+        "what the privilege gate judges"
+    );
+    // On USB the same saved pair swaps, so mark stays high on RF — the low tone is not "mark".
+    let mut s = e.settings().clone();
+    s.rtty_afsk_sideband = "usb".into();
+    let mut u = e;
+    u.apply_settings(s);
+    assert_eq!(
+        emitted(&u),
+        (1445.0, 1275.0),
+        "USB: the same two tones, mark the upper"
+    );
+}
+
+/// The privilege gate judges the SAVED pair, not 2125: a dial where the standard pair sits just
+/// inside the top of the 20 m data segment puts a 1275 pair 850 Hz higher on RF, outside it.
+#[test]
+fn the_privilege_gate_judges_the_saved_pair() {
+    let dial = 14.1514; // LSB: the 2125 pair tops out at 14.149275, the 1275 pair at 14.150125
+    assert!(
+        station("lsb", false).rtty_emission_ok(dial),
+        "control: 2125 is inside"
+    );
+    assert!(
+        !saved_pair(1275).rtty_emission_ok(dial),
+        "a 1275 pair at this dial lands above 14.150 and must be refused"
+    );
+}
+
+/// A waterfall net still moves RTTY for the session; a save that MOVES the saved pair re-homes
+/// onto it, and a save that leaves the pair alone (any other setting) keeps the net.
+#[test]
+fn a_net_holds_until_a_save_moves_the_saved_pair() {
+    let mut e = saved_pair(1275);
+    e.rtty_net(1800.0).expect("unkeyed: the net is taken");
+    assert_eq!(e.rtty_center_hz(), 1800.0);
+    // An unrelated save keeps the net.
+    let mut s = e.settings().clone();
+    s.rtty_shift_hz = 170;
+    s.cw_wpm = s.cw_wpm.saturating_add(1);
+    e.apply_settings(s);
+    assert_eq!(
+        e.rtty_center_hz(),
+        1800.0,
+        "an unrelated save dropped the net"
+    );
+    // Moving the pair re-homes onto it.
+    let mut s = e.settings().clone();
+    s.rtty_low_tone_hz = 2125;
+    e.apply_settings(s);
+    assert_eq!(
+        e.rtty_center_hz(),
+        2210.0,
+        "the new saved pair, not the old net"
+    );
+}
+
+/// A saved low tone outside 300–2700 Hz (a cleared box, a hand-edited file, a Remote write) is
+/// not used: RTTY sits on the 2125/2295 standard instead of a pair at the passband's edge.
+#[test]
+fn an_out_of_range_saved_tone_falls_back_to_the_standard_pair() {
+    for bad in [0, 10, 2701, 9000] {
+        let e = saved_pair(bad);
+        assert_eq!(e.rtty_center_hz(), 2210.0, "stored {bad}");
+        assert_eq!(
+            e.rtty_tx_mark_hz(),
+            2125.0,
+            "what the gate judges, stored {bad}"
+        );
+    }
+    // CONTROL: the range edges are used as saved.
+    assert_eq!(saved_pair(300).rtty_center_hz(), 385.0);
+    assert_eq!(saved_pair(2700).rtty_center_hz(), 2785.0);
+}

@@ -440,8 +440,17 @@ try {
   }
   // A big log stays virtualised: only the rows in view (and the overscan) are in the page, however
   // far it scrolls.
+  //
+  // The scroll is 240 drawn frames, so how long it takes is the machine's frame time, never part of
+  // the check: 34 ms a frame on four cores of the development box (8.2 s), more on a CI runner. It
+  // used to be ONE Runtime.evaluate awaiting all 240, which browser-runtime.mjs ends after 10 s, so a
+  // runner drawing slower than 42 ms a frame went red with "Browser command timed out" though the log
+  // was virtualised (reproduced here on one core). So the page runs the scroll on its own and the
+  // probe asks, in short calls, whether it has finished; two minutes is ample at any frame rate a
+  // runner draws.
   const big = await open(1920, 1080, '?n=10000&zoom=1')
-  const perf = await big.evaluate(`new Promise((done) => {
+  await big.evaluate(`(() => {
+    window.__scroll = null
     const s = document.querySelector('.log-scroll')
     const frames = [], counts = []
     let last = performance.now(), i = 0
@@ -450,10 +459,17 @@ try {
       counts.push(document.querySelectorAll('.logbook-row:not(.head)').length)
       s.scrollTop += 120
       if (++i < 240) requestAnimationFrame(step)
-      else done({ total: s.scrollHeight, maxRows: Math.max(...counts), meanFrameMs: +(frames.slice(1).reduce((a, b) => a + b, 0) / (frames.length - 1)).toFixed(1), maxFrameMs: +Math.max(...frames.slice(1)).toFixed(1) })
+      else window.__scroll = { total: s.scrollHeight, maxRows: Math.max(...counts), meanFrameMs: +(frames.slice(1).reduce((a, b) => a + b, 0) / (frames.length - 1)).toFixed(1), maxFrameMs: +Math.max(...frames.slice(1)).toFixed(1) }
     }
     requestAnimationFrame(step)
-  })`)
+    return true
+  })()`)
+  let perf = null
+  for (const until = Date.now() + 120_000; !perf && Date.now() < until; ) {
+    await sleep(250)
+    perf = await big.evaluate('window.__scroll')
+  }
+  if (!perf) console.error('logbook-probe: the 10,000-contact scroll did not finish its 240 frames in two minutes')
   console.log(`logbook-probe: 10,000 contacts while scrolling: ${JSON.stringify(perf)}`)
   if (!perf || perf.maxRows > 80) red(`a 10,000-contact log rendered ${perf?.maxRows} rows at once — it is not virtualised`)
   await big.close()

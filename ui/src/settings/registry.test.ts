@@ -543,6 +543,9 @@ describe('searchSettings — the operator types their own words', () => {
     expect(ids('colour blind')).toContain('waterfall-scopes')
     expect(ids('logbook globe')).toContain('map-globe')
     expect(ids('reduce motion')).toContain('performance')
+    // The two power words: the audio drive lives in Audio, SSTV's starting RF power in SSTV.
+    expect(ids('drive')).toContain('audio')
+    expect(ids('rf power')).toContain('sstv')
     // #390: the note on each watch-list entry, whose rows sit in the Alerts section.
     expect(ids('watch list notes')).toContain('alerts')
     // The built-in themes (2026-09-27) by their names, and by what an operator wants of one; bare

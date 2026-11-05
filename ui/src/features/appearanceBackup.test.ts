@@ -43,6 +43,7 @@ const FULL: Appearance = {
   waterfallPalette: 'cividis',
   ftWaterfallPalette: 'inferno',
   logbookGlobe: false,
+  txMeterStyle: 'needle',
 }
 
 describe('the backup carries the appearance', () => {
@@ -76,7 +77,7 @@ describe('the backup carries the appearance', () => {
     const section = JSON.parse(withAppearance(STATION, FULL)).appearance
     expect(Object.keys(section).sort()).toEqual(
       ['colours', 'density', 'ftWaterfallPalette', 'highContrast', 'logbookGlobe', 'motion', 'night',
-        'skin', 'textSize', 'theme', 'waterfallPalette'],
+        'skin', 'textSize', 'theme', 'txMeterStyle', 'waterfallPalette'],
     )
   })
 })
@@ -101,6 +102,7 @@ describe('a restore reads it back', () => {
         waterfallPalette: 'rainbow',
         ftWaterfallPalette: 'grayscale',
         logbookGlobe: 0,
+        txMeterStyle: 'NEEDLE',
         fieldMode: true, // never restored, even when a file carries it
       },
     })
@@ -110,6 +112,14 @@ describe('a restore reads it back', () => {
       colours: { readout: 'green' },
       ftWaterfallPalette: 'grayscale',
     })
+  })
+
+  it('the TX meters\' look comes back as Bars or Needle, and nothing else', () => {
+    expect(appearanceIn(withAppearance(STATION, { txMeterStyle: 'bars' }))).toEqual({ txMeterStyle: 'bars' })
+    expect(appearanceIn(withAppearance(STATION, { txMeterStyle: 'needle' }))).toEqual({ txMeterStyle: 'needle' })
+    for (const v of ['Needle', 'analog', 1, null]) {
+      expect(appearanceIn(JSON.stringify({ ...JSON.parse(STATION), appearance: { txMeterStyle: v } })), String(v)).toEqual({})
+    }
   })
 
   it('a built-in theme comes back, and so does "the standard theme" (null); a backup without one says nothing about it', () => {

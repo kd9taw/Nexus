@@ -190,3 +190,15 @@ describe('Tx Power slider: throttled live-apply', () => {
     }
   })
 })
+
+// The audio drive has one name on every screen: "Drive", the word the cockpit headers' drive
+// sliders carry (PowerSliderNames.test.tsx). It was "Tx Power", which read as the radio's RF
+// output, a different setting the RF power sliders move.
+describe('the drive slider is called Drive', () => {
+  // The slider is the drive (the curve tests above: it applies `setTxLevel`); here, what it reads.
+  it('its visible label is Drive', async () => {
+    await openRadioTab()
+    const label = slider().closest('label')!.querySelector('.settings-label')!
+    expect(label.firstChild?.textContent?.trim()).toBe('Drive')
+  })
+})

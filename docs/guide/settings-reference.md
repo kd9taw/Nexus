@@ -617,9 +617,10 @@ target to copy.*
 - **Live input spectrum** — what the selected input hears, live. "Band noise
   should show as a moving floor. Confirms the RIGHT device before you leave
   Settings." Flat means no audio on that input.
-- **Tx Power** — the audio **drive** into the rig, the same control as the
-  cockpit **Pwr** slider (they always match). "Trim down until your rig's ALC is
-  just zero. This is *not* the rig's RF watts — set those on the radio." On a Yaesu
+- **Drive** — the audio **drive** into the rig, the same control as the
+  cockpit **Drive** slider (they always match). "Trim down until your rig's ALC is
+  just zero. This is *not* the rig's RF power — set that on the radio, or with the
+  **RF power** slider on the Phone, RTTY, PSK and SSTV screens." On a Yaesu
   that turns its power down with the ALC, such as the FT-991A, the ALC reads above
   zero whenever the power is below full, so set the drive at full power.
 - **RX Level** — a live dB meter like WSJT-X. "Aim for around 30 dB. Anything
@@ -628,7 +629,7 @@ target to copy.*
   meter responds as you release the slider. Leave at ×1.0 unless the meter reads
   low (under ~15 dB) — FT8 decodes on a small signal, so you rarely need much."
 
-While you **Edit** a radio that is not the one in use, Tx Power and RX Gain are
+While you **Edit** a radio that is not the one in use, Drive and RX Gain are
 that radio's own levels: moving them changes nothing on the radio in use,
 **Save** stores them on the radio you are editing, and it uses them once it
 becomes the active radio.
@@ -1246,8 +1247,8 @@ All Decoder settings drive the *native* decoder. On a WSJT-X UDP source
   contact as its power (ADIF TX_PWR), and unlocks the Journey miles-per-watt &
   QRP feats." It also feeds the P.533 link budget. Leave blank if unknown, and
   contacts are logged with no power. This is what you actually run, for the
-  record — it commands nothing; the rig's power lives on the cockpit **Pwr**
-  slider.
+  record — it commands nothing; the rig's power lives on the radio, or on the **RF power**
+  slider of the Phone, RTTY, PSK and SSTV screens.
 
 Units used to be the last field in this row; it is now on the Station tab under
 [Operator & Radio](#operator--radio).
@@ -1392,11 +1393,20 @@ Comma-separated chip lists for the quick text you fire from each surface:
 
 **Signal**
 
-- **Baud rate** — 45.45 (the HF standard) or 75. Drives the TX bit clock and the
-  RX demodulator — true 45.45, never rounded to 45.
+- **Baud rate** — 45.45 (the HF standard), 50 (used in parts of Europe) or 75.
+  Drives the TX bit clock and the RX demodulator — true 45.45, never rounded to 45.
 - **Shift (Hz)** — 170 (the HF standard), 425 or 850. The TX tone pair and the RX
   demodulator both.
-- **Reverse (swap mark/space)** — swaps mark and space on TX and in the RX
+- **Low tone (Hz)** — where the decoder and the AFSK transmitter sit until you
+  click the waterfall: this tone and this plus the shift. 2125 gives the standard
+  2125/2295; 1275 gives 1275/1445. A waterfall click still moves both for the
+  session; changing this setting moves them back onto it. It is the *low* tone
+  rather than "mark" because which of the two is mark depends on the sideband and
+  Reverse. True FSK keys the rig's own tones, but the decoder still listens here,
+  so set it to the tones your rig's RTTY mode puts out.
+  It takes 300 to 2700 Hz, which keeps both tones inside the passband at any
+  shift; a cleared or out-of-range entry is not taken, and the box keeps the last
+  tone you gave it.- **Reverse (swap mark/space)** — swaps mark and space on TX and in the RX
   decoder, to work a station sending upside down. Not for running USB: pick the
   AFSK sideband instead, which keeps the sense right on its own.
 
@@ -1428,7 +1438,7 @@ PSK31 receive needs no setup: open the PSK screen, tune a watering hole
 prints. The click nets the *decoder* — it never moves the rig — and a
 slew-limited AFC (never more than ±25 Hz) rides small drift for you.
 
-PSK31 and QPSK31 both **transmit as well as receive** in this build. Nothing about
+PSK31, QPSK31 and PSK63 all **transmit as well as receive** in this build. Nothing about
 sending lives on this tab, which is why there is only one control here: you type and send
 from the [PSK cockpit](psk.md), and its dock carries the macros, the continuous-TX latch
 and its own Stop. An over is capped at 500 characters — about two to three
@@ -1730,10 +1740,10 @@ it well below their SSB drive.*
   there for one picture. **Automatic** follows the band: HF gets Scottie 1 (the
   NA calling-frequency convention — Martin 1 is the EU one), 2 m gets PD-120,
   which is what ARISS transmits. Pick one of the 15 modes to always start there.
-- **Transmit power** — the drive the SSTV screen starts on, and the level an
+- **RF power** — the RF power the SSTV screen starts on, and the power an
   image is sent at. Leave it blank and Nexus never touches your power. SSTV is up
   to 290 seconds of continuous key-down at full duty, so most operators run it
-  well below their SSB drive. Your Phone power cap still applies on top of this.
+  well below their SSB power. Your Phone power cap still applies on top of this.
 
 Your callsign is burned into the top-left of every picture you transmit and there
 is no switch for it: an SSTV over is one long carrier of picture-only audio, so

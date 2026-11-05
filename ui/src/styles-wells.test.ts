@@ -24,6 +24,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { SMeter } from './components/SMeter'
 import { TxMeters } from './components/TxMeters'
+import { TX_METER_STYLE_KEY } from './txMeterStyle'
 import { LevelMeter } from './components/LevelMeter'
 import { CockpitHeader } from './components/CockpitHeader'
 import { Waterfall } from './components/Waterfall'
@@ -33,9 +34,11 @@ import { PhoneScope } from './components/PhoneScope'
 import { ZeroBeat } from './components/ZeroBeat'
 import {
   MODES,
+  SKIN_MODES,
   baseTheme,
   chainOf,
   contrast,
+  deltaE,
   expandWith,
   isNight,
   parseRules,
@@ -80,7 +83,9 @@ const sheet = (name: string) =>
   readFileSync(resolve(process.cwd(), 'src', name), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
 const RULES = parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css'))
 const ROOT = Object.fromEntries(MODES.map((m) => [m, rootTokensFrom(RULES, m)])) as Record<Mode, Map<string, string>>
-const rootValue = (mode: Mode, token: string) => expandWith(ROOT[mode], `var(${token})`).trim()
+/** A mode outside MODES (the needle faces walk every built-in theme, SKIN_MODES) resolves on demand. */
+const rootOf = (mode: Mode) => (ROOT[mode] ??= rootTokensFrom(RULES, mode))
+const rootValue = (mode: Mode, token: string) => expandWith(rootOf(mode), `var(${token})`).trim()
 
 /** The built-in theme (features/skins.ts) a mode carries, if any. */
 const skinOf = (mode: Mode) => SKINS.find((s) => s.id === rolesOf(mode).skin)
@@ -232,7 +237,12 @@ interface Instrument {
   display: string
   /** Something painted INSIDE the well whose colour is a status ink, measured on the well. */
   fills?: string
+  /** SVG marks painted INSIDE the well by their `stroke`, each measured on the well (the needle faces). */
+  strokes?: string[]
 }
+
+/** The needle faces' marks: the needle, the peak mark (asserted distinct from the needle below) and the scale. */
+const NEEDLE_STROKES = ['.ph-txneedle-needle', '.ph-txneedle-peak', '.ph-txneedle-scale']
 
 const INSTRUMENTS: Instrument[] = [
   { name: 'the S-meter', mount: () => createElement(SMeter, { radio: radio(false) }), display: '.ph-smeter-track', fills: '.ph-smeter-seg.lit' },
@@ -247,6 +257,20 @@ const INSTRUMENTS: Instrument[] = [
     mount: () => createElement(TxMeters, { radio: radio(true), inline: true }),
     display: '.ph-txmeter-track',
     fills: '.ph-txmeter-fill',
+  },
+  // #343: the needle faces (Settings ▸ Workspace ▸ TX meters ▸ Needle). Stored before the render and
+  // cleared after it (`rendered`), so no other instrument here is drawn as needles.
+  {
+    name: 'the needle TX meters (Phone/CW dock)',
+    mount: () => (localStorage.setItem(TX_METER_STYLE_KEY, 'needle'), createElement(TxMeters, { radio: radio(true), pinned: true })),
+    display: '.ph-txneedle-face',
+    strokes: NEEDLE_STROKES,
+  },
+  {
+    name: "the needle TX meters (Operate's strip cell)",
+    mount: () => (localStorage.setItem(TX_METER_STYLE_KEY, 'needle'), createElement(TxMeters, { radio: radio(true), inline: true })),
+    display: '.ph-txneedle-face',
+    strokes: NEEDLE_STROKES,
   },
   { name: 'the RX audio level meter', mount: () => createElement(LevelMeter, { value: 0.5 }), display: '.level-meter', fills: '.level-fill' },
   {
@@ -279,6 +303,8 @@ interface Rendered {
   display: El[]
   /** Each painted fill inside the well: its chain and its inline `background`, if any. */
   fills: { chain: El[]; inline: string }[]
+  /** Each `strokes` selector's first element's chain, in the instrument's order. */
+  strokes: El[][]
 }
 
 /** `tokensAt` once per mode and chain: several suites below resolve the same element in the
@@ -308,8 +334,14 @@ function rendered(i: Instrument): Rendered {
         inline: (f as HTMLElement).style.getPropertyValue('background') || (f as HTMLElement).style.background || '',
       }))
     : []
-  const out = { display: chainOf(el!), fills }
+  const strokes = (i.strokes ?? []).map((sel) => {
+    const s = container.querySelector(sel)
+    expect(s, `${i.name}: ${sel} did not render`).not.toBeNull()
+    return chainOf(s!)
+  })
+  const out = { display: chainOf(el!), fills, strokes }
   cleanup()
+  localStorage.clear()
   RENDERED.set(i, out)
   return out
 }
@@ -385,6 +417,32 @@ describe('what an instrument paints is dark, and what it paints on it reads', ()
       const ratio = contrast(c!, face)
       expect(ratio, `${i.name} in ${mode}: fill ${hex(c!)} on ${hex(face)} = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(3)
     }
+  })
+})
+
+describe('the needle faces: every mark reads on the face, and the peak mark is not the needle', () => {
+  // Every built-in theme, not only MODES' sentinel skins: Amber LCD and Green LCD are where a theme's
+  // accent sits next to its ink, and the peak mark was once the accent.
+  const STROKE_MODES = [...new Set([...MODES, ...SKIN_MODES])]
+  const withStrokes = INSTRUMENTS.filter((i) => i.strokes).flatMap((i) => STROKE_MODES.map((m) => [i.name, m, i] as const))
+  it.each(withStrokes)('%s in %s', (_n, mode, i) => {
+    const { display, strokes } = rendered(i)
+    const face = surfaceOf(display, mode, tokensOf(mode, display))
+    const inks = strokes.map((chain, k) => {
+      const w = winnerAt(RULES, mode, chain, 'stroke')
+      expect(w, `${i.strokes![k]} declares no stroke`).not.toBeNull()
+      const c = toRgb(expandWith(tokensOf(mode, chain), w!.value), face)
+      expect(c, `${i.strokes![k]}: the stroke did not compute (${w!.value})`).not.toBeNull()
+      const ratio = contrast(c!, face)
+      expect(ratio, `${i.name} in ${mode}: ${i.strokes![k]} ${hex(c!)} on ${hex(face)} = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(3)
+      return c!
+    })
+    // The peak mark and the needle cross at every reading the peak holds: they must differ by more than
+    // shape. ΔE 0.1 is the sheet's floor for two inks that must read apart (styles-palette-roles.test.ts,
+    // the frequency digits against the unconfirmed ink).
+    const [needle, peak] = inks
+    const d = deltaE(needle, peak)
+    expect(d, `${i.name} in ${mode}: needle ${hex(needle)} and peak ${hex(peak)} differ by ΔE ${d.toFixed(3)}`).toBeGreaterThanOrEqual(0.1)
   })
 })
 

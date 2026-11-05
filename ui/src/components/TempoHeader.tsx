@@ -7,6 +7,8 @@ import type { AppSnapshot, BandChannel, Tier } from '../types'
 import { bandLabelForMhz } from '../band'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
+import { TxMeters } from './TxMeters'
+import { useCompactChrome } from '../features/compactChrome'
 import { FrequencyControl } from './FrequencyControl'
 import { TuningStrip } from './TuningStrip'
 
@@ -79,6 +81,7 @@ export function TempoHeader({
 }: Props) {
   const cq = snap.chatCq ?? 'off'
   const [tuneStep, setTuneStep] = useState(100)
+  const chrome = useCompactChrome()
   const commitDial = (mhz: number) => {
     // An EMPTY band label is not a refusal: listening off the ham bands is first-class (operator,
     // 2026-08-13), so a typed WWV/shortwave/inter-band frequency tunes there. This used to
@@ -189,6 +192,9 @@ export function TempoHeader({
       onAtuBypass={onAtuBypass}
       onStopTx={onHaltTx}
       hold={{ on: snap.radio.holdTxFreq, onChange: onSetHoldTxFreq }}
+      // md and up, the read-only TX meters beside the cluster (SSTV's and Phone's arrangement): the
+      // header's Drive slider is set against the radio's ALC, so the ALC reads here.
+      meters={chrome.wide ? <TxMeters radio={snap.radio} strip /> : undefined}
     />
     </>
   )

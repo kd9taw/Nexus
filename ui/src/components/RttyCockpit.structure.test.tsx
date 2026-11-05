@@ -2,19 +2,16 @@
 //
 // RTTY COCKPIT SHELL STRUCTURE (2026-07-30 layout assessment, design3 §4 Phase 3).
 //
-// RTTY is the SMALL case of the pane-grid contract and the one place it is deliberately
-// applied in part: the cockpit has exactly ONE operator-content block (the decoded
-// stream), so it adopts CockpitPaneFrame + the pinned .cockpit-txdock and introduces NO
-// pane region. A region would have to pick a tier, and every multi-column tier is a
-// 2-or-3-track template with one filled column — i.e. it would MANUFACTURE the band of
-// dead space this whole rebuild exists to delete. (At one column it is no better: the
-// region's rows are content-height there, so the single frame would sit at its content
-// height with a void below it — literally the RTTY bug fixed at styles.css ~16323.)
-// The shell's own deficit valve (Batch 1) plus a grower frame is the whole mechanism here.
+// RTTY is on the cockpit shell contract (2026-11-04): header (PINNED — it never scrolls out of
+// the window), the waterfall strip, the TX strip, ONE pane region, the TX dock. The region holds
+// ONE column — the RF scope pane, the transcript, the log strip, the Stats pane — so it can never
+// pick a track it cannot fill, and it FILLS at every width (useRegionCols `oneGroup`): the old
+// objection to a region here, a content-height row with a void under it, was the stacking flow,
+// which a one-group region never takes.
 //
-// What the tests pin: the stream renders through a frame; every transmit control (macros,
-// the auto-sequencer row, Stop, the compose bar) renders in the dock and never inside a
-// pane; the ⊞ menu still hides exactly the stream; and no region is introduced.
+// What the tests pin: the panes render through frames in that one column; every transmit control
+// (macros, the auto-sequencer row, Stop, the compose bar) renders in the dock and never inside a
+// pane; the ⊞ menu still hides exactly the stream; the header is pinned.
 import type { Ref } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
@@ -82,7 +79,10 @@ vi.mock('../toast', () => ({
 vi.mock('./LogEntry', () => ({
   LogEntry: (p: { onEntryCall?: (call: string) => void }) => <div data-testid="log-stub" onClick={() => p.onEntryCall?.('W1AW')} />,
 }))
-vi.mock('./CockpitHeader', () => ({ CockpitHeader: () => <header className="cockpit-header" /> }))
+// The stub keeps the one prop the shell census reads: whether the cockpit pins its header.
+vi.mock('./CockpitHeader', () => ({
+  CockpitHeader: ({ pinned }: { pinned?: boolean }) => <header className={pinned ? 'cockpit-header cockpit-header-pinned' : 'cockpit-header'} />,
+}))
 // The RF scope pane's picture is a renderer canvas jsdom cannot draw; its frame and place are what
 // these cases check.
 vi.mock('./PhoneScope', () => ({ PhoneScope: (p: { feed?: string }) => <div data-testid="rfscope-stub" data-feed={p.feed} /> }))
@@ -147,13 +147,14 @@ describe('RttyCockpit pane shell', () => {
     // the transcript — the frames come after the strip, so a pane can never push the strip down.
     await renderCockpit({ panels: fakePanels() })
     const shell = document.querySelector('main.layout.single.rtty-cockpit')!
-    const frames = Array.from(shell.querySelectorAll(':scope > .pane-frame')).map((f) => f.getAttribute('data-pane'))
+    const frames = Array.from(shell.querySelectorAll(':scope > .cockpit-panes > .cockpit-col > .pane-frame')).map((f) => f.getAttribute('data-pane'))
     // …and the Stats pane, ticked too (it ships hidden here): the LAST frame, under the log strip. (The Recent
     // contacts pane, ticked too, stands inside the log strip's frame, not beside it.)
     expect(frames).toEqual(['rfScope', 'stream', 'log', 'stats'])
     const strip = shell.querySelector(':scope > .cockpit-txstrip')!
     expect(strip.previousElementSibling?.matches('.pane-splitter'), 'the TX strip left its place under the scope').toBe(true)
-    expect(strip.nextElementSibling?.getAttribute('data-pane'), 'the RF scope pane is not first under the TX strip').toBe('rfScope')
+    expect(strip.nextElementSibling?.matches('.cockpit-panes'), 'the pane region is not directly under the TX strip').toBe(true)
+    expect(shell.querySelector('.cockpit-col')!.firstElementChild?.getAttribute('data-pane'), 'the RF scope pane is not first in the region').toBe('rfScope')
     const pane = shell.querySelector('[data-pane="rfScope"]')!
     expect(pane.getAttribute('data-fit'), 'a scope can use the height it is given: a fill frame').toBe('fill')
     expect(pane.querySelector('[data-testid="rfscope-stub"]')?.getAttribute('data-feed')).toBe('rf')
@@ -180,7 +181,9 @@ describe('RttyCockpit pane shell', () => {
     // child between the two frames when there is a record to keep the split in — the census with a
     // record is in the divider's own block below. `.rtty-wf-row`: the waterfall's strip, which holds the
     // waterfall and, right of it, the tuning scope (2026-10-26); the waterfall is never a shell child.
-    const ALLOWED = ['.cockpit-header', '.rtty-wf-row', '.cw-keyer-warn', '.pane-frame', '.pane-splitter', '.cockpit-txstrip', '.cockpit-txdock']
+    // `.cockpit-panes`: the ONE pane region (2026-11-04); the frames and the divider between the transcript
+    // and the log strip are in its column, not shell children (the region block below).
+    const ALLOWED = ['.cockpit-header', '.rtty-wf-row', '.cw-keyer-warn', '.pane-splitter', '.cockpit-txstrip', '.cockpit-panes', '.cockpit-txdock']
     for (const el of Array.from(shell.children)) {
       expect(
         ALLOWED.some((s) => el.matches(s)),
@@ -189,8 +192,10 @@ describe('RttyCockpit pane shell', () => {
     }
     expect(document.querySelector('.cw-keyer-warn'), 'warn banner did not render — census untested').not.toBeNull()
     // Named, not just counted: a count alone goes green on the stream frame rendering twice.
-    const frames = Array.from(shell.querySelectorAll(':scope > .pane-frame'))
+    expect(shell.querySelectorAll(':scope > .pane-frame').length, 'a frame is a shell child again').toBe(0)
+    const frames = Array.from(shell.querySelectorAll(':scope > .cockpit-panes > .cockpit-col > .pane-frame'))
     expect(frames.map((f) => f.getAttribute('data-pane'))).toEqual(['stream', 'log'])
+    expect(shell.querySelectorAll(':scope > .cockpit-panes').length).toBe(1)
     expect(shell.querySelectorAll(':scope > .cockpit-txdock').length).toBe(1)
     // THE TX STRIP (2026-10-01): exactly one, a shell child directly under the scope (after
     // its divider), holding the stop controls the header used to hold — and the header none.
@@ -221,14 +226,19 @@ describe('RttyCockpit pane shell', () => {
     expect(pane!.querySelector('.rtty-arm')).not.toBeNull()
   })
 
-  it('introduces no pane region (one content pane cannot fill a multi-track template)', async () => {
+  it('one pane region with ONE column, filling at every width; the header is pinned', async () => {
+    // jsdom measures every region at 0 px wide, the narrowest window there is: a region that could
+    // stack would stamp 'stack' here. A one-group region stamps 'fill' (useRegionCols `oneGroup`).
     await renderCockpit()
-    expect(
-      document.querySelectorAll('.cockpit-panes').length,
-      'RTTY grew a pane region: with a single content block every tier leaves a track (or ' +
-        'the space under a content-height row) empty — the dead space this rebuild removes.',
-    ).toBe(0)
-    expect(document.querySelectorAll('.cockpit-col').length).toBe(0)
+    const shell = document.querySelector('main.layout.single.rtty-cockpit')!
+    const regions = shell.querySelectorAll(':scope > .cockpit-panes')
+    expect(regions.length, 'not exactly one pane region').toBe(1)
+    expect(regions[0].querySelectorAll(':scope > .cockpit-col').length, 'more than the one column').toBe(1)
+    expect([regions[0].getAttribute('data-cols'), regions[0].getAttribute('data-flow')]).toEqual(['1', 'fill'])
+    // The header: the shell's FIRST child (a sticky box never leaves its containing block), pinned.
+    const head = shell.firstElementChild!
+    expect(head.classList.contains('cockpit-header'), 'the header is not the first shell child').toBe(true)
+    expect(head.classList.contains('cockpit-header-pinned'), 'the header is not pinned: it scrolls away with the scope').toBe(true)
   })
 
   it('every transmit control lives in the pinned TX dock — never inside a pane', async () => {
@@ -328,7 +338,7 @@ describe('RTTY: the divider between the transcript and the log strip', () => {
     })
     return r
   }
-  const pane = (id: string) => document.querySelector<HTMLElement>(`main.rtty-cockpit > [data-pane="${id}"]`)!
+  const pane = (id: string) => document.querySelector<HTMLElement>(`main.rtty-cockpit > .cockpit-panes > .cockpit-col > [data-pane="${id}"]`)!
   const divider = () => screen.queryByRole('separator', { name: 'Decoded text / Log' })
   const stored = () => JSON.parse(localStorage.getItem(panelStorageKey('rtty')) ?? '{"share":{}}')
   const box = (el: HTMLElement, top: number, h: number) => {
@@ -336,13 +346,15 @@ describe('RTTY: the divider between the transcript and the log strip', () => {
   }
   beforeEach(() => localStorage.clear())
 
-  it('sits between the two frames, a shell child, only while both render and a record keeps the split', async () => {
+  it('sits between the two frames, in the region’s column, only while both render and a record keeps the split', async () => {
     await mountLive()
     const sep = divider()
     expect(sep, 'no divider between the transcript and the log').not.toBeNull()
     expect(sep!.previousElementSibling).toBe(pane('stream'))
     expect(sep!.nextElementSibling).toBe(pane('log'))
-    expect(sep!.parentElement!.matches('main.rtty-cockpit')).toBe(true)
+    expect(sep!.parentElement!.matches('main.rtty-cockpit > .cockpit-panes > .cockpit-col')).toBe(true)
+    // It gives back the column's gap, not the shell's (styles.css `.in-column`; cockpit-shells.test.ts computes the net).
+    expect(sep!.classList.contains('in-column')).toBe(true)
     expect(sep!.tabIndex).toBe(0)
     cleanup()
     await renderCockpit()
@@ -486,7 +498,7 @@ describe('the Stats pane under the log strip', () => {
     cleanup()
     await renderCockpit({ panels: fakePanels() })
     const shell = document.querySelector('main.layout.single.rtty-cockpit')!
-    const stats = shell.querySelector(':scope > [data-pane="stats"]')!
+    const stats = shell.querySelector(':scope > .cockpit-panes > .cockpit-col > [data-pane="stats"]')!
     expect(stats.getAttribute('data-fit')).toBe('content')
     expect(stats.previousElementSibling?.getAttribute('data-pane'), 'not directly under the log strip').toBe('log')
     expect(getCallStats).not.toHaveBeenCalled()

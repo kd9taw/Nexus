@@ -752,6 +752,38 @@ pub fn with_daemon_error(detail: String, said: &[String]) -> String {
     format!("{detail} Hamlib said: {}", picked.join(" / "))
 }
 
+/// Hamlib rigctld's own default TCP port, the one an operator's rigctld answers on unless told
+/// otherwise.
+const RIGCTLD_DEFAULT_PORT: u16 = 4532;
+
+/// #165: the words for a radio model on Connection Network at rigctld's own port, appended to a
+/// failed CAT check. `None` for every other setup.
+///
+/// A radio model there makes Nexus's rigctld open that address as the radio's CAT port and send
+/// it the radio's own commands. When what answers is a rigctld (the operator's own, already
+/// serving the radio to their logger), it hangs up on them, and the failure reads as a radio that
+/// is switched off ("rig power is off? … Connection reset by peer"). The cure is the radio model
+/// NET rigctl, which talks to that rigctld as one more client. Judged by the port alone, so it is
+/// worded as an if: a serial-over-network bridge on 4532 is possible, only unlikely.
+fn rigctld_port_hint(rig_model: u32, rig_conn: &str, rig_addr: &str) -> Option<String> {
+    // 0 is no radio (VOX); 2 is NET rigctl, the right model for this address.
+    if rig_model == 0
+        || rig_model == 2
+        || !tempo_app::settings::rig_conn_is_network(rig_conn, rig_addr)
+    {
+        return None;
+    }
+    let (_, port) = tempo_app::settings::split_host_port(rig_addr)?;
+    (port == RIGCTLD_DEFAULT_PORT).then(|| {
+        format!(
+            "{addr} is rigctld's own port. If a rigctld already serves your radio there, set \
+             Rig Model to NET rigctl (remote rigctld): this model sends the radio's own CAT \
+             commands to that address, and a rigctld hangs up on them.",
+            addr = rig_addr.trim()
+        )
+    })
+}
+
 // How much of the fault a daemon line actually names — `rigctld_proc::Explains`.
 //
 // **It moved, and the move is part of the fix.** Ranking used to happen here, at read time, over
@@ -3604,7 +3636,8 @@ enum PskGen {
 impl PskGen {
     fn new(cfg: tempo_core::psk::PskTxConfig, mode: (tempo_core::psk::PskModeKind, bool)) -> Self {
         match mode.0 {
-            tempo_core::psk::PskModeKind::Bpsk31 => {
+            // BPSK63 is the BPSK stream at its own symbol rate (`cfg.baud`).
+            tempo_core::psk::PskModeKind::Bpsk31 | tempo_core::psk::PskModeKind::Bpsk63 => {
                 Self::Bpsk(tempo_core::psk::PskStream::new(cfg))
             }
             tempo_core::psk::PskModeKind::Qpsk31 => {
@@ -7669,7 +7702,15 @@ impl RadioLoop {
                 if silent && rig.has_control() {
                     self.freq_misses = self.freq_misses.saturating_add(1);
                 }
-                let brief = dial_failure_brief(&e);
+                // OmniRig's own reason for a refused dial (#161: the rig file has no command for
+                // the VFO the radio is on). The rigctld answer only says RPRT -1.
+                let omni_why = (!silent)
+                    .then(|| self.rigctld_proc.as_ref().and_then(CatDaemon::omni))
+                    .flatten()
+                    .and_then(crate::omnirig::OmniDaemon::dial_refusal);
+                let brief = omni_why
+                    .clone()
+                    .unwrap_or_else(|| dial_failure_brief(&e).to_string());
                 self.dial_fail_count += 1;
                 if self.dial_fail_count < DIAL_SET_MAX_TRIES {
                     let tries = format!("({}/{DIAL_SET_MAX_TRIES})", self.dial_fail_count);
@@ -7716,10 +7757,7 @@ impl RadioLoop {
                         still_on.unwrap_or_default()
                     )
                 } else {
-                    format!(
-                        "the radio refused {mhz:.4} MHz — it does not cover that frequency{}",
-                        still_on.unwrap_or_default()
-                    )
+                    refused_dial_words(mhz, omni_why.as_deref(), &still_on.unwrap_or_default())
                 })
             }
         }
@@ -8946,6 +8984,11 @@ impl RadioLoop {
                 if ok == Some(false) {
                     if let Some(CatDaemon::Spawned(p)) = &self.rigctld_proc {
                         detail = with_daemon_error(detail, &p.said());
+                        if let Some(h) =
+                            rigctld_port_hint(want.rig_model, &want.rig_conn, &want.rig_addr)
+                        {
+                            detail = format!("{detail} {h}");
+                        }
                     }
                 }
                 self.cat_ok = ok;
@@ -12850,10 +12893,15 @@ impl RadioLoop {
         // machinery unkeys. Idle between keystrokes is CONTINUOUS REVERSALS — the PSK31
         // idle that holds the far end's sync — never silence under a held PTT.
         {
-            let psk_baud = tempo_core::psk::BAUD as f64;
             let ready = now >= self.psk_busy_until && self.may_key();
             let (abort, msg, stream_tick, center_hz, psk_mode) = {
                 let mut eng = engine_lock(engine);
+                // Sub-mode + QPSK reverse — engine truth, one read per tick so the
+                // one-shot, the stream and the look-ahead budget all key the same
+                // mode. The budget is in character times at the sub-mode's own rate,
+                // so at 62.5 Bd the stuck-carrier bound halves with the character.
+                let psk_mode = eng.psk_mode();
+                let psk_baud = psk_mode.0.baud() as f64;
                 // Keep the cockpit's sending indicator honest each tick (the
                 // latched stream keeps it true through the look-ahead, like RTTY).
                 eng.set_psk_sending(now < self.psk_busy_until);
@@ -12889,11 +12937,10 @@ impl RadioLoop {
                     },
                     stream_tick,
                     eng.psk_center_hz(),
-                    // Sub-mode + QPSK reverse — engine truth, one read per
-                    // tick so the one-shot and the stream key the same mode.
-                    eng.psk_mode(),
+                    psk_mode,
                 )
             };
+            let psk_baud = psk_mode.0.baud() as f64;
             if abort {
                 // Stop mid-over: dump the queued audio and unkey immediately.
                 // Same shared-transmitter care as RTTY's abort: the cut fires
@@ -12949,10 +12996,7 @@ impl RadioLoop {
                     {
                         self.psk_stream = Some(PskTxStream {
                             gen: PskGen::new(
-                                tempo_core::psk::PskTxConfig {
-                                    center_hz,
-                                    ..tempo_core::psk::PskTxConfig::default()
-                                },
+                                tempo_core::psk::PskTxConfig::for_mode(center_hz, psk_mode.0),
                                 psk_mode,
                             ),
                             center_hz,
@@ -13022,13 +13066,13 @@ impl RadioLoop {
                 // through the SAME TX audio output the FT8 modem uses — one
                 // route, so the operator's tx_level / drive / ALC discipline
                 // applies unchanged.
-                let cfg = tempo_core::psk::PskTxConfig {
-                    center_hz,
-                    ..tempo_core::psk::PskTxConfig::default()
-                };
+                let cfg = tempo_core::psk::PskTxConfig::for_mode(center_hz, psk_mode.0);
                 let buf = match psk_mode.0 {
-                    tempo_core::psk::PskModeKind::Bpsk31 => {
-                        tempo_core::psk::bpsk_samples(&tempo_core::psk::psk_over_bits(&text), &cfg)
+                    tempo_core::psk::PskModeKind::Bpsk31 | tempo_core::psk::PskModeKind::Bpsk63 => {
+                        tempo_core::psk::bpsk_samples(
+                            &tempo_core::psk::psk_over_bits_for(&text, psk_mode.0),
+                            &cfg,
+                        )
                     }
                     tempo_core::psk::PskModeKind::Qpsk31 => tempo_core::psk::qpsk_samples(
                         &tempo_core::psk::qpsk_over_bits(&text),
@@ -18664,8 +18708,27 @@ impl Transport {
             // says why, or dials again once it no longer does).
             || self.tci_target() != o.tci_target()
             || self.tci_dials_nexus_by_name() != o.tci_dials_nexus_by_name()
-            || self.broker_self_port != o.broker_self_port
+            // Where the CAT broker is, compared only where it is in the way (#431): a broker that
+            // stepped aside to another port (in a second radio window, at every launch) moved
+            // nothing this link talks to, and rebuilding killed and restarted its rigctld.
+            || self.broker_in_the_way() != o.broker_in_the_way()
             || self.address_refusal != o.address_refusal
+    }
+
+    /// Where Nexus's own CAT broker (`broker_self_port`) is in this link's way: on its rigctld TCP
+    /// Port, which [`open_cat`] then refuses as a self-collision, and on its NET rigctl address on
+    /// this computer, which [`net_rigctld_shared_directly`] then does not share. These are the only
+    /// places the opener reads the broker's port, so a move that changes neither changes nothing
+    /// the link does. (A broker on the address is also an [`AddressRefusal`], compared beside it.)
+    fn broker_in_the_way(&self) -> (bool, bool) {
+        let on = |port: u16| self.broker_self_port == Some(port);
+        let address = tempo_app::settings::net_rigctl_addr_here(
+            self.rig_model,
+            &self.rig_conn,
+            &self.rig_addr,
+        )
+        .is_some_and(|(_, port)| on(port));
+        (on(self.rigctld_port), address)
     }
 
     /// Is CAT for this radio Nexus's own Icom network client? The rule lives in tempo-app
@@ -19228,6 +19291,17 @@ fn alias_for(
     Some(first)
 }
 
+/// The give-up sentence for a dial the radio refused. `why` is the backend's own reason when it
+/// has one (OmniRig's, #161); without it the refusal is read as the radio not covering the dial.
+fn refused_dial_words(mhz: f64, why: Option<&str>, still_on: &str) -> String {
+    match why {
+        Some(why) => format!("the radio refused {mhz:.4} MHz — {why}{still_on}"),
+        None => {
+            format!("the radio refused {mhz:.4} MHz — it does not cover that frequency{still_on}")
+        }
+    }
+}
+
 fn dial_failure_brief(e: &std::io::Error) -> &'static str {
     use std::io::ErrorKind::*;
     if crate::rig::cat_unreachable(e) {
@@ -19692,6 +19766,9 @@ fn open_cat(
                 match &proc {
                     CatDaemon::Spawned(p) => {
                         probe.detail = with_daemon_error(probe.detail, &p.said());
+                        if let Some(h) = rigctld_port_hint(t.rig_model, &t.rig_conn, &t.rig_addr) {
+                            probe.detail = format!("{} {h}", probe.detail);
+                        }
                     }
                     CatDaemon::Omni(d) => {
                         if let Err(e) = d.health() {
@@ -19993,6 +20070,7 @@ mod tests {
     mod late_key;
     mod omnirig_coverage;
     mod pc_mic;
+    mod psk63_keying;
     mod ptt_lines;
     mod readback_coverage;
     mod receive_source;
@@ -22594,6 +22672,49 @@ mod tests {
         assert_eq!(with_daemon_error(ours.clone(), &["   ".to_string()]), ours);
     }
 
+    /// #161: OmniRig's reason for a refused dial is the sentence, not "does not cover".
+    #[test]
+    fn a_refused_dial_says_omnirigs_reason_when_there_is_one() {
+        let why = crate::omnirig::NO_DIAL_COMMAND;
+        let s = refused_dial_words(7.074, Some(why), "; still on 14.0740 MHz");
+        assert!(
+            s.contains(why) && s.ends_with("still on 14.0740 MHz"),
+            "{s}"
+        );
+        assert!(!s.contains("does not cover"), "{s}");
+        // CONTROL: no reason keeps the coverage sentence.
+        assert_eq!(
+            refused_dial_words(144.39, None, ""),
+            "the radio refused 144.3900 MHz — it does not cover that frequency"
+        );
+    }
+
+    /// #165: a radio model (an FTDX10) on Connection Network at 127.0.0.1:4532, where the
+    /// operator's own rigctld already serves the radio. Nexus's rigctld then sends the FTDX10's
+    /// own CAT commands to that rigctld, which hangs up ("rig power is off? … Connection reset by
+    /// peer"), and nothing said the model was the thing to change.
+    #[test]
+    fn a_radio_model_pointed_at_a_rigctld_port_is_told_to_use_net_rigctl() {
+        let hint = rigctld_port_hint(1042, "network", "127.0.0.1:4532")
+            .expect("a radio model at rigctld's own port gets the hint");
+        assert!(hint.contains("NET rigctl"), "{hint}");
+        assert!(hint.contains("127.0.0.1:4532"), "{hint}");
+        // A rigctld on another computer is the same mistake.
+        assert!(rigctld_port_hint(1042, "network", "192.168.1.20:4532").is_some());
+
+        // CONTROLS. NET rigctl itself is the right setup: no hint.
+        assert_eq!(rigctld_port_hint(2, "network", "127.0.0.1:4532"), None);
+        // Another port is a serial-over-network bridge or a radio's own LAN port: no guess.
+        assert_eq!(
+            rigctld_port_hint(1042, "network", "192.168.1.20:4533"),
+            None
+        );
+        // A serial radio has no address to judge, whatever the field still holds.
+        assert_eq!(rigctld_port_hint(1042, "serial", "127.0.0.1:4532"), None);
+        // No radio model (VOX / none) has no CAT to send there.
+        assert_eq!(rigctld_port_hint(0, "network", "127.0.0.1:4532"), None);
+    }
+
     /// ⭐ **THE DELIVERABLE: the sentence an operator actually reads, for each of the four ways
     /// CAT fails**, computed from stderr captured verbatim from the REAL bundled
     /// `rigctld.exe` (Hamlib 4.7.1, `src-tauri/resources/hamlib`) at the `-vvv` Nexus launches
@@ -22920,6 +23041,68 @@ mod tests {
             "the failed backend owns the word — it must not be re-keyed through the CAT \
              keyer, whose own error would then misdiagnose this: {err}"
         );
+    }
+
+    /// ⛔ #434, at the radio. A Serial keyline or a WinKeyer chosen with its port box blank used
+    /// to key the word through the radio's CAT keyer (`b TEST`) without a word to the operator.
+    /// Now nothing reaches the wire, the radio is not keyed, and the CW screen says where to pick
+    /// the port. The CAT keyer through the same loop and the same fake radio is the control: it
+    /// still keys `b TEST`, so a missing line here is the refusal, not a harness that sees
+    /// nothing.
+    #[test]
+    fn a_keyline_or_winkeyer_with_no_port_keys_nothing_through_the_cat_keyer() {
+        let run = |backend: &str| {
+            let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                let mut s = e.settings().clone();
+                s.cw_key_port = String::new();
+                s.winkeyer_port = String::new();
+                e.apply_settings(s);
+                e.set_license_class("extra");
+                e.set_cw_keyer(backend, 600.0);
+                e.set_operating_mode("cw", false);
+                e.set_frequency(7.03, "40m", "CW");
+                e.send_cw("TEST");
+            }
+            let (addr, log) = mock_rigctld_refusing(7_030_000, &[]);
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let mut state = loop_state_for(&engine);
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    100.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            let keyed = log.lock().unwrap().iter().any(|l| l.starts_with("b "));
+            let said = engine.lock().unwrap().cw_keyer_error();
+            (keyed, rig.keyed, said)
+        };
+        assert!(run("cat").0, "control: the CAT keyer keys `b TEST`");
+        for (backend, says) in [
+            ("serial", "Pick the keyline serial port in Settings ▸ CW"),
+            ("winkeyer", "Pick the WinKeyer port in Settings ▸ CW"),
+        ] {
+            let (keyed, rig_keyed, said) = run(backend);
+            assert!(
+                !keyed,
+                "{backend}, no port: nothing is sent to the CAT keyer"
+            );
+            assert!(!rig_keyed, "{backend}, no port: the radio is not keyed");
+            assert!(
+                said.as_deref().is_some_and(|w| w.contains(says)),
+                "{backend}, no port: the CW screen says where: {said:?}"
+            );
+        }
     }
 
     /// ⭐ #332 — an FT-710 operator reports the CAT-CW warning on a rig that is NOT on the
@@ -24574,6 +24757,44 @@ mod tests {
         let mut s = test_settings();
         s.tx_audio_source = String::new();
         assert!(!base.rig_differs(&Transport::from_settings(&s)));
+    }
+
+    /// #431: the CAT broker stepping aside to another port rebuilds a radio's CAT only where the
+    /// broker was, or now is, in its way: on its rigctld TCP Port, or on its NET rigctl address on
+    /// this computer. A second radio window's broker steps aside at every launch (the first
+    /// window has the Sharing port), and the rebuild killed and restarted that radio's rigctld.
+    #[test]
+    fn the_broker_stepping_aside_rebuilds_only_a_radio_it_is_in_the_way_of() {
+        let moved = |s: &Settings, from: Option<u16>, to: Option<u16>| {
+            Transport::from_station(s, from).rig_differs(&Transport::from_station(s, to))
+        };
+        let mut serial = test_settings();
+        serial.cat_broker = true;
+        serial.cat_broker_port = 4532;
+        serial.rigctld_port = 4534;
+        let mut net = serial.clone();
+        net.rig_model = 2;
+        net.rig_conn = "network".to_string();
+        net.rig_addr = "127.0.0.1:4547".to_string();
+        assert_eq!(
+            [
+                // Nexus's own rigctld on 4534: the broker binds 4547, or moves on from there.
+                moved(&serial, None, Some(4547)),
+                moved(&serial, Some(4547), Some(4548)),
+                // …or is back on the Sharing port, not bound yet.
+                moved(&serial, Some(4547), None),
+                // CONTROLS: the broker onto the rigctld's port, and off it again.
+                moved(&serial, None, Some(4534)),
+                moved(&serial, Some(4534), Some(4547)),
+                // CONTROLS: a NET rigctl radio's address here, with the broker moving onto it and
+                // off it (#165: the radio connects once sharing has moved).
+                moved(&net, None, Some(4547)),
+                moved(&net, Some(4547), Some(4548)),
+                // …and a move nowhere near its address.
+                moved(&net, Some(4548), Some(4549)),
+            ],
+            [false, false, false, true, true, true, true, false]
+        );
     }
 
     #[test]
@@ -31290,9 +31511,10 @@ mod tests {
     /// three true-CW rows are the ones that must NOT move with it.
     ///
     /// ⚠️ The harness configures no WinKeyer/serial keyline PORT (there is no such hardware on
-    /// this box), so those two backends' WORDS fall through to the CAT arm — the shipped
-    /// behaviour, and not what this test is about. The MODE word is backend-derived either way,
-    /// which is what is pinned here.
+    /// this box). Those two backends' words used to fall through to the CAT arm; since #434 a
+    /// keyer with no port keys nothing at all, so their rows pin the receive mode word and that
+    /// nothing at all is keyed, and the CAT row is the keyed over. The MODE word is
+    /// backend-derived either way, which is what is pinned here.
     #[test]
     fn the_cw_keyer_backends_command_one_mode_word_for_receive_and_transmit_alike() {
         use tempo_app::settings::CwKeyerBackend;
@@ -31368,11 +31590,19 @@ mod tests {
                     "{keyer:?} on {band}: a keyed over must command NO mode — the receive mode \
                      IS the transmit mode. saw {over:?}"
                 );
-                assert!(
-                    wire.iter().any(|l| l == "b TEST"),
-                    "POSITIVE CONTROL: the over must actually have keyed, or an empty mode list \
-                     proves nothing. wire={wire:?}"
-                );
+                if keyer == CwKeyerBackend::Cat {
+                    assert!(
+                        wire.iter().any(|l| l == "b TEST"),
+                        "POSITIVE CONTROL: the over must actually have keyed, or an empty mode \
+                         list proves nothing. wire={wire:?}"
+                    );
+                } else {
+                    assert!(
+                        !wire.iter().any(|l| l.starts_with("b ")),
+                        "{keyer:?} with no port keys nothing through the CAT keyer (#434). \
+                         wire={wire:?}"
+                    );
+                }
             }
 
             // The SOUNDCARD keyer: a keyed audio tone has to reach the modulator rather than the

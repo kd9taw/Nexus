@@ -194,7 +194,7 @@ Fix: in your RDP client, set audio to **Play on the remote computer** (or disabl
 
 ### TX Level
 
-The **Tx Power** slider sets the audio output gain from 0.0 to 1.0 before it reaches the sound card. Default: **0.9 (90% drive)**.
+The **Drive** slider (Settings ▸ Radio ▸ Audio) sets the audio output gain from 0.0 to 1.0 before it reaches the sound card. Default: **0.9 (90% drive)**.
 
 This is software drive level, not RF power. Set it so your rig's ALC reads **zero** during transmit. Trim down if ALC is deflecting. Overdrive causes IMD and splatter and degrades your signal decodability — a slightly conservative level is always correct for a digital mode.
 

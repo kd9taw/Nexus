@@ -440,6 +440,68 @@ pub fn mark_lotw_uploaded_all(
     mark_lotw_uploaded_in_chunks(engine, when_unix, STAMP_CHUNK)
 }
 
+/// #163: rewrite the past satellite contacts `ids` into the corrected shape their re-upload to
+/// LoTW signs ([`tempo_core::lotw_sat_fix::sat_band_fixed`]: FREQ the nominal uplink, FREQ_RX the
+/// downlink), each by id, planned with the Engine lock released and made under it, through the
+/// edit's one implementation. A contact that is no longer one to fix as the plan reads it — a
+/// confirmation arrived, the operator changed it — is left alone. Answers the ids rewritten.
+///
+/// ⚠️ OWED IN THE SAME CHANGE. The row's LoTW stamp is the OLD, downlink-only upload's, and the
+/// rewrite takes the row out of the offer; were the stamp left, any way the re-upload ends without
+/// stamping it — the app closed while TQSL runs, a later run of a multi-location batch that never
+/// starts, an edit mid-run, this loop stopping part-way — would leave it marked sent and offered
+/// nowhere. So the same change stamps it not sent (`when_unix`, class `Resend`: "corrected, not
+/// sent yet", which no view calls a failure): the re-upload's own stamp moves it
+/// on, and if that never comes the ordinary Upload to LoTW sends it.
+pub fn fix_sat_bands(
+    engine: &Mutex<Engine>,
+    ids: &[RecordId],
+    when_unix: i64,
+) -> (Result<Vec<RecordId>, String>, Durability) {
+    // Not sent (owed), as its own class: "corrected, not sent yet", never a failure.
+    let owed = UploadStatus {
+        outcome: tempo_core::logbook::UploadOutcome::Rejected,
+        when_unix,
+        detail: Some(tempo_core::logbook::UploadDetail::Resend),
+    };
+    let (mut fixed, mut durability) = (Vec::new(), Durability::default());
+    for &id in ids {
+        let (out, d) = change_row(
+            engine,
+            id,
+            "lotw satellite band fix",
+            |_, row| {
+                Ok(
+                    tempo_core::lotw_sat_fix::sat_band_fixed(row).and_then(|rec| {
+                        station::ops_on(
+                            row,
+                            &[
+                                LogOp::Edit {
+                                    id,
+                                    rec: Box::new(rec),
+                                },
+                                LogOp::Stamp {
+                                    id,
+                                    service: UploadService::Lotw,
+                                    status: owed.clone(),
+                                },
+                            ],
+                        )
+                    }),
+                )
+            },
+            |_, _| (),
+        );
+        durability = durability.and(d);
+        match out {
+            Ok(Ok(Some(()))) => fixed.push(id),
+            Ok(_) => {}
+            Err(e) => return (Err(e), durability),
+        }
+    }
+    (Ok(fixed), durability)
+}
+
 /// How many contacts one change of the "already uploaded" declaration stamps: a bound on what one
 /// plan reads whole and one commit holds the lock for, whatever the log's size. Set by SPEC-2 v3
 /// §4.11's 5 ms bound on an Engine-lock hold, as the fill job's is ([`FILL_CHUNK`]): at 4,096 the

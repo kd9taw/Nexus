@@ -550,7 +550,7 @@ export function workTier(alert: Pick<NeedAlert, 'mode' | 'exactMode'>): 'FT8' | 
 }
 
 /** The PSK screen's sub-mode for a row, as its selector names it, where the screen has the row's
- * own mode (PSK31, QPSK31: `PSK_MODES`). PSK63 and PSK125 have none there, so the screen opens on
+ * own mode (PSK31, QPSK31, PSK63: `PSK_MODES`). PSK125 has none there, so the screen opens on
  * the sub-mode it is on. */
 export function pskSubmode(alert: Pick<NeedAlert, 'exactMode'>): string | null {
   const m = modeKey(alert.exactMode)

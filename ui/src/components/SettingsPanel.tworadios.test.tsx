@@ -571,3 +571,35 @@ describe('the hints under Tx Power and RX Gain', () => {
     })
   })
 })
+
+// The transmit meters beside the drive slider: set the drive against the radio's ALC without leaving
+// Settings. Read-only (the cockpits' TxMeters, nothing to press), and only for the radio in use, which
+// is the one they measure: under another radio's Drive they would be a different radio's ALC.
+/** The meters block that follows the drive slider's own field. */
+const metersBesideDrive = () => {
+  const field = txPower().closest('.settings-field')!
+  const next = field.nextElementSibling
+  return next?.querySelector('.ph-txmeters') ?? null
+}
+
+describe('the TX meters beside the drive slider', () => {
+  it('on the radio in use, they follow the slider, ALC among them, live while it transmits', async () => {
+    installStation([IN_USE, OTHER])
+    renderPanel({ txLevel: 0.25, transmitting: true, txAlc: 0.4, txSwr: 1.2 })
+    await openRadioTab()
+    await waitFor(() => expect(metersBesideDrive()).not.toBeNull())
+    const meters = metersBesideDrive()!
+    const labels = [...meters.querySelectorAll('.ph-txmeter-label')].map((l) => l.textContent)
+    expect(labels).toContain('ALC')
+    expect(meters.textContent).toContain('40%')
+    expect(meters.querySelector('button, input, select'), 'a readout: nothing in it to press').toBeNull()
+  })
+
+  it('while a radio not in use is open for Edit, they are not shown', async () => {
+    installStation([IN_USE, OTHER])
+    renderPanel({ txLevel: 0.25, transmitting: true, txAlc: 0.4 })
+    await openRadioTab()
+    await editTheOtherRadio('FT-991A')
+    expect(metersBesideDrive()).toBeNull()
+  })
+})

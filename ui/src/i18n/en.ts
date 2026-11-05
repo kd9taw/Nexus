@@ -1610,6 +1610,15 @@ export const EN = {
   'logbook.lotw.upload.label': 'Upload to LoTW',
   'logbook.lotw.upload.labelCount': 'Upload to LoTW ({{count}})',
   'logbook.lotw.upload.busy': 'Uploading…',
+  // #163: the one-click corrected re-upload of past satellite QSOs. LoTW, TQSL, QSO and the band
+  // names are invariant tokens.
+  'logbook.lotw.satFix.label': 'Fix satellite uploads ({{count}})',
+  'logbook.lotw.satFix.title':
+    'These satellite QSOs went to LoTW with the downlink band, from before Nexus logged the uplink, so LoTW cannot match them. Click to re-upload them corrected.',
+  'logbook.lotw.satFix.confirm.title': 'Re-upload satellite QSOs to LoTW?',
+  'logbook.lotw.satFix.confirm.body':
+    'Satellite QSOs to correct: {{count}}. They went to LoTW with the downlink band, and LoTW matches a satellite QSO on the uplink band, so they cannot confirm. Nexus fills in each satellite’s uplink and uploads a corrected copy through TQSL. LoTW keeps the old record, which matches nothing and does no harm.',
+  'logbook.lotw.satFix.confirm.label': 'Re-upload corrected',
   'logbook.lotw.upload.title':
     'Sign + upload your un-uploaded QSOs to LoTW via TQSL (set your Station Location in Settings)',
   // A second statement appended to the title above, with its own count — see the import
@@ -2052,6 +2061,8 @@ export const EN = {
   'logbook.upload.waiting': 'Sent, no answer yet',
   'logbook.upload.failed': 'Refused',
   'logbook.upload.none': 'Not uploaded',
+  // #163: a satellite contact the one-click LoTW fix corrected and has not sent yet.
+  'logbook.upload.resend': 'Corrected, not sent yet',
   'logbook.upload.title': '{{state}}, {{date}}',
   'logbook.field.iota.label': 'IOTA',
   'logbook.field.iota.title':
@@ -4079,6 +4090,11 @@ export const EN = {
   'map.coverage.dim.title': 'What to color: your worked grid squares (VUCC) or CQ zones (WAZ)',
   'map.coverage.dim.grids': 'Grids',
   'map.coverage.dim.zones': 'CQ zones',
+  'map.style.label': 'Map style',
+  'map.style.title': 'How the Globe, Flat and Beam maps paint land and sea: Atlas is light, Dark is dark in either theme. A dark theme brings its own map until you pick one. The 3D globe keeps its photo of the Earth.',
+  'map.style.atlas': 'Atlas',
+  'map.style.dark': 'Dark',
+  'map.style.theme': "Theme's own",
 
   // Hover tooltips. The station line is pure measurement and is not here at all. Each of
   // these carries its own leading separator where it is an appended clause.
@@ -7081,6 +7097,12 @@ export const EN = {
   // invariant token and `bd` is read off the catalog the way MHz is: the same in every language.
   'sat.transponder.baud': '{{baud}} bd',
   'sat.transponder.auto': 'picked for you — change it here if this is not the one',
+  'sat.transponder.fav.aria': 'Favorite transponder: {{description}}',
+  'sat.transponder.fav.on.title': 'Your favorite on this bird: “Work this pass” picks it first. Click to clear the star.',
+  'sat.transponder.fav.off.title': 'Make this your favorite on this bird: “Work this pass” picks it first. Starring does not tune the radio.',
+  'sat.transponder.last': 'last used',
+  'sat.transponder.last.title': 'The one you picked last time on this bird. “Work this pass” picks it unless you star a favorite.',
+  'sat.transponder.pref.gone': '“{{label}}”, the transponder you saved for this bird, is not listed as working now. “Work this pass” picks the usual one.',
   'sat.transponder.showAll': 'show all {{count}} ▾',
   'sat.transponder.showAll.title': 'Show every workable transmitter SatNOGS lists for this bird',
   'sat.transponder.dead': 'reported dead (SatNOGS) — not workable',
@@ -8041,7 +8063,7 @@ export const EN = {
   'settings.backup.reset.failed': 'Could not reset the configuration',
 
   'settings.audio.rxGain.failed': 'Could not apply RX gain',
-  'settings.audio.txPower.failed': 'Could not set TX power',
+  'settings.audio.txPower.failed': 'Could not set the drive',
   // What one sound-card option READS when the saved device is not among the ones we offer.
   // The device NAME is the OS's, and it is never translated — only the note after it is.
   'settings.audio.device.notInList': '{{device}} — saved, not in the list',
@@ -8701,10 +8723,10 @@ export const EN = {
   // ⚠️ TX POWER IS THE DRIVE-LEVEL SLIDER, NOT A TRANSMIT CONTROL. It sets how hard the sound
   // card feeds the rig; it cannot key, unkey or stop anything, and it is on no cockpit's
   // stop-line census. Same reading as PTT Method above — the words moved, the path did not.
-  'settings.audio.txPower.label': 'Tx Power',
+  'settings.audio.txPower.label': 'Drive',
   'settings.audio.txPower.aria': 'Transmit drive level',
   'settings.audio.txPower.hint':
-    "The audio <b>drive</b> into the rig — the SAME control as the cockpit <b>Pwr</b> slider (they always match now). Trim down until your rig's ALC is just zero. This is <em>not</em> the rig's RF watts — set those on the radio.",
+    "The audio <b>drive</b> into the rig — the SAME control as the cockpit <b>Drive</b> slider (they always match now). Trim down until your rig's ALC is just zero. This is <em>not</em> the rig's RF power — set that on the radio, or with the <b>RF power</b> slider on the Phone, RTTY, PSK and SSTV screens.",
   'settings.audio.rxLevel.label': 'RX Level',
   'settings.audio.rxLevel.meter': 'RX audio level',
   'settings.audio.rxLevel.hint':
@@ -8730,7 +8752,7 @@ export const EN = {
     'Set it so your voice drives the radio without ALC on the peaks. Your voice is not played back to you.',
   // Under BOTH sliders above, in place of their own hints, while the form edits a radio that is not
   // the one in use: the sliders then set that radio's stored levels and act on nothing live, so
-  // "the SAME control as the cockpit Pwr" and "the meter responds" are not true there. `{{radio}}`
+  // "the SAME control as the cockpit Drive" and "the meter responds" are not true there. `{{radio}}`
   // is that radio's name, as in the multi-radio banner.
   'settings.audio.multiRadio.levelHint':
     '<b>Save</b> stores this for <b>{{radio}}</b>, and it takes effect when that radio is in use; the radio in use now does not change.',
@@ -9500,7 +9522,7 @@ export const EN = {
 
   // Station Housekeeping. ⚠️ The beacon toggle is a CONFIGURATION control, not a transmit
   // control — it chooses whether the station announces itself, and it can neither key nor
-  // unkey anything. Same reading as Tx Power's drive slider; nothing here is on
+  // unkey anything. Same reading as the Drive slider; nothing here is on
   // any cockpit's stop-line census. The watts placeholder ("e.g. 100") is a power value and
   // stays in the component, as the example addresses in Rig & CAT do.
   'settings.digital.housekeeping.title': 'Station Housekeeping',
@@ -9801,12 +9823,16 @@ export const EN = {
   'settings.rtty.signal.title': 'Signal',
   'settings.rtty.baud.label': 'Baud rate',
   'settings.rtty.baud.hf': '45.45 — the HF standard',
+  'settings.rtty.baud.eu': '50 — used in parts of Europe',
   'settings.rtty.baud.vhf': '75 — VHF / some nets',
   'settings.rtty.baud.hint':
     'Drives the TX bit clock and the RX demodulator (true 45.45, never rounded to 45).',
   'settings.rtty.shift.label': 'Shift (Hz)',
   'settings.rtty.shift.hf': '170 — the HF standard',
   'settings.rtty.shift.hint': 'Mark/space spacing — the TX tone pair and the RX demodulator both.',
+  'settings.rtty.lowTone.label': 'Low tone (Hz)',
+  'settings.rtty.lowTone.hint':
+    'Where the decoder and the AFSK transmitter sit until you click the waterfall: this tone, and this plus the shift. 2125 gives the standard 2125/2295; 1275 gives 1275/1445. A waterfall click still moves both for the session; changing this moves them back here.',
   'settings.rtty.reverse.label': 'Reverse (swap mark/space)',
   'settings.rtty.reverse.hint':
     'Swaps mark and space on TX and in the RX decoder, to work a station sending upside down. Not for running USB: pick the AFSK sideband instead, which keeps the sense right on its own.',
@@ -10099,6 +10125,9 @@ export const EN = {
   'settings.sstv.rxAutoArm.label': 'Start receiving when SSTV opens',
   'settings.sstv.rxAutoArm.hint':
     'The SSTV screen starts the decoder as soon as you open it, so a picture on the band decodes without arming anything. Turn this off to arm the receiver by hand (the Arm button in the SSTV header). Stopping the receiver yourself is already remembered for the rest of the session.',
+  'settings.sstv.tuneOnOpen.label': 'Tune to the band’s SSTV frequency when SSTV opens',
+  'settings.sstv.tuneOnOpen.hint':
+    'Opening the SSTV screen tunes the radio to the SSTV calling frequency of the band you are on, or to {{freq}} on {{band}} from an HF band that has none. The dial stays where it is when it is already on an SSTV frequency, while you transmit, and on a VHF or UHF band that has none. With this off, the screen leaves the dial alone, and the band picker in its header tunes to any SSTV frequency.',
   'settings.sstv.issAutoArm.label': 'ISS SSTV auto-arm',
   'settings.sstv.issAutoArm.hint':
     "Auto-arm SSTV for ISS passes — tunes {{freq}} FM and arms the decoder when the ISS is overhead while the SSTV or Satellites screen is open, restores your dial at LOS. On any other screen it only tells you the ISS is up and leaves your radio alone. If your radio can't receive {{freq}} MHz, it tells you once a session and does nothing else. Off by default. A pass arm is an explicit act, so it works whether or not the switch above is on.",
@@ -10107,14 +10136,14 @@ export const EN = {
   'settings.sstv.txMode.auto': 'Automatic — Scottie 1 on HF, PD-120 on 2 m (ARISS)',
   'settings.sstv.txMode.hint':
     'This is the mode the SSTV screen starts on; you can still change it there for one picture. <b>Automatic</b> follows the band: HF gets Scottie 1 (the NA calling-frequency convention — Martin 1 is the EU one), 2 m gets PD-120, which is what ARISS transmits.',
-  'settings.sstv.txPower.label': 'Transmit power',
-  'settings.sstv.txPower.aria': 'SSTV transmit power percent',
+  'settings.sstv.txPower.label': 'RF power',
+  'settings.sstv.txPower.aria': 'SSTV RF power percent',
   'settings.sstv.fskId.label':
     'Send my callsign after each picture',
   'settings.sstv.fskId.hint':
     'Adds the FSK callsign burst other SSTV software reads and shows under the received picture — the same one Nexus shows you under yours. Off by default: it adds about {{seconds}} seconds of key-down to every transmission. Your callsign is still drawn into the picture either way.',
   'settings.sstv.txPower.hint':
-    'The drive the SSTV screen starts on, and the level an image is sent at. Leave it blank and Nexus never touches your power. SSTV is up to 290 seconds of continuous key-down at full duty, so most operators run it well below their SSB drive. Your Phone power cap still applies on top of this.',
+    'The RF power the SSTV screen starts on, and the power an image is sent at. Leave it blank and Nexus never touches your power. SSTV is up to 290 seconds of continuous key-down at full duty, so most operators run it well below their SSB power. Your Phone power cap still applies on top of this.',
   'settings.sstv.callsignNote':
     'Your callsign is burned into the top-left of every picture you transmit, and there is no switch for it: an SSTV over is one long carrier of picture-only audio, so the picture is the identification ({{rule}}). Send is refused until you have set a callsign in Settings ▸ Station. If a picture already shows your call — a pre-made QSO card — tick “My picture already shows my callsign” in the SSTV screen: that is per-picture on purpose and resets with every new image.',
 
@@ -10949,6 +10978,10 @@ export const EN = {
   // ── Settings ▸ Appearance: the other Display sections ─────────────────────────────
   // Theme holds the theme cards and the High contrast, Night and Field mode rows, whose keys keep
   // their `settings.workspace.*` ids: an id is an invariant token, and the rows only moved.
+  'settings.workspace.txMeters.label': 'TX meters',
+  'settings.workspace.txMeters.bars': 'Bars',
+  'settings.workspace.txMeters.needle': 'Needle',
+  'settings.workspace.txMeters.hint': 'How the power, ALC and SWR meters look on the FT8, Phone and CW screens. Needle draws an analog meter with a peak mark that holds the highest reading for a second; between overs it shows the last over\'s peak.',
   'settings.theme.legend': 'Theme',
   'settings.waterfallScopes.legend': 'Waterfall & scopes',
   'settings.waterfallScopes.note':
@@ -11959,8 +11992,8 @@ export const EN = {
 
   // A CONFIGURATION control on the transmit path is not a transmit control — the batch-13
   // ruling, where the drive slider moved and Prove TX did not.
-  'operate.header.power.label': 'Pwr',
-  'operate.header.power.title': "TX drive (Pwr) — trim down until your rig's ALC is just zero",
+  'operate.header.power.label': 'Drive',
+  'operate.header.power.title': "TX audio drive — trim down until your rig's ALC is just zero",
 
   // The DXpedition Hound toggle. `Hound` is WSJT-X's role name and stays in the code (it is
   // the button's whole label); only its explanation is words. One title serves both states —
@@ -12270,6 +12303,12 @@ export const EN = {
   // A received row's time is its period's start, as WSJT-X and ALL.TXT show it; {{time}} is when
   // the line reached the list (UTC, hhmmss), seconds later for a full-pass decode.
   'operate.decodes.utc.period.title': 'Start of the period it was heard in (UTC). Arrived at {{time}}.',
+  // #452: a row filled in from the station's decode history after this pane missed its period.
+  'operate.decodes.utc.refilled.title': 'Start of the period it was heard in (UTC). Filled in afterwards from the station history: this pane was not showing when it was decoded.',
+  // #452: a dim marker between two rows for periods this pane missed and could not fill in;
+  // {{n}} is how many. A label with a number after it, so no plural form is needed.
+  'operate.decodes.gap': 'Periods not received: {{n}}',
+  'operate.decodes.gap.title': 'This pane was not taking decodes in for these periods, and the station no longer holds them. ALL.TXT has every decode.',
   'operate.decodes.dt.title': 'DT — time offset (s); large = clock/sync skew',
   'operate.decodes.dt.title.msk144': 'T — when in the period the ping landed (s)',
   'operate.decodes.marker.lowConf.title': 'Low-confidence decode',
@@ -12422,7 +12461,7 @@ export const EN = {
     'True FSK — data bits on the serial keyline, rig in RTTY mode (its narrow RTTY filters work). Change the backend in Settings → RTTY.',
   'rtty.header.backend.afsk.title':
     'AFSK — soundcard tones through the rig in LSB (soundcard-clocked, the robust default). Change the backend in Settings → RTTY.',
-  'rtty.header.power.label': 'Power',
+  'rtty.header.power.label': 'RF power',
   'rtty.header.power.title':
     'RF output power — RTTY keys the carrier for the whole over, so most rigs want well under their SSB rating',
   'rtty.header.band.title': "Showing the rig's current band",
@@ -12580,7 +12619,7 @@ export const EN = {
   'psk.panel.waterfall': 'Waterfall',
   'psk.panel.stream': 'Decoded Text',
   'psk.header.mode.aria': 'PSK sub-mode',
-  'psk.header.power.label': 'Power',
+  'psk.header.power.label': 'RF power',
   'psk.header.power.title':
     'RF output power — key Tune and wind it back until the ALC stops moving; overdriven PSK splatters',
   'psk.mode.failed': 'PSK mode switch refused',
@@ -12790,6 +12829,8 @@ export const EN = {
   'js8.header.power.label': 'Drive',
   'js8.header.power.title':
     'TX audio drive — set it so the rig’s ALC barely moves; JS8 is a constant-envelope mode, but an overdriven sound card still splatters',
+  'js8.header.txOffset.held':
+    'The TX offset stays put while a message waits to go or goes out, as in JS8Call. To move it while sending, turn on Settings ▸ Digital ▸ JS8 ▸ Allow TX offset changes while sending.',
   'js8.header.speed.title': 'JS8 — JS8Call-compatible keyboard mode on FT8’s waveform',
   'js8.header.speed.aria': 'Transmit speed',
   'js8.header.speed.chip.title':
@@ -13273,7 +13314,7 @@ export const EN = {
   'sstv.manualRx.failed': 'Could not start the receiver in that mode',
   // A CONFIGURATION control on the transmit path is not a transmit control (the batch-13
   // ruling): the drive slider moved, Stop did not.
-  'sstv.header.power.label': 'Power',
+  'sstv.header.power.label': 'RF power',
   'sstv.header.power.title': 'RF output power — set it against a Tune carrier, below ALC',
   'sstv.header.mode.title':
     'Detected SSTV mode — fills in (Martin / Scottie / Robot / PD) when the receiver hears a VIS header',
@@ -13612,14 +13653,12 @@ export const EN = {
   'cw.rigScope.aria': 'Rig scope control',
   'cw.rigScope.label': 'Rig\u00a0scope',
   'cw.rigScope.title': "These command the radio's own scope, not just the on-screen zoom",
-  'cw.rigScope.span.title': "Set the radio's scope span to {{span}}",
   'cw.rigScope.ref.title': 'Scope reference level — lower to lift weak signals out of the noise',
   'cw.rigScope.ref.aria': 'Scope reference level (dB)',
   'cw.flexPan.aria': 'Flex panadapter control',
   'cw.flexPan.label': 'Flex\u00a0pan',
   'cw.flexPan.title':
     "These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom",
-  'cw.flexPan.span.title': 'Set the Flex panadapter bandwidth to {{span}}',
   'cw.flexPan.ref.title':
     'Panadapter reference level (dBm) — lower to lift weak signals out of the noise',
   'cw.flexPan.ref.aria': 'Flex panadapter reference level (dBm)',
@@ -13941,7 +13980,7 @@ export const EN = {
   // sideband only. "USB" is a mode name.
   'phone.mode.usbOnly': '60 m allows only USB phone',
   'phone.mode.failed': 'Could not set mode',
-  'phone.header.power.label': 'Power',
+  'phone.header.power.label': 'RF power',
   'phone.header.power.title': 'RF output power',
   // The mic-is-dead warning: native Flex DAX transmit audio is a RADIO-WIDE setting, so this
   // screen is the only one that can say the physical microphone is disconnected.
@@ -14084,7 +14123,6 @@ export const EN = {
   'phone.rigScope.aria': 'Rig scope control',
   'phone.rigScope.label': 'Rig\u00a0scope',
   'phone.rigScope.title': "These command the radio's own scope, not just the on-screen zoom",
-  'phone.rigScope.span.title': "Set the radio's scope span to {{span}}",
   'phone.rigScope.ref.title':
     'Scope reference level — lower to lift weak signals out of the noise',
   'phone.rigScope.ref.aria': 'Scope reference level (dB)',
@@ -14092,7 +14130,6 @@ export const EN = {
   'phone.flexPan.label': 'Flex\u00a0pan',
   'phone.flexPan.title':
     "These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom",
-  'phone.flexPan.span.title': 'Set the Flex panadapter bandwidth to {{span}}',
   'phone.flexPan.ref.title':
     'Panadapter reference level (dBm) — lower to lift weak signals out of the noise',
   'phone.flexPan.ref.aria': 'Flex panadapter reference level (dBm)',
@@ -14241,7 +14278,7 @@ export const EN = {
   'shell.lane.radioConfig.message': 'RADIO CONFIG',
   'shell.lane.txPowerZero.message': 'NO RF POWER',
   'shell.lane.txPowerZero.detail':
-    'The radio reports 0% power and transmit is armed — it will key and put nothing on the air. Check the Pwr slider, and the rig\u2019s own power for THIS mode: Yaesu rigs keep a separate level for SSB, DATA, CW and AM.',
+    'The radio reports 0% power and transmit is armed — it will key and put nothing on the air. Check the rig\u2019s own power for THIS mode (Yaesu rigs keep a separate level for SSB, DATA, CW and AM), or the RF power slider on the Phone, RTTY, PSK or SSTV screen.',
   'shell.lane.recording.message': 'RECORDING',
   // Parsec presence mode stopped a transmission while the operator was away; the lane keeps it
   // until they transmit again. `{{what}}` is a list of the `.what.*` entries below.
@@ -14515,7 +14552,7 @@ export const EN = {
   'shell.aprs.tune.failed': 'Could not tune to APRS',
   'shell.tx.enable.failed': 'Could not enable transmit',
   'shell.tx.mute.failed': 'Could not mute transmit',
-  'shell.tx.level.failed': 'Could not set TX level',
+  'shell.tx.level.failed': 'Could not set the drive',
   'shell.tune.failed': 'Could not toggle tune',
   'shell.proveTx.failed': 'Could not key the transmitter',
   'shell.halt.failed': 'Could not stop transmit',
@@ -14707,9 +14744,9 @@ export const EN = {
   'tempo.header.tier.fast.title': 'TempoFast — fast conversational tier',
   'tempo.header.tier.deep.title': 'TempoDeep — robust weak-signal tier (15 s)',
   // TX drive: a CONFIGURATION control on the transmit path, not a transmit control (the
-  // batch-13 ruling — Tx Power moved, Prove TX did not).
-  'tempo.header.power.label': 'Pwr',
-  'tempo.header.power.title': "TX drive (Pwr) — trim down until your rig's ALC is just zero",
+  // batch-13 ruling — the drive slider moved, Prove TX did not).
+  'tempo.header.power.label': 'Drive',
+  'tempo.header.power.title': "TX audio drive — trim down until your rig's ALC is just zero",
   'tempo.header.cqRun.aria': 'CQ run',
   'tempo.header.cqRun.off': '📢 Call CQ',
   'tempo.header.cqRun.off.title':
@@ -14992,6 +15029,16 @@ export const EN = {
   // the chip it shows while the radio sends it no panadapter.
   'rfScope.title': 'RF scope',
   'scope.rf.none': 'No scope data from the radio',
+  // The CW and Phone scope head's view chip (components/ScopeViewChips): the radio's own scope, the
+  // sound-card audio, or (CW) both stacked. And the hint shown while the radio's scope sweeps slowly.
+  'scope.view.aria': 'What the scope shows',
+  'scope.view.rf.label': 'RF',
+  'scope.view.rf.title': "The radio's own scope: the band around your dial",
+  'scope.view.audio.label': 'Audio',
+  'scope.view.audio.title': "The sound-card audio: what came through the radio's filter, in fine detail",
+  'scope.view.both.label': 'Both',
+  'scope.view.both.title': "The radio's scope for the band, with the audio view under it for the detail inside the filter",
+  'scope.slow.hint': "Set the radio's scope SPEED to FAST for a smoother scope",
   // The scope's ⚙ strip (`spectrum/ScaleStrip.tsx`). The window widths (47/23/12 Hz) and the
   // averaging times (50 ms … 2 s) are measurements and stay in the component.
   'scope.strip.aria': 'Scope display settings',
@@ -15065,6 +15112,7 @@ export const EN = {
     "Antenna match — this is the radio's own raw figure, and Nexus has no verified scale for this model, so it cannot tell you what counts as high here. Watch which way it moves as you tune; the absolute number may be well out, and nothing stops your transmission on it.",
   'meters.tx.alc.title': 'ALC — set mic gain so SSB peaks just tickle the zone, never peg it',
   'meters.tx.po.title': 'Actual output power',
+  'meters.tx.needle.peak.title': 'The bright mark is the peak: it holds the highest reading for a second, then falls back. Between overs it shows the last over\'s peak.',
   'meters.tx.comp.title': 'Speech compression',
   'meters.tx.comp.level.aria': 'Speech processor level',
   'meters.tx.comp.level.title': 'Speech compression — the bar is the meter, the line is the processor level ({{level}}%). Drag the bar or use the arrow keys to set the level.',

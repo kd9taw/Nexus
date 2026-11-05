@@ -139,7 +139,7 @@ describe('the analog levels a voice operator rides', () => {
     // the receive gain had been plumbed into the transmitter — which is the whole case.
     mount({ rfGain: 0.3 })
     expect((screen.getByLabelText('RF gain') as HTMLInputElement).value).toBe('30')
-    const power = screen.getByLabelText('Power') as HTMLInputElement
+    const power = screen.getByLabelText('RF power') as HTMLInputElement
     expect(power.value, 'the receive RF gain reached the transmit-power slider').not.toBe('30')
     // …and they are not even in the same place any more: RF gain is a receive control and
     // lives in the receive chain, while power stays in the header with the transmit chrome.

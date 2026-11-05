@@ -227,6 +227,9 @@ describe('the CW audio scope span', () => {
   })
 
   it('the radio\'s own RF rows take the chips away: an audio span means nothing on them', async () => {
+    // In the radio-scope-only view. The default Both view keeps the audio pane, chips and all, under
+    // the radio's scope (CwCockpit.scopeView.test.tsx).
+    localStorage.setItem('nexus.cw.scopeView', 'rf')
     await renderCw({ scopeModeCode: 0x34 })
     expect(group()).toBeTruthy()
     const onFeed = scopeProps[scopeProps.length - 1].onFeed as (s: string, lo: number, hi: number) => void
@@ -279,6 +282,8 @@ describe('the CW audio scope says when the radio\'s filter is what limits it', (
     await renderCw({ filterWidthHz: null })
     expect(note()).toBeNull()
     cleanup()
+    // The radio-scope-only view: the default Both view keeps the audio pane, and its note, under it.
+    localStorage.setItem('nexus.cw.scopeView', 'rf')
     await renderCw({ filterWidthHz: 500 })
     expect(note()).not.toBeNull()
     const onFeed = scopeProps[scopeProps.length - 1].onFeed as (s: string, lo: number, hi: number) => void

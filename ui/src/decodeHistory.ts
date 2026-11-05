@@ -1,4 +1,4 @@
-import type { DecodeRow, LateDecodes, Tier } from './types'
+import type { DecodeRefill, DecodeRow, LateDecodes, Tier } from './types'
 
 // Pure model behind the Band Activity / Rx Frequency panes (OperateDecodes).
 // Kept DOM-free so the WSJT-X-critical behaviors — chronological flow, the
@@ -22,6 +22,43 @@ export interface DecodeEntry extends DecodeRow {
   /** Set on a row of a period heard before a band or mode change ({@link DecodeHistory.ingestLate}):
    *  what it was received on. Such a row is shown under these and never worked. */
   heard?: Omit<LateDecodes, 'slot' | 'rows'>
+  /** #452: a row of a period this pane missed, filled in afterwards from the station's decode
+   *  history ({@link DecodeHistory.applyRefill}). History, drawn as such: it never reached the
+   *  snapshot's live feed late, so nothing that reacts to a new decode ever sees it. */
+  refilled?: true
+}
+
+/** A run of periods (ingest slots, inclusive) this pane missed that the station no longer held,
+ *  so they could not be filled in (#452). */
+export interface HistoryGap {
+  from: number
+  to: number
+}
+
+/** The refill a pane owes after missing periods: ingest slots `from..=to`, asked under `epoch`. */
+export interface RefillAsk {
+  from: number
+  to: number
+  epoch: number
+}
+
+/** The newest gaps a pane keeps a marker for. */
+const MAX_GAPS = 50
+
+/** Periods missed that begin between two adjacent drawn rows' slots (either order): the marker goes
+ *  where the missing stretch STARTS. Our own overs of those periods still draw (the ring re-sends
+ *  them), so a gap is seldom bare of rows end to end. */
+export function missedBetween(gaps: readonly HistoryGap[], a: number, b: number): number {
+  const lo = Math.min(a, b)
+  const hi = Math.max(a, b)
+  let n = 0
+  for (const g of gaps) if (lo < g.from && g.from <= hi) n += g.to - g.from + 1
+  return n
+}
+
+/** A received decode's dedupe key: slot-scoped, so re-polls and a refill of the same line agree. */
+function receivedId(slot: number, d: DecodeRow): string {
+  return `${slot}|${d.message}|${Math.round(d.freqHz / 5)}`
 }
 
 /**
@@ -242,6 +279,20 @@ export class DecodeHistory {
    * that changed nothing costs neither (two panes × 3,000 rows × every poll was a CPU report).
    */
   private ver = 0
+  /**
+   * #452 — THE PERIODS THIS PANE MISSED. The snapshot's decode list is the CURRENT period only,
+   * while our own overs ride the engine's 30-deep ring on every poll (see `erasedThroughSec`). So a
+   * pane that stopped ingesting for a while — closed, its window in the background (App Nap,
+   * WebKit timer throttling), a pop-out out of sight — came back with the received rows of the
+   * periods in between gone for good and our report and RR73 back in place: a contact that read
+   * as sent to a station never heard. `lastSlot` is the newest ingest slot; a jump past it is a
+   * miss, owed a refill ({@link takeRefill}) from the engine's history.
+   */
+  private lastSlot: number | null = null
+  private ask: { from: number; to: number } | null = null
+  /** Bumped by every wipe: a refill asked before one is answered into a pane it no longer fits. */
+  private epoch = 0
+  private gapList: HistoryGap[] = []
 
   /** The change counter (see `ver`): equal values mean equal {@link entries}. */
   get version(): number {
@@ -268,6 +319,7 @@ export class DecodeHistory {
     if (this.scope === key) return false
     this.scope = key
     this.map.clear()
+    this.forgetSlots()
     this.ver++
     // A scope change is a fresh pane, not an erase: the new band's own-TX rows are all still
     // to come, and carrying a watermark across would silently hide the first overs on it.
@@ -278,6 +330,7 @@ export class DecodeHistory {
   /** A new transport observation session cannot inherit rows or an erase watermark. */
   reset(): void {
     this.map.clear()
+    this.forgetSlots()
     this.erasedThroughSec = null
     this.ver++
   }
@@ -306,7 +359,7 @@ export class DecodeHistory {
       // the same second, and keyed on txAt alone the second replaced the first.
       const id = d.mine
         ? `mine|${d.txAt ?? Math.floor(now / SLOT_MS)}|${d.message}`
-        : `${slot}|${d.message}|${Math.round(d.freqHz / 5)}`
+        : receivedId(slot, d)
       const prev = m.get(id)
       // Keep the first-heard timestamp (chronological position is stable);
       // own-TX rows timestamp by their transmit cycle, not the ingest clock.
@@ -334,13 +387,75 @@ export class DecodeHistory {
       m.set(id, next)
       changed = true
     }
+    this.cap()
+    // A jump past the last slot ingested is periods missed: the refill covers from that slot (its
+    // later decodes may have folded after the pane stopped) through this one (its earlier ones).
+    if (this.lastSlot != null && slot > this.lastSlot + 1) {
+      this.ask = {
+        from: Math.min(this.ask?.from ?? this.lastSlot, this.lastSlot),
+        to: Math.max(this.ask?.to ?? slot, slot),
+      }
+    }
+    if (this.lastSlot == null || slot > this.lastSlot) this.lastSlot = slot
+    if (changed) this.ver++
+    return changed
+  }
+
+  /** The refill owed for periods this pane missed, once: taking it clears it. */
+  takeRefill(): RefillAsk | null {
+    const ask = this.ask
+    this.ask = null
+    return ask && { ...ask, epoch: this.epoch }
+  }
+
+  /**
+   * Fill in the periods an {@link RefillAsk} covers from the station's answer, and mark the ones it
+   * no longer held. Returns whether the history changed. A row already here is left as it is (a
+   * line is never drawn twice), our own overs are never taken from it (the ring re-sends those),
+   * and an answer to an ask made before a band or mode change, an Erase or a reset is dropped.
+   * `atOf(slot)` stamps a refilled row: it orders before the live rows of its slot.
+   */
+  applyRefill(ask: RefillAsk, refill: DecodeRefill, atOf: (slot: number) => number): boolean {
+    if (ask.epoch !== this.epoch) return false
+    let changed = false
+    for (const { slot, row } of refill.rows) {
+      if (row.mine || slot < ask.from || slot > ask.to) continue
+      const id = receivedId(slot, row)
+      if (this.map.has(id)) continue
+      this.map.set(id, { ...row, slot, at: atOf(slot), id, refilled: true })
+      changed = true
+    }
+    this.cap()
+    // The slots strictly between the two ingests that the station no longer held whole.
+    const from = ask.from + 1
+    const to = Math.min(ask.to - 1, refill.coveredFrom - 1)
+    if (to >= from) {
+      this.gapList = [...this.gapList, { from, to }].slice(-MAX_GAPS)
+      changed = true
+    }
+    if (changed) this.ver++
+    return changed
+  }
+
+  /** The missed periods that could not be filled in, oldest first. */
+  gaps(): readonly HistoryGap[] {
+    return this.gapList
+  }
+
+  private forgetSlots(): void {
+    this.lastSlot = null
+    this.ask = null
+    this.gapList = []
+    this.epoch++
+  }
+
+  private cap(): void {
+    const m = this.map
     if (m.size > MAX_HISTORY) {
       const drop = m.size - MAX_HISTORY
       const it = m.keys()
       for (let i = 0; i < drop; i++) m.delete(it.next().value as string)
     }
-    if (changed) this.ver++
-    return changed
   }
 
   /**
@@ -385,6 +500,7 @@ export class DecodeHistory {
    */
   erase(nowSec: number = Math.floor(Date.now() / 1000)): void {
     this.map.clear()
+    this.forgetSlots()
     this.ver++
     this.erasedThroughSec =
       this.erasedThroughSec == null ? nowSec : Math.max(this.erasedThroughSec, nowSec)

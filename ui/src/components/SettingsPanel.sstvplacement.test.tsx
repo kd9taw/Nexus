@@ -108,7 +108,7 @@ describe('the SSTV section', () => {
       'Start receiving when SSTV opens',
       'ISS SSTV auto-arm',
       'Transmit mode',
-      'Transmit power',
+      'RF power',
     ]) {
       const el = await screen.findByText(label)
       expect(sectionOf(el), `"${label}" must sit under the SSTV legend`).toBe('SSTV')
@@ -170,7 +170,7 @@ describe('the SSTV section', () => {
       new Set(SSTV_TX_MODES.map((m) => m.group)).size,
     )
 
-    const power = (await screen.findByText('Transmit power'))
+    const power = (await screen.findByText('RF power'))
       .closest('label')
       ?.querySelector('input') as HTMLInputElement
     expect(power.value).toBe('')

@@ -31,9 +31,13 @@
 //   5. PHONE'S LEFT SIDE: with Band Activity on the side, the scope is exactly as wide as without it, and the side
 //      starts under the TX strip. TEMPO, STACKED (1024×768 at a pinned 100 %): its strip is 25 % of the window and
 //      stands clear of the cell under it.
+//   8. CW ON A RADIO WITH ITS OWN SCOPE (2026-11-04): its scope strip opens at 40 % of the cockpit (clamped by the
+//      divider's range) in each of the RF / Audio / Both views, with Stop TX and Tune on screen; with no scope of its
+//      own it opens at 25 % (check 1).
 // THE CONTROLS, run every time: JS8 with its divider moved one step (the default no longer 25 %) must fail check
 // 1, and Phone with a planted 360 px margin beside its scope must fail check 2. If either passes, the checks
-// cannot fail and the probe says so instead of passing. RTTY's two (6): a planted ceiling on its strip must fail the
+// cannot fail and the probe says so instead of passing.
+// Check 8's: the radio-scope CW page held to 25 % must fail. RTTY's two (6): a planted ceiling on its strip must fail the
 // common height, and a planted 60 px square must fail the scope's size. The CW switch's (7): a planted cover over
 // it must fail its reach.
 //
@@ -157,12 +161,23 @@ const realSrc = await readFile(REAL_API, 'utf8')
 const stubSrc = await readFile(STUB_SRC, 'utf8')
 const names = [...realSrc.matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1])
 const own = new Set([...stubSrc.matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1]))
+// Every export that answers the app's snapshot answers the stub's own `snapshot`, not `{}`: the cockpits
+// hand that answer straight to the app's state, and a `{}` there is a snapshot with no `radio`, which
+// takes the whole page down (`snap.radio` read on undefined). The radio-scope setters a native RF feed
+// calls are the first to hit it. Read off each signature, never crossing into the next export.
+const snapshotNames = new Set(
+  [...realSrc.matchAll(/^export (?:async )?function (\w+)\((?:(?!\nexport )[\s\S])*?\)\s*:\s*Promise<AppSnapshot>\s*\{/gm)].map((m) => m[1]),
+)
 const stubCode =
   stubSrc +
   `\nexport * from ${JSON.stringify(REAL_API)}\n` +
   names
     .filter((n) => !own.has(n))
-    .map((n) => `export async function ${n}(..._a: unknown[]): Promise<any> { return (globalThis as any).__DEFAULT_ARR ? [] : {} }`)
+    .map((n) =>
+      snapshotNames.has(n)
+        ? `export async function ${n}(..._a: unknown[]): Promise<any> { return snapshot }`
+        : `export async function ${n}(..._a: unknown[]): Promise<any> { return (globalThis as any).__DEFAULT_ARR ? [] : {} }`,
+    )
     .join('\n')
 const swap = {
   name: 'waterfalls-probe-api',
@@ -245,10 +260,11 @@ function hidefRed(name, m, label) {
   return reds
 }
 
-/** Check 1 for one page: the announced height is 25 % of the shell, clamped by the announced range. */
-function defaultRed(name, m) {
-  const want = Math.min(m.max, Math.max(m.min, 0.25 * m.shellCs))
-  if (Math.abs(m.now - want) > 2) return `${name}: the divider stands at ${m.now} CSS px, not 25 % of its ${m.shellCs.toFixed(0)} px cockpit (${want.toFixed(0)}, range ${m.min}–${m.max})`
+/** Check 1 for one page: the announced height is `share` of the shell (25 %; 40 % for CW on a radio with its
+ *  own scope, check 8), clamped by the announced range. */
+function defaultRed(name, m, share = 0.25) {
+  const want = Math.min(m.max, Math.max(m.min, share * m.shellCs))
+  if (Math.abs(m.now - want) > 2) return `${name}: the divider stands at ${m.now} CSS px, not ${Math.round(share * 100)} % of its ${m.shellCs.toFixed(0)} px cockpit (${want.toFixed(0)}, range ${m.min}–${m.max})`
   if (Math.abs(m.stripCs - m.now) > 2) return `${name}: the strip renders ${m.stripCs.toFixed(0)} CSS px, not the ${m.now} its divider announces`
   return null
 }
@@ -387,7 +403,34 @@ try {
     }
   }
 
+  // 8. CW ON A RADIO WITH ITS OWN SCOPE (2026-11-04): the strip opens at 40 % of the cockpit, in each of the
+  // RF / Audio / Both views (the view chip never moves Stop TX), with Stop TX and Tune on screen. Check 1
+  // above is the other half: CW on a radio with no scope of its own still opens at 25 %.
+  const rigScoped = new Map()
+  for (const size of SIZES) {
+    const tag = `${size[0]}×${size[1]}`
+    for (const view of ['Both', 'RF', 'Audio']) {
+      const m = await measure('cw', size, { 'probe.rigScope': '1' }, view === 'Both' ? null : async (evaluate) => {
+        await evaluate(`(() => { const b = [...document.querySelectorAll('[aria-label="What the scope shows"] button')].find((x) => x.textContent === ${JSON.stringify(view)}); b?.click(); return !!b })()`)
+      })
+      if (!m) { red(`CW with a radio scope (${view}) at ${tag}: no scope`); continue }
+      if (view === 'Both') rigScoped.set(tag, m)
+      console.log(`waterfalls-probe: CW with a radio scope, ${view}, at ${tag}: divider ${m.now} of ${m.min}–${m.max} (40 % of ${m.shellCs.toFixed(0)} = ${(0.4 * m.shellCs).toFixed(0)})`)
+      const r = defaultRed(`CW with a radio scope (${view}) at ${tag}`, m, 0.4)
+      if (r) red(r)
+      for (const [label, ok] of m.stops) if (!ok) red(`CW with a radio scope (${view}) at ${tag}: ${label} is not on screen or something covers it`)
+    }
+  }
+
   // THE CONTROLS.
+  // Check 8's: the radio-scope CW page held to the no-scope rule (25 %) must be red at 1920×1080, where 25 %
+  // and 40 % both fit, or check 1 could not tell a no-scope radio opening at 40 % from one at 25 %.
+  {
+    const m = rigScoped.get('1920×1080')
+    const r = m ? defaultRed('CW with a radio scope held to 25 %', m) : null
+    if (r == null) red('CONTROL FAILED — the radio-scope CW strip passed the 25 % check; check 1 cannot catch a no-scope CW strip opening at 40 %')
+    else console.log(`waterfalls-probe: CONTROL — ${r} (caught)`)
+  }
   const step = await measure('js8', [1366, 768], {}, async (evaluate) => {
     await evaluate(`(() => { const s = document.querySelector('.js8-cockpit > .pane-splitter.horizontal'); s.focus(); s.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })); return 1 })()`)
   })
@@ -424,7 +467,7 @@ try {
     else console.log(`waterfalls-probe: CONTROL — ${caught[0]} (caught)`)
   }
 
-  if (code === 0) console.log('waterfalls-probe: PASS — every waterfall starts at 25 % of its cockpit (or its layout ceiling), as wide as every other, RTTY\'s with its tuning scope beside it at its own size, the CW scope\'s HiDef switch on screen, and every control was caught')
+  if (code === 0) console.log('waterfalls-probe: PASS — every waterfall starts at 25 % of its cockpit (or its layout ceiling; CW on a radio with its own scope 40 %), as wide as every other, RTTY\'s with its tuning scope beside it at its own size, the CW scope\'s HiDef switch on screen, and every control was caught')
   process.exitCode = process.exitCode || code
 } catch (e) {
   if (!process.exitCode) {

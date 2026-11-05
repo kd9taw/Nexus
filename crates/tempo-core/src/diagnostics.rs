@@ -498,6 +498,23 @@ pub fn diagnose_rows(
         }
         let recent = is_recent(now, r.when_unix, cfg.lag_secs);
         match r.upload.lotw.as_ref().map(|s| (s.outcome, s.detail)) {
+            // #163: corrected by the one-click satellite fix and not sent yet — owed, not bounced.
+            // Said plainly, with the ordinary upload as the fix, as a contact never uploaded is.
+            Some((UploadOutcome::Rejected, Some(crate::logbook::UploadDetail::Resend))) => {
+                push_reason(
+                    &mut reasons,
+                    i,
+                    Reason {
+                        code: ReasonCode::R1NeverUploaded,
+                        confidence: Confidence::Confident,
+                        explanation: format!(
+                            "{} was corrected for LoTW and is not sent yet — Upload to LoTW sends it.",
+                            r.call
+                        ),
+                        action: Action::UploadToLotw,
+                    },
+                )
+            }
             // R9 — your upload bounced (highest leverage, own-side, Confident). This
             // fires even for an eQSL-confirmed QSO: a bounced LoTW upload is still
             // actionable, and R3 ("get it onto LoTW") can't express "it bounced".
@@ -1211,6 +1228,39 @@ mod tests {
         assert_eq!(d.reasons[0].code, ReasonCode::R1NeverUploaded);
         assert!(matches!(d.reasons[0].action, Action::UploadToLotw));
         assert_eq!(d.status, QsoAwardStatus::NeedsAction);
+    }
+
+    /// #163: a satellite contact the one-click LoTW fix corrected and has not sent yet is owed to
+    /// LoTW, said plainly — never "your upload bounced", and never a failure to fix. Its action is
+    /// the ordinary upload, which sends it.
+    #[test]
+    fn a_corrected_satellite_contact_not_sent_yet_is_owed_never_bounced() {
+        let mut r = rec("W1AW", "70cm", "FM", 20_000);
+        r.upload = UploadState {
+            lotw: Some(UploadStatus {
+                outcome: UploadOutcome::Rejected,
+                when_unix: NOW,
+                detail: Some(UploadDetail::Resend),
+            }),
+            ..Default::default()
+        };
+        let rep = diag(&[r], &[None], vec![]);
+        let d = rep.diagnoses.iter().find(|d| d.index == 0).unwrap();
+        assert_eq!(d.reasons[0].code, ReasonCode::R1NeverUploaded);
+        assert!(matches!(d.reasons[0].action, Action::UploadToLotw));
+        let says = &d.reasons[0].explanation;
+        assert!(
+            says.contains("corrected") && says.contains("not sent yet"),
+            "{says}"
+        );
+        assert!(
+            !says.contains("bounced") && !says.contains("failed"),
+            "{says}"
+        );
+        assert!(d
+            .reasons
+            .iter()
+            .all(|x| x.code != ReasonCode::R9UploadBounced));
     }
 
     #[test]

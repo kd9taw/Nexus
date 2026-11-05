@@ -119,7 +119,7 @@ Both modes share a single drain point: the VFO is always restored when PTT is re
 
 - **Clipping (meter red):** turn down the rig's audio output or the sound card input gain until the meter sits in the green zone.
 - **Too low (meter barely moves):** raise the input gain. If the rig has an AF output level control, use it.
-- **TX too hot:** lower the **Pwr** slider (default 0.9 / 90% drive) and watch the rig's ALC meter — ALC deflection means splatter. Use **Tune** (12 s auto-release) to set drive level before operating. See [Rig and Audio Setup](Rig-and-Audio-Setup.md).
+- **TX too hot:** lower the **Drive** slider (default 0.9 / 90% drive) and watch the rig's ALC meter — ALC deflection means splatter. Use **Tune** (12 s auto-release) to set drive level before operating. See [Rig and Audio Setup](Rig-and-Audio-Setup.md).
 
 ### Audio devices missing under Remote Desktop (DAX, virtual audio)
 

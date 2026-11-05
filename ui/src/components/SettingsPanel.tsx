@@ -269,6 +269,7 @@ import { PalettePicker } from './PalettePicker'
 import { SettingsColours } from './SettingsColours'
 import type { PaletteRoleId, PaletteSelection } from '../features/paletteRoles'
 import { LiveLevelMeter, LiveRxLevelDb } from './LiveMeters'
+import { TxMeters } from './TxMeters'
 import { WatchlistPanel } from './WatchlistPanel'
 import { MiniSpectrum } from './MiniSpectrum'
 import { SettingsGroup, SettingsOpenTarget } from './SettingsGroup'
@@ -321,6 +322,7 @@ import { renumberedTwin, showHiddenSpaces } from '../features/audioDeviceTwin'
 import { ampPortIsNetwork, joinAmpAddress, KPA_NET_PORT, splitAmpAddress } from '../settings/ampAddress'
 import { normaliseTyped, upperTyped } from '../typedInput'
 import { IotaListSettings } from './Iota'
+import { setTxMeterStyle, useTxMeterStyle } from '../txMeterStyle'
 
 /** The call a running contest entry is operated under, when saving `form` over `saved` would
  *  change the station's call (`mycall`) while the entry runs (the live snapshot, `fieldDay`) and
@@ -1121,6 +1123,30 @@ export const RTTY_AUTO_REPEATS_MAX = 10
 export const RTTY_AUTO_REPEATS_DEFAULT = 3
 
 /**
+ * The saved RTTY tone pair's low tone: the range it is used in and the standard it falls back to.
+ * A SECOND COPY of `RTTY_LOW_TONE_HZ_MIN/MAX` in `settings.rs` (`Settings::rtty_low_tone`), checked
+ * by `SettingsPanel.rttysignal.test.tsx`. 2700 + the widest shift (850) stays inside the passband.
+ */
+export const RTTY_LOW_TONE_HZ_MIN = 300
+export const RTTY_LOW_TONE_HZ_MAX = 2700
+export const RTTY_LOW_TONE_HZ_DEFAULT = 2125
+
+/** `v` if it is a low tone the engine uses, else the 2125 standard — what the engine reads. */
+export function validLowTone(v: unknown): number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= RTTY_LOW_TONE_HZ_MIN && v <= RTTY_LOW_TONE_HZ_MAX
+    ? v
+    : RTTY_LOW_TONE_HZ_DEFAULT
+}
+
+/** A loaded form whose stored low tone is outside the range carries the standard instead, so the
+ *  box shows what the engine uses and the next Save writes it (a missing key stays missing). */
+function withValidLowTone(s: Settings): Settings {
+  return s.rttyLowToneHz === undefined || s.rttyLowToneHz === validLowTone(s.rttyLowToneHz)
+    ? s
+    : { ...s, rttyLowToneHz: RTTY_LOW_TONE_HZ_DEFAULT }
+}
+
+/**
  * APRS's own wire formats, shown as examples or written into a frame.
  *
  * `ssid` is a callsign, `path` is a digipeater path the packet carries verbatim, and `isHost`
@@ -1142,6 +1168,10 @@ const SSTV_ID_RULE = '§97.119(b)(4)'
 /** The ISS SSTV downlink, in MHz. A dial reading: formatted invariantly, never written into
  *  a sentence (`i18n/index.ts`, the invariant-token rule). */
 const ISS_SSTV_MHZ = 145.8
+/** 20 m's SSTV calling frequency and its band, where the SSTV screen tunes on opening from an HF
+ *  band with no SSTV channel (#451). Dial readings and band names, interpolated into the hint. */
+const SSTV_20M_MHZ = 14.23
+const SSTV_20M_BAND = '20m'
 
 /**
  * Tokens the panel prints beside a number or stores as a `<select>` value, where the row has
@@ -1247,7 +1277,7 @@ export function SettingsPanel({
       // values, so a restore looks like it did nothing — and the stale form is still live, so the
       // next Save writes the old values straight back over the restored ones.
       const fresh = await getSettings()
-      setForm(fresh)
+      setForm(withValidLowTone(fresh))
       setEditingRadioId(fresh.activeRadio)
       dirtyRef.current = false
       savedRef.current = fresh
@@ -1282,7 +1312,7 @@ export function SettingsPanel({
     )
     if (snap) {
       const fresh = await getSettings()
-      setForm(fresh)
+      setForm(withValidLowTone(fresh))
       setEditingRadioId(fresh.activeRadio)
       dirtyRef.current = false
       savedRef.current = fresh
@@ -1294,6 +1324,8 @@ export function SettingsPanel({
   const [logbookGlobe, setLogbookGlobe] = useLogbookGlobe()
   // Browser-local like the globe: whether resting the pointer on a call opens its station card.
   const [callCardHover, setCallCardHover] = useCallCardHover()
+  // Browser-local too (txMeterStyle.ts): how the TX meters are drawn.
+  const txMeterStyle = useTxMeterStyle()
   // APPEARANCE IN THE BACKUP (features/appearanceBackup.ts). The look on screen, as the backup
   // carries it: what this host wires, both waterfall palettes and the Logbook globe — and, by
   // design, not Field mode or UI scale. A restore puts it back through the very setters the rows
@@ -1304,6 +1336,7 @@ export function SettingsPanel({
       waterfallPalette: getWaterfallPalette(),
       ftWaterfallPalette: getWaterfallPalette(FT_PALETTE_SCOPE),
       logbookGlobe,
+      txMeterStyle,
     }
     if (theme) a.theme = theme
     if (onSkinChange) a.skin = skin
@@ -1334,8 +1367,12 @@ export function SettingsPanel({
     if (a.waterfallPalette) setWaterfallPalette(a.waterfallPalette)
     if (a.ftWaterfallPalette) setWaterfallPalette(a.ftWaterfallPalette, FT_PALETTE_SCOPE)
     if (a.logbookGlobe !== undefined) setLogbookGlobe(a.logbookGlobe)
+    if (a.txMeterStyle) setTxMeterStyle(a.txMeterStyle)
   }
   const [form, setForm] = useState<Settings | null>(null)
+  // The RTTY Low tone box's text while it is being edited (null = show the form's value): lets the
+  // operator clear it to type a new number while only a valid tone ever reaches the form.
+  const [lowToneText, setLowToneText] = useState<string | null>(null)
   // From a computer driving the station, the read names the settings a save from there keeps as
   // the station has them (`stationOnlySettings`): each shows here read-only, and says so, instead
   // of taking an edit the save would quietly put back. At the station the read names none.
@@ -2011,7 +2048,7 @@ export function SettingsPanel({
     lastActiveRef.current = activeRadioId
     void getSettings()
       .then((s) => {
-        setForm(s)
+        setForm(withValidLowTone(s))
         dirtyRef.current = false
       savedRef.current = s
         setEditingRadioId(activeRadioId) // form now mirrors the (new) active radio
@@ -2025,7 +2062,7 @@ export function SettingsPanel({
     getSettings()
       .then((s) => {
         if (mounted) {
-          setForm(s)
+          setForm(withValidLowTone(s))
           dirtyRef.current = false
       savedRef.current = s
           setStatus('idle')
@@ -2126,13 +2163,13 @@ export function SettingsPanel({
     )
   }
 
-  // True while the form edits a radio that is NOT the one in use. Its RX Gain and Tx Power then edit
+  // True while the form edits a radio that is NOT the one in use. Its RX Gain and Drive then edit
   // the form only, and Save stores them on that radio: `set_rx_gain` / `set_tx_level` take no radio,
   // so applying them live would change the radio in use. Keyed on the LIVE active radio, as the
   // satellite VFO map's guard is, because that is the radio the two verbs act on.
   const editingOtherRadio = editingRadioId != null && editingRadioId !== (activeRadioId ?? form?.activeRadio)
-  // …and the hint both sliders show then, in place of their own: those call Tx Power the cockpit
-  // Pwr's control and say the RX Level meter answers RX Gain, which holds for the radio in use only.
+  // …and the hint both sliders show then, in place of their own: those call Drive the cockpit
+  // Drive slider's twin and say the RX Level meter answers RX Gain, which holds for the radio in use only.
   const otherRadioLevelHint = (
     <T
       k="settings.audio.multiRadio.levelHint"
@@ -2155,7 +2192,7 @@ export function SettingsPanel({
     void setRxGain(value).catch(() => pushToast(t('settings.audio.rxGain.failed'), 'error'))
   }
 
-  // Apply TX drive (Pwr) to the LIVE radio, the SAME value as the cockpit "Pwr" slider —
+  // Apply the TX drive to the LIVE radio, the SAME value as the cockpit "Drive" slider —
   // set_tx_level persists + updates the snapshot, so the cockpit reflects it immediately.
   // Throttled to ~16 Hz while dragging (not gated entirely on release): set_tx_level writes
   // the whole settings.json to disk on every call, so applying on every onChange tick would
@@ -2170,7 +2207,7 @@ export function SettingsPanel({
     void setTxLevel(value).catch(() => pushToast(t('settings.audio.txPower.failed'), 'error'))
   }
 
-  // Keep the Tx Power slider in step with the cockpit "Pwr" control — both are the SAME value
+  // Keep the Drive slider in step with the cockpit "Drive" control — both are the SAME value
   // (radio.txLevel). When the cockpit changes it, mirror the live value into the form so the slider
   // tracks it (previously the form was a stale copy, so cockpit→Settings never showed). setForm
   // directly (not updateNum) so this live-sync never spuriously marks the form dirty.
@@ -4855,6 +4892,30 @@ export function SettingsPanel({
                   <span className="settings-hint">{t('settings.workspace.localClock.hint')}</span>
                 </div>
               )}
+              {/* #343: how the TX meters are drawn — bars, or needles with a peak marker. Per
+                  machine, Bars by default (txMeterStyle.ts); the meters read it themselves. */}
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.workspace.txMeters.label')}</span>
+                <div className="theme-switcher" role="group" aria-label={t('settings.workspace.txMeters.label')}>
+                  <button
+                    type="button"
+                    className={`theme-chip${txMeterStyle === 'bars' ? ' active' : ''}`}
+                    aria-pressed={txMeterStyle === 'bars'}
+                    onClick={() => setTxMeterStyle('bars')}
+                  >
+                    {t('settings.workspace.txMeters.bars')}
+                  </button>
+                  <button
+                    type="button"
+                    className={`theme-chip${txMeterStyle === 'needle' ? ' active' : ''}`}
+                    aria-pressed={txMeterStyle === 'needle'}
+                    onClick={() => setTxMeterStyle('needle')}
+                  >
+                    {t('settings.workspace.txMeters.needle')}
+                  </button>
+                </div>
+                <span className="settings-hint">{t('settings.workspace.txMeters.hint')}</span>
+              </div>
 
               <div className="settings-field">
                 <span className="settings-label">{t('settings.workspace.panes.label')}</span>
@@ -7675,6 +7736,17 @@ export function SettingsPanel({
                 </span>
               </label>
 
+              {/* THE TX METERS BESIDE THE DRIVE (#461): set the drive against the radio's ALC without
+                  leaving Settings. The cockpits' read-only TxMeters (`pinned`: live while keyed, the
+                  last readings held between overs), nothing in it to press. Only for the radio in
+                  use, the one they measure: under another radio's Drive they would be the wrong
+                  radio's ALC. */}
+              {radio && !editingOtherRadio && (
+                <div className="settings-field">
+                  <TxMeters radio={radio} pinned />
+                </div>
+              )}
+
               <div className="settings-field">
                 <span className="settings-label">
                   {t('settings.audio.rxLevel.label')}{' '}
@@ -9651,7 +9723,7 @@ export function SettingsPanel({
               <div className="settings-grid">
                 {/* ⚠️ The beacon toggle is a CONFIGURATION control, not a transmit control: it
                     chooses whether the station announces itself, and it can neither key, unkey
-                    nor stop anything. Same reading as Tx Power's drive slider — nothing in this
+                    nor stop anything. Same reading as the Drive slider — nothing in this
                     sub-group is on any cockpit's stop-line census. */}
                 <div className="settings-field">
                   <label className="settings-toggle">
@@ -10495,6 +10567,7 @@ export function SettingsPanel({
                   onChange={(e) => updateNum('rttyBaud', Number(e.target.value))}
                 >
                   <option value="45.45">{t('settings.rtty.baud.hf')}</option>
+                  <option value="50">{t('settings.rtty.baud.eu')}</option>
                   <option value="75">{t('settings.rtty.baud.vhf')}</option>
                 </select>
                 <span className="settings-hint">{t('settings.rtty.baud.hint')}</span>
@@ -10513,6 +10586,31 @@ export function SettingsPanel({
                   <option value="850">850</option>
                 </select>
                 <span className="settings-hint">{t('settings.rtty.shift.hint')}</span>
+              </label>
+              {/* The saved tone pair, by its LOW tone: which of the two is mark swaps with the
+                  sideband and Reverse, so a "mark" box would mean different tones on different
+                  rigs. Offered on true FSK too — the decoder still listens on the pair. The
+                  engine clamps the pair's centre into 300–3700 Hz, as a waterfall net is. */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.rtty.lowTone.label')}</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  min={RTTY_LOW_TONE_HZ_MIN}
+                  max={RTTY_LOW_TONE_HZ_MAX}
+                  step={5}
+                  value={lowToneText ?? String(validLowTone(form.rttyLowToneHz ?? RTTY_LOW_TONE_HZ_DEFAULT))}
+                  onChange={(e) => {
+                    // Cleared, junk or out of range: shown while typing, never stored — the form
+                    // keeps the last valid tone, and leaving the box shows it again.
+                    const raw = e.target.value
+                    setLowToneText(raw)
+                    const n = Number(raw)
+                    if (raw.trim() !== '' && validLowTone(n) === n) updateNum('rttyLowToneHz', n)
+                  }}
+                  onBlur={() => setLowToneText(null)}
+                />
+                <span className="settings-hint">{t('settings.rtty.lowTone.hint')}</span>
               </label>
               <div className="settings-field">
                 <label className="settings-toggle">
@@ -11069,6 +11167,21 @@ export function SettingsPanel({
                   </button>
                 </label>
                 <span className="settings-hint">{t('settings.sstv.rxAutoArm.hint')}</span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.sstv.tuneOnOpen.label')}</span>
+                  <button disabled={locked('sstvTuneOnOpen')}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.sstvTuneOnOpen === true}
+                    className={`toggle${form.sstvTuneOnOpen === true ? ' on' : ''}`}
+                    onClick={() => updateBool('sstvTuneOnOpen', form.sstvTuneOnOpen !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.sstv.tuneOnOpen.hint', { freq: SSTV_20M_MHZ.toFixed(3), band: SSTV_20M_BAND })}</span>
               </div>
               <div className="settings-field">
                 <label className="settings-toggle">

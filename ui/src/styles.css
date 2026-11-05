@@ -5313,6 +5313,21 @@ body.resizing-row {
   background: transparent;
   color: var(--text);
 }
+/* The Map style row (MapStylePick): its words on one line (they wrapped under a theme with wider
+   type), and its select beside them, taking the rest of the row. */
+.map-style-label {
+  white-space: nowrap;
+}
+.map-style-pick {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-label);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+}
 
 
 /* Logbook header action buttons (Import ADIF / Log QSO). */
@@ -8078,9 +8093,14 @@ select optgroup {
   border-radius: 999px;
   padding: 3px;
 }
+/* A BUTTON LOOKS PRESSABLE (#455). TX Off, Tune and ATU were bare words — no face, no outline — so
+   in the dark theme they read like the status lights beside them. Every .op-btn now wears a raised
+   face and an outline 3:1 against what it sits on, and the outline goes to the accent on hover. A
+   status indicator wears neither (`.op-btn.readonly`, the header chips). ButtonsVsIndicators
+   .test.tsx computes both halves in every theme. */
 .op-btn {
-  border: 1px solid transparent;
-  background: transparent;
+  border: 1px solid var(--text-faint);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
   color: var(--text-dim);
   font-size: calc(12px * var(--text-scale));
   font-weight: 700;
@@ -8091,14 +8111,31 @@ select optgroup {
 }
 .op-btn:hover {
   color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+/* A button that cannot be pressed says so, as a disabled settings switch does. */
+.op-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.op-btn:disabled:hover {
+  color: var(--text-dim);
+  border-color: var(--text-faint);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 .op-btn.monitor.on {
   background: color-mix(in srgb, var(--rx) 18%, transparent);
-  border-color: color-mix(in srgb, var(--rx) 45%, transparent);
-  color: var(--state-good);
+  /* At full strength, so the lit latch keeps a button's 3:1 outline (#455; a 45 % mix was 2.25:1 in
+     the light theme). */
+  border-color: var(--rx);
+  /* The green a step toward the theme's ink, so the word reads 4.5:1 on the green tint (the light
+     theme's plain green was 3.68:1 on it). */
+  color: color-mix(in srgb, var(--state-good) 70%, var(--text));
 }
+/* TX Off in the buttons' own ink: the faint ink read under 4.5:1 on the button's face. */
 .op-btn.monitor:not(.on) {
-  color: var(--text-faint);
+  color: var(--text-dim);
 }
 /* ATU ON (#344): the radio reports its tuner in line. Lit like Hold Tx's latch, from variables
    both themes define. The menu that switches it out is anchored on an empty span inside the
@@ -8106,7 +8143,8 @@ select optgroup {
 .op-btn.atu.on {
   background: color-mix(in srgb, var(--accent) 22%, var(--bg-elev));
   color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  /* The accent at full strength: a button's 3:1 outline while lit (#455). */
+  border-color: var(--accent);
 }
 /* The anchor sits on the button's bottom-left corner, so the menu opens below (or, without room, above)
    the strip's row and never over Stop TX beside it (measured by `scripts/browser-probe --desktop atu`). */
@@ -8255,7 +8293,7 @@ select optgroup {
 .op-btn.hold.on {
   background: color-mix(in srgb, var(--accent) 22%, var(--bg-elev));
   color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-color: var(--accent);
 }
 
 .tier-toggle {
@@ -10457,13 +10495,15 @@ select optgroup {
   gap: var(--space-4);
   flex-wrap: wrap;
 }
+/* A READ-ONLY badge, so it wears no outline (#455): an accent outline on an accent tint is what a lit
+   toggle button wears. The tint stays; the transparent border keeps the badge's box. */
 .cw-mode-badge {
   font-weight: 800;
   font-size: var(--fs-label);
   letter-spacing: 0.08em;
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   padding: 3px 10px;
 }
@@ -13174,6 +13214,27 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: calc(18px * var(--text-scale));
   min-width: 4.5em;
 }
+/* The needle faces (#343) at the dialog's size too. The cockpit hosts share one 5em face, sized to the
+   TX strip's buttons; the dialog is opened to read the meters, so its faces take the room it has and
+   their name and value grow as the bars' do. They still wrap onto a second line on a narrow window. */
+.txmeters-large .ph-txneedle {
+  width: 12em;
+}
+.txmeters-large .ph-txneedle-label {
+  font-size: calc(14px * var(--text-scale));
+}
+.txmeters-large .ph-txneedle-value {
+  font-size: calc(16px * var(--text-scale));
+}
+/* Beside faces that large, COMP and the temperatures take a line of their own, at the dialog's bar size. */
+.txmeters-large .ph-txmeters.needle .ph-txmeter {
+  flex: 1 1 100%;
+}
+/* The dialog's own spacing around the meters, which the dock's one-box rule would otherwise take. */
+.txmeters-large .ph-txmeters.needle {
+  padding: var(--space-2) 0;
+  gap: var(--space-3);
+}
 .txmeters-actions {
   display: flex;
   justify-content: flex-end;
@@ -13249,6 +13310,148 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: calc(10px * var(--text-scale));
   color: var(--text-dim);
   padding: 1px var(--space-1);
+}
+/* THE NEEDLE METERS (#343, components/TxNeedles.tsx): PO, ALC and SWR as analog faces, in place of
+   their bars, when Settings ▸ Workspace ▸ TX meters is Needle. Each face is a display well: a dial
+   (an SVG whose viewBox is the dial's own shape, so it scales with the face) over a band carrying the
+   meter's name and value, laid over the dial's lower half (the needle's pivot sits under it).
+
+   THE FACE'S SIZE IS ITS WIDTH, ONE SIZE IN EVERY HOST; its height is the dial's, from the dial's
+   aspect ratio, so the whole face is in em and follows --ui-zoom and the text size as the bars' type
+   does. It never changes with the TX cycle: the faces are drawn from the first moment the bars'
+   slots would be, at rest until a reading arrives, and the bars' compact/full switch does not reach
+   them. The size is the strip's: no taller than its buttons (measured in Chrome at 1920×1080 and
+   1366×768), and narrow enough that its COMP row keeps the room it has beside the bars.
+   - The dock (Phone and CW below md): the faces and the bars left (COMP, the temperatures) share
+     one wrapping line instead of the bars' grid, so the bottom-anchored dock grows by the faces'
+     extra height over a bar row and no more.
+   - Operate's cell (`inline`): the faces take the first row of its grid.
+   - The TX strip (`strip`): the faces take a first column across both of its rows. */
+.ph-txmeters.needle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  /* ONE BOX THROUGH THE TX CYCLE. The bars' container takes `.pinned`'s compact padding between
+     overs and the full one while keyed; the dock is bottom-anchored, so with needles that 2 px
+     swing moved Stop TX on every key and unkey. The faces never change size, so the box doesn't. */
+  padding: 2px var(--space-2);
+  gap: 2px var(--space-3);
+}
+/* Before the first reading the hint shares the faces' line, as it shares the bars' grid, instead of
+   wrapping onto a line of its own that the first reading would then take away. */
+.ph-txmeters.needle .ph-txmeters-hint {
+  flex: 1 1 150px;
+  min-width: 0;
+}
+.ph-txmeters.needle .ph-txmeter {
+  flex: 1 1 150px;
+}
+.ph-txmeters.needle .ph-txmeter.has-ctl {
+  flex-basis: 300px;
+}
+.ph-txmeters.inline.needle {
+  display: grid;
+  /* …and the one box above is the dock's: Operate's cell and the TX strip own their spacing
+     (`.ph-txmeters.inline`), with needles as with bars. */
+  padding: 0;
+  gap: 1px var(--space-2);
+}
+.ph-txmeters.needle .ph-txneedles {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--space-1);
+  min-width: 0;
+}
+.ph-txneedle {
+  flex: none;
+  width: 5em;
+  min-width: 0;
+}
+.ph-txneedle-face {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.ph-txneedle-dial {
+  position: relative;
+  aspect-ratio: 100 / 38;
+}
+.ph-txneedle-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.ph-txneedle-scale,
+.ph-txneedle-tick {
+  fill: none;
+  stroke: var(--text-dim);
+  stroke-width: 1.2;
+}
+.ph-txneedle-zone {
+  fill: none;
+  stroke-width: 3;
+}
+.ph-txneedle-peak {
+  fill: none;
+  /* The Cyan role: a signal colour no theme retunes, so in every theme and skin it stays apart from
+     the needle's ink (styles-wells.test.ts measures the pair). */
+  stroke: var(--alert-info);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+.ph-txneedle-needle {
+  stroke: var(--text);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+.ph-txneedle-band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1);
+  padding: 0 3px;
+  line-height: 1.15;
+  background: var(--bg-elev);
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+}
+.ph-txneedle-label {
+  font-family: var(--font-mono);
+  font-size: calc(10px * var(--text-scale));
+  font-weight: 800;
+  color: var(--text-dim);
+}
+.ph-txneedle-value {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.74rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The strip's two rows: the faces take both, in a first column of their own width; COMP and the
+   temperatures fill the columns after it as they do beside the bars. */
+.ph-txmeters.inline.strip.needle {
+  grid-template-columns: max-content;
+}
+.ph-txmeters.inline.strip.needle .ph-txneedles {
+  grid-column: auto;
+  grid-row: 1 / -1;
+  flex-wrap: nowrap;
+}
+/* Between overs the needle rests and the marker holds the last over's peak, dimmed like the bars. */
+.ph-txmeters.idle .ph-txneedle-value,
+.ph-txmeters.idle .ph-txneedle-label,
+.ph-txmeters.idle .ph-txneedle-peak {
+  opacity: 0.55;
 }
 /* THE TRANSMIT CONTRACT — the dock's top line (2026-09-20). ONE LINE, ALWAYS: `nowrap` is
    not tidiness, it is the whole reason this sits where it does. The dock is bottom-anchored,
@@ -18114,6 +18317,16 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: color-mix(in srgb, var(--bg) 62%, transparent);
   pointer-events: none;
   user-select: none;
+  /* Never down over the frequency scale: on a short waterfall (a large UI zoom, a dragged-down
+     strip) the legend stops 6px above the scale's strip (its 18px, which the UI zoom scales with
+     it), its bar giving up height first, and anything that still cannot fit is clipped. */
+  max-height: calc(100% - 30px);
+  overflow: hidden;
+}
+/* Squeezed to no bar at all (Waterfall's `legendBarRef`): hidden whole, so a clipped tick never
+   stands alone in the corner reading like a frequency. */
+.wf-legend[data-squeezed] {
+  visibility: hidden;
 }
 .wf-legend-bar {
   width: 8px;
@@ -18715,6 +18928,10 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .decode-row.ignored {
   opacity: 0.3;
   filter: grayscale(0.8);
+}
+/* #452: a row filled in afterwards from the station's history — its time reads as history. */
+.decode-row.refilled .decode-utc {
+  font-style: italic;
 }
 .decode-tag {
   font-size: calc(10px * var(--text-scale));
@@ -19382,6 +19599,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--state-good);
 }
 .log-upload.waiting,
+.log-upload.resend,
 .log-upload.none {
   color: var(--text-faint);
 }
@@ -19923,9 +20141,6 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-dim);
   margin-top: 2px;
 }
-.roam-enable .op-btn {
-  border-color: var(--border);
-}
 
 /* role / status pill */
 .roam-chip {
@@ -19981,9 +20196,6 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   flex-wrap: wrap;
   gap: var(--space-2);
   margin: var(--space-2) 0 var(--space-3);
-}
-.roam-controls .op-btn {
-  border: 1px solid var(--border);
 }
 .roam-controls .op-btn:disabled {
   opacity: 0.4;
@@ -21385,9 +21597,20 @@ button.cq-skiptx1.on {
 .cq-txctl .op-btn.atu {
   min-width: 7em;
 }
-/* The latch's READ-ONLY twin (Phone, CW): the same box, nothing to press. */
-.cq-txctl .op-btn.readonly {
+/* The latch's READ-ONLY twin (Phone, CW): the same box, nothing to press, so it looks like the
+   status it is (#455): no outline and no face, lit or not. Armed, it keeps the green word on a
+   tint, a lamp rather than a key. The buttons' hover does not reach it. */
+.cq-txctl .op-btn.monitor.readonly,
+.cq-txctl .op-btn.monitor.readonly:hover {
   cursor: default;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-faint);
+}
+.cq-txctl .op-btn.monitor.readonly.on,
+.cq-txctl .op-btn.monitor.readonly.on:hover {
+  background: color-mix(in srgb, var(--rx) 18%, transparent);
+  color: color-mix(in srgb, var(--state-good) 70%, var(--text));
 }
 /* The TX state after the cluster on the other screens' strips: Operate's colours, carried by the
    cap itself because those strips wear no rx/tx wash of their own. */
@@ -23897,6 +24120,11 @@ button.cq-skiptx1.on {
   content: '';
   flex: 1;
   border-top: 1px solid var(--border-soft);
+}
+/* #452: periods this pane missed that the station no longer held — the rule is dashed. */
+.od-period-sep.od-gap::before,
+.od-period-sep.od-gap::after {
+  border-top-style: dashed;
 }
 .od-sep-utc {
   font-family: var(--font-mono);
@@ -27171,6 +27399,14 @@ button.sat-chip:disabled {
 .sat-tp-auto {
   color: var(--accent);
 }
+/* The row's ★ favorite: the .sat-star toggle (same gold, both themes), at the card's end. */
+.sat-tp-fav {
+  margin-left: auto;
+}
+/* "last used": a quiet word on the row the operator picked last time. */
+.sat-tp-last {
+  color: var(--text-dim);
+}
 .sat-tp-deadmark {
   color: var(--text-dim);
 }
@@ -29683,10 +29919,8 @@ button.sat-chip:disabled {
   display: none;
 }
 /* Triple-class (0,3,0) so `.layout.single` can't collapse the flex chain — same
-   fix as `.layout.single.cw-cockpit`. PSK is RTTY's region-less shape (one
-   content pane, no region), so it rides the same rule — and the same
-   `--cockpit-fill-min` knob, whose allowlist in cockpit-panes.test.ts names all
-   three shells. */
+   fix as `.layout.single.cw-cockpit`. RTTY, PSK and SSTV share one shape: header
+   (pinned), scope, TX strip, ONE pane region with a single column, dock. */
 .layout.single.rtty-cockpit,
 .layout.single.psk-cockpit,
 .layout.single.sstv-view {
@@ -29700,19 +29934,10 @@ button.sat-chip:disabled {
      cockpits' content usually fits, so the scrollbar appears only on genuine deficit. */
   overflow-y: auto;
   min-height: 0;
-  /* THE FILL-FRAME FLOOR (region-less cockpits only). These two shells have no
-     .cockpit-panes region — their CockpitPaneFrames are bare shell children whose
-     inline fill flex is `1 1 0` with `min-height: var(--cockpit-fill-min, 0)`. This
-     knob is that floor: RTTY's stream / SSTV's gallery keep their head plus a readable
-     band of content, and deficit past it flows to the `overflow-y: auto` valve above.
-     A SHEET rule on `.pane-frame` cannot supply the floor — the frame's inline
-     min-height outranks every selector, which is how the previous spelling
-     (`.rtty-cockpit > .pane-frame { min-height: 10em }`) shipped dead. Fenced:
-     cockpit-panes.test.ts fails any other rule that sets this — inherited under a
-     region's tier-2/3 `overflow: hidden` it would be the clip mechanism reborn.
-     RTTY lowers it on a short cockpit through its knob (cockpit-panes.css `.rtty-cockpit`,
-     2026-10-27); PSK and SSTV never set the knob and keep the stock 10em. */
-  --cockpit-fill-min: var(--rtty-fill-floor, 10em);
+  /* (The fill-frame floor knob `--cockpit-fill-min` that stood here went with the
+     region-less shape, 2026-11-04: the frames are in a pane region now, whose bounded
+     flow sets their yielding floor itself — cockpit-panes.css. RTTY's short-cockpit
+     floors became its region's floor there, `.rtty-cockpit`.) */
 }
 /* JS8 is a REGION cockpit (CW's shape: a .cockpit-panes grid, not bare fill frames), so it
    takes CW's shell rule and NOT the --cockpit-fill-min knob — cockpit-panes.test.ts fences
@@ -29739,7 +29964,11 @@ button.sat-chip:disabled {
   flex: 0 0 auto;
   position: sticky;
   bottom: 0;
-  z-index: 2;
+  /* 4, the TX strip's and `.cockpit-txdock`'s level and the pinned header's (cockpit-panes.css):
+     the bar comes after the header in the shell, so at equal z it wins any overlap — Send and Stop
+     are never under the dial. (It was 2, under the header's 4, and at 900×600 / 175 % the header
+     covered Send and Stop.) Above the region's column dividers (3) for the dock's reason. */
+  z-index: 4;
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -29870,23 +30099,25 @@ button.sat-chip:disabled {
   gap: var(--space-2);
   align-items: end;
 }
-/* Muted dashed placeholder pill (band slot etc.) — reads as "not wired yet". */
+/* The band READOUT a header shows when it has no band picker: plain dim words, no outline, so it is
+   not mistaken for a button (#455; it was a dashed pill). The transparent border keeps its box. */
 .cockpit-ph-pill {
   font-size: var(--fs-label);
   font-weight: 700;
   color: var(--text-dim);
-  border: 1px dashed var(--border);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   padding: 3px 10px;
 }
-/* FSK/AFSK keying-backend indicator beside the RTTY mode badge. */
+/* FSK/AFSK keying-backend indicator beside the RTTY mode badge. An indicator, so no outline and no
+   raised face (#455): those are a button's. */
 .rtty-backend-pill {
   font-size: var(--fs-label);
   font-weight: 700;
   letter-spacing: 0.06em;
   color: var(--text-dim);
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 999px;
   padding: 2px 10px;
   margin-left: var(--space-2);

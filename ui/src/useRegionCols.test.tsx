@@ -42,8 +42,8 @@ function stubWidth(el: HTMLElement, w: number) {
   Object.defineProperty(el, 'clientWidth', { configurable: true, get: () => w })
 }
 
-function Region({ max }: { max?: 1 | 2 | 3 }) {
-  const { ref, cols, flow } = useRegionCols<HTMLDivElement>(max)
+function Region({ max, oneGroup }: { max?: 1 | 2 | 3; oneGroup?: boolean }) {
+  const { ref, cols, flow } = useRegionCols<HTMLDivElement>(max, oneGroup)
   return (
     <div data-testid="region" ref={ref}>
       <span data-testid="cols">{cols}</span>
@@ -181,6 +181,33 @@ describe('useRegionCols', () => {
     fire!()
     await frame()
     expect([el.getAttribute('data-flow'), screen.getByTestId('flow').textContent]).toEqual(['stack', 'stack'])
+  })
+
+  it('a ONE-GROUP region (SSTV, RTTY, PSK) fills at every width: it has nothing to stack', async () => {
+    // Stacking lays SEVERAL column groups one under another in a content-height region. With
+    // one group the stacking flow would only turn the fill panes content height (the transcript
+    // at its 6em floor, the log strip at its form) with the height below them left empty, and
+    // strand the divider between them. The state it stamps instead, (1, fill), is the one the ⊞
+    // menu already reaches on a wide window — no new state for the sheet.
+    render(<Region max={1} oneGroup />)
+    const el = screen.getByTestId('region')
+    expect([el.getAttribute('data-cols'), el.getAttribute('data-flow')], 'before any measurement').toEqual(['1', 'fill'])
+    expect(screen.getByTestId('flow').textContent).toBe('fill')
+    for (const w of [600, 900, 1079, 1470, 3390]) {
+      stubWidth(el, w)
+      fire!()
+      await frame()
+      expect([el.getAttribute('data-cols'), el.getAttribute('data-flow'), screen.getByTestId('flow').textContent], `at ${w} px`).toEqual(['1', 'fill', 'fill'])
+    }
+  })
+
+  it('the control: the same narrow region WITHOUT oneGroup still stacks', async () => {
+    render(<Region max={1} />)
+    const el = screen.getByTestId('region')
+    stubWidth(el, 900)
+    fire!()
+    await frame()
+    expect(el.getAttribute('data-flow')).toBe('stack')
   })
 
   it("never stamps a 'stack' flow at more than one track (the state space CSS enumerates)", async () => {
