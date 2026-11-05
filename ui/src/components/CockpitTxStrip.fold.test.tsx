@@ -16,7 +16,7 @@
 // is folded: the decision unfolds only the dock to measure it, which is the anti-flap band.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
-import { CockpitTxStrip, FOLD_ROOM_EM, PIN_ROOM_EM } from './CockpitTxStrip'
+import { CockpitTxStrip, FOLD_ROOM_EM, PIN_ROOM_EM, keepInSight } from './CockpitTxStrip'
 import type { AppSnapshot } from '../types'
 
 vi.mock('../api', () => ({ setFrequency: vi.fn(() => Promise.resolve(null)), haltTx: vi.fn() }))
@@ -359,6 +359,17 @@ describe('a focused control is never left behind the parked keep row', () => {
     send.focus()
     flush()
     expect(main().scrollTop).toBe(500)
+  })
+
+  it('keepInSight does the same for something opened rather than focused, and needs no focus', () => {
+    mountFolded()
+    main().scrollTop = 500
+    boxes['opened'] = box(300, 61)
+    const el = document.createElement('span')
+    el.className = 'opened'
+    document.querySelector('main > .cockpit-txdock')!.appendChild(el)
+    keepInSight(el)
+    expect(main().scrollTop).toBeCloseTo(500 + (330.5 - 233.5) / 1.75, 3)
   })
 
   it('the control: an unfolded dock leaves focus to the browser', () => {
