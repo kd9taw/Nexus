@@ -70,7 +70,7 @@ export async function rttyArm(): Promise<any> { return rtty }
 export async function getPskState(): Promise<any> { return psk }
 export async function pskAutoArm(): Promise<any> { return psk }
 export async function pskArm(): Promise<any> { return psk }
-export async function getJttyState(): Promise<any> { return jtty }
+export async function getJttyState(): Promise<any> { return { ...jtty, ...(globalThis as any).__jttyOver } }
 export async function jttyAutoArm(): Promise<any> { return jtty }
 export async function jttyArm(): Promise<any> { return jtty }
 export async function jttySetBand(lo: number, hi: number): Promise<any> { return { ...jtty, lowHz: lo, highHz: hi } }

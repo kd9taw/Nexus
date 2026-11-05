@@ -845,9 +845,10 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     setConfirmSetReset(false)
     // The caret goes back to the key the editor was opened from, not to the top of the page.
     if (key) {
-      dockRef.current
-        ?.querySelector<HTMLElement>(`[data-rtty-macro="${key}"] .cw-macro`)
-        ?.focus({ preventScroll: true })
+      const back = dockRef.current?.querySelector<HTMLElement>(`[data-rtty-macro="${key}"] .cw-macro`)
+      back?.focus({ preventScroll: true })
+      // While the dock is folded the key scrolls with the panes: it may be off screen or behind the keep row.
+      back?.scrollIntoView?.({ block: 'nearest' })
     }
   }
   const saveMacroSets = async (profiles: KeyboardMacroProfile[], activeSet: string): Promise<boolean> => {

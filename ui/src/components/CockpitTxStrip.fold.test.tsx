@@ -251,3 +251,111 @@ describe('the fold keeps its decision, and is re-measured when what it reads cha
     vi.unstubAllGlobals()
   })
 })
+
+// A FOCUSED CONTROL IS NEVER LEFT BEHIND THE PARKED KEEP ROW. Folded, the macro keys scroll with the panes, so Tab could
+// stop on one behind the keep row, and Enter then sent a key the operator could not see (RTTY at 900×600: 15 of 18
+// controls, measured). Two halves, and both are load-bearing:
+//  · `--cockpit-txdock-keep-h` on the shell, read by its `scroll-padding-bottom`, in RENDERED px. Chrome applies scroll
+//    padding unzoomed: offsetHeight (89 px for RTTY's 156 px row at 175 %) cleared CW and PSK by luck and not RTTY.
+//  · Where the room between the strip and the keep row is shorter than the control (JS8 at 900×600: 22 px for 38 px
+//    buttons) no padding can fit it and Chrome top-aligns it, its centre behind the row; the strip centres it instead.
+describe('a focused control is never left behind the parked keep row', () => {
+  const box = (top: number, height: number) => ({ x: 0, y: top, left: 0, right: 100, top, bottom: top + height, width: 100, height, toJSON() {} }) as DOMRect
+  const boxes: Record<string, DOMRect> = {}
+  const raf: Array<() => void> = []
+  const flush = () => { while (raf.length) raf.shift()!() }
+  const mountFolded = () => {
+    injectSheet(SHEET)
+    shellH = FITS - 1
+    return render(<Shell />)
+  }
+  beforeEach(() => {
+    for (const k of Object.keys(boxes)) delete boxes[k]
+    Object.assign(boxes, { 'cockpit-txstrip': box(100, 67), 'cockpit-txdock-keep': box(300, 156), 'layout': box(50, 400) })
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      for (const [c, b] of Object.entries(boxes)) if (this.classList.contains(c)) return b
+      return box(0, 0)
+    })
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      if (this.tagName === 'MAIN') return 400 / 1.75
+      if (this.classList.contains('cockpit-txdock')) return this.getAttribute('data-fold') === 'on' ? 0 : DOCK_H
+      if (this.classList.contains('cockpit-txdock-keep')) return 156 / 1.75
+      if (this.classList.contains('cockpit-txstrip')) return STRIP_H
+      return 0
+    })
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => { raf.push(() => cb(0)); return raf.length })
+    vi.spyOn(HTMLElement.prototype, 'matches').mockImplementation(function (this: HTMLElement, sel: string) {
+      return sel === ':focus-visible' ? !this.classList.contains('by-mouse') : Element.prototype.closest.call(this, sel) === this
+    })
+  })
+  const focusOn = (cls: string, top: number, height = 61) => {
+    boxes[cls] = box(top, height)
+    const el = document.createElement('button')
+    el.className = cls
+    document.querySelector('main > .cockpit-txdock')!.insertBefore(el, document.querySelector('.cw-macros'))
+    el.focus()
+    flush()
+    return el
+  }
+  const main = () => document.querySelector<HTMLElement>('main')!
+
+  it('folded, the shell pads its scroll by the keep row’s RENDERED height, not its layout height', () => {
+    mountFolded()
+    expect(main().style.getPropertyValue('--cockpit-txdock-keep-h'), 'in layout px, RTTY’s row is not cleared').toBe('156px')
+  })
+
+  it('unfolded it pads nothing, and the shell’s inline style is what it was', () => {
+    injectSheet(SHEET)
+    shellH = 900
+    render(<Shell />)
+    expect(main().style.getPropertyValue('--cockpit-txdock-keep-h')).toBe('')
+  })
+
+  it('a control whose centre is still behind the keep row is centred between the strip and the row', () => {
+    // The band is 167..300, its middle 233.5; the control's centre 330.5. At 175 % that is 97 / 1.75 of the shell's scroll.
+    mountFolded()
+    main().scrollTop = 500
+    focusOn('key-a', 300)
+    expect(main().scrollTop, 'focus stays on a key behind the keep row').toBeCloseTo(500 + (330.5 - 233.5) / 1.75, 3)
+  })
+
+  it('a control whose centre is under the strip is centred too', () => {
+    mountFolded()
+    main().scrollTop = 500
+    focusOn('key-b', 90)
+    expect(main().scrollTop).toBeCloseTo(500 + (120.5 - 233.5) / 1.75, 3)
+  })
+
+  it('a control already in sight does not move the shell', () => {
+    mountFolded()
+    main().scrollTop = 500
+    focusOn('key-c', 200, 40)
+    expect(main().scrollTop).toBe(500)
+  })
+
+  it('a mouse focus never moves the shell: the button would move out from under the press', () => {
+    mountFolded()
+    main().scrollTop = 500
+    focusOn('by-mouse', 300)
+    expect(main().scrollTop).toBe(500)
+  })
+
+  it('the parked surfaces themselves never scroll the shell for their own focus', () => {
+    mountFolded()
+    main().scrollTop = 500
+    const send = document.querySelector<HTMLElement>('.cockpit-txdock-keep')!
+    send.tabIndex = 0
+    send.focus()
+    flush()
+    expect(main().scrollTop).toBe(500)
+  })
+
+  it('the control: an unfolded dock leaves focus to the browser', () => {
+    injectSheet(SHEET)
+    shellH = 900
+    render(<Shell />)
+    main().scrollTop = 500
+    focusOn('key-d', 300)
+    expect(main().scrollTop).toBe(500)
+  })
+})

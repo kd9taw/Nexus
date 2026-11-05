@@ -44,6 +44,11 @@
 //      at every step of a walk of the shell with the menu open. Each of those opens is also at least SHORTEST_MENU_PX
 //      tall (or as tall as the whole menu), inside the window, and every item is topmost under the menu's own scroll.
 //      Run on Operate as well.
+//   9. ON A FOLDED DOCK, A FOCUSED CONTROL IS NEVER HIDDEN: real Tab through the dock's rows, and the centre of each control
+//      focused is the topmost thing there. They scroll with the panes, so Tab could leave focus on a macro key behind
+//      the parked keep row, and Enter then sends a key the operator cannot see (RTTY at 900×600: 15 of 18, measured).
+//   10. JTTY'S REFUSAL IS ON SCREEN, whatever the scroll, covering no stop button, and with it showing no control of the
+//      keep row or the strip moves. JS8'S HEARTBEAT MENU OPENS IN SIGHT: its first item is topmost as it opens.
 //   7. EVERY CONTROL OF THE STRIP AND THE DOCK CAN BE CLICKED at some scroll position (the same 6 px search): a folded
 //      dock's macro keys scroll with the panes, and each must come out between the parked surfaces.
 // THE CONTROLS, run every time: the header forced to stick on top (z 9) at 900×600 / 175 % must make check 1 fail;
@@ -51,7 +56,8 @@
 // the dock's fold taken away at 900×600 / 175 % on RTTY must make check 5 fail; and the menu's clamp into the window
 // taken away at 700×800 / 175 % on RTTY must make check 4 fail; the menu's sizing taken away (0.7 × the window,
 // downward) at 1366×768 / 150 % on CW must make check 4b fail; a menu planted over the stop button at 1024×768 / 175 %
-// on Phone, and a menu held to 20 px at 1280×720 / 175 % on CW, must make check 8 fail.
+// on Phone, and a menu held to 20 px at 1280×720 / 175 % on CW, must make check 8 fail; and a keep row planted over the
+// whole shell at 900×600 / 175 % on RTTY must make check 9 fail.
 //
 // exit: 0 every check held · 1 a red, or a control that could not fail · 2 the page never drew a screen
 import { createServer } from 'vite'
@@ -87,6 +93,7 @@ const NO_FOLD = ".cockpit-txdock[data-fold='on'] { display: flex !important } .c
 const NO_CLAMP = '.panels-menu-pop { translate: none !important }'
 const OVER_STOP = '.panels-menu-pop { position: fixed !important; top: 5% !important; bottom: 5% !important; left: 5% !important; right: 5% !important; width: auto !important; max-width: none !important; max-height: none !important; translate: none !important }'
 const TINY_MENU = '.panels-menu-pop { max-height: 20px !important }'
+const KEEP_OVER_ALL = ".cockpit-txdock-keep[data-fold='on']::before { content: ''; position: absolute; left: 0; right: 0; top: -900px; bottom: 0 }"
 const NO_FIT = ".panels-menu-pop { max-height: calc(0.7 * var(--vh-eff, 100vh)) !important; top: 100% !important; bottom: auto !important }"
 /** The dock's send control: Send on the keyboard docks, PTT on Phone's. */
 const SEND = '.cw-send-btn, .ph-ptt'
@@ -240,7 +247,8 @@ const coverHelpers = (sel) => `(() => {
   H.shell = () => document.querySelector(${JSON.stringify(sel)})
   H.btn = () => H.shell().querySelector('.panels-menu-btn')
   H.pop = () => H.shell().querySelector('.panels-menu-pop')
-  H.stops = () => [...H.shell().querySelectorAll('.op-btn.stop')].filter((b) => b.closest('[hidden]') == null && b.getBoundingClientRect().width > 0)
+  // Every parked stop: the shell's stop button, and whatever in the dock or SSTV's bar says Stop (Esc/Stop).
+  H.stops = () => [...H.shell().querySelectorAll('.op-btn.stop, .cockpit-txdock button, .sstv-tx-bar button')].filter((b) => (b.matches('.op-btn.stop') || /stop/i.test(b.textContent || '')) && b.closest('[hidden]') == null && b.getBoundingClientRect().width > 0)
   // Grid points of the stop button (9 × 5, inset past its round corners) with the MENU topmost, worst button.
   H.under = () => {
     const pop = H.pop()
@@ -326,6 +334,82 @@ async function coverRun(evaluate, call, sel) {
   }
   await evaluate('__cover.shell().scrollTop = 0; 1')
   return { opens, clickable: clickable.length }
+}
+
+/** Check 9: real Tab through a folded dock's rows. `call` drives the keys. */
+async function focusRun(evaluate, call, sel) {
+  const settled = () => evaluate('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => r(1), 30))))')
+  const ok = await evaluate(`(() => { const s = document.querySelector(${JSON.stringify(sel)}); const d = s.querySelector(':scope > .cockpit-txdock'); if (d?.getAttribute('data-fold') !== 'on') return false
+    window.__focus = { d, s }
+    const all = [...s.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex="0"]')].filter((e) => e.getBoundingClientRect().width > 0)
+    const i = all.indexOf(all.find((e) => d.contains(e))); (all[i - 1] ?? all[i]).focus(); return true })()`)
+  if (!ok) return null
+  await settled()
+  const seen = []
+  for (let i = 0; i < 45; i++) {
+    await call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 })
+    await call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 })
+    await settled()
+    const r = await evaluate(`(() => { const e = document.activeElement; if (!e || !__focus.d.contains(e)) return null; const q = e.getBoundingClientRect()
+      const hit = ([a, b]) => { const t = document.elementFromPoint(q.left + q.width * a, q.top + q.height * b); return t != null && (t === e || e.contains(t)) }
+      const pts = [[.5, .5], [.1, .5], [.9, .5], [.5, .15], [.5, .85]].map(hit)
+      return { n: (e.getAttribute('aria-label') || e.textContent || e.placeholder || e.tagName).replace(/\\s+/g, ' ').trim().slice(0, 16), centre: pts[0], whole: pts.every(Boolean) } })()`)
+    if (!r) { if (seen.length) break; continue }
+    seen.push(r)
+  }
+  await evaluate('document.activeElement?.blur(); __focus.s.scrollTop = 0; 1')
+  return { n: seen.length, hidden: seen.filter((r) => !r.centre).map((r) => r.n), part: seen.filter((r) => r.centre && !r.whole).length }
+}
+
+/** Check 10, JS8: the heartbeat menu, opened with a real click from where its button can be clicked. */
+async function hbRun(evaluate, call, sel) {
+  const at = await evaluate(`(() => { const s = document.querySelector(${JSON.stringify(sel)}); const b = s.querySelector('.js8-hb-menu-btn'); if (!b || b.disabled) return null; const top = () => { const q = b.getBoundingClientRect(); const t = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2); return t === b || b.contains(t) }
+    const max = s.scrollHeight - s.clientHeight; for (let y = 0; y <= max + 5; y += 6) { s.scrollTop = Math.min(y, max); if (top()) { const q = b.getBoundingClientRect(); return [q.left + q.width / 2, q.top + q.height / 2] } } return null })()`)
+  if (!at) return { skipped: true }
+  await call('Input.dispatchMouseEvent', { type: 'mousePressed', x: at[0], y: at[1], button: 'left', clickCount: 1 })
+  await call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: at[0], y: at[1], button: 'left', clickCount: 1 })
+  await sleep(250)
+  const r = await evaluate(`(() => { const s = document.querySelector(${JSON.stringify(sel)}); const i = s.querySelector('.js8-hb-menu-item'); if (!i) return { opened: false }; const q = i.getBoundingClientRect(); const t = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2); const seen = t === i || i.contains(t); s.querySelector('.js8-hb-menu-btn').click(); return { opened: true, seen, by: seen ? null : String(t?.className).slice(0, 24) } })()`)
+  await evaluate(`document.querySelector(${JSON.stringify(sel)}).scrollTop = 0; 1`)
+  return r
+}
+
+const LONG_REFUSAL = 'TX is off, and this line stands in for the longest reason the transmitter gives: enable TX first, then send it again.'
+/** Check 10, JTTY: a refusal raised, read at every 24 px of the shell's scroll, against where the stops stood without it. */
+async function refusalRun(evaluate, sel) {
+  const stopsAt = `[...document.querySelector(${JSON.stringify(sel)}).querySelectorAll('.op-btn.stop, .cockpit-txdock .cw-send-btn, .cockpit-txdock .jtty-stop')].map((b) => Math.round(b.getBoundingClientRect().top))`
+  const walk = `(async () => { const s = document.querySelector(${JSON.stringify(sel)}); const max = s.scrollHeight - s.clientHeight; let n = 0, shown = 0, over = 0, moved = 0; const was = {}
+    for (let y = 0; y <= max + 23; y += 24) { s.scrollTop = Math.min(y, max); await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0))); n++
+      const e = [...s.querySelectorAll('[role=status]')].find((x) => x.textContent.includes('stands in for')); if (!e) continue; const q = e.getBoundingClientRect()
+      const hit = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2); if (hit === e || e.contains(hit)) shown++
+      for (const b of s.querySelectorAll('.op-btn.stop')) { const k = b.getBoundingClientRect(); if (Math.min(k.bottom, q.bottom) > Math.max(k.top, q.top) && Math.min(k.right, q.right) > Math.max(k.left, q.left)) over++ }
+      const now = ${stopsAt}.join(); if (window.__was?.[y] !== undefined && window.__was[y] !== now) moved++ }
+    s.scrollTop = 0; return { n, shown, over, moved } })()`
+  // Where the stops stand at each position with no refusal, for "moved".
+  await evaluate(`(async () => { const s = document.querySelector(${JSON.stringify(sel)}); const max = s.scrollHeight - s.clientHeight; window.__was = {}; for (let y = 0; y <= max + 23; y += 24) { s.scrollTop = Math.min(y, max); await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0))); window.__was[y] = ${stopsAt}.join() } s.scrollTop = 0; return 1 })()`)
+  await evaluate(`(() => { window.__jttyOver = { tx: { refusal: ${JSON.stringify(LONG_REFUSAL)}, txHz: 1500, serial: 1, sending: false, live: false, left: 0, pending: '', notice: null } }; return 1 })()`)
+  for (let i = 0; i < 40; i++) {
+    await sleep(100)
+    if (await evaluate(`[...document.querySelector(${JSON.stringify(sel)}).querySelectorAll('[role=status]')].some((x) => x.textContent.includes('stands in for'))`)) break
+  }
+  const r = await evaluate(walk)
+  await evaluate('window.__jttyOver = undefined; 1')
+  return r
+}
+
+function focusReds(name, m) {
+  const out = []
+  if (m.focus?.hidden.length) out.push(`${name}: Tab leaves focus hidden on ${m.focus.hidden.length} of ${m.focus.n} controls (${m.focus.hidden.join(', ')})`)
+  if (m.hb && !m.hb.skipped) {
+    if (!m.hb.opened) out.push(`${name}: the heartbeat menu did not open`)
+    else if (!m.hb.seen) out.push(`${name}: the heartbeat menu opens hidden, under ${m.hb.by}`)
+  }
+  if (m.refusal) {
+    if (m.refusal.shown < m.refusal.n) out.push(`${name}: JTTY's refusal is on screen at only ${m.refusal.shown} of ${m.refusal.n} scroll positions`)
+    if (m.refusal.over > 0) out.push(`${name}: JTTY's refusal stands over the stop button at ${m.refusal.over} positions`)
+    if (m.refusal.moved > 0) out.push(`${name}: a refusal showing moved a stop or Send at ${m.refusal.moved} positions`)
+  }
+  return out
 }
 
 function coverReds(name, c) {
@@ -429,6 +513,11 @@ async function measureAt(route, sel, [W, H, scale], css = null, menus = true, co
       m.after = await evaluate(measure(sel))
     }
     if (cover) m.cover = await coverRun(evaluate, call, sel)
+    if (cover) {
+      m.focus = await focusRun(evaluate, call, sel)
+      if (route === 'js8') m.hb = await hbRun(evaluate, call, sel)
+      if (route === 'jtty') m.refusal = await refusalRun(evaluate, sel)
+    }
     return m
   } finally {
     await browser.call('Target.closeTarget', { targetId })
@@ -490,7 +579,9 @@ try {
       const menu = (mc) => (mc?.opened ? `${mc.ok}/${mc.n} on screen and topmost${mc.off ? `, ${mc.off} outside the window` : ''}${mc.clipped ? `, ${mc.clipped} clipped by the scroll` : ''}${mc.inmenu ? `, ${mc.inmenu} in the menu's scroll` : ''}${mc.covered.length ? `, ${mc.covered.length} covered` : ''}` : 'not opened')
       console.log(`digishell-probe: ${name.padEnd(22)} header ${m.pin === 'on' ? 'pinned' : 'unpinned'} (${m.vp}), dock ${m.fold === 'on' ? 'folded' : 'whole'}, scrolls ${m.valve} px · top: ${info(m.top)} · end: ${info(m.end)}, header ${m.end.headReach} · ⊞ button reachable ${m.reach == null ? 'n/a' : m.reach < 0 ? 'NEVER' : `from scroll ${m.reach}`} · ⊞ Panels at top ${menu(m.menuTop)}, at end ${menu(m.menuEnd)}${m.menuReach ? `, at its button ${menu(m.menuReach)}` : ''}`)
       console.log(`digishell-probe:   check 8: ${coverLine(m.cover)}`)
-      for (const r of [...reds(name, m, cover), ...coverReds(name, m.cover)]) red(r)
+      if (m.focus) console.log(`digishell-probe:   check 9: ${m.focus.n} controls focused, ${m.focus.hidden.length} hidden, ${m.focus.part} part-covered`)
+      if (m.hb || m.refusal) console.log(`digishell-probe:   check 10: ${JSON.stringify(m.hb ?? m.refusal)}`)
+      for (const r of [...reds(name, m, cover), ...coverReds(name, m.cover), ...focusReds(name, m)]) red(r)
     }
   }
   for (const [view, route, sel] of COVER_ONLY) {
@@ -542,7 +633,12 @@ try {
   const caught7 = m7 ? coverReds(`CW at ${tagOf(size7)} (menu held to 20 px)`, m7.cover).filter((r) => r.includes('px tall')) : []
   if (caught7.length === 0) red('CONTROL FAILED — a menu held to 20 px passed as tall enough; the short-menu check cannot fail')
   else console.log(`digishell-probe: CONTROL — ${caught7[0]} (caught)`)
-  if (code === 0) console.log('digishell-probe: PASS — no header covers a transmit control, every stop control and Send/PTT is on screen and topmost at every scroll position of every screen at every size, ⊞ Panels can be clicked, a pinned header stays on screen, every on-screen item of an open ⊞ Panels menu is reachable and inside the window, the menu never stands over the stop button whether opened by pointer or keyboard or walked with it open, and all seven controls were caught')
+  const size8 = [900, 600, '175']
+  const m8 = await measureAt('rtty', 'main.rtty-cockpit', size8, KEEP_OVER_ALL, false, true)
+  const caught8 = m8 ? focusReds(`RTTY at ${tagOf(size8)} (keep row planted over the shell)`, m8).filter((r) => r.includes('hidden on')) : []
+  if (caught8.length === 0) red('CONTROL FAILED — a keep row planted over the whole shell hid no focused control; check 9 cannot fail')
+  else console.log(`digishell-probe: CONTROL — ${caught8[0].slice(0, 110)} (caught)`)
+  if (code === 0) console.log('digishell-probe: PASS — no header covers a transmit control, every stop control and Send/PTT is on screen and topmost at every scroll position of every screen at every size, ⊞ Panels can be clicked, a pinned header stays on screen, every on-screen item of an open ⊞ Panels menu is reachable and inside the window, the menu never stands over the stop button whether opened by pointer or keyboard or walked with it open, a focused control on a folded dock is never hidden, the JTTY refusal stays on screen, the JS8 heartbeat menu opens in sight, and all eight controls were caught')
   process.exitCode = process.exitCode || code
 } catch (e) {
   if (!process.exitCode) {

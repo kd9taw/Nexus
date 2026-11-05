@@ -1071,6 +1071,25 @@ describe('every stop and send control keeps its floor when --touch drops (comput
   })
 })
 
+describe('a shell keeps what it scrolls to clear of what is parked', () => {
+  // Top: the TX strip. Bottom: a folded dock's keep row, or Tab stops on a macro key behind it and Enter sends a key the
+  // operator cannot see (RTTY at 900×600 at 175 %, measured). Computed for every shell that folds.
+  const decl = (prop: string) => (body: string): string | null => {
+    let v: string | null = null
+    for (const d of body.split(';')) {
+      const m = new RegExp(`^\\s*${prop}\\s*:\\s*(\\S[^]*?)\\s*$`).exec(d)
+      if (m) v = m[1].replace(/\s+/g, ' ')
+    }
+    return v
+  }
+  for (const shell of ['cw-cockpit', 'phone-cockpit', 'rtty-cockpit', 'psk-cockpit', 'js8-cockpit', 'jtty-cockpit']) {
+    it(`${shell}: both edges read what the strip writes`, () => {
+      expect(winningValue(shellChain(shell), decl('scroll-padding-top'))?.value).toBe('var(--cockpit-txstrip-h, 0px)')
+      expect(winningValue(shellChain(shell), decl('scroll-padding-bottom'))?.value, 'a folded dock’s keep row can hide what is focused').toBe('var(--cockpit-txdock-keep-h, 0px)')
+    })
+  }
+})
+
 describe('Journey cards win their row direction against .panel', () => {
   // `<div className="jy-marathon panel">` / `<section className="jy-hero panel">`
   // (JourneyView.tsx ~60/~124): `.panel { flex-direction: column }` also targets the

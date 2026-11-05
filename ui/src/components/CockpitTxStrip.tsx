@@ -231,6 +231,9 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
  *    zoom Chrome applies `scroll-padding` unzoomed (measured: at 175 % a 42 px offsetHeight padded
  *    42 screen px under a 74 px strip), and more padding than the strip only scrolls a target a
  *    little lower.
+ *  · `--cockpit-txdock-keep-h` on the SHELL, while the dock is folded: the keep row's height, which the shell's
+ *    `scroll-padding-bottom` reads so a focus or a `scrollIntoView` never lands behind the parked row. RENDERED, for the
+ *    strip's reason: with offsetHeight (89 px for RTTY's 156 px row at 175 %) it cleared CW and PSK by luck and not RTTY.
  *  Re-read on every render as well as on a resize. */
 const isDock = (c: Element): c is HTMLElement =>
   c instanceof HTMLElement && (c.classList.contains('cockpit-txdock') || c.classList.contains('sstv-tx-bar'))
@@ -341,6 +344,23 @@ function decideFold(shell: HTMLElement, strip: HTMLElement, dock: HTMLElement): 
   return natural
 }
 
+/** A FOCUSED CONTROL THE PADDING COULD NOT CLEAR. Where the room between the strip and the keep row is shorter than the
+ *  control (JS8 at 900×600 at 175 %: 22 px for its 38 px buttons), no `scroll-padding` fits it and Chrome top-aligns it,
+ *  its centre behind the keep row, so Enter would send a key the operator cannot see. Its centre is brought to the middle
+ *  of that room instead, after the browser's own reveal. Keyboard focus only (`:focus-visible`): a press must not move a
+ *  button out from under the pointer before its release. The parked surfaces hold their own focus. */
+function centreIfBehind(shell: HTMLElement, strip: HTMLElement, dock: HTMLElement, el: HTMLElement): void {
+  const keep = dock.getAttribute('data-fold') === 'on' ? keepRow(dock) : undefined
+  if (!keep || document.activeElement !== el || keep.contains(el) || strip.contains(el) || el.closest('.panels-menu-pop')) return
+  const q = el.getBoundingClientRect()
+  const s = strip.getBoundingClientRect()
+  const k = keep.getBoundingClientRect()
+  const cy = q.top + q.height / 2
+  if (cy < k.top && (cy < s.top || cy > s.bottom)) return
+  if (k.top <= s.bottom || shell.offsetHeight === 0) return
+  shell.scrollTop += (cy - (s.bottom + k.top) / 2) / (shell.getBoundingClientRect().height / shell.offsetHeight)
+}
+
 /** The cockpit shell the strip stands in: its parent — or, where layout wrappers stand between them
  *  (Phone's stage and the left side's row, 2026-10-03), the nearest ancestor holding the dock, up to
  *  the cockpit's own `<main>`. With no dock that far up, the parent, as before. */
@@ -366,6 +386,8 @@ function useDockClearance(ref: RefObject<HTMLDivElement | null>) {
     const keep = dock?.getAttribute('data-fold') === 'on' ? keepRow(dock) : undefined
     strip.style.setProperty('--cockpit-txstrip-bottom',
       dock && getComputedStyle(dock).position === 'sticky' ? `${keep ? keep.offsetHeight : dock.offsetHeight}px` : '0px')
+    if (keep) shell.style.setProperty('--cockpit-txdock-keep-h', `${Math.ceil(keep.getBoundingClientRect().height)}px`)
+    else shell.style.removeProperty('--cockpit-txdock-keep-h')
     // Only where something is pinned above: every other cockpit's strip keeps exactly the inline style
     // it always had (the sheet's fallback is 0), so their documents are unchanged.
     if (head) strip.style.setProperty('--cockpit-txstrip-top', `${head.offsetHeight}px`)
@@ -392,9 +414,16 @@ function useDockClearance(ref: RefObject<HTMLDivElement | null>) {
     // The pin and fold decisions are against the shell's own height: a shorter window may unpin the
     // header or fold the dock without any of the parked surfaces changing size.
     if (head || keep) observer?.observe(shell)
+    const onFocus = (e: FocusEvent) => {
+      const el = e.target
+      if (dock && el instanceof HTMLElement && el.matches(':focus-visible')) requestAnimationFrame(() => centreIfBehind(shell, strip, dock, el))
+    }
+    shell.addEventListener('focusin', onFocus)
     return () => {
       observer?.disconnect()
+      shell.removeEventListener('focusin', onFocus)
       shell.style.removeProperty('--cockpit-txstrip-h')
+      shell.style.removeProperty('--cockpit-txdock-keep-h')
     }
     // `apply` reads only refs and the DOM; the observer is set up once per mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -267,6 +267,25 @@ describe('the macro editor', () => {
     )
   })
 
+  it('its field, and the key it returns to, are brought into view (the dock folded, both scroll with the panes)', async () => {
+    const seen: string[] = []
+    const was = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = function (this: Element, arg?: boolean | ScrollIntoViewOptions) {
+      expect(arg, 'not the layout contract’s nearest').toEqual({ block: 'nearest' })
+      seen.push(this.tagName)
+    }
+    try {
+      await renderCockpit()
+      fireEvent.click(editOf('F1')!)
+      expect(seen, 'the editor’s field was not brought into view').toContain('INPUT')
+      seen.length = 0
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      expect(seen, 'the key focus returned to was not brought into view').toContain('BUTTON')
+    } finally {
+      Element.prototype.scrollIntoView = was
+    }
+  })
+
   it('Cancel closes it and saves nothing', async () => {
     await renderCockpit()
     fireEvent.click(editOf('F1')!)
