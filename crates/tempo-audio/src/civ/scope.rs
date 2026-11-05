@@ -343,10 +343,126 @@ pub fn publish_sweep(feed: &tempo_app::engine::SpectrumFeed, sweep: ScopeSweep) 
     );
 }
 
+/// What one measuring window of the scope stream came to: see [`SweepMeter`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SweepRate {
+    /// Complete sweeps a second over the window.
+    pub sweeps_per_sec: f32,
+    /// Sweeps dropped since the meter started (the stream came on): never drawn.
+    pub dropped: u64,
+}
+
+/// THE REAL SWEEP RATE, MEASURED. Nexus's figure for how fast an Icom's scope streams over CI-V
+/// was a planning number nobody had timed; this turns the engine's running counters
+/// (`CivEngine::scope_counts`, plus the feed's own drops) into sweeps per second over a window of
+/// [`Self::WINDOW`], for Diagnostics and the diagnostic log. Pure: the caller hands it the time.
+///
+/// It starts over when the counters go backwards (a new engine: the radio was switched or its link
+/// re-opened) and when the caller resets it (the stream went off).
+#[derive(Debug, Default)]
+pub struct SweepMeter {
+    /// When the current window began, and the totals then.
+    base: Option<(std::time::Instant, u64, u64)>,
+    /// The dropped total when the meter started.
+    dropped_at_start: u64,
+    /// Windows completed since the meter started.
+    windows: u64,
+}
+
+impl SweepMeter {
+    /// How long one measuring window lasts: long enough to average a few sweeps at the slowest
+    /// scope speed, short enough that a change on the radio's SPEED menu shows within seconds.
+    pub const WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// Start over: the stream went off.
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Windows completed since the meter started.
+    pub fn windows(&self) -> u64 {
+        self.windows
+    }
+
+    /// Hand the meter the running totals at `now`: the sweeps assembled and dropped so far.
+    /// `Some` once per [`Self::WINDOW`], with the rate over that window.
+    pub fn sample(
+        &mut self,
+        now: std::time::Instant,
+        assembled: u64,
+        dropped: u64,
+    ) -> Option<SweepRate> {
+        match self.base {
+            Some((t0, a0, d0)) if assembled >= a0 && dropped >= d0 => {
+                let dt = now.saturating_duration_since(t0);
+                if dt < Self::WINDOW {
+                    return None;
+                }
+                self.base = Some((now, assembled, dropped));
+                self.windows += 1;
+                Some(SweepRate {
+                    sweeps_per_sec: (assembled - a0) as f32 / dt.as_secs_f32(),
+                    dropped: dropped - self.dropped_at_start,
+                })
+            }
+            _ => {
+                *self = Self {
+                    base: Some((now, assembled, dropped)),
+                    dropped_at_start: dropped,
+                    windows: 0,
+                };
+                None
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::frame::{freq_to_bcd, Frame};
     use super::*;
+
+    /// THE METER: one answer per window, the rate over that window, drops counted from when the
+    /// stream came on; and it starts over on a reset and when the counters go backwards (a new
+    /// engine), instead of reporting a negative or a huge rate.
+    #[test]
+    fn the_sweep_meter_reports_the_rate_once_per_window() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let mut m = SweepMeter::default();
+        assert_eq!(
+            m.sample(t0, 100, 7),
+            None,
+            "the first sample opens a window"
+        );
+        assert_eq!(m.sample(t0 + Duration::from_secs(4), 140, 7), None);
+        let r = m
+            .sample(t0 + Duration::from_secs(5), 150, 9)
+            .expect("one window");
+        assert_eq!(
+            r,
+            SweepRate {
+                sweeps_per_sec: 10.0,
+                dropped: 2
+            }
+        );
+        let r = m
+            .sample(t0 + Duration::from_secs(10), 165, 9)
+            .expect("the next window");
+        assert_eq!((r.sweeps_per_sec, r.dropped), (3.0, 2), "drops since start");
+        assert_eq!(m.windows(), 2);
+
+        // A new engine: its counters start at zero. No rate from the old base.
+        assert_eq!(m.sample(t0 + Duration::from_secs(15), 3, 0), None);
+        let r = m
+            .sample(t0 + Duration::from_secs(20), 18, 0)
+            .expect("measured afresh");
+        assert_eq!((r.sweeps_per_sec, r.dropped), (3.0, 0));
+
+        m.reset();
+        assert_eq!(m.windows(), 0);
+        assert_eq!(m.sample(t0 + Duration::from_secs(30), 18, 0), None);
+    }
 
     /// Build a `27 00` waveform frame as the radio would send it.
     fn wf_frame(seq: u8, total: u8, body: &[u8]) -> Frame {

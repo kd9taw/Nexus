@@ -8676,6 +8676,11 @@ export const EN = {
     "<b>Recording</b> to <code>{{path}}</code> — this keeps running while you're on other screens, so go to the FT8 or Phone cockpit and reproduce the issue (Tune or transmit) now. Come back and turn it off when done, then send that file. It shows exactly what's on the bus during the fault.",
   'settings.rigControl.civLog.idle':
     'Records every byte to/from the radio on the native CI-V path to a file in your Downloads — a support tool for hardware-only issues like the IC-9700 PTT flicker. Turn on, reproduce the problem, turn off, then send the file.',
+  'settings.rigControl.scopeRate.label': 'Radio scope stream',
+  'settings.rigControl.scopeRate.value': '{{rate}} sweeps a second · {{dropped}} not drawn · scope SPEED {{speed}} on the radio',
+  'settings.rigControl.scopeRate.speedUnknown': 'not read',
+  'settings.rigControl.scopeRate.idle':
+    "Measured while the radio's own scope streams to Nexus (the CW or Phone scope, or the RF scope pane). Nexus reads the radio's scope SPEED and never changes it.",
   'settings.rigControl.flexIp.label': 'Flex radio IP (native panadapter + DAX)',
   'settings.rigControl.flexIp.hint':
     "Your FlexRadio's LAN IP (SmartSDR API, port 4992) — turns on the native RF panadapter. This is the <em>radio's</em> address, not the SmartSDR-CAT port above.",

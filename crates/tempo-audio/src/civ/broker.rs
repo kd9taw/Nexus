@@ -2007,9 +2007,19 @@ impl CivDaemon {
         self.civ.set_filter_width_hz(hz)
     }
 
-    /// Newest completed scope sweep (latest-wins; `None` until the next arrives).
+    /// The oldest completed scope sweep still waiting (`None` until the next arrives).
     pub fn take_scope_row(&self) -> Option<ScopeSweep> {
         self.engine.take_scope_row()
+    }
+
+    /// Every completed scope sweep still waiting, oldest first: see `CivEngine::take_scope_rows`.
+    pub fn take_scope_rows(&self) -> Vec<ScopeSweep> {
+        self.engine.take_scope_rows()
+    }
+
+    /// The scope stream's counters for this radio since its engine started.
+    pub fn scope_counts(&self) -> super::engine::ScopeCounts {
+        self.engine.scope_counts()
     }
 
     /// Stream the radio's scope waveform (on for the ACTIVE radio, off for monitors —
@@ -2084,6 +2094,24 @@ impl CivDaemon {
             commands::set_scope_center_mode(self.civ_addr, self.scope_ms(), fixed),
             Expect::Ack,
         );
+    }
+
+    /// READ the rig's scope SWEEP SPEED (`27 1A`), for the waterfall's "the radio is sending slowly"
+    /// hint and the diagnostic log. `None` when the radio did not answer or answered something
+    /// else. Read only: see `commands::read_scope_speed` for why nothing here ever writes it.
+    pub fn scope_speed(&self) -> Option<commands::ScopeSpeed> {
+        self.engine
+            .handle()
+            .transact(
+                commands::read_scope_speed(self.civ_addr, self.scope_ms()),
+                Expect::Reply {
+                    cmd: 0x27,
+                    sub: Some(0x1A),
+                },
+            )
+            .ok()
+            .as_ref()
+            .and_then(commands::parse_scope_speed)
     }
 
     /// READ the rig's scope CENTER/FIXED mode (`27 14`). `Some(true)` = fixed, `Some(false)` =
@@ -2477,6 +2505,42 @@ mod tests {
             "a 27 00 waveform burst must reach the assembler — this is the path that draws the \
              waterfall, and narrowing the router is exactly what could cut it"
         );
+    }
+
+    /// THE RADIO'S SCOPE SPEED IS READ, IN EVERY POSITION, AND NEVER WRITTEN. Each of the three
+    /// settings reads back as itself (a reader stuck on one answer would pass a one-sided check),
+    /// a radio that refuses the read is `None`, and the wire carries only `27 1A 00` reads: no
+    /// frame that could change the operator's setting.
+    #[test]
+    fn the_scope_speed_is_read_in_every_position_and_never_written() {
+        let (d, _port, regs) = daemon_with_regs();
+        for (byte, want) in [
+            (0x00, commands::ScopeSpeed::Fast),
+            (0x01, commands::ScopeSpeed::Mid),
+            (0x02, commands::ScopeSpeed::Slow),
+        ] {
+            regs.lock().unwrap().scope_speed = byte;
+            assert_eq!(d.scope_speed(), Some(want), "{byte:02X}");
+        }
+        regs.lock().unwrap().off = true;
+        assert_eq!(d.scope_speed(), None, "no answer, no speed");
+        regs.lock().unwrap().off = false;
+        let speed_frames: Vec<Vec<u8>> = regs
+            .lock()
+            .unwrap()
+            .wire
+            .iter()
+            .filter(|w| w.len() > 5 && w[4] == 0x27 && w[5] == 0x1A)
+            .cloned()
+            .collect();
+        assert_eq!(speed_frames.len(), 4);
+        for w in speed_frames {
+            assert_eq!(
+                w,
+                vec![0xFE, 0xFE, 0xA2, 0xE0, 0x27, 0x1A, 0x00, 0xFD],
+                "reads only"
+            );
+        }
     }
 
     fn daemon_with_regs() -> (CivDaemon, u16, Arc<std::sync::Mutex<Regs>>) {

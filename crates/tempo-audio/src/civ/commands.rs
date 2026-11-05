@@ -1309,6 +1309,56 @@ pub fn parse_scope_center_mode(f: &Frame) -> Option<bool> {
         .then(|| f.data.last().is_some_and(|b| *b != 0))
 }
 
+/// The radio's scope SWEEP SPEED, as its own scope menu names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeSpeed {
+    Fast,
+    Mid,
+    Slow,
+}
+
+impl ScopeSpeed {
+    /// The word the snapshot and the diagnostic log carry: `fast`, `mid` or `slow`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ScopeSpeed::Fast => "fast",
+            ScopeSpeed::Mid => "mid",
+            ScopeSpeed::Slow => "slow",
+        }
+    }
+}
+
+/// READ the scope SWEEP SPEED (`27 1A <main_sub>`, no speed byte). The radio answers with the same
+/// two bytes and a trailing speed byte: `00` = FAST, `01` = MID, `02` = SLOW.
+///
+/// Icom's own pages: IC-9700 CI-V Reference Guide A7508-3EX-2, the command table (printed p. 12,
+/// "1A* Send/read the Sweep speed setting", `*` = send/read) and "Scope Sweep speed settings"
+/// (printed p. 25: `27 1A`, `00`=MAIN / `01`=SUB, `00`=FAST / `01`=MID / `02`=SLOW); IC-7300 Full
+/// Manual A7292-4EX-9, the command table (PDF p. 161, "1A … Send/read the Sweep speed setting")
+/// and "Scope Sweep speed settings" (printed p. 19-13: `27 1A`, `00` fixed, then the same three
+/// values). The selector sits before the value exactly as in `27 14`.
+///
+/// ⛔ READ ONLY, AND THERE IS NO SETTER ON PURPOSE. The speed is the operator's choice on the
+/// radio's own scope menu, and the slower settings are a legitimate pick (a steadier picture).
+/// Nexus reads it to explain a slow waterfall and never writes it.
+pub fn read_scope_speed(radio: u8, main_sub: u8) -> Frame {
+    scope_ctrl_frame(radio, 0x1A, main_sub, &[])
+}
+
+/// The speed from a `27 1A` reply (`1A <main_sub> <speed>`), `None` for any other frame or an
+/// unknown speed byte.
+pub fn parse_scope_speed(f: &Frame) -> Option<ScopeSpeed> {
+    if f.cmd != 0x27 || f.data.first() != Some(&0x1A) || f.data.len() != 3 {
+        return None;
+    }
+    match f.data[2] {
+        0x00 => Some(ScopeSpeed::Fast),
+        0x01 => Some(ScopeSpeed::Mid),
+        0x02 => Some(ScopeSpeed::Slow),
+        _ => None,
+    }
+}
+
 // ---- reply decoders ----
 
 /// Extract the frequency (Hz) from a `03` frequency report (or an unsolicited transceive
@@ -2054,6 +2104,43 @@ mod tests {
                 vec![0x19, 0x00, 0x00, 0x00, 0x00]
             );
         }
+    }
+
+    /// THE SWEEP-SPEED READ, WHOLE, ON THE WIRE, and its reply decoded in all three positions.
+    /// `27 1A 00` to an IC-9700 (Main) and an IC-7300 (the fixed `00`), per the two guides cited on
+    /// [`read_scope_speed`]. A reply carrying a speed byte the guides do not list, or another
+    /// sub-command's reply, decodes to nothing.
+    #[test]
+    fn the_scope_speed_read_is_pinned_and_its_reply_decoded() {
+        assert_eq!(
+            read_scope_speed(0xA2, 0x00).to_bytes(),
+            vec![0xFE, 0xFE, 0xA2, 0xE0, 0x27, 0x1A, 0x00, 0xFD]
+        );
+        assert_eq!(
+            read_scope_speed(0x94, 0x00).to_bytes(),
+            vec![0xFE, 0xFE, 0x94, 0xE0, 0x27, 0x1A, 0x00, 0xFD]
+        );
+        let reply = |data: &[u8]| Frame {
+            to: 0xE0,
+            from: 0xA2,
+            cmd: 0x27,
+            data: data.to_vec(),
+        };
+        assert_eq!(
+            parse_scope_speed(&reply(&[0x1A, 0x00, 0x00])),
+            Some(ScopeSpeed::Fast)
+        );
+        assert_eq!(
+            parse_scope_speed(&reply(&[0x1A, 0x00, 0x01])),
+            Some(ScopeSpeed::Mid)
+        );
+        assert_eq!(
+            parse_scope_speed(&reply(&[0x1A, 0x00, 0x02])),
+            Some(ScopeSpeed::Slow)
+        );
+        assert_eq!(parse_scope_speed(&reply(&[0x1A, 0x00, 0x03])), None);
+        assert_eq!(parse_scope_speed(&reply(&[0x1A, 0x00])), None, "no value");
+        assert_eq!(parse_scope_speed(&reply(&[0x14, 0x00, 0x01])), None);
     }
 
     #[test]
