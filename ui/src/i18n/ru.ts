@@ -545,7 +545,7 @@ export const RU: PartialCatalog = {
   "settings.workspace.txMeters.label": "Измерители TX",
   "settings.workspace.txMeters.bars": "Полосы",
   "settings.workspace.txMeters.needle": "Стрелка",
-  "settings.workspace.txMeters.hint": "Как выглядят индикаторы мощности, ALC и SWR на экранах FT8, «Телефон» и CW. «Стрелка» рисует стрелочный прибор с меткой пика, которая держит наибольшее показание секунду; между передачами она показывает пик последней передачи.",
+  "settings.workspace.txMeters.hint": "Как измерители TX показывают мощность, ALC и SWR на всех экранах, где они есть. «Стрелка» рисует стрелочный прибор с меткой пика, которая держит наибольшее показание секунду; между передачами она показывает пик последней передачи.",
   "settings.theme.legend": "Тема",
   "settings.workspace.panes.label": "Размеры панелей",
   "settings.workspace.panes.reset": "Сбросить размеры панелей",

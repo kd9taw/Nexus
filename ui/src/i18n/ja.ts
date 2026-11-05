@@ -6956,7 +6956,7 @@ export const JA: PartialCatalog = {
   "settings.workspace.txMeters.label": "TXメーター",
   "settings.workspace.txMeters.bars": "バー",
   "settings.workspace.txMeters.needle": "針",
-  "settings.workspace.txMeters.hint": "FT8・Phone・CWの画面での出力・ALC・SWRメーターの見た目です。「針」はアナログメーターを表示し、ピークマークが最大値を1秒間保持します。送信と送信の間は直前の送信のピークを表示します。",
+  "settings.workspace.txMeters.hint": "TXメーターのある画面での出力・ALC・SWRの見た目です。「針」はアナログメーターを表示し、ピークマークが最大値を1秒間保持します。送信と送信の間は直前の送信のピークを表示します。",
   "settings.dataFolder.legend": "データとログのフォルダー",
   "settings.dataFolder.note": "ログブック、Nexusがダウンロードするデータ表、Winlinkのメールボックスは1つのフォルダーにあります。このコンピューター内部のドライブに置いてください。Nexusはログブックをデータベースで管理しており、ネットワークドライブ上のデータベースはネットワーク越しのファイルロックの仕組みによって壊れることがあるため、ネットワークドライブは拒否されます。同期フォルダー（Dropbox、OneDrive、iCloud、Google Drive）は使えますが、同時に使えるNexusは1台だけです。2台が同期サービス経由で1つのログブックに書き込むと、統合ではなく競合コピーになります。",
   "settings.dataFolder.onNetwork": "このフォルダーはネットワークドライブ上にあります。Nexusはログブックをデータベースで管理しており、ネットワーク上のデータベースはネットワーク越しのファイルロックの仕組みによって壊れることがあります。最悪の場合、ログブックがまったく開けなくなります。フォルダーをこのコンピューター内部のドライブにコピーし、そのコピーをNexusに指定してください。",

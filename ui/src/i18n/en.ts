@@ -10984,7 +10984,7 @@ export const EN = {
   'settings.workspace.txMeters.label': 'TX meters',
   'settings.workspace.txMeters.bars': 'Bars',
   'settings.workspace.txMeters.needle': 'Needle',
-  'settings.workspace.txMeters.hint': 'How the power, ALC and SWR meters look on the FT8, Phone and CW screens. Needle draws an analog meter with a peak mark that holds the highest reading for a second; between overs it shows the last over\'s peak.',
+  'settings.workspace.txMeters.hint': 'How the TX meters show power, ALC and SWR, on every screen that has them. Needle draws an analog meter with a peak mark that holds the highest reading for a second; between overs it shows the last over\'s peak.',
   'settings.theme.legend': 'Theme',
   'settings.waterfallScopes.legend': 'Waterfall & scopes',
   'settings.waterfallScopes.note':
