@@ -156,6 +156,28 @@ describe('the JTTY shell is the census: header, scope, TX strip, ONE pane region
   })
 })
 
+describe('why a send was refused stays on screen', () => {
+  // While folded the dock's rows scroll with the panes, and JTTY's line under the send row was on screen at 6 of about 85
+  // positions (1024×768 and 1280×720 at 175 %, measured; main always shows it). The notice and the refusal therefore
+  // stand in the keep row, which stays parked; the standing how-to hint is advice, and scrolls.
+  const tx = (over: object) => ({ refusal: null, txHz: 1500, serial: 1, sending: false, live: false, left: 0, pending: '', notice: null, ...over })
+  const reason = () => document.querySelector('.cockpit-txdock-keep [role="status"]')
+  it('a refusal stands in the keep row', async () => {
+    await mount(jtty({ tx: tx({ refusal: 'TX is off — enable TX first' }) } as never))
+    expect(reason()?.textContent, 'the refusal can scroll away while the dock is folded').toBe('TX is off — enable TX first')
+    expect(document.querySelectorAll('.cockpit-txdock [role="status"]').length, 'said twice').toBe(1)
+  })
+  it('so does the transmitter’s notice, before a refusal', async () => {
+    await mount(jtty({ tx: tx({ notice: 'Queue complete', refusal: 'TX is off' }) } as never))
+    expect(reason()?.textContent).toBe('Queue complete')
+  })
+  it('the control: the how-to hint is not in the keep row, where it would take the parked room', async () => {
+    await mount(jtty({ tx: tx({}) } as never))
+    expect(reason()).toBeNull()
+    expect(document.querySelector('.cockpit-txdock > [role="status"]')).not.toBeNull()
+  })
+})
+
 describe('the dock’s keep row', () => {
   it('is one direct dock child holding Send and Esc/Stop', async () => {
     // THE KEEP ROW: the one dock row still parked when the dock folds on a small window at a large zoom

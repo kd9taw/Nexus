@@ -471,6 +471,7 @@
 .cockpit-txdock[data-fold='on'] {
   display: contents;
   --cockpit-txdock-float: static;
+  --cockpit-txdock-reason-pos: absolute;
 }
 /* THE KEEP ROW, while the dock is folded (the strip writes `data-fold="on"` on it as well): sticky at
    the bottom of the shell's scrollport, as the dock was, above the dividers like the dock, and opaque,

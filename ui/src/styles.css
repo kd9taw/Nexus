@@ -30261,6 +30261,24 @@ button.sat-chip:disabled {
   color: var(--text-dim);
   padding: 0 var(--space-1);
 }
+/* JTTY'S NOTICE OR REFUSAL, in the keep row so it stays parked while the dock is folded. In flow it takes a line of its
+   own under the send row, where the how-to hint stands. FOLDED IT IS AN OVERLAY on the row's top edge (cockpit-panes.css
+   sets `--cockpit-txdock-reason-pos`): in flow it would grow the row, and the row is bottom-anchored, so Send and Esc/Stop
+   would move up under the pointer as the refusal arrived. Where the strip parks directly above the row the overlay reaches
+   it, so it keeps to the column right of Stop TX, which holds no control (`--cockpit-txdock-reason-left`, CockpitTxStrip).
+   Opaque, and takes no click from what it covers. */
+.jtty-dock-reason {
+  flex: 0 0 100%;
+  /* In flow, the dock's gap above it rather than the send row's bigger one (`.cockpit-txdock`'s stepped length), so a
+     refusal replacing the hint moves nothing above it: the line stands exactly where the hint stood. */
+  margin-top: calc(max(var(--space-1), min(var(--space-2), (var(--vh-eff, 100vh) - 1100px) * 100)) - var(--space-2));
+  position: var(--cockpit-txdock-reason-pos, static);
+  bottom: 100%;
+  left: var(--cockpit-txdock-reason-left, 0px);
+  right: 0;
+  background: var(--panel);
+  pointer-events: none;
+}
 /* (`.rtty-cockpit > .cw-macros` / `> .cw-send { flex: 0 0 auto }` deleted with the pane
    rebuild — the child combinator stopped matching once the rows moved inside the pinned
    `.cockpit-txdock`. The pins themselves came BACK on the base `.cw-macros` / `.cw-send`

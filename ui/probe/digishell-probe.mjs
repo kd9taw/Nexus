@@ -381,7 +381,8 @@ async function refusalRun(evaluate, sel) {
   const walk = `(async () => { const s = document.querySelector(${JSON.stringify(sel)}); const max = s.scrollHeight - s.clientHeight; let n = 0, shown = 0, over = 0, moved = 0; const was = {}
     for (let y = 0; y <= max + 23; y += 24) { s.scrollTop = Math.min(y, max); await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0))); n++
       const e = [...s.querySelectorAll('[role=status]')].find((x) => x.textContent.includes('stands in for')); if (!e) continue; const q = e.getBoundingClientRect()
-      const hit = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2); if (hit === e || e.contains(hit)) shown++
+      e.style.pointerEvents = 'auto' // it takes no clicks, on purpose: lifted only to ask what is topmost
+      const hit = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2); e.style.pointerEvents = ''; if (hit === e || e.contains(hit)) shown++
       for (const b of s.querySelectorAll('.op-btn.stop')) { const k = b.getBoundingClientRect(); if (Math.min(k.bottom, q.bottom) > Math.max(k.top, q.top) && Math.min(k.right, q.right) > Math.max(k.left, q.left)) over++ }
       const now = ${stopsAt}.join(); if (window.__was?.[y] !== undefined && window.__was[y] !== now) moved++ }
     s.scrollTop = 0; return { n, shown, over, moved } })()`

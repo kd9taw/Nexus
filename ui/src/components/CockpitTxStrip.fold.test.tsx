@@ -304,6 +304,17 @@ describe('a focused control is never left behind the parked keep row', () => {
     expect(main().style.getPropertyValue('--cockpit-txdock-keep-h'), 'in layout px, RTTY’s row is not cleared').toBe('156px')
   })
 
+  it('a notice standing on the parked row keeps to the column right of Stop TX, in layout px', () => {
+    boxes['op-btn'] = { ...box(100, 52), left: 339, right: 497, width: 158 }
+    boxes['cockpit-txdock-keep'] = { ...box(300, 156), left: 24, right: 876, width: 852 }
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('cockpit-txdock-keep') ? 852 / 1.75 : 0
+    })
+    mountFolded()
+    const left = parseFloat(document.querySelector<HTMLElement>('.cockpit-txdock-keep')!.style.getPropertyValue('--cockpit-txdock-reason-left'))
+    expect(left, 'the notice can stand over Stop TX').toBeCloseTo((497 - 24) / 1.75 + 4, 3)
+  })
+
   it('unfolded it pads nothing, and the shell’s inline style is what it was', () => {
     injectSheet(SHEET)
     shellH = 900

@@ -388,6 +388,13 @@ function useDockClearance(ref: RefObject<HTMLDivElement | null>) {
       dock && getComputedStyle(dock).position === 'sticky' ? `${keep ? keep.offsetHeight : dock.offsetHeight}px` : '0px')
     if (keep) shell.style.setProperty('--cockpit-txdock-keep-h', `${Math.ceil(keep.getBoundingClientRect().height)}px`)
     else shell.style.removeProperty('--cockpit-txdock-keep-h')
+    // A notice standing on the parked row's top edge (JTTY's) keeps clear of Stop TX: the column to its right.
+    const stop = strip.querySelector<HTMLElement>('.op-btn.stop')
+    if (keep && stop && keep.offsetWidth > 0) {
+      const k = keep.getBoundingClientRect()
+      const z = k.width / keep.offsetWidth
+      keep.style.setProperty('--cockpit-txdock-reason-left', `${Math.max(0, stop.getBoundingClientRect().right - k.left) / z + 4}px`)
+    } else if (dock) keepRow(dock)?.style.removeProperty('--cockpit-txdock-reason-left')
     // Only where something is pinned above: every other cockpit's strip keeps exactly the inline style
     // it always had (the sheet's fallback is 0), so their documents are unchanged.
     if (head) strip.style.setProperty('--cockpit-txstrip-top', `${head.offsetHeight}px`)
