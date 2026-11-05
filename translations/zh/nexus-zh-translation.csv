@@ -497,7 +497,7 @@
 "1","settings.workspace.txMeters.label","TX meters","发射表计","","Filled by the maintainer, pending translator review."
 "1","settings.workspace.txMeters.bars","Bars","条形","","Filled by the maintainer, pending translator review."
 "1","settings.workspace.txMeters.needle","Needle","指针","","Filled by the maintainer, pending translator review."
-"1","settings.workspace.txMeters.hint","How the power, ALC and SWR meters look on the FT8, Phone and CW screens. Needle draws an analog meter with a peak mark that holds the highest reading for a second; between overs it shows the last over's peak.","FT8、Phone 与 CW 界面上功率、ALC 与 SWR 表的样式。指针显示模拟表头，峰值标记将最高读数保持一秒；两次发射之间显示上一次发射的峰值。","ALC | SWR | FT8 | CW","Filled by the maintainer, pending translator review."
+"1","settings.workspace.txMeters.hint","How the TX meters show power, ALC and SWR, on every screen that has them. Needle draws an analog meter with a peak mark that holds the highest reading for a second; between overs it shows the last over's peak.","有发射表计的界面上，功率、ALC 与 SWR 的显示样式。指针显示模拟表头，峰值标记将最高读数保持一秒；两次发射之间显示上一次发射的峰值。","ALC | SWR","Filled by the maintainer, pending translator review."
 "1","settings.theme.legend","Theme","主题","","Section heading on: Settings ▸ Appearance ▸ Theme. Use the same word as the Theme row (settings.workspace.theme.label). The same English text ""Theme"" is used by 3 different keys (e.g. settings.workspace.theme.label, theme.aria) — each can take a different Russian word, so choose the one that fits THIS screen."
 "1","settings.workspace.panes.label","Pane sizes","面板尺寸","",""
 "1","settings.workspace.panes.reset","Reset pane sizes","重置面板尺寸","",""

@@ -493,7 +493,7 @@ export const ZH_HANT: PartialCatalog = {
   "settings.workspace.txMeters.label": "發射表計",
   "settings.workspace.txMeters.bars": "條形",
   "settings.workspace.txMeters.needle": "指針",
-  "settings.workspace.txMeters.hint": "FT8、Phone 與 CW 介面上功率、ALC 與 SWR 表的樣式。指針顯示類比表頭，峰值標記將最高讀數保持一秒；兩次發射之間顯示上一次發射的峰值。",
+  "settings.workspace.txMeters.hint": "有發射表計的介面上，功率、ALC 與 SWR 的顯示樣式。指針顯示類比表頭，峰值標記將最高讀數保持一秒；兩次發射之間顯示上一次發射的峰值。",
   "settings.theme.legend": "主題",
   "settings.workspace.panes.label": "面板尺寸",
   "settings.workspace.panes.reset": "重設面板尺寸",

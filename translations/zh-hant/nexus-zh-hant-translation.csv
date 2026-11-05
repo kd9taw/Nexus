@@ -497,7 +497,7 @@
 "1","settings.workspace.txMeters.label","TX meters","發射表計","","Filled by the maintainer, pending translator review."
 "1","settings.workspace.txMeters.bars","Bars","條形","","Filled by the maintainer, pending translator review."
 "1","settings.workspace.txMeters.needle","Needle","指針","","Filled by the maintainer, pending translator review."
-"1","settings.workspace.txMeters.hint","How the power, ALC and SWR meters look on the FT8, Phone and CW screens. Needle draws an analog meter with a peak mark that holds the highest reading for a second; between overs it shows the last over's peak.","FT8、Phone 與 CW 介面上功率、ALC 與 SWR 表的樣式。指針顯示類比表頭，峰值標記將最高讀數保持一秒；兩次發射之間顯示上一次發射的峰值。","ALC | SWR | FT8 | CW","Filled by the maintainer, pending translator review."
+"1","settings.workspace.txMeters.hint","How the TX meters show power, ALC and SWR, on every screen that has them. Needle draws an analog meter with a peak mark that holds the highest reading for a second; between overs it shows the last over's peak.","有發射表計的介面上，功率、ALC 與 SWR 的顯示樣式。指針顯示類比表頭，峰值標記將最高讀數保持一秒；兩次發射之間顯示上一次發射的峰值。","ALC | SWR","Filled by the maintainer, pending translator review."
 "1","settings.theme.legend","Theme","主題","",""
 "1","settings.workspace.panes.label","Pane sizes","面板尺寸","",""
 "1","settings.workspace.panes.reset","Reset pane sizes","重設面板尺寸","",""

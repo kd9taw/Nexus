@@ -491,7 +491,7 @@ export const ZH: PartialCatalog = {
   "settings.workspace.txMeters.label": "发射表计",
   "settings.workspace.txMeters.bars": "条形",
   "settings.workspace.txMeters.needle": "指针",
-  "settings.workspace.txMeters.hint": "FT8、Phone 与 CW 界面上功率、ALC 与 SWR 表的样式。指针显示模拟表头，峰值标记将最高读数保持一秒；两次发射之间显示上一次发射的峰值。",
+  "settings.workspace.txMeters.hint": "有发射表计的界面上，功率、ALC 与 SWR 的显示样式。指针显示模拟表头，峰值标记将最高读数保持一秒；两次发射之间显示上一次发射的峰值。",
   "settings.theme.legend": "主题",
   "settings.workspace.panes.label": "面板尺寸",
   "settings.workspace.panes.reset": "重置面板尺寸",

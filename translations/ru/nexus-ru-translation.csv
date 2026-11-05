@@ -542,7 +542,7 @@
 "1","settings.workspace.txMeters.label","TX meters","Измерители TX","TX",""
 "1","settings.workspace.txMeters.bars","Bars","Полосы","",""
 "1","settings.workspace.txMeters.needle","Needle","Стрелка","",""
-"1","settings.workspace.txMeters.hint","How the power, ALC and SWR meters look on the FT8, Phone and CW screens. Needle draws an analog meter with a peak mark that holds the highest reading for a second; between overs it shows the last over's peak.","Как выглядят индикаторы мощности, ALC и SWR на экранах FT8, «Телефон» и CW. «Стрелка» рисует стрелочный прибор с меткой пика, которая держит наибольшее показание секунду; между передачами она показывает пик последней передачи.","ALC | SWR | FT8 | CW",""
+"1","settings.workspace.txMeters.hint","How the TX meters show power, ALC and SWR, on every screen that has them. Needle draws an analog meter with a peak mark that holds the highest reading for a second; between overs it shows the last over's peak.","Как измерители TX показывают мощность, ALC и SWR на всех экранах, где они есть. «Стрелка» рисует стрелочный прибор с меткой пика, которая держит наибольшее показание секунду; между передачами она показывает пик последней передачи.","TX | ALC | SWR",""
 "1","settings.theme.legend","Theme","Тема","","Section heading on: Settings ▸ Appearance ▸ Theme. Use the same word as the Theme row (settings.workspace.theme.label). The same English text ""Theme"" is used by 3 different keys (e.g. settings.workspace.theme.label, theme.aria) — each can take a different Russian word, so choose the one that fits THIS screen."
 "1","settings.workspace.panes.label","Pane sizes","Размеры панелей","",""
 "1","settings.workspace.panes.reset","Reset pane sizes","Сбросить размеры панелей","",""
