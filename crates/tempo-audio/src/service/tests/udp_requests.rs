@@ -407,7 +407,7 @@ fn a_refused_request_is_one_line_in_the_diagnostic_log() {
         "{}::a_refused_request_is_one_line_in_the_diagnostic_log",
         module_path!().split_once("::").map_or("", |(_, rest)| rest)
     );
-    let out = std::process::Command::new(std::env::current_exe().expect("test binary"))
+    let out = tempo_core::process::command(std::env::current_exe().expect("test binary"))
         .args([me.as_str(), "--exact", "--test-threads=1"])
         .env(CHILD, &path)
         .output()
