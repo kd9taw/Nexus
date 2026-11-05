@@ -1202,7 +1202,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             <span className="cw-macro-label">{t('jtty.stop.label')}</span>
           </button>
           {dockReason && (
-            <div className="psk-drive-hint jtty-dock-reason" role="status">
+            <div className="psk-drive-hint jtty-dock-reason" role="status" title={dockReason} onClick={() => pushToast(dockReason, 'info')}>
               {dockReason}
             </div>
           )}

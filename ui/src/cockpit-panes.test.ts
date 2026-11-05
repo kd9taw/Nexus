@@ -1118,7 +1118,18 @@ describe('a TX dock that does not fit folds, and only its keep row parks', () =>
     // The strip parks directly above the keep row at some scrolls: the overlay keeps to the column right of Stop TX.
     expect(classWinner('jtty-dock-reason', blockDecl('left'))?.value, 'it can stand over Stop TX').toBe('var(--cockpit-txdock-reason-left, 0px)')
     expect(classWinner('jtty-dock-reason', blockDecl('background'))?.value, 'the panes show through it').toBe('var(--panel)')
-    expect(classWinner('jtty-dock-reason', blockDecl('pointer-events'))?.value, 'it takes clicks from what it covers').toBe('none')
+    // It hides what is under it, so it takes its own clicks: with `pointer-events: none` a click on the words went to the
+    // hidden key behind them, and called it (measured).
+    expect(classWinner('jtty-dock-reason', blockDecl('pointer-events')), 'a click on the words reaches a key the operator cannot see').toBeNull()
+    // Clamped while folded, to the lines the strip writes; the whole text is in its tooltip and a click's toast.
+    const fold = one(RULES, ".cockpit-txdock[data-fold='on']").body
+    expect(classWinner('jtty-dock-reason', blockDecl('display'))?.value).toBe('var(--cockpit-txdock-reason-display, block)')
+    expect(blockVar('--cockpit-txdock-reason-display')(fold), 'folded, it is not clamped').toBe('-webkit-box')
+    expect(classWinner('jtty-dock-reason', blockDecl('-webkit-line-clamp'))?.value).toBe('var(--cockpit-txdock-reason-lines, none)')
+    expect(classWinner('jtty-dock-reason', blockDecl('overflow'))?.value).toBe('var(--cockpit-txdock-reason-overflow, visible)')
+    expect(blockVar('--cockpit-txdock-reason-overflow')(fold)).toBe('hidden')
+    // The shell's scroll ends that much later, or the row above the keep row never comes out from under the words.
+    expect(blockDecl('margin-top')(one(RULES, ".cockpit-txdock-keep[data-fold='on']").body)).toBe('var(--cockpit-txdock-reason-room, 0px)')
     // In flow, the dock's own gap above it, not the send row's: a refusal replacing the hint moves nothing.
     const dockGap = blockDecl('gap')(one(RULES, '.cockpit-txdock').body)
     const sendGap = classWinner('cw-send', blockDecl('gap'))?.value

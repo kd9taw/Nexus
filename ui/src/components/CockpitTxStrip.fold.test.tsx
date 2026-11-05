@@ -15,8 +15,8 @@
 // Chrome, the keep row's folded padding and border (BAND) count in the dock's height while the keep row
 // is folded: the decision unfolds only the dock to measure it, which is the anti-flap band.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { render, cleanup } from '@testing-library/react'
-import { CockpitTxStrip, FOLD_ROOM_EM, PIN_ROOM_EM, keepInSight } from './CockpitTxStrip'
+import { render, cleanup, fireEvent } from '@testing-library/react'
+import { CockpitTxStrip, FOLD_ROOM_EM, PIN_ROOM_EM, keepInSight, revealAfterPress } from './CockpitTxStrip'
 import type { AppSnapshot } from '../types'
 
 vi.mock('../api', () => ({ setFrequency: vi.fn(() => Promise.resolve(null)), haltTx: vi.fn() }))
@@ -72,7 +72,7 @@ afterEach(() => {
   sheet = null
 })
 
-function Shell({ keep = true, dial = 7.04, header = false, dockClass = 'cockpit-txdock', extra = false }: { keep?: boolean; dial?: number; header?: boolean; dockClass?: string; extra?: boolean }) {
+function Shell({ keep = true, dial = 7.04, header = false, dockClass = 'cockpit-txdock', extra = false, reason = false }: { keep?: boolean; dial?: number; header?: boolean; dockClass?: string; extra?: boolean; reason?: boolean }) {
   return (
     <main className="layout single cw-cockpit">
       {header && <div className="cockpit-header cockpit-header-pinned" data-pin="on" />}
@@ -80,7 +80,7 @@ function Shell({ keep = true, dial = 7.04, header = false, dockClass = 'cockpit-
       <div className={dockClass}>
         {extra && <div className="cw-extra" />}
         <div className="cw-macros" />
-        <div className={keep ? 'cw-send cockpit-txdock-keep' : 'cw-send'} />
+        <div className={keep ? 'cw-send cockpit-txdock-keep' : 'cw-send'}>{reason && <div className="the-reason" role="status" />}</div>
       </div>
     </main>
   )
@@ -284,16 +284,22 @@ describe('a focused control is never left behind the parked keep row', () => {
       return 0
     })
     vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => { raf.push(() => cb(0)); return raf.length })
-    vi.spyOn(HTMLElement.prototype, 'matches').mockImplementation(function (this: HTMLElement, sel: string) {
-      return sel === ':focus-visible' ? !this.classList.contains('by-mouse') : Element.prototype.closest.call(this, sel) === this
-    })
   })
-  const focusOn = (cls: string, top: number, height = 61) => {
+  const addControl = (cls: string, top: number, height = 61, tag = 'button') => {
     boxes[cls] = box(top, height)
-    const el = document.createElement('button')
+    const el = document.createElement(tag)
     el.className = cls
     document.querySelector('main > .cockpit-txdock')!.insertBefore(el, document.querySelector('.cw-macros'))
+    return el
+  }
+  /** What a real Tab does: the key first, then the focus it moves. */
+  const tabTo = (el: HTMLElement) => {
+    fireEvent.keyDown(window, { key: 'Tab' })
     el.focus()
+  }
+  const focusOn = (cls: string, top: number, height = 61) => {
+    const el = addControl(cls, top, height)
+    tabTo(el)
     flush()
     return el
   }
@@ -344,11 +350,158 @@ describe('a focused control is never left behind the parked keep row', () => {
     expect(main().scrollTop).toBe(500)
   })
 
-  it('a mouse focus never moves the shell: the button would move out from under the press', () => {
+  it('a focus with no Tab behind it never moves the shell, on a text field either', () => {
+    // `:focus-visible` matches a text field on a mouse press, so it let a press re-centre the field under the held
+    // pointer, and the second click of a double click reached a sender (21 send calls, measured).
     mountFolded()
     main().scrollTop = 500
-    focusOn('by-mouse', 300)
+    const field = addControl('a-field', 300, 40, 'input')
+    fireEvent.pointerDown(field)
+    field.focus()
+    flush()
     expect(main().scrollTop).toBe(500)
+  })
+
+  it('a window regain never moves the shell: focusin fires again on the key Tab left focus on', async () => {
+    // The operator has since scrolled that key behind the keep row; a click just after the jump sent a different key.
+    mountFolded()
+    const key = focusOn('tabbed', 300)
+    main().scrollTop = 500
+    await new Promise((r) => setTimeout(r, 130))
+    key.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+    flush()
+    expect(main().scrollTop, 'the regain scrolled the shell').toBe(500)
+  })
+
+  it('a frame later, only the control still focused is centred', () => {
+    // Tab held down moves focus on before the frame: the one it left must not scroll the shell.
+    mountFolded()
+    main().scrollTop = 500
+    const passed = addControl('passed', 300)
+    const now = addControl('now', 200, 40)
+    tabTo(passed)
+    tabTo(now)
+    flush()
+    expect(main().scrollTop, 'the shell scrolled for a control focus had already left').toBe(500)
+  })
+
+  it('a notice standing on the keep row counts: the shell’s padding and the centring both clear it', () => {
+    // The whole row plus its notice is what stands there. Tab stopped under JTTY's words otherwise (6 of 14, measured).
+    injectSheet(SHEET)
+    shellH = FITS - 1
+    boxes['the-reason'] = box(250, 50)
+    render(<Shell reason />)
+    expect(main().style.getPropertyValue('--cockpit-txdock-keep-h'), 'the notice is not in what the shell clears').toBe('206px')
+    main().scrollTop = 500
+    focusOn('under-words', 250, 40) // centre 270: behind the notice, not the row. The room is 167..250, its middle 208.5.
+    expect(main().scrollTop, 'Tab stops behind the notice').toBeCloseTo(500 + (270 - 208.5) / 1.75, 3)
+  })
+
+  it('a notice gets 2 lines, or 3 in a column under 160 layout px', () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('cockpit-txdock-keep') ? 852 / 1.75 : 0
+    })
+    boxes['cockpit-txdock-keep'] = { ...box(300, 156), left: 24, right: 876, width: 852 }
+    boxes['op-btn'] = { ...box(100, 52), left: 339, right: 497, width: 158 }
+    mountFolded()
+    const keep = document.querySelector<HTMLElement>('.cockpit-txdock-keep')!
+    expect(keep.style.getPropertyValue('--cockpit-txdock-reason-lines')).toBe('2')
+    cleanup()
+    boxes['op-btn'] = { ...box(100, 52), left: 500, right: 658, width: 158 } // 218 window px, 124.6 layout px of column
+    mountFolded()
+    expect(document.querySelector<HTMLElement>('.cockpit-txdock-keep')!.style.getPropertyValue('--cockpit-txdock-reason-lines')).toBe('3')
+  })
+
+  it('while a press is held on a control the shell stays put, and lets go on release', () => {
+    // Chrome reveals a field or a <select> on a mouse press, and it honours the shell's scroll padding, so the press moved
+    // the keys under the pointer: 87 px on a <select>, 102 px on a field even before the padding (measured).
+    mountFolded()
+    main().scrollTop = 500
+    const field = addControl('held', 300, 40, 'select')
+    fireEvent.pointerDown(field)
+    main().scrollTop = 587
+    fireEvent.scroll(main())
+    expect(main().scrollTop, 'the press moved the shell').toBe(500)
+    main().scrollTop = 560
+    fireEvent.pointerUp(window)
+    expect(main().scrollTop, 'a reveal not yet delivered as a scroll event survived the release').toBe(500)
+    main().scrollTop = 620
+    fireEvent.scroll(main())
+    expect(main().scrollTop, 'the operator’s own scroll is held after the release').toBe(620)
+  })
+
+  it('a press on a label holds a moment past the release: its click focuses the field then', () => {
+    vi.useFakeTimers()
+    try {
+      mountFolded()
+      main().scrollTop = 500
+      const label = addControl('a-label', 300, 40, 'label')
+      fireEvent.pointerDown(label)
+      fireEvent.pointerUp(window)
+      main().scrollTop = 580
+      fireEvent.scroll(main())
+      expect(main().scrollTop).toBe(500)
+      vi.advanceTimersByTime(200)
+      main().scrollTop = 580
+      fireEvent.scroll(main())
+      expect(main().scrollTop).toBe(580)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a pin never sticks: a press with no release (a <select>’s native list) lets go by itself', () => {
+    vi.useFakeTimers()
+    try {
+      mountFolded()
+      main().scrollTop = 500
+      fireEvent.pointerDown(addControl('stuck', 300, 40, 'select'))
+      vi.advanceTimersByTime(1100)
+      main().scrollTop = 580
+      fireEvent.scroll(main())
+      expect(main().scrollTop).toBe(580)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('the controls: a press on the shell’s scrollbar, or on an unfolded dock, pins nothing', () => {
+    mountFolded()
+    main().scrollTop = 500
+    fireEvent.pointerDown(main())
+    main().scrollTop = 580
+    fireEvent.scroll(main())
+    expect(main().scrollTop, 'the scrollbar cannot be dragged').toBe(580)
+    cleanup()
+    injectSheet(SHEET)
+    shellH = 900
+    render(<Shell />)
+    main().scrollTop = 500
+    fireEvent.pointerDown(document.querySelector('.cw-send')!, {})
+    fireEvent.pointerDown(addControl('unfolded', 300, 40, 'select'))
+    main().scrollTop = 580
+    fireEvent.scroll(main())
+    expect(main().scrollTop).toBe(580)
+  })
+
+  it('what a click opens is revealed only after a double click’s second press could land', () => {
+    vi.useFakeTimers()
+    try {
+      mountFolded()
+      const key = addControl('opener', 200, 40)
+      fireEvent.pointerDown(key)
+      fireEvent.pointerUp(window)
+      let ran = 0
+      revealAfterPress(() => { ran++ })
+      expect(ran, 'it moved the keys under the second click').toBe(0)
+      vi.advanceTimersByTime(600)
+      expect(ran).toBe(1)
+      vi.advanceTimersByTime(1000)
+      revealAfterPress(() => { ran++ })
+      expect(ran, 'by keyboard there is no second click to wait for').toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('the parked surfaces themselves never scroll the shell for their own focus', () => {

@@ -30266,7 +30266,7 @@ button.sat-chip:disabled {
    sets `--cockpit-txdock-reason-pos`): in flow it would grow the row, and the row is bottom-anchored, so Send and Esc/Stop
    would move up under the pointer as the refusal arrived. Where the strip parks directly above the row the overlay reaches
    it, so it keeps to the column right of Stop TX, which holds no control (`--cockpit-txdock-reason-left`, CockpitTxStrip).
-   Opaque, and takes no click from what it covers. */
+   Opaque. */
 .jtty-dock-reason {
   flex: 0 0 100%;
   /* In flow, the dock's gap above it rather than the send row's bigger one (`.cockpit-txdock`'s stepped length), so a
@@ -30277,7 +30277,14 @@ button.sat-chip:disabled {
   left: var(--cockpit-txdock-reason-left, 0px);
   right: 0;
   background: var(--panel);
-  pointer-events: none;
+  /* CLAMPED WHILE FOLDED to the lines the strip writes, so the keys keep their room; the whole text is in its tooltip and
+     the toast a click on it raises (JttyCockpit). It takes that click itself: a notice that hides a key may not pass a
+     click to it. */
+  display: var(--cockpit-txdock-reason-display, block);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--cockpit-txdock-reason-lines, none);
+  overflow: var(--cockpit-txdock-reason-overflow, visible);
+  cursor: help;
 }
 /* (`.rtty-cockpit > .cw-macros` / `> .cw-send { flex: 0 0 auto }` deleted with the pane
    rebuild — the child combinator stopped matching once the rows moved inside the pinned

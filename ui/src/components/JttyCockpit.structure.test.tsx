@@ -11,8 +11,9 @@
 // engine gives these columns is the browser check's, since jsdom lays nothing out.
 //
 // jsdom has no layout, so the region's width is stubbed the way useRegionCols.test.tsx does.
+import { pushToast } from '../toast'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, act } from '@testing-library/react'
+import { render, cleanup, act, fireEvent } from '@testing-library/react'
 import type { ReactNode, Ref } from 'react'
 import { JttyCockpit } from './JttyCockpit'
 import type { AppSnapshot, JttyState } from '../types'
@@ -167,6 +168,14 @@ describe('why a send was refused stays on screen', () => {
     expect(reason()?.textContent, 'the refusal can scroll away while the dock is folded').toBe('TX is off — enable TX first')
     expect(document.querySelectorAll('.cockpit-txdock [role="status"]').length, 'said twice').toBe(1)
   })
+  it('the whole text can be read: a tooltip, and a click says it in a toast', async () => {
+    const long = 'JTTY keyer: the rig did not accept PTT, so nothing was sent and what was queued was dropped.'
+    await mount(jtty({ tx: tx({ notice: long }) } as never))
+    expect(reason()?.getAttribute('title'), 'clamped while folded, the rest could not be read').toBe(long)
+    fireEvent.click(reason()!)
+    expect(vi.mocked(pushToast)).toHaveBeenCalledWith(long, 'info')
+  })
+
   it('so does the transmitter’s notice, before a refusal', async () => {
     await mount(jtty({ tx: tx({ notice: 'Queue complete', refusal: 'TX is off' }) } as never))
     expect(reason()?.textContent).toBe('Queue complete')

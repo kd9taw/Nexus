@@ -21,7 +21,7 @@ import { BandPicker } from './BandPicker'
 import { BandStrip } from './BandStrip'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
-import { CockpitTxStrip } from './CockpitTxStrip'
+import { CockpitTxStrip, keepInSight, revealAfterPress } from './CockpitTxStrip'
 import { ZeroBeat } from './ZeroBeat'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
@@ -1540,7 +1540,13 @@ export function CwCockpit({
       const back = dockRef.current?.querySelector<HTMLElement>(`[data-cw-macro="${key}"] .cw-macro`)
       back?.focus({ preventScroll: true })
       // While the dock is folded the key scrolls with the panes: it may be off screen or behind the keep row.
-      back?.scrollIntoView?.({ block: 'nearest' })
+      if (back) {
+        revealAfterPress(() => {
+          if (!back.isConnected) return
+          back.scrollIntoView?.({ block: 'nearest' })
+          keepInSight(back)
+        })
+      }
     }
   }
   const writeKey = async (key: string, entry: { label: string; text: string }) => {
