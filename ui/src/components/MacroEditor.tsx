@@ -238,14 +238,14 @@ export function MacroEditor({
       const el = messageRef.current
       el?.focus({ preventScroll: true })
       el?.setSelectionRange(el.value.length, el.value.length)
-      if (el) revealAfterPress(() => { if (el.isConnected) el.scrollIntoView?.({ block: 'nearest' }) })
+      if (el) revealAfterPress(el, () => el.scrollIntoView?.({ block: 'nearest' }))
       return
     }
     titleRef.current?.focus({ preventScroll: true })
     titleRef.current?.select()
     // While the dock is folded the editor is in the flow, and may have opened behind the keep row.
     const title = titleRef.current
-    if (title) revealAfterPress(() => { if (title.isConnected) title.scrollIntoView?.({ block: 'nearest' }) })
+    if (title) revealAfterPress(title, () => title.scrollIntoView?.({ block: 'nearest' }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   // Over F8 at a narrow width the key's own offset would run the editor off the dock's right

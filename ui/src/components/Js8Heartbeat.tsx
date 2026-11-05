@@ -159,8 +159,7 @@ export function Js8HbButton({
   useLayoutEffect(() => {
     const first = menuRef.current?.firstElementChild
     if (!open || !(first instanceof HTMLElement)) return
-    revealAfterPress(() => {
-      if (!first.isConnected) return
+    revealAfterPress(first, () => {
       first.scrollIntoView?.({ block: 'nearest' })
       keepInSight(first)
     })

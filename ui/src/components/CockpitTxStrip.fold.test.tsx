@@ -484,6 +484,25 @@ describe('a focused control is never left behind the parked keep row', () => {
     expect(main().scrollTop).toBe(580)
   })
 
+  it('…and an operator who has scrolled in that gap keeps their scroll', () => {
+    // The reveal fired anyway, and dragged the screen 573–658 px back from where they had just gone (measured).
+    vi.useFakeTimers()
+    try {
+      mountFolded()
+      main().scrollTop = 500
+      const key = addControl('opener-2', 200, 40)
+      fireEvent.pointerDown(key)
+      fireEvent.pointerUp(window)
+      let ran = 0
+      revealAfterPress(key, () => { ran++ })
+      main().scrollTop = 0
+      vi.advanceTimersByTime(600)
+      expect(ran, 'the reveal fought the operator’s scroll').toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('what a click opens is revealed only after a double click’s second press could land', () => {
     vi.useFakeTimers()
     try {
@@ -492,12 +511,12 @@ describe('a focused control is never left behind the parked keep row', () => {
       fireEvent.pointerDown(key)
       fireEvent.pointerUp(window)
       let ran = 0
-      revealAfterPress(() => { ran++ })
+      revealAfterPress(key, () => { ran++ })
       expect(ran, 'it moved the keys under the second click').toBe(0)
       vi.advanceTimersByTime(600)
       expect(ran).toBe(1)
       vi.advanceTimersByTime(1000)
-      revealAfterPress(() => { ran++ })
+      revealAfterPress(key, () => { ran++ })
       expect(ran, 'by keyboard there is no second click to wait for').toBe(2)
     } finally {
       vi.useRealTimers()

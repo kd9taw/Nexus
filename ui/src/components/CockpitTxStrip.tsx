@@ -368,11 +368,19 @@ let lastPressAt = -Infinity
 const DOUBLE_CLICK_MS = 500
 /** Run `reveal`, which scrolls the shell to show something a click or a key just opened or returned to. After a pointer's
  *  click it waits out the second press of a double click, which would otherwise land on whatever the scroll put under the
- *  pointer, a macro key among them. By keyboard there is no second press, so it runs at once. */
-export function revealAfterPress(reveal: () => void): void {
+ *  pointer, a macro key among them. By keyboard there is no second press, so it runs at once. If the operator has scrolled
+ *  the shell in that gap, or `el` has gone, it does not run: the operator's scroll is theirs. */
+export function revealAfterPress(el: HTMLElement, reveal: () => void): void {
   const since = performance.now() - lastPressAt
-  if (since < DOUBLE_CLICK_MS) setTimeout(reveal, DOUBLE_CLICK_MS - since)
-  else reveal()
+  if (since >= DOUBLE_CLICK_MS) {
+    reveal()
+    return
+  }
+  const shell = el.closest('main')
+  const from = shell?.scrollTop
+  setTimeout(() => {
+    if (el.isConnected && shell?.scrollTop === from) reveal()
+  }, DOUBLE_CLICK_MS - since)
 }
 
 /** A FOCUSED CONTROL THE PADDING COULD NOT CLEAR. Where the room between the strip and the keep row is shorter than the

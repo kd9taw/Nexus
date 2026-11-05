@@ -1541,8 +1541,7 @@ export function CwCockpit({
       back?.focus({ preventScroll: true })
       // While the dock is folded the key scrolls with the panes: it may be off screen or behind the keep row.
       if (back) {
-        revealAfterPress(() => {
-          if (!back.isConnected) return
+        revealAfterPress(back, () => {
           back.scrollIntoView?.({ block: 'nearest' })
           keepInSight(back)
         })

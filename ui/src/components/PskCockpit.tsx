@@ -446,8 +446,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
       back?.focus({ preventScroll: true })
       // While the dock is folded the key scrolls with the panes: it may be off screen or behind the keep row.
       if (back) {
-        revealAfterPress(() => {
-          if (!back.isConnected) return
+        revealAfterPress(back, () => {
           back.scrollIntoView?.({ block: 'nearest' })
           keepInSight(back)
         })
