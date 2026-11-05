@@ -30619,8 +30619,8 @@ contact yourself."
     /// The dial shift the next over would carry at the current TX offset, consuming nothing, for
     /// the radio loop to put Split Operation's TX dial on the radio while it receives (WSJT-X
     /// writes it when the dial changes: `MainWindow::band_changed` calls `setXIT`). `None` when
-    /// Split Operation does not apply to this tier's mode (anything but FT8/FT4 today); `Some(0)`
-    /// for an in-window offset, Split Operation off, or a cluster SPLIT-on-Work owning the TX dial,
+    /// Split Operation does not apply to this tier's mode (anything but FT8, FT4 and FT2 today);
+    /// `Some(0)` for an in-window offset, Split Operation off, or a cluster SPLIT-on-Work owning the TX dial,
     /// as [`Self::split_reduce`] decides for the over itself.
     pub fn planned_tx_dial_shift(&self) -> Option<i64> {
         self.tier_mode_kind(self.app.tier())

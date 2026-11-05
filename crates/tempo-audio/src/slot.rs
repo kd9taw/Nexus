@@ -593,7 +593,9 @@ pub(crate) fn rig_split_confirmed_for(rig: &Rig, dial: u64, tx_dial: u64, md: &s
 /// How long the receive-time pre-set ([`preset_rig_split`]) may go on starting split writes, from
 /// the first. The radio loop runs it only with [`SPLIT_PRESET_LEAD_MS`] to the next slot boundary,
 /// and one write still running when this has gone takes at most its CAT deadline (700 ms on a
-/// serial link, 2.5 s on a network one), so the pre-set never holds the loop into a key.
+/// local link, 2.5 s on a network or slow serial one) and one 500 ms socket read, so one started
+/// clear of a boundary is done before it. The tick of a boundary itself has the whole slot ahead:
+/// see `RadioLoop::preset_rig_split_due` for what that means for a key on that tick.
 #[cfg_attr(not(feature = "device"), allow(dead_code))] // the radio loop (service.rs, device)
 pub(crate) const SPLIT_PRESET_BUDGET_MS: u64 = 1_000;
 
@@ -604,7 +606,8 @@ pub(crate) const SPLIT_PRESET_SETTLE_MS: f64 = 300.0;
 
 /// The least time (ms) to the next slot boundary at which the radio loop starts a pre-set: its
 /// budget plus the longest CAT deadline, and a little over. Counted from the moment of the
-/// decision, not the tick's start, and never on a tick that had to open the CAT link.
+/// decision, not the tick's start, and never on a tick that had to open the CAT link. Longer than
+/// FT2's 3.75 s slot, so FT2 never pre-sets.
 #[cfg_attr(not(feature = "device"), allow(dead_code))] // the radio loop (service.rs, device)
 pub(crate) const SPLIT_PRESET_LEAD_MS: f64 = 4_000.0;
 
