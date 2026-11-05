@@ -3413,6 +3413,8 @@ export const RU: PartialCatalog = {
   "settings.integrations.wsjtxUdp.hint": "для JTAlert / GridTracker / логгеров — и программ подсчёта очков FT8-соревнований. Несколько сразу: разделяйте адреса запятой.",
   "settings.integrations.udpAddr.label": "UDP-адрес",
   "settings.integrations.udpAddr.hint": "host:port для канала UDP",
+  "settings.integrations.wsjtxUdpAccept.label": "Принимать запросы с других компьютеров",
+  "settings.integrations.wsjtxUdpAccept.hint": "Выкл.: ответить станции, отправить или заполнить свободный текст и изменить ваш локатор может только программа, которая передаёт с адреса 127.0.0.1 этого компьютера. Любая другая программа может остановить TX. Это касается и программы на этом компьютере, связанной через multicast-адрес: чтобы оставить её без этого переключателя, укажите по одному адресу 127.0.0.1 на программу через запятую (127.0.0.1:2237, 127.0.0.1:2238). Вкл.: любой, кто достигнет этого компьютера по сети, может включить TX и передавать под вашим позывным, потому что адрес отправителя UDP можно подделать. Stop TX и сработавший сторожевой таймер по-прежнему отказывают таким запросам, но каждый принятый ответ перезапускает отсчёт таймера, как в WSJT-X.",
   "settings.integrations.hrdLogging.label": "Ведение журналов Ham Radio Deluxe",
   "settings.integrations.hrdLogging.hint": "отправлять каждое QSO в HRD Logbook через его UDP-порт QSO-Forwarding (HRD должен быть запущен; не направляйте в HRD ещё и JTAlert/QSO Relay, иначе запись будет двойной)",
   "settings.integrations.hrdAddr.label": "Адрес HRD UDP",

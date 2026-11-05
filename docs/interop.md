@@ -26,8 +26,10 @@ sender id **`Tempo`**.
 
 **Enable it:** Settings → Services ▸ Integrations & Feeds → turn on **WSJT-X UDP API** (`wsjtx_udp`, **off by default**). The target
 address defaults to **`127.0.0.1:2237`** (`wsjtx_udp_addr`) — WSJT-X's own default —
-so most consumers need no reconfiguration. A **multicast group address** also works
-if you want several apps to hear Nexus at once.
+so most consumers need no reconfiguration. To feed several apps on this computer, list
+one address per app, with commas: **`127.0.0.1:2237, 127.0.0.1:2238`**. Each app keeps
+every request. A **multicast group address** also reaches several apps, but they only
+listen: what they answer comes from a network address, so it needs the setting below.
 
 **What Nexus sends:**
 
@@ -45,6 +47,10 @@ if you want several apps to hear Nexus at once.
 decode to call that station), HaltTx (stop transmitting, optionally auto-only),
 FreeText (stage or send a free-text message), Clear, Replay, Location (a GPS feeder
 updating your grid), and HighlightCallsign (row coloring sent by a logger such as JTAlert).
+Reply, FreeText and Location are taken only from this computer's loopback address unless
+**Accept requests from other computers** (`wsjtx_udp_accept_other_computers`, off by default) is on.
+With it on, anyone who can reach this computer over the network can turn TX on, because a UDP
+sender's address can be faked.
 
 > The message-type numbers follow WSJT-X's canonical `NetworkMessage.hpp` exactly
 > (HaltTx = 8, FreeText = 9, …). This matters: an off-by-one here once made a real
@@ -53,12 +59,13 @@ updating your grid), and HighlightCallsign (row coloring sent by a logger such a
 
 ### GridTracker
 
-1. In Nexus, enable the WSJT-X UDP output (target `127.0.0.1:2237`, or a multicast
-   group if GridTracker is on another machine).
+1. In Nexus, enable the WSJT-X UDP output (target `127.0.0.1:2237`, or that machine's
+   address if GridTracker is on another machine).
 2. In GridTracker, point its WSJT-X/UDP source at the same address/port.
 3. GridTracker will see station **`Tempo`** and plot decodes, log QSOs, and — because
    Nexus honors inbound **Reply** — you can double-click a spot in GridTracker to make
-   Nexus call it.
+   Nexus call it. On another machine, or through a multicast target, that double-click
+   is ignored until you turn on **Accept requests from other computers**.
 
 GridTracker reads the schema-3 Status trailer (including `tx_message`), which Nexus
 populates, so its transmit-state display works normally.
@@ -72,8 +79,11 @@ populates, so its transmit-state display works normally.
    **HaltTx** and **FreeText** from JTAlert are honored.
 
 > **One-port rule.** WSJT-X-family telemetry is a single UDP port. If several apps
-> need it on one machine, use a **multicast** target so they all receive, rather than
-> pointing two apps at the same unicast port.
+> need it on one machine, give each its own port and list them with commas
+> (`127.0.0.1:2237, 127.0.0.1:2238`) rather than pointing two apps at the same unicast
+> port. Each app keeps every request. A **multicast** target also reaches them all, but
+> their Reply, FreeText and Location are ignored until you turn on **Accept requests
+> from other computers**.
 
 ### ALL.TXT decode log
 

@@ -3267,6 +3267,8 @@ export const ZH: PartialCatalog = {
   "settings.integrations.wsjtxUdp.hint": "用于 JTAlert / GridTracker / 日志记录器 — 以及 FT8 竞赛计分器。可多个同时使用：用逗号分隔地址。",
   "settings.integrations.udpAddr.label": "UDP 地址",
   "settings.integrations.udpAddr.hint": "UDP 推送的 host:port",
+  "settings.integrations.wsjtxUdpAccept.label": "接受来自其他计算机的请求",
+  "settings.integrations.wsjtxUdpAccept.hint": "关闭：只有从本计算机的 127.0.0.1 发送的程序才能应答电台、发送或填写自由文本、更改您的网格。其他程序仍可停止 TX。这也包括本计算机上通过组播地址连接的程序：如要不开此开关而继续使用，请为每个程序列出一个 127.0.0.1 地址，用逗号分隔（127.0.0.1:2237, 127.0.0.1:2238）。开启：任何能通过网络访问本计算机的人都能开启 TX 并以您的呼号发射，因为 UDP 发送方地址可以伪造。Stop TX（停止发射）和已触发的 TX 看门狗仍会拒绝它们，但每次被接受的应答都会重新开始看门狗计时，与 WSJT-X 相同。",
   "settings.integrations.hrdLogging.label": "Ham Radio Deluxe 日志",
   "settings.integrations.hrdLogging.hint": "通过 HRD 的 QSO 转发 UDP 端口将每个 QSO 推送到 HRD Logbook（HRD 必须运行；不要同时让 JTAlert/QSO Relay 也写入 HRD，否则会重复记录）",
   "settings.integrations.hrdAddr.label": "HRD UDP 地址",

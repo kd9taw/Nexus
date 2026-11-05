@@ -18721,6 +18721,70 @@ mod contest_session_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ⛔ A BACKUP NEVER CHANGES WHETHER OTHER COMPUTERS' WSJT-X REQUESTS ARE TAKEN: not a file
+    /// that says yes where the station says no, in its settings or a saved profile, and not one
+    /// that says no where the station says yes. The rest of the backup lands.
+    #[test]
+    fn a_restore_keeps_the_stations_answer_on_other_computers_requests() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-accept", 0);
+        let set = |on: bool| {
+            let mut s = engine_lock(&engine).settings().clone();
+            s.wsjtx_udp_accept_other_computers = on;
+            engine_lock(&engine).apply_restored_settings(s);
+        };
+        let station_ui = with_station_paths_set(&engine, "C:\\Shack");
+        let restore = |file_says: bool| {
+            let text = settings_bundle(&engine, station_ui.clone(), None).unwrap();
+            let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            v["settings"]["mycall"] = serde_json::json!("W9NEW");
+            v["settings"]["wsjtxUdpAcceptOtherComputers"] = serde_json::json!(file_says);
+            let mut profiles: serde_json::Value = serde_json::from_str(
+                v["uiState"][crate::command_dispatch::PROFILES]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap();
+            profiles[0]["settings"]["wsjtxUdpAcceptOtherComputers"] = serde_json::json!(file_says);
+            v["uiState"][crate::command_dispatch::PROFILES] =
+                serde_json::Value::String(profiles.to_string());
+            let mut saved = None;
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                || station_ui.clone(),
+                |ui| {
+                    saved = Some(ui);
+                    true
+                },
+                no_key_change,
+            )
+            .unwrap();
+            let s = engine_lock(&engine).settings().clone();
+            let profiles: serde_json::Value =
+                serde_json::from_str(&saved.unwrap()[crate::command_dispatch::PROFILES]).unwrap();
+            (
+                s.mycall,
+                s.wsjtx_udp_accept_other_computers,
+                profiles[0]["settings"]
+                    .get("wsjtxUdpAcceptOtherComputers")
+                    .cloned(),
+            )
+        };
+        set(false);
+        assert_eq!(
+            restore(true),
+            ("W9NEW".to_string(), false, None),
+            "(the rest lands, the station's answer, the profile's)"
+        );
+        set(true);
+        assert_eq!(
+            restore(false),
+            ("W9NEW".to_string(), true, None),
+            "(the rest lands, the station's answer, the profile's)"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ★ RESTORING A BACKUP MADE FROM AFAR KEEPS THE STATION'S PATHS, as the station has them at
     /// the restore (moved since the backup), in its settings and in its saved profile of the same
     /// name, while the rest of the backup lands. A backup made at the station keeps them too.
@@ -22107,8 +22171,9 @@ fn export_settings_bundle(
 
 /// The settings that hold a path on the station's own disk: the TQSL program and JS8's sound
 /// files. Each voice-keyer slot's recording (`voiceMessages[].file`) is one too, and goes with
-/// them ([`without_station_paths`]).
-const STATION_PATHS: [&str; 2] = ["tqslPath", "js8SoundFiles"];
+/// them ([`without_station_paths`]). ⛔ With them, though it is no path, the leave for other
+/// computers to send WSJT-X requests that can arm TX: a backup can never turn it on.
+const STATION_PATHS: [&str; 3] = ["tqslPath", "js8SoundFiles", "wsjtxUdpAcceptOtherComputers"];
 
 /// The name a bundle exported from afar carries, `true`, beside its settings: the station's paths
 /// were left out of it ([`without_station_paths`]), so a restore keeps the station's own

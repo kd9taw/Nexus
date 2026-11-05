@@ -7930,6 +7930,8 @@ export const FR: PartialCatalog = {
   "settings.integrations.spotSources.title": "Sources de spots",
   "settings.integrations.udpAddr.hint": "host:port du flux UDP",
   "settings.integrations.udpAddr.label": "Adresse UDP",
+  "settings.integrations.wsjtxUdpAccept.label": "Accepter les requêtes d’autres ordinateurs",
+  "settings.integrations.wsjtxUdpAccept.hint": "Désactivé : un programme ne peut répondre à une station, envoyer ou remplir du texte libre ou changer votre locator que s’il émet depuis l’adresse 127.0.0.1 de cet ordinateur. Tout autre programme peut toujours arrêter TX. Cela inclut un programme de cet ordinateur joint par une adresse multicast : pour le garder sans cet interrupteur, indiquez une adresse 127.0.0.1 par programme, séparées par des virgules (127.0.0.1:2237, 127.0.0.1:2238). Activé : toute personne qui atteint cet ordinateur par le réseau peut activer TX et émettre sous votre indicatif, car l’adresse d’origine UDP peut être falsifiée. Stop TX et un watchdog déclenché les refusent toujours, mais chaque réponse acceptée relance le délai du watchdog, comme dans WSJT-X.",
   "settings.integrations.wsjtxUdp.hint": "pour JTAlert / GridTracker / logiciels de journal",
   "settings.js8.legend": "JS8",
   "settings.js8.receiving.title": "Vitesse et réception",

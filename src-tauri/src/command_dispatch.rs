@@ -220,6 +220,7 @@ pub(crate) fn keep_the_shacks_transmit_settings(
     // PTT, JS8's API.
     save.wsjtx_udp = shack.wsjtx_udp;
     save.wsjtx_udp_addr = shack.wsjtx_udp_addr.clone();
+    save.wsjtx_udp_accept_other_computers = shack.wsjtx_udp_accept_other_computers;
     save.cat_broker = shack.cat_broker;
     save.cat_broker_ptt = shack.cat_broker_ptt;
     save.js8_api_tcp = shack.js8_api_tcp;
@@ -520,12 +521,13 @@ pub(crate) const PROFILE_CALL_SETTING: &str = "mycall";
 /// ([`keep_the_shacks_transmit_settings`]), then the addresses the shack sends a stored key or
 /// password to ([`keep_the_shacks_credential_addresses`]). A test changes each setting alone in a save from
 /// afar and holds this list to exactly the ones that come back.
-pub(crate) const STATION_ONLY_SETTINGS: [&str; 62] = [
+pub(crate) const STATION_ONLY_SETTINGS: [&str; 63] = [
     "js8AprsRelay",
     "beaconTxPercent",
     "cqPauseSecs",
     "wsjtxUdp",
     "wsjtxUdpAddr",
+    "wsjtxUdpAcceptOtherComputers",
     "catBroker",
     "catBrokerPtt",
     "js8ApiTcp",

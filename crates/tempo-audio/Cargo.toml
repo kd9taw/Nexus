@@ -186,8 +186,9 @@ tungstenite = { version = "=0.30.0", default-features = false, features = ["hand
 # `tests/icomlan_leak.rs`) run against: tempo-net's `icom-sim` feature, which only test builds turn
 # on. Not a new dependency: tempo-net is already one, behind `device`. And `flex-unbenched`, the
 # door the Flex client's tests use to run its CW path, which admission refuses in every build that
-# ships (a release build will not compile with it).
-tempo-net = { path = "../tempo-net", features = ["icom-sim", "flex-unbenched"] }
+# ships (a release build will not compile with it). `udp-source-sim` is the same kind: the radio
+# loop's tests of a WSJT-X request from another computer name the sender's address with it.
+tempo-net = { path = "../tempo-net", features = ["icom-sim", "flex-unbenched", "udp-source-sim"] }
 # TEST-ONLY: tempo-app's `test-util` hooks for this crate's tests: the radio loop's test of a TCI
 # program's 10-minute ceiling ages the over with `Engine::age_tci_over_for_test`. Not a new
 # dependency: tempo-app is already one, and a dev-dependency's feature is never on in a shipped build.

@@ -761,6 +761,9 @@ const TRANSMITS_BY_ITSELF: &[Change] = &[
     ("wsjtx_udp_addr", |s| {
         s.wsjtx_udp_addr = "203.0.113.9:2237".into()
     }),
+    ("wsjtx_udp_accept_other_computers", |s| {
+        s.wsjtx_udp_accept_other_computers = !s.wsjtx_udp_accept_other_computers
+    }),
     ("cat_broker", |s| s.cat_broker = !s.cat_broker),
     ("cat_broker_ptt", |s| s.cat_broker_ptt = !s.cat_broker_ptt),
     ("js8_api_tcp", |s| s.js8_api_tcp = !s.js8_api_tcp),

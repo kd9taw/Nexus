@@ -7930,6 +7930,8 @@ export const ES: PartialCatalog = {
   "settings.integrations.spotSources.title": "Fuentes de spots",
   "settings.integrations.udpAddr.hint": "host:puerto del feed UDP",
   "settings.integrations.udpAddr.label": "Dirección UDP",
+  "settings.integrations.wsjtxUdpAccept.label": "Aceptar solicitudes de otros ordenadores",
+  "settings.integrations.wsjtxUdpAccept.hint": "Desactivado: un programa solo puede responder a una estación, enviar o rellenar texto libre o cambiar tu locator si transmite desde 127.0.0.1 de este ordenador. Cualquier otro programa sí puede detener TX. Esto incluye un programa de este ordenador al que se llega por una dirección multicast: para conservarlo sin este interruptor, indica una dirección 127.0.0.1 por programa, separadas por comas (127.0.0.1:2237, 127.0.0.1:2238). Activado: cualquiera que alcance este ordenador por la red puede activar TX y transmitir con tu indicativo, porque la dirección de origen de UDP se puede falsificar. Stop TX y un watchdog disparado siguen rechazándolos, pero cada respuesta aceptada reinicia el tiempo del watchdog, como en WSJT-X.",
   "settings.integrations.wsjtxUdp.hint": "para JTAlert / GridTracker / loggers",
   "settings.js8.legend": "JS8",
   "settings.js8.receiving.title": "Velocidad y recepción",

@@ -586,6 +586,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Integrations & Feeds',
     tab: 'services',
     keywords: ['wsjt-x', 'udp', 'gridtracker', 'jtalert', 'hrd', 'ham radio deluxe', 'psk',
+      'accept requests', 'other computers', 'another computer', 'reply', 'free text',
       'pskreporter', 'cluster', 'rbn', 'reverse beacon', 'spot source', 'cluster node',
       'dxspider', 'cc cluster', 'all.txt', 'directed.txt', 'wav',
       'recording', 'propagation', 'diagnostic log', 'nexus-diag.log', 'log file', 'debug log',

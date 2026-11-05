@@ -1167,6 +1167,8 @@ export const DE: PartialCatalog = {
   "settings.integrations.wsjtxUdp.hint": "für JTAlert / GridTracker / Logprogramme",
   "settings.integrations.udpAddr.label": "UDP-Adresse",
   "settings.integrations.udpAddr.hint": "host:port für den UDP-Feed",
+  "settings.integrations.wsjtxUdpAccept.label": "Anfragen von anderen Computern annehmen",
+  "settings.integrations.wsjtxUdpAccept.hint": "Aus: Ein Programm kann nur dann eine Station beantworten, Freitext senden oder eintragen oder deinen Locator ändern, wenn es von 127.0.0.1 dieses Computers sendet. Jedes andere Programm kann weiterhin TX stoppen. Das gilt auch für ein Programm auf diesem Computer, das über eine Multicast-Adresse erreicht wird: Um es ohne diesen Schalter zu behalten, trage pro Programm eine 127.0.0.1-Adresse ein, durch Kommas getrennt (127.0.0.1:2237, 127.0.0.1:2238). Ein: Jeder, der diesen Computer über das Netzwerk erreicht, kann TX einschalten und unter deinem Rufzeichen senden, denn die Absenderadresse eines UDP-Pakets lässt sich fälschen. Stop TX und ein ausgelöster Watchdog weisen solche Anfragen weiterhin ab, aber jede angenommene Antwort startet die Watchdog-Zeit neu, wie bei WSJT-X.",
   "settings.integrations.hrdLogging.label": "Logging in Ham Radio Deluxe",
   "settings.integrations.hrdLogging.hint": "jedes QSO über den QSO-Forwarding-UDP-Port an HRD Logbook schieben (HRD muss laufen; nicht zusätzlich JTAlert/QSO Relay nach HRD laufen lassen, sonst wird doppelt geloggt)",
   "settings.integrations.hrdAddr.label": "HRD-UDP-Adresse",
