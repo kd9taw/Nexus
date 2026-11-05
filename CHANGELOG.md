@@ -5,7 +5,7 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.23.0] — 2026-11-05
 
 ### Added
 - **RTTY at 50 baud, and your RTTY tone pair saved (#459).** Settings ▸ Digital ▸ RTTY ▸ Baud rate now offers 50 baud beside 45.45 and 75; it sets the transmit bit clock (AFSK and true FSK) and the decoder alike. The new **Low tone (Hz)** box beside it saves where RTTY sits: the decoder and the AFSK transmitter start on this tone and this plus the shift, so 1275 at 170 shift is 1275/1445 every time you open RTTY, with no waterfall click. It is the low tone rather than "mark" because which of the two is mark depends on the sideband and Reverse. A waterfall click still nets for the session; changing the box brings both back onto the saved pair. The licence check judges the pair you actually transmit on. 2125/2295 stays the default, so nothing changes until you set it.
