@@ -80,3 +80,61 @@ describe('a pinned cockpit header stays at the top of its shell', () => {
     expect(css(head, 'position')).not.toBe('sticky')
   })
 })
+
+// THE LIFT'S LIFECYCLE (review 3): pinned flipping while a menu is open, a menu already open when the header
+// pins, an unpinned header, and an unmount mid-menu. Each one is a way the lift could stick on a header that
+// should stand under the strip and the dock, or never come.
+describe('the menu lift follows the pin and never outlives the header', () => {
+  const el = (pinned: boolean) => (
+    <main className="layout single rtty-cockpit">
+      <CockpitHeader snap={snap} modeIndicator={<span>RTTY</span>} bandControl={<span>20m</span>} pinned={pinned} />
+    </main>
+  )
+  const flush = () => new Promise((r) => setTimeout(r, 0))
+  const pop = () => {
+    const p = document.createElement('div')
+    p.className = 'panels-menu-pop'
+    return p
+  }
+  const head = () => document.querySelector<HTMLElement>('.cockpit-header')!
+
+  it('unpinned while open drops the lift at once, and a later menu never lifts it', async () => {
+    const r = render(el(true))
+    const p = pop()
+    head().querySelector('.ch-identity')!.appendChild(p)
+    await flush()
+    expect(head().getAttribute('data-menu')).toBe('open')
+    r.rerender(el(false))
+    await flush()
+    expect(head().getAttribute('data-menu'), 'left lifted after the header stopped being pinned').toBeNull()
+    p.remove()
+    head().querySelector('.ch-identity')!.appendChild(pop())
+    await flush()
+    expect(head().getAttribute('data-menu'), 'an unpinned header is still being watched').toBeNull()
+  })
+
+  it('a header that was never pinned is never watched', async () => {
+    render(el(false))
+    head().querySelector('.ch-identity')!.appendChild(pop())
+    await flush()
+    expect(head().getAttribute('data-menu')).toBeNull()
+  })
+
+  it('pinned while a menu is already open lifts at once', async () => {
+    const r = render(el(false))
+    head().querySelector('.ch-identity')!.appendChild(pop())
+    await flush()
+    r.rerender(el(true))
+    await flush()
+    expect(head().getAttribute('data-menu')).toBe('open')
+  })
+
+  it('unmounted while open leaves nothing behind (the node, if reused, is clean)', async () => {
+    const r = render(el(true))
+    const h = head()
+    h.querySelector('.ch-identity')!.appendChild(pop())
+    await flush()
+    r.unmount()
+    expect(h.getAttribute('data-menu')).toBeNull()
+  })
+})
