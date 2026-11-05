@@ -181,8 +181,15 @@ interface Look {
   opacity: number
   borderRule: string
 }
-/** How the element at the chain's end paints in `mode`. */
+/** `paint`, memoised: every test reads the same (mode, chain) looks, so each is resolved once. */
+const looks = new Map<string, Look>()
 function look(mode: Mode, chain: El[]): Look {
+  const k = `${mode}|${JSON.stringify(chain)}`
+  if (!looks.has(k)) looks.set(k, paint(mode, chain))
+  return looks.get(k)!
+}
+/** How the element at the chain's end paints in `mode`. */
+function paint(mode: Mode, chain: El[]): Look {
   let under = colour(mode, chain.slice(0, 1), 'var(--bg)', [0, 0, 0])
   for (let i = 0; i < chain.length - 1; i++) {
     const bg = winnerAt(RULES, mode, chain.slice(0, i + 1), ...FACE)
@@ -227,9 +234,20 @@ function worst(items: Item[], ratio: (mode: Mode, i: Item) => { r: number; what:
 }
 
 describe('buttons look pressable and status indicators do not, in every theme', () => {
+  // The sweep is 192 modes × 23 elements (plus the hovered states), and resolving each mode's
+  // cascade is what costs. It is done ONCE here, for every look the tests below read, so no test
+  // re-resolves a cascade another already resolved, and the cost sits under one timeout sized from
+  // a measurement instead of the 5 s default per test (which a CI runner overran).
+  // Measured 2026-11-04 under `taskset -c 0,1` (two cores, like a CI runner), one worker: the
+  // sweep took 11.3, 11.8 and 11.9 s, and then each test read its looks in 25 ms or less. The
+  // hook's timeout is 60 s, about 5× the slowest run.
   beforeAll(() => {
     RULES = relevant([...LIVE, ...DISABLED, ...INDICATORS])
-  })
+    for (const mode of MODES) {
+      for (const i of [...LIVE, ...DISABLED, ...INDICATORS]) look(mode, i.chain)
+      for (const i of [...LIVE.filter((i) => i.name.includes('unlit')), ...INDICATORS]) look(mode, hovered(i.chain))
+    }
+  }, 60_000)
 
   it('renders what it measures', () => {
     expect(LIVE.map((i) => i.name)).toEqual([
