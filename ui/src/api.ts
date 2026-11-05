@@ -5256,7 +5256,7 @@ export async function getPortlessRigModels(): Promise<number[]> {
 }
 
 /** Models whose CAT CW keyer is UNPROVEN and cannot report its own failure (today: the Yaesu
- *  FTX-1). Drives a caution on the CW settings page — never a block, the keyer stays selectable.
+ *  FTX-1 and FT-710). Drives a caution on the CW settings page — never a block, the keyer stays selectable.
  *  The rule lives in Rust (`rigmodels::cat_cw_unproven_rig_models`) and is fetched rather than
  *  duplicated here: membership changes as backends are fixed upstream, and a stale copy would
  *  keep warning about a radio that had started working. An empty array means the rule could not

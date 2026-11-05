@@ -7592,7 +7592,7 @@ export const ES: PartialCatalog = {
   "settings.cw.keyer.label": "Backend del manipulador",
   "settings.cw.keyer.serial": "Línea serie (DTR/RTS) — manipula el jack KEY del equipo",
   "settings.cw.keyer.soundcard": "Tarjeta de sonido — tono de audio por un modo de datos (apaño)",
-  "settings.cw.keyer.unproven": "La manipulación de CW por CAT <b>no está comprobada en este equipo</b>. Su backend de Hamlib envía una orden de manipulación distinta de la que se usa en otros equipos, e informa de éxito en cualquier caso — así que si no sale nada al aire, Nexus no puede avisarte. Si el CW no sale, usa la línea serie, el WinKeyer o la tarjeta de sonido.",
+  "settings.cw.keyer.unproven": "La manipulación de CW por CAT <b>no está comprobada en este equipo</b>. Su backend de Hamlib puede enviar una orden de manipulación que este equipo no acepta, e informa de éxito en cualquier caso — así que si no sale nada al aire, Nexus no puede avisarte. Si el CW no sale, usa la línea serie, el WinKeyer o la tarjeta de sonido.",
   "settings.cw.keyer.title": "Manipulador",
   "settings.cw.keyer.winkeyer": "WinKeyer — manipulador hardware K1EL",
   "settings.cw.legend": "CW",
