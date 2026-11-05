@@ -1144,7 +1144,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             </button>
           </div>
         </div>
-        <div className="cw-send">
+        <div className="cw-send cw-send-wrap cockpit-txdock-keep">
           {committed && (
             <span className="jtty-committed" title={t('jtty.compose.committed.title')}>
               {committed}

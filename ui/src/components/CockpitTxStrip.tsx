@@ -278,7 +278,7 @@ function decidePin(shell: HTMLElement, head: HTMLElement, strip: HTMLElement, do
 export const FOLD_ROOM_EM = 2
 
 /** THE DOCK'S KEEP ROW: the dock child that parks at the bottom while the dock is folded (Send, PTT,
- *  Esc/Stop and the latch). A dock without one never folds (JS8, JTTY, an observer's dock). */
+ *  Esc/Stop and the latch). A dock without one never folds. */
 const keepRow = (dock: HTMLElement): HTMLElement | undefined =>
   Array.from(dock.children).find(
     (c): c is HTMLElement => c instanceof HTMLElement && c.classList.contains('cockpit-txdock-keep'),

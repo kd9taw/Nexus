@@ -463,8 +463,8 @@
    is the scope, the panes, the header and, at the end of the scroll, the macro keys at full size.
    Nothing is hidden, nothing gets smaller, and the stop surfaces are the strip and the keep row.
    The strip folds the dock only where its WHOLE height, the strip's and FOLD_ROOM_EM do not fit;
-   everywhere else this rule never applies (measured: of the windows from 1024×768 at 175 % up, only PSK at
-   1280×720 at 175 % folds, by 4.5 layout px).
+   everywhere else this rule never applies (measured: of the windows from 1024×768 at 175 % up, only JTTY at
+   1024×768 and 1280×720 and PSK at 1280×720, all at 175 %, fold).
    `--cockpit-txdock-float: static` is read by the macro editor (styles.css `.rtty-macro-editor`):
    folded, the dock is no containing block, so the editor joins the flow above the keep row instead of
    standing on a dock edge that is not there. */

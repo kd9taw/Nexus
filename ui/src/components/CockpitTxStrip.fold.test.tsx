@@ -152,7 +152,7 @@ describe('the dock folds only where it does not fit whole', () => {
     expect(dock().getAttribute('data-fold'), 'an unlaid-out host folded the dock').toBeNull()
   })
 
-  it('the control: a dock with no keep row never folds, however small the window (JS8, JTTY)', () => {
+  it('the control: a dock with no keep row never folds, however small the window', () => {
     injectSheet(SHEET)
     shellH = 60
     render(<Shell keep={false} />)
