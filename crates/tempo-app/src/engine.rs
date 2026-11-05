@@ -30272,6 +30272,18 @@ contact yourself."
         self.split_tx_mhz.is_some()
     }
 
+    /// The dial shift the next over would carry at the current TX offset, consuming nothing, for
+    /// the radio loop to put Split Operation's TX dial on the radio while it receives (WSJT-X
+    /// writes it when the dial changes: `MainWindow::band_changed` calls `setXIT`). `None` when
+    /// Split Operation does not apply to this tier's mode (anything but FT8/FT4 today); `Some(0)`
+    /// for an in-window offset, Split Operation off, or a cluster SPLIT-on-Work owning the TX dial,
+    /// as [`Self::split_reduce`] decides for the over itself.
+    pub fn planned_tx_dial_shift(&self) -> Option<i64> {
+        self.tier_mode_kind(self.app.tier())
+            .is_some_and(|k| modes::make_mode(k).capabilities().split_reduce)
+            .then(|| self.split_reduce(self.tx_offset_hz).1)
+    }
+
     /// Consume the dial shift for the over just generated (0 = none). The slot
     /// core applies it via the rig BEFORE keying PTT.
     pub fn take_tx_dial_shift(&mut self) -> i64 {
@@ -50820,6 +50832,42 @@ mod tests {
         e.broadcast("CQ W9XYZ EN37");
         assert!(!e.poll_tx(12).is_empty());
         assert_eq!(e.take_tx_dial_shift(), 0, "None = stock raw-offset TX");
+    }
+
+    /// The radio loop's look ahead at the next over's dial shift is the shift that over takes, and
+    /// takes nothing: `None` only where Split Operation does not apply to the mode at all.
+    #[test]
+    fn the_planned_dial_shift_is_the_next_overs_and_consumes_nothing() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        e.settings.split_mode = crate::settings::SplitMode::Rig;
+        e.set_tx_enabled(true);
+        for (tx_hz, shift) in [(1441.0, -500), (750.0, -1000), (1700.0, 0), (2600.0, 1000)] {
+            e.set_tx_offset(tx_hz);
+            assert_eq!(
+                e.planned_tx_dial_shift(),
+                Some(shift),
+                "{tx_hz} Hz, planned"
+            );
+            assert_eq!(
+                e.planned_tx_dial_shift(),
+                Some(shift),
+                "{tx_hz} Hz, asked twice"
+            );
+            e.broadcast("CQ W9XYZ EN37");
+            assert!(!e.poll_tx(0).is_empty());
+            assert_eq!(e.take_tx_dial_shift(), shift, "{tx_hz} Hz, the over's own");
+        }
+        e.set_tx_offset(1441.0);
+        e.settings.split_mode = crate::settings::SplitMode::None;
+        assert_eq!(e.planned_tx_dial_shift(), Some(0), "Split Operation None");
+        e.settings.split_mode = crate::settings::SplitMode::Rig;
+        e.set_tier(Tier::TempoFast);
+        assert_eq!(
+            e.planned_tx_dial_shift(),
+            None,
+            "a mode Split Operation does not apply to"
+        );
     }
 
     #[test]

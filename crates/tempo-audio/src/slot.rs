@@ -467,67 +467,8 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
             // that exists only in split refuses `I` and `X` until `S 1` (Nexus's own Flex client
             // makes its split slice there), so after a release the next over would never key.
             let md = eng.rig_mode_effective();
-            // What the radio confirmed for this dial, only while this connection holds the split.
-            let mut confirmed = rig
-                .take_split_confirmed()
-                .filter(|c| rig.tx_split_held && c.rx_dial == dial)
-                .unwrap_or(SplitConfirmed {
-                    rx_dial: dial,
-                    tx_hz: None,
-                    tx_mode: None,
-                });
-            // The connection that confirmed it: the take gave up a stale one, but the bound can
-            // pass between the take and the first write, which then gives it up and goes out on a
-            // new connection with the TX dial and mode skipped as confirmed on the old one.
-            let drops_at_take = rig.connection_drops();
-            let budget = split_writes_budget_ms(rig);
-            let started = std::time::Instant::now();
-            let mut vfo_b_written = false;
-            let sent = (|| -> std::io::Result<()> {
-                // A refusal the radio gave this first `S 1` (not a missing answer, which may have
-                // been taken) does not stop the over by itself: the TX dial and mode go out and
-                // the last `S 1` decides. A K3 refuses split while VFO B is in a mode it will not
-                // pair with VFO A's, which WSJT-X 3.0.2 notes for this first call
-                // (`HamlibTransceiver.cpp:963-970`), and the `X` below is what fixes VFO B.
-                if !rig.tx_split_held {
-                    if let Err(e) = rig.hold_split_on("VFOB") {
-                        if rig.tx_split_held {
-                            return Err(e);
-                        }
-                    }
-                    within_split_budget(started, budget)?;
-                }
-                if confirmed.tx_hz != Some(tx_dial) {
-                    rig.set_split_freq(tx_dial)?;
-                    vfo_b_written = true;
-                    confirmed.tx_hz = Some(tx_dial);
-                    within_split_budget(started, budget)?;
-                }
-                if confirmed.tx_mode.as_deref() != Some(md.as_str()) {
-                    // A link that cannot set the TX VFO's mode at all (`RPRT -11`: Nexus's own TCI
-                    // client) keys as it always did, its TX dial taken, and is asked again next
-                    // over; any other refusal, or no answer, keys nothing.
-                    if rig.set_split_mode_where_available(&md, -1)? && !md.trim().is_empty() {
-                        confirmed.tx_mode = Some(md.clone());
-                    }
-                    within_split_budget(started, budget)?;
-                }
-                // Split on, last, before every over: never skipped as unchanged, and inside the
-                // budget like the rest.
-                rig.hold_split_on("VFOB")?;
-                within_split_budget(started, budget)?;
-                // Every write that succeeded went out on one connection (a write's own failure
-                // is an `Err` above), so a drop since the take came before the first of them.
-                if rig.connection_drops() != drops_at_take {
-                    return Err(std::io::Error::other(
-                        "the connection to the radio was renewed during the split writes",
-                    ));
-                }
-                Ok(())
-            })();
-            if sent.is_ok() {
-                rig.split_confirmed = Some(confirmed);
-            }
+            let (sent, vfo_b_written) =
+                write_rig_split(rig, dial, tx_dial, &md, split_writes_budget_ms(rig));
             SplitApply {
                 // Engaged once the radio took split on (or got it and never answered), or VFO B
                 // was written (the loop puts back the radio's own split and its VFO B). Only a
@@ -554,6 +495,132 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
         }
         SplitMode::None => none, // shift can't be non-zero here, but stay total
     }
+}
+
+/// Split Operation = Rig's writes for an over on the RX dial `dial`: split on first when this
+/// connection does not hold it, then the TX dial `tx_dial` and the TX VFO's mode `md` where the
+/// radio has not already confirmed them for this dial ([`Rig::split_confirmed`]), then split on
+/// last, every write inside `budget_ms` from the first. `Ok` stores what the radio confirmed;
+/// any `Err` leaves nothing confirmed. The `bool` says whether VFO B was written.
+///
+/// One sequence for the key ([`apply_tx_dial_shift`], [`SPLIT_WRITES_BUDGET_MS`]) and for the
+/// receive-time pre-set after the dial changes ([`preset_rig_split`]), as WSJT-X 3.0.2 has one
+/// `HamlibTransceiver::do_tx_frequency` for both.
+fn write_rig_split(
+    rig: &mut Rig,
+    dial: u64,
+    tx_dial: u64,
+    md: &str,
+    budget: u64,
+) -> (std::io::Result<()>, bool) {
+    // What the radio confirmed for this dial, only while this connection holds the split.
+    let mut confirmed = rig
+        .take_split_confirmed()
+        .filter(|c| rig.tx_split_held && c.rx_dial == dial)
+        .unwrap_or(SplitConfirmed {
+            rx_dial: dial,
+            tx_hz: None,
+            tx_mode: None,
+        });
+    // The connection that confirmed it: the take gave up a stale one, but the bound can
+    // pass between the take and the first write, which then gives it up and goes out on a
+    // new connection with the TX dial and mode skipped as confirmed on the old one.
+    let drops_at_take = rig.connection_drops();
+    let started = std::time::Instant::now();
+    let mut vfo_b_written = false;
+    let sent = (|| -> std::io::Result<()> {
+        // A refusal the radio gave this first `S 1` (not a missing answer, which may have
+        // been taken) does not stop the over by itself: the TX dial and mode go out and
+        // the last `S 1` decides. A K3 refuses split while VFO B is in a mode it will not
+        // pair with VFO A's, which WSJT-X 3.0.2 notes for this first call
+        // (`HamlibTransceiver.cpp:963-970`), and the `X` below is what fixes VFO B.
+        if !rig.tx_split_held {
+            if let Err(e) = rig.hold_split_on("VFOB") {
+                if rig.tx_split_held {
+                    return Err(e);
+                }
+            }
+            within_split_budget(started, budget)?;
+        }
+        if confirmed.tx_hz != Some(tx_dial) {
+            rig.set_split_freq(tx_dial)?;
+            vfo_b_written = true;
+            confirmed.tx_hz = Some(tx_dial);
+            within_split_budget(started, budget)?;
+        }
+        if confirmed.tx_mode.as_deref() != Some(md) {
+            // A link that cannot set the TX VFO's mode at all (`RPRT -11`: Nexus's own TCI
+            // client) keys as it always did, its TX dial taken, and is asked again next
+            // over; any other refusal, or no answer, keys nothing.
+            if rig.set_split_mode_where_available(md, -1)? && !md.trim().is_empty() {
+                confirmed.tx_mode = Some(md.to_string());
+            }
+            within_split_budget(started, budget)?;
+        }
+        // Split on, last, before every over: never skipped as unchanged, and inside the
+        // budget like the rest.
+        rig.hold_split_on("VFOB")?;
+        within_split_budget(started, budget)?;
+        // Every write that succeeded went out on one connection (a write's own failure
+        // is an `Err` above), so a drop since the take came before the first of them.
+        if rig.connection_drops() != drops_at_take {
+            return Err(std::io::Error::other(
+                "the connection to the radio was renewed during the split writes",
+            ));
+        }
+        Ok(())
+    })();
+    if sent.is_ok() {
+        rig.split_confirmed = Some(confirmed);
+    }
+    (sent, vfo_b_written)
+}
+
+/// Whether the radio already confirmed, through the split this connection holds, the TX dial
+/// `tx_dial` and TX mode `md` for the RX dial `dial`: the next over's split writes would then be
+/// split on last and nothing else ([`write_rig_split`]).
+#[cfg_attr(not(feature = "device"), allow(dead_code))] // the radio loop (service.rs, device)
+pub(crate) fn rig_split_confirmed_for(rig: &Rig, dial: u64, tx_dial: u64, md: &str) -> bool {
+    rig.tx_split_held
+        && rig.split_confirmed.as_ref().is_some_and(|c| {
+            c.rx_dial == dial && c.tx_hz == Some(tx_dial) && c.tx_mode.as_deref() == Some(md)
+        })
+}
+
+/// How long the receive-time pre-set ([`preset_rig_split`]) may go on starting split writes, from
+/// the first. The radio loop runs it only with [`SPLIT_PRESET_LEAD_MS`] to the next slot boundary,
+/// and one write still running when this has gone takes at most its CAT deadline (700 ms on a
+/// serial link, 2.5 s on a network one), so the pre-set never holds the loop into a key.
+#[cfg_attr(not(feature = "device"), allow(dead_code))] // the radio loop (service.rs, device)
+pub(crate) const SPLIT_PRESET_BUDGET_MS: u64 = 1_000;
+
+/// The least time (ms) to the next slot boundary at which the radio loop starts a pre-set: its
+/// budget plus the longest CAT deadline, and a little over.
+#[cfg_attr(not(feature = "device"), allow(dead_code))] // the radio loop (service.rs, device)
+pub(crate) const SPLIT_PRESET_LEAD_MS: f64 = 4_000.0;
+
+/// Put Split Operation = Rig's TX dial `tx_dial` and TX mode `md` on the radio for the RX dial
+/// `dial` while the station receives, after the dial changed, so the next over finds them
+/// confirmed and its key sends only split on last ([`apply_tx_dial_shift`]). WSJT-X 3.0.2 does the
+/// same: `MainWindow::band_changed` calls `setRig` and then `setXIT` (`widgets/mainwindow.cpp:12117-
+/// 12118`), and `setXIT` sends the TX dial to the radio while it is only monitoring
+/// (`:12378-12387`), through the one `do_tx_frequency` an over's TX dial goes through
+/// (`Transceiver/HamlibTransceiver.cpp:947-1033`: split on, TX dial and mode, split on last).
+///
+/// ⛔ ONLY AT A QUIET POINT, which the radio loop decides (`RadioLoop::preset_rig_split_due`):
+/// nothing keyed, no over, tune or PTT of its own, no over about to start. `Err` leaves nothing
+/// confirmed, so the over's key writes everything again under [`SPLIT_WRITES_BUDGET_MS`], which
+/// stays the guard at the key. The `bool` is whether the radio took split on or VFO B was written,
+/// so the loop holds the split (and lets go of it) as after an over that engaged it.
+#[cfg_attr(not(feature = "device"), allow(dead_code))] // the radio loop (service.rs, device)
+pub(crate) fn preset_rig_split(
+    rig: &mut Rig,
+    dial: u64,
+    tx_dial: u64,
+    md: &str,
+) -> (std::io::Result<()>, bool) {
+    let (sent, vfo_b_written) = write_rig_split(rig, dial, tx_dial, md, SPLIT_PRESET_BUDGET_MS);
+    (sent, rig.tx_split_held || vfo_b_written)
 }
 
 /// Put VFO B back on the RX dial `dial` for a key that is NOT a slot over, while Nexus holds Rig

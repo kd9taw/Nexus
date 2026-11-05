@@ -4558,6 +4558,12 @@ struct RadioLoop {
     /// When an owed split release ([`Rig::split_release_pending`]) may be sent again (loop ms);
     /// `None` until the first quiet tick after it was refused.
     rig_split_release_at: Option<f64>,
+    /// The engine's dial (Hz) the last tick saw, so a change of it is noticed whenever it comes
+    /// (`Self::preset_rig_split_due`). `0` until the first tick.
+    split_preset_seen_dial: u64,
+    /// The receive-time pre-set of Split Operation = Rig's TX dial still owed for a dial change:
+    /// the dial it is for and how many tries it has had (at most two). `None` when none is owed.
+    split_preset: Option<(u64, u8)>,
     /// The rig's OWN split state, observed while Nexus was not holding split, as
     /// `(split_on, tx_vfo, tx_freq_hz)` — what the teardown RESTORES.
     ///
@@ -5107,6 +5113,8 @@ impl RadioLoop {
             audio_rig_split: false,
             rig_split_dial: 0,
             rig_split_release_at: None,
+            split_preset_seen_dial: 0,
+            split_preset: None,
             rig_split_restore: None,
             split_detect: None,
             rfpower_floor: None,
@@ -7285,6 +7293,112 @@ impl RadioLoop {
             crate::slot::vfo_b_to_the_rx_dial(rig, dial).map_err(|e| e.to_string())
         } else {
             Ok(())
+        }
+    }
+
+    /// Whether Split Operation = Rig's TX dial is due to be put on the radio now, ahead of the next
+    /// over (`slot::preset_rig_split`): `Some((dial, tx_dial, tx_mode))` when it is.
+    ///
+    /// Owed once per change of the engine's dial (a band change, a QSY in the band, the radio's own
+    /// dial read as moved), noticed on any tick, and only while the radio has not already confirmed
+    /// that TX dial and mode for that dial. A change of the TX offset alone owes nothing: the over's
+    /// key writes the new TX dial, as it always has.
+    ///
+    /// ⛔ ONLY AT A QUIET POINT. Never with a carrier up or coming: no over, tune or PTT of this
+    /// loop's, nothing keyed by this loop or read as keyed at the radio, no first over waiting to
+    /// key at once, and at least [`crate::slot::SPLIT_PRESET_LEAD_MS`] to the next slot boundary,
+    /// so the writes are done before any key. Never on a radio this loop does not own, one with no
+    /// control channel, or while a split release or a Fake It write-back is owed.
+    ///
+    /// ⛔ ONLY WHERE THE NEXT OVER WOULD WRITE SPLIT ITSELF: Split Operation is Rig, TX is on, the
+    /// station is on the digital screens in a mode Split Operation applies to (FT8/FT4), no cluster
+    /// SPLIT-on-Work owns VFO B, and the over would shift the dial or the split is already held
+    /// (an over in 1500-1999 Hz with no split held writes none). Fake It and None never pre-set.
+    fn preset_rig_split_due(
+        &mut self,
+        eng: &Engine,
+        rig: &Rig,
+        now: f64,
+    ) -> Option<(u64, u64, String)> {
+        use tempo_app::settings::{OperatingMode, SplitMode};
+        let s = eng.settings();
+        let dial = s.dial_hz();
+        if dial != self.split_preset_seen_dial {
+            if self.split_preset_seen_dial != 0 {
+                self.split_preset = Some((dial, 0));
+            }
+            self.split_preset_seen_dial = dial;
+        }
+        let (for_dial, tries) = self.split_preset?;
+        let quiet = self.tx_until_ms.is_none()
+            && !self.manual_ptt_applied
+            && !self.tuning_keyed
+            && !rig.keyed
+            && !self.rig_keyed
+            && !eng.peek_immediate_tx()
+            && self.clock.ms_to_next_slot(now) >= crate::slot::SPLIT_PRESET_LEAD_MS;
+        let free = self.may_key()
+            && rig.has_control()
+            && !rig.split_release_pending
+            && self.fake_it_restore.is_none();
+        let wanted = s.split_mode == SplitMode::Rig
+            && !eng.cluster_split_active()
+            && eng.tx_enabled()
+            && s.operating_mode == OperatingMode::Digital
+            && (!self.audio_rig_split || same_named_band(self.rig_split_dial, dial));
+        if for_dial != dial || tries >= 2 || !quiet || !free || !wanted {
+            return None;
+        }
+        let shift = eng.planned_tx_dial_shift()?;
+        let tx_dial = (dial as i64 + shift).max(0) as u64;
+        let md = eng.rig_mode_effective();
+        if (shift == 0 && !rig.tx_split_held)
+            || crate::slot::rig_split_confirmed_for(rig, dial, tx_dial, &md)
+        {
+            self.split_preset = None;
+            return None;
+        }
+        Some((dial, tx_dial, md))
+    }
+
+    /// Run a due pre-set ([`Self::preset_rig_split_due`]). A split the radio took, or VFO B written,
+    /// is held as after an over that engaged it, so the loop lets go of it where it lets go of any.
+    /// One the radio did not take is tried once more at a later quiet point, then given up: the
+    /// over's key writes everything again, inside its own budget, and keys nothing if the radio
+    /// is still slower than that.
+    fn preset_rig_split(&mut self, rig: &mut Rig, dial: u64, tx_dial: u64, md: &str) {
+        let (sent, engaged) = crate::slot::preset_rig_split(rig, dial, tx_dial, md);
+        if engaged {
+            self.hold_rig_split(dial);
+        }
+        let tx_mhz = tx_dial as f64 / 1e6;
+        match sent {
+            Ok(()) => {
+                self.split_preset = None;
+                tempo_core::applog::info(
+                    "tx",
+                    &format!(
+                        "Split Operation: the radio took the TX dial {tx_mhz:.6} MHz ahead of the \
+                         next over"
+                    ),
+                );
+            }
+            Err(e) => {
+                let tries = self.split_preset.map_or(2, |(_, n)| n + 1);
+                self.split_preset = (tries < 2).then_some((dial, tries));
+                tempo_core::applog::info(
+                    "tx",
+                    &format!(
+                        "Split Operation: the radio did not take the TX dial {tx_mhz:.6} MHz \
+                         ahead of the next over ({e}){}",
+                        if tries < 2 {
+                            "; trying once more"
+                        } else {
+                            "; the over writes it at the key"
+                        }
+                    ),
+                );
+            }
         }
     }
 
@@ -14890,6 +15004,15 @@ impl RadioLoop {
             // A carrier is up: a held write-back's wait starts again when it ends, so it always
             // goes FAKE_IT_WRITE_BACK_MS after the last unkey.
             self.fake_it_restore_at = None;
+        }
+        // ⭐ SPLIT OPERATION = RIG'S TX DIAL GOES ON THE RADIO WHILE IT RECEIVES, AFTER THE DIAL
+        // CHANGES, as WSJT-X writes it from `setXIT` on a band change, so the next over's key finds
+        // it confirmed and sends only split on last. ⚠️ OUTSIDE THE ENGINE LOCK, as the release
+        // retry above: a slow radio takes its time here, while nothing is due to key.
+        if let Some((dial, tx_dial, md)) = self.preset_rig_split_due(&eng, rig, now) {
+            drop(eng);
+            self.preset_rig_split(rig, dial, tx_dial, &md);
+            eng = engine_lock(engine);
         }
 
         // Operator hit Erase → mirror it to cooperating apps (UDP Clear).
