@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|toastcorner|logwaiting|topbar|header|rttyfit|firstrun|journeys|clublog|aprsmap|logbook|profiles
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|toastcorner|logwaiting|topbar|header|rttyfit|digishell|firstrun|journeys|clublog|aprsmap|logbook|profiles
        scripts/browser-probe --desktop-shard <n> <of>
 
   --desktop-shard <n> <of>
@@ -183,6 +183,13 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         Tune, the Esc/Stop macro, the TX latch and the scope's nudges are on
                         screen, with a planted margin that must be caught
                         (ui/probe/rttyfit-probe.mjs; it builds nothing)
+  --desktop digishell   the SSTV, RTTY and PSK screens in the real app, from 900×600 and 700×800
+                        at 175 % up to 1920×1080, at five scroll positions top to end: nothing in
+                        the cockpit header covers a TX strip or dock control, a stop control is
+                        on screen and topmost, a pinned header's controls stay on screen, and
+                        every on-screen item of the ⊞ Panels menu opened from the header is
+                        reachable; a header forced on top and a menu lift taken away must be
+                        caught (ui/probe/digishell-probe.mjs; it builds nothing)
   --desktop firstrun    a fresh install's first-run wizard in the real app, at 1024×768 and
                         1920×1080: the About-you question and its answers on screen, Finish
                         writes the answer, the Getting started guide then the first-contact
@@ -227,9 +234,9 @@ USAGE
 # Every --desktop scenario, and the ONLY list that admits one: a name missing here is refused by
 # --desktop as well, so a new probe cannot be runnable by hand and missing from the desktop-probes CI
 # job, which deals this list round-robin over its shards with --desktop-shard. Slowest first, so the
-# deal balances (local seconds on 2026-11-04: topbar 96, waterfalls 92, logbook 67, header 62,
+# deal balances (local seconds on 2026-11-04: topbar 96, digishell 93, waterfalls 92, logbook 67, header 62,
 # journeys 42, rttyfit 39, the rest 7-27); keep a new probe near its cost when you add it.
-DESKTOP_ALL=(toastcorner topbar waterfalls logbook header journeys rttyfit profiles firstrun radiosetup contestlog
+DESKTOP_ALL=(toastcorner topbar digishell waterfalls logbook header journeys rttyfit profiles firstrun radiosetup contestlog
   logwaiting spots atu radioswitch jtty activation clublog aprsmap callcard voicenote rotor contactcard txmeters)
 
 SCENARIO='stream'
@@ -330,6 +337,7 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = topbar ] && exec node "$ROOT/ui/probe/topbar-probe.mjs"
   [ "$DESKTOP" = header ] && exec node "$ROOT/ui/probe/header-probe.mjs"
   [ "$DESKTOP" = rttyfit ] && exec node "$ROOT/ui/probe/rttyfit-probe.mjs"
+  [ "$DESKTOP" = digishell ] && exec node "$ROOT/ui/probe/digishell-probe.mjs"
   [ "$DESKTOP" = clublog ] && exec node "$ROOT/ui/probe/clublog-probe.mjs"
   [ "$DESKTOP" = aprsmap ] && exec node "$ROOT/ui/probe/aprsmap-probe.mjs"
   [ "$DESKTOP" = logbook ] && exec node "$ROOT/ui/probe/logbook-probe.mjs"

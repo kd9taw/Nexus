@@ -29919,10 +29919,8 @@ button.sat-chip:disabled {
   display: none;
 }
 /* Triple-class (0,3,0) so `.layout.single` can't collapse the flex chain — same
-   fix as `.layout.single.cw-cockpit`. PSK is RTTY's region-less shape (one
-   content pane, no region), so it rides the same rule — and the same
-   `--cockpit-fill-min` knob, whose allowlist in cockpit-panes.test.ts names all
-   three shells. */
+   fix as `.layout.single.cw-cockpit`. RTTY, PSK and SSTV share one shape: header
+   (pinned), scope, TX strip, ONE pane region with a single column, dock. */
 .layout.single.rtty-cockpit,
 .layout.single.psk-cockpit,
 .layout.single.sstv-view {
@@ -29936,19 +29934,10 @@ button.sat-chip:disabled {
      cockpits' content usually fits, so the scrollbar appears only on genuine deficit. */
   overflow-y: auto;
   min-height: 0;
-  /* THE FILL-FRAME FLOOR (region-less cockpits only). These two shells have no
-     .cockpit-panes region — their CockpitPaneFrames are bare shell children whose
-     inline fill flex is `1 1 0` with `min-height: var(--cockpit-fill-min, 0)`. This
-     knob is that floor: RTTY's stream / SSTV's gallery keep their head plus a readable
-     band of content, and deficit past it flows to the `overflow-y: auto` valve above.
-     A SHEET rule on `.pane-frame` cannot supply the floor — the frame's inline
-     min-height outranks every selector, which is how the previous spelling
-     (`.rtty-cockpit > .pane-frame { min-height: 10em }`) shipped dead. Fenced:
-     cockpit-panes.test.ts fails any other rule that sets this — inherited under a
-     region's tier-2/3 `overflow: hidden` it would be the clip mechanism reborn.
-     RTTY lowers it on a short cockpit through its knob (cockpit-panes.css `.rtty-cockpit`,
-     2026-10-27); PSK and SSTV never set the knob and keep the stock 10em. */
-  --cockpit-fill-min: var(--rtty-fill-floor, 10em);
+  /* (The fill-frame floor knob `--cockpit-fill-min` that stood here went with the
+     region-less shape, 2026-11-04: the frames are in a pane region now, whose bounded
+     flow sets their yielding floor itself — cockpit-panes.css. RTTY's short-cockpit
+     floors became its region's floor there, `.rtty-cockpit`.) */
 }
 /* JS8 is a REGION cockpit (CW's shape: a .cockpit-panes grid, not bare fill frames), so it
    takes CW's shell rule and NOT the --cockpit-fill-min knob — cockpit-panes.test.ts fences
@@ -29975,7 +29964,11 @@ button.sat-chip:disabled {
   flex: 0 0 auto;
   position: sticky;
   bottom: 0;
-  z-index: 2;
+  /* 4, the TX strip's and `.cockpit-txdock`'s level and the pinned header's (cockpit-panes.css):
+     the bar comes after the header in the shell, so at equal z it wins any overlap — Send and Stop
+     are never under the dial. (It was 2, under the header's 4, and at 900×600 / 175 % the header
+     covered Send and Stop.) Above the region's column dividers (3) for the dock's reason. */
+  z-index: 4;
   display: flex;
   align-items: center;
   gap: var(--space-3);

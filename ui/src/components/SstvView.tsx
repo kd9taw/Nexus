@@ -21,6 +21,8 @@ import { rotorPointAt } from './rotorPointAt'
 import { PanelsMenu } from './PanelsMenu'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PaneSeam } from './PaneSeam'
+import { useRegionCols } from '../useRegionCols'
+import { idInImageRemembered, pictureKey, rememberIdInImage } from '../features/sstvIdInImage'
 import { SSTV_STAGE_SPLIT_MAX, SSTV_STAGE_SPLIT_MIN } from '../features/paneSeam'
 import { panelHost } from '../features/panelHost'
 import { sstvImageWidth } from '../sstvScale'
@@ -1281,12 +1283,30 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   }
 
   // #50: the operator's per-picture affirmation that the callsign is already IN the image (a
-  // pre-made QSO card), so the plate should not be drawn over it. Deliberately per-image —
-  // reset every load, never persisted: a sticky opt-out would quietly carry one picture's
-  // affirmation onto the next, which is exactly how an unidentified picture goes on the air.
+  // pre-made QSO card), so the plate should not be drawn over it. Deliberately per-image: it
+  // resets on every load, and comes back ticked only for the SAME picture, by the hash of its
+  // bytes (features/sstvIdInImage) — never by name, never carried onto a different picture,
+  // which is exactly how an unidentified picture would go on the air.
   const [idInImage, setIdInImage] = useState(false)
   const idInImageRef = useRef(false)
   idInImageRef.current = idInImage
+  /** The loaded picture's content key (null until one loads, or where the browser cannot hash). */
+  const pictureKeyRef = useRef<string | null>(null)
+  /** The newest picture load; an older one that finishes later commits nothing (loadImage). */
+  const loadGenRef = useRef(0)
+  // The tick says the picture shows THIS station's call. When the call changes under a loaded
+  // picture (a profile switch), it is re-read from memory for the new call — so a card ticked
+  // for one call is never left ticked under another.
+  useEffect(() => {
+    if (pictureKeyRef.current == null && !idInImageRef.current) return
+    const remembered = idInImageRemembered(callsign, pictureKeyRef.current)
+    if (remembered === idInImageRef.current) return
+    setIdInImage(remembered)
+    idInImageRef.current = remembered
+    if (srcRef.current) renderTx(modeSlugRef.current, true)
+    // Keyed on the call alone: the picture's own loads set the tick themselves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callsign])
 
   // Operator text overlays (text composed onto the picture). State drives the item strip;
   // the ref is what renderTx and the drag read — the same state+ref pairing as
@@ -1348,7 +1368,14 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   const lastHeardCall = gallery.find((g) => g.fskId)?.fskId ?? null
 
   const loadImage = async (file: File) => {
+    // THIS LOAD'S GENERATION. Every await below is a point where the operator may already have
+    // picked another picture; a load that has been superseded commits nothing — not the picture,
+    // not a notice, and above all not a tick. Without it, a slow unticked picture landing after
+    // a fast remembered card could be shown under the card's tick and go out with no plate.
+    const gen = ++loadGenRef.current
+    const superseded = () => gen !== loadGenRef.current
     setIdInImage(false)
+    idInImageRef.current = false
     setNotice(null)
     // Header only, through Blob.slice — a 100 MB file must not land in memory just to
     // be refused for being 100 MB.
@@ -1358,6 +1385,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     } catch {
       /* no Blob.slice/arrayBuffer here — fall through and let the decoder answer */
     }
+    if (superseded()) return
     const kind = sniffImageKind(head)
     const refusal = refusalFor(kind)
     if (refusal) {
@@ -1367,6 +1395,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       return
     }
     const decoded = await decodeImage(file)
+    if (superseded()) return
     if (!decoded || decoded.w <= 0 || decoded.h <= 0) {
       setNotice({
         kind: 'error',
@@ -1390,17 +1419,30 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       return
     }
 
+    // The picture's content key, for the remembered "already shows my callsign" tick. Taken
+    // only once the picture is accepted (the decode above has read the whole file already).
+    const key = await pictureKey(file)
+    if (superseded()) return
+
     // ⭐ ORIENTATION FIRST, and only when the decode did not already do it.
     const tag = readExifOrientation(head)
     // The probe tells us whether THIS engine applied EXIF orientation during the decode —
     // the only way to get orientation 3 (upside down) right, which changes no dimensions
     // and so is invisible to the size comparison. Cached, so this awaits real work once.
     const decoderApplies = await probeDecoderAppliesOrientation()
+    if (superseded()) return
     const eff = effectiveOrientation(tag, readIntrinsicSize(head), { w: decoded.w, h: decoded.h }, decoderApplies)
     srcRef.current = eff === 1 ? decoded : orientOnto(decoded, eff)
     centreRef.current = CENTRE
     setSrcSize({ w: srcRef.current.w, h: srcRef.current.h })
     setImageName(file.name)
+    pictureKeyRef.current = key
+    // The tick is SET from memory as the picture is committed, true OR false — never only
+    // switched on: ticked before for this very picture under this very call, it is ticked again
+    // (and drawn without the plate, below); anything else is unticked, whatever the box said.
+    const remembered = idInImageRemembered(callsignRef.current, key)
+    setIdInImage(remembered)
+    idInImageRef.current = remembered
     if (kind === 'gif') {
       setNotice({ kind: 'warn', text: t('sstv.tx.notice.gif') })
     }
@@ -1565,6 +1607,12 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   const ownStop = useRef(false)
   const sendImage = async () => {
     if (!packed || sending) return
+    // WHAT THESE PIXELS SAY, TAKEN WITH THEM. `packed` is the raster of the click; the affirmation
+    // that travels with it (below) and the preset calls it carries must be the same click's, not
+    // whatever a picture loaded during the awaits below has set since — a remembered card landing
+    // while the mode switch is pending would otherwise send THESE pixels with ITS tick.
+    const idCarried = idInImageRef.current || overlayCarriesId()
+    const overlayCalls = overlaysRef.current.flatMap((o) => (o.call ? [o.call] : []))
     // ⚠️ NO CALLSIGN, NO TRANSMISSION. The picture IS the identification here, so an
     // empty call is not a cosmetic gap. The backend refuses the same way and is the
     // authority — this is the half that says so before the operator clicks.
@@ -1653,8 +1701,8 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
         packed.width,
         packed.height,
         packed.slug,
-        idInImageRef.current || overlayCarriesId(),
-        overlaysRef.current.flatMap((o) => (o.call ? [o.call] : [])),
+        idCarried,
+        overlayCalls,
       )
     }, t('sstv.tx.send.failed')).then((s) => {
       if (s) {
@@ -1777,10 +1825,14 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
         ? t('sstv.tx.preview.aria.cropX', previewVals)
         : t('sstv.tx.preview.aria.cropY', previewVals)
 
+  // The one pane region: one column group, so it fills at every width (see the region below).
+  const { ref: panesRef } = useRegionCols<HTMLDivElement>(1, true)
+
   return (
     <main className="layout single sstv-view">
       {snap && (
         <CockpitHeader
+          pinned
           snap={snap}
           onSnap={onSnap}
           // RF POWER (the radio's output over CAT, `setRfPower`; labelled "RF power", never the
@@ -1932,7 +1984,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           layout half. `.sstv-canvas` is `flex: 1.1 1 0` with a 16em floor — keep the section and
           hide only its contents and the operator trades a waterfall for a 16em bordered void
           that hoards the height he was trying to reclaim. Dropped entirely, the height goes to
-          the gallery frame (the shell's fill grower) and the composer stays content-height.
+          the pane region (the shell's grower, its gallery the fill pane) and the composer stays content-height.
 
           Nothing here stops a transmission: the stage is display only, with no click-to-tune at
           all in this cockpit. Stop lives in `.sstv-tx-bar` and the TX-enable latch in the
@@ -2086,8 +2138,16 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
         />
       )}
 
+      {/* THE PANE REGION — the shell contract's one `.cockpit-panes` region (RTTY's and PSK's): a
+          single column holding the RF scope pane, the composer and the gallery, in the order they
+          always stood. One column group, so it fills at every width (useRegionCols `oneGroup`); the
+          composer is a content-height strip and the gallery the fill pane, and where the two do not
+          fit the COLUMN scrolls, not the shell. The header (pinned), the RX stage, the TX strip and
+          the TX bar stay shell children, so no pane can move them. */}
+      <div className="cockpit-panes" ref={panesRef}>
+      <div className="cockpit-col">
       {/* THE RF SCOPE PANE — the radio's own panadapter, hidden until ticked (RF_SCOPE_PANEL_ID):
-          RTTY's placement, a bare fill frame first under the TX strip. Display only — it hosts no
+          RTTY's placement, a fill frame first in the region under the TX strip. Display only — it hosts no
           stop control and no sender — and separate from the RX stage, which stays the band or the
           picture whatever this box says. */}
       {shown('rfScope') && (
@@ -2101,13 +2161,10 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
         />
       )}
 
-      {/* THE LOWER PANES — CockpitPaneFrame with ROLES, and deliberately NO
-          .cockpit-panes region (RTTY's precedent: with this few content blocks every
-          multi-column tier leaves a track empty — manufactured dead space). The old
+      {/* THE LOWER PANES — CockpitPaneFrame with ROLES, in the region's one column. The old
           `.sstv-lower` wrapper split the region 50/50 whatever the panes held (census
-          #10: ~440px dead per pane on an ultrawide with an empty gallery); now the
-          composer is a content-height strip and the gallery is the fill grower beside
-          the RX stage, with deficit flowing to the shell's own overflow-y:auto valve. */}
+          #10: ~440px dead per pane on an ultrawide with an empty gallery); the composer is
+          a content-height strip and the gallery the fill pane. */}
       {shown('txcompose') && (
         <CockpitPaneFrame title={t('sstv.panel.txcompose')} paneId="txcompose" fit="content" {...closeProps('txcompose')}>
           {/* Unnamed section: the frame above is the landmark ("Transmit"); the wrapper
@@ -2365,8 +2422,10 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                 would cover artwork to repeat it. Per-image on purpose — it RESETS when a
                 new image loads, because an affirmation is about one picture, and a sticky
                 toggle would quietly carry it onto the next image, which may not identify
-                anyone. The identification is the operator's responsibility either way;
-                this checkbox is them telling us where it lives. */}
+                anyone. It is REMEMBERED for that one picture (by its content, not its
+                name), so a card ticked once comes back ticked; unticking forgets it. The
+                identification is the operator's responsibility either way; this checkbox
+                is them telling us where it lives. */}
             {packed && callsign && (
               <label className="sstv-tx-idopt" title={t('sstv.tx.idopt.title')}>
                 <input
@@ -2374,6 +2433,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                   checked={idInImage}
                   onChange={(e) => {
                     setIdInImage(e.target.checked)
+                    rememberIdInImage(callsign, pictureKeyRef.current, e.target.checked)
                     // The preview must show what will actually transmit, immediately.
                     idInImageRef.current = e.target.checked
                     renderTx(modeSlugRef.current, true)
@@ -2511,6 +2571,8 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           </div>
         </CockpitPaneFrame>
       )}
+      </div>
+      </div>
 
       {/* Pinned TX dock — transmit mode + Send + Stop + progress. TX-LOCKED: never a
           removable panel, so Stop is ALWAYS reachable (paramount SSTV TX-safety). LAST

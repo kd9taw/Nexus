@@ -196,6 +196,9 @@ export const PER_SURFACE = [
 /** Keys that describe the STATION or the PERSON and must never be scoped. Listed rather
  *  than inferred so a failure names the key that leaked. */
 const SHARED = [
+  // SSTV's "My picture already shows my callsign", remembered per picture by the hash of its bytes
+  // (features/sstvIdInImage): a fact about a picture, so the same in every window.
+  'nexus.sstv.idInImage',
   // Spot me's last comment for each mode on the Spots board (SpotsSpotMe): what the operator says about
   // themselves on a mode, the same whichever window's board they spot from.
   'nexus.spotMe.comments',

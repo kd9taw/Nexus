@@ -97,7 +97,9 @@ const STYLES_RULES = parseStylesRules(STYLES)
  *  attribute (`[data-cols=…]` or `[data-flow=…]`). Anything else — a descendant, a
  *  combinator, a second class, a tag, an id, a pseudo — is a specificity gradient, i.e.
  *  a future cascade war. */
-const FLAT = /^\.[a-z][a-z0-9-]*(\[data-(cols='[123]'|flow='(stack|fill)')\])?$/
+// `[data-pin='off']`: the pinned header's one state, written by the TX strip (CockpitTxStrip decidePin);
+// `[data-menu='open']`: the pinned header while a menu it opens is open (CockpitHeader).
+const FLAT = /^\.[a-z][a-z0-9-]*(\[data-(cols='[123]'|flow='(stack|fill)'|pin='off'|menu='open')\])?$/
 
 /** (classes+attributes, ids) — flat rules are all (0,1,0) or (0,2,0). */
 function specificity(sel: string): number {
@@ -833,7 +835,8 @@ describe('panes are sized by the grid, never by themselves', () => {
       for (const m of r.body.matchAll(/min-height\s*:\s*([^;]+)/g)) {
         const v = m[1].trim()
         if (v === '0') continue
-        if (r.selector === '.cockpit-panes' && /^\d+(\.\d+)?em$/.test(v)) continue
+        // An em floor, or the one knob over an em fallback (`--cockpit-region-floor`, fenced below).
+        if (r.selector === '.cockpit-panes' && /^(\d+(\.\d+)?em|var\(--cockpit-region-floor, \d+(\.\d+)?em\))$/.test(v)) continue
         // The hosted FT region has the same shell-valve contract. Its smaller
         // viewport-capped floor is paired with computed overflow guards in
         // cockpit-shells.test.ts and real compiled-browser reachability tests.
@@ -859,7 +862,20 @@ describe('panes are sized by the grid, never by themselves', () => {
       r!.body.replace(/\s+/g, ' '),
       'the region must floor itself (em units — px are zoom-hostile) so vertical deficit ' +
         'overflows the shell and its valve scrolls.',
-    ).toMatch(/min-height: \d+(\.\d+)?em/)
+    ).toMatch(/min-height: (var\(--cockpit-region-floor, )?\d+(\.\d+)?em/)
+  })
+
+  it('the region-floor knob is set by RTTY alone, from the frames’ own yielding floors', () => {
+    // `.cockpit-panes { min-height: var(--cockpit-region-floor, 18em) }`. RTTY's transcript and log strip
+    // stood on a yielding floor of their own before they moved into a region (`--rtty-fill-floor`, 6em to
+    // 10em with the shell's height); the knob makes the region stand on exactly that, so the shell's valve
+    // fires no sooner than it did (`scripts/browser-probe --desktop rttyfit`). Anywhere else a lower floor
+    // is the crush the base floor exists to stop, and a higher one is more shell scroll. Both sheets.
+    const sets = [...RULES, ...STYLES_RULES].filter((r) => /--cockpit-region-floor\s*:/.test(r.body))
+    expect(sets.map((r) => r.selector)).toEqual(['.rtty-cockpit'])
+    expect(/--cockpit-region-floor\s*:\s*([^;]+)/.exec(sets[0].body)![1].trim()).toBe('calc(2 * var(--rtty-fill-floor) + var(--space-3))')
+    // The floor it is built from still yields and still floors at a readable 6em.
+    expect(/--rtty-fill-floor\s*:\s*([^;]+)/.exec(sets[0].body)![1].trim()).toBe('max(6em, min(10em, calc((100% - 30em) / 2)))')
   })
 
   it('the log column cap cannot out-pay the feed track (§11.6 maximize-tracks)', () => {
@@ -959,11 +975,61 @@ describe('panes are sized by the grid, never by themselves', () => {
     }
     expect(decl('flex'), 'a grower or a shrink victim').toBe('0 0 auto')
     expect(decl('position'), 'not sticky: at a large pin it scrolls out of the window').toBe('sticky')
-    expect(decl('top'), 'scrolled down, it would leave through the top').toBe('0')
+    // Under a pinned header (SSTV, RTTY, PSK) the strip parks at the header's height, which it measures
+    // (CockpitTxStrip.pinnedHeader.test.tsx); everywhere else that is 0.
+    expect(decl('top'), 'scrolled down, it would leave through the top, or park over a pinned header').toBe('var(--cockpit-txstrip-top, 0px)')
     expect(decl('bottom'), 'parked at the bottom, it must clear the sticky dock').toBe('var(--cockpit-txstrip-bottom, 0px)')
     // A sticky box over scrolled content must be opaque and stack above the panes it covers.
     expect(decl('background')).toBe('var(--panel)')
     expect(Number(decl('z-index'))).toBeGreaterThanOrEqual(1)
+  })
+
+  // THE PINNED HEADER (SSTV, RTTY, PSK). Sticky at the top of the shell's scrollport so the dial, the
+  // band, ⊞ Panels, power and CAT stay in the window when the shell's valve scrolls. The fence makes
+  // this one rule its whole cascade (styles.css may not name the class); the shells' side is computed
+  // in cockpit-shells.test.ts.
+  it('the pinned header is sticky at the top, opaque, over the dividers, and NEVER over the strip or the dock', () => {
+    const r = RULES.filter((x) => x.selector === '.cockpit-header-pinned')
+    expect(r.length, 'exactly one .cockpit-header-pinned rule').toBe(1)
+    const decl = (prop: string) => {
+      let v: string | null = null
+      for (const d of r[0].body.split(';')) {
+        const m = new RegExp(`^\\s*${prop}\\s*:\\s*([^]*?)\\s*$`).exec(d)
+        if (m) v = m[1].replace(/\s+/g, ' ')
+      }
+      return v
+    }
+    expect(decl('position')).toBe('sticky')
+    expect(decl('top')).toBe('0')
+    // Content scrolls under it: the page colour, which both themes define (styles.css theme blocks).
+    expect(decl('background')).toBe('var(--bg)')
+    // …and the shell's top padding above it, which a sticky box leaves open, is covered in that colour.
+    expect(decl('box-shadow')).toBe('0 calc(-1 * var(--space-4) - 1px) 0 var(--bg)')
+    const z = (rules: Rule[], selector: string) => Number(/(?:^|;)\s*z-index\s*:\s*(-?\d+)/.exec(rules.find((x) => x.selector === selector)!.body)![1])
+    // In any overlap the stop surfaces win: the header is no higher than the strip or the dock, and
+    // it is their EARLIER sibling (the structure tests hold it first), so at equal z it paints under.
+    expect(Number(decl('z-index'))).toBeLessThanOrEqual(z(RULES, '.cockpit-txstrip'))
+    expect(Number(decl('z-index'))).toBeLessThanOrEqual(z(RULES, '.cockpit-txdock'))
+    expect(Number(decl('z-index'))).toBeGreaterThan(z(STYLES_RULES, '.pane-splitter'))
+    // …and where the three would not fit, the strip turns the pin off: static, nothing parked.
+    const off = RULES.filter((x) => x.selector === ".cockpit-header-pinned[data-pin='off']")
+    expect(off.length, "no .cockpit-header-pinned[data-pin='off'] rule").toBe(1)
+    expect(/(?:^|;)\s*position\s*:\s*static\s*(?:;|$)/.test(off[0].body), 'the unpinned header still sticks').toBe(true)
+    // A flex item's z-index stacks even when it is static: unpinned, the header must drop it.
+    expect(/(?:^|;)\s*z-index\s*:\s*auto\s*(?:;|$)/.test(off[0].body), 'a static header at z 4 still paints over a dock').toBe(true)
+    // It comes AFTER the pinned rule (same specificity, so source order decides).
+    expect(RULES.indexOf(off[0])).toBeGreaterThan(RULES.indexOf(r[0]))
+    // THE MENU LIFT: one step over the strip and the dock while a menu the header opens is open, so the
+    // menu is never under them; and BEFORE the unpinned rule, so an unpinned header is never lifted.
+    const lift = RULES.filter((x) => x.selector === ".cockpit-header-pinned[data-menu='open']")
+    expect(lift.length, "no .cockpit-header-pinned[data-menu='open'] rule").toBe(1)
+    const liftZ = Number(/(?:^|;)\s*z-index\s*:\s*(-?\d+)/.exec(lift[0].body)![1])
+    expect(liftZ).toBeGreaterThan(z(RULES, '.cockpit-txstrip'))
+    expect(liftZ).toBeGreaterThan(z(RULES, '.cockpit-txdock'))
+    expect(RULES.indexOf(lift[0]), 'the lift would outrank the unpinned rule').toBeLessThan(RULES.indexOf(off[0]))
+    expect(RULES.indexOf(lift[0])).toBeGreaterThan(RULES.indexOf(r[0]))
+    // Not a size: the header stays exactly as tall as what it holds (cockpit-header-crush.test.tsx).
+    for (const p of ['height', 'min-height', 'max-height', 'flex', 'overflow', 'overflow-y']) expect(decl(p), p).toBeNull()
   })
 
   // THE MACRO EDITOR stands on the dock's top edge, over the pane region, so it paints at the
@@ -1150,15 +1216,11 @@ describe('styles.css cannot size a pane frame either (the fence has two sides)',
     // including frames with nothing between them and a clip edge, where a floor IS the
     // clip mechanism. So the allowlist is not "these files" but "these owners, each of
     // which has a scroller standing behind the floor":
-    //   · the three REGION-LESS shells (RTTY / PSK / SSTV): their own `overflow-y: auto`
-    //     deficit valve (cockpit-shells.test.ts), and their frames are bare shell children.
     //   · the region's BOUNDED flow: the column valve above (.cockpit-col scrolls).
-    // Anything else — a shell that clips, a column, a tier variant, `:root` — is refused.
-    const ALLOWED_KNOB = new Set([
-      '.layout.single.rtty-cockpit',
-      '.layout.single.psk-cockpit',
-      '.layout.single.sstv-view',
-    ])
+    // Anything else — a shell that clips, a column, a tier variant, `:root` — is refused. (RTTY, PSK
+    // and SSTV set it on their shells while their frames were bare shell children; since 2026-11-04
+    // their frames are in a pane region, which sets it itself, so no shell in styles.css may.)
+    const ALLOWED_KNOB = new Set<string>()
     // …and Phone's LEFT SIDE (2026-10-03), whose column IS the scroller its frames sit in
     // (`.cockpit-left-col`, overflow-y: auto — computed in the left-side block above), and FT's arranged
     // columns (2026-10-07), the same: `.op-stack` scrolls (computed in its block above). So does FT's stock

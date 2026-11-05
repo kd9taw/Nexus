@@ -2,10 +2,10 @@
 //
 // SSTV SHELL STRUCTURE (2026-07-30 layout assessment; census growers.md #9/#10).
 //
-// SSTV follows RTTY's shape of the pane-grid contract: CockpitPaneFrame for the
-// operator-content blocks, deliberately NO .cockpit-panes region — with two content
-// blocks every multi-column tier is a 2-or-3-track template with one filled column,
-// i.e. manufactured dead space. The roles fix census #10 directly: the Transmit
+// SSTV follows RTTY's shape of the cockpit shell contract (2026-11-04): a PINNED header (the
+// dial, the band, ⊞ Panels, power and CAT never scroll out of the window), the RX stage, the TX
+// strip, ONE pane region with a single column — so it never has a track it cannot fill, and it
+// fills at every width (useRegionCols `oneGroup`) — and the TX bar. The roles fix census #10 directly: the Transmit
 // composer is a bounded strip (fit="content" — a drop zone cannot use surplus), the
 // Gallery is the fill grower beside the RX stage. The `.sstv-lower` 50/50 wrapper
 // (each pane took half the region whatever it held) is deleted, not restyled.
@@ -136,11 +136,12 @@ describe('SstvView pane shell', () => {
     cleanup()
     await renderView({ panels: fakePanels() })
     const shell = document.querySelector('main.layout.single.sstv-view')!
-    const frames = Array.from(shell.querySelectorAll(':scope > .pane-frame')).map((f) => f.getAttribute('data-pane'))
+    const frames = Array.from(shell.querySelectorAll(':scope > .cockpit-panes > .cockpit-col > .pane-frame')).map((f) => f.getAttribute('data-pane'))
     expect(frames).toEqual(['rfScope', 'txcompose', 'gallery'])
     const strip = shell.querySelector(':scope > .cockpit-txstrip')!
     expect(strip.previousElementSibling?.matches('.pane-splitter'), 'the TX strip left its place under the stage').toBe(true)
-    expect(strip.nextElementSibling?.getAttribute('data-pane'), 'the RF scope pane is not first under the TX strip').toBe('rfScope')
+    expect(strip.nextElementSibling?.matches('.cockpit-panes'), 'the pane region is not directly under the TX strip').toBe(true)
+    expect(shell.querySelector('.cockpit-col')!.firstElementChild?.getAttribute('data-pane'), 'the RF scope pane is not first in the region').toBe('rfScope')
     const pane = shell.querySelector('[data-pane="rfScope"]')!
     expect(pane.getAttribute('data-fit')).toBe('fill')
     expect(pane.querySelector('[data-testid="rfscope-stub"]')?.getAttribute('data-feed')).toBe('rf')
@@ -148,19 +149,23 @@ describe('SstvView pane shell', () => {
     expect(shell.querySelector(':scope > .sstv-canvas')).not.toBeNull()
   })
 
-  it('the shell holds no child kinds beyond the census (header, RX stage and its divider, TX bar, frames)', async () => {
+  it('the shell holds no child kinds beyond the census (header, RX stage and its divider, TX strip, region, TX bar)', async () => {
     await renderView()
     const shell = document.querySelector('main.layout.single.sstv-view')!
     expect(shell).not.toBeNull()
     // The stage's divider (layout L6) is a shell child, as the scope dividers are in Phone/CW/JS8.
-    const ALLOWED = ['.cockpit-header', '.sstv-canvas', '.pane-splitter', '.cockpit-txstrip', '.sstv-tx-bar', '.pane-frame']
+    // The frames are in the ONE pane region's column (2026-11-04), never shell children.
+    const ALLOWED = ['.cockpit-header', '.sstv-canvas', '.pane-splitter', '.cockpit-txstrip', '.cockpit-panes', '.sstv-tx-bar']
     for (const el of Array.from(shell.children)) {
       expect(
         ALLOWED.some((s) => el.matches(s)),
         `unexpected shell-level child <${el.tagName.toLowerCase()} class="${el.className}">`,
       ).toBe(true)
     }
-    expect(shell.querySelectorAll(':scope > .pane-frame').length).toBe(2)
+    expect(shell.querySelectorAll(':scope > .pane-frame').length, 'a frame is a shell child again').toBe(0)
+    expect(shell.querySelectorAll(':scope > .cockpit-panes > .cockpit-col > .pane-frame').length).toBe(2)
+    // The TX bar is still the LAST shell child: bottom-sticky, it parks in the scrollport at every scroll.
+    expect(shell.lastElementChild?.matches('.sstv-tx-bar'), 'the TX bar is not the last shell child').toBe(true)
     // THE TX STRIP (2026-10-01): exactly one, a shell child directly under the scope (after
     // its divider), holding the stop controls the header used to hold — and the header none.
     const strips = shell.querySelectorAll(':scope > .cockpit-txstrip')
@@ -192,13 +197,17 @@ describe('SstvView pane shell', () => {
     expect(pane!.querySelector('.pane-body .sstv-gallery-grid')).not.toBeNull()
   })
 
-  it('introduces no pane region and the .sstv-lower 50/50 wrapper is gone', async () => {
+  it('one pane region with ONE column, filling at every width; the header is pinned; the .sstv-lower 50/50 wrapper is gone', async () => {
+    // jsdom measures every region at 0 px wide: a region that could stack would stamp 'stack' here.
     await renderView()
-    expect(
-      document.querySelectorAll('.cockpit-panes').length,
-      'SSTV grew a pane region: two content blocks cannot fill a multi-track template',
-    ).toBe(0)
-    expect(document.querySelectorAll('.cockpit-col').length).toBe(0)
+    const shell = document.querySelector('main.layout.single.sstv-view')!
+    const regions = shell.querySelectorAll(':scope > .cockpit-panes')
+    expect(regions.length, 'not exactly one pane region').toBe(1)
+    expect(regions[0].querySelectorAll(':scope > .cockpit-col').length, 'more than the one column').toBe(1)
+    expect([regions[0].getAttribute('data-cols'), regions[0].getAttribute('data-flow')]).toEqual(['1', 'fill'])
+    const head = shell.firstElementChild!
+    expect(head.classList.contains('cockpit-header'), 'the header is not the first shell child').toBe(true)
+    expect(head.classList.contains('cockpit-header-pinned'), 'the header is not pinned: it scrolls away with the stage').toBe(true)
     expect(
       document.querySelectorAll('.sstv-lower').length,
       '.sstv-lower is back — the wrapper whose 50/50 split is census finding #10',

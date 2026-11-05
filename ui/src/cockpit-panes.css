@@ -229,8 +229,11 @@
      the floor, deficit past this point overflows the shell, whose `overflow-y: auto`
      valve (guarded by cockpit-shells.test.ts) turns it into the scrollbar + the sticky
      dock. A floor under a SCROLLING ancestor is the documented safe case; the 18em
-     floors this rebuild deleted sat under a CLIPPING one. */
-  min-height: 18em;
+     floors this rebuild deleted sat under a CLIPPING one.
+     A KNOB with the stock 18em as its fallback, set in exactly one place: RTTY's short cockpit
+     (`.rtty-cockpit` below), whose two fill frames stood on a yielding floor of their own before
+     they moved into a region. Every other region floors at 18em. */
+  min-height: var(--cockpit-region-floor, 18em);
   min-width: 0;
   display: grid;
   gap: var(--space-3);
@@ -509,7 +512,9 @@
 .cockpit-txstrip {
   flex: 0 0 auto;
   position: sticky;
-  top: 0;
+  /* Under a PINNED header (below), not over it: the header's height, written by the strip as the
+     dock's is. 0 under a header that scrolls. */
+  top: var(--cockpit-txstrip-top, 0px);
   bottom: var(--cockpit-txstrip-bottom, 0px);
   /* Above the region's column dividers, as the dock is: parked at the top of a scrolled shell the
      strip covers the top of the region, and Stop TX must take its own click. */
@@ -523,6 +528,58 @@
   background: var(--panel);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
+}
+/* THE PINNED HEADER (SSTV, RTTY, PSK; CockpitHeader `pinned`). The header is the shell's first child
+   and carries the mode, the dial, the band, ⊞ Panels, power and the CAT pill. In a shell whose
+   deficit valve scrolls (a laptop at 150–175 %), an unpinned header scrolls out of the window with
+   the scope, and the operator has to scroll back up to see the frequency or change the band — on
+   SSTV that is the whole 4-minute picture. Pinned, it parks at the top of the scrollport the way the
+   TX strip does, and the strip parks right under it (`--cockpit-txstrip-top`, which the strip
+   measures because CSS cannot read a sibling's box); what scrolls under the two is the scope and the
+   pane region, never a control in either. It must be a DIRECT shell child for the reason the strip
+   must: a sticky box never leaves its containing block.
+   Z-INDEX 4, THE STRIP'S AND THE DOCK'S OWN, and FIRST in the shell: at equal z the later box
+   paints on top, so in any overlap the TX strip and the dock win and the header loses — a broken
+   parking can hide the dial, never Stop TX. Over the region's dividers (3). Opaque (the page's own
+   `--bg`, defined in both themes) because content scrolls under it. Not a size: the header stays
+   exactly as tall as what it holds.
+   ONLY WHERE IT FITS (`[data-pin='off']` below): pinned, the header, the strip and the dock all
+   park; on a small window at a large zoom (900×600 / 700×800 at 175 %) the three are taller than
+   the scrollport and the header sat over Stop TX, Send and Esc/Stop at every scroll position. The
+   strip measures the three and turns the pin off there (CockpitTxStrip decidePin), and the header
+   scrolls as every other cockpit's does. */
+.cockpit-header-pinned {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: var(--bg);
+  /* A sticky box parks INSIDE its scroller's padding (Chrome), so `top: 0` leaves the shell's own
+     top padding (`--space-4`, the three shells' rule in styles.css) open above the header, and the
+     scope and the panes scrolled through that band in full view (measured at 1366×768 / 175 %).
+     The shadow is the header's own box lifted by that padding, in the page colour: it covers the
+     band and nothing else, and it takes no room. One pixel more than the padding: at a fractional
+     zoom the shell's top edge falls on a subpixel and the last row of the band leaked (measured at
+     1366×768 / 175 %); the extra pixel lies outside the scrollport, which clips it. */
+  box-shadow: 0 calc(-1 * var(--space-4) - 1px) 0 var(--bg);
+}
+/* …LIFTED ONE STEP while a menu it opens is open (CockpitHeader `data-menu="open"`, ⊞ Panels): the
+   menu (z 70 inside the header's context) hung over the strip and the dock at the header's 4, and
+   half its items were under them. Pinned, the header's own box never overlaps the strip or the dock
+   (it pins only where all three fit), so the lift lets only the open menu paint over them, and only
+   while the operator has it open. BEFORE the unpinned rule below, at the same specificity, so an
+   unpinned header is never lifted (a static flex item's z-index still stacks). */
+.cockpit-header-pinned[data-menu='open'] {
+  z-index: 5;
+}
+/* …UNPINNED where the header, the strip and the dock do not all fit (see above). Static: it scrolls
+   away with the scope, it parks over nothing, and the strip's top offset falls back to 0. */
+.cockpit-header-pinned[data-pin='off'] {
+  position: static;
+  /* `auto`, not merely ignored: the header is a FLEX ITEM of the shell, and a flex item's z-index
+     makes a stacking context even when it is static — a static header at 4 still painted over
+     SSTV's TX bar (measured at 900×600 / 175 %). Unpinned, it stacks as every other header does. */
+  z-index: auto;
+  box-shadow: none;
 }
 /* THE STRIP'S METERS CELL (Phone and CW from md up, the compact dock): the read-only TX meters in the
    strip's empty right side, as Operate's QSO strip carries its own (`.cq-telemetry`). Right-packed by
@@ -1014,9 +1071,10 @@
   gap: var(--space-3);
 }
 
-/* RTTY'S FLOORS ON A SHORT COCKPIT (2026-10-27). RTTY is region-less: its decoded text and log strip are
-   bare fill frames under the waterfall strip, so their floors and the strip's are what decide whether the
-   cockpit fits or its deficit valve scrolls the header away. At their stock sizes (10em each, the strip
+/* RTTY'S FLOORS ON A SHORT COCKPIT (2026-10-27). RTTY's decoded text and log strip stood as bare fill frames
+   under the waterfall strip until they moved into the cockpit's pane region (2026-11-04), so their floors and
+   the strip's were what decided whether the cockpit fits or its deficit valve scrolls. (The header no longer
+   scrolls away with it: it is pinned, `.cockpit-header-pinned` above.) At their stock sizes (10em each, the strip
    8em) the three need more than RTTY has at 1920×1080 with the UI at 150 %, and the cockpit scrolled 117 px
    there; until the tuning scope moved beside the waterfall (2026-10-26) the scope's own knobs lowered all
    three to 6em in RTTY's default layout, which is what made it fit. These two hold that geometry with or
@@ -1033,10 +1091,17 @@
                          8em (WATERFALL_SPLIT_MIN); the strip goes lower only when the shell has no other room.
    Where even the 6em floors do not fit, the shell's deficit valve scrolls, as it did in 1.21.0. No stop
    control is in a frame or the strip: Stop TX, Tune and the latch are in the sticky TX strip, the Esc/Stop
-   macro in the sticky dock. `scripts/browser-probe --desktop rttyfit` measures it. */
+   macro in the sticky dock. `scripts/browser-probe --desktop rttyfit` measures it.
+     --cockpit-region-floor  SINCE THE REGION: the two frames' floors and the gap between them, as the pane
+                         region's floor (`.cockpit-panes` above), so the region stands on exactly what the
+                         frames stood on and the shell scrolls no sooner than it did. The `100%` in the
+                         frames' floor still means the shell's height: the region, like the frames before
+                         it, is a shell child. Inside the region the frames keep the region's own yielding
+                         floor, and where the two do not fit its column scrolls (the second legal fate). */
 .rtty-cockpit {
   --rtty-fill-floor: max(6em, min(10em, calc((100% - 30em) / 2)));
   --rtty-strip-floor: 6em;
+  --cockpit-region-floor: calc(2 * var(--rtty-fill-floor) + var(--space-3));
 }
 
 /* THE RTTY TUNING SCOPE (⊞ `tuning`): RIGHT of the waterfall, in the strip its divider sizes (operator,
