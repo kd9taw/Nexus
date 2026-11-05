@@ -64026,6 +64026,46 @@ mod tests {
         }
     }
 
+    /// The FT drive the operator set per band and mode is a station setting: a settings backup
+    /// carries each radio's, and a restore brings it back. In a backup hand-edited to a level the
+    /// slider cannot reach, that entry is dropped (never clamped to full drive), as is one that is
+    /// not a level; the backup still restores.
+    #[test]
+    fn a_backup_carries_the_ft_drive_per_band_and_mode() {
+        let mut s = tempo_app::settings::Settings {
+            mycall: "W9XYZ".into(),
+            ..Default::default()
+        };
+        s.ensure_radio_profiles();
+        s.radios[0].remember_ft_drive("20m", "FT8", 0.30);
+        s.radios[0].remember_ft_drive("6m", "FT4", 0.80);
+        let engine: super::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::with_settings(s.clone()),
+        ));
+        let text = super::settings_bundle(&engine, Default::default(), None).expect("exports");
+        let mut bundle: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let restored = super::settings_from_bundle(bundle["settings"].clone()).unwrap();
+        assert_eq!(restored.radios[0].ft_drive, s.radios[0].ft_drive);
+        assert_eq!(restored.radios[0].ft_drive_for("20m", "FT8"), Some(0.30));
+        assert_eq!(restored.radios[0].ft_drive_for("6m", "FT4"), Some(0.80));
+
+        let drive = &mut bundle["settings"]["radios"][0]["ftDrive"];
+        drive["20m/FT8"] = serde_json::json!(9.0);
+        drive["40m/FT8"] = serde_json::json!("max");
+        let restored = super::settings_from_bundle(bundle["settings"].clone()).unwrap();
+        assert_eq!(restored.mycall, "W9XYZ", "the backup restores");
+        assert!(
+            !restored.radios[0].ft_drive.contains_key("20m/FT8"),
+            "out of range: dropped, never clamped to full drive"
+        );
+        assert_eq!(
+            restored.radios[0].ft_drive_for("20m", "FT8"),
+            Some(0.30),
+            "the band's own drive stands in"
+        );
+        assert!(!restored.radios[0].ft_drive.contains_key("40m/FT8"));
+    }
+
     /// A backup from before the cluster node choice restores the way an upgraded settings file
     /// loads: a list the operator wrote stays theirs, a list Nexus shipped goes automatic, and a
     /// backup that carries the choice keeps it. A restore runs none of `Settings::load`'s

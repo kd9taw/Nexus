@@ -7466,6 +7466,28 @@ export function SettingsPanel({
                   </label>
                 )}
 
+              {/* The radio's own scope stream, MEASURED (`radio.scopeRate`): read only, on the same
+                  radios as the CI-V log above. The SPEED is the radio's menu word, as it shows it. */}
+              {(form.rigConn === 'icomlan'
+                ? ICOM_LAN_MODELS.includes(form.rigModel)
+                : civBlocked === null && form.icomNativeCat) && (
+                  <div className="settings-field" data-testid="scope-rate">
+                    <span className="settings-label">{t('settings.rigControl.scopeRate.label')}</span>
+                    {radio?.scopeRate && (
+                      <span>
+                        {t('settings.rigControl.scopeRate.value', {
+                          rate: radio.scopeRate.sweepsPerSec.toFixed(1),
+                          dropped: String(radio.scopeRate.dropped),
+                          speed:
+                            radio.scopeRate.speed?.toUpperCase() ??
+                            t('settings.rigControl.scopeRate.speedUnknown'),
+                        })}
+                      </span>
+                    )}
+                    <span className="settings-hint">{t('settings.rigControl.scopeRate.idle')}</span>
+                  </div>
+                )}
+
               {(form.rigModel === 2036 || form.rigModel === 23005) && (
                 <label className="settings-field">
                   <span className="settings-label">{t('settings.rigControl.flexIp.label')}</span>
