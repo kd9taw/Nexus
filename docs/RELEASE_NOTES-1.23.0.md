@@ -10,8 +10,11 @@ contacts now go to LoTW with the uplink band, so they can confirm, and one click
 wrong. "My station" profiles let you pick Home, a portable kit or a club call from the top bar.
 
 The map shows what a flare or a proton event does to your path right now, and you can replay the last six hours. WWFF
-joins POTA and SOTA. Nexus is now in Chinese, Simplified and Traditional. The rotator holds on over a slow link and can
+joins POTA and SOTA. The rotator holds on over a slow link and can
 follow the Moon.
+
+**Nexus is now in Chinese, Simplified and Traditional (简体中文, 繁體中文).** Every screen is translated, by BG5EQA and completed
+for this release. Pick one in Settings ▸ Appearance ▸ Language.
 
 Many of this release's fixes concern where the radio transmits. Tune, the ATU, an APRS beacon and the voice keyer are
 judged where they really go out, and Split Operation = Rig no longer sends them from the last over's TX dial.
@@ -19,6 +22,7 @@ judged where they really go out, and Split Operation = Rig no longer sends them 
 ## The short version
 
 - **A logger on another computer now needs your say-so** before it can answer a station or turn TX on; see Upgrading, below.
+- **Nexus in Chinese (简体中文, 繁體中文)**, every screen, translated by BG5EQA and completed for this release.
 - **Radio scope and audio view together in CW**, with an RF / Audio / Both chip, and one control for the scope's span.
 - **An Icom's scope draws every sweep it sends**, and comes back after a power cycle. Not yet confirmed on a real Icom; see
   Scopes and waterfalls, below.
@@ -38,7 +42,6 @@ judged where they really go out, and Split Operation = Rig no longer sends them 
   Nexus does not send or receive FreeDV itself.
 - **More room on a 1080p screen**, and a better default size on a scaled Windows display.
 - **Stop TX and Send stay reachable** on a small window at a high zoom.
-- **Nexus in Chinese**, Simplified and Traditional.
 
 ## Upgrading from 1.22
 
@@ -305,8 +308,9 @@ new band's TX dial instead. This is what WSJT-X does, but it is new for Nexus op
 
 ## Language
 
-- **Nexus in Chinese, Simplified and Traditional (Taiwan wording).** Every screen is translated. Pick one in Settings ▸
-  Appearance ▸ Language. On Linux, Chinese needs a CJK font installed.
+- **Nexus in Chinese, Simplified and Traditional (Taiwan wording).** Every screen is translated, by BG5EQA. Pick one in
+  Settings ▸ Appearance ▸ Language. On Linux, Chinese needs a CJK font installed. The kits for corrections are in
+  `translations/zh/` and `translations/zh-hant/`.
 
 ## Known issues
 
