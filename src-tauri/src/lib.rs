@@ -35054,6 +35054,8 @@ fn callbook_iota_for_call(call: &str) -> Option<String> {
         .map(|(_, i)| i.clone())
 }
 
+use tempo_core::logbook::offer::SpotIota;
+
 /// How far back the Spots board shows a spot, and the log-time IOTA offer reads one.
 const SPOTS_WINDOW: std::time::Duration = std::time::Duration::from_secs(1200);
 
@@ -35152,26 +35154,32 @@ impl SpotIotaLog {
         named.cloned()
     }
 
-    /// The group to write on an FT contact logged with no popup: stricter than the offer, since no
+    /// What the spots say of an FT contact logged with no popup: stricter than the offer, since no
     /// one looks at it first. Reading every spot of exactly `call` made within [`SPOTS_WINDOW`]
-    /// of the contact's start (`when_unix`), on any band: they must all name one group, and one
-    /// of them must be on the contact's `band`. An old trip's re-spot, a typo, or a spot of the
-    /// station on another band alone writes nothing.
-    fn group_at_contact(&self, call: &str, band: &str, when_unix: u64) -> Option<String> {
+    /// of the contact's start (`when_unix`), on any band: none names a group, or they all name one
+    /// and one of them is on the contact's `band`, or they are refused (an old trip's re-spot, a
+    /// typo, or the station spotted only on another band).
+    fn group_at_contact(&self, call: &str, band: &str, when_unix: u64) -> SpotIota {
         let call = call.trim();
         let mut spots = self.named.iter().filter(|n| {
             n.call.eq_ignore_ascii_case(call)
                 && n.made_unix.abs_diff(when_unix) <= SPOTS_WINDOW.as_secs()
         });
-        let first = spots.next()?;
+        let Some(first) = spots.next() else {
+            return SpotIota::Silent;
+        };
         let mut on_band = false;
         for n in std::iter::once(first).chain(spots) {
             if n.group != first.group {
-                return None;
+                return SpotIota::Refused;
             }
             on_band |= n.band.is_some_and(|b| b.eq_ignore_ascii_case(band.trim()));
         }
-        on_band.then(|| first.group.clone())
+        if on_band {
+            SpotIota::Names(first.group.clone())
+        } else {
+            SpotIota::Refused
+        }
     }
 }
 
@@ -35185,19 +35193,18 @@ fn note_spot_iota(spot: &tempo_net::cluster::ClusterSpot) {
     }
 }
 
-/// The group a spot named for a no-popup FT contact (`tempo_core::logbook::offer::hold_spot_iota`;
-/// [`SpotIotaLog::group_at_contact`]), under the offer's rules ([`get_iota_offer`]): no spots in an
-/// unassisted contest entry, and with the island list held, nothing it lacks. Called under the
-/// Engine lock: both locks it takes are held only for a read, and neither holder waits for the Engine.
-fn spot_iota_at_log(call: &str, band: &str, when_unix: u64) -> Option<String> {
+/// What the spots say of a no-popup FT contact (`tempo_core::logbook::offer::hold_iota_at_log`;
+/// [`SpotIotaLog::group_at_contact`]), under the offer's rule ([`get_iota_offer`]): no spots in an
+/// unassisted contest entry. Called under the Engine lock: the lock it takes is held only for a
+/// read, and no holder of it waits for the Engine.
+fn spot_iota_at_log(call: &str, band: &str, when_unix: u64) -> SpotIota {
     if unassisted() {
-        return None;
+        return SpotIota::Silent;
     }
-    let group = SPOT_IOTA
+    SPOT_IOTA
         .lock()
-        .ok()?
-        .group_at_contact(call, band, when_unix)?;
-    iota_list::known(&group).then_some(group)
+        .map(|log| log.group_at_contact(call, band, when_unix))
+        .unwrap_or(SpotIota::Silent)
 }
 
 /// Forget every spot's group, with the spot buffer it sits beside.
@@ -49476,7 +49483,7 @@ fn start_on_the_logbook(
         // administrative subdivision", so "ON" on a Canadian contact is the correct value for
         // an export and for TQSL, and no province code can collide with a WAS state.
         eng.set_state_resolver(subdivision_hint);
-        eng.set_spot_iota_at_log(spot_iota_at_log);
+        eng.set_iota_at_log(spot_iota_at_log, iota_list::known);
         // Grid-rarity gems: geography table + the measured-activity census
         // (demote-only refinement). Restore the persisted census BEFORE any
         // stamping so the first snapshot already shows refined tiers.
@@ -59100,9 +59107,11 @@ mod tests {
     }
 
     /// ★ What a no-popup FT contact may take from the spots: the contact's own call, its band, and
-    /// spots made within the window of its start, all naming one group.
+    /// spots made within the window of its start, all naming one group. Silence lets the callbook
+    /// speak; spots that cannot be taken do not.
     #[test]
     fn a_no_popup_contact_takes_only_a_fresh_spot_on_its_own_band() {
+        use tempo_core::logbook::offer::SpotIota;
         use tempo_net::cluster::ClusterSpot;
         const T: u64 = 1_793_000_000; // the contact's start
         const WINDOW: u64 = SPOTS_WINDOW.as_secs();
@@ -59125,54 +59134,59 @@ mod tests {
             log
         };
         let eu028 = || mk("IA5X", 14074.0, "IOTA EU-028 FT8");
+        let names = || SpotIota::Names("EU-028".into());
 
         let log = log_of(&[(T - 60, eu028())]);
         assert_eq!(
-            log.group_at_contact("ia5x", "20m", T).as_deref(),
-            Some("EU-028"),
-            "a minute old, this band"
+            log.group_at_contact("ia5x", "20m", T),
+            names(),
+            "a minute old"
         );
-        assert_eq!(log.group_at_contact("IA5X", "40m", T), None, "another band");
+        assert_eq!(
+            log.group_at_contact("IA5X", "40m", T),
+            SpotIota::Refused,
+            "another band"
+        );
         assert_eq!(
             log.group_at_contact("IA5X/P", "20m", T),
-            None,
+            SpotIota::Silent,
             "another call"
         );
-        assert_eq!(log.group_at_contact("IA5Y", "20m", T), None);
+        assert_eq!(log.group_at_contact("IA5Y", "20m", T), SpotIota::Silent);
 
         // The window, both ways: a spot during the contact counts too.
-        assert!(log_of(&[(T - WINDOW, eu028())])
-            .group_at_contact("IA5X", "20m", T)
-            .is_some());
-        assert!(log_of(&[(T + 30, eu028())])
-            .group_at_contact("IA5X", "20m", T)
-            .is_some());
+        assert_eq!(
+            log_of(&[(T - WINDOW, eu028())]).group_at_contact("IA5X", "20m", T),
+            names()
+        );
+        assert_eq!(
+            log_of(&[(T + 30, eu028())]).group_at_contact("IA5X", "20m", T),
+            names()
+        );
         assert_eq!(
             log_of(&[(T - WINDOW - 1, eu028())]).group_at_contact("IA5X", "20m", T),
-            None,
-            "a stale spot"
+            SpotIota::Silent,
+            "a stale spot says nothing"
         );
 
-        // Two groups named for the call, on any band, write neither.
+        // Two groups named for the call, on any band, are refused.
         let log = log_of(&[
             (T - 60, eu028()),
             (T - 30, mk("IA5X", 7074.0, "IOTA EU-031")),
         ]);
-        assert_eq!(log.group_at_contact("IA5X", "20m", T), None);
+        assert_eq!(log.group_at_contact("IA5X", "20m", T), SpotIota::Refused);
         // A stale one does not stand against a fresh one.
         let log = log_of(&[
             (T - WINDOW - 1, mk("IA5X", 14074.0, "IOTA EU-031")),
             (T - 60, eu028()),
         ]);
-        assert_eq!(
-            log.group_at_contact("IA5X", "20m", T).as_deref(),
-            Some("EU-028")
-        );
+        assert_eq!(log.group_at_contact("IA5X", "20m", T), names());
     }
 
     /// A node replaying an old spot at login delivers it now; the time it carries is its age.
     #[test]
     fn a_replayed_spot_is_as_old_as_the_time_it_carries() {
+        use tempo_core::logbook::offer::SpotIota;
         use tempo_net::cluster::ClusterSpot;
         // 12:00:00 UTC on a day boundary multiple.
         const NOON: u64 = 20_750 * 86_400 + 12 * 3600;
@@ -59191,8 +59205,16 @@ mod tests {
             log.note(std::time::Instant::now(), NOON, &mk(time));
             log.group_at_contact("IA5X", "20m", NOON)
         };
-        assert_eq!(at("1155Z").as_deref(), Some("EU-028"), "five minutes old");
-        assert_eq!(at("0900Z"), None, "three hours old, delivered just now");
+        assert_eq!(
+            at("1155Z"),
+            SpotIota::Names("EU-028".into()),
+            "five minutes old"
+        );
+        assert_eq!(
+            at("0900Z"),
+            SpotIota::Silent,
+            "three hours old, delivered just now"
+        );
         // No date in the token: the time nearest to arrival, across midnight too.
         assert_eq!(
             super::spot_made_unix(Some("2359Z"), NOON - 12 * 3600 + 60),
@@ -59208,8 +59230,8 @@ mod tests {
         }
     }
 
-    /// The lookup the engine is given keeps every rule of the offer's spot side: no spots at all
-    /// in an unassisted contest entry, and with the island list, nothing the list lacks.
+    /// The lookup the engine is given keeps the offer's rules: no spots at all in an unassisted
+    /// contest entry, and the island list judges what it writes.
     #[test]
     fn the_no_popup_lookup_is_wired_and_gated_like_the_offer() {
         let src = include_str!("lib.rs");
@@ -59217,9 +59239,12 @@ mod tests {
         let b = &src[start..src[start..].find("\n}\n").unwrap() + start];
         let gate = b.find("if unassisted()").expect("the unassisted gate");
         let read = b.find(".group_at_contact(").expect("the spot read");
-        let known = b.find("iota_list::known").expect("the list check");
-        assert!(gate < read && read < known, "{b}");
-        assert!(src.contains("eng.set_spot_iota_at_log(spot_iota_at_log);"));
+        assert!(gate < read, "{b}");
+        // Split, or this test's own source would satisfy it.
+        assert!(src.contains(concat!(
+            "eng.set_iota_at_log(",
+            "spot_iota_at_log, iota_list::known);"
+        )));
     }
 
     /// The log-time offer's spot side: the group EVERY spot of exactly this call within the

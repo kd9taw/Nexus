@@ -2930,6 +2930,70 @@ mod tests {
         assert_eq!(confirmed.custom, (1, 1));
     }
 
+    /// ★ THE DECODE ROW'S TAG, end to end: a station decoded with no spot takes its New IOTA from
+    /// the callbook answer ([`crate::place_iotas`], as the board builds it). Logged by Log QSO with
+    /// no popup, on the real path, the contact holds that reference and the real needs fold clears
+    /// the tag, and the group is worked, not confirmed. Another station on another island keeps its
+    /// tag, and so does one with no answer until something names its group.
+    #[test]
+    fn a_decode_rows_callbook_tag_clears_in_the_real_needs_fold() {
+        use propagation::needalert::NeedTag;
+        use tempo_core::logbook::callbook::{is_callbook_filled, CallbookAnswer};
+        use tempo_core::logbook::offer::withhold_iota;
+
+        const CALL: &str = "VK9IH";
+        let answer = CallbookAnswer {
+            call: CALL.into(),
+            iota: Some("OC-147".into()),
+            ..CallbookAnswer::default()
+        };
+        crate::note_callbook_iota(CALL, &answer);
+        let d = Dir::new("decode-tag-clears");
+        std::fs::write(d.log(), tempo_core::logbook::adif_header()).unwrap();
+        let e = launch(&d);
+        {
+            let mut eng = engine_lock(&e);
+            eng.set_iota_at_log(crate::spot_iota_at_log, |_| true);
+            eng.note_callbook_answer(CALL, answer);
+        }
+        let tallies = LogTallies::default();
+        // What the decode list's alerts say of this call: its row names no island of its own.
+        let tagged = |e: &crate::SharedEngine| {
+            let mut heard = [propagation::needalert::heard_from_freq(CALL, 14.074, "FT8").unwrap()];
+            assert_eq!(heard[0].iota, None, "premise: a decode names no island");
+            crate::place_iotas(&mut heard, crate::callbook_iota_for_call, |_| true);
+            let needs = needs_kept(e, &LogTallies::default()).unwrap();
+            propagation::rank_needs(&heard, &*needs, &needs.slots())
+                .iter()
+                .any(|a| a.tags.contains(&NeedTag::NewIota))
+        };
+        assert!(tagged(&e), "premise: the tag shows before the contact");
+
+        {
+            let mut eng = engine_lock(&e);
+            eng.set_tier(tempo_app::dto::Tier::Ft8);
+            eng.set_frequency(14.074, "20m", "USB");
+            eng.call_station(CALL);
+            eng.hear_for_test(&format!("{MY_CALL} {CALL} -10"), -7, 1);
+            assert!(eng.log_current_qso(), "premise: Log QSO logged it");
+        }
+        let log = records(&e);
+        let r = log.iter().find(|r| r.call == CALL).expect("logged");
+        assert_eq!(r.ota.iota.as_deref(), Some("OC-147"));
+        assert!(withhold_iota(r));
+        assert!(
+            is_callbook_filled(r, "IOTA"),
+            "the card says from the callbook"
+        );
+
+        assert!(!tagged(&e), "the tag clears");
+        let needs = needs_kept(&e, &tallies).unwrap();
+        assert!(needs.worked_iota().contains("OC-147"));
+        assert!(!needs.confirmed_iota().contains("OC-147"));
+        let a = awards_kept(&e, &tallies).unwrap().iota.clone();
+        assert_eq!((a.worked, a.confirmed, a.held), (1, 0, 1));
+    }
+
     /// The contact card, through the store: Confirm makes a held group a confirmed one where the
     /// contact is confirmed and lets it go out; Clear takes it out of the log and the group is
     /// needed again. Both reach the kept folds.

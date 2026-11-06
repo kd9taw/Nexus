@@ -22,14 +22,16 @@
 //! callbook's answer is; that mark alone, on a contact logged before offers existed, holds
 //! nothing back.
 //!
-//! **One exception to "offered": an FT contact logged with no popup** (operator decision,
+//! **One exception to "offered": an FT contact logged with no popup** (operator decisions,
 //! 2026-11-06, replacing the 2026-10-27 one for this path alone). There is nothing on screen to
-//! take an offer from, so the reference THE SPOT named is written by itself
-//! ([`hold_spot_iota`]) and held exactly as a taken offer is: the log shows it and the New IOTA
-//! need clears, nothing is sent until the operator confirms it on the contact card, and it counts
-//! toward no confirmed total. Never the callbook's here: a callbook describes the licensee, not
-//! where they are today. The spot must also be fresh and on the contact's band, which is the
-//! command layer's to judge (it keeps the spots).
+//! take an offer from, so what would have been offered is written by itself
+//! ([`hold_iota_at_log`]) and held exactly as a taken offer is, marked by where it came from: the
+//! log shows it and the New IOTA need clears, nothing is sent until the operator confirms it on the
+//! contact card, and it counts toward no confirmed total. A fresh spot on the contact's band wins
+//! over the callbook, which describes the licensee and not where they are today; with none, the
+//! answer a lookup already gave this session for exactly this call. Spots that disagree, or that
+//! place the station only on another band, write nothing from either ([`SpotIota::Refused`]).
+//! Judging the spots is the command layer's (it keeps them); the logging path never makes a lookup.
 //!
 //! **A held reference is worked, not confirmed.** It counts as a group worked, and no card or LoTW
 //! match on the contact makes it a confirmed group until the operator has confirmed the reference:
@@ -134,13 +136,42 @@ pub fn accept_iota_offer(rec: &mut QsoRecord, offer: &IotaOffer) -> bool {
     true
 }
 
-/// Write the reference a spot named into an FT contact logged with no popup, held back as a taken
-/// offer is (the module header): only into an empty IOTA field, only a reference by its shape, and
-/// never a callbook's. `false` (and `rec` untouched) otherwise. `spot_iota` is what the command
-/// layer found for this contact's call, band and time.
-pub fn hold_spot_iota(rec: &mut QsoRecord, spot_iota: Option<&str>) -> bool {
-    iota_offer(&rec.call, rec.ota.iota.as_deref(), spot_iota, None, None)
-        .is_some_and(|offer| accept_iota_offer(rec, &offer))
+/// What the spots say of a contact being logged with no popup, for its call, band and start time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SpotIota {
+    /// No fresh spot of this call names a group.
+    Silent,
+    /// Every fresh spot of this call names this group, one of them on the contact's band.
+    Names(String),
+    /// Fresh spots name a group but cannot be taken: they disagree, or none is on this band. The
+    /// callbook does not settle it, so nothing is written.
+    Refused,
+}
+
+/// Write into an FT contact logged with no popup what its log form would have offered, held back as
+/// a taken offer is (the module header): the spot's reference, else `callbook`'s under
+/// [`iota_offer`]'s rules, into an empty IOTA field only and marked by its source. `false` (and
+/// `rec` untouched) when there is nothing to write. `callbook` is an answer already held: this
+/// never asks for one.
+pub fn hold_iota_at_log(
+    rec: &mut QsoRecord,
+    spots: &SpotIota,
+    callbook: Option<&CallbookAnswer>,
+    known: &dyn Fn(&str) -> bool,
+) -> bool {
+    let spot = match spots {
+        SpotIota::Refused => return false,
+        SpotIota::Silent => None,
+        SpotIota::Names(group) => Some(group.as_str()),
+    };
+    iota_offer(
+        &rec.call,
+        rec.ota.iota.as_deref(),
+        spot,
+        callbook,
+        Some(known),
+    )
+    .is_some_and(|offer| accept_iota_offer(rec, &offer))
 }
 
 /// The fields `field` (a mark) names on this record.
@@ -400,12 +431,18 @@ mod tests {
         assert!(adif_record_own_logger(&older).contains("<IOTA:6>EU-025"));
     }
 
+    const ANY: &dyn Fn(&str) -> bool = &|_| true;
+
+    fn names(r: &str) -> SpotIota {
+        SpotIota::Names(r.into())
+    }
+
     /// THE NO-POPUP PATH: the spot's reference goes in held, into an empty field only, with no
     /// callbook mark, and leaves the machine in no upload.
     #[test]
     fn a_spots_reference_on_a_no_popup_contact_is_written_held() {
         let mut r = rec("IA5X");
-        assert!(hold_spot_iota(&mut r, Some("eu-028")));
+        assert!(hold_iota_at_log(&mut r, &names("eu-028"), None, ANY));
         assert_eq!(r.ota.iota.as_deref(), Some("EU-028"));
         assert!(withhold_iota(&r));
         assert!(!crate::logbook::callbook::is_callbook_filled(&r, "IOTA"));
@@ -414,19 +451,120 @@ mod tests {
         assert!(!adif_record_own_logger(&r).contains("IOTA"));
     }
 
+    /// With no spot, the answer already held for exactly this call: held, withheld alike, and
+    /// marked as the callbook's, which is what the contact card's note reads.
+    #[test]
+    fn with_no_spot_a_no_popup_contact_takes_the_callbooks_reference_held() {
+        let cb = answer("IA5X", "eu-025");
+        let mut r = rec("IA5X");
+        assert!(hold_iota_at_log(&mut r, &SpotIota::Silent, Some(&cb), ANY));
+        assert_eq!(r.ota.iota.as_deref(), Some("EU-025"));
+        assert!(withhold_iota(&r));
+        assert!(crate::logbook::callbook::is_callbook_filled(&r, "IOTA"));
+        assert!(adif_record_own_log(&r).contains("<IOTA:6>EU-025"));
+        assert!(!adif_record(&r).contains("IOTA"));
+        assert!(!adif_record_own_logger(&r).contains("IOTA"));
+    }
+
+    /// Agreeing or not, a fresh spot is the source: the contact says it came from the spot.
+    #[test]
+    fn a_spot_wins_over_the_callbook_whether_they_agree_or_not() {
+        for (spot, cb, want) in [
+            ("EU-025", "EU-025", "EU-025"),
+            ("EU-028", "EU-025", "EU-028"),
+        ] {
+            let cb = answer("IA5X", cb);
+            let mut r = rec("IA5X");
+            assert!(hold_iota_at_log(&mut r, &names(spot), Some(&cb), ANY));
+            assert_eq!(r.ota.iota.as_deref(), Some(want));
+            assert!(withhold_iota(&r));
+            assert!(!crate::logbook::callbook::is_callbook_filled(&r, "IOTA"));
+        }
+    }
+
+    /// Spots that cannot be taken stop the callbook too.
+    #[test]
+    fn refused_spots_write_nothing_from_either() {
+        let cb = answer("IA5X", "EU-025");
+        let mut r = rec("IA5X");
+        assert!(!hold_iota_at_log(
+            &mut r,
+            &SpotIota::Refused,
+            Some(&cb),
+            ANY
+        ));
+        assert_eq!(r.ota.iota, None);
+        assert!(!withhold_iota(&r));
+    }
+
+    /// The offer's call rules: a stroked call and another call's answer give nothing. No answer
+    /// gives nothing. The island list judges the callbook's too, and a spot's it lacks is a
+    /// misreading that leaves the callbook's standing, as the offer has it.
+    #[test]
+    fn a_no_popup_contact_keeps_the_offers_callbook_and_list_rules() {
+        let write = |call: &str,
+                     spots: &SpotIota,
+                     cb: Option<&CallbookAnswer>,
+                     known: &dyn Fn(&str) -> bool| {
+            let mut r = rec(call);
+            hold_iota_at_log(&mut r, spots, cb, known);
+            r.ota.iota
+        };
+        let cb = answer("IA5X", "EU-025");
+        let silent = SpotIota::Silent;
+        assert_eq!(write("IA5X/P", &silent, Some(&cb), ANY), None, "stroked");
+        let stroked = answer("IA5X/P", "EU-025");
+        assert_eq!(
+            write("IA5X/P", &silent, Some(&stroked), ANY),
+            None,
+            "stroked"
+        );
+        assert_eq!(write("IA5Y", &silent, Some(&cb), ANY), None, "another call");
+        assert_eq!(write("IA5X", &silent, None, ANY), None, "no answer yet");
+        let listed = |g: &str| g == "EU-028";
+        assert_eq!(
+            write("IA5X", &silent, Some(&cb), &listed),
+            None,
+            "off the list"
+        );
+        let listed = |g: &str| g == "EU-025";
+        assert_eq!(
+            write("IA5X", &names("EU-999"), Some(&cb), &listed).as_deref(),
+            Some("EU-025")
+        );
+    }
+
     #[test]
     fn a_no_popup_contact_takes_nothing_over_a_reference_or_from_junk() {
+        let cb = answer("IA5X", "EU-025");
         let mut typed = rec("IA5X");
         typed.ota.iota = Some("EU-001".into());
-        assert!(!hold_spot_iota(&mut typed, Some("EU-028")));
+        assert!(!hold_iota_at_log(
+            &mut typed,
+            &names("EU-028"),
+            Some(&cb),
+            ANY
+        ));
+        assert!(!hold_iota_at_log(
+            &mut typed,
+            &SpotIota::Silent,
+            Some(&cb),
+            ANY
+        ));
         assert_eq!(typed.ota.iota.as_deref(), Some("EU-001"));
         assert!(!withhold_iota(&typed), "what it held is not marked");
 
-        for junk in [None, Some("EU-5"), Some("heard on EU-028"), Some("")] {
+        let junk = [
+            names("EU-5"),
+            names("heard on EU-028"),
+            names(""),
+            SpotIota::Silent,
+        ];
+        for spots in &junk {
             let mut r = rec("IA5X");
-            assert!(!hold_spot_iota(&mut r, junk), "{junk:?}");
-            assert_eq!(r.ota.iota, None, "{junk:?}");
-            assert!(!withhold_iota(&r), "{junk:?}");
+            assert!(!hold_iota_at_log(&mut r, spots, None, ANY), "{spots:?}");
+            assert_eq!(r.ota.iota, None, "{spots:?}");
+            assert!(!withhold_iota(&r), "{spots:?}");
         }
     }
 
