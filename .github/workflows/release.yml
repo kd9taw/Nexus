@@ -795,6 +795,13 @@ jobs:
   # ---------------------------------------------------------------------------------------
   macos:
     name: macOS (${{ matrix.label }} .dmg)
+    # `tsc -b` needs about 2.5 GB of JavaScript heap since the Chinese catalogs (2,048 MB, Node's
+    # default on these 7 GB runners, aborts with exit 134; 3,072 MB passes). For the whole job, not
+    # one step: the web UI is built here AND again by `cargo tauri build`'s beforeBuildCommand. The
+    # other platforms' larger runners default higher, and ci.yml has no macOS UI build, so only a
+    # release run reaches this. Prove a change here with a workflow_dispatch of this file.
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
     runs-on: ${{ matrix.runner }}
     strategy:
       # One leg failing must not cancel the other: a dry run should say which architecture broke.
@@ -945,12 +952,7 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      # `tsc -b` needs about 2.5 GB of JavaScript heap since the Chinese catalogs (2,048 MB, Node's
-      # default on these 7 GB runners, aborts with exit 134; 3,072 MB passes). The other platforms'
-      # larger runners default higher, and ci.yml has no macOS UI build, so only a tag reaches this.
       - name: Build the web UI
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
         run: |
           npm --prefix ui ci
           npm --prefix ui run build
