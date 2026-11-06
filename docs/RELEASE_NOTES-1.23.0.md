@@ -34,7 +34,8 @@ judged where they really go out, and Split Operation = Rig no longer sends them 
 - **WWFF** beside POTA and SOTA.
 - **Follow the Moon with your rotator (EME)**, and an LP button on the Rotor box.
 - **RTTY at 50 baud with your tone pair saved, PSK63, and 12 or 16 macro keys** on CW, RTTY and PSK.
-- **FreeDV:** receive and log it from the Phone screen, and contacts from FreeDV's own app land in your log.
+- **FreeDV beside Nexus:** contacts from FreeDV's own app land in your log, and a Phone pane shows the calls it hears.
+  Nexus does not send or receive FreeDV itself.
 - **More room on a 1080p screen**, and a better default size on a scaled Windows display.
 - **Stop TX and Send stay reachable** on a small window at a high zoom.
 - **Nexus in Chinese**, Simplified and Traditional.
