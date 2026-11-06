@@ -5,6 +5,11 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **DXKeeper gets each contact once.** When an upload to another service failed, for example with the internet down, every retry sent the contact to DXKeeper again, so your master log could collect a dozen or more copies of it. A catch-up of older contacts sent them to DXKeeper again too. Now a contact goes to DXKeeper once, when it is first logged or, for one held during a contest, when it is released. Copies already sent to DXKeeper are not removed, so any extras in your master log stay there until you delete them. Correcting a callsign still sends the corrected contact to DXKeeper once.
+
 ## [1.23.0] — 2026-11-05
 
 ### Added

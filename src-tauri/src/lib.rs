@@ -41121,16 +41121,126 @@ mod upload_record_tests {
         )
         .pop()
         .unwrap();
+        let owing = |rec: &tempo_core::logbook::QsoRecord| tempo_app::engine::PendingUpload {
+            rec: rec.clone(),
+            origin: tempo_app::engine::UploadOrigin::Live,
+            legs: tempo_app::engine::upload_legs::ALL,
+            attempts: 0,
+            retry_after_unix: 0,
+            corrected: false,
+        };
         assert_eq!(
-            crate::dxkeeper_target_for(Some(&dxk), &mine),
+            crate::dxkeeper_target_for(Some(&dxk), &owing(&mine)),
             Some(dxk.clone())
         );
-        assert_eq!(crate::dxkeeper_target_for(None, &mine), None);
+        assert_eq!(crate::dxkeeper_target_for(None, &owing(&mine)), None);
         mine.extra.push((
             tempo_app::log_intake::VIA_FIELD.to_string(),
             "WSJT-X".to_string(),
         ));
-        assert_eq!(crate::dxkeeper_target_for(Some(&dxk), &mine), None);
+        assert_eq!(crate::dxkeeper_target_for(Some(&dxk), &owing(&mine)), None);
+    }
+
+    /// ⛔ A CONTACT GOES TO DXKEEPER ONCE. With the internet down, every retry of a failed service
+    /// came back through the push and the operator's master log took a copy each time, and a
+    /// catch-up sweep sent old contacts again. These walk one contact down each way back onto the
+    /// queue, with the engine's own queue and the worker's own Cloudlog hold, and ask the push.
+    #[test]
+    fn dxkeeper_is_sent_a_contact_once_whichever_way_it_comes_back() {
+        use tempo_app::engine::{upload_legs as legs, PendingUpload, UploadOrigin};
+        use tempo_app::settings::KeysToConfirm;
+        let dxk = ("127.0.0.1".to_string(), 52000u16, false);
+        let pushes = |p: &PendingUpload| crate::dxkeeper_target_for(Some(&dxk), p).is_some();
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN61", 0),
+        ));
+        let log = |call: &str, time: &str| {
+            let mut rec = tempo_core::logbook::parse_adif(&format!(
+                "<CALL:{}>{call}<QSO_DATE:8>20261014<TIME_ON:6>{time}<BAND:3>20m<MODE:2>CW<EOR>",
+                call.len()
+            ))
+            .pop()
+            .unwrap();
+            rec.id = None;
+            let mut eng = crate::engine_lock(&engine);
+            eng.log_qso(rec);
+            eng.take_pending_uploads()
+                .pop()
+                .expect("the funnel queued it")
+        };
+        let take = || crate::engine_lock(&engine).take_pending_uploads().pop();
+
+        // The first pass of a contact at the key pushes.
+        let first = log("K1ABC", "120000");
+        assert_eq!(first.origin, UploadOrigin::Live, "premise: logged live");
+        assert!(pushes(&first), "the first live pass goes to DXKeeper");
+
+        // Every retry, to the end of the budget, with every service still down: what the worker
+        // does with `failed`, which `auto_push_one` builds from the services' legs alone.
+        let failed = legs::ALL & !legs::DXKEEPER;
+        let mut p = first;
+        let mut sent = 0;
+        for attempts in 1..tempo_app::engine::MAX_UPLOAD_RETRIES {
+            sent += usize::from(pushes(&p));
+            crate::engine_lock(&engine).requeue_after_failure(
+                p.rec.clone(),
+                failed,
+                attempts,
+                0,
+                p.origin,
+            );
+            p = take().expect("still within the budget");
+            assert_eq!(p.attempts, attempts, "premise: a real retry");
+        }
+        sent += usize::from(pushes(&p));
+        assert_eq!(sent, 1, "one copy, however many retries");
+
+        // A Cloudlog leg held for its key comes back with no attempt spent and still Live: neither
+        // `attempts` nor the origin can tell it from a first pass.
+        crate::engine_lock(&engine).set_keys_to_confirm(KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![],
+            ..Default::default()
+        });
+        let first = log("W1AW", "121500");
+        assert!(pushes(&first), "the pass that holds the leg back pushes");
+        crate::hold_a_waiting_cloudlog_leg(&engine, &first, 1_000_000);
+        let held = take().expect("the held leg is queued");
+        assert_eq!(
+            (held.attempts, held.origin, held.legs),
+            (0, UploadOrigin::Live, legs::CLOUDLOG),
+            "premise: it looks like a first pass in everything but what it owes"
+        );
+        assert!(!pushes(&held), "the held leg's return does not push again");
+        crate::engine_lock(&engine).set_keys_to_confirm(KeysToConfirm::default());
+
+        // A record not yet due goes back as it was. It has pushed nothing, so it still owes.
+        let waiting = log("N0CALL", "123000");
+        crate::engine_lock(&engine).requeue_upload_at(
+            waiting.rec.clone(),
+            waiting.legs,
+            waiting.attempts,
+            i64::MAX,
+            waiting.origin,
+        );
+        let waiting = take().expect("back on the queue");
+        assert!(pushes(&waiting), "a pass not made yet is still owed");
+
+        // The catch-up sweep of history owes only the services it is short of.
+        let stale = log("K9OLD", "124500");
+        crate::engine_lock(&engine).requeue_catch_up(vec![(stale.rec, legs::QRZ | legs::EQSL)]);
+        let stale = take().expect("the sweep queued it");
+        assert_eq!(stale.origin, UploadOrigin::CatchUp, "premise: the sweep");
+        assert!(!pushes(&stale), "a catch-up does not send it again");
+
+        // Another program's contact: owed on the queue as any other, and never pushed.
+        let mut theirs = log("K2DEF", "130000");
+        theirs.rec.extra.push((
+            tempo_app::log_intake::VIA_FIELD.to_string(),
+            "WSJT-X".to_string(),
+        ));
+        assert_ne!(theirs.legs & legs::DXKEEPER, 0, "premise: it owes the leg");
+        assert!(!pushes(&theirs), "it may have come from DXKeeper");
     }
 
     /// Every service push sends the contact `upload_record` makes of its row, and the DXKeeper
@@ -41160,6 +41270,10 @@ mod upload_record_tests {
         let launch = body(src, "start_on_the_logbook");
         assert!(launch.contains("wire_country_resolvers(&mut eng);"));
         assert!(launch.contains("dxkeeper_push_async(host, base, uploads, dxkeeper_adif(&rec));"));
+        // The one push asks what the record still owes, and no failure can put that leg back:
+        // `dxkeeper_is_sent_a_contact_once_whichever_way_it_comes_back` takes both as read.
+        assert!(launch.contains("dxkeeper_target_for(dxk.as_ref(), &p)"));
+        assert!(!body(src, "auto_push_one").contains("DXKEEPER"));
         assert!(body(src, "dxkeeper_adif").contains("log_queries::sent(rec.clone())"));
         assert_eq!(launch.matches("dxkeeper_push_async(").count(), 1);
     }
@@ -42406,15 +42520,21 @@ fn dxkeeper_adif(rec: &tempo_core::logbook::QsoRecord) -> String {
     tempo_core::logbook::adif_record_own_logger(&log_queries::sent(rec.clone()))
 }
 
-/// Where the upload worker pushes `rec` in DXKeeper (`dxk`, the push's host, base port and uploads
-/// switch while it is on): nowhere for a contact another program logged into Nexus
+/// Where the upload worker pushes queued record `p` in DXKeeper (`dxk`, the push's host, base port
+/// and uploads switch while it is on): nowhere unless `p` still owes DXKeeper its one send
+/// ([`tempo_app::engine::upload_legs::DXKEEPER`]), so no retry, held leg or catch-up sends a contact
+/// again; and nowhere for a contact another program logged into Nexus
 /// (`tempo_app::log_intake::from_another_program`), since DXKeeper may be the program that sent it
 /// and it would come back in.
+///
+/// What it owes, and not `attempts` or the origin: a leg held for its key comes back with no attempt
+/// spent and still `Live`, and a contact contest mode held makes its first pass as a `CatchUp`.
 fn dxkeeper_target_for(
     dxk: Option<&(String, u16, bool)>,
-    rec: &tempo_core::logbook::QsoRecord,
+    p: &tempo_app::engine::PendingUpload,
 ) -> Option<(String, u16, bool)> {
-    dxk.filter(|_| !tempo_app::log_intake::from_another_program(rec))
+    use tempo_app::engine::upload_legs::DXKEEPER;
+    dxk.filter(|_| p.legs & DXKEEPER != 0 && !tempo_app::log_intake::from_another_program(&p.rec))
         .cloned()
 }
 
@@ -49984,18 +50104,18 @@ fn start_on_the_logbook(
                 // waits on the queue, unspent, and the rest go now.
                 let legs = legs_to_send_now(&push_engine, &p, now_unix, &mut catchup_left);
                 if legs == 0 {
-                    // Nothing else owed: nothing goes anywhere, DXKeeper included, which saw
-                    // this contact the first time it came round.
+                    // Nothing goes anywhere now: the leg left on the queue is a held one, and
+                    // DXKeeper's was not owed.
                     continue;
                 }
                 let rec = p.rec.clone();
-                // DXKeeper is deliberately OUTSIDE the legs/retry machinery: it never
-                // acknowledges, so there is no success to distinguish from failure and
-                // nothing meaningful to retry. A failed connect almost always just means
-                // DXLab is not running. Fire it and move on.
+                // DXKeeper is deliberately OUTSIDE the retry machinery: it never acknowledges,
+                // so there is no success to distinguish from failure and nothing meaningful to
+                // retry. A failed connect almost always just means DXLab is not running. Fire it
+                // once and move on: it is a leg this pass spends and `failed` can never hold.
                 // …but never a contact another program logged into Nexus (`tempo_app::log_intake`):
                 // DXKeeper may be the program that sent it, and it would come back in.
-                if let Some((host, base, uploads)) = dxkeeper_target_for(dxk.as_ref(), &rec) {
+                if let Some((host, base, uploads)) = dxkeeper_target_for(dxk.as_ref(), &p) {
                     // ⭐ THE PRIVATE NOTE RIDES ALONG HERE, deliberately — the one outbound
                     // call site that does. DXKeeper is the operator's OWN logging software on
                     // their OWN machine (the comment above says it: a failed connect just means

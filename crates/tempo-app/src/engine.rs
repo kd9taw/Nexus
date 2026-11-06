@@ -3101,7 +3101,15 @@ pub mod upload_legs {
     pub const N3FJP: u8 = 1 << 4;
     pub const CLOUDLOG: u8 = 1 << 5;
     pub const WRL: u8 = 1 << 6;
-    pub const ALL: u8 = QRZ | CLUBLOG | EQSL | HRDLOG | N3FJP | CLOUDLOG | WRL;
+    /// DXKeeper, which is owed ONE send and never a retry: it acknowledges nothing, so there is no
+    /// failure to retry on. A contact owes it from the funnel, as it owes every service, and the
+    /// worker's first pass spends it. It can never come back: the worker re-queues only the legs
+    /// that failed, and this one cannot fail ([`crate::station::unsent_legs`] cannot pick it either,
+    /// so a catch-up sweep of history owes it nothing). A contact contest mode held keeps it until
+    /// its release goes out, and its file keeps what has been spent across a restart. No Settings
+    /// toggle or destination maps to it, so it is in neither [`on`] nor [`mask_for`].
+    pub const DXKEEPER: u8 = 1 << 7;
+    pub const ALL: u8 = QRZ | CLUBLOG | EQSL | HRDLOG | N3FJP | CLOUDLOG | WRL | DXKEEPER;
 
     /// The leg mask for a list of connector ids — a contest session's DESTINATION
     /// logbooks (§18.1).
@@ -16149,9 +16157,15 @@ impl Engine {
                 .station
                 .append(std::mem::take(&mut report.written), false);
             report.written = written;
+            // A merged contact is new to the log, so where it goes at all it owes DXKeeper too.
+            let owed = if legs == 0 {
+                0
+            } else {
+                legs | upload_legs::DXKEEPER
+            };
             for rec in &report.written {
                 self.station
-                    .requeue_upload_at(rec.clone(), legs, 0, 0, UploadOrigin::CatchUp);
+                    .requeue_upload_at(rec.clone(), owed, 0, 0, UploadOrigin::CatchUp);
             }
         }
         tempo_core::applog::info(
@@ -56840,8 +56854,8 @@ mod tests {
         assert_eq!(queued.len(), 2, "the control is on — these go out");
         assert_eq!(
             queued[0].legs,
-            upload_legs::WRL,
-            "…to WRL, and nowhere else"
+            upload_legs::WRL | upload_legs::DXKEEPER,
+            "…to WRL and nowhere else among the services, and once to the operator's own DXKeeper"
         );
         assert_ne!(
             queued[0].legs,

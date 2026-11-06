@@ -450,3 +450,40 @@ fn a_held_contact_made_before_a_first_logins_answer_is_not_sent_to_that_service(
         [("W1AW".to_string(), upload_legs::ALL & !upload_legs::QRZ)]
     );
 }
+
+/// A held contact has never been to DXKeeper, so its release does owe it, though it goes as a
+/// catch-up. Once it has gone it is spent, and a restart with a service still owed does not send it
+/// again.
+#[test]
+fn a_held_contact_goes_to_dxkeeper_on_release_and_not_again_after_a_restart() {
+    let dir = std::env::temp_dir().join(format!("nexus-held-dxkeeper-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("contest_held_uploads.json");
+    let mut e = contest_on();
+    e.set_contest_held_uploads_path(path.clone());
+    e.log_qso(cw("W1AW"));
+    contest_off(&mut e);
+    let sent = e.take_pending_uploads();
+    assert_eq!(sent[0].origin, UploadOrigin::CatchUp, "premise");
+    assert_ne!(
+        sent[0].legs & upload_legs::DXKEEPER,
+        0,
+        "the release owes it"
+    );
+    // The worker's first pass: every service down. `failed` holds service legs alone.
+    settle(&mut e, &sent[0], upload_legs::ALL & !upload_legs::DXKEEPER);
+    drop(e);
+
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    e.set_contest_held_uploads_path(path);
+    e.restore_contest_held_uploads(NOW);
+    let again = e.take_pending_uploads();
+    assert_eq!(again.len(), 1, "the services are still owed");
+    assert_eq!(
+        again[0].legs,
+        upload_legs::ALL & !upload_legs::DXKEEPER,
+        "and DXKeeper is not"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
