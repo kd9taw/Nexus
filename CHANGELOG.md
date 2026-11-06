@@ -5,6 +5,12 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **An FT contact logged with no popup now keeps the island group its spot named.** When Auto-log (or Log QSO with the popup off) writes an FT contact, and a cluster spot of that exact call on that band, made within 20 minutes of the contact, names an IOTA reference, the reference goes into the contact's empty IOTA field, so the log shows it and the New IOTA tag clears on the Needed board, the decode lists, Spots and Pounce. It is held: it goes to no service or logging program (LoTW, QRZ, Club Log, eQSL, HRDLog, Cloudlog, DXKeeper, N3FJP, HRD) until you press Confirm on the contact card, and Clear there takes it back out if the spot was wrong. Spots that disagree about the group write nothing, a callbook's reference is never written this way, and an unassisted contest entry reads no spots. The confirm popup and the log forms still only offer it.
+- **An island group held for your confirmation counts as worked, not confirmed.** The Awards view's IOTA card, the award status list and custom awards leave it out of their confirmed counts even if LoTW or a card confirms the contact, until you confirm the reference on the contact card; the IOTA card shows how many are waiting. This covers a reference you took from an offer too.
+
 ## [1.23.0] — 2026-11-05
 
 ### Added

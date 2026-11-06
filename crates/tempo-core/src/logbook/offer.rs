@@ -22,6 +22,19 @@
 //! callbook's answer is; that mark alone, on a contact logged before offers existed, holds
 //! nothing back.
 //!
+//! **One exception to "offered": an FT contact logged with no popup** (operator decision,
+//! 2026-11-06, replacing the 2026-10-27 one for this path alone). There is nothing on screen to
+//! take an offer from, so the reference THE SPOT named is written by itself
+//! ([`hold_spot_iota`]) and held exactly as a taken offer is: the log shows it and the New IOTA
+//! need clears, nothing is sent until the operator confirms it on the contact card, and it counts
+//! toward no confirmed total. Never the callbook's here: a callbook describes the licensee, not
+//! where they are today. The spot must also be fresh and on the contact's band, which is the
+//! command layer's to judge (it keeps the spots).
+//!
+//! **A held reference is worked, not confirmed.** It counts as a group worked, and no card or LoTW
+//! match on the contact makes it a confirmed group until the operator has confirmed the reference:
+//! such a match confirms that the contact happened, not which island it was made from.
+//!
 //! **The engine's seam.** The log-time half is the engine's to call (it holds the spot the
 //! contact came from and the session's callbook answers): `iota_offer` while the log form is
 //! open, `accept_iota_offer` on the record it is about to write when the operator said yes.
@@ -119,6 +132,15 @@ pub fn accept_iota_offer(rec: &mut QsoRecord, offer: &IotaOffer) -> bool {
         set_mark(rec, field, tags);
     }
     true
+}
+
+/// Write the reference a spot named into an FT contact logged with no popup, held back as a taken
+/// offer is (the module header): only into an empty IOTA field, only a reference by its shape, and
+/// never a callbook's. `false` (and `rec` untouched) otherwise. `spot_iota` is what the command
+/// layer found for this contact's call, band and time.
+pub fn hold_spot_iota(rec: &mut QsoRecord, spot_iota: Option<&str>) -> bool {
+    iota_offer(&rec.call, rec.ota.iota.as_deref(), spot_iota, None, None)
+        .is_some_and(|offer| accept_iota_offer(rec, &offer))
 }
 
 /// The fields `field` (a mark) names on this record.
@@ -376,6 +398,75 @@ mod tests {
         older.ota.iota = Some("EU-025".into());
         set_extra(&mut older, CALLBOOK_FILLED_FIELD, Some("IOTA,NAME".into()));
         assert!(adif_record_own_logger(&older).contains("<IOTA:6>EU-025"));
+    }
+
+    /// THE NO-POPUP PATH: the spot's reference goes in held, into an empty field only, with no
+    /// callbook mark, and leaves the machine in no upload.
+    #[test]
+    fn a_spots_reference_on_a_no_popup_contact_is_written_held() {
+        let mut r = rec("IA5X");
+        assert!(hold_spot_iota(&mut r, Some("eu-028")));
+        assert_eq!(r.ota.iota.as_deref(), Some("EU-028"));
+        assert!(withhold_iota(&r));
+        assert!(!crate::logbook::callbook::is_callbook_filled(&r, "IOTA"));
+        assert!(adif_record_own_log(&r).contains("<IOTA:6>EU-028"));
+        assert!(!adif_record(&r).contains("IOTA"));
+        assert!(!adif_record_own_logger(&r).contains("IOTA"));
+    }
+
+    #[test]
+    fn a_no_popup_contact_takes_nothing_over_a_reference_or_from_junk() {
+        let mut typed = rec("IA5X");
+        typed.ota.iota = Some("EU-001".into());
+        assert!(!hold_spot_iota(&mut typed, Some("EU-028")));
+        assert_eq!(typed.ota.iota.as_deref(), Some("EU-001"));
+        assert!(!withhold_iota(&typed), "what it held is not marked");
+
+        for junk in [None, Some("EU-5"), Some("heard on EU-028"), Some("")] {
+            let mut r = rec("IA5X");
+            assert!(!hold_spot_iota(&mut r, junk), "{junk:?}");
+            assert_eq!(r.ota.iota, None, "{junk:?}");
+            assert!(!withhold_iota(&r), "{junk:?}");
+        }
+    }
+
+    /// Clear on the contact card takes a held reference back out with its marks; it can touch no
+    /// other reference, and goes stale like any card change.
+    #[test]
+    fn clearing_on_the_card_removes_a_held_reference_and_no_other() {
+        let clear = |old: &str| FieldEdit {
+            tag: "IOTA".into(),
+            old: Some(old.into()),
+            new: None,
+        };
+        let mut r = rec("IA5X");
+        let from_cb = IotaOffer {
+            reference: "EU-025".into(),
+            source: OfferSource::Callbook,
+        };
+        assert!(accept_iota_offer(&mut r, &from_cb));
+        assert!(clear("EU-025").check().is_ok());
+        assert!(clear("EU-025").check_on(&r).is_ok());
+        assert!(clear("EU-025").is_fresh(&r));
+        assert!(!clear("EU-028").is_fresh(&r), "made against another value");
+        let write = FieldEdit {
+            tag: "IOTA".into(),
+            old: None,
+            new: Some("EU-028".into()),
+        };
+        assert!(write.check().is_err(), "a card clears it, never writes it");
+
+        fields_set(&mut r, &[("IOTA".to_string(), None)]);
+        assert_eq!(r.ota.iota, None);
+        assert!(!withhold_iota(&r));
+        assert!(!crate::logbook::callbook::is_callbook_filled(&r, "IOTA"));
+        assert!(!adif_record_own_log(&r).contains("IOTA"));
+
+        let mut typed = rec("IA5X");
+        typed.ota.iota = Some("EU-001".into());
+        assert!(clear("EU-001").check_on(&typed).is_err(), "not held");
+        fields_set(&mut typed, &[("IOTA".to_string(), None)]);
+        assert_eq!(typed.ota.iota.as_deref(), Some("EU-001"));
     }
 
     /// Confirming on the contact card takes the mark off (the one APP_NEXUS_ field a card may

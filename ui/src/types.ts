@@ -4168,6 +4168,9 @@ export interface IotaProgress {
   confirmed: number
   /** Confirmed by card alone, shown beside it. */
   cardConfirmed: number
+  /** Worked only through references still held for the operator to confirm: in `worked`, never in
+   *  `confirmed`. Absent from an older station. */
+  held?: number
 }
 
 /** The US Counties award (CQ's USA-CA): the 3,077 counties, by the contact's CNTY. Confirmed by

@@ -97,4 +97,13 @@ describe('Awards: IOTA', () => {
       note: EN['awards.iota.note.worked'].replace('{{worked}}', '150').replace('{{cards}}', '40'),
     })
   })
+
+  it('says how many groups are held for the operator to confirm, and says nothing when none are', async () => {
+    await renderWith({ worked: 3, confirmed: 1, cardConfirmed: 0, held: 2 })
+    expect(screen.getByText(EN['awards.iota.note.held'].replace('{{held}}', '2'))).toBeTruthy()
+    expect(card().value).toContain('1')
+    cleanup()
+    await renderWith({ worked: 3, confirmed: 1, cardConfirmed: 0, held: 0 })
+    expect(document.body.textContent).not.toContain('waiting for you to confirm')
+  })
 })

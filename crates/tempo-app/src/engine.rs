@@ -18214,7 +18214,17 @@ impl Engine {
 
     /// [`Self::log_qso`] for a contact the FT8/FT4 engine built ([`HeldQso::built`]), as it was
     /// built: one with no grid of its own takes a callbook's for the map only.
-    fn log_built_qso(&mut self, held: HeldQso) {
+    ///
+    /// This is the FT contact logged with no popup, whether Auto-log wrote it or Log QSO did, so
+    /// nothing was on screen to take an IOTA offer from: the reference a fresh spot on its band
+    /// named goes in held (`tempo_core::logbook::offer::hold_spot_iota`). Logging only: the
+    /// contact is already finished, and neither the sequencer nor the transmitter reads this.
+    fn log_built_qso(&mut self, mut held: HeldQso) {
+        if let Some(resolve) = &self.station.spot_iota_at_log {
+            let rec = &mut held.record;
+            let named = resolve(&rec.call, &rec.band, rec.when_unix);
+            tempo_core::logbook::offer::hold_spot_iota(rec, named.as_deref());
+        }
         let _ = self.log_qso_inner(
             held.record,
             false,
@@ -18855,7 +18865,8 @@ impl Engine {
         //
         // Never its IOTA reference: that is OFFERED on the log form and in the popup, and written
         // only when the operator takes it (`tempo_core::logbook::offer`; operator decision,
-        // 2026-10-27). An FT contact auto-logged with no popup logs without one.
+        // 2026-10-27). An FT contact logged with no popup logs a fresh spot's, held, and never
+        // the callbook's (`Self::log_built_qso`).
         //
         // An FT8/FT4 contact the station gave no grid in takes the callbook's grid for the
         // distance and the map only (`fill_gridless_from_callbook`): it counts toward no award
@@ -35607,6 +35618,14 @@ contact yourself."
         resolve: impl Fn(&str, Option<&str>) -> Option<String> + Send + Sync + 'static,
     ) {
         self.station.set_state_resolver(resolve)
+    }
+
+    /// See [`StationCore::set_spot_iota_at_log`].
+    pub fn set_spot_iota_at_log(
+        &mut self,
+        resolve: impl Fn(&str, &str, u64) -> Option<String> + Send + Sync + 'static,
+    ) {
+        self.station.set_spot_iota_at_log(resolve)
     }
 
     /// See [`StationCore::set_path_grader`].

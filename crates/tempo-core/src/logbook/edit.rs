@@ -123,6 +123,10 @@ impl FieldEdit {
 
     /// Whether `stored` still holds the value the change was made against, exactly.
     pub fn is_fresh(&self, stored: &QsoRecord) -> bool {
+        // The one modelled field a card can change: see [`Self::check`].
+        if self.tag == "IOTA" {
+            return stored.ota.iota.as_deref() == self.old.as_deref();
+        }
         let held = stored
             .extra
             .iter()
@@ -151,6 +155,11 @@ impl FieldEdit {
         if tag == super::offer::OFFER_HELD_FIELD && self.value().is_none() {
             return Ok(());
         }
+        // And clearing such a reference instead (`super::fields_set`): removal only, and
+        // [`Self::check_on`] refuses it on a reference not held. Any other is changed in its box.
+        if tag == "IOTA" && self.value().is_none() {
+            return Ok(());
+        }
         if tag.starts_with("APP_NEXUS_")
             || tag.starts_with("APP_TEMPO_")
             || tag == super::EQSL_AG_FIELD
@@ -176,6 +185,12 @@ impl FieldEdit {
     /// change would be saved and shown, and reach none of them. A column holding only blanks holds
     /// the field as well: the writer writes every non-empty column, in place of a field beside it.
     pub fn check_on(&self, stored: &QsoRecord) -> Result<(), String> {
+        if self.tag == "IOTA" && !super::offer::withhold_iota(stored) {
+            return Err(
+                "This contact's IOTA reference is not held for your confirmation — change it in its box."
+                    .to_string(),
+            );
+        }
         let held = stored.contest.as_deref().is_some_and(|c| {
             c.adif
                 .iter()

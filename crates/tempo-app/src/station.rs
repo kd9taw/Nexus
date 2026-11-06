@@ -2587,6 +2587,14 @@ pub struct StationCore {
     #[allow(clippy::type_complexity)]
     pub(crate) state_resolve:
         Option<Box<dyn Fn(&str, Option<&str>) -> Option<String> + Send + Sync>>,
+    /// The IOTA reference a cluster spot named for an FT contact logged with no popup, given its
+    /// call, band and start time ([`tempo_core::logbook::offer::hold_spot_iota`]). Injected by the
+    /// command layer, which keeps the spots and judges whether one is fresh and on this band.
+    /// Runs under the Engine lock, so it only reads what that layer holds in memory. `None` in
+    /// headless tests (no reference is written).
+    #[allow(clippy::type_complexity)]
+    pub(crate) spot_iota_at_log:
+        Option<Box<dyn Fn(&str, &str, u64) -> Option<String> + Send + Sync>>,
     /// The log-time path grader, injected by the command layer (which holds the propagation
     /// model and the path card it last computed): for a contact being logged, its graded route
     /// ([`tempo_core::logbook::path_stamp`]). Same pattern as [`Self::set_state_resolver`], for
@@ -2806,6 +2814,7 @@ impl StationCore {
             dxcc_country: None,
             country_dxcc: None,
             state_resolve: None,
+            spot_iota_at_log: None,
             path_at_log: None,
             grid_rarity_resolve: None,
             lotw_resolve: None,
@@ -3712,6 +3721,14 @@ impl StationCore {
         resolve: impl Fn(&str, Option<&str>) -> Option<String> + Send + Sync + 'static,
     ) {
         self.state_resolve = Some(Box::new(resolve));
+    }
+
+    /// Inject the spot's reference for a no-popup FT contact ([`Self::spot_iota_at_log`]).
+    pub fn set_spot_iota_at_log(
+        &mut self,
+        resolve: impl Fn(&str, &str, u64) -> Option<String> + Send + Sync + 'static,
+    ) {
+        self.spot_iota_at_log = Some(Box::new(resolve));
     }
 
     /// Inject the log-time path grader ([`Self::path_at_log`]).

@@ -273,12 +273,16 @@ pub const EQSL_AG_FIELD: &str = "APP_EQSL_AG";
 /// And the map-only mark ([`callbook::MAP_ONLY_GRID_FIELD`]): a grid a callbook filled for a
 /// contact logged with none is for the distance and the map, and counts toward nothing
 /// ([`counted_grid`]).
+///
+/// And the held mark ([`offer::OFFER_HELD_FIELD`]): an IOTA reference it names is a group worked,
+/// never one confirmed.
 pub const AWARD_EXTRAS: &[&str] = &[
     "CQZ",
     LOTW_DXCC_FIELD,
     EQSL_AG_FIELD,
     "STATE",
     callbook::MAP_ONLY_GRID_FIELD,
+    offer::OFFER_HELD_FIELD,
 ];
 
 /// A passthrough field's value, by its (uppercased) ADIF name.
@@ -579,6 +583,14 @@ pub(crate) fn set_extra(r: &mut QsoRecord, name: &str, value: Option<String>) {
 pub(crate) fn fields_set(r: &mut QsoRecord, fields: &[(String, Option<String>)]) {
     let before = r.clone();
     for (tag, value) in fields {
+        // Clearing an IOTA reference still held back (`FieldEdit::check`), the one modelled field
+        // named here: its marks follow in `offer::unmark_edited`. Any other reference stays.
+        if tag == "IOTA" {
+            if value.is_none() && offer::withhold_iota(r) {
+                r.ota.iota = None;
+            }
+            continue;
+        }
         set_extra(r, tag, value.clone());
         if SELF_FILLED_TAGS.contains(&tag.as_str())
             && extra_value(&before, tag) != extra_value(r, tag)

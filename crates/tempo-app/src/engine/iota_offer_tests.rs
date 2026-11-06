@@ -1,8 +1,10 @@
 //! An IOTA reference is OFFERED at log time, from the spot comment and the callbook, and written
 //! only when the operator takes the offer (operator decision, 2026-10-27). Nothing stamps one by
-//! itself: a callbook answer naming an island group no longer fills the contact on any path, an FT
-//! contact auto-logged with no popup logs without one, and a reference taken from an offer is
-//! held back from every upload until the operator touches it.
+//! itself: a callbook answer naming an island group no longer fills the contact on any path, and a
+//! reference taken from an offer is held back from every upload until the operator touches it.
+//!
+//! The one exception (operator decision, 2026-11-06): an FT contact logged with no popup takes the
+//! reference a fresh spot on its band named, held the same way.
 
 use super::*;
 use crate::engine::tests::dec_snr;
@@ -185,4 +187,116 @@ fn a_form_offer_taken_keeps_its_hold_through_to_the_upload_queue() {
         let sent = tempo_core::logbook::adif_record(&u.rec);
         assert!(!sent.contains("<IOTA:"), "{sent}");
     }
+}
+
+/// What the injected spot lookup was asked, so a test can name the call, band and time it read.
+type Asked = std::sync::Arc<std::sync::Mutex<Vec<(String, String, u64)>>>;
+
+/// A station whose spots name `group` for every call, keeping what each lookup asked.
+fn spotted(group: &'static str) -> (Engine, Asked) {
+    let mut e = station();
+    let asked = Asked::default();
+    let keep = asked.clone();
+    e.set_spot_iota_at_log(move |call, band, when| {
+        keep.lock()
+            .unwrap()
+            .push((call.to_string(), band.to_string(), when));
+        Some(group.to_string())
+    });
+    (e, asked)
+}
+
+/// ★ THE NO-POPUP FT CONTACT: the spot's reference is in the log, held, and in no upload; the
+/// lookup is asked for this contact's own call, band and start time, which is what a stale spot
+/// or one on another band is refused by.
+#[test]
+fn an_ft_contact_with_no_popup_logs_the_spots_reference_held() {
+    let (mut e, asked) = spotted("EU-028");
+    e.settings.auto_log = true;
+    let _ = e.take_pending_uploads();
+    work(&mut e, "IA5X", 1);
+    let r = logged(&e, "IA5X");
+    assert_eq!(r.ota.iota.as_deref(), Some("EU-028"));
+    assert!(is_offer_held(&r, "IOTA"), "held back until touched");
+    assert!(
+        !is_callbook_filled(&r, "IOTA"),
+        "the spot's, not a callbook's"
+    );
+    assert_eq!(
+        *asked.lock().unwrap(),
+        [("IA5X".to_string(), r.band.clone(), r.when_unix)]
+    );
+    let sent = uploaded_iota(&mut e, "IA5X");
+    assert!(
+        !sent.is_empty(),
+        "premise: the contact is queued for upload"
+    );
+    assert!(
+        sent.iter().all(|has| !has),
+        "no upload carries the reference"
+    );
+}
+
+/// Log QSO with Auto-log and the popup both off is the same contact with no popup.
+#[test]
+fn the_log_qso_button_with_no_popup_logs_the_spots_reference_held() {
+    let (mut e, _) = spotted("EU-028");
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = false;
+    work(&mut e, "IA5X", 1);
+    assert!(
+        e.stored_records().iter().all(|r| r.call != "IA5X"),
+        "premise"
+    );
+    assert!(e.log_current_qso());
+    let r = logged(&e, "IA5X");
+    assert_eq!(r.ota.iota.as_deref(), Some("EU-028"));
+    assert!(is_offer_held(&r, "IOTA"));
+}
+
+/// The popup and the log forms keep their offer: the spot lookup is never even asked.
+#[test]
+fn the_popup_and_the_log_forms_still_only_offer() {
+    let (mut e, asked) = spotted("EU-028");
+    e.settings.prompt_to_log = true;
+    work(&mut e, "IA5P", 1);
+    let key = e
+        .pending_qso_log_key()
+        .expect("premise: the popup holds it");
+    let shown = e.pending_log().cloned().expect("held");
+    assert_eq!(shown.ota.iota, None, "nothing written on the held contact");
+    assert!(e.confirm_pending_log(&key, shown));
+    e.settings.prompt_to_log = false;
+    let form = bare(&e, "IA5F");
+    e.log_form_qso(form, StateSource::Operator, Vec::new());
+    let plain = bare(&e, "IA5L");
+    e.log_qso(plain);
+    let sync = bare(&e, "IA5S");
+    let _ = e.log_qso_for_sync(sync);
+    for call in ["IA5P", "IA5F", "IA5L", "IA5S"] {
+        let r = logged(&e, call);
+        assert_eq!(r.ota.iota, None, "{call}");
+        assert!(!is_offer_held(&r, "IOTA"), "{call}");
+    }
+    assert!(asked.lock().unwrap().is_empty());
+}
+
+/// A callbook answer never writes here: alone it logs no reference, and beside a spot the spot's
+/// goes in with no callbook mark.
+#[test]
+fn the_no_popup_path_never_takes_the_callbooks_reference() {
+    let mut e = station();
+    e.set_spot_iota_at_log(|call, _, _| (call == "IA5B").then(|| "EU-028".to_string()));
+    e.settings.auto_log = true;
+    for call in ["IA5A", "IA5B"] {
+        e.note_callbook_answer(call, answer(call));
+    }
+    work(&mut e, "IA5A", 1);
+    work(&mut e, "IA5B", 11);
+    let alone = logged(&e, "IA5A");
+    assert_eq!(alone.ota.iota, None, "the callbook alone writes nothing");
+    assert!(!is_offer_held(&alone, "IOTA"));
+    let both = logged(&e, "IA5B");
+    assert_eq!(both.ota.iota.as_deref(), Some("EU-028"));
+    assert!(!is_callbook_filled(&both, "IOTA"));
 }
