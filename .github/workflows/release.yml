@@ -795,6 +795,7 @@ jobs:
   # ---------------------------------------------------------------------------------------
   macos:
     name: macOS (${{ matrix.label }} .dmg)
+    runs-on: ${{ matrix.runner }}
     # `tsc -b` needs about 2.5 GB of JavaScript heap since the Chinese catalogs (2,048 MB, Node's
     # default on these 7 GB runners, aborts with exit 134; 3,072 MB passes). For the whole job, not
     # one step: the web UI is built here AND again by `cargo tauri build`'s beforeBuildCommand. The
@@ -802,7 +803,6 @@ jobs:
     # release run reaches this. Prove a change here with a workflow_dispatch of this file.
     env:
       NODE_OPTIONS: --max-old-space-size=4096
-    runs-on: ${{ matrix.runner }}
     strategy:
       # One leg failing must not cancel the other: a dry run should say which architecture broke.
       fail-fast: false
