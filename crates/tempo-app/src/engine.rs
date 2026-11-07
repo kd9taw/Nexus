@@ -3353,14 +3353,18 @@ pub const CONTEST_HELD_UPLOADS_CAP: usize = 4096;
 
 /// One contact on the held list: contest mode held it ([`Engine::release_contest_uploads`]), or
 /// DXKeeper could not be reached ([`Engine::dxkeeper_hold`]). The services it still owes
-/// ([`upload_legs`]), whether this run has handed it to the upload queue yet, and whether it is
-/// waiting for DXKeeper now.
+/// ([`upload_legs`]), whether this run has handed it to the upload queue yet, whether it is
+/// waiting for DXKeeper now, and whether its DXKeeper leg is put aside.
 #[derive(Clone)]
 struct ContestHeld {
     rec: QsoRecord,
     owed: u8,
     released: bool,
     dxkeeper_waiting: bool,
+    /// An undo moved the row off this copy's call ([`Engine::dxkeeper_call_undone`]): its DXKeeper
+    /// leg stays owed but is not sent, unless the call comes back. Kept in the file, since a redo can
+    /// come after a restart.
+    dxkeeper_aside: bool,
 }
 
 /// The held list's file (`contest_held_uploads.json`):
@@ -3374,6 +3378,9 @@ struct ContestHeldFile {
     count: usize,
     adif: String,
     owed: Vec<u8>,
+    /// Which contacts' DXKeeper legs are put aside, in the same order; absent reads as none.
+    #[serde(default)]
+    aside: Vec<bool>,
 }
 
 /// Version 2 added [`upload_legs::DXKEEPER`] to `owed`; [`contest_held_from_json`] reads version 1.
@@ -3401,6 +3408,7 @@ fn contest_held_to_json(held: &[ContestHeld]) -> std::io::Result<String> {
             .collect::<Vec<_>>()
             .join("\n"),
         owed: held.iter().map(|h| h.owed).collect(),
+        aside: held.iter().map(|h| h.dxkeeper_aside).collect(),
     };
     serde_json::to_string(&file).map_err(std::io::Error::other)
 }
@@ -3428,6 +3436,7 @@ fn contest_held_from_json(text: &str) -> Result<Vec<ContestHeld>, String> {
             file.count
         ));
     }
+    let mut aside = file.aside.into_iter();
     Ok(held
         .into_iter()
         .zip(file.owed)
@@ -3440,6 +3449,7 @@ fn contest_held_from_json(text: &str) -> Result<Vec<ContestHeld>, String> {
             },
             released: false,
             dxkeeper_waiting: false,
+            dxkeeper_aside: aside.next().unwrap_or(false),
         })
         .collect())
 }
@@ -19037,7 +19047,7 @@ impl Engine {
     fn hold_contest_upload(&mut self, rec: QsoRecord) {
         if self.contest_held_uploads.len() >= CONTEST_HELD_UPLOADS_CAP {
             let dropped = self.contest_held_uploads.remove(0);
-            if dropped.dxkeeper_waiting {
+            if dropped.dxkeeper_waiting || dropped.dxkeeper_aside {
                 self.dxkeeper_evicted.push(dropped.rec.clone());
             }
             tempo_core::applog::warn(
@@ -19055,6 +19065,7 @@ impl Engine {
             owed: upload_legs::ALL,
             released: false,
             dxkeeper_waiting: false,
+            dxkeeper_aside: false,
         });
         self.persist_contest_held_uploads();
     }
@@ -19066,12 +19077,17 @@ impl Engine {
     /// or `rec` itself when none does, never a contest's held contact; what went is returned, for
     /// the worker to name.
     pub fn dxkeeper_hold(&mut self, rec: &QsoRecord) -> Option<QsoRecord> {
+        // Deleted while the worker held it: nothing joins the wait after that.
+        if self.upload_cancelled(rec) {
+            return None;
+        }
         // A contact contest mode held is on the list already, and owes the leg.
-        if let Some(held) = self
-            .contest_held_uploads
-            .iter_mut()
-            .find(|h| !h.dxkeeper_waiting && h.owed & upload_legs::DXKEEPER != 0 && h.rec == *rec)
-        {
+        if let Some(held) = self.contest_held_uploads.iter_mut().find(|h| {
+            !h.dxkeeper_waiting
+                && !h.dxkeeper_aside
+                && h.owed & upload_legs::DXKEEPER != 0
+                && h.rec == *rec
+        }) {
             held.dxkeeper_waiting = true;
             return None;
         }
@@ -19091,6 +19107,7 @@ impl Engine {
             owed: upload_legs::DXKEEPER,
             released: true,
             dxkeeper_waiting: true,
+            dxkeeper_aside: false,
         });
         self.persist_contest_held_uploads();
         gone
@@ -19108,6 +19125,7 @@ impl Engine {
         {
             h.owed &= !upload_legs::DXKEEPER;
             h.dxkeeper_waiting = false;
+            h.dxkeeper_aside = false;
             changed = true;
         }
         if changed {
@@ -19116,13 +19134,60 @@ impl Engine {
         }
     }
 
-    /// See [`Self::dxkeeper_forget`]: the contact `id` under `call`, the copy an undone correction
-    /// leaves no row for. The contact under its other call still goes.
-    pub(crate) fn dxkeeper_forget_call(&mut self, id: tempo_core::logbook::RecordId, call: &str) {
-        let call = call.trim();
-        self.dxkeeper_forget(|rec| {
-            rec.id == Some(id) && rec.call.trim().eq_ignore_ascii_case(call)
-        });
+    /// An undo moved the contact `id` off the call `left` and onto `to`, which it does both ways: a
+    /// redo is an undo of an undo. The copy under `left` is put aside, whether waiting, held or still
+    /// on the queue, since the log no longer holds that call. One put aside under `to` is owed again.
+    /// So DXKeeper is owed the call the row holds, and a copy it was sent is never sent again.
+    /// Call before the queue's copy is cancelled.
+    pub(crate) fn dxkeeper_call_undone(
+        &mut self,
+        id: tempo_core::logbook::RecordId,
+        left: &str,
+        to: &str,
+    ) {
+        let same = |a: &str, b: &str| a.trim().eq_ignore_ascii_case(b.trim());
+        let mut changed = false;
+        for h in self
+            .contest_held_uploads
+            .iter_mut()
+            .filter(|h| h.rec.id == Some(id) && h.owed & upload_legs::DXKEEPER != 0)
+        {
+            if same(&h.rec.call, left) && !h.dxkeeper_aside {
+                h.dxkeeper_aside = true;
+                h.dxkeeper_waiting = false;
+                changed = true;
+            } else if same(&h.rec.call, to) && h.dxkeeper_aside {
+                h.dxkeeper_aside = false;
+                h.dxkeeper_waiting = h.released;
+                changed = true;
+            }
+        }
+        let queued: Vec<QsoRecord> = self
+            .station
+            .pending_uploads
+            .iter()
+            .filter(|p| {
+                p.rec.id == Some(id)
+                    && p.legs & upload_legs::DXKEEPER != 0
+                    && same(&p.rec.call, left)
+            })
+            .map(|p| p.rec.clone())
+            .collect();
+        for rec in queued {
+            if !self.contest_held_uploads.iter().any(|h| h.rec == rec) {
+                self.contest_held_uploads.push(ContestHeld {
+                    rec,
+                    owed: upload_legs::DXKEEPER,
+                    released: true,
+                    dxkeeper_waiting: false,
+                    dxkeeper_aside: true,
+                });
+                changed = true;
+            }
+        }
+        if changed {
+            self.persist_contest_held_uploads();
+        }
     }
 
     /// Whatever has left the log since the last call never goes to DXKeeper. Called in the same
@@ -19143,6 +19208,13 @@ impl Engine {
     /// ceiling, for the upload worker to name.
     pub fn take_dxkeeper_evicted(&mut self) -> Vec<QsoRecord> {
         std::mem::take(&mut self.dxkeeper_evicted)
+    }
+
+    /// Whether `rec`, a copy the upload worker holds off the lock, is of a contact that has left the
+    /// log since: it must not go to DXKeeper or join the wait. A send already under way is past this.
+    /// A corrected copy keeps its id, and is not refused: only a contact that left is.
+    pub fn upload_cancelled(&self, rec: &QsoRecord) -> bool {
+        self.station.upload_cancelled(rec)
     }
 
     /// How many contacts are waiting for DXKeeper ([`Self::dxkeeper_hold`]).
@@ -19171,9 +19243,14 @@ impl Engine {
     /// quit part-way through sends the rest at the next launch.
     fn release_contest_uploads(&mut self) {
         for held in self.contest_held_uploads.iter_mut().filter(|h| !h.released) {
+            let aside = if held.dxkeeper_aside {
+                upload_legs::DXKEEPER
+            } else {
+                0
+            };
             self.station.requeue_upload_at(
                 held.rec.clone(),
-                held.owed,
+                held.owed & !aside,
                 0,
                 0,
                 UploadOrigin::CatchUp,
@@ -19199,6 +19276,7 @@ impl Engine {
         // With DXKeeper's leg spent it is not waiting, whatever the services still owe.
         if done & upload_legs::DXKEEPER != 0 {
             self.contest_held_uploads[i].dxkeeper_waiting = false;
+            self.contest_held_uploads[i].dxkeeper_aside = false;
         }
         if self.contest_held_uploads[i].owed == 0 {
             self.contest_held_uploads.remove(i);
@@ -19231,7 +19309,7 @@ impl Engine {
         // Owing DXKeeper alone, it has had its services and was waiting when the last run ended. It
         // waits now, not on the upload queue, whose cap and catch-up pacing are for the services.
         for h in held.iter_mut().filter(|h| h.owed == upload_legs::DXKEEPER) {
-            h.dxkeeper_waiting = true;
+            h.dxkeeper_waiting = !h.dxkeeper_aside;
             h.released = true;
         }
         held.append(&mut self.contest_held_uploads);

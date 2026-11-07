@@ -41762,6 +41762,38 @@ mod upload_record_tests {
             assert_eq!((wait.said, wait.delivered), (0, 0));
         }
 
+        /// ⛔ THE WORKER'S TRIP. It drains the whole queue and works through it off the lock. A contact
+        /// deleted once it holds it does not go to DXKeeper, and does not join the wait, and the
+        /// neighbour in the same batch does go.
+        #[test]
+        fn a_contact_deleted_in_the_workers_hand_does_not_reach_dxkeeper() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let mut wait = DxkeeperWait::default();
+            let gone = log(&engine, "K1GON");
+            let kept = log(&engine, "K2KPT");
+            let id = gone.rec.id.unwrap();
+            let (made, _) = tempo_app::logwrite::change_ops(
+                &engine,
+                id,
+                None,
+                &[tempo_core::logbook::LogOp::Delete(id)],
+                "test",
+            );
+            made.expect("read").expect("made");
+
+            // DXKeeper closed: it does not wait, and the worker's next tick has nothing for it.
+            pass(&engine, gone.clone(), port, false, &mut wait);
+            assert_eq!(waiting(&engine), 0);
+            // DXKeeper open: it is not sent.
+            let dxkeeper = listen(port);
+            pass(&engine, gone, port, false, &mut wait);
+            assert_eq!(arrived(&dxkeeper).len(), 0);
+            pass(&engine, kept, port, false, &mut wait);
+            assert_eq!(calls(&arrived(&dxkeeper)), ["K2KPT"]);
+        }
+
         /// A send that connected is never repeated: not by a service's retries, and not by anything
         /// that waits after it.
         #[test]
@@ -43820,7 +43852,11 @@ fn send_queued_upload(
     // …never a contact another program logged into Nexus (`tempo_app::log_intake`): DXKeeper may
     // be the program that sent it, and it would come back in.
     let mut dxk_waits = false;
-    if let Some(target) = dxkeeper_target_for(dxk, &p) {
+    // Deleted since the worker took the queue: the leg is spent below, unsent.
+    let deleted = engine_lock_result(engine)
+        .unwrap_or_else(|e| e.into_inner())
+        .upload_cancelled(&rec);
+    if let Some(target) = dxkeeper_target_for(dxk, &p).filter(|_| !deleted) {
         let others_waiting = engine_lock_result(engine)
             .unwrap_or_else(|e| e.into_inner())
             .dxkeeper_waiting_count()

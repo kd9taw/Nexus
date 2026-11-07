@@ -2496,6 +2496,12 @@ pub struct StationCore {
     /// DXKeeper is the engine's, and every change to the log passes [`Self::make`].
     rows_gone: Vec<RecordId>,
     every_row_gone: bool,
+    /// Every contact deleted this session and not put back: [`Self::upload_cancelled`]. Off the
+    /// lock, the upload worker holds a copy of what it drained.
+    gone_ids: std::collections::HashSet<RecordId>,
+    /// A purge since the worker's last drain: what it holds is cancelled, whatever its id, and
+    /// nothing logged after the purge can be among it.
+    purged_since_drain: bool,
     /// Uploads the full queue dropped (#290), held for the connector worker to report — see
     /// [`Self::enqueue_upload`]. Bounded like the queue.
     pub(crate) dropped_uploads: Vec<PendingUpload>,
@@ -2802,6 +2808,8 @@ impl StationCore {
             pending_uploads: VecDeque::new(),
             rows_gone: Vec::new(),
             every_row_gone: false,
+            gone_ids: std::collections::HashSet::new(),
+            purged_since_drain: false,
             dropped_uploads: Vec::new(),
             corrections: HashMap::new(),
             lotw_batches: 0,
@@ -3283,24 +3291,38 @@ impl StationCore {
     fn note_rows_gone(&mut self, change: &RowChange) {
         use crate::engine::upload_legs::DXKEEPER;
         let start = self.rows_gone.len();
-        self.rows_gone.extend(
-            change
-                .pairs
-                .iter()
-                .filter(|(_, after)| after.is_none())
-                .filter_map(|(before, _)| before.as_ref().and_then(|b| b.id)),
-        );
+        for (before, after) in &change.pairs {
+            match (before, after) {
+                (Some(row), None) => {
+                    if let Some(id) = row.id {
+                        self.rows_gone.push(id);
+                        self.gone_ids.insert(id);
+                    }
+                }
+                (None, Some(row)) if !self.gone_ids.is_empty() => {
+                    if let Some(id) = row.id {
+                        self.gone_ids.remove(&id);
+                    }
+                }
+                _ => {}
+            }
+        }
         self.every_row_gone |= change.purged;
+        self.purged_since_drain |= change.purged;
         if !change.purged && self.rows_gone.len() == start {
             return;
         }
-        let gone = &self.rows_gone[start..];
         for p in self.pending_uploads.iter_mut() {
-            if change.purged || p.rec.id.is_some_and(|id| gone.contains(&id)) {
+            if change.purged || p.rec.id.is_some_and(|id| self.gone_ids.contains(&id)) {
                 p.legs &= !DXKEEPER;
             }
         }
         self.pending_uploads.retain(|p| p.legs != 0);
+    }
+
+    /// Whether `rec`, a copy held off the lock, is of a contact that has left the log.
+    pub(crate) fn upload_cancelled(&self, rec: &QsoRecord) -> bool {
+        self.purged_since_drain || rec.id.is_some_and(|id| self.gone_ids.contains(&id))
     }
 
     /// The contacts that have left the log since the last call, and whether every one has.
@@ -4143,6 +4165,7 @@ impl StationCore {
     /// Drain the freshly-logged QSOs awaiting connector auto-upload (FIFO).
     /// Called by the shell's upload worker; empty when nothing was logged.
     pub fn take_pending_uploads(&mut self) -> Vec<PendingUpload> {
+        self.purged_since_drain = false;
         self.pending_uploads.drain(..).collect()
     }
 

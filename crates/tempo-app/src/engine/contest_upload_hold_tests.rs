@@ -718,3 +718,60 @@ fn a_waiting_contact_the_contest_list_puts_out_is_named_for_dxkeeper() {
         "a contest's own says nothing here"
     );
 }
+
+/// A copy put aside by an undone correction stays aside across a restart, and comes back when the call
+/// does. It is not sent meanwhile.
+#[test]
+fn a_copy_an_undo_put_aside_survives_a_restart_and_comes_back_with_its_call() {
+    let dir = scratch_dir("put-aside-restart");
+    let path = dir.join("contest_held_uploads.json");
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    e.set_contest_held_uploads_path(path.clone());
+    let (first, second) = two_waiting(&mut e);
+    let id = second.id.unwrap();
+    e.dxkeeper_call_undone(id, &second.call, "K9NEW");
+    assert_eq!(e.dxkeeper_waiting_count(), 1);
+    assert_eq!(e.dxkeeper_oldest_waiting(), Some(first));
+    drop(e);
+
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    e.set_contest_held_uploads_path(path);
+    e.restore_contest_held_uploads(NOW);
+    assert_eq!(e.dxkeeper_waiting_count(), 1, "still aside");
+    assert!(e.take_pending_uploads().is_empty());
+    e.dxkeeper_call_undone(id, "K9NEW", &second.call);
+    assert_eq!(e.dxkeeper_waiting_count(), 2, "its call is back");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A contest-held contact: the leg put aside is not sent at the release, the services are, and it
+/// comes back when the call does.
+#[test]
+fn a_contest_held_copy_put_aside_keeps_what_it_owes_the_services() {
+    let mut e = contest_on();
+    e.log_qso(cw("K1ABC"));
+    let id = e.stored_log()[0].id.unwrap();
+    e.dxkeeper_call_undone(id, "K1ABC", "K9NEW");
+    contest_off(&mut e);
+    let queued = e.take_pending_uploads();
+    assert_eq!(calls(&queued), ["K1ABC"]);
+    assert_eq!(queued[0].legs, upload_legs::ALL & !upload_legs::DXKEEPER);
+    settle(&mut e, &queued[0], 0);
+    assert_eq!(e.dxkeeper_waiting_count(), 0);
+    e.dxkeeper_call_undone(id, "K9NEW", "K1ABC");
+    assert_eq!(e.dxkeeper_waiting_count(), 1, "the leg is owed again");
+}
+
+/// ⛔ A contact deleted while it is in the worker's hand: its failed connection does not put it on the
+/// wait after the delete, and a restart has nothing to send. Undoing the delete lifts that.
+#[test]
+fn a_contact_deleted_in_the_workers_hand_cannot_join_the_wait() {
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    e.log_qso(cw("K1ABC"));
+    let rec = e.take_pending_uploads().pop().unwrap().rec;
+    assert!(!e.upload_cancelled(&rec), "premise");
+    assert!(e.delete_qso(rec.id.unwrap()));
+    assert!(e.upload_cancelled(&rec));
+    assert_eq!(e.dxkeeper_hold(&rec), None);
+    assert_eq!(e.dxkeeper_waiting_count(), 0);
+}
