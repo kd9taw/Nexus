@@ -30,8 +30,7 @@
 //! An ASCII header block of `Name: value` lines terminated by a blank line, then the body of
 //! exactly `Body:` bytes, then one payload per `File: <bytelen> <name>` header **in header
 //! order**, each part followed by CRLF. Grammar from the ARSFI B2F document (winlink.org/B2F) and
-//! cross-read against wl2k-go's `fbb/message.go` (LA5NTA, MIT), which is the open implementation
-//! that interoperates with RMS Express.
+//! cross-read against an open client implementation that interoperates with the other clients.
 //!
 //! Three of those header names are **structural** — `Mid:` names the message, `Body:` and `File:`
 //! declare where the parts stop — so they are lifted out into [`Message::mid`],
@@ -283,7 +282,7 @@ pub enum AssembleError {
 ///
 /// Header order is canonical rather than preserved: `Mid:`, then
 /// [`headers`](Message::headers) in their own order, then `Body:`, then one `File:` per
-/// attachment. That is the order wl2k-go emits and RMS Express expects; [`parse_b2`] itself does
+/// attachment. That is the order other clients emit and expect; [`parse_b2`] itself does
 /// not depend on header order, so a round-trip through this function is value-preserving but not
 /// necessarily byte-identical to the message that came in.
 ///
@@ -737,7 +736,7 @@ mod tests {
         assert_eq!(back.mid, b"ABCDE1234567");
     }
 
-    /// Structural header names are matched case-insensitively. RMS Express writes `Mid:`, but a
+    /// Structural header names are matched case-insensitively. Clients write `Mid:`, but a
     /// gateway that writes `MID:` is naming the same field, and treating it as an unknown header
     /// would drop the MID and then fail on a message that is perfectly well formed.
     #[test]

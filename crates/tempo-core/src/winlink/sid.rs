@@ -1,7 +1,7 @@
 //! The FBB/B2F **SID** (System IDentification) line grammar.
 //!
 //! Each side opens by announcing itself in square brackets — `[WL2K-5.0-B2FWIHJM$]`,
-//! `[RMS Express-1.5.45.0-B2FHM$]`, `[Paclink-unix-2.7-B2FIHM$]`, `[FBB-7.00i-B1FHM$]` — in the
+//! `[FBB-7.00i-B1FHM$]` — in the
 //! form `[<product>-<version>-<flags>$]`, and the trailing flag letters say what the peer can do.
 //!
 //! **The contract, and the whole of it: require `F` and `B2`, tolerate the rest.** Nexus needs
@@ -21,8 +21,8 @@
 //! editing that function and nothing else:
 //!
 //! 1. **The three fields split from the RIGHT** (`split_body`) — flags after the last `-`,
-//!    version between the last two, product everything before. `Paclink-unix` puts a hyphen in
-//!    its own product name, so a left-to-right split mis-slices a real peer. The cost is the
+//!    version between the last two, product everything before. Some clients put a hyphen in
+//!    their own product name, so a left-to-right split mis-slices a real peer. The cost is the
 //!    mirror case: a version carrying a hyphen (`1.0-beta`) would be mis-split. No observed SID
 //!    does that, and one of them has to lose.
 //! 2. **`B` takes the ASCII digits after it as ONE level token** (`scan_flags`) — `B1F` is
@@ -52,7 +52,7 @@
 /// a caller holding a `Sid` can read the capability directly instead of having to know that.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sid {
-    /// The product identifier — `WL2K`, `RMS Express`, `Paclink-unix`. May contain spaces and
+    /// The product identifier — `WL2K`, or another client's name. May contain spaces and
     /// hyphens, and is not guaranteed UTF-8; kept as the bytes that arrived.
     pub product: Vec<u8>,
     /// The version field, verbatim and unparsed. `7.00i` and `3.4.062` are not semver, nothing
@@ -229,7 +229,7 @@ mod tests {
         }
     }
 
-    /// `Paclink-unix` puts a hyphen in the product name, so the three fields are split from the
+    /// Some clients put a hyphen in the product name, so the three fields are split from the
     /// RIGHT: flags after the last `-`, version between the last two, product is everything left.
     #[test]
     fn product_may_contain_hyphens() {

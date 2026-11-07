@@ -181,16 +181,11 @@
 //! 2026-09-07).
 //!
 //! ⚠️ **Five is what a legitimate peer sends, not a number to refuse a session over.** It is a
-//! sender's rule in a sender's document, and the reference implementation of this protocol —
-//! `wl2k-go`, the library Pat is built on — reads it the same way: it caps its **own sender** at
-//! five, truncating the block in `Session.sendOutbound` (<https://github.com/la5nta/wl2k-go>, HEAD
-//! `efde6fbc`, `fbb/b2f.go:26` `MaxBlockSize = 5`, applied at `fbb/b2f.go:112`), and enforces no
-//! count at all on **receive** — its `case "FA", "FB", "FC", "FD"` arm appends (`fbb/b2f.go:233`)
-//! and `writeProposalsAnswer` (`fbb/b2f.go:304`) has no length test. All four line numbers read
-//! 2026-09-07. ⚠️ An earlier revision of this paragraph said "enforces no proposal count in either
-//! direction" and cited `fbb/wl2k.go` and `fbb/handshake.go`: both halves were wrong — the count
-//! exists on the sending side, and neither named file mentions it (`grep -n
-//! 'MaxBlockSize\|len(proposals)' fbb/wl2k.go fbb/handshake.go` is empty). The design conclusion
+//! sender's rule in a sender's document, and an open client implementation of this protocol
+//! reads it the same way: it caps its **own sender** at five, truncating the block as it sends, and
+//! enforces no count at all on **receive** — its proposal arm appends and its answer has no length
+//! test. Read 2026-09-07. ⚠️ An earlier revision of this paragraph said "enforces no proposal count
+//! in either direction": that was wrong — the count exists on the sending side. The design conclusion
 //! is unchanged and is better argued by the correct facts: senders cap at five, receivers cap at
 //! nothing. Made a cap *here*, it would be [`super::fbb`]'s trap 1 in a new costume — a receiver
 //! refusing a block for being longer than one document's example destroys mail the peer then stops
@@ -203,7 +198,7 @@
 //! | block size | charged at the peak | of the ceiling |
 //! |---|---|---|
 //! | 256 ([`super::fbb`]'s maximum) | 1,182,003 | 14.1 % |
-//! | 125 (`wl2k-go`'s sender) | 1,574,994 | 18.8 % |
+//! | 125 (another client's sender) | 1,574,994 | 18.8 % |
 //! | 16 | 3,147,867 | 37.5 % |
 //! | 8 | 5,245,207 | 62.5 % |
 //! | 7 | refused at the door | — |
@@ -212,7 +207,7 @@
 //! vector's `capacity()` of 8 times [`PROPOSAL_HELD_BYTES`], not its `len()` of 5, which is this
 //! section's own rule applied to itself — and an open FBB-legal block of five charges 1,278 all
 //! told. Both are asserted by `the_session_ceiling_bounds_every_buffer_at_the_door`. The worst
-//! *legitimate* session measured is five cap-sized messages at `wl2k-go`'s framing through a
+//! *legitimate* session measured is five cap-sized messages at 125-byte framing through a
 //! 64 KiB reader: **1,703,188 charged bytes, 20.3 % of the ceiling, 4.93× headroom**. Erring
 //! generous is deliberate: a few unnecessary MiB cost the operator nothing they can see, and
 //! refusing legitimate mail is the one outcome an email transport may not have.
@@ -284,8 +279,8 @@ pub const SID_VERSION: &[u8] = b"1.0";
 ///
 /// **Reading 5.** `B2` and `F` are the two capabilities this implementation actually requires and
 /// implements — [`super::sid`] refuses a peer that lacks either. `H` and `M` are carried because
-/// this is verbatim the flag set RMS Express advertises (`[RMS Express-1.5.45.0-B2FHM$]`), and
-/// RMS Express is the client the CMS is built and tested against, which is the strongest interop
+/// this is verbatim the flag set of the client the CMS is built and tested against (`B2FHM$`),
+/// which is the strongest interop
 /// evidence available offline. ⚠️ Their exact meanings are not established from the documents
 /// available here, so this constant advertises two letters whose semantics we cannot state. If a
 /// live CMS ever behaves as though we claimed something we do not do, narrowing this to `B2F` is
@@ -326,8 +321,7 @@ const MAX_LINE: usize = 512;
 
 /// Longest MID this session will retain from a proposal, in bytes.
 ///
-/// Winlink MIDs are twelve characters — `wl2k-go` has `MaxMIDLength = 12` (`fbb/mid.go:14`) and
-/// annotates the field it writes as "Max 12 characters" (`fbb/b2f.go:120`), both read 2026-09-07 —
+/// Winlink MIDs are twelve characters — an open client caps the field it writes at 12, read 2026-09-07 —
 /// so this is generous by 5×. It is here because
 /// [`PROPOSAL_HELD_BYTES`] is a *flat* charge: a per-proposal cost that did not bound the one
 /// variable-length field a [`Proposal`] owns would be a number, not a bound. A longer MID is
@@ -349,7 +343,7 @@ const MAX_MID: usize = 64;
 /// One consequence is worth stating where the constant is: because the charge is honest about
 /// container overhead, a peer that streams a transfer in absurdly small blocks is refused here
 /// rather than quietly costing several times what it appeared to. The block sizes real senders
-/// use are 125 (`wl2k-go`, `fbb/b2f.go:30`, "Paclink-unix uses 250, protocol maximum is 255", read
+/// use are 125 (one client; another uses 250, and the protocol maximum is 255, read
 /// 2026-09-07) up to [`super::fbb`]'s 256, and a transfer at [`MAX_PROPOSAL_C_SIZE`] is delivered
 /// at every block size down to **8 bytes**; **7 and under are refused there**, with the trace
 /// [`Session::feed`] emits rather than silently. Nothing sends those, and the boundary is a
@@ -1847,8 +1841,8 @@ mod tests {
     /// data blocks, then the `EOT` and its checksum over the data bytes alone.
     ///
     /// `block` is a parameter because the sender picks it and what it costs this end is the whole
-    /// subject of [`MAX_SESSION_HELD_BYTES`]: 256 is [`super::fbb`]'s maximum, 125 is `wl2k-go`'s
-    /// sender, and 1 is the smallest the framing can express.
+    /// subject of [`MAX_SESSION_HELD_BYTES`]: 256 is [`super::fbb`]'s maximum, 125 is another
+    /// client's sender, and 1 is the smallest the framing can express.
     fn transfer_records(mid: &[u8], image: &[u8], block: usize) -> Vec<u8> {
         assert!(
             (1..=256).contains(&block),
@@ -2474,7 +2468,7 @@ mod tests {
             image.len()
         );
 
-        // 125 is `wl2k-go`'s sender; 8 is the smallest framing this ceiling leaves room for.
+        // 125 is another client's sender; 8 is the smallest framing this ceiling leaves room for.
         for block in [125usize, 8] {
             let actions = deliver_at_block_size(b"ABCDEFGHIJKL", plain.len(), &image, block);
             assert_eq!(
@@ -2545,7 +2539,7 @@ mod tests {
         };
 
         // The reality control, and it is a literal: a Winlink MID is twelve characters
-        // (`wl2k-go`'s `MaxMIDLength = 12`), so any tightening of `MAX_MID` under 12 destroys
+        // (an open client caps it at 12), so any tightening of `MAX_MID` under 12 destroys
         // every real message and must redden here rather than sliding with the constant.
         let (session, retained, actions) = answer(12);
         assert_eq!(

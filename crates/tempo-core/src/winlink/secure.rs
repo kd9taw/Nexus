@@ -15,8 +15,8 @@
 //! why it moves through here as bytes and is never logged, formatted, or copied to the heap.
 //!
 //! ⚠️ **The exact derivation is undecidable from documents.** There is no published specification
-//! for `;PR:`. What is implemented is the wl2k-go reading (LA5NTA, MIT — see `NOTICE`), which
-//! reached wl2k-go from paclink-unix. Every choice it makes — the salt bytes, the order the three
+//! for `;PR:`. What is implemented is the reading of an open client implementation (MIT, credited
+//! in `NOTICE`). Every choice it makes — the salt bytes, the order the three
 //! inputs are hashed in, which four digest bytes are used, the six-bit mask, the byte order, the
 //! decimal formatting and the eight-character truncation — is confined to [`pr_with_salt`] and
 //! [`reduce_digest_wl2kgo`], so **the first live CMS connect settles it by editing two small
@@ -30,9 +30,8 @@
 
 use md5::{Digest, Md5};
 
-/// The fixed 64-byte Winlink secure-login salt, transcribed verbatim from wl2k-go's
-/// `fbb/secure.go` (`winlinkSecureSalt`, whose own comment records that it came from
-/// paclink-unix). A public protocol constant, **not** a key — see the module header.
+/// The fixed 64-byte Winlink secure-login salt, transcribed verbatim from an open client
+/// implementation (MIT, credited in `NOTICE`). A public protocol constant, **not** a key — see the module header.
 ///
 /// `pub` for two reasons: the salt-sensitivity negative control perturbs a copy of it, and an
 /// operator debugging a refused login against another client needs to be able to compare bytes.
@@ -64,7 +63,7 @@ pub fn pr_response(challenge: &[u8], password: &[u8]) -> Vec<u8> {
 /// [`pr_response`] with the salt supplied explicitly, so the negative control can run the real
 /// derivation over a perturbed copy of a compile-time constant.
 ///
-/// **Undecidable choice #1 — the feed order.** wl2k-go digests the single concatenation
+/// **Undecidable choice #1 — the feed order.** The open client digests the single concatenation
 /// `challenge ++ password ++ salt`. Feeding the three slices to one [`Md5`] in that order is the
 /// same byte stream, and it avoids materialising a joined copy of the password on the heap where
 /// a later allocator reuse could expose it.
@@ -81,14 +80,14 @@ fn pr_with_salt(salt: &[u8; 64], challenge: &[u8], password: &[u8]) -> Vec<u8> {
 /// **Undecidable choice #2 — the digest→token reduction.** Isolated and named so that a live CMS
 /// disagreement is a one-function edit rather than a hunt through the session engine.
 ///
-/// wl2k-go reads the digest's first four bytes as a little-endian 32-bit value with the most
+/// The open client reads the digest's first four bytes as a little-endian 32-bit value with the most
 /// significant byte masked to six bits, prints it as zero-padded decimal, and keeps the last
 /// eight characters. Twelve of the sixteen digest bytes are therefore never consulted; that is
 /// the reference's behaviour, transcribed rather than corrected.
 ///
 /// Two consequences that each look like a bug and are neither:
-/// * The six-bit mask caps the value at `0x3FFF_FFFF`, so it can never be negative. wl2k-go's
-///   `int32` and this `u32` print identically, and there is no overflow to reason about.
+/// * The six-bit mask caps the value at `0x3FFF_FFFF`, so it can never be negative. The open
+///   client's `int32` and this `u32` print identically, and there is no overflow to reason about.
 /// * `0x3FFF_FFFF` is 1_073_741_823 — **ten** digits — so the trailing-eight rule genuinely
 ///   discards leading digits. Both halves of the formatting are live in production, and the rare
 ///   half is the dangerous one: over a uniform 30-bit value roughly 91% of digests exceed eight
@@ -97,7 +96,7 @@ fn pr_with_salt(salt: &[u8; 64], challenge: &[u8], password: &[u8]) -> Vec<u8> {
 ///   one login in a hundred, so the pinned vectors below carry one of each on purpose.
 fn reduce_digest_wl2kgo(digest: &[u8; 16]) -> Vec<u8> {
     // Most significant byte first, so the fold shifts the remaining three in underneath it —
-    // little-endian over `digest[0..4]`, exactly wl2k-go's descending `i = 2, 1, 0` loop.
+    // little-endian over `digest[0..4]`, exactly the open client's descending `i = 2, 1, 0` loop.
     let masked_high = u32::from(digest[3] & 0x3f);
     let value = digest[..3]
         .iter()
@@ -183,9 +182,9 @@ mod tests {
     /// is loud instead of silent — the sensitivity controls above would all still pass through any
     /// of those.
     ///
-    /// These vectors were produced by an independent transliteration of wl2k-go's
-    /// `secureLoginResponse` (its own arithmetic, its own MD5, its own `%08d`) and agree with this
-    /// implementation. **They pin the wl2k-go reading, not CMS truth.** If the first live connect
+    /// These vectors were produced by an independent transliteration of the open
+    /// client's login response (its own arithmetic, its own MD5, its own `%08d`) and agree with this
+    /// implementation. **They pin the open client's reading, not CMS truth.** If the first live connect
     /// disagrees, the fix is [`reduce_digest_wl2kgo`] / [`pr_with_salt`] and then these values —
     /// deliberately, in that order, never the other way round.
     #[test]
