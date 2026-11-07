@@ -1476,8 +1476,8 @@ name = "window"
 file = "tempofast/tempofast_downsample.f90"
 line = 47
 class = 2
-size_bytes = 3552
-reason = "real(0:887), saved (:51), built once under `first` (:68-92). Verified fully written before any read: blanket `window = 0.0` at :68, edges at :70-85, then `window = cshift(window, iws)` at :92 - no partial-fill hole. Content is a function of df=12000/NMAX and baud=12000/NSPS only, both compile-time parameters. Identical for every chain and band (the band-specific part is the f0 bin offset at :103-108, which is per-call). Shareable."
+size_bytes = 3584
+reason = "real(0:895), saved (:51), built once under `first` (:68-92). Verified fully written before any read: blanket `window = 0.0` at :68, edges at :70-85, then `window = cshift(window, iws)` at :92 - no partial-fill hole. Content is a function of df=12000/NMAX and baud=12000/NSPS only, both compile-time parameters. Identical for every chain and band (the band-specific part is the f0 bin offset at :103-108, which is per-call). Shareable."
 
 [[symbol]]
 name = "first"

@@ -31,6 +31,7 @@ parameter (NMAX=4*12000)              !Samples in iwave (4.0s * 12000 Hz = 48000
 parameter (NFFT1=1024, NH1=NFFT1/2)  !Length of FFTs for spectrogram
 parameter (NSTEP=107)                 !Spectrogram step size (~quarter symbol)
 parameter (NHSYM=(NMAX-NFFT1)/NSTEP) !Number of spectral columns
-parameter (NDOWN=54)                  !Downsample factor (12000/54 = 222.2 Hz, ~8 samp/sym)
-parameter (NSS=8)                     !Downsampled samples/symbol: ceil(NSPS/NDOWN)=ceil(7.94)
+parameter (NDOWN=54)                  !Sizes the baseband buffers only: NDMAX=NMAX/NDOWN=888
+parameter (NDFFT=896)                 !Baseband IFFT: 896 x 0.25 Hz = 224 Hz, exactly NSS x 28 Bd
+parameter (NSS=8)                     !Downsampled samples/symbol, exact at 224 Hz
 parameter (MAXCAND=200)               !Maximum sync candidates

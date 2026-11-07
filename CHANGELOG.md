@@ -5,6 +5,11 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **TempoFast copies far more of what it hears.** In simulation on white noise, a frame at +15 dB used to go missing about 7% of the time, more at some time offsets, and strong signals did no better. That is now under 1%. At -10 dB the missed share falls from about 43% to about 9%, the level where half of frames are copied moves from about -11 dB to about -13.5 dB, and false decodes do not rise. The transmitted signal has not changed, so this helps any station you receive, whichever version it runs. Decoding each signal takes about 20 ms longer. These are bench figures, not on-air results.
+
 ## [1.23.0] — 2026-11-05
 
 ### Added

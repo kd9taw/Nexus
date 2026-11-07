@@ -26,7 +26,7 @@ module tempofast_downsample_state
   include 'tempofast_params.f90'
   parameter (NDMAX=NMAX/NDOWN)              !48000/54 = 888
   complex cx(0:NMAX/2)
-  real x(NMAX), window(0:NDMAX-1)
+  real x(NMAX), window(0:NDFFT-1)
   logical first
   data first/.true./
   equivalence (x,cx)
@@ -42,8 +42,14 @@ subroutine ft1_downsample(dd,newdata,f0,c)
 !   2. Bandpass filter around f0 (Tukey window, ~120 Hz bandwidth)
 !   3. Frequency-shift to baseband (move passband to DC)
 !   4. Inverse FFT of reduced-length section
-!   5. Output: complex baseband signal downsampled by NDOWN=54
-!      -> effective rate: 12000/54 = 222.2 Hz = ~8 samples/symbol
+!   5. Output: complex baseband at exactly 224 Hz, 8 samples per symbol
+!
+! The rate is NDFFT bins x 0.25 Hz. It used to be an 888-point IFFT, which is 222.0 Hz, while
+! every caller assumed 12000/54 = 222.2 Hz. That put each symbol on a rounded, drifting sample
+! grid: a sawtooth timing error with a 15.75-symbol period and 0.8 sample of drift across the
+! frame. At 224 Hz each symbol starts on a whole sample of a grid the matched filters fit. The
+! caller keeps only the first NDMAX samples (3.96 s), which still holds any frame ft1_sync
+! can place.
 !
 ! Reference: ft4_downsample.f90
 !
@@ -51,13 +57,13 @@ subroutine ft1_downsample(dd,newdata,f0,c)
 !   dd(NMAX)          Raw audio samples (48000 samples at 12kHz)
 !   newdata           Logical: true on first call (compute full FFT)
 !   f0                Center frequency of candidate signal (Hz)
-!   c(0:NDMAX-1)      Complex downsampled output
+!   c(0:NDMAX-1)      Complex downsampled output (224 Hz)
 
   use tempofast_downsample_state   ! also re-exports tempofast_params (NMAX, NDOWN, NDMAX, ...)
 
   real dd(NMAX)
   complex c(0:NDMAX-1)
-  complex c1(0:NDMAX-1)
+  complex c1(0:NDFFT-1)
   logical newdata
 
   df=12000.0/NMAX                           !0.25 Hz/bin
@@ -82,15 +88,15 @@ subroutine ft1_downsample(dd,newdata,f0,c)
         enddo
      endif
      do i=iwt,iwt+iwf-1
-        if(i.le.NDMAX-1) window(i) = 1.0
+        if(i.le.NDFFT-1) window(i) = 1.0
      enddo
      if(iwt.gt.0) then
         do i=0,iwt-1
            j = iwt+iwf+i
-           if(j.le.NDMAX-1) window(j) = 0.5*(1.0+cos(pi*real(i)/real(iwt)))
+           if(j.le.NDFFT-1) window(j) = 0.5*(1.0+cos(pi*real(i)/real(iwt)))
         enddo
      endif
-     do i=2*iwt+iwf,NDMAX-1
+     do i=2*iwt+iwf,NDFFT-1
         window(i) = 0.0
      enddo
 
@@ -113,16 +119,16 @@ subroutine ft1_downsample(dd,newdata,f0,c)
   i0=nint(f0/df)
   c1=0.
   if(i0.ge.0 .and. i0.le.NMAX/2) c1(0)=cx(i0)
-  do i=1,NDMAX/2
+  do i=1,NDFFT/2
      if(i0+i.ge.0 .and. i0+i.le.NMAX/2) c1(i)=cx(i0+i)
-     if(i0-i.ge.0 .and. i0-i.le.NMAX/2) c1(NDMAX-i)=cx(i0-i)
+     if(i0-i.ge.0 .and. i0-i.le.NMAX/2) c1(NDFFT-i)=cx(i0-i)
   enddo
 
   ! Apply bandpass window and normalize
-  c1=c1*window/NDMAX
+  c1=c1*window/NDFFT
 
   ! Inverse FFT back to time domain (complex-to-complex)
-  call four2a(c1,NDMAX,1,1,1)
+  call four2a(c1,NDFFT,1,1,1)
   c=c1(0:NDMAX-1)
 
   return

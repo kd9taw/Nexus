@@ -65,15 +65,15 @@ const LOW_SEEDS: u64 = 4;
 // flip the verdict.
 //
 //                         broken decoder      fixed decoder
-//   +15 dB, per offset    6.7 / 15.6 / 10.9%  0.5 - 0.9%
-//   +15 dB, per message   worst 23%           worst 3.3%
-//   -10 dB, per offset    41 - 45%            8.0 - 8.8%
+//   +15 dB, per offset    6.7 / 15.6 / 10.9%  0.6 / 0.5 / 0.9%
+//   +15 dB, per message   worst about 23%     worst about 3%
+//   -10 dB, per offset    41 - 45%            8.0 - 9.2%
 const MAX_MISS_PCT_15DB_PER_OFFSET: f64 = 4.0;
 const MAX_MISS_PCT_15DB_PER_MESSAGE: f64 = 14.0;
 const MAX_MISS_PCT_MINUS_10DB_PER_OFFSET: f64 = 25.0;
-/// Wrong decodes tolerated across the -10 dB frames: about 3 in 10800 were measured, near
-/// where CRC-valid noise lives, so one is not an alarm. At +15 dB there is no such excuse.
-const MAX_WRONG_MINUS_10DB: u32 = 1;
+/// Wrong decodes tolerated across the -10 dB frames. Both decoders were measured at 7 or 8 in
+/// 10800, where CRC-valid noise lives, so one or two is not an alarm. At +15 dB none is allowed.
+const MAX_WRONG_MINUS_10DB: u32 = 2;
 
 /// splitmix64, so consecutive seeds are decorrelated: the LCG in `Awgn` starts close to where it
 /// started for a neighboring small seed.
@@ -163,7 +163,6 @@ fn print_table(snr: f32, by_offset: &BTreeMap<usize, Tally>, by_message: &BTreeM
 /// The gate: at +15 dB no offset and no message may lose more than a small share of frames and
 /// no frame may produce the wrong text; at -10 dB the decoder must still copy most frames.
 #[test]
-#[ignore = "fails until the FT1 miss floor is fixed: see the module header for the command"]
 fn a_clean_frame_is_copied_at_every_offset_and_for_every_message() {
     let (by_offset, by_message) = sweep(15.0, &GATE_OFFSETS, GATE_SEEDS);
     print_table(15.0, &by_offset, &by_message);

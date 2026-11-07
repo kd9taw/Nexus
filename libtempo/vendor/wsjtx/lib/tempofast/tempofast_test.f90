@@ -99,7 +99,7 @@ program ft1_test
      k=i+noff_test
      if(k.ge.1 .and. k.le.NMAX) dd(k)=wave(i)
   enddo
-  dt0_expected=real(noff_test)/real(NDOWN)         !Expected downsampled timing
+  dt0_expected=real(noff_test)*224.0/12000.0         !Expected downsampled timing
   write(*,'(a,i5,a,f8.2)') 'Time offset: ',noff_test, &
        ' samples, expected dt0=',dt0_expected
 
@@ -247,7 +247,7 @@ subroutine diag_branch_metrics(cd,npts,itone)
   call init_cpm_trellis()
   call init_matched_filters(8)
 
-  nsps_down_real = 3000.0 / (7.0 * 54.0)
+  nsps_down_real = 8.0
 
   ! Trace the correct trellis path through all 99 channel symbols
   ! Start at state 1: theta=0, sigma_1=0, sigma_2=0
@@ -457,7 +457,7 @@ subroutine diag_bcjr_quality(cd, npts, itone, snrdb)
   sync_sym(99) = icos_rv0(4)
 
   ! Phase estimation (same as turbo decoder)
-  nsps_down_real = 3000.0 / (7.0 * 54.0)
+  nsps_down_real = 8.0
   phase_sum = cmplx(0.0, 0.0)
   s_sync = 1
   do j = 1, 4

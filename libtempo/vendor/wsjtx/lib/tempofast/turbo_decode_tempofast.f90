@@ -94,6 +94,8 @@ subroutine turbo_decode_ft1(cd, npts, f0, dt0, snr_est, llr_out, &
 
 ! Phase estimation variables
   complex :: cd_rot(npts)         ! Phase-compensated signal
+  complex :: cd_w(npts)           ! cd, or cd shifted onto the found fractional timing
+  real    :: tau_sync, tau_fine   ! Frame start in baseband samples: coarse, then refined
   complex :: corr_sync, phase_sum
   real    :: phi(3)               ! Phase estimates at Costas groups
   real    :: best_mag, mag_try    ! For state search
@@ -266,7 +268,7 @@ subroutine turbo_decode_ft1(cd, npts, f0, dt0, snr_est, llr_out, &
 !
 ! Group centers (channel position): 1.5, 48.5, 96.5
 
-  nsps_down_real = 3000.0 / (7.0 * 54.0)
+  nsps_down_real = 8.0            ! Baseband is exactly 224 Hz; see ft1_downsample
   chan_start = (/0, 47, 95/)
 
 ! ================================================================
@@ -331,7 +333,8 @@ subroutine turbo_decode_ft1(cd, npts, f0, dt0, snr_est, llr_out, &
 
 !  write(*,'(a,i4,a,i4,a,f8.1)') '    timing: hint=',n_test, &
 !       ' chosen=',n_offset,' mag=',best_mag
-  fs_down = 12000.0 / 54.0       ! ~222.2 Hz
+  fs_down = 224.0
+  cd_w = cd
 
 ! ================================================================
 ! Step 1b: G1 carrier phase estimation
@@ -350,7 +353,7 @@ subroutine turbo_decode_ft1(cd, npts, f0, dt0, snr_est, llr_out, &
      do k_sync = 1, NSS
         idx_sync = idx_start_sync + k_sync - 1
         if(idx_sync .ge. 1 .and. idx_sync .le. npts) then
-           corr_sync = corr_sync + cd(idx_sync) * &
+           corr_sync = corr_sync + cd_w(idx_sync) * &
                 conjg(mf_bank(k_sync, s_sync, icos_rv0(j_sync)))
         endif
      enddo
@@ -359,7 +362,7 @@ subroutine turbo_decode_ft1(cd, npts, f0, dt0, snr_est, llr_out, &
   enddo
   phi(1) = atan2(aimag(phase_sum), real(phase_sum))
   do i = 1, npts
-     cd_rot(i) = cd(i) * cmplx(cos(phi(1)), -sin(phi(1)))
+     cd_rot(i) = cd_w(i) * cmplx(cos(phi(1)), -sin(phi(1)))
   enddo
 
 ! ================================================================
@@ -476,149 +479,22 @@ subroutine turbo_decode_ft1(cd, npts, f0, dt0, snr_est, llr_out, &
   endif   ! niter_max .eq. 0
 
 ! ================================================================
-! Step 1c: Internal frequency refinement via Viterbi sweep
+! Step 1c: Joint fine timing and frequency search
 ! ================================================================
-  if(niter_max .eq. 0 .and. snr_est .gt. -12.0) then
-
-! Step 1c.1: Compute complex MF correlations for all 99 positions
-  do n = 1, NSYM
-     idx_start_sync = nint(real(n - 1) * nsps_down_real) + 1 + n_offset
-     do s_sync = 1, NSTATES
-        do i_sym = 0, 3
-           corr_sync = cmplx(0.0, 0.0)
-           do k_sync = 1, NSS
-              idx_sync = idx_start_sync + k_sync - 1
-              if(idx_sync .ge. 1 .and. idx_sync .le. npts) then
-                 corr_sync = corr_sync + cd_rot(idx_sync) * &
-                      conjg(mf_bank(k_sync, s_sync, i_sym))
-              endif
-           enddo
-           all_corr_c(s_sync, i_sym, n) = corr_sync
-        enddo
+! Frequency and fractional timing have to be found together, because a coherent whole-frame
+! metric is only sharp in both at once. See ft1_timefreq_search.
+  if(niter_max .eq. 0) then
+     call ft1_sync_fraction(cd, npts, n_offset, icos_rv0, tau_sync)
+     call ft1_timefreq_search(cd, npts, tau_sync, sync_sym, icos_rv0, &
+          tau_fine, df_best_int)
+     call ft1_shift_baseband(cd, npts, tau_fine, cd_w)
+     n_offset = 0
+     do i = 1, npts
+        t_samp = real(i - 1) / fs_down
+        cd_rot(i) = cd_w(i) * cmplx(cos(-twopi_val * df_best_int * t_samp), &
+             sin(-twopi_val * df_best_int * t_samp))
      enddo
-  enddo
-
-! Step 1c.2: Coarse Viterbi frequency sweep ±2.0 Hz at 0.05 Hz (81 points)
-  df_best_int = 0.0
-  ndf_pd = 81
-  df_pd_step = 0.05
-  vit_pd_best = -1.0e30
-
-  do idf_pd = 1, ndf_pd
-     df_try_pd = real(idf_pd - (ndf_pd+1)/2) * df_pd_step
-
-     ! Viterbi forward pass with frequency rotation
-     alpha_pd = -1.0e30
-     alpha_pd(1) = 0.0          ! Known start state
-
-     do n = 1, NSYM
-        phase_n = twopi_val * df_try_pd * real(n - 1) / 28.0
-        cos_n = cos(phase_n)
-        sin_n = sin(phase_n)
-
-        alpha_pd_new = -1.0e30
-
-        if(sync_sym(n) .ge. 0) then
-           u_pd = sync_sym(n)
-           do s_pd = 1, NSTATES
-              if(alpha_pd(s_pd) .le. -1.0e20) cycle
-              s_next_pd = next_state(s_pd, u_pd)
-              bm_pd = real(all_corr_c(s_pd, u_pd, n)) * cos_n + &
-                       aimag(all_corr_c(s_pd, u_pd, n)) * sin_n
-              if(alpha_pd(s_pd) + bm_pd .gt. &
-                   alpha_pd_new(s_next_pd)) then
-                 alpha_pd_new(s_next_pd) = alpha_pd(s_pd) + bm_pd
-              endif
-           enddo
-        else
-           do s_pd = 1, NSTATES
-              if(alpha_pd(s_pd) .le. -1.0e20) cycle
-              do u_pd = 0, 3
-                 s_next_pd = next_state(s_pd, u_pd)
-                 bm_pd = real(all_corr_c(s_pd, u_pd, n)) * cos_n + &
-                          aimag(all_corr_c(s_pd, u_pd, n)) * sin_n
-                 if(alpha_pd(s_pd) + bm_pd .gt. &
-                      alpha_pd_new(s_next_pd)) then
-                    alpha_pd_new(s_next_pd) = alpha_pd(s_pd) + bm_pd
-                 endif
-              enddo
-           enddo
-        endif
-
-        alpha_pd = alpha_pd_new
-     enddo
-
-     vit_pd_metric = maxval(alpha_pd)
-     if(idf_pd .eq. (ndf_pd+1)/2) alpha_pd_center = alpha_pd
-     if(vit_pd_metric .gt. vit_pd_best) then
-        vit_pd_best = vit_pd_metric
-        df_best_int = df_try_pd
-     endif
-  enddo
-
-! Pass 2: Fine sweep ±0.025 Hz at 0.005 Hz around coarse best (11 points)
-  df_pd_center = df_best_int
-  vit_pd_best = -1.0e30
-  do idf_pd = 1, 11
-     df_try_pd = df_pd_center + real(idf_pd - 6) * 0.005
-
-     alpha_pd = -1.0e30
-     alpha_pd(1) = 0.0
-     do n = 1, NSYM
-        phase_n = twopi_val * df_try_pd * real(n - 1) / 28.0
-        cos_n = cos(phase_n)
-        sin_n = sin(phase_n)
-        alpha_pd_new = -1.0e30
-        if(sync_sym(n) .ge. 0) then
-           u_pd = sync_sym(n)
-           do s_pd = 1, NSTATES
-              if(alpha_pd(s_pd) .le. -1.0e20) cycle
-              s_next_pd = next_state(s_pd, u_pd)
-              bm_pd = real(all_corr_c(s_pd, u_pd, n)) * cos_n + &
-                       aimag(all_corr_c(s_pd, u_pd, n)) * sin_n
-              if(alpha_pd(s_pd) + bm_pd .gt. alpha_pd_new(s_next_pd)) then
-                 alpha_pd_new(s_next_pd) = alpha_pd(s_pd) + bm_pd
-              endif
-           enddo
-        else
-           do s_pd = 1, NSTATES
-              if(alpha_pd(s_pd) .le. -1.0e20) cycle
-              do u_pd = 0, 3
-                 s_next_pd = next_state(s_pd, u_pd)
-                 bm_pd = real(all_corr_c(s_pd, u_pd, n)) * cos_n + &
-                          aimag(all_corr_c(s_pd, u_pd, n)) * sin_n
-                 if(alpha_pd(s_pd) + bm_pd .gt. alpha_pd_new(s_next_pd)) then
-                    alpha_pd_new(s_next_pd) = alpha_pd(s_pd) + bm_pd
-                 endif
-              enddo
-           enddo
-        endif
-        alpha_pd = alpha_pd_new
-     enddo
-
-     vit_pd_metric = maxval(alpha_pd)
-     if(vit_pd_metric .gt. vit_pd_best) then
-        vit_pd_best = vit_pd_metric
-        df_best_int = df_try_pd
-     endif
-  enddo
-
-! Confidence check: compare peak to center (df=0) metric
-  vit_pd_center = maxval(alpha_pd_center)
-  vit_threshold = 3.0 + max(0.0, -(snr_est + 10.0))
-  if(vit_pd_best - vit_pd_center .lt. vit_threshold .and. &
-       abs(df_best_int) .gt. 0.01) then
-     df_best_int = 0.0   ! Center is nearly as good — don't correct
   endif
-
-! Step 1c.3: Apply frequency correction to cd_rot
-  do i = 1, npts
-     t_samp = real(i - 1) / fs_down
-     cd_rot(i) = cd_rot(i) * &
-          cmplx(cos(-twopi_val * df_best_int * t_samp), &
-                sin(-twopi_val * df_best_int * t_samp))
-  enddo
-  endif   ! VitSweep
 
 ! Re-estimate carrier phase after frequency correction.
 ! The VitSweep correction exp(-j*2π*df*t) introduces a phase offset
@@ -1161,6 +1037,239 @@ subroutine turbo_decode_ft1(cd, npts, f0, dt0, snr_est, llr_out, &
 end subroutine turbo_decode_ft1
 
 
+subroutine ft1_shift_baseband(cd, npts, tau, cr)
+!
+! Interpolate cd so that cr(j) = cd at (0-indexed) position tau + j - 1.
+!
+! The kernel is a Blackman-windowed sinc, 16 taps, modulated up to the signal's center (mean
+! tone 0.75 baud = 21 Hz) because the baseband passband runs asymmetrically from -49 to +91 Hz.
+! Every output sample has the same fractional position, so the weights are computed once.
+!
+  implicit none
+  integer, intent(in)  :: npts
+  complex, intent(in)  :: cd(npts)
+  real, intent(in)     :: tau
+  complex, intent(out) :: cr(npts)
+  integer, parameter :: W = 8
+  real, parameter :: PI = 3.14159265358979, FC = 21.0/224.0
+  complex :: g(-W+1:W), acc
+  real :: d, frac, h
+  integer :: i0, j, m, im
+
+  i0 = floor(tau)
+  frac = tau - real(i0)
+  do m = -W+1, W
+     d = frac - real(m)
+     if(abs(d) .lt. 1.0e-6) then
+        h = 1.0
+     else
+        h = sin(PI*d)/(PI*d) * &
+             (0.42 + 0.5*cos(PI*d/real(W)) + 0.08*cos(2.0*PI*d/real(W)))
+     endif
+     g(m) = h * cmplx(cos(2.0*PI*FC*d), sin(2.0*PI*FC*d))
+  enddo
+
+  do j = 1, npts
+     acc = cmplx(0.0, 0.0)
+     do m = -W+1, W
+        im = i0 + j + m            ! 1-indexed: position i0 + (j-1) + m
+        if(im .ge. 1 .and. im .le. npts) acc = acc + cd(im) * g(m)
+     enddo
+     cr(j) = acc
+  enddo
+  return
+end subroutine ft1_shift_baseband
+
+
+subroutine ft1_sync_fraction(cd, npts, n_int, icos, tau)
+!
+! Sub-sample frame start from the Costas symbols whose waveform is fully known: all of G1 (known
+! start state), and the last two symbols of G2 and G3, once the group's own symbols fill the
+! correlative state. Searching over the 16 possible states, as Step 1a does, picks whichever
+! state flatters the noise and pulls the peak off the true timing, sometimes by more than a sample.
+!
+! Non-coherent per group, so it needs no frequency estimate. The result is a starting point for
+! ft1_timefreq_search.
+!
+  use cpm_trellis_mod
+  use matched_filter_bank_mod
+  implicit none
+  integer, intent(in) :: npts, n_int, icos(4)
+  complex, intent(in) :: cd(npts)
+  real, intent(out)   :: tau
+  complex :: cr(npts), z
+  integer, parameter :: NT = 6
+  real, parameter :: DTAU = 0.25
+  real :: m(-NT:NT), tot, d
+  integer :: it, ig, j, j0, k, s, s0, ibest, group_start(3)
+
+  group_start = (/0, 47, 95/)
+  s0 = next_state(next_state(1, icos(1)), icos(2))
+  s0 = mod(s0 - 1, 16) + 1          ! Same correlative state at theta=0
+  do it = -NT, NT
+     call ft1_shift_baseband(cd, npts, real(n_int) + it*DTAU, cr)
+     tot = 0.0
+     do ig = 1, 3
+        z = cmplx(0.0, 0.0)
+        j0 = 3
+        s = s0
+        if(ig .eq. 1) then
+           j0 = 1
+           s = 1
+        endif
+        do j = j0, 4
+           do k = 1, 8
+              z = z + cr((group_start(ig) + j - 1)*8 + k) * conjg(mf_bank(k, s, icos(j)))
+           enddo
+           s = next_state(s, icos(j))
+        enddo
+        tot = tot + abs(z)
+     enddo
+     m(it) = tot
+  enddo
+  ibest = maxloc(m, 1) - NT - 1
+  tau = real(n_int) + ibest*DTAU
+  if(abs(ibest) .lt. NT) then
+     d = m(ibest-1) - 2.0*m(ibest) + m(ibest+1)
+     if(d .lt. 0.0) tau = tau + DTAU*0.5*(m(ibest-1) - m(ibest+1))/d
+  endif
+  return
+end subroutine ft1_sync_fraction
+
+
+subroutine ft1_timefreq_search(cd, npts, tau0, sync_sym, icos, tau, df)
+!
+! Find frame timing and residual frequency by maximizing a coherent Viterbi metric over the whole
+! trellis.
+!
+! WHY THE GRID IS THIS FINE. A frequency error is almost free to the metric as long as the path
+! may change data symbols: with h=1/2 a symbol change absorbs a pi/2 phase slip, so the metric
+! stays within a few percent of its peak across +-1 Hz and ripples. The true frequency is a
+! narrow spike above that floor, about 0.03 Hz wide and only 3 to 5 percent high. A 0.05 Hz grid
+! steps over it and settles on a ripple, typically a few tenths of a Hz off, which decodes as
+! bursts of errors every 15 symbols with confident LLRs that BP cannot repair. That was the miss
+! floor at high SNR, and it is independent of noise, which is why more signal did not help.
+!
+! WHY TIMING IS SEARCHED WITH IT. The spike only stands up when timing is within about half a
+! sample, and at weak signals ft1_sync_fraction is not always that close. So the frequency sweep
+! repeats at a few timings around tau0, and the best (timing, frequency) pair wins.
+!
+  use cpm_trellis_mod
+  use matched_filter_bank_mod
+  implicit none
+  integer, intent(in) :: npts, sync_sym(99), icos(4)
+  complex, intent(in) :: cd(npts)
+  real, intent(in)    :: tau0
+  real, intent(out)   :: tau, df
+  integer, parameter :: NSYM = 99, NT = 3, NDF = 80
+  real, parameter :: DTAU = 0.5, DF_STEP = 0.02, DTAU_FINE = 0.125
+  real, parameter :: TWOPI = 6.2831853
+  complex :: cr(npts), c(NSTATES, 0:3, NSYM)
+  real :: best, metric, df0, fine(-2:2), d, tau1
+  integer :: it, idf, ibest
+
+  best = -1.0e30
+  tau = tau0
+  df = 0.0
+  do it = -NT, NT
+     call load_correlations(tau0 + it*DTAU)
+     do idf = -NDF, NDF
+        call viterbi_metric(idf*DF_STEP, metric)
+        if(metric .gt. best) then
+           best = metric
+           tau = tau0 + it*DTAU
+           df = idf*DF_STEP
+        endif
+     enddo
+  enddo
+
+! Refine frequency at the winning timing, then timing at that frequency.
+  call load_correlations(tau)
+  df0 = df
+  do idf = -5, 5
+     call viterbi_metric(df0 + idf*DF_STEP/5.0, metric)
+     if(metric .gt. best) then
+        best = metric
+        df = df0 + idf*DF_STEP/5.0
+     endif
+  enddo
+  do it = -2, 2
+     call load_correlations(tau + it*DTAU_FINE)
+     call viterbi_metric(df, fine(it))
+  enddo
+  ibest = maxloc(fine, 1) - 3
+  tau1 = tau + ibest*DTAU_FINE
+  if(abs(ibest) .lt. 2) then
+     d = fine(ibest-1) - 2.0*fine(ibest) + fine(ibest+1)
+     if(d .lt. 0.0) tau1 = tau1 + DTAU_FINE*0.5*(fine(ibest-1) - fine(ibest+1))/d
+  endif
+  tau = tau1
+  return
+
+contains
+
+  subroutine load_correlations(tau_try)
+  ! Matched-filter outputs for every (symbol, state, input) at this timing, with the carrier
+  ! phase taken out using G1, whose start state is known.
+    real, intent(in) :: tau_try
+    integer :: n, s, u, k
+    complex :: z, rot
+    real :: phi
+
+    call ft1_shift_baseband(cd, npts, tau_try, cr)
+    do n = 1, NSYM
+       do s = 1, NSTATES
+          do u = 0, 3
+             z = cmplx(0.0, 0.0)
+             do k = 1, 8
+                z = z + cr((n-1)*8 + k) * conjg(mf_bank(k, s, u))
+             enddo
+             c(s, u, n) = z
+          enddo
+       enddo
+    enddo
+    z = cmplx(0.0, 0.0)
+    s = 1
+    do n = 1, 4
+       z = z + c(s, icos(n), n)
+       s = next_state(s, icos(n))
+    enddo
+    phi = atan2(aimag(z), real(z))
+    rot = cmplx(cos(phi), -sin(phi))
+    c = c * rot
+  end subroutine load_correlations
+
+  subroutine viterbi_metric(df_try, metric_out)
+  ! Best path metric through the trellis with the carrier rotated by df_try.
+    real, intent(in)  :: df_try
+    real, intent(out) :: metric_out
+    real :: alpha(NSTATES), alpha_new(NSTATES), bm, th, cos_n, sin_n
+    integer :: n, s, u, s_next
+
+    alpha = -1.0e30
+    alpha(1) = 0.0            ! Known start state
+    do n = 1, NSYM
+       th = TWOPI * df_try * real(n-1) / 28.0
+       cos_n = cos(th)
+       sin_n = sin(th)
+       alpha_new = -1.0e30
+       do s = 1, NSTATES
+          if(alpha(s) .le. -1.0e20) cycle
+          do u = 0, 3
+             if(sync_sym(n) .ge. 0 .and. u .ne. sync_sym(n)) cycle
+             bm = real(c(s, u, n))*cos_n + aimag(c(s, u, n))*sin_n
+             s_next = next_state(s, u)
+             if(alpha(s) + bm .gt. alpha_new(s_next)) alpha_new(s_next) = alpha(s) + bm
+          enddo
+       enddo
+       alpha = alpha_new
+    enddo
+    metric_out = maxval(alpha)
+  end subroutine viterbi_metric
+
+end subroutine ft1_timefreq_search
+
+
 subroutine ft1_joint_turbo_harq(cd_rv0, cd_rv1, cd_rv2, npts, snr_est, &
      nrv, message77, nharderror, niter_outer)
 ! Joint iterative turbo HARQ combining.
@@ -1372,8 +1481,7 @@ subroutine compute_branch_metrics_all(cd, npts, nss, sigma2, &
 ! FT1 frame via matched filter correlation.
 !
 ! Each symbol position n (1-indexed) corresponds to channel position
-! n-1 (0-indexed). Exact symbol start positions are computed using
-! Bresenham-style rational timing, offset by n_offset samples.
+! n-1 (0-indexed). Symbols start every 8 samples, offset by n_offset.
 !
   use matched_filter_bank_mod, only: mf_bank, nss_down
   use cpm_trellis_mod, only: NSTATES
@@ -1395,8 +1503,8 @@ subroutine compute_branch_metrics_all(cd, npts, nss, sigma2, &
      scale = 1.0
   endif
 
-  ! Exact samples per symbol in the downsampled domain
-  nsps_down_real = 3000.0 / (7.0 * 54.0)
+  ! Samples per symbol in the 224 Hz baseband
+  nsps_down_real = 8.0
 
   branch_metrics = 0.0
 

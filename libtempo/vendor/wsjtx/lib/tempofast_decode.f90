@@ -100,7 +100,7 @@ contains
       procedure(ft1_decode_callback) :: callback
       logical, intent(in) :: lapcqonly
 
-      parameter (NDMAX=NMAX/NDOWN)            !Max downsampled samples (48000/54=888)
+      parameter (NDMAX=NMAX/NDOWN)            !Baseband samples kept (888 at 224 Hz)
 
       character message*37,msgsent*37
       character c77*77
@@ -247,7 +247,7 @@ contains
       nd1=0
 
       if(first) then
-         fs=12000.0/NDOWN                    !Sample rate after downsampling
+         fs=NDFFT*12000.0/NMAX               !Baseband rate: 224 Hz, 8 samples/symbol
          dt_samp=1.0/fs                      !Sample interval (s)
          tt=real(NSPS)/12000.0               !Symbol period (s)
          txt=real(NZ)/12000.0                !TX duration (s)
@@ -438,7 +438,7 @@ contains
 ! ================================================================
 
                nss_ds = NSS
-               nsps_dn = real(NSPS_NUM)/(real(NSPS_DEN)*real(NDOWN))
+               nsps_dn = real(NSS)
 
 ! Phase 1: Coarse sync metric at 1 Hz steps
                call timer('sync1d  ',0)
@@ -1037,7 +1037,7 @@ subroutine sync1d_ft1(cd0,i0,ctwk,itwk,icos,sync)
   nsync_len=4*NSS_DS                            !32 samples per sync group
 
 ! Sync group positions using fractional samples/symbol
-  nsps_down=real(NSPS_NUM)/(real(NSPS_DEN)*real(NDOWN))  !7.9365
+  nsps_down=real(NSS_DS)
   i1=i0                                         !G1: symbol 0
   i2=i0+nint(47.0*nsps_down)                    !G2: symbol 47
   i3=i0+nint(95.0*nsps_down)                    !G3: symbol 95
@@ -1279,8 +1279,8 @@ subroutine ft1_freq_est_acorr(cd0, npts, i0, df_est)
 
   pi = 4.0*atan(1.0)
   twopi = 2.0*pi
-  nsps_down = 3000.0 / (7.0 * real(NDOWN))
-  dt_ds = real(NDOWN) / 12000.0
+  nsps_down = real(NSS_DS)
+  dt_ds = real(NMAX) / (real(NDFFT) * 12000.0)
 
 ! ================================================================
 ! Step 1: Generate self-reference (once, cached)
