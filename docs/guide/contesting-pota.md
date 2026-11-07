@@ -606,8 +606,8 @@ holds no POTA login and sends nothing to POTA, so it never hears whether the log
 page is where you find that out.
 
 You don't need this button at the park. With no internet the browser just can't load the page, and
-the file stays in Downloads for when you are back online. The button goes when you pick another
-activation or leave Nexus; pick the activation and export it again to bring it back. If the file
+the file stays in Downloads for when you are back online. The button shows only for the activation
+you just exported; if it has gone, pick that activation and export it again. If the file
 has been moved, renamed or deleted, Nexus says so, and **Export activation** writes it again. If
 Nexus can't open a browser, it gives you the address to type; if it can't open a file manager, it
 tells you where the file is.
