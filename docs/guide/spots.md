@@ -73,12 +73,12 @@ Comment don't sort.
 them work in opposite directions, which is the thing to learn:
 
 - **Band chips** — 160 m through 6 m always, plus any other band present in the
-  current spots. **Selected means *show only these*.** Nothing selected shows every band.
-- **Mode chips** — the specific modes actually in the feed right now, in operating
-  order (CW, Phone, then the digital submodes). These work the other way round:
-  everything is shown by default and clicking a chip *hides* that mode ("Hide FT4
+  current spots or already selected. **Selected means *show only these*.** Nothing selected shows every band.
+- **Mode chips** — the specific modes actually in the feed right now, plus any you have
+  hidden, in operating order (CW, Phone, then the digital submodes). These work the other way
+  round: everything is shown by default and clicking a chip *hides* that mode ("Hide FT4
   spots"). Nexus stores what you hid, not what you kept, so a mode that first
-  turns up mid-session shows rather than arriving silently hidden.
+  turns up later, even after a restart, shows rather than arriving silently hidden.
 - **US state chips** — the states resolved for the spots in hand. **Selected means *show only
   these***, and a spot whose state didn't resolve drops out while any state chip is on.
 - **My privileges** — "Show only spots you may transmit to under your license
@@ -104,12 +104,14 @@ word — `PA*` finds the PA prefix, the same way it does in the Tempo stations l
 without one behaves as it always has. `Esc` or the ✕ clears it. The Comment column is
 displayed but not searched.
 
-Filters, search text, sort column and the drawer's open state all survive leaving
-the section and coming back — they are held for the life of the app run and go
-when you quit.
-The popped-out window keeps a set of its own for as long as it is open: it starts
+**Your mode and band choices come back after you quit and restart Nexus.** Everything else
+(the other chips, search text, sort column and the drawer's open state) survives leaving the
+section and coming back, is held for the life of the app run, and goes when you quit.
+The popped-out window keeps a set of its own: it starts
 on the filters, search and sort your Spots view had when you pressed Pop out, and
-nothing set in it moves the main window's board, or the other way round.
+nothing set in it moves the main window's board, or the other way round. Its modes and bands
+are remembered too: if your Spots view has no mode or band chosen when you press Pop out, the
+window comes back on the modes and bands you last chose in it.
 
 ## Core workflows
 
@@ -218,12 +220,13 @@ arrive."
   fresh board is already hiding spots nobody on your continent heard. It is not hidden from you
   — the header count and the chip's own "*N* hidden" both say so — but it is the reason a
   count here can be smaller than a cluster window's.
-- **Filters are for this run of the app.** They survive leaving the section and
-  coming back, and they are gone at exit — unlike the Needed board's, which persist
-  across restarts.
-- **A popped-out board forgets its filters when you close it.** The window's
-  filters, search and sort are its own and go with the window; the next one opens
-  on what your Spots view shows when you press Pop out.
+- **Only modes and bands are kept across a restart.** The other chips, the search and the
+  sort are for this run of the app, and **Heard on my continent** and **Hide worked** are back on
+  at the next launch. The Spots boxes and panes on other screens keep all their filters for this
+  run only, modes and bands too.
+- **A popped-out board forgets its other filters when you close it.** The window's
+  search, sort and other chips go with the window; the next one opens on what your Spots
+  view shows when you press Pop out.
 - **Twenty minutes, and nothing before that.** No history, no export, no "what did
   I miss while I was away".
 - **Declaring an unassisted entry empties the board.** The switch stops cluster/RBN

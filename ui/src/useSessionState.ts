@@ -1,6 +1,7 @@
 // Filter state that lives for the session — through a view switch, gone at app exit — for the Spots
 // board and the Needed board's search, which keep the same lifetime (sessionStorage is per window,
 // so a pop-out keeps its own). Moved out of SpotsPanel.tsx when the Needed board took its search.
+// The Spots view's modes and bands outlive the session instead: useRememberedList.ts.
 // storage-scope.test.ts lists and scans every key passed to it.
 import { useEffect, useState } from 'react'
 

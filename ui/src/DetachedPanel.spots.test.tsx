@@ -256,6 +256,8 @@ describe("the Spots window opens on the view's filters, then keeps its own", () 
   type Win = 'main' | 'spots'
   let sessions: Record<Win, Record<string, string>>
   function inWindow<T>(win: Win, step: () => T): T {
+    // The address is what names a window's own copy of what it remembers (`surfaceId`).
+    window.history.replaceState(null, '', win === 'spots' ? '?panel=spots' : '/')
     sessionStorage.clear()
     for (const [k, v] of Object.entries(sessions[win])) sessionStorage.setItem(k, v)
     const out = step()
@@ -274,6 +276,7 @@ describe("the Spots window opens on the view's filters, then keeps its own", () 
     sessions = { main: {}, spots: {} }
     askedWith = []
   })
+  afterEach(() => window.history.replaceState(null, '', '/'))
 
   const view = () =>
     render(
@@ -312,6 +315,8 @@ describe("the Spots window opens on the view's filters, then keeps its own", () 
   /** The view's picks, every one of them off its default. */
   const PICKED = { bands: ['20m'], modes: ['CW true', 'FT4 false'], hideWorked: 'false', sort: `${t('spots.column.call')} ▲`, search: 'K1' }
   const DEFAULTS = { bands: [], modes: ['CW true', 'FT4 true'], hideWorked: 'true', sort: `${t('spots.column.age')} ▲`, search: '' }
+  /** A window no fresh hand-off reached: its modes and bands are remembered, all the rest starts over. */
+  const REMEMBERED_ONLY = { ...DEFAULTS, bands: PICKED.bands, modes: PICKED.modes }
   function pick(main: HTMLElement) {
     inWindow('main', () => {
       fireEvent.click(bandChip(main, '20m'))
@@ -361,9 +366,9 @@ describe("the Spots window opens on the view's filters, then keeps its own", () 
     pick(main)
     for (const [age, expected, why] of [
       [10_000, PICKED, "a window ten seconds slow to open still opens on the view's filters"],
-      [61_000, DEFAULTS, "an earlier press's, over a minute old, is not this window's"],
-      [86_400_000, DEFAULTS, "an earlier run's, a day old, is not this window's"],
-      [-3_600_000, DEFAULTS, 'one stamped an hour ahead, the clock set back since, is not this window’s'],
+      [61_000, REMEMBERED_ONLY, "an earlier press's, over a minute old, is not this window's"],
+      [86_400_000, REMEMBERED_ONLY, "an earlier run's, a day old, is not this window's"],
+      [-3_600_000, REMEMBERED_ONLY, 'one stamped an hour ahead, the clock set back since, is not this window’s'],
     ] as const) {
       const at = Date.now()
       const clock = vi.spyOn(Date, 'now').mockReturnValue(at)
@@ -382,7 +387,7 @@ describe("the Spots window opens on the view's filters, then keeps its own", () 
     }
   })
 
-  it('the hand-off is taken once: closed and opened again with no press, the window opens on the defaults', async () => {
+  it('the hand-off is taken once: closed and opened again with no press, the window opens on what it remembers and the defaults', async () => {
     const main = inWindow('main', view).container
     pick(main)
     press(main)
@@ -391,7 +396,56 @@ describe("the Spots window opens on the view's filters, then keeps its own", () 
     first.unmount()
     sessions.spots = {} // closing the window forgets its copy
     const second = inWindow('spots', popOut)
-    expect(filtersOf(await fed(second.container)), 'a window no press opened opens on the defaults').toEqual(DEFAULTS)
+    expect(filtersOf(await fed(second.container)), 'a window no press opened keeps only its remembered modes and bands').toEqual(REMEMBERED_ONLY)
+  })
+
+  /** Quit Nexus and start it again: every window closes and its session goes, localStorage stays. */
+  function restart() {
+    cleanup()
+    sessions = { main: {}, spots: {} }
+  }
+
+  it("after a restart, Pop out opens on the view's remembered modes and bands", async () => {
+    const before = inWindow('main', view).container
+    pick(before)
+    restart()
+    const main = inWindow('main', view).container
+    expect(filtersOf(main), 'the view comes back on its modes and bands').toEqual(REMEMBERED_ONLY)
+    press(main)
+    const win = inWindow('spots', popOut).container
+    expect(filtersOf(await fed(win)), 'and hands them over').toEqual(REMEMBERED_ONLY)
+  })
+
+  it('after a restart, the picks made in the window itself come back while the view has none, and never reach the view', async () => {
+    const first = inWindow('main', view).container
+    press(first)
+    let win = inWindow('spots', popOut).container
+    await fed(win)
+    inWindow('spots', () => {
+      fireEvent.click(bandChip(win, '20m'))
+      fireEvent.click(modeChip(win, 'FT4'))
+    })
+    expect(localStorage.getItem('nexus.spots.bands.spots'), "the window's own copy").toBe('["20m"]')
+    expect(localStorage.getItem('nexus.spots.bands'), "the view's own copy is not moved").toBe('[]')
+
+    restart()
+    const main = inWindow('main', view).container
+    expect(filtersOf(main).bands, 'the view has no picks of its own').toEqual([])
+    press(main)
+    win = inWindow('spots', popOut).container
+    expect(filtersOf(await fed(win)), 'the window comes back on its own').toEqual(REMEMBERED_ONLY)
+    expect(filtersOf(main).bands, 'and the view is as it was').toEqual([])
+  })
+
+  it("a press from a view with picks still wins over the window's remembered ones", async () => {
+    localStorage.setItem('nexus.spots.bands.spots', '["40m"]')
+    localStorage.setItem('nexus.spots.hiddenModes.spots', '["CW"]')
+    const main = inWindow('main', view).container
+    pick(main)
+    press(main)
+    const win = inWindow('spots', popOut).container
+    expect(filtersOf(await fed(win)), "the window opens on the view's filters").toEqual(PICKED)
+    expect(localStorage.getItem('nexus.spots.bands.spots')).toBe('["20m"]')
   })
 
   it('a chip in either window never moves the other, and a press while the window is open moves nothing in it, even as it reloads', async () => {

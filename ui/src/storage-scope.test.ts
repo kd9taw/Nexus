@@ -154,6 +154,11 @@ export const PER_SURFACE = [
   'nexus.sats.columns',
   'nexus.sats.favOnly',
   'nexus.spotlegend',
+  // The Spots view's hidden modes and picked bands (useRememberedList): what THIS window's board shows,
+  // kept across restarts, so the Pop out has its own. A pane of the board keeps `<key>.<scope>` in
+  // the session instead (SESSION_SCOPED below), and never reads or writes these.
+  'nexus.spots.bands',
+  'nexus.spots.hiddenModes',
   // Connect's bottom strip height (layout L7): a % of THIS window's grid, like the strips below.
   'nexus.split.connect.strip',
   // The Contest screen's log height and the last contacts' over it: a % of THIS window's screen, like
@@ -420,8 +425,9 @@ const DEDUPE = [
  * filters, the Needed board's search). sessionStorage is
  * already per-webview by the platform, so these need no scope suffix — the same guarantee
  * PER_SURFACE buys, by a different mechanism (windowScope.test.ts leans on it for seenSet).
- * Their lifetime is deliberately shorter: the Spots filters are meant to survive a view
- * switch and die on app exit, unlike the roster/board filters, which persist across restarts.
+ * Their lifetime is deliberately shorter: these Spots filters are meant to survive a view
+ * switch and die on app exit, unlike the roster/board filters and the Spots view's own modes and
+ * bands, which persist across restarts (SpotsPanel's REMEMBERED_FILTERS says why each is which).
  *
  * Listed AND scanned for (see `classifies every useSessionState key`), because the raw-storage
  * scan below structurally cannot see them: the helper takes the key as a PARAMETER, so no
@@ -431,17 +437,17 @@ const DEDUPE = [
  * existed and none on four that did.
  */
 const SESSION_SCOPED = [
-  'nexus.spots.bands',
   'nexus.spots.filtersOpen',
   // The band a PANE of the board follows, and the modes it opens on as an allow-list (#345: the
   // Phone cockpit's Spots pane). Each is kept only by that pane; the view keeps `hiddenModes`
   // instead and no follow switch at all. A pane keeps EVERY key here as its own copy,
-  // `<key>.<scope>` (`nexus.spots.bands.phone`): same store, same lifetime, same verdict. Connect's
-  // Spots box is a pane that names no modes and follows no band, so it keeps `hiddenModes` in
-  // its copy (`nexus.spots.hiddenModes.connect`), the view's rule, and no follow switch.
+  // `<key>.<scope>` (`nexus.spots.sort.phone`): same store, same lifetime, same verdict, and its
+  // bands and hidden modes the same way (`nexus.spots.bands.phone`), though the view's own are
+  // remembered (PER_SURFACE). Connect's Spots box is a pane that names no modes and follows no band,
+  // so it keeps `hiddenModes` in its copy (`nexus.spots.hiddenModes.connect`), the view's rule, and
+  // no follow switch.
   'nexus.spots.followBand',
   'nexus.spots.shownModes',
-  'nexus.spots.hiddenModes',
   // Hide worked and the window it reaches back over. Session-lived like the filters around them:
   // on again next launch, which is the default the operator chose.
   'nexus.spots.hideWorked',
@@ -528,6 +534,10 @@ function sources(dir: string, out: string[] = []): string[] {
 const INDIRECT: Record<string, string[]> = {
   'usePaneWidths.ts:key': ['tempo-right-rail-w', 'tempo-left-rail-w'],
   'components/ConnectView.tsx:key': ['nexus.connect.intent'],
+  // The Spots view's remembered modes and bands: the hook that keeps them, and the Pop out's hand-off
+  // (SpotsPanel's REMEMBERED_FILTERS), which reads the view's copy and writes the window's.
+  'useRememberedList.ts:key': ['nexus.spots.hiddenModes', 'nexus.spots.bands'],
+  'components/SpotsPanel.tsx:key': ['nexus.spots.hiddenModes', 'nexus.spots.bands'],
   // Reserved generic pane-grid persistence. Carries NO key today: no `PaneLayoutSpec`
   // literal exists in the tree (Connect composes the pure helpers and persists through its
   // own scoped `nexus.connect.config`). Routed through the scope helper anyway so the next
@@ -789,6 +799,12 @@ describe('call sites agree with the classification', () => {
     ]) {
       expect(readFileSync(join(SRC, file), 'utf8')).toContain(`storageKey="${key}"`)
     }
+    // The Spots view's remembered lists: each key is passed to the hook, and named in the hand-off's list.
+    const spotsBoard = readFileSync(join(SRC, 'components/SpotsPanel.tsx'), 'utf8')
+    for (const k of INDIRECT['useRememberedList.ts:key']) {
+      expect(spotsBoard).toContain(`useRememberedList('${k}'`)
+    }
+    expect(spotsBoard).toContain("REMEMBERED_FILTERS: readonly string[] = ['nexus.spots.hiddenModes', 'nexus.spots.bands']")
     // The Needed board's `key`: its own when nobody passes one, the Phone pane's when it does.
     const needed = readFileSync(join(SRC, 'components/NeededPanel.tsx'), 'utf8')
     expect(needed).toContain("const FILTER_KEY = 'neededFilters'")
