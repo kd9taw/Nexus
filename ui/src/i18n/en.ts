@@ -7974,6 +7974,8 @@ export const EN = {
     '{{port}} is not connected right now — check the rig is powered on, or pick another port.',
   'settings.radio.check.dialIn':
     '{{port}} is a dial-in device and will hang waiting for carrier. Use the matching /dev/cu.… port instead.',
+  'settings.radio.check.netRigctlPort':
+    'NET rigctl reaches a radio through a rigctld on the network and cannot open {{port}} itself. To have Nexus run the radio on {{port}}, set Rig Model to your radio. Keep NET rigctl only if another program runs a rigctld for this radio.',
   'settings.radio.check.catNoModel':
     'PTT is set to CAT but the rig model is None/VOX — pick your rig model, or choose a different PTT method.',
   'settings.radio.check.noCatPtt':
@@ -8612,6 +8614,8 @@ export const EN = {
   'settings.rigControl.serialHandshake.xonxoff': 'XON/XOFF (software)',
   'settings.rigControl.serialHandshake.hint':
     "Tells Nexus what your cable actually does, instead of letting it guess. Leave it on Auto unless you have a rig that keys at launch — Auto changes nothing about how your station works today. If you change it and CAT stops working, put it back on Auto: on some rigs Hamlib quietly refuses the setting and then answers without ever having opened the radio, so you get a CAT light and a rig that ignores you.",
+  'settings.rigControl.netRigctl.notConnected':
+    'Rig Model is NET rigctl, which reaches a radio through a rigctld on the network and cannot open {{port}} itself, and no rigctld answered. To have Nexus run the radio on {{port}}, set Rig Model to your radio. If another program runs a rigctld for it, start that program, or set Connection to Network with its address as host:port.',
   'settings.rigControl.serialHandshake.rtsKeys':
     "RTS keys your transmitter on this port, so Serial handshake can't be Hardware — set it to Auto or None.",
   'settings.rigControl.pttLineState.label': 'Keying line at startup',

@@ -13,7 +13,7 @@ import { js8CqTextRefused } from '../js8Compose'
 import { confirmDialog } from '../confirm'
 import { Js8FrequencySettings } from './Js8FrequencySettings'
 import { DraftNumberInput } from './DraftNumberInput'
-import { checkRigForm, blocks, dataModePickerShown, APRS_DATA_FM_MODELS, ICOM_LAN_MODELS, NATIVE_CIV_MODELS, NO_CAT_PTT_TRANSCEIVERS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
+import { checkRigForm, blocks, netRigctlSerialPort, dataModePickerShown, APRS_DATA_FM_MODELS, ICOM_LAN_MODELS, NATIVE_CIV_MODELS, NO_CAT_PTT_TRANSCEIVERS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
   confirmSatUplink,
   clearDataFolder,
@@ -4469,6 +4469,7 @@ export function SettingsPanel({
   // native client and DAX audio run on Serial and Network alike, but not on OmniRig, the Icom
   // network connection or TCI (`flex_client_reachable`; `flexClientNotHere` below).
   const flexPanNeedsNetwork = [2036, 23005].includes(form.rigModel) && form.rigConn !== 'network'
+  const netRigctlPort = netRigctlSerialPort(form)
   // A Flex model on OmniRig or TCI: those connections hand CAT to another program, and the CAT
   // daemon starts that connection's own driver before it ever asks for the Flex client
   // (`spawn_cat_daemon`), so the client, its DAX audio and its CW/Tune/ATU setting do nothing
@@ -6585,6 +6586,11 @@ export function SettingsPanel({
                 <span className="settings-hint">
                   <T k="settings.rigControl.conn.hint" tags={{ b: <strong /> }} />
                 </span>
+                {netRigctlPort !== null && (
+                  <span className="settings-hint" role="status">
+                    {t('settings.radio.check.netRigctlPort', { port: netRigctlPort })}
+                  </span>
+                )}
                 <span className="settings-hint">
                   <T
                     k="settings.rigControl.conn.omnirig.hint"

@@ -1,0 +1,28 @@
+{
+  "ports": [
+    "COM1",
+    "COM4",
+    "com12",
+    "COM4:",
+    "\\\\.\\COM4",
+    " COM4 ",
+    "/dev/ttyUSB0",
+    "/dev/cu.usbserial-A"
+  ],
+  "hosts": [
+    "localhost",
+    "127.0.0.1:4532",
+    "COM4:4532",
+    "com4.local",
+    "comet",
+    "com",
+    "COM",
+    "COMX",
+    "COM4x",
+    "rig-shack:4532",
+    "192.168.1.20",
+    "[::1]:4532",
+    "dev/ttyUSB0",
+    ""
+  ]
+}

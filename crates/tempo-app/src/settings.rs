@@ -5848,6 +5848,51 @@ pub fn net_rigctl_addr<'a>(
     Some((rig_addr.trim(), port))
 }
 
+/// Does `name` read as a serial port rather than a network host? `COM4`, `com12`, `COM4:`,
+/// `\\\\.\\COM4` or anything under `/dev/`. A host and port is never one (`COM4:4532` is a machine
+/// that happens to be called COM4), nor is a longer name (`com4.local`, `comet`).
+///
+/// A bare `COM4` could in principle be a machine on the network. That is why nothing decides on
+/// this alone: it only ever chooses words, and only for a radio that has failed to connect or a
+/// form being filled in ([`net_rigctl_serial_port`]). The table both this and the Settings form
+/// read is `tests/fixtures/serial_port_names.json`.
+pub fn looks_like_serial_port(name: &str) -> bool {
+    let name = name.trim();
+    if name.starts_with("/dev/") {
+        return true;
+    }
+    let name = name.strip_prefix(r"\\.\").unwrap_or(name);
+    let name = name.strip_suffix(':').unwrap_or(name);
+    name.get(..3).is_some_and(|c| c.eq_ignore_ascii_case("com"))
+        && name.len() > 3
+        && name.as_bytes()[3..].iter().all(u8::is_ascii_digit)
+}
+
+/// The serial port a NET rigctl radio has been given, when it has: `None` for every other radio.
+/// NET rigctl (Hamlib model 2) only ever dials a rigctld over TCP, so whatever rigctld it is handed
+/// is resolved as a host name. `rigctld -m 2 -r COM4` opens no serial port; Hamlib looks up a
+/// machine called COM4 and says `COM4 No such file or directory`.
+///
+/// ⚠️ THE SAME SETTINGS ALSO WORK, while another program's rigctld answers on rigctld TCP Port:
+/// Nexus shares it and never uses the port name. So this is a reason for words, never for
+/// refusing a save, changing the settings or starting anything differently.
+pub fn net_rigctl_serial_port<'a>(
+    rig_model: u32,
+    rig_conn: &str,
+    serial_port: &'a str,
+    rig_addr: &'a str,
+) -> Option<&'a str> {
+    if rig_model != 2 || matches!(rig_conn, "omnirig" | "icomlan" | "tci") {
+        return None;
+    }
+    let dialled = if rig_conn_is_network(rig_conn, rig_addr) {
+        rig_addr
+    } else {
+        serial_port
+    };
+    looks_like_serial_port(dialled).then(|| dialled.trim())
+}
+
 /// [`net_rigctl_addr`], when the address is on this computer: the rigctld the operator runs here
 /// (wfview's, or their own). `None` for any other radio. The rule the port bookkeeping below reads:
 /// only an address on this computer shares a port space with Nexus's own listeners.
@@ -19830,5 +19875,88 @@ mod am_power_tests {
     fn an_old_settings_file_gains_the_am_cap() {
         let old: Settings = serde_json::from_str("{}").expect("empty settings loads");
         assert_eq!(old.max_power_am, Some(0.25));
+    }
+}
+
+#[cfg(test)]
+mod net_rigctl_serial_port_tests {
+    use super::*;
+
+    /// The table the Settings form reads too (`rigFormChecks.netrigctl.test.ts`), so the two
+    /// answers about one name cannot drift.
+    #[test]
+    fn a_serial_port_name_is_told_from_a_host_by_the_shared_table() {
+        let table: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/serial_port_names.json")).unwrap();
+        let names = |k: &str| -> Vec<String> {
+            table[k]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|n| n.as_str().unwrap().to_string())
+                .collect()
+        };
+        for port in names("ports") {
+            assert!(looks_like_serial_port(&port), "{port} is a serial port");
+        }
+        for host in names("hosts") {
+            assert!(!looks_like_serial_port(&host), "{host} is a network host");
+        }
+    }
+
+    #[test]
+    fn only_a_net_rigctl_radio_given_a_port_name_is_answered() {
+        let ask = net_rigctl_serial_port;
+        // The field report's shape: Connection Serial, and an older file with no connection at all.
+        assert_eq!(ask(2, "serial", "COM4", ""), Some("COM4"));
+        assert_eq!(ask(2, "", " COM4 ", ""), Some("COM4"));
+        // A Network Address that holds a port name.
+        assert_eq!(ask(2, "network", "", "COM4"), Some("COM4"));
+        assert_eq!(ask(2, "network", "", "/dev/ttyUSB0"), Some("/dev/ttyUSB0"));
+        // A real address beats a port left in the other field.
+        assert_eq!(ask(2, "network", "COM4", "192.168.1.20:4532"), None);
+        assert_eq!(ask(2, "network", "COM4", "COM4:4532"), None);
+        // Nothing given, a real radio on its port, and the connections that use neither field.
+        assert_eq!(ask(2, "serial", "", ""), None);
+        assert_eq!(ask(847, "serial", "COM4", ""), None);
+        assert_eq!(ask(0, "serial", "COM4", ""), None);
+        assert_eq!(ask(2, "omnirig", "COM4", ""), None);
+        assert_eq!(ask(2, "tci", "COM4", ""), None);
+    }
+
+    /// A station saved by an older version loads as it was saved, and saves back as it was: this
+    /// combination is told about, never repaired behind the operator's back. Its connection is
+    /// written out, and left out as a file from before the field existed has it.
+    #[test]
+    fn a_saved_net_rigctl_radio_on_a_com_port_loads_and_saves_unchanged() {
+        for conn in [r#""rigConn":"serial","#, ""] {
+            let json = format!(
+                r#"{{"catBroker":false,"radios":[{{"id":0,"name":"FT847","rigModel":2,{conn}"serialPort":"COM4","baud":9600,"rigctldPort":4532}}]}}"#
+            );
+            let mut loaded: Settings = serde_json::from_str(&json).unwrap();
+            loaded.ensure_distinct_radio_ports();
+            let radio = &loaded.radios[0];
+            assert_eq!(
+                (
+                    radio.rig_model,
+                    radio.serial_port.as_str(),
+                    radio.baud,
+                    radio.rigctld_port
+                ),
+                (2, "COM4", 9600, 4532)
+            );
+            assert_eq!(
+                net_rigctl_serial_port(
+                    radio.rig_model,
+                    &radio.rig_conn,
+                    &radio.serial_port,
+                    &radio.rig_addr
+                ),
+                Some("COM4")
+            );
+            let again: Settings =
+                serde_json::from_str(&serde_json::to_string(&loaded).unwrap()).unwrap();
+            assert_eq!(again.radios[0], *radio);
+        }
     }
 }

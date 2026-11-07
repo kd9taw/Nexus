@@ -48,6 +48,8 @@ export interface RigFormFacts {
   rigConn: string
   pttMethod: string
   rigModel: number
+  /** The Network Address, on Connection: Network. */
+  rigAddr?: string
   /** The Icom network connection's radio address and network user. */
   icomLanHost?: string
   icomLanUser?: string
@@ -98,6 +100,16 @@ export function checkRigForm(
     NO_CAT_PTT_MODELS.includes(form.rigModel)
   ) {
     out.push({ level: 'warning', message: t('settings.radio.check.noCatPtt') })
+  }
+  // NET rigctl given a serial port name: it dials a rigctld over TCP and opens no port, so the name
+  // is looked up as a machine on the network. A WARNING, never an error: while another program's
+  // rigctld answers on rigctld TCP Port this same setting works, and Nexus shares that rigctld.
+  const netRigctlPort = netRigctlSerialPort(form)
+  if (netRigctlPort !== null) {
+    out.push({
+      level: 'warning',
+      message: t('settings.radio.check.netRigctlPort', { port: netRigctlPort }),
+    })
   }
   // A network rig has no serial port at all; none of this applies.
   if (form.rigConn === 'network') return out
@@ -219,6 +231,31 @@ export function checkRigForm(
   }
 
   return out
+}
+
+/**
+ * Does `name` read as a serial port rather than a network host? `COM4`, `com12`, `COM4:`,
+ * `\\\\.\\COM4` or anything under `/dev/`; never a host and port (`COM4:4532`) or a longer name
+ * (`com4.local`).
+ *
+ * ⚠️ MIRRORS `looks_like_serial_port` in crates/tempo-app/src/settings.rs. Both are held to one
+ * table, crates/tempo-app/tests/fixtures/serial_port_names.json.
+ */
+export function looksLikeSerialPort(name: string): boolean {
+  const n = name.trim()
+  return n.startsWith('/dev/') || /^(\\\\\.\\)?com\d+:?$/i.test(n)
+}
+
+/**
+ * The serial port a NET rigctl radio has been given, or `null`: the form's half of
+ * `net_rigctl_serial_port` in crates/tempo-app/src/settings.rs. It chooses words only.
+ */
+export function netRigctlSerialPort(
+  form: Pick<RigFormFacts, 'rigModel' | 'rigConn' | 'serialPort' | 'rigAddr'>,
+): string | null {
+  if (form.rigModel !== 2 || ['omnirig', 'icomlan', 'tci'].includes(form.rigConn)) return null
+  const dialled = form.rigConn === 'network' && form.rigAddr ? form.rigAddr : form.serialPort
+  return looksLikeSerialPort(dialled) ? dialled.trim() : null
 }
 
 /** Is `host` an IPv4 address in dotted form? The radio's network protocol names it by one. */
