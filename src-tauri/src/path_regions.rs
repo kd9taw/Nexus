@@ -66,6 +66,10 @@ pub(crate) struct PathRegionsView {
     /// When the model part was computed (unix seconds) — the hours are always current.
     pub(crate) computed_unix: i64,
     pub(crate) regions: Vec<RegionView>,
+    /// The configured engine could not run and `engine` is the heuristic that answered
+    /// ([`propagation::with_fallback`]). Such a sweep is never kept. Absent when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) engine_fallback: bool,
 }
 
 /// Everything a sweep's answer depends on, besides the clock's hour.
@@ -179,10 +183,15 @@ pub(crate) fn serve(ask: Ask, path: &Path) -> PathRegionsView {
                 engine: engine.clone(),
                 regions: sweep(),
             };
-            save(path, &s);
+            // A stand-in for an engine that could not run is not kept: the next ask tries again.
+            if !ask.engine.fell_back() {
+                save(path, &s);
+            }
             s
         });
-        *KEPT.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.clone());
+        if !ask.engine.fell_back() {
+            *KEPT.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.clone());
+        }
         (s.computed_unix, s.regions)
     };
     propagation::refresh_regions(
@@ -192,8 +201,14 @@ pub(crate) fn serve(ask: Ask, path: &Path) -> PathRegionsView {
         ask.kp_now,
         ask.forecast.as_ref(),
     );
+    let engine_fallback = ask.engine.fell_back();
     PathRegionsView {
-        engine,
+        engine: if engine_fallback {
+            "heuristic".to_string()
+        } else {
+            engine
+        },
+        engine_fallback,
         computed_unix,
         regions: PATH_REGIONS
             .iter()
@@ -335,6 +350,49 @@ mod tests {
         save(&path, &stored(&at(70.0, None), T));
         assert!(load(&path, &at(70.0, None), T).is_some());
         assert!(load(&path, &at(200.0, None), T).is_none());
+    }
+
+    /// A P.533 ask whose engine cannot run: the strips get the heuristic's day, named as such,
+    /// and nothing is kept, so the next ask tries P.533 again rather than serving this for hours.
+    #[test]
+    fn a_sweep_whose_engine_cannot_run_says_so_and_is_not_kept() {
+        struct Broken;
+        impl propagation::PathPredictor for Broken {
+            fn name(&self) -> &'static str {
+                "p533"
+            }
+            fn predict(&self, _: (f64, f64), _: i64, _: &SpaceWx) -> propagation::PathPrediction {
+                panic!("broken on purpose")
+            }
+        }
+        let path = crate::test_dirs::root().join("path_regions_broken.json");
+        let key = "broken-sweep-test";
+        let view = serve(
+            Ask {
+                me: BOSTON,
+                key: key.into(),
+                engine: propagation::with_fallback(Broken, Some(BOSTON)),
+                t: T,
+                wx: SpaceWx::default(),
+                kp_now: Some(2.0),
+                forecast: None,
+            },
+            &path,
+        );
+        assert!(view.engine_fallback);
+        assert_eq!(view.engine, "heuristic");
+        assert_eq!(view.regions.len(), 10, "an answer, not a blank");
+        assert!(
+            !path.exists(),
+            "a stand-in is not written beside the settings"
+        );
+        assert!(
+            KEPT.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .is_none_or(|s| s.key != key),
+            "a stand-in is not held in memory"
+        );
     }
 
     #[test]

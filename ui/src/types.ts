@@ -399,8 +399,10 @@ export interface PathGradingStatus {
 }
 /** Per-path HF prediction (the PathPredictor seam): operator↔DX, best-first. */
 export interface PathPrediction {
-  /** Engine that produced it: "heuristic" today; "voacap"/"p533" later. */
+  /** Engine that produced it: "p533" or "heuristic". */
   engine: string
+  /** P.533 could not run, so `engine` is the heuristic that answered. Absent when false. */
+  engineFallback?: boolean
   bands: BandOutlook[]
   /** Controlling MUF (MHz) on the path now — the band ceiling. */
   mufNow: number
@@ -534,6 +536,8 @@ export interface RegionPathDay {
 }
 export interface PathRegions {
   engine: string
+  /** P.533 could not run, so `engine` is the heuristic that answered. Absent when false. */
+  engineFallback?: boolean
   /** When the model part was computed (unix s); the hours are current at every ask. */
   computedUnix: number
   regions: RegionPathDay[]
@@ -606,6 +610,8 @@ export interface DxpedWindow {
   call: string
   /** Which model produced it: "p533" → the badge shows P.533, else modelled. */
   engine: string
+  /** P.533 could not run, so `engine` is the heuristic that answered. Absent when false. */
+  engineFallback?: boolean
   /** One-line headline, e.g. "17m Good 0230–0430Z" (same format as CalendarEntry.best). */
   best: string
   /** Top bands' 24 h outlooks, best first — feeds LikelihoodHeatmap. */
@@ -6265,7 +6271,7 @@ export interface Settings {
   /** Watch near-region spots (not just your own paths) so opening detection can
    *  flag "a band is open around you" before you've worked anyone. */
   openingRegional: boolean
-  /** Path-prediction engine: 'heuristic' (physics-lite default) or 'p533'
+  /** Path-prediction engine: 'p533' (the default) or 'heuristic' (physics-lite)
    * (native ITU-R P.533 — real circuit-reliability physics). */
   propEngine: string
   /** Save each RX period as a WAV: 'none' | 'all' | 'decodes' (WSJT-X Save menu). */

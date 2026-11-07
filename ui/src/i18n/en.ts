@@ -10431,9 +10431,9 @@ export const EN = {
   // and stay in the panel.
   'settings.integrations.propEngine.label': 'Prediction engine',
   'settings.integrations.propEngine.heuristic': 'Modelled (fast heuristic)',
-  'settings.integrations.propEngine.p533': 'ITU-R P.533 (full physics)',
+  'settings.integrations.propEngine.p533': 'ITU-R P.533 (full physics, default)',
   'settings.integrations.propEngine.hint':
-    'Drives the per-station path outlook + 24h band×hour grid. P.533 is the real circuit-reliability method (validated against the ITU reference; ~0.1 s per prediction, uses your station power). Live spots always win over any model.',
+    'Drives the per-station path outlook + 24h band×hour grid. P.533, the default, is the real circuit-reliability method (validated against the ITU reference; ~0.1 s per prediction, uses your station power). Live spots always win over any model.',
   // The collapsed disclosure inside Integrations & Feeds. ⚠️ dBi, TX and RX are units and the
   // radio's own two states.
   'settings.antennaGain.title': 'Antenna gain (advanced)',
@@ -11320,6 +11320,9 @@ export const EN = {
   // The engine behind a prediction. `P.533` is the ITU recommendation's number and stays in
   // the component beside it.
   'connect.engine.modelled': 'modelled',
+  // Shown where the engine's name goes when P.533 failed and the heuristic answered instead.
+  // ⚠️ `P.533` is the recommendation's number: keep it verbatim.
+  'prop.engine.fallback': 'modelled: P.533 could not run',
   'connect.engine.outlook': 'modelled · DX',
 
   'connect.path.heading': 'Path to {{call}}',

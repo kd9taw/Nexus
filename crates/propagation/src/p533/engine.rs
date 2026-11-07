@@ -298,6 +298,7 @@ impl P533Engine {
                 day: None,
                 overlay: None,
                 space_now: None,
+                engine_fallback: false,
             };
         };
 
@@ -385,6 +386,7 @@ impl P533Engine {
             day: None,
             overlay: None,
             space_now: None,
+            engine_fallback: false,
         }
     }
 }

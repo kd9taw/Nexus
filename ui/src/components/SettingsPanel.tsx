@@ -13294,7 +13294,7 @@ export function SettingsPanel({
                   </span>
                   <select disabled={locked('propEngine')}
                     className="settings-input"
-                    value={form.propEngine || 'heuristic'}
+                    value={form.propEngine || 'p533'}
                     onChange={(e) => update('propEngine', e.target.value)}
                   >
                     <option value="heuristic">

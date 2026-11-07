@@ -2167,8 +2167,8 @@ Nexus connects to all of them and merges what they report.*
   log carries the planetary K index, A index and solar flux (ADIF `K_INDEX`,
   `A_INDEX`, `SFI`) from the latest reading Nexus fetched from NOAA SWPC, and
   nothing when that reading is more than 3 hours old.
-- **Prediction engine** — Modelled (fast heuristic) or ITU-R P.533 (full
-  physics). "P.533 is the real circuit-reliability method (validated against the
+- **Prediction engine** — ITU-R P.533 (full physics, the default) or Modelled
+  (fast heuristic). "P.533 is the real circuit-reliability method (validated against the
   ITU reference; ~0.1 s per prediction, uses your station power). **Live spots
   always win over any model.**" See [Conditions](connect.md).
 - **Antenna gain (dBi) — TX / RX** (under *Antenna gain (advanced)*) — "Used by

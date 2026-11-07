@@ -10011,7 +10011,7 @@ async fn get_path_outlook(
     let me = propagation::geo::maidenhead_to_latlon(&mygrid);
     let Some(dx) = propagation::geo::maidenhead_to_latlon(grid.trim()) else {
         return Ok(propagation::PathPrediction {
-            engine: "heuristic".to_string(),
+            engine: prop_engine,
             bands: Vec::new(),
             muf_now: 0.0,
             muf_hourly: Vec::new(),
@@ -10021,6 +10021,7 @@ async fn get_path_outlook(
             day: None,
             overlay: None,
             space_now: None,
+            engine_fallback: false,
         });
     };
     // Current space weather from the propagation cache's last snapshot (the same
@@ -10087,7 +10088,8 @@ async fn get_path_outlook(
                     let sp = eng.predict(dx, t, &wx);
                     (sp, lp.join().ok().flatten())
                 });
-                if keep {
+                // A stand-in for an engine that could not run is not kept: the next ask tries again.
+                if keep && !eng.fell_back() {
                     path_outlook::put(key, sp.clone(), lp.clone());
                 }
                 (sp, lp)
@@ -10203,6 +10205,7 @@ async fn get_path_regions(
     let Some(me) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
         return Ok(path_regions::PathRegionsView {
             engine: prop_engine,
+            engine_fallback: false,
             computed_unix: 0,
             regions: Vec::new(),
         });
@@ -10983,7 +10986,7 @@ async fn get_band_outlook(
     };
     let Some(me) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
         return Ok(propagation::PathPrediction {
-            engine: "heuristic".to_string(),
+            engine: prop_engine,
             bands: Vec::new(),
             muf_now: 0.0,
             muf_hourly: Vec::new(),
@@ -10993,6 +10996,7 @@ async fn get_band_outlook(
             day: None,
             overlay: None,
             space_now: None,
+            engine_fallback: false,
         });
     };
     let p533 = prop_engine == "p533";
@@ -11098,8 +11102,11 @@ async fn ring_prediction(
     })
     .await
     .map_err(|e| e.to_string())?;
-    if let Ok(mut g) = RING_OUTLOOK.lock() {
-        *g = Some((std::time::Instant::now(), key, out.clone()));
+    // A stand-in for an engine that could not run is not kept: the next ask tries again.
+    if !out.engine_fallback {
+        if let Ok(mut g) = RING_OUTLOOK.lock() {
+            *g = Some((std::time::Instant::now(), key, out.clone()));
+        }
     }
     Ok(out)
 }
@@ -11112,6 +11119,10 @@ struct DxpedWindow {
     call: String,
     /// Which model produced it ("p533" → the UI badge shows P.533).
     engine: String,
+    /// The configured engine could not run and `engine` is the heuristic that answered
+    /// ([`propagation::with_fallback`]). Absent when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    engine_fallback: bool,
     /// One-line headline, e.g. "17m Good 0230–0430Z" (CalendarEntry.best format).
     best: String,
     /// Top bands' 24 h outlooks, best first — feeds LikelihoodHeatmap directly.
@@ -11289,8 +11300,8 @@ async fn get_dxped_windows(
     // the p533 CCIR-cell memo makes same-month targets amortize each other.
     let eng = propagation::make_predictor(&prop_engine, Some(me), station_power_w, ant_gain_dbi);
     let t = now_unix();
-    let out = tauri::async_runtime::spawn_blocking(move || {
-        targets
+    let (out, fell_back) = tauri::async_runtime::spawn_blocking(move || {
+        let windows = targets
             .into_iter()
             .map(|(call, dx, start_unix, end_unix)| {
                 let mut p = eng.predict(dx, t, &wx);
@@ -11362,6 +11373,7 @@ async fn get_dxped_windows(
                 DxpedWindow {
                     call,
                     engine: p.engine,
+                    engine_fallback: p.engine_fallback,
                     best,
                     outlook: p.bands,
                     days: days_out,
@@ -11369,14 +11381,18 @@ async fn get_dxped_windows(
                     end_unix,
                 }
             })
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        (windows, eng.fell_back())
     })
     .await
     .map_err(|e| e.to_string())?;
-    if let Ok(mut g) = DXPED_WINDOWS.lock() {
-        g.retain(|(when, _, _)| when.elapsed().as_secs() < DXPED_WINDOWS_TTL_SECS);
-        g.retain(|(_, k, _)| *k != key);
-        g.push((std::time::Instant::now(), key, out.clone()));
+    // A stand-in for an engine that could not run is not kept: the next ask tries again.
+    if !fell_back {
+        if let Ok(mut g) = DXPED_WINDOWS.lock() {
+            g.retain(|(when, _, _)| when.elapsed().as_secs() < DXPED_WINDOWS_TTL_SECS);
+            g.retain(|(_, k, _)| *k != key);
+            g.push((std::time::Instant::now(), key, out.clone()));
+        }
     }
     Ok(out)
 }

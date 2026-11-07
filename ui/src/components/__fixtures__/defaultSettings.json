@@ -188,7 +188,7 @@
   "maxPowerPhone": null,
   "maxPowerCw": null,
   "maxPowerDigital": null,
-  "propEngine": "heuristic",
+  "propEngine": "p533",
   "saveWav": "none",
   "lotwMaxAgeDays": 365,
   "antTxGainDbi": 0.0,

@@ -97,7 +97,11 @@ export function WorkNowCard({
           })}
           {timing ? ` · ${timing}` : ''}
           <span className="cp-engine">
-            {win.engine === 'p533' ? ENGINE_P533 : t('dxped.engine.modelled')}
+            {win.engineFallback
+              ? t('prop.engine.fallback')
+              : win.engine === 'p533'
+                ? ENGINE_P533
+                : t('dxped.engine.modelled')}
           </span>
           <button
             type="button"

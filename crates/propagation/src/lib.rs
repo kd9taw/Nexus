@@ -143,8 +143,8 @@ pub use pathgeo::{
 };
 pub use pota::{parse_pota_spots, parse_sota_spots, parse_wwff_spots, OtaSpot};
 pub use predict::{
-    band_outlook_ring, make_predictor, modeled_now, representative_muf, HeuristicEngine,
-    ModeledNow, PathPrediction, PathPredictor,
+    band_outlook_ring, make_predictor, modeled_now, representative_muf, with_fallback,
+    HeuristicEngine, ModeledNow, PathPrediction, PathPredictor,
 };
 pub use province::province_for_call;
 pub use pskr_mqtt::{

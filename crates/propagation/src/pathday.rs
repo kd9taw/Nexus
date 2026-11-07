@@ -386,6 +386,7 @@ mod tests {
             day: None,
             overlay: None,
             space_now: None,
+            engine_fallback: false,
         }
     }
 

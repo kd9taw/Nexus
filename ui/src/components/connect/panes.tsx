@@ -216,7 +216,11 @@ function renderSelection(c: PaneContext): ReactNode {
         <div className="cs-spot">
           {t('connect.selection.bestShot', { window: c.selDxpedWindow.best })}
           <span className="cp-engine">
-            {c.selDxpedWindow.engine === 'p533' ? ENGINE_P533 : t('connect.engine.modelled')}
+            {c.selDxpedWindow.engineFallback
+              ? t('prop.engine.fallback')
+              : c.selDxpedWindow.engine === 'p533'
+                ? ENGINE_P533
+                : t('connect.engine.modelled')}
           </span>
         </div>
       )}
@@ -261,7 +265,9 @@ function renderPath(c: PaneContext): ReactNode {
         {t('connect.path.heading', { call: c.selectedCall })}
         {p.engine && (
           <span className="cp-engine">
-            {p.engine === 'heuristic'
+            {p.engineFallback
+              ? t('prop.engine.fallback')
+              : p.engine === 'heuristic'
               ? t('connect.engine.modelled')
               : p.engine === 'p533'
                 ? ENGINE_P533
@@ -316,7 +322,9 @@ function renderOutlook(c: PaneContext): ReactNode {
     <section className="connect-path panel">
       <h3>
         {t('connect.outlook.heading')}
-        <span className="cp-engine">{t('connect.engine.outlook')}</span>
+        <span className="cp-engine">
+          {o.engineFallback ? t('prop.engine.fallback') : t('connect.engine.outlook')}
+        </span>
       </h3>
       <SpaceNowLine now={o.spaceNow} nowSec={Math.floor(Date.now() / 1000)} />
       {o.mufNow > 0 && (

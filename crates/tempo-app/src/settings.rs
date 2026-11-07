@@ -3214,9 +3214,11 @@ pub struct Settings {
     /// without a bench.
     #[serde(default = "default_max_power_am")]
     pub max_power_am: Option<f32>,
-    /// Path-prediction engine: "heuristic" (physics-lite, the default) or
-    /// "p533" (the native ITU-R P.533 engine). Unknown values fall back to
-    /// the heuristic in the factory, so old configs can never break.
+    /// Path-prediction engine: "p533" (the native ITU-R P.533 engine, the default) or
+    /// "heuristic" (physics-lite). Unknown values fall back to the heuristic in the factory, so
+    /// old configs can never break.
+    ///
+    /// Always written out, so a saved value alone does not say whether the operator chose it.
     #[serde(default = "default_prop_engine")]
     pub prop_engine: String,
     /// Save each received period's audio as a WAV: "none" (default) | "all"
@@ -4427,7 +4429,7 @@ fn default_lotw_max_age_days() -> u32 {
 }
 
 fn default_prop_engine() -> String {
-    "heuristic".to_string()
+    "p533".to_string()
 }
 
 fn default_qrz_sync_hours() -> u32 {
@@ -17137,6 +17139,42 @@ mod tests {
         );
         assert_eq!(bad.voice_esm_roles, None);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// A new install runs P.533, whether it starts from no file at all or from the defaults.
+    #[test]
+    fn a_new_install_predicts_with_p533() {
+        assert_eq!(Settings::default().prop_engine, "p533");
+        let path = scratch_dir("engine_new").join("settings.json");
+        assert_eq!(Settings::load(&path).prop_engine, "p533");
+    }
+
+    /// A file from before the setting existed has no key, so nobody can have chosen an engine in
+    /// it.
+    #[test]
+    fn a_file_without_the_engine_key_predicts_with_p533() {
+        let path = scratch_dir("engine_nokey").join("settings.json");
+        Settings::default().save(&path).unwrap();
+        let mut v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        v.as_object_mut().unwrap().remove("propEngine").unwrap();
+        std::fs::write(&path, v.to_string()).unwrap();
+        assert_eq!(Settings::load(&path).prop_engine, "p533");
+    }
+
+    /// Either engine named in a file survives a load and a save.
+    #[test]
+    fn a_saved_engine_choice_is_kept_through_a_round_trip() {
+        for engine in ["heuristic", "p533"] {
+            let path = scratch_dir(&format!("engine_kept_{engine}")).join("settings.json");
+            let mut s = Settings::default();
+            s.prop_engine = engine.to_string();
+            s.save(&path).unwrap();
+            let back = Settings::load(&path);
+            assert_eq!(back.prop_engine, engine);
+            back.save(&path).unwrap();
+            assert_eq!(Settings::load(&path).prop_engine, engine);
+        }
     }
 
     #[test]

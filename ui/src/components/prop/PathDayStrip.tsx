@@ -497,6 +497,7 @@ export function PathRegionsPane({
         className="regions"
         greyEnds="me"
       />
+      {data?.engineFallback && <div className="pd-modelled">{t('prop.engine.fallback')}</div>}
       <Legend hasLong={hasLong} showLong={hasLong && shown !== 'short'} />
     </div>
   )

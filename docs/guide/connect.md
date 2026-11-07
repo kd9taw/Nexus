@@ -444,7 +444,7 @@ leads with the top few; Chase Feed is the full ranked table.
 
 Click a station on the map (or in a pane) and the **Selection** and **Band
 Outlook** panes switch to *that call*: the modelled path, its MUF ceiling, and
-per-band workability. With the P.533 engine selected you also get per-mode
+per-band workability. With the P.533 engine, the default, you also get per-mode
 FT8/FT4/CW/SSB "workable now" chips.
 
 ![The Band Outlook pane retitled Path to G4XYZ, listing per-band workability, windows and per-mode chips.](../img/manual/connect-path-prediction.webp)
@@ -458,10 +458,12 @@ was solved for a real contact, and nobody reported this station.*
 ### Choose the prediction engine
 
 In [Settings ▸ Services](settings-reference.md#integrations--feeds),
-**Prediction engine** selects **Modelled (fast heuristic)** or **ITU-R P.533
-(full physics)**. P.533 is the real circuit-reliability method (validated
+**Prediction engine** selects **ITU-R P.533 (full physics, default)** or
+**Modelled (fast heuristic)**. P.533 is the real circuit-reliability method (validated
 against the ITU reference, ~0.1 s per prediction, and it uses your station power
-and antenna gain). **Live spots always win over any model.**
+and antenna gain). **Live spots always win over any model.** If P.533 cannot run,
+the pane shows the heuristic's answer and says "modelled: P.533 could not run" where
+the engine's name goes.
 
 ## The Now-Bar
 
@@ -474,9 +476,9 @@ hides the dashboard rail (above).
 
 ## Honest limits
 
-- **The per-path 24-hour outlook is a physics-lite in-house heuristic** (MUF +
-  D-layer) and is labelled "modelled." The P.533 engine is a fuller model but is
-  still a *model*; live spots override both.
+- **The per-path 24-hour outlook is a model.** P.533, the default, is a monthly
+  median: it does not change with today's Kp. The physics-lite heuristic (MUF +
+  D-layer) is labelled "modelled." Both are *models*; live spots override both.
 - **VOACAP is not integrated.**
 - **PSK Reporter's MQTT band topics carry no SNR**, so SNR-derived features
   degrade gracefully where the data isn't present.
