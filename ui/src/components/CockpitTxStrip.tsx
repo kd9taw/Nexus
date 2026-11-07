@@ -207,12 +207,19 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
             ? t('operate.strip.state.connectionNoTx')
             : radio.txEnabled
               ? t('operate.strip.state.receiving')
-              : catOff === 'lost'
-                ? t('operate.strip.state.txOffCatLost')
-                : catOff === 'back'
-                  ? t('operate.strip.state.txOffCatBack')
-                  : t('operate.strip.state.txOff')}
+              : t('operate.strip.state.txOff')}
       </span>
+      {/* Why transmit is off after a CAT outage: a zero-basis cell after the state, so it can never
+          wrap the strip or move a control (`.cockpit-txstrip-catnote`). Not beside the meters cell,
+          whose room it would share; the state's hover and the CAT status carry the words there. */}
+      {catOff && !lit && !radio.txRefusal && meters == null && (
+        <span
+          className="cockpit-txstrip-catnote cat-txoff-note"
+          title={catOff === 'lost' ? t('settings.rigControl.catSilentTxOff') : t('settings.rigControl.catBackTxOff')}
+        >
+          {catOff === 'lost' ? t('operate.strip.state.txOffCatLost') : t('operate.strip.state.txOffCatBack')}
+        </span>
+      )}
       {/* THE METERS' CELL, at the strip's right end (`.cockpit-txstrip-meters`): after the cluster and
           the TX state, so nothing it shows can move a control. Two rows at most, the strip's own
           height, and the same readings before and after a key-down (TxMeters `strip`). */}

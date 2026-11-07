@@ -360,11 +360,7 @@ export function OperateQsoStrip({
               ? t('operate.strip.state.connectionNoTx')
               : radio.txEnabled
                 ? t('operate.strip.state.receiving')
-                : catOff === 'lost'
-                  ? t('operate.strip.state.txOffCatLost')
-                  : catOff === 'back'
-                    ? t('operate.strip.state.txOffCatBack')
-                    : t('operate.strip.state.txOff')}
+                : t('operate.strip.state.txOff')}
         </span>
       )}
       {/* The rig has been moved out from under us — stated in the strip that is already always
@@ -495,7 +491,18 @@ export function OperateQsoStrip({
         </span>
       </form>
 
-      <span className="cq-spacer" />
+      {/* The strip's one absorber. Why transmit is off after a CAT outage rides in it: it is already a
+          zero-basis grower, so the words can never wrap the strip or move a control (`.cq-catnote`). */}
+      {catOff && !onAir && !radio?.txRefusal ? (
+        <span
+          className="cq-spacer cq-catnote cat-txoff-note"
+          title={catOff === 'lost' ? t('settings.rigControl.catSilentTxOff') : t('settings.rigControl.catBackTxOff')}
+        >
+          {catOff === 'lost' ? t('operate.strip.state.txOffCatLost') : t('operate.strip.state.txOffCatBack')}
+        </span>
+      ) : (
+        <span className="cq-spacer" />
+      )}
       {/* Active DXpedition mode badge — prominent, next to the period controls. */}
       {specialOpBadge}
       {rotor}

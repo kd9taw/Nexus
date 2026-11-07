@@ -45,53 +45,62 @@ function ft(over: Partial<RadioStatus>): Element {
       onSetHoldTxFreq={noop}
     />,
   )
-  return container.querySelector('.cq-statecap')!
+  return container.querySelector('.cockpit-qso')!
 }
 
 function other(over: Partial<RadioStatus>): Element {
   const { container } = render(<CockpitTxStrip radio={radio(over)} onSetTxEnabled={vi.fn()} onStopTx={vi.fn()} />)
-  return container.querySelector('.cq-statecap')!
+  return container.querySelector('.cockpit-txstrip')!
+}
+
+/** What the strip says: its TX state, and the words beside it (null when there are none). */
+const says = (strip: Element) => {
+  const words = strip.querySelector('.cat-txoff-note')
+  return {
+    state: strip.querySelector('.cq-statecap')!.textContent,
+    words: words?.textContent ?? null,
+    hover: words?.getAttribute('title') ?? null,
+  }
 }
 
 describe.each([
   ["FT's strip", ft],
   ["every other screen's strip", other],
-] as const)('%s', (_, state) => {
-  it('says transmit is off, why and what to press, with the whole sentence on hover', () => {
-    const s = state(LOST)
-    expect(s.textContent).toBe('■ TX off — CAT lost: press TX On')
-    expect(s.getAttribute('title')).toBe(SENTENCE)
+] as const)('%s', (_, strip) => {
+  it('keeps its TX state as it was, and says why and what to press beside it, with the whole sentence on hover', () => {
+    expect(says(strip(LOST))).toEqual({ state: '■ TX off', words: 'CAT lost: press TX On', hover: SENTENCE })
   })
 
-  it('in the operator\'s language', () => {
+  it("in the operator's language", () => {
     installCatalog('de', DE)
     setLocale('de')
-    const s = state(LOST)
-    expect(s.textContent).toBe(DE['operate.strip.state.txOffCatLost'])
-    expect(s.textContent).toContain('TX On')
-    expect(s.getAttribute('title')).toBe(DE['settings.rigControl.catSilentTxOff'])
+    expect(says(strip(LOST))).toEqual({
+      state: DE['operate.strip.state.txOff'],
+      words: DE['operate.strip.state.txOffCatLost'],
+      hover: DE['settings.rigControl.catSilentTxOff'],
+    })
   })
 
   it('keeps explaining once CAT is back, in words for that, until transmit is back on', () => {
     const back = { txEnabled: false, catOk: true, catDetail: `14.074 MHz ${EN['settings.rigControl.catBackTxOff']}` }
-    const s = state(back)
-    expect(s.textContent).toBe('■ TX off — CAT is back: press TX On')
-    expect(s.getAttribute('title')).toBe(EN['settings.rigControl.catBackTxOff'])
+    expect(says(strip(back))).toEqual({
+      state: '■ TX off',
+      words: 'CAT is back: press TX On',
+      hover: EN['settings.rigControl.catBackTxOff'],
+    })
     cleanup()
-    expect(state({ ...back, txEnabled: true }).textContent).toBe('▼ Receiving')
+    expect(says(strip({ ...back, txEnabled: true }))).toEqual({ state: '▼ Receiving', words: null, hover: null })
   })
 
-  it('goes when the status does, and when transmit is back on', () => {
-    expect(state({ txEnabled: false, catDetail: 'Connected — 14.074 MHz' }).textContent).toBe('■ TX off')
-    cleanup()
-    expect(state({ ...LOST, txEnabled: true }).textContent).toBe('▼ Receiving')
+  it('says nothing more for any other status', () => {
+    expect(says(strip({ txEnabled: false, catDetail: 'Connected — 14.074 MHz' })).words).toBeNull()
   })
 
   it('is second to the on-air sign and to a connection that transmits nothing', () => {
-    expect(state({ ...LOST, rigKeyed: true }).textContent).toBe(EN['operate.strip.state.transmitting'])
+    expect(says(strip({ ...LOST, rigKeyed: true }))).toEqual({
+      state: EN['operate.strip.state.transmitting'], words: null, hover: null,
+    })
     cleanup()
-    const refused = state({ ...LOST, txRefusal: 'This connection is receive only' })
-    expect(refused.textContent).toBe(EN['operate.strip.state.connectionNoTx'])
-    expect(refused.getAttribute('title')).toBe('This connection is receive only')
+    expect(says(strip({ ...LOST, txRefusal: 'This connection is receive only' })).words).toBeNull()
   })
 })
