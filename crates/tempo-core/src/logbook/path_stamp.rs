@@ -180,6 +180,107 @@ mod tests {
         .remove(0)
     }
 
+    /// Whether `adif` carries any of the graded path's three fields.
+    fn has_path(adif: &str) -> bool {
+        [PATH_FIELD, PATH_CONF_FIELD, PATH_WHY_FIELD]
+            .iter()
+            .any(|t| adif.contains(&format!("<{t}:")))
+    }
+
+    /// Every door out of Nexus, by its writer: each Logbook export, `log.adi` (the mirror and the
+    /// append), and the logging programs. None carries the graded path; the store keeps it.
+    #[test]
+    fn the_grade_leaves_by_no_door_and_the_store_keeps_it() {
+        use crate::logbook::mirror::mirror_adif;
+        use crate::logbook::sqlite::{LogDb, Resolved};
+        use crate::logbook::{adif_record_own_logger, Export, ExportKind, Logbook};
+        let mut r = parse_adif(
+            "<EOH><CALL:6>JA1ABC<QSO_DATE:8>20261030<TIME_ON:6>120000<BAND:3>20m<MODE:3>FT8\
+             <GRIDSQUARE:6>PM95vq<OPERATOR:5>K1ABC<MY_POTA_REF:7>US-1234<EOR>",
+        )
+        .remove(0);
+        stamp_path(&mut r, &grade(StampRoute::Long, Some(StampConf::Likely)));
+        let mut log = Logbook::new();
+        let id = log.add(r.clone());
+        let r = log
+            .records()
+            .iter()
+            .find(|x| x.id == Some(id))
+            .unwrap()
+            .as_ref()
+            .clone();
+        assert!(
+            has_path(&crate::logbook::adif_record_own_log(&r)),
+            "premise: graded"
+        );
+        let kinds = [
+            (
+                "all",
+                ExportKind::Adif {
+                    from: None,
+                    to: None,
+                },
+            ),
+            (
+                "csv",
+                ExportKind::Csv {
+                    from: None,
+                    to: None,
+                },
+            ),
+            ("operator", ExportKind::Operator("K1ABC".into())),
+            (
+                "activation",
+                ExportKind::Activation {
+                    reference: "US-1234".into(),
+                    day_start_unix: r.when_unix,
+                    callsign: Some("K1ABC".into()),
+                },
+            ),
+            ("selected", ExportKind::Selected([id].into_iter().collect())),
+        ];
+        for (what, kind) in kinds {
+            let mut e = Export::new(kind);
+            e.add(&r);
+            let out = e.finish();
+            assert!(out.contains("JA1ABC"), "{what}: the contact is in it");
+            assert!(!has_path(&out), "{what}: {out}");
+        }
+        let mirror = mirror_adif(&[std::sync::Arc::new(r.clone())]);
+        assert!(
+            mirror.contains("JA1ABC") && !has_path(&mirror),
+            "log.adi mirror"
+        );
+        let dir = std::env::temp_dir().join(format!("tempo_path_doors_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("log.adi");
+        Logbook::append_for_sync(&file, &r).unwrap().sync().unwrap();
+        let appended = std::fs::read_to_string(&file).unwrap();
+        assert!(
+            appended.contains("JA1ABC") && !has_path(&appended),
+            "log.adi append"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            !has_path(&adif_record_own_logger(&r)),
+            "DXKeeper and HRD Logbook"
+        );
+        assert!(
+            !has_path(&crate::logbook::adif_record(&r)),
+            "every service upload"
+        );
+        // The operator's log keeps it, through the store.
+        let mut db = LogDb::open_in_memory().unwrap();
+        db.insert(&r, Resolved::default()).unwrap();
+        let back = db.load_all().unwrap();
+        assert_eq!(
+            read_path(&back[0]),
+            read_path(&r),
+            "the store keeps the grade"
+        );
+    }
+
     fn grade(route: StampRoute, conf: Option<StampConf>) -> PathStamp {
         PathStamp {
             route,
@@ -258,7 +359,11 @@ mod tests {
         let back = parse_adif(&format!("<EOH>{own}")).remove(0);
         assert_eq!(back.extra, r.extra);
         assert_eq!(read_path(&back), read_path(&r));
-        assert_eq!(adif_record_own_logger(&r), own);
+        // Nothing that leaves Nexus carries it: not a logging program (DXKeeper, HRD Logbook)
+        // and not a file. Only the operator's log inside Nexus keeps it.
+        let file = crate::logbook::adif_record_own_file(&r);
+        assert_eq!(file, adif_record_own_log(&plain));
+        assert_eq!(adif_record_own_logger(&r), file);
         // What goes off the machine is exactly the ungraded contact.
         assert_eq!(adif_record(&r), adif_record(&plain));
         // An antenna path the operator set travels as any field they type.

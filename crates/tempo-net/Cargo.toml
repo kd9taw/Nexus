@@ -48,6 +48,9 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Com",
     "Win32_System_Ole",
     "Win32_System_Variant",
+    # A prediction thread below normal priority (`priority`): turned on by tempo-stream for the
+    # same call, so nothing new is compiled.
+    "Win32_System_Threading",
 ] }
 
 [features]

@@ -32,6 +32,9 @@ export interface Toast {
   /** An ALERT about the world — a decode, a spot, a band opening, space weather — that the app
    *  raised on its own. With pop-ups off it does not pop up (see `popsUpWhenOff`). */
   alert?: boolean
+  /** The operator closed it with ✕ (not its expiry, and not its action, which says what it did
+   *  itself): for a notice whose dismissal is recorded, such as the engine move's. */
+  onClose?: () => void
 }
 
 export interface ToastOptions {
@@ -41,6 +44,7 @@ export interface ToastOptions {
   secondaryAction?: () => void
   secondaryLabel?: string
   alert?: boolean
+  onClose?: () => void
 }
 
 type Listener = (toasts: Toast[]) => void

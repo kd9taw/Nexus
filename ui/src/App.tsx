@@ -254,7 +254,6 @@ import { ConfirmHost, confirmDialog } from './confirm'
 import { RemoteApprovalPrompt } from './remote-native/RemoteApprovalPrompt'
 import { LogbookSaving } from './components/LogbookSaving'
 import { OnboardingBanner } from './components/OnboardingBanner'
-import { PropEngineNote, propEngineNoteDismissed, rememberPropEngineNoteDismissed } from './components/PropEngineNote'
 import { PounceBanner } from './components/PounceBanner'
 import { UpdateBanner } from './components/UpdateBanner'
 import { ClientBanner } from './components/ClientBanner'
@@ -2823,6 +2822,25 @@ function App() {
     [handleSetMode, settings?.fdActive, snap?.mode],
   )
 
+  // The one-time notice after the move to P.533 (Settings::move_prop_engine_once): a sticky notice
+  // in the pop-up corner, which covers no transmit control in any corner and moves nothing in the
+  // cockpit. Raised once a run; the settings file is its only record, cleared by ✕ or by opening
+  // Settings from it (dismiss_prop_engine_note). A save that is refused shows it again next launch.
+  const engineNoteRaised = useRef(false)
+  useEffect(() => {
+    if (engineNoteRaised.current || !settings?.propEngineNoteDue || settings.propEngine !== 'p533') return
+    engineNoteRaised.current = true
+    const answered = () => void dismissPropEngineNote().catch(() => {})
+    pushToast(t('prop.engine.note'), 'info', 0, {
+      action: () => {
+        handleView('settings')
+        answered()
+      },
+      actionLabel: t('nav.settings.label'),
+      onClose: answered,
+    })
+  }, [settings, handleView])
+
   // ⭐ "WORK THIS CONTEST IN CW / IN PHONE" FROM A CONTEST WINDOW (features/contestWorkIn): the same switch
   // as the rail's, so the contest's S&P is entered where the session dropped and a station already in
   // the contest keeps its role, and then this window comes to the front, where the operator asked to be.
@@ -3005,13 +3023,6 @@ function App() {
     window.addEventListener(CONTEST_SETUP_SAVED_EVENT, handleSettingsSaved)
     return () => window.removeEventListener(CONTEST_SETUP_SAVED_EVENT, handleSettingsSaved)
   }, [handleSettingsSaved])
-
-  const [engineNoteDismissed, setEngineNoteDismissed] = useState(propEngineNoteDismissed)
-  const handleDismissEngineNote = useCallback(() => {
-    rememberPropEngineNoteDismissed()
-    setEngineNoteDismissed(true)
-    void dismissPropEngineNote().catch(() => {})
-  }, [])
 
   const handleDismissOnboarding = useCallback(() => {
     localStorage.setItem(ONBOARD_KEY, '1')
@@ -4394,10 +4405,6 @@ function App() {
           onOpenSettings={() => handleView('settings')}
           onDismiss={handleDismissOnboarding}
         />
-      )}
-
-      {settings?.propEngineNoteDue && settings.propEngine === 'p533' && !engineNoteDismissed && (
-        <PropEngineNote onOpenSettings={() => handleView('settings')} onDismiss={handleDismissEngineNote} />
       )}
 
       {reveal.pending && (

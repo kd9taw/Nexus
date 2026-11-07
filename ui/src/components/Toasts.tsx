@@ -215,7 +215,7 @@ export function Toasts() {
               </button>
             </RToast.Action>
           )}
-          <RToast.Close className="ui-toast-close" aria-label={t('toast.dismiss')}>
+          <RToast.Close className="ui-toast-close" aria-label={t('toast.dismiss')} onClick={() => toast.onClose?.()}>
             ×
           </RToast.Close>
         </RToast.Root>

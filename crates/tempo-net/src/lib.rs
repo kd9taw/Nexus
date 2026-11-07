@@ -59,6 +59,7 @@ pub mod log_intake;
 pub mod mqtt;
 pub mod n1mm;
 pub mod n3fjp;
+pub mod priority;
 pub mod pskreporter;
 pub mod qds;
 pub mod sdrconnect;

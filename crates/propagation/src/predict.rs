@@ -352,6 +352,16 @@ impl<P: PathPredictor> PathPredictor for WithFallback<P> {
     }
 }
 
+/// The grade words, lowest first, as [`Workability`] labels them.
+const WORDS: [&str; 5] = ["Closed", "Marginal", "Fair", "Good", "Excellent"];
+
+fn word_rank(label: &str) -> u8 {
+    WORDS
+        .iter()
+        .position(|w| *w == label)
+        .map_or(0, |i| i as u8)
+}
+
 /// Instantaneous, model-only band openness "right now" (NOT a 24 h peak): for each HF
 /// band, the BEST [`PathModel::score`] to any of `n_dirs` azimuths at `dist_km` — i.e.
 /// "is this band open to DX in SOME direction now", derivable with ZERO observed spots.
@@ -422,12 +432,16 @@ pub fn band_outlook_ring(
     let mut muf_hourly = vec![0f32; 24];
     let mut engine_fallback = false;
     let mut storm = None;
+    // Each band's word toward each direction, P.533's only (see below).
+    let mut words: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut all_p533 = true;
     for i in 0..n {
         let brg = (i as f64) * 360.0 / (n as f64);
         let dx = crate::geo::destination_point(me, brg, dist_km);
         let p = eng.predict(dx, now, wx);
         engine_fallback |= p.engine_fallback;
         crate::storm::StormNote::fold(&mut storm, p.storm);
+        all_p533 &= p.engine == "p533";
         muf_now = muf_now.max(p.muf_now);
         for (h, slot) in muf_hourly.iter_mut().enumerate() {
             if let Some(&m) = p.muf_hourly.get(h) {
@@ -438,6 +452,10 @@ pub fn band_outlook_ring(
             // The ring's bands answer "which band, any direction": one azimuth's hop
             // geometry would be read as THE path's, so it is not carried.
             bo.detail = None;
+            words
+                .entry(bo.band.clone())
+                .or_default()
+                .push(word_rank(&bo.workability));
             best.entry(bo.band.clone())
                 .and_modify(|e| {
                     if bo.score > e.score {
@@ -448,6 +466,20 @@ pub fn band_outlook_ring(
         }
     }
     let mut bands: Vec<BandOutlook> = best.into_values().collect();
+    // P.533's word for the ring is the one a band reaches toward at least half the directions.
+    // Its best direction alone reads Good or Excellent on nearly every band at almost any power,
+    // since some direction carries CW at some hour of the day: the all-alike outlook the grade
+    // exists to avoid. The hours, the heat map and the timing stay the best direction's. The
+    // heuristic keeps its own words, as before.
+    if all_p533 {
+        for bo in &mut bands {
+            if let Some(v) = words.get_mut(&bo.band) {
+                v.sort_unstable_by(|a, b| b.cmp(a));
+                let k = v.len().div_ceil(2);
+                bo.workability = WORDS[usize::from(v[k - 1])].to_string();
+            }
+        }
+    }
     bands.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
@@ -538,6 +570,65 @@ mod tests {
         assert!(ring.engine_fallback);
         assert_eq!(ring.engine, "heuristic");
         assert!(!ring.bands.is_empty());
+    }
+
+    /// P.533's ring reads the word a band reaches toward at least half the directions, so it is
+    /// not one word for every band; its hours stay the best direction's.
+    #[test]
+    fn a_p533_ring_is_graded_toward_half_the_directions() {
+        let wx = SpaceWx::default();
+        let me = (42.1, -88.0);
+        let t = 1_794_009_600 + 21 * 3600;
+        let eng = make_predictor("p533", Some(me), Some(100.0), 0.0);
+        let ring = band_outlook_ring(eng.as_ref(), me, 9000.0, 8, t, &wx);
+        let words: std::collections::HashSet<_> =
+            ring.bands.iter().map(|b| b.workability.as_str()).collect();
+        assert!(words.len() >= 3, "a spread of words: {words:?}");
+        let most = words
+            .iter()
+            .map(|w| ring.bands.iter().filter(|b| b.workability == *w).count())
+            .max()
+            .unwrap();
+        assert!(
+            most <= 6,
+            "no one word for most bands: {most} of {}",
+            ring.bands.len()
+        );
+        assert!(
+            !words.contains("Excellent"),
+            "no band is Excellent toward half the world at 100 W"
+        );
+        let best = |band: &str| {
+            (0..8)
+                .map(|k| {
+                    let dx = crate::geo::destination_point(me, f64::from(k) * 45.0, 9000.0);
+                    let p = eng.predict(dx, t, &wx);
+                    p.bands.iter().find(|b| b.band == band).unwrap().score
+                })
+                .fold(0.0f32, f32::max)
+        };
+        let b20 = ring.bands.iter().find(|b| b.band == "20m").unwrap();
+        assert!(
+            (b20.score - best("20m")).abs() < 1e-6,
+            "the hours are the best direction's"
+        );
+    }
+
+    /// The heuristic's ring keeps the heuristic's own words.
+    #[test]
+    fn the_heuristic_ring_keeps_its_own_words() {
+        let wx = SpaceWx::default();
+        let me = (42.1, -88.0);
+        let t = 1_794_009_600 + 21 * 3600;
+        let ring = band_outlook_ring(&HeuristicEngine::new(Some(me)), me, 9000.0, 8, t, &wx);
+        for b in &ring.bands {
+            assert_eq!(
+                b.workability,
+                Workability::from_score(b.score).label(),
+                "{}",
+                b.band
+            );
+        }
     }
 
     #[test]

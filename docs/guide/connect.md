@@ -485,8 +485,13 @@ hides the dashboard rail (above).
 - **The power P.533 assumes is shown under the answer:** your Station power
   setting; else the power your radio measured on your last transmission (with an
   amplifier set up, the amplifier's output); else 100 W, said as such.
-- **The Band Advisor still uses the physics-lite heuristic** for a band nobody has
-  been heard on, and says so in its caption. Both are *models*; live spots
+- **The Band Advisor and the DXpedition cards' "work now" status still use the
+  physics-lite heuristic** for a band nobody has been heard on; the Band Advisor
+  says so in its caption.
+- **Band Outlook's words under P.533 follow the modes a band carries** at its best
+  hour: Excellent when SSB is usable on three days in four, Good for CW, Fair when
+  FT8 is usable on half the days, Marginal at one day in ten. The outlook to DX
+  reads the word a band reaches toward at least half the directions. Both are *models*; live spots
   override both.
 - **VOACAP is not integrated.**
 - **PSK Reporter's MQTT band topics carry no SNR**, so SNR-derived features

@@ -118,7 +118,6 @@ const MIGRATED = [
   'components/SettingsClusterNodes.tsx',
   'components/SettingsSearch.tsx',
   'components/OnboardingBanner.tsx',
-  'components/PropEngineNote.tsx',
   'components/prop/ModelBasis.tsx',
   'components/RevealNudge.tsx',
   // Client mode (2026-10-07) — born migrated: the banner of a computer driving another station,

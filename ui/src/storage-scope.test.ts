@@ -200,7 +200,6 @@ export const PER_SURFACE = [
 /** Keys that describe the STATION or the PERSON and must never be scoped. Listed rather
  *  than inferred so a failure names the key that leaked. */
 const SHARED = [
-  'nexus.propEngineNoteDismissed',
   // SSTV's "My picture already shows my callsign", remembered per picture by the hash of its bytes
   // (features/sstvIdInImage): a fact about a picture, so the same in every window.
   'nexus.sstv.idInImage',

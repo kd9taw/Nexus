@@ -10076,7 +10076,7 @@ async fn get_path_outlook(
         &wx,
     );
     let key = with_storm_key(key, t, kp_now, forecast.as_ref());
-    tauri::async_runtime::spawn_blocking(move || {
+    below_normal(move || {
         let (mut pred, long) = match keep.then(|| path_outlook::get(&key)).flatten() {
             Some((mut sp, mut lp)) => {
                 path_outlook::refresh_now(&mut sp, t);
@@ -10135,7 +10135,6 @@ async fn get_path_outlook(
         pred
     })
     .await
-    .map_err(|e| e.to_string())
 }
 
 /// The path grade of each Logbook row asked about: its own stamp when it carries one made for its
@@ -10259,13 +10258,12 @@ async fn get_path_regions(
         wx,
         forecast,
     };
-    tauri::async_runtime::spawn_blocking(move || {
+    below_normal(move || {
         let mut view = path_regions::serve(ask, &path_regions::file_path());
         view.power = Some(power);
         view
     })
     .await
-    .map_err(|e| e.to_string())
 }
 
 /// The band advice of a served snapshot (fresh, or cached at any age), made for `now`: the
@@ -11081,6 +11079,54 @@ pub(crate) fn ssn_key(wx: &propagation::SpaceWx) -> String {
 }
 
 /// The ring outlook's cache key: UTC day, grid, gain, power and the sunspot number the engine runs on.
+/// Run `f`, a path prediction, on a thread of its own below normal priority
+/// ([`tempo_net::priority`]), and hand back its answer. A burst of predictions (a cold region
+/// sweep, the DXpedition planner, a run of station clicks) then yields the CPU to the decoder and
+/// the radio loop. Its own thread rather than the blocking pool's, because a lowered thread cannot
+/// raise itself again, and a pool thread runs other work next. A prediction that panics past its
+/// own fallback ends its thread, and this says so rather than waiting.
+async fn below_normal<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("prediction".into())
+        .spawn(move || {
+            tempo_net::priority::lower_this_thread();
+            let _ = tx.send(f());
+        })
+        .map_err(|e| e.to_string())?;
+    rx.await
+        .map_err(|_| "the prediction ended without an answer".to_string())
+}
+
+#[cfg(test)]
+mod below_normal_tests {
+    /// The answer comes back; a panic comes back as an error, never a wait.
+    #[test]
+    fn a_prediction_on_its_own_thread_answers_or_says_it_could_not() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        assert_eq!(rt.block_on(super::below_normal(|| 6 * 7)), Ok(42));
+        let failed: Result<u8, String> = rt.block_on(super::below_normal(|| panic!("on purpose")));
+        assert!(failed.is_err());
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            rt.block_on(super::below_normal(nice_of_this_thread)),
+            Ok(19)
+        );
+    }
+
+    /// The calling thread's nice: field 19 of `/proc/thread-self/stat`.
+    #[cfg(target_os = "linux")]
+    fn nice_of_this_thread() -> i32 {
+        let stat = std::fs::read_to_string("/proc/thread-self/stat").unwrap();
+        let after = &stat[stat.rfind(')').unwrap() + 2..];
+        after.split(' ').nth(16).unwrap().parse().unwrap()
+    }
+}
+
 /// The power a P.533 answer assumes ([`tempo_app::engine::Engine::prediction_power`]), as the
 /// answer carries it to the screen.
 fn assumed_power(eng: &tempo_app::engine::Engine) -> propagation::AssumedPower {
@@ -11191,11 +11237,9 @@ async fn ring_prediction(
             }
         }
     }
-    let out = tauri::async_runtime::spawn_blocking(move || {
-        propagation::band_outlook_ring(eng.as_ref(), me, 9000.0, 8, t, &wx)
-    })
-    .await
-    .map_err(|e| e.to_string())?;
+    let out =
+        below_normal(move || propagation::band_outlook_ring(eng.as_ref(), me, 9000.0, 8, t, &wx))
+            .await?;
     // A stand-in for an engine that could not run is not kept: the next ask tries again.
     if !out.engine_fallback {
         if let Ok(mut g) = RING_OUTLOOK.lock() {
@@ -11433,7 +11477,7 @@ async fn get_dxped_windows(
         kp_now,
         forecast,
     );
-    let (out, fell_back) = tauri::async_runtime::spawn_blocking(move || {
+    let (out, fell_back) = below_normal(move || {
         let windows = targets
             .into_iter()
             .map(|(call, dx, start_unix, end_unix)| {
@@ -11518,8 +11562,7 @@ async fn get_dxped_windows(
             .collect::<Vec<_>>();
         (windows, eng.fell_back())
     })
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
     // A stand-in for an engine that could not run is not kept: the next ask tries again.
     if !fell_back {
         if let Ok(mut g) = DXPED_WINDOWS.lock() {
@@ -53929,12 +53972,8 @@ mod tests {
         assert!(r.unassisted);
     }
 
-    /// The settings backup's stated contract is that it CARRIES NO SECRETS, and
-    /// `command_dispatch::SECRET_SETTINGS` can only name credentials this build knows about. With
-    /// `Settings::unknown` preserving a newer build's keys through save/load, an API key that
-    /// build added would otherwise be copied straight into a file the operator is told is safe
-    /// to email — so the export drops every preserved key, identified from the live settings
-    /// rather than guessed from its name.
+    /// A restore makes the one-time move to P.533 for a backup with no marker, note included, as an
+    /// upgraded settings file does; a backup with the marker keeps its engine.
     #[test]
     fn a_backup_from_before_the_engine_move_is_moved_and_one_from_after_is_not() {
         let bundle = |engine: Option<&str>, moved: Option<bool>| {
@@ -53962,6 +54001,12 @@ mod tests {
         }
     }
 
+    /// The settings backup's stated contract is that it CARRIES NO SECRETS, and
+    /// `command_dispatch::SECRET_SETTINGS` can only name credentials this build knows about. With
+    /// `Settings::unknown` preserving a newer build's keys through save/load, an API key that
+    /// build added would otherwise be copied straight into a file the operator is told is safe
+    /// to email — so the export drops every preserved key, identified from the live settings
+    /// rather than guessed from its name.
     #[test]
     fn an_exported_bundle_carries_neither_a_known_credential_nor_a_newer_builds_keys() {
         let mut s = tempo_app::settings::Settings {

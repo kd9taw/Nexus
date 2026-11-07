@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::geo;
 use crate::kpforecast::KpForecast;
-use crate::likelihood::{mode_now_at, PathModel, Workability};
+use crate::likelihood::{mode_now_at, PathModel};
 use crate::model::{Band, SpaceWx};
 use crate::pathgeo::KpSource;
 use crate::predict::{PathPrediction, PathPredictor};
@@ -203,7 +203,9 @@ impl StormCorrected {
             b.window = window;
             b.grayline = grayline;
             b.score = peak;
-            b.workability = Workability::from_score(peak).label().to_string();
+            b.workability = crate::p533::engine::p533_workability(&b.mode_hourly, peak)
+                .label()
+                .to_string();
             b.reliability = hourly.iter().filter(|&&s| s >= usable).count() as f32 / 24.0 * 100.0;
             if !b.mode_hourly.is_empty() {
                 b.mode_now = mode_now_at(&b.mode_hourly, now_hour);
@@ -404,7 +406,10 @@ mod tests {
         for b in &p.bands {
             let peak = b.hourly.iter().copied().fold(0.0f32, f32::max);
             assert!((b.score - peak).abs() < 1e-6, "{}", b.band);
-            assert_eq!(b.workability, Workability::from_score(peak).label());
+            assert_eq!(
+                b.workability,
+                crate::p533::engine::p533_workability(&b.mode_hourly, peak).label()
+            );
         }
         assert!(band(&p, "20m").score < 0.3, "the storm closes 20m all day");
         assert!(!p.storm.unwrap().hours_without_kp);

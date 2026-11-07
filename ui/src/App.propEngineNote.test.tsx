@@ -1,13 +1,17 @@
 // @vitest-environment jsdom
 //
 // THE NOTE AFTER THE MOVE TO P.533, IN THE REAL APP: shown once to a station the move changed, as a
-// line above the shell and never over anything in it, and gone for good when dismissed.
+// sticky notice in the pop-up corner. It moves nothing: every Stop TX in the cockpit keeps exactly
+// its place in the page with the notice up, at launch and at its dismissal (a press aimed at Stop
+// must never land on something else because a line appeared or went). jsdom has no geometry, so
+// this holds the STRUCTURE: the controls' place in the tree and the app's in-flow children. The
+// corner itself was proven clear of every transmit control in a real browser.
 //   · CONTROL: not due (a new install, or a station already on P.533): no note.
 //   · CONTROL: due, but the operator has since gone back to the heuristic: no note.
-//   · CONTROL: dismissed where the settings file could not record it: no note at the next launch.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, cleanup, waitFor, fireEvent } from '@testing-library/react'
+import { render, cleanup, waitFor, fireEvent, within } from '@testing-library/react'
 import App from './App'
+import { dismissToast, subscribeToasts } from './toast'
 import { allFeatureIds } from './features/registry'
 import { pastTheSwitch } from './components/ConnectView.testkit'
 import defaultSettings from './components/__fixtures__/defaultSettings.json'
@@ -89,6 +93,8 @@ beforeEach(() => {
 })
 afterEach(() => {
   cleanup()
+  // The toast bus outlives a render: a notice one test leaves up must not answer for the next.
+  subscribeToasts((list) => list.forEach((x) => dismissToast(x.id)))()
   delete window.__TAURI_INTERNALS__
   window.history.replaceState(null, '', '/')
 })
@@ -101,22 +107,53 @@ async function launch(over: Record<string, unknown>): Promise<void> {
   await waitFor(() => expect(document.querySelector('.shell')).toBeTruthy(), { timeout: 15_000 })
 }
 
-/** The note, once the settings have had time to arrive. */
+/** The notice, wherever it is drawn. */
 const note = () =>
-  [...document.querySelectorAll<HTMLElement>('[role="note"]')].find((n) => n.textContent?.includes('now use P.533'))
+  [...document.querySelectorAll<HTMLElement>('.ui-toast')].find((n) => n.textContent?.includes('now use P.533'))
 
-/** Long enough for the settings answer to land: a note that is coming has come. */
+/** Long enough for the settings answer to land: a notice that is coming has come. */
 const settled = () => new Promise((r) => setTimeout(r, 300))
 
+/** Each Stop control's place in the page: the path of child indexes from <body>, and the app's own
+ *  in-flow children. Identical with and without the notice means nothing before it moved. */
+function places(): { stops: string[]; app: string[] } {
+  const path = (el: Element): string => {
+    const steps: number[] = []
+    for (let e: Element | null = el; e && e !== document.body; e = e.parentElement) {
+      steps.unshift(e.parentElement ? [...e.parentElement.children].indexOf(e) : 0)
+    }
+    return steps.join('.')
+  }
+  const stops = [...document.querySelectorAll<HTMLElement>('.shell button')]
+    .filter((b) => /stop/i.test(`${b.textContent} ${b.getAttribute('aria-label') ?? ''} ${b.title}`))
+    .map((b) => `${b.textContent?.trim()}@${path(b)}`)
+  const app = [...(document.querySelector('.app')?.children ?? [])]
+    .filter((c) => !c.closest('.ui-toast-viewport'))
+    .map((c) => `${c.tagName}.${c.className}`)
+  return { stops, app }
+}
+
 describe('the note after the move to P.533, in the app', () => {
-  it('shows above the shell and outside it, and is gone for good once dismissed', async () => {
+  it('is a notice in the pop-up corner that moves no Stop control, up or dismissed', async () => {
+    await launch({ propEngine: 'p533', propEngineNoteDue: false })
+    await settled()
+    const without = places()
+    expect(without.stops.length, 'control: the cockpit draws its Stop controls').toBeGreaterThan(0)
+    cleanup()
     await launch({ propEngine: 'p533', propEngineNoteDue: true })
     await waitFor(() => expect(note()).toBeTruthy(), { timeout: 15_000 })
-    const line = note()!
-    expect(line.closest('.shell'), 'over nothing in the shell').toBeNull()
-    expect(line.compareDocumentPosition(document.querySelector('.shell')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    fireEvent.click(line.querySelector('.onboarding-dismiss')!)
+    expect(note()!.closest('.ui-toast-viewport'), 'in the pop-up corner').toBeTruthy()
+    expect(places(), 'nothing moved with the notice up').toEqual(without)
+    fireEvent.click(within(note()!).getByRole('button', { name: /dismiss/i }))
     await waitFor(() => expect(note()).toBeUndefined())
+    await waitFor(() => expect(dismissals).toBe(1))
+    expect(places(), 'nothing moved at its dismissal').toEqual(without)
+  })
+
+  it('opening Settings from it answers it too', async () => {
+    await launch({ propEngine: 'p533', propEngineNoteDue: true })
+    await waitFor(() => expect(note()).toBeTruthy(), { timeout: 15_000 })
+    fireEvent.click(within(note()!).getByRole('button', { name: /settings/i }))
     await waitFor(() => expect(dismissals).toBe(1))
   })
 
@@ -128,13 +165,6 @@ describe('the note after the move to P.533, in the app', () => {
 
   it('stays away once the operator has gone back to the heuristic', async () => {
     await launch({ propEngine: 'heuristic', propEngineNoteDue: true })
-    await settled()
-    expect(note()).toBeUndefined()
-  })
-
-  it('stays away after a dismissal the settings file could not record', async () => {
-    localStorage.setItem('nexus.propEngineNoteDismissed', '1')
-    await launch({ propEngine: 'p533', propEngineNoteDue: true })
     await settled()
     expect(note()).toBeUndefined()
   })
