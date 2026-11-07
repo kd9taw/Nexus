@@ -3025,6 +3025,12 @@ export async function saveTextToDownloads(filename: string, text: string): Promi
   return invoke<string>('save_text_to_downloads', { filename, text })
 }
 
+/** Show a file saved by saveTextToDownloads in the file manager. False when it is no longer in
+ *  Downloads (moved, renamed or deleted); rejects when no file manager or folder could be opened. */
+export async function revealInDownloads(filename: string): Promise<boolean> {
+  return invoke<boolean>('reveal_in_downloads', { filename })
+}
+
 /** Save As: the OS save dialog, opening in Downloads with `filename` filled in, then the text
  *  written where the operator picked. The saved path, or null when the dialog was cancelled. */
 export async function saveTextAs(filename: string, text: string): Promise<string | null> {

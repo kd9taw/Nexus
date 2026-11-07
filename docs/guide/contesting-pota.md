@@ -594,6 +594,24 @@ it reminds you of a `K-` reference, contacts that carried no grid, a state line 
 picked, and that the files are yours to upload at pota.app. Nothing is ticked to begin with;
 **Keep activating** changes nothing.
 
+### Sending the file to POTA
+
+**Logbook ▸ Export activation** writes the same file for the park-day you pick. Once it has,
+**Open POTA's upload page** appears beside it. One click opens POTA's *My Log Uploads* page in your
+browser and shows the file in its folder, on Windows, Mac and Linux, with nothing to set up. Some
+Linux desktops open the folder without selecting the file.
+
+The next step is yours: log in to POTA there and drop the file on the page, or choose it. Nexus
+holds no POTA login and sends nothing to POTA, so it never hears whether the log arrived. POTA's
+page is where you find that out.
+
+You don't need this button at the park. With no internet the browser just can't load the page, and
+the file stays in Downloads for when you are back online. The button goes when you pick another
+activation or leave Nexus; pick the activation and export it again to bring it back. If the file
+has been moved, renamed or deleted, Nexus says so, and **Export activation** writes it again. If
+Nexus can't open a browser, it gives you the address to type; if it can't open a file manager, it
+tells you where the file is.
+
 ## Honest limits
 
 - **The POTA/SOTA section is hunter-only** — Nexus helps you *chase* activators;

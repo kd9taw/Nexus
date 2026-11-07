@@ -1606,6 +1606,20 @@ export const EN = {
   'logbook.export.activation.button': 'Export activation',
   'logbook.export.activation.buttonTitle':
     'Save the selected activation as an ADIF named the way POTA asks. Ignores the date range — an activation is already one park on one UTC day',
+  // The way from that file to POTA's own upload page. Nexus opens a page and shows a file; it has
+  // no POTA login and hears nothing back, so none of these may say the log has gone. "My Log
+  // Uploads" is the name of POTA's page and stays in English.
+  'logbook.export.potaUpload.button': "Open POTA's upload page",
+  'logbook.export.potaUpload.title':
+    "Open My Log Uploads on pota.app in your browser and show this file in its folder. You log in and drop the file there: Nexus sends nothing to POTA. It needs internet, and it can wait until you have it: the file stays in Downloads",
+  'logbook.export.potaUpload.next':
+    "Your browser is opening POTA's My Log Uploads page, and {{filename}} is showing in its folder. Next, log in there and drop the file on the page, or choose it. Nothing has gone to POTA yet. No internet here? Do it later: the file stays in Downloads.",
+  'logbook.export.potaUpload.noBrowser':
+    'Nexus could not open your browser. Go to {{url}}, log in, and drop {{filename}} on the page, or choose it. Nothing has gone to POTA yet.',
+  'logbook.export.potaUpload.moved':
+    '{{filename}} is not in Downloads any more: it was moved, renamed or deleted. Press Export activation to write it again, or use the copy you moved.',
+  'logbook.export.potaUpload.noFileManager':
+    "Nexus could not open your file manager. The file is at {{path}}. Log in on POTA's page and drop it there, or choose it. Nothing has gone to POTA yet.",
 
   'logbook.lotw.upload.label': 'Upload to LoTW',
   'logbook.lotw.upload.labelCount': 'Upload to LoTW ({{count}})',

@@ -23345,6 +23345,107 @@ fn save_text_to_downloads(
     Ok(path.display().to_string())
 }
 
+/// `filename` in `dir` if it is a file there now. Reduced to its bare name first, as
+/// [`save_text_to_downloads`] reduces what it writes, so this can never look outside `dir`.
+/// `Ok(None)` is the file having been moved, renamed or deleted; an unusable name is an error.
+fn file_in_dir(dir: &Path, filename: &str) -> Result<Option<PathBuf>, String> {
+    let name = Path::new(filename).file_name().ok_or("Invalid file name")?;
+    let path = dir.join(name);
+    Ok(path.is_file().then_some(path))
+}
+
+#[cfg(test)]
+mod file_in_dir_tests {
+    use super::file_in_dir;
+
+    /// A folder of this test's own, with a file `name` in it, removed at the end of the test.
+    struct Folder(std::path::PathBuf);
+    impl Folder {
+        fn with_file(test: &str, name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("nexus-{test}-{}", std::process::id()));
+            std::fs::create_dir_all(dir.join("inner")).unwrap();
+            std::fs::write(dir.join(name), "x").unwrap();
+            Folder(dir)
+        }
+    }
+    impl Drop for Folder {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn finds_the_file_written_under_pota_s_name() {
+        let f = Folder::with_file("found", "KD9TAW@US-1234-20260909.adi");
+        assert_eq!(
+            file_in_dir(&f.0, "KD9TAW@US-1234-20260909.adi"),
+            Ok(Some(f.0.join("KD9TAW@US-1234-20260909.adi")))
+        );
+    }
+
+    #[test]
+    fn a_file_moved_away_is_none_and_not_an_error() {
+        let f = Folder::with_file("moved", "other.adi");
+        assert_eq!(file_in_dir(&f.0, "KD9TAW@US-1234-20260909.adi"), Ok(None));
+    }
+
+    #[test]
+    fn a_folder_of_that_name_is_not_the_file() {
+        let f = Folder::with_file("folder", "other.adi");
+        assert_eq!(file_in_dir(&f.0, "inner"), Ok(None));
+    }
+
+    /// The webview names the file, so the name must not reach outside Downloads: a path is reduced
+    /// to its last part, and a file that exists only outside the folder is not found.
+    #[test]
+    fn a_path_cannot_reach_outside_the_folder() {
+        let f = Folder::with_file("escape", "inside.adi");
+        let inner = f.0.join("inner");
+        assert_eq!(file_in_dir(&inner, "../inside.adi"), Ok(None));
+        assert_eq!(
+            file_in_dir(&inner, &f.0.join("inside.adi").display().to_string()),
+            Ok(None)
+        );
+        assert_eq!(
+            file_in_dir(&f.0, "elsewhere/inside.adi"),
+            Ok(Some(f.0.join("inside.adi")))
+        );
+    }
+
+    #[test]
+    fn a_name_with_no_file_part_is_refused() {
+        let f = Folder::with_file("noname", "other.adi");
+        for bad in ["", "..", "/"] {
+            assert!(file_in_dir(&f.0, bad).is_err(), "{bad:?} must be refused");
+        }
+    }
+}
+
+/// Show a file [`save_text_to_downloads`] wrote in the file manager, for the Logbook's way on to
+/// POTA's upload page. Opens no browser and sends nothing. `Ok(false)` when the file is no longer
+/// in Downloads, so the UI can say so; if it cannot be selected in the file manager (a Linux
+/// desktop with no D-Bus file manager, say), its folder is opened instead, as `reveal_all_txt`
+/// does; `Err` only when neither would open.
+#[tauri::command]
+fn reveal_in_downloads(app: tauri::AppHandle, filename: String) -> Result<bool, String> {
+    use tauri::Manager;
+    use tauri_plugin_opener::OpenerExt;
+    let dir = app
+        .path()
+        .download_dir()
+        .or_else(|_| app.path().home_dir())
+        .map_err(|e| format!("Could not locate your Downloads folder: {e}"))?;
+    let Some(path) = file_in_dir(&dir, &filename)? else {
+        return Ok(false);
+    };
+    if app.opener().reveal_item_in_dir(&path).is_err() {
+        app.opener()
+            .open_path(dir.to_string_lossy().to_string(), None::<&str>)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(true)
+}
+
 /// Save As for the settings backup (#306): the OS save dialog, opening in Downloads (as
 /// [`save_text_to_downloads`] finds it) with `filename` reduced to its bare name and filled in,
 /// then `text` written wherever the operator picked. `None` when the dialog is cancelled or
@@ -52210,6 +52311,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         export_general_log,
         export_selected_log,
         save_text_to_downloads,
+        reveal_in_downloads,
         save_text_as,
         save_png_to_downloads,
         civ_diagnostic_log,
