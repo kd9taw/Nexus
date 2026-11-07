@@ -46,7 +46,7 @@ beforeEach(() => {
   vi.mocked(pushToast).mockClear()
   vi.mocked(api.getSnapshot).mockResolvedValue(APP_SNAPSHOT as never)
   vi.mocked(api.getSettings).mockImplementation(async () => ({ ...defaultSettings }) as never)
-  for (const verb of [api.workSpot, api.sstvTune, api.aprsTune, api.setSidebandOverride]) {
+  for (const verb of [api.workSpot, api.sstvTuneRecall, api.aprsTune, api.setSidebandOverride]) {
     vi.mocked(verb).mockReset()
     vi.mocked(verb).mockResolvedValue(APP_SNAPSHOT as never)
   }
@@ -56,7 +56,7 @@ afterEach(cleanup)
 describe('the pop-out’s recall', () => {
   it('SSTV: tunes with the SSTV verb and asks the main window to open it', async () => {
     await recall({ rxMhz: 144.8875, mode: 'FM', screen: 'sstv' })
-    expect(api.sstvTune).toHaveBeenCalledExactlyOnceWith(144.8875, '2m', 'FM')
+    expect(api.sstvTuneRecall).toHaveBeenCalledExactlyOnceWith(144.8875, '2m', 'FM')
     expect(api.workSpot).not.toHaveBeenCalled()
     expect(asked()).toBe('sstv')
   })
@@ -96,7 +96,7 @@ describe('the pop-out’s recall', () => {
   it('a recorded screen switched off falls back, and asks nothing', async () => {
     localStorage.setItem('nexus.features.v1', JSON.stringify({ profile: 'custom', enabled: { sstv: false } }))
     await recall({ rxMhz: 146.52, mode: 'FM', screen: 'sstv' })
-    expect(api.sstvTune).not.toHaveBeenCalled()
+    expect(api.sstvTuneRecall).not.toHaveBeenCalled()
     expect(api.workSpot).toHaveBeenCalledExactlyOnceWith('phone', 146.52, '2m', undefined, undefined)
     expect(asked()).toBeNull()
   })

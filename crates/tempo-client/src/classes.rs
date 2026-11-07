@@ -609,6 +609,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("sstv_stop",                      StopsTx,     "Stops the SSTV transmission now."),
     ("sstv_tune",                      RunsAtShack, "Tunes the shack's rig for SSTV; keys nothing."),
     ("sstv_tune_on_open",              RunsAtShack, "Tunes the shack's rig for SSTV as the app's own tune; keys nothing, arms nothing."),
+    ("sstv_tune_recall",               RunsAtShack, "Tunes the shack's rig for SSTV to a saved memory; keys nothing, arms nothing."),
     ("start_confirmation_check",       RunsAtShack, "Starts a new confirmation check at the shack, dropping the one it held; changes nothing."),
     ("start_cq",                       StartsTx,    "Starts a CQ run."),
     ("start_moon_track",               RefusedHere, "Turns the shack's rotator to follow the Moon on its own for hours; a mast that moves unattended is started at the shack only."),

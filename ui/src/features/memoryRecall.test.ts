@@ -3,8 +3,8 @@
 // THE VERB EACH SCREEN'S RECALL TUNES WITH, AND THE ASK A POP-OUT MAKES OF THE MAIN WINDOW.
 //
 // Recall adds no way of tuning: each screen uses the verb that screen's own surfaces already use.
-// The SSTV strip's `sstv_tune`, the APRS Tune button's `aprs_tune`, and `work_spot` for the rest,
-// so a recall during TX meets the same `tune_dial` it always did. `work_spot` is also what ticks the
+// `sstv_tune_recall` (the SSTV strip's tune without its arming), the APRS Tune button's `aprs_tune`,
+// and `work_spot` for the rest, so a recall during TX meets the same `tune_dial` it always did. `work_spot` is also what ticks the
 // nav hint every window follows, and the SSTV and APRS verbs tick nothing: that gap is what a pop-out's
 // ask fills.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -20,11 +20,12 @@ import {
 } from './memoryRecall'
 
 vi.mock('../api', () => ({
-  sstvTune: vi.fn(async () => 'sstv'),
+  sstvTuneRecall: vi.fn(async () => 'sstv'),
+  sstvTune: vi.fn(async () => 'armed'),
   aprsTune: vi.fn(async () => 'aprs'),
   workSpot: vi.fn(async () => 'work'),
 }))
-const sstvTune = api.sstvTune as unknown as ReturnType<typeof vi.fn>
+const sstvTune = api.sstvTuneRecall as unknown as ReturnType<typeof vi.fn>
 const aprsTune = api.aprsTune as unknown as ReturnType<typeof vi.fn>
 const workSpot = api.workSpot as unknown as ReturnType<typeof vi.fn>
 
@@ -43,6 +44,8 @@ describe('tuneForRecall', () => {
     expect(sstvTune).toHaveBeenCalledExactlyOnceWith(144.8875, '2m', 'FM')
     expect(workSpot).not.toHaveBeenCalled()
     expect(aprsTune).not.toHaveBeenCalled()
+    // A recall leaves Enable TX as it was, and this is the verb that would arm it.
+    expect(api.sstvTune).not.toHaveBeenCalled()
   })
 
   it('an NFM memory holds FM on SSTV, whose hold is armed by the word FM', async () => {

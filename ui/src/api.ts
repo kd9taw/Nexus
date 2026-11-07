@@ -3143,6 +3143,15 @@ export async function sstvTune(
   return invoke<AppSnapshot>('sstv_tune', { dialMhz, band, mode })
 }
 
+/** A saved memory recalled to the SSTV screen: `sstvTune`, but it never arms Phone's Enable-TX latch. */
+export async function sstvTuneRecall(
+  dialMhz: number,
+  band: string,
+  mode: string,
+): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('sstv_tune_recall', { dialMhz, band, mode })
+}
+
 /** #451: the SSTV screen's own tune on opening — `sstvTune` as the APP's tune, so the channel is
  * never remembered as the operator's Phone dial (theirs is banked). The engine refuses the ISS
  * downlink and a dial a satellite pass owns, and then tunes nothing. */

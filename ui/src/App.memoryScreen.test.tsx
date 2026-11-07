@@ -105,7 +105,7 @@ beforeEach(() => {
   for (const verb of [api.setTier, api.setFrequency, api.tuneChannel, api.setOperatingMode]) {
     vi.mocked(verb).mockResolvedValue(APP_SNAPSHOT as never)
   }
-  for (const verb of [api.workSpot, api.sstvTune, api.aprsTune, api.setSettings, api.setSidebandOverride]) {
+  for (const verb of [api.workSpot, api.sstvTuneRecall, api.aprsTune, api.setSettings, api.setSidebandOverride]) {
     vi.mocked(verb).mockReset()
     vi.mocked(verb).mockResolvedValue(APP_SNAPSHOT as never)
   }
@@ -135,7 +135,7 @@ describe('saving from the Memories section names the mode screen the operator ca
     vi.mocked(api.setOperatingMode).mockClear()
     await pressTune()
 
-    expect(api.sstvTune).toHaveBeenCalledExactlyOnceWith(144.8875, '2m', 'FM')
+    expect(api.sstvTuneRecall).toHaveBeenCalledExactlyOnceWith(144.8875, '2m', 'FM')
     expect(api.workSpot, 'work_spot’s nav hint would pull the window to Phone').not.toHaveBeenCalled()
     expect(document.title).toContain('SSTV')
   })
@@ -177,7 +177,7 @@ describe('recall', () => {
     await mountOn('memories')
     await pressTune()
     expect(api.workSpot).toHaveBeenCalledExactlyOnceWith('phone', 146.52, '2m', undefined, undefined)
-    expect(api.sstvTune).not.toHaveBeenCalled()
+    expect(api.sstvTuneRecall).not.toHaveBeenCalled()
     expect(document.title).toContain('Phone')
   })
 
@@ -187,7 +187,7 @@ describe('recall', () => {
     await mountOn('memories')
     await pressTune()
     expect(api.workSpot).toHaveBeenCalledExactlyOnceWith('phone', 146.52, '2m', undefined, undefined)
-    expect(api.sstvTune).not.toHaveBeenCalled()
+    expect(api.sstvTuneRecall).not.toHaveBeenCalled()
     expect(document.title).toContain('Phone')
   })
 
@@ -197,7 +197,7 @@ describe('recall', () => {
     await mountOn('memories')
     await pressTune()
     expect(api.workSpot).not.toHaveBeenCalled()
-    expect(api.sstvTune).not.toHaveBeenCalled()
+    expect(api.sstvTuneRecall).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -220,7 +220,7 @@ describe('recall', () => {
     saved({ rxMhz: 3.845, mode: 'USB', screen: 'sstv' })
     await mountOn('memories')
     await pressTune()
-    expect(api.sstvTune).toHaveBeenCalledExactlyOnceWith(3.845, '80m', 'USB')
+    expect(api.sstvTuneRecall).toHaveBeenCalledExactlyOnceWith(3.845, '80m', 'USB')
     expect(api.setSidebandOverride).toHaveBeenCalledExactlyOnceWith('USB')
     expect(api.setSettings).not.toHaveBeenCalled()
   })
@@ -233,7 +233,7 @@ describe('recall', () => {
     const written = vi.mocked(api.setSettings).mock.calls[0][0] as unknown as Record<string, unknown>
     expect(written).toMatchObject({ rptrShift: 'minus', rptrOffsetOverrideHz: 600000, ctcssToneHz: 100 })
     expect(written.phoneMode).toBe(defaultSettings.phoneMode)
-    expect(vi.mocked(api.setSettings).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.sstvTune).mock.invocationCallOrder[0])
+    expect(vi.mocked(api.setSettings).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.sstvTuneRecall).mock.invocationCallOrder[0])
   })
 
   it('APRS tunes with its own verb and opens APRS', async () => {
@@ -254,7 +254,7 @@ describe('recall', () => {
     const tunes = document.querySelectorAll<HTMLButtonElement>('.mv-row-tune')
     fireEvent.click(tunes[0])
     await settle()
-    expect(api.sstvTune).toHaveBeenCalledTimes(1)
+    expect(api.sstvTuneRecall).toHaveBeenCalledTimes(1)
     expect(api.workSpot).not.toHaveBeenCalled()
     expect(api.setTxEnabled, 'a recall never touches the TX latch').not.toHaveBeenCalled()
     await navTo('Memories')
@@ -288,7 +288,7 @@ describe('recall', () => {
   })
 
   it('a failed tune stays on the screen the operator was on', async () => {
-    vi.mocked(api.sstvTune).mockRejectedValue(new Error('no'))
+    vi.mocked(api.sstvTuneRecall).mockRejectedValue(new Error('no'))
     saved({ rxMhz: 144.8875, mode: 'FM', screen: 'sstv' })
     await mountOn('memories')
     await pressTune()
@@ -309,7 +309,7 @@ describe('the Memories pop-out asks the main window to open SSTV or APRS', () =>
     await settle()
     expect(document.title).toContain('SSTV')
     expect(api.workSpot).not.toHaveBeenCalled()
-    expect(api.sstvTune).not.toHaveBeenCalled()
+    expect(api.sstvTuneRecall).not.toHaveBeenCalled()
   })
 
   it('a screen switched off stays shut, and any other word opens nothing', async () => {

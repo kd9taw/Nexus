@@ -30257,6 +30257,25 @@ fn sstv_tune(
     Ok(eng.snapshot())
 }
 
+/// A saved memory recalled to the SSTV screen: [`sstv_tune`]'s claim of Phone and QSY, the
+/// operator's own dial as that is, but it never arms Phone's Enable-TX latch, so it takes no `afar`.
+/// Recalling a memory is listening on a frequency, and transmitting stays one press of Enable TX
+/// away. What was armed before stays armed. Persists like `sstv_tune`.
+#[tauri::command(async)]
+fn sstv_tune_recall(
+    state: State<'_, SharedEngine>,
+    dial_mhz: f64,
+    band: String,
+    mode: String,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.sstv_tune_with_arming(dial_mhz, &band, &mode, false);
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist frequency: {e}")
+    });
+    Ok(eng.snapshot())
+}
+
 /// The SSTV screen's tune on opening (#451, Settings ▸ Digital ▸ SSTV, off by default): the strip
 /// pick's claim of Phone and QSY, as the APP's tune — `Engine::sstv_tune_on_open` declares
 /// machinery provenance, so the channel never becomes the operator's remembered Phone dial, and
@@ -51344,6 +51363,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         dxcc_entity_locations,
         set_frequency,
         sstv_tune,
+        sstv_tune_recall,
         sstv_tune_on_open,
         pick_band,
         tune_channel,
@@ -70360,6 +70380,74 @@ mod tests {
             }
         }
         assert!(armed.is_empty(), "Enable TX armed from afar by {armed:?}");
+    }
+
+    /// ⛔ RECALLING AN SSTV MEMORY ARMS NOTHING. Through the shack's own runner with the arguments
+    /// recall sends: Enable TX stays off when it was off, and it was off, from Digital and from
+    /// Phone alike. What was already armed stays armed: a recall changes neither way. CONTROL: the
+    /// SSTV screen's own pick keeps arming on the way into Phone.
+    #[test]
+    fn recalling_an_sstv_memory_leaves_enable_tx_where_it_was() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use crate::{sstv_tune, sstv_tune_recall};
+        use serde_json::{json, Value};
+        use tempo_app::settings::OperatingMode;
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .invoke_handler(tauri::generate_handler![sstv_tune, sstv_tune_recall])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        let args = json!({"dialMhz": 144.8875, "band": "2m", "mode": "FM"});
+        for (section, armed) in [
+            ("digital", false),
+            ("phone", false),
+            ("digital", true),
+            ("phone", true),
+        ] {
+            {
+                let mut e = engine_lock(&engine);
+                e.set_operating_mode(section, false);
+                e.set_tx_enabled(armed);
+                assert_eq!(e.tx_enabled(), armed, "premise: {section}");
+            }
+            let ran = ask("sstv_tune_recall", args.clone());
+            assert!(ran.is_ok(), "{section}: {ran:?}");
+            let e = engine_lock(&engine);
+            assert_eq!(e.settings().operating_mode, OperatingMode::Phone, "{section}");
+            assert!((e.settings().dial_mhz - 144.8875).abs() < 1e-9, "{section}");
+            assert_eq!(e.tx_enabled(), armed, "from {section}, armed: {armed}");
+        }
+
+        {
+            let mut e = engine_lock(&engine);
+            e.set_operating_mode("digital", false);
+            e.set_tx_enabled(false);
+        }
+        assert!(ask("sstv_tune", args).is_ok());
+        assert!(
+            engine_lock(&engine).tx_enabled(),
+            "CONTROL: the SSTV screen's own pick still arms"
+        );
     }
 
     /// The Phone tab pressed on the SSTV screen, through the shack's own runner with the arguments
