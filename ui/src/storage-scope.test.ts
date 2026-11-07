@@ -362,6 +362,9 @@ const SHARED = [
   // buttons, dismissed once for this computer whichever window showed it.
   'nexus.contest.workIn',
   'nexus.contest.workInHint',
+  // A recall from the Memories pop-out asking the main window to open SSTV or APRS
+  // (features/memoryRecall): heard as a `storage` event, the whole mechanism between the two.
+  'nexus.memory.openScreen',
   // The Flex DAX note in the voice keyer (features/flexDaxNote), dismissed once for this computer like
   // the work-in hint above.
   'nexus.phone.flexDaxNote',

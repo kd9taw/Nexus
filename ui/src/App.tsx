@@ -192,9 +192,13 @@ import {
   hotkeyRecallTarget,
   markRecalled,
   memoriesStore,
+  memoryModeFromRig,
+  nextModeScreen,
   planRecall,
   type Memory,
+  type MemoryScreen,
 } from './features/memories'
+import { modeNotCommanded, recallLeavesTxAlone, ridesPhone, tuneForRecall, useMemoryOpenScreenRequests } from './features/memoryRecall'
 import { dueNetReminders, reminderKey, untilPhrase } from './features/nets'
 import { bandLabelForMhz } from './band'
 import { sameCall } from './callsign'
@@ -645,6 +649,12 @@ function App() {
   // and stop the decoder under the screen the operator is on. So a leave that lands with its screen
   // in front again asks for that screen's entry arm once more (only ever an upgrade from off, and
   // refused after the operator's own Stop, as on entry).
+  // The mode screen a save from the Memories section came from (`nextModeScreen`). Null until one
+  // has been entered: a launch straight into Memories names none, and such a save recalls by mode.
+  const lastModeScreenRef = useRef<MemoryScreen | null>(nextModeScreen(null, view))
+  useEffect(() => {
+    lastModeScreenRef.current = nextModeScreen(lastModeScreenRef.current, view)
+  }, [view])
   const decoderScreensRef = useRef<DecoderScreen[]>(isDecoderScreen(view) ? [view] : [])
   useEffect(() => {
     const { left, held } = enterView(decoderScreensRef.current, view)
@@ -2062,7 +2072,14 @@ function App() {
 
   // #451: the SSTV screen's tune on opening — the app's tune, never remembered as the
   // operator's Phone dial (`sstv_tune_on_open`).
+  // Not when a recall opened the screen: the memory's frequency is the one the operator asked for,
+  // and the recall's toast has just named it.
+  const sstvOpenedByRecallRef = useRef(false)
+  useEffect(() => {
+    if (view !== 'sstv') sstvOpenedByRecallRef.current = false
+  }, [view])
   const handleSstvTuneOnOpen = useCallback((dialMhz: number, band: string, mode: string) => {
+    if (sstvOpenedByRecallRef.current) return
     void withErrorToast(
       () => apiSstvTuneOnOpen(dialMhz, band, mode),
       t('shell.frequency.failed'),
@@ -2257,11 +2274,13 @@ function App() {
   // change and re-homes the dial; the setFrequency lands LAST so the recalled frequency
   // is the final word. A feature-disabled cockpit gates only the NAV — the rig still
   // retunes (same behavior as the Needed board's work-click).
+  const isScreenOn = features.isOn
   const recallMemory = useCallback(
     (m: Memory) => {
-      const plan = planRecall(m)
+      // A recorded screen that is switched off plans as a memory with none, so these two gates
+      // keep their meaning.
+      const plan = planRecall(m, isScreenOn)
       const target = plan.view
-      const opMode: 'digital' | 'phone' | 'cw' = target === 'operate' ? 'digital' : target
       // The CW/Phone cockpits are opt-in. Recalling into a disabled cockpit would tune the
       // rig but leave the operator with no place to work it — and (finding) half-apply a
       // heavyweight settings write for a hidden feature. Guide them to enable it instead.
@@ -2294,7 +2313,7 @@ function App() {
           // ATOMIC band+mode+freq — the SAME verb the Needed board uses, so the rig can never
           // land in the new mode at the old dial (no wrong-mode flash) and the mode is always
           // asserted, gated path excluded above.
-          const s2 = await workSpot(opMode, plan.freqMhz, band)
+          const s2 = await tuneForRecall(plan, band)
           if (!s2) {
             pushToast(t('shell.recall.failed'), 'error', 3000)
             return
@@ -2303,23 +2322,25 @@ function App() {
           // Honor a saved SSB memory's EXACT sideband over the band-auto convention (some nets
           // run off-convention, e.g. USB below 10 MHz), and drop any stale manual override.
           // Set AFTER the tune — set_frequency clears the override on a band change.
-          if (target === 'phone' && (mode === 'USB' || mode === 'LSB')) {
+          if (ridesPhone(target) && (mode === 'USB' || mode === 'LSB')) {
             const s3 = await setSidebandOverride(mode as 'USB' | 'LSB')
             if (s3) setSnap(s3)
           }
-          // Keep the rig-mode effect's guard in sync so the nav doesn't re-home the dial.
-          lastOpModeRef.current = opMode
-          lastHomedModeRef.current = opMode // recalled to an EXACT dial — do not re-home
+          // Keep the rig-mode effect's guard in sync so the nav doesn't re-home the dial. SSTV and
+          // APRS own no rig mode, so entering them asserts nothing and there is nothing to guard.
+          const rigMode = RIG_MODE_BY_VIEW[target]
+          if (rigMode) {
+            lastOpModeRef.current = rigMode
+            lastHomedModeRef.current = rigMode // recalled to an EXACT dial — do not re-home
+          }
+          // The tune entered the section and left Enable TX as it was, so the [view] effect must not
+          // re-assert it and arm the latch (`recallLeavesTxAlone`).
+          if (recallLeavesTxAlone(target)) afarEntryRef.current = target
+          if (target === 'sstv' && viewRef.current !== 'sstv') sstvOpenedByRecallRef.current = true
           setView(target)
           memoriesStore.update((b) => markRecalled(b, m.id, Math.floor(Date.now() / 1000)))
-          // The phone policy commands only SSB/FM; AM/WFM/DV/DN can't be set there, so for a
-          // phone memory in one of those we tune the dial but tell the operator to set the mode
-          // on the rig rather than claim a mode we didn't command. (CW and digital recalls set
-          // their mode via the CW/DATA operating policy, so they're always honest.)
-          const phoneUncommandable =
-            target === 'phone' && mode !== 'USB' && mode !== 'LSB' && mode !== 'FM'
           pushToast(
-            phoneUncommandable
+            modeNotCommanded(plan)
               ? t('shell.recall.done.setMode', {
                   name: m.name,
                   freq: plan.freqMhz.toFixed(3),
@@ -2338,7 +2359,7 @@ function App() {
         }
       })()
     },
-    [cwEnabled, phoneEnabled],
+    [cwEnabled, phoneEnabled, isScreenOn],
   )
 
   // Global quick-recall hotkeys: Ctrl+1..9 (or ⌘+1..9 — the native chord on macOS, where
@@ -2807,6 +2828,13 @@ function App() {
   useWorkInRequests((next) => {
     handleView(next)
     void focusWindow().catch(() => {})
+  })
+  // A recall from the Memories pop-out into SSTV or APRS, whose tunes tick no nav hint. The pop-out
+  // has tuned already; both screens are entered without asserting anything on the rig.
+  useMemoryOpenScreenRequests((screen) => {
+    if (!features.isOn(screen)) return
+    if (screen === 'sstv' && viewRef.current !== 'sstv') sstvOpenedByRecallRef.current = true
+    setView(screen)
   })
 
   // ⭐ CTRL+O FROM A CONTEST STRIP (`features/contestKeys.ts`): the Contest screen, with an ask its
@@ -4062,8 +4090,13 @@ function App() {
             onPopOut={() => void openPanelWindow('memories')}
             myGrid={settings?.mygrid ?? ''}
             dialMhz={snap.radio.dialMhz}
+            dialScreen={lastModeScreenRef.current ?? undefined}
             dialMode={
-              lastOpModeRef.current === 'cw'
+              lastModeScreenRef.current === 'sstv' || lastModeScreenRef.current === 'aprs'
+                ? // Neither screen is a section, so the ladder below would answer for whichever
+                  // section the operator came through: FT8 for a channel held in FM on SSTV.
+                  memoryModeFromRig(snap.radio.rigMode?.trim() || snap.radio.sideband || 'USB')
+                : lastOpModeRef.current === 'cw'
                 ? 'CW'
                 : lastOpModeRef.current === 'phone'
                   ? settings?.phoneMode === 'fm'

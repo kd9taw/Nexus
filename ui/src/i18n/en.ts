@@ -7235,6 +7235,7 @@ export const EN = {
   'memories.toolbar.grid.title': 'Grid view — the CHIRP-style spreadsheet',
   'memories.toolbar.save.label': '＋ Save {{freq}} {{mode}}',
   'memories.toolbar.save.title': 'Save the current dial frequency + mode as a memory',
+  'memories.toolbar.save.title.screen': 'Save the current dial frequency + mode as a memory. Recalling it opens {{screen}}.',
   'memories.toolbar.new.label': '＋ New',
   'memories.toolbar.new.title': 'Add a memory by hand',
   'memories.toolbar.import.label': 'Import CSV',
@@ -7295,6 +7296,9 @@ export const EN = {
   // only the words around them are prose.
   'memories.editor.name.label': 'Name',
   'memories.editor.kind.label': 'Kind',
+  'memories.editor.screen.label': 'Opens on',
+  'memories.editor.screen.auto': 'By its mode',
+  'memories.editor.screen.title': 'The screen a recall opens. A memory saved from a mode screen opens that screen; By its mode goes by the mode alone.',
   'memories.editor.rx.label': 'RX MHz',
   'memories.editor.mode.label': 'Mode',
   'memories.editor.offset.label': 'Offset',
@@ -7403,6 +7407,7 @@ export const EN = {
   // What the section says after it acts.
   'memories.toast.saved': 'Saved {{freq}} {{mode}}',
   'memories.toast.alreadySaved': '{{freq}} {{mode}} is already saved',
+  'memories.toast.moved': '{{freq}} {{mode}} now opens {{screen}}',
   'memories.export.empty': 'Nothing to export in this view',
   'memories.export.done': {
     one: 'Exported {{count}} channel → {{path}}',

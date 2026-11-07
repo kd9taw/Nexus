@@ -42,6 +42,11 @@ export type OffsetDir = 'simplex' | 'plus' | 'minus' | 'split'
  * ([`isSendOnlyDcs`]). */
 export type ToneMode = 'none' | 'tone' | 'tsql' | 'dtcs' | 'cross'
 
+/** The mode screens a memory can reopen on. Tempo and Satellites are absent on purpose: both own
+ * the dial their own way, so a recall has nothing to hand them. */
+export const MEMORY_SCREENS = ['operate', 'cw', 'phone', 'rtty', 'psk', 'jtty', 'js8', 'sstv', 'aprs'] as const
+export type MemoryScreen = (typeof MEMORY_SCREENS)[number]
+
 /** Recurring net schedule + alert opt-in (kind === 'hfnet'; alerts are Phase 2 —
  * the model carries them now so pack imports and edits survive the upgrade). */
 export interface NetInfo {
@@ -105,6 +110,11 @@ export interface Memory {
   /** Unix seconds of the last recall (recents / sort). */
   lastUsedUtc?: number
   net?: NetInfo
+  /** The mode screen it was saved from, which recall reopens ([`planRecall`]). Absent = recall
+   * goes by the mode word alone, as every memory did before this field. Optional and additive, so
+   * the bank stays version 2: an older build reads the row and ignores the field. Not memory
+   * CONTENT: moving a row to another screen leaves a pack's row the pack's. */
+  screen?: MemoryScreen
 }
 
 export interface MemoryGroup {
@@ -211,6 +221,9 @@ export function coerceMemory(raw: unknown): Memory | null {
   const lon = num(o.lon)
   if (lon !== undefined && lon >= -180 && lon <= 180) m.lon = lon
   if (o.skip === true) m.skip = true
+  // A word this build does not know (a newer build's screen, a hand edit) is dropped, never fatal:
+  // the row then recalls by its mode, as a row with no screen does.
+  if (MEMORY_SCREENS.includes(o.screen as MemoryScreen)) m.screen = o.screen as MemoryScreen
   const used = posNum(o.lastUsedUtc)
   if (used !== undefined) m.lastUsedUtc = used
   const net = o.net
@@ -422,16 +435,29 @@ export function addMemory(bank: MemoriesBank, input: Partial<Memory> & { rxMhz: 
   return { ...bank, memories: [...bank.memories, m] }
 }
 
+/** A save from a mode screen is the operator's latest word on where this channel belongs, so an
+ * equivalent row already in the bank moves there. A save that names no screen (Program, a pack, an
+ * import) leaves the row where it is. */
+function moveToScreen(bank: MemoriesBank, row: Memory, screen: MemoryScreen | undefined): MemoriesBank {
+  if (!screen || row.screen === screen) return bank
+  return { ...bank, memories: bank.memories.map((m) => (m.id === row.id ? { ...m, screen } : m)) }
+}
+
 /** Add unless an equivalent channel (memoryKey) already exists; returns the bank
- * and whether a row was added (for "N added, M skipped" toasts). */
+ * and whether a row was added (for "N added, M skipped" toasts), or an existing one moved to the
+ * screen this save names. */
 export function addMemoryDeduped(
   bank: MemoriesBank,
   input: Partial<Memory> & { rxMhz: number; mode: string },
-): { bank: MemoriesBank; added: boolean } {
+): { bank: MemoriesBank; added: boolean; moved: boolean } {
   const probe = coerceMemory({ ...input, id: 'probe' })
-  if (!probe) return { bank, added: false }
-  if (findEquivalent(bank, probe)) return { bank, added: false }
-  return { bank: addMemory(bank, input), added: true }
+  if (!probe) return { bank, added: false, moved: false }
+  const existing = findEquivalent(bank, probe)
+  if (existing) {
+    const next = moveToScreen(bank, existing, probe.screen)
+    return { bank: next, added: false, moved: next !== bank }
+  }
+  return { bank: addMemory(bank, input), added: true, moved: false }
 }
 
 /** Star `id` and move it to RANK 1 — just ahead of the current first favorite, leaving
@@ -461,8 +487,9 @@ export function saveFavoriteFromDial(
   if (!probe) return { bank, result: 'exists' }
   const existing = findEquivalent(bank, probe)
   if (existing) {
-    if (existing.favorite) return { bank, result: 'exists' }
-    return { bank: starAtRankOne(bank, existing.id), result: 'starred' }
+    const moved = moveToScreen(bank, existing, probe.screen)
+    if (existing.favorite) return { bank: moved, result: 'exists' }
+    return { bank: starAtRankOne(moved, existing.id), result: 'starred' }
   }
   const id = input.id ?? newMemoryId()
   return { bank: starAtRankOne(addMemory(bank, { ...input, id }), id), result: 'added' }
@@ -601,7 +628,7 @@ export function setMemoryGroups(bank: MemoriesBank, id: string, groups: string[]
 }
 
 // ---------------------------------------------------------------------------
-// Recall planning (pure — App executes: settings patch, view switch, retune)
+// Recall planning (pure — App executes: settings patch, view switch, retune; features/memoryRecall)
 // ---------------------------------------------------------------------------
 
 /** The settings fields a recall may need to flip before the retune (a subset of
@@ -615,9 +642,9 @@ export interface RecallSettingsPatch {
 }
 
 export interface RecallPlan {
-  /** The cockpit this memory belongs in (recall AUTO-SWITCHES to it) — always
-   * one of the three operating cockpits, never a passive view. */
-  view: Extract<View, 'operate' | 'cw' | 'phone'>
+  /** The screen this memory belongs in (recall AUTO-SWITCHES to it): the mode screen it was saved
+   * from where that can take it, else one of the three operating cockpits. Never a passive view. */
+  view: MemoryScreen
   freqMhz: number
   mode: string
   settingsPatch: RecallSettingsPatch | null
@@ -627,14 +654,62 @@ export interface RecallPlan {
 // PHONE (SSB) — a voice mode commanded on a data frequency.
 const DIGITAL_MODES = new Set(['FT8', 'FT4', 'DIG', 'DIGITAL', 'DATA', 'JS8', 'PSK', 'PSK31', 'RTTY', 'JTTY'])
 
-/** Where a memory's mode lives: FM/SSB/AM → Phone, CW → CW, digital → Operate.
- * The memory "just works" from any cockpit (operator decision: auto-switch). */
-export function planRecall(m: Memory): RecallPlan {
+// The words a digital screen cannot be asked to work. Listed this way round, not as "in
+// DIGITAL_MODES", because a tier like Q65 is on neither list and belongs on the FT screen it was
+// saved from.
+const VOICE_MODES = new Set(['USB', 'LSB', 'SSB', 'FM', 'NFM', 'AM', 'WFM'])
+
+/** Can this memory be worked on `screen`? The mode can be edited after the save, and a screen that
+ * no longer fits it must not win over it. APRS is 2 m FM because its tune is (`aprs_tune` names the
+ * band and commands FM). */
+export function screenFits(m: Pick<Memory, 'mode' | 'rxMhz'>, screen: MemoryScreen): boolean {
   const mode = m.mode.toUpperCase()
+  switch (screen) {
+    case 'cw':
+      return mode === 'CW'
+    case 'phone':
+    case 'sstv':
+      return mode !== 'CW' && !DIGITAL_MODES.has(mode)
+    case 'aprs':
+      return (mode === 'FM' || mode === 'NFM') && m.rxMhz >= 144 && m.rxMhz <= 148
+    default:
+      return mode !== 'CW' && !VOICE_MODES.has(mode)
+  }
+}
+
+/** The screen a save from the Memories section came from, given the last one and the view just
+ * entered. A glance (the logbook, the map, Memories itself) keeps it, as `lastOpModeRef` keeps the
+ * mode. Tempo and Satellites take the dial their own way, so a save after them names no screen. */
+export function nextModeScreen(prev: MemoryScreen | null, view: View): MemoryScreen | null {
+  if ((MEMORY_SCREENS as readonly string[]).includes(view)) return view as MemoryScreen
+  return view === 'chat' || view === 'sats' ? null : prev
+}
+
+/** The mode a save from SSTV or APRS is stamped with. Neither is a section, so the rig's word is
+ * the only one there is, and with the data submode held that word is not the channel's: a memory
+ * stamped PKTFM would plan an SSB tune. */
+export function memoryModeFromRig(rig: string): string {
+  const word = rig.trim().toUpperCase()
+  if (word.includes('FM')) return 'FM'
+  if (word.includes('USB') || word.endsWith('-U')) return 'USB'
+  if (word.includes('LSB') || word.endsWith('-L')) return 'LSB'
+  return word
+}
+
+/** Where a memory lives: the mode screen it was saved from, if that screen is on and fits it, else
+ * by its mode: FM/SSB/AM → Phone, CW → CW, digital → Operate.
+ * The memory "just works" from any cockpit (operator decision: auto-switch). */
+export function planRecall(m: Memory, screenOn: (screen: MemoryScreen) => boolean = () => true): RecallPlan {
+  const mode = m.mode.toUpperCase()
+  const screen = m.screen && screenOn(m.screen) && screenFits(m, m.screen) ? m.screen : undefined
   if (mode === 'CW') {
     return { view: 'cw', freqMhz: m.rxMhz, mode: m.mode, settingsPatch: null }
   }
-  if (DIGITAL_MODES.has(mode) || m.kind === 'digital') {
+  // APRS's own tune is simplex and writes its own context; the digital screens write none.
+  if (screen && screen !== 'phone' && screen !== 'sstv') {
+    return { view: screen, freqMhz: m.rxMhz, mode: m.mode, settingsPatch: null }
+  }
+  if (!screen && (DIGITAL_MODES.has(mode) || m.kind === 'digital')) {
     return { view: 'operate', freqMhz: m.rxMhz, mode: m.mode, settingsPatch: null }
   }
   const wantFm = mode === 'FM' || mode === 'NFM'
@@ -650,6 +725,12 @@ export function planRecall(m: Memory): RecallPlan {
       patch.rptrOffsetOverrideHz = m.offsetMhz !== undefined ? Math.round(m.offsetMhz * 1e6) : 0
     }
     patch.ctcssToneHz = m.toneMode === 'tone' || m.toneMode === 'tsql' ? (m.ctcssEncHz ?? 0) : 0
+  }
+  if (screen === 'sstv') {
+    // SSTV leaves the station-wide phone mode alone: its tune holds FM on the channel by itself and
+    // takes the sideband as an override. Only an FM machine's shift and tone need saying.
+    const { phoneMode: _phoneMode, ...plumbing } = patch
+    return { view: 'sstv', freqMhz: m.rxMhz, mode: m.mode, settingsPatch: wantFm ? plumbing : null }
   }
   return { view: 'phone', freqMhz: m.rxMhz, mode: m.mode, settingsPatch: patch }
 }

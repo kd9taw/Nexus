@@ -609,6 +609,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("sstv_stop",                      StopsTx,     "Stops the SSTV transmission now."),
     ("sstv_tune",                      RunsAtShack, "Tunes the shack's rig for SSTV; keys nothing."),
     ("sstv_tune_on_open",              RunsAtShack, "Tunes the shack's rig for SSTV as the app's own tune; keys nothing, arms nothing."),
+    ("sstv_tune_recall",               RunsAtShack, "Tunes the shack's rig for SSTV to a saved memory; keys nothing, arms nothing."),
     ("start_confirmation_check",       RunsAtShack, "Starts a new confirmation check at the shack, dropping the one it held; changes nothing."),
     ("start_cq",                       StartsTx,    "Starts a CQ run."),
     ("start_moon_track",               RefusedHere, "Turns the shack's rotator to follow the Moon on its own for hours; a mast that moves unattended is started at the shack only."),
@@ -663,6 +664,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("winlink_message",                RunsAtShack, "The shack's Winlink mailbox."),
     ("winlink_session_status",         RunsAtShack, "The shack's Winlink session."),
     ("work_spot",                      RunsAtShack, "QSY to a spot with its mode and split; keys nothing."),
+    ("work_spot_recall",               RunsAtShack, "Tunes the shack's rig to a saved memory and enters its section; keys nothing, arms nothing."),
     ("wrl_push_qso",                   RunsAtShack, "An upload from the shack, with its stored credential."),
 ];
 

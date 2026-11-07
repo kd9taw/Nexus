@@ -26,6 +26,7 @@ import {
   useMemories,
   type Memory,
   type MemoryKind,
+  type MemoryScreen,
 } from '../features/memories'
 import { t } from '../i18n'
 import { modChord } from '../platform'
@@ -35,6 +36,8 @@ export interface MemoryStripProps {
   dialMhz: number
   /** Current mode string (USB / LSB / FM / CW / FT8 …) captured with the dial. */
   mode: string
+  /** The mode screen hosting this strip: a memory saved here reopens on it. */
+  screen?: MemoryScreen
   /** Recall a memory (App's recallMemory: settings + retune + section switch). */
   onRecall?: (m: Memory) => void
   /** Open the full Memories section (manage, groups, import/export). */
@@ -52,7 +55,7 @@ function kindForMode(mode: string): MemoryKind {
   return 'other'
 }
 
-export function MemoryStrip({ dialMhz, mode, onRecall, onManage }: MemoryStripProps) {
+export function MemoryStrip({ dialMhz, mode, screen, onRecall, onManage }: MemoryStripProps) {
   const bank = useMemories()
   const favorites = bank.memories.filter((m) => m.favorite)
   // Master-array order — the same order hotkeyRecallTarget counts and the ★ view ranks.
@@ -65,7 +68,7 @@ export function MemoryStrip({ dialMhz, mode, onRecall, onManage }: MemoryStripPr
     // (no silent "＋ did nothing"). Either way it lands at rank 1, which is what keeps the
     // new chip inside the cap when the strip is already full.
     memoriesStore.update(
-      (b) => saveFavoriteFromDial(b, { rxMhz: dialMhz, mode, kind: kindForMode(mode) }).bank,
+      (b) => saveFavoriteFromDial(b, { rxMhz: dialMhz, mode, kind: kindForMode(mode), screen }).bank,
     )
   }
 

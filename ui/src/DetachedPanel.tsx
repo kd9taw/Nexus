@@ -83,6 +83,7 @@ import {
   type FreqMarker,
 } from './api'
 import { markRecalled, memoriesStore, planRecall, type Memory } from './features/memories'
+import { askMainWindowToOpen, ridesPhone, tuneForRecall } from './features/memoryRecall'
 import { useTciSpots } from './features/tciSpots'
 import { failureToShow, useLatestLogAnswer, useLogStatus } from './features/logSource'
 import { bandLabelForMhz } from './band'
@@ -111,7 +112,7 @@ import { StationList } from './components/StationList'
 import { visibleNeeds, boardNeeds, modeClassOf, workTarget, alertsByCall, activityTypeByCall, topNeedByCall, ownScreen, workTier, pskSubmode, WORK_SECTION, spotNeed, type OwnScreen } from './features/needs'
 import { OPERATE_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
-import { readEnabledModes } from './useFeatures'
+import { readEnabledModes, readFeatureOn } from './useFeatures'
 import { useTheme } from './useTheme'
 import { useContrastPrefs } from './useFieldMode'
 import { usePaletteRoles } from './usePaletteRoles'
@@ -780,9 +781,8 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     // atomic workSpot tunes the shared engine, and the MAIN window follows to the
     // right cockpit via the same snapshot nav-hint the Needed pop-out uses.
     const recall = (m: Memory) => {
-      const plan = planRecall(m)
+      const plan = planRecall(m, readFeatureOn)
       const target = plan.view
-      const opMode: 'digital' | 'phone' | 'cw' = target === 'operate' ? 'digital' : target
       const modes = readEnabledModes()
       if ((target === 'cw' && !modes.cw) || (target === 'phone' && !modes.phone)) {
         return // cockpit disabled — the main window's Settings gate applies
@@ -798,14 +798,19 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             await persistSettings({ ...cur, ...patch })
           }
         }
-        const s2 = await workSpot(opMode, plan.freqMhz, band)
+        const s2 = await tuneForRecall(plan, band)
         if (!s2) return
         apply(Promise.resolve(s2))
-        if (target === 'phone' && (mode === 'USB' || mode === 'LSB')) {
+        if (ridesPhone(target) && (mode === 'USB' || mode === 'LSB')) {
           await setSidebandOverride(mode as 'USB' | 'LSB')
         }
+        // SSTV's and APRS's tunes tick no nav hint, so the main window has to be asked.
+        if (target === 'sstv' || target === 'aprs') askMainWindowToOpen(target)
         memoriesStore.update((b) => markRecalled(b, m.id, Math.floor(Date.now() / 1000)))
-      })()
+      })().catch((e) =>
+        // `aprs_tune` refuses a radio that cannot reach the channel, and says so.
+        pushToast(t('shell.recall.error', { error: `${e instanceof Error ? e.message : e}` }), 'error', 4000),
+      )
     }
     return (
       <DetachedShell>

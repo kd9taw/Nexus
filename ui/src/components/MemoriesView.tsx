@@ -24,6 +24,7 @@ import {
   addMemoriesToGroup,
   deleteMemory,
   isSendOnlyDcs,
+  MEMORY_SCREENS,
   memoriesStore,
   moveFavorite,
   moveMemory,
@@ -31,6 +32,7 @@ import {
   parseChirpCsv,
   renameGroup,
   restoreMemories,
+  screenFits,
   setMemoryGroups,
   siteOffset,
   STRIP_FAVORITE_LIMIT,
@@ -41,10 +43,12 @@ import {
   type Memory,
   type MemoriesBank,
   type MemoryKind,
+  type MemoryScreen,
   type OffsetDir,
   type ToneMode,
 } from '../features/memories'
 import { octant } from '../features/radioprog'
+import { featureById } from '../features/registry'
 import { fmtDistanceKm, useUnits, type Units } from '../units'
 import { importPack, STARTER_PACKS, type Pack } from '../features/packs'
 import { saveTextToDownloads } from '../api'
@@ -59,6 +63,9 @@ export interface MemoriesViewProps {
   /** Current dial (MHz) + mode — what "Save current" captures. */
   dialMhz: number
   dialMode: string
+  /** The mode screen the operator came here from: a memory saved here reopens on it. Absent in the
+   * pop-out, which has no last screen of its own, and before any mode screen has been entered. */
+  dialScreen?: MemoryScreen
   /** Recall = tune (App's recallMemory: settings + retune + cockpit switch). */
   onRecall?: (m: Memory) => void
   /** An ephemeral station bank. Never read or write the local singleton in this view. */
@@ -69,6 +76,9 @@ export interface MemoriesViewProps {
   /** Pop this section out into its own window (hidden when already detached). */
   onPopOut?: () => void
 }
+
+/** A mode screen's name: its section's own, from the registry. */
+const screenLabel = (screen: MemoryScreen): string => featureById(screen)?.label ?? screen
 
 /** The sidebar's built-in views ahead of the custom groups. */
 type Selection = 'all' | 'fav' | 'nets' | { group: string }
@@ -339,6 +349,7 @@ function NativeMemoriesView(props: MemoriesViewProps) {
 function MemoriesContent({
   dialMhz,
   dialMode,
+  dialScreen,
   onRecall,
   myGrid = '',
   onPopOut,
@@ -512,21 +523,27 @@ function MemoriesContent({
 
   const saveCurrent = () => {
     let added = false
+    let moved = false
     commit((b) => {
       const res = addMemoryDeduped(b, {
         rxMhz: dialMhz,
         mode: dialMode,
         favorite: sel === 'fav', // saving while looking at Favorites stars it
         groups: groupSel ? [groupSel] : [],
+        screen: dialScreen,
       })
       added = res.added
+      moved = res.moved
       return res.bank
     })
+    const freq = dialMhz.toFixed(3)
     pushToast(
       added
-        ? t('memories.toast.saved', { freq: dialMhz.toFixed(3), mode: dialMode })
-        : t('memories.toast.alreadySaved', { freq: dialMhz.toFixed(3), mode: dialMode }),
-      added ? 'success' : 'info',
+        ? t('memories.toast.saved', { freq, mode: dialMode })
+        : moved && dialScreen
+          ? t('memories.toast.moved', { freq, mode: dialMode, screen: screenLabel(dialScreen) })
+          : t('memories.toast.alreadySaved', { freq, mode: dialMode }),
+      added || moved ? 'success' : 'info',
       2500,
     )
   }
@@ -564,6 +581,7 @@ function MemoriesContent({
         favorite: sel === 'fav',
         kind: sel === 'nets' ? 'hfnet' : undefined,
         groups: groupSel ? [groupSel] : [],
+        screen: dialScreen,
       }),
     )
     // The row is created IMMEDIATELY, as it always was — a crash, a closed window or a stray
@@ -728,6 +746,27 @@ function MemoriesContent({
             {(Object.keys(KIND_LABEL) as MemoryKind[]).map((k) => (
               <option key={k} value={k}>
                 {KIND_LABEL[k]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="mv-field" title={t('memories.editor.screen.title')}>
+          <span>{t('memories.editor.screen.label')}</span>
+          {/* Not content, so not `up`: moving a pack's row to another screen leaves it the pack's,
+              as a star does. A screen the mode no longer fits reads as Automatic, because that is
+              what a recall then does. */}
+          <select
+            value={m.screen && screenFits(m, m.screen) ? m.screen : ''}
+            onChange={(e) =>
+              commit((b) =>
+                updateMemory(b, m.id, { screen: (e.target.value || undefined) as MemoryScreen | undefined }),
+              )
+            }
+          >
+            <option value="">{t('memories.editor.screen.auto')}</option>
+            {MEMORY_SCREENS.filter((s) => screenFits(m, s)).map((s) => (
+              <option key={s} value={s}>
+                {screenLabel(s)}
               </option>
             ))}
           </select>
@@ -1151,7 +1190,11 @@ function MemoriesContent({
             type="button"
             className="mv-tool"
             onClick={saveCurrent}
-            title={t('memories.toolbar.save.title')}
+            title={
+              dialScreen
+                ? t('memories.toolbar.save.title.screen', { screen: screenLabel(dialScreen) })
+                : t('memories.toolbar.save.title')
+            }
           >
             {t('memories.toolbar.save.label', {
               freq: dialMhz > 0 ? dialMhz.toFixed(3) : '—',
