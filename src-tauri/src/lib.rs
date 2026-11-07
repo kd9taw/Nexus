@@ -41867,6 +41867,98 @@ mod upload_record_tests {
             );
         }
 
+        /// Run `during` as each leg starts, until the test clears it.
+        fn on_each_leg(during: impl FnMut(u8) + 'static) {
+            crate::LEG_UNDER_WAY.with(|hook| *hook.borrow_mut() = Some(Box::new(during)));
+        }
+
+        /// ⛔ A DELETE LANDING DURING A LEG. The leg has passed its check, so it goes, and arrives.
+        /// The leg after it never starts. CONTROL: with no delete, both start.
+        #[test]
+        fn a_delete_during_a_leg_lets_that_leg_go_and_stops_the_next() {
+            let _one = one_at_a_time();
+            let n3fjp_port = free_port();
+            let n3fjp = listen(n3fjp_port);
+            let engine = engine(n3fjp_port);
+            let gone = log(&engine, "K1FLT");
+            let control = log(&engine, "K2FLT");
+            let on = || ConnectorToggles {
+                qrz_on: false,
+                clublog_on: false,
+                eqsl_on: false,
+                hrdlog_on: false,
+                wrl_on: false,
+                n3fjp_on: true,
+                cloudlog_on: true,
+            };
+            let both = legs::N3FJP | legs::CLOUDLOG;
+            let started = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+
+            let seen = started.clone();
+            on_each_leg(move |leg| seen.borrow_mut().push(leg));
+            crate::auto_push_one(
+                &engine,
+                crate::LoggedQso::from(control.rec.clone()),
+                &control.rec,
+                on(),
+                both,
+            );
+            assert_eq!(*started.borrow(), [legs::N3FJP, legs::CLOUDLOG], "CONTROL");
+            assert_eq!(arrived(&n3fjp).len(), 1, "CONTROL");
+            started.borrow_mut().clear();
+
+            let seen = started.clone();
+            let (during, rec) = (engine.clone(), gone.rec.clone());
+            on_each_leg(move |leg| {
+                seen.borrow_mut().push(leg);
+                delete_rec(&during, &rec);
+            });
+            crate::auto_push_one(
+                &engine,
+                crate::LoggedQso::from(gone.rec.clone()),
+                &gone.rec,
+                on(),
+                both,
+            );
+            crate::LEG_UNDER_WAY.with(|hook| *hook.borrow_mut() = None);
+            assert_eq!(arrived(&n3fjp).len(), 1, "the leg under way went");
+            assert_eq!(
+                *started.borrow(),
+                [legs::N3FJP],
+                "and the next never started"
+            );
+        }
+
+        /// A delete landing during a leg that then fails: no retry comes of it, through the worker's
+        /// own trip. CONTROL: with no delete, the same failure goes back on the queue.
+        #[test]
+        fn a_delete_during_a_leg_that_fails_leaves_no_retry() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let dxkeeper = listen(port);
+            let mut wait = DxkeeperWait::default();
+
+            let control = log(&engine, "K1FLD");
+            pass(&engine, control, port, true, &mut wait);
+            let back = take(&engine);
+            assert_eq!(back.len(), 1, "CONTROL: N3FJP is closed, and it retries");
+            assert_eq!(back[0].legs, legs::N3FJP);
+
+            let gone = log(&engine, "K2FLD");
+            let (during, rec) = (engine.clone(), gone.rec.clone());
+            on_each_leg(move |_| delete_rec(&during, &rec));
+            pass(&engine, gone, port, true, &mut wait);
+            crate::LEG_UNDER_WAY.with(|hook| *hook.borrow_mut() = None);
+            assert!(take(&engine).is_empty(), "no retry");
+            assert_eq!(waiting(&engine), 0);
+            assert_eq!(
+                calls(&arrived(&dxkeeper)),
+                ["K1FLD", "K2FLD"],
+                "DXKeeper's went first"
+            );
+        }
+
         /// A contact whose DXKeeper leg has gone keeps that fact when a service's retry is cancelled.
         /// A failed service leg of a contact deleted before its retry does not retry.
         #[test]
@@ -43957,6 +44049,24 @@ fn cloudlog_class_name(class: propagation::live::cloudlog::CloudlogFailure) -> &
     }
 }
 
+// What a test does in the moment a leg has passed its check and is on its way: a delete can land there,
+// and nowhere else can a test put one deterministically.
+#[cfg(test)]
+type LegUnderWay = Option<Box<dyn FnMut(u8)>>;
+#[cfg(test)]
+thread_local! {
+    static LEG_UNDER_WAY: std::cell::RefCell<LegUnderWay> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn leg_under_way(leg: u8) {
+    let hook = LEG_UNDER_WAY.with(|hook| hook.borrow_mut().take());
+    if let Some(mut during) = hook {
+        during(leg);
+        LEG_UNDER_WAY.with(|hook| *hook.borrow_mut() = Some(during));
+    }
+}
+
 /// Whether the contact of `rec`, a copy the upload worker holds off the lock, has since left the log.
 fn upload_cancelled(engine: &SharedEngine, rec: &tempo_core::logbook::QsoRecord) -> bool {
     engine_lock_result(engine)
@@ -44119,7 +44229,14 @@ fn auto_push_one(
     use tempo_app::engine::upload_legs as legs;
     // Asked before each leg: a push can take many seconds, and a contact deleted meanwhile sends no
     // more. A leg already under way when it went is past this.
-    let owes = |leg: u8| owed & leg != 0 && !upload_cancelled(engine, rec);
+    let owes = |leg: u8| {
+        let owes = owed & leg != 0 && !upload_cancelled(engine, rec);
+        #[cfg(test)]
+        if owes {
+            leg_under_way(leg);
+        }
+        owes
+    };
     let call = dto.call.clone();
     let mut parts: Vec<String> = Vec::new();
     let mut all_ok = true;
