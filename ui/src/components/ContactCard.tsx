@@ -262,17 +262,18 @@ function CardBody({
   // An IOTA reference taken from a log-time offer (a spot comment's or the callbook's) is kept in the
   // log and sent to no service until the operator confirms it (`tempo_core::logbook::offer`).
   // Confirm takes the mark off: the one Nexus-kept field a card may change, and only by removing it.
+  // Clear takes the reference out with its marks, for a spot that named the wrong island.
   const names = (field: string, tag: string) =>
     !!q.extra?.find(([k]) => k === field)?.[1]?.split(',').some((t) => t.trim() === tag)
   const spotMark = q.extra?.find(([k]) => k === OFFER_HELD_FIELD)?.[1] ?? null
   const spotHeld = names(OFFER_HELD_FIELD, 'IOTA')
   const heldFromCallbook = spotHeld && names(CALLBOOK_FILLED_FIELD, 'IOTA')
-  const confirmIota = async () => {
+  const settleHeldIota = async (change: FieldEdit) => {
     if (!contact.ref || busy || !spotMark) return
     const made = cardSave(q, start, start, fieldsOf(q))
     if (!made.ok) return
     setBusy(true)
-    const answer = await save(contact.ref, made.edit, [...made.fields, { tag: OFFER_HELD_FIELD, old: spotMark, new: null }], q.call)
+    const answer = await save(contact.ref, made.edit, [...made.fields, change], q.call)
     setBusy(false)
     if (answer?.kind === 'applied' || answer?.kind === 'changed') {
       onChanged()
@@ -451,8 +452,11 @@ function CardBody({
                 {spotHeld && (
                   <span className="iota-card-held">
                     <span className="settings-hint">{heldFromCallbook ? t('iota.card.callbookHeld') : t('iota.card.spotHeld')}</span>
-                    <button type="button" className="settings-test-btn" onClick={() => void confirmIota()} disabled={!canSave || busy || dirty}>
+                    <button type="button" className="settings-test-btn" onClick={() => void settleHeldIota({ tag: OFFER_HELD_FIELD, old: spotMark, new: null })} disabled={!canSave || busy || dirty}>
                       {t('iota.card.confirm')}
+                    </button>
+                    <button type="button" className="settings-test-btn" onClick={() => void settleHeldIota({ tag: 'IOTA', old: q.ota?.iota ?? null, new: null })} disabled={!canSave || busy || dirty}>
+                      {t('iota.card.clear')}
                     </button>
                   </span>
                 )}

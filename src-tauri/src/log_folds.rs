@@ -121,6 +121,7 @@ const AWARDS_EXTRAS: &[&str] = &[
     "STATE",
     "CNTY",
     tempo_core::logbook::callbook::MAP_ONLY_GRID_FIELD,
+    tempo_core::logbook::offer::OFFER_HELD_FIELD,
 ];
 
 /// The passthrough fields [`journey_qso`] reads beside [`JOURNEY`]: the state a merged contest
@@ -288,8 +289,12 @@ fn needs_add(needs: &mut propagation::LogNeeds, q: &QsoRecord) {
         qso_is_sat(q.prop_mode.as_deref()),
         award_fields(q),
     );
-    // The island group, confirmed as IOTA credits it (a card or LoTW: the award-grade gate).
-    needs.add_iota(q.ota.iota.as_deref(), q.award_confirmed);
+    // The island group, confirmed as IOTA credits it (a card or LoTW: the award-grade gate). One
+    // still held for the operator to confirm clears its New IOTA and confirms nothing.
+    needs.add_iota(
+        q.ota.iota.as_deref(),
+        q.award_confirmed && !tempo_core::logbook::offer::withhold_iota(q),
+    );
 }
 
 /// The award-needs model of the whole log, folded again only when the log's content moves.
@@ -458,6 +463,7 @@ pub(crate) fn award_fields(q: &QsoRecord) -> propagation::RecordFields {
             eqsl_ag: tempo_core::logbook::record_eqsl_ag(q),
             qrz: q.qsl_rcvd.qrz,
         },
+        iota_held: tempo_core::logbook::offer::withhold_iota(q),
     }
 }
 
@@ -594,10 +600,16 @@ pub(crate) fn custom_awards_kept(
 /// One whole record into the custom awards' fold.
 pub(crate) fn custom_add(fold: &mut propagation::custom::CustomAwards, q: &QsoRecord) {
     // The references a contact carries: its park or summit, its island group, and the WWFF,
-    // POTA and SOTA fields the log keeps beside a modelled one.
+    // POTA and SOTA fields the log keeps beside a modelled one. Never an island group still held
+    // for the operator to confirm: a custom award has no "held" to show it under.
+    let iota = q
+        .ota
+        .iota
+        .as_deref()
+        .filter(|_| !tempo_core::logbook::offer::withhold_iota(q));
     let mut refs: Vec<&str> = Vec::new();
     refs.extend(q.ota.their_ref.as_deref());
-    refs.extend(q.ota.iota.as_deref());
+    refs.extend(iota);
     for (k, v) in &q.extra {
         if matches!(
             k.as_str(),
@@ -617,7 +629,7 @@ pub(crate) fn custom_add(fold: &mut propagation::custom::CustomAwards, q: &QsoRe
             "MODE" => Some(q.mode.clone()),
             "COUNTRY" => some(q.country.as_deref()),
             "DXCC" => q.dxcc.map(|d| d.to_string()),
-            "IOTA" => some(q.ota.iota.as_deref()),
+            "IOTA" => some(iota),
             "SIG" => some(q.ota.their_program.as_deref()),
             "SIG_INFO" => some(q.ota.their_ref.as_deref()),
             "PROP_MODE" => some(q.prop_mode.as_deref()),
@@ -2826,6 +2838,234 @@ mod tests {
             "the LoTW and the card groups count; the eQSL one does not"
         );
         assert_eq!(s.iota.card_confirmed, 1, "one group on a card");
+    }
+
+    /// ★ A reference held for the operator to confirm, read the way the folds read the log (the
+    /// store's narrow reads, where a field the pass does not name is not there): the New IOTA need
+    /// clears and the group is worked, and a LoTW match on the contact does not confirm the group
+    /// for the needs, the awards, an application or a custom award. Confirmed by the operator, it
+    /// counts as any other.
+    #[test]
+    fn a_held_iota_reference_clears_the_need_and_counts_as_confirmed_nowhere() {
+        use propagation::award_status::{AwardKind, StatusFold};
+        use propagation::custom::{CustomAward, CustomAwards, CustomKind};
+        use propagation::needalert::NeedTag;
+        use tempo_core::logbook::offer::OFFER_HELD_FIELD;
+
+        struct Counts {
+            worked: bool,
+            confirmed: bool,
+            new_iota: bool,
+            award: (usize, usize, usize),
+            status: (usize, usize, usize),
+            custom: (usize, usize),
+        }
+        let counts = |text: &str| {
+            let mut rec = parse_one(text);
+            rec.id = Some(tempo_core::logbook::RecordId::Provisional {
+                hash: 77,
+                ordinal: 0,
+            });
+            let mut db = tempo_core::logbook::sqlite::LogDb::open_in_memory().unwrap();
+            db.insert(&rec, Resolved::default()).unwrap();
+            let mut needs = propagation::LogNeeds::new();
+            db.each_narrow_with(NEEDS, AWARD_EXTRAS, Scope::All, Order::Log, &mut |q| {
+                needs_add(&mut needs, q);
+                ControlFlow::Continue(())
+            })
+            .unwrap();
+            let mut awards = propagation::Awards::new();
+            db.each_narrow_with(AWARDS, AWARDS_EXTRAS, Scope::All, Order::Log, &mut |q| {
+                award_add(&mut awards, q);
+                ControlFlow::Continue(())
+            })
+            .unwrap();
+            let a = awards.summary().iota;
+            let mut fold = StatusFold::new(AwardKind::Iota, false);
+            fold.add(&status_contact(&rec, "1"));
+            let s = fold.finish();
+            let defs = [CustomAward {
+                name: "islands".into(),
+                kind: CustomKind::Field,
+                field: "IOTA".into(),
+                targets: vec!["EU-028".into()],
+                ..CustomAward::default()
+            }];
+            let mut custom = CustomAwards::new(&defs);
+            custom_add(&mut custom, &rec);
+            let c = &custom.progress()[0];
+            let heard = propagation::Heard {
+                iota: Some("EU-028".into()),
+                ..propagation::needalert::heard_from_freq("IA5Z", 14.074, "FT8").unwrap()
+            };
+            let alerts =
+                propagation::rank_needs(std::slice::from_ref(&heard), &needs, &needs.slots());
+            Counts {
+                worked: needs.worked_iota().contains("EU-028"),
+                confirmed: needs.confirmed_iota().contains("EU-028"),
+                new_iota: alerts.iter().any(|a| a.tags.contains(&NeedTag::NewIota)),
+                award: (a.worked, a.confirmed, a.held),
+                status: (s.worked, s.confirmed, s.ready.len()),
+                custom: (c.worked, c.confirmed),
+            }
+        };
+        let contact = "<CALL:4>IA5X<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20261106<TIME_ON:6>120000\
+                       <IOTA:6>EU-028<LOTW_QSL_RCVD:1>Y";
+
+        let held = counts(&format!("{contact}<{OFFER_HELD_FIELD}:4>IOTA<EOR>",));
+        assert!(held.worked && !held.new_iota, "the tag clears");
+        assert!(!held.confirmed, "and the group is not confirmed");
+        assert_eq!(held.award, (1, 0, 1), "award: worked, confirmed, held");
+        assert_eq!(held.status, (1, 0, 0), "status: worked, confirmed, ready");
+        assert_eq!(
+            held.custom,
+            (0, 0),
+            "a custom award counts no held reference"
+        );
+
+        let confirmed = counts(&format!("{contact}<EOR>"));
+        assert!(confirmed.worked && !confirmed.new_iota && confirmed.confirmed);
+        assert_eq!(confirmed.award, (1, 1, 0));
+        assert_eq!(confirmed.status, (1, 1, 1));
+        assert_eq!(confirmed.custom, (1, 1));
+    }
+
+    /// ★ THE DECODE ROW'S TAG, end to end: a station decoded with no spot takes its New IOTA from
+    /// the callbook answer ([`crate::place_iotas`], as the board builds it). Logged by Log QSO with
+    /// no popup, on the real path, the contact holds that reference and the real needs fold clears
+    /// the tag, and the group is worked, not confirmed. Another station on another island keeps its
+    /// tag, and so does one with no answer until something names its group.
+    #[test]
+    fn a_decode_rows_callbook_tag_clears_in_the_real_needs_fold() {
+        use propagation::needalert::NeedTag;
+        use tempo_core::logbook::callbook::{is_callbook_filled, CallbookAnswer};
+        use tempo_core::logbook::offer::withhold_iota;
+
+        const CALL: &str = "VK9IH";
+        let answer = CallbookAnswer {
+            call: CALL.into(),
+            iota: Some("OC-147".into()),
+            ..CallbookAnswer::default()
+        };
+        crate::note_callbook_iota(CALL, &answer);
+        let d = Dir::new("decode-tag-clears");
+        std::fs::write(d.log(), tempo_core::logbook::adif_header()).unwrap();
+        let e = launch(&d);
+        {
+            let mut eng = engine_lock(&e);
+            eng.set_iota_at_log(crate::spot_iota_at_log, |_| true);
+            eng.note_callbook_answer(CALL, answer);
+        }
+        let tallies = LogTallies::default();
+        // What the decode list's alerts say of this call: its row names no island of its own.
+        let tagged = |e: &crate::SharedEngine| {
+            let mut heard = [propagation::needalert::heard_from_freq(CALL, 14.074, "FT8").unwrap()];
+            assert_eq!(heard[0].iota, None, "premise: a decode names no island");
+            crate::place_iotas(&mut heard, crate::callbook_iota_for_call, |_| true);
+            let needs = needs_kept(e, &LogTallies::default()).unwrap();
+            propagation::rank_needs(&heard, &*needs, &needs.slots())
+                .iter()
+                .any(|a| a.tags.contains(&NeedTag::NewIota))
+        };
+        assert!(tagged(&e), "premise: the tag shows before the contact");
+
+        {
+            let mut eng = engine_lock(&e);
+            eng.set_tier(tempo_app::dto::Tier::Ft8);
+            eng.set_frequency(14.074, "20m", "USB");
+            eng.call_station(CALL);
+            eng.hear_for_test(&format!("{MY_CALL} {CALL} -10"), -7, 1);
+            assert!(eng.log_current_qso(), "premise: Log QSO logged it");
+        }
+        let log = records(&e);
+        let r = log.iter().find(|r| r.call == CALL).expect("logged");
+        assert_eq!(r.ota.iota.as_deref(), Some("OC-147"));
+        assert!(withhold_iota(r));
+        assert!(
+            is_callbook_filled(r, "IOTA"),
+            "the card says from the callbook"
+        );
+
+        assert!(!tagged(&e), "the tag clears");
+        let needs = needs_kept(&e, &tallies).unwrap();
+        assert!(needs.worked_iota().contains("OC-147"));
+        assert!(!needs.confirmed_iota().contains("OC-147"));
+        let a = awards_kept(&e, &tallies).unwrap().iota.clone();
+        assert_eq!((a.worked, a.confirmed, a.held), (1, 0, 1));
+    }
+
+    /// The contact card, through the store: Confirm makes a held group a confirmed one where the
+    /// contact is confirmed and lets it go out; Clear takes it out of the log and the group is
+    /// needed again. Both reach the kept folds.
+    #[test]
+    fn confirming_or_clearing_a_held_reference_moves_what_the_log_counts() {
+        use tempo_core::logbook::offer::{withhold_iota, OFFER_HELD_FIELD};
+        use tempo_core::logbook::{FieldEdit, QsoEdit};
+        let row = |call: &str, iota: &str| {
+            format!(
+                "<CALL:4>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20261106<TIME_ON:6>120000\
+                 <IOTA:6>{iota}<LOTW_QSL_RCVD:1>Y<{OFFER_HELD_FIELD}:4>IOTA<EOR>\n"
+            )
+        };
+        let d = Dir::new("held-iota-card");
+        std::fs::write(
+            d.log(),
+            format!(
+                "{}{}{}",
+                tempo_core::logbook::adif_header(),
+                row("IA5X", "EU-028"),
+                row("IA5Y", "EU-031"),
+            ),
+        )
+        .unwrap();
+        let e = launch(&d);
+        let tallies = LogTallies::default();
+        let iota = |e: &_, t: &_| {
+            let a = awards_kept(e, t).unwrap().iota.clone();
+            (a.worked, a.confirmed, a.held)
+        };
+        assert_eq!(iota(&e, &tallies), (2, 0, 2));
+
+        let change = |call: &str, field: FieldEdit| {
+            let r = records(&e).into_iter().find(|r| r.call == call).unwrap();
+            let edit = QsoEdit::project(&r);
+            let (made, dur) = tempo_app::logwrite::edit_row_with_fields(
+                &e,
+                r.id.unwrap(),
+                &edit.key(),
+                &edit,
+                &[field],
+            );
+            made.expect("reads").expect("made");
+            dur.wait(std::time::Duration::from_secs(30)).unwrap();
+        };
+        change(
+            "IA5X",
+            FieldEdit {
+                tag: OFFER_HELD_FIELD.into(),
+                old: Some("IOTA".into()),
+                new: None,
+            },
+        );
+        change(
+            "IA5Y",
+            FieldEdit {
+                tag: "IOTA".into(),
+                old: Some("EU-031".into()),
+                new: None,
+            },
+        );
+        assert_eq!(iota(&e, &tallies), (1, 1, 0));
+        let needs = needs_kept(&e, &tallies).unwrap();
+        assert!(needs.confirmed_iota().contains("EU-028"));
+        assert!(!needs.worked_iota().contains("EU-031"), "needed again");
+
+        let log = records(&e);
+        let at = |call: &str| log.iter().find(|r| r.call == call).unwrap();
+        assert!(!withhold_iota(at("IA5X")));
+        assert!(tempo_core::logbook::adif_record(at("IA5X")).contains("<IOTA:6>EU-028"));
+        assert_eq!(at("IA5Y").ota.iota, None);
+        assert!(!withhold_iota(at("IA5Y")));
     }
 
     /// One ADIF record, parsed as the log parses it, with no id.

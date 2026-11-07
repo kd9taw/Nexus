@@ -538,6 +538,23 @@ describe('an IOTA reference taken from an offer (operator rulings, 2026-10-27)',
     expect(edit.name, 'and every box is as stored').toBeNull()
   })
 
+  it('Clear takes the reference out as the backend expects, naming what it was made against', async () => {
+    const spotted: LoggedQso = {
+      ...DL,
+      ota: { ...DL.ota!, iota: 'EU-028' },
+      extra: [...(DL.extra ?? []), ['APP_NEXUS_OFFER_HELD', 'IOTA']],
+    }
+    engine.log = [OTHER, spotted, ...Array.from({ length: 12 }, (_, n) => earlier(n))]
+    await mounted()
+    const card = await openCard()
+    fireEvent.click(within(card).getByRole('button', { name: t('iota.card.clear') }))
+    await waitFor(() => expect(api.editQsoById).toHaveBeenCalledTimes(1))
+    const [ref, edit, fields] = vi.mocked(api.editQsoById).mock.calls[0]
+    expect(ref.id).toBe('id-dl')
+    expect(fields).toEqual([{ tag: 'IOTA', old: 'EU-028', new: null }])
+    expect(edit.name, 'and every box is as stored').toBeNull()
+  })
+
   it('one taken from the callbook says so, and is held back the same way', async () => {
     const looked: LoggedQso = {
       ...DL,
@@ -563,6 +580,7 @@ describe('an IOTA reference taken from an offer (operator rulings, 2026-10-27)',
     const card = await openCard()
     expect(within(card).queryByText(t('iota.card.callbookHeld'))).toBeNull()
     expect(within(card).queryByRole('button', { name: t('iota.card.confirm') })).toBeNull()
+    expect(within(card).queryByRole('button', { name: t('iota.card.clear') })).toBeNull()
   })
 
   it('a reference the operator typed shows no such note', async () => {

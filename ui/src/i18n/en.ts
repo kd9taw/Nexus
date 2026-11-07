@@ -3073,6 +3073,9 @@ export const EN = {
     'IOTA ✓ (LoTW or card) · {{cards}} on cards — IOTA credits LoTW and cards, not eQSL',
   'awards.iota.note.worked':
     '{{worked}} worked · {{cards}} on cards — IOTA credits LoTW and cards, not eQSL',
+  // Island groups held on a contact, whether written with no popup or taken from an offer: in the
+  // worked count, in no confirmed one, until the operator confirms each on its contact card.
+  'awards.iota.note.held': 'Waiting for you to confirm on the contact card: {{held}}',
 
   // The breakdown panels. Every band and mode name under these headings is data.
   'awards.bands.head': 'DXCC by band',
@@ -10550,6 +10553,7 @@ export const EN = {
   'iota.card.spotHeld': 'Filled from a spot: kept in your log, sent to no service until you confirm it.',
   'iota.card.callbookHeld': 'Filled from the callbook: kept in your log, sent to no service until you confirm it.',
   'iota.card.confirm': 'Confirm',
+  'iota.card.clear': 'Clear',
   'spots.row.iota.title': 'IOTA {{ref}}, from the spot comment',
   'spots.row.iota.needed': 'New IOTA: {{ref}}, from the spot comment',
   'settings.iotaList.legend': 'IOTA island list',

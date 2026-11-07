@@ -1040,6 +1040,7 @@ export function AwardsView({
                   cards: aw.iota.cardConfirmed ?? 0,
                 })}
           </span>
+          {(aw.iota.held ?? 0) > 0 && <span className="aw-note">{t('awards.iota.note.held', { held: aw.iota.held ?? 0 })}</span>}
         </div>
 
         {/* CQ's US Counties award: the 3,077 counties, counted from each contact's CNTY. The

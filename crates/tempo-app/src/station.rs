@@ -2421,6 +2421,17 @@ fn wider(a: OpClass, b: OpClass) -> OpClass {
     }
 }
 
+/// What an FT contact logged with no popup reads for its IOTA reference. Both run under the Engine
+/// lock, so they only read what the command layer holds in memory.
+pub(crate) struct IotaAtLog {
+    /// What the spots say for a call, band and start time.
+    #[allow(clippy::type_complexity)]
+    pub(crate) spots:
+        Box<dyn Fn(&str, &str, u64) -> tempo_core::logbook::offer::SpotIota + Send + Sync>,
+    /// Whether a reference is an island group.
+    pub(crate) known: Box<dyn Fn(&str) -> bool + Send + Sync>,
+}
+
 /// The operator's station: one log, one identity of record, one set of outbound
 /// connector queues — shared by every receive/transmit chain the app runs.
 pub struct StationCore {
@@ -2587,6 +2598,10 @@ pub struct StationCore {
     #[allow(clippy::type_complexity)]
     pub(crate) state_resolve:
         Option<Box<dyn Fn(&str, Option<&str>) -> Option<String> + Send + Sync>>,
+    /// What an FT contact logged with no popup reads for its IOTA reference
+    /// ([`tempo_core::logbook::offer::hold_iota_at_log`]). Injected by the command layer, which
+    /// keeps the spots and the island list. `None` in headless tests (no reference is written).
+    pub(crate) iota_at_log: Option<IotaAtLog>,
     /// The log-time path grader, injected by the command layer (which holds the propagation
     /// model and the path card it last computed): for a contact being logged, its graded route
     /// ([`tempo_core::logbook::path_stamp`]). Same pattern as [`Self::set_state_resolver`], for
@@ -2806,6 +2821,7 @@ impl StationCore {
             dxcc_country: None,
             country_dxcc: None,
             state_resolve: None,
+            iota_at_log: None,
             path_at_log: None,
             grid_rarity_resolve: None,
             lotw_resolve: None,
@@ -3712,6 +3728,18 @@ impl StationCore {
         resolve: impl Fn(&str, Option<&str>) -> Option<String> + Send + Sync + 'static,
     ) {
         self.state_resolve = Some(Box::new(resolve));
+    }
+
+    /// Inject what a no-popup FT contact reads ([`Self::iota_at_log`]).
+    pub fn set_iota_at_log(
+        &mut self,
+        spots: impl Fn(&str, &str, u64) -> tempo_core::logbook::offer::SpotIota + Send + Sync + 'static,
+        known: impl Fn(&str) -> bool + Send + Sync + 'static,
+    ) {
+        self.iota_at_log = Some(IotaAtLog {
+            spots: Box::new(spots),
+            known: Box::new(known),
+        });
     }
 
     /// Inject the log-time path grader ([`Self::path_at_log`]).

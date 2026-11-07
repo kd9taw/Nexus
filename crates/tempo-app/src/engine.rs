@@ -18251,7 +18251,19 @@ impl Engine {
 
     /// [`Self::log_qso`] for a contact the FT8/FT4 engine built ([`HeldQso::built`]), as it was
     /// built: one with no grid of its own takes a callbook's for the map only.
-    fn log_built_qso(&mut self, held: HeldQso) {
+    ///
+    /// This is the FT contact logged with no popup, whether Auto-log wrote it or Log QSO did, so
+    /// nothing was on screen to take an IOTA offer from: what the spots name, else the answer a
+    /// lookup already gave for this call, goes in held
+    /// (`tempo_core::logbook::offer::hold_iota_at_log`). Never a lookup from here. Logging only:
+    /// the contact is already finished, and neither the sequencer nor the transmitter reads this.
+    fn log_built_qso(&mut self, mut held: HeldQso) {
+        if let Some(read) = &self.station.iota_at_log {
+            let rec = &mut held.record;
+            let spots = (read.spots)(&rec.call, &rec.band, rec.when_unix);
+            let answer = self.callbook_answer(&rec.call);
+            tempo_core::logbook::offer::hold_iota_at_log(rec, &spots, answer, &*read.known);
+        }
         let _ = self.log_qso_inner(
             held.record,
             false,
@@ -18892,7 +18904,8 @@ impl Engine {
         //
         // Never its IOTA reference: that is OFFERED on the log form and in the popup, and written
         // only when the operator takes it (`tempo_core::logbook::offer`; operator decision,
-        // 2026-10-27). An FT contact auto-logged with no popup logs without one.
+        // 2026-10-27). An FT contact logged with no popup logs it held instead, written before
+        // it reaches this funnel (`Self::log_built_qso`).
         //
         // An FT8/FT4 contact the station gave no grid in takes the callbook's grid for the
         // distance and the map only (`fill_gridless_from_callbook`): it counts toward no award
@@ -35708,6 +35721,15 @@ contact yourself."
         resolve: impl Fn(&str, Option<&str>) -> Option<String> + Send + Sync + 'static,
     ) {
         self.station.set_state_resolver(resolve)
+    }
+
+    /// See [`StationCore::set_iota_at_log`].
+    pub fn set_iota_at_log(
+        &mut self,
+        spots: impl Fn(&str, &str, u64) -> tempo_core::logbook::offer::SpotIota + Send + Sync + 'static,
+        known: impl Fn(&str) -> bool + Send + Sync + 'static,
+    ) {
+        self.station.set_iota_at_log(spots, known)
     }
 
     /// See [`StationCore::set_path_grader`].
