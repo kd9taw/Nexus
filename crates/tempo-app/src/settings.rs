@@ -3218,9 +3218,22 @@ pub struct Settings {
     /// "heuristic" (physics-lite). Unknown values fall back to the heuristic in the factory, so
     /// old configs can never break.
     ///
-    /// Always written out, so a saved value alone does not say whether the operator chose it.
-    #[serde(default = "default_prop_engine")]
+    /// Always written out, so a saved value alone does not say whether the operator chose it:
+    /// that is [`Self::prop_engine_moved`]'s job. A file with no key was running the heuristic,
+    /// the default of the builds that wrote it, and moves like any other that says so.
+    #[serde(default = "prop_engine_of_an_older_file")]
     pub prop_engine: String,
+    /// The one-time move to P.533 has been made for this file ([`Self::move_prop_engine_once`]).
+    /// From then on a saved "heuristic" is the operator's choice and is never moved. True for a
+    /// new install, which has nothing to move; absent, so false, in a file from before the move.
+    /// No form sets it (`Engine::apply_settings_inner`).
+    #[serde(default)]
+    pub prop_engine_moved: bool,
+    /// The move changed this station's engine and the one-time note saying so is still to be
+    /// dismissed. Written in the same save as the move, so the two cannot come apart. One writer
+    /// clears it, `Engine::dismiss_prop_engine_note`; no form can bring it back.
+    #[serde(default)]
+    pub prop_engine_note_due: bool,
     /// Save each received period's audio as a WAV: "none" (default) | "all"
     /// (every RX period — ~2 GB/day, debugging/archival) | "decodes" (only
     /// periods that produced at least one decode). WSJT-X's Save menu.
@@ -4430,6 +4443,10 @@ fn default_lotw_max_age_days() -> u32 {
 
 fn default_prop_engine() -> String {
     "p533".to_string()
+}
+
+fn prop_engine_of_an_older_file() -> String {
+    "heuristic".to_string()
 }
 
 fn default_qrz_sync_hours() -> u32 {
@@ -6962,6 +6979,8 @@ impl Default for Settings {
             max_power_digital: None,
             max_power_am: default_max_power_am(),
             prop_engine: default_prop_engine(),
+            prop_engine_moved: true,
+            prop_engine_note_due: false,
             save_wav: default_save_wav(),
             lotw_max_age_days: default_lotw_max_age_days(),
             ant_tx_gain_dbi: 0.0,
@@ -7164,6 +7183,39 @@ impl Settings {
     /// migrations, so without this a restored heartbeat user would lose the HB button.
     pub fn choose_js8_hb_networking_for_old_settings(&mut self) {
         self.js8_hb_networking = self.js8_hb_ack || self.js8_hb_interval_min > 0;
+    }
+
+    /// The one-time move to P.533, in memory: every "heuristic" moves and is due the note; "p533"
+    /// and a name this build does not know stay as they are. Either way the move is recorded as
+    /// made, so a "heuristic" chosen later is never moved. False when it was already made.
+    pub fn move_prop_engine_in_memory(&mut self) -> bool {
+        if self.prop_engine_moved {
+            return false;
+        }
+        self.prop_engine_moved = true;
+        if self.prop_engine == "heuristic" {
+            self.prop_engine = default_prop_engine();
+            self.prop_engine_note_due = true;
+        }
+        true
+    }
+
+    /// [`Self::move_prop_engine_in_memory`] at launch, kept only if `save` took it. The engine,
+    /// the marker and the note go in one save, a temp file renamed into place, so a crash leaves
+    /// all of them or none. A refused save (a read-only folder, a file that could not be read)
+    /// leaves this station as it was, on its old engine with no note, and the next launch tries
+    /// again: nothing moves or nags at each launch. `Ok(true)` when the move was made and saved.
+    pub fn move_prop_engine_once(
+        &mut self,
+        save: impl FnOnce(&Settings) -> std::io::Result<()>,
+    ) -> std::io::Result<bool> {
+        let mut moved = self.clone();
+        if !moved.move_prop_engine_in_memory() {
+            return Ok(false);
+        }
+        save(&moved)?;
+        *self = moved;
+        Ok(true)
     }
 
     /// Is DX cluster / RBN spot ingestion EFFECTIVELY on? Cluster and RBN spots are
@@ -17149,32 +17201,238 @@ mod tests {
         assert_eq!(Settings::load(&path).prop_engine, "p533");
     }
 
-    /// A file from before the setting existed has no key, so nobody can have chosen an engine in
-    /// it.
-    #[test]
-    fn a_file_without_the_engine_key_predicts_with_p533() {
-        let path = scratch_dir("engine_nokey").join("settings.json");
+    /// A settings file as an older build left it: `engine` for its `propEngine` (`None`, no key),
+    /// and no marker unless `moved` says one.
+    fn engine_file(label: &str, engine: Option<&str>, moved: Option<bool>) -> std::path::PathBuf {
+        let path = scratch_dir(&format!("engine_{label}")).join("settings.json");
+        let _ = std::fs::remove_file(&path);
         Settings::default().save(&path).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        v.as_object_mut().unwrap().remove("propEngine").unwrap();
+        let o = v.as_object_mut().unwrap();
+        o.remove("propEngineMoved");
+        o.remove("propEngineNoteDue");
+        o.remove("propEngine");
+        if let Some(engine) = engine {
+            o.insert("propEngine".into(), engine.into());
+        }
+        if let Some(moved) = moved {
+            o.insert("propEngineMoved".into(), moved.into());
+        }
         std::fs::write(&path, v.to_string()).unwrap();
-        assert_eq!(Settings::load(&path).prop_engine, "p533");
+        path
     }
 
-    /// Either engine named in a file survives a load and a save.
+    /// Every kind of file a launch can meet: what it runs afterwards, whether the note is due, and
+    /// that all of it is on disk and a second launch changes nothing.
     #[test]
-    fn a_saved_engine_choice_is_kept_through_a_round_trip() {
-        for engine in ["heuristic", "p533"] {
-            let path = scratch_dir(&format!("engine_kept_{engine}")).join("settings.json");
-            let mut s = Settings::default();
-            s.prop_engine = engine.to_string();
-            s.save(&path).unwrap();
-            let back = Settings::load(&path);
-            assert_eq!(back.prop_engine, engine);
-            back.save(&path).unwrap();
-            assert_eq!(Settings::load(&path).prop_engine, engine);
+    fn the_engine_moves_once_for_every_kind_of_older_file() {
+        for (label, engine, moved, want, note) in [
+            ("nokey", None, None, "p533", true),
+            ("heuristic", Some("heuristic"), None, "p533", true),
+            ("p533", Some("p533"), None, "p533", false),
+            ("unknown", Some("voacap"), None, "voacap", false),
+            ("chosen", Some("heuristic"), Some(true), "heuristic", false),
+            ("chosen_p533", Some("p533"), Some(true), "p533", false),
+        ] {
+            let path = engine_file(label, engine, moved);
+            let mut s = Settings::load(&path);
+            let first = s.move_prop_engine_once(|m| m.save(&path)).unwrap();
+            assert_eq!(
+                first,
+                moved.is_none(),
+                "{label}: only an unmarked file moves"
+            );
+            assert_eq!(s.prop_engine, want, "{label}");
+            assert!(s.prop_engine_moved, "{label}");
+            assert_eq!(s.prop_engine_note_due, note, "{label}");
+            let mut again = Settings::load(&path);
+            assert_eq!(again.prop_engine, want, "{label}: on disk");
+            assert!(again.prop_engine_moved, "{label}: on disk");
+            assert_eq!(again.prop_engine_note_due, note, "{label}: on disk");
+            assert!(
+                !again.move_prop_engine_once(|m| m.save(&path)).unwrap(),
+                "{label}: once"
+            );
+            assert_eq!(again.prop_engine, want, "{label}: second launch");
+            assert_eq!(again.prop_engine_note_due, note, "{label}: second launch");
         }
+    }
+
+    /// Real files from older versions, not just the one key.
+    #[test]
+    fn the_engine_moves_in_real_files_from_older_versions() {
+        for (label, text) in [
+            (
+                "v1_15",
+                include_str!("../../../src-tauri/tests/fixtures/settings-1.15.0.json"),
+            ),
+            (
+                "v1_17",
+                include_str!(
+                    "../../tempo-audio/tests/fixtures/settings-1.17.0-net-rigctl-clash.json"
+                ),
+            ),
+            (
+                "before_tci",
+                include_str!("../tests/fixtures/settings-before-tci-two-radios.json"),
+            ),
+        ] {
+            let path = scratch_dir(&format!("engine_real_{label}")).join("settings.json");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, text).unwrap();
+            let mut s = Settings::load(&path);
+            assert_eq!(s.prop_engine, "heuristic", "{label}: what the file says");
+            assert!(!s.prop_engine_moved, "{label}");
+            assert!(
+                s.move_prop_engine_once(|m| m.save(&path)).unwrap(),
+                "{label}"
+            );
+            let back = Settings::load(&path);
+            assert_eq!(back.prop_engine, "p533", "{label}");
+            assert!(
+                back.prop_engine_moved && back.prop_engine_note_due,
+                "{label}"
+            );
+        }
+    }
+
+    /// A new install has nothing to move and no reason for a note, and neither does a station
+    /// whose file could not be read, which starts from the defaults.
+    #[test]
+    fn a_new_install_has_no_move_to_make_and_no_note() {
+        let path = scratch_dir("engine_fresh").join("settings.json");
+        let _ = std::fs::remove_file(&path);
+        let mut s = Settings::load(&path);
+        assert!(!s.move_prop_engine_once(|m| m.save(&path)).unwrap());
+        assert_eq!(s.prop_engine, "p533");
+        assert!(!s.prop_engine_note_due);
+        assert!(Settings::not_a_new_install().prop_engine_moved);
+    }
+
+    /// A refused save moves nothing: this run stays on its old engine with no note and the file
+    /// is untouched, so no launch can show the note again without a move having been saved.
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_save_moves_nothing_and_shows_no_note() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = engine_file("readonly", Some("heuristic"), None);
+        let dir = path.parent().unwrap().to_path_buf();
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        for launch in 0..2 {
+            let mut s = Settings::load(&path);
+            assert!(
+                s.move_prop_engine_once(|m| m.save(&path)).is_err(),
+                "launch {launch}"
+            );
+            assert_eq!(s.prop_engine, "heuristic", "launch {launch}");
+            assert!(!s.prop_engine_moved, "launch {launch}");
+            assert!(!s.prop_engine_note_due, "launch {launch}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        }
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // The folder writable again: the next launch makes the move, once.
+        let mut s = Settings::load(&path);
+        assert!(s.move_prop_engine_once(|m| m.save(&path)).unwrap());
+        assert_eq!(s.prop_engine, "p533");
+        assert!(s.prop_engine_note_due);
+    }
+
+    /// After the move a saved "heuristic" is a real choice, through every later save and launch.
+    #[test]
+    fn heuristic_chosen_after_the_move_is_never_moved_again() {
+        let path = engine_file("after", Some("heuristic"), None);
+        let mut s = Settings::load(&path);
+        s.move_prop_engine_once(|m| m.save(&path)).unwrap();
+        let mut e = crate::engine::Engine::with_settings(s);
+        let mut form = e.settings().clone();
+        form.prop_engine = "heuristic".into();
+        e.apply_settings(form);
+        assert!(
+            !e.settings().prop_engine_note_due,
+            "the note says P.533 is in use; it no longer is"
+        );
+        e.settings().save(&path).unwrap();
+        for _ in 0..2 {
+            let mut next = Settings::load(&path);
+            assert!(!next.move_prop_engine_once(|m| m.save(&path)).unwrap());
+            assert_eq!(next.prop_engine, "heuristic");
+            assert!(!next.prop_engine_note_due);
+            next.save(&path).unwrap();
+        }
+    }
+
+    /// No form, the Settings panel's or Remote's, can reset the marker or bring back the note:
+    /// `propEngine` is writable from afar but these two are not, and a stale form holds old values.
+    #[test]
+    fn a_stale_form_cannot_reset_the_marker_or_bring_back_the_note() {
+        let path = engine_file("form", Some("heuristic"), None);
+        let mut s = Settings::load(&path);
+        s.move_prop_engine_once(|m| m.save(&path)).unwrap();
+        let stale = s.clone();
+        let mut e = crate::engine::Engine::with_settings(s);
+        assert!(e.settings().prop_engine_note_due);
+        e.dismiss_prop_engine_note();
+        assert!(!e.settings().prop_engine_note_due);
+        e.apply_settings(stale);
+        assert!(
+            !e.settings().prop_engine_note_due,
+            "dismissed stays dismissed"
+        );
+        let mut older = e.settings().clone();
+        older.prop_engine_moved = false;
+        e.apply_settings(older);
+        assert!(e.settings().prop_engine_moved, "made stays made");
+    }
+
+    /// A form cannot make the note due on a station that was never moved.
+    #[test]
+    fn a_form_cannot_raise_the_note() {
+        let mut e = crate::engine::Engine::with_settings(Settings::default());
+        let mut form = e.settings().clone();
+        form.prop_engine_note_due = true;
+        e.apply_settings(form);
+        assert!(!e.settings().prop_engine_note_due);
+    }
+
+    /// An engine picked from a form during a run whose launch save was refused is a choice too.
+    #[test]
+    fn an_engine_picked_before_the_move_was_saved_is_a_choice() {
+        let path = engine_file("picked", Some("p533"), None);
+        let s = Settings::load(&path);
+        assert!(!s.prop_engine_moved);
+        let mut e = crate::engine::Engine::with_settings(s);
+        let mut form = e.settings().clone();
+        form.prop_engine = "heuristic".into();
+        e.apply_settings(form);
+        e.settings().save(&path).unwrap();
+        let mut next = Settings::load(&path);
+        assert!(!next.move_prop_engine_once(|m| m.save(&path)).unwrap());
+        assert_eq!(next.prop_engine, "heuristic");
+    }
+
+    /// A restored backup keeps the note its settings carry: the restore is not a form.
+    #[test]
+    fn a_restore_keeps_the_note_it_carries() {
+        let mut bundle = Settings::default();
+        bundle.prop_engine_note_due = true;
+        let mut e = crate::engine::Engine::with_settings(Settings::default());
+        e.apply_restored_settings(bundle);
+        assert!(e.settings().prop_engine_note_due);
+    }
+
+    /// The marker and the note survive an ordinary load and save.
+    #[test]
+    fn the_marker_and_the_note_survive_a_round_trip() {
+        let path = engine_file("round", Some("heuristic"), None);
+        let mut s = Settings::load(&path);
+        s.move_prop_engine_once(|m| m.save(&path)).unwrap();
+        Settings::load(&path).save(&path).unwrap();
+        let back = Settings::load(&path);
+        assert_eq!(back.prop_engine, "p533");
+        assert!(back.prop_engine_moved);
+        assert!(back.prop_engine_note_due);
     }
 
     #[test]

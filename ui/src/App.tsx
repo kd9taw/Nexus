@@ -175,6 +175,7 @@ import {
   setLicenseClass,
   setExperienceLevel as apiSetExperienceLevel,
   markSetupWizardSeen,
+  dismissPropEngineNote,
   stopQsoRecording,
   pointRotatorAtCall,
   qsySetEnabled as apiQsySetEnabled,
@@ -253,6 +254,7 @@ import { ConfirmHost, confirmDialog } from './confirm'
 import { RemoteApprovalPrompt } from './remote-native/RemoteApprovalPrompt'
 import { LogbookSaving } from './components/LogbookSaving'
 import { OnboardingBanner } from './components/OnboardingBanner'
+import { PropEngineNote, propEngineNoteDismissed, rememberPropEngineNoteDismissed } from './components/PropEngineNote'
 import { PounceBanner } from './components/PounceBanner'
 import { UpdateBanner } from './components/UpdateBanner'
 import { ClientBanner } from './components/ClientBanner'
@@ -3004,6 +3006,13 @@ function App() {
     return () => window.removeEventListener(CONTEST_SETUP_SAVED_EVENT, handleSettingsSaved)
   }, [handleSettingsSaved])
 
+  const [engineNoteDismissed, setEngineNoteDismissed] = useState(propEngineNoteDismissed)
+  const handleDismissEngineNote = useCallback(() => {
+    rememberPropEngineNoteDismissed()
+    setEngineNoteDismissed(true)
+    void dismissPropEngineNote().catch(() => {})
+  }, [])
+
   const handleDismissOnboarding = useCallback(() => {
     localStorage.setItem(ONBOARD_KEY, '1')
     setOnboardDismissed(true)
@@ -4385,6 +4394,10 @@ function App() {
           onOpenSettings={() => handleView('settings')}
           onDismiss={handleDismissOnboarding}
         />
+      )}
+
+      {settings?.propEngineNoteDue && settings.propEngine === 'p533' && !engineNoteDismissed && (
+        <PropEngineNote onOpenSettings={() => handleView('settings')} onDismiss={handleDismissEngineNote} />
       )}
 
       {reveal.pending && (

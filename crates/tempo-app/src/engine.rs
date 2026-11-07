@@ -8112,7 +8112,10 @@ impl Engine {
         let mut s = s;
         // ⛔ A bundle whose station profile id names no profile lands on one, with its call.
         s.repair_active_station_profile();
+        // A restore is not a form: a backup's own move is due its note.
+        let note_due = s.prop_engine_note_due;
         self.apply_settings_inner(s, false);
+        self.settings.prop_engine_note_due = note_due;
     }
 
     /// Drop the Cloudlog key waiting to move to the keychain, which every apply keeps
@@ -8271,6 +8274,11 @@ impl Engine {
         // The setup wizard's "seen" record (`mark_setup_wizard_seen`) only ever goes from not seen
         // to seen: no form, restore or reset brings the first-run wizard back to a station.
         let live_setup_wizard_seen = self.settings.setup_wizard_seen;
+        // The one-time engine move (`Settings::move_prop_engine_once`): no form resets its marker
+        // or brings back its note.
+        let live_prop_engine = self.settings.prop_engine.clone();
+        let live_prop_engine_moved = self.settings.prop_engine_moved;
+        let live_prop_engine_note_due = self.settings.prop_engine_note_due;
         // The station profiles and which one is on: ONE writer each, the profile verbs
         // (`engine/station_profiles.rs`). The form's own active id says which profile its flat
         // call, grid, state and power describe (`Settings::keep_station_form`).
@@ -8432,6 +8440,12 @@ impl Engine {
         self.settings.operating_mode = live_op_mode;
         self.settings.keyboard_modem = live_keyboard_modem;
         self.settings.setup_wizard_seen |= live_setup_wizard_seen;
+        // An engine changed here is a choice, even if the launch's save of the move was refused.
+        self.settings.prop_engine_moved |=
+            live_prop_engine_moved || self.settings.prop_engine != live_prop_engine;
+        // The note says P.533 is in use, so going back to the heuristic also answers it.
+        self.settings.prop_engine_note_due =
+            live_prop_engine_note_due && self.settings.prop_engine == "p533";
         if keep_live_roster {
             self.settings.blocked_calls = live_blocked;
         }
@@ -9106,6 +9120,13 @@ impl Engine {
     /// or skipped, so it never opens by itself again. Nothing clears it (see `apply_settings_inner`).
     pub fn mark_setup_wizard_seen(&mut self) -> &Settings {
         self.settings.setup_wizard_seen = true;
+        &self.settings
+    }
+
+    /// The one-time note about the engine move was dismissed. The ONE writer that clears
+    /// `Settings::prop_engine_note_due`.
+    pub fn dismiss_prop_engine_note(&mut self) -> &Settings {
+        self.settings.prop_engine_note_due = false;
         &self.settings
     }
 

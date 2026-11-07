@@ -1227,6 +1227,7 @@ export const DE: PartialCatalog = {
   "settings.integrations.logSpaceWeather.label": "Weltraumwetter bei jedem QSO loggen",
   "settings.integrations.logSpaceWeather.hint": "Trägt den planetaren K-Index, den A-Index und den Solarflux in jedes geloggte QSO ein (ADIF K_INDEX, A_INDEX, SFI), aus dem letzten Wert, den Nexus abgerufen hat. Ist dieser Wert älter als 3 Stunden, wird nichts eingetragen.",
   "prop.engine.fallback": "modelliert: P.533 konnte nicht laufen",
+  "prop.engine.note": "Vorhersagen nutzen jetzt P.533, daher haben sich manche Bandempfehlungen geändert. Zum Zurückstellen öffnen Sie Einstellungen ▸ Dienste ▸ Vorhersagemodell.",
   "settings.integrations.propEngine.label": "Vorhersagemodell",
   "settings.integrations.propEngine.heuristic": "Modelliert (schnelle Heuristik)",
   "settings.integrations.propEngine.p533": "ITU-R P.533 (volle Physik, Standard)",

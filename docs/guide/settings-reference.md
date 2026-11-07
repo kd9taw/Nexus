@@ -2170,7 +2170,9 @@ Nexus connects to all of them and merges what they report.*
 - **Prediction engine** — ITU-R P.533 (full physics, the default) or Modelled
   (fast heuristic). "P.533 is the real circuit-reliability method (validated against the
   ITU reference; ~0.1 s per prediction, uses your station power). **Live spots
-  always win over any model.**" See [Conditions](connect.md).
+  always win over any model.**" See [Conditions](connect.md). A station on the
+  fast heuristic moves to P.533 once when it updates to the version that made it
+  the default, and a dismissible line says so. Set it back here and it stays.
 - **Antenna gain (dBi) — TX / RX** (under *Antenna gain (advanced)*) — "Used by
   the P.533 link budget only. 0 = a simple wire/vertical (isotropic); a
   3-element yagi ≈ 6–8. Honest v1: a plain dB shift — no pattern or

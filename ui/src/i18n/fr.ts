@@ -7923,6 +7923,7 @@ export const FR: PartialCatalog = {
   "settings.integrations.openingWatch.hint": "Surveille l'activité VHF/10 m autour de votre QTH (pas seulement vos propres contacts) pour que les ouvertures signalent « ouvert autour de vous » avant même d'avoir contacté quelqu'un. Effectif au redémarrage.",
   "settings.integrations.openingWatch.label": "Veille des ouvertures proches",
   "prop.engine.fallback": "modélisé : P.533 n'a pas pu s'exécuter",
+  "prop.engine.note": "Les prévisions utilisent maintenant P.533, donc certaines réponses de bande ont changé. Pour revenir en arrière, ouvrez Réglages ▸ Services ▸ Moteur de prévision.",
   "settings.integrations.propEngine.heuristic": "Modélisé (heuristique rapide)",
   "settings.integrations.propEngine.hint": "Alimente la prévision de trajet par station et la grille 24h bande×heure. P.533, le choix par défaut, est la vraie méthode de fiabilité de circuit (validée contre la référence ITU ; ~0.1 s par prévision, utilise la puissance de votre station). Les spots en direct l'emportent toujours sur un modèle.",
   "settings.integrations.propEngine.label": "Moteur de prévision",

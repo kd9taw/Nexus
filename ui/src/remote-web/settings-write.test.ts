@@ -24,6 +24,16 @@ const control: LogChange = { kind: 'settings', revision, values: { contestCheck:
 const mixed: LogChange = { kind: 'settings', revision, values: { autoLog: true, contestCheck: '73' } }
 afterEach(() => vi.useRealTimers())
 
+it('offers the engine but not the record of its one-time move, to read or to write', () => {
+  expect(WRITABLE_CONTROL_SETTINGS_KEYS).toContain('propEngine')
+  for (const key of ['propEngineMoved', 'propEngineNoteDue']) {
+    expect(SETTINGS_KEYS as readonly string[]).not.toContain(key)
+    expect(WRITABLE_CONTROL_SETTINGS_KEYS as readonly string[]).not.toContain(key)
+    expect(WRITABLE_LOGGING_SETTINGS_KEYS as readonly string[]).not.toContain(key)
+  }
+  expect(() => logChange({ kind: 'settings', revision, values: { propEngineMoved: false } })).toThrow()
+})
+
 it('writes only settings on the allow-list, each in its own type, against the document revision it showed', () => {
   const macros = { activeCwProfile: 0, band: ['QRZ?'], chat: ['73'], cw: [], cwProfiles: [], qso: ['RR73'] }
   for (const change of [logging, control, mixed,

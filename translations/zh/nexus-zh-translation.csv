@@ -3726,6 +3726,7 @@
 "4","settings.integrations.propEngine.p533","ITU-R P.533 (full physics, default)","ITU-R P.533（完整物理模型，默认）","ITU | ITU-R","Filled by the maintainer, pending translator review."
 "4","settings.integrations.propEngine.hint","Drives the per-station path outlook + 24h band×hour grid. P.533, the default, is the real circuit-reliability method (validated against the ITU reference; ~0.1 s per prediction, uses your station power). Live spots always win over any model.","驱动每电台路径展望 + 24 小时 频段×小时 网格。默认的 P.533 是真实的电路可靠性方法（对照 ITU 参考验证；每次预测约 0.1 秒，使用你的电台功率）。实时报点始终优先于任何模型。","ITU | 0.1","Filled by the maintainer, pending translator review."
 "4","prop.engine.fallback","modelled: P.533 could not run","建模：P.533 无法运行","P.533","Filled by the maintainer, pending translator review."
+"4","prop.engine.note","Predictions now use P.533, so some band answers have changed. To go back, open Settings ▸ Services ▸ Prediction engine.","预测现在使用 P.533，因此部分频段的结果已有变化。要改回，请打开 设置 ▸ 服务 ▸ 预测引擎。","P.533","Filled by the maintainer, pending translator review."
 "4","settings.lotwUsers.legend","LoTW users list","LoTW 用户列表","LoTW",""
 "4","settings.lotwUsers.fetch.action","Fetch now","立即获取","",""
 "4","settings.lotwUsers.fetch.busy","Fetching…","正在获取…","","One-word control on: Settings ▸ LoTW users. Out of context this could be a noun or a verb — open that screen (or read the key name) before choosing the Russian word."

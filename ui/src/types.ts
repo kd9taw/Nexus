@@ -6274,6 +6274,9 @@ export interface Settings {
   /** Path-prediction engine: 'p533' (the default) or 'heuristic' (physics-lite)
    * (native ITU-R P.533 — real circuit-reliability physics). */
   propEngine: string
+  /** The one-time move to P.533 changed this station's engine and its note is still to be
+   *  dismissed. Set by the shack alone; no form changes it. */
+  propEngineNoteDue?: boolean
   /** Save each RX period as a WAV: 'none' | 'all' | 'decodes' (WSJT-X Save menu). */
   saveWav?: string
   /** LoTW-user highlight window (days; default 365) — calls with an ARRL

@@ -6601,6 +6601,7 @@ export const JA: PartialCatalog = {
   "settings.integrations.logSpaceWeather.label": "交信ごとに宇宙天気を記録",
   "settings.integrations.logSpaceWeather.hint": "Nexusが最後に取得した値から、惑星K指数・A指数・太陽フラックスを記録するすべての交信に付記します（ADIF K_INDEX、A_INDEX、SFI）。その値が3時間より古い場合は何も付記しません。",
   "prop.engine.fallback": "モデル計算：P.533 を実行できませんでした",
+  "prop.engine.note": "予測は P.533 を使うようになり、一部のバンドの答えが変わりました。元に戻すには 設定 ▸ サービス ▸ 予測エンジン を開いてください。",
   "settings.integrations.propEngine.label": "予測エンジン",
   "settings.integrations.propEngine.heuristic": "モデル計算（高速ヒューリスティック）",
   "settings.integrations.propEngine.p533": "ITU-R P.533（完全な物理計算、既定）",

@@ -22365,6 +22365,9 @@ fn settings_from_bundle(
     if predates_hb_networking {
         settings.choose_js8_hb_networking_for_old_settings();
     }
+    // A marker this backup does not carry reads as false, so the move is made here as it would be
+    // for an upgraded file, note included; otherwise the live marker would keep its "heuristic".
+    settings.move_prop_engine_in_memory();
     Ok(settings)
 }
 
@@ -29406,6 +29409,18 @@ fn mark_setup_wizard_seen(state: State<'_, SharedEngine>) -> Result<AppSnapshot,
     let s = eng.mark_setup_wizard_seen();
     persist_settings(s.clone(), |e| {
         eprintln!("tempo: mark_setup_wizard_seen save failed: {e}")
+    });
+    Ok(eng.snapshot())
+}
+
+/// The one-time note about the move to P.533 was dismissed. The ONE write path that clears
+/// `Settings::prop_engine_note_due`. Returns the snapshot.
+#[tauri::command(async)]
+fn dismiss_prop_engine_note(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    let s = eng.dismiss_prop_engine_note();
+    persist_settings(s.clone(), |e| {
+        eprintln!("tempo: dismiss_prop_engine_note save failed: {e}")
     });
     Ok(eng.snapshot())
 }
@@ -49813,6 +49828,12 @@ pub fn run() {
 
     let mut settings = Settings::load(&settings_path());
     move_upload_start_beside_the_log(&mut settings, &shared_data_dir());
+    // One-time migration: every saved "heuristic" moves to P.533, and says so once. Launch, before
+    // the Engine and any settings writer exist: a bare save, exempt from the writer's Engine-lock
+    // precondition (`tempo_app::settings::writer`). A refused save leaves this run as it was.
+    if let Err(e) = settings.move_prop_engine_once(|settings| settings.save(&settings_path())) {
+        eprintln!("tempo: couldn't save the move to P.533, trying again next launch: {e}");
+    }
     // The DEBUG tier, as early as the settings are known — a diagnostic session must capture
     // the startup it was turned on for, not just what came after.
     tempo_core::applog::set_debug(settings.diag_debug_log);
@@ -52506,6 +52527,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         remove_station_profile,
         set_experience_level,
         mark_setup_wizard_seen,
+        dismiss_prop_engine_note,
         route_preview,
         route_preview_draft,
         test_radio_cat,
@@ -53777,6 +53799,33 @@ mod tests {
     /// build added would otherwise be copied straight into a file the operator is told is safe
     /// to email — so the export drops every preserved key, identified from the live settings
     /// rather than guessed from its name.
+    #[test]
+    fn a_backup_from_before_the_engine_move_is_moved_and_one_from_after_is_not() {
+        let bundle = |engine: Option<&str>, moved: Option<bool>| {
+            let mut v = serde_json::json!({});
+            if let Some(engine) = engine {
+                v["propEngine"] = engine.into();
+            }
+            if let Some(moved) = moved {
+                v["propEngineMoved"] = moved.into();
+            }
+            super::settings_from_bundle(v).unwrap()
+        };
+        for (engine, moved, want, note) in [
+            (None, None, "p533", true),
+            (Some("heuristic"), None, "p533", true),
+            (Some("p533"), None, "p533", false),
+            (Some("voacap"), None, "voacap", false),
+            (Some("heuristic"), Some(true), "heuristic", false),
+            (Some("p533"), Some(true), "p533", false),
+        ] {
+            let s = bundle(engine, moved);
+            assert_eq!(s.prop_engine, want, "{engine:?} {moved:?}");
+            assert_eq!(s.prop_engine_note_due, note, "{engine:?} {moved:?}");
+            assert!(s.prop_engine_moved, "{engine:?} {moved:?}");
+        }
+    }
+
     #[test]
     fn an_exported_bundle_carries_neither_a_known_credential_nor_a_newer_builds_keys() {
         let mut s = tempo_app::settings::Settings {

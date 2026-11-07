@@ -11323,6 +11323,10 @@ export const EN = {
   // Shown where the engine's name goes when P.533 failed and the heuristic answered instead.
   // ⚠️ `P.533` is the recommendation's number: keep it verbatim.
   'prop.engine.fallback': 'modelled: P.533 could not run',
+  // The one-time note after an existing station is moved to P.533. The path names the Settings
+  // tab and the setting's own label, so each catalog repeats its own words for them.
+  'prop.engine.note':
+    'Predictions now use P.533, so some band answers have changed. To go back, open Settings ▸ Services ▸ Prediction engine.',
   'connect.engine.outlook': 'modelled · DX',
 
   'connect.path.heading': 'Path to {{call}}',

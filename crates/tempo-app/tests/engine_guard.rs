@@ -936,14 +936,14 @@ fn settings_files_are_written_through_their_writer_everywhere_outside_tests() {
     );
 }
 
-/// The control on the real tree: with launch not excused, the scan finds launch's three re-saves
-/// in `run()` (the Cloudlog-key migration's, the AGN-to-F8 migration's and the tty-port heal's)
-/// and nothing else, so it read `lib.rs`, blanked nothing it should not have, and saw through to
+/// The control on the real tree: with launch not excused, the scan finds launch's four re-saves
+/// in `run()` (the move to P.533's, the Cloudlog-key migration's, the AGN-to-F8 migration's and the
+/// tty-port heal's) and nothing else, so it read `lib.rs`, blanked nothing it should not have, and saw through to
 /// the calls.
 #[test]
-fn the_settings_scan_sees_launchs_three_saves() {
+fn the_settings_scan_sees_launchs_four_saves() {
     let found = bare_settings_saves(&production_sources(), true);
-    assert_eq!(found.len(), 3, "{found:#?}");
+    assert_eq!(found.len(), 4, "{found:#?}");
     assert!(
         found
             .iter()

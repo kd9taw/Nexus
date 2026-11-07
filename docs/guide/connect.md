@@ -463,7 +463,8 @@ In [Settings ▸ Services](settings-reference.md#integrations--feeds),
 against the ITU reference, ~0.1 s per prediction, and it uses your station power
 and antenna gain). **Live spots always win over any model.** If P.533 cannot run,
 the pane shows the heuristic's answer and says "modelled: P.533 could not run" where
-the engine's name goes.
+the engine's name goes. A station on the heuristic moves to P.533 once when it
+updates to the version that made it the default; set it back here and it stays.
 
 ## The Now-Bar
 

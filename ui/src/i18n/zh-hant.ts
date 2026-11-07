@@ -3334,6 +3334,7 @@ export const ZH_HANT: PartialCatalog = {
   "settings.integrations.propEngine.p533": "ITU-R P.533（完整物理模型，預設）",
   "settings.integrations.propEngine.hint": "驅動每電台路徑展望 + 24 小時 頻段×小時 網格。預設的 P.533 是真實的電路可靠性方法（對照 ITU 參考驗證；每次預測約 0.1 秒，使用你的電台功率）。即時報點始終優先於任何模型。",
   "prop.engine.fallback": "建模：P.533 無法執行",
+  "prop.engine.note": "預測現在使用 P.533，因此部分頻段的結果已有變化。要改回，請開啟 設定 ▸ 服務 ▸ 預測引擎。",
   "settings.lotwUsers.legend": "LoTW 使用者清單",
   "settings.lotwUsers.fetch.action": "立即獲取",
   "settings.lotwUsers.fetch.busy": "正在獲取…",
