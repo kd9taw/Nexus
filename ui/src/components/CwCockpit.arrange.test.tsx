@@ -185,7 +185,7 @@ function expected(tracks: number) {
   // The boxes (2026-10-07) and the Stats pane (2026-10-14) ship hidden and none is added here: the columns
   // without them. The log form heads its column (2026-10-14): a pane placed there stands under it.
   const all = placedColumns(CW_PANELS.arrange!, place)
-  const own = (ids: readonly CwPanelId[]) => ids.filter((id) => !(BOX_IDS as readonly string[]).includes(id) && id !== 'stats')
+  const own = (ids: readonly CwPanelId[]) => ids.filter((id) => !(BOX_IDS as readonly string[]).includes(id) && id !== 'stats' && id !== 'txMetersPane')
   const c = { a: own(all.a), b: own(all.b), log: own(all.log) }
   const mid = ['rigctl', ...c.b]
   if (tracks === 3) return [[...c.a], mid, ['log', ...c.log]]

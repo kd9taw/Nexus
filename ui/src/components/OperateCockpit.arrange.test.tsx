@@ -275,6 +275,38 @@ const decode = (over: Partial<DecodeRow>): DecodeRow => ({
   ...over,
 })
 
+describe('the large TX meters pane in FT', () => {
+  const pane = () => document.querySelector('[data-pane="txMetersPane"]')
+
+  it.each(['classic', 'roster'] as const)('%s: unticked it is not drawn and the region is today’s; ticked, a fill pane in the rail, with a divider', async (layoutMode) => {
+    render(<Live layoutMode={layoutMode} />)
+    await settle()
+    expect(pane()).toBeNull()
+    expect(lower().hasAttribute('data-arranged')).toBe(false)
+    act(() => api!.setExtra!(layoutMode, 'txMetersPane', true))
+    await settle()
+    const frame = pane()!
+    expect(frame.getAttribute('data-fit')).toBe('fill')
+    expect(frame.closest('aside.op-stack'), 'it stands in the rail').not.toBeNull()
+    expect(frame.querySelector('.pane-body button, .pane-body input, .pane-body [role="slider"]')).toBeNull()
+    expect(frame.querySelectorAll('.ph-txneedle-needle')).toHaveLength(3)
+    expect(frame.nextElementSibling?.getAttribute('role')).toBe('separator')
+    // The QSO strip, with Stop TX, stays outside every pane.
+    expect(document.querySelector('.cockpit-qso')?.closest('[data-pane]')).toBeNull()
+  })
+
+  it('the other layout stays as it is', async () => {
+    const view = render(<Live layoutMode="classic" />)
+    await settle()
+    act(() => api!.setExtra!('classic', 'txMetersPane', true))
+    await settle()
+    expect(pane()).not.toBeNull()
+    view.rerender(<Live layoutMode="roster" />)
+    await settle()
+    expect(pane()).toBeNull()
+  })
+})
+
 describe('⊞ Arrange in FT', () => {
   it('a move draws the region as keyed columns that follow the placement, on the stock grid', async () => {
     render(<Live layoutMode="roster" />)

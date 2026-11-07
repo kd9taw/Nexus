@@ -367,6 +367,9 @@ describe('#215 text size: EVERY font size in the sheet scales with the pick', ()
       'sat-pb-label',
       'sat-pb-shift',
       'sat-pb-ticklabel',
+      'txmeters-pane-label',
+      'txmeters-pane-scale',
+      'txmeters-pane-value',
     ])
     // …and an ordinary rule is not exempt by accident (the control for the skip above).
     expect(isSvgText('.decode-row')).toBe(false)

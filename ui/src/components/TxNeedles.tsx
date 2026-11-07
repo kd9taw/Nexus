@@ -13,10 +13,14 @@
 // at zero and the marker and the value hold the LAST OVER'S highest reading — the number an
 // operator nudging ALC or reading SWR after a short over wants — until the next over starts.
 //
+// THE LARGE FACE (`large`, the TX meters pane, TxMeters `TxMetersPane`): the same reading and the same
+// dial, but the whole face is one drawing, its scale's numbers, finer ticks, name and value in the
+// viewBox, so all of it grows with the pane and nothing can ever be ellipsized.
+//
 // A READOUT: nothing here keys, gates or sets anything. Drawn in SVG on a display well (dark in
 // both themes, styles.css DISPLAY WELLS), so it scales with `--ui-zoom` and the text size like the
 // bars' type does; its size is its host's, in styles.css's NEEDLE METERS block.
-import { useRef } from 'react'
+import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import { t } from '../i18n'
 
 /** The three faces, in the order a rig's meter switch has them. */
@@ -108,6 +112,59 @@ function radial(r0: number, r1: number, frac: number): string {
   return `M${x0.toFixed(2)} ${y0.toFixed(2)}L${x1.toFixed(2)} ${y1.toFixed(2)}`
 }
 const TICKS = [0, 0.25, 0.5, 0.75, 1]
+/** The large face's finer ticks, between the numbered ones. */
+const FINE_TICKS = Array.from({ length: 21 }, (_, i) => i / 20).filter((f) => !TICKS.includes(f))
+// The large face's drawing, in the same units as the dial: room above the arc for the scale's numbers,
+// and the band with the name and value under it, where the needle runs in beneath the band.
+const LARGE_TOP = -9
+const LARGE_BAND_TOP = 38
+const LARGE_BOTTOM = 50
+const LARGE_ASPECT = W / (LARGE_BOTTOM - LARGE_TOP)
+
+/** How many columns draw the three large faces biggest in this much room: the one choice CSS cannot make,
+ *  since wrapping looks at the width alone, and put SWR under a scroll in a short wide pane. `gap` is
+ *  the space between faces. A box not measured yet has all three in a row. */
+export function largeFaceColumns(width: number, height: number, gap = 4): 1 | 2 | 3 {
+  if (!(width > 0) || !(height > 0)) return 3
+  const faceWidthAt = (cols: number) => {
+    const rows = Math.ceil(3 / cols)
+    return Math.min((width - gap * (cols - 1)) / cols, ((height - gap * (rows - 1)) / rows) * LARGE_ASPECT)
+  }
+  // The fewest rows wins a tie, so all three stay side by side wherever a face is no bigger for it.
+  return ([3, 2, 1] as const).reduce((best, cols) => (faceWidthAt(cols) > faceWidthAt(best) + 0.5 ? cols : best))
+}
+
+/** The columns for the box it is given, followed as the pane is dragged. A keep-alive host reports 0×0
+ *  while hidden: that leaves the last answer alone (`largeFaceColumns` would say 3, and the face would
+ *  jump on the way back). */
+function useLargeFaceColumns(on: boolean) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [cols, setCols] = useState<1 | 2 | 3>(3)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!on || !el) return
+    const measure = () => {
+      if (el.clientWidth > 0 && el.clientHeight > 0) setCols(largeFaceColumns(el.clientWidth, el.clientHeight))
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [on])
+  return { ref, cols }
+}
+
+/** The numbers on a large face, at the five numbered ticks: the inverse of the bar functions that
+ *  place the needle (TxMeters' `poBar`, `alcBar`, `swrBar`, held to them by TxMetersPane.test.tsx). None on
+ *  an SWR scale Nexus cannot stand behind: TxMeters' `SWR?` says so of the reading, and numbers on the
+ *  scale would claim what its missing colours decline to. */
+export function needleScale(key: NeedleKey, opts: { ratedWatts: number; swrVerified: boolean }): { frac: number; text: string }[] {
+  if (key === 'swr' && !opts.swrVerified) return []
+  const full = opts.ratedWatts > 0 ? opts.ratedWatts : 100
+  const at = (f: number): number => (key === 'swr' ? 1 + 2 * f : key === 'alc' ? 100 * f : full * f)
+  return TICKS.map((frac) => ({ frac, text: String(Math.round(at(frac) * 100) / 100) }))
+}
 
 export function TxNeedles({
   rows,
@@ -115,6 +172,7 @@ export function TxNeedles({
   swrVerified,
   alcZoneTop,
   unreported,
+  large,
 }: {
   /** PO, ALC and SWR as TxMeters built them from this poll (not its held copy). */
   rows: NeedleRow[]
@@ -124,9 +182,12 @@ export function TxNeedles({
   alcZoneTop: number
   /** Meters the rig stayed silent on through a whole over (TxMeters' ⊘ verdict, which it owns). */
   unreported: readonly NeedleKey[]
+  /** The large face, as the pane draws it, with the radio's rated output for the power scale's numbers. */
+  large?: { ratedWatts: number }
 }) {
   // Refs, as TxMeters' own memory is: the poll re-renders us, and holding a peak must never itself
   // cause a render.
+  const largeBox = useLargeFaceColumns(large != null)
   const peaks = useRef(new Map<NeedleKey, Peak>())
   const overMax = useRef(new Map<NeedleKey, Peak>())
   const wasLive = useRef(false)
@@ -147,6 +208,78 @@ export function TxNeedles({
   }
 
   const peakTitle = t('meters.tx.needle.peak.title')
+  if (large) {
+    return (
+      <div
+        ref={largeBox.ref}
+        className={`txmeters-pane txmeters-pane-body${live ? '' : ' txmeters-pane-idle'}`}
+        role="group"
+        aria-label={t('meters.tx.aria')}
+        style={{ '--txmeters-pane-cols': largeBox.cols } as CSSProperties}
+      >
+        {NEEDLE_KEYS.map((key) => {
+          const r = rows.find((x) => x.key === key)
+          if (!r) return null
+          const held = live ? peaks.current.get(key) ?? null : overMax.current.get(key) ?? null
+          const peak = live ? peakAt(held, now) : held?.frac ?? 0
+          const needle = live ? r.bar?.frac ?? 0 : 0
+          const silent = unreported.includes(key)
+          const value = live ? r.bar?.value ?? '—' : held?.value ?? '—'
+          return (
+            <div key={key} className="txmeters-pane-meter ph-txneedle-face well" data-meter={key} title={`${r.title}\n${peakTitle}`}>
+              <div className="ph-txneedle-dial">
+                <svg
+                  className="ph-txneedle-svg"
+                  viewBox={`0 ${LARGE_TOP} ${W} ${LARGE_BOTTOM - LARGE_TOP}`}
+                  preserveAspectRatio="xMidYMax meet"
+                  role="img"
+                  aria-label={`${r.label} ${silent ? t('phone.unavail.mark') : value}`}
+                >
+                  <path className="ph-txneedle-scale" d={arc(R, 0, 1)} />
+                  {needleZones(key, { swrVerified, alcZoneTop }).map(([f0, f1, zone]) => (
+                    <path key={zone} className="ph-txneedle-zone" data-zone={zone} data-from={f0} data-to={f1} d={arc(R + 1.5, f0, f1)} style={{ stroke: ZONE_INK[zone] }} />
+                  ))}
+                  {FINE_TICKS.map((f) => (
+                    <path key={f} className="ph-txneedle-tick txmeters-pane-finetick" d={radial(R - 2, R + 0.5, f)} />
+                  ))}
+                  {TICKS.map((f) => (
+                    <path key={f} className="ph-txneedle-tick" d={radial(R - 4, R + 0.5, f)} />
+                  ))}
+                  {needleScale(key, { ratedWatts: large.ratedWatts, swrVerified }).map(({ frac, text }) => {
+                    const [x, y] = at(R + 4.5, frac)
+                    return (
+                      <text key={frac} className="txmeters-pane-scale" x={x.toFixed(2)} y={y.toFixed(2)} textAnchor="middle">
+                        {text}
+                      </text>
+                    )
+                  })}
+                  {held && <path className="ph-txneedle-peak" data-frac={peak.toFixed(3)} d={radial(R - 7, R + 2.5, peak)} />}
+                  <line
+                    className="ph-txneedle-needle"
+                    data-frac={needle.toFixed(3)}
+                    x1={CX}
+                    y1={CY}
+                    x2={CX}
+                    y2={CY - R - 2}
+                    transform={`rotate(${needleAngle(needle).toFixed(2)} ${CX} ${CY})`}
+                  />
+                  {/* The band, past the drawing on every side: a wide face has it edge to edge, and the
+                      needle's foot, which runs on to the pivot, never shows under it. */}
+                  <rect className="txmeters-pane-band" x={-W * 5} y={LARGE_BAND_TOP} width={W * 11} height={W} />
+                  <text className="txmeters-pane-label" x={2} y={LARGE_BOTTOM - 3}>
+                    {r.label}
+                  </text>
+                  <text className="txmeters-pane-value" x={W - 2} y={LARGE_BOTTOM - 3} textAnchor="end">
+                    {silent ? '⊘' : value}
+                  </text>
+                </svg>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
   return (
     <div className="ph-txneedles">
       {NEEDLE_KEYS.map((key) => {

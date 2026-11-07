@@ -24,8 +24,8 @@ import { BOX_IDS, PHONE_PANELS, RTTY_PANELS, coercePanelLayout, panelStorageKey,
 const SPEC = PHONE_PANELS.arrange!
 const all = () => true
 // The cockpit's own panes on screen and its boxes hidden, as every box ships (features/panelState).
-// A stock screen: the boxes and the Stats pane (2026-10-14) ship hidden.
-const stockShown = (id: PhonePanelId) => !(BOX_IDS as readonly string[]).includes(id) && id !== 'stats'
+// A stock screen: the boxes, the Stats pane (2026-10-14) and the large TX meters pane ship hidden.
+const stockShown = (id: PhonePanelId) => !(BOX_IDS as readonly string[]).includes(id) && id !== 'stats' && id !== 'txMetersPane'
 
 describe('the placement a record may carry', () => {
   it('keeps a place only for the panes the cockpit arranges: an id outside it, or no id at all, is dropped', () => {
@@ -84,7 +84,7 @@ describe('the columns a placement gives', () => {
     expect(cols).toEqual({
       // The boxes too stand at the end of their stock column, the record naming none of them.
       a: ['needed', 'voiceKeyer', 'spots', 'freedv', ...BOX_IDS],
-      b: ['rigscope', 'receiver', 'transmitter'],
+      b: ['rigscope', 'receiver', 'transmitter', 'txMetersPane'],
       log: ['bandActivity', 'stats'],
     })
     const seen = PANE_COLUMNS.flatMap((c) => cols[c])
@@ -96,7 +96,7 @@ describe('the groups each tier renders', () => {
   const shownOf = (hidden: PhonePanelId[]) => (id: PhonePanelId) => !hidden.includes(id)
 
   it('three tracks: a | b | log, only what is shown', () => {
-    expect(regionGroups(SPEC, undefined, 3, shownOf(['spots', 'needed', 'stats', 'freedv', ...BOX_IDS]))).toEqual([
+    expect(regionGroups(SPEC, undefined, 3, shownOf(['spots', 'needed', 'stats', 'freedv', 'txMetersPane', ...BOX_IDS]))).toEqual([
       { col: 'a', ids: ['bandActivity', 'voiceKeyer'] },
       { col: 'b', ids: ['rigscope', 'receiver', 'transmitter'] },
       { col: 'log', ids: [] },
@@ -118,24 +118,24 @@ describe('the groups each tier renders', () => {
 
   it('a placement written out in full but equal to the stock one still renders the stock merged order', () => {
     expect(isStockPlacement(SPEC, stockPlacement(SPEC))).toBe(true)
-    expect(regionGroups(SPEC, stockPlacement(SPEC), 2, stockShown)[0].ids).toEqual(SPEC.stockMerged)
+    expect(regionGroups(SPEC, stockPlacement(SPEC), 2, stockShown)[0].ids).toEqual(SPEC.stockMerged!.filter(stockShown))
   })
 })
 
 describe('a move', () => {
   it('up and down step within the column, past the panes that are hidden', () => {
-    const hiddenRigscope = (id: PhonePanelId) => id !== 'rigscope'
+    const hiddenRigscope = (id: PhonePanelId) => id !== 'rigscope' && id !== 'txMetersPane'
     const place = movePane(SPEC, undefined, undefined, 'receiver', 'down', hiddenRigscope)!
-    expect(placedColumns(SPEC, place).b).toEqual(['rigscope', 'transmitter', 'receiver', 'needed'])
+    expect(placedColumns(SPEC, place).b).toEqual(['rigscope', 'transmitter', 'receiver', 'txMetersPane', 'needed'])
     const back = movePane(SPEC, place, undefined, 'receiver', 'up', hiddenRigscope)!
     // Up from under Transmitter lands above it; the hidden rig scope strip is stepped over, not swapped.
-    expect(placedColumns(SPEC, back).b).toEqual(['rigscope', 'receiver', 'transmitter', 'needed'])
+    expect(placedColumns(SPEC, back).b).toEqual(['rigscope', 'receiver', 'transmitter', 'txMetersPane', 'needed'])
   })
 
   it('does nothing at the top going up, at the foot going down, or with only hidden panes that way', () => {
     expect(movePane(SPEC, undefined, undefined, 'bandActivity', 'up', all)).toBeNull()
     expect(movePane(SPEC, undefined, undefined, 'needed', 'down', all)).toBeNull()
-    expect(movePane(SPEC, undefined, undefined, 'transmitter', 'down', (id) => id !== 'needed')).toBeNull()
+    expect(movePane(SPEC, undefined, undefined, 'transmitter', 'down', (id) => id !== 'needed' && id !== 'txMetersPane')).toBeNull()
   })
 
   it('left and right go to the neighbouring column on screen, at its foot', () => {

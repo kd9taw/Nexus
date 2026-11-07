@@ -15730,6 +15730,11 @@ export const EN = {
   // data, kept in the component, never here.
   'callStats.pane.title': 'Stats',
   'recentQsos.pane.title': 'Recent contacts',
+  // The large TX meters pane: its name in the frame and ⊞ Panels, and the ways to it from the strip's meters.
+  'meters.tx.pane.title': 'TX Meters, large',
+  'meters.tx.pane.open': 'Show the large TX meters pane',
+  'meters.tx.pane.hide': 'Hide the large TX meters pane',
+  'meters.tx.pane.fromDialog': 'Show as a pane',
   'recentQsos.empty': 'No contacts logged yet',
   'recentQsos.aria': 'The last {{count}} contacts, newest first',
   'callStats.empty': 'Type a call in the log entry: its DXCC, WAS and WAZ standing shows here.',

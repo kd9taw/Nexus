@@ -193,7 +193,7 @@ describe('a face’s size is the room its host has, and the TX cycle does not to
     expect(win(container.querySelector('.ph-txneedle-value')!, 'font-size')).toBe(
       host === 'cell' ? 'calc(13px * var(--text-scale))' : 'calc(14px * var(--text-scale))',
     )
-    expect(win(band, 'width')).toBe(host === 'cell' ? '3.6em' : '4.4em')
+    expect(win(band, 'width')).toBe(host === 'cell' ? '4.2em' : '4.4em')
   })
 
   it.each(['dock', 'cell', 'strip'] as const)('%s: the same size keyed and between overs', (host) => {
@@ -214,7 +214,7 @@ describe('a face’s size is the room its host has, and the TX cycle does not to
 describe('the TX strip at md, where its column is shortest, takes the narrower readout', () => {
   it('md: the band and the value of Operate’s cell', () => {
     const { container } = mount('strip', KEYED, true, 'md')
-    expect(win(container.querySelector('.ph-txneedle-band')!, 'width')).toBe('3.6em')
+    expect(win(container.querySelector('.ph-txneedle-band')!, 'width')).toBe('4.2em')
     expect(win(container.querySelector('.ph-txneedle-value')!, 'font-size')).toBe('calc(13px * var(--text-scale))')
   })
 

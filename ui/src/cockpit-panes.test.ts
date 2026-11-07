@@ -252,7 +252,7 @@ describe('the fence: styles.css never names a structural class', () => {
     // The 1080p pass (2026-11-01): the compact dock's meters cell and in-row status, the keyboard docks'
     // key floor, the folded top bar and now-bar, the header's ⋯ and the shorter CW speed slider. Each is a flat class a component adds; a styles.css rule naming
     // one could undo the fold or the tier from the sheet that has lost these fights before.
-    'cockpit-txstrip-meters', 'cockpit-txstrip-meters-needle', 'dock-status-inrow', 'dock-fkeys', 'tier-menu-folded', 'topbar-now', 'now-bar-inbar',
+    'cockpit-txstrip-meters', 'cockpit-txstrip-meters-needle', 'txmeters-pane', 'txmeters-pane-meter', 'dock-status-inrow', 'dock-fkeys', 'tier-menu-folded', 'topbar-now', 'now-bar-inbar',
     'ch-overflow', 'ch-overflow-panel', 'ch-overflow-open', 'cw-wpm-compact',
     // The My station picker in the top bar (2026-11-03): it stands over the callsign, out of the bar's
     // line; a styles.css margin or width on it would put it back in the line and wrap the bar.

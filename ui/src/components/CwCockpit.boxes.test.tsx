@@ -156,7 +156,7 @@ async function mount(lend = true) {
 const FIRST = SHARED_PANES.map((e) => e.id)
 const paneOf = (entry: string) => SHARED_PANES.find((e) => e.id === entry)!.pane
 /** CW's own panes on screen in this fixture (the two feeds and the Stats pane only once ticked). */
-const ownShown = (id: CwPanelId) => (id !== 'spots' && id !== 'needed' && id !== 'stats' ? true : api!.stateOf(id) !== 'removed')
+const ownShown = (id: CwPanelId) => (id !== 'spots' && id !== 'needed' && id !== 'stats' && id !== 'txMetersPane' ? true : api!.stateOf(id) !== 'removed')
 
 /** What the record says the region shows: the Rig controls frame at the head of column 2 (and, below
  *  three tracks, where column 2's panes begin, ahead of the feeds on the stock placement). */

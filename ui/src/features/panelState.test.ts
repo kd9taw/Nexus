@@ -490,12 +490,12 @@ describe('cockpit vocabularies (TX-safety: the STOP line)', () => {
   it('lists the expected content panels per cockpit', () => {
     expect([...SSTV_PANELS.panelIds]).toEqual(['scope', 'rfScope', 'txcompose', 'gallery'])
     expect([...PHONE_PANELS.panelIds]).toEqual([
-      'scope', 'rigscope', 'txmeters', 'receiver', 'transmitter', 'bandActivity', 'voiceKeyer',
+      'scope', 'rigscope', 'txmeters', 'txMetersPane', 'receiver', 'transmitter', 'bandActivity', 'voiceKeyer',
       'spots', 'needed', 'recent', 'stats', 'freedv', 'box1', 'box2', 'box3', 'box4', 'box5', 'box6',
     ])
     expect([...RTTY_PANELS.panelIds]).toEqual(['scope', 'rfScope', 'tuning', 'stream', 'recent', 'stats'])
     expect([...CW_PANELS.panelIds]).toEqual([
-      'scope', 'scopeCtl', 'dsp', 'txmeters', 'turnCue', 'rxdsp', 'bandActivity', 'copilot', 'decode', 'sent',
+      'scope', 'scopeCtl', 'dsp', 'txmeters', 'txMetersPane', 'turnCue', 'rxdsp', 'bandActivity', 'copilot', 'decode', 'sent',
       'spots', 'needed', 'recent', 'stats', 'box1', 'box2', 'box3', 'box4', 'box5', 'box6',
     ])
   })
@@ -549,7 +549,7 @@ describe('panes a vocabulary ships HIDDEN (#345: Phone Spots and Needed)', () =>
   // and the six boxes (2026-10-07), which ship hidden for the same reason; the Recent contacts pane
   // (2026-10-18) beside the Stats pane, hidden in every vocabulary; and the FreeDV pane (2026-10-14),
   // Phone's alone.
-  const HIDDEN = ['spots', 'needed', 'recent', 'stats', 'freedv', ...BOX_IDS] as const
+  const HIDDEN = ['spots', 'needed', 'recent', 'stats', 'freedv', 'txMetersPane', ...BOX_IDS] as const
 
   it('a FRESH record shows Spots, Needed, the Stats pane, FreeDV and the boxes hidden, and every other Phone pane docked', () => {
     const { result } = renderHook(() => usePanelLayout(PHONE_PANELS))
@@ -637,7 +637,7 @@ describe('panes a vocabulary ships HIDDEN (#345: Phone Spots and Needed)', () =>
     // JS8 is a grid cockpit, and FT arranges its columns (2026-10-07): the Recent contacts pane, the Stats
     // pane and the six boxes of each ship hidden beside its RF scope pane.
     expect([...(panelState.JS8_PANELS.defaultRemoved ?? [])]).toEqual(['rfScope', 'recent', 'stats', ...BOX_IDS])
-    expect([...(OPERATE_PANELS.defaultRemoved ?? [])]).toEqual(['rfScope', 'recent', 'stats', ...BOX_IDS])
+    expect([...(OPERATE_PANELS.defaultRemoved ?? [])]).toEqual(['rfScope', 'recent', 'stats', 'txMetersPane', ...BOX_IDS])
     for (const v of ALL_PANEL_VOCABULARIES) {
       for (const id of v.defaultRemoved ?? []) {
         expect(v.panelIds, `"${v.view}" hides "${id}", which is not in its vocabulary`).toContain(id)
@@ -672,7 +672,7 @@ describe('the RF scope pane ships hidden in the five digital cockpits (operator,
         // JS8's boxes ship hidden too (panelState.boxes.test.ts reads them), and so does the Stats pane
         // in the four with a log entry (its own block below), and the Recent contacts pane in the three
         // with a log entry form.
-        if ((BOX_IDS as readonly string[]).includes(id) || id === 'stats' || id === 'recent') {
+        if ((BOX_IDS as readonly string[]).includes(id) || id === 'stats' || id === 'recent' || id === 'txMetersPane') {
           expect(result.current.stateOf(id), `${v.view}: "${id}" ships visible`).toBe('removed')
           continue
         }
@@ -714,9 +714,9 @@ describe("CW ships Phone's two feeds hidden too", () => {
 
   it('a FRESH CW record shows Spots, Needed, the Stats pane and the boxes hidden, and every other CW pane docked', () => {
     const { result } = renderHook(() => usePanelLayout(CW_PANELS))
-    for (const id of ['spots', 'needed', 'recent', 'stats', ...BOX_IDS] as const) expect(result.current.stateOf(id), `${id} ships visible`).toBe('removed')
+    for (const id of ['spots', 'needed', 'recent', 'stats', 'txMetersPane', ...BOX_IDS] as const) expect(result.current.stateOf(id), `${id} ships visible`).toBe('removed')
     for (const id of CW_PANELS.panelIds) {
-      if (id === 'spots' || id === 'needed' || id === 'recent' || id === 'stats' || (BOX_IDS as readonly string[]).includes(id)) continue
+      if (id === 'spots' || id === 'needed' || id === 'recent' || id === 'stats' || id === 'txMetersPane' || (BOX_IDS as readonly string[]).includes(id)) continue
       expect(result.current.stateOf(id), `"${id}" changed its default`).toBe('docked')
     }
     expect(localStorage.getItem(CW_KEY)).toBeNull()
@@ -760,9 +760,9 @@ describe("CW ships Phone's two feeds hidden too", () => {
 
   it("the feeds take Phone's places: Spots under Decode's column, Needed under the middle one, both last below three tracks", () => {
     expect(CW_PANELS.arrange!.columns.a).toEqual(['decode', 'sent', 'spots', ...BOX_IDS])
-    expect(CW_PANELS.arrange!.columns.b).toEqual(['bandActivity', 'copilot', 'needed'])
+    expect(CW_PANELS.arrange!.columns.b).toEqual(['bandActivity', 'copilot', 'txMetersPane', 'needed'])
     expect(CW_PANELS.arrange!.pinned).toEqual([])
-    expect(CW_PANELS.arrange!.stockMerged).toEqual(['decode', 'sent', 'bandActivity', 'copilot', 'spots', 'needed'])
+    expect(CW_PANELS.arrange!.stockMerged).toEqual(['decode', 'sent', 'bandActivity', 'copilot', 'txMetersPane', 'spots', 'needed'])
   })
 })
 
@@ -825,7 +825,7 @@ describe('the Stats pane (2026-10-14): one id in every cockpit with a log entry,
     expect(PHONE_PANELS.arrange!.columns.log).toEqual(['stats'])
     expect(CW_PANELS.arrange!.columns.log).toEqual(['stats'])
     expect(panelState.JS8_PANELS.arrange!.columns.log).toEqual(['log', 'stats'])
-    expect(panelState.OPERATE_ARRANGE.classic.columns.log.slice(0, 3)).toEqual(['recall', 'stats', 'stations'])
+    expect(panelState.OPERATE_ARRANGE.classic.columns.log.slice(0, 4)).toEqual(['recall', 'stats', 'txMetersPane', 'stations'])
     expect(panelState.OPERATE_ARRANGE.roster.columns.log.slice(0, 2)).toEqual(['recall', 'stats'])
     // Movable as any pane is: nothing pins it.
     for (const v of [PHONE_PANELS, CW_PANELS, panelState.JS8_PANELS]) expect(v.arrange!.pinned, v.view).not.toContain('stats')

@@ -8,7 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- **The needle TX meters are big enough to read.** They were a fixed, tiny size whatever room the window had, with the meter's name and value covering the lower half of the dial. Now the name and value stand beside the dial, in larger type, the dial takes the full height, and the three meters spread into the free space on the TX strip and Operate's strip: on a 1080p window each dial is about twice as wide as it was. On a phone each meter is drawn taller as well as wider. The strips stay the same height and Stop TX stays where it was. They sit in the transmit strip rather than in a pane, so they have no drag handle. On Operate, clicking them still opens them larger.
+- **The needle TX meters are big enough to read.** They were a fixed, tiny size whatever room the window had, with the meter's name and value covering the lower half of the dial. Now the name and value stand beside the dial, in larger type, the dial takes the full height, and the three meters spread into the free space on the TX strip and Operate's strip: on a 1080p window each dial is about twice as wide as it was. On a phone each meter is drawn taller as well as wider. The strips stay the same height and Stop TX stays where it was. On Operate, clicking them still opens them larger.
+
+### Added
+- **A large TX meters pane you can size.** ⊞ Panels ▸ "TX Meters, large" on FT, Phone and CW shows power, ALC and SWR as big needle meters with a numbered scale and fine ticks, all of which grow with the pane, whichever way you draw the meters in the strip. Drag the dividers beside it (and the one under it, where another list stands below) to make it bigger; the size is remembered. It starts hidden, so your layout does not change. The small button after the meters on the Phone and CW transmit strip opens it, and on FT so does "Show as a pane" in the larger meters dialog. It only shows readings: COMP, PROC and every transmit control stay where they were.
 
 ## [1.23.0] — 2026-11-05
 

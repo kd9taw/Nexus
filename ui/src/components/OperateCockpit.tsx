@@ -65,7 +65,7 @@ import { TX_SPLIT_MAX, TX_SPLIT_MIN } from '../features/paneSeam'
 import { buildHighlightMap, OperateDecodes } from './OperateDecodes'
 import { DecodeHistory, type DecodeSort } from '../decodeHistory'
 import { OperateQsoStrip } from './OperateQsoStrip'
-import { TxMetersCell, TX_METERS_WHEN } from './TxMeters'
+import { TxMetersCell, TxMetersPane, TX_METERS_WHEN } from './TxMeters'
 import { SpotDialog } from './SpotDialog'
 import { DEFAULT_ROSTER_SORT, OperateRoster, type RosterSort } from './OperateRoster'
 import { RecallPanel } from './RecallPanel'
@@ -318,6 +318,7 @@ const panelLabels = (): Record<Exclude<OperatePanelId, BoxId>, string> => ({
   txmsgs: t('operate.panel.txmsgs'),
   stations: t('operate.panel.stations'),
   txmeters: t('operate.panel.txmeters'),
+  txMetersPane: t('meters.tx.pane.title'),
   recall: t('operate.panel.recall'),
   stats: t('callStats.pane.title'),
   recent: t('recentQsos.pane.title'),
@@ -328,8 +329,8 @@ const panelLabels = (): Record<Exclude<OperatePanelId, BoxId>, string> => ({
  *  pick, 2026-10-07), each also lists the panes only the other draws in stock (OPERATE_ARRANGE `extra`):
  *  the Call Roster in Classic, the Tx messages and Stations in Roster, unticked until added. */
 const LAYOUT_PANELS: Record<'classic' | 'roster', readonly OperatePanelId[]> = {
-  classic: ['waterfall', 'rfScope', 'bandActivity', 'txmsgs', 'rxfreq', 'stations', 'callRoster', 'recall', 'stats', 'recent', 'txmeters'],
-  roster: ['waterfall', 'rfScope', 'callRoster', 'bandActivity', 'rxfreq', 'txmsgs', 'stations', 'recall', 'stats', 'recent', 'txmeters'],
+  classic: ['waterfall', 'rfScope', 'bandActivity', 'txmsgs', 'rxfreq', 'stations', 'callRoster', 'recall', 'stats', 'recent', 'txmeters', 'txMetersPane'],
+  roster: ['waterfall', 'rfScope', 'callRoster', 'bandActivity', 'rxfreq', 'txmsgs', 'stations', 'recall', 'stats', 'recent', 'txmeters', 'txMetersPane'],
 }
 
 /** Where the rail side is stored (per surface): 'left', or anything else for the stock right. */
@@ -368,7 +369,7 @@ const CLASSIC_COLUMNS: readonly (readonly OperatePanelId[])[] = [
 
 /** ⊞ ARRANGE'S FILL PANES (2026-10-07): the four feeds, which share their column's height by weight in the
  *  arranged columns. The Tx1–Tx6 machine and the callsign card are content-sized there, as everywhere. */
-const FILL_PANES = ['bandActivity', 'rxfreq', 'callRoster', 'stations'] as const
+const FILL_PANES = ['bandActivity', 'rxfreq', 'callRoster', 'stations', 'txMetersPane'] as const
 type FillPane = (typeof FILL_PANES)[number]
 const isFillPane = (id: OperatePanelId): id is FillPane => (FILL_PANES as readonly string[]).includes(id)
 
@@ -479,6 +480,7 @@ export function OperateCockpit({
       rxfreq: createRef<HTMLDivElement>(),
       callRoster: createRef<HTMLDivElement>(),
       stations: createRef<HTMLDivElement>(),
+      txMetersPane: createRef<HTMLDivElement>(),
     }),
     [],
   )
@@ -1478,6 +1480,17 @@ export function OperateCockpit({
             />
           </div>
         )
+      case 'txMetersPane':
+        return (
+          <TxMetersPane
+            radio={snap.radio}
+            paneRef={fillRefs.txMetersPane as RefObject<HTMLElement>}
+            weight={weightOf(id)}
+            split={split}
+            share={split != null && share != null ? share * split : undefined}
+            close={closeProps(id)}
+          />
+        )
       case 'recall':
         return recallCard
       case 'stats':
@@ -2137,7 +2150,14 @@ export function OperateCockpit({
           // now render into the strip's fixed-width telemetry cell, so the FT TX
           // cycle still cannot bounce the layout. Still a ⊞ Panels entry. #446: the cell opens
           // the same live meters at full size in a dialog (TxMetersCell), a readout as the cell is.
-          telemetry={shown('txmeters') ? <TxMetersCell radio={snap.radio} /> : undefined}
+          telemetry={
+            shown('txmeters') ? (
+              <TxMetersCell
+                radio={snap.radio}
+                pane={{ shown: shown('txMetersPane'), onToggle: () => layoutSetPanelState('txMetersPane', shown('txMetersPane') ? 'removed' : 'docked') }}
+              />
+            ) : undefined
+          }
         />
 
         {/* data-cols collapses the grid to ONE column once the main cell or the whole
