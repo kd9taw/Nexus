@@ -24253,6 +24253,19 @@ button.cq-skiptx1.on {
   flex-direction: column;
   gap: 2px;
 }
+/* A state block ("No decodes yet") in a decode list, which may be a row high (Rx Frequency in a short rail).
+   Its heading comes first, with the glyph beside it and no padding above, and the rest scrolls; the
+   auto margins centre it where there is room and collapse where there is not. */
+.od-scroll > .state-block {
+  flex-direction: row;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  padding: 0 var(--space-4);
+  margin-block: auto;
+}
+.od-scroll > .state-block .sb-detail {
+  flex-basis: 100%;
+}
 /* WSJT-X period separator: a dim rule with the period's UTC start + band,
    inserted between decoding periods (time-sorted view). */
 .od-period-sep {

@@ -587,8 +587,11 @@ export function OperateDecodes({
   // arrive above it (each row carries `data-pin-key` for that). `drawn` is the content signal:
   // the pin (and the layout it reads) runs when the drawn rows change, not on every render; a
   // keep-alive host shown again re-pins through the hook's resize watch.
+  // EMPTY, THERE IS NOTHING TO FOLLOW: the list holds only its "No decodes yet" block, and in a list
+  // shorter than the block a pin to the bottom scrolled the heading out of view. It stands at its top
+  // until the first row, and reading down the block is not "reviewing" (the scroller's `onScroll`).
   const { ref: scrollRef, pinned, onScroll, repin } = usePinnedScroll<HTMLDivElement>(
-    newestTop ? 'top' : 'bottom',
+    newestTop || shown.length === 0 ? 'top' : 'bottom',
     drawn,
   )
 
@@ -957,7 +960,7 @@ export function OperateDecodes({
         role="listbox"
         aria-label={t('operate.decodes.list.aria')}
         ref={scrollRef}
-        onScroll={onScroll}
+        onScroll={shown.length > 0 ? onScroll : undefined}
         onKeyDown={roving.containerProps.onKeyDown}
       >
         {shown.length === 0 &&
