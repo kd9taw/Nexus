@@ -212,6 +212,10 @@ contains
 
 ! Top-K Phase 1 candidate selection for Phase 2 Viterbi
       integer, parameter :: NTOP=3           !Number of Phase 1 peaks to try
+! A candidate this close to a signal already decoded in this frame is that signal again.
+      real, parameter :: REPEAT_HZ=8.0
+      real :: fdec(100)                      !Frequency of each entry in decodes
+      logical :: repeat_cand
       integer :: itop_idx(3)                 !Indices of top Phase 1 peaks
       real    :: df_top(3)                   !Coarse freq for each top peak
       integer :: ibest_top(3)                !Best timing for each top peak
@@ -396,6 +400,15 @@ contains
 ! ================================================================
          do icand=1,ncand
             f0=candidate(1,icand)
+! Skip a candidate on a signal already decoded: it can only decode to the same text, which the
+! duplicate check would then discard, after a full timing and frequency search. Each decoded
+! signal comes round again because later passes sync on the same audio. Close pairs lose
+! nothing by this: at under 60 Hz spacing two equal signals were not copied either way.
+            repeat_cand=.false.
+            do i=1,ndecodes
+               if(abs(f0-fdec(i)).lt.REPEAT_HZ) repeat_cand=.true.
+            enddo
+            if(repeat_cand) cycle
             snr0=candidate(2,icand)-1.0
             irv=nint(candidate(3,icand))     !RV index hint (0,1,2) from sync
             this%cur_rv=0                    !Reported RV = #RVs combined; standalone/AP
@@ -779,6 +792,7 @@ contains
 
                   ndecodes=ndecodes+1
                   decodes(ndecodes)=message
+                  fdec(ndecodes)=f1
 
                   nsnr=nint(snr_est)
                   xdt=ibest/fs - 0.5
@@ -894,6 +908,7 @@ contains
 
                      ndecodes=ndecodes+1
                      decodes(ndecodes)=message
+                     fdec(ndecodes)=f1
                      nsnr=nint(snr_est)
                      xdt=ibest/fs - 0.5
                      qual=1.0-(nharderror+dmin)/60.0
@@ -976,6 +991,7 @@ contains
                            if(idupe.eq.0) then
                               ndecodes=ndecodes+1
                               decodes(ndecodes)=message
+                              fdec(ndecodes)=f1
                               nsnr=nint(snr_est)
                               xdt=real(harq_sibest)/fs - 0.5
                               qual=1.0-(nharderror+dmin)/60.0
