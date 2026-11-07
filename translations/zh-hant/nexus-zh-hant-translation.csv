@@ -3728,6 +3728,7 @@
 "4","prop.engine.fallback","modelled: P.533 could not run","建模：P.533 無法執行","P.533","Filled by the maintainer, pending translator review."
 "4","prop.engine.note","Predictions now use P.533, so some band answers have changed. To go back, open Settings ▸ Services ▸ Prediction engine.","預測現在使用 P.533，因此部分頻段的結果已有變化。要改回，請開啟 設定 ▸ 服務 ▸ 預測引擎。","P.533","Filled by the maintainer, pending translator review."
 "4","prop.storm.applied","Adjusted for a geomagnetic storm, Kp up to {{kp}}.","已按地磁暴修正，Kp 最高 {{kp}}。","Kp","Filled by the maintainer, pending translator review."
+"4","prop.storm.unsettled","Adjusted for unsettled geomagnetic conditions, Kp up to {{kp}}.","已按地磁擾動修正，Kp 最高 {{kp}}。","Kp","Filled by the maintainer, pending translator review."
 "4","prop.storm.someHours","Hours with no Kp forecast are not adjusted.","沒有 Kp 預報的時段未作修正。","Kp","Filled by the maintainer, pending translator review."
 "4","prop.power.setting","Assumes {{watts}} W, your station power setting.","以 {{watts}} W 計算，即你的電台功率設定。","","Filled by the maintainer, pending translator review."
 "4","prop.power.rig","Assumes about {{watts}} W, the radio's output on your last transmission.","以約 {{watts}} W 計算，即上次發射時電台的輸出。","","Filled by the maintainer, pending translator review."

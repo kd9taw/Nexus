@@ -481,7 +481,8 @@ hides the dashboard rail (above).
   median. In a geomagnetic storm Nexus lowers its hours with the heuristic's own
   storm penalty: the current hour from today's Kp, later hours from SWPC's Kp
   forecast, and an hour with no forecast is left as P.533 gave it. The pane says
-  "Adjusted for a geomagnetic storm" when it has done so.
+  "Adjusted for a geomagnetic storm" when it has done so from Kp 5, and "Adjusted
+  for unsettled geomagnetic conditions" at Kp 3 or 4.
 - **The power P.533 assumes is shown under the answer:** your Station power
   setting; else the power your radio measured on your last transmission (with an
   amplifier set up, the amplifier's output); else 100 W, said as such.

@@ -4,6 +4,9 @@
 import type { AssumedPower, StormNote } from '../../types'
 import { t } from '../../i18n'
 
+/** The Kp from which the line says "storm": NOAA's G1. */
+const STORM_KP = 5
+
 /** Watts as the line says them: whole from 10 W, tenths below. */
 function wattsText(w: number): string {
   return w >= 10 ? String(Math.round(w)) : String(Math.round(w * 10) / 10)
@@ -12,7 +15,10 @@ function wattsText(w: number): string {
 export function modelBasisLines(engine: string | undefined, power?: AssumedPower, storm?: StormNote): string[] {
   const lines: string[] = []
   if (storm) {
-    lines.push(t('prop.storm.applied', { kp: storm.kp.toFixed(1) }))
+    // Decided on the Kp as shown, so the words never say "unsettled, Kp up to 5.0". Below 5,
+    // NOAA's G1, the same correction reads as unsettled conditions, not a storm.
+    const kp = storm.kp.toFixed(1)
+    lines.push(Number(kp) >= STORM_KP ? t('prop.storm.applied', { kp }) : t('prop.storm.unsettled', { kp }))
     if (storm.hoursWithoutKp) lines.push(t('prop.storm.someHours'))
   }
   if (engine === 'p533' && power) {

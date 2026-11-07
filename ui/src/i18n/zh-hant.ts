@@ -3336,6 +3336,7 @@ export const ZH_HANT: PartialCatalog = {
   "prop.engine.fallback": "建模：P.533 無法執行",
   "prop.engine.note": "預測現在使用 P.533，因此部分頻段的結果已有變化。要改回，請開啟 設定 ▸ 服務 ▸ 預測引擎。",
   "prop.storm.applied": "已按地磁暴修正，Kp 最高 {{kp}}。",
+  "prop.storm.unsettled": "已按地磁擾動修正，Kp 最高 {{kp}}。",
   "prop.storm.someHours": "沒有 Kp 預報的時段未作修正。",
   "prop.power.setting": "以 {{watts}} W 計算，即你的電台功率設定。",
   "prop.power.rig": "以約 {{watts}} W 計算，即上次發射時電台的輸出。",

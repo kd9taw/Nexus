@@ -7924,6 +7924,7 @@ export const ES: PartialCatalog = {
   "settings.integrations.openingWatch.label": "Vigilancia de aperturas cercanas",
   "prop.engine.fallback": "modelado: P.533 no pudo ejecutarse",
   "prop.storm.applied": "Ajustado por una tormenta geomagnética, Kp hasta {{kp}}.",
+  "prop.storm.unsettled": "Ajustado por condiciones geomagnéticas inestables, Kp hasta {{kp}}.",
   "prop.storm.someHours": "Las horas sin previsión de Kp no se ajustan.",
   "prop.power.setting": "Supone {{watts}} W, tu ajuste de potencia de estación.",
   "prop.power.rig": "Supone unos {{watts}} W, la salida de la radio en tu última transmisión.",

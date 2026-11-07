@@ -34,6 +34,19 @@ describe('what a P.533 answer rests on', () => {
     ])
   })
 
+  it('calls Kp 5 and up a storm, and below it unsettled conditions, on the Kp as shown', () => {
+    expect(modelBasisLines('p533', undefined, { kp: 5, hoursWithoutKp: false })).toEqual([
+      'Adjusted for a geomagnetic storm, Kp up to 5.0.',
+    ])
+    expect(modelBasisLines('p533', undefined, { kp: 4.67, hoursWithoutKp: false })).toEqual([
+      'Adjusted for unsettled geomagnetic conditions, Kp up to 4.7.',
+    ])
+    expect(modelBasisLines('p533', undefined, { kp: 3, hoursWithoutKp: false })[0]).toContain('unsettled')
+    expect(modelBasisLines('p533', undefined, { kp: 4.96, hoursWithoutKp: false })[0], 'shown as 5.0, so a storm').toContain(
+      'storm, Kp up to 5.0',
+    )
+  })
+
   it('says nothing for the heuristic, which ignores power, and nothing on a quiet sky with no power', () => {
     expect(modelBasisLines('heuristic', { watts: 100, source: 'default', amplifier: false })).toEqual([])
     const { container } = render(<ModelBasis engine="p533" />)

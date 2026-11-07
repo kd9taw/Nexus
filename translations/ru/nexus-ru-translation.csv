@@ -3883,6 +3883,7 @@
 "4","prop.engine.fallback","modelled: P.533 could not run","смоделировано: P.533 не удалось запустить","P.533",""
 "4","prop.engine.note","Predictions now use P.533, so some band answers have changed. To go back, open Settings ▸ Services ▸ Prediction engine.","Прогнозы теперь используют P.533, поэтому некоторые ответы по диапазонам изменились. Чтобы вернуться, откройте Настройки ▸ Сервисы ▸ Модуль предсказаний.","P.533",""
 "4","prop.storm.applied","Adjusted for a geomagnetic storm, Kp up to {{kp}}.","Учтена геомагнитная буря, Kp до {{kp}}.","Kp",""
+"4","prop.storm.unsettled","Adjusted for unsettled geomagnetic conditions, Kp up to {{kp}}.","Учтена неспокойная геомагнитная обстановка, Kp до {{kp}}.","Kp",""
 "4","prop.storm.someHours","Hours with no Kp forecast are not adjusted.","Часы без прогноза Kp не скорректированы.","Kp",""
 "4","prop.power.setting","Assumes {{watts}} W, your station power setting.","Принято {{watts}} Вт, ваша настройка мощности станции.","",""
 "4","prop.power.rig","Assumes about {{watts}} W, the radio's output on your last transmission.","Принято около {{watts}} Вт, выходная мощность радиостанции при последней передаче.","",""

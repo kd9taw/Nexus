@@ -11328,6 +11328,8 @@ export const EN = {
   // What a P.533 answer rests on: the storm correction laid over it and the power it assumes
   // (components/prop/ModelBasis). ⚠️ `Kp`, `W` and `P.533` stay verbatim.
   'prop.storm.applied': 'Adjusted for a geomagnetic storm, Kp up to {{kp}}.',
+  // The same correction below storm level (Kp under 5, NOAA's G1): unsettled, not a storm.
+  'prop.storm.unsettled': 'Adjusted for unsettled geomagnetic conditions, Kp up to {{kp}}.',
   'prop.storm.someHours': 'Hours with no Kp forecast are not adjusted.',
   'prop.power.setting': 'Assumes {{watts}} W, your station power setting.',
   'prop.power.rig': 'Assumes about {{watts}} W, the radio\'s output on your last transmission.',

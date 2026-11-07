@@ -6602,6 +6602,7 @@ export const JA: PartialCatalog = {
   "settings.integrations.logSpaceWeather.hint": "Nexusが最後に取得した値から、惑星K指数・A指数・太陽フラックスを記録するすべての交信に付記します（ADIF K_INDEX、A_INDEX、SFI）。その値が3時間より古い場合は何も付記しません。",
   "prop.engine.fallback": "モデル計算：P.533 を実行できませんでした",
   "prop.storm.applied": "地磁気嵐のため補正済み（Kp 最大 {{kp}}）。",
+  "prop.storm.unsettled": "地磁気の乱れのため補正済み（Kp 最大 {{kp}}）。",
   "prop.storm.someHours": "Kp 予報のない時間帯は補正していません。",
   "prop.power.setting": "{{watts}} W を想定（局の出力設定）。",
   "prop.power.rig": "約 {{watts}} W を想定（前回の送信時の無線機の出力）。",

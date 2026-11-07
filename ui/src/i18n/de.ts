@@ -1228,6 +1228,7 @@ export const DE: PartialCatalog = {
   "settings.integrations.logSpaceWeather.hint": "Trägt den planetaren K-Index, den A-Index und den Solarflux in jedes geloggte QSO ein (ADIF K_INDEX, A_INDEX, SFI), aus dem letzten Wert, den Nexus abgerufen hat. Ist dieser Wert älter als 3 Stunden, wird nichts eingetragen.",
   "prop.engine.fallback": "modelliert: P.533 konnte nicht laufen",
   "prop.storm.applied": "Für einen geomagnetischen Sturm angepasst, Kp bis {{kp}}.",
+  "prop.storm.unsettled": "Für unruhige geomagnetische Bedingungen angepasst, Kp bis {{kp}}.",
   "prop.storm.someHours": "Stunden ohne Kp-Vorhersage sind nicht angepasst.",
   "prop.power.setting": "Angenommen {{watts}} W, Ihre Einstellung für die Stationsleistung.",
   "prop.power.rig": "Angenommen etwa {{watts}} W, die Ausgangsleistung des Funkgeräts bei Ihrer letzten Sendung.",
