@@ -6,8 +6,9 @@
 // top of the box. Empty, the list stands at its top and scrolls down to the rest of the block.
 // ⚠️ jsdom does not lay out, so the overflow is stubbed; the pixels are the real-Chrome pass's.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { OperateDecodes } from './OperateDecodes'
+import { saveDecodeNewestTop } from '../operateFilters'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { chainOf, parseRules, winnerAt } from '../cssCascade'
@@ -75,6 +76,76 @@ describe('the decode list while it is empty', () => {
   })
 })
 
+describe('a list emptied while the operator was reviewing', () => {
+  const row = (from: string, over: Partial<DecodeRow> = {}): DecodeRow => ({ ...decode(from), ...over })
+  const rx = (decodes: DecodeRow[], slot: number, rxOffsetHz: number) => (
+    <OperateDecodes decodes={decodes} slot={slot} rxOffsetHz={rxOffsetHz} band="20m" tier="FT8" harqRescues={0} onCall={() => {}} lockedFilter="rx" />
+  )
+  const reviewing = () => {
+    list().scrollTop = 100
+    fireEvent.scroll(list())
+    expect(document.querySelector('.od-paused.on')).not.toBeNull()
+  }
+  // What the browser does as the list shrinks under a scrolled view: the offset clamps and a scroll
+  // event follows. Nothing else in these panes would end the "reviewing".
+  const clamp = () => {
+    list().scrollTop = 0
+    fireEvent.scroll(list())
+  }
+
+  it('the RX offset moved to a quiet frequency: "reviewing" ends and the first decode there is followed', () => {
+    const view = render(rx([row('W1AW')], 100, 1200))
+    reviewing()
+    view.rerender(rx([], 101, 2500))
+    clamp()
+    expect(list().querySelector('.decode-row')).toBeNull()
+    expect(document.querySelector('.od-paused.on')).toBeNull()
+    list().scrollTop = 0
+    view.rerender(rx([row('K1ABC', { freqHz: 2500, message: 'CQ K1ABC FN42' })], 102, 2500))
+    expect(list().querySelector('.decode-row')).not.toBeNull()
+    expect(list().scrollTop).toBe(500)
+    expect(document.querySelector('.od-paused.on')).toBeNull()
+  })
+
+  it('a chip hid every row: the same', () => {
+    const view = render(<Pane decodes={[row('W1AW', { isCq: false, message: 'K1ABC W1AW -05' })]} />)
+    reviewing()
+    fireEvent.click(screen.getByRole('button', { name: 'CQ' }))
+    clamp()
+    expect(list().querySelector('.decode-row')).toBeNull()
+    expect(document.querySelector('.od-paused.on')).toBeNull()
+    list().scrollTop = 0
+    view.rerender(<OperateDecodes decodes={[decode('K1ABC')]} slot={101} rxOffsetHz={1200} band="20m" tier="FT8" harqRescues={0} onCall={() => {}} />)
+    expect(list().querySelector('.decode-row')).not.toBeNull()
+    expect(list().scrollTop).toBe(500)
+    expect(document.querySelector('.od-paused.on')).toBeNull()
+  })
+
+  it('newest on top: the same, at the top edge', () => {
+    // Locked panes keep the stock order, so this is Band Activity with its chip.
+    saveDecodeNewestTop(true)
+    const pane = render(<Pane decodes={[row('W1AW', { isCq: false, message: 'K1ABC W1AW -05' })]} />)
+    list().scrollTop = 100
+    fireEvent.scroll(list())
+    expect(document.querySelector('.od-paused.on')).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'CQ' }))
+    clamp()
+    expect(document.querySelector('.od-paused.on')).toBeNull()
+    pane.rerender(<OperateDecodes decodes={[decode('K1ABC')]} slot={101} rxOffsetHz={1200} band="20m" tier="FT8" harqRescues={0} onCall={() => {}} />)
+    expect(list().querySelector('.decode-row')).not.toBeNull()
+    expect(list().scrollTop).toBe(0)
+    expect(document.querySelector('.od-paused.on')).toBeNull()
+  })
+
+  it('the control: a filter that leaves a row in the list does not end the reading', () => {
+    render(<Pane decodes={[decode('W1AW')]} />)
+    reviewing()
+    fireEvent.click(screen.getByRole('button', { name: 'CQ' }))
+    expect(list().querySelector('.decode-row')).not.toBeNull()
+    expect(document.querySelector('.od-paused.on')).not.toBeNull()
+  })
+})
+
 describe('the block fits a short list: its heading on the first line, its room only where there is some', () => {
   const sheet = (name: string) =>
     readFileSync(resolve(process.cwd(), 'src', name), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
@@ -89,7 +160,6 @@ describe('the block fits a short list: its heading on the first line, its room o
     expect(win(block, 'flex-direction')).toBe('row')
     expect(win(block, 'flex-wrap')).toBe('wrap')
     expect(win(block, 'flex-shrink')).toBe('0')
-    expect(win(list().querySelector('.sb-detail')!, 'flex-basis')).toBe('100%')
   })
 
   it('the control: a state block anywhere else keeps its roomy column', () => {

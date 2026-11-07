@@ -594,6 +594,13 @@ export function OperateDecodes({
     newestTop || shown.length === 0 ? 'top' : 'bottom',
     drawn,
   )
+  // A list that shrinks clamps its offset, and that scroll event is what re-pins a reader. Empty, the
+  // scroller takes no scroll events (above), so "reviewing" ends here instead; otherwise a filter or an
+  // RX offset that hid every row would leave the first row after it unfollowed, with no scrollbar to end it.
+  const listEmpty = shown.length === 0
+  useEffect(() => {
+    if (listEmpty) repin()
+  }, [listEmpty, repin])
 
   // A new search follows the newest matches: the list may shrink below the pane's height, where
   // no scroll event could ever arrive to end a "reviewing" the operator left behind.
