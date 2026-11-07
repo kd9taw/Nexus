@@ -127,7 +127,6 @@ subroutine turbo_decode_ft1(cd, npts, f0, dt0, snr_est, llr_out, &
   real    :: pi_val                ! pi constant
 
 ! Internal frequency refinement variables (SyncSweep)
-  complex :: all_corr_c(NSTATES, 0:3, NSYM) ! Complex MF correlations (kept for turbo-aided)
   real    :: vit_pd_best, vit_pd_metric, vit_threshold  ! Best/current metric
   real    :: vit_pd_metrics(41)          ! Metric at each sweep point
   integer :: ibest_pd                    ! Index of best sweep point
@@ -170,17 +169,6 @@ subroutine turbo_decode_ft1(cd, npts, f0, dt0, snr_est, llr_out, &
   real    :: df_coh_best               ! Frequency at best coherent metric
   integer :: s_bt                      ! Backtrace state variable
 
-! Turbo-aided VitSweep variables (mid-loop frequency correction)
-  integer :: sym_ta(NSYM)              ! Hard-decided symbols from BCJR
-  real    :: alpha_ta(NSTATES)         ! Viterbi forward for turbo-aided sweep
-  real    :: alpha_ta_new(NSTATES)     ! Updated forward
-  real    :: vit_ta_best, vit_ta_metric ! Best/current metric
-  real    :: df_ta_best, df_ta_try     ! Best/trial turbo-aided frequency
-  real    :: bm_ta                     ! Branch metric for turbo-aided
-  real    :: phase_ta                  ! Total phase for turbo-aided
-  integer :: s_ta, s_next_ta, idf_ta  ! Loop indices
-  integer :: i_data_ta, b1_ta, b2_ta  ! Symbol extraction
-  real    :: phi_g1                    ! G1 phase (saved for all_corr_c rotation)
 
 ! For OSD fallback
   real    :: llr_osd(NBITS)
@@ -377,11 +365,11 @@ subroutine turbo_decode_ft1(cd, npts, f0, dt0, snr_est, llr_out, &
 ! DISABLED (kept for reference, never compiled — the `.false.` short-circuits the
 ! whole block, including its debug write). The 3-group phase-slope df estimate
 ! proved unreliable: the pi/2-ambiguity 16-combo search over only G2/G3 is too
-! noisy at low SNR. Step 1c below (line ~471, also gated on niter_max==0) runs a
-! coarse Viterbi frequency sweep (±2 Hz @ 0.05 Hz) that is the robust replacement
-! Tempo's live decoder actually uses (tempofast_cabi calls turbo with niter_max=0). Do
-! NOT re-enable without re-running the AWGN-threshold conformance sweep — it would
-! double-correct against that sweep and regress sensitivity.
+! noisy at low SNR. Step 1c below (also gated on niter_max==0) runs ft1_timefreq_search,
+! the joint timing and frequency search that is the robust replacement Tempo's live
+! decoder actually uses (tempofast_cabi calls turbo with niter_max=0). Do NOT re-enable
+! without re-running the AWGN-threshold conformance sweep — it would double-correct
+! against that search and regress sensitivity.
   if(.false. .and. niter_max .eq. 0) then   ! DISABLED: phase-slope unreliable
   pi_val = 4.0 * atan(1.0)
 
@@ -516,7 +504,6 @@ subroutine turbo_decode_ft1(cd, npts, f0, dt0, snr_est, llr_out, &
      s_sync = next_state(s_sync, icos_rv0(j_sync))
   enddo
   phi(1) = atan2(aimag(phase_sum), real(phase_sum))
-  phi_g1 = phi(1)  ! Save for turbo-aided VitSweep
   do i = 1, npts
      cd_rot(i) = cd_rot(i) * cmplx(cos(phi(1)), -sin(phi(1)))
   enddo
@@ -624,96 +611,6 @@ subroutine turbo_decode_ft1(cd, npts, f0, dt0, snr_est, llr_out, &
         ncheck_out = ncheck_bp
         llr_out = zn_bp
         return
-     endif
-
-     ! ----------------------------------------------------------
-     ! Step 3d0: Turbo-aided frequency correction at k_outer=3
-     ! After 3 BCJR+BP iterations, use hard-decided symbols to run
-     ! a VitSweep with ALL symbols known (no max-over-4 noise).
-     ! Uses the pre-correction all_corr_c with analytical rotation
-     ! to avoid recomputing correlations.
-     ! ----------------------------------------------------------
-     if(.false. .and. k_outer .eq. 3 .and. niter_max .le. 0 .and. &
-          ncheck_bp .gt. 20) then
-        ! Extract hard symbol decisions from BCJR extrinsic
-        do n = 1, NSYM
-           if(sync_sym(n) .ge. 0) then
-              sym_ta(n) = sync_sym(n)
-           else
-              i_data_ta = data_idx(n)
-              b1_ta = 0
-              b2_ta = 0
-              if(ext_bcjr(2*i_data_ta-1) .gt. 0.0) b1_ta = 1
-              if(ext_bcjr(2*i_data_ta)   .gt. 0.0) b2_ta = 1
-              ! Gray mapping: 00→0, 01→1, 11→2, 10→3
-              sym_ta(n) = 2*b1_ta + b2_ta
-              if(sym_ta(n) .eq. 2) then
-                 sym_ta(n) = 3
-              else if(sym_ta(n) .eq. 3) then
-                 sym_ta(n) = 2
-              endif
-           endif
-        enddo
-
-        ! Turbo-aided VitSweep: ±3 Hz at 0.05 Hz (121 points)
-        ! Reuses all_corr_c (computed from G1-corrected cd_rot) with
-        ! analytical rotation: phase(n) = 2π*df_ta*(n-1)/28
-        vit_ta_best = -1.0e30
-        df_ta_best = 0.0
-        do idf_ta = 1, 121
-           df_ta_try = real(idf_ta - 61) * 0.05
-
-           alpha_ta = -1.0e30
-           alpha_ta(1) = 0.0
-           do n = 1, NSYM
-              phase_ta = twopi_val * df_ta_try * &
-                   real(n - 1) / 28.0
-              cos_n = cos(phase_ta)
-              sin_n = sin(phase_ta)
-
-              alpha_ta_new = -1.0e30
-              u_pd = sym_ta(n)
-              do s_ta = 1, NSTATES
-                 if(alpha_ta(s_ta) .le. -1.0e20) cycle
-                 s_next_ta = next_state(s_ta, u_pd)
-                 bm_ta = real(all_corr_c(s_ta, u_pd, n)) * cos_n + &
-                          aimag(all_corr_c(s_ta, u_pd, n)) * sin_n
-                 if(alpha_ta(s_ta) + bm_ta .gt. &
-                      alpha_ta_new(s_next_ta)) then
-                    alpha_ta_new(s_next_ta) = alpha_ta(s_ta) + bm_ta
-                 endif
-              enddo
-              alpha_ta = alpha_ta_new
-           enddo
-
-           vit_ta_metric = maxval(alpha_ta)
-           if(vit_ta_metric .gt. vit_ta_best) then
-              vit_ta_best = vit_ta_metric
-              df_ta_best = df_ta_try
-           endif
-        enddo
-
-        ! Apply correction if non-trivial
-        if(abs(df_ta_best) .gt. 0.003) then
-           write(*,'(a,f8.4)') '    turbo-aided df=',df_ta_best
-           do i = 1, npts
-              t_samp = real(i - 1) / fs_down
-              cd_rot(i) = cd_rot(i) * &
-                   cmplx(cos(-twopi_val*df_ta_best*t_samp), &
-                         sin(-twopi_val*df_ta_best*t_samp))
-           enddo
-           ! Recompute branch metrics at corrected frequency
-           call compute_branch_metrics_all(cd_rot, npts, NSS, sigma2, &
-                branch_metrics_all, NSYM, n_offset)
-           do n = 1, NSYM
-              if(sync_sym(n) .ge. 0) then
-                 call force_sync_metrics(branch_metrics_all(:,:,n), &
-                      sync_sym(n))
-              endif
-           enddo
-           ! Reset a priori: old LDPC feedback was for wrong frequency
-           apriori_llr = 0.0
-        endif
      endif
 
      ! Early termination: hopeless signal (no convergence by k=5)

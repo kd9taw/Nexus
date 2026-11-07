@@ -13889,3 +13889,11 @@ line = 51
 class = 4
 size_bytes = 448
 reason = "NOT REPORTED BY THE GATE and not in any source line: gfortran's type-bound metadata (__vtab_*, and __def_init_* default-initialisation templates), found with nm -S. CLUSTER ROW for this object: vtabs of the eight pack77_*_source types (8 x 56 B). Written only by the loader, never by any code (no CLASS(...) dispatch in these files touches them). Class 4."
+
+[[symbol]]
+name = "c"
+file = "tempofast/turbo_decode_tempofast.f90"
+line = 1064
+class = 3
+size_bytes = 202752
+reason = "complex c(NSTATES,0:3,NSYM), a local of ft1_timefreq_search, spilled to .bss for exceeding -fmax-stack-var-size (nm: c.12, size 0x31800). Scratch: load_correlations writes every element before viterbi_metric reads any, within one call, and calls serialize under the modem lock. Nothing is carried between calls, so sharing is safe; one chain's values cannot reach another."

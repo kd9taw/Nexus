@@ -13,8 +13,9 @@
 //!   threshold over many seeds is stable where one seed's verdict is not.
 //!
 //! The misses being guarded are not sensitivity: they stay flat or rise with SNR, so the
-//! gate runs where a frame has no excuse (+15 dB). A wrong decode is counted separately, and
-//! any at all fails: a sequencer can survive a miss but it will act on a false copy.
+//! gate runs where a frame has no excuse (+15 dB). A wrong decode is counted separately: any at
+//! +15 dB fails, because a sequencer can survive a miss but it will act on a false copy. At
+//! -10 dB a couple are allowed, see [`MAX_WRONG_MINUS_10DB`].
 //!
 //! The gate runs in about a minute. The full table takes tens of minutes and is a measuring
 //! instrument: `cargo test -p tempo-core --test ft1_decode_rate measure -- --ignored --nocapture`

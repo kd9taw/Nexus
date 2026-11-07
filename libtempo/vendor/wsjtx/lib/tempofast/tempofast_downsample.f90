@@ -48,8 +48,9 @@ subroutine ft1_downsample(dd,newdata,f0,c)
 ! every caller assumed 12000/54 = 222.2 Hz. That put each symbol on a rounded, drifting sample
 ! grid: a sawtooth timing error with a 15.75-symbol period and 0.8 sample of drift across the
 ! frame. At 224 Hz each symbol starts on a whole sample of a grid the matched filters fit. The
-! caller keeps only the first NDMAX samples (3.96 s), which still holds any frame ft1_sync
-! can place.
+! caller keeps only the first NDMAX samples (3.96 s). A whole frame (792 samples) fits only if
+! it starts by sample 96, 0.43 s in; the timing search looks as far as sample 205, and a frame
+! that late is decoded without its tail, as it always was (the margin was 0.46 s at 222 Hz).
 !
 ! Reference: ft4_downsample.f90
 !
