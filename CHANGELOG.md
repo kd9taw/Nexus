@@ -5,6 +5,11 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **NET rigctl with a COM port now says what is wrong.** NET rigctl reaches a radio through a rigctld on the network and cannot open a serial port itself, so a radio set up that way failed with "COM4 No such file or directory" unless another program's rigctld happened to be running. Test CAT and the CAT status now say so and what to do: set Rig Model to your radio, or start the program that runs the rigctld, or use Connection: Network with its address. Test CAT also no longer spends half a minute sweeping baud rates for it. Settings shows the same advice as soon as the two are picked, and on Save. Nothing is changed for you: the setup still saves, and still shares a rigctld that is running. A NET rigctl radio with a real network address is not affected.
+
 ## [1.23.0] — 2026-11-05
 
 ### Added

@@ -462,7 +462,10 @@ pub fn ladder_applies(
     ptt_serial_port: &str,
     rts_keys: bool,
 ) -> Option<LadderGate> {
-    if is_network || serial_port.trim().is_empty() || rig_model == 0 {
+    // NET rigctl (2) has no serial rate to find: it dials a rigctld over TCP, so every rung would
+    // only look up the port name as a host, and the verdict would replace the words that say so
+    // (`tempo_app::settings::net_rigctl_serial_port`).
+    if is_network || serial_port.trim().is_empty() || rig_model == 0 || rig_model == 2 {
         return None;
     }
     let keying = match ptt_method {
@@ -1756,6 +1759,7 @@ mod tests {
         assert_eq!(cat(3078), none); // IC-7610
         assert_eq!(cat(1042), none); // FTDX-10 — no CI-V, still laddered
         assert_eq!(ladder_applies(true, 3078, "COM4", "cat", "", false), None); // network rig
+        assert_eq!(ladder_applies(false, 2, "COM4", "cat", "", false), None); // NET rigctl
         assert_eq!(cat(0), None); // no model picked
         assert_eq!(ladder_applies(false, 3078, "  ", "cat", "", false), None); // no port
     }

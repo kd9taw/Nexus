@@ -389,6 +389,13 @@ pub(crate) fn rts_keys_transmitter(keying: &KeyingFacts, addr: &str) -> bool {
 pub const HARDWARE_HANDSHAKE_RTS_KEYS: &str =
     "RTS keys your transmitter on this port, so Serial handshake can't be Hardware — set it to Auto or None.";
 
+/// What the operator is told when a NET rigctl radio that was given a serial port name fails to
+/// connect ([`tempo_app::settings::net_rigctl_serial_port`]), with the port in `{{port}}`.
+/// ⚠️ The UI matches this exact sentence to show it in the operator's language
+/// (`ui/src/features/catDetail.ts`, whose test reads this constant) — change both together.
+pub const NET_RIGCTL_ON_A_SERIAL_PORT: &str =
+    "Rig Model is NET rigctl, which reaches a radio through a rigctld on the network and cannot open {{port}} itself, and no rigctld answered. To have Nexus run the radio on {{port}}, set Rig Model to your radio. If another program runs a rigctld for it, start that program, or set Connection to Network with its address as host:port.";
+
 /// The error [`spawn_rigctld`] returns for a launch it refused ([`launch_refused`]), so a caller
 /// can tell the refusal from every other launch failure by TYPE ([`is_handshake_refusal`]), not
 /// by matching the sentence. Displays as [`HARDWARE_HANDSHAKE_RTS_KEYS`].

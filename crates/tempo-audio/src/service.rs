@@ -784,6 +784,23 @@ fn rigctld_port_hint(rig_model: u32, rig_conn: &str, rig_addr: &str) -> Option<S
     })
 }
 
+/// A failed connect of a NET rigctl radio that was given a serial port name, led by what is wrong
+/// and what to do; `detail`, Hamlib's own words among it, stays behind them for a support log. Every
+/// other radio's `detail` comes back untouched. Only for the daemon Nexus started: with another
+/// program's rigctld answering, this same setup is sharing it and the port name was never used.
+fn with_net_rigctl_serial_words(detail: String, t: &Transport) -> String {
+    let Some(port) = tempo_app::settings::net_rigctl_serial_port(
+        t.rig_model,
+        &t.rig_conn,
+        &t.serial_port,
+        &t.rig_addr,
+    ) else {
+        return detail;
+    };
+    let words = crate::rigctld_proc::NET_RIGCTL_ON_A_SERIAL_PORT.replace("{{port}}", port);
+    format!("{words} {detail}").trim_end().to_string()
+}
+
 // How much of the fault a daemon line actually names — `rigctld_proc::Explains`.
 //
 // **It moved, and the move is part of the fix.** Ranking used to happen here, at read time, over
@@ -9178,6 +9195,7 @@ impl RadioLoop {
                         {
                             detail = format!("{detail} {h}");
                         }
+                        detail = with_net_rigctl_serial_words(detail, &want);
                     }
                 }
                 self.cat_ok = ok;
@@ -11604,6 +11622,13 @@ impl RadioLoop {
                                 cat_down_message(&self.applied, &e),
                                 self.live_backend_label(&self.applied),
                             );
+                            // The words a failed connect led with must not go at the first trip.
+                            let msg = match &self.rigctld_proc {
+                                Some(CatDaemon::Spawned(_)) => {
+                                    with_net_rigctl_serial_words(msg, &self.applied)
+                                }
+                                _ => msg,
+                            };
                             // Both S-meter mirrors — the fast reader must go "—" with the snapshot.
                             self.meter_feed.set_smeter_db(None);
                             {
@@ -19984,6 +20009,7 @@ fn open_cat(
                         if let Some(h) = rigctld_port_hint(t.rig_model, &t.rig_conn, &t.rig_addr) {
                             probe.detail = format!("{} {h}", probe.detail);
                         }
+                        probe.detail = with_net_rigctl_serial_words(probe.detail, t);
                     }
                     CatDaemon::Omni(d) => {
                         if let Err(e) = d.health() {
@@ -41021,7 +41047,150 @@ mod tests {
             probe.detail
         );
         drop(proc);
+
+        // ...and a NET rigctl radio given a COM port leads with what is wrong and what to do, with
+        // Hamlib's words still behind them. In this test because it is the one that may resolve a
+        // rigctld (it sets PATH).
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let mut wrong = cat_transport(port, None);
+        wrong.rig_model = 2;
+        wrong.rig_conn = "serial".into();
+        wrong.serial_port = "COM4".into();
+        let (_rig, proc, probe) = open_rig(&wrong, true);
+        assert_eq!(probe.ok, Some(false));
+        assert!(
+            probe.detail.starts_with(
+                &crate::rigctld_proc::NET_RIGCTL_ON_A_SERIAL_PORT.replace("{{port}}", "COM4")
+            ) && probe.detail.contains(HAMLIB_SAYS),
+            "got: {}",
+            probe.detail
+        );
+        drop(proc);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A NET rigctl radio given a serial port name is told so; nothing else is. A real address, an
+    /// odd-looking host included, and a real radio on its port keep their words to the byte.
+    #[test]
+    fn only_a_net_rigctl_radio_on_a_port_name_gets_the_serial_port_words() {
+        let words = crate::rigctld_proc::NET_RIGCTL_ON_A_SERIAL_PORT;
+        let radio = |model: u32, conn: &str, port: &str, addr: &str| {
+            let mut t = cat_transport(4532, None);
+            t.rig_model = model;
+            t.rig_conn = conn.into();
+            t.serial_port = port.into();
+            t.rig_addr = addr.into();
+            with_net_rigctl_serial_words("the detail".to_string(), &t)
+        };
+        let told = |port: &str| format!("{} the detail", words.replace("{{port}}", port));
+        assert_eq!(radio(2, "serial", "COM4", ""), told("COM4"));
+        assert_eq!(radio(2, "", "COM4", ""), told("COM4"));
+        assert_eq!(radio(2, "network", "", "COM4"), told("COM4"));
+        assert_eq!(radio(2, "serial", "/dev/ttyUSB0", ""), told("/dev/ttyUSB0"));
+        for (model, conn, port, addr) in [
+            (2, "network", "", "127.0.0.1:4532"),
+            (2, "network", "COM4", "shack-pi:4532"),
+            (2, "network", "", "COM4:4532"),
+            (2, "network", "", "com4.local"),
+            (2, "serial", "", ""),
+            (1001, "serial", "COM4", ""),
+        ] {
+            assert_eq!(radio(model, conn, port, addr), "the detail");
+        }
+    }
+
+    /// A rigctld Nexus started for a NET rigctl radio on `COM4`, alive and answering nothing useful,
+    /// as Hamlib's does: Test CAT and the first trip of the breaker both say what is wrong, and
+    /// neither reopens the radio. The other half of the pair is a valid address, under the same
+    /// daemon: the same two moments say nothing of the kind. Port 1 is one nothing listens on.
+    #[test]
+    #[cfg(unix)]
+    fn test_cat_and_a_tripped_breaker_keep_the_serial_port_words() {
+        let run = |conn: &str, port: &str, addr: &str| {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            let settings = {
+                let mut e = engine.lock().unwrap();
+                let mut s = e.settings().clone();
+                s.ptt_method = "cat".into();
+                s.rig_model = 2;
+                s.rig_conn = conn.into();
+                s.serial_port = port.into();
+                s.rig_addr = addr.into();
+                e.apply_settings(s);
+                e.settings().clone()
+            };
+            let alive = std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .unwrap();
+            let cfg = RadioConfig {
+                rig_model: 2,
+                ..RadioConfig::default()
+            };
+            let mut state = RadioLoop::new(
+                Transport::from_settings(&settings),
+                Some(CatDaemon::Spawned(
+                    crate::rigctld_proc::RigctldProc::from_child_for_test(alive),
+                )),
+                &cfg,
+            );
+            state.last_rig_poll = 0.0;
+            state.last_freq_poll = 0.0;
+            state.last_smeter_poll = 0.0;
+            let mut rig = Rig::rigctld("127.0.0.1:1");
+            let mut opens = 0;
+            let mut tick = 0.0f64;
+            let mut step = |state: &mut RadioLoop, rig: &mut Rig, opens: &mut usize| {
+                tick += 400.0;
+                let mut reopen = |_t: &Transport, _c: bool| -> RigOpen {
+                    *opens += 1;
+                    (Rig::vox(), None, CatProbe::status(Some(false), "reopened"))
+                };
+                state
+                    .step(
+                        &engine,
+                        &mut MockBackend::new(),
+                        rig,
+                        &no_sinks(),
+                        tick,
+                        &mut mock_reopen_audio(),
+                        &mut reopen,
+                        &mut StationSinks::new(),
+                    )
+                    .unwrap();
+            };
+            let asked = engine.lock().unwrap().request_cat_reprobe();
+            step(&mut state, &mut rig, &mut opens);
+            let test_cat = engine.lock().unwrap().cat_reprobe_answer(asked);
+            for _ in 0..75 {
+                if state.cat_ok == Some(false) {
+                    break;
+                }
+                step(&mut state, &mut rig, &mut opens);
+            }
+            assert_eq!(state.cat_ok, Some(false), "the breaker tripped");
+            let tripped = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+            (test_cat.unwrap().1, tripped, opens)
+        };
+        let words = crate::rigctld_proc::NET_RIGCTL_ON_A_SERIAL_PORT.replace("{{port}}", "COM4");
+        let (test_cat, tripped, opens) = run("serial", "COM4", "");
+        assert!(test_cat.starts_with(&words), "Test CAT said: {test_cat}");
+        assert!(tripped.starts_with(&words), "the status said: {tripped}");
+        assert_eq!(opens, 0);
+        let (test_cat, tripped, opens) = run("network", "", "127.0.0.1:1");
+        assert!(
+            !test_cat.contains("NET rigctl"),
+            "Test CAT said: {test_cat}"
+        );
+        assert!(
+            !tripped.contains("NET rigctl"),
+            "the status said: {tripped}"
+        );
+        assert_eq!(opens, 0);
     }
 
     /// The exact greeting the field-report operator's Thetis sent (2.10.3.13 on a Hermes

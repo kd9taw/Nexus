@@ -59,3 +59,39 @@ describe('the hardware-handshake refusal in the CAT status', () => {
     expect(csv).toContain(`"${KEY}","${SENTENCE.replace(/"/g, '""')}"`)
   })
 })
+
+describe('NET rigctl given a serial port, in the CAT status', () => {
+  const NET_KEY = 'settings.rigControl.netRigctl.notConnected'
+  const sent = (port: string) => EN[NET_KEY].split('{{port}}').join(port)
+
+  it('is the exact sentence the backend sends', () => {
+    const rust = read('../../../crates/tempo-audio/src/rigctld_proc.rs')
+    const m = rust.match(/pub const NET_RIGCTL_ON_A_SERIAL_PORT: &str =\s*"([^"]*)";/)
+    expect(m?.[1]).toBe(EN[NET_KEY])
+  })
+
+  it.each([
+    ['de', DE],
+    ['es', ES],
+    ['fr', FR],
+    ['ja', JA],
+    ['ru', RU],
+  ] as const)('%s: is translated, keeps what surrounds it, and carries the port across', (lang, cat) => {
+    const text = String((cat as Record<string, unknown>)[NET_KEY])
+    expect(text).not.toBe(EN[NET_KEY])
+    installCatalog(lang, cat)
+    setLocale(lang)
+    const shown = catDetailText(`the port was reopened. ${sent('COM4')} Hamlib said: COM4 No such file`)
+    expect(shown).toBe(
+      `the port was reopened. ${text.split('{{port}}').join('COM4')} Hamlib said: COM4 No such file`,
+    )
+  })
+
+  it('takes a Unix device path too, and leaves a different sentence alone', () => {
+    installCatalog('ru', RU)
+    setLocale('ru')
+    expect(catDetailText(sent('/dev/ttyUSB0'))).toContain('/dev/ttyUSB0')
+    expect(catDetailText(sent('/dev/ttyUSB0'))).not.toContain('Rig Model is NET rigctl')
+    expect(catDetailText('rigctld is not reachable on 127.0.0.1:1.')).toBe('rigctld is not reachable on 127.0.0.1:1.')
+  })
+})
