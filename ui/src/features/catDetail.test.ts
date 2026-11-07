@@ -153,3 +153,17 @@ describe('transmit still off once CAT is back, in the CAT status', () => {
   })
 })
 
+describe('the NET rigctl sentence and a transmit-off sentence in one status', () => {
+  const NET_KEY = 'settings.rigControl.netRigctl.notConnected'
+  const sent = (port: string) => EN[NET_KEY].split('{{port}}').join(port)
+
+  it.each([
+    ['settings.rigControl.catSilentTxOff'],
+    ['settings.rigControl.catBackTxOff'],
+  ] as const)('both are translated: %s', (offKey) => {
+    installCatalog('ru', RU)
+    setLocale('ru')
+    const net = String(RU[NET_KEY]).split('{{port}}').join('COM4')
+    expect(catDetailText(`${sent('COM4')} ${EN[offKey]}`)).toBe(`${net} ${String(RU[offKey])}`)
+  })
+})
