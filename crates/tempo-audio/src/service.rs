@@ -1633,7 +1633,10 @@ const FAKE_IT_WRITE_BACK_MS: f64 = 100.0;
 /// rig. A rigctld sitting on a serial handle whose device went away at power-off is ALIVE
 /// (`is_alive` is `try_wait`) and answers `RPRT -5` forever; only reopening the port helps.
 const CAT_DEAD_PROBES_BEFORE_REBUILD: u32 = 3;
-/// Between suspect rebuilds while the link stays dead — a rebuild is a process respawn.
+/// The first wait between suspect rebuilds while the link stays dead — a rebuild is a process
+/// respawn, and the radio loop stands still for it. Doubles to [`CAT_REOPEN_MAX_MS`]; the link
+/// answering starts it over. The three failed re-probes a rebuild also needs set the floor: once
+/// the re-probes have backed off to [`CAT_RETRY_MAX_MS`] that is 90 s, whatever this says.
 const CAT_REBUILD_BACKOFF_MS: f64 = 60_000.0;
 /// How often the configured serial port is checked for presence while CAT is down.
 const CAT_PORT_CHECK_MS: f64 = 10_000.0;
@@ -4773,6 +4776,8 @@ struct RadioLoop {
     /// A silence rebuild has already halted TX in this outage, so the next retry only retries.
     /// Cleared when the link answers, and by a rebuild that had another reason.
     cat_outage_halted: bool,
+    /// The wait the next suspect rebuild sets (see [`CAT_REBUILD_BACKOFF_MS`]).
+    cat_rebuild_backoff_ms: f64,
     /// Earliest tick a FAILED reopen (no daemon, no control) is retried, and its backoff.
     cat_reopen_at: f64,
     cat_reopen_backoff_ms: f64,
@@ -5249,6 +5254,7 @@ impl RadioLoop {
             cat_down_link_fault: false,
             cat_rebuild_at: 0.0,
             cat_outage_halted: false,
+            cat_rebuild_backoff_ms: CAT_REBUILD_BACKOFF_MS,
             cat_reopen_at: 0.0,
             cat_reopen_backoff_ms: CAT_REOPEN_RETRY_MS,
             cat_port_check_at: 0.0,
@@ -5382,6 +5388,7 @@ impl RadioLoop {
         self.width_unanswered = None;
         self.cat_dead_probes = 0;
         self.cat_outage_halted = false;
+        self.cat_rebuild_backoff_ms = CAT_REBUILD_BACKOFF_MS;
         self.cat_port_present = None;
         self.cat_reopen_backoff_ms = CAT_REOPEN_RETRY_MS;
         self.cat_reopen_at = 0.0;
@@ -9146,7 +9153,12 @@ impl RadioLoop {
                 // would dress this one's cached VFO up as a reading.
                 self.vfo_read_native = None;
                 self.cat_dead_probes = 0;
-                self.cat_rebuild_at = now + CAT_REBUILD_BACKOFF_MS;
+                if !only_silence {
+                    self.cat_rebuild_backoff_ms = CAT_REBUILD_BACKOFF_MS;
+                }
+                self.cat_rebuild_at = now + self.cat_rebuild_backoff_ms;
+                self.cat_rebuild_backoff_ms =
+                    (self.cat_rebuild_backoff_ms * 2.0).min(CAT_REOPEN_MAX_MS);
                 self.cat_port_present = None;
                 // If THIS open failed too, the next try waits out the reopen backoff.
                 self.cat_reopen_at = now + self.cat_reopen_backoff_ms;
@@ -46378,6 +46390,36 @@ mod tests {
         // The link answers, then goes silent again: a new outage.
         state.on_cat_link_back();
         assert!(!rebuild(&mut state, &mut rig, 200_000.0), "a new outage: off");
+    }
+
+    /// A link that stays silent is tried less and less often, up to every five minutes, because a
+    /// retry stops the whole radio loop for seconds while a daemon starts and is asked. The port
+    /// coming back still fires at once, and the re-probes keep listening every 30 s. A link that
+    /// answers starts the ladder over. The value is the gap, in seconds, before each rebuild.
+    #[test]
+    fn a_link_that_stays_silent_is_tried_less_often_and_answering_starts_over() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let (mut state, mut rig) = a_silent_link(&engine);
+        let mut backend = MockBackend::new();
+        let mut now = 1_000.0;
+        let mut gaps = |state: &mut RadioLoop, rig: &mut Rig, n: usize| {
+            let mut last = None;
+            let mut out = Vec::new();
+            while out.len() < n {
+                if silent_link_tick(&engine, state, rig, &mut backend, now) == 1 {
+                    if let Some(l) = last {
+                        out.push(((now - l) / 1000.0) as u32);
+                    }
+                    last = Some(now);
+                }
+                now += 5_000.0;
+            }
+            out
+        };
+        assert_eq!(gaps(&mut state, &mut rig, 5), [60, 120, 240, 300, 300]);
+        state.on_cat_link_back();
+        state.cat_rebuild_at = 0.0;
+        assert_eq!(gaps(&mut state, &mut rig, 2), [60, 120]);
     }
 
     /// A retry that is not only a retry still stops transmit: a saved CAT change, or the daemon
