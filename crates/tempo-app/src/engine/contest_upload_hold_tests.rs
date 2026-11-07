@@ -487,3 +487,47 @@ fn a_held_contact_goes_to_dxkeeper_on_release_and_not_again_after_a_restart() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A held list exactly as 1.23.0 wrote it: version 1, seven services and no DXKeeper bit, 127 for
+/// a contact no pass has touched. 1.23.0 pushed to DXKeeper on a contact's first pass, and any
+/// pass leaves a service done unless all seven failed, so what still shows all seven has not been
+/// to DXKeeper and what shows fewer has. The first owes the send, and the second must not get it
+/// again.
+#[test]
+fn a_held_list_from_1_23_0_owes_dxkeeper_only_for_contacts_that_have_not_been_sent() {
+    let dir = scratch_dir("from-1-23-0");
+    let path = dir.join("contest_held_uploads.json");
+    std::fs::write(
+        &path,
+        concat!(
+            r#"{"version":1,"count":2,"adif":""#,
+            r#"<CALL:5>K1ABC<QSO_DATE:8>20261017<TIME_ON:6>120000<BAND:3>20m<MODE:2>CW<EOR>\n"#,
+            r#"<CALL:4>W1AW<QSO_DATE:8>20261017<TIME_ON:6>120500<BAND:3>20m<MODE:2>CW<EOR>","#,
+            r#""owed":[127,2]}"#
+        ),
+    )
+    .unwrap();
+
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    e.set_contest_held_uploads_path(path.clone());
+    e.restore_contest_held_uploads(NOW);
+    let sent = e.take_pending_uploads();
+    assert_eq!(calls(&sent), ["K1ABC", "W1AW"]);
+    assert_eq!(sent[0].legs, upload_legs::ALL, "never sent: it owes all");
+    assert_eq!(
+        sent[1].legs,
+        upload_legs::CLUBLOG,
+        "sent once: it owes the same"
+    );
+
+    // Once a pass has spent the leg the list is written in the new form, and a restart reads it
+    // back as spent: seven services owed no longer means DXKeeper is.
+    settle(&mut e, &sent[0], upload_legs::ALL & !upload_legs::DXKEEPER);
+    drop(e);
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    e.set_contest_held_uploads_path(path);
+    e.restore_contest_held_uploads(NOW);
+    let again = e.take_pending_uploads();
+    assert_eq!(again[0].legs, upload_legs::ALL & !upload_legs::DXKEEPER);
+    let _ = std::fs::remove_dir_all(&dir);
+}

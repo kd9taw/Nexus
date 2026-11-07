@@ -3101,12 +3101,13 @@ pub mod upload_legs {
     pub const N3FJP: u8 = 1 << 4;
     pub const CLOUDLOG: u8 = 1 << 5;
     pub const WRL: u8 = 1 << 6;
-    /// DXKeeper, which is owed ONE send and never a retry: it acknowledges nothing, so there is no
-    /// failure to retry on. A contact owes it from the funnel, as it owes every service, and the
-    /// worker's first pass spends it. It can never come back: the worker re-queues only the legs
-    /// that failed, and this one cannot fail ([`crate::station::unsent_legs`] cannot pick it either,
-    /// so a catch-up sweep of history owes it nothing). A contact contest mode held keeps it until
-    /// its release goes out, and its file keeps what has been spent across a restart. No Settings
+    /// DXKeeper, which is owed ONE delivery. It acknowledges nothing, so a send that connected is
+    /// the end of it, whatever became of it. Only a connection that failed, which delivered
+    /// nothing, keeps the leg, for a short retry the worker bounds. A contact owes it from the
+    /// funnel, as it owes every service; a re-queue holds only the legs that failed, so a retry of
+    /// a service cannot fire it again, and [`crate::station::unsent_legs`] cannot pick it, so a
+    /// catch-up sweep of history owes it nothing. A contact contest mode held keeps it until its
+    /// release goes out, and its file keeps what has been spent across a restart. No Settings
     /// toggle or destination maps to it, so it is in neither [`on`] nor [`mask_for`].
     pub const DXKEEPER: u8 = 1 << 7;
     pub const ALL: u8 = QRZ | CLUBLOG | EQSL | HRDLOG | N3FJP | CLOUDLOG | WRL | DXKEEPER;
@@ -3360,7 +3361,7 @@ struct ContestHeld {
 }
 
 /// The held list's file (`contest_held_uploads.json`):
-/// `{"version":1,"count":N,"adif":"…","owed":[…]}`. The contacts are the operator's own-log ADIF,
+/// `{"version":2,"count":N,"adif":"…","owed":[…]}`. The contacts are the operator's own-log ADIF,
 /// the Logbook's own lossless form, and `owed` is each one's owed services, in the same order;
 /// `count` lets a read tell a list it got whole from one it did not, because an ADIF parse skips
 /// what it cannot read rather than failing.
@@ -3372,7 +3373,20 @@ struct ContestHeldFile {
     owed: Vec<u8>,
 }
 
-const CONTEST_HELD_FILE_VERSION: u32 = 1;
+/// Version 2 added [`upload_legs::DXKEEPER`] to `owed`; [`contest_held_from_json`] reads version 1.
+const CONTEST_HELD_FILE_VERSION: u32 = 2;
+
+/// What a version 1 held list owes for `owed`, written when DXKeeper had no leg. That build sent a
+/// contact to DXKeeper on its first pass, and any pass leaves a service done unless every one of
+/// them failed, so a contact that shows all seven has not been to DXKeeper and still owes it, and
+/// one that shows fewer has been and must not go again.
+fn contest_held_owed_from_v1(owed: u8) -> u8 {
+    if owed == upload_legs::ALL & !upload_legs::DXKEEPER {
+        upload_legs::ALL
+    } else {
+        owed
+    }
+}
 
 fn contest_held_to_json(held: &[ContestHeld]) -> std::io::Result<String> {
     let file = ContestHeldFile {
@@ -3390,7 +3404,7 @@ fn contest_held_to_json(held: &[ContestHeld]) -> std::io::Result<String> {
 
 fn contest_held_from_json(text: &str) -> Result<Vec<ContestHeld>, String> {
     let file: ContestHeldFile = serde_json::from_str(text).map_err(|e| e.to_string())?;
-    if file.version != CONTEST_HELD_FILE_VERSION {
+    if !(1..=CONTEST_HELD_FILE_VERSION).contains(&file.version) {
         return Err(format!(
             "version {} is not one this build reads",
             file.version
@@ -3416,7 +3430,11 @@ fn contest_held_from_json(text: &str) -> Result<Vec<ContestHeld>, String> {
         .zip(file.owed)
         .map(|(rec, owed)| ContestHeld {
             rec,
-            owed,
+            owed: if file.version == 1 {
+                contest_held_owed_from_v1(owed)
+            } else {
+                owed
+            },
             released: false,
         })
         .collect())

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **DXKeeper gets each contact once.** When an upload to another service failed, for example with the internet down, every retry sent the contact to DXKeeper again, so your master log could collect a dozen or more copies of it. A catch-up of older contacts sent them to DXKeeper again too. Now a contact goes to DXKeeper once, when it is first logged or, for one held during a contest, when it is released. Copies already sent to DXKeeper are not removed, so any extras in your master log stay there until you delete them. Correcting a callsign still sends the corrected contact to DXKeeper once.
+- **A closed DXKeeper gets a short retry, then a clear line.** If Nexus cannot connect to DXKeeper, nothing was delivered, so it tries that contact again up to five more times over about two minutes. If it still cannot connect, the Connections log names the contact as not delivered, and you can add it with Logbook ▸ Export ADIF. At most ten contacts wait for a retry at once, so a DXKeeper closed all day cannot build a backlog or take a flood when it opens: a contact past that limit is named as not delivered straight away. Waiting retries end when you close Nexus, except for contacts held during a contest, which try again at the next launch. A send that connected is never repeated, since DXKeeper does not say whether it arrived.
+- **Updating mid-contest keeps your DXKeeper sends.** Contacts still held from 1.23.0 that had not gone out would never have reached DXKeeper after the update. They now go when released, and ones that had already been sent do not go again.
 
 ## [1.23.0] — 2026-11-05
 

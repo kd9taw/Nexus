@@ -107,6 +107,25 @@ fn connect(host: &str, port: u16) -> Result<TcpStream, String> {
     Ok(s)
 }
 
+/// Why [`push_qso`] did not get as far as `Ok`, split by the one question a caller has to ask:
+/// can trying again put the contact in the log twice?
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PushError {
+    /// No connection was made, so not a byte left this machine: trying again cannot duplicate.
+    NotConnected(String),
+    /// Connected, and the write then failed. DXKeeper may have the whole directive, and it says
+    /// nothing either way: trying again could duplicate.
+    Unsure(String),
+}
+
+impl std::fmt::Display for PushError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotConnected(e) | Self::Unsure(e) => f.write_str(e),
+        }
+    }
+}
+
 /// Push one QSO into DXKeeper: connect → one directive → close.
 ///
 /// `base_port` is the operator-facing **Base Port** (what DXKeeper's config panel shows);
@@ -119,18 +138,20 @@ pub fn push_qso(
     base_port: u16,
     adif_record: &str,
     upload_flags: bool,
-) -> Result<(), String> {
+) -> Result<(), PushError> {
     let port = port_for_base(base_port);
     let mut stream = connect(host, port).map_err(|e| {
-        format!(
+        PushError::NotConnected(format!(
             "DXKeeper connect {host}:{port}: {e} \
              (is Network Service enabled in DXKeeper ▸ Configuration ▸ Defaults?)"
-        )
+        ))
     })?;
     stream
         .write_all(build_externallog(adif_record, upload_flags).as_bytes())
-        .map_err(|e| format!("DXKeeper send: {e}"))?;
-    stream.flush().map_err(|e| format!("DXKeeper flush: {e}"))?;
+        .map_err(|e| PushError::Unsure(format!("DXKeeper send: {e}")))?;
+    stream
+        .flush()
+        .map_err(|e| PushError::Unsure(format!("DXKeeper flush: {e}")))?;
     Ok(())
 }
 
@@ -215,6 +236,34 @@ mod tests {
         // DeduceMissing/QueryCallbook are the value a DXKeeper user is there for.
         assert!(msg.contains("<QueryCallbook:1>Y"));
         assert!(msg.contains("<CheckOverrides:1>Y"));
+    }
+
+    /// Whether anything can have arrived decides whether the worker may try again: nobody home
+    /// means nothing was delivered, and a retry cannot duplicate.
+    #[test]
+    fn no_listener_is_told_apart_from_a_send() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let base = port - 1;
+
+        push_qso("127.0.0.1", base, "<call:5>W1ABC<EOR>", false).expect("someone is listening");
+        let (mut conn, _) = listener.accept().unwrap();
+        let mut got = String::new();
+        std::io::Read::read_to_string(&mut conn, &mut got).unwrap();
+        assert!(got.contains("<call:5>W1ABC"), "{got}");
+
+        drop(conn);
+        drop(listener);
+        let err = push_qso("127.0.0.1", base, "<call:5>W1ABC<EOR>", false).unwrap_err();
+        assert!(matches!(err, PushError::NotConnected(_)), "{err}");
+        assert!(err.to_string().contains("Network Service"), "{err}");
+    }
+
+    /// A name that does not resolve reached nobody either.
+    #[test]
+    fn an_unresolvable_host_is_not_connected() {
+        let err = push_qso("host.invalid.", 52000, "<call:5>W1ABC<EOR>", false).unwrap_err();
+        assert!(matches!(err, PushError::NotConnected(_)), "{err}");
     }
 
     #[test]
