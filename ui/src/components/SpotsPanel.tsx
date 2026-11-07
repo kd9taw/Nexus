@@ -9,6 +9,7 @@
 // comment) and the age column below — all data and measurement, invariant in every locale.
 import { useEffect, useMemo, useState } from 'react'
 import { useSessionState } from '../useSessionState'
+import { useRememberedList } from '../useRememberedList'
 import type { BandChannel, FieldDayStatus, NeedAlert, SpotRow } from '../types'
 import { callCardTrigger, qrzPageOf } from './CallCard'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
@@ -25,6 +26,7 @@ import { SpotsSpotMe, type SpotMeStation } from './SpotsSpotMe'
 import { SpotDialog } from './SpotDialog'
 import { WorkedWindowSelect, isWorkedWindow, workedWithin, type WorkedWindow } from './WorkedWindowSelect'
 import { setPounceSpotterFilter } from '../api'
+import { surfaceGet, surfaceSet } from '../features/windowScope'
 
 type SortKey = 'age' | 'call' | 'entity' | 'state' | 'band' | 'freq' | 'mode'
 
@@ -109,8 +111,9 @@ export interface SpotsPanelProps {
  * The board as a PANE of another screen (#345: the Phone cockpit's Spots pane). A second host of
  * the same component, and everything it needs to be a board of its own:
  *
- *  - `scope` names this host's copy of every filter: the session key `nexus.spots.bands` becomes
- *    `nexus.spots.bands.<scope>`, so neither host's chips can move the other's.
+ *  - `scope` names this host's copy of every filter: `nexus.spots.bands` becomes the session key
+ *    `nexus.spots.bands.<scope>`, so neither host's chips can move the other's. A pane's copy goes
+ *    at exit, modes and bands too: only the view remembers those (`REMEMBERED_FILTERS`).
  *  - `modes` are the modes it opens on, and they are an ALLOW-list: a mode that first appears
  *    later stays hidden until its chip is ticked. The view's HIDDEN set does the opposite (a new
  *    mode shows) — right for a firehose, wrong for Phone's "SSB/AM/FM spots on the band you're
@@ -140,6 +143,11 @@ export interface SpotsPane {
  * them into its own session before its board's first paint. That copy is then the window's own, and goes when
  * the window closes, as before.
  *
+ * MODES AND BANDS OUTLIVE THE RUN (`REMEMBERED_FILTERS`), and travel in the same record into the window's own
+ * remembered copy. One thing differs: a view with neither has nothing to hand over, so its press leaves them out
+ * and the window comes back on the picks it remembers, which is how an operator who filters only in the Pop out
+ * gets them back after a restart. A view with either hands over both, as a press always has.
+ *
  * Taken once, never stale. The window takes the record only while it holds no copy of its own, so a press that
  * only brings the open window forward, or the window reloading, moves nothing in it. It deletes the record as it
  * reads it, and one stamped more than a minute from now (an earlier press, an earlier run of the app) is deleted
@@ -149,6 +157,18 @@ export interface SpotsPane {
 const POP_OUT_FILTERS_KEY = 'nexus.spotsPopOut.filters'
 const POP_OUT_FILTERS_MAX_AGE_MS = 60_000
 const VIEW_ENTRY = /^nexus\.spots\.[A-Za-z]+$/
+/** The two filters that come back after a restart, each window its own copy. They are what an operator sets up
+ *  and means to keep. The rest stay for the run, each for a reason: the search and sort are the question of the
+ *  moment, and a search term left over from yesterday would hide nearly the board with no chip to show for it;
+ *  Heard on my continent and Hide worked are on again next launch by the operator's choice; the state and
+ *  spotted-from chips offer only what the feed holds at launch, so a remembered one would have no chip, and
+ *  spotted-from also narrows the Pounce alert, which should not change because a run from last week said so.
+ *  My privileges has no such reason against it; it stays for the run only because nobody has asked otherwise. */
+const REMEMBERED_FILTERS: readonly string[] = ['nexus.spots.hiddenModes', 'nexus.spots.bands']
+/** A band as the band plan spells them (`20m`, `1.25m`, `70cm`, `2.5mm`), whether or not it has spots today. */
+const isBandName = (band: string) => /^\d+(\.\d+)?(m|cm|mm)$/.test(band)
+/** Modes are whatever the feed sends, so only the plainly broken are refused. An unknown one costs one unlit chip. */
+const isModeName = (mode: string) => mode.trim() !== '' && mode.length <= 24
 
 /** This window's copy of the view's filters, as stored. */
 function viewEntries(): Record<string, string> {
@@ -166,8 +186,13 @@ function viewEntries(): Record<string, string> {
  *  first, so a record this press cannot store never leaves an older one in its place. */
 function handOffFilters(): void {
   try {
+    const filters = viewEntries()
+    const remembered = REMEMBERED_FILTERS.map((key) => [key, surfaceGet(key)] as const)
+    if (remembered.some(([, value]) => value != null && value !== '[]')) {
+      for (const [key, value] of remembered) if (value != null) filters[key] = value
+    }
     localStorage.removeItem(POP_OUT_FILTERS_KEY)
-    localStorage.setItem(POP_OUT_FILTERS_KEY, JSON.stringify({ at: Date.now(), filters: viewEntries() }))
+    localStorage.setItem(POP_OUT_FILTERS_KEY, JSON.stringify({ at: Date.now(), filters }))
   } catch {
     /* storage refused: the window opens on the defaults, as it did before there was a hand-off */
   }
@@ -185,7 +210,9 @@ function adoptPopOutFilters(): void {
     const { at, filters } = JSON.parse(raw) as { at?: unknown; filters?: Record<string, unknown> }
     if (typeof at !== 'number' || Math.abs(Date.now() - at) > POP_OUT_FILTERS_MAX_AGE_MS) return
     for (const [key, value] of Object.entries(filters ?? {})) {
-      if (VIEW_ENTRY.test(key) && typeof value === 'string') sessionStorage.setItem(key, value)
+      if (!VIEW_ENTRY.test(key) || typeof value !== 'string') continue
+      if (REMEMBERED_FILTERS.includes(key)) surfaceSet(key, value)
+      else sessionStorage.setItem(key, value)
     }
   } catch {
     /* storage refused, or a record that does not parse: the defaults */
@@ -224,9 +251,9 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
   // modes stores the SHOWN set instead — it opens on them, and a new one must not widen it by
   // arriving. One key per semantic, each kept by the host it belongs to; a chip toggles membership
   // in whichever this host keeps, which flips that chip either way.
-  const [hiddenModes, setHiddenModes] = useSessionState<string[]>('nexus.spots.hiddenModes', [], allowModes ? null : host)
+  const [hiddenModes, setHiddenModes] = useRememberedList('nexus.spots.hiddenModes', allowModes ? null : host, isModeName)
   const [shownModes, setShownModes] = useSessionState<string[]>('nexus.spots.shownModes', [...(pane?.modes ?? [])], allowModes ? host : null)
-  const [bands, setBands] = useSessionState<string[]>('nexus.spots.bands', [], host) // empty = all
+  const [bands, setBands] = useRememberedList('nexus.spots.bands', host, isBandName) // empty = all
   // A pane FOLLOWS the radio's band until that band's chip is unticked (SpotsPane). `bands` is
   // then the operator's OTHER picks, and the filter is both. The view, and a pane with no band to
   // follow, keep no such switch.
@@ -257,7 +284,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
   // operator is scanning this board for. DEFAULT ON, like the locality chip, and for the same
   // reason it prints its count: what it hides has to be visible and one click away.
   const [hideWorked, setHideWorked] = useSessionState('nexus.spots.hideWorked', true, host)
-  // How far back "worked" reaches. Session-scoped like every other filter here, and validated on
+  // How far back "worked" reaches. Session-scoped like Hide worked itself, and validated on
   // read — a stale or hand-edited value falls back to the UTC day rather than hiding nothing.
   const [storedWindow, setWorkedWindow] = useSessionState<WorkedWindow>('nexus.spots.workedWindow', 'utcDay', host)
   const workedWindow = isWorkedWindow(storedWindow) ? storedWindow : 'utcDay'
@@ -293,20 +320,24 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
     for (const s of spots) if (s.band && !result.includes(s.band)) result.push(s.band)
     // The band a pane follows always has a chip — it is the one way to stop following it.
     if (rigBand && !result.includes(rigBand)) result.push(rigBand)
+    // A picked band always has one too: a filter with no chip empties the board and cannot say why.
+    for (const b of bands) if (!result.includes(b)) result.push(b)
     return result
-  }, [spots, rigBand])
+  }, [spots, rigBand, bands])
   // The SPECIFIC modes present in the firehose (skimmer submode, else the class label), in a
   // natural operating order (CW, Phone, then the digital submodes), unknowns trailing alpha.
   const availableModes = useMemo(() => {
     const set = new Set<string>()
     for (const s of spots) set.add(s.submode ?? s.mode)
+    // So does a hidden mode, for the same reason, whether or not the feed holds it right now.
+    for (const m of hiddenModes) set.add(m)
     const order = ['CW', 'Phone', 'FT8', 'FT4', 'RTTY', 'PSK', 'Digital']
     const rank = (m: string) => {
       const i = order.indexOf(m)
       return i < 0 ? order.length : i
     }
     return [...set].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
-  }, [spots])
+  }, [spots, hiddenModes])
   // US states present (resolved for stations heard before with a grid).
   const availableStates = useMemo(() => presentStates(spots), [spots])
 
@@ -518,7 +549,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
               </button>
             ))}
           </div>
-          {availableModes.length > 1 && (
+          {(availableModes.length > 1 || hiddenModes.length > 0) && (
             <>
               <div className="np-filter-sep" aria-hidden="true" />
               <div className="np-filter-group" role="group" aria-label={t('spots.filters.modes.aria')}>
