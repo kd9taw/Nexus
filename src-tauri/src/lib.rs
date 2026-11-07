@@ -41890,6 +41890,38 @@ mod upload_record_tests {
             );
         }
 
+        /// ⛔ THE WORKER'S TRIP. It drains the whole queue and works through it off the lock. A contact
+        /// deleted once it holds it does not go to DXKeeper, and does not join the wait, and the
+        /// neighbour in the same batch does go.
+        #[test]
+        fn a_contact_deleted_in_the_workers_hand_does_not_reach_dxkeeper() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let mut wait = DxkeeperWait::default();
+            let gone = log(&engine, "K1GON");
+            let kept = log(&engine, "K2KPT");
+            let id = gone.rec.id.unwrap();
+            let (made, _) = tempo_app::logwrite::change_ops(
+                &engine,
+                id,
+                None,
+                &[tempo_core::logbook::LogOp::Delete(id)],
+                "test",
+            );
+            made.expect("read").expect("made");
+
+            // DXKeeper closed: it does not wait, and the worker's next tick has nothing for it.
+            pass(&engine, gone.clone(), port, false, &mut wait);
+            assert_eq!(waiting(&engine), 0);
+            // DXKeeper open: it is not sent.
+            let dxkeeper = listen(port);
+            pass(&engine, gone, port, false, &mut wait);
+            assert_eq!(arrived(&dxkeeper).len(), 0);
+            pass(&engine, kept, port, false, &mut wait);
+            assert_eq!(calls(&arrived(&dxkeeper)), ["K2KPT"]);
+        }
+
         /// A send that connected is never repeated: not by a service's retries, and not by anything
         /// that waits after it.
         #[test]
