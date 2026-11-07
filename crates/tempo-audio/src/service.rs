@@ -46389,7 +46389,10 @@ mod tests {
         assert!(t_0s() > first, "a retry still sends the key-up");
         // The link answers, then goes silent again: a new outage.
         state.on_cat_link_back();
-        assert!(!rebuild(&mut state, &mut rig, 200_000.0), "a new outage: off");
+        assert!(
+            !rebuild(&mut state, &mut rig, 200_000.0),
+            "a new outage: off"
+        );
     }
 
     /// A link that stays silent is tried less and less often, up to every five minutes, because a
