@@ -3102,13 +3102,12 @@ pub mod upload_legs {
     pub const CLOUDLOG: u8 = 1 << 5;
     pub const WRL: u8 = 1 << 6;
     /// DXKeeper, which is owed ONE delivery. It acknowledges nothing, so a send that connected is
-    /// the end of it, whatever became of it. Only a connection that failed, which delivered
-    /// nothing, keeps the leg, for a short retry the worker bounds. A contact owes it from the
-    /// funnel, as it owes every service; a re-queue holds only the legs that failed, so a retry of
-    /// a service cannot fire it again, and [`crate::station::unsent_legs`] cannot pick it, so a
-    /// catch-up sweep of history owes it nothing. A contact contest mode held keeps it until its
-    /// release goes out, and its file keeps what has been spent across a restart. No Settings
-    /// toggle or destination maps to it, so it is in neither [`on`] nor [`mask_for`].
+    /// the end of it, whatever became of it. A connection that failed delivered nothing, and the
+    /// contact keeps the leg and waits ([`super::Engine::dxkeeper_hold`]) until one succeeds, across
+    /// a restart too. It never goes back on the upload queue, so a retry of a service cannot fire
+    /// it, and [`crate::station::unsent_legs`] cannot pick it, so a catch-up sweep of history owes
+    /// it nothing. A contact owes it from the funnel, as it owes every service. No Settings toggle
+    /// or destination maps to it, so it is in neither [`on`] nor [`mask_for`].
     pub const DXKEEPER: u8 = 1 << 7;
     pub const ALL: u8 = QRZ | CLUBLOG | EQSL | HRDLOG | N3FJP | CLOUDLOG | WRL | DXKEEPER;
 
@@ -3346,18 +3345,22 @@ pub struct StationGrids {
 /// the fallback for the realtime-only path.
 pub const CATCHUP_UPLOAD_SPACING_SECS: i64 = 15;
 
-/// How many contacts logged with contest mode on wait for it to go off
-/// ([`Engine::release_contest_uploads`]): a weekend's run logged through the everyday form, and
-/// no growth without limit when contest mode is never turned off.
-const CONTEST_HELD_UPLOADS_CAP: usize = 4096;
+/// How many contacts the held list keeps: those logged with contest mode on, waiting for it to go
+/// off ([`Engine::release_contest_uploads`]), a weekend's run logged through the everyday form, and
+/// those waiting for DXKeeper ([`Engine::dxkeeper_hold`]). No growth without limit when contest mode
+/// is never turned off or DXKeeper never opened.
+pub const CONTEST_HELD_UPLOADS_CAP: usize = 4096;
 
-/// One contact contest mode held ([`Engine::release_contest_uploads`]): the services it still
-/// owes ([`upload_legs`]), and whether this run has handed it to the upload queue yet.
+/// One contact on the held list: contest mode held it ([`Engine::release_contest_uploads`]), or
+/// DXKeeper could not be reached ([`Engine::dxkeeper_hold`]). The services it still owes
+/// ([`upload_legs`]), whether this run has handed it to the upload queue yet, and whether it is
+/// waiting for DXKeeper now.
 #[derive(Clone)]
 struct ContestHeld {
     rec: QsoRecord,
     owed: u8,
     released: bool,
+    dxkeeper_waiting: bool,
 }
 
 /// The held list's file (`contest_held_uploads.json`):
@@ -3436,6 +3439,7 @@ fn contest_held_from_json(text: &str) -> Result<Vec<ContestHeld>, String> {
                 owed
             },
             released: false,
+            dxkeeper_waiting: false,
         })
         .collect())
 }
@@ -4195,7 +4199,8 @@ pub struct Engine {
     /// ClubLog and the rest through the merge at the end, never live. A copy is kept on disk
     /// ([`Self::persist_contest_held_uploads`]), so a restart with the switch on does not forget
     /// what is owed. A released contact stays here until its upload is done
-    /// ([`Self::contest_upload_done`]).
+    /// ([`Self::contest_upload_done`]). Contacts waiting for DXKeeper are kept here too
+    /// ([`Self::dxkeeper_hold`]).
     contest_held_uploads: Vec<ContestHeld>,
     /// Where the held list is kept between launches, beside the settings, when the shell set it
     /// ([`Self::set_contest_held_uploads_path`]).
@@ -19030,8 +19035,62 @@ impl Engine {
             rec,
             owed: upload_legs::ALL,
             released: false,
+            dxkeeper_waiting: false,
         });
         self.persist_contest_held_uploads();
+    }
+
+    /// DXKeeper could not be reached for `rec`: keep it, on the held list and so on disk, until the
+    /// upload worker gets it there ([`Self::contest_upload_done`] with the DXKeeper leg). The list
+    /// is what already keeps a contact's unfinished upload across a restart, so a quit loses
+    /// nothing. Past [`CONTEST_HELD_UPLOADS_CAP`] the oldest contact that owes DXKeeper alone goes,
+    /// or `rec` itself when none does, never a contest's held contact; what went is returned, for
+    /// the worker to name.
+    pub fn dxkeeper_hold(&mut self, rec: &QsoRecord) -> Option<QsoRecord> {
+        // A contact contest mode held is on the list already, and owes the leg.
+        if let Some(held) = self
+            .contest_held_uploads
+            .iter_mut()
+            .find(|h| !h.dxkeeper_waiting && h.owed & upload_legs::DXKEEPER != 0 && h.rec == *rec)
+        {
+            held.dxkeeper_waiting = true;
+            return None;
+        }
+        let mut gone = None;
+        if self.contest_held_uploads.len() >= CONTEST_HELD_UPLOADS_CAP {
+            let Some(oldest) = self
+                .contest_held_uploads
+                .iter()
+                .position(|h| h.dxkeeper_waiting && h.owed == upload_legs::DXKEEPER)
+            else {
+                return Some(rec.clone());
+            };
+            gone = Some(self.contest_held_uploads.remove(oldest).rec);
+        }
+        self.contest_held_uploads.push(ContestHeld {
+            rec: rec.clone(),
+            owed: upload_legs::DXKEEPER,
+            released: true,
+            dxkeeper_waiting: true,
+        });
+        self.persist_contest_held_uploads();
+        gone
+    }
+
+    /// How many contacts are waiting for DXKeeper ([`Self::dxkeeper_hold`]).
+    pub fn dxkeeper_waiting_count(&self) -> usize {
+        self.contest_held_uploads
+            .iter()
+            .filter(|h| h.dxkeeper_waiting)
+            .count()
+    }
+
+    /// The next contact to send when DXKeeper answers: the first of those waiting.
+    pub fn dxkeeper_oldest_waiting(&self) -> Option<QsoRecord> {
+        self.contest_held_uploads
+            .iter()
+            .find(|h| h.dxkeeper_waiting)
+            .map(|h| h.rec.clone())
     }
 
     /// Contest mode went off: send what it held, once, as catch-up — paced one slot apart,
@@ -19069,6 +19128,10 @@ impl Engine {
             return;
         };
         self.contest_held_uploads[i].owed &= !done;
+        // With DXKeeper's leg spent it is not waiting, whatever the services still owe.
+        if done & upload_legs::DXKEEPER != 0 {
+            self.contest_held_uploads[i].dxkeeper_waiting = false;
+        }
         if self.contest_held_uploads[i].owed == 0 {
             self.contest_held_uploads.remove(i);
         }
@@ -19097,6 +19160,12 @@ impl Engine {
         ) else {
             return;
         };
+        // Owing DXKeeper alone, it has had its services and was waiting when the last run ended. It
+        // waits now, not on the upload queue, whose cap and catch-up pacing are for the services.
+        for h in held.iter_mut().filter(|h| h.owed == upload_legs::DXKEEPER) {
+            h.dxkeeper_waiting = true;
+            h.released = true;
+        }
         held.append(&mut self.contest_held_uploads);
         self.contest_held_uploads = held;
         if !self.settings.fd_active {

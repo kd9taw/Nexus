@@ -531,3 +531,43 @@ fn a_held_list_from_1_23_0_owes_dxkeeper_only_for_contacts_that_have_not_been_se
     assert_eq!(again[0].legs, upload_legs::ALL & !upload_legs::DXKEEPER);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Waiting for DXKeeper keeps a contact on the held list, so on disk, in order. Past the ceiling the
+/// oldest that owes DXKeeper alone goes and is returned, and a contest's held contact never does.
+#[test]
+fn what_waits_for_dxkeeper_is_bounded_and_never_costs_a_held_contact() {
+    let mut e = contest_on();
+    e.log_qso(cw("W1AW"));
+    assert_eq!(
+        e.dxkeeper_waiting_count(),
+        0,
+        "held for the contest, not waiting"
+    );
+    let rec = |n: usize| {
+        let mut r = cw("K1ABC");
+        r.when_unix += n as u64;
+        r
+    };
+    assert_eq!(e.dxkeeper_hold(&rec(0)), None);
+    assert_eq!(e.dxkeeper_oldest_waiting(), Some(rec(0)));
+    for n in 1..CONTEST_HELD_UPLOADS_CAP - 1 {
+        assert_eq!(e.dxkeeper_hold(&rec(n)), None);
+    }
+    assert_eq!(e.dxkeeper_waiting_count(), CONTEST_HELD_UPLOADS_CAP - 1);
+    let past = e.dxkeeper_hold(&rec(CONTEST_HELD_UPLOADS_CAP));
+    assert_eq!(past, Some(rec(0)), "the oldest of those waiting");
+    assert_eq!(e.dxkeeper_waiting_count(), CONTEST_HELD_UPLOADS_CAP - 1);
+    assert_eq!(e.dxkeeper_oldest_waiting(), Some(rec(1)));
+    contest_off(&mut e);
+    assert_eq!(calls(&e.take_pending_uploads()), ["W1AW"], "it still goes");
+
+    // A contact the list holds already waits where it is, and owes what it owed.
+    let mut e = contest_on();
+    e.log_qso(cw("W1AW"));
+    contest_off(&mut e);
+    let sent = e.take_pending_uploads();
+    assert_eq!(e.dxkeeper_hold(&sent[0].rec), None);
+    assert_eq!(e.dxkeeper_waiting_count(), 1);
+    settle(&mut e, &sent[0], upload_legs::ALL & !upload_legs::DXKEEPER);
+    assert_eq!(e.dxkeeper_waiting_count(), 0, "and it is done");
+}
