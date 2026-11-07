@@ -12,8 +12,8 @@
 ! Frame / array constants (from ft1/ft1_params.f90):
 !   NN    = 99     total channel symbols
 !   NMAX  = 48000  raw audio samples (4.0 s @ 12 kHz)
-!   NDOWN = 54     downsample factor
-!   NDMAX = 888    downsampled complex samples (NMAX/NDOWN)
+!   NDOWN = 54     sizes the baseband buffers; not the rate, which is 224 Hz (ft1_downsample)
+!   NDMAX = 888    baseband complex samples kept (NMAX/NDOWN)
 
 module tempofast_cabi
   use iso_c_binding

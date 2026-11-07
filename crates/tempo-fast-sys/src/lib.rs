@@ -125,9 +125,10 @@ fn settle_deferred_encodes() {
 pub const FT1_NN: usize = 99;
 /// Raw audio samples per frame (4.0 s @ 12 kHz).
 pub const FT1_NMAX: usize = 48000;
-/// Downsample factor.
+/// Sizes the baseband buffers (`NMAX / NDOWN`). Not the rate: FT1's baseband runs at exactly
+/// 224 Hz, see `ft1_downsample`.
 pub const FT1_NDOWN: usize = 54;
-/// Downsampled complex samples.
+/// Baseband complex samples kept.
 pub const FT1_NDMAX: usize = 888;
 /// Samples-per-symbol numerator.
 pub const FT1_NSPS_NUM: c_int = 3000;

@@ -1,5 +1,5 @@
 //! Every (mycall-class × dxcall-class) pair must reach 73 — measured END TO END, two
-//! real [`Station`]s driving each other over the virtual air through the real modem.
+//! real [`Station`]s driving each other over a LOSSLESS channel.
 //!
 //! **Why this file exists rather than more unit tests on `observe`.** `c745a842` and
 //! `b1651125` got the WIRE right: `/P` and `/R` ride Type 1/2 with their grid and their
@@ -13,17 +13,84 @@
 //! sat in `AwaitRoger` waiting for the other to roger first. Nothing was malformed;
 //! nothing advanced.
 //!
-//! So the assertion here is COMPLETION: two stations, real encode, real decode, run to 73
-//! and a contact the log will take. Sixteen quadrants — plain standard, `/P`, `/R` and
-//! genuinely nonstandard on each side, because `/P` and `/R` must be told apart to see the
-//! suffix conflict at all — with the CQ caller drawn from one set and the answering
-//! station from the other, so both roles of every class pair are swept.
+//! So the assertion here is COMPLETION: two stations run to 73 and a contact the log will
+//! take. Sixteen quadrants — plain standard, `/P`, `/R` and genuinely nonstandard on each
+//! side, because `/P` and `/R` must be told apart to see the suffix conflict at all — with
+//! the CQ caller drawn from one set and the answering station from the other, so both
+//! roles of every class pair are swept.
 //!
-//! Message-form correctness (the packer round trip, the never-rename-a-station rule) is
-//! `portable_suffix_air.rs`. This file assumes those forms and asks only whether a QSO
-//! built out of them finishes.
+//! **Why the channel is lossless.** This is a claim about the sequencer, so each over goes
+//! through the packer and straight to the other station's `observe`: a pair the packer cannot
+//! carry still fails, with no waveform and no noise to lose a frame. Over the real modem at a fixed
+//! noise seed this test's verdict was a coin flip: a decoder miss on the wrong over strands
+//! a station one state short of `Done`, which has nothing to do with whether the arms
+//! exist. A lost over is a different question and it is not asked here.
+//!
+//! What the channel skips is covered elsewhere: message-form correctness (the packer round
+//! trip, the never-rename-a-station rule) is `portable_suffix_air.rs`, and one whole exchange
+//! through the real FT1 modem is `qso_loopback.rs`.
 
-use tempo_core::qso::{run_loopback_qso, State, Station};
+use modes::Decode;
+use tempo_core::qso::{AirLog, State, Station};
+use tempo_core::tempo_fast;
+
+/// What a receiver prints for `text`, with no waveform or noise in the way: the text packed to
+/// its 77 bits and unpacked again. `None` when the packer has no frame for it, so nothing is
+/// heard, and a hash the tables cannot resolve comes back as `<...>`, not as the call.
+///
+/// `tempo_fast::encode` runs first because a real transmission puts the sender's calls in the
+/// callsign tables `unpack77` reads. This process has one set of tables, so both stations share
+/// them; that is the same assumption `run_loopback_qso` made.
+fn through_the_packer(text: &str) -> Option<String> {
+    tempo_fast::encode(text);
+    let mut msg37 = [b' '; 37];
+    msg37[..text.len()].copy_from_slice(text.as_bytes());
+    let bits = modes::wsjt77::pack::pack(&msg37).ok().flatten()?;
+    tempo_fast::unpack77(&bits.map(|b| b as i8))
+}
+
+/// `run_loopback_qso`'s slot loop with the waveform and the decoder taken out: `a` transmits on
+/// even slots, `b` on odd, and every over the packer can carry arrives, as the same record a
+/// decode would produce.
+fn run_lossless_qso(a: &mut Station, b: &mut Station, max_slots: u64) -> Vec<AirLog> {
+    let mut log = Vec::new();
+    for slot in 0..max_slots {
+        let (txs, rxs) = if slot % 2 == 0 {
+            (&mut *a, &mut *b)
+        } else {
+            (&mut *b, &mut *a)
+        };
+        if let Some(msg) = txs.outgoing() {
+            let text = msg.to_text();
+            let heard: Vec<Decode> = through_the_packer(&text)
+                .into_iter()
+                .map(|message| Decode {
+                    message,
+                    sync: 1.0,
+                    snr: -5,
+                    dt: 0.0,
+                    freq: 1500.0,
+                    nap: 0,
+                    qual: 1.0,
+                    rv: None,
+                    mode: None,
+                    raw: None,
+                })
+                .collect();
+            log.push(AirLog {
+                slot,
+                from: txs.mycall.clone(),
+                text,
+            });
+            rxs.observe(&heard);
+            txs.after_tx();
+        }
+        if a.done() && b.done() {
+            break;
+        }
+    }
+    log
+}
 
 /// What the 77-bit packer can carry for a callsign, as a property of the CALL alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,7 +148,7 @@ fn every_callsign_class_pair_runs_to_73_and_logs() {
             // sets every (CQ-caller class × answerer class) combination is covered.
             let mut theirs = Station::calling_cq(dx, dxgrid);
             let mut mine = Station::answering(my, mygrid, dx);
-            let air = run_loopback_qso(&mut theirs, &mut mine, 15.0, 24);
+            let air = run_lossless_qso(&mut theirs, &mut mine, 24);
 
             let show = || {
                 let mut s = format!("\n--- {my} × {dx} ---\n");
@@ -173,6 +240,16 @@ fn every_callsign_class_pair_runs_to_73_and_logs() {
             }
         }
     }
+}
+
+#[test]
+fn the_lossless_channel_still_refuses_what_the_packer_cannot_carry() {
+    assert_eq!(
+        through_the_packer("W9XYZ KD9TAW 73").as_deref(),
+        Some("W9XYZ KD9TAW 73")
+    );
+    // A hashed CQ has no frame: it must not arrive as text the sequencer could ride.
+    assert_eq!(through_the_packer("CQ <PJ4/K1ABC> FK52"), None);
 }
 
 #[test]

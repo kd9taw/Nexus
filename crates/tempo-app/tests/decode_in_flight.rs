@@ -723,8 +723,11 @@ fn harq_pair(e: &Arc<Mutex<Engine>>) -> (Vec<f32>, Vec<f32>) {
             })
             .collect()
     };
-    for (seed0, seed1) in [(9, 10), (13, 14), (3, 4), (39, 40), (23, 24)] {
-        for amp in [67.0, 65.0, 69.0, 63.0, 71.0] {
+    // About -14 to -13 dB. Stronger than this RV0 mostly decodes alone, and weaker the combine
+    // fails too. Even here only about one try in twenty is such a pair, so try enough of them.
+    for seed0 in (1..80u64).step_by(2) {
+        let seed1 = seed0 + 1;
+        for amp in [58.0, 56.0, 60.0, 54.0, 62.0] {
             let (rv0, rv1) = (frame(0, amp, seed0), frame(1, amp, seed1));
             tempo_fast::harq_reset();
             if decode_rv(e, &rv0, 2).is_none() && decode_rv(e, &rv1, 4) == Some(1) {

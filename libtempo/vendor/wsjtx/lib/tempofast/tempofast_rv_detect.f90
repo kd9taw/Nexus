@@ -64,7 +64,7 @@ subroutine ft1_rv_detect(cd, npts, i0_hint, irv_det)
   icos_rv(0:3,1)=(/1,3,2,0/)
   icos_rv(0:3,2)=(/3,0,2,1/)
 
-  nsps_dn = real(NSPS_NUM)/(real(NSPS_DEN)*real(NDOWN))
+  nsps_dn = real(NSS)
   i0lo = i0_hint - nint(WIN_SYM*nsps_dn)
   i0hi = i0_hint + nint(WIN_SYM*nsps_dn)
 
@@ -96,7 +96,7 @@ contains
     complex :: z
     real    :: m, ssum, ndn
     integer :: i1, i2, i3, s, ig, grp
-    ndn = real(NSPS_NUM)/(real(NSPS_DEN)*real(NDOWN))
+    ndn = real(NSS)
     i1 = i0
     i2 = i0 + nint(47.0*ndn)
     i3 = i0 + nint(95.0*ndn)

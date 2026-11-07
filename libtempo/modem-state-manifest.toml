@@ -1476,8 +1476,8 @@ name = "window"
 file = "tempofast/tempofast_downsample.f90"
 line = 47
 class = 2
-size_bytes = 3552
-reason = "real(0:887), saved (:51), built once under `first` (:68-92). Verified fully written before any read: blanket `window = 0.0` at :68, edges at :70-85, then `window = cshift(window, iws)` at :92 - no partial-fill hole. Content is a function of df=12000/NMAX and baud=12000/NSPS only, both compile-time parameters. Identical for every chain and band (the band-specific part is the f0 bin offset at :103-108, which is per-call). Shareable."
+size_bytes = 3584
+reason = "real(0:895), saved (:51), built once under `first` (:68-92). Verified fully written before any read: blanket `window = 0.0` at :68, edges at :70-85, then `window = cshift(window, iws)` at :92 - no partial-fill hole. Content is a function of df=12000/NMAX and baud=12000/NSPS only, both compile-time parameters. Identical for every chain and band (the band-specific part is the f0 bin offset at :103-108, which is per-call). Shareable."
 
 [[symbol]]
 name = "first"
@@ -13889,3 +13889,11 @@ line = 51
 class = 4
 size_bytes = 448
 reason = "NOT REPORTED BY THE GATE and not in any source line: gfortran's type-bound metadata (__vtab_*, and __def_init_* default-initialisation templates), found with nm -S. CLUSTER ROW for this object: vtabs of the eight pack77_*_source types (8 x 56 B). Written only by the loader, never by any code (no CLASS(...) dispatch in these files touches them). Class 4."
+
+[[symbol]]
+name = "c"
+file = "tempofast/turbo_decode_tempofast.f90"
+line = 1064
+class = 3
+size_bytes = 202752
+reason = "complex c(NSTATES,0:3,NSYM), a local of ft1_timefreq_search, spilled to .bss for exceeding -fmax-stack-var-size (nm: c.12, size 0x31800). Scratch: load_correlations writes every element before viterbi_metric reads any, within one call, and calls serialize under the modem lock. Nothing is carried between calls, so sharing is safe; one chain's values cannot reach another."
