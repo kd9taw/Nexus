@@ -46905,6 +46905,64 @@ mod tests {
         assert!(said.ends_with(CAT_SILENT_TX_OFF), "{said}");
     }
 
+    /// A rigctld that dies and restarts cleanly: its rebuild turns transmit off and finds the radio
+    /// in the same tick, so the outage is over before any status was read. Transmit is off, so the
+    /// reason stays, after the rebuild's own words, until transmit is back on.
+    #[test]
+    fn a_daemon_that_dies_and_restarts_cleanly_still_explains_transmit_off() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tx_enabled(true);
+        let (mut state, mut rig) = a_silent_link(&engine);
+        let dead = std::process::Command::new("true").spawn().unwrap();
+        let mut dead =
+            CatDaemon::Spawned(crate::rigctld_proc::RigctldProc::from_child_for_test(dead));
+        let by = Instant::now() + Duration::from_secs(30);
+        while CatDaemon::is_alive(&mut dead) {
+            assert!(Instant::now() < by, "the stand-in daemon exited");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        state.rigctld_proc = Some(dead);
+        let mut clean = |_t: &Transport, _c: bool| -> RigOpen {
+            let alive = std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .unwrap();
+            (
+                Rig::with_control(Some("127.0.0.1:1".into()), PttMode::Cat),
+                Some(CatDaemon::Spawned(
+                    crate::rigctld_proc::RigctldProc::from_child_for_test(alive),
+                )),
+                CatProbe::status(Some(true), "answering"),
+            )
+        };
+        state.cat_retry_at = f64::MAX;
+        state
+            .step(
+                &engine,
+                &mut MockBackend::new(),
+                &mut rig,
+                &no_sinks(),
+                1_000.0,
+                &mut mock_reopen_audio(),
+                &mut clean,
+                &mut StationSinks::new(),
+            )
+            .unwrap();
+        assert_eq!(
+            state.cat_ok,
+            Some(true),
+            "premise: the restart found the radio"
+        );
+        let reads = || engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+        assert!(
+            !engine.lock().unwrap().tx_enabled(),
+            "premise: transmit went off"
+        );
+        assert!(reads().ends_with(CAT_BACK_TX_OFF), "{}", reads());
+        engine.lock().unwrap().set_tx_enabled(true);
+        assert!(!reads().contains(CAT_BACK_TX_OFF), "{}", reads());
+    }
+
     /// TEST CAT'S OWN RESULT carries the sentence while it holds, as its result line replaces the
     /// status on the screen, in the words for a link that is back when it found the radio.
     #[test]
