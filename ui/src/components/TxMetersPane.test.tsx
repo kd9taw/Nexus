@@ -11,7 +11,7 @@ import { resolve } from 'node:path'
 import { chainOf, parseRules, winnerAt, type Mode } from '../cssCascade'
 import { CockpitTxStrip } from './CockpitTxStrip'
 import { TxMeters, TxMetersCell, alcBar, poBar, swrBar } from './TxMeters'
-import { largeFaceColumns, needleScale } from './TxNeedles'
+import { LARGE_FACE_FLOOR_EM, largeFaceColumns, needleScale } from './TxNeedles'
 import {
   CW_PANELS,
   OPERATE_ARRANGE,
@@ -151,14 +151,15 @@ describe('its size, computed', () => {
     const root = c.querySelector<HTMLElement>('.txmeters-pane')!
     expect(win(root, 'display')).toBe('grid')
     expect(win(root, 'grid-template-columns')).toBe('repeat(var(--txmeters-pane-cols, 3), minmax(0, 1fr))')
-    expect(win(root, 'grid-auto-rows')).toBe('minmax(0, 1fr)')
+    // The floor is the track's: a floor on the face alone leaves the track short, and the next row
+    // stands over it. The pane body scrolls what no longer fits.
+    expect(win(root, 'grid-auto-rows')).toBe(`minmax(${LARGE_FACE_FLOOR_EM}em, 1fr)`)
     expect(win(root, 'height')).toBe('100%')
     // Not measured (jsdom lays nothing out): all three in a row.
     expect(root.style.getPropertyValue('--txmeters-pane-cols')).toBe('3')
     const meter = c.querySelector('.txmeters-pane-meter')!
     expect(win(meter, 'min-width')).toBe('0')
-    // The floor is on the content inside the pane body, where a pane squeezed shorter scrolls it.
-    expect(win(meter, 'min-height')).toBe('7em')
+    expect(win(meter, 'min-height')).toBeNull()
   })
 
   it('no strip or dock rule reaches it: it is not `.ph-txneedle`', () => {
@@ -170,6 +171,24 @@ describe('its size, computed', () => {
     const styles = parseRules(sheet('styles.css'))
     const hits = styles.map((r) => r.selector).filter((s) => /\.txmeters-pane(-meter)?(?![a-z0-9-])/.test(s))
     expect(hits.filter((s) => /\.txmeters-pane(-meter)?$/.test(s.trim()))).toEqual([])
+  })
+})
+
+describe('the columns, with the floor a row of faces cannot go under', () => {
+  const FLOOR = 98
+  it.each([
+    ['two rows would not fit: all three side by side, in view', 252, 140, 3],
+    ['three rows would not fit: two rows, in view', 262, 290, 2],
+    ['two rows exactly fit', 262, 200, 2],
+    ['three rows exactly fit', 262, 302, 1],
+    ['a pane too short for one row keeps one row', 600, 60, 3],
+  ] as const)('%s', (_what, w, h, cols) => {
+    expect(largeFaceColumns(w, h, 4, FLOOR)).toBe(cols)
+  })
+
+  it('the control: with no floor the first two would choose more rows', () => {
+    expect(largeFaceColumns(252, 140)).toBe(2)
+    expect(largeFaceColumns(262, 290)).toBe(1)
   })
 })
 

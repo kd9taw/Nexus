@@ -13558,12 +13558,6 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .txmeters-pane-idle .ph-txneedle-peak {
   opacity: 0.55;
 }
-/* A face's comfortable minimum, on the content inside the pane body, the sanctioned place (`.np-pane--stacked`):
-   a dial has no height of its own, so in the stacking flow this is what gives the pane one, and a pane
-   squeezed shorter scrolls in its body. */
-.pane-body > .txmeters-pane-body > .ph-txneedle-face {
-  min-height: 7em;
-}
 /* The strip's way to that pane, and only a look: where it stands is cockpit-panes.css's. */
 .txmeters-pane-toggle {
   color: var(--text-dim);

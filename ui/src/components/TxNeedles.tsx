@@ -120,18 +120,25 @@ const LARGE_TOP = -9
 const LARGE_BAND_TOP = 38
 const LARGE_BOTTOM = 50
 const LARGE_ASPECT = W / (LARGE_BOTTOM - LARGE_TOP)
+/** A row of large faces never goes under this: `.txmeters-pane`'s track floor (cockpit-panes.css), which
+ *  TxMetersPane.test.tsx holds to it. */
+export const LARGE_FACE_FLOOR_EM = 7
 
 /** How many columns draw the three large faces biggest in this much room: the one choice CSS cannot make,
  *  since wrapping looks at the width alone, and put SWR under a scroll in a short wide pane. `gap` is
- *  the space between faces. A box not measured yet has all three in a row. */
-export function largeFaceColumns(width: number, height: number, gap = 4): 1 | 2 | 3 {
+ *  the space between faces. `floor` is the least a row may be high: a shape whose rows would not fit it is
+ *  no choice, since it would scroll SWR away where a row of three keeps all of them in view. A box not
+ *  measured yet has all three in a row. */
+export function largeFaceColumns(width: number, height: number, gap = 4, floor = 0): 1 | 2 | 3 {
   if (!(width > 0) || !(height > 0)) return 3
+  const rowsAt = (cols: number) => Math.ceil(3 / cols)
+  const fits = (cols: number) => rowsAt(cols) * floor + gap * (rowsAt(cols) - 1) <= height
   const faceWidthAt = (cols: number) => {
-    const rows = Math.ceil(3 / cols)
+    const rows = rowsAt(cols)
     return Math.min((width - gap * (cols - 1)) / cols, ((height - gap * (rows - 1)) / rows) * LARGE_ASPECT)
   }
   // The fewest rows wins a tie, so all three stay side by side wherever a face is no bigger for it.
-  return ([3, 2, 1] as const).reduce((best, cols) => (faceWidthAt(cols) > faceWidthAt(best) + 0.5 ? cols : best))
+  return ([3, 2, 1] as const).reduce((best, cols) => (fits(cols) && faceWidthAt(cols) > faceWidthAt(best) + 0.5 ? cols : best))
 }
 
 /** The columns for the box it is given, followed as the pane is dragged. A keep-alive host reports 0×0
@@ -144,7 +151,10 @@ function useLargeFaceColumns(on: boolean) {
     const el = ref.current
     if (!on || !el) return
     const measure = () => {
-      if (el.clientWidth > 0 && el.clientHeight > 0) setCols(largeFaceColumns(el.clientWidth, el.clientHeight))
+      if (el.clientWidth > 0 && el.clientHeight > 0) {
+        const floor = LARGE_FACE_FLOOR_EM * parseFloat(getComputedStyle(el).fontSize)
+        setCols(largeFaceColumns(el.clientWidth, el.clientHeight, undefined, floor))
+      }
     }
     measure()
     if (typeof ResizeObserver === 'undefined') return
@@ -212,7 +222,7 @@ export function TxNeedles({
     return (
       <div
         ref={largeBox.ref}
-        className={`txmeters-pane txmeters-pane-body${live ? '' : ' txmeters-pane-idle'}`}
+        className={`txmeters-pane${live ? '' : ' txmeters-pane-idle'}`}
         role="group"
         aria-label={t('meters.tx.aria')}
         style={{ '--txmeters-pane-cols': largeBox.cols } as CSSProperties}

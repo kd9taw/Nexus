@@ -657,12 +657,14 @@
 /* THE LARGE TX METERS PANE'S BODY (TxNeedles `large`). A fill pane: the frame's size is the grid's, and
    this fills it. The faces share the pane in as many columns as draw them biggest in its shape (`--txmeters-pane-cols`,
    measured, 1 to 3), and each is one SVG drawing that takes all the room it is given. A face's
-   comfortable minimum is on the content, as a feed's is (styles.css `.pane-body > .txmeters-pane-body`):
-   a pane squeezed shorter than that scrolls its faces. */
+   comfortable minimum is the TRACK's, so a row keeps it and the next row stands below: a floor on the face
+   alone leaves the track short and the faces overlap. It also gives the stacking flow, where a dial has
+   no height of its own, the pane's height. A pane too short for one row scrolls in its body. TxNeedles'
+   LARGE_FACE_FLOOR_EM is this number: the column choice takes no shape whose rows would not fit it. */
 .txmeters-pane {
   display: grid;
   grid-template-columns: repeat(var(--txmeters-pane-cols, 3), minmax(0, 1fr));
-  grid-auto-rows: minmax(0, 1fr);
+  grid-auto-rows: minmax(7em, 1fr);
   gap: 4px;
   height: 100%;
   min-width: 0;
