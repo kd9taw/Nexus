@@ -12,6 +12,7 @@ import { FtStopControl } from './FtStopControl'
 // air, the rig's mode and filter width, and every count.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { t } from '../i18n'
+import { catSaysTxOff } from '../features/catDetail'
 import { requestWindowAttention } from '../api'
 import type { ModeRequest, QsoStatus, RadioStatus } from '../types'
 import { isOnAir } from '../types'
@@ -338,14 +339,25 @@ export function OperateQsoStrip({
           screens' TX strip does (`CockpitTxStrip`), rather than "Receiving" over a Call CQ that
           cannot key. What is on the air is still shown first. */}
       {radio && (
-        <span className="cq-statecap" title={!onAir && radio.txRefusal ? radio.txRefusal : undefined}>
+        <span
+          className="cq-statecap"
+          title={
+            !onAir && radio.txRefusal
+              ? radio.txRefusal
+              : !onAir && !radio.txEnabled && catSaysTxOff(radio.catDetail)
+                ? t('settings.rigControl.catSilentTxOff')
+                : undefined
+          }
+        >
           {onAir
             ? t('operate.strip.state.transmitting')
             : radio.txRefusal
               ? t('operate.strip.state.connectionNoTx')
               : radio.txEnabled
                 ? t('operate.strip.state.receiving')
-                : t('operate.strip.state.txOff')}
+                : catSaysTxOff(radio.catDetail)
+                  ? t('operate.strip.state.txOffCatLost')
+                  : t('operate.strip.state.txOff')}
         </span>
       )}
       {/* The rig has been moved out from under us — stated in the strip that is already always

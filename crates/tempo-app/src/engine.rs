@@ -2181,7 +2181,7 @@ const SSTV_RADIO_HAS_MIC: &str = "SSTV can't send while the radio has the mic: w
 /// ([`Engine::say_tx_off_for_silent_cat`]). ⚠️ The UI matches this exact sentence to show it in the
 /// operator's language (`ui/src/features/catDetail.ts`, whose test reads this constant) — change
 /// both together.
-pub const CAT_SILENT_TX_OFF: &str = "Transmit was turned off because the radio stopped answering CAT. Check the radio and its CAT cable; Nexus keeps trying. Press TX On to transmit again.";
+pub const CAT_SILENT_TX_OFF: &str = "Transmit was turned off because CAT to the radio was lost. Check the radio and its CAT cable; Nexus keeps trying. Press TX On to transmit again.";
 
 /// What a refused start says while a clock repair holds transmit
 /// ([`Engine::hold_tx_for_clock_repair`]): the answer of every up-front TX gate, and of TX On on
@@ -28968,7 +28968,7 @@ contact yourself."
 
     /// Set the rig/CAT connection status the UI renders (and the Test-CAT result
     /// reads). `ok`: `None` = VOX/no CAT, `Some(true/false)` = CAT up/down.
-    /// A silent CAT link has just turned transmit off. The CAT status leads with
+    /// A lost CAT link (silent, or its daemon dead) has just turned transmit off. The CAT status leads with
     /// [`CAT_SILENT_TX_OFF`] until the link answers ([`Self::clear_tx_off_for_silent_cat`]) or
     /// transmit is back on. Kept apart from the status because the status is latest-wins, and the
     /// next failed read, one tick later, would replace the words. It says something and changes
@@ -28981,6 +28981,20 @@ contact yourself."
     /// stays as it is, as only the operator turns it back on.
     pub fn clear_tx_off_for_silent_cat(&mut self) {
         self.cat_silence_tx_off = false;
+    }
+
+    /// `detail`, led by [`CAT_SILENT_TX_OFF`] while it holds. Test CAT's result reads through this
+    /// as the status does, since its result line replaces the status on screen. Never on a verdict
+    /// that the radio answered (`ok`): the tick that follows ends the words, and a press read
+    /// before it must not show a green result that says CAT was lost.
+    pub fn cat_detail_with_tx_off(&self, ok: Option<bool>, detail: String) -> String {
+        if self.cat_silence_tx_off && !self.tx_enabled && ok != Some(true) {
+            format!("{CAT_SILENT_TX_OFF} {detail}")
+                .trim_end()
+                .to_string()
+        } else {
+            detail
+        }
     }
 
     pub fn set_cat_status(&mut self, ok: Option<bool>, detail: String) {
@@ -31385,13 +31399,8 @@ contact yourself."
         s.radio.flex_meter_stream = self.flex_meter_stream;
         s.radio.time_sync_ok = self.time_sync_ok();
         s.radio.cat_ok = self.cat_status.0;
-        s.radio.cat_detail = if self.cat_silence_tx_off && !self.tx_enabled {
-            format!("{CAT_SILENT_TX_OFF} {}", self.cat_status.1)
-                .trim_end()
-                .to_string()
-        } else {
-            self.cat_status.1.clone()
-        };
+        s.radio.cat_detail =
+            self.cat_detail_with_tx_off(self.cat_status.0, self.cat_status.1.clone());
         // The radio's RX coverage, in MHz, for the UI to gate a "move the radio" control on. Empty
         // = unknown, which the UI must read as "allow" for the same fail-open reason the engine does.
         s.radio.rx_ranges_mhz = self

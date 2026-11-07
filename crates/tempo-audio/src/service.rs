@@ -9031,7 +9031,9 @@ impl RadioLoop {
                         let mut eng = engine_lock(engine);
                         // Only what happened: a manual mode's halt re-arms, and transmit that was
                         // already off was not turned off by this.
-                        if only_silence && was_on && !eng.tx_enabled() {
+                        let link_lost =
+                            only_silence || (daemon_died && !want.rig_differs(&self.applied));
+                        if link_lost && was_on && !eng.tx_enabled() {
                             eng.say_tx_off_for_silent_cat();
                             self.cat_tx_off_said = true;
                         } else if want.rig_differs(&self.applied) {
@@ -46728,9 +46730,9 @@ mod tests {
         silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 1_000.0);
         assert_eq!(
             reads(),
-            "Transmit was turned off because the radio stopped answering CAT. Check the radio and \
-             its CAT cable; Nexus keeps trying. Press TX On to transmit again. 14.0740 MHz CAT \
-             link unreachable (1/3)"
+            "Transmit was turned off because CAT to the radio was lost. Check the radio and its \
+             CAT cable; Nexus keeps trying. Press TX On to transmit again. 14.0740 MHz CAT link \
+             unreachable (1/3)"
         );
         engine
             .lock()
@@ -46844,6 +46846,64 @@ mod tests {
             e.snapshot().radio.cat_detail
         );
         assert!(!e.tx_enabled());
+    }
+
+    /// A rigctld that died turns transmit off the same way, and says so the same way. A rebuild's
+    /// words come after the sentence, which the status keeps until the link answers.
+    #[test]
+    fn the_status_says_it_when_a_dead_daemon_turned_transmit_off() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tx_enabled(true);
+        let (mut state, mut rig) = a_silent_link(&engine);
+        let dead = std::process::Command::new("true").spawn().unwrap();
+        let mut dead =
+            CatDaemon::Spawned(crate::rigctld_proc::RigctldProc::from_child_for_test(dead));
+        let by = Instant::now() + Duration::from_secs(30);
+        while CatDaemon::is_alive(&mut dead) {
+            assert!(Instant::now() < by, "the stand-in daemon exited");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        state.rigctld_proc = Some(dead);
+        state.cat_rebuild_at = f64::MAX; // only the death can rebuild
+        assert_eq!(
+            silent_link_tick(
+                &engine,
+                &mut state,
+                &mut rig,
+                &mut MockBackend::new(),
+                1_000.0
+            ),
+            1
+        );
+        let e = engine.lock().unwrap();
+        assert!(!e.tx_enabled());
+        let said = e.snapshot().radio.cat_detail;
+        assert!(said.starts_with(CAT_SILENT_TX_OFF), "{said}");
+    }
+
+    /// TEST CAT'S OWN RESULT carries the sentence while it holds, as its result line replaces the
+    /// status on the screen, and not on an answer that found the radio, whose tick ends the words.
+    #[test]
+    fn test_cat_says_it_too_unless_it_found_the_radio() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tx_enabled(true);
+        let (mut state, mut rig) = a_silent_link(&engine);
+        silent_link_tick(
+            &engine,
+            &mut state,
+            &mut rig,
+            &mut MockBackend::new(),
+            1_000.0,
+        );
+        let e = engine.lock().unwrap();
+        assert_eq!(
+            e.cat_detail_with_tx_off(Some(false), "no reply".to_string()),
+            format!("{CAT_SILENT_TX_OFF} no reply")
+        );
+        assert_eq!(
+            e.cat_detail_with_tx_off(Some(true), "14.074 MHz".to_string()),
+            "14.074 MHz"
+        );
     }
 
     /// It says only what happened. A manual mode's transmit is re-armed by the same halt, and

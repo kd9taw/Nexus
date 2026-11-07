@@ -21,3 +21,12 @@ export function catDetailText(detail: string): string {
     )
     .replace(EN['settings.rigControl.catSilentTxOff'], () => t('settings.rigControl.catSilentTxOff'))
 }
+
+/**
+ * Does this CAT status say a lost link has turned transmit off? The backend leads the status with
+ * the sentence for exactly as long as that holds, so the TX strip's state follows it with no field
+ * of its own: the status is a tooltip on the cockpits, and the strip can be read without hovering.
+ */
+export function catSaysTxOff(detail: string | undefined): boolean {
+  return detail?.includes(EN['settings.rigControl.catSilentTxOff']) ?? false
+}
