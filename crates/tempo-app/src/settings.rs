@@ -19931,7 +19931,7 @@ mod net_rigctl_serial_port_tests {
     fn a_saved_net_rigctl_radio_on_a_com_port_loads_and_saves_unchanged() {
         for conn in [r#""rigConn":"serial","#, ""] {
             let json = format!(
-                r#"{{"radios":[{{"id":0,"name":"FT847","rigModel":2,{conn}"serialPort":"COM4","baud":9600,"rigctldPort":4532}}]}}"#
+                r#"{{"catBroker":false,"radios":[{{"id":0,"name":"FT847","rigModel":2,{conn}"serialPort":"COM4","baud":9600,"rigctldPort":4532}}]}}"#
             );
             let mut loaded: Settings = serde_json::from_str(&json).unwrap();
             loaded.ensure_distinct_radio_ports();

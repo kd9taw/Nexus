@@ -41166,13 +41166,14 @@ mod tests {
             let asked = engine.lock().unwrap().request_cat_reprobe();
             step(&mut state, &mut rig, &mut opens);
             let test_cat = engine.lock().unwrap().cat_reprobe_answer(asked);
-            for _ in 0..75 {
-                if state.cat_ok == Some(false) {
+            // Test CAT has already read the link down; the trip's own status comes at the last miss.
+            for _ in 0..150 {
+                if state.freq_misses >= FREQ_MISS_LIMIT {
                     break;
                 }
                 step(&mut state, &mut rig, &mut opens);
             }
-            assert_eq!(state.cat_ok, Some(false), "the breaker tripped");
+            assert!(state.freq_misses >= FREQ_MISS_LIMIT, "the breaker tripped");
             let tripped = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
             (test_cat.unwrap().1, tripped, opens)
         };
