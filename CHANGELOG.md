@@ -5,6 +5,11 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **A silent CAT link no longer cuts your transmission or keeps turning transmit off.** While the radio was not answering CAT, Nexus tried its port again every minute and a half, and each try cut anything it was sending through VOX or a serial line and turned transmit off again. Now it waits for your over, tune or PTT to end, turns transmit off once when the link goes silent, and leaves it as you set it after that. Every try still releases the key first.
+
 ## [1.23.0] — 2026-11-05
 
 ### Added
