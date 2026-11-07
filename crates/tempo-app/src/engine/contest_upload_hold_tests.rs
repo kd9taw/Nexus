@@ -657,41 +657,6 @@ fn a_purged_log_leaves_nothing_waiting_for_dxkeeper() {
     assert_eq!(e.dxkeeper_oldest_waiting(), None);
 }
 
-/// Not only a contact that has reached the list: one still on the queue, its first pass yet to come
-/// (a contest's release is paced, so that can be hours), gives up the DXKeeper leg too, and what
-/// the services are owed is as it was.
-#[test]
-fn a_contact_deleted_before_its_first_pass_owes_dxkeeper_nothing() {
-    let mut e = Engine::new("W9XYZ", "EN61", 0);
-    e.log_qso(cw("K1ABC"));
-    let id = e.stored_log()[0].id.unwrap();
-    assert!(e.delete_qso(id));
-    let queued = e.take_pending_uploads();
-    assert_eq!(calls(&queued), ["K1ABC"], "the services' queue as today");
-    assert_eq!(queued[0].legs, upload_legs::ALL & !upload_legs::DXKEEPER);
-}
-
-/// CONTEST-HELD. Deleted while the contest runs, it never owes DXKeeper, and what it owes the
-/// services at the release is as it was. A held neighbour is untouched.
-#[test]
-fn a_contest_held_contact_deleted_gives_up_only_the_dxkeeper_leg() {
-    let mut e = contest_on();
-    e.log_qso(cw("K1ABC"));
-    e.log_qso(cw("W1AW"));
-    let gone = e
-        .stored_log()
-        .iter()
-        .find(|r| r.call == "K1ABC")
-        .and_then(|r| r.id)
-        .unwrap();
-    assert!(e.delete_qso(gone));
-    contest_off(&mut e);
-    let queued = e.take_pending_uploads();
-    assert_eq!(calls(&queued), ["K1ABC", "W1AW"]);
-    assert_eq!(queued[0].legs, upload_legs::ALL & !upload_legs::DXKEEPER);
-    assert_eq!(queued[1].legs, upload_legs::ALL, "the neighbour keeps its");
-}
-
 /// A contest contact put past the ceiling can be one waiting for DXKeeper: it is named as that, for
 /// the Connections log, and one that is not waiting is not.
 #[test]
@@ -717,4 +682,132 @@ fn a_waiting_contact_the_contest_list_puts_out_is_named_for_dxkeeper() {
         e.take_dxkeeper_evicted().is_empty(),
         "a contest's own says nothing here"
     );
+}
+
+/// A store-less engine's contacts with what each owes on the queue, for the delete tests below.
+fn queued_pair(e: &mut Engine) -> (PendingUpload, PendingUpload) {
+    e.log_qso(cw("K1ABC"));
+    e.log_qso(cw("W1AW"));
+    let mut queued = e.take_pending_uploads();
+    let second = queued.pop().unwrap();
+    (queued.pop().unwrap(), second)
+}
+
+/// ⛔ A DELETED CONTACT LEAVES THE UPLOAD QUEUE, ON EVERY SERVICE. The contact beside it keeps every
+/// leg, attempt and due time it had.
+#[test]
+fn a_deleted_contact_leaves_the_queue_and_its_neighbour_is_untouched() {
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    let (first, second) = queued_pair(&mut e);
+    for p in [&first, &second] {
+        e.requeue_after_failure(
+            p.rec.clone(),
+            upload_legs::QRZ | upload_legs::EQSL,
+            3,
+            500,
+            p.origin,
+        );
+    }
+    assert!(e.delete_qso(first.rec.id.unwrap()));
+    let left = e.take_pending_uploads();
+    assert_eq!(calls(&left), ["W1AW"]);
+    assert_eq!(
+        (left[0].legs, left[0].attempts, left[0].retry_after_unix),
+        (upload_legs::QRZ | upload_legs::EQSL, 3, 500)
+    );
+    assert!(e.upload_cancelled(&first.rec));
+    assert!(!e.upload_cancelled(&second.rec));
+}
+
+/// The worker holds what it drained, off the queue. What it tries to put back of a contact deleted
+/// meanwhile stays out, whichever way it comes back, and the neighbour goes back as ever.
+#[test]
+fn what_the_worker_holds_of_a_deleted_contact_cannot_go_back_on_the_queue() {
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    let (first, second) = queued_pair(&mut e);
+    assert!(e.delete_qso(first.rec.id.unwrap()));
+    e.requeue_after_failure(first.rec.clone(), upload_legs::QRZ, 1, 500, first.origin);
+    e.requeue_upload_at(first.rec.clone(), upload_legs::QRZ, 0, 500, first.origin);
+    assert!(e.take_pending_uploads().is_empty(), "neither way back");
+    e.requeue_after_failure(second.rec.clone(), upload_legs::QRZ, 1, 500, second.origin);
+    assert_eq!(calls(&e.take_pending_uploads()), ["W1AW"]);
+    // Nor to the wait for DXKeeper, if its connection failed as the delete went through.
+    assert_eq!(e.dxkeeper_hold(&first.rec), None);
+    assert_eq!(e.dxkeeper_waiting_count(), 0);
+}
+
+/// A purge cancels what the worker holds too, and only what it held: the next drain starts clean, so
+/// a contact logged after the purge goes.
+#[test]
+fn a_purge_cancels_what_the_worker_holds_and_nothing_logged_after_it() {
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    let (first, _) = queued_pair(&mut e);
+    e.log_qso(cw("N0CALL"));
+    e.clear_logbook();
+    assert!(e.upload_cancelled(&first.rec), "in the worker's hand");
+    assert!(e.take_pending_uploads().is_empty(), "off the queue");
+    assert!(!e.upload_cancelled(&first.rec), "the drain is over");
+    e.log_qso(cw("K9XYZ"));
+    let queued = e.take_pending_uploads();
+    assert_eq!(calls(&queued), ["K9XYZ"]);
+    assert_eq!(queued[0].legs, upload_legs::ALL);
+}
+
+/// HRD Logbook has its own queue. It gives up a deleted contact too, its drain's failure does not put
+/// one back, and the neighbour stays.
+#[test]
+fn a_deleted_contact_leaves_the_hrd_queue() {
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    let mut s = e.settings().clone();
+    s.hrd_logging = true;
+    e.apply_settings(s);
+    let (first, second) = queued_pair(&mut e);
+    assert_eq!(e.snapshot().radio.hrd_queued, 2, "premise");
+    assert!(e.delete_qso(first.rec.id.unwrap()));
+    let left = e.take_hrd_pending();
+    assert_eq!(
+        left.iter().map(|r| r.call.as_str()).collect::<Vec<_>>(),
+        ["W1AW"]
+    );
+    e.note_hrd_result(first.rec.clone(), false);
+    e.note_hrd_result(second.rec.clone(), false);
+    let left = e.take_hrd_pending();
+    assert_eq!(
+        left.iter().map(|r| r.call.as_str()).collect::<Vec<_>>(),
+        ["W1AW"]
+    );
+}
+
+/// The held file stays true: a deleted contest contact leaves it whole, whatever it owed, and a
+/// restart neither sends it nor loses the neighbour. With nothing left, there is no file.
+#[test]
+fn a_deleted_contest_contact_leaves_the_held_file() {
+    let dir = scratch_dir("delete-held-file");
+    let path = dir.join("contest_held_uploads.json");
+    let mut e = contest_on();
+    e.set_contest_held_uploads_path(path.clone());
+    e.log_qso(cw("K1ABC"));
+    e.log_qso(cw("W1AW"));
+    let id_of = |e: &Engine, call: &str| {
+        e.stored_log()
+            .iter()
+            .find(|r| r.call == call)
+            .and_then(|r| r.id)
+            .unwrap()
+    };
+    assert!(e.delete_qso(id_of(&e, "K1ABC")));
+    let kept = id_of(&e, "W1AW");
+    drop(e);
+
+    let mut next = contest_on();
+    next.set_contest_held_uploads_path(path.clone());
+    next.restore_contest_held_uploads(NOW);
+    contest_off(&mut next);
+    let sent = next.take_pending_uploads();
+    assert_eq!(calls(&sent), ["W1AW"], "the neighbour, and all it owes");
+    assert_eq!(sent[0].legs, upload_legs::ALL);
+    assert_eq!(sent[0].rec.id, Some(kept));
+    settle(&mut next, &sent[0], 0);
+    assert!(!path.exists(), "it owes nothing, and no file is left");
+    let _ = std::fs::remove_dir_all(&dir);
 }

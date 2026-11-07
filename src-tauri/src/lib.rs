@@ -41486,6 +41486,39 @@ mod upload_record_tests {
             crate::engine_lock(engine).take_pending_uploads()
         }
 
+        /// As every window's delete makes it, with the Engine lock released.
+        fn delete(engine: &SharedEngine, p: &PendingUpload) {
+            delete_rec(engine, &p.rec);
+        }
+
+        fn delete_rec(engine: &SharedEngine, rec: &tempo_core::logbook::QsoRecord) {
+            let id = rec.id.expect("the queue's copy names its row");
+            let (made, _) = tempo_app::logwrite::change_ops(
+                engine,
+                id,
+                None,
+                &[tempo_core::logbook::LogOp::Delete(id)],
+                "test",
+            );
+            made.expect("read").expect("made");
+        }
+
+        /// What is on the queue, left there.
+        fn take_back(engine: &SharedEngine) -> Vec<PendingUpload> {
+            let mut e = crate::engine_lock(engine);
+            let q = e.take_pending_uploads();
+            for p in &q {
+                e.requeue_upload_at(
+                    p.rec.clone(),
+                    p.legs,
+                    p.attempts,
+                    p.retry_after_unix,
+                    p.origin,
+                );
+            }
+            q
+        }
+
         fn waiting(engine: &SharedEngine) -> usize {
             crate::engine_lock(engine).dxkeeper_waiting_count()
         }
@@ -41760,6 +41793,101 @@ mod upload_record_tests {
             delete_oldest();
             tick(&engine, port, &mut wait, now + 4);
             assert_eq!((wait.said, wait.delivered), (0, 0));
+        }
+
+        /// ⛔ THE WORKER'S TRIP. It drains the whole queue and works through it off the lock, for as
+        /// long as the services take. A contact deleted once it holds it goes nowhere: not to DXKeeper
+        /// and not to a service, and it does not come back to the queue or the wait.
+        #[test]
+        fn a_contact_deleted_in_the_workers_hand_goes_nowhere() {
+            let _one = one_at_a_time();
+            let n3fjp_port = free_port();
+            let n3fjp = listen(n3fjp_port);
+            let engine = engine(n3fjp_port);
+            let port = free_port();
+            let dxkeeper = listen(port);
+            let mut wait = DxkeeperWait::default();
+            let gone = log(&engine, "K1GON");
+            let kept = log(&engine, "K2KPT");
+            delete(&engine, &gone);
+
+            pass(&engine, gone, port, true, &mut wait);
+            assert_eq!(arrived(&dxkeeper).len(), 0, "not DXKeeper");
+            assert_eq!(arrived(&n3fjp).len(), 0, "and not a service");
+            assert!(take(&engine).is_empty());
+            assert_eq!(waiting(&engine), 0);
+
+            pass(&engine, kept, port, true, &mut wait);
+            assert_eq!(calls(&arrived(&dxkeeper)), ["K2KPT"], "the neighbour goes");
+            assert_eq!(arrived(&n3fjp).len(), 1);
+        }
+
+        /// A contact deleted during its own trip: the legs still to come do not go. The one under way
+        /// when the delete landed has gone or has not, and this is the check before each next one.
+        #[test]
+        fn a_contact_deleted_part_way_through_its_legs_sends_no_more() {
+            let _one = one_at_a_time();
+            let n3fjp_port = free_port();
+            let n3fjp = listen(n3fjp_port);
+            let engine = engine(n3fjp_port);
+            let gone = log(&engine, "K1LEG");
+            let kept = log(&engine, "K2LEG");
+            let on = || ConnectorToggles {
+                qrz_on: false,
+                clublog_on: false,
+                eqsl_on: false,
+                hrdlog_on: false,
+                wrl_on: false,
+                n3fjp_on: true,
+                cloudlog_on: false,
+            };
+            delete(&engine, &gone);
+            let failed = crate::auto_push_one(
+                &engine,
+                crate::LoggedQso::from(gone.rec.clone()),
+                &gone.rec,
+                on(),
+                legs::N3FJP,
+            );
+            assert_eq!(failed, 0, "nothing tried, so nothing to retry");
+            assert_eq!(arrived(&n3fjp).len(), 0);
+
+            let failed = crate::auto_push_one(
+                &engine,
+                crate::LoggedQso::from(kept.rec.clone()),
+                &kept.rec,
+                on(),
+                legs::N3FJP,
+            );
+            assert_eq!(failed, 0);
+            assert_eq!(
+                arrived(&n3fjp).len(),
+                1,
+                "CONTROL: the neighbour's leg goes"
+            );
+        }
+
+        /// A contact whose DXKeeper leg has gone keeps that fact when a service's retry is cancelled.
+        /// A failed service leg of a contact deleted before its retry does not retry.
+        #[test]
+        fn a_retry_waiting_on_the_queue_is_cancelled_by_a_delete() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let dxkeeper = listen(port);
+            let mut wait = DxkeeperWait::default();
+            let p = log(&engine, "K1RTY");
+            let id = p.rec.clone();
+            pass(&engine, p, port, true, &mut wait);
+            assert_eq!(calls(&arrived(&dxkeeper)), ["K1RTY"], "premise: sent");
+            assert_eq!(take_back(&engine).len(), 1, "premise: N3FJP retries");
+            delete_rec(&engine, &id);
+            assert!(take(&engine).is_empty(), "no retry");
+            assert_eq!(
+                arrived(&dxkeeper).len(),
+                0,
+                "and DXKeeper keeps its one copy"
+            );
         }
 
         /// A send that connected is never repeated: not by a service's retries, and not by anything
@@ -43434,7 +43562,7 @@ fn dxkeeper_wait_tick(
     use tempo_app::engine::upload_legs::DXKEEPER;
     let evicted = {
         let mut eng = engine_lock_result(engine).unwrap_or_else(|e| e.into_inner());
-        eng.dxkeeper_settle_gone_rows();
+        eng.settle_gone_rows();
         eng.take_dxkeeper_evicted()
     };
     for gone in &evicted {
@@ -43797,6 +43925,13 @@ fn cloudlog_class_name(class: propagation::live::cloudlog::CloudlogFailure) -> &
     }
 }
 
+/// Whether the contact of `rec`, a copy the upload worker holds off the lock, has since left the log.
+fn upload_cancelled(engine: &SharedEngine, rec: &tempo_core::logbook::QsoRecord) -> bool {
+    engine_lock_result(engine)
+        .unwrap_or_else(|e| e.into_inner())
+        .upload_cancelled(rec)
+}
+
 /// One due record's trip through the upload worker: `legs` is what it sends now
 /// ([`legs_to_send_now`]). DXKeeper first, then every service it owes. What a service failed for a
 /// reason that may pass goes back on the queue, and only that; DXKeeper has its own wait.
@@ -43811,6 +43946,9 @@ fn send_queued_upload(
 ) {
     use tempo_app::engine::upload_legs::DXKEEPER;
     use tempo_net::dxkeeper::PushError;
+    if upload_cancelled(engine, &p.rec) {
+        return;
+    }
     let rec = p.rec.clone();
     // DXKeeper never acknowledges, so a send that connected is the end of the leg, whatever became
     // of it. A connection that failed delivered nothing, and almost always just means DXLab is not
@@ -43856,7 +43994,11 @@ fn send_queued_upload(
             .contest_upload_done(&rec, DXKEEPER);
     }
     let services = legs & !DXKEEPER;
-    let failed = auto_push_one(engine, LoggedQso::from(p.rec), on, services);
+    let failed = auto_push_one(engine, LoggedQso::from(p.rec), &rec, on, services);
+    // Deleted during the trip: what failed is not retried, and nothing is left owing to give up on.
+    if upload_cancelled(engine, &rec) {
+        return;
+    }
     let capped = cap_hrdlog_retries(failed, p.attempts);
     if capped != failed {
         conn_log(
@@ -43926,7 +44068,13 @@ struct ConnectorToggles {
 /// legs that failed TRANSIENTLY (network down / service busy) and should be
 /// retried — a permanent reject (bad auth, malformed) or a success is NOT in the
 /// return, so the worker's re-queue never re-pushes a leg that already landed.
-fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, owed: u8) -> u8 {
+fn auto_push_one(
+    engine: &SharedEngine,
+    dto: LoggedQso,
+    rec: &tempo_core::logbook::QsoRecord,
+    on: ConnectorToggles,
+    owed: u8,
+) -> u8 {
     let ConnectorToggles {
         qrz_on,
         clublog_on,
@@ -43937,12 +44085,15 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
         cloudlog_on,
     } = on;
     use tempo_app::engine::upload_legs as legs;
+    // Asked before each leg: a push can take many seconds, and a contact deleted meanwhile sends no
+    // more. A leg already under way when it went is past this.
+    let owes = |leg: u8| owed & leg != 0 && !upload_cancelled(engine, rec);
     let call = dto.call.clone();
     let mut parts: Vec<String> = Vec::new();
     let mut all_ok = true;
     // Legs that failed transiently → the worker retries just these.
     let mut failed: u8 = 0;
-    if qrz_on && owed & legs::QRZ != 0 {
+    if qrz_on && owes(legs::QRZ) {
         let (part, ok, transient) = match qrz_push_qso_impl(dto.clone(), engine, false) {
             Ok(r) => {
                 let ok = matches!(r.result.as_str(), "ok" | "replace" | "duplicate");
@@ -43994,7 +44145,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
             failed |= legs::QRZ;
         }
     }
-    if clublog_on && owed & legs::CLUBLOG != 0 {
+    if clublog_on && owes(legs::CLUBLOG) {
         let (part, ok, transient) = match clublog_push_qso_impl(dto.clone(), engine, false) {
             Ok(r) => {
                 let ok = matches!(r.result.as_str(), "ok" | "modified" | "duplicate");
@@ -44044,7 +44195,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
             failed |= legs::CLUBLOG;
         }
     }
-    if hrdlog_on && owed & legs::HRDLOG != 0 {
+    if hrdlog_on && owes(legs::HRDLOG) {
         // `part` is the operator's toast and may quote HRDLog; `detail` is what the
         // Connections row persists and may not — see `note_conn_health`.
         let (part, ok, detail, transient) = match hrdlog_push_qso_impl(dto.clone(), engine) {
@@ -44100,7 +44251,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
             failed |= legs::HRDLOG;
         }
     }
-    if eqsl_on && owed & legs::EQSL != 0 {
+    if eqsl_on && owes(legs::EQSL) {
         let (part, ok, transient) = match eqsl_push_qso_impl(dto.clone(), engine, false) {
             Ok((r, refusal)) => {
                 let ok = matches!(r.outcome.as_str(), "accepted" | "duplicate");
@@ -44136,7 +44287,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
             failed |= legs::EQSL;
         }
     }
-    if wrl_on && owed & legs::WRL != 0 {
+    if wrl_on && owes(legs::WRL) {
         let (part, ok, detail, transient) = match wrl_push_qso_impl(dto.clone(), engine) {
             Ok(r) => {
                 let (ok, detail) = wrl_stamp(&r.result);
@@ -44188,7 +44339,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
             failed |= legs::WRL;
         }
     }
-    if n3fjp_on && owed & legs::N3FJP != 0 {
+    if n3fjp_on && owes(legs::N3FJP) {
         let (part, ok, transient) = match n3fjp_push_qso_impl(&dto, engine) {
             Ok(()) => {
                 conn_log("N3FJP", "ok", format!("auto-forward {call}"));
@@ -44206,7 +44357,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
             failed |= legs::N3FJP;
         }
     }
-    if cloudlog_on && owed & legs::CLOUDLOG != 0 {
+    if cloudlog_on && owes(legs::CLOUDLOG) {
         let (part, ok, detail, transient) =
             match cloudlog_push_qso_impl(&dto, engine, cloudlog_key_from_keychain) {
                 Ok(_) => {
@@ -51157,6 +51308,10 @@ fn start_on_the_logbook(
                 .filter(|p| p.origin == tempo_app::engine::UploadOrigin::CatchUp)
                 .count();
             for p in recs {
+                // Deleted since the drain: it does not go back on the queue or anywhere else.
+                if upload_cancelled(&push_engine, &p.rec) {
+                    continue;
+                }
                 // BACKOFF: a record not yet due goes back on the queue untouched — no push,
                 // no attempt spent, no toast. This is what turns 20-in-40-seconds into one
                 // push every few minutes for a genuinely-down service. It is ALSO what
@@ -51209,6 +51364,9 @@ fn start_on_the_logbook(
                     (eng.take_hrd_pending(), eng.hrd_addr())
                 };
                 for rec in pending {
+                    if upload_cancelled(&push_engine, &rec) {
+                        continue;
+                    }
                     let datagram = {
                         let eng =
                             engine_lock_result(&push_engine).unwrap_or_else(|e| e.into_inner());

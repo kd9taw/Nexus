@@ -2027,6 +2027,34 @@ fn every_way_a_row_leaves_cancels_what_waits_for_dxkeeper() {
     );
 }
 
+/// Undoing a delete brings the row back with its upload stamps, which is what stops a duplicate, and
+/// lifts the cancel. It queues nothing itself: the cancelled sends stay cancelled.
+#[test]
+fn an_undone_delete_lifts_the_cancel_keeps_the_stamps_and_queues_nothing() {
+    let d = Dir::new("history-delete-undo-uploads");
+    let engine = shared(&d, 3);
+    let (id, before) = uploaded_contact(&engine);
+    let (made, dur) = logwrite::change_ops(
+        &engine,
+        id,
+        None,
+        &[tempo_core::logbook::LogOp::Delete(id)],
+        "test",
+    );
+    made.expect("read").expect("made");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert!(engine_lock(&engine).upload_cancelled(&before), "premise");
+
+    let h = history_of(&engine, id).unwrap();
+    let (undone, dur) = undo_entry(&engine, h.last().unwrap().seq);
+    undone.expect("undone");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(*row_of(&engine, id).unwrap(), before, "the stamps with it");
+    let mut e = engine_lock(&engine);
+    assert!(!e.upload_cancelled(&before));
+    assert!(e.take_pending_uploads().is_empty());
+}
+
 /// ★ A corrected call takes the paper card's received mark off and its received date
 /// (`QSLRDATE`) with it — the Card received column must not keep a date for a card no longer
 /// marked — and its undo puts back the mark and the same date exactly. The other contacts in the

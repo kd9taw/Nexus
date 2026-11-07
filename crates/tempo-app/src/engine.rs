@@ -19066,6 +19066,9 @@ impl Engine {
     /// or `rec` itself when none does, never a contest's held contact; what went is returned, for
     /// the worker to name.
     pub fn dxkeeper_hold(&mut self, rec: &QsoRecord) -> Option<QsoRecord> {
+        if self.upload_cancelled(rec) {
+            return None;
+        }
         // A contact contest mode held is on the list already, and owes the leg.
         if let Some(held) = self
             .contest_held_uploads
@@ -19125,18 +19128,31 @@ impl Engine {
         });
     }
 
-    /// Whatever has left the log since the last call never goes to DXKeeper. Called in the same
-    /// hold as a change made through [`Self::with_log_tickets`] and the deletes that bypass it, so
-    /// a quit straight after finds it gone from the file too; and on the upload worker's tick for
-    /// any other way a row leaves.
-    pub fn dxkeeper_settle_gone_rows(&mut self) {
+    /// Whatever has left the log since the last call leaves the held list and its file, whatever it
+    /// owed, and HRD's queue: nothing not yet sent goes. Called in the same hold as a change made
+    /// through [`Self::with_log_tickets`] and the deletes that bypass it, so a quit straight after
+    /// finds it gone from the file too; and on the upload worker's tick for any other way a row
+    /// leaves.
+    pub fn settle_gone_rows(&mut self) {
         let (ids, all) = self.station.take_rows_gone();
-        if all {
-            self.dxkeeper_forget(|_| true);
-        } else if !ids.is_empty() {
-            let ids: std::collections::HashSet<_> = ids.into_iter().collect();
-            self.dxkeeper_forget(|rec| rec.id.is_some_and(|id| ids.contains(&id)));
+        if !all && ids.is_empty() {
+            return;
         }
+        let ids: std::collections::HashSet<_> = ids.into_iter().collect();
+        let gone = |rec: &QsoRecord| all || rec.id.is_some_and(|id| ids.contains(&id));
+        self.hrd_pending.retain(|rec| !gone(rec));
+        let held = self.contest_held_uploads.len();
+        self.contest_held_uploads.retain(|h| !gone(&h.rec));
+        if self.contest_held_uploads.len() != held {
+            self.persist_contest_held_uploads();
+        }
+    }
+
+    /// Whether `rec`, a copy held off the lock by the upload worker, has been cancelled by its
+    /// contact leaving the log: it must not be sent, or put back anywhere. A send already under
+    /// way when the contact went is past this.
+    pub fn upload_cancelled(&self, rec: &QsoRecord) -> bool {
+        self.station.upload_cancelled(rec)
     }
 
     /// The contacts that were waiting for DXKeeper when contest mode's list put them out at its
@@ -19352,7 +19368,7 @@ impl Engine {
     /// (bounded) so a closed HRD never loses the contact; `hrd_link_up` drives the indicator.
     pub fn note_hrd_result(&mut self, rec: QsoRecord, delivered: bool) {
         self.hrd_link_up = Some(delivered);
-        if !delivered {
+        if !delivered && !self.upload_cancelled(&rec) {
             if self.hrd_pending.len() >= 256 {
                 self.hrd_pending.pop_front();
             }
@@ -35715,7 +35731,7 @@ contact yourself."
     ) -> (T, crate::logstore::Durability) {
         self.station.store.begin_collecting();
         let out = f(self);
-        self.dxkeeper_settle_gone_rows();
+        self.settle_gone_rows();
         let store = &mut self.station.store;
         let tickets = store.take_collected();
         (out, store.durability(tickets))
@@ -36259,7 +36275,7 @@ contact yourself."
             return false;
         };
         self.contest_row_deleted(&gone, None);
-        self.dxkeeper_settle_gone_rows();
+        self.settle_gone_rows();
         true
     }
 
@@ -36278,7 +36294,7 @@ contact yourself."
     /// across a restart.
     pub fn clear_logbook(&mut self) -> usize {
         let removed = self.station.clear_logbook();
-        self.dxkeeper_settle_gone_rows();
+        self.settle_gone_rows();
         self.settings.lotw_last_qsl.clear();
         self.settings.lotw_sweep_year = 0;
         self.settings.lotw_sweep_since.clear();
