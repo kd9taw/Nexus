@@ -339,7 +339,33 @@ fn a_fresh_spot_wins_over_the_callbook_on_a_no_popup_contact() {
     }
 }
 
-/// Spots that disagree, or place the station only on another band, write nothing from either.
+/// Spots only on another band and a held callbook answer that name the same group write it, held
+/// and marked as the callbook's. Naming another group, or with no answer, they write nothing.
+#[test]
+fn a_spot_on_another_band_needs_a_callbook_answer_naming_the_same_group() {
+    let group = answer("IA5X").iota.expect("the fixture names a group");
+    let (mut e, _) = spotted(SpotIota::OtherBand(group.clone()));
+    e.settings.auto_log = true;
+    e.note_callbook_answer("IA5X", answer("IA5X"));
+    work(&mut e, "IA5X", 1);
+    let r = logged(&e, "IA5X");
+    assert_eq!(r.ota.iota, Some(group));
+    assert!(is_offer_held(&r, "IOTA"));
+    assert!(is_callbook_filled(&r, "IOTA"), "says from the callbook");
+
+    let (mut e, _) = spotted(SpotIota::OtherBand("AS-001".into()));
+    e.settings.auto_log = true;
+    e.note_callbook_answer("IA5X", answer("IA5X"));
+    work(&mut e, "IA5X", 1);
+    assert_eq!(logged(&e, "IA5X").ota.iota, None, "they disagree");
+
+    let (mut e, _) = spotted(SpotIota::OtherBand("AS-001".into()));
+    e.settings.auto_log = true;
+    work(&mut e, "IA5X", 1);
+    assert_eq!(logged(&e, "IA5X").ota.iota, None, "no answer in hand");
+}
+
+/// Spots that disagree with each other write nothing from either.
 #[test]
 fn refused_spots_stop_the_callbook_on_a_no_popup_contact() {
     let (mut e, _) = spotted(SpotIota::Refused);

@@ -4894,7 +4894,7 @@ export const DE: PartialCatalog = {
   "awards.satVucc.note.tagging": "QSOs während eines Überflugs werden automatisch markiert, wenn sie auf dem Downlink des Satelliten geloggt werden (Ausnahme ISS — kein LoTW-Kürzel ableitbar)",
   "awards.iota.note.achieved": "IOTA ✓ (per LoTW oder Karte) · {{cards}} per Karte — IOTA wertet LoTW und Karten, nicht eQSL",
   "awards.iota.note.worked": "{{worked}} gearbeitet · {{cards}} per Karte — IOTA wertet LoTW und Karten, nicht eQSL",
-  "awards.iota.note.held": "Aus Spots, warten auf Ihre Bestätigung auf der Verbindungskarte: {{held}}",
+  "awards.iota.note.held": "Warten auf Ihre Bestätigung auf der Verbindungskarte: {{held}}",
   "awards.bands.head": "DXCC nach Band",
   "awards.bandNeeds.head": "Gesucht nach Band",
   "awards.bandNeeds.award.label": "Diplom",

@@ -29,9 +29,11 @@
 //! log shows it and the New IOTA need clears, nothing is sent until the operator confirms it on the
 //! contact card, and it counts toward no confirmed total. A fresh spot on the contact's band wins
 //! over the callbook, which describes the licensee and not where they are today; with none, the
-//! answer a lookup already gave this session for exactly this call. Spots that disagree, or that
-//! place the station only on another band, write nothing from either ([`SpotIota::Refused`]).
-//! Judging the spots is the command layer's (it keeps them); the logging path never makes a lookup.
+//! answer a lookup already gave this session for exactly this call. Spots that disagree with each
+//! other write nothing from either ([`SpotIota::Refused`]). Spots that agree but place the station
+//! only on another band write nothing by themselves ([`SpotIota::OtherBand`]): with a callbook
+//! answer already held naming that same group, the two vouch for each other and it is written,
+//! marked as the callbook's. Judging the spots is the command layer's (it keeps them); the logging path never makes a lookup.
 //!
 //! **A held reference is worked, not confirmed.** It counts as a group worked, and no card or LoTW
 //! match on the contact makes it a confirmed group until the operator has confirmed the reference:
@@ -143,16 +145,21 @@ pub enum SpotIota {
     Silent,
     /// Every fresh spot of this call names this group, one of them on the contact's band.
     Names(String),
-    /// Fresh spots name a group but cannot be taken: they disagree, or none is on this band. The
-    /// callbook does not settle it, so nothing is written.
+    /// Every fresh spot of this call names this group, and none is on the contact's band. It places
+    /// the station elsewhere, so it is written only when a callbook answer already held names the
+    /// same group ([`hold_iota_at_log`]).
+    OtherBand(String),
+    /// Fresh spots disagree about the group. The callbook does not settle it, so nothing is
+    /// written.
     Refused,
 }
 
 /// Write into an FT contact logged with no popup what its log form would have offered, held back as
 /// a taken offer is (the module header): the spot's reference, else `callbook`'s under
-/// [`iota_offer`]'s rules, into an empty IOTA field only and marked by its source. `false` (and
-/// `rec` untouched) when there is nothing to write. `callbook` is an answer already held: this
-/// never asks for one.
+/// [`iota_offer`]'s rules, into an empty IOTA field only and marked by its source. A group the spots
+/// name only on another band goes in when `callbook`'s names the same one, marked as the callbook's,
+/// since no spot places the station on this band. `false` (and `rec` untouched) when there is nothing
+/// to write. `callbook` is an answer already held: this never asks for one.
 pub fn hold_iota_at_log(
     rec: &mut QsoRecord,
     spots: &SpotIota,
@@ -161,17 +168,21 @@ pub fn hold_iota_at_log(
 ) -> bool {
     let spot = match spots {
         SpotIota::Refused => return false,
-        SpotIota::Silent => None,
+        SpotIota::Silent | SpotIota::OtherBand(_) => None,
         SpotIota::Names(group) => Some(group.as_str()),
     };
-    iota_offer(
+    let offer = iota_offer(
         &rec.call,
         rec.ota.iota.as_deref(),
         spot,
         callbook,
         Some(known),
     )
-    .is_some_and(|offer| accept_iota_offer(rec, &offer))
+    .filter(|offer| match spots {
+        SpotIota::OtherBand(group) => valid_iota(group).as_ref() == Some(&offer.reference),
+        _ => true,
+    });
+    offer.is_some_and(|offer| accept_iota_offer(rec, &offer))
 }
 
 /// The fields `field` (a mark) names on this record.
@@ -482,7 +493,44 @@ mod tests {
         }
     }
 
-    /// Spots that cannot be taken stop the callbook too.
+    /// A spot only on another band and a callbook answer that name the same group vouch for each
+    /// other: it goes in, held, marked as the callbook's, since no spot places the station here.
+    /// Either alone says less: the spot names no other group, and a callbook that disagrees loses.
+    #[test]
+    fn a_spot_on_another_band_writes_only_with_a_callbook_answer_naming_its_group() {
+        let other = SpotIota::OtherBand("EU-025".into());
+        let mut r = rec("IA5X");
+        assert!(hold_iota_at_log(
+            &mut r,
+            &other,
+            Some(&answer("IA5X", "EU-025")),
+            ANY
+        ));
+        assert_eq!(r.ota.iota.as_deref(), Some("EU-025"));
+        assert!(withhold_iota(&r));
+        assert!(crate::logbook::callbook::is_callbook_filled(&r, "IOTA"));
+
+        for (cb, why) in [
+            (None, "no answer in hand"),
+            (
+                Some(answer("IA5X", "EU-028")),
+                "the answer names another group",
+            ),
+            (Some(answer("IA5Y", "EU-025")), "another call's answer"),
+        ] {
+            let mut r = rec("IA5X");
+            assert!(!hold_iota_at_log(&mut r, &other, cb.as_ref(), ANY), "{why}");
+            assert_eq!(r.ota.iota, None, "{why}");
+        }
+
+        // The island list still judges it.
+        let mut r = rec("IA5X");
+        let cb = answer("IA5X", "EU-025");
+        assert!(!hold_iota_at_log(&mut r, &other, Some(&cb), &|_| false));
+        assert_eq!(r.ota.iota, None);
+    }
+
+    /// Spots that disagree stop the callbook too, even when it agrees with one of them.
     #[test]
     fn refused_spots_write_nothing_from_either() {
         let cb = answer("IA5X", "EU-025");

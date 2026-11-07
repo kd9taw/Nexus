@@ -3934,7 +3934,7 @@
 "5","awards.satVucc.note.tagging","Pass contacts are tagged automatically when logged on the bird’s downlink (ISS excepted — no LoTW designator to derive)","在衛星下行鏈路上記錄時，過境聯絡會自動新增標記（ISS 除外 — 無 LoTW 識別符號可供推導）","LoTW | ISS",""
 "5","awards.iota.note.achieved","IOTA ✓ (LoTW or card) · {{cards}} on cards — IOTA credits LoTW and cards, not eQSL","IOTA ✓（LoTW 或卡片）· {{cards}} 張為卡片確認 — IOTA 認可 LoTW 和卡片，不認可 eQSL","IOTA | LoTW | {{cards}} | eQSL",""
 "5","awards.iota.note.worked","{{worked}} worked · {{cards}} on cards — IOTA credits LoTW and cards, not eQSL","{{worked}} 個已聯絡 · {{cards}} 張為卡片確認 — IOTA 認可 LoTW 和卡片，不認可 eQSL","{{worked}} | {{cards}} | IOTA | LoTW | eQSL",""
-"5","awards.iota.note.held","From spots, waiting for you to confirm on the contact card: {{held}}","來自點報，等待你在聯絡卡片上確認：{{held}}","{{held}}","Filled by the maintainer, pending translator review."
+"5","awards.iota.note.held","Waiting for you to confirm on the contact card: {{held}}","等待你在聯絡卡片上確認：{{held}}","{{held}}","Filled by the maintainer, pending translator review."
 "5","awards.bands.head","DXCC by band","按波段統計的 DXCC","DXCC",""
 "5","awards.bandNeeds.head","Needed by band","各波段所需","",""
 "5","awards.bandNeeds.award.label","Award","獎項","",""

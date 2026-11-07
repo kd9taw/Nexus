@@ -3684,7 +3684,7 @@ export const RU: PartialCatalog = {
   "awards.satVucc.note.tagging": "Связи во время прохода помечаются автоматически, если записаны на частоте нисходящего канала спутника (кроме ISS — для неё нет обозначения LoTW)",
   "awards.iota.note.achieved": "IOTA ✓ (по LoTW или карточкам) · по карточкам: {{cards}} — IOTA засчитывает LoTW и карточки, а не eQSL",
   "awards.iota.note.worked": "сработано: {{worked}} · по карточкам: {{cards}} — IOTA засчитывает LoTW и карточки, а не eQSL",
-  "awards.iota.note.held": "Из спотов, ждут вашего подтверждения в карточке связи: {{held}}",
+  "awards.iota.note.held": "Ждут вашего подтверждения в карточке связи: {{held}}",
   "awards.bands.head": "DXCC по диапазонам",
   "awards.bandNeeds.head": "Нужные по диапазонам",
   "awards.bandNeeds.award.label": "Диплом",

@@ -1236,7 +1236,7 @@ export const ES: PartialCatalog = {
   "awards.honorRoll.note.toGo": "faltan {{needed}} confirmadas más — se entra en Honor Roll con {{threshold}}",
   "awards.iota.note.achieved": "IOTA ✓ (por LoTW o tarjeta) · {{cards}} en tarjetas — IOTA acredita LoTW y tarjetas, no eQSL",
   "awards.iota.note.worked": "{{worked}} trabajadas · {{cards}} en tarjetas — IOTA acredita LoTW y tarjetas, no eQSL",
-  "awards.iota.note.held": "De spots, pendientes de su confirmación en la ficha del contacto: {{held}}",
+  "awards.iota.note.held": "Pendientes de su confirmación en la ficha del contacto: {{held}}",
   "awards.load.failed.detail": "No se pudo calcular el recuento de diplomas.",
   "awards.load.failed.title": "No se pudieron cargar los diplomas",
   "awards.loading.detail": "Cotejando tu log con la lista de entidades DXCC.",

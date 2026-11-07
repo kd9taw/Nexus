@@ -3537,7 +3537,7 @@ export const ZH: PartialCatalog = {
   "awards.satVucc.note.tagging": "在卫星下行链路上记录时，过境联络会自动添加标记（ISS 除外 — 无 LoTW 标识符可供推导）",
   "awards.iota.note.achieved": "IOTA ✓（LoTW 或卡片）· {{cards}} 张为卡片确认 — IOTA 认可 LoTW 和卡片，不认可 eQSL",
   "awards.iota.note.worked": "{{worked}} 个已联络 · {{cards}} 张为卡片确认 — IOTA 认可 LoTW 和卡片，不认可 eQSL",
-  "awards.iota.note.held": "来自点报，等待你在联络卡片上确认：{{held}}",
+  "awards.iota.note.held": "等待你在联络卡片上确认：{{held}}",
   "awards.bands.head": "按波段统计的 DXCC",
   "awards.bandNeeds.head": "各波段所需",
   "awards.bandNeeds.award.label": "奖项",

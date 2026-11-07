@@ -4090,7 +4090,7 @@
 "5","awards.satVucc.note.tagging","Pass contacts are tagged automatically when logged on the bird’s downlink (ISS excepted — no LoTW designator to derive)","Связи во время прохода помечаются автоматически, если записаны на частоте нисходящего канала спутника (кроме ISS — для неё нет обозначения LoTW)","LoTW | ISS",""
 "5","awards.iota.note.achieved","IOTA ✓ (LoTW or card) · {{cards}} on cards — IOTA credits LoTW and cards, not eQSL","IOTA ✓ (по LoTW или карточкам) · по карточкам: {{cards}} — IOTA засчитывает LoTW и карточки, а не eQSL","IOTA | LoTW | {{cards}} | eQSL",""
 "5","awards.iota.note.worked","{{worked}} worked · {{cards}} on cards — IOTA credits LoTW and cards, not eQSL","сработано: {{worked}} · по карточкам: {{cards}} — IOTA засчитывает LoTW и карточки, а не eQSL","{{worked}} | {{cards}} | IOTA | LoTW | eQSL",""
-"5","awards.iota.note.held","From spots, waiting for you to confirm on the contact card: {{held}}","Из спотов, ждут вашего подтверждения в карточке связи: {{held}}","{{held}}","Filled by the maintainer, pending translator review."
+"5","awards.iota.note.held","Waiting for you to confirm on the contact card: {{held}}","Ждут вашего подтверждения в карточке связи: {{held}}","{{held}}","Filled by the maintainer, pending translator review."
 "5","awards.bands.head","DXCC by band","DXCC по диапазонам","DXCC",""
 "5","awards.bandNeeds.head","Needed by band","Нужные по диапазонам","",""
 "5","awards.bandNeeds.award.label","Award","Диплом","","The same English text ""Award"" is used by 2 different keys (e.g. awards.status.award) — each can take a different Russian word, so choose the one that fits THIS screen."

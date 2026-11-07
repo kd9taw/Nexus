@@ -35156,9 +35156,9 @@ impl SpotIotaLog {
 
     /// What the spots say of an FT contact logged with no popup: stricter than the offer, since no
     /// one looks at it first. Reading every spot of exactly `call` made within [`SPOTS_WINDOW`]
-    /// of the contact's start (`when_unix`), on any band: none names a group, or they all name one
-    /// and one of them is on the contact's `band`, or they are refused (an old trip's re-spot, a
-    /// typo, or the station spotted only on another band).
+    /// of the contact's start (`when_unix`), on any band: none names a group; or they all name one
+    /// and one of them is on the contact's `band`; or they all name one and none is, which the
+    /// callbook has to agree with; or they disagree and are refused (an old trip's re-spot, a typo).
     fn group_at_contact(&self, call: &str, band: &str, when_unix: u64) -> SpotIota {
         let call = call.trim();
         let mut spots = self.named.iter().filter(|n| {
@@ -35178,7 +35178,7 @@ impl SpotIotaLog {
         if on_band {
             SpotIota::Names(first.group.clone())
         } else {
-            SpotIota::Refused
+            SpotIota::OtherBand(first.group.clone())
         }
     }
 }
@@ -59144,7 +59144,7 @@ mod tests {
         );
         assert_eq!(
             log.group_at_contact("IA5X", "40m", T),
-            SpotIota::Refused,
+            SpotIota::OtherBand("EU-028".into()),
             "another band"
         );
         assert_eq!(
