@@ -2491,6 +2491,11 @@ pub struct StationCore {
     /// happen for any log path. Drained by [`Self::take_pending_uploads`];
     /// bounded so a worker outage can't grow it without limit.
     pub(crate) pending_uploads: VecDeque<PendingUpload>,
+    /// The contacts that have left the log since the engine last looked
+    /// ([`Self::take_rows_gone`]), and whether a purge took them all. What the held list keeps for
+    /// DXKeeper is the engine's, and every change to the log passes [`Self::make`].
+    rows_gone: Vec<RecordId>,
+    every_row_gone: bool,
     /// Uploads the full queue dropped (#290), held for the connector worker to report — see
     /// [`Self::enqueue_upload`]. Bounded like the queue.
     pub(crate) dropped_uploads: Vec<PendingUpload>,
@@ -2795,6 +2800,8 @@ impl StationCore {
             all_txt_pending: Vec::new(),
             all_txt_held_tx: Vec::new(),
             pending_uploads: VecDeque::new(),
+            rows_gone: Vec::new(),
+            every_row_gone: false,
             dropped_uploads: Vec::new(),
             corrections: HashMap::new(),
             lotw_batches: 0,
@@ -3242,6 +3249,7 @@ impl StationCore {
     /// its pairs — the half of [`Self::commit`] and [`Self::append`] that does not touch the
     /// disk. A purge hands back the index as it stood, for its rows ([`Self::follow_purge`]).
     fn make(&mut self, change: &RowChange) -> (Watermarks, Option<HotIndex>) {
+        self.note_rows_gone(change);
         // The pairs start where the index does: nothing reached the log around the station.
         let at = hot_mut(&mut self.hot).at();
         self.check_in_step(at);
@@ -3266,6 +3274,41 @@ impl StationCore {
         }
         self.follow(&change.pairs, marks);
         (marks, None)
+    }
+
+    /// A contact that leaves the log, by any change, is never sent to DXKeeper: the leg comes off
+    /// what is queued here at once, and the engine takes it off the held list
+    /// ([`crate::engine::Engine::dxkeeper_settle_gone_rows`]). What the services are owed is as it
+    /// was.
+    fn note_rows_gone(&mut self, change: &RowChange) {
+        use crate::engine::upload_legs::DXKEEPER;
+        let start = self.rows_gone.len();
+        self.rows_gone.extend(
+            change
+                .pairs
+                .iter()
+                .filter(|(_, after)| after.is_none())
+                .filter_map(|(before, _)| before.as_ref().and_then(|b| b.id)),
+        );
+        self.every_row_gone |= change.purged;
+        if !change.purged && self.rows_gone.len() == start {
+            return;
+        }
+        let gone = &self.rows_gone[start..];
+        for p in self.pending_uploads.iter_mut() {
+            if change.purged || p.rec.id.is_some_and(|id| gone.contains(&id)) {
+                p.legs &= !DXKEEPER;
+            }
+        }
+        self.pending_uploads.retain(|p| p.legs != 0);
+    }
+
+    /// The contacts that have left the log since the last call, and whether every one has.
+    pub(crate) fn take_rows_gone(&mut self) -> (Vec<RecordId>, bool) {
+        (
+            std::mem::take(&mut self.rows_gone),
+            std::mem::take(&mut self.every_row_gone),
+        )
     }
 
     /// ★ Make a change planned off the Engine lock (SPEC-2 v3 §4.6) — under it. `rows` are the

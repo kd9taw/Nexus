@@ -571,3 +571,150 @@ fn what_waits_for_dxkeeper_is_bounded_and_never_costs_a_held_contact() {
     settle(&mut e, &sent[0], upload_legs::ALL & !upload_legs::DXKEEPER);
     assert_eq!(e.dxkeeper_waiting_count(), 0, "and it is done");
 }
+
+/// Two contacts logged and waiting for DXKeeper, as a failed connection leaves them.
+fn two_waiting(e: &mut Engine) -> (QsoRecord, QsoRecord) {
+    e.log_qso(cw("K1ABC"));
+    e.log_qso(cw("W1AW"));
+    let queued = e.take_pending_uploads();
+    let (first, second) = (queued[0].rec.clone(), queued[1].rec.clone());
+    assert!(
+        first.id.is_some(),
+        "premise: the queue's copy names its row"
+    );
+    for rec in [&first, &second] {
+        assert_eq!(e.dxkeeper_hold(rec), None);
+    }
+    assert_eq!(e.dxkeeper_waiting_count(), 2, "premise");
+    (first, second)
+}
+
+/// ⛔ A CONTACT DELETED WHILE IT WAITS IS NEVER SENT. It leaves the list and its file, so a restart
+/// does not bring it back, and the one beside it still goes.
+#[test]
+fn a_contact_deleted_while_it_waits_for_dxkeeper_is_never_sent() {
+    let dir = scratch_dir("delete-waiting");
+    let path = dir.join("contest_held_uploads.json");
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    e.set_contest_held_uploads_path(path.clone());
+    let (first, second) = two_waiting(&mut e);
+
+    assert!(e.delete_qso(first.id.unwrap()));
+    assert_eq!(e.dxkeeper_waiting_count(), 1, "the count follows at once");
+    assert_eq!(e.dxkeeper_oldest_waiting(), Some(second.clone()));
+    drop(e);
+
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    e.set_contest_held_uploads_path(path);
+    e.restore_contest_held_uploads(NOW);
+    assert_eq!(e.dxkeeper_waiting_count(), 1, "and it stays gone");
+    assert_eq!(e.dxkeeper_oldest_waiting(), Some(second));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// After a restart the list's copies are read back from the file, and a delete still finds them.
+#[test]
+fn a_delete_after_a_restart_finds_what_waits() {
+    let dir = scratch_dir("delete-after-restart");
+    let path = dir.join("contest_held_uploads.json");
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    e.set_contest_held_uploads_path(path.clone());
+    let (first, second) = two_waiting(&mut e);
+
+    // A second engine stands for the next launch, and takes the same delete.
+    let mut next = Engine::new("W9XYZ", "EN61", 0);
+    next.set_contest_held_uploads_path(path);
+    next.restore_contest_held_uploads(NOW);
+    assert_eq!(next.dxkeeper_waiting_count(), 2, "premise");
+    next.dxkeeper_forget(|rec| rec.id == first.id);
+    assert_eq!(
+        next.dxkeeper_oldest_waiting().map(|r| r.call),
+        Some(second.call)
+    );
+    assert_eq!(next.dxkeeper_waiting_count(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A contact sent before the delete has nothing left to cancel, and nothing else changes: DXKeeper
+/// keeps its copy.
+#[test]
+fn a_delete_after_the_send_changes_nothing_else() {
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    let (first, second) = two_waiting(&mut e);
+    e.contest_upload_done(&first, upload_legs::DXKEEPER);
+    assert!(e.delete_qso(first.id.unwrap()));
+    assert_eq!(e.dxkeeper_waiting_count(), 1);
+    assert_eq!(e.dxkeeper_oldest_waiting(), Some(second));
+}
+
+/// A purge takes everything waiting with it.
+#[test]
+fn a_purged_log_leaves_nothing_waiting_for_dxkeeper() {
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    two_waiting(&mut e);
+    e.clear_logbook();
+    assert_eq!(e.dxkeeper_waiting_count(), 0);
+    assert_eq!(e.dxkeeper_oldest_waiting(), None);
+}
+
+/// Not only a contact that has reached the list: one still on the queue, its first pass yet to come
+/// (a contest's release is paced, so that can be hours), gives up the DXKeeper leg too, and what
+/// the services are owed is as it was.
+#[test]
+fn a_contact_deleted_before_its_first_pass_owes_dxkeeper_nothing() {
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    e.log_qso(cw("K1ABC"));
+    let id = e.stored_log()[0].id.unwrap();
+    assert!(e.delete_qso(id));
+    let queued = e.take_pending_uploads();
+    assert_eq!(calls(&queued), ["K1ABC"], "the services' queue as today");
+    assert_eq!(queued[0].legs, upload_legs::ALL & !upload_legs::DXKEEPER);
+}
+
+/// CONTEST-HELD. Deleted while the contest runs, it never owes DXKeeper, and what it owes the
+/// services at the release is as it was. A held neighbour is untouched.
+#[test]
+fn a_contest_held_contact_deleted_gives_up_only_the_dxkeeper_leg() {
+    let mut e = contest_on();
+    e.log_qso(cw("K1ABC"));
+    e.log_qso(cw("W1AW"));
+    let gone = e
+        .stored_log()
+        .iter()
+        .find(|r| r.call == "K1ABC")
+        .and_then(|r| r.id)
+        .unwrap();
+    assert!(e.delete_qso(gone));
+    contest_off(&mut e);
+    let queued = e.take_pending_uploads();
+    assert_eq!(calls(&queued), ["K1ABC", "W1AW"]);
+    assert_eq!(queued[0].legs, upload_legs::ALL & !upload_legs::DXKEEPER);
+    assert_eq!(queued[1].legs, upload_legs::ALL, "the neighbour keeps its");
+}
+
+/// A contest contact put past the ceiling can be one waiting for DXKeeper: it is named as that, for
+/// the Connections log, and one that is not waiting is not.
+#[test]
+fn a_waiting_contact_the_contest_list_puts_out_is_named_for_dxkeeper() {
+    let mut e = contest_on();
+    let mut waiter = cw("K1ABC");
+    waiter.when_unix -= 1;
+    assert_eq!(e.dxkeeper_hold(&waiter), None);
+    for n in 1..CONTEST_HELD_UPLOADS_CAP {
+        let mut held = cw("W1AW");
+        held.when_unix += n as u64;
+        e.hold_contest_upload(held);
+    }
+    assert!(
+        e.take_dxkeeper_evicted().is_empty(),
+        "premise: the list is full"
+    );
+    e.hold_contest_upload(cw("N0CALL"));
+    assert_eq!(e.take_dxkeeper_evicted(), [waiter]);
+    assert_eq!(e.dxkeeper_waiting_count(), 0);
+    e.hold_contest_upload(cw("K9XYZ"));
+    assert!(
+        e.take_dxkeeper_evicted().is_empty(),
+        "a contest's own says nothing here"
+    );
+}

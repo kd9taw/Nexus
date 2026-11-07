@@ -686,6 +686,7 @@ fn undo_entries(
             if matches!(made, Some((true, _))) {
                 for (id, call) in cancel {
                     e.station_mut().cancel_queued_uploads(id, &call);
+                    e.dxkeeper_forget_call(id, &call);
                 }
             }
             Ok(made.map(|(committed, duplicates)| (committed, duplicates, owed)))

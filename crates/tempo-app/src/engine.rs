@@ -4202,6 +4202,8 @@ pub struct Engine {
     /// ([`Self::contest_upload_done`]). Contacts waiting for DXKeeper are kept here too
     /// ([`Self::dxkeeper_hold`]).
     contest_held_uploads: Vec<ContestHeld>,
+    /// See [`Self::take_dxkeeper_evicted`].
+    dxkeeper_evicted: Vec<QsoRecord>,
     /// Where the held list is kept between launches, beside the settings, when the shell set it
     /// ([`Self::set_contest_held_uploads_path`]).
     contest_held_path: Option<PathBuf>,
@@ -7576,6 +7578,7 @@ impl Engine {
             pending_logs: VecDeque::new(),
             unconfirmed_auto_logs: Vec::new(),
             contest_held_uploads: Vec::new(),
+            dxkeeper_evicted: Vec::new(),
             contest_held_path: None,
             pending_logs_auto_logged: 0,
             pending_log_identity: std::sync::Arc::new(()),
@@ -19034,6 +19037,9 @@ impl Engine {
     fn hold_contest_upload(&mut self, rec: QsoRecord) {
         if self.contest_held_uploads.len() >= CONTEST_HELD_UPLOADS_CAP {
             let dropped = self.contest_held_uploads.remove(0);
+            if dropped.dxkeeper_waiting {
+                self.dxkeeper_evicted.push(dropped.rec.clone());
+            }
             tempo_core::applog::warn(
                 "upload",
                 &format!(
@@ -19088,6 +19094,55 @@ impl Engine {
         });
         self.persist_contest_held_uploads();
         gone
+    }
+
+    /// Take the DXKeeper leg off every held contact `gone` picks: it leaves the waiting list and is
+    /// never sent, and a contact that owed nothing else leaves the list and its file. One a contest
+    /// holds still owes the services what it did.
+    fn dxkeeper_forget(&mut self, gone: impl Fn(&QsoRecord) -> bool) {
+        let mut changed = false;
+        for h in self
+            .contest_held_uploads
+            .iter_mut()
+            .filter(|h| h.owed & upload_legs::DXKEEPER != 0 && gone(&h.rec))
+        {
+            h.owed &= !upload_legs::DXKEEPER;
+            h.dxkeeper_waiting = false;
+            changed = true;
+        }
+        if changed {
+            self.contest_held_uploads.retain(|h| h.owed != 0);
+            self.persist_contest_held_uploads();
+        }
+    }
+
+    /// See [`Self::dxkeeper_forget`]: the contact `id` under `call`, the copy an undone correction
+    /// leaves no row for. The contact under its other call still goes.
+    pub(crate) fn dxkeeper_forget_call(&mut self, id: tempo_core::logbook::RecordId, call: &str) {
+        let call = call.trim();
+        self.dxkeeper_forget(|rec| {
+            rec.id == Some(id) && rec.call.trim().eq_ignore_ascii_case(call)
+        });
+    }
+
+    /// Whatever has left the log since the last call never goes to DXKeeper. Called in the same
+    /// hold as a change made through [`Self::with_log_tickets`] and the deletes that bypass it, so
+    /// a quit straight after finds it gone from the file too; and on the upload worker's tick for
+    /// any other way a row leaves.
+    pub fn dxkeeper_settle_gone_rows(&mut self) {
+        let (ids, all) = self.station.take_rows_gone();
+        if all {
+            self.dxkeeper_forget(|_| true);
+        } else if !ids.is_empty() {
+            let ids: std::collections::HashSet<_> = ids.into_iter().collect();
+            self.dxkeeper_forget(|rec| rec.id.is_some_and(|id| ids.contains(&id)));
+        }
+    }
+
+    /// The contacts that were waiting for DXKeeper when contest mode's list put them out at its
+    /// ceiling, for the upload worker to name.
+    pub fn take_dxkeeper_evicted(&mut self) -> Vec<QsoRecord> {
+        std::mem::take(&mut self.dxkeeper_evicted)
     }
 
     /// How many contacts are waiting for DXKeeper ([`Self::dxkeeper_hold`]).
@@ -35660,6 +35715,7 @@ contact yourself."
     ) -> (T, crate::logstore::Durability) {
         self.station.store.begin_collecting();
         let out = f(self);
+        self.dxkeeper_settle_gone_rows();
         let store = &mut self.station.store;
         let tickets = store.take_collected();
         (out, store.durability(tickets))
@@ -36203,6 +36259,7 @@ contact yourself."
             return false;
         };
         self.contest_row_deleted(&gone, None);
+        self.dxkeeper_settle_gone_rows();
         true
     }
 
@@ -36221,6 +36278,7 @@ contact yourself."
     /// across a restart.
     pub fn clear_logbook(&mut self) -> usize {
         let removed = self.station.clear_logbook();
+        self.dxkeeper_settle_gone_rows();
         self.settings.lotw_last_qsl.clear();
         self.settings.lotw_sweep_year = 0;
         self.settings.lotw_sweep_since.clear();

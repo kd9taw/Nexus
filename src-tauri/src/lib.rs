@@ -41705,6 +41705,63 @@ mod upload_record_tests {
             assert_eq!(calls(&got), names(0, 3));
         }
 
+        /// A contact deleted while it waits: the count follows on the next tick and it never goes.
+        /// Sent before the delete, it has gone: nothing asks DXKeeper to take it out.
+        #[test]
+        fn a_contact_deleted_while_it_waits_never_goes() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let mut wait = DxkeeperWait::default();
+            logged_closed(&engine, port, 3, &mut wait);
+            tick(&engine, port, &mut wait, NOW);
+            assert_eq!(wait.said, 3);
+
+            // As every window's delete makes it, with the Engine lock released.
+            let delete_oldest = || {
+                let oldest = crate::engine_lock(&engine)
+                    .dxkeeper_oldest_waiting()
+                    .unwrap();
+                let id = oldest.id.unwrap();
+                let (made, _) = tempo_app::logwrite::change_ops(
+                    &engine,
+                    id,
+                    None,
+                    &[tempo_core::logbook::LogOp::Delete(id)],
+                    "test",
+                );
+                made.expect("read").expect("made");
+                oldest
+            };
+            assert_eq!(delete_oldest().call, "K0WT", "premise");
+            tick(&engine, port, &mut wait, NOW);
+            assert_eq!(wait.said, 2, "the line says so");
+
+            let dxkeeper = listen(port);
+            let mut now = NOW + 60;
+            let mut got = Vec::new();
+            for _ in 0..4 {
+                tick(&engine, port, &mut wait, now);
+                got.extend(arrived(&dxkeeper));
+                now += 2;
+            }
+            assert_eq!(
+                calls(&got),
+                names(1, 3),
+                "the other two, and not the deleted one"
+            );
+
+            // The last one waiting, deleted: the wait ends, with no line that says it was delivered.
+            let p = log(&engine, "K9WT");
+            drop(dxkeeper);
+            pass(&engine, p, port, false, &mut wait);
+            tick(&engine, port, &mut wait, now + 2);
+            assert_eq!(wait.said, 1);
+            delete_oldest();
+            tick(&engine, port, &mut wait, now + 4);
+            assert_eq!((wait.said, wait.delivered), (0, 0));
+        }
+
         /// A send that connected is never repeated: not by a service's retries, and not by anything
         /// that waits after it.
         #[test]
@@ -43375,6 +43432,14 @@ fn dxkeeper_wait_tick(
     now_unix: i64,
 ) {
     use tempo_app::engine::upload_legs::DXKEEPER;
+    let evicted = {
+        let mut eng = engine_lock_result(engine).unwrap_or_else(|e| e.into_inner());
+        eng.dxkeeper_settle_gone_rows();
+        eng.take_dxkeeper_evicted()
+    };
+    for gone in &evicted {
+        conn_log("DXKeeper", "error", dxkeeper_past_ceiling_line(gone));
+    }
     let Some(target) = dxk else {
         return;
     };
