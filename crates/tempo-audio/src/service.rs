@@ -46638,10 +46638,7 @@ mod tests {
             );
             assert!(state.cat_outage_halted);
             let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
-            assert!(
-                said.starts_with(CAT_SILENT_TX_OFF),
-                "outage {outage}: {said}"
-            );
+            assert!(said.ends_with(CAT_SILENT_TX_OFF), "outage {outage}: {said}");
             // The operator re-arms, which ends the words; retries leave transmit as set.
             engine.lock().unwrap().set_tx_enabled(true);
             let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
@@ -46707,7 +46704,7 @@ mod tests {
     }
 
     /// ⭐ WHAT THE OPERATOR READS when a silent link turns transmit off: the CAT status, word for
-    /// word, led by what happened and how to transmit again. It stays through every later CAT
+    /// word, ending with what happened and how to transmit again, after anything that must lead it. It stays through every later CAT
     /// message of the outage, as those replace the status, and goes when transmit is turned back
     /// on. Then a retry, which leaves transmit on, says nothing of it.
     #[test]
@@ -46720,9 +46717,9 @@ mod tests {
         silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 1_000.0);
         assert_eq!(
             reads(),
-            "Transmit was turned off because CAT to the radio was lost. Check the radio and its \
-             CAT cable; Nexus keeps trying. Press TX On to transmit again. 14.0740 MHz CAT link \
-             unreachable (1/3)"
+            "14.0740 MHz CAT link unreachable (1/3) Transmit was turned off because CAT to the radio \
+             was lost. Check the radio and its CAT cable; Nexus keeps trying. Press TX On to transmit \
+             again."
         );
         engine
             .lock()
@@ -46730,11 +46727,11 @@ mod tests {
             .set_cat_status(Some(false), "CAT link unreachable (2/3)".to_string());
         assert_eq!(
             reads(),
-            format!("{CAT_SILENT_TX_OFF} CAT link unreachable (2/3)")
+            format!("CAT link unreachable (2/3) {CAT_SILENT_TX_OFF}")
         );
         state.cat_rebuild_at = 0.0;
         silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 100_000.0);
-        assert!(reads().starts_with(CAT_SILENT_TX_OFF), "{}", reads());
+        assert!(reads().ends_with(CAT_SILENT_TX_OFF), "{}", reads());
         engine.lock().unwrap().set_tx_enabled(true);
         assert!(!reads().contains(CAT_SILENT_TX_OFF), "{}", reads());
         state.cat_rebuild_at = 0.0;
@@ -46762,7 +46759,7 @@ mod tests {
             );
             assert_eq!(state.cat_ok, Some(true), "premise: and found the radio");
             let said = e.snapshot().radio.cat_detail;
-            assert!(said.starts_with(CAT_BACK_TX_OFF), "{said}");
+            assert!(said.ends_with(CAT_BACK_TX_OFF), "{said}");
         }
         engine.lock().unwrap().set_tx_enabled(true);
         let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
@@ -46830,7 +46827,7 @@ mod tests {
         }
         assert_eq!(opens.get(), before + 1, "the silence earned its rebuild");
         let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
-        assert!(said.starts_with(CAT_SILENT_TX_OFF), "{said}");
+        assert!(said.ends_with(CAT_SILENT_TX_OFF), "{said}");
         mute.store(false, SeqCst);
         for _ in 0..4000 {
             if state.cat_ok == Some(true) {
@@ -46844,7 +46841,7 @@ mod tests {
             let e = engine.lock().unwrap();
             assert!(!e.tx_enabled());
             let said = e.snapshot().radio.cat_detail;
-            assert!(said.starts_with(CAT_BACK_TX_OFF), "{said}");
+            assert!(said.ends_with(CAT_BACK_TX_OFF), "{said}");
             assert!(!said.contains(CAT_SILENT_TX_OFF), "{said}");
         }
         // Silent again, transmit never turned back on: it is lost again, and it says so.
@@ -46857,7 +46854,7 @@ mod tests {
         }
         {
             let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
-            assert!(said.starts_with(CAT_SILENT_TX_OFF), "{said}");
+            assert!(said.ends_with(CAT_SILENT_TX_OFF), "{said}");
         }
         // A saved CAT change ends it: the words were about the link that is gone.
         {
@@ -46875,8 +46872,8 @@ mod tests {
         );
     }
 
-    /// A rigctld that died turns transmit off the same way, and says so the same way. A rebuild's
-    /// words come after the sentence, which the status keeps until the link answers.
+    /// A rigctld that died turns transmit off the same way, and says so the same way, after the
+    /// rebuild's own words.
     #[test]
     fn the_status_says_it_when_a_dead_daemon_turned_transmit_off() {
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
@@ -46905,7 +46902,7 @@ mod tests {
         let e = engine.lock().unwrap();
         assert!(!e.tx_enabled());
         let said = e.snapshot().radio.cat_detail;
-        assert!(said.starts_with(CAT_SILENT_TX_OFF), "{said}");
+        assert!(said.ends_with(CAT_SILENT_TX_OFF), "{said}");
     }
 
     /// TEST CAT'S OWN RESULT carries the sentence while it holds, as its result line replaces the
@@ -46925,11 +46922,11 @@ mod tests {
         let e = engine.lock().unwrap();
         assert_eq!(
             e.cat_detail_with_tx_off(Some(false), "no reply".to_string()),
-            format!("{CAT_SILENT_TX_OFF} no reply")
+            format!("no reply {CAT_SILENT_TX_OFF}")
         );
         assert_eq!(
             e.cat_detail_with_tx_off(Some(true), "14.074 MHz".to_string()),
-            format!("{CAT_BACK_TX_OFF} 14.074 MHz")
+            format!("14.074 MHz {CAT_BACK_TX_OFF}")
         );
     }
 

@@ -13,7 +13,7 @@ vi.mock('../api', () => ({ setFrequency: vi.fn(() => Promise.resolve(null)) }))
 vi.mock('../toast', () => ({ pushToast: vi.fn() }))
 vi.mock('../useWheelTune', () => ({ useWheelTune: () => undefined }))
 
-const SENT = `${EN['settings.rigControl.catSilentTxOff']} 14.0740 MHz CAT link unreachable (1/3)`
+const SENT = `14.0740 MHz CAT link unreachable (1/3) ${EN['settings.rigControl.catSilentTxOff']}`
 const snap = {
   radio: {
     dialMhz: 14.074, catOk: false, catDetail: SENT, sideband: 'USB', transmitting: false,
@@ -39,6 +39,6 @@ describe('the CAT mark when a silent link has turned transmit off', () => {
   it('says it in the operator\'s language', () => {
     installCatalog('de', DE)
     setLocale('de')
-    expect(reads()).toBe(`${String(DE['settings.rigControl.catSilentTxOff'])} 14.0740 MHz CAT link unreachable (1/3)`)
+    expect(reads()).toBe(`14.0740 MHz CAT link unreachable (1/3) ${String(DE['settings.rigControl.catSilentTxOff'])}`)
   })
 })

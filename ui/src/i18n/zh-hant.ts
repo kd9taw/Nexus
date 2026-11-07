@@ -8715,7 +8715,7 @@ export const ZH_HANT: PartialCatalog = {
   "settings.rigControl.serialHandshake.xonxoff": "XON/XOFF（軟體）",
   "settings.rigControl.serialHandshake.hint": "告訴 Nexus 你的線纜實際做什麼，而不是讓它猜。除非你有一部啟動就發射的電台，否則保持「自動」— 自動不會改變你台站今天的工作方式。若改了之後 CAT 失效，請改回自動：在某些電台上，Hamlib 會默默拒絕該設定，然後在你根本沒開啟電台的情況下照常應答，於是你看到 CAT 指示燈亮著，電台卻對你的指令毫無反應。",
   "settings.rigControl.catSilentTxOff": "與電台的 CAT 連線已中斷，因此發射已關閉。請檢查電台及其 CAT 線纜；Nexus 會繼續嘗試。要再次發射，請按 TX On（開啟發射）。",
-  "settings.rigControl.catBackTxOff": "電台曾停止回應 CAT，發射已關閉。CAT 已恢復；要發射，請按 TX On（開啟發射）。",
+  "settings.rigControl.catBackTxOff": "與電台的 CAT 連線曾中斷，發射已關閉。CAT 已恢復；要發射，請按 TX On（開啟發射）。",
   "settings.rigControl.serialHandshake.rtsKeys": "此連線埠上的 RTS 會鍵控你的發射，因此串列埠握手不能設為「硬體」 — 請設為「自動」或「無」。",
   "settings.rigControl.pttLineState.label": "啟動時的鍵控線狀態",
   "settings.rigControl.pttLineState.auto": "自動（推薦）",

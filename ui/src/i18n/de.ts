@@ -1740,7 +1740,7 @@ export const DE: PartialCatalog = {
   "settings.rigControl.serialHandshake.xonxoff": "XON/XOFF (Software)",
   "settings.rigControl.serialHandshake.hint": "Sagt Nexus, was Ihr Kabel wirklich tut, statt es raten zu lassen. Lassen Sie es auf Automatisch, außer Sie haben ein Gerät, das beim Start tastet — Automatisch ändert nichts daran, wie Ihre Station heute arbeitet. Wenn Sie es umstellen und CAT nicht mehr funktioniert, stellen Sie es auf Automatisch zurück: bei manchen Geräten lehnt Hamlib die Einstellung stillschweigend ab und antwortet dann, ohne das Funkgerät je geöffnet zu haben — Sie haben eine CAT-Anzeige und ein Gerät, das Sie ignoriert.",
   "settings.rigControl.catSilentTxOff": "Senden wurde ausgeschaltet, weil die CAT-Verbindung zum Funkgerät verloren ging. Prüfen Sie das Funkgerät und sein CAT-Kabel; Nexus versucht es weiter. Drücken Sie TX On, um wieder zu senden.",
-  "settings.rigControl.catBackTxOff": "Das Funkgerät antwortete nicht mehr über CAT und Senden wurde ausgeschaltet. CAT ist wieder da; drücken Sie TX On, um zu senden.",
+  "settings.rigControl.catBackTxOff": "Die CAT-Verbindung zum Funkgerät ging verloren und Senden wurde ausgeschaltet. CAT ist wieder da; drücken Sie TX On, um zu senden.",
   "settings.rigControl.serialHandshake.rtsKeys": "RTS tastet an diesem Port Ihren Sender, daher kann „Serielles Handshake“ nicht Hardware sein — stellen Sie es auf Automatisch oder Keines.",
   "settings.rigControl.pttLineState.label": "Tastleitung beim Start",
   "settings.rigControl.pttLineState.auto": "Automatisch (empfohlen)",

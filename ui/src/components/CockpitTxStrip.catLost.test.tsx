@@ -14,7 +14,7 @@ import { DE } from '../i18n/de'
 import type { RadioStatus } from '../types'
 
 const SENTENCE = EN['settings.rigControl.catSilentTxOff']
-const LOST = { txEnabled: false, catOk: false, catDetail: `${SENTENCE} 14.0740 MHz CAT link unreachable (1/3)` }
+const LOST = { txEnabled: false, catOk: false, catDetail: `14.0740 MHz CAT link unreachable (1/3) ${SENTENCE}` }
 
 afterEach(() => {
   cleanup()
@@ -73,7 +73,7 @@ describe.each([
   })
 
   it('keeps explaining once CAT is back, in words for that, until transmit is back on', () => {
-    const back = { txEnabled: false, catOk: true, catDetail: `${EN['settings.rigControl.catBackTxOff']} 14.074 MHz` }
+    const back = { txEnabled: false, catOk: true, catDetail: `14.074 MHz ${EN['settings.rigControl.catBackTxOff']}` }
     const s = state(back)
     expect(s.textContent).toBe('■ TX off — CAT is back: press TX On')
     expect(s.getAttribute('title')).toBe(EN['settings.rigControl.catBackTxOff'])

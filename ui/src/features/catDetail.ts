@@ -25,7 +25,7 @@ export function catDetailText(detail: string): string {
 
 /**
  * Does this CAT status say a lost link has turned transmit off, and is the link still lost or back?
- * The backend leads the status with one of the two sentences for exactly as long as that holds, so
+ * The backend ends the status with one of the two sentences for exactly as long as that holds, so
  * the TX strip's state follows it with no field of its own: the status is a tooltip on the cockpits,
  * and the strip can be read without hovering.
  */

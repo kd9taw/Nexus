@@ -8713,7 +8713,7 @@ export const ZH: PartialCatalog = {
   "settings.rigControl.serialHandshake.xonxoff": "XON/XOFF（软件）",
   "settings.rigControl.serialHandshake.hint": "告诉 Nexus 你的线缆实际做什么，而不是让它猜。除非你有一部启动就发射的电台，否则保持“自动”— 自动不会改变你台站今天的工作方式。若改了之后 CAT 失效，请改回自动：在某些电台上，Hamlib 会默默拒绝该设置，然后在你根本没打开电台的情况下照常应答，于是你看到 CAT 指示灯亮着，电台却对你的指令毫无反应。",
   "settings.rigControl.catSilentTxOff": "与电台的 CAT 连接已丢失，因此发射已关闭。请检查电台及其 CAT 线缆；Nexus 会继续尝试。要再次发射，请按 TX On（开启发射）。",
-  "settings.rigControl.catBackTxOff": "电台曾停止响应 CAT，发射已关闭。CAT 已恢复；要发射，请按 TX On（开启发射）。",
+  "settings.rigControl.catBackTxOff": "与电台的 CAT 连接曾丢失，发射已关闭。CAT 已恢复；要发射，请按 TX On（开启发射）。",
   "settings.rigControl.serialHandshake.rtsKeys": "此端口上的 RTS 会键控你的发射，因此串口握手不能设为“硬件” — 请设为“自动”或“无”。",
   "settings.rigControl.pttLineState.label": "启动时的键控线状态",
   "settings.rigControl.pttLineState.auto": "自动（推荐）",

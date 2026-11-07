@@ -8607,7 +8607,7 @@ export const EN = {
   'settings.rigControl.catSilentTxOff':
     'Transmit was turned off because CAT to the radio was lost. Check the radio and its CAT cable; Nexus keeps trying. Press TX On to transmit again.',
   'settings.rigControl.catBackTxOff':
-    'The radio stopped answering CAT and transmit was turned off. CAT is back; press TX On to transmit.',
+    'CAT to the radio was lost and transmit was turned off. CAT is back; press TX On to transmit.',
   'settings.rigControl.serialHandshake.rtsKeys':
     "RTS keys your transmitter on this port, so Serial handshake can't be Hardware — set it to Auto or None.",
   'settings.rigControl.pttLineState.label': 'Keying line at startup',

@@ -2177,14 +2177,15 @@ const SSTV_RADIO_HAS_MIC: &str = "SSTV can't send while the radio has the mic: w
      DAX audio on, Phone at the shack uses the radio's own mic, so the picture would not go out. \
      Nothing was keyed.";
 
-/// Leads the CAT status while a silent link has turned transmit off
+/// Ends the CAT status while a lost link has turned transmit off
 /// ([`Engine::say_tx_off_for_silent_cat`]). ⚠️ The UI matches this exact sentence to show it in the
 /// operator's language (`ui/src/features/catDetail.ts`, whose test reads this constant) — change
 /// both together.
 pub const CAT_SILENT_TX_OFF: &str = "Transmit was turned off because CAT to the radio was lost. Check the radio and its CAT cable; Nexus keeps trying. Press TX On to transmit again.";
 
 /// [`CAT_SILENT_TX_OFF`] once the radio answers again, with transmit still off. The same UI match.
-pub const CAT_BACK_TX_OFF: &str = "The radio stopped answering CAT and transmit was turned off. CAT is back; press TX On to transmit.";
+pub const CAT_BACK_TX_OFF: &str =
+    "CAT to the radio was lost and transmit was turned off. CAT is back; press TX On to transmit.";
 
 /// What a refused start says while a clock repair holds transmit
 /// ([`Engine::hold_tx_for_clock_repair`]): the answer of every up-front TX gate, and of TX On on
@@ -28972,7 +28973,7 @@ contact yourself."
     /// Set the rig/CAT connection status the UI renders (and the Test-CAT result
     /// reads). `ok`: `None` = VOX/no CAT, `Some(true/false)` = CAT up/down.
     /// A lost CAT link (silent, or its daemon dead) has just turned transmit off. The CAT status
-    /// leads with why until transmit is back on or the CAT settings change
+    /// says why until transmit is back on or the CAT settings change
     /// ([`Self::clear_tx_off_for_silent_cat`]). The link answering does not end it: transmit is still
     /// off, and only the words change ([`Self::cat_detail_with_tx_off`]). Kept apart from the status
     /// because the status is latest-wins and the next failed read replaces it a tick later. It says
@@ -28986,9 +28987,11 @@ contact yourself."
         self.cat_silence_tx_off = false;
     }
 
-    /// `detail`, led by why transmit is off while that holds: [`CAT_SILENT_TX_OFF`], or
-    /// [`CAT_BACK_TX_OFF`] when this verdict (`ok`) is that the radio answers. Test CAT's result reads
-    /// through this as the status does, since its result line replaces the status on screen.
+    /// `detail`, followed by why transmit is off while that holds: [`CAT_SILENT_TX_OFF`], or
+    /// [`CAT_BACK_TX_OFF`] when this verdict (`ok`) is that the radio answers. ⛔ AFTER, NEVER BEFORE:
+    /// a client's alarm leads the status, as "it may still be transmitting" is what the operator must
+    /// read first (the rebuild's own rule, in `RadioLoop::step`). Test CAT's result reads through this
+    /// as the status does, since its result line replaces the status on screen.
     pub fn cat_detail_with_tx_off(&self, ok: Option<bool>, detail: String) -> String {
         if self.cat_silence_tx_off && !self.tx_enabled {
             let lead = if ok == Some(true) {
@@ -28996,7 +28999,7 @@ contact yourself."
             } else {
                 CAT_SILENT_TX_OFF
             };
-            format!("{lead} {detail}").trim_end().to_string()
+            format!("{detail} {lead}").trim_start().to_string()
         } else {
             detail
         }
