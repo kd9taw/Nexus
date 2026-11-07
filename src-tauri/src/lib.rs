@@ -7686,7 +7686,8 @@ fn pending_qso_path() -> PathBuf {
 }
 
 /// `<config dir>/contest_held_uploads.json` — the contacts logged while contest mode is on, whose
-/// upload waits for it to go off (`Engine::restore_contest_held_uploads`).
+/// upload waits for it to go off (`Engine::restore_contest_held_uploads`), and those waiting for
+/// DXKeeper (`Engine::dxkeeper_hold`).
 fn contest_held_uploads_path() -> PathBuf {
     settings_path()
         .parent()
@@ -36021,6 +36022,9 @@ struct ConnEvent {
     /// "ok" | "info" | "error"
     level: String,
     message: EphemeralText,
+    /// A connector's one standing line ([`conn_log_standing`]): it replaces the one before it,
+    /// and the ring's cap passes over it.
+    standing: bool,
 }
 
 /// The wire shape of a [`ConnEvent`] — the one boundary a service's own words cross.
@@ -36856,7 +36860,26 @@ fn qrz_logbook_health(logged: HealthTriple, session: HealthTriple) -> HealthTrip
 /// convention: [`EphemeralText`] implements no `Display` and no `Debug`, so a line added below
 /// that formats it does not compile.
 fn conn_log(connector: &'static str, level: &'static str, message: impl Into<String>) {
-    let message = EphemeralText::new(message.into());
+    conn_log_event(connector, level, message.into(), false);
+}
+
+/// `connector`'s one standing line, for a state that lasts and whose count changes: it replaces
+/// the one before, so the log says how things stand rather than every step of getting there.
+fn conn_log_standing(connector: &'static str, level: &'static str, message: impl Into<String>) {
+    conn_log_standing_ends(connector);
+    conn_log_event(connector, level, message.into(), true);
+}
+
+/// `connector` has no standing line any more.
+fn conn_log_standing_ends(connector: &'static str) {
+    CONN_LOG
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|ev| !(ev.standing && ev.connector == connector));
+}
+
+fn conn_log_event(connector: &'static str, level: &'static str, message: String, standing: bool) {
+    let message = EphemeralText::new(message);
     eprintln!("conn[{connector}/{level}]");
     let mut log = CONN_LOG.lock().unwrap_or_else(|e| e.into_inner());
     log.push_back(ConnEvent {
@@ -36864,9 +36887,17 @@ fn conn_log(connector: &'static str, level: &'static str, message: impl Into<Str
         connector: connector.to_string(),
         level: level.to_string(),
         message,
+        standing,
     });
     while log.len() > CONN_LOG_CAP {
-        log.pop_front();
+        match log.iter().position(|ev| !ev.standing) {
+            Some(oldest) => {
+                log.remove(oldest);
+            }
+            None => {
+                log.pop_front();
+            }
+        }
     }
 }
 
@@ -41121,16 +41152,661 @@ mod upload_record_tests {
         )
         .pop()
         .unwrap();
+        let owing = |rec: &tempo_core::logbook::QsoRecord| tempo_app::engine::PendingUpload {
+            rec: rec.clone(),
+            origin: tempo_app::engine::UploadOrigin::Live,
+            legs: tempo_app::engine::upload_legs::ALL,
+            attempts: 0,
+            retry_after_unix: 0,
+            corrected: false,
+        };
         assert_eq!(
-            crate::dxkeeper_target_for(Some(&dxk), &mine),
+            crate::dxkeeper_target_for(Some(&dxk), &owing(&mine)),
             Some(dxk.clone())
         );
-        assert_eq!(crate::dxkeeper_target_for(None, &mine), None);
+        assert_eq!(crate::dxkeeper_target_for(None, &owing(&mine)), None);
         mine.extra.push((
             tempo_app::log_intake::VIA_FIELD.to_string(),
             "WSJT-X".to_string(),
         ));
-        assert_eq!(crate::dxkeeper_target_for(Some(&dxk), &mine), None);
+        assert_eq!(crate::dxkeeper_target_for(Some(&dxk), &owing(&mine)), None);
+    }
+
+    /// ⛔ A CONTACT GOES TO DXKEEPER ONCE. With the internet down, every retry of a failed service
+    /// came back through the push and the operator's master log took a copy each time, and a
+    /// catch-up sweep sent old contacts again. These walk one contact down each way back onto the
+    /// queue, with the engine's own queue and the worker's own Cloudlog hold, and ask the push.
+    #[test]
+    fn dxkeeper_is_sent_a_contact_once_whichever_way_it_comes_back() {
+        use tempo_app::engine::{upload_legs as legs, PendingUpload, UploadOrigin};
+        use tempo_app::settings::KeysToConfirm;
+        let dxk = ("127.0.0.1".to_string(), 52000u16, false);
+        let pushes = |p: &PendingUpload| crate::dxkeeper_target_for(Some(&dxk), p).is_some();
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN61", 0),
+        ));
+        let log = |call: &str, time: &str| {
+            let mut rec = tempo_core::logbook::parse_adif(&format!(
+                "<CALL:{}>{call}<QSO_DATE:8>20261014<TIME_ON:6>{time}<BAND:3>20m<MODE:2>CW<EOR>",
+                call.len()
+            ))
+            .pop()
+            .unwrap();
+            rec.id = None;
+            let mut eng = crate::engine_lock(&engine);
+            eng.log_qso(rec);
+            eng.take_pending_uploads()
+                .pop()
+                .expect("the funnel queued it")
+        };
+        let take = || crate::engine_lock(&engine).take_pending_uploads().pop();
+
+        // The first pass of a contact at the key pushes.
+        let first = log("K1ABC", "120000");
+        assert_eq!(first.origin, UploadOrigin::Live, "premise: logged live");
+        assert!(pushes(&first), "the first live pass goes to DXKeeper");
+
+        // Every retry, to the end of the budget, with every service still down: what the worker
+        // does with what `auto_push_one` fails, which it builds from the services' legs alone.
+        let failed = legs::ALL & !legs::DXKEEPER;
+        let mut p = first;
+        let mut sent = 0;
+        for attempts in 1..tempo_app::engine::MAX_UPLOAD_RETRIES {
+            sent += usize::from(pushes(&p));
+            crate::engine_lock(&engine).requeue_after_failure(
+                p.rec.clone(),
+                failed,
+                attempts,
+                0,
+                p.origin,
+            );
+            p = take().expect("still within the budget");
+            assert_eq!(p.attempts, attempts, "premise: a real retry");
+        }
+        sent += usize::from(pushes(&p));
+        assert_eq!(sent, 1, "one copy, however many retries");
+
+        // A Cloudlog leg held for its key comes back with no attempt spent and still Live: neither
+        // `attempts` nor the origin can tell it from a first pass.
+        crate::engine_lock(&engine).set_keys_to_confirm(KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![],
+            ..Default::default()
+        });
+        let first = log("W1AW", "121500");
+        assert!(pushes(&first), "the pass that holds the leg back pushes");
+        crate::hold_a_waiting_cloudlog_leg(&engine, &first, 1_000_000);
+        let held = take().expect("the held leg is queued");
+        assert_eq!(
+            (held.attempts, held.origin, held.legs),
+            (0, UploadOrigin::Live, legs::CLOUDLOG),
+            "premise: it looks like a first pass in everything but what it owes"
+        );
+        assert!(!pushes(&held), "the held leg's return does not push again");
+        crate::engine_lock(&engine).set_keys_to_confirm(KeysToConfirm::default());
+
+        // A record not yet due goes back as it was. It has pushed nothing, so it still owes.
+        let waiting = log("N0CALL", "123000");
+        crate::engine_lock(&engine).requeue_upload_at(
+            waiting.rec.clone(),
+            waiting.legs,
+            waiting.attempts,
+            i64::MAX,
+            waiting.origin,
+        );
+        let waiting = take().expect("back on the queue");
+        assert!(pushes(&waiting), "a pass not made yet is still owed");
+
+        // The catch-up sweep of history owes only the services it is short of.
+        let stale = log("K9OLD", "124500");
+        crate::engine_lock(&engine).requeue_catch_up(vec![(stale.rec, legs::QRZ | legs::EQSL)]);
+        let stale = take().expect("the sweep queued it");
+        assert_eq!(stale.origin, UploadOrigin::CatchUp, "premise: the sweep");
+        assert!(!pushes(&stale), "a catch-up does not send it again");
+
+        // Another program's contact: owed on the queue as any other, and never pushed.
+        let mut theirs = log("K2DEF", "130000");
+        theirs.rec.extra.push((
+            tempo_app::log_intake::VIA_FIELD.to_string(),
+            "WSJT-X".to_string(),
+        ));
+        assert_ne!(theirs.legs & legs::DXKEEPER, 0, "premise: it owes the leg");
+        assert!(!pushes(&theirs), "it may have come from DXKeeper");
+    }
+
+    /// The worker's own trip for one record and its tick for what waits, against real sockets:
+    /// DXKeeper, and N3FJP standing in for any service, each on a loopback port listening or closed.
+    mod dxkeeper_wait {
+        use crate::{
+            dxkeeper_wait_tick, send_queued_upload, ConnectorToggles, DxkeeperWait, SharedEngine,
+        };
+        use std::io::Read;
+        use std::net::TcpListener;
+        use tempo_app::engine::{upload_legs as legs, PendingUpload};
+
+        const NOW: i64 = 1_792_324_800;
+
+        /// One test at a time: a port one lets go of is not then another's listener.
+        static PORTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+            PORTS.lock().unwrap_or_else(|e| e.into_inner())
+        }
+
+        fn free_port() -> u16 {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        }
+
+        fn listen(port: u16) -> TcpListener {
+            let l = TcpListener::bind(("127.0.0.1", port)).unwrap();
+            l.set_nonblocking(true).unwrap();
+            l
+        }
+
+        /// What has come in, one entry a connection: the directive, empty for a connection check.
+        /// It waits a moment, as a connect can return before the listener has it queued.
+        fn arrived(l: &TcpListener) -> Vec<String> {
+            let until = std::time::Instant::now() + std::time::Duration::from_millis(100);
+            let mut got = Vec::new();
+            while std::time::Instant::now() < until {
+                if let Ok((conn, _)) = l.accept() {
+                    conn.set_nonblocking(false).unwrap();
+                    let mut text = String::new();
+                    conn.take(1 << 16).read_to_string(&mut text).unwrap();
+                    got.push(text);
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+            }
+            got
+        }
+
+        /// The calls in what `arrived` read, connection checks left out.
+        fn calls(got: &[String]) -> Vec<String> {
+            got.iter()
+                .filter(|d| !d.is_empty())
+                .map(|d| {
+                    let start = d.to_ascii_uppercase().find("<CALL:").expect("a contact") + 6;
+                    let tail = &d[start..];
+                    let open = tail.find('>').unwrap() + 1;
+                    let len: usize = tail[..open - 1].parse().unwrap();
+                    tail[open..open + len].to_string()
+                })
+                .collect()
+        }
+
+        fn engine(n3fjp_port: u16) -> SharedEngine {
+            let mut e = tempo_app::engine::Engine::new("W9XYZ", "EN61", 0);
+            let mut s = e.settings().clone();
+            s.n3fjp_host = "127.0.0.1".into();
+            s.n3fjp_port = n3fjp_port;
+            e.apply_settings(s);
+            std::sync::Arc::new(std::sync::Mutex::new(e))
+        }
+
+        fn log(engine: &SharedEngine, call: &str) -> PendingUpload {
+            let rec = tempo_core::logbook::parse_adif(&format!(
+                "<CALL:{}>{call}<QSO_DATE:8>20261014<TIME_ON:6>120000<BAND:3>20m<MODE:2>CW<EOR>",
+                call.len()
+            ))
+            .pop()
+            .unwrap();
+            let mut eng = crate::engine_lock(engine);
+            eng.log_qso(rec);
+            eng.take_pending_uploads().pop().expect("queued")
+        }
+
+        fn take(engine: &SharedEngine) -> Vec<PendingUpload> {
+            crate::engine_lock(engine).take_pending_uploads()
+        }
+
+        fn waiting(engine: &SharedEngine) -> usize {
+            crate::engine_lock(engine).dxkeeper_waiting_count()
+        }
+
+        fn target(dxk_port: u16) -> (String, u16, bool) {
+            ("127.0.0.1".to_string(), dxk_port - 1, false)
+        }
+
+        fn pass(
+            engine: &SharedEngine,
+            p: PendingUpload,
+            dxk_port: u16,
+            n3fjp_on: bool,
+            wait: &mut DxkeeperWait,
+        ) {
+            let legs = p.legs;
+            send_queued_upload(
+                engine,
+                p,
+                legs,
+                Some(&target(dxk_port)),
+                ConnectorToggles {
+                    qrz_on: false,
+                    clublog_on: false,
+                    eqsl_on: false,
+                    hrdlog_on: false,
+                    wrl_on: false,
+                    n3fjp_on,
+                    cloudlog_on: false,
+                },
+                wait,
+                NOW,
+            );
+        }
+
+        fn tick(engine: &SharedEngine, dxk_port: u16, wait: &mut DxkeeperWait, now: i64) {
+            dxkeeper_wait_tick(engine, Some(&target(dxk_port)), wait, now);
+        }
+
+        /// Contacts logged with `port` closed, left waiting.
+        fn logged_closed(engine: &SharedEngine, port: u16, n: usize, wait: &mut DxkeeperWait) {
+            for i in 0..n {
+                let p = log(engine, &format!("K{i}WT"));
+                pass(engine, p, port, false, wait);
+            }
+            assert_eq!(waiting(engine), n, "premise: all waiting");
+            assert!(take(engine).is_empty(), "and none on the service queue");
+        }
+
+        fn names(from: usize, to: usize) -> Vec<String> {
+            (from..to).map(|i| format!("K{i}WT")).collect()
+        }
+
+        /// More than the old cap of ten, with DXKeeper closed: all of them wait, and when it comes
+        /// back each arrives once, oldest first, one per tick, and nothing is left.
+        #[test]
+        fn more_than_ten_waiting_are_all_delivered_once_oldest_first_on_its_return() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let mut wait = DxkeeperWait::default();
+            logged_closed(&engine, port, 25, &mut wait);
+
+            let dxkeeper = listen(port);
+            let mut now = NOW + crate::DXKEEPER_CHECK_SECS;
+            tick(&engine, port, &mut wait, now);
+            assert!(wait.connected, "the check found it");
+            let check = arrived(&dxkeeper);
+            assert_eq!(check, [String::new()], "a check sends no contact");
+            assert_eq!(waiting(&engine), 25);
+
+            let mut got = Vec::new();
+            for sent in 1..=25 {
+                now += 2;
+                tick(&engine, port, &mut wait, now);
+                let one = arrived(&dxkeeper);
+                assert_eq!(one.len(), 1, "one per tick");
+                got.extend(one);
+                assert_eq!(waiting(&engine), 25 - sent);
+            }
+            assert_eq!(calls(&got), names(0, 25));
+            tick(&engine, port, &mut wait, now + 2);
+            assert_eq!(arrived(&dxkeeper).len(), 0, "and nothing after");
+            assert_eq!(wait.said, 0, "the wait is over");
+        }
+
+        /// The connection drops part-way. What went is not repeated, what did not still waits, and
+        /// both are right when it comes back.
+        #[test]
+        fn a_drop_part_way_sends_the_rest_and_repeats_nothing() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let mut wait = DxkeeperWait::default();
+            logged_closed(&engine, port, 12, &mut wait);
+
+            let dxkeeper = listen(port);
+            let mut now = NOW + 60;
+            tick(&engine, port, &mut wait, now);
+            let mut got = arrived(&dxkeeper);
+            for _ in 0..5 {
+                now += 2;
+                tick(&engine, port, &mut wait, now);
+            }
+            got.extend(arrived(&dxkeeper));
+            assert_eq!(calls(&got), names(0, 5));
+            drop(dxkeeper);
+
+            now += 2;
+            tick(&engine, port, &mut wait, now);
+            assert!(!wait.connected, "the send found it gone");
+            assert_eq!(waiting(&engine), 7, "nothing unsent was lost");
+
+            let dxkeeper = listen(port);
+            now += crate::DXKEEPER_CHECK_SECS;
+            let mut got = Vec::new();
+            for _ in 0..9 {
+                tick(&engine, port, &mut wait, now);
+                got.extend(arrived(&dxkeeper));
+                now += 2;
+            }
+            assert_eq!(calls(&got), names(5, 12), "the rest, and only the rest");
+            assert_eq!(waiting(&engine), 0);
+        }
+
+        /// A closed DXKeeper is looked for on the ladder and then each minute, and between those
+        /// times nothing connects at all. Its failed checks add no line of their own.
+        #[test]
+        fn a_closed_dxkeeper_is_checked_at_the_slow_interval() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let mut wait = DxkeeperWait::default();
+            logged_closed(&engine, port, 1, &mut wait);
+            assert_eq!(
+                wait.next_check_unix,
+                NOW + 4,
+                "the failed send's first step"
+            );
+            let mut now = NOW;
+            for step in [8, 16, 32, 60, 60, 60] {
+                now = wait.next_check_unix;
+                tick(&engine, port, &mut wait, now);
+                assert_eq!(wait.next_check_unix, now + step);
+            }
+            let dxkeeper = listen(port);
+            tick(&engine, port, &mut wait, now + 59);
+            assert_eq!(arrived(&dxkeeper).len(), 0, "not due");
+            tick(&engine, port, &mut wait, now + 60);
+            assert_eq!(arrived(&dxkeeper).len(), 1, "due");
+            assert_eq!(waiting(&engine), 1, "and a check sends nothing");
+        }
+
+        /// However many contacts and failed checks, the Connections log holds one line for them.
+        #[test]
+        fn the_connections_log_holds_one_line_for_what_waits() {
+            let _one = one_at_a_time();
+            let standing = || {
+                crate::CONN_LOG
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|ev| ev.standing && ev.connector == "DXKeeper")
+                    .count()
+            };
+            let engine = engine(free_port());
+            let port = free_port();
+            let mut wait = DxkeeperWait::default();
+            logged_closed(&engine, port, 3, &mut wait);
+            for now in [NOW + 10, NOW + 100, NOW + 200] {
+                tick(&engine, port, &mut wait, now);
+                assert_eq!(standing(), 1);
+            }
+            let p = log(&engine, "K9WT");
+            pass(&engine, p, port, false, &mut wait);
+            tick(&engine, port, &mut wait, NOW + 300);
+            assert_eq!((standing(), wait.said), (1, 4));
+
+            let _dxkeeper = listen(port);
+            let mut now = NOW + 400;
+            for _ in 0..6 {
+                tick(&engine, port, &mut wait, now);
+                now += 2;
+            }
+            assert_eq!(waiting(&engine), 0);
+            assert_eq!(standing(), 0, "the delivered line replaces it");
+
+            assert!(crate::dxkeeper_waiting_line(4, 0).contains("4 waiting for DXKeeper"));
+            let lost = crate::dxkeeper_waiting_line(4, 7);
+            assert!(
+                lost.contains("7 sent, then the connection was lost"),
+                "{lost}"
+            );
+        }
+
+        /// A contact logged while others wait joins them untried: no connection per contact, and
+        /// it does not overtake them when DXKeeper is back.
+        #[test]
+        fn a_new_contact_joins_the_wait_behind_the_others() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let mut wait = DxkeeperWait::default();
+            logged_closed(&engine, port, 2, &mut wait);
+            let dxkeeper = listen(port);
+            let p = log(&engine, "K2WT");
+            pass(&engine, p, port, false, &mut wait);
+            assert_eq!(arrived(&dxkeeper).len(), 0, "untried");
+            assert_eq!(waiting(&engine), 3);
+            let mut now = NOW + 60;
+            let mut got = Vec::new();
+            for _ in 0..4 {
+                tick(&engine, port, &mut wait, now);
+                got.extend(arrived(&dxkeeper));
+                now += 2;
+            }
+            assert_eq!(calls(&got), names(0, 3));
+        }
+
+        /// A send that connected is never repeated: not by a service's retries, and not by anything
+        /// that waits after it.
+        #[test]
+        fn a_service_retry_does_not_send_to_dxkeeper_again() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let dxkeeper = listen(port);
+            let mut wait = DxkeeperWait::default();
+            let mut p = log(&engine, "K1SVC");
+            for attempts in 1..=8 {
+                pass(&engine, p, port, true, &mut wait);
+                tick(&engine, port, &mut wait, NOW + i64::from(attempts));
+                p = take(&engine).pop().expect("N3FJP is closed: it comes back");
+                assert_eq!(p.legs, legs::N3FJP, "for the service alone");
+                assert_eq!(p.attempts, attempts);
+            }
+            assert_eq!(calls(&arrived(&dxkeeper)), ["K1SVC"], "one copy");
+            assert_eq!(waiting(&engine), 0);
+        }
+
+        /// DXKeeper's wait sends nothing to a service that already has the contact, and leaves a
+        /// failing service's retries on their own ladder.
+        #[test]
+        fn dxkeepers_wait_does_not_touch_a_service() {
+            let _one = one_at_a_time();
+            let n3fjp_port = free_port();
+            let n3fjp = listen(n3fjp_port);
+            let engine = engine(n3fjp_port);
+            let port = free_port();
+            let mut wait = DxkeeperWait::default();
+            let p = log(&engine, "K1RVS");
+            pass(&engine, p, port, true, &mut wait);
+            assert_eq!(arrived(&n3fjp).len(), 1, "premise: the service took it");
+            assert!(take(&engine).is_empty(), "the service owes nothing");
+            assert_eq!(waiting(&engine), 1);
+
+            let dxkeeper = listen(port);
+            let mut now = NOW + 60;
+            for _ in 0..3 {
+                tick(&engine, port, &mut wait, now);
+                now += 2;
+            }
+            assert_eq!(calls(&arrived(&dxkeeper)), ["K1RVS"]);
+            assert_eq!(arrived(&n3fjp).len(), 0, "and no second copy");
+            drop(dxkeeper);
+            drop(n3fjp);
+
+            // The other way about: both closed. The service alone goes back on the queue.
+            let p = log(&engine, "K2RVS");
+            pass(&engine, p, port, true, &mut wait);
+            let q = take(&engine);
+            assert_eq!(q.len(), 1);
+            assert_eq!((q[0].legs, q[0].attempts), (legs::N3FJP, 1));
+            assert_eq!(waiting(&engine), 1, "and DXKeeper's half waits");
+        }
+
+        /// Another program's contact never goes, on the first pass or through the wait.
+        #[test]
+        fn another_programs_contact_never_reaches_dxkeeper() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let dxkeeper = listen(port);
+            let mut p = log(&engine, "K1OTH");
+            p.rec.extra.push((
+                tempo_app::log_intake::VIA_FIELD.to_string(),
+                "WSJT-X".to_string(),
+            ));
+            let mut wait = DxkeeperWait::default();
+            pass(&engine, p, port, false, &mut wait);
+            tick(&engine, port, &mut wait, NOW);
+            assert_eq!(arrived(&dxkeeper).len(), 0);
+            assert!(take(&engine).is_empty());
+            assert_eq!(waiting(&engine), 0);
+        }
+
+        /// A write that failed after connecting may have arrived. It is not repeated, in either
+        /// place it can happen, and the connection is taken as lost.
+        #[test]
+        fn a_send_that_may_have_arrived_is_not_retried() {
+            use tempo_net::dxkeeper::PushError;
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let mut wait = DxkeeperWait::default();
+            logged_closed(&engine, port, 2, &mut wait);
+            let rec = crate::engine_lock(&engine)
+                .dxkeeper_oldest_waiting()
+                .unwrap();
+            wait.connected = true;
+            crate::dxkeeper_settle_waiting(
+                &engine,
+                &mut wait,
+                &rec,
+                Err(PushError::Unsure("DXKeeper send: reset".into())),
+                NOW,
+            );
+            assert_eq!(waiting(&engine), 1, "not waiting any more");
+            assert_ne!(
+                crate::engine_lock(&engine)
+                    .dxkeeper_oldest_waiting()
+                    .unwrap()
+                    .call,
+                rec.call
+            );
+            assert!(!wait.connected);
+            let line = crate::dxkeeper_unsure_line(&rec, "DXKeeper send: reset");
+            assert!(line.contains("K0WT (20m CW"), "{line}");
+            assert!(line.contains("not sent again"), "{line}");
+        }
+
+        /// EXIT. What waits is on disk: the next launch has every contact still waiting, none on the
+        /// service queue, and sends each once. What was sent before the exit does not go again.
+        #[test]
+        fn what_waits_survives_an_exit_and_what_went_does_not_go_again() {
+            let _one = one_at_a_time();
+            let dir = std::env::temp_dir().join(format!(
+                "nexus-dxk-wait-{}-{}",
+                std::process::id(),
+                free_port()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("contest_held_uploads.json");
+            let port = free_port();
+            let launch = |path: &std::path::Path| {
+                let engine = engine(free_port());
+                {
+                    let mut e = crate::engine_lock(&engine);
+                    e.set_contest_held_uploads_path(path.to_path_buf());
+                    e.restore_contest_held_uploads(NOW);
+                }
+                engine
+            };
+
+            let engine = launch(&path);
+            let mut wait = DxkeeperWait::default();
+            logged_closed(&engine, port, 12, &mut wait);
+            // Three go, and then Nexus is closed.
+            let dxkeeper = listen(port);
+            let mut now = NOW + 60;
+            let mut got = Vec::new();
+            for _ in 0..4 {
+                tick(&engine, port, &mut wait, now);
+                now += 2;
+            }
+            got.extend(arrived(&dxkeeper));
+            assert_eq!(calls(&got), names(0, 3));
+            drop(engine);
+
+            let engine = launch(&path);
+            assert!(take(&engine).is_empty(), "none on the paced service queue");
+            assert_eq!(waiting(&engine), 9, "the rest wait");
+            let mut wait = DxkeeperWait::default();
+            let mut got = Vec::new();
+            for _ in 0..11 {
+                tick(&engine, port, &mut wait, now);
+                got.extend(arrived(&dxkeeper));
+                now += 2;
+            }
+            assert_eq!(calls(&got), names(3, 12), "each once");
+            assert!(!path.exists(), "and nothing is left owing");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// A contact contest mode held, across a restart, as one that owes the services too. While
+        /// it waits, the leg stays in its file; once sent, the file no longer owes it.
+        #[test]
+        fn a_held_contact_waits_too_and_goes_once() {
+            let _one = one_at_a_time();
+            let dir = std::env::temp_dir().join(format!(
+                "nexus-dxk-held-{}-{}",
+                std::process::id(),
+                free_port()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("contest_held_uploads.json");
+            let contest = |on: bool, e: &mut tempo_app::engine::Engine| {
+                let mut s = e.settings().clone();
+                s.fd_active = on;
+                s.fd_class = "3A".into();
+                s.fd_section = "WI".into();
+                e.apply_settings(s);
+            };
+            let port = free_port();
+            let engine = self::engine(free_port());
+            {
+                let mut e = crate::engine_lock(&engine);
+                e.set_contest_held_uploads_path(path.clone());
+                contest(true, &mut e);
+                e.set_mode("fieldday-sp").unwrap();
+                e.log_qso(
+                    tempo_core::logbook::parse_adif(
+                        "<CALL:5>K1HLD<QSO_DATE:8>20261014<TIME_ON:6>120000<BAND:3>20m\
+                         <MODE:2>CW<EOR>",
+                    )
+                    .pop()
+                    .unwrap(),
+                );
+                assert!(e.take_pending_uploads().is_empty(), "premise: held");
+                contest(false, &mut e);
+            }
+            let p = take(&engine).pop().expect("released");
+            let mut wait = DxkeeperWait::default();
+            pass(&engine, p, port, false, &mut wait);
+            assert_eq!(waiting(&engine), 1);
+            drop(engine);
+
+            let engine = self::engine(free_port());
+            {
+                let mut e = crate::engine_lock(&engine);
+                e.set_contest_held_uploads_path(path.clone());
+                e.restore_contest_held_uploads(NOW);
+            }
+            assert_eq!(waiting(&engine), 1, "still owed");
+            let dxkeeper = listen(port);
+            let mut wait = DxkeeperWait::default();
+            let mut now = NOW;
+            for _ in 0..3 {
+                tick(&engine, port, &mut wait, now);
+                now += 2;
+            }
+            assert_eq!(calls(&arrived(&dxkeeper)), ["K1HLD"]);
+            assert!(!path.exists(), "sent: not sent again");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     /// Every service push sends the contact `upload_record` makes of its row, and the DXKeeper
@@ -41159,9 +41835,13 @@ mod upload_record_tests {
         }
         let launch = body(src, "start_on_the_logbook");
         assert!(launch.contains("wire_country_resolvers(&mut eng);"));
-        assert!(launch.contains("dxkeeper_push_async(host, base, uploads, dxkeeper_adif(&rec));"));
+        let send = body(src, "send_queued_upload");
+        assert!(body(src, "dxkeeper_send").contains("dxkeeper_adif(rec)"));
+        // The one push asks what the record still owes.
+        assert!(send.contains("dxkeeper_target_for(dxk, &p)"));
+        assert!(!body(src, "auto_push_one").contains("DXKEEPER"));
         assert!(body(src, "dxkeeper_adif").contains("log_queries::sent(rec.clone())"));
-        assert_eq!(launch.matches("dxkeeper_push_async(").count(), 1);
+        assert_eq!(src.matches(concat!("dxkeeper::", "push_qso(")).count(), 1);
     }
 
     /// DXKeeper gets the operator's own record, private note included, but never a grid kept for
@@ -42360,15 +43040,6 @@ fn n3fjp_push_qso_impl(dto: &LoggedQso, engine: &SharedEngine) -> Result<(), Str
     tempo_net::n3fjp::push_qso(&host, port, &push)
 }
 
-/// Forward ONE logged QSO to DXKeeper's TCP Network Service, off-thread.
-///
-/// Fire-and-forget by design. DXKeeper never acknowledges a directive, so there is nothing
-/// to wait for — and the connect carries a 3 s timeout, which inline would stall EVERY log
-/// by three seconds whenever DXKeeper simply is not running. That is the common case (the
-/// operator has Nexus open and DXLab closed), so it must not be on the logging path.
-///
-/// Failures land in the connector log rather than a toast: a logger that is not running is
-/// not an error worth interrupting an operator mid-QSO.
 /// Send one HRD Logbook datagram, returning whether it was DELIVERED. HRD's QSO-Forwarding
 /// listener does not ack, so delivery cannot be confirmed positively over UDP — but a
 /// CONNECTED socket lets the OS report a closed listener: on localhost a datagram to a port
@@ -42406,34 +43077,245 @@ fn dxkeeper_adif(rec: &tempo_core::logbook::QsoRecord) -> String {
     tempo_core::logbook::adif_record_own_logger(&log_queries::sent(rec.clone()))
 }
 
-/// Where the upload worker pushes `rec` in DXKeeper (`dxk`, the push's host, base port and uploads
-/// switch while it is on): nowhere for a contact another program logged into Nexus
+/// Where the upload worker pushes queued record `p` in DXKeeper (`dxk`, the push's host, base port
+/// and uploads switch while it is on): nowhere unless `p` still owes DXKeeper its one send
+/// ([`tempo_app::engine::upload_legs::DXKEEPER`]), so no retry, held leg or catch-up sends a contact
+/// again; and nowhere for a contact another program logged into Nexus
 /// (`tempo_app::log_intake::from_another_program`), since DXKeeper may be the program that sent it
 /// and it would come back in.
+///
+/// What it owes, and not `attempts` or the origin: a leg held for its key comes back with no attempt
+/// spent and still `Live`, and a contact contest mode held makes its first pass as a `CatchUp`.
 fn dxkeeper_target_for(
     dxk: Option<&(String, u16, bool)>,
-    rec: &tempo_core::logbook::QsoRecord,
+    p: &tempo_app::engine::PendingUpload,
 ) -> Option<(String, u16, bool)> {
-    dxk.filter(|_| !tempo_app::log_intake::from_another_program(rec))
+    use tempo_app::engine::upload_legs::DXKEEPER;
+    dxk.filter(|_| p.legs & DXKEEPER != 0 && !tempo_app::log_intake::from_another_program(&p.rec))
         .cloned()
 }
 
-fn dxkeeper_push_async(host: String, base_port: u16, uploads: bool, adif: String) {
-    std::thread::spawn(move || {
-        match tempo_net::dxkeeper::push_qso(&host, base_port, &adif, uploads) {
-            Ok(()) => conn_log(
+/// Seconds between checks for a DXKeeper that stays closed. The first checks of an outage come
+/// sooner, on the shared ladder ([`tempo_app::engine::upload_backoff_secs`]: 4, 8, 16 and 32 s),
+/// for the DXKeeper that was only just being started.
+const DXKEEPER_CHECK_SECS: i64 = 60;
+
+/// Where the upload worker has got to with the contacts waiting for DXKeeper
+/// ([`tempo_app::engine::Engine::dxkeeper_hold`]). The contacts themselves are the engine's; this is
+/// only the worker's own schedule, so it starts over at a launch, with a check at once.
+#[derive(Default)]
+struct DxkeeperWait {
+    /// A check found DXKeeper, so one waiting contact goes per worker tick (2 s).
+    connected: bool,
+    /// Connections that have failed since the last send that got through.
+    failures: u8,
+    next_check_unix: i64,
+    /// Sent since the wait began, for the line that says they were.
+    delivered: usize,
+    /// The count the standing Connections line gives.
+    said: usize,
+}
+
+impl DxkeeperWait {
+    fn connection_failed(&mut self, now_unix: i64) {
+        self.connected = false;
+        self.failures = self.failures.saturating_add(1);
+        self.next_check_unix = now_unix
+            + tempo_app::engine::upload_backoff_secs(self.failures).min(DXKEEPER_CHECK_SECS);
+    }
+}
+
+/// A contact as a DXKeeper line names it.
+fn dxkeeper_qso_words(rec: &tempo_core::logbook::QsoRecord) -> String {
+    let (y, mo, d, h, mi, _) = tempo_core::logbook::datetime_utc(rec.when_unix);
+    format!(
+        "{} ({} {}, {y:04}-{mo:02}-{d:02} {h:02}:{mi:02}Z)",
+        rec.call, rec.band, rec.mode
+    )
+}
+
+/// What the Connections log says of a contact whose send connected and then failed: it may have
+/// arrived, and is never sent again.
+fn dxkeeper_unsure_line(rec: &tempo_core::logbook::QsoRecord, why: &str) -> String {
+    format!(
+        "{why} — the QSO with {} may or may not have arrived, and is not sent again in case it \
+         did; check DXKeeper's log, and if it is missing, use Logbook ▸ Export ADIF and import the \
+         file into DXKeeper",
+        dxkeeper_qso_words(rec)
+    )
+}
+
+/// What the Connections log says of a contact past the ceiling on what can wait.
+fn dxkeeper_past_ceiling_line(rec: &tempo_core::logbook::QsoRecord) -> String {
+    format!(
+        "not delivered: the QSO with {}, because {} contacts are waiting for DXKeeper, the most \
+         Nexus keeps; to add it, use Logbook ▸ Export ADIF and import the file into DXKeeper",
+        dxkeeper_qso_words(rec),
+        tempo_app::engine::CONTEST_HELD_UPLOADS_CAP
+    )
+}
+
+/// The one standing line while contacts wait and DXKeeper does not answer.
+fn dxkeeper_waiting_line(count: usize, delivered: usize) -> String {
+    let sent = if delivered > 0 {
+        format!("{delivered} sent, then the connection was lost; ")
+    } else {
+        String::new()
+    };
+    format!(
+        "{sent}{count} waiting for DXKeeper, which is not answering (is Network Service enabled in \
+         DXKeeper ▸ Configuration ▸ Defaults?). Nexus checks every minute and sends each one once \
+         when it answers"
+    )
+}
+
+/// One send to DXKeeper, the only one in the app.
+fn dxkeeper_send(
+    (host, base, uploads): &(String, u16, bool),
+    rec: &tempo_core::logbook::QsoRecord,
+) -> Result<(), tempo_net::dxkeeper::PushError> {
+    // ⭐ THE PRIVATE NOTE RIDES ALONG HERE, deliberately — the one outbound
+    // call site that does. DXKeeper is the operator's OWN logging software on
+    // their OWN machine (a failed connect just means DXLab is not running),
+    // reached point-to-point as the master log they
+    // nominated. That is their data moving between their own programs, not a
+    // publication, and stripping it would leave their master log missing what
+    // they typed in Nexus. The line this fix draws is a nominated local logger
+    // vs a service or a broadcast — flip this one word if the operator wants it
+    // drawn elsewhere. Its COUNTRY is the one its DXCC number gives it, as
+    // every service's is (`log_queries::sent`).
+    tempo_net::dxkeeper::push_qso(host, *base, &dxkeeper_adif(rec), *uploads)
+}
+
+/// Keep `rec` for DXKeeper, and name what the ceiling put out, if anything.
+fn dxkeeper_hold(engine: &SharedEngine, rec: &tempo_core::logbook::QsoRecord) {
+    let past_ceiling = engine_lock_result(engine)
+        .unwrap_or_else(|e| e.into_inner())
+        .dxkeeper_hold(rec);
+    if let Some(gone) = past_ceiling {
+        conn_log("DXKeeper", "error", dxkeeper_past_ceiling_line(&gone));
+    }
+}
+
+/// What one send of the oldest waiting contact came to.
+///
+/// ⛔ ONLY A CONNECTION THAT FAILED LEAVES IT WAITING. DXKeeper never acknowledges, so a contact it
+/// was sent can never be told from one it lost, and sending it again is what filled master logs
+/// with copies. So a send that connected is finished whatever became of it. That includes the
+/// ambiguous case, a connection made and the write then failing, where DXKeeper may hold the whole
+/// directive: it is not repeated, and its line names the contact.
+fn dxkeeper_settle_waiting(
+    engine: &SharedEngine,
+    wait: &mut DxkeeperWait,
+    rec: &tempo_core::logbook::QsoRecord,
+    result: Result<(), tempo_net::dxkeeper::PushError>,
+    now_unix: i64,
+) {
+    use tempo_app::engine::upload_legs::DXKEEPER;
+    use tempo_net::dxkeeper::PushError;
+    let spent = match result {
+        Ok(()) => {
+            wait.delivered += 1;
+            wait.failures = 0;
+            true
+        }
+        Err(PushError::NotConnected(_)) => {
+            wait.connection_failed(now_unix);
+            false
+        }
+        Err(PushError::Unsure(why)) => {
+            conn_log("DXKeeper", "error", dxkeeper_unsure_line(rec, &why));
+            wait.connection_failed(now_unix);
+            true
+        }
+    };
+    if spent {
+        engine_lock_result(engine)
+            .unwrap_or_else(|e| e.into_inner())
+            .contest_upload_done(rec, DXKEEPER);
+    }
+}
+
+/// The upload worker's tick for the contacts waiting for DXKeeper.
+///
+/// While it does not answer, a connection and nothing more, at [`DXKEEPER_CHECK_SECS`]: no contact
+/// leaves, the attempts write no line, and one standing Connections line says how many wait. Once a
+/// check finds it, one contact per tick, oldest first, because DXKeeper closes and reopens its port
+/// after each directive. If a connection fails part-way, what is unsent waits for the next check.
+fn dxkeeper_wait_tick(
+    engine: &SharedEngine,
+    dxk: Option<&(String, u16, bool)>,
+    wait: &mut DxkeeperWait,
+    now_unix: i64,
+) {
+    use tempo_app::engine::upload_legs::DXKEEPER;
+    let Some(target) = dxk else {
+        return;
+    };
+    let (oldest, count) = {
+        let eng = engine_lock_result(engine).unwrap_or_else(|e| e.into_inner());
+        (eng.dxkeeper_oldest_waiting(), eng.dxkeeper_waiting_count())
+    };
+    let Some(rec) = oldest else {
+        if wait.said > 0 || wait.delivered > 0 {
+            conn_log_standing_ends("DXKeeper");
+        }
+        if wait.delivered > 0 {
+            conn_log(
                 "DXKeeper",
                 "ok",
-                // Deliberately not "logged" — we cannot know that. DXKeeper replies to
-                // nothing; its Server Log is the only place a rejection shows up.
                 format!(
-                    "sent to {host}:{}",
-                    tempo_net::dxkeeper::port_for_base(base_port)
+                    "delivered: {} of the contacts waiting for DXKeeper sent, and none waits now",
+                    wait.delivered
                 ),
-            ),
-            Err(e) => conn_log("DXKeeper", "error", e),
+            );
         }
-    });
+        *wait = DxkeeperWait::default();
+        return;
+    };
+    // …never a contact another program logged into Nexus, however it came to be owing.
+    if tempo_app::log_intake::from_another_program(&rec) {
+        engine_lock_result(engine)
+            .unwrap_or_else(|e| e.into_inner())
+            .contest_upload_done(&rec, DXKEEPER);
+        return;
+    }
+    if !wait.connected {
+        if wait.said != count {
+            let line = dxkeeper_waiting_line(count, wait.delivered);
+            conn_log_standing("DXKeeper", "error", line);
+            wait.said = count;
+        }
+        if now_unix >= wait.next_check_unix {
+            match tempo_net::dxkeeper::test_connection(&target.0, target.1) {
+                // The next tick sends: the port has just been opened and closed.
+                Ok(_) => wait.connected = true,
+                Err(_) => wait.connection_failed(now_unix),
+            }
+        }
+        return;
+    }
+    let result = dxkeeper_send(target, &rec);
+    dxkeeper_settle_waiting(engine, wait, &rec, result, now_unix);
+    let left = engine_lock_result(engine)
+        .unwrap_or_else(|e| e.into_inner())
+        .dxkeeper_waiting_count();
+    if wait.connected && left > 0 {
+        conn_log_standing(
+            "DXKeeper",
+            "info",
+            format!("sending the waiting contacts, one at a time: {left} still waiting"),
+        );
+        wait.said = left;
+    } else if !wait.connected && left > 0 {
+        // Said at once, as the count may not change while it waits.
+        conn_log_standing(
+            "DXKeeper",
+            "error",
+            dxkeeper_waiting_line(left, wait.delivered),
+        );
+        wait.said = left;
+    }
 }
 
 /// Forward ONE logged QSO to a Cloudlog/Wavelog instance (HTTP JSON ADIF POST). URL +
@@ -42721,6 +43603,119 @@ fn cloudlog_class_name(class: propagation::live::cloudlog::CloudlogFailure) -> &
         F::RecordRefused => "RecordRefused",
         F::ServerError => "ServerError",
         F::Refused => "Refused",
+    }
+}
+
+/// One due record's trip through the upload worker: `legs` is what it sends now
+/// ([`legs_to_send_now`]). DXKeeper first, then every service it owes. What a service failed for a
+/// reason that may pass goes back on the queue, and only that; DXKeeper has its own wait.
+fn send_queued_upload(
+    engine: &SharedEngine,
+    p: tempo_app::engine::PendingUpload,
+    legs: u8,
+    dxk: Option<&(String, u16, bool)>,
+    on: ConnectorToggles,
+    wait: &mut DxkeeperWait,
+    now_unix: i64,
+) {
+    use tempo_app::engine::upload_legs::DXKEEPER;
+    use tempo_net::dxkeeper::PushError;
+    let rec = p.rec.clone();
+    // DXKeeper never acknowledges, so a send that connected is the end of the leg, whatever became
+    // of it. A connection that failed delivered nothing, and almost always just means DXLab is not
+    // running: the contact waits for it, on the engine's held list so that it outlives this run
+    // ([`dxkeeper_wait_tick`]). With contacts already waiting this one joins them untried, so they
+    // go oldest first and a closed DXKeeper costs no connection per contact.
+    // …never a contact another program logged into Nexus (`tempo_app::log_intake`): DXKeeper may
+    // be the program that sent it, and it would come back in.
+    let mut dxk_waits = false;
+    if let Some(target) = dxkeeper_target_for(dxk, &p) {
+        let others_waiting = engine_lock_result(engine)
+            .unwrap_or_else(|e| e.into_inner())
+            .dxkeeper_waiting_count()
+            > 0;
+        dxk_waits = others_waiting;
+        if !others_waiting {
+            match dxkeeper_send(&target, &rec) {
+                // Deliberately not "logged" — we cannot know that. DXKeeper replies to nothing; its
+                // Server Log is the only place a rejection shows up.
+                Ok(()) => conn_log(
+                    "DXKeeper",
+                    "ok",
+                    format!("sent the QSO with {}", dxkeeper_qso_words(&rec)),
+                ),
+                Err(PushError::NotConnected(_)) => {
+                    wait.connection_failed(now_unix);
+                    dxk_waits = true;
+                }
+                Err(PushError::Unsure(why)) => {
+                    conn_log("DXKeeper", "error", dxkeeper_unsure_line(&rec, &why));
+                }
+            }
+        }
+        if dxk_waits {
+            dxkeeper_hold(engine, &rec);
+        }
+    }
+    // Written down before the services are tried, which can take a while: a quit in between must
+    // not send a held contact to DXKeeper again at the next launch.
+    if legs & DXKEEPER != 0 && !dxk_waits {
+        engine_lock_result(engine)
+            .unwrap_or_else(|e| e.into_inner())
+            .contest_upload_done(&rec, DXKEEPER);
+    }
+    let services = legs & !DXKEEPER;
+    let failed = auto_push_one(engine, LoggedQso::from(p.rec), on, services);
+    let capped = cap_hrdlog_retries(failed, p.attempts);
+    if capped != failed {
+        conn_log(
+            "HRDLog.net",
+            "error",
+            format!(
+                "gave up on the QSO with {} after {HRDLOG_MAX_RETRIES} retries — \
+                 push it again from the Logbook",
+                rec.call
+            ),
+        );
+    }
+    // Every leg it owed but did not fail transiently is done: sent, or refused for
+    // good. A contact contest mode held stays in its file until it owes nothing, so
+    // a quit part-way through the paced release sends the rest at the next launch.
+    // `failed` before the HRDLog cap: a leg that cap gives up on is retried then.
+    let done = services & !failed;
+    if done != 0 {
+        engine_lock_result(engine)
+            .unwrap_or_else(|e| e.into_inner())
+            .contest_upload_done(&rec, done);
+    }
+    let failed = capped;
+    // Transient failures (network down / service busy) → re-queue ONLY
+    // the legs that failed so the next tick retries them, without
+    // re-pushing the legs that already succeeded (no double-upload).
+    if failed != 0 {
+        let attempts = p.attempts.saturating_add(1);
+        // #290: at the budget the re-queue below drops the record without a
+        // word — say so here, while the contact is still in hand.
+        let given_up = GivenUpQso {
+            call: &rec.call,
+            band: &rec.band,
+            mode: &rec.mode,
+            when_unix: rec.when_unix,
+        };
+        for (service, line) in upload_give_up_lines(failed, attempts, &given_up) {
+            conn_log(service, "error", line);
+        }
+        let due = now_unix + tempo_app::engine::upload_backoff_secs(attempts);
+        let mut eng = engine_lock_result(engine).unwrap_or_else(|e| e.into_inner());
+        // `p.origin` CARRIED, not re-derived: a catch-up record that blips on
+        // the network must come back as a catch-up record, or the retry would
+        // re-enter the queue as if it were a live contact (#193).
+        // PACED, not stamped-and-forgotten. `requeue_after_failure` keeps a
+        // catch-up record in the pacing lane instead of letting its backoff put
+        // it back in the free-for-all: a busy ClubLog fails everything that
+        // comes due, and without this they would all be due in the past when it
+        // recovers and leave inside one tick — the burst again, compressed.
+        eng.requeue_after_failure(rec, failed, attempts, due, p.origin);
     }
 }
 
@@ -49797,6 +50792,7 @@ fn start_on_the_logbook(
     // Runs regardless of the `radio` feature: Companion-sourced QSOs upload too.
     {
         let push_engine = engine.clone();
+        let mut dxk_wait = DxkeeperWait::default();
         std::thread::spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_secs(2));
             let (
@@ -49984,33 +50980,15 @@ fn start_on_the_logbook(
                 // waits on the queue, unspent, and the rest go now.
                 let legs = legs_to_send_now(&push_engine, &p, now_unix, &mut catchup_left);
                 if legs == 0 {
-                    // Nothing else owed: nothing goes anywhere, DXKeeper included, which saw
-                    // this contact the first time it came round.
+                    // Nothing goes anywhere now: the leg left on the queue is a held one, and
+                    // DXKeeper's was not owed.
                     continue;
                 }
-                let rec = p.rec.clone();
-                // DXKeeper is deliberately OUTSIDE the legs/retry machinery: it never
-                // acknowledges, so there is no success to distinguish from failure and
-                // nothing meaningful to retry. A failed connect almost always just means
-                // DXLab is not running. Fire it and move on.
-                // …but never a contact another program logged into Nexus (`tempo_app::log_intake`):
-                // DXKeeper may be the program that sent it, and it would come back in.
-                if let Some((host, base, uploads)) = dxkeeper_target_for(dxk.as_ref(), &rec) {
-                    // ⭐ THE PRIVATE NOTE RIDES ALONG HERE, deliberately — the one outbound
-                    // call site that does. DXKeeper is the operator's OWN logging software on
-                    // their OWN machine (the comment above says it: a failed connect just means
-                    // DXLab is not running), reached point-to-point as the master log they
-                    // nominated. That is their data moving between their own programs, not a
-                    // publication, and stripping it would leave their master log missing what
-                    // they typed in Nexus. The line this fix draws is a nominated local logger
-                    // vs a service or a broadcast — flip this one word if the operator wants it
-                    // drawn elsewhere. Its COUNTRY is the one its DXCC number gives it, as
-                    // every service's is (`log_queries::sent`).
-                    dxkeeper_push_async(host, base, uploads, dxkeeper_adif(&rec));
-                }
-                let failed = auto_push_one(
+                send_queued_upload(
                     &push_engine,
-                    LoggedQso::from(p.rec),
+                    p,
+                    legs,
+                    dxk.as_ref(),
                     ConnectorToggles {
                         qrz_on,
                         clublog_on: clublog_live,
@@ -50020,61 +50998,11 @@ fn start_on_the_logbook(
                         n3fjp_on,
                         cloudlog_on,
                     },
-                    legs,
+                    &mut dxk_wait,
+                    now_unix,
                 );
-                let capped = cap_hrdlog_retries(failed, p.attempts);
-                if capped != failed {
-                    conn_log(
-                        "HRDLog.net",
-                        "error",
-                        format!(
-                            "gave up on the QSO with {} after {HRDLOG_MAX_RETRIES} retries — \
-                             push it again from the Logbook",
-                            rec.call
-                        ),
-                    );
-                }
-                // Every leg it owed but did not fail transiently is done: sent, or refused for
-                // good. A contact contest mode held stays in its file until it owes nothing, so
-                // a quit part-way through the paced release sends the rest at the next launch.
-                // `failed` before the HRDLog cap: a leg that cap gives up on is retried then.
-                let done = legs & !failed;
-                if done != 0 {
-                    engine_lock_result(&push_engine)
-                        .unwrap_or_else(|e| e.into_inner())
-                        .contest_upload_done(&rec, done);
-                }
-                let failed = capped;
-                // Transient failures (network down / service busy) → re-queue ONLY
-                // the legs that failed so the next tick retries them, without
-                // re-pushing the legs that already succeeded (no double-upload).
-                if failed != 0 {
-                    let attempts = p.attempts.saturating_add(1);
-                    // #290: at the budget the re-queue below drops the record without a
-                    // word — say so here, while the contact is still in hand.
-                    let given_up = GivenUpQso {
-                        call: &rec.call,
-                        band: &rec.band,
-                        mode: &rec.mode,
-                        when_unix: rec.when_unix,
-                    };
-                    for (service, line) in upload_give_up_lines(failed, attempts, &given_up) {
-                        conn_log(service, "error", line);
-                    }
-                    let due = now_unix + tempo_app::engine::upload_backoff_secs(attempts);
-                    let mut eng =
-                        engine_lock_result(&push_engine).unwrap_or_else(|e| e.into_inner());
-                    // `p.origin` CARRIED, not re-derived: a catch-up record that blips on
-                    // the network must come back as a catch-up record, or the retry would
-                    // re-enter the queue as if it were a live contact (#193).
-                    // PACED, not stamped-and-forgotten. `requeue_after_failure` keeps a
-                    // catch-up record in the pacing lane instead of letting its backoff put
-                    // it back in the free-for-all: a busy ClubLog fails everything that
-                    // comes due, and without this they would all be due in the past when it
-                    // recovers and leave inside one tick — the burst again, compressed.
-                    eng.requeue_after_failure(rec, failed, attempts, due, p.origin);
-                }
             }
+            dxkeeper_wait_tick(&push_engine, dxk.as_ref(), &mut dxk_wait, now_unix);
             // HRD Logbook drain (F4MQS): the datagram used to be fire-and-forget from
             // log_qso, so a QSO logged while HRD was closed vanished. Now the engine
             // queues them and we send here — CONNECTED to the target so a closed HRD on

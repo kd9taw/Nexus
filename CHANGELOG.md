@@ -5,6 +5,13 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **DXKeeper gets each contact once.** When an upload to another service failed, for example with the internet down, every retry sent the contact to DXKeeper again, so your master log could collect a dozen or more copies of it. A catch-up of older contacts sent them to DXKeeper again too. Now a contact goes to DXKeeper once, when it is first logged or, for one held during a contest, when it is released. Copies already sent to DXKeeper are not removed, so any extras in your master log stay there until you delete them. Correcting a callsign still sends the corrected contact to DXKeeper once.
+- **Contacts wait for DXKeeper instead of being lost.** If Nexus cannot connect to DXKeeper, nothing was delivered, so the contact waits, along with any you log after it. Nexus looks for DXKeeper a few times in the first minute and then once a minute, without sending anything, and when it answers it sends each waiting contact once, oldest first, one every two seconds. If the connection drops part-way, what was sent is not sent again and the rest keep waiting. They also survive closing Nexus and go after the next launch. The Connections log keeps one line saying how many are waiting, and says when they have all been delivered. A send that connected is never repeated, since DXKeeper does not say whether it arrived: if the connection breaks during a send, a line names that contact so you can check it in DXKeeper. Nexus keeps up to 4096 waiting contacts, shared with those held for a contest; past that, the oldest one waiting is dropped and named, and you can add it with Logbook ▸ Export ADIF.
+- **Updating mid-contest keeps your DXKeeper sends.** Contacts still held from 1.23.0 that had not gone out would never have reached DXKeeper after the update. They now go when released, and ones that had already been sent do not go again.
+
 ## [1.23.0] — 2026-11-05
 
 ### Added
