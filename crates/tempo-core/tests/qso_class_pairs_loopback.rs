@@ -19,8 +19,9 @@
 //! the CQ caller drawn from one set and the answering station from the other, so both
 //! roles of every class pair are swept.
 //!
-//! **Why the channel is lossless.** This is a claim about the sequencer, so each over's
-//! text is handed straight to the other station's `observe`. Over the real modem at a fixed
+//! **Why the channel is lossless.** This is a claim about the sequencer, so each over goes
+//! through the packer and straight to the other station's `observe`: a pair the packer cannot
+//! carry still fails, with no waveform and no noise to lose a frame. Over the real modem at a fixed
 //! noise seed this test's verdict was a coin flip: a decoder miss on the wrong over strands
 //! a station one state short of `Done`, which has nothing to do with whether the arms
 //! exist. A lost over is a different question and it is not asked here.
@@ -31,9 +32,26 @@
 
 use modes::Decode;
 use tempo_core::qso::{AirLog, State, Station};
+use tempo_core::tempo_fast;
 
-/// `run_loopback_qso`'s slot loop with the modem taken out: `a` transmits on even slots, `b`
-/// on odd, and every over arrives intact, as the same record a decode would produce.
+/// What a receiver prints for `text`, with no waveform or noise in the way: the text packed to
+/// its 77 bits and unpacked again. `None` when the packer has no frame for it, so nothing is
+/// heard, and a hash the tables cannot resolve comes back as `<...>`, not as the call.
+///
+/// `tempo_fast::encode` runs first because a real transmission puts the sender's calls in the
+/// callsign tables `unpack77` reads. This process has one set of tables, so both stations share
+/// them; that is the same assumption `run_loopback_qso` made.
+fn through_the_packer(text: &str) -> Option<String> {
+    tempo_fast::encode(text);
+    let mut msg37 = [b' '; 37];
+    msg37[..text.len()].copy_from_slice(text.as_bytes());
+    let bits = modes::wsjt77::pack::pack(&msg37).ok().flatten()?;
+    tempo_fast::unpack77(&bits.map(|b| b as i8))
+}
+
+/// `run_loopback_qso`'s slot loop with the waveform and the decoder taken out: `a` transmits on
+/// even slots, `b` on odd, and every over the packer can carry arrives, as the same record a
+/// decode would produce.
 fn run_lossless_qso(a: &mut Station, b: &mut Station, max_slots: u64) -> Vec<AirLog> {
     let mut log = Vec::new();
     for slot in 0..max_slots {
@@ -44,24 +62,27 @@ fn run_lossless_qso(a: &mut Station, b: &mut Station, max_slots: u64) -> Vec<Air
         };
         if let Some(msg) = txs.outgoing() {
             let text = msg.to_text();
-            let decode = Decode {
-                message: text.clone(),
-                sync: 1.0,
-                snr: -5,
-                dt: 0.0,
-                freq: 1500.0,
-                nap: 0,
-                qual: 1.0,
-                rv: None,
-                mode: None,
-                raw: None,
-            };
+            let heard: Vec<Decode> = through_the_packer(&text)
+                .into_iter()
+                .map(|message| Decode {
+                    message,
+                    sync: 1.0,
+                    snr: -5,
+                    dt: 0.0,
+                    freq: 1500.0,
+                    nap: 0,
+                    qual: 1.0,
+                    rv: None,
+                    mode: None,
+                    raw: None,
+                })
+                .collect();
             log.push(AirLog {
                 slot,
                 from: txs.mycall.clone(),
                 text,
             });
-            rxs.observe(&[decode]);
+            rxs.observe(&heard);
             txs.after_tx();
         }
         if a.done() && b.done() {
@@ -219,6 +240,16 @@ fn every_callsign_class_pair_runs_to_73_and_logs() {
             }
         }
     }
+}
+
+#[test]
+fn the_lossless_channel_still_refuses_what_the_packer_cannot_carry() {
+    assert_eq!(
+        through_the_packer("W9XYZ KD9TAW 73").as_deref(),
+        Some("W9XYZ KD9TAW 73")
+    );
+    // A hashed CQ has no frame: it must not arrive as text the sequencer could ride.
+    assert_eq!(through_the_packer("CQ <PJ4/K1ABC> FK52"), None);
 }
 
 #[test]
