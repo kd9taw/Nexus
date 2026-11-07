@@ -308,7 +308,7 @@ describe('the boxes in a cockpit’s columns', () => {
       rec = { ...rec, place: Object.fromEntries((['a', 'b', 'log'] as const).flatMap((c) => cols[c].map((x, k) => [x, { col: c, order: k }]))) }
     }
     expect(isStockPlacement(spec, rec.place), 'the own panes are where they shipped').toBe(true)
-    const shown = (id: PhonePanelId) => !id.startsWith('box') || boxEntries(PHONE_PANELS, rec)[id] != null
+    const shown = (id: PhonePanelId) => id !== 'txMetersPane' && (!id.startsWith('box') || boxEntries(PHONE_PANELS, rec)[id] != null)
     const merged = regionGroups(spec, rec.place, 2, shown)[0].ids
     expect(merged).toEqual([
       'box1',

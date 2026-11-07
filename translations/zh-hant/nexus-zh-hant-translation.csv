@@ -10985,3 +10985,7 @@ Click for internet feed controls.","{{detail}}
 "5","phone.tune.usbAudioNote","Tune sends its tone over USB audio. If the radio keys with no power, set its SSB MOD SOURCE menu to REAR (USB).","Tune（調諧發射）透過 USB 音訊送出音調。如果電台進入發射卻沒有功率輸出，請把電台的 SSB MOD SOURCE 選單設為 REAR（USB）。","Tune | SSB MOD SOURCE | REAR (USB) | USB","Filled by the maintainer, pending translator review."
 "5","phone.tune.usbAudioNote.aria","About Tune on this radio","關於此電台上的 Tune（調諧發射）","Tune","Filled by the maintainer, pending translator review."
 "3","meters.tx.enlarge.close","Close","關閉","","Filled by the maintainer, pending translator review."
+"3","meters.tx.pane.title","TX Meters, large","發射表計(大)","","Filled by the maintainer, pending translator review."
+"3","meters.tx.pane.open","Show the large TX meters pane","顯示大發射表計窗格","","Filled by the maintainer, pending translator review."
+"3","meters.tx.pane.hide","Hide the large TX meters pane","隱藏大發射表計窗格","","Filled by the maintainer, pending translator review."
+"3","meters.tx.pane.fromDialog","Show as a pane","以窗格顯示","","Filled by the maintainer, pending translator review."

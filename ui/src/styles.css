@@ -13214,11 +13214,16 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: calc(18px * var(--text-scale));
   min-width: 4.5em;
 }
-/* The needle faces (#343) at the dialog's size too. The cockpit hosts share one 5em face, sized to the
-   TX strip's buttons; the dialog is opened to read the meters, so its faces take the room it has and
-   their name and value grow as the bars' do. They still wrap onto a second line on a narrow window. */
+/* The needle faces (#343) at the dialog's size too. The cockpit hosts have a strip's height to draw in
+   and set the readout beside the dial; the dialog is opened to read the meters and has the height, so
+   its faces are drawn whole, the band over the dial's lower half, and their name and value grow as the
+   bars' do. They still wrap onto a second line on a narrow window. (The band's rules are in the NEEDLE
+   METERS block below, which comes after these and shares them with a phone's dock.) */
 .txmeters-large .ph-txneedle {
+  flex: none;
   width: 12em;
+  min-width: 0;
+  max-width: none;
 }
 .txmeters-large .ph-txneedle-label {
   font-size: calc(14px * var(--text-scale));
@@ -13314,19 +13319,25 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 /* THE NEEDLE METERS (#343, components/TxNeedles.tsx): PO, ALC and SWR as analog faces, in place of
    their bars, when Settings ▸ Workspace ▸ TX meters is Needle. Each face is a display well: a dial
    (an SVG whose viewBox is the dial's own shape, so it scales with the face) over a band carrying the
-   meter's name and value, laid over the dial's lower half (the needle's pivot sits under it).
+   meter's name and value.
 
-   THE FACE'S SIZE IS ITS WIDTH, ONE SIZE IN EVERY HOST; its height is the dial's, from the dial's
-   aspect ratio, so the whole face is in em and follows --ui-zoom and the text size as the bars' type
-   does. It never changes with the TX cycle: the faces are drawn from the first moment the bars'
-   slots would be, at rest until a reading arrives, and the bars' compact/full switch does not reach
-   them. The size is the strip's: no taller than its buttons (measured in Chrome at 1920×1080 and
-   1366×768), and narrow enough that its COMP row keeps the room it has beside the bars.
+   THE HEIGHT IS THE STRIP'S, THE WIDTH IS WHATEVER THE HOST HAS. None of the hosts is a pane and neither
+   strip may grow taller than its buttons, so a cockpit face is as tall as its two lines of type (no
+   taller than those buttons at any text size; measured in Chrome from 900×600 to 1920×1080), the
+   readout stands BESIDE the dial, and the dial, out of flow, takes that whole height. The three faces
+   share the host's width: `7.7em` is where a dial stops being worth drawing, `14em` is where it fills
+   the height and more width would draw nothing larger. All in em, so they follow --ui-zoom and the text
+   size as the bars' type does. They never change with the TX cycle: the faces are drawn from the first
+   moment the bars' slots would be, at rest until a reading arrives, and the bars' compact/full switch
+   does not reach them.
    - The dock (Phone and CW below md): the faces and the bars left (COMP, the temperatures) share
-     one wrapping line instead of the bars' grid, so the bottom-anchored dock grows by the faces'
-     extra height over a bar row and no more.
-   - Operate's cell (`inline`): the faces take the first row of its grid.
-   - The TX strip (`strip`): the faces take a first column across both of its rows. */
+     one wrapping line instead of the bars' grid; COMP folds under the faces on a narrow window. On a
+     phone (`xs`) the line is too short for a readout beside a dial, so a face is drawn whole there, as
+     in the dialog, from the old 5em up: the line wraps nowhere it did not, and the dock is the taller
+     for it, the same height keyed and between overs.
+   - Operate's cell (`inline`, `.cq-telemetry.needle`): the faces take the first row of its grid.
+   - The TX strip (`strip`, `.cockpit-txstrip-meters-needle`): the faces take a first column across
+     both of its rows. */
 .ph-txmeters.needle {
   display: flex;
   flex-wrap: wrap;
@@ -13359,17 +13370,19 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .ph-txmeters.needle .ph-txneedles {
   grid-column: 1 / -1;
   display: flex;
+  flex: 3 1 24em;
   flex-wrap: wrap;
   gap: 2px var(--space-1);
   min-width: 0;
 }
 .ph-txneedle {
-  flex: none;
-  width: 5em;
-  min-width: 0;
+  flex: 1 1 0;
+  min-width: 7.7em;
+  max-width: 14em;
 }
 .ph-txneedle-face {
   position: relative;
+  display: flex;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--bg);
@@ -13377,7 +13390,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .ph-txneedle-dial {
   position: relative;
-  aspect-ratio: 100 / 38;
+  flex: 1 1 0;
+  min-width: 0;
 }
 .ph-txneedle-svg {
   position: absolute;
@@ -13410,18 +13424,17 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   stroke-linecap: round;
 }
 .ph-txneedle-band {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  flex: none;
+  /* A fixed width, so the dial does not change as the value does. Holds "1500 W". */
+  width: 4.4em;
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-1);
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
   padding: 0 3px;
-  line-height: 1.15;
+  line-height: 1.1;
   background: var(--bg-elev);
-  border-top: 1px solid var(--border);
+  border-left: 1px solid var(--border);
   white-space: nowrap;
 }
 .ph-txneedle-label {
@@ -13431,16 +13444,79 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-dim);
 }
 .ph-txneedle-value {
+  max-width: 100%;
   color: var(--text);
   font-variant-numeric: tabular-nums;
-  font-size: 0.74rem;
+  font-size: calc(14px * var(--text-scale));
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* The strip's two rows: the faces take both, in a first column of their own width; COMP and the
-   temperatures fill the columns after it as they do beside the bars. */
+/* DRAWN WHOLE, where there is the height for it: a dial of its own shape with the band over its lower
+   half, like a meter's pivot cover, so the needle runs in under it and no reading is ever drawn under
+   the needle. The dialog, and a phone's dock. */
+.txmeters-large .ph-txneedle-face,
+[data-viewport='xs'] .ph-txmeters.needle:not(.inline) .ph-txneedle-face {
+  display: block;
+}
+.txmeters-large .ph-txneedle-dial,
+[data-viewport='xs'] .ph-txmeters.needle:not(.inline) .ph-txneedle-dial {
+  aspect-ratio: 100 / 38;
+}
+.txmeters-large .ph-txneedle-band,
+[data-viewport='xs'] .ph-txmeters.needle:not(.inline) .ph-txneedle-band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: auto;
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1);
+  line-height: 1.15;
+  border-left: 0;
+  border-top: 1px solid var(--border);
+}
+[data-viewport='xs'] .ph-txmeters.needle:not(.inline) .ph-txneedles {
+  flex: none;
+}
+[data-viewport='xs'] .ph-txmeters.needle:not(.inline) .ph-txneedle {
+  flex: none;
+  width: clamp(5em, calc((var(--vw-eff, 100vw) - 5em) / 3), 8em);
+  min-width: 0;
+  max-width: none;
+}
+[data-viewport='xs'] .ph-txmeters.needle:not(.inline) .ph-txneedle-value {
+  font-size: 0.74rem;
+}
+/* Operate's cell has the least room of the three: on a laptop with the rotor showing the row leaves it
+   about 27em; and so has the TX strip at md. A narrower readout there, which still holds "1500 W", so
+   the dial stays about as wide as the old 5em face's was, and twice its height. */
+.ph-txmeters.inline.needle:not(.strip) .ph-txneedle-band,
+[data-viewport='md'] .ph-txmeters.inline.strip.needle .ph-txneedle-band {
+  width: 4.2em;
+}
+.ph-txmeters.inline.needle:not(.strip) .ph-txneedle-value,
+[data-viewport='md'] .ph-txmeters.inline.strip.needle .ph-txneedle-value {
+  font-size: calc(13px * var(--text-scale));
+}
+/* …and on a phone, narrow enough to fit a phone's strip on one line, as 21em did. */
+[data-viewport='xs'] .ph-txmeters.inline.needle .ph-txneedle {
+  min-width: 6.5em;
+}
+/* The strip's two rows: the faces take both, in a first column of their own. ITS WIDTH IS THE WINDOW'S,
+   NOT THE CELL'S. The cell takes what the TX state caption leaves, and the caption changes width on
+   every key and unkey ("Receiving" / "TRANSMITTING"), so a column sized by the cell resized the faces
+   on every over (measured at 1024×768: 101 ↔ 92 px). `--vw-eff` less what stands beside it (57em: the
+   nav rail, the TX cluster, the caption at its widest and room for COMP's level bar, PROC and the
+   bandwidth chip) and less the dashboard rail where one is open (DashRail publishes its width on the
+   shell), up to the three largest faces. COMP and the temperatures fill the columns after it as they do
+   beside the bars, and take the caption's swing. */
 .ph-txmeters.inline.strip.needle {
-  grid-template-columns: max-content;
+  grid-template-columns: clamp(20em, calc(var(--vw-eff, 100vw) - var(--dash-rail-taken, 0px) - 57em), 43em);
+}
+.ph-txmeters.inline.strip.needle .ph-txneedle {
+  min-width: 0;
 }
 .ph-txmeters.inline.strip.needle .ph-txneedles {
   grid-column: auto;
@@ -13452,6 +13528,48 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .ph-txmeters.idle .ph-txneedle-label,
 .ph-txmeters.idle .ph-txneedle-peak {
   opacity: 0.55;
+}
+/* THE LARGE FACE (the TX meters pane): the drawing's own ink. Its box is cockpit-panes.css's; it scales as a
+   drawing, so these sizes are in the viewBox's units, and every one grows with the pane. */
+.txmeters-pane-finetick {
+  stroke-width: 0.5;
+}
+.txmeters-pane-scale {
+  fill: var(--text-dim);
+  font-size: 4.6px;
+  font-variant-numeric: tabular-nums;
+}
+.txmeters-pane-band {
+  fill: var(--bg-elev);
+}
+.txmeters-pane-label {
+  fill: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 6.5px;
+  font-weight: 800;
+}
+.txmeters-pane-value {
+  fill: var(--text);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+.txmeters-pane-idle .txmeters-pane-value,
+.txmeters-pane-idle .txmeters-pane-label,
+.txmeters-pane-idle .ph-txneedle-peak {
+  opacity: 0.55;
+}
+/* The strip's way to that pane, and only a look: where it stands is cockpit-panes.css's. */
+.txmeters-pane-toggle {
+  color: var(--text-dim);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.txmeters-pane-toggle:hover,
+.txmeters-pane-toggle[aria-pressed='true'] {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 /* THE TRANSMIT CONTRACT — the dock's top line (2026-09-20). ONE LINE, ALWAYS: `nowrap` is
    not tidiness, it is the whole reason this sits where it does. The dock is bottom-anchored,
@@ -21561,6 +21679,19 @@ button.cq-skiptx1.on {
   min-width: 0;
   overflow: hidden;
 }
+/* With needles (OperateQsoStrip): faces need the room bars do not, and the row has it to give. A fixed
+   basis and no shrink, so the line breaks in one place; a grow that outbids .cq-spacer up to the three
+   largest faces. Nothing on this row changes width with the TX cycle (see .cq-now), so the cell does
+   not either: the anti-bounce invariant above still holds, only at a size set by the row. */
+.cq-telemetry.needle {
+  flex: 1000 0 24em;
+  width: auto;
+  max-width: min(43em, 100%);
+  /* A face's height (its two lines of type and its border) before the first over too, while the cell
+     holds only the hint: in this wider cell the hint is one line, and the first key-down would raise
+     the strip by the difference. */
+  min-height: calc(26.4px * var(--text-scale) + 2px);
+}
 /* THE TX CLUSTER, ONE SIZE ON EVERY SCREEN — FT's strip and every other screen's TX strip
    (CockpitTxStrip) draw it, so it is SCOPED to `.cq-txctl`: .op-btn/.op-controls are shared with
    the TopBar and RoamPanel, and an unscoped rule would bleed there. THE HEADER'S SIZE (operator
@@ -24115,6 +24246,17 @@ button.cq-skiptx1.on {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+/* A state block ("No decodes yet") in a decode list, which may be a row high (Rx Frequency in a short rail).
+   The glyph, the heading and the detail share a wrapping line with no padding above, so the heading comes
+   first: the detail stands beside it where both fit and under it where they do not, and what a short list
+   cannot show scrolls. The auto margins centre it where there is room and collapse where there is not. */
+.od-scroll > .state-block {
+  flex-direction: row;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  padding: 0 var(--space-4);
+  margin-block: auto;
 }
 /* WSJT-X period separator: a dim rule with the period's UTC start + band,
    inserted between decoding periods (time-sorted view). */

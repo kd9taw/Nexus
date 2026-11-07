@@ -5,7 +5,8 @@
 //
 // These are READOUTS, not transmit controls: nothing here keys, gates or stops anything.
 import { useRef, useState } from 'react'
-import type { KeyboardEvent, MutableRefObject, PointerEvent } from 'react'
+import type { ComponentProps, KeyboardEvent, MutableRefObject, PointerEvent, Ref } from 'react'
+import { Maximize2 } from 'lucide-react'
 import type { RadioStatus } from '../types'
 import { isOnAir } from '../types'
 import { t } from '../i18n'
@@ -14,6 +15,7 @@ import { useTxMeterStyle } from '../txMeterStyle'
 import { NEEDLE_KEYS, TxNeedles, type NeedleKey, type NeedleRow } from './TxNeedles'
 import { useFocusReturn } from '../focusReturn'
 import { Dialog } from './ui/Dialog'
+import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 
 /** The rig's own meter names, as they are printed on a radio's front panel — technical tokens
  *  exactly as a mode name is, gathered here so the catalog guard reads them as the deliberate
@@ -182,6 +184,7 @@ export function TxMeters({
   pinned = false,
   inline: inlineProp = false,
   strip = false,
+  pane = false,
   controls,
   memory,
 }: {
@@ -202,6 +205,9 @@ export function TxMeters({
   /** The TX strip's cell (Phone and CW, the compact dock): the inline variant's semantics, laid
    *  out in at most two rows that grow sideways, so the strip is never taller than its buttons. */
   strip?: boolean
+  /** The large TX meters pane (`TxMetersPane`): PO, ALC and SWR alone, as large needle faces, whichever way
+   *  Settings draws the strip's meters. No COMP and no temperatures: those stay with the strip's. */
+  pane?: boolean
 }) {
   const inline = inlineProp || strip
   // Retain the last live readings so the pinned strip has something to show between overs.
@@ -452,7 +458,7 @@ export function TxMeters({
     </>
   )
 
-  const pin = pinned || inline
+  const pin = pinned || inline || pane
   if (!pin) {
     // Default (Phone/CW's old shape): appear only while keyed, exactly as before. It has no
     // caller left in the app — both cockpits pass `pinned` — so it deliberately does NOT
@@ -503,6 +509,18 @@ export function TxMeters({
   // BEFORE the first over. So the strip keeps the dock's four slots from the start, in the compact
   // geometry, without the hint line (a cell of its own in the strip's two rows); the rows' dashes
   // and their titles say the same until a reading arrives.
+  if (pane) {
+    return (
+      <TxNeedles
+        rows={rows.filter((r): r is NeedleRow => isNeedle(r.key))}
+        live={live}
+        swrVerified={radio.swrScaleVerified === true}
+        alcZoneTop={alcZone.current}
+        unreported={overJudged.current ? NEEDLE_KEYS.filter((k) => !seen.current.has(k)) : []}
+        large={{ ratedWatts: radio.ratedWatts ?? 100 }}
+      />
+    )
+  }
   if (inline && !strip && !keyedOnce.current) {
     return (
       <div className={`ph-txmeters${variant} idle`} role="group" aria-label={t('meters.tx.aria')}>
@@ -614,7 +632,7 @@ const isNeedle = (k: MeterKey): k is NeedleKey => (NEEDLE_KEYS as readonly strin
  *
  *  The dialog's panel shares the cell's memory (`useTxMeterMemory`): live while keyed, and between
  *  overs the same held last readings the cell shows, however late it is opened. */
-export function TxMetersCell({ radio }: { radio: RadioStatus }) {
+export function TxMetersCell({ radio, pane }: { radio: RadioStatus; pane?: TxMetersPaneToggleProps }) {
   const [open, setOpen] = useState(false)
   // One memory for the cell and the dialog: opened between overs, the dialog holds the readings the
   // cell holds, so the two never disagree.
@@ -649,11 +667,81 @@ export function TxMetersCell({ radio }: { radio: RadioStatus }) {
           <TxMeters radio={radio} pinned memory={memory} />
         </div>
         <div className="txmeters-actions">
+          {pane && !pane.shown && (
+            <button
+              type="button"
+              className="export-btn"
+              onClick={() => {
+                pane.onToggle()
+                setOpen(false)
+                revealTxMetersPane()
+              }}
+            >
+              {t('meters.tx.pane.fromDialog')}
+            </button>
+          )}
           <button type="button" className="export-btn" aria-label={t('meters.tx.enlarge.close')} onClick={() => setOpen(false)}>
             ✕ {t('meters.tx.enlarge.close')}
           </button>
         </div>
       </Dialog>
     </>
+  )
+}
+
+/** The way to the large pane from the meters: whether it is on screen, and the same write its ⊞ tick makes. */
+export interface TxMetersPaneToggleProps {
+  shown: boolean
+  onToggle: () => void
+}
+
+/** THE LARGE TX METERS PANE: the fill pane an operator can make as big as the grid lets a pane be, ticked in ⊞
+ *  Panels or opened from the strip's meters. A READOUT through and through: its body holds no control, so
+ *  its ✕ and its place in the vocabulary reach nothing that keys or stops (THE STOP LINE). It keeps its
+ *  own memory across overs, and until its first over it says nothing it does not know. */
+export function TxMetersPane({
+  radio,
+  paneRef,
+  weight,
+  split,
+  share,
+  close,
+}: {
+  radio: RadioStatus
+  paneRef?: Ref<HTMLElement>
+  weight?: number
+  split?: number
+  share?: number
+  /** The cockpit's `closeProps`: the frame's ✕, absent with no panel record. */
+  close?: Pick<ComponentProps<typeof CockpitPaneFrame>, 'onRemove' | 'hideNote'>
+}) {
+  return (
+    <CockpitPaneFrame title={t('meters.tx.pane.title')} paneId="txMetersPane" weight={weight ?? 1} split={split} share={share} paneRef={paneRef} {...close}>
+      <TxMeters radio={radio} pane />
+    </CockpitPaneFrame>
+  )
+}
+
+/** A pane opened from the strip may land below the fold (Phone at 1366×768), where the click would seem to
+ *  have done nothing: bring it into view, the next frame, once it is there. Never on a pane ticked or
+ *  restored any other way: only the operator's asking for it here moves the view. */
+function revealTxMetersPane() {
+  requestAnimationFrame(() => {
+    const on = [...document.querySelectorAll('[data-pane="txMetersPane"]')].find((el) => el.getBoundingClientRect().width > 0)
+    on?.scrollIntoView({ block: 'nearest' })
+  })
+}
+
+/** The small toggle after the TX strip's meters cell (Phone and CW; Operate's is in its larger dialog). */
+export function TxMetersPaneToggle({ shown, onToggle }: TxMetersPaneToggleProps) {
+  const label = shown ? t('meters.tx.pane.hide') : t('meters.tx.pane.open')
+  const toggle = () => {
+    onToggle()
+    if (!shown) revealTxMetersPane()
+  }
+  return (
+    <button type="button" className="txmeters-pane-toggle" aria-label={label} title={label} aria-pressed={shown} onClick={toggle}>
+      <Maximize2 size="1em" aria-hidden />
+    </button>
   )
 }

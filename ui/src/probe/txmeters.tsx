@@ -9,19 +9,24 @@
 // radio reports a PA temperature and sits behind a Celsius amplifier, so both temperature rows draw.
 // The controls record what they were asked, for the probe to read back.
 //
-// `?units=imperial` shows °F. `&control=1` is the CONTROL: a transmit-bandwidth step named with a
+// `?pane=280x180` draws only the large TX meters pane, in its real frame, in a box that size.
+//
+// `?units=imperial` shows °F. `&needle=1` draws PO, ALC and SWR as the needle faces. `&control=1` is the CONTROL: a transmit-bandwidth step named with a
 // 400-character unbreakable word, which must overflow its row, and the probe must see it.
 import '../styles.css'
 import '../cockpit-panes.css'
 import { createRoot } from 'react-dom/client'
-import { TxMeters } from '../components/TxMeters'
+import { TxMeters, TxMetersPane } from '../components/TxMeters'
 import type { RadioStatus } from '../types'
 import { UNITS_KEY } from '../units'
+import { TX_METER_STYLE_KEY } from '../txMeterStyle'
 
 const params = new URLSearchParams(location.search)
 document.documentElement.setAttribute('data-theme', 'dark')
 localStorage.clear()
 localStorage.setItem(UNITS_KEY, params.get('units') === 'imperial' ? 'imperial' : 'metric')
+const needle = params.get('needle') === '1'
+if (needle) localStorage.setItem(TX_METER_STYLE_KEY, 'needle')
 
 const wide = params.get('control') === '1' ? 'W'.repeat(400) : 'NAR'
 const RADIO = {
@@ -52,9 +57,11 @@ const controls = {
 // the strip whose height the meters must not raise.
 const strip = params.get('host') === 'strip'
 
-createRoot(document.getElementById('root')!).render(
+const paneBox = params.get('pane')?.split('x').map(Number)
+
+const page = (
   <div className="app" style={{ height: '100%', position: 'relative' }}>
-    <div className="cq-telemetry" data-probe="cell" style={{ position: 'absolute', top: 8, left: 8 }}>
+    <div className={`cq-telemetry${needle ? ' needle' : ''}`} data-probe="cell" style={{ position: 'absolute', top: 8, left: 8 }}>
       <TxMeters radio={RADIO} inline />
     </div>
     {strip ? (
@@ -65,7 +72,7 @@ createRoot(document.getElementById('root')!).render(
           <button type="button" className="op-btn stop">Stop TX</button>
         </div>
         <span className="cq-statecap rx">Receiving</span>
-        <div className="cockpit-txstrip-meters" data-probe="dock">
+        <div className={`cockpit-txstrip-meters${needle ? ' cockpit-txstrip-meters-needle' : ''}`} data-probe="dock">
           <TxMeters radio={RADIO} strip controls={controls} />
         </div>
       </div>
@@ -74,5 +81,17 @@ createRoot(document.getElementById('root')!).render(
         <TxMeters radio={RADIO} pinned controls={controls} />
       </div>
     )}
-  </div>,
+  </div>
+)
+
+createRoot(document.getElementById('root')!).render(
+  paneBox ? (
+    <div className="app" style={{ height: '100%', position: 'relative' }}>
+      <div data-probe="pane" style={{ position: 'absolute', top: 8, left: 8, width: paneBox[0], height: paneBox[1], display: 'flex', flexDirection: 'column' }}>
+        <TxMetersPane radio={RADIO} />
+      </div>
+    </div>
+  ) : (
+    page
+  ),
 )

@@ -19,6 +19,7 @@ import { modeMismatch } from './TopBar'
 import { RadioTuneNote } from './RadioTuneNote'
 import { AtuSwitchOutMenu, useAtuSwitchOutMenu } from './AtuSwitchOutMenu'
 import { upperTyped } from '../typedInput'
+import { useTxMeterStyle } from '../txMeterStyle'
 
 /** `TX` on the now-sending label and `AUTO-CQ` on the run pill are annunciator tokens, not
  *  words — `CQ` is a Q-code, and the word joiners keep the pill from breaking mid-token in a
@@ -151,6 +152,7 @@ export function OperateQsoStrip({
   rotor,
   telemetry,
 }: Props) {
+  const meterStyle = useTxMeterStyle()
   // ⚠️ cqRunning, NOT qso.running. `running` is also true through a directed S&P call (the
   // engine's own comment at call_station_ctx says so) and nothing clears it after the QSO —
   // so this strip lit Call CQ solid through every S&P contact and forever after, and the
@@ -517,7 +519,7 @@ export function OperateQsoStrip({
           {t('operate.strip.nextSlot.label', { secs: nextSlotSec })}
         </span>
       )}
-      {telemetry != null && <div className="cq-telemetry">{telemetry}</div>}
+      {telemetry != null && <div className={`cq-telemetry${meterStyle === 'needle' ? ' needle' : ''}`}>{telemetry}</div>}
       {/* What the radio reports beside Tune while Tune is the Flex radio's own carrier: the last
           child, on a line of its own, so it never moves the clusters or the readouts. */}
       {radio && <RadioTuneNote radio={radio} />}

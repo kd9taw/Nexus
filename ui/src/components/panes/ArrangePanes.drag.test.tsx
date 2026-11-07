@@ -28,6 +28,7 @@ const PHONE_LABELS: Record<PhonePanelId, string> = {
   scope: 'Scope',
   rigscope: 'Rig scope',
   txmeters: 'TX meters',
+  txMetersPane: 'TX meters, large',
   receiver: 'Receiver',
   transmitter: 'Transmitter',
   bandActivity: 'Band Activity',

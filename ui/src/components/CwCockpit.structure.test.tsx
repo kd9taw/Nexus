@@ -161,7 +161,8 @@ function makeSnap(over: Record<string, unknown> = {}): AppSnapshot {
 function fakePanels(removed: CwPanelId[] = []): PanelLayoutApi<CwPanelId> {
   return {
     layout: { v: 1, state: {}, share: {} },
-    stateOf: (id) => (removed.includes(id) ? 'removed' : 'docked'),
+    // The large TX meters pane ships hidden, in this fake as in the record.
+    stateOf: (id) => (removed.includes(id) || id === 'txMetersPane' ? 'removed' : 'docked'),
     setPanelState: () => {},
     shareOf: () => 1,
     setShare: () => {},
@@ -926,5 +927,45 @@ describe('the Recent contacts pane under the log form', () => {
     await renderCockpit({ panels: fakePanels(['recent']) })
     expect(document.querySelector('[data-pane="recent"]')).toBeNull()
     expect(document.querySelector('[data-pane="log"]'), 'control: the log rendered').not.toBeNull()
+  })
+})
+
+describe('the large TX meters pane', () => {
+  // Ticked: the same fake with this one id docked, as the ⊞ tick writes it.
+  const ticked = () => {
+    const base = fakePanels()
+    return { ...base, stateOf: () => 'docked' as const }
+  }
+  const pane = () => document.querySelector('[data-pane="txMetersPane"]')
+
+  it('is not on a stock screen', async () => {
+    await renderCockpit()
+    expect(pane()).toBeNull()
+  })
+
+  it('ticked, a FILL pane in the middle column, with no control in its body and the TX chrome outside it', async () => {
+    await renderCockpit({ panels: ticked() })
+    const frame = pane()!
+    expect(frame.getAttribute('data-fit'), 'a fill pane, sized by its column').toBe('fill')
+    expect(frame.closest('.cockpit-col'), 'it stands in a region column').not.toBeNull()
+    const body = frame.querySelector('.pane-body')!
+    expect(body.querySelector('button, input, select, a, [role="slider"]')).toBeNull()
+    expect(body.querySelectorAll('.ph-txneedle-needle')).toHaveLength(3)
+    // Nothing that keys or stops moved in with it.
+    const dock = document.querySelector('.cockpit-txdock')!
+    expect(frame.contains(dock)).toBe(false)
+    expect(dock.closest('[data-pane]')).toBeNull()
+    const stop = document.querySelector('.cockpit-txstrip')!
+    expect(stop.closest('[data-pane]')).toBeNull()
+  })
+
+  it('with a feed directly under it, shares a divider with that feed', async () => {
+    await renderCockpit({ panels: ticked(), neededBoard: { alerts: [], bandPlan: [], selectedCall: null, onQsy: () => {}, onSelect: () => {} } as never })
+    stubWidth(document.querySelector('.cockpit-panes')!, 1800)
+    act(() => fire!())
+    await frame()
+    const el = pane()!
+    expect(el.nextElementSibling?.getAttribute('role')).toBe('separator')
+    expect(el.nextElementSibling?.nextElementSibling?.getAttribute('data-pane')).toBe('needed')
   })
 })

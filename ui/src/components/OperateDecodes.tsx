@@ -587,10 +587,20 @@ export function OperateDecodes({
   // arrive above it (each row carries `data-pin-key` for that). `drawn` is the content signal:
   // the pin (and the layout it reads) runs when the drawn rows change, not on every render; a
   // keep-alive host shown again re-pins through the hook's resize watch.
+  // EMPTY, THERE IS NOTHING TO FOLLOW: the list holds only its "No decodes yet" block, and in a list
+  // shorter than the block a pin to the bottom scrolled the heading out of view. It stands at its top
+  // until the first row, and reading down the block is not "reviewing" (the scroller's `onScroll`).
   const { ref: scrollRef, pinned, onScroll, repin } = usePinnedScroll<HTMLDivElement>(
-    newestTop ? 'top' : 'bottom',
+    newestTop || shown.length === 0 ? 'top' : 'bottom',
     drawn,
   )
+  // A list that shrinks clamps its offset, and that scroll event is what re-pins a reader. Empty, the
+  // scroller takes no scroll events (above), so "reviewing" ends here instead; otherwise a filter or an
+  // RX offset that hid every row would leave the first row after it unfollowed, with no scrollbar to end it.
+  const listEmpty = shown.length === 0
+  useEffect(() => {
+    if (listEmpty) repin()
+  }, [listEmpty, repin])
 
   // A new search follows the newest matches: the list may shrink below the pane's height, where
   // no scroll event could ever arrive to end a "reviewing" the operator left behind.
@@ -957,7 +967,7 @@ export function OperateDecodes({
         role="listbox"
         aria-label={t('operate.decodes.list.aria')}
         ref={scrollRef}
-        onScroll={onScroll}
+        onScroll={shown.length > 0 ? onScroll : undefined}
         onKeyDown={roving.containerProps.onKeyDown}
       >
         {shown.length === 0 &&

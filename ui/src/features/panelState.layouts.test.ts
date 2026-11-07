@@ -43,11 +43,11 @@ const last = <T,>(xs: readonly T[]): T | undefined => xs[xs.length - 1]
 
 describe('FT is arranged per layout, over every FT pane', () => {
   it('the stock arrangements are the columns FT has always drawn, with the other layout’s panes listed but not drawn', () => {
-    // The boxes, the Stats pane (2026-10-14) and the Recent contacts pane are listed in the rail and ship hidden:
+    // The boxes, the Stats pane (2026-10-14), the large TX meters pane and the Recent contacts pane are listed in the rail and ship hidden:
     // what each layout draws is the rest.
     const own = (c: Record<string, OperatePanelId[]>, extra: readonly OperatePanelId[] = []) =>
       Object.fromEntries(
-        Object.entries(c).map(([k, ids]) => [k, ids.filter((id) => !(BOX_IDS as readonly string[]).includes(id) && id !== 'stats' && id !== 'recent' && !extra.includes(id))]),
+        Object.entries(c).map(([k, ids]) => [k, ids.filter((id) => !(BOX_IDS as readonly string[]).includes(id) && id !== 'stats' && id !== 'recent' && id !== 'txMetersPane' && !extra.includes(id))]),
       )
     // What each layout draws until the operator adds a pane: today's columns.
     expect(own(placedColumns(CLASSIC, undefined), CLASSIC.extra)).toEqual({ a: ['bandActivity'], b: ['rxfreq', 'txmsgs'], log: ['recall', 'stations'] })
@@ -56,8 +56,8 @@ describe('FT is arranged per layout, over every FT pane', () => {
     // Roster's rail under Rx Frequency, and nothing else is another layout's.
     expect(own(placedColumns(CLASSIC, undefined))).toEqual({ a: ['bandActivity', 'callRoster'], b: ['rxfreq', 'txmsgs'], log: ['recall', 'stations'] })
     expect(own(placedColumns(ROSTER, undefined))).toEqual({ a: ['callRoster'], b: [], log: ['recall', 'bandActivity', 'rxfreq', 'txmsgs', 'stations'] })
-    expect(CLASSIC.extra).toEqual(['callRoster'])
-    expect(ROSTER.extra).toEqual(['txmsgs', 'stations'])
+    expect(CLASSIC.extra).toEqual(['callRoster', 'txMetersPane'])
+    expect(ROSTER.extra).toEqual(['txmsgs', 'stations', 'txMetersPane'])
     // The Stats pane, ticked, stands under the callsign card in both rails.
     expect(placedColumns(CLASSIC, undefined).log.slice(0, 2)).toEqual(['recall', 'stats'])
     expect(placedColumns(ROSTER, undefined).log.slice(0, 2)).toEqual(['recall', 'stats'])

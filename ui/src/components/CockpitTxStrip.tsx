@@ -4,6 +4,8 @@ import type { RadioStatus } from '../types'
 import { isOnAir } from '../types'
 import { RadioTuneNote } from './RadioTuneNote'
 import { AtuSwitchOutMenu, useAtuSwitchOutMenu } from './AtuSwitchOutMenu'
+import { useTxMeterStyle } from '../txMeterStyle'
+import { TxMetersPaneToggle, type TxMetersPaneToggleProps } from './TxMeters'
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), for the same
 // deferral `CockpitHeader` carried until these controls moved here: THE TX-ENABLE LATCH (and its
 // read-only rendering), TUNE, ATU AND STOP TX stay written here, labels and tooltips. One strip
@@ -37,6 +39,8 @@ export interface CockpitTxStripProps {
    *  readout and never a control that keys or stops anything: the screen's send area stays in its
    *  dock. Omitted: the strip is exactly what it was. */
   meters?: ReactNode
+  /** The way to the large TX meters pane, beside the meters: a screen with a panel record passes it. */
+  metersPane?: TxMetersPaneToggleProps
   /** A screen's own line beside Tune (Phone's newcat Yaesu note, #441): text only, drawn last and
    *  only where Tune is, after RadioTuneNote, so it never moves a control or the TX state. */
   tuneNote?: ReactNode
@@ -64,8 +68,9 @@ export interface CockpitTxStripProps {
  * the header's did: in RTTY and SSTV the latch is a STOP (set_tx_enabled(false) arms the mode's
  * abort) and must stay a button through their overs, which `radio.transmitting` never marks.
  */
-export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtuBypass, onStopTx, hold, meters, tuneNote, tuneHint }: CockpitTxStripProps) {
+export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtuBypass, onStopTx, hold, meters, metersPane, tuneNote, tuneHint }: CockpitTxStripProps) {
   const onAir = isOnAir(radio)
+  const needle = useTxMeterStyle() === 'needle'
   // THE SIGN WAITS WITH AN ARMED OVER (the operator's pick "Header ON AIR waits too",
   // 2026-09-28; the sign moved here from the header with the rest of the strip). A streamed
   // operator's PTT, whichever they hold, arms an over that owns the transmitter from the arm, but
@@ -208,7 +213,8 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
       {/* THE METERS' CELL, at the strip's right end (`.cockpit-txstrip-meters`): after the cluster and
           the TX state, so nothing it shows can move a control. Two rows at most, the strip's own
           height, and the same readings before and after a key-down (TxMeters `strip`). */}
-      {meters != null && <div className="cockpit-txstrip-meters">{meters}</div>}
+      {meters != null && <div className={`cockpit-txstrip-meters${needle ? ' cockpit-txstrip-meters-needle' : ''}`}>{meters}</div>}
+      {meters != null && metersPane && <TxMetersPaneToggle {...metersPane} />}
       {/* What the radio reports beside Tune while Tune is the Flex radio's own carrier: the last
           child, on a line of its own, so it never moves the controls or the TX state. */}
       {onTune && <RadioTuneNote radio={radio} />}

@@ -162,7 +162,7 @@ describe('drops that need several arrows, by hand', () => {
   it('Phone: the Transmitter from column 2 to the top of column 1 is ◀ then ▲ until it heads the column', () => {
     const got = dropArranged(PHONE, {}, 'transmitter', { area: 'a', before: 'bandActivity' }, all, false)!
     expect(placedColumns(PHONE, got.place).a.slice(0, 2)).toEqual(['transmitter', 'bandActivity'])
-    expect(placedColumns(PHONE, got.place).b).toEqual(['rigscope', 'receiver', 'needed'])
+    expect(placedColumns(PHONE, got.place).b).toEqual(['rigscope', 'receiver', 'txMetersPane', 'needed'])
     let arrows: Arrangement<PhonePanelId> = {}
     arrows = moveArranged(PHONE, arrows, 'transmitter', 'left', all, false)!
     while (placedColumns(PHONE, arrows.place).a[0] !== 'transmitter') arrows = moveArranged(PHONE, arrows, 'transmitter', 'up', all, false)!
@@ -185,7 +185,7 @@ describe('drops that need several arrows, by hand', () => {
     const CLASSIC = OPERATE_ARRANGE.classic
     const order: PaneColumn[] = ['log', 'a', 'b']
     const got = dropArranged(CLASSIC, {}, 'bandActivity', { area: 'log', before: 'stations' }, all, false, order)!
-    expect(placedColumns(CLASSIC, got.place).log.slice(0, 4)).toEqual(['recall', 'stats', 'bandActivity', 'stations'])
+    expect(placedColumns(CLASSIC, got.place).log.slice(0, 5)).toEqual(['recall', 'stats', 'txMetersPane', 'bandActivity', 'stations'])
   })
   it('Phone: Needed from column 2 onto the left side is ◀ (to column 1) then ◀ (to the side)', () => {
     const got = dropArranged(PHONE, {}, 'needed', { area: 'side', before: null }, all, true)!
@@ -197,10 +197,10 @@ describe('drops that need several arrows, by hand', () => {
     const on: Arrangement<PhonePanelId> = { leftSide: ['spots'] }
     const got = dropArranged(PHONE, on, 'spots', { area: 'b', before: 'receiver' }, all, true)!
     expect(got.leftSide ?? []).toEqual([])
-    expect(placedColumns(PHONE, got.place).b).toEqual(['rigscope', 'spots', 'receiver', 'transmitter', 'needed'])
+    expect(placedColumns(PHONE, got.place).b).toEqual(['rigscope', 'spots', 'receiver', 'transmitter', 'txMetersPane', 'needed'])
   })
   it('hidden panes are stepped past exactly as the arrows step past them', () => {
-    const shown = (id: PhonePanelId) => id !== 'receiver'
+    const shown = (id: PhonePanelId) => id !== 'receiver' && id !== 'txMetersPane'
     const got = dropArranged(PHONE, {}, 'needed', { area: 'b', before: 'rigscope' }, shown, false)!
     // The hidden Receiver keeps its place among the others; the on-screen order is what was asked for.
     expect(placedColumns(PHONE, got.place).b.filter(shown)).toEqual(['needed', 'rigscope', 'transmitter'])

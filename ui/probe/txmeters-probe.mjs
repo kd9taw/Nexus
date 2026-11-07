@@ -11,7 +11,14 @@
 //   · the level bar, PROC, the bandwidth chip and both temperature rows are the topmost thing where
 //     they stand, and the temperatures read in the chosen units;
 //   · a real mouse drag on the bar sets the level where the pointer is, and real clicks on PROC and
-//     the chip ask for the processor off and the radio's next step.
+//     the chip ask for the processor off and the radio's next step;
+//   · all of that with the needle faces too, whose dials must be as high as the readout and, on the
+//     1920 window, about twice the old face's arc, with the strip still no taller. (The 1024 window is
+//     checked for a dial at all: at 100 % it is below the app's md, where the strip is not drawn.)
+//
+//   · the large TX meters pane, in its real frame: in a short pane no face stands over another, and where
+//     the rows cannot all fit (two columns forced) they keep their floor and the pane body scrolls to the last.
+//     Its control puts back a track with no floor, where the faces must overlap and the probe must see it.
 //
 // THE CONTROL, run every time: the same page with a 400-character bandwidth step. There the probe
 // must see the COMP row overflow; if it does not, the check cannot fail and the probe says so.
@@ -71,6 +78,17 @@ const MEASURE = `(() => {
     bw: comp?.querySelector('[data-ctl="txbw"]') ? box(comp.querySelector('[data-ctl="txbw"]')) : null,
     dockTemps: temps(dock),
     cellTemps: temps(cell),
+    // The needle faces, where they are drawn: the narrowest dial in the dock or strip host, in em, so
+    // a window's zoom cannot pass for a size, and how high a dial stands.
+    dialEm: (() => {
+      const dials = [...dock.querySelectorAll('.ph-txneedle-dial')]
+      if (!dials.length) return null
+      return Math.min(...dials.map((d) => d.getBoundingClientRect().width)) / parseFloat(getComputedStyle(dock).fontSize)
+    })(),
+    dialH: (() => {
+      const d = dock.querySelector('.ph-txneedle-dial')
+      return d ? Math.round(d.getBoundingClientRect().height) : null
+    })(),
     // The strip host only: the strip's height against its own buttons. The meters must not raise it.
     strip: (() => {
       const s = document.querySelector('[data-probe="strip"]')
@@ -96,7 +114,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function measure(w, h, units, control, host) {
+async function measure(w, h, units, control, host, needle = false) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -105,7 +123,7 @@ async function measure(w, h, units, control, host) {
     return r.exceptionDetails ? { error: r.exceptionDetails.exception?.description ?? r.exceptionDetails.text } : r.result.value
   }
   await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
-  await call('Page.navigate', { url: `${origin}/probe/txmeters.html?units=${units}${control ? '&control=1' : ''}${host === 'strip' ? '&host=strip' : ''}` })
+  await call('Page.navigate', { url: `${origin}/probe/txmeters.html?units=${units}${control ? '&control=1' : ''}${host === 'strip' ? '&host=strip' : ''}${needle ? '&needle=1' : ''}` })
   let last = null
   for (let i = 0; i < 80; i++) {
     await sleep(150)
@@ -134,8 +152,12 @@ async function measure(w, h, units, control, host) {
 }
 
 /** What is wrong with a measure, as words; empty when nothing is. */
-function faults(m, units) {
+function faults(m, units, needle = false, w = 0) {
   const f = []
+  if (needle) {
+    if (!(m.dialEm > (w >= 1100 ? 8 : 1.5))) f.push(`the narrowest needle dial is ${m.dialEm}em wide`)
+    if (!(m.dialH >= 24)) f.push(`a needle dial is ${m.dialH} px high`)
+  }
   if (m.page > 0) f.push(`the page scrolls sideways by ${m.page} px`)
   if (m.dock > 0) f.push(`the dock's meters are ${m.dock} px wider than they show`)
   if (m.rowOverflow > 0) f.push(`a meter row overflows by ${m.rowOverflow} px`)
@@ -160,17 +182,82 @@ function faults(m, units) {
   return f
 }
 
+const PANE_MEASURE = `(() => {
+  const body = document.querySelector('.pane-body')
+  const faces = [...document.querySelectorAll('.txmeters-pane-meter')].map((e) => e.getBoundingClientRect())
+  if (!body || faces.length !== 3) return null
+  let overlap = 0
+  faces.forEach((a, i) => faces.slice(i + 1).forEach((b) => {
+    const dx = Math.min(a.right, b.right) - Math.max(a.left, b.left), dy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
+    if (dx > 0.5 && dy > 0.5) overlap = Math.max(overlap, dy)
+  }))
+  const face = document.querySelector('.txmeters-pane-meter')
+  body.scrollTop = body.scrollHeight
+  const last = document.querySelectorAll('.txmeters-pane-meter')[2].getBoundingClientRect()
+  const box = body.getBoundingClientRect()
+  return { overlap: Math.round(overlap), scrolls: body.scrollHeight > body.clientHeight + 1, lastInView: last.bottom <= box.bottom + 1, sideways: body.scrollWidth > body.clientWidth + 1, floorPx: 7 * parseFloat(getComputedStyle(face).fontSize), minFaceH: Math.round(Math.min(...faces.map((r) => r.height))), cols: document.querySelector('.txmeters-pane').style.getPropertyValue('--txmeters-pane-cols') }
+})()`
+
+async function measurePane(box, css) {
+  const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
+  const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
+  const call = (method, params) => browser.call(method, params, sessionId)
+  const evaluate = async (expression) => (await call('Runtime.evaluate', { expression, returnByValue: true })).result?.value
+  await call('Emulation.setDeviceMetricsOverride', { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false })
+  await call('Page.navigate', { url: `${origin}/probe/txmeters.html?pane=${box}` })
+  let m = null
+  for (let i = 0; i < 80 && !m; i++) {
+    await sleep(150)
+    m = await evaluate(PANE_MEASURE)
+  }
+  await sleep(300)
+  if (css) {
+    await evaluate(`(() => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(css)}; document.head.appendChild(s); return 1 })()`)
+    await sleep(300)
+  }
+  m = await evaluate(PANE_MEASURE)
+  await browser.call('Target.closeTarget', { targetId })
+  return m
+}
+
+/** The pane: in the shapes a short pane can take, and with two rows forced where they cannot fit. */
+async function checkPane() {
+  const TWO = '.txmeters-pane { grid-template-columns: repeat(2, minmax(0, 1fr)) !important }'
+  const red = []
+  for (const box of ['280x180', '280x240', '280x330', '600x130', '1200x400', '300x700']) {
+    const m = await measurePane(box)
+    console.log(`txmeters-probe: the pane in ${box}: ${JSON.stringify(m)}`)
+    if (!m) { red.push(`the pane never drew in ${box}`); continue }
+    if (m.overlap > 0) red.push(`in ${box} one face stands ${m.overlap} px over another`)
+    if (m.scrolls) red.push(`in ${box} the faces scroll, where a column choice keeps them in view`)
+    if (m.sideways) red.push(`in ${box} the pane scrolls sideways`)
+    if (m.minFaceH < m.floorPx - 1) red.push(`in ${box} a face is ${m.minFaceH} px high, under its floor of ${m.floorPx}`)
+  }
+  const forced = await measurePane('280x180', TWO)
+  console.log(`txmeters-probe: the pane in 280x180 with two rows forced: ${JSON.stringify(forced)}`)
+  if (!forced || forced.overlap > 0 || !forced.scrolls || !forced.lastInView) red.push(`two rows forced in a short pane should scroll to the last face with no overlap: ${JSON.stringify(forced)}`)
+  const control = await measurePane('280x180', `${TWO} .txmeters-pane { grid-auto-rows: minmax(0, 1fr) !important } .txmeters-pane-meter { min-height: 7em }`)
+  console.log(`txmeters-probe: CONTROL the pane with no track floor: ${JSON.stringify(control)}`)
+  if (!(control?.overlap > 0)) red.push('CONTROL FAILED: the planted overlap was not seen; the check cannot fail')
+  return red
+}
+
 let code = 0
 try {
-  for (const { w, h, units } of SIZES) for (const host of ['dock', 'strip']) {
-    const { m, asked } = await measure(w, h, units, false, host)
-    console.log(`txmeters-probe: window ${w}×${h} ${units} in the ${host}: ${JSON.stringify(m)} asked: ${JSON.stringify(asked)}`)
+  const paneRed = await checkPane()
+  if (paneRed.length) {
+    console.error(`txmeters-probe: RED in the large pane — ${paneRed.join('; ')}`)
+    code = 1
+  }
+  for (const { w, h, units } of SIZES) for (const host of ['dock', 'strip']) for (const needle of [false, true]) {
+    const { m, asked } = await measure(w, h, units, false, host, needle)
+    console.log(`txmeters-probe: window ${w}×${h} ${units} in the ${host}${needle ? ' with needles' : ''}: ${JSON.stringify(m)} asked: ${JSON.stringify(asked)}`)
     if (!m || m.error) {
       console.error(`txmeters-probe: the meters never drew at ${w}×${h}`)
       code = 2
       continue
     }
-    const red = faults(m, units)
+    const red = faults(m, units, needle, w)
     const comp = asked?.comp ?? []
     if (!(comp.length >= 2 && Math.abs(comp[0] - 0.75) <= 0.02 && Math.abs(comp[comp.length - 1] - 0.25) <= 0.02))
       red.push(`the drag asked for ${JSON.stringify(comp)}, not 0.75 then 0.25`)

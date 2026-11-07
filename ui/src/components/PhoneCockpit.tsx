@@ -19,7 +19,7 @@ import { panelHost } from '../features/panelHost'
 import { composingText } from '../features/contestExchange'
 import type { AppSnapshot, FieldDayStatus, NeedTag, Settings, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
-import { TxMeters, TX_METERS_WHEN } from './TxMeters'
+import { TxMeters, TxMetersPane, TX_METERS_WHEN } from './TxMeters'
 import { BandStrip } from './BandStrip'
 import { PanelsMenu } from './PanelsMenu'
 import { ArrangePanes } from './panes/ArrangePanes'
@@ -327,6 +327,7 @@ const phonePanelLabels = (): Record<Exclude<PhonePanelId, BoxId>, string> => ({
   scope: t('phone.panel.scope'),
   rigscope: t('phone.panel.rigscope'),
   txmeters: t('phone.panel.txmeters'),
+  txMetersPane: t('meters.tx.pane.title'),
   receiver: t('phone.panel.receiver'),
   transmitter: t('phone.panel.transmitter'),
   bandActivity: t('phone.panel.bandActivity'),
@@ -1727,6 +1728,8 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
   // THE STATS PANE under the log form, in the station's own window (CallStatsPane). It ships hidden, so
   // with no panel record at all (no ⊞, nothing ticked) it stays hidden, as its vocabulary says.
   const hasStatsPane = host != null && shown('stats')
+  // THE LARGE TX METERS PANE: ships hidden, so with no panel record it stays hidden (the Stats pane's rule).
+  const hasMetersPane = host != null && shown('txMetersPane')
   // THE RECENT CONTACTS PANE, the same way (RecentQsosPane): inside the log pane, under the form.
   const hasRecentPane = host != null && shown('recent')
   // FreeDV's pane (receive only): hidden until added, like the two feeds, and like them offered only
@@ -1764,6 +1767,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
           receiver: hasReceiverPane,
           transmitter: hasTransmitterPane,
           stats: hasStatsPane,
+          txMetersPane: hasMetersPane,
         })[id as string] ?? false)
   // ── THE LEFT SIDE (operator's pick, 2026-10-03: ⊞ Arrange's "Left side") ───────────────────────
   // A column beside the region, under the full-width scope and TX strip (2026-10-26), above the
@@ -1790,7 +1794,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
   const folded = boxes?.rail?.folded?.boxes ?? []
   const boxInA = placed3[0].ids.some(isBoxId) || folded.length > 0
   const boxInB = placed3[1].ids.some(isBoxId)
-  const leadPresent = inRegion('bandActivity') || hasKeyerPane || auxPresent || inRegion('spots') || inRegion('needed') || inRegion('freedv') || boxInA || boxInB
+  const leadPresent = inRegion('txMetersPane') || inRegion('bandActivity') || hasKeyerPane || auxPresent || inRegion('spots') || inRegion('needed') || inRegion('freedv') || boxInA || boxInB
   // An arranged region offers a track per column that holds something; the stock one keeps its own
   // rule above (a keyer alone does not earn the leading track its own column).
   const { ref: panesRef, cols, flow } = useRegionCols<HTMLDivElement>(
@@ -1800,7 +1804,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
         : placed3[0].ids.length + folded.length + placed3[1].ids.length > 0
           ? 2
           : 1
-      : (auxPresent || inRegion('needed') || boxInB) && (inRegion('bandActivity') || inRegion('spots') || inRegion('freedv') || boxInA)
+      : (auxPresent || inRegion('txMetersPane') || inRegion('needed') || boxInB) && (inRegion('bandActivity') || inRegion('spots') || inRegion('freedv') || boxInA)
         ? 3
         : leadPresent
           ? 2
@@ -2217,13 +2221,19 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
   }
   const feedsAdjacent = cols >= 2 && groups.some((g) => spotsOverNeeded(g.ids))
   const feedsSplit = hasSpotsPane && hasNeededPane && (feedsAdjacent || spotsOverNeeded(sideGroup)) && panels != null
+  // The large TX meters pane shares a divider with a feed directly under it, as the feeds do with each other.
+  // Each pane stands in one pair at most, so a feed already in the feeds' pair is not its partner.
+  const metersGroup = cols >= 2 && hasMetersPane && panels != null ? groups.find((g) => g.ids.includes('txMetersPane'))?.ids : undefined
+  const underMeters = metersGroup?.[metersGroup.indexOf('txMetersPane') + 1]
+  const metersWith = !feedsSplit && (underMeters === 'spots' || underMeters === 'needed') ? underMeters : null
+  const metersFrameRef = useRef<HTMLElement>(null)
   const spotsPane =
     hasSpotsPane && spotsBoard ? (
       <CockpitPaneFrame
         title={t('phone.pane.spots.title')}
         paneId="spots"
-        split={feedsSplit ? 1 : undefined}
-        share={feedsSplit ? panels?.layout.share.spots : undefined}
+        split={feedsSplit || metersWith === 'spots' ? 1 : undefined}
+        share={feedsSplit || metersWith === 'spots' ? panels?.layout.share.spots : undefined}
         paneRef={spotsFrameRef}
         {...closeProps('spots')}
       >
@@ -2242,8 +2252,8 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
       <CockpitPaneFrame
         title={t('phone.pane.needed.title')}
         paneId="needed"
-        split={feedsSplit ? 1 : undefined}
-        share={feedsSplit ? panels?.layout.share.needed : undefined}
+        split={feedsSplit || metersWith === 'needed' ? 1 : undefined}
+        share={feedsSplit || metersWith === 'needed' ? panels?.layout.share.needed : undefined}
         paneRef={neededFrameRef}
         {...closeProps('needed')}
       >
@@ -2759,7 +2769,28 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
   // Each placed pane by its id, KEYED by it (layout L3): a pane that moves up or down in its column
   // is moved by React, not remounted, and only a change of column remounts one — which the voice
   // keyer (pinned) and the log form (no id) never make. The feeds' divider rides with Spots.
+  const metersSeam =
+    metersWith && panels ? (
+      <PaneSeam
+        above={metersFrameRef}
+        below={metersWith === 'spots' ? spotsFrameRef : neededFrameRef}
+        varName="--pane-share"
+        onCommit={(av, bv) => panels.setShares({ txMetersPane: av, [metersWith]: bv })}
+        onReset={() => panels.setShares({ txMetersPane: null, [metersWith]: null })}
+        label={t('operate.seam.pair.label', { above: labels.txMetersPane, below: labels[metersWith] })}
+        className="in-column"
+      />
+    ) : null
   const paneEls: Partial<Record<PhonePanelId, React.ReactNode>> = {
+    txMetersPane: hasMetersPane ? (
+      <TxMetersPane
+        radio={snap.radio}
+        paneRef={metersFrameRef}
+        split={metersWith ? 1 : undefined}
+        share={metersWith ? panels?.layout.share.txMetersPane : undefined}
+        close={closeProps('txMetersPane')}
+      />
+    ) : null,
     bandActivity: bandPane,
     voiceKeyer: keyerPane,
     spots: spotsPane,
@@ -2800,6 +2831,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
     <Fragment key={id}>
       {paneEls[id]}
       {id === 'spots' && feedSeam}
+      {id === 'txMetersPane' && metersSeam}
     </Fragment>
   )
 
@@ -2849,6 +2881,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
       // THE COMPACT DOCK (md and up): the read-only meters stand in the strip's empty right side, as
       // in Operate's QSO strip, and the dock loses their row. They keep their ⊞ id — a readout.
       meters={chrome.wide && shown('txmeters') ? <TxMeters radio={snap.radio} strip controls={txMeterControls} /> : undefined}
+      metersPane={panels?.setPanelState ? { shown: hasMetersPane, onToggle: () => panels.setPanelState('txMetersPane', hasMetersPane ? 'removed' : 'docked') } : undefined}
       // #441: Phone keys plain USB/LSB, so these Yaesus take their audio from the SSB MOD SOURCE menu;
       // on MIC, Tune's USB-audio tone keys the radio with no RF. Nexus changes no menu.
       tuneHint={

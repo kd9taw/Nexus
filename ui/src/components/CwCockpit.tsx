@@ -12,7 +12,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, CwTurn, FieldDayStatus, NeedTag, Settings, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { useSmeterDb } from './LiveMeters'
-import { TxMeters, TX_METERS_WHEN } from './TxMeters'
+import { TxMeters, TxMetersPane, TX_METERS_WHEN } from './TxMeters'
 import { useCompactChrome } from '../features/compactChrome'
 import { HeaderOverflow } from './HeaderOverflow'
 import { DraftNumberInput } from './DraftNumberInput'
@@ -442,6 +442,7 @@ const cwPanelLabels = (): Record<Exclude<CwPanelId, BoxId>, string> => ({
   scopeCtl: t('cw.panel.scopeCtl'),
   dsp: t('cw.panel.dsp'),
   txmeters: t('cw.panel.txmeters'),
+  txMetersPane: t('meters.tx.pane.title'),
   turnCue: t('cw.panel.turnCue'),
   rxdsp: t('cw.panel.rxdsp'),
   bandActivity: t('cw.panel.bandActivity'),
@@ -1779,6 +1780,8 @@ export function CwCockpit({
   // THE STATS PANE under the log form, in the station's own window (CallStatsPane). It ships hidden, so
   // with no panel record at all (no ⊞, nothing ticked) it stays hidden, as its vocabulary says.
   const hasStatsPane = host != null && shown('stats')
+  // THE LARGE TX METERS PANE: ships hidden, so with no panel record it stays hidden (the Stats pane's rule).
+  const hasMetersPane = host != null && shown('txMetersPane')
   // THE RECENT CONTACTS PANE, the same way (RecentQsosPane): inside the log pane, under the form.
   const hasRecentPane = host != null && shown('recent')
   // The three rig-control groups share ONE frame (see rigCtlPane), so the frame renders when
@@ -1809,6 +1812,7 @@ export function CwCockpit({
           spots: hasSpotsPane,
           needed: hasNeededPane,
           stats: hasStatsPane,
+          txMetersPane: hasMetersPane,
         })[id as string] ?? false)
   const placed3 = regionGroups(CW_PANELS.arrange!, place, 3, paneShown)
   // BELOW THREE TRACKS the leading and middle columns are one (regionGroups): column a then b once
@@ -2310,13 +2314,19 @@ export function CwCockpit({
     return i >= 0 && c[i + 1] === 'needed'
   })
   const feedsSplit = hasSpotsPane && hasNeededPane && feedsAdjacent && cols >= 2 && panels != null
+  // The large TX meters pane shares a divider with a feed directly under it, as the feeds do with each other.
+  // Each pane stands in one pair at most, so a feed already in the feeds' pair is not its partner.
+  const metersIds = cols === 3 ? [placed3[0].ids, placed3[1].ids, placed3[2].ids].find((ids) => ids.includes('txMetersPane')) : merged
+  const underMeters = cols >= 2 && hasMetersPane && panels != null && metersIds?.includes('txMetersPane') ? metersIds[metersIds.indexOf('txMetersPane') + 1] : undefined
+  const metersWith = !feedsSplit && (underMeters === 'spots' || underMeters === 'needed') ? underMeters : null
+  const metersFrameRef = useRef<HTMLElement>(null)
   const spotsPane =
     hasSpotsPane && spotsBoard ? (
       <CockpitPaneFrame
         title={t('cw.pane.spots.title')}
         paneId="spots"
-        split={feedsSplit ? 1 : undefined}
-        share={feedsSplit ? panels?.layout.share.spots : undefined}
+        split={feedsSplit || metersWith === 'spots' ? 1 : undefined}
+        share={feedsSplit || metersWith === 'spots' ? panels?.layout.share.spots : undefined}
         paneRef={spotsFrameRef}
         {...closeProps('spots')}
       >
@@ -2335,8 +2345,8 @@ export function CwCockpit({
       <CockpitPaneFrame
         title={t('cw.pane.needed.title')}
         paneId="needed"
-        split={feedsSplit ? 1 : undefined}
-        share={feedsSplit ? panels?.layout.share.needed : undefined}
+        split={feedsSplit || metersWith === 'needed' ? 1 : undefined}
+        share={feedsSplit || metersWith === 'needed' ? panels?.layout.share.needed : undefined}
         paneRef={neededFrameRef}
         {...closeProps('needed')}
       >
@@ -2363,7 +2373,28 @@ export function CwCockpit({
   // Each placed pane by its id, KEYED by it (layout L3): a move within a column is a React move, not
   // a remount, and only a change of column remounts a pane (the log form, keyed apart, never moves).
   // The feeds' divider rides with Spots.
+  const metersSeam =
+    metersWith && panels ? (
+      <PaneSeam
+        above={metersFrameRef}
+        below={metersWith === 'spots' ? spotsFrameRef : neededFrameRef}
+        varName="--pane-share"
+        onCommit={(av, bv) => panels.setShares({ txMetersPane: av, [metersWith]: bv })}
+        onReset={() => panels.setShares({ txMetersPane: null, [metersWith]: null })}
+        label={t('operate.seam.pair.label', { above: labels.txMetersPane, below: labels[metersWith] })}
+        className="in-column"
+      />
+    ) : null
   const paneEls: Partial<Record<CwPanelId, React.ReactNode>> = {
+    txMetersPane: hasMetersPane ? (
+      <TxMetersPane
+        radio={snap.radio}
+        paneRef={metersFrameRef}
+        split={metersWith ? 1 : undefined}
+        share={metersWith ? panels?.layout.share.txMetersPane : undefined}
+        close={closeProps('txMetersPane')}
+      />
+    ) : null,
     decode: decodePane,
     sent: sentPane,
     bandActivity: bandPane,
@@ -2401,6 +2432,7 @@ export function CwCockpit({
     <Fragment key={id}>
       {paneEls[id]}
       {id === 'spots' && feedSeam}
+      {id === 'txMetersPane' && metersSeam}
     </Fragment>
   )
   const rigCtlSlot = <Fragment key="rigctl">{rigCtlPane}</Fragment>
@@ -2445,6 +2477,7 @@ export function CwCockpit({
       // THE COMPACT DOCK (md and up): the read-only meters stand in the strip's empty right side, as
       // in Operate's QSO strip, and the dock loses their row. They keep their ⊞ id — a readout.
       meters={chrome.wide && shown('txmeters') ? <TxMeters radio={snap.radio} strip /> : undefined}
+      metersPane={panels?.setPanelState ? { shown: hasMetersPane, onToggle: () => panels.setPanelState('txMetersPane', hasMetersPane ? 'removed' : 'docked') } : undefined}
     />
   )
   // The header's occasional controls, drawn inline or behind its ⋯ (see the header below).
