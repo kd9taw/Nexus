@@ -8604,6 +8604,8 @@ export const EN = {
   'settings.rigControl.serialHandshake.xonxoff': 'XON/XOFF (software)',
   'settings.rigControl.serialHandshake.hint':
     "Tells Nexus what your cable actually does, instead of letting it guess. Leave it on Auto unless you have a rig that keys at launch — Auto changes nothing about how your station works today. If you change it and CAT stops working, put it back on Auto: on some rigs Hamlib quietly refuses the setting and then answers without ever having opened the radio, so you get a CAT light and a rig that ignores you.",
+  'settings.rigControl.catSilentTxOff':
+    'Transmit was turned off because the radio stopped answering CAT. Check the radio and its CAT cable; Nexus keeps trying. Press TX On to transmit again.',
   'settings.rigControl.serialHandshake.rtsKeys':
     "RTS keys your transmitter on this port, so Serial handshake can't be Hardware — set it to Auto or None.",
   'settings.rigControl.pttLineState.label': 'Keying line at startup',

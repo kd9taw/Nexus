@@ -13,6 +13,8 @@ import { ES } from '../i18n/es'
 import { FR } from '../i18n/fr'
 import { JA } from '../i18n/ja'
 import { RU } from '../i18n/ru'
+import { ZH } from '../i18n/zh'
+import { ZH_HANT } from '../i18n/zh-hant'
 
 const KEY = 'settings.rigControl.serialHandshake.rtsKeys'
 const SENTENCE = EN[KEY]
@@ -57,5 +59,33 @@ describe('the hardware-handshake refusal in the CAT status', () => {
   it("the Russian kit's row has the English the app shows", () => {
     const csv = read('../../../translations/ru/nexus-ru-translation.csv')
     expect(csv).toContain(`"${KEY}","${SENTENCE.replace(/"/g, '""')}"`)
+  })
+})
+
+describe('transmit turned off by a silent CAT link, in the CAT status', () => {
+  const OFF_KEY = 'settings.rigControl.catSilentTxOff'
+
+  it('is the exact sentence the backend sends', () => {
+    const rust = read('../../../crates/tempo-app/src/engine.rs')
+    const m = rust.match(/pub const CAT_SILENT_TX_OFF: &str =\s*"([^"]*)";/)
+    expect(m?.[1]).toBe(EN[OFF_KEY])
+  })
+
+  it.each([
+    ['de', DE],
+    ['es', ES],
+    ['fr', FR],
+    ['ja', JA],
+    ['ru', RU],
+    ['zh', ZH],
+    ['zh-hant', ZH_HANT],
+  ] as const)('%s: is translated, names TX On as it is on the button, and keeps what follows it', (lang, cat) => {
+    const text = String((cat as Record<string, unknown>)[OFF_KEY])
+    expect(text).not.toBe(EN[OFF_KEY])
+    expect(text).toContain('TX On')
+    installCatalog(lang, cat)
+    setLocale(lang)
+    const rest = '14.0740 MHz CAT link unreachable (1/3)'
+    expect(catDetailText(`${EN[OFF_KEY]} ${rest}`)).toBe(`${text} ${rest}`)
   })
 })

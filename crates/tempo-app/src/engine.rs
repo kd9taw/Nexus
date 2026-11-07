@@ -2177,6 +2177,12 @@ const SSTV_RADIO_HAS_MIC: &str = "SSTV can't send while the radio has the mic: w
      DAX audio on, Phone at the shack uses the radio's own mic, so the picture would not go out. \
      Nothing was keyed.";
 
+/// Leads the CAT status while a silent link has turned transmit off
+/// ([`Engine::say_tx_off_for_silent_cat`]). ⚠️ The UI matches this exact sentence to show it in the
+/// operator's language (`ui/src/features/catDetail.ts`, whose test reads this constant) — change
+/// both together.
+pub const CAT_SILENT_TX_OFF: &str = "Transmit was turned off because the radio stopped answering CAT. Check the radio and its CAT cable; Nexus keeps trying. Press TX On to transmit again.";
+
 /// What a refused start says while a clock repair holds transmit
 /// ([`Engine::hold_tx_for_clock_repair`]): the answer of every up-front TX gate, and of TX On on
 /// the desktop. English at the engine, like the gates' other answers.
@@ -5162,6 +5168,9 @@ pub struct Engine {
     /// `None` for VOX (no CAT), `Some(true/false)` for a CAT/serial rig. Written
     /// by the radio loop when it (re)opens or probes the rig.
     cat_status: (Option<bool>, String),
+    /// A silent CAT link turned transmit off and nothing has answered that yet
+    /// ([`Self::say_tx_off_for_silent_cat`]).
+    cat_silence_tx_off: bool,
     /// The transmitter alarms the operator has not dismissed, oldest first (`tx_alarms.rs`).
     tx_alarms: Vec<crate::dto::TxAlarm>,
     /// The last alarm id handed out. Never reused, so a dismissal names exactly one alarm.
@@ -7797,6 +7806,7 @@ impl Engine {
             cw_stream: tempo_core::cw_decode::CwStreamDecoder::new(tempo_fast::SAMPLE_RATE, 600.0),
             qso_audio: Vec::new(),
             cat_status: (None, String::new()),
+            cat_silence_tx_off: false,
             tx_alarms: Vec::new(),
             tx_alarm_seq: 0,
             contest_entry: None,
@@ -12944,6 +12954,7 @@ impl Engine {
             // never re-arms behind a stop; this does.
             tempo_core::applog::info("tx", &format!("CW over queued: {expanded:?}"));
             self.tx_enabled = true;
+            self.cat_silence_tx_off = false;
             self.tx_stop_hold = false;
             self.tx_watchdog = false;
             // A fresh send supersedes BOTH pending one-shot aborts: the CW abort, and the
@@ -22910,6 +22921,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
         self.tx_enabled = on;
         if on {
+            self.cat_silence_tx_off = false;
             // The operator's arm ends Clear DX's hold on the callers it dropped.
             self.cleared_dx_calls.clear();
             // Re-enabling is an operator action: clear a tripped watchdog and
@@ -28956,6 +28968,21 @@ contact yourself."
 
     /// Set the rig/CAT connection status the UI renders (and the Test-CAT result
     /// reads). `ok`: `None` = VOX/no CAT, `Some(true/false)` = CAT up/down.
+    /// A silent CAT link has just turned transmit off. The CAT status leads with
+    /// [`CAT_SILENT_TX_OFF`] until the link answers ([`Self::clear_tx_off_for_silent_cat`]) or
+    /// transmit is back on. Kept apart from the status because the status is latest-wins, and the
+    /// next failed read, one tick later, would replace the words. It says something and changes
+    /// nothing: it keys nothing and arms nothing.
+    pub fn say_tx_off_for_silent_cat(&mut self) {
+        self.cat_silence_tx_off = true;
+    }
+
+    /// The link answered, or its settings changed: the sentence no longer describes it. Transmit
+    /// stays as it is, as only the operator turns it back on.
+    pub fn clear_tx_off_for_silent_cat(&mut self) {
+        self.cat_silence_tx_off = false;
+    }
+
     pub fn set_cat_status(&mut self, ok: Option<bool>, detail: String) {
         self.cat_status = (ok, detail);
         self.cat_probe_gen = self.cat_probe_gen.wrapping_add(1);
@@ -31358,7 +31385,13 @@ contact yourself."
         s.radio.flex_meter_stream = self.flex_meter_stream;
         s.radio.time_sync_ok = self.time_sync_ok();
         s.radio.cat_ok = self.cat_status.0;
-        s.radio.cat_detail = self.cat_status.1.clone();
+        s.radio.cat_detail = if self.cat_silence_tx_off && !self.tx_enabled {
+            format!("{CAT_SILENT_TX_OFF} {}", self.cat_status.1)
+                .trim_end()
+                .to_string()
+        } else {
+            self.cat_status.1.clone()
+        };
         // The radio's RX coverage, in MHz, for the UI to gate a "move the radio" control on. Empty
         // = unknown, which the UI must read as "allow" for the same fail-open reason the engine does.
         s.radio.rx_ranges_mhz = self
