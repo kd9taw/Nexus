@@ -70433,7 +70433,11 @@ mod tests {
             let ran = ask("sstv_tune_recall", args.clone());
             assert!(ran.is_ok(), "{section}: {ran:?}");
             let e = engine_lock(&engine);
-            assert_eq!(e.settings().operating_mode, OperatingMode::Phone, "{section}");
+            assert_eq!(
+                e.settings().operating_mode,
+                OperatingMode::Phone,
+                "{section}"
+            );
             assert!((e.settings().dial_mhz - 144.8875).abs() < 1e-9, "{section}");
             assert_eq!(e.tx_enabled(), armed, "from {section}, armed: {armed}");
         }
