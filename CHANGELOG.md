@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- **TempoFast copies far more of what it hears.** In simulation on white noise, a frame at +15 dB used to go missing about 7% of the time, more at some time offsets, and strong signals did no better. That is now under 1%. At -10 dB the missed share falls from about 43% to about 9%, the level where half of frames are copied moves from about -11 dB to about -13.5 dB, and false decodes do not rise. The transmitted signal has not changed, so this helps any station you receive, whichever version it runs. Decoding each signal takes about 20 ms longer. These are bench figures, not on-air results.
+- **TempoFast copies far more of what it hears.** In simulation on white noise, a frame at +15 dB used to go missing about 7% of the time, more at some time offsets, and strong signals did no better. That is now under 1%. At -10 dB the missed share falls from about 43% to about 9%, the level where half of frames are copied moves from about -11 dB to about -13.5 dB, and false decodes do not rise. The transmitted signal has not changed, so this helps any station you receive, whichever version it runs. Decode time is about the same or better: 5, 10 and 20 signals take about 0.14, 0.22 and 0.43 s, was 0.15, 0.31 and 0.63 s, though a frame of 10 signals too weak to copy can take up to 2 s, was 1.5 s. These are bench figures, not on-air results.
 
 ## [1.23.0] — 2026-11-05
 
