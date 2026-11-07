@@ -2183,6 +2183,9 @@ const SSTV_RADIO_HAS_MIC: &str = "SSTV can't send while the radio has the mic: w
 /// both together.
 pub const CAT_SILENT_TX_OFF: &str = "Transmit was turned off because CAT to the radio was lost. Check the radio and its CAT cable; Nexus keeps trying. Press TX On to transmit again.";
 
+/// [`CAT_SILENT_TX_OFF`] once the radio answers again, with transmit still off. The same UI match.
+pub const CAT_BACK_TX_OFF: &str = "The radio stopped answering CAT and transmit was turned off. CAT is back; press TX On to transmit.";
+
 /// What a refused start says while a clock repair holds transmit
 /// ([`Engine::hold_tx_for_clock_repair`]): the answer of every up-front TX gate, and of TX On on
 /// the desktop. English at the engine, like the gates' other answers.
@@ -28968,30 +28971,32 @@ contact yourself."
 
     /// Set the rig/CAT connection status the UI renders (and the Test-CAT result
     /// reads). `ok`: `None` = VOX/no CAT, `Some(true/false)` = CAT up/down.
-    /// A lost CAT link (silent, or its daemon dead) has just turned transmit off. The CAT status leads with
-    /// [`CAT_SILENT_TX_OFF`] until the link answers ([`Self::clear_tx_off_for_silent_cat`]) or
-    /// transmit is back on. Kept apart from the status because the status is latest-wins, and the
-    /// next failed read, one tick later, would replace the words. It says something and changes
-    /// nothing: it keys nothing and arms nothing.
+    /// A lost CAT link (silent, or its daemon dead) has just turned transmit off. The CAT status
+    /// leads with why until transmit is back on or the CAT settings change
+    /// ([`Self::clear_tx_off_for_silent_cat`]). The link answering does not end it: transmit is still
+    /// off, and only the words change ([`Self::cat_detail_with_tx_off`]). Kept apart from the status
+    /// because the status is latest-wins and the next failed read replaces it a tick later. It says
+    /// something and changes nothing: it keys nothing and arms nothing.
     pub fn say_tx_off_for_silent_cat(&mut self) {
         self.cat_silence_tx_off = true;
     }
 
-    /// The link answered, or its settings changed: the sentence no longer describes it. Transmit
-    /// stays as it is, as only the operator turns it back on.
+    /// The CAT settings changed: the sentence was about a link that is gone. Transmit stays as it is.
     pub fn clear_tx_off_for_silent_cat(&mut self) {
         self.cat_silence_tx_off = false;
     }
 
-    /// `detail`, led by [`CAT_SILENT_TX_OFF`] while it holds. Test CAT's result reads through this
-    /// as the status does, since its result line replaces the status on screen. Never on a verdict
-    /// that the radio answered (`ok`): the tick that follows ends the words, and a press read
-    /// before it must not show a green result that says CAT was lost.
+    /// `detail`, led by why transmit is off while that holds: [`CAT_SILENT_TX_OFF`], or
+    /// [`CAT_BACK_TX_OFF`] when this verdict (`ok`) is that the radio answers. Test CAT's result reads
+    /// through this as the status does, since its result line replaces the status on screen.
     pub fn cat_detail_with_tx_off(&self, ok: Option<bool>, detail: String) -> String {
-        if self.cat_silence_tx_off && !self.tx_enabled && ok != Some(true) {
-            format!("{CAT_SILENT_TX_OFF} {detail}")
-                .trim_end()
-                .to_string()
+        if self.cat_silence_tx_off && !self.tx_enabled {
+            let lead = if ok == Some(true) {
+                CAT_BACK_TX_OFF
+            } else {
+                CAT_SILENT_TX_OFF
+            };
+            format!("{lead} {detail}").trim_end().to_string()
         } else {
             detail
         }

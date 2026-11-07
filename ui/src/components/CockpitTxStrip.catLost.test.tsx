@@ -72,6 +72,15 @@ describe.each([
     expect(s.getAttribute('title')).toBe(DE['settings.rigControl.catSilentTxOff'])
   })
 
+  it('keeps explaining once CAT is back, in words for that, until transmit is back on', () => {
+    const back = { txEnabled: false, catOk: true, catDetail: `${EN['settings.rigControl.catBackTxOff']} 14.074 MHz` }
+    const s = state(back)
+    expect(s.textContent).toBe('■ TX off — CAT is back: press TX On')
+    expect(s.getAttribute('title')).toBe(EN['settings.rigControl.catBackTxOff'])
+    cleanup()
+    expect(state({ ...back, txEnabled: true }).textContent).toBe('▼ Receiving')
+  })
+
   it('goes when the status does, and when transmit is back on', () => {
     expect(state({ txEnabled: false, catDetail: 'Connected — 14.074 MHz' }).textContent).toBe('■ TX off')
     cleanup()

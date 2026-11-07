@@ -222,6 +222,9 @@ export function OperateQsoStrip({
     setFree('')
   }
 
+  // A CAT outage turned transmit off: said in the TX state, after the controls (`catSaysTxOff`).
+  const catOff = radio && !radio.txEnabled ? catSaysTxOff(radio.catDetail) : null
+
   return (
     <section className={`cockpit-qso panel${radio ? (onAir ? ' tx' : ' rx') : ''}`}>
       {/* POSITION-STABILITY ORDER (OperateQsoStrip.geometry.test): the two button
@@ -344,9 +347,11 @@ export function OperateQsoStrip({
           title={
             !onAir && radio.txRefusal
               ? radio.txRefusal
-              : !onAir && !radio.txEnabled && catSaysTxOff(radio.catDetail)
+              : !onAir && catOff === 'lost'
                 ? t('settings.rigControl.catSilentTxOff')
-                : undefined
+                : !onAir && catOff === 'back'
+                  ? t('settings.rigControl.catBackTxOff')
+                  : undefined
           }
         >
           {onAir
@@ -355,9 +360,11 @@ export function OperateQsoStrip({
               ? t('operate.strip.state.connectionNoTx')
               : radio.txEnabled
                 ? t('operate.strip.state.receiving')
-                : catSaysTxOff(radio.catDetail)
+                : catOff === 'lost'
                   ? t('operate.strip.state.txOffCatLost')
-                  : t('operate.strip.state.txOff')}
+                  : catOff === 'back'
+                    ? t('operate.strip.state.txOffCatBack')
+                    : t('operate.strip.state.txOff')}
         </span>
       )}
       {/* The rig has been moved out from under us — stated in the strip that is already always

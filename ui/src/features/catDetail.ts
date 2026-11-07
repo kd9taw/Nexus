@@ -8,7 +8,7 @@
 // `HARDWARE_HANDSHAKE_RTS_KEYS`). The backend sends the English catalog's sentence exactly, so the
 // match is against EN itself; catDetail.test.ts holds the Rust constant to the same words.
 //
-// Transmit off: `CAT_SILENT_TX_OFF` in crates/tempo-app/src/engine.rs, the same way.
+// Transmit off: `CAT_SILENT_TX_OFF` and `CAT_BACK_TX_OFF` in crates/tempo-app/src/engine.rs, the same way.
 
 import { EN, t } from '../i18n'
 
@@ -20,13 +20,16 @@ export function catDetailText(detail: string): string {
       () => t('settings.rigControl.serialHandshake.rtsKeys'),
     )
     .replace(EN['settings.rigControl.catSilentTxOff'], () => t('settings.rigControl.catSilentTxOff'))
+    .replace(EN['settings.rigControl.catBackTxOff'], () => t('settings.rigControl.catBackTxOff'))
 }
 
 /**
- * Does this CAT status say a lost link has turned transmit off? The backend leads the status with
- * the sentence for exactly as long as that holds, so the TX strip's state follows it with no field
- * of its own: the status is a tooltip on the cockpits, and the strip can be read without hovering.
+ * Does this CAT status say a lost link has turned transmit off, and is the link still lost or back?
+ * The backend leads the status with one of the two sentences for exactly as long as that holds, so
+ * the TX strip's state follows it with no field of its own: the status is a tooltip on the cockpits,
+ * and the strip can be read without hovering.
  */
-export function catSaysTxOff(detail: string | undefined): boolean {
-  return detail?.includes(EN['settings.rigControl.catSilentTxOff']) ?? false
+export function catSaysTxOff(detail: string | undefined): 'lost' | 'back' | null {
+  if (detail?.includes(EN['settings.rigControl.catSilentTxOff'])) return 'lost'
+  return detail?.includes(EN['settings.rigControl.catBackTxOff']) ? 'back' : null
 }

@@ -89,3 +89,31 @@ describe('transmit turned off by a silent CAT link, in the CAT status', () => {
     expect(catDetailText(`${EN[OFF_KEY]} ${rest}`)).toBe(`${text} ${rest}`)
   })
 })
+
+describe('transmit still off once CAT is back, in the CAT status', () => {
+  const KEY = 'settings.rigControl.catBackTxOff'
+
+  it('is the exact sentence the backend sends', () => {
+    const rust = read('../../../crates/tempo-app/src/engine.rs')
+    const m = rust.match(/pub const CAT_BACK_TX_OFF: &str =\s*"([^"]*)";/)
+    expect(m?.[1]).toBe(EN[KEY])
+  })
+
+  it.each([
+    ['de', DE],
+    ['es', ES],
+    ['fr', FR],
+    ['ja', JA],
+    ['ru', RU],
+    ['zh', ZH],
+    ['zh-hant', ZH_HANT],
+  ] as const)('%s: is translated and names TX On as it is on the button', (lang, cat) => {
+    const text = String((cat as Record<string, unknown>)[KEY])
+    expect(text).not.toBe(EN[KEY])
+    expect(text).toContain('TX On')
+    installCatalog(lang, cat)
+    setLocale(lang)
+    expect(catDetailText(`${EN[KEY]} 14.074 MHz`)).toBe(`${text} 14.074 MHz`)
+  })
+})
+

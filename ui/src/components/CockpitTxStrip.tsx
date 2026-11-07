@@ -79,9 +79,9 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
   const lit =
     onAir &&
     !(radio.streamMic === 'armed' && !radio.transmitting && !radio.tuning && radio.rigKeyed !== true)
-  // A lost CAT link turned transmit off: said in the TX state, after every control, so that it can
+  // A CAT outage turned transmit off: said in the TX state, after every control, so that it can
   // be read without hovering and moves none of them.
-  const catLost = !radio.txEnabled && catSaysTxOff(radio.catDetail)
+  const catOff = radio.txEnabled ? null : catSaysTxOff(radio.catDetail)
   const ref = useRef<HTMLDivElement>(null)
   useDockClearance(ref)
   // ⭐ ATU ON (#344, operator ruling): the label says when the radio reports its tuner in line; a
@@ -200,16 +200,18 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
           than "receiving" over a TX that cannot key. A key the radio itself holds still lights
           the sign: what is on the air is shown first. */}
       <span className={`cq-statecap ${lit ? 'tx' : radio.txRefusal ? 'off' : radio.txEnabled ? 'rx' : 'off'}`}
-        title={!lit && radio.txRefusal ? radio.txRefusal : !lit && catLost ? t('settings.rigControl.catSilentTxOff') : undefined}>
+        title={!lit && radio.txRefusal ? radio.txRefusal : !lit && catOff === 'lost' ? t('settings.rigControl.catSilentTxOff') : !lit && catOff === 'back' ? t('settings.rigControl.catBackTxOff') : undefined}>
         {lit
           ? t('operate.strip.state.transmitting')
           : radio.txRefusal
             ? t('operate.strip.state.connectionNoTx')
             : radio.txEnabled
               ? t('operate.strip.state.receiving')
-              : catLost
+              : catOff === 'lost'
                 ? t('operate.strip.state.txOffCatLost')
-                : t('operate.strip.state.txOff')}
+                : catOff === 'back'
+                  ? t('operate.strip.state.txOffCatBack')
+                  : t('operate.strip.state.txOff')}
       </span>
       {/* THE METERS' CELL, at the strip's right end (`.cockpit-txstrip-meters`): after the cluster and
           the TX state, so nothing it shows can move a control. Two rows at most, the strip's own
