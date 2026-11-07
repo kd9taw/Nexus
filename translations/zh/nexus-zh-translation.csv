@@ -4242,7 +4242,7 @@
 "5","stats.byBand.head","By band","按波段","",""
 "5","stats.byMode.head","By mode","按模式","",""
 "5","stats.byYear.head","By year","按年份","",""
-"5","stats.topEntities.head","Top DXCC entities","顶级 DXCC 实体","DXCC",""
+"5","stats.topEntities.head","Top DXCC entities","DXCC 实体排行","DXCC",""
 "5","stats.byState.head","Most-worked states (WAS)","通联最多的州（WAS）","WAS",""
 "5","stats.byHour.head","Activity by hour (UTC)","按小时的活动（UTC）","UTC",""
 "5","stats.hour.title","{{hour}}:00 UTC — {{count}} QSOs","{{hour}}:00 UTC — {{count}} 个 QSO","{{hour}} | {{count}} | UTC",""
