@@ -3812,7 +3812,7 @@ export const ZH: PartialCatalog = {
   "stats.byBand.head": "按波段",
   "stats.byMode.head": "按模式",
   "stats.byYear.head": "按年份",
-  "stats.topEntities.head": "顶级 DXCC 实体",
+  "stats.topEntities.head": "DXCC 实体排行",
   "stats.byState.head": "通联最多的州（WAS）",
   "stats.byHour.head": "按小时的活动（UTC）",
   "stats.hour.title": "{{hour}}:00 UTC — {{count}} 个 QSO",

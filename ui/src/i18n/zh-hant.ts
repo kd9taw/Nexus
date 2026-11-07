@@ -3814,7 +3814,7 @@ export const ZH_HANT: PartialCatalog = {
   "stats.byBand.head": "按波段",
   "stats.byMode.head": "按模式",
   "stats.byYear.head": "按年份",
-  "stats.topEntities.head": "頂級 DXCC 實體",
+  "stats.topEntities.head": "DXCC 實體排行",
   "stats.byState.head": "通聯最多的州（WAS）",
   "stats.byHour.head": "按小時的活動（UTC）",
   "stats.hour.title": "{{hour}}:00 UTC — {{count}} 筆 QSO",
