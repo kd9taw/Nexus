@@ -33,6 +33,8 @@ function tileTitle(tile: BandTile, outlook: readonly BandOutlook[], nowMs: numbe
   // No data: the band menu's own words for it, so the two say the same.
   if (tile.state === 'unknown') lines.push(t('bandMenu.condition.unknown.title'))
   else lines.push(t('bandTiles.title.state', { band: tile.band, word: tile.word }))
+  // A word nobody's report backs is the advisor's model: the simple one, not the engine P.533 runs.
+  if (r?.modeled && r.tier !== 'Active' && r.tier !== 'Moderate') lines.push(t('prop.bands.simpleModel'))
   if (tile.mode) lines.push(t('bandTiles.title.opening', { mode: tile.mode }))
   if (r) {
     if (r.reason) lines.push(r.reason)

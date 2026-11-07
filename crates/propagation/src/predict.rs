@@ -68,6 +68,39 @@ pub struct PathPrediction {
     /// ([`with_fallback`]). The screen says so; a cache never keeps it. Absent when false.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub engine_fallback: bool,
+    /// The storm correction laid over this P.533 answer ([`crate::storm`]); absent when it changed
+    /// nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storm: Option<crate::storm::StormNote>,
+    /// The transmit power the answer assumes and where it came from, set by the caller that
+    /// chose it. Only P.533 uses power; absent from the engines themselves.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub power: Option<AssumedPower>,
+}
+
+/// The transmit power a prediction assumes, and where that figure came from, for the screen to
+/// say. `amplifier` is true when an amplifier is set up on the radio, so a figure that is not the
+/// amplifier's own may be below the power on the air.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssumedPower {
+    pub watts: f64,
+    pub source: PowerSource,
+    pub amplifier: bool,
+}
+
+/// Where an [`AssumedPower`] came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PowerSource {
+    /// Settings ▸ Station power.
+    Setting,
+    /// The radio's forward power on the last transmission Nexus measured.
+    Rig,
+    /// The amplifier's output on the last transmission Nexus measured.
+    Amplifier,
+    /// Nothing set and nothing measured: 100 W.
+    Default,
 }
 
 impl PathPrediction {
@@ -146,6 +179,12 @@ pub trait PathPredictor: Send + Sync {
         }
     }
 
+    /// The storm correction this engine has laid over any answer since it was built
+    /// ([`crate::storm::with_storm_correction`]); none for an engine that makes none.
+    fn storm_note(&self) -> Option<crate::storm::StormNote> {
+        None
+    }
+
     /// Whether this engine could not run and answered from the heuristic ([`with_fallback`]),
     /// at any time since it was built. An engine that cannot fail never has.
     fn fell_back(&self) -> bool {
@@ -203,6 +242,8 @@ impl PathPredictor for HeuristicEngine {
             overlay: None,
             space_now: None,
             engine_fallback: false,
+            storm: None,
+            power: None,
         }
     }
 }
@@ -380,11 +421,13 @@ pub fn band_outlook_ring(
     let mut muf_now = 0f32;
     let mut muf_hourly = vec![0f32; 24];
     let mut engine_fallback = false;
+    let mut storm = None;
     for i in 0..n {
         let brg = (i as f64) * 360.0 / (n as f64);
         let dx = crate::geo::destination_point(me, brg, dist_km);
         let p = eng.predict(dx, now, wx);
         engine_fallback |= p.engine_fallback;
+        crate::storm::StormNote::fold(&mut storm, p.storm);
         muf_now = muf_now.max(p.muf_now);
         for (h, slot) in muf_hourly.iter_mut().enumerate() {
             if let Some(&m) = p.muf_hourly.get(h) {
@@ -427,6 +470,8 @@ pub fn band_outlook_ring(
         overlay: None,
         space_now: None,
         engine_fallback,
+        storm,
+        power: None,
     }
 }
 

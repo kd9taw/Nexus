@@ -18,6 +18,7 @@ import { t } from '../../i18n'
 import { fmtZ, heatColor } from '../../propViz'
 import { getLogStats } from '../../api'
 import { PATH_REGIONS, refreshFeed, useFeed } from '../../features/connectFeeds'
+import { ModelBasis } from './ModelBasis'
 import {
   bestBand,
   cellView,
@@ -498,6 +499,7 @@ export function PathRegionsPane({
         greyEnds="me"
       />
       {data?.engineFallback && <div className="pd-modelled">{t('prop.engine.fallback')}</div>}
+      <ModelBasis engine={data?.engine} power={data?.power} storm={data?.storm} className="pd-modelled" />
       <Legend hasLong={hasLong} showLong={hasLong && shown !== 'short'} />
     </div>
   )

@@ -29,6 +29,7 @@ import type { BandOutlook } from '../../types'
 import { bandTiming } from '../../propViz'
 import { PathWhy } from '../prop/PathWhy'
 import { SpaceNowLine } from '../prop/SpaceNowLine'
+import { ModelBasis } from '../prop/ModelBasis'
 import { PathRoute } from '../prop/PathRoute'
 import { PathDayPane, PathRegionsPane } from '../prop/PathDayStrip'
 import { azimuthLabel, azimuthTitle } from '../../grid'
@@ -284,6 +285,7 @@ function renderPath(c: PaneContext): ReactNode {
           />
         </p>
       )}
+      <ModelBasis engine={p.engine} power={p.power} storm={p.storm} />
       <PathWhy pred={p} />
       <PathRoute pred={p} focusBand={c.focusBand} className="cp-route" />
       {c.pathOpen.length === 0 ? (
@@ -327,6 +329,7 @@ function renderOutlook(c: PaneContext): ReactNode {
         </span>
       </h3>
       <SpaceNowLine now={o.spaceNow} nowSec={Math.floor(Date.now() / 1000)} />
+      <ModelBasis engine={o.engine} power={o.power} storm={o.storm} />
       {o.mufNow > 0 && (
         <p className="cp-muf" title={t('connect.outlook.muf.title')}>
           <T

@@ -478,8 +478,16 @@ hides the dashboard rail (above).
 ## Honest limits
 
 - **The per-path 24-hour outlook is a model.** P.533, the default, is a monthly
-  median: it does not change with today's Kp. The physics-lite heuristic (MUF +
-  D-layer) is labelled "modelled." Both are *models*; live spots override both.
+  median. In a geomagnetic storm Nexus lowers its hours with the heuristic's own
+  storm penalty: the current hour from today's Kp, later hours from SWPC's Kp
+  forecast, and an hour with no forecast is left as P.533 gave it. The pane says
+  "Adjusted for a geomagnetic storm" when it has done so.
+- **The power P.533 assumes is shown under the answer:** your Station power
+  setting; else the power your radio measured on your last transmission (with an
+  amplifier set up, the amplifier's output); else 100 W, said as such.
+- **The Band Advisor still uses the physics-lite heuristic** for a band nobody has
+  been heard on, and says so in its caption. Both are *models*; live spots
+  override both.
 - **VOACAP is not integrated.**
 - **PSK Reporter's MQTT band topics carry no SNR**, so SNR-derived features
   degrade gracefully where the data isn't present.

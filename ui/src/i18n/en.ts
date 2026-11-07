@@ -11325,6 +11325,16 @@ export const EN = {
   'prop.engine.fallback': 'modelled: P.533 could not run',
   // The one-time note after an existing station is moved to P.533. The path names the Settings
   // tab and the setting's own label, so each catalog repeats its own words for them.
+  // What a P.533 answer rests on: the storm correction laid over it and the power it assumes
+  // (components/prop/ModelBasis). ⚠️ `Kp`, `W` and `P.533` stay verbatim.
+  'prop.storm.applied': 'Adjusted for a geomagnetic storm, Kp up to {{kp}}.',
+  'prop.storm.someHours': 'Hours with no Kp forecast are not adjusted.',
+  'prop.power.setting': 'Assumes {{watts}} W, your station power setting.',
+  'prop.power.rig': 'Assumes about {{watts}} W, the radio\'s output on your last transmission.',
+  'prop.power.amplifier': 'Assumes about {{watts}} W, the amplifier\'s output on your last transmission.',
+  'prop.power.default': 'Assumes 100 W: no station power is set and the radio has not reported its output.',
+  'prop.power.amplifierSetUp': 'An amplifier is set up, so the power on the air may be higher.',
+  'prop.bands.simpleModel': 'With nothing heard, a band\'s word comes from the simple model, not P.533.',
   'prop.engine.note':
     'Predictions now use P.533, so some band answers have changed. To go back, open Settings ▸ Services ▸ Prediction engine.',
   'connect.engine.outlook': 'modelled · DX',

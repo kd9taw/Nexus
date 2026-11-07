@@ -72,7 +72,7 @@ export function BandAdvisor({
         )}
       </h2>
       <p className="ba-caption">
-        {showWorld ? t('prop.bands.caption.world') : t('prop.bands.caption.you')}
+        {showWorld ? t('prop.bands.caption.world') : t('prop.bands.caption.you')} {t('prop.bands.simpleModel')}
       </p>
       <div className="ba-rows">
         {rows.map((b) => {

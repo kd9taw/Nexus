@@ -86,6 +86,13 @@ describe('the band tiles, drawn', () => {
     expect(title).toEqual(['40m: Open', 'r', '4 hear you · you hear 12', 'Best toward Europe (NE, 48°)', 'Click to show this band on the map, and again to clear it'])
   })
 
+  it('a word nobody backs says it is the simple model, and a heard band does not', () => {
+    render(<BandTiles prop={snap(BANDS)} nowMs={NOW_MS} />)
+    const title = (band: string) => tiles().find((b) => b.querySelector('.bt-band')!.textContent === band)!.title
+    expect(title('80m')).toContain('the simple model, not P.533')
+    expect(title('40m')).not.toContain('simple model')
+  })
+
   it('a click shows the band on the map', () => {
     const onBandClick = vi.fn()
     render(<BandTiles prop={snap(BANDS)} nowMs={NOW_MS} onBandClick={onBandClick} />)

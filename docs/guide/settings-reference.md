@@ -2173,6 +2173,8 @@ Nexus connects to all of them and merges what they report.*
   always win over any model.**" See [Conditions](connect.md). A station on the
   fast heuristic moves to P.533 once when it updates to the version that made it
   the default, and a dismissible line says so. Set it back here and it stays.
+  With Station power blank, P.533 assumes the power your radio measured on your
+  last transmission, or 100 W, and says which under each answer.
 - **Antenna gain (dBi) — TX / RX** (under *Antenna gain (advanced)*) — "Used by
   the P.533 link budget only. 0 = a simple wire/vertical (isotropic); a
   3-element yagi ≈ 6–8. Honest v1: a plain dB shift — no pattern or

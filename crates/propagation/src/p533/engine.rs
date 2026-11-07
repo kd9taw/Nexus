@@ -146,7 +146,7 @@ fn path_hour(run: &P533Run) -> Option<PathHour> {
 /// The heuristic's window formatting over a 24×1-hour score array: the
 /// contiguous ≥Fair run containing the peak, with the low-band greyline label
 /// (byte-identical format strings so the two engines read the same in the UI).
-fn best_window(scores: &[f32; 24], day0: i64, band: Band) -> (String, bool, f32, usize) {
+pub(crate) fn best_window(scores: &[f32; 24], day0: i64, band: Band) -> (String, bool, f32, usize) {
     const STEP: i64 = 3600;
     let (mut peak_i, mut peak) = (0usize, 0.0f32);
     for (i, &s) in scores.iter().enumerate() {
@@ -299,6 +299,8 @@ impl P533Engine {
                 overlay: None,
                 space_now: None,
                 engine_fallback: false,
+                storm: None,
+                power: None,
             };
         };
 
@@ -387,6 +389,8 @@ impl P533Engine {
             overlay: None,
             space_now: None,
             engine_fallback: false,
+            storm: None,
+            power: None,
         }
     }
 }

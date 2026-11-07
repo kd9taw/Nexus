@@ -8,6 +8,7 @@ import type { DxpedWindow, WorkableCard } from '../../types'
 import { needMeta, workabilityVar, bandTiming } from '../../propViz'
 import { azimuthLabel, azimuthTitle, backendAzimuth } from '../../grid'
 import { LikelihoodHeatmap } from './LikelihoodHeatmap'
+import { ModelBasis } from './ModelBasis'
 import { t } from '../../i18n'
 import { fmtDistanceKm, useUnits } from '../../units'
 
@@ -115,6 +116,7 @@ export function WorkNowCard({
       ) : (
         <div className="wn-window">{card.windowHint}</div>
       )}
+      {win?.storm && <ModelBasis engine={win.engine} storm={win.storm} className="wn-how" />}
       {details && win && <LikelihoodHeatmap outlook={win.outlook} />}
       <div className="wn-how">{card.howToCall}</div>
       {/* SuperFox, said BEFORE the Work button rather than in the middle of the pileup. The

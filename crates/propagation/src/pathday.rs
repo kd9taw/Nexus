@@ -387,6 +387,8 @@ mod tests {
             overlay: None,
             space_now: None,
             engine_fallback: false,
+            storm: None,
+            power: None,
         }
     }
 

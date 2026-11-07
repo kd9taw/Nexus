@@ -299,6 +299,21 @@ describe('the region strips', () => {
     expect(container.textContent).toContain('modelled: P.533 could not run')
   })
 
+  it('says what the sweep assumes and when a storm correction is on it', async () => {
+    fx.regions = {
+      engine: 'p533',
+      computedUnix: T0,
+      regions: [region('eu', [14])],
+      storm: { kp: 7, hoursWithoutKp: true },
+      power: { watts: 100, source: 'default', amplifier: false },
+    }
+    const { container } = render(<PathRegionsPane needs={[]} scrub={null} />)
+    await waitFor(() => expect(names(container)).toEqual(['Europe']))
+    expect(container.textContent).toContain('Adjusted for a geomagnetic storm, Kp up to 7.0.')
+    expect(container.textContent).toContain('Hours with no Kp forecast are not adjusted.')
+    expect(container.textContent).toContain('Assumes 100 W')
+  })
+
   it('says nothing about a failure when P.533 ran', async () => {
     fx.regions = { engine: 'p533', computedUnix: T0, regions: [region('eu', [14])] }
     const { container } = render(<PathRegionsPane needs={[]} scrub={null} />)

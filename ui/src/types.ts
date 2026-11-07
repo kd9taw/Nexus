@@ -398,11 +398,31 @@ export interface PathGradingStatus {
   last30Days?: PathValidation
 }
 /** Per-path HF prediction (the PathPredictor seam): operator↔DX, best-first. */
+/** The storm correction laid over a P.533 answer (`propagation::storm::StormNote`). */
+export interface StormNote {
+  /** The highest Kp that lowered any hour. */
+  kp: number
+  /** Some hour had no Kp, measured or forecast, and was left as P.533 gave it. */
+  hoursWithoutKp: boolean
+}
+
+/** The transmit power a prediction assumes (`propagation::AssumedPower`). */
+export interface AssumedPower {
+  watts: number
+  source: 'setting' | 'rig' | 'amplifier' | 'default'
+  /** An amplifier is set up on the radio. */
+  amplifier: boolean
+}
+
 export interface PathPrediction {
   /** Engine that produced it: "p533" or "heuristic". */
   engine: string
   /** P.533 could not run, so `engine` is the heuristic that answered. Absent when false. */
   engineFallback?: boolean
+  /** The storm correction laid over this P.533 answer. Absent when it changed nothing. */
+  storm?: StormNote
+  /** The transmit power the answer assumes and where it came from. */
+  power?: AssumedPower
   bands: BandOutlook[]
   /** Controlling MUF (MHz) on the path now — the band ceiling. */
   mufNow: number
@@ -538,6 +558,8 @@ export interface PathRegions {
   engine: string
   /** P.533 could not run, so `engine` is the heuristic that answered. Absent when false. */
   engineFallback?: boolean
+  storm?: StormNote
+  power?: AssumedPower
   /** When the model part was computed (unix s); the hours are current at every ask. */
   computedUnix: number
   regions: RegionPathDay[]
@@ -612,6 +634,7 @@ export interface DxpedWindow {
   engine: string
   /** P.533 could not run, so `engine` is the heuristic that answered. Absent when false. */
   engineFallback?: boolean
+  storm?: StormNote
   /** One-line headline, e.g. "17m Good 0230–0430Z" (same format as CalendarEntry.best). */
   best: string
   /** Top bands' 24 h outlooks, best first — feeds LikelihoodHeatmap. */

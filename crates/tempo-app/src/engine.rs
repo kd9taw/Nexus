@@ -7034,6 +7034,24 @@ struct MeasuredOver {
     open: bool,
 }
 
+/// The power a path prediction assumes ([`Engine::prediction_power`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PredictionPower {
+    pub watts: f64,
+    pub source: PredictionPowerSource,
+    /// An amplifier is set up on the active radio.
+    pub amplifier: bool,
+}
+
+/// Where a [`PredictionPower`] came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PredictionPowerSource {
+    Setting,
+    Rig,
+    Amplifier,
+    Default,
+}
+
 /// A forward-power reading this long after the last one belongs to a new over.
 const MEASURED_OVER_GAP_SECS: u64 = 5;
 
@@ -14360,6 +14378,49 @@ impl Engine {
             .is_some_and(|o| o.open && now.saturating_sub(o.last_unix) <= MEASURED_OVER_GAP_SECS);
         if keyed || extends_open_over {
             self.fold_over_power(f32::from(w));
+        }
+    }
+
+    /// The transmit power a path prediction assumes, and where it came from: Settings ▸ Station
+    /// power when set; else the last over Nexus measured, the figure the log would write
+    /// ([`Self::note_measured_power`], [`Self::note_amp_output`]: the radio's own scale, the
+    /// amplifier's output while one is set up and operating, never a tune carrier); else 100 W.
+    ///
+    /// Read-only: it reads what the radio loop's existing meter poll already left here and asks
+    /// the radio nothing, and nothing on the transmit path reads it. Never the rig's power slider,
+    /// for the reason [`Self::log_power_now`] gives. A measured figure is rounded to the nearest
+    /// whole decibel, so the next over's slightly different peak does not start the P.533 caches
+    /// again; the caches key on it.
+    pub fn prediction_power(&self) -> PredictionPower {
+        let amplifier = self.settings.amp_configured();
+        if let Some(w) = self
+            .settings
+            .station_power_w
+            .filter(|w| w.is_finite() && *w > 0.0)
+        {
+            return PredictionPower {
+                watts: w,
+                source: PredictionPowerSource::Setting,
+                amplifier,
+            };
+        }
+        if let Some(over) = self.measured_over.as_ref().filter(|o| o.peak_w > 0.0) {
+            let db = (10.0 * f64::from(over.peak_w).log10()).round();
+            let from_amp = amplifier && !self.amp_in_standby();
+            return PredictionPower {
+                watts: 10f64.powf(db / 10.0),
+                source: if from_amp {
+                    PredictionPowerSource::Amplifier
+                } else {
+                    PredictionPowerSource::Rig
+                },
+                amplifier,
+            };
+        }
+        PredictionPower {
+            watts: 100.0,
+            source: PredictionPowerSource::Default,
+            amplifier,
         }
     }
 
@@ -52714,6 +52775,61 @@ mod tests {
             e.observe_rig_tx_meters(None, None, Some(*w), None);
         }
         e.clear_rig_tx_meters();
+    }
+
+    /// A prediction's power: the setting when there is one; else the radio's last measured over,
+    /// rounded to a whole decibel; else 100 W, said as such. With an amplifier set up the radio's
+    /// figure is its drive, so none is taken from it; the amplifier's own output is.
+    #[test]
+    fn a_prediction_assumes_the_setting_then_the_measured_over_then_100_w() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.station_power_w = None;
+        let p = e.prediction_power();
+        assert_eq!(
+            (p.watts, p.source, p.amplifier),
+            (100.0, PredictionPowerSource::Default, false)
+        );
+        an_over(&mut e, &[0.0, 38.6, 40.2, 39.9]);
+        let p = e.prediction_power();
+        assert_eq!(p.source, PredictionPowerSource::Rig);
+        assert!(
+            (p.watts - 39.81).abs() < 0.01,
+            "40.2 W rounded to 16 dBW: {}",
+            p.watts
+        );
+        an_over(&mut e, &[41.5]);
+        assert_eq!(
+            e.prediction_power().watts,
+            p.watts,
+            "a near peak keeps the figure"
+        );
+        e.settings.station_power_w = Some(5.0);
+        let p = e.prediction_power();
+        assert_eq!((p.watts, p.source), (5.0, PredictionPowerSource::Setting));
+        e.settings.station_power_w = Some(0.0);
+        assert_eq!(
+            e.prediction_power().source,
+            PredictionPowerSource::Rig,
+            "0 is not a power"
+        );
+    }
+
+    #[test]
+    fn with_an_amplifier_the_radios_drive_is_not_taken_for_the_stations_power() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.station_power_w = None;
+        e.settings.ensure_radio_profiles();
+        e.settings.sync_active_from_flat();
+        let id = e.settings.active_radio;
+        let p = e.settings.radios.iter_mut().find(|p| p.id == id).unwrap();
+        p.amp_model = "spe".into();
+        p.amp_port = "COM7".into();
+        an_over(&mut e, &[25.0]);
+        let p = e.prediction_power();
+        assert_eq!(
+            (p.watts, p.source, p.amplifier),
+            (100.0, PredictionPowerSource::Default, true)
+        );
     }
 
     /// The operator's report: the log said 100 W, the figure in Settings, while the radio was
