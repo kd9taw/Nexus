@@ -1954,6 +1954,209 @@ fn a_corrected_calls_undo_puts_back_what_the_old_call_carried() {
     );
 }
 
+/// ⛔ A CORRECTION UNDONE WHILE DXKEEPER IS CLOSED. Both copies were waiting, which a correction
+/// accepts: the old call and the corrected one. The undo moves the contact off the corrected call, so
+/// that copy never goes, and the old call's, which the log holds again, still does. Until the undo,
+/// the correction leaves both.
+#[test]
+fn a_correction_undone_cancels_the_corrected_copy_waiting_for_dxkeeper() {
+    let d = Dir::new("history-call-fix-dxk");
+    let engine = shared(&d, 3);
+    let (id, before) = uploaded_contact(&engine);
+    assert_eq!(engine_lock(&engine).dxkeeper_hold(&before), None);
+
+    let call = correct_call(&engine, id, &before);
+    let resend = engine_lock(&engine).take_pending_uploads().pop().unwrap();
+    assert_eq!(resend.rec.call, call, "premise: the re-send");
+    assert_eq!(engine_lock(&engine).dxkeeper_hold(&resend.rec), None);
+    assert_eq!(
+        engine_lock(&engine).dxkeeper_waiting_count(),
+        2,
+        "a correction leaves both, as accepted"
+    );
+
+    let h = history_of(&engine, id).unwrap();
+    let (undone, dur) = undo_entry(&engine, h.last().unwrap().seq);
+    undone.expect("undone");
+    dur.wait(DURABLE_WAIT).unwrap();
+    let e = engine_lock(&engine);
+    assert_eq!(e.dxkeeper_waiting_count(), 1);
+    assert_eq!(
+        e.dxkeeper_oldest_waiting().map(|r| r.call),
+        Some(before.call.clone())
+    );
+}
+
+/// The calls waiting for DXKeeper, oldest first, sent as the worker sends them: an entry leaves the
+/// list as it goes. Off-list copies are not reported, and the engine ends as it began.
+fn dxkeeper_waits(engine: &Arc<Mutex<Engine>>) -> Vec<String> {
+    let mut e = engine_lock(engine);
+    let mut sent = Vec::new();
+    while let Some(rec) = e.dxkeeper_oldest_waiting() {
+        e.contest_upload_done(&rec, crate::engine::upload_legs::DXKEEPER);
+        sent.push(rec);
+    }
+    for rec in &sent {
+        assert_eq!(e.dxkeeper_hold(rec), None);
+    }
+    sent.into_iter().map(|r| r.call).collect()
+}
+
+/// The last history entry of the contact, undone: an undo, and an undo of that is a redo.
+fn undo_last(engine: &Arc<Mutex<Engine>>, id: RecordId) {
+    let h = history_of(engine, id).unwrap();
+    let (undone, dur) = undo_entry(engine, h.last().unwrap().seq);
+    undone.expect("undone");
+    dur.wait(DURABLE_WAIT).unwrap();
+}
+
+/// ⛔ CORRECT, UNDO, REDO, DXKEEPER CLOSED. A redo is an undo of an undo. It must end with DXKeeper
+/// owed the call the row now holds, never with nothing owed under either call, and it goes on working
+/// back and forth.
+#[test]
+fn correct_undo_redo_leaves_dxkeeper_owed_the_call_the_row_holds() {
+    let d = Dir::new("history-redo-dxk");
+    let engine = shared(&d, 3);
+    let (id, before) = uploaded_contact(&engine);
+    assert_eq!(engine_lock(&engine).dxkeeper_hold(&before), None);
+    let call = correct_call(&engine, id, &before);
+    let resend = engine_lock(&engine).take_pending_uploads().pop().unwrap();
+    assert_eq!(engine_lock(&engine).dxkeeper_hold(&resend.rec), None);
+    assert_eq!(
+        dxkeeper_waits(&engine),
+        [before.call.as_str(), call.as_str()]
+    );
+
+    undo_last(&engine, id);
+    assert_eq!(dxkeeper_waits(&engine), [before.call.as_str()], "the undo");
+    undo_last(&engine, id);
+    assert_eq!(row_of(&engine, id).unwrap().call, call, "premise: redone");
+    assert_eq!(dxkeeper_waits(&engine), [call.as_str()], "the redo");
+    undo_last(&engine, id);
+    assert_eq!(dxkeeper_waits(&engine), [before.call.as_str()], "and back");
+    assert!(engine_lock(&engine).take_pending_uploads().is_empty());
+}
+
+/// The same with the original already sent: the undo must not send it again, and the redo still owes
+/// the corrected call the undo cancelled.
+#[test]
+fn correct_undo_redo_with_the_original_already_sent() {
+    let d = Dir::new("history-redo-dxk-sent");
+    let engine = shared(&d, 3);
+    let (id, before) = uploaded_contact(&engine);
+    let call = correct_call(&engine, id, &before);
+    let resend = engine_lock(&engine).take_pending_uploads().pop().unwrap();
+    assert_eq!(engine_lock(&engine).dxkeeper_hold(&resend.rec), None);
+
+    undo_last(&engine, id);
+    assert!(
+        dxkeeper_waits(&engine).is_empty(),
+        "cancelled, and the original not sent twice"
+    );
+    undo_last(&engine, id);
+    assert_eq!(dxkeeper_waits(&engine), [call], "the redo owes it");
+}
+
+/// Everything already sent: neither way sends anything again.
+#[test]
+fn correct_undo_redo_after_everything_was_sent_sends_nothing_more() {
+    let d = Dir::new("history-redo-dxk-all-sent");
+    let engine = shared(&d, 3);
+    let (id, before) = uploaded_contact(&engine);
+    correct_call(&engine, id, &before);
+    engine_lock(&engine).take_pending_uploads();
+    undo_last(&engine, id);
+    assert!(dxkeeper_waits(&engine).is_empty());
+    undo_last(&engine, id);
+    assert!(dxkeeper_waits(&engine).is_empty());
+}
+
+/// The corrected copy still on the queue, its first pass yet to come: the undo takes it off the queue,
+/// and the redo still owes it.
+#[test]
+fn a_redo_owes_the_copy_an_undo_took_off_the_queue() {
+    let d = Dir::new("history-redo-dxk-queue");
+    let engine = shared(&d, 3);
+    let (id, before) = uploaded_contact(&engine);
+    let call = correct_call(&engine, id, &before);
+    undo_last(&engine, id);
+    assert!(
+        engine_lock(&engine).take_pending_uploads().is_empty(),
+        "premise"
+    );
+    assert!(dxkeeper_waits(&engine).is_empty());
+    undo_last(&engine, id);
+    assert_eq!(dxkeeper_waits(&engine), [call]);
+}
+
+/// A contact taken out by an undo, or by the command every window's delete comes through, is a
+/// contact deleted.
+#[test]
+fn every_way_a_row_leaves_cancels_what_waits_for_dxkeeper() {
+    let d = Dir::new("history-gone-dxk");
+    let engine = shared(&d, 3);
+    let waiting = |call: &str| {
+        let id = id_of(&engine, call);
+        let rec = QsoRecord::clone(&row_of(&engine, id).unwrap());
+        engine_lock(&engine).dxkeeper_hold(&rec);
+        id
+    };
+    let calls = engine
+        .stored_log()
+        .iter()
+        .map(|r| r.call.clone())
+        .collect::<Vec<_>>();
+    let by_command = waiting(&calls[0]);
+    waiting(&calls[1]);
+    let (made, dur) = logwrite::change_ops(
+        &engine,
+        by_command,
+        None,
+        &[tempo_core::logbook::LogOp::Delete(by_command)],
+        "test",
+    );
+    made.expect("read").expect("made");
+    dur.wait(DURABLE_WAIT).unwrap();
+    let e = engine_lock(&engine);
+    assert_eq!(
+        e.dxkeeper_waiting_count(),
+        1,
+        "at once, in the command's hold"
+    );
+    assert_eq!(
+        e.dxkeeper_oldest_waiting().map(|r| r.call),
+        Some(calls[1].clone())
+    );
+}
+
+/// Undoing a delete brings the row back with its upload stamps, which is what stops a duplicate, and
+/// lifts the cancel. It queues nothing itself: the cancelled sends stay cancelled.
+#[test]
+fn an_undone_delete_lifts_the_cancel_keeps_the_stamps_and_queues_nothing() {
+    let d = Dir::new("history-delete-undo-uploads");
+    let engine = shared(&d, 3);
+    let (id, before) = uploaded_contact(&engine);
+    let (made, dur) = logwrite::change_ops(
+        &engine,
+        id,
+        None,
+        &[tempo_core::logbook::LogOp::Delete(id)],
+        "test",
+    );
+    made.expect("read").expect("made");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert!(engine_lock(&engine).upload_cancelled(&before), "premise");
+
+    let h = history_of(&engine, id).unwrap();
+    let (undone, dur) = undo_entry(&engine, h.last().unwrap().seq);
+    undone.expect("undone");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(*row_of(&engine, id).unwrap(), before, "the stamps with it");
+    let mut e = engine_lock(&engine);
+    assert!(!e.upload_cancelled(&before));
+    assert!(e.take_pending_uploads().is_empty());
+}
+
 /// ★ A corrected call takes the paper card's received mark off and its received date
 /// (`QSLRDATE`) with it — the Card received column must not keep a date for a card no longer
 /// marked — and its undo puts back the mark and the same date exactly. The other contacts in the

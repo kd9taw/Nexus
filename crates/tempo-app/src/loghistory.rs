@@ -507,7 +507,7 @@ fn corrections_undone(
     station: &crate::station::StationCore,
     on: u8,
     pairs: &mut [RowPair],
-) -> (Vec<(RecordId, String)>, Vec<Owed>) {
+) -> (Vec<(RecordId, String, String)>, Vec<Owed>) {
     let mut cancel = Vec::new();
     let mut owed = Vec::new();
     for (before, after) in pairs.iter_mut() {
@@ -518,7 +518,7 @@ fn corrections_undone(
         if a.call.trim().eq_ignore_ascii_case(b.call.trim()) {
             continue;
         }
-        cancel.push((id, b.call.clone()));
+        cancel.push((id, b.call.clone(), a.call.clone()));
         let Some(undone) = station.correction_undone(b, a, on) else {
             owed.push(Owed {
                 id,
@@ -684,8 +684,9 @@ fn undo_entries(
             // What is queued under the calls it undid goes only with the change, in the same
             // hold: the upload worker never sees it in between.
             if matches!(made, Some((true, _))) {
-                for (id, call) in cancel {
-                    e.station_mut().cancel_queued_uploads(id, &call);
+                for (id, left, to) in cancel {
+                    e.dxkeeper_call_undone(id, &left, &to);
+                    e.station_mut().cancel_queued_uploads(id, &left);
                 }
             }
             Ok(made.map(|(committed, duplicates)| (committed, duplicates, owed)))
