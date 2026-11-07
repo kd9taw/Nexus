@@ -105,7 +105,7 @@ beforeEach(() => {
   for (const verb of [api.setTier, api.setFrequency, api.tuneChannel, api.setOperatingMode]) {
     vi.mocked(verb).mockResolvedValue(APP_SNAPSHOT as never)
   }
-  for (const verb of [api.workSpot, api.sstvTuneRecall, api.aprsTune, api.setSettings, api.setSidebandOverride]) {
+  for (const verb of [api.workSpot, api.workSpotRecall, api.sstvTuneRecall, api.sstvTuneOnOpen, api.aprsTune, api.setSettings, api.setSidebandOverride]) {
     vi.mocked(verb).mockReset()
     vi.mocked(verb).mockResolvedValue(APP_SNAPSHOT as never)
   }
@@ -205,12 +205,13 @@ describe('recall', () => {
     ['psk', 'PSK31', 14.07, 'keyboard', undefined, 'PSK'],
     ['jtty', 'JTTY', 14.09, 'jtty', undefined, 'JTTY'],
     ['js8', 'JS8', 14.078, 'js8', 'JS8', 'JS8'],
-  ] as const)('%s opens on its own section’s work_spot', async (screen, mode, rxMhz, section, tier, title) => {
+  ] as const)('%s opens on its own section', async (screen, mode, rxMhz, section, tier, title) => {
     saved({ rxMhz, mode, screen })
     await mountOn('memories')
     vi.mocked(api.setOperatingMode).mockClear()
     await pressTune()
-    expect(api.workSpot).toHaveBeenCalledExactlyOnceWith(section, rxMhz, '20m', undefined, tier)
+    if (screen === 'js8') expect(api.workSpot).toHaveBeenCalledExactlyOnceWith(section, rxMhz, '20m', undefined, tier)
+    else expect(api.workSpotRecall).toHaveBeenCalledExactlyOnceWith(section, rxMhz, '20m')
     expect(document.title).toContain(title)
     // The dial was recalled exactly: entering the screen must not re-home it.
     for (const [, followFreq] of vi.mocked(api.setOperatingMode).mock.calls) expect(followFreq).toBe(false)
@@ -294,6 +295,94 @@ describe('recall', () => {
     await pressTune()
     expect(document.title).not.toContain('SSTV')
     expect(memoriesStore.get().memories[0].lastUsedUtc).toBeUndefined()
+  })
+})
+
+// ⛔ THE LATCH. A recall reaches it twice: through the tune, and through the rig-mode effect, which
+// re-asserts the section on the view change the recall makes. Both must stay out of it where recall
+// armed nothing before a memory could name its screen.
+describe('recall and Enable TX', () => {
+  const asserted = () => vi.mocked(api.setOperatingMode).mock.calls.map(([mode]) => mode)
+
+  it.each([
+    ['rtty', 'RTTY', 'rtty'],
+    ['psk', 'BPSK31', 'keyboard'],
+    ['jtty', 'JTTY', 'jtty'],
+  ] as const)('%s: no arming tune, and no re-assert behind it', async (screen, mode, section) => {
+    saved({ rxMhz: 14.08, mode, screen })
+    await mountOn('memories')
+    vi.mocked(api.setOperatingMode).mockClear()
+    await pressTune()
+    expect(api.workSpotRecall).toHaveBeenCalledExactlyOnceWith(section, 14.08, '20m')
+    expect(api.workSpot).not.toHaveBeenCalled()
+    expect(asserted(), 'set_operating_mode arms a manual section').toEqual([])
+  })
+
+  it('CONTROL: opening RTTY by its tab afterwards still asserts it, and so may arm', async () => {
+    saved({ rxMhz: 14.08, mode: 'RTTY', screen: 'rtty' })
+    await mountOn('memories')
+    await pressTune()
+    await navTo('FT')
+    vi.mocked(api.setOperatingMode).mockClear()
+    await navTo('RTTY')
+    expect(asserted()).toEqual(['rtty'])
+  })
+
+  it('CONTROL: a Phone memory keeps its entry', async () => {
+    saved({ rxMhz: 14.25, mode: 'USB', screen: 'phone' })
+    await mountOn('memories')
+    vi.mocked(api.setOperatingMode).mockClear()
+    await pressTune()
+    expect(api.workSpot).toHaveBeenCalledExactlyOnceWith('phone', 14.25, '20m', undefined, undefined)
+    expect(asserted()).toEqual(['phone'])
+  })
+})
+
+// With "tune when SSTV opens" on, the screen's own tune must not move a memory's frequency off what
+// the recall just tuned and its toast just named.
+describe('recall and the SSTV screen’s tune on opening', () => {
+  const tuneOnOpen = () => {
+    vi.mocked(api.getSettings).mockImplementation(async () => ({ ...defaultSettings, mycall: 'KD9TAW', mygrid: 'EN52', sstvTuneOnOpen: true }) as never)
+    vi.mocked(api.getLicensedBandPlan).mockResolvedValue([{ band: '20m', dialMhz: 14.23, mode: 'USB' }] as never)
+  }
+  const AT_MEMORY = { dialMhz: 14.227, band: '20m', sideband: 'USB', rigMode: 'USB' }
+
+  it('a recall opens it where the memory is', async () => {
+    tuneOnOpen()
+    stationRadio(AT_MEMORY)
+    saved({ rxMhz: 14.227, mode: 'USB', screen: 'sstv' })
+    await mountOn('memories')
+    await settle()
+    await pressTune()
+    await settle()
+    expect(document.title).toContain('SSTV')
+    expect(api.sstvTuneOnOpen).not.toHaveBeenCalled()
+  })
+
+  it('a pop-out’s ask to open it, which is only ever a recall, does too', async () => {
+    tuneOnOpen()
+    stationRadio(AT_MEMORY)
+    await mountOn('memories')
+    await settle()
+    await act(async () => {
+      window.dispatchEvent(new StorageEvent('storage', { key: MEMORY_OPEN_SCREEN_KEY, newValue: JSON.stringify({ screen: 'sstv', at: 1 }) }))
+    })
+    await settle()
+    expect(document.title).toContain('SSTV')
+    expect(api.sstvTuneOnOpen).not.toHaveBeenCalled()
+  })
+
+  it('CONTROL: opening it by its tab tunes, even after a recall has been and gone', async () => {
+    tuneOnOpen()
+    stationRadio(AT_MEMORY)
+    saved({ rxMhz: 14.227, mode: 'USB', screen: 'sstv' })
+    await mountOn('memories')
+    await settle()
+    await pressTune()
+    await navTo('FT')
+    vi.mocked(api.sstvTuneOnOpen).mockClear()
+    await navTo('SSTV')
+    expect(api.sstvTuneOnOpen).toHaveBeenCalledExactlyOnceWith(14.23, '20m', 'USB')
   })
 })
 

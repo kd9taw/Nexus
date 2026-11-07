@@ -198,7 +198,7 @@ import {
   type Memory,
   type MemoryScreen,
 } from './features/memories'
-import { modeNotCommanded, ridesPhone, tuneForRecall, useMemoryOpenScreenRequests } from './features/memoryRecall'
+import { modeNotCommanded, recallLeavesTxAlone, ridesPhone, tuneForRecall, useMemoryOpenScreenRequests } from './features/memoryRecall'
 import { dueNetReminders, reminderKey, untilPhrase } from './features/nets'
 import { bandLabelForMhz } from './band'
 import { sameCall } from './callsign'
@@ -2072,7 +2072,14 @@ function App() {
 
   // #451: the SSTV screen's tune on opening — the app's tune, never remembered as the
   // operator's Phone dial (`sstv_tune_on_open`).
+  // Not when a recall opened the screen: the memory's frequency is the one the operator asked for,
+  // and the recall's toast has just named it.
+  const sstvOpenedByRecallRef = useRef(false)
+  useEffect(() => {
+    if (view !== 'sstv') sstvOpenedByRecallRef.current = false
+  }, [view])
   const handleSstvTuneOnOpen = useCallback((dialMhz: number, band: string, mode: string) => {
+    if (sstvOpenedByRecallRef.current) return
     void withErrorToast(
       () => apiSstvTuneOnOpen(dialMhz, band, mode),
       t('shell.frequency.failed'),
@@ -2326,6 +2333,10 @@ function App() {
             lastOpModeRef.current = rigMode
             lastHomedModeRef.current = rigMode // recalled to an EXACT dial — do not re-home
           }
+          // The tune entered the section and left Enable TX as it was, so the [view] effect must not
+          // re-assert it and arm the latch (`recallLeavesTxAlone`).
+          if (recallLeavesTxAlone(target)) afarEntryRef.current = target
+          if (target === 'sstv' && viewRef.current !== 'sstv') sstvOpenedByRecallRef.current = true
           setView(target)
           memoriesStore.update((b) => markRecalled(b, m.id, Math.floor(Date.now() / 1000)))
           pushToast(
@@ -2821,7 +2832,9 @@ function App() {
   // A recall from the Memories pop-out into SSTV or APRS, whose tunes tick no nav hint. The pop-out
   // has tuned already; both screens are entered without asserting anything on the rig.
   useMemoryOpenScreenRequests((screen) => {
-    if (features.isOn(screen)) setView(screen)
+    if (!features.isOn(screen)) return
+    if (screen === 'sstv' && viewRef.current !== 'sstv') sstvOpenedByRecallRef.current = true
+    setView(screen)
   })
 
   // ⭐ CTRL+O FROM A CONTEST STRIP (`features/contestKeys.ts`): the Contest screen, with an ask its

@@ -3,8 +3,8 @@
 // THE VERB EACH SCREEN'S RECALL TUNES WITH, AND THE ASK A POP-OUT MAKES OF THE MAIN WINDOW.
 //
 // Recall adds no way of tuning: each screen uses the verb that screen's own surfaces already use.
-// `sstv_tune_recall` (the SSTV strip's tune without its arming), the APRS Tune button's `aprs_tune`,
-// and `work_spot` for the rest, so a recall during TX meets the same `tune_dial` it always did. `work_spot` is also what ticks the
+// `sstv_tune_recall` and `work_spot_recall` (those verbs without their arming), the APRS Tune button's
+// `aprs_tune`, and `work_spot` for the rest, so a recall during TX meets the same `tune_dial` it always did. `work_spot` is also what ticks the
 // nav hint every window follows, and the SSTV and APRS verbs tick nothing: that gap is what a pop-out's
 // ask fills.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -15,6 +15,7 @@ import {
   MEMORY_OPEN_SCREEN_KEY,
   modeNotCommanded,
   openScreenRequest,
+  recallLeavesTxAlone,
   ridesPhone,
   tuneForRecall,
 } from './memoryRecall'
@@ -24,10 +25,12 @@ vi.mock('../api', () => ({
   sstvTune: vi.fn(async () => 'armed'),
   aprsTune: vi.fn(async () => 'aprs'),
   workSpot: vi.fn(async () => 'work'),
+  workSpotRecall: vi.fn(async () => 'unarmed'),
 }))
 const sstvTune = api.sstvTuneRecall as unknown as ReturnType<typeof vi.fn>
 const aprsTune = api.aprsTune as unknown as ReturnType<typeof vi.fn>
 const workSpot = api.workSpot as unknown as ReturnType<typeof vi.fn>
+const workSpotRecall = api.workSpotRecall as unknown as ReturnType<typeof vi.fn>
 
 const plan = (view: RecallPlan['view'], mode: string, freqMhz = 144.8875): RecallPlan => ({
   view,
@@ -69,14 +72,29 @@ describe('tuneForRecall', () => {
     ['phone', 'phone'],
     ['cw', 'cw'],
     ['operate', 'digital'],
-    ['rtty', 'rtty'],
-    ['psk', 'keyboard'],
-    ['jtty', 'jtty'],
   ] as const)('%s tells work_spot section %s, with no tier', async (view, section) => {
     await expect(tuneForRecall(plan(view, 'USB', 14.08), '20m')).resolves.toBe('work')
     expect(workSpot).toHaveBeenCalledExactlyOnceWith(section, 14.08, '20m', undefined, undefined)
+    expect(workSpotRecall).not.toHaveBeenCalled()
     expect(sstvTune).not.toHaveBeenCalled()
     expect(aprsTune).not.toHaveBeenCalled()
+  })
+
+  // ⛔ A memory on these screens opened FT, which arms nothing, until a memory could name its
+  // screen. That may not turn Enable TX on, so they tune without arming.
+  it.each([
+    ['rtty', 'rtty'],
+    ['psk', 'keyboard'],
+    ['jtty', 'jtty'],
+  ] as const)('%s tells section %s without arming, and never through work_spot', async (view, section) => {
+    await expect(tuneForRecall(plan(view, 'USB', 14.08), '20m')).resolves.toBe('unarmed')
+    expect(workSpotRecall).toHaveBeenCalledExactlyOnceWith(section, 14.08, '20m')
+    expect(workSpot).not.toHaveBeenCalled()
+    expect(recallLeavesTxAlone(view)).toBe(true)
+  })
+
+  it.each(['phone', 'cw', 'operate', 'js8'] as const)('%s keeps the entry it always had', (view) => {
+    expect(recallLeavesTxAlone(view)).toBe(false)
   })
 
   it('JS8 names its tier on the same call, as a Needed row of JS8 does', async () => {

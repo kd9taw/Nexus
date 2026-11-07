@@ -46,7 +46,7 @@ beforeEach(() => {
   vi.mocked(pushToast).mockClear()
   vi.mocked(api.getSnapshot).mockResolvedValue(APP_SNAPSHOT as never)
   vi.mocked(api.getSettings).mockImplementation(async () => ({ ...defaultSettings }) as never)
-  for (const verb of [api.workSpot, api.sstvTuneRecall, api.aprsTune, api.setSidebandOverride]) {
+  for (const verb of [api.workSpot, api.workSpotRecall, api.sstvTuneRecall, api.aprsTune, api.setSidebandOverride]) {
     vi.mocked(verb).mockReset()
     vi.mocked(verb).mockResolvedValue(APP_SNAPSHOT as never)
   }
@@ -81,10 +81,17 @@ describe('the pop-out’s recall', () => {
     expect(vi.mocked(pushToast).mock.calls[0][1]).toBe('error')
   })
 
-  it('a section uses work_spot, whose hint the main window follows, and asks nothing', async () => {
+  it('RTTY tunes without arming, ticks the hint the main window follows, and asks nothing', async () => {
     await recall({ rxMhz: 14.08, mode: 'RTTY', screen: 'rtty' })
-    expect(api.workSpot).toHaveBeenCalledExactlyOnceWith('rtty', 14.08, '20m', undefined, undefined)
+    expect(api.workSpotRecall).toHaveBeenCalledExactlyOnceWith('rtty', 14.08, '20m')
+    expect(api.workSpot).not.toHaveBeenCalled()
     expect(asked()).toBeNull()
+  })
+
+  it('a section that always armed still uses work_spot', async () => {
+    await recall({ rxMhz: 14.25, mode: 'USB', screen: 'phone' })
+    expect(api.workSpot).toHaveBeenCalledExactlyOnceWith('phone', 14.25, '20m', undefined, undefined)
+    expect(api.workSpotRecall).not.toHaveBeenCalled()
   })
 
   it('a memory with no screen goes as it always did', async () => {

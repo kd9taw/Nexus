@@ -1,10 +1,14 @@
 // Carrying out a memory's recall plan: the one piece of it App and the Memories pop-out share.
 //
 // RECALL ADDS NO WAY OF TUNING. Each screen tunes with the verb its own surfaces already use: the
-// APRS Tune button's `aprs_tune`, `work_spot` for most, and for SSTV `sstv_tune_recall`, the strip's
-// tune without its arming: a recall to SSTV leaves Enable TX as it was. All of them land in the
-// engine's `tune_dial`, so a recall during a transmission is treated as any other QSY is, and none
-// of them keys anything.
+// APRS Tune button's `aprs_tune` and `work_spot` for most. All of them land in the engine's
+// `tune_dial`, so a recall during a transmission is treated as any other QSY is, and none of them
+// keys anything.
+//
+// ⛔ AND IT ARMS NOTHING IT DID NOT BEFORE. A memory on SSTV, RTTY, PSK or JTTY tunes with that verb's
+// no-arming form (`sstv_tune_recall`, `work_spot_recall`), so Enable TX stays as it was. Phone and CW
+// keep the arming entry they always had, and FT and JS8's section arms nothing. See
+// [`recallLeavesTxAlone`] for the second way a recall could reach the latch.
 //
 // ⚠️ SSTV MUST NOT USE `work_spot`. Its nav hint names a SECTION, and every window follows it: on a
 // Phone-section tune it would pull the operator straight off SSTV onto Phone. `sstv_tune_recall`
@@ -13,7 +17,7 @@
 //
 // The ask's key is SHARED (storage-scope.test.ts): it is the whole mechanism between two documents.
 import { useEffect, useRef } from 'react'
-import { aprsTune, sstvTuneRecall, workSpot } from '../api'
+import { aprsTune, sstvTuneRecall, workSpot, workSpotRecall } from '../api'
 import type { AppSnapshot } from '../types'
 import type { MemoryScreen, RecallPlan } from './memories'
 import { WORK_SECTION } from './needs'
@@ -25,7 +29,16 @@ export function tuneForRecall(plan: RecallPlan, band: string): Promise<AppSnapsh
     return sstvTuneRecall(plan.freqMhz, band, word)
   }
   if (plan.view === 'aprs') return aprsTune(plan.freqMhz)
+  if (recallLeavesTxAlone(plan.view)) return workSpotRecall(WORK_SECTION[plan.view], plan.freqMhz, band)
   return workSpot(WORK_SECTION[plan.view], plan.freqMhz, band, undefined, plan.view === 'js8' ? 'JS8' : undefined)
+}
+
+/** The manual sections a recall enters without arming. Their memories opened FT, which arms nothing,
+ * until a memory could name its screen. The tune is one way to the latch; the other is the view
+ * change, whose rig-mode effect re-asserts the section at the station's own authority, so a window
+ * opening one of these for a recall must skip that re-assert. A tab opening it does not. */
+export function recallLeavesTxAlone(view: MemoryScreen): view is 'rtty' | 'psk' | 'jtty' {
+  return view === 'rtty' || view === 'psk' || view === 'jtty'
 }
 
 /** SSTV rides Phone, so a sideband override means the same on both. */
