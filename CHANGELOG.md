@@ -5,6 +5,11 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **The needle TX meters are big enough to read.** They were a fixed, tiny size whatever room the window had, with the meter's name and value covering the lower half of the dial. Now the name and value stand beside the dial, in larger type, the dial takes the full height, and the three meters spread into the free space on the TX strip and Operate's strip: on a 1080p window each dial is about twice as wide as it was. On a phone each meter is drawn taller as well as wider. The strips stay the same height and Stop TX stays where it was. They sit in the transmit strip rather than in a pane, so they have no drag handle. On Operate, clicking them still opens them larger.
+
 ## [1.23.0] — 2026-11-05
 
 ### Added

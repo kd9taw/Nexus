@@ -15,7 +15,7 @@
 //
 // A READOUT: nothing here keys, gates or sets anything. Drawn in SVG on a display well (dark in
 // both themes, styles.css DISPLAY WELLS), so it scales with `--ui-zoom` and the text size like the
-// bars' type does; its size is the variant's, in styles.css's TX meters block.
+// bars' type does; its size is its host's, in styles.css's NEEDLE METERS block.
 import { useRef } from 'react'
 import { t } from '../i18n'
 
@@ -77,12 +77,12 @@ const ZONE_INK: Record<Zone, string> = {
   unknown: 'var(--state-pending)',
 }
 
-// THE DIAL, in viewBox units: a window over a shallow arc in its top half, whose pivot sits BELOW the
-// window, as a panel meter's does. The face's bottom band (styles.css), which carries the meter's name
-// and its value, lies over the lower half like a meter's pivot cover: the needle runs in under it, so
-// no reading is ever drawn under the needle, and the face is no taller than the dial.
+// THE DIAL, in viewBox units: a window over a shallow arc, the box the scale itself needs, whose pivot
+// sits BELOW the window, as a panel meter's does. So the arc fills a strip's short wide dial, and in a
+// taller one (narrower, or drawn whole: styles.css) `xMidYMin` keeps it at the top and the needle runs
+// on down what is left of the box, to the band that carries the meter's name and value.
 const W = 100
-const H = 38
+const H = 20
 const CX = 50
 const CY = 63
 const R = 60
@@ -165,7 +165,7 @@ export function TxNeedles({
           >
             <div className="ph-txneedle-face well">
               <div className="ph-txneedle-dial">
-                <svg className="ph-txneedle-svg" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMax meet" aria-hidden="true">
+                <svg className="ph-txneedle-svg" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMin meet" aria-hidden="true">
                   <path className="ph-txneedle-scale" d={arc(R, 0, 1)} />
                   {needleZones(key, { swrVerified, alcZoneTop }).map(([f0, f1, zone]) => (
                     <path
@@ -199,7 +199,7 @@ export function TxNeedles({
                 <span className="ph-txneedle-label">{r.label}</span>
                 {unreported.includes(key) ? (
                   <span className="ph-unavail" role="note" title={t('phone.unavail.meter', { meter: r.label })}>
-                    {/* The glyph alone on the face (the band has no room for the words); the words
+                    {/* The glyph alone on the face (the readout has no room for the words); the words
                         are its title and what a screen reader reads. */}
                     <span aria-hidden="true">⊘</span>
                     <span className="sr-only">{t('phone.unavail.mark')}</span>

@@ -40,7 +40,7 @@
 // arms the station it was handed, as after a Work from any board).
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts).
-import { Fragment, createRef, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, createRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, RefObject } from 'react'
 import type { AmpStatus, FieldDayStatus, NeedAlert, NeedTag, PropagationSnapshot, Station } from '../types'
 import type { Theme } from '../useTheme'
@@ -229,6 +229,17 @@ function useRailWidth(scale: number | undefined, rail: RefObject<HTMLElement | n
 export function DashRail(props: DashRailProps) {
   const railRef = useRef<HTMLElement>(null)
   const width = useRailWidth(props.scale, railRef)
+  // The cockpit is the rail's sibling, so `--dash-rail-w` does not reach it. What sizes itself from the
+  // window beside the rail (the needle TX meters, styles.css) reads this off the shell instead. Set on
+  // a committed width, not per drag move: it is a layout input, and the rail's own paint is the feedback.
+  useLayoutEffect(() => {
+    const shell = railRef.current?.parentElement
+    if (!shell) return
+    shell.style.setProperty('--dash-rail-taken', `${width.px}px`)
+    return () => {
+      shell.style.removeProperty('--dash-rail-taken')
+    }
+  }, [width.px])
   return (
     <aside
       ref={railRef}

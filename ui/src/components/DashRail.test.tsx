@@ -266,6 +266,18 @@ describe('the width divider', () => {
   const seam = () => within(rail()).getByRole('separator', { name: 'Dashboard rail width' })
   const width = () => rail().style.getPropertyValue('--dash-rail-w')
 
+  it('tells the shell what it takes, for what sizes itself from the window beside it, until it goes', () => {
+    const { container, unmount } = render(
+      <div data-testid="shell">
+        <OwnedDashRail {...props()} />
+      </div>,
+    )
+    const shell = container.querySelector<HTMLElement>('[data-testid="shell"]')!
+    expect(shell.style.getPropertyValue('--dash-rail-taken')).toBe(width())
+    unmount()
+    expect(shell.style.getPropertyValue('--dash-rail-taken')).toBe('')
+  })
+
   it('opens at the default and moves the way the arrows point, stored as the preference', () => {
     render(<OwnedDashRail {...props()} />)
     expect(width()).toBe('300px')

@@ -641,6 +641,11 @@
   max-width: 30em;
   margin-left: auto;
 }
+/* …WITH NEEDLES, a higher ceiling: the three largest faces and the COMP row beside them. The same zero
+   basis and auto margin, so the same promise; it still only takes the strip's empty right side. */
+.cockpit-txstrip-meters-needle {
+  max-width: 65em;
+}
 /* THE KEYBOARD DOCKS' EIGHT KEYS (RTTY, PSK, JTTY: `.rtty-dock-keys`, styles.css) share their line with
    the fixed row (Call box, set switch, TX latch, Esc/Stop) only where 76em of keys fit beside it, and fold
    the row under the keys everywhere else, so the keys then take the whole line. A BASIS, deliberately, not
