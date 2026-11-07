@@ -69,7 +69,14 @@ import {
   type LogColumnsSaved,
   type UploadMark,
 } from '../features/logColumns'
-import { POTA_MIN_QSOS, activationKeyOf, exportActivation } from '../features/activationExport'
+import {
+  POTA_MIN_QSOS,
+  activationFilename,
+  activationKeyOf,
+  exportActivation,
+  isPotaActivation,
+  openPotaUpload,
+} from '../features/activationExport'
 
 // The 3-D QSO globe band. Lazy so three.js/react-globe.gl only download when the
 // Logbook actually shows it (same pattern as ConnectView's Globe3D) — a weak-GPU
@@ -386,6 +393,8 @@ export function Logbook({
   // appear when the log grows.
   const [activations, setActivations] = useState<LoggedActivation[]>([])
   const [activationKey, setActivationKey] = useState('')
+  // The POTA file Export activation last wrote, and which activation it holds.
+  const [potaFile, setPotaFile] = useState<{ key: string; filename: string; path: string } | null>(null)
   useEffect(() => {
     if (logSize === 0) {
       setActivations((prev) => (prev.length === 0 ? prev : []))
@@ -2636,13 +2645,30 @@ export function Logbook({
                   withErrorToast(async () => {
                     const a = activations.find((x) => activationKeyOf(x) === activationKey)
                     if (!a) return
-                    await exportActivation(a)
+                    const { path } = await exportActivation(a)
+                    setPotaFile(
+                      isPotaActivation(a)
+                        ? { key: activationKeyOf(a), filename: activationFilename(a), path }
+                        : null,
+                    )
                   }, t('logbook.export.failed'))
                 }
                 title={t('logbook.export.activation.buttonTitle')}
               >
                 {t('logbook.export.activation.button')}
               </button>
+              {/* Only once this activation's file exists, and only for the one the picker names:
+                  shown beside another park it would take the operator to the wrong file. */}
+              {potaFile?.key === activationKey && (
+                <button
+                  type="button"
+                  className="export-btn"
+                  onClick={() => void openPotaUpload(potaFile)}
+                  title={t('logbook.export.potaUpload.title')}
+                >
+                  {t('logbook.export.potaUpload.button')}
+                </button>
+              )}
             </>
           )}
           {/* Per-operator export (#25). Shown only when the log actually HAS more than one

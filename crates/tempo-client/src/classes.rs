@@ -460,6 +460,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("retire_wanted_calls",            RunsAtShack, "Operator data kept at the shack."),
     ("reveal_all_txt",                 RefusedHere, "Opens the shack's file manager on its own screen."),
     ("reveal_diag_log",                RunsHere,    "Shows this computer's own diagnostic log."),
+    ("reveal_in_downloads",            RunsHere,    "Shows a file this computer saved in its own Downloads folder."),
     ("reveal_recordings",              RefusedHere, "Opens the shack's file manager on its own screen."),
     ("reveal_sstv_gallery",            RefusedHere, "Opens the shack's file manager on its own screen."),
     ("rotator_bearing_to_call",        RunsAtShack, "The bearing the shack's rotator would turn to; turns nothing."),

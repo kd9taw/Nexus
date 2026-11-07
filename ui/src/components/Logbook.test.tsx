@@ -43,6 +43,7 @@ vi.mock('../api', () => {
     // Empty list => no satellite picker rendered, so this suite's DOM is unchanged.
     lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     saveTextToDownloads: noop(),
+    openExternalUrl: vi.fn(async () => {}), revealInDownloads: vi.fn(async () => true),
     logQso: noop(), markQslSentById: noop(), purgeLog: noop(), qrzLookup: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(),
@@ -591,6 +592,97 @@ describe('per-activation export', () => {
       'KD9TAW@US-5678-20260909.adi',
       expect.stringContaining('W9AAA'),
     )
+  })
+
+  // The way on to POTA's page exists only once a file does, and only for the file the picker names.
+  describe("POTA's upload page", () => {
+    const uploadBtn = (c: HTMLElement) =>
+      [...c.querySelectorAll('button')].find((b) =>
+        b.textContent?.includes("Open POTA's upload page"),
+      ) as HTMLButtonElement | undefined
+
+    async function pick(container: HTMLElement, key: string) {
+      const sel = await waitFor(() => {
+        const s = picker(container)
+        expect(s).not.toBeNull()
+        return s as HTMLSelectElement
+      })
+      fireEvent.change(sel, { target: { value: key } })
+    }
+
+    function exportWorks() {
+      ;(toast.withErrorToast as ReturnType<typeof vi.fn>).mockImplementation((fn: () => unknown) =>
+        fn(),
+      )
+      ;(api.exportLogForActivation as ReturnType<typeof vi.fn>).mockResolvedValue({
+        text: 'Nexus logbook\n<EOH>\n<CALL:5>W9AAA<EOR>\n',
+        saving: 0,
+        held: 0,
+      })
+      ;(api.saveTextToDownloads as ReturnType<typeof vi.fn>).mockResolvedValue(
+        '/dl/KD9TAW@US-5678-20260909.adi',
+      )
+    }
+
+    it('is not offered until the file has been written, then opens the page and shows that file', async () => {
+      exportWorks()
+      vi.mocked(api.openExternalUrl).mockClear()
+      vi.mocked(api.revealInDownloads).mockClear()
+      const { container } = mountWith([MORNING, AFTERNOON])
+      await pick(container, `US-5678|${DAY}|KD9TAW`)
+      expect(uploadBtn(container), 'no file yet, so nothing to take to POTA').toBeUndefined()
+
+      fireEvent.click(exportBtn(container) as HTMLButtonElement)
+      const btn = await waitFor(() => {
+        const b = uploadBtn(container)
+        expect(b).toBeDefined()
+        return b as HTMLButtonElement
+      })
+      expect(api.openExternalUrl, 'exporting alone must not open a browser').not.toHaveBeenCalled()
+
+      fireEvent.click(btn)
+      await waitFor(() =>
+        expect(api.openExternalUrl).toHaveBeenCalledWith('https://pota.app/#/user/logs'),
+      )
+      expect(api.revealInDownloads).toHaveBeenCalledWith('KD9TAW@US-5678-20260909.adi')
+    })
+
+    it('is not offered when the export failed', async () => {
+      exportWorks()
+      ;(api.saveTextToDownloads as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('disk full'))
+      ;(toast.withErrorToast as ReturnType<typeof vi.fn>).mockImplementation(
+        (fn: () => Promise<unknown>) => fn().catch(() => {}),
+      )
+      vi.mocked(api.saveTextToDownloads).mockClear()
+      const { container } = mountWith([MORNING, AFTERNOON])
+      await pick(container, `US-5678|${DAY}|KD9TAW`)
+      fireEvent.click(exportBtn(container) as HTMLButtonElement)
+      await waitFor(() => expect(api.saveTextToDownloads).toHaveBeenCalled())
+      await act(async () => {})
+      expect(uploadBtn(container)).toBeUndefined()
+    })
+
+    it('goes away when another activation is picked: it would show the wrong park', async () => {
+      exportWorks()
+      const { container } = mountWith([MORNING, AFTERNOON])
+      await pick(container, `US-5678|${DAY}|KD9TAW`)
+      fireEvent.click(exportBtn(container) as HTMLButtonElement)
+      await waitFor(() => expect(uploadBtn(container)).toBeDefined())
+      await pick(container, `US-1234|${DAY}|KD9TAW`)
+      expect(uploadBtn(container)).toBeUndefined()
+    })
+
+    it('is not offered for a summit: POTA takes no SOTA log', async () => {
+      exportWorks()
+      const SUMMIT = { ...MORNING, program: 'SOTA', reference: 'W9/IL-001' }
+      vi.mocked(api.saveTextToDownloads).mockClear()
+      const { container } = mountWith([SUMMIT])
+      await pick(container, `W9/IL-001|${DAY}|KD9TAW`)
+      fireEvent.click(exportBtn(container) as HTMLButtonElement)
+      await waitFor(() => expect(api.saveTextToDownloads).toHaveBeenCalled())
+      await act(async () => {})
+      expect(uploadBtn(container)).toBeUndefined()
+    })
   })
 
   it('a portable callsign cannot put a slash in the filename', async () => {
