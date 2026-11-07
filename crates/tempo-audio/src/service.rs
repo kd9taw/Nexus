@@ -5387,12 +5387,18 @@ impl RadioLoop {
         self.dial_fail_count = 0;
         self.width_unanswered = None;
         self.cat_dead_probes = 0;
-        self.cat_outage_halted = false;
-        self.cat_rebuild_backoff_ms = CAT_REBUILD_BACKOFF_MS;
+        self.end_cat_outage();
         self.cat_port_present = None;
         self.cat_reopen_backoff_ms = CAT_REOPEN_RETRY_MS;
         self.cat_reopen_at = 0.0;
         self.remember_port_identity();
+    }
+
+    /// The link answered, so the next silence is a new outage: it halts TX once again, and its
+    /// rebuilds start from the shortest wait.
+    fn end_cat_outage(&mut self) {
+        self.cat_outage_halted = false;
+        self.cat_rebuild_backoff_ms = CAT_REBUILD_BACKOFF_MS;
     }
 
     /// Capture the USB identity of the configured serial port while it is present, so a rig
@@ -8990,9 +8996,12 @@ impl RadioLoop {
                 // ⭐ THE LINK IS SILENT, AND NOTHING ELSE HAPPENED: the same radio, the same
                 // settings, nothing of ours keyed (`cat_rebuild_due`). The first such rebuild of an
                 // outage halts TX, as WSJT-X stops transmitting when rig control fails. The ones
-                // after it only try the port again: the operator was told, and whoever turned
-                // transmit back on chose to. They send the same key-up through the old link and
-                // the new one, and every transmit guard stays where it is.
+                // after it only try the port again, so transmit stays as the operator last set it.
+                // ⚠️ The halt is said only in the log: the CAT status says the link stayed silent
+                // and the port was reopened, not that transmit went off. WSJT-X opens a dialog
+                // here, and its automatic retry is one, not many; these retries are Nexus's own.
+                // They send the same key-up through the old link and the new one, and every
+                // transmit guard stays where it is.
                 let only_silence = suspect_rebuild
                     && !daemon_died
                     && !resume_after_hold
@@ -9228,6 +9237,11 @@ impl RadioLoop {
                 }
                 self.cat_ok = ok;
                 engine_lock(engine).answer_cat_reprobe(ok, detail, refused);
+            }
+            // A rebuild or a Test CAT whose own probe found the radio answering has set `cat_ok`
+            // directly, and the recovery paths in the poll below never run for a link already up.
+            if self.cat_ok == Some(true) {
+                self.end_cat_outage();
             }
             let mut audio_rebuilt = false;
             // A stream the OS KILLED can only re-enter the loop here. Nothing in `want` changed
@@ -46388,11 +46402,131 @@ mod tests {
         assert!(rebuild(&mut state, &mut rig, 100_000.0), "a retry: left on");
         assert!(t_0s() > first, "a retry still sends the key-up");
         // The link answers, then goes silent again: a new outage.
-        state.on_cat_link_back();
+        a_rebuild_that_cures(
+            &engine,
+            &mut state,
+            &mut rig,
+            &mut MockBackend::new(),
+            150_000.0,
+        );
         assert!(
             !rebuild(&mut state, &mut rig, 200_000.0),
             "a new outage: off"
         );
+    }
+
+    /// A silence rebuild whose own probe finds the radio answering, the usual way one succeeds.
+    fn a_rebuild_that_cures(
+        engine: &Arc<Mutex<Engine>>,
+        state: &mut RadioLoop,
+        rig: &mut Rig,
+        backend: &mut MockBackend,
+        now: f64,
+    ) {
+        state.cat_ok = Some(false);
+        state.cat_retry_at = f64::MAX;
+        state.cat_dead_probes = CAT_DEAD_PROBES_BEFORE_REBUILD;
+        state.cat_rebuild_at = 0.0;
+        let mut cured = |_t: &Transport, _c: bool| -> RigOpen {
+            let alive = std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .unwrap();
+            (
+                Rig::with_control(Some("127.0.0.1:1".into()), PttMode::Cat),
+                Some(CatDaemon::Spawned(
+                    crate::rigctld_proc::RigctldProc::from_child_for_test(alive),
+                )),
+                CatProbe::status(Some(true), "answering"),
+            )
+        };
+        state
+            .step(
+                engine,
+                backend,
+                rig,
+                &no_sinks(),
+                now,
+                &mut mock_reopen_audio(),
+                &mut cured,
+                &mut StationSinks::new(),
+            )
+            .unwrap();
+        assert_eq!(state.cat_ok, Some(true), "premise: the rebuild cured it");
+    }
+
+    /// ⭐ A REBUILD THAT CURES THE LINK ENDS THE OUTAGE. Its probe sets `cat_ok` itself, and the
+    /// poll's recovery paths only run for a link that was down, so neither reset ran: transmit never
+    /// turned off for any later outage of the session. The cure can be on the first rebuild of an
+    /// outage or on a retry, and each is followed by a second outage that halts.
+    #[test]
+    fn a_rebuild_that_cures_the_link_ends_the_outage() {
+        for retries_first in [0, 3] {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            let (mut state, mut rig) = a_silent_link(&engine);
+            let mut backend = MockBackend::new();
+            let mut now = 1_000.0;
+            // Outage 1 halts.
+            engine.lock().unwrap().set_tx_enabled(true);
+            assert_eq!(
+                silent_link_tick(&engine, &mut state, &mut rig, &mut backend, now),
+                1
+            );
+            assert!(!engine.lock().unwrap().tx_enabled());
+            for _ in 0..retries_first {
+                now += 400_000.0;
+                state.cat_rebuild_at = 0.0;
+                silent_link_tick(&engine, &mut state, &mut rig, &mut backend, now);
+            }
+            now += 400_000.0;
+            a_rebuild_that_cures(&engine, &mut state, &mut rig, &mut backend, now);
+            assert_eq!(
+                (state.cat_outage_halted, state.cat_rebuild_backoff_ms),
+                (false, CAT_REBUILD_BACKOFF_MS)
+            );
+            // Outage 2, days of session later, halts again.
+            engine.lock().unwrap().set_tx_enabled(true);
+            now += 400_000.0;
+            state.cat_rebuild_at = 0.0;
+            assert_eq!(
+                silent_link_tick(&engine, &mut state, &mut rig, &mut backend, now),
+                1
+            );
+            assert!(
+                !engine.lock().unwrap().tx_enabled(),
+                "the second outage stopped transmit"
+            );
+        }
+    }
+
+    /// The same when the cure is the operator's Test CAT, which also sets `cat_ok` itself. The
+    /// mock rigctld answers its probe; the premise is that it was answered as up.
+    #[test]
+    fn a_test_cat_that_finds_the_radio_answering_ends_the_outage() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let (mut state, mut rig) = a_silent_link(&engine);
+        let mut backend = MockBackend::new();
+        silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 1_000.0);
+        assert!(state.cat_outage_halted, "premise: the outage has halted");
+        let (addr, _wire) = mock_pkt_rejecting_rigctld();
+        let mut rig = Rig::rigctld(&addr);
+        state.cat_retry_at = f64::MAX;
+        state.cat_rebuild_at = f64::MAX;
+        engine.lock().unwrap().request_cat_reprobe();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &no_sinks(),
+                100_000.0,
+                &mut mock_reopen_audio(),
+                &mut mock_reopen_rig(),
+                &mut StationSinks::new(),
+            )
+            .unwrap();
+        assert_eq!(state.cat_ok, Some(true), "premise: Test CAT found it");
+        assert!(!state.cat_outage_halted);
     }
 
     /// A link that stays silent is tried less and less often, up to every five minutes, because a
@@ -46404,23 +46538,29 @@ mod tests {
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
         let (mut state, mut rig) = a_silent_link(&engine);
         let mut backend = MockBackend::new();
-        let mut now = 1_000.0;
+        let now = std::cell::Cell::new(1_000.0);
         let mut gaps = |state: &mut RadioLoop, rig: &mut Rig, n: usize| {
             let mut last = None;
             let mut out = Vec::new();
             while out.len() < n {
-                if silent_link_tick(&engine, state, rig, &mut backend, now) == 1 {
+                if silent_link_tick(&engine, state, rig, &mut backend, now.get()) == 1 {
                     if let Some(l) = last {
-                        out.push(((now - l) / 1000.0) as u32);
+                        out.push(((now.get() - l) / 1000.0) as u32);
                     }
-                    last = Some(now);
+                    last = Some(now.get());
                 }
-                now += 5_000.0;
+                now.set(now.get() + 5_000.0);
             }
             out
         };
         assert_eq!(gaps(&mut state, &mut rig, 5), [60, 120, 240, 300, 300]);
-        state.on_cat_link_back();
+        a_rebuild_that_cures(
+            &engine,
+            &mut state,
+            &mut rig,
+            &mut MockBackend::new(),
+            now.get(),
+        );
         state.cat_rebuild_at = 0.0;
         assert_eq!(gaps(&mut state, &mut rig, 2), [60, 120]);
     }
