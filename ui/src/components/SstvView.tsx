@@ -2623,6 +2623,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           <button
             type="button"
             className="sstv-tx-stop"
+            data-stop-control
             onClick={stopTx}
             disabled={!sending}
             title="Stop the transmission in progress and unkey"

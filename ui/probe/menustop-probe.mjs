@@ -14,14 +14,14 @@
 // THE CONTROLS, run at every case: the same page with the modal menu's lock planted (`pointer-events: none` on
 // <body>, the menu's own layer left live, as Radix's modal menu does it), where the same click must stop NOTHING
 // (halts +0); and with the open menu planted over the whole window, where check 1 must see Stop TX covered. If
-// either is not caught, that check cannot fail and the probe says so instead of passing.
+// either is not caught, that check cannot fail and the probe says so instead of passing. Both run with the stop layer
+// taken away (StopLayer.tsx), which beats a lock and a covering menu alike by design.
 //
-// ONE KNOWN CASE (`KNOWN` below), found by this probe and on main before it: at 700×800 the Logbook's top bar wraps,
-// its TX cluster stands under the band pill, and the pill's menu is DRAWN over every point of Stop TX, so the click
-// lands on the menu. That is stacking, not modality: it waits for Stop TX to stand above every overlay (the
-// stop-above-overlays work), which must turn it green. Until then the case is still run and printed as KNOWN, and it
-// fails the probe if anything else is wrong with it (a locked page, a menu that never opened). The day it comes out
-// clear the probe says so, so it can be taken off the list.
+// A MENU DRAWN OVER STOP TX. At 700×800 the Logbook's top bar wraps, its TX cluster stands under the band pill, and
+// the pill's menu is drawn over Stop TX. That case was KNOWN here until Stop TX stood above every overlay
+// (components/StopLayer.tsx): Stop TX's mirror in the stop layer now counts as Stop TX for check 1, and a click on
+// the mirror stops, leaves the menu open and moves no focus (the stop layer's rule), so for that click checks 2 and 3
+// read "stopped once, the menu still open, the keyboard where it was" instead.
 //
 // exit: 0 every case clear · 1 a red, or a control that could not fail · 2 a page never drew Stop TX
 import { createServer } from 'vite'
@@ -40,11 +40,12 @@ const SIZES = [[700, 800, 'xs'], [2560, 1440, 'xl']]
 const SCREENS = ['logbook', 'operate']
 /** [name, the trigger's selector]: Help is on every screen; the band pill only where the screen draws it. */
 const MENUS = [['Help', `button.theme-chip[title="Help"]`], ['band', 'button.freq-channel']]
-const LOCK = 'body { pointer-events: none !important } [data-radix-popper-content-wrapper] { pointer-events: auto !important }'
-const OVER_ALL = '[data-radix-popper-content-wrapper] { position: fixed !important; inset: 0 !important; transform: none !important } [data-radix-popper-content-wrapper] > [role="menu"] { width: 100vw; height: 100vh; max-height: none !important }'
+// Each control takes the stop layer away too: with it, Stop TX beats a lock or a covering menu, which is its job
+// (stopabove-probe.mjs proves that half), and the control would prove nothing about this probe's checks.
+const NO_LAYER = ' .stop-layer { display: none !important }'
+const LOCK = 'body { pointer-events: none !important } [data-radix-popper-content-wrapper] { pointer-events: auto !important }' + NO_LAYER
+const OVER_ALL = '[data-radix-popper-content-wrapper] { position: fixed !important; inset: 0 !important; transform: none !important } [data-radix-popper-content-wrapper] > [role="menu"] { width: 100vw; height: 100vh; max-height: none !important }' + NO_LAYER
 const STOP = '.op-btn.stop'
-/** Cases where an open menu is drawn over Stop TX, known and owned by the stop-above-overlays work (see the header). */
-const KNOWN = new Set(['700×800 logbook band'])
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** The centre of the first visible element matching `sel`, or null. */
@@ -63,7 +64,8 @@ const STOP_POINT = `(() => {
     const x = q.left + (q.width * i) / 10, y = q.top + (q.height * j) / 6
     if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) continue
     const t = document.elementFromPoint(x, y)
-    if (t && (t === b || b.contains(t))) return [x, y]
+    // Stop TX's mirror in the stop layer is Stop TX, where an overlay covers the button (StopLayer.tsx).
+    if (t && (t === b || b.contains(t) || t.closest('.stop-layer [data-stop-mirror]'))) return [x, y]
   }
   return 'covered'
 })()`
@@ -162,6 +164,7 @@ async function run([W, H], screen, [, trigger], plant) {
     const covered = found === 'covered'
     const point = covered ? boxes.mid : found
     if (plant === 'lock') await evaluate(style(LOCK))
+    const mirrored = await evaluate(`(() => { const t = document.elementFromPoint(${point[0]}, ${point[1]}); return t != null && t.closest('.stop-layer [data-stop-mirror]') != null })()`)
     const before = await evaluate('window.__probeHalts()')
     await click(point)
     await sleep(500)
@@ -169,6 +172,7 @@ async function run([W, H], screen, [, trigger], plant) {
       vp,
       opened: true,
       covered,
+      mirrored,
       ...(covered ? { stop: boxes.stop, menu: boxes.menu, onTop: boxes.onTop } : {}),
       point: point.map(Math.round),
       halts: (await evaluate('window.__probeHalts()')) - before,
@@ -203,21 +207,15 @@ try {
           continue
         }
         ran += 1
-        if (KNOWN.has(tag)) {
-          if (r.covered && r.onTop !== 'HTML' && r.vp === size[2]) {
-            // Its controls are not run: with the menu drawn over the button, every click lands on the menu anyway.
-            console.log(`menustop-probe: KNOWN at ${tag} — the open menu is drawn over every point of Stop TX (${r.onTop}); stacking, owned by the stop-above-overlays work`)
-            continue
-          }
-          if (!r.covered) console.log(`menustop-probe: KNOWN CASE NOW CLEAR at ${tag} — take it off KNOWN`)
-        }
         const red = []
         if (r.vp !== size[2]) red.push(`the window came out ${r.vp}, not ${size[2]}`)
         // An <html> on top of the button is a page whose pointer events are locked (a modal menu), not a menu over it.
         if (r.covered) red.push(r.onTop === 'HTML' ? 'Stop TX takes no pointer events with the menu open (the page is locked)' : `the open menu covers every point of Stop TX (${r.onTop} is on top)`)
         if (r.halts !== 1) red.push(`one click on Stop TX stopped ${r.halts} times, not once`)
-        if (!r.closed) red.push('the menu is still open after the click')
-        if (!r.focusOnStop) red.push('the keyboard is not on Stop TX after the click')
+        // A click on the mirror leaves the menu open and the keyboard where it was; a click on Stop TX itself closes it.
+        if (!r.mirrored && !r.closed) red.push('the menu is still open after the click')
+        if (!r.mirrored && !r.focusOnStop) red.push('the keyboard is not on Stop TX after the click')
+        if (r.mirrored && r.closed) red.push('the click on the mirror closed the menu')
         if (red.length) {
           console.error(`menustop-probe: RED at ${tag} — ${red.join('; ')}`)
           code = code || 1
@@ -242,7 +240,7 @@ try {
     console.error('menustop-probe: no case ran')
     code = code || 1
   }
-  if (code === 0) console.log(`menustop-probe: PASS — ${ran} cases (known: ${[...KNOWN].join(', ')}): with Help or the band menu open, one real click on Stop TX stopped once, closed the menu and left the keyboard on Stop TX, at ${SIZES.map(([w, h, v]) => `${w}×${h} (${v})`).join(' and ')} on ${SCREENS.join(' and ')}; each planted modal lock and covering menu caught`)
+  if (code === 0) console.log(`menustop-probe: PASS — ${ran} cases: with Help or the band menu open, one real click on Stop TX stopped once, closed the menu and left the keyboard on Stop TX, at ${SIZES.map(([w, h, v]) => `${w}×${h} (${v})`).join(' and ')} on ${SCREENS.join(' and ')}; each planted modal lock and covering menu caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

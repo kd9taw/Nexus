@@ -256,6 +256,23 @@ describe('the stop line, computed against the real cockpits', () => {
     30_000,
   )
 
+  // STOP TX ABOVE EVERY OVERLAY (components/StopLayer.tsx) finds the controls it keeps clickable by `data-stop-control`,
+  // so a Stop TX or a dock stop drawn without it would sit under a dialog again, unclickable, with nothing red. Every
+  // case's Stop TX and dock stop (Esc Stop, SSTV's Stop) must carry it; Tune, PTT and the TX latch are not stops of
+  // that kind (the latch's other click turns transmit ON) and must not.
+  it.each(CASES.map((c) => [c.cockpit, c] as const))('%s: every Stop TX and dock stop is one the stop layer keeps on top', async (_name, c) => {
+    c.render(panelsWith<string>([]))
+    await settle()
+    const on = stopsOnScreen(c.stopControls)
+    for (const [label] of c.stopControls) {
+      const stop = /^stop/i.test(label)
+      for (const el of on.get(label)!) {
+        expect(el.hasAttribute('data-stop-control'), `${c.cockpit}: "${label}" ${stop ? 'lacks' : 'carries'} data-stop-control`).toBe(stop)
+      }
+    }
+    cleanup()
+  }, 30_000)
+
   it('the two Sub-receiver cases really draw a SUB row — else they would sweep a copy of their twin', async () => {
     for (const c of [phoneDual, cwDual] as Array<Case<any>>) {
       c.render(panelsWith<string>([]))

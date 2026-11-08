@@ -1740,6 +1740,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           <button
             type="button"
             className="cw-macro rtty-stop send-row-stop"
+            data-stop-control
             onClick={stop}
             // `sending || latched`, NOT `sending` alone. `sending` is stamped by the
             // radio loop from the audio actually in flight, so it is false for the

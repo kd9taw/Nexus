@@ -457,6 +457,15 @@ html {
   background: rgba(0, 0, 0, 0.5);
   z-index: 90;
 }
+/* THE STOP LAYER (components/StopLayer.tsx): above every other layer of the app, so a stop control an overlay covers
+   is mirrored here, at its own place, and stays clickable ("always clickable on top"). The layer itself takes no
+   pointer events; only its mirrors do. stop-layer.test.ts computes that this z-index wins over every other one. */
+.stop-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2147483000;
+}
 .ui-dialog {
   position: fixed;
   top: 12vh;
