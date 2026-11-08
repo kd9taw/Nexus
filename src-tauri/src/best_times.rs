@@ -34,11 +34,17 @@ use crate::{
 pub(crate) struct Basis {
     /// `grid`, `position` (a callbook's coordinates) or `entity` (the DXCC entity's centre).
     kind: &'static str,
-    /// For a grid or a position: `typed`, `logForm`, `heard`, `callbook` or `logged`.
+    /// For a grid or a position: `typed`, `logForm`, `heard`, `callbook`, `callbookBase` (the
+    /// callbook's address for the home call `base`, in the same country) or `logged`.
     #[serde(skip_serializing_if = "Option::is_none")]
     from: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     grid: Option<String>,
+    /// The home call whose callbook record answered a stroked call (`EA8/DL1ABC` answered from
+    /// `DL1ABC`'s). With `callbookBase` its address is used and said to be the home one; with an
+    /// entity centre it was left out because it is in another country, and the screen says so.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base: Option<String>,
 }
 
 /// Where [`place`] put the station.
@@ -127,6 +133,7 @@ fn at_grid(call: String, grid: &str, from: &'static str) -> Option<Placed> {
             kind: "grid",
             from: Some(from),
             grid: Some(g),
+            base: None,
         },
     })
 }
@@ -137,12 +144,16 @@ fn position_key((lat, lon): (f64, f64)) -> String {
 
 /// Where `asked`'s station is, from the operator's call and grid, an optional grid the operator
 /// typed for it, and the labelled fixes the engine holds for it ([`labelled_station_fixes`]).
+/// `record_call` is the call of the callbook record that answered for it this session, when one did
+/// (`Engine::callbook_answer`): for a stroked call it can be the base call's record, whose address is
+/// the home station's ([`base_call_home`]).
 pub(crate) fn place(
     asked: &str,
     typed_grid: Option<&str>,
     mycall: &str,
     mygrid: &str,
     fixes: &[(FixSource, StationFix)],
+    record_call: Option<&str>,
 ) -> Result<Placed, NoPlace> {
     if maidenhead_to_latlon(mygrid.trim()).is_none() {
         return Err(NoPlace::NoGrid);
@@ -170,16 +181,35 @@ pub(crate) fn place(
     // cty strips /MM and /AM and would name the home entity, which is wrong for a ship or a plane:
     // only a grid the station sent, or the log form's, places one.
     let mobile = call.ends_with("/MM") || call.ends_with("/AM");
+    let home = base_call_home(&call, record_call);
+    // A home address in another country is not where this station is: left out, so the entity
+    // centre and "Rough" stand, and the screen says why.
+    let dropped_home = home
+        .as_ref()
+        .filter(|h| !h.same_entity)
+        .map(|h| h.base.clone());
     let usable: Vec<(FixSource, StationFix)> = fixes
         .iter()
         .filter(|(s, _)| !mobile || matches!(s, FixSource::LogForm | FixSource::Heard))
+        .filter(|(s, _)| !(dropped_home.is_some() && *s == FixSource::Callbook))
         .cloned()
         .collect();
     if let Some((src, fix)) = best_labelled_fix(&usable) {
         if let Some(at) = fix.latlon() {
+            // The callbook's answer for a stroked call from the home call's record, same country:
+            // used, and named as the home call's address.
+            let from_home = src == FixSource::Callbook && home.is_some();
+            let from = if from_home {
+                "callbookBase"
+            } else {
+                source_word(src)
+            };
+            let base = home.filter(|_| from_home).map(|h| h.base);
             return Ok(match fix {
                 StationFix::Grid(g) => {
-                    at_grid(call, &g, source_word(src)).ok_or(NoPlace::EnterCall)?
+                    let mut p = at_grid(call, &g, from).ok_or(NoPlace::EnterCall)?;
+                    p.basis.base = base;
+                    p
                 }
                 StationFix::Position(..) => Placed {
                     call,
@@ -187,8 +217,9 @@ pub(crate) fn place(
                     key: position_key(at),
                     basis: Basis {
                         kind: "position",
-                        from: Some(source_word(src)),
+                        from: Some(from),
                         grid: None,
+                        base,
                     },
                 },
             });
@@ -210,7 +241,29 @@ pub(crate) fn place(
             kind: "entity",
             from: None,
             grid: None,
+            base: dropped_home,
         },
+    })
+}
+
+/// A stroked call's callbook answer that came from another record: the home call it came from, and
+/// whether that home call is in the same DXCC entity as the call asked.
+struct BaseHome {
+    base: String,
+    same_entity: bool,
+}
+
+/// [`BaseHome`] when the callbook record that answered `call` (`record_call`) is another call's.
+/// `note_lookup_fix` keys the fix on the call asked even then; the rotator's aim is left as it is.
+fn base_call_home(call: &str, record_call: Option<&str>) -> Option<BaseHome> {
+    let rec = normalise(record_call?);
+    if rec.is_empty() || rec == call {
+        return None;
+    }
+    let entity = |c: &str| propagation::dxcc::resolve(c).map(|i| i.entity);
+    Some(BaseHome {
+        same_entity: entity(&rec).is_some() && entity(&rec) == entity(call),
+        base: rec,
     })
 }
 
@@ -240,6 +293,10 @@ pub(crate) struct BestTimesView {
     engine_fallback: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     power: Option<propagation::AssumedPower>,
+    /// The antenna gain (transmit plus receive, dBi) the answer assumed: the one figure the pane,
+    /// the card, a pop-out and the hosted page all read, so none of them states it from elsewhere.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ant_gain_dbi: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     storm: Option<propagation::storm::StormNote>,
     /// The "now" line: a flare, a proton event, a watch.
@@ -260,6 +317,7 @@ impl BestTimesView {
             engine,
             engine_fallback: false,
             power: None,
+            ant_gain_dbi: None,
             storm: None,
             space_now: None,
         }
@@ -311,7 +369,15 @@ pub(crate) async fn get_best_times(
         let station = PathStation::read(&eng);
         let fixes = labelled_station_fixes(&eng, &asked);
         let st = eng.settings();
-        let placed = place(&asked, grid.as_deref(), &st.mycall, &st.mygrid, &fixes);
+        let record = eng.callbook_answer(&asked).map(|a| a.call.clone());
+        let placed = place(
+            &asked,
+            grid.as_deref(),
+            &st.mycall,
+            &st.mygrid,
+            &fixes,
+            record.as_deref(),
+        );
         (station, placed, tx_bands(st.license_class, mode))
     };
     let placed = match placed {
@@ -359,6 +425,7 @@ fn answer(
         engine: station.prop_engine.clone(),
         engine_fallback: pred.engine_fallback,
         power: Some(station.power),
+        ant_gain_dbi: Some(station.ant_gain_dbi),
         storm: pred.storm,
         space_now: pred.space_now.clone(),
     }
@@ -397,7 +464,7 @@ mod tests {
         for fixes in cases {
             let plain: Vec<F> = fixes.iter().map(|(_, f)| f.clone()).collect();
             let aim = crate::aim_at_call(MYGRID, "EA8ABC", plain).unwrap();
-            let p = place("EA8ABC", None, MYCALL, MYGRID, &fixes).unwrap();
+            let p = place("EA8ABC", None, MYCALL, MYGRID, &fixes, None).unwrap();
             let me = maidenhead_to_latlon(MYGRID).unwrap();
             assert!(
                 (bearing_deg(me, p.at) - aim.bearing).abs() < 1e-9,
@@ -416,6 +483,7 @@ mod tests {
             MYCALL,
             MYGRID,
             &[(FixSource::Heard, g("IL18"))],
+            None,
         )
         .unwrap();
         assert_eq!((p.basis.kind, p.basis.from), ("grid", Some("heard")));
@@ -427,54 +495,110 @@ mod tests {
             MYCALL,
             MYGRID,
             &[(FixSource::Callbook, F::Position(28.1, -15.4))],
+            None,
         )
         .unwrap();
         assert_eq!((p.basis.kind, p.basis.from), ("position", Some("callbook")));
         assert_eq!(p.key, "28.10,-15.40");
-        let p = place("EA8ABC", None, MYCALL, MYGRID, &[]).unwrap();
+        let p = place("EA8ABC", None, MYCALL, MYGRID, &[], None).unwrap();
         assert_eq!((p.basis.kind, p.basis.from), ("entity", None));
         // A grid typed for the call wins over the centre, labelled as typed.
-        let p = place("EA8ABC", Some("il28"), MYCALL, MYGRID, &[]).unwrap();
+        let p = place("EA8ABC", Some("il28"), MYCALL, MYGRID, &[], None).unwrap();
         assert_eq!((p.basis.kind, p.basis.from), ("grid", Some("typed")));
         // A bare grid in the box answers for that square.
-        let p = place(" jo21 ", None, MYCALL, MYGRID, &[]).unwrap();
+        let p = place(" jo21 ", None, MYCALL, MYGRID, &[], None).unwrap();
         assert_eq!((p.call.as_str(), p.basis.from), ("JO21", Some("typed")));
     }
 
     #[test]
+    fn a_home_fix_the_callbook_gave_for_a_stroked_call_is_never_the_stations_location() {
+        // EA8/DL1ABC, answered from DL1ABC's record: a German home, the call in the Canary Islands.
+        let book = [(FixSource::Callbook, g("JO31"))];
+        let p = place("EA8/DL1ABC", None, MYCALL, MYGRID, &book, Some("DL1ABC")).unwrap();
+        assert_eq!((p.basis.kind, p.basis.from), ("entity", None));
+        assert_eq!(p.basis.base.as_deref(), Some("DL1ABC"));
+        let centre = propagation::dxcc::resolve("EA8/DL1ABC").unwrap();
+        assert_eq!(p.at, (centre.lat, centre.lon));
+        // Same entity (W1AW/4 answered from W1AW's record): used, and said to be the home call's address.
+        let p = place(
+            "W1AW/4",
+            None,
+            "DL1XX",
+            MYGRID,
+            &[(FixSource::Callbook, g("FN31"))],
+            Some("W1AW"),
+        )
+        .unwrap();
+        assert_eq!((p.basis.kind, p.basis.from), ("grid", Some("callbookBase")));
+        assert_eq!(p.basis.base.as_deref(), Some("W1AW"));
+        // A grid the station sent on the air outranks the home address and is not labelled.
+        let p = place(
+            "EA8/DL1ABC",
+            None,
+            MYCALL,
+            MYGRID,
+            &[
+                (FixSource::Heard, g("IL18")),
+                (FixSource::Callbook, g("JO31")),
+            ],
+            Some("DL1ABC"),
+        )
+        .unwrap();
+        assert_eq!(
+            (p.basis.from, p.basis.base.as_deref()),
+            (Some("heard"), None)
+        );
+        // Negative control: the callbook answered for the call itself.
+        let p = place("DL1ABC", None, MYCALL, MYGRID, &book, Some("dl1abc")).unwrap();
+        assert_eq!(
+            (p.basis.from, p.basis.base.as_deref()),
+            (Some("callbook"), None)
+        );
+    }
+
+    #[test]
     fn the_cases_with_no_answer() {
-        assert_eq!(place("EA8ABC", None, MYCALL, "", &[]), Err(NoPlace::NoGrid));
         assert_eq!(
-            place("   ", None, MYCALL, MYGRID, &[]),
+            place("EA8ABC", None, MYCALL, "", &[], None),
+            Err(NoPlace::NoGrid)
+        );
+        assert_eq!(
+            place("   ", None, MYCALL, MYGRID, &[], None),
             Err(NoPlace::EnterCall)
         );
         assert_eq!(
-            place("HELLO", None, MYCALL, MYGRID, &[]),
+            place("HELLO", None, MYCALL, MYGRID, &[], None),
             Err(NoPlace::EnterCall)
         );
-        assert_eq!(place("w1aw", None, MYCALL, MYGRID, &[]), Err(NoPlace::You));
-        assert_eq!(place("FN42", None, MYCALL, MYGRID, &[]), Err(NoPlace::You));
+        assert_eq!(
+            place("w1aw", None, MYCALL, MYGRID, &[], None),
+            Err(NoPlace::You)
+        );
+        assert_eq!(
+            place("FN42", None, MYCALL, MYGRID, &[], None),
+            Err(NoPlace::You)
+        );
         // Negative control: someone else's square answers.
-        assert!(place("FN31", None, MYCALL, MYGRID, &[]).is_ok());
+        assert!(place("FN31", None, MYCALL, MYGRID, &[], None).is_ok());
     }
 
     #[test]
     fn a_maritime_mobile_is_placed_only_by_a_grid_heard_or_logged_on_the_form() {
         assert_eq!(
-            place("G4ABC/MM", None, MYCALL, MYGRID, &[]),
+            place("G4ABC/MM", None, MYCALL, MYGRID, &[], None),
             Err(NoPlace::Maritime)
         );
         // A callbook answer is the home address: still unknown.
         let book = [(FixSource::Callbook, g("IO91"))];
         assert_eq!(
-            place("G4ABC/MM", None, MYCALL, MYGRID, &book),
+            place("G4ABC/MM", None, MYCALL, MYGRID, &book, None),
             Err(NoPlace::Maritime)
         );
         let heard = [(FixSource::Heard, g("HM55"))];
-        let p = place("G4ABC/MM", None, MYCALL, MYGRID, &heard).unwrap();
+        let p = place("G4ABC/MM", None, MYCALL, MYGRID, &heard, None).unwrap();
         assert_eq!(p.basis.grid.as_deref(), Some("HM55"));
         assert_eq!(
-            place("N1ABC/AM", None, MYCALL, MYGRID, &[]),
+            place("N1ABC/AM", None, MYCALL, MYGRID, &[], None),
             Err(NoPlace::Maritime)
         );
     }
@@ -483,7 +607,7 @@ mod tests {
     fn a_centre_in_the_operators_own_entity_gives_no_answer_and_a_neighbours_does() {
         // W1AW is in the United States: a US call known only by its centre has no answer …
         assert_eq!(
-            place("K6XYZ", None, MYCALL, MYGRID, &[]),
+            place("K6XYZ", None, MYCALL, MYGRID, &[], None),
             Err(NoPlace::SameEntity)
         );
         // … but with a grid it does, and Canada's centre does.
@@ -492,10 +616,11 @@ mod tests {
             None,
             MYCALL,
             MYGRID,
-            &[(FixSource::Heard, g("CM87"))]
+            &[(FixSource::Heard, g("CM87"))],
+            None,
         )
         .is_ok());
-        let p = place("VE3ABC", None, MYCALL, MYGRID, &[]).unwrap();
+        let p = place("VE3ABC", None, MYCALL, MYGRID, &[], None).unwrap();
         assert_eq!(p.basis.kind, "entity");
     }
 
@@ -542,9 +667,11 @@ mod tests {
             kp_now: Some(2.0),
             now_inputs: Default::default(),
         };
-        let placed = place("JO21", None, MYCALL, MYGRID, &[]).unwrap();
+        let placed = place("JO21", None, MYCALL, MYGRID, &[], None).unwrap();
         let v = answer(&station, &inputs, placed, BestMode::Ft8, None);
         assert_eq!(v.state, "answer");
+        // The gain the answer assumed travels with it.
+        assert_eq!(v.ant_gain_dbi, Some(0.0));
         assert!(v.answer.as_ref().is_some_and(|a| a.per_mode));
         assert!(!crate::path_grades::holds_outlook_for(MYGRID, "JO21"));
         // Positive control: the same prediction handed to the grading keep, as `get_path_outlook`
