@@ -356,22 +356,21 @@ fn expand_home_with(port: String, home: Option<&std::ffi::OsStr>) -> String {
     }
 }
 
-/// Does this serial path PROVABLY have no modem-control lines (RTS, DTR, CTS, DSR, DCD)? True
-/// for a pseudo-terminal: the virtual port another program (wfview, socat) makes and forwards
-/// to a radio. False — the safe answer — for everything else, and whenever it cannot be
-/// proved.
+/// Is this serial path a VIRTUAL port, with no modem-control lines (RTS, DTR, CTS, DSR, DCD)
+/// and no baud rate? True only for a pseudo-terminal slave: the port another program (wfview,
+/// socat) makes and forwards to a radio. False, the safe answer, for everything else and
+/// whenever it cannot be proved.
 ///
 /// ⚠️ TRANSMIT SAFETY. The callers drop the RTS/DTR hold-low on a `true` (and skip setting a
 /// baud), and on a real serial port that hold is what stops an RTS- or DTR-keyed interface
-/// from keying the radio the moment the port opens. So `true` needs positive proof, in two
-/// steps:
-/// 1. A port the OS enumerates as hardware (`serialport::available_ports`, the raw list
-///    without Nexus's virtual-port unions) is never even probed: it keeps its holds exactly
-///    as before, and opening it here would raise its lines for a moment.
-/// 2. Anything else is opened and asked for its modem lines (`TIOCMGET`), and only the
-///    driver's own "no such ioctl" (`ENOTTY`, or `EINVAL`) counts. A real UART answers the
-///    question; an open that fails, a busy port, or any other error all mean "keep the
-///    holds".
+/// from keying the radio the moment the port opens. And merely OPENING a real tty raises its
+/// lines, so the question is answered WITHOUT OPENING THE PORT, from the filesystem alone:
+/// 1. The path is resolved through any symlink (wfview's `rig-ptyN`, a udev `by-id` name). A
+///    port the OS enumerates as hardware (`serialport::available_ports`, the raw list without
+///    Nexus's virtual-port unions), by its own name or its resolved one, is real.
+/// 2. Otherwise the resolved node is `stat`ed, and only a character device whose major number
+///    is the pseudo-terminal slaves' ([`is_pty_slave`]) is virtual. A regular file, a missing
+///    path, and every other character device — whatever its driver — are real.
 ///
 /// Off Unix, and without the `serial` feature, this is always false: Windows has no
 /// pseudo-terminals (its virtual COM pairs emulate the lines), and a build that cannot
@@ -383,15 +382,15 @@ pub fn has_no_modem_lines(port: &str) -> bool {
             Ok(ports) => ports.into_iter().map(|p| p.port_name).collect(),
             Err(_) => Vec::new(),
         };
-        let absent = lacks_modem_lines_with(port, hardware, ask_modem_lines);
+        let absent = lacks_modem_lines_with(port, hardware, char_device_major);
         if absent {
             static NOTED: std::sync::Once = std::sync::Once::new();
             NOTED.call_once(|| {
                 tempo_core::applog::info(
                     "cat",
                     &format!(
-                        "{port} is a virtual port (no RTS/DTR lines, no baud): opening it \
-                         without holding the lines or setting a rate"
+                        "{port} is a virtual port (a pseudo-terminal: no RTS/DTR lines, no \
+                         baud): opening it without holding the lines or setting a rate"
                     ),
                 );
             });
@@ -405,55 +404,101 @@ pub fn has_no_modem_lines(port: &str) -> bool {
     }
 }
 
-/// [`has_no_modem_lines`] with the enumeration and the probe as parameters, so the
-/// real-port arm is testable with a fake that answers like a UART.
+/// [`has_no_modem_lines`] with the enumeration and the `stat` as parameters, so the real-port
+/// arms are testable with a fake device. `major` answers `Some(major)` for a character device
+/// and `None` for anything else; it is asked only of a path the enumeration did not list.
 #[cfg(unix)]
 #[cfg_attr(not(feature = "serial"), allow(dead_code))]
 fn lacks_modem_lines_with(
     port: &str,
     hardware: impl FnOnce() -> Vec<String>,
-    probe: impl FnOnce(&std::path::Path) -> std::io::Result<()>,
+    major: impl FnOnce(&std::path::Path) -> Option<i64>,
 ) -> bool {
     let port = port.trim();
     if port.is_empty() {
         return false;
     }
     let named = std::path::Path::new(port);
-    // A symlink (wfview's `rig-ptyN`, a udev `by-id` name) is judged by the node it points at.
     let real = std::fs::canonicalize(named).unwrap_or_else(|_| named.to_path_buf());
     let listed = hardware()
         .iter()
         .any(|h| std::path::Path::new(h) == named || std::path::Path::new(h) == real);
-    !listed && no_such_ioctl(&probe(&real))
+    !listed && major(&real).is_some_and(|m| is_pty_slave(&real, m))
 }
 
-/// Is this the driver saying the modem-line ioctl does not exist? `ENOTTY` is what Linux and
-/// macOS pseudo-terminals answer; `EINVAL` is the other spelling a driver with no modem lines
-/// uses. Nothing else counts.
+/// The node's character-device major number, from `stat` alone (the device is not opened).
+/// `None` for a missing path and for anything that is not a character device.
+#[cfg(all(unix, feature = "serial"))]
+fn char_device_major(path: &std::path::Path) -> Option<i64> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let md = std::fs::metadata(path).ok()?;
+    md.file_type()
+        .is_char_device()
+        .then(|| i64::from(libc::major(md.rdev() as libc::dev_t)))
+}
+
+/// Is a character device with this major (at the resolved `path`) a pseudo-terminal SLAVE?
+///
+/// - **Linux:** the Unix98 pty slaves are majors 136–143 (`include/uapi/linux/major.h`,
+///   `UNIX98_PTY_SLAVE_MAJOR` = 128 + 8; `Documentation/admin-guide/devices.txt`, "136-143 char
+///   Unix98 PTY slaves"). They live at `/dev/pts/N`, but the major is the proof, not the name.
+/// - **macOS:** the slaves are `/dev/ttysNNN` (`PTSD_TEMPLATE "ttys%03d"`), but their major is
+///   NOT fixed: xnu `bsd/kern/tty_ptmx.c` `ptmx_init` takes it from `cdevsw_add(-15,
+///   &ptsd_cdev)`, "dynamically assigned major number". So it is learned at run time from a pty
+///   pair Nexus makes itself ([`macos_pty_slave_major`]), and the name must be `/dev/ttys` and
+///   digits too. `/dev/cu.*` and `/dev/tty.*` (USB serial, Bluetooth) are a different driver.
+/// - Any other Unix: never.
 #[cfg(unix)]
 #[cfg_attr(not(feature = "serial"), allow(dead_code))]
-fn no_such_ioctl(probe: &std::io::Result<()>) -> bool {
-    matches!(probe, Err(e) if matches!(e.raw_os_error(), Some(c) if c == libc::ENOTTY || c == libc::EINVAL))
+fn is_pty_slave(path: &std::path::Path, major: i64) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = path;
+        (136..=143).contains(&major)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let ttys = path
+            .to_str()
+            .and_then(|p| p.strip_prefix("/dev/ttys"))
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        ttys && macos_pty_slave_major() == Some(major)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (path, major);
+        false
+    }
 }
 
-/// Open `path` without making it the controlling terminal or waiting for carrier, and read its
-/// modem lines once. Closing it again is the whole cleanup.
-#[cfg(all(unix, feature = "serial"))]
-fn ask_modem_lines(path: &std::path::Path) -> std::io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::os::unix::io::AsRawFd;
-    let f = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .custom_flags(libc::O_NOCTTY | libc::O_NONBLOCK)
-        .open(path)?;
-    let mut bits: libc::c_int = 0;
-    // SAFETY: `f` owns a valid descriptor for the whole call, and TIOCMGET writes exactly one
-    // `c_int` through the pointer.
-    if unsafe { libc::ioctl(f.as_raw_fd(), libc::TIOCMGET, &mut bits) } == -1 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
+/// This Mac's pty-slave major, learned once by making a pseudo-terminal pair through
+/// `/dev/ptmx` and `stat`ing its slave. Only Nexus's own new pair is opened, never an
+/// operator's port. `None` if the pair cannot be made, and then nothing is virtual.
+#[cfg(target_os = "macos")]
+fn macos_pty_slave_major() -> Option<i64> {
+    static MAJOR: std::sync::OnceLock<Option<i64>> = std::sync::OnceLock::new();
+    *MAJOR.get_or_init(|| {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: plain libc calls on a descriptor owned here and closed before returning;
+        // `ptsname`'s static buffer is copied out at once, inside this one-time initialiser.
+        unsafe {
+            let m = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            if m < 0 {
+                return None;
+            }
+            let name = if libc::grantpt(m) == 0 && libc::unlockpt(m) == 0 {
+                let p = libc::ptsname(m);
+                (!p.is_null()).then(|| std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned())
+            } else {
+                None
+            };
+            let major = name
+                .and_then(|n| std::fs::metadata(n).ok())
+                .map(|md| i64::from(libc::major(md.rdev() as libc::dev_t)));
+            libc::close(m);
+            major
+        }
+    })
 }
 
 /// A USB serial port plus the descriptor fields zero-config setup reads to identify
@@ -1020,54 +1065,90 @@ mod tests {
     }
 
     /// ⭐ TRANSMIT SAFETY: a port shaped like a real one keeps its RTS/DTR holds. A port the OS
-    /// lists as hardware is never even opened by the probe; an unlisted one that answers the
-    /// modem-line question like a UART, or fails in any way but "no such ioctl", is not
-    /// virtual. Only `ENOTTY`/`EINVAL` from the ioctl itself makes a port virtual.
+    /// lists as hardware, reached through a symlink, is real and its node is not even looked
+    /// at. Unlisted, only a character device with the pty-slave major is virtual: a USB serial,
+    /// ACM, legacy UART or unknown character device, a non-device and a missing path are real.
     #[cfg(unix)]
     #[test]
-    fn only_the_drivers_no_such_ioctl_makes_a_port_virtual() {
-        let err = |c: i32| -> std::io::Result<()> { Err(std::io::Error::from_raw_os_error(c)) };
-        let listed = || {
-            vec![
-                "/dev/ttyUSB0".to_string(),
-                "/dev/cu.usbserial-A".to_string(),
-            ]
+    fn only_a_pty_slave_major_makes_an_unlisted_port_virtual() {
+        let dir = std::env::temp_dir().join(format!("nexus-real-shape-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let device = dir.join("ttyUSB0");
+        std::fs::write(&device, b"").expect("stand-in device");
+        let link = dir.join("by-id-radio");
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&device, &link).expect("symlink");
+        let canonical = std::fs::canonicalize(&device).expect("canonical");
+        let listed = || vec![canonical.to_string_lossy().into_owned()];
+        let never_asked = |_: &std::path::Path| -> Option<i64> {
+            panic!("a listed hardware port must not be examined")
         };
-        let never_probe = |_: &std::path::Path| -> std::io::Result<()> {
-            panic!("a listed hardware port must not be opened by the probe")
-        };
-        assert!(!lacks_modem_lines_with("/dev/ttyUSB0", listed, never_probe));
         assert!(!lacks_modem_lines_with(
-            " /dev/cu.usbserial-A ",
+            &link.to_string_lossy(),
             listed,
-            never_probe
+            never_asked
         ));
-        // Unlisted, and answering like a UART: not virtual.
         assert!(!lacks_modem_lines_with(
-            "/dev/ttyUSB7",
-            Vec::new,
-            |_| Ok(())
+            &device.to_string_lossy(),
+            listed,
+            never_asked
         ));
-        for c in [
-            libc::EIO,
-            libc::EBUSY,
-            libc::EACCES,
-            libc::ENOENT,
-            libc::EPERM,
-            libc::ENXIO,
-        ] {
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Unlisted: by major alone. 188 ttyUSB, 166 ttyACM, 4 ttyS, 5 /dev/tty, 1 /dev/null.
+        for major in [188, 166, 4, 5, 1, 0, 144, 135] {
             assert!(
-                !lacks_modem_lines_with("/dev/ttyUSB7", Vec::new, |_| err(c)),
-                "errno {c} keeps the holds"
+                !lacks_modem_lines_with("/dev/ttyUSB7", Vec::new, |_| Some(major)),
+                "major {major} is real"
             );
         }
-        for c in [libc::ENOTTY, libc::EINVAL] {
-            assert!(lacks_modem_lines_with("/dev/pts/9", Vec::new, |_| err(c)));
+        assert!(
+            !lacks_modem_lines_with("/dev/pts/9", Vec::new, |_| None),
+            "not a char device"
+        );
+        assert!(!lacks_modem_lines_with("", Vec::new, |_| Some(136)));
+        assert!(!lacks_modem_lines_with("   ", Vec::new, |_| Some(136)));
+        #[cfg(target_os = "linux")]
+        for major in 136..=143 {
+            assert!(lacks_modem_lines_with("/dev/pts/9", Vec::new, |_| Some(
+                major
+            )));
         }
-        assert!(!lacks_modem_lines_with("", Vec::new, |_| err(libc::ENOTTY)));
-        assert!(!lacks_modem_lines_with("   ", Vec::new, |_| err(
-            libc::ENOTTY
-        )));
+    }
+
+    /// How many times `path` is opened while `f` runs, by anyone, as inotify sees it.
+    #[cfg(target_os = "linux")]
+    fn opens_during(path: &std::path::Path, f: impl FnOnce()) -> usize {
+        let c = std::ffi::CString::new(path.to_string_lossy().as_bytes()).expect("path");
+        // SAFETY: an inotify descriptor owned here and closed before returning; `read` writes at
+        // most `buf.len()` bytes.
+        unsafe {
+            let fd = libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC);
+            assert!(fd >= 0, "inotify_init1");
+            assert!(
+                libc::inotify_add_watch(fd, c.as_ptr(), libc::IN_OPEN) >= 0,
+                "watch"
+            );
+            f();
+            let mut buf = [0u8; 4096];
+            let mut opens = 0;
+            loop {
+                let n = libc::read(fd, buf.as_mut_ptr().cast(), buf.len());
+                if n <= 0 {
+                    break;
+                }
+                let mut at = 0usize;
+                while at < n as usize {
+                    let ev = &*(buf.as_ptr().add(at) as *const libc::inotify_event);
+                    if ev.mask & libc::IN_OPEN != 0 {
+                        opens += 1;
+                    }
+                    at += std::mem::size_of::<libc::inotify_event>() + ev.len as usize;
+                }
+            }
+            libc::close(fd);
+            opens
+        }
     }
 
     /// A pseudo-terminal pair, as a virtual-port program makes one: the master end (held open
@@ -1091,22 +1172,71 @@ mod tests {
         }
     }
 
-    /// The real probe on a real pseudo-terminal, directly and through a symlink the way wfview
-    /// hands one out (`rig-ptyN`): virtual. A missing path is not.
+    /// ⭐ NOTHING IS OPENED TO DECIDE: a pty behind a wfview-style `rig-pty1` symlink is virtual,
+    /// and is not opened on the way (positive control: an open of our own is seen).
     #[cfg(all(target_os = "linux", feature = "serial"))]
     #[test]
-    fn a_pseudo_terminal_is_virtual_directly_and_through_its_symlink() {
-        let (_master, slave) = open_pty();
-        assert!(has_no_modem_lines(&slave), "{slave}");
+    fn a_pty_behind_a_symlink_is_virtual_and_is_not_opened_to_decide() {
         let dir = std::env::temp_dir().join(format!("nexus-pty-link-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
+        let (_master, slave) = open_pty();
         let link = dir.join("rig-pty1");
         let _ = std::fs::remove_file(&link);
         std::os::unix::fs::symlink(&slave, &link).expect("symlink");
-        assert!(has_no_modem_lines(&link.to_string_lossy()));
+        let slave_path = std::path::Path::new(&slave);
+        assert_eq!(
+            opens_during(slave_path, || drop(std::fs::File::open(slave_path))),
+            1,
+            "control: an open of the pty is seen"
+        );
+        let mut virtual_port = false;
+        let opens = opens_during(slave_path, || {
+            virtual_port = has_no_modem_lines(&link.to_string_lossy());
+        });
+        assert_eq!(opens, 0, "the pty was opened to classify it");
+        assert!(virtual_port, "{slave} behind a symlink is virtual");
+        assert!(has_no_modem_lines(&slave));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ TRANSMIT SAFETY: a symlink to a node that is not a pty is real (holds kept) and the node
+    /// is never opened — opening a real tty raises its lines, a key-down on an RTS/DTR-keyed
+    /// radio. Positive control as above.
+    #[cfg(all(target_os = "linux", feature = "serial"))]
+    #[test]
+    fn a_symlink_to_a_node_that_is_not_a_pty_is_real_and_is_never_opened() {
+        let dir = std::env::temp_dir().join(format!("nexus-real-link-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let node = dir.join("ttyUSB9");
+        std::fs::write(&node, b"").expect("not a pty");
+        let link = dir.join("by-id-radio");
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&node, &link).expect("symlink");
+        assert_eq!(
+            opens_during(&node, || drop(std::fs::File::open(&node))),
+            1,
+            "control: an open of the node is seen"
+        );
+        let mut virtual_port = true;
+        let opens = opens_during(&node, || {
+            virtual_port = has_no_modem_lines(&link.to_string_lossy());
+        });
+        assert_eq!(opens, 0, "the node was opened to classify it");
+        assert!(
+            !virtual_port,
+            "a symlink to a node that is not a pty is real"
+        );
         assert!(!has_no_modem_lines(
             &dir.join("nothing-here").to_string_lossy()
         ));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An unknown character device (`/dev/null`, major 1) is real: only the pty-slave major is
+    /// virtual, whatever a driver would answer if asked.
+    #[cfg(all(target_os = "linux", feature = "serial"))]
+    #[test]
+    fn an_unknown_character_device_is_real() {
+        assert!(!has_no_modem_lines("/dev/null"));
     }
 }

@@ -106,8 +106,9 @@ alsa = { version = "0.11", optional = true }
 # (MIT only — not dual). All three are GPL-3.0-only compatible and all three are already on
 # `deny.toml`'s allowlist today, because cargo-deny reads the whole lockfile with no target
 # filter and they have been in it as transitive deps all along. NOTICE entries filed.
-# macOS and Linux: one `TIOCMGET` ioctl, to tell a virtual serial port (a pseudo-terminal, which
-# has no RTS/DTR lines) from a real one (`ports::has_no_modem_lines`). libc is already in
+# macOS and Linux: `major()` of a device number, and on macOS one pseudo-terminal pair of Nexus's
+# own, to tell a virtual serial port (a pseudo-terminal, which has no RTS/DTR lines) from a real
+# one without opening it (`ports::has_no_modem_lines`). libc is already in
 # Cargo.lock at this requirement (serialport, cpal, tempo-net), so this compiles nothing new.
 # MIT OR Apache-2.0: both on deny.toml's allowlist, and the crate is already in the licence list
 # scripts/gen-rust-licenses.py writes from the lockfile.

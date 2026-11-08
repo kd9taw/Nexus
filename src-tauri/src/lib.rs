@@ -30248,8 +30248,8 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
                     // frees it asynchronously after the daemon exits).
                     std::thread::sleep(Duration::from_millis(300));
                 }
-                // A virtual port has no baud to find: say so instead of sweeping. Asked once
-                // the loop has let go of it, so our own daemon's exclusive open cannot hide it.
+                // A virtual port has no baud to find: say so instead of sweeping. Decided from
+                // the filesystem alone; the port is not opened to ask.
                 if released && tempo_audio::ports::has_no_modem_lines(&port) {
                     detail = format!(
                         "{detail} {}",
