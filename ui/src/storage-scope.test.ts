@@ -285,6 +285,9 @@ const SHARED = [
   // and the eyes in front of it, like the cap; only the main window ever asks or reads it.
   'nexus-ui-scale-fit-rule',
   'nexus.connect.chaseDefault.v1',
+  // See full day's hand-off to the Conditions window (features/bestTimesAsk): written by one window for
+  // ANOTHER to read, so it cannot be scoped to either.
+  'nexus.bestTimes.handoff',
   'nexus.connect.mode',
   'nexus.cw.sensitivity',
   // The FT country-exclusion list. SHARED, and the one key here where that is a RULING

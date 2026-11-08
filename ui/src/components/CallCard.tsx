@@ -57,6 +57,7 @@ import { fmtDistanceKm, useUnits } from '../units'
 import { t } from '../i18n'
 import { lookupCall } from '../callsign'
 import { TX_AVOID } from '../features/txSurfaces'
+import { registerFloatingCard } from '../features/floatingCard'
 
 // ---- where the card may never stand ----------------------------------------------------------
 
@@ -172,10 +173,14 @@ const subscribe = (l: () => void) => {
 }
 const readOpened = () => opened
 
+/** One floating card at a time (features/floatingCard): the Best times card closes when this opens. */
+const closeOtherCards = registerFloatingCard(() => closeCallCard())
+
 export function openCallCard(call: string, anchor: HTMLElement, keyboard = false, hover = false): void {
   const cu = call.trim().toUpperCase()
   // An unresolved hash, `<...>`, names no station: there is nothing to show a card about.
   if (!lookupCall(cu)) return
+  closeOtherCards()
   opened = { call: cu, anchor, keyboard, hover }
   emit()
 }

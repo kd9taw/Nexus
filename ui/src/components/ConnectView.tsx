@@ -41,6 +41,7 @@ import { CONNECT_STRIP_MAX_SHARE, CONNECT_STRIP_SPLIT_MAX, CONNECT_STRIP_SPLIT_M
 import type { NeededBoard, OtaBoard, SpotsFeed } from './connect/paneContext'
 import type { DayScrub } from './prop/PathDayStrip'
 import { fmtZ } from '../propViz'
+import { askCount, subscribeAsk } from '../features/bestTimesAsk'
 import {
   SLOT_IDS,
   addableTo,
@@ -546,6 +547,21 @@ export function ConnectView({
   const { slots, tabs, rotate, assignPane, addTab, removeTab, showTab, setRotate, resetSlots, restoreSlots } = useConnectConfig(
     tableOffers(table, 'bestTimes'),
   )
+  // A call handed to Best times (a card's See full day): the box comes on screen, shown where it is
+  // or added as the last tab of the right column's top slot. Each hand-off once, those made before
+  // this view mounted included.
+  const seenAsks = useRef(0)
+  useEffect(() => {
+    const bring = () => {
+      if (askCount() === seenAsks.current) return
+      seenAsks.current = askCount()
+      const at = SLOT_IDS.find((s) => slotBoxes({ slots, tabs }, s).includes('bestTimes'))
+      if (!at) addTab('right1', 'bestTimes')
+      else if (slots[at] !== 'bestTimes') showTab(at, 'bestTimes')
+    }
+    bring()
+    return subscribeAsk(bring)
+  }, [slots, tabs, addTab, showTab])
   // Band focus (advisor/opening row click) — the map highlights that band's heat
   // + spots; click the same band again (or the clear chip) to release.
   const [focusBand, setFocusBand] = useState<string | null>(null)

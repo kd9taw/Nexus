@@ -24,6 +24,7 @@ import { Entries, type Js8MenuEntry } from './Js8ListMenu'
 import { addCallToWatchlist, exactCallEntry, loadWatchlist, removeWatchEntry } from '../watchlist'
 import { endOfUtcDay, hideCall } from '../features/hideCalls'
 import { useCountryExclude } from '../features/countryExclude'
+import { openBestTimesCard } from './BestTimesCard'
 
 const HOUR_MS = 3600_000
 
@@ -93,6 +94,7 @@ export function CallRowMenu({
   onClose: () => void
 }) {
   const countries = useCountryExclude()
+  const anchor = useRef<HTMLSpanElement>(null)
   const entries = (): Js8MenuEntry[] => {
     // Each end is worked out when the item is CHOSEN, not when the menu opened.
     const durations = (scope: string | null): Js8MenuEntry[] => [
@@ -102,8 +104,14 @@ export function CallRowMenu({
       { kind: 'item', label: t('callMenu.hide.always'), onSelect: () => hideCall(call, scope, null) },
     ]
     const exact = exactCallEntry(loadWatchlist(), call)
+    // The row the menu was opened on, for the card to stand beside (the anchor sits inside it).
+    const row = () => anchor.current?.parentElement ?? document.body
     const out: Js8MenuEntry[] = [
       { kind: 'heading', label: call },
+      // Best times first, on every call menu: it opens a card beside the row and selects, tunes and
+      // works nothing (the anchor below keeps the choice from reaching the row).
+      { kind: 'item', label: t('callMenu.bestTimes'), onSelect: () => openBestTimesCard(call, row()) },
+      { kind: 'sep' },
       exact
         ? { kind: 'item', label: t('callMenu.watch.remove'), onSelect: () => removeWatchEntry(exact.id) }
         : { kind: 'item', label: t('callMenu.watch.add'), onSelect: () => addCallToWatchlist(call) },
@@ -118,7 +126,7 @@ export function CallRowMenu({
     return out
   }
   return (
-    <span className="call-row-menu-anchor" onClick={stop} onDoubleClick={stop} onKeyDown={stop} onContextMenu={stop}>
+    <span ref={anchor} className="call-row-menu-anchor" onClick={stop} onDoubleClick={stop} onKeyDown={stop} onContextMenu={stop}>
       <RM.Root open onOpenChange={(open) => !open && onClose()}>
         <RM.Trigger asChild>
           <span aria-hidden="true" />

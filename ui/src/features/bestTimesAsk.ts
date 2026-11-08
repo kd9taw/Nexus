@@ -16,12 +16,20 @@ import { surfaceGet, surfaceSet } from './windowScope'
 const LAST_KEY = 'nexus.bestTimes.call'
 
 let pending: string | null = null
+let asks = 0
 const listeners = new Set<() => void>()
 
 /** Hand `call` to this window's Best times pane. */
 export function askBestTimes(call: string): void {
   pending = call.trim().toUpperCase()
+  asks++
   listeners.forEach((l) => l())
+}
+
+/** How many calls have been handed over in this window: the Conditions view brings the box on
+ *  screen for each one it has not seen. */
+export function askCount(): number {
+  return asks
 }
 
 /** Take the call handed over, once. */
@@ -44,6 +52,52 @@ export function lastAsked(): string {
 
 export function rememberAsked(call: string): void {
   surfaceSet(LAST_KEY, call)
+}
+
+/** The hand-off to the Conditions window (See full day): a shared key that window reads when it opens,
+ *  and hears when it is already open (another window's write fires its `storage` event). */
+const HANDOFF_KEY = 'nexus.bestTimes.handoff'
+/** A hand-off older than this is not for a window opening now. */
+const HANDOFF_MS = 30_000
+
+export function handOff(call: string): void {
+  try {
+    localStorage.setItem(HANDOFF_KEY, JSON.stringify({ call: call.trim().toUpperCase(), at: Date.now() }))
+  } catch {
+    /* storage blocked — the window opens without the call */
+  }
+}
+
+/** Take a fresh hand-off, once: the call, or null. */
+export function takeHandoff(): string | null {
+  try {
+    const raw = localStorage.getItem(HANDOFF_KEY)
+    if (!raw) return null
+    localStorage.removeItem(HANDOFF_KEY)
+    const h = JSON.parse(raw) as { call?: unknown; at?: unknown }
+    return typeof h.call === 'string' && typeof h.at === 'number' && Date.now() - h.at < HANDOFF_MS ? h.call : null
+  } catch {
+    return null
+  }
+}
+
+/** In the Conditions window: hand every See full day to this window's Best times box. */
+export function listenForHandoff(): () => void {
+  const take = () => {
+    const c = takeHandoff()
+    if (c) askBestTimes(c)
+  }
+  take()
+  const on = (e: StorageEvent) => {
+    if (e.key === HANDOFF_KEY && e.newValue) take()
+  }
+  window.addEventListener('storage', on)
+  return () => window.removeEventListener('storage', on)
+}
+
+/** The call handed over and not yet taken by a box (the Conditions view puts the box on screen). */
+export function pendingAsk(): string | null {
+  return pending
 }
 
 const looked = new Map<string, Promise<boolean>>()
@@ -70,4 +124,5 @@ export function lookedUp(call: string): boolean {
 export function resetBestTimesAsk(): void {
   looked.clear()
   pending = null
+  asks = 0
 }

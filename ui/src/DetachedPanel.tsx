@@ -14,6 +14,8 @@
 // window (the two mirrors drifting apart is what put the guard here). The club-sync-off copy
 // is the router's because it is about a panel that ISN'T mounted: it names the Settings route
 // that would fill the board, and the board component never renders in that state.
+import { BestTimesCardHost } from './components/BestTimesCard'
+import { listenForHandoff } from './features/bestTimesAsk'
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { t } from './i18n'
 import { useEscStop } from './useEscStop'
@@ -220,10 +222,19 @@ export function DetachedPanel({ panel }: { panel: string }) {
 
 /** The root of every pop-out branch: the zoomed `.app` tree plus this window's toast host.
  *  Use this, never a bare `<div className="app detached">` — see the warning above. */
+/** The Conditions window takes See full day's call from any other window (features/bestTimesAsk). */
+function ConditionsHandoff() {
+  useEffect(() => listenForHandoff(), [])
+  return null
+}
+
 function DetachedShell({ className, children }: { className?: string; children?: ReactNode }) {
   return (
     <div className={className ? `app detached ${className}` : 'app detached'}>
       {children}
+      {/* A call menu's Best times card shows in a torn-off window too, never over its transmit
+          controls (BestTimesCard.tsx). */}
+      <BestTimesCardHost />
       <Toasts />
     </div>
   )
@@ -828,9 +839,11 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     // THE DASHBOARD WINDOW: the clock and space-weather bar across the top, the
     // station from the shared snapshot and the indices from this window's own propagation poll
     // above. Its toggle keeps the window behind the others where the shell offers that; the
-    // window's size, place and that choice are the shell's (`window_state` in src-tauri).
+    // window's size, place and that choice are the shell's (`window_state` in src-tauri). It is also
+    // where a Best times card's See full day lands: the call goes to its Best times box.
     return (
       <DetachedShell>
+        <ConditionsHandoff />
         <DashboardBar call={snap?.mycall ?? ''} grid={snap?.mygrid ?? ''} prop={prop}>
           <StayBehindToggle />
         </DashboardBar>

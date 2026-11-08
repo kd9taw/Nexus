@@ -309,6 +309,7 @@ const MIGRATED = [
   'components/prop/BestTimesAnswer.tsx',
   'components/prop/BestTimesChart.tsx',
   'components/prop/BestTimesPane.tsx',
+  'components/BestTimesCard.tsx',
   // The flare / proton overlay on a path and the outlook's "now" line (solar paths and outlook).
   'features/pathNow.ts',
   'components/prop/SpaceNowLine.tsx',
