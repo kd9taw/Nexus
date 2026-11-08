@@ -50387,6 +50387,11 @@ fn install_panic_logger() {
 /// - on Stop's second road's stopper, which runs every later Stop's verbs.
 ///
 /// The line is queued anyway, and the writer flushes an error line as soon as it has it.
+///
+/// ⚠️ Deliberate: such a panic followed at once by an abort (one that unwinds into an `extern "C"`
+/// frame, or a panic while panicking) can lose its line, because the writer may not get a turn
+/// before the process dies. The wait would not have saved the transmission there, and it would
+/// hold the Engine for up to 2 s whenever no abort follows. Do not put the wait back.
 fn a_panic_here_may_wait_for_the_disk() -> bool {
     !tempo_net::on_a_transmit_driver()
         && tempo_core::logbook::io_fence::engine_guards_held() == 0

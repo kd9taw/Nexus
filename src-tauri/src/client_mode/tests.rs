@@ -1538,12 +1538,6 @@ fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_link_stuck() {
 /// their median within the millisecond, and each ends this computer's press without waiting for
 /// the sender. CONTROL: the press was live before each Stop, and the sender was still held when
 /// the Stops had gone.
-///
-/// Timed from the press to the Stop's departure. Each press runs on a thread of its own, as the
-/// window's event loop runs it, while this thread waits on the socket, so what the handler does
-/// after the write (answering the call on Tauri's runtime) is not in the number. The runtime is
-/// warmed first: in the app it runs long before any Stop, and here its first use, about 4 ms
-/// quiet and 50-230 ms on a loaded box, would otherwise compete with the first press.
 #[test]
 fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_audio_sender_blocked_too() {
     use crate::lan_client::audio_road::{AudioRoad, StandIn};
@@ -1554,11 +1548,7 @@ fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_audio_sender_bl
     let exported = [5; EXPORTED];
     let tag = a_tag_of_its_own();
     let socket = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
-    // A blocking receive, woken by the datagram: a thread spinning on the socket used up its
-    // turn on a loaded box and was descheduled just as the Stop arrived, stamping it 4-20 ms late.
-    socket
-        .set_read_timeout(Some(Duration::from_millis(50)))
-        .unwrap();
+    socket.set_nonblocking(true).unwrap();
     let road =
         StopRoad::open(socket.local_addr().unwrap(), tag, &exported, on_air.clone()).unwrap();
     let station = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
@@ -1588,37 +1578,34 @@ fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_audio_sender_bl
         })
     };
     eventually("the sender held", || on_air.sender.try_lock().is_err());
+    // Tauri's runtime is built on its first use: here that is the first press's answer, after
+    // its Stop has gone but inside the time this thread measures (about 4 ms quiet, 50-230 ms on
+    // a loaded box). In the app it runs long before any Stop, so warm it first.
     tauri::async_runtime::block_on(async {});
     let mut took = Vec::new();
     let mut answers = Vec::new();
     let mut buffer = [0u8; 256];
     for stop in 1..=5u64 {
         on_air.pressing(Some(9));
-        let (left, (pressed, answer)) = std::thread::scope(|s| {
-            let press = s.spawn(|| {
-                let pressed = std::time::Instant::now();
-                (pressed, send(&screens.main, "halt_tx", json!({})))
-            });
-            let deadline = std::time::Instant::now() + Duration::from_secs(1);
-            let left = loop {
-                if let Ok(length) = socket.recv(&mut buffer) {
-                    let at = std::time::Instant::now();
-                    let up = keys
-                        .receive
-                        .open(&buffer[..length])
-                        .and_then(|(kind, body)| Up::read(kind, &body));
-                    if up == Some(Up::Stop { stop }) {
-                        break at;
-                    }
+        let pressed = std::time::Instant::now();
+        answers.push(send(&screens.main, "halt_tx", json!({})));
+        let deadline = pressed + Duration::from_secs(1);
+        let left = loop {
+            if let Ok(length) = socket.recv(&mut buffer) {
+                let at = std::time::Instant::now();
+                let up = keys
+                    .receive
+                    .open(&buffer[..length])
+                    .and_then(|(kind, body)| Up::read(kind, &body));
+                if up == Some(Up::Stop { stop }) {
+                    break at;
                 }
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "Stop {stop} never left"
-                );
-            };
-            (left, press.join().unwrap())
-        });
-        answers.push(answer);
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Stop {stop} never left"
+            );
+        };
         took.push(left - pressed);
         eventually("the press ended", || on_air.press().is_none());
     }
