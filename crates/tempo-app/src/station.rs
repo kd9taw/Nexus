@@ -3321,7 +3321,13 @@ impl StationCore {
 
     /// Whether `rec`, a copy held off the lock, has been cancelled by its contact leaving the log.
     pub(crate) fn upload_cancelled(&self, rec: &QsoRecord) -> bool {
-        self.purged_since_drain || rec.id.is_some_and(|id| self.gone_ids.contains(&id))
+        self.purged_since_drain || self.deleted(rec)
+    }
+
+    /// Whether the contact of `rec` was deleted this session and not put back. A purge names no ids:
+    /// each drain says for itself whether one happened since it took its copies.
+    pub(crate) fn deleted(&self, rec: &QsoRecord) -> bool {
+        rec.id.is_some_and(|id| self.gone_ids.contains(&id))
     }
 
     /// The contacts that have left the log since the last call, and whether every one has.
