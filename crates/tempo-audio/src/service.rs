@@ -360,7 +360,77 @@ fn hamlib_launch_refused(t: &Transport) -> bool {
 /// see [`crate::rigctld_proc::ControlLines`]. They reach only the Hamlib path; the native CI-V
 /// daemon opens the port itself and gets the same guarantee from
 /// [`crate::control_line::idle_both_lines`] at its own open.
+///
+/// Whatever starts, the mode policy learns what it can express ([`learn_mode_caps`]) before
+/// anything is commanded through it.
 fn spawn_cat_daemon(
+    t: &Transport,
+    target: &str,
+    network: bool,
+    ptt_line: Option<SerialLine>,
+) -> std::io::Result<(CatDaemon, Option<String>)> {
+    let started = start_cat_daemon(t, target, network, ptt_line);
+    if let Ok((daemon, _)) = &started {
+        learn_mode_caps(t, matches!(daemon, CatDaemon::Spawned(_)));
+    }
+    started
+}
+
+/// Tell the mode policy ([`tempo_app::rig_modes`]) which modes the daemon now serving
+/// `t.rig_model` can express, so Nexus never commands a mode word it does not list where the
+/// same emission has another name (Hamlib's SDR Console backend, 2056, turns `PKTUSB` into
+/// `MDD;`, an invalid TS-2000 mode).
+///
+/// Hamlib's `rigctld` (`hamlib`): its own `-u` caps dump, read once per model. Anything else
+/// (Nexus's own CI-V, Flex, TCI or Icom network client, OmniRig) does not speak Hamlib's list, so
+/// the model is forgotten and its modes are commanded as before. A dump that cannot be read
+/// leaves the model unknown, which is also "as before", and says so in the log. So does a CI-V
+/// backend, whose printed list Hamlib does not go by ([`crate::rigctld_proc::hamlib_mode_list`]).
+fn learn_mode_caps(t: &Transport, hamlib: bool) {
+    let model = t.rig_model;
+    if !hamlib {
+        tempo_app::rig_modes::record(model, None);
+        return;
+    }
+    if tempo_app::rig_modes::is_known(model) {
+        return;
+    }
+    let Some(modes) = crate::rigctld_proc::hamlib_mode_list(model) else {
+        tempo_core::applog::info(
+            "cat",
+            &format!(
+                "{}: no Hamlib mode list is used for model {model} (unreadable, or a CI-V \
+                 backend); modes are commanded as configured",
+                t.radio_label
+            ),
+        );
+        return;
+    };
+    tempo_app::rig_modes::record(model, Some(modes.clone()));
+    let lacking: Vec<&str> = ["PKTUSB", "PKTLSB", "CWR"]
+        .into_iter()
+        .filter(|m| tempo_app::rig_modes::lacks(model, m))
+        .collect();
+    tempo_core::applog::info(
+        "cat",
+        &format!(
+            "{}: Hamlib model {model} modes: {}{}",
+            t.radio_label,
+            modes.join(" "),
+            if lacking.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " (no {}: the plain sideband, or CW, is commanded instead)",
+                    lacking.join("/")
+                )
+            }
+        ),
+    );
+}
+
+/// [`spawn_cat_daemon`]'s body: start the daemon `t` asks for.
+fn start_cat_daemon(
     t: &Transport,
     target: &str,
     network: bool,
@@ -8679,7 +8749,17 @@ impl RadioLoop {
             // a rig that had not been transmitting when it was asked. See
             // `RadioLoop::operator_keyed`.
             let remote_want_radio;
-            let (want, dial, md, reprobe_req, force_retune, split_req, fm, cat_hold, section_cw) = {
+            let (
+                want,
+                dial,
+                mut md,
+                reprobe_req,
+                force_retune,
+                split_req,
+                fm,
+                cat_hold,
+                mut section_cw,
+            ) = {
                 let mut eng = engine_lock(engine);
                 remote_want_radio = eng.settings().active_radio;
                 // ⚠️ W0: the engine flipped `active_radio` after this tick's handoff read it, so
@@ -9049,7 +9129,23 @@ impl RadioLoop {
                 engine_lock(engine).remote_close_radio();
                 self.remote_connection = None;
                 self.remote_radio_id = Some(remote_want_radio);
+                let caps_before = tempo_app::rig_modes::generation();
                 let (new_rig, proc, probe) = reopen_rig(&open_want, allow_coexist);
+                // The open may have just learned what this radio's backend can express
+                // (`learn_mode_caps`), and `md` was worked out before it, at the top of the tick.
+                // The retune below commands `md` in this same tick, so it is asked again here:
+                // otherwise the first mode a radio with no DATA mode is sent is the DATA word
+                // (`MDD;` on SDR Console). Only WHICH word changes; nothing is sent sooner or
+                // later. Mode word and section are re-read together, from one lock.
+                if tempo_app::rig_modes::generation() != caps_before {
+                    let eng = engine_lock(engine);
+                    md = eng.rig_mode_effective();
+                    section_cw =
+                        eng.settings().operating_mode == tempo_app::settings::OperatingMode::Cw;
+                    drop(eng);
+                    self.cur_md = md.clone();
+                    self.cur_section_cw = section_cw;
+                }
                 let (ok, detail, refused) = (probe.ok, probe.detail, probe.refused);
                 let detail = if suspect_rebuild && !daemon_died && !linkless {
                     format!("the CAT link stayed silent — the port was reopened. {detail}")

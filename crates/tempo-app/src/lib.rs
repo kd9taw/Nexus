@@ -43,6 +43,7 @@ pub mod privileges;
 pub mod radio_claim;
 pub mod remote_control;
 pub mod remote_monitor;
+pub mod rig_modes;
 pub mod scp;
 pub mod sstv_gallery;
 #[cfg(test)]

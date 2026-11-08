@@ -3318,3 +3318,193 @@ fn a_tick_that_reopens_the_cat_link_does_not_pre_set_and_the_next_does() {
         "CONTROL: the next tick pre-sets: {next:?}"
     );
 }
+
+// ── A radio whose CAT backend has no DATA mode ───────────────────────────────────────────────
+
+/// Hamlib 4.6.5's whole mode list for model 2056, SDR Console (`rigctld -m 2056 -u`): no PKT mode.
+const SDR_CONSOLE_MODES: [&str; 8] = ["AM", "CW", "USB", "LSB", "RTTY", "FM", "CWR", "RTTYR"];
+
+/// The registry is process-wide and tests run in parallel, so each scene names its own model.
+fn record_modes(model: u32, modes: &[&str]) {
+    tempo_app::rig_modes::record(model, Some(modes.iter().map(|m| m.to_string()).collect()));
+}
+
+/// The rigctld in front of SDR Console, as Hamlib's 2056 backend serves it: the radio sits in USB,
+/// and any DATA word is refused (`RPRT -9`), as SDR Console refuses the `MDD;` Hamlib turns
+/// `PKTUSB` into. Split writes are taken. The loop's transport is already this radio's, `model`.
+fn sdr_console_bench(engine: Arc<Mutex<Engine>>, model: u32) -> Bench<Hamlib> {
+    let keyed = Arc::new(AtomicBool::new(false));
+    let vfos = Arc::new(Mutex::new(Vfos::default()));
+    let k = keyed.clone();
+    let peer = retuning_peer(FT8_DIAL, "USB", move |line, radio| {
+        let ok = || Some("RPRT 0\n".to_string());
+        match line {
+            "T 1" | "T 3" => {
+                radio.keyed = true;
+                k.store(true, Ordering::SeqCst);
+                ok()
+            }
+            "T 0" => {
+                radio.keyed = false;
+                k.store(false, Ordering::SeqCst);
+                ok()
+            }
+            _ if (line.starts_with("M ") || line.starts_with("X ")) && line.contains("PKT") => {
+                Some("RPRT -9\n".to_string())
+            }
+            _ if line.starts_with("S ") || line.starts_with("I ") || line.starts_with("X ") => ok(),
+            "i" => Some(format!("{FT8_DIAL}\n")),
+            _ => None,
+        }
+    });
+    let rig = Rig::rigctld(&peer.address);
+    let mut state = loop_state();
+    state.applied.rig_model = model;
+    Bench::new(engine, state, rig, Hamlib { peer, keyed, vfos })
+}
+
+/// Every mode and TX-mode write the radio was sent, in order.
+fn mode_writes(b: &Bench<Hamlib>) -> Vec<String> {
+    b.radio
+        .peer
+        .lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.starts_with("M ") || l.starts_with("X "))
+        .cloned()
+        .collect()
+}
+
+/// ⭐ FT8 ON SDR CONSOLE (Hamlib 2056) KEYS IN USB AND IS NEVER SENT A DATA WORD. Its backend lists
+/// no PKT mode, and Hamlib puts `PKTUSB` on SDR Console's wire as `MDD;`, which SDR Console
+/// answered with an error window at every key-down, because the mode set goes out on the slot
+/// boundary just before `TX;`. Nothing is configured: the operator's plain-SSB switch is off.
+/// Each over keys at its slot, as before; only the mode word differs.
+#[test]
+fn ft8_on_a_backend_with_no_data_mode_keys_in_usb_and_never_sends_pkt() {
+    const MODEL: u32 = 2056;
+    record_modes(MODEL, &SDR_CONSOLE_MODES);
+    let engine = cq_engine(SplitMode::None, 1441.0, |s| s.rig_model = MODEL);
+    assert_eq!(
+        engine.lock().unwrap().rig_mode_effective(),
+        "USB",
+        "premise: the policy"
+    );
+    let mut b = sdr_console_bench(engine, MODEL);
+    let overs = b.overs(2);
+    for (i, o) in overs.iter().enumerate() {
+        eprintln!("SDR Console over {}: {o:?}", i + 1);
+        assert_eq!(
+            o.key.last().map(String::as_str),
+            Some("T 1"),
+            "over {}",
+            i + 1
+        );
+        assert_eq!(o.unkey, ["T 0"], "over {}", i + 1);
+    }
+    let modes = mode_writes(&b);
+    assert!(
+        modes.iter().all(|l| !l.contains("PKT")),
+        "a DATA word reached the radio: {modes:?}"
+    );
+    assert_eq!(modes, ["M USB -1"], "the mode, once, in USB");
+}
+
+/// …and with Split Operation = Rig, VFO B's mode (`X`) is USB too: the same over, the same
+/// writes in the same order as on any other radio, one word apart.
+#[test]
+fn rig_split_on_a_backend_with_no_data_mode_writes_vfo_b_in_usb() {
+    const MODEL: u32 = 990_301;
+    record_modes(MODEL, &SDR_CONSOLE_MODES);
+    let engine = cq_engine(SplitMode::Rig, 1441.0, |s| s.rig_model = MODEL);
+    let mut b = sdr_console_bench(engine, MODEL);
+    let overs = b.overs(2);
+    assert_eq!(
+        overs[0].key,
+        ["S 1 VFOB", "I 14073500", "X USB -1", "S 1 VFOB", "T 1"]
+    );
+    assert_eq!(overs[1].key, ["S 1 VFOB", "T 1"]);
+    assert!(mode_writes(&b).iter().all(|l| !l.contains("PKT")));
+}
+
+/// CONTROLS: a backend that lists its DATA modes still gets `PKTUSB`; the operator's own
+/// "Data modes use plain SSB" switch still gives USB on it; and a model whose list was never read
+/// is commanded exactly as before, `PKTUSB` first.
+#[test]
+fn a_backend_with_data_modes_or_unknown_caps_gets_pktusb_and_the_switch_still_wins() {
+    const LISTED: u32 = 990_302;
+    const UNKNOWN: u32 = 990_303;
+    record_modes(
+        LISTED,
+        &["AM", "CW", "USB", "LSB", "FM", "PKTLSB", "PKTUSB", "FM-D"],
+    );
+    for (model, plain, want) in [
+        (LISTED, false, "M PKTUSB -1"),
+        (LISTED, true, "M USB -1"),
+        (UNKNOWN, false, "M PKTUSB -1"),
+    ] {
+        let engine = cq_engine(SplitMode::None, 1441.0, |s| {
+            s.rig_model = model;
+            s.data_modes_plain_ssb = plain;
+        });
+        let mut b = sdr_console_bench(engine, model);
+        let _ = b.overs(1);
+        assert_eq!(
+            mode_writes(&b).first().map(String::as_str),
+            Some(want),
+            "model {model}, plain SSB {plain}"
+        );
+    }
+}
+
+/// ⛔ THE TICK THAT OPENS THE LINK. The loop works out the mode word at the top of a tick, and the
+/// open that learns the backend's modes runs later in the same tick, just before the retune that
+/// commands it. Without asking again the first word a radio with no DATA mode got was `PKTUSB`.
+#[test]
+fn the_tick_that_learns_the_backends_modes_commands_the_word_it_can_express() {
+    const MODEL: u32 = 990_304;
+    let engine = cq_engine(SplitMode::None, 1441.0, |s| s.rig_model = MODEL);
+    let peer = retuning_peer(FT8_DIAL, "USB", |_, _| None);
+    let address = peer.address.clone();
+    let mut state = loop_state();
+    state.rx_ranges_probed = true;
+    state.tuner_probed = true;
+    let mut ra = mock_reopen_audio();
+    // The open: `learn_mode_caps` records what the daemon's backend lists, then the link is up.
+    let mut rr = move |_t: &Transport, _coexist: bool| {
+        record_modes(MODEL, &SDR_CONSOLE_MODES);
+        (
+            Rig::rigctld(&address),
+            None,
+            CatProbe::status(Some(true), ""),
+        )
+    };
+    let (mut backend, mut rig, mut station) = (MockBackend::new(), Rig::vox(), StationSinks::new());
+    let sinks = Sinks {
+        wsjtx: None,
+        psk: None,
+    };
+    let t = now_unix_ms() + 2_000.0;
+    state
+        .step(
+            &engine,
+            &mut backend,
+            &mut rig,
+            &sinks,
+            t,
+            &mut ra,
+            &mut rr,
+            &mut station,
+        )
+        .unwrap();
+    let modes: Vec<String> = peer
+        .lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.starts_with("M "))
+        .cloned()
+        .collect();
+    assert_eq!(modes, ["M USB -1"], "the opening tick's mode write");
+}
