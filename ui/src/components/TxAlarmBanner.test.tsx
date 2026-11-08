@@ -105,8 +105,9 @@ describe('the transmitter alarm cell on the TX strip', () => {
     expect(words()!.title, 'the whole alarm on hover').toBe(lead)
     expect(words()!.textContent, 'a newer alarm waits behind it, never in its place').not.toContain(HELD)
     const queue = document.querySelector<HTMLElement>('.ch-txalarm-queue')!
-    expect(queue.textContent, 'one width in every language').toBe('+1')
-    expect(queue.getAttribute('aria-label')).toBe('1 of 2')
+    expect(queue.querySelector('[aria-hidden="true"]')!.textContent, 'one width in every language').toBe('+1')
+    expect(queue.querySelector('.sr-only')!.textContent, 'what a screen reader reads').toBe('1 of 2')
+    expect(queue.getAttribute('aria-label'), 'no name on a role-less span (ARIA 1.2)').toBeNull()
     expect(queue.title, 'the waiting alarm is reachable on hover').toContain(HELD)
   })
 
@@ -192,8 +193,8 @@ describe('every critical status-lane item is shown by Stop TX too', () => {
     act(() => setStatus('probe-critical', { tier: 'critical', message: 'PTT OFF FAILED — TX STOPPED' }))
     expect(words()!.textContent).toContain(UNCONFIRMED)
     const queue = document.querySelector<HTMLElement>('.ch-txalarm-queue')!
-    expect(queue.textContent).toBe('+1')
-    expect(queue.getAttribute('aria-label')).toBe('1 of 2')
+    expect(queue.querySelector('[aria-hidden="true"]')!.textContent).toBe('+1')
+    expect(queue.querySelector('.sr-only')!.textContent).toBe('1 of 2')
     expect(queue.title).toContain('PTT OFF FAILED — TX STOPPED')
     expect(screen.getByRole('button', { name: 'Dismiss' })).toBeTruthy()
   })

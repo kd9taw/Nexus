@@ -136,6 +136,8 @@ import {
 import { rttyState } from './stop-line.api.testkit'
 import { AmpPane } from './prop/AmpPane'
 import { AmpStrip } from './AmpStrip'
+import { TempoHeader } from './TempoHeader'
+import { ALARM_CELL_VIEWS } from '../features/alarmCellViews'
 import type { AmpStatus, RttyState } from '../types'
 
 // THE BUDGET (2026-10-09). The slowest case without a budget of its own, "the RF scope pane is on screen with nothing
@@ -634,3 +636,34 @@ describe('the transmitter alarm stands under Stop TX on every cockpit', () => {
       expect(alarms[0].previousElementSibling?.classList.contains('cq-break'), `${c.cockpit}: the cell does not start the strip's second line`).toBe(true)
   })
 })
+
+// THE LIST THE TOP BAR TRUSTS (features/alarmCellViews): a view on it lets the bar's lane be cut, because its
+// strip shows every critical item beside Stop TX; a view off it keeps the lane's flag. Held to the cockpits that
+// really draw the cell: every swept cockpit above is on it (and draws the cell, the test above), and the two
+// that are not swept here are each checked where their cell comes from.
+describe('ALARM_CELL_VIEWS is exactly the views whose strip draws the alarm cell', () => {
+  it('every swept cockpit is on the list, and the list holds nothing else but Tempo and APRS', () => {
+    const swept = new Set(CASES.map((c) => c.view))
+    for (const v of swept) expect(ALARM_CELL_VIEWS.has(v as never), `${v} draws the cell but is not on the list`).toBe(true)
+    expect([...ALARM_CELL_VIEWS].filter((v) => !swept.has(v)).sort()).toEqual(['aprs', 'chat'])
+  })
+  it('Tempo (`chat`): its header’s TX strip draws the cell', async () => {
+    render(
+      <TempoHeader
+        snap={{ ...snap, chatCq: 'off' } as never}
+        tier="TempoFast" onTierChange={() => {}} bandPlan={[]} onSetFrequency={() => {}} onSetTxLevel={() => {}}
+        onToggleCqRun={() => {}} onResumeCqRun={() => {}} onSetTxEnabled={() => {}} onSetTune={() => {}}
+        onAtuTune={() => {}} onHaltTx={() => {}} onSetHoldTxFreq={() => {}}
+      />,
+    )
+    await settle()
+    expect(document.querySelector('.cockpit-txstrip .ch-txalarm')).not.toBeNull()
+  })
+  it('APRS: App hands its strip the cell (App draws APRS’s strip, so this reads App’s wiring)', () => {
+    const app = readFileSync(resolve(process.cwd(), 'src/App.tsx'), 'utf8')
+    const aprs = app.slice(app.indexOf('<AprsCockpit'), app.indexOf('/>', app.indexOf('txStrip={', app.indexOf('<AprsCockpit'))) + 2)
+    expect(aprs, 'the APRS host passes a TX strip').toContain('<CockpitTxStrip')
+    expect(aprs, 'App’s APRS strip carries the alarm cell').toMatch(/alarm=\{<TxAlarmBanner /)
+  })
+})
+

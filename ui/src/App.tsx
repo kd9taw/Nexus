@@ -65,6 +65,7 @@ import { flexVoiceNeedsDax } from './features/flexDaxNote'
 import { phoneTuneNeedsRearSource } from './features/yaesuTuneNote'
 import { useActivationNotices } from './useActivationNotices'
 import { t } from './i18n'
+import { ALARM_CELL_VIEWS } from './features/alarmCellViews'
 import { resolveUnits, setUnitsMirror } from './units'
 import { doubleBeep, processDecodes, txEarcon, type NeededAlert } from './alerts'
 import { openingToastSpec } from './openingAlert'
@@ -339,9 +340,6 @@ const OPERATE_TIERS: Tier[] = [
  *  App). The other operating screens bind their own Esc; stop-control-wiring.test.tsx presses Esc
  *  on every section in the registry and holds each to what it sends. Connect is here because it draws
  *  no top bar, so no Stop TX of its own (the operator's 2026-10-01 ruling). */
-/** The views whose TX strip draws the transmitter alarm cell (CockpitTxStrip / OperateQsoStrip `alarm`).
- *  stop-line.test.tsx renders each of these cockpits and finds the cell in its strip. */
-const ALARM_CELL_VIEWS: ReadonlySet<View> = new Set<View>(['operate', 'chat', 'phone', 'cw', 'rtty', 'psk', 'jtty', 'sstv', 'aprs', 'js8'])
 const ESC_HALT_VIEWS: ReadonlySet<View> = new Set<View>(['chat', 'phone', 'jtty', 'sstv', 'aprs', 'sats', 'connect'])
 /** The screen of each section the station reports (`radio.operatingMode`), for a computer driving
  *  it to follow. 'keyboard' is PSK's screen, the section's own landing; 'jtty' is the Keyboard

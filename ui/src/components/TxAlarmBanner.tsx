@@ -19,7 +19,7 @@
 // never hidden anywhere):
 //   1. the station's transmitter alarm, oldest first, with its Dismiss (✕, named "Dismiss");
 //   2. the critical status-lane items (status.ts), in the lane's order;
-//   3. "+N" when there are more ("1 of N" to a screen reader), which shows every other entry whole on hover.
+//   3. "+N" when there are more ("1 of N" to a screen reader, as hidden text), every other entry whole on hover.
 // THE FLOOR THE WORDS GET: the cell's 13em minimum less "+N", the ✕ and their gaps, in every language
 // (about 8em of the cell's type: 97 px at 100 % zoom, 65 px at FT 900x600 auto-fit, measured in all eight
 // languages): the alarm's name or nearly all of it ("⚠ Transmitter alar…", "⚠ Тревога переда…",
@@ -84,14 +84,12 @@ export function TxAlarmBanner({
       )}
       {rest.length > 0 && (
         // "+N", the same width in every language, so the words keep the cell's room: the localized "1 of N"
-        // ("共 4 条中的第 1 条" in Chinese) left the alarm's own words 9 px at FT 900x600. The sentence is its
-        // accessible name and heads its hover, which lists every other entry whole.
-        <span
-          className="ch-txalarm-queue"
-          aria-label={t('cockpit.txAlarm.queue', { total: entries.length })}
-          title={[t('cockpit.txAlarm.queue', { total: entries.length }), ...rest].join('\n')}
-        >
-          +{rest.length}
+        // ("共 4 条中的第 1 条" in Chinese) left the alarm's own words 9 px at FT 900x600. The sentence is what a
+        // screen reader reads (visually hidden text, `.sr-only`, out of flow: a name on a role-less span is not
+        // valid ARIA, and browse mode would read "+3"), and it heads the hover, which lists every other entry.
+        <span className="ch-txalarm-queue" title={[t('cockpit.txAlarm.queue', { total: entries.length }), ...rest].join('\n')}>
+          <span aria-hidden="true">+{rest.length}</span>
+          <span className="sr-only">{t('cockpit.txAlarm.queue', { total: entries.length })}</span>
         </span>
       )}
       {shown && (
