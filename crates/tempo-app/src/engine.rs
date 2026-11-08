@@ -10647,7 +10647,29 @@ impl Engine {
         self.amp_live.remove(&id);
     }
 
-    /// One radio's last amplifier reading, or `None` when no amplifier is configured on it.
+    /// The active radio's amplifier BEFORE its first poll has answered: the family set up, not linked,
+    /// no readings and no reason (nothing has failed yet). `None` with no amplifier set up, model and
+    /// port both, which is the condition the radio loop polls on.
+    ///
+    /// ⭐ SO THE SNAPSHOT CARRIES AN AMPLIFIER FROM THE FIRST FRAME. The cockpit header draws the
+    /// amplifier strip from `radio.amp`; absent until the first answer, the strip appeared at the first
+    /// poll after launch or a radio switch, re-wrapped the header, and moved Stop TX under it. The
+    /// placeholder draws the same box the answer will (the strip's words keep one width), so the first
+    /// answer only fills it in. A display value: no transmit decision reads it.
+    fn amp_not_yet_answered(&self) -> Option<crate::dto::AmpStatusDto> {
+        let p = self.settings.active_profile()?;
+        let model = p.amp_model.trim();
+        if model.is_empty() || p.amp_port.trim().is_empty() {
+            return None;
+        }
+        Some(crate::dto::AmpStatusDto {
+            family: model.to_ascii_lowercase(),
+            ..Default::default()
+        })
+    }
+
+    /// One radio's last amplifier reading, or `None` before its first poll and when no amplifier is
+    /// configured on it (the snapshot fills the first case from [`Self::amp_not_yet_answered`]).
     pub fn amp_live(&self, id: u32) -> Option<&crate::dto::AmpStatusDto> {
         self.amp_live.get(&id).map(|a| &a.status)
     }
@@ -31635,7 +31657,10 @@ contact yourself."
         // A map lookup and a clone: no I/O and no second lock. `Engine::snapshot` runs under
         // the engine mutex on the UI's 300 ms poll, and work done inside it has twice stalled
         // the radio loop.
-        s.radio.amp = self.amp_live(self.settings.active_radio).cloned();
+        s.radio.amp = self
+            .amp_live(self.settings.active_radio)
+            .cloned()
+            .or_else(|| self.amp_not_yet_answered());
         s.radio.scope_error = self.scope_error.clone();
         s.radio.scope_span_refused = self.scope_span_refused.clone();
         s.radio.scope_rate = self.scope_rate.clone();
@@ -52919,6 +52944,55 @@ mod tests {
             logged(&icom(3073), &plain),
             Some(25.0),
             "an IC-7300 on its own curve"
+        );
+    }
+
+    /// AN AMPLIFIER SET UP IS ON THE SNAPSHOT FROM THE FIRST FRAME, before its first poll answers. The
+    /// cockpit header draws the amplifier strip from `radio.amp`; when it went from absent to present at
+    /// the first poll after launch or a radio switch, the header re-wrapped and Stop TX under it moved
+    /// (real Chrome: 33 of 128 window sizes, zooms and languages each way). Before the first answer it is
+    /// the not-yet-answered status: the family set up, not linked, no readings, no reason. With no
+    /// amplifier set up there is still no `amp` at all (the control), and the first answer replaces it.
+    #[test]
+    fn a_configured_amplifier_is_on_the_snapshot_before_its_first_poll() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        assert!(
+            e.snapshot().radio.amp.is_none(),
+            "control: no amplifier set up, no amp at all"
+        );
+        with_amp(&mut e);
+        let amp = e
+            .snapshot()
+            .radio
+            .amp
+            .expect("an amplifier set up is on the snapshot before its first poll");
+        assert_eq!(amp.family, "spe");
+        assert!(!amp.linked, "not answered yet: never shown as linked");
+        assert_eq!(amp.reason, "", "no failure has been seen yet");
+        assert_eq!(
+            (amp.operate, amp.output_watts, amp.band_label.as_deref()),
+            (None, None, None),
+            "no readings"
+        );
+        amp_poll(&mut e, true, 0);
+        assert!(
+            e.snapshot().radio.amp.unwrap().linked,
+            "the first answer replaces it"
+        );
+        // A port left empty is no amplifier the radio loop polls, so nothing is promised.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        with_amp(&mut e);
+        let id = e.settings.active_radio;
+        e.settings
+            .radios
+            .iter_mut()
+            .find(|p| p.id == id)
+            .unwrap()
+            .amp_port
+            .clear();
+        assert!(
+            e.snapshot().radio.amp.is_none(),
+            "no port: no amplifier strip"
         );
     }
 
