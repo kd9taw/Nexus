@@ -175,6 +175,28 @@ own CAT settings (Network for a TCP server, Serial for a virtual COM pair),
 and send the audio through two cables. Their menus have not been checked here,
 so this page does not name them.
 
+### QO-100 through SDR Console
+
+SDR Console handles the QO-100 converters itself. It applies the LNB offset
+and the transmit converter offset, and over CAT it reports, and takes, the
+**downlink** frequency: about 10489.7 MHz, not 2400.2. Nexus sees that dial
+as 3 cm and judges your licence on it. It sets no LNB offset of its own and
+does not tune the uplink.
+
+- In Phone or CW, pick **3cm** from the band menu. With the **Open** licence
+  class it lands on the narrowband transponder: SSB at 10489.700 and CW at
+  10489.520. A US class lands on the 10368.100 calling frequency instead,
+  because the US is outside QO-100's footprint. Once you have tuned there,
+  Nexus remembers your frequency on 3 cm.
+- The last entry in that menu, **QO-100 satellite**, opens the Satellites
+  screen on QO-100. Picking its narrowband transponder there tunes the
+  downlink. With the satellite uplink mapping left at its default, Nexus
+  writes nothing to a transmit VFO and leaves the uplink to SDR Console. Keep
+  it that way with SDR Console: its CAT does only an emulated split.
+- Before you transmit, check that SDR Console shows the uplink you expect
+  (2400.200 for 10489.700). Nexus cannot see how SDR Console maps its
+  transmit frequency.
+
 For a program that is not in the list, tick **Show all models** for the full
 Hamlib catalog or type its model number. Or run rigctld yourself and point
 Nexus at it as **NET rigctl**, as described under

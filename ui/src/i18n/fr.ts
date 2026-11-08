@@ -1332,6 +1332,8 @@ export const FR: PartialCatalog = {
   "bandPicker.txLock.usbOnlyTitle": "Sur 60 m, seul le phone en USB est autorisé — l'émission est bloquée. Choisissez USB ou AUTO.",
   "bandPicker.planAdvice.label": "Hors plan de bande",
   "bandPicker.planAdvice.title": "La phonie ici sur {{band}} est hors du plan de bande habituel : toutes les régions IARU réservent cette partie de la bande à la CW et aux données. Nexus ne la bloque pas — votre licence et le plan de bande de votre pays décident.",
+  "bandPicker.qo100.label": "Satellite QO-100",
+  "bandPicker.qo100.title": "Ouvre QO-100 dans l’écran Satellites. Choisissez-y son transpondeur bande étroite pour accorder la liaison descendante.",
   "bandStrip.age.hours": "il y a {{hours}} h",
   "bandStrip.age.mins": "il y a {{mins}} min",
   "bandStrip.age.secs": "il y a {{secs}} s",

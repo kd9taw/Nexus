@@ -4288,6 +4288,8 @@ export const DE: PartialCatalog = {
   "bandPicker.txLock.usbOnlyTitle": "Auf 60 m ist nur Phone in USB erlaubt — Senden ist gesperrt. USB oder AUTO wählen.",
   "bandPicker.planAdvice.label": "Außerhalb des Bandplans",
   "bandPicker.planAdvice.title": "Phone hier auf {{band}} liegt außerhalb des üblichen Bandplans: Jede IARU-Region hält diesen Teil des Bandes für CW und Daten frei. Nexus sperrt es nicht — es entscheiden die eigene Lizenz und der Bandplan des eigenen Landes.",
+  "bandPicker.qo100.label": "QO-100-Satellit",
+  "bandPicker.qo100.title": "Öffnet QO-100 im Bildschirm Satelliten. Wählen Sie dort seinen Schmalband-Transponder, um den Downlink abzustimmen.",
   "freq.control.aria": "Frequenzsteuerung",
   "freq.channel.label": "Band / Kanal",
   "freq.channel.aria": "Bandplan-Kanal",

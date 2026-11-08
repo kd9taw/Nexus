@@ -814,6 +814,61 @@ pub fn cw_activity_mhz(band: &str) -> Option<f64> {
     })
 }
 
+/// Where Phone and CW ACTIVITY sits on the bands whose licensed segment starts AT THE BAND'S OWN
+/// EDGE, per licence regime, so neither home is that edge. For Phone, the bottom of the passband
+/// (the dial on USB); for CW, the carrier. `None` = no override, and the caller keeps its own
+/// answer (`cw_activity_mhz`, the segment start). [`crate::privileges::phone_home`] and
+/// [`crate::privileges::cw_home`] take a value only where the class may key it.
+///
+/// THE QO-100 REPORT: entering Phone on 3 cm with no remembered dial commanded the radio to
+/// 10000.000 MHz, the segment start. Through SDR Console, which maps the downlink dial to the
+/// satellite's uplink by the transponder's 8089.500 MHz offset, that is about 1910.5 MHz, not
+/// amateur spectrum. Every value here was checked on 2026-11-07:
+/// - US classes: the ARRL band plan (arrl.org/band-plan) calling frequencies, "222.1 SSB & CW
+///   calling frequency", "432.10", 903.100 (the regional option the 33 cm listening dial already
+///   uses), "1296.100", and the National Weak-Signal Calling Frequencies 2304.100, 5760.1 and
+///   10368.100; 160 m phone from "1.843-2.000 SSB, SSTV and other wideband modes".
+/// - `Open` on 3 cm and 13 cm: the QO-100 narrowband transponder (AMSAT-DL, "QO-100 NB
+///   Transponder Bandplan and Operating Guidelines"). Phone 10489.700 down / 2400.200 up, in
+///   "SSB only" 10489.650-10489.745 / 2400.150-2400.245, clear of the middle beacon (10489.750,
+///   guard 10489.745-10489.755); CW 10489.520 / 2400.020, in "CW only" 10489.505-10489.540 /
+///   2400.005-2400.040. The legs differ by the 8089.500 MHz translation, non-inverting. The
+///   US is outside the footprint, so a US class calls terrestrially there.
+/// - `Open` on 160 m CW: the IARU Region 1 HF plan's "1836 kHz QRP Centre of Activity" in its
+///   1810-1838 CW segment. 1.810, every class's CW dial, is Region 1's band bottom.
+/// - 6 cm: the ARRL's 5760.1 for `Open` too, inside its 5650-5850 parking and the narrowband
+///   segment WSJT-X's default frequency list (v3.0.2, `models/FrequencyList.cpp`) calls in at
+///   5760.065-5760.200.
+/// - 9 cm and 1.25 cm: that list's narrowband dials, 3400.065 and 24048.200 (no US class holds
+///   9 cm; the ARRL plan names no 24 GHz calling frequency). 3400.100 is the Region 1 narrowband
+///   calling frequency as commonly quoted, not read from a plan today.
+pub fn activity_home_mhz(
+    class: crate::settings::LicenseClass,
+    band: &str,
+    mode: crate::settings::OperatingMode,
+) -> Option<f64> {
+    use crate::settings::{LicenseClass::Open, OperatingMode::*};
+    let open = matches!(class, Open);
+    Some(match (band, mode) {
+        ("160m", Phone) => 1.843,
+        ("160m", Cw) if open => 1.836,
+        ("1.25m", Phone) => 222.100,
+        ("70cm", Phone) => 432.100,
+        ("33cm", Phone) => 903.100,
+        ("23cm", Phone) => 1296.100,
+        ("13cm", Phone) if open => 2400.200,
+        ("13cm", Cw) if open => 2400.020,
+        ("13cm", Phone | Cw) => 2304.100,
+        ("9cm", Phone | Cw) => 3400.100,
+        ("6cm", Phone | Cw) => 5760.100,
+        ("3cm", Phone) if open => 10489.700,
+        ("3cm", Cw) if open => 10489.520,
+        ("3cm", Phone | Cw) => 10368.100,
+        ("1.25cm", Phone | Cw) => 24048.200,
+        _ => return None,
+    })
+}
+
 /// The Tempo channel whose dial matches `dial_mhz` (within 500 Hz), if any — used
 /// by the UI to highlight the active band channel.
 pub fn channel_for_dial(dial_mhz: f64) -> Option<BandChannel> {
