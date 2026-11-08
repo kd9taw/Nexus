@@ -249,6 +249,9 @@ pub struct BestTimes {
     pub now_hour: u8,
     /// Any part of the answer rests on the long path (the screen labels it unvalidated).
     pub long_used: bool,
+    /// The operator's licence holds no transmit band in this mode among the bands predicted: the
+    /// answer is empty because of the licence, not the path, and the screen says so.
+    pub no_tx_band: bool,
 }
 
 /// Order of the words, Closed lowest.
@@ -502,25 +505,33 @@ pub fn best_times(ask: &BestAsk) -> BestTimes {
             .partial_cmp(&(rank(ca.word), ca.fig))
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    // `predict::rank_for_chase`'s rule on words: this is a chase answer, so the headline goes to
-    // the best band that earns DXCC credit when one is Fair or better; nothing else moves.
+    // A flare or a proton event estimated to cost a band PASS_OVER_DB or more NOW takes it out of
+    // the headline and the runner-up, every such band, not only the top one: flare absorption grows
+    // as frequency falls, so the next band down is usually hit harder still. The strongest band
+    // taken out is named, so the operator knows why the answer is not the band they expected. Its
+    // scores stay as they are (the chart and the windows are untouched); the overlay covers now only.
+    let mut passed_over = None;
+    order.retain(|&i| {
+        let c = cells[i].1[now_hour];
+        let db = absorbed_db(ask, &cells[i].0, c.route);
+        if db < PASS_OVER_DB || !c.word.is_open() {
+            return true;
+        }
+        if passed_over.is_none() {
+            passed_over = Some(Absorbed {
+                band: cells[i].0.clone(),
+                db: db.round() as u16,
+            });
+        }
+        false
+    });
+    // `predict::rank_for_chase`'s rule on words, over the bands left: this is a chase answer, so the
+    // headline goes to the best band that earns DXCC credit when one is Fair or better.
     if let Some(p) = order
         .iter()
         .position(|&i| earns_credit(&cells[i].0) && usable(cells[i].1[now_hour].word))
     {
         order[..=p].rotate_right(1);
-    }
-    let mut passed_over = None;
-    if let Some(&top) = order.first() {
-        let c = cells[top].1[now_hour];
-        let db = absorbed_db(ask, &cells[top].0, c.route);
-        if usable(c.word) && db >= PASS_OVER_DB && order.len() > 1 {
-            passed_over = Some(Absorbed {
-                band: cells[top].0.clone(),
-                db: db.round() as u16,
-            });
-            order.remove(0);
-        }
     }
     let head = order.first().copied();
     let now = match head {
@@ -704,6 +715,7 @@ pub fn best_times(ask: &BestAsk) -> BestTimes {
         hours: day_hours,
         now_hour: now_hour as u8,
         long_used,
+        no_tx_band: ask.tx_bands.is_some() && !cells.iter().any(|(b, _)| licensed(b)),
     }
 }
 
@@ -1008,24 +1020,108 @@ mod tests {
             .all(|w| w[0].from_unix <= w[1].from_unix));
     }
 
-    fn with_flare(mut sp: PathPrediction, band: &str, db: f32) -> PathPrediction {
+    fn with_flare(sp: PathPrediction, band: &str, db: f32) -> PathPrediction {
+        with_flares(sp, &[(band, db)])
+    }
+
+    /// The "now" overlay with an absorption estimate on each band named.
+    fn with_flares(mut sp: PathPrediction, bands: &[(&str, f32)]) -> PathPrediction {
         sp.overlay = Some(PathHourOverlay {
             unix: MAY_12Z,
             kp: Some(2.0),
             kp_source: KpSource::Current,
             cap_lat_deg: None,
             source: OverlaySource::default(),
-            bands: vec![BandNow {
-                band: band.into(),
-                hops: 2,
-                hops_modelled: true,
-                flare_db: Some(db),
-                pca_db: None,
-                flare_from: None,
-                segments: Vec::new(),
-            }],
+            bands: bands
+                .iter()
+                .map(|&(band, db)| BandNow {
+                    band: band.into(),
+                    hops: 2,
+                    hops_modelled: true,
+                    flare_db: Some(db),
+                    pca_db: None,
+                    flare_from: None,
+                    segments: Vec::new(),
+                })
+                .collect(),
         });
         sp
+    }
+
+    #[test]
+    fn a_licence_with_no_transmit_band_in_the_mode_says_so_rather_than_blaming_the_path() {
+        let sp = pred(vec![flat("20m", |_| 0.9), flat("40m", |_| 0.9)]);
+        let none: Vec<String> = Vec::new();
+        let a = best_times(&BestAsk {
+            tx_bands: Some(&none),
+            ..ask(&sp, None, BestMode::Ssb)
+        });
+        assert!(a.no_tx_band);
+        assert_eq!(a.now.kind, NowKind::NotNow);
+        // Negative controls: one band on the licence, and no licence filter at all.
+        let one = vec!["40m".to_string()];
+        assert!(
+            !best_times(&BestAsk {
+                tx_bands: Some(&one),
+                ..ask(&sp, None, BestMode::Ssb)
+            })
+            .no_tx_band
+        );
+        assert!(!best_times(&ask(&sp, None, BestMode::Ssb)).no_tx_band);
+    }
+
+    #[test]
+    fn a_pass_over_never_lands_on_a_band_absorbed_more() {
+        // Flare absorption grows as frequency falls: 20 m loses 12 dB, 40 m 30 dB, 17 m nothing.
+        let sp = with_flares(
+            pred(vec![
+                flat("20m", |_| 0.95),
+                flat("40m", |_| 0.9),
+                flat("17m", |_| 0.6),
+            ]),
+            &[("20m", 12.0), ("40m", 30.0)],
+        );
+        let a = best_times(&ask(&sp, None, BestMode::Ft8));
+        assert_eq!(a.now.band.as_deref(), Some("17m"));
+        assert_eq!(
+            a.now.passed_over,
+            Some(Absorbed {
+                band: "20m".into(),
+                db: 12
+            })
+        );
+        // The runner-up is never a band the flare took either.
+        assert!(a.now.runner_up.as_ref().is_none_or(|r| r.band != "40m"));
+        // Every band hit hard: not now, and the note still names the band it would have been.
+        let all = with_flares(
+            pred(vec![flat("20m", |_| 0.95), flat("40m", |_| 0.9)]),
+            &[("20m", 12.0), ("40m", 30.0)],
+        );
+        let a = best_times(&ask(&all, None, BestMode::Ft8));
+        assert_eq!(a.now.kind, NowKind::NotNow);
+        assert_eq!(
+            a.now.passed_over,
+            Some(Absorbed {
+                band: "20m".into(),
+                db: 12
+            })
+        );
+    }
+
+    #[test]
+    fn after_a_pass_over_sixty_metres_still_cannot_headline_while_a_creditable_band_is_fair() {
+        // 20 m is taken by the flare; of what is left, 60 m reads best, but 30 m earns credit and is Fair.
+        let sp = with_flare(
+            pred(vec![
+                flat("20m", |_| 0.95),
+                flat("60m", |_| 0.9),
+                flat("30m", |_| 0.6),
+            ]),
+            "20m",
+            15.0,
+        );
+        let a = best_times(&ask(&sp, None, BestMode::Ft8));
+        assert_eq!(a.now.band.as_deref(), Some("30m"));
     }
 
     #[test]
