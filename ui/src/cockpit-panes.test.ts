@@ -267,7 +267,7 @@ describe('the fence: styles.css never names a structural class', () => {
     'amp-op-face', 'amp-op-word', 'amp-op-word-off',
     // …and the transmitter alarm, now the TX strip's last line (2026-11-07): a styles.css position on it
     // could set it over Stop TX.
-    'ch-txalarm',
+    'ch-txalarm', 'ch-txalarm-own',
     // …and the lane's flag floor off the operating screens: a styles.css min-width on it could undo it.
     'status-lane-keep',
     // …and the lane's own box (2026-11-08): where it stands decides whether the bar's Stop TX moves for it.
@@ -1837,17 +1837,24 @@ describe('THE TRANSMITTER ALARM CELL: one constant width to the TX strip’s lin
   // padding + border. With a zero basis, the margin cancelling the gap and no padding or border, that is
   // exactly `min-width`, an em length its content cannot change: an alarm, a critical lane item or none
   // leaves every line of the strip where it was. (Padding is counted: the CAT words leaked 8 px of it.)
-  const STRIPS: Array<[string, string[][]]> = [
-    ['the TX strip', [['cockpit-txstrip']]],
-    ['FT’s QSO strip', [['cockpit-qso', 'panel']]],
+  // The room the TX state's line always has, measured in real Chrome beside the TX state on all seven
+  // CockpitTxStrip screens, eight languages, at 900x600 and 700x800, 150 and 175 % (the tightest): 6.32em
+  // (Russian, 900x600 175 %). A floor above it puts the cell on a line of its own, the sticky strip grows,
+  // and controls under it cannot be reached at any scroll position (digishell, RTTY and JS8 at 900x600
+  // 175 %). FT's cell stands on a line of its own by design (`ch-txalarm-own`).
+  const TX_STATE_LINE_ROOM_EM = 6.32
+  const STRIPS: Array<[string, string[][], string[]]> = [
+    ['the TX strip', [['cockpit-txstrip']], ['ch-txalarm']],
+    ['FT’s QSO strip', [['cockpit-qso', 'panel']], ['ch-txalarm', 'ch-txalarm-own']],
   ]
   const columnGap = (gap: string) => {
     const parts = gap.trim().split(/\s+(?![^(]*\))/)
     return parts[parts.length - 1]
   }
   const first = (v: string, vh: number) => lengthsAt(v.replace(/\bcalc\(/g, '('), vh)
-  it.each(STRIPS)('in %s: gap + margin + padding + border is 0, and the rest is a fixed em floor', (_name, strip) => {
-    const cell = [...strip, ['ch-txalarm']]
+  it.each(STRIPS)('in %s: gap + margin + padding + border is 0, and the rest is a fixed em floor', (_name, strip, classes) => {
+    const cell = [...strip, classes]
+    const own = classes.includes('ch-txalarm-own')
     const gap = classChainWinner(strip, 'gap')
     expect(gap, 'the strip has a gap').not.toBeNull()
     expect(classChainWinner(cell, 'flex')?.value).toBe('1 1 0')
@@ -1865,7 +1872,14 @@ describe('THE TRANSMITTER ALARM CELL: one constant width to the TX strip’s lin
     for (const p of ['padding-left', 'padding-inline-start', 'border-left', 'border-width', 'width'])
       expect(classChainWinner(cell, p), `${p} on the cell is width the breaker sees`).toBeNull()
     expect(classChainWinner(cell, 'min-width')?.value, 'the floor: a length no content changes').toMatch(/^\d+(\.\d+)?em$/)
-    expect(classChainWinner(cell, 'height')?.value, 'one height, empty or full: its own line is never 0 px tall').toMatch(/^\d+(\.\d+)?em$/)
+    const floorEm = parseFloat(classChainWinner(cell, 'min-width')!.value)
+    if (own) {
+      expect(classChainWinner(cell, 'height')?.value, 'one height, empty or full: its own line is never 0 px tall').toMatch(/^\d+(\.\d+)?em$/)
+    } else {
+      expect(floorEm, 'the floor fits beside the TX state, so the cell never takes a line of its own').toBeLessThanOrEqual(TX_STATE_LINE_ROOM_EM)
+      expect(classChainWinner(cell, 'height'), 'beside the controls it takes no height of its own').toBeNull()
+      expect(classChainWinner([...cell, ['ch-txalarm-text']], 'line-height')?.value, 'its words are never taller than the buttons').toBe('1')
+    }
     expect(classChainWinner(cell, 'overflow')?.value).toBe('hidden')
   })
   it('within the floor the words shorten; the count and the ✕ never do', () => {

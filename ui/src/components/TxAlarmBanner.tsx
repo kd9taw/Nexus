@@ -20,10 +20,11 @@
 //   1. the station's transmitter alarm, oldest first, with its Dismiss (✕, named "Dismiss");
 //   2. the critical status-lane items (status.ts), in the lane's order;
 //   3. "+N" when there are more ("1 of N" to a screen reader, as hidden text), every other entry whole on hover.
-// THE FLOOR THE WORDS GET: the cell's 13em minimum less "+N", the ✕ and their gaps, in every language
-// (about 8em of the cell's type: 97 px at 100 % zoom, 65 px at FT 900x600 auto-fit, measured in all eight
-// languages): the alarm's name or nearly all of it ("⚠ Transmitter alar…", "⚠ Тревога переда…",
-// "⚠ 发射机报警，IC-73…"). The count and the ✕ never shrink. Dismiss clears exactly the transmitter alarm shown (by its id), never one raised
+// THE FLOOR THE WORDS GET (cockpit-panes.css): beside the TX state the cell's minimum is 6em, the room
+// that line always has, so it never takes a line of its own (a 13em floor did, and the taller sticky strip
+// covered controls at 900x600 175 %). That keeps the ⚠, the ✕ and about 2em of words; the cell grows
+// into the line's room, which is far more at most sizes. On FT's own line (`ownLine`) the minimum is 13em:
+// the name or nearly all of it. The count and the ✕ never shrink. Dismiss clears exactly the transmitter alarm shown (by its id), never one raised
 // since; a lane item clears when its condition does. The Remote shows it without the button: the
 // dismissal is the station's.
 //
@@ -59,10 +60,14 @@ export function useCriticalLane(): StatusItem[] {
 export function TxAlarmBanner({
   alarms,
   onSnap,
+  ownLine = false,
 }: {
   alarms?: TxAlarm[]
   /** Takes the snapshot the dismissal answers with. */
   onSnap?: (s: AppSnapshot) => void
+  /** The cell stands on a line of its own (FT's strip): the name's floor and a fixed height
+   *  (cockpit-panes.css `.ch-txalarm-own`). Beside a TX state it does not. */
+  ownLine?: boolean
 }) {
   const critical = useCriticalLane()
   const shown = alarms?.[0]
@@ -75,7 +80,7 @@ export function TxAlarmBanner({
   return (
     // The always-drawn cell is no alert itself (an empty one would be a standing alert region); the words
     // are, so each alarm is announced as it arrives.
-    <div className="ch-txalarm">
+    <div className={ownLine ? 'ch-txalarm ch-txalarm-own' : 'ch-txalarm'}>
       {first != null && (
         <span className="ch-txalarm-text" role="alert" title={first}>
           <span aria-hidden="true">⚠ </span>

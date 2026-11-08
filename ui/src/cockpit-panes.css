@@ -831,16 +831,19 @@
    strip's column gap, no padding and no border (a box cannot be narrower than those, and they would be
    width the breaker sees: the 8 px the CAT words leaked). What it holds can never change where the strip
    wraps, so no control on the strip moves when an alarm comes or goes, and it sits beside them, never
-   over one. The minimum is the floor the alarm keeps on the tightest line: its opening words, the count
-   and the ✕. It grows into the room left on its line; the words shorten (whole on hover). The cost is
-   that floor, on every strip, in every state (and, where the floor takes a line of its own, that line). */
+   over one. It grows into the room left on its line; the words shorten (whole on hover).
+   THE FLOOR, 6em, IS THE ROOM THE TX STATE'S LINE ALWAYS HAS, so the cell always stands BESIDE the TX state
+   and never takes a line of its own: measured beside the TX state on all seven strips, eight languages,
+   900x600 and 700x800 at 150 and 175 % (the tightest), the least room is 6.32em (Russian, 900x600 175 %).
+   A 13em floor took a line of its own there, the sticky strip grew 39 px, and controls under it could no
+   longer be reached at any scroll position (digishell, RTTY and JS8). One case is tighter still: Spanish
+   at 700x800 150 %, 2.26em, where the floor takes a line (a constant cost: nothing moves on a state change).
+   The floor holds the ⚠ and the ✕ with about 2em of words beside them (more wherever the line has room).
+   Beside the controls the cell needs no height of its own: its words and its ✕ are shorter than the
+   strip's buttons (line-height 1). FT's cell stands on a line of its own (`.ch-txalarm-own`, below). */
 .ch-txalarm {
   flex: 1 1 0;
-  min-width: 13em;
-  /* …and ONE HEIGHT: where the floor does not fit beside the controls the cell stands on a line of its own,
-     and an empty cell's line was 0 px tall, so an alarm grew the strip (FT, 1366x768). A fixed height
-     makes that line the same height empty or full; beside the controls it is shorter than they are. */
-  height: 1.6em;
+  min-width: 6em;
   margin: 0 0 0 calc(-1 * var(--space-2));
   padding: 0;
   border: 0;
@@ -850,10 +853,20 @@
   overflow: hidden;
   font-size: var(--fs-label);
 }
-/* The words: first, after the gap the cell gave back, and the one part that shortens. */
+/* FT's cell (OperateQsoStrip, TxAlarmBanner `ownLine`): the first cell of the strip's second line, which its
+   QSO controls already fill, so the cell always stands on a line of its own there. There the floor is the
+   alarm's name with the count and the ✕, and ONE HEIGHT: an empty cell's own line was 0 px tall, so an
+   alarm grew the strip (FT, 1366x768); fixed, that line is the same height empty or full. */
+.ch-txalarm-own {
+  min-width: 13em;
+  height: 1.6em;
+}
+/* The words: first, after the gap the cell gave back, and the one part that shortens. Line height 1, so a
+   cell beside the controls is never taller than they are. */
 .ch-txalarm-text {
   flex: 0 1 auto;
   min-width: 0;
+  line-height: 1;
   margin-inline-start: var(--space-2);
   padding: 1px var(--space-1);
   overflow: hidden;

@@ -2068,7 +2068,7 @@ export function OperateCockpit({
             controls absorbed from the deleted status row (period, Skip Tx1, next-Ns,
             HOUND badge, rotor) and the fixed-width TX telemetry cell. */}
         <OperateQsoStrip
-          alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} />}
+          alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} ownLine />}
           qso={snap.qso}
           contestRunning={snap.fieldDay?.running}
           radio={snap.radio}
