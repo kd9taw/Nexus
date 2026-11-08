@@ -3298,6 +3298,7 @@
 "3","meters.tx.swr.unverified","Antenna match — this is the radio's own raw figure, and Nexus has no verified scale for this model, so it cannot tell you what counts as high here. Watch which way it moves as you tune; the absolute number may be well out, and nothing stops your transmission on it.","天線匹配 — 這是電台自身的原始數值，而 Nexus 沒有為該型號驗證過的刻度，因此無法告知你何為過高。調諧時注意其變化方向；絕對值可能偏差很大，且不會據此阻止你發射。","Nexus",""
 "3","meters.tx.alc.title","ALC — set mic gain so SSB peaks just tickle the zone, never peg it","ALC — 設定麥克風增益，使 SSB 峰值僅輕觸該區，切勿頂滿","ALC | SSB",""
 "3","meters.tx.po.title","Actual output power","實際輸出功率","",""
+"3","meters.tx.po.derived","Output power, estimated: this radio reports its power only as a share of its meter, so Nexus shows that share of the rated power set for it in Settings ▸ Radio. It is not written to your log.","輸出功率（估算）：此電台僅以其表頭的比例回報功率，因此 Nexus 顯示的是在 設定 ▸ 電台 中為它設定的額定功率的該比例。不會寫入你的日誌。","Nexus","Filled by the maintainer, pending translator review."
 "3","meters.tx.needle.peak.title","The bright mark is the peak: it holds the highest reading for a second, then falls back. Between overs it shows the last over's peak.","亮色標記為峰值：最高讀數保持一秒後回落。兩次發射之間顯示上一次發射的峰值。","","Filled by the maintainer, pending translator review."
 "3","meters.tx.comp.title","Speech compression","語音壓縮","",""
 "3","meters.tx.comp.level.aria","Speech processor level","語音處理器電平","",""

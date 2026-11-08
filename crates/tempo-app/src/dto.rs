@@ -1931,6 +1931,12 @@ pub struct RadioStatus {
     pub tx_alc_zone: Option<f32>,
     #[serde(default)]
     pub tx_po_w: Option<f32>,
+    /// `tx_po_w` is DERIVED, not the radio's own watts: the radio's Hamlib backend gives no
+    /// `RFPOWER_METER_WATTS`, so its `RFPOWER_METER` (a share of the radio's meter) is shown as
+    /// that share of `rated_watts` (#489). The meter marks it as an estimate, and it is never
+    /// written to the log. Left out of the JSON when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tx_po_derived: bool,
     #[serde(default)]
     pub tx_comp_db: Option<f32>,
     /// The radio's own PA (finals) temperature in degrees CELSIUS, as its CAT interface last

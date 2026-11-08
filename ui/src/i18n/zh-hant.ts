@@ -2915,6 +2915,7 @@ export const ZH_HANT: PartialCatalog = {
   "meters.tx.swr.unverified": "天線匹配 — 這是電台自身的原始數值，而 Nexus 沒有為該型號驗證過的刻度，因此無法告知你何為過高。調諧時注意其變化方向；絕對值可能偏差很大，且不會據此阻止你發射。",
   "meters.tx.alc.title": "ALC — 設定麥克風增益，使 SSB 峰值僅輕觸該區，切勿頂滿",
   "meters.tx.po.title": "實際輸出功率",
+  "meters.tx.po.derived": "輸出功率（估算）：此電台僅以其表頭的比例回報功率，因此 Nexus 顯示的是在 設定 ▸ 電台 中為它設定的額定功率的該比例。不會寫入你的日誌。",
   "meters.tx.needle.peak.title": "亮色標記為峰值：最高讀數保持一秒後回落。兩次發射之間顯示上一次發射的峰值。",
   "meters.tx.comp.title": "語音壓縮",
   "meters.tx.comp.level.aria": "語音處理器電平",

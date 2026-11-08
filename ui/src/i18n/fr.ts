@@ -4679,6 +4679,7 @@ export const FR: PartialCatalog = {
   "meters.tx.temp.meter.title": "Indicateur de température de l'étage final de la radio, en part de son échelle — cette radio rapporte son indicateur, pas des degrés",
   "meters.tx.idle": "Mesures TX — {{when}}",
   "meters.tx.po.title": "Puissance de sortie réelle",
+  "meters.tx.po.derived": "Puissance de sortie, estimée : cette radio ne donne sa puissance que comme une part de son indicateur, Nexus affiche donc cette part de la puissance nominale réglée pour elle dans Réglages ▸ Radio. Elle n’est pas écrite dans votre journal.",
   "meters.tx.needle.peak.title": "Le repère clair est la crête : il garde la valeur la plus haute pendant une seconde, puis redescend. Entre deux passages, il montre la crête du dernier.",
   "meters.tx.swr.title": "Adaptation d'antenne — restez sous 2:1",
   "meters.tx.swr.cutoff": "Adaptation d'antenne — Nexus arrête d'émettre au-dessus de {{ratio}}:1, votre réglage dans Paramètres ▸ Radio ▸ Limites d'émission et partage",
