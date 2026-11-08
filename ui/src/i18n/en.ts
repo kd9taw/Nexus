@@ -9232,7 +9232,7 @@ export const EN = {
   'setup.rig.second.action': '＋ I have a second radio',
   'setup.rig.second.title': 'Adds a radio profile and probes the remaining USB ports for it',
   'setup.rig.second.probing':
-    'Probing the other ports — {{seconds}}s (radio 1’s port is skipped; this can take up to a minute)…',
+    'Probing the other ports — {{seconds}}s (radio 1’s port is skipped; a port nothing answers on can take over a minute)…',
   'setup.rig.second.saved': 'Second radio: {{radio}} on {{port}} — saved to its own profile.',
   'setup.rig.second.addFailed': "Couldn't add the radio: {{error}}",
   'setup.rig.second.model.label': 'Which radio is the second one?',

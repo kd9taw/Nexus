@@ -9154,7 +9154,7 @@ export const FR: PartialCatalog = {
   "setup.rig.second.model.label": "Quelle est la seconde radio ?",
   "setup.rig.second.model.placeholder": "Choisissez le modèle…",
   "setup.rig.second.model.seeded": "Le port a répondu mais le modèle exact est une supposition — choisissez la radio pour utiliser son vrai jeu de commandes.",
-  "setup.rig.second.probing": "Sondage des autres ports — {{seconds}}s (le port de la radio 1 est ignoré ; cela peut prendre jusqu’à une minute)…",
+  "setup.rig.second.probing": "Sondage des autres ports — {{seconds}}s (le port de la radio 1 est ignoré ; un port où rien ne répond peut prendre plus d’une minute)…",
   "setup.rig.second.saved": "Seconde radio : {{radio}} sur {{port}} — enregistrée dans son propre profil.",
   "setup.rig.second.swap": "Les deux radios utilisent des cartes son USB identiques, réparties une par radio. Si vous voyez plus tard bouger les mesures de la <em>mauvaise</em> radio quand l’audio joue,\u00a0<a>permutez-les</a>.",
   "setup.rig.second.title": "Ajoute un profil de radio et sonde les ports USB restants",

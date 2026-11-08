@@ -1193,7 +1193,7 @@ export const ZH_HANT: PartialCatalog = {
   "setup.rig.testCat.title": "儲存你目前輸入的內容，然後向電台詢問其頻率",
   "setup.rig.second.action": "＋ 我有第二台電台",
   "setup.rig.second.title": "新增一個電台配置檔案，並探測其餘 USB 連線埠以尋找它",
-  "setup.rig.second.probing": "探測其他連線埠中 —— {{seconds}} 秒（跳過電台 1 的連線埠；最多需一分鐘）…",
+  "setup.rig.second.probing": "探測其他連線埠中 —— {{seconds}} 秒（跳過電台 1 的連線埠；無回應的連線埠可能需要一分鐘以上）…",
   "setup.rig.second.saved": "第二台電台：{{radio}} 於 {{port}} —— 已儲存到其獨立配置檔案。",
   "setup.rig.second.addFailed": "無法新增電台：{{error}}",
   "setup.rig.second.model.label": "第二台是哪台電台？",

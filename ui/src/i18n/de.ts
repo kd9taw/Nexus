@@ -3883,7 +3883,7 @@ export const DE: PartialCatalog = {
   "setup.rig.testCat.title": "Speichert die bisherigen Eingaben und fragt dann das Gerät nach seiner Frequenz",
   "setup.rig.second.action": "＋ Ich habe ein zweites Funkgerät",
   "setup.rig.second.title": "Legt ein Geräteprofil an und prüft die übrigen USB-Ports darauf",
-  "setup.rig.second.probing": "Die anderen Ports werden geprüft — {{seconds}} s (der Port von Gerät 1 wird übersprungen; das kann bis zu einer Minute dauern)…",
+  "setup.rig.second.probing": "Die anderen Ports werden geprüft — {{seconds}} s (der Port von Gerät 1 wird übersprungen; ein Port, an dem nichts antwortet, kann über eine Minute dauern)…",
   "setup.rig.second.saved": "Zweites Funkgerät: {{radio}} an {{port}} — in einem eigenen Profil gespeichert.",
   "setup.rig.second.addFailed": "Funkgerät konnte nicht hinzugefügt werden: {{error}}",
   "setup.rig.second.model.label": "Welches Funkgerät ist das zweite?",

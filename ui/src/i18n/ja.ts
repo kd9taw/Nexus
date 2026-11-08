@@ -5873,7 +5873,7 @@ export const JA: PartialCatalog = {
   "setup.rig.testCat.title": "ここまでの入力を保存し、無線機に周波数を問い合わせます",
   "setup.rig.second.action": "＋ 2台目の無線機がある",
   "setup.rig.second.title": "無線機プロファイルを追加し、残りのUSBポートを調べます",
-  "setup.rig.second.probing": "他のポートを調査中 — {{seconds}}秒（1台目のポートはスキップします。最大1分ほどかかります）…",
+  "setup.rig.second.probing": "他のポートを調査中 — {{seconds}}秒（1台目のポートはスキップします。応答のないポートは1分以上かかることがあります）…",
   "setup.rig.second.saved": "2台目の無線機: {{port}}の{{radio}} — 専用のプロファイルに保存しました。",
   "setup.rig.second.addFailed": "無線機を追加できませんでした: {{error}}",
   "setup.rig.second.model.label": "2台目の無線機はどれですか？",

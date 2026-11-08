@@ -9154,7 +9154,7 @@ export const ES: PartialCatalog = {
   "setup.rig.second.model.label": "¿Cuál es el segundo equipo?",
   "setup.rig.second.model.placeholder": "Elige el modelo…",
   "setup.rig.second.model.seeded": "El puerto respondió pero el modelo exacto es una suposición — elige el equipo para que se use su juego de comandos real.",
-  "setup.rig.second.probing": "Sondeando los demás puertos — {{seconds}}s (se omite el puerto del equipo 1; puede tardar hasta un minuto)…",
+  "setup.rig.second.probing": "Sondeando los demás puertos — {{seconds}}s (se omite el puerto del equipo 1; un puerto en el que nada responde puede tardar más de un minuto)…",
   "setup.rig.second.saved": "Segundo equipo: {{radio}} en {{port}} — guardado en su propio perfil.",
   "setup.rig.second.swap": "Los dos equipos usan tarjetas de sonido USB idénticas, una para cada uno. Si luego ves moverse los medidores del equipo <em>equivocado</em> al sonar el audio,\u00a0<a>intercámbialos</a>.",
   "setup.rig.second.title": "Añade un perfil de equipo y sondea los puertos USB restantes buscándolo",

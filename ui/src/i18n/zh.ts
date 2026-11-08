@@ -1191,7 +1191,7 @@ export const ZH: PartialCatalog = {
   "setup.rig.testCat.title": "保存你目前输入的内容，然后向电台询问其频率",
   "setup.rig.second.action": "＋ 我有第二台电台",
   "setup.rig.second.title": "添加一个电台配置文件，并探测其余 USB 端口以寻找它",
-  "setup.rig.second.probing": "探测其他端口中 —— {{seconds}} 秒（跳过电台 1 的端口；最多需一分钟）…",
+  "setup.rig.second.probing": "探测其他端口中 —— {{seconds}} 秒（跳过电台 1 的端口；无应答的端口可能需要一分钟以上）…",
   "setup.rig.second.saved": "第二台电台：{{radio}} 于 {{port}} —— 已保存到其独立配置文件。",
   "setup.rig.second.addFailed": "无法添加电台：{{error}}",
   "setup.rig.second.model.label": "第二台是哪台电台？",
