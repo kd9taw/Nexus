@@ -9813,7 +9813,7 @@ export const JA: PartialCatalog = {
   "cockpit.header.readout.digitTune.title": "桁の上でスクロールして同調",
   "cockpit.header.readout.txLock.tooWide": "{{mode}} は 2.8 kHz より広く、28.3 MHz 未満では Nexus は米国免許のデータをその幅までに制限しています。送信はブロックされています。設定でもっと狭い Q65 サブモードを選んでください。",
   "cockpit.header.readout.txLock.tooFast": "{{mode}} は 2000 ボーで送信し、2200 m と 630 m では米国のデータは 300 ボーを超えられません。送信はブロックされています。別のモードを選んでください。",
-  "cockpit.header.readout.txLock.fixedCentre": "{{mode}} は TX マーカーの位置にかかわらず常にダイヤルの 1500 Hz 上で送信し、そこでの信号は免許の範囲外です。送信はブロックされています。ダイヤルをセグメントのもっと内側に移してください。",
+  "cockpit.header.readout.txLock.fixedCentre": "{{mode}} は TX マーカーの位置にかかわらず、常にダイヤルから 1500 Hz 離れた所（USB では上、LSB では下）を中心に送信し、そこでの信号は免許の範囲外です。送信はブロックされています。ダイヤルをセグメントのもっと内側に移してください。",
   "cockpit.header.bandEdge.up": "{{band}}のバンド端 {{edge}} MHzで停止しました — もう一度スクロールで上へ続行",
   "cockpit.header.bandEdge.down": "{{band}}のバンド端 {{edge}} MHzで停止しました — もう一度スクロールで下へ続行",
   "cockpit.header.power.label": "出力",

@@ -41,9 +41,9 @@ describe('the readout names a data-mode licence lock', () => {
     )
   })
 
-  it('names MSK144 transmitting at 1500 Hz whatever the marker says', () => {
+  it('names MSK144 transmitting 1500 Hz from the dial on either sideband, whatever the marker says', () => {
     expect(readoutTitle({ dialMhz: 50.0965, band: '6m', dataModeRefusal: { rule: 'fixedCentre', mode: 'MSK144-15' } }, true)).toBe(
-      'MSK144-15 always transmits 1500 Hz above the dial, whatever the TX marker says, and its signal there is outside your license privileges — transmit is blocked. Move the dial further into the segment.',
+      'MSK144-15 always transmits centred 1500 Hz from the dial, above it on USB and below it on LSB, whatever the TX marker says, and its signal there is outside your license privileges — transmit is blocked. Move the dial further into the segment.',
     )
   })
 

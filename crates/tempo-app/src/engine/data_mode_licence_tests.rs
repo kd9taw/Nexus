@@ -136,6 +136,60 @@ fn msk144_at_the_top_of_6_m_is_judged_across_its_width() {
 }
 
 #[test]
+fn msk144_is_judged_1395_hz_either_side_of_its_centre_to_the_hertz() {
+    // The width itself, at both 6 m edges. The signal runs from dial + 105 Hz to dial + 2895 Hz,
+    // so the lowest dial that keeps it above 50.1 MHz is 50.099895, and the highest that keeps it
+    // under 54.0 is 53.997105: one hertz either side of each keys and is refused. A half-width of
+    // 1000 or 1600 Hz moves both edges by hundreds of hertz and turns this red.
+    let mut wrong = Vec::new();
+    for class in VHF_CLASSES {
+        for (dial, keys) in [
+            (50.099896, true),
+            (50.099894, false),
+            (53.997104, true),
+            (53.997106, false),
+        ] {
+            // Each marker lands inside the segment on every one of these dials, so only the
+            // signal's span decides.
+            for marker in [200.0, 1500.0] {
+                let e = digital(class, Tier::Msk144, dial, marker);
+                if e.tx_allowed() != keys {
+                    wrong.push(format!(
+                        "{class} {dial:.6} marker {marker}: keyed={}",
+                        !keys
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "MSK144's ±1395 Hz edges moved: {wrong:#?}"
+    );
+}
+
+#[test]
+fn msk144_on_630_m_lsb_is_named_for_its_symbol_rate_where_its_signal_fits() {
+    // Dial 0.4790 LSB: the dial is the band top, but the signal sits below it, 0.476105-0.478895
+    // MHz, wholly inside 630 m. Only the 300-baud cap refuses it, so the lock names that, not the
+    // fixed centre, whose "outside your license privileges" would be false here.
+    let mut wrong = Vec::new();
+    for class in HF_CLASSES {
+        let e = digital_on(class, Tier::Msk144, 0.4790, "LSB", 1500.0);
+        if e.tx_allowed() {
+            wrong.push(format!("{class} 0.4790 LSB keyed"));
+        }
+        if told(&e) != Some(("tooFast".into(), "MSK144-15".into())) {
+            wrong.push(format!("{class} 0.4790 LSB told {:?}", told(&e)));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "the reason must be where the signal is: {wrong:#?}"
+    );
+}
+
+#[test]
 fn msk144_is_refused_on_2200_m_and_630_m_for_every_us_class() {
     // 2000 baud against the 300-baud cap. On 2200 m the signal is also wider than the band; on
     // 630 m it fits, so there the symbol rate is the whole reason and the lock names it.

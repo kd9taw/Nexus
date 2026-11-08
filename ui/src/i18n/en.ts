@@ -15416,7 +15416,7 @@ export const EN = {
   'cockpit.header.readout.txLock.tooFast':
     '{{mode}} keys at 2000 baud, and US data on 2200 m and 630 m may not exceed 300 baud — transmit is blocked. Pick another mode.',
   'cockpit.header.readout.txLock.fixedCentre':
-    '{{mode}} always transmits 1500 Hz above the dial, whatever the TX marker says, and its signal there is outside your license privileges — transmit is blocked. Move the dial further into the segment.',
+    '{{mode}} always transmits centred 1500 Hz from the dial, above it on USB and below it on LSB, whatever the TX marker says, and its signal there is outside your license privileges — transmit is blocked. Move the dial further into the segment.',
   // Two WHOLE sentences, one per direction — the band name and the edge frequency are invariant
   // tokens formatted by the header, never by a locale-aware formatter.
   'cockpit.header.bandEdge.up':

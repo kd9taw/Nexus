@@ -7370,10 +7370,11 @@ pub(crate) struct DataFrame {
 }
 
 /// Hz either side of MSK144's centre its signal occupies: the -26 dB edge of its main lobe, the
-/// width 47 CFR 97.3(a)(8) measures (dial + 105 to dial + 2895 Hz on USB). Measured from this
-/// repo's modulator; the textbook MSK spectrum at 2000 Bd puts the same point at ±1390 Hz.
-/// ⚠️ The first sidelobes (about -23 dB, out to about ±2150 Hz) are not counted, by decision
-/// (operator ruling, 2026-11-08: the main lobe).
+/// width 47 CFR 97.3(a)(8) measures (dial + 105 to dial + 2895 Hz on USB). The textbook MSK
+/// spectrum at 2000 Bd puts that point at ±1390 Hz; this repo's modulator measures inside it on
+/// the low side (about 205-225 Hz above the dial, where the audio folds at 0 Hz), so the figure
+/// is the conservative one. ⚠️ The first sidelobes (about -24.6 dB, out to about ±2050 Hz) are
+/// not counted, by decision (operator ruling, 2026-11-08: the main lobe).
 const MSK144_HALF_WIDTH_HZ: f64 = 1_395.0;
 
 impl DataFrame {
@@ -29933,8 +29934,9 @@ contact yourself."
     /// Is the licence lock the data MODE alone, and by which of its rules? The Digital section is
     /// refused, and the same over judged with no rule of its mode's would key (a frame of no mode,
     /// [`Self::data_frame_allowed`]): then the mode is all that stands in the way, and the lock
-    /// names it ([`crate::dto::DataModeRule`]). MSK144 on 2200 m or 630 m is named for its symbol
-    /// rate, which no dial there cures; elsewhere for its fixed 1500 Hz centre. Where the frame of
+    /// names it ([`crate::dto::DataModeRule`]). MSK144 is named for its symbol rate where its signal
+    /// keys, or the dial is on 2200 m or 630 m, which no dial there cures; elsewhere for its fixed
+    /// 1500 Hz centre. Where the frame of
     /// no mode is refused too, the frequency is a reason and the lock keeps its frequency sentence.
     ///
     /// DISPLAY ONLY, as [`Self::phone_mode_refused`] is: it picks the words for a refusal
@@ -29956,18 +29958,27 @@ contact yourself."
         }
         let rule = match mode {
             modes::ModeKind::Q65 { .. } => DataModeRule::TooWide,
+            // Named from the term that refuses, judged where the signal is. Its marker keys (above),
+            // so if its signal keys too, through every term of the gate, the 300-baud cap is all
+            // that is left: on 630 m an LSB dial at the band top puts the whole signal inside the
+            // band, and "its signal there is outside your license privileges" would be false.
+            // Where the signal is refused too, both can be true; on 2200 m and 630 m the cap is
+            // named, which no dial there cures, and elsewhere the fixed centre.
             modes::ModeKind::Msk144 { .. } => {
+                let signal_keys = frame.keyed_signal().is_some_and(|f| self.tx_allowed_for(f));
                 let at = self.tx_source_verdict().emission_mhz;
                 let baud = f64::from(modes::MSK144_BAUD);
-                if crate::privileges::data_symbol_rate_allowed(
-                    self.settings.license_class,
-                    at,
-                    at,
-                    baud,
-                ) {
-                    DataModeRule::FixedCentre
-                } else {
+                if signal_keys
+                    || !crate::privileges::data_symbol_rate_allowed(
+                        self.settings.license_class,
+                        at,
+                        at,
+                        baud,
+                    )
+                {
                     DataModeRule::TooFast
+                } else {
+                    DataModeRule::FixedCentre
                 }
             }
             _ => return None,

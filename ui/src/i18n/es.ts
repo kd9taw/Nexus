@@ -1408,7 +1408,7 @@ export const ES: PartialCatalog = {
   "cockpit.header.readout.digitTune.title": "Gira sobre un dígito para sintonizarlo",
   "cockpit.header.readout.txLock.tooWide": "{{mode}} ocupa más de 2.8 kHz, y por debajo de 28.3 MHz Nexus limita a eso los datos de una licencia de EE. UU. — la transmisión está bloqueada. Elige un submodo Q65 más estrecho en Ajustes.",
   "cockpit.header.readout.txLock.tooFast": "{{mode}} transmite a 2000 baudios, y en 2200 m y 630 m los datos de EE. UU. no pueden superar 300 baudios — la transmisión está bloqueada. Elige otro modo.",
-  "cockpit.header.readout.txLock.fixedCentre": "{{mode}} siempre transmite 1500 Hz por encima del dial, diga lo que diga el marcador de TX, y ahí su señal queda fuera de los privilegios de tu licencia — la transmisión está bloqueada. Lleva el dial más adentro del segmento.",
+  "cockpit.header.readout.txLock.fixedCentre": "{{mode}} siempre transmite centrado a 1500 Hz del dial, por encima en USB y por debajo en LSB, diga lo que diga el marcador de TX, y ahí su señal queda fuera de los privilegios de tu licencia — la transmisión está bloqueada. Lleva el dial más adentro del segmento.",
   "cockpit.header.readout.wheelTune.title": "Rueda para sintonizar",
   "cockpit.tuning.aria": "Sintonía",
   "cockpit.tuning.down.aria": "Bajar {{hz}} Hz",
