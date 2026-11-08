@@ -269,7 +269,7 @@ struct Peer {
     /// Whether the program has an elevation axis ([`Peer::has_elevation`]). Held while it is
     /// being found out, so two clients do not ask at once.
     axis: Mutex<Axis>,
-    /// Whether an elevation past 0–[`MAX_EL`] has been logged this episode (`p`).
+    /// Whether an elevation above [`MAX_EL`] has been logged this episode (`p`).
     beyond: AtomicBool,
 }
 
@@ -413,26 +413,28 @@ impl Peer {
         }
     }
 
-    /// PstRotator's elevation for `p`: its report when it lies inside the 0–[`MAX_EL`] the link
-    /// declares, else no position. Past 90° is PstRotator's "180 deg Elevation" setup: clamped to
-    /// the declared 90° and sent back by a beam turn (`rotator::point_keeping`), it would LOWER
-    /// the antenna, so it is no position and a beam turn sends nothing.
+    /// PstRotator's elevation for `p`: its report, unless it lies above the [`MAX_EL`] the link
+    /// declares. Past 90° is PstRotator's "180 deg Elevation" setup: clamped to the declared 90°
+    /// and sent back by a beam turn (`rotator::point_keeping`), it would LOWER the antenna, so it
+    /// is no position and a beam turn sends nothing. A little BELOW 0 is a position: a rotor on
+    /// its lower stop, or with an elevation offset, reads -0.5°, and a beam turn sends it back as
+    /// 0° (`point_keeping` clamps it into the declared range), which leaves the antenna where it is.
     fn reported_elevation(&self) -> Option<f64> {
         let el = self.elevation()?;
-        let inside = (0.0..=MAX_EL).contains(&el);
-        let was = self.beyond.swap(!inside, Ordering::Relaxed);
-        if !inside && !was {
+        let beyond = el > MAX_EL;
+        let was = self.beyond.swap(beyond, Ordering::Relaxed);
+        if beyond && !was {
             tempo_core::applog::info(
                 "rotator",
                 &format!(
-                    "PstRotator at {} reports an elevation of {el}°, outside the 0–{MAX_EL}° \
-                     Nexus drives: the compass shows no position and a beam turn sends nothing \
-                     until it is back inside",
+                    "PstRotator at {} reports an elevation of {el}°, above the {MAX_EL}° Nexus \
+                     drives: the compass shows no position and a beam turn sends nothing until \
+                     it is back under it",
                     self.to
                 ),
             );
         }
-        inside.then_some(el)
+        (!beyond).then_some(el)
     }
 
     /// `RPRT 0` when PstRotatorAz answers after `datagrams` went out, `RPRT -5` when it did not,
@@ -1162,6 +1164,18 @@ mod tests {
     /// Review F4: PstRotator with 180° elevation reports past 90°. That is outside the range the
     /// link declares, so it is no position: a beam turn sends nothing, rather than clamping the
     /// kept elevation to 90° and lowering the antenna.
+    /// REVIEW R2: an elevation a little under the horizon (a rotor resting on its lower stop
+    /// reads -0.5°) must still be a position, so a beam turn at the horizon works.
+    #[test]
+    fn review_a_slightly_negative_elevation_is_still_a_position() {
+        let (_pst, link, _) = fake_azel("AZ:12.0\r", "EL:-0.5\r");
+        let a = addr(&link);
+        rotator::read_limits(&a).expect("answered");
+        let at = rotator::read_position(&a);
+        eprintln!("p at -0.5: {at:?}");
+        assert!(at.is_ok(), "{at:?}");
+    }
+
     #[test]
     fn an_elevation_past_the_declared_range_is_no_position() {
         let (pst, link, _) = fake_azel("AZ:12.0\r", "EL:120.0\r");
