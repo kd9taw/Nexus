@@ -12,7 +12,10 @@ import { CONNECT_PRESETS, CONNECT_PRESET_IDS, TV_PRESETS, connectLayoutNow, layo
 const stored = (c: ConnectConfig) => localStorage.setItem('nexus.connect.config', JSON.stringify(c))
 const where = (c: ConnectConfig) => SLOT_IDS.filter((s) => slotBoxes(c, s).includes('bestTimes'))
 
-beforeEach(() => localStorage.clear())
+beforeEach(() => {
+  localStorage.clear()
+  window.history.replaceState(null, '', '/')
+})
 
 describe('the Best times box on a stored layout', () => {
   it('appears once, as a tab of right1, displacing nothing', () => {
@@ -71,6 +74,20 @@ describe('the Best times box on a stored layout', () => {
       const other = { ...now, tabs: { ...now.tabs, right1: [...(now.tabs.right1 ?? []), 'clock' as const].filter((p, i, a) => a.indexOf(p) === i) } }
       if (!slotBoxes(after, 'bottom1').includes('clock') && !slotBoxes(after, 'bottom3').includes('clock')) expect(connectLayoutNow(other), id).toBe('custom')
     }
+  })
+
+  it('a pop-out with no layout of its own neither gains it nor stops following the main window', () => {
+    // The main window's layout, the box already removed there (its one-time insertion done).
+    stored({ slots: { ...DEFAULT_SLOTS }, tabs: {}, rotate: {}, overlays: {} })
+    localStorage.setItem('nexus.connect.bestTimes.v1', '1')
+    // The dashboard window, which has never saved a layout: it reads the main window's.
+    window.history.replaceState(null, '', '/?panel=connect')
+    const popped = loadConnectConfig()
+    expect(where(popped)).toEqual([])
+    expect(localStorage.getItem('nexus.connect.config.connect'), 'no layout of its own was written').toBeNull()
+    // Control: once it has a layout of its own, it gets the box once like any stored layout.
+    localStorage.setItem('nexus.connect.config.connect', JSON.stringify({ slots: { ...DEFAULT_SLOTS }, tabs: {}, rotate: {}, overlays: {} }))
+    expect(where(loadConnectConfig())).toEqual(['right1'])
   })
 
   it('never goes into the TV page, whose table does not offer it', () => {

@@ -32,7 +32,6 @@ export interface BestTimesAnswerProps {
   view: BestTimesView
   nowUnix: number
   units: Units
-  antGainDbi?: number
   /** Windows to list (the card's three); all of them when absent. */
   cap?: number
   /** The Spots board's rows, for the one "last spotted" line. */
@@ -58,7 +57,7 @@ export function BestTimesAnswer(p: BestTimesAnswerProps) {
   const rows = windowRows(v, p.nowUnix, p.cap)
   const noWindow = noWindowLine(v)
   const spotted = v.state === 'answer' ? lastSpottedLine(v.call, p.spots) : null
-  const model = modelLine(v, p.nowUnix, p.antGainDbi)
+  const model = modelLine(v, p.nowUnix)
   return (
     <div className="bt-answer">
       <div className="bt-head">

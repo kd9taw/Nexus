@@ -10174,7 +10174,11 @@ fn predict_path(
             // Both routes at once on their own threads: the long path costs the same chain
             // again, so this keeps the card's wait at one prediction's. Neither holds a lock.
             let (sp, lp) = std::thread::scope(|s| {
-                let lp = s.spawn(|| eng.predict_route(dx, propagation::Route::Long, t, wx));
+                // Lowered too: a thread is born at normal priority on Windows, whatever its parent's.
+                let lp = s.spawn(|| {
+                    tempo_net::priority::lower_this_thread();
+                    eng.predict_route(dx, propagation::Route::Long, t, wx)
+                });
                 let sp = eng.predict(dx, t, wx);
                 (sp, lp.join().ok().flatten())
             });
@@ -45478,20 +45482,6 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
                 ok(get_band_outlook(app.state(), app.state(), app.state(), app.state()).await)
             }
             "get_path_regions" => ok(get_path_regions(app.state(), app.state(), app.state()).await),
-            "get_best_times" => {
-                let s = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
-                ok(best_times::get_best_times(
-                    s("call").unwrap_or_default(),
-                    s("grid"),
-                    s("mode"),
-                    app.state(),
-                    app.state(),
-                    app.state(),
-                    app.state(),
-                    app.state(),
-                )
-                .await)
-            }
             "get_path_outlook" => {
                 let grid = v
                     .get("grid")

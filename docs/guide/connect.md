@@ -485,12 +485,18 @@ Every answer says what it rests on:
   you asked for the answer, never when you just hover. If a station is in your own country and
   only the country is known, it gives no answer, because the centre of your own country says
   nothing about where they are. For a ship or aircraft mobile it asks for their grid. You can
-  always type a grid for the call. If the callbook answered a stroked call (EA8/DL1ABC) from the
-  home call's record, the answer says that address is the home one and they may be elsewhere.
+  always type a grid for the call. For a portable call (EA8/DL1ABC) the callbook often answers
+  with the home call's record. That address is never taken as where they are now: in another
+  country it is left out (the country centre, marked Rough, stands), and in the same country the
+  answer says it is the home call's address and they may be elsewhere.
   Under 300 km there is no answer: that close, the model calls nearly every band open all day.
 - **The model and your station.** It follows your prediction engine (P.533 by default), its month,
   the mode you picked (FT8, FT4, CW or SSB, starting from your radio's mode), and the power and
   antenna gain it assumed.
+
+During a flare or a proton event, a band estimated to lose 10 dB or more right now is left out of
+"Now", every such band, and the answer names the one it would have been. If every band is hit that
+hard, it says "Not now". The chart and the later windows are not changed.
 
 It never gives a percentage, and it never promises that the station is on the air. One line says
 when the Spots board last saw them. That line comes from spots Nexus already has and changes no

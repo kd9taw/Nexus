@@ -573,6 +573,7 @@ mod tests {
             "get_log_stats",    // the log, aggregated
             "get_log_timeline", // the log, aggregated over time
             "get_need_alerts",  // the needs board
+            "get_best_times",   // reads the log's, the roster's and the callbook's grids for a call
             "get_credentials_status",
             "set_frequency",
             "set_tx_enabled",

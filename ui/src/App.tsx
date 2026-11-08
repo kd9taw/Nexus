@@ -269,6 +269,8 @@ import { RadioPicker } from './components/RadioPicker'
 import { PROFILES, type ProfileId } from './features/profiles'
 import { CallCardHost } from './components/CallCard'
 import { BestTimesCardHost } from './components/BestTimesCard'
+import { noteRadioMode } from './features/bestTimesAsk'
+import { radioModeOf } from './features/bestTimes'
 import { useRadioSwitchNotice } from './useRadioSwitchNotice'
 
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). It is the shell: it
@@ -4285,6 +4287,9 @@ function App() {
     />
   )
 
+  // The card a call menu opens starts on the mode the radio is in (features/bestTimesAsk).
+  const radioModeForBestTimes = radioModeOf(snap)
+  useEffect(() => noteRadioMode(radioModeForBestTimes), [radioModeForBestTimes])
   return (
     <div className="app">
       <ClientBanner />

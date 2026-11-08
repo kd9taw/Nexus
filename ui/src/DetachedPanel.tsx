@@ -15,7 +15,8 @@
 // is the router's because it is about a panel that ISN'T mounted: it names the Settings route
 // that would fill the board, and the board component never renders in that state.
 import { BestTimesCardHost } from './components/BestTimesCard'
-import { listenForHandoff } from './features/bestTimesAsk'
+import { listenForHandoff, noteRadioMode } from './features/bestTimesAsk'
+import { radioModeOf } from './features/bestTimes'
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { t } from './i18n'
 import { useEscStop } from './useEscStop'
@@ -264,6 +265,9 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   useTextSize()
   useMotion()
   const [snap, setSnap] = useState<AppSnapshot | null>(null)
+  // A call menu's Best times card starts on the mode the radio is in (features/bestTimesAsk).
+  const radioModeForBestTimes = radioModeOf(snap)
+  useEffect(() => noteRadioMode(radioModeForBestTimes), [radioModeForBestTimes])
   // Night follows the station into a pop-out: this document's own writer of data-night, going by
   // the same grid square and the same sun as the main window.
   useNight(snap?.mygrid ?? '')

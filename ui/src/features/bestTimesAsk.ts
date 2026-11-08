@@ -15,6 +15,18 @@ import { surfaceGet, surfaceSet } from './windowScope'
 
 const LAST_KEY = 'nexus.bestTimes.call'
 
+/** The radio's mode in this window as Best times names it (features/bestTimes `radioModeOf`), kept
+ *  by the window that has the snapshot (App, a pop-out): the card starts on it. */
+let radioMode: string | null = null
+
+export function noteRadioMode(mode: string | null): void {
+  radioMode = mode
+}
+
+export function radioModeNow(): string | null {
+  return radioMode
+}
+
 let pending: string | null = null
 let asks = 0
 const listeners = new Set<() => void>()

@@ -42,6 +42,7 @@ function answer(over: Partial<BestTimes> = {}): BestTimes {
     hours: [],
     nowHour: 12,
     longUsed: true,
+    noTxBand: false,
     ...over,
   }
 }
@@ -74,7 +75,7 @@ function allLines(v: BestTimesView): string[] {
     ...windowRows(v, NOW).flatMap((r) => [r.when, r.local, r.word, ...r.tags]),
     noWindowLine(v),
     ...weekLines(v),
-    modelLine(v, NOW, 0),
+    modelLine(v, NOW),
     lastSpottedLine(v.call, [{ call: 'EA8ABC', band: '20m', ageSecs: 840 } as never]),
     cellTitle('20m', 3, 'Fair', 'long', false),
   ].filter((x): x is string => typeof x === 'string')
@@ -114,8 +115,12 @@ describe('the basis line', () => {
     expect(basisLine(view({ basis: { kind: 'grid', from: 'logged', grid: 'IL18' } }))).toMatch(/from your log\. It may be old\.$/)
     expect(basisLine(view({ basis: { kind: 'grid', from: 'typed', grid: 'IL28' } }))).toMatch(/the grid you typed/)
     expect(basisLine(view({ basis: { kind: 'position', from: 'callbook' } }))).toMatch(/callbook's position/)
-    expect(basisLine(view({ call: 'EA8/DL1ABC', basis: { kind: 'grid', from: 'callbook', grid: 'JO31', homeOf: 'DL1ABC' } }))).toBe(
-      'Worked out from grid JO31, from the callbook. That is the home address of DL1ABC; they may be elsewhere.',
+    // A stroked call the callbook answered from the home call's record.
+    expect(basisLine(view({ call: 'W1AW/4', basis: { kind: 'grid', from: 'callbookBase', grid: 'FN31', base: 'W1AW' } }))).toBe(
+      "Worked out from grid FN31, the callbook's address for W1AW, the home call. They may be elsewhere.",
+    )
+    expect(basisLine(view({ call: 'EA8/DL1ABC', basis: { kind: 'entity', base: 'DL1ABC' } }))).toBe(
+      "Worked out from the centre of Canary Islands. Rough. The callbook has only DL1ABC's home address, in another country, so it is not used.",
     )
     const centre = basisLine(view({ basis: { kind: 'entity' } }))
     expect(centre).toBe('Worked out from the centre of Canary Islands. Rough.')
@@ -153,6 +158,12 @@ describe('the answer', () => {
     expect(windowRows(view(), NOW, 1)).toHaveLength(1)
   })
 
+  it('blames the licence, not the path, when the licence has no transmit band in the mode', () => {
+    expect(noWindowLine(view({ answer: answer({ windows: [], now: { kind: 'notNow', allDay: false }, noTxBand: true, mode: 'SSB' }) }))).toBe(
+      'Your licence has no band to transmit SSB on, so there is nothing to suggest.',
+    )
+  })
+
   it('says when there is no workable hour, and not when now is open', () => {
     expect(noWindowLine(view({ answer: answer({ windows: [], now: { kind: 'notNow', allDay: false } }) }))).toBe(
       'The model finds no workable hour for FT8 in the next day.',
@@ -169,10 +180,12 @@ describe('the answer', () => {
     expect(none).toEqual(['This week: these same hours repeat each day.', 'No Kp forecast is held, so no day can be told apart.'])
   })
 
-  it('names the model and its month, and admits what it lacks', () => {
-    expect(modelLine(view(), NOW, 0)).toBe('P.533 monthly median for May · FT8 · antenna gain not set')
-    expect(modelLine(view(), NOW, 6)).toBe('P.533 monthly median for May · FT8')
-    expect(modelLine(view({ answer: answer({ engine: 'heuristic', perMode: false }) }), NOW, 0)).toBe(
+  it('names the model and its month, and admits what it lacks — the gain the answer itself assumed', () => {
+    expect(modelLine(view({ antGainDbi: 0 }), NOW)).toBe('P.533 monthly median for May · FT8 · antenna gain not set')
+    expect(modelLine(view({ antGainDbi: 6 }), NOW)).toBe('P.533 monthly median for May · FT8')
+    // No gain in the view (an older shack): nothing is claimed about it.
+    expect(modelLine(view({ antGainDbi: undefined }), NOW)).toBe('P.533 monthly median for May · FT8')
+    expect(modelLine(view({ antGainDbi: 0, answer: answer({ engine: 'heuristic', perMode: false }) }), NOW)).toBe(
       'Simple model · FT8 · the same for every mode',
     )
   })

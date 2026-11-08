@@ -3,7 +3,7 @@
 // id vocabulary + DEFAULT_SLOTS live here; components/connect/* build on top.
 import { useCallback, useState } from 'react'
 import { coercePlacement, type PaneVocabulary } from './paneLayout'
-import { surfaceGet, surfaceKey, surfaceSet } from './windowScope'
+import { surfaceGet, surfaceHasOwn, surfaceKey, surfaceSet } from './windowScope'
 
 /** The 7 wrap-the-globe slots. A SlotId === its CSS grid-area name (see styles.css). */
 export const SLOT_IDS = ['left1', 'left2', 'right1', 'right2', 'bottom1', 'bottom2', 'bottom3'] as const
@@ -289,6 +289,10 @@ const BEST_TIMES_KEY = 'nexus.connect.bestTimes.v1'
  * has it is left alone, and once it has run it never runs again: a box the operator removes stays
  * removed. Exported for its test. */
 export function migrateBestTimes(cfg: ConnectConfig): ConnectConfig {
+  // A window still reading the main window's layout (a pop-out that never saved its own) is left
+  // alone: inserting here would save it a layout of its own, which stops it following the main
+  // window, and could put back a box the operator removed there.
+  if (!surfaceHasOwn(STORAGE_KEY)) return cfg
   const flag = surfaceKey(BEST_TIMES_KEY)
   try {
     if (localStorage.getItem(flag)) return cfg
