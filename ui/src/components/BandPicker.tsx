@@ -46,6 +46,9 @@ const QO100_ITEM = 'sat:QO-100'
  */
 export function BandPicker({ snap, mode, onSnap, onOpenSatellite }: Props) {
   const [plan, setPlan] = useState<BandChannel[]>([])
+  // Re-read on a radio switch too: a row's dial follows the radio the pick lands on (the 3 cm
+  // home differs between an IC-905 and SDR Console).
+  const radioId = snap.activeRadioId
   useEffect(() => {
     let live = true
     getLicensedBandPlan(mode)
@@ -53,7 +56,7 @@ export function BandPicker({ snap, mode, onSnap, onOpenSatellite }: Props) {
       // A read that failed is not a licence change: KEEP the last answer.
       .catch(() => {})
     return () => { live = false }
-  }, [mode])
+  }, [mode, radioId])
 
   const onPick = (band: string) => {
     if (band === QO100_ITEM) {

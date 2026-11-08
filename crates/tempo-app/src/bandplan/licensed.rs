@@ -5,6 +5,17 @@ pub fn licensed_bands(
     class: crate::settings::LicenseClass,
     mode: crate::settings::OperatingMode,
 ) -> Vec<crate::bandplan::BandChannel> {
+    licensed_bands_for(class, mode, 0)
+}
+
+/// [`licensed_bands`] for the radio with Hamlib model `rig_model` (0 = unknown): the rows the
+/// Phone/CW menu lists and the band pick lands on, whose 3 cm home follows the radio
+/// ([`crate::bandplan::activity_home_mhz`]).
+pub fn licensed_bands_for(
+    class: crate::settings::LicenseClass,
+    mode: crate::settings::OperatingMode,
+    rig_model: u32,
+) -> Vec<crate::bandplan::BandChannel> {
     use crate::bandplan::BandChannel;
     use crate::settings::{LicenseClass, OperatingMode};
     // Band and UI group, low band to high.
@@ -48,9 +59,9 @@ pub fn licensed_bands(
     // section regardless of this field).
     let home = |class: LicenseClass, band: &str| {
         if matches!(mode, OperatingMode::Phone) {
-            crate::privileges::phone_home(class, band)
+            crate::privileges::phone_home_for(class, band, rig_model)
         } else if matches!(mode, OperatingMode::Cw) {
-            crate::privileges::cw_home(class, band).map(|dial| (dial, "USB"))
+            crate::privileges::cw_home_for(class, band, rig_model).map(|dial| (dial, "USB"))
         } else {
             crate::privileges::segment_start(class, band, mode).map(|seg| (seg, "USB"))
         }

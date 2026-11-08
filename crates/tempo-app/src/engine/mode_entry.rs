@@ -938,10 +938,15 @@ mod tests {
         classes.push(LicenseClass::Open);
         let mut bad = Vec::new();
         let mut judged = 0;
-        for &class in &classes {
+        // An unknown radio, and the IC-905, which transmits on 3 cm itself and homes there by rig.
+        for (rig, &class) in [0, 3090]
+            .into_iter()
+            .flat_map(|r| classes.iter().map(move |c| (r, c)))
+        {
             for &band in BANDS {
                 for (word, om) in sections {
                     let mut e = station();
+                    e.settings.rig_model = rig;
                     e.settings.license_class = class;
                     e.settings.band = band.to_string();
                     let entry = e.prepare_mode_entry(word, true).frequency;
@@ -960,7 +965,9 @@ mod tests {
                     {
                         let Some((dial, sideband)) = home else {
                             if want {
-                                bad.push(format!("{class:?} {band} {word} {path}: no home"));
+                                bad.push(format!(
+                                    "rig {rig} {class:?} {band} {word} {path}: no home"
+                                ));
                             }
                             continue;
                         };
@@ -994,7 +1001,7 @@ mod tests {
                         let keyable = !holds || channel || tx_span_allowed(class, lo, hi, om);
                         if !inside || !keyable {
                             bad.push(format!(
-                                "{class:?} {band} {word} {path}: {dial:.4} {sideband} \
+                                "rig {rig} {class:?} {band} {word} {path}: {dial:.4} {sideband} \
                                  (inside={inside} keyable={keyable})"
                             ));
                         }
@@ -1047,6 +1054,177 @@ mod tests {
             let down = enter(Open, "3cm", word).unwrap();
             let up = enter(Open, "13cm", word).unwrap();
             assert!((down - up - 8089.5).abs() < 1e-9, "{word}: {down} / {up}");
+        }
+    }
+
+    /// THE 3 CM HOME BY RIG (operator, 2026-11-07: "Yes, by rig"). An `Open` station whose radio
+    /// transmits on 3 cm itself (the IC-905, Hamlib 3090) homes to the 10368.100 terrestrial
+    /// calling frequency: keyed directly, 10489.700 would be a terrestrial signal in QO-100's
+    /// downlink. An SDR program (SDR Console is Hamlib 2056; Thetis 2054), whose 3 cm dial is the
+    /// QO-100 downlink it maps to the uplink itself, and a radio Nexus does not know (model 0)
+    /// keep the narrowband transponder. 13 cm keeps 2400.200 on every rig: keyed directly there it
+    /// IS the QO-100 uplink. Entry and the band pick agree, and the band menu lists that dial.
+    #[test]
+    fn the_open_3cm_home_follows_the_rig() {
+        use crate::settings::LicenseClass::Open;
+        let close = |got: Option<f64>, want: f64| got.is_some_and(|f| (f - want).abs() < 1e-9);
+        for (rig, phone3, cw3) in [
+            (3090, 10368.100, 10368.100),
+            (2056, 10489.700, 10489.520),
+            (2054, 10489.700, 10489.520),
+            (0, 10489.700, 10489.520),
+        ] {
+            for (band, word, om, want) in [
+                ("3cm", "phone", OperatingMode::Phone, phone3),
+                ("3cm", "cw", OperatingMode::Cw, cw3),
+                ("13cm", "phone", OperatingMode::Phone, 2400.200),
+                ("13cm", "cw", OperatingMode::Cw, 2400.020),
+            ] {
+                let mut e = station();
+                e.settings.license_class = Open;
+                e.settings.rig_model = rig;
+                e.settings.band = band.to_string();
+                let entry = e.prepare_mode_entry(word, true).frequency.map(|(f, _)| f);
+                let pick = e.prepare_band_pick(band, om).map(|(f, _)| f);
+                assert!(
+                    close(entry, want),
+                    "rig {rig} {band} {word} entry: want {want}, got {entry:?}"
+                );
+                assert!(
+                    close(pick, want),
+                    "rig {rig} {band} {word} pick: want {want}, got {pick:?}"
+                );
+            }
+        }
+    }
+
+    /// Two radios with the given Hamlib models and band lists (empty = covers every band), `Open`,
+    /// in Phone on 20 m with radio 0 active. Returns the engine and radio 1's id.
+    fn two_rigs(a: u32, a_bands: &[&str], b: u32, b_bands: &[&str]) -> (Engine, u32) {
+        let mut e = Engine::new("N0CALL", "JN58", 0);
+        e.settings.license_class = crate::settings::LicenseClass::Open;
+        e.settings.rig_model = a;
+        e.settings.ensure_radio_profiles();
+        e.settings.sync_active_from_flat();
+        let other = e.add_radio();
+        e.settings
+            .radios
+            .iter_mut()
+            .find(|p| p.id == other)
+            .unwrap()
+            .rig_model = b;
+        e.set_radio_bands(0, a_bands.iter().map(|b| b.to_string()).collect());
+        e.set_radio_bands(other, b_bands.iter().map(|b| b.to_string()).collect());
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.250, "20m", "USB");
+        assert_eq!(e.settings.active_radio, 0, "scene: radio 0 active");
+        (e, other)
+    }
+
+    /// ⭐ THE 3 CM HOME IS THE RADIO THE ROUTING HANDS 3 CM TO, not the one active before the pick.
+    /// An HF rig active with an IC-905 listing 3 cm: the pick moves to the IC-905 and must call on
+    /// 10368.100, not key 10489.700 into QO-100's downlink. The mirror: an IC-905 active with SDR
+    /// Console listing 3 cm lands SDR Console on the transponder, never on 10368.100. Band pick,
+    /// section entry and the band menu's row agree.
+    #[test]
+    fn the_3cm_home_is_the_routed_radios() {
+        for (active, other, want) in [(3073, 3090, 10368.100), (3090, 2056, 10489.700)] {
+            let (mut e, id) = two_rigs(active, &[], other, &["3cm", "13cm"]);
+            let row = e
+                .licensed_band_plan(OperatingMode::Phone)
+                .into_iter()
+                .find(|c| c.band == "3cm")
+                .map(|c| c.dial_mhz);
+            assert!(
+                row.is_some_and(|f| (f - want).abs() < 1e-9),
+                "{active}->{other} menu row: {row:?}"
+            );
+            e.settings.band = "3cm".into();
+            let entry = e
+                .prepare_mode_entry("phone", true)
+                .frequency
+                .map(|(f, _)| f);
+            assert!(
+                entry.is_some_and(|f| (f - want).abs() < 1e-9),
+                "{active}->{other} entry: {entry:?}"
+            );
+            e.settings.band = "20m".into();
+            e.pick_band("3cm", Some("phone"));
+            assert_eq!(e.settings.active_radio, id, "{active}->{other}: routed");
+            assert!(
+                (e.settings.dial_mhz - want).abs() < 1e-9,
+                "{active}->{other} pick: {}",
+                e.settings.dial_mhz
+            );
+        }
+    }
+
+    /// ⭐ ONE RADIO'S 3 CM DIAL IS NOT RECALLED ON THE OTHER KIND. The dial memory is station-wide
+    /// per band and mode, so the IC-905's 10368.100 used to come back on SDR Console (and SDR
+    /// Console's 10489.700 on the IC-905). A 3 cm Phone/CW cell is recalled only on the side of
+    /// QO-100's narrowband downlink (10489.500-10490.000) that the radio's kind homes on; the other
+    /// kind gets its own home. Control: the same radio still recalls its own tuned dial.
+    #[test]
+    fn a_3cm_dial_is_not_recalled_on_the_other_kind_of_radio() {
+        let both = &["20m", "3cm", "13cm"];
+        for (first, second, first_home, second_home) in [
+            (3090, 2056, 10368.100, 10489.700),
+            (2056, 3090, 10489.700, 10368.100),
+        ] {
+            let (mut e, id) = two_rigs(first, both, second, both);
+            e.pick_band("3cm", Some("phone"));
+            assert!(
+                (e.settings.dial_mhz - first_home).abs() < 1e-9,
+                "scene: {first} homes"
+            );
+            // Control: retune within the side, leave, come back on the same radio: remembered.
+            let tuned = first_home + 0.010;
+            e.set_frequency(tuned, "3cm", "USB");
+            e.pick_band("20m", Some("phone"));
+            e.pick_band("3cm", Some("phone"));
+            assert!(
+                (e.settings.dial_mhz - tuned).abs() < 1e-9,
+                "{first}: its own dial, got {}",
+                e.settings.dial_mhz
+            );
+            e.pick_band("20m", Some("phone"));
+            e.set_active_radio(id);
+            e.pick_band("3cm", Some("phone"));
+            assert_eq!(e.settings.active_radio, id, "scene: still radio {second}");
+            assert!(
+                (e.settings.dial_mhz - second_home).abs() < 1e-9,
+                "{second} after {first}: want {second_home}, got {}",
+                e.settings.dial_mhz
+            );
+        }
+    }
+
+    /// The recall side follows the radio's OWN home, licence class included. A US class homes on
+    /// 10368.100 on every radio, so a US Technician on SDR Console (or an unknown radio) who
+    /// hand-tuned 10368.250 gets it back on re-pick; the transponder side is `Open`'s, never theirs.
+    #[test]
+    fn a_us_class_recalls_its_own_terrestrial_3cm_dial_on_any_radio() {
+        for rig in [2056, 0] {
+            for word in ["phone", "cw"] {
+                let mut e = Engine::new("N0CALL", "EN52", 0);
+                e.settings.license_class = crate::settings::LicenseClass::Technician;
+                e.settings.rig_model = rig;
+                e.set_operating_mode(word, false);
+                e.set_frequency(14.250, "20m", "USB");
+                e.pick_band("3cm", Some(word));
+                assert!(
+                    (e.settings.dial_mhz - 10368.100).abs() < 1e-9,
+                    "scene: rig {rig} {word} homes"
+                );
+                e.set_frequency(10368.250, "3cm", "USB");
+                e.pick_band("6m", Some(word));
+                e.pick_band("3cm", Some(word));
+                assert!(
+                    (e.settings.dial_mhz - 10368.250).abs() < 1e-9,
+                    "rig {rig} {word}: its own dial back, got {}",
+                    e.settings.dial_mhz
+                );
+            }
         }
     }
 }
