@@ -93,7 +93,7 @@ interface Props {
    * Day and the other screens without a cockpit the cluster is the only Stop TX. */
   ftScreen?: boolean
   /** This screen's TX strip draws the transmitter alarm cell, which shows every critical lane item beside
-   *  Stop TX, so the lane here may be cut on a full line (styles.css `.status-lane`). Without one, the lane
+   *  Stop TX, so the lane here may be cut on a full line (cockpit-panes.css `.status-lane`). Without one, the lane
    *  keeps a critical item's flag and announces it as an alert. */
   alarmCell?: boolean
   mycall: string
