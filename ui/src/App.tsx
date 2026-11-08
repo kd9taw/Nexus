@@ -456,6 +456,10 @@ function App() {
   const { leftW, rightW, leftMax, rightMax, commitLeft, commitRight, resetLeft, resetRight, resetWidths } =
     usePaneWidths(scale)
   const [snap, setSnap] = useState<AppSnapshot | null>(null)
+  // The card a call menu opens starts on the mode the radio is in (features/bestTimesAsk). Here, with
+  // the snapshot and ahead of every early return, so the hook order never changes.
+  const radioModeForBestTimes = radioModeOf(snap)
+  useEffect(() => noteRadioMode(radioModeForBestTimes), [radioModeForBestTimes])
   // Night (Settings ▸ Appearance ▸ Theme): App is its one writer. Auto goes by the sun at the
   // station's grid square, which arrives with the snapshot — until then Auto has no grid and stays off.
   const { night, setNight, gridKnown: nightGridKnown } = useNight(snap?.mygrid ?? '')
@@ -4287,9 +4291,6 @@ function App() {
     />
   )
 
-  // The card a call menu opens starts on the mode the radio is in (features/bestTimesAsk).
-  const radioModeForBestTimes = radioModeOf(snap)
-  useEffect(() => noteRadioMode(radioModeForBestTimes), [radioModeForBestTimes])
   return (
     <div className="app">
       <ClientBanner />
