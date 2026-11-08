@@ -32,6 +32,7 @@ import { SpaceNowLine } from '../prop/SpaceNowLine'
 import { ModelBasis } from '../prop/ModelBasis'
 import { PathRoute } from '../prop/PathRoute'
 import { PathDayPane, PathRegionsPane } from '../prop/PathDayStrip'
+import { BestTimesPane } from '../prop/BestTimesPane'
 import { azimuthLabel, azimuthTitle } from '../../grid'
 import { SpaceWxGauges } from '../prop/SpaceWxGauges'
 import { BandAdvisor } from '../prop/BandAdvisor'
@@ -891,7 +892,38 @@ export const PANES: PaneDef[] = [
       />
     ),
   },
+  {
+    // BEST TIMES — a call box and the answer for that call: now, the next best windows over the day,
+    // the week's Kp warnings, what it rests on, and a band × UTC-hour chart (BestTimesPane, which
+    // asks get_best_times itself). It follows its own box and a call menu's Best times item, never the
+    // selection. Nothing on it transmits, tunes or works the station.
+    id: 'bestTimes',
+    get title() {
+      return t('connect.pane.bestTimes.title')
+    },
+    category: 'bands',
+    basic: () => t('connect.pane.bestTimes.basic'),
+    expert: (c) => (
+      <BestTimesPane units={c.units} antGainDbi={c.antGainDbi} spots={c.spotsFeed?.rows} radioMode={radioModeOf(c.otaBoard?.snap)} />
+    ),
+  },
 ]
+
+/** The radio's mode as the Best times chips name modes: FT8/FT4 from the digital tier, CW, SSB. The
+ *  window's snapshot travels with the POTA/SOTA board's wiring; a window that lends none starts on FT8. */
+function radioModeOf(snap: NonNullable<PaneContext['otaBoard']>['snap'] | undefined): string | null {
+  if (!snap) return null
+  switch (snap.radio.operatingMode) {
+    case 'cw':
+      return 'CW'
+    case 'phone':
+      return snap.radio.sideband === 'FM' ? null : 'SSB'
+    case 'digital':
+      return snap.link.tier
+    default:
+      return null
+  }
+}
 
 export const PANE_BY_ID = new Map<PaneId, PaneDef>(PANES.map((p) => [p.id, p]))
 export function paneById(id: PaneId): PaneDef | undefined {

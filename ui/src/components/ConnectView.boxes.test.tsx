@@ -272,6 +272,9 @@ describe('tabs — several panes in one slot', () => {
 
   it('a layout saved before tabs loads exactly as today: every head is its title, no tab strip anywhere', async () => {
     localStorage.setItem(CONFIG, JSON.stringify({ slots: { ...DEFAULT_SLOTS, left1: 'greyline' }, overlays: {} }))
+    // This window has had its one-time Best times box already (connectConfig's migrateBestTimes, which
+    // its own test covers): the subject here is how a stored layout without tabs reads.
+    localStorage.setItem('nexus.connect.bestTimes.v1', '1')
     const { container } = await mount()
     for (const s of SLOT_IDS) {
       const head = frameOf(container, s).querySelector('.pane-head')!
@@ -412,11 +415,15 @@ describe('auto-rotate — a slot’s tabs in turn, on the dashboard window and t
   const CONFIG = 'nexus.connect.config'
   const cfg = () => JSON.parse(localStorage.getItem(CONFIG) ?? 'null')
   const paneIn = (c: HTMLElement, s: SlotId) => frameOf(c, s)?.getAttribute('data-pane')
-  const store = (rotate?: Record<string, number>) =>
+  const store = (rotate?: Record<string, number>) => {
     localStorage.setItem(
       CONFIG,
       JSON.stringify({ slots: DEFAULT_SLOTS, tabs: { left2: ['bandTiles', 'clock', 'greyline'] }, ...(rotate ? { rotate } : {}), overlays: {} }),
     )
+    // A window that has had its one-time Best times box already (connectConfig's migrateBestTimes):
+    // the subject here is left2's rotation.
+    localStorage.setItem('nexus.connect.bestTimes.v1', '1')
+  }
   async function mountRotating(autoRotate = true) {
     let r!: ReturnType<typeof render>
     await act(async () => {

@@ -304,6 +304,11 @@ const MIGRATED = [
   'features/pathRibbon.ts',
   'components/prop/PathDayStrip.tsx',
   'features/pathDay.ts',
+  // Best times to work a call: the answer, its chart, the box (Conditions).
+  'features/bestTimes.ts',
+  'components/prop/BestTimesAnswer.tsx',
+  'components/prop/BestTimesChart.tsx',
+  'components/prop/BestTimesPane.tsx',
   // The flare / proton overlay on a path and the outlook's "now" line (solar paths and outlook).
   'features/pathNow.ts',
   'components/prop/SpaceNowLine.tsx',

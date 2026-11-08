@@ -3,7 +3,7 @@
 // id vocabulary + DEFAULT_SLOTS live here; components/connect/* build on top.
 import { useCallback, useState } from 'react'
 import { coercePlacement, type PaneVocabulary } from './paneLayout'
-import { surfaceGet, surfaceSet } from './windowScope'
+import { surfaceGet, surfaceKey, surfaceSet } from './windowScope'
 
 /** The 7 wrap-the-globe slots. A SlotId === its CSS grid-area name (see styles.css). */
 export const SLOT_IDS = ['left1', 'left2', 'right1', 'right2', 'bottom1', 'bottom2', 'bottom3'] as const
@@ -28,6 +28,9 @@ export const PANE_IDS = [
   // same reason.
   'pathDay',
   'pathRegions',
+  // Best times to work a call (a call box, the answer and its band × hour chart), appended for the
+  // same reason.
+  'bestTimes',
 ] as const
 export type PaneId = (typeof PANE_IDS)[number]
 
@@ -276,10 +279,42 @@ function migrateChaseDefault(cfg: ConnectConfig): ConnectConfig {
   return next
 }
 
-export function loadConnectConfig(): ConnectConfig {
+/** Flag so the one-time Best times insertion runs exactly once per window's layout (persisted,
+ *  survives edits): the dashboard window keeps a layout of its own, and gets the box in it too. */
+const BEST_TIMES_KEY = 'nexus.connect.bestTimes.v1'
+
+/** One-time: put the Best times box into a STORED layout, as the last tab of the right column's top
+ * slot, without changing what any slot shows or moving any other box. A stored layout fully overrides
+ * the presets' tab plans, so a box added to them is otherwise only in the picker. A layout that already
+ * has it is left alone, and once it has run it never runs again: a box the operator removes stays
+ * removed. Exported for its test. */
+export function migrateBestTimes(cfg: ConnectConfig): ConnectConfig {
+  const flag = surfaceKey(BEST_TIMES_KEY)
+  try {
+    if (localStorage.getItem(flag)) return cfg
+    localStorage.setItem(flag, '1')
+  } catch {
+    return cfg // storage blocked — leave the layout untouched
+  }
+  if (SLOT_IDS.some((s) => slotBoxes(cfg, s).includes('bestTimes'))) return cfg
+  const added = addTab(cfg, 'right1', 'bestTimes')
+  if (!added) return cfg
+  // addTab shows the box it adds; the slot keeps showing what it showed.
+  const slots = { ...added.slots, right1: cfg.slots.right1 }
+  const next = { ...cfg, slots, tabs: coerceTabs(slots, added.tabs) }
+  saveConnectConfig(next)
+  return next
+}
+
+/** This window's layout. `insertBestTimes`: the host's layout table offers the Best times box, so a
+ *  stored layout gains it once (`migrateBestTimes`); the TV page's table does not, and never does. */
+export function loadConnectConfig(insertBestTimes = true): ConnectConfig {
   try {
     const raw = surfaceGet(STORAGE_KEY)
-    if (raw != null) return migrateChaseDefault(normalizeConfig(JSON.parse(raw)))
+    if (raw != null) {
+      const cfg = migrateChaseDefault(normalizeConfig(JSON.parse(raw)))
+      return insertBestTimes ? migrateBestTimes(cfg) : cfg
+    }
   } catch {
     /* malformed — fall through (matches useFeatures.readInitial) */
   }
@@ -322,8 +357,8 @@ function placed(c: ConnectConfig, next: ConnectPlacement): ConnectConfig {
   return { ...c, ...next, rotate: coerceRotate(next.tabs, c.rotate) }
 }
 
-export function useConnectConfig(): ConnectConfigApi {
-  const [cfg, setCfg] = useState<ConnectConfig>(loadConnectConfig)
+export function useConnectConfig(insertBestTimes = true): ConnectConfigApi {
+  const [cfg, setCfg] = useState<ConnectConfig>(() => loadConnectConfig(insertBestTimes))
   const commit = useCallback((next: ConnectConfig) => {
     saveConnectConfig(next)
     return next

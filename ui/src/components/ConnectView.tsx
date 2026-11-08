@@ -55,6 +55,7 @@ import {
 import {
   CONNECT_PRESET_IDS,
   CONNECT_PRESETS,
+  tableOffers,
   STANDARD_LAYOUT,
   connectLayoutNow,
   layoutOf,
@@ -310,6 +311,7 @@ function hasOwnLayout(surface: string): boolean {
 }
 
 function switchToDefaultOnce(presets: Readonly<Record<ConnectPresetId, ConnectLayout>>): void {
+  const insert = tableOffers(presets, 'bestTimes')
   const surface = surfaceId()
   const key = switchKey(surface)
   if (switchRecord(surface)) return
@@ -317,7 +319,7 @@ function switchToDefaultOnce(presets: Readonly<Record<ConnectPresetId, ConnectLa
     durableSet(key, JSON.stringify({ v: SWITCH_V, kept: switchRecord('main')?.kept ?? null }))
     return
   }
-  const cfg = loadConnectConfig()
+  const cfg = loadConnectConfig(insert)
   const panels = loadPanelLayout(CONNECT_PANELS, surface, 'main')
   const rails = loadRailWidths()
   const now = { slots: cfg.slots, tabs: cfg.tabs, panels, rails, bar: surfaceGet(BAR_KEY) === '1' }
@@ -541,7 +543,9 @@ export function ConnectView({
     return loadKeptLayout()
   })
   // Basic/Expert + the per-slot pane assignment (persisted; basic-default, remember-last).
-  const { slots, tabs, rotate, assignPane, addTab, removeTab, showTab, setRotate, resetSlots, restoreSlots } = useConnectConfig()
+  const { slots, tabs, rotate, assignPane, addTab, removeTab, showTab, setRotate, resetSlots, restoreSlots } = useConnectConfig(
+    tableOffers(table, 'bestTimes'),
+  )
   // Band focus (advisor/opening row click) — the map highlights that band's heat
   // + spots; click the same band again (or the clear chip) to release.
   const [focusBand, setFocusBand] = useState<string | null>(null)

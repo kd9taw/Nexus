@@ -285,6 +285,7 @@ The panes you can assign:
 | Kp outlook | NOAA's three-day planetary-K forecast as bars, the measured hours solid and the forecast hollow, with when a storm is expected to start or settle |
 | Path over the day | the selected station's path through the 24 UTC hours: per band, how well the model expects the short and long path to work and which way round it favours, the MUF ceiling, the grey line and the Kp ribbon; click an hour to move the 2-D map to it |
 | Paths to the regions | the same strip for ten DX regions, each on its best band (▸ for every band), the regions you need or have worked most first |
+| Best times | type a call (or a grid square) and see whether you can work it now and on which band, then the next good windows over the coming day, the days this week a Kp forecast reaches the path, and a band × hour chart. It says what the answer rests on: the station's grid and where Nexus got it, or only its country's centre |
 | Getting Out | who is hearing you right now: a compass, and every station that heard you in the last half hour, with its direction and distance, band, SNR and how long ago |
 | Bands by region | the best band to reach each region |
 | Activity Matrix | a region × band grid of live activity |
