@@ -3528,10 +3528,12 @@ fn the_data_word_is_judged_only_after_nexuss_own_set_and_latched_once_taken() {
             state.dial_band_crosses += 1;
         }
         let t = T0 + writes as f64 * 100_000.0;
-        state.judge_data_word(engine, writes, t, Some(word)); // the set is seen: skipped
+        state.judge_data_word(writes, t, Some(word)); // the set is seen: skipped
         for (at, read) in reads {
-            state.judge_data_word(engine, writes, t + at, Some(read));
+            state.judge_data_word(writes, t + at, Some(read));
         }
+        // TX off: the held re-set and verdict apply at once.
+        state.apply_owed_data_judgement(engine, &Rig::vox(), t + 20_000.0);
         state.last_mode.is_empty()
     }
     let fresh = |model: u32| {
@@ -3590,10 +3592,11 @@ fn the_data_word_is_judged_only_after_nexuss_own_set_and_latched_once_taken() {
     // A band crossing inside a watch closes it: no verdict, no set again.
     let (mut st, eng) = fresh(990_503);
     st.last_mode = "PKTUSB".into();
-    st.judge_data_word(&eng, 1, T0, Some("PKTUSB"));
-    st.judge_data_word(&eng, 1, T0 + 3_000.0, Some("USB"));
+    st.judge_data_word(1, T0, Some("PKTUSB"));
+    st.judge_data_word(1, T0 + 3_000.0, Some("USB"));
     st.dial_band_crosses += 1;
-    st.judge_data_word(&eng, 1, T0 + 6_000.0, Some("USB"));
+    st.judge_data_word(1, T0 + 6_000.0, Some("USB"));
+    st.apply_owed_data_judgement(&eng, &Rig::vox(), T0 + 20_000.0);
     assert!(st.data_watch.is_none() && !st.last_mode.is_empty());
 
     // The FT-1000MP's DATA-LSB reads PKTLSB: taken; later plain LSB changes nothing.
@@ -4082,4 +4085,106 @@ fn review_r2_first_set_crossing_a_band_stack_radio() {
         Some("PKTUSB"),
         "keyed in: {keys:?}"
     );
+}
+
+/// T3 (delta review D2): SDR Console's chain, its start swept in 20 ms steps so that the judgement's
+/// re-set and verdict would fall at the slot boundary. No mode write may land inside
+/// `DATA_WRITE_GUARD_MS` before any `T 1`, at any start: both are held until no over can key.
+#[test]
+fn review_t3_a_re_set_aimed_at_the_boundary() {
+    let mut near = Vec::new();
+    let mut inside = Vec::new();
+    for j in 0..40u32 {
+        let model = 990_700 + j;
+        let mut b = data_word_bench(SplitMode::None, model, DataAnswer::Ignores);
+        let slot = b.slot;
+        b.t = slot - 9_600.0 + f64::from(j) * 20.0;
+        let lines = b.radio.peer.lines.clone();
+        let log: Arc<Mutex<Vec<(f64, String)>>> = Arc::default();
+        let lg = log.clone();
+        let mut seen = 0usize;
+        let _ = b.overs_hooked(
+            2,
+            |_| {},
+            move |t, _| {
+                let v = lines.lock().unwrap();
+                for line in &v[seen..] {
+                    lg.lock().unwrap().push((t - 20.0, line.clone()));
+                }
+                seen = v.len();
+            },
+        );
+        let log = log.lock().unwrap().clone();
+        let keys: Vec<f64> = log
+            .iter()
+            .filter(|(_, l)| l == "T 1")
+            .map(|(t, _)| *t)
+            .collect();
+        let mut row = Vec::new();
+        for (t, l) in log.iter().filter(|(_, l)| l.starts_with("M ")) {
+            let lead = keys.iter().find(|k| **k >= *t).map(|k| k - t);
+            // ⛔ D2: no mode write the judgement causes, or any other, inside the guard before a key.
+            if lead.is_some_and(|x| x < DATA_WRITE_GUARD_MS) {
+                inside.push(format!("j{j}: {l} {lead:?} ms before T 1"));
+            }
+            row.push(format!(
+                "{l}@{}",
+                lead.map_or("-".into(), |x| format!("{x:.0}"))
+            ));
+            if l.contains("PKT") && lead.is_some_and(|x| x < 1_000.0) {
+                near.push(format!("j{j}: {l} {lead:?} ms before T 1"));
+            }
+        }
+        eprintln!("REVIEW T3 j{j}: {row:?}");
+    }
+    eprintln!("REVIEW T3 DATA writes under 1 s before a key: {near:?}");
+    assert!(
+        inside.is_empty(),
+        "mode writes inside the guard before a key: {inside:?}"
+    );
+}
+
+/// D2, the verdict's `M USB` and the re-set directly: with an FT8 over armed, both are held while the
+/// slot may still key an over (before 75 %) and inside the guard before the boundary, and while
+/// anything is keyed; applied in the window between (11.25 s to 13.0 s into an FT8 slot).
+#[test]
+fn the_judgements_re_set_and_verdict_wait_for_a_moment_no_over_can_key_in() {
+    const MODEL: u32 = 2056;
+    let engine = Mutex::new(Engine::new("KD9TAW", "EN52", 0));
+    {
+        let mut e = engine.lock().unwrap();
+        e.set_tier(Tier::Ft8);
+        e.set_tx_enabled(true);
+    }
+    let refused = || {
+        engine
+            .lock()
+            .unwrap()
+            .settings()
+            .link_refusals
+            .refused(MODEL, "PKTUSB")
+    };
+    let mut state = loop_state();
+    state.applied.rig_model = MODEL;
+    state.last_mode = "PKTUSB".into();
+    state.data_verdict_owed = Some(("PKTUSB", "still reads USB".into()));
+    state.data_reset_owed = Some("PKTUSB");
+    let slot = 30_000_000.0;
+    let rig = Rig::vox();
+    for into in [100.0, 5_000.0, 11_000.0, 13_100.0, 14_900.0] {
+        state.apply_owed_data_judgement(&engine, &rig, slot + into);
+        assert!(!refused(), "verdict applied {into} ms into the slot");
+        assert_eq!(
+            state.last_mode, "PKTUSB",
+            "re-set applied {into} ms into the slot"
+        );
+    }
+    let mut keyed = Rig::vox();
+    keyed.keyed = true;
+    state.apply_owed_data_judgement(&engine, &keyed, slot + 12_000.0);
+    assert!(!refused(), "verdict applied while keyed");
+    state.apply_owed_data_judgement(&engine, &rig, slot + 12_000.0);
+    assert!(refused(), "the verdict, in the window");
+    assert!(state.last_mode.is_empty(), "the re-set, in the window");
+    assert!(state.data_verdict_owed.is_none() && state.data_reset_owed.is_none());
 }

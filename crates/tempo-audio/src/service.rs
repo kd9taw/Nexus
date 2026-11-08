@@ -1851,6 +1851,9 @@ const MODE_SET_MAX_TRIES: u32 = 30;
 const DATA_WATCH_READS: u8 = 3;
 /// Reads sooner than this after the set can be Hamlib's own mode cache, and are not judged.
 const DATA_CACHE_MS: f64 = 1_000.0;
+/// The least room to the next slot boundary a mode write the DATA-word judgement causes may leave,
+/// with TX armed ([`RadioLoop::apply_owed_data_judgement`]).
+const DATA_WRITE_GUARD_MS: f64 = 2_000.0;
 /// Models whose Hamlib backend sets the DATA mode through one field and reads it through another
 /// (TX re-review F3), so a read-back of plain USB does not show the radio left DATA: TS-950S/SDX
 /// (2012/2013: set via `DT1`, read via `IF`), TS-590S/SG (2031/2037: set and read via `SF`, whose
@@ -4267,6 +4270,10 @@ struct RadioLoop {
     /// (`reassert_mode_after_band_cross`), and the count when the judgement last looked.
     dial_band_crosses: u64,
     data_seen_crosses: u64,
+    /// The judgement's re-set of a DATA word, and its verdict, waiting for a moment no over can key
+    /// in ([`Self::apply_owed_data_judgement`]).
+    data_reset_owed: Option<&'static str>,
+    data_verdict_owed: Option<(&'static str, String)>,
     /// A radio handoff installed another connection: the engine's judgement of the last one's DATA
     /// word is forgotten at the next tick's engine lock, before the mode word is worked out.
     link_judgement_stale: bool,
@@ -5166,6 +5173,8 @@ impl RadioLoop {
             data_twin_watches: 0,
             dial_band_crosses: 0,
             data_seen_crosses: 0,
+            data_reset_owed: None,
+            data_verdict_owed: None,
             link_judgement_stale: false,
             last_cat_wpm: 0, // 0 = unset → first send pushes the speed
             cw_word_matched: None,
@@ -7216,13 +7225,7 @@ impl RadioLoop {
     /// NOT on the TS-590S/SG and TS-950 ([`READBACK_UNTRUSTED`]), whose Hamlib backends set and read
     /// the data mode through different fields: those keep today's behaviour until a bench settles it.
     /// Only Hamlib's links are judged: Nexus's own daemons speak for their radios themselves.
-    fn judge_data_word(
-        &mut self,
-        engine: &Mutex<Engine>,
-        writes: u64,
-        now: f64,
-        reported: Option<&str>,
-    ) {
+    fn judge_data_word(&mut self, writes: u64, now: f64, reported: Option<&str>) {
         if READBACK_UNTRUSTED.contains(&self.applied.rig_model) {
             return;
         }
@@ -7284,19 +7287,66 @@ impl RadioLoop {
             }
             if self.data_twin_watches >= 2 {
                 self.data_twin_watches = 0;
-                self.data_word_not_taken(engine, word, &format!("still reads {twin}"));
+                // Held, not applied here: the verdict changes the word the next retune sends, so it
+                // waits for a moment no over can key in (`apply_owed_data_judgement`, delta D2).
+                self.data_verdict_owed = Some((word, format!("still reads {twin}")));
             } else {
                 // Not yet a verdict: ONE watch can be fooled (the operator's own USB press inside
                 // it, a band stack's recall behind Hamlib's cache). Nexus sets the word again,
-                // through the retune at the next idle tick, and judges the reads after THAT set.
+                // through the retune once no over can key (`apply_owed_data_judgement`), and judges
+                // the reads after THAT set.
                 // A radio that takes the word reads it back then and is latched; SDR Console reads
                 // plain USB after every set.
-                self.last_mode.clear();
+                // Held like the verdict (delta D2): applied by `apply_owed_data_judgement`.
+                self.data_reset_owed = Some(word);
             }
         } else {
             self.data_watch = None; // another mode: something else moved it, judge nothing
             self.data_twin_watches = 0;
         }
+    }
+
+    /// Apply the judgement's owed re-set and verdict (`judge_data_word`), ONLY where nothing they cause
+    /// can reach the wire before a key (delta D2). Both work through the retune: the re-set clears
+    /// `last_mode` so this tick's retune sends the word again, and the verdict changes the word the
+    /// next tick's retune sends. So both wait while anything of Nexus's is keyed and, with TX armed
+    /// on a slotted mode, until the current slot is past the last point an over may still key
+    /// (WSJT-X's 75 %, [`crate::slot::wsjtx_may_key_at`]) with at least [`DATA_WRITE_GUARD_MS`] left
+    /// to the next boundary. Held otherwise, and applied on the first tick that may, which after an
+    /// over is the tail of its slot. Nothing about the key itself changes.
+    fn apply_owed_data_judgement(&mut self, engine: &Mutex<Engine>, rig: &Rig, now: f64) {
+        if self.data_reset_owed.is_none() && self.data_verdict_owed.is_none() {
+            return;
+        }
+        if !self.data_write_may_go(engine, rig, now) {
+            return;
+        }
+        if let Some((word, why)) = self.data_verdict_owed.take() {
+            self.data_word_not_taken(engine, word, &why);
+        }
+        if let Some(word) = self.data_reset_owed.take() {
+            // Only if the word is still Nexus's applied word: anything set since stands.
+            if tempo_app::rig_modes::data_word(&self.last_mode) == Some(word) {
+                self.last_mode.clear();
+            }
+        }
+    }
+
+    /// May a mode write the judgement causes go out now ([`Self::apply_owed_data_judgement`])?
+    fn data_write_may_go(&self, engine: &Mutex<Engine>, rig: &Rig, now: f64) -> bool {
+        if rig.keyed || self.holds_tx() || self.operator_keyed() || self.manual_ptt_applied {
+            return false;
+        }
+        let eng = engine_lock(engine);
+        if !eng.tx_enabled() {
+            return true;
+        }
+        let period = eng.active_slot_secs() * 1000.0;
+        if period.is_nan() || period <= 0.0 {
+            return false;
+        }
+        let into = now.rem_euclid(period);
+        !crate::slot::wsjtx_may_key_at(into, period) && period - into > DATA_WRITE_GUARD_MS
     }
 
     /// A new connection: nothing it showed about the DATA word carries over.
@@ -7305,6 +7355,8 @@ impl RadioLoop {
         self.data_seen_writes = u64::MAX;
         self.data_taken.clear();
         self.data_twin_watches = 0;
+        self.data_reset_owed = None;
+        self.data_verdict_owed = None;
     }
 
     /// Record that this Hamlib link does not take the DATA word `md`, and say so in the log.
@@ -8994,6 +9046,10 @@ impl RadioLoop {
             self.cur_dial = dial;
             self.cur_md = md.clone();
             self.cur_section_cw = section_cw;
+            // The DATA-word judgement's held re-set and verdict, only outside the key guard (D2).
+            if can_retune && !link_down {
+                self.apply_owed_data_judgement(engine, rig, now);
+            }
             // Falling edge of Test CAT's port hold → rebuild the CAT channel we dropped,
             // through the rig_differs branch below (same teardown-then-reopen path).
             let resume_after_hold = !cat_hold && self.cat_hold_active;
@@ -11190,7 +11246,7 @@ impl RadioLoop {
                             let remote_mode = self.remote_read(engine);
                             let (m, pb) = rig.read_mode_passband();
                             if !rig.keyed {
-                                self.judge_data_word(engine, rig.mode_writes, now, m.as_deref());
+                                self.judge_data_word(rig.mode_writes, now, m.as_deref());
                             }
                             // THE NATIVE CI-V DAEMON'S WIDTH IS ITS OWN VERB (`1A 03`), never `m`'s
                             // passband: `m` answers 0 there on purpose, so a client's `M PKTUSB
