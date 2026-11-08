@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// #468: the top bar draws the listening level in the group every screen keeps (beside Help) while
+// #468: the top bar draws the listening level's chip in the group every screen keeps (beside Help) while
 // receive audio plays on this computer, and nothing at all otherwise.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
@@ -36,11 +36,12 @@ describe('the top bar’s listening level (#468)', () => {
     ['a cockpit (Phone, CW, RTTY…)', { hideTxControls: true, hideFrequencyControl: true, hideDigitalChrome: true }],
   ])('on %s, in the chip group beside Help', (_where, extra) => {
     const c = bar({ ...extra, listenLevel: { level: 0.3, onCommit: async () => {} } })
-    const slider = c.querySelector('.topbar-chips .listen-level input[type=range]') as HTMLInputElement
-    expect(slider?.value).toBe('0.3')
+    // Only the chip is in the bar; its slider opens in a popover (ListenLevel.test.tsx).
+    expect(c.querySelector('.topbar-chips button.listen-chip')).not.toBeNull()
+    expect(c.querySelector('.topbar-chips input')).toBeNull()
   })
 
   it('CONTROL: absent while receive audio is not played here', () => {
-    expect(bar({}).querySelector('.listen-level')).toBeNull()
+    expect(bar({}).querySelector('.listen-chip')).toBeNull()
   })
 })

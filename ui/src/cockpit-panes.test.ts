@@ -253,6 +253,8 @@ describe('the fence: styles.css never names a structural class', () => {
     // key floor, the folded top bar and now-bar, the header's ⋯ and the shorter CW speed slider. Each is a flat class a component adds; a styles.css rule naming
     // one could undo the fold or the tier from the sheet that has lost these fights before.
     'cockpit-txstrip-meters', 'cockpit-txstrip-meters-needle', 'txmeters-pane', 'txmeters-pane-meter', 'cockpit-txstrip-catnote', 'cq-catnote', 'dock-status-inrow', 'dock-fkeys', 'tier-menu-folded', 'topbar-now', 'now-bar-inbar',
+    // The listening level's chip in the top bar (#468): a styles.css width or a slider beside it would wrap the bar.
+    'listen-chip',
     'ch-overflow', 'ch-overflow-panel', 'ch-overflow-open', 'cw-wpm-compact',
     // The My station picker in the top bar (2026-11-03): it stands over the callsign, out of the bar's
     // line; a styles.css margin or width on it would put it back in the line and wrap the bar.
