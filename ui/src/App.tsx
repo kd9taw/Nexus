@@ -57,6 +57,7 @@ import {
   subscribeSnapshot,
 } from './api'
 import { withErrorToast, pushToast, dismissToast, setPopupNotifications, setPopupMinSeconds } from './toast'
+import { patchSettings } from './settings/patch'
 import { setPopupCorner } from './features/popupCorner'
 import { contestStartWarning } from './features/contestLocation'
 import { keptFileMessage } from './features/keptFiles'
@@ -3011,6 +3012,15 @@ function App() {
     })
   }, [])
 
+  // #468: the top bar's listening level. Saves that one field over the settings as the backend
+  // holds them (the patch seam), then reads them back so the slider settles on what was kept; a
+  // failed save says so and rejects, which puts the slider back.
+  const handleListenLevel = useCallback(async (level: number) => {
+    const saved = await withErrorToast(() => patchSettings(() => ({ monitorLevel: level })), t('settings.save.failed'))
+    if (!saved) throw new Error('not saved')
+    setSettings(await getSettings())
+  }, [])
+
   const handleSettingsSaved = useCallback(() => {
     getSnapshot().then(setSnap).catch(() => {})
     reloadSettings()
@@ -4381,6 +4391,11 @@ function App() {
         fdActive={settings?.fdActive ?? false}
         showLocalClock={localClock}
         nowBar={nowBarInTopBar ? nowBar(true) : undefined}
+        listenLevel={
+          settings?.monitorEnabled
+            ? { level: settings.monitorLevel ?? 0.5, onCommit: handleListenLevel }
+            : undefined
+        }
       />}
 
       <UpdateBanner update={selfUpdate} />

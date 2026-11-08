@@ -324,7 +324,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     // `tune`/`tune timeout` are here because the Tune timeout — the auto-release on a key-down
     // carrier — sits in this section's "Transmit & Sequencing" group and had NO searchable word
     // anywhere in the registry, so search returned nothing and no deep link could name it.
-    keywords: ['ft8', 'ft4', 'auto sequence', 'sequencing', 'tx enable', 'watchdog', 'decode',
+    // `tuner`… (#487): the same control as an operator names it, the tuner's time limit; "tuner"
+    // is not a substring of "tune", so it found nothing.
+    keywords: ['tuner', 'tuner timeout', 'tuner time limit', 'ft8', 'ft4', 'auto sequence', 'sequencing', 'tx enable', 'watchdog', 'decode',
       'depth', 'deep', 'auto cq', 'cq', 'hound', 'fox', 'dxpedition', 'auto log', 'blocked',
       'ap decode', 'f low', 'f high', 'tune', 'tune timeout', 'tune carrier', 'key down',
       'tx period', 't/r period', 'disable tx after 73', 'tune power', 'low power tune',

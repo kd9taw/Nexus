@@ -8366,6 +8366,20 @@ select optgroup {
   background: var(--accent);
   color: var(--accent-ink);
 }
+/* #468: the top bar's listening level, a chip-sized slider beside Help. Its own width only. */
+.listen-level {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  min-height: 26px;
+  color: var(--text);
+}
+.listen-level input[type='range'] {
+  width: 5.5em;
+  margin: 0;
+  accent-color: var(--accent);
+}
 /* Unreachable option (e.g. an Auto max-scale the window can't fit) — dimmed, not
    hittable, tooltip explains why. */
 .theme-chip:disabled {

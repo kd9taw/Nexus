@@ -8811,6 +8811,9 @@ export const EN = {
     'On Linux, pick it by its card name (hw: or plughw:): receive audio does not play on the system default, pulse or pipewire, which may be the radio’s card.',
   'settings.headphoneMonitor.level.label': 'Listening level',
   'settings.headphoneMonitor.level.aria': 'Receive listening level',
+  // #468: the same level as a slider in the top bar, shown while receive audio plays here.
+  'topbar.listen.title':
+    'Listening level {{pct}}%: how loud Nexus plays the receive audio on this computer (Settings ▸ Radio ▸ Receive audio on this computer)',
   'settings.headphoneMonitor.level.hint':
     'Headphone listening volume (does not affect TX).',
 
@@ -12518,6 +12521,10 @@ export const EN = {
   'rtty.panel.stream': 'Decoded Text',
   'rtty.header.mode.title':
     'RTTY — Baudot/ITA2 at the configured baud + shift (45.45 / 170 Hz is the HF standard; change it in Settings → RTTY)',
+  // #488: the baud picker beside the mode badge (the same setting as Settings → RTTY).
+  'rtty.header.baud.aria': 'RTTY baud rate',
+  'rtty.header.baud.title':
+    'Baud rate: 45.45 is the HF standard, 50 is used in parts of Europe, 75 on VHF and some nets. The same setting as Settings → RTTY. It cannot be changed while transmitting.',
   'rtty.header.backend.fsk.title':
     'True FSK — data bits on the serial keyline, rig in RTTY mode (its narrow RTTY filters work). Change the backend in Settings → RTTY.',
   'rtty.header.backend.afsk.title':

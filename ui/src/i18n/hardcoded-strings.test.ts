@@ -988,6 +988,8 @@ const PARTIAL = [
   'components/AprsCockpit.tsx',
   'components/OperateQsoStrip.tsx',
   'components/RttyCockpit.tsx',
+  'components/RttyBaudPicker.tsx',
+  'components/ListenLevel.tsx',
   'components/PskCockpit.tsx',
   'components/Js8Cockpit.tsx',
   'components/SstvView.tsx',
