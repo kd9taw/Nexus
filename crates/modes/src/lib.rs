@@ -35,6 +35,12 @@ pub use ft8::A7ResetGuard as Ft8A7ResetGuard;
 /// FT2 frame occupies without naming the modem crate.
 pub use ft2::{BAUD as FT2_TONE_SPACING_HZ, NTONES as FT2_NTONES};
 
+/// MSK144's symbol rate (Bd) and the audio centre it always keys on (Hz), and the band a Q65
+/// period and submode occupies (Hz), so the licence gate can judge them without naming the modem
+/// crates.
+pub use msk144::{BAUD as MSK144_BAUD, TX_CENTRE_HZ as MSK144_TX_CENTRE_HZ};
+pub use q65::bandwidth_hz as q65_bandwidth_hz;
+
 #[cfg(test)]
 mod tests {
 

@@ -531,6 +531,42 @@ pub fn cw_and_ssb_voice_only(class: LicenseClass, carrier_mhz: f64) -> bool {
         && (28.300..28.500).contains(&carrier_mhz)
 }
 
+/// The widest data emission a US class may send below [`DATA_WIDTH_CAP_TOP_MHZ`]: 2.8 kHz. 47 CFR
+/// 97.307(f)(3): "The authorized bandwidth is 2.8 kHz" for the HF data rows, and 97.307(f)(14) for
+/// 60 m: "Emissions must not exceed a bandwidth of 2.8 kilohertz".
+pub const DATA_WIDTH_CAP_HZ: f64 = 2_800.0;
+
+/// Where [`DATA_WIDTH_CAP_HZ`] stops: 28.3 MHz, the top of 10 m data (97.305(c)). Every US data
+/// row below it is held to the cap, 2200 m through 10 m and 60 m (operator ruling, 2026-11-08).
+/// ⚠️ 97.307(f)(3) itself says "except in the 2200 m band and 630 m band", which it holds to a
+/// symbol rate instead ([`LF_MF_DATA_MAX_BAUD`]). Holding them to 2.8 kHz too only refuses more:
+/// nothing that wide fits the 2.1 kHz of 2200 m at all.
+pub const DATA_WIDTH_CAP_TOP_MHZ: f64 = 28.3;
+
+/// The fastest data symbol rate a US class may send on 2200 m and 630 m: 300 baud. 47 CFR
+/// 97.307(f)(3): "In the 2200 m band and the 630 m band the symbol rate must not exceed 300 bauds".
+pub const LF_MF_DATA_MAX_BAUD: f64 = 300.0;
+
+/// May `class` send a data emission `width_hz` wide whose lowest frequency is `lo_mhz`? Not wider
+/// than [`DATA_WIDTH_CAP_HZ`] anywhere below [`DATA_WIDTH_CAP_TOP_MHZ`], for a US class. Whether
+/// the frequencies are the class's is [`tx_span_allowed`]'s question; this judges the width alone.
+/// `Open` is trusted, as [`tx_allowed`] trusts it.
+pub fn data_width_allowed(class: LicenseClass, lo_mhz: f64, width_hz: f64) -> bool {
+    matches!(class, LicenseClass::Open)
+        || lo_mhz >= DATA_WIDTH_CAP_TOP_MHZ
+        || width_hz <= DATA_WIDTH_CAP_HZ
+}
+
+/// May `class` send data at `baud` across `lo_mhz`..`hi_mhz`? Not faster than
+/// [`LF_MF_DATA_MAX_BAUD`] with either end on 2200 m or 630 m ([`LF_MF`]), for a US class. `Open` is
+/// trusted, as [`tx_allowed`] trusts it.
+pub fn data_symbol_rate_allowed(class: LicenseClass, lo_mhz: f64, hi_mhz: f64, baud: f64) -> bool {
+    let lf_mf = |f: f64| LF_MF.iter().any(|seg| f >= seg.lo && f < seg.hi);
+    matches!(class, LicenseClass::Open)
+        || baud <= LF_MF_DATA_MAX_BAUD
+        || !(lf_mf(lo_mhz) || lf_mf(hi_mhz))
+}
+
 /// Is upper sideband the only phone `class` may transmit with its carrier at `carrier_mhz`: LSB
 /// refused ([`lsb_phone_allowed`]) and every word that is not one sideband refused too
 /// ([`wide_phone_allowed`])? 60 m, for every US class. It decides nothing about keying, which those
@@ -1722,5 +1758,70 @@ mod tests {
             assert_eq!(g, w, "line {}: a shipped class's privileges changed", n + 1);
         }
         assert_eq!(got, want, "a shipped class's privileges changed");
+    }
+
+    /// The two data limits judged by mode: 2.8 kHz below 28.3 MHz, and 300 baud on 2200 m and
+    /// 630 m, for every US class, at their edges; never for `Open`.
+    #[test]
+    fn data_width_and_symbol_rate_limits_hold_at_their_edges() {
+        for class in US_CLASSES {
+            assert!(
+                data_width_allowed(class, 14.074, 2_800.0),
+                "{class:?}: 2.8 kHz itself keys"
+            );
+            assert!(
+                !data_width_allowed(class, 14.074, 2_800.1),
+                "{class:?}: wider is refused"
+            );
+            assert!(
+                !data_width_allowed(class, 28.2999, 3_467.0),
+                "{class:?}: just under 28.3"
+            );
+            assert!(
+                !data_width_allowed(class, 0.1357, 3_467.0),
+                "{class:?}: 2200 m"
+            );
+            assert!(
+                data_width_allowed(class, 28.3, 3_467.0),
+                "{class:?}: from 28.3 MHz, no cap"
+            );
+            assert!(
+                data_width_allowed(class, 50.275, 3_467.0),
+                "{class:?}: 6 m has no cap"
+            );
+            for (lo, hi) in [
+                (0.1357, 0.1357),
+                (0.1377, 0.1379),
+                (0.4745, 0.4773),
+                (0.4789, 0.479),
+            ] {
+                assert!(
+                    !data_symbol_rate_allowed(class, lo, hi, 2_000.0),
+                    "{class:?} {lo}-{hi}"
+                );
+                assert!(
+                    data_symbol_rate_allowed(class, lo, hi, 300.0),
+                    "{class:?}: 300 Bd keys"
+                );
+            }
+            for (lo, hi) in [
+                (0.479, 0.4818),
+                (1.8, 1.8028),
+                (5.357, 5.3598),
+                (50.26, 50.2628),
+            ] {
+                assert!(
+                    data_symbol_rate_allowed(class, lo, hi, 2_000.0),
+                    "{class:?} {lo}-{hi}"
+                );
+            }
+        }
+        assert!(data_width_allowed(LicenseClass::Open, 14.074, 3_467.0));
+        assert!(data_symbol_rate_allowed(
+            LicenseClass::Open,
+            0.4745,
+            0.4773,
+            2_000.0
+        ));
     }
 }

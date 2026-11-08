@@ -108,6 +108,9 @@ mod cw_unassisted_tests;
 /// A CW message the radio's own keyer would not take is refused whole, before anything keys.
 #[cfg(test)]
 mod cw_whole_message_tests;
+/// MSK144 judged where it transmits, and the US data limits held by mode.
+#[cfg(test)]
+mod data_mode_licence_tests;
 /// The receive decoders a screen started, stopped when the operator leaves for another section.
 pub mod decoder_screens;
 mod field_day_display;
@@ -7360,9 +7363,36 @@ pub(crate) struct DataFrame {
     pub(crate) f0_hz: f64,
     /// Hz the frame occupies above its lowest tone; 0 judges the lowest tone alone.
     pub(crate) bw_hz: f64,
+    /// The mode the over keys, whose own rules the gate judges too ([`Self::keyed_signal`],
+    /// [`Engine::data_mode_allowed`]). `None` for a frame that is no mode's over: Nexus's tune
+    /// tone, or the passband a program outside Nexus could send.
+    pub(crate) mode: Option<modes::ModeKind>,
 }
 
+/// Hz either side of MSK144's centre its signal occupies: the -26 dB edge of its main lobe, the
+/// width 47 CFR 97.3(a)(8) measures (dial + 105 to dial + 2895 Hz on USB). Measured from this
+/// repo's modulator; the textbook MSK spectrum at 2000 Bd puts the same point at ±1390 Hz.
+/// ⚠️ The first sidelobes (about -23 dB, out to about ±2150 Hz) are not counted, by decision
+/// (operator ruling, 2026-11-08: the main lobe).
+const MSK144_HALF_WIDTH_HZ: f64 = 1_395.0;
+
 impl DataFrame {
+    /// The audio the over actually keys when its mode does not key on the TX offset: MSK144's,
+    /// always centred on [`modes::MSK144_TX_CENTRE_HZ`], whatever the marker says
+    /// (`Msk144Mode::gen_wave` ignores `f0`, as WSJT-X's own MSK144 does), and
+    /// [`MSK144_HALF_WIDTH_HZ`] either side of it. `None` for every other mode, which keys where
+    /// the frame says.
+    pub(crate) fn keyed_signal(&self) -> Option<DataFrame> {
+        match self.mode {
+            Some(modes::ModeKind::Msk144 { .. }) => Some(DataFrame {
+                f0_hz: f64::from(modes::MSK144_TX_CENTRE_HZ) - MSK144_HALF_WIDTH_HZ,
+                bw_hz: 2.0 * MSK144_HALF_WIDTH_HZ,
+                mode: None,
+            }),
+            _ => None,
+        }
+    }
+
     /// The width a frame of `kind` occupies above its lowest tone: its tones times their spacing.
     /// That is the bandwidth WSJT-X's User Guide gives FT8 (8 × 6.25 = 50 Hz) and FT4 (4 × 12000 /
     /// 576 = 83.3 Hz), and the one JS8Call gives each JS8 speed (`JS8::Submode::bandwidth`, 8 × the
@@ -25445,6 +25475,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return self.tx_allowed_for(DataFrame {
                 f0_hz: f64::from(TUNE_TONE_HZ),
                 bw_hz: 0.0,
+                mode: None,
             });
         }
         let tone = f64::from(TUNE_TONE_HZ) / 1_000_000.0;
@@ -29680,9 +29711,11 @@ contact yourself."
     /// The data frame the operator's next over keys: its lowest tone on the TX offset, as wide as
     /// the active tier's mode occupies ([`DataFrame::width_hz`]).
     pub(crate) fn tx_data_frame(&self) -> DataFrame {
+        let mode = self.tier_mode_kind(self.app.tier());
         DataFrame {
             f0_hz: f64::from(self.tx_offset_hz),
-            bw_hz: DataFrame::width_hz(self.tier_mode_kind(self.app.tier())),
+            bw_hz: DataFrame::width_hz(mode),
+            mode,
         }
     }
 
@@ -29809,6 +29842,54 @@ contact yourself."
             && self.every_tx_frequency(OperatingMode::Phone, |mhz| {
                 self.phone_emission_allowed(mhz, "USB")
             })
+    }
+
+    /// Is the licence lock the data MODE alone, and by which of its rules? The Digital section is
+    /// refused, and the same over judged with no rule of its mode's would key (a frame of no mode,
+    /// [`Self::data_frame_allowed`]): then the mode is all that stands in the way, and the lock
+    /// names it ([`crate::dto::DataModeRule`]). MSK144 on 2200 m or 630 m is named for its symbol
+    /// rate, which no dial there cures; elsewhere for its fixed 1500 Hz centre. Where the frame of
+    /// no mode is refused too, the frequency is a reason and the lock keeps its frequency sentence.
+    ///
+    /// DISPLAY ONLY, as [`Self::phone_mode_refused`] is: it picks the words for a refusal
+    /// [`Self::tx_allowed`] has already made.
+    pub fn data_mode_refusal(&self) -> Option<crate::dto::DataModeRefusal> {
+        use crate::dto::DataModeRule;
+        if self.settings.operating_mode != crate::settings::OperatingMode::Digital
+            || self.tx_allowed()
+        {
+            return None;
+        }
+        let frame = self.tx_data_frame();
+        let mode = frame.mode?;
+        if !self.tx_allowed_for(DataFrame {
+            mode: None,
+            ..frame
+        }) {
+            return None;
+        }
+        let rule = match mode {
+            modes::ModeKind::Q65 { .. } => DataModeRule::TooWide,
+            modes::ModeKind::Msk144 { .. } => {
+                let at = self.tx_source_verdict().emission_mhz;
+                let baud = f64::from(modes::MSK144_BAUD);
+                if crate::privileges::data_symbol_rate_allowed(
+                    self.settings.license_class,
+                    at,
+                    at,
+                    baud,
+                ) {
+                    DataModeRule::FixedCentre
+                } else {
+                    DataModeRule::TooFast
+                }
+            }
+            _ => return None,
+        };
+        Some(crate::dto::DataModeRefusal {
+            rule,
+            mode: mode.as_str().to_string(),
+        })
     }
 
     /// Is the licence lock the phone MODE alone from 28.3 to 28.5 MHz? The Phone section is
@@ -30589,20 +30670,67 @@ contact yourself."
     /// ⚠️ IT CAN ONLY EVER REFUSE MORE than judging the lowest tone did: a frame is allowed only
     /// where its lowest tone is, and a frame of no width is judged exactly as that tone was, so a
     /// mode [`DataFrame::width_hz`] gives no width is judged as before.
+    ///
+    /// ⭐ AND WHERE ITS MODE TRANSMITS, AND BY ITS MODE'S OWN LIMITS (operator ruling, 2026-11-08),
+    /// both ANDed on, so a frame of no mode is judged exactly as before and every other frame can
+    /// only be refused more. MSK144 keys at 1500 Hz whatever the marker says
+    /// ([`DataFrame::keyed_signal`]): with the marker dragged to 4000 Hz on 50.0965 MHz the marker
+    /// was judged at 50.1005 while the whole signal went out under 50.1, in the CW-only segment.
+    /// Both are judged now, the marker and the signal. The mode's limits are
+    /// [`Self::data_mode_allowed`]'s.
     fn data_frame_allowed(&self, dial: f64, frame: DataFrame, lsb: bool) -> bool {
-        let near = frame.f0_hz / 1_000_000.0;
-        let far = (frame.f0_hz + frame.bw_hz) / 1_000_000.0;
-        let (lo, hi) = if lsb {
-            (dial - far, dial - near)
-        } else {
-            (dial + near, dial + far)
+        let class = self.settings.license_class;
+        let span = |f: DataFrame| {
+            let near = f.f0_hz / 1_000_000.0;
+            let far = (f.f0_hz + f.bw_hz) / 1_000_000.0;
+            if lsb {
+                (dial - far, dial - near)
+            } else {
+                (dial + near, dial + far)
+            }
         };
-        crate::privileges::tx_span_allowed(
-            self.settings.license_class,
-            lo,
-            hi,
-            crate::settings::OperatingMode::Digital,
-        )
+        let allowed = |(lo, hi): (f64, f64)| {
+            crate::privileges::tx_span_allowed(
+                class,
+                lo,
+                hi,
+                crate::settings::OperatingMode::Digital,
+            )
+        };
+        let signal = span(frame.keyed_signal().unwrap_or(frame));
+        allowed(span(frame))
+            && allowed(signal)
+            && Self::data_mode_allowed(class, frame.mode, signal)
+    }
+
+    /// May `class` send `mode` across `lo`..`hi` MHz by the limits US data is held to whatever
+    /// the frequency (`privileges::data_width_allowed`, `privileges::data_symbol_rate_allowed`)?
+    /// Two modes reach them, and only those two are judged (operator ruling, 2026-11-08):
+    /// * Q65 is held to 2.8 kHz below 28.3 MHz: its band ([`modes::q65_bandwidth_hz`], 65 tones)
+    ///   is 3.47 kHz at Q65-30E and Q65-15D, and 6.93 kHz at Q65-15E, which keys nothing anyway.
+    ///   Every other Q65 is 1.73 kHz or narrower. A period and submode Q65 does not know is
+    ///   never trusted to fit.
+    /// * MSK144, 2000 Bd ([`modes::MSK144_BAUD`]), is held to 300 baud on 2200 m and 630 m.
+    ///
+    /// Every other mode, and a frame of no mode, passes: their widths are not judged here.
+    fn data_mode_allowed(
+        class: crate::settings::LicenseClass,
+        mode: Option<modes::ModeKind>,
+        (lo, hi): (f64, f64),
+    ) -> bool {
+        match mode {
+            Some(modes::ModeKind::Q65 { period_s, submode }) => {
+                let width = modes::q65_bandwidth_hz(period_s, submode).map_or(f64::MAX, f64::from);
+                crate::privileges::data_width_allowed(class, lo, width)
+            }
+            Some(modes::ModeKind::Msk144 { .. }) => crate::privileges::data_symbol_rate_allowed(
+                class,
+                lo,
+                hi,
+                f64::from(modes::MSK144_BAUD),
+            ),
+            _ => true,
+        }
     }
 
     /// May the operator's class key a KEYBOARD-mode emission (PSK31's, or JTTY's while it is the
@@ -31660,6 +31788,7 @@ contact yourself."
             self.tx_source_verdict().emission_mhz,
         );
         s.radio.phone_mode_refused = self.phone_mode_refused();
+        s.radio.data_mode_refusal = self.data_mode_refusal();
         // The FM-channel hold as `rig_mode_effective` reads it, so the Phone cockpit's AUTO says
         // what is commanded on a kept FM channel.
         s.radio.fm_channel = self.fm_channel && self.settings.dial_mhz >= 29.0;

@@ -2083,6 +2083,12 @@ pub struct RadioStatus {
     /// when false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub phone_mode_refused: bool,
+    /// The licence lock is the data MODE alone, and the rule that refuses it
+    /// (`Engine::data_mode_refusal`): the same over in another mode would key. `tx_allowed` is
+    /// false with it, and the cockpit names the rule and the mode instead of "this frequency is
+    /// outside your license privileges". Skipped when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_mode_refusal: Option<DataModeRefusal>,
     /// The rig is held on an FM channel at or above 29 MHz (`Engine::fm_channel`), so FM is
     /// commanded whatever the section's own policy says: in Phone, the FM channel kept from the
     /// SSTV screen. The Phone cockpit's AUTO reads FM from it. Skipped when false.
@@ -2495,6 +2501,29 @@ pub struct RadioStatus {
     /// scale and cannot define it.
     #[serde(default)]
     pub rated_watts: u32,
+}
+
+/// Why the licence refuses a data over for its MODE alone ([`RadioStatus::data_mode_refusal`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataModeRefusal {
+    /// The rule that refuses it.
+    pub rule: DataModeRule,
+    /// The mode as the operator picked it, period and submode included: `"Q65-30E"`, `"MSK144-15"`.
+    pub mode: String,
+}
+
+/// The rules [`DataModeRefusal`] names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DataModeRule {
+    /// Wider than the 2.8 kHz US data is held to below 28.3 MHz: Q65-30E and Q65-15D.
+    TooWide,
+    /// Faster than the 300 baud US data is held to on 2200 m and 630 m: MSK144.
+    TooFast,
+    /// MSK144 keys at 1500 Hz above the dial whatever the TX marker says, and its signal there
+    /// is outside the licence while the marker is not.
+    FixedCentre,
 }
 
 /// serde default helper: TX drive defaults to 0.9.

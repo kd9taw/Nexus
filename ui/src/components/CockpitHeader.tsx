@@ -154,6 +154,20 @@ function usePopoverLift(ref: RefObject<HTMLDivElement | null>, pinned: boolean) 
   }, [ref, pinned])
 }
 
+/** The words for a licence lock that is the data MODE alone (the engine's `dataModeRefusal`): the
+ *  frequency would key for another mode, so name the rule that refuses this one, and the mode. */
+function dataModeLockTitle(why: NonNullable<AppSnapshot['radio']['dataModeRefusal']>): string {
+  const mode = why.mode
+  switch (why.rule) {
+    case 'tooWide':
+      return t('cockpit.header.readout.txLock.tooWide', { mode })
+    case 'tooFast':
+      return t('cockpit.header.readout.txLock.tooFast', { mode })
+    case 'fixedCentre':
+      return t('cockpit.header.readout.txLock.fixedCentre', { mode })
+  }
+}
+
 export function CockpitHeader({
   snap,
   onSnap,
@@ -337,11 +351,15 @@ export function CockpitHeader({
           className="ch-readout well"
           ref={readoutRef}
           title={
-            digitTune
-              ? t('cockpit.header.readout.digitTune.title')
-              : wheelTune
-                ? t('cockpit.header.readout.wheelTune.title')
-                : undefined
+            // The red readout's reason when the data MODE is the whole licence lock; every other
+            // lock keeps the red readout alone, as before.
+            radio.dataModeRefusal
+              ? dataModeLockTitle(radio.dataModeRefusal)
+              : digitTune
+                ? t('cockpit.header.readout.digitTune.title')
+                : wheelTune
+                  ? t('cockpit.header.readout.wheelTune.title')
+                  : undefined
           }
         >
           <FrequencyReadout
