@@ -1886,14 +1886,16 @@ export function OperateCockpit({
               DXpedition pile-up is actually worked, and "UP 5" is the ordinary case: the spot
               parser already reads the offset out of the comment and commands it, but an
               operator who tuned to the DX by hand had no control at all. NOT a stop control —
-              see SplitControl's header. */}
-          {snap.radio.catOk === true && (
-            <SplitControl
-              snap={snap}
-              onSnap={onSnap}
-              onError={(m) => pushToast(m, 'error')}
-            />
-          )}
+              see SplitControl's header.
+              DRAWN WHATEVER CAT SAYS, disabled without it (2026-11-07): this header stands above
+              the QSO strip, and the control coming and going with `catOk` re-wrapped it and moved
+              Stop TX 26 to 56 px every time CAT dropped. */}
+          <SplitControl
+            snap={snap}
+            onSnap={onSnap}
+            onError={(m) => pushToast(m, 'error')}
+            unavailable={snap.radio.catOk === true ? undefined : { title: t('cockpit.header.cat.bad.title') }}
+          />
           <div className="cockpit-layout-toggle" role="group" aria-label={t('operate.header.layout.aria')}>
             <button
               type="button"

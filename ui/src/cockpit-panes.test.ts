@@ -259,7 +259,10 @@ describe('the fence: styles.css never names a structural class', () => {
     'mycall-picker', 'station-profile-picker',
     // The TX dock's keep row (2026-11-05): parked alone while the dock is folded. A styles.css position, offset or
     // background on it would park it, or unpark it, from the sheet that cannot see the fold.
-    'cockpit-txdock-keep']) {
+    'cockpit-txdock-keep',
+    // The header's state words (2026-11-07): zero wide to the header's line breaker, so a word the radio
+    // brings never moves Stop TX. A styles.css width, padding or margin on either would give it width back.
+    'ch-statecell', 'ch-stateword']) {
     it(`styles.css declares no .${cls} rule`, () => {
       const hits = STYLES_RULES
         .map((r) => r.selector)
@@ -1783,5 +1786,39 @@ describe('THE ONE-ROW TOP BAR AND HEADER (1080p pass): what the folds show and h
     expect(blockDecl('width')(stock!.body)).toBe('var(--cw-wpm-w, 160px)')
     expect(classChainWinner([['cw-wpm', 'cw-wpm-compact']], '--cw-wpm-w')?.value).toBe('80px')
     expect(classChainWinner([['cw-wpm']], '--cw-wpm-w'), 'nothing sets it on the stock label').toBeNull()
+  })
+})
+
+describe('THE HEADER’S STATE WORDS: a word the radio brings or takes adds nothing to the header’s line breaking', () => {
+  // The header is in flow above the TX strip. A state word with a width of its own that appeared on a full
+  // line re-wrapped the header and moved Stop TX 32 px (Phone, 1920x1080, real Chrome). The cell is zero
+  // wide to the line breaker: the row gap before it, its margin, its width, padding and border sum to 0.
+  const row = [['app'], ['cockpit-header'], ['ch-mode-extras']]
+  const cell = [...row, ['ch-statecell']]
+  const px = (v: string | undefined, vh: number) => (v == null ? 0 : lengthsAt(v.replace(/\bcalc\(/g, '('), vh)[0])
+  it.each([700, 1040, 1100, 1101, 1440])('gap + margin + width + padding + border is 0 at an effective %i px', (vh) => {
+    const gap = classChainWinner(row, 'gap')
+    expect(gap, 'the header row has a gap').not.toBeNull()
+    const margin = classChainWinner(cell, 'margin-inline-start') ?? classChainWinner(cell, 'margin-left')
+    expect(margin, 'nothing cancels the row gap in front of the cell').not.toBeNull()
+    const width = classChainWinner(cell, 'width')
+    expect(width?.value, 'the cell must be zero wide: its width is its contribution to the row').toBe('0')
+    for (const p of ['padding', 'padding-left', 'padding-inline-start', 'padding-inline', 'border', 'border-left', 'border-width'])
+      expect(classChainWinner(cell, p), `${p} on the cell is width the line breaker sees`).toBeNull()
+    expect(px(gap!.value, vh) + px(margin!.value, vh) + px(width!.value, vh)).toBe(0)
+  })
+  it('it grows into the room left and clips; its words shorten rather than wrap', () => {
+    expect(classChainWinner(cell, 'flex')?.value).toBe('1 1 0')
+    expect(classChainWinner(cell, 'min-width')?.value).toBe('0')
+    expect(classChainWinner(cell, 'overflow')?.value).toBe('hidden')
+    const word = [...cell, ['ch-stateword']]
+    expect(classChainWinner(word, 'min-width')?.value).toBe('0')
+    expect(classChainWinner(word, 'white-space')?.value).toBe('nowrap')
+    expect(classChainWinner(word, 'text-overflow')?.value).toBe('ellipsis')
+    // Each word carries the gap the cell gave back, so two words do not touch.
+    expect(classChainWinner(word, 'margin-inline-start')?.value).toBe(classChainWinner(row, 'gap')?.value)
+  })
+  it('the evaluator bites: a cell with the row gap left in front of it does not sum to 0 (control)', () => {
+    expect(px('var(--chrome-extras-gap, var(--space-3))', 1440) + px('0', 1440)).not.toBe(0)
   })
 })

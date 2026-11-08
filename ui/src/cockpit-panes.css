@@ -786,6 +786,34 @@
   --chrome-extras-gap: max(var(--space-2), min(var(--space-3), (var(--vh-eff, 100vh) - 1100px) * 100));
 }
 
+/* THE HEADER'S STATE WORDS (`.ch-statecell`, Phone's header: the mic held off for DAX, the rig on a mode
+   it was not told, no rig control). They come and go with the radio, and the header stands above the TX
+   strip: a word with a width of its own that appeared on a full line re-wrapped the header and moved
+   Stop TX (32 px at 1920x1080). So the cell is the status lane's shape (styles.css `.status-lane`):
+   ZERO WIDE TO THE LINE BREAKER. `width: 0` is its basis and its contribution to the row's own size, its
+   margin cancels the row gap in front of it, and it has no padding or border (a box cannot be narrower
+   than those): gap + margin + width = 0, so the row breaks exactly where it breaks without it. It grows
+   into the room left on its line and clips; the words in it shorten to an ellipsis (`.ch-stateword`) and
+   keep the whole text in their tooltip. Each word carries the gap the cell gave back as its own margin.
+   Always drawn, words or none, so it is a box no state adds or removes. A readout: nothing in it keys,
+   stops or tunes anything. */
+.ch-statecell {
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  margin-inline-start: calc(-1 * var(--chrome-extras-gap, var(--space-3)));
+  overflow: hidden;
+}
+.ch-stateword {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-inline-start: var(--chrome-extras-gap, var(--space-3));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* THE CW AND PHONE HEADERS' ⋯ (components/HeaderOverflow), at md and lg: memories, the rotator, split
    and REC behind one button, so the header is one row. Its group stands OUT OF FLOW under the button,
    right-aligned to it, over the scope: opening it moves no control in the header, the TX strip or the

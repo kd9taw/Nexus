@@ -3210,31 +3210,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
           },
         }}
       >
-        {micOffForDax && (
-          <span className="ph-mode-mismatch" title={t('phone.micDax.title')}>
-            {t('phone.micDax.label')}
-          </span>
-        )}
-        {modeMismatch && (
-          <span
-            className="ph-mode-mismatch"
-            title={t('phone.rigMismatch.title', {
-              rigMode: modeMismatch,
-              mode: commandedMode,
-            })}
-          >
-            {t('phone.rigMismatch.chip', { mode: modeMismatch })}
-          </span>
-        )}
         {!chrome.fold && splitEl}
-        {!catOk && (
-          <span
-            className="ph-nocat"
-            title={(snap.radio.catDetail && catDetailText(localizeRefusal(snap.radio.catDetail))) || t('phone.noCat.title')}
-          >
-            {t('phone.noCat.label')}
-          </span>
-        )}
         {!chrome.fold && memoryEl}
         {!chrome.fold && rotorEl}
         {/* The Spot button, as Operate's header has had it (OperateCockpit 📢): one click opens
@@ -3282,6 +3258,39 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
         <label className="ph-rxmeter" title={t('phone.rxMeter.label')}>
           <LiveLevelMeter active={active} label={t('phone.rxMeter.label')} variant="compact" />
         </label>
+        {/* THE STATE WORDS: the mic held off for DAX, the rig on a mode it was not told, and no rig
+            control. They come and go with the radio, and this header stands above Stop TX: as
+            items of the row with their own width, each one that appeared on a full line re-wrapped
+            the header and moved Stop TX 32 px (1920x1080, measured). In `.ch-statecell` they take
+            only the room left on the row's last line and shorten to an ellipsis, with the whole
+            words on hover; the cell is always drawn and adds nothing to the row's line breaking
+            (cockpit-panes.css). Last, before power and the CAT pill, which says CAT ✗ in full. */}
+        <span className="ch-statecell">
+          {micOffForDax && (
+            <span className="ph-mode-mismatch ch-stateword" title={t('phone.micDax.title')}>
+              {t('phone.micDax.label')}
+            </span>
+          )}
+          {modeMismatch && (
+            <span
+              className="ph-mode-mismatch ch-stateword"
+              title={t('phone.rigMismatch.title', {
+                rigMode: modeMismatch,
+                mode: commandedMode,
+              })}
+            >
+              {t('phone.rigMismatch.chip', { mode: modeMismatch })}
+            </span>
+          )}
+          {!catOk && (
+            <span
+              className="ph-nocat ch-stateword"
+              title={(snap.radio.catDetail && catDetailText(localizeRefusal(snap.radio.catDetail))) || t('phone.noCat.title')}
+            >
+              {t('phone.noCat.label')}
+            </span>
+          )}
+        </span>
       </CockpitHeader>
 
       {/* THE SCOPE STRIP, ⊞-hideable since 2026-08-16. The shell's four-child census is
