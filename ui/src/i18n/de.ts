@@ -1227,6 +1227,8 @@ export const DE: PartialCatalog = {
   "settings.integrations.logSpaceWeather.label": "Weltraumwetter bei jedem QSO loggen",
   "settings.integrations.logSpaceWeather.hint": "Trägt den planetaren K-Index, den A-Index und den Solarflux in jedes geloggte QSO ein (ADIF K_INDEX, A_INDEX, SFI), aus dem letzten Wert, den Nexus abgerufen hat. Ist dieser Wert älter als 3 Stunden, wird nichts eingetragen.",
   "prop.engine.fallback": "modelliert: P.533 konnte nicht laufen",
+  "prop.words.p533.title": "Die Wörter von P.533: Excellent, SSB an 3 von 4 Tagen zur besten Stunde des Bandes nutzbar; Good, CW an 3 von 4 Tagen nutzbar; Fair, FT8 an der Hälfte der Tage nutzbar; Marginal, FT8 an 1 von 10 Tagen.",
+  "prop.words.ring.title": "Ins DX ist das Wort eines Bandes das, das es in mindestens der Hälfte der Richtungen erreicht; seine Stunden sind die seiner besten Richtung.",
   "prop.storm.applied": "Für einen geomagnetischen Sturm angepasst, Kp bis {{kp}}.",
   "prop.storm.unsettled": "Für unruhige geomagnetische Bedingungen angepasst, Kp bis {{kp}}.",
   "prop.storm.someHours": "Stunden ohne Kp-Vorhersage sind nicht angepasst.",

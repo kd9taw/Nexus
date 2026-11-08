@@ -87,10 +87,13 @@ describe('the band tiles, drawn', () => {
   })
 
   it('a word nobody backs says it is the simple model, and a heard band does not', () => {
-    render(<BandTiles prop={snap(BANDS)} nowMs={NOW_MS} />)
+    render(<BandTiles simpleModelNote prop={snap(BANDS)} nowMs={NOW_MS} />)
     const title = (band: string) => tiles().find((b) => b.querySelector('.bt-band')!.textContent === band)!.title
     expect(title('80m')).toContain('the simple model, not P.533')
     expect(title('40m')).not.toContain('simple model')
+    cleanup()
+    render(<BandTiles prop={snap(BANDS)} nowMs={NOW_MS} />)
+    expect(title('80m'), 'a station on the simple model is not told it').not.toContain('P.533')
   })
 
   it('a click shows the band on the map', () => {

@@ -3576,8 +3576,7 @@ pub enum Audience {
     /// export (the Logbook's, an operator's, an activation's, the selected rows) and the logging
     /// programs Nexus hands a contact to (DXKeeper, HRD Logbook). [`Self::OwnLog`] less what is
     /// Nexus's alone: the path it graded for a contact ([`path_stamp`]), the model's opinion,
-    /// which Nexus keeps in the operator's log for its own use and lets out nowhere (operator
-    /// ruling: "Strip from exports and uploads").
+    /// which Nexus keeps in the operator's log for its own use and lets out nowhere.
     OwnFile,
     /// Anything Nexus sends off the machine BY ITSELF: every logbook service (QRZ, ClubLog,
     /// eQSL, HRDLog.net, Cloudlog/Wavelog, LoTW) and the broadcast sinks. Private fields are

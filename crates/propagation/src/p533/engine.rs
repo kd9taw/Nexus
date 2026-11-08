@@ -210,8 +210,10 @@ impl PathPredictor for P533Engine {
     }
 }
 
-/// The day's word for one P.533 band, from the modes it carries at their best hour
-/// (`mode_hourly`: each mode's circuit reliability, 0..1, per UTC hour).
+/// The day's word for one P.533 band, from the modes it carries, each at its own best hour of the
+/// day (`mode_hourly`: each mode's circuit reliability, 0..1, per UTC hour). The modes usually
+/// peak in the same hour; where they do not, the word can be a little more generous than any one
+/// hour gives.
 ///
 /// The heuristic's score thresholds ([`Workability::from_score`]) cannot be reused on P.533's
 /// score. That score is the reliability at FT8's required SNR, and it saturates. Measured over
@@ -220,7 +222,7 @@ impl PathPredictor for P533Engine {
 /// Excellent. An equal-share mapping onto the heuristic's words puts Excellent at exactly 1.000,
 /// so no score threshold separates them. The modes P.533 already models do:
 ///
-/// - **Excellent:** SSB usable on three days in four at the band's best hour;
+/// - **Excellent:** SSB usable on three days in four at its best hour;
 /// - **Good:** CW usable on three days in four;
 /// - **Fair:** FT8 usable on half the days, the engine's own "usable" line (`bcr_usable_pct`);
 /// - **Marginal:** FT8 usable on one day in ten;
@@ -228,8 +230,12 @@ impl PathPredictor for P533Engine {
 ///
 /// On the same sample at 100 W that reads 7% Closed, 4% Marginal, 25% Fair, 37% Good and 26%
 /// Excellent, against the heuristic's 11%, 12%, 12%, 45% and 20%. Power still counts: at 5 W no
-/// band reads Excellent, and at 1 kW 55% do. Simulation only: the method and tables are in the
-/// branch report, and the cut-offs are for the bench to confirm.
+/// band reads Excellent, and at 1 kW 55% do. Simulation only, measured offline; the cut-offs are
+/// for the bench to confirm.
+///
+/// The band's time window is still the score's: the hours at or above 0.30 ([`best_window`]). So
+/// a Marginal band (FT8 between one day in ten and half the days) can still show a window, where
+/// under the score's thresholds a window meant Fair or better.
 ///
 /// An answer with no per-mode grid falls back to the score's own thresholds.
 pub(crate) fn p533_workability(mode_hourly: &[ModeHourly], score: f32) -> Workability {

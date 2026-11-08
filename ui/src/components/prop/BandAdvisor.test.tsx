@@ -9,8 +9,13 @@ import { BandAdvisor } from './BandAdvisor'
 afterEach(cleanup)
 
 describe('the Band Advisor', () => {
-  it('labels its model as the simple one, in both views', () => {
-    const { container } = render(<BandAdvisor bands={[]} />)
+  it('labels its model as the simple one for a station on P.533', () => {
+    const { container } = render(<BandAdvisor simpleModelNote bands={[]} />)
     expect(container.querySelector('.ba-caption')!.textContent).toContain('the simple model, not P.533')
+  })
+
+  it('says nothing about P.533 to a station that chose the simple model', () => {
+    const { container } = render(<BandAdvisor bands={[]} />)
+    expect(container.querySelector('.ba-caption')!.textContent).not.toContain('P.533')
   })
 })

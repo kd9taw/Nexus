@@ -7923,6 +7923,8 @@ export const FR: PartialCatalog = {
   "settings.integrations.openingWatch.hint": "Surveille l'activité VHF/10 m autour de votre QTH (pas seulement vos propres contacts) pour que les ouvertures signalent « ouvert autour de vous » avant même d'avoir contacté quelqu'un. Effectif au redémarrage.",
   "settings.integrations.openingWatch.label": "Veille des ouvertures proches",
   "prop.engine.fallback": "modélisé : P.533 n'a pas pu s'exécuter",
+  "prop.words.p533.title": "Les mots de P.533 : Excellent, SSB utilisable 3 jours sur 4 à la meilleure heure de la bande ; Good, CW utilisable 3 jours sur 4 ; Fair, FT8 utilisable un jour sur deux ; Marginal, FT8 1 jour sur 10.",
+  "prop.words.ring.title": "Vers le DX, le mot d’une bande est celui qu’elle atteint dans au moins la moitié des directions ; ses heures sont celles de sa meilleure direction.",
   "prop.storm.applied": "Ajusté pour un orage géomagnétique, Kp jusqu’à {{kp}}.",
   "prop.storm.unsettled": "Ajusté pour des conditions géomagnétiques agitées, Kp jusqu’à {{kp}}.",
   "prop.storm.someHours": "Les heures sans prévision de Kp ne sont pas ajustées.",

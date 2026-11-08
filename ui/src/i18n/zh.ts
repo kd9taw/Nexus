@@ -3332,6 +3332,8 @@ export const ZH: PartialCatalog = {
   "settings.integrations.propEngine.p533": "ITU-R P.533（完整物理模型，默认）",
   "settings.integrations.propEngine.hint": "驱动每电台路径展望 + 24 小时 频段×小时 网格。默认的 P.533 是真实的电路可靠性方法（对照 ITU 参考验证；每次预测约 0.1 秒，使用你的电台功率）。实时报点始终优先于任何模型。",
   "prop.engine.fallback": "建模：P.533 无法运行",
+  "prop.words.p533.title": "P.533 的评语：Excellent，在该频段最佳时段 4 天中有 3 天可用 SSB；Good，4 天中有 3 天可用 CW；Fair，一半日子可用 FT8；Marginal，10 天中有 1 天可用 FT8。",
+  "prop.words.ring.title": "对 DX 方向，频段的评语是它在至少一半方向上能达到的评语；其时段取最佳方向的时段。",
   "prop.engine.note": "预测现在使用 P.533，因此部分频段的结果已有变化。要改回，请打开 设置 ▸ 服务 ▸ 预测引擎。",
   "prop.storm.applied": "已按地磁暴修正，Kp 最高 {{kp}}。",
   "prop.storm.unsettled": "已按地磁扰动修正，Kp 最高 {{kp}}。",

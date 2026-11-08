@@ -7923,6 +7923,8 @@ export const ES: PartialCatalog = {
   "settings.integrations.openingWatch.hint": "Vigila la actividad en VHF/10 m cerca de tu QTH (no solo tus propios contactos) para que las aperturas se marquen como \"abierto a tu alrededor\" antes de que hayas trabajado a nadie. Efecto al reiniciar.",
   "settings.integrations.openingWatch.label": "Vigilancia de aperturas cercanas",
   "prop.engine.fallback": "modelado: P.533 no pudo ejecutarse",
+  "prop.words.p533.title": "Las palabras de P.533: Excellent, SSB utilizable 3 días de cada 4 en la mejor hora de la banda; Good, CW utilizable 3 días de cada 4; Fair, FT8 utilizable la mitad de los días; Marginal, FT8 1 día de cada 10.",
+  "prop.words.ring.title": "Hacia el DX, la palabra de una banda es la que alcanza en al menos la mitad de las direcciones; sus horas son las de su mejor dirección.",
   "prop.storm.applied": "Ajustado por una tormenta geomagnética, Kp hasta {{kp}}.",
   "prop.storm.unsettled": "Ajustado por condiciones geomagnéticas inestables, Kp hasta {{kp}}.",
   "prop.storm.someHours": "Las horas sin previsión de Kp no se ajustan.",

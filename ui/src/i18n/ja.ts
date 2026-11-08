@@ -6601,6 +6601,8 @@ export const JA: PartialCatalog = {
   "settings.integrations.logSpaceWeather.label": "交信ごとに宇宙天気を記録",
   "settings.integrations.logSpaceWeather.hint": "Nexusが最後に取得した値から、惑星K指数・A指数・太陽フラックスを記録するすべての交信に付記します（ADIF K_INDEX、A_INDEX、SFI）。その値が3時間より古い場合は何も付記しません。",
   "prop.engine.fallback": "モデル計算：P.533 を実行できませんでした",
+  "prop.words.p533.title": "P.533 の表示：Excellent はバンドの最良の時間帯に SSB が 4 日に 3 日使える、Good は CW が 4 日に 3 日使える、Fair は FT8 が 2 日に 1 日使える、Marginal は FT8 が 10 日に 1 日使える。",
+  "prop.words.ring.title": "DX 方向では、バンドの表示は少なくとも半数の方向で届く評価です。時間帯は最良の方向のものです。",
   "prop.storm.applied": "地磁気嵐のため補正済み（Kp 最大 {{kp}}）。",
   "prop.storm.unsettled": "地磁気の乱れのため補正済み（Kp 最大 {{kp}}）。",
   "prop.storm.someHours": "Kp 予報のない時間帯は補正していません。",

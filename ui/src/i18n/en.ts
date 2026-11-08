@@ -11337,6 +11337,12 @@ export const EN = {
   'prop.power.default': 'Assumes 100 W: no station power is set and the radio has not reported its output.',
   'prop.power.amplifierSetUp': 'An amplifier is set up, so the power on the air may be higher.',
   'prop.bands.simpleModel': 'With nothing heard, a band\'s word comes from the simple model, not P.533.',
+  // The hover on a P.533 answer's words (Band Outlook, the path card). ⚠️ The five words are
+  // the backend's, shown in English everywhere: keep them verbatim, and `P.533`, SSB, CW, FT8.
+  'prop.words.p533.title':
+    'P.533\'s words: Excellent, SSB usable on 3 days in 4 at the band\'s best hour; Good, CW usable on 3 days in 4; Fair, FT8 usable on half the days; Marginal, FT8 on 1 day in 10.',
+  'prop.words.ring.title':
+    'Toward DX, a band\'s word is the one it reaches in at least half the directions; its hours are its best direction\'s.',
   'prop.engine.note':
     'Predictions now use P.533, so some band answers have changed. To go back, open Settings ▸ Services ▸ Prediction engine.',
   'connect.engine.outlook': 'modelled · DX',

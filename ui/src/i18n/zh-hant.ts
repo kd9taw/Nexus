@@ -3334,6 +3334,8 @@ export const ZH_HANT: PartialCatalog = {
   "settings.integrations.propEngine.p533": "ITU-R P.533（完整物理模型，預設）",
   "settings.integrations.propEngine.hint": "驅動每電台路徑展望 + 24 小時 頻段×小時 網格。預設的 P.533 是真實的電路可靠性方法（對照 ITU 參考驗證；每次預測約 0.1 秒，使用你的電台功率）。即時報點始終優先於任何模型。",
   "prop.engine.fallback": "建模：P.533 無法執行",
+  "prop.words.p533.title": "P.533 的評語：Excellent，在該頻段最佳時段 4 天中有 3 天可用 SSB；Good，4 天中有 3 天可用 CW；Fair，一半日子可用 FT8；Marginal，10 天中有 1 天可用 FT8。",
+  "prop.words.ring.title": "對 DX 方向，頻段的評語是它在至少一半方向上能達到的評語；其時段取最佳方向的時段。",
   "prop.engine.note": "預測現在使用 P.533，因此部分頻段的結果已有變化。要改回，請開啟 設定 ▸ 服務 ▸ 預測引擎。",
   "prop.storm.applied": "已按地磁暴修正，Kp 最高 {{kp}}。",
   "prop.storm.unsettled": "已按地磁擾動修正，Kp 最高 {{kp}}。",

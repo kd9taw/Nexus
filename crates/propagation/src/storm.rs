@@ -76,11 +76,24 @@ fn hour_kp(
 
 /// What the correction depends on beyond what the caches already key on: every Kp above 2 that
 /// could reach an hour, from now on. Empty on a quiet sky, so a cache keeps its key.
+///
+/// SWPC's latest Kp is its 1-minute estimate, which moves in thirds every few minutes. It corrects
+/// only the current hour, and only when no outlook period holds now ([`hour_kp`]), so only then is
+/// it part of the key: rounded to its thirds, with the hour it corrects. Otherwise a held forecast
+/// would see every cache start cold each time the estimate ticked, for no change in any answer.
 pub fn storm_key(now: i64, kp_now: Option<f32>, forecast: Option<&KpForecast>) -> String {
     const PERIOD: i64 = 3 * 3600;
     let mut parts: Vec<String> = Vec::new();
-    if let Some(kp) = kp_now.filter(|kp| *kp > 2.0) {
-        parts.push(format!("n{kp:.2}"));
+    let period_holds_now = forecast.is_some_and(|f| {
+        f.points
+            .iter()
+            .any(|p| p.time_unix <= now && now < p.time_unix + PERIOD)
+    });
+    if !period_holds_now {
+        if let Some(kp) = kp_now.filter(|kp| *kp > 2.0) {
+            let thirds = (kp * 3.0).round() / 3.0;
+            parts.push(format!("n{thirds:.2}h{}", now.div_euclid(3600)));
+        }
     }
     if let Some(f) = forecast {
         for p in f
@@ -441,6 +454,36 @@ mod tests {
         assert_eq!(p.storm.map(|n| n.kp), Some(7.0));
     }
 
+    /// SWPC's 1-minute Kp moves every few minutes. While a forecast period holds now, it corrects
+    /// nothing, so it must not move a cache's key either.
+    #[test]
+    fn a_held_forecast_keeps_the_key_whatever_the_minute_kp_does() {
+        let f = forecast(&[
+            (T - 3600, 3.33, KpKind::Estimated),
+            (T + 7200, 3.67, KpKind::Predicted),
+        ]);
+        let keys: Vec<String> = [2.67, 3.0, 3.33, 3.67, 4.0]
+            .iter()
+            .map(|kp| storm_key(T, Some(*kp), Some(&f)))
+            .collect();
+        assert!(keys.windows(2).all(|w| w[0] == w[1]), "{keys:?}");
+        assert!(
+            !keys[0].is_empty(),
+            "the forecast's own storm Kp still keys it"
+        );
+    }
+
+    /// With no period holding now, the minute Kp is what corrects the current hour: it keys in
+    /// the product's thirds, and with the hour it corrects.
+    #[test]
+    fn without_a_forecast_the_minute_kp_keys_in_thirds_and_by_its_hour() {
+        let k = |kp: f32, t: i64| storm_key(t, Some(kp), None);
+        assert_eq!(k(3.31, T), k(3.36, T), "the same third");
+        assert_ne!(k(3.33, T), k(3.67, T), "another third");
+        assert_ne!(k(3.33, T), k(3.33, T + 3600), "another hour corrected");
+        assert_eq!(k(2.0, T), "", "quiet");
+    }
+
     #[test]
     fn the_key_names_every_storm_kp_and_nothing_quiet() {
         let f = forecast(&[
@@ -448,10 +491,16 @@ mod tests {
             (T, 5.0, KpKind::Predicted),
             (T + 3 * 3600, 2.0, KpKind::Predicted),
         ]);
-        assert_eq!(storm_key(T, Some(5.0), Some(&f)), format!("n5.00,{T}:5.00"));
+        assert_eq!(storm_key(T, Some(5.0), Some(&f)), format!("{T}:5.00"));
+        let reissued = forecast(&[
+            (T - 4 * 3600, 6.0, KpKind::Observed),
+            (T, 5.67, KpKind::Predicted),
+            (T + 3 * 3600, 2.0, KpKind::Predicted),
+        ]);
         assert_ne!(
             storm_key(T, Some(5.0), Some(&f)),
-            storm_key(T, Some(6.0), Some(&f))
+            storm_key(T, Some(5.0), Some(&reissued)),
+            "a forecast that moves is another key"
         );
     }
 }

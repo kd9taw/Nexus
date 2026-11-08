@@ -7032,6 +7032,9 @@ struct MeasuredOver {
     last_unix: u64,
     /// Still keyed: no unkey has been seen since its first reading.
     open: bool,
+    /// Its readings were the amplifier's output ([`Engine::note_amp_output`]), not the radio's
+    /// forward power: fixed when measured, so a later Operate or Standby cannot rename it.
+    from_amp: bool,
 }
 
 /// The power a path prediction assumes ([`Engine::prediction_power`]).
@@ -14344,7 +14347,7 @@ impl Engine {
         {
             return;
         }
-        self.fold_over_power(w);
+        self.fold_over_power(w, false);
     }
 
     /// Fold one amplifier output reading (watts) into the over it was measured on, for the log:
@@ -14377,7 +14380,7 @@ impl Engine {
             .measured_over
             .is_some_and(|o| o.open && now.saturating_sub(o.last_unix) <= MEASURED_OVER_GAP_SECS);
         if keyed || extends_open_over {
-            self.fold_over_power(f32::from(w));
+            self.fold_over_power(f32::from(w), true);
         }
     }
 
@@ -14406,10 +14409,9 @@ impl Engine {
         }
         if let Some(over) = self.measured_over.as_ref().filter(|o| o.peak_w > 0.0) {
             let db = (10.0 * f64::from(over.peak_w).log10()).round();
-            let from_amp = amplifier && !self.amp_in_standby();
             return PredictionPower {
                 watts: 10f64.powf(db / 10.0),
-                source: if from_amp {
+                source: if over.from_amp {
                     PredictionPowerSource::Amplifier
                 } else {
                     PredictionPowerSource::Rig
@@ -14433,13 +14435,14 @@ impl Engine {
 
     /// Fold one forward-power reading (watts) into the current over's peak, or start a new over:
     /// see [`Self::note_measured_power`].
-    fn fold_over_power(&mut self, w: f32) {
+    fn fold_over_power(&mut self, w: f32, from_amp: bool) {
         let now = now_unix_secs();
         match &mut self.measured_over {
             Some(over)
                 if over.open && now.saturating_sub(over.last_unix) <= MEASURED_OVER_GAP_SECS =>
             {
                 over.peak_w = over.peak_w.max(w);
+                over.from_amp |= from_amp;
                 over.last_unix = now;
             }
             _ => {
@@ -14447,6 +14450,7 @@ impl Engine {
                     peak_w: w,
                     last_unix: now,
                     open: true,
+                    from_amp,
                 })
             }
         }
@@ -52812,6 +52816,23 @@ mod tests {
             PredictionPowerSource::Rig,
             "0 is not a power"
         );
+    }
+
+    /// Where a measured figure came from is fixed when it is measured: an over the radio measured
+    /// stays the radio's after an amplifier is set up, rather than taking the amplifier's name.
+    #[test]
+    fn a_measured_figure_keeps_the_source_it_was_measured_from() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.station_power_w = None;
+        an_over(&mut e, &[40.0]);
+        e.settings.ensure_radio_profiles();
+        e.settings.sync_active_from_flat();
+        let id = e.settings.active_radio;
+        let p = e.settings.radios.iter_mut().find(|p| p.id == id).unwrap();
+        p.amp_model = "spe".into();
+        p.amp_port = "COM7".into();
+        let p = e.prediction_power();
+        assert_eq!((p.source, p.amplifier), (PredictionPowerSource::Rig, true));
     }
 
     #[test]
