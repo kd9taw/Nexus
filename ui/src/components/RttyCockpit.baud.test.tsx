@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 //
-// #488, wired: the RTTY screen's header carries the baud picker beside the mode badge, it saves
+// #488, wired: the RTTY screen's receive pane carries the baud picker in its head (beside Arm RX;
+// not in the cockpit header, whose width moves the TX dock at 1366×768), it saves
 // `rttyBaud` through the settings patch seam (only that field), and it is disabled while an over
 // or the TX latch is up. The picker itself is RttyBaudPicker.test.tsx.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -57,10 +58,12 @@ afterEach(cleanup)
 const picker = () => screen.getByRole('combobox', { name: 'RTTY baud rate' }) as HTMLSelectElement
 
 describe('the RTTY header’s baud picker (#488)', () => {
-  it('sits beside the badge and saves only the baud', async () => {
+  it('sits in the receive pane’s head, not the header, and saves only the baud', async () => {
     render(<RttyCockpit snap={snap} />)
     await screen.findByText('RTTY 45.45 · 170 Hz')
     await waitFor(() => expect(picker().value).toBe('45.45'))
+    expect(picker().closest('.cw-decode-head')).not.toBeNull()
+    expect(picker().closest('.cockpit-header')).toBeNull()
     fireEvent.change(picker(), { target: { value: '50' } })
     await waitFor(() => expect(patch.fields).toEqual([{ rttyBaud: 50 }]))
   })
