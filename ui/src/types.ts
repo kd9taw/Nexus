@@ -602,10 +602,12 @@ export interface BestBasis {
   kind: 'grid' | 'position' | 'entity'
   from?: 'typed' | 'logForm' | 'heard' | 'callbook' | 'logged'
   grid?: string
+  /** The callbook answered a stroked call from this base call's record: its home address. */
+  homeOf?: string
 }
 /** `get_best_times`: an answer, or the code of a case with no answer. */
 export interface BestTimesView {
-  state: 'answer' | 'noGrid' | 'enterCall' | 'unplaceable' | 'sameEntity' | 'maritime' | 'you'
+  state: 'answer' | 'noGrid' | 'enterCall' | 'unplaceable' | 'sameEntity' | 'maritime' | 'you' | 'tooClose'
   call: string
   entity?: string
   basis?: BestBasis

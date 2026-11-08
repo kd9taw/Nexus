@@ -39,6 +39,11 @@ pub(crate) struct Basis {
     from: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     grid: Option<String>,
+    /// A callbook answer for a stroked call that came from the base call's record (`EA8/DL1ABC`
+    /// answered by `DL1ABC`'s): that record's call. Its address is the home station's, so the screen
+    /// says they may be elsewhere.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    home_of: Option<String>,
 }
 
 /// Where [`place`] put the station.
@@ -68,7 +73,15 @@ pub(crate) enum NoPlace {
     Maritime,
     /// The operator's own call or square.
     You,
+    /// Closer than [`TOO_CLOSE_KM`]: the model cannot tell the bands apart.
+    TooClose,
 }
+
+/// Below this distance (km) Best times gives no answer. Measured on a release build of the P.533
+/// engine from Boston, a May evening, 100 W: at 50, 150 and 300 km it calls every band from 10 m to
+/// 160 m open 20 to 24 hours of the day (10 m on a 50 km path, which near-vertical skip never
+/// carries), so its words there would mislead; by 600 km the bands separate (10 m 13 hours, 160 m 15).
+pub(crate) const TOO_CLOSE_KM: f64 = 300.0;
 
 impl NoPlace {
     fn code(self) -> &'static str {
@@ -79,6 +92,7 @@ impl NoPlace {
             NoPlace::SameEntity => "sameEntity",
             NoPlace::Maritime => "maritime",
             NoPlace::You => "you",
+            NoPlace::TooClose => "tooClose",
         }
     }
 }
@@ -127,6 +141,7 @@ fn at_grid(call: String, grid: &str, from: &'static str) -> Option<Placed> {
             kind: "grid",
             from: Some(from),
             grid: Some(g),
+            home_of: None,
         },
     })
 }
@@ -189,6 +204,7 @@ pub(crate) fn place(
                         kind: "position",
                         from: Some(source_word(src)),
                         grid: None,
+                        home_of: None,
                     },
                 },
             });
@@ -210,8 +226,33 @@ pub(crate) fn place(
             kind: "entity",
             from: None,
             grid: None,
+            home_of: None,
         },
     })
+}
+
+/// `placed`, unless it is closer to the operator's grid than [`TOO_CLOSE_KM`].
+pub(crate) fn not_too_close(placed: Placed, mygrid: &str) -> Result<Placed, NoPlace> {
+    match maidenhead_to_latlon(mygrid.trim()) {
+        Some(me) if haversine_km(me, placed.at) < TOO_CLOSE_KM => Err(NoPlace::TooClose),
+        _ => Ok(placed),
+    }
+}
+
+/// `placed` with the base call's provenance: when its location is the callbook's and the callbook
+/// answered `asked` from another record (`record_call`, a stroked call's base), the basis names it.
+/// `note_lookup_fix` keys the fix on the call asked even then; the rotator's aim is left as it is.
+pub(crate) fn with_home_of(mut placed: Placed, record_call: Option<&str>) -> Placed {
+    if placed.basis.from != Some("callbook") {
+        return placed;
+    }
+    if let Some(rec) = record_call
+        .map(normalise)
+        .filter(|r| !r.is_empty() && *r != placed.call)
+    {
+        placed.basis.home_of = Some(rec);
+    }
+    placed
 }
 
 /// What `get_best_times` answers.
@@ -311,7 +352,10 @@ pub(crate) async fn get_best_times(
         let station = PathStation::read(&eng);
         let fixes = labelled_station_fixes(&eng, &asked);
         let st = eng.settings();
-        let placed = place(&asked, grid.as_deref(), &st.mycall, &st.mygrid, &fixes);
+        let record = eng.callbook_answer(&asked).map(|a| a.call.clone());
+        let placed = place(&asked, grid.as_deref(), &st.mycall, &st.mygrid, &fixes)
+            .and_then(|p| not_too_close(p, &st.mygrid))
+            .map(|p| with_home_of(p, record.as_deref()));
         (station, placed, tx_bands(st.license_class, mode))
     };
     let placed = match placed {
@@ -439,6 +483,40 @@ mod tests {
         // A bare grid in the box answers for that square.
         let p = place(" jo21 ", None, MYCALL, MYGRID, &[]).unwrap();
         assert_eq!((p.call.as_str(), p.basis.from), ("JO21", Some("typed")));
+    }
+
+    #[test]
+    fn a_callbook_answer_from_the_base_calls_record_says_whose_address_it_is() {
+        let book = [(FixSource::Callbook, g("JO31"))];
+        let p = with_home_of(
+            place("EA8/DL1ABC", None, MYCALL, MYGRID, &book).unwrap(),
+            Some("dl1abc"),
+        );
+        assert_eq!(p.basis.home_of.as_deref(), Some("DL1ABC"));
+        // Negative controls: the record is the call itself; the location is not the callbook's.
+        let p = with_home_of(
+            place("DL1ABC", None, MYCALL, MYGRID, &book).unwrap(),
+            Some("DL1ABC"),
+        );
+        assert_eq!(p.basis.home_of, None);
+        let heard = [(FixSource::Heard, g("IL18"))];
+        let p = with_home_of(
+            place("EA8/DL1ABC", None, MYCALL, MYGRID, &heard).unwrap(),
+            Some("DL1ABC"),
+        );
+        assert_eq!(p.basis.home_of, None);
+    }
+
+    #[test]
+    fn a_station_under_300_km_gets_no_answer_and_one_beyond_does() {
+        // FN42 (Boston) to FN31 is about 160 km; to FN20 about 390 km.
+        let near = place("W1ABC", Some("FN31"), "K1XX", MYGRID, &[]).unwrap();
+        assert_eq!(
+            not_too_close(near, MYGRID).map(|p| p.call),
+            Err(NoPlace::TooClose)
+        );
+        let far = place("W1ABC", Some("FN20"), "K1XX", MYGRID, &[]).unwrap();
+        assert!(not_too_close(far, MYGRID).is_ok());
     }
 
     #[test]

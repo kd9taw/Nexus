@@ -90,6 +90,7 @@ describe('the states with no answer', () => {
     expect(say('unplaceable')).toMatch(/can't place this call/)
     expect(say('maritime')).toMatch(/^Maritime or aeronautical mobile: location unknown/)
     expect(say('you')).toBe("That's you.")
+    expect(say('tooClose')).toBe('EA8ABC is under 300 km away. That close, the model cannot tell the bands apart, so Nexus gives no answer.')
     expect(stateLine(view({ state: 'sameEntity', entity: 'United States', basis: undefined, answer: undefined }))).toMatch(
       /where in United States they are/,
     )
@@ -113,6 +114,9 @@ describe('the basis line', () => {
     expect(basisLine(view({ basis: { kind: 'grid', from: 'logged', grid: 'IL18' } }))).toMatch(/from your log\. It may be old\.$/)
     expect(basisLine(view({ basis: { kind: 'grid', from: 'typed', grid: 'IL28' } }))).toMatch(/the grid you typed/)
     expect(basisLine(view({ basis: { kind: 'position', from: 'callbook' } }))).toMatch(/callbook's position/)
+    expect(basisLine(view({ call: 'EA8/DL1ABC', basis: { kind: 'grid', from: 'callbook', grid: 'JO31', homeOf: 'DL1ABC' } }))).toBe(
+      'Worked out from grid JO31, from the callbook. That is the home address of DL1ABC; they may be elsewhere.',
+    )
     const centre = basisLine(view({ basis: { kind: 'entity' } }))
     expect(centre).toBe('Worked out from the centre of Canary Islands. Rough.')
     for (const from of ['typed', 'logForm', 'heard', 'callbook', 'logged'] as const)

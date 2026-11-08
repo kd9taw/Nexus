@@ -61,6 +61,8 @@ export function stateLine(v: BestTimesView): string | null {
       return t('bestTimes.state.maritime')
     case 'you':
       return t('bestTimes.state.you')
+    case 'tooClose':
+      return t('bestTimes.state.tooClose', { call: v.call })
   }
 }
 
@@ -84,6 +86,12 @@ export function whereLine(v: BestTimesView, units: Units): string | null {
 
 /** What the location rests on. Always present with an answer. */
 export function basisLine(v: BestTimesView): string | null {
+  const line = basisWords(v)
+  const home = v.basis?.homeOf
+  return line && home ? `${line} ${t('bestTimes.basis.homeOf', { call: home })}` : line
+}
+
+function basisWords(v: BestTimesView): string | null {
   const b = v.basis
   if (!b) return null
   if (b.kind === 'entity') return t('bestTimes.basis.entity', { entity: v.entity ?? v.call })
