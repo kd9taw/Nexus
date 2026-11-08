@@ -15167,6 +15167,10 @@ export const EN = {
   // report, as against the blank rows before the first over, which the line above answers.
   'phone.unavail.meter': 'Your radio does not report {{meter}} over CAT — the bar stays empty.',
   'meters.tx.swr.title': 'Antenna match — keep it under 2:1',
+  // #476: the same tip once the operator has switched on the high-SWR cutoff: the number it names
+  // is theirs, the one Nexus acts on, not the fixed rule of thumb above.
+  'meters.tx.swr.cutoff':
+    'Antenna match — Nexus stops transmitting above {{ratio}}:1, your setting in Settings ▸ Radio ▸ Transmit limits & sharing',
   // ⚠️ THE SAME READING, ON A SCALE NEXUS CANNOT VOUCH FOR (2026-09-20). `swrScaleVerified`
   // is false — the rig is outside the two paths whose meter curve we can point at — so the
   // line above must not be shown: "under 2:1" is a threshold on an absolute scale, and the

@@ -13657,6 +13657,16 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: var(--state-weak);
   border-color: var(--state-weak);
 }
+/* #485: the held peak, one segment past the lit ones: its colour at half strength inside a full
+   outline, so it reads as a mark on the scale and not as more signal. */
+.ph-smeter-seg.peak {
+  background: color-mix(in srgb, var(--state-good) 45%, var(--bg));
+  border-color: var(--state-good);
+}
+.ph-smeter-seg.hot.peak {
+  background: color-mix(in srgb, var(--state-weak) 45%, var(--bg));
+  border-color: var(--state-weak);
+}
 /* The printed scale. Absolutely positioned by the same fraction that drives the segments, so a
    tick and the bar beneath it cannot disagree about where S9 falls. The row reserves its own
    height so the pane does not resize as the reading moves. */
@@ -21587,9 +21597,6 @@ body.pane-dragging {
   padding: 1px var(--space-2);
   border: 1px solid transparent;
   border-radius: 999px;
-}
-.cockpit-qso.rx .cq-statecap {
-  color: var(--state-good, #29c281);
 }
 /* Operate's ON AIR sign (see `--on-air-*`). Its rim is what separates it from the strip's own
    red wash above. */
@@ -32570,6 +32577,12 @@ tr.sel .aprs-sym {
 }
 .setup-health .health-item.unknown .health-dot {
   background: var(--text-faint);
+}
+/* #486: transmit switched on but not yet proven by power out: the green as a ring, so "TX on"
+   no longer wears TX off's grey and still reads apart from the solid green a tune earns. */
+.setup-health .health-item.armed .health-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--state-good);
 }
 .setup-health .health-prove {
   margin-left: auto;

@@ -3444,6 +3444,7 @@
 "3","meters.tx.aria","Transmit meters","Индикаторы передачи","",""
 "3","meters.tx.idle","TX meters — {{when}}","Индикаторы TX — {{when}}","{{when}} | TX",""
 "3","meters.tx.swr.title","Antenna match — keep it under 2:1","Согласование антенны — держите ниже 2:1","",""
+"3","meters.tx.swr.cutoff","Antenna match — Nexus stops transmitting above {{ratio}}:1, your setting in Settings ▸ Radio ▸ Transmit limits & sharing","Согласование антенны — Nexus прекращает передачу выше {{ratio}}:1, ваша настройка в разделе Настройки ▸ Трансивер ▸ Ограничения передачи и общий доступ","",""
 "3","meters.tx.swr.unverified","Antenna match — this is the radio's own raw figure, and Nexus has no verified scale for this model, so it cannot tell you what counts as high here. Watch which way it moves as you tune; the absolute number may be well out, and nothing stops your transmission on it.","Согласование антенны — это необработанное значение самого трансивера, а у Nexus нет проверенной шкалы для этой модели, поэтому он не может сказать, что здесь считается высоким. Следите, в какую сторону оно меняется при настройке; абсолютное число может сильно отличаться от реального, и передача из-за него не прерывается.","Nexus",""
 "3","meters.tx.alc.title","ALC — set mic gain so SSB peaks just tickle the zone, never peg it","ALC — установите усиление микрофона так, чтобы пики SSB лишь касались зоны, но никогда не зашкаливали","ALC | SSB",""
 "3","meters.tx.po.title","Actual output power","Фактическая выходная мощность","",""

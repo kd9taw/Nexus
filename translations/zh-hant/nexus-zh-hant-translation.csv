@@ -3292,6 +3292,7 @@
 "3","meters.tx.aria","Transmit meters","發射表","",""
 "3","meters.tx.idle","TX meters — {{when}}","TX 表 — {{when}}","{{when}} | TX",""
 "3","meters.tx.swr.title","Antenna match — keep it under 2:1","天線匹配 — 保持在 2:1 以下","",""
+"3","meters.tx.swr.cutoff","Antenna match — Nexus stops transmitting above {{ratio}}:1, your setting in Settings ▸ Radio ▸ Transmit limits & sharing","天線匹配 — 高於 {{ratio}}:1 時 Nexus 停止發射，即你在 設定 ▸ 電台 ▸ 發射限制與共享 中的設定","","Filled by the maintainer, pending translator review."
 "3","meters.tx.swr.unverified","Antenna match — this is the radio's own raw figure, and Nexus has no verified scale for this model, so it cannot tell you what counts as high here. Watch which way it moves as you tune; the absolute number may be well out, and nothing stops your transmission on it.","天線匹配 — 這是電台自身的原始數值，而 Nexus 沒有為該型號驗證過的刻度，因此無法告知你何為過高。調諧時注意其變化方向；絕對值可能偏差很大，且不會據此阻止你發射。","Nexus",""
 "3","meters.tx.alc.title","ALC — set mic gain so SSB peaks just tickle the zone, never peg it","ALC — 設定麥克風增益，使 SSB 峰值僅輕觸該區，切勿頂滿","ALC | SSB",""
 "3","meters.tx.po.title","Actual output power","實際輸出功率","",""

@@ -345,7 +345,10 @@ export function OperateQsoStrip({
           cannot key. What is on the air is still shown first. */}
       {radio && (
         <span
-          className="cq-statecap"
+          // #482: the state rides on the caption itself, as on every other screen's strip
+          // (CockpitTxStrip): the strip's `rx` wash means "not on the air", TX off included, so
+          // painting the caption from it made "TX off" green here and white everywhere else.
+          className={`cq-statecap ${onAir ? 'tx' : radio.txRefusal ? 'off' : radio.txEnabled ? 'rx' : 'off'}`}
           title={
             !onAir && radio.txRefusal
               ? radio.txRefusal

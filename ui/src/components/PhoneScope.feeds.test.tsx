@@ -18,6 +18,8 @@ const src = {
   seq: 0,
   /** The radio's scope has stopped: the RF reads come back empty. */
   stalled: false,
+  /** The radio powered down (#463): no RF row and no audio either, so every read comes back empty. */
+  dead: false,
   calls: [] as string[],
 }
 const rfFrame = () => ({
@@ -43,11 +45,12 @@ const empty = () => ({ seq: 0, tMs: Date.now(), source: '', loHz: 0, hiHz: 0, sc
 vi.mock('../api', () => ({
   getScopeFrame: () => {
     src.calls.push('scope')
+    if (src.dead) return Promise.resolve(empty())
     return Promise.resolve(src.source === 'audio' || src.stalled ? audioFrame() : rfFrame())
   },
   getAudioScopeFrame: () => {
     src.calls.push('audio')
-    return Promise.resolve(audioFrame())
+    return Promise.resolve(src.dead ? empty() : audioFrame())
   },
   getRfFrame: () => {
     src.calls.push('rf')
@@ -56,7 +59,7 @@ vi.mock('../api', () => ({
 }))
 
 beforeEach(() => {
-  Object.assign(src, { source: 'civ', seq: 0, stalled: false, calls: [] })
+  Object.assign(src, { source: 'civ', seq: 0, stalled: false, dead: false, calls: [] })
   localStorage.clear()
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance', 'Date'] })
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(performance.now()), 16))
@@ -195,5 +198,30 @@ describe('a compact scope (the stacked halves of CW Both)', () => {
     expect(host.textContent).toContain('chips')
     expect(document.querySelector('.ph-scope > .ph-scope-smeter')).toBeNull()
     host.remove()
+  })
+})
+
+// #463: the radio powered down and its scope went away, but the last picture stayed on screen,
+// frozen, as if it were still live. A source that went quiet hands out an EMPTY frame (the
+// engine's `scope_frame_after`: "unavailable", not "keep the last picture"); the RF pane already
+// blanked on it, the rig scope and the audio view kept drawing the last frame.
+describe('a scope whose source went quiet clears, rather than freezing the last picture (#463)', () => {
+  const picture = () => document.querySelector('.ph-scope-render') as HTMLElement
+  it.each([
+    ['the rig scope', 'scope'],
+    ['the audio view', 'audio'],
+  ] as const)('%s blanks and says so, and comes back with the next frame', async (_name, feed) => {
+    render(<PhoneScope feed={feed} cockpit="phone" transmitting={false} theme="dark" viewLoHz={200} viewHiHz={3000} />)
+    await run(300)
+    expect(picture().style.visibility).toBe('')
+    expect(screen.queryByText('Scope data unavailable.')).toBeNull()
+    src.dead = true
+    await run(300)
+    expect(picture().style.visibility).toBe('hidden')
+    expect(screen.getByText('Scope data unavailable.')).toBeTruthy()
+    src.dead = false
+    await run(300)
+    expect(picture().style.visibility).toBe('')
+    expect(screen.queryByText('Scope data unavailable.')).toBeNull()
   })
 })
