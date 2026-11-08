@@ -200,6 +200,31 @@ describe("the rig's own ATU control", () => {
     }
   })
 
+  // The click a touch press ends with also FOCUSES the button it lands on (Chrome, on the press's compatibility
+  // mousedown). The menu is not modal (ui/MenuParts.tsx), so focus leaving it closes it; the button's own focus is
+  // the press that opened it, and must not (real Chrome, `scripts/browser-probe --desktop atu`: the long-press menu
+  // was gone by the time the finger lifted).
+  it('a long press on touch: the focus its closing click gives the button leaves the menu open', () => {
+    vi.useFakeTimers()
+    try {
+      mount(snapWith({ atu: true, atuSwitchOut: true }), vi.fn(), vi.fn())
+      const btn = screen.getByRole('button', { name: 'ATU ON' })
+      fireEvent.pointerDown(btn, { pointerType: 'touch' })
+      act(() => {
+        vi.advanceTimersByTime(ATU_LONG_PRESS_MS + 50)
+      })
+      fireEvent.pointerUp(btn, { pointerType: 'touch' })
+      act(() => btn.focus())
+      fireEvent.click(btn)
+      act(() => {
+        vi.advanceTimersByTime(50)
+      })
+      expect(screen.getByRole('menuitem', { name: 'Switch tuner out' })).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('the menu is offered only where the tuner can be switched out, and only while it is in', () => {
     const cases: [Record<string, unknown>, boolean, boolean][] = [
       [{ atu: true, atuSwitchOut: true }, true, true], // POSITIVE
