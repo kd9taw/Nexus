@@ -106,8 +106,8 @@ interface Props {
   specialOpBadge?: ReactNode
   rotor?: ReactNode
   telemetry?: ReactNode
-  /** THE TRANSMITTER ALARM CELL (`TxAlarmBanner`), one line on the strip's row (2026-11-07): always
-   *  drawn at one minimum width, so an alarm or a critical lane item coming or going moves nothing.
+  /** THE TRANSMITTER ALARM CELL (`TxAlarmBanner`), first on the strip's second line, after the break (2026-11-07):
+   *  always drawn at one minimum width, so an alarm or a critical lane item coming or going moves nothing.
    *  OperateCockpit passes it (`snap.txAlarms` is not in `radio`); stop-line.test.tsx checks FT. */
   alarm?: ReactNode
 }
@@ -403,6 +403,14 @@ export function OperateQsoStrip({
           below) instead of a content-dependent wrap mid-QSO. lg includes the
           1366x768 laptop (85 % auto-fit → effective 1607). */}
       <span className="cq-break" aria-hidden="true" />
+      {/* THE TRANSMITTER ALARM CELL (`TxAlarmBanner`): the FIRST cell of the strip's second line, right under
+          the cluster and Stop TX, always drawn at one minimum width. First on a line the break always starts,
+          so nothing before it can push it to a line of its own: the first line's words change with the
+          contact (the sequencer state, the DX call, the report, the rig-mode chip), and a cell at its end was
+          pushed off it and grew the strip, moving Stop TX. Not the row's last cell either: where the strip is
+          taller than the room the shell gives it (FT, ru, 900x600 pinned) its last line is below the fold,
+          and a critical alarm shown only there was on screen nowhere (review F1). */}
+      {alarm}
 
       <div className={`cq-now${stalled ? ' stalled' : ''}`} role="status">
         <span className="cq-now-label">{stalled ? t('operate.strip.now.stalled') : TX_LABEL}</span>
@@ -527,9 +535,6 @@ export function OperateQsoStrip({
       {telemetry != null && <div className={`cq-telemetry${meterStyle === 'needle' ? ' needle' : ''}`}>{telemetry}</div>}
       {/* What the radio reports beside Tune while Tune is the Flex radio's own carrier: the last
           child, on a line of its own, so it never moves the clusters or the readouts. */}
-      {/* THE TRANSMITTER ALARM CELL (`TxAlarmBanner`): the strip's last cell on its row, in the room left at
-          the line's end, always drawn at one minimum width, so an alarm never moves a control. */}
-      {alarm}
       {radio && <RadioTuneNote radio={radio} />}
     </section>
   )

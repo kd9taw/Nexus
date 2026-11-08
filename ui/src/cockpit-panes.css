@@ -787,7 +787,7 @@
 }
 
 /* THE TRANSMITTER ALARM CELL (TxAlarmBanner, `.ch-txalarm`; operator pick "One line inside the strip",
-   2026-11-07): one line IN THE TX STRIP'S ROW, beside the TX state (FT: the last cell of its row). It holds
+   2026-11-07): one line IN THE TX STRIP'S ROW, beside the TX state (FT: the first cell of its second line, under Stop TX). It holds
    the station's transmitter alarm and every critical status-lane item, which the top bar's lane may cut.
    As the header's last row an alarm moved Stop TX 26 to 38 px; as a line of the strip, the scope above
    shrank and Stop TX moved up. So the cell is ALWAYS DRAWN, alarms or none, and to the strip's line

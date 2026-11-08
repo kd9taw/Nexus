@@ -12337,7 +12337,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-weight: 700;
   cursor: pointer;
 }
-.ph-filter-step:hover {
+.ph-filter-step:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -12397,6 +12397,15 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: var(--bg);
   color: var(--text);
   cursor: pointer;
+}
+/* A control CAT cannot serve is DRAWN, DISABLED (Split on FT, CW and Phone, BW on CW, while CAT is down: a
+   control that came and went with CAT moved Stop TX). It must look dead: the app's own disabled look
+   (`.op-btn:disabled`), no pointer, and no hover (BW's hover rule above skips it). */
+.ph-split-toggle:disabled,
+.ph-split-step:disabled,
+.ph-filter-step:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .ph-split-amt {
   min-width: 3em;

@@ -10,6 +10,8 @@
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { render, cleanup, act } from '@testing-library/react'
 import { CwCockpit } from './CwCockpit'
+import { css, loadSheets } from '../cssCascade.testkit'
+import { t } from '../i18n'
 import type { AppSnapshot } from '../types'
 
 vi.setConfig({ testTimeout: 15_000 })
@@ -40,6 +42,7 @@ vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> })
 vi.mock('./SpotDialog', () => ({ SpotDialog: () => null }))
 
 beforeAll(() => {
+  loadSheets(['styles.css', 'cockpit-panes.css'])
   globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
   Element.prototype.scrollIntoView = vi.fn()
 })
@@ -76,3 +79,44 @@ describe('the CW header with CAT up and down', () => {
     for (const b of split.querySelectorAll('button')) expect((b as HTMLButtonElement).disabled).toBe(true)
   })
 })
+
+// …AND A CONTROL DRAWN DISABLED MUST LOOK DEAD (review F2): Split's and BW's buttons had no `:disabled` paint,
+// so with CAT down they looked, pointed and lit on hover exactly as live ones. Computed over the real sheets.
+describe('Split and BW with CAT down look dead and say why', () => {
+  /** Every rule that would paint `el` on hover: its selector with `:hover` taken out matches `el`. */
+  const hoverPaint = (el: Element) =>
+    [...document.styleSheets].flatMap((sh) => [...sh.cssRules]).filter((r): r is CSSStyleRule => {
+      const sel = (r as CSSStyleRule).selectorText
+      if (!sel || !sel.includes(':hover')) return false
+      const paints = ['color', 'border-color', 'background', 'background-color'].some((p) => (r as CSSStyleRule).style.getPropertyValue(p))
+      if (!paints) return false
+      return sel.split(',').some((one) => {
+        if (!one.includes(':hover')) return false
+        try { return el.matches(one.replace(/:hover/g, '')) } catch { return false }
+      })
+    }).map((r) => r.selectorText)
+
+  it('the app’s disabled look, no pointer, no hover, and "No CAT link" on hover', async () => {
+    render(<CwCockpit snap={snap(false)} theme="dark" onWorkSpot={() => {}} spots={[]} />)
+    await settle()
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>('.cockpit-header .ph-split button, .cockpit-header .ph-filter button')]
+    expect(buttons.length, 'Split’s three and BW’s two').toBe(5)
+    for (const b of buttons) {
+      expect(b.disabled).toBe(true)
+      expect(css(b, 'opacity'), `${b.className} looks live`).toBe('0.5')
+      expect(css(b, 'cursor'), `${b.className} still points`).toBe('not-allowed')
+      expect(hoverPaint(b), `${b.className} still lights on hover`).toEqual([])
+      expect(b.title, `${b.className} says what it would do, not why it cannot`).toBe(t('cockpit.header.cat.bad.title'))
+    }
+  })
+
+  it('control: with CAT up the same buttons are live, point, and light on hover', async () => {
+    render(<CwCockpit snap={snap(true)} theme="dark" onWorkSpot={() => {}} spots={[]} />)
+    await settle()
+    const step = document.querySelector<HTMLButtonElement>('.cockpit-header .ph-filter .ph-filter-step')!
+    expect(step.disabled).toBe(false)
+    expect(css(step, 'cursor')).toBe('pointer')
+    expect(hoverPaint(step).length).toBeGreaterThan(0)
+  })
+})
+

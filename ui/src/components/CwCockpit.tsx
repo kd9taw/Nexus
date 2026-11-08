@@ -2689,7 +2689,7 @@ export function CwCockpit({
             className="ph-filter-step"
             disabled={!catOk}
             onClick={() => bumpFilter(-FILTER_STEP_HZ)}
-            title={t('cw.filter.narrower.title', { step: FILTER_STEP_HZ })}
+            title={catOk ? t('cw.filter.narrower.title', { step: FILTER_STEP_HZ }) : t('cockpit.header.cat.bad.title')}
           >
             −
           </button>
@@ -2699,7 +2699,7 @@ export function CwCockpit({
             className="ph-filter-step"
             disabled={!catOk}
             onClick={() => bumpFilter(FILTER_STEP_HZ)}
-            title={t('cw.filter.wider.title', { step: FILTER_STEP_HZ })}
+            title={catOk ? t('cw.filter.wider.title', { step: FILTER_STEP_HZ }) : t('cockpit.header.cat.bad.title')}
           >
             +
           </button>

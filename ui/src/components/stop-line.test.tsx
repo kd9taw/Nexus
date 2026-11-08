@@ -627,5 +627,10 @@ describe('the transmitter alarm stands under Stop TX on every cockpit', () => {
     const stop = [...strip!.querySelectorAll('button')].find((b) => /^stop tx$/i.test(b.textContent?.trim() ?? ''))
     expect(stop, `${c.cockpit}: no Stop TX in the strip the alarm is in`).toBeDefined()
     expect(stop!.compareDocumentPosition(alarms[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // FT's strip has two lines; the cell STARTS the second, right after the break. As the row's last cell it
+    // was below the fold where the strip is taller than its room (FT, ru, 900x600 pinned: on screen nowhere);
+    // at the end of the first line, that line's changing words pushed it off and grew the strip.
+    if (strip!.classList.contains('cockpit-qso'))
+      expect(alarms[0].previousElementSibling?.classList.contains('cq-break'), `${c.cockpit}: the cell does not start the strip's second line`).toBe(true)
   })
 })
