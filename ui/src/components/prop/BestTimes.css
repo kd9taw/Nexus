@@ -1,0 +1,111 @@
+/* Best times (BestTimesPane, BestTimesCard). Content layout only: the frame sizes the box, and the
+   box's body scrolls. Side by side when the box itself is wide (`.wide`, measured by the pane),
+   else the answer above the chart. Every grower is minmax-safe: nothing here floors a width. */
+.best-times {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.bt-ask {
+  display: flex;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.bt-input {
+  flex: 1 1 8em;
+  min-width: 0;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+}
+.bt-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.best-times.wide .bt-body {
+  flex-direction: row;
+  align-items: flex-start;
+}
+.best-times.wide .bt-answer {
+  flex: 0 1 24em;
+}
+.bt-answer,
+.bt-chart {
+  min-width: 0;
+}
+.best-times.wide .bt-chart {
+  flex: 1 1 0;
+}
+.bt-answer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--fs-label);
+}
+.bt-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1);
+}
+.bt-call,
+.bt-band {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+.bt-modes {
+  display: inline-flex;
+  gap: 1px;
+}
+.bt-basis,
+.bt-state {
+  margin: 0;
+}
+.bt-basis.rough {
+  color: var(--text-dim);
+}
+.bt-now-head {
+  font-weight: 600;
+}
+.bt-sub {
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+}
+.bt-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+}
+.bt-dim,
+.bt-foot {
+  color: var(--text-dim);
+}
+.bt-foot {
+  font-size: var(--fs-micro);
+}
+.bt-promise {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-1);
+}
+.bt-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.bt-link:disabled {
+  color: var(--text-dim);
+  cursor: default;
+}
+.bt-unlicensed > * {
+  opacity: 0.35;
+}

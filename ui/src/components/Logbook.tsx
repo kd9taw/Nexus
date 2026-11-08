@@ -13,6 +13,8 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import type { Activation, ImportStats, LogExport, LoggedActivation, LoggedQso, UploadReport, UploadStatus } from '../types'
 import { ContactCard, type CardContact } from './ContactCard'
 import { Menu, type MenuEntry } from './ui/Menu'
+import { useCallMenu } from './useCallMenu'
+import { openBestTimesCard } from './BestTimesCard'
 import { RecentlyDeleted } from './RecentlyDeleted'
 import { LogTools, type LogTool } from './LogTools'
 import { useCallbookUpdateEnd } from './LogCallbookUpdate'
@@ -2205,9 +2207,21 @@ export function Logbook({
   // The row's ⋯ menu. Each item does exactly what the row's own button or menu entry did, with the
   // same handler; only the way to it changed. HRDLog and World Radio League keep no per-contact
   // state in the log, so their items say none.
+  // A right-click (or the menu key) on a row: the call menu every list shares, Best times first.
+  const callMenu = useCallMenu()
   const rowMenu = (q: LoggedQso, key: string, ref: RowRef | null): MenuEntry[] => [
     {
+      // Best times first, as on every call menu: a card beside the row's ⋯, and nothing else.
+      label: t('callMenu.bestTimes'),
+      onSelect: () =>
+        openBestTimesCard(
+          q.call,
+          document.querySelector<HTMLElement>('.log-rowmore[data-state="open"], .log-rowmore[aria-expanded="true"]') ?? document.body,
+        ),
+    },
+    {
       label: t('logbook.row.menu.spot'),
+      separatorBefore: true,
       title: t('logbook.row.spot.title', { call: q.call }),
       onSelect: () => setSpotSeed({ call: q.call, freq: q.freqMhz, mode: q.mode }),
     },
@@ -3661,6 +3675,7 @@ export function Logbook({
                     aria-rowindex={vrow.index + 2}
                     tabIndex={key === tabStop ? 0 : -1}
                     onFocus={() => setFocusKey(key)}
+                    {...callMenu.on(key, q.call, { band: q.band })}
                     ref={rowVirtualizer.measureElement}
                     style={{
                       ...placed,
@@ -3673,6 +3688,7 @@ export function Logbook({
                           : 'transparent',
                     }}
                   >
+                {callMenu.at(key)}
                 {cols.map((c) => (
                   <Fragment key={c.id}>{rowCell(c)}</Fragment>
                 ))}

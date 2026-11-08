@@ -283,6 +283,12 @@ export async function getPathOutlook(grid: string): Promise<PathPrediction> {
   return invoke<PathPrediction>('get_path_outlook', { grid })
 }
 
+/** Best times to work `call` (or the square it names): `grid` a grid typed for it this session,
+ * `mode` FT8, FT4, CW or SSB. Answers from what the shack holds; never asks the network. */
+export async function getBestTimes(call: string, grid: string | null, mode: import('./types').BestMode): Promise<import('./types').BestTimesView> {
+  return invoke<import('./types').BestTimesView>('get_best_times', { call, grid, mode })
+}
+
 /** The path grade of each Logbook row: its own stamp when it carries one made for its current
  * grid and band, else the display-only grade of the log, else null. */
 export async function logPathGrades(rows: import('./types').PathGradeAsk[]): Promise<(import('./types').PathGrade | null)[]> {

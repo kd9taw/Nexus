@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallMenu } from './useCallMenu'
 import type { SpotRow, NeedTag, AppSnapshot, FieldDayStatus } from '../types'
 import type { FreqMarker } from '../api'
 import { markerMhz } from '../features/freqMarkers'
@@ -252,6 +253,10 @@ export function BandMap({
   })
 
   /** Invert `yOf`: a point on the track is already a frequency, this just reads it back. */
+  // A right-click on a spot's label: the call menu every list shares (Best times first). Its handler
+  // stops the event, so the track's own right-click (mark a frequency) never sees it; on the track,
+  // between labels, that right-click is unchanged.
+  const callMenu = useCallMenu()
   const onTrackClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       if (tuneEnabled !== true || !win) return
@@ -463,7 +468,9 @@ export function BandMap({
                 aria-label={mark ? [s.call, ...markWords].join(' · ') : undefined}
                 // ⛔ A program's spot only tunes: never the Work, whatever it names.
                 onClick={() => (program != null ? onTciSpot?.(s) : onWorkSpot(s))}
+                {...callMenu.on(`${program ?? ''}-${s.call}-${s.freqMhz}-${i}`, s.call)}
               >
+                {callMenu.at(`${program ?? ''}-${s.call}-${s.freqMhz}-${i}`)}
                 {program != null && <span className="spot-type-badge type-tci">{tciSource(program)}</span>}
                 {beacon && <span className={`spot-type-badge ${beacon.cls}`}>{beacon.ch}</span>}
                 {badge && <span className={`spot-type-badge ${badge.cls}`}>{badge.ch}</span>}

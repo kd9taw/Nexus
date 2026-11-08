@@ -32,6 +32,7 @@ import { useCallback, useEffect, useSyncExternalStore } from 'react'
 import {
   getArrivalOutlook,
   getBandOutlook,
+  getBestTimes,
   getDxpedWindows,
   getGettingOut,
   getKc2gMuf,
@@ -47,6 +48,8 @@ import {
 import type {
   AlertView,
   ArrivalOutlook,
+  BestMode,
+  BestTimesView,
   DailySolarIndices,
   DxpedWindow,
   GettingOut,
@@ -135,6 +138,21 @@ export const PATH_REGIONS: Feed<PathRegions> = { name: 'pathRegions', load: () =
  *  station stays selected: the shack keeps the day's prediction (P.533), so each ask only moves the
  *  current hour, the Kp per hour and the route calls on. */
 export const PATH_OUTLOOK: KeyedFeed<PathPrediction> = { name: 'pathOutlook', load: (grid) => getPathOutlook(grid), everyMs: 60_000 }
+
+/** A Best times ask as a feed key: the call, a grid typed for it ('' for none) and the mode. */
+export function bestTimesKey(call: string, grid: string | null, mode: BestMode): string {
+  return JSON.stringify([call, grid ?? '', mode])
+}
+/** Best times for one call, asked again every minute while shown, as the path outlook is: the shack
+ *  keeps the day's prediction, so each ask only moves the hour, the Kp and the "now" overlay on. */
+export const BEST_TIMES: KeyedFeed<BestTimesView> = {
+  name: 'bestTimes',
+  load: (key) => {
+    const [call, grid, mode] = JSON.parse(key) as [string, string, BestMode]
+    return getBestTimes(call, grid || null, mode)
+  },
+  everyMs: 60_000,
+}
 
 /** A programme's activators on the air now, with when the answer came (the board's "Updated" line). */
 export interface OtaAnswer {
@@ -335,6 +353,11 @@ function feedFor<T>(kf: KeyedFeed<T>, key: string): Feed<T> {
 }
 
 /** A keyed feed for `key` while this component is mounted; `null` asks for nothing. */
+/** Ask one key of a keyed feed again now (a callbook answer just landed for it), when it is shown. */
+export function refreshKeyedFeed<T>(kf: KeyedFeed<T>, key: string): Promise<void> {
+  return refreshFeed(feedFor(kf, key))
+}
+
 export function useKeyedFeed<T>(kf: KeyedFeed<T>, key: string | null, enabled = true): Held<T> {
   return useFeed(key == null ? null : feedFor(kf, key), enabled)
 }

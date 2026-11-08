@@ -130,7 +130,7 @@ describe('Frame + bar — the default view to try', () => {
     expect(A().tabs).toEqual({
       left1: ['bandTiles', 'bandAdvisor', 'bestband', 'activity', 'advisory'],
       left2: ['openings', 'esNowcast', 'openingsLog', 'insights', 'bandHours', 'pathRegions'],
-      right1: ['chase', 'chaseFeed', 'selection', 'pathDay', 'contests', 'satPasses'],
+      right1: ['chase', 'chaseFeed', 'selection', 'pathDay', 'contests', 'satPasses', 'bestTimes'],
       right2: ['getout', 'spacewx', 'kpOutlook', 'measuredMuf', 'beacons', 'greyline'],
       bottom1: ['outlook', 'clock'],
       bottom2: ['rotor', 'amp'],

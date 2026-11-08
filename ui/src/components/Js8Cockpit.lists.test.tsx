@@ -358,7 +358,8 @@ describe('Band activity is JS8Call’s', () => {
     state.current = { ...js8Fixture(), controls: { filter, qsyCenterHz: 1500, hop: null } }
     await renderCockpit()
     const names = (await menuEntries(stationRow('W0IND').querySelector('.js8-row-menu')!)).map(([n, off]) => (off ? `(${n})` : n))
-    expect(names.slice(0, 3)).toEqual(['Jump to 1503 Hz', 'Centre filter at 1503 Hz', 'Jump to Fast speed'])
+    // Best times leads every call menu (BestTimesCard); JS8Call's own entries follow in its order.
+    expect(names.slice(0, 4)).toEqual(['Best times', 'Jump to 1503 Hz', 'Centre filter at 1503 Hz', 'Jump to Fast speed'])
     cleanup()
     await renderCockpit()
     await pick(document.querySelectorAll('[data-pane="offsets"] .js8-offset-row')[1].querySelector('.js8-row-menu')!, 'Centre filter at 900 Hz')
@@ -367,7 +368,7 @@ describe('Band activity is JS8Call’s', () => {
     state.current = { ...js8Fixture(), controls: { filter: { ...filter, enabled: false }, qsyCenterHz: 1500, hop: null } }
     await renderCockpit()
     const off = (await menuEntries(stationRow('W0IND').querySelector('.js8-row-menu')!)).map(([n]) => n)
-    expect(off.slice(0, 2), 'with the filter off it is not offered').toEqual(['Jump to 1503 Hz', 'Jump to Fast speed'])
+    expect(off.slice(0, 3), 'with the filter off it is not offered').toEqual(['Best times', 'Jump to 1503 Hz', 'Jump to Fast speed'])
   })
 
   it('removes one offset’s activity until it is heard again', async () => {
@@ -633,6 +634,8 @@ describe('the call list is JS8Call’s', () => {
     await renderCockpit()
     const names = (await menuEntries(stationRow('W0IND').querySelector('.js8-row-menu')!)).map(([n, off]) => (off ? `(${n})` : n))
     expect(names).toEqual([
+      // Best times leads every call menu (BestTimesCard); JS8Call's own entries follow in its order.
+      'Best times',
       'Jump to 1503 Hz',
       'Jump to Fast speed',
       'Show message inbox',
@@ -646,7 +649,7 @@ describe('the call list is JS8Call’s', () => {
     cleanup()
     await renderCockpit()
     const k1hb = (await menuEntries(stationRow('K1HB').querySelector('.js8-row-menu')!)).map(([n, off]) => (off ? `(${n})` : n))
-    expect(k1hb.slice(0, 3), 'K1HB is at my speed and sent me nothing').toEqual(['Jump to 600 Hz', '(Show message inbox)', 'Pin to the top'])
+    expect(k1hb.slice(0, 4), 'K1HB is at my speed and sent me nothing').toEqual(['Best times', 'Jump to 600 Hz', '(Show message inbox)', 'Pin to the top'])
   })
 })
 

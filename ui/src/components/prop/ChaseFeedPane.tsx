@@ -3,6 +3,7 @@
 // Basic shows the top-3 as plain "call — why now" lines; Expert shows the full
 // ranked table (rank, need chip, gem, window, Work). Clicking a row selects it
 // on the map; ▶ Work QSYs the rig and opens the right cockpit.
+import { useCallMenu } from '../useCallMenu'
 import { useRef } from 'react'
 import type { PaneContext } from '../connect/paneContext'
 import { NEED_CHIP } from '../connect/paneFormat'
@@ -32,6 +33,8 @@ export function ChaseFeedPane({ ctx }: { ctx: PaneContext }) {
   // The Chase pane's row, and its line under the first for an entity with no room (chaseSplit).
   const list = useRef<HTMLUListElement>(null)
   useChaseSplit(list, items.length > 0)
+  // The call menu (Best times first, then watch and hide), on a right-click or the menu key on a row.
+  const callMenu = useCallMenu()
   // Nothing chase-worthy: the box's one line, drawn here (the Chase pane's reason).
   if (items.length === 0) return <p className="pane-basic">{t('chase.feed.empty')}</p>
 
@@ -43,7 +46,11 @@ export function ChaseFeedPane({ ctx }: { ctx: PaneContext }) {
           const chip = i.tags[0] ? NEED_CHIP[i.tags[0]] : null
           const g = gem(i)
           return (
-            <li key={`${i.call}-${i.band}`} className={`chase-row is-${i.openNow ? 'open' : 'closed'}`}>
+            <li
+              key={`${i.call}-${i.band}`}
+              className={`chase-row is-${i.openNow ? 'open' : 'closed'}`}
+              {...callMenu.on(`${i.call}-${i.band}`, i.call, { band: i.band })}
+            >
               <div
                 className="chase-main"
                 onClick={() => ctx.onSelectCall(i.call)}
@@ -62,6 +69,7 @@ export function ChaseFeedPane({ ctx }: { ctx: PaneContext }) {
                       {g.glyph}
                     </span>
                   )}
+                  {callMenu.at(`${i.call}-${i.band}`)}
                   <b className="chase-call">{i.call}</b>
                   {i.endsSoon && (
                     <span className="cfeed-ends" title={t('chase.feed.endsSoon.title')}>

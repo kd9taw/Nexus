@@ -5,6 +5,7 @@
 // `i18n/index.ts`), and the need-chip words, which live in `features/needVisuals.ts` and are
 // migrated with that registry, not here.
 
+import { useCallMenu } from './useCallMenu'
 import type { NeedTag, Station, Tier } from '../types'
 import { callCardTrigger, qrzPageOf } from './CallCard'
 import { t } from '../i18n'
@@ -86,6 +87,8 @@ export function StationCard({
 }: Props) {
   const units = useUnits()
   const centroids = useEntityCentroids()
+  // A right-click on the card: the call menu every list shares (Best times first).
+  const callMenu = useCallMenu()
   const dist = distanceLabel(myGrid, station.grid, units)
   // Distance still needs a real grid — an entity centroid would claim a precision
   // it does not have on a number the operator reads as a measurement. A BEARING
@@ -119,7 +122,9 @@ export function StationCard({
       }`}
       onDoubleClick={() => workThisStation()}
       title={t('roster.card.doubleClick', { call: station.call })}
+      {...callMenu.on('card', station.call, { country: station.country ?? null })}
     >
+      {callMenu.at('card')}
       <button
         type="button"
         className="station-open"

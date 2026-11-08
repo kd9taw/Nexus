@@ -24,6 +24,7 @@
 //    rows all had a voice on the operator's continent already.
 //  * A pane following the radio's band: this board's worth is the bands you are NOT on.
 //  * Mode chips stay mode classes (Digital/CW/Phone), the board's own routing.
+import { useCallMenu } from './useCallMenu'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRovingList } from '../useRovingList'
 import type { BandChannel, FeedStatus, NeedAlert, NeedTag } from '../types'
@@ -402,6 +403,8 @@ export function NeededPanel({
 }: NeededPanelProps) {
   // An evidence line's distances ("heard by K9LC (EN52, 26 km)") in the operator's units.
   const units = useUnits()
+  // The call menu (Best times first, then watch and hide), on a right-click or the menu key on a row.
+  const callMenu = useCallMenu()
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({
     key: 'priority',
     dir: 'desc',
@@ -904,6 +907,7 @@ export function NeededPanel({
                   if (workable) onWork(a)
                   else if (canQsy) onQsy(a)
                 }}
+                {...callMenu.on(`${a.call}|${a.band}|${a.mode}`, a.call, { band: a.band, country: a.entity || null })}
               >
                 <span className="np-need">
                   {a.tags.map((tag) => (
@@ -922,6 +926,7 @@ export function NeededPanel({
                   ))}
                 </span>
                 <span className="np-call">
+                  {callMenu.at(`${a.call}|${a.band}|${a.mode}`)}
                   <button
                     type="button"
                     className="qrz-link-call"

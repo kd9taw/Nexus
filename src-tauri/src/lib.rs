@@ -45,6 +45,8 @@ mod arrival_outlook;
 /// that blocks its command link or its Stop road, one at a time, so each road can be tried alone.
 #[cfg(feature = "bench-road-switch")]
 mod bench_road_switch;
+/// Best times to work one station: where it is, then the path prediction folded into an answer.
+mod best_times;
 /// WebView2's browser keys (F5 and Ctrl+R reload, Ctrl+P print, Ctrl+F find…) off in every Nexus
 /// window, set on each webview as Tauri makes it.
 mod browser_keys;
@@ -9998,21 +10000,11 @@ async fn get_path_outlook(
     aurora: State<'_, AuroraCache>,
     protons: State<'_, ProtonCache>,
 ) -> Result<propagation::PathPrediction, String> {
-    let (mygrid, prop_engine, power, ant_gain_dbi) = {
-        let eng = engine_lock(&state);
-        let st = eng.settings();
-        (
-            st.mygrid.clone(),
-            st.prop_engine.clone(),
-            assumed_power(&eng),
-            st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
-        )
-    };
-    let station_power_w = Some(power.watts);
-    let me = propagation::geo::maidenhead_to_latlon(&mygrid);
+    let station = PathStation::read(&engine_lock(&state));
+    let me = propagation::geo::maidenhead_to_latlon(&station.mygrid);
     let Some(dx) = propagation::geo::maidenhead_to_latlon(grid.trim()) else {
         return Ok(propagation::PathPrediction {
-            engine: prop_engine,
+            engine: station.prop_engine,
             bands: Vec::new(),
             muf_now: 0.0,
             muf_hourly: Vec::new(),
@@ -10027,114 +10019,201 @@ async fn get_path_outlook(
             power: None,
         });
     };
-    // Current space weather from the propagation cache's last snapshot (the same
-    // SWPC-fed values get_propagation uses); benign defaults if the cache is cold. Its stamps go
-    // with the card to `path_grades::keep_outlook`, which keeps it for a contact's grade only
-    // when they say the flux and Kp were measured and current.
-    let (wx, stamps) = {
-        let guard = cache.lock().map_err(|e| e.to_string())?;
-        let view = guard.as_ref().map(|(_, s)| &s.space_wx);
-        let wx = view
-            .map(|v| outlook_wx(v, held_ssn(now_unix()), now_unix()))
-            .unwrap_or_default();
-        (wx, view.map(|v| v.stamps))
-    };
-    // The configured engine: "p533" (native ITU-R P.533, ~100 ms/prediction) or
-    // the heuristic fallback. p533 is compute-heavy → keep it off the async core.
-    let eng = propagation::make_predictor(&prop_engine, me, station_power_w, ant_gain_dbi);
-    let t = now_unix();
-    let forecast = kp_cache
-        .lock()
-        .ok()
-        .and_then(|g| g.as_ref().map(|(_, f)| f.clone()));
-    // The oval is a ~30-minute nowcast: an older one says nothing about now.
-    const OVAL_FRESH_SECS: u64 = 1800;
-    let oval: Option<Vec<(f32, f32)>> = aurora.lock().ok().and_then(|g| {
-        g.as_ref()
-            .filter(|(when, _)| when.elapsed().as_secs() < OVAL_FRESH_SECS)
-            .map(|(_, oval)| oval.points.iter().map(|p| (p.lat, p.lon)).collect())
-    });
-    // The geometry's Kp is only ever one SWPC reported: `wx.kp` above may be the cold-cache
-    // default or a failed fetch's stand-in, which the engine may use but no label may call a
-    // reading.
-    let (kp_now, now_inputs) = {
-        let guard = cache.lock().map_err(|e| e.to_string())?;
-        let view = guard.as_ref().map(|(_, s)| &s.space_wx);
-        (swpc_kp(view, t), NowInputs::read(view, &protons, t))
-    };
-    let eng = storm_corrected(eng, &prop_engine, me, t, kp_now, forecast.clone());
-    // P.533 pairs are kept (`path_outlook`): the client asks again every 60 s, and only the
-    // serving hour's scalars and the geometry are recomputed then.
-    let keep = prop_engine == "p533";
-    let key = path_outlook::key(
-        t,
-        &mygrid,
-        &grid,
-        &prop_engine,
-        station_power_w,
-        ant_gain_dbi,
-        &wx,
-    );
-    let key = with_storm_key(key, t, kp_now, forecast.as_ref());
+    let inputs = PathInputs::read(&cache, &kp_cache, &aurora, &protons)?;
     below_normal(move || {
-        let (mut pred, long) = match keep.then(|| path_outlook::get(&key)).flatten() {
-            Some((mut sp, mut lp)) => {
-                path_outlook::refresh_now(&mut sp, t);
-                if let Some(lp) = lp.as_mut() {
-                    path_outlook::refresh_now(lp, t);
-                }
-                (sp, lp)
-            }
-            None => {
-                // Both routes at once on their own threads: the long path costs the same chain
-                // again, so this keeps the card's wait at one prediction's. Neither holds a lock.
-                let (sp, lp) = std::thread::scope(|s| {
-                    let lp = s.spawn(|| eng.predict_route(dx, propagation::Route::Long, t, &wx));
-                    let sp = eng.predict(dx, t, &wx);
-                    (sp, lp.join().ok().flatten())
-                });
-                // A stand-in for an engine that could not run is not kept: the next ask tries again.
-                if keep && !eng.fell_back() {
-                    path_outlook::put(key, sp.clone(), lp.clone());
-                }
-                (sp, lp)
-            }
-        };
-        if let Some(me) = me {
-            let geom = |route| {
-                propagation::path_geometry_route(
-                    me,
-                    dx,
-                    route,
-                    t,
-                    kp_now,
-                    forecast.as_ref(),
-                    oval.as_deref(),
-                )
-            };
-            pred.geometry = Some(geom(propagation::Route::Short));
-            let long = long.map(|mut lp| {
-                lp.geometry = Some(geom(propagation::Route::Long));
-                lp
-            });
-            // The day as the path-over-the-day strip draws it (both routes, every hour).
-            pred.day = propagation::path_day(&pred, long.as_ref());
-            if let Some(lp) = long {
-                pred.routes = Some(propagation::compare_routes(&pred, &lp));
-                pred.long_path = Some(Box::new(lp));
-            }
-        }
+        let t = inputs.t;
+        let mut pred = predict_path(&station, &inputs, dx, &grid);
         // Kept for the grade of a contact logged with this station (`path_grades::at_log`), when
         // it was computed from measured space weather (`keep_outlook` decides).
-        path_grades::keep_outlook(&mygrid, &grid, t, &pred, stamps.as_ref());
+        path_grades::keep_outlook(&station.mygrid, &grid, t, &pred, inputs.stamps.as_ref());
         // Then the display-only "now" overlay, which the kept card never carries.
         if let Some(me) = me {
-            attach_now(&mut pred, me, dx, &now_inputs, t);
+            attach_now(&mut pred, me, dx, &inputs.now_inputs, t);
         }
-        pred.power = Some(power);
+        pred.power = Some(station.power);
         pred
     })
     .await
+}
+
+/// The station settings a per-path prediction is computed from, read under the Engine lock once.
+struct PathStation {
+    mygrid: String,
+    prop_engine: String,
+    power: propagation::AssumedPower,
+    ant_gain_dbi: f64,
+}
+
+impl PathStation {
+    fn read(eng: &tempo_app::engine::Engine) -> PathStation {
+        let st = eng.settings();
+        PathStation {
+            mygrid: st.mygrid.clone(),
+            prop_engine: st.prop_engine.clone(),
+            power: assumed_power(eng),
+            ant_gain_dbi: st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
+        }
+    }
+}
+
+/// What a per-path prediction reads from the caches the feeds keep, once per ask, never fetched
+/// here: a cold cache simply means "latest Kp only" / "oval unknown", and with no SWPC reading at
+/// all, "Kp unknown".
+struct PathInputs {
+    t: i64,
+    /// Current space weather from the propagation cache's last snapshot (the same SWPC-fed values
+    /// get_propagation uses); benign defaults if the cache is cold.
+    wx: propagation::SpaceWx,
+    /// Its stamps, which `path_grades::keep_outlook` reads to keep a card for a contact's grade
+    /// only when they say the flux and Kp were measured and current.
+    stamps: Option<propagation::model::SpaceWxStamps>,
+    forecast: Option<propagation::KpForecast>,
+    oval: Option<Vec<(f32, f32)>>,
+    /// The geometry's Kp is only ever one SWPC reported: `wx.kp` may be the cold-cache default or
+    /// a failed fetch's stand-in, which the engine may use but no label may call a reading.
+    kp_now: Option<f32>,
+    now_inputs: NowInputs,
+}
+
+impl PathInputs {
+    fn read(
+        cache: &PropCache,
+        kp_cache: &KpForecastCache,
+        aurora: &AuroraCache,
+        protons: &ProtonCache,
+    ) -> Result<PathInputs, String> {
+        let t = now_unix();
+        let (wx, stamps, kp_now, now_inputs) = {
+            let guard = cache.lock().map_err(|e| e.to_string())?;
+            let view = guard.as_ref().map(|(_, s)| &s.space_wx);
+            let wx = view
+                .map(|v| outlook_wx(v, held_ssn(t), t))
+                .unwrap_or_default();
+            (
+                wx,
+                view.map(|v| v.stamps),
+                swpc_kp(view, t),
+                NowInputs::read(view, protons, t),
+            )
+        };
+        let forecast = kp_cache
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|(_, f)| f.clone()));
+        // The oval is a ~30-minute nowcast: an older one says nothing about now.
+        const OVAL_FRESH_SECS: u64 = 1800;
+        let oval = aurora.lock().ok().and_then(|g| {
+            g.as_ref()
+                .filter(|(when, _)| when.elapsed().as_secs() < OVAL_FRESH_SECS)
+                .map(|(_, oval)| oval.points.iter().map(|p| (p.lat, p.lon)).collect())
+        });
+        Ok(PathInputs {
+            t,
+            wx,
+            stamps,
+            forecast,
+            oval,
+            kp_now,
+            now_inputs,
+        })
+    }
+}
+
+/// The path to `dx` both ways round, as the configured engine predicts it (with the storm
+/// correction), with its geometry, its day and the route calls attached: what `get_path_outlook`
+/// and `get_best_times` both draw from. `dx_key` names the far end in the kept pair's key (a grid,
+/// or a rounded position). P.533 pairs are kept (`path_outlook`): the client asks again every
+/// 60 s, and only the serving hour's scalars and the geometry are recomputed then. Heavy: call it
+/// on a prediction thread ([`below_normal`]), with no lock held. It neither keeps a card for
+/// grading nor lays the "now" overlay: each caller does what it needs after.
+fn predict_path(
+    station: &PathStation,
+    inputs: &PathInputs,
+    dx: (f64, f64),
+    dx_key: &str,
+) -> propagation::PathPrediction {
+    let t = inputs.t;
+    let me = propagation::geo::maidenhead_to_latlon(&station.mygrid);
+    let station_power_w = Some(station.power.watts);
+    // The configured engine: "p533" (native ITU-R P.533, ~100 ms/prediction) or the heuristic.
+    let eng = propagation::make_predictor(
+        &station.prop_engine,
+        me,
+        station_power_w,
+        station.ant_gain_dbi,
+    );
+    let eng = storm_corrected(
+        eng,
+        &station.prop_engine,
+        me,
+        t,
+        inputs.kp_now,
+        inputs.forecast.clone(),
+    );
+    let keep = station.prop_engine == "p533";
+    let key = path_outlook::key(
+        t,
+        &station.mygrid,
+        dx_key,
+        &station.prop_engine,
+        station_power_w,
+        station.ant_gain_dbi,
+        &inputs.wx,
+    );
+    let key = with_storm_key(key, t, inputs.kp_now, inputs.forecast.as_ref());
+    let wx = &inputs.wx;
+    let (mut pred, long) = match keep.then(|| path_outlook::get(&key)).flatten() {
+        Some((mut sp, mut lp)) => {
+            path_outlook::refresh_now(&mut sp, t);
+            if let Some(lp) = lp.as_mut() {
+                path_outlook::refresh_now(lp, t);
+            }
+            (sp, lp)
+        }
+        None => {
+            // Both routes at once on their own threads: the long path costs the same chain
+            // again, so this keeps the card's wait at one prediction's. Neither holds a lock.
+            let (sp, lp) = std::thread::scope(|s| {
+                // Lowered too: a thread is born at normal priority on Windows, whatever its parent's.
+                let lp = s.spawn(|| {
+                    tempo_net::priority::lower_this_thread();
+                    eng.predict_route(dx, propagation::Route::Long, t, wx)
+                });
+                let sp = eng.predict(dx, t, wx);
+                (sp, lp.join().ok().flatten())
+            });
+            // A stand-in for an engine that could not run is not kept: the next ask tries again.
+            if keep && !eng.fell_back() {
+                path_outlook::put(key, sp.clone(), lp.clone());
+            }
+            (sp, lp)
+        }
+    };
+    if let Some(me) = me {
+        let geom = |route| {
+            propagation::path_geometry_route(
+                me,
+                dx,
+                route,
+                t,
+                inputs.kp_now,
+                inputs.forecast.as_ref(),
+                inputs.oval.as_deref(),
+            )
+        };
+        pred.geometry = Some(geom(propagation::Route::Short));
+        let long = long.map(|mut lp| {
+            lp.geometry = Some(geom(propagation::Route::Long));
+            lp
+        });
+        // The day as the path-over-the-day strip draws it (both routes, every hour).
+        pred.day = propagation::path_day(&pred, long.as_ref());
+        if let Some(lp) = long {
+            pred.routes = Some(propagation::compare_routes(&pred, &lp));
+            pred.long_path = Some(Box::new(lp));
+        }
+    }
+    pred
 }
 
 /// The path grade of each Logbook row asked about: its own stamp when it carries one made for its
@@ -26205,26 +26284,77 @@ impl NoAim {
     }
 }
 
+/// Where one of [`labelled_station_fixes`] came from, for a screen that says what an answer rests on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+enum FixSource {
+    /// The log form's grid for this call.
+    LogForm,
+    /// A grid the station sent on the air this session.
+    Heard,
+    /// This session's callbook answer.
+    Callbook,
+    /// The grid on its newest logged contact.
+    Logged,
+}
+
 /// Every place Nexus already knows `call`'s station to be, MOST TRUSTED FIRST — the order
 /// [`propagation::geo::best_fix`] refines within: the log form's grid, the grids the station sent
 /// this session, the callbook's answer (its locator, then the position it vouched for), the grid
-/// on its newest logged contact. The engine keeps them ([`tempo_app::engine::StationGrids`]);
-/// none of them asks the network.
-fn station_fixes(eng: &tempo_app::engine::Engine, call: &str) -> Vec<propagation::geo::StationFix> {
+/// on its newest logged contact — each with where it came from. The engine keeps them
+/// ([`tempo_app::engine::StationGrids`]); none of them asks the network.
+fn labelled_station_fixes(
+    eng: &tempo_app::engine::Engine,
+    call: &str,
+) -> Vec<(FixSource, propagation::geo::StationFix)> {
     use propagation::geo::StationFix;
     let grids = eng.station_grids(call);
     let mut fixes = Vec::new();
-    fixes.extend(grids.log_form.map(StationFix::Grid));
-    fixes.extend(grids.heard.into_iter().map(StationFix::Grid));
+    fixes.extend(
+        grids
+            .log_form
+            .map(|g| (FixSource::LogForm, StationFix::Grid(g))),
+    );
+    fixes.extend(
+        grids
+            .heard
+            .into_iter()
+            .map(|g| (FixSource::Heard, StationFix::Grid(g))),
+    );
     if let Some(book) = grids.callbook {
-        fixes.extend(book.grid.map(StationFix::Grid));
+        fixes.extend(
+            book.grid
+                .map(|g| (FixSource::Callbook, StationFix::Grid(g))),
+        );
         fixes.extend(
             book.position
-                .map(|(lat, lon)| StationFix::Position(lat, lon)),
+                .map(|(lat, lon)| (FixSource::Callbook, StationFix::Position(lat, lon))),
         );
     }
-    fixes.extend(grids.logged.map(StationFix::Grid));
+    fixes.extend(
+        grids
+            .logged
+            .map(|g| (FixSource::Logged, StationFix::Grid(g))),
+    );
     fixes
+}
+
+/// [`labelled_station_fixes`] without the labels: what the rotator's point-at-call refines within.
+/// Derived from the labelled list so the two can never disagree.
+fn station_fixes(eng: &tempo_app::engine::Engine, call: &str) -> Vec<propagation::geo::StationFix> {
+    labelled_station_fixes(eng, call)
+        .into_iter()
+        .map(|(_, f)| f)
+        .collect()
+}
+
+/// [`propagation::geo::best_fix`] over labelled fixes: the same fix, with the label of the first
+/// (most trusted) source that gave it.
+fn best_labelled_fix(
+    fixes: &[(FixSource, propagation::geo::StationFix)],
+) -> Option<(FixSource, propagation::geo::StationFix)> {
+    let best = propagation::geo::best_fix(fixes.iter().map(|(_, f)| f.clone()))?;
+    fixes.iter().find(|(_, f)| *f == best).cloned()
 }
 
 /// The bearing from the operator's own grid, at its full precision, to `call`'s station: to the
@@ -53437,6 +53567,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         click_tci_spot,
         get_propagation,
         get_path_outlook,
+        best_times::get_best_times,
         get_path_regions,
         log_path_grades,
         contact_path_day,

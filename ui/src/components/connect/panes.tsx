@@ -32,6 +32,8 @@ import { SpaceNowLine } from '../prop/SpaceNowLine'
 import { ModelBasis } from '../prop/ModelBasis'
 import { PathRoute } from '../prop/PathRoute'
 import { PathDayPane, PathRegionsPane } from '../prop/PathDayStrip'
+import { BestTimesPane } from '../prop/BestTimesPane'
+import { radioModeOf } from '../../features/bestTimes'
 import { azimuthLabel, azimuthTitle } from '../../grid'
 import { SpaceWxGauges } from '../prop/SpaceWxGauges'
 import { BandAdvisor } from '../prop/BandAdvisor'
@@ -889,6 +891,21 @@ export const PANES: PaneDef[] = [
         stationPowerW={c.stationPowerW}
         antGainDbi={c.antGainDbi}
       />
+    ),
+  },
+  {
+    // BEST TIMES — a call box and the answer for that call: now, the next best windows over the day,
+    // the week's Kp warnings, what it rests on, and a band × UTC-hour chart (BestTimesPane, which
+    // asks get_best_times itself). It follows its own box and a call menu's Best times item, never the
+    // selection. Nothing on it transmits, tunes or works the station.
+    id: 'bestTimes',
+    get title() {
+      return t('connect.pane.bestTimes.title')
+    },
+    category: 'bands',
+    basic: () => t('connect.pane.bestTimes.basic'),
+    expert: (c) => (
+      <BestTimesPane units={c.units} spots={c.spotsFeed?.rows} radioMode={radioModeOf(c.otaBoard?.snap)} />
     ),
   },
 ]
