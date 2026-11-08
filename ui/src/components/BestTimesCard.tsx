@@ -32,7 +32,7 @@ import { registerFloatingCard } from '../features/floatingCard'
 import { planReturn, giveBack } from '../focusReturn'
 import { BEST_TIMES, bestTimesKey, refreshKeyedFeed, useKeyedFeed } from '../features/connectFeeds'
 import { CARD_WINDOWS, startMode } from '../features/bestTimes'
-import { askBestTimes, handOff, lookUpOnce, lookedUp } from '../features/bestTimesAsk'
+import { askBestTimes, handOff, lookUpOnce, lookedUp, radioModeNow } from '../features/bestTimesAsk'
 import { surfacePanel } from '../features/windowScope'
 import { openPanelWindow } from '../api'
 import { withErrorToast } from '../toast'
@@ -92,16 +92,19 @@ export function openBestTimesCard(call: string, anchor: HTMLElement, keyboard = 
   emit()
 }
 
-function CardPopover({ open, spots, antGainDbi, radioMode }: { open: Opened; spots?: readonly SpotRow[]; antGainDbi?: number; radioMode?: string | null }) {
+function CardPopover({ open, spots }: { open: Opened; spots?: readonly SpotRow[] }) {
   const units = useUnits()
   const box = useRef<HTMLDivElement>(null)
   const inner = useRef<HTMLDivElement>(null)
   const [place, setPlace] = useState<Placement | null | undefined>(undefined)
-  const [mode, setMode] = useState<BestMode>(() => startMode(radioMode))
+  // The mode the operator is in now (the window's radio), else FT8.
+  const [mode, setMode] = useState<BestMode>(() => startMode(radioModeNow()))
   const [grid, setGrid] = useState<string | null>(null)
   const [lookingUp, setLookingUp] = useState(false)
   const [note, setNote] = useState<string | null>(null)
   const focusInside = useRef(false)
+  /** It has been placed at least once (see the placement below). */
+  const placedOnce = useRef(false)
   const key = bestTimesKey(open.call, grid, mode)
   const view = useKeyedFeed(BEST_TIMES, key).value ?? null
   const nowUnix = Math.floor(Date.now() / 1000)
@@ -136,8 +139,11 @@ function CardPopover({ open, spots, antGainDbi, radioMode }: { open: Opened; spo
         { w: window.innerWidth, h: window.innerHeight },
         txBoxes(),
       )
-      // No room that keeps it off the transmit controls: See full day rather than nothing.
-      if (p === null && c.width > 0) return seeFullDay(open.call)
+      // No room that keeps it off the transmit controls when it OPENS: See full day rather than a
+      // choice that does nothing. Once it has stood somewhere, losing the room (a resize, a feed
+      // scrolling under it) only hides it, as the station card does: it never opens a window unasked.
+      if (p === null && c.width > 0 && !placedOnce.current) return seeFullDay(open.call)
+      if (p) placedOnce.current = true
       setPlace((old) => (old && p && old.left === p.left && old.top === p.top && old.maxHeight === p.maxHeight ? old : p))
     }
     replace()
@@ -206,7 +212,6 @@ function CardPopover({ open, spots, antGainDbi, radioMode }: { open: Opened; spo
             view={view}
             nowUnix={nowUnix}
             units={units}
-            antGainDbi={antGainDbi}
             cap={CARD_WINDOWS}
             spots={spots}
             mode={mode}
@@ -230,7 +235,7 @@ function CardPopover({ open, spots, antGainDbi, radioMode }: { open: Opened; spo
 }
 
 /** The window's one Best times card. Mount it once per window (App, and every pop-out). */
-export function BestTimesCardHost({ spots, antGainDbi, radioMode }: { spots?: readonly SpotRow[]; antGainDbi?: number; radioMode?: string | null }) {
+export function BestTimesCardHost({ spots }: { spots?: readonly SpotRow[] }) {
   useEffect(() => {
     hosts++
     return () => {
@@ -240,5 +245,5 @@ export function BestTimesCardHost({ spots, antGainDbi, radioMode }: { spots?: re
   }, [])
   const open = useSyncExternalStore(subscribe, readOpened)
   if (!open) return null
-  return <CardPopover key={open.call} open={open} spots={spots} antGainDbi={antGainDbi} radioMode={radioMode} />
+  return <CardPopover key={open.call} open={open} spots={spots} />
 }

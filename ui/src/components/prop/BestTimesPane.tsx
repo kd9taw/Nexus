@@ -52,12 +52,10 @@ function useWide<T extends HTMLElement>(): [React.RefObject<T>, boolean] {
 
 export function BestTimesPane({
   units,
-  antGainDbi,
   spots,
   radioMode,
 }: {
   units: Units
-  antGainDbi?: number
   spots?: readonly SpotRow[]
   /** The radio's mode now, which the mode chips start from. */
   radioMode?: string | null
@@ -153,7 +151,6 @@ export function BestTimesPane({
             view={shown}
             nowUnix={nowUnix}
             units={units}
-            antGainDbi={antGainDbi}
             spots={spots}
             mode={mode}
             onMode={setMode}

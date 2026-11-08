@@ -596,12 +596,17 @@ export interface BestTimes {
   hours: PathDayHour[]
   nowHour: number
   longUsed: boolean
+  /** The licence has no transmit band in this mode: the answer is empty for that, not the path. */
+  noTxBand?: boolean
 }
 /** What an answer's location rests on. */
 export interface BestBasis {
   kind: 'grid' | 'position' | 'entity'
-  from?: 'typed' | 'logForm' | 'heard' | 'callbook' | 'logged'
+  from?: 'typed' | 'logForm' | 'heard' | 'callbook' | 'callbookBase' | 'logged'
   grid?: string
+  /** The home call whose callbook record answered a stroked call: used (`callbookBase`), or left out
+   *  because it is in another country (with an entity centre). */
+  base?: string
 }
 /** `get_best_times`: an answer, or the code of a case with no answer. */
 export interface BestTimesView {
@@ -615,6 +620,8 @@ export interface BestTimesView {
   engine: string
   engineFallback?: boolean
   power?: AssumedPower
+  /** The antenna gain (dBi, transmit plus receive) the answer assumed. */
+  antGainDbi?: number
   storm?: StormNote
   spaceNow?: SpaceNow
 }

@@ -21,6 +21,22 @@ export const CARD_WINDOWS = 3
 /** Below this width the pane stacks the answer above the chart. */
 export const SIDE_BY_SIDE_PX = 560
 
+/** The radio's mode as Best times names modes: FT8/FT4 from the digital tier, CW, SSB; null for a
+ *  mode it does not answer for (FM, RTTY, the keyboard modes). */
+export function radioModeOf(snap: { radio: { operatingMode?: string; sideband?: string }; link: { tier?: string } } | null | undefined): string | null {
+  if (!snap) return null
+  switch (snap.radio.operatingMode) {
+    case 'cw':
+      return 'CW'
+    case 'phone':
+      return snap.radio.sideband === 'FM' ? null : 'SSB'
+    case 'digital':
+      return snap.link.tier ?? null
+    default:
+      return null
+  }
+}
+
 /** The mode an answer starts from: the radio's, when it is one Best times knows, else FT8. */
 export function startMode(radioMode: string | null | undefined): BestMode {
   const m = (radioMode ?? '').toUpperCase()
@@ -86,7 +102,10 @@ export function whereLine(v: BestTimesView, units: Units): string | null {
 export function basisLine(v: BestTimesView): string | null {
   const b = v.basis
   if (!b) return null
-  if (b.kind === 'entity') return t('bestTimes.basis.entity', { entity: v.entity ?? v.call })
+  if (b.kind === 'entity') {
+    const centre = t('bestTimes.basis.entity', { entity: v.entity ?? v.call })
+    return b.base ? `${centre} ${t('bestTimes.basis.homeElsewhere', { base: b.base })}` : centre
+  }
   if (b.kind === 'position') return t('bestTimes.basis.position')
   const grid = b.grid ?? ''
   switch (b.from) {
@@ -98,6 +117,8 @@ export function basisLine(v: BestTimesView): string | null {
       return t('bestTimes.basis.heard', { grid })
     case 'callbook':
       return t('bestTimes.basis.callbook', { grid })
+    case 'callbookBase':
+      return t('bestTimes.basis.callbookBase', { grid, base: b.base ?? v.call })
     case 'logged':
       return t('bestTimes.basis.logged', { grid })
     default:
@@ -193,6 +214,7 @@ function kpText(kp: number): string {
 export function noWindowLine(v: BestTimesView): string | null {
   const a = v.answer
   if (!a || a.windows.length > 0 || a.now.kind === 'try') return null
+  if (a.noTxBand) return t('bestTimes.next.noTxBand', { mode: a.mode })
   return t('bestTimes.next.none', { mode: a.mode })
 }
 
@@ -208,7 +230,7 @@ export function weekLines(v: BestTimesView): string[] {
 }
 
 /** What the answer rests on besides the location: the model and its month, the mode, the antenna. */
-export function modelLine(v: BestTimesView, nowUnix: number, antGainDbi: number | undefined): string | null {
+export function modelLine(v: BestTimesView, nowUnix: number): string | null {
   const a = v.answer
   if (!a) return null
   const parts = [
@@ -218,7 +240,8 @@ export function modelLine(v: BestTimesView, nowUnix: number, antGainDbi: number 
     a.mode,
   ]
   if (!a.perMode) parts.push(t('bestTimes.model.noModes'))
-  if (a.engine === 'p533' && !antGainDbi) parts.push(t('bestTimes.model.noGain'))
+  // The gain the answer itself assumed, from the shack: a view with none (an older shack) claims nothing.
+  if (a.engine === 'p533' && v.antGainDbi === 0) parts.push(t('bestTimes.model.noGain'))
   return parts.join(' · ')
 }
 

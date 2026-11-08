@@ -48,7 +48,8 @@ import { BestTimesCardHost, closeBestTimesCard, openBestTimesCard, seeFullDay } 
 import { CallCardHost, closeCallCard, openCallCard } from './CallCard'
 import { CallRowMenu } from './CallRowMenu'
 import { js8CallRowEntries } from './js8ListMenus'
-import { handOff, takeHandoff } from '../features/bestTimesAsk'
+import { handOff, noteRadioMode, takeHandoff } from '../features/bestTimesAsk'
+import * as api from '../api'
 
 beforeAll(() => {
   Element.prototype.hasPointerCapture = () => false
@@ -158,3 +159,52 @@ describe('See full day', () => {
     expect(takeHandoff()).toBeNull()
   })
 })
+
+describe('the card on its own', () => {
+  it('starts on the mode the radio is in, and on FT8 when the radio is in none it answers for', async () => {
+    const anchor = document.createElement('button')
+    document.body.appendChild(anchor)
+    render(<BestTimesCardHost />)
+    act(() => noteRadioMode('CW'))
+    act(() => openBestTimesCard('EA8ABC', anchor))
+    await waitFor(() => expect(vi.mocked(api.getBestTimes).mock.lastCall?.[2]).toBe('CW'))
+    act(() => closeBestTimesCard())
+    act(() => noteRadioMode(null))
+    act(() => openBestTimesCard('EA8XYZ', anchor))
+    await waitFor(() => expect(vi.mocked(api.getBestTimes).mock.lastCall).toEqual(['EA8XYZ', null, 'FT8']))
+    anchor.remove()
+  })
+
+  it('once placed, losing its room hides it and never opens the Conditions window', async () => {
+    // A window 1000 x 700, the call near the top, a TX dock that later grows over every free place.
+    let dockCovers = false
+    const rect = (l: number, t: number, w: number, h: number) => ({ left: l, top: t, right: l + w, bottom: t + h, width: w, height: h, x: l, y: t, toJSON: () => ({}) }) as DOMRect
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('cockpit-txdock')) return dockCovers ? rect(0, 0, 1000, 700) : rect(0, 650, 1000, 50)
+      if (this.classList.contains('callcard-body')) return rect(0, 0, 300, 200)
+      if (this.classList.contains('probe-anchor')) return rect(100, 50, 60, 20)
+      return rect(0, 0, 0, 0)
+    })
+    Object.defineProperty(window, 'innerWidth', { value: 1000, configurable: true })
+    Object.defineProperty(window, 'innerHeight', { value: 700, configurable: true })
+    const anchor = document.createElement('button')
+    anchor.className = 'probe-anchor'
+    document.body.appendChild(anchor)
+    const dock = document.createElement('div')
+    dock.className = 'cockpit-txdock'
+    document.body.appendChild(dock)
+    render(<BestTimesCardHost />)
+    act(() => openBestTimesCard('EA8ABC', anchor))
+    await waitFor(() => expect(document.querySelector('.bt-card')?.getAttribute('data-placed')).toBe('yes'))
+    dockCovers = true
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+    await waitFor(() => expect(document.querySelector('.bt-card')?.getAttribute('data-placed')).toBe('no'))
+    expect(fx.opened).toEqual([])
+    spy.mockRestore()
+    anchor.remove()
+    dock.remove()
+  })
+})
+
