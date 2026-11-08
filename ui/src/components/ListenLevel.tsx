@@ -2,18 +2,19 @@
 // on this computer" ▸ Listening level (`monitorLevel`): how loud Nexus plays the receive audio on
 // this computer. Receive only; it does not touch transmit audio or anything the radio is told.
 //
-// AN ICON CHIP THAT OPENS A SLIDER, never a slider in the bar. The bar has almost no slack at the
-// common sizes (1366×768, 1024×768): a 5.5em inline slider wrapped it onto a second row there, which
-// moved the whole cockpit and Stop TX down by a row whenever receive audio was switched on. The chip
-// is narrower than Help, its neighbour, and its box is cockpit-panes.css's (`.listen-chip`); the
-// slider lives in a portaled popover (Radix DropdownMenu, as ui/Menu, with the app zoom re-applied
-// inside it) that takes no room in the bar.
+// IT ADDS NO WIDTH TO THE BAR. The bar has no slack at 1366×768 on FT (its now-bar fills the line):
+// an inline slider wrapped it onto a second row, and so did even a 25 px icon chip, each moving the
+// whole cockpit and Stop TX down by a row whenever receive audio was switched on. So the trigger is
+// the bar's own RX level meter (`children`, TopBar's `.rx-level`), made a button whose box is the
+// meter's exactly (`.listen-trigger`, cockpit-panes.css, resets every box property a button brings).
+// The slider lives in a portaled popover (Radix DropdownMenu, as ui/Menu, with the app zoom
+// re-applied inside it), which takes no room in the bar.
 //
 // A drag is many changes and each save writes the settings file, so the slider shows the value
 // under the pointer at once (`draft`) and hands the one it settles on to `onCommit`, once, 250 ms
 // after the last change. The draft gives way when the saved level arrives back, or when the save
 // fails, so the slider never sits on a value that was not kept.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import * as RM from '@radix-ui/react-dropdown-menu'
 import { Volume2 } from 'lucide-react'
 import { t } from '../i18n'
@@ -25,7 +26,13 @@ const PCT = '%'
 export function ListenLevel({
   level,
   onCommit,
+  className,
+  children,
 }: {
+  /** The trigger's own look (TopBar passes the RX meter's class). */
+  className: string
+  /** What the trigger shows: the RX level meter it stands in for. */
+  children: ReactNode
   /** The saved listening level, 0..1. */
   level: number
   /** Save a level, 0..1. A rejection puts the slider back on the saved level. */
@@ -62,8 +69,8 @@ export function ListenLevel({
   return (
     <RM.Root open={open} onOpenChange={setOpen}>
       <RM.Trigger asChild>
-        <button type="button" className="theme-chip listen-chip" title={t('topbar.listen.title', { pct })} aria-label={label}>
-          <Volume2 size={14} aria-hidden="true" />
+        <button type="button" className={`${className} listen-trigger`} title={t('topbar.listen.title', { pct })} aria-label={label}>
+          {children}
         </button>
       </RM.Trigger>
       <RM.Portal>

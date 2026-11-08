@@ -1,11 +1,17 @@
 // @vitest-environment jsdom
 //
-// #468: the top bar draws the listening level's chip in the group every screen keeps (beside Help) while
-// receive audio plays on this computer, and nothing at all otherwise.
+// #468: while receive audio plays on this computer, the top bar's RX level meter is the listening
+// level's button; otherwise it is the meter alone. Either way the bar's line gets nothing new: the
+// trigger's box properties all resolve to nothing (cascade winners over both sheets, on the rendered
+// chain), so the button is exactly the meter's box. A slider, and then a 25 px chip, beside Help wrapped
+// the bar at 1366x768 on FT and moved Stop TX down.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import { createElement } from 'react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { TopBar } from './TopBar'
+import { chainOf, parseRules, winnerAt } from '../cssCascade'
 import type { RadioStatus } from '../types'
 
 vi.mock('../api', () => ({
@@ -30,18 +36,36 @@ function bar(extra: Record<string, unknown>) {
   ).container
 }
 
-describe('the top bar’s listening level (#468)', () => {
+const sheet = (name: string) =>
+  readFileSync(resolve(process.cwd(), 'src', name), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+const RULES = parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css'))
+
+describe('the top bar\u2019s listening level (#468)', () => {
   it.each([
     ['an FT screen', {}],
     ['a cockpit (Phone, CW, RTTY…)', { hideTxControls: true, hideFrequencyControl: true, hideDigitalChrome: true }],
-  ])('on %s, in the chip group beside Help', (_where, extra) => {
+  ])('on %s, the RX meter is the button, and nothing is added to the chip group', (_where, extra) => {
+    const plain = bar(extra).querySelector('.topbar-chips')!.children.length
+    cleanup()
     const c = bar({ ...extra, listenLevel: { level: 0.3, onCommit: async () => {} } })
-    // Only the chip is in the bar; its slider opens in a popover (ListenLevel.test.tsx).
-    expect(c.querySelector('.topbar-chips button.listen-chip')).not.toBeNull()
-    expect(c.querySelector('.topbar-chips input')).toBeNull()
+    const btn = c.querySelector('.txrx button.rx-level.listen-trigger')
+    expect(btn).not.toBeNull()
+    expect(btn!.querySelector('.rx-level-label')).not.toBeNull()
+    expect(c.querySelector('.topbar-chips')!.children.length).toBe(plain)
+    expect(c.querySelector('.topbar input')).toBeNull()
   })
 
-  it('CONTROL: absent while receive audio is not played here', () => {
-    expect(bar({}).querySelector('.listen-chip')).toBeNull()
+  it.each(['dark', 'light'] as const)('the button brings no box of its own, %s theme', (theme) => {
+    const c = bar({ listenLevel: { level: 0.3, onCommit: async () => {} } })
+    const chain = chainOf(c.querySelector('button.listen-trigger')!)
+    const zero = (v: string | undefined) => v != null && /^(0|0px|none|0 none)$/.test(v.trim())
+    for (const props of [['padding', 'padding-left', 'padding-right', 'padding-top', 'padding-bottom'], ['border', 'border-width'], ['margin']])
+      expect(zero(winnerAt(RULES, theme, chain, ...props)?.value), props[0]).toBe(true)
+  })
+
+  it('CONTROL: without it the meter is a meter, not a button', () => {
+    const c = bar({})
+    expect(c.querySelector('.listen-trigger')).toBeNull()
+    expect(c.querySelector('.txrx div.rx-level')).not.toBeNull()
   })
 })

@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 //
 // #468: THE LISTENING LEVEL ON THE MAIN WINDOW. Settings ▸ Radio ▸ "Receive audio on this computer"
-// ▸ Listening level was the only way to change how loud Nexus plays the band. The top bar now carries
-// a speaker chip that opens a slider for the same setting (`monitorLevel`).
+// ▸ Listening level was the only way to change how loud Nexus plays the band. The top bar's RX level
+// meter now opens a slider for the same setting (`monitorLevel`).
 //
-// THE BAR ITSELF GETS ONLY THE CHIP: the slider is in a portaled popover. An inline slider wrapped the
-// bar onto a second row at 1366×768 and 1024×768, which moved the cockpit and Stop TX down.
+// THE BAR GETS NOTHING NEW: the trigger is what the host hands in (the RX meter), and the slider is in
+// a portaled popover. A slider, and then even a small chip, wrapped the bar at 1366×768 on FT.
 //
 // A drag is many changes and each save writes the settings file, so the slider follows the pointer at
 // once and saves the value it settles on (250 ms after the last change), once.
@@ -22,7 +22,12 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-const chip = (c: HTMLElement) => c.querySelector('button.listen-chip') as HTMLButtonElement
+const chip = (c: HTMLElement) => c.querySelector('button.listen-trigger') as HTMLButtonElement
+const LL = (p: { level: number; onCommit: (v: number) => unknown }) => (
+  <ListenLevel className="rx-level" level={p.level} onCommit={p.onCommit as never}>
+    <span className="probe-meter">RX</span>
+  </ListenLevel>
+)
 /** Open the popover from the keyboard, as ui/Menu's tests do, and return its slider. */
 async function open(c: HTMLElement): Promise<HTMLInputElement> {
   fireEvent.keyDown(chip(c), { key: 'Enter' })
@@ -33,15 +38,17 @@ async function open(c: HTMLElement): Promise<HTMLInputElement> {
 }
 
 describe('the top bar’s listening level (#468)', () => {
-  it('the bar holds only an icon chip, named and titled with the level; no slider in the bar', () => {
-    const { container } = render(<ListenLevel level={0.4} onCommit={() => {}} />)
+  it('the trigger is the host’s own content, named and titled with the level; no slider in the bar', () => {
+    const { container } = render(<LL level={0.4} onCommit={() => {}} />)
+    expect(chip(container).classList.contains('rx-level')).toBe(true)
+    expect(chip(container).querySelector('.probe-meter')).not.toBeNull()
     expect(chip(container).getAttribute('aria-label')).toBe(t('settings.headphoneMonitor.level.aria'))
     expect(chip(container).title).toBe(t('topbar.listen.title', { pct: 40 }))
     expect(container.querySelector('input')).toBeNull()
   })
 
   it('the chip opens the slider on the saved level', async () => {
-    const { container } = render(<ListenLevel level={0.4} onCommit={() => {}} />)
+    const { container } = render(<LL level={0.4} onCommit={() => {}} />)
     const s = await open(container)
     expect(s.value).toBe('0.4')
     expect(s.getAttribute('aria-label')).toBe(t('settings.headphoneMonitor.level.aria'))
@@ -49,7 +56,7 @@ describe('the top bar’s listening level (#468)', () => {
 
   it('a drag follows the pointer and saves once, the value it settles on', async () => {
     const onCommit = vi.fn()
-    const { container } = render(<ListenLevel level={0.4} onCommit={onCommit} />)
+    const { container } = render(<LL level={0.4} onCommit={onCommit} />)
     const s = await open(container)
     vi.useFakeTimers()
     for (const v of ['0.5', '0.6', '0.7']) fireEvent.change(s, { target: { value: v } })
@@ -61,8 +68,8 @@ describe('the top bar’s listening level (#468)', () => {
   })
 
   it('follows a level changed elsewhere (Settings) when not being dragged', () => {
-    const { container, rerender } = render(<ListenLevel level={0.4} onCommit={() => {}} />)
-    rerender(<ListenLevel level={0.8} onCommit={() => {}} />)
+    const { container, rerender } = render(<LL level={0.4} onCommit={() => {}} />)
+    rerender(<LL level={0.8} onCommit={() => {}} />)
     expect(chip(container).title).toBe(t('topbar.listen.title', { pct: 80 }))
   })
 })

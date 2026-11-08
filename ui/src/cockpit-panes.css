@@ -772,15 +772,18 @@
   background: transparent;
   border-bottom: 0;
 }
-/* THE LISTENING LEVEL'S CHIP (#468, components/ListenLevel), beside Help in the chip group every screen
-   keeps. An icon and the chip's own padding, never more: its slider is in a portaled popover, because a
-   slider in the line wrapped the bar onto a second row at 1366×768 and 1024×768 (moving the cockpit and
-   Stop TX down) whenever receive audio was switched on. It does not grow and does not shrink. */
-.listen-chip {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+/* THE LISTENING LEVEL'S BUTTON (#468, components/ListenLevel) IS THE TOP BAR'S RX LEVEL METER, so it adds
+   no width: the bar has no slack at 1366×768 on FT, and a slider, or even a 25 px chip, beside Help wrapped
+   it onto a second row (moving the cockpit and Stop TX down) whenever receive audio was switched on. This
+   takes away every box property a <button> brings, so the meter's box is what it is as a <div>. */
+.listen-trigger {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  line-height: inherit;
+  color: inherit;
 }
 /* THE "MY STATION" PICKER (components/TopBar, shown with two or more station profiles) is the CALLSIGN
    BLOCK ITSELF: the select stands over the call and grid, out of the bar's line, with its own text
