@@ -353,9 +353,12 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
       const b = bandFromKhz(s.freqKhz)
       if (b !== '?') seen.add(b)
     }
+    // A picked band always has its chip, lit, whether or not anyone is on it now: the filter is
+    // remembered, and one with no chip empties the board with no way to see why or undo it.
+    for (const b of bandFilter) seen.add(b)
     // Order by HF → VHF
     const ORDER = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '2m']
-    return ORDER.filter((b) => seen.has(b))
+    return [...ORDER.filter((b) => seen.has(b)), ...bandFilter.filter((b) => !ORDER.includes(b))]
   })()
 
   // Derive the set of distinct modes in the current spot list.
