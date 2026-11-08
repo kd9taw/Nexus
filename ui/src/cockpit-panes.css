@@ -772,6 +772,19 @@
   background: transparent;
   border-bottom: 0;
 }
+/* THE LISTENING LEVEL'S BUTTON (#468, components/ListenLevel) IS THE TOP BAR'S RX LEVEL METER, so it adds
+   no width: the bar has no slack at 1366×768 on FT, and a slider, or even a 25 px chip, beside Help wrapped
+   it onto a second row (moving the cockpit and Stop TX down) whenever receive audio was switched on. This
+   takes away every box property a <button> brings, so the meter's box is what it is as a <div>. */
+.listen-trigger {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  line-height: inherit;
+  color: inherit;
+}
 /* THE "MY STATION" PICKER (components/TopBar, shown with two or more station profiles) is the CALLSIGN
    BLOCK ITSELF: the select stands over the call and grid, out of the bar's line, with its own text
    transparent (the call and grid under it are what reads). Its box reaches 10 px past them, into the

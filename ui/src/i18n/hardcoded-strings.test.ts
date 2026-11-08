@@ -53,6 +53,8 @@ import { EN, type MessageKey } from './index'
  * proven on a real shipped sentence rather than on a fixture.
  */
 const MIGRATED = [
+  'components/RttyBaudPicker.tsx',
+  'components/ListenLevel.tsx',
   'remote-web/AudioListen.tsx',
   'remote-web/RemoteApp.tsx',
   'remote-web/StreamView.tsx',
