@@ -175,6 +175,15 @@ own CAT settings (Network for a TCP server, Serial for a virtual COM pair),
 and send the audio through two cables. Their menus have not been checked here,
 so this page does not name them.
 
+For FT8 and the other sound card modes, Nexus asks for the radio's data mode.
+SDR Console has none: it stays in USB, and may show its error window two or
+three times when Nexus connects. Nexus asks twice, while you receive, sees the
+radio stay in USB both times, and from then on uses plain **USB** (LSB where the mode sits on the lower side) on
+that connection, so you do not need to turn on **Data modes use plain SSB**.
+Thetis, PowerSDR and piHPSDR take the data mode as **DIGU**, and Nexus keeps
+it. The same applies when you point Nexus at a rigctld you run yourself, as
+**NET rigctl**.
+
 ### QO-100 through SDR Console
 
 SDR Console handles the QO-100 converters itself. It applies the LNB offset

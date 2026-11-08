@@ -3318,3 +3318,873 @@ fn a_tick_that_reopens_the_cat_link_does_not_pre_set_and_the_next_does() {
         "CONTROL: the next tick pre-sets: {next:?}"
     );
 }
+
+// ── A link that does not take the DATA word ──────────────────────────────────────────────────
+
+/// What a rigctld does with a DATA word (`M PKT…`/`X PKT…`), as Hamlib's backends were seen to.
+#[derive(Clone, Copy)]
+enum DataAnswer {
+    /// Refused (`RPRT -9`): a backend with no case for the word (Ten-Tec, Alinco, the FT-857's
+    /// `PKTLSB`), which Hamlib refuses itself.
+    Refuses,
+    /// Taken (`RPRT 0`), but the radio stays in USB and reads back USB: SDR Console (2056), whose
+    /// `MDD;` Hamlib reports as taken whether SDR Console answers it `?;` or not
+    /// (`tests/rigctld_sdrconsole.rs`).
+    Ignores,
+    /// Taken, and read back as this: `PKTUSB` on an emulation answering ID904, piHPSDR, the
+    /// QCX/QDX (Hamlib's `MD9;` = DIGU) and an Icom with a data flag (USB-D); `RTTYR` on the
+    /// FT-1000MP, whose `PKTUSB` is RTTY-USB.
+    Takes(&'static str),
+}
+
+/// FT8 CQ on 20 m against a rigctld whose radio starts in USB and answers a DATA word `answer`'s
+/// way. Split writes are taken. The loop's transport is already this radio's, `model`.
+fn data_word_bench(split: SplitMode, model: u32, answer: DataAnswer) -> Bench<Hamlib> {
+    let engine = cq_engine(split, 1441.0, |s| s.rig_model = model);
+    let keyed = Arc::new(AtomicBool::new(false));
+    let vfos = Arc::new(Mutex::new(Vfos::default()));
+    let k = keyed.clone();
+    let peer = retuning_peer(FT8_DIAL, "USB", move |line, radio| {
+        let ok = || Some("RPRT 0\n".to_string());
+        let data = (line.starts_with("M ") || line.starts_with("X ")) && line.contains("PKT");
+        match line {
+            "T 1" | "T 3" => {
+                radio.keyed = true;
+                k.store(true, Ordering::SeqCst);
+                ok()
+            }
+            "T 0" => {
+                radio.keyed = false;
+                k.store(false, Ordering::SeqCst);
+                ok()
+            }
+            _ if data => match answer {
+                DataAnswer::Refuses => Some("RPRT -9\n".to_string()),
+                DataAnswer::Ignores => ok(),
+                DataAnswer::Takes(reads) => {
+                    if line.starts_with("M ") {
+                        radio.mode = reads.to_string();
+                    }
+                    ok()
+                }
+            },
+            _ if line.starts_with("S ") || line.starts_with("I ") || line.starts_with("X ") => ok(),
+            "i" => Some(format!("{FT8_DIAL}\n")),
+            _ => None,
+        }
+    });
+    let rig = Rig::rigctld(&peer.address);
+    let mut state = loop_state();
+    state.applied.rig_model = model;
+    Bench::new(engine, state, rig, Hamlib { peer, keyed, vfos })
+}
+
+/// Has the engine been told this link does not take `word`?
+fn refused(b: &Bench<Hamlib>, model: u32, word: &str) -> bool {
+    b.engine
+        .lock()
+        .unwrap()
+        .settings()
+        .link_refusals
+        .refused(model, word)
+}
+
+/// Every mode and TX-mode write the radio was sent, in order.
+fn mode_writes(b: &Bench<Hamlib>) -> Vec<String> {
+    b.radio
+        .peer
+        .lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.starts_with("M ") || l.starts_with("X "))
+        .cloned()
+        .collect()
+}
+
+/// A LINK THAT REFUSES THE DATA WORD. The loop's ladder gives up on it while receiving and puts
+/// the radio in USB, as it always did, and from then on this connection's word IS USB: no over is
+/// keyed after another DATA word. Before, the key-time assert sent `M PKTUSB` again at every slot
+/// boundary, just ahead of `TX;`. Every over keys at its slot.
+#[test]
+fn ft8_on_a_link_that_refuses_the_data_word_keys_every_over_in_usb() {
+    const MODEL: u32 = 2056;
+    let mut b = data_word_bench(SplitMode::None, MODEL, DataAnswer::Refuses);
+    let overs = b.overs(3);
+    for (i, o) in overs.iter().enumerate() {
+        eprintln!("refusing link, over {}: {o:?}", i + 1);
+        assert_eq!(
+            o.key.last().map(String::as_str),
+            Some("T 1"),
+            "over {}",
+            i + 1
+        );
+        assert!(
+            o.key.iter().all(|l| !l.contains("PKT")),
+            "over {}: a DATA word on the key tick: {:?}",
+            i + 1,
+            o.key
+        );
+    }
+    let modes = mode_writes(&b);
+    let usb = modes
+        .iter()
+        .position(|l| l == "M USB -1")
+        .expect("put in USB");
+    assert!(
+        modes[usb..].iter().all(|l| !l.contains("PKT")),
+        "a DATA word after the link refused it: {modes:?}"
+    );
+    assert!(refused(&b, MODEL, "PKTUSB"));
+}
+
+/// …and with Split Operation = Rig, VFO B's mode is USB too. Before, the refused `X PKTUSB` halted
+/// TX, so no over went out at all. The first over's key-time mode assert goes out where it always
+/// did (the ladder's fallback never latches it); only its word is USB now.
+#[test]
+fn rig_split_on_a_link_that_refuses_the_data_word_writes_vfo_b_in_usb() {
+    let mut b = data_word_bench(SplitMode::Rig, 990_301, DataAnswer::Refuses);
+    let overs = b.overs(2);
+    assert_eq!(
+        overs[0].key,
+        [
+            "M USB -1",
+            "S 1 VFOB",
+            "I 14073500",
+            "X USB -1",
+            "S 1 VFOB",
+            "T 1"
+        ]
+    );
+    assert_eq!(overs[1].key, ["S 1 VFOB", "T 1"]);
+}
+
+/// ⭐ SDR CONSOLE (2056): Hamlib takes `PKTUSB` (`RPRT 0`) and sends `MDD;`, the radio never moves,
+/// and it reads plain USB after EVERY set Nexus makes. One watch is never a verdict on its own (the
+/// operator may have pressed USB inside it, delta R1), so Nexus sets the word again while receiving,
+/// and the second consecutive plain watch condemns it: then the word is USB for the connection.
+/// Every over still keys at its slot, and none is keyed behind a DATA word: each set is made while
+/// receiving, and SDR Console stays in USB throughout. Before, `PKTUSB` was the word for good and
+/// went out at every key.
+#[test]
+fn ft8_on_a_link_that_silently_ignores_the_data_word_moves_to_usb_while_receiving() {
+    const MODEL: u32 = 990_302;
+    let mut b = data_word_bench(SplitMode::None, MODEL, DataAnswer::Ignores);
+    let overs = b.overs(4);
+    for (i, o) in overs.iter().enumerate() {
+        assert_eq!(
+            o.key.last().map(String::as_str),
+            Some("T 1"),
+            "over {}",
+            i + 1
+        );
+        assert!(o.key.iter().all(|l| !l.contains("PKT")), "over {}", i + 1);
+    }
+    eprintln!("silent link, mode writes: {:?}", mode_writes(&b));
+    assert_eq!(
+        mode_writes(&b),
+        ["M PKTUSB -1", "M PKTUSB -1", "M USB -1"],
+        "the set, the set again after one plain watch, then USB after the second"
+    );
+    assert!(refused(&b, MODEL, "PKTUSB"));
+}
+
+/// CONTROLS: a link whose radio TAKES the DATA word keeps it, however Hamlib's list reads.
+/// Read back as `PKTUSB` (an emulation answering ID904, piHPSDR, the QCX/QDX: Hamlib's `MD9;`, DIGU;
+/// an Icom's USB-D) or as another mode entirely (`RTTYR`, the FT-1000MP's RTTY-USB): the word stays
+/// `PKTUSB` for every over, as today.
+#[test]
+fn a_link_that_takes_the_data_word_keeps_it() {
+    for (model, reads) in [(990_303, "PKTUSB"), (990_304, "RTTYR")] {
+        let mut b = data_word_bench(SplitMode::None, model, DataAnswer::Takes(reads));
+        let _ = b.overs(2);
+        assert_eq!(mode_writes(&b), ["M PKTUSB -1"], "reads back {reads}");
+        assert!(!refused(&b, model, "PKTUSB"), "reads back {reads}");
+    }
+}
+
+/// The judgement itself (TX re-review F1, delta D1). Only the reads after NEXUS'S OWN DATA set are
+/// judged: the read on which the set is first seen is skipped (Hamlib's cache), as is any inside
+/// `DATA_CACHE_MS`; the word read back latches it taken for the connection; a watch whose two reads
+/// are the plain twin is NOT a verdict on its own: Nexus sets the word again (`last_mode` cleared for
+/// the retune), and only two consecutive such watches condemn it; a watch whose set crossed a band
+/// counts for nothing, and a band crossing inside a watch closes it; any other mode closes it; the
+/// TS-590S/SG and TS-950 are never judged (F3); and a word that is not a DATA word opens no watch.
+#[test]
+fn the_data_word_is_judged_only_after_nexuss_own_set_and_latched_once_taken() {
+    const T0: f64 = 1_000_000.0;
+    /// One watch after Nexus's set number `writes` of `word`: `crossed_at_set` = that set crossed a
+    /// band. Returns whether the watch asked for the word to be set again.
+    fn watch(
+        state: &mut RadioLoop,
+        engine: &Mutex<Engine>,
+        writes: u64,
+        word: &str,
+        crossed_at_set: bool,
+        reads: &[(f64, &str)],
+    ) -> bool {
+        state.last_mode = word.into();
+        if crossed_at_set {
+            state.dial_band_crosses += 1;
+        }
+        let t = T0 + writes as f64 * 100_000.0;
+        state.judge_data_word(writes, t, Some(word)); // the set is seen: skipped
+        for (at, read) in reads {
+            state.judge_data_word(writes, t + at, Some(read));
+        }
+        // TX off: the held re-set and verdict apply at once.
+        state.apply_owed_data_judgement(engine, &Rig::vox(), t + 20_000.0);
+        state.last_mode.is_empty()
+    }
+    let fresh = |model: u32| {
+        let mut state = loop_state();
+        state.applied.rig_model = model;
+        (state, Mutex::new(Engine::new("KD9TAW", "EN52", 0)))
+    };
+    let refused = |engine: &Mutex<Engine>, model: u32, word: &str| {
+        engine
+            .lock()
+            .unwrap()
+            .settings()
+            .link_refusals
+            .refused(model, word)
+    };
+    let twice = [(3_000.0, "USB"), (6_000.0, "USB")];
+
+    // SDR Console: plain USB after every one of Nexus's sets. The first watch asks for the set
+    // again, the second condemns.
+    let (mut st, eng) = fresh(2056);
+    assert!(
+        watch(&mut st, &eng, 1, "PKTUSB", false, &twice),
+        "set it again"
+    );
+    assert!(!refused(&eng, 2056, "PKTUSB"), "one watch is not a verdict");
+    watch(&mut st, &eng, 2, "PKTUSB", false, &twice);
+    assert!(refused(&eng, 2056, "PKTUSB"), "two consecutive watches are");
+
+    // R1: the operator's USB inside the first watch; the radio takes the word set again: latched.
+    let (mut st, eng) = fresh(990_501);
+    assert!(watch(&mut st, &eng, 1, "PKTUSB", false, &twice));
+    watch(&mut st, &eng, 2, "PKTUSB", false, &[(3_000.0, "PKTUSB")]);
+    assert!(!refused(&eng, 990_501, "PKTUSB") && st.data_taken == ["PKTUSB"]);
+    watch(&mut st, &eng, 3, "PKTUSB", false, &twice);
+    watch(&mut st, &eng, 4, "PKTUSB", false, &twice);
+    assert!(
+        !refused(&eng, 990_501, "PKTUSB"),
+        "latched: never judged again"
+    );
+
+    // R2: the first set crossed a band (the band stack's USB behind Hamlib's cache): that watch
+    // counts for nothing, so it takes two clean ones after it.
+    let (mut st, eng) = fresh(990_502);
+    assert!(
+        watch(&mut st, &eng, 1, "PKTUSB", true, &twice),
+        "set it again"
+    );
+    watch(&mut st, &eng, 2, "PKTUSB", false, &twice);
+    assert!(
+        !refused(&eng, 990_502, "PKTUSB"),
+        "only one clean watch so far"
+    );
+    watch(&mut st, &eng, 3, "PKTUSB", false, &twice);
+    assert!(refused(&eng, 990_502, "PKTUSB"));
+
+    // A band crossing inside a watch closes it: no verdict, no set again.
+    let (mut st, eng) = fresh(990_503);
+    st.last_mode = "PKTUSB".into();
+    st.judge_data_word(1, T0, Some("PKTUSB"));
+    st.judge_data_word(1, T0 + 3_000.0, Some("USB"));
+    st.dial_band_crosses += 1;
+    st.judge_data_word(1, T0 + 6_000.0, Some("USB"));
+    st.apply_owed_data_judgement(&eng, &Rig::vox(), T0 + 20_000.0);
+    assert!(st.data_watch.is_none() && !st.last_mode.is_empty());
+
+    // The FT-1000MP's DATA-LSB reads PKTLSB: taken; later plain LSB changes nothing.
+    let (mut st, eng) = fresh(1024);
+    watch(
+        &mut st,
+        &eng,
+        1,
+        "PKTLSB",
+        false,
+        &[(3_000.0, "PKTLSB"), (6_000.0, "LSB"), (9_000.0, "LSB")],
+    );
+    assert!(!refused(&eng, 1024, "PKTLSB") && st.data_taken == ["PKTLSB"]);
+
+    // A watch that judged nothing in between breaks the run: one plain watch, then another mode,
+    // then one plain watch is not two consecutive.
+    let (mut st, eng) = fresh(990_504);
+    watch(&mut st, &eng, 1, "PKTUSB", false, &twice);
+    watch(&mut st, &eng, 2, "PKTUSB", false, &[(3_000.0, "CW")]);
+    watch(&mut st, &eng, 3, "PKTUSB", false, &twice);
+    assert!(!refused(&eng, 990_504, "PKTUSB"));
+
+    // One plain read is not two; reads inside the cache window are not judged.
+    for reads in [
+        &[(3_000.0, "USB")][..],
+        &[(300.0, "USB"), (600.0, "USB")][..],
+    ] {
+        let (mut st, eng) = fresh(2056);
+        assert!(
+            !watch(&mut st, &eng, 1, "PKTUSB", false, reads),
+            "{reads:?}"
+        );
+    }
+    // F3: the TS-590S/SG and TS-950 read back through another field.
+    for model in [2012, 2013, 2031, 2037] {
+        let (mut st, eng) = fresh(model);
+        assert!(!watch(&mut st, &eng, 1, "PKTUSB", false, &twice), "{model}");
+        watch(&mut st, &eng, 2, "PKTUSB", false, &twice);
+        assert!(!refused(&eng, model, "PKTUSB"), "{model}");
+    }
+    // Not a DATA word: no watch.
+    let (mut st, _eng) = fresh(2056);
+    assert!(!watch(&mut st, &_eng, 1, "USB", false, &twice));
+}
+
+/// ⛔ A NEW CONNECTION IS JUDGED AFRESH. What the last link showed is forgotten when the loop opens
+/// the link, and the word is asked again in the same tick, so the new link is sent the DATA word
+/// and judged on its own answers.
+#[test]
+fn the_tick_that_opens_a_link_forgets_the_last_links_judgement() {
+    const MODEL: u32 = 2056;
+    let engine = cq_engine(SplitMode::None, 1441.0, |s| s.rig_model = MODEL);
+    engine
+        .lock()
+        .unwrap()
+        .refuse_link_data_word(MODEL, "PKTUSB");
+    assert_eq!(
+        engine.lock().unwrap().rig_mode_effective(),
+        "USB",
+        "premise"
+    );
+    let peer = retuning_peer(FT8_DIAL, "USB", |_, _| None);
+    let address = peer.address.clone();
+    let mut state = loop_state();
+    state.rx_ranges_probed = true;
+    state.tuner_probed = true;
+    let mut ra = mock_reopen_audio();
+    let mut rr = move |_t: &Transport, _coexist: bool| {
+        (
+            Rig::rigctld(&address),
+            None,
+            CatProbe::status(Some(true), ""),
+        )
+    };
+    let (mut backend, mut rig, mut station) = (MockBackend::new(), Rig::vox(), StationSinks::new());
+    let sinks = Sinks {
+        wsjtx: None,
+        psk: None,
+    };
+    state
+        .step(
+            &engine,
+            &mut backend,
+            &mut rig,
+            &sinks,
+            now_unix_ms() + 2_000.0,
+            &mut ra,
+            &mut rr,
+            &mut station,
+        )
+        .unwrap();
+    let modes: Vec<String> = peer
+        .lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.starts_with("M "))
+        .cloned()
+        .collect();
+    assert_eq!(modes, ["M PKTUSB -1"], "the opening tick's mode write");
+}
+
+// ── TX re-review scenes (2026-11-08): a radio that TAKES the DATA word is never condemned ────
+
+/// A rigctld whose radio TAKES the DATA word (reads back what it was told) and lets the test
+/// change its mode behind the loop's back (the operator's front panel, or a band-stack recall).
+/// `errs`: every `M`/`X` answers `RPRT -1` although the radio applies it (a link whose post-set
+/// step fails, the Kenwood IF-length trap). Records the radio's mode at every key.
+fn review_scene(
+    model: u32,
+    errs: bool,
+    flip_at: Option<f64>,
+    qsy_at: Option<f64>,
+) -> (Vec<String>, Vec<String>) {
+    review_scene_at(model, errs, flip_at, None, qsy_at)
+}
+
+/// [`review_scene`], the flip also moving the radio's dial to `flip_dial` (a band change on the
+/// radio's own panel, its band stack recalling USB there).
+fn review_scene_at(
+    model: u32,
+    errs: bool,
+    flip_at: Option<f64>,
+    flip_dial: Option<u64>,
+    qsy_at: Option<f64>,
+) -> (Vec<String>, Vec<String>) {
+    let engine = cq_engine(SplitMode::None, 1441.0, |s| s.rig_model = model);
+    let panel = Arc::new(AtomicBool::new(false));
+    let at_key = Arc::new(Mutex::new(Vec::<String>::new()));
+    let (p, k) = (panel.clone(), at_key.clone());
+    let peer = retuning_peer(FT8_DIAL, "USB", move |line, radio| {
+        if p.swap(false, Ordering::SeqCst) {
+            radio.mode = "USB".into();
+            if let Some(hz) = flip_dial {
+                radio.dial = hz;
+            }
+        }
+        let ok = || Some("RPRT 0\n".to_string());
+        match line {
+            "T 1" | "T 3" => {
+                k.lock().unwrap().push(radio.mode.clone());
+                radio.keyed = true;
+                ok()
+            }
+            "T 0" => {
+                radio.keyed = false;
+                ok()
+            }
+            _ if line.starts_with("M ") => {
+                radio.mode = line.split_whitespace().nth(1).unwrap().to_string();
+                if errs {
+                    Some("RPRT -1\n".into())
+                } else {
+                    ok()
+                }
+            }
+            _ if line.starts_with("X ") => {
+                if errs {
+                    Some("RPRT -1\n".into())
+                } else {
+                    ok()
+                }
+            }
+            _ if line.starts_with("S ") || line.starts_with("I ") => ok(),
+            "i" => Some(format!("{FT8_DIAL}\n")),
+            _ => None,
+        }
+    });
+    let mut rig = Rig::rigctld(&peer.address);
+    let mut state = loop_state();
+    state.applied.rig_model = model;
+    state.rx_ranges_probed = true;
+    state.tuner_probed = true;
+    let sinks = Sinks {
+        wsjtx: None,
+        psk: None,
+    };
+    let mut ra = mock_reopen_audio();
+    let mut rr = move |_t: &Transport, _c: bool| (Rig::vox(), None, CatProbe::status(None, ""));
+    let mut station = StationSinks::new();
+    let mut backend = MockBackend::new();
+    let slot = ((now_unix_ms() + 25_000.0) / 30_000.0).ceil() * 30_000.0;
+    let mut t = slot - 14_900.0;
+    let mut mark = 0;
+    let mut flipped = false;
+    let mut qsyd = false;
+    let end = slot + 75_000.0;
+    while t < end {
+        if let Some(f) = flip_at {
+            if !flipped && t >= slot + f {
+                flipped = true;
+                panel.store(true, Ordering::SeqCst);
+                mark = peer.lines.lock().unwrap().len();
+            }
+        }
+        if let Some(q) = qsy_at {
+            if !qsyd && t >= slot + q {
+                qsyd = true;
+                let mut e = engine.lock().unwrap();
+                e.set_frequency(14.0745, "20m", "USB"); // the operator clicks a spot: a QSY
+                e.start_cq(None).expect("CQ again");
+                let _ = e.take_immediate_tx();
+            }
+        }
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                t,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        t += 20.0;
+    }
+    let writes: Vec<String> = peer.lines.lock().unwrap()[mark..]
+        .iter()
+        .filter(|l| l.starts_with("M ") || l.starts_with("X "))
+        .cloned()
+        .collect();
+    let keys = at_key.lock().unwrap().clone();
+    eprintln!("REVIEW model {model} errs {errs}: mode writes after the flip {writes:?}; radio mode at each key {keys:?}");
+    (writes, keys)
+}
+
+/// F-A: a radio that TAKES PKTUSB. The operator turns it to USB on the front panel (or a band-stack
+/// recall does) during receive, and ~12 s later clicks a spot (QSY) and calls CQ again. The radio has
+/// shown it takes the DATA word on this connection, so the over after the click must key in PKTUSB.
+#[test]
+fn review_front_panel_usb_then_a_spot_click_keys_in_the_data_word() {
+    let (writes, keys) = review_scene(990_401, false, Some(16_000.0), Some(28_000.0));
+    assert!(keys.len() >= 2, "premise: overs keyed: {keys:?}");
+    assert_eq!(
+        keys[0], "PKTUSB",
+        "premise: the first over went out in the DATA word"
+    );
+    assert!(
+        !writes.iter().any(|l| l.starts_with("M USB")),
+        "a radio that took PKTUSB was commanded plain USB after a front-panel change: {writes:?}"
+    );
+    assert_eq!(
+        keys.last().map(String::as_str),
+        Some("PKTUSB"),
+        "keyed in: {keys:?}"
+    );
+}
+
+/// F-B: a link whose every mode set answers RPRT -1 although the radio applies it. The radio TAKES
+/// PKTUSB on the wire; every over should key in it.
+#[test]
+fn review_a_link_that_errors_every_set_still_keys_in_what_the_radio_takes() {
+    let (_writes, keys) = review_scene(990_402, true, None, None);
+    assert!(keys.len() >= 2, "premise: overs keyed: {keys:?}");
+    assert!(keys.iter().all(|m| m == "PKTUSB"), "keyed in: {keys:?}");
+}
+
+/// Q3: Split = Rig on a SILENT link (SDR Console): how many overs carry `X PKTUSB` before the verdict?
+#[test]
+fn review_rig_split_on_a_silent_link_sends_x_pkt_on_how_many_overs() {
+    let mut b = data_word_bench(SplitMode::Rig, 990_405, DataAnswer::Ignores);
+    let overs = b.overs(3);
+    for (i, o) in overs.iter().enumerate() {
+        eprintln!(
+            "REVIEW split silent over {}: key {:?} rx-modes {:?}",
+            i + 1,
+            o.key,
+            o.rx.iter()
+                .filter(|l| l.starts_with("M ") || l.starts_with("X "))
+                .collect::<Vec<_>>()
+        );
+    }
+    let n = overs
+        .iter()
+        .filter(|o| o.key.iter().any(|l| l.contains("PKT")))
+        .count();
+    eprintln!("REVIEW overs keyed behind a DATA word: {n}");
+    assert!(n <= 1, "{n}");
+}
+
+/// F-A, the band-stack variant: the operator changes band ON THE RADIO (40 m), its band stack
+/// recalls USB there, and ~12 s later a spot click brings it back to 20 m FT8. The radio showed it
+/// takes PKTUSB on this connection, so the over after the click keys in it.
+#[test]
+fn review_a_band_stack_usb_then_a_spot_click_keys_in_the_data_word() {
+    let (writes, keys) = review_scene_at(
+        990_403,
+        false,
+        Some(16_000.0),
+        Some(7_074_000),
+        Some(28_000.0),
+    );
+    assert!(keys.len() >= 2, "premise: overs keyed: {keys:?}");
+    assert_eq!(
+        keys[0], "PKTUSB",
+        "premise: the first over went out in the DATA word"
+    );
+    assert!(
+        !writes.iter().any(|l| l.starts_with("M USB")),
+        "a radio that took PKTUSB was commanded plain USB after a band-stack recall: {writes:?}"
+    );
+    assert_eq!(
+        keys.last().map(String::as_str),
+        Some("PKTUSB"),
+        "keyed in: {keys:?}"
+    );
+}
+
+/// F3: a TS-590SG on a link that reads back plain USB after `PKTUSB` (Hamlib sets its DATA mode
+/// through `SF` and may read the base mode there) is never judged by the read-back: today's word,
+/// every over.
+#[test]
+fn a_ts590_is_never_read_back_judged() {
+    let mut b = data_word_bench(SplitMode::None, 2037, DataAnswer::Ignores);
+    let _ = b.overs(2);
+    assert_eq!(mode_writes(&b), ["M PKTUSB -1"]);
+    assert!(!refused(&b, 2037, "PKTUSB"));
+}
+
+/// ⛔ A RADIO HANDOFF IS JUDGED AFRESH, with no tick of the old verdict (F5): the loop's handoff
+/// runs ahead of `step`, and the step's first engine lock forgets before it works out the word.
+#[test]
+fn a_radio_handoff_forgets_the_last_links_judgement_before_the_first_mode_write() {
+    const MODEL: u32 = 2056;
+    let engine = cq_engine(SplitMode::None, 1441.0, |s| s.rig_model = MODEL);
+    engine
+        .lock()
+        .unwrap()
+        .refuse_link_data_word(MODEL, "PKTUSB");
+    let peer = retuning_peer(FT8_DIAL, "USB", |_, _| None);
+    let mut rig = Rig::rigctld(&peer.address);
+    let mut state = loop_state();
+    state.applied.rig_model = MODEL;
+    state.rx_ranges_probed = true;
+    state.tuner_probed = true;
+    state.data_taken.push("PKTLSB");
+    state.reset_for_handoff(); // what `install_handoff_connection` runs
+    assert!(
+        state.data_taken.is_empty(),
+        "nothing the last radio showed carries over"
+    );
+    let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
+    let (mut backend, mut station) = (MockBackend::new(), StationSinks::new());
+    let sinks = Sinks {
+        wsjtx: None,
+        psk: None,
+    };
+    state
+        .step(
+            &engine,
+            &mut backend,
+            &mut rig,
+            &sinks,
+            now_unix_ms() + 2_000.0,
+            &mut ra,
+            &mut rr,
+            &mut station,
+        )
+        .unwrap();
+    let modes: Vec<String> = peer
+        .lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.starts_with("M "))
+        .cloned()
+        .collect();
+    assert_eq!(
+        modes.first().map(String::as_str),
+        Some("M PKTUSB -1"),
+        "{modes:?}"
+    );
+}
+
+/// R1 (delta review): the front-panel USB lands INSIDE the first watch, ~1 s after the loop's first
+/// DATA set on this connection and before any read latched "taken". Then a spot click at +28 s.
+#[test]
+fn review_residual_front_panel_inside_the_first_watch() {
+    let (writes, keys) = review_scene(990_406, false, Some(-13_900.0), Some(28_000.0));
+    eprintln!("REVIEW residual writes {writes:?} keys {keys:?}");
+    assert_eq!(
+        keys.last().map(String::as_str),
+        Some("PKTUSB"),
+        "keyed in: {keys:?}"
+    );
+}
+
+/// R2 (delta review): the connection's FIRST DATA set crosses a band. The radio sits on 40 m in USB;
+/// Nexus restores 20 m FT8 (`M PKTUSB`, then `F 14074000`). The radio TAKES PKTUSB, but its band
+/// stack then recalls USB for 20 m. Hamlib answers the re-assert's immediate `m` from its 500 ms
+/// mode cache (measured on the wire, 4.6.5: no `MD;` sent, `PKTUSB` returned while the radio is in
+/// `MD2`), so the re-assert sees nothing to fix. Later real reads say USB. At +28 s the operator
+/// clicks a spot (no band cross): the over after it must key in PKTUSB, as on the base.
+#[test]
+fn review_r2_first_set_crossing_a_band_stack_radio() {
+    let model = 990_407;
+    let engine = cq_engine(SplitMode::None, 1441.0, |s| s.rig_model = model);
+    let at_key = Arc::new(Mutex::new(Vec::<String>::new()));
+    let cache: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let (k, c) = (at_key.clone(), cache.clone());
+    let peer = retuning_peer(7_074_000, "USB", move |line, radio| {
+        let ok = || Some("RPRT 0\n".to_string());
+        match line {
+            "T 1" | "T 3" => {
+                k.lock().unwrap().push(radio.mode.clone());
+                radio.keyed = true;
+                ok()
+            }
+            "T 0" => {
+                radio.keyed = false;
+                ok()
+            }
+            "m" => c.lock().unwrap().take().map(|m| format!("{m}\n2400\n")), // Hamlib's mode cache, once
+            _ if line.starts_with("M ") => {
+                let m = line.split_whitespace().nth(1).unwrap().to_string();
+                radio.mode = m.clone();
+                *c.lock().unwrap() = Some(m);
+                ok()
+            }
+            _ if line.starts_with("F ") => {
+                let hz: u64 = line[2..].trim().parse().unwrap();
+                if hz / 1_000_000 != radio.dial / 1_000_000 {
+                    radio.mode = "USB".into(); // band stack recall
+                }
+                radio.dial = hz;
+                ok()
+            }
+            _ if line.starts_with("S ") || line.starts_with("I ") || line.starts_with("X ") => ok(),
+            "i" => Some(format!("{}\n", radio.dial)),
+            _ => None,
+        }
+    });
+    let mut rig = Rig::rigctld(&peer.address);
+    let mut state = loop_state();
+    state.applied.rig_model = model;
+    state.rx_ranges_probed = true;
+    state.tuner_probed = true;
+    let sinks = Sinks {
+        wsjtx: None,
+        psk: None,
+    };
+    let mut ra = mock_reopen_audio();
+    let mut rr = move |_t: &Transport, _c: bool| (Rig::vox(), None, CatProbe::status(None, ""));
+    let mut station = StationSinks::new();
+    let mut backend = MockBackend::new();
+    let slot = ((now_unix_ms() + 25_000.0) / 30_000.0).ceil() * 30_000.0;
+    let mut t = slot - 14_900.0;
+    let mut qsyd = false;
+    while t < slot + 75_000.0 {
+        if !qsyd && t >= slot + 28_000.0 {
+            qsyd = true;
+            let mut e = engine.lock().unwrap();
+            e.set_frequency(14.0745, "20m", "USB");
+            e.start_cq(None).expect("CQ again");
+            let _ = e.take_immediate_tx();
+        }
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                t,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        t += 20.0;
+    }
+    let writes: Vec<String> = peer
+        .lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.starts_with("M ") || l.starts_with("F "))
+        .cloned()
+        .collect();
+    let keys = at_key.lock().unwrap().clone();
+    eprintln!("REVIEW R2 writes {writes:?} keys {keys:?}");
+    assert!(keys.len() >= 2, "premise: overs keyed: {keys:?}");
+    assert_eq!(
+        keys.last().map(String::as_str),
+        Some("PKTUSB"),
+        "keyed in: {keys:?}"
+    );
+}
+
+/// T3 (delta review D2): SDR Console's chain, its start swept in 20 ms steps so that the judgement's
+/// re-set and verdict would fall at the slot boundary. No mode write may land inside
+/// `DATA_WRITE_GUARD_MS` before any `T 1`, at any start: both are held until no over can key.
+#[test]
+fn review_t3_a_re_set_aimed_at_the_boundary() {
+    let mut near = Vec::new();
+    let mut inside = Vec::new();
+    for j in 0..40u32 {
+        let model = 990_700 + j;
+        let mut b = data_word_bench(SplitMode::None, model, DataAnswer::Ignores);
+        let slot = b.slot;
+        b.t = slot - 9_600.0 + f64::from(j) * 20.0;
+        let lines = b.radio.peer.lines.clone();
+        let log: Arc<Mutex<Vec<(f64, String)>>> = Arc::default();
+        let lg = log.clone();
+        let mut seen = 0usize;
+        let _ = b.overs_hooked(
+            2,
+            |_| {},
+            move |t, _| {
+                let v = lines.lock().unwrap();
+                for line in &v[seen..] {
+                    lg.lock().unwrap().push((t - 20.0, line.clone()));
+                }
+                seen = v.len();
+            },
+        );
+        let log = log.lock().unwrap().clone();
+        let keys: Vec<f64> = log
+            .iter()
+            .filter(|(_, l)| l == "T 1")
+            .map(|(t, _)| *t)
+            .collect();
+        let mut row = Vec::new();
+        for (t, l) in log.iter().filter(|(_, l)| l.starts_with("M ")) {
+            let lead = keys.iter().find(|k| **k >= *t).map(|k| k - t);
+            // ⛔ D2: no mode write the judgement causes, or any other, inside the guard before a key.
+            if lead.is_some_and(|x| x < DATA_WRITE_GUARD_MS) {
+                inside.push(format!("j{j}: {l} {lead:?} ms before T 1"));
+            }
+            row.push(format!(
+                "{l}@{}",
+                lead.map_or("-".into(), |x| format!("{x:.0}"))
+            ));
+            if l.contains("PKT") && lead.is_some_and(|x| x < 1_000.0) {
+                near.push(format!("j{j}: {l} {lead:?} ms before T 1"));
+            }
+        }
+        eprintln!("REVIEW T3 j{j}: {row:?}");
+    }
+    eprintln!("REVIEW T3 DATA writes under 1 s before a key: {near:?}");
+    assert!(
+        inside.is_empty(),
+        "mode writes inside the guard before a key: {inside:?}"
+    );
+}
+
+/// D2, the verdict's `M USB` and the re-set directly: with an FT8 over armed, both are held while the
+/// slot may still key an over (before 75 %) and inside the guard before the boundary, and while
+/// anything is keyed; applied in the window between (11.25 s to 13.0 s into an FT8 slot).
+#[test]
+fn the_judgements_re_set_and_verdict_wait_for_a_moment_no_over_can_key_in() {
+    const MODEL: u32 = 2056;
+    let engine = Mutex::new(Engine::new("KD9TAW", "EN52", 0));
+    {
+        let mut e = engine.lock().unwrap();
+        e.set_tier(Tier::Ft8);
+        e.set_tx_enabled(true);
+    }
+    let refused = || {
+        engine
+            .lock()
+            .unwrap()
+            .settings()
+            .link_refusals
+            .refused(MODEL, "PKTUSB")
+    };
+    let mut state = loop_state();
+    state.applied.rig_model = MODEL;
+    state.last_mode = "PKTUSB".into();
+    state.data_verdict_owed = Some(("PKTUSB", "still reads USB".into()));
+    state.data_reset_owed = Some("PKTUSB");
+    let slot = 30_000_000.0;
+    let rig = Rig::vox();
+    for into in [100.0, 5_000.0, 11_000.0, 13_100.0, 14_900.0] {
+        state.apply_owed_data_judgement(&engine, &rig, slot + into);
+        assert!(!refused(), "verdict applied {into} ms into the slot");
+        assert_eq!(
+            state.last_mode, "PKTUSB",
+            "re-set applied {into} ms into the slot"
+        );
+    }
+    let mut keyed = Rig::vox();
+    keyed.keyed = true;
+    state.apply_owed_data_judgement(&engine, &keyed, slot + 12_000.0);
+    assert!(!refused(), "verdict applied while keyed");
+    state.apply_owed_data_judgement(&engine, &rig, slot + 12_000.0);
+    assert!(refused(), "the verdict, in the window");
+    assert!(state.last_mode.is_empty(), "the re-set, in the window");
+    assert!(state.data_verdict_owed.is_none() && state.data_reset_owed.is_none());
+}

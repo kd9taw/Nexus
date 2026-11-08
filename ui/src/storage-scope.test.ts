@@ -51,7 +51,14 @@ export const PER_SURFACE = [
   // bar on, every other layout and Reset layout off). A pop-out inherits the main window's until it
   // picks a layout of its own, like the placement it is read back with.
   'nexus.connect.bar',
+  // Whether THIS window's stored layout has had the Best times box put in once (connectConfig's
+  // migrateBestTimes): the dashboard window keeps a layout of its own, and gets the box in it too.
+  'nexus.connect.bestTimes.v1',
   'nexus.connect.config',
+  // The Best times box's last call and mode (features/bestTimesAsk, BestTimesPane): what THIS window's
+  // box was last asked, a convenience, like a box's sort.
+  'nexus.bestTimes.call',
+  'nexus.bestTimes.mode',
   // The Getting Out box's Start fresh time (features/getoutSince): an antenna test in THIS window. A
   // pop-out starts on the main window's and diverges at its first press; a restart keeps it.
   'nexus.connect.getout.since',
@@ -261,6 +268,9 @@ const SHARED = [
   // How the TX meters are drawn, Bars or Needle (#343, txMeterStyle.ts): a display preference about
   // this screen, so a popped-out cockpit draws its meters as the main window does.
   'nexus-txmeter-style',
+  // The high-SWR cutoff, mirrored for the TX meters' tooltip (#476, swrCutoff.ts): a copy of a
+  // station setting, so a popped-out cockpit's meters name the same number as the main window's.
+  'nexus-swr-cutoff',
   // The colour roles (Settings ▸ Appearance ▸ Colours), one key per role: a preference about this
   // screen and the eyes in front of it, the same class as the theme, so every window agrees. The
   // role table is their one source (`classifies every colour-role key`, below).
@@ -278,6 +288,9 @@ const SHARED = [
   // and the eyes in front of it, like the cap; only the main window ever asks or reads it.
   'nexus-ui-scale-fit-rule',
   'nexus.connect.chaseDefault.v1',
+  // See full day's hand-off to the Conditions window (features/bestTimesAsk): written by one window for
+  // ANOTHER to read, so it cannot be scoped to either.
+  'nexus.bestTimes.handoff',
   'nexus.connect.mode',
   'nexus.cw.sensitivity',
   // The FT country-exclusion list. SHARED, and the one key here where that is a RULING

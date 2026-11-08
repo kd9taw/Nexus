@@ -30,6 +30,22 @@ export function gridToLatLon(grid: string): LatLon | null {
   return { lat, lon }
 }
 
+/** #483: the OpenStreetMap page for a locator, opened in the browser by `openExternalUrl` from
+ *  the caller card. STRICT (4, 6 or 8 characters, Maidenhead fields only), so nothing that is not
+ *  a locator can reach a URL; an 8-character locator maps at its 6-character square. A pin at the
+ *  square's centre, zoomed to show the square. Nexus fetches nothing itself: the browser opens
+ *  openstreetmap.org's own page, and the locator is all that goes to it. */
+export function gridMapUrl(grid: string): string | null {
+  const g = grid.trim().toUpperCase()
+  if (!/^[A-R]{2}[0-9]{2}(?:[A-X]{2}(?:[0-9]{2})?)?$/.test(g)) return null
+  const at = gridToLatLon(g.slice(0, 6))
+  if (!at) return null
+  const zoom = g.length >= 6 ? 13 : 9
+  const lat = at.lat.toFixed(4)
+  const lon = at.lon.toFixed(4)
+  return `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=${zoom}/${lat}/${lon}`
+}
+
 /** Lat/lon → 4-char Maidenhead square (e.g. "EN52") — the inverse of
  * gridToLatLon at square precision. Used to ask the path predictor about a
  * map spot that has coordinates but no reported grid. */

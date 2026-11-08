@@ -33,6 +33,7 @@ import { ConnectView } from './ConnectView'
 import { DEFAULT_SLOTS, SLOT_IDS, type SlotId } from '../features/connectConfig'
 import { installExternalLinkInterceptor } from '../externalLinks'
 import { pastTheSwitch } from './ConnectView.testkit'
+import { askBestTimes, resetBestTimesAsk } from '../features/bestTimesAsk'
 
 // THE BUDGET (2026-10-09). The slowest case here, "A+ grows THAT pane’s text a step at a time, keeps the…", takes
 // 0.41 s and 0.32 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
@@ -270,8 +271,37 @@ describe('tabs — several panes in one slot', () => {
     return screen.getByRole('group', { name: 'Layout' }).querySelector('.connect-layout-now')?.textContent
   }
 
+  it('a call handed to Best times (See full day) brings its box on screen, once, wherever it is', async () => {
+    resetBestTimesAsk()
+    // A layout without the box (its one-time insertion done and the box since removed).
+    localStorage.setItem(CONFIG, JSON.stringify({ slots: { ...DEFAULT_SLOTS }, overlays: {} }))
+    localStorage.setItem('nexus.connect.bestTimes.v1', '1')
+    const { container } = await mount()
+    expect(paneIn(container, 'right1')).toBe('chase')
+    await act(async () => askBestTimes('EA8ABC'))
+    expect(paneIn(container, 'right1')).toBe('bestTimes')
+    expect(cfg().tabs.right1).toEqual(['chase', 'bestTimes'])
+    // Back on Chase, a second hand-off shows the box's tab again; nothing is added twice.
+    fireEvent.click(within(frameOf(container, 'right1')).getByRole('tab', { name: 'Chase' }))
+    expect(paneIn(container, 'right1')).toBe('chase')
+    await act(async () => askBestTimes('K1ABC'))
+    expect(paneIn(container, 'right1')).toBe('bestTimes')
+    expect(cfg().tabs.right1).toEqual(['chase', 'bestTimes'])
+    // Removed again, then the view mounts afresh (a switch back to Conditions): a hand-off already
+    // handled brings nothing back.
+    fireEvent.click(within(openMenu(container, 'right1')).getByRole('menuitem', { name: /^Remove / }))
+    expect(cfg().tabs.right1).toBeUndefined()
+    cleanup()
+    const again = await mount()
+    expect(paneIn(again.container, 'right1')).toBe('chase')
+    expect(cfg().tabs.right1).toBeUndefined()
+  })
+
   it('a layout saved before tabs loads exactly as today: every head is its title, no tab strip anywhere', async () => {
     localStorage.setItem(CONFIG, JSON.stringify({ slots: { ...DEFAULT_SLOTS, left1: 'greyline' }, overlays: {} }))
+    // This window has had its one-time Best times box already (connectConfig's migrateBestTimes, which
+    // its own test covers): the subject here is how a stored layout without tabs reads.
+    localStorage.setItem('nexus.connect.bestTimes.v1', '1')
     const { container } = await mount()
     for (const s of SLOT_IDS) {
       const head = frameOf(container, s).querySelector('.pane-head')!
@@ -412,11 +442,15 @@ describe('auto-rotate — a slot’s tabs in turn, on the dashboard window and t
   const CONFIG = 'nexus.connect.config'
   const cfg = () => JSON.parse(localStorage.getItem(CONFIG) ?? 'null')
   const paneIn = (c: HTMLElement, s: SlotId) => frameOf(c, s)?.getAttribute('data-pane')
-  const store = (rotate?: Record<string, number>) =>
+  const store = (rotate?: Record<string, number>) => {
     localStorage.setItem(
       CONFIG,
       JSON.stringify({ slots: DEFAULT_SLOTS, tabs: { left2: ['bandTiles', 'clock', 'greyline'] }, ...(rotate ? { rotate } : {}), overlays: {} }),
     )
+    // A window that has had its one-time Best times box already (connectConfig's migrateBestTimes):
+    // the subject here is left2's rotation.
+    localStorage.setItem('nexus.connect.bestTimes.v1', '1')
+  }
   async function mountRotating(autoRotate = true) {
     let r!: ReturnType<typeof render>
     await act(async () => {

@@ -213,8 +213,11 @@ export function js8CallRowEntries(o: {
   canBlock: boolean
   onBlock: () => void
   clears: Js8MenuEntry[]
+  /** Best times for the station (a station row only); first on the menu, as on every call menu. */
+  onBestTimes?: () => void
 }): Js8MenuEntry[] {
   return [
+    ...(!o.group && o.onBestTimes ? [{ kind: 'item' as const, label: t('callMenu.bestTimes'), onSelect: o.onBestTimes }, { kind: 'sep' as const }] : []),
     ...(o.jump ? [...js8JumpEntries(o.jump), { kind: 'sep' as const }] : []),
     { kind: 'item', label: t('js8.lists.showInbox'), onSelect: o.onShowInbox, disabled: !o.hasMessages },
     ...(o.group ? [] : [{ kind: 'item' as const, label: o.pinned ? t('js8.lists.unpin') : t('js8.lists.pin'), onSelect: o.onPin }]),

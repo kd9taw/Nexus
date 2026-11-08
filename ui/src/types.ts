@@ -545,6 +545,86 @@ export interface PathDay {
   bands: { band: string; cells: PathDayCell[] }[]
   hours: PathDayHour[]
 }
+/** A word the path model gives an hour (never a number: the figures are relative). */
+export type Workability = 'Closed' | 'Marginal' | 'Fair' | 'Good' | 'Excellent'
+/** The mode a Best times answer is for. */
+export type BestMode = 'FT8' | 'FT4' | 'CW' | 'SSB'
+/** A band and its word (`get_best_times`). */
+export interface BestBandWord {
+  band: string
+  word: Workability
+}
+/** Estimated absorption now (a flare, a proton event) on one band, whole dB. */
+export interface BestAbsorbed {
+  band: string
+  db: number
+}
+/** What "now" says in a Best times answer. */
+export interface BestNow {
+  kind: 'try' | 'longShot' | 'notNow'
+  band?: string
+  word?: Workability
+  route?: 'short' | 'long'
+  /** The top of the hour the band's run ends (unix seconds); absent with `allDay`. */
+  untilUnix?: number
+  allDay: boolean
+  runnerUp?: BestBandWord
+  passedOver?: BestAbsorbed
+  absorbed?: BestAbsorbed
+}
+/** One window over the next 24 hours: a run of hours at Fair or better on one band. */
+export interface BestWindow {
+  band: string
+  fromUnix: number
+  toUnix: number
+  word: Workability
+  route?: 'short' | 'long'
+  greyline: boolean
+  longShot: boolean
+  stormKp?: number
+}
+/** The answer folded from the path prediction (`propagation::besttimes`). */
+export interface BestTimes {
+  engine: string
+  mode: BestMode
+  perMode: boolean
+  now: BestNow
+  windows: BestWindow[]
+  week: { forecastUntilUnix?: number; flags: { dayUnix: number; kp: number }[] }
+  /** Highest band first; cells by UTC hour. */
+  chart: { band: string; licensed: boolean; cells: { word: Workability; route?: 'short' | 'long' }[] }[]
+  hours: PathDayHour[]
+  nowHour: number
+  longUsed: boolean
+  /** The licence has no transmit band in this mode: the answer is empty for that, not the path. */
+  noTxBand?: boolean
+}
+/** What an answer's location rests on. */
+export interface BestBasis {
+  kind: 'grid' | 'position' | 'entity'
+  from?: 'typed' | 'logForm' | 'heard' | 'callbook' | 'callbookBase' | 'logged'
+  grid?: string
+  /** The home call whose callbook record answered a stroked call: used (`callbookBase`), or left out
+   *  because it is in another country (with an entity centre). */
+  base?: string
+}
+/** `get_best_times`: an answer, or the code of a case with no answer. */
+export interface BestTimesView {
+  state: 'answer' | 'noGrid' | 'enterCall' | 'unplaceable' | 'sameEntity' | 'maritime' | 'you' | 'tooClose'
+  call: string
+  entity?: string
+  basis?: BestBasis
+  km?: number
+  bearing?: number
+  answer?: BestTimes
+  engine: string
+  engineFallback?: boolean
+  power?: AssumedPower
+  /** The antenna gain (dBi, transmit plus receive) the answer assumed. */
+  antGainDbi?: number
+  storm?: StormNote
+  spaceNow?: SpaceNow
+}
 /** One of the ten fixed DX regions with its path over the day (`get_path_regions`). */
 export interface RegionPathDay {
   id: string

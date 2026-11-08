@@ -87,7 +87,8 @@ export function SetupHealth({
   const tuning = !!radio?.tuning
   const watts = radio?.txPower ?? null
   // While keying: green once forward power registers (RF is being made → CAT/PTT/rig all work).
-  const txClass = tuning ? (watts != null && watts > 0 ? 'ok' : 'bad') : 'unknown'
+  // Not keying: switched on is `armed` (#486, a green ring: on, not yet proven), off is grey.
+  const txClass = tuning ? (watts != null && watts > 0 ? 'ok' : 'bad') : radio?.txEnabled ? 'armed' : 'unknown'
   return (
     <div className="setup-health" role="status" aria-label={t('setup.health.title')}>
       <span className="setup-health-title">{t('setup.health.title')}</span>

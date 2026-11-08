@@ -203,7 +203,7 @@ export const CONNECT_PRESETS: Record<ConnectPresetId, ConnectLayout> = {
     tabs: {
       left1: ['bandTiles', 'bandAdvisor', 'bestband', 'activity', 'advisory'],
       left2: ['openings', 'esNowcast', 'openingsLog', 'insights', 'bandHours', 'pathRegions'],
-      right1: ['chase', 'chaseFeed', 'selection', 'pathDay', 'contests', 'satPasses'],
+      right1: ['chase', 'chaseFeed', 'selection', 'pathDay', 'contests', 'satPasses', 'bestTimes'],
       right2: ['getout', 'spacewx', 'kpOutlook', 'measuredMuf', 'beacons', 'greyline'],
       bottom1: ['outlook', 'clock'],
       bottom2: ['rotor', 'amp'],
@@ -308,7 +308,7 @@ const sameShare = (a: number | undefined, b: number | undefined) => Math.abs((a 
 /** Boxes a preset's tab plan gained after it shipped. A stored layout that is the plan as it was
  *  before them still reads as that preset (it was never customised), and the boxes stay offered in the
  *  picker rather than being inserted into it; a fresh install gets the plan with them. */
-const LATER_PLAN_BOXES: readonly PaneId[] = ['pathDay', 'pathRegions']
+const LATER_PLAN_BOXES: readonly PaneId[] = ['pathDay', 'pathRegions', 'bestTimes']
 
 /** A preset's tab plan as it was before `LATER_PLAN_BOXES` joined it. */
 function withoutLaterBoxes(layout: ConnectLayout): ConnectLayout {
@@ -321,7 +321,35 @@ function withoutLaterBoxes(layout: ConnectLayout): ConnectLayout {
   return { ...layout, tabs }
 }
 
-function matches(layout: ConnectLayout, now: ConnectLayoutState): boolean {
+/** Boxes Nexus itself puts into a stored layout once (connectConfig's `migrateBestTimes`). Where one
+ *  sits is not part of an arrangement: a layout that is a preset apart from it still reads as that
+ *  preset, so an update never renames the operator's layout Custom. */
+const INSERTED_BOXES: readonly PaneId[] = ['bestTimes']
+
+/** Whether any layout of `table` offers box `id` in its tab plan: a host whose table never offers a
+ *  box (the TV page's, for Best times) never has it inserted. */
+export function tableOffers(table: Readonly<Record<ConnectPresetId, ConnectLayout>>, id: PaneId): boolean {
+  return CONNECT_PRESET_IDS.some((p) => SLOT_IDS.some((s) => table[p].tabs?.[s]?.includes(id)))
+}
+
+/** `tabs` and `slots` without the inserted boxes: a slot showing one shows the first box left. */
+function withoutInserted<T extends { slots: Record<SlotId, PaneId>; tabs?: Partial<Record<SlotId, readonly PaneId[]>> }>(x: T): T {
+  if (!x.tabs) return x
+  const tabs: Partial<Record<SlotId, PaneId[]>> = {}
+  const slots = { ...x.slots }
+  for (const s of SLOT_IDS) {
+    const list = x.tabs[s]
+    if (!list) continue
+    const left = list.filter((p) => !INSERTED_BOXES.includes(p))
+    tabs[s] = left
+    if (INSERTED_BOXES.includes(slots[s]) && left.length > 0) slots[s] = left[0]
+  }
+  return { ...x, slots, tabs }
+}
+
+function matches(layoutIn: ConnectLayout, nowIn: ConnectLayoutState): boolean {
+  const layout = withoutInserted(layoutIn)
+  const now = withoutInserted(nowIn)
   for (const s of SLOT_IDS) {
     const want = layout.tabs?.[s]
     const have = now.tabs?.[s]

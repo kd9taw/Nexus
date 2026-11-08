@@ -1847,6 +1847,36 @@ fn agc_from_hamlib(v: u8) -> &'static str {
 /// 500 ms read timeout, so even a couple dozen tries spans seconds), then we stop
 /// retrying THAT mode until the target changes.
 const MODE_SET_MAX_TRIES: u32 = 30;
+
+/// How many reads after Nexus's own DATA-word set one watch judges ([`RadioLoop::judge_data_word`]),
+/// past the skipped first one and the cache window. Counted in READS, not time: the heavy poll holds
+/// its reads while the radio is keyed, so a watch opened before an over is finished after it.
+const DATA_WATCH_READS: u8 = 3;
+/// Reads sooner than this after the set can be Hamlib's own mode cache, and are not judged.
+const DATA_CACHE_MS: f64 = 1_000.0;
+/// The least room to the next slot boundary a mode write the DATA-word judgement causes may leave,
+/// with TX armed ([`RadioLoop::apply_owed_data_judgement`]).
+const DATA_WRITE_GUARD_MS: f64 = 2_000.0;
+/// Models whose Hamlib backend sets the DATA mode through one field and reads it through another
+/// (TX re-review F3), so a read-back of plain USB does not show the radio left DATA: TS-950S/SDX
+/// (2012/2013: set via `DT1`, read via `IF`), TS-590S/SG (2031/2037: set and read via `SF`, whose
+/// mode character may not carry DATA). Not read-back judged until a bench settles it; an explicit
+/// refusal is still acted on.
+const READBACK_UNTRUSTED: [u32; 4] = [2012, 2013, 2031, 2037];
+
+/// One watch of the reads after Nexus's own DATA-word set ([`RadioLoop::judge_data_word`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct DataWatch {
+    word: &'static str,
+    /// Loop time of the first read after the set (ms).
+    since: f64,
+    twin_reads: u8,
+    /// Reads judged so far ([`DATA_WATCH_READS`]).
+    reads: u8,
+    /// The set came with a dial write that crossed a band: its plain reads may be the band stack.
+    void: bool,
+}
+
 /// After this many consecutive failures, DATA-mode retries drop their explicit 3 kHz
 /// passband and go filter-agnostic (`M PKTUSB 0`) — the middle rung of the mode-set
 /// resilience ladder (see [`retry_passband`]). A backend that chokes on the width→DATA-
@@ -4228,6 +4258,28 @@ struct RadioLoop {
     /// faults mean the CAT link is too slow or mute — claiming "rig has no mode" there
     /// sent an IC-7610 @ 19200 baud operator chasing a mode the rig has always had.
     mode_saw_reject: bool,
+    /// The reads being judged after Nexus's own DATA-word set ([`Self::judge_data_word`]); `None`
+    /// when no such set is being watched.
+    data_watch: Option<DataWatch>,
+    /// `Rig::mode_writes` when the judgement last looked: a change is a mode write since.
+    data_seen_writes: u64,
+    /// The DATA words this connection's radio has SHOWN it takes (read back as itself, past
+    /// Hamlib's cache): latched, never judged again on this connection.
+    data_taken: Vec<&'static str>,
+    /// Consecutive watches of Nexus's own DATA set that ended on the plain twin with no band
+    /// crossing in them ([`Self::judge_data_word`]): two condemn the word.
+    data_twin_watches: u8,
+    /// Dial writes that crossed a band (or came from an unknown one), counted
+    /// (`reassert_mode_after_band_cross`), and the count when the judgement last looked.
+    dial_band_crosses: u64,
+    data_seen_crosses: u64,
+    /// The judgement's re-set of a DATA word, and its verdict, waiting for a moment no over can key
+    /// in ([`Self::apply_owed_data_judgement`]).
+    data_reset_owed: Option<&'static str>,
+    data_verdict_owed: Option<(&'static str, String)>,
+    /// A radio handoff installed another connection: the engine's judgement of the last one's DATA
+    /// word is forgotten at the next tick's engine lock, before the mode word is worked out.
+    link_judgement_stale: bool,
     /// Last CW keyer speed (WPM) pushed to the RIG over CAT (`set_keyspd`), so the command
     /// only fires on change.
     ///
@@ -5123,6 +5175,15 @@ impl RadioLoop {
             mode_fail_count: 0,
             mode_giveup: None,
             mode_saw_reject: false,
+            data_watch: None,
+            data_seen_writes: u64::MAX,
+            data_taken: Vec::new(),
+            data_twin_watches: 0,
+            dial_band_crosses: 0,
+            data_seen_crosses: 0,
+            data_reset_owed: None,
+            data_verdict_owed: None,
+            link_judgement_stale: false,
             last_cat_wpm: 0, // 0 = unset → first send pushes the speed
             cw_word_matched: None,
             cat_wpm_matched: false,
@@ -7157,6 +7218,192 @@ impl RadioLoop {
         }
     }
 
+    /// Judge, from one receive-time mode read, whether this link took the SSB DATA word NEXUS
+    /// ITSELF last set (`tempo_app::rig_modes`). Sends nothing: it reads what the heavy poll read.
+    ///
+    /// The case it exists for is the SILENT one. Through Hamlib's SDR Console backend (2056)
+    /// `PKTUSB` goes out as `MDD;`; Hamlib answers the set `RPRT 0` (measured, whether the radio
+    /// answers `?;` or nothing) and the radio stays in USB.
+    ///
+    /// ⛔ ONLY THE READS THAT FOLLOW NEXUS'S OWN SET, and never a mode the operator or the radio
+    /// changed (TX re-review F1, delta D1/R1). A watch opens on Nexus's own DATA-word set (a mode
+    /// write, `Rig::mode_writes`, that left that word in `last_mode`). The read on which the set is
+    /// first seen is skipped (it can be Hamlib's cache), as is anything inside [`DATA_CACHE_MS`].
+    /// Then:
+    /// - the word itself read back: TAKEN, latched for the connection; a later front-panel USB or a
+    ///   band-stack recall can never condemn it;
+    /// - its plain twin on two reads (`USB` after `PKTUSB`): ONE plain watch, never a verdict on its
+    ///   own, because the operator's own USB press inside it looks the same. Nexus sets the word
+    ///   again (the retune, at the next idle tick) and judges the reads after THAT set; only two
+    ///   consecutive plain watches condemn the word. SDR Console reads plain USB after every set.
+    /// - any other mode: something else moved the radio; the watch closes, judging nothing, and the
+    ///   run of plain watches starts again.
+    /// - a watch whose set came with a dial write onto another band, or from an unknown one (the
+    ///   connection's first), counts for nothing: the band stack's mode can sit behind Hamlib's cache
+    ///   (`dial_band_crosses`); a band crossing inside a watch closes it.
+    ///
+    /// A watch judges at most [`DATA_WATCH_READS`] reads, counted in reads rather than time because
+    /// reads are held while the radio is keyed.
+    ///
+    /// Safe on the radios whose DATA mode hides behind another name, because Hamlib reads them
+    /// back as the DATA word: DIGU on a PowerSDR/SmartSDR/DDUtil emulation, piHPSDR and the QCX/QDX
+    /// (`kenwood.c` get_mode), an Icom with a data flag, the FT-1000MP's DATA-LSB as `PKTLSB`.
+    /// NOT on the TS-590S/SG and TS-950 ([`READBACK_UNTRUSTED`]), whose Hamlib backends set and read
+    /// the data mode through different fields: those keep today's behaviour until a bench settles it.
+    /// Only Hamlib's links are judged: Nexus's own daemons speak for their radios themselves.
+    fn judge_data_word(&mut self, writes: u64, now: f64, reported: Option<&str>) {
+        if READBACK_UNTRUSTED.contains(&self.applied.rig_model) {
+            return;
+        }
+        // A mode write since the last look. If it left Nexus's own DATA word applied (`last_mode`
+        // only ever holds a mode Nexus set and the link took), watch the reads after it; anything
+        // else (the plain word, a fallback, CW) closes the watch. This read may be Hamlib's cache
+        // of that very set, so it is not judged.
+        let crossed = self.dial_band_crosses != self.data_seen_crosses;
+        self.data_seen_crosses = self.dial_band_crosses;
+        if writes != self.data_seen_writes {
+            self.data_seen_writes = writes;
+            self.data_watch = tempo_app::rig_modes::data_word(&self.last_mode)
+                .filter(|w| !self.data_taken.contains(w))
+                .map(|word| DataWatch {
+                    word,
+                    since: now,
+                    twin_reads: 0,
+                    reads: 0,
+                    void: crossed,
+                });
+            return;
+        }
+        let Some(watch) = self.data_watch.as_mut() else {
+            return;
+        };
+        if crossed {
+            // A band-crossing dial write inside the watch: what follows may be the band stack.
+            self.data_watch = None;
+            return;
+        }
+        if now - watch.since < DATA_CACHE_MS {
+            return;
+        }
+        let Some(reported) = reported.map(str::trim) else {
+            return;
+        };
+        if watch.reads >= DATA_WATCH_READS {
+            self.data_watch = None; // it has said all it will about that set
+            return;
+        }
+        watch.reads += 1;
+        let word = watch.word;
+        let twin = tempo_app::rig_modes::plain_twin(word).unwrap_or("");
+        if tempo_app::rig_modes::data_word(reported) == Some(word) {
+            // The radio shows the word itself: taken, for this connection, whatever the operator
+            // or the band stack does to the radio's mode later.
+            self.data_taken.push(word);
+            self.data_watch = None;
+            self.data_twin_watches = 0;
+        } else if reported.eq_ignore_ascii_case(twin) {
+            watch.twin_reads += 1;
+            if watch.twin_reads < 2 {
+                return;
+            }
+            let void = watch.void;
+            self.data_watch = None;
+            if !void {
+                self.data_twin_watches += 1;
+            }
+            if self.data_twin_watches >= 2 {
+                self.data_twin_watches = 0;
+                // Held, not applied here: the verdict changes the word the next retune sends, so it
+                // waits for a moment no over can key in (`apply_owed_data_judgement`, delta D2).
+                self.data_verdict_owed = Some((word, format!("still reads {twin}")));
+            } else {
+                // Not yet a verdict: ONE watch can be fooled (the operator's own USB press inside
+                // it, a band stack's recall behind Hamlib's cache). Nexus sets the word again,
+                // through the retune once no over can key (`apply_owed_data_judgement`), and judges
+                // the reads after THAT set.
+                // A radio that takes the word reads it back then and is latched; SDR Console reads
+                // plain USB after every set.
+                // Held like the verdict (delta D2): applied by `apply_owed_data_judgement`.
+                self.data_reset_owed = Some(word);
+            }
+        } else {
+            self.data_watch = None; // another mode: something else moved it, judge nothing
+            self.data_twin_watches = 0;
+        }
+    }
+
+    /// Apply the judgement's owed re-set and verdict (`judge_data_word`), ONLY where nothing they cause
+    /// can reach the wire before a key (delta D2). Both work through the retune: the re-set clears
+    /// `last_mode` so this tick's retune sends the word again, and the verdict changes the word the
+    /// next tick's retune sends. So both wait while anything of Nexus's is keyed and, with TX armed
+    /// on a slotted mode, until the current slot is past the last point an over may still key
+    /// (WSJT-X's 75 %, [`crate::slot::wsjtx_may_key_at`]) with at least [`DATA_WRITE_GUARD_MS`] left
+    /// to the next boundary. Held otherwise, and applied on the first tick that may, which after an
+    /// over is the tail of its slot. Nothing about the key itself changes.
+    fn apply_owed_data_judgement(&mut self, engine: &Mutex<Engine>, rig: &Rig, now: f64) {
+        if self.data_reset_owed.is_none() && self.data_verdict_owed.is_none() {
+            return;
+        }
+        if !self.data_write_may_go(engine, rig, now) {
+            return;
+        }
+        if let Some((word, why)) = self.data_verdict_owed.take() {
+            self.data_word_not_taken(engine, word, &why);
+        }
+        if let Some(word) = self.data_reset_owed.take() {
+            // Only if the word is still Nexus's applied word: anything set since stands.
+            if tempo_app::rig_modes::data_word(&self.last_mode) == Some(word) {
+                self.last_mode.clear();
+            }
+        }
+    }
+
+    /// May a mode write the judgement causes go out now ([`Self::apply_owed_data_judgement`])?
+    fn data_write_may_go(&self, engine: &Mutex<Engine>, rig: &Rig, now: f64) -> bool {
+        if rig.keyed || self.holds_tx() || self.operator_keyed() || self.manual_ptt_applied {
+            return false;
+        }
+        let eng = engine_lock(engine);
+        if !eng.tx_enabled() {
+            return true;
+        }
+        let period = eng.active_slot_secs() * 1000.0;
+        if period.is_nan() || period <= 0.0 {
+            return false;
+        }
+        let into = now.rem_euclid(period);
+        !crate::slot::wsjtx_may_key_at(into, period) && period - into > DATA_WRITE_GUARD_MS
+    }
+
+    /// A new connection: nothing it showed about the DATA word carries over.
+    fn forget_data_judgement(&mut self) {
+        self.data_watch = None;
+        self.data_seen_writes = u64::MAX;
+        self.data_taken.clear();
+        self.data_twin_watches = 0;
+        self.data_reset_owed = None;
+        self.data_verdict_owed = None;
+    }
+
+    /// Record that this Hamlib link does not take the DATA word `md`, and say so in the log.
+    fn data_word_not_taken(&mut self, engine: &Mutex<Engine>, md: &str, why: &str) {
+        let hamlib = matches!(self.rigctld_proc, None | Some(CatDaemon::Spawned(_)));
+        let Some(twin) = tempo_app::rig_modes::plain_twin(md).filter(|_| hamlib) else {
+            return;
+        };
+        if !engine_lock(engine).refuse_link_data_word(self.applied.rig_model, md) {
+            return;
+        }
+        tempo_core::applog::info(
+            "cat",
+            &format!(
+                "{}: the radio was sent {md} and {why}; {twin} is used for the data modes on this \
+                 connection",
+                self.applied.radio_label
+            ),
+        );
+    }
+
     /// Reset the per-rig caches after a dual-radio HANDOFF adopted an already-connected Rig for a new
     /// active radio. Forces the retune block to re-assert the restored dial/mode (sentinel
     /// `last_dial`/`last_mode`) and the health / S-meter / DSP-func capabilities to re-probe for the
@@ -7782,6 +8029,12 @@ impl RadioLoop {
         dial: u64,
         engine: &Arc<Mutex<Engine>>,
     ) {
+        // For the DATA-word judgement (`judge_data_word`): a dial write onto another band (or from
+        // an unknown one) can land the radio in its band stack's mode, which Hamlib's cache hides
+        // from the read just below, so no read after it may condemn the DATA word.
+        if prev_dial == 0 || !crate::rig::tuning::same_named_band(prev_dial, dial) {
+            self.dial_band_crosses = self.dial_band_crosses.wrapping_add(1);
+        }
         if md.trim().is_empty() {
             return;
         }
@@ -8191,6 +8444,10 @@ impl RadioLoop {
 
     fn reset_for_handoff(&mut self) {
         self.remote_connection = None;
+        // Another connection: judged afresh (`judge_data_word`), by the next tick's engine lock,
+        // before it works out the mode word.
+        self.link_judgement_stale = true;
+        self.forget_data_judgement();
         self.last_dial = 0; // != any real dial → force the retune to command the restored freq
         self.last_mode = String::new(); // force the mode re-assert
         self.rig_asserted = false; // belt-and-braces: the retune re-asserts + re-latches same tick
@@ -8705,8 +8962,21 @@ impl RadioLoop {
             // a rig that had not been transmitting when it was asked. See
             // `RadioLoop::operator_keyed`.
             let remote_want_radio;
-            let (want, dial, md, reprobe_req, force_retune, split_req, fm, cat_hold, section_cw) = {
+            let (
+                want,
+                dial,
+                mut md,
+                reprobe_req,
+                force_retune,
+                split_req,
+                fm,
+                cat_hold,
+                mut section_cw,
+            ) = {
                 let mut eng = engine_lock(engine);
+                if std::mem::take(&mut self.link_judgement_stale) {
+                    eng.forget_link_refusals();
+                }
                 remote_want_radio = eng.settings().active_radio;
                 // ⚠️ W0: the engine flipped `active_radio` after this tick's handoff read it, so
                 // this read belongs to a radio the handoff has not handed over (see
@@ -8802,6 +9072,10 @@ impl RadioLoop {
             self.cur_dial = dial;
             self.cur_md = md.clone();
             self.cur_section_cw = section_cw;
+            // The DATA-word judgement's held re-set and verdict, only outside the key guard (D2).
+            if can_retune && !link_down {
+                self.apply_owed_data_judgement(engine, rig, now);
+            }
             // Falling edge of Test CAT's port hold → rebuild the CAT channel we dropped,
             // through the rig_differs branch below (same teardown-then-reopen path).
             let resume_after_hold = !cat_hold && self.cat_hold_active;
@@ -9109,6 +9383,24 @@ impl RadioLoop {
                 engine_lock(engine).remote_close_radio();
                 self.remote_connection = None;
                 self.remote_radio_id = Some(remote_want_radio);
+                // A NEW CONNECTION IS JUDGED AFRESH: whatever the last link showed about the DATA
+                // word (`tempo_app::rig_modes`, `Self::judge_data_word`) is forgotten, so this one
+                // is sent the DATA word again and judged on its own answers. `md` was worked out
+                // at the top of the tick, before the forget, and the retune below commands it in
+                // this same tick, so it is asked again when the forget changed anything. Only
+                // WHICH word changes; nothing is sent sooner or later. Mode word and section are
+                // re-read together, from one lock.
+                {
+                    let mut eng = engine_lock(engine);
+                    if eng.forget_link_refusals() {
+                        md = eng.rig_mode_effective();
+                        section_cw =
+                            eng.settings().operating_mode == tempo_app::settings::OperatingMode::Cw;
+                        self.cur_md = md.clone();
+                        self.cur_section_cw = section_cw;
+                    }
+                }
+                self.forget_data_judgement();
                 let (new_rig, proc, probe) = reopen_rig(&open_want, allow_coexist);
                 let (ok, detail, refused) = (probe.ok, probe.detail, probe.refused);
                 let detail = if suspect_rebuild && !daemon_died && !linkless {
@@ -10217,6 +10509,16 @@ impl RadioLoop {
                                         .filter(|base| rig.set_mode(base, -1).is_ok());
                                     if let Some(base) = fallback {
                                         self.last_mode = base.to_string();
+                                        // The link REFUSED the DATA word AND took its plain twin:
+                                        // from now on, on this connection, the twin is the word
+                                        // (`judge_data_word`). Only on that evidence (TX re-review
+                                        // F2): a link that answers every set with an error says
+                                        // nothing about the DATA word, and keeps today's word.
+                                        if saw_reject
+                                            && tempo_app::rig_modes::plain_twin(&md) == Some(base)
+                                        {
+                                            self.data_word_not_taken(engine, &md, "refused it");
+                                        }
                                     }
                                     retune_note = Some(mode_giveup_note(
                                         &md,
@@ -11013,6 +11315,9 @@ impl RadioLoop {
                             // One `m` read gives BOTH the mode (mirror) and the RX passband width.
                             let remote_mode = self.remote_read(engine);
                             let (m, pb) = rig.read_mode_passband();
+                            if !rig.keyed {
+                                self.judge_data_word(rig.mode_writes, now, m.as_deref());
+                            }
                             // THE NATIVE CI-V DAEMON'S WIDTH IS ITS OWN VERB (`1A 03`), never `m`'s
                             // passband: `m` answers 0 there on purpose, so a client's `M PKTUSB
                             // <width>` never starts rewriting the operator's DATA filter (see
@@ -44505,19 +44810,95 @@ mod tests {
         run(&mut state, &mut rig, &mut backend, t);
 
         let pkt = count_from(&log, mark, "M PKTUSB");
-        // POSITIVE CONTROL: the tick must have tried the mode at all, or "not twice" is
-        // vacuous — a tick that commanded nothing would pass the real assertion below.
+        // POSITIVE CONTROL: the tick must have commanded the section's mode at all, or "never
+        // the refused word" is vacuous — a tick that commanded nothing would pass it.
         assert!(
-            pkt > 0,
+            count_from(&log, mark, "M ") > 0,
             "control: the band pick must command the section's mode: {:?}",
             log.lock().unwrap()[mark..].to_vec()
         );
+        // ⭐ ZERO, NOT ONE, since the link's refusal is remembered for the connection
+        // (`RadioLoop::judge_data_word`, `tempo_app::rig_modes`): the ladder's give-up made the
+        // plain sideband this link's word, so the band pick asks for USB and never again for the
+        // `PKTUSB` it refused. That is the invariant this test exists for, in its strongest form:
+        // no doomed re-ask on the band-cross tick at all.
         assert_eq!(
             pkt,
-            1,
-            "the band-cross re-assert must not re-ask for a mode this same tick already \
-             proved the rig refuses — one attempt per tick, not two: {:?}",
+            0,
+            "the band-cross re-assert must not re-ask for a mode this link already refused: {:?}",
             log.lock().unwrap()[mark..].to_vec()
+        );
+    }
+
+    /// The band-cross guard on a word the DATA-word judgement never touches (TX re-review F4). The
+    /// test above no longer reaches `reassert_mode_after_band_cross`'s `last_mode` guard, since the
+    /// link's refusal makes its word plain USB. CW reverse is never judged: a radio that refuses
+    /// `CWR` still gets exactly ONE attempt on the band-cross tick (the force retune's), never a
+    /// second from the band-stack re-assert reading back the `CW` the ladder fell back to.
+    #[test]
+    fn a_band_cross_never_re_asks_for_a_word_that_is_never_judged() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            let mut st = e.settings().clone();
+            st.cw_keyer = tempo_app::settings::CwKeyerBackend::Cat;
+            st.cw_reverse = true;
+            e.apply_settings(st);
+            e.set_operating_mode("cw", true);
+            e.set_frequency(14.030, "20m", "CW");
+        }
+        assert_eq!(
+            engine.lock().unwrap().rig_mode_effective(),
+            "CWR",
+            "premise"
+        );
+        let peer = crate::rig::remote_tests::retuning_peer(14_030_000, "CW", |line, _| {
+            line.starts_with("M CWR").then(|| "RPRT -1\n".to_string())
+        });
+        let mut rig = Rig::rigctld(&peer.address);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut t = 0.0;
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, backend: &mut MockBackend, t: f64| {
+            state
+                .step(
+                    &engine,
+                    backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        for _ in 0..(MODE_SET_MAX_TRIES + 8) {
+            run(&mut state, &mut rig, &mut backend, t);
+            t += 20.0;
+        }
+        assert_eq!(
+            state.mode_giveup.as_deref(),
+            Some("CWR"),
+            "precondition: the rig refused CWR and the ladder gave up"
+        );
+        let cwr = |from: usize| {
+            peer.lines.lock().unwrap()[from..]
+                .iter()
+                .filter(|l| l.starts_with("M CWR"))
+                .count()
+        };
+        let mark = peer.lines.lock().unwrap().len();
+        engine.lock().unwrap().pick_band("15m", None);
+        run(&mut state, &mut rig, &mut backend, t);
+        assert_eq!(
+            cwr(mark),
+            1,
+            "one attempt on the band-cross tick, not two: {:?}",
+            peer.lines.lock().unwrap()[mark..].to_vec()
         );
     }
 
@@ -47608,6 +47989,7 @@ mod tests {
         let rec = seen.clone();
         std::thread::spawn(move || {
             let mut cur = start;
+            let mut mode = String::from("USB");
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { return };
                 let mut out = match stream.try_clone() {
@@ -47630,8 +48012,14 @@ mod tests {
                     } else if line.trim() == "f" {
                         format!("{cur}\n")
                     } else if line.trim() == "m" {
-                        "USB\n2400\n".to_string()
+                        // The mode it was last set to, as a radio that takes every mode reads
+                        // back: a fixed `USB` after a `PKTUSB` it took is the signature of a
+                        // radio that does NOT take the DATA word (`judge_data_word`).
+                        format!("{mode}\n2400\n")
                     } else {
+                        if let Some(m) = line.strip_prefix("M ") {
+                            mode = m.split_whitespace().next().unwrap_or("USB").to_string();
+                        }
                         "RPRT 0\n".to_string()
                     };
                     if out.write_all(reply.as_bytes()).is_err() {

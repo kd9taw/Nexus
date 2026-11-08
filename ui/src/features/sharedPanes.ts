@@ -95,6 +95,9 @@ export const SHARED_PANES: readonly SharedPane[] = [
   // The ten regions' strips, which grow when a region is opened and scroll in their box. Not on the
   // hosted page until its region sweep is checked there.
   { id: 'pathRegions', pane: 'pathRegions', role: 'fill', weight: 1, remote: false },
+  // Best times to work a call: its answer and chart grow with the call asked and scroll in their box.
+  // Not on the hosted page until it is checked there.
+  { id: 'bestTimes', pane: 'bestTimes', role: 'fill', weight: 1, remote: false },
 ]
 
 const BY_ID = new Map<string, SharedPane>(SHARED_PANES.map((e) => [e.id, e]))

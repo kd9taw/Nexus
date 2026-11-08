@@ -57,6 +57,7 @@ import { fmtDistanceKm, useUnits } from '../units'
 import { t } from '../i18n'
 import { lookupCall } from '../callsign'
 import { TX_AVOID } from '../features/txSurfaces'
+import { openBestTimesFrom, registerFloatingCard } from '../features/floatingCard'
 
 // ---- where the card may never stand ----------------------------------------------------------
 
@@ -172,12 +173,23 @@ const subscribe = (l: () => void) => {
 }
 const readOpened = () => opened
 
+/** One floating card at a time (features/floatingCard): the Best times card closes when this opens. */
+const closeOtherCards = registerFloatingCard(() => closeCallCard())
+
 export function openCallCard(call: string, anchor: HTMLElement, keyboard = false, hover = false): void {
   const cu = call.trim().toUpperCase()
   // An unresolved hash, `<...>`, names no station: there is nothing to show a card about.
   if (!lookupCall(cu)) return
+  closeOtherCards()
   opened = { call: cu, anchor, keyboard, hover }
   emit()
+}
+
+/** The station card's Best times button: the Best times card, beside the call this card was opened
+ *  from, in this card's place. */
+function bestTimesInstead(call: string): void {
+  const anchor = opened?.anchor
+  if (anchor) openBestTimesFrom(call, anchor)
 }
 
 export function closeCallCard(): void {
@@ -393,6 +405,11 @@ export function CallCardView({ data, onClose }: { data: CallCardData; onClose: (
             )}
             <button type="button" className="callcard-qrz" onClick={qrzPageOf(call)} title={t('callbook.qrzPage.title', { call })}>
               {QRZ_PAGE}
+            </button>
+            {/* Best times for this call: the Best times card takes this card's place beside the call
+                it was opened from (one floating card at a time). It tunes and works nothing. */}
+            <button type="button" className="callcard-besttimes" onClick={() => bestTimesInstead(call)} title={t('callCard.bestTimes.title', { call })}>
+              {t('callMenu.bestTimes')}
             </button>
           </div>
         </div>

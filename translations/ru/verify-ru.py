@@ -28,11 +28,11 @@ sys.stdout.reconfigure(encoding='utf-8')
 # file it just wrote. Do not edit them by hand: a pin that disagrees with the CSV beside it
 # reports a translator's untouched file as damaged.
 # >>> make-kit pins
-EXPECTED_ROWS = 11008
-EXPECTED_KEYS_SHA = '34db2945cb52ba32b7d1165bf0537f725959079ce818eb58e93127b556e8aa05'
-EXPECTED_ENGLISH_SHA = 'b3742fee05c5aeb72252c9711cacf8330aa3767a2600eba1dfdda2344bea93b3'
-EXPECTED_DNT_SHA = '64007329cd64163a731ef65ae9a9675d2e0716888d03f39b6e0c451b2468fdf0'
-EXPECTED_TIERS = {1: 1025, 2: 366, 3: 2023, 4: 639, 5: 4465, 6: 2490}
+EXPECTED_ROWS = 11086
+EXPECTED_KEYS_SHA = '1ffe8a84efc030c4f64a7db86d74aac4a36016d5b363fc20805d91ecc57578db'
+EXPECTED_ENGLISH_SHA = 'a552fad50a481a0fe6a7d9f1a5c46f12c43c0e301a7ff8e9296c222f1dd5d9c4'
+EXPECTED_DNT_SHA = '06e2256072f0d29abfb9e4c18d433fcbd8d4e26d310df394859e5a1181e66d29'
+EXPECTED_TIERS = {1: 1025, 2: 366, 3: 2026, 4: 639, 5: 4540, 6: 2490}
 # <<< make-kit pins
 COLUMNS = ['priority', 'key', 'english', 'russian', 'do_not_translate', 'notes']
 

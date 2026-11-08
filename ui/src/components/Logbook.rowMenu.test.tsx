@@ -175,6 +175,8 @@ describe('the row shows two buttons, and the rest is in its ⋯ menu', () => {
     const qrzSent = t('logbook.upload.title', { state: t('logbook.upload.done'), date: fmtUtc(SENT_AT) })
     const clublogRefused = t('logbook.upload.title', { state: t('logbook.upload.failed'), date: fmtUtc(SENT_AT) })
     expect(texts).toEqual([
+      // Best times leads every call menu (BestTimesCard); the row's own items follow.
+      t('callMenu.bestTimes'),
       t('logbook.row.menu.spot'),
       t('logbook.row.menu.qrz') + qrzSent,
       t('logbook.row.menu.qrzCorrect'),
@@ -305,6 +307,10 @@ describe('Spot from the ⋯ menu', () => {
     const more = rowMore('K0ABC')
     more.focus()
     const menu = await openRowMenu('K0ABC')
+    // The keyboard lands on the first item, Best times; Spot is the next one down.
+    const first = menuItem(menu, t('callMenu.bestTimes'))
+    await waitFor(() => expect(document.activeElement).toBe(first))
+    fireEvent.keyDown(first, { key: 'ArrowDown' })
     const spot = menuItem(menu, t('logbook.row.menu.spot'))
     await waitFor(() => expect(document.activeElement).toBe(spot))
     fireEvent.keyDown(spot, { key: 'Enter' })

@@ -16,6 +16,10 @@
 //     1920 window, about twice the old face's arc, with the strip still no taller. (The 1024 window is
 //     checked for a dial at all: at 100 % it is below the app's md, where the strip is not drawn.)
 //
+//   · after an over in which COMP stayed silent, its "⊘ not reported" note whole inside its host, and in
+//     Operate's cell (which clips) inside its row too, at xs through xl and at 100 % and 175 % zoom, with
+//     the Operate cell and Stop TX where they stood while keyed. Its control widens the note.
+//
 //   · the large TX meters pane, in its real frame: in a short pane no face stands over another, and where
 //     the rows cannot all fit (two columns forced) they keep their floor and the pane body scrolls to the last.
 //     Its control puts back a track with no floor, where the faces must overlap and the probe must see it.
@@ -242,8 +246,93 @@ async function checkPane() {
   return red
 }
 
+const OVER_MEASURE = `(() => {
+  const cell = document.querySelector('[data-probe="cell"]')
+  if (!cell || !cell.querySelector('.ph-txmeter')) return null
+  const r = (el) => el.getBoundingClientRect()
+  const inside = (a, b) => a.left >= b.left - 0.5 && a.right <= b.right + 0.5 && a.top >= b.top - 0.5 && a.bottom <= b.bottom + 0.5
+  const notes = [...document.querySelectorAll('.ph-unavail')].map((n) => ({
+    host: n.closest('[data-probe]').dataset.probe,
+    inRow: inside(r(n), r(n.closest('.ph-txmeter'))),
+    inHost: inside(r(n), r(n.closest('[data-probe]'))),
+    text: n.textContent,
+  }))
+  const stop = document.querySelector('.op-btn.stop')
+  const c = r(cell)
+  return { notes, cell: [Math.round(c.left), Math.round(c.top), Math.round(c.width), Math.round(c.height)], stop: stop ? [Math.round(r(stop).left), Math.round(r(stop).top)] : null }
+})()`
+
+async function measureOver(w, h, query, css) {
+  const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
+  const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
+  const call = (method, params) => browser.call(method, params, sessionId)
+  const evaluate = async (expression) => (await call('Runtime.evaluate', { expression, returnByValue: true })).result?.value
+  await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+  await call('Page.navigate', { url: `${origin}/probe/txmeters.html?${query}` })
+  // The control's style goes in once the meters have drawn: earlier, it can land in the
+  // about:blank document the navigation is still replacing, and the check would see nothing planted.
+  let planted = !css
+  let last = null
+  for (let i = 0; i < 80; i++) {
+    await sleep(150)
+    const now = await evaluate(OVER_MEASURE)
+    if (now && !planted) {
+      await evaluate(`(() => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(css)}; document.head.appendChild(s); return 1 })()`)
+      planted = true
+      last = null
+      continue
+    }
+    if (i > 4 && now && last && JSON.stringify(now) === JSON.stringify(last)) break
+    last = now
+  }
+  await browser.call('Target.closeTarget', { targetId })
+  return last
+}
+
+/** COMP silent through an over: its note whole in every host, at every viewport class and zoom. */
+async function checkUnreported() {
+  const red = []
+  const classify = (effW) => (effW < 768 ? 'xs' : effW < 1100 ? 'sm' : effW < 1600 ? 'md' : effW < 2400 ? 'lg' : 'xl')
+  const WINDOWS = [[640, 900], [1024, 768], [1366, 768], [1920, 1080], [2560, 1440], [4480, 1440]]
+  const overFaults = (m, keyed) => {
+    const f = []
+    if (!m) return ['the meters never drew']
+    if (m.notes.length !== 2) f.push(`${m.notes.length} ⊘ notes, not one in each of the page's two hosts`)
+    for (const n of m.notes) {
+      // Operate's cell is the host that clips, so there its note must stay inside its own row too.
+      if (n.host === 'cell' && !n.inRow) f.push(`the ${n.host}'s note overflows its row`)
+      if (!n.inHost) f.push(`the ${n.host}'s note is clipped by its host`)
+      if (!n.text.includes('⊘')) f.push(`the ${n.host}'s note reads ${JSON.stringify(n.text)}`)
+    }
+    if (keyed && JSON.stringify(m.cell) !== JSON.stringify(keyed.cell)) f.push(`the Operate cell moved from ${keyed.cell} to ${m.cell} at unkey`)
+    if (keyed && JSON.stringify(m.stop) !== JSON.stringify(keyed.stop)) f.push(`Stop TX moved from ${keyed.stop} to ${m.stop} at unkey`)
+    return f
+  }
+  for (const zoom of [1, 1.75]) for (const [w, h] of WINDOWS) for (const host of ['dock', 'strip']) {
+    const vp = classify(w / zoom)
+    // The TX strip is drawn from md up (below it the dock is), so the strip host runs only there.
+    if (host === 'strip' && (vp === 'xs' || vp === 'sm')) continue
+    const q = `vp=${vp}&zoom=${zoom}${host === 'strip' ? '&host=strip' : ''}`
+    const keyed = await measureOver(w, h, `over=keyed&${q}`)
+    const m = await measureOver(w, h, `over=1&${q}`)
+    console.log(`txmeters-probe: COMP silent, ${w}×${h} zoom ${zoom} (${vp}) in the ${host}: ${JSON.stringify(m)}`)
+    const f = overFaults(m, keyed)
+    if (f.length) red.push(`${w}×${h} zoom ${zoom} (${vp}) in the ${host}: ${f.join('; ')}`)
+  }
+  const control = await measureOver(1920, 1080, 'over=1&vp=lg&zoom=1', '.ph-unavail { padding-right: 30em }')
+  const caught = overFaults(control)
+  console.log(`txmeters-probe: CONTROL COMP's note widened: caught ${JSON.stringify(caught)}`)
+  if (!caught.some((s) => s.includes('clipped'))) red.push('CONTROL FAILED: a widened ⊘ note was not seen clipped; the check cannot fail')
+  return red
+}
+
 let code = 0
 try {
+  const overRed = await checkUnreported()
+  if (overRed.length) {
+    console.error(`txmeters-probe: RED with COMP unreported — ${overRed.join(' | ')}`)
+    code = 1
+  }
   const paneRed = await checkPane()
   if (paneRed.length) {
     console.error(`txmeters-probe: RED in the large pane — ${paneRed.join('; ')}`)

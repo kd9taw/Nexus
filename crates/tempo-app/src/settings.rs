@@ -2273,6 +2273,11 @@ pub struct Settings {
     /// (flat mirror — see [`RadioProfile::data_modes_plain_ssb`]). Default off.
     #[serde(default)]
     pub data_modes_plain_ssb: bool,
+    /// RUNTIME ONLY, never saved, never compared: the DATA words the active radio's CAT link has
+    /// shown it does not take, judged by the radio loop from what happened on the wire
+    /// ([`crate::rig_modes`]). Read by [`Self::plain_ssb_if_configured`].
+    #[serde(skip)]
+    pub link_refusals: crate::rig_modes::LinkRefusals,
     /// Hold the DATA submode (FM-D on FM, USB-D/LSB-D on HF) for as long as the SSTV receiver
     /// is running, for the active radio (flat mirror — see
     /// [`RadioProfile::sstv_hold_data_submode`]). Default off.
@@ -6791,6 +6796,7 @@ impl Default for Settings {
             native_scope: default_native_scope(),
             tx_audio_source: default_tx_audio_source(),
             data_modes_plain_ssb: false,
+            link_refusals: crate::rig_modes::LinkRefusals::default(),
             sstv_hold_data_submode: false,
             aprs_data_fm: false,
             pc_mic: false,
@@ -9026,8 +9032,14 @@ impl Settings {
     /// ⚠️ Read the warning on `RadioProfile::data_modes_plain_ssb` before touching this: for a
     /// normally-wired rig, plain SSB on a soundcard mode transmits NO RF. This exists for
     /// mic-jack interfaces, and it is off by default for everyone else.
+    ///
+    /// ⭐ THE SECOND REASON, AND IT NEEDS NO SWITCH: this radio's link has SHOWN it does not take
+    /// the DATA word ([`crate::rig_modes`]): it refused it, or Hamlib answered the set and the
+    /// radio still read back the plain sideband. Through Hamlib's SDR Console backend (2056) the
+    /// word goes out as `MDD;`, which SDR Console rejects at every key-down. Only the SSB words
+    /// are judged; nothing judged changes nothing.
     pub(crate) fn plain_ssb_if_configured(&self, m: &str) -> String {
-        if !self.data_modes_plain_ssb {
+        if !self.data_modes_plain_ssb && !self.link_refusals.refused(self.rig_model, m) {
             return m.to_string();
         }
         match m {
@@ -11628,6 +11640,56 @@ mod tests {
         // True FSK: the rig's RTTY mode (unlocks its narrow RTTY filters).
         s.rtty_backend = "fsk".to_string();
         assert_eq!(s.rig_mode(), "RTTY");
+    }
+
+    /// A radio whose link has shown it does not take the SSB DATA word (`rig_modes`) gets the
+    /// plain sideband for every sound-card mode, as the operator's own switch would give it,
+    /// and only for the word it refused. Nothing else moves: CW reverse, FSK RTTY and `PKTFM`
+    /// are commanded as before.
+    #[test]
+    fn a_link_that_refused_the_data_word_gets_the_plain_sideband_without_being_configured() {
+        const MODEL: u32 = 2056;
+        let mut s = Settings::default();
+        s.rig_model = MODEL;
+        s.link_refusals.refuse(MODEL, "PKTUSB");
+        assert!(!s.data_modes_plain_ssb, "premise: the operator set nothing");
+        s.operating_mode = OperatingMode::Digital;
+        s.dial_mhz = 14.074;
+        assert_eq!(s.rig_mode(), "USB", "FT8 on 20 m");
+        s.operating_mode = OperatingMode::Rtty;
+        assert_eq!(s.rig_mode(), "PKTLSB", "PKTLSB was not refused: kept");
+        s.link_refusals.refuse(MODEL, "PKTLSB");
+        assert_eq!(s.rig_mode(), "LSB", "and once refused, the plain side");
+        s.rtty_backend = "fsk".into();
+        assert_eq!(s.rig_mode(), "RTTY");
+        s.operating_mode = OperatingMode::Cw;
+        s.cw_keyer = CwKeyerBackend::Cat;
+        s.cw_reverse = true;
+        assert_eq!(s.rig_mode(), "CWR", "CW reverse is never judged");
+        assert_eq!(s.plain_ssb_if_configured("PKTFM"), "PKTFM");
+        s.rig_model = 2014;
+        s.operating_mode = OperatingMode::Digital;
+        assert_eq!(
+            s.rig_mode(),
+            "PKTUSB",
+            "another model never sees the judgement"
+        );
+        s.rig_model = MODEL;
+        s.link_refusals.forget();
+        assert_eq!(s.rig_mode(), "PKTUSB", "a new connection is judged afresh");
+    }
+
+    /// CONTROL: a radio whose link refused nothing keeps its DATA word, and the operator's
+    /// explicit switch still gives the plain sideband on it.
+    #[test]
+    fn a_link_that_refused_nothing_keeps_the_data_word_and_the_switch_still_wins() {
+        let mut s = Settings::default();
+        s.rig_model = 2056;
+        s.operating_mode = OperatingMode::Digital;
+        s.dial_mhz = 14.074;
+        assert_eq!(s.rig_mode(), "PKTUSB");
+        s.data_modes_plain_ssb = true;
+        assert_eq!(s.rig_mode(), "USB");
     }
 
     /// The AFSK sideband setting. LSB, the default, is unchanged; USB commands the DATA submode

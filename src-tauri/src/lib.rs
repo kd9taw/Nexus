@@ -45,6 +45,8 @@ mod arrival_outlook;
 /// that blocks its command link or its Stop road, one at a time, so each road can be tried alone.
 #[cfg(feature = "bench-road-switch")]
 mod bench_road_switch;
+/// Best times to work one station: where it is, then the path prediction folded into an answer.
+mod best_times;
 /// WebView2's browser keys (F5 and Ctrl+R reload, Ctrl+P print, Ctrl+F find…) off in every Nexus
 /// window, set on each webview as Tauri makes it.
 mod browser_keys;
@@ -9998,21 +10000,11 @@ async fn get_path_outlook(
     aurora: State<'_, AuroraCache>,
     protons: State<'_, ProtonCache>,
 ) -> Result<propagation::PathPrediction, String> {
-    let (mygrid, prop_engine, power, ant_gain_dbi) = {
-        let eng = engine_lock(&state);
-        let st = eng.settings();
-        (
-            st.mygrid.clone(),
-            st.prop_engine.clone(),
-            assumed_power(&eng),
-            st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
-        )
-    };
-    let station_power_w = Some(power.watts);
-    let me = propagation::geo::maidenhead_to_latlon(&mygrid);
+    let station = PathStation::read(&engine_lock(&state));
+    let me = propagation::geo::maidenhead_to_latlon(&station.mygrid);
     let Some(dx) = propagation::geo::maidenhead_to_latlon(grid.trim()) else {
         return Ok(propagation::PathPrediction {
-            engine: prop_engine,
+            engine: station.prop_engine,
             bands: Vec::new(),
             muf_now: 0.0,
             muf_hourly: Vec::new(),
@@ -10027,114 +10019,201 @@ async fn get_path_outlook(
             power: None,
         });
     };
-    // Current space weather from the propagation cache's last snapshot (the same
-    // SWPC-fed values get_propagation uses); benign defaults if the cache is cold. Its stamps go
-    // with the card to `path_grades::keep_outlook`, which keeps it for a contact's grade only
-    // when they say the flux and Kp were measured and current.
-    let (wx, stamps) = {
-        let guard = cache.lock().map_err(|e| e.to_string())?;
-        let view = guard.as_ref().map(|(_, s)| &s.space_wx);
-        let wx = view
-            .map(|v| outlook_wx(v, held_ssn(now_unix()), now_unix()))
-            .unwrap_or_default();
-        (wx, view.map(|v| v.stamps))
-    };
-    // The configured engine: "p533" (native ITU-R P.533, ~100 ms/prediction) or
-    // the heuristic fallback. p533 is compute-heavy → keep it off the async core.
-    let eng = propagation::make_predictor(&prop_engine, me, station_power_w, ant_gain_dbi);
-    let t = now_unix();
-    let forecast = kp_cache
-        .lock()
-        .ok()
-        .and_then(|g| g.as_ref().map(|(_, f)| f.clone()));
-    // The oval is a ~30-minute nowcast: an older one says nothing about now.
-    const OVAL_FRESH_SECS: u64 = 1800;
-    let oval: Option<Vec<(f32, f32)>> = aurora.lock().ok().and_then(|g| {
-        g.as_ref()
-            .filter(|(when, _)| when.elapsed().as_secs() < OVAL_FRESH_SECS)
-            .map(|(_, oval)| oval.points.iter().map(|p| (p.lat, p.lon)).collect())
-    });
-    // The geometry's Kp is only ever one SWPC reported: `wx.kp` above may be the cold-cache
-    // default or a failed fetch's stand-in, which the engine may use but no label may call a
-    // reading.
-    let (kp_now, now_inputs) = {
-        let guard = cache.lock().map_err(|e| e.to_string())?;
-        let view = guard.as_ref().map(|(_, s)| &s.space_wx);
-        (swpc_kp(view, t), NowInputs::read(view, &protons, t))
-    };
-    let eng = storm_corrected(eng, &prop_engine, me, t, kp_now, forecast.clone());
-    // P.533 pairs are kept (`path_outlook`): the client asks again every 60 s, and only the
-    // serving hour's scalars and the geometry are recomputed then.
-    let keep = prop_engine == "p533";
-    let key = path_outlook::key(
-        t,
-        &mygrid,
-        &grid,
-        &prop_engine,
-        station_power_w,
-        ant_gain_dbi,
-        &wx,
-    );
-    let key = with_storm_key(key, t, kp_now, forecast.as_ref());
+    let inputs = PathInputs::read(&cache, &kp_cache, &aurora, &protons)?;
     below_normal(move || {
-        let (mut pred, long) = match keep.then(|| path_outlook::get(&key)).flatten() {
-            Some((mut sp, mut lp)) => {
-                path_outlook::refresh_now(&mut sp, t);
-                if let Some(lp) = lp.as_mut() {
-                    path_outlook::refresh_now(lp, t);
-                }
-                (sp, lp)
-            }
-            None => {
-                // Both routes at once on their own threads: the long path costs the same chain
-                // again, so this keeps the card's wait at one prediction's. Neither holds a lock.
-                let (sp, lp) = std::thread::scope(|s| {
-                    let lp = s.spawn(|| eng.predict_route(dx, propagation::Route::Long, t, &wx));
-                    let sp = eng.predict(dx, t, &wx);
-                    (sp, lp.join().ok().flatten())
-                });
-                // A stand-in for an engine that could not run is not kept: the next ask tries again.
-                if keep && !eng.fell_back() {
-                    path_outlook::put(key, sp.clone(), lp.clone());
-                }
-                (sp, lp)
-            }
-        };
-        if let Some(me) = me {
-            let geom = |route| {
-                propagation::path_geometry_route(
-                    me,
-                    dx,
-                    route,
-                    t,
-                    kp_now,
-                    forecast.as_ref(),
-                    oval.as_deref(),
-                )
-            };
-            pred.geometry = Some(geom(propagation::Route::Short));
-            let long = long.map(|mut lp| {
-                lp.geometry = Some(geom(propagation::Route::Long));
-                lp
-            });
-            // The day as the path-over-the-day strip draws it (both routes, every hour).
-            pred.day = propagation::path_day(&pred, long.as_ref());
-            if let Some(lp) = long {
-                pred.routes = Some(propagation::compare_routes(&pred, &lp));
-                pred.long_path = Some(Box::new(lp));
-            }
-        }
+        let t = inputs.t;
+        let mut pred = predict_path(&station, &inputs, dx, &grid);
         // Kept for the grade of a contact logged with this station (`path_grades::at_log`), when
         // it was computed from measured space weather (`keep_outlook` decides).
-        path_grades::keep_outlook(&mygrid, &grid, t, &pred, stamps.as_ref());
+        path_grades::keep_outlook(&station.mygrid, &grid, t, &pred, inputs.stamps.as_ref());
         // Then the display-only "now" overlay, which the kept card never carries.
         if let Some(me) = me {
-            attach_now(&mut pred, me, dx, &now_inputs, t);
+            attach_now(&mut pred, me, dx, &inputs.now_inputs, t);
         }
-        pred.power = Some(power);
+        pred.power = Some(station.power);
         pred
     })
     .await
+}
+
+/// The station settings a per-path prediction is computed from, read under the Engine lock once.
+struct PathStation {
+    mygrid: String,
+    prop_engine: String,
+    power: propagation::AssumedPower,
+    ant_gain_dbi: f64,
+}
+
+impl PathStation {
+    fn read(eng: &tempo_app::engine::Engine) -> PathStation {
+        let st = eng.settings();
+        PathStation {
+            mygrid: st.mygrid.clone(),
+            prop_engine: st.prop_engine.clone(),
+            power: assumed_power(eng),
+            ant_gain_dbi: st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
+        }
+    }
+}
+
+/// What a per-path prediction reads from the caches the feeds keep, once per ask, never fetched
+/// here: a cold cache simply means "latest Kp only" / "oval unknown", and with no SWPC reading at
+/// all, "Kp unknown".
+struct PathInputs {
+    t: i64,
+    /// Current space weather from the propagation cache's last snapshot (the same SWPC-fed values
+    /// get_propagation uses); benign defaults if the cache is cold.
+    wx: propagation::SpaceWx,
+    /// Its stamps, which `path_grades::keep_outlook` reads to keep a card for a contact's grade
+    /// only when they say the flux and Kp were measured and current.
+    stamps: Option<propagation::model::SpaceWxStamps>,
+    forecast: Option<propagation::KpForecast>,
+    oval: Option<Vec<(f32, f32)>>,
+    /// The geometry's Kp is only ever one SWPC reported: `wx.kp` may be the cold-cache default or
+    /// a failed fetch's stand-in, which the engine may use but no label may call a reading.
+    kp_now: Option<f32>,
+    now_inputs: NowInputs,
+}
+
+impl PathInputs {
+    fn read(
+        cache: &PropCache,
+        kp_cache: &KpForecastCache,
+        aurora: &AuroraCache,
+        protons: &ProtonCache,
+    ) -> Result<PathInputs, String> {
+        let t = now_unix();
+        let (wx, stamps, kp_now, now_inputs) = {
+            let guard = cache.lock().map_err(|e| e.to_string())?;
+            let view = guard.as_ref().map(|(_, s)| &s.space_wx);
+            let wx = view
+                .map(|v| outlook_wx(v, held_ssn(t), t))
+                .unwrap_or_default();
+            (
+                wx,
+                view.map(|v| v.stamps),
+                swpc_kp(view, t),
+                NowInputs::read(view, protons, t),
+            )
+        };
+        let forecast = kp_cache
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|(_, f)| f.clone()));
+        // The oval is a ~30-minute nowcast: an older one says nothing about now.
+        const OVAL_FRESH_SECS: u64 = 1800;
+        let oval = aurora.lock().ok().and_then(|g| {
+            g.as_ref()
+                .filter(|(when, _)| when.elapsed().as_secs() < OVAL_FRESH_SECS)
+                .map(|(_, oval)| oval.points.iter().map(|p| (p.lat, p.lon)).collect())
+        });
+        Ok(PathInputs {
+            t,
+            wx,
+            stamps,
+            forecast,
+            oval,
+            kp_now,
+            now_inputs,
+        })
+    }
+}
+
+/// The path to `dx` both ways round, as the configured engine predicts it (with the storm
+/// correction), with its geometry, its day and the route calls attached: what `get_path_outlook`
+/// and `get_best_times` both draw from. `dx_key` names the far end in the kept pair's key (a grid,
+/// or a rounded position). P.533 pairs are kept (`path_outlook`): the client asks again every
+/// 60 s, and only the serving hour's scalars and the geometry are recomputed then. Heavy: call it
+/// on a prediction thread ([`below_normal`]), with no lock held. It neither keeps a card for
+/// grading nor lays the "now" overlay: each caller does what it needs after.
+fn predict_path(
+    station: &PathStation,
+    inputs: &PathInputs,
+    dx: (f64, f64),
+    dx_key: &str,
+) -> propagation::PathPrediction {
+    let t = inputs.t;
+    let me = propagation::geo::maidenhead_to_latlon(&station.mygrid);
+    let station_power_w = Some(station.power.watts);
+    // The configured engine: "p533" (native ITU-R P.533, ~100 ms/prediction) or the heuristic.
+    let eng = propagation::make_predictor(
+        &station.prop_engine,
+        me,
+        station_power_w,
+        station.ant_gain_dbi,
+    );
+    let eng = storm_corrected(
+        eng,
+        &station.prop_engine,
+        me,
+        t,
+        inputs.kp_now,
+        inputs.forecast.clone(),
+    );
+    let keep = station.prop_engine == "p533";
+    let key = path_outlook::key(
+        t,
+        &station.mygrid,
+        dx_key,
+        &station.prop_engine,
+        station_power_w,
+        station.ant_gain_dbi,
+        &inputs.wx,
+    );
+    let key = with_storm_key(key, t, inputs.kp_now, inputs.forecast.as_ref());
+    let wx = &inputs.wx;
+    let (mut pred, long) = match keep.then(|| path_outlook::get(&key)).flatten() {
+        Some((mut sp, mut lp)) => {
+            path_outlook::refresh_now(&mut sp, t);
+            if let Some(lp) = lp.as_mut() {
+                path_outlook::refresh_now(lp, t);
+            }
+            (sp, lp)
+        }
+        None => {
+            // Both routes at once on their own threads: the long path costs the same chain
+            // again, so this keeps the card's wait at one prediction's. Neither holds a lock.
+            let (sp, lp) = std::thread::scope(|s| {
+                // Lowered too: a thread is born at normal priority on Windows, whatever its parent's.
+                let lp = s.spawn(|| {
+                    tempo_net::priority::lower_this_thread();
+                    eng.predict_route(dx, propagation::Route::Long, t, wx)
+                });
+                let sp = eng.predict(dx, t, wx);
+                (sp, lp.join().ok().flatten())
+            });
+            // A stand-in for an engine that could not run is not kept: the next ask tries again.
+            if keep && !eng.fell_back() {
+                path_outlook::put(key, sp.clone(), lp.clone());
+            }
+            (sp, lp)
+        }
+    };
+    if let Some(me) = me {
+        let geom = |route| {
+            propagation::path_geometry_route(
+                me,
+                dx,
+                route,
+                t,
+                inputs.kp_now,
+                inputs.forecast.as_ref(),
+                inputs.oval.as_deref(),
+            )
+        };
+        pred.geometry = Some(geom(propagation::Route::Short));
+        let long = long.map(|mut lp| {
+            lp.geometry = Some(geom(propagation::Route::Long));
+            lp
+        });
+        // The day as the path-over-the-day strip draws it (both routes, every hour).
+        pred.day = propagation::path_day(&pred, long.as_ref());
+        if let Some(lp) = long {
+            pred.routes = Some(propagation::compare_routes(&pred, &lp));
+            pred.long_path = Some(Box::new(lp));
+        }
+    }
+    pred
 }
 
 /// The path grade of each Logbook row asked about: its own stamp when it carries one made for its
@@ -15975,8 +16054,16 @@ fn send_rot_step(
             // error): rotctld answered, but only to say the CONTROLLER did not. This arm
             // used to take every answered non-zero `RPRT`, so on a G-5500 reached over the
             // internet one slow round trip dropped the elevation for a minute of the pass.
+            //
+            // ⚠️ And the azimuth goes alone through `point_keeping`, never `point`'s
+            // `P <az> 0`. A mount WITH an elevation axis refuses too: an elevation past its
+            // range, which Allow flip asks for on a high pass. `P <az> 0` then laid the antenna
+            // on the horizon on that tick and on every azimuth-only tick after it, while the
+            // driver believed the elevation had stayed put. `point_keeping` sends a mount with
+            // no elevation axis exactly the `P <az> 0` it always got, keeps the elevation an
+            // az/el mount reports, and sends nothing when neither can be told.
             Err(e) if tempo_audio::rotator::says_unsupported(&e) => {
-                if tempo_audio::rotator::point(addr, az).is_ok() {
+                if tempo_audio::rotator::point_keeping(addr, Some(az), None).is_ok() {
                     RotOutcome::AzOnly
                 } else {
                     RotOutcome::Failed
@@ -15984,8 +16071,10 @@ fn send_rot_step(
             }
             Err(_) => RotOutcome::Failed,
         },
+        // The azimuth-only ticks after two refusals: kept the same way, so they leave the
+        // elevation where it is, which is what the driver records (`TrackDriver::record`).
         RotStep::PointAz { az } => {
-            if tempo_audio::rotator::point(addr, az).is_ok() {
+            if tempo_audio::rotator::point_keeping(addr, Some(az), None).is_ok() {
                 RotOutcome::AzOk
             } else {
                 RotOutcome::Failed
@@ -17033,8 +17122,12 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
                     // only form it accepts. We know which this is: the driver learned it during
                     // the pass. Anything else is a failed park, and the operator is told rather
                     // than having the antenna put somewhere they did not ask for.
+                    //
+                    // The azimuth goes alone through `point_keeping`: an az/el mount whose
+                    // elevation the pass found refused (a flip past its range) keeps the
+                    // elevation it reports rather than being parked on the horizon.
                     if !driver.azel_ok() {
-                        if let Err(e) = tempo_audio::rotator::point(addr, paz) {
+                        if let Err(e) = tempo_audio::rotator::point_keeping(addr, Some(paz), None) {
                             conn_log(
                                 "Rotator",
                                 "error",
@@ -26205,26 +26298,77 @@ impl NoAim {
     }
 }
 
+/// Where one of [`labelled_station_fixes`] came from, for a screen that says what an answer rests on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+enum FixSource {
+    /// The log form's grid for this call.
+    LogForm,
+    /// A grid the station sent on the air this session.
+    Heard,
+    /// This session's callbook answer.
+    Callbook,
+    /// The grid on its newest logged contact.
+    Logged,
+}
+
 /// Every place Nexus already knows `call`'s station to be, MOST TRUSTED FIRST — the order
 /// [`propagation::geo::best_fix`] refines within: the log form's grid, the grids the station sent
 /// this session, the callbook's answer (its locator, then the position it vouched for), the grid
-/// on its newest logged contact. The engine keeps them ([`tempo_app::engine::StationGrids`]);
-/// none of them asks the network.
-fn station_fixes(eng: &tempo_app::engine::Engine, call: &str) -> Vec<propagation::geo::StationFix> {
+/// on its newest logged contact — each with where it came from. The engine keeps them
+/// ([`tempo_app::engine::StationGrids`]); none of them asks the network.
+fn labelled_station_fixes(
+    eng: &tempo_app::engine::Engine,
+    call: &str,
+) -> Vec<(FixSource, propagation::geo::StationFix)> {
     use propagation::geo::StationFix;
     let grids = eng.station_grids(call);
     let mut fixes = Vec::new();
-    fixes.extend(grids.log_form.map(StationFix::Grid));
-    fixes.extend(grids.heard.into_iter().map(StationFix::Grid));
+    fixes.extend(
+        grids
+            .log_form
+            .map(|g| (FixSource::LogForm, StationFix::Grid(g))),
+    );
+    fixes.extend(
+        grids
+            .heard
+            .into_iter()
+            .map(|g| (FixSource::Heard, StationFix::Grid(g))),
+    );
     if let Some(book) = grids.callbook {
-        fixes.extend(book.grid.map(StationFix::Grid));
+        fixes.extend(
+            book.grid
+                .map(|g| (FixSource::Callbook, StationFix::Grid(g))),
+        );
         fixes.extend(
             book.position
-                .map(|(lat, lon)| StationFix::Position(lat, lon)),
+                .map(|(lat, lon)| (FixSource::Callbook, StationFix::Position(lat, lon))),
         );
     }
-    fixes.extend(grids.logged.map(StationFix::Grid));
+    fixes.extend(
+        grids
+            .logged
+            .map(|g| (FixSource::Logged, StationFix::Grid(g))),
+    );
     fixes
+}
+
+/// [`labelled_station_fixes`] without the labels: what the rotator's point-at-call refines within.
+/// Derived from the labelled list so the two can never disagree.
+fn station_fixes(eng: &tempo_app::engine::Engine, call: &str) -> Vec<propagation::geo::StationFix> {
+    labelled_station_fixes(eng, call)
+        .into_iter()
+        .map(|(_, f)| f)
+        .collect()
+}
+
+/// [`propagation::geo::best_fix`] over labelled fixes: the same fix, with the label of the first
+/// (most trusted) source that gave it.
+fn best_labelled_fix(
+    fixes: &[(FixSource, propagation::geo::StationFix)],
+) -> Option<(FixSource, propagation::geo::StationFix)> {
+    let best = propagation::geo::best_fix(fixes.iter().map(|(_, f)| f.clone()))?;
+    fixes.iter().find(|(_, f)| *f == best).cloned()
 }
 
 /// The bearing from the operator's own grid, at its full precision, to `call`'s station: to the
@@ -42329,6 +42473,155 @@ mod upload_record_tests {
             assert_eq!(calls(&arrived(&dxkeeper)), ["K2KPT"]);
         }
 
+        /// ⛔ HRD LOGBOOK CLOSED WITH SEVERAL CONTACTS QUEUED. Each tick's drain takes the whole queue
+        /// and stops at the first failure. Every contact still reaches HRD once it opens, in order,
+        /// none lost and none twice.
+        #[test]
+        fn hrd_closed_with_several_queued_loses_none_and_sends_none_twice() {
+            let _one = one_at_a_time();
+            let port = {
+                let probe = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+                probe.local_addr().unwrap().port()
+            };
+            let engine = engine(free_port());
+            {
+                let mut e = crate::engine_lock(&engine);
+                let mut s = e.settings().clone();
+                s.hrd_logging = true;
+                s.hrd_udp_addr = format!("127.0.0.1:{port}");
+                e.apply_settings(s);
+            }
+            for call in ["K1HRD", "K2HRD", "K3HRD"] {
+                log(&engine, call);
+            }
+            // Closed: two ticks, so an order that turned over would show.
+            for _ in 0..2 {
+                crate::drain_hrd(&engine);
+            }
+            assert_eq!(
+                crate::engine_lock(&engine).snapshot().radio.hrd_queued,
+                3,
+                "all three still queued"
+            );
+
+            let hrd = std::net::UdpSocket::bind(("127.0.0.1", port)).unwrap();
+            hrd.set_read_timeout(Some(std::time::Duration::from_millis(300)))
+                .unwrap();
+            for _ in 0..2 {
+                crate::drain_hrd(&engine);
+            }
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = hrd.recv(&mut buf) {
+                let text = String::from_utf8_lossy(&buf[..n]).to_string();
+                let call = ["K1HRD", "K2HRD", "K3HRD"]
+                    .into_iter()
+                    .find(|c| text.contains(c))
+                    .expect("a contact");
+                got.push(call);
+            }
+            assert_eq!(got, ["K1HRD", "K2HRD", "K3HRD"], "each once, in order");
+            assert_eq!(crate::engine_lock(&engine).snapshot().radio.hrd_queued, 0);
+        }
+
+        /// ⛔ BOTH AT ONCE: a purge, then HRD Logbook closed, then open. What the purge took never
+        /// goes; every contact logged after it survives the failed sends and arrives once, in order.
+        #[test]
+        fn after_a_purge_and_a_closed_hrd_every_surviving_contact_arrives_once_in_order() {
+            let _one = one_at_a_time();
+            let port = {
+                let probe = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+                probe.local_addr().unwrap().port()
+            };
+            let engine = engine(free_port());
+            {
+                let mut e = crate::engine_lock(&engine);
+                let mut s = e.settings().clone();
+                s.hrd_logging = true;
+                s.hrd_udp_addr = format!("127.0.0.1:{port}");
+                e.apply_settings(s);
+            }
+            // The worker's trip has begun with this one; then the log is cleared.
+            log(&engine, "K4HRD");
+            crate::engine_lock(&engine).clear_logbook();
+            for call in ["K1HRD", "K2HRD", "K3HRD"] {
+                let rec = tempo_core::logbook::parse_adif(&format!(
+                    "<CALL:5>{call}<QSO_DATE:8>20261014<TIME_ON:6>121000<BAND:3>20m<MODE:2>CW<EOR>"
+                ))
+                .pop()
+                .unwrap();
+                crate::engine_lock(&engine).log_qso(rec);
+            }
+            // HRD closed, in the same trip and the next.
+            for _ in 0..2 {
+                crate::drain_hrd(&engine);
+            }
+            assert_eq!(
+                crate::engine_lock(&engine).snapshot().radio.hrd_queued,
+                3,
+                "the three logged after the purge are all still queued"
+            );
+
+            let hrd = std::net::UdpSocket::bind(("127.0.0.1", port)).unwrap();
+            hrd.set_read_timeout(Some(std::time::Duration::from_millis(300)))
+                .unwrap();
+            for _ in 0..2 {
+                crate::drain_hrd(&engine);
+            }
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = hrd.recv(&mut buf) {
+                let text = String::from_utf8_lossy(&buf[..n]).to_string();
+                let call = ["K4HRD", "K1HRD", "K2HRD", "K3HRD"]
+                    .into_iter()
+                    .find(|c| text.contains(c))
+                    .expect("a contact");
+                got.push(call);
+            }
+            assert_eq!(
+                got,
+                ["K1HRD", "K2HRD", "K3HRD"],
+                "each once, in order, and not the purged one"
+            );
+            assert_eq!(crate::engine_lock(&engine).snapshot().radio.hrd_queued, 0);
+        }
+
+        /// ⛔ A PURGE DURING THE WORKER'S TRIP. A contact logged after it, within the same trip, still
+        /// reaches HRD Logbook on that trip's drain; one in HRD's queue at the purge never does.
+        #[test]
+        fn a_contact_logged_after_a_purge_in_the_same_trip_reaches_hrd() {
+            let _one = one_at_a_time();
+            let hrd = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+            hrd.set_read_timeout(Some(std::time::Duration::from_millis(300)))
+                .unwrap();
+            let engine = engine(free_port());
+            {
+                let mut e = crate::engine_lock(&engine);
+                let mut s = e.settings().clone();
+                s.hrd_logging = true;
+                s.hrd_udp_addr = hrd.local_addr().unwrap().to_string();
+                e.apply_settings(s);
+            }
+            let before = log(&engine, "K1PRG");
+            assert_eq!(before.rec.call, "K1PRG", "premise: the trip has begun");
+            crate::engine_lock(&engine).clear_logbook();
+            // Logged, and left on the upload queue: the worker drains that at its next tick.
+            let after = tempo_core::logbook::parse_adif(
+                "<CALL:5>K2AFT<QSO_DATE:8>20261014<TIME_ON:6>120500<BAND:3>20m<MODE:2>CW<EOR>",
+            )
+            .pop()
+            .unwrap();
+            crate::engine_lock(&engine).log_qso(after);
+            crate::drain_hrd(&engine);
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = hrd.recv(&mut buf) {
+                got.push(String::from_utf8_lossy(&buf[..n]).to_string());
+            }
+            assert_eq!(got.len(), 1, "one datagram: {got:?}");
+            assert!(got[0].contains("K2AFT"), "{got:?}");
+        }
+
         /// A send that connected is never repeated: not by a service's retries, and not by anything
         /// that waits after it.
         #[test]
@@ -44379,6 +44672,48 @@ fn leg_under_way(leg: u8) {
     if let Some(mut during) = hook {
         during(leg);
         LEG_UNDER_WAY.with(|hook| *hook.borrow_mut() = Some(during));
+    }
+}
+
+/// HRD Logbook drain (F4MQS): the datagram used to be fire-and-forget from log_qso, so a QSO logged
+/// while HRD was closed vanished. Now the engine queues them and the upload worker sends them here,
+/// each tick — CONNECTED to the target so a closed HRD on localhost surfaces ConnectionRefused
+/// (ICMP port-unreachable), which we report back so the record is re-queued and the cockpit shows
+/// the link down.
+/// ⚠️ NEEDS-BENCH: the closed-port detection is OS/loopback-dependent; verified on Windows/Linux
+/// localhost but confirm on the operator's box.
+fn drain_hrd(engine: &SharedEngine) {
+    let (pending, addr) = {
+        let mut eng = engine_lock_result(engine).unwrap_or_else(|e| e.into_inner());
+        (eng.take_hrd_pending(), eng.hrd_addr())
+    };
+    let mut pending = pending.into_iter();
+    while let Some(rec) = pending.next() {
+        // A purge counts from HRD's own take (`Engine::hrd_cancelled`), not the upload queue's.
+        let cancelled = engine_lock_result(engine)
+            .unwrap_or_else(|e| e.into_inner())
+            .hrd_cancelled(&rec);
+        if cancelled {
+            continue;
+        }
+        let datagram = {
+            let eng = engine_lock_result(engine).unwrap_or_else(|e| e.into_inner());
+            eng.hrd_datagram(&rec)
+        };
+        // connect()+send() off the lock — DNS/connect can block, and a slow
+        // resolver must never freeze the engine (the original spawn's reason).
+        let delivered = hrd_send_connected(&addr, datagram.as_bytes());
+        let mut eng = engine_lock_result(engine).unwrap_or_else(|e| e.into_inner());
+        if !delivered {
+            // Stop hammering a closed HRD this tick. The one that failed goes back with every one
+            // this drain took and did not try, in order, for the next tick: the take emptied HRD's
+            // queue, and this is all that holds them. One log line, not one per queued record.
+            eng.hrd_unreachable(std::iter::once(rec).chain(pending).collect());
+            conn_log("HRD", "error", "HRD Logbook not reachable — QSO queued");
+            break;
+        }
+        eng.note_hrd_result(rec, true);
+        conn_log("HRD", "ok", "QSO forwarded to HRD Logbook");
     }
 }
 
@@ -51822,43 +52157,7 @@ fn start_on_the_logbook(
                 );
             }
             dxkeeper_wait_tick(&push_engine, dxk.as_ref(), &mut dxk_wait, now_unix);
-            // HRD Logbook drain (F4MQS): the datagram used to be fire-and-forget from
-            // log_qso, so a QSO logged while HRD was closed vanished. Now the engine
-            // queues them and we send here — CONNECTED to the target so a closed HRD on
-            // localhost surfaces ConnectionRefused (ICMP port-unreachable), which we
-            // report back so the record is re-queued and the cockpit shows the link down.
-            // ⚠️ NEEDS-BENCH: the closed-port detection is OS/loopback-dependent; verified
-            // on Windows/Linux localhost but confirm on the operator's box.
-            {
-                let (pending, addr) = {
-                    let mut eng =
-                        engine_lock_result(&push_engine).unwrap_or_else(|e| e.into_inner());
-                    (eng.take_hrd_pending(), eng.hrd_addr())
-                };
-                for rec in pending {
-                    if upload_cancelled(&push_engine, &rec) {
-                        continue;
-                    }
-                    let datagram = {
-                        let eng =
-                            engine_lock_result(&push_engine).unwrap_or_else(|e| e.into_inner());
-                        eng.hrd_datagram(&rec)
-                    };
-                    // connect()+send() off the lock — DNS/connect can block, and a slow
-                    // resolver must never freeze the engine (the original spawn's reason).
-                    let delivered = hrd_send_connected(&addr, datagram.as_bytes());
-                    let mut eng =
-                        engine_lock_result(&push_engine).unwrap_or_else(|e| e.into_inner());
-                    eng.note_hrd_result(rec, delivered);
-                    if !delivered {
-                        // Stop hammering a closed HRD this tick — the queue stays, the next
-                        // tick retries. One log line, not one per queued record.
-                        conn_log("HRD", "error", "HRD Logbook not reachable — QSO queued");
-                        break;
-                    }
-                    conn_log("HRD", "ok", "QSO forwarded to HRD Logbook");
-                }
-            }
+            drain_hrd(&push_engine);
         });
     }
 
@@ -53437,6 +53736,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         click_tci_spot,
         get_propagation,
         get_path_outlook,
+        best_times::get_best_times,
         get_path_regions,
         log_path_grades,
         contact_path_day,
@@ -63323,6 +63623,160 @@ mod tests {
                 let _ = t.join();
             }
         }
+    }
+
+    /// A Hamlib rotctld for a mount declaring `max_el` of elevation (`0`: none, `rot_type=Az`),
+    /// standing at 100° / 45°, that refuses a `P` above its elevation range as Hamlib's frontend
+    /// does (`RPRT -1`) and takes any other.
+    fn hamlib_mount(max_el: u32) -> FakeRotctld {
+        FakeRotctld::serve(move |cmd| {
+            if cmd == "\\dump_state" {
+                let kind = if max_el > 0 { "AzEl" } else { "Az" };
+                return format!(
+                    "1\n603\nmin_az=0.000000\nmax_az=360.000000\nmin_el=0.000000\n\
+                     max_el={max_el}.000000\nsouth_zero=0\nrot_type={kind}\ndone\n"
+                );
+            }
+            if cmd == "p" {
+                return "100.000000\n45.000000\n".into();
+            }
+            let el = cmd
+                .split_whitespace()
+                .nth(2)
+                .and_then(|w| w.parse::<f64>().ok());
+            match el {
+                Some(el) if cmd.starts_with('P') && el > f64::from(max_el) => "RPRT -1\n".into(),
+                _ => "RPRT 0\n".into(),
+            }
+        })
+    }
+
+    /// The elevation of every `P` line a fake rotctld was sent.
+    fn p_elevations(rot: &FakeRotctld) -> Vec<f64> {
+        rot.commands()
+            .iter()
+            .filter(|c| c.starts_with('P'))
+            .filter_map(|c| c.split_whitespace().nth(2)?.parse::<f64>().ok())
+            .collect()
+    }
+
+    /// Review F1: with Allow flip on, a high pass asks an az/el mount for more than its declared
+    /// 90°, and the mount refuses. The fallback used to be `P <az> 0`, so the antenna went to the
+    /// horizon on the first tick and on every azimuth-only tick after it. On a mount that declares
+    /// an elevation axis the azimuth-only sends now keep the elevation it reports.
+    #[test]
+    fn an_azel_mount_that_refuses_an_elevation_keeps_its_elevation() {
+        use tempo_core::rotator::{RotOutcome, RotStep};
+        let rot = hamlib_mount(90);
+        assert_eq!(
+            super::send_rot_step(
+                &rot.addr,
+                RotStep::PointAzEl {
+                    az: 10.0,
+                    el: 120.0
+                }
+            ),
+            RotOutcome::AzOnly
+        );
+        assert_eq!(
+            super::send_rot_step(&rot.addr, RotStep::PointAz { az: 20.0 }),
+            RotOutcome::AzOk
+        );
+        assert_eq!(
+            p_elevations(&rot),
+            vec![120.0, 45.0, 45.0],
+            "refused, then azimuth with the elevation held: {:?}",
+            rot.commands()
+        );
+    }
+
+    /// CONTROL: a mount with no elevation axis is sent exactly the azimuth line it always was.
+    #[test]
+    fn an_azimuth_only_mount_still_gets_its_azimuth_line() {
+        use tempo_core::rotator::{RotOutcome, RotStep};
+        let rot = hamlib_mount(0);
+        assert_eq!(
+            super::send_rot_step(&rot.addr, RotStep::PointAzEl { az: 10.0, el: 30.0 }),
+            RotOutcome::AzOnly
+        );
+        assert_eq!(
+            super::send_rot_step(&rot.addr, RotStep::PointAz { az: 20.0 }),
+            RotOutcome::AzOk
+        );
+        let points: Vec<String> = rot
+            .commands()
+            .into_iter()
+            .filter(|c| c.starts_with('P'))
+            .collect();
+        assert_eq!(
+            points,
+            vec![
+                "P 10.0 30.0".to_string(),
+                tempo_audio::rotator::point_line(10.0).trim().to_string(),
+                tempo_audio::rotator::point_line(20.0).trim().to_string(),
+            ]
+        );
+    }
+
+    /// Review F1 on the PstRotator link (#480): a flipped elevation past the link's 90° is
+    /// refused, and neither the fallback nor the azimuth-only ticks after it send PstRotator an
+    /// `<ELEVATION>0</ELEVATION>`: they keep the 30° it reports.
+    #[test]
+    fn a_refused_flip_never_sends_pstrotator_to_the_horizon() {
+        use tempo_core::rotator::{RotOutcome, RotStep};
+        let (pst, link) = (0..50)
+            .find_map(|_| {
+                let pst = std::net::UdpSocket::bind("127.0.0.1:0").ok()?;
+                let port = pst.local_addr().ok()?.port();
+                let link =
+                    tempo_audio::pstrotator::PstRotatorLink::start(&format!("127.0.0.1:{port}"), 0)
+                        .ok()?;
+                Some((pst, link))
+            })
+            .expect("a free UDP port pair");
+        let reply = pst.local_addr().expect("its port").port() + 1;
+        let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let log = heard.clone();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 256];
+            while let Ok((n, _)) = pst.recv_from(&mut buf) {
+                let d = String::from_utf8_lossy(&buf[..n]).to_string();
+                let answer: Option<&[u8]> = match d.as_str() {
+                    "<PST>AZ?</PST>" => Some(b"AZ:100.0\r"),
+                    "<PST>EL?</PST>" => Some(b"EL:30.0\r"),
+                    _ => None,
+                };
+                match answer {
+                    Some(a) => {
+                        let _ = pst.send_to(a, ("127.0.0.1", reply));
+                    }
+                    None => log.lock().expect("the fake's log").push(d),
+                }
+            }
+        });
+        let addr = link.rotctld_addr().to_string();
+        assert_eq!(
+            super::send_rot_step(
+                &addr,
+                RotStep::PointAzEl {
+                    az: 10.0,
+                    el: 120.0
+                }
+            ),
+            RotOutcome::AzOnly
+        );
+        assert_eq!(
+            super::send_rot_step(&addr, RotStep::PointAz { az: 20.0 }),
+            RotOutcome::AzOk
+        );
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(
+            *heard.lock().expect("the fake's log"),
+            vec![
+                "<PST><AZIMUTH>10</AZIMUTH><ELEVATION>30</ELEVATION></PST>".to_string(),
+                "<PST><AZIMUTH>20</AZIMUTH><ELEVATION>30</ELEVATION></PST>".to_string(),
+            ]
+        );
     }
 
     /// SO-50 armed for real: an FM bird worked with a handheld beam or a

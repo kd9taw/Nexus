@@ -3,6 +3,7 @@
  * absent. The operator finds activators on the air now, clicks Hunt to QSY and
  * tag the next logged QSO with the park/summit reference.
  */
+import { useCallMenu } from './useCallMenu'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { TreePine, Mountain, Leaf, RefreshCw, X } from 'lucide-react'
 import type { AppSnapshot, OtaSpot, Activation } from '../types'
@@ -225,6 +226,8 @@ export type OtaRemote = {
 export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observation, remote, pane = false }: Props) {
   const observed = observation !== undefined
   const keys = pane ? OTA_KEYS.box : OTA_KEYS.view
+  // The call menu (Best times first, then watch and hide), on a right-click or the menu key on a row.
+  const callMenu = useCallMenu()
   // Program + band filter persist for the same reason the sort and mode do: the operator
   // filed "leaving and returning resets all filters" as a bug. A stale/hand-edited value
   // falls back to the default rather than throwing.
@@ -353,9 +356,12 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
       const b = bandFromKhz(s.freqKhz)
       if (b !== '?') seen.add(b)
     }
+    // A picked band always has its chip, lit, whether or not anyone is on it now: the filter is
+    // remembered, and one with no chip empties the board with no way to see why or undo it.
+    for (const b of bandFilter) seen.add(b)
     // Order by HF → VHF
     const ORDER = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '2m']
-    return ORDER.filter((b) => seen.has(b))
+    return [...ORDER.filter((b) => seen.has(b)), ...bandFilter.filter((b) => !ORDER.includes(b))]
   })()
 
   // Derive the set of distinct modes in the current spot list.
@@ -1165,9 +1171,11 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                 aria-current={hunted ? 'true' : undefined}
                 className={`pota-spot pota-spot-v2${hunted ? ' selected' : ''}${s.bandOpen ? ' pota-spot-open' : ''}${s.newPark ? ' pota-spot-new' : ''}`}
                 title={tooltip}
+                {...callMenu.on(spotKey(s), s.activator)}
               >
                 <div className="pota-spot-main">
                   <div className="pota-spot-line1">
+                    {callMenu.at(spotKey(s))}
                     <span className="pota-spot-call">{s.activator}</span>
                     <span className="pota-spot-ref" title={`${s.program} ${s.reference}`}>
                       {s.reference}

@@ -4496,6 +4496,8 @@ pub struct Engine {
     /// closed HRD is DETECTABLE on localhost (ICMP unreachable → ConnectionRefused), sets
     /// [`Self::hrd_link_up`], and re-queues on failure (bounded) so nothing is lost.
     hrd_pending: std::collections::VecDeque<QsoRecord>,
+    /// A purge since HRD's drain last took its queue ([`Self::hrd_cancelled`]).
+    hrd_purged_since_take: bool,
     /// Last HRD datagram outcome: `Some(true)` delivered, `Some(false)` HRD not reachable
     /// (queued), `None` nothing sent yet. Drives the cockpit's HRD link indicator.
     hrd_link_up: Option<bool>,
@@ -7691,6 +7693,7 @@ impl Engine {
             space_weather: None,
             tci_device: None,
             hrd_pending: std::collections::VecDeque::new(),
+            hrd_purged_since_take: false,
             hrd_link_up: None,
             cq_dir: None,
             last_wire_decodes: Vec::new(),
@@ -8445,7 +8448,11 @@ impl Engine {
         // `RttyStream::key_cfg` carries the centre), and the privilege gate judges the new pair
         // (`rtty_tx_mark_hz`) on its next per-tick check.
         let rtty_home_moved = s.rtty_low_tone() != self.settings.rtty_low_tone();
+        // Runtime only: what the radio's link has shown about the DATA word is not a setting
+        // (`crate::rig_modes`), and a save must not make the link be judged again.
+        let link_refusals = std::mem::take(&mut self.settings.link_refusals);
         self.settings = s;
+        self.settings.link_refusals = link_refusals;
         if rtty_home_moved {
             self.rtty_center = None;
             self.request_rtty_afc_reset();
@@ -9782,7 +9789,9 @@ impl Engine {
         // Port collision repair can also change the active profile when editing another.
         self.remote_actuation.revoke();
         self.remote_readings.invalidate();
+        let link_refusals = std::mem::take(&mut self.settings.link_refusals);
         self.settings = edited;
+        self.settings.link_refusals = link_refusals;
         // Mirror the ACTIVE profile back into the flat fields — a no-op for the flat mirror when
         // id != active.
         self.settings.sync_flat_from_active();
@@ -12408,6 +12417,19 @@ impl Engine {
             .is_some_and(|m| m.eq_ignore_ascii_case("fm"));
         let policy_fm = self.settings.phone_mode.eq_ignore_ascii_case("fm") && dial_mhz >= 29.0;
         override_fm || policy_fm
+    }
+
+    /// The radio loop's judgement that this radio's CAT link does not take the SSB DATA word
+    /// `mode` (`crate::rig_modes`, `RadioLoop::judge_data_word` in tempo-audio): from now on, on
+    /// this connection, its plain sideband is commanded instead. `true` when that is news.
+    pub fn refuse_link_data_word(&mut self, model: u32, mode: &str) -> bool {
+        self.settings.link_refusals.refuse(model, mode)
+    }
+
+    /// A new CAT connection: whatever the last one showed about the DATA word is forgotten, so this
+    /// one is judged afresh. `true` when anything was forgotten.
+    pub fn forget_link_refusals(&mut self) -> bool {
+        self.settings.link_refusals.forget()
     }
 
     /// The mode the radio loop should COMMAND: the operator's transient Phone override when set,
@@ -19371,6 +19393,7 @@ impl Engine {
     /// leaves.
     pub fn settle_gone_rows(&mut self) {
         let (ids, all) = self.station.take_rows_gone();
+        self.hrd_purged_since_take |= all;
         if !all && ids.is_empty() {
             return;
         }
@@ -19386,6 +19409,13 @@ impl Engine {
     /// A corrected copy keeps its id, and is not refused: only a contact that left is.
     pub fn upload_cancelled(&self, rec: &QsoRecord) -> bool {
         self.station.upload_cancelled(rec)
+    }
+
+    /// [`Self::upload_cancelled`] for what HRD Logbook's drain holds ([`Self::take_hrd_pending`]),
+    /// which is taken later in the worker's trip than the upload queue. A purge counts from its own
+    /// take: a contact logged after the purge, before HRD's drain, is not cancelled by it.
+    pub fn hrd_cancelled(&self, rec: &QsoRecord) -> bool {
+        self.hrd_purged_since_take || self.station.deleted(rec)
     }
 
     /// The contacts that were waiting for DXKeeper when contest mode's list put them out at its
@@ -19595,6 +19625,7 @@ impl Engine {
     /// Take the queued HRD records for the shell to send (drains the queue). The shell
     /// connects+sends each off the engine lock, then reports back via [`Self::note_hrd_result`].
     pub fn take_hrd_pending(&mut self) -> Vec<QsoRecord> {
+        self.hrd_purged_since_take = false;
         self.hrd_pending.drain(..).collect()
     }
 
@@ -19603,15 +19634,35 @@ impl Engine {
         self.settings.hrd_udp_addr.trim().to_string()
     }
 
-    /// Report an HRD send outcome from the shell worker. On failure the record is re-queued
-    /// (bounded) so a closed HRD never loses the contact; `hrd_link_up` drives the indicator.
+    /// Report an HRD send outcome from the shell worker. On failure the record is re-queued at the
+    /// front (bounded, [`Self::hrd_put_back`]) so a closed HRD never loses the contact; `hrd_link_up`
+    /// drives the indicator.
     pub fn note_hrd_result(&mut self, rec: QsoRecord, delivered: bool) {
         self.hrd_link_up = Some(delivered);
-        if !delivered && !self.upload_cancelled(&rec) {
-            if self.hrd_pending.len() >= 256 {
-                self.hrd_pending.pop_front();
+        if !delivered {
+            self.hrd_put_back(vec![rec]);
+        }
+    }
+
+    /// HRD Logbook refused a send and the drain stopped there: `unsent` is the record that failed and
+    /// every one after it that the drain took, in the order they were logged. The link is down, and
+    /// they all go back ([`Self::hrd_put_back`]).
+    pub fn hrd_unreachable(&mut self, unsent: Vec<QsoRecord>) {
+        self.hrd_link_up = Some(false);
+        self.hrd_put_back(unsent);
+    }
+
+    /// What HRD's drain took and did not send (`recs`, in the order it was logged) goes back ahead of
+    /// anything logged since, for the next tick. A contact deleted meanwhile is left out. Bounded as
+    /// the queue always is: past 256 the oldest goes.
+    pub fn hrd_put_back(&mut self, recs: Vec<QsoRecord>) {
+        for rec in recs.into_iter().rev() {
+            if !self.hrd_cancelled(&rec) {
+                self.hrd_pending.push_front(rec);
             }
-            self.hrd_pending.push_back(rec);
+        }
+        while self.hrd_pending.len() > 256 {
+            self.hrd_pending.pop_front();
         }
     }
 

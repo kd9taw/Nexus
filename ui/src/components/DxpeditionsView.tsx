@@ -6,6 +6,7 @@
 // "Your Window": the get_dxped_windows sweep (configured engine — P.533 when
 // selected) feeds each card's Best-shot line + expandable 24h×band grid, and the
 // ★ chase toggle arms the window-open alert (features/dxpedChase).
+import { useCallMenu } from './useCallMenu'
 import { useEffect, useMemo, useState } from 'react'
 import type { CalendarEntry, DxpedWindow, PropagationSnapshot, WorkableCard } from '../types'
 import { StateBlock } from './StateBlock'
@@ -52,6 +53,8 @@ function provenance(source: PropagationSnapshot['source'], asOf: number): { labe
 }
 
 export function DxpeditionsView({ snap, observation, onWorkSpot, onShowOnMap, onPopOut }: Props) {
+  // The call menu (Best times first, then watch and hide), on a right-click or the menu key on a row.
+  const callMenu = useCallMenu()
   // "Your Window" data: server-cached climatology — a 10-min poll is generous.
   const [nativeWindows, setWindows] = useState<Map<string, DxpedWindow>>(new Map())
   const observedWindows = observation?.windows
@@ -152,7 +155,8 @@ export function DxpeditionsView({ snap, observation, onWorkSpot, onShowOnMap, on
         ) : (
           <div className="dx-cards">
             {workable.map((c: WorkableCard, i) => (
-              <div className="dx-card-wrap" key={`${c.call}-${c.band}-${i}`}>
+              <div className="dx-card-wrap" key={`${c.call}-${c.band}-${i}`} {...callMenu.on(`${c.call}-${c.band}-${i}`, c.call, { band: c.band })}>
+                {callMenu.at(`${c.call}-${c.band}-${i}`)}
                 <WorkNowCard
                   card={c}
                   window={windows.get(c.call.toUpperCase())}
