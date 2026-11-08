@@ -16,10 +16,13 @@
 // .pane-body scroller would hand its height to content measurement instead.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, act, cleanup, fireEvent, screen } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { SstvView } from './SstvView'
 import * as api from '../api'
 import type { AppSnapshot, SstvHealth, SstvState } from '../types'
-import type { PanelLayoutApi, SstvPanelId } from '../features/panelState'
+import { SSTV_PANELS, coercePanelLayout, panelStateIn, type PanelLayoutApi, type SstvPanelId } from '../features/panelState'
+import { chainOf, parseRules, winnerAt } from '../cssCascade'
 
 // THE BUDGET (2026-10-09). The slowest case here, "the RF scope pane ships hidden; ticked, it is one more…", takes
 // 0.27 s and 0.19 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
@@ -97,11 +100,11 @@ const IDLE: SstvState = {
   txTotalSecs: 0,
 }
 
-function fakePanels(removed: SstvPanelId[] = []): PanelLayoutApi<SstvPanelId> {
+function fakePanels(removed: SstvPanelId[] = [], setPanelState: PanelLayoutApi<SstvPanelId>['setPanelState'] = () => {}): PanelLayoutApi<SstvPanelId> {
   return {
     layout: { v: 1, state: {}, share: {} },
     stateOf: (id) => (removed.includes(id) ? 'removed' : 'docked'),
-    setPanelState: () => {},
+    setPanelState,
     shareOf: () => 1,
     setShare: () => {},
     setShares: () => {},
@@ -137,7 +140,9 @@ describe('SstvView pane shell', () => {
     await renderView({ panels: fakePanels() })
     const shell = document.querySelector('main.layout.single.sstv-view')!
     const frames = Array.from(shell.querySelectorAll(':scope > .cockpit-panes > .cockpit-col > .pane-frame')).map((f) => f.getAttribute('data-pane'))
-    expect(frames).toEqual(['rfScope', 'txcompose', 'gallery'])
+    // fakePanels docks every id, so the large TX meters pane stands too: under the RF scope pane, over the
+    // gallery, with the composer last (#479).
+    expect(frames).toEqual(['rfScope', 'txMetersPane', 'gallery', 'txcompose'])
     const strip = shell.querySelector(':scope > .cockpit-txstrip')!
     expect(strip.previousElementSibling?.matches('.pane-splitter'), 'the TX strip left its place under the stage').toBe(true)
     expect(strip.nextElementSibling?.matches('.cockpit-panes'), 'the pane region is not directly under the TX strip').toBe(true)
@@ -483,3 +488,105 @@ describe('the SSTV stage divider', () => {
 // (The computed-winner check that the sheet's `.sstv-live-canvas` width actually consumes
 // the stamp lives in cockpit-shells.test.ts, beside the file's other cascade computers —
 // this jsdom file cannot read styles.css: import.meta.url is not file-scheme here.)
+
+// #479: THE COMPOSER AT THE BOTTOM, THE LARGE TX METERS PANE, AND "OPEN FOLDER". The composer stands last in
+// the pane region, directly above the Send/Stop bar, with the gallery above it taking the spare height; it lays
+// out sideways (picture left, options right) and wraps by its own width. The large TX meters pane joins SSTV's
+// vocabulary as FT's, Phone's and CW's: hidden until ticked, and one click from the strip's meters. Nothing in the
+// strip or the bar moves, and neither gains or loses a control.
+describe('#479: the composer at the bottom, the meters pane, Open folder', () => {
+  const sheet = (name: string) =>
+    readFileSync(resolve(process.cwd(), 'src', name), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+  const RULES = parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css'))
+  const win = (el: Element, prop: string) => winnerAt(RULES, 'dark', chainOf(el), prop)?.value.trim() ?? null
+  const frames = () =>
+    [...document.querySelectorAll('main.sstv-view > .cockpit-panes > .cockpit-col > .pane-frame')].map((f) => f.getAttribute('data-pane'))
+  afterEach(() => document.documentElement.removeAttribute('data-viewport'))
+
+  it('the composer is the LAST pane, directly above the Send/Stop bar; the gallery stands above it', async () => {
+    await renderView()
+    expect(frames()).toEqual(['gallery', 'txcompose'])
+    const shell = document.querySelector('main.sstv-view')!
+    const col = shell.querySelector(':scope > .cockpit-panes > .cockpit-col')!
+    expect(col.lastElementChild?.getAttribute('data-pane'), 'the composer is not at the foot of the region').toBe('txcompose')
+    expect(shell.querySelector(':scope > .cockpit-panes')!.nextElementSibling?.matches('.sstv-tx-bar'), 'the bar is not right under the region').toBe(true)
+    // Still the content-height strip it was, and still holding no transmit control.
+    expect(document.querySelector('[data-pane="txcompose"]')!.getAttribute('data-fit')).toBe('content')
+    for (const sel of ['.sstv-tx-send', '.sstv-tx-stop', '.sstv-tx-mode']) expect(document.querySelector(sel)!.closest('.pane-frame'), sel).toBeNull()
+  })
+
+  it('the composer lays out sideways and wraps by its own width: the picture side, then the options', async () => {
+    await renderView()
+    const row = document.querySelector('[data-pane="txcompose"] .sstv-compose-row')
+    expect(row, 'no composer row').not.toBeNull()
+    expect(win(row!, 'display')).toBe('flex')
+    expect(win(row!, 'flex-wrap')).toBe('wrap')
+    const stage = row!.firstElementChild!
+    expect(stage.classList.contains('sstv-compose-stage'), 'the picture side does not lead the row').toBe(true)
+    expect(stage.querySelector('.sstv-tx-drop'), 'the drop zone left the picture side').not.toBeNull()
+    expect(stage.querySelector('input[type=file]'), 'the file picker left the picture side').not.toBeNull()
+    // Nothing loaded: the drop zone takes the whole row, as it did.
+    expect(win(stage, 'flex')).toBe('1 1 auto')
+    expect(win(stage, 'min-width')).toBe('0')
+    // Loaded, the picture side is the preview's own width, and yields before it overflows.
+    cleanup()
+    const c = render(
+      <div className="sstv-compose-row">
+        <div className="sstv-compose-stage sstv-compose-stage-packed" />
+        <div className="sstv-compose-opts" />
+      </div>,
+    ).container
+    const packed = c.querySelector('.sstv-compose-stage')!
+    expect(win(packed, 'flex')).toBe('0 1 auto')
+    expect(win(packed, 'min-width')).toBe('0')
+    const opts = c.querySelector('.sstv-compose-opts')!
+    // A basis in em, so the wrap point follows the text size and the zoom; capped so a wide window
+    // never gets a window-wide text field; shrinkable to nothing before the row overflows sideways.
+    expect(win(opts, 'flex')).toBe('1 1 24em')
+    expect(win(opts, 'min-width')).toBe('0')
+    expect(win(opts, 'max-width')).toBe('64em')
+  })
+
+  it('the large TX meters pane ships hidden, and ticked it is a fill pane over the gallery', async () => {
+    await renderView()
+    expect(document.querySelector('[data-pane="txMetersPane"]'), 'shown with no panel record').toBeNull()
+    cleanup()
+    await renderView({ panels: fakePanels(['rfScope']) })
+    expect(frames()).toEqual(['txMetersPane', 'gallery', 'txcompose'])
+    expect(document.querySelector('[data-pane="txMetersPane"]')!.getAttribute('data-fit')).toBe('fill')
+    expect(document.querySelector('[data-pane="txMetersPane"] .txmeters-pane'), 'the pane holds no meters').not.toBeNull()
+  })
+
+  it('from md up the strip opens it beside its meters; below md the strip has no meters and no toggle', async () => {
+    const set = vi.fn()
+    document.documentElement.setAttribute('data-viewport', 'lg')
+    await renderView({ panels: fakePanels(['txMetersPane'], set) })
+    const strip = document.querySelector('main.sstv-view > .cockpit-txstrip')!
+    const toggle = strip.querySelector<HTMLButtonElement>('.txmeters-pane-toggle')
+    expect(toggle, 'no way to the large meters from the strip').not.toBeNull()
+    expect(toggle!.previousElementSibling?.className).toContain('cockpit-txstrip-meters')
+    fireEvent.click(toggle!)
+    expect(set).toHaveBeenCalledWith('txMetersPane', 'docked')
+    cleanup()
+    document.documentElement.setAttribute('data-viewport', 'sm')
+    await renderView({ panels: fakePanels(['txMetersPane']) })
+    expect(document.querySelector('.txmeters-pane-toggle')).toBeNull()
+  })
+
+  it('an SSTV layout saved before the change opens with every pane as it was and the meters hidden, writing nothing', () => {
+    const saved = { v: 2, state: { scope: 'docked', rfScope: 'docked', txcompose: 'docked', gallery: 'removed' }, share: {} }
+    const layout = coercePanelLayout(SSTV_PANELS, saved)
+    expect(panelStateIn(SSTV_PANELS, layout, 'txMetersPane')).toBe('removed')
+    expect(panelStateIn(SSTV_PANELS, layout, 'rfScope')).toBe('docked')
+    expect(panelStateIn(SSTV_PANELS, layout, 'txcompose')).toBe('docked')
+    expect(panelStateIn(SSTV_PANELS, layout, 'gallery')).toBe('removed')
+    // The read is the insertion: no entry is added for the new pane.
+    expect(Object.keys(layout.state).sort()).toEqual(['gallery', 'rfScope', 'scope', 'txcompose'])
+  })
+
+  it('the gallery button says what it does: Open folder', async () => {
+    await renderView()
+    const btn = document.querySelector<HTMLButtonElement>('.sstv-gallery-reveal')!
+    expect(btn.textContent).toBe('Open folder')
+  })
+})

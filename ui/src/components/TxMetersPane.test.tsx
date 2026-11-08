@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// THE LARGE TX METERS PANE. A READOUT that stands in the pane vocabulary of Operate, Phone and CW and
+// THE LARGE TX METERS PANE. A READOUT that stands in the pane vocabulary of Operate, Phone, CW and SSTV and
 // ships hidden: display only, with every control and the TX chrome outside it. Its size is computed over
 // the REAL sheets (cssCascade: importance, specificity, source order), never read off them with a regex.
 // ⚠️ jsdom does not lay out: the pixels are the real-Chrome sweep's.
@@ -17,6 +17,7 @@ import {
   OPERATE_ARRANGE,
   OPERATE_PANELS,
   PHONE_PANELS,
+  SSTV_PANELS,
   coercePanelLayout,
   panelStateIn,
   type PanelVocabulary,
@@ -45,7 +46,8 @@ const KEYED = {
   txCompDb: 6,
   paTempC: 47,
 } as unknown as RadioStatus
-const VOCABS = [OPERATE_PANELS, PHONE_PANELS, CW_PANELS] as unknown as PanelVocabulary<string>[]
+// SSTV joined with the composer re-flow: the same pane, the same hidden start.
+const VOCABS = [OPERATE_PANELS, PHONE_PANELS, CW_PANELS, SSTV_PANELS] as unknown as PanelVocabulary<string>[]
 
 describe('the vocabulary', () => {
   it.each(VOCABS.map((v) => [v.view, v] as const))('%s lists it and ships it hidden', (_view, spec) => {

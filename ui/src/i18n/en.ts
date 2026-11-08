@@ -13611,7 +13611,7 @@ export const EN = {
     'Close',
   'sstv.viewer.close.title':
     'Close this window (Esc)',
-  'sstv.gallery.reveal.label': 'Reveal',
+  'sstv.gallery.reveal.label': 'Open folder',
   'sstv.gallery.reveal.title': 'Open the folder the received pictures are saved in (Pictures/Nexus SSTV)',
   'sstv.gallery.reveal.failed': 'Could not open the SSTV gallery folder',
   'sstv.gallery.thumb.alt': '{{mode}} image received {{when}}',

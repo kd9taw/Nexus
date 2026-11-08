@@ -672,6 +672,41 @@
 .txmeters-pane-meter {
   min-width: 0;
 }
+/* SSTV'S COMPOSER BODY (#479). The composer is a fit="content" pane at the foot of SSTV's one column,
+   directly over the Send/Stop bar, and its body is ONE ROW: the picture side (the drop zone and the file
+   picker), then the options (the overlays, what goes out, the ident, the warnings). The row WRAPS: where the
+   composer is narrower than the picture beside a 24em options column, the options fall under the picture, as
+   the composer always read. A wrap, so it is the composer's own width at any zoom and never a viewport rule.
+   Empty, the picture side takes the whole row (the drop zone, as before); loaded (`-packed`, after the base
+   so it wins the tie) it is the preview's own width. The options grow into the rest up to 64em, so a wide
+   window never gets a window-wide text field. Everything here can shrink to nothing first: the region's
+   column clips sideways. No height anywhere: the pane is content-height and the preview carries its own
+   yielding ceiling (styles.css `.sstv-tx-preview`). Nothing here keys or stops anything; Send and Stop are
+   in the bar. */
+.sstv-compose-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+.sstv-compose-stage {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.sstv-compose-stage-packed {
+  flex: 0 1 auto;
+}
+.sstv-compose-opts {
+  flex: 1 1 24em;
+  min-width: 0;
+  max-width: 64em;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
 /* WHY TRANSMIT IS OFF AFTER A CAT OUTAGE, IN THE STRIP, MOVING NOTHING. The TX state beside it keeps
    its own words ("TX off") and so its width; these words never take room a control could need.
    `.cockpit-txstrip-catnote` (the strip of every screen but FT): a ZERO basis growing into the line's
