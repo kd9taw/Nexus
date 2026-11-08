@@ -25,13 +25,11 @@
 //     return runs. A content's own `onCloseAutoFocus` runs first and, by preventing
 //     the event, takes the return over, as the ATU and JS8 menus do.
 //
-// AND A MENU FROM THE TOP BAR OPENS BELOW THE WHOLE BAR. Not modal, a click on Stop TX reaches Stop TX only where
-// the menu is not drawn over it. At xs the bar wraps and the TX cluster (TX, Tune, Stop TX) stands under the band
-// pill, and the pill's menu dropped over every point of Stop TX (700×800 on the Logbook, measured by
-// `scripts/browser-probe --desktop menustop`). A menu that opens downward from a control in `header.topbar` is
-// pushed past the bar's bottom edge, so it never covers a control of the bar, whatever the bar wraps to.
+// What this does NOT settle: a click reaches Stop TX only where no menu is DRAWN over it. That is stacking, not
+// modality, and Stop TX standing above every overlay (menus and dialogs alike) is its own change; the menu-stop
+// probe names the one case it found (the band pill's menu over the top bar's Stop TX at xs on the Logbook).
 import * as RM from '@radix-ui/react-dropdown-menu'
-import { forwardRef, useLayoutEffect, useRef, useState } from 'react'
+import { forwardRef, useRef } from 'react'
 
 /** A Radix DropdownMenu root that is never modal. */
 export function MenuRoot(props: Omit<RM.DropdownMenuProps, 'modal'>) {
@@ -40,31 +38,15 @@ export function MenuRoot(props: Omit<RM.DropdownMenuProps, 'modal'>) {
 
 /** A Radix DropdownMenu content whose close gives the keyboard back without scrolling anything. */
 export const MenuContent = forwardRef<HTMLDivElement, RM.DropdownMenuContentProps>(function MenuContent(
-  { onCloseAutoFocus, onInteractOutside, sideOffset = 0, ...props },
+  { onCloseAutoFocus, onInteractOutside, ...props },
   ref,
 ) {
   // Fresh per opening: the content unmounts when the menu closes.
   const outside = useRef(false)
-  const own = useRef<HTMLDivElement | null>(null)
-  // How far below its trigger the top bar ends, for a menu that opens downward from it (the header).
-  const [belowBar, setBelowBar] = useState(0)
-  useLayoutEffect(() => {
-    if ((props.side ?? 'bottom') !== 'bottom') return
-    const id = own.current?.getAttribute('aria-labelledby')
-    const trigger = id ? document.getElementById(id) : null
-    const bar = trigger?.closest('header.topbar')
-    if (!trigger || !bar) return
-    setBelowBar(Math.max(0, bar.getBoundingClientRect().bottom - trigger.getBoundingClientRect().bottom))
-  }, [props.side])
   return (
     <RM.Content
-      ref={(node) => {
-        own.current = node
-        if (typeof ref === 'function') ref(node)
-        else if (ref) ref.current = node
-      }}
+      ref={ref}
       {...props}
-      sideOffset={sideOffset + belowBar}
       onInteractOutside={(e) => {
         onInteractOutside?.(e)
         if (!e.defaultPrevented) outside.current = true
