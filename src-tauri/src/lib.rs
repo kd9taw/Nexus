@@ -42542,7 +42542,7 @@ mod upload_record_tests {
                 e.apply_settings(s);
             }
             // The worker's trip has begun with this one; then the log is cleared.
-            log(&engine, "K0GON");
+            log(&engine, "K4HRD");
             crate::engine_lock(&engine).clear_logbook();
             for call in ["K1HRD", "K2HRD", "K3HRD"] {
                 let rec = tempo_core::logbook::parse_adif(&format!(
@@ -42572,7 +42572,7 @@ mod upload_record_tests {
             let mut buf = [0u8; 4096];
             while let Ok(n) = hrd.recv(&mut buf) {
                 let text = String::from_utf8_lossy(&buf[..n]).to_string();
-                let call = ["K0GON", "K1HRD", "K2HRD", "K3HRD"]
+                let call = ["K4HRD", "K1HRD", "K2HRD", "K3HRD"]
                     .into_iter()
                     .find(|c| text.contains(c))
                     .expect("a contact");
