@@ -16,9 +16,11 @@
 // taken about one surface must not be implemented in a component the others share — see
 // the Operate recall card that went 5 px
 // past the fold when that was forgotten.
+import { useRef } from 'react'
 import type { RadioStatus } from '../types'
 import { isOnAir } from '../types'
 import { t } from '../i18n'
+import { peakAt, peakStep, type Peak } from './TxNeedles'
 
 /** The scale's own name, as a rig prints it — a technical token, like `TxMeters`' four. */
 const PLATE_S = 'S'
@@ -74,6 +76,15 @@ export function SMeter({ radio }: SMeterProps) {
   const keyed = isOnAir(radio)
   const live = db != null && !keyed
   const frac = live ? sFrac(db) : null
+  // #485: PEAK HOLD, the TX needles' own (`peakStep` / `peakAt`: jump to any reading above the
+  // mark, hold it 1 s, then fall). A ref, as theirs is: the poll re-renders us, and holding a peak
+  // must never itself cause a render. Dropped while keyed or unread, so a burst from before an
+  // over is not still marked after it.
+  const peak = useRef<Peak | null>(null)
+  const now = Date.now()
+  peak.current = frac == null ? null : peakStep(peak.current, frac, '', now)
+  const litTop = frac == null ? -1 : Math.floor(frac * SEGMENTS - 0.5)
+  const peakSeg = peak.current == null ? -1 : Math.floor(peakAt(peak.current, now) * SEGMENTS - 0.5)
 
   return (
     <div
@@ -101,7 +112,7 @@ export function SMeter({ radio }: SMeterProps) {
             return (
               <span
                 key={i}
-                className={`ph-smeter-seg${lit ? ' lit' : ''}${at > S9_FRAC ? ' hot' : ''}`}
+                className={`ph-smeter-seg${lit ? ' lit' : ''}${!lit && i === peakSeg && peakSeg > litTop ? ' peak' : ''}${at > S9_FRAC ? ' hot' : ''}`}
               />
             )
           })}

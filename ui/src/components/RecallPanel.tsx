@@ -8,7 +8,8 @@ import type { LoggedQso } from '../types'
 import type { CallHistory } from '../features/callHistory'
 import type { ContestDupeVerdict } from '../features/contestDupe'
 import type { PotaDupe } from '../features/potaActivation'
-import { openQrzPage } from '../api'
+import { openExternalUrl, openQrzPage } from '../api'
+import { gridMapUrl } from '../grid'
 import { withErrorToast } from '../toast'
 import { useCallBearings } from '../features/callBearing'
 import { pointedTo } from './rotorPointAt'
@@ -224,6 +225,29 @@ export function RecallPanel({ call, band, name, qth, state, grid, country, image
   const place = [town, grid?.trim() ? `(${grid.trim()})` : ''].filter(Boolean).join(' ')
   const ctry = country?.trim()
   const where = [place, ctry].filter(Boolean).join(' · ')
+  // #483: the square opens on OpenStreetMap in the browser, through the app's one external-link
+  // opener (the QRZ photo's pattern, below). Only a real locator becomes a button (`gridMapUrl`);
+  // the line reads exactly as the plain text it was.
+  const sq = grid?.trim() ?? ''
+  const mapUrl = sq ? gridMapUrl(sq) : null
+  const whereNode: ReactNode = mapUrl ? (
+    <>
+      {town ? `${town} ` : ''}(
+      <button
+        type="button"
+        className="recall-grid"
+        title={t('recall.grid.map.title', { grid: sq })}
+        // The QRZ photo's focus guard: a click must not pull the caret out of the log form.
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => void withErrorToast(() => openExternalUrl(mapUrl), t('recall.grid.map.error', { grid: sq }))}
+      >
+        {sq}
+      </button>
+      ){ctry ? ` · ${ctry}` : ''}
+    </>
+  ) : (
+    where
+  )
   // Distance + true bearing from the operator's QTH: the station's answer for where a point at this
   // call turns the antenna (features/callBearing), the number the Rotor box shows and its Point turns
   // to, never one worked out here. It is taken to the square typed into the log strip, sharpened by
@@ -335,7 +359,7 @@ export function RecallPanel({ call, band, name, qth, state, grid, country, image
           <div className="recall-where">
             {/* Names the button the operator actually sees: the log strip's callbook button is
                 "Lookup" (it answers from QRZ or HamQTH), not "QRZ". */}
-            {where ||
+            {(where && whereNode) ||
               (hasLookup ? <span className="recall-where-empty">{t('recall.where.empty')}</span> : null)}
           </div>
           {geo && (

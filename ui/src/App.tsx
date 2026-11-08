@@ -66,6 +66,7 @@ import { phoneTuneNeedsRearSource } from './features/yaesuTuneNote'
 import { useActivationNotices } from './useActivationNotices'
 import { t } from './i18n'
 import { resolveUnits, setUnitsMirror } from './units'
+import { setSwrCutoffMirror } from './swrCutoff'
 import { doubleBeep, processDecodes, txEarcon, type NeededAlert } from './alerts'
 import { openingToastSpec } from './openingAlert'
 import { announce } from './announce'
@@ -1076,6 +1077,9 @@ function App() {
   const workDxpedRef = useRef<((c: WorkableCard) => void) | null>(null)
   // Latest link tier (TempoFast/TempoDeep/FT8/FT4) — the rail's Digital button preserves it.
   const tierRef = useRef<Tier>('FT8')
+  // Whether the Satellites screen exists, for the poll below (mounted once, so it reads a ref).
+  const satsOnRef = useRef(false)
+  satsOnRef.current = features.isOn('sats')
   useEffect(() => {
     let live = true
     const OPENING_ALERT_COOLDOWN_MS = 10 * 60_000
@@ -1120,7 +1124,19 @@ function App() {
           const armedSats = Object.keys(satAlarmMap())
           if (armedSats.length > 0) {
             getSatSchedule(armedSats, 2)
-              .then((passes) => checkSatAlarms(passes, Date.now()))
+              .then((passes) =>
+                checkSatAlarms(
+                  passes,
+                  Date.now(),
+                  // #478: the notice's button opens that pass on the Satellites screen.
+                  satsOnRef.current
+                    ? (name) => {
+                        setSatFocus(name)
+                        setView('sats')
+                      }
+                    : undefined,
+                ),
+              )
               .catch(() => {})
           }
           // ISS SSTV auto-arm (opt-in, default off): at AOS tune 145.800 FM + arm
@@ -1620,6 +1636,12 @@ function App() {
   useEffect(() => {
     setUnitsMirror(settings?.units)
   }, [settings?.units])
+
+  // #476: the high-SWR cutoff, for the TX meters' tooltip (swrCutoff.ts). Not before the first
+  // load, so a window opening does not blank the value every other window is showing.
+  useEffect(() => {
+    if (settings) setSwrCutoffMirror(settings)
+  }, [settings])
 
   // The station profile changed (the picker, Settings, or an activation picking its park's): the
   // settings copy every screen reads takes the profile's call, grid, state and power.

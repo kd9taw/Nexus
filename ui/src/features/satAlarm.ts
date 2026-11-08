@@ -174,7 +174,11 @@ const HHMM = (unix: number) => {
  * whose next pass's AOS minus lead has arrived (and the pass isn't over), fire
  * the loud repeating beep + a persistent banner once per (bird, AOS).
  */
-export function checkSatAlarms(passes: SatPass[] | null, nowMs: number): void {
+/** `onOpen` (#478): show that bird on the Satellites screen, given where that screen exists. The
+ *  notice's button then opens it (stopping the alarm); without it the button only stops the
+ *  alarm. Closing the notice with ✕ stops the alarm either way: a hidden notice must not leave
+ *  the beep running for up to `LOOP_FOR_MS`. */
+export function checkSatAlarms(passes: SatPass[] | null, nowMs: number, onOpen?: (name: string) => void): void {
   if (!passes || passes.length === 0) return
   const alarms = satAlarmMap()
   if (Object.keys(alarms).length === 0) return
@@ -208,7 +212,17 @@ export function checkSatAlarms(passes: SatPass[] | null, nowMs: number): void {
       message,
       'success',
       0, // persistent — stays until the operator dismisses it
-      { prominent: true, action: () => stopSatAlarmLoop(), actionLabel: t('sat.alarm.stop') },
+      {
+        prominent: true,
+        action: onOpen
+          ? () => {
+              stopSatAlarmLoop()
+              onOpen(p.name)
+            }
+          : () => stopSatAlarmLoop(),
+        actionLabel: onOpen ? t('sat.alarm.open') : t('sat.alarm.stop'),
+        onClose: stopSatAlarmLoop,
+      },
     )
   }
 }

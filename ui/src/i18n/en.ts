@@ -6743,6 +6743,8 @@ export const EN = {
   'sat.alarm.up': '⏰ {{name}} is UP now (LOS {{los}}) · max {{maxEl}}°',
   'sat.alarm.rises': '⏰ {{name}} rises {{aos}} (~{{mins}} min) · max {{maxEl}}°',
   'sat.alarm.stop': 'Stop alarm',
+  // #478: the alarm notice's button where the Satellites screen exists: stops the alarm and opens that pass.
+  'sat.alarm.open': 'Open in Satellites',
 
   // ISS SSTV auto-arm (features/issAutoArm.ts). The dial and the mode are interpolated from
   // the module's own constants and never become text: a decimal comma reaching 145.800 is an
@@ -7844,6 +7846,9 @@ export const EN = {
   'recall.log.comment.readAria': 'Comment — open it in the row',
   'recall.qrz.title': 'Open {{call}} on QRZ (browser)',
   'recall.qrz.error': 'Could not open {{call}} on QRZ',
+  // #483: the caller card's grid square, a button that opens it on OpenStreetMap in the browser.
+  'recall.grid.map.title': 'Open {{grid}} on OpenStreetMap (browser)',
+  'recall.grid.map.error': 'Could not open {{grid}} on OpenStreetMap',
   // Names the button the operator can see: the log strip's callbook button reads "Lookup".
   'recall.where.empty': 'Tab or press Lookup for name / QTH',
   // Two whole statements, and the conjunction between the two squares is inside a message of
@@ -15241,6 +15246,10 @@ export const EN = {
   // report, as against the blank rows before the first over, which the line above answers.
   'phone.unavail.meter': 'Your radio does not report {{meter}} over CAT — the bar stays empty.',
   'meters.tx.swr.title': 'Antenna match — keep it under 2:1',
+  // #476: the same tip once the operator has switched on the high-SWR cutoff: the number it names
+  // is theirs, the one Nexus acts on, not the fixed rule of thumb above.
+  'meters.tx.swr.cutoff':
+    'Antenna match — Nexus stops transmitting above {{ratio}}:1, your setting in Settings ▸ Radio ▸ Transmit limits & sharing',
   // ⚠️ THE SAME READING, ON A SCALE NEXUS CANNOT VOUCH FOR (2026-09-20). `swrScaleVerified`
   // is false — the rig is outside the two paths whose meter curve we can point at — so the
   // line above must not be shown: "under 2:1" is a threshold on an absolute scale, and the
