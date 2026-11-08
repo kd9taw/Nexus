@@ -381,6 +381,9 @@ interface Props {
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
    *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
   onOpenLogbook?: (call: string, id?: string | null) => void
+  /** Open the Satellites screen on a bird by NORAD id — the band picker's QO-100 row. Omitted ⇒
+   *  the picker lists no QO-100 row. */
+  onOpenSatellite?: (norad: number) => void
   /** The call in this cockpit's log strip, for the Rotor box beside it (LogEntry `onEntryCall`). */
   onEntryCall?: (call: string) => void
   /** Panel visibility/resize record — host-owned (App) so it survives this view's remounts.
@@ -572,6 +575,7 @@ export function CwCockpit({
   onOpenMemories,
   onOpenSettings,
   onOpenLogbook,
+  onOpenSatellite,
   onEntryCall,
   panels,
   spotsBoard,
@@ -2547,7 +2551,7 @@ export function CwCockpit({
             {CW}
           </span>
         }
-        bandControl={<BandPicker snap={snap} mode="cw" onSnap={onSnap} />}
+        bandControl={<BandPicker snap={snap} mode="cw" onSnap={onSnap} onOpenSatellite={onOpenSatellite} />}
         onCommitDial={commitDial}
         actions={
           host && panels ? (

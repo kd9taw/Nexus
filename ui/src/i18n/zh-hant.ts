@@ -10248,6 +10248,8 @@ export const ZH_HANT: PartialCatalog = {
   "settings.save.entryCall.action": "更改呼號",
   "bandPicker.planAdvice.label": "超出波段規劃",
   "bandPicker.planAdvice.title": "在 {{band}} 的此處使用話音超出了常用波段規劃：所有 IARU 分區都把這段留給 CW 和數據。Nexus 不會阻擋 — 由你的執照和你所在國家的波段規劃決定。",
+  "bandPicker.qo100.label": "QO-100 衛星",
+  "bandPicker.qo100.title": "在「衛星」頁面開啟 QO-100。在那裡選擇它的窄頻轉發器即可調諧到下行。",
   "dash.kp.est": "估",
   "settings.stationProfiles.title": "我的台站設定檔",
   "settings.stationProfiles.hint": "為你的台站命名的幾套設定：家中、攜帶式裝備、俱樂部呼號。每套包含呼號、網格與位置，以及你記錄日誌時用的裝置。在頂欄選擇一個；開始某個設定檔所屬公園的 POTA 激活會自動選中它，停止後切回。新通聯在空白處帶上設定檔中的資訊；已在日誌中的通聯絕不改變。每個設定檔在你單獨儲存時即存放，不隨「儲存」一起。",

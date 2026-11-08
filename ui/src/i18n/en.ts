@@ -7857,6 +7857,10 @@ export const EN = {
   'bandPicker.planAdvice.label': 'Outside band plan',
   'bandPicker.planAdvice.title':
     'Phone here on {{band}} is outside the usual band plan: every IARU region keeps this part of the band for CW and data. Nexus does not block it — your licence and your country’s band plan decide.',
+  // The band picker's last row: opens the Satellites screen on QO-100 (it tunes nothing itself).
+  'bandPicker.qo100.label': 'QO-100 satellite',
+  'bandPicker.qo100.title':
+    'Opens QO-100 on the Satellites screen. Pick its narrowband transponder there to tune the downlink.',
 
   'freq.control.aria': 'Frequency control',
   'freq.channel.label': 'Band / Channel',

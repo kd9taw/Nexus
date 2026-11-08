@@ -900,4 +900,153 @@ mod tests {
         phone_tab_on_the_sstv_screen(&mut e, true);
         assert_eq!(e.rig_mode_effective(), "USB", "APRS's channel");
     }
+
+    /// ⭐ NO HOME IS AN ALLOCATION EDGE (the QO-100 report: entering Phone on 3 cm with no
+    /// remembered dial commanded the radio to 10000.000 MHz, the band's bottom edge, because the
+    /// phone home fell back to the segment start; CW did the same, having no 3 cm activity dial).
+    /// Every band, every section, every class, through both paths that command the radio with no
+    /// memory cell: section entry (`prepare_mode_entry`) and the band pick (`prepare_band_pick`).
+    ///
+    /// The emission (an SSB passband on its sideband, a CW carrier, the FT8 tone at the TX offset)
+    /// must lie STRICTLY inside the amateur spectrum of the class's regime, touching neither end of
+    /// it, and a Phone or CW home must be keyable wherever the class holds a segment for the
+    /// section on the band. A
+    /// phone home on a class's own phone FLOOR (14.150 USB for an Extra) is inside the allocation,
+    /// with the class's own CW and data spectrum below it, and stays: that is a sub-band boundary,
+    /// not a band edge. A receive-only row (no segment for the class) listens at the `Open` dial,
+    /// so it is judged against the `Open` regime.
+    #[test]
+    fn no_home_on_any_band_mode_or_class_is_an_allocation_edge() {
+        use crate::privileges::{
+            allowed_spans, inside_allocation, segment_start, tx_span_allowed, SSB_BW_MHZ,
+            US_CLASSES,
+        };
+        use crate::settings::LicenseClass;
+        const BANDS: &[&str] = &[
+            "2200m", "630m", "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m",
+            "8m", "6m", "5m", "4m", "2m", "1.25m", "70cm", "33cm", "23cm", "13cm", "9cm", "6cm",
+            "3cm", "1.25cm",
+        ];
+        let sections = [
+            ("phone", OperatingMode::Phone),
+            ("cw", OperatingMode::Cw),
+            ("digital", OperatingMode::Digital),
+            ("rtty", OperatingMode::Rtty),
+            ("keyboard", OperatingMode::Keyboard),
+        ];
+        let mut classes = US_CLASSES.to_vec();
+        classes.push(LicenseClass::Open);
+        let mut bad = Vec::new();
+        let mut judged = 0;
+        for &class in &classes {
+            for &band in BANDS {
+                for (word, om) in sections {
+                    let mut e = station();
+                    e.settings.license_class = class;
+                    e.settings.band = band.to_string();
+                    let entry = e.prepare_mode_entry(word, true).frequency;
+                    let pick = e.prepare_band_pick(band, om);
+                    // A LOST HOME FAILS TOO, so "no home" can never pass as "no edge". Phone and
+                    // CW must home on entry wherever the class holds a segment for the section
+                    // (US 60 m is channelised and holds none), and must pick every band the
+                    // Phone/CW menu lists. The one deliberate gap: 2200 m and 630 m, whose only
+                    // start is their edge, keep the dial. 8 m and 5 m hold no row at all.
+                    let voice = matches!(om, OperatingMode::Phone | OperatingMode::Cw);
+                    let unhomed = matches!(band, "2200m" | "630m" | "8m" | "5m");
+                    let want_entry = voice && !unhomed && segment_start(class, band, om).is_some();
+                    let want_pick = voice && !unhomed;
+                    for (path, home, want) in
+                        [("entry", entry, want_entry), ("pick", pick, want_pick)]
+                    {
+                        let Some((dial, sideband)) = home else {
+                            if want {
+                                bad.push(format!("{class:?} {band} {word} {path}: no home"));
+                            }
+                            continue;
+                        };
+                        judged += 1;
+                        let (lo, hi) = match om {
+                            OperatingMode::Phone if sideband == "LSB" => (dial - SSB_BW_MHZ, dial),
+                            OperatingMode::Phone => (dial, dial + SSB_BW_MHZ),
+                            OperatingMode::Digital => {
+                                let off = e.tx_offset_hz as f64 / 1e6;
+                                (dial + off, dial + off + 0.00005)
+                            }
+                            _ => (dial, dial),
+                        };
+                        // Does the class hold a segment for the section on this band (US 60 m
+                        // through its channels too)? `Open` holds every band it parks on.
+                        let holds = allowed_spans(class, om).is_none_or(|spans| {
+                            spans.iter().any(|&(a, b)| {
+                                crate::bandplan::band_for_dial(a) == Some(band)
+                                    || crate::bandplan::band_for_dial(b - 1e-6) == Some(band)
+                            })
+                        });
+                        let regime = if holds { class } else { LicenseClass::Open };
+                        // The channel sections (FT8, RTTY, PSK) tune published worldwide
+                        // channels, not a segment fallback: inside either regime is enough there
+                        // (60 m FT8's 5.3715 is the US channel, outside `Open`'s parking span).
+                        let channel = !matches!(om, OperatingMode::Phone | OperatingMode::Cw);
+                        let inside = inside_allocation(regime, lo, hi)
+                            || (channel && inside_allocation(LicenseClass::General, lo, hi));
+                        // A channel pick may land where the class cannot key (a Novice's 23 cm
+                        // FT8 channel is above its 1270-1295): it listens, and the gate refuses.
+                        let keyable = !holds || channel || tx_span_allowed(class, lo, hi, om);
+                        if !inside || !keyable {
+                            bad.push(format!(
+                                "{class:?} {band} {word} {path}: {dial:.4} {sideband} \
+                                 (inside={inside} keyable={keyable})"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(judged > 400, "scene: the sweep judged {judged} homes");
+        assert!(
+            bad.is_empty(),
+            "{} homes on an edge:\n{}",
+            bad.len(),
+            bad.join("\n")
+        );
+    }
+
+    /// The reported case by name: Phone and CW entered on 3 cm with no remembered dial. `Open`
+    /// lands on the QO-100 narrowband transponder (SSB 10489.700, clear of the 10489.750 middle
+    /// beacon; CW 10489.520), a US class on the 10368.100 national calling frequency; 13 cm for
+    /// `Open` lands on the same channel's uplink, 8089.500 MHz below (non-inverting), and a US
+    /// class on 2304.100. Never the 10000.000 / 2300.000 / 2400.000 edge it was commanded to.
+    #[test]
+    fn three_and_thirteen_cm_enter_on_their_activity_not_the_band_edge() {
+        use crate::settings::LicenseClass::{Extra, Open, Technician};
+        let enter = |class, band: &str, word: &str| {
+            let mut e = station();
+            e.settings.license_class = class;
+            e.settings.band = band.to_string();
+            e.prepare_mode_entry(word, true).frequency.map(|(f, _)| f)
+        };
+        let close = |got: Option<f64>, want: f64| got.is_some_and(|f| (f - want).abs() < 1e-9);
+        for (class, band, word, want) in [
+            (Open, "3cm", "phone", 10489.700),
+            (Open, "3cm", "cw", 10489.520),
+            (Open, "13cm", "phone", 2400.200),
+            (Open, "13cm", "cw", 2400.020),
+            (Technician, "3cm", "phone", 10368.100),
+            (Extra, "3cm", "cw", 10368.100),
+            (Technician, "13cm", "phone", 2304.100),
+            (Extra, "13cm", "cw", 2304.100),
+        ] {
+            let got = enter(class, band, word);
+            assert!(
+                close(got, want),
+                "{class:?} {band} {word}: want {want}, got {got:?}"
+            );
+        }
+        // The two QO-100 legs are one channel: uplink = downlink - 8089.500 MHz.
+        for word in ["phone", "cw"] {
+            let down = enter(Open, "3cm", word).unwrap();
+            let up = enter(Open, "13cm", word).unwrap();
+            assert!((down - up - 8089.5).abs() < 1e-9, "{word}: {down} / {up}");
+        }
+    }
 }

@@ -5059,6 +5059,8 @@ export const JA: PartialCatalog = {
   "bandPicker.txLock.usbOnlyTitle": "60 mではUSBのPhoneのみ許可されているため、送信はブロックされています。USBかAUTOを選んでください。",
   "bandPicker.planAdvice.label": "バンドプラン外",
   "bandPicker.planAdvice.title": "{{band}} のこの周波数での電話は、通常のバンドプランの外です。IARU のどの地域も、バンドのこの部分を CW とデータ用にしています。Nexus は止めません — 判断するのはあなたの免許と自国のバンドプランです。",
+  "bandPicker.qo100.label": "QO-100 衛星",
+  "bandPicker.qo100.title": "衛星画面で QO-100 を開きます。そこで狭帯域トランスポンダーを選ぶと、ダウンリンクに同調します。",
   "freq.control.aria": "周波数コントロール",
   "freq.channel.label": "バンド / チャンネル",
   "freq.channel.aria": "バンドチャンネルプリセット",

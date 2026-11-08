@@ -106,6 +106,9 @@ import { fmtDistanceKm, fmtSpeedKmS, useUnits } from '../units'
 interface Props {
   /** Bird to select (map click hand-off). The section follows changes. */
   focusSat?: string | null
+  /** Bird to select by NORAD id (the band picker's QO-100 row), once the bird list names it:
+   * the catalogue may list a bird under another name (QO-100 is "ES'HAIL 2" in Celestrak's). */
+  focusNorad?: number | null
   /** The live engine snapshot — the log strip's dial/band/mode source, exactly
    * as the Phone and CW cockpits feed it. Nullable (and absent in the older
    * section tests) because the pop-out window polls it on its own 300 ms
@@ -2221,7 +2224,7 @@ function SatLockOn({ onLockOn }: { onLockOn: () => void }) {
  *  and the pass column's. */
 const SATS_COLUMN_VARS = ['--sats-col-a', '--sats-col-b'] as const
 
-export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap }: Props) {
+export function SatellitesView({ focusSat, focusNorad, snap, onPopOut, onOpenLogbook, onSnap }: Props) {
   const [nativeView, setView] = useState<SatView | null>(null)
   const [favs, setFavs] = useState<Set<string>>(() => satChasingSet())
   const [nativeSchedule, setSchedule] = useState<SatPass[]>([])
@@ -2356,6 +2359,18 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
   useEffect(() => {
     if (focusSat) setSelected(focusSat)
   }, [focusSat])
+  // The NORAD hand-off, applied ONCE per id: the bird list refreshes on its own cadence, and
+  // re-selecting on every refresh would take the pane back from a bird the operator chose since.
+  const appliedNorad = useRef<number | null>(null)
+  useEffect(() => {
+    if (focusNorad == null || appliedNorad.current === focusNorad || !view) return
+    const bird =
+      view.birds.find((b) => b.norad === focusNorad) ??
+      view.excluded.find((e) => e.norad === focusNorad)
+    if (!bird) return
+    appliedNorad.current = focusNorad
+    setSelected(bird.name)
+  }, [focusNorad, view])
 
   // Countdown re-render cadence. 10 s keeps "in N min" honest without churn.
   // (The sky dome runs its own 1 s tick while a pass is live — a 1 s tick here

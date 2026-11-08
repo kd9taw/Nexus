@@ -273,6 +273,9 @@ interface Props {
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
    *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
   onOpenLogbook?: (call: string, id?: string | null) => void
+  /** Open the Satellites screen on a bird by NORAD id — the band picker's QO-100 row. Omitted ⇒
+   *  the picker lists no QO-100 row. */
+  onOpenSatellite?: (norad: number) => void
   /** The call in this cockpit's log strip, for the Rotor box beside it (LogEntry `onEntryCall`). */
   onEntryCall?: (call: string) => void
   /** The Spots board exactly as App wires the Spots VIEW (#345) — its handlers, not a copy of
@@ -714,7 +717,7 @@ const YAESU_SPANS = [
  *  notch, the scope references and the scope's G and Z move one of their own steps. */
 const LEVEL_WHEEL_STEP = 2
 
-export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeContest, active = true, snap, theme, pendingWork, freedvPane, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, tciSpots, onTciSpot, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
+export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeContest, active = true, snap, theme, pendingWork, freedvPane, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, tciSpots, onTciSpot, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onOpenSatellite, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
   // The compact chrome (features/compactChrome): md and up, the meters stand in the TX strip and the
   // dock is one row.
   const chrome = useCompactChrome()
@@ -3145,7 +3148,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
             })}
           </div>
         }
-        bandControl={<BandPicker snap={snap} mode="phone" onSnap={onSnap} />}
+        bandControl={<BandPicker snap={snap} mode="phone" onSnap={onSnap} onOpenSatellite={onOpenSatellite} />}
         onCommitDial={commitDial}
         actions={
           host && panels ? (

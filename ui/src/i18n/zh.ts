@@ -10246,6 +10246,8 @@ export const ZH: PartialCatalog = {
   "settings.save.entryCall.action": "更改呼号",
   "bandPicker.planAdvice.label": "超出波段规划",
   "bandPicker.planAdvice.title": "在 {{band}} 的此处使用话音超出了常用波段规划：所有 IARU 分区都把这段留给 CW 和数据。Nexus 不会阻止 — 由你的执照和你所在国家的波段规划决定。",
+  "bandPicker.qo100.label": "QO-100 卫星",
+  "bandPicker.qo100.title": "在“卫星”页面打开 QO-100。在那里选择它的窄带转发器即可调谐到下行。",
   "dash.kp.est": "估",
   "settings.stationProfiles.title": "我的台站配置",
   "settings.stationProfiles.hint": "为你的台站命名的几套设置：家中、便携装备、俱乐部呼号。每套包含呼号、网格与位置，以及你记录日志时用的设备。在顶栏选择一个；开始某个配置所属公园的 POTA 激活会自动选中它，停止后切回。新通联在空白处带上配置中的信息；已在日志中的通联绝不改变。每个配置在你单独保存时即存储，不随“保存”一起。",

@@ -529,6 +529,8 @@ function App() {
   }, [view])
   // Bird handed off from a map satellite click — the Satellites section opens on it.
   const [satFocus, setSatFocus] = useState<string | null>(null)
+  // Bird handed off by NORAD id — the Phone/CW band picker's QO-100 row (`BandPicker`).
+  const [satFocusNorad, setSatFocusNorad] = useState<number | null>(null)
   // Callsign handed off from a cockpit recall card's previous-contact row (#192) — the Logbook
   // opens with it in the search box. `pendingWork`'s shape, not `satFocus`'s, and the `ts` nonce
   // is the reason: the operator can type over the Logbook's search box, go back to the cockpit
@@ -3671,6 +3673,14 @@ function App() {
     settings?.fdActive === true && snap.mode !== 'fieldDay' && !contestReentering
       ? () => void handleSetMode('fieldday-sp')
       : undefined
+  // The band picker's QO-100 row opens the Satellites screen on the bird, as a map click does.
+  const openSatellite = features.isOn('sats')
+    ? (norad: number) => {
+        setSatFocus(null)
+        setSatFocusNorad(norad)
+        setView('sats')
+      }
+    : undefined
   const cwWorkspace = (
     <CwCockpit
       esmSetting={esmSettingFor('cw')}
@@ -3679,6 +3689,7 @@ function App() {
       announceVerbosity={settings?.announceVerbosity ?? 'needed'}
       onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
+      onOpenSatellite={openSatellite}
       onEntryCall={reportEntry.cw}
       pitchHz={settings?.cwPitchHz ?? 600}
       onPitch={(cwPitchHz) => setSettings((prev) => (prev ? { ...prev, cwPitchHz } : prev))}
@@ -3711,6 +3722,7 @@ function App() {
       yaesuTuneNote={settings ? phoneTuneNeedsRearSource(settings) : false}
       onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
+      onOpenSatellite={openSatellite}
       onEntryCall={reportEntry.phone}
       snap={snap}
       panels={phonePanels}
@@ -4059,6 +4071,7 @@ function App() {
             features.isOn('sats')
               ? (name) => {
                   setSatFocus(name)
+                  setSatFocusNorad(null)
                   setView('sats')
                 }
               : undefined
@@ -4094,6 +4107,7 @@ function App() {
           <SatellitesView
             onOpenLogbook={openLogbookFor}
             focusSat={satFocus}
+            focusNorad={satFocusNorad}
             snap={snap}
             onPopOut={() => void openPanelWindow('sats')}
             onSnap={setSnap}

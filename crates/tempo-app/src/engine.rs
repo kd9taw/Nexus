@@ -10813,14 +10813,13 @@ impl Engine {
             OperatingMode::Phone => {
                 crate::privileges::phone_home(class, &band).map(|(dial, sb)| (dial, sb.to_string()))
             }
-            OperatingMode::Cw => crate::privileges::segment_start(class, &band, om)
+            OperatingMode::Cw => crate::privileges::cw_home(class, &band)
                 // Park on the CW ACTIVITY frequency (20 m → 14.030), NOT the dead band edge
                 // (14.000, where nobody works and your signal would fall out of band),
                 // clamped to the licensed CW-segment start so it never drops below privileges.
-                // This mirrors the band-dropdown path (getLicensedBandPlan) so switching TO CW
-                // mode and picking a band from the dropdown both land in the same place.
-                .map(|lo| {
-                    let dial = crate::bandplan::cw_activity_mhz(&band).map_or(lo, |a| a.max(lo));
+                // THE CW home, which the band-dropdown path (getLicensedBandPlan) reads too, so
+                // switching TO CW mode and picking a band from the dropdown land in one place.
+                .map(|dial| {
                     // Sideband is inert for CW (the rig-mode policy commands CW or a band-aware
                     // tone), but keep it self-consistent with the band's convention.
                     (
@@ -44786,7 +44785,9 @@ mod tests {
         // where the passband hangs below the dial. Each on a fresh engine so the pick reads an
         // EMPTY memory cell (a remembered dial would answer instead of the default).
         for (class, band, want) in [
-            ("extra", "160m", 1.8028),
+            // 160 m parks on the ARRL's 1.843 SSB floor, lifted: 1.8028 put the passband's foot
+            // on the 1.800 band edge (no home is an allocation edge).
+            ("extra", "160m", 1.843 + crate::privileges::SSB_BW_MHZ),
             ("extra", "80m", 3.6028),
             ("general", "80m", 3.8028),
             ("general", "40m", 7.1778),
@@ -44891,7 +44892,8 @@ mod tests {
         // 9 cm for a non-US operator, both modes.
         for mode in ["phone", "cw"] {
             let e = pick("open", "9cm", mode);
-            assert!((e.settings().dial_mhz - 3400.0).abs() < 1e-9, "{mode}");
+            // The narrowband calling frequency, not the 3400.0 parking edge.
+            assert!((e.settings().dial_mhz - 3400.1).abs() < 1e-9, "{mode}");
             assert!(e.tx_allowed(), "{mode}");
         }
         // A US General clicking 4 m: it tunes, and it is receive-only, which is what the list says.
