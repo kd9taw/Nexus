@@ -36,6 +36,14 @@ const SIZES = [
   { w: 1366, h: 768, z: 0.85 }, { w: 1440, h: 900, z: 1 }, { w: 1512, h: 982, z: 1 }, { w: 1024, h: 768, z: 0.85 },
 ]
 const VIEWS = ['operate', 'cw']
+// A screen with no cockpit (no TX strip, so no alarm cell): there the lane KEEPS a critical item's flag
+// (StatusLane `keepCritical`), and the bar may take a line for it. Swept at the common sizes and the small
+// and zoomed ones where the bar is fullest.
+const NO_CELL_SIZES = [
+  { w: 900, h: 600, z: 0.65 }, { w: 900, h: 600, z: 1 }, { w: 1024, h: 768, z: 1 }, { w: 1200, h: 750, z: 0.8 },
+  { w: 1366, h: 768, z: 1 }, { w: 1920, h: 1080, z: 1.75 }, { w: 1280, h: 720, z: 1.5 }, { w: 1024, h: 768, z: 1.75 },
+]
+const NO_FLOOR = '.status-lane-keep{min-width:0!important}'
 const OLD_LANE = '.status-lane{width:auto!important;flex:0 0 auto!important;margin-inline-start:0!important}.txrx{flex-grow:0!important}'
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -127,6 +135,23 @@ try {
       if (reds.length) code = code || 1
     }
   }
+  // OFF THE OPERATING SCREENS: the critical item's flag is on screen at every size, and the bar never runs past
+  // the window. CONTROL: the same sizes with the floor taken off must cut the flag somewhere, or this cannot fail.
+  let cutWithout = 0
+  for (const s of [...SIZES, ...NO_CELL_SIZES]) {
+    const at = `logbook at ${s.w}×${s.h} ${Math.round(s.z * 100)}%`
+    const on = await measure(s, 'logbook', true)
+    const bare = await measure(s, 'logbook', true, NO_FLOOR)
+    console.log(`topbar-probe: ${at}: with the floor ${JSON.stringify(on?.lane)}; without ${JSON.stringify(bare?.lane)}`)
+    if (!on?.lane) { console.error(`topbar-probe: the lane was never drawn for ${at}`); code = 2; continue }
+    if (!on.lane.flag) { console.error(`topbar-probe: RED ${at} — a critical item's flag is cut on a screen with no alarm cell`); code = code || 1 }
+    if (on.overflowX > 0) { console.error(`topbar-probe: RED ${at} — the bar runs ${on.overflowX}px past the window`); code = code || 1 }
+    if (bare?.lane && !bare.lane.flag) cutWithout++
+  }
+  if (cutWithout === 0) {
+    console.error('topbar-probe: CONTROL FAILED — without the floor no size cut the flag on the no-cell screen; the check cannot fail')
+    code = code || 1
+  } else console.log(`topbar-probe: CONTROL no-cell: without the floor the flag is cut at ${cutWithout} size(s)`)
   const s = tightest?.s ?? SIZES[0]
   const off = await measure(s, 'operate', false, OLD_LANE)
   const on = await measure(s, 'operate', true, OLD_LANE)
@@ -135,7 +160,7 @@ try {
     console.error('topbar-probe: CONTROL FAILED — with the old sizing the message did not make the bar taller; the check cannot fail')
     code = code || 1
   }
-  if (code === 0) console.log(`topbar-probe: PASS — a status message leaves the bar's height and every group's line alone at every size, on the FT screen and on CW, at ${SIZES.map((x) => `${x.w}×${x.h}@${Math.round(x.z * 100)}%`).join(', ')}; the old sizing wraps the bar (control). Flag cut (the item is shown by Stop TX): ${tookLine.length ? tookLine.join('; ') : 'none'}`)
+  if (code === 0) console.log(`topbar-probe: PASS — a status message leaves the bar's height and every group's line alone at every size, on the FT screen and on CW, at ${SIZES.map((x) => `${x.w}×${x.h}@${Math.round(x.z * 100)}%`).join(', ')}; the old sizing wraps the bar (control); on a screen with no alarm cell a critical item's flag is on screen at every size, and taking its floor off cuts it (control). Flag cut (the item is shown by Stop TX): ${tookLine.length ? tookLine.join('; ') : 'none'}`)
   process.exitCode = code
 } finally {
   await browser.stop()

@@ -14379,6 +14379,9 @@ export const EN = {
   'shell.lane.pttRefused.message': 'PTT REFUSED',
   'shell.lane.pttRefused.detail':
     'Nexus did not key the {{mode}} over at {{time}} UTC: the radio was still taking its transmit audio from DAX, as Nexus had set it, not from its mic, so your voice would not have gone out. Nothing was sent. Let go of PTT and Nexus puts the radio back on its mic input within a moment; then press PTT again.',
+  // The TX watchdog's halt, a critical lane item (App): how to transmit again. `TX On` is the strip's
+  // button, whose label is not translated.
+  'shell.lane.txWatchdog.detail': 'Transmit is off. Press TX On to transmit again.',
   // A computer-microphone over that ended, or never keyed, for a reason the operator did not
   // choose (features/pcMic.ts). `{{why}}` is one of the sentences after it.
   'shell.lane.pcMic.message': 'COMPUTER MIC',

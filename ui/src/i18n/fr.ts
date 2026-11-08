@@ -9291,6 +9291,7 @@ export const FR: PartialCatalog = {
   "shell.lane.slotOverDropped.detail": "Ce passage a été abandonné : la radio n’est passée en émission qu’à {{time}} UTC, {{late}} après la fin de votre période (CAT lent), donc Nexus l’a aussitôt remise en réception, n’a rien émis et a laissé le TX activé pour votre prochain passage. Le Fonctionnement Split envoie ses commandes à la radio avant chaque passage en émission, ce qui peut prendre plusieurs secondes sur une liaison CAT lente : si cela se reproduit, vérifiez la liaison CAT et le Fonctionnement Split dans les Réglages.",
   "shell.lane.pttRefused.message": "PTT REFUSÉ",
   "shell.lane.pttRefused.detail": "Nexus n’a pas passé en émission le passage {{mode}} à {{time}} UTC : la radio prenait encore son audio d’émission par DAX, comme Nexus l’avait réglée, et non depuis son micro, donc votre voix ne serait pas partie. Rien n’a été émis. Relâchez le PTT : Nexus remet la radio sur son entrée micro dans un instant ; appuyez ensuite de nouveau sur le PTT.",
+  "shell.lane.txWatchdog.detail": "L’émission est coupée. Appuyez sur TX On pour émettre à nouveau.",
   "shell.lane.pcMic.message": "MICRO DE L'ORDINATEUR",
   "shell.lane.pcMic.detail": "À {{time}} UTC : {{why}}",
   "shell.lane.pcMic.noDevice": "aucun micro n'est choisi pour cette radio, donc rien n'a été émis. Choisissez-en un dans Paramètres ▸ Radio ▸ Audio.",

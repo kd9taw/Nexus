@@ -92,6 +92,10 @@ interface Props {
    * ⚠️ ITS OWN FLAG, NOT `hideDigitalChrome`: that one also hides the TX cluster, and on Field
    * Day and the other screens without a cockpit the cluster is the only Stop TX. */
   ftScreen?: boolean
+  /** This screen's TX strip draws the transmitter alarm cell, which shows every critical lane item beside
+   *  Stop TX, so the lane here may be cut on a full line (styles.css `.status-lane`). Without one, the lane
+   *  keeps a critical item's flag and announces it as an alert. */
+  alarmCell?: boolean
   mycall: string
   mygrid: string
   radio: RadioStatus
@@ -408,6 +412,7 @@ export function TopBar({
   hideFrequencyControl,
   hideDigitalChrome,
   ftScreen = false,
+  alarmCell = false,
   showLocalClock = false,
   nowBar,
 }: Props) {
@@ -685,6 +690,7 @@ export function TopBar({
             item it is also shown beside Stop TX on the operating screens' TX strip. REC rides first in the
             lane for the same reason (styles.css `.status-lane`). */}
         <StatusLane
+          keepCritical={!alarmCell}
           lead={
             radio.qsoRecording ? (
               <button

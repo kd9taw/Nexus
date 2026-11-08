@@ -339,6 +339,9 @@ const OPERATE_TIERS: Tier[] = [
  *  App). The other operating screens bind their own Esc; stop-control-wiring.test.tsx presses Esc
  *  on every section in the registry and holds each to what it sends. Connect is here because it draws
  *  no top bar, so no Stop TX of its own (the operator's 2026-10-01 ruling). */
+/** The views whose TX strip draws the transmitter alarm cell (CockpitTxStrip / OperateQsoStrip `alarm`).
+ *  stop-line.test.tsx renders each of these cockpits and finds the cell in its strip. */
+const ALARM_CELL_VIEWS: ReadonlySet<View> = new Set<View>(['operate', 'chat', 'phone', 'cw', 'rtty', 'psk', 'jtty', 'sstv', 'aprs', 'js8'])
 const ESC_HALT_VIEWS: ReadonlySet<View> = new Set<View>(['chat', 'phone', 'jtty', 'sstv', 'aprs', 'sats', 'connect'])
 /** The screen of each section the station reports (`radio.operatingMode`), for a computer driving
  *  it to follow. 'keyboard' is PSK's screen, the section's own landing; 'jtty' is the Keyboard
@@ -939,9 +942,14 @@ function App() {
   // The TX watchdog halted transmit: a CRITICAL lane item while the station says so (it was the top
   // bar's own chip, whose width wrapped the bar and moved Stop TX under it). Critical, so it is also
   // shown beside Stop TX on the operating screens' TX strip (TxAlarmBanner). Its words are the
-  // catalog's sentence for this halt; TX On, in the strip, re-enables.
+  // catalog's sentence for this halt, with how to transmit again (the bar's old chip said it).
   useEffect(() => {
-    setStatus('txWatchdog', snap?.radio.txWatchdog ? { tier: 'critical', message: t('remote.stream.mic.ended.watchdog') } : null)
+    setStatus(
+      'txWatchdog',
+      snap?.radio.txWatchdog
+        ? { tier: 'critical', message: t('remote.stream.mic.ended.watchdog'), detail: t('shell.lane.txWatchdog.detail') }
+        : null,
+    )
   }, [snap?.radio.txWatchdog])
 
   // A clock repair holds transmit: from the press of Repair clock until the repair ends, the
@@ -4309,6 +4317,10 @@ function App() {
         // Tempo's cluster moved into its TX strip under the Tempo header (2026-10-01), so
         // the top bar hides it there exactly as on Operate.
         hideTxControls={effectiveView === 'operate' || effectiveView === 'chat'}
+        // The screens whose TX strip carries the transmitter alarm cell (TxAlarmBanner), where every
+        // critical lane item is also shown beside Stop TX, so the bar's lane may be cut. Elsewhere
+        // (Logbook, Field Day, Satellites, Settings…) the lane is the only place a critical item shows.
+        alarmCell={ALARM_CELL_VIEWS.has(effectiveView)}
         hideFrequencyControl={
           effectiveView === 'phone' ||
           effectiveView === 'cw' ||

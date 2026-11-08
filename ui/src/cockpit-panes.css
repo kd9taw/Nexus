@@ -786,6 +786,16 @@
   --chrome-extras-gap: max(var(--space-2), min(var(--space-3), (var(--vh-eff, 100vh) - 1100px) * 100));
 }
 
+/* THE TOP BAR'S LANE OFF THE OPERATING SCREENS (`.status-lane-keep`, StatusLane `keepCritical`): on a screen
+   with no TX strip, and so no transmitter alarm cell (Logbook, Field Day, Satellites, Settings…), the lane is
+   the only place a critical item shows, so while one is up the lane keeps its FLAG: the 13 px icon, the
+   chip's padding and border, and the 10 px the lane's margin cancels. On a line with less room the bar
+   takes a line rather than hide the alarm; those screens have no Stop TX under the bar to move (their own
+   Stop TX is in the bar's TX cluster, before the lane). On the operating screens the lane has no floor
+   (styles.css `.status-lane`): the alarm cell beside Stop TX shows every critical item. */
+.status-lane-keep {
+  min-width: calc(10px + 13px + 2 * var(--space-2) + 2px);
+}
 /* THE TRANSMITTER ALARM CELL (TxAlarmBanner, `.ch-txalarm`; operator pick "One line inside the strip",
    2026-11-07): one line IN THE TX STRIP'S ROW, beside the TX state (FT: the first cell of its second line, under Stop TX). It holds
    the station's transmitter alarm and every critical status-lane item, which the top bar's lane may cut.

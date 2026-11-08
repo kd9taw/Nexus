@@ -267,7 +267,9 @@ describe('the fence: styles.css never names a structural class', () => {
     'amp-op-face', 'amp-op-word', 'amp-op-word-off',
     // …and the transmitter alarm, now the TX strip's last line (2026-11-07): a styles.css position on it
     // could set it over Stop TX.
-    'ch-txalarm']) {
+    'ch-txalarm',
+    // …and the lane's flag floor off the operating screens: a styles.css min-width on it could undo it.
+    'status-lane-keep']) {
     it(`styles.css declares no .${cls} rule`, () => {
       const hits = STYLES_RULES
         .map((r) => r.selector)
@@ -1887,5 +1889,17 @@ describe('THE AMPLIFIER’S OPERATE / STANDBY WORD: one width in every state', (
     expect(classChainWinner([['amp-op-face'], ['amp-op-word']], 'grid-area')?.value).toBe('1 / 1')
     expect(classChainWinner([['amp-op-face'], ['amp-op-word', 'amp-op-word-off']], 'visibility')?.value).toBe('hidden')
     expect(classChainWinner([['amp-op-face'], ['amp-op-word', 'amp-op-word-off']], 'display'), 'display:none would take its width away').toBeNull()
+  })
+})
+
+describe('THE LANE OFF THE OPERATING SCREENS keeps a critical item’s flag', () => {
+  // No TX strip there, so no alarm cell: the lane is the only place a critical item shows (StatusLane
+  // `keepCritical`). Its flag floor must win over the bar's zero floor; on the operating screens it is absent.
+  it('`.status-lane-keep` wins the lane’s min-width with the flag’s floor', () => {
+    const keep = classChainWinner([['topbar'], ['txrx'], ['status-lane', 'status-lane-keep']], 'min-width')
+    expect(keep?.sheet).toBe('cockpit-panes.css')
+    // The 13 px icon, the chip's 2 x 8 px padding and 2 px border, and the 10 px the lane's margin cancels.
+    expect(lengthsAt(keep!.value.replace(/\bcalc\(/g, '('), 1440)).toEqual([10 + 13 + 16 + 2])
+    expect(classChainWinner([['topbar'], ['txrx'], ['status-lane']], 'min-width')?.value, 'control: no floor without it').toBe('0')
   })
 })

@@ -17,32 +17,44 @@ function chipClass(tier: StatusTier): string {
   return `status-chip tier-${tier}`
 }
 
-/** `lead`: the top bar's REC chip, drawn first in the lane so it takes the lane's zero width (styles.css
- *  `.status-lane`): a recording that starts or stops never wraps the bar. */
-export function StatusLane({ lead }: { lead?: ReactNode } = {}) {
+/** `lead`: the top bar's REC chip, drawn in the lane so it takes the lane's zero width (styles.css
+ *  `.status-lane`): a recording that starts or stops never wraps the bar.
+ *
+ *  `keepCritical`: this screen has NO transmitter alarm cell (TxAlarmBanner, on the operating screens' TX
+ *  strip), so the lane is the only place a critical item shows. Then a critical item is never cut to
+ *  nothing: it is drawn first, the lane keeps its flag (`.status-lane-keep`, cockpit-panes.css: on a line
+ *  with less room the bar takes a line, as it always did off the operating screens), and it is announced as
+ *  an alert, not politely. With the cell, the lane may be cut: every critical item is beside Stop TX. */
+export function StatusLane({ lead, keepCritical = false }: { lead?: ReactNode; keepCritical?: boolean } = {}) {
   const [items, setItems] = useState<StatusItem[]>([])
   useEffect(() => subscribeStatus(setItems), [])
 
   if (items.length === 0 && !lead) return null
+  const critical = items.filter((it) => it.tier === 'critical')
+  const keep = keepCritical && critical.length > 0
+
+  const chip = (it: StatusItem) => {
+    const Icon = TIER_ICON[it.tier]
+    // Keyed by its words as well as its id: the critical pulse runs a few times and then
+    // holds, so a different alarm under the same id (the audio line names several) has to
+    // be a new chip to pulse again. A reworded tooltip is the same alarm and keeps its chip.
+    return (
+      <Tooltip key={`${it.id}\u0000${it.message}`} side="bottom" content={it.detail ?? it.message}>
+        <span className={chipClass(it.tier)} role={keep && it.tier === 'critical' ? 'alert' : undefined}>
+          <Icon size={13} strokeWidth={2} aria-hidden="true" />
+          <span className="status-chip-msg">{it.message}</span>
+        </span>
+      </Tooltip>
+    )
+  }
 
   return (
     <TooltipProvider>
-      <div className="status-lane" role="status" aria-live="polite">
+      <div className={keep ? 'status-lane status-lane-keep' : 'status-lane'} role="status" aria-live="polite">
+        {/* Critical first, ahead of REC, so the kept flag is a critical item's (the store sorts critical first). */}
+        {keep && critical.map(chip)}
         {lead}
-        {items.map((it) => {
-          const Icon = TIER_ICON[it.tier]
-          // Keyed by its words as well as its id: the critical pulse runs a few times and then
-          // holds, so a different alarm under the same id (the audio line names several) has to
-          // be a new chip to pulse again. A reworded tooltip is the same alarm and keeps its chip.
-          return (
-            <Tooltip key={`${it.id}\u0000${it.message}`} side="bottom" content={it.detail ?? it.message}>
-              <span className={chipClass(it.tier)}>
-                <Icon size={13} strokeWidth={2} aria-hidden="true" />
-                <span className="status-chip-msg">{it.message}</span>
-              </span>
-            </Tooltip>
-          )
-        })}
+        {(keep ? items.filter((it) => it.tier !== 'critical') : items).map(chip)}
       </div>
     </TooltipProvider>
   )

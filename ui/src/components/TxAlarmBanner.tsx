@@ -19,9 +19,11 @@
 // never hidden anywhere):
 //   1. the station's transmitter alarm, oldest first, with its Dismiss (✕, named "Dismiss");
 //   2. the critical status-lane items (status.ts), in the lane's order;
-//   3. "1 of N" when there are more, which shows the whole of every other entry on hover.
-// The first entry always keeps at least its opening words, and the count and ✕ never shrink, inside
-// the cell's minimum. Dismiss clears exactly the transmitter alarm shown (by its id), never one raised
+//   3. "+N" when there are more ("1 of N" to a screen reader), which shows every other entry whole on hover.
+// THE FLOOR THE WORDS GET: the cell's 13em minimum less "+N", the ✕ and their gaps, in every language
+// (about 8em of the cell's type: 97 px at 100 % zoom, 65 px at FT 900x600 auto-fit, measured in all eight
+// languages): the alarm's name or nearly all of it ("⚠ Transmitter alar…", "⚠ Тревога переда…",
+// "⚠ 发射机报警，IC-73…"). The count and the ✕ never shrink. Dismiss clears exactly the transmitter alarm shown (by its id), never one raised
 // since; a lane item clears when its condition does. The Remote shows it without the button: the
 // dismissal is the station's.
 //
@@ -81,8 +83,15 @@ export function TxAlarmBanner({
         </span>
       )}
       {rest.length > 0 && (
-        <span className="ch-txalarm-queue" title={rest.join('\n')}>
-          {t('cockpit.txAlarm.queue', { total: entries.length })}
+        // "+N", the same width in every language, so the words keep the cell's room: the localized "1 of N"
+        // ("共 4 条中的第 1 条" in Chinese) left the alarm's own words 9 px at FT 900x600. The sentence is its
+        // accessible name and heads its hover, which lists every other entry whole.
+        <span
+          className="ch-txalarm-queue"
+          aria-label={t('cockpit.txAlarm.queue', { total: entries.length })}
+          title={[t('cockpit.txAlarm.queue', { total: entries.length }), ...rest].join('\n')}
+        >
+          +{rest.length}
         </span>
       )}
       {shown && (

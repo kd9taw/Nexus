@@ -742,8 +742,10 @@ button.nb-chip:hover {
    has NO FLOOR and may be cut to nothing on a full line, and EVERY CRITICAL ITEM ("PTT OFF FAILED —
    TX STOPPED") is ALSO in the transmitter alarm cell beside the TX state on the TX strip, next to
    Stop TX (TxAlarmBanner, cockpit-panes.css `.ch-txalarm`), which always keeps at least its opening
-   words. Outside the operating screens there is no strip and no Stop TX to move, and the lane there
-   has the whole bar line to grow into. */
+   words. OFF the operating screens there is no strip and no alarm cell, so there the lane KEEPS a
+   critical item's flag and announces it as an alert (StatusLane `keepCritical`, cockpit-panes.css
+   `.status-lane-keep`): on a line with less room the bar takes a line, and no Stop TX sits under it
+   to move (that screen's Stop TX is in the bar, before the lane). */
 .status-lane {
   display: inline-flex;
   align-items: center;

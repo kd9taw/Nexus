@@ -544,6 +544,7 @@ export const ZH: PartialCatalog = {
   "shell.lane.slotOverDropped.detail": "此次发射被丢弃：电台仅在 {{time}} UTC 键控，即你的时隙结束后 {{late}}（CAT 较慢），因此 Nexus 立即解除键控且未发送任何内容，并保持发射开启以等待你的下一次发射。分频操作会在每次键控前向电台发送指令，在慢速 CAT 链路上可能耗时数秒：若此情况持续，请检查设置中的 CAT 链路与分频操作。",
   "shell.lane.pttRefused.message": "PTT 被拒",
   "shell.lane.pttRefused.detail": "Nexus 未在 {{time}} UTC 键控本次 {{mode}} 发射：电台仍按 Nexus 所设从其经 DAX 接收发射音频，而非来自麦克风，因此你的语音不会发出。未发送任何内容。松开 PTT，Nexus 会在片刻内将电台切回麦克风输入；随后再次按下 PTT。",
+  "shell.lane.txWatchdog.detail": "发射已关闭。按 TX On 可再次发射。",
   "shell.lane.voiceDropped.message": "语音消息已丢弃",
   "shell.lane.voiceDropped.noDax": "Nexus 未在 {{time}} UTC 播放语音消息：电台未在 2 秒内将其发射音频切换至 DAX，因此未键控任何内容。该消息被丢弃而非暂存；请再次按下其按键。",
   "shell.lane.voiceDropped.keyed": "Nexus 未在 {{time}} UTC 播放语音消息：另有程序正在发射或已先行键控电台（你的麦克风或 PTT、一个调谐载波、另一程序），因此未键控任何内容。该消息被丢弃而非暂存。",
