@@ -45,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **"TX off" is the same colour on every screen.** On FT it was painted green, the receiving colour, while every other screen shows it plainly. (#482)
 - **A scope clears when the radio goes away.** Power the radio down and the Phone and CW scopes, and the audio view under them, no longer leave the last picture frozen on screen. They now blank and say "Scope data unavailable", and the picture comes back with the first new sweep. (#463)
 - **Closing a satellite alarm stops it.** Closing the pass alarm's notice with ✕ hid it but left the alarm sounding for up to a minute. It now stops the alarm, and the notice's button, **Open in Satellites**, stops it too and takes you to that pass on the Satellites screen. (#478)
+- **An internal error during Stop TX no longer holds the transmitter on.** If something inside Nexus failed while a Stop TX was being carried out, Nexus could wait up to two seconds to write the error to its diagnostic log before the radio unkeyed, and a remote computer's next Stop could wait that long too. It now writes the error without waiting, so the unkey goes ahead at once. The error is still recorded in the log.
 
 ## [1.23.0] — 2026-11-05
 

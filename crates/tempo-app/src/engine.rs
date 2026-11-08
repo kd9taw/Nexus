@@ -1868,12 +1868,12 @@ pub fn engine_try_lock(m: &std::sync::Mutex<Engine>) -> std::sync::TryLockResult
 /// **It is the `MutexGuard` and nothing more.** The lock is taken by the same `Mutex::lock` /
 /// `try_lock` call as before, derefs to the [`Engine`], and is released when the guard drops —
 /// at the same point in the same scope a bare `MutexGuard` would be. What it adds is a
-/// zero-sized [`tempo_core::logbook::io_fence::EngineHeld`] riding beside the guard, which in a
-/// DEBUG build counts the Engine guards alive on this thread, so the logbook store's disk code
-/// can assert that none is ([`tempo_core::logbook::io_fence`]): the proof that the radio loop,
-/// which needs this lock every 20 ms, never waits on the disk. In a release build the count
-/// does not exist and there is nothing to drop; the size pin below holds the two types to one
-/// layout in every build.
+/// zero-sized [`tempo_core::logbook::io_fence::EngineHeld`] riding beside the guard, which
+/// counts the Engine guards alive on this thread, so the logbook store's disk code can assert
+/// in a DEBUG build that none is ([`tempo_core::logbook::io_fence`]): the proof that the radio
+/// loop, which needs this lock every 20 ms, never waits on the disk. The count is kept in a
+/// release build too, for the panic hook, which must not wait on the disk under this lock. The
+/// size pin below holds the two types to one layout in every build.
 ///
 /// A raw `Mutex::lock()` on the Engine is invisible to that count, so production code never
 /// takes one — `tests/engine_guard.rs` scans for it.
