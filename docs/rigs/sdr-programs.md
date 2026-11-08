@@ -176,16 +176,13 @@ and send the audio through two cables. Their menus have not been checked here,
 so this page does not name them.
 
 For FT8 and the other sound card modes, Nexus asks for the radio's data mode.
-SDR Console has none: it stays in USB. Nexus checks this once when it
-connects, while receiving, and puts the radio back in its mode afterwards; SDR
-Console may show its error window once then. From then on Nexus uses plain
-**USB** (LSB where the mode sits on the lower side) on that connection, so you
-do not need to turn on **Data modes use plain SSB**.
+SDR Console has none: it stays in USB, and may show its error window that
+first time. Nexus sees, while you receive, that the radio stayed in USB, and
+from then on uses plain **USB** (LSB where the mode sits on the lower side) on
+that connection, so you do not need to turn on **Data modes use plain SSB**.
 Thetis, PowerSDR and piHPSDR take the data mode as **DIGU**, and Nexus keeps
-it. If you run rigctld for SDR Console yourself and point Nexus at it as
-**NET rigctl**, Nexus skips the check at connect, because that rigctld may
-serve other programs too. It still switches to USB once it sees, while you work,
-that the radio stays in USB.
+it. The same applies when you point Nexus at a rigctld you run yourself, as
+**NET rigctl**.
 
 For a program that is not in the list, tick **Show all models** for the full
 Hamlib catalog or type its model number. Or run rigctld yourself and point

@@ -3494,42 +3494,70 @@ fn a_link_that_takes_the_data_word_keeps_it() {
     }
 }
 
-/// The judgement itself, on the lower side too: the FT-1000MP's `PKTLSB` (DATA-LSB) reads back
-/// `PKTLSB` and is kept; a radio reading back plain LSB twice in a row has not taken it; one stale
-/// read (Hamlib's cache), a read of anything else, or no read decides nothing.
+/// The judgement itself (TX re-review F1). Only the reads after NEXUS'S OWN DATA set are judged:
+/// the read on which the set is first seen is skipped (Hamlib's cache), as is any inside
+/// `DATA_CACHE_MS`; the word read back latches it taken for the connection, so later plain reads
+/// (the operator's front panel, a band-stack recall) never condemn it; two plain-twin reads condemn
+/// it; any other mode closes the watch; past `DATA_WATCH_MS` nothing is judged; the TS-590S/SG and
+/// TS-950 are never judged (F3); and a word that is not a DATA word opens no watch.
 #[test]
-fn the_data_word_is_judged_on_two_reads_of_its_plain_twin_and_nothing_else() {
-    const MODEL: u32 = 1024;
-    let engine = Mutex::new(Engine::new("KD9TAW", "EN52", 0));
-    let refused = |word: &str| {
-        engine
+fn the_data_word_is_judged_only_after_nexuss_own_set_and_latched_once_taken() {
+    const T0: f64 = 1_000_000.0;
+    let judged = |model: u32, last_mode: &str, reads: &[(f64, &str)]| {
+        let engine = Mutex::new(Engine::new("KD9TAW", "EN52", 0));
+        let mut state = loop_state();
+        state.applied.rig_model = model;
+        state.last_mode = last_mode.into();
+        state.judge_data_word(&engine, 1, T0, Some(last_mode)); // the set is seen: skipped
+        for (at, read) in reads {
+            state.judge_data_word(&engine, 1, T0 + at, Some(read));
+        }
+        let word = tempo_app::rig_modes::data_word(last_mode).unwrap_or("PKTUSB");
+        let refused = engine
             .lock()
             .unwrap()
             .settings()
             .link_refusals
-            .refused(MODEL, word)
+            .refused(model, word);
+        (refused, state.data_taken.clone())
     };
-    let mut state = loop_state();
-    state.applied.rig_model = MODEL;
-    state.last_mode = "PKTLSB".into();
-    for read in [
-        Some("PKTLSB"),
-        Some("LSB"),
-        None,
-        Some("PKTLSB"),
-        Some("LSB"),
-    ] {
-        state.judge_data_word(&engine, read);
+    // The FT-1000MP's DATA-LSB reads PKTLSB: taken, and a front panel to LSB later changes nothing.
+    let (refused, taken) = judged(
+        1024,
+        "PKTLSB",
+        &[(3_000.0, "PKTLSB"), (6_000.0, "LSB"), (9_000.0, "LSB")],
+    );
+    assert!(!refused && taken == ["PKTLSB"], "taken, then latched");
+    // SDR Console: two plain reads after Nexus's set.
+    assert!(judged(2056, "PKTUSB", &[(3_000.0, "USB"), (6_000.0, "USB")]).0);
+    assert!(
+        judged(1024, "PKTLSB", &[(3_000.0, "LSB"), (6_000.0, "LSB")]).0,
+        "the lower side too"
+    );
+    // One plain read is not two.
+    assert!(!judged(2056, "PKTUSB", &[(3_000.0, "USB")]).0);
+    // Inside the cache window: not judged.
+    assert!(!judged(2056, "PKTUSB", &[(300.0, "USB"), (600.0, "USB")]).0);
+    // Another mode: something else moved the radio; nothing after it is judged.
+    assert!(
+        !judged(
+            2056,
+            "PKTUSB",
+            &[(3_000.0, "CW"), (6_000.0, "USB"), (9_000.0, "USB")]
+        )
+        .0
+    );
+    // Too long after the set.
+    assert!(!judged(2056, "PKTUSB", &[(13_000.0, "USB"), (16_000.0, "USB")]).0);
+    // F3: the TS-590S/SG and TS-950 read back through another field.
+    for model in [2012, 2013, 2031, 2037] {
+        assert!(
+            !judged(model, "PKTUSB", &[(3_000.0, "USB"), (6_000.0, "USB")]).0,
+            "{model}"
+        );
     }
-    assert!(!refused("PKTLSB"), "never two in a row");
-    state.judge_data_word(&engine, Some("LSB"));
-    assert!(refused("PKTLSB"), "two in a row");
-    assert!(!refused("PKTUSB"), "that word only");
-    // A word that is not a DATA word is never judged.
-    state.last_mode = "USB".into();
-    state.judge_data_word(&engine, Some("USB"));
-    state.judge_data_word(&engine, Some("USB"));
-    assert!(!refused("PKTUSB"));
+    // Not a DATA word: no watch.
+    assert!(!judged(2056, "USB", &[(3_000.0, "USB"), (6_000.0, "USB")]).0);
 }
 
 /// ⛔ A NEW CONNECTION IS JUDGED AFRESH. What the last link showed is forgotten when the loop opens
@@ -3589,228 +3617,276 @@ fn the_tick_that_opens_a_link_forgets_the_last_links_judgement() {
     assert_eq!(modes, ["M PKTUSB -1"], "the opening tick's mode write");
 }
 
-// ── The connect probe: once per connection, then restore ─────────────────────────────────────
+// ── TX re-review scenes (2026-11-08): a radio that TAKES the DATA word is never condemned ────
 
-/// A rigctld whose radio sits in `start` and answers a DATA word `answer`'s way; every other mode
-/// set is taken and read back.
-fn probe_peer(start: &'static str, answer: DataAnswer) -> Peer {
-    retuning_peer(FT8_DIAL, start, move |line, radio| {
-        if line == "T 1" {
-            radio.keyed = true;
-            return Some("RPRT 0\n".to_string());
-        }
-        if line.starts_with("M ") && line.contains("PKT") {
-            return Some(match answer {
-                DataAnswer::Refuses => "RPRT -9\n".to_string(),
-                DataAnswer::Ignores => "RPRT 0\n".to_string(),
-                DataAnswer::Takes(reads) => {
-                    radio.mode = reads.to_string();
-                    "RPRT 0\n".to_string()
-                }
-            });
-        }
-        None
-    })
+/// A rigctld whose radio TAKES the DATA word (reads back what it was told) and lets the test
+/// change its mode behind the loop's back (the operator's front panel, or a band-stack recall).
+/// `errs`: every `M`/`X` answers `RPRT -1` although the radio applies it (a link whose post-set
+/// step fails, the Kenwood IF-length trap). Records the radio's mode at every key.
+fn review_scene(
+    model: u32,
+    errs: bool,
+    flip_at: Option<f64>,
+    qsy_at: Option<f64>,
+) -> (Vec<String>, Vec<String>) {
+    review_scene_at(model, errs, flip_at, None, qsy_at)
 }
 
-fn writes_of(peer: &Peer) -> Vec<String> {
-    peer.lines
+/// [`review_scene`], the flip also moving the radio's dial to `flip_dial` (a band change on the
+/// radio's own panel, its band stack recalling USB there).
+fn review_scene_at(
+    model: u32,
+    errs: bool,
+    flip_at: Option<f64>,
+    flip_dial: Option<u64>,
+    qsy_at: Option<f64>,
+) -> (Vec<String>, Vec<String>) {
+    let engine = cq_engine(SplitMode::None, 1441.0, |s| s.rig_model = model);
+    let panel = Arc::new(AtomicBool::new(false));
+    let at_key = Arc::new(Mutex::new(Vec::<String>::new()));
+    let (p, k) = (panel.clone(), at_key.clone());
+    let peer = retuning_peer(FT8_DIAL, "USB", move |line, radio| {
+        if p.swap(false, Ordering::SeqCst) {
+            radio.mode = "USB".into();
+            if let Some(hz) = flip_dial {
+                radio.dial = hz;
+            }
+        }
+        let ok = || Some("RPRT 0\n".to_string());
+        match line {
+            "T 1" | "T 3" => {
+                k.lock().unwrap().push(radio.mode.clone());
+                radio.keyed = true;
+                ok()
+            }
+            "T 0" => {
+                radio.keyed = false;
+                ok()
+            }
+            _ if line.starts_with("M ") => {
+                radio.mode = line.split_whitespace().nth(1).unwrap().to_string();
+                if errs {
+                    Some("RPRT -1\n".into())
+                } else {
+                    ok()
+                }
+            }
+            _ if line.starts_with("X ") => {
+                if errs {
+                    Some("RPRT -1\n".into())
+                } else {
+                    ok()
+                }
+            }
+            _ if line.starts_with("S ") || line.starts_with("I ") => ok(),
+            "i" => Some(format!("{FT8_DIAL}\n")),
+            _ => None,
+        }
+    });
+    let mut rig = Rig::rigctld(&peer.address);
+    let mut state = loop_state();
+    state.applied.rig_model = model;
+    state.rx_ranges_probed = true;
+    state.tuner_probed = true;
+    let sinks = Sinks {
+        wsjtx: None,
+        psk: None,
+    };
+    let mut ra = mock_reopen_audio();
+    let mut rr = move |_t: &Transport, _c: bool| (Rig::vox(), None, CatProbe::status(None, ""));
+    let mut station = StationSinks::new();
+    let mut backend = MockBackend::new();
+    let slot = ((now_unix_ms() + 25_000.0) / 30_000.0).ceil() * 30_000.0;
+    let mut t = slot - 14_900.0;
+    let mut mark = 0;
+    let mut flipped = false;
+    let mut qsyd = false;
+    let end = slot + 75_000.0;
+    while t < end {
+        if let Some(f) = flip_at {
+            if !flipped && t >= slot + f {
+                flipped = true;
+                panel.store(true, Ordering::SeqCst);
+                mark = peer.lines.lock().unwrap().len();
+            }
+        }
+        if let Some(q) = qsy_at {
+            if !qsyd && t >= slot + q {
+                qsyd = true;
+                let mut e = engine.lock().unwrap();
+                e.set_frequency(14.0745, "20m", "USB"); // the operator clicks a spot: a QSY
+                e.start_cq(None).expect("CQ again");
+                let _ = e.take_immediate_tx();
+            }
+        }
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                t,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        t += 20.0;
+    }
+    let writes: Vec<String> = peer.lines.lock().unwrap()[mark..]
+        .iter()
+        .filter(|l| l.starts_with("M ") || l.starts_with("X "))
+        .cloned()
+        .collect();
+    let keys = at_key.lock().unwrap().clone();
+    eprintln!("REVIEW model {model} errs {errs}: mode writes after the flip {writes:?}; radio mode at each key {keys:?}");
+    (writes, keys)
+}
+
+/// F-A: a radio that TAKES PKTUSB. The operator turns it to USB on the front panel (or a band-stack
+/// recall does) during receive, and ~12 s later clicks a spot (QSY) and calls CQ again. The radio has
+/// shown it takes the DATA word on this connection, so the over after the click must key in PKTUSB.
+#[test]
+fn review_front_panel_usb_then_a_spot_click_keys_in_the_data_word() {
+    let (writes, keys) = review_scene(990_401, false, Some(16_000.0), Some(28_000.0));
+    assert!(keys.len() >= 2, "premise: overs keyed: {keys:?}");
+    assert_eq!(
+        keys[0], "PKTUSB",
+        "premise: the first over went out in the DATA word"
+    );
+    assert!(
+        !writes.iter().any(|l| l.starts_with("M USB")),
+        "a radio that took PKTUSB was commanded plain USB after a front-panel change: {writes:?}"
+    );
+    assert_eq!(
+        keys.last().map(String::as_str),
+        Some("PKTUSB"),
+        "keyed in: {keys:?}"
+    );
+}
+
+/// F-B: a link whose every mode set answers RPRT -1 although the radio applies it. The radio TAKES
+/// PKTUSB on the wire; every over should key in it.
+#[test]
+fn review_a_link_that_errors_every_set_still_keys_in_what_the_radio_takes() {
+    let (_writes, keys) = review_scene(990_402, true, None, None);
+    assert!(keys.len() >= 2, "premise: overs keyed: {keys:?}");
+    assert!(keys.iter().all(|m| m == "PKTUSB"), "keyed in: {keys:?}");
+}
+
+/// Q3: Split = Rig on a SILENT link (SDR Console): how many overs carry `X PKTUSB` before the verdict?
+#[test]
+fn review_rig_split_on_a_silent_link_sends_x_pkt_on_how_many_overs() {
+    let mut b = data_word_bench(SplitMode::Rig, 990_405, DataAnswer::Ignores);
+    let overs = b.overs(3);
+    for (i, o) in overs.iter().enumerate() {
+        eprintln!(
+            "REVIEW split silent over {}: key {:?} rx-modes {:?}",
+            i + 1,
+            o.key,
+            o.rx.iter()
+                .filter(|l| l.starts_with("M ") || l.starts_with("X "))
+                .collect::<Vec<_>>()
+        );
+    }
+    let n = overs
+        .iter()
+        .filter(|o| o.key.iter().any(|l| l.contains("PKT")))
+        .count();
+    eprintln!("REVIEW overs keyed behind a DATA word: {n}");
+    assert!(n <= 1, "{n}");
+}
+
+/// F-A, the band-stack variant: the operator changes band ON THE RADIO (40 m), its band stack
+/// recalls USB there, and ~12 s later a spot click brings it back to 20 m FT8. The radio showed it
+/// takes PKTUSB on this connection, so the over after the click keys in it.
+#[test]
+fn review_a_band_stack_usb_then_a_spot_click_keys_in_the_data_word() {
+    let (writes, keys) = review_scene_at(
+        990_403,
+        false,
+        Some(16_000.0),
+        Some(7_074_000),
+        Some(28_000.0),
+    );
+    assert!(keys.len() >= 2, "premise: overs keyed: {keys:?}");
+    assert_eq!(
+        keys[0], "PKTUSB",
+        "premise: the first over went out in the DATA word"
+    );
+    assert!(
+        !writes.iter().any(|l| l.starts_with("M USB")),
+        "a radio that took PKTUSB was commanded plain USB after a band-stack recall: {writes:?}"
+    );
+    assert_eq!(
+        keys.last().map(String::as_str),
+        Some("PKTUSB"),
+        "keyed in: {keys:?}"
+    );
+}
+
+/// F3: a TS-590SG on a link that reads back plain USB after `PKTUSB` (Hamlib sets its DATA mode
+/// through `SF` and may read the base mode there) is never judged by the read-back: today's word,
+/// every over.
+#[test]
+fn a_ts590_is_never_read_back_judged() {
+    let mut b = data_word_bench(SplitMode::None, 2037, DataAnswer::Ignores);
+    let _ = b.overs(2);
+    assert_eq!(mode_writes(&b), ["M PKTUSB -1"]);
+    assert!(!refused(&b, 2037, "PKTUSB"));
+}
+
+/// ⛔ A RADIO HANDOFF IS JUDGED AFRESH, with no tick of the old verdict (F5): the loop's handoff
+/// runs ahead of `step`, and the step's first engine lock forgets before it works out the word.
+#[test]
+fn a_radio_handoff_forgets_the_last_links_judgement_before_the_first_mode_write() {
+    const MODEL: u32 = 2056;
+    let engine = cq_engine(SplitMode::None, 1441.0, |s| s.rig_model = MODEL);
+    engine
+        .lock()
+        .unwrap()
+        .refuse_link_data_word(MODEL, "PKTUSB");
+    let peer = retuning_peer(FT8_DIAL, "USB", |_, _| None);
+    let mut rig = Rig::rigctld(&peer.address);
+    let mut state = loop_state();
+    state.applied.rig_model = MODEL;
+    state.rx_ranges_probed = true;
+    state.tuner_probed = true;
+    state.data_taken.push("PKTLSB");
+    state.reset_for_handoff(); // what `install_handoff_connection` runs
+    assert!(
+        state.data_taken.is_empty(),
+        "nothing the last radio showed carries over"
+    );
+    let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
+    let (mut backend, mut station) = (MockBackend::new(), StationSinks::new());
+    let sinks = Sinks {
+        wsjtx: None,
+        psk: None,
+    };
+    state
+        .step(
+            &engine,
+            &mut backend,
+            &mut rig,
+            &sinks,
+            now_unix_ms() + 2_000.0,
+            &mut ra,
+            &mut rr,
+            &mut station,
+        )
+        .unwrap();
+    let modes: Vec<String> = peer
+        .lines
         .lock()
         .unwrap()
         .iter()
-        .filter(|l| l.starts_with('M') || l.starts_with('T') || *l == "m")
+        .filter(|l| l.starts_with("M "))
         .cloned()
-        .collect()
-}
-
-/// The probe run straight through on an idle radio (TX off): its set, its read past the cache,
-/// its restore. `(wire, refused PKTUSB?, the radio's mode after)`.
-fn probe_through(start: &'static str, answer: DataAnswer) -> (Vec<String>, bool, String) {
-    let peer = probe_peer(start, answer);
-    let engine = Mutex::new(Engine::new("KD9TAW", "EN52", 0));
-    let mut rig = Rig::rigctld(&peer.address);
-    let mut state = loop_state();
-    state.applied.rig_model = 2056;
-    state.mode_probe = ModeProbe::Due;
-    let t0 = 1_000_000.0;
-    state.step_mode_probe(&engine, &mut rig, t0, true);
-    assert!(
-        matches!(state.mode_probe, ModeProbe::Waiting { .. }),
-        "premise: probing"
-    );
-    state.step_mode_probe(&engine, &mut rig, t0 + 100.0, true);
-    assert!(
-        matches!(state.mode_probe, ModeProbe::Waiting { .. }),
-        "the read waits past Hamlib's cache"
-    );
-    state.step_mode_probe(&engine, &mut rig, t0 + MODE_PROBE_READ_MS, true);
-    assert_eq!(state.mode_probe, ModeProbe::Idle, "once per connection");
-    assert!(rig.probe_restore.is_none());
-    let mode = rig.read_mode().unwrap_or_default();
-    let refused = engine
-        .lock()
-        .unwrap()
-        .settings()
-        .link_refusals
-        .refused(2056, "PKTUSB");
-    (writes_of(&peer), refused, mode)
-}
-
-/// ⭐ RESTORE. A radio that takes `PKTUSB` (an ID904 emulation, piHPSDR, an Icom's USB-D) is put
-/// back in the mode it was in, and keeps its DATA word. SDR Console, which Hamlib says took it and
-/// which still reads USB, is put back too, and its link is recorded as not taking `PKTUSB`.
-#[test]
-fn the_connect_probe_restores_the_radios_mode_and_judges_only_a_plain_read_back() {
-    let (wire, refused, mode) = probe_through("LSB", DataAnswer::Takes("PKTUSB"));
-    assert_eq!(wire, ["m", "M PKTUSB -1", "m", "M LSB -1", "m"], "takes it");
-    assert!(!refused, "a radio that takes it keeps it");
-    assert_eq!(mode, "LSB", "and is back where it was");
-
-    let (wire, refused, mode) = probe_through("USB", DataAnswer::Ignores);
+        .collect();
     assert_eq!(
-        wire,
-        ["m", "M PKTUSB -1", "m", "M USB -1", "m"],
-        "SDR Console"
-    );
-    assert!(refused, "reads back plain USB: not taken");
-    assert_eq!(mode, "USB");
-
-    // Another mode entirely (the FT-1000MP's RTTY-USB reads RTTYR) proves nothing.
-    let (_, refused, mode) = probe_through("USB", DataAnswer::Takes("RTTYR"));
-    assert!(!refused);
-    assert_eq!(mode, "USB");
-}
-
-/// ⭐ A REFUSED PROBE LEAVES THE RADIO IN ITS ORIGINAL MODE, and records the refusal.
-#[test]
-fn a_refused_connect_probe_leaves_the_radio_in_its_original_mode() {
-    let (wire, refused, mode) = probe_through("LSB", DataAnswer::Refuses);
-    assert_eq!(wire, ["m", "M PKTUSB -1", "m", "M LSB -1", "m"]);
-    assert_eq!(
-        mode, "LSB",
-        "the radio never left LSB, and is told LSB again"
-    );
-    assert!(refused);
-}
-
-/// ⛔ NEVER KEYED IN THE PROBE'S MODE: a key-down inside the probe's wait puts the original mode
-/// back first, and the probe then neither restores again nor judges.
-#[test]
-fn a_key_during_the_connect_probe_puts_the_mode_back_first() {
-    let peer = probe_peer("USB", DataAnswer::Takes("PKTUSB"));
-    let engine = Mutex::new(Engine::new("KD9TAW", "EN52", 0));
-    let mut rig = Rig::rigctld(&peer.address);
-    let mut state = loop_state();
-    state.mode_probe = ModeProbe::Due;
-    state.step_mode_probe(&engine, &mut rig, 1_000_000.0, true);
-    rig.ptt(true).unwrap();
-    let wire = writes_of(&peer);
-    assert_eq!(
-        &wire[wire.len() - 2..],
-        ["M USB -1", "T 1"],
-        "the mode back, then the key: {wire:?}"
-    );
-    let _ = rig.ptt(false);
-    let before = writes_of(&peer).len();
-    state.step_mode_probe(&engine, &mut rig, 1_000_000.0 + MODE_PROBE_READ_MS, true);
-    assert_eq!(
-        writes_of(&peer).len(),
-        before,
-        "nothing more from the probe"
-    );
-    assert_eq!(state.mode_probe, ModeProbe::Idle);
-}
-
-/// A mode Nexus commands while the probe waits stands: the probe puts nothing back and judges
-/// nothing. And a probe whose window closes (TX keyed, a slot due) is put back at once, unjudged.
-#[test]
-fn the_connect_probe_never_undoes_a_mode_commanded_meanwhile_and_yields_its_window() {
-    let peer = probe_peer("USB", DataAnswer::Ignores);
-    let engine = Mutex::new(Engine::new("KD9TAW", "EN52", 0));
-    let mut rig = Rig::rigctld(&peer.address);
-    let mut state = loop_state();
-    state.mode_probe = ModeProbe::Due;
-    state.step_mode_probe(&engine, &mut rig, 1_000_000.0, true);
-    rig.set_mode("CW", -1).unwrap(); // the operator's section change, through the loop's retune
-    let before = writes_of(&peer).len();
-    state.step_mode_probe(&engine, &mut rig, 1_000_000.0 + MODE_PROBE_READ_MS, true);
-    assert_eq!(writes_of(&peer).len(), before, "CW stands");
-    assert_eq!(rig.read_mode().as_deref(), Some("CW"));
-
-    let peer = probe_peer("USB", DataAnswer::Ignores);
-    let mut rig = Rig::rigctld(&peer.address);
-    let mut state = loop_state();
-    state.mode_probe = ModeProbe::Due;
-    state.step_mode_probe(&engine, &mut rig, 1_000_000.0, true);
-    state.step_mode_probe(&engine, &mut rig, 1_000_100.0, false); // the window closed
-    assert_eq!(
-        &writes_of(&peer)[2..],
-        ["M USB -1"],
-        "put back at once, no read"
-    );
-    assert!(
-        !engine
-            .lock()
-            .unwrap()
-            .settings()
-            .link_refusals
-            .refused(0, "PKTUSB"),
-        "unjudged"
-    );
-}
-
-/// ⛔ WITH TX ARMED, ONLY WHERE NO OVER CAN KEY: past 75 % of the slot (WSJT-X's last key) and with
-/// the read and the restore landing before the next boundary. In the real loop, an FT8 CQ keys
-/// every over at its slot, the probe's set and restore both go out between overs, and no key tick
-/// carries a probe write.
-#[test]
-fn with_tx_armed_the_connect_probe_waits_for_the_end_of_a_slot_and_never_meets_a_key() {
-    let mut b = data_word_bench(SplitMode::None, 2056, DataAnswer::Takes("PKTUSB"));
-    b.state.mode_probe = ModeProbe::Due;
-    {
-        let state = &b.state;
-        let eng = Mutex::new(Engine::new("KD9TAW", "EN52", 0));
-        {
-            let mut e = eng.lock().unwrap();
-            e.set_tier(Tier::Ft8);
-            e.set_tx_enabled(true);
-        }
-        let rig = Rig::vox();
-        for (into, may) in [
-            (100.0, false),
-            (11_000.0, false),
-            (11_300.0, true),
-            (12_900.0, true),
-            (13_100.0, false),
-        ] {
-            assert_eq!(
-                state.mode_probe_window(&eng, &rig, 30_000_000.0 + into),
-                may,
-                "{into} ms into an FT8 slot"
-            );
-        }
-    }
-    let overs = b.overs(2);
-    for (i, o) in overs.iter().enumerate() {
-        assert_eq!(
-            o.key.last().map(String::as_str),
-            Some("T 1"),
-            "over {}",
-            i + 1
-        );
-        assert!(
-            o.key.iter().all(|l| !l.contains("PKT")),
-            "over {}: {:?}",
-            i + 1,
-            o.key
-        );
-    }
-    assert_eq!(b.state.mode_probe, ModeProbe::Idle, "the probe ran");
-    // The section's own PKTUSB, then the probe's, then its restore of the mode the radio was in
-    // (that same PKTUSB, which this radio took).
-    assert_eq!(
-        mode_writes(&b),
-        ["M PKTUSB -1", "M PKTUSB -1", "M PKTUSB -1"],
-        "the section's word, the probe's set and its restore"
+        modes.first().map(String::as_str),
+        Some("M PKTUSB -1"),
+        "{modes:?}"
     );
 }

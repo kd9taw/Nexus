@@ -36,7 +36,7 @@
 
 /// The one spelling of an SSB DATA submode, or `None` for any other mode: only these two are ever
 /// judged (`PKTFM` and the rest are commanded as before).
-fn data_word(mode: &str) -> Option<&'static str> {
+pub fn data_word(mode: &str) -> Option<&'static str> {
     match mode.trim().to_ascii_uppercase().as_str() {
         "PKTUSB" | "USB-D" | "DATA-U" | "PKT-U" => Some("PKTUSB"),
         "PKTLSB" | "LSB-D" | "DATA-L" | "PKT-L" => Some("PKTLSB"),

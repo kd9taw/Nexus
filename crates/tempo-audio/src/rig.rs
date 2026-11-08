@@ -658,14 +658,9 @@ pub struct Rig {
     /// CAT control channel — rigctld `host:port` (e.g. `127.0.0.1:4532`). `Some` =
     /// a CAT rig is configured; drives all freq/mode/CAT verbs AND `PttMode::Cat`.
     control: Option<String>,
-    /// The mode the radio loop's connect-time DATA-mode probe moved the radio away from, while
-    /// it waits to read the answer back (`RadioLoop::step_mode_probe`). ⛔ Put back BEFORE ANY
-    /// KEY-DOWN ([`Self::key`]): nothing may ever transmit in the probe's mode. The probe only
-    /// starts where no slot over can key, so this is the operator's own key (PTT, CW, a tune)
-    /// landing inside the probe's 1.5 s at connect.
-    pub(crate) probe_restore: Option<String>,
-    /// Every mode write sent to the radio ([`Self::set_mode`]), counted, so the probe can tell
-    /// whether anything else commanded a mode while it waited and must not be undone.
+    /// Every mode write sent to the radio ([`Self::set_mode`]), counted, so the radio loop's
+    /// DATA-word judgement (`RadioLoop::judge_data_word`) judges only the reads after a mode write
+    /// of Nexus's own.
     pub(crate) mode_writes: u64,
     /// Lazily-opened TCP connection to `control`.
     stream: Option<TcpStream>,
@@ -913,7 +908,6 @@ impl Rig {
     pub fn with_control(control: Option<String>, ptt_mode: PttMode) -> Self {
         Self {
             control,
-            probe_restore: None,
             mode_writes: 0,
             stream: None,
             ptt_mode,
@@ -1782,12 +1776,6 @@ impl Rig {
 
     #[track_caller]
     fn key(&mut self, on: bool, nexus_audio: bool, link_window: bool) -> std::io::Result<()> {
-        // ⛔ NEVER KEYED IN THE PROBE'S MODE: the connect probe's mode goes back first.
-        if on {
-            if let Some(mode) = self.probe_restore.take() {
-                let _ = self.set_mode(&mode, -1);
-            }
-        }
         // Diagnostic: name the exact caller of every PTT change. A CI-V capture that shows an
         // unexplained unkey mid-TX can then be traced to the precise line that dropped it —
         // this is how the IC-9700 flicker's true source gets pinned instead of inferred. Cheap
