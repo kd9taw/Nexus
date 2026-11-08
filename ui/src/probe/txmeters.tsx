@@ -11,10 +11,14 @@
 //
 // `?pane=280x180` draws only the large TX meters pane, in its real frame, in a box that size.
 //
+// `&over=1` plays one over in which PO, ALC and SWR read and COMP stays silent, then unkeys, so every
+// host draws COMP's "⊘ not reported" note; `&over=keyed` holds that over, never unkeying. `&zoom=1.75` sets the app's UI zoom; `&vp=xs` its viewport class.
+//
 // `?units=imperial` shows °F. `&needle=1` draws PO, ALC and SWR as the needle faces. `&control=1` is the CONTROL: a transmit-bandwidth step named with a
 // 400-character unbreakable word, which must overflow its row, and the probe must see it.
 import '../styles.css'
 import '../cockpit-panes.css'
+import type { CSSProperties } from 'react'
 import { createRoot } from 'react-dom/client'
 import { TxMeters, TxMetersPane } from '../components/TxMeters'
 import type { RadioStatus } from '../types'
@@ -58,9 +62,14 @@ const controls = {
 const strip = params.get('host') === 'strip'
 
 const paneBox = params.get('pane')?.split('x').map(Number)
+const over = params.get('over')
+const zoom = params.get('zoom')
+if (params.get('vp')) document.documentElement.setAttribute('data-viewport', params.get('vp')!)
+const appStyle = { height: '100%', position: 'relative', ...(zoom ? { '--ui-zoom': zoom } : {}) } as CSSProperties
+const KEYED = { ...RADIO, rigKeyed: true, txSwr: 1.2, txAlc: 0.3, txPoW: 50, txCompDb: null } as unknown as RadioStatus
 
-const page = (
-  <div className="app" style={{ height: '100%', position: 'relative' }}>
+const page = (RADIO: RadioStatus) => (
+  <div className="app" style={appStyle}>
     <div className={`cq-telemetry${needle ? ' needle' : ''}`} data-probe="cell" style={{ position: 'absolute', top: 8, left: 8 }}>
       <TxMeters radio={RADIO} inline />
     </div>
@@ -84,14 +93,17 @@ const page = (
   </div>
 )
 
-createRoot(document.getElementById('root')!).render(
+const root = createRoot(document.getElementById('root')!)
+root.render(
   paneBox ? (
-    <div className="app" style={{ height: '100%', position: 'relative' }}>
+    <div className="app" style={appStyle}>
       <div data-probe="pane" style={{ position: 'absolute', top: 8, left: 8, width: paneBox[0], height: paneBox[1], display: 'flex', flexDirection: 'column' }}>
         <TxMetersPane radio={RADIO} />
       </div>
     </div>
   ) : (
-    page
+    page(over ? KEYED : RADIO)
   ),
 )
+// The over ends: the same tree again, unkeyed, so each panel keeps its memory of what read.
+if (over === '1' && !paneBox) setTimeout(() => root.render(page(RADIO)), 300)
