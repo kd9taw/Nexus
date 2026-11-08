@@ -1070,6 +1070,9 @@ function App() {
   const workDxpedRef = useRef<((c: WorkableCard) => void) | null>(null)
   // Latest link tier (TempoFast/TempoDeep/FT8/FT4) — the rail's Digital button preserves it.
   const tierRef = useRef<Tier>('FT8')
+  // Whether the Satellites screen exists, for the poll below (mounted once, so it reads a ref).
+  const satsOnRef = useRef(false)
+  satsOnRef.current = features.isOn('sats')
   useEffect(() => {
     let live = true
     const OPENING_ALERT_COOLDOWN_MS = 10 * 60_000
@@ -1114,7 +1117,19 @@ function App() {
           const armedSats = Object.keys(satAlarmMap())
           if (armedSats.length > 0) {
             getSatSchedule(armedSats, 2)
-              .then((passes) => checkSatAlarms(passes, Date.now()))
+              .then((passes) =>
+                checkSatAlarms(
+                  passes,
+                  Date.now(),
+                  // #478: the notice's button opens that pass on the Satellites screen.
+                  satsOnRef.current
+                    ? (name) => {
+                        setSatFocus(name)
+                        setView('sats')
+                      }
+                    : undefined,
+                ),
+              )
               .catch(() => {})
           }
           // ISS SSTV auto-arm (opt-in, default off): at AOS tune 145.800 FM + arm
