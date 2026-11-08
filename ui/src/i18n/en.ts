@@ -6669,6 +6669,8 @@ export const EN = {
   'sat.alarm.up': '⏰ {{name}} is UP now (LOS {{los}}) · max {{maxEl}}°',
   'sat.alarm.rises': '⏰ {{name}} rises {{aos}} (~{{mins}} min) · max {{maxEl}}°',
   'sat.alarm.stop': 'Stop alarm',
+  // #478: the alarm notice's button where the Satellites screen exists: stops the alarm and opens that pass.
+  'sat.alarm.open': 'Open in Satellites',
 
   // ISS SSTV auto-arm (features/issAutoArm.ts). The dial and the mode are interpolated from
   // the module's own constants and never become text: a decimal comma reaching 145.800 is an
@@ -7770,6 +7772,9 @@ export const EN = {
   'recall.log.comment.readAria': 'Comment — open it in the row',
   'recall.qrz.title': 'Open {{call}} on QRZ (browser)',
   'recall.qrz.error': 'Could not open {{call}} on QRZ',
+  // #483: the caller card's grid square, a button that opens it on OpenStreetMap in the browser.
+  'recall.grid.map.title': 'Open {{grid}} on OpenStreetMap (browser)',
+  'recall.grid.map.error': 'Could not open {{grid}} on OpenStreetMap',
   // Names the button the operator can see: the log strip's callbook button reads "Lookup".
   'recall.where.empty': 'Tab or press Lookup for name / QTH',
   // Two whole statements, and the conjunction between the two squares is inside a message of

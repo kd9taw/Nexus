@@ -12013,6 +12013,21 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: var(--fs-body);
   color: var(--text);
 }
+/* #483: the grid square as a link to its map: the line's own type, marked only by an underline. */
+.recall-grid {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.recall-grid:hover {
+  color: var(--accent);
+  text-decoration-style: solid;
+}
 .recall-where-empty {
   color: var(--text-faint);
   font-style: italic;
