@@ -218,6 +218,33 @@ describe('one click where Stop TX is drawn stops once, and the overlay stays ope
     expect(mirror?.closest('[aria-hidden="true"]')).not.toBeNull()
   })
 
+  it("a dock's Esc Stop under a dialog: a click on its label stops it, the dialog open", async () => {
+    const stop = vi.fn()
+    render(
+      <>
+        <div className="app">
+          <button type="button" className="cw-macro rtty-stop send-row-stop" data-stop-control onClick={stop}>
+            <span className="cw-macro-key">Esc</span>
+            <span className="cw-macro-label">Stop</span>
+          </button>
+        </div>
+        <OpenDialog />
+        <StopLayer />
+      </>,
+    )
+    await frames()
+    const label = document.querySelector<HTMLElement>('.stop-layer [data-stop-mirror] .cw-macro-label')!
+    expect(label.textContent).toBe('Stop')
+    fireEvent.pointerDown(label, { button: 0, pointerType: 'mouse' })
+    fireEvent.mouseDown(label, { button: 0 })
+    fireEvent.pointerUp(label, { button: 0, pointerType: 'mouse' })
+    fireEvent.mouseUp(label, { button: 0 })
+    fireEvent.click(label, { button: 0 })
+    await frames()
+    expect(stop).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('dialog', { hidden: true })).not.toBeNull()
+  })
+
   // The instrument's control: without the layer, the same click on the same page stops nothing.
   it('without the stop layer the click stops nothing (the control)', async () => {
     const halt = vi.fn()

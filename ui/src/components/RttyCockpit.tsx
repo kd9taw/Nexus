@@ -1574,6 +1574,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               <button
                 type="button"
                 className="cw-macro rtty-auto-stop"
+                data-stop-control
                 onClick={autoAbort}
                 title="Abort the auto QSO — stop the sequencer, drop the queue, unkey"
               >

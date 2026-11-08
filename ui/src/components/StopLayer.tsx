@@ -14,9 +14,10 @@
 // did (stop-control-wiring.test.tsx).
 //
 // A STOP CONTROL is an element carrying `data-stop-control`: Stop TX wherever it is drawn (the top bar, the TX strip,
-// FT's strip, Roam), and the docks' stop keys (RTTY's, PSK's and JTTY's Esc Stop, SSTV's Stop). stop-line.test.tsx
-// holds every Stop TX and dock stop of every cockpit to carrying it. Tune, PTT and the TX latch are not on it: the
-// ruling is Stop TX and the docks' stops, and the latch's other click turns transmit ON.
+// FT's strip), and the docks' stop keys (RTTY's, PSK's and JTTY's Esc Stop, RTTY's sequencer Abort, SSTV's Stop).
+// stop-line.test.tsx holds every Stop TX and dock stop of every cockpit to carrying it. Tune, PTT and the TX latch are
+// not on it: the ruling is Stop TX and the docks' stops, and the latch's other click turns transmit ON. Roam's Stop
+// stops roaming, not a transmission, and is not on it either.
 //
 // WHAT A PRESS ON A MIRROR DOES, AND DOES NOT:
 //   · It stops: the original's click handler runs once.
