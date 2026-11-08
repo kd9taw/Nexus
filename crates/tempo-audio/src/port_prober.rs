@@ -314,11 +314,12 @@ mod tests {
     /// Every seeded model number must be a REAL Hamlib model. A typo'd or removed number does
     /// not fail loudly — the probe just never gets an answer, and the rig reports as undetected
     /// with no clue why. The display name must match the table too, or Detect shows the operator
-    /// one rig while configuring another. The FULL catalog: the extended tier is drawn from
-    /// Hamlib's `riglist.h` just as the verified one is, and the FT-847 seed lives there.
+    /// one rig while configuring another. The VERIFIED list, the picker's default: a seeded hit
+    /// fills in only the port and baud and leaves the operator to pick the model, so a seed
+    /// behind "Show all models" would name a radio its owner cannot find in the list.
     #[test]
     fn every_seeded_cat_model_exists_in_hamlib() {
-        let table = crate::rigmodels::all_rig_models();
+        let table = crate::rigmodels::rig_models();
         for (model, name, bauds) in COMMON_CAT_MODELS {
             let found = table.iter().find(|(m, _)| m == model);
             let (_, real) = found
