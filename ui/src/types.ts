@@ -2165,6 +2165,11 @@ export interface RadioStatus {
   /** The licence lock is the phone MODE alone: LSB, AM or FM on 60 m, where a USB pick would key.
    *  Name that rule instead of the frequency. `txAllowed` is false with it. Absent when false. */
   phoneModeRefused?: boolean
+  /** The licence lock is the data MODE alone: the same over in another mode would key. `rule`
+   *  names why — wider than 2.8 kHz below 28.3 MHz, faster than 300 baud on 2200 m and 630 m, or
+   *  MSK144's signal at its fixed 1500 Hz centre — and `mode` is the mode as picked ("Q65-30E").
+   *  `txAllowed` is false with it. Absent otherwise. */
+  dataModeRefusal?: { rule: 'tooWide' | 'tooFast' | 'fixedCentre'; mode: string } | null
   /** The rig is held on an FM channel at or above 29 MHz, so FM is commanded whatever the
    *  section's own policy says: in Phone, the FM channel kept from the SSTV screen. The Phone
    *  cockpit's AUTO reads FM from it. Absent when false. */

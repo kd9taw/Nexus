@@ -109,6 +109,7 @@ mod cw;
 pub(super) const PASSBAND: DataFrame = DataFrame {
     f0_hz: 0.0,
     bw_hz: 3_000.0,
+    mode: None,
 };
 
 /// The frames the over's feed is handed, whatever size a program sends: 20 ms at the route's rate,

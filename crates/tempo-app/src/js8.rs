@@ -1381,9 +1381,11 @@ impl Engine {
     /// ([`Engine::tx_allowed_for`]), across the width the frame occupies at that speed. For a frame
     /// on the operator's TX offset at the TX speed it is [`Engine::tx_allowed`]'s judgement.
     pub(crate) fn js8_frame_allowed(&self, f0: f32, speed: Js8Speed) -> bool {
+        let mode = Some(modes::ModeKind::Js8 { speed });
         self.tx_allowed_for(DataFrame {
             f0_hz: f64::from(f0),
-            bw_hz: DataFrame::width_hz(Some(modes::ModeKind::Js8 { speed })),
+            bw_hz: DataFrame::width_hz(mode),
+            mode,
         })
     }
 

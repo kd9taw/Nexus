@@ -15500,6 +15500,14 @@ export const EN = {
   // slider (a CONFIGURATION control on the transmit path) and the CAT pill.
   'cockpit.header.readout.wheelTune.title': 'Scroll to tune',
   'cockpit.header.readout.digitTune.title': 'Scroll a digit to tune it',
+  // The red readout's words when the data MODE is the whole licence lock (`dataModeRefusal`). `{{mode}}` is the mode as
+  // picked, period and submode included ("Q65-30E", "MSK144-15").
+  'cockpit.header.readout.txLock.tooWide':
+    '{{mode}} is wider than 2.8 kHz, and below 28.3 MHz Nexus holds a US license’s data to that — transmit is blocked. Pick a narrower Q65 submode in Settings.',
+  'cockpit.header.readout.txLock.tooFast':
+    '{{mode}} keys at 2000 baud, and US data on 2200 m and 630 m may not exceed 300 baud — transmit is blocked. Pick another mode.',
+  'cockpit.header.readout.txLock.fixedCentre':
+    '{{mode}} always transmits centred 1500 Hz from the dial, above it on USB and below it on LSB, whatever the TX marker says, and its signal there is outside your license privileges — transmit is blocked. Move the dial further into the segment.',
   // Two WHOLE sentences, one per direction — the band name and the edge frequency are invariant
   // tokens formatted by the header, never by a locale-aware formatter.
   'cockpit.header.bandEdge.up':
