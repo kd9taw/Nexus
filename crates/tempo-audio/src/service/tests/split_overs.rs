@@ -3319,25 +3319,34 @@ fn a_tick_that_reopens_the_cat_link_does_not_pre_set_and_the_next_does() {
     );
 }
 
-// ── A radio whose CAT backend has no DATA mode ───────────────────────────────────────────────
+// ── A link that does not take the DATA word ──────────────────────────────────────────────────
 
-/// Hamlib 4.6.5's whole mode list for model 2056, SDR Console (`rigctld -m 2056 -u`): no PKT mode.
-const SDR_CONSOLE_MODES: [&str; 8] = ["AM", "CW", "USB", "LSB", "RTTY", "FM", "CWR", "RTTYR"];
-
-/// The registry is process-wide and tests run in parallel, so each scene names its own model.
-fn record_modes(model: u32, modes: &[&str]) {
-    tempo_app::rig_modes::record(model, Some(modes.iter().map(|m| m.to_string()).collect()));
+/// What a rigctld does with a DATA word (`M PKT…`/`X PKT…`), as Hamlib's backends were seen to.
+#[derive(Clone, Copy)]
+enum DataAnswer {
+    /// Refused (`RPRT -9`): a backend with no case for the word (Ten-Tec, Alinco, the FT-857's
+    /// `PKTLSB`), which Hamlib refuses itself.
+    Refuses,
+    /// Taken (`RPRT 0`), but the radio stays in USB and reads back USB: SDR Console (2056), whose
+    /// `MDD;` Hamlib reports as taken whether SDR Console answers it `?;` or not
+    /// (`tests/rigctld_sdrconsole.rs`).
+    Ignores,
+    /// Taken, and read back as this: `PKTUSB` on an emulation answering ID904, piHPSDR, the
+    /// QCX/QDX (Hamlib's `MD9;` = DIGU) and an Icom with a data flag (USB-D); `RTTYR` on the
+    /// FT-1000MP, whose `PKTUSB` is RTTY-USB.
+    Takes(&'static str),
 }
 
-/// The rigctld in front of SDR Console, as Hamlib's 2056 backend serves it: the radio sits in USB,
-/// and any DATA word is refused (`RPRT -9`), as SDR Console refuses the `MDD;` Hamlib turns
-/// `PKTUSB` into. Split writes are taken. The loop's transport is already this radio's, `model`.
-fn sdr_console_bench(engine: Arc<Mutex<Engine>>, model: u32) -> Bench<Hamlib> {
+/// FT8 CQ on 20 m against a rigctld whose radio starts in USB and answers a DATA word `answer`'s
+/// way. Split writes are taken. The loop's transport is already this radio's, `model`.
+fn data_word_bench(split: SplitMode, model: u32, answer: DataAnswer) -> Bench<Hamlib> {
+    let engine = cq_engine(split, 1441.0, |s| s.rig_model = model);
     let keyed = Arc::new(AtomicBool::new(false));
     let vfos = Arc::new(Mutex::new(Vfos::default()));
     let k = keyed.clone();
     let peer = retuning_peer(FT8_DIAL, "USB", move |line, radio| {
         let ok = || Some("RPRT 0\n".to_string());
+        let data = (line.starts_with("M ") || line.starts_with("X ")) && line.contains("PKT");
         match line {
             "T 1" | "T 3" => {
                 radio.keyed = true;
@@ -3349,9 +3358,16 @@ fn sdr_console_bench(engine: Arc<Mutex<Engine>>, model: u32) -> Bench<Hamlib> {
                 k.store(false, Ordering::SeqCst);
                 ok()
             }
-            _ if (line.starts_with("M ") || line.starts_with("X ")) && line.contains("PKT") => {
-                Some("RPRT -9\n".to_string())
-            }
+            _ if data => match answer {
+                DataAnswer::Refuses => Some("RPRT -9\n".to_string()),
+                DataAnswer::Ignores => ok(),
+                DataAnswer::Takes(reads) => {
+                    if line.starts_with("M ") {
+                        radio.mode = reads.to_string();
+                    }
+                    ok()
+                }
+            },
             _ if line.starts_with("S ") || line.starts_with("I ") || line.starts_with("X ") => ok(),
             "i" => Some(format!("{FT8_DIAL}\n")),
             _ => None,
@@ -3361,6 +3377,16 @@ fn sdr_console_bench(engine: Arc<Mutex<Engine>>, model: u32) -> Bench<Hamlib> {
     let mut state = loop_state();
     state.applied.rig_model = model;
     Bench::new(engine, state, rig, Hamlib { peer, keyed, vfos })
+}
+
+/// Has the engine been told this link does not take `word`?
+fn refused(b: &Bench<Hamlib>, model: u32, word: &str) -> bool {
+    b.engine
+        .lock()
+        .unwrap()
+        .settings()
+        .link_refusals
+        .refused(model, word)
 }
 
 /// Every mode and TX-mode write the radio was sent, in order.
@@ -3376,104 +3402,159 @@ fn mode_writes(b: &Bench<Hamlib>) -> Vec<String> {
         .collect()
 }
 
-/// ⭐ FT8 ON SDR CONSOLE (Hamlib 2056) KEYS IN USB AND IS NEVER SENT A DATA WORD. Its backend lists
-/// no PKT mode, and Hamlib puts `PKTUSB` on SDR Console's wire as `MDD;`, which SDR Console
-/// answered with an error window at every key-down, because the mode set goes out on the slot
-/// boundary just before `TX;`. Nothing is configured: the operator's plain-SSB switch is off.
-/// Each over keys at its slot, as before; only the mode word differs.
+/// A LINK THAT REFUSES THE DATA WORD. The loop's ladder gives up on it while receiving and puts
+/// the radio in USB, as it always did, and from then on this connection's word IS USB: no over is
+/// keyed after another DATA word. Before, the key-time assert sent `M PKTUSB` again at every slot
+/// boundary, just ahead of `TX;`. Every over keys at its slot.
 #[test]
-fn ft8_on_a_backend_with_no_data_mode_keys_in_usb_and_never_sends_pkt() {
+fn ft8_on_a_link_that_refuses_the_data_word_keys_every_over_in_usb() {
     const MODEL: u32 = 2056;
-    record_modes(MODEL, &SDR_CONSOLE_MODES);
-    let engine = cq_engine(SplitMode::None, 1441.0, |s| s.rig_model = MODEL);
-    assert_eq!(
-        engine.lock().unwrap().rig_mode_effective(),
-        "USB",
-        "premise: the policy"
-    );
-    let mut b = sdr_console_bench(engine, MODEL);
-    let overs = b.overs(2);
+    let mut b = data_word_bench(SplitMode::None, MODEL, DataAnswer::Refuses);
+    let overs = b.overs(3);
     for (i, o) in overs.iter().enumerate() {
-        eprintln!("SDR Console over {}: {o:?}", i + 1);
+        eprintln!("refusing link, over {}: {o:?}", i + 1);
         assert_eq!(
             o.key.last().map(String::as_str),
             Some("T 1"),
             "over {}",
             i + 1
         );
-        assert_eq!(o.unkey, ["T 0"], "over {}", i + 1);
+        assert!(
+            o.key.iter().all(|l| !l.contains("PKT")),
+            "over {}: a DATA word on the key tick: {:?}",
+            i + 1,
+            o.key
+        );
     }
     let modes = mode_writes(&b);
+    let usb = modes
+        .iter()
+        .position(|l| l == "M USB -1")
+        .expect("put in USB");
     assert!(
-        modes.iter().all(|l| !l.contains("PKT")),
-        "a DATA word reached the radio: {modes:?}"
+        modes[usb..].iter().all(|l| !l.contains("PKT")),
+        "a DATA word after the link refused it: {modes:?}"
     );
-    assert_eq!(modes, ["M USB -1"], "the mode, once, in USB");
+    assert!(refused(&b, MODEL, "PKTUSB"));
 }
 
-/// …and with Split Operation = Rig, VFO B's mode (`X`) is USB too: the same over, the same
-/// writes in the same order as on any other radio, one word apart.
+/// …and with Split Operation = Rig, VFO B's mode is USB too. Before, the refused `X PKTUSB` halted
+/// TX, so no over went out at all. The first over's key-time mode assert goes out where it always
+/// did (the ladder's fallback never latches it); only its word is USB now.
 #[test]
-fn rig_split_on_a_backend_with_no_data_mode_writes_vfo_b_in_usb() {
-    const MODEL: u32 = 990_301;
-    record_modes(MODEL, &SDR_CONSOLE_MODES);
-    let engine = cq_engine(SplitMode::Rig, 1441.0, |s| s.rig_model = MODEL);
-    let mut b = sdr_console_bench(engine, MODEL);
+fn rig_split_on_a_link_that_refuses_the_data_word_writes_vfo_b_in_usb() {
+    let mut b = data_word_bench(SplitMode::Rig, 990_301, DataAnswer::Refuses);
     let overs = b.overs(2);
     assert_eq!(
         overs[0].key,
-        ["S 1 VFOB", "I 14073500", "X USB -1", "S 1 VFOB", "T 1"]
+        [
+            "M USB -1",
+            "S 1 VFOB",
+            "I 14073500",
+            "X USB -1",
+            "S 1 VFOB",
+            "T 1"
+        ]
     );
     assert_eq!(overs[1].key, ["S 1 VFOB", "T 1"]);
-    assert!(mode_writes(&b).iter().all(|l| !l.contains("PKT")));
 }
 
-/// CONTROLS: a backend that lists its DATA modes still gets `PKTUSB`; the operator's own
-/// "Data modes use plain SSB" switch still gives USB on it; and a model whose list was never read
-/// is commanded exactly as before, `PKTUSB` first.
+/// ⭐ SDR CONSOLE (2056): Hamlib takes `PKTUSB` (`RPRT 0`) and sends `MDD;`, the radio never moves,
+/// and two receive-time reads say USB: this connection's word becomes USB, sent while receiving,
+/// and no over after it is keyed behind a DATA word. Before, `PKTUSB` was the word for good.
 #[test]
-fn a_backend_with_data_modes_or_unknown_caps_gets_pktusb_and_the_switch_still_wins() {
-    const LISTED: u32 = 990_302;
-    const UNKNOWN: u32 = 990_303;
-    record_modes(
-        LISTED,
-        &["AM", "CW", "USB", "LSB", "FM", "PKTLSB", "PKTUSB", "FM-D"],
-    );
-    for (model, plain, want) in [
-        (LISTED, false, "M PKTUSB -1"),
-        (LISTED, true, "M USB -1"),
-        (UNKNOWN, false, "M PKTUSB -1"),
-    ] {
-        let engine = cq_engine(SplitMode::None, 1441.0, |s| {
-            s.rig_model = model;
-            s.data_modes_plain_ssb = plain;
-        });
-        let mut b = sdr_console_bench(engine, model);
-        let _ = b.overs(1);
+fn ft8_on_a_link_that_silently_ignores_the_data_word_moves_to_usb_while_receiving() {
+    const MODEL: u32 = 990_302;
+    let mut b = data_word_bench(SplitMode::None, MODEL, DataAnswer::Ignores);
+    let overs = b.overs(2);
+    for (i, o) in overs.iter().enumerate() {
         assert_eq!(
-            mode_writes(&b).first().map(String::as_str),
-            Some(want),
-            "model {model}, plain SSB {plain}"
+            o.key.last().map(String::as_str),
+            Some("T 1"),
+            "over {}",
+            i + 1
         );
+        assert!(o.key.iter().all(|l| !l.contains("PKT")), "over {}", i + 1);
+    }
+    assert_eq!(mode_writes(&b), ["M PKTUSB -1", "M USB -1"]);
+    assert!(refused(&b, MODEL, "PKTUSB"));
+}
+
+/// CONTROLS: a link whose radio TAKES the DATA word keeps it, however Hamlib's list reads.
+/// Read back as `PKTUSB` (an emulation answering ID904, piHPSDR, the QCX/QDX: Hamlib's `MD9;`, DIGU;
+/// an Icom's USB-D) or as another mode entirely (`RTTYR`, the FT-1000MP's RTTY-USB): the word stays
+/// `PKTUSB` for every over, as today.
+#[test]
+fn a_link_that_takes_the_data_word_keeps_it() {
+    for (model, reads) in [(990_303, "PKTUSB"), (990_304, "RTTYR")] {
+        let mut b = data_word_bench(SplitMode::None, model, DataAnswer::Takes(reads));
+        let _ = b.overs(2);
+        assert_eq!(mode_writes(&b), ["M PKTUSB -1"], "reads back {reads}");
+        assert!(!refused(&b, model, "PKTUSB"), "reads back {reads}");
     }
 }
 
-/// ⛔ THE TICK THAT OPENS THE LINK. The loop works out the mode word at the top of a tick, and the
-/// open that learns the backend's modes runs later in the same tick, just before the retune that
-/// commands it. Without asking again the first word a radio with no DATA mode got was `PKTUSB`.
+/// The judgement itself, on the lower side too: the FT-1000MP's `PKTLSB` (DATA-LSB) reads back
+/// `PKTLSB` and is kept; a radio reading back plain LSB twice in a row has not taken it; one stale
+/// read (Hamlib's cache), a read of anything else, or no read decides nothing.
 #[test]
-fn the_tick_that_learns_the_backends_modes_commands_the_word_it_can_express() {
-    const MODEL: u32 = 990_304;
+fn the_data_word_is_judged_on_two_reads_of_its_plain_twin_and_nothing_else() {
+    const MODEL: u32 = 1024;
+    let engine = Mutex::new(Engine::new("KD9TAW", "EN52", 0));
+    let refused = |word: &str| {
+        engine
+            .lock()
+            .unwrap()
+            .settings()
+            .link_refusals
+            .refused(MODEL, word)
+    };
+    let mut state = loop_state();
+    state.applied.rig_model = MODEL;
+    state.last_mode = "PKTLSB".into();
+    for read in [
+        Some("PKTLSB"),
+        Some("LSB"),
+        None,
+        Some("PKTLSB"),
+        Some("LSB"),
+    ] {
+        state.judge_data_word(&engine, read);
+    }
+    assert!(!refused("PKTLSB"), "never two in a row");
+    state.judge_data_word(&engine, Some("LSB"));
+    assert!(refused("PKTLSB"), "two in a row");
+    assert!(!refused("PKTUSB"), "that word only");
+    // A word that is not a DATA word is never judged.
+    state.last_mode = "USB".into();
+    state.judge_data_word(&engine, Some("USB"));
+    state.judge_data_word(&engine, Some("USB"));
+    assert!(!refused("PKTUSB"));
+}
+
+/// ⛔ A NEW CONNECTION IS JUDGED AFRESH. What the last link showed is forgotten when the loop opens
+/// the link, and the word is asked again in the same tick, so the new link is sent the DATA word
+/// and judged on its own answers.
+#[test]
+fn the_tick_that_opens_a_link_forgets_the_last_links_judgement() {
+    const MODEL: u32 = 2056;
     let engine = cq_engine(SplitMode::None, 1441.0, |s| s.rig_model = MODEL);
+    engine
+        .lock()
+        .unwrap()
+        .refuse_link_data_word(MODEL, "PKTUSB");
+    assert_eq!(
+        engine.lock().unwrap().rig_mode_effective(),
+        "USB",
+        "premise"
+    );
     let peer = retuning_peer(FT8_DIAL, "USB", |_, _| None);
     let address = peer.address.clone();
     let mut state = loop_state();
     state.rx_ranges_probed = true;
     state.tuner_probed = true;
     let mut ra = mock_reopen_audio();
-    // The open: `learn_mode_caps` records what the daemon's backend lists, then the link is up.
     let mut rr = move |_t: &Transport, _coexist: bool| {
-        record_modes(MODEL, &SDR_CONSOLE_MODES);
         (
             Rig::rigctld(&address),
             None,
@@ -3485,14 +3566,13 @@ fn the_tick_that_learns_the_backends_modes_commands_the_word_it_can_express() {
         wsjtx: None,
         psk: None,
     };
-    let t = now_unix_ms() + 2_000.0;
     state
         .step(
             &engine,
             &mut backend,
             &mut rig,
             &sinks,
-            t,
+            now_unix_ms() + 2_000.0,
             &mut ra,
             &mut rr,
             &mut station,
@@ -3506,5 +3586,5 @@ fn the_tick_that_learns_the_backends_modes_commands_the_word_it_can_express() {
         .filter(|l| l.starts_with("M "))
         .cloned()
         .collect();
-    assert_eq!(modes, ["M USB -1"], "the opening tick's mode write");
+    assert_eq!(modes, ["M PKTUSB -1"], "the opening tick's mode write");
 }

@@ -1375,42 +1375,6 @@ pub(crate) fn daemon_dump(args: &[&str]) -> Option<String> {
     }
 }
 
-/// The modes Hamlib's backend for `model` can express, from the bundled daemon's own caps dump
-/// (`rigctld -m <model> -u`). Feeds [`tempo_app::rig_modes`], so Nexus never commands a mode word
-/// the backend does not list when it has another name for the same emission. `None` when the dump
-/// cannot be had or lists nothing, which callers take as "unknown": everything as before.
-///
-/// ⚠️ `None` FOR A CI-V BACKEND TOO (a model whose conf carries a CI-V address), because Hamlib's
-/// Icom backend does not go by its printed list: it takes `PKTUSB` as USB with the data flag where
-/// the radio has one (`data_mode_supported`, `icom.c`) and as plain USB where it does not
-/// (`frame.c`), so it never sends an invalid mode. The IC-9700's list prints no PKT mode at all;
-/// acting on it would take USB-D away from an IC-9700 and key FT8 with no RF.
-pub fn hamlib_mode_list(model: u32) -> Option<Vec<String>> {
-    if crate::baud_ladder::civ_addr_from_caps(model).is_some() {
-        return None;
-    }
-    let model = model.to_string();
-    daemon_dump(&["-m", model.as_str(), "-u"]).and_then(|d| parse_mode_list(&d))
-}
-
-/// The backend's whole mode list out of a `--dump-caps` dump: the UNINDENTED `Mode list:` line.
-/// The indented ones under each RX/TX range are per-range subsets and are not read. Hamlib prints
-/// `Mode list: None. This backend might be bogus!` for a backend with no modes (model 2, NET
-/// rigctl, whose modes are the remote daemon's), which is `None` here, not an empty list: an empty
-/// list would withhold every mode.
-pub fn parse_mode_list(dump: &str) -> Option<Vec<String>> {
-    let rest = dump
-        .lines()
-        .map(|l| l.trim_end_matches('\r'))
-        .find_map(|l| l.strip_prefix("Mode list:"))?;
-    let modes: Vec<String> = rest
-        .split_whitespace()
-        .take_while(|w| !w.starts_with("None"))
-        .map(str::to_ascii_uppercase)
-        .collect();
-    (!modes.is_empty()).then_some(modes)
-}
-
 /// The `rigctl` companion binary, resolved exactly like [`resolve_rigctld`]: bundled beside the
 /// app first (the Windows installer ships the whole Hamlib tool set together), then `PATH`.
 ///
@@ -1747,31 +1711,6 @@ pub fn spawn_rigctld(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The whole-backend `Mode list:` line, never the per-range subsets indented under it. The
-    /// SDR Console dump (Hamlib 4.6.5, `rigctld -m 2056 -u`) lists no PKT mode at all; the FT-710's
-    /// does. Model 2's "None. This backend might be bogus!" is unknown, not an empty list.
-    #[test]
-    fn the_mode_list_is_the_backends_own_unindented_line() {
-        let sdr = parse_mode_list(include_str!(
-            "../tests/fixtures/rigctld/caps_sdrconsole.log"
-        ));
-        assert_eq!(
-            sdr.as_deref(),
-            Some(&["AM", "CW", "USB", "LSB", "RTTY", "FM", "CWR", "RTTYR"].map(String::from)[..])
-        );
-        let ft710 = parse_mode_list(include_str!("../tests/fixtures/rigctld/caps_ft710.log"))
-            .expect("the FT-710 lists its modes");
-        assert!(ft710.iter().any(|m| m == "PKTUSB") && ft710.iter().any(|m| m == "FM-D"));
-        assert_eq!(
-            parse_mode_list(
-                "Model name:\tNET rigctl\nMode list: None. This backend might be bogus!\n"
-            ),
-            None
-        );
-        assert_eq!(parse_mode_list("Model name:\tX\n\t\tMode list: AM\n"), None);
-        assert_eq!(parse_mode_list(""), None);
-    }
 
     /// Write `body` as an executable shell script in a fresh temp dir and return its path.
     #[cfg(unix)]

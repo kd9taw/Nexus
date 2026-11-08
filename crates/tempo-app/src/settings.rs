@@ -2273,6 +2273,11 @@ pub struct Settings {
     /// (flat mirror — see [`RadioProfile::data_modes_plain_ssb`]). Default off.
     #[serde(default)]
     pub data_modes_plain_ssb: bool,
+    /// RUNTIME ONLY, never saved, never compared: the DATA words the active radio's CAT link has
+    /// shown it does not take, judged by the radio loop from what happened on the wire
+    /// ([`crate::rig_modes`]). Read by [`Self::plain_ssb_if_configured`].
+    #[serde(skip)]
+    pub link_refusals: crate::rig_modes::LinkRefusals,
     /// Hold the DATA submode (FM-D on FM, USB-D/LSB-D on HF) for as long as the SSTV receiver
     /// is running, for the active radio (flat mirror — see
     /// [`RadioProfile::sstv_hold_data_submode`]). Default off.
@@ -6772,6 +6777,7 @@ impl Default for Settings {
             native_scope: default_native_scope(),
             tx_audio_source: default_tx_audio_source(),
             data_modes_plain_ssb: false,
+            link_refusals: crate::rig_modes::LinkRefusals::default(),
             sstv_hold_data_submode: false,
             aprs_data_fm: false,
             pc_mic: false,
@@ -8880,16 +8886,8 @@ impl Settings {
                 // Nothing on the air changes either way: `CW` and `CWR` are the same emission
                 // on the same dial, which is why `lib.rs` classes both as `CatFamily::Cw` with
                 // no side, and the mode-apply helpers treat CWR exactly like CW.
-                //
-                // A backend whose own caps list no `CWR` gets plain `CW` for the same reason
-                // (`crate::rig_modes`): the same emission, in a word it can express.
                 CwKeyerBackend::Cat | CwKeyerBackend::WinKeyer | CwKeyerBackend::Serial => {
-                    if self.cw_reverse && !crate::rig_modes::lacks(self.rig_model, "CWR") {
-                        "CWR"
-                    } else {
-                        "CW"
-                    }
-                    .to_string()
+                    if self.cw_reverse { "CWR" } else { "CW" }.to_string()
                 }
                 // SOUNDCARD: a DATA submode, exactly like every other soundcard-audio path
                 // here (Digital, Keyboard, RTTY-AFSK, and SSTV's `PKTFM`) — and for their
@@ -8981,14 +8979,13 @@ impl Settings {
     /// normally-wired rig, plain SSB on a soundcard mode transmits NO RF. This exists for
     /// mic-jack interfaces, and it is off by default for everyone else.
     ///
-    /// ⭐ THE SECOND REASON, AND IT NEEDS NO SWITCH: the radio's own CAT backend lists no such
-    /// DATA submode in its capabilities ([`crate::rig_modes`]). There is then no DATA word the
-    /// radio can be sent at all: Hamlib's SDR Console backend (2056) turns `PKTUSB` into `MDD;`,
-    /// which SDR Console rejects at every key-down. The plain sideband is what such a radio is
-    /// worked in, and it is what the radio loop's refusal ladder ended on anyway, after sending
-    /// the bad word first. Unknown caps change nothing.
+    /// ⭐ THE SECOND REASON, AND IT NEEDS NO SWITCH: this radio's link has SHOWN it does not take
+    /// the DATA word ([`crate::rig_modes`]): it refused it, or Hamlib answered the set and the
+    /// radio still read back the plain sideband. Through Hamlib's SDR Console backend (2056) the
+    /// word goes out as `MDD;`, which SDR Console rejects at every key-down. Only the SSB words
+    /// are judged; nothing judged changes nothing.
     pub(crate) fn plain_ssb_if_configured(&self, m: &str) -> String {
-        if !self.data_modes_plain_ssb && !crate::rig_modes::lacks(self.rig_model, m) {
+        if !self.data_modes_plain_ssb && !self.link_refusals.refused(self.rig_model, m) {
             return m.to_string();
         }
         match m {
@@ -11591,104 +11588,54 @@ mod tests {
         assert_eq!(s.rig_mode(), "RTTY");
     }
 
-    /// A radio whose CAT backend lists no DATA submode is never commanded one (`rig_modes`).
-    /// Model 2056 (SDR Console) prints `AM CW USB LSB RTTY FM CWR RTTYR` and turns `PKTUSB`
-    /// into `MDD;`, which SDR Console rejects at every FT8 key-down. Every soundcard mode on a
-    /// sideband gets the plain sideband instead, as the operator's own switch would give it.
-    /// `PKTFM` is left as it was: a list's missing `PKTFM` proves nothing (`rig_modes`).
+    /// A radio whose link has shown it does not take the SSB DATA word (`rig_modes`) gets the
+    /// plain sideband for every sound-card mode, as the operator's own switch would give it,
+    /// and only for the word it refused. Nothing else moves: CW reverse, FSK RTTY and `PKTFM`
+    /// are commanded as before.
     #[test]
-    fn a_backend_with_no_data_mode_gets_the_plain_sideband_without_being_configured() {
-        const MODEL: u32 = 990_201; // the registry is process-wide: a model of this test's own
-        crate::rig_modes::record(
-            MODEL,
-            Some(
-                ["AM", "CW", "USB", "LSB", "RTTY", "FM", "CWR", "RTTYR"]
-                    .map(String::from)
-                    .to_vec(),
-            ),
-        );
+    fn a_link_that_refused_the_data_word_gets_the_plain_sideband_without_being_configured() {
+        const MODEL: u32 = 2056;
         let mut s = Settings::default();
         s.rig_model = MODEL;
+        s.link_refusals.refuse(MODEL, "PKTUSB");
         assert!(!s.data_modes_plain_ssb, "premise: the operator set nothing");
         s.operating_mode = OperatingMode::Digital;
         s.dial_mhz = 14.074;
         assert_eq!(s.rig_mode(), "USB", "FT8 on 20 m");
-        s.dial_mhz = 7.074;
-        assert_eq!(s.rig_mode(), "USB", "FT8 is USB on 40 m too");
         s.operating_mode = OperatingMode::Rtty;
-        assert_eq!(s.rig_mode(), "LSB", "RTTY AFSK keeps its side");
+        assert_eq!(s.rig_mode(), "PKTLSB", "PKTLSB was not refused: kept");
+        s.link_refusals.refuse(MODEL, "PKTLSB");
+        assert_eq!(s.rig_mode(), "LSB", "and once refused, the plain side");
         s.rtty_backend = "fsk".into();
-        assert_eq!(
-            s.rig_mode(),
-            "RTTY",
-            "the rig's own RTTY is listed, and kept"
-        );
+        assert_eq!(s.rig_mode(), "RTTY");
         s.operating_mode = OperatingMode::Cw;
-        s.cw_keyer = CwKeyerBackend::Soundcard;
-        assert_eq!(s.rig_mode(), "LSB", "soundcard CW below 10 MHz");
         s.cw_keyer = CwKeyerBackend::Cat;
         s.cw_reverse = true;
-        assert_eq!(s.rig_mode(), "CWR", "CW-reverse is listed, and kept");
+        assert_eq!(s.rig_mode(), "CWR", "CW reverse is never judged");
+        assert_eq!(s.plain_ssb_if_configured("PKTFM"), "PKTFM");
+        s.rig_model = 2014;
+        s.operating_mode = OperatingMode::Digital;
         assert_eq!(
-            s.plain_ssb_if_configured("PKTFM"),
-            "PKTFM",
-            "SSTV on FM: as before"
+            s.rig_mode(),
+            "PKTUSB",
+            "another model never sees the judgement"
         );
-    }
-
-    /// The same model with its PKT modes listed keeps them: the rule reads the list, it does
-    /// not single out a radio. And a model whose list was never read behaves as before.
-    #[test]
-    fn a_backend_that_lists_its_data_modes_keeps_them_and_unknown_is_unchanged() {
-        const LISTED: u32 = 990_202;
-        const UNKNOWN: u32 = 990_203;
-        crate::rig_modes::record(
-            LISTED,
-            Some(
-                ["AM", "CW", "USB", "LSB", "FM", "PKTLSB", "PKTUSB", "PKTFM"]
-                    .map(String::from)
-                    .to_vec(),
-            ),
-        );
-        for model in [LISTED, UNKNOWN] {
-            let mut s = Settings::default();
-            s.rig_model = model;
-            s.operating_mode = OperatingMode::Digital;
-            s.dial_mhz = 14.074;
-            assert_eq!(s.rig_mode(), "PKTUSB", "model {model}");
-            assert_eq!(s.plain_ssb_if_configured("PKTFM"), "PKTFM", "model {model}");
-            // The operator's explicit switch still wins on either.
-            s.data_modes_plain_ssb = true;
-            assert_eq!(s.rig_mode(), "USB", "model {model}, plain SSB switched on");
-        }
-    }
-
-    /// CW-reverse on a backend with no `CWR` is plain CW, the same emission, instead of a word
-    /// the backend refuses or garbles. (Four catalog SDR models list no CWR.)
-    #[test]
-    fn cw_reverse_on_a_backend_without_it_is_plain_cw() {
-        const MODEL: u32 = 990_204;
-        crate::rig_modes::record(
-            MODEL,
-            Some(
-                ["AM", "CW", "USB", "LSB", "FM", "PKTLSB", "PKTUSB"]
-                    .map(String::from)
-                    .to_vec(),
-            ),
-        );
-        let mut s = Settings::default();
         s.rig_model = MODEL;
-        s.operating_mode = OperatingMode::Cw;
-        s.cw_keyer = CwKeyerBackend::Cat;
-        s.cw_reverse = true;
-        assert_eq!(s.rig_mode(), "CW");
-        s.cw_keyer = CwKeyerBackend::Soundcard;
-        s.dial_mhz = 7.030;
-        assert_eq!(
-            s.rig_mode(),
-            "PKTLSB",
-            "its DATA submode is listed, and kept"
-        );
+        s.link_refusals.forget();
+        assert_eq!(s.rig_mode(), "PKTUSB", "a new connection is judged afresh");
+    }
+
+    /// CONTROL: a radio whose link refused nothing keeps its DATA word, and the operator's
+    /// explicit switch still gives the plain sideband on it.
+    #[test]
+    fn a_link_that_refused_nothing_keeps_the_data_word_and_the_switch_still_wins() {
+        let mut s = Settings::default();
+        s.rig_model = 2056;
+        s.operating_mode = OperatingMode::Digital;
+        s.dial_mhz = 14.074;
+        assert_eq!(s.rig_mode(), "PKTUSB");
+        s.data_modes_plain_ssb = true;
+        assert_eq!(s.rig_mode(), "USB");
     }
 
     /// The AFSK sideband setting. LSB, the default, is unchanged; USB commands the DATA submode

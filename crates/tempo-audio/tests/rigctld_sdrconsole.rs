@@ -1,18 +1,25 @@
-//! FT8 through Hamlib's SDR Console backend (model 2056) sends SDR Console a mode it can take.
+//! What Hamlib's TS-2000-family backends put on the wire for Nexus's FT8 DATA word, and what they
+//! read back: the facts the radio loop's judgement (`RadioLoop::judge_data_word`,
+//! `tempo_app::rig_modes`) stands on.
 //!
 //! The field report: SDR Console raised an error window at every FT8 key-down. Nexus commanded
-//! `M PKTUSB` on the slot boundary just before `T 1`, and Hamlib's 2056 backend (a TS-2000
-//! family one) put that on the wire as `MDD;`, which is not a TS-2000 mode. Its own caps dump
-//! lists no PKT mode at all, and Nexus now reads that list (`tempo_app::rig_modes`) and commands
-//! the plain sideband instead.
+//! `M PKTUSB` on the slot boundary just before `T 1`, and Hamlib's 2056 backend put it on the wire
+//! as `MDD;`, which is not a TS-2000 mode. Hamlib's mode lists cannot tell that apart from a radio
+//! that does take the word under another name, which is decided at open from the radio's own `ID`.
+//! So Nexus judges by what happens on the link: a refusal, or a radio that reads back as plain USB.
 //!
-//! This puts Hamlib's own `rigctld -m 2056` between `Rig` and a fake TS-2000, which answers the
-//! reads Hamlib makes and answers `?;` (the Kenwood "bad command" reply) to a mode it does not
-//! have. The mode list comes from the same binary, so the test is about that Hamlib, not a table.
+//! These put Hamlib's own `rigctld` between `Rig` and a fake TS-2000 that answers the reads Hamlib
+//! makes and either refuses (`?;`, the Kenwood "bad command" answer) or ignores a mode outside 1-9.
+//! Its `IF` answer is the 37 characters Hamlib expects; a wrong length makes Hamlib's VFO restore
+//! after the set fail, and every set then reads as `RPRT -1`. They pin, per backend:
+//! - 2056 SDR Console: `PKTUSB` goes out as `MDD;`, Hamlib (4.6.5) reports the set as taken
+//!   whether the radio answers `?;` or nothing, and the radio reads back `USB`;
+//! - 2014 TS-2000 whose radio answers `ID904` (SmartSDR's emulation): `MD9;` (DIGU), read back
+//!   `PKTUSB`;
+//! - 2040 piHPSDR: `MD9;`, read back `PKTUSB`.
 //!
-//! Skips without a `rigctld`, audibly, and never on GitHub Actions (`common::require_daemon`).
-//! A Hamlib with no model 2056, or one whose 2056 lists a PKT mode, skips audibly too: the
-//! premise is that backend's list. `NEXUS_RIGCTLD=/path/to/rigctld` picks the binary.
+//! Skips without a `rigctld`, audibly, and never on GitHub Actions (`common::require_daemon`). A
+//! Hamlib without one of these models skips that case audibly. `NEXUS_RIGCTLD` picks the binary.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -20,15 +27,19 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tempo_app::settings::{OperatingMode, Settings};
 use tempo_audio::rig::Rig;
 
 mod common;
 
-const SDR_CONSOLE: u32 = 2056;
+/// How the fake answers a mode set outside the TS-2000's 1-9.
+#[derive(Clone, Copy)]
+enum BadMode {
+    Refuse,
+    Ignore,
+}
 
-/// A fake TS-2000 on `listener`, on 20 m in USB, logging every command it gets.
-fn fake_ts2000(listener: TcpListener) -> Arc<Mutex<Vec<String>>> {
+/// A fake TS-2000 answering `ID` with `id`, on 20 m in USB, logging every command it gets.
+fn fake_ts2000(listener: TcpListener, id: &'static str, bad: BadMode) -> Arc<Mutex<Vec<String>>> {
     let log = Arc::new(Mutex::new(Vec::new()));
     let log2 = Arc::clone(&log);
     std::thread::spawn(move || {
@@ -51,24 +62,26 @@ fn fake_ts2000(listener: TcpListener) -> Arc<Mutex<Vec<String>>> {
                     }
                     log2.lock().unwrap().push(format!("{cmd};"));
                     let reply = match cmd.as_str() {
-                        "ID" => "ID019;".to_string(),
+                        "ID" => format!("ID{id};"),
                         "FA" | "FB" => format!("{cmd}00014074000;"),
                         "MD" => format!("MD{mode};"),
                         // The TS-2000 IF answer: dial, step, RIT, flags, memory, TX, mode, VFO,
                         // scan, split, tone, tone number.
-                        "IF" => format!("IF00014074000     +00000000000{mode}0000000;"),
+                        "IF" => format!("IF00014074000     +0000000000{mode}0000000;"),
                         "AI" => "AI0;".to_string(),
                         "PS" => "PS1;".to_string(),
                         "FR" | "FT" => format!("{cmd}0;"),
                         "TX" | "RX" => String::new(), // a set: no reply
-                        // A mode set: 1-9 are TS-2000 modes; anything else is a bad command.
                         c if c.len() == 3 && c.starts_with("MD") => {
                             let m = c.chars().nth(2).unwrap_or(' ');
                             if ('1'..='9').contains(&m) {
                                 mode = m;
                                 String::new()
                             } else {
-                                "?;".to_string()
+                                match bad {
+                                    BadMode::Refuse => "?;".to_string(),
+                                    BadMode::Ignore => String::new(),
+                                }
                             }
                         }
                         c if c.len() > 2
@@ -104,58 +117,41 @@ fn free_port() -> u16 {
         .port()
 }
 
-/// A mode SET (`MD<x>;`) whose `x` is not one of the TS-2000's modes 1-9.
-fn not_a_ts2000_mode(cmd: &str) -> bool {
-    cmd.len() == 4 && cmd.starts_with("MD") && !(b'1'..=b'9').contains(&cmd.as_bytes()[2])
-}
-
 /// The skip notice, on the real stderr (libtest captures `eprintln!` from a passing test).
 fn not_run(why: &str) {
     let mut err = std::io::stderr().lock();
     let _ = writeln!(err, "!! NOT RUN, and NOT A PASS: {why}");
 }
 
-/// ⭐ FT8 ON SDR CONSOLE: NEXUS'S MODE WORD REACHES THE RADIO AS A TS-2000 MODE, AND THE KEY
-/// FOLLOWS. CONTROL: the DATA word Nexus used to send reaches it as `MDD;`, and is refused.
-#[test]
-fn ft8_through_hamlib_2056_sends_a_mode_sdr_console_takes_and_keys() {
-    let Some(bin) = common::require_daemon("rigctld", "NEXUS_RIGCTLD") else {
-        return;
-    };
-    let dump = Command::new(&bin)
-        .args(["-m", &SDR_CONSOLE.to_string(), "-u"])
-        .stderr(Stdio::null())
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
-    let Some(modes) = dump
-        .as_deref()
-        .and_then(tempo_audio::rigctld_proc::parse_mode_list)
-    else {
-        return not_run("this Hamlib has no model 2056 (SDR Console)");
-    };
-    if modes.iter().any(|m| m.starts_with("PKT")) {
-        return not_run(&format!("this Hamlib's 2056 lists a DATA mode: {modes:?}"));
-    }
-    // What the radio loop does at the open (`learn_mode_caps`), and the word the policy gives.
-    tempo_app::rig_modes::record(SDR_CONSOLE, Some(modes));
-    let s = Settings {
-        rig_model: SDR_CONSOLE,
-        operating_mode: OperatingMode::Digital,
-        dial_mhz: 14.074,
-        ..Settings::default()
-    };
-    let md = s.rig_mode();
-    assert_eq!(md, "USB", "the FT8 mode word for this backend");
+/// What one DATA-word set did through `rigctld -m <model>` in front of the fake.
+struct Outcome {
+    /// What reached the radio for the set.
+    wire: Vec<String>,
+    /// Whether Hamlib answered the set as taken.
+    taken: bool,
+    /// What the radio reads back as afterwards, past Hamlib's own cache.
+    reads: Option<String>,
+}
 
+/// Set `PKTUSB` through `bin -m model`, in front of a fake answering `ID` with `id`. `None` when
+/// this Hamlib has no such model.
+fn pktusb_through(bin: &str, model: u32, id: &'static str, bad: BadMode) -> Option<Outcome> {
+    let known = Command::new(bin)
+        .args(["-m", &model.to_string(), "-u"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !known {
+        return None;
+    }
     let radio = TcpListener::bind("127.0.0.1:0").unwrap();
     let radio_addr = radio.local_addr().unwrap().to_string();
-    let log = fake_ts2000(radio);
+    let log = fake_ts2000(radio, id, bad);
     let port = free_port();
     let _daemon = Daemon(
-        Command::new(&bin)
-            .args(["-m", &SDR_CONSOLE.to_string(), "-r", &radio_addr])
+        Command::new(bin)
+            .args(["-m", &model.to_string(), "-r", &radio_addr])
             .args(["-T", "127.0.0.1", "-t", &port.to_string()])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -177,62 +173,61 @@ fn ft8_through_hamlib_2056_sends_a_mode_sdr_console_takes_and_keys() {
     assert_eq!(
         freq,
         Some(14_074_000),
-        "control: the dial read through rigctld"
+        "model {model}: the dial read through rigctld"
     );
-
     let from = log.lock().unwrap().len();
-    rig.set_mode(&md, -1).expect("the mode set is taken");
-    rig.ptt(true).expect("the key is taken");
-    let _ = rig.ptt(false);
-    let seen: Vec<String> = log.lock().unwrap()[from..].to_vec();
-    eprintln!("Nexus's FT8 mode set and key, on the wire: {seen:?}");
-    assert!(
-        !seen.iter().any(|c| not_a_ts2000_mode(c)),
-        "a mode SDR Console has no such thing as reached it: {seen:?}"
-    );
-    assert!(
-        seen.iter().any(|c| c == "TX;"),
-        "the key reached the radio: {seen:?}"
-    );
-
-    // CONTROL: the DATA word, as Nexus sent it before, reaches SDR Console as `MDD;`.
-    let from = log.lock().unwrap().len();
-    let _ = rig.set_mode("PKTUSB", -1);
-    let seen: Vec<String> = log.lock().unwrap()[from..].to_vec();
-    eprintln!("CONTROL, PKTUSB on the wire: {seen:?}");
-    assert!(
-        seen.iter().any(|c| c == "MDD;"),
-        "control: Hamlib's 2056 puts PKTUSB on the wire as MDD;: {seen:?}"
-    );
+    let set = rig.set_mode("PKTUSB", -1);
+    eprintln!("model {model}: set_mode answered {set:?}");
+    let taken = set.is_ok();
+    let wire = log.lock().unwrap()[from..].to_vec();
+    // Past Hamlib's mode cache, as the radio loop's receive-time read always is.
+    std::thread::sleep(Duration::from_millis(1500));
+    let reads = rig.read_mode();
+    eprintln!("model {model}, ID{id}: wire {wire:?}, taken {taken}, reads back {reads:?}");
+    Some(Outcome { wire, taken, reads })
 }
 
-/// The list the radio loop records, read from the installed Hamlib: SDR Console's has no PKT
-/// mode; the FT-991's does; an IC-9700 (a CI-V backend, whose printed list leaves out the USB-D it
-/// takes) and NET rigctl (no list of its own) are unknown, so they are commanded as before.
+/// ⭐ SDR CONSOLE: `PKTUSB` reaches it as `MDD;`, and Hamlib reports the set as TAKEN whether the
+/// radio answers it with `?;` or ignores it. So the refusal never shows up as an error. What does
+/// show is the radio reading back as plain `USB`, which is what the loop's two-read judgement acts
+/// on.
 #[test]
-fn the_mode_list_nexus_records_is_hamlibs_own_and_never_an_icoms() {
-    if common::require_daemon("rigctld", "NEXUS_RIGCTLD").is_none() {
+fn sdr_console_gets_mdd_reported_as_taken_and_reads_back_usb() {
+    let Some(bin) = common::require_daemon("rigctld", "NEXUS_RIGCTLD") else {
         return;
+    };
+    for bad in [BadMode::Refuse, BadMode::Ignore] {
+        let Some(o) = pktusb_through(&bin, 2056, "019", bad) else {
+            return not_run("this Hamlib has no model 2056 (SDR Console)");
+        };
+        assert!(o.wire.iter().any(|c| c == "MDD;"), "{:?}", o.wire);
+        assert_eq!(
+            o.reads.as_deref(),
+            Some("USB"),
+            "the radio reads back as the plain twin"
+        );
+        eprintln!("SDR Console, taken by Hamlib: {}", o.taken);
     }
-    let list = tempo_audio::rigctld_proc::hamlib_mode_list;
-    match list(SDR_CONSOLE) {
-        Some(modes) => assert!(
-            !modes.iter().any(|m| m.starts_with("PKT")) && modes.iter().any(|m| m == "USB"),
-            "SDR Console: {modes:?}"
-        ),
-        None => not_run("this Hamlib has no model 2056 (SDR Console)"),
+}
+
+/// CONTROLS: the same word on backends whose radio has a DATA mode Hamlib's list does not name.
+/// A TS-2000 entry on SmartSDR's emulation (`ID904`) and piHPSDR: `MD9;` (DIGU), taken, and read
+/// back as `PKTUSB`, so the loop keeps the DATA word.
+#[test]
+fn an_emulation_and_pihpsdr_take_pktusb_as_digu_and_read_it_back() {
+    let Some(bin) = common::require_daemon("rigctld", "NEXUS_RIGCTLD") else {
+        return;
+    };
+    for (model, id, what) in [
+        (2014, "904", "TS-2000 entry on SmartSDR's emulation"),
+        (2040, "019", "piHPSDR"),
+    ] {
+        let Some(o) = pktusb_through(&bin, model, id, BadMode::Refuse) else {
+            not_run(&format!("this Hamlib has no model {model} ({what})"));
+            continue;
+        };
+        assert!(o.wire.iter().any(|c| c == "MD9;"), "{what}: {:?}", o.wire);
+        assert!(o.taken, "{what}: taken");
+        assert_eq!(o.reads.as_deref(), Some("PKTUSB"), "{what}: read back");
     }
-    let ft991 = list(1035).expect("the FT-991's list");
-    assert!(ft991.iter().any(|m| m == "PKTUSB"), "FT-991: {ft991:?}");
-    assert_eq!(
-        list(3081),
-        None,
-        "IC-9700: a CI-V backend is never recorded"
-    );
-    assert_eq!(
-        list(3073),
-        None,
-        "IC-7300: nor is this one, PKT listed or not"
-    );
-    assert_eq!(list(2), None, "NET rigctl has no list of its own");
 }

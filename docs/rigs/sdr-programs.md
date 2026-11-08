@@ -175,11 +175,13 @@ own CAT settings (Network for a TCP server, Serial for a virtual COM pair),
 and send the audio through two cables. Their menus have not been checked here,
 so this page does not name them.
 
-For FT8 and the other sound card modes, Nexus sets SDR Console and piHPSDR to
-plain **USB** (LSB where the mode sits on the lower side). Their Hamlib
-entries have no data mode, so Nexus does not ask for one, and you do not need
-to turn on **Data modes use plain SSB**. Thetis and PowerSDR do have one
-(**DIGU**), and Nexus uses it.
+For FT8 and the other sound card modes, Nexus asks for the radio's data mode.
+SDR Console has none: it stays in USB. Nexus sees that while you receive, and
+from then on uses plain **USB** (LSB where the mode sits on the lower side) on
+that connection, so you do not need to turn on **Data modes use plain SSB**.
+Thetis, PowerSDR and piHPSDR take the data mode as **DIGU**, and Nexus keeps
+it. If you run rigctld for SDR Console yourself and point Nexus at it as
+**NET rigctl**, the same check applies.
 
 For a program that is not in the list, tick **Show all models** for the full
 Hamlib catalog or type its model number. Or run rigctld yourself and point

@@ -1,193 +1,142 @@
-//! The modes a radio model's CAT backend can express, as that backend itself says.
+//! The SSB DATA submodes a radio's CAT link has shown it does not take, judged by what happened on
+//! the wire, for the connection in use.
 //!
 //! # Why
 //!
-//! Nexus commands a DATA submode for every soundcard mode (`PKTUSB`/`PKTLSB`, `PKTFM` for an
-//! SSTV picture on FM), and it used to send that word to every radio. Not every Hamlib backend
-//! has one. Model 2056 (SDR Console, a TS-2000-family backend) lists
-//! `AM CW USB LSB RTTY FM CWR RTTYR` and no PKT mode, and it does not refuse `M PKTUSB`: it
-//! puts `MDD;` on the wire, which is not a TS-2000 mode. SDR Console raised an error window at
-//! every FT8 key-down, because the mode set goes out on the slot boundary just before `TX;`.
+//! Nexus commands a DATA submode (`PKTUSB`/`PKTLSB`) for every sound-card mode, and sends it to
+//! every radio. Through Hamlib's SDR Console backend (2056, a TS-2000-family one) that word goes
+//! out as `MDD;`, which is not a TS-2000 mode: SDR Console raised an error window at every FT8
+//! key-down, because the mode set goes out on the slot boundary just before `TX;`. Hamlib reports
+//! that set as taken, and SDR Console stays in USB.
 //!
-//! So the rule is the backend's own word, never a table: a mode the backend does not list is
-//! not commanded when the same emission has another name the backend does list. The SSB DATA
-//! submodes become the plain sideband, exactly as the operator's "Data modes use plain SSB"
-//! switch makes them (`Settings::plain_ssb_if_configured`), and CW-reverse becomes CW
-//! (the same emission; only the receiver's side differs). Modes with no such twin (AM, FM,
-//! the rig's own RTTY) are still commanded and left to the radio loop's refusal ladder, which
-//! tells the operator what to do.
+//! # Judged by the wire, not by a table or a caps list
 //!
-//! # What the list can be trusted for, and what it cannot
+//! Hamlib's printed mode list cannot decide this. It under-reports, and the real answer is often
+//! settled only at open, from the radio's own identity: a TS-2000-family backend whose radio
+//! answers `ID900`/`ID904`–`ID909` (PowerSDR, DDUtil, SmartSDR emulations) takes `PKTUSB` as
+//! DIGU, and so do piHPSDR and the QCX/QDX; Icom takes it as USB-D where the radio has a data
+//! flag; the FT-1000MP takes `PKTLSB` as DATA-LSB. None of those lists name a PKT mode.
 //!
-//! Hamlib's printed `Mode list` is the union of the backend's declared receive ranges
-//! (`dumpcaps.c`, `rs->mode_list`), and `rig_set_mode` never checks a mode against it: each
-//! backend's own `set_mode` decides. So the list is a declaration, and it UNDER-reports in places.
-//! Read against the Hamlib 4.7.1 source:
+//! So the radio loop (`tempo-audio`, `RadioLoop::judge_data_word`) judges the DATA word it
+//! ALREADY sends, while receiving, and records a word here only when the link has shown it does
+//! not take it: the loop's mode ladder gave up on it after an explicit refusal, or Hamlib answered
+//! the set and the radio then read back as the plain twin (`USB` for `PKTUSB`) on two receive-time
+//! reads in a row. A recorded word becomes its plain sideband (`Settings::plain_ssb_if_configured`,
+//! the same path as the operator's "Data modes use plain SSB" switch). Nothing is sent for the
+//! judgement itself, and nothing is sent sooner or later: only which word goes out next changes.
 //!
-//! - **Icom (every CI-V backend).** `icom_set_mode` turns `PKTUSB` into USB with the data flag on
-//!   whenever the backend's private caps set `data_mode_supported` (`icom.c`; the IC-9700 and
-//!   IC-756PRO II/III among them), and into plain USB otherwise (`frame.c` `rig2icom_mode`). The
-//!   IC-9700's list prints no PKT mode at all, and FT8 through it works in USB-D. An Icom
-//!   backend therefore never puts an invalid mode on the wire, and is never recorded here
-//!   (`tempo-audio` leaves it unknown).
-//! - **`PKTFM`.** Yaesu's newcat maps it to `A` (DATA-FM) for every newcat radio while the
-//!   FT-891's list omits it, and the TS-990S's own Kenwood mode table carries it (`E`) while its
-//!   list omits it. So a missing `PKTFM` (Hamlib prints it `FM-D`) is not evidence of anything,
-//!   and is not acted on.
-//! - **`PKTUSB`, `PKTLSB` and `CWR`** on every other backend: an unlisted one was refused or
-//!   garbled on each backend checked (the Kenwood table sends `PKTUSB` as `D`, giving SDR
-//!   Console's `MDD;`). And landing on the plain twin costs nothing a working radio had: it is
-//!   what the refusal ladder already ended on, after sending the bad word first.
+//! # Runtime only, per connection
 //!
-//! # Who fills it
-//!
-//! `tempo-audio`, when it launches Hamlib's `rigctld` for a model: from that same binary's
-//! `-u` (dump caps) output, read once per model. A model served by anything else (Nexus's own
-//! CI-V, Flex, TCI or Icom network client, OmniRig) is removed, because Hamlib's list is not
-//! what that daemon speaks.
-//!
-//! # Unknown answers "not lacking"
-//!
-//! A model with no entry (caps not read, the dump failed, an Icom, a NET rigctl attach whose
-//! remote model Nexus never saw) lacks nothing, so everything is commanded as before. Only a list
-//! Hamlib actually printed can withhold a mode.
+//! It lives in the engine's own `Settings` (`Settings::link_refusals`), so every copy of the
+//! settings agrees about one link, and it is never saved, never compared, and never sent to the UI.
+//! It names the model it was judged on, so a model change or another radio's settings never see it,
+//! and the loop forgets it at every reconnect and radio handoff, so each connection is judged
+//! afresh. Losing it (settings replaced from somewhere that does not carry it over) only means the
+//! link is judged again. Nothing recorded means everything is commanded as before.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
-
-/// Model number → the backend's mode words, upper case, as Hamlib prints them.
-fn known() -> MutexGuard<'static, HashMap<u32, Vec<String>>> {
-    static KNOWN: OnceLock<Mutex<HashMap<u32, Vec<String>>>> = OnceLock::new();
-    KNOWN
-        .get_or_init(Mutex::default)
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+/// The one spelling of an SSB DATA submode, or `None` for any other mode: only these two are ever
+/// judged (`PKTFM` and the rest are commanded as before).
+fn data_word(mode: &str) -> Option<&'static str> {
+    match mode.trim().to_ascii_uppercase().as_str() {
+        "PKTUSB" | "USB-D" | "DATA-U" | "PKT-U" => Some("PKTUSB"),
+        "PKTLSB" | "LSB-D" | "DATA-L" | "PKT-L" => Some("PKTLSB"),
+        _ => None,
+    }
 }
 
-/// Bumped on every change, so a caller that computed a mode word before a change can tell that
-/// it has to compute it again ([`generation`]).
-static GENERATION: AtomicU64 = AtomicU64::new(0);
+/// The plain sideband a DATA word's radio reads back as when it did not take it.
+pub fn plain_twin(mode: &str) -> Option<&'static str> {
+    match data_word(mode)? {
+        "PKTUSB" => Some("USB"),
+        _ => Some("LSB"),
+    }
+}
 
-/// One mode under one name, whichever spelling it arrived in.
+/// The DATA words one radio model's current link has shown it does not take.
 ///
-/// ⚠️ HAMLIB PRINTS SOME MODES UNDER A DIFFERENT NAME FROM THE ONE NEXUS SENDS. 4.6.5 parses
-/// `PKTFM` and prints it `FM-D` (and `PKTAM` as `AM-D`), in the caps dump and in `m` alike, so
-/// the FT-710's list reads `… PKTLSB PKTUSB FM-D …`. Compared as bare strings, that radio would
-/// "lack" `PKTFM` and lose FM-D for an SSTV picture. The other spellings are the ones Nexus
-/// already reads back from radios (`civ::commands`, `fallback_sideband` in tempo-audio).
-fn canonical(mode: &str) -> String {
-    let m = mode.trim().to_ascii_uppercase();
-    match m.as_str() {
-        "FM-D" | "PKT-FM" => "PKTFM",
-        "AM-D" | "PKT-AM" => "PKTAM",
-        "USB-D" | "DATA-U" | "PKT-U" => "PKTUSB",
-        "LSB-D" | "DATA-L" | "PKT-L" => "PKTLSB",
-        "CW-R" => "CWR",
-        "RTTY-R" => "RTTYR",
-        _ => return m,
-    }
-    .to_string()
+/// ⚠️ `PartialEq` IS ALWAYS EQUAL, ON PURPOSE. This is not configuration: two `Settings` that
+/// differ only here are the same settings, so a judgement can never mark them changed, dirty, or
+/// in need of a rebuild.
+#[derive(Debug, Clone, Default)]
+pub struct LinkRefusals {
+    model: u32,
+    words: Vec<&'static str>,
 }
 
-/// Record what the backend serving `model` can express: `Some(list)` from its own caps, or
-/// `None` to forget it (served by something else now, or unreadable).
-pub fn record(model: u32, modes: Option<Vec<String>>) {
-    let mut k = known();
-    let changed = match modes {
-        Some(list) => {
-            let list: Vec<String> = list.iter().map(|m| canonical(m)).collect();
-            k.insert(model, list.clone()) != Some(list)
+impl PartialEq for LinkRefusals {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl LinkRefusals {
+    /// Record that `model`'s link does not take the DATA word `mode`. `true` when that is news.
+    /// Ignored for any other mode. A different model starts a new record.
+    pub fn refuse(&mut self, model: u32, mode: &str) -> bool {
+        let Some(word) = data_word(mode) else {
+            return false;
+        };
+        if self.model != model {
+            *self = Self {
+                model,
+                words: Vec::new(),
+            };
         }
-        None => k.remove(&model).is_some(),
-    };
-    if changed {
-        GENERATION.fetch_add(1, Ordering::Relaxed);
+        if self.words.contains(&word) {
+            return false;
+        }
+        self.words.push(word);
+        true
     }
-}
 
-/// Is there a list for `model`?
-pub fn is_known(model: u32) -> bool {
-    known().contains_key(&model)
-}
+    /// Forget everything: a new connection is judged afresh. `true` when anything was recorded.
+    pub fn forget(&mut self) -> bool {
+        let had = !self.words.is_empty();
+        *self = Self::default();
+        had
+    }
 
-/// The modes whose ABSENCE from a list is acted on (see the module header for why `PKTFM` is not
-/// among them).
-const ABSENCE_TRUSTED: [&str; 3] = ["PKTUSB", "PKTLSB", "CWR"];
-
-/// Does `model`'s backend lack `mode`, so that Nexus should command its plain twin instead?
-/// `false` when the model's list is unknown, and for any mode outside [`ABSENCE_TRUSTED`].
-pub fn lacks(model: u32, mode: &str) -> bool {
-    let mode = canonical(mode);
-    ABSENCE_TRUSTED.contains(&mode.as_str())
-        && known()
-            .get(&model)
-            .is_some_and(|list| !list.contains(&mode))
-}
-
-/// A counter that moves whenever any model's list changes.
-pub fn generation() -> u64 {
-    GENERATION.load(Ordering::Relaxed)
+    /// Has `model`'s link shown it does not take `mode`? `false` for anything not recorded.
+    pub fn refused(&self, model: u32, mode: &str) -> bool {
+        self.model == model && data_word(mode).is_some_and(|word| self.words.contains(&word))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Model numbers no real radio has: the registry is process-wide, and tests run in parallel.
-    const A: u32 = 990_101;
-    const B: u32 = 990_102;
-
     #[test]
-    fn an_unknown_model_lacks_nothing() {
-        assert!(!is_known(A));
-        assert!(!lacks(A, "PKTUSB"));
-        assert!(!lacks(A, "CWR"));
+    fn nothing_recorded_refuses_nothing() {
+        let r = LinkRefusals::default();
+        assert!(!r.refused(2056, "PKTUSB"));
+        assert!(!r.refused(0, "PKTLSB"));
     }
 
     #[test]
-    fn a_known_model_lacks_only_what_its_list_leaves_out() {
-        record(B, Some(vec!["usb".into(), "LSB".into(), "CW".into()]));
-        assert!(is_known(B));
-        assert!(lacks(B, "PKTUSB"));
-        assert!(lacks(B, " cwr "));
-        assert!(!lacks(B, "USB"));
-        assert!(!lacks(B, "cw"));
-        let before = generation();
-        record(B, Some(vec!["USB".into(), "LSB".into(), "CW".into()]));
-        assert_eq!(generation(), before, "the same list again is no change");
-        record(B, None);
-        assert!(generation() > before, "forgetting it is");
-        assert!(!lacks(B, "PKTUSB"), "forgotten is unknown again");
-    }
-
-    /// Hamlib 4.6.5's FT-710 list, verbatim: `PKTFM` is printed `FM-D`, and is there.
-    #[test]
-    fn a_mode_hamlib_prints_under_another_name_is_not_lacking() {
-        const FT710: u32 = 990_103;
-        let list = "AM CW USB LSB RTTY FM CWR RTTYR PKTLSB PKTUSB FM-D FMN AMN PKTFMN";
-        record(FT710, Some(list.split(' ').map(String::from).collect()));
-        assert!(!lacks(FT710, "PKTFM"));
-        assert!(!lacks(FT710, "FM-D"));
-        assert!(!lacks(FT710, "PKTUSB"));
-        assert!(!lacks(FT710, "CW-R"));
-    }
-
-    /// A missing `PKTFM` is not acted on: Hamlib's lists under-report it (the FT-891's omits
-    /// what newcat sends as DATA-FM). Nor is anything outside the three trusted words.
-    #[test]
-    fn only_the_ssb_data_submodes_and_cw_reverse_are_withheld() {
-        const SDR: u32 = 990_104;
-        let list = "AM CW USB LSB RTTY FM";
-        record(SDR, Some(list.split(' ').map(String::from).collect()));
-        assert!(lacks(SDR, "PKTUSB") && lacks(SDR, "USB-D") && lacks(SDR, "PKTLSB"));
-        assert!(lacks(SDR, "CWR"));
-        assert!(!lacks(SDR, "PKTFM"), "PKTFM's absence proves nothing");
-        assert!(!lacks(SDR, "FM-D"));
+    fn a_refused_word_is_that_word_on_that_model_only_until_forgotten() {
+        let mut r = LinkRefusals::default();
+        assert!(r.refuse(2056, "PKTUSB"));
+        assert!(r.refused(2056, "PKTUSB") && r.refused(2056, "USB-D"));
+        assert!(!r.refused(2056, "PKTLSB"), "each word is judged on its own");
+        assert!(!r.refused(2014, "PKTUSB"), "another model never sees it");
+        assert!(!r.refuse(2056, "pktusb"), "the same word again is no news");
+        assert!(!r.refuse(2056, "PKTFM") && !r.refuse(2056, "CWR"));
+        assert!(!r.refused(2056, "PKTFM") && !r.refused(2056, "CWR"));
+        assert!(r.forget());
         assert!(
-            !lacks(SDR, "RTTYR"),
-            "no twin of the same emission: left to the radio"
+            !r.refused(2056, "PKTUSB"),
+            "a new connection starts unjudged"
         );
-        assert!(!lacks(SDR, "WFM"));
+        assert!(!r.forget(), "nothing left to forget");
+        assert_eq!(LinkRefusals::default(), r, "never configuration");
+    }
+
+    #[test]
+    fn the_plain_twin_is_the_sideband_underneath() {
+        assert_eq!(plain_twin("PKTUSB"), Some("USB"));
+        assert_eq!(plain_twin("pktlsb"), Some("LSB"));
+        assert_eq!(plain_twin("PKTFM"), None);
+        assert_eq!(plain_twin("USB"), None);
     }
 }

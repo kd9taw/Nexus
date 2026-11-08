@@ -8402,7 +8402,11 @@ impl Engine {
         // `RttyStream::key_cfg` carries the centre), and the privilege gate judges the new pair
         // (`rtty_tx_mark_hz`) on its next per-tick check.
         let rtty_home_moved = s.rtty_low_tone() != self.settings.rtty_low_tone();
+        // Runtime only: what the radio's link has shown about the DATA word is not a setting
+        // (`crate::rig_modes`), and a save must not make the link be judged again.
+        let link_refusals = std::mem::take(&mut self.settings.link_refusals);
         self.settings = s;
+        self.settings.link_refusals = link_refusals;
         if rtty_home_moved {
             self.rtty_center = None;
             self.request_rtty_afc_reset();
@@ -9726,7 +9730,9 @@ impl Engine {
         // Port collision repair can also change the active profile when editing another.
         self.remote_actuation.revoke();
         self.remote_readings.invalidate();
+        let link_refusals = std::mem::take(&mut self.settings.link_refusals);
         self.settings = edited;
+        self.settings.link_refusals = link_refusals;
         // Mirror the ACTIVE profile back into the flat fields — a no-op for the flat mirror when
         // id != active.
         self.settings.sync_flat_from_active();
@@ -12267,6 +12273,19 @@ impl Engine {
             .is_some_and(|m| m.eq_ignore_ascii_case("fm"));
         let policy_fm = self.settings.phone_mode.eq_ignore_ascii_case("fm") && dial_mhz >= 29.0;
         override_fm || policy_fm
+    }
+
+    /// The radio loop's judgement that this radio's CAT link does not take the SSB DATA word
+    /// `mode` (`crate::rig_modes`, `RadioLoop::judge_data_word` in tempo-audio): from now on, on
+    /// this connection, its plain sideband is commanded instead. `true` when that is news.
+    pub fn refuse_link_data_word(&mut self, model: u32, mode: &str) -> bool {
+        self.settings.link_refusals.refuse(model, mode)
+    }
+
+    /// A new CAT connection: whatever the last one showed about the DATA word is forgotten, so this
+    /// one is judged afresh. `true` when anything was forgotten.
+    pub fn forget_link_refusals(&mut self) -> bool {
+        self.settings.link_refusals.forget()
     }
 
     /// The mode the radio loop should COMMAND: the operator's transient Phone override when set,
