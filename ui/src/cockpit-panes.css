@@ -672,6 +672,37 @@
 .txmeters-pane-meter {
   min-width: 0;
 }
+/* WHY TRANSMIT IS OFF AFTER A CAT OUTAGE, IN THE STRIP, MOVING NOTHING. The TX state beside it keeps
+   its own words ("TX off") and so its width; these words never take room a control could need.
+   `.cockpit-txstrip-catnote` (the strip of every screen but FT): a ZERO basis growing into the line's
+   free room, as the meters cell does, with the column gap cancelled by its margin, so the strip's line
+   breaking sees a zero-wide item and can never wrap for it. The space before the words is a TEXT
+   INDENT, never padding: padding is width the breaker counts, even on a zero basis with border-box,
+   and 8 px of it wrapped Phone, CW and RTTY in Russian at 175 % (1002-1012 px), moving Stop TX 30 px. Where the
+   room is short the words end in an ellipsis, and where there is none they are not seen: the whole
+   sentence is the TX state's hover and the CAT status. Not rendered beside the meters cell, which
+   would share the room with it.
+   `.cq-catnote` (FT's strip): the words ride inside `.cq-spacer`, the strip's one absorber, which is
+   already a zero-basis grower on its line. Its min-width is the only thing to add: without it a
+   flex item cannot shrink below its text, and the absorber would push the line. */
+.cockpit-txstrip-catnote {
+  flex-grow: 1;
+  flex-shrink: 1;
+  flex-basis: 0;
+  min-width: 0;
+  margin-left: calc(-1 * var(--space-2));
+  padding-left: 0;
+  text-indent: var(--space-2);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.cq-catnote {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 /* THE KEYBOARD DOCKS' EIGHT KEYS (RTTY, PSK, JTTY: `.rtty-dock-keys`, styles.css) share their line with
    the fixed row (Call box, set switch, TX latch, Esc/Stop) only where 76em of keys fit beside it, and fold
    the row under the keys everywhere else, so the keys then take the whole line. A BASIS, deliberately, not

@@ -1650,7 +1650,10 @@ const FAKE_IT_WRITE_BACK_MS: f64 = 100.0;
 /// rig. A rigctld sitting on a serial handle whose device went away at power-off is ALIVE
 /// (`is_alive` is `try_wait`) and answers `RPRT -5` forever; only reopening the port helps.
 const CAT_DEAD_PROBES_BEFORE_REBUILD: u32 = 3;
-/// Between suspect rebuilds while the link stays dead — a rebuild is a process respawn.
+/// The first wait between suspect rebuilds while the link stays dead — a rebuild is a process
+/// respawn, and the radio loop stands still for it. Doubles to [`CAT_REOPEN_MAX_MS`]; the link
+/// answering starts it over. The three failed re-probes a rebuild also needs set the floor: once
+/// the re-probes have backed off to [`CAT_RETRY_MAX_MS`] that is 90 s, whatever this says.
 const CAT_REBUILD_BACKOFF_MS: f64 = 60_000.0;
 /// How often the configured serial port is checked for presence while CAT is down.
 const CAT_PORT_CHECK_MS: f64 = 10_000.0;
@@ -4787,6 +4790,11 @@ struct RadioLoop {
     cat_down_link_fault: bool,
     /// Earliest tick a suspect rebuild may run (backoff between rebuilds).
     cat_rebuild_at: f64,
+    /// A silence rebuild has already halted TX in this outage, so the next retry only retries.
+    /// Cleared when the link answers, and by a rebuild that had another reason.
+    cat_outage_halted: bool,
+    /// The wait the next suspect rebuild sets (see [`CAT_REBUILD_BACKOFF_MS`]).
+    cat_rebuild_backoff_ms: f64,
     /// Earliest tick a FAILED reopen (no daemon, no control) is retried, and its backoff.
     cat_reopen_at: f64,
     cat_reopen_backoff_ms: f64,
@@ -5262,6 +5270,8 @@ impl RadioLoop {
             cat_dead_probes: 0,
             cat_down_link_fault: false,
             cat_rebuild_at: 0.0,
+            cat_outage_halted: false,
+            cat_rebuild_backoff_ms: CAT_REBUILD_BACKOFF_MS,
             cat_reopen_at: 0.0,
             cat_reopen_backoff_ms: CAT_REOPEN_RETRY_MS,
             cat_port_check_at: 0.0,
@@ -5394,10 +5404,18 @@ impl RadioLoop {
         self.dial_fail_count = 0;
         self.width_unanswered = None;
         self.cat_dead_probes = 0;
+        self.end_cat_outage();
         self.cat_port_present = None;
         self.cat_reopen_backoff_ms = CAT_REOPEN_RETRY_MS;
         self.cat_reopen_at = 0.0;
         self.remember_port_identity();
+    }
+
+    /// The link answered, so the next silence is a new outage: it halts TX once again, and its
+    /// rebuilds start from the shortest wait.
+    fn end_cat_outage(&mut self) {
+        self.cat_outage_halted = false;
+        self.cat_rebuild_backoff_ms = CAT_REBUILD_BACKOFF_MS;
     }
 
     /// Capture the USB identity of the configured serial port while it is present, so a rig
@@ -5445,8 +5463,21 @@ impl RadioLoop {
     /// [`CAT_DEAD_PROBES_BEFORE_REBUILD`] failed re-probes (or no daemon at all to probe with),
     /// rate-limited by [`CAT_REBUILD_BACKOFF_MS`]. Never while the port is known absent —
     /// there is nothing to open yet.
+    ///
+    /// ⛔ NEVER DURING A KEY OF NEXUS'S OWN. `operator_keyed` is what the RADIO reports, and a
+    /// tripped breaker stops reading it, so it does not see an over, a tune, a mic PTT or a CW word
+    /// that CAT is not carrying: the radio's VOX or a serial line can be keying them over a silent
+    /// link. The retry waits for the end of it. Returning before the port watch leaves a port's
+    /// return unconsumed, to fire on the tick after.
     fn cat_rebuild_due(&mut self, want: &Transport, now: f64, rig_has_control: bool) -> bool {
-        if self.cat_ok != Some(false) || self.operator_keyed() || self.cat_hold_active {
+        if self.cat_ok != Some(false)
+            || self.operator_keyed()
+            || self.cat_hold_active
+            || self.tx_until_ms.is_some()
+            || self.tuning_keyed
+            || self.manual_ptt_applied
+            || now < self.cw_keying_until
+        {
             return false;
         }
         let port_returned = if !want.is_network()
@@ -5469,14 +5500,9 @@ impl RadioLoop {
         // No daemon AND no way to talk to a rig: the last open FAILED (or never happened) while
         // the port is present or unknowable. Retry it on the reopen backoff. A coexisting or
         // external rigctld has no handle here either but DOES give the rig control, so it
-        // takes the silence path below instead. Never during an over of Nexus's own: with no
-        // CAT channel the radio keys by the VOX fallback, so an over can be on the air, and the
-        // retry waits for its end.
+        // takes the silence path below instead.
         if !rig_has_control && self.rigctld_proc.is_none() {
-            return now >= self.cat_reopen_at
-                && self.tx_until_ms.is_none()
-                && !self.tuning_keyed
-                && !self.manual_ptt_applied;
+            return now >= self.cat_reopen_at;
         }
         self.silence_rebuild_due(now)
     }
@@ -8984,14 +9010,48 @@ impl RadioLoop {
                 let was_keyed = rig.keyed || self.flex_keyed() || self.tci_keyed();
                 // Unkey through the STILL-ALIVE old rig/daemon before tearing it
                 // down — flush, unkey, clear TX state, THEN drop the daemon.
+                // ⭐ THE LINK IS SILENT, AND NOTHING ELSE HAPPENED: the same radio, the same
+                // settings, nothing of ours keyed (`cat_rebuild_due`). The first such rebuild of an
+                // outage halts TX, as WSJT-X stops transmitting when rig control fails. The ones
+                // after it only try the port again, so transmit stays as the operator last set it.
+                // The CAT status says so when this did turn transmit off, in place of the dialog
+                // WSJT-X opens here. WSJT-X's automatic retry is one, not many; these are Nexus's own.
+                // They send the same key-up through the old link and the new one, and every
+                // transmit guard stays where it is.
+                let only_silence = suspect_rebuild
+                    && !daemon_died
+                    && !resume_after_hold
+                    && !want.rig_differs(&self.applied);
+                let retry_only = only_silence && self.cat_outage_halted;
                 if !asking_again {
-                    self.unkey_before_letting_go(
-                        engine,
-                        backend,
-                        rig,
-                        "rig_differs: transport changed → teardown+rebuild daemon (unkey first)",
-                        "CAT daemon rebuild",
-                    );
+                    if retry_only {
+                        tempo_core::applog::info(
+                            "tx",
+                            "CAT link still silent: trying the port again; transmit left as it is",
+                        );
+                        crate::civ::diag::note("suspect rebuild: same outage (unkey first)");
+                        let _ = rig.ptt(false);
+                    } else {
+                        let was_on = engine_lock(engine).tx_enabled();
+                        self.unkey_before_letting_go(
+                            engine,
+                            backend,
+                            rig,
+                            "rig_differs: transport changed → teardown+rebuild daemon (unkey first)",
+                            "CAT daemon rebuild",
+                        );
+                        self.cat_outage_halted = only_silence;
+                        let mut eng = engine_lock(engine);
+                        // Only what happened: a manual mode's halt re-arms, and transmit that was
+                        // already off was not turned off by this.
+                        let link_lost =
+                            only_silence || (daemon_died && !want.rig_differs(&self.applied));
+                        if link_lost && was_on && !eng.tx_enabled() {
+                            eng.say_tx_off_for_silent_cat();
+                        } else if want.rig_differs(&self.applied) {
+                            eng.clear_tx_off_for_silent_cat();
+                        }
+                    }
                     // …and let go of a Rig split held on it, through the still-alive old link.
                     let cluster_active = engine_lock(engine).cluster_split_active();
                     self.let_go_of_rig_split(rig, cluster_active);
@@ -9129,7 +9189,12 @@ impl RadioLoop {
                 // would dress this one's cached VFO up as a reading.
                 self.vfo_read_native = None;
                 self.cat_dead_probes = 0;
-                self.cat_rebuild_at = now + CAT_REBUILD_BACKOFF_MS;
+                if !only_silence {
+                    self.cat_rebuild_backoff_ms = CAT_REBUILD_BACKOFF_MS;
+                }
+                self.cat_rebuild_at = now + self.cat_rebuild_backoff_ms;
+                self.cat_rebuild_backoff_ms =
+                    (self.cat_rebuild_backoff_ms * 2.0).min(CAT_REOPEN_MAX_MS);
                 self.cat_port_present = None;
                 // If THIS open failed too, the next try waits out the reopen backoff.
                 self.cat_reopen_at = now + self.cat_reopen_backoff_ms;
@@ -9200,6 +9265,11 @@ impl RadioLoop {
                 }
                 self.cat_ok = ok;
                 engine_lock(engine).answer_cat_reprobe(ok, detail, refused);
+            }
+            // A rebuild or a Test CAT whose own probe found the radio answering has set `cat_ok`
+            // directly, and the recovery paths in the poll below never run for a link already up.
+            if self.cat_ok == Some(true) {
+                self.end_cat_outage();
             }
             let mut audio_rebuilt = false;
             // A stream the OS KILLED can only re-enter the loop here. Nothing in `want` changed
@@ -20497,6 +20567,7 @@ mod tests {
     use super::*;
     use crate::backend::MockBackend;
     use crate::rig::ATU_START_TUNE;
+    use tempo_app::engine::{CAT_BACK_TX_OFF, CAT_SILENT_TX_OFF};
 
     /// THE WFD-RTTY-PUSHED-AS-FT8 BUG: the core records the actual on-air mode
     /// behind a "DIG" contact (`LoggedQso::submode` — ADIF and Cabrillo already
@@ -46366,6 +46437,840 @@ mod tests {
             (saved, opens, engine.lock().unwrap().tx_enabled()),
             (true, 1, false)
         );
+    }
+
+    /// One tick with the silence watch due, as three failed re-probes leave it: the breaker open,
+    /// the backoff over, and no re-probe of its own to confuse the count. The rebuilt link is as
+    /// mute as the last. Returns how many opens the tick made.
+    fn silent_link_tick(
+        engine: &Arc<Mutex<Engine>>,
+        state: &mut RadioLoop,
+        rig: &mut Rig,
+        backend: &mut MockBackend,
+        now: f64,
+    ) -> usize {
+        state.cat_ok = Some(false);
+        state.cat_retry_at = f64::MAX;
+        state.cat_dead_probes = CAT_DEAD_PROBES_BEFORE_REBUILD;
+        let mut opens = 0;
+        let mut reopen = |_t: &Transport, _c: bool| -> RigOpen {
+            opens += 1;
+            let alive = std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .unwrap();
+            (
+                Rig::with_control(Some("127.0.0.1:1".into()), PttMode::Cat),
+                Some(CatDaemon::Spawned(
+                    crate::rigctld_proc::RigctldProc::from_child_for_test(alive),
+                )),
+                CatProbe::status(Some(false), "still mute"),
+            )
+        };
+        state
+            .step(
+                engine,
+                backend,
+                rig,
+                &no_sinks(),
+                now,
+                &mut mock_reopen_audio(),
+                &mut reopen,
+                &mut StationSinks::new(),
+            )
+            .unwrap();
+        opens
+    }
+
+    /// A rigctld of ours, alive and answering its socket, in front of a radio that says nothing.
+    fn a_silent_link(engine: &Arc<Mutex<Engine>>) -> (RadioLoop, Rig) {
+        let mut state = loop_state_for(engine);
+        let alive = std::process::Command::new("sleep")
+            .arg("300")
+            .spawn()
+            .unwrap();
+        state.rigctld_proc = Some(CatDaemon::Spawned(
+            crate::rigctld_proc::RigctldProc::from_child_for_test(alive),
+        ));
+        (
+            state,
+            Rig::with_control(Some("127.0.0.1:1".into()), PttMode::Cat),
+        )
+    }
+
+    /// ⛔ THE SILENCE WATCH WAITS FOR AN OVER OF OURS. `operator_keyed` is what the RADIO reports,
+    /// and a tripped breaker stops reading it, so it was no guard against Nexus's own key: an
+    /// over on the air through the radio's VOX or a serial line, with CAT silent, had its audio
+    /// flushed and its deadline dropped by the rebuild. Each value is (opens, flushes, the over's
+    /// deadline) mid-over, then opens once the over has ended.
+    #[test]
+    fn a_silent_link_is_not_rebuilt_under_an_over_of_ours() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tx_enabled(true); // an over only runs with transmit on
+        let (mut state, mut rig) = a_silent_link(&engine);
+        let mut backend = MockBackend::new();
+        state.tx_until_ms = Some(5_000.0);
+        let opens = silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 1_000.0);
+        assert_eq!(
+            (opens, backend.flush_calls, state.tx_until_ms),
+            (0, 0, Some(5_000.0))
+        );
+        state.tx_until_ms = None;
+        assert_eq!(
+            silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 6_000.0),
+            1
+        );
+    }
+
+    /// …nor under a tune, a mic PTT or a CW word, which an over's deadline does not cover. The
+    /// watch's own answer, on each; the unkeyed control says it is due.
+    #[test]
+    fn the_silence_watch_waits_for_a_tune_a_mic_ptt_or_a_cw_word() {
+        let due = |set: fn(&mut RadioLoop)| {
+            let mut state = loop_state();
+            state.cat_ok = Some(false);
+            state.cat_dead_probes = CAT_DEAD_PROBES_BEFORE_REBUILD;
+            state.cat_rebuild_at = 0.0;
+            set(&mut state);
+            let mut no_port = Transport::from_cfg(&RadioConfig::default());
+            no_port.serial_port.clear();
+            state.cat_rebuild_due(&no_port, 1_000.0, true)
+        };
+        assert_eq!(
+            [
+                due(|_| {}),
+                due(|s| s.tuning_keyed = true),
+                due(|s| s.manual_ptt_applied = true),
+                due(|s| s.cw_keying_until = 2_000.0),
+            ],
+            [true, false, false, false]
+        );
+    }
+
+    /// ⭐ A SILENT LINK TURNS TRANSMIT OFF ONCE, NOT EVERY TIME THE PORT IS TRIED AGAIN. WSJT-X
+    /// stops transmitting when rig control fails (`MainWindow::handle_transceiver_failure` calls
+    /// `on_stopTxButton_clicked`) and then leaves the choice to the operator; the first rebuild
+    /// does the same. An operator who turns transmit back on, knowing the state of the link, keeps
+    /// it across the retries. Every retry still sends the key-up through the old link and through
+    /// the new one, on the wire as before. A link that answered and went silent again is a new
+    /// outage and stops transmit again. The value is transmit on after each rebuild.
+    #[test]
+    fn a_silent_link_turns_transmit_off_once_an_outage_and_every_retry_still_unkeys() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let (mut state, _) = a_silent_link(&engine);
+        let (addr, wire) = mock_pkt_rejecting_rigctld();
+        let mut rig = Rig::with_control(Some(addr.clone()), PttMode::Cat);
+        let mut backend = MockBackend::new();
+        let t_0s = || {
+            wire.lock()
+                .unwrap()
+                .iter()
+                .filter(|l| l.trim() == "T 0")
+                .count()
+        };
+        let mut rebuild = |state: &mut RadioLoop, rig: &mut Rig, at: f64| {
+            engine.lock().unwrap().set_tx_enabled(true);
+            state.cat_rebuild_at = 0.0;
+            let opens = silent_link_tick(&engine, state, rig, &mut backend, at);
+            assert_eq!(opens, 1);
+            engine.lock().unwrap().tx_enabled()
+        };
+        assert!(!rebuild(&mut state, &mut rig, 1_000.0), "the first: off");
+        let first = t_0s();
+        assert!(first > 0, "the key-up went out through the old link");
+        // The next retries go through a mock of their own, to count the key-up on each.
+        rig = Rig::with_control(Some(addr.clone()), PttMode::Cat);
+        assert!(rebuild(&mut state, &mut rig, 100_000.0), "a retry: left on");
+        assert!(t_0s() > first, "a retry still sends the key-up");
+        // The link answers, then goes silent again: a new outage.
+        a_rebuild_that_cures(
+            &engine,
+            &mut state,
+            &mut rig,
+            &mut MockBackend::new(),
+            150_000.0,
+        );
+        assert!(
+            !rebuild(&mut state, &mut rig, 200_000.0),
+            "a new outage: off"
+        );
+    }
+
+    /// A silence rebuild whose own probe finds the radio answering, the usual way one succeeds.
+    fn a_rebuild_that_cures(
+        engine: &Arc<Mutex<Engine>>,
+        state: &mut RadioLoop,
+        rig: &mut Rig,
+        backend: &mut MockBackend,
+        now: f64,
+    ) {
+        state.cat_ok = Some(false);
+        state.cat_retry_at = f64::MAX;
+        state.cat_dead_probes = CAT_DEAD_PROBES_BEFORE_REBUILD;
+        state.cat_rebuild_at = 0.0;
+        let mut cured = |_t: &Transport, _c: bool| -> RigOpen {
+            let alive = std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .unwrap();
+            (
+                Rig::with_control(Some("127.0.0.1:1".into()), PttMode::Cat),
+                Some(CatDaemon::Spawned(
+                    crate::rigctld_proc::RigctldProc::from_child_for_test(alive),
+                )),
+                CatProbe::status(Some(true), "answering"),
+            )
+        };
+        state
+            .step(
+                engine,
+                backend,
+                rig,
+                &no_sinks(),
+                now,
+                &mut mock_reopen_audio(),
+                &mut cured,
+                &mut StationSinks::new(),
+            )
+            .unwrap();
+        assert_eq!(state.cat_ok, Some(true), "premise: the rebuild cured it");
+    }
+
+    /// ⭐ A REBUILD THAT CURES THE LINK ENDS THE OUTAGE. Its probe sets `cat_ok` itself, and the
+    /// poll's recovery paths only run for a link that was down, so neither reset ran: transmit never
+    /// turned off for any later outage of the session. The cure can be on the first rebuild of an
+    /// outage or on a retry, and each is followed by a second outage that halts.
+    #[test]
+    fn a_rebuild_that_cures_the_link_ends_the_outage() {
+        for retries_first in [0, 3] {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            let (mut state, mut rig) = a_silent_link(&engine);
+            let mut backend = MockBackend::new();
+            let mut now = 1_000.0;
+            // Outage 1 halts.
+            engine.lock().unwrap().set_tx_enabled(true);
+            assert_eq!(
+                silent_link_tick(&engine, &mut state, &mut rig, &mut backend, now),
+                1
+            );
+            assert!(!engine.lock().unwrap().tx_enabled());
+            for _ in 0..retries_first {
+                now += 400_000.0;
+                state.cat_rebuild_at = 0.0;
+                silent_link_tick(&engine, &mut state, &mut rig, &mut backend, now);
+            }
+            now += 400_000.0;
+            a_rebuild_that_cures(&engine, &mut state, &mut rig, &mut backend, now);
+            assert_eq!(
+                (state.cat_outage_halted, state.cat_rebuild_backoff_ms),
+                (false, CAT_REBUILD_BACKOFF_MS)
+            );
+            // Outage 2, days of session later, halts again.
+            engine.lock().unwrap().set_tx_enabled(true);
+            now += 400_000.0;
+            state.cat_rebuild_at = 0.0;
+            assert_eq!(
+                silent_link_tick(&engine, &mut state, &mut rig, &mut backend, now),
+                1
+            );
+            assert!(
+                !engine.lock().unwrap().tx_enabled(),
+                "the second outage stopped transmit"
+            );
+        }
+    }
+
+    /// A rigctld whose radio can be silenced and brought back: every command answers `RPRT -5`
+    /// while `mute` holds.
+    fn switchable_mute_rigctld() -> (String, Arc<std::sync::atomic::AtomicBool>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let mute = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mute2 = Arc::clone(&mute);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mute3 = Arc::clone(&mute2);
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut line = String::new();
+                    loop {
+                        line.clear();
+                        match reader.read_line(&mut line) {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => {}
+                        }
+                        let l = line.trim();
+                        let reply = if mute3.load(std::sync::atomic::Ordering::SeqCst) {
+                            "RPRT -5\n"
+                        } else if l == "f" {
+                            "14074000\n"
+                        } else if l == "m" {
+                            "USB\n2400\n"
+                        } else {
+                            "RPRT 0\n"
+                        };
+                        if stream.write_all(reply.as_bytes()).is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+        (addr, mute)
+    }
+
+    /// ⭐ THREE OUTAGES, NOTHING FORCED, ON A REAL CAT TRANSPORT: the breaker trips on failed reads,
+    /// re-probes fail, the silence watch earns its rebuild, and `cure` is one of the three real ways
+    /// a link comes back. (On the default transport `reprobe` answers "VOX, no CAT" and a later
+    /// retune clears the state, which would say nothing about Test CAT.) Every outage's first
+    /// rebuild turns transmit off, says so, and a retry leaves transmit as the operator set it.
+    fn three_outages_ended_by(cure: &str) {
+        use std::sync::atomic::Ordering::SeqCst;
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut st = e.settings().clone();
+            st.rig_model = 1035;
+            st.ptt_method = "cat".to_string();
+            e.apply_settings(st);
+        }
+        let (addr, mute) = switchable_mute_rigctld();
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state_for(&engine);
+        let opens = std::cell::Cell::new(0usize);
+        let cure_on_open = std::cell::Cell::new(false);
+        let (addr2, mute2) = (addr.clone(), Arc::clone(&mute));
+        let mut rr = |_t: &Transport, _c: bool| -> RigOpen {
+            opens.set(opens.get() + 1);
+            if cure_on_open.get() {
+                mute2.store(false, SeqCst);
+            }
+            let up = !mute2.load(SeqCst);
+            let alive = std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .unwrap();
+            (
+                Rig::rigctld(&addr2),
+                Some(CatDaemon::Spawned(
+                    crate::rigctld_proc::RigctldProc::from_child_for_test(alive),
+                )),
+                CatProbe::status(Some(up), "probe"),
+            )
+        };
+        let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
+        let mut station = StationSinks::new();
+        let mut now = 1_000.0f64;
+        let mut tick = |state: &mut RadioLoop,
+                        rig: &mut Rig,
+                        backend: &mut MockBackend,
+                        rr: &mut dyn FnMut(&Transport, bool) -> RigOpen| {
+            now += 500.0;
+            state.last_rig_poll = now - RIG_POLL_MS - 1.0;
+            state
+                .step(
+                    &engine,
+                    backend,
+                    rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        for _ in 0..6 {
+            tick(&mut state, &mut rig, &mut backend, &mut rr);
+        }
+        assert_ne!(state.cat_ok, Some(false), "healthy at the start");
+
+        for outage in 1..=3 {
+            engine.lock().unwrap().set_tx_enabled(true);
+            mute.store(true, SeqCst);
+            let start = opens.get();
+            let mut n = 0;
+            while opens.get() == start && n < 4000 {
+                tick(&mut state, &mut rig, &mut backend, &mut rr);
+                n += 1;
+            }
+            assert_eq!(
+                opens.get(),
+                start + 1,
+                "outage {outage}: the rebuild fired after {n}"
+            );
+            assert!(
+                !engine.lock().unwrap().tx_enabled(),
+                "outage {outage}: its first rebuild turned transmit off"
+            );
+            assert!(state.cat_outage_halted);
+            let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+            assert!(said.ends_with(CAT_SILENT_TX_OFF), "outage {outage}: {said}");
+            // The operator re-arms, which ends the words; retries leave transmit as set.
+            engine.lock().unwrap().set_tx_enabled(true);
+            let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+            assert!(!said.contains(CAT_SILENT_TX_OFF), "outage {outage}: {said}");
+            let start = opens.get();
+            let mut n = 0;
+            while opens.get() < start + 2 && n < 4000 {
+                tick(&mut state, &mut rig, &mut backend, &mut rr);
+                n += 1;
+            }
+            assert_eq!(opens.get(), start + 2, "outage {outage}: retries fired");
+            assert!(
+                engine.lock().unwrap().tx_enabled(),
+                "outage {outage}: a retry left transmit as set"
+            );
+            // The cure.
+            match cure {
+                "rebuild" => {
+                    cure_on_open.set(true);
+                    let start = opens.get();
+                    let mut n = 0;
+                    while opens.get() == start && n < 4000 {
+                        tick(&mut state, &mut rig, &mut backend, &mut rr);
+                        n += 1;
+                    }
+                    assert_eq!(opens.get(), start + 1, "the curing rebuild fired");
+                    cure_on_open.set(false);
+                }
+                "reprobe" => {
+                    mute.store(false, SeqCst);
+                    let mut n = 0;
+                    while state.cat_ok != Some(true) && n < 4000 {
+                        tick(&mut state, &mut rig, &mut backend, &mut rr);
+                        n += 1;
+                    }
+                }
+                "testcat" => {
+                    mute.store(false, SeqCst);
+                    engine.lock().unwrap().request_cat_reprobe();
+                    tick(&mut state, &mut rig, &mut backend, &mut rr);
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(state.cat_ok, Some(true), "cured by {cure}");
+            assert!(!state.cat_outage_halted, "{cure} ended the outage");
+            assert_eq!(state.cat_rebuild_backoff_ms, CAT_REBUILD_BACKOFF_MS);
+            for _ in 0..4 {
+                tick(&mut state, &mut rig, &mut backend, &mut rr);
+            }
+        }
+    }
+    #[test]
+    fn a_rebuild_that_cures_ends_every_outage() {
+        three_outages_ended_by("rebuild");
+    }
+    #[test]
+    fn a_re_probe_that_finds_the_radio_ends_every_outage() {
+        three_outages_ended_by("reprobe");
+    }
+    #[test]
+    fn a_test_cat_that_finds_the_radio_ends_every_outage() {
+        three_outages_ended_by("testcat");
+    }
+
+    /// ⭐ WHAT THE OPERATOR READS when a silent link turns transmit off: the CAT status, word for
+    /// word, ending with what happened and how to transmit again, after anything that must lead it. It stays through every later CAT
+    /// message of the outage, as those replace the status, and goes when transmit is turned back
+    /// on. Then a retry, which leaves transmit on, says nothing of it.
+    #[test]
+    fn the_status_says_when_a_silent_link_turned_transmit_off_until_transmit_is_back_on() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tx_enabled(true);
+        let (mut state, mut rig) = a_silent_link(&engine);
+        let mut backend = MockBackend::new();
+        let reads = || engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+        silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 1_000.0);
+        assert_eq!(
+            reads(),
+            "14.0740 MHz CAT link unreachable (1/3) Transmit was turned off because CAT to the radio \
+             was lost. Check the radio and its CAT cable; Nexus keeps trying. Press TX On to transmit \
+             again."
+        );
+        engine
+            .lock()
+            .unwrap()
+            .set_cat_status(Some(false), "CAT link unreachable (2/3)".to_string());
+        assert_eq!(
+            reads(),
+            format!("CAT link unreachable (2/3) {CAT_SILENT_TX_OFF}")
+        );
+        state.cat_rebuild_at = 0.0;
+        silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 100_000.0);
+        assert!(reads().ends_with(CAT_SILENT_TX_OFF), "{}", reads());
+        engine.lock().unwrap().set_tx_enabled(true);
+        assert!(!reads().contains(CAT_SILENT_TX_OFF), "{}", reads());
+        state.cat_rebuild_at = 0.0;
+        silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 200_000.0);
+        assert!(!reads().contains(CAT_SILENT_TX_OFF), "{}", reads());
+    }
+
+    /// ⭐ TRANSMIT OFF IS NEVER LEFT UNEXPLAINED. The radio answering leaves transmit off, as only
+    /// the operator turns it back on, so the status keeps saying why, in words for a link that is
+    /// back, until they do. The review's scenario: the first rebuild itself finds the radio, as a
+    /// replugged USB cable does, in the same tick that turned transmit off. Then a re-probe cure on
+    /// the real path. Then a link that goes silent again says it is lost again.
+    #[test]
+    fn the_status_explains_transmit_off_after_the_link_returns_until_tx_is_back_on() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tx_enabled(true);
+        let (mut state, mut rig) = a_silent_link(&engine);
+        let mut backend = MockBackend::new();
+        a_rebuild_that_cures(&engine, &mut state, &mut rig, &mut backend, 1_000.0);
+        {
+            let e = engine.lock().unwrap();
+            assert!(
+                !e.tx_enabled(),
+                "premise: the first rebuild turned transmit off"
+            );
+            assert_eq!(state.cat_ok, Some(true), "premise: and found the radio");
+            let said = e.snapshot().radio.cat_detail;
+            assert!(said.ends_with(CAT_BACK_TX_OFF), "{said}");
+        }
+        engine.lock().unwrap().set_tx_enabled(true);
+        let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+        assert!(!said.contains(CAT_BACK_TX_OFF), "{said}");
+
+        // The re-probe, through the real path: failed reads, a rebuild, then the radio answers.
+        use std::sync::atomic::Ordering::SeqCst;
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut st = e.settings().clone();
+            st.rig_model = 1035;
+            st.ptt_method = "cat".to_string();
+            e.apply_settings(st);
+        }
+        let (addr, mute) = switchable_mute_rigctld();
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state_for(&engine);
+        let opens = std::cell::Cell::new(0usize);
+        let (addr2, mute2) = (addr.clone(), Arc::clone(&mute));
+        let mut rr = |_t: &Transport, _c: bool| -> RigOpen {
+            opens.set(opens.get() + 1);
+            let alive = std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .unwrap();
+            (
+                Rig::rigctld(&addr2),
+                Some(CatDaemon::Spawned(
+                    crate::rigctld_proc::RigctldProc::from_child_for_test(alive),
+                )),
+                CatProbe::status(Some(!mute2.load(SeqCst)), "probe"),
+            )
+        };
+        let mut now = 1_000.0f64;
+        let mut tick = |state: &mut RadioLoop,
+                        rig: &mut Rig,
+                        rr: &mut dyn FnMut(&Transport, bool) -> RigOpen| {
+            now += 500.0;
+            state.last_rig_poll = now - RIG_POLL_MS - 1.0;
+            state
+                .step(
+                    &engine,
+                    &mut MockBackend::new(),
+                    rig,
+                    &no_sinks(),
+                    now,
+                    &mut mock_reopen_audio(),
+                    rr,
+                    &mut StationSinks::new(),
+                )
+                .unwrap();
+        };
+        for _ in 0..6 {
+            tick(&mut state, &mut rig, &mut rr);
+        }
+        engine.lock().unwrap().set_tx_enabled(true);
+        mute.store(true, SeqCst);
+        let before = opens.get(); // the first tick opened the radio these settings name
+        for _ in 0..4000 {
+            if opens.get() > before {
+                break;
+            }
+            tick(&mut state, &mut rig, &mut rr);
+        }
+        assert_eq!(opens.get(), before + 1, "the silence earned its rebuild");
+        let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+        assert!(said.ends_with(CAT_SILENT_TX_OFF), "{said}");
+        mute.store(false, SeqCst);
+        for _ in 0..4000 {
+            if state.cat_ok == Some(true) {
+                break;
+            }
+            tick(&mut state, &mut rig, &mut rr);
+        }
+        assert_eq!(state.cat_ok, Some(true), "the re-probe found the radio");
+        tick(&mut state, &mut rig, &mut rr);
+        {
+            let e = engine.lock().unwrap();
+            assert!(!e.tx_enabled());
+            let said = e.snapshot().radio.cat_detail;
+            assert!(said.ends_with(CAT_BACK_TX_OFF), "{said}");
+            assert!(!said.contains(CAT_SILENT_TX_OFF), "{said}");
+        }
+        // Silent again, transmit never turned back on: it is lost again, and it says so.
+        mute.store(true, SeqCst);
+        for _ in 0..4000 {
+            if state.cat_ok == Some(false) {
+                break;
+            }
+            tick(&mut state, &mut rig, &mut rr);
+        }
+        {
+            let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+            assert!(said.ends_with(CAT_SILENT_TX_OFF), "{said}");
+        }
+        // A saved CAT change ends it: the words were about the link that is gone.
+        {
+            let mut e = engine.lock().unwrap();
+            let mut st = e.settings().clone();
+            st.rigctld_port += 7;
+            e.apply_settings(st);
+        }
+        tick(&mut state, &mut rig, &mut rr);
+        let e = engine.lock().unwrap();
+        let said = e.snapshot().radio.cat_detail;
+        assert!(
+            !said.contains(CAT_SILENT_TX_OFF) && !said.contains(CAT_BACK_TX_OFF),
+            "{said}"
+        );
+    }
+
+    /// A rigctld that died turns transmit off the same way, and says so the same way, after the
+    /// rebuild's own words.
+    #[test]
+    fn the_status_says_it_when_a_dead_daemon_turned_transmit_off() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tx_enabled(true);
+        let (mut state, mut rig) = a_silent_link(&engine);
+        let dead = std::process::Command::new("true").spawn().unwrap();
+        let mut dead =
+            CatDaemon::Spawned(crate::rigctld_proc::RigctldProc::from_child_for_test(dead));
+        let by = Instant::now() + Duration::from_secs(30);
+        while CatDaemon::is_alive(&mut dead) {
+            assert!(Instant::now() < by, "the stand-in daemon exited");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        state.rigctld_proc = Some(dead);
+        state.cat_rebuild_at = f64::MAX; // only the death can rebuild
+        assert_eq!(
+            silent_link_tick(
+                &engine,
+                &mut state,
+                &mut rig,
+                &mut MockBackend::new(),
+                1_000.0
+            ),
+            1
+        );
+        let e = engine.lock().unwrap();
+        assert!(!e.tx_enabled());
+        let said = e.snapshot().radio.cat_detail;
+        assert!(said.ends_with(CAT_SILENT_TX_OFF), "{said}");
+    }
+
+    /// A rigctld that dies and restarts cleanly: its rebuild turns transmit off and finds the radio
+    /// in the same tick, so the outage is over before any status was read. Transmit is off, so the
+    /// reason stays, after the rebuild's own words, until transmit is back on.
+    #[test]
+    fn a_daemon_that_dies_and_restarts_cleanly_still_explains_transmit_off() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tx_enabled(true);
+        let (mut state, mut rig) = a_silent_link(&engine);
+        let dead = std::process::Command::new("true").spawn().unwrap();
+        let mut dead =
+            CatDaemon::Spawned(crate::rigctld_proc::RigctldProc::from_child_for_test(dead));
+        let by = Instant::now() + Duration::from_secs(30);
+        while CatDaemon::is_alive(&mut dead) {
+            assert!(Instant::now() < by, "the stand-in daemon exited");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        state.rigctld_proc = Some(dead);
+        let mut clean = |_t: &Transport, _c: bool| -> RigOpen {
+            let alive = std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .unwrap();
+            (
+                Rig::with_control(Some("127.0.0.1:1".into()), PttMode::Cat),
+                Some(CatDaemon::Spawned(
+                    crate::rigctld_proc::RigctldProc::from_child_for_test(alive),
+                )),
+                CatProbe::status(Some(true), "answering"),
+            )
+        };
+        state.cat_retry_at = f64::MAX;
+        state
+            .step(
+                &engine,
+                &mut MockBackend::new(),
+                &mut rig,
+                &no_sinks(),
+                1_000.0,
+                &mut mock_reopen_audio(),
+                &mut clean,
+                &mut StationSinks::new(),
+            )
+            .unwrap();
+        assert_eq!(
+            state.cat_ok,
+            Some(true),
+            "premise: the restart found the radio"
+        );
+        let reads = || engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+        assert!(
+            !engine.lock().unwrap().tx_enabled(),
+            "premise: transmit went off"
+        );
+        assert!(reads().ends_with(CAT_BACK_TX_OFF), "{}", reads());
+        engine.lock().unwrap().set_tx_enabled(true);
+        assert!(!reads().contains(CAT_BACK_TX_OFF), "{}", reads());
+    }
+
+    /// TEST CAT'S OWN RESULT carries the sentence while it holds, as its result line replaces the
+    /// status on the screen, in the words for a link that is back when it found the radio.
+    #[test]
+    fn test_cat_says_it_too_for_the_state_it_found() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tx_enabled(true);
+        let (mut state, mut rig) = a_silent_link(&engine);
+        silent_link_tick(
+            &engine,
+            &mut state,
+            &mut rig,
+            &mut MockBackend::new(),
+            1_000.0,
+        );
+        let e = engine.lock().unwrap();
+        assert_eq!(
+            e.cat_detail_with_tx_off(Some(false), "no reply".to_string()),
+            format!("no reply {CAT_SILENT_TX_OFF}")
+        );
+        assert_eq!(
+            e.cat_detail_with_tx_off(Some(true), "14.074 MHz".to_string()),
+            format!("14.074 MHz {CAT_BACK_TX_OFF}")
+        );
+    }
+
+    /// It says only what happened. A manual mode's transmit is re-armed by the same halt, and
+    /// transmit that was already off was not turned off by this.
+    #[test]
+    fn the_status_says_nothing_when_transmit_was_not_turned_off_by_the_silence() {
+        let reads_after = |phone: bool, armed: bool| {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                if phone {
+                    e.set_operating_mode("phone", false);
+                }
+                e.set_tx_enabled(armed);
+            }
+            let (mut state, mut rig) = a_silent_link(&engine);
+            silent_link_tick(
+                &engine,
+                &mut state,
+                &mut rig,
+                &mut MockBackend::new(),
+                1_000.0,
+            );
+            let e = engine.lock().unwrap();
+            let on = e.tx_enabled();
+            (
+                on,
+                e.snapshot().radio.cat_detail.contains(CAT_SILENT_TX_OFF),
+            )
+        };
+        assert_eq!(reads_after(true, true), (true, false));
+        assert_eq!(reads_after(false, false), (false, false));
+        assert_eq!(reads_after(false, true), (false, true), "the control");
+    }
+
+    /// A link that stays silent is tried less and less often, up to every five minutes, because a
+    /// retry stops the whole radio loop for seconds while a daemon starts and is asked. The port
+    /// coming back still fires at once, and the re-probes keep listening every 30 s. A link that
+    /// answers starts the ladder over. The value is the gap, in seconds, before each rebuild.
+    #[test]
+    fn a_link_that_stays_silent_is_tried_less_often_and_answering_starts_over() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let (mut state, mut rig) = a_silent_link(&engine);
+        let mut backend = MockBackend::new();
+        let now = std::cell::Cell::new(1_000.0);
+        let mut gaps = |state: &mut RadioLoop, rig: &mut Rig, n: usize| {
+            let mut last = None;
+            let mut out = Vec::new();
+            while out.len() < n {
+                if silent_link_tick(&engine, state, rig, &mut backend, now.get()) == 1 {
+                    if let Some(l) = last {
+                        out.push(((now.get() - l) / 1000.0) as u32);
+                    }
+                    last = Some(now.get());
+                }
+                now.set(now.get() + 5_000.0);
+            }
+            out
+        };
+        assert_eq!(gaps(&mut state, &mut rig, 5), [60, 120, 240, 300, 300]);
+        a_rebuild_that_cures(
+            &engine,
+            &mut state,
+            &mut rig,
+            &mut MockBackend::new(),
+            now.get(),
+        );
+        state.cat_rebuild_at = 0.0;
+        assert_eq!(gaps(&mut state, &mut rig, 2), [60, 120]);
+    }
+
+    /// A retry that is not only a retry still stops transmit: a saved CAT change, or the daemon
+    /// dying, whatever an earlier rebuild of the same outage already did.
+    #[test]
+    fn a_saved_change_or_a_dead_daemon_during_an_outage_still_turns_transmit_off() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let (mut state, mut rig) = a_silent_link(&engine);
+        let mut backend = MockBackend::new();
+        assert_eq!(
+            silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 1_000.0),
+            1
+        );
+        // The save.
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.rigctld_port += 7;
+            e.apply_settings(s);
+            e.set_tx_enabled(true);
+        }
+        state.cat_rebuild_at = 0.0;
+        assert_eq!(
+            silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 100_000.0),
+            1
+        );
+        assert!(!engine.lock().unwrap().tx_enabled(), "the save: off");
+        // The daemon dies during the next silence, which has already been halted for once.
+        state.cat_rebuild_at = 0.0;
+        silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 200_000.0);
+        engine.lock().unwrap().set_tx_enabled(true);
+        let dead = std::process::Command::new("true").spawn().unwrap();
+        let mut dead =
+            CatDaemon::Spawned(crate::rigctld_proc::RigctldProc::from_child_for_test(dead));
+        let by = Instant::now() + Duration::from_secs(30);
+        while CatDaemon::is_alive(&mut dead) {
+            assert!(Instant::now() < by, "the stand-in daemon exited");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        state.rigctld_proc = Some(dead);
+        state.cat_rebuild_at = f64::MAX;
+        assert_eq!(
+            silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 300_000.0),
+            1
+        );
+        assert!(!engine.lock().unwrap().tx_enabled(), "the death: off");
     }
 
     /// Asking again waits for a tune carrier, and for the operator's mic PTT, as it does for an

@@ -21571,6 +21571,12 @@ body.pane-dragging {
   0%, 100% { background: color-mix(in srgb, var(--tx) 12%, var(--bg-elev-2)); }
   50% { background: color-mix(in srgb, var(--tx) 26%, var(--bg-elev-2)); }
 }
+/* The words for transmit left off by a CAT outage (paint only; their box is cockpit-panes.css's). */
+.cat-txoff-note {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--alert-warning);
+}
 .cq-statecap {
   font-size: 0.78rem;
   font-weight: 800;

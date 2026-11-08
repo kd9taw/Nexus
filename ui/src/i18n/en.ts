@@ -8630,6 +8630,10 @@ export const EN = {
     "Tells Nexus what your cable actually does, instead of letting it guess. Leave it on Auto unless you have a rig that keys at launch — Auto changes nothing about how your station works today. If you change it and CAT stops working, put it back on Auto: on some rigs Hamlib quietly refuses the setting and then answers without ever having opened the radio, so you get a CAT light and a rig that ignores you.",
   'settings.rigControl.netRigctl.notConnected':
     'Rig Model is NET rigctl, which reaches a radio through a rigctld on the network and cannot open {{port}} itself, and no rigctld answered. To have Nexus run the radio on {{port}}, set Rig Model to your radio. If another program runs a rigctld for it, start that program, or set Connection to Network with its address as host:port.',
+  'settings.rigControl.catSilentTxOff':
+    'Transmit was turned off because CAT to the radio was lost. Check the radio and its CAT cable; Nexus keeps trying. Press TX On to transmit again.',
+  'settings.rigControl.catBackTxOff':
+    'CAT to the radio was lost and transmit was turned off. CAT is back; press TX On to transmit.',
   'settings.rigControl.serialHandshake.rtsKeys':
     "RTS keys your transmitter on this port, so Serial handshake can't be Hardware — set it to Auto or None.",
   'settings.rigControl.pttLineState.label': 'Keying line at startup',
@@ -12153,6 +12157,8 @@ export const EN = {
   'operate.strip.state.transmitting': '▲ TRANSMITTING',
   'operate.strip.state.receiving': '▼ Receiving',
   'operate.strip.state.txOff': '■ TX off',
+  'operate.strip.state.txOffCatLost': 'CAT lost: press TX On',
+  'operate.strip.state.txOffCatBack': 'CAT is back: press TX On',
   'operate.strip.tune.radioPower': 'Radio tune power {{pct}} %',
   'operate.strip.tune.radioTimeoutSec': 'Radio TX timeout {{sec}} s',
   'operate.strip.tune.radioTimeoutMin': 'Radio TX timeout {{min}} min',

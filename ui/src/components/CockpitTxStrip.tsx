@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react'
 import { t } from '../i18n'
+import { catSaysTxOff } from '../features/catDetail'
 import type { RadioStatus } from '../types'
 import { isOnAir } from '../types'
 import { RadioTuneNote } from './RadioTuneNote'
@@ -83,6 +84,9 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
   const lit =
     onAir &&
     !(radio.streamMic === 'armed' && !radio.transmitting && !radio.tuning && radio.rigKeyed !== true)
+  // A CAT outage turned transmit off: said in the TX state, after every control, so that it can
+  // be read without hovering and moves none of them.
+  const catOff = radio.txEnabled ? null : catSaysTxOff(radio.catDetail)
   const ref = useRef<HTMLDivElement>(null)
   useDockClearance(ref)
   // ⭐ ATU ON (#344, operator ruling): the label says when the radio reports its tuner in line; a
@@ -201,7 +205,7 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
           than "receiving" over a TX that cannot key. A key the radio itself holds still lights
           the sign: what is on the air is shown first. */}
       <span className={`cq-statecap ${lit ? 'tx' : radio.txRefusal ? 'off' : radio.txEnabled ? 'rx' : 'off'}`}
-        title={!lit && radio.txRefusal ? radio.txRefusal : undefined}>
+        title={!lit && radio.txRefusal ? radio.txRefusal : !lit && catOff === 'lost' ? t('settings.rigControl.catSilentTxOff') : !lit && catOff === 'back' ? t('settings.rigControl.catBackTxOff') : undefined}>
         {lit
           ? t('operate.strip.state.transmitting')
           : radio.txRefusal
@@ -210,6 +214,17 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
               ? t('operate.strip.state.receiving')
               : t('operate.strip.state.txOff')}
       </span>
+      {/* Why transmit is off after a CAT outage: a zero-basis cell after the state, so it can never
+          wrap the strip or move a control (`.cockpit-txstrip-catnote`). Not beside the meters cell,
+          whose room it would share; the state's hover and the CAT status carry the words there. */}
+      {catOff && !lit && !radio.txRefusal && meters == null && (
+        <span
+          className="cockpit-txstrip-catnote cat-txoff-note"
+          title={catOff === 'lost' ? t('settings.rigControl.catSilentTxOff') : t('settings.rigControl.catBackTxOff')}
+        >
+          {catOff === 'lost' ? t('operate.strip.state.txOffCatLost') : t('operate.strip.state.txOffCatBack')}
+        </span>
+      )}
       {/* THE METERS' CELL, at the strip's right end (`.cockpit-txstrip-meters`): after the cluster and
           the TX state, so nothing it shows can move a control. Two rows at most, the strip's own
           height, and the same readings before and after a key-down (TxMeters `strip`). */}

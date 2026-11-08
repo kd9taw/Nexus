@@ -29932,7 +29932,7 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
             detail: if detail.is_empty() {
                 "No CAT status yet — set your rig + PTT method, Save, then test.".to_string()
             } else {
-                detail
+                engine_lock(&state).cat_detail_with_tx_off(ok, detail)
             },
         })
     }
