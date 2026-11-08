@@ -1844,6 +1844,43 @@ fn agc_from_hamlib(v: u8) -> &'static str {
 /// 500 ms read timeout, so even a couple dozen tries spans seconds), then we stop
 /// retrying THAT mode until the target changes.
 const MODE_SET_MAX_TRIES: u32 = 30;
+
+/// How long the connect probe ([`RadioLoop::step_mode_probe`]) waits before reading the radio's
+/// mode back: past Hamlib's own mode cache, which answers a read straight after a set with the
+/// word just set (measured: a read 1.5 s after SDR Console's `MDD;` reports the radio's `USB`).
+const MODE_PROBE_READ_MS: f64 = 1_500.0;
+/// Room the probe leaves before a slot boundary, beyond its read, for the read and the restore.
+const MODE_PROBE_MARGIN_MS: f64 = 500.0;
+
+/// Where the once-per-connection DATA-mode probe stands ([`RadioLoop::step_mode_probe`]).
+#[derive(Debug, Clone, PartialEq)]
+enum ModeProbe {
+    /// Not wanted on this connection, or done.
+    Idle,
+    /// Wanted, at the first tick that may.
+    Due,
+    /// `PKTUSB` set (`refused`: Hamlib refused it); the mode is read back at `read_at` and
+    /// `original` put back. `writes`: the radio's mode-write count just after the probe's set.
+    Waiting {
+        original: String,
+        refused: bool,
+        read_at: f64,
+        writes: u64,
+    },
+}
+
+impl ModeProbe {
+    /// `Due` for a connection served by Nexus's own Hamlib `rigctld`, `Idle` for anything else:
+    /// Nexus's own daemons speak for their radios, and a shared external rigctld (NET rigctl,
+    /// another program's) serves other programs too, so it gets only the in-use judgement.
+    fn due_for(daemon: Option<&CatDaemon>) -> Self {
+        if matches!(daemon, Some(CatDaemon::Spawned(_))) {
+            ModeProbe::Due
+        } else {
+            ModeProbe::Idle
+        }
+    }
+}
 /// After this many consecutive failures, DATA-mode retries drop their explicit 3 kHz
 /// passband and go filter-agnostic (`M PKTUSB 0`) — the middle rung of the mode-set
 /// resilience ladder (see [`retry_passband`]). A backend that chokes on the width→DATA-
@@ -4232,6 +4269,8 @@ struct RadioLoop {
     /// A radio handoff installed another connection: the engine's judgement of the last one's DATA
     /// word is forgotten at the next tick's engine lock, before the mode word is worked out.
     link_judgement_stale: bool,
+    /// The once-per-connection DATA-mode probe ([`Self::step_mode_probe`]).
+    mode_probe: ModeProbe,
     /// Last CW keyer speed (WPM) pushed to the RIG over CAT (`set_keyspd`), so the command
     /// only fires on change.
     ///
@@ -5072,6 +5111,7 @@ impl RadioLoop {
     }
 
     fn new(applied: Transport, rigctld_proc: Option<CatDaemon>, cfg: &RadioConfig) -> Self {
+        let mode_probe = ModeProbe::due_for(rigctld_proc.as_ref());
         Self {
             remote_radio_id: None,
             port_claims: Vec::new(),
@@ -5124,6 +5164,7 @@ impl RadioLoop {
             mode_saw_reject: false,
             data_twin_reads: 0,
             link_judgement_stale: false,
+            mode_probe,
             last_cat_wpm: 0, // 0 = unset → first send pushes the speed
             cw_word_matched: None,
             cat_wpm_matched: false,
@@ -7176,6 +7217,126 @@ impl RadioLoop {
         }
     }
 
+    /// THE CONNECT PROBE (operator: "Yes, once at connect, then restore"). Once per connection
+    /// that Nexus's own Hamlib `rigctld` serves, while receiving: read the radio's mode, set
+    /// `PKTUSB`, and after [`MODE_PROBE_READ_MS`] (past Hamlib's own mode cache) read back what the
+    /// radio reports, then put the original mode back. The answer goes to the same judgement as
+    /// [`Self::judge_data_word`]: the link does not take `PKTUSB` when the radio reads back plain
+    /// `USB`, or when Hamlib refused the set and the radio does not read back `PKTUSB`. Anything
+    /// else (it reads `PKTUSB`, another mode, or nothing) is not a verdict, and changes nothing.
+    ///
+    /// Measured (Hamlib 4.6.5, `tests/rigctld_sdrconsole.rs`): SDR Console's `MDD;` is reported
+    /// taken and the radio reads `USB`; an ID904 emulation and piHPSDR take it as DIGU (`MD9;`) and
+    /// read `PKTUSB`.
+    ///
+    /// ⛔ WHEN, and these are the whole safety of it:
+    /// - only on a tick that may retune (`may`: not keyed, not mid-over, link up, no handoff or
+    ///   Test-CAT hold), and only while nothing of Nexus's is keyed;
+    /// - with TX armed, only once the current slot is past the point where an over may still key
+    ///   (WSJT-X's 75 %, [`crate::slot::wsjtx_may_key_at`]) and the next boundary is far enough
+    ///   that the read and the restore land before it; otherwise it waits for a later slot;
+    /// - a waiting probe that loses its window is put back at once, unjudged;
+    /// - any key-down while it waits puts the mode back first (`Rig::key`), so nothing ever
+    ///   transmits in the probe's mode;
+    /// - if anything else commands a mode while it waits (`Rig::mode_writes` moved), that mode
+    ///   stands: nothing is put back and nothing is judged.
+    ///
+    /// Skipped, and left to the in-use judgement, when the radio's mode cannot be read or is a CW
+    /// mode (a pitch-offset radio moves its dial on a CW↔SSB change).
+    fn step_mode_probe(&mut self, engine: &Mutex<Engine>, rig: &mut Rig, now: f64, may: bool) {
+        match std::mem::replace(&mut self.mode_probe, ModeProbe::Idle) {
+            ModeProbe::Idle => {}
+            ModeProbe::Due => {
+                if !may || !self.mode_probe_window(engine, rig, now) {
+                    self.mode_probe = ModeProbe::Due;
+                    return;
+                }
+                let Some(original) = rig.read_mode().filter(|m| {
+                    !matches!(
+                        m.trim().to_ascii_uppercase().as_str(),
+                        "CW" | "CWR" | "CW-R"
+                    )
+                }) else {
+                    return;
+                };
+                let refused = match rig.set_mode("PKTUSB", -1) {
+                    Ok(()) => false,
+                    Err(e) if e.kind() == std::io::ErrorKind::Other => true,
+                    // A link fault proves nothing about the radio: put it back, judge nothing.
+                    Err(_) => {
+                        let _ = rig.set_mode(&original, -1);
+                        return;
+                    }
+                };
+                rig.probe_restore = Some(original.clone());
+                self.mode_probe = ModeProbe::Waiting {
+                    original,
+                    refused,
+                    read_at: now + MODE_PROBE_READ_MS,
+                    writes: rig.mode_writes,
+                };
+            }
+            ModeProbe::Waiting {
+                original,
+                refused,
+                read_at,
+                writes,
+            } => {
+                if rig.probe_restore.is_none() {
+                    return; // a key-down already put it back (`Rig::key`)
+                }
+                if rig.mode_writes != writes {
+                    rig.probe_restore = None; // a mode commanded since stands
+                    return;
+                }
+                let window = may && self.mode_probe_window(engine, rig, now);
+                if window && now < read_at {
+                    self.mode_probe = ModeProbe::Waiting {
+                        original,
+                        refused,
+                        read_at,
+                        writes,
+                    };
+                    return;
+                }
+                let reads = window.then(|| rig.read_mode()).flatten();
+                rig.probe_restore = None;
+                let _ = rig.set_mode(&original, -1);
+                let reads = reads.as_deref().map(str::trim);
+                let not_taken = matches!(reads, Some(r) if r.eq_ignore_ascii_case("USB"))
+                    || (refused
+                        && window
+                        && !matches!(reads, Some(r) if r.eq_ignore_ascii_case("PKTUSB")));
+                if not_taken {
+                    let why = if refused {
+                        "refused it"
+                    } else {
+                        "still read USB"
+                    };
+                    self.data_word_not_taken(engine, "PKTUSB", &format!("{why} (connect check)"));
+                }
+            }
+        }
+    }
+
+    /// May the connect probe hold the radio in its mode for the next [`MODE_PROBE_READ_MS`]?
+    fn mode_probe_window(&self, engine: &Mutex<Engine>, rig: &Rig, now: f64) -> bool {
+        if rig.keyed || self.holds_tx() || self.operator_keyed() || self.manual_ptt_applied {
+            return false;
+        }
+        let eng = engine_lock(engine);
+        if !eng.tx_enabled() {
+            return true;
+        }
+        let period = eng.active_slot_secs() * 1000.0;
+        if period.is_nan() || period <= 0.0 {
+            return false;
+        }
+        let into = now.rem_euclid(period);
+        !crate::slot::wsjtx_may_key_at(into, period)
+            && period - into > MODE_PROBE_READ_MS + MODE_PROBE_MARGIN_MS
+    }
+
     /// Record that this Hamlib link does not take the DATA word `md`, and say so in the log.
     fn data_word_not_taken(&mut self, engine: &Mutex<Engine>, md: &str, why: &str) {
         let hamlib = matches!(self.rigctld_proc, None | Some(CatDaemon::Spawned(_)));
@@ -8175,6 +8336,10 @@ impl RadioLoop {
         want_active: &Transport,
         outgoing: u32,
     ) -> MonitorConn {
+        // A probe still waiting on the outgoing radio puts its mode back before the radio goes.
+        if let Some(mode) = rig.probe_restore.take() {
+            let _ = rig.set_mode(&mode, -1);
+        }
         let mut old_rig = std::mem::replace(rig, conn.rig);
         // Monitors are Vox/read-only; adoption restores the configured keying
         // method without reopening either connection.
@@ -8233,6 +8398,7 @@ impl RadioLoop {
         // before it works out the mode word.
         self.link_judgement_stale = true;
         self.data_twin_reads = 0;
+        self.mode_probe = ModeProbe::due_for(self.rigctld_proc.as_ref());
         self.last_dial = 0; // != any real dial → force the retune to command the restored freq
         self.last_mode = String::new(); // force the mode re-assert
         self.rig_asserted = false; // belt-and-braces: the retune re-asserts + re-latches same tick
@@ -9148,7 +9314,12 @@ impl RadioLoop {
                     }
                 }
                 self.data_twin_reads = 0;
+                // A probe still waiting puts its mode back through the old link, best effort.
+                if let Some(mode) = rig.probe_restore.take() {
+                    let _ = rig.set_mode(&mode, -1);
+                }
                 let (new_rig, proc, probe) = reopen_rig(&open_want, allow_coexist);
+                self.mode_probe = ModeProbe::due_for(proc.as_ref());
                 let (ok, detail, refused) = (probe.ok, probe.detail, probe.refused);
                 let detail = if suspect_rebuild && !daemon_died && !linkless {
                     format!("the CAT link stayed silent — the port was reopened. {detail}")
@@ -10290,6 +10461,14 @@ impl RadioLoop {
                 }
             }
 
+            // The once-per-connection DATA-mode probe, while receiving only.
+            self.step_mode_probe(
+                engine,
+                rig,
+                now,
+                can_retune && !link_down && !self.handoff_deferred && !self.cat_hold_active,
+            );
+
             // FM repeater: once the mode policy is FM, push the shift / offset / CTCSS —
             // ON CHANGE only, so the CAT link isn't spammed every loop. Leaving FM clears
             // the tracker so the next FM entry re-applies. All three commands are always
@@ -11048,7 +11227,7 @@ impl RadioLoop {
                             // One `m` read gives BOTH the mode (mirror) and the RX passband width.
                             let remote_mode = self.remote_read(engine);
                             let (m, pb) = rig.read_mode_passband();
-                            if !rig.keyed {
+                            if !rig.keyed && !matches!(self.mode_probe, ModeProbe::Waiting { .. }) {
                                 self.judge_data_word(engine, m.as_deref());
                             }
                             // THE NATIVE CI-V DAEMON'S WIDTH IS ITS OWN VERB (`1A 03`), never `m`'s
