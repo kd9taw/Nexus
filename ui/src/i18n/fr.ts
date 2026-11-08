@@ -4679,6 +4679,7 @@ export const FR: PartialCatalog = {
   "meters.tx.po.title": "Puissance de sortie réelle",
   "meters.tx.needle.peak.title": "Le repère clair est la crête : il garde la valeur la plus haute pendant une seconde, puis redescend. Entre deux passages, il montre la crête du dernier.",
   "meters.tx.swr.title": "Adaptation d'antenne — restez sous 2:1",
+  "meters.tx.swr.cutoff": "Adaptation d'antenne — Nexus arrête d'émettre au-dessus de {{ratio}}:1, votre réglage dans Paramètres ▸ Radio ▸ Limites d'émission et partage",
   "meters.tx.swr.unverified": "Adaptation d’antenne — c’est la valeur brute de la radio elle-même, et Nexus n’a pas d’échelle vérifiée pour ce modèle : il ne peut donc pas vous dire ce qui compte comme élevé ici. Regardez dans quel sens elle évolue pendant que vous accordez ; le chiffre absolu peut être très faux, et rien n’interrompt votre émission à cause de lui.",
   "nav.aria": "Mode de trafic",
   "nav.awards.label": "Diplômes",

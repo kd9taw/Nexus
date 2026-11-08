@@ -4679,6 +4679,7 @@ export const ES: PartialCatalog = {
   "meters.tx.po.title": "Potencia real de salida",
   "meters.tx.needle.peak.title": "La marca brillante es el pico: retiene la lectura más alta durante un segundo y luego baja. Entre pasadas muestra el pico de la última.",
   "meters.tx.swr.title": "Adaptación de antena — mantenla por debajo de 2:1",
+  "meters.tx.swr.cutoff": "Adaptación de antena — Nexus deja de transmitir por encima de {{ratio}}:1, tu ajuste en Ajustes ▸ Equipo ▸ Límites de transmisión y compartición",
   "meters.tx.swr.unverified": "Adaptación de antena — esta es la cifra en bruto del propio equipo, y Nexus no tiene una escala verificada para este modelo, así que no puede decirte qué cuenta como alto aquí. Fíjate en hacia dónde se mueve mientras sintonizas; el número absoluto puede estar muy lejos, y nada detiene tu transmisión por él.",
   "nav.aria": "Modo de operación",
   "nav.awards.label": "Diplomas",

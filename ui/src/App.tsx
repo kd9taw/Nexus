@@ -66,6 +66,7 @@ import { phoneTuneNeedsRearSource } from './features/yaesuTuneNote'
 import { useActivationNotices } from './useActivationNotices'
 import { t } from './i18n'
 import { resolveUnits, setUnitsMirror } from './units'
+import { setSwrCutoffMirror } from './swrCutoff'
 import { doubleBeep, processDecodes, txEarcon, type NeededAlert } from './alerts'
 import { openingToastSpec } from './openingAlert'
 import { announce } from './announce'
@@ -1611,6 +1612,12 @@ function App() {
   useEffect(() => {
     setUnitsMirror(settings?.units)
   }, [settings?.units])
+
+  // #476: the high-SWR cutoff, for the TX meters' tooltip (swrCutoff.ts). Not before the first
+  // load, so a window opening does not blank the value every other window is showing.
+  useEffect(() => {
+    if (settings) setSwrCutoffMirror(settings)
+  }, [settings])
 
   // The station profile changed (the picker, Settings, or an activation picking its park's): the
   // settings copy every screen reads takes the profile's call, grid, state and power.

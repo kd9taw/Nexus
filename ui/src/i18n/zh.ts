@@ -2907,6 +2907,7 @@ export const ZH: PartialCatalog = {
   "meters.tx.aria": "发射表",
   "meters.tx.idle": "TX 表 — {{when}}",
   "meters.tx.swr.title": "天线匹配 — 保持在 2:1 以下",
+  "meters.tx.swr.cutoff": "天线匹配 — 高于 {{ratio}}:1 时 Nexus 停止发射，即你在 设置 ▸ 电台 ▸ 发射限制与共享 中的设定",
   "meters.tx.swr.unverified": "天线匹配 — 这是电台自身的原始数值，而 Nexus 没有为该型号验证过的刻度，因此无法告知你何为过高。调谐时注意其变化方向；绝对值可能偏差很大，且不会据此阻止你发射。",
   "meters.tx.alc.title": "ALC — 设置麦克风增益，使 SSB 峰值仅轻触该区，切勿顶满",
   "meters.tx.po.title": "实际输出功率",
