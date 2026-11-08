@@ -50356,11 +50356,9 @@ fn install_panic_logger() {
         // `info` renders payload + location; the applog redactor scrubs it either way.
         tempo_core::applog::error("panic", &format!("at {where_}: {info}"));
         // Error level flushes, but a panic can be followed immediately by an abort, so make
-        // the wait explicit rather than relying on the writer getting a slice first. TX SAFETY:
-        // not on a transmit session's driver, whose stops go out the moment this hook returns
-        // (it catches its own panic, so no abort follows): the line is queued, and the writer
-        // flushes an error line as soon as it has it.
-        if !tempo_net::on_a_transmit_driver() {
+        // the wait explicit rather than relying on the writer getting a slice first, except
+        // where waiting would hold a Stop (`a_panic_here_may_wait_for_the_disk`).
+        if a_panic_here_may_wait_for_the_disk() {
             tempo_core::applog::flush();
         }
         // ★ THE STARTUP-SILENCE CATCH. A panic BEFORE the main window exists is the shape the
@@ -50374,6 +50372,25 @@ fn install_panic_logger() {
         }
         previous(info);
     }));
+}
+
+/// Whether the panic hook may wait (up to 2 s) for the panic's line to reach the disk on this
+/// thread.
+///
+/// TX SAFETY: a panic hook runs at the panic, before anything unwinds, so everything the thread
+/// holds stays held while it waits. So it never waits:
+/// - on a transmit session's driver, whose stops go out the moment the hook returns (it catches
+///   its own panic, so no abort follows);
+/// - under the Engine lock (any guard on this thread, counted in every build): the radio loop
+///   needs it every 20 ms and is the only thing that unkeys the radio, so a stop verb that
+///   panicked there would hold the unkey for as long as the disk took;
+/// - on Stop's second road's stopper, which runs every later Stop's verbs.
+///
+/// The line is queued anyway, and the writer flushes an error line as soon as it has it.
+fn a_panic_here_may_wait_for_the_disk() -> bool {
+    !tempo_net::on_a_transmit_driver()
+        && tempo_core::logbook::io_fence::engine_guards_held() == 0
+        && !remote_service::operations::on_the_road_stopper()
 }
 
 /// Build and run the Tauri application.
@@ -54306,6 +54323,55 @@ fn winlink_disconnect() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use crate::remote_service::stored_log_tests::StoredLog;
+
+    /// ⛔ A panic on the Stop path never waits for the disk. The panic hook runs at the panic,
+    /// before anything unwinds, so whatever the thread holds stays held while the hook waits:
+    /// under the Engine lock that is the radio loop, which unkeys the radio, and on the road's
+    /// stopper it is every later Stop's verbs. A stop verb that panicked there would hold the unkey
+    /// for as long as the disk took, up to 2 s. CONTROL: an ordinary thread's panic still waits
+    /// for its line, and so does a thread once its Engine guard is gone.
+    #[test]
+    fn a_panic_on_the_stop_path_never_waits_for_the_disk() {
+        let engine = std::sync::Arc::new(std::sync::Mutex::new(tempo_app::engine::Engine::new(
+            "W9XYZ", "EN52", 0,
+        )));
+        let on = |name: &str, holding_engine: bool| {
+            let engine = engine.clone();
+            std::thread::Builder::new()
+                .name(name.into())
+                .spawn(move || {
+                    let _guard = holding_engine.then(|| tempo_app::engine::engine_lock(&engine));
+                    super::a_panic_here_may_wait_for_the_disk()
+                })
+                .unwrap()
+                .join()
+                .unwrap()
+        };
+        assert!(
+            on("some-thread", false),
+            "CONTROL: an ordinary panic waits for the disk"
+        );
+        assert!(
+            !on("some-thread", true),
+            "a panic under the Engine lock never waits for the disk"
+        );
+        assert!(
+            !on("nexus-remote-road-stopper", false),
+            "a panic on the road's stopper never waits for the disk"
+        );
+        assert!(
+            !on(tempo_net::flex::session::DRIVER_THREAD, false),
+            "CONTROL: nor on a transmit session's driver, as before"
+        );
+        let after = std::thread::spawn(move || {
+            drop(tempo_app::engine::engine_lock(&engine));
+            super::a_panic_here_may_wait_for_the_disk()
+        });
+        assert!(
+            after.join().unwrap(),
+            "CONTROL: the guard gone, a panic waits again"
+        );
+    }
 
     /// The AI decoder's provisional tail is for the eye only. The copilot's callsign chips and the
     /// report and name the log entry takes all read the CONFIRMED copy, so a

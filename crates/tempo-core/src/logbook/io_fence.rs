@@ -25,12 +25,16 @@
 //! code that touches the disk. A guard taken with a raw `Mutex::lock()` is invisible to it —
 //! which is why tempo-app's scan forbids one anywhere outside `EngineGuard`.
 //!
-//! # Debug builds only
+//! # Debug builds only, except the count
 //!
-//! Every check here, and the count itself, is compiled out of a release build: there the
-//! functions are empty and [`EngineHeld`] is a zero-sized marker with nothing to drop. What a
+//! Every check here is compiled out of a release build: there the functions are empty. What a
 //! failed check reports is a design error, and a debug build (and every test run) is where it
 //! is found. It changes nothing about when anything locks, waits or transmits.
+//!
+//! The count itself is kept in every build (one thread-local add and subtract per guard), because
+//! the app's panic hook reads it: a panic hook runs before anything unwinds, so a hook that waited
+//! for the disk under an Engine guard would hold the radio loop, and with it the unkey, for as
+//! long as the disk took. [`EngineHeld`] stays zero-sized either way.
 //!
 //! # Where the fence stands, and where it does not
 //!
@@ -81,15 +85,17 @@
 //! with those paths and with the tests that drive them directly, so the fence stands at the
 //! store's operations, not inside the primitives.
 
-#[cfg(debug_assertions)]
 use std::cell::Cell;
 use std::marker::PhantomData;
 
-#[cfg(debug_assertions)]
 thread_local! {
     // How many Engine guards this thread holds. Per thread, because the lock is per thread:
     // only a guard held HERE makes this thread's disk work a wait the radio loop feels.
     static ENGINE_HELD: Cell<u32> = const { Cell::new(0) };
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
     // Whether this thread is one of the log lanes.
     static LOG_LANE: Cell<bool> = const { Cell::new(false) };
 }
@@ -109,7 +115,6 @@ impl EngineHeld {
     /// Count one more Engine guard on this thread, until the token drops.
     #[inline]
     pub fn acquired() -> EngineHeld {
-        #[cfg(debug_assertions)]
         let _ = ENGINE_HELD.try_with(|n| n.set(n.get() + 1));
         EngineHeld {
             _thread_bound: PhantomData,
@@ -117,24 +122,15 @@ impl EngineHeld {
     }
 }
 
-#[cfg(debug_assertions)]
 impl Drop for EngineHeld {
     fn drop(&mut self) {
         let _ = ENGINE_HELD.try_with(|n| n.set(n.get().saturating_sub(1)));
     }
 }
 
-/// How many Engine guards this thread holds — always 0 in a release build, which counts
-/// nothing.
+/// How many Engine guards this thread holds, in every build.
 pub fn engine_guards_held() -> u32 {
-    #[cfg(debug_assertions)]
-    {
-        ENGINE_HELD.try_with(Cell::get).unwrap_or(0)
-    }
-    #[cfg(not(debug_assertions))]
-    {
-        0
-    }
+    ENGINE_HELD.try_with(Cell::get).unwrap_or(0)
 }
 
 /// Mark this thread as a log lane: the database writer and the mirror call it once, first
@@ -205,6 +201,22 @@ pub fn on_log_lane(op: &str) {
         );
     }
     off_engine_lock(op);
+}
+
+/// In every build, release included: the panic hook reads the count to know whether waiting on
+/// the disk would hold the Engine lock.
+#[cfg(test)]
+mod every_build {
+    use super::*;
+
+    #[test]
+    fn the_count_is_kept_in_a_release_build_too() {
+        assert_eq!(engine_guards_held(), 0);
+        let held = EngineHeld::acquired();
+        assert_eq!(engine_guards_held(), 1, "a guard held here is counted");
+        drop(held);
+        assert_eq!(engine_guards_held(), 0, "and uncounted when it drops");
+    }
 }
 
 #[cfg(all(test, debug_assertions))]

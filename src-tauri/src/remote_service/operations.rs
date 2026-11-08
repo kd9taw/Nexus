@@ -1348,7 +1348,7 @@ impl Drop for LanConnection {
     }
 }
 
-pub(crate) use transmit_stop::RoadStop;
+pub(crate) use transmit_stop::{on_the_road_stopper, RoadStop};
 
 /// Presence for a computer on Stop's second road (`lan::stop_road`): minted under that computer's
 /// own lease, exactly as a stream's is ([`Authority::stream_presence`]), and handed to the engine,
