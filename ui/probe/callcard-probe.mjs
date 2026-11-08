@@ -31,6 +31,8 @@ import { chrome } from '../../remote/test/browser-runtime.mjs'
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const SIZES = [{ w: 1366, h: 768 }, { w: 1024, h: 768 }]
 const CASES = ['strip', 'qso']
+/** The station card, then the Best times card (`&card=best`), each against the same boxes. */
+const CARDS = [{ name: 'station card', q: '' }, { name: 'Best times card', q: '&card=best' }]
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** The card's box and whether it is drawn, and for each transmit box whether the card covers any of nine
@@ -110,6 +112,8 @@ async function measure(w, h, which, avoid, extra = '', expr = MEASURE) {
     at = await evaluate(`(() => { const b = document.querySelector('.probe-call')?.getBoundingClientRect(); return b ? { x: b.left + b.width / 2, y: b.top + b.height / 2 } : null })()`)
   }
   if (!at) return null
+  const RECTS = `JSON.stringify([...document.querySelectorAll('[data-tx]')].map((e) => { const r = e.getBoundingClientRect(); return [e.dataset.tx, Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)] }))`
+  const before = await evaluate(RECTS)
   for (const type of ['mousePressed', 'mouseReleased']) {
     await call('Input.dispatchMouseEvent', { type, x: at.x, y: at.y, button: 'left', clickCount: 1 })
   }
@@ -120,27 +124,33 @@ async function measure(w, h, which, avoid, extra = '', expr = MEASURE) {
     if (now && last && JSON.stringify(now) === JSON.stringify(last)) break
     last = now
   }
+  const after = await evaluate(RECTS)
   await browser.call('Target.closeTarget', { targetId })
+  if (last) last.txMoved = before !== after
   return last
 }
 
 let code = 0
 try {
-  for (const { w, h } of SIZES) {
-    for (const which of CASES) {
-      const m = await measure(w, h, which, true)
-      console.log(`callcard-probe: ${which}, window ${w}×${h}: ${JSON.stringify(m)}`)
+  for (const card of CARDS) for (const { w, h, zoom } of [...SIZES, ...(card.q ? [{ w: 1024, h: 768, zoom: 1.75 }] : [])]) {
+    const z = zoom ? `&zoom=${zoom}` : ''
+    const where = `${w}×${h}${zoom ? ` at ${zoom * 100}%` : ''}`
+    // At 175% the page's fixed boxes scale with the app: the strip case's call (top 560) would stand
+    // below a 768 px window, so only the QSO strip case is drawn there.
+    for (const which of zoom ? ['qso'] : CASES) {
+      const m = await measure(w, h, which, true, card.q + z)
+      console.log(`callcard-probe: ${card.name}, ${which}, window ${where}: ${JSON.stringify(m)}`)
       if (!m || !m.drawn) {
-        console.error(`callcard-probe: the card was never drawn for the ${which} case at ${w}×${h}`)
+        console.error(`callcard-probe: the ${card.name} was never drawn for the ${which} case at ${where}`)
         code = 2
-      } else if (Object.keys(m.covered).length === 0 || Object.values(m.covered).some(Boolean)) {
-        console.error(`callcard-probe: RED ${which} at ${w}×${h} — the card covers a transmit control (see "covered")`)
+      } else if (Object.keys(m.covered).length === 0 || Object.values(m.covered).some(Boolean) || m.txMoved) {
+        console.error(`callcard-probe: RED ${card.name} ${which} at ${where} — it covers a transmit control (see "covered") or one moved (txMoved: ${m.txMoved})`)
         code = code || 1
       }
-      const c = await measure(w, h, which, false)
-      console.log(`callcard-probe: CONTROL ${which}, window ${w}×${h}, transmit classes removed: ${JSON.stringify(c)}`)
+      const c = await measure(w, h, which, false, card.q + z)
+      console.log(`callcard-probe: CONTROL ${card.name} ${which}, window ${where}, transmit classes removed: ${JSON.stringify(c)}`)
       if (!c || !Object.values(c.covered).some(Boolean)) {
-        console.error(`callcard-probe: CONTROL FAILED ${which} at ${w}×${h} — with nothing to keep off, the card did not land on the boxes; the check cannot fail`)
+        console.error(`callcard-probe: CONTROL FAILED ${card.name} ${which} at ${where} — with nothing to keep off, the card did not land on the boxes; the check cannot fail`)
         code = code || 1
       }
     }
@@ -163,7 +173,7 @@ try {
       code = code || 1
     }
   }
-  if (code === 0) console.log(`callcard-probe: PASS — the card clear of the TX strip, Stop TX, the TX dock and the QSO strip at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}; each control covered with the transmit classes removed; from Phone's Card button the photo shows and the text takes the card's width`)
+  if (code === 0) console.log(`callcard-probe: PASS — the station card and the Best times card clear of the TX strip, Stop TX, the TX dock and the QSO strip at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}; each control covered with the transmit classes removed; from Phone's Card button the photo shows and the text takes the card's width`)
   process.exitCode = code
 } finally {
   await browser.stop()

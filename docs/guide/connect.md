@@ -456,6 +456,47 @@ including the FT8/CW/SSB chips. The *observed* half is a different pane: **Getti
 the stations that actually reported hearing you. Both are documentation fixtures here — no path
 was solved for a real contact, and nobody reported this station.*
 
+### Find the best times to work a call
+
+The **Best times** box answers one question: when, and on which band, can I work this station?
+Type a call (or a grid square) and press **Best times**. You can also right-click a call in the
+Call Roster or Band Activity, or open a JS8 station row's menu, and choose **Best times** at the
+top. That opens a small card beside the row and does nothing else: it does not select, tune or
+call the station.
+
+The answer starts with now: "Now: try 20m", how good the band is and until about which hour (UTC,
+on the hour, because the model works in hours), and a second band if one is also open. If nothing
+is open you get "a long shot" or "Not now". Under that come the next good windows over the coming
+day, with the time in UTC and in your own time, then the week. The model is a monthly median, so
+every day this week has the same hours. The only thing that changes from day to day is the Kp
+forecast, so you get a warning only for a day whose forecast Kp reaches this path's auroral zone.
+Past the end of the forecast, Nexus says nothing about the weather.
+
+Every answer says what it rests on:
+
+- **Where the station is.** It uses the same place the rotator would point at: the grid on your
+  log form, a grid they sent on the air, the callbook's answer, or your last contact with them. If
+  Nexus knows only their country, it says "centre of … Rough." and asks the callbook once, after
+  you asked for the answer, never when you just hover. If a station is in your own country and
+  only the country is known, it gives no answer, because the centre of your own country says
+  nothing about where they are. For a ship or aircraft mobile it asks for their grid. You can
+  always type a grid for the call.
+- **The model and your station.** It follows your prediction engine (P.533 by default), its month,
+  the mode you picked (FT8, FT4, CW or SSB, starting from your radio's mode), and the power and
+  antenna gain it assumed.
+
+It never gives a percentage, and it never promises that the station is on the air. One line says
+when the Spots board last saw them. That line comes from spots Nexus already has and changes no
+ranking. Bands your licence does not let you transmit on in that mode are left out of the answer
+and dimmed in the chart. VHF and up are not predicted.
+
+In a wide box the band-by-hour chart sits beside the answer, and in a narrow one it goes below.
+The card's **See full day** opens Conditions in its own window with this call, so your operating
+screen and its Stop TX stay where they are. If you have removed the box from that window's layout,
+See full day puts it back. Existing layouts get the box once, as the last tab of the right
+column's top slot, and still read as the layout they were. If you remove it, it stays removed.
+Nothing in the box or the card transmits.
+
 ### Choose the prediction engine
 
 In [Settings ▸ Services](settings-reference.md#integrations--feeds),
