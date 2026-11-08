@@ -62,6 +62,21 @@ const openMenu = () => {
 }
 const rows = (menu: HTMLElement) => within(menu).getAllByRole('menuitemradio').map((el) => el.textContent ?? '')
 
+describe('the band menu after a radio switch', () => {
+  it('reads its rows again, so a row shows the new radio\'s dial', async () => {
+    const { rerender } = render(<BandPicker snap={snap} mode="phone" />)
+    await settle()
+    expect(api.getLicensedBandPlan).toHaveBeenCalledTimes(1)
+    rerender(<BandPicker snap={{ ...snap, activeRadioId: 2 } as AppSnapshot} mode="phone" />)
+    await settle()
+    expect(api.getLicensedBandPlan).toHaveBeenCalledTimes(2)
+    // Control: a snapshot on the same radio does not re-read.
+    rerender(<BandPicker snap={{ ...snap, activeRadioId: 2 } as AppSnapshot} mode="phone" />)
+    await settle()
+    expect(api.getLicensedBandPlan).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('the band picker QO-100 row', () => {
   it('opens the Satellites screen on QO-100 and tunes nothing itself', async () => {
     const open = vi.fn()
