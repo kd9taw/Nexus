@@ -1540,10 +1540,10 @@ fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_link_stuck() {
 /// the Stops had gone.
 ///
 /// Timed from the press to the Stop's departure. Each press runs on a thread of its own, as the
-/// window's event loop runs it, while this thread receives, so what the handler does after the
-/// write (answering the call on Tauri's runtime) is not in the number. The runtime is warmed
-/// first: in the app it runs long before any Stop, and here its first use, about 4 ms quiet and
-/// 50-230 ms on a loaded box, would otherwise compete with the first press.
+/// window's event loop runs it, while this thread waits on the socket, so what the handler does
+/// after the write (answering the call on Tauri's runtime) is not in the number. The runtime is
+/// warmed first: in the app it runs long before any Stop, and here its first use, about 4 ms
+/// quiet and 50-230 ms on a loaded box, would otherwise compete with the first press.
 #[test]
 fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_audio_sender_blocked_too() {
     use crate::lan_client::audio_road::{AudioRoad, StandIn};
@@ -1554,7 +1554,11 @@ fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_audio_sender_bl
     let exported = [5; EXPORTED];
     let tag = a_tag_of_its_own();
     let socket = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
-    socket.set_nonblocking(true).unwrap();
+    // A blocking receive, woken by the datagram: a thread spinning on the socket used up its
+    // turn on a loaded box and was descheduled just as the Stop arrived, stamping it 4-20 ms late.
+    socket
+        .set_read_timeout(Some(Duration::from_millis(50)))
+        .unwrap();
     let road =
         StopRoad::open(socket.local_addr().unwrap(), tag, &exported, on_air.clone()).unwrap();
     let station = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
