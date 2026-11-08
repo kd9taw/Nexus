@@ -13,7 +13,7 @@
 // Every assertion resolves the cascade WINNER for the rendered element (cssCascade: importance →
 // specificity → source order) — a regex over the sheet would pass on a dead selector.
 // ⚠️ jsdom does not lay out: nothing here is a pixel, only what the cascade declares. The pixels are
-// the real-Chrome pass's (tasks/scratch/n6-needle/).
+// the real-Chrome pass's, a separate measurement run in a real browser.
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
