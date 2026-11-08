@@ -19518,15 +19518,35 @@ impl Engine {
         self.settings.hrd_udp_addr.trim().to_string()
     }
 
-    /// Report an HRD send outcome from the shell worker. On failure the record is re-queued
-    /// (bounded) so a closed HRD never loses the contact; `hrd_link_up` drives the indicator.
+    /// Report an HRD send outcome from the shell worker. On failure the record is re-queued at the
+    /// front (bounded, [`Self::hrd_put_back`]) so a closed HRD never loses the contact; `hrd_link_up`
+    /// drives the indicator.
     pub fn note_hrd_result(&mut self, rec: QsoRecord, delivered: bool) {
         self.hrd_link_up = Some(delivered);
-        if !delivered && !self.upload_cancelled(&rec) {
-            if self.hrd_pending.len() >= 256 {
-                self.hrd_pending.pop_front();
+        if !delivered {
+            self.hrd_put_back(vec![rec]);
+        }
+    }
+
+    /// HRD Logbook refused a send and the drain stopped there: `unsent` is the record that failed and
+    /// every one after it that the drain took, in the order they were logged. The link is down, and
+    /// they all go back ([`Self::hrd_put_back`]).
+    pub fn hrd_unreachable(&mut self, unsent: Vec<QsoRecord>) {
+        self.hrd_link_up = Some(false);
+        self.hrd_put_back(unsent);
+    }
+
+    /// What HRD's drain took and did not send (`recs`, in the order it was logged) goes back ahead of
+    /// anything logged since, for the next tick. A contact deleted meanwhile is left out. Bounded as
+    /// the queue always is: past 256 the oldest goes.
+    pub fn hrd_put_back(&mut self, recs: Vec<QsoRecord>) {
+        for rec in recs.into_iter().rev() {
+            if !self.upload_cancelled(&rec) {
+                self.hrd_pending.push_front(rec);
             }
-            self.hrd_pending.push_back(rec);
+        }
+        while self.hrd_pending.len() > 256 {
+            self.hrd_pending.pop_front();
         }
     }
 

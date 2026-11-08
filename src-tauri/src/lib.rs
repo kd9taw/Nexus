@@ -42323,6 +42323,57 @@ mod upload_record_tests {
             assert_eq!(calls(&arrived(&dxkeeper)), ["K2KPT"]);
         }
 
+        /// ⛔ HRD LOGBOOK CLOSED WITH SEVERAL CONTACTS QUEUED. Each tick's drain takes the whole queue
+        /// and stops at the first failure. Every contact still reaches HRD once it opens, in order,
+        /// none lost and none twice.
+        #[test]
+        fn hrd_closed_with_several_queued_loses_none_and_sends_none_twice() {
+            let _one = one_at_a_time();
+            let port = {
+                let probe = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+                probe.local_addr().unwrap().port()
+            };
+            let engine = engine(free_port());
+            {
+                let mut e = crate::engine_lock(&engine);
+                let mut s = e.settings().clone();
+                s.hrd_logging = true;
+                s.hrd_udp_addr = format!("127.0.0.1:{port}");
+                e.apply_settings(s);
+            }
+            for call in ["K1HRD", "K2HRD", "K3HRD"] {
+                log(&engine, call);
+            }
+            // Closed: two ticks, so an order that turned over would show.
+            for _ in 0..2 {
+                crate::drain_hrd(&engine);
+            }
+            assert_eq!(
+                crate::engine_lock(&engine).snapshot().radio.hrd_queued,
+                3,
+                "all three still queued"
+            );
+
+            let hrd = std::net::UdpSocket::bind(("127.0.0.1", port)).unwrap();
+            hrd.set_read_timeout(Some(std::time::Duration::from_millis(300)))
+                .unwrap();
+            for _ in 0..2 {
+                crate::drain_hrd(&engine);
+            }
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = hrd.recv(&mut buf) {
+                let text = String::from_utf8_lossy(&buf[..n]).to_string();
+                let call = ["K1HRD", "K2HRD", "K3HRD"]
+                    .into_iter()
+                    .find(|c| text.contains(c))
+                    .expect("a contact");
+                got.push(call);
+            }
+            assert_eq!(got, ["K1HRD", "K2HRD", "K3HRD"], "each once, in order");
+            assert_eq!(crate::engine_lock(&engine).snapshot().radio.hrd_queued, 0);
+        }
+
         /// A send that connected is never repeated: not by a service's retries, and not by anything
         /// that waits after it.
         #[test]
@@ -44373,6 +44424,44 @@ fn leg_under_way(leg: u8) {
     if let Some(mut during) = hook {
         during(leg);
         LEG_UNDER_WAY.with(|hook| *hook.borrow_mut() = Some(during));
+    }
+}
+
+/// HRD Logbook drain (F4MQS): the datagram used to be fire-and-forget from log_qso, so a QSO logged
+/// while HRD was closed vanished. Now the engine queues them and the upload worker sends them here,
+/// each tick — CONNECTED to the target so a closed HRD on localhost surfaces ConnectionRefused
+/// (ICMP port-unreachable), which we report back so the record is re-queued and the cockpit shows
+/// the link down.
+/// ⚠️ NEEDS-BENCH: the closed-port detection is OS/loopback-dependent; verified on Windows/Linux
+/// localhost but confirm on the operator's box.
+fn drain_hrd(engine: &SharedEngine) {
+    let (pending, addr) = {
+        let mut eng = engine_lock_result(engine).unwrap_or_else(|e| e.into_inner());
+        (eng.take_hrd_pending(), eng.hrd_addr())
+    };
+    let mut pending = pending.into_iter();
+    while let Some(rec) = pending.next() {
+        if upload_cancelled(engine, &rec) {
+            continue;
+        }
+        let datagram = {
+            let eng = engine_lock_result(engine).unwrap_or_else(|e| e.into_inner());
+            eng.hrd_datagram(&rec)
+        };
+        // connect()+send() off the lock — DNS/connect can block, and a slow
+        // resolver must never freeze the engine (the original spawn's reason).
+        let delivered = hrd_send_connected(&addr, datagram.as_bytes());
+        let mut eng = engine_lock_result(engine).unwrap_or_else(|e| e.into_inner());
+        if !delivered {
+            // Stop hammering a closed HRD this tick. The one that failed goes back with every one
+            // this drain took and did not try, in order, for the next tick: the take emptied HRD's
+            // queue, and this is all that holds them. One log line, not one per queued record.
+            eng.hrd_unreachable(std::iter::once(rec).chain(pending).collect());
+            conn_log("HRD", "error", "HRD Logbook not reachable — QSO queued");
+            break;
+        }
+        eng.note_hrd_result(rec, true);
+        conn_log("HRD", "ok", "QSO forwarded to HRD Logbook");
     }
 }
 
@@ -51816,43 +51905,7 @@ fn start_on_the_logbook(
                 );
             }
             dxkeeper_wait_tick(&push_engine, dxk.as_ref(), &mut dxk_wait, now_unix);
-            // HRD Logbook drain (F4MQS): the datagram used to be fire-and-forget from
-            // log_qso, so a QSO logged while HRD was closed vanished. Now the engine
-            // queues them and we send here — CONNECTED to the target so a closed HRD on
-            // localhost surfaces ConnectionRefused (ICMP port-unreachable), which we
-            // report back so the record is re-queued and the cockpit shows the link down.
-            // ⚠️ NEEDS-BENCH: the closed-port detection is OS/loopback-dependent; verified
-            // on Windows/Linux localhost but confirm on the operator's box.
-            {
-                let (pending, addr) = {
-                    let mut eng =
-                        engine_lock_result(&push_engine).unwrap_or_else(|e| e.into_inner());
-                    (eng.take_hrd_pending(), eng.hrd_addr())
-                };
-                for rec in pending {
-                    if upload_cancelled(&push_engine, &rec) {
-                        continue;
-                    }
-                    let datagram = {
-                        let eng =
-                            engine_lock_result(&push_engine).unwrap_or_else(|e| e.into_inner());
-                        eng.hrd_datagram(&rec)
-                    };
-                    // connect()+send() off the lock — DNS/connect can block, and a slow
-                    // resolver must never freeze the engine (the original spawn's reason).
-                    let delivered = hrd_send_connected(&addr, datagram.as_bytes());
-                    let mut eng =
-                        engine_lock_result(&push_engine).unwrap_or_else(|e| e.into_inner());
-                    eng.note_hrd_result(rec, delivered);
-                    if !delivered {
-                        // Stop hammering a closed HRD this tick — the queue stays, the next
-                        // tick retries. One log line, not one per queued record.
-                        conn_log("HRD", "error", "HRD Logbook not reachable — QSO queued");
-                        break;
-                    }
-                    conn_log("HRD", "ok", "QSO forwarded to HRD Logbook");
-                }
-            }
+            drain_hrd(&push_engine);
         });
     }
 

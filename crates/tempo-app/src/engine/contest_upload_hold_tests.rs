@@ -868,3 +868,24 @@ fn a_contact_deleted_in_the_workers_hand_cannot_join_the_wait() {
     assert_eq!(e.dxkeeper_hold(&rec), None);
     assert_eq!(e.dxkeeper_waiting_count(), 0);
 }
+
+/// ⛔ HRD LOGBOOK'S DRAIN STOPS AT ITS FIRST FAILED SEND. What it took and did not try goes back with
+/// the failed one, ahead of anything logged meanwhile, in the order it was logged.
+#[test]
+fn what_hrds_drain_did_not_try_goes_back_in_order() {
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    let mut s = e.settings().clone();
+    s.hrd_logging = true;
+    e.apply_settings(s);
+    for call in ["K1ABC", "W1AW", "N0CALL"] {
+        e.log_qso(cw(call));
+    }
+    let taken = e.take_hrd_pending();
+    e.log_qso(cw("K9XYZ"));
+    e.hrd_unreachable(taken);
+    let back = e.take_hrd_pending();
+    assert_eq!(
+        back.iter().map(|r| r.call.as_str()).collect::<Vec<_>>(),
+        ["K1ABC", "W1AW", "N0CALL", "K9XYZ"]
+    );
+}
