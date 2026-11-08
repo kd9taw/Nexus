@@ -118,7 +118,10 @@ pub const COMMON_CAT_MODELS: &[(u32, &str, &[u32])] = &[
     (1036, "Yaesu FT-891", &[38400]),
     (1022, "Yaesu FT-857 / FT-857D", &[4800]),
     (1041, "Yaesu FT-818 / FT-818ND", &[4800]),
-    (1020, "Yaesu FT-817 / FT-817ND", &[4800]),
+    // 9600 too, and it must stay AHEAD of the FT-847 seed below: that open's CAT ON is LOCK ON on
+    // this family, whose own open sends nothing (see the order test). One entry covers the family:
+    // they answer the same read, and a seeded model is a guess the operator confirms anyway.
+    (1020, "Yaesu FT-817 / FT-817ND", &[4800, 9600]),
     (3070, "Icom IC-7100", &[19200, 115200]),
     (3085, "Icom IC-705", &[115200, 19200]),
     (3088, "Xiegu G90", &[19200]),
@@ -127,6 +130,7 @@ pub const COMMON_CAT_MODELS: &[(u32, &str, &[u32])] = &[
     // The FT-847's CAT RATE menu offers exactly 4800 / 9600 / 57600 and Hamlib's caps agree
     // (`rigctl -m 1001 --dump-caps` → `4800..57600`). All three are seeded rather than one
     // "default": an operator who moved the menu off any single seed would be undetectable.
+    // ⚠️ LAST, after the FT-817 family: its open sends CAT ON, which that family reads as LOCK ON.
     (1001, "Yaesu FT-847", &[9600, 4800, 57600]),
 ];
 
@@ -367,6 +371,32 @@ mod tests {
                     .iter()
                     .any(|c| c.model == 1001 && c.baud == Some(baud) && c.seeded),
                 "an unconfigured FT-847 on {baud} baud is never tried by Auto-test"
+            );
+        }
+    }
+
+    /// ⚠️ THE FT-847 PROBE MUST NEVER BE THE FIRST TO REACH AN FT-817-FAMILY RADIO. Hamlib's FT-847
+    /// open sends CAT ON, `00 00 00 00 00`, and on the FT-817/818/857/897 that frame is LOCK ON;
+    /// the probe's rigctld is killed, not closed, so no CAT OFF (LOCK OFF) follows. Those radios
+    /// read the frequency the same way, so an unprotected one would answer the FT-847 probe with
+    /// its dial locked and be named an FT-847. So at every rate an 817-family radio can be set to
+    /// (4800 / 9600 / 38400) that the FT-847 seed also tries, an 817-family seed — whose open sends
+    /// nothing — must come first on the port, and the first answer ends the sweep.
+    #[test]
+    fn an_ft817_family_radio_answers_its_own_seed_before_the_ft847_probe_locks_it() {
+        const FT817_FAMILY: &[u32] = &[1020, 1041, 1022, 1023, 1043];
+        const FT817_FAMILY_RATES: &[u32] = &[4800, 9600, 38400];
+        let cands = candidates_from(&[usb("COM4", "USB-SERIAL CH340", "wch.cn")], 0, &[]);
+        let first = |pred: &dyn Fn(&Candidate) -> bool| cands.iter().position(|c| pred(c));
+        for &baud in FT817_FAMILY_RATES {
+            let Some(ft847) = first(&|c| c.model == 1001 && c.baud == Some(baud)) else {
+                continue;
+            };
+            let own = first(&|c| FT817_FAMILY.contains(&c.model) && c.baud == Some(baud));
+            assert!(
+                own.is_some_and(|i| i < ft847),
+                "an FT-817-family radio at {baud} baud meets the FT-847 probe (CAT ON = LOCK ON) \
+                 before any seed of its own family"
             );
         }
     }
