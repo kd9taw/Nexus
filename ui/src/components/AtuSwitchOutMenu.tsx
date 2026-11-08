@@ -14,6 +14,7 @@
 //
 // ⚠️ Born migrated (i18n/hardcoded-strings.test.ts): every word comes from the catalogs.
 import * as RM from '@radix-ui/react-dropdown-menu'
+import { MenuContent, MenuRoot } from './ui/MenuParts'
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent, type RefObject } from 'react'
 import { t } from '../i18n'
 
@@ -103,12 +104,12 @@ export function AtuSwitchOutMenu({
   buttonRef: RefObject<HTMLButtonElement | null>
 }) {
   return (
-    <RM.Root open={open} onOpenChange={onOpenChange}>
+    <MenuRoot open={open} onOpenChange={onOpenChange}>
       <RM.Trigger asChild>
         <span className="atu-menu-anchor" aria-hidden="true" tabIndex={-1} />
       </RM.Trigger>
       <RM.Portal>
-        <RM.Content
+        <MenuContent
           className="ui-menu box-menu"
           aria-label={t('operate.strip.atu.menu.aria')}
           // The anchor is an empty span; name the menu itself rather than point at it.
@@ -127,8 +128,8 @@ export function AtuSwitchOutMenu({
               {t('operate.strip.atu.switchOut')}
             </RM.Item>
           </div>
-        </RM.Content>
+        </MenuContent>
       </RM.Portal>
-    </RM.Root>
+    </MenuRoot>
   )
 }

@@ -5,6 +5,7 @@
 // It edits a choice and hands it back (`onChange`); the Logbook saves it. Nothing here knows where
 // a choice is kept, so the menu cannot write past the one writer (`setLogbookColumns`).
 import * as RM from '@radix-ui/react-dropdown-menu'
+import { MenuContent, MenuRoot } from './ui/MenuParts'
 import { t } from '../i18n'
 import {
   columnName,
@@ -32,7 +33,7 @@ export function LogColumnsMenu({ choice, onChange, onReset }: Props) {
   const custom =
     choice.shown.length > 0 || choice.hidden.length > 0 || Object.keys(choice.widths).length > 0 || !!choice.order
   return (
-    <RM.Root modal={false}>
+    <MenuRoot>
       <RM.Trigger asChild>
         <button
           type="button"
@@ -43,7 +44,7 @@ export function LogColumnsMenu({ choice, onChange, onReset }: Props) {
         </button>
       </RM.Trigger>
       <RM.Portal>
-        <RM.Content className="ui-menu log-columns-menu" sideOffset={4} align="end" collisionPadding={8}>
+        <MenuContent className="ui-menu log-columns-menu" sideOffset={4} align="end" collisionPadding={8}>
           {/* The portal escapes `.app`'s zoom, so the content re-applies it (as ui/Menu does). */}
           <div style={{ zoom: 'var(--ui-zoom, 1)' }}>
             <p className="log-columns-hint">{t('logbook.columns.hint')}</p>
@@ -73,8 +74,8 @@ export function LogColumnsMenu({ choice, onChange, onReset }: Props) {
               {t('logbook.columns.reset')}
             </RM.Item>
           </div>
-        </RM.Content>
+        </MenuContent>
       </RM.Portal>
-    </RM.Root>
+    </MenuRoot>
   )
 }

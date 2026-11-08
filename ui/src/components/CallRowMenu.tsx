@@ -18,6 +18,7 @@
 // ⚠️ Migrated from birth (i18n/hardcoded-strings.test.ts): every word arrives from the catalog; the
 // callsign, the band and the country are data.
 import * as RM from '@radix-ui/react-dropdown-menu'
+import { MenuContent, MenuRoot } from './ui/MenuParts'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { t } from '../i18n'
 import { Entries, type Js8MenuEntry } from './Js8ListMenu'
@@ -119,12 +120,12 @@ export function CallRowMenu({
   }
   return (
     <span className="call-row-menu-anchor" onClick={stop} onDoubleClick={stop} onKeyDown={stop} onContextMenu={stop}>
-      <RM.Root open onOpenChange={(open) => !open && onClose()}>
+      <MenuRoot open onOpenChange={(open) => !open && onClose()}>
         <RM.Trigger asChild>
           <span aria-hidden="true" />
         </RM.Trigger>
         <RM.Portal>
-          <RM.Content
+          <MenuContent
             className="ui-menu box-menu call-row-menu"
             aria-label={t('callMenu.aria', { call })}
             sideOffset={2}
@@ -136,9 +137,9 @@ export function CallRowMenu({
             <div style={{ zoom: 'var(--ui-zoom, 1)' }}>
               <Entries entries={entries()} />
             </div>
-          </RM.Content>
+          </MenuContent>
         </RM.Portal>
-      </RM.Root>
+      </MenuRoot>
     </span>
   )
 }

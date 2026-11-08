@@ -22,6 +22,7 @@
 // numbers it lists are data (cty.dat's and the ARRL's); every word around them is the catalog's.
 
 import * as RM from '@radix-ui/react-dropdown-menu'
+import { MenuContent, MenuRoot } from './ui/MenuParts'
 import { useRef, useState } from 'react'
 import { getDxccEntities } from '../api'
 import { findEntities, lotwDxccOf } from '../features/dxccPick'
@@ -69,7 +70,7 @@ export function LogCountryPicker({ q, onPick }: Props) {
   const lotw = lotwDxccOf(q)
   const shown = q.entity ?? q.country ?? '—'
   return (
-    <RM.Root modal={false} open={open} onOpenChange={onOpenChange}>
+    <MenuRoot open={open} onOpenChange={onOpenChange}>
       <RM.Trigger asChild>
         <button
           type="button"
@@ -82,7 +83,7 @@ export function LogCountryPicker({ q, onPick }: Props) {
         </button>
       </RM.Trigger>
       <RM.Portal>
-        <RM.Content
+        <MenuContent
           className="ui-menu country-menu log-country-menu"
           sideOffset={4}
           align="start"
@@ -151,8 +152,8 @@ export function LogCountryPicker({ q, onPick }: Props) {
               )
             )}
           </div>
-        </RM.Content>
+        </MenuContent>
       </RM.Portal>
-    </RM.Root>
+    </MenuRoot>
   )
 }
