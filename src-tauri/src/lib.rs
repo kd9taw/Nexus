@@ -42374,6 +42374,104 @@ mod upload_record_tests {
             assert_eq!(crate::engine_lock(&engine).snapshot().radio.hrd_queued, 0);
         }
 
+        /// ⛔ BOTH AT ONCE: a purge, then HRD Logbook closed, then open. What the purge took never
+        /// goes; every contact logged after it survives the failed sends and arrives once, in order.
+        #[test]
+        fn after_a_purge_and_a_closed_hrd_every_surviving_contact_arrives_once_in_order() {
+            let _one = one_at_a_time();
+            let port = {
+                let probe = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+                probe.local_addr().unwrap().port()
+            };
+            let engine = engine(free_port());
+            {
+                let mut e = crate::engine_lock(&engine);
+                let mut s = e.settings().clone();
+                s.hrd_logging = true;
+                s.hrd_udp_addr = format!("127.0.0.1:{port}");
+                e.apply_settings(s);
+            }
+            // The worker's trip has begun with this one; then the log is cleared.
+            log(&engine, "K0GON");
+            crate::engine_lock(&engine).clear_logbook();
+            for call in ["K1HRD", "K2HRD", "K3HRD"] {
+                let rec = tempo_core::logbook::parse_adif(&format!(
+                    "<CALL:5>{call}<QSO_DATE:8>20261014<TIME_ON:6>121000<BAND:3>20m<MODE:2>CW<EOR>"
+                ))
+                .pop()
+                .unwrap();
+                crate::engine_lock(&engine).log_qso(rec);
+            }
+            // HRD closed, in the same trip and the next.
+            for _ in 0..2 {
+                crate::drain_hrd(&engine);
+            }
+            assert_eq!(
+                crate::engine_lock(&engine).snapshot().radio.hrd_queued,
+                3,
+                "the three logged after the purge are all still queued"
+            );
+
+            let hrd = std::net::UdpSocket::bind(("127.0.0.1", port)).unwrap();
+            hrd.set_read_timeout(Some(std::time::Duration::from_millis(300)))
+                .unwrap();
+            for _ in 0..2 {
+                crate::drain_hrd(&engine);
+            }
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = hrd.recv(&mut buf) {
+                let text = String::from_utf8_lossy(&buf[..n]).to_string();
+                let call = ["K0GON", "K1HRD", "K2HRD", "K3HRD"]
+                    .into_iter()
+                    .find(|c| text.contains(c))
+                    .expect("a contact");
+                got.push(call);
+            }
+            assert_eq!(
+                got,
+                ["K1HRD", "K2HRD", "K3HRD"],
+                "each once, in order, and not the purged one"
+            );
+            assert_eq!(crate::engine_lock(&engine).snapshot().radio.hrd_queued, 0);
+        }
+
+        /// ⛔ A PURGE DURING THE WORKER'S TRIP. A contact logged after it, within the same trip, still
+        /// reaches HRD Logbook on that trip's drain; one in HRD's queue at the purge never does.
+        #[test]
+        fn a_contact_logged_after_a_purge_in_the_same_trip_reaches_hrd() {
+            let _one = one_at_a_time();
+            let hrd = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+            hrd.set_read_timeout(Some(std::time::Duration::from_millis(300)))
+                .unwrap();
+            let engine = engine(free_port());
+            {
+                let mut e = crate::engine_lock(&engine);
+                let mut s = e.settings().clone();
+                s.hrd_logging = true;
+                s.hrd_udp_addr = hrd.local_addr().unwrap().to_string();
+                e.apply_settings(s);
+            }
+            let before = log(&engine, "K1PRG");
+            assert_eq!(before.rec.call, "K1PRG", "premise: the trip has begun");
+            crate::engine_lock(&engine).clear_logbook();
+            // Logged, and left on the upload queue: the worker drains that at its next tick.
+            let after = tempo_core::logbook::parse_adif(
+                "<CALL:5>K2AFT<QSO_DATE:8>20261014<TIME_ON:6>120500<BAND:3>20m<MODE:2>CW<EOR>",
+            )
+            .pop()
+            .unwrap();
+            crate::engine_lock(&engine).log_qso(after);
+            crate::drain_hrd(&engine);
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = hrd.recv(&mut buf) {
+                got.push(String::from_utf8_lossy(&buf[..n]).to_string());
+            }
+            assert_eq!(got.len(), 1, "one datagram: {got:?}");
+            assert!(got[0].contains("K2AFT"), "{got:?}");
+        }
+
         /// A send that connected is never repeated: not by a service's retries, and not by anything
         /// that waits after it.
         #[test]
@@ -44441,7 +44539,11 @@ fn drain_hrd(engine: &SharedEngine) {
     };
     let mut pending = pending.into_iter();
     while let Some(rec) = pending.next() {
-        if upload_cancelled(engine, &rec) {
+        // A purge counts from HRD's own take (`Engine::hrd_cancelled`), not the upload queue's.
+        let cancelled = engine_lock_result(engine)
+            .unwrap_or_else(|e| e.into_inner())
+            .hrd_cancelled(&rec);
+        if cancelled {
             continue;
         }
         let datagram = {

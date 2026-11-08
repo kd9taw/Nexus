@@ -4496,6 +4496,8 @@ pub struct Engine {
     /// closed HRD is DETECTABLE on localhost (ICMP unreachable → ConnectionRefused), sets
     /// [`Self::hrd_link_up`], and re-queues on failure (bounded) so nothing is lost.
     hrd_pending: std::collections::VecDeque<QsoRecord>,
+    /// A purge since HRD's drain last took its queue ([`Self::hrd_cancelled`]).
+    hrd_purged_since_take: bool,
     /// Last HRD datagram outcome: `Some(true)` delivered, `Some(false)` HRD not reachable
     /// (queued), `None` nothing sent yet. Drives the cockpit's HRD link indicator.
     hrd_link_up: Option<bool>,
@@ -7691,6 +7693,7 @@ impl Engine {
             space_weather: None,
             tci_device: None,
             hrd_pending: std::collections::VecDeque::new(),
+            hrd_purged_since_take: false,
             hrd_link_up: None,
             cq_dir: None,
             last_wire_decodes: Vec::new(),
@@ -19286,6 +19289,7 @@ impl Engine {
     /// leaves.
     pub fn settle_gone_rows(&mut self) {
         let (ids, all) = self.station.take_rows_gone();
+        self.hrd_purged_since_take |= all;
         if !all && ids.is_empty() {
             return;
         }
@@ -19301,6 +19305,13 @@ impl Engine {
     /// A corrected copy keeps its id, and is not refused: only a contact that left is.
     pub fn upload_cancelled(&self, rec: &QsoRecord) -> bool {
         self.station.upload_cancelled(rec)
+    }
+
+    /// [`Self::upload_cancelled`] for what HRD Logbook's drain holds ([`Self::take_hrd_pending`]),
+    /// which is taken later in the worker's trip than the upload queue. A purge counts from its own
+    /// take: a contact logged after the purge, before HRD's drain, is not cancelled by it.
+    pub fn hrd_cancelled(&self, rec: &QsoRecord) -> bool {
+        self.hrd_purged_since_take || self.station.deleted(rec)
     }
 
     /// The contacts that were waiting for DXKeeper when contest mode's list put them out at its
@@ -19510,6 +19521,7 @@ impl Engine {
     /// Take the queued HRD records for the shell to send (drains the queue). The shell
     /// connects+sends each off the engine lock, then reports back via [`Self::note_hrd_result`].
     pub fn take_hrd_pending(&mut self) -> Vec<QsoRecord> {
+        self.hrd_purged_since_take = false;
         self.hrd_pending.drain(..).collect()
     }
 
@@ -19541,7 +19553,7 @@ impl Engine {
     /// the queue always is: past 256 the oldest goes.
     pub fn hrd_put_back(&mut self, recs: Vec<QsoRecord>) {
         for rec in recs.into_iter().rev() {
-            if !self.upload_cancelled(&rec) {
+            if !self.hrd_cancelled(&rec) {
                 self.hrd_pending.push_front(rec);
             }
         }
