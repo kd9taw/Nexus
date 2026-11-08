@@ -124,6 +124,10 @@ pub const COMMON_CAT_MODELS: &[(u32, &str, &[u32])] = &[
     (3088, "Xiegu G90", &[19200]),
     (3087, "Xiegu X6100", &[19200]),
     (2028, "Kenwood TS-480 (SAT/HX)", &[9600, 57600]),
+    // The FT-847's CAT RATE menu offers exactly 4800 / 9600 / 57600 and Hamlib's caps agree
+    // (`rigctl -m 1001 --dump-caps` → `4800..57600`). All three are seeded rather than one
+    // "default": an operator who moved the menu off any single seed would be undetectable.
+    (1001, "Yaesu FT-847", &[9600, 4800, 57600]),
 ];
 
 /// Build probe candidates from enumerated USB ports. A native-USB rig (IC-705, FT-710…)
@@ -306,10 +310,11 @@ mod tests {
     /// Every seeded model number must be a REAL Hamlib model. A typo'd or removed number does
     /// not fail loudly — the probe just never gets an answer, and the rig reports as undetected
     /// with no clue why. The display name must match the table too, or Detect shows the operator
-    /// one rig while configuring another.
+    /// one rig while configuring another. The FULL catalog: the extended tier is drawn from
+    /// Hamlib's `riglist.h` just as the verified one is, and the FT-847 seed lives there.
     #[test]
     fn every_seeded_cat_model_exists_in_hamlib() {
-        let table = crate::rigmodels::rig_models();
+        let table = crate::rigmodels::all_rig_models();
         for (model, name, bauds) in COMMON_CAT_MODELS {
             let found = table.iter().find(|(m, _)| m == model);
             let (_, real) = found
@@ -340,6 +345,28 @@ mod tests {
                 PROBE_BAUDS.contains(&baud),
                 "{baud} is one of the FT-847's three CAT RATE choices (menu 37); a rig left \
                  on it can never be found by Auto-test"
+            );
+        }
+    }
+
+    /// The rate sweep above only runs for a TRUSTED model. An FT-847 owner who has not picked a
+    /// model yet sits behind a bridge-chip cable that names only the chip, so the seeded list is
+    /// the only thing that can find the port — and the FT-847 was not on it, so on a fresh setup
+    /// Auto-test could not find that rig at any rate. Every rate its CAT menu offers is seeded,
+    /// because a rig left on one we skip is undetectable by construction.
+    #[test]
+    fn the_ft847_is_seeded_at_every_rate_its_cat_menu_offers() {
+        let cands = candidates_from(
+            &[usb("COM4", "USB-SERIAL CH340", "wch.cn")],
+            0,
+            &[],
+        );
+        for baud in [4800u32, 9600, 57600] {
+            assert!(
+                cands
+                    .iter()
+                    .any(|c| c.model == 1001 && c.baud == Some(baud) && c.seeded),
+                "an unconfigured FT-847 on {baud} baud is never tried by Auto-test"
             );
         }
     }
