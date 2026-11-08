@@ -5,11 +5,12 @@
 // Tx 1st / Tx 2nd) onto a second line, so the whole screen moved down a row while the message was up.
 // The probe serves src/probe/topbar.tsx with the app's own Vite config, on the FT screen and on CW, at
 // the common full-screen sizes (each at the zoom the app's auto-fit gives it, plus 125 % and 150 % at
-// 1920×1080), once without a message and once with the slot-unkey-failed lane, and asserts: the message
-// is on screen with at least its flag; wherever the lane's line has room for that flag, the bar is the
-// same height and every group of the bar starts on the same line (with less room than the flag, the bar
-// may take a line rather than hide a critical alarm, and the probe names those sizes); nothing in the
-// bar runs past the window's edge.
+// 1920×1080), once without a message and once with the slot-unkey-failed lane, and asserts: the bar
+// is the same height and every group of the bar starts on the same line, AT EVERY SIZE (operator pick
+// 2026-11-07, "Never wraps, alarms also shown by Stop": the lane has no floor and may be cut to nothing
+// on a full line; a critical item is also shown beside Stop TX in the TX strip's alarm cell, which
+// TxAlarmBanner.test.tsx holds); nothing in the bar runs past the window's edge. It names the sizes
+// where the message's flag was cut.
 //
 // THE CONTROL, run every time: the same page with the lane's old sizing put back (its own text width,
 // no growing). There the bar must come back taller on the FT screen at the size whose bar had the LEAST
@@ -117,17 +118,10 @@ try {
       }
       if (view === 'operate' && (!tightest || off.free < tightest.free)) tightest = { s, free: off.free }
       const reds = []
-      // The flag's floor (styles.css `.status-lane` min-width: the 13 px icon, the chip's 2 × 8 px
-      // padding and 2 px border, and the 10 px gap), in screen px at this zoom.
-      const flag = (10 + 13 + 16 + 2) * off.zoom
-      if (off.free >= flag) {
-        if (on.h !== off.h) reds.push(`the bar is ${on.h}px tall with the message, ${off.h}px without (${off.free}px free on its line)`)
-        if (JSON.stringify(on.groups) !== JSON.stringify(off.groups)) reds.push(`a group moved line: ${JSON.stringify(off.groups)} → ${JSON.stringify(on.groups)}`)
-      } else {
-        console.log(`topbar-probe: ${at}: only ${off.free}px free on the lane's line, less than its flag (${Math.round(flag)}px): the bar may take a line here rather than hide the alarm`)
-        if (on.h !== off.h) tookLine.push(at)
-      }
-      if (!on.lane.flag) reds.push('the message is not on screen (its flag is clipped)')
+      // No floor: the bar holds whatever room its line has left.
+      if (on.h !== off.h) reds.push(`the bar is ${on.h}px tall with the message, ${off.h}px without (${off.free}px free on its line)`)
+      if (JSON.stringify(on.groups) !== JSON.stringify(off.groups)) reds.push(`a group moved line: ${JSON.stringify(off.groups)} → ${JSON.stringify(on.groups)}`)
+      if (!on.lane.flag) tookLine.push(at)
       if (on.overflowX > 0 || off.overflowX > 0) reds.push(`the bar runs ${Math.max(on.overflowX, off.overflowX)}px past the window`)
       for (const r of reds) console.error(`topbar-probe: RED ${at} — ${r}`)
       if (reds.length) code = code || 1
@@ -141,7 +135,7 @@ try {
     console.error('topbar-probe: CONTROL FAILED — with the old sizing the message did not make the bar taller; the check cannot fail')
     code = code || 1
   }
-  if (code === 0) console.log(`topbar-probe: PASS — a status message shows its flag and leaves the bar's height and every group's line alone wherever its line has room for the flag, on the FT screen and on CW, at ${SIZES.map((x) => `${x.w}×${x.h}@${Math.round(x.z * 100)}%`).join(', ')}; the old sizing wraps the bar (control). Took a line for the flag: ${tookLine.length ? tookLine.join('; ') : 'none'}`)
+  if (code === 0) console.log(`topbar-probe: PASS — a status message leaves the bar's height and every group's line alone at every size, on the FT screen and on CW, at ${SIZES.map((x) => `${x.w}×${x.h}@${Math.round(x.z * 100)}%`).join(', ')}; the old sizing wraps the bar (control). Flag cut (the item is shown by Stop TX): ${tookLine.length ? tookLine.join('; ') : 'none'}`)
   process.exitCode = code
 } finally {
   await browser.stop()

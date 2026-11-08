@@ -786,21 +786,66 @@
   --chrome-extras-gap: max(var(--space-2), min(var(--space-3), (var(--vh-eff, 100vh) - 1100px) * 100));
 }
 
-/* THE TRANSMITTER ALARM (TxAlarmBanner, `.ch-txalarm`): the TX strip's LAST line, the full width, only
-   while an alarm is up (CockpitTxStrip and FT's OperateQsoStrip `alarm`; APRS's strip too). It was the
-   cockpit header's last row, and the header stands above the strip: every alarm that came or went moved
-   Stop TX 26 to 38 px (real Chrome, 2026-11-07). As the strip's last line it moves nothing on the strip,
-   the panes under the strip give up the height, and the strip parks with it when the shell scrolls. Its
-   look is the cockpits' alert box in amber (`.cw-keyer-warn.caution`, styles.css); this rule places it.
-   In flow and unpositioned: it can never sit over Stop TX. */
+/* THE TRANSMITTER ALARM CELL (TxAlarmBanner, `.ch-txalarm`; operator pick "One line inside the strip",
+   2026-11-07): one line IN THE TX STRIP'S ROW, beside the TX state (FT: the last cell of its row). It holds
+   the station's transmitter alarm and every critical status-lane item, which the top bar's lane may cut.
+   As the header's last row an alarm moved Stop TX 26 to 38 px; as a line of the strip, the scope above
+   shrank and Stop TX moved up. So the cell is ALWAYS DRAWN, alarms or none, and to the strip's line
+   breaker it is ONE CONSTANT WIDTH, `min-width` and nothing else: zero basis, its margin cancelling the
+   strip's column gap, no padding and no border (a box cannot be narrower than those, and they would be
+   width the breaker sees: the 8 px the CAT words leaked). What it holds can never change where the strip
+   wraps, so no control on the strip moves when an alarm comes or goes, and it sits beside them, never
+   over one. The minimum is the floor the alarm keeps on the tightest line: its opening words, the count
+   and the ✕. It grows into the room left on its line; the words shorten (whole on hover). The cost is
+   that floor, on every strip, in every state (and, where the floor takes a line of its own, that line). */
 .ch-txalarm {
-  flex: 1 1 100%;
-  margin: 0;
+  flex: 1 1 0;
+  min-width: 13em;
+  /* …and ONE HEIGHT: where the floor does not fit beside the controls the cell stands on a line of its own,
+     and an empty cell's line was 0 px tall, so an alarm grew the strip (FT, 1366x768). A fixed height
+     makes that line the same height empty or full; beside the controls it is shorter than they are. */
+  height: 1.6em;
+  margin: 0 0 0 calc(-1 * var(--space-2));
+  padding: 0;
+  border: 0;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
+  gap: var(--space-1);
+  overflow: hidden;
+  font-size: var(--fs-label);
+}
+/* The words: first, after the gap the cell gave back, and the one part that shortens. */
+.ch-txalarm-text {
+  flex: 0 1 auto;
   min-width: 0;
+  margin-inline-start: var(--space-2);
+  padding: 1px var(--space-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* "1 of N" and the ✕ never shrink: the count says more are waiting, and Dismiss stays a button. */
+.ch-txalarm-queue {
+  flex: none;
+  white-space: nowrap;
+}
+.ch-txalarm-dismiss {
+  flex: none;
+  padding: 1px var(--space-1);
+  font-size: inherit;
+}
+/* THE AMPLIFIER'S OPERATE / STANDBY WORD (components/AmpStrip, in the cockpit header): the three words it
+   can say are stacked in one grid cell, the current one shown, so the button is the widest word's width in
+   every state. The header stands above Stop TX, and a word of its own width re-wrapped it (CW 1024x768:
+   Stop TX moved 26.6 px when the amplifier went to standby). */
+.amp-op-face {
+  display: inline-grid;
+}
+.amp-op-word {
+  grid-area: 1 / 1;
+}
+.amp-op-word-off {
+  visibility: hidden;
 }
 /* THE HEADER'S STATE WORDS (`.ch-statecell`, Phone's header: the mic held off for DAX, the rig on a mode
    it was not told, no rig control). They come and go with the radio, and the header stands above the TX

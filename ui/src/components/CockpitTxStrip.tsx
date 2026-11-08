@@ -47,11 +47,11 @@ export interface CockpitTxStripProps {
   /** A screen's own small marker right after the cluster (Phone's ⓘ for the Tune note, #441): after
    *  Stop TX, never between the controls, so Tune, ATU and Stop TX keep their places on every screen. */
   tuneHint?: ReactNode
-  /** THE TRANSMITTER ALARM (`TxAlarmBanner`), the strip's LAST line, under Stop TX (2026-11-07). It was
-   *  the cockpit header's last row, and the header stands above this strip: every alarm that came or
-   *  went moved Stop TX 26 to 38 px. Here it moves nothing on the strip, never sits over it, and the
-   *  panes below give up the height. The screen passes it (`snap.txAlarms` is not in `radio`); every
-   *  operating screen does, which stop-line.test.tsx renders and checks. */
+  /** THE TRANSMITTER ALARM CELL (`TxAlarmBanner`), one line in the strip's row beside the TX state
+   *  (2026-11-07). As the cockpit header's last row, every alarm moved Stop TX 26 to 38 px; the cell is
+   *  always drawn at one minimum width, so nothing on the strip moves when an alarm or a critical lane
+   *  item comes or goes. The screen passes it (`snap.txAlarms` is not in `radio`); every operating
+   *  screen does, which stop-line.test.tsx renders and checks. */
   alarm?: ReactNode
 }
 
@@ -216,6 +216,9 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
               ? t('operate.strip.state.receiving')
               : t('operate.strip.state.txOff')}
       </span>
+      {/* THE TRANSMITTER ALARM CELL, beside the TX state (`TxAlarmBanner`): always drawn at one minimum
+          width, so an alarm coming or going never changes where the strip breaks its lines. */}
+      {alarm}
       {/* THE METERS' CELL, at the strip's right end (`.cockpit-txstrip-meters`): after the cluster and
           the TX state, so nothing it shows can move a control. Two rows at most, the strip's own
           height, and the same readings before and after a key-down (TxMeters `strip`). */}
@@ -225,7 +228,6 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
           child, on a line of its own, so it never moves the controls or the TX state. */}
       {onTune && <RadioTuneNote radio={radio} />}
       {onTune && tuneNote}
-      {alarm}
     </div>
   )
 }

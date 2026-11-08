@@ -734,18 +734,23 @@ button.nb-chip:hover {
    its contribution to the TX/RX group's width, the margin cancelling the group's gap before it),
    grows into the room left on the line that group is on, and its chips shorten to an ellipsis;
    the full text is the chip's tooltip, as it always was. The group grows only while a lane is up
-   (`:has`), so nothing moves without one.
-   ⛔ ONE EXCEPTION, AND IT IS SAFETY: the first chip's flag is never cut. A critical lane ("PTT
-   OFF FAILED — TX STOPPED") must be on screen, so the lane keeps at least its flag (the 13 px
-   icon, the chip's padding and border, and the gap the margin cancels); on a line with less room
-   than that the bar takes a line rather than hide the alarm. */
+   (`:has`), so nothing moves without one. The REC chip rides first in the lane (TopBar), so it takes
+   the same zero width; the TX watchdog's halt is a lane item (App), not a chip of its own.
+   ⛔ SAFETY: WHERE A CRITICAL ITEM GOES WHEN THE BAR CUTS IT (operator pick 2026-11-07, "Never wraps,
+   alarms also shown by Stop"). The lane used to keep its first chip's flag, taking a bar line rather
+   than hide it, and every such line moved Stop TX under it (20 px at 1366x768 on FT). Now the lane
+   has NO FLOOR and may be cut to nothing on a full line, and EVERY CRITICAL ITEM ("PTT OFF FAILED —
+   TX STOPPED") is ALSO in the transmitter alarm cell beside the TX state on the TX strip, next to
+   Stop TX (TxAlarmBanner, cockpit-panes.css `.ch-txalarm`), which always keeps at least its opening
+   words. Outside the operating screens there is no strip and no Stop TX to move, and the lane there
+   has the whole bar line to grow into. */
 .status-lane {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   flex: 1 1 0;
   width: 0;
-  min-width: calc(10px + 13px + 2 * var(--space-2) + 2px);
+  min-width: 0;
   margin-inline-start: -10px;
   overflow: hidden;
 }
@@ -8068,8 +8073,11 @@ select optgroup {
   color: var(--text-faint);
 }
 /* Global QSO-recording badge — visible from any view while recording; click to stop. */
+/* No taller than the lane's chips (`.status-chip`: a 13 px icon, 2 px padding, 1 px border): REC rides first in
+   the lane, and a taller box grew the bar 0.8 px when a recording started (1024x768, auto-fit). */
 .topbar-rec {
   padding: 2px 9px;
+  line-height: 1;
   font-size: calc(10px * var(--text-scale));
   font-weight: 800;
   letter-spacing: 0.04em;
@@ -8177,19 +8185,6 @@ select optgroup {
 .op-btn.stop:hover {
   background: var(--state-weak);
   color: var(--bg);
-}
-
-/* ---- TX watchdog warning chip ---- */
-.watchdog-chip {
-  display: inline-flex;
-  align-items: center;
-  font-size: calc(11px * var(--text-scale));
-  font-weight: 700;
-  color: var(--state-weak);
-  background: color-mix(in srgb, var(--state-weak) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--state-weak) 45%, transparent);
-  border-radius: 999px;
-  padding: var(--space-1) 10px;
 }
 
 /* ---- DT (decode time) readout ---- */
@@ -20526,14 +20521,26 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   gap: var(--space-2);
   flex-wrap: wrap;
 }
-/* The transmitter alarm's placement (`.ch-txalarm`) is structure, in cockpit-panes.css. */
+/* The transmitter alarm cell (TxAlarmBanner, one line in the TX strip): its box and the boxes in it are
+   structure, in cockpit-panes.css; this is only their paint. Amber, the cockpits' caution tone
+   (`--alert-warning`, both themes), on the words, the count and the ✕ alike. */
 .ch-txalarm-text {
-  flex: 1 1 auto;
-  min-width: 0;
+  color: var(--alert-warning);
+  font-weight: 700;
+  background: color-mix(in srgb, var(--alert-warning) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--alert-warning) 55%, transparent);
+  border-radius: var(--radius-sm);
 }
 .ch-txalarm-queue {
+  color: var(--alert-warning);
   font-weight: 600;
-  white-space: nowrap;
+}
+.ch-txalarm-dismiss {
+  color: var(--alert-warning);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--alert-warning) 55%, transparent);
+  border-radius: var(--radius-sm);
+  line-height: 1;
 }
 
 /* ⊞ Panels — show/hide this screen's panels. Menu-only removal (no per-panel ✕ an

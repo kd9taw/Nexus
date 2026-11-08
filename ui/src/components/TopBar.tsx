@@ -1,8 +1,8 @@
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), and what is
 // deferred is the TX CLUSTER: TX On/Off (its two tooltip arms state the abort semantics — "an
 // FT over already in flight finishes" — and its labels name the latch), TUNE and STOP TX, which
-// key and cut a carrier, and the TX WATCHDOG chip, which is what the watchdog says when it has
-// halted a transmission. Transmit-path controls and their accessible names move in their own
+// key and cut a carrier. (The TX WATCHDOG chip was deferred with them; since 2026-11-07 the
+// watchdog's halt is a status-lane item App raises in catalog words.) Transmit-path controls and their accessible names move in their own
 // batch, with the stop-line sweeps re-run. Everything else here is migrated under `topbar.*`.
 //
 // The units rule lands on the BAR: every tier and mode name, the DT and clock readouts, the
@@ -629,20 +629,9 @@ export function TopBar({
           <LiveLevelMeter label={t('topbar.rxLevel.label')} variant="compact" />
         </div>
 
-        {radio.qsoRecording && (
-          <button
-            type="button"
-            className="topbar-rec"
-            onClick={() => onStopRecording?.()}
-            title={t('topbar.recording.title')}
-          >
-            ● {REC}
-          </button>
-        )}
-
         {!hideTxControls && !hideDigitalChrome && (
         <div className="op-controls" role="group" aria-label={t('topbar.txControls.aria')}>
-          {/* ⚠️ DEFERRED, the three controls below and the watchdog chip after them: TX On/Off's
+          {/* ⚠️ DEFERRED, the three controls below: TX On/Off's
               tooltip states the abort semantics, Tune keys a carrier and Stop TX cuts an over in
               flight. They move in the transmit-path batch — see this file's header. */}
           <button
@@ -691,13 +680,24 @@ export function TopBar({
         </div>
         )}
 
-        {radio.txWatchdog && (
-          <span className="watchdog-chip" role="alert" title="Transmit was auto-halted by the TX watchdog. Click TX On to re-enable.">
-            ⚠ TX watchdog — auto-halted
-          </span>
-        )}
-
-        <StatusLane />
+        {/* The TX watchdog's halt is a CRITICAL LANE ITEM now (App), not a chip of its own: a chip with a
+            width of its own wrapped the bar when it came and moved every control under it, and as a lane
+            item it is also shown beside Stop TX on the operating screens' TX strip. REC rides first in the
+            lane for the same reason (styles.css `.status-lane`). */}
+        <StatusLane
+          lead={
+            radio.qsoRecording ? (
+              <button
+                type="button"
+                className="topbar-rec"
+                onClick={() => onStopRecording?.()}
+                title={t('topbar.recording.title')}
+              >
+                ● {REC}
+              </button>
+            ) : undefined
+          }
+        />
         {!hideDigitalChrome && (
           <div className="slot-clock" title={t('topbar.slotClock.title')}>
             <span className="slot-count">{countdown}s</span>

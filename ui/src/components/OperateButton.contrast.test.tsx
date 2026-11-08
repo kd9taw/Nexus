@@ -113,7 +113,13 @@ function ampButtons(host: string, headerClass: string, rules: Rule[]): Button[] 
       </div>,
     )
     for (const b of r.container.querySelectorAll<HTMLButtonElement>('.amp-strip button')) {
-      const label = `${b.textContent?.trim() || '?'}${b.disabled ? ' (disabled)' : ''}`
+      // The word on the face: AmpStrip stacks all three words so the button keeps one width, and only the
+      // current one is seen (the others are hidden and aria-hidden).
+      const seen = [...b.querySelectorAll('*'), b]
+        .flatMap((e) => [...e.childNodes].filter((n) => n.nodeType === 3 && !(n.parentElement?.closest('[aria-hidden="true"]'))))
+        .map((n) => n.textContent)
+        .join('')
+      const label = `${seen.trim() || '?'}${b.disabled ? ' (disabled)' : ''}`
       out.push({ host, label, chain: chainOf(b), disabled: b.disabled, rules, operate: b.classList.contains('on') })
     }
     cleanup()

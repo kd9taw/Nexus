@@ -936,6 +936,14 @@ function App() {
     setStatus('voiceDropped', voiceDroppedLane(snap?.radio.voiceDropped))
   }, [snap?.radio.voiceDropped?.at, snap?.radio.voiceDropped?.cause])
 
+  // The TX watchdog halted transmit: a CRITICAL lane item while the station says so (it was the top
+  // bar's own chip, whose width wrapped the bar and moved Stop TX under it). Critical, so it is also
+  // shown beside Stop TX on the operating screens' TX strip (TxAlarmBanner). Its words are the
+  // catalog's sentence for this halt; TX On, in the strip, re-enables.
+  useEffect(() => {
+    setStatus('txWatchdog', snap?.radio.txWatchdog ? { tier: 'critical', message: t('remote.stream.mic.ended.watchdog') } : null)
+  }, [snap?.radio.txWatchdog])
+
   // A clock repair holds transmit: from the press of Repair clock until the repair ends, the
   // station starts no transmission, and the lane says so on every screen while it lasts. Not on
   // the Remote page either: that page is frozen.

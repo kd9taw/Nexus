@@ -106,11 +106,9 @@ interface Props {
   specialOpBadge?: ReactNode
   rotor?: ReactNode
   telemetry?: ReactNode
-  /** THE TRANSMITTER ALARM (`TxAlarmBanner`), the strip's LAST line, under Stop TX (2026-11-07). It was
-   *  the cockpit header's last row, and the header stands above this strip: every alarm that came or
-   *  went moved Stop TX 26 to 38 px. Here it moves nothing on the strip, never sits over it, and the
-   *  panes below give up the height. OperateCockpit passes it (`snap.txAlarms` is not in `radio`);
-   *  stop-line.test.tsx renders FT and checks it. */
+  /** THE TRANSMITTER ALARM CELL (`TxAlarmBanner`), one line on the strip's row (2026-11-07): always
+   *  drawn at one minimum width, so an alarm or a critical lane item coming or going moves nothing.
+   *  OperateCockpit passes it (`snap.txAlarms` is not in `radio`); stop-line.test.tsx checks FT. */
   alarm?: ReactNode
 }
 
@@ -529,8 +527,10 @@ export function OperateQsoStrip({
       {telemetry != null && <div className={`cq-telemetry${meterStyle === 'needle' ? ' needle' : ''}`}>{telemetry}</div>}
       {/* What the radio reports beside Tune while Tune is the Flex radio's own carrier: the last
           child, on a line of its own, so it never moves the clusters or the readouts. */}
-      {radio && <RadioTuneNote radio={radio} />}
+      {/* THE TRANSMITTER ALARM CELL (`TxAlarmBanner`): the strip's last cell on its row, in the room left at
+          the line's end, always drawn at one minimum width, so an alarm never moves a control. */}
       {alarm}
+      {radio && <RadioTuneNote radio={radio} />}
     </section>
   )
 }

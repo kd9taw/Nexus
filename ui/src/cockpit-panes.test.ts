@@ -263,6 +263,8 @@ describe('the fence: styles.css never names a structural class', () => {
     // The header's state words (2026-11-07): zero wide to the header's line breaker, so a word the radio
     // brings never moves Stop TX. A styles.css width, padding or margin on either would give it width back.
     'ch-statecell', 'ch-stateword',
+    // …the amplifier's stacked Operate / Standby word: a styles.css display or position would unstack it.
+    'amp-op-face', 'amp-op-word', 'amp-op-word-off',
     // …and the transmitter alarm, now the TX strip's last line (2026-11-07): a styles.css position on it
     // could set it over Stop TX.
     'ch-txalarm']) {
@@ -1823,5 +1825,67 @@ describe('THE HEADER’S STATE WORDS: a word the radio brings or takes adds noth
   })
   it('the evaluator bites: a cell with the row gap left in front of it does not sum to 0 (control)', () => {
     expect(px('var(--chrome-extras-gap, var(--space-3))', 1440) + px('0', 1440)).not.toBe(0)
+  })
+})
+
+describe('THE TRANSMITTER ALARM CELL: one constant width to the TX strip’s line breaker, whatever it holds', () => {
+  // The cell is always drawn; what the breaker sees of it is its row gap + margin + max(basis, min-width) +
+  // padding + border. With a zero basis, the margin cancelling the gap and no padding or border, that is
+  // exactly `min-width`, an em length its content cannot change: an alarm, a critical lane item or none
+  // leaves every line of the strip where it was. (Padding is counted: the CAT words leaked 8 px of it.)
+  const STRIPS: Array<[string, string[][]]> = [
+    ['the TX strip', [['cockpit-txstrip']]],
+    ['FT’s QSO strip', [['cockpit-qso', 'panel']]],
+  ]
+  const columnGap = (gap: string) => {
+    const parts = gap.trim().split(/\s+(?![^(]*\))/)
+    return parts[parts.length - 1]
+  }
+  const first = (v: string, vh: number) => lengthsAt(v.replace(/\bcalc\(/g, '('), vh)
+  it.each(STRIPS)('in %s: gap + margin + padding + border is 0, and the rest is a fixed em floor', (_name, strip) => {
+    const cell = [...strip, ['ch-txalarm']]
+    const gap = classChainWinner(strip, 'gap')
+    expect(gap, 'the strip has a gap').not.toBeNull()
+    expect(classChainWinner(cell, 'flex')?.value).toBe('1 1 0')
+    const margin = classChainWinner(cell, 'margin')
+    expect(margin, 'nothing cancels the strip’s gap in front of the cell').not.toBeNull()
+    const [, , , left] = first(margin!.value, 1440)
+    for (const vh of [700, 1040, 1440]) {
+      const g = first(columnGap(gap!.value), vh)[0]
+      const [, , , l] = first(margin!.value, vh)
+      expect(g + l, `the column gap and the margin at an effective ${vh} px`).toBe(0)
+    }
+    expect(left).toBeLessThan(0)
+    expect(classChainWinner(cell, 'padding')?.value ?? '0').toBe('0')
+    expect(classChainWinner(cell, 'border')?.value ?? '0').toBe('0')
+    for (const p of ['padding-left', 'padding-inline-start', 'border-left', 'border-width', 'width'])
+      expect(classChainWinner(cell, p), `${p} on the cell is width the breaker sees`).toBeNull()
+    expect(classChainWinner(cell, 'min-width')?.value, 'the floor: a length no content changes').toMatch(/^\d+(\.\d+)?em$/)
+    expect(classChainWinner(cell, 'height')?.value, 'one height, empty or full: its own line is never 0 px tall').toMatch(/^\d+(\.\d+)?em$/)
+    expect(classChainWinner(cell, 'overflow')?.value).toBe('hidden')
+  })
+  it('within the floor the words shorten; the count and the ✕ never do', () => {
+    const cell = [['cockpit-txstrip'], ['ch-txalarm']]
+    expect(classChainWinner([...cell, ['ch-txalarm-text']], 'min-width')?.value).toBe('0')
+    expect(classChainWinner([...cell, ['ch-txalarm-text']], 'text-overflow')?.value).toBe('ellipsis')
+    expect(classChainWinner([...cell, ['ch-txalarm-text']], 'white-space')?.value).toBe('nowrap')
+    expect(classChainWinner([...cell, ['ch-txalarm-queue']], 'flex')?.value).toBe('none')
+    expect(classChainWinner([...cell, ['ch-txalarm-dismiss']], 'flex')?.value).toBe('none')
+  })
+  it('the top bar’s lane has no floor now: the bar never takes a line for it', () => {
+    expect(classChainWinner([['topbar'], ['txrx'], ['status-lane']], 'min-width')?.value).toBe('0')
+    expect(classChainWinner([['topbar'], ['txrx'], ['status-lane']], 'width')?.value).toBe('0')
+  })
+})
+
+describe('THE AMPLIFIER’S OPERATE / STANDBY WORD: one width in every state', () => {
+  // AmpStrip rides in the cockpit header, above Stop TX; a word of its own width re-wrapped the header
+  // when the amplifier went to standby (CW 1024x768, Stop TX moved 26.6 px). The three words share one
+  // grid cell, so the button is the widest one's width, and only the current one is seen.
+  it('the three words stack in one cell, and the others are hidden, not removed', () => {
+    expect(classChainWinner([['amp-op-face']], 'display')?.value).toBe('inline-grid')
+    expect(classChainWinner([['amp-op-face'], ['amp-op-word']], 'grid-area')?.value).toBe('1 / 1')
+    expect(classChainWinner([['amp-op-face'], ['amp-op-word', 'amp-op-word-off']], 'visibility')?.value).toBe('hidden')
+    expect(classChainWinner([['amp-op-face'], ['amp-op-word', 'amp-op-word-off']], 'display'), 'display:none would take its width away').toBeNull()
   })
 })
