@@ -287,6 +287,14 @@ describe('tabs — several panes in one slot', () => {
     await act(async () => askBestTimes('K1ABC'))
     expect(paneIn(container, 'right1')).toBe('bestTimes')
     expect(cfg().tabs.right1).toEqual(['chase', 'bestTimes'])
+    // Removed again, then the view mounts afresh (a switch back to Conditions): a hand-off already
+    // handled brings nothing back.
+    fireEvent.click(within(openMenu(container, 'right1')).getByRole('menuitem', { name: /^Remove / }))
+    expect(cfg().tabs.right1).toBeUndefined()
+    cleanup()
+    const again = await mount()
+    expect(paneIn(again.container, 'right1')).toBe('chase')
+    expect(cfg().tabs.right1).toBeUndefined()
   })
 
   it('a layout saved before tabs loads exactly as today: every head is its title, no tab strip anywhere', async () => {

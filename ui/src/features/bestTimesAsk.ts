@@ -26,10 +26,15 @@ export function askBestTimes(call: string): void {
   listeners.forEach((l) => l())
 }
 
-/** How many calls have been handed over in this window: the Conditions view brings the box on
- *  screen for each one it has not seen. */
-export function askCount(): number {
-  return asks
+let brought = 0
+
+/** Whether a call has been handed over that no Conditions view has brought the box on screen for
+ *  yet; true once per hand-off. Kept here, not in the view, so a view that mounts later (a switch
+ *  back to Conditions) does not bring the box back for a hand-off already handled. */
+export function claimAsk(): boolean {
+  if (brought === asks) return false
+  brought = asks
+  return true
 }
 
 /** Take the call handed over, once. */
@@ -125,4 +130,5 @@ export function resetBestTimesAsk(): void {
   looked.clear()
   pending = null
   asks = 0
+  brought = 0
 }
