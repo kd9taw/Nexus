@@ -1097,4 +1097,105 @@ mod tests {
             }
         }
     }
+
+    /// Two radios with the given Hamlib models and band lists (empty = covers every band), `Open`,
+    /// in Phone on 20 m with radio 0 active. Returns the engine and radio 1's id.
+    fn two_rigs(a: u32, a_bands: &[&str], b: u32, b_bands: &[&str]) -> (Engine, u32) {
+        let mut e = Engine::new("N0CALL", "JN58", 0);
+        e.settings.license_class = crate::settings::LicenseClass::Open;
+        e.settings.rig_model = a;
+        e.settings.ensure_radio_profiles();
+        e.settings.sync_active_from_flat();
+        let other = e.add_radio();
+        e.settings
+            .radios
+            .iter_mut()
+            .find(|p| p.id == other)
+            .unwrap()
+            .rig_model = b;
+        e.set_radio_bands(0, a_bands.iter().map(|b| b.to_string()).collect());
+        e.set_radio_bands(other, b_bands.iter().map(|b| b.to_string()).collect());
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.250, "20m", "USB");
+        assert_eq!(e.settings.active_radio, 0, "scene: radio 0 active");
+        (e, other)
+    }
+
+    /// ⭐ THE 3 CM HOME IS THE RADIO THE ROUTING HANDS 3 CM TO, not the one active before the pick.
+    /// An HF rig active with an IC-905 listing 3 cm: the pick moves to the IC-905 and must call on
+    /// 10368.100, not key 10489.700 into QO-100's downlink. The mirror: an IC-905 active with SDR
+    /// Console listing 3 cm lands SDR Console on the transponder, never on 10368.100. Band pick,
+    /// section entry and the band menu's row agree.
+    #[test]
+    fn the_3cm_home_is_the_routed_radios() {
+        for (active, other, want) in [(3073, 3090, 10368.100), (3090, 2056, 10489.700)] {
+            let (mut e, id) = two_rigs(active, &[], other, &["3cm", "13cm"]);
+            let row = e
+                .licensed_band_plan(OperatingMode::Phone)
+                .into_iter()
+                .find(|c| c.band == "3cm")
+                .map(|c| c.dial_mhz);
+            assert!(
+                row.is_some_and(|f| (f - want).abs() < 1e-9),
+                "{active}->{other} menu row: {row:?}"
+            );
+            e.settings.band = "3cm".into();
+            let entry = e
+                .prepare_mode_entry("phone", true)
+                .frequency
+                .map(|(f, _)| f);
+            assert!(
+                entry.is_some_and(|f| (f - want).abs() < 1e-9),
+                "{active}->{other} entry: {entry:?}"
+            );
+            e.settings.band = "20m".into();
+            e.pick_band("3cm", Some("phone"));
+            assert_eq!(e.settings.active_radio, id, "{active}->{other}: routed");
+            assert!(
+                (e.settings.dial_mhz - want).abs() < 1e-9,
+                "{active}->{other} pick: {}",
+                e.settings.dial_mhz
+            );
+        }
+    }
+
+    /// ⭐ ONE RADIO'S 3 CM DIAL IS NOT RECALLED ON THE OTHER KIND. The dial memory is station-wide
+    /// per band and mode, so the IC-905's 10368.100 used to come back on SDR Console (and SDR
+    /// Console's 10489.700 on the IC-905). A 3 cm Phone/CW cell is recalled only on the side of
+    /// QO-100's narrowband downlink (10489.500-10490.000) that the radio's kind homes on; the other
+    /// kind gets its own home. Control: the same radio still recalls its own tuned dial.
+    #[test]
+    fn a_3cm_dial_is_not_recalled_on_the_other_kind_of_radio() {
+        let both = &["20m", "3cm", "13cm"];
+        for (first, second, first_home, second_home) in [
+            (3090, 2056, 10368.100, 10489.700),
+            (2056, 3090, 10489.700, 10368.100),
+        ] {
+            let (mut e, id) = two_rigs(first, both, second, both);
+            e.pick_band("3cm", Some("phone"));
+            assert!(
+                (e.settings.dial_mhz - first_home).abs() < 1e-9,
+                "scene: {first} homes"
+            );
+            // Control: retune within the side, leave, come back on the same radio: remembered.
+            let tuned = first_home + 0.010;
+            e.set_frequency(tuned, "3cm", "USB");
+            e.pick_band("20m", Some("phone"));
+            e.pick_band("3cm", Some("phone"));
+            assert!(
+                (e.settings.dial_mhz - tuned).abs() < 1e-9,
+                "{first}: its own dial, got {}",
+                e.settings.dial_mhz
+            );
+            e.pick_band("20m", Some("phone"));
+            e.set_active_radio(id);
+            e.pick_band("3cm", Some("phone"));
+            assert_eq!(e.settings.active_radio, id, "scene: still radio {second}");
+            assert!(
+                (e.settings.dial_mhz - second_home).abs() < 1e-9,
+                "{second} after {first}: want {second_home}, got {}",
+                e.settings.dial_mhz
+            );
+        }
+    }
 }
