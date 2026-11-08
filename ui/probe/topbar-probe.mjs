@@ -2,7 +2,9 @@
 //
 // A status-lane message must never change the top bar's height or move a control to another line.
 // The bar is one flex-wrap row, and a message sized by its text used to push FT's last group (Auto /
-// Tx 1st / Tx 2nd) onto a second line, so the whole screen moved down a row while the message was up.
+// Tx 1st / Tx 2nd) onto a second line, so the whole screen moved down a row while the message was up. And on
+// the screens without a cockpit (the Logbook, Field Day), the bar's own Stop TX and every group must stand
+// exactly where they stood (2026-11-08: a lane in the TX/RX group slid Stop TX 937 → 450 px at 1920x1080).
 // The probe serves src/probe/topbar.tsx with the app's own Vite config, on the FT screen and on CW, at
 // the common full-screen sizes (each at the zoom the app's auto-fit gives it, plus 125 % and 150 % at
 // 1920×1080), once without a message and once with the slot-unkey-failed lane, and asserts: the bar
@@ -43,8 +45,14 @@ const NO_CELL_SIZES = [
   { w: 900, h: 600, z: 0.65 }, { w: 900, h: 600, z: 1 }, { w: 1024, h: 768, z: 1 }, { w: 1200, h: 750, z: 0.8 },
   { w: 1366, h: 768, z: 1 }, { w: 1920, h: 1080, z: 1.75 }, { w: 1280, h: 720, z: 1.5 }, { w: 1024, h: 768, z: 1.75 },
 ]
-const NO_FLOOR = '.status-lane-keep{min-width:0!important}'
-const OLD_LANE = '.status-lane{width:auto!important;flex:0 0 auto!important;margin-inline-start:0!important}.txrx{flex-grow:0!important}'
+// The flag check's own control: a lane squeezed below its flag must read as cut (the floor itself is
+// cockpit-panes.test.ts's: it is always held off the operating screens, so no size here can test it by removal).
+const NO_FLOOR = '.status-lane{max-width:20px!important;min-width:0!important}'
+// CONTROL for Stop TX: the old mechanism put back, the TX/RX group growing while the lane holds a message (it was
+// `.txrx:has(> .status-lane)`), which takes the readout's auto margin: the bar's Stop TX must then move somewhere.
+const LANE_LAST = '.topbar:has(.status-chip) .txrx{flex-grow:1!important}'
+// The old lane: its own text width, and (as before 2026-11-08) no box at all while it is empty.
+const OLD_LANE = '.status-lane{width:auto!important;flex:0 0 auto!important;margin:0!important}.status-lane:not(:has(.status-chip)){display:none!important}'
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const MEASURE = `(() => {
@@ -58,8 +66,13 @@ const MEASURE = `(() => {
   return {
     vp: document.documentElement.getAttribute('data-viewport'),
     h: Math.round(b.height * 10) / 10,
-    groups: [...bar.children].filter((e) => e.getClientRects().length).map((e) => e.className.split(' ').slice(0, 2).join('.') + '@' + Math.round(e.getBoundingClientRect().top)),
+    // The lane itself is left out: it is always drawn, and its own top follows what it holds (0 px tall empty).
+    groups: [...bar.children].filter((e) => e.getClientRects().length && !e.classList.contains('status-lane')).map((e) => e.className.split(' ').slice(0, 2).join('.') + '@' + Math.round(e.getBoundingClientRect().top)),
     lane: lane ? { w: Math.round(lane.getBoundingClientRect().width), flag: shown(flag), text: chip?.textContent ?? '' } : null,
+    // The bar's own Stop TX (the TX cluster: Logbook, Field Day and every screen without a cockpit), and where
+    // every group of the bar starts, left and top: none of it may move when a lane item comes or goes.
+    stop: (() => { const b = bar.querySelector('.op-btn.stop'); if (!b) return null; const r = b.getBoundingClientRect(); return [Math.round(r.left * 10) / 10, Math.round(r.top * 10) / 10, Math.round(r.width * 10) / 10] })(),
+    boxes: [...bar.querySelectorAll(':scope > *, .op-controls > *')].filter((e) => e.getClientRects().length && !e.classList.contains('status-lane')).map((e) => e.className.toString().split(' ')[0] + '@' + Math.round(e.getBoundingClientRect().left) + ',' + Math.round(e.getBoundingClientRect().top)),
     // The room left on the line the TX/RX group (the lane's home) sits on: the bar's content width
     // less the items on that line and the gaps between them.
     free: (() => {
@@ -67,7 +80,8 @@ const MEASURE = `(() => {
       const cs = getComputedStyle(bar)
       const g = bar.querySelector(':scope > .txrx')?.getBoundingClientRect()
       if (!g) return null
-      const line = [...bar.children].filter((e) => e.getClientRects().length).map((e) => e.getBoundingClientRect()).filter((r) => r.top < g.bottom && r.bottom > g.top)
+      // The lane is left out: it grows into exactly this room.
+      const line = [...bar.children].filter((e) => e.getClientRects().length && !e.classList.contains('status-lane')).map((e) => e.getBoundingClientRect()).filter((r) => r.top < g.bottom && r.bottom > g.top)
       const inner = (bar.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)) * z
       return Math.round(inner - line.reduce((a, r) => a + r.width, 0) - (line.length - 1) * parseFloat(cs.columnGap) * z)
     })(),
@@ -137,7 +151,7 @@ try {
   }
   // OFF THE OPERATING SCREENS: the critical item's flag is on screen at every size, and the bar never runs past
   // the window. CONTROL: the same sizes with the floor taken off must cut the flag somewhere, or this cannot fail.
-  let cutWithout = 0
+  let cutWithout = 0, stopRows = 0, stopMovedLast = 0
   for (const s of [...SIZES, ...NO_CELL_SIZES]) {
     const at = `logbook at ${s.w}×${s.h} ${Math.round(s.z * 100)}%`
     const on = await measure(s, 'logbook', true)
@@ -145,13 +159,27 @@ try {
     console.log(`topbar-probe: ${at}: with the floor ${JSON.stringify(on?.lane)}; without ${JSON.stringify(bare?.lane)}`)
     if (!on?.lane) { console.error(`topbar-probe: the lane was never drawn for ${at}`); code = 2; continue }
     if (!on.lane.flag) { console.error(`topbar-probe: RED ${at} — a critical item's flag is cut on a screen with no alarm cell`); code = code || 1 }
+    // STOP TX NEVER MOVES (the bar's own, the only one on these screens), and neither does any group or TX control.
+    const off = await measure(s, 'logbook', false)
+    if (!off?.stop || !on.stop) { console.error(`topbar-probe: the bar's Stop TX was never drawn for ${at}`); code = 2 }
+    else if (JSON.stringify(off.stop) !== JSON.stringify(on.stop)) { console.error(`topbar-probe: RED ${at} — the bar's Stop TX moved when a lane item came: ${JSON.stringify(off.stop)} → ${JSON.stringify(on.stop)}`); code = code || 1 }
+    const movedBoxes = (off?.boxes ?? []).filter((b, i) => b !== on.boxes?.[i])
+    if (movedBoxes.length) { console.error(`topbar-probe: RED ${at} — ${movedBoxes.length} of the bar's boxes moved: ${movedBoxes.slice(0, 3).join(' ')} → ${on.boxes.filter((b) => !off.boxes.includes(b)).slice(0, 3).join(' ')}`); code = code || 1 }
+    stopRows++
+    const offLast = await measure(s, 'logbook', false, LANE_LAST)
+    const onLast = await measure(s, 'logbook', true, LANE_LAST)
+    if (offLast?.stop && onLast?.stop && JSON.stringify(offLast.stop) !== JSON.stringify(onLast.stop)) stopMovedLast++
     if (on.overflowX > 0) { console.error(`topbar-probe: RED ${at} — the bar runs ${on.overflowX}px past the window`); code = code || 1 }
     if (bare?.lane && !bare.lane.flag) cutWithout++
   }
   if (cutWithout === 0) {
-    console.error('topbar-probe: CONTROL FAILED — without the floor no size cut the flag on the no-cell screen; the check cannot fail')
+    console.error('topbar-probe: CONTROL FAILED — a lane squeezed below its flag read as whole; the check cannot fail')
     code = code || 1
-  } else console.log(`topbar-probe: CONTROL no-cell: without the floor the flag is cut at ${cutWithout} size(s)`)
+  } else console.log(`topbar-probe: CONTROL no-cell: a lane squeezed below its flag reads as cut at ${cutWithout} size(s)`)
+  if (stopMovedLast === 0) {
+    console.error('topbar-probe: CONTROL FAILED — with the TX/RX group growing for a message no size moved the bar’s Stop TX; the check cannot fail')
+    code = code || 1
+  } else console.log(`topbar-probe: CONTROL no-cell: the TX/RX group growing for a message (the old rule) moves the bar’s Stop TX at ${stopMovedLast} of ${stopRows} size(s); with the fix it moves at none`)
   const s = tightest?.s ?? SIZES[0]
   const off = await measure(s, 'operate', false, OLD_LANE)
   const on = await measure(s, 'operate', true, OLD_LANE)

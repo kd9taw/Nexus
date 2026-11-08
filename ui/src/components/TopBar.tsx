@@ -597,6 +597,30 @@ export function TopBar({
         )}
       </div>
 
+      {/* THE STATUS LANE: ALWAYS DRAWN, and HERE, right after the brand group, so it is the item in front of
+          the group that carries the bar's free room (the readout's `margin-left: auto`, or the TX/RX group's
+          where there is no readout). A zero-basis grower takes exactly the room that margin had, so nothing
+          after it moves, empty or full. Inside the TX/RX group it made the group grow when a message came,
+          the margin went to 0, and the bar's own Stop TX slid left: 937 → 450 px at 1920x1080 on the
+          Logbook (cockpit-panes.css `.status-lane`).
+          The TX watchdog's halt is a CRITICAL LANE ITEM (App), not a chip of its own; REC rides in the lane
+          too; on the operating screens every critical item is also shown beside Stop TX on the TX strip. */}
+      <StatusLane
+        keepCritical={!alarmCell}
+        lead={
+          radio.qsoRecording ? (
+            <button
+              type="button"
+              className="topbar-rec"
+              onClick={() => onStopRecording?.()}
+              title={t('topbar.recording.title')}
+            >
+              ● {REC}
+            </button>
+          ) : undefined
+        }
+      />
+
       {!hideFrequencyControl && (
         <div className="topbar-group radio-readout">
           <FrequencyControl
@@ -685,25 +709,6 @@ export function TopBar({
         </div>
         )}
 
-        {/* The TX watchdog's halt is a CRITICAL LANE ITEM now (App), not a chip of its own: a chip with a
-            width of its own wrapped the bar when it came and moved every control under it, and as a lane
-            item it is also shown beside Stop TX on the operating screens' TX strip. REC rides first in the
-            lane for the same reason (styles.css `.status-lane`). */}
-        <StatusLane
-          keepCritical={!alarmCell}
-          lead={
-            radio.qsoRecording ? (
-              <button
-                type="button"
-                className="topbar-rec"
-                onClick={() => onStopRecording?.()}
-                title={t('topbar.recording.title')}
-              >
-                ● {REC}
-              </button>
-            ) : undefined
-          }
-        />
         {!hideDigitalChrome && (
           <div className="slot-clock" title={t('topbar.slotClock.title')}>
             <span className="slot-count">{countdown}s</span>

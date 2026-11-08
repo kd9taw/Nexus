@@ -17,21 +17,23 @@ function chipClass(tier: StatusTier): string {
   return `status-chip tier-${tier}`
 }
 
-/** `lead`: the top bar's REC chip, drawn in the lane so it takes the lane's zero width (styles.css
- *  `.status-lane`): a recording that starts or stops never wraps the bar.
+/** ALWAYS DRAWN, items or none (cockpit-panes.css `.status-lane`): the lane stands where the bar's free room
+ *  is, so a box that came and went with a message moved the groups after it, the bar's own Stop TX among them.
+ *
+ *  `lead`: the top bar's REC chip, drawn in the lane so it takes the lane's zero width: a recording that
+ *  starts or stops never wraps the bar.
  *
  *  `keepCritical`: this screen has NO transmitter alarm cell (TxAlarmBanner, on the operating screens' TX
- *  strip), so the lane is the only place a critical item shows. Then a critical item is never cut to
- *  nothing: it is drawn first, the lane keeps its flag (`.status-lane-keep`, cockpit-panes.css: on a line
- *  with less room the bar takes a line, as it always did off the operating screens), and it is announced as
- *  an alert, not politely. With the cell, the lane may be cut: every critical item is beside Stop TX. */
+ *  strip), so the lane is the only place a critical item shows. Then the lane ALWAYS keeps the room for a
+ *  critical item's flag (`.status-lane-keep`), so one arriving never wraps the bar; critical items are drawn
+ *  first and announced as alerts, not politely. With the cell, the lane may be cut: every critical item is
+ *  beside Stop TX. */
 export function StatusLane({ lead, keepCritical = false }: { lead?: ReactNode; keepCritical?: boolean } = {}) {
   const [items, setItems] = useState<StatusItem[]>([])
   useEffect(() => subscribeStatus(setItems), [])
 
-  if (items.length === 0 && !lead) return null
   const critical = items.filter((it) => it.tier === 'critical')
-  const keep = keepCritical && critical.length > 0
+  const keep = keepCritical
 
   const chip = (it: StatusItem) => {
     const Icon = TIER_ICON[it.tier]
@@ -51,6 +53,8 @@ export function StatusLane({ lead, keepCritical = false }: { lead?: ReactNode; k
   return (
     <TooltipProvider>
       <div className={keep ? 'status-lane status-lane-keep' : 'status-lane'} role="status" aria-live="polite">
+        {/* The bar's gap, given back inside the lane (its margin cancels it for the line breaker). */}
+        <span className="status-lane-gap" aria-hidden="true" />
         {/* Critical first, ahead of REC, so the kept flag is a critical item's (the store sorts critical first). */}
         {keep && critical.map(chip)}
         {lead}

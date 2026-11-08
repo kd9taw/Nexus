@@ -63,7 +63,8 @@ function Probe() {
         onSetFrequency={noop} onSetTxEnabled={noop} onSetTune={noop} onHaltTx={noop}
         onSetTxEven={noop} onSetTxCycleAuto={noop} onSetHoldTxFreq={noop} onStopRecording={noop}
         hideTxControls={ft}
-        hideFrequencyControl
+        // The Logbook and Field Day show the frequency readout; its `margin-left: auto` holds the bar's free room.
+        hideFrequencyControl={cockpit}
         hideDigitalChrome={cockpit && !ft}
         ftScreen={ft}
         alarmCell={cockpit}

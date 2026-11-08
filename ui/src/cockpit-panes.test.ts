@@ -269,7 +269,9 @@ describe('the fence: styles.css never names a structural class', () => {
     // could set it over Stop TX.
     'ch-txalarm',
     // …and the lane's flag floor off the operating screens: a styles.css min-width on it could undo it.
-    'status-lane-keep']) {
+    'status-lane-keep',
+    // …and the lane's own box (2026-11-08): where it stands decides whether the bar's Stop TX moves for it.
+    'status-lane', 'status-lane-gap']) {
     it(`styles.css declares no .${cls} rule`, () => {
       const hits = STYLES_RULES
         .map((r) => r.selector)
@@ -1875,8 +1877,8 @@ describe('THE TRANSMITTER ALARM CELL: one constant width to the TX strip’s lin
     expect(classChainWinner([...cell, ['ch-txalarm-dismiss']], 'flex')?.value).toBe('none')
   })
   it('the top bar’s lane has no floor now: the bar never takes a line for it', () => {
-    expect(classChainWinner([['topbar'], ['txrx'], ['status-lane']], 'min-width')?.value).toBe('0')
-    expect(classChainWinner([['topbar'], ['txrx'], ['status-lane']], 'width')?.value).toBe('0')
+    expect(classChainWinner([['topbar'], ['status-lane']], 'min-width')?.value).toBe('0')
+    expect(classChainWinner([['topbar'], ['status-lane']], 'width')?.value).toBe('0')
   })
 })
 
@@ -1896,10 +1898,41 @@ describe('THE LANE OFF THE OPERATING SCREENS keeps a critical item’s flag', ()
   // No TX strip there, so no alarm cell: the lane is the only place a critical item shows (StatusLane
   // `keepCritical`). Its flag floor must win over the bar's zero floor; on the operating screens it is absent.
   it('`.status-lane-keep` wins the lane’s min-width with the flag’s floor', () => {
-    const keep = classChainWinner([['topbar'], ['txrx'], ['status-lane', 'status-lane-keep']], 'min-width')
+    const keep = classChainWinner([['app'], ['topbar'], ['status-lane', 'status-lane-keep']], 'min-width')
     expect(keep?.sheet).toBe('cockpit-panes.css')
-    // The 13 px icon, the chip's 2 x 8 px padding and 2 px border, and the 10 px the lane's margin cancels.
-    expect(lengthsAt(keep!.value.replace(/\bcalc\(/g, '('), 1440)).toEqual([10 + 13 + 16 + 2])
-    expect(classChainWinner([['topbar'], ['txrx'], ['status-lane']], 'min-width')?.value, 'control: no floor without it').toBe('0')
+    // The bar's gap (which the lane's margin cancels: 18 px stock, 12 px on a short window), the 13 px icon,
+    // the chip's 2 x 8 px padding and 2 px border.
+    expect(lengthsAt(keep!.value.replace(/\bcalc\(/g, '('), 1440)).toEqual([18 + 13 + 16 + 2])
+    expect(lengthsAt(keep!.value.replace(/\bcalc\(/g, '('), 900)).toEqual([12 + 13 + 16 + 2])
+    expect(classChainWinner([['topbar'], ['status-lane']], 'min-width')?.value, 'control: no floor without it').toBe('0')
+  })
+})
+
+describe('THE STATUS LANE: zero wide to the bar’s line breaker, and nothing grows when a message comes', () => {
+  // It stands right after the brand group, in front of the group with the bar's auto margin, and takes that
+  // margin's room. Inside the TX/RX group, which grew while a message was up (`.txrx:has(> .status-lane)`),
+  // the margin went to 0 and the bar's own Stop TX slid left 937 → 450 px at 1920x1080 on the Logbook.
+  const lane = [['app'], ['topbar'], ['status-lane']]
+  const px = (v: string, vh: number) => lengthsAt(v.replace(/\bcalc\(/g, '('), vh)
+  it.each([700, 1040, 1100, 1101, 1440])('the bar’s gap + the lane’s margin + width + padding + border is 0 at an effective %i px', (vh) => {
+    const gap = classChainWinner([['app'], ['topbar']], 'gap')
+    expect(gap).not.toBeNull()
+    const margin = classChainWinner(lane, 'margin')
+    expect(margin, 'nothing cancels the bar’s gap in front of the lane').not.toBeNull()
+    expect(classChainWinner(lane, 'width')?.value).toBe('0')
+    expect(classChainWinner(lane, 'flex')?.value).toBe('1 1 0')
+    expect(classChainWinner(lane, 'padding')?.value ?? '0').toBe('0')
+    expect(classChainWinner(lane, 'border')?.value ?? '0').toBe('0')
+    const g = px(gap!.value, vh)[0]
+    const [, , , left] = px(margin!.value, vh)
+    expect(g + left).toBe(0)
+    // …and the gap it gives back inside it: the bar's gap less the lane's own (the first chip's distance).
+    const giveBack = classChainWinner([...lane, ['status-lane-gap']], 'width')
+    const inner = classChainWinner(lane, 'gap')
+    expect(px(giveBack!.value, vh)[0] + px(inner!.value, vh)[0]).toBe(g)
+  })
+  it('no rule grows the TX/RX group, or any group, while a lane is up', () => {
+    const growers = [...STYLES_RULES, ...RULES].filter((r) => /:has\([^)]*status-lane/.test(r.selector))
+    expect(growers.map((r) => r.selector), 'a group that grows with the lane gives it the bar’s auto margin, and Stop TX moves').toEqual([])
   })
 })

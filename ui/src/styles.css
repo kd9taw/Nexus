@@ -727,41 +727,9 @@ button.nb-chip:hover {
   border-color: var(--accent);
 }
 
-/* THE LANE NEVER MAKES THE TOP BAR TALLER. The bar is one flex-wrap row, and a wrapping row
-   places each item on a line by its max-content width, so a lane sized by its text pushed the
-   last group (FT's Auto / Tx 1st / Tx 2nd) onto a second line, and the whole screen moved down
-   a row while a message was up. So the lane takes no width of its own (`width: 0`, which is also
-   its contribution to the TX/RX group's width, the margin cancelling the group's gap before it),
-   grows into the room left on the line that group is on, and its chips shorten to an ellipsis;
-   the full text is the chip's tooltip, as it always was. The group grows only while a lane is up
-   (`:has`), so nothing moves without one. The REC chip rides first in the lane (TopBar), so it takes
-   the same zero width; the TX watchdog's halt is a lane item (App), not a chip of its own.
-   ⛔ SAFETY: WHERE A CRITICAL ITEM GOES WHEN THE BAR CUTS IT (operator pick 2026-11-07, "Never wraps,
-   alarms also shown by Stop"). The lane used to keep its first chip's flag, taking a bar line rather
-   than hide it, and every such line moved Stop TX under it (20 px at 1366x768 on FT). Now the lane
-   has NO FLOOR and may be cut to nothing on a full line, and EVERY CRITICAL ITEM ("PTT OFF FAILED —
-   TX STOPPED") is ALSO in the transmitter alarm cell beside the TX state on the TX strip, next to
-   Stop TX (TxAlarmBanner, cockpit-panes.css `.ch-txalarm`), which always keeps at least its opening
-   words. OFF the operating screens there is no strip and no alarm cell, so there the lane KEEPS a
-   critical item's flag and announces it as an alert (StatusLane `keepCritical`, cockpit-panes.css
-   `.status-lane-keep`): on a line with less room the bar takes a line, and no Stop TX sits under it
-   to move (that screen's Stop TX is in the bar, before the lane). */
-.status-lane {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex: 1 1 0;
-  width: 0;
-  min-width: 0;
-  margin-inline-start: -10px;
-  overflow: hidden;
-}
-.status-lane > :first-child {
-  margin-inline-start: 10px;
-}
-.txrx:has(> .status-lane) {
-  flex-grow: 1;
-}
+/* THE STATUS LANE's box is structure: cockpit-panes.css `.status-lane` (where it stands in the bar and why
+   the bar's Stop TX never moves for it, its zero width, and where a critical item goes when it is cut).
+   Its chips' look is below. */
 .status-chip {
   display: inline-flex;
   align-items: center;
