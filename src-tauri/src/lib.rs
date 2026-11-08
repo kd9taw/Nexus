@@ -30471,6 +30471,10 @@ fn set_license_class(state: State<'_, SharedEngine>, class: String) -> Result<Ap
 /// home dial. Split out of [`get_licensed_band_plan`] so the list and the privilege filter
 /// that trims it can be driven directly by a test, with no engine and no Tauri state — the
 /// band that is MISSING from a list is invisible to every test that goes through the command.
+///
+/// The command itself reads `Engine::licensed_band_plan`, whose rows follow the radio each band
+/// routes to; this is the list for an unknown radio, the same rows wherever the rig is not 3 cm.
+#[cfg(test)]
 fn licensed_bands(
     class: tempo_app::settings::LicenseClass,
     mode: tempo_app::settings::OperatingMode,
@@ -30541,7 +30545,9 @@ fn get_licensed_band_plan(
         "cw" => OperatingMode::Cw,
         _ => OperatingMode::Digital,
     };
-    Ok(licensed_bands(class, mode))
+    // The rows the band pick lands on: each band's home is the one for the radio the routing
+    // hands that band to (`Engine::licensed_band_plan`).
+    Ok(eng.licensed_band_plan(mode))
 }
 
 /// Change band / dial frequency / mode live (does not reset the operating mode).
