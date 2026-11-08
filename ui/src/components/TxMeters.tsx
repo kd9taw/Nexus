@@ -549,6 +549,11 @@ export function TxMeters({
       {shown.filter((r) => !needle || (!isNeedle(r.key) && !(r.key === 'comp' && inline && !strip))).map((r) => {
         const slider = r.key === 'comp' && levelPct != null
         const hasCtl = r.key === 'comp' && (slider || procOn != null || bwSteps.length > 1)
+        const unreported = overJudged.current && !seen.current.has(r.key)
+        // ⊘ IN PLACE OF THE BAR. A meter the radio does not report has an empty track and a dash, and
+        // beside them the note was wider than Operate's half of its fixed cell, which clipped it. A row
+        // with no controls says it with the note alone; one with them keeps its track, the slider.
+        const noteOnly = unreported && !hasCtl
         return (
         <div
           key={r.key}
@@ -558,6 +563,7 @@ export function TxMeters({
           <span className="ph-txmeter-label">{r.label}</span>
           {/* A display well (styles.css DISPLAY WELLS), in all three hosts alike: the zone colours
               above resolve to the dark theme's inks on a track that is dark in both themes. */}
+          {!noteOnly && <>
           <div
             className="ph-txmeter-track well"
             {...(slider
@@ -587,12 +593,13 @@ export function TxMeters({
             {slider && <div className="ph-txmeter-mark" style={{ left: `${levelPct}%` }} />}
           </div>
           <span className="ph-txmeter-value">{r.bar?.value ?? '—'}</span>
+          </>}
           {r.key === 'comp' && compControls}
           {/* ⊘ ONLY ONCE WE COULD HAVE KNOWN. The rig has keyed and this meter stayed
               silent through it, so it is one the radio does not report — as against the
               blank rows before the first over, which say nothing about the radio and are
               answered by the hint below instead. */}
-          {overJudged.current && !seen.current.has(r.key) && (
+          {unreported && (
             <span className="ph-unavail" role="note" title={t('phone.unavail.meter', { meter: r.label })}>
               <span aria-hidden="true">⊘</span> {t('phone.unavail.mark')}
             </span>
