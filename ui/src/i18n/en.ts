@@ -8237,6 +8237,7 @@ export const EN = {
     "Saved to {{name}}. CAT can only be tested on the radio you're operating — make {{name}} active to test it.",
   'settings.cat.test.failed': 'Could not run the CAT test.',
   'settings.cat.autoTest.failed': 'Could not run the port auto-test.',
+  'settings.cat.autoTest.busy': 'Testing ports — {{seconds}}s (a port nothing answers on can take over a minute)…',
 
   'settings.profiles.saved': 'Profile "{{name}}" saved',
   'settings.profiles.loaded': 'Loaded profile "{{name}}"',
@@ -9271,7 +9272,7 @@ export const EN = {
   'setup.rig.selected.baud': ' @ {{baud}} baud',
   'setup.rig.selected.unnamedRadio': 'radio',
   'setup.rig.autoTest.action': '🔎 Auto-test my ports',
-  'setup.rig.autoTest.busy': 'Testing ports — {{seconds}}s (can take up to a minute)…',
+  'setup.rig.autoTest.busy': 'Testing ports — {{seconds}}s (a port nothing answers on can take over a minute)…',
   'setup.rig.autoTest.title':
     'Probes every USB port until a radio answers — read-only, never transmits',
   'setup.rig.autoTest.failed': 'Auto-test failed: {{error}}',
@@ -9313,7 +9314,7 @@ export const EN = {
   'setup.rig.second.action': '＋ I have a second radio',
   'setup.rig.second.title': 'Adds a radio profile and probes the remaining USB ports for it',
   'setup.rig.second.probing':
-    'Probing the other ports — {{seconds}}s (radio 1’s port is skipped; this can take up to a minute)…',
+    'Probing the other ports — {{seconds}}s (radio 1’s port is skipped; a port nothing answers on can take over a minute)…',
   'setup.rig.second.saved': 'Second radio: {{radio}} on {{port}} — saved to its own profile.',
   'setup.rig.second.addFailed': "Couldn't add the radio: {{error}}",
   'setup.rig.second.model.label': 'Which radio is the second one?',
