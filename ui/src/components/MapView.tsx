@@ -11,6 +11,7 @@
 // under `map.*`. Nothing drawn on the canvas is prose — every fillText draws a token.
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { callCardTrigger } from './CallCard'
+import { useCallMenu } from './useCallMenu'
 import { flushSync } from 'react-dom'
 import type { AprsStation } from '../api'
 import { bandLabelForMhz } from '../band'
@@ -957,6 +958,8 @@ export function MapView({
   // anything was decoded; `placed`, `rxLines`, `selStation` and the draw effect all key on this,
   // so identity-keyed they cleared and redrew the whole canvas ~3×/s for identical content.
   const stations = useStableByKey(stationsProp, JSON.stringify(stationsProp))
+  // A right-click on the selected station's name: the call menu every list shares (Best times first).
+  const callMenu = useCallMenu()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   // Flare effects overlay (the animated sun + rays) — a separate transparent
@@ -4236,7 +4239,8 @@ export function MapView({
           {selStation && pathInfo && (
             <div className="map-path">
               {/* The selected station's card, from the call in this readout. */}
-              <button type="button" className="map-path-call" {...callCardTrigger(selStation.call)}>
+              <button type="button" className="map-path-call" {...callCardTrigger(selStation.call)} {...callMenu.on('map-path', selStation.call)}>
+                {callMenu.at('map-path')}
                 {selStation.call}
               </button>
               <span className="map-path-fig">

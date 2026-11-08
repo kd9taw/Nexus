@@ -12,6 +12,7 @@ import { useSessionState } from '../useSessionState'
 import { useRememberedList } from '../useRememberedList'
 import type { BandChannel, FieldDayStatus, NeedAlert, SpotRow } from '../types'
 import { callCardTrigger, qrzPageOf } from './CallCard'
+import { useCallMenu } from './useCallMenu'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
 import { alertsByCall, alertsForSurface, isActivityTag } from '../features/needs'
@@ -221,6 +222,8 @@ function adoptPopOutFilters(): void {
 
 export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, onPopOut, myGrid = '', needAlerts, pane, fieldDay, spotMe, poppedOut }: SpotsPanelProps) {
   const marker = useContestSpotMarker(fieldDay)
+  // The call menu (Best times first, then watch and hide), on a right-click or the menu key on a row.
+  const callMenu = useCallMenu()
   // The row-level Spot button (reuses SpotDialog, the same reviewable popup Operate/Phone open):
   // which row's call+freq is being spotted, or null when the popup is closed. A right-there spot
   // for a station already on the board is one click, then the confirm (it posts publicly from the
@@ -739,9 +742,11 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
                   onSelect(s.call)
                   onWork(s)
                 }}
+                {...callMenu.on(`${s.call}|${s.freqMhz}|${s.spotter}`, s.call, { band: s.band || null, country: s.entity || null })}
               >
                 <span className="np-age">{ageLabel(s.ageSecs)}</span>
                 <span className="np-call">
+                  {callMenu.at(`${s.call}|${s.freqMhz}|${s.spotter}`)}
                   {/* The station card; stopping the click keeps the row's tune from firing. */}
                   <button
                     type="button"

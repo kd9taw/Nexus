@@ -28,7 +28,7 @@ import type { BestMode, SpotRow } from '../types'
 import { useUnits } from '../units'
 import { lookupCall } from '../callsign'
 import { closeCallCard, placeCallCard, txBoxes, type Placement } from './CallCard'
-import { registerFloatingCard } from '../features/floatingCard'
+import { registerFloatingCard, setBestTimesOpener } from '../features/floatingCard'
 import { planReturn, giveBack } from '../focusReturn'
 import { BEST_TIMES, bestTimesKey, refreshKeyedFeed, useKeyedFeed } from '../features/connectFeeds'
 import { CARD_WINDOWS, startMode } from '../features/bestTimes'
@@ -91,6 +91,7 @@ export function openBestTimesCard(call: string, anchor: HTMLElement, keyboard = 
   opened = { call: cu, anchor, keyboard }
   emit()
 }
+setBestTimesOpener((call, anchor) => openBestTimesCard(call, anchor))
 
 function CardPopover({ open, spots, antGainDbi, radioMode }: { open: Opened; spots?: readonly SpotRow[]; antGainDbi?: number; radioMode?: string | null }) {
   const units = useUnits()

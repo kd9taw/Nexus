@@ -459,10 +459,15 @@ was solved for a real contact, and nobody reported this station.*
 ### Find the best times to work a call
 
 The **Best times** box answers one question: when, and on which band, can I work this station?
-Type a call (or a grid square) and press **Best times**. You can also right-click a call in the
-Call Roster or Band Activity, or open a JS8 station row's menu, and choose **Best times** at the
-top. That opens a small card beside the row and does nothing else: it does not select, tune or
-call the station.
+Type a call (or a grid square) and press **Best times**. You can also right-click a call (or press
+the Menu key, or Shift+F10, on it) and choose **Best times** at the top of the menu. The same menu
+opens everywhere a call is listed: the Call Roster, Band Activity, Spots, Needed, Chase and the
+chase feed, POTA/SOTA, DXpeditions, the Logbook (also in a row's ⋯ menu), a band map's spot labels,
+the map's selected station, a roster card and a JS8 station row. On the band map, a right-click on
+the track between labels still marks a frequency. The station card has a **Best times** button too.
+The item opens a small card beside the call and does nothing else: it does not select, tune or call
+the station. JS8's Band Activity rows (an offset and its text, with no call of their own) and the
+heartbeat button (a transmit control) have no such menu.
 
 The answer starts with now: "Now: try 20m", how good the band is and until about which hour (UTC,
 on the hour, because the model works in hours), and a second band if one is also open. If nothing
@@ -480,7 +485,9 @@ Every answer says what it rests on:
   you asked for the answer, never when you just hover. If a station is in your own country and
   only the country is known, it gives no answer, because the centre of your own country says
   nothing about where they are. For a ship or aircraft mobile it asks for their grid. You can
-  always type a grid for the call.
+  always type a grid for the call. If the callbook answered a stroked call (EA8/DL1ABC) from the
+  home call's record, the answer says that address is the home one and they may be elsewhere.
+  Under 300 km there is no answer: that close, the model calls nearly every band open all day.
 - **The model and your station.** It follows your prediction engine (P.533 by default), its month,
   the mode you picked (FT8, FT4, CW or SSB, starting from your radio's mode), and the power and
   antenna gain it assumed.
