@@ -50,10 +50,23 @@ describe('the CAT words take no room the strip lays out by', () => {
     expect(words.textContent).toBe('CAT lost: press TX On')
     expect(css(words, 'flex-basis')).toBe('0px')
     expect(css(words, 'min-width')).toBe('0px')
-    // The strip's column gap is what the margin takes back and the padding gives back (tokens resolved).
-    expect(css(strip, 'gap')).toBe('3px 8px')
-    expect(css(words, 'margin-left')).toBe('calc(-1 * 8px)')
-    expect(css(words, 'padding-left')).toBe('8px')
+    // What the cell adds to the line the strip breaks by: the column gap before it, its margin, its border
+    // and its padding (with border-box and a zero basis, padding is still width the breaker sees). Zero, or the
+    // strip wraps and Stop TX moves (Phone, CW and RTTY in Russian at 175 %, 1002-1012 px wide).
+    const px = (v: string | null) => {
+      const m = /^calc\(\s*(-?[\d.]+)\s*\*\s*(-?[\d.]+)px\s*\)$/.exec(v ?? '')
+      if (m) return Number(m[1]) * Number(m[2])
+      const n = /^(-?[\d.]+)(px)?$/.exec((v ?? '0').trim())
+      if (!n) throw new Error(`cannot read ${v}`)
+      return Number(n[1])
+    }
+    const columnGap = px(css(strip, 'gap')!.split(/\s+/)[1])
+    expect(columnGap, 'premise: the strip has a column gap').toBeGreaterThan(0)
+    expect(
+      columnGap + px(css(words, 'margin-left')) + px(css(words, 'padding-left')) + px(css(words, 'border-left-width')),
+    ).toBe(0)
+    // The space before the words is drawn by an indent, which no line breaker counts.
+    expect(css(words, 'text-indent')).toBe('8px')
     expect(css(words, 'white-space')).toBe('nowrap')
     expect(css(words, 'overflow')).toBe('hidden')
   })
