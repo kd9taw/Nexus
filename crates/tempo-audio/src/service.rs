@@ -1845,9 +1845,10 @@ fn agc_from_hamlib(v: u8) -> &'static str {
 /// retrying THAT mode until the target changes.
 const MODE_SET_MAX_TRIES: u32 = 30;
 
-/// How long after Nexus's own DATA-word set its read-backs are judged ([`RadioLoop::judge_data_word`]):
-/// the heavy poll reads the mode about every 3 s, so this holds the skipped first read and two more.
-const DATA_WATCH_MS: f64 = 12_000.0;
+/// How many reads after Nexus's own DATA-word set one watch judges ([`RadioLoop::judge_data_word`]),
+/// past the skipped first one and the cache window. Counted in READS, not time: the heavy poll holds
+/// its reads while the radio is keyed, so a watch opened before an over is finished after it.
+const DATA_WATCH_READS: u8 = 3;
 /// Reads sooner than this after the set can be Hamlib's own mode cache, and are not judged.
 const DATA_CACHE_MS: f64 = 1_000.0;
 /// Models whose Hamlib backend sets the DATA mode through one field and reads it through another
@@ -1864,6 +1865,10 @@ struct DataWatch {
     /// Loop time of the first read after the set (ms).
     since: f64,
     twin_reads: u8,
+    /// Reads judged so far ([`DATA_WATCH_READS`]).
+    reads: u8,
+    /// The set came with a dial write that crossed a band: its plain reads may be the band stack.
+    void: bool,
 }
 
 /// After this many consecutive failures, DATA-mode retries drop their explicit 3 kHz
@@ -4255,6 +4260,13 @@ struct RadioLoop {
     /// The DATA words this connection's radio has SHOWN it takes (read back as itself, past
     /// Hamlib's cache): latched, never judged again on this connection.
     data_taken: Vec<&'static str>,
+    /// Consecutive watches of Nexus's own DATA set that ended on the plain twin with no band
+    /// crossing in them ([`Self::judge_data_word`]): two condemn the word.
+    data_twin_watches: u8,
+    /// Dial writes that crossed a band (or came from an unknown one), counted
+    /// (`reassert_mode_after_band_cross`), and the count when the judgement last looked.
+    dial_band_crosses: u64,
+    data_seen_crosses: u64,
     /// A radio handoff installed another connection: the engine's judgement of the last one's DATA
     /// word is forgotten at the next tick's engine lock, before the mode word is worked out.
     link_judgement_stale: bool,
@@ -5151,6 +5163,9 @@ impl RadioLoop {
             data_watch: None,
             data_seen_writes: u64::MAX,
             data_taken: Vec::new(),
+            data_twin_watches: 0,
+            dial_band_crosses: 0,
+            data_seen_crosses: 0,
             link_judgement_stale: false,
             last_cat_wpm: 0, // 0 = unset → first send pushes the speed
             cw_word_matched: None,
@@ -7176,14 +7191,24 @@ impl RadioLoop {
     /// answers `?;` or nothing) and the radio stays in USB.
     ///
     /// ⛔ ONLY THE READS THAT FOLLOW NEXUS'S OWN SET, and never a mode the operator or the radio
-    /// changed (TX re-review F1). A watch opens on Nexus's own DATA-word set (a mode write,
-    /// `Rig::mode_writes`, that left that word in `last_mode`) and closes after
-    /// [`DATA_WATCH_MS`]. The first read after the set is skipped (it can be Hamlib's cache), as is
-    /// anything inside [`DATA_CACHE_MS`]. Then:
+    /// changed (TX re-review F1, delta D1/R1). A watch opens on Nexus's own DATA-word set (a mode
+    /// write, `Rig::mode_writes`, that left that word in `last_mode`). The read on which the set is
+    /// first seen is skipped (it can be Hamlib's cache), as is anything inside [`DATA_CACHE_MS`].
+    /// Then:
     /// - the word itself read back: TAKEN, latched for the connection; a later front-panel USB or a
     ///   band-stack recall can never condemn it;
-    /// - its plain twin on two reads (`USB` after `PKTUSB`): not taken;
-    /// - any other mode: something else moved the radio; the watch closes, judging nothing.
+    /// - its plain twin on two reads (`USB` after `PKTUSB`): ONE plain watch, never a verdict on its
+    ///   own, because the operator's own USB press inside it looks the same. Nexus sets the word
+    ///   again (the retune, at the next idle tick) and judges the reads after THAT set; only two
+    ///   consecutive plain watches condemn the word. SDR Console reads plain USB after every set.
+    /// - any other mode: something else moved the radio; the watch closes, judging nothing, and the
+    ///   run of plain watches starts again.
+    /// - a watch whose set came with a dial write onto another band, or from an unknown one (the
+    ///   connection's first), counts for nothing: the band stack's mode can sit behind Hamlib's cache
+    ///   (`dial_band_crosses`); a band crossing inside a watch closes it.
+    ///
+    /// A watch judges at most [`DATA_WATCH_READS`] reads, counted in reads rather than time because
+    /// reads are held while the radio is keyed.
     ///
     /// Safe on the radios whose DATA mode hides behind another name, because Hamlib reads them
     /// back as the DATA word: DIGU on a PowerSDR/SmartSDR/DDUtil emulation, piHPSDR and the QCX/QDX
@@ -7205,6 +7230,8 @@ impl RadioLoop {
         // only ever holds a mode Nexus set and the link took), watch the reads after it; anything
         // else (the plain word, a fallback, CW) closes the watch. This read may be Hamlib's cache
         // of that very set, so it is not judged.
+        let crossed = self.dial_band_crosses != self.data_seen_crosses;
+        self.data_seen_crosses = self.dial_band_crosses;
         if writes != self.data_seen_writes {
             self.data_seen_writes = writes;
             self.data_watch = tempo_app::rig_modes::data_word(&self.last_mode)
@@ -7213,23 +7240,30 @@ impl RadioLoop {
                     word,
                     since: now,
                     twin_reads: 0,
+                    reads: 0,
+                    void: crossed,
                 });
             return;
         }
         let Some(watch) = self.data_watch.as_mut() else {
             return;
         };
-        let age = now - watch.since;
-        if age > DATA_WATCH_MS {
-            self.data_watch = None; // too long after Nexus's set to say anything about it
+        if crossed {
+            // A band-crossing dial write inside the watch: what follows may be the band stack.
+            self.data_watch = None;
             return;
         }
-        if age < DATA_CACHE_MS {
+        if now - watch.since < DATA_CACHE_MS {
             return;
         }
         let Some(reported) = reported.map(str::trim) else {
             return;
         };
+        if watch.reads >= DATA_WATCH_READS {
+            self.data_watch = None; // it has said all it will about that set
+            return;
+        }
+        watch.reads += 1;
         let word = watch.word;
         let twin = tempo_app::rig_modes::plain_twin(word).unwrap_or("");
         if tempo_app::rig_modes::data_word(reported) == Some(word) {
@@ -7237,14 +7271,31 @@ impl RadioLoop {
             // or the band stack does to the radio's mode later.
             self.data_taken.push(word);
             self.data_watch = None;
+            self.data_twin_watches = 0;
         } else if reported.eq_ignore_ascii_case(twin) {
             watch.twin_reads += 1;
-            if watch.twin_reads >= 2 {
-                self.data_watch = None;
+            if watch.twin_reads < 2 {
+                return;
+            }
+            let void = watch.void;
+            self.data_watch = None;
+            if !void {
+                self.data_twin_watches += 1;
+            }
+            if self.data_twin_watches >= 2 {
+                self.data_twin_watches = 0;
                 self.data_word_not_taken(engine, word, &format!("still reads {twin}"));
+            } else {
+                // Not yet a verdict: ONE watch can be fooled (the operator's own USB press inside
+                // it, a band stack's recall behind Hamlib's cache). Nexus sets the word again,
+                // through the retune at the next idle tick, and judges the reads after THAT set.
+                // A radio that takes the word reads it back then and is latched; SDR Console reads
+                // plain USB after every set.
+                self.last_mode.clear();
             }
         } else {
             self.data_watch = None; // another mode: something else moved it, judge nothing
+            self.data_twin_watches = 0;
         }
     }
 
@@ -7253,6 +7304,7 @@ impl RadioLoop {
         self.data_watch = None;
         self.data_seen_writes = u64::MAX;
         self.data_taken.clear();
+        self.data_twin_watches = 0;
     }
 
     /// Record that this Hamlib link does not take the DATA word `md`, and say so in the log.
@@ -7899,6 +7951,12 @@ impl RadioLoop {
         dial: u64,
         engine: &Arc<Mutex<Engine>>,
     ) {
+        // For the DATA-word judgement (`judge_data_word`): a dial write onto another band (or from
+        // an unknown one) can land the radio in its band stack's mode, which Hamlib's cache hides
+        // from the read just below, so no read after it may condemn the DATA word.
+        if prev_dial == 0 || !crate::rig::tuning::same_named_band(prev_dial, dial) {
+            self.dial_band_crosses = self.dial_band_crosses.wrapping_add(1);
+        }
         if md.trim().is_empty() {
             return;
         }
