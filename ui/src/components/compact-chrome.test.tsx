@@ -137,8 +137,9 @@ describe('the compact dock: every transmit and stop control stays in the dock or
 
   // An ALC readout wherever the level is set: SSTV (it carries the picture in the audio, so overdrive
   // past ALC wrecks the image at the far end) and the two Drive sliders without one, JS8's and
-  // Tempo's. Their strips show the same read-only meters, ALC among them, from md up. Below md these
-  // screens have no dock row for them, and nothing else moves.
+  // Tempo's — and the three keyboard modes, RTTY, PSK and JTTY, whose operators set the same audio
+  // drive into the same ALC (#489). Their strips show the same read-only meters, ALC among them,
+  // from md up. Below md these screens have no dock row for them, and nothing else moves.
   const tempo = {
     cockpit: 'Tempo',
     render: () =>
@@ -148,7 +149,7 @@ describe('the compact dock: every transmit and stop control stays in the dock or
           onSetTune={() => {}} onAtuTune={() => {}} onHaltTx={() => {}} onSetHoldTxFreq={() => {}} />,
       ),
   } as unknown as Case<any>
-  for (const c of [sstv, js8, tempo]) {
+  for (const c of [sstv, js8, tempo, rtty, psk, jtty]) {
     it.each(SIZES)(`${c.cockpit} at %s: the read-only meters, ALC among them, stand in the strip from md up`, async (vp) => {
       at(vp)
       await mount(c)
