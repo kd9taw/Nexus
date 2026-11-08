@@ -15975,8 +15975,16 @@ fn send_rot_step(
             // error): rotctld answered, but only to say the CONTROLLER did not. This arm
             // used to take every answered non-zero `RPRT`, so on a G-5500 reached over the
             // internet one slow round trip dropped the elevation for a minute of the pass.
+            //
+            // ⚠️ And the azimuth goes alone through `point_keeping`, never `point`'s
+            // `P <az> 0`. A mount WITH an elevation axis refuses too: an elevation past its
+            // range, which Allow flip asks for on a high pass. `P <az> 0` then laid the antenna
+            // on the horizon on that tick and on every azimuth-only tick after it, while the
+            // driver believed the elevation had stayed put. `point_keeping` sends a mount with
+            // no elevation axis exactly the `P <az> 0` it always got, keeps the elevation an
+            // az/el mount reports, and sends nothing when neither can be told.
             Err(e) if tempo_audio::rotator::says_unsupported(&e) => {
-                if tempo_audio::rotator::point(addr, az).is_ok() {
+                if tempo_audio::rotator::point_keeping(addr, Some(az), None).is_ok() {
                     RotOutcome::AzOnly
                 } else {
                     RotOutcome::Failed
@@ -15984,8 +15992,10 @@ fn send_rot_step(
             }
             Err(_) => RotOutcome::Failed,
         },
+        // The azimuth-only ticks after two refusals: kept the same way, so they leave the
+        // elevation where it is, which is what the driver records (`TrackDriver::record`).
         RotStep::PointAz { az } => {
-            if tempo_audio::rotator::point(addr, az).is_ok() {
+            if tempo_audio::rotator::point_keeping(addr, Some(az), None).is_ok() {
                 RotOutcome::AzOk
             } else {
                 RotOutcome::Failed
@@ -17033,8 +17043,12 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
                     // only form it accepts. We know which this is: the driver learned it during
                     // the pass. Anything else is a failed park, and the operator is told rather
                     // than having the antenna put somewhere they did not ask for.
+                    //
+                    // The azimuth goes alone through `point_keeping`: an az/el mount whose
+                    // elevation the pass found refused (a flip past its range) keeps the
+                    // elevation it reports rather than being parked on the horizon.
                     if !driver.azel_ok() {
-                        if let Err(e) = tempo_audio::rotator::point(addr, paz) {
+                        if let Err(e) = tempo_audio::rotator::point_keeping(addr, Some(paz), None) {
                             conn_log(
                                 "Rotator",
                                 "error",
@@ -63317,6 +63331,160 @@ mod tests {
                 let _ = t.join();
             }
         }
+    }
+
+    /// A Hamlib rotctld for a mount declaring `max_el` of elevation (`0`: none, `rot_type=Az`),
+    /// standing at 100° / 45°, that refuses a `P` above its elevation range as Hamlib's frontend
+    /// does (`RPRT -1`) and takes any other.
+    fn hamlib_mount(max_el: u32) -> FakeRotctld {
+        FakeRotctld::serve(move |cmd| {
+            if cmd == "\\dump_state" {
+                let kind = if max_el > 0 { "AzEl" } else { "Az" };
+                return format!(
+                    "1\n603\nmin_az=0.000000\nmax_az=360.000000\nmin_el=0.000000\n\
+                     max_el={max_el}.000000\nsouth_zero=0\nrot_type={kind}\ndone\n"
+                );
+            }
+            if cmd == "p" {
+                return "100.000000\n45.000000\n".into();
+            }
+            let el = cmd
+                .split_whitespace()
+                .nth(2)
+                .and_then(|w| w.parse::<f64>().ok());
+            match el {
+                Some(el) if cmd.starts_with('P') && el > f64::from(max_el) => "RPRT -1\n".into(),
+                _ => "RPRT 0\n".into(),
+            }
+        })
+    }
+
+    /// The elevation of every `P` line a fake rotctld was sent.
+    fn p_elevations(rot: &FakeRotctld) -> Vec<f64> {
+        rot.commands()
+            .iter()
+            .filter(|c| c.starts_with('P'))
+            .filter_map(|c| c.split_whitespace().nth(2)?.parse::<f64>().ok())
+            .collect()
+    }
+
+    /// Review F1: with Allow flip on, a high pass asks an az/el mount for more than its declared
+    /// 90°, and the mount refuses. The fallback used to be `P <az> 0`, so the antenna went to the
+    /// horizon on the first tick and on every azimuth-only tick after it. On a mount that declares
+    /// an elevation axis the azimuth-only sends now keep the elevation it reports.
+    #[test]
+    fn an_azel_mount_that_refuses_an_elevation_keeps_its_elevation() {
+        use tempo_core::rotator::{RotOutcome, RotStep};
+        let rot = hamlib_mount(90);
+        assert_eq!(
+            super::send_rot_step(
+                &rot.addr,
+                RotStep::PointAzEl {
+                    az: 10.0,
+                    el: 120.0
+                }
+            ),
+            RotOutcome::AzOnly
+        );
+        assert_eq!(
+            super::send_rot_step(&rot.addr, RotStep::PointAz { az: 20.0 }),
+            RotOutcome::AzOk
+        );
+        assert_eq!(
+            p_elevations(&rot),
+            vec![120.0, 45.0, 45.0],
+            "refused, then azimuth with the elevation held: {:?}",
+            rot.commands()
+        );
+    }
+
+    /// CONTROL: a mount with no elevation axis is sent exactly the azimuth line it always was.
+    #[test]
+    fn an_azimuth_only_mount_still_gets_its_azimuth_line() {
+        use tempo_core::rotator::{RotOutcome, RotStep};
+        let rot = hamlib_mount(0);
+        assert_eq!(
+            super::send_rot_step(&rot.addr, RotStep::PointAzEl { az: 10.0, el: 30.0 }),
+            RotOutcome::AzOnly
+        );
+        assert_eq!(
+            super::send_rot_step(&rot.addr, RotStep::PointAz { az: 20.0 }),
+            RotOutcome::AzOk
+        );
+        let points: Vec<String> = rot
+            .commands()
+            .into_iter()
+            .filter(|c| c.starts_with('P'))
+            .collect();
+        assert_eq!(
+            points,
+            vec![
+                "P 10.0 30.0".to_string(),
+                tempo_audio::rotator::point_line(10.0).trim().to_string(),
+                tempo_audio::rotator::point_line(20.0).trim().to_string(),
+            ]
+        );
+    }
+
+    /// Review F1 on the PstRotator link (#480): a flipped elevation past the link's 90° is
+    /// refused, and neither the fallback nor the azimuth-only ticks after it send PstRotator an
+    /// `<ELEVATION>0</ELEVATION>`: they keep the 30° it reports.
+    #[test]
+    fn a_refused_flip_never_sends_pstrotator_to_the_horizon() {
+        use tempo_core::rotator::{RotOutcome, RotStep};
+        let (pst, link) = (0..50)
+            .find_map(|_| {
+                let pst = std::net::UdpSocket::bind("127.0.0.1:0").ok()?;
+                let port = pst.local_addr().ok()?.port();
+                let link =
+                    tempo_audio::pstrotator::PstRotatorLink::start(&format!("127.0.0.1:{port}"), 0)
+                        .ok()?;
+                Some((pst, link))
+            })
+            .expect("a free UDP port pair");
+        let reply = pst.local_addr().expect("its port").port() + 1;
+        let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let log = heard.clone();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 256];
+            while let Ok((n, _)) = pst.recv_from(&mut buf) {
+                let d = String::from_utf8_lossy(&buf[..n]).to_string();
+                let answer: Option<&[u8]> = match d.as_str() {
+                    "<PST>AZ?</PST>" => Some(b"AZ:100.0\r"),
+                    "<PST>EL?</PST>" => Some(b"EL:30.0\r"),
+                    _ => None,
+                };
+                match answer {
+                    Some(a) => {
+                        let _ = pst.send_to(a, ("127.0.0.1", reply));
+                    }
+                    None => log.lock().expect("the fake's log").push(d),
+                }
+            }
+        });
+        let addr = link.rotctld_addr().to_string();
+        assert_eq!(
+            super::send_rot_step(
+                &addr,
+                RotStep::PointAzEl {
+                    az: 10.0,
+                    el: 120.0
+                }
+            ),
+            RotOutcome::AzOnly
+        );
+        assert_eq!(
+            super::send_rot_step(&addr, RotStep::PointAz { az: 20.0 }),
+            RotOutcome::AzOk
+        );
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(
+            *heard.lock().expect("the fake's log"),
+            vec![
+                "<PST><AZIMUTH>10</AZIMUTH><ELEVATION>30</ELEVATION></PST>".to_string(),
+                "<PST><AZIMUTH>20</AZIMUTH><ELEVATION>30</ELEVATION></PST>".to_string(),
+            ]
+        );
     }
 
     /// SO-50 armed for real: an FM bird worked with a handheld beam or a
