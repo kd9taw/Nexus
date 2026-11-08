@@ -10811,26 +10811,38 @@ impl Engine {
             // every picker in the app — this one, `band_pick_default`, and the licensed-band
             // command — because two of the three used to recompute it from the bare edge.
             OperatingMode::Phone => {
-                crate::privileges::phone_home(class, &band).map(|(dial, sb)| (dial, sb.to_string()))
+                let home = |rig| crate::privileges::phone_home_for(class, &band, rig);
+                // The radio this entry's QSY lands on (`routed_rig_model`), judged at the active
+                // radio's home: both 3 cm homes are SSB, so they route alike.
+                home(self.settings.rig_model)
+                    .and_then(|(dial, _)| home(self.routed_rig_model(&band, dial, om)))
+                    .map(|(dial, sb)| (dial, sb.to_string()))
             }
-            OperatingMode::Cw => crate::privileges::cw_home(class, &band)
-                // Park on the CW ACTIVITY frequency (20 m → 14.030), NOT the dead band edge
-                // (14.000, where nobody works and your signal would fall out of band),
-                // clamped to the licensed CW-segment start so it never drops below privileges.
-                // THE CW home, which the band-dropdown path (getLicensedBandPlan) reads too, so
-                // switching TO CW mode and picking a band from the dropdown land in one place.
-                .map(|dial| {
-                    // Sideband is inert for CW (the rig-mode policy commands CW or a band-aware
-                    // tone), but keep it self-consistent with the band's convention.
-                    (
-                        dial,
-                        if dial < 10.0 {
-                            "LSB".to_string()
-                        } else {
-                            "USB".to_string()
-                        },
-                    )
-                }),
+            OperatingMode::Cw => {
+                crate::privileges::cw_home_for(class, &band, self.settings.rig_model)
+                    // The radio this entry's QSY lands on (`routed_rig_model`), as in Phone.
+                    .and_then(|dial| {
+                        let rig = self.routed_rig_model(&band, dial, om);
+                        crate::privileges::cw_home_for(class, &band, rig)
+                    })
+                    // Park on the CW ACTIVITY frequency (20 m → 14.030), NOT the dead band edge
+                    // (14.000, where nobody works and your signal would fall out of band),
+                    // clamped to the licensed CW-segment start so it never drops below privileges.
+                    // THE CW home, which the band-dropdown path (getLicensedBandPlan) reads too, so
+                    // switching TO CW mode and picking a band from the dropdown land in one place.
+                    .map(|dial| {
+                        // Sideband is inert for CW (the rig-mode policy commands CW or a band-aware
+                        // tone), but keep it self-consistent with the band's convention.
+                        (
+                            dial,
+                            if dial < 10.0 {
+                                "LSB".to_string()
+                            } else {
+                                "USB".to_string()
+                            },
+                        )
+                    })
+            }
             // RTTY: park on the band's RTTY watering hole (the built-in plan the cockpit's
             // band selector serves) — only if the operator may key the RTTY emission there.
             OperatingMode::Rtty => self
@@ -11031,7 +11043,7 @@ impl Engine {
             Some(sb) => sb,
             None => self.band_pick_default(band, om).map(|(_, sb)| sb)?,
         };
-        self.emission_allowed(om, dial, &sideband)
+        (self.emission_allowed(om, dial, &sideband) && self.recall_fits_the_radio(band, om, dial))
             .then_some((dial, sideband))
     }
 
@@ -11064,17 +11076,17 @@ impl Engine {
         om: crate::settings::OperatingMode,
     ) -> Option<(f64, String)> {
         use crate::settings::OperatingMode;
-        let class = self.settings.license_class;
         match om {
             // THE ROW THE PHONE/CW PICKER LISTED, read from the same function that lists it
-            // (`bandplan::licensed_bands`), so a listed band always tunes. These arms used to
+            // (`Engine::licensed_band_plan`), so a listed band always tunes. These arms used to
             // recompute a segment start of their own and returned `None` where the class had
             // none, which made a pick of a listed receive-only band (a General's 4 m, `Open`'s
             // 30 m phone) do nothing at all. The row carries THE phone home (an LSB home lifted
             // clear of the segment edge — the unkeyable 7.1250 an Extra once landed on) and the
             // CW activity dial; a receive-only row carries the listening dial, where the
             // transmit gate, which this does not consult, refuses the over as the row's lock says.
-            OperatingMode::Phone | OperatingMode::Cw => crate::bandplan::licensed_bands(class, om)
+            OperatingMode::Phone | OperatingMode::Cw => self
+                .licensed_band_plan(om)
                 .into_iter()
                 .find(|c| c.band == band)
                 .map(|c| (c.dial_mhz, c.mode)),
@@ -11095,6 +11107,80 @@ impl Engine {
                 .filter(|c| self.psk_emission_ok(c.dial_mhz))
                 .map(|c| (c.dial_mhz, c.mode)),
         }
+    }
+
+    /// The Phone/CW band menu's rows for this station: what the menu lists and a band pick lands
+    /// on (`get_licensed_band_plan`, [`Self::band_pick_default`]).
+    ///
+    /// Each band's row is the one for the radio a pick of it will LAND on ([`Self::routed_rig_model`]),
+    /// because the 3 cm home follows the radio: an IC-905 active beside SDR Console listing 3 cm
+    /// must not hand SDR Console the IC-905's 10368.100.
+    pub fn licensed_band_plan(
+        &self,
+        om: crate::settings::OperatingMode,
+    ) -> Vec<crate::bandplan::BandChannel> {
+        let class = self.settings.license_class;
+        let active = self.settings.rig_model;
+        crate::bandplan::licensed_bands_for(class, om, active)
+            .into_iter()
+            .map(|row| {
+                let rig = self.routed_rig_model(&row.band, row.dial_mhz, om);
+                if rig == active {
+                    return row;
+                }
+                crate::bandplan::licensed_bands_for(class, om, rig)
+                    .into_iter()
+                    .find(|r| r.band == row.band)
+                    .unwrap_or(row)
+            })
+            .collect()
+    }
+
+    /// The Hamlib model of the radio a QSY to `dial_mhz` on `band` in section `om` will land on:
+    /// the radio the routing hands the band to (`Settings::route_radio`, the decision
+    /// `set_frequency` applies), or the active radio when it is peg-locked, nothing routes, or
+    /// the routed radio is disabled or another Nexus window's (`set_frequency` stays put then).
+    fn routed_rig_model(
+        &self,
+        band: &str,
+        dial_mhz: f64,
+        om: crate::settings::OperatingMode,
+    ) -> u32 {
+        if self.settings.radio_pegged || band.is_empty() {
+            return self.settings.rig_model;
+        }
+        self.settings
+            .route_radio(band, self.route_mode_for(band, dial_mhz, om))
+            .and_then(|id| self.settings.radios.iter().find(|p| p.id == id))
+            .filter(|p| p.enabled && !crate::radio_claim::profile_held_elsewhere(p))
+            .map_or(self.settings.rig_model, |p| p.rig_model)
+    }
+
+    /// May a remembered 3 cm Phone/CW dial be recalled for the radio the QSY lands on? Only on the
+    /// side of QO-100's narrowband downlink (10489.500-10490.000) that radio's own home sits on for
+    /// this licence class ([`crate::bandplan::activity_home_mhz`]): the dial memory is station-wide per band and
+    /// mode, so without this an IC-905's 10368.100 came back on SDR Console, and SDR Console's
+    /// transponder dial on the IC-905, each the other kind's home. A cell on the wrong side falls
+    /// to the radio's own home. Every other band and section recalls as before.
+    fn recall_fits_the_radio(
+        &self,
+        band: &str,
+        om: crate::settings::OperatingMode,
+        dial: f64,
+    ) -> bool {
+        use crate::settings::OperatingMode;
+        if band != "3cm" || !matches!(om, OperatingMode::Phone | OperatingMode::Cw) {
+            return true;
+        }
+        // The side the routed radio's OWN home sits on, for this licence class: `Open` homes on
+        // the transponder unless the radio transmits on 3 cm itself; a US class homes on
+        // 10368.100 on every radio, so its terrestrial cells always come back.
+        let transponder = 10_489.5..=10_490.0;
+        let rig = self.routed_rig_model(band, dial, om);
+        let home_on_transponder =
+            crate::bandplan::activity_home_mhz(self.settings.license_class, band, om, rig)
+                .is_some_and(|h| transponder.contains(&h));
+        transponder.contains(&dial) == home_on_transponder
     }
 
     /// The operator is in the PSK section: the Keyboard section with PSK as its modem

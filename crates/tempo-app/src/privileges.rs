@@ -582,11 +582,21 @@ pub const SSB_BW_MHZ: f64 = 0.0028;
 /// the cockpit showed 🔒 TX LOCKED on a band the operator is fully licensed for. 160/80/40 m
 /// are the LSB phone bands this bit. Every phone home in the app now comes from here.
 pub fn phone_home(class: LicenseClass, band: &str) -> Option<(f64, &'static str)> {
+    phone_home_for(class, band, 0)
+}
+
+/// [`phone_home`] for the radio with Hamlib model `rig_model` (0 = unknown): the 3 cm home
+/// follows whether the radio transmits there itself ([`crate::bandplan::activity_home_mhz`]).
+pub fn phone_home_for(
+    class: LicenseClass,
+    band: &str,
+    rig_model: u32,
+) -> Option<(f64, &'static str)> {
     let lo = segment_start(class, band, OperatingMode::Phone)?;
     // WHERE THE PASSBAND STARTS: the band's phone ACTIVITY where it has one the class may key
     // (`bandplan::activity_home_mhz`: 10368.100 on 3 cm, not the 10000.000 band edge the QO-100
     // report was commanded to), else the segment start, as before.
-    let floor = crate::bandplan::activity_home_mhz(class, band, OperatingMode::Phone)
+    let floor = crate::bandplan::activity_home_mhz(class, band, OperatingMode::Phone, rig_model)
         .filter(|&a| a >= lo && tx_span_allowed(class, a, a + SSB_BW_MHZ, OperatingMode::Phone))
         .unwrap_or(lo);
     // The band's sideband convention, 60 m's upper sideband included (`phone_is_lsb`).
@@ -611,8 +621,13 @@ pub fn phone_home(class: LicenseClass, band: &str) -> Option<(f64, &'static str)
 /// privilege there, or no home strictly inside the amateur allocation (the LF/MF bands, whose
 /// only start is their edge). THE CW home: section entry and the band picker both read it.
 pub fn cw_home(class: LicenseClass, band: &str) -> Option<f64> {
+    cw_home_for(class, band, 0)
+}
+
+/// [`cw_home`] for the radio with Hamlib model `rig_model` (0 = unknown), as [`phone_home_for`].
+pub fn cw_home_for(class: LicenseClass, band: &str, rig_model: u32) -> Option<f64> {
     let lo = segment_start(class, band, OperatingMode::Cw)?;
-    let dial = crate::bandplan::activity_home_mhz(class, band, OperatingMode::Cw)
+    let dial = crate::bandplan::activity_home_mhz(class, band, OperatingMode::Cw, rig_model)
         .or_else(|| crate::bandplan::cw_activity_mhz(band))
         // Only an activity dial the class may key: 23 cm's 1296.100 is above a Novice's
         // 1270-1295, so a Novice parks on its own segment start instead.

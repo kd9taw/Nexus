@@ -22,7 +22,7 @@
 use serde::{Deserialize, Serialize};
 
 mod licensed;
-pub use licensed::licensed_bands;
+pub use licensed::{licensed_bands, licensed_bands_for};
 
 /// One Tempo calling channel: a band, a recommended dial frequency, and the mode
 /// the radio should be in.
@@ -843,13 +843,22 @@ pub fn cw_activity_mhz(band: &str) -> Option<f64> {
 /// - 9 cm and 1.25 cm: that list's narrowband dials, 3400.065 and 24048.200 (no US class holds
 ///   9 cm; the ARRL plan names no 24 GHz calling frequency). 3400.100 is the Region 1 narrowband
 ///   calling frequency as commonly quoted, not read from a plan today.
+///
+/// `rig_model` (Hamlib's number; 0 = none or unknown) picks the 3 cm home for `Open` (operator,
+/// 2026-11-07): a radio that transmits on 3 cm itself ([`transmits_on_3cm`]) homes to the
+/// 10368.100 terrestrial calling frequency, since keyed directly 10489.700 is a terrestrial signal
+/// in QO-100's downlink. Every other radio keeps the transponder: an SDR program such as SDR
+/// Console (2056) reports the downlink and maps the uplink itself, and a radio Nexus does not
+/// know keeps the rule it had. 13 cm needs no split: keyed directly, 2400.200 is the uplink.
 pub fn activity_home_mhz(
     class: crate::settings::LicenseClass,
     band: &str,
     mode: crate::settings::OperatingMode,
+    rig_model: u32,
 ) -> Option<f64> {
     use crate::settings::{LicenseClass::Open, OperatingMode::*};
     let open = matches!(class, Open);
+    let qo100_downlink = open && !transmits_on_3cm(rig_model);
     Some(match (band, mode) {
         ("160m", Phone) => 1.843,
         ("160m", Cw) if open => 1.836,
@@ -862,12 +871,21 @@ pub fn activity_home_mhz(
         ("13cm", Phone | Cw) => 2304.100,
         ("9cm", Phone | Cw) => 3400.100,
         ("6cm", Phone | Cw) => 5760.100,
-        ("3cm", Phone) if open => 10489.700,
-        ("3cm", Cw) if open => 10489.520,
+        ("3cm", Phone) if qo100_downlink => 10489.700,
+        ("3cm", Cw) if qo100_downlink => 10489.520,
         ("3cm", Phone | Cw) => 10368.100,
         ("1.25cm", Phone | Cw) => 24048.200,
         _ => return None,
     })
+}
+
+/// Does this radio transmit on 3 cm ITSELF, as opposed to a program or converter that maps its 3 cm
+/// dial elsewhere? By Hamlib model: the Icom IC-905 (3090), 10 GHz with its CX-10G unit, the one
+/// listed transceiver that covers the band. Nexus has no transverter setting to read, so a
+/// transverter station reads as its IF radio, which is not on 3 cm. Unknown = `false`.
+pub fn transmits_on_3cm(rig_model: u32) -> bool {
+    const DIRECT_3CM: &[u32] = &[3090]; // Icom IC-905
+    DIRECT_3CM.contains(&rig_model)
 }
 
 /// The Tempo channel whose dial matches `dial_mhz` (within 500 Hz), if any — used
