@@ -185,7 +185,11 @@ export function DxpedCalendar({
                     {w?.best ?? e.best}
                     {w && (
                       <span className="cp-engine">
-                        {w.engine === 'p533' ? ENGINE_P533 : t('dxped.engine.modelled')}
+                        {w.engineFallback
+                          ? t('prop.engine.fallback')
+                          : w.engine === 'p533'
+                            ? ENGINE_P533
+                            : t('dxped.engine.modelled')}
                       </span>
                     )}
                   </span>

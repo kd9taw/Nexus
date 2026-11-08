@@ -112,7 +112,7 @@ pub fn mirror_header(body_len: usize) -> String {
 pub fn mirror_adif(records: &[Arc<QsoRecord>]) -> String {
     let mut body = String::from("\n");
     for r in records {
-        body.push_str(&super::adif_record_own_log(r));
+        body.push_str(&super::adif_record_own_file(r));
     }
     let mut out = mirror_header(body.len());
     out.push_str(&body);
@@ -788,7 +788,7 @@ fn write_streamed(
         };
     if put(&mut out, b"\n") {
         source.each(&mut |r| {
-            if put(&mut out, super::adif_record_own_log(r).as_bytes()) {
+            if put(&mut out, super::adif_record_own_file(r).as_bytes()) {
                 ControlFlow::Continue(())
             } else {
                 ControlFlow::Break(())
@@ -1352,7 +1352,7 @@ mod tests {
             // "\n", then every record: what the header records.
             let body = 1 + recs
                 .iter()
-                .map(|r| super::super::adif_record_own_log(r).len() as u64)
+                .map(|r| super::super::adif_record_own_file(r).len() as u64)
                 .sum::<u64>();
             for expect in [
                 0,

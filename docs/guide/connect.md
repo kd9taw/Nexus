@@ -444,7 +444,7 @@ leads with the top few; Chase Feed is the full ranked table.
 
 Click a station on the map (or in a pane) and the **Selection** and **Band
 Outlook** panes switch to *that call*: the modelled path, its MUF ceiling, and
-per-band workability. With the P.533 engine selected you also get per-mode
+per-band workability. With the P.533 engine, the default, you also get per-mode
 FT8/FT4/CW/SSB "workable now" chips.
 
 ![The Band Outlook pane retitled Path to G4XYZ, listing per-band workability, windows and per-mode chips.](../img/manual/connect-path-prediction.webp)
@@ -458,10 +458,13 @@ was solved for a real contact, and nobody reported this station.*
 ### Choose the prediction engine
 
 In [Settings ▸ Services](settings-reference.md#integrations--feeds),
-**Prediction engine** selects **Modelled (fast heuristic)** or **ITU-R P.533
-(full physics)**. P.533 is the real circuit-reliability method (validated
+**Prediction engine** selects **ITU-R P.533 (full physics, default)** or
+**Modelled (fast heuristic)**. P.533 is the real circuit-reliability method (validated
 against the ITU reference, ~0.1 s per prediction, and it uses your station power
-and antenna gain). **Live spots always win over any model.**
+and antenna gain). **Live spots always win over any model.** If P.533 cannot run,
+the pane shows the heuristic's answer and says "modelled: P.533 could not run" where
+the engine's name goes. A station on the heuristic moves to P.533 once when it
+updates to the version that made it the default; set it back here and it stays.
 
 ## The Now-Bar
 
@@ -474,9 +477,23 @@ hides the dashboard rail (above).
 
 ## Honest limits
 
-- **The per-path 24-hour outlook is a physics-lite in-house heuristic** (MUF +
-  D-layer) and is labelled "modelled." The P.533 engine is a fuller model but is
-  still a *model*; live spots override both.
+- **The per-path 24-hour outlook is a model.** P.533, the default, is a monthly
+  median. In a geomagnetic storm Nexus lowers its hours with the heuristic's own
+  storm penalty: the current hour from today's Kp, later hours from SWPC's Kp
+  forecast, and an hour with no forecast is left as P.533 gave it. The pane says
+  "Adjusted for a geomagnetic storm" when it has done so from Kp 5, and "Adjusted
+  for unsettled geomagnetic conditions" at Kp 3 or 4.
+- **The power P.533 assumes is shown under the answer:** your Station power
+  setting; else the power your radio measured on your last transmission (with an
+  amplifier set up, the amplifier's output); else 100 W, said as such.
+- **The Band Advisor and the DXpedition cards' "work now" status still use the
+  physics-lite heuristic** for a band nobody has been heard on; the Band Advisor
+  says so in its caption.
+- **Band Outlook's words under P.533 follow the modes a band carries** at its best
+  hour: Excellent when SSB is usable on three days in four, Good for CW, Fair when
+  FT8 is usable on half the days, Marginal at one day in ten. The outlook to DX
+  reads the word a band reaches toward at least half the directions. Both are *models*; live spots
+  override both.
 - **VOACAP is not integrated.**
 - **PSK Reporter's MQTT band topics carry no SNR**, so SNR-derived features
   degrade gracefully where the data isn't present.

@@ -419,15 +419,19 @@ impl PathModel {
     /// Geomagnetic/auroral factor (0..1) — mild global Kp penalty plus a harsh
     /// polar-path penalty when the great circle crosses high geomagnetic lat.
     fn aurora(&self, me: (f64, f64), dx: (f64, f64), band: Band, wx: &SpaceWx) -> f64 {
-        let p = &self.params;
-        let kp = wx.kp as f64;
-        let global = (1.0 - p.kp_global * (kp - 2.0).max(0.0)).max(0.0);
-
         let mut max_geo = 0.0f64;
         for i in 0..=8 {
             let pt = interpolate(me, dx, i as f64 / 8.0);
             max_geo = max_geo.max(geomagnetic_lat_deg(pt.0, pt.1).abs());
         }
+        self.storm_factor(band, wx.kp as f64, max_geo)
+    }
+
+    /// [`Self::aurora`] for a path whose highest geomagnetic latitude is already known, so the
+    /// storm correction of P.533's answers ([`crate::storm`]) uses this formula and no other.
+    pub(crate) fn storm_factor(&self, band: Band, kp: f64, max_geo: f64) -> f64 {
+        let p = &self.params;
+        let global = (1.0 - p.kp_global * (kp - 2.0).max(0.0)).max(0.0);
         let polar = if max_geo > p.geomag_high {
             // Low bands feel auroral absorption more.
             let g = if matches!(band, Band::B160 | Band::B80) {
@@ -440,6 +444,19 @@ impl PathModel {
             1.0
         };
         (global * polar).clamp(0.0, 1.0)
+    }
+
+    /// The heuristic's own auroral factor for `me` to `dx` at `wx.kp`, for a test to hold the
+    /// storm correction to.
+    #[cfg(test)]
+    pub(crate) fn aurora_factor(
+        &self,
+        me: (f64, f64),
+        dx: (f64, f64),
+        band: Band,
+        wx: &SpaceWx,
+    ) -> f64 {
+        self.aurora(me, dx, band, wx)
     }
 
     /// Greyline bonus (≥1) on the low bands when either end is on the terminator.

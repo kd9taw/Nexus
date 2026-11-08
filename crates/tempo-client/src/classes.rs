@@ -142,6 +142,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("diag_log_location",              RunsHere,    "This computer's own diagnostic log."),
     ("discard_pending_log",            RunsAtShack, "Discards the contact the prompt showed, by its key."),
     ("discover_flex",                  RunsAtShack, "Listens for a FlexRadio on the shack's network."),
+    ("dismiss_prop_engine_note",       RunsAtShack, "The shack's record that its note about the move to P.533 was dismissed; it keys nothing."),
     ("dismiss_tx_alarm",               RunsAtShack, "Clears one transmitter alarm banner; keys nothing."),
     ("display_metrics",                RunsHere,    "This computer's display."),
     ("dock_bandmap_window",            RunsHere,    "A window on this computer."),

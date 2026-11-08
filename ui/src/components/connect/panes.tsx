@@ -25,10 +25,11 @@ import { t } from '../../i18n'
 import { T } from '../../i18n/T'
 import { type PaneId, PANE_IDS } from '../../features/connectConfig'
 import type { PaneContext } from './paneContext'
-import type { BandOutlook } from '../../types'
+import type { BandOutlook, PathPrediction } from '../../types'
 import { bandTiming } from '../../propViz'
 import { PathWhy } from '../prop/PathWhy'
 import { SpaceNowLine } from '../prop/SpaceNowLine'
+import { ModelBasis } from '../prop/ModelBasis'
 import { PathRoute } from '../prop/PathRoute'
 import { PathDayPane, PathRegionsPane } from '../prop/PathDayStrip'
 import { azimuthLabel, azimuthTitle } from '../../grid'
@@ -216,7 +217,11 @@ function renderSelection(c: PaneContext): ReactNode {
         <div className="cs-spot">
           {t('connect.selection.bestShot', { window: c.selDxpedWindow.best })}
           <span className="cp-engine">
-            {c.selDxpedWindow.engine === 'p533' ? ENGINE_P533 : t('connect.engine.modelled')}
+            {c.selDxpedWindow.engineFallback
+              ? t('prop.engine.fallback')
+              : c.selDxpedWindow.engine === 'p533'
+                ? ENGINE_P533
+                : t('connect.engine.modelled')}
           </span>
         </div>
       )}
@@ -252,6 +257,19 @@ function renderSelection(c: PaneContext): ReactNode {
   )
 }
 
+/** What a P.533 answer's words mean, for the hover on each: they follow the modes a band carries,
+ *  and toward DX they are what a band reaches in at least half the directions. Nothing for the
+ *  heuristic, whose words are its score's. */
+function wordsTitle(p: PathPrediction, ring: boolean): string | undefined {
+  if (p.engine !== 'p533') return undefined
+  return ring ? `${t('prop.words.p533.title')} ${t('prop.words.ring.title')}` : t('prop.words.p533.title')
+}
+
+/** Whether these answers are P.533's: the station's engine, failing over to the heuristic or not. */
+export function onP533(o: PathPrediction | null | undefined): boolean {
+  return o?.engine === 'p533' || o?.engineFallback === true
+}
+
 function renderPath(c: PaneContext): ReactNode {
   const p = c.pathPred
   if (!p || !c.selectedCall) return null
@@ -261,7 +279,9 @@ function renderPath(c: PaneContext): ReactNode {
         {t('connect.path.heading', { call: c.selectedCall })}
         {p.engine && (
           <span className="cp-engine">
-            {p.engine === 'heuristic'
+            {p.engineFallback
+              ? t('prop.engine.fallback')
+              : p.engine === 'heuristic'
               ? t('connect.engine.modelled')
               : p.engine === 'p533'
                 ? ENGINE_P533
@@ -278,6 +298,7 @@ function renderPath(c: PaneContext): ReactNode {
           />
         </p>
       )}
+      <ModelBasis engine={p.engine} power={p.power} storm={p.storm} />
       <PathWhy pred={p} />
       <PathRoute pred={p} focusBand={c.focusBand} className="cp-route" />
       {c.pathOpen.length === 0 ? (
@@ -288,7 +309,9 @@ function renderPath(c: PaneContext): ReactNode {
             {c.pathOpen.slice(0, 6).map((b) => (
               <li key={b.band}>
                 <span className="cp-band">{b.band}</span>
-                <span className={`cp-work w-${b.workability.toLowerCase()}`}>{b.workability}</span>
+                <span className={`cp-work w-${b.workability.toLowerCase()}`} title={wordsTitle(p, false)}>
+                  {b.workability}
+                </span>
                 <span className="cp-win">
                   {b.grayline && (
                     <span className="cp-grayline" title={t('connect.path.greyline.title')}>
@@ -316,9 +339,12 @@ function renderOutlook(c: PaneContext): ReactNode {
     <section className="connect-path panel">
       <h3>
         {t('connect.outlook.heading')}
-        <span className="cp-engine">{t('connect.engine.outlook')}</span>
+        <span className="cp-engine">
+          {o.engineFallback ? t('prop.engine.fallback') : t('connect.engine.outlook')}
+        </span>
       </h3>
       <SpaceNowLine now={o.spaceNow} nowSec={Math.floor(Date.now() / 1000)} />
+      <ModelBasis engine={o.engine} power={o.power} storm={o.storm} />
       {o.mufNow > 0 && (
         <p className="cp-muf" title={t('connect.outlook.muf.title')}>
           <T
@@ -336,7 +362,9 @@ function renderOutlook(c: PaneContext): ReactNode {
             {c.outlookOpen.slice(0, 8).map((b) => (
               <li key={b.band}>
                 <span className="cp-band">{b.band}</span>
-                <span className={`cp-work w-${b.workability.toLowerCase()}`}>{b.workability}</span>
+                <span className={`cp-work w-${b.workability.toLowerCase()}`} title={wordsTitle(o, true)}>
+                  {b.workability}
+                </span>
                 <span className="cp-win">
                   {b.grayline && (
                     <span className="cp-grayline" title={t('connect.path.greyline.title')}>
@@ -457,6 +485,7 @@ export const PANES: PaneDef[] = [
     expert: (c) =>
       c.prop && c.prop.source !== 'offline' ? (
         <BandAdvisor
+          simpleModelNote={onP533(c.bandOutlook)}
           bands={c.prop.advisory.bands}
           worldwideBands={c.prop.worldwide?.bands ?? null}
           onBandClick={c.toggleFocusBand}
@@ -477,6 +506,7 @@ export const PANES: PaneDef[] = [
     expert: (c) =>
       c.prop ? (
         <BandTiles
+          simpleModelNote={onP533(c.bandOutlook)}
           prop={c.prop}
           outlook={c.bandOutlook?.bands}
           rigBand={c.rigBand}

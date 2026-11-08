@@ -63,6 +63,18 @@ function win(over: Partial<DxpedWindow> = {}): DxpedWindow {
 }
 
 describe('WorkNowCard best-shot line', () => {
+  it('names P.533 when it ran, modelled for the heuristic, and says so when P.533 could not run', () => {
+    const badge = (w: DxpedWindow) => {
+      const { container, unmount } = render(<WorkNowCard card={card({ band: '60m' })} window={w} />)
+      const text = container.querySelector('.cp-engine')?.textContent
+      unmount()
+      return text
+    }
+    expect(badge(win({ engine: 'p533' }))).toBe('P.533')
+    expect(badge(win({ engine: 'heuristic' }))).toBe('modelled')
+    expect(badge(win({ engine: 'heuristic', engineFallback: true }))).toBe('modelled: P.533 could not run')
+  })
+
   it('headlines the card with its OWN band, not the path-best band', () => {
     render(
       <WorkNowCard

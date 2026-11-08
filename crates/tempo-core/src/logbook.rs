@@ -2336,8 +2336,9 @@ impl Logbook {
         if new {
             file.write_all(adif_header().as_bytes())?;
         }
-        // The operator's OWN log: everything they typed, private note included.
-        file.write_all(adif_record_own_log(rec).as_bytes())?;
+        // The operator's OWN log as it leaves Nexus: everything they typed, private note
+        // included, and not the path Nexus graded ([`Audience::OwnFile`]).
+        file.write_all(adif_record_own_file(rec).as_bytes())?;
         let mut parent = None;
         #[cfg(unix)]
         if receipt && new {
@@ -2791,8 +2792,9 @@ pub enum ExportKind {
 /// One export, built a contact at a time, in log order — THE rules of the Logbook's exports,
 /// written once for whoever holds the log: [`Logbook`] hands it its records, and a reader of the
 /// logbook store hands it the rows it streams (SPEC-2 v3 C15), so the two cannot come out
-/// different. The operator's own copy of every record ([`adif_record_own_log`]): a backup that
-/// dropped their private notes would lose them for good on the next re-import.
+/// different. The operator's own copy of every record as it leaves Nexus
+/// ([`adif_record_own_file`]): a backup that dropped their private notes would lose them for good
+/// on the next re-import. Only the path Nexus graded stays behind.
 #[derive(Debug, Clone)]
 pub struct Export {
     rule: ExportRule,
@@ -2869,7 +2871,7 @@ impl Export {
         match &self.rule {
             ExportRule::Adif { from, to } => {
                 if in_range(*from, *to) {
-                    self.out.push_str(&adif_record_own_log(r));
+                    self.out.push_str(&adif_record_own_file(r));
                 }
             }
             ExportRule::Csv { from, to } => {
@@ -2901,7 +2903,7 @@ impl Export {
                     .map(|o| o.trim().to_ascii_uppercase() == *want)
                     .unwrap_or(false);
                 if is_theirs {
-                    self.out.push_str(&adif_record_own_log(r));
+                    self.out.push_str(&adif_record_own_file(r));
                 }
             }
             ExportRule::Activation {
@@ -2927,17 +2929,17 @@ impl Export {
                     one.ota.their_ref.as_deref(),
                 );
                 if theirs.len() < 2 {
-                    self.out.push_str(&adif_record_own_log(&one));
+                    self.out.push_str(&adif_record_own_file(&one));
                     return;
                 }
                 for park in theirs {
                     one.ota.their_ref = Some(park);
-                    self.out.push_str(&adif_record_own_log(&one));
+                    self.out.push_str(&adif_record_own_file(&one));
                 }
             }
             ExportRule::Selected { ids } => {
                 if r.id.is_some_and(|id| ids.contains(&id)) {
-                    self.out.push_str(&adif_record_own_log(r));
+                    self.out.push_str(&adif_record_own_file(r));
                 }
             }
         }
@@ -3566,9 +3568,16 @@ fn upload_field(name: &str, st: &Option<UploadStatus>) -> String {
 /// Miss an OUTBOUND site and the note is on someone else's server forever.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Audience {
-    /// The operator's own data — `log.adi`, the files they export and re-import, and the
-    /// integrity re-derivations that must match those bytes. Everything they typed.
+    /// The operator's own record as Nexus holds it — the store's own round trips, the edit
+    /// history, the integrity re-derivations of a row. Everything they typed, and what Nexus keeps
+    /// beside it for its own use.
     OwnLog,
+    /// The operator's own record as it LEAVES Nexus while staying theirs: `log.adi`, every file
+    /// export (the Logbook's, an operator's, an activation's, the selected rows) and the logging
+    /// programs Nexus hands a contact to (DXKeeper, HRD Logbook). [`Self::OwnLog`] less what is
+    /// Nexus's alone: the path it graded for a contact ([`path_stamp`]), the model's opinion,
+    /// which Nexus keeps in the operator's log for its own use and lets out nowhere.
+    OwnFile,
     /// Anything Nexus sends off the machine BY ITSELF: every logbook service (QRZ, ClubLog,
     /// eQSL, HRDLog.net, Cloudlog/Wavelog, LoTW) and the broadcast sinks. Private fields are
     /// withheld.
@@ -3583,6 +3592,13 @@ pub fn adif_record_own_log(r: &QsoRecord) -> String {
     adif_record_for(r, Audience::OwnLog)
 }
 
+/// The operator's own record for anything that leaves Nexus while staying theirs: `log.adi`,
+/// every file export, and the logging programs on their machine ([`Audience::OwnFile`]). Their
+/// private note and everything they typed, without the path Nexus graded.
+pub fn adif_record_own_file(r: &QsoRecord) -> String {
+    adif_record_for(r, Audience::OwnFile)
+}
+
 /// ★ The operator's own record for a logging program on their own machine (DXKeeper, HRD
 /// Logbook): [`adif_record_own_log`], private note included, but **never a grid for the distance
 /// and the map only** ([`counted_grid`]), nor its marks. Such a program counts the grid toward
@@ -3594,7 +3610,7 @@ pub fn adif_record_own_logger(r: &QsoRecord) -> String {
     let map_only = callbook::is_map_only_grid(r);
     let held_iota = offer::withhold_iota(r);
     if !map_only && !held_iota {
-        return adif_record_own_log(r);
+        return adif_record_own_file(r);
     }
     let mut kept = r.clone();
     if map_only {
@@ -3606,7 +3622,7 @@ pub fn adif_record_own_logger(r: &QsoRecord) -> String {
         offer::unmark_offer_held(&mut kept, "IOTA");
         callbook::unmark_callbook_filled(&mut kept, "IOTA");
     }
-    adif_record_own_log(&kept)
+    adif_record_own_file(&kept)
 }
 
 /// One QSO as an ADIF record, **safe to send** — the private note is withheld.
@@ -3780,7 +3796,7 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
     // service gets it on one line. The operator's own log keeps it exactly as stored.
     if let Some(c) = &r.comment {
         match audience {
-            Audience::OwnLog => out.push_str(&field("COMMENT", c)),
+            Audience::OwnLog | Audience::OwnFile => out.push_str(&field("COMMENT", c)),
             Audience::Outbound => out.push_str(&field("COMMENT", &one_line(c))),
         }
     }
@@ -3789,7 +3805,7 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
     // `NOTES` is labelled "Private note" and must not leave the machine. It cannot arrive by
     // another door: the parser CONSUMES the tags it models (`f.remove("NOTES")`), so an
     // imported NOTES lands here and never in `extra`.
-    if let Some(n) = r.notes.as_ref().filter(|_| audience == Audience::OwnLog) {
+    if let Some(n) = r.notes.as_ref().filter(|_| audience != Audience::Outbound) {
         out.push_str(&field("NOTES", n));
     }
     if let Some(p) = r.tx_power {
@@ -3903,7 +3919,7 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .filter(|_| audience == Audience::OwnLog || !offer::withhold_iota(r))
+        .filter(|_| audience != Audience::Outbound || !offer::withhold_iota(r))
     {
         out.push_str(&field("IOTA", iota));
     }
@@ -3947,6 +3963,10 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
                 || k == VIA_FIELD
                 || path_stamp::is_path_field(k))
         {
+            continue;
+        }
+        // The graded path leaves Nexus by no door: not in a file, not to a logging program.
+        if audience == Audience::OwnFile && path_stamp::is_path_field(k) {
             continue;
         }
         // Nor ever a history-only tag ([`history::HISTORY_ONLY_PREFIX`]), for any audience: only a

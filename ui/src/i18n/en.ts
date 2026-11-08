@@ -10449,9 +10449,9 @@ export const EN = {
   // and stay in the panel.
   'settings.integrations.propEngine.label': 'Prediction engine',
   'settings.integrations.propEngine.heuristic': 'Modelled (fast heuristic)',
-  'settings.integrations.propEngine.p533': 'ITU-R P.533 (full physics)',
+  'settings.integrations.propEngine.p533': 'ITU-R P.533 (full physics, default)',
   'settings.integrations.propEngine.hint':
-    'Drives the per-station path outlook + 24h band×hour grid. P.533 is the real circuit-reliability method (validated against the ITU reference; ~0.1 s per prediction, uses your station power). Live spots always win over any model.',
+    'Drives the per-station path outlook + 24h band×hour grid. P.533, the default, is the real circuit-reliability method (validated against the ITU reference; ~0.1 s per prediction, uses your station power). Live spots always win over any model.',
   // The collapsed disclosure inside Integrations & Feeds. ⚠️ dBi, TX and RX are units and the
   // radio's own two states.
   'settings.antennaGain.title': 'Antenna gain (advanced)',
@@ -11338,6 +11338,31 @@ export const EN = {
   // The engine behind a prediction. `P.533` is the ITU recommendation's number and stays in
   // the component beside it.
   'connect.engine.modelled': 'modelled',
+  // Shown where the engine's name goes when P.533 failed and the heuristic answered instead.
+  // ⚠️ `P.533` is the recommendation's number: keep it verbatim.
+  'prop.engine.fallback': 'modelled: P.533 could not run',
+  // The one-time note after an existing station is moved to P.533. The path names the Settings
+  // tab and the setting's own label, so each catalog repeats its own words for them.
+  // What a P.533 answer rests on: the storm correction laid over it and the power it assumes
+  // (components/prop/ModelBasis). ⚠️ `Kp`, `W` and `P.533` stay verbatim.
+  'prop.storm.applied': 'Adjusted for a geomagnetic storm, Kp up to {{kp}}.',
+  // The same correction below storm level (Kp under 5, NOAA's G1): unsettled, not a storm.
+  'prop.storm.unsettled': 'Adjusted for unsettled geomagnetic conditions, Kp up to {{kp}}.',
+  'prop.storm.someHours': 'Hours with no Kp forecast are not adjusted.',
+  'prop.power.setting': 'Assumes {{watts}} W, your station power setting.',
+  'prop.power.rig': 'Assumes about {{watts}} W, the radio\'s output on your last transmission.',
+  'prop.power.amplifier': 'Assumes about {{watts}} W, the amplifier\'s output on your last transmission.',
+  'prop.power.default': 'Assumes 100 W: no station power is set and the radio has not reported its output.',
+  'prop.power.amplifierSetUp': 'An amplifier is set up, so the power on the air may be higher.',
+  'prop.bands.simpleModel': 'With nothing heard, a band\'s word comes from the simple model, not P.533.',
+  // The hover on a P.533 answer's words (Band Outlook, the path card). ⚠️ The five words are
+  // the backend's, shown in English everywhere: keep them verbatim, and `P.533`, SSB, CW, FT8.
+  'prop.words.p533.title':
+    'P.533\'s words: Excellent, SSB usable on 3 days in 4 at the band\'s best hour; Good, CW usable on 3 days in 4; Fair, FT8 usable on half the days; Marginal, FT8 on 1 day in 10.',
+  'prop.words.ring.title':
+    'Toward DX, a band\'s word is the one it reaches in at least half the directions; its hours are its best direction\'s.',
+  'prop.engine.note':
+    'Predictions now use P.533, so some band answers have changed. To go back, open Settings ▸ Services ▸ Prediction engine.',
   'connect.engine.outlook': 'modelled · DX',
 
   'connect.path.heading': 'Path to {{call}}',

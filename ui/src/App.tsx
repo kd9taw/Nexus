@@ -175,6 +175,7 @@ import {
   setLicenseClass,
   setExperienceLevel as apiSetExperienceLevel,
   markSetupWizardSeen,
+  dismissPropEngineNote,
   stopQsoRecording,
   pointRotatorAtCall,
   qsySetEnabled as apiQsySetEnabled,
@@ -2820,6 +2821,25 @@ function App() {
     },
     [handleSetMode, settings?.fdActive, snap?.mode],
   )
+
+  // The one-time notice after the move to P.533 (Settings::move_prop_engine_once): a sticky notice
+  // in the pop-up corner, which covers no transmit control in any corner and moves nothing in the
+  // cockpit. Raised once a run; the settings file is its only record, cleared by ✕ or by opening
+  // Settings from it (dismiss_prop_engine_note). A save that is refused shows it again next launch.
+  const engineNoteRaised = useRef(false)
+  useEffect(() => {
+    if (engineNoteRaised.current || !settings?.propEngineNoteDue || settings.propEngine !== 'p533') return
+    engineNoteRaised.current = true
+    const answered = () => void dismissPropEngineNote().catch(() => {})
+    pushToast(t('prop.engine.note'), 'info', 0, {
+      action: () => {
+        handleView('settings')
+        answered()
+      },
+      actionLabel: t('nav.settings.label'),
+      onClose: answered,
+    })
+  }, [settings, handleView])
 
   // ⭐ "WORK THIS CONTEST IN CW / IN PHONE" FROM A CONTEST WINDOW (features/contestWorkIn): the same switch
   // as the rail's, so the contest's S&P is entered where the session dropped and a station already in

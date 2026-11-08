@@ -44,6 +44,9 @@ pub(crate) struct Stored {
     pub(crate) computed_unix: i64,
     pub(crate) engine: String,
     pub(crate) regions: Vec<RegionDay>,
+    /// The storm correction laid over the sweep ([`propagation::storm`]), kept with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) storm: Option<propagation::storm::StormNote>,
 }
 
 /// One region as the strips get it: the fixed anchor and zones beside its day.
@@ -66,6 +69,16 @@ pub(crate) struct PathRegionsView {
     /// When the model part was computed (unix seconds) — the hours are always current.
     pub(crate) computed_unix: i64,
     pub(crate) regions: Vec<RegionView>,
+    /// The configured engine could not run and `engine` is the heuristic that answered
+    /// ([`propagation::with_fallback`]). Such a sweep is never kept. Absent when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) engine_fallback: bool,
+    /// The storm correction laid over the sweep served. Absent when none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) storm: Option<propagation::storm::StormNote>,
+    /// The transmit power the sweep assumes, set by the command. Absent until it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) power: Option<propagation::AssumedPower>,
 }
 
 /// Everything a sweep's answer depends on, besides the clock's hour.
@@ -162,8 +175,8 @@ pub(crate) fn serve(ask: Ask, path: &Path) -> PathRegionsView {
             ask.forecast.as_ref(),
         )
     };
-    let (computed_unix, mut regions) = if engine != "p533" {
-        (ask.t, sweep())
+    let (computed_unix, mut regions, storm) = if engine != "p533" {
+        (ask.t, sweep(), None)
     } else {
         let _one = SWEEPING.lock().unwrap_or_else(|e| e.into_inner());
         let held = KEPT
@@ -178,12 +191,18 @@ pub(crate) fn serve(ask: Ask, path: &Path) -> PathRegionsView {
                 computed_unix: ask.t,
                 engine: engine.clone(),
                 regions: sweep(),
+                storm: ask.engine.storm_note(),
             };
-            save(path, &s);
+            // A stand-in for an engine that could not run is not kept: the next ask tries again.
+            if !ask.engine.fell_back() {
+                save(path, &s);
+            }
             s
         });
-        *KEPT.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.clone());
-        (s.computed_unix, s.regions)
+        if !ask.engine.fell_back() {
+            *KEPT.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.clone());
+        }
+        (s.computed_unix, s.regions, s.storm)
     };
     propagation::refresh_regions(
         &mut regions,
@@ -192,8 +211,16 @@ pub(crate) fn serve(ask: Ask, path: &Path) -> PathRegionsView {
         ask.kp_now,
         ask.forecast.as_ref(),
     );
+    let engine_fallback = ask.engine.fell_back();
     PathRegionsView {
-        engine,
+        engine: if engine_fallback {
+            "heuristic".to_string()
+        } else {
+            engine
+        },
+        engine_fallback,
+        storm,
+        power: None,
         computed_unix,
         regions: PATH_REGIONS
             .iter()
@@ -230,6 +257,7 @@ mod tests {
             computed_unix: at,
             engine: "p533".into(),
             regions: heuristic_sweep(),
+            storm: None,
         }
     }
 
@@ -337,6 +365,103 @@ mod tests {
         assert!(load(&path, &at(200.0, None), T).is_none());
     }
 
+    /// The tests that leave a sweep in the module's memory take turns, so one never serves
+    /// another's.
+    static MEMORY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A P.533 sweep in a storm carries its correction's note, and keeps it with the sweep: on disk
+    /// and in memory, so a sweep served from either still says so.
+    #[test]
+    fn a_storm_corrected_sweep_says_so_and_keeps_saying_so() {
+        let _memory = MEMORY.lock().unwrap_or_else(|e| e.into_inner());
+        // The heuristic's answers named as P.533's: fast, and the correction takes them.
+        struct LikeP533(propagation::HeuristicEngine);
+        impl propagation::PathPredictor for LikeP533 {
+            fn name(&self) -> &'static str {
+                "p533"
+            }
+            fn predict(&self, dx: (f64, f64), t: i64, wx: &SpaceWx) -> propagation::PathPrediction {
+                let mut p = self.0.predict(dx, t, wx);
+                p.engine = "p533".into();
+                p
+            }
+        }
+        let path = crate::test_dirs::root().join("path_regions_storm.json");
+        let key = "storm-sweep-test";
+        let ask = || Ask {
+            me: BOSTON,
+            key: key.into(),
+            engine: propagation::storm::with_storm_correction(
+                Box::new(LikeP533(propagation::HeuristicEngine::new(Some(BOSTON)))),
+                Some(BOSTON),
+                T,
+                Some(7.0),
+                None,
+            ),
+            t: T,
+            wx: SpaceWx::default(),
+            kp_now: Some(7.0),
+            forecast: None,
+        };
+        let swept = serve(ask(), &path);
+        let note = swept.storm.expect("the sweep was corrected");
+        assert_eq!(note.kp, 7.0);
+        assert!(
+            note.hours_without_kp,
+            "no forecast: later hours are not corrected"
+        );
+        assert_eq!(
+            load(&path, key, T).and_then(|s| s.storm),
+            Some(note),
+            "on disk"
+        );
+        assert_eq!(serve(ask(), &path).storm, Some(note), "served again");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    /// A P.533 ask whose engine cannot run: the strips get the heuristic's day, named as such,
+    /// and nothing is kept, so the next ask tries P.533 again rather than serving this for hours.
+    #[test]
+    fn a_sweep_whose_engine_cannot_run_says_so_and_is_not_kept() {
+        struct Broken;
+        impl propagation::PathPredictor for Broken {
+            fn name(&self) -> &'static str {
+                "p533"
+            }
+            fn predict(&self, _: (f64, f64), _: i64, _: &SpaceWx) -> propagation::PathPrediction {
+                panic!("broken on purpose")
+            }
+        }
+        let path = crate::test_dirs::root().join("path_regions_broken.json");
+        let key = "broken-sweep-test";
+        let view = serve(
+            Ask {
+                me: BOSTON,
+                key: key.into(),
+                engine: propagation::with_fallback(Broken, Some(BOSTON)),
+                t: T,
+                wx: SpaceWx::default(),
+                kp_now: Some(2.0),
+                forecast: None,
+            },
+            &path,
+        );
+        assert!(view.engine_fallback);
+        assert_eq!(view.engine, "heuristic");
+        assert_eq!(view.regions.len(), 10, "an answer, not a blank");
+        assert!(
+            !path.exists(),
+            "a stand-in is not written beside the settings"
+        );
+        assert!(
+            KEPT.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .is_none_or(|s| s.key != key),
+            "a stand-in is not held in memory"
+        );
+    }
+
     #[test]
     fn a_heuristic_ask_is_swept_fresh_in_region_order_and_writes_nothing() {
         let path = crate::test_dirs::root().join("path_regions.json");
@@ -365,6 +490,7 @@ mod tests {
     /// in-memory copy it leaves cannot meet another test's key.
     #[test]
     fn a_kept_p533_sweep_is_served_from_disk_then_memory_with_current_hours() {
+        let _memory = MEMORY.lock().unwrap_or_else(|e| e.into_inner());
         let path = crate::test_dirs::root().join("path_regions.json");
         let key = "kept-sweep-test";
         let s = stored(key, T - 3600);

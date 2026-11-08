@@ -12,11 +12,14 @@ import { tierVar, bandConditionCell } from '../../propViz'
 import { t } from '../../i18n'
 
 export function BandAdvisor({
+  simpleModelNote = false,
   bands,
   worldwideBands,
   onBandClick,
   activeBand,
 }: {
+  /** Say the words come from the simple model: for a station on P.533, whose other panes do not. */
+  simpleModelNote?: boolean
   bands: BandReport[]
   /** "Worldwide activity" ranking (the global firehose). When provided, a
    * For-you / Worldwide toggle appears; absent = single (for-you) view. */
@@ -73,6 +76,7 @@ export function BandAdvisor({
       </h2>
       <p className="ba-caption">
         {showWorld ? t('prop.bands.caption.world') : t('prop.bands.caption.you')}
+        {simpleModelNote && ` ${t('prop.bands.simpleModel')}`}
       </p>
       <div className="ba-rows">
         {rows.map((b) => {

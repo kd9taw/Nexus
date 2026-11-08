@@ -9998,20 +9998,21 @@ async fn get_path_outlook(
     aurora: State<'_, AuroraCache>,
     protons: State<'_, ProtonCache>,
 ) -> Result<propagation::PathPrediction, String> {
-    let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
+    let (mygrid, prop_engine, power, ant_gain_dbi) = {
         let eng = engine_lock(&state);
         let st = eng.settings();
         (
             st.mygrid.clone(),
             st.prop_engine.clone(),
-            st.station_power_w,
+            assumed_power(&eng),
             st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
         )
     };
+    let station_power_w = Some(power.watts);
     let me = propagation::geo::maidenhead_to_latlon(&mygrid);
     let Some(dx) = propagation::geo::maidenhead_to_latlon(grid.trim()) else {
         return Ok(propagation::PathPrediction {
-            engine: "heuristic".to_string(),
+            engine: prop_engine,
             bands: Vec::new(),
             muf_now: 0.0,
             muf_hourly: Vec::new(),
@@ -10021,6 +10022,9 @@ async fn get_path_outlook(
             day: None,
             overlay: None,
             space_now: None,
+            engine_fallback: false,
+            storm: None,
+            power: None,
         });
     };
     // Current space weather from the propagation cache's last snapshot (the same
@@ -10058,6 +10062,7 @@ async fn get_path_outlook(
         let view = guard.as_ref().map(|(_, s)| &s.space_wx);
         (swpc_kp(view, t), NowInputs::read(view, &protons, t))
     };
+    let eng = storm_corrected(eng, &prop_engine, me, t, kp_now, forecast.clone());
     // P.533 pairs are kept (`path_outlook`): the client asks again every 60 s, and only the
     // serving hour's scalars and the geometry are recomputed then.
     let keep = prop_engine == "p533";
@@ -10070,7 +10075,8 @@ async fn get_path_outlook(
         ant_gain_dbi,
         &wx,
     );
-    tauri::async_runtime::spawn_blocking(move || {
+    let key = with_storm_key(key, t, kp_now, forecast.as_ref());
+    below_normal(move || {
         let (mut pred, long) = match keep.then(|| path_outlook::get(&key)).flatten() {
             Some((mut sp, mut lp)) => {
                 path_outlook::refresh_now(&mut sp, t);
@@ -10087,7 +10093,8 @@ async fn get_path_outlook(
                     let sp = eng.predict(dx, t, &wx);
                     (sp, lp.join().ok().flatten())
                 });
-                if keep {
+                // A stand-in for an engine that could not run is not kept: the next ask tries again.
+                if keep && !eng.fell_back() {
                     path_outlook::put(key, sp.clone(), lp.clone());
                 }
                 (sp, lp)
@@ -10124,10 +10131,10 @@ async fn get_path_outlook(
         if let Some(me) = me {
             attach_now(&mut pred, me, dx, &now_inputs, t);
         }
+        pred.power = Some(power);
         pred
     })
     .await
-    .map_err(|e| e.to_string())
 }
 
 /// The path grade of each Logbook row asked about: its own stamp when it carries one made for its
@@ -10190,19 +10197,23 @@ async fn get_path_regions(
     cache: State<'_, PropCache>,
     kp_cache: State<'_, KpForecastCache>,
 ) -> Result<path_regions::PathRegionsView, String> {
-    let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
+    let (mygrid, prop_engine, power, ant_gain_dbi) = {
         let eng = engine_lock(&state);
         let st = eng.settings();
         (
             st.mygrid.clone(),
             st.prop_engine.clone(),
-            st.station_power_w,
+            assumed_power(&eng),
             st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
         )
     };
+    let station_power_w = Some(power.watts);
     let Some(me) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
         return Ok(path_regions::PathRegionsView {
             engine: prop_engine,
+            engine_fallback: false,
+            storm: None,
+            power: None,
             computed_unix: 0,
             regions: Vec::new(),
         });
@@ -10228,18 +10239,31 @@ async fn get_path_regions(
     };
     let ask = path_regions::Ask {
         me,
-        key: path_regions::sweep_key(t, &mygrid, &prop_engine, station_power_w, ant_gain_dbi, &wx),
-        engine: propagation::make_predictor(&prop_engine, Some(me), station_power_w, ant_gain_dbi),
+        key: with_storm_key(
+            path_regions::sweep_key(t, &mygrid, &prop_engine, station_power_w, ant_gain_dbi, &wx),
+            t,
+            kp_now,
+            forecast.as_ref(),
+        ),
+        engine: storm_corrected(
+            propagation::make_predictor(&prop_engine, Some(me), station_power_w, ant_gain_dbi),
+            &prop_engine,
+            Some(me),
+            t,
+            kp_now,
+            forecast.clone(),
+        ),
         t,
         kp_now,
         wx,
         forecast,
     };
-    tauri::async_runtime::spawn_blocking(move || {
-        path_regions::serve(ask, &path_regions::file_path())
+    below_normal(move || {
+        let mut view = path_regions::serve(ask, &path_regions::file_path());
+        view.power = Some(power);
+        view
     })
     .await
-    .map_err(|e| e.to_string())
 }
 
 /// The band advice of a served snapshot (fresh, or cached at any age), made for `now`: the
@@ -10970,20 +10994,22 @@ async fn get_band_outlook(
     state: State<'_, SharedEngine>,
     cache: State<'_, PropCache>,
     protons: State<'_, ProtonCache>,
+    kp_cache: State<'_, KpForecastCache>,
 ) -> Result<propagation::PathPrediction, String> {
-    let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
+    let (mygrid, prop_engine, power, ant_gain_dbi) = {
         let eng = engine_lock(&state);
         let st = eng.settings();
         (
             st.mygrid.clone(),
             st.prop_engine.clone(),
-            st.station_power_w,
+            assumed_power(&eng),
             st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
         )
     };
+    let station_power_w = Some(power.watts);
     let Some(me) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
         return Ok(propagation::PathPrediction {
-            engine: "heuristic".to_string(),
+            engine: prop_engine,
             bands: Vec::new(),
             muf_now: 0.0,
             muf_hourly: Vec::new(),
@@ -10993,6 +11019,9 @@ async fn get_band_outlook(
             day: None,
             overlay: None,
             space_now: None,
+            engine_fallback: false,
+            storm: None,
+            power: None,
         });
     };
     let p533 = prop_engine == "p533";
@@ -11009,20 +11038,31 @@ async fn get_band_outlook(
             .unwrap_or_default()
     };
     let t = now_unix();
-    let now_inputs = {
+    let (now_inputs, kp_now) = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
-        NowInputs::read(guard.as_ref().map(|(_, s)| &s.space_wx), &protons, t)
+        let view = guard.as_ref().map(|(_, s)| &s.space_wx);
+        (NowInputs::read(view, &protons, t), swpc_kp(view, t))
     };
-    let mut out = ring_prediction(
-        mygrid,
-        prop_engine,
-        station_power_w,
-        ant_gain_dbi,
-        me,
-        wx,
+    let forecast = kp_cache
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|(_, f)| f.clone()));
+    let key = with_storm_key(
+        ring_key(t, &mygrid, ant_gain_dbi, station_power_w, &wx),
         t,
-    )
-    .await?;
+        kp_now,
+        forecast.as_ref(),
+    );
+    let eng = storm_corrected(
+        propagation::make_predictor(&prop_engine, Some(me), station_power_w, ant_gain_dbi),
+        &prop_engine,
+        Some(me),
+        t,
+        kp_now,
+        forecast,
+    );
+    let mut out = ring_prediction(prop_engine == "p533", key, eng, me, wx, t).await?;
+    out.power = Some(power);
     // The "now" line beside the climatology (never cached with it: it is re-read every ask).
     out.space_now = now_inputs.space_now(t);
     Ok(out)
@@ -11039,6 +11079,105 @@ pub(crate) fn ssn_key(wx: &propagation::SpaceWx) -> String {
 }
 
 /// The ring outlook's cache key: UTC day, grid, gain, power and the sunspot number the engine runs on.
+/// Run `f`, a path prediction, on a thread of its own below normal priority
+/// ([`tempo_net::priority`]), and hand back its answer. A burst of predictions (a cold region
+/// sweep, the DXpedition planner, a run of station clicks) then yields the CPU to the decoder and
+/// the radio loop. Its own thread rather than the blocking pool's, because a lowered thread cannot
+/// raise itself again, and a pool thread runs other work next. A prediction that panics past its
+/// own fallback ends its thread, and this says so rather than waiting.
+async fn below_normal<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("prediction".into())
+        .spawn(move || {
+            tempo_net::priority::lower_this_thread();
+            let _ = tx.send(f());
+        })
+        .map_err(|e| e.to_string())?;
+    rx.await
+        .map_err(|_| "the prediction ended without an answer".to_string())
+}
+
+#[cfg(test)]
+mod below_normal_tests {
+    /// The answer comes back; a panic comes back as an error, never a wait.
+    #[test]
+    fn a_prediction_on_its_own_thread_answers_or_says_it_could_not() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        assert_eq!(rt.block_on(super::below_normal(|| 6 * 7)), Ok(42));
+        let failed: Result<u8, String> = rt.block_on(super::below_normal(|| panic!("on purpose")));
+        assert!(failed.is_err());
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            rt.block_on(super::below_normal(nice_of_this_thread)),
+            Ok(19)
+        );
+    }
+
+    /// The calling thread's nice: field 19 of `/proc/thread-self/stat`.
+    #[cfg(target_os = "linux")]
+    fn nice_of_this_thread() -> i32 {
+        let stat = std::fs::read_to_string("/proc/thread-self/stat").unwrap();
+        let after = &stat[stat.rfind(')').unwrap() + 2..];
+        after.split(' ').nth(16).unwrap().parse().unwrap()
+    }
+}
+
+/// The power a P.533 answer assumes ([`tempo_app::engine::Engine::prediction_power`]), as the
+/// answer carries it to the screen.
+fn assumed_power(eng: &tempo_app::engine::Engine) -> propagation::AssumedPower {
+    use propagation::PowerSource as To;
+    use tempo_app::engine::PredictionPowerSource as From;
+    let p = eng.prediction_power();
+    propagation::AssumedPower {
+        watts: p.watts,
+        source: match p.source {
+            From::Setting => To::Setting,
+            From::Rig => To::Rig,
+            From::Amplifier => To::Amplifier,
+            From::Default => To::Default,
+        },
+        amplifier: p.amplifier,
+    }
+}
+
+/// The P.533 engine with the storm correction for the Kp held now ([`propagation::storm`]); any
+/// other engine as it is, since the heuristic reads Kp itself.
+fn storm_corrected(
+    eng: Box<dyn propagation::PathPredictor>,
+    prop_engine: &str,
+    me: Option<(f64, f64)>,
+    t: i64,
+    kp_now: Option<f32>,
+    forecast: Option<propagation::KpForecast>,
+) -> Box<dyn propagation::PathPredictor> {
+    if prop_engine == "p533" {
+        propagation::storm::with_storm_correction(eng, me, t, kp_now, forecast)
+    } else {
+        eng
+    }
+}
+
+/// `key` with the Kp the storm correction depends on ([`propagation::storm::storm_key`]). On a
+/// quiet sky that is nothing, and the key is unchanged.
+fn with_storm_key(
+    key: String,
+    t: i64,
+    kp_now: Option<f32>,
+    forecast: Option<&propagation::KpForecast>,
+) -> String {
+    let storm = propagation::storm::storm_key(t, kp_now, forecast);
+    if storm.is_empty() {
+        key
+    } else {
+        format!("{key}|storm:{storm}")
+    }
+}
+
 fn ring_key(
     t: i64,
     mygrid: &str,
@@ -11054,23 +11193,29 @@ fn ring_key(
     )
 }
 
+/// The ring for `eng`, the configured engine as `get_band_outlook` built it (the storm
+/// correction included), kept under `key` when it is P.533's.
 async fn ring_prediction(
-    mygrid: String,
-    prop_engine: String,
-    station_power_w: Option<f64>,
-    ant_gain_dbi: f64,
+    p533: bool,
+    key: String,
+    eng: Box<dyn propagation::PathPredictor>,
     me: (f64, f64),
     wx: propagation::SpaceWx,
     t: i64,
 ) -> Result<propagation::PathPrediction, String> {
     const RING_TTL_SECS: u64 = 6 * 3600;
-    let p533 = prop_engine == "p533";
-    // 8 azimuths at ~9000 km — direction-agnostic "best band to ANY far DX now".
+    // 8 azimuths at ~9000 km — direction-agnostic "best band to ANY far DX now". The heuristic is
+    // microseconds and reads the current Kp, so it is never kept.
     if !p533 {
-        let eng = propagation::HeuristicEngine::new(Some(me));
-        return Ok(propagation::band_outlook_ring(&eng, me, 9000.0, 8, t, &wx));
+        return Ok(propagation::band_outlook_ring(
+            eng.as_ref(),
+            me,
+            9000.0,
+            8,
+            t,
+            &wx,
+        ));
     }
-    let key = ring_key(t, &mygrid, ant_gain_dbi, station_power_w, &wx);
     if let Ok(g) = RING_OUTLOOK.lock() {
         if let Some((when, k, v)) = g.as_ref() {
             if *k == key && when.elapsed().as_secs() < RING_TTL_SECS {
@@ -11092,14 +11237,14 @@ async fn ring_prediction(
             }
         }
     }
-    let eng = propagation::make_predictor(&prop_engine, Some(me), station_power_w, ant_gain_dbi);
-    let out = tauri::async_runtime::spawn_blocking(move || {
-        propagation::band_outlook_ring(eng.as_ref(), me, 9000.0, 8, t, &wx)
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-    if let Ok(mut g) = RING_OUTLOOK.lock() {
-        *g = Some((std::time::Instant::now(), key, out.clone()));
+    let out =
+        below_normal(move || propagation::band_outlook_ring(eng.as_ref(), me, 9000.0, 8, t, &wx))
+            .await?;
+    // A stand-in for an engine that could not run is not kept: the next ask tries again.
+    if !out.engine_fallback {
+        if let Ok(mut g) = RING_OUTLOOK.lock() {
+            *g = Some((std::time::Instant::now(), key, out.clone()));
+        }
     }
     Ok(out)
 }
@@ -11112,6 +11257,13 @@ struct DxpedWindow {
     call: String,
     /// Which model produced it ("p533" → the UI badge shows P.533).
     engine: String,
+    /// The configured engine could not run and `engine` is the heuristic that answered
+    /// ([`propagation::with_fallback`]). Absent when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    engine_fallback: bool,
+    /// The storm correction laid over its P.533 answer ([`propagation::storm`]); absent when none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    storm: Option<propagation::storm::StormNote>,
     /// One-line headline, e.g. "17m Good 0230–0430Z" (CalendarEntry.best format).
     best: String,
     /// Top bands' 24 h outlooks, best first — feeds LikelihoodHeatmap directly.
@@ -11171,6 +11323,24 @@ fn dxped_windows_key(
 }
 
 #[cfg(test)]
+mod storm_key_tests {
+    use super::with_storm_key;
+
+    /// On a quiet sky every P.533 cache keeps the key it had; a storm Kp starts it afresh.
+    #[test]
+    fn a_quiet_sky_leaves_the_cache_keys_alone() {
+        let t = 1_794_074_400;
+        assert_eq!(with_storm_key("k".into(), t, Some(2.0), None), "k");
+        assert_eq!(with_storm_key("k".into(), t, None, None), "k");
+        assert_ne!(with_storm_key("k".into(), t, Some(5.0), None), "k");
+        assert_ne!(
+            with_storm_key("k".into(), t, Some(5.0), None),
+            with_storm_key("k".into(), t, Some(7.0), None)
+        );
+    }
+}
+
+#[cfg(test)]
 mod dxped_windows_key_tests {
     use super::dxped_windows_key;
     use propagation::SpaceWx;
@@ -11204,21 +11374,23 @@ mod dxped_windows_key_tests {
 async fn get_dxped_windows(
     state: State<'_, SharedEngine>,
     cache: State<'_, PropCache>,
+    kp_cache: State<'_, KpForecastCache>,
     days: Option<u32>,
 ) -> Result<Vec<DxpedWindow>, String> {
     // 1 = today only (Connect's default); the DXpeditions board asks for 7 (the
     // week planner). Clamped so a bad caller can't request an unbounded sweep.
     let days = days.unwrap_or(1).clamp(1, 10);
-    let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
+    let (mygrid, prop_engine, power, ant_gain_dbi) = {
         let eng = engine_lock(&state);
         let st = eng.settings();
         (
             st.mygrid.clone(),
             st.prop_engine.clone(),
-            st.station_power_w,
+            assumed_power(&eng),
             st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
         )
     };
+    let station_power_w = Some(power.watts);
     let Some(me) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
         return Ok(Vec::new());
     };
@@ -11267,6 +11439,14 @@ async fn get_dxped_windows(
         return Ok(Vec::new());
     }
     let day = now_unix() / 86_400;
+    let kp_now = {
+        let guard = cache.lock().map_err(|e| e.to_string())?;
+        swpc_kp(guard.as_ref().map(|(_, s)| &s.space_wx), now_unix())
+    };
+    let forecast = kp_cache
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|(_, f)| f.clone()));
     let key = dxped_windows_key(
         day,
         days,
@@ -11287,10 +11467,18 @@ async fn get_dxped_windows(
     }
     // Build the engine ONCE and sweep every target inside one spawn_blocking —
     // the p533 CCIR-cell memo makes same-month targets amortize each other.
-    let eng = propagation::make_predictor(&prop_engine, Some(me), station_power_w, ant_gain_dbi);
     let t = now_unix();
-    let out = tauri::async_runtime::spawn_blocking(move || {
-        targets
+    let key = with_storm_key(key, t, kp_now, forecast.as_ref());
+    let eng = storm_corrected(
+        propagation::make_predictor(&prop_engine, Some(me), station_power_w, ant_gain_dbi),
+        &prop_engine,
+        Some(me),
+        t,
+        kp_now,
+        forecast,
+    );
+    let (out, fell_back) = below_normal(move || {
+        let windows = targets
             .into_iter()
             .map(|(call, dx, start_unix, end_unix)| {
                 let mut p = eng.predict(dx, t, &wx);
@@ -11362,6 +11550,8 @@ async fn get_dxped_windows(
                 DxpedWindow {
                     call,
                     engine: p.engine,
+                    engine_fallback: p.engine_fallback,
+                    storm: p.storm,
                     best,
                     outlook: p.bands,
                     days: days_out,
@@ -11369,14 +11559,17 @@ async fn get_dxped_windows(
                     end_unix,
                 }
             })
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        (windows, eng.fell_back())
     })
-    .await
-    .map_err(|e| e.to_string())?;
-    if let Ok(mut g) = DXPED_WINDOWS.lock() {
-        g.retain(|(when, _, _)| when.elapsed().as_secs() < DXPED_WINDOWS_TTL_SECS);
-        g.retain(|(_, k, _)| *k != key);
-        g.push((std::time::Instant::now(), key, out.clone()));
+    .await?;
+    // A stand-in for an engine that could not run is not kept: the next ask tries again.
+    if !fell_back {
+        if let Ok(mut g) = DXPED_WINDOWS.lock() {
+            g.retain(|(when, _, _)| when.elapsed().as_secs() < DXPED_WINDOWS_TTL_SECS);
+            g.retain(|(_, k, _)| *k != key);
+            g.push((std::time::Instant::now(), key, out.clone()));
+        }
     }
     Ok(out)
 }
@@ -22349,6 +22542,9 @@ fn settings_from_bundle(
     if predates_hb_networking {
         settings.choose_js8_hb_networking_for_old_settings();
     }
+    // A marker this backup does not carry reads as false, so the move is made here as it would be
+    // for an upgraded file, note included; otherwise the live marker would keep its "heuristic".
+    settings.move_prop_engine_in_memory();
     Ok(settings)
 }
 
@@ -29491,6 +29687,18 @@ fn mark_setup_wizard_seen(state: State<'_, SharedEngine>) -> Result<AppSnapshot,
     let s = eng.mark_setup_wizard_seen();
     persist_settings(s.clone(), |e| {
         eprintln!("tempo: mark_setup_wizard_seen save failed: {e}")
+    });
+    Ok(eng.snapshot())
+}
+
+/// The one-time note about the move to P.533 was dismissed. The ONE write path that clears
+/// `Settings::prop_engine_note_due`. Returns the snapshot.
+#[tauri::command(async)]
+fn dismiss_prop_engine_note(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    let s = eng.dismiss_prop_engine_note();
+    persist_settings(s.clone(), |e| {
+        eprintln!("tempo: dismiss_prop_engine_note save failed: {e}")
     });
     Ok(eng.snapshot())
 }
@@ -45140,7 +45348,9 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
             "get_ota_map_spots" => ok(get_ota_map_spots(app.state(), app.state()).await),
             "get_kp_forecast" => ok(get_kp_forecast(app.state()).await),
             "get_solar_indices" => ok(get_solar_indices(app.state()).await),
-            "get_band_outlook" => ok(get_band_outlook(app.state(), app.state(), app.state()).await),
+            "get_band_outlook" => {
+                ok(get_band_outlook(app.state(), app.state(), app.state(), app.state()).await)
+            }
             "get_path_regions" => ok(get_path_regions(app.state(), app.state(), app.state()).await),
             "get_path_outlook" => {
                 let grid = v
@@ -45163,7 +45373,7 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
             }
             "get_dxped_windows" => {
                 let days = v.get("days").and_then(|x| x.as_u64()).map(|d| d as u32);
-                ok(get_dxped_windows(app.state(), app.state(), days).await)
+                ok(get_dxped_windows(app.state(), app.state(), app.state(), days).await)
             }
             "get_openings_log" => ok(Ok::<_, String>(get_openings_log())),
             "get_declination" => ok(get_declination(app.state())),
@@ -50263,6 +50473,12 @@ pub fn run() {
 
     let mut settings = Settings::load(&settings_path());
     move_upload_start_beside_the_log(&mut settings, &shared_data_dir());
+    // One-time migration: every saved "heuristic" moves to P.533, and says so once. Launch, before
+    // the Engine and any settings writer exist: a bare save, exempt from the writer's Engine-lock
+    // precondition (`tempo_app::settings::writer`). A refused save leaves this run as it was.
+    if let Err(e) = settings.move_prop_engine_once(|settings| settings.save(&settings_path())) {
+        eprintln!("tempo: couldn't save the move to P.533, trying again next launch: {e}");
+    }
     // The DEBUG tier, as early as the settings are known — a diagnostic session must capture
     // the startup it was turned on for, not just what came after.
     tempo_core::applog::set_debug(settings.diag_debug_log);
@@ -52964,6 +53180,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         remove_station_profile,
         set_experience_level,
         mark_setup_wizard_seen,
+        dismiss_prop_engine_note,
         route_preview,
         route_preview_draft,
         test_radio_cat,
@@ -54227,6 +54444,35 @@ mod tests {
         let r = super::read_cw_state(&e);
         assert_eq!(r.turn, None, "unassisted: no turn cue");
         assert!(r.unassisted);
+    }
+
+    /// A restore makes the one-time move to P.533 for a backup with no marker, note included, as an
+    /// upgraded settings file does; a backup with the marker keeps its engine.
+    #[test]
+    fn a_backup_from_before_the_engine_move_is_moved_and_one_from_after_is_not() {
+        let bundle = |engine: Option<&str>, moved: Option<bool>| {
+            let mut v = serde_json::json!({});
+            if let Some(engine) = engine {
+                v["propEngine"] = engine.into();
+            }
+            if let Some(moved) = moved {
+                v["propEngineMoved"] = moved.into();
+            }
+            super::settings_from_bundle(v).unwrap()
+        };
+        for (engine, moved, want, note) in [
+            (None, None, "p533", true),
+            (Some("heuristic"), None, "p533", true),
+            (Some("p533"), None, "p533", false),
+            (Some("voacap"), None, "voacap", false),
+            (Some("heuristic"), Some(true), "heuristic", false),
+            (Some("p533"), Some(true), "p533", false),
+        ] {
+            let s = bundle(engine, moved);
+            assert_eq!(s.prop_engine, want, "{engine:?} {moved:?}");
+            assert_eq!(s.prop_engine_note_due, note, "{engine:?} {moved:?}");
+            assert!(s.prop_engine_moved, "{engine:?} {moved:?}");
+        }
     }
 
     /// The settings backup's stated contract is that it CARRIES NO SECRETS, and

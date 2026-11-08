@@ -3735,6 +3735,12 @@ export async function setExperienceLevel(level: ExperienceLevel): Promise<AppSna
   return invoke<AppSnapshot>('set_experience_level', { level })
 }
 
+/** The one-time note about the move to P.533 was dismissed (`Settings.propEngineNoteDue`'s one
+ *  writer). */
+export async function dismissPropEngineNote(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('dismiss_prop_engine_note')
+}
+
 /** The first-run setup wizard was finished or skipped (`Settings.setupWizardSeen`'s one writer):
  *  recorded beside the station's settings, so it never opens by itself again. */
 export async function markSetupWizardSeen(): Promise<AppSnapshot> {

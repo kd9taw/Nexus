@@ -249,9 +249,9 @@ plain-language reasoning ("12 EU stations hear you on 20m"), and the persistent 
 answers "is the band open / am I getting out / what do I need" from every section of the app,
 with feed-health pills that distinguish "connected but quiet" from "down."
 
-*Honest labels:* the prediction engine is selectable — a physics-lite in-house heuristic (MUF +
-D-layer) or a native port of ITU-R P.533 (the VOACAP-class link-budget standard) with P.1240
-operational MUF; both labeled "modelled" in the UI. VOACAP itself is not integrated. PSKR MQTT
+*Honest labels:* the prediction engine is selectable — a native port of ITU-R P.533 (the VOACAP-class
+link-budget standard) with P.1240 operational MUF, the default, or a physics-lite in-house
+heuristic (MUF + D-layer); both labeled "modelled" in the UI. VOACAP itself is not integrated. PSKR MQTT
 band topics carry no SNR, so SNR-derived features degrade gracefully where absent.
 
 ## Zero-config setup and rig control
