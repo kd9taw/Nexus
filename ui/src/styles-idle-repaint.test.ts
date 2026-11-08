@@ -63,9 +63,9 @@ function mount(html: string, select: string): Element {
 describe('the critical status chip pulses, then holds', () => {
   const chip = (tier: string) =>
     mount(
-      `<header class="topbar"><div class="txrx"><div class="status-lane" role="status">` +
+      `<header class="topbar"><div class="status-lane" role="status">` +
         `<span class="status-chip tier-${tier}"><svg></svg><span class="status-chip-msg">RADIO ENGINE STOPPED</span></span>` +
-        `</div></div></header>`,
+        `</div></header>`,
       '.status-chip',
     )
 

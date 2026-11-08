@@ -22,6 +22,7 @@ import { BandStrip } from './BandStrip'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip, keepInSight, revealAfterPress } from './CockpitTxStrip'
+import { TxAlarmBanner } from './TxAlarmBanner'
 import { ZeroBeat } from './ZeroBeat'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
@@ -2453,6 +2454,7 @@ export function CwCockpit({
   // the scope, or after the contact in the hosted Quick presentation (below).
   const txStrip = (
     <CockpitTxStrip
+      alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} />}
       radio={snap.radio}
       onSetTxEnabled={
         drivesAnotherStation()
@@ -2509,16 +2511,16 @@ export function CwCockpit({
           transmitting. Fixing the gate without this left the fix unreachable by the operator
           who reported it, and he was a CW operator.
   
-          Gated on `catOk` like Phone's: with no CAT there is nothing to command, and the
-          header is width-critical at 1024 (see the density note above), so it costs nothing
-          when there is no radio to talk to. NOT a stop control — see SplitControl's header. */}
-      {catOk && (
-        <SplitControl
-          snap={snap}
-          onSnap={onSnap}
-          onError={(m) => pushToast(m, 'error')}
-        />
-      )}
+          DRAWN WHATEVER CAT SAYS, disabled without it (2026-11-07). It was gated on `catOk`,
+          and this header stands above the TX strip: the control coming and going with CAT
+          re-wrapped the header and moved Stop TX. It costs no width CAT-up did not already pay.
+          NOT a stop control — see SplitControl's header. */}
+      <SplitControl
+        snap={snap}
+        onSnap={onSnap}
+        onError={(m) => pushToast(m, 'error')}
+        unavailable={catOk ? undefined : { title: t('cockpit.header.cat.bad.title') }}
+      />
       {/* Dot + "REC", the same `.ph-rec` class Phone uses. This header already carries the band
           picker, tuning strip, Tune, Stop TX, speed, pitch, macros, BW, memories and the rotator,
           and its own density note records that width here is what wraps it at 1024, so this was
@@ -2683,28 +2685,29 @@ export function CwCockpit({
             </select>
           </label>
         )}
-        {catOk && (
-          <div className="ph-filter" title={t('cw.filter.title')}>
-            <span className="ph-filter-lbl">{BW}</span>
-            <button
-              type="button"
-              className="ph-filter-step"
-              onClick={() => bumpFilter(-FILTER_STEP_HZ)}
-              title={t('cw.filter.narrower.title', { step: FILTER_STEP_HZ })}
-            >
-              −
-            </button>
-            <span className="ph-filter-val mono">{filterHz ? `${filterHz}` : '—'}</span>
-            <button
-              type="button"
-              className="ph-filter-step"
-              onClick={() => bumpFilter(FILTER_STEP_HZ)}
-              title={t('cw.filter.wider.title', { step: FILTER_STEP_HZ })}
-            >
-              +
-            </button>
-          </div>
-        )}
+        {/* Drawn whatever CAT says, disabled without it, for Split's reason just above. */}
+        <div className="ph-filter" title={catOk ? t('cw.filter.title') : t('cockpit.header.cat.bad.title')}>
+          <span className="ph-filter-lbl">{BW}</span>
+          <button
+            type="button"
+            className="ph-filter-step"
+            disabled={!catOk}
+            onClick={() => bumpFilter(-FILTER_STEP_HZ)}
+            title={catOk ? t('cw.filter.narrower.title', { step: FILTER_STEP_HZ }) : t('cockpit.header.cat.bad.title')}
+          >
+            −
+          </button>
+          <span className="ph-filter-val mono">{filterHz ? `${filterHz}` : '—'}</span>
+          <button
+            type="button"
+            className="ph-filter-step"
+            disabled={!catOk}
+            onClick={() => bumpFilter(FILTER_STEP_HZ)}
+            title={catOk ? t('cw.filter.wider.title', { step: FILTER_STEP_HZ }) : t('cockpit.header.cat.bad.title')}
+          >
+            +
+          </button>
+        </div>
         {/* THE OCCASIONAL CONTROLS — memories, the rotator, split and REC: inline at xl and below md,
             behind the header's ⋯ at md and lg (components/HeaderOverflow, features/compactChrome),
             so the header is one row on a 1080p window. None of them keys or stops a transmission. */}

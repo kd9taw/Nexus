@@ -65,6 +65,7 @@ import { TX_SPLIT_MAX, TX_SPLIT_MIN } from '../features/paneSeam'
 import { buildHighlightMap, OperateDecodes } from './OperateDecodes'
 import { DecodeHistory, type DecodeSort } from '../decodeHistory'
 import { OperateQsoStrip } from './OperateQsoStrip'
+import { TxAlarmBanner } from './TxAlarmBanner'
 import { TxMetersCell, TxMetersPane, TX_METERS_WHEN } from './TxMeters'
 import { SpotDialog } from './SpotDialog'
 import { DEFAULT_ROSTER_SORT, OperateRoster, type RosterSort } from './OperateRoster'
@@ -1886,14 +1887,16 @@ export function OperateCockpit({
               DXpedition pile-up is actually worked, and "UP 5" is the ordinary case: the spot
               parser already reads the offset out of the comment and commands it, but an
               operator who tuned to the DX by hand had no control at all. NOT a stop control —
-              see SplitControl's header. */}
-          {snap.radio.catOk === true && (
-            <SplitControl
-              snap={snap}
-              onSnap={onSnap}
-              onError={(m) => pushToast(m, 'error')}
-            />
-          )}
+              see SplitControl's header.
+              DRAWN WHATEVER CAT SAYS, disabled without it (2026-11-07): this header stands above
+              the QSO strip, and the control coming and going with `catOk` re-wrapped it and moved
+              Stop TX 26 to 56 px every time CAT dropped. */}
+          <SplitControl
+            snap={snap}
+            onSnap={onSnap}
+            onError={(m) => pushToast(m, 'error')}
+            unavailable={snap.radio.catOk === true ? undefined : { title: t('cockpit.header.cat.bad.title') }}
+          />
           <div className="cockpit-layout-toggle" role="group" aria-label={t('operate.header.layout.aria')}>
             <button
               type="button"
@@ -2065,6 +2068,7 @@ export function OperateCockpit({
             controls absorbed from the deleted status row (period, Skip Tx1, next-Ns,
             HOUND badge, rotor) and the fixed-width TX telemetry cell. */}
         <OperateQsoStrip
+          alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} />}
           qso={snap.qso}
           contestRunning={snap.fieldDay?.running}
           radio={snap.radio}

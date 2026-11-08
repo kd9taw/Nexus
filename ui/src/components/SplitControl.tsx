@@ -42,13 +42,19 @@ interface Props {
    *  and a control that VANISHES is indistinguishable from one that was never built, which
    *  for split is the worst case in the app: it is the first thing a DX chaser looks for.
    *  Passing the reason in keeps ONE fact driving both halves, the disabled buttons and the
-   *  printed mark, so they cannot disagree. Omitted ⇒ nothing is wrong and nothing is said,
-   *  which is what CW and Operate pass. */
-  unavailable?: { mark: string; title: string }
+   *  printed mark, so they cannot disagree. Omitted ⇒ nothing is wrong and nothing is said.
+   *
+   *  WITHOUT A MARK (CW and Operate, CAT down, 2026-11-07): the buttons are disabled and say why
+   *  on hover, and nothing is added to the row. Those headers stand above Stop TX, so a box that
+   *  came and went with CAT re-wrapped them and moved Stop TX 26 to 56 px; their CAT pill, in the
+   *  same row, prints the state. */
+  unavailable?: { mark?: string; title: string }
 }
 
 export function SplitControl({ snap, onSnap, onError, unavailable }: Props) {
   const allowed = unavailable == null
+  // Dead with no printed mark: the reason rides on each disabled button instead.
+  const quietReason = unavailable && !unavailable.mark ? unavailable.title : undefined
   const failed = (local: string) => () => onError?.(local)
   // The desired TX dial lives in the snapshot; a plain retune clears it (backend).
   // Offset is kHz off the RX dial; default +5, the common pileup.
@@ -93,9 +99,10 @@ export function SplitControl({ snap, onSnap, onError, unavailable }: Props) {
         className="ph-split-toggle"
         onClick={toggleSplit}
         title={
-          splitOn
+          quietReason ??
+          (splitOn
             ? t('phone.split.on.title', { freq: splitTxMhz?.toFixed(3) ?? '' })
-            : t('phone.split.off.title')
+            : t('phone.split.off.title'))
         }
       >
         SPLIT
@@ -103,7 +110,7 @@ export function SplitControl({ snap, onSnap, onError, unavailable }: Props) {
       <button disabled={!allowed}
         className="ph-split-step"
         onClick={() => bumpSplit(-SPLIT_STEP_KHZ)}
-        title={t('phone.split.lower.title', { step: SPLIT_STEP_KHZ })}
+        title={quietReason ?? t('phone.split.lower.title', { step: SPLIT_STEP_KHZ })}
       >
         −
       </button>
@@ -113,13 +120,13 @@ export function SplitControl({ snap, onSnap, onError, unavailable }: Props) {
       <button disabled={!allowed}
         className="ph-split-step"
         onClick={() => bumpSplit(SPLIT_STEP_KHZ)}
-        title={t('phone.split.higher.title', { step: SPLIT_STEP_KHZ })}
+        title={quietReason ?? t('phone.split.higher.title', { step: SPLIT_STEP_KHZ })}
       >
         +
       </button>
       {/* TEXT, never colour alone, and the glyph is decoration: the WORD is what a screen
           reader and a monochrome display get. Same shape as the cockpit's own ⊘ marks. */}
-      {unavailable && (
+      {unavailable?.mark && (
         <span className="ph-unavail" role="note" title={unavailable.title}>
           <span aria-hidden="true">⊘</span> {unavailable.mark}
         </span>

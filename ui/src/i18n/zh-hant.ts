@@ -546,6 +546,7 @@ export const ZH_HANT: PartialCatalog = {
   "shell.lane.slotOverDropped.detail": "此次發射被丟棄：電台僅在 {{time}} UTC 鍵控，即你的時隙結束後 {{late}}（CAT 較慢），因此 Nexus 立即解除鍵控且未傳送任何內容，並保持發射開啟以等待你的下一次發射。分頻操作會在每次鍵控前向電台傳送指令，在慢速 CAT 鏈路上可能耗時數秒：若此情況持續，請檢查設定中的 CAT 鏈路與分頻操作。",
   "shell.lane.pttRefused.message": "PTT 被拒",
   "shell.lane.pttRefused.detail": "Nexus 未在 {{time}} UTC 鍵控本次 {{mode}} 發射：電台仍按 Nexus 所設從其經 DAX 接收發射音訊，而非來自麥克風，因此你的語音不會發出。未傳送任何內容。鬆開 PTT，Nexus 會在片刻內將電台切回麥克風輸入；隨後再次按下 PTT。",
+  "shell.lane.txWatchdog.detail": "發射已關閉。按 TX On 可再次發射。",
   "shell.lane.voiceDropped.message": "語音訊息已丟棄",
   "shell.lane.voiceDropped.noDax": "Nexus 未在 {{time}} UTC 播放語音訊息：電台未在 2 秒內將其發射音訊切換至 DAX，因此未鍵控任何內容。該訊息被丟棄而非暫存；請再次按下其按鍵。",
   "shell.lane.voiceDropped.keyed": "Nexus 未在 {{time}} UTC 播放語音訊息：另有程式正在發射或已先行鍵控電台（你的麥克風或 PTT、一個調諧載波、另一程式），因此未鍵控任何內容。該訊息被丟棄而非暫存。",

@@ -65,6 +65,7 @@ import { flexVoiceNeedsDax } from './features/flexDaxNote'
 import { phoneTuneNeedsRearSource } from './features/yaesuTuneNote'
 import { useActivationNotices } from './useActivationNotices'
 import { t } from './i18n'
+import { ALARM_CELL_VIEWS } from './features/alarmCellViews'
 import { resolveUnits, setUnitsMirror } from './units'
 import { doubleBeep, processDecodes, txEarcon, type NeededAlert } from './alerts'
 import { openingToastSpec } from './openingAlert'
@@ -938,6 +939,19 @@ function App() {
   useEffect(() => {
     setStatus('voiceDropped', voiceDroppedLane(snap?.radio.voiceDropped))
   }, [snap?.radio.voiceDropped?.at, snap?.radio.voiceDropped?.cause])
+
+  // The TX watchdog halted transmit: a CRITICAL lane item while the station says so (it was the top
+  // bar's own chip, whose width wrapped the bar and moved Stop TX under it). Critical, so it is also
+  // shown beside Stop TX on the operating screens' TX strip (TxAlarmBanner). Its words are the
+  // catalog's sentence for this halt, with how to transmit again (the bar's old chip said it).
+  useEffect(() => {
+    setStatus(
+      'txWatchdog',
+      snap?.radio.txWatchdog
+        ? { tier: 'critical', message: t('remote.stream.mic.ended.watchdog'), detail: t('shell.lane.txWatchdog.detail') }
+        : null,
+    )
+  }, [snap?.radio.txWatchdog])
 
   // A clock repair holds transmit: from the press of Repair clock until the repair ends, the
   // station starts no transmission, and the lane says so on every screen while it lasts. Not on
@@ -4335,6 +4349,10 @@ function App() {
         // Tempo's cluster moved into its TX strip under the Tempo header (2026-10-01), so
         // the top bar hides it there exactly as on Operate.
         hideTxControls={effectiveView === 'operate' || effectiveView === 'chat'}
+        // The screens whose TX strip carries the transmitter alarm cell (TxAlarmBanner), where every
+        // critical lane item is also shown beside Stop TX, so the bar's lane may be cut. Elsewhere
+        // (Logbook, Field Day, Satellites, Settings…) the lane is the only place a critical item shows.
+        alarmCell={ALARM_CELL_VIEWS.has(effectiveView)}
         hideFrequencyControl={
           effectiveView === 'phone' ||
           effectiveView === 'cw' ||
@@ -4651,9 +4669,9 @@ function App() {
                     onAtuTune={handleAtuTune}
                     onAtuBypass={handleAtuBypass}
                     onStopTx={handleHaltTx}
+                    alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={setSnap} />}
                   />
                 }
-                txAlarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={setSnap} />}
                 onOpenSettings={openSettingsAt}
               />
             </div>

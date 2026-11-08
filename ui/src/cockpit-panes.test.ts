@@ -259,7 +259,19 @@ describe('the fence: styles.css never names a structural class', () => {
     'mycall-picker', 'station-profile-picker',
     // The TX dock's keep row (2026-11-05): parked alone while the dock is folded. A styles.css position, offset or
     // background on it would park it, or unpark it, from the sheet that cannot see the fold.
-    'cockpit-txdock-keep']) {
+    'cockpit-txdock-keep',
+    // The header's state words (2026-11-07): zero wide to the header's line breaker, so a word the radio
+    // brings never moves Stop TX. A styles.css width, padding or margin on either would give it width back.
+    'ch-statecell', 'ch-stateword',
+    // …the amplifier's stacked Operate / Standby word: a styles.css display or position would unstack it.
+    'amp-op-face', 'amp-op-word', 'amp-op-word-off',
+    // …and the transmitter alarm, now the TX strip's last line (2026-11-07): a styles.css position on it
+    // could set it over Stop TX.
+    'ch-txalarm',
+    // …and the lane's flag floor off the operating screens: a styles.css min-width on it could undo it.
+    'status-lane-keep',
+    // …and the lane's own box (2026-11-08): where it stands decides whether the bar's Stop TX moves for it.
+    'status-lane', 'status-lane-gap']) {
     it(`styles.css declares no .${cls} rule`, () => {
       const hits = STYLES_RULES
         .map((r) => r.selector)
@@ -1783,5 +1795,144 @@ describe('THE ONE-ROW TOP BAR AND HEADER (1080p pass): what the folds show and h
     expect(blockDecl('width')(stock!.body)).toBe('var(--cw-wpm-w, 160px)')
     expect(classChainWinner([['cw-wpm', 'cw-wpm-compact']], '--cw-wpm-w')?.value).toBe('80px')
     expect(classChainWinner([['cw-wpm']], '--cw-wpm-w'), 'nothing sets it on the stock label').toBeNull()
+  })
+})
+
+describe('THE HEADER’S STATE WORDS: a word the radio brings or takes adds nothing to the header’s line breaking', () => {
+  // The header is in flow above the TX strip. A state word with a width of its own that appeared on a full
+  // line re-wrapped the header and moved Stop TX 32 px (Phone, 1920x1080, real Chrome). The cell is zero
+  // wide to the line breaker: the row gap before it, its margin, its width, padding and border sum to 0.
+  const row = [['app'], ['cockpit-header'], ['ch-mode-extras']]
+  const cell = [...row, ['ch-statecell']]
+  const px = (v: string | undefined, vh: number) => (v == null ? 0 : lengthsAt(v.replace(/\bcalc\(/g, '('), vh)[0])
+  it.each([700, 1040, 1100, 1101, 1440])('gap + margin + width + padding + border is 0 at an effective %i px', (vh) => {
+    const gap = classChainWinner(row, 'gap')
+    expect(gap, 'the header row has a gap').not.toBeNull()
+    const margin = classChainWinner(cell, 'margin-inline-start') ?? classChainWinner(cell, 'margin-left')
+    expect(margin, 'nothing cancels the row gap in front of the cell').not.toBeNull()
+    const width = classChainWinner(cell, 'width')
+    expect(width?.value, 'the cell must be zero wide: its width is its contribution to the row').toBe('0')
+    for (const p of ['padding', 'padding-left', 'padding-inline-start', 'padding-inline', 'border', 'border-left', 'border-width'])
+      expect(classChainWinner(cell, p), `${p} on the cell is width the line breaker sees`).toBeNull()
+    expect(px(gap!.value, vh) + px(margin!.value, vh) + px(width!.value, vh)).toBe(0)
+  })
+  it('it grows into the room left and clips; its words shorten rather than wrap', () => {
+    expect(classChainWinner(cell, 'flex')?.value).toBe('1 1 0')
+    expect(classChainWinner(cell, 'min-width')?.value).toBe('0')
+    expect(classChainWinner(cell, 'overflow')?.value).toBe('hidden')
+    const word = [...cell, ['ch-stateword']]
+    expect(classChainWinner(word, 'min-width')?.value).toBe('0')
+    expect(classChainWinner(word, 'white-space')?.value).toBe('nowrap')
+    expect(classChainWinner(word, 'text-overflow')?.value).toBe('ellipsis')
+    // Each word carries the gap the cell gave back, so two words do not touch.
+    expect(classChainWinner(word, 'margin-inline-start')?.value).toBe(classChainWinner(row, 'gap')?.value)
+  })
+  it('the evaluator bites: a cell with the row gap left in front of it does not sum to 0 (control)', () => {
+    expect(px('var(--chrome-extras-gap, var(--space-3))', 1440) + px('0', 1440)).not.toBe(0)
+  })
+})
+
+describe('THE TRANSMITTER ALARM CELL: one constant width to the TX strip’s line breaker, whatever it holds', () => {
+  // The cell is always drawn; what the breaker sees of it is its row gap + margin + max(basis, min-width) +
+  // padding + border. With a zero basis, the margin cancelling the gap and no padding or border, that is
+  // exactly `min-width`, an em length its content cannot change: an alarm, a critical lane item or none
+  // leaves every line of the strip where it was. (Padding is counted: the CAT words leaked 8 px of it.)
+  const STRIPS: Array<[string, string[][]]> = [
+    ['the TX strip', [['cockpit-txstrip']]],
+    ['FT’s QSO strip', [['cockpit-qso', 'panel']]],
+  ]
+  const columnGap = (gap: string) => {
+    const parts = gap.trim().split(/\s+(?![^(]*\))/)
+    return parts[parts.length - 1]
+  }
+  const first = (v: string, vh: number) => lengthsAt(v.replace(/\bcalc\(/g, '('), vh)
+  it.each(STRIPS)('in %s: gap + margin + padding + border is 0, and the rest is a fixed em floor', (_name, strip) => {
+    const cell = [...strip, ['ch-txalarm']]
+    const gap = classChainWinner(strip, 'gap')
+    expect(gap, 'the strip has a gap').not.toBeNull()
+    expect(classChainWinner(cell, 'flex')?.value).toBe('1 1 0')
+    const margin = classChainWinner(cell, 'margin')
+    expect(margin, 'nothing cancels the strip’s gap in front of the cell').not.toBeNull()
+    const [, , , left] = first(margin!.value, 1440)
+    for (const vh of [700, 1040, 1440]) {
+      const g = first(columnGap(gap!.value), vh)[0]
+      const [, , , l] = first(margin!.value, vh)
+      expect(g + l, `the column gap and the margin at an effective ${vh} px`).toBe(0)
+    }
+    expect(left).toBeLessThan(0)
+    expect(classChainWinner(cell, 'padding')?.value ?? '0').toBe('0')
+    expect(classChainWinner(cell, 'border')?.value ?? '0').toBe('0')
+    for (const p of ['padding-left', 'padding-inline-start', 'border-left', 'border-width', 'width'])
+      expect(classChainWinner(cell, p), `${p} on the cell is width the breaker sees`).toBeNull()
+    expect(classChainWinner(cell, 'min-width')?.value, 'the floor: a length no content changes').toMatch(/^\d+(\.\d+)?em$/)
+    expect(classChainWinner(cell, 'height')?.value, 'one height, empty or full: its own line is never 0 px tall').toMatch(/^\d+(\.\d+)?em$/)
+    expect(classChainWinner(cell, 'overflow')?.value).toBe('hidden')
+  })
+  it('within the floor the words shorten; the count and the ✕ never do', () => {
+    const cell = [['cockpit-txstrip'], ['ch-txalarm']]
+    expect(classChainWinner([...cell, ['ch-txalarm-text']], 'min-width')?.value).toBe('0')
+    expect(classChainWinner([...cell, ['ch-txalarm-text']], 'text-overflow')?.value).toBe('ellipsis')
+    expect(classChainWinner([...cell, ['ch-txalarm-text']], 'white-space')?.value).toBe('nowrap')
+    expect(classChainWinner([...cell, ['ch-txalarm-queue']], 'flex')?.value).toBe('none')
+    expect(classChainWinner([...cell, ['ch-txalarm-dismiss']], 'flex')?.value).toBe('none')
+  })
+  it('the top bar’s lane has no floor now: the bar never takes a line for it', () => {
+    expect(classChainWinner([['topbar'], ['status-lane']], 'min-width')?.value).toBe('0')
+    expect(classChainWinner([['topbar'], ['status-lane']], 'width')?.value).toBe('0')
+  })
+})
+
+describe('THE AMPLIFIER’S OPERATE / STANDBY WORD: one width in every state', () => {
+  // AmpStrip rides in the cockpit header, above Stop TX; a word of its own width re-wrapped the header
+  // when the amplifier went to standby (CW 1024x768, Stop TX moved 26.6 px). The three words share one
+  // grid cell, so the button is the widest one's width, and only the current one is seen.
+  it('the three words stack in one cell, and the others are hidden, not removed', () => {
+    expect(classChainWinner([['amp-op-face']], 'display')?.value).toBe('inline-grid')
+    expect(classChainWinner([['amp-op-face'], ['amp-op-word']], 'grid-area')?.value).toBe('1 / 1')
+    expect(classChainWinner([['amp-op-face'], ['amp-op-word', 'amp-op-word-off']], 'visibility')?.value).toBe('hidden')
+    expect(classChainWinner([['amp-op-face'], ['amp-op-word', 'amp-op-word-off']], 'display'), 'display:none would take its width away').toBeNull()
+  })
+})
+
+describe('THE LANE OFF THE OPERATING SCREENS keeps a critical item’s flag', () => {
+  // No TX strip there, so no alarm cell: the lane is the only place a critical item shows (StatusLane
+  // `keepCritical`). Its flag floor must win over the bar's zero floor; on the operating screens it is absent.
+  it('`.status-lane-keep` wins the lane’s min-width with the flag’s floor', () => {
+    const keep = classChainWinner([['app'], ['topbar'], ['status-lane', 'status-lane-keep']], 'min-width')
+    expect(keep?.sheet).toBe('cockpit-panes.css')
+    // The bar's gap (which the lane's margin cancels: 18 px stock, 12 px on a short window), the 13 px icon,
+    // the chip's 2 x 8 px padding and 2 px border.
+    expect(lengthsAt(keep!.value.replace(/\bcalc\(/g, '('), 1440)).toEqual([18 + 13 + 16 + 2])
+    expect(lengthsAt(keep!.value.replace(/\bcalc\(/g, '('), 900)).toEqual([12 + 13 + 16 + 2])
+    expect(classChainWinner([['topbar'], ['status-lane']], 'min-width')?.value, 'control: no floor without it').toBe('0')
+  })
+})
+
+describe('THE STATUS LANE: zero wide to the bar’s line breaker, and nothing grows when a message comes', () => {
+  // It stands right after the brand group, in front of the group with the bar's auto margin, and takes that
+  // margin's room. Inside the TX/RX group, which grew while a message was up (`.txrx:has(> .status-lane)`),
+  // the margin went to 0 and the bar's own Stop TX slid left 937 → 450 px at 1920x1080 on the Logbook.
+  const lane = [['app'], ['topbar'], ['status-lane']]
+  const px = (v: string, vh: number) => lengthsAt(v.replace(/\bcalc\(/g, '('), vh)
+  it.each([700, 1040, 1100, 1101, 1440])('the bar’s gap + the lane’s margin + width + padding + border is 0 at an effective %i px', (vh) => {
+    const gap = classChainWinner([['app'], ['topbar']], 'gap')
+    expect(gap).not.toBeNull()
+    const margin = classChainWinner(lane, 'margin')
+    expect(margin, 'nothing cancels the bar’s gap in front of the lane').not.toBeNull()
+    expect(classChainWinner(lane, 'width')?.value).toBe('0')
+    expect(classChainWinner(lane, 'flex')?.value).toBe('1 1 0')
+    expect(classChainWinner(lane, 'padding')?.value ?? '0').toBe('0')
+    expect(classChainWinner(lane, 'border')?.value ?? '0').toBe('0')
+    const g = px(gap!.value, vh)[0]
+    const [, , , left] = px(margin!.value, vh)
+    expect(g + left).toBe(0)
+    // …and the gap it gives back inside it: the bar's gap less the lane's own (the first chip's distance).
+    const giveBack = classChainWinner([...lane, ['status-lane-gap']], 'width')
+    const inner = classChainWinner(lane, 'gap')
+    expect(px(giveBack!.value, vh)[0] + px(inner!.value, vh)[0]).toBe(g)
+  })
+  it('no rule grows the TX/RX group, or any group, while a lane is up', () => {
+    const growers = [...STYLES_RULES, ...RULES].filter((r) => /:has\([^)]*status-lane/.test(r.selector))
+    expect(growers.map((r) => r.selector), 'a group that grows with the lane gives it the bar’s auto margin, and Stop TX moves').toEqual([])
   })
 })

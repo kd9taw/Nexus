@@ -69,7 +69,19 @@ export function AmpStrip({
               : t('amp.strip.toOperate.title')
         }
       >
-        {amp.operate == null ? '—' : amp.operate ? <T k="amp.operate" /> : <T k="amp.standby" />}
+        {/* ALL THREE WORDS, STACKED (2026-11-07): the button is the widest one's width in every state, so
+            Operate → Standby → — never re-wraps the cockpit header it rides in, which stands above Stop
+            TX (CW 1024x768 moved 26.6 px). Only the current word is seen and named. */}
+        <span className="amp-op-face">
+          {(['op', 'stby', 'none'] as const).map((w) => {
+            const on = (amp.operate == null ? 'none' : amp.operate ? 'op' : 'stby') === w
+            return (
+              <span key={w} className={on ? 'amp-op-word' : 'amp-op-word amp-op-word-off'} aria-hidden={on ? undefined : true}>
+                {w === 'none' ? '—' : w === 'op' ? <T k="amp.operate" /> : <T k="amp.standby" />}
+              </span>
+            )
+          })}
+        </span>
       </button>
 
       <div className="amp-band">

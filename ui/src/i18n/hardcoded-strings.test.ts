@@ -960,7 +960,8 @@ const MIGRATED = [
  *     must never read as different controls.
  *   · The top bar keeps its TX CLUSTER: TX On/Off, whose two tooltip arms state the abort
  *     semantics ("an FT over already in flight finishes" — the batch-18 ruling), TUNE, STOP TX,
- *     and the TX WATCHDOG chip, which is what the watchdog says once it has halted an over.
+ *     and the TX WATCHDOG chip, which is what the watchdog says once it has halted an over (since
+ *     2026-11-07 a status-lane item App raises in catalog words, no longer a chip of the bar).
  *
  * Everything around them moved — the wheel-tune tooltips and the band-edge toast, the power
  * slider (batch 13: a configuration control on the transmit path is not a transmit control),

@@ -8,6 +8,7 @@ import { Fragment, useEffect, useMemo, useRef, useState, type ReactElement } fro
 import type { AppSnapshot, BandChannel, JttyLine, JttyLogPromptAnswer, JttyMessageStyle, JttySent, JttyState, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
+import { TxAlarmBanner } from './TxAlarmBanner'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PaneSeam } from './PaneSeam'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
@@ -991,6 +992,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           and Stop TX, sticky so they never leave the window. A shell child with no ⊞ id. */}
       {snap && (
         <CockpitTxStrip
+          alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} />}
           radio={snap.radio}
           onStopTx={stop}
           onSetTxEnabled={onSetTxEnabled}

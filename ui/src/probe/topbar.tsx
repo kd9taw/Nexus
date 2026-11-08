@@ -20,6 +20,9 @@ import type { LinkState, RadioStatus } from '../types'
 const params = new URLSearchParams(location.search)
 const view = params.get('view') ?? 'operate'
 const ft = view === 'operate'
+// `logbook`: a screen with no cockpit and so no transmitter alarm cell (Logbook, Field Day, Settings…): the
+// bar's fullest shape, the whole digital chrome and the TX cluster, with Field Day's operator chip.
+const cockpit = view !== 'logbook'
 
 document.documentElement.setAttribute('data-theme', 'dark')
 if (params.get('zoom')) document.documentElement.style.setProperty('--ui-zoom', params.get('zoom')!)
@@ -60,9 +63,13 @@ function Probe() {
         onSetFrequency={noop} onSetTxEnabled={noop} onSetTune={noop} onHaltTx={noop}
         onSetTxEven={noop} onSetTxCycleAuto={noop} onSetHoldTxFreq={noop} onStopRecording={noop}
         hideTxControls={ft}
-        hideFrequencyControl
-        hideDigitalChrome={!ft}
+        // The Logbook and Field Day show the frequency readout; its `margin-left: auto` holds the bar's free room.
+        hideFrequencyControl={cockpit}
+        hideDigitalChrome={cockpit && !ft}
         ftScreen={ft}
+        alarmCell={cockpit}
+        fdActive={!cockpit}
+        operator={cockpit ? undefined : 'W1AW/0'}
         tier="FT8" onTierChange={noop}
         onOpenGuide={noop} field={false} onFieldChange={noop}
         nowBar={foldedChrome(vc) ? NOW_BAR : undefined}
