@@ -121,6 +121,11 @@ export function AtuSwitchOutMenu({
             e.preventDefault()
             buttonRef.current?.focus({ preventScroll: true })
           }}
+          // The menu is not modal, so focus leaving it closes it. A long press ends with a click on the button it
+          // was held on, and that click focuses the button: it is the press that opened the menu, not a move away.
+          onFocusOutside={(e) => {
+            if (e.target instanceof Node && buttonRef.current?.contains(e.target)) e.preventDefault()
+          }}
         >
           {/* The portal escapes `.app`'s zoom, so the content re-applies it (Menu.tsx's reason). */}
           <div style={{ zoom: 'var(--ui-zoom, 1)' }}>
