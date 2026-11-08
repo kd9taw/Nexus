@@ -868,3 +868,41 @@ fn a_contact_deleted_in_the_workers_hand_cannot_join_the_wait() {
     assert_eq!(e.dxkeeper_hold(&rec), None);
     assert_eq!(e.dxkeeper_waiting_count(), 0);
 }
+
+/// ⛔ A PURGE DURING THE WORKER'S TRIP, AND HRD LOGBOOK. HRD's queue has its own drain, after the
+/// upload queue's in the same trip. A contact logged after the purge is not cancelled by it there,
+/// and its failed send goes back on HRD's queue; one taken before the purge is cancelled.
+#[test]
+fn a_contact_logged_after_a_purge_keeps_its_hrd_send() {
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    let mut s = e.settings().clone();
+    s.hrd_logging = true;
+    e.apply_settings(s);
+
+    // Taken by HRD's drain before the purge: cancelled.
+    e.log_qso(cw("K1ABC"));
+    let held = e.take_hrd_pending();
+    e.take_pending_uploads();
+    e.clear_logbook();
+    assert!(e.hrd_cancelled(&held[0]));
+    e.note_hrd_result(held[0].clone(), false);
+    assert!(e.take_hrd_pending().is_empty(), "not put back");
+
+    // The upload queue drained, then the purge, then a contact, then HRD's drain: one trip.
+    e.log_qso(cw("W1AW"));
+    e.take_pending_uploads();
+    e.clear_logbook();
+    e.log_qso(cw("N0CALL"));
+    let taken = e.take_hrd_pending();
+    assert_eq!(
+        taken.iter().map(|r| r.call.as_str()).collect::<Vec<_>>(),
+        ["N0CALL"]
+    );
+    assert!(!e.hrd_cancelled(&taken[0]), "logged after the purge");
+    e.note_hrd_result(taken[0].clone(), false);
+    assert_eq!(
+        e.take_hrd_pending().len(),
+        1,
+        "a failed send waits for the next tick"
+    );
+}
