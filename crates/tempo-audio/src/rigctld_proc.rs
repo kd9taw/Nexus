@@ -464,6 +464,28 @@ pub struct KeyingFacts {
     pub rts_keys: bool,
 }
 
+/// The holds a port can take. On a port with no modem lines at all
+/// ([`crate::ports::has_no_modem_lines`], a pseudo-terminal such as wfview's virtual port) every
+/// `<line>_state` is dropped: Hamlib's `port_open` sets each one with `TIOCMBIC`/`TIOCMBIS`, a
+/// pseudo-terminal answers `ENOTTY`, and the open is ABORTED (`src/iofunc.c`; observed with 4.6.5 and 4.7.1:
+/// `ser_set_rts: Cannot change RTS - Inappropriate ioctl for device`), so the hold made CAT dead
+/// while holding nothing. There is no line there to key a transmitter, so nothing is given up.
+///
+/// ⚠️ `no_modem_lines` false — every real port — returns `want` unchanged, hold-low included.
+/// The handshake declarations pass through either way: they are termios flags, not ioctls, and
+/// a pseudo-terminal accepts them.
+pub(crate) fn holds_for_port(want: ControlLines, no_modem_lines: bool) -> ControlLines {
+    if !no_modem_lines {
+        return want;
+    }
+    ControlLines {
+        rts: LineState::Untouched,
+        dtr: LineState::Untouched,
+        keying_line: LineState::Untouched,
+        ..want
+    }
+}
+
 fn resolve_lines(
     settable: SettableLines,
     want: ControlLines,
@@ -1654,6 +1676,7 @@ pub fn spawn_rigctld(
         if let Some(why) = handshake_refusal(&want) {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, why));
         }
+        let want = holds_for_port(want, crate::ports::has_no_modem_lines(addr));
         resolve_lines(settable_lines_for(model, ptt_line), want, deliberate)
     };
     let args = rigctld_args(model, addr, baud, tcp_port, network, ptt_line, lines);
@@ -2494,6 +2517,64 @@ mod tests {
         assert!(
             holds(&args, "dtr", "OFF"),
             "DTR left high on connect: {args:?}"
+        );
+    }
+
+    /// ⭐ TRANSMIT SAFETY: a REAL port keeps both holds. [`holds_for_port`] drops them only for a
+    /// port proved to have no modem lines; for every other port the arguments are the ones the
+    /// hold-low default always produced, through the same narrowing [`spawn_rigctld`] applies,
+    /// on an Icom (both lines settable) and with the operator's High wish too. The virtual
+    /// port beside it gets no `<line>_state` at all — the one difference.
+    #[test]
+    fn a_real_port_keeps_its_holds_and_only_a_virtual_one_drops_them() {
+        let settable = SettableLines {
+            rts: true,
+            dtr: true,
+            ..SettableLines::default()
+        };
+        for want in [ControlLines::hold_low(), high_both()] {
+            let args = |no_lines: bool| {
+                let lines = resolve_lines(settable, holds_for_port(want, no_lines), false);
+                rigctld_args(3073, "/dev/ttyUSB0", 115200, 4532, false, None, lines)
+            };
+            let level = if want.rts == LineState::High {
+                "ON"
+            } else {
+                "OFF"
+            };
+            let real = args(false);
+            assert!(holds(&real, "rts", level), "{real:?}");
+            assert!(holds(&real, "dtr", level), "{real:?}");
+            assert_eq!(
+                real,
+                rigctld_args(
+                    3073,
+                    "/dev/ttyUSB0",
+                    115200,
+                    4532,
+                    false,
+                    None,
+                    resolve_lines(settable, want, false)
+                ),
+                "a real port's arguments are exactly as before"
+            );
+            let virt = args(true);
+            assert!(
+                !virt
+                    .iter()
+                    .any(|a| a.ends_with("_state=OFF") || a.ends_with("_state=ON")),
+                "no line hold on a port with no lines: {virt:?}"
+            );
+        }
+        // The keying-line declaration is a line hold too.
+        let keyed = ControlLines {
+            keying_line: LineState::Low,
+            ..ControlLines::hold_low()
+        };
+        assert_eq!(holds_for_port(keyed, false), keyed);
+        assert_eq!(
+            holds_for_port(keyed, true).keying_line,
+            LineState::Untouched
         );
     }
 

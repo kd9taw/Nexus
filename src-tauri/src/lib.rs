@@ -30247,6 +30247,15 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
                     // Let the OS finish tearing the just-dropped COM port down (Windows
                     // frees it asynchronously after the daemon exits).
                     std::thread::sleep(Duration::from_millis(300));
+                }
+                // A virtual port has no baud to find: say so instead of sweeping. Asked once
+                // the loop has let go of it, so our own daemon's exclusive open cannot hide it.
+                if released && tempo_audio::ports::has_no_modem_lines(&port) {
+                    detail = format!(
+                        "{detail} {}",
+                        tempo_audio::baud_ladder::SWEEP_SKIPPED_VIRTUAL_PORT
+                    );
+                } else if released {
                     // WHICH ladder is asked of Hamlib, never assumed from the model: a rig that
                     // publishes a `civaddr` speaks CI-V and gets the fast raw probe; every
                     // other serial rig gets the Hamlib ladder. Both run on the blocking pool —

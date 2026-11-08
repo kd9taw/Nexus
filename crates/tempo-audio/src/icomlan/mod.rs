@@ -365,6 +365,8 @@ impl IcomLanDaemon {
         let link = Link {
             deadline: LAN_DEADLINE,
             keying: KeyingPolicy::Refused(KEYING_REFUSED),
+            // The radio takes one network client, so nothing else is on this bus.
+            shared: false,
         };
         let civ = match CivDaemon::start_with_link(
             Box::new(io::LanCivIo::new(inbox, outbox)),

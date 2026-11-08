@@ -203,6 +203,22 @@ impl CivEngine {
         model: Option<IcomModel>,
         deadline: Duration,
     ) -> CivEngine {
+        Self::start_on_bus(io, radio_addr, model, deadline, false)
+    }
+
+    /// [`Self::start_with_deadline`] on a bus another controller may share (`shared`): a
+    /// virtual port another program forwards to the radio it is also driving. There the engine
+    /// never sends the scope-OFF frame (`27 11 00`), at start or after: the radio has one
+    /// waveform output, and turning it off would stop the other program's waterfall as well.
+    /// Turning it ON is still sent when the scope is wanted; it is what the other program wants
+    /// too. The cost of a scope left on is a stream this engine reads and drops.
+    pub fn start_on_bus(
+        io: Box<dyn CivIo>,
+        radio_addr: u8,
+        model: Option<IcomModel>,
+        deadline: Duration,
+        shared: bool,
+    ) -> CivEngine {
         let (tx, rx) = mpsc::channel::<CivRequest>();
         let state = Arc::new(Mutex::new(CivState::default()));
         let scope_row = Arc::new(Mutex::new(ScopeQueue::default()));
@@ -223,6 +239,7 @@ impl CivEngine {
                         radio_addr,
                         model,
                         deadline,
+                        shared,
                         rx,
                         state,
                         scope_row,
@@ -356,6 +373,7 @@ fn engine_loop(
     radio_addr: u8,
     model: Option<IcomModel>,
     deadline: Duration,
+    shared: bool,
     rx: mpsc::Receiver<CivRequest>,
     state: Arc<Mutex<CivState>>,
     scope_row: Arc<Mutex<ScopeQueue>>,
@@ -392,12 +410,15 @@ fn engine_loop(
         // Keep the radio's waveform-output state in sync with the wanted flag.
         let want_scope = scope_enabled.load(Ordering::Relaxed);
         if scope_sent != Some(want_scope) {
-            for f in scope_stream_frames(radio_addr, want_scope) {
-                internal.push_back(CivRequest {
-                    frame: f,
-                    expect: Expect::Ack,
-                    reply_to: None,
-                });
+            // On a shared bus the OFF is never sent ([`CivEngine::start_on_bus`]).
+            if want_scope || !shared {
+                for f in scope_stream_frames(radio_addr, want_scope) {
+                    internal.push_back(CivRequest {
+                        frame: f,
+                        expect: Expect::Ack,
+                        reply_to: None,
+                    });
+                }
             }
             scope_sent = Some(want_scope);
         }
@@ -2086,6 +2107,39 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         sent(regs, &SCOPE_ON_9700[2])
+    }
+
+    /// ⭐ ON A SHARED BUS THE SCOPE IS NEVER TURNED OFF. Another program on the same radio (wfview
+    /// behind its virtual port) is drawing its own waterfall from the one waveform output, so the
+    /// `27 11 00` an ordinary bus gets at start and on every disable would blank it. The enable
+    /// still goes out. The ordinary bus is pinned alongside, so the rule cannot leak to it.
+    #[test]
+    fn a_shared_bus_never_turns_the_scope_off() {
+        const OFF_9700: [u8; 8] = [0xFE, 0xFE, 0xA2, 0xE0, 0x27, 0x11, 0x00, 0xFD];
+        for shared in [true, false] {
+            let (radio, _push) = FakeRadio::new(0xA2);
+            let regs = radio.regs();
+            let eng = CivEngine::start_on_bus(
+                Box::new(radio),
+                0xA2,
+                Some(IcomModel::Ic9700),
+                REQUEST_DEADLINE,
+                shared,
+            );
+            let h = eng.handle();
+            poll_dial_for(&h, Duration::from_millis(200));
+            eng.set_scope_enabled(true);
+            poll_dial_for(&h, Duration::from_millis(200));
+            assert_eq!(wait_enables(&regs, 1), 1, "shared={shared}: the enable");
+            eng.set_scope_enabled(false);
+            poll_dial_for(&h, Duration::from_millis(300));
+            let offs = sent(&regs, &OFF_9700);
+            if shared {
+                assert_eq!(offs, 0, "no scope-off on a shared bus");
+            } else {
+                assert_eq!(offs, 2, "an ordinary bus: at start, and on the disable");
+            }
+        }
     }
 
     /// ⭐ A RADIO SWITCHED OFF AND ON AGAIN WHILE THE PORT STAYS OPEN GETS ITS SCOPE BACK. The

@@ -316,7 +316,14 @@ pub fn same_port(a: &str, b: &str) -> bool {
 /// rewrites the file, but a rig that was unplugged at launch is only ever healed here.
 ///
 /// Logs the substitution once per session (the open path re-runs every settings tick).
+///
+/// Also expands a leading `~/` to the home directory on macOS and Linux
+/// ([`expand_home_with`]): the path another program gives its virtual port is often written
+/// that way (`~/Downloads/rig-pty1`), and nothing below a shell expands it — rigctld and the
+/// serial open would look for a directory literally named `~`.
 pub fn heal_stored_port(port: String) -> String {
+    #[cfg(unix)]
+    let port = expand_home_with(port, std::env::var_os("HOME").as_deref());
     #[cfg(target_os = "macos")]
     if let Some(cu) = heal_tty_twin_with(&port, |p| std::path::Path::new(p).exists()) {
         static NOTED: std::sync::Once = std::sync::Once::new();
@@ -330,6 +337,123 @@ pub fn heal_stored_port(port: String) -> String {
         return cu;
     }
     port
+}
+
+/// `~/rest` → `<home>/rest`; every other name (and a missing or empty home) is returned as
+/// it came. Only the `~/` form: `~user/` would need the password database, and no program
+/// that makes a virtual port hands out that spelling. The home is a parameter so the rule is
+/// testable without touching the process environment.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn expand_home_with(port: String, home: Option<&std::ffi::OsStr>) -> String {
+    match (
+        port.trim_start().strip_prefix("~/"),
+        home.and_then(|h| h.to_str()),
+    ) {
+        (Some(rest), Some(home)) if !home.is_empty() => {
+            format!("{}/{rest}", home.trim_end_matches('/'))
+        }
+        _ => port,
+    }
+}
+
+/// Does this serial path PROVABLY have no modem-control lines (RTS, DTR, CTS, DSR, DCD)? True
+/// for a pseudo-terminal: the virtual port another program (wfview, socat) makes and forwards
+/// to a radio. False — the safe answer — for everything else, and whenever it cannot be
+/// proved.
+///
+/// ⚠️ TRANSMIT SAFETY. The callers drop the RTS/DTR hold-low on a `true` (and skip setting a
+/// baud), and on a real serial port that hold is what stops an RTS- or DTR-keyed interface
+/// from keying the radio the moment the port opens. So `true` needs positive proof, in two
+/// steps:
+/// 1. A port the OS enumerates as hardware (`serialport::available_ports`, the raw list
+///    without Nexus's virtual-port unions) is never even probed: it keeps its holds exactly
+///    as before, and opening it here would raise its lines for a moment.
+/// 2. Anything else is opened and asked for its modem lines (`TIOCMGET`), and only the
+///    driver's own "no such ioctl" (`ENOTTY`, or `EINVAL`) counts. A real UART answers the
+///    question; an open that fails, a busy port, or any other error all mean "keep the
+///    holds".
+///
+/// Off Unix, and without the `serial` feature, this is always false: Windows has no
+/// pseudo-terminals (its virtual COM pairs emulate the lines), and a build that cannot
+/// enumerate cannot do step 1.
+pub fn has_no_modem_lines(port: &str) -> bool {
+    #[cfg(all(unix, feature = "serial"))]
+    {
+        let hardware = || match serialport::available_ports() {
+            Ok(ports) => ports.into_iter().map(|p| p.port_name).collect(),
+            Err(_) => Vec::new(),
+        };
+        let absent = lacks_modem_lines_with(port, hardware, ask_modem_lines);
+        if absent {
+            static NOTED: std::sync::Once = std::sync::Once::new();
+            NOTED.call_once(|| {
+                tempo_core::applog::info(
+                    "cat",
+                    &format!(
+                        "{port} is a virtual port (no RTS/DTR lines, no baud): opening it \
+                         without holding the lines or setting a rate"
+                    ),
+                );
+            });
+        }
+        absent
+    }
+    #[cfg(not(all(unix, feature = "serial")))]
+    {
+        let _ = port;
+        false
+    }
+}
+
+/// [`has_no_modem_lines`] with the enumeration and the probe as parameters, so the
+/// real-port arm is testable with a fake that answers like a UART.
+#[cfg(unix)]
+#[cfg_attr(not(feature = "serial"), allow(dead_code))]
+fn lacks_modem_lines_with(
+    port: &str,
+    hardware: impl FnOnce() -> Vec<String>,
+    probe: impl FnOnce(&std::path::Path) -> std::io::Result<()>,
+) -> bool {
+    let port = port.trim();
+    if port.is_empty() {
+        return false;
+    }
+    let named = std::path::Path::new(port);
+    // A symlink (wfview's `rig-ptyN`, a udev `by-id` name) is judged by the node it points at.
+    let real = std::fs::canonicalize(named).unwrap_or_else(|_| named.to_path_buf());
+    let listed = hardware()
+        .iter()
+        .any(|h| std::path::Path::new(h) == named || std::path::Path::new(h) == real);
+    !listed && no_such_ioctl(&probe(&real))
+}
+
+/// Is this the driver saying the modem-line ioctl does not exist? `ENOTTY` is what Linux and
+/// macOS pseudo-terminals answer; `EINVAL` is the other spelling a driver with no modem lines
+/// uses. Nothing else counts.
+#[cfg(unix)]
+#[cfg_attr(not(feature = "serial"), allow(dead_code))]
+fn no_such_ioctl(probe: &std::io::Result<()>) -> bool {
+    matches!(probe, Err(e) if matches!(e.raw_os_error(), Some(c) if c == libc::ENOTTY || c == libc::EINVAL))
+}
+
+/// Open `path` without making it the controlling terminal or waiting for carrier, and read its
+/// modem lines once. Closing it again is the whole cleanup.
+#[cfg(all(unix, feature = "serial"))]
+fn ask_modem_lines(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::io::AsRawFd;
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOCTTY | libc::O_NONBLOCK)
+        .open(path)?;
+    let mut bits: libc::c_int = 0;
+    // SAFETY: `f` owns a valid descriptor for the whole call, and TIOCMGET writes exactly one
+    // `c_int` through the pointer.
+    if unsafe { libc::ioctl(f.as_raw_fd(), libc::TIOCMGET, &mut bits) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// A USB serial port plus the descriptor fields zero-config setup reads to identify
@@ -868,5 +992,121 @@ mod tests {
         // We can't assert hardware is present; just prove the function exists
         // and returns a Vec in either build configuration.
         let _ports: Vec<String> = available_ports();
+    }
+
+    /// `~/` is the home directory and nothing else is touched: no home, an empty home, `~user/`
+    /// and a mid-path tilde all come back as they were.
+    #[test]
+    fn a_leading_tilde_slash_is_the_home_directory() {
+        let home = Some(std::ffi::OsStr::new("/Users/op"));
+        let x = |p: &str, h| expand_home_with(p.to_string(), h);
+        assert_eq!(
+            x("~/Downloads/rig-pty1", home),
+            "/Users/op/Downloads/rig-pty1"
+        );
+        assert_eq!(
+            x("~/rig-pty1", Some(std::ffi::OsStr::new("/home/op/"))),
+            "/home/op/rig-pty1"
+        );
+        assert_eq!(x("~/rig-pty1", None), "~/rig-pty1");
+        assert_eq!(
+            x("~/rig-pty1", Some(std::ffi::OsStr::new(""))),
+            "~/rig-pty1"
+        );
+        assert_eq!(x("~op/rig-pty1", home), "~op/rig-pty1");
+        assert_eq!(x("/dev/cu.usbserial-A", home), "/dev/cu.usbserial-A");
+        assert_eq!(x("/tmp/a~/b", home), "/tmp/a~/b");
+        assert_eq!(x("COM5", home), "COM5");
+    }
+
+    /// ⭐ TRANSMIT SAFETY: a port shaped like a real one keeps its RTS/DTR holds. A port the OS
+    /// lists as hardware is never even opened by the probe; an unlisted one that answers the
+    /// modem-line question like a UART, or fails in any way but "no such ioctl", is not
+    /// virtual. Only `ENOTTY`/`EINVAL` from the ioctl itself makes a port virtual.
+    #[cfg(unix)]
+    #[test]
+    fn only_the_drivers_no_such_ioctl_makes_a_port_virtual() {
+        let err = |c: i32| -> std::io::Result<()> { Err(std::io::Error::from_raw_os_error(c)) };
+        let listed = || {
+            vec![
+                "/dev/ttyUSB0".to_string(),
+                "/dev/cu.usbserial-A".to_string(),
+            ]
+        };
+        let never_probe = |_: &std::path::Path| -> std::io::Result<()> {
+            panic!("a listed hardware port must not be opened by the probe")
+        };
+        assert!(!lacks_modem_lines_with("/dev/ttyUSB0", listed, never_probe));
+        assert!(!lacks_modem_lines_with(
+            " /dev/cu.usbserial-A ",
+            listed,
+            never_probe
+        ));
+        // Unlisted, and answering like a UART: not virtual.
+        assert!(!lacks_modem_lines_with(
+            "/dev/ttyUSB7",
+            Vec::new,
+            |_| Ok(())
+        ));
+        for c in [
+            libc::EIO,
+            libc::EBUSY,
+            libc::EACCES,
+            libc::ENOENT,
+            libc::EPERM,
+            libc::ENXIO,
+        ] {
+            assert!(
+                !lacks_modem_lines_with("/dev/ttyUSB7", Vec::new, |_| err(c)),
+                "errno {c} keeps the holds"
+            );
+        }
+        for c in [libc::ENOTTY, libc::EINVAL] {
+            assert!(lacks_modem_lines_with("/dev/pts/9", Vec::new, |_| err(c)));
+        }
+        assert!(!lacks_modem_lines_with("", Vec::new, |_| err(libc::ENOTTY)));
+        assert!(!lacks_modem_lines_with("   ", Vec::new, |_| err(
+            libc::ENOTTY
+        )));
+    }
+
+    /// A pseudo-terminal pair, as a virtual-port program makes one: the master end (held open
+    /// by the caller, as that program holds it) and the slave's path.
+    #[cfg(target_os = "linux")]
+    fn open_pty() -> (std::fs::File, String) {
+        use std::os::unix::io::FromRawFd;
+        // SAFETY: plain libc calls on a descriptor this function owns; `ptsname_r` writes at
+        // most `buf.len()` bytes, NUL-terminated.
+        unsafe {
+            let m = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            assert!(m >= 0, "posix_openpt");
+            assert_eq!(libc::grantpt(m), 0);
+            assert_eq!(libc::unlockpt(m), 0);
+            let mut buf = [0 as libc::c_char; 128];
+            assert_eq!(libc::ptsname_r(m, buf.as_mut_ptr(), buf.len()), 0);
+            let name = std::ffi::CStr::from_ptr(buf.as_ptr())
+                .to_string_lossy()
+                .into_owned();
+            (std::fs::File::from_raw_fd(m), name)
+        }
+    }
+
+    /// The real probe on a real pseudo-terminal, directly and through a symlink the way wfview
+    /// hands one out (`rig-ptyN`): virtual. A missing path is not.
+    #[cfg(all(target_os = "linux", feature = "serial"))]
+    #[test]
+    fn a_pseudo_terminal_is_virtual_directly_and_through_its_symlink() {
+        let (_master, slave) = open_pty();
+        assert!(has_no_modem_lines(&slave), "{slave}");
+        let dir = std::env::temp_dir().join(format!("nexus-pty-link-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let link = dir.join("rig-pty1");
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&slave, &link).expect("symlink");
+        assert!(has_no_modem_lines(&link.to_string_lossy()));
+        assert!(!has_no_modem_lines(
+            &dir.join("nothing-here").to_string_lossy()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

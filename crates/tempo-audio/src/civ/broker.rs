@@ -173,6 +173,11 @@ pub struct Link {
     /// How long the engine waits for one request's reply.
     pub deadline: Duration,
     pub keying: KeyingPolicy,
+    /// Another controller may share this bus: a virtual port another program (wfview) forwards
+    /// to the radio it also drives. The engine then never turns the radio's scope output OFF
+    /// (`27 11 00`), because that would stop the other program's waterfall too; see
+    /// [`super::engine::CivEngine::start_on_bus`].
+    pub shared: bool,
 }
 
 impl Link {
@@ -181,6 +186,7 @@ impl Link {
         Link {
             deadline: super::engine::REQUEST_DEADLINE,
             keying: KeyingPolicy::Allowed,
+            shared: false,
         }
     }
 }
@@ -1828,6 +1834,17 @@ pub struct CivDaemon {
     civ: Arc<CivBackend>,
 }
 
+/// The rate [`CivDaemon::start`] opens a port at: the operator's baud, or none (0) on a virtual
+/// port, which has no rate to set.
+#[cfg(feature = "serial")]
+fn open_baud(baud: u32, virtual_port: bool) -> u32 {
+    if virtual_port {
+        0
+    } else {
+        baud
+    }
+}
+
 impl CivDaemon {
     /// Start on an already-open transport (tests use the in-memory fake radio).
     /// `data_mode` is REQUIRED here for the same reason it is on [`start`]: it reached the wire
@@ -1852,7 +1869,7 @@ impl CivDaemon {
         model: Option<IcomModel>,
         link: Link,
     ) -> std::io::Result<CivDaemon> {
-        let engine = CivEngine::start_with_deadline(io, civ_addr, model, link.deadline);
+        let engine = CivEngine::start_on_bus(io, civ_addr, model, link.deadline, link.shared);
         let listener = TcpListener::bind(("127.0.0.1", tcp_port))?;
         let local_addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
@@ -1941,7 +1958,12 @@ impl CivDaemon {
         data_mode: u8,
         model: Option<IcomModel>,
     ) -> std::io::Result<CivDaemon> {
-        let mut port = serialport::new(port_name, baud)
+        // A virtual port (wfview's, a socat link) has no baud: macOS refuses to set one on a
+        // pseudo-terminal at all (`ENOTTY` from serialport's speed ioctl), so the open would
+        // fail at every rate. Baud 0 is serialport's own "set no rate". It is also a bus
+        // another program may share ([`Link::shared`]). A real port keeps the operator's baud.
+        let virtual_port = crate::ports::has_no_modem_lines(port_name);
+        let mut port = serialport::new(port_name, open_baud(baud, virtual_port))
             .timeout(super::engine::READ_TIMEOUT)
             .open()
             .map_err(std::io::Error::other)?;
@@ -1949,9 +1971,20 @@ impl CivDaemon {
         // control lines would sit asserted for the whole session on an interface wired to key
         // from either. Same rule as every other port Nexus opens; see
         // `control_line::idle_both_lines`. (This path carries real data at the operator's
-        // baud, so it cannot go through `open_control_line_port` and its baud ladder.)
+        // baud, so it cannot go through `open_control_line_port` and its baud ladder.) Called
+        // on a virtual port too: it ignores the errors a port with no lines answers.
         crate::control_line::idle_both_lines(&mut port);
-        Self::start_with_io(Box::new(port), civ_addr, tcp_port, data_mode, model)
+        Self::start_with_link(
+            Box::new(port),
+            civ_addr,
+            tcp_port,
+            data_mode,
+            model,
+            Link {
+                shared: virtual_port,
+                ..Link::serial()
+            },
+        )
     }
 
     /// The CI-V address to drive `model_name` at, when it's a native-capable Icom.
@@ -6058,6 +6091,7 @@ mod tests {
     const REFUSED: Link = Link {
         deadline: super::super::engine::REQUEST_DEADLINE,
         keying: KeyingPolicy::Refused("transmit is off on this connection"),
+        shared: false,
     };
 
     /// ⭐ A LINK THAT MAY NOT KEY sends no key to the radio: `T 1`, `b` and `U VOX 1` are refused
@@ -6155,7 +6189,8 @@ mod tests {
         );
     }
 
-    /// The serial link is the daemon as it always was: the engine's own 300 ms and keying.
+    /// The serial link is the daemon as it always was: the engine's own 300 ms and keying, and a
+    /// bus no other controller shares.
     #[test]
     fn the_serial_link_is_the_daemon_as_it_always_was() {
         assert_eq!(
@@ -6163,6 +6198,7 @@ mod tests {
             Link {
                 deadline: std::time::Duration::from_millis(300),
                 keying: KeyingPolicy::Allowed,
+                shared: false,
             }
         );
     }
@@ -6217,6 +6253,7 @@ mod tests {
         let (wire, took) = teardown_held(Link {
             deadline: crate::icomlan::LAN_DEADLINE,
             keying: KeyingPolicy::Refused(crate::icomlan::KEYING_REFUSED),
+            shared: false,
         });
         assert!(
             took >= Duration::from_millis(4_000),

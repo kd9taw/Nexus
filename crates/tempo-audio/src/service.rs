@@ -5603,11 +5603,16 @@ impl RadioLoop {
     /// One presence check of `port` against an enumeration. Returns true on the ABSENT →
     /// PRESENT edge. An empty enumeration says nothing (no `serial` feature, or the platform
     /// walk failed) and leaves the verdict untouched — it must never read as "absent".
+    ///
+    /// A typed path the enumeration cannot list is judged by the filesystem instead
+    /// ([`typed_port_exists`]): a virtual port another program makes (wfview's
+    /// `~/Downloads/rig-ptyN` on a Mac) is never enumerated, and read against the list alone it
+    /// was "absent" for good, so after a CAT drop the radio never reconnected by itself.
     fn port_watch(&mut self, port: &str, ports: &[String]) -> bool {
         if ports.is_empty() {
             return false;
         }
-        let present = ports.iter().any(|p| p == port);
+        let present = ports.iter().any(|p| p == port) || typed_port_exists(port);
         let returned = self.cat_port_present == Some(false) && present;
         if self.cat_port_present != Some(present) {
             crate::civ::diag::note(&format!(
@@ -19881,6 +19886,14 @@ fn is_link_fault(e: &std::io::Error) -> bool {
         e.kind(),
         TimedOut | UnexpectedEof | ConnectionReset | ConnectionAborted | BrokenPipe | NotConnected
     ) || crate::rig::cat_unreachable(e)
+}
+
+/// Is `port` a typed absolute path (macOS, Linux) whose file is there right now? The presence
+/// half the enumeration cannot supply for a virtual port ([`RadioLoop::port_watch`]). A
+/// real serial device's node goes away when it is unplugged, so this cannot hold one present
+/// that is gone. A Windows `COM5` is not a path and is never judged this way.
+fn typed_port_exists(port: &str) -> bool {
+    cfg!(unix) && port.starts_with('/') && std::path::Path::new(port).exists()
 }
 
 /// The port to follow a rig to when `configured` is absent: exactly one present USB port
@@ -47761,6 +47774,42 @@ mod tests {
             !state.port_watch("COM5", &["COM5".to_string()]),
             "present → present is not an edge"
         );
+    }
+
+    /// ⭐ A TYPED VIRTUAL PORT IS PRESENT WHILE ITS FILE IS THERE. wfview's `~/Downloads/rig-ptyN`
+    /// is never in a Mac's enumeration (which is never empty), so read against the list alone it
+    /// stayed absent for good and a dropped CAT link never reopened by itself. The file going
+    /// away is still absence, and its return is the same rebuild edge a USB port's return is.
+    #[cfg(unix)]
+    #[test]
+    fn a_typed_path_that_exists_is_present_though_never_enumerated() {
+        let dir = std::env::temp_dir().join(format!("nexus-typed-port-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let pty = dir.join("rig-pty1");
+        let pty_s = pty.to_string_lossy().into_owned();
+        let listed = ["/dev/cu.Bluetooth-Incoming-Port".to_string()];
+        let mut state = loop_state();
+        std::fs::write(&pty, b"").expect("stand-in node");
+        assert!(
+            !state.port_watch(&pty_s, &listed),
+            "unknown → present is no edge"
+        );
+        assert_eq!(
+            state.cat_port_present,
+            Some(true),
+            "there, though not listed"
+        );
+        std::fs::remove_file(&pty).expect("rm");
+        assert!(!state.port_watch(&pty_s, &listed));
+        assert_eq!(state.cat_port_present, Some(false), "the file gone: absent");
+        std::fs::write(&pty, b"").expect("back");
+        assert!(
+            state.port_watch(&pty_s, &listed),
+            "absent → present: reopen"
+        );
+        // A Windows name is never looked up on disk, whatever the working directory holds.
+        assert!(!typed_port_exists("COM5"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Following a rig to a NEW port name: exactly one present port with the remembered USB

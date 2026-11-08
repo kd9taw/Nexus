@@ -383,6 +383,16 @@ pub struct LadderGate {
 pub const SWEEP_REFUSED_RTS_KEYS: &str = "Nexus did not try other baud rates: RTS keys your \
      transmitter on this port, and a baud sweep could not hold it unkeyed.";
 
+/// Why a baud sweep on this port is NOT run: it is a virtual port
+/// ([`crate::ports::has_no_modem_lines`]), the kind another program such as wfview makes and
+/// forwards to the radio. It has no baud rate, so every rung would answer the same, and on a Mac
+/// every rung would fail to open — a verdict blaming the rate or the port, both wrong. What can
+/// be wrong is the program behind it, so that is what the sentence points at.
+pub const SWEEP_SKIPPED_VIRTUAL_PORT: &str = "This is a virtual port, made by another program \
+     such as wfview, and a virtual port has no baud rate, so Nexus did not try other rates. \
+     Check that the program is running and connected to the radio, and that this is the port \
+     it made.";
+
 /// Should the sweep be refused? Wherever RTS keys the radio ([`LadderGate::rts_keys`]) and it is
 /// not PROVEN that a rung holds it down. A rung names ONE keying line to Hamlib (`-P`), so with
 /// DTR named RTS keeps the driver's open-time level: refused. With RTS named, `rig_open` lowers

@@ -112,6 +112,42 @@ COM port instead, and Nexus uses that port the way it uses a USB cable:
 3. The audio travels through RS-BA1 too: pick the audio devices RS-BA1 uses on this computer in Nexus's audio
    settings.
 
+### wfview on a Mac or Linux
+
+wfview gives Nexus the radio in two ways. Pick one; don't use both at once.
+
+**Rig control through wfview's rigctld** works as described under *With wfview* above: **Connection: Network**,
+**Rig Model: NET rigctl**, **Network Address** `127.0.0.1:4533`. The RF pane then shows the sound card's spectrum, not
+the radio's scope.
+
+**Rig control and the radio's scope through wfview's virtual serial port:**
+
+1. In wfview, turn on its virtual serial port. On a Mac it appears as `~/Downloads/rig-pty1`, on Linux as
+   `~/rig-pty1` (the number can differ). Use that name, not the `/dev/ttys…` it points at, which changes every time
+   wfview starts.
+2. In Nexus, set **Connection** to **Serial**, pick your Icom's own **Rig Model** (not NET rigctl), and type the name
+   into **Serial Port**. Nexus fills in the `~` itself, and Save does not warn that the port is missing just because
+   it isn't in the list. The baud rate doesn't matter: a virtual port has none.
+3. For the radio's scope, turn on **Native Icom CI-V (early access)**. Nexus then reads the scope through the same
+   port, and it never turns the radio's scope off, so wfview's waterfall keeps running. Changing the span or the
+   reference level in Nexus moves wfview's display too: it is one scope.
+4. **Save**, then **Test CAT**. If it fails, Test CAT says the port is virtual and has no baud rate: check that
+   wfview is running and connected to the radio, and that the name is the one wfview made.
+
+Whether wfview passes the scope on to its virtual port depends on how the radio addresses it. To check, on a Mac with
+wfview's own scope running and Nexus not connected, run this in Terminal:
+
+```
+stty -f ~/Downloads/rig-pty1 raw -echo
+xxd -p -l 65536 ~/Downloads/rig-pty1 | tr -d '\n' | grep -o 'fefe....2700' | sort | uniq -c
+```
+
+On Linux use `stty -F ~/rig-pty1 raw -echo` and the Linux name. Any count means scope data reaches the port. No lines
+means wfview keeps it to itself: rig control still works that way, and the RF pane shows the sound card's spectrum.
+
+Nexus doesn't hold RTS or DTR low on a virtual port, since it has neither line. A real USB or serial port keeps its
+lines held low, as always.
+
 ## IC-9700 — VHF/UHF and 23 cm
 
 The **IC-9700** is fully supported, including the **23 cm band**: Nexus knows the
