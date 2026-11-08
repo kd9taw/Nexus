@@ -918,7 +918,8 @@ mod tests {
     #[test]
     fn no_home_on_any_band_mode_or_class_is_an_allocation_edge() {
         use crate::privileges::{
-            allowed_spans, inside_allocation, tx_span_allowed, SSB_BW_MHZ, US_CLASSES,
+            allowed_spans, inside_allocation, segment_start, tx_span_allowed, SSB_BW_MHZ,
+            US_CLASSES,
         };
         use crate::settings::LicenseClass;
         const BANDS: &[&str] = &[
@@ -945,8 +946,22 @@ mod tests {
                     e.settings.band = band.to_string();
                     let entry = e.prepare_mode_entry(word, true).frequency;
                     let pick = e.prepare_band_pick(band, om);
-                    for (path, home) in [("entry", entry), ("pick", pick)] {
+                    // A LOST HOME FAILS TOO, so "no home" can never pass as "no edge". Phone and
+                    // CW must home on entry wherever the class holds a segment for the section
+                    // (US 60 m is channelised and holds none), and must pick every band the
+                    // Phone/CW menu lists. The one deliberate gap: 2200 m and 630 m, whose only
+                    // start is their edge, keep the dial. 8 m and 5 m hold no row at all.
+                    let voice = matches!(om, OperatingMode::Phone | OperatingMode::Cw);
+                    let unhomed = matches!(band, "2200m" | "630m" | "8m" | "5m");
+                    let want_entry = voice && !unhomed && segment_start(class, band, om).is_some();
+                    let want_pick = voice && !unhomed;
+                    for (path, home, want) in
+                        [("entry", entry, want_entry), ("pick", pick, want_pick)]
+                    {
                         let Some((dial, sideband)) = home else {
+                            if want {
+                                bad.push(format!("{class:?} {band} {word} {path}: no home"));
+                            }
                             continue;
                         };
                         judged += 1;

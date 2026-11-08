@@ -821,9 +821,10 @@ pub fn cw_activity_mhz(band: &str) -> Option<f64> {
 /// [`crate::privileges::cw_home`] take a value only where the class may key it.
 ///
 /// THE QO-100 REPORT: entering Phone on 3 cm with no remembered dial commanded the radio to
-/// 10000.000 MHz, the segment start. Through SDR Console, which maps the downlink dial to the
-/// satellite's uplink by the transponder's 8089.500 MHz offset, that is about 1910.5 MHz, not
-/// amateur spectrum. Every value here was checked on 2026-11-07:
+/// 10000.000 MHz, the segment start. The risk, not verified against SDR Console: if it is set to
+/// derive the satellite's uplink from the downlink dial by the transponder's 8089.500 MHz offset,
+/// that dial could have meant an uplink near 1910.5 MHz, which is not amateur spectrum. Every
+/// value here was checked on 2026-11-07:
 /// - US classes: the ARRL band plan (arrl.org/band-plan) calling frequencies, "222.1 SSB & CW
 ///   calling frequency", "432.10", 903.100 (the regional option the 33 cm listening dial already
 ///   uses), "1296.100", and the National Weak-Signal Calling Frequencies 2304.100, 5760.1 and
