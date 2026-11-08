@@ -7337,6 +7337,7 @@ export const ZH_HANT: PartialCatalog = {
   "amp.swrAtu.title": "在功放調諧器之前測得的駐波比。",
   "amp.temp.unknownScale": "SPE 協議未說明單位是 °C 還是 °F — 功放按其自身顯示設定為準。請檢視功放前面板。",
   "amp.reason.noAnswer": "無響應",
+  "amp.reason.waiting": "正在連線…",
   "amp.reason.portBusy": "連線埠被其他程式佔用",
   "amp.reason.wrongModel": "有響應，但使用的是 Nexus 尚未支援的協議",
   "amp.reason.malformed": "有響應，但內容 Nexus 無法解析",

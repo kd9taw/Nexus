@@ -7335,6 +7335,7 @@ export const ZH: PartialCatalog = {
   "amp.swrAtu.title": "在功放调谐器之前测得的驻波比。",
   "amp.temp.unknownScale": "SPE 协议未说明单位是 °C 还是 °F — 功放按其自身显示设置为准。请查看功放前面板。",
   "amp.reason.noAnswer": "无响应",
+  "amp.reason.waiting": "正在连接…",
   "amp.reason.portBusy": "端口被其他程序占用",
   "amp.reason.wrongModel": "有响应，但使用的是 Nexus 尚未支持的协议",
   "amp.reason.malformed": "有响应，但内容 Nexus 无法解析",

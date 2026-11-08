@@ -56,6 +56,18 @@ describe('the amplifier pane tells the truth about a kilowatt', () => {
     expect(screen.getByText(/port in use/i)).toBeTruthy()
   })
 
+  // BEFORE THE FIRST ANSWER (the engine's not-yet-answered status: not linked, an EMPTY reason, for the first
+  // 0.3-2 s after launch or a radio switch) nothing has failed, so the pane says it is connecting, not
+  // "Not answering". A reason token this page does not know is still read as the fault (the control).
+  it('says it is connecting before the first answer, and still reads an unknown reason as the fault', () => {
+    const first = render(<AmpPane amp={live({ linked: false, reason: '' })} radioOnAir={false} />)
+    expect(screen.getByText('Connecting…')).toBeTruthy()
+    expect(screen.queryByText('Not answering')).toBeNull()
+    first.unmount()
+    render(<AmpPane amp={live({ linked: false, reason: 'aReasonFromALaterBuild' })} radioOnAir={false} />)
+    expect(screen.getByText('Not answering')).toBeTruthy()
+  })
+
   it('shows NO stale reading from a dead link — every value is an em dash', () => {
     // The backend already clears each reading on the first failed poll. This is the second
     // half of the same rule: even a value that somehow survived must not reach the screen.

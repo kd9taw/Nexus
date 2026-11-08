@@ -7953,6 +7953,7 @@ Click for internet feed controls.","{{detail}}
 "5","amp.swrAtu.title","Standing-wave ratio measured before the amplifier's tuner.","在功放调谐器之前测得的驻波比。","",""
 "5","amp.temp.unknownScale","The SPE protocol does not say whether this is °C or °F — the amplifier reports whatever its own display is set to. Check the amplifier's front panel.","SPE 协议未说明单位是 °C 还是 °F — 功放按其自身显示设置为准。请查看功放前面板。","",""
 "5","amp.reason.noAnswer","Not answering","无响应","","The same English text ""Not answering"" is used by 2 different keys (e.g. radioSetup.cat.notAnswering) — each can take a different Russian word, so choose the one that fits THIS screen."
+"5","amp.reason.waiting","Connecting…","正在连接…","","Filled by the maintainer, pending translator review."
 "5","amp.reason.portBusy","Port in use by something else","端口被其他程序占用","",""
 "5","amp.reason.wrongModel","Answering, but in a protocol Nexus does not read yet","有响应，但使用的是 Nexus 尚未支持的协议","Nexus",""
 "5","amp.reason.malformed","Answering with something Nexus cannot read","有响应，但内容 Nexus 无法解析","Nexus",""

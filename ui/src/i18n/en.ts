@@ -15271,6 +15271,9 @@ export const EN = {
   // Why the link is down. Four states, and `wrongModel` is the one that earns its own sentence:
   // a working link on a protocol Nexus does not speak must never read as "no amplifier".
   'amp.reason.noAnswer': 'Not answering',
+  // Before the amplifier's first answer after launch or a radio switch (the engine's not-yet-answered status: an
+  // empty reason). Not a fault: nothing has failed yet.
+  'amp.reason.waiting': 'Connecting…',
   'amp.reason.portBusy': 'Port in use by something else',
   'amp.reason.wrongModel': 'Answering, but in a protocol Nexus does not read yet',
   'amp.reason.malformed': 'Answering with something Nexus cannot read',

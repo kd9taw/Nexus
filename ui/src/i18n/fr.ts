@@ -748,6 +748,7 @@ export const FR: PartialCatalog = {
   "amp.operate": "En service",
   "amp.reason.malformed": "Répond par quelque chose que Nexus ne peut pas lire",
   "amp.reason.noAnswer": "Ne répond pas",
+  "amp.reason.waiting": "Connexion…",
   "amp.reason.portBusy": "Port occupé par autre chose",
   "amp.reason.wrongModel": "Répond, mais dans un protocole que Nexus ne lit pas encore",
   "amp.standby": "En veille",

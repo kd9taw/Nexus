@@ -1845,6 +1845,7 @@ export const DE: PartialCatalog = {
   "amp.swrAtu.title": "Stehwellenverhältnis, gemessen vor dem Tuner der Endstufe.",
   "amp.temp.unknownScale": "Das SPE-Protokoll sagt nicht, ob dies °C oder °F ist — die Endstufe meldet, was auf ihrer eigenen Anzeige eingestellt ist. Sieh auf der Frontplatte nach.",
   "amp.reason.noAnswer": "Antwortet nicht",
+  "amp.reason.waiting": "Verbinde…",
   "amp.reason.portBusy": "Port von etwas anderem belegt",
   "amp.reason.wrongModel": "Antwortet, aber in einem Protokoll, das Nexus noch nicht liest",
   "amp.reason.malformed": "Antwortet mit etwas, das Nexus nicht lesen kann",

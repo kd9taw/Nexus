@@ -7953,6 +7953,7 @@ Click for internet feed controls.","{{detail}}
 "5","amp.swrAtu.title","Standing-wave ratio measured before the amplifier's tuner.","在功放調諧器之前測得的駐波比。","",""
 "5","amp.temp.unknownScale","The SPE protocol does not say whether this is °C or °F — the amplifier reports whatever its own display is set to. Check the amplifier's front panel.","SPE 協議未說明單位是 °C 還是 °F — 功放按其自身顯示設定為準。請檢視功放前面板。","",""
 "5","amp.reason.noAnswer","Not answering","無響應","",""
+"5","amp.reason.waiting","Connecting…","正在連線…","","Filled by the maintainer, pending translator review."
 "5","amp.reason.portBusy","Port in use by something else","連線埠被其他程式佔用","",""
 "5","amp.reason.wrongModel","Answering, but in a protocol Nexus does not read yet","有響應，但使用的是 Nexus 尚未支援的協議","Nexus",""
 "5","amp.reason.malformed","Answering with something Nexus cannot read","有響應，但內容 Nexus 無法解析","Nexus",""

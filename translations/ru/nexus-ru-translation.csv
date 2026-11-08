@@ -8371,6 +8371,7 @@ Click for internet feed controls.","{{detail}}
 "5","amp.swrAtu.title","Standing-wave ratio measured before the amplifier's tuner.","Коэффициент стоячей волны, измеренный перед тюнером усилителя.","",""
 "5","amp.temp.unknownScale","The SPE protocol does not say whether this is °C or °F — the amplifier reports whatever its own display is set to. Check the amplifier's front panel.","Протокол SPE не указывает, в градусах Цельсия или Фаренгейта это — усилитель отображает то, что установлено на его собственном дисплее. Проверьте переднюю панель усилителя.","",""
 "5","amp.reason.noAnswer","Not answering","Не отвечает","","The same English text ""Not answering"" is used by 2 different keys (e.g. radioSetup.cat.notAnswering) — each can take a different Russian word, so choose the one that fits THIS screen."
+"5","amp.reason.waiting","Connecting…","Подключение…","","Filled by the maintainer, pending translator review."
 "5","amp.reason.portBusy","Port in use by something else","Порт используется другим приложением","",""
 "5","amp.reason.wrongModel","Answering, but in a protocol Nexus does not read yet","Отвечает, но по протоколу, который Nexus пока не читает","Nexus",""
 "5","amp.reason.malformed","Answering with something Nexus cannot read","Отвечает чем-то, что Nexus не может прочитать","Nexus",""

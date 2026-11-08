@@ -9727,6 +9727,7 @@ export const JA: PartialCatalog = {
   "amp.swrAtu.title": "アンプ内蔵チューナーの手前で測定した定在波比です。",
   "amp.temp.unknownScale": "SPEプロトコルはこの値が°Cか°Fかを伝えません — アンプは自身の表示設定のままの値を返します。アンプのフロントパネルで確認してください。",
   "amp.reason.noAnswer": "応答なし",
+  "amp.reason.waiting": "接続中…",
   "amp.reason.portBusy": "ポートが他で使用中",
   "amp.reason.wrongModel": "応答はありますが、Nexusが未対応のプロトコルです",
   "amp.reason.malformed": "応答はありますが、Nexusが解釈できない内容です",
