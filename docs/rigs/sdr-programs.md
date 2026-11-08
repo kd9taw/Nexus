@@ -186,8 +186,11 @@ does not tune the uplink.
 - In Phone or CW, pick **3cm** from the band menu. With the **Open** licence
   class it lands on the narrowband transponder: SSB at 10489.700 and CW at
   10489.520. A US class lands on the 10368.100 calling frequency instead,
-  because the US is outside QO-100's footprint. Once you have tuned there,
-  Nexus remembers your frequency on 3 cm.
+  because the US is outside QO-100's footprint. A radio that transmits on
+  3 cm itself (the IC-905) lands there with the Open class too: keyed
+  directly, the transponder frequency would be a terrestrial signal in the
+  satellite's downlink. Once you have tuned there, Nexus remembers your
+  frequency on 3 cm.
 - The last entry in that menu, **QO-100 satellite**, opens the Satellites
   screen on QO-100. Picking its narrowband transponder there tunes the
   downlink. With the satellite uplink mapping left at its default, Nexus

@@ -10755,26 +10755,29 @@ impl Engine {
             // every picker in the app — this one, `band_pick_default`, and the licensed-band
             // command — because two of the three used to recompute it from the bare edge.
             OperatingMode::Phone => {
-                crate::privileges::phone_home(class, &band).map(|(dial, sb)| (dial, sb.to_string()))
+                crate::privileges::phone_home_for(class, &band, self.settings.rig_model)
+                    .map(|(dial, sb)| (dial, sb.to_string()))
             }
-            OperatingMode::Cw => crate::privileges::cw_home(class, &band)
-                // Park on the CW ACTIVITY frequency (20 m → 14.030), NOT the dead band edge
-                // (14.000, where nobody works and your signal would fall out of band),
-                // clamped to the licensed CW-segment start so it never drops below privileges.
-                // THE CW home, which the band-dropdown path (getLicensedBandPlan) reads too, so
-                // switching TO CW mode and picking a band from the dropdown land in one place.
-                .map(|dial| {
-                    // Sideband is inert for CW (the rig-mode policy commands CW or a band-aware
-                    // tone), but keep it self-consistent with the band's convention.
-                    (
-                        dial,
-                        if dial < 10.0 {
-                            "LSB".to_string()
-                        } else {
-                            "USB".to_string()
-                        },
-                    )
-                }),
+            OperatingMode::Cw => {
+                crate::privileges::cw_home_for(class, &band, self.settings.rig_model)
+                    // Park on the CW ACTIVITY frequency (20 m → 14.030), NOT the dead band edge
+                    // (14.000, where nobody works and your signal would fall out of band),
+                    // clamped to the licensed CW-segment start so it never drops below privileges.
+                    // THE CW home, which the band-dropdown path (getLicensedBandPlan) reads too, so
+                    // switching TO CW mode and picking a band from the dropdown land in one place.
+                    .map(|dial| {
+                        // Sideband is inert for CW (the rig-mode policy commands CW or a band-aware
+                        // tone), but keep it self-consistent with the band's convention.
+                        (
+                            dial,
+                            if dial < 10.0 {
+                                "LSB".to_string()
+                            } else {
+                                "USB".to_string()
+                            },
+                        )
+                    })
+            }
             // RTTY: park on the band's RTTY watering hole (the built-in plan the cockpit's
             // band selector serves) — only if the operator may key the RTTY emission there.
             OperatingMode::Rtty => self
@@ -11018,10 +11021,12 @@ impl Engine {
             // clear of the segment edge — the unkeyable 7.1250 an Extra once landed on) and the
             // CW activity dial; a receive-only row carries the listening dial, where the
             // transmit gate, which this does not consult, refuses the over as the row's lock says.
-            OperatingMode::Phone | OperatingMode::Cw => crate::bandplan::licensed_bands(class, om)
-                .into_iter()
-                .find(|c| c.band == band)
-                .map(|c| (c.dial_mhz, c.mode)),
+            OperatingMode::Phone | OperatingMode::Cw => {
+                crate::bandplan::licensed_bands_for(class, om, self.settings.rig_model)
+                    .into_iter()
+                    .find(|c| c.band == band)
+                    .map(|c| (c.dial_mhz, c.mode))
+            }
             OperatingMode::Digital => self
                 .band_plan()
                 .into_iter()

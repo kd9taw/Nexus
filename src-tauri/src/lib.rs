@@ -30249,11 +30249,15 @@ fn set_license_class(state: State<'_, SharedEngine>, class: String) -> Result<Ap
 /// home dial. Split out of [`get_licensed_band_plan`] so the list and the privilege filter
 /// that trims it can be driven directly by a test, with no engine and no Tauri state — the
 /// band that is MISSING from a list is invisible to every test that goes through the command.
+///
+/// `rig_model` is the radio's Hamlib model (0 = unknown): the 3 cm home follows whether it
+/// transmits there itself (`tempo_app::bandplan::activity_home_mhz`).
 fn licensed_bands(
     class: tempo_app::settings::LicenseClass,
     mode: tempo_app::settings::OperatingMode,
+    rig_model: u32,
 ) -> Vec<tempo_app::bandplan::BandChannel> {
-    tempo_app::bandplan::licensed_bands(class, mode)
+    tempo_app::bandplan::licensed_bands_for(class, mode, rig_model)
 }
 
 /// The bands the operator may use in the CURRENT operating mode, each parked at the START of
@@ -30319,7 +30323,9 @@ fn get_licensed_band_plan(
         "cw" => OperatingMode::Cw,
         _ => OperatingMode::Digital,
     };
-    Ok(licensed_bands(class, mode))
+    // The rows the band pick lands on (`Engine::band_pick_default`): this radio's, whose 3 cm
+    // home follows whether it transmits there itself.
+    Ok(licensed_bands(class, mode, eng.settings().rig_model))
 }
 
 /// Change band / dial frequency / mode live (does not reset the operating mode).
@@ -57432,7 +57438,7 @@ mod tests {
         use tempo_app::settings::LicenseClass::Open;
         use tempo_app::settings::OperatingMode::{Cw, Phone};
         let ch = |class, mode| {
-            super::licensed_bands(class, mode)
+            super::licensed_bands(class, mode, 0)
                 .into_iter()
                 .find(|c| c.band == "4m")
         };
@@ -57474,7 +57480,7 @@ mod tests {
                 );
                 // A Novice holds no 2 m: 1.25 m and 23 cm are its VHF-and-up bands.
                 assert!(
-                    super::licensed_bands(class, mode)
+                    super::licensed_bands(class, mode, 0)
                         .iter()
                         .any(|c| c.group == "VHF" && c.tx),
                     "control: {class:?} {mode:?} still gets the VHF bands they do hold"
@@ -69730,7 +69736,7 @@ mod tests {
     fn a_band_you_cannot_key_is_still_listed_for_listening() {
         use tempo_app::settings::{LicenseClass, OperatingMode};
 
-        let general = crate::licensed_bands(LicenseClass::General, OperatingMode::Digital);
+        let general = crate::licensed_bands(LicenseClass::General, OperatingMode::Digital, 0);
         let four = general
             .iter()
             .find(|c| c.band == "4m")
@@ -69764,7 +69770,7 @@ mod tests {
         ));
 
         // A Technician has no 20 m data privilege — listed, and marked receive-only.
-        let tech = crate::licensed_bands(LicenseClass::Technician, OperatingMode::Digital);
+        let tech = crate::licensed_bands(LicenseClass::Technician, OperatingMode::Digital, 0);
         let t20 = tech
             .iter()
             .find(|c| c.band == "20m")
@@ -69775,7 +69781,7 @@ mod tests {
         );
 
         // Open (non-US / undeclared) keeps everything transmit-capable.
-        let open = crate::licensed_bands(LicenseClass::Open, OperatingMode::Digital);
+        let open = crate::licensed_bands(LicenseClass::Open, OperatingMode::Digital, 0);
         assert!(
             open.iter().all(|c| c.tx),
             "the Open class is trusted everywhere and must show nothing as receive-only"

@@ -938,10 +938,15 @@ mod tests {
         classes.push(LicenseClass::Open);
         let mut bad = Vec::new();
         let mut judged = 0;
-        for &class in &classes {
+        // An unknown radio, and the IC-905, which transmits on 3 cm itself and homes there by rig.
+        for (rig, &class) in [0, 3090]
+            .into_iter()
+            .flat_map(|r| classes.iter().map(move |c| (r, c)))
+        {
             for &band in BANDS {
                 for (word, om) in sections {
                     let mut e = station();
+                    e.settings.rig_model = rig;
                     e.settings.license_class = class;
                     e.settings.band = band.to_string();
                     let entry = e.prepare_mode_entry(word, true).frequency;
@@ -960,7 +965,9 @@ mod tests {
                     {
                         let Some((dial, sideband)) = home else {
                             if want {
-                                bad.push(format!("{class:?} {band} {word} {path}: no home"));
+                                bad.push(format!(
+                                    "rig {rig} {class:?} {band} {word} {path}: no home"
+                                ));
                             }
                             continue;
                         };
@@ -994,7 +1001,7 @@ mod tests {
                         let keyable = !holds || channel || tx_span_allowed(class, lo, hi, om);
                         if !inside || !keyable {
                             bad.push(format!(
-                                "{class:?} {band} {word} {path}: {dial:.4} {sideband} \
+                                "rig {rig} {class:?} {band} {word} {path}: {dial:.4} {sideband} \
                                  (inside={inside} keyable={keyable})"
                             ));
                         }
@@ -1047,6 +1054,47 @@ mod tests {
             let down = enter(Open, "3cm", word).unwrap();
             let up = enter(Open, "13cm", word).unwrap();
             assert!((down - up - 8089.5).abs() < 1e-9, "{word}: {down} / {up}");
+        }
+    }
+
+    /// THE 3 CM HOME BY RIG (operator, 2026-11-07: "Yes, by rig"). An `Open` station whose radio
+    /// transmits on 3 cm itself (the IC-905, Hamlib 3090) homes to the 10368.100 terrestrial
+    /// calling frequency: keyed directly, 10489.700 would be a terrestrial signal in QO-100's
+    /// downlink. An SDR program (SDR Console is Hamlib 2056; Thetis 2054), whose 3 cm dial is the
+    /// QO-100 downlink it maps to the uplink itself, and a radio Nexus does not know (model 0)
+    /// keep the narrowband transponder. 13 cm keeps 2400.200 on every rig: keyed directly there it
+    /// IS the QO-100 uplink. Entry and the band pick agree, and the band menu lists that dial.
+    #[test]
+    fn the_open_3cm_home_follows_the_rig() {
+        use crate::settings::LicenseClass::Open;
+        let close = |got: Option<f64>, want: f64| got.is_some_and(|f| (f - want).abs() < 1e-9);
+        for (rig, phone3, cw3) in [
+            (3090, 10368.100, 10368.100),
+            (2056, 10489.700, 10489.520),
+            (2054, 10489.700, 10489.520),
+            (0, 10489.700, 10489.520),
+        ] {
+            for (band, word, om, want) in [
+                ("3cm", "phone", OperatingMode::Phone, phone3),
+                ("3cm", "cw", OperatingMode::Cw, cw3),
+                ("13cm", "phone", OperatingMode::Phone, 2400.200),
+                ("13cm", "cw", OperatingMode::Cw, 2400.020),
+            ] {
+                let mut e = station();
+                e.settings.license_class = Open;
+                e.settings.rig_model = rig;
+                e.settings.band = band.to_string();
+                let entry = e.prepare_mode_entry(word, true).frequency.map(|(f, _)| f);
+                let pick = e.prepare_band_pick(band, om).map(|(f, _)| f);
+                assert!(
+                    close(entry, want),
+                    "rig {rig} {band} {word} entry: want {want}, got {entry:?}"
+                );
+                assert!(
+                    close(pick, want),
+                    "rig {rig} {band} {word} pick: want {want}, got {pick:?}"
+                );
+            }
         }
     }
 }
