@@ -8813,7 +8813,7 @@ export const EN = {
   'settings.headphoneMonitor.level.aria': 'Receive listening level',
   // #468: the same level as a slider in the top bar, shown while receive audio plays here.
   'topbar.listen.title':
-    'Listening level {{pct}}%: how loud Nexus plays the receive audio on this computer (Settings ▸ Radio ▸ Receive audio on this computer)',
+    'Listening level {{pct}}%: how loud Nexus plays the receive audio on this computer (Settings ▸ Radio ▸ Receive audio on this computer). Click to change.',
   'settings.headphoneMonitor.level.hint':
     'Headphone listening volume (does not affect TX).',
 

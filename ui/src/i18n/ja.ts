@@ -5613,7 +5613,7 @@ export const JA: PartialCatalog = {
   "settings.headphoneMonitor.device.linuxHint": "Linux ではカード名（hw: または plughw:）で選んでください。システム既定、pulse、pipewire は無線機のカードである可能性があるため、そこでは受信音を再生しません。",
   "settings.headphoneMonitor.level.label": "再生音量",
   "settings.headphoneMonitor.level.aria": "受信音の再生音量",
-  "topbar.listen.title": "再生音量 {{pct}}%：Nexus がこのコンピューターで受信音を鳴らす音量（設定 ▸ 無線機 ▸ このコンピューターでの受信音）",
+  "topbar.listen.title": "再生音量 {{pct}}%：Nexus がこのコンピューターで受信音を鳴らす音量（設定 ▸ 無線機 ▸ このコンピューターでの受信音）クリックで変更できます。",
   "settings.headphoneMonitor.level.hint": "ヘッドホンで聞く音量です（TXには影響しません）。",
   "settings.scopeSource.legend": "スコープの入力元",
   "settings.scopeSource.note": "RFスコープの表示をどこから取るか：無線機自身のパンアダプター（無線機にない場合はサウンドカードの音声）、またはSDRconnect経由のSDRplay RSP受信機です。SDRconnectはSDRplay社の無料・非公開ソースのプログラムで、WebSocket APIを有効にしてNexusと並べて起動します。初代RSP1を除くすべてのRSPに対応しています。",

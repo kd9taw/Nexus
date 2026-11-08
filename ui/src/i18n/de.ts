@@ -1125,7 +1125,7 @@ export const DE: PartialCatalog = {
   "settings.headphoneMonitor.device.linuxHint": "Unter Linux wählen Sie es über den Kartennamen (hw: oder plughw:): Auf dem Systemstandard, pulse oder pipewire wird kein Empfangsaudio wiedergegeben, denn dahinter kann die Karte des Funkgeräts stecken.",
   "settings.headphoneMonitor.level.label": "Wiedergabepegel",
   "settings.headphoneMonitor.level.aria": "Wiedergabepegel für Empfangsaudio",
-  "topbar.listen.title": "Wiedergabepegel {{pct}} %: wie laut Nexus das Empfangsaudio auf diesem Computer abspielt (Einstellungen ▸ Funkgerät ▸ Empfangsaudio auf diesem Computer)",
+  "topbar.listen.title": "Wiedergabepegel {{pct}} %: wie laut Nexus das Empfangsaudio auf diesem Computer abspielt (Einstellungen ▸ Funkgerät ▸ Empfangsaudio auf diesem Computer). Zum Ändern klicken.",
   "settings.headphoneMonitor.level.hint": "Wiedergabelautstärke am Kopfhörer (ohne Einfluss auf TX).",
   "settings.scopeSource.legend": "Scope-Quelle",
   "settings.scopeSource.note": "Woher das Bild des HF-Scopes kommt: vom eigenen Panadapter des Funkgeräts (oder vom Audio der Soundkarte, wo das Funkgerät keinen hat) oder von einem SDRplay-RSP-Empfänger über SDRconnect. SDRconnect ist SDRplays eigenes Programm, kostenlos und nicht quelloffen; Sie installieren es und lassen es neben Nexus mit eingeschalteter WebSocket-API laufen. Es unterstützt jeden RSP außer dem ursprünglichen RSP1.",

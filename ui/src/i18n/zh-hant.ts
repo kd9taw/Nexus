@@ -8808,7 +8808,7 @@ export const ZH_HANT: PartialCatalog = {
   "settings.headphoneMonitor.device.hint": "你的耳機或音箱 — 絕不能是電台的 TX 輸出裝置。",
   "settings.headphoneMonitor.level.label": "收聽音量",
   "settings.headphoneMonitor.level.aria": "接收收聽音量",
-  "topbar.listen.title": "收聽音量 {{pct}}%：Nexus 在本機播放接收音訊的音量（設定 ▸ 電台 ▸ 在本機播放接收音訊）",
+  "topbar.listen.title": "收聽音量 {{pct}}%：Nexus 在本機播放接收音訊的音量（設定 ▸ 電台 ▸ 在本機播放接收音訊）點擊即可變更。",
   "settings.headphoneMonitor.level.hint": "耳機收聽的音量（不影響 TX）。",
   "settings.scopeSource.legend": "頻譜來源",
   "settings.scopeSource.note": "射頻頻譜的畫面來自哪裡：電台自帶的全景（電台沒有時用音效卡的音訊），或經 SDRconnect 接入的 SDRplay RSP 接收機。SDRconnect 是 SDRplay 自家的程式，免費但閉源，你在 Nexus 旁邊安裝並執行它，並開啟其 WebSocket API；它支援除初代 RSP1 之外的所有 RSP。",

@@ -7869,7 +7869,7 @@ export const FR: PartialCatalog = {
   "settings.headphoneMonitor.enable.label": "Écouter l'audio de réception ici",
   "settings.headphoneMonitor.legend": "Audio de réception sur cet ordinateur",
   "settings.headphoneMonitor.level.aria": "Niveau d'écoute en réception",
-  "topbar.listen.title": "Niveau d'écoute {{pct}} % : le volume auquel Nexus joue l'audio de réception sur cet ordinateur (Paramètres ▸ Radio ▸ Audio de réception sur cet ordinateur)",
+  "topbar.listen.title": "Niveau d'écoute {{pct}} % : le volume auquel Nexus joue l'audio de réception sur cet ordinateur (Paramètres ▸ Radio ▸ Audio de réception sur cet ordinateur). Cliquez pour le modifier.",
   "settings.headphoneMonitor.level.hint": "Volume d'écoute au casque (sans effet sur le TX).",
   "settings.scopeSource.legend": "Source du scope",
   "settings.scopeSource.note": "D'où vient l'image du scope RF : du panoramique propre à la radio (ou de l'audio de la carte son quand la radio n'en a pas), ou d'un récepteur SDRplay RSP via SDRconnect. SDRconnect est le programme de SDRplay, gratuit et à code fermé, que vous installez et lancez à côté de Nexus avec son API WebSocket activée ; il prend en charge tous les RSP sauf le RSP1 d'origine.",

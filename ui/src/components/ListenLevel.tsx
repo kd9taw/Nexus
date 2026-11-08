@@ -67,7 +67,11 @@ export function ListenLevel({
   }
   const label = t('settings.headphoneMonitor.level.aria')
   return (
-    <RM.Root open={open} onOpenChange={setOpen}>
+    // NOT MODAL: a modal menu turns off pointer events everywhere else while it is open, so the
+    // first click on Stop TX would only close this popover. A volume control is open while the
+    // operator listens, which is exactly when Stop TX may be needed: a click outside closes the
+    // popover AND reaches what it lands on.
+    <RM.Root open={open} onOpenChange={setOpen} modal={false}>
       <RM.Trigger asChild>
         <button type="button" className={`${className} listen-trigger`} title={t('topbar.listen.title', { pct })} aria-label={label}>
           {children}

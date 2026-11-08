@@ -8366,8 +8366,8 @@ select optgroup {
   background: var(--accent);
   color: var(--accent-ink);
 }
-/* #468: the listening level's popover, opened from the top bar's speaker chip (its box is
-   cockpit-panes.css's `.listen-chip`). Portaled, so this styles content only. */
+/* #468: the listening level's popover, opened from the top bar's RX level meter (its button box is
+   cockpit-panes.css's `.listen-trigger`). Portaled, so this styles content only. */
 .listen-pop-row {
   display: flex;
   align-items: center;
@@ -10821,6 +10821,14 @@ input.cw-pitch::-webkit-inner-spin-button {
   font-weight: 700;
   letter-spacing: 0.08em;
   color: var(--text-faint);
+}
+/* RTTY's receive head (RX, Arm RX, Auto, the baud picker, the AFC pill, Re-tune, Clear) wraps onto a
+   second line inside its pane when it runs out of width (700×800 at 175 %), instead of squeezing its
+   labels onto two lines or pushing Clear out of sight behind a sideways scroll. The pane's own size
+   is the frame's (cockpit-panes.css); this only lets the head's content take a second line in it. */
+.rtty-stream > .cw-decode-head {
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
 }
 .cw-decode-clear {
   margin-left: auto;

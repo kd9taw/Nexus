@@ -6,7 +6,10 @@
 // or the TX latch is up. The picker itself is RttyBaudPicker.test.tsx.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { RttyCockpit } from './RttyCockpit'
+import { chainOf, parseRules, winnerAt } from '../cssCascade'
 import type { AppSnapshot, RttyState } from '../types'
 
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
@@ -80,5 +83,21 @@ describe('the RTTY header’s baud picker (#488)', () => {
   it('CONTROL: enabled on receive', async () => {
     render(<RttyCockpit snap={snap} />)
     await waitFor(() => expect(picker().disabled).toBe(false))
+  })
+})
+
+// The receive head gained the picker, and at 700x800 at 175 % it ran out of width: in ru its content
+// scrolled the pane sideways and hid Clear, in en its labels squeezed onto two lines. It wraps onto a
+// second line inside its pane instead. Computed on the rendered head over both sheets.
+const sheet = (name: string) =>
+  readFileSync(resolve(process.cwd(), 'src', name), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+const RULES = parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css'))
+
+describe('the RTTY receive head wraps rather than overflowing', () => {
+  it.each(['dark', 'light'] as const)('flex-wrap is wrap on the rendered head, %s theme', async (theme) => {
+    render(<RttyCockpit snap={snap} />)
+    await waitFor(() => expect(picker()).toBeTruthy())
+    const head = picker().closest('.cw-decode-head')!
+    expect(winnerAt(RULES, theme, chainOf(head), 'flex-wrap', 'flex-flow')?.value).toBe('wrap')
   })
 })

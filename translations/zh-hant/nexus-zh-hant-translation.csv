@@ -9439,7 +9439,7 @@ Click for internet feed controls.","{{detail}}
 "6","settings.headphoneMonitor.device.hint","Your headphones or speakers — must NOT be the rig's TX output device.","你的耳機或音箱 — 絕不能是電台的 TX 輸出裝置。","TX",""
 "6","settings.headphoneMonitor.level.label","Listening level","收聽音量","",""
 "6","settings.headphoneMonitor.level.aria","Receive listening level","接收收聽音量","",""
-"4","topbar.listen.title","Listening level {{pct}}%: how loud Nexus plays the receive audio on this computer (Settings ▸ Radio ▸ Receive audio on this computer)","收聽音量 {{pct}}%：Nexus 在本機播放接收音訊的音量（設定 ▸ 電台 ▸ 在本機播放接收音訊）","Nexus","Filled by the maintainer, pending translator review."
+"4","topbar.listen.title","Listening level {{pct}}%: how loud Nexus plays the receive audio on this computer (Settings ▸ Radio ▸ Receive audio on this computer). Click to change.","收聽音量 {{pct}}%：Nexus 在本機播放接收音訊的音量（設定 ▸ 電台 ▸ 在本機播放接收音訊）點擊即可變更。","Nexus","Filled by the maintainer, pending translator review."
 "6","settings.headphoneMonitor.level.hint","Headphone listening volume (does not affect TX).","耳機收聽的音量（不影響 TX）。","TX",""
 "6","settings.scopeSource.legend","Scope source","頻譜來源","",""
 "6","settings.scopeSource.note","Where the RF scope's picture comes from: the radio's own panadapter (or the sound card's audio where the radio has none), or an SDRplay RSP receiver through SDRconnect. SDRconnect is SDRplay's own program, free and closed-source, which you install and run beside Nexus with its WebSocket API turned on; it serves every RSP except the original RSP1.","射頻頻譜的畫面來自哪裡：電台自帶的全景（電台沒有時用音效卡的音訊），或經 SDRconnect 接入的 SDRplay RSP 接收機。SDRconnect 是 SDRplay 自家的程式，免費但閉源，你在 Nexus 旁邊安裝並執行它，並開啟其 WebSocket API；它支援除初代 RSP1 之外的所有 RSP。","RF | Nexus",""

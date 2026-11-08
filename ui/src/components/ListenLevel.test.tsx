@@ -67,6 +67,27 @@ describe('the top bar’s listening level (#468)', () => {
     expect(onCommit).toHaveBeenCalledWith(0.7)
   })
 
+  // A modal menu turns off pointer events outside it while open, so the first click on Stop TX only
+  // closed the popover (measured: halts +0). The popover is open while the operator listens, which is
+  // when Stop TX may be wanted: a click outside must reach what it lands on, and close the popover.
+  it('with the popover open, one click on Stop TX reaches Stop TX', async () => {
+    const stop = vi.fn()
+    const { container } = render(
+      <>
+        <LL level={0.4} onCommit={() => {}} />
+        <button type="button" onClick={stop}>
+          Stop TX
+        </button>
+      </>,
+    )
+    await open(container)
+    expect(document.body.style.pointerEvents, 'the page outside the popover stays clickable').not.toBe('none')
+    const target = screen.getByText('Stop TX')
+    fireEvent.pointerDown(target)
+    fireEvent.click(target)
+    expect(stop).toHaveBeenCalledTimes(1)
+  })
+
   it('follows a level changed elsewhere (Settings) when not being dragged', () => {
     const { container, rerender } = render(<LL level={0.4} onCommit={() => {}} />)
     rerender(<LL level={0.8} onCommit={() => {}} />)

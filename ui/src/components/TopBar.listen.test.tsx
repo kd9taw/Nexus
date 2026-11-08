@@ -61,6 +61,10 @@ describe('the top bar\u2019s listening level (#468)', () => {
     const zero = (v: string | undefined) => v != null && /^(0|0px|none|0 none)$/.test(v.trim())
     for (const props of [['padding', 'padding-left', 'padding-right', 'padding-top', 'padding-bottom'], ['border', 'border-width'], ['margin']])
       expect(zero(winnerAt(RULES, theme, chain, ...props)?.value), props[0]).toBe(true)
+    // A UA button's own font (13.33px, normal line-height) would change the trigger's width and height:
+    // the bar's type must reach it.
+    for (const props of [['font', 'font-size'], ['font', 'line-height']])
+      expect(winnerAt(RULES, theme, chain, ...props)?.value, props[1]).toBe('inherit')
   })
 
   it('CONTROL: without it the meter is a meter, not a button', () => {
