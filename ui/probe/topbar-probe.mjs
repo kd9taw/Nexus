@@ -166,6 +166,7 @@ try {
     const movedBoxes = (off?.boxes ?? []).filter((b, i) => b !== on.boxes?.[i])
     if (movedBoxes.length) { console.error(`topbar-probe: RED ${at} — ${movedBoxes.length} of the bar's boxes moved: ${movedBoxes.slice(0, 3).join(' ')} → ${on.boxes.filter((b) => !off.boxes.includes(b)).slice(0, 3).join(' ')}`); code = code || 1 }
     stopRows++
+    console.log(`topbar-probe: PLAIN ${at}: bar ${off?.h}px, stop ${JSON.stringify(off?.stop)}, groups ${JSON.stringify(off?.groups)}`)
     const offLast = await measure(s, 'logbook', false, LANE_LAST)
     const onLast = await measure(s, 'logbook', true, LANE_LAST)
     if (offLast?.stop && onLast?.stop && JSON.stringify(offLast.stop) !== JSON.stringify(onLast.stop)) stopMovedLast++
