@@ -80,7 +80,7 @@ describe('the CW header with CAT up and down', () => {
   })
 })
 
-// …AND A CONTROL DRAWN DISABLED MUST LOOK DEAD (review F2): Split's and BW's buttons had no `:disabled` paint,
+// …AND A CONTROL DRAWN DISABLED MUST LOOK DEAD: Split's and BW's buttons had no `:disabled` paint,
 // so with CAT down they looked, pointed and lit on hover exactly as live ones. Computed over the real sheets.
 describe('Split and BW with CAT down look dead and say why', () => {
   /** Every rule that would paint `el` on hover: its selector with `:hover` taken out matches `el`. */

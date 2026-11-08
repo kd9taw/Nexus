@@ -10,8 +10,8 @@
 // screen. It locks nothing: the strip's controls render exactly as without it.
 //
 // The cascade half is computed over the real sheets, never grepped: one constant width to the strip's
-// line breaker, and in flow. Whether anything moves is geometry, which jsdom never lays out (the Chrome
-// sweep, tasks/scratch/stop-steady/probe.mjs).
+// line breaker, and in flow. Whether anything moves is geometry, which jsdom never lays out (a real-browser
+// sweep's job).
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, screen, fireEvent, act } from '@testing-library/react'
 import { CockpitHeader } from './CockpitHeader'

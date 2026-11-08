@@ -409,7 +409,7 @@ export function OperateQsoStrip({
           contact (the sequencer state, the DX call, the report, the rig-mode chip), and a cell at its end was
           pushed off it and grew the strip, moving Stop TX. Not the row's last cell either: where the strip is
           taller than the room the shell gives it (FT, ru, 900x600 pinned) its last line is below the fold,
-          and a critical alarm shown only there was on screen nowhere (review F1). */}
+          and a critical alarm shown only there was on screen nowhere. */}
       {alarm}
 
       <div className={`cq-now${stalled ? ' stalled' : ''}`} role="status">
