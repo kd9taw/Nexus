@@ -4617,9 +4617,9 @@ function App() {
                     onAtuTune={handleAtuTune}
                     onAtuBypass={handleAtuBypass}
                     onStopTx={handleHaltTx}
+                    alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={setSnap} />}
                   />
                 }
-                txAlarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={setSnap} />}
                 onOpenSettings={openSettingsAt}
               />
             </div>

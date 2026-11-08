@@ -1,16 +1,19 @@
 // @vitest-environment jsdom
 //
-// THE TRANSMITTER ALARM BANNER (operator ruling 2026-10-04, "Sticky until dismissed"), as the
-// cockpit header draws it for every cockpit that has one. The station sends the alarms the
+// THE TRANSMITTER ALARM BANNER (operator ruling 2026-10-04, "Sticky until dismissed"), as the TX
+// strip draws it for every operating screen, its last line under Stop TX (2026-11-07: as the cockpit
+// header's last row, every alarm that came or went moved Stop TX 26 to 38 px; real Chrome). The station sends the alarms the
 // operator has not dismissed, oldest first; the banner shows the oldest with its radio, its UTC
 // time and the station's own words, says how many wait, and its Dismiss names exactly the alarm on
-// screen. It locks nothing: the dial and the CAT verdict render exactly as without it.
+// screen. It locks nothing: the strip's controls render exactly as without it.
 //
-// The cascade half is computed over the real sheets, never grepped: its own row, and in flow.
-// Whether it covers Stop TX or moves the dock is geometry, which jsdom never lays out.
+// The cascade half is computed over the real sheets, never grepped: its own line, and in flow.
+// Whether it covers Stop TX or moves the dock is geometry, which jsdom never lays out (the Chrome sweep).
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, screen, fireEvent, act } from '@testing-library/react'
 import { CockpitHeader } from './CockpitHeader'
+import { CockpitTxStrip } from './CockpitTxStrip'
+import { TxAlarmBanner } from './TxAlarmBanner'
 import { css, loadSheets } from '../cssCascade.testkit'
 import { dismissTxAlarm } from '../api'
 import type { AppSnapshot, TxAlarm } from '../types'
@@ -56,7 +59,12 @@ const snapWith = (txAlarms?: TxAlarm[]) =>
 
 const mount = (snap: AppSnapshot, onSnap = vi.fn()) =>
   render(
-    <CockpitHeader snap={snap} onSnap={onSnap} modeIndicator={<span>USB</span>} bandControl={<span>20m</span>} />,
+    <CockpitTxStrip
+      radio={snap.radio}
+      onStopTx={() => {}}
+      onTune={() => {}}
+      alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} />}
+    />,
   )
 const banner = () => document.querySelector<HTMLElement>('.ch-txalarm')
 
@@ -64,7 +72,7 @@ beforeAll(() => loadSheets(['styles.css', 'cockpit-panes.css']))
 beforeEach(() => vi.mocked(dismissTxAlarm).mockReset())
 afterEach(cleanup)
 
-describe('the transmitter alarm in the cockpit header', () => {
+describe('the transmitter alarm on the TX strip', () => {
   it('no alarm, no banner', () => {
     mount(snapWith(undefined))
     expect(banner()).toBeNull()
@@ -102,25 +110,33 @@ describe('the transmitter alarm in the cockpit header', () => {
     expect(onSnap).toHaveBeenCalledWith(after)
   })
 
-  it('locks nothing: the dial and the CAT verdict render exactly as without it', () => {
+  it('locks nothing: every control of the strip renders exactly as without it', () => {
     // React's generated ids differ from one mount to the next; nothing else may.
-    const part = (sel: string) => document.querySelector(sel)!.outerHTML.replace(/[:«]r[0-9a-z]+[:»]/g, 'id')
+    const controls = () =>
+      [...document.querySelectorAll('.cockpit-txstrip > :not(.ch-txalarm)')].map((e) => e.outerHTML.replace(/[:«]r[0-9a-z]+[:»]/g, 'id'))
     mount(snapWith(undefined))
-    const before = [part('.ch-freq'), part('.ch-actions')]
+    const before = controls()
     cleanup()
     mount(snapWith([alarm(7, UNCONFIRMED, AT)]))
     expect(banner(), 'premise: the alarm is shown').not.toBeNull()
-    expect([part('.ch-freq'), part('.ch-actions')]).toEqual(before)
-    expect(document.querySelector('.cockpit-cat')!.textContent).toBe('CAT ✓')
+    expect(controls()).toEqual(before)
   })
 
-  it('is the header’s last row, its own full-width line, and in flow', () => {
+  it('is the strip’s last line, after Stop TX, its own full-width line, and in flow', () => {
     mount(snapWith([alarm(7, UNCONFIRMED, AT)]))
-    const header = document.querySelector('.cockpit-header')!
-    expect(header.lastElementChild, 'the last row, so the controls above never move').toBe(banner())
+    const strip = document.querySelector('.cockpit-txstrip')!
+    expect(strip.lastElementChild, 'the last line, so nothing on the strip moves').toBe(banner())
+    const stop = screen.getByRole('button', { name: /^stop tx$/i })
+    expect(stop.compareDocumentPosition(banner()!) & Node.DOCUMENT_POSITION_FOLLOWING, 'under Stop TX, never before it').toBeTruthy()
     expect(css(banner()!, 'flex-basis'), 'a line of its own').toBe('100%')
     expect(css(banner()!, 'margin-bottom'), 'the alert box’s own margin is not a gap here').toBe('0px')
     expect(css(banner()!, 'position'), 'positioned, it could sit over Stop TX').toBeNull()
   })
 
+
+  // STOP TX STAYS PUT: the header stands above the strip, so the alarm may not be drawn there.
+  it('the cockpit header draws no alarm, whatever the station sends', () => {
+    render(<CockpitHeader snap={snapWith([alarm(7, UNCONFIRMED, AT)])} modeIndicator={<span>USB</span>} bandControl={<span>20m</span>} />)
+    expect(banner()).toBeNull()
+  })
 })

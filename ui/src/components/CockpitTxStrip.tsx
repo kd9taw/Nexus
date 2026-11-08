@@ -47,6 +47,12 @@ export interface CockpitTxStripProps {
   /** A screen's own small marker right after the cluster (Phone's ⓘ for the Tune note, #441): after
    *  Stop TX, never between the controls, so Tune, ATU and Stop TX keep their places on every screen. */
   tuneHint?: ReactNode
+  /** THE TRANSMITTER ALARM (`TxAlarmBanner`), the strip's LAST line, under Stop TX (2026-11-07). It was
+   *  the cockpit header's last row, and the header stands above this strip: every alarm that came or
+   *  went moved Stop TX 26 to 38 px. Here it moves nothing on the strip, never sits over it, and the
+   *  panes below give up the height. The screen passes it (`snap.txAlarms` is not in `radio`); every
+   *  operating screen does, which stop-line.test.tsx renders and checks. */
+  alarm?: ReactNode
 }
 
 /**
@@ -68,7 +74,7 @@ export interface CockpitTxStripProps {
  * the header's did: in RTTY and SSTV the latch is a STOP (set_tx_enabled(false) arms the mode's
  * abort) and must stay a button through their overs, which `radio.transmitting` never marks.
  */
-export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtuBypass, onStopTx, hold, meters, metersPane, tuneNote, tuneHint }: CockpitTxStripProps) {
+export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtuBypass, onStopTx, hold, meters, metersPane, tuneNote, tuneHint, alarm }: CockpitTxStripProps) {
   const onAir = isOnAir(radio)
   const needle = useTxMeterStyle() === 'needle'
   // THE SIGN WAITS WITH AN ARMED OVER (the operator's pick "Header ON AIR waits too",
@@ -219,6 +225,7 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
           child, on a line of its own, so it never moves the controls or the TX state. */}
       {onTune && <RadioTuneNote radio={radio} />}
       {onTune && tuneNote}
+      {alarm}
     </div>
   )
 }

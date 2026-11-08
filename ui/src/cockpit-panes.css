@@ -786,6 +786,22 @@
   --chrome-extras-gap: max(var(--space-2), min(var(--space-3), (var(--vh-eff, 100vh) - 1100px) * 100));
 }
 
+/* THE TRANSMITTER ALARM (TxAlarmBanner, `.ch-txalarm`): the TX strip's LAST line, the full width, only
+   while an alarm is up (CockpitTxStrip and FT's OperateQsoStrip `alarm`; APRS's strip too). It was the
+   cockpit header's last row, and the header stands above the strip: every alarm that came or went moved
+   Stop TX 26 to 38 px (real Chrome, 2026-11-07). As the strip's last line it moves nothing on the strip,
+   the panes under the strip give up the height, and the strip parks with it when the shell scrolls. Its
+   look is the cockpits' alert box in amber (`.cw-keyer-warn.caution`, styles.css); this rule places it.
+   In flow and unpositioned: it can never sit over Stop TX. */
+.ch-txalarm {
+  flex: 1 1 100%;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
 /* THE HEADER'S STATE WORDS (`.ch-statecell`, Phone's header: the mic held off for DAX, the rig on a mode
    it was not told, no rig control). They come and go with the radio, and the header stands above the TX
    strip: a word with a width of its own that appeared on a full line re-wrapped the header and moved

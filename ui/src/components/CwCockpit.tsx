@@ -22,6 +22,7 @@ import { BandStrip } from './BandStrip'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip, keepInSight, revealAfterPress } from './CockpitTxStrip'
+import { TxAlarmBanner } from './TxAlarmBanner'
 import { ZeroBeat } from './ZeroBeat'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
@@ -2449,6 +2450,7 @@ export function CwCockpit({
   // the scope, or after the contact in the hosted Quick presentation (below).
   const txStrip = (
     <CockpitTxStrip
+      alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} />}
       radio={snap.radio}
       onSetTxEnabled={
         drivesAnotherStation()

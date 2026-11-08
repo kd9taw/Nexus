@@ -124,24 +124,25 @@ describe('APRS’s station list width divider and map side', () => {
   })
 })
 
-// The transmitter alarm (TxAlarmBanner, which App passes in): APRS has no CockpitHeader, so its
-// header line carries the alarm where every other cockpit's header does, as that line's last row.
+// The transmitter alarm (TxAlarmBanner): App draws it as the last line of APRS's TX strip
+// (`CockpitTxStrip` `alarm`), under Stop TX, as every cockpit's strip does (2026-11-07). The header
+// line, above the strip, no longer takes it: an alarm there moved Stop TX.
 describe('the transmitter alarm on APRS', () => {
-  it('is the last row of the header line', async () => {
+  it('is drawn where the strip is, after the header line', async () => {
     const view = render(
       <AprsCockpit
         active
         theme="dark"
         myGrid="EM28"
         onTune={() => {}}
-        txAlarm={<div className="ch-txalarm">alarm</div>}
+        txStrip={<div className="cockpit-txstrip"><div className="ch-txalarm">alarm</div></div>}
       />,
     )
     await act(async () => {
       for (let i = 0; i < 6; i++) await Promise.resolve()
     })
     const alarm = view.container.querySelector('.ch-txalarm')
-    expect(alarm, 'the alarm passed in is drawn').not.toBeNull()
-    expect(view.container.querySelector('.np-head')!.lastElementChild).toBe(alarm)
+    expect(alarm, 'the strip passed in is drawn with its alarm').not.toBeNull()
+    expect(view.container.querySelector('.np-head')!.contains(alarm), 'never in the header line, above the strip').toBe(false)
   })
 })

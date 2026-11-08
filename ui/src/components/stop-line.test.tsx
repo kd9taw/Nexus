@@ -115,6 +115,7 @@ import { ALL_PANEL_VOCABULARIES, BOX_IDS } from '../features/panelState'
 import {
   CASES,
   CASE_BY_NAME,
+  CASE_SNAPS,
   cw,
   cwDual,
   js8,
@@ -600,5 +601,31 @@ describe('the amplifier’s Operate/Standby is not a stop control', () => {
       </>,
     )
     expect([...stopsOnScreen(everyStop).values()].some((els) => els.length > 0)).toBe(true)
+  })
+})
+
+// STOP TX STAYS PUT WHEN A TRANSMITTER ALARM COMES OR GOES (2026-11-07). The alarm was the cockpit header's
+// last row, and the header stands above the TX strip: every alarm moved Stop TX 26 to 38 px (real Chrome).
+// It is the strip's last line now, which each screen passes in (`alarm`): rendered here with the props App
+// gives, every cockpit must draw it in its strip, after Stop TX, and nowhere in its header.
+describe('the transmitter alarm stands under Stop TX on every cockpit', () => {
+  const ALARM = { id: 7, text: 'the radio did not confirm the unkey', radioId: 1, radioName: 'FLEX-6600', atMs: 0 }
+  beforeEach(() => {
+    for (const s of CASE_SNAPS) (s as { txAlarms?: unknown }).txAlarms = [ALARM]
+  })
+  afterEach(() => {
+    for (const s of CASE_SNAPS) delete (s as { txAlarms?: unknown }).txAlarms
+  })
+  it.each(CASES.map((c) => [c.cockpit, c] as const))('%s', async (_name, c) => {
+    c.render(panelsWith<string>([]))
+    await settle()
+    const alarms = [...document.querySelectorAll('.ch-txalarm')]
+    expect(alarms.length, `${c.cockpit} draws the alarm once`).toBe(1)
+    const strip = alarms[0].closest('.cockpit-txstrip, .cockpit-qso')
+    expect(strip, `${c.cockpit}: the alarm is not in the TX strip`).not.toBeNull()
+    expect(alarms[0].closest('.cockpit-header'), `${c.cockpit}: the alarm is in the header, above Stop TX`).toBeNull()
+    const stop = [...strip!.querySelectorAll('button')].find((b) => /^stop tx$/i.test(b.textContent?.trim() ?? ''))
+    expect(stop, `${c.cockpit}: no Stop TX in the strip the alarm is in`).toBeDefined()
+    expect(stop!.compareDocumentPosition(alarms[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })

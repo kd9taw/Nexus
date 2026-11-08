@@ -10,6 +10,7 @@ import { useEscStop } from '../useEscStop'
 import type { AppSnapshot, BandChannel, Js8InboxEntry, Js8InboxState, Js8Origin, Js8Speed, Js8State, Js8Switch, Js8Unarmed, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
+import { TxAlarmBanner } from './TxAlarmBanner'
 import { TxMeters } from './TxMeters'
 import { useCompactChrome } from '../features/compactChrome'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
@@ -1809,6 +1810,7 @@ export function Js8Cockpit({
           is on this cockpit's stop-line census and its sweep. */}
       {snap && (
         <CockpitTxStrip
+          alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} />}
           radio={snap.radio}
           onStopTx={stop}
           onSetTxEnabled={onSetTxEnabled}

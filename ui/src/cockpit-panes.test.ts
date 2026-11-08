@@ -262,7 +262,10 @@ describe('the fence: styles.css never names a structural class', () => {
     'cockpit-txdock-keep',
     // The header's state words (2026-11-07): zero wide to the header's line breaker, so a word the radio
     // brings never moves Stop TX. A styles.css width, padding or margin on either would give it width back.
-    'ch-statecell', 'ch-stateword']) {
+    'ch-statecell', 'ch-stateword',
+    // …and the transmitter alarm, now the TX strip's last line (2026-11-07): a styles.css position on it
+    // could set it over Stop TX.
+    'ch-txalarm']) {
     it(`styles.css declares no .${cls} rule`, () => {
       const hits = STYLES_RULES
         .map((r) => r.selector)

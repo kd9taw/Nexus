@@ -65,6 +65,7 @@ import { TX_SPLIT_MAX, TX_SPLIT_MIN } from '../features/paneSeam'
 import { buildHighlightMap, OperateDecodes } from './OperateDecodes'
 import { DecodeHistory, type DecodeSort } from '../decodeHistory'
 import { OperateQsoStrip } from './OperateQsoStrip'
+import { TxAlarmBanner } from './TxAlarmBanner'
 import { TxMetersCell, TxMetersPane, TX_METERS_WHEN } from './TxMeters'
 import { SpotDialog } from './SpotDialog'
 import { DEFAULT_ROSTER_SORT, OperateRoster, type RosterSort } from './OperateRoster'
@@ -2067,6 +2068,7 @@ export function OperateCockpit({
             controls absorbed from the deleted status row (period, Skip Tx1, next-Ns,
             HOUND badge, rotor) and the fixed-width TX telemetry cell. */}
         <OperateQsoStrip
+          alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} />}
           qso={snap.qso}
           contestRunning={snap.fieldDay?.running}
           radio={snap.radio}

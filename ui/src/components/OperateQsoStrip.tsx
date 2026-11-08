@@ -106,6 +106,12 @@ interface Props {
   specialOpBadge?: ReactNode
   rotor?: ReactNode
   telemetry?: ReactNode
+  /** THE TRANSMITTER ALARM (`TxAlarmBanner`), the strip's LAST line, under Stop TX (2026-11-07). It was
+   *  the cockpit header's last row, and the header stands above this strip: every alarm that came or
+   *  went moved Stop TX 26 to 38 px. Here it moves nothing on the strip, never sits over it, and the
+   *  panes below give up the height. OperateCockpit passes it (`snap.txAlarms` is not in `radio`);
+   *  stop-line.test.tsx renders FT and checks it. */
+  alarm?: ReactNode
 }
 
 function reportLabel(rx: number | null | undefined): string | null {
@@ -143,6 +149,7 @@ export function OperateQsoStrip({
   onSetHoldTxFreq,
   rxOnly,
   beacon,
+  alarm,
   onSetTxEven,
   onSetTxCycleAuto,
   skipTx1,
@@ -523,6 +530,7 @@ export function OperateQsoStrip({
       {/* What the radio reports beside Tune while Tune is the Flex radio's own carrier: the last
           child, on a line of its own, so it never moves the clusters or the readouts. */}
       {radio && <RadioTuneNote radio={radio} />}
+      {alarm}
     </section>
   )
 }

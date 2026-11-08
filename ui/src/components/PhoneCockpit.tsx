@@ -28,6 +28,7 @@ import { SpotDialog } from './SpotDialog'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
+import { TxAlarmBanner } from './TxAlarmBanner'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { FreedvPane } from './FreedvPane'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
@@ -2850,6 +2851,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
   const [tuneNoteOpen, setTuneNoteOpen] = useState(false)
   const txStrip = (
     <CockpitTxStrip
+      alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} />}
       radio={snap.radio}
       onSetTxEnabled={
         driving
