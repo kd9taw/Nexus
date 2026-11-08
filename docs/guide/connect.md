@@ -486,8 +486,8 @@ Every answer says what it rests on:
   only the country is known, it gives no answer, because the centre of your own country says
   nothing about where they are. For a ship or aircraft mobile it asks for their grid. You can
   always type a grid for the call. For a portable call (EA8/DL1ABC) the callbook often answers
-  with the home call's record. That address is never taken as where they are now: in another
-  country it is left out (the country centre, marked Rough, stands), and in the same country the
+  with the home call's record. If that address is in another country, Nexus leaves it out and
+  uses the country centre, marked Rough. If it is in the same country, Nexus uses it, and the
   answer says it is the home call's address and they may be elsewhere.
   Under 300 km there is no answer: that close, the model calls nearly every band open all day.
 - **The model and your station.** It follows your prediction engine (P.533 by default), its month,

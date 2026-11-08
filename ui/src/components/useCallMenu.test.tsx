@@ -79,6 +79,27 @@ describe('the shared call menu', () => {
 const spot = (over: Partial<SpotRow>): SpotRow =>
   ({ call: 'W1AW', entity: 'United States', zone: 5, band: '20m', freqMhz: 14.025, mode: 'CW', spotter: 'K3LR', corroborators: [], ageSecs: 30, comment: '', licensed: true, ...over }) as SpotRow
 
+describe('closing the menu', () => {
+  it('gives the keyboard back to the row without scrolling the page, then brings the row into view', async () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+    const into = vi.spyOn(Element.prototype, 'scrollIntoView')
+    render(<Row onRow={() => {}} />)
+    const row = screen.getByRole('row')
+    fireEvent.contextMenu(row)
+    await screen.findAllByRole('menuitem')
+    focus.mockClear()
+    into.mockClear()
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+    await waitFor(() => expect(focus.mock.contexts).toContain(row))
+    const call = focus.mock.calls[focus.mock.contexts.indexOf(row)]
+    expect(call[0]).toEqual({ preventScroll: true })
+    expect(into.mock.contexts).toContain(row)
+    expect(into.mock.calls[into.mock.contexts.indexOf(row)][0]).toEqual({ block: 'nearest' })
+    focus.mockRestore()
+    into.mockRestore()
+  })
+})
+
 describe('surfaces that had no call menu', () => {
   it('the Spots board: a right-click on a row opens it, and the row neither selects nor works', async () => {
     const onSelect = vi.fn()

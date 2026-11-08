@@ -10,7 +10,7 @@
 // or works the row: the right-click is the menu's alone (its default and its propagation stop here),
 // and the anchor stops every event from inside the menu (CallRowMenu). On close the keyboard goes back
 // to the row it was opened from.
-import { useCallback, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
+import { useCallback, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { CallRowMenu, isMenuKey } from './CallRowMenu'
 import { lookupCall } from '../callsign'
 
@@ -37,17 +37,25 @@ export interface CallMenu {
 
 export function useCallMenu(): CallMenu {
   const [open, setOpen] = useState<Open | null>(null)
-  const start = useCallback((key: string, call: string, from: HTMLElement, opts?: { band?: string | null; country?: string | null }) => {
+  /** The row the open menu came from, for the keyboard to go back to. */
+  const from = useRef<HTMLElement | null>(null)
+  const start = useCallback((key: string, call: string, el: HTMLElement, opts?: { band?: string | null; country?: string | null }) => {
     const cu = call.trim().toUpperCase()
     // An unresolved hash names no station: nothing to offer.
     if (!lookupCall(cu)) return
-    setOpen({ key, call: cu, band: opts?.band, country: opts?.country, from })
+    from.current = el
+    setOpen({ key, call: cu, band: opts?.band, country: opts?.country, from: el })
   }, [])
   const close = useCallback(() => {
-    setOpen((o) => {
-      if (o?.from.isConnected) o.from.focus({ preventScroll: true })
-      return null
-    })
+    const row = from.current
+    from.current = null
+    setOpen(null)
+    // The project's rule for programmatic focus: never scroll the page to it, then bring the row
+    // into view only as far as it needs (a list may have scrolled while the menu was open).
+    if (row?.isConnected) {
+      row.focus({ preventScroll: true })
+      row.scrollIntoView?.({ block: 'nearest' })
+    }
   }, [])
   const on: CallMenu['on'] = (key, call, opts) => ({
     onContextMenu: (e) => {
