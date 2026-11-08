@@ -709,8 +709,9 @@ right.*
   chosen in its own Service Tool. Configured the way its manual recommends
   (GS-232B, 9600) it belongs on the **GS-232B interface** entry; only in DCU-1 mode
   does it belong on the **DF9GR ERC** entry, which runs at 4800.
-  **PstRotatorAz / PstRotator (UDP)** is Hamlib model 3, for YO3DMU's PstRotatorAz.
-  It is the one entry that talks over the network rather than a serial port (see
+  **PstRotatorAz / PstRotator (UDP)** is Hamlib model 3, for YO3DMU's PstRotatorAz
+  (azimuth) and PstRotator (azimuth and elevation, 0–90°: Nexus finds out which by
+  asking the program for its elevation). It is the one entry that talks over the network rather than a serial port (see
   the next item).
 - **Rotator port & baud** — the serial port the controller is on, and its line
   rate. **The baud is per MODEL**, and picking your model fills in the right one:

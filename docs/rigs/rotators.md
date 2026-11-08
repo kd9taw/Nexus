@@ -132,6 +132,15 @@ Selectable in the dropdown; `rotctl -l` lists every model your Hamlib knows, and
 > Nobody has tried this against a real PstRotatorAz yet: please report how it
 > goes.
 
+> **PstRotator (az/el) users:** the same entry, the same port and the same
+> **Setup ▸ UDP Control**. Nexus asks the program for its elevation (PstRotator's
+> documented `EL?`). PstRotator answers, so Nexus drives the elevation too: the
+> Rotor pane shows it, a satellite or Moon track moves both axes, and turning the
+> beam keeps the elevation where it is. PstRotatorAz has no elevation, does not
+> answer, and stays azimuth only. Nexus sends 0–90° and refuses anything higher,
+> even with PstRotator's 180° elevation turned on, because its UDP control does
+> not report that setting.
+
 There's also an **External rotctld (advanced)** field: enter a `host:port` to
 point Nexus at a `rotctld` you run yourself (or one on another machine). It
 overrides the model/port picker above and stops the integrated daemon. The port

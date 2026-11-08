@@ -12,6 +12,16 @@
 //!   the rotor, switch to manual mode), `<PST><PARK>1</PARK></PST>` (stop, manual mode, park the
 //!   antenna) and `<PST>AZ?</PST>`, answered on port + 1 as `AZ:xxx<CR>`.
 //!
+//! **PstRotator, the az/el program, on the same picker entry (#480).** Its own User's Manual,
+//! Rev. 7.5, "UDP Control" (pp. 10–12), documents the same port, framing and commands, plus
+//! `<PST><ELEVATION>23</ELEVATION></PST>` (set elevation to 23°) and `<PST>EL?</PST>`, answered on
+//! port + 1 as `EL:yy.y<CR>`, and "You can send many commands in one message". PstRotatorAz's
+//! manual has neither. So an answer to `EL?` is what tells the two apart ([`Axis`]): PstRotator
+//! that answers it is declared 0–90° of elevation and sent both axes in one message; a program
+//! that answers `AZ?` and not `EL?` stays azimuth-only, refused any elevation exactly as before.
+//! The 1.20.0 link took every program on this entry for PstRotatorAz, so a PstRotator lost the
+//! elevation Hamlib's backend used to send it.
+//!
 //! **Why not Hamlib's PstRotator backend (model 3), which the picker used to run.** Its
 //! `set_position` writes the bearing with `%f.2`, a typo for `%.2f`, so 90° goes out as
 //! `90.000000.2`; it has no stop at all, so rotctld refuses `S`; its `get_position` sends `AZ?`
@@ -84,26 +94,81 @@ pub const PARK_DATAGRAM: &str = "<PST><PARK>1</PARK></PST>";
 /// Ask for the antenna position, answered on the control port + 1 as `AZ:xxx<CR>` (manual p. 12).
 pub const AZ_QUERY: &str = "<PST>AZ?</PST>";
 
-/// What `\dump_state` answers, in rotctld's protocol-1 shape: PstRotatorAz turns azimuth only,
-/// so the Rotor pane shows no elevation axis (Hamlib's backend declares 0–90° of one).
+/// Ask PstRotator for the elevation, answered on the control port + 1 as `EL:yy.y<CR>`
+/// (PstRotator manual p. 12). PstRotatorAz's manual has no such question: an answer is how the
+/// link knows it is talking to PstRotator with an elevation axis ([`Axis`]).
+pub const EL_QUERY: &str = "<PST>EL?</PST>";
+
+/// The highest elevation the link sends or declares. PstRotator reaches 0–90°, and 0–180° only
+/// with its "Setup ▸ 180 deg Elevation" ticked, which its UDP control does not report. So the
+/// link declares the range every PstRotator elevation axis has, and refuses anything past it.
+const MAX_EL: f64 = 90.0;
+
+/// What `\dump_state` answers, in rotctld's protocol-1 shape, for PstRotatorAz (or a PstRotator
+/// that has not answered `EL?`): azimuth only, so the Rotor pane shows no elevation axis.
 const DUMP_STATE: &str = "1\n3\nmin_az=0.000000\nmax_az=360.000000\nmin_el=0.000000\n\
                           max_el=0.000000\nsouth_zero=0\nrot_type=Az\ndone\n";
 
-/// The set-azimuth datagram for `az_deg`: a whole number of degrees in [0, 360), as in the
-/// manual's own example (`<AZIMUTH>85</AZIMUTH>`). Rounded BEFORE it is wrapped, so 359.6° is
-/// 0°, never 360.
+/// What `\dump_state` answers once PstRotator has answered `EL?`: an elevation axis of 0–[`MAX_EL`].
+const DUMP_STATE_AZEL: &str = "1\n3\nmin_az=0.000000\nmax_az=360.000000\nmin_el=0.000000\n\
+                               max_el=90.000000\nsouth_zero=0\nrot_type=AzEl\ndone\n";
+
+/// How long "it did not answer `EL?`" stands before the link asks again. A lost reply must not
+/// make a PstRotator azimuth-only for good; asking PstRotatorAz once in a while costs one
+/// unanswered question.
+const RELEARN: Duration = Duration::from_secs(30);
+
+/// The whole degree a bearing is sent as: in [0, 360), as in the manual's own example
+/// (`<AZIMUTH>85</AZIMUTH>`). Rounded BEFORE it is wrapped, so 359.6° is 0°, never 360.
+fn whole_az(az_deg: f64) -> i64 {
+    (az_deg.round() as i64).rem_euclid(360)
+}
+
+/// The set-azimuth datagram for `az_deg` ([`whole_az`]).
 pub fn azimuth_datagram(az_deg: f64) -> String {
-    let whole = (az_deg.round() as i64).rem_euclid(360);
-    format!("<PST><AZIMUTH>{whole}</AZIMUTH></PST>")
+    format!("<PST><AZIMUTH>{}</AZIMUTH></PST>", whole_az(az_deg))
+}
+
+/// The datagram that sets both axes, for PstRotator: one message holding both commands, as its
+/// manual allows ("You can send many commands in one message"), so a lost datagram loses both
+/// rather than one. The elevation is a whole degree like the manual's `<ELEVATION>23</ELEVATION>`,
+/// kept inside 0–[`MAX_EL`]; the caller has already refused one outside it.
+pub fn azel_datagram(az_deg: f64, el_deg: f64) -> String {
+    let el = el_deg.round().clamp(0.0, MAX_EL) as i64;
+    format!(
+        "<PST><AZIMUTH>{}</AZIMUTH><ELEVATION>{el}</ELEVATION></PST>",
+        whole_az(az_deg)
+    )
+}
+
+/// The angle after `key` in a position report, `AZ:xxx<CR>` or `EL:yy.y<CR>`.
+fn parse_report(datagram: &[u8], key: &str) -> Option<f64> {
+    let text = std::str::from_utf8(datagram).ok()?;
+    text.split(['\r', '\n'])
+        .find_map(|l| l.trim().strip_prefix(key)?.trim().parse::<f64>().ok())
+        .filter(|deg| deg.is_finite())
 }
 
 /// The azimuth in a position report, `AZ:xxx<CR>`. `None` for anything else, including the
 /// `TGA:` target report, which is where the antenna is going, not where it is.
 pub fn parse_azimuth(datagram: &[u8]) -> Option<f64> {
-    let text = std::str::from_utf8(datagram).ok()?;
-    text.split(['\r', '\n'])
-        .find_map(|l| l.trim().strip_prefix("AZ:")?.trim().parse::<f64>().ok())
-        .filter(|az| az.is_finite())
+    parse_report(datagram, "AZ:")
+}
+
+/// The elevation in PstRotator's report, `EL:yy.y<CR>`. `None` for anything else.
+pub fn parse_elevation(datagram: &[u8]) -> Option<f64> {
+    parse_report(datagram, "EL:")
+}
+
+/// What the link has learned about the program's elevation axis.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Axis {
+    /// Not asked yet, or asked while the program answered nothing at all.
+    Unknown,
+    /// It answered `EL?`: PstRotator with an elevation axis. It stays so for the life of the link.
+    Elevation,
+    /// It answered `AZ?` but not `EL?` (PstRotatorAz), at this instant ([`RELEARN`]).
+    AzimuthOnly(Instant),
 }
 
 /// PstRotatorAz's address from the rotator port box. Empty means this PC, default port.
@@ -188,6 +253,9 @@ struct Peer {
     /// Whether the last `AZ?` went unanswered, so a silent PstRotatorAz is logged once per
     /// episode rather than twice a second.
     silent: AtomicBool,
+    /// Whether the program has an elevation axis ([`Peer::has_elevation`]). Held while it is
+    /// being found out, so two clients do not ask at once.
+    axis: Mutex<Axis>,
 }
 
 impl Peer {
@@ -195,9 +263,9 @@ impl Peer {
         self.udp.send_to(datagram.as_bytes(), self.to).map(|_| ())
     }
 
-    /// PstRotatorAz's antenna position, or `None` when it did not report one within
-    /// [`ANSWER_WAIT`].
-    fn azimuth(&self) -> Option<f64> {
+    /// The angle the program reports in answer to `query`, read by `parse`, or `None` when it
+    /// did not report one within [`ANSWER_WAIT`].
+    fn ask(&self, query: &str, parse: fn(&[u8]) -> Option<f64>) -> Option<f64> {
         let _one = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         let mut buf = [0u8; 512];
         // A late reply to an earlier question is not the answer to this one.
@@ -205,7 +273,7 @@ impl Peer {
             while self.udp.recv_from(&mut buf).is_ok() {}
             let _ = self.udp.set_nonblocking(false);
         }
-        let heard = self.send(AZ_QUERY).ok().and_then(|()| {
+        self.send(query).ok().and_then(|()| {
             let deadline = Instant::now() + ANSWER_WAIT;
             loop {
                 let left = deadline.saturating_duration_since(Instant::now());
@@ -217,8 +285,8 @@ impl Peer {
                     // can reach the port could otherwise set the bearing the compass shows. The
                     // manual names no source PORT for replies, so none is required.
                     Ok((n, from)) if from.ip() == self.to.ip() => {
-                        if let Some(az) = parse_azimuth(&buf[..n]) {
-                            return Some(az);
+                        if let Some(deg) = parse(&buf[..n]) {
+                            return Some(deg);
                         }
                     }
                     Ok(_) => {}
@@ -236,7 +304,13 @@ impl Peer {
                     Err(_) => std::thread::sleep(TICK),
                 }
             }
-        });
+        })
+    }
+
+    /// The antenna azimuth, or `None` when the program did not report one within
+    /// [`ANSWER_WAIT`].
+    fn azimuth(&self) -> Option<f64> {
+        let heard = self.ask(AZ_QUERY, parse_azimuth);
         let was_silent = self.silent.swap(heard.is_none(), Ordering::Relaxed);
         if heard.is_none() && !was_silent {
             tempo_core::applog::info(
@@ -254,6 +328,62 @@ impl Peer {
             tempo_core::applog::info("rotator", "PstRotatorAz is answering");
         }
         heard
+    }
+
+    /// PstRotator's elevation, or `None` when it did not report one within [`ANSWER_WAIT`].
+    fn elevation(&self) -> Option<f64> {
+        self.ask(EL_QUERY, parse_elevation)
+    }
+
+    /// Whether the program has already answered `EL?`. Never asks.
+    fn knows_elevation(&self) -> bool {
+        *self.axis.lock().unwrap_or_else(|e| e.into_inner()) == Axis::Elevation
+    }
+
+    /// Whether the program has an elevation axis, asking it when that is not known: PstRotator
+    /// answers `EL?`, PstRotatorAz answers `AZ?` and not `EL?`. A program that answers neither
+    /// (not running, UDP Control off) says nothing about its axes, so it is asked again once it
+    /// answers. What it said is kept, so the Rotor pane's `\dump_state` every two seconds asks
+    /// nothing; "no elevation" is asked again after [`RELEARN`], in case one reply was lost.
+    fn has_elevation(&self) -> bool {
+        let mut axis = self.axis.lock().unwrap_or_else(|e| e.into_inner());
+        match *axis {
+            Axis::Elevation => return true,
+            Axis::AzimuthOnly(at) if at.elapsed() < RELEARN => return false,
+            _ => {}
+        }
+        // The last `AZ?` went unanswered: asking now would only wait out two silences.
+        if self.silent.load(Ordering::Relaxed) {
+            return false;
+        }
+        let learned = if self.elevation().is_some() {
+            Axis::Elevation
+        } else if self.azimuth().is_some() {
+            Axis::AzimuthOnly(Instant::now())
+        } else {
+            Axis::Unknown
+        };
+        match (*axis, learned) {
+            (_, Axis::Elevation) => tempo_core::applog::info(
+                "rotator",
+                &format!(
+                    "PstRotator at {} reports its elevation: Nexus drives elevation too \
+                     (0–{MAX_EL}°)",
+                    self.to
+                ),
+            ),
+            (Axis::Unknown, Axis::AzimuthOnly(_)) => tempo_core::applog::info(
+                "rotator",
+                &format!(
+                    "the program at {} reports its azimuth but not an elevation, as \
+                     PstRotatorAz does: azimuth only",
+                    self.to
+                ),
+            ),
+            _ => {}
+        }
+        *axis = learned;
+        learned == Axis::Elevation
     }
 
     /// `RPRT 0` when PstRotatorAz answers after `datagrams` went out, `RPRT -5` when it did not,
@@ -278,8 +408,15 @@ impl Peer {
 fn answer(peer: &Peer, line: &str) -> Option<String> {
     let mut words = line.split_whitespace();
     let reply = match words.next()? {
+        // ⚠️ With an elevation axis, the elevation is PstRotator's own report or no position at
+        // all: a beam turn keeps the elevation `p` gives (`rotator::point_keeping`), so a 0
+        // invented here would send the antenna to the horizon.
         "p" | "\\get_pos" => match peer.azimuth() {
-            Some(az) => format!("{az:.6}\n{:.6}\n", 0.0),
+            Some(az) if !peer.knows_elevation() => format!("{az:.6}\n{:.6}\n", 0.0),
+            Some(az) => match peer.elevation() {
+                Some(el) => format!("{az:.6}\n{el:.6}\n"),
+                None => "RPRT -5\n".into(),
+            },
             None => "RPRT -5\n".into(),
         },
         "P" | "\\set_pos" => {
@@ -287,14 +424,27 @@ fn answer(peer: &Peer, line: &str) -> Option<String> {
             match (num(words.next()), num(words.next())) {
                 // The ranges `\dump_state` declares, refused as Hamlib's frontend refuses them
                 // (`RPRT -1`), so the satellite track's elevation probe learns "azimuth only".
-                (Some(az), Some(el)) if (0.0..=360.0).contains(&az) && el == 0.0 => {
-                    peer.command(&[&azimuth_datagram(az)]).into()
+                // `P <az> 0`, the line an azimuth-only rotator is sent, finds nothing out: to a
+                // program not yet known to have elevation it stays the azimuth it always was.
+                (Some(az), Some(el)) if (0.0..=360.0).contains(&az) => {
+                    if (el != 0.0 || peer.knows_elevation()) && peer.has_elevation() {
+                        if (0.0..=MAX_EL).contains(&el) {
+                            peer.command(&[&azel_datagram(az, el)]).into()
+                        } else {
+                            "RPRT -1\n".into()
+                        }
+                    } else if el == 0.0 {
+                        peer.command(&[&azimuth_datagram(az)]).into()
+                    } else {
+                        "RPRT -1\n".into()
+                    }
                 }
                 _ => "RPRT -1\n".into(),
             }
         }
         "S" | "\\stop" => peer.command(&[STOP_DATAGRAM, STOP_DATAGRAM]).into(),
         "K" | "\\park" => peer.command(&[PARK_DATAGRAM]).into(),
+        "\\dump_state" if peer.has_elevation() => DUMP_STATE_AZEL.into(),
         "\\dump_state" => DUMP_STATE.into(),
         "q" | "Q" | "\\quit" => return None,
         _ => "RPRT -11\n".into(),
@@ -401,6 +551,7 @@ impl PstRotatorLink {
             to,
             asking: Mutex::new(()),
             silent: AtomicBool::new(false),
+            axis: Mutex::new(Axis::Unknown),
         });
         let halt = Arc::new(AtomicBool::new(false));
         let stop = Arc::clone(&halt);
@@ -484,6 +635,26 @@ mod tests {
 
     /// A fake that answers each `AZ?` `late` after it is asked.
     fn fake_late(answer: Option<&'static str>, late: Duration) -> (FakePst, PstRotatorLink) {
+        fake_with(answer, None, late)
+    }
+
+    /// The question PstRotator (the az/el program) answers with its elevation, `EL:yy.y<CR>`
+    /// (PstRotator User's Manual Rev. 7.5, p. 12). PstRotatorAz's manual has no such question.
+    const EL_QUESTION: &str = "<PST>EL?</PST>";
+
+    /// A fake PstRotator with an elevation axis: it answers `AZ?` with `az` and, while `el_on`
+    /// holds, `EL?` with `el`, both on its port + 1 as its manual says.
+    fn fake_azel(az: &'static str, el: &'static str) -> (FakePst, PstRotatorLink, Arc<AtomicBool>) {
+        let el_on = Arc::new(AtomicBool::new(true));
+        let (pst, link) = fake_with(Some(az), Some((el, Arc::clone(&el_on))), Duration::ZERO);
+        (pst, link, el_on)
+    }
+
+    fn fake_with(
+        answer: Option<&'static str>,
+        el: Option<(&'static str, Arc<AtomicBool>)>,
+        late: Duration,
+    ) -> (FakePst, PstRotatorLink) {
         // Its reply port is its own + 1, which another test may hold: try again on a fresh one.
         for _ in 0..50 {
             let sock = UdpSocket::bind("127.0.0.1:0").expect("a loopback UDP port");
@@ -493,10 +664,16 @@ mod tests {
                 Err(_) => continue,
             };
             let (tx, heard) = mpsc::channel();
+            let el = el.clone();
             std::thread::spawn(move || {
                 let mut buf = [0u8; 512];
                 while let Ok((n, _)) = sock.recv_from(&mut buf) {
                     let d = String::from_utf8_lossy(&buf[..n]).to_string();
+                    if let (true, Some((e, on))) = (d == EL_QUESTION, &el) {
+                        if on.load(Ordering::Relaxed) {
+                            let _ = sock.send_to(e.as_bytes(), ("127.0.0.1", port + 1));
+                        }
+                    }
                     if let (true, Some(a)) = (d == AZ_QUERY, answer) {
                         let sock = sock.try_clone().expect("the fake's socket");
                         std::thread::spawn(move || {
@@ -515,9 +692,12 @@ mod tests {
     }
 
     impl FakePst {
-        /// Every datagram heard so far, other than `AZ?`.
+        /// Every datagram heard so far, other than the position questions `AZ?` and `EL?`.
         fn commands(&self) -> Vec<String> {
-            self.heard.try_iter().filter(|d| d != AZ_QUERY).collect()
+            self.heard
+                .try_iter()
+                .filter(|d| d != AZ_QUERY && d != EL_QUESTION)
+                .collect()
         }
 
         /// Every datagram heard until `quiet` passes without one, `AZ?` included.
@@ -556,6 +736,25 @@ mod tests {
         assert_eq!(parse_azimuth(b"AZ:\r"), None);
         assert_eq!(parse_azimuth(b"AZ:nan\r"), None);
         assert_eq!(parse_azimuth(b"hello"), None);
+    }
+
+    /// PstRotator's manual bytes for elevation (Rev. 7.5, pp. 11–12).
+    #[test]
+    fn pstrotators_elevation_bytes_are_its_manuals() {
+        assert_eq!(EL_QUERY, EL_QUESTION);
+        assert_eq!(
+            azel_datagram(85.0, 23.0),
+            "<PST><AZIMUTH>85</AZIMUTH><ELEVATION>23</ELEVATION></PST>"
+        );
+        assert_eq!(
+            azel_datagram(359.6, 89.6),
+            "<PST><AZIMUTH>0</AZIMUTH><ELEVATION>90</ELEVATION></PST>",
+            "whole degrees, never 360 and never past 90"
+        );
+        assert_eq!(parse_elevation(b"EL:23.5\r"), Some(23.5));
+        assert_eq!(parse_elevation(b"AZ:123.0\r"), None, "an azimuth is not it");
+        assert_eq!(parse_azimuth(b"EL:23.5\r"), None, "nor the other way round");
+        assert_eq!(parse_elevation(b"EL:nan\r"), None);
     }
 
     #[test]
@@ -711,6 +910,128 @@ mod tests {
         let e = rotator::point_azel(&a, 90.0, 30.0).expect_err("an elevation is refused");
         assert!(e.to_string().contains("RPRT -1"), "{e}");
         assert!(pst.commands().is_empty(), "a refused command sends nothing");
+    }
+
+    /// #480: PstRotator (the az/el program) answers `EL?`, so the link declares its elevation axis,
+    /// reads its elevation back, and sends a pass's elevation with the azimuth, in one message as
+    /// its manual allows. Before, the link took every PstRotator for PstRotatorAz.
+    #[test]
+    fn pstrotator_with_elevation_declares_it_and_points_both_axes() {
+        let (pst, link, _) = fake_azel("AZ:12.0\r", "EL:30.0\r");
+        let a = addr(&link);
+        let limits = rotator::read_limits(&a)
+            .expect("answered")
+            .expect("declared");
+        assert_eq!(limits.model, MODEL);
+        assert_eq!(limits.elevation(), Some((0.0, 90.0)), "an elevation axis");
+        assert_eq!(
+            rotator::read_position(&a).expect("read"),
+            (12.0, Some(30.0))
+        );
+        rotator::point_azel(&a, 90.0, 30.0).expect("PstRotator answered, so RPRT 0");
+        assert_eq!(
+            pst.commands(),
+            vec!["<PST><AZIMUTH>90</AZIMUTH><ELEVATION>30</ELEVATION></PST>"]
+        );
+    }
+
+    /// A satellite track's first `P az el` may come before anything asked `\dump_state`: the link
+    /// finds the elevation axis then, rather than refusing the pass's elevation.
+    #[test]
+    fn a_tracks_first_elevation_finds_the_axis_by_itself() {
+        let (pst, link, _) = fake_azel("AZ:12.0\r", "EL:30.0\r");
+        rotator::point_azel(&addr(&link), 200.0, 45.4).expect("RPRT 0");
+        assert_eq!(
+            pst.commands(),
+            vec!["<PST><AZIMUTH>200</AZIMUTH><ELEVATION>45</ELEVATION></PST>"]
+        );
+    }
+
+    /// The declared range is 0–90°, and nothing past it is ever sent: an elevation above it is
+    /// refused (`RPRT -1`, as Hamlib's frontend refuses one), never clamped onto the stop.
+    #[test]
+    fn an_elevation_past_the_declared_range_is_refused_and_sends_nothing() {
+        let (pst, link, _) = fake_azel("AZ:12.0\r", "EL:30.0\r");
+        let a = addr(&link);
+        rotator::read_limits(&a).expect("answered");
+        let e = rotator::point_azel(&a, 90.0, 95.0).expect_err("past 90° is refused");
+        assert!(e.to_string().contains("RPRT -1"), "{e}");
+        assert!(pst.commands().is_empty(), "a refused command sends nothing");
+    }
+
+    /// Turning the beam on an az/el PstRotator keeps the elevation it reports, instead of laying
+    /// the antenna on the horizon.
+    #[test]
+    fn turning_the_beam_keeps_pstrotators_elevation() {
+        let (pst, link, _) = fake_azel("AZ:12.0\r", "EL:30.0\r");
+        rotator::point_keeping(&addr(&link), Some(200.0), None).expect("RPRT 0");
+        assert_eq!(
+            pst.commands(),
+            vec!["<PST><AZIMUTH>200</AZIMUTH><ELEVATION>30</ELEVATION></PST>"]
+        );
+    }
+
+    /// An elevation PstRotator did not report is no position, never 0°: a beam turn that keeps the
+    /// elevation would otherwise send the antenna to the horizon.
+    #[test]
+    fn an_unanswered_elevation_is_no_position_and_moves_nothing() {
+        let (pst, link, el_on) = fake_azel("AZ:12.0\r", "EL:30.0\r");
+        let a = addr(&link);
+        rotator::read_limits(&a).expect("answered");
+        el_on.store(false, Ordering::Relaxed);
+        let e = rotator::read_position(&a).expect_err("no elevation reported");
+        assert!(e.to_string().contains("RPRT -5"), "{e}");
+        rotator::point_keeping(&a, Some(200.0), None).expect_err("nothing to keep");
+        assert!(
+            pst.commands().is_empty(),
+            "nothing was sent: {:?}",
+            pst.commands()
+        );
+    }
+
+    /// CONTROL: PstRotatorAz is asked about elevation once, not on every `\dump_state` the Rotor
+    /// pane asks (one every two seconds), and stays azimuth-only.
+    #[test]
+    fn pstrotatoraz_is_asked_about_elevation_once() {
+        let (pst, link) = fake(Some("AZ:12\r"));
+        let a = addr(&link);
+        for _ in 0..3 {
+            let limits = rotator::read_limits(&a)
+                .expect("answered")
+                .expect("declared");
+            assert_eq!(limits.elevation(), None, "azimuth only");
+        }
+        let asked = pst
+            .hears(Duration::from_millis(300))
+            .into_iter()
+            .filter(|d| d == EL_QUESTION)
+            .count();
+        assert_eq!(asked, 1, "EL? asked once");
+    }
+
+    /// The az/el twin of [`real_rotctld_commands_are_answered_as_before`]: the same rotctld
+    /// commands, against a PstRotator with an elevation axis.
+    #[test]
+    fn real_rotctld_commands_to_an_azel_pstrotator() {
+        let script: &[u8] = b"P 90 30\np\n\\dump_state\nP 90 0\nP 90 91\nS\nq\n";
+        let want = "RPRT 0\n12.000000\n30.000000\n1\n3\nmin_az=0.000000\nmax_az=360.000000\n\
+                    min_el=0.000000\nmax_el=90.000000\nsouth_zero=0\nrot_type=AzEl\ndone\n\
+                    RPRT 0\nRPRT -1\nRPRT 0\n";
+        let (pst, link, _) = fake_azel("AZ:12.0\r", "EL:30.0\r");
+        let mut s = client(&link);
+        send(&mut s, script, 1);
+        let (closed, said) = answers(&mut s, Duration::from_secs(4));
+        assert_eq!(said, want);
+        assert!(closed, "`q` ends the session");
+        assert_eq!(
+            pst.commands(),
+            vec![
+                "<PST><AZIMUTH>90</AZIMUTH><ELEVATION>30</ELEVATION></PST>".to_string(),
+                "<PST><AZIMUTH>90</AZIMUTH><ELEVATION>0</ELEVATION></PST>".to_string(),
+                STOP_DATAGRAM.to_string(),
+                STOP_DATAGRAM.to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -1004,7 +1325,12 @@ mod tests {
         for chunk in [script.len(), 1] {
             let (heard, closed, said) = sent(script, chunk);
             assert_eq!(said, want, "the answers ({chunk} bytes a write)");
-            let heard: Vec<String> = heard.into_iter().filter(|d| d != AZ_QUERY).collect();
+            // The position questions are not commands: `AZ?` confirms each one, and `P 90 30`
+            // asks `EL?` once to learn that this PstRotatorAz has no elevation axis.
+            let heard: Vec<String> = heard
+                .into_iter()
+                .filter(|d| d != AZ_QUERY && d != EL_QUESTION)
+                .collect();
             assert_eq!(
                 heard, commands,
                 "what PstRotatorAz was sent ({chunk} bytes a write)"
