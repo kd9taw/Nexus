@@ -12,6 +12,7 @@
 
 use crate::ports::UsbPort;
 use crate::usbrig::match_rig_model;
+use std::time::Duration;
 
 /// Baud rates tried per port, most-common-for-CAT first. A port that answers at one baud
 /// ends the probe immediately (auto-select), so the rare high speeds rarely run.
@@ -130,6 +131,12 @@ pub const COMMON_CAT_MODELS: &[(u32, &str, &[u32])] = &[
     // The FT-847's CAT RATE menu offers exactly 4800 / 9600 / 57600 and Hamlib's caps agree
     // (`rigctl -m 1001 --dump-caps` → `4800..57600`). All three are seeded rather than one
     // "default": an operator who moved the menu off any single seed would be undetectable.
+    // THE BACKSTOP for the FT-847 entry below, at 9600: the FT-857 backend's rigctld answers this
+    // whole family within 0.7 s, where the FT-817's opens in ~1.7 s (once 3.2 s, cold), so an 817,
+    // 818, 857 or 897 at 9600 is caught here even if the FT-817 seed above runs out of time. (At
+    // 4800 the FT-857 entry above already comes first.) It names the radio "FT-857" when it is the
+    // one that answers; a seeded model is a guess the operator confirms anyway.
+    (1022, "Yaesu FT-857 / FT-857D", &[9600]),
     // ⚠️ LAST, after the FT-817 family: its open sends CAT ON, which that family reads as LOCK ON.
     (1001, "Yaesu FT-847", &[9600, 4800, 57600]),
 ];
@@ -237,13 +244,17 @@ pub fn candidates_from(
 /// wastes a baud ladder on a port a live daemon is holding.
 #[cfg(feature = "serial")]
 pub fn probe_cat_ports(fallback_model: u32, tcp_port: u16, exclude: &[String]) -> ProbeOutcome {
-    use crate::rig::Rig;
-    use crate::rigctld_proc::{spawn_rigctld, ControlLines};
-    use std::time::Duration;
-
     let ports = crate::ports::available_usb_ports();
+    sweep(candidates_from(&ports, fallback_model, exclude), tcp_port)
+}
+
+/// Probe `candidates` in order (the body of [`probe_cat_ports`]); the first answer ends it.
+#[cfg(feature = "serial")]
+fn sweep(candidates: Vec<Candidate>, tcp_port: u16) -> ProbeOutcome {
+    use crate::rigctld_proc::{spawn_rigctld, ControlLines};
+
     let addr = format!("127.0.0.1:{tcp_port}");
-    for c in candidates_from(&ports, fallback_model, exclude) {
+    for c in candidates {
         // A seeded (guessed-model) candidate probes only its family baud; a trusted model sweeps.
         let bauds: &[u32] = c
             .baud
@@ -278,12 +289,8 @@ pub fn probe_cat_ports(fallback_model: u32, tcp_port: u16, exclude: &[String]) -
                 // this candidate is skipped, the sweep goes on.
                 Err(_) => continue,
             };
-            // Let rigctld open the port + settle, then ask for the dial frequency.
-            std::thread::sleep(Duration::from_millis(700));
-            let hz = Rig::rigctld(&addr)
-                .read_freq()
-                .ok()
-                .filter(|&hz| is_plausible_cat_freq(hz));
+            let mut proc = proc;
+            let hz = read_freq_when_listening(&addr, LISTEN_DEADLINE, || proc.is_alive());
             drop(proc); // kill rigctld + free the serial port before the next attempt
             std::thread::sleep(Duration::from_millis(200));
             if let Some(freq_hz) = hz {
@@ -299,6 +306,46 @@ pub fn probe_cat_ports(fallback_model: u32, tcp_port: u16, exclude: &[String]) -
         }
     }
     ProbeOutcome::NoAnswer
+}
+
+/// How long a throwaway rigctld gets to start listening, per candidate. rigctld opens the rig
+/// BEFORE it listens, and Hamlib's open is slow on exactly the rigs the seeded sweep exists for:
+/// ~0.77 s for an FT-847 (50 ms per byte plus 50 ms after each frame, `ft847.h`) and ~1.7 s for an
+/// FT-817/818 (`ft817_open` sleeps 1.5 s), before a real radio's own reply time or a Windows spawn.
+///
+/// ⚠️ THE COST, accepted: a candidate nothing answers holds its port for the whole deadline, so a
+/// no-answer seeded sweep of a bridge-chip port grows from ~25 s to ~75 s. A hit still ends the
+/// sweep at once, and a daemon that exits (it could not open the port) ends its wait at once.
+pub const LISTEN_DEADLINE: Duration = Duration::from_millis(2500);
+
+/// Read the dial frequency from the throwaway rigctld at `addr` once it is listening.
+///
+/// It retries ONLY a refused connect, every 50 ms until `deadline` or until `alive` says the
+/// daemon has exited. A refused connect never reaches rigctld, so nothing more goes to the radio
+/// than before: the one connection that succeeds carries the one `f` read, as the fixed 700 ms
+/// sleep's single read did. No throwaway connect is made to test for listening, because a client
+/// that comes and goes is one rigctld may close and re-open the rig for. Any other failure (the
+/// daemon listened and the rig did not answer) ends the candidate, as it always has.
+#[cfg_attr(not(feature = "serial"), allow(dead_code))] // the sweep's own; tests use it without
+fn read_freq_when_listening(
+    addr: &str,
+    deadline: Duration,
+    mut alive: impl FnMut() -> bool,
+) -> Option<u64> {
+    let start = std::time::Instant::now();
+    loop {
+        match crate::rig::Rig::rigctld(addr).read_freq() {
+            Ok(hz) => return Some(hz).filter(|&hz| is_plausible_cat_freq(hz)),
+            Err(e)
+                if e.kind() == std::io::ErrorKind::ConnectionRefused
+                    && start.elapsed() < deadline
+                    && alive() =>
+            {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 /// Without the `serial` feature there is no port enumeration → nothing to probe.
@@ -361,11 +408,7 @@ mod tests {
     /// because a rig left on one we skip is undetectable by construction.
     #[test]
     fn the_ft847_is_seeded_at_every_rate_its_cat_menu_offers() {
-        let cands = candidates_from(
-            &[usb("COM4", "USB-SERIAL CH340", "wch.cn")],
-            0,
-            &[],
-        );
+        let cands = candidates_from(&[usb("COM4", "USB-SERIAL CH340", "wch.cn")], 0, &[]);
         for baud in [4800u32, 9600, 57600] {
             assert!(
                 cands
@@ -388,7 +431,7 @@ mod tests {
         const FT817_FAMILY: &[u32] = &[1020, 1041, 1022, 1023, 1043];
         const FT817_FAMILY_RATES: &[u32] = &[4800, 9600, 38400];
         let cands = candidates_from(&[usb("COM4", "USB-SERIAL CH340", "wch.cn")], 0, &[]);
-        let first = |pred: &dyn Fn(&Candidate) -> bool| cands.iter().position(|c| pred(c));
+        let first = |pred: &dyn Fn(&Candidate) -> bool| cands.iter().position(pred);
         for &baud in FT817_FAMILY_RATES {
             let Some(ft847) = first(&|c| c.model == 1001 && c.baud == Some(baud)) else {
                 continue;
@@ -399,7 +442,106 @@ mod tests {
                 "an FT-817-family radio at {baud} baud meets the FT-847 probe (CAT ON = LOCK ON) \
                  before any seed of its own family"
             );
+            // And one that answers IN TIME: coming first is not enough if its open outlasts the
+            // listen deadline. The FT-857 backend's rigctld answers within 0.7 s (rigctld 4.6.5
+            // and 4.7.1, emulated radio); the FT-817's opens in ~1.7 s, once 3.2 s cold.
+            let fast = first(&|c| c.model == 1022 && c.baud == Some(baud));
+            assert!(
+                fast.is_some_and(|i| i < ft847),
+                "at {baud} baud no fast-opening FT-857 seed comes before the FT-847 probe"
+            );
         }
+    }
+
+    /// A stand-in rigctld that starts listening only after `after`, as the real one does: it opens
+    /// the rig BEFORE it listens, and Hamlib's open takes ~0.77 s for an FT-847 (its per-byte
+    /// write delays) and ~1.7 s for an FT-817/818 (`ft817_open` sleeps 1.5 s). It answers `f`.
+    fn late_rigctld(after: Duration) -> String {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        std::thread::spawn(move || {
+            std::thread::sleep(after);
+            let l = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+            if let Ok((mut s, _)) = l.accept() {
+                use std::io::{Read, Write};
+                let mut b = [0u8; 64];
+                let _ = s.read(&mut b);
+                let _ = s.write_all(b"14074000\n");
+                std::thread::sleep(Duration::from_secs(2));
+            }
+        });
+        format!("127.0.0.1:{port}")
+    }
+
+    /// ⭐ THE PROBE WAITS FOR RIGCTLD, not a fixed 700 ms. One read at 700 ms found nothing behind
+    /// a rigctld still opening the rig: an FT-847 was never found, and the FT-817 seed that must
+    /// answer before the FT-847 probe (whose CAT ON is LOCK ON on that family) never answered.
+    #[test]
+    fn the_probe_reads_a_rigctld_that_listens_only_after_a_slow_open() {
+        let addr = late_rigctld(Duration::from_millis(1700));
+        assert_eq!(
+            read_freq_when_listening(&addr, LISTEN_DEADLINE, || true),
+            Some(14_074_000)
+        );
+    }
+
+    /// The wait is bounded, and it ends early once the daemon has exited (it could not open the
+    /// port), so a dead candidate costs nothing extra.
+    #[test]
+    fn the_wait_gives_up_at_its_deadline_and_at_once_for_a_daemon_that_exited() {
+        let nobody = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            format!("127.0.0.1:{}", l.local_addr().unwrap().port())
+        };
+        let t = std::time::Instant::now();
+        assert_eq!(
+            read_freq_when_listening(&nobody, Duration::from_millis(600), || true),
+            None
+        );
+        let waited = t.elapsed();
+        assert!(
+            waited >= Duration::from_millis(550) && waited < Duration::from_millis(1500),
+            "{waited:?}"
+        );
+        let t = std::time::Instant::now();
+        assert_eq!(
+            read_freq_when_listening(&nobody, LISTEN_DEADLINE, || false),
+            None
+        );
+        assert!(
+            t.elapsed() < Duration::from_millis(300),
+            "{:?}",
+            t.elapsed()
+        );
+    }
+
+    /// THE REAL SWEEP against a radio emulated on a pty, driven by an emulator script that owns the
+    /// pty's other side and records every CAT frame the radio is sent. It names the pty in
+    /// `NEXUS_PROBE_PTY` (and the configured model, if any, in `NEXUS_PROBE_FALLBACK`), puts a
+    /// `rigctld` first on PATH that drops only `rts_state`/`dtr_state` (the line ioctls a pty
+    /// refuses), and reads the `OUTCOME` line. Ignored: it needs rigctld and the emulator.
+    #[cfg(feature = "serial")]
+    #[test]
+    #[ignore = "needs rigctld and an emulated radio on a pty"]
+    fn sweep_against_an_emulated_radio() {
+        let pty = std::env::var("NEXUS_PROBE_PTY").expect("NEXUS_PROBE_PTY");
+        let fallback = std::env::var("NEXUS_PROBE_FALLBACK")
+            .ok()
+            .and_then(|m| m.parse().ok())
+            .unwrap_or(0);
+        let port = UsbPort {
+            port_name: pty,
+            vid: 0,
+            pid: 0,
+            product: "USB-SERIAL CH340".into(),
+            manufacturer: "wch.cn".into(),
+        };
+        let t = std::time::Instant::now();
+        let out = sweep(candidates_from(&[port], fallback, &[]), 4610);
+        println!("OUTCOME {out:?} after {:.1} s", t.elapsed().as_secs_f64());
     }
 
     /// The trusted-model sweep runs EVERY baud on EVERY candidate port before giving up, so

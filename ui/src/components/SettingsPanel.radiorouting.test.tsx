@@ -271,3 +271,21 @@ describe('a refused save says why, in Test CAT and Auto-test too', () => {
     await waitFor(() => expect(shown()).toBe(`✗ ${refusal}`))
   })
 })
+
+// Auto-test waits for each throwaway rigctld to start listening, so a port nothing answers on takes
+// over a minute. A bare "…" on the button for that long reads as hung: the CAT status line counts
+// the seconds while it works, and the result replaces it.
+describe('Auto-test says it is working while it works', () => {
+  it('counts the seconds in the CAT status line until the probe answers', async () => {
+    let answer: (v: unknown) => void = () => {}
+    api.get('probeCatPorts').mockImplementation(() => new Promise((resolve) => (answer = resolve)))
+    renderPanel()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
+    fireEvent.click(await screen.findByRole('button', { name: /auto-test/i }))
+    const line = () => document.querySelector('.settings-cat-test .cat-result')?.textContent ?? ''
+    await waitFor(() => expect(line()).toMatch(/^Testing ports — 0s/))
+    await waitFor(() => expect(line()).toMatch(/^Testing ports — [1-9]\d*s/), { timeout: 3000 })
+    answer({ found: false, detail: 'No port answered.' })
+    await waitFor(() => expect(line()).toBe('✗ No port answered.'))
+  })
+})
