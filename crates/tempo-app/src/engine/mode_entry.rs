@@ -1198,4 +1198,33 @@ mod tests {
             );
         }
     }
+
+    /// The recall side follows the radio's OWN home, licence class included. A US class homes on
+    /// 10368.100 on every radio, so a US Technician on SDR Console (or an unknown radio) who
+    /// hand-tuned 10368.250 gets it back on re-pick; the transponder side is `Open`'s, never theirs.
+    #[test]
+    fn a_us_class_recalls_its_own_terrestrial_3cm_dial_on_any_radio() {
+        for rig in [2056, 0] {
+            for word in ["phone", "cw"] {
+                let mut e = Engine::new("N0CALL", "EN52", 0);
+                e.settings.license_class = crate::settings::LicenseClass::Technician;
+                e.settings.rig_model = rig;
+                e.set_operating_mode(word, false);
+                e.set_frequency(14.250, "20m", "USB");
+                e.pick_band("3cm", Some(word));
+                assert!(
+                    (e.settings.dial_mhz - 10368.100).abs() < 1e-9,
+                    "scene: rig {rig} {word} homes"
+                );
+                e.set_frequency(10368.250, "3cm", "USB");
+                e.pick_band("6m", Some(word));
+                e.pick_band("3cm", Some(word));
+                assert!(
+                    (e.settings.dial_mhz - 10368.250).abs() < 1e-9,
+                    "rig {rig} {word}: its own dial back, got {}",
+                    e.settings.dial_mhz
+                );
+            }
+        }
+    }
 }

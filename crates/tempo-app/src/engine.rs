@@ -11101,8 +11101,8 @@ impl Engine {
     }
 
     /// May a remembered 3 cm Phone/CW dial be recalled for the radio the QSY lands on? Only on the
-    /// side of QO-100's narrowband downlink (10489.500-10490.000) that radio's kind homes on
-    /// ([`crate::bandplan::transmits_on_3cm`]): the dial memory is station-wide per band and
+    /// side of QO-100's narrowband downlink (10489.500-10490.000) that radio's own home sits on for
+    /// this licence class ([`crate::bandplan::activity_home_mhz`]): the dial memory is station-wide per band and
     /// mode, so without this an IC-905's 10368.100 came back on SDR Console, and SDR Console's
     /// transponder dial on the IC-905, each the other kind's home. A cell on the wrong side falls
     /// to the radio's own home. Every other band and section recalls as before.
@@ -11116,9 +11116,15 @@ impl Engine {
         if band != "3cm" || !matches!(om, OperatingMode::Phone | OperatingMode::Cw) {
             return true;
         }
-        let on_transponder = (10_489.5..=10_490.0).contains(&dial);
-        let direct = crate::bandplan::transmits_on_3cm(self.routed_rig_model(band, dial, om));
-        on_transponder != direct
+        // The side the routed radio's OWN home sits on, for this licence class: `Open` homes on
+        // the transponder unless the radio transmits on 3 cm itself; a US class homes on
+        // 10368.100 on every radio, so its terrestrial cells always come back.
+        let transponder = 10_489.5..=10_490.0;
+        let rig = self.routed_rig_model(band, dial, om);
+        let home_on_transponder =
+            crate::bandplan::activity_home_mhz(self.settings.license_class, band, om, rig)
+                .is_some_and(|h| transponder.contains(&h));
+        transponder.contains(&dial) == home_on_transponder
     }
 
     /// The operator is in the PSK section: the Keyboard section with PSK as its modem
