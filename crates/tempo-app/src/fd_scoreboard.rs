@@ -142,6 +142,11 @@ pub struct FdBoardData {
     pub power_mult: u32,
     /// Claimed bonus ids (settings), filtered against the menu.
     pub claimed: Vec<String>,
+    /// The counts typed beside the per-unit bonuses (settings), by id.
+    pub bonus_counts: std::collections::BTreeMap<String, u32>,
+    /// Counting contacts the club's GOTA station made (`FieldDayLog::gota_contacts` over the
+    /// club's own rebuild): these rows carry no station call, so the board is told.
+    pub gota_contacts: u32,
     /// Ticked objective ids (settings), for an event that scores by objectives.
     pub objectives: Vec<String>,
     pub positions: Vec<FdBoardPosition>,
@@ -836,7 +841,14 @@ pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
         .filter(|id| menu.iter().any(|b| b.id == *id))
         .cloned()
         .collect();
-    let bonus_points = rs.bonus_points(&claimed);
+    let bonus_points = rs.claimed_bonus_points(
+        fd_rules::BonusClaim {
+            claimed: &claimed,
+            counts: &d.bonus_counts,
+            class: &d.class,
+        },
+        d.gota_contacts,
+    );
     // An objectives event ticks its COMPLETED objectives on the board — each ticked one
     // and what it brings with it — in place of a bonus list it does not have.
     let earned = rs.objectives_earned(&d.objectives);
@@ -1265,7 +1277,14 @@ fn build_contest_core(d: &FdBoardData, c: &ContestBoard, now_unix: u64) -> Strin
     // points, the power tier where there is one, the multipliers with their caps, then
     // the ticked menu plus the bonus stations the club worked.
     let (qso_points, powered, mults, scored) = rs.scoring.score(log.score_rows(), d.power_mult);
-    let bonus_points = rs.bonus_points(&d.claimed) + log.bonus_station_points();
+    let bonus_points = rs.claimed_bonus_points(
+        fd_rules::BonusClaim {
+            claimed: &d.claimed,
+            counts: &d.bonus_counts,
+            class: &d.class,
+        },
+        log.gota_contacts(),
+    ) + log.bonus_station_points();
     let tiers = rs.scoring.power_tiers().is_some();
     let score = ContestScore {
         model: if rs.scoring.multipliers.is_empty() {
@@ -1872,6 +1891,8 @@ mod tests {
                 "web-submission".into(),  // 50
                 "not-a-real-bonus".into(),
             ],
+            bonus_counts: Default::default(),
+            gota_contacts: 0,
             // 100% alternative power (×2, bringing station equipment on alternative power,
             // ×1) and QRP (×4): OM 7. ARRL Field Day has no objectives and ignores them.
             objectives: vec!["wfd-alt-power-100".into(), "wfd-qrp".into()],
@@ -3241,7 +3262,7 @@ mod tests {
 
     const ARRL_FD_CORE_GOLDEN: &str = r##"{"event":{"kind":"arrlfd","name":"ARRL Field Day","year":2026,"start_unix":1782583200,"end_unix":1782680400,"call":"W9ABC","class":"3A","section":"WI"},"score":{"model":"powered","qso_points":6,"bonus_points":150,"power_mult":2,"powered_points":12,"total":162},"qsos":{"count":4,"rate_hour":1,"rate_10min":1,"hourly":[2,2,0]},"ticker":[{"when_unix":1782590200,"call":"VE3AAA","class":"2A","section":"ONE","band":"20m","mode":"DIG","submode":"FT8","position":"CW tent","operator":"W9AAA"},{"when_unix":1782587200,"call":"K1ABC","class":"2A","section":"EMA","band":"20m","mode":"CW","submode":"","position":"Phone tent","operator":"W9BBB"},{"when_unix":1782586900,"call":"W5XYZ","class":"2A","section":"STX","band":"40m","mode":"PH","submode":"","position":"Phone tent","operator":"W9BBB"},{"when_unix":1782583400,"call":"K1ABC","class":"2A","section":"EMA","band":"20m","mode":"PH","submode":"","position":"Phone tent","operator":"W9BBB"},{"when_unix":1782583300,"call":"K1ABC","class":"2A","section":"EMA","band":"20m","mode":"CW","submode":"","position":"CW tent","operator":"W9AAA"}],"band_mode":[{"band":"40m","ph":1,"cw":0,"dig":0},{"band":"20m","ph":1,"cw":1,"dig":1}],"sections_worked":["EMA","ONE","STX"],"positions":[{"id":"aaaa1111","label":"CW tent","operator":"W9AAA","band":"20m","mode":"CW","stale":false,"qsos_raw":2,"qsos_unique":2,"points":4,"last_qso_unix":1782590200},{"id":"bbbb2222","label":"Phone tent","operator":"W9BBB","band":"40m","mode":"PH","stale":true,"qsos_raw":3,"qsos_unique":2,"points":2,"last_qso_unix":1782587200}],"claimed":["emergency-power","web-submission"]}"##;
     const ARRL_FD_SECTION_CODES_GOLDEN: &str = r##"DE EPA MDC NNY SNJ WNY WPA IL IN WI MN ND SD AR LA MS TN KY MI OH ENY NLI NNJ IA KS MO NE CT EMA ME NH RI VT WMA AK EWA ID MT OR WWA EB NV PAC SCV SF SJV SV NC SC VA WV CO NM UT WY AL GA NFL PR SFL VI WCF AZ LAX ORG SB SDG NTX OK STX WTX NL NB NS PE QC ONE ONN ONS GH MB SK AB BC TER"##;
-    const ARRL_FD_META_GOLDEN: &str = r##"{"bonuses":[{"id":"emergency-power","label":"100% emergency power","points":100},{"id":"media-publicity","label":"Media publicity","points":100},{"id":"public-location","label":"Public location","points":100},{"id":"public-info-table","label":"Public information table","points":100},{"id":"nts-message","label":"Message to ARRL SM/SEC","points":100},{"id":"w1aw-bulletin","label":"W1AW bulletin copied","points":100},{"id":"natural-power","label":"Natural power QSOs","points":100},{"id":"site-visit-official","label":"Site visit: elected official","points":100},{"id":"site-visit-agency","label":"Site visit: agency representative","points":100},{"id":"gota","label":"GOTA station max","points":100},{"id":"youth","label":"Youth participation","points":100},{"id":"web-submission","label":"Web submission","points":50},{"id":"safety-officer","label":"Safety officer","points":100},{"id":"social-media","label":"Social media","points":100},{"id":"educational","label":"Educational activity","points":100},{"id":"satellite","label":"Satellite QSO","points":100}],"event":{"call":"W9ABC","class":"3A","end_unix":1782680400,"kind":"arrlfd","name":"ARRL Field Day","section":"WI","start_unix":1782583200,"year":2026},"rules_year":2026,"scoring_model":"powered"}"##;
+    const ARRL_FD_META_GOLDEN: &str = r##"{"bonuses":[{"id":"emergency-power","label":"100% emergency power","points":100},{"id":"media-publicity","label":"Media publicity","points":100},{"id":"public-location","label":"Public location","points":100},{"id":"public-info-table","label":"Public information table","points":100},{"id":"nts-message","label":"Message to ARRL SM/SEC","points":100},{"id":"w1aw-bulletin","label":"W1AW bulletin copied","points":100},{"id":"natural-power","label":"Natural power QSOs","points":100},{"id":"site-visit-official","label":"Site visit: elected official","points":100},{"id":"site-visit-agency","label":"Site visit: agency representative","points":100},{"id":"gota","label":"GOTA station max","points":100},{"id":"gota-coach","label":"GOTA coach","points":100},{"id":"youth","label":"Youth participation","points":100},{"id":"message-handling","label":"Message handling","points":10},{"id":"web-submission","label":"Web submission","points":50},{"id":"safety-officer","label":"Safety officer","points":100},{"id":"social-media","label":"Social media","points":100},{"id":"educational","label":"Educational activity","points":100},{"id":"satellite","label":"Satellite QSO","points":100},{"id":"site-responsibilities","label":"Site responsibilities","points":50}],"event":{"call":"W9ABC","class":"3A","end_unix":1782680400,"kind":"arrlfd","name":"ARRL Field Day","section":"WI","start_unix":1782583200,"year":2026},"rules_year":2026,"scoring_model":"powered"}"##;
     const WFD_CORE_GOLDEN: &str = r##"qsos={"count":3,"hourly":[2,1,0],"rate_10min":0,"rate_hour":0}
 band_mode=[{"band":"40m","cw":0,"dig":0,"ph":1},{"band":"20m","cw":1,"dig":0,"ph":1}]
 sections_worked=["EMA","STX"]

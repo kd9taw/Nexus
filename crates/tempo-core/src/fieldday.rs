@@ -363,6 +363,12 @@ pub struct LoggedQso {
     /// and carried into the Logbook by the merge as the my-side park fields, so the contact
     /// counts for the activation too; no contest file writes it.
     pub activation: RowActivation,
+    /// ⭐ **Made on natural power** (ARRL Field Day 7.3.8: *"A separate list of natural power
+    /// QSOs should be submitted with your entry"*) — Settings' "on natural power now" at the
+    /// moment it was logged, as [`FieldDayLog::natural_power`] held it. Journaled
+    /// (`APP_NEXUS_NATPOWER`) and read by [`FieldDayLog::natural_power_list`] alone: no
+    /// submitted file and no club sync carries it, so the list is this laptop's own.
+    pub natural_power: bool,
 }
 
 /// The my-side activation a contest row was logged during ([`LoggedQso::activation`]): empty
@@ -1050,6 +1056,10 @@ pub struct FieldDayLog {
     /// contest entry and whenever the activation changes, and copied as [`rig`](Self::rig) is
     /// ([`LoggedQso::activation`]).
     pub activation: RowActivation,
+    /// Whether this station is on natural power RIGHT NOW, stamped by the engine at contest
+    /// entry and on every save, and copied onto each row as it is logged exactly as
+    /// [`operator`](Self::operator) is ([`LoggedQso::natural_power`]).
+    pub natural_power: bool,
     /// The LIVE rows: what is scored, duped, exported, merged and synced.
     qsos: Vec<LoggedQso>,
     /// ⭐ **The contacts the operator took out of the live log — kept, never deleted**
@@ -1163,6 +1173,7 @@ impl FieldDayLog {
             tx_power: String::new(),
             grid: String::new(),
             activation: RowActivation::default(),
+            natural_power: false,
             qsos: Vec::new(),
             removed: Vec::new(),
             worked: HashSet::new(),
@@ -1997,6 +2008,7 @@ impl FieldDayLog {
             tx_power: self.tx_power.clone(),
             grid: self.grid.clone(),
             activation: self.activation.clone(),
+            natural_power: self.natural_power,
         });
         // The contact is logged, so nothing is in flight any more: the next exchange
         // composed issues its own serial instead of re-sending this one's.
@@ -2240,6 +2252,46 @@ impl FieldDayLog {
     pub fn bonus_station_points(&self) -> u32 {
         self.ruleset()
             .bonus_station_points(self.counting().map(|q| q.call.as_str()))
+    }
+
+    /// ⭐ **The separate list of natural power QSOs** ARRL Field Day 7.3.8 asks for: *"100
+    /// bonus points for Field Day groups making a minimum of five QSOs without using power
+    /// from commercial mains or petroleum driven generator … A separate list of natural power
+    /// QSOs should be submitted with your entry."* Every counting row marked
+    /// [`LoggedQso::natural_power`], in log order, one line each. This laptop's rows only:
+    /// the mark rides no club sync.
+    pub fn natural_power_list(&self) -> String {
+        let rows: Vec<&LoggedQso> = self.counting().filter(|q| q.natural_power).collect();
+        let mut s = String::from("NATURAL POWER QSOs (ARRL Field Day rule 7.3.8)\n");
+        s.push_str(&format!("Station {}\n", self.mycall));
+        s.push_str(&format!(
+            "{} contact{} (the bonus needs at least five)\n\n",
+            rows.len(),
+            if rows.len() == 1 { "" } else { "s" }
+        ));
+        for q in rows {
+            let (date, time) = cabrillo_datetime(q.when_unix);
+            s.push_str(&format!(
+                "{date} {time}Z  {:<5} {:<5} {}\n",
+                q.band,
+                q.recorded_mode(),
+                q.call
+            ));
+        }
+        s
+    }
+
+    /// ⭐ **Counting contacts a GOTA station made** — the rows sent under another call than
+    /// the log's own ([`LoggedQso::station_call`]), which only a club's rebuild stamps, and
+    /// only for its GOTA station's rows. ARRL 7.3.13.1: *"Any successfully completed contacts
+    /// made by an operator at the GOTA station are worth five (5) bonus points"*. 0 on a
+    /// position's own log, whose rows carry no station call.
+    pub fn gota_contacts(&self) -> u32 {
+        let n = self
+            .counting()
+            .filter(|q| !q.station_call.is_empty())
+            .count();
+        u32::try_from(n).unwrap_or(u32::MAX)
     }
 
     /// Distinct ARRL/RAC sections worked — a DISPLAY count for the worked-sections
@@ -2650,6 +2702,10 @@ impl FieldDayLog {
                 if !q.activation.state.is_empty() {
                     s.push_str(&adif_field("APP_NEXUS_MYSTATE", &q.activation.state));
                 }
+            }
+            // Made on natural power, in the journal alone: the separate list is built from it.
+            if journal && q.natural_power {
+                s.push_str(&adif_field("APP_NEXUS_NATPOWER", "Y"));
             }
             // A contact the operator removed: kept, with when (`restore_row` reads it back).
             if let Some(at) = removed_unix {
@@ -3238,6 +3294,11 @@ impl FieldDayLog {
                 },
                 _ => RowActivation::default(),
             },
+            // From the journal's own `APP_NEXUS_NATPOWER`: a row journaled before the tag
+            // existed was not marked.
+            natural_power: f
+                .get("APP_NEXUS_NATPOWER")
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case("Y")),
         };
         match removed_unix {
             Some(at) => self.keep_removed(row, at),
@@ -8918,6 +8979,83 @@ mod tests {
         let row = &log.qsos()[0];
         assert_eq!(row.call, "K9AAB", "the edit took");
         assert_eq!(row.activation, activation("POTA", "US-0001", "ND"));
+    }
+
+    /// ⭐ **ARRL Field Day 7.3.8's separate list of natural power QSOs.** A contact logged while
+    /// the station is on natural power is marked, the journal keeps the mark (a restart reads
+    /// it back), no submitted file carries it, and the list holds exactly the marked contacts
+    /// that count — a duplicate is not one.
+    #[test]
+    fn the_natural_power_list_holds_the_marked_contacts_and_the_journal_keeps_the_mark() {
+        let fd = || {
+            FieldDayLog::new(
+                "W9XYZ",
+                ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+                "20m",
+            )
+        };
+        let mut log = fd();
+        assert!(log.log_mode_at("K9AAA", "2A", "IL", "CW", 0, 1_782_583_200));
+        log.natural_power = true;
+        assert!(log.log_mode_at("K9BBB", "1D", "WI", "CW", 0, 1_782_583_260));
+        assert!(log.log_mode_at("K9CCC", "1E", "IN", "PH", 0, 1_782_583_320));
+        // The same station again: a duplicate, logged, and not a natural power QSO to list.
+        log.log_mode_at("K9BBB", "1D", "WI", "CW", 0, 1_782_583_380);
+        log.natural_power = false;
+        assert!(log.log_mode_at("K9DDD", "3A", "OH", "CW", 0, 1_782_583_440));
+
+        let marked = |log: &FieldDayLog| -> Vec<String> {
+            log.qsos()
+                .iter()
+                .filter(|q| q.natural_power)
+                .map(|q| q.call.clone())
+                .collect()
+        };
+        assert_eq!(marked(&log), ["K9BBB", "K9CCC", "K9BBB"]);
+        assert_eq!(
+            log.natural_power_list(),
+            "NATURAL POWER QSOs (ARRL Field Day rule 7.3.8)\n\
+             Station W9XYZ\n\
+             2 contacts (the bonus needs at least five)\n\n\
+             2026-06-27 1801Z  20m   CW    K9BBB\n\
+             2026-06-27 1802Z  20m   SSB   K9CCC\n"
+        );
+
+        let journal = log.journal_adif();
+        assert_eq!(
+            journal.matches("<APP_NEXUS_NATPOWER:1>Y").count(),
+            3,
+            "{journal}"
+        );
+        for export in [log.adif(), log.submission_adif()] {
+            assert!(!export.contains("APP_NEXUS_NATPOWER"), "{export}");
+        }
+        let mut back = fd();
+        back.merge_adif(&journal, 0);
+        assert_eq!(
+            marked(&back),
+            ["K9BBB", "K9CCC", "K9BBB"],
+            "read back from the journal"
+        );
+        assert_eq!(back.natural_power_list(), log.natural_power_list());
+    }
+
+    /// ⭐ A position's own log holds no GOTA contact (its rows carry no station call); a row
+    /// stamped with another call (a club's rebuild of its GOTA station's rows) is one, once it
+    /// counts.
+    #[test]
+    fn gota_contacts_are_the_counting_rows_sent_under_another_call() {
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
+        assert!(log.log_mode_at("K9AAA", "2A", "IL", "CW", 0, 1_782_583_200));
+        assert_eq!(log.gota_contacts(), 0);
+        log.station_call = "K9GOTA".into();
+        assert!(log.log_mode_at("K9BBB", "1D", "WI", "CW", 0, 1_782_583_260));
+        assert!(log.log_mode_at("K9CCC", "1E", "IN", "PH", 0, 1_782_583_320));
+        assert_eq!(log.gota_contacts(), 2);
     }
 }
 

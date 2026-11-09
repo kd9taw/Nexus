@@ -111,6 +111,16 @@ pub enum SatVfoMap {
 }
 
 impl Settings {
+    /// ⭐ What this station claims of the contest's bonus menu: the ticked ids, the counts
+    /// typed beside the per-unit ones, and the entry class (`fd_rules::BonusClaim`).
+    pub fn fd_bonus_claim(&self) -> tempo_core::fd_rules::BonusClaim<'_> {
+        tempo_core::fd_rules::BonusClaim {
+            claimed: &self.fd_bonuses,
+            counts: &self.fd_bonus_counts,
+            class: &self.fd_class,
+        }
+    }
+
     /// The rotator policy these settings describe — one place that turns the
     /// flat persisted fields into the pointing rules.
     pub fn rotator_config(&self) -> tempo_core::rotator::RotatorConfig {
@@ -1901,6 +1911,20 @@ pub struct Settings {
     /// same points it always did.
     #[serde(default)]
     pub fd_bonuses_planned: Vec<String>,
+    /// ⭐ The count typed beside a bonus worth so much PER UNIT (the rules file's `per_unit`:
+    /// ARRL's transmitters on emergency power, youth participants, messages handled), by
+    /// bonus id. Read only for an id that is also in [`Self::fd_bonuses`]: the box claims the
+    /// bonus and this says how many. A claimed box with no count here is one unit, which is
+    /// what it scored before the count existed. `#[serde(default)]`, so an older settings
+    /// file loads with none and scores what it always did.
+    #[serde(default)]
+    pub fd_bonus_counts: std::collections::BTreeMap<String, u32>,
+    /// ⭐ **This station is on natural power now** (ARRL Field Day 7.3.8: *"without using
+    /// power from commercial mains or petroleum driven generator"*). While it is on, each
+    /// contact this laptop logs is marked ([`tempo_core::fieldday::LoggedQso::natural_power`])
+    /// for the separate list the rule asks for. This laptop's own: no club sync carries it.
+    #[serde(default)]
+    pub fd_natural_power: bool,
     /// ⭐ Ticked OBJECTIVE ids — the objectives a contest that scores by them (Winter Field
     /// Day) has completed, from its rules file's `objective_menu`. What the claimed score
     /// MULTIPLIES by: QSO points × (the objectives' multipliers + 1).
@@ -6736,6 +6760,8 @@ impl Default for Settings {
             fd_power_mult: 2,
             fd_bonuses: Vec::new(),
             fd_bonuses_planned: Vec::new(),
+            fd_bonus_counts: std::collections::BTreeMap::new(),
+            fd_natural_power: false,
             fd_objectives: Vec::new(),
             fd_objectives_planned: Vec::new(),
             n3fjp_host: String::new(),

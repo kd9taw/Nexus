@@ -5638,7 +5638,7 @@ export async function civDiagnosticStatus(): Promise<string> {
  * text (the caller saves it via a browser download). Rejects if there is no
  * log to export (e.g. not in Field Day mode).
  */
-export async function exportLog(format: 'cabrillo' | 'adif'): Promise<string> {
+export async function exportLog(format: 'cabrillo' | 'adif' | 'natural-power'): Promise<string> {
   return invoke<string>('export_log', { format })
 }
 

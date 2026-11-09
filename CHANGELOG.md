@@ -26,6 +26,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Only new parks and summits on the POTA/SOTA board.** A new **Only new** chip beside Hide worked today shows just the parks and summits you have never logged (the ones marked NEW PARK), on POTA, SOTA, WWFF or All, in the main view, its pop-out and the Connect box. Parks in your imported Hunted Parks list count as logged. While it is on, the chip shows how many activators it is hiding, and an empty board tells you it was the chip. It is off at first and Nexus remembers your choice. The chip is not shown when the board cannot tell which parks are new, such as a station you are only watching.
 - **TX meters on RTTY, PSK and JTTY.** Their TX strips now show the same read-only meters as SSTV and JS8 (power, ALC, SWR and COMP, whichever your radio reports), from a medium-sized window up, so you can set the audio drive against the radio's ALC. When a CAT outage has turned transmit off, the words that say so ("CAT lost: press TX On", then "CAT is back: press TX On") stand where the meters are, on these screens and on SSTV and JS8, which had shown only "TX off" there from a medium-sized window up. Stop TX and the other strip controls stay where they were. (#489)
+- **ARRL Field Day bonuses that count per unit score per unit.** Emergency power is 100 points per
+  transmitter, up to 20 (rule 7.3.1); youth participation 20 per young operator, up to 100, or 40 for
+  a Class B station (7.3.15); message handling, new, 10 per formal message, up to 100 (7.3.6). Type
+  the number beside the ticked box. The club's score adds five points for each contact the GOTA
+  station makes (7.3.13.1), counted from the club log with nothing to tick. Two new boxes: the GOTA
+  coach (100, 7.3.13.2) and site responsibilities (50, 7.3.18). A box ticked before this update
+  counts as one unit, so Emergency Power still scores 100. Two older ticks change: a ticked Youth
+  box now scores 20, one young operator, until you type how many; and the old GOTA tick adds
+  nothing, because GOTA points now come from the club log. The values come with the rules data, and
+  older Nexus versions keep scoring each box once, as before.
+- **The natural power list ARRL Field Day asks for (rule 7.3.8).** Tick "On natural power now" beside
+  the Natural Power bonus, and each contact this laptop logs while it is on is marked. Export ▸
+  Natural power saves the list. Each laptop exports its own list; club sync does not carry the mark.
 
 ### Changed
 - **The built-in SQLite is updated to 3.54 for a security fix.** The logbook's database engine moves from SQLite 3.50 to 3.54.1, which fixes a flaw where a specially made pair of database files could make the program read leftover memory. Your log, its format and how it behaves are unchanged, and nothing needs doing.

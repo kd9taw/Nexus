@@ -73,11 +73,68 @@ pub const RUNNING_DAY_LEAD_SECS: u64 = 24 * 3600;
 
 /// One Field Day bonus (replaces the old `tempo_app::FD_BONUSES` tuple table).
 /// `id` is the stable settings key; `points` is what a claimed bonus scores.
+///
+/// ⭐ **A bonus worth so much PER UNIT** — ARRL's 100 per transmitter on emergency power
+/// (7.3.1), 20 per youth participant (7.3.15), 10 per message handled (7.3.6), 5 per GOTA
+/// contact (7.3.13.1) — says so in [`per_unit`](Self::per_unit), and then `points` is NOT
+/// what this build scores. `points` stays the single value an older build scores the box
+/// at, because the rules file reaches installed builds: 1.14 to 1.23 ignore the new keys
+/// and keep scoring `points` once ([`FdRuleset::claimed_bonus_points`] is the newer rule).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Bonus {
     pub id: &'static str,
     pub label: &'static str,
     pub points: u32,
+    /// Points per unit; `0` for a one-box bonus, which scores [`points`](Self::points).
+    pub per_unit: u32,
+    /// The most units the rule credits; `0` for no limit (GOTA: *"There is no limit to the
+    /// number of contacts a single GOTA operator can make"*).
+    pub max_units: u32,
+    /// A lower limit for an entry class, by the class's letter: youth at a Class B station,
+    /// *"maximum of 40 points"* (7.3.15.2), so `[("B", 2)]`.
+    pub class_max_units: &'static [(&'static str, u32)],
+    /// Where the count comes from.
+    pub counted_from: BonusCount,
+}
+
+/// ⭐ **Who counts a per-unit bonus's units.**
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BonusCount {
+    /// The operator types the count beside the box (`Settings::fd_bonus_counts`); a
+    /// claimed box with no count typed is one unit, which is what a box scored before
+    /// the count existed.
+    #[default]
+    Operator,
+    /// The club's log counts it: one unit per counting contact a GOTA station made
+    /// ([`crate::fieldday::FieldDayLog::gota_contacts`]). Nobody ticks or types it — like
+    /// a bonus station, it is earned in the log, and a box would leave a club that missed
+    /// it short on its entry.
+    GotaContacts,
+}
+
+/// ⭐ **What the operator has claimed of the bonus menu** — the ticked ids, the counts typed
+/// beside the per-unit ones, and the entry class whose letter can lower a limit.
+#[derive(Debug, Clone, Copy)]
+pub struct BonusClaim<'a> {
+    pub claimed: &'a [String],
+    pub counts: &'a BTreeMap<String, u32>,
+    /// The entry class as the station sends it (`"3A"`); only its letter is read.
+    pub class: &'a str,
+}
+
+/// The counts of a claim that typed none.
+static NO_COUNTS: BTreeMap<String, u32> = BTreeMap::new();
+
+impl BonusClaim<'_> {
+    /// Nothing ticked and nothing typed: a log-counted bonus still scores.
+    pub fn none() -> BonusClaim<'static> {
+        BonusClaim {
+            claimed: &[],
+            counts: &NO_COUNTS,
+            class: "",
+        }
+    }
 }
 
 /// ⭐ **One of a contest's OBJECTIVES** — Winter Field Day's thirteen (the sponsor's 2027
@@ -478,9 +535,47 @@ impl FdRuleset {
         self.bonuses.iter().find(|b| b.id == id).map(|b| b.points)
     }
 
-    /// Total points for a set of claimed bonus ids (unknown ids score nothing).
+    /// Total points for a set of claimed bonus ids (unknown ids score nothing), each box
+    /// once — no counts, and no GOTA contacts. The scoring paths call
+    /// [`claimed_bonus_points`](Self::claimed_bonus_points).
     pub fn bonus_points(&self, claimed: &[String]) -> u32 {
         claimed.iter().filter_map(|id| self.bonus(id)).sum()
+    }
+
+    /// ⭐ **What one bonus of the menu scores** for `claim`, with `gota_contacts` the
+    /// counting contacts the log holds from a GOTA station.
+    pub fn bonus_value(&self, b: &Bonus, claim: BonusClaim<'_>, gota_contacts: u32) -> u32 {
+        let claimed = claim.claimed.iter().any(|id| id == b.id);
+        if b.per_unit == 0 {
+            return if claimed { b.points } else { 0 };
+        }
+        let units = match b.counted_from {
+            BonusCount::GotaContacts => gota_contacts,
+            BonusCount::Operator if claimed => claim.counts.get(b.id).copied().unwrap_or(1),
+            BonusCount::Operator => 0,
+        };
+        let letter = claim
+            .class
+            .trim()
+            .chars()
+            .last()
+            .map(|c| c.to_ascii_uppercase());
+        let limit = b
+            .class_max_units
+            .iter()
+            .find(|(class, _)| class.chars().next() == letter)
+            .map_or(b.max_units, |&(_, max)| max);
+        let units = if limit == 0 { units } else { units.min(limit) };
+        units.saturating_mul(b.per_unit)
+    }
+
+    /// ⭐ **The bonus menu's points for `claim`** — every bonus's
+    /// [`bonus_value`](Self::bonus_value), added after the multiplier like every bonus.
+    pub fn claimed_bonus_points(&self, claim: BonusClaim<'_>, gota_contacts: u32) -> u32 {
+        self.bonuses
+            .iter()
+            .map(|b| self.bonus_value(b, claim, gota_contacts))
+            .sum()
     }
 
     /// The objective this id names, when the menu has one.
@@ -1883,6 +1978,18 @@ struct BonusSpec {
     id: String,
     label: String,
     points: u32,
+    /// ⚠️ The four keys below are `#[serde(default)]`: absent is a one-box bonus, which is
+    /// what every bonus written before they existed means. They are NEW keys rather than a
+    /// new meaning for `points`, because 1.14 to 1.23 ignore a key they do not know and
+    /// keep scoring `points` once.
+    #[serde(default)]
+    per_unit: u32,
+    #[serde(default)]
+    max_units: u32,
+    #[serde(default)]
+    class_max_units: BTreeMap<String, u32>,
+    #[serde(default)]
+    counted_from: BonusCount,
 }
 
 /// One [`Objective`] in the rules file. Every field is REQUIRED: a file that forgot
@@ -2874,6 +2981,27 @@ mode class ({})",
                 return Err(format!("{tag}: duplicate bonus id {:?}", b.id));
             }
             ids.push(&b.id);
+            // A per-unit key on a one-box bonus is a value nothing would score.
+            if b.per_unit == 0
+                && (b.max_units != 0
+                    || !b.class_max_units.is_empty()
+                    || b.counted_from != BonusCount::Operator)
+            {
+                return Err(format!(
+                    "{tag}: bonus {:?} sets a limit or a count source without per_unit",
+                    b.id
+                ));
+            }
+            if let Some((class, _)) = b
+                .class_max_units
+                .iter()
+                .find(|(c, _)| c.len() != 1 || !c.bytes().all(|x| x.is_ascii_uppercase()))
+            {
+                return Err(format!(
+                    "{tag}: bonus {:?} limits class {class:?}, which is not one uppercase letter",
+                    b.id
+                ));
+            }
         }
         // ⭐ THE OBJECTIVE MENU. Each refusal is an objective that would load and then score
         // wrong: worth nothing, indistinguishable from another, bringing with it one that does
@@ -3057,6 +3185,16 @@ fn leak_bonuses(v: Vec<BonusSpec>) -> &'static [Bonus] {
                 id: leak_str(b.id),
                 label: leak_str(b.label),
                 points: b.points,
+                per_unit: b.per_unit,
+                max_units: b.max_units,
+                class_max_units: Box::leak(
+                    b.class_max_units
+                        .into_iter()
+                        .map(|(class, max)| (leak_str(class), max))
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                ),
+                counted_from: b.counted_from,
             })
             .collect::<Vec<_>>()
             .into_boxed_slice(),
@@ -3833,8 +3971,157 @@ mod tests {
             ]),
             150,
         );
-        // 16 since 2026-09-22: rule 7.3.8's satellite bonus joined the fifteen.
-        assert_eq!(rs.bonuses.len(), 16, "the full ARRL bonus menu");
+        // 16 since 2026-09-22: rule 7.3.8's satellite bonus joined the fifteen. 19 since
+        // 2026-10-14: the GOTA coach (7.3.13.2), message handling (7.3.6) and site
+        // responsibilities (7.3.18) joined them.
+        assert_eq!(rs.bonuses.len(), 19, "the full ARRL bonus menu");
+    }
+
+    /// The value of one ARRL Field Day bonus for a claim, by id.
+    fn arrl_bonus(id: &str, claimed: bool, count: Option<u32>, class: &str, gota: u32) -> u32 {
+        let rs = ruleset(FdEvent::ArrlFd, 2026);
+        let b = rs
+            .bonuses
+            .iter()
+            .find(|b| b.id == id)
+            .expect("the seed has it");
+        let ids = if claimed {
+            vec![id.to_string()]
+        } else {
+            Vec::new()
+        };
+        let counts: BTreeMap<String, u32> =
+            count.map(|n| (id.to_string(), n)).into_iter().collect();
+        let claim = BonusClaim {
+            claimed: &ids,
+            counts: &counts,
+            class,
+        };
+        rs.bonus_value(b, claim, gota)
+    }
+
+    /// ⭐ ARRL 7.3.1: *"100 points per transmitter classification if all contacts are made
+    /// only using an emergency power source up to a total of 20 transmitters (maximum 2,000
+    /// points)."* The count is the operator's: 0, 1, the limit and one past it.
+    #[test]
+    fn emergency_power_is_100_per_transmitter_up_to_20() {
+        let v = |n| arrl_bonus("emergency-power", true, Some(n), "3A", 0);
+        assert_eq!([v(0), v(1), v(3), v(20), v(21)], [0, 100, 300, 2000, 2000]);
+        // A box ticked before the count existed is one transmitter, as it always scored.
+        assert_eq!(arrl_bonus("emergency-power", true, None, "3A", 0), 100);
+        // A count with the box not ticked claims nothing.
+        assert_eq!(arrl_bonus("emergency-power", false, Some(3), "3A", 0), 0);
+    }
+
+    /// ⭐ ARRL 7.3.15.1: *"A 20-point bonus (maximum of 100) … for each participant age 18 or
+    /// younger"*; 7.3.15.2: a Class B station, *"maximum of 40 points"*.
+    #[test]
+    fn youth_is_20_per_participant_up_to_100_and_40_at_class_b() {
+        let a = |n| arrl_bonus("youth", true, Some(n), "3A", 0);
+        assert_eq!([a(0), a(1), a(5), a(6)], [0, 20, 100, 100]);
+        let b = |n| arrl_bonus("youth", true, Some(n), "2B", 0);
+        assert_eq!([b(0), b(1), b(2), b(3)], [0, 20, 40, 40]);
+        // The class letter only, whatever the case or spacing.
+        assert_eq!(arrl_bonus("youth", true, Some(5), " 1b ", 0), 40);
+        assert_eq!(
+            arrl_bonus("youth", true, Some(5), "", 0),
+            100,
+            "no class: the general limit"
+        );
+    }
+
+    /// ⭐ ARRL 7.3.6: *"10 points for each formal message … up to a maximum of 100 points
+    /// (ten messages)."*
+    #[test]
+    fn message_handling_is_10_per_message_up_to_100() {
+        let v = |n| arrl_bonus("message-handling", true, Some(n), "3A", 0);
+        assert_eq!([v(0), v(1), v(10), v(11)], [0, 10, 100, 100]);
+    }
+
+    /// ⭐ ARRL 7.3.13.1: *"Any successfully completed contacts made by an operator at the GOTA
+    /// station are worth five (5) bonus points … There is no limit"*. Counted from the log, so
+    /// neither the box nor a typed count moves it.
+    #[test]
+    fn gota_is_5_per_gota_contact_from_the_log_with_no_limit() {
+        let v = |n| arrl_bonus("gota", false, None, "3A", n);
+        assert_eq!([v(0), v(1), v(400), v(401)], [0, 5, 2000, 2005]);
+        assert_eq!(
+            arrl_bonus("gota", true, Some(50), "3A", 2),
+            10,
+            "the log's count, not a typed one"
+        );
+    }
+
+    /// ⭐ The two new one-box bonuses: the GOTA coach (7.3.13.2, *"a single 100-point
+    /// bonus"*) and site responsibilities (7.3.18, *"A 50-point bonus"*). A count typed
+    /// beside a one-box bonus changes nothing.
+    #[test]
+    fn the_gota_coach_and_site_responsibilities_are_one_box_each() {
+        for (id, pts) in [("gota-coach", 100), ("site-responsibilities", 50)] {
+            assert_eq!(arrl_bonus(id, false, None, "3A", 0), 0, "{id} unclaimed");
+            assert_eq!(arrl_bonus(id, true, None, "3A", 0), pts, "{id}");
+            assert_eq!(
+                arrl_bonus(id, true, Some(4), "3A", 0),
+                pts,
+                "{id} with a count"
+            );
+        }
+    }
+
+    /// The menu's total is the sum of its bonuses: 3 transmitters on emergency power, 2
+    /// youth, 4 messages, the W1AW bulletin, and 12 GOTA contacts, at Class A.
+    #[test]
+    fn the_claimed_menu_adds_each_bonus_once_at_its_value() {
+        let rs = ruleset(FdEvent::ArrlFd, 2026);
+        let ids: Vec<String> = [
+            "emergency-power",
+            "youth",
+            "message-handling",
+            "w1aw-bulletin",
+        ]
+        .map(String::from)
+        .to_vec();
+        let counts: BTreeMap<String, u32> = [
+            ("emergency-power", 3),
+            ("youth", 2),
+            ("message-handling", 4),
+        ]
+        .map(|(k, v)| (k.to_string(), v))
+        .into_iter()
+        .collect();
+        let claim = BonusClaim {
+            claimed: &ids,
+            counts: &counts,
+            class: "3A",
+        };
+        assert_eq!(rs.claimed_bonus_points(claim, 12), 300 + 40 + 40 + 100 + 60);
+    }
+
+    /// A file that sets a limit without a per-unit value describes a bonus nothing would
+    /// score, and a class limit names a class by its one letter.
+    #[test]
+    fn a_per_unit_key_without_per_unit_or_a_bad_class_letter_is_refused() {
+        let with = |edit: &dyn Fn(&mut serde_json::Value)| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            let menu = v["rulesets"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|r| r["event"] == "arrlfd")
+                .unwrap();
+            edit(&mut menu["bonuses"][1]);
+            parse_spec(&v.to_string())
+        };
+        assert!(with(&|_| {}).is_ok(), "control: the seed loads");
+        let err = with(&|b| b["max_units"] = serde_json::json!(3)).unwrap_err();
+        assert!(err.contains("without per_unit"), "{err}");
+        let err = with(&|b| {
+            b["per_unit"] = serde_json::json!(5);
+            b["class_max_units"] = serde_json::json!({"3B": 2});
+        })
+        .unwrap_err();
+        assert!(err.contains("not one uppercase letter"), "{err}");
+        assert!(with(&|b| b["counted_from"] = serde_json::json!("a_later_source")).is_err());
     }
 
     #[test]
@@ -4473,6 +4760,20 @@ mod tests {
             .lines()
             .filter_map(|l| Some((ts_str_field(l, "id")?, ts_num_field(l, "points")?)))
             .collect();
+        // The per-unit half of each row, which the checklist scores by: per unit, the limit,
+        // the class limit as written, and whether the club log counts it.
+        let ts_units: Vec<(u32, u32, bool, bool)> = body
+            .lines()
+            .filter(|l| ts_str_field(l, "id").is_some())
+            .map(|l| {
+                (
+                    ts_num_field(l, "perUnit").unwrap_or(0),
+                    ts_num_field(l, "maxUnits").unwrap_or(0),
+                    l.contains("classMaxUnits: { B: 2 }"),
+                    l.contains("fromLog: true"),
+                )
+            })
+            .collect();
         assert!(
             ts.len() > 10,
             "parsed only {} bonus rows out of ContestView.tsx — the parser is \
@@ -4494,13 +4795,27 @@ mod tests {
             "bonus id(s) {missing_in_rust:?} exist in ContestView.tsx but NOT in \
              the seed's bonus menu — a claimed checkbox that scores nothing"
         );
-        assert_eq!(ts.len(), 16, "the full ARRL bonus menu, both sides");
+        assert_eq!(ts.len(), 19, "the full ARRL bonus menu, both sides");
         for (i, (rust, ts_row)) in bonuses.iter().zip(&ts).enumerate() {
             assert_eq!(
                 (rust.id, rust.points),
                 *ts_row,
                 "bonus #{i} diverged (id or points) between the seed's bonus menu \
                  and ContestView.tsx"
+            );
+        }
+        for (i, (rust, ts_row)) in bonuses.iter().zip(&ts_units).enumerate() {
+            assert_eq!(
+                (
+                    rust.per_unit,
+                    rust.max_units,
+                    rust.class_max_units == [("B", 2)],
+                    rust.counted_from == BonusCount::GotaContacts,
+                ),
+                *ts_row,
+                "bonus #{i} ({}) diverged (per unit, limit, class limit or count source) \
+                 between the seed's bonus menu and ContestView.tsx",
+                rust.id
             );
         }
     }

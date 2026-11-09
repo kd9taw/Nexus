@@ -9414,6 +9414,7 @@ impl Engine {
         // same way.
         let (rig, tx_power, grid) = self.fd_row_kit();
         let activation = self.fd_row_activation();
+        let natural_power = self.settings.fd_natural_power;
         if let Mode::FieldDay { station, .. } = &mut self.mode {
             station.log.band = band;
             station.log.dial_khz = dial_khz;
@@ -9425,6 +9426,7 @@ impl Engine {
             station.log.tx_power = tx_power;
             station.log.grid = grid;
             station.log.activation = activation;
+            station.log.natural_power = natural_power;
         }
     }
 
@@ -16447,7 +16449,9 @@ impl Engine {
             .score(station.log.score_rows(), self.settings.fd_power_mult);
         // The ticked menu plus what the log earned — the same sum the snapshot shows
         // (`field_day_display`), so the two cannot disagree about the total.
-        let bonus = rs.bonus_points(&self.settings.fd_bonuses) + station.log.bonus_station_points();
+        let bonus = rs
+            .claimed_bonus_points(self.settings.fd_bonus_claim(), station.log.gota_contacts())
+            + station.log.bonus_station_points();
         Some((qso_pts, scored, bonus))
     }
 
@@ -17433,7 +17437,7 @@ impl Engine {
                     &self.settings.mycall,
                     session,
                     self.settings.fd_power_mult,
-                    &self.settings.fd_bonuses,
+                    self.settings.fd_bonus_claim(),
                     &self.settings.fd_objectives,
                 )
                 .total
@@ -17686,6 +17690,16 @@ impl Engine {
             })
             .collect();
         positions.sort_by(|a, b| a.id.cmp(&b.id));
+        // The GOTA station's counting contacts, off the club's own rebuild: the board's Field
+        // Day rows carry no station call to count them by.
+        let gota_contacts = if contest.is_none() && club.has_gota_station() {
+            self.fd_club_session(club).map_or(0, |session| {
+                club.unique_log_with(&self.settings.mycall, session)
+                    .gota_contacts()
+            })
+        } else {
+            0
+        };
         Some(crate::fd_scoreboard::FdBoardData {
             event: club.event,
             call: self.fd_club_call(),
@@ -17693,6 +17707,8 @@ impl Engine {
             section: self.settings.fd_section.clone(),
             power_mult: self.settings.fd_power_mult,
             claimed: self.settings.fd_bonuses.clone(),
+            bonus_counts: self.settings.fd_bonus_counts.clone(),
+            gota_contacts,
             objectives: self.settings.fd_objectives.clone(),
             positions,
             rows: club
@@ -20091,6 +20107,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     st.log.on_air_call = self.fd_row_call();
                     (st.log.rig, st.log.tx_power, st.log.grid) = self.fd_row_kit();
                     st.log.activation = self.fd_row_activation();
+                    st.log.natural_power = self.settings.fd_natural_power;
                     st
                 }),
                 running: true,
@@ -20104,6 +20121,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     st.log.on_air_call = self.fd_row_call();
                     (st.log.rig, st.log.tx_power, st.log.grid) = self.fd_row_kit();
                     st.log.activation = self.fd_row_activation();
+                    st.log.natural_power = self.settings.fd_natural_power;
                     st
                 }),
                 running: false,
@@ -35942,6 +35960,9 @@ contact yourself."
                     // The file the entry submits: a satellite contact the contest gives
                     // no credit is left out (the journal keeps it).
                     "adif" => Ok(station.log.submission_adif()),
+                    // ARRL Field Day 7.3.8's separate list of natural power QSOs, from this
+                    // laptop's own rows.
+                    "natural-power" => Ok(station.log.natural_power_list()),
                     // NAME and EMAIL, CLUB, ENTRY-CLASS, the typed OPERATORS, the multi-operator
                     // class, the overlay, the mailing address and the soapbox are the entrant's
                     // own settings, read at export so a corrected typo reaches the next file;
@@ -63716,6 +63737,50 @@ mod tests {
         );
     }
 
+    /// ⭐ **A per-unit bonus scores at the count Settings holds** (ARRL 7.3.1: 100 per
+    /// transmitter on emergency power), on the score and the snapshot alike; and a contact
+    /// logged while "on natural power now" is on is the one the natural power list names.
+    #[test]
+    fn the_bonus_counts_score_and_the_natural_power_switch_marks_contacts() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.fd_power_mult = 2;
+            s.fd_bonuses = vec!["emergency-power".into()];
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap()); // 2 pts
+        assert_eq!(
+            e.fd_score(),
+            Some((2, 4, 100)),
+            "no count typed: one transmitter"
+        );
+        {
+            let mut s = e.settings().clone();
+            s.fd_bonus_counts.insert("emergency-power".into(), 3);
+            s.fd_natural_power = true;
+            e.apply_settings(s);
+        }
+        assert_eq!(e.fd_score(), Some((2, 4, 300)), "three transmitters");
+        let fd = e.snapshot().field_day.expect("master on → FD chrome");
+        assert_eq!((fd.bonus_points, fd.total_score), (300, 304));
+
+        assert!(e.fd_log_manual("K2DEF", "1D", "NNJ", "CW").unwrap());
+        let list = e.export_log("natural-power").unwrap();
+        assert!(
+            list.contains("1 contact (the bonus needs at least five)"),
+            "{list}"
+        );
+        assert!(
+            list.contains(" K2DEF\n") && !list.contains("K1ABC"),
+            "{list}"
+        );
+    }
+
     /// PLANNING IS NOT SCORING. A club knows on Friday which bonuses it expects
     /// (media publicity, a safety officer, a youth op) and wants them tracked —
     /// but an intention is worth nothing on a submitted entry. `fd_bonuses` is
@@ -63734,8 +63799,9 @@ mod tests {
         .iter()
         .map(|b| b.id.to_string())
         .collect();
-        // 16 since 2026-09-22: ARRL 7.3.8's satellite bonus joined the fifteen.
-        assert_eq!(all.len(), 16, "the whole menu is planned below");
+        // 16 since 2026-09-22: ARRL 7.3.8's satellite bonus joined the fifteen. 19 since
+        // 2026-10-14: the GOTA coach, message handling and site responsibilities.
+        assert_eq!(all.len(), 19, "the whole menu is planned below");
         {
             let mut s = e.settings().clone();
             s.fd_active = true;
@@ -63776,7 +63842,7 @@ mod tests {
         );
         assert_eq!(
             e.settings().fd_bonuses_planned.len(),
-            16,
+            19,
             "earning a bonus does not empty the chase list"
         );
     }

@@ -7,7 +7,10 @@ import type { FdRulesetDto } from './api'
 export type FdDisplaySettings = Pick<
   Settings,
   'fdOperator' | 'fdPowerMult' | 'fdBonuses' | 'fdBonusesPlanned' | 'fdObjectives' | 'fdObjectivesPlanned'
->
+> &
+  // The station's own screen only: no Remote capture carries these two, so an observed
+  // view counts a claimed per-unit box as one unit (its score is the snapshot's).
+  Partial<Pick<Settings, 'fdBonusCounts' | 'fdClass'>>
 export interface FieldDayObservation {
   active: boolean
   fieldDay: FieldDayStatus | null

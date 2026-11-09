@@ -5870,6 +5870,9 @@ export const EN = {
   'fieldDay.export.dupeSheet.label': 'Dupe sheet',
   'fieldDay.export.dupeSheet.title':
     'Download a dupe / multiplier check sheet (sections + callsigns worked)',
+  'fieldDay.export.naturalPower.label': 'Natural power',
+  'fieldDay.export.naturalPower.title':
+    'Download the natural power contacts this laptop logged (ARRL Field Day rule 7.3.8 asks for the list)',
   'fieldDay.export.done': 'Exported → {{path}}',
   'fieldDay.export.remote': 'Only at the station: a press through Remote exports no log.',
 
@@ -5880,6 +5883,13 @@ export const EN = {
   'fieldDay.bonuses.aria': 'Claimed FD bonuses',
   'fieldDay.bonus.aria': '{{label}} — {{points}} pts',
   'fieldDay.bonus.pts': '{{points}} pts',
+  'fieldDay.bonus.ptsEach': '{{points}} pts each',
+  'fieldDay.bonus.count.aria': 'How many for {{label}}',
+  'fieldDay.bonus.count.title': '{{points}} pts each, up to {{max}}',
+  'fieldDay.bonus.fromLog': '{{points}} pts per GOTA contact, counted from the club log',
+  'fieldDay.bonus.naturalNow': 'On natural power now',
+  'fieldDay.bonus.naturalNow.title':
+    'Marks each contact this laptop logs while on, for the natural power list (Export ▸ Natural power)',
 
   // Three states per bonus: not planned / planned / earned. Only EARNED scores — a plan is
   // a plan, not points — so these words carry that distinction and must keep carrying it in

@@ -92,11 +92,21 @@ const FD_SHORT_NAMES: Record<FdKind, string> = { arrlfd: 'Field Day', wfd: 'WFD'
 export interface FdBonus {
   id: string
   label: string
+  /** What an older build scores the box at, once — and what a one-box bonus scores. */
   points: number
+  /** Points per unit, for a bonus worth so much each (the seed's `per_unit`). */
+  perUnit?: number
+  /** The most units credited (the seed's `max_units`); absent for no limit. */
+  maxUnits?: number
+  /** A lower limit by the entry class's letter (the seed's `class_max_units`). */
+  classMaxUnits?: Record<string, number>
+  /** Counted from the club log's GOTA rows, never ticked or typed. */
+  fromLog?: boolean
 }
 
 export const FD_BONUSES: FdBonus[] = [
-  { id: 'emergency-power',    label: 'Emergency Power',             points: 100 },
+  // ARRL 7.3.1: 100 per transmitter on emergency power, up to 20.
+  { id: 'emergency-power',    label: 'Emergency Power',             points: 100, perUnit: 100, maxUnits: 20 },
   { id: 'media-publicity',    label: 'Media Publicity',             points: 100 },
   { id: 'public-location',    label: 'Public Location',             points: 100 },
   { id: 'public-info-table',  label: 'Public Info Table',           points: 100 },
@@ -105,8 +115,13 @@ export const FD_BONUSES: FdBonus[] = [
   { id: 'natural-power',      label: 'Natural Power (solar/wind)',  points: 100 },
   { id: 'site-visit-official', label: 'Site Visit by Elected Official', points: 100 },
   { id: 'site-visit-agency',  label: 'Site Visit by Agency Official', points: 100 },
-  { id: 'gota',               label: 'GOTA Station',                points: 100 },
-  { id: 'youth',              label: 'Youth Participation',         points: 100 },
+  // ARRL 7.3.13.1: five per GOTA contact, no limit, counted from the club log.
+  { id: 'gota',               label: 'GOTA Station',                points: 100, perUnit: 5, fromLog: true },
+  { id: 'gota-coach',         label: 'GOTA Coach',                  points: 100 },
+  // ARRL 7.3.15: 20 per youth participant, up to 100 (Class B: 40).
+  { id: 'youth',              label: 'Youth Participation',         points: 100, perUnit: 20, maxUnits: 5, classMaxUnits: { B: 2 } },
+  // ARRL 7.3.6: 10 per formal message, up to 100.
+  { id: 'message-handling',   label: 'Message Handling',            points: 10, perUnit: 10, maxUnits: 10 },
   { id: 'web-submission',     label: 'Web Submission',              points: 50  },
   { id: 'safety-officer',     label: 'Safety Officer',              points: 100 },
   { id: 'social-media',       label: 'Social Media',               points: 100 },
@@ -116,7 +131,36 @@ export const FD_BONUSES: FdBonus[] = [
   // you work — "You do not receive an additional bonus for contacting different
   // satellites" — so it is a single box like the rest, not a per-bird tally.
   { id: 'satellite',          label: 'Satellite QSO',               points: 100 },
+  { id: 'site-responsibilities', label: 'Site Responsibilities',    points: 50  },
 ]
+
+/** The most units `b` credits at entry class `fdClass` (its letter), or `null` for no limit. */
+export function fdBonusLimit(b: FdBonus, fdClass: string): number | null {
+  const letter = fdClass.trim().slice(-1).toUpperCase()
+  const byClass = b.classMaxUnits?.[letter]
+  if (byClass !== undefined) return byClass
+  return b.maxUnits ?? null
+}
+
+/**
+ * ⭐ What one bonus scores — `fd_rules::FdRuleset::bonus_value`'s rule, mirrored. A one-box bonus
+ * is its `points` when claimed. A per-unit one is `perUnit` × the count typed (one when none is),
+ * up to its limit. A GOTA bonus is counted from the club log, which this laptop cannot see: 0 here,
+ * and the club's score counts it.
+ */
+export function fdBonusValue(
+  b: FdBonus,
+  earned: string[],
+  counts: Record<string, number> = {},
+  fdClass = '',
+): number {
+  const claimed = earned.includes(b.id)
+  if (!b.perUnit) return claimed ? b.points : 0
+  if (b.fromLog || !claimed) return 0
+  const units = counts[b.id] ?? 1
+  const limit = fdBonusLimit(b, fdClass)
+  return (limit === null ? units : Math.min(units, limit)) * b.perUnit
+}
 
 /**
  * THREE STATES PER BONUS, out of two id lists.
@@ -144,7 +188,12 @@ export function fdBonusState(id: string, earned: string[], planned: string[]): F
  * planned-but-not-yet-earned bonuses only, so a bonus never lands in both columns and
  * "if all land" is a real ceiling rather than a double count.
  */
-export function fdBonusTally(earned: string[], planned: string[]) {
+export function fdBonusTally(
+  earned: string[],
+  planned: string[],
+  counts: Record<string, number> = {},
+  fdClass = '',
+) {
   let earnedCount = 0
   let earnedPoints = 0
   let plannedCount = 0
@@ -153,10 +202,11 @@ export function fdBonusTally(earned: string[], planned: string[]) {
     const state = fdBonusState(b.id, earned, planned)
     if (state === 'earned') {
       earnedCount++
-      earnedPoints += b.points
+      earnedPoints += fdBonusValue(b, earned, counts, fdClass)
     } else if (state === 'planned') {
       plannedCount++
-      plannedPoints += b.points
+      // What it would score if ticked at the count typed now.
+      plannedPoints += fdBonusValue(b, [b.id], counts, fdClass)
     }
   }
   return {
@@ -254,12 +304,13 @@ interface LogRowMeta {
   isDupe: boolean
 }
 
-type ExportFormat = 'cabrillo' | 'adif' | 'summary' | 'dupesheet' | 'club-cabrillo' | 'club-adif'
+type ExportFormat = 'cabrillo' | 'adif' | 'summary' | 'dupesheet' | 'natural-power' | 'club-cabrillo' | 'club-adif'
 const EXT: Record<ExportFormat, string> = {
   cabrillo: 'cbr',
   adif: 'adi',
   summary: 'txt',
   dupesheet: 'txt',
+  'natural-power': 'txt',
   'club-cabrillo': 'cbr',
   'club-adif': 'adi',
 }
@@ -572,7 +623,8 @@ interface SummaryArgs {
   poweredPoints: number
   bonusPoints: number
   totalScore: number
-  claimedBonuses: FdBonus[]
+  /** Each claimed bonus with what it scores (`points`) and, for a per-unit one, how many. */
+  claimedBonuses: (FdBonus & { units?: number })[]
   /** Winter Field Day's completed objectives and the multiplier they earn, when the station
    *  scores by them — `totalScore` is then QSO points × (om + 1). */
   objectives?: { om: number; done: WfdObjective[] }
@@ -623,7 +675,11 @@ export function contestSummaryText(
     poweredPoints,
     bonusPoints,
     totalScore,
-    claimedBonuses: FD_BONUSES.filter((b) => claimedBonusIds.includes(b.id)),
+    // The GOTA contacts are the club's to count, not this laptop's to claim.
+    claimedBonuses: FD_BONUSES.filter((b) => !b.fromLog && claimedBonusIds.includes(b.id)).map((b) => {
+      const points = fdBonusValue(b, claimedBonusIds, settings?.fdBonusCounts, settings?.fdClass)
+      return b.perUnit ? { ...b, points, units: points / b.perUnit } : b
+    }),
     objectives:
       wfdOm === null
         ? undefined
@@ -731,7 +787,14 @@ export function buildSummaryText(a: SummaryArgs): string {
   L.push(`Power multiplier: ×${a.powerMult}`)
   L.push(`Bonuses claimed (${a.claimedBonuses.length}, ${a.bonusPoints} pts):`)
   if (a.claimedBonuses.length === 0) L.push('  (none)')
-  else for (const b of a.claimedBonuses) L.push(`  ${b.label} — ${b.points} pts`)
+  else
+    for (const b of a.claimedBonuses) {
+      L.push(
+        b.perUnit && b.units !== undefined
+          ? `  ${b.label} — ${b.units} × ${b.perUnit} = ${b.points} pts`
+          : `  ${b.label} — ${b.points} pts`,
+      )
+    }
   L.push('')
   L.push('SCORE')
   L.push(`  QSO points                 ${a.qsoPts}`)
@@ -1172,8 +1235,7 @@ function computeFdScore(fieldDay: FieldDayStatus | null, settings: FdDisplaySett
   const poweredPoints = fieldDay?.poweredPoints ?? qsoPts * fdPowerMult
   const claimedBonusIds = settings?.fdBonuses ?? []
   const bonusPoints = fieldDay?.bonusPoints ?? FD_BONUSES
-    .filter((b) => claimedBonusIds.includes(b.id))
-    .reduce((sum, b) => sum + b.points, 0)
+    .reduce((sum, b) => sum + fdBonusValue(b, claimedBonusIds, settings?.fdBonusCounts, settings?.fdClass), 0)
   const totalScore = fieldDay?.totalScore ?? poweredPoints + bonusPoints
   // ⭐ The multiplier count off the ruleset — `null` for a contest that declares none,
   // which is what switches the tile and the score line between Field Day's arithmetic
@@ -3255,7 +3317,7 @@ export function ContestView({
   const log = fieldDay?.log ?? []
   const [exportError, setExportError] = useState<string | null>(null)
   const [busy, setBusy] = useState<ExportFormat | null>(null)
-  // The 16 bonuses are worth ~1550 points — more than most clubs' QSO points — and they
+  // The 19 bonuses are worth ~1700 points — more than most clubs' QSO points — and they
   // sat behind a collapsed disclosure an operator had to know was there. Once the event is
   // running the panel opens itself, ONCE: `openedForRun` means a club that deliberately
   // closes it is not fought on the next snapshot.
@@ -3593,6 +3655,11 @@ export function ContestView({
   const togglePlanned = (id: string) =>
     saveScoringPatch((s) => ({ fdBonusesPlanned: toggle(s.fdBonusesPlanned ?? [], id) }))
   const setPowerMult = (mult: number) => saveScoringPatch(() => ({ fdPowerMult: mult }))
+  /** The count beside a per-unit bonus: how many transmitters, youth, messages. */
+  const setBonusCount = (id: string, count: number) =>
+    saveScoringPatch((s) => ({ fdBonusCounts: { ...(s.fdBonusCounts ?? {}), [id]: count } }))
+  /** On natural power now: each contact logged from here on is marked for the list. */
+  const toggleNaturalPower = () => saveScoringPatch((s) => ({ fdNaturalPower: !s.fdNaturalPower }))
   /** Tick / untick a Winter Field Day objective: the list the score multiplies by. */
   const toggleObjective = (id: string) =>
     saveScoringPatch((s) => ({ fdObjectives: toggle(s.fdObjectives ?? [], id) }))
@@ -3728,9 +3795,11 @@ export function ContestView({
   // The chase: earned vs planned. `computeFdScore` above is untouched by any of this —
   // it reads `fdBonuses` and nothing else, which is what makes a plan unscoreable.
   const plannedBonuses = settings?.fdBonusesPlanned ?? []
+  const bonusCounts = settings?.fdBonusCounts
+  const fdClass = settings?.fdClass ?? ''
   const tally = useMemo(
-    () => fdBonusTally(claimedBonuses, plannedBonuses),
-    [claimedBonuses, plannedBonuses],
+    () => fdBonusTally(claimedBonuses, plannedBonuses, bonusCounts, fdClass),
+    [claimedBonuses, plannedBonuses, bonusCounts, fdClass],
   )
 
   // Cabrillo/ADIF come from the backend; Summary/Dupe sheet are derived client-side
@@ -4132,6 +4201,18 @@ export function ContestView({
           >
             {busy === 'dupesheet' ? t('fieldDay.export.busy') : t('fieldDay.export.dupeSheet.label')}
           </button>
+          {/* ARRL Field Day 7.3.8's separate list of natural power QSOs: this laptop's marked rows. */}
+          {fdEventIsFieldDay && !isWfd && (
+            <button
+              type="button"
+              className="export-btn"
+              disabled={busy !== null}
+              onClick={() => handleExport('natural-power')}
+              title={t('fieldDay.export.naturalPower.title')}
+            >
+              {busy === 'natural-power' ? t('fieldDay.export.busy') : t('fieldDay.export.naturalPower.label')}
+            </button>
+          )}
           {/* Clear test contacts: beside the exports rather than on a row of its own, so the log
               keeps every pixel. Asked, it says what the second click does. */}
           {removable && (
@@ -4481,21 +4562,63 @@ export function ContestView({
                 const state = fdBonusState(b.id, claimedBonuses, plannedBonuses)
                 const earned = state === 'earned'
                 const onPlan = plannedBonuses.includes(b.id)
+                const limit = fdBonusLimit(b, fdClass)
+                const value = fdBonusValue(b, claimedBonuses, bonusCounts, fdClass)
                 return (
                   <div
                     key={b.id}
                     className={`fd-bonus-row${earned ? ' checked' : ''}${state === 'planned' ? ' planned' : ''}`}
                     data-bonus-state={state}
                   >
-                    <input
-                      id={`fd-bonus-${b.id}`}
-                      type="checkbox"
-                      checked={earned}
-                      disabled={observed || logger}
-                      onChange={() => void toggleEarned(b.id)}
-                      aria-label={t('fieldDay.bonus.aria', { label: b.label, points: b.points })}
-                    />
-                    <label className="fd-bonus-label" htmlFor={`fd-bonus-${b.id}`}>{b.label}</label>
+                    {/* The GOTA contacts are counted from the club log: nothing to tick. */}
+                    {b.fromLog ? (
+                      <span className="fd-bonus-auto" aria-hidden="true">·</span>
+                    ) : (
+                      <input
+                        id={`fd-bonus-${b.id}`}
+                        type="checkbox"
+                        checked={earned}
+                        disabled={observed || logger}
+                        onChange={() => void toggleEarned(b.id)}
+                        aria-label={t('fieldDay.bonus.aria', { label: b.label, points: b.perUnit ?? b.points })}
+                      />
+                    )}
+                    <label className="fd-bonus-label" htmlFor={b.fromLog ? undefined : `fd-bonus-${b.id}`}>
+                      {b.label}
+                      {b.fromLog && (
+                        <span className="fd-bonus-note">{t('fieldDay.bonus.fromLog', { points: b.perUnit ?? 0 })}</span>
+                      )}
+                    </label>
+                    {/* ARRL 7.3.8 asks for a separate list of the natural power contacts: while
+                        this is on, each contact this laptop logs is marked for it. */}
+                    {b.id === 'natural-power' && !observed && (
+                      <label className="fd-bonus-natural" title={t('fieldDay.bonus.naturalNow.title')}>
+                        <input
+                          type="checkbox"
+                          checked={nativeSettings?.fdNaturalPower === true}
+                          disabled={logger || !nativeSettings}
+                          onChange={() => void toggleNaturalPower()}
+                        />
+                        {t('fieldDay.bonus.naturalNow')}
+                      </label>
+                    )}
+                    {b.perUnit && !b.fromLog ? (
+                      <input
+                        className="fd-bonus-count"
+                        type="number"
+                        min={0}
+                        max={limit ?? undefined}
+                        step={1}
+                        value={bonusCounts?.[b.id] ?? 1}
+                        disabled={observed || logger || !earned}
+                        aria-label={t('fieldDay.bonus.count.aria', { label: b.label })}
+                        title={t('fieldDay.bonus.count.title', { points: b.perUnit, max: limit ?? '—' })}
+                        onChange={(e) => {
+                          const n = Math.max(0, Math.floor(Number(e.target.value)))
+                          if (Number.isFinite(n)) void setBonusCount(b.id, n)
+                        }}
+                      />
+                    ) : null}
                     <button
                       type="button"
                       className={`fd-bonus-plan${onPlan ? ' on' : ''}`}
@@ -4507,7 +4630,11 @@ export function ContestView({
                     >
                       {onPlan ? t('fieldDay.bonus.plan.on') : t('fieldDay.bonus.plan.off')}
                     </button>
-                    <span className="fd-bonus-pts">{t('fieldDay.bonus.pts', { points: b.points })}</span>
+                    <span className="fd-bonus-pts">
+                      {b.perUnit && !earned
+                        ? t('fieldDay.bonus.ptsEach', { points: b.perUnit })
+                        : t('fieldDay.bonus.pts', { points: b.perUnit ? value : b.points })}
+                    </span>
                   </div>
                 )
               })}
