@@ -588,6 +588,23 @@ describe('right-click, Ctrl+Shift+F-key and Send once', () => {
     expect(mocked(api.pskStop)).toHaveBeenCalled()
     expect(mocked(api.haltTx)).toHaveBeenCalled()
   })
+
+  it('Esc while a Send once is still unanswered is the stop, not a cancel, and the editor stays', async () => {
+    // `psk_send` held: the station has the over and may be about to key it, and nothing in the
+    // snapshot shows that yet.
+    pskSend.mockImplementation(() => new Promise(() => {}))
+    mocked(api.pskStop).mockResolvedValue(state)
+    mocked(api.haltTx).mockResolvedValue({})
+    await renderCockpit()
+    fireEvent.contextMenu(key('F1'))
+    fireEvent.click(sendOnce())
+    await act(async () => {})
+    expect(pskSend, 'fixture: the message was handed over').toHaveBeenCalledTimes(1)
+    fireEvent.keyDown(field(/^message$/i), { key: 'Escape' })
+    expect(mocked(api.pskStop), 'Esc after a Send once only closed the editor').toHaveBeenCalledTimes(1)
+    expect(mocked(api.haltTx)).toHaveBeenCalledTimes(1)
+    expect(editor(), 'a stop is not a cancel').not.toBeNull()
+  })
 })
 
 describe('Everyday / Contest', () => {
