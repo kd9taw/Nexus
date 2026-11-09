@@ -14986,6 +14986,10 @@ impl Engine {
         if self.settings.operating_mode != crate::settings::OperatingMode::Digital {
             return;
         }
+        // A second press made while this tune-up starts (a double-click) goes with it, as the halt
+        // below would drop it anyway; taken here first so the halt does not report it as a press
+        // the radio never got. The radio is tuning.
+        self.pending_atu_tune = None;
         self.halt_tx_for_context_change("ATU tune-up");
         reset();
     }
@@ -43120,6 +43124,29 @@ mod tests {
             )),
             "a band change after the click"
         );
+    }
+
+    /// A second ATU press while the first tune-up starts (a double-click, in the Digital section)
+    /// is not "dropped": the radio is tuning, and the section's stand-down for that tune-up is
+    /// not a context change that lost a press.
+    #[test]
+    fn a_second_press_while_the_first_tune_up_starts_raises_no_dropped_notice() {
+        let mut e = atu_engine();
+        e.set_operating_mode("digital", false);
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_tx_enabled(true);
+        e.atu_tune()
+            .expect("scene guard: the first press is accepted");
+        assert!(e.take_atu_tune(), "scene guard: the first press goes out");
+        e.atu_tune()
+            .expect("scene guard: the second press is accepted");
+        e.note_atu_tune_started();
+        assert!(!e.tx_enabled(), "scene guard: the section stood down");
+        assert!(
+            e.pending_atu_tune.is_none(),
+            "the second press goes with the tune-up"
+        );
+        assert_eq!(atu_failed(&e), None, "no 'dropped' notice while it tunes");
     }
 
     /// CONTROL: the operator's own Stop TX drops a queued ATU press too, and says nothing about
