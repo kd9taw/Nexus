@@ -9,7 +9,7 @@
 // `HARDWARE_HANDSHAKE_RTS_KEYS`). The backend sends the English catalog's sentence exactly, so the
 // match is against EN itself; catDetail.test.ts holds the Rust constant to the same words.
 //
-// The unconfirmed holds: an older Hamlib (4.5) gave no show-conf dump, so Nexus could not confirm
+// The unconfirmed holds: Hamlib gave no whole show-conf dump in time, so Nexus could not confirm
 // it would hold RTS and DTR low, and did not open the port (`HAMLIB_CANNOT_CONFIRM_HOLDS` in the
 // same file), matched the same way.
 //

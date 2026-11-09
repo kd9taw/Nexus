@@ -96,7 +96,7 @@ pub enum LadderKind {
 /// 3091 X6200 → 164. Absent, correctly, for 1001 FT-847, every Kenwood, 1042 FTDX-10, 2053 FX-4.
 pub fn civ_addr_from_caps(rig_model: u32) -> Option<u8> {
     let model = rig_model.to_string();
-    parse_civ_addr(&crate::rigctld_proc::daemon_dump(&[
+    parse_civ_addr(&crate::rigctld_proc::show_conf_dump(&[
         "-m",
         model.as_str(),
         "-L",
@@ -417,11 +417,12 @@ fn sweep_refusal_given(
 }
 
 /// [`sweep_refusal_given`], asking the operator's own Hamlib about `rig_model` (a one-shot
-/// `rigctld -L` dump: it opens no port). Blocking; Test CAT calls it before taking the port.
+/// show-conf dump, [`crate::rigctld_proc::show_conf_dump`], which points the rig at no port).
+/// Blocking; Test CAT calls it before taking the port.
 pub fn sweep_refusal(rig_model: u32, gate: LadderGate) -> Option<&'static str> {
     sweep_refusal_given(gate, || {
         let model = rig_model.to_string();
-        crate::rigctld_proc::daemon_dump(&[
+        crate::rigctld_proc::show_conf_dump(&[
             "-m",
             &model,
             "-L",

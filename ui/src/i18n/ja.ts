@@ -5587,7 +5587,7 @@ export const JA: PartialCatalog = {
   "settings.rigControl.catSilentTxOff": "無線機とのCAT接続が失われたため、送信をオフにしました。無線機とCATケーブルを確認してください。Nexusは再試行を続けます。再び送信するにはTX Onを押してください。",
   "settings.rigControl.catBackTxOff": "無線機とのCAT接続が失われたため、送信をオフにしました。CATは復旧しました。送信するにはTX Onを押してください。",
   "settings.rigControl.serialHandshake.rtsKeys": "このポートではRTSが送信機をキーイングするため、シリアルハンドシェイクを「ハードウェア」にはできません — 「自動」か「なし」に設定してください。",
-  "settings.rigControl.hamlibCannotConfirmHolds": "Nexusはシリアルポートを開きませんでした。このHamlibは古いため、RTSとDTRの信号線をLowに保てるかを確認できません。確認せずにポートを開くと、どちらかの信号線でキーイングする送信機が送信状態になるおそれがあります。Hamlibを4.6以降に更新するか、Nexusに同梱のHamlibを使用してください。",
+  "settings.rigControl.hamlibCannotConfirmHolds": "Nexusはシリアルポートを開きませんでした。このHamlibがRTSとDTRの信号線をLowに保てることを確認できませんでした。確認せずにポートを開くと、どちらかの信号線でキーイングする送信機が送信状態になるおそれがあります。もう一度お試しください。繰り返し起きる場合は、Hamlibを更新するか、Nexusに同梱のHamlibを使用してください。",
   "settings.rigControl.pttLineState.label": "起動時のキーイングライン",
   "settings.rigControl.pttLineState.auto": "自動（推奨）",
   "settings.rigControl.pttLineState.untouched": "操作しない",

@@ -1,11 +1,11 @@
 //! A Hamlib that cannot confirm the RTS/DTR holds does not get a real port opened without them:
 //! the launch is refused, with the operator's sentence, before any daemon runs.
 //!
-//! That is a `rigctld` whose `-L` dump never exits (Hamlib 4.5.5 behaves so) AND a `rigctl` that
-//! gives no dump either. The `rigctld` is a 4.5.x one when one is on hand (`NEXUS_RIGCTLD`, or
-//! the first on PATH) and otherwise a stand-in that does what 4.5.5 does: print, then stay up.
-//! The `rigctl` is always a stand-in that fails. A pseudo-terminal, which has no lines to hold,
-//! is launched all the same.
+//! That is a `rigctl` (asked first, every time) that gives no whole dump. The `rigctld` is a 4.5.x
+//! one when one is on hand (`NEXUS_RIGCTLD`, or the first on PATH), otherwise a stand-in that
+//! does what 4.5.5 does after `-L`: print, then stay up; it is never asked once `rigctl` ran. The
+//! `rigctl` is always a stand-in that fails. A pseudo-terminal, which has no lines to hold, is
+//! launched all the same.
 #![cfg(all(target_os = "linux", feature = "serial"))]
 
 use std::io::Write;

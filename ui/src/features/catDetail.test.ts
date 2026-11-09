@@ -83,7 +83,7 @@ describe('the unconfirmed RTS/DTR holds refusal, in the CAT status', () => {
   ] as const)('%s: renders translated, keeps Hamlib, RTS and DTR, and what leads it', (lang, cat) => {
     const text = String((cat as Record<string, unknown>)[HOLDS_KEY])
     expect(text).not.toBe(HOLDS)
-    for (const word of ['Hamlib', 'RTS', 'DTR', '4.6']) expect(text).toContain(word)
+    for (const word of ['Hamlib', 'RTS', 'DTR']) expect(text).toContain(word)
     installCatalog(lang, cat)
     setLocale(lang)
     expect(catDetailText(HOLDS)).toBe(text)

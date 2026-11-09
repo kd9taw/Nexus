@@ -1758,7 +1758,7 @@ export const DE: PartialCatalog = {
   "settings.rigControl.catSilentTxOff": "Senden wurde ausgeschaltet, weil die CAT-Verbindung zum Funkgerät verloren ging. Prüfen Sie das Funkgerät und sein CAT-Kabel; Nexus versucht es weiter. Drücken Sie TX On, um wieder zu senden.",
   "settings.rigControl.catBackTxOff": "Die CAT-Verbindung zum Funkgerät ging verloren und Senden wurde ausgeschaltet. CAT ist wieder da; drücken Sie TX On, um zu senden.",
   "settings.rigControl.serialHandshake.rtsKeys": "RTS tastet an diesem Port Ihren Sender, daher kann „Serielles Handshake“ nicht Hardware sein — stellen Sie es auf Automatisch oder Keines.",
-  "settings.rigControl.hamlibCannotConfirmHolds": "Nexus hat den seriellen Port nicht geöffnet: Diese Hamlib-Version ist zu alt, um zu bestätigen, dass sie die Leitungen RTS und DTR auf Low hält, und den Port ohne das zu öffnen kann einen Sender tasten, der an eine der beiden Leitungen angeschlossen ist. Aktualisieren Sie Hamlib auf 4.6 oder neuer, oder verwenden Sie das mit Nexus mitgelieferte Hamlib.",
+  "settings.rigControl.hamlibCannotConfirmHolds": "Nexus hat den seriellen Port nicht geöffnet: Es ließ sich nicht bestätigen, dass diese Hamlib-Version die Leitungen RTS und DTR auf Low hält, und den Port ohne das zu öffnen kann einen Sender tasten, der an eine der beiden Leitungen angeschlossen ist. Versuchen Sie es erneut; passiert das weiterhin, aktualisieren Sie Hamlib oder verwenden Sie das mit Nexus mitgelieferte Hamlib.",
   "settings.rigControl.pttLineState.label": "Tastleitung beim Start",
   "settings.rigControl.pttLineState.auto": "Automatisch (empfohlen)",
   "settings.rigControl.pttLineState.untouched": "Nie anfassen",
