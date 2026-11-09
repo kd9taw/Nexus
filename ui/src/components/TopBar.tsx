@@ -1,8 +1,8 @@
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), and what is
 // deferred is the TX CLUSTER: TX On/Off (its two tooltip arms state the abort semantics — "an
 // FT over already in flight finishes" — and its labels name the latch), TUNE and STOP TX, which
-// key and cut a carrier, and the TX WATCHDOG chip, which is what the watchdog says when it has
-// halted a transmission. Transmit-path controls and their accessible names move in their own
+// key and cut a carrier. (The TX WATCHDOG chip was deferred with them; since 2026-11-07 the
+// watchdog's halt is a status-lane item App raises in catalog words.) Transmit-path controls and their accessible names move in their own
 // batch, with the stop-line sweeps re-run. Everything else here is migrated under `topbar.*`.
 //
 // The units rule lands on the BAR: every tier and mode name, the DT and clock readouts, the
@@ -93,6 +93,10 @@ interface Props {
    * ⚠️ ITS OWN FLAG, NOT `hideDigitalChrome`: that one also hides the TX cluster, and on Field
    * Day and the other screens without a cockpit the cluster is the only Stop TX. */
   ftScreen?: boolean
+  /** This screen's TX strip draws the transmitter alarm cell, which shows every critical lane item beside
+   *  Stop TX, so the lane here may be cut on a full line (cockpit-panes.css `.status-lane`). Without one, the lane
+   *  keeps a critical item's flag and announces it as an alert. */
+  alarmCell?: boolean
   mycall: string
   mygrid: string
   radio: RadioStatus
@@ -413,6 +417,7 @@ export function TopBar({
   hideFrequencyControl,
   hideDigitalChrome,
   ftScreen = false,
+  alarmCell = false,
   showLocalClock = false,
   nowBar,
   listenLevel,
@@ -598,6 +603,30 @@ export function TopBar({
         )}
       </div>
 
+      {/* THE STATUS LANE: ALWAYS DRAWN, and HERE, right after the brand group, so it is the item in front of
+          the group that carries the bar's free room (the readout's `margin-left: auto`, or the TX/RX group's
+          where there is no readout). A zero-basis grower takes exactly the room that margin had, so nothing
+          after it moves, empty or full. Inside the TX/RX group it made the group grow when a message came,
+          the margin went to 0, and the bar's own Stop TX slid left: 937 → 450 px at 1920x1080 on the
+          Logbook (cockpit-panes.css `.status-lane`).
+          The TX watchdog's halt is a CRITICAL LANE ITEM (App), not a chip of its own; REC rides in the lane
+          too; on the operating screens every critical item is also shown beside Stop TX on the TX strip. */}
+      <StatusLane
+        keepCritical={!alarmCell}
+        lead={
+          radio.qsoRecording ? (
+            <button
+              type="button"
+              className="topbar-rec"
+              onClick={() => onStopRecording?.()}
+              title={t('topbar.recording.title')}
+            >
+              ● {REC}
+            </button>
+          ) : undefined
+        }
+      />
+
       {!hideFrequencyControl && (
         <div className="topbar-group radio-readout">
           <FrequencyControl
@@ -644,20 +673,9 @@ export function TopBar({
           </div>
         )}
 
-        {radio.qsoRecording && (
-          <button
-            type="button"
-            className="topbar-rec"
-            onClick={() => onStopRecording?.()}
-            title={t('topbar.recording.title')}
-          >
-            ● {REC}
-          </button>
-        )}
-
         {!hideTxControls && !hideDigitalChrome && (
         <div className="op-controls" role="group" aria-label={t('topbar.txControls.aria')}>
-          {/* ⚠️ DEFERRED, the three controls below and the watchdog chip after them: TX On/Off's
+          {/* ⚠️ DEFERRED, the three controls below: TX On/Off's
               tooltip states the abort semantics, Tune keys a carrier and Stop TX cuts an over in
               flight. They move in the transmit-path batch — see this file's header. */}
           <button
@@ -707,13 +725,6 @@ export function TopBar({
         </div>
         )}
 
-        {radio.txWatchdog && (
-          <span className="watchdog-chip" role="alert" title="Transmit was auto-halted by the TX watchdog. Click TX On to re-enable.">
-            ⚠ TX watchdog — auto-halted
-          </span>
-        )}
-
-        <StatusLane />
         {!hideDigitalChrome && (
           <div className="slot-clock" title={t('topbar.slotClock.title')}>
             <span className="slot-count">{countdown}s</span>

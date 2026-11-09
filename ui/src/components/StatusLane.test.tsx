@@ -62,3 +62,58 @@ describe('the status lane remounts a chip only for a new alarm', () => {
     expect(chip('RADIO ENGINE STOPPED')).toBe(first)
   })
 })
+
+// OFF THE OPERATING SCREENS (no alarm cell beside Stop TX) the lane is the only place a critical item shows:
+// it keeps the flag (`.status-lane-keep`), comes first, ahead of REC, and is announced as an alert. On the
+// operating screens the alarm cell carries it, and the lane neither floors nor alerts.
+/** The lane's first drawn item, after the gap it gives back (`.status-lane-gap`). */
+const firstItem = (lane: Element) => [...lane.children].find((e) => !e.classList.contains('status-lane-gap'))
+
+describe('a critical item with no alarm cell on the screen', () => {
+  afterEach(() => {
+    for (const id of ['k-crit', 'k-warn']) setStatus(id, null)
+  })
+  const rec = <button type="button" className="topbar-rec">REC</button>
+  it('keepCritical: kept, first, an alert; a warning is not', () => {
+    render(<StatusLane keepCritical lead={rec} />)
+    act(() => {
+      setStatus('k-warn', { tier: 'warning', message: 'NO RF SCOPE' })
+      setStatus('k-crit', { tier: 'critical', message: 'PTT OFF FAILED — TX STOPPED' })
+    })
+    const lane = document.querySelector('.status-lane')!
+    expect(lane.classList.contains('status-lane-keep')).toBe(true)
+    expect(firstItem(lane)?.textContent).toContain('PTT OFF FAILED')
+    expect(screen.getByRole('alert').textContent).toContain('PTT OFF FAILED')
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+  })
+  it('with the alarm cell (no keepCritical): no floor and no alert, REC first', () => {
+    render(<StatusLane lead={rec} />)
+    act(() => setStatus('k-crit', { tier: 'critical', message: 'PTT OFF FAILED — TX STOPPED' }))
+    const lane = document.querySelector('.status-lane')!
+    expect(lane.classList.contains('status-lane-keep')).toBe(false)
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(firstItem(lane)?.classList.contains('topbar-rec')).toBe(true)
+  })
+  // The floor is held whether or not a critical item is up: one ARRIVING must not wrap the bar and move its
+  // Stop TX (the Logbook's, the only one on such a screen).
+  it('keepCritical with nothing critical: the floor is held all the same', () => {
+    render(<StatusLane keepCritical lead={rec} />)
+    act(() => setStatus('k-warn', { tier: 'warning', message: 'NO RF SCOPE' }))
+    expect(document.querySelector('.status-lane')!.classList.contains('status-lane-keep')).toBe(true)
+  })
+})
+
+// ALWAYS DRAWN (2026-11-08): the lane stands where the bar's free room is, so a box that came and went with a
+// message moved every group after it, the Logbook's Stop TX among them (937 → 450 px at 1920x1080).
+describe('the lane box with nothing in it', () => {
+  it('is drawn, empty but for the gap it gives back, on both kinds of screen', () => {
+    for (const keepCritical of [false, true]) {
+      render(<StatusLane keepCritical={keepCritical} />)
+      const lane = document.querySelector('.status-lane')
+      expect(lane, `keepCritical=${keepCritical}: no lane box`).not.toBeNull()
+      expect([...lane!.children].map((e) => e.className)).toEqual(['status-lane-gap'])
+      cleanup()
+    }
+  })
+})
+

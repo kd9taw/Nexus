@@ -342,13 +342,19 @@ export function TxMeters({
   // in the operator's units. The amplifier's beside it, reusing the reading its own pane shows.
   // Neither has a zone colour: a safe temperature is the radio's own business, and its limits
   // differ by model, so a red bar here would be a threshold Nexus cannot stand behind.
+  //
+  // THE AMPLIFIER'S ROW IS DRAWN WHENEVER AN AMPLIFIER IS SET UP (`radio.amp` present), with "—" while it
+  // has no reading: before its first answer, with the link down, or between readings. Drawn only while
+  // linked with a temperature, the row came with the first answer and went with a dropped link, and the
+  // dock under Stop TX grew or shrank a line and moved it (Phone and CW at 900x600). The radio's own row
+  // is labelled RIG beside it for the same reason, so neither label changes with the amplifier's state.
   const temps: TempRow[] = []
-  const amp = radio.amp?.linked ? radio.amp : null
-  const ampTemp = amp?.temp ?? null
+  const amp = radio.amp ?? null
+  const ampTemp = amp?.linked ? amp.temp ?? null : null
   if (radio.paTempC != null) {
     temps.push({
       key: 'rigTemp',
-      label: ampTemp != null ? RIG : TEMP,
+      label: amp ? RIG : TEMP,
       title: t('meters.tx.temp.rig.title'),
       frac: Math.max(0, Math.min(1, radio.paTempC / 100)),
       value: fmtTempC(radio.paTempC, units),
@@ -358,13 +364,15 @@ export function TxMeters({
     // from it would be a number the radio never stated.
     temps.push({
       key: 'rigTemp',
-      label: ampTemp != null ? RIG : TEMP,
+      label: amp ? RIG : TEMP,
       title: t('meters.tx.temp.meter.title'),
       frac: Math.max(0, Math.min(1, radio.paTempMeter)),
       value: `${Math.round(radio.paTempMeter * 100)}%`,
     })
   }
-  if (amp && ampTemp != null) {
+  if (amp && ampTemp == null) {
+    temps.push({ key: 'ampTemp', label: AMP, title: t('meters.tx.temp.amp.title'), frac: 0, value: '—' })
+  } else if (amp && ampTemp != null) {
     // SPE's protocol does not say whether its number is °C or °F (the amplifier sends whatever
     // its own panel is set to), so that number is shown bare, unconverted and unbarred — the
     // amplifier pane's rule. The KPA's is documented Celsius and converts like the radio's.

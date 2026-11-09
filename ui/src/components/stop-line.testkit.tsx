@@ -507,6 +507,10 @@ const operateSnap = {
 export const operateClassic = operateCase('classic')
 export const operateRoster = operateCase('roster')
 
+/** Every snapshot a case renders from, for a check that must put the same thing in front of all of them
+ *  (stop-line.test.tsx's transmitter alarm). */
+export const CASE_SNAPS: AppSnapshot[] = [snap, dualSnap, operateSnap as unknown as AppSnapshot]
+
 export const CASES: Array<Case<any>> = [phone, cw, rtty, psk, jtty, js8, sstv, phoneDual, cwDual, operateClassic, operateRoster]
 
 /** Each case by the name it is exported under: how stop-line.test.tsx reads which case a sweep file sweeps

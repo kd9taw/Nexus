@@ -30,9 +30,32 @@ const kpa = (temp: number) => ({ family: 'kpa', model: '', linked: true, reason:
 const spe = (temp: number) => ({ family: 'spe', model: '13K', linked: true, reason: '', temp, tempCelsius: false, alarm: '' })
 
 describe('the finals temperature', () => {
-  it('is hidden on a radio that reports none, and with an amplifier that is not linked', () => {
-    render(<TxMeters radio={radio({ amp: { ...kpa(40), linked: false } })} pinned />)
+  it('is hidden on a radio that reports none and has no amplifier set up', () => {
+    render(<TxMeters radio={radio()} pinned />)
     expect(temps()).toEqual([])
+  })
+
+  // STOP TX STAYS PUT (2026-11-08): the amplifier's row is drawn whenever an amplifier is set up, with "—"
+  // while it has no reading. Drawn only while linked with a temperature, it came with the first answer and
+  // went with a dropped link, and the dock under Stop TX changed height (Phone and CW at 900x600, real
+  // Chrome). Every state of the amplifier draws the same rows, under the same labels.
+  it('an amplifier draws the same rows in every state: not answered yet, linked, lost, linked with no reading', () => {
+    const notYet = { family: 'kpa', model: '', linked: false, reason: '', tempCelsius: false, alarm: '' }
+    const lost = { ...kpa(40), linked: false, reason: 'noAnswer', temp: null }
+    const states = [notYet, kpa(52), lost, { ...kpa(52), temp: null }]
+    const shapes = states.map((amp) => {
+      const r = render(<TxMeters radio={radio({ paTempC: 38, amp })} pinned />)
+      const rows = temps()
+      r.unmount()
+      return rows
+    })
+    expect(shapes[1]).toEqual([['RIG', '38°C'], ['AMP', '52°C']])
+    for (const s of shapes) expect(s.map(([label]) => label), 'the same rows, the same labels').toEqual(['RIG', 'AMP'])
+    expect(shapes[0][1][1], 'no reading: a dash, never an old number').toBe('—')
+    expect(shapes[2][1][1]).toBe('—')
+    // An amplifier with no radio reading beside it: its row alone, in every state.
+    render(<TxMeters radio={radio({ amp: notYet })} pinned />)
+    expect(temps()).toEqual([['AMP', '—']])
   })
 
   it('reads the radio in °C, before any over, and in °F under Imperial', () => {

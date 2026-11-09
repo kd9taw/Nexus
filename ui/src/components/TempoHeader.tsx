@@ -7,6 +7,7 @@ import type { AppSnapshot, BandChannel, Tier } from '../types'
 import { bandLabelForMhz } from '../band'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
+import { TxAlarmBanner } from './TxAlarmBanner'
 import { TxMeters } from './TxMeters'
 import { useCompactChrome } from '../features/compactChrome'
 import { FrequencyControl } from './FrequencyControl'
@@ -185,6 +186,7 @@ export function TempoHeader({
       </div>
     </CockpitHeader>
     <CockpitTxStrip
+      alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} />}
       radio={snap.radio}
       onSetTxEnabled={onSetTxEnabled}
       onTune={onSetTune}

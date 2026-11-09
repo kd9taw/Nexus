@@ -12,6 +12,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, KeyboardMacroProfile, RttyState, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip, keepInSight, revealAfterPress } from './CockpitTxStrip'
+import { TxAlarmBanner } from './TxAlarmBanner'
 import { TxMeters } from './TxMeters'
 import { useCompactChrome } from '../features/compactChrome'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
@@ -1244,6 +1245,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           here (set_tx_enabled(false) arms rtty_abort). */}
       {snap && (
         <CockpitTxStrip
+          alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} />}
           radio={snap.radio}
           onStopTx={stop}
           onSetTxEnabled={onSetTxEnabled}

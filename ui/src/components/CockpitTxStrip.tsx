@@ -48,6 +48,12 @@ export interface CockpitTxStripProps {
   /** A screen's own small marker right after the cluster (Phone's ⓘ for the Tune note, #441): after
    *  Stop TX, never between the controls, so Tune, ATU and Stop TX keep their places on every screen. */
   tuneHint?: ReactNode
+  /** THE TRANSMITTER ALARM CELL (`TxAlarmBanner`), one line in the strip's row beside the TX state
+   *  (2026-11-07). As the cockpit header's last row, every alarm moved Stop TX 26 to 38 px; the cell is
+   *  always drawn at one minimum width, so nothing on the strip moves when an alarm or a critical lane
+   *  item comes or goes. The screen passes it (`snap.txAlarms` is not in `radio`); every operating
+   *  screen does, which stop-line.test.tsx renders and checks. */
+  alarm?: ReactNode
 }
 
 /**
@@ -69,7 +75,7 @@ export interface CockpitTxStripProps {
  * the header's did: in RTTY and SSTV the latch is a STOP (set_tx_enabled(false) arms the mode's
  * abort) and must stay a button through their overs, which `radio.transmitting` never marks.
  */
-export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtuBypass, onStopTx, hold, meters, metersPane, tuneNote, tuneHint }: CockpitTxStripProps) {
+export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtuBypass, onStopTx, hold, meters, metersPane, tuneNote, tuneHint, alarm }: CockpitTxStripProps) {
   const onAir = isOnAir(radio)
   const needle = useTxMeterStyle() === 'needle'
   // THE SIGN WAITS WITH AN ARMED OVER (the operator's pick "Header ON AIR waits too",
@@ -225,6 +231,9 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
               ? t('operate.strip.state.receiving')
               : t('operate.strip.state.txOff')}
       </span>
+      {/* THE TRANSMITTER ALARM CELL, beside the TX state (`TxAlarmBanner`): always drawn at one minimum
+          width, so an alarm coming or going never changes where the strip breaks its lines. */}
+      {alarm}
       {/* Why transmit is off after a CAT outage: a zero-basis cell after the state, so it can never
           wrap the strip or move a control (`.cockpit-txstrip-catnote`). On a strip with a meters
           cell the words stand IN that cell, in place of the meters (#489): transmit is off, so

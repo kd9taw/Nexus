@@ -140,6 +140,10 @@ const ampKey = (amp: AmpStatus) => `${amp.family}/${amp.model}`
  *  this stays one lookup instead of a TS union that falls through on a shape it did not expect.
  */
 const REASON: Record<string, () => string> = {
+  // An EMPTY reason on an unlinked amplifier is the engine's not-yet-answered status, before the first
+  // poll after launch or a radio switch: nothing has failed, so it is not "Not answering". Any other token
+  // this page does not know still falls back to the fault below.
+  '': () => t('amp.reason.waiting'),
   portBusy: () => t('amp.reason.portBusy'),
   noAnswer: () => t('amp.reason.noAnswer'),
   wrongModel: () => t('amp.reason.wrongModel'),

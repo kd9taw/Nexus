@@ -55,7 +55,7 @@ describe('AmpStrip', () => {
   it('shows an em dash rather than guessing when the amplifier reports a band we cannot name', () => {
     render(<AmpStrip amp={linked({ bandLabel: null })} />)
     // A wrong band name in front of a kilowatt is worse than an honest blank.
-    expect(screen.getByText('—')).toBeTruthy()
+    expect(document.querySelector('.amp-band-label')!.textContent).toBe('—')
   })
 
   it('drives Operate from the amplifier, not from the click', () => {
@@ -125,5 +125,18 @@ describe('AmpStrip', () => {
       const name = (b.getAttribute('aria-label') ?? b.textContent ?? '').trim()
       for (const p of stopish) expect(p.test(name)).toBe(false)
     }
+  })
+
+  // STOP TX STAYS PUT: the button's face carries all three words in every state (cockpit-panes.css stacks
+  // them), so going to standby or losing the link never changes its width in the header above Stop TX.
+  it.each([true, false, null])('operate %s: all three words are drawn, and only the current one is seen and named', (operate) => {
+    render(<AmpStrip amp={linked({ operate })} />)
+    const words = [...document.querySelectorAll('.amp-op .amp-op-word')]
+    expect(words).toHaveLength(3)
+    const seen = words.filter((w) => !w.classList.contains('amp-op-word-off'))
+    expect(seen).toHaveLength(1)
+    expect(seen[0].getAttribute('aria-hidden')).toBeNull()
+    for (const w of words.filter((x) => x !== seen[0])) expect(w.getAttribute('aria-hidden')).toBe('true')
+    expect(seen[0].textContent).toBe(operate == null ? '—' : operate ? 'Operate' : 'Standby')
   })
 })

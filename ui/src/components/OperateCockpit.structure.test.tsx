@@ -12,6 +12,7 @@
 //   - TX meters are a fixed strip cell, not a permanent body row, and the cell exists
 //     in BOTH RX and TX states (zero mount/unmount with the 15 s cycle).
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { cloneElement } from 'react'
 import { render, screen, cleanup, within } from '@testing-library/react'
 import { OperateCockpit } from './OperateCockpit'
 import type { AppSnapshot } from '../types'
@@ -638,5 +639,26 @@ describe('the warn-only FD banned-mode chip in the header (a status line, never 
   it('absent with FD off — the stock header is unchanged', () => {
     const { container } = renderCockpit({})
     expect(container.querySelector('.fd-advisory, .le-fd-nocredit')).toBeNull()
+  })
+})
+
+// STOP TX STAYS PUT WHEN CAT DROPS. The header is in flow above the QSO strip, so a box the header
+// adds or drops re-wraps its rows and moves Stop TX: SplitControl rendered only while `catOk`, and
+// Stop TX jumped 26 to 56 px every time CAT went down (measured in real Chrome). A state change may
+// repaint a header box (the CAT pill, a disabled control); it may not add or remove one.
+const headerBoxes = () =>
+  [...document.querySelectorAll('.cockpit-header *')].map((e) => `${e.tagName.toLowerCase()}.${e.classList[0] ?? ''}`)
+
+describe('the header with CAT up and down', () => {
+  it('draws the same boxes either way, Split included and disabled without CAT', () => {
+    const { element } = cockpitElement({})
+    const view = render(element)
+    const up = headerBoxes()
+    expect(up).toContain('div.ph-split')
+    const snap = element.props.snap as AppSnapshot
+    view.rerender(cloneElement(element, { snap: { ...snap, radio: { ...snap.radio, catOk: false } } }))
+    expect(headerBoxes()).toEqual(up)
+    const split = document.querySelector('.cockpit-header .ph-split')!
+    for (const b of within(split as HTMLElement).getAllByRole('button')) expect((b as HTMLButtonElement).disabled).toBe(true)
   })
 })

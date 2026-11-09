@@ -736,34 +736,9 @@ button.nb-chip:hover {
   border-color: var(--accent);
 }
 
-/* THE LANE NEVER MAKES THE TOP BAR TALLER. The bar is one flex-wrap row, and a wrapping row
-   places each item on a line by its max-content width, so a lane sized by its text pushed the
-   last group (FT's Auto / Tx 1st / Tx 2nd) onto a second line, and the whole screen moved down
-   a row while a message was up. So the lane takes no width of its own (`width: 0`, which is also
-   its contribution to the TX/RX group's width, the margin cancelling the group's gap before it),
-   grows into the room left on the line that group is on, and its chips shorten to an ellipsis;
-   the full text is the chip's tooltip, as it always was. The group grows only while a lane is up
-   (`:has`), so nothing moves without one.
-   ⛔ ONE EXCEPTION, AND IT IS SAFETY: the first chip's flag is never cut. A critical lane ("PTT
-   OFF FAILED — TX STOPPED") must be on screen, so the lane keeps at least its flag (the 13 px
-   icon, the chip's padding and border, and the gap the margin cancels); on a line with less room
-   than that the bar takes a line rather than hide the alarm. */
-.status-lane {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex: 1 1 0;
-  width: 0;
-  min-width: calc(10px + 13px + 2 * var(--space-2) + 2px);
-  margin-inline-start: -10px;
-  overflow: hidden;
-}
-.status-lane > :first-child {
-  margin-inline-start: 10px;
-}
-.txrx:has(> .status-lane) {
-  flex-grow: 1;
-}
+/* THE STATUS LANE's box is structure: cockpit-panes.css `.status-lane` (where it stands in the bar and why
+   the bar's Stop TX never moves for it, its zero width, and where a critical item goes when it is cut).
+   Its chips' look is below. */
 .status-chip {
   display: inline-flex;
   align-items: center;
@@ -8077,8 +8052,11 @@ select optgroup {
   color: var(--text-faint);
 }
 /* Global QSO-recording badge — visible from any view while recording; click to stop. */
+/* No taller than the lane's chips (`.status-chip`: a 13 px icon, 2 px padding, 1 px border): REC rides first in
+   the lane, and a taller box grew the bar 0.8 px when a recording started (1024x768, auto-fit). */
 .topbar-rec {
   padding: 2px 9px;
+  line-height: 1;
   font-size: calc(10px * var(--text-scale));
   font-weight: 800;
   letter-spacing: 0.04em;
@@ -8186,19 +8164,6 @@ select optgroup {
 .op-btn.stop:hover {
   background: var(--state-weak);
   color: var(--bg);
-}
-
-/* ---- TX watchdog warning chip ---- */
-.watchdog-chip {
-  display: inline-flex;
-  align-items: center;
-  font-size: calc(11px * var(--text-scale));
-  font-weight: 700;
-  color: var(--state-weak);
-  background: color-mix(in srgb, var(--state-weak) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--state-weak) 45%, transparent);
-  border-radius: 999px;
-  padding: var(--space-1) 10px;
 }
 
 /* ---- DT (decode time) readout ---- */
@@ -12407,7 +12372,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-weight: 700;
   cursor: pointer;
 }
-.ph-filter-step:hover {
+.ph-filter-step:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -12467,6 +12432,15 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: var(--bg);
   color: var(--text);
   cursor: pointer;
+}
+/* A control CAT cannot serve is DRAWN, DISABLED (Split on FT, CW and Phone, BW on CW, while CAT is down: a
+   control that came and went with CAT moved Stop TX). It must look dead: the app's own disabled look
+   (`.op-btn:disabled`), no pointer, and no hover (BW's hover rule above skips it). */
+.ph-split-toggle:disabled,
+.ph-split-step:disabled,
+.ph-filter-step:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .ph-split-amt {
   min-width: 3em;
@@ -13242,12 +13216,15 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 /* The TX strip's cell (Phone and CW in the compact dock, `md` and up): AT MOST TWO ROWS, filled down
    then across, so a rig with more readings (COMP's controls, a temperature) makes the cell wider and
    never the strip taller — two compact rows are the height of the strip's own buttons. The cell's
-   box is cockpit-panes.css's (`.cockpit-txstrip-meters`); this is only how the meters sit in it. */
+   box is cockpit-panes.css's (`.cockpit-txstrip-meters`); this is only how the meters sit in it.
+   Each column shares the cell equally, as 1fr did, up to half of Operate's cell (`.cq-telemetry`, two
+   columns less the gap between them): that is the meters' useful width, the cell's `max-content`, so past
+   it the strip's room goes to the alarm cell beside them. A fixed track, so no reading changes it. */
 .ph-txmeters.inline.strip {
   grid-template-columns: none;
   grid-template-rows: repeat(2, auto);
   grid-auto-flow: column;
-  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-columns: minmax(0, calc((21em - var(--space-2)) / 2));
 }
 /* #446: OPERATE'S CELL OPENS LARGER (TxMetersCell). The opener is the cell's own block wrapper, so
    the fixed-width cell keeps its geometry; its focus ring is drawn INSIDE, since the cell clips.
@@ -20624,27 +20601,26 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   gap: var(--space-2);
   flex-wrap: wrap;
 }
-/* The transmitter alarm (TxAlarmBanner): the header's LAST row, the full width, only while an
-   alarm is up, so the controls above it never move when it comes or goes. Its look is the
-   cockpits' alert box in amber (`.cw-keyer-warn.caution`); this rule only places it. In flow and
-   unpositioned: it can never sit over Stop TX in the strip below. APRS's header line (`.np-head`)
-   wraps the same way. */
-.ch-txalarm {
-  flex: 1 1 100%;
-  margin: 0;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  min-width: 0;
-}
+/* The transmitter alarm cell (TxAlarmBanner, one line in the TX strip): its box and the boxes in it are
+   structure, in cockpit-panes.css; this is only their paint. Amber, the cockpits' caution tone
+   (`--alert-warning`, both themes), on the words, the count and the ✕ alike. */
 .ch-txalarm-text {
-  flex: 1 1 auto;
-  min-width: 0;
+  color: var(--alert-warning);
+  font-weight: 700;
+  background: color-mix(in srgb, var(--alert-warning) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--alert-warning) 55%, transparent);
+  border-radius: var(--radius-sm);
 }
 .ch-txalarm-queue {
+  color: var(--alert-warning);
   font-weight: 600;
-  white-space: nowrap;
+}
+.ch-txalarm-dismiss {
+  color: var(--alert-warning);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--alert-warning) 55%, transparent);
+  border-radius: var(--radius-sm);
+  line-height: 1;
 }
 
 /* ⊞ Panels — show/hide this screen's panels. Menu-only removal (no per-panel ✕ an
