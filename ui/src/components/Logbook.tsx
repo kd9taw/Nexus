@@ -277,6 +277,13 @@ function fmtQslSent(sent: { sent: boolean; via: string | null; dateUnix: number 
   return t('logbook.qsl.sent')
 }
 
+/** The QSL tooltip's word on the day an eQSL card arrived (`EQSL_QSLRDATE`, which an eQSL merge
+ *  keeps), for a contact eQSL confirmed; null when it holds no such day. */
+function eqslDateNote(q: LoggedQso): string | null {
+  const day = q.qslRcvd?.eqsl ? adifDate(extraTag(q, 'EQSL_QSLRDATE')) : null
+  return day ? t('logbook.row.qsl.eqslDate', { date: day }) : null
+}
+
 // RST is a free string now (CW "599" / phone "59" / digital "-12"); just trim.
 /** The entities whose contacts take a US state or Canadian province, as cty.dat (and the
  *  callbook) name them. */
@@ -3491,9 +3498,7 @@ export function Logbook({
                                       ? t('logbook.row.qsl.eqslAg')
                                       : t('logbook.row.qsl.eqsl')
                                     : null,
-                                  q.qslRcvd.eqsl && adifDate(extraTag(q, 'EQSL_QSLRDATE'))
-                                    ? t('logbook.row.qsl.eqslDate', { date: adifDate(extraTag(q, 'EQSL_QSLRDATE')) })
-                                    : null,
+                                  eqslDateNote(q),
                                   q.qslRcvd.qrz ? t('logbook.row.qsl.qrz') : null,
                                 ]
                                   .filter(Boolean)
