@@ -15,7 +15,7 @@
 // Since 2026-10-01 the button is the TX strip's (CockpitTxStrip, FT's cluster
 // under the scope on every screen), no longer the cockpit header's; these cases moved with it.
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, cleanup, screen, fireEvent, act } from '@testing-library/react'
+import { render, cleanup, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { CockpitTxStrip } from './CockpitTxStrip'
 import { ATU_LONG_PRESS_MS } from './AtuSwitchOutMenu'
 import type { AppSnapshot } from '../types'
@@ -168,6 +168,28 @@ describe("the rig's own ATU control", () => {
     expect([out.mock.calls.length, tune.mock.calls.length]).toEqual([1, 0])
   })
 
+  // Focus goes back to the ATU button when the menu closes, without scrolling the shell to it beyond what keeps it in
+  // sight (CLAUDE.md's focus rule: preventScroll, then scrollIntoView({ block: 'nearest' })).
+  it('Esc closes the menu and gives the keyboard back to ATU with preventScroll and a nearest scroll', async () => {
+    const scrolled: Element[] = []
+    const was = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = function (this: Element, arg?: boolean | ScrollIntoViewOptions) {
+      if (typeof arg === 'object' && arg.block === 'nearest') scrolled.push(this)
+    }
+    try {
+      mount(snapWith({ atu: true, atuSwitchOut: true }), vi.fn(), vi.fn())
+      const btn = screen.getByRole('button', { name: 'ATU ON' })
+      fireEvent.contextMenu(btn)
+      const item = await screen.findByRole('menuitem', { name: 'Switch tuner out' })
+      fireEvent.keyDown(item, { key: 'Escape' })
+      await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+      await waitFor(() => expect(document.activeElement).toBe(btn))
+      expect(scrolled).toContain(btn)
+    } finally {
+      Element.prototype.scrollIntoView = was
+    }
+  })
+
   it('a long press on touch opens the same menu, and the press does not tune', () => {
     vi.useFakeTimers()
     try {
@@ -195,6 +217,59 @@ describe("the rig's own ATU control", () => {
       fireEvent.click(tap)
       expect(tune).toHaveBeenCalledTimes(1)
       expect(screen.queryByRole('menuitem')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // The click a touch press ends with also FOCUSES the button it lands on (Chrome, on the press's compatibility
+  // mousedown). The menu is not modal (ui/MenuParts.tsx), so focus leaving it closes it; the button's own focus is
+  // the press that opened it, and must not (real Chrome, `scripts/browser-probe --desktop atu`: the long-press menu
+  // was gone by the time the finger lifted).
+  it('a long press on touch: the focus its closing click gives the button leaves the menu open', () => {
+    vi.useFakeTimers()
+    try {
+      mount(snapWith({ atu: true, atuSwitchOut: true }), vi.fn(), vi.fn())
+      const btn = screen.getByRole('button', { name: 'ATU ON' })
+      fireEvent.pointerDown(btn, { pointerType: 'touch' })
+      act(() => {
+        vi.advanceTimersByTime(ATU_LONG_PRESS_MS + 50)
+      })
+      fireEvent.pointerUp(btn, { pointerType: 'touch' })
+      act(() => btn.focus())
+      fireEvent.click(btn)
+      act(() => {
+        vi.advanceTimersByTime(50)
+      })
+      expect(screen.getByRole('menuitem', { name: 'Switch tuner out' })).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // ...and the keyboard is not left on ATU: Enter there would run a tune-up, keying a carrier, with the menu open.
+  // It goes back into the menu, where Enter on its one item switches the tuner out and keys nothing.
+  it('a long press on touch: the keyboard ends in the menu, not on ATU, so Enter cannot tune', () => {
+    vi.useFakeTimers()
+    try {
+      const tune = vi.fn()
+      mount(snapWith({ atu: true, atuSwitchOut: true }), tune, vi.fn())
+      const btn = screen.getByRole('button', { name: 'ATU ON' })
+      fireEvent.pointerDown(btn, { pointerType: 'touch' })
+      act(() => {
+        vi.advanceTimersByTime(ATU_LONG_PRESS_MS + 50)
+      })
+      fireEvent.pointerUp(btn, { pointerType: 'touch' })
+      act(() => btn.focus())
+      fireEvent.click(btn)
+      act(() => {
+        vi.advanceTimersByTime(50)
+      })
+      const menu = screen.getByRole('menu')
+      expect(document.activeElement, 'the keyboard is on ATU').not.toBe(btn)
+      expect(menu.contains(document.activeElement), 'the keyboard is in the menu').toBe(true)
+      fireEvent.keyDown(document.activeElement!, { key: 'Enter' })
+      expect(tune).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
     }

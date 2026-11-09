@@ -15,6 +15,7 @@
 // words are the mode's vocabulary; every sentence is from the catalog.
 import { Fragment, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import * as RM from '@radix-ui/react-dropdown-menu'
+import { MenuContent, MenuRoot } from './ui/MenuParts'
 import { t } from '../i18n'
 import { js8Pills, type Js8Pill, type Js8PillCommand } from '../js8Pills'
 import { js8Words, useJs8FlaggedWords, type Js8Word } from '../js8Suggest'
@@ -216,7 +217,7 @@ export function Js8ComposeBox({ value, onChange, onEnter, toCall, pills: pillsOn
   }
 
   return (
-    <RM.Root open={menu !== null} onOpenChange={(open) => { if (!open) setMenu(null) }} modal={false}>
+    <MenuRoot open={menu !== null} onOpenChange={(open) => { if (!open) setMenu(null) }}>
       <span className="js8-compose-wrap">
         {marked && (
           <span className="js8-compose-backdrop" ref={backRef} aria-hidden="true">
@@ -282,7 +283,7 @@ export function Js8ComposeBox({ value, onChange, onEnter, toCall, pills: pillsOn
           spellCheck={false}
         />
         <RM.Portal>
-          <RM.Content
+          <MenuContent
             className="ui-menu js8-suggest-menu"
             side="top"
             align="start"
@@ -292,6 +293,7 @@ export function Js8ComposeBox({ value, onChange, onEnter, toCall, pills: pillsOn
             onCloseAutoFocus={(e) => {
               e.preventDefault()
               inputRef.current?.focus({ preventScroll: true })
+              inputRef.current?.scrollIntoView?.({ block: 'nearest' })
             }}
           >
             {/* The portal escapes `.app`'s zoom, so the content re-applies it (Menu.tsx's reason). */}
@@ -312,9 +314,9 @@ export function Js8ComposeBox({ value, onChange, onEnter, toCall, pills: pillsOn
                 ))
               )}
             </div>
-          </RM.Content>
+          </MenuContent>
         </RM.Portal>
       </span>
-    </RM.Root>
+    </MenuRoot>
   )
 }

@@ -1194,6 +1194,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           <button
             type="button"
             className="cw-macro rtty-stop jtty-stop"
+            data-stop-control="esc-stop"
             onClick={stopJtty}
             disabled={!going}
             title={t('jtty.stop.title')}

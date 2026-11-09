@@ -1186,6 +1186,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           <button
             type="button"
             className="cw-macro rtty-stop psk-stop send-row-stop"
+            data-stop-control="esc-stop"
             onClick={stop}
             // `sending || latched`, NOT `sending` alone — RTTY's rule: this is on
             // the PSK stop-line census, and it must be live from the instant the
