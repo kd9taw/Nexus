@@ -41449,8 +41449,8 @@ mod tests {
             let mut f = std::fs::File::create(&bin).expect("write stand-in");
             // Speaks once and then just lives, without binding the CAT port — the shape of a
             // daemon that came up, opened the port and got nothing back from the radio. The
-            // `--show-conf` probe inside `spawn_rigctld` runs first with other arguments and is
-            // EXPECTED to fail here (it falls back to "say nothing about the control lines").
+            // show-conf ask inside `spawn_rigctld` does not reach it: it goes to the `rigctl`
+            // beside it, below.
             f.write_all(
                 format!(
                     "#!/bin/sh\n\
@@ -41463,6 +41463,23 @@ mod tests {
             .expect("write stand-in");
         }
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        // …and the `rigctl` beside it, which `spawn_rigctld` asks for the show-conf dump first
+        // (`rigctld_proc::ask_show_conf`). It answers with a whole dump (the FT-847's, verbatim),
+        // so the holds are confirmed and the launch goes ahead: what this test is about is the
+        // connect failure AFTER the launch. Without it the ask finds no whole dump, and the
+        // port, which has lines to hold, is refused before any daemon runs.
+        std::fs::write(
+            dir.join("showconf.log"),
+            include_str!("../tests/fixtures/rigctld/showconf_ft847.log"),
+        )
+        .expect("write dump");
+        let rigctl = dir.join("rigctl");
+        std::fs::write(
+            &rigctl,
+            "#!/bin/sh\ncase \" $* \" in *' -L '*) cat \"$(dirname \"$0\")/showconf.log\"; exit 0;; esac\nexit 9\n",
+        )
+        .expect("write stand-in rigctl");
+        std::fs::set_permissions(&rigctl, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         // `resolve_rigctld` prefers a binary bundled beside the executable and falls back to
         // PATH; a test binary has no bundle, so this is the path it takes. Prepend-only, and
         // this is the only test in this binary that resolves a rigctld.
