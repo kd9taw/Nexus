@@ -1402,7 +1402,13 @@ fn settable_lines_for(model: u32, ptt_line: Option<crate::rig::SerialLine>) -> S
         args.push("-P");
         args.push(ptt_type_token(line));
     }
-    ask_show_conf(&resolve_rigctl(), &resolve_rigctld(), &args, DUMP_BUDGET)
+    let rigctld = resolve_rigctld();
+    ask_show_conf(
+        &rigctl_beside(rigctld.clone()),
+        &rigctld,
+        &args,
+        DUMP_BUDGET,
+    )
 }
 
 /// The `-L` show-conf dump for a caller that only reads it (the baud ladder's `civaddr` and its
@@ -1410,7 +1416,8 @@ fn settable_lines_for(model: u32, ptt_line: Option<crate::rig::SerialLine>) -> S
 /// [`NO_SUCH_RIG`]. `None` for anything but a whole dump; every such caller reads that as
 /// "claim nothing".
 pub(crate) fn show_conf_dump(args: &[&str]) -> Option<String> {
-    match ask_show_conf(&resolve_rigctl(), &resolve_rigctld(), args, DUMP_BUDGET) {
+    let rigctld = resolve_rigctld();
+    match ask_show_conf(&rigctl_beside(rigctld.clone()), &rigctld, args, DUMP_BUDGET) {
         ShowConf::Dump(d) => Some(d),
         ShowConf::Unanswered | ShowConf::Unconfirmable => None,
     }
@@ -1436,11 +1443,16 @@ pub(crate) enum ShowConf {
 /// (and its PTT, which defaults to the rig's path) at it ([`ask_show_conf`]).
 pub(crate) const NO_SUCH_RIG: &str = "/dev/nexus-no-such-rig/rig";
 
-/// Is this `-L` output a WHOLE dump, one a parse may read an absence from? The frontend block
-/// always ends with `async` (4.5.5 through 4.7.1, every model), and a serial backend's block runs
-/// from `serial_speed` to `dtr_state`. So: `async` present, and if the serial block started, its
-/// last parameter too. A cut-off dump that lost the serial block would otherwise read as "no
-/// lines to hold" and drop the holds without a word.
+/// Is this `-L` output a WHOLE dump, one a parse may read an absence from?
+///
+/// The real truncation guard is the caller's: only a process that EXITED by a status is read
+/// ([`ask_show_conf`]), and an exited process has flushed everything it printed. This adds two
+/// presence checks on top. `async` is a frontend parameter every Hamlib here prints for every model
+/// (4.5.4, 4.5.5, 4.6.5, 4.7.1; models 1, 2, 1042, 3073): it is the frontend block's LAST on 4.5.x,
+/// but not on 4.6.5 and 4.7.1, where `tuner_control_pathname` through `client` follow it, so it
+/// proves the frontend block got that far, not that it ended. And a serial backend's block runs
+/// from `serial_speed` to `dtr_state`, so when the block started, its last parameter must be there
+/// too: a dump cut inside it would otherwise read as "no lines to hold" and drop the holds.
 pub(crate) fn whole_dump(dump: &str) -> bool {
     let has = |name: &str| dump.lines().any(|l| l.starts_with(&format!("{name}:")));
     has("async") && (!has("serial_speed") || has("dtr_state"))
@@ -1450,15 +1462,17 @@ pub(crate) fn whole_dump(dump: &str) -> bool {
 /// only if there is no `rigctl` to run, and both with `-r` [`NO_SUCH_RIG`].
 ///
 /// ⚠️ THE `-r` IS THE POINT. Asked with no `-r`, a Hamlib may OPEN the rig's default port, a real
-/// serial device, with no line held: observed at `-vvvvv`, Hamlib 4.5.5's `rigctld -L` and
-/// `rigctl -L` and 4.6.5's `rigctl -L` all call `rig_open` on `/dev/ttyS0` after printing the
-/// dump (`serial_open(/dev/ttyS0)`, retried for up to 2 s, or for the whole budget by a 4.5.5
-/// `rigctld`, which then stays up as a daemon). On a station with a keying interface on that port
+/// serial device, with no line held. Observed at `-vvvvv` (`serial_open(/dev/ttyS0)` after the
+/// dump): `rigctld -L` AND `rigctl -L` on 4.5.4 and 4.5.5, and `rigctl -L` on 4.6.5 and on the
+/// bundled 4.7.1; only 4.6.5's and 4.7.1's `rigctld -L` open nothing. A `rigctl` retries for up to
+/// 2 s; a 4.5.x `rigctld` retries for the whole budget and then stays up as a daemon. On a station with a keying interface on that port
 /// (COM1, a Raspberry Pi's serial port) that open could key the radio, on every CAT open. Pointed
 /// at [`NO_SUCH_RIG`], the only open tried is that path, which fails "no such file".
 ///
-/// `rigctl` goes first because it EXITS on every Hamlib here (4.5.5 with status 2 after the failed
-/// open, about 2 s; 4.6.5 and 4.7.1 in about 0.5 s), where 4.5.5's `rigctld -L` never does. Any
+/// `rigctl` goes first because it EXITS on every Hamlib here (4.5.4 and 4.5.5 with status 2 after
+/// the failed open, about 2 s; 4.6.5 and 4.7.1 in about 0.5 s), where a 4.5.x `rigctld -L` never
+/// does. Both come from ONE Hamlib: the callers pass the `rigctl` beside the `rigctld` that will run
+/// ([`rigctl_beside`]). Any
 /// exit by a status counts, as long as the dump is whole ([`whole_dump`]): an exited process has
 /// flushed what it printed. A tool still running at the budget is killed and reaped; one killed
 /// by a signal, or short of the dump's end, gives [`ShowConf::Unconfirmable`].
@@ -1643,8 +1657,11 @@ pub(crate) fn run_within(cmd: &mut Command, budget: std::time::Duration) -> Boun
 /// a one-shot CLI, not a daemon holding a TCP port. Both binaries ship in the same Hamlib
 /// package on every platform Nexus targets, so if `rigctld` is present `rigctl` is too.
 ///
-/// Also the second source of the `-L` show-conf dump on a Hamlib whose `rigctld -L` never exits
-/// ([`ask_show_conf`]), which is why it is not gated on `serial` any more.
+/// Gated on `serial` because its one caller is (`baud_ladder::rigctl_read`); without the gate the
+/// headless `cargo clippy --workspace --all-targets -- -D warnings` CI job fails it as dead code.
+/// The show-conf dump does NOT use it: it asks the `rigctl` beside the `rigctld` that will run
+/// ([`rigctl_beside`]), so the dump and the daemon are one Hamlib.
+#[cfg(feature = "serial")]
 pub(crate) fn resolve_rigctl() -> std::ffi::OsString {
     #[cfg(unix)]
     {
@@ -1659,6 +1676,37 @@ pub(crate) fn resolve_rigctl() -> std::ffi::OsString {
             return p;
         }
         std::ffi::OsString::from("rigctl")
+    }
+}
+
+/// The `rigctl` from the SAME Hamlib as `rigctld` (as [`resolve_rigctld`] returned it), so the
+/// show-conf dump Nexus reads and the daemon it then launches are one Hamlib: a dump from one
+/// version deciding the `-C` options handed to another is how a hold gets lost or refused.
+///
+/// A path (`/usr/bin/rigctld`, a bundled `…/resources/hamlib/rigctld.exe`) gives the `rigctl` in
+/// its directory. A bare `rigctld` (found on `PATH`) gives the `rigctl` in the first `PATH`
+/// directory that holds `rigctld` (the one a bare launch runs), never an earlier directory that
+/// happens to hold only a `rigctl`. Anything else is returned unchanged.
+pub(crate) fn rigctl_beside(rigctld: std::ffi::OsString) -> std::ffi::OsString {
+    rigctl_beside_in(rigctld, &std::env::var_os("PATH").unwrap_or_default())
+}
+
+/// [`rigctl_beside`] with `PATH` as a parameter, for the test.
+fn rigctl_beside_in(rigctld: std::ffi::OsString, path_var: &std::ffi::OsStr) -> std::ffi::OsString {
+    let p = std::path::PathBuf::from(&rigctld);
+    let client = match p.file_name().and_then(|f| f.to_str()) {
+        Some("rigctld") => "rigctl",
+        Some("rigctld.exe") => "rigctl.exe",
+        _ => return rigctld,
+    };
+    let dir = match p.parent().filter(|d| !d.as_os_str().is_empty()) {
+        Some(d) => Some(d.to_path_buf()),
+        None => std::env::split_paths(path_var)
+            .find(|d| d.join(&p).is_file() || d.join(format!("{}.exe", p.display())).is_file()),
+    };
+    match dir {
+        Some(d) => d.join(client).into_os_string(),
+        None => p.with_file_name(client).into_os_string(),
     }
 }
 
@@ -2128,8 +2176,8 @@ mod tests {
         );
     }
 
-    /// A whole dump ends its frontend block with `async` and, for a serial backend, its serial
-    /// block with `dtr_state` (4.5.5 and 4.7.1, models 1, 2, 1042, 3073 all checked).
+    /// A whole dump carries `async` (printed by every Hamlib checked, for every model) and, for a
+    /// serial backend, its serial block through `dtr_state`.
     #[test]
     fn a_dump_is_whole_only_through_its_last_block() {
         assert!(
@@ -4075,9 +4123,9 @@ mod tests {
             rigctl_beside(OsString::from("/opt/hamlib/bin/rigctld.exe")),
             OsString::from("/opt/hamlib/bin/rigctl.exe")
         );
-        // A bare name (nothing resolved) is left alone rather than rewritten into a guess.
+        // A bare name that no PATH directory holds is left a bare name.
         assert_eq!(
-            rigctl_beside(OsString::from("rigctld")),
+            rigctl_beside_in(OsString::from("rigctld"), std::ffi::OsStr::new("")),
             OsString::from("rigctl")
         );
         assert_eq!(
@@ -4086,16 +4134,31 @@ mod tests {
         );
     }
 
-    /// `rigctl` sitting beside a resolved `rigctld` — same Hamlib package, same directory, so
-    /// swapping the final component is enough. Done here rather than calling `resolve_rigctl`
-    /// because that is `#[cfg(feature = "serial")]` and this test runs without it.
-    fn rigctl_beside(rigctld: std::ffi::OsString) -> std::ffi::OsString {
-        let p = std::path::PathBuf::from(&rigctld);
-        match p.file_name().and_then(|f| f.to_str()) {
-            Some("rigctld") => p.with_file_name("rigctl").into_os_string(),
-            Some("rigctld.exe") => p.with_file_name("rigctl.exe").into_os_string(),
-            _ => rigctld,
-        }
+    /// ⭐ THE DUMP AND THE DAEMON ARE ONE HAMLIB. A bare `rigctld` runs the first one on PATH, so
+    /// its `rigctl` comes from that same directory: not from an earlier directory that holds only
+    /// a `rigctl` (another Hamlib), and not left to a second PATH search that would find it.
+    #[cfg(unix)]
+    #[test]
+    fn the_dump_comes_from_the_rigctl_beside_the_rigctld_that_runs() {
+        use std::ffi::OsString;
+        let root = std::env::temp_dir().join(format!("nexus-beside-{}", std::process::id()));
+        let (only_rigctl, hamlib) = (root.join("other-hamlib"), root.join("this-hamlib"));
+        std::fs::create_dir_all(&only_rigctl).expect("dir");
+        std::fs::create_dir_all(&hamlib).expect("dir");
+        std::fs::write(only_rigctl.join("rigctl"), b"").expect("rigctl");
+        std::fs::write(hamlib.join("rigctl"), b"").expect("rigctl");
+        std::fs::write(hamlib.join("rigctld"), b"").expect("rigctld");
+        let path = std::env::join_paths([&only_rigctl, &hamlib]).expect("PATH");
+        assert_eq!(
+            rigctl_beside_in(OsString::from("rigctld"), &path),
+            hamlib.join("rigctl").into_os_string()
+        );
+        // A resolved path keeps its own directory whatever PATH says.
+        assert_eq!(
+            rigctl_beside_in(OsString::from("/opt/h/bin/rigctld"), &path),
+            OsString::from("/opt/h/bin/rigctl")
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Say that a test asserted NOTHING, in a way that cannot be mistaken for a pass — and

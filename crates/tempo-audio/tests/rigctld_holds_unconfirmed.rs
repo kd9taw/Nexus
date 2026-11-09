@@ -1,11 +1,12 @@
 //! A Hamlib that cannot confirm the RTS/DTR holds does not get a real port opened without them:
 //! the launch is refused, with the operator's sentence, before any daemon runs.
 //!
-//! That is a `rigctl` (asked first, every time) that gives no whole dump. The `rigctld` is a 4.5.x
-//! one when one is on hand (`NEXUS_RIGCTLD`, or the first on PATH), otherwise a stand-in that
-//! does what 4.5.5 does after `-L`: print, then stay up; it is never asked once `rigctl` ran. The
-//! `rigctl` is always a stand-in that fails. A pseudo-terminal, which has no lines to hold, is
-//! launched all the same.
+//! That is a `rigctl` (asked first, every time) that gives no whole dump. The `rigctld` beside it
+//! is a 4.5.x one when one is on hand (`NEXUS_RIGCTLD`, or the first on PATH, linked into the
+//! stand-in's directory, since the `rigctl` asked is the one beside the `rigctld` that runs),
+//! otherwise a stand-in that does what 4.5.5 does after `-L`: print, then stay up; it is never
+//! asked once `rigctl` ran. The `rigctl` is always a stand-in that fails. A pseudo-terminal, which
+//! has no lines to hold, is launched all the same.
 #![cfg(all(target_os = "linux", feature = "serial"))]
 
 use std::io::Write;
@@ -89,13 +90,18 @@ fn a_hamlib_that_cannot_confirm_the_holds_is_refused_on_a_real_port_only() {
             ),
         );
     }
-    let mut path = dir.display().to_string();
+    // The real rigctld goes in the SAME directory as the failing rigctl, as a link: Nexus asks
+    // the rigctl beside the rigctld it will run, so the two have to sit together to be paired.
     if let Some(d) = &real_45 {
-        path = format!("{path}:{}", d.display());
+        std::os::unix::fs::symlink(d.join("rigctld"), dir.join("rigctld")).expect("link rigctld");
     }
     std::env::set_var(
         "PATH",
-        format!("{path}:{}", std::env::var("PATH").unwrap_or_default()),
+        format!(
+            "{}:{}",
+            dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
     );
 
     let tcp = || {
