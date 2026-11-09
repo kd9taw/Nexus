@@ -1024,6 +1024,10 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       const name = g.path.split(/[\\/]/).pop() ?? 'received-image'
       await loadImage(new File([buf], name))
       announce(t('sstv.gallery.edit.loaded', { mode: g.mode }))
+      // The composer stands UNDER the gallery, so on a short window the picture just loaded was below the
+      // fold and the click seemed to do nothing. Scrolled to the nearest way, the next frame (the loaded
+      // preview has its size by then); focus stays on ✎.
+      requestAnimationFrame(() => composeRef.current?.scrollIntoView({ block: 'nearest' }))
     }, t('sstv.gallery.edit.failed'))
   }
 
@@ -1087,6 +1091,8 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // what the operator sees is what goes out — ID plate included.
   const srcRef = useRef<{ img: CanvasImageSource; w: number; h: number } | null>(null)
   const txCanvasRef = useRef<HTMLCanvasElement>(null)
+  // The composer's body, for ✎ Edit & resend to bring into view.
+  const composeRef = useRef<HTMLElement>(null)
   const [imageName, setImageName] = useState<string | null>(null)
   const [srcSize, setSrcSize] = useState<{ w: number; h: number } | null>(null)
   const [notice, setNotice] = useState<{ kind: 'error' | 'warn'; text: string } | null>(null)
@@ -2291,7 +2297,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           {/* Unnamed section: the frame above is the landmark ("Transmit"); the wrapper
               stays for its column layout, with `.pane-body > .panel` stripping the
               card-in-card chrome. */}
-          <section className="sstv-compose panel">
+          <section className="sstv-compose panel" ref={composeRef}>
             <div className="sstv-compose-row">
             <div className={`sstv-compose-stage${packed ? ' sstv-compose-stage-packed' : ''}`}>
             <div

@@ -584,6 +584,49 @@ describe('#479: the composer at the bottom, the meters pane, Open folder', () =>
     expect(Object.keys(layout.state).sort()).toEqual(['gallery', 'rfScope', 'scope', 'txcompose'])
   })
 
+  it('✎ Edit & resend brings the composer into view once the picture is loaded: it stands below the gallery now', async () => {
+    // The composer moved under the gallery, so on a short window ✎ loaded a picture into a composer below the
+    // fold and nothing on screen changed. Once the load settles the composer is scrolled to, the nearest way,
+    // and focus stays where it was.
+    const w = window as unknown as { __TAURI_INTERNALS__?: { convertFileSrc: (p: string) => string } }
+    w.__TAURI_INTERNALS__ = { convertFileSrc: (p: string) => `asset://localhost${p}` }
+    const realFetch = globalThis.fetch
+    globalThis.fetch = vi.fn(async () => ({ arrayBuffer: async () => new ArrayBuffer(8) })) as unknown as typeof fetch
+    // jsdom loads no picture: the decoder answers "nothing decoded", so the load settles on its notice, which
+    // stands in the composer too and is as worth seeing.
+    const g = globalThis as { createImageBitmap?: unknown }
+    const realCib = g.createImageBitmap
+    g.createImageBitmap = async () => ({ width: 0, height: 0 })
+    const scrolled: Array<{ el: Element; arg: unknown }> = []
+    const real = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = function (this: Element, arg?: unknown) {
+      scrolled.push({ el: this, arg })
+    }
+    try {
+      getSstvState.mockResolvedValue({
+        ...IDLE,
+        gallery: [{ path: '/pics/a.png', mode: 'Scottie 1', finishedUtc: '2026-11-08T12:00:00Z', freqMhz: 14.23, lines: 256 }],
+      })
+      await renderView()
+      const edit = document.querySelector<HTMLButtonElement>('.sstv-thumb-edit')!
+      const focusBefore = document.activeElement
+      await act(async () => {
+        fireEvent.click(edit)
+        // The load settles, then the next frame scrolls (jsdom's frames are ~16 ms).
+        for (let i = 0; i < 40 && !scrolled.some((x) => x.el.closest('[data-pane="txcompose"]')); i++) await new Promise((r) => setTimeout(r, 10))
+      })
+      const toComposer = scrolled.filter((x) => x.el.closest('[data-pane="txcompose"]') != null)
+      expect(toComposer.length, 'the composer was never scrolled into view').toBeGreaterThan(0)
+      expect(toComposer[toComposer.length - 1].arg).toEqual({ block: 'nearest' })
+      expect(document.activeElement).toBe(focusBefore)
+    } finally {
+      Element.prototype.scrollIntoView = real
+      globalThis.fetch = realFetch
+      g.createImageBitmap = realCib
+      delete w.__TAURI_INTERNALS__
+    }
+  })
+
   it('the gallery button says what it does: Open folder', async () => {
     await renderView()
     const btn = document.querySelector<HTMLButtonElement>('.sstv-gallery-reveal')!
