@@ -150,7 +150,8 @@ const LIFT_CSS = '*:not(.stop-layer) { pointer-events: auto !important }'
 /** Every Stop TX on the page: where it is, and whether its whole face is on screen and topmost. */
 const MEASURE = `(() => {
   if (!document.documentElement.getAttribute('data-viewport')) return null
-  const stops = [...document.querySelectorAll('.op-btn.stop')].filter((b) => b.closest('[hidden]') == null && b.getBoundingClientRect().width > 0)
+  // The REAL button only: a stop layer's mirror (a clone, data-stop-mirror) is proven by the clicking check, never counted here.
+  const stops = [...document.querySelectorAll('.op-btn.stop:not([data-stop-mirror])')].filter((b) => b.closest('[hidden]') == null && b.getBoundingClientRect().width > 0)
   if (!stops.length) return { vp: document.documentElement.getAttribute('data-viewport'), stops: [] }
   const lift = document.createElement('style'); lift.textContent = ${JSON.stringify(LIFT_CSS)}; document.head.appendChild(lift)
   const name = (t) => !t ? 'nothing' : (t.closest('.sstv-tx-bar') ? 'sstv-tx-bar>' : t.closest('.cockpit-txdock, .cockpit-txdock-keep') ? 'dock>' : '') + (String(t.className || '').split(' ')[0] || t.tagName).slice(0, 32)
@@ -182,9 +183,13 @@ const MEASURE = `(() => {
     // Any control of it whole inside its box, as its own scroll stands.
     const box = sq.getBoundingClientRect()
     const ctlWhole = [...sq.querySelectorAll('button, input, select, textarea')].some((e) => { const q = e.getBoundingClientRect(); return q.height > 0 && q.top >= box.top - 0.5 && q.bottom <= box.bottom + 0.5 })
-    if (!own) return { cap, ctlWhole, stop: null }; const q = own.getBoundingClientRect(); const x = q.left + q.width / 2, y = q.top + q.height / 2
+    const st0 = [...document.querySelectorAll('.cockpit-txstrip')].find((x) => x.closest('[hidden]') == null && x.getBoundingClientRect().height > 0)
+    const overStrip0 = !!st0 && box.top < st0.getBoundingClientRect().bottom - 0.5
+    if (!own) return { cap, ctlWhole, overStrip: overStrip0, stop: null }; const q = own.getBoundingClientRect(); const x = q.left + q.width / 2, y = q.top + q.height / 2
     const t = x >= 0 && y >= 0 && x < innerWidth && y < innerHeight ? document.elementFromPoint(x, y) : null
-    return { cap, ctlWhole, stop: { seen: t != null && (t === own || own.contains(t)), live: !own.disabled, h: Math.round(q.height) } } })()
+    const st = [...document.querySelectorAll('.cockpit-txstrip')].find((x) => x.closest('[hidden]') == null && x.getBoundingClientRect().height > 0)
+    const overStrip = !!st && box.top < st.getBoundingClientRect().bottom - 0.5
+    return { cap, ctlWhole, overStrip, stop: { seen: t != null && (t === own || own.contains(t)), live: !own.disabled, h: Math.round(q.height) } } })()
   const span = (sel) => { const e = [...document.querySelectorAll(sel)].find((x) => x.closest('[hidden]') == null && x.getBoundingClientRect().height > 0); if (!e) return null; const q = e.getBoundingClientRect(); return Math.round(q.top) + '–' + Math.round(q.bottom) }
   return { vp: document.documentElement.getAttribute('data-viewport'), stops: rows, headBottom: head ? Math.round(head.getBoundingClientRect().bottom) : null,
     alarmSeen, squeezed, boxes: { shell: span('main'), strip: span('.cockpit-txstrip, .cockpit-qso'), dock: span('.cockpit-txdock, .cockpit-txdock-keep[data-fold], .sstv-tx-bar') },
@@ -440,23 +445,47 @@ async function mirrorCase(route, size, scale, loc, state, sel, kind, css = null)
     await p.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: at.x, y: at.y, button: 'left', clickCount: 1 })
     await sleep(300)
     const after = await p.evaluate('globalThis.__probeStops()')
-    return { stops: after[kind] - before[kind], mirrors: at.mirrors, disabled: at.disabled, open: await p.evaluate("!!document.querySelector('.probe-modal')") }
+    return { stops: after[kind] - before[kind], mirrors: at.mirrors, disabled: at.disabled, open: await p.evaluate("!!document.querySelector('.probe-modal')"),
+      squeezed: await p.evaluate("[...document.querySelectorAll(\"[data-squeeze='on']\")].some((x) => x.closest('[hidden]') == null)") }
   } finally {
     await p.close()
   }
 }
 const MIRROR = [
   ['FT parked line, Stop TX', 'operate', [900, 600], '175', 'en', 'plain', 'main.operate-cockpit .cockpit-qso .op-btn.stop', 'halts'],
-  ['SSTV squeezed bar, Stop TX', 'sstv', [900, 600], '175', 'ru', 'keyedAlarm', 'main.sstv-view .cockpit-txstrip .op-btn.stop', 'halts'],
-  ['SSTV squeezed bar, its own Stop (sending)', 'sstv', [900, 600], '175', 'ru', 'keyedAlarm', 'main.sstv-view .sstv-tx-bar .sstv-tx-stop', 'sstv'],
+  ['SSTV squeezed bar, Stop TX', 'sstv', null, '175', null, 'keyedAlarm', 'main.sstv-view .cockpit-txstrip .op-btn.stop', 'halts'],
+  ['SSTV squeezed bar, its own Stop (sending)', 'sstv', null, '175', null, 'keyedAlarm', 'main.sstv-view .sstv-tx-bar .sstv-tx-stop', 'sstv'],
 ]
+/** Where SSTV's bar really squeezes while sending under an alarm, the first of these: the shell's room depends on the top
+ *  bar and the header, which other changes move (a top bar that no longer grows for a status message squeezes far less),
+ *  so the case is searched for, and asserted squeezed, never assumed. */
+const SQUEEZE_AT = [[[900, 600], 'ru'], [[900, 600], 'ja'], [[800, 520], 'ru'], [[700, 500], 'ja'], [[640, 480], 'ru']]
+async function squeezedSstv() {
+  for (const [size, loc] of SQUEEZE_AT) {
+    const p = await openPage('sstv', size, '175', loc)
+    try {
+      let m = null
+      for (let i = 0; i < 160 && !m?.stops.length; i++) { await sleep(250); m = await p.evaluate(MEASURE).catch(() => null) }
+      await settle(p, await apply(p, STATES.keyedAlarm, 'sstv'))
+      if (await p.evaluate("!!document.querySelector(\"main.sstv-view .sstv-tx-bar[data-squeeze='on']\")")) return [size, loc]
+    } finally {
+      await p.close()
+    }
+  }
+  return null
+}
 const mirrorReds = []
 let mirrorControl = null
 if (process.env.STOPVIS_MIRROR !== '0' && wantViews.includes('FT')) {
-  for (const [what, ...c] of MIRROR) {
-    const r = await mirrorCase(...c)
+  const sqAt = await squeezedSstv()
+  if (!sqAt) mirrorReds.push(`stop layer — SSTV: no size of ${SQUEEZE_AT.map(([[w, h], l]) => `${w}×${h} ${l}`).join(', ')} at 175 % squeezes the bar while sending under an alarm: the squeezed-bar cases cannot run`)
+  else console.log(`stop layer — SSTV's bar squeezes at ${sqAt[0].join('×')} 175 % ${sqAt[1]}`)
+  for (const [what, route, size, scale, loc, ...rest] of MIRROR) {
+    const sstv = route === 'sstv'
+    if (sstv && !sqAt) continue
+    const r = await mirrorCase(route, sstv ? sqAt[0] : size, scale, sstv ? sqAt[1] : loc, ...rest)
     console.log(`stop layer — ${what}, a modal open: ${JSON.stringify(r)}`)
-    if (r.error || r.stops !== 1 || r.disabled || !r.open) mirrorReds.push(`stop layer — ${what}: with a modal open, one real click stopped ${r.stops ?? 0} times (${r.error ?? (r.disabled ? 'the stop was disabled' : !r.open ? 'the modal closed' : 'not once')})`)
+    if (r.error || r.stops !== 1 || r.disabled || !r.open || (sstv && !r.squeezed)) mirrorReds.push(`stop layer — ${what}: with a modal open, one real click stopped ${r.stops ?? 0} times (${r.error ?? (r.disabled ? 'the stop was disabled' : !r.open ? 'the modal closed' : sstv && !r.squeezed ? 'the bar was not squeezed' : 'not once')})`)
   }
   const c = await mirrorCase(...MIRROR[0].slice(1), '.stop-layer { display: none !important }')
   mirrorControl = c.stops === 0
@@ -486,6 +515,11 @@ if (errors) { console.log(`stopvisible: ${errors} screens never drew`); process.
     console.log(`note: a squeezed bottom surface shows at least one whole control in ${all.length - sliver.length} of ${all.length} rows` +
       (sliver.length ? `; a sliver only: ${sliver.slice(0, 12).map((r) => `${r.view} ${r.W}×${r.H} ${r.scale} ${r.loc} ${r.state} (cap ${r.squeezed.cap} px)`).join('; ')}` : ''))
   }
+  // The one-control cap (CockpitTxStrip capFor): the surface stands over the strip's lower part. Stop TX in those rows is
+  // held by the matrix's own check; they are named here so a size that starts to use it is seen.
+  const over = all.filter((r) => r.squeezed.overStrip)
+  console.log(`note: the one-control cap (a squeezed surface standing over the strip below Stop TX's line) in ${over.length} rows` +
+    (over.length ? `: ${over.slice(0, 12).map((r) => `${r.view} ${r.W}×${r.H} ${r.scale} ${r.loc} ${r.state}`).join('; ')}` : ''))
   const sq = rows.filter((r) => r.squeezed?.stop)
   if (sq.length) {
     const hidden = sq.filter((r) => !r.squeezed.stop.seen)
