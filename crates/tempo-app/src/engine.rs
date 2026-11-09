@@ -17272,7 +17272,7 @@ impl Engine {
         let dto = &mut read.dto;
         let mut rows = Vec::new();
         {
-            let other = self.fd_on_another_call_than("");
+            let other = self.fd_on_another_call_than("", true);
             for q in &read.log.qsos()[read.next..end] {
                 if other(q) {
                     dto.other_call += 1;
@@ -17497,6 +17497,12 @@ impl Engine {
     /// that needs more than the counts.
     pub fn fd_club_log(&self) -> Option<&crate::fdevent::ClubLog> {
         self.fd_club.as_ref()
+    }
+
+    /// The host's club journal, taken under the lock and synced after it is released
+    /// ([`crate::fdevent::ClubJournal::sync`]) — `None` when this laptop hosts nothing.
+    pub fn fd_club_journal(&self) -> Option<crate::fdevent::ClubJournal> {
+        self.fd_club.as_ref().and_then(|c| c.journal())
     }
 
     /// ⭐ **The club log, as the contest screen lists it** — the newest
@@ -17820,20 +17826,27 @@ impl Engine {
     /// ([`Self::fd_club_call`], held through "Contest over?") and the one the host's welcome
     /// named on any other laptop. Both are read as club sync reads a call
     /// ([`crate::fdevent::club_call`]), and a call either side cannot say keeps the contact
-    /// flowing, as the JOIN gate serves it. ARRL Field Day takes every call: its GOTA station is on
-    /// another call by rule, and the club's file writes its contacts under it.
+    /// flowing, as the JOIN gate serves it. ARRL Field Day takes every call from any other laptop:
+    /// its GOTA station is on another call by rule, and the club's file writes its contacts under
+    /// it. The host's own laptop is no GOTA station, so there too its contacts on another call
+    /// (after its "Contest over?") stay out.
     fn fd_on_another_call(&self) -> impl Fn(&tempo_core::fieldday::LoggedQso) -> bool + '_ {
-        self.fd_on_another_call_than(self.fd_mirror.link_call.as_str())
+        self.fd_on_another_call_than(self.fd_mirror.link_call.as_str(), self.fd_club.is_none())
     }
 
     /// [`Self::fd_on_another_call`], with `link` the call a contact that carries none follows: this
     /// laptop's link's for its own contacts, nothing for a laptop's file the host imports
     /// ([`Self::fd_club_import`]), whose contact carrying no call is taken as the club's.
+    /// `gota_may` is whether these contacts may be a GOTA station's, which ARRL Field Day takes on
+    /// any call: a laptop's (another laptop's own, or its file the host imports), never the
+    /// host's own.
     fn fd_on_another_call_than<'a>(
         &'a self,
         link: &'a str,
+        gota_may: bool,
     ) -> impl Fn(&tempo_core::fieldday::LoggedQso) -> bool + 'a {
-        let gota = self.fd_club_contest() == tempo_core::fieldday::FdEvent::ArrlFd.code();
+        let gota =
+            gota_may && self.fd_club_contest() == tempo_core::fieldday::FdEvent::ArrlFd.code();
         let club = crate::fdevent::club_call(&match &self.fd_club {
             Some(_) => self.fd_club_call(),
             None => self.fd_mirror.host_call.clone(),
@@ -37811,8 +37824,16 @@ fn fd_club_import_with(
     let plan = engine_lock(engine).fd_club_import_plan(text, posid)?;
     let mut read = read(plan, text);
     loop {
-        let done = engine_lock(engine).fd_club_import_merge(&mut read)?;
-        if done {
+        // Each hold's rows reach the host's disk once the lock is let go, as the club link's
+        // do ([`crate::fdevent::ClubJournal::sync`]).
+        let (done, journal) = {
+            let mut e = engine_lock(engine);
+            (e.fd_club_import_merge(&mut read), e.fd_club_journal())
+        };
+        if let Some(j) = journal {
+            j.sync();
+        }
+        if done? {
             return Ok(read.dto);
         }
         between();
@@ -60040,6 +60061,46 @@ mod tests {
         dir
     }
 
+    /// ⭐ **At ARRL Field Day the host takes a GOTA laptop's file in.** The host's own contacts
+    /// on another call than the club's stay out of the club's log there (its laptop is no GOTA
+    /// station), and an imported file is another laptop's, which may be the GOTA station's: its
+    /// contacts on the GOTA call go in, as its link would have sent them, and none is counted as
+    /// on another call.
+    #[test]
+    fn at_arrl_field_day_the_host_takes_a_gota_laptops_file_in() {
+        let dir = import_dir("arrl-gota");
+        let mut gota = Engine::new("K9GOT", "EN61", 0);
+        gota.set_fd_log_path(dir.join("fieldday_backup_cccc0003.adi"));
+        let mut s = gota.settings().clone();
+        s.fd_active = true;
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        s.fd_position_id = "cccc0003".into();
+        s.fd_join_addr = "192.168.1.10:42073".into();
+        gota.apply_settings(s);
+        gota.set_mode("fieldday-sp").unwrap();
+        assert!(gota.fd_log_manual("K1ABC", "2A", "EMA", "PH").unwrap());
+        let file = gota.field_day_log_adif().expect("the GOTA laptop logged");
+
+        let mut host = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = host.settings().clone();
+        s.fd_active = true;
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        s.fd_host_enable = true;
+        s.fd_host_port = 42073;
+        s.fd_position_id = "aaaa0001".into();
+        host.apply_settings(s);
+        host.set_mode("fieldday-run").unwrap();
+        host.fd_host_start(dir.join("fd.ndjson"))
+            .expect("ARRL Field Day is hosted");
+        let got = host.fd_club_import(&file, "cccc0003").unwrap();
+        assert_eq!((got.added, got.other_call), (1, 0), "{got:?}");
+        let cab = host.fd_club_export(true).unwrap();
+        assert!(cab.contains("K1ABC 2A EMA"), "{cab}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ⭐ **A laptop's file merges its contacts into the host's club log once**: imported again it
     /// adds nothing, and says every contact is already in.
     #[test]
@@ -60121,6 +60182,27 @@ mod tests {
                 .map(|c| c.qsos_raw()),
             Some(2),
             "CONTROL: the contacts read are merged"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **An imported laptop's contacts reach the host's disk as a link's do**: the club journal
+    /// is synced after the merge, with the Engine lock let go
+    /// ([`crate::fdevent::ClubJournal::sync`]), so a power cut on the host after the import's
+    /// answer cannot cost them. Seen through the journal's test seam, by its own path.
+    #[test]
+    fn a_laptops_file_import_syncs_the_club_journal() {
+        use crate::fdevent::club_journal_seam::count;
+        let dir = import_dir("synced");
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &["K9AAA", "K9BBB"]);
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let journal = dir.join("ilqp.ndjson");
+        let before = count(&journal);
+        let got = super::fd_club_import_in(&host, &file, "bbbb0002").unwrap();
+        assert_eq!(got.added, 2, "CONTROL: {got:?}");
+        assert!(
+            count(&journal) > before,
+            "the import synced the club journal"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -308,7 +308,7 @@ done that you have not ticked:
 - **Export the Cabrillo log to Downloads**: the same file the Contest screen's Export Cabrillo
   writes.
 - **Put back what the contest changed**: each of Callsign on the air, Operator at the key, Position
-  name, Entry category, Entry class, Power category and Unassisted entry that the contest changed,
+  name, Entry category, Entry class, Power category, Band category and Unassisted entry that the contest changed,
   shown as it is now and as it was before. Tick the ones you want back.
 
 At a club it also says how many of this laptop's contacts the club's log does not have yet. They

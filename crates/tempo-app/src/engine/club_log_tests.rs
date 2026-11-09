@@ -356,3 +356,40 @@ fn the_hosts_club_log_is_the_club_adifs_contacts_by_value() {
         "…and the one the file leaves out"
     );
 }
+
+/// ⭐ **The host's club journal reaches the disk for every row, take-back and put-back a laptop
+/// sends**: the bridge syncs it ([`crate::fdevent::ClubJournal::sync`]) once it has released the
+/// Engine lock, before the ack goes back, so a row the laptop sees acked survives a hard power
+/// cut on the host. Seen through the journal's test seam, by the journal's own path.
+#[test]
+fn the_bridge_syncs_the_club_journal_for_every_row_it_merges() {
+    use crate::fdevent::club_journal_seam::count;
+    use tempo_net::fdsync::ClubBackend;
+    let d = Dir::new("club-journal-sync");
+    let path = d.0.join("fd_event_test.jsonl");
+    let e = host(&d);
+    let bridge = crate::fdbridge::EngineClubBackend(std::sync::Arc::new(std::sync::Mutex::new(e)));
+    assert_eq!(count(&path), 0, "CONTROL: nothing synced before a row");
+    let q = row("bbbb0002", 1, "K1ABC", ("2A", "EMA"), "40m", "CW", T0);
+    assert_eq!(bridge.merge(0, &q), Ok(1), "merged and acked");
+    assert_eq!(count(&path), 1, "the merge syncs the journal");
+    assert!(
+        std::fs::read_to_string(&path).unwrap().contains("K1ABC"),
+        "CONTROL: the synced journal holds the row"
+    );
+    bridge.retract(0, "bbbb0002", 1).expect("taken back");
+    assert_eq!(count(&path), 2, "a take-back syncs it");
+    bridge.restore(0, "bbbb0002", 1).expect("put back");
+    assert_eq!(count(&path), 3, "a put-back syncs it");
+}
+
+/// The sync is a wait on the disk, so it is never made under the Engine lock: a debug build
+/// stops one that is (the logbook's fence, `off_engine_lock`).
+#[test]
+#[should_panic(expected = "a sync of the club journal ran while this thread holds the Engine lock")]
+fn a_club_journal_sync_under_the_engine_lock_trips_the_fence() {
+    let d = Dir::new("club-journal-fence");
+    let shared = std::sync::Arc::new(std::sync::Mutex::new(host(&d)));
+    let e = engine_lock(&shared);
+    e.fd_club_journal().expect("hosting journals").sync();
+}

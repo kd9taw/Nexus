@@ -6205,6 +6205,11 @@ export const EN = {
   },
   'fieldDay.unmerged.title':
     'Add these contacts to your general logbook as they were logged. Safe to press twice: a contact already there is skipped, never duplicated. Nothing is queued for upload.',
+  // Dismiss puts away the offer as it stands (its contest, count and days), on this computer, for
+  // good; the contacts stay in the journal. A changed offer is shown again.
+  'fieldDay.unmerged.dismiss': 'Dismiss',
+  'fieldDay.unmerged.dismissTitle':
+    "Stop offering these. They stay in this computer's contest journal, and nothing is deleted. A contact not offered here before is offered again.",
   'fieldDay.club.board.empty': 'No positions heard yet — every other Nexus position on this network appears here as it logs.',
   'fieldDay.club.board.column.position': 'Position',
   'fieldDay.club.bands.column.band': 'Band',
@@ -6544,7 +6549,7 @@ export const EN = {
   'settings.fieldDay.power.hundred.label': '×2 ≤100W',
   'settings.fieldDay.power.hundred.hint': '100W or less from any power source',
   'settings.fieldDay.power.high.label': '×1 >100W',
-  'settings.fieldDay.power.high.hint': 'Over 100W — commercial/generator power',
+  'settings.fieldDay.power.high.hint': 'Over 100W from any power source',
   'settings.fieldDay.power.hint':
     'Multiplies your QSO points. QRP/battery = ×5 (ARRL bonus for going off-grid). Choose before the event.',
 

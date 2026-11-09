@@ -75,6 +75,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Importing your eQSL InBox file adds no contacts.** An InBox downloaded by hand at eqsl.cc and opened with Import was read as a log. Each card, timed by the station that sent it, came in as a second copy of your contact carrying that station's "QSL sent" mark, and a card for a contact missing from your log came in as a QSO you never logged. Nexus now knows the file by the program its header names, eQSL's DownloadInBox, and reads it as Sync eQSL does: each card confirms the contact it matches, and nothing is added. An ADIF file from any other program imports as before.
 - **Moving your log from another program does not send it to eQSL again.** A contact that another logger's ADIF marks as sent to eQSL (EQSL_QSL_SENT Y) now counts as uploaded, as LOTW_QSL_SENT already did for LoTW, so saving your eQSL password does not send it again and Awards ▸ Confirmations does not list it as never uploaded. Nexus's own exports now say the same of each contact eQSL accepted or already held, with the day of the upload, so the next program reads it too. A contact eQSL refused, or that was never sent, says nothing.
 - **The Logbook's QSL column shows every mark.** The column was narrower than the mark of a contact confirmed by LoTW, card, eQSL and QRZ together, so "L·C·E·Q" could read "L·C…". It now holds the longest mark. In Check park states, Check confirmations and Check eQSL sent marks, Cancel and the button that applies the list now stay at the bottom of the list on screen, where a long list used to put them below the window until you scrolled to its end.
+- **Contest over? puts back the Band category.** A band category declared for one contest (20M
+  for CQ WW SSB, say) was left in place when the contest ended, so the next contest's Cabrillo
+  file claimed it. The checklist now lists the Band category beside the other settings the contest
+  changed, as it is now and as it was before, and puts it back when you tick it.
+- **The offer to merge old contest contacts can be dismissed.** Contacts the contest journal keeps
+  that are not in your logbook (because you deleted their logbook copies, for example) were offered
+  every time the Contest screen opened. Dismiss puts that offer away for good on this computer,
+  across a restart. Nothing is deleted: the contacts stay in the journal, and a contact that was
+  not in the offer before brings it back.
+- **A legal contact after one in a banned mode with the same station now counts.** At the Illinois
+  QSO Party, an RTTY contact with a station you had already worked on FT8, on the same band and
+  between the same counties, was marked a dupe and scored nothing, although the sponsor credits it
+  (the FT8 one earns nothing). It now counts on your screen, the club line, every laptop's county
+  board and the claimed score, and is not marked a dupe; the same at Winter Field Day after a WSJT
+  contact. A second RTTY contact with that station is still a dupe. The FT8 and FT4 sequencers'
+  "worked before" is unchanged.
+- **At ARRL Field Day, the host's own contacts after Contest over? stay out of the club's log.**
+  As at every other contest, a contact logged on the host laptop under your own call, with Contest
+  mode turned back on to reach **Club Cabrillo**, now stays in that laptop's own log instead of going
+  into the Club Cabrillo under the club's call. The GOTA station and the other laptops send their
+  contacts as before.
+- **A Field Day host's club log survives a sudden power cut.** The host wrote each contact the
+  laptops sent into its club journal but left it to the operating system to put on the disk, so a
+  hard power cut could lose the newest ones (the laptops sent them again when they rejoined). The
+  host now puts each one on the disk before it tells the laptop it has it, and the contacts of a
+  laptop's file it imports before it shows what it added. Each laptop's own contest
+  log, the message queue and the JS8 inbox also make sure the file's new name is on the disk after
+  every save, so a power cut can no longer bring back the version from before it (Linux and macOS;
+  Windows has no such step).
+- **The ×1 Field Day power hint is right.** It said "Over 100W — commercial/generator power", but
+  ARRL's rules give ×1 for more than 100 W from any power source. It now says so.
 
 ## [1.23.0] — 2026-11-05
 

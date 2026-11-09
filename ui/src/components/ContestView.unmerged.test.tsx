@@ -76,6 +76,8 @@ const show = async (fd: FieldDayStatus = FD(), observed = false) => {
 beforeEach(() => {
   contestUnmerged.mockReset()
   contestMergeUnmerged.mockReset()
+  // A dismissal is kept in storage: one test's must not hide another's offer.
+  localStorage.clear()
 })
 afterEach(cleanup)
 
@@ -137,6 +139,28 @@ describe('the contacts the contest journal keeps that the logbook does not hold'
     render(<ContestView fieldDay={null} tier="FT8" onSetMode={() => {}} />)
     await settle()
     expect(contestUnmerged, 'no contest, nothing to ask').not.toHaveBeenCalled()
+  })
+
+  // The Logbook copy of a merged contact was deleted: the journal keeps the contact and offers it
+  // again, and the operator who deleted it on purpose says no once. A relaunch remounts the screen
+  // and asks the station again, which still answers with the same contacts.
+  it('Dismiss puts the offer away for good, a relaunch included, and merges nothing', async () => {
+    contestUnmerged.mockResolvedValue([PARTY])
+    await show()
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    await settle()
+    expect(screen.queryByText(/not in your logbook/)).toBeNull()
+    cleanup()
+    await show()
+    expect(contestUnmerged, 'asked again on the relaunch').toHaveBeenCalledTimes(2)
+    expect(screen.queryByText(/not in your logbook/)).toBeNull()
+    expect(contestMergeUnmerged).not.toHaveBeenCalled()
+    // CONTROL: a contact not offered before (a third one) is offered again, Dismiss and all.
+    cleanup()
+    contestUnmerged.mockResolvedValue([{ ...PARTY, count: 3 }])
+    await show()
+    expect(screen.getByRole('button', { name: 'Merge these 3 into my logbook' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeTruthy()
   })
 
   it('never asks the station for a Remote observer, and offers nothing there', async () => {

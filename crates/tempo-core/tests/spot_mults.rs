@@ -298,3 +298,47 @@ fn a_county_line_predicts_each_county_it_would_add() {
         "the entity is confirmed already, so only the county is predicted"
     );
 }
+
+/// ⭐ **A spot whose mode is only a guess from its frequency still previews its multipliers.** At
+/// the RTTY Roundup, which bans CW, a spot that names no mode on US 40 m below 7.070 MHz is
+/// guessed CW from where it sits, and that stretch is busy with RTTY during the contest. The
+/// preview judges a banned mode by the mode a spot names, never by the guessed class: a guess is
+/// not a contact in a banned mode, so the station's country, and the state it is said to send,
+/// are still shown. A spot that names a banned mode adds nothing.
+#[test]
+fn a_spot_guessed_cw_from_its_frequency_still_previews_its_multipliers() {
+    let log = log_of(
+        "arrlrtty",
+        StationData {
+            contest_qth_state: "IL".into(),
+            ..Default::default()
+        },
+        "40m",
+    );
+    let probe = log.spot_mults();
+    assert_eq!(
+        probe.new_mults("DL1AAA", "40m", "CW", None),
+        vec![("dxcc", "Germany".to_string())],
+        "a guessed CW class: its country"
+    );
+    let ma = vec![tempo_core::contest::FieldValue {
+        key: "QTH",
+        raw: "MA".to_string(),
+        domain: Some("arrl_rtty_qth"),
+    }];
+    assert_eq!(
+        probe.predicted_mults("K1NEW", "40m", "CW", None, std::slice::from_ref(&ma)),
+        vec![("qth", "MA".to_string())],
+        "a guessed CW class: the state it is said to send"
+    );
+    assert_eq!(
+        probe.new_mults("DL1AAA", "40m", "CW", Some("CW")),
+        vec![],
+        "control: a spot that names CW adds nothing"
+    );
+    assert_eq!(
+        probe.predicted_mults("K1NEW", "40m", "DIG", Some("FT8"), &[ma]),
+        vec![],
+        "control: a banned mode named"
+    );
+}

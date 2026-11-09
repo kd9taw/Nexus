@@ -4,7 +4,8 @@
 //! # Why a thread
 //!
 //! Each of these journals is rewritten whole on every change — a temporary file, written and
-//! fsynced, renamed over the journal — and the changes are made under the Engine lock, often by
+//! fsynced, renamed over the journal, and the folder fsynced after the rename where the
+//! platform has a folder handle to sync (unix; Windows has none) — and the changes are made under the Engine lock, often by
 //! the radio loop itself: the FT Field Day sequencer journals every contact from inside the slot
 //! it logs it in, the message queue is journaled from TX planning and decode handling, and the
 //! JS8 inbox from decode handling and the once-a-second JS8 tick. The
@@ -51,7 +52,8 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
 
 /// One journal write.
 enum Op {
-    /// Replace `path` with `bytes`: write `tmp`, fsync it, rename it over `path`.
+    /// Replace `path` with `bytes`: write `tmp`, fsync it, rename it over `path`, fsync the
+    /// folder.
     Replace {
         path: PathBuf,
         tmp: PathBuf,
@@ -303,8 +305,11 @@ fn apply(op: Op) -> (PathBuf, bool) {
                     f.sync_all() // on disk BEFORE the rename publishes it
                 })
                 .and_then(|()| std::fs::rename(&tmp, &path));
-            if let Err(e) = &res {
-                eprintln!("{failure}: {e}");
+            match &res {
+                // …and the folder, so the rename itself survives a power cut: without it the
+                // machine can come back with the journal from before this write.
+                Ok(()) => crate::logbook::sync_parent_dir(&path),
+                Err(e) => eprintln!("{failure}: {e}"),
             }
             // Only a saved journal is copied, and the copy's outcome is not the journal's.
             if let (Ok(()), Some(dir)) = (&res, &copies) {
@@ -588,6 +593,29 @@ mod tests {
         put("five");
         assert_eq!(w.trouble(&path), None, "and the next good write clears it");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "five");
+    }
+
+    /// ⭐ **The folder is synced after the rename, once per journal written**, so a power cut
+    /// cannot bring back the journal from before a write the operator saw land. The tmp's own
+    /// fsync makes its CONTENT durable; the rename that publishes it is the folder's. Seen
+    /// through [`crate::logbook::dir_sync_seam`], which records the request on every platform
+    /// (only a unix build has a folder handle to sync). A removal syncs nothing here.
+    #[test]
+    fn each_write_syncs_the_journals_folder_after_the_rename() {
+        use crate::logbook::dir_sync_seam::count;
+        let d = Dir::new("dirsync");
+        let a = d.0.join("fieldday.adi");
+        let b = d.0.join("queue.json");
+        let w = JournalWriter::default();
+        write(&w, &a, "one");
+        write(&w, &a, "two");
+        write(&w, &b, "q");
+        w.settle();
+        assert_eq!(count(&a), 2, "one folder sync per write of the journal");
+        assert_eq!(count(&b), 1, "and one for the other journal's write");
+        w.remove(&b);
+        w.settle();
+        assert_eq!(count(&b), 1, "CONTROL: a removal asks for none");
     }
 
     /// The write itself is the one the callers used to make: the same temporary file, left

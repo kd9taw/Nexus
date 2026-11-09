@@ -271,7 +271,10 @@ pub struct LoggedQso {
     /// 0 = never assigned (rows built by paths that predate sync).
     pub seq: u64,
     /// ⭐ **This contact duplicates one already in the log** — it is REPORTED to the
-    /// sponsor and worth nothing. Every contest logs its dupes
+    /// sponsor and worth nothing. A contact in a mode the contest bans is not one the sponsor
+    /// credits, so a legal contact after it is no duplicate of it
+    /// (the log's scoring list); what the FT sequencer treats as worked is the dupe index,
+    /// which still holds it. Every contest logs its dupes
     /// ([`DupeRule::log_dupes`](crate::contest::DupeRule::log_dupes), the operator's ruling
     /// of 2026-10-11), so a row of any contest, Field Day's included, can carry it.
     ///
@@ -413,20 +416,11 @@ impl LoggedQso {
     /// mode: an empty mode is never banned, as `FdRuleset::mode_banned` says.
     ///
     /// The same answer as `FdRuleset::mode_banned(&self.submode)` without its allocation, which the
-    /// scorer's walk of every row on every snapshot must not make: the row's mode is stored trimmed
-    /// and uppercase, and the loader takes a banned mode only uppercase and non-empty.
-    ///
-    /// ⭐ **…except a `CW` row, whose CLASS is its mode.** A CW contact records no submode (CW
-    /// needs none, [`FieldDayLog::log_mode_at`]), and that is not missing evidence: it
-    /// was worked in CW. A contest that bans CW (the ARRL RTTY Roundup, RTTY only) must not
-    /// credit it for having nothing in the submode.
+    /// scorer's walk of every row on every snapshot must not make, ⭐ **except a `CW` row, whose
+    /// CLASS is its mode**: [`worked_in_banned_mode`], the one decision every judge of a banned
+    /// mode makes, the club's included.
     pub fn banned_under(&self, rs: &crate::fd_rules::FdRuleset) -> bool {
-        let mode = if self.submode.is_empty() && self.mode == "CW" {
-            "CW"
-        } else {
-            self.submode.as_str()
-        };
-        rs.banned_modes.contains(&mode)
+        worked_in_banned_mode(&self.mode, &self.submode, rs)
     }
 
     /// ⭐ **What the dupe key needs to know about this row's bird** — [`SatKey`]'s
@@ -552,6 +546,10 @@ impl SpotMults {
         mode_class: &str,
         submode: Option<&str>,
     ) -> Vec<(&'static str, String)> {
+        // The mode the spot NAMES, never its class: a spot that names none has its class guessed
+        // from its frequency, and a guess is not a contact in a banned mode (a "CW" spot on 40 m
+        // during the RTTY Roundup is likely RTTY). A logged row is judged by
+        // [`worked_in_banned_mode`].
         if submode.is_some_and(|m| self.ruleset.mode_banned(m)) {
             return Vec::new();
         }
@@ -721,6 +719,32 @@ fn record_when(f: &std::collections::HashMap<String, String>) -> u64 {
         (Some(d), Some(t)) => parse_dt(d, t).unwrap_or(0),
         _ => 0,
     }
+}
+
+/// ⭐ **Was a contact of mode class `mode` (`CW` | `PH` | `DIG`), recorded as `submode`, worked
+/// in a mode `rs` bans?** The one decision every judge of a banned CONTACT makes: a row
+/// ([`LoggedQso::banned_under`]), the dupe check that admits a row before it exists and the
+/// club's merged rows (tempo-app's `ClubLog`). Not a spot's multiplier preview ([`SpotMults`]): a
+/// spot's class may be a guess from its frequency, so the preview reads only the mode it names.
+///
+/// ⭐ **A `CW` contact with no recorded mode was worked in CW.** CW needs no submode, so its rows
+/// record none ([`FieldDayLog::log_mode_at`]); a contest that bans CW (the ARRL RTTY Roundup) must
+/// not credit it for having nothing there. Any other empty mode is never banned, as
+/// [`FdRuleset::mode_banned`](crate::fd_rules::FdRuleset::mode_banned) says: a guess is not a
+/// contact in a banned mode. Case and surrounding spaces do not matter, and nothing is allocated:
+/// the scorer asks for every row on every snapshot.
+pub fn worked_in_banned_mode(mode: &str, submode: &str, rs: &crate::fd_rules::FdRuleset) -> bool {
+    let submode = submode.trim();
+    let worked = if submode.is_empty() && mode.trim().eq_ignore_ascii_case("CW") {
+        "CW"
+    } else {
+        submode
+    };
+    !worked.is_empty()
+        && rs
+            .banned_modes
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case(worked))
 }
 
 /// ADIF `MODE` and `SUBMODE` → (mode class, actual mode): how the journal reads a row's mode back
@@ -1041,6 +1065,17 @@ pub struct FieldDayLog {
     /// as an ordered `Vec<String>` rather than by a `(call, band, mode)` tuple — a
     /// mobile in a new county is a new station, and a tuple cannot say so.
     worked: HashSet<Vec<String>>,
+    /// ⭐ **The scoring list: the keys of the contacts the sponsor CREDITS**, which
+    /// [`LoggedQso::dupe`] is read against. Every row in [`worked`](Self::worked) but those
+    /// worked in a mode the contest bans ([`LoggedQso::banned_under`]): the sponsor gives such a
+    /// contact no credit, so a legal contact made after it with the same station, band, mode
+    /// group and exchange is the first one it credits, and counts.
+    ///
+    /// ⚠️ **A second set, never a change to `worked`.** The FT sequencer's "worked before" and
+    /// the B4 marks read `worked`, and at Winter Field Day the sequencer logs FT8 contacts: a
+    /// banned row stays in it, so what an FT contest treats as worked is what it always was.
+    /// For a contest that bans no mode the two sets are equal.
+    credited: HashSet<Vec<String>>,
     /// ⭐ **The `constant_sent` warning raised at LOG time** (§6.3) — `Some` once a
     /// contact has been logged whose sent value for a slot the role declares constant
     /// disagrees with the log's first row.
@@ -1131,6 +1166,7 @@ impl FieldDayLog {
             qsos: Vec::new(),
             removed: Vec::new(),
             worked: HashSet::new(),
+            credited: HashSet::new(),
             constant_sent_warning: None,
             next_seq: 1,
             held: Vec::new(),
@@ -1314,14 +1350,29 @@ impl FieldDayLog {
     /// Both write paths — [`log_exchange_at`](Self::log_exchange_at) and the journal's
     /// `restore_row` — come through here, because two copies of this decision is how
     /// the live log and the restored one come to disagree about the same contact.
-    fn admit_row(&mut self, key: Vec<String>, satellite: bool) -> Option<bool> {
+    ///
+    /// The mark it returns is the scoring list's ([`credited`](Self::credited)): a row in a
+    /// mode the contest bans (its class `mode` and its recorded `submode`, judged as
+    /// [`LoggedQso::banned_under`] judges the row) is marked as the index says, and enters only
+    /// the index, so a legal contact after it is no duplicate.
+    fn admit_row(
+        &mut self,
+        key: Vec<String>,
+        satellite: bool,
+        mode: &str,
+        submode: &str,
+    ) -> Option<bool> {
         // ⭐ A satellite contact this ruleset gives no credit (Winter Field Day) is logged,
         // worth nothing, and a dupe of nothing: kept out of the index, it can never refuse a
         // later contact that does count.
         if satellite && !self.ruleset().satellite_credit {
             return Some(false);
         }
-        self.admit(key)
+        if worked_in_banned_mode(mode, submode, self.ruleset()) {
+            return self.admit(key);
+        }
+        self.admit(key.clone())?;
+        Some(!self.credited.insert(key))
     }
 
     fn admit(&mut self, key: Vec<String>) -> Option<bool> {
@@ -1350,9 +1401,11 @@ impl FieldDayLog {
     /// test that says so. `log_dupes` does not appear here on purpose: refusing happens
     /// when a row is offered, and every row already in the log was already admitted.
     fn rebuild_dupe_index(&mut self) {
-        let rule = self.dupe_rule();
-        let credit = self.ruleset().satellite_credit;
+        let rs = self.ruleset();
+        let rule = rs.dupe_rule;
+        let credit = rs.satellite_credit;
         let mut worked: HashSet<Vec<String>> = HashSet::new();
+        let mut credited: HashSet<Vec<String>> = HashSet::new();
         for q in &mut self.qsos {
             // A satellite contact the ruleset gives no credit stays out, as `admit_row`
             // keeps it out.
@@ -1361,10 +1414,19 @@ impl FieldDayLog {
                 continue;
             }
             // `insert` is false when the key was already present — an earlier row has
-            // it, which is precisely what makes this row a duplicate.
-            q.dupe = !worked.insert(rule.key(q));
+            // it, which is precisely what makes this row a duplicate. A row in a banned mode
+            // is marked by the index and enters only it; any other is marked by the scoring
+            // list, as `admit_row` marks it.
+            let key = rule.key(q);
+            q.dupe = if q.banned_under(rs) {
+                !worked.insert(key)
+            } else {
+                worked.insert(key.clone());
+                !credited.insert(key)
+            };
         }
         self.worked = worked;
+        self.credited = credited;
     }
 
     /// ⭐ **Correct a contact already in the log** — a busted callsign or a wrong band,
@@ -1871,7 +1933,7 @@ impl FieldDayLog {
             .key_of(call, &band, &mode, &rx, &tx, sat_key);
         // The per-ruleset split lives in [`admit`](Self::admit) — one decision, shared
         // with the journal restore, so the live log and the restored one cannot disagree.
-        let Some(dupe) = self.admit_row(key, sat.is_some()) else {
+        let Some(dupe) = self.admit_row(key, sat.is_some(), &mode, submode) else {
             return false;
         };
         // ⭐ FIRING SITE 1 of 3 (§6.3): the cheap one, at the moment the operator can
@@ -2066,9 +2128,10 @@ impl FieldDayLog {
     /// ⭐ **A contact in a mode the contest bans is left out the same way** (FT8 at the
     /// Illinois QSO Party: *"FT4 and FT8 contacts will receive no contact credit"*): logged,
     /// in the files, and worth no point, multiplier, bonus or board cell
-    /// ([`LoggedQso::banned_under`]). It still keys the dupe index like any row, so whether a
-    /// later contact is a duplicate is what it always was, and the FT sequencer, which asks
-    /// that index whether a station was worked, is not touched by it.
+    /// ([`LoggedQso::banned_under`]). It still keys the dupe index like any row, so the FT
+    /// sequencer, which asks that index whether a station was worked, is not touched by it; it
+    /// stays off the scoring list ([`credited`](Self::credited)), so a legal contact made after
+    /// it with the same station is no duplicate and counts, as the sponsor credits it.
     ///
     /// ⚠️ **The hosted Remote page recounts [`qso_count`](Self::qso_count) from the rows it
     /// is sent**, by the marks a row carries (its `dupe`, its `sat` when the status says
@@ -3047,7 +3110,7 @@ impl FieldDayLog {
             None if journaled_seq.is_some_and(|s| self.qsos.iter().any(|q| q.seq == s)) => {
                 return RowFate::Passed;
             }
-            None => match self.admit_row(key, sat.is_some()) {
+            None => match self.admit_row(key, sat.is_some(), mode, &submode) {
                 Some(dupe) => dupe,
                 None => return RowFate::Passed,
             },

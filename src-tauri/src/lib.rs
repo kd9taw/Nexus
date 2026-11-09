@@ -47116,7 +47116,7 @@ enum FdGiveDto {
 /// a press that comes through a stream.
 #[tauri::command(async)]
 fn fd_club_give_position(state: State<'_, SharedEngine>, handle: u64) -> FdGiveDto {
-    let given = engine_lock(&state).fd_club_give_position(handle);
+    let given = club_journaled(&state, |e| e.fd_club_give_position(handle));
     match given {
         Ok(()) => FdGiveDto::Given,
         Err(refusal) => FdGiveDto::Refused {
@@ -47154,14 +47154,29 @@ impl From<Result<(), tempo_app::fdevent::RemoveRefusal>> for FdRemoveDto {
 /// press that comes through a stream. Nothing here transmits or touches the radio.
 #[tauri::command(async)]
 fn fd_club_remove_position(state: State<'_, SharedEngine>, posid: String) -> FdRemoveDto {
-    engine_lock(&state).fd_club_remove_position(&posid).into()
+    club_journaled(&state, |e| e.fd_club_remove_position(&posid)).into()
 }
 
 /// Let a removed position back in ([`tempo_app::engine::Engine::fd_club_allow_back`]): its next
 /// try joins, and it sends what it logged meanwhile. The host's own board only, as Remove is.
 #[tauri::command(async)]
 fn fd_club_allow_back(state: State<'_, SharedEngine>, posid: String) -> FdRemoveDto {
-    engine_lock(&state).fd_club_allow_back(&posid).into()
+    club_journaled(&state, |e| e.fd_club_allow_back(&posid)).into()
+}
+
+/// A host button's change to the club, then — with the Engine lock released — the club journal
+/// it appended to fsynced ([`tempo_app::fdevent::ClubJournal::sync`]), as the club link's own
+/// changes are.
+fn club_journaled<T>(state: &SharedEngine, f: impl FnOnce(&mut Engine) -> T) -> T {
+    let (out, journal) = {
+        let mut e = engine_lock(state);
+        let out = f(&mut e);
+        (out, e.fd_club_journal())
+    };
+    if let Some(j) = journal {
+        j.sync();
+    }
+    out
 }
 
 /// Best-effort LAN IP via the UDP-connect trick: no packet is sent — connect()
