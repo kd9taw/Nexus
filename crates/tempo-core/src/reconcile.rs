@@ -704,12 +704,7 @@ fn merge_pairs<R: StoredRecord>(
             }
             // Only a row that actually carries a confirmation/credit is a
             // meaningful "missing" diagnostic; a plain unconfirmed QSO row is not.
-            None if (inc.confirmed
-                || inc.award_confirmed
-                || !inc.credit_granted.is_empty()
-                || !inc.credit_submitted.is_empty())
-                && orphan(inc) =>
-            {
+            None if confirms(inc) && orphan(inc) => {
                 let mc = mode_class(&inc.mode);
                 let call_u = inc.call.to_ascii_uppercase();
                 let band_l = inc.band.to_ascii_lowercase();
@@ -731,6 +726,55 @@ fn merge_pairs<R: StoredRecord>(
         }
     }
     sum
+}
+
+/// Whether a report row carries a confirmation or a credit: only such a row matching no contact
+/// is a meaningful "missing" diagnostic (an orphan); a plain unconfirmed QSO row is not.
+fn confirms(inc: &QsoRecord) -> bool {
+    inc.confirmed
+        || inc.award_confirmed
+        || !inc.credit_granted.is_empty()
+        || !inc.credit_submitted.is_empty()
+}
+
+/// Import ADIF's "Add the unmatched rows as new contacts" for a LoTW report: the rows
+/// [`reconcile_lotw`] counts as orphans, and only those, appended to `local` as contacts, each as
+/// the report has it (its confirmation on the LoTW channel, its credit, its fields). Paired exactly
+/// as that merge pairs them ([`pair_lotw`]), so a row it matched, and one it would not count (no
+/// confirmation, or another call on the account), is never added; nor is a row of a contact a
+/// first add appended, so asking again adds none. A row matching a contact changes nothing here:
+/// the merge already put its confirmation there.
+///
+/// Each contact added is marked uploaded to LoTW (`Accepted` at `when_unix`): LoTW holds it, which
+/// is how it is in LoTW's report, so it is never owed to LoTW and never signed and sent back. The
+/// rows added.
+pub fn add_lotw_orphans<R: StoredRecord>(
+    local: &mut Vec<R>,
+    incoming: &[QsoRecord],
+    settings_call: Option<&str>,
+    when_unix: i64,
+) -> Vec<QsoRecord> {
+    use crate::logbook::{UploadOutcome, UploadStatus};
+
+    let pairs = pair_lotw(local, incoming, settings_call);
+    let added: Vec<QsoRecord> = incoming
+        .iter()
+        .zip(pairs)
+        .filter(|(inc, pair)| {
+            pair.is_none() && confirms(inc) && of_settings_call(inc, settings_call)
+        })
+        .map(|(inc, _)| {
+            let mut row = inc.clone();
+            row.upload.lotw = Some(UploadStatus {
+                outcome: UploadOutcome::Accepted,
+                when_unix,
+                detail: None,
+            });
+            row
+        })
+        .collect();
+    local.extend(added.iter().cloned().map(R::from));
+    added
 }
 
 /// Two-way merge of a DOWNLOADED logbook (a QRZ Logbook FETCH — the operator's own

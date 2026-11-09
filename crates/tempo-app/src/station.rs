@@ -2340,6 +2340,24 @@ pub(crate) fn plan_lotw_report(
     })
 }
 
+/// Import ADIF's "Add the unmatched rows as new contacts" for a LoTW report planned: the rows
+/// [`plan_lotw_report`] counts as matching no contact appended, marked uploaded to LoTW at
+/// `when_unix` — `Logbook::add_lotw_orphans`, on the rows of the report's calls. How many it adds,
+/// and the plan.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub(crate) fn plan_lotw_orphans(
+    plan: &LogPlan,
+    text: &str,
+    settings_call: Option<&str>,
+    when_unix: i64,
+) -> Result<(usize, Planned), String> {
+    let (calls, _) = calls_and_ids(text);
+    plan_on_candidates(plan, calls, &[], OpClass::Upgrade, |log| {
+        log.add_lotw_orphans(text, settings_call, when_unix)
+    })
+}
+
 /// A downloaded logbook planned (QRZ's fetch): its contacts the log lacks appended, and the ones it
 /// holds upgraded — `Logbook::merge_downloaded`, on the rows of the download's calls. How many it
 /// added and its summary, and the plan.
@@ -5437,7 +5455,8 @@ impl StationCore {
     /// log that the import restates — the confirmations and credits a LoTW/eQSL/QRZ download
     /// carries — are upgraded in place. Planned on the rows of the calls it brings
     /// ([`plan_import`]), in one breath here; a command plans it with the Engine lock released
-    /// ([`crate::logwrite::import_adif`]).
+    /// ([`crate::logwrite::import_adif`]), which merges a LoTW report as Sync confirmations' file
+    /// button does instead.
     ///
     /// ORDER — another instance's commits are taken in before the import is planned
     /// ([`Self::log_plan`]), as before every change. A confirmation report is about contacts

@@ -1176,7 +1176,7 @@ mod purge {
         engine_lock(&engine).log_qso(qso("K1NEW", 1_788_000_060));
         let restated = adif_header() + &tempo_core::logbook::adif_record_own_log(&back);
         let (made, _) = import_adif(&engine, &restated);
-        let (added, _, _, _) = made.expect("the import is made");
+        let (added, ..) = made.expect("the import is made");
         assert_eq!(added, 1, "premise: the purged contact comes back as new");
         assert_eq!(
             named(&engine, &back.call),
@@ -1419,7 +1419,7 @@ fn an_import_planned_before_a_contact_of_its_call_is_logged_plans_again() {
         }
     };
     let (made, durability) = racing(hook, || import_adif(&engine, &text));
-    let (added, skipped, _, _) = made.expect("the import is made");
+    let (added, skipped, ..) = made.expect("the import is made");
     assert_eq!(
         plans.get(),
         2,
@@ -4294,4 +4294,359 @@ fn a_rewritten_satellite_contact_is_owed_to_lotw_until_its_upload_stamps_it() {
     // And never offered a second time: it is the next upload's now.
     let rows = engine_lock(&engine).log_rows();
     assert!(station::lotw_sat_band_fixes(&rows).unwrap().is_empty());
+}
+
+// ── Logbook ▸ Import ADIF of a LoTW report ──────────────────────────────────────────────────
+
+/// W1AW's contact on 20 m FT8 at 12:00, and LoTW's report confirming it and a K9ZZZ contact the
+/// log does not hold, each row as LoTW writes one: under the station's call, a bare `QSL_RCVD`.
+fn lotw_report_scene() -> (Vec<QsoRecord>, Vec<String>) {
+    let log = contacts(&[adif_row("W1AW", "20m", "FT8", "120000", "")]);
+    let confirmed = "<STATION_CALLSIGN:5>K2DEF<QSL_RCVD:1>Y<QSLRDATE:8>20261005";
+    let rows = vec![
+        adif_row("W1AW", "20m", "FT8", "120000", confirmed),
+        adif_row("K9ZZZ", "20m", "FT8", "130000", confirmed),
+    ];
+    (log, rows)
+}
+
+/// The log's contacts, without the ids the store minted: what two logs are compared by.
+fn without_ids(engine: &Mutex<Engine>) -> Vec<QsoRecord> {
+    let mut rows: Vec<QsoRecord> = engine
+        .stored_records()
+        .into_iter()
+        .map(|mut r| {
+            r.id = None;
+            r
+        })
+        .collect();
+    rows.sort_by(|a, b| (a.when_unix, &a.call).cmp(&(b.when_unix, &b.call)));
+    rows
+}
+
+/// ★ Import ADIF of a LoTW report downloaded by hand at lotw.arrl.org does what Logbook ▸ Sync
+/// confirmations' file button does with the same file: each confirmation lands on the LoTW
+/// channel of the contact it matches, a confirmation for a contact the log lacks is reported, not
+/// added, and the summary is LoTW's last sync. Read as a log, the report's bare `QSL_RCVD` was a
+/// paper card and K9ZZZ came in as a QSO the operator never logged.
+#[test]
+fn importing_a_lotw_report_confirms_on_lotw_and_adds_none() {
+    let (mut log, mut rows) = lotw_report_scene();
+    // K1ABC's contact, made under the call in Settings, and a confirmation of a QSO made under
+    // another call on the account, N2OLD: it is that call's, and lands on no contact of this one.
+    log.extend(contacts(&[adif_row("K1ABC", "20m", "FT8", "140000", "")]));
+    rows.push(adif_row(
+        "K1ABC",
+        "20m",
+        "FT8",
+        "140000",
+        "<STATION_CALLSIGN:5>N2OLD<QSL_RCVD:1>Y<QSLRDATE:8>20261005",
+    ));
+    let report = lotw_answer(&rows);
+
+    let d = Dir::new("import-lotw-report");
+    let engine = holding(&d, &log);
+    let (made, written) = until_written(|| import_adif(&engine, &report));
+    written.wait(DURABLE_WAIT).expect("on disk");
+    let (added, skipped, merged, total, unmatched) = made.expect("imported");
+    assert_eq!(
+        (added, skipped, merged, total, unmatched),
+        (0, 1, 1, 2, 1),
+        "W1AW confirmed, K9ZZZ not added but counted"
+    );
+    let w1aw = contact_at(&engine, "W1AW", "120000");
+    assert_eq!(
+        (w1aw.qsl_rcvd.lotw, w1aw.qsl_rcvd.card, w1aw.award_confirmed),
+        (true, false, true),
+        "a LoTW confirmation, not a paper card: {w1aw:?}"
+    );
+    let k1abc = contact_at(&engine, "K1ABC", "140000");
+    assert!(
+        !k1abc.confirmed,
+        "N2OLD's confirmation is not K2DEF's: {k1abc:?}"
+    );
+    let orphans: Vec<String> = engine_lock(&engine)
+        .station()
+        .last_lotw_reconcile
+        .as_ref()
+        .map(|s| s.orphans.iter().map(|o| o.call.clone()).collect())
+        .unwrap_or_default();
+    assert_eq!(orphans, ["K9ZZZ"], "the unmatched confirmation is reported");
+
+    // Control: Sync confirmations' file button, handed the same file on the same log, leaves
+    // the log exactly as the import does.
+    let b = Dir::new("import-lotw-report-button");
+    let button = holding(&b, &log);
+    let (synced, written) = until_written(|| merge_lotw_report(&button, &report));
+    written.wait(DURABLE_WAIT).expect("on disk");
+    let synced = synced.expect("synced");
+    assert_eq!(
+        (synced.matched, synced.newly_confirmed, synced.orphans.len()),
+        (1, 1, 1)
+    );
+    assert_eq!(without_ids(&engine), without_ids(&button));
+}
+
+/// The control: the same rows in another program's ADIF are that program's log, and import as
+/// one: `QSL_RCVD` a paper card, K9ZZZ added.
+#[test]
+fn the_same_rows_in_another_programs_adif_import_as_a_log() {
+    let (log, rows) = lotw_report_scene();
+    let other = format!(
+        "Exported by another logger\n<PROGRAMID:6>Log4OM\n<EOH>\n{}",
+        rows.concat()
+    );
+
+    let d = Dir::new("import-lotw-rows-other-program");
+    let engine = holding(&d, &log);
+    let (made, written) = until_written(|| import_adif(&engine, &other));
+    written.wait(DURABLE_WAIT).expect("on disk");
+    let (added, skipped, merged, total, unmatched) = made.expect("imported");
+    assert_eq!((added, skipped, merged, total, unmatched), (1, 1, 1, 2, 0));
+    let w1aw = contact_at(&engine, "W1AW", "120000");
+    assert_eq!(
+        (w1aw.qsl_rcvd.lotw, w1aw.qsl_rcvd.card),
+        (false, true),
+        "{w1aw:?}"
+    );
+    assert!(engine_lock(&engine).station().last_lotw_reconcile.is_none());
+}
+
+/// The import preview of a LoTW report counts what its import will do — the confirmations that
+/// match, the contacts they change, and those matching none — adds none, and writes nothing.
+#[test]
+fn the_preview_of_a_lotw_report_counts_its_merge_and_writes_nothing() {
+    let (log, rows) = lotw_report_scene();
+    let report = lotw_answer(&rows);
+    let d = Dir::new("preview-lotw-report");
+    let engine = holding(&d, &log);
+    assert_eq!(
+        preview_import(&engine, &report).expect("the preview"),
+        (0, 1, 1, Some(1)),
+        "W1AW matches and changes, K9ZZZ matches none, nothing is new"
+    );
+    assert!(
+        !contact_at(&engine, "W1AW", "120000").qsl_rcvd.lotw,
+        "nothing written"
+    );
+    // Another program's file is no LoTW report.
+    let other = format!("Exported by another logger\n<EOH>\n{}", rows.concat());
+    assert_eq!(
+        preview_import(&engine, &other).expect("the preview"),
+        (1, 1, 1, None)
+    );
+}
+
+/// The import's run holds the LoTW merge it made, so its Undo takes the confirmations back off.
+#[test]
+fn a_lotw_report_imports_in_its_run_and_its_undo_takes_the_confirmations_off() {
+    let (log, rows) = lotw_report_scene();
+    let report = lotw_answer(&rows);
+    let d = Dir::new("import-lotw-report-undo");
+    let engine = holding(&d, &log);
+    let run = crate::loghistory::new_run();
+    let (made, written) = until_written(|| import_adif_in_run(&engine, &report, &run));
+    written.wait(DURABLE_WAIT).expect("on disk");
+    assert_eq!(made.expect("imported"), (0, 1, 1, 1, 1));
+    assert!(contact_at(&engine, "W1AW", "120000").qsl_rcvd.lotw);
+
+    let (undone, written) = crate::loghistory::undo_run(&engine, &run);
+    assert_eq!(undone.expect("undone").changed, 1);
+    written.wait(DURABLE_WAIT).expect("on disk");
+    let w1aw = contact_at(&engine, "W1AW", "120000");
+    assert!(!w1aw.qsl_rcvd.lotw && !w1aw.confirmed, "{w1aw:?}");
+}
+
+/// "Import new only" leaves every contact the log holds as it is, and a LoTW report changes only
+/// those: refused, nothing written.
+#[test]
+fn import_new_only_refuses_a_lotw_report() {
+    let (log, rows) = lotw_report_scene();
+    let report = lotw_answer(&rows);
+    let d = Dir::new("import-lotw-report-new-only");
+    let engine = holding(&d, &log);
+    let run = crate::loghistory::new_run();
+    let (made, _) = import_adif_new_only_in_run(&engine, &report, &run);
+    assert!(made.is_err(), "{made:?}");
+    assert_eq!(without_ids(&engine).len(), 1);
+    assert!(!contact_at(&engine, "W1AW", "120000").qsl_rcvd.lotw);
+}
+
+// ── Import ADIF of a LoTW report ▸ Add the unmatched rows as new contacts ───────────────────
+
+/// When the operator pressed Add: what the added contacts' LoTW upload mark is stamped with.
+const ADDED_AT: i64 = 1_791_000_000;
+
+/// The log holds W1AW at 12:00. LoTW's report confirms it; confirms K9ZZZ at 13:00 (with its grid,
+/// state and DXCC credit) and holds K7XYZ at 15:00 submitted for WAS but unconfirmed, neither in
+/// the log; holds K5NOC at 16:00 unconfirmed with no credit; and confirms K1QQQ at 17:00 under
+/// another call on the account, N2OLD. Only K9ZZZ and K7XYZ match no contact and count.
+fn lotw_unmatched_scene() -> (Vec<QsoRecord>, String) {
+    let log = contacts(&[adif_row("W1AW", "20m", "FT8", "120000", "")]);
+    let k2def = "<STATION_CALLSIGN:5>K2DEF";
+    let report = lotw_answer(&[
+        adif_row(
+            "W1AW",
+            "20m",
+            "FT8",
+            "120000",
+            &format!("{k2def}<QSL_RCVD:1>Y"),
+        ),
+        adif_row(
+            "K9ZZZ",
+            "20m",
+            "FT8",
+            "130000",
+            &format!("{k2def}<QSL_RCVD:1>Y<GRIDSQUARE:4>EN52<STATE:2>IL<CREDIT_GRANTED:4>DXCC"),
+        ),
+        adif_row(
+            "K7XYZ",
+            "20m",
+            "FT8",
+            "150000",
+            &format!("{k2def}<QSL_RCVD:1>N<CREDIT_SUBMITTED:3>WAS"),
+        ),
+        adif_row(
+            "K5NOC",
+            "20m",
+            "FT8",
+            "160000",
+            &format!("{k2def}<QSL_RCVD:1>N"),
+        ),
+        adif_row(
+            "K1QQQ",
+            "20m",
+            "FT8",
+            "170000",
+            "<STATION_CALLSIGN:5>N2OLD<QSL_RCVD:1>Y",
+        ),
+    ]);
+    (log, report)
+}
+
+/// The log's calls, sorted: what an add is compared by.
+fn calls_of(engine: &Mutex<Engine>) -> Vec<String> {
+    let mut calls: Vec<String> = engine
+        .stored_records()
+        .into_iter()
+        .map(|r| r.call)
+        .collect();
+    calls.sort();
+    calls
+}
+
+/// ★ After Import ADIF of a LoTW report, "Add N unmatched rows as new contacts" adds exactly the
+/// rows the import counted as matching no contact, each as LoTW has it, marked uploaded to LoTW
+/// so none is owed to LoTW or queued to any connector; pressed again it adds none. Until it is
+/// pressed, the import adds none.
+#[test]
+fn adding_a_lotw_reports_unmatched_rows_adds_exactly_those_and_owes_lotw_none() {
+    let (log, report) = lotw_unmatched_scene();
+    let d = Dir::new("lotw-add-unmatched");
+    let engine = holding(&d, &log);
+
+    let (made, written) = until_written(|| import_adif(&engine, &report));
+    written.wait(DURABLE_WAIT).expect("on disk");
+    assert_eq!(
+        made.expect("imported"),
+        (0, 1, 1, 1, 2),
+        "K9ZZZ and K7XYZ count"
+    );
+    assert_eq!(
+        calls_of(&engine),
+        ["W1AW"],
+        "nothing added until Add is pressed"
+    );
+    engine_lock(&engine).take_pending_uploads();
+
+    let run = crate::loghistory::new_run();
+    let (made, written) = until_written(|| add_lotw_unmatched(&engine, &report, ADDED_AT, &run));
+    written.wait(DURABLE_WAIT).expect("on disk");
+    assert_eq!(made.expect("added"), (2, 3), "the two the import counted");
+    assert_eq!(calls_of(&engine), ["K7XYZ", "K9ZZZ", "W1AW"]);
+
+    let k9zzz = contact_at(&engine, "K9ZZZ", "130000");
+    assert_eq!(
+        (
+            k9zzz.qsl_rcvd.lotw,
+            k9zzz.qsl_rcvd.card,
+            k9zzz.award_confirmed,
+            k9zzz.band.as_str(),
+            k9zzz.mode.as_str(),
+            k9zzz.grid.as_deref(),
+            k9zzz.state.as_deref(),
+            k9zzz.credit_granted.clone(),
+            k9zzz.time_known,
+        ),
+        (
+            true,
+            false,
+            true,
+            "20m",
+            "FT8",
+            Some("EN52"),
+            Some("IL"),
+            vec!["DXCC".to_string()],
+            true
+        ),
+        "{k9zzz:?}"
+    );
+    let k7xyz = contact_at(&engine, "K7XYZ", "150000");
+    assert_eq!(
+        (k7xyz.confirmed, k7xyz.credit_submitted.clone()),
+        (false, vec!["WAS".to_string()]),
+        "{k7xyz:?}"
+    );
+    for added in [&k9zzz, &k7xyz] {
+        let mark = added.upload.lotw.as_ref().map(|s| (s.outcome, s.when_unix));
+        assert_eq!(
+            (mark, station::owed_to_lotw(added)),
+            (Some((UploadOutcome::Accepted, ADDED_AT)), false),
+            "LoTW holds {}: never sent back",
+            added.call
+        );
+    }
+    assert!(
+        engine_lock(&engine).take_pending_uploads().is_empty(),
+        "an added row is queued to no connector"
+    );
+
+    let again = crate::loghistory::new_run();
+    let (made, written) = until_written(|| add_lotw_unmatched(&engine, &report, ADDED_AT, &again));
+    written.wait(DURABLE_WAIT).expect("on disk");
+    assert_eq!(
+        made.expect("added"),
+        (0, 3),
+        "pressed again: each row is now a dupe"
+    );
+    assert_eq!(calls_of(&engine), ["K7XYZ", "K9ZZZ", "W1AW"]);
+
+    // Its Undo takes out the two it added, and only those.
+    let (undone, written) = crate::loghistory::undo_run(&engine, &run);
+    assert_eq!(undone.expect("undone").changed, 2);
+    written.wait(DURABLE_WAIT).expect("on disk");
+    assert_eq!(calls_of(&engine), ["W1AW"]);
+
+    // Control: the probe sees a contact a log path queues.
+    engine_lock(&engine).log_qso(qso("K1NEW", 1_791_000_060));
+    assert_eq!(engine_lock(&engine).take_pending_uploads().len(), 1);
+}
+
+/// Add is LoTW's alone: handed another program's ADIF it refuses, and adds nothing.
+#[test]
+fn adding_unmatched_rows_refuses_a_file_that_is_not_a_lotw_report() {
+    let (log, report) = lotw_unmatched_scene();
+    let other = report.replacen(
+        "ARRL Logbook of the World Status Report\n<PROGRAMID:4>LoTW",
+        "Exported by another logger\n<PROGRAMID:6>Log4OM",
+        1,
+    );
+    assert!(!tempo_core::lotw::is_lotw_adif(&other), "premise");
+    let d = Dir::new("lotw-add-unmatched-other");
+    let engine = holding(&d, &log);
+    let run = crate::loghistory::new_run();
+    let (made, written) = until_written(|| add_lotw_unmatched(&engine, &other, ADDED_AT, &run));
+    written.wait(DURABLE_WAIT).expect("on disk");
+    assert!(made.is_err(), "{made:?}");
+    assert_eq!(calls_of(&engine), ["W1AW"]);
 }

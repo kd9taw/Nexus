@@ -36248,12 +36248,44 @@ async fn import_adif(state: State<'_, SharedEngine>, text: String) -> Result<Imp
         let (made, durability) = tempo_app::logwrite::until_written(|| {
             tempo_app::logwrite::import_adif_in_run(&engine, &text, &run)
         });
-        let made = made.map(|(added, skipped, updated, total)| ImportStats {
+        let made = made.map(|(added, skipped, updated, total, unmatched)| ImportStats {
             added,
             skipped,
             updated,
             total,
             run: Some(run.clone()),
+            unmatched,
+        });
+        (made, durability)
+    })
+    .await
+}
+
+/// The import preview's "Add N unmatched rows as new contacts", after a LoTW report's import: the
+/// report's confirmations that match no contact added as contacts, marked uploaded to LoTW so none
+/// is sent back ([`tempo_app::logwrite::add_lotw_unmatched`]). Takes the same file's text the
+/// import took. One run of its own, which its Undo undoes. How many it added, and the log's size
+/// after it.
+#[tauri::command]
+async fn import_lotw_unmatched(
+    state: State<'_, SharedEngine>,
+    text: String,
+) -> Result<ImportStats, String> {
+    let engine = Arc::clone(&state);
+    let now = now_unix();
+    // Planned with the Engine lock released and made under it, as the import is.
+    durable_command(move || {
+        let run = tempo_app::loghistory::new_run();
+        let (made, durability) = tempo_app::logwrite::until_written(|| {
+            tempo_app::logwrite::add_lotw_unmatched(&engine, &text, now, &run)
+        });
+        let made = made.map(|(added, total)| ImportStats {
+            added,
+            skipped: 0,
+            updated: 0,
+            total,
+            run: Some(run.clone()),
+            unmatched: 0,
         });
         (made, durability)
     })
@@ -36276,11 +36308,12 @@ async fn preview_import(
         let mut preview = import::preview(&source);
         // The records let go before the plan parses the text again.
         let adif = source.into_adif();
-        let (new, duplicates, updates) =
+        let (new, duplicates, updates, lotw_unmatched) =
             tempo_app::logwrite::preview_import(&engine, adif.as_deref().unwrap_or(&text))?;
         preview.new = new;
         preview.duplicates = duplicates;
         preview.updates = updates;
+        preview.lotw_unmatched = lotw_unmatched;
         Ok(preview)
     })
     .await
@@ -36320,13 +36353,14 @@ async fn import_log(
                 tempo_app::logwrite::import_adif_in_run(&engine, adif, &run)
             }
         });
-        let made = made.map(|(added, skipped, updated, total)| ImportDone {
+        let made = made.map(|(added, skipped, updated, total, unmatched)| ImportDone {
             stats: ImportStats {
                 added,
                 skipped,
                 updated,
                 total,
                 run: Some(run.clone()),
+                unmatched,
             },
             report: import::report(&source, (added, skipped, updated), new_only),
         });
@@ -53270,6 +53304,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         radio_picker_timed_out,
         radio_picker_unavailable,
         import_pota_log,
+        import_lotw_unmatched,
         set_skip_tx1,
         civ_diagnostic_status,
         broadcast,

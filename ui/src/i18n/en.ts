@@ -1229,6 +1229,7 @@ export const EN = {
     other: 'Imported {{count}} QSOs',
   },
   'logbook.import.dupes': ' ({{count}} dupes skipped)',
+  'logbook.import.addUnmatched': { one: 'Add {{count}} unmatched row as a new contact', other: 'Add {{count}} unmatched rows as new contacts' },
   'logbook.import.updated': {
     one: ' · {{count}} existing QSO updated with confirmations/credits',
     other: ' · {{count}} existing QSOs updated with confirmations/credits',
@@ -1252,6 +1253,8 @@ export const EN = {
   'logbook.import.preview.new': { one: '{{count}} new contact', other: '{{count}} new contacts' },
   'logbook.import.preview.dupes': { one: '{{count}} already in your log', other: '{{count}} already in your log' },
   'logbook.import.preview.updates': { one: '{{count}} of those would gain confirmations or credits', other: '{{count}} of those would gain confirmations or credits' },
+  'logbook.import.preview.lotwUnmatched': { one: '{{count}} matches no contact in your log', other: '{{count}} match no contact in your log' },
+  'logbook.import.preview.lotw': 'A LoTW report: each confirmation goes on LoTW for the contact it matches, and no contact is added.',
   'logbook.import.preview.problems': 'Problems found',
   'logbook.import.preview.noProblems': 'No problems found.',
   'logbook.import.preview.unmapped': 'Not stored as a field of a contact',

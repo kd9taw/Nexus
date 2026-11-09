@@ -294,6 +294,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("import_call_history",            RunsAtShack, "A call-history file's text, imported at the shack."),
     ("import_hunted_parks_csv",        RunsAtShack, "A file's text, imported at the shack."),
     ("import_log",                     RunsAtShack, "A log file's text (ADIF, ADX or Cabrillo), imported into the shack's logbook."),
+    ("import_lotw_unmatched",          RunsAtShack, "A LoTW report's text: its rows matching no contact added to the shack's logbook."),
     ("import_parks_csv",               RunsAtShack, "A file's text, imported at the shack."),
     ("import_pota_log",                RunsAtShack, "A file's text, imported at the shack."),
     ("import_settings_bundle",         RefusedHere, "Replaces the shack's whole configuration from a file."),

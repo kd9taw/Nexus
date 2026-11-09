@@ -46,14 +46,14 @@ fn card(engine: &Mutex<Engine>, call: &str) -> bool {
 fn the_preview_counts_by_the_logs_own_rule_and_writes_nothing() {
     let d = Dir::new("import-preview");
     let engine = shared(&d);
-    let (new, dupes, updates) = preview_import(&engine, &file()).expect("the preview");
-    assert_eq!((new, dupes, updates), (2, 2, 1));
+    let (new, dupes, updates, lotw) = preview_import(&engine, &file()).expect("the preview");
+    assert_eq!((new, dupes, updates, lotw), (2, 2, 1, None));
     assert_eq!(engine.stored_log().len(), 3, "nothing was written");
     assert!(!card(&engine, "K0ABC"));
     // The import it previewed makes those very counts.
     let run = new_run();
     let (made, dur) = until_written(|| import_adif_in_run(&engine, &file(), &run));
-    assert_eq!(made.expect("the import"), (2, 2, 1, 5));
+    assert_eq!(made.expect("the import"), (2, 2, 1, 5, 0));
     dur.wait(DURABLE_WAIT).unwrap();
     assert!(card(&engine, "K0ABC"));
 }
@@ -64,7 +64,7 @@ fn new_only_adds_what_the_log_lacks_and_leaves_what_it_holds() {
     let engine = shared(&d);
     let run = new_run();
     let (made, dur) = until_written(|| import_adif_new_only_in_run(&engine, &file(), &run));
-    assert_eq!(made.expect("the import"), (2, 2, 0, 5));
+    assert_eq!(made.expect("the import"), (2, 2, 0, 5, 0));
     dur.wait(DURABLE_WAIT).unwrap();
     assert!(!card(&engine, "K0ABC"), "the held contact is left as it is");
     // One run, and its Undo takes the two contacts out.

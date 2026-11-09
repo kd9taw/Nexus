@@ -4635,6 +4635,10 @@ pub struct ImportStats {
     /// (`tempo_app::loghistory::undo_run`). `None` from a build that named none.
     #[serde(default)]
     pub run: Option<String>,
+    /// The confirmations of a LoTW report that match no contact in the log: reported, and added
+    /// only when the operator presses Add (`logwrite::add_lotw_unmatched`). 0 for any other file.
+    #[serde(default)]
+    pub unmatched: usize,
 }
 
 /// A confirmation in a synced report with no matching logged QSO (diagnostic).

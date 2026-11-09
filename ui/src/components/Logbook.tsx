@@ -605,9 +605,13 @@ export function Logbook({
     // for two counts at once, so each carries its own (see the catalog's note).
     const dupes = stats.skipped ? t('logbook.import.dupes', { count: stats.skipped }) : ''
     const upgraded = stats.updated ? t('logbook.import.updated', { count: stats.updated }) : ''
+    // A LoTW report's confirmations that match no contact: reported, and added only when the
+    // operator presses the preview's Add. The words are the POTA stamp's, which says the same of
+    // its rows.
+    const unmatched = stats.unmatched ? t('logbook.pota.unmatched', { count: stats.unmatched }) : ''
     const run = stats.run
     pushToast(
-      `${t('logbook.import.imported', { count: stats.added })}${dupes}${upgraded}`,
+      `${t('logbook.import.imported', { count: stats.added })}${dupes}${upgraded}${unmatched}`,
       'success',
       10_000,
       stats.added + stats.updated > 0 && run

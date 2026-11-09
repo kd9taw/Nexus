@@ -2488,6 +2488,28 @@ impl Logbook {
         crate::reconcile::reconcile_lotw(&mut self.records[..], &report_rows(text), settings_call)
     }
 
+    /// Import ADIF's "Add the unmatched rows as new contacts" for a LoTW report: the rows
+    /// [`merge_lotw_report`](Self::merge_lotw_report) counts as matching no contact appended as
+    /// contacts, marked uploaded to LoTW at `when_unix`
+    /// ([`crate::reconcile::add_lotw_orphans`]). How many it added. Pure merge — call
+    /// [`save`](Self::save) to persist.
+    pub fn add_lotw_orphans(
+        &mut self,
+        text: &str,
+        settings_call: Option<&str>,
+        when_unix: i64,
+    ) -> usize {
+        let before = self.records.len();
+        let added = crate::reconcile::add_lotw_orphans(
+            &mut *self.records,
+            &report_rows(text),
+            settings_call,
+            when_unix,
+        );
+        self.settle_new_ids(before);
+        added.len()
+    }
+
     /// Two-way merge of a DOWNLOADED logbook (a QRZ Logbook FETCH — the operator's own
     /// book pulled back down). Unlike [`merge_report`] (confirmations only, unmatched
     /// rows become orphans), this ADDS the QSOs the download has that the local log

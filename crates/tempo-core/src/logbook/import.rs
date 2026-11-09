@@ -851,6 +851,10 @@ pub struct Preview {
     pub new: usize,
     pub duplicates: usize,
     pub updates: usize,
+    /// Filled by the caller for a LoTW report alone (`None` for any other file): its
+    /// confirmations that match no contact. Such a file confirms the contacts it matches
+    /// (`duplicates`) and adds none (`new` is 0).
+    pub lotw_unmatched: Option<usize>,
     pub notes: Vec<NoteGroup>,
     /// Which fields the file carries, most common first.
     pub coverage: Vec<FieldCount>,
@@ -1136,6 +1140,7 @@ pub fn preview(source: &Source) -> Preview {
         new: 0,
         duplicates: 0,
         updates: 0,
+        lotw_unmatched: None,
         notes,
         coverage,
         unmapped: source.unmapped.clone(),

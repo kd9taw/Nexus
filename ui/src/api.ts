@@ -2412,6 +2412,12 @@ export async function importLog(text: string, newOnly: boolean): Promise<ImportD
   return invoke<ImportDone>('import_log', { text, newOnly })
 }
 
+/** After a LoTW report's import: add the report's rows that matched no contact as contacts, marked
+ *  as already on LoTW. `text` is the file the import took. `added`, `total` and `run` are set. */
+export async function importLotwUnmatched(text: string): Promise<ImportStats> {
+  return invoke<ImportStats>('import_lotw_unmatched', { text })
+}
+
 /** Reconcile a LoTW (or any ADIF) confirmation report INTO the log: upgrade
  * confirmation + credit on already-logged QSOs, return the diff + orphans. */
 export async function syncLotwReport(text: string): Promise<LotwSyncResult> {

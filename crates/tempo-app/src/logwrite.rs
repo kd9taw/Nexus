@@ -718,12 +718,14 @@ fn import_as(
     )
 }
 
-/// What an import answers: `(added, skipped, merged, total)` — the contacts it added, the ones the
-/// log already held, those of them it upgraded, and the log's size after it.
-pub type ImportCounts = (usize, usize, usize, usize);
+/// What an import answers: `(added, skipped, merged, total, unmatched)` — the contacts it added,
+/// the ones the log already held, those of them it upgraded, the log's size after it, and the
+/// confirmations of a LoTW report that match no contact (none for any other file).
+pub type ImportCounts = (usize, usize, usize, usize, usize);
 
 /// The Logbook's Import ([`StationCore::import_adif`]), planned with the Engine lock released:
-/// its [`ImportCounts`], the total counted once the import is made.
+/// its [`ImportCounts`], the total counted once the import is made. A LoTW report is merged as
+/// Sync confirmations' file button merges it ([`import_lotw_report`]).
 pub fn import_adif(
     engine: &Mutex<Engine>,
     text: &str,
@@ -745,26 +747,55 @@ pub fn import_adif_in_run(
 
 /// [`import_adif_in_run`] with "Import new only": a contact the log already holds is left exactly
 /// as it is, nothing the file restates about it merged in. Its own run, undone as one.
+///
+/// A LoTW report is refused: it adds no contact and only changes the ones the log holds
+/// ([`import_lotw_report`]), so "new only" would leave nothing for it to do.
 pub fn import_adif_new_only_in_run(
     engine: &Mutex<Engine>,
     text: &str,
     run: &str,
 ) -> (Result<ImportCounts, String>, Durability) {
+    if tempo_core::lotw::is_lotw_adif(text) {
+        return (
+            Err(
+                "A LoTW report confirms the contacts in your log and adds none: \
+                 use Import, not Import new only"
+                    .into(),
+            ),
+            Durability::default(),
+        );
+    }
     let (made, durability) = import_as(engine, text, Some(run), true);
     let made =
-        made.and_then(|(added, skipped, merged)| Ok((added, skipped, merged, log_len(engine)?)));
+        made.and_then(|(added, skipped, merged)| Ok((added, skipped, merged, log_len(engine)?, 0)));
     (made, durability)
 }
 
 /// What an import of `text` would do, planned on the log as it stands and then let go: nothing
-/// is written. `(added, skipped, merged)` — the contacts the log lacks, the ones it holds by its
-/// own duplicate rule, and how many of those the import would upgrade — the very plan
-/// [`import_adif_in_run`] makes, so the preview's counts are the import's.
+/// is written. `(added, skipped, merged, unmatched)` — the contacts the log lacks, the ones it
+/// holds by its own duplicate rule, and how many of those the import would upgrade — the very
+/// plan [`import_adif_in_run`] makes, so the preview's counts are the import's. `unmatched` is
+/// `Some` for a LoTW report alone ([`import_lotw_report`]): its confirmations matching no
+/// contact, which it adds none of, while `skipped` counts those that matched.
 ///
 /// ⚠️ It reads the store: never call it under the Engine lock.
-pub fn preview_import(engine: &Mutex<Engine>, text: &str) -> Result<(usize, usize, usize), String> {
+pub fn preview_import(
+    engine: &Mutex<Engine>,
+    text: &str,
+) -> Result<(usize, usize, usize, Option<usize>), String> {
+    if tempo_core::lotw::is_lotw_adif(text) {
+        let call = settings_call(engine);
+        let plan = crate::engine::log_plan(engine);
+        let (summary, planned) = station::plan_lotw_report(&plan, text, Some(&call))?;
+        return Ok((
+            0,
+            summary.matched,
+            planned.upgraded(),
+            Some(summary.orphans.len()),
+        ));
+    }
     let plan = crate::engine::log_plan(engine);
-    station::plan_import(&plan, text).map(|(counts, _)| counts)
+    station::plan_import(&plan, text).map(|((new, dupes, updates), _)| (new, dupes, updates, None))
 }
 
 fn import_adif_in(
@@ -772,9 +803,85 @@ fn import_adif_in(
     text: &str,
     run: Option<&str>,
 ) -> (Result<ImportCounts, String>, Durability) {
+    if tempo_core::lotw::is_lotw_adif(text) {
+        return import_lotw_report(engine, text, run);
+    }
     let (made, durability) = import(engine, text, run);
     let made =
-        made.and_then(|(added, skipped, merged)| Ok((added, skipped, merged, log_len(engine)?)));
+        made.and_then(|(added, skipped, merged)| Ok((added, skipped, merged, log_len(engine)?, 0)));
+    (made, durability)
+}
+
+/// Import ADIF of a LoTW report downloaded by hand at lotw.arrl.org: what Sync confirmations'
+/// file button makes of the same file ([`merge_lotw_report`]). The file is known as that merge
+/// knows it ([`tempo_core::lotw::is_lotw_adif`]: it opens with LoTW's status banner); an ADIF any
+/// other program wrote, whatever its rows hold, is a log and imports as one.
+///
+/// A report is confirmations of contacts already logged, not a log. Imported as a log, its bare
+/// `QSL_RCVD` was a paper card on the contact it restated, and a confirmation of a contact the
+/// log lacks came in as a QSO the operator never logged. Here each lands on the LoTW channel of
+/// the contact it matches, under the call in Settings as the merge pairs them, and one matching
+/// none is counted `unmatched` and kept in LoTW's last sync summary, never added. `skipped`
+/// counts the confirmations that matched, `merged` the contacts they changed. Recorded as a LoTW
+/// change in the import's `run` when one is named, so the import's Undo takes the confirmations
+/// back off.
+fn import_lotw_report(
+    engine: &Mutex<Engine>,
+    text: &str,
+    run: Option<&str>,
+) -> (Result<ImportCounts, String>, Durability) {
+    use tempo_core::logbook::history::Source;
+    let call = settings_call(engine);
+    let (made, durability) = bulk_as(
+        engine,
+        "merge_lotw_report",
+        run.map(|run| crate::loghistory::Origin::in_run(Source::Lotw, run)),
+        |plan| {
+            let (summary, planned) = station::plan_lotw_report(plan, text, Some(&call))?;
+            let upgraded = planned.upgraded();
+            Ok(((summary, upgraded), planned))
+        },
+        |e, (summary, upgraded)| {
+            let counts = (summary.matched, upgraded, summary.orphans.len());
+            e.station_mut().last_lotw_reconcile = Some(summary);
+            counts
+        },
+    );
+    let made = made.and_then(|(matched, upgraded, unmatched)| {
+        Ok((0, matched, upgraded, log_len(engine)?, unmatched))
+    });
+    (made, durability)
+}
+
+/// Import ADIF's "Add N unmatched rows as new contacts", pressed after a LoTW report's import
+/// ([`import_lotw_report`]): the report's confirmations that match no contact, and only those,
+/// added as contacts as the report has them, each marked uploaded to LoTW at `when_unix` so none is
+/// owed to LoTW ([`station::plan_lotw_orphans`]). Planned with the Engine lock released, under the
+/// call in Settings as the import pairs them, and recorded in the history under `run`, its own
+/// Undo. Each row added is a contact the next ask pairs it with, so asking again adds none. A
+/// file that is not a LoTW report is refused. `(added, total)`.
+pub fn add_lotw_unmatched(
+    engine: &Mutex<Engine>,
+    text: &str,
+    when_unix: i64,
+    run: &str,
+) -> (Result<(usize, usize), String>, Durability) {
+    use tempo_core::logbook::history::Source;
+    if !tempo_core::lotw::is_lotw_adif(text) {
+        return (
+            Err("Not a LoTW report: only a LoTW report's unmatched rows can be added".into()),
+            Durability::default(),
+        );
+    }
+    let call = settings_call(engine);
+    let (made, durability) = bulk_as(
+        engine,
+        "add_lotw_unmatched",
+        Some(crate::loghistory::Origin::in_run(Source::Import, run)),
+        |plan| station::plan_lotw_orphans(plan, text, Some(&call), when_unix),
+        |_, added| added,
+    );
+    let made = made.and_then(|added| Ok((added, log_len(engine)?)));
     (made, durability)
 }
 

@@ -10,11 +10,17 @@
 // The import is one run in the log's history, as it always was: the host's toast carries its Undo,
 // and Recently deleted can undo it later. After it, this dialog shows what the report found and
 // saves the report as a text file through the app's own save path.
+//
+// A LoTW report downloaded by hand is no log: the engine knows it by LoTW's banner, and its import
+// puts each confirmation on LoTW for the contact it matches and adds none (Sync confirmations'
+// own merge). The preview says so and offers no "Import new only"; after it, the confirmations
+// matching no contact are counted, with "Add N unmatched rows as new contacts", which adds them
+// (as LoTW has them, marked as already on LoTW) only when pressed, as a run of its own.
 // ---------------------------------------------------------------------------
 import { useEffect, useState } from 'react'
 import { Dialog } from './ui/Dialog'
 import { t } from '../i18n'
-import { importLog, previewImport, saveTextToDownloads } from '../api'
+import { importLog, importLotwUnmatched, previewImport, saveTextToDownloads } from '../api'
 import { pushToast, failureText } from '../toast'
 import {
   droppedCount,
@@ -55,6 +61,9 @@ export function ImportPreview({
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState<ImportDone | null>(null)
   const [allFields, setAllFields] = useState(false)
+  // The LoTW report's unmatched rows, once Add added them: the button is not offered again.
+  const [addedUnmatched, setAddedUnmatched] = useState(false)
+  const lotw = preview?.lotwUnmatched != null
 
   useEffect(() => {
     let live = true
@@ -73,6 +82,19 @@ export function ImportPreview({
       const d = await importLog(text, newOnly)
       setDone(d)
       onImported(d.stats)
+    } catch (err) {
+      pushToast(importFailure(t('logbook.import.failed'), err), 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const addUnmatched = async () => {
+    setBusy(true)
+    try {
+      const added = await importLotwUnmatched(text)
+      setAddedUnmatched(true)
+      onImported(added)
     } catch (err) {
       pushToast(importFailure(t('logbook.import.failed'), err), 'error')
     } finally {
@@ -125,7 +147,11 @@ export function ImportPreview({
               <li className="import-preview-new">{t('logbook.import.preview.new', { count: preview.new })}</li>
               <li>{t('logbook.import.preview.dupes', { count: preview.duplicates })}</li>
               {preview.updates > 0 && <li>{t('logbook.import.preview.updates', { count: preview.updates })}</li>}
+              {lotw && (
+                <li>{t('logbook.import.preview.lotwUnmatched', { count: preview.lotwUnmatched ?? 0 })}</li>
+              )}
             </ul>
+            {lotw && <p>{t('logbook.import.preview.lotw')}</p>}
 
             <h3>{t('logbook.import.preview.problems')}</h3>
             {preview.notes.length === 0 ? (
@@ -183,7 +209,7 @@ export function ImportPreview({
               <button type="button" className="logconfirm-discard" onClick={close} disabled={busy}>
                 {t('logbook.import.preview.cancel')}
               </button>
-              {preview.duplicates > 0 && (
+              {preview.duplicates > 0 && !lotw && (
                 <button
                   type="button"
                   className="logconfirm-discard"
@@ -211,6 +237,7 @@ export function ImportPreview({
               {t('logbook.import.imported', { count: done.stats.added })}
               {done.stats.skipped ? t('logbook.import.dupes', { count: done.stats.skipped }) : ''}
               {done.stats.updated ? t('logbook.import.updated', { count: done.stats.updated }) : ''}
+              {done.stats.unmatched ? t('logbook.pota.unmatched', { count: done.stats.unmatched }) : ''}
             </p>
             <p className={done.report.accounted ? 'import-preview-ok' : 'import-preview-error'}>
               {done.report.accounted ? t('logbook.import.done.accounted') : t('logbook.import.done.notAccounted')}
@@ -222,7 +249,17 @@ export function ImportPreview({
               <button type="button" className="logconfirm-discard" onClick={() => void saveReport()}>
                 {t('logbook.import.done.save')}
               </button>
-              <button type="button" className="logconfirm-log" onClick={onClose}>
+              {!!done.stats.unmatched && !addedUnmatched && (
+                <button
+                  type="button"
+                  className="logconfirm-discard"
+                  onClick={() => void addUnmatched()}
+                  disabled={busy}
+                >
+                  {t('logbook.import.addUnmatched', { count: done.stats.unmatched })}
+                </button>
+              )}
+              <button type="button" className="logconfirm-log" onClick={onClose} disabled={busy}>
                 {t('logbook.import.done.close')}
               </button>
             </div>
