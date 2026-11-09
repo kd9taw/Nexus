@@ -157,7 +157,7 @@ Neither box transmits. In the Conditions pop-out (the dashboard window) the two 
 
 ## Per-Path Outlook
 
-Clicking any station or spot opens a "Path to X" panel with a 24-hour band workability predictor. This honors the **Prediction engine** selected in Settings: the internal **HeuristicEngine** (the default) — a physics-lite model driven by MUF, D-layer absorption, greyline timing, and current SFI/Kp from the cached SWPC values — or the native **ITU-R P.533/P.372 engine**, a full standards-based point-to-point ionospheric prediction. The UI badges the result as **"modelled"** — it is a model output, not measured propagation data (the external VOACAP program is not integrated).
+Clicking any station or spot opens a "Path to X" panel with a 24-hour band workability predictor. This honors the **Prediction engine** selected in Settings: the native **ITU-R P.533/P.372 engine** (the default), a full standards-based point-to-point ionospheric prediction, or the internal **HeuristicEngine** — a physics-lite model driven by MUF, D-layer absorption, greyline timing, and current SFI/Kp from the cached SWPC values. The UI badges the result as **"modelled"** — it is a model output, not measured propagation data (the external VOACAP program is not integrated).
 
 ---
 
@@ -277,7 +277,7 @@ A near-region MQTT feed (10 m / 6 m / 4 m / 2 m per-band global streams, 60 000-
 
 ## Limits / Not Yet
 
-- **The external VOACAP program is not integrated.** The per-path outlook runs the engine selected in Settings behind the `PathPredictor` trait: the physics-lite heuristic (MUF + D-layer model, the default) or the native ITU-R P.533/P.372 engine. Results are labeled "modelled" in the UI.
+- **The external VOACAP program is not integrated.** The per-path outlook runs the engine selected in Settings behind the `PathPredictor` trait: the native ITU-R P.533/P.372 engine (the default) or the physics-lite heuristic (MUF + D-layer model). Results are labeled "modelled" in the UI.
 - **PSK Reporter MQTT SNR.** Band-level MQTT topics carry no per-spot SNR field; SNR-derived features in the opening detector (median SNR, SNR variance, aurora decode-quality signature) are noted as Phase 2 and not yet computed.
 - **Tropo confidence.** Capped at "Marginal" for geometry-only reasons; Tropo claims should not be treated as confirmed without SNR data.
 - **Aurora oval and MUF layers** require an internet connection. The basemap, graticule, range rings, and greyline all work offline.

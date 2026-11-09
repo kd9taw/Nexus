@@ -53,6 +53,8 @@ import { EN, type MessageKey } from './index'
  * proven on a real shipped sentence rather than on a fixture.
  */
 const MIGRATED = [
+  'components/RttyBaudPicker.tsx',
+  'components/ListenLevel.tsx',
   'remote-web/AudioListen.tsx',
   'remote-web/RemoteApp.tsx',
   'remote-web/StreamView.tsx',
@@ -118,6 +120,7 @@ const MIGRATED = [
   'components/SettingsClusterNodes.tsx',
   'components/SettingsSearch.tsx',
   'components/OnboardingBanner.tsx',
+  'components/prop/ModelBasis.tsx',
   'components/RevealNudge.tsx',
   // Client mode (2026-10-07) — born migrated: the banner of a computer driving another station,
   // and the words for a call it refused or could not make.
@@ -303,6 +306,12 @@ const MIGRATED = [
   'features/pathRibbon.ts',
   'components/prop/PathDayStrip.tsx',
   'features/pathDay.ts',
+  // Best times to work a call: the answer, its chart, the box (Conditions).
+  'features/bestTimes.ts',
+  'components/prop/BestTimesAnswer.tsx',
+  'components/prop/BestTimesChart.tsx',
+  'components/prop/BestTimesPane.tsx',
+  'components/BestTimesCard.tsx',
   // The flare / proton overlay on a path and the outlook's "now" line (solar paths and outlook).
   'features/pathNow.ts',
   'components/prop/SpaceNowLine.tsx',

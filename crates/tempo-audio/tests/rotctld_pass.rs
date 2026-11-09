@@ -202,8 +202,10 @@ fn send(addr: &str, step: RotStep) -> RotOutcome {
             Ok(()) => RotOutcome::AzElOk,
             // Only an ANSWER that the mount does not take the elevation; silence, Hamlib's own
             // timeout and its I/O error are a rotator that did not answer.
+            // Azimuth alone, keeping the elevation on a mount that declares one: `P <az> 0`
+            // would lay an az/el antenna on the horizon.
             Err(e) if tempo_audio::rotator::says_unsupported(&e) => {
-                if tempo_audio::rotator::point(addr, az).is_ok() {
+                if tempo_audio::rotator::point_keeping(addr, Some(az), None).is_ok() {
                     RotOutcome::AzOnly
                 } else {
                     RotOutcome::Failed
@@ -212,7 +214,7 @@ fn send(addr: &str, step: RotStep) -> RotOutcome {
             Err(_) => RotOutcome::Failed,
         },
         RotStep::PointAz { az } => {
-            if tempo_audio::rotator::point(addr, az).is_ok() {
+            if tempo_audio::rotator::point_keeping(addr, Some(az), None).is_ok() {
                 RotOutcome::AzOk
             } else {
                 RotOutcome::Failed

@@ -709,8 +709,9 @@ right.*
   chosen in its own Service Tool. Configured the way its manual recommends
   (GS-232B, 9600) it belongs on the **GS-232B interface** entry; only in DCU-1 mode
   does it belong on the **DF9GR ERC** entry, which runs at 4800.
-  **PstRotatorAz / PstRotator (UDP)** is Hamlib model 3, for YO3DMU's PstRotatorAz.
-  It is the one entry that talks over the network rather than a serial port (see
+  **PstRotatorAz / PstRotator (UDP)** is Hamlib model 3, for YO3DMU's PstRotatorAz
+  (azimuth) and PstRotator (azimuth and elevation, 0–90°: Nexus finds out which by
+  asking the program for its elevation). It is the one entry that talks over the network rather than a serial port (see
   the next item).
 - **Rotator port & baud** — the serial port the controller is on, and its line
   rate. **The baud is per MODEL**, and picking your model fills in the right one:
@@ -2167,10 +2168,14 @@ Nexus connects to all of them and merges what they report.*
   log carries the planetary K index, A index and solar flux (ADIF `K_INDEX`,
   `A_INDEX`, `SFI`) from the latest reading Nexus fetched from NOAA SWPC, and
   nothing when that reading is more than 3 hours old.
-- **Prediction engine** — Modelled (fast heuristic) or ITU-R P.533 (full
-  physics). "P.533 is the real circuit-reliability method (validated against the
+- **Prediction engine** — ITU-R P.533 (full physics, the default) or Modelled
+  (fast heuristic). "P.533 is the real circuit-reliability method (validated against the
   ITU reference; ~0.1 s per prediction, uses your station power). **Live spots
-  always win over any model.**" See [Conditions](connect.md).
+  always win over any model.**" See [Conditions](connect.md). A station on the
+  fast heuristic moves to P.533 once when it updates to the version that made it
+  the default, and a dismissible notice in the pop-up corner says so. Set it back here and it stays.
+  With Station power blank, P.533 assumes the power your radio measured on your
+  last transmission, or 100 W, and says which under each answer.
 - **Antenna gain (dBi) — TX / RX** (under *Antenna gain (advanced)*) — "Used by
   the P.533 link budget only. 0 = a simple wire/vertical (isotropic); a
   3-element yagi ≈ 6–8. Honest v1: a plain dB shift — no pattern or

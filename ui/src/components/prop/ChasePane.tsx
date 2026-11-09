@@ -9,6 +9,7 @@
 // knows one, `~` and the centre of its country when it does not. When the station cannot give one the
 // row says so in words, on a line of its own under the call (in the heading's place they took the
 // whole line from the entity in a 200 px box, measured in Chrome).
+import { useCallMenu } from '../useCallMenu'
 import { useRef } from 'react'
 import type { PaneContext } from '../connect/paneContext'
 import { NEED_CHIP } from '../connect/paneFormat'
@@ -80,6 +81,8 @@ export function ChasePane({ ctx }: { ctx: PaneContext }) {
   // A row whose first line has no room for the entity gives it the line under it (chaseSplit).
   const list = useRef<HTMLUListElement>(null)
   useChaseSplit(list, targets.length > 0)
+  // The call menu (Best times first, then watch and hide), on a right-click or the menu key on a row.
+  const callMenu = useCallMenu()
   // Nothing needed and heard: the box's one line, drawn here — the frame never sees a null from
   // this component, so returning one would leave the box empty.
   if (targets.length === 0) return <p className="pane-basic">{t('chase.empty')}</p>
@@ -91,7 +94,11 @@ export function ChasePane({ ctx }: { ctx: PaneContext }) {
           const chip = target.tags[0] ? NEED_CHIP[target.tags[0]] : null
           const op = openPhrase(target)
           return (
-            <li key={`${target.call}-${target.band}`} className={`chase-row is-${op.cls}`}>
+            <li
+              key={`${target.call}-${target.band}`}
+              className={`chase-row is-${op.cls}`}
+              {...callMenu.on(`${target.call}-${target.band}`, target.call, { band: target.band })}
+            >
               <div
                 className="chase-main"
                 onClick={() => ctx.onSelectCall(target.call)}
@@ -99,6 +106,7 @@ export function ChasePane({ ctx }: { ctx: PaneContext }) {
               >
                 <div className="chase-head">
                   {chip && <span className={`need-chip need-${chip.cls}`}>{chip.label}</span>}
+                  {callMenu.at(`${target.call}-${target.band}`)}
                   <b className="chase-call">{target.call}</b>
                   {ctx.onPoint && (
                     <button

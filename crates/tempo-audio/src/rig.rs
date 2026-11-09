@@ -658,6 +658,10 @@ pub struct Rig {
     /// CAT control channel — rigctld `host:port` (e.g. `127.0.0.1:4532`). `Some` =
     /// a CAT rig is configured; drives all freq/mode/CAT verbs AND `PttMode::Cat`.
     control: Option<String>,
+    /// Every mode write sent to the radio ([`Self::set_mode`]), counted, so the radio loop's
+    /// DATA-word judgement (`RadioLoop::judge_data_word`) judges only the reads after a mode write
+    /// of Nexus's own.
+    pub(crate) mode_writes: u64,
     /// Lazily-opened TCP connection to `control`.
     stream: Option<TcpStream>,
     /// How PTT is keyed (independent of `control`).
@@ -904,6 +908,7 @@ impl Rig {
     pub fn with_control(control: Option<String>, ptt_mode: PttMode) -> Self {
         Self {
             control,
+            mode_writes: 0,
             stream: None,
             ptt_mode,
             #[cfg(feature = "serial")]
@@ -2010,6 +2015,7 @@ impl Rig {
             };
         }
         self.split_confirmed = None;
+        self.mode_writes = self.mode_writes.wrapping_add(1);
         let reply = self.command_permitted(&mode_line(mode, passband_hz), None, permission)?;
         if reply_ok(&reply) || (permission.is_none() && reply.is_empty()) {
             Ok(())

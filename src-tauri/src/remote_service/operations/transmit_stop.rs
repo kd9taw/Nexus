@@ -357,6 +357,16 @@ pub(crate) struct RoadStop {
     stopper: std::thread::Thread,
 }
 
+/// The name of [`RoadStop`]'s thread.
+const STOPPER_THREAD: &str = "nexus-remote-road-stopper";
+
+/// Whether this thread is [`RoadStop`]'s, the one that runs every later Stop's verbs on Stop's
+/// second road. TX SAFETY: the panic hook must not hold it on anything slow, such as waiting for a
+/// log to reach the disk (`a_panic_here_may_wait_for_the_disk`).
+pub(crate) fn on_the_road_stopper() -> bool {
+    std::thread::current().name() == Some(STOPPER_THREAD)
+}
+
 #[derive(Default)]
 struct RoadSignal {
     wanted: std::sync::atomic::AtomicBool,
@@ -392,7 +402,7 @@ impl RoadStop {
         let signal = std::sync::Arc::new(RoadSignal::default());
         let theirs = signal.clone();
         let stopper = std::thread::Builder::new()
-            .name("nexus-remote-road-stopper".into())
+            .name(STOPPER_THREAD.into())
             .spawn(move || {
                 while !theirs.gone.load(Ordering::SeqCst) {
                     if theirs.wanted.swap(false, Ordering::SeqCst) {
@@ -443,36 +453,54 @@ impl Drop for RoadStop {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicUsize;
-    use std::time::Duration;
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+    use std::time::{Duration, Instant};
 
     /// How many times [`fails_first`] ran.
     static RAN: AtomicUsize = AtomicUsize::new(0);
+    /// The test has pressed its second Stop. The first run waits for it before it panics, so that
+    /// Stop lands while the verbs it follows are still running.
+    static SECOND_PRESSED: AtomicBool = AtomicBool::new(false);
+
+    /// How long a Stop may take to run its verbs before this test calls it lost. It tells a lost
+    /// Stop, which never runs, from a late one; it times nothing. A panic's unwind reads pages of
+    /// this large debug binary that nothing else touched (3 to 4 major faults on the stopper,
+    /// measured), so on a box short of page cache and disk the stopper waits for the disk: it was
+    /// more than 2 s late twice beside the whole suite on a loaded box, and was never lost. How
+    /// fast a Stop unkeys is the road's own tests' to prove (`lan/tests/stop_road/unkey.rs`).
+    const LOST: Duration = Duration::from_secs(60);
 
     /// The stop verbs as this test stands them in: the first run panics, as a verb that met
     /// something it could not handle would, and every run is counted.
     fn fails_first(_: &mut tempo_app::engine::Engine) -> Option<String> {
         if RAN.fetch_add(1, Ordering::SeqCst) == 0 {
+            let waiting = Instant::now();
+            while !SECOND_PRESSED.load(Ordering::SeqCst) && waiting.elapsed() < LOST {
+                std::thread::sleep(Duration::from_millis(1));
+            }
             panic!("a stop verb that fails");
         }
         None
     }
 
-    /// Waits up to two seconds for the verbs to have run `runs` times.
-    fn ran(runs: usize) -> bool {
-        for _ in 0..400 {
+    /// How long the verbs took to have run `runs` times, or `None` if they had not within [`LOST`].
+    fn ran(runs: usize) -> Option<Duration> {
+        let waiting = Instant::now();
+        while waiting.elapsed() < LOST {
             if RAN.load(Ordering::SeqCst) >= runs {
-                return true;
+                return Some(waiting.elapsed());
             }
             std::thread::sleep(Duration::from_millis(5));
         }
-        false
+        None
     }
 
-    /// ⛔ A stop verb that panics never ends the road's stopper: the next Stop on the road still runs
-    /// the verbs. The first Stop's verbs panic (the test's stand-in); the second Stop, a moment
-    /// later, runs them again. CONTROL: the first Stop's verbs ran, and each Stop retired the
-    /// transmit generation at once, whatever its verbs then did.
+    /// ⛔ A stop verb that panics never ends the road's stopper, and loses no Stop: every later Stop
+    /// on the road still runs the verbs. The first Stop's verbs panic (the test's stand-in). The
+    /// second Stop lands while those verbs are still running, before they panic, and runs them
+    /// again after. The third, a moment later, lands on a stopper that went back to waiting, and
+    /// runs them too. CONTROL: the first Stop's verbs ran, and each Stop retired the transmit
+    /// generation at once, whatever its verbs then did.
     #[test]
     fn a_stop_verb_that_panics_never_ends_the_roads_stopper() {
         let authority = std::sync::Arc::new(Authority::default());
@@ -482,19 +510,29 @@ mod tests {
         let road = RoadStop::with_verbs(authority.clone(), engine, fails_first).unwrap();
         let before = authority.transmit_revocation().generation();
         road.stop();
-        assert!(ran(1), "CONTROL: the first Stop's verbs ran");
+        assert!(ran(1).is_some(), "CONTROL: the first Stop's verbs ran");
+        road.stop();
+        SECOND_PRESSED.store(true, Ordering::SeqCst);
+        let second = ran(2);
         std::thread::sleep(Duration::from_millis(50));
         road.stop();
-        let again = ran(2);
+        let third = ran(3);
+        eprintln!(
+            "measured: the verbs ran {second:?} after the second Stop, {third:?} after the third"
+        );
         assert_eq!(
             authority.transmit_revocation().generation(),
-            before + 2,
+            before + 3,
             "CONTROL: each Stop retired the generation"
         );
+        let runs = RAN.load(Ordering::SeqCst);
         assert!(
-            again,
-            "the second Stop on the road ran no verb: {} runs",
-            RAN.load(Ordering::SeqCst)
+            second.is_some(),
+            "the Stop that landed while a verb panicked ran no verb in {LOST:?}: {runs} runs"
+        );
+        assert!(
+            third.is_some(),
+            "the Stop after the panic ran no verb in {LOST:?}: {runs} runs"
         );
     }
 }

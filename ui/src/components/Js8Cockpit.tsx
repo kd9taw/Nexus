@@ -138,6 +138,7 @@ import { JS8_COMPOSE_DEFAULTS, js8InsertText, js8MacroSelected, type Js8ComposeC
 import { JS8_DEFAULT_SAVED, JS8_DEFAULT_STATUS, js8FormatSnr, js8MacroValues, replaceJs8Macros } from '../js8Macros'
 import { patchSettings } from '../settings/patch'
 import { upperTyped } from '../typedInput'
+import { openBestTimesCard } from './BestTimesCard'
 
 interface Props {
   /** Open the Logbook filtered to a callsign — handed to the log strip's recall card. */
@@ -1295,6 +1296,9 @@ export function Js8Cockpit({
       canBlock: lists.setRxBlocklist != null,
       onBlock: () => block(call, !blocked),
       clears: clears('call'),
+      // Beside the row's menu button (the open menu's trigger), else the list.
+      onBestTimes: () =>
+        openBestTimesCard(call, document.querySelector<HTMLElement>('.js8-row-menu[aria-expanded="true"], .js8-row-menu[data-state="open"]') ?? document.body),
     })
   }
   const bandRowMenu = (r: Js8BandRow) =>

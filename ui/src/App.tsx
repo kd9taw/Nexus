@@ -57,6 +57,7 @@ import {
   subscribeSnapshot,
 } from './api'
 import { withErrorToast, pushToast, dismissToast, setPopupNotifications, setPopupMinSeconds } from './toast'
+import { patchSettings } from './settings/patch'
 import { setPopupCorner } from './features/popupCorner'
 import { contestStartWarning } from './features/contestLocation'
 import { keptFileMessage } from './features/keptFiles'
@@ -67,6 +68,7 @@ import { useActivationNotices } from './useActivationNotices'
 import { t } from './i18n'
 import { ALARM_CELL_VIEWS } from './features/alarmCellViews'
 import { resolveUnits, setUnitsMirror } from './units'
+import { setSwrCutoffMirror } from './swrCutoff'
 import { doubleBeep, processDecodes, txEarcon, type NeededAlert } from './alerts'
 import { openingToastSpec } from './openingAlert'
 import { announce } from './announce'
@@ -176,6 +178,7 @@ import {
   setLicenseClass,
   setExperienceLevel as apiSetExperienceLevel,
   markSetupWizardSeen,
+  dismissPropEngineNote,
   stopQsoRecording,
   pointRotatorAtCall,
   qsySetEnabled as apiQsySetEnabled,
@@ -268,6 +271,9 @@ import { FirstContactWalk } from './components/FirstContactWalk'
 import { RadioPicker } from './components/RadioPicker'
 import { PROFILES, type ProfileId } from './features/profiles'
 import { CallCardHost } from './components/CallCard'
+import { BestTimesCardHost } from './components/BestTimesCard'
+import { noteRadioMode } from './features/bestTimesAsk'
+import { radioModeOf } from './features/bestTimes'
 import { useRadioSwitchNotice } from './useRadioSwitchNotice'
 
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). It is the shell: it
@@ -453,6 +459,10 @@ function App() {
   const { leftW, rightW, leftMax, rightMax, commitLeft, commitRight, resetLeft, resetRight, resetWidths } =
     usePaneWidths(scale)
   const [snap, setSnap] = useState<AppSnapshot | null>(null)
+  // The card a call menu opens starts on the mode the radio is in (features/bestTimesAsk). Here, with
+  // the snapshot and ahead of every early return, so the hook order never changes.
+  const radioModeForBestTimes = radioModeOf(snap)
+  useEffect(() => noteRadioMode(radioModeForBestTimes), [radioModeForBestTimes])
   // Night (Settings ▸ Appearance ▸ Theme): App is its one writer. Auto goes by the sun at the
   // station's grid square, which arrives with the snapshot — until then Auto has no grid and stays off.
   const { night, setNight, gridKnown: nightGridKnown } = useNight(snap?.mygrid ?? '')
@@ -529,6 +539,8 @@ function App() {
   }, [view])
   // Bird handed off from a map satellite click — the Satellites section opens on it.
   const [satFocus, setSatFocus] = useState<string | null>(null)
+  // Bird handed off by NORAD id — the Phone/CW band picker's QO-100 row (`BandPicker`).
+  const [satFocusNorad, setSatFocusNorad] = useState<number | null>(null)
   // Callsign handed off from a cockpit recall card's previous-contact row (#192) — the Logbook
   // opens with it in the search box. `pendingWork`'s shape, not `satFocus`'s, and the `ts` nonce
   // is the reason: the operator can type over the Logbook's search box, go back to the cockpit
@@ -1080,6 +1092,9 @@ function App() {
   const workDxpedRef = useRef<((c: WorkableCard) => void) | null>(null)
   // Latest link tier (TempoFast/TempoDeep/FT8/FT4) — the rail's Digital button preserves it.
   const tierRef = useRef<Tier>('FT8')
+  // Whether the Satellites screen exists, for the poll below (mounted once, so it reads a ref).
+  const satsOnRef = useRef(false)
+  satsOnRef.current = features.isOn('sats')
   useEffect(() => {
     let live = true
     const OPENING_ALERT_COOLDOWN_MS = 10 * 60_000
@@ -1124,7 +1139,19 @@ function App() {
           const armedSats = Object.keys(satAlarmMap())
           if (armedSats.length > 0) {
             getSatSchedule(armedSats, 2)
-              .then((passes) => checkSatAlarms(passes, Date.now()))
+              .then((passes) =>
+                checkSatAlarms(
+                  passes,
+                  Date.now(),
+                  // #478: the notice's button opens that pass on the Satellites screen.
+                  satsOnRef.current
+                    ? (name) => {
+                        setSatFocus(name)
+                        setView('sats')
+                      }
+                    : undefined,
+                ),
+              )
               .catch(() => {})
           }
           // ISS SSTV auto-arm (opt-in, default off): at AOS tune 145.800 FM + arm
@@ -1624,6 +1651,12 @@ function App() {
   useEffect(() => {
     setUnitsMirror(settings?.units)
   }, [settings?.units])
+
+  // #476: the high-SWR cutoff, for the TX meters' tooltip (swrCutoff.ts). Not before the first
+  // load, so a window opening does not blank the value every other window is showing.
+  useEffect(() => {
+    if (settings) setSwrCutoffMirror(settings)
+  }, [settings])
 
   // The station profile changed (the picker, Settings, or an activation picking its park's): the
   // settings copy every screen reads takes the profile's call, grid, state and power.
@@ -2835,6 +2868,25 @@ function App() {
     [handleSetMode, settings?.fdActive, snap?.mode],
   )
 
+  // The one-time notice after the move to P.533 (Settings::move_prop_engine_once): a sticky notice
+  // in the pop-up corner, which covers no transmit control in any corner and moves nothing in the
+  // cockpit. Raised once a run; the settings file is its only record, cleared by ✕ or by opening
+  // Settings from it (dismiss_prop_engine_note). A save that is refused shows it again next launch.
+  const engineNoteRaised = useRef(false)
+  useEffect(() => {
+    if (engineNoteRaised.current || !settings?.propEngineNoteDue || settings.propEngine !== 'p533') return
+    engineNoteRaised.current = true
+    const answered = () => void dismissPropEngineNote().catch(() => {})
+    pushToast(t('prop.engine.note'), 'info', 0, {
+      action: () => {
+        handleView('settings')
+        answered()
+      },
+      actionLabel: t('nav.settings.label'),
+      onClose: answered,
+    })
+  }, [settings, handleView])
+
   // ⭐ "WORK THIS CONTEST IN CW / IN PHONE" FROM A CONTEST WINDOW (features/contestWorkIn): the same switch
   // as the rail's, so the contest's S&P is entered where the session dropped and a station already in
   // the contest keeps its role, and then this window comes to the front, where the operator asked to be.
@@ -3003,6 +3055,15 @@ function App() {
         )
       }
     })
+  }, [])
+
+  // #468: the top bar's listening level. Saves that one field over the settings as the backend
+  // holds them (the patch seam), then reads them back so the slider settles on what was kept; a
+  // failed save says so and rejects, which puts the slider back.
+  const handleListenLevel = useCallback(async (level: number) => {
+    const saved = await withErrorToast(() => patchSettings(() => ({ monitorLevel: level })), t('settings.save.failed'))
+    if (!saved) throw new Error('not saved')
+    setSettings(await getSettings())
   }, [])
 
   const handleSettingsSaved = useCallback(() => {
@@ -3665,6 +3726,14 @@ function App() {
     settings?.fdActive === true && snap.mode !== 'fieldDay' && !contestReentering
       ? () => void handleSetMode('fieldday-sp')
       : undefined
+  // The band picker's QO-100 row opens the Satellites screen on the bird, as a map click does.
+  const openSatellite = features.isOn('sats')
+    ? (norad: number) => {
+        setSatFocus(null)
+        setSatFocusNorad(norad)
+        setView('sats')
+      }
+    : undefined
   const cwWorkspace = (
     <CwCockpit
       esmSetting={esmSettingFor('cw')}
@@ -3673,6 +3742,7 @@ function App() {
       announceVerbosity={settings?.announceVerbosity ?? 'needed'}
       onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
+      onOpenSatellite={openSatellite}
       onEntryCall={reportEntry.cw}
       pitchHz={settings?.cwPitchHz ?? 600}
       onPitch={(cwPitchHz) => setSettings((prev) => (prev ? { ...prev, cwPitchHz } : prev))}
@@ -3705,6 +3775,7 @@ function App() {
       yaesuTuneNote={settings ? phoneTuneNeedsRearSource(settings) : false}
       onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
+      onOpenSatellite={openSatellite}
       onEntryCall={reportEntry.phone}
       snap={snap}
       panels={phonePanels}
@@ -4053,6 +4124,7 @@ function App() {
             features.isOn('sats')
               ? (name) => {
                   setSatFocus(name)
+                  setSatFocusNorad(null)
                   setView('sats')
                 }
               : undefined
@@ -4088,6 +4160,7 @@ function App() {
           <SatellitesView
             onOpenLogbook={openLogbookFor}
             focusSat={satFocus}
+            focusNorad={satFocusNorad}
             snap={snap}
             onPopOut={() => void openPanelWindow('sats')}
             onSnap={setSnap}
@@ -4284,6 +4357,8 @@ function App() {
       <KeyConfirmBanner />
       {/* The window's one station card: a call clicked anywhere on screen opens it (CallCard.tsx). */}
       <CallCardHost snap={snap} spots={allSpots} needAlertsByCall={needAlertsByCall} />
+      {/* And its Best times card, from a call menu's Best times item (BestTimesCard.tsx). */}
+      <BestTimesCardHost spots={allSpots} />
       {/* ⚠️ NOT ON CONNECT, by the operator's ruling (2026-10-01): "at very top, its the frequency, the
           band dropdown, tx off, tune, stop tx.  That bar doenst need to live in connect/conditions",
           then "remove all radio control from connect, reclaim that space". So the whole bar goes on
@@ -4379,6 +4454,11 @@ function App() {
         fdActive={settings?.fdActive ?? false}
         showLocalClock={localClock}
         nowBar={nowBarInTopBar ? nowBar(true) : undefined}
+        listenLevel={
+          settings?.monitorEnabled
+            ? { level: settings.monitorLevel ?? 0.5, onCommit: handleListenLevel }
+            : undefined
+        }
       />}
 
       <UpdateBanner update={selfUpdate} />

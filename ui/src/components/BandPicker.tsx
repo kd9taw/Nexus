@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react'
 import type { AppSnapshot, BandChannel } from '../types'
 import { getLicensedBandPlan, pickBand } from '../api'
 import { bandChipInk, bandColor } from '../bandColors'
-import { BandMenu } from './BandMenu'
+import { BandMenu, type BandMenuItem } from './BandMenu'
 import { t } from '../i18n'
 import { showWhenDriving } from '../features/drivingRefusal'
 import { phoneOutsideBandPlan } from '../bandPlanAdvice'
@@ -21,7 +21,17 @@ interface Props {
   mode: string
   /** Apply the snapshot returned by the QSY immediately (else it lands on the next poll). */
   onSnap?: (snap: AppSnapshot) => void
+  /** Open the Satellites screen on the bird with this NORAD id. Given, the menu ends with a
+   * QO-100 row; absent (Satellites switched off, a window with no Satellites screen), it does not. */
+  onOpenSatellite?: (norad: number) => void
 }
+
+/** QO-100 (Es'hail-2). Its row OPENS THE SATELLITES SCREEN on the bird rather than tuning here:
+ * that screen already works its narrowband transponder (linear, the 13 cm / 3 cm licence gate,
+ * the uplink left alone unless the operator mapped one, the contact logged as a satellite one),
+ * and a second copy of that state in a band list would drift from it. */
+export const QO100_NORAD = 43700
+const QO100_ITEM = 'sat:QO-100'
 
 /**
  * Licensed-band dropdown for the CW/Phone cockpits: lists only the bands the operator may use
@@ -34,8 +44,11 @@ interface Props {
  * outside privileges (transmit hard-blocked by the engine). Open-mode operators see all bands
  * and never the lock.
  */
-export function BandPicker({ snap, mode, onSnap }: Props) {
+export function BandPicker({ snap, mode, onSnap, onOpenSatellite }: Props) {
   const [plan, setPlan] = useState<BandChannel[]>([])
+  // Re-read on a radio switch too: a row's dial follows the radio the pick lands on (the 3 cm
+  // home differs between an IC-905 and SDR Console).
+  const radioId = snap.activeRadioId
   useEffect(() => {
     let live = true
     getLicensedBandPlan(mode)
@@ -43,9 +56,13 @@ export function BandPicker({ snap, mode, onSnap }: Props) {
       // A read that failed is not a licence change: KEEP the last answer.
       .catch(() => {})
     return () => { live = false }
-  }, [mode])
+  }, [mode, radioId])
 
   const onPick = (band: string) => {
+    if (band === QO100_ITEM) {
+      onOpenSatellite?.(QO100_NORAD)
+      return
+    }
     if (!plan.some((c) => c.band === band)) return
     void pickBand(band, mode)
       .then((s) => onSnap?.(s))
@@ -90,7 +107,11 @@ export function BandPicker({ snap, mode, onSnap }: Props) {
         items={[
           ...(!known && snap.radio.band ? [snap.radio.band] : []),
           ...plan.map((c) => c.band),
-        ].map((band) => ({ value: band, label: band, conditionBand: band }))}
+        ].map((band): BandMenuItem => ({ value: band, label: band, conditionBand: band })).concat(
+          onOpenSatellite
+            ? [{ value: QO100_ITEM, label: t('bandPicker.qo100.label'), conditionBand: '3cm', title: t('bandPicker.qo100.title') }]
+            : [],
+        )}
       />
       {!snap.radio.txAllowed && (
         <span

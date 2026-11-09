@@ -59,6 +59,7 @@ export const PANE_HELP: Partial<Record<PaneId, PaneHelp>> = {
   activation: { chapter: 'contesting-pota', anchor: 'the-activation-pane' },
   pathDay: GRID,
   pathRegions: GRID,
+  bestTimes: GRID,
 }
 
 /** The manual page for a pane, or null when the manual does not describe it. */

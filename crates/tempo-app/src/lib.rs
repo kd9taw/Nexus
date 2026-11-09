@@ -43,6 +43,7 @@ pub mod privileges;
 pub mod radio_claim;
 pub mod remote_control;
 pub mod remote_monitor;
+pub mod rig_modes;
 pub mod scp;
 pub mod sstv_gallery;
 #[cfg(test)]
@@ -364,6 +365,7 @@ impl AppState {
                 tx_emission_mhz: None,
                 phone_usb_only: false,
                 phone_mode_refused: false,
+                data_mode_refusal: None,
                 fm_channel: false,
                 tuning: false,
                 tx_watchdog: false,

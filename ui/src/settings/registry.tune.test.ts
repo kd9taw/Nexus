@@ -23,6 +23,12 @@ describe('the Tune timeout can be found', () => {
     expect(searchSettings('tune timeout').map((h) => h.section.id)).toContain('digital-ft8-ft4')
   })
 
+  // #487: the reporter looked for it as the TUNER's time limit, and "tuner" is not a substring of
+  // "tune", so the search found nothing. The operator's own words must land on it.
+  it.each(['tuner', 'tuner timeout', 'tuner time limit', 'atu time'])('and so does %j (#487)', (q) => {
+    expect(searchSettings(q).map((h) => h.section.id)).toContain('digital-ft8-ft4')
+  })
+
   it('positive control — a keyword that was already registered still hits', () => {
     expect(searchSettings('watchdog').map((h) => h.section.id)).toContain('digital-ft8-ft4')
   })

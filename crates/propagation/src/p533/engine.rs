@@ -146,7 +146,7 @@ fn path_hour(run: &P533Run) -> Option<PathHour> {
 /// The heuristic's window formatting over a 24×1-hour score array: the
 /// contiguous ≥Fair run containing the peak, with the low-band greyline label
 /// (byte-identical format strings so the two engines read the same in the UI).
-fn best_window(scores: &[f32; 24], day0: i64, band: Band) -> (String, bool, f32, usize) {
+pub(crate) fn best_window(scores: &[f32; 24], day0: i64, band: Band) -> (String, bool, f32, usize) {
     const STEP: i64 = 3600;
     let (mut peak_i, mut peak) = (0usize, 0.0f32);
     for (i, &s) in scores.iter().enumerate() {
@@ -207,6 +207,57 @@ impl PathPredictor for P533Engine {
             }
         }
         Some(self.predict_on(dx, route, from_unix, wx))
+    }
+}
+
+/// The day's word for one P.533 band, from the modes it carries, each at its own best hour of the
+/// day (`mode_hourly`: each mode's circuit reliability, 0..1, per UTC hour). The modes usually
+/// peak in the same hour; where they do not, the word can be a little more generous than any one
+/// hour gives.
+///
+/// The heuristic's score thresholds ([`Workability::from_score`]) cannot be reused on P.533's
+/// score. That score is the reliability at FT8's required SNR, and it saturates. Measured over
+/// six stations on four continents, eight directions at 2,500, 6,000 and 11,000 km, November and
+/// June, default space weather: at 100 W, 48% of bands peak at 0.995 or more and 79% read
+/// Excellent. An equal-share mapping onto the heuristic's words puts Excellent at exactly 1.000,
+/// so no score threshold separates them. The modes P.533 already models do:
+///
+/// - **Excellent:** SSB usable on three days in four at its best hour;
+/// - **Good:** CW usable on three days in four;
+/// - **Fair:** FT8 usable on half the days, the engine's own "usable" line (`bcr_usable_pct`);
+/// - **Marginal:** FT8 usable on one day in ten;
+/// - **Closed:** less.
+///
+/// On the same sample at 100 W that reads 7% Closed, 4% Marginal, 25% Fair, 37% Good and 26%
+/// Excellent, against the heuristic's 11%, 12%, 12%, 45% and 20%. Power still counts: at 5 W no
+/// band reads Excellent, and at 1 kW 55% do. Simulation only, measured offline; the cut-offs are
+/// for the bench to confirm.
+///
+/// The band's time window is still the score's: the hours at or above 0.30 ([`best_window`]). So
+/// a Marginal band (FT8 between one day in ten and half the days) can still show a window, where
+/// under the score's thresholds a window meant Fair or better.
+///
+/// An answer with no per-mode grid falls back to the score's own thresholds.
+pub(crate) fn p533_workability(mode_hourly: &[ModeHourly], score: f32) -> Workability {
+    let peak = |mode: &str| {
+        mode_hourly
+            .iter()
+            .find(|m| m.mode == mode)
+            .map(|m| m.hourly.iter().copied().fold(0.0f32, f32::max))
+    };
+    let (Some(ft8), Some(cw), Some(ssb)) = (peak("FT8"), peak("CW"), peak("SSB")) else {
+        return Workability::from_score(score);
+    };
+    if ssb >= 0.75 {
+        Workability::Excellent
+    } else if cw >= 0.75 {
+        Workability::Good
+    } else if ft8 >= 0.5 {
+        Workability::Fair
+    } else if ft8 >= 0.1 {
+        Workability::Marginal
+    } else {
+        Workability::Closed
     }
 }
 
@@ -298,6 +349,9 @@ impl P533Engine {
                 day: None,
                 overlay: None,
                 space_now: None,
+                engine_fallback: false,
+                storm: None,
+                power: None,
             };
         };
 
@@ -357,7 +411,7 @@ impl P533Engine {
                 .count();
             bands.push(BandOutlook {
                 band: band.label().to_string(),
-                workability: Workability::from_score(peak).label().to_string(),
+                workability: p533_workability(&mode_hourly, peak).label().to_string(),
                 score: peak,
                 window,
                 grayline,
@@ -385,6 +439,9 @@ impl P533Engine {
             day: None,
             overlay: None,
             space_now: None,
+            engine_fallback: false,
+            storm: None,
+            power: None,
         }
     }
 }
@@ -393,6 +450,64 @@ impl P533Engine {
 mod tests {
     use super::*;
     use crate::p533::run_p533;
+
+    fn modes(ft8: f32, cw: f32, ssb: f32) -> Vec<ModeHourly> {
+        let one = |mode: &str, v: f32| {
+            let mut hourly = [0.0; 24];
+            hourly[12] = v;
+            ModeHourly {
+                mode: mode.into(),
+                hourly,
+            }
+        };
+        vec![
+            one("FT8", ft8),
+            one("FT4", ft8),
+            one("CW", cw),
+            one("SSB", ssb),
+        ]
+    }
+
+    /// The word follows the modes a band carries at its best hour, not a saturated score.
+    #[test]
+    fn a_p533_band_is_graded_by_the_modes_it_carries() {
+        let w = |ft8, cw, ssb| p533_workability(&modes(ft8, cw, ssb), 1.0);
+        assert_eq!(w(1.0, 1.0, 0.8), Workability::Excellent);
+        assert_eq!(
+            w(1.0, 0.9, 0.5),
+            Workability::Good,
+            "FT8 at 1.0 is not enough for Excellent"
+        );
+        assert_eq!(w(1.0, 0.4, 0.0), Workability::Fair);
+        assert_eq!(w(0.3, 0.0, 0.0), Workability::Marginal);
+        assert_eq!(w(0.05, 0.0, 0.0), Workability::Closed);
+        assert_eq!(
+            p533_workability(&[], 0.9),
+            Workability::Excellent,
+            "no per-mode grid: the score's own thresholds"
+        );
+    }
+
+    /// The failure this fixes: at one station and hour most bands read Excellent. With the modes
+    /// graded, a 100 W station at Chicago sees a spread, and a 5 W one fewer Excellents still.
+    #[test]
+    fn a_p533_outlook_is_not_all_excellent() {
+        let me = (42.1, -88.0);
+        let t = 1_794_009_600 + 21 * 3600;
+        let excellent = |watts: f64| {
+            let eng = P533Engine::with_config(Some(me), P533Config::with_power_watts(watts));
+            let p = eng.predict((51.5, -0.1), t, &SpaceWx::default());
+            let words: Vec<_> = p.bands.iter().map(|b| b.workability.clone()).collect();
+            (words.iter().filter(|w| *w == "Excellent").count(), words)
+        };
+        let (at_100, words) = excellent(100.0);
+        assert!(at_100 <= 4, "{words:?}");
+        assert!(
+            words.iter().any(|w| w == "Good" || w == "Fair"),
+            "{words:?}"
+        );
+        assert!(excellent(5.0).0 <= at_100);
+    }
 
     #[test]
     fn one_band_hour_is_the_day_predictions_cell() {

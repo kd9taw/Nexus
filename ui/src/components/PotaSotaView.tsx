@@ -3,6 +3,7 @@
  * absent. The operator finds activators on the air now, clicks Hunt to QSY and
  * tag the next logged QSO with the park/summit reference.
  */
+import { useCallMenu } from './useCallMenu'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { TreePine, Mountain, Leaf, RefreshCw, X } from 'lucide-react'
 import type { AppSnapshot, OtaSpot, Activation } from '../types'
@@ -97,6 +98,7 @@ const OTA_KEYS = {
     sort: 'nexus.ota.sortKey',
     sortAsc: 'nexus.ota.sortAsc',
     hideWorked: 'nexus.ota.hideWorked',
+    onlyNew: 'nexus.ota.onlyNew',
   },
   box: {
     program: 'nexus.connect.ota.program',
@@ -105,6 +107,7 @@ const OTA_KEYS = {
     sort: 'nexus.connect.ota.sortKey',
     sortAsc: 'nexus.connect.ota.sortAsc',
     hideWorked: 'nexus.connect.ota.hideWorked',
+    onlyNew: 'nexus.connect.ota.onlyNew',
   },
 } as const
 
@@ -225,6 +228,8 @@ export type OtaRemote = {
 export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observation, remote, pane = false }: Props) {
   const observed = observation !== undefined
   const keys = pane ? OTA_KEYS.box : OTA_KEYS.view
+  // The call menu (Best times first, then watch and hide), on a right-click or the menu key on a row.
+  const callMenu = useCallMenu()
   // Program + band filter persist for the same reason the sort and mode do: the operator
   // filed "leaving and returning resets all filters" as a bug. A stale/hand-edited value
   // falls back to the default rather than throwing.
@@ -292,6 +297,13 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
   useEffect(() => {
     surfaceSet(keys.hideWorked, hideWorked ? '1' : '0')
   }, [keys, hideWorked])
+  // Only new: the references this operator has never logged (`newPark` — parks, summits and WWFF
+  // references alike, one index on the station). DEFAULT OFF — it hides most of the board — and
+  // per-surface, stored raw like Hide worked, so a stale value falls back to off.
+  const [onlyNew, setOnlyNew] = useState(() => surfaceGet(keys.onlyNew) === '1')
+  useEffect(() => {
+    surfaceSet(keys.onlyNew, onlyNew ? '1' : '0')
+  }, [keys, onlyNew])
   useEffect(() => {
     surfaceSet(keys.sort, sortKey)
   }, [keys, sortKey])
@@ -353,9 +365,12 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
       const b = bandFromKhz(s.freqKhz)
       if (b !== '?') seen.add(b)
     }
+    // A picked band always has its chip, lit, whether or not anyone is on it now: the filter is
+    // remembered, and one with no chip empties the board with no way to see why or undo it.
+    for (const b of bandFilter) seen.add(b)
     // Order by HF → VHF
     const ORDER = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '2m']
-    return ORDER.filter((b) => seen.has(b))
+    return [...ORDER.filter((b) => seen.has(b)), ...bandFilter.filter((b) => !ORDER.includes(b))]
   })()
 
   // Derive the set of distinct modes in the current spot list.
@@ -385,8 +400,16 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
   // Counted after the other filters, so the number on the chip is exactly what one click brings
   // back — the locality chip's bargain on the Spots panel, made here too.
   const workedHidden = hideWorked ? inScope.filter((s) => s.huntedToday === true).length : 0
+  const unworked = hideWorked ? inScope.filter((s) => s.huntedToday !== true) : inScope
+  // Only new, the same bargain: offered only when the rows carry the flag (an observed station's
+  // feed may not), and counted after every other filter, Hide worked included. A board that cannot
+  // tell applies nothing, whatever was remembered. Per row the same: only `newPark === false` is
+  // "already logged" — a row without the flag (a mixed feed) cannot tell, so it stays.
+  const canOnlyNew = spots.some((s) => typeof s.newPark === 'boolean')
+  const applyOnlyNew = onlyNew && canOnlyNew
+  const notNewHidden = applyOnlyNew ? unworked.filter((s) => s.newPark === false).length : 0
   const filtered = sortSpots(
-    hideWorked ? inScope.filter((s) => s.huntedToday !== true) : inScope,
+    applyOnlyNew ? unworked.filter((s) => s.newPark !== false) : unworked,
     sortKey,
     sortAsc,
   )
@@ -989,6 +1012,21 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
             </button>
           )}
 
+          {/* Only new — the references never logged; its count rides on the chip too. */}
+          {canOnlyNew && (
+            <button
+              type="button"
+              className={`filter-chip${onlyNew ? ' active' : ''}`}
+              aria-pressed={onlyNew}
+              onClick={() => setOnlyNew((v) => !v)}
+              title={t('ota.filter.onlyNew.title')}
+            >
+              {onlyNew && notNewHidden > 0
+                ? t('ota.filter.onlyNew.hidden', { count: notNewHidden })
+                : t('ota.filter.onlyNew.label')}
+            </button>
+          )}
+
           {/* Refresh + timestamp */}
           {!observed && <div className="pota-refresh-row">
             <button
@@ -1113,6 +1151,8 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
             ? t('ota.loading')
             : observation && observation.feeds.some(f => (program === 'Both' || f.program === program) && f.status !== 'ready')
               ? t('remote.collectionUnavailable')
+            : notNewHidden > 0
+              ? t('ota.empty.notNew', { count: notNewHidden })
             : workedHidden > 0
               ? t('ota.empty.worked', { count: workedHidden })
             : bandFilter.length > 0 || modeFilter !== 'All'
@@ -1165,9 +1205,11 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                 aria-current={hunted ? 'true' : undefined}
                 className={`pota-spot pota-spot-v2${hunted ? ' selected' : ''}${s.bandOpen ? ' pota-spot-open' : ''}${s.newPark ? ' pota-spot-new' : ''}`}
                 title={tooltip}
+                {...callMenu.on(spotKey(s), s.activator)}
               >
                 <div className="pota-spot-main">
                   <div className="pota-spot-line1">
+                    {callMenu.at(spotKey(s))}
                     <span className="pota-spot-call">{s.activator}</span>
                     <span className="pota-spot-ref" title={`${s.program} ${s.reference}`}>
                       {s.reference}

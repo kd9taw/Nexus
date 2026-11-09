@@ -27,12 +27,14 @@ import { t } from '../../i18n'
 const DOT: Record<BandTile['heard'], string> = { active: '●', some: '◐', none: '○' }
 const STAR = '★'
 
-function tileTitle(tile: BandTile, outlook: readonly BandOutlook[], nowMs: number): string {
+function tileTitle(tile: BandTile, outlook: readonly BandOutlook[], nowMs: number, simpleModelNote: boolean): string {
   const lines: string[] = []
   const r = tile.report
   // No data: the band menu's own words for it, so the two say the same.
   if (tile.state === 'unknown') lines.push(t('bandMenu.condition.unknown.title'))
   else lines.push(t('bandTiles.title.state', { band: tile.band, word: tile.word }))
+  // A word nobody's report backs is the advisor's model: the simple one, not the engine P.533 runs.
+  if (simpleModelNote && r?.modeled && r.tier !== 'Active' && r.tier !== 'Moderate') lines.push(t('prop.bands.simpleModel'))
   if (tile.mode) lines.push(t('bandTiles.title.opening', { mode: tile.mode }))
   if (r) {
     if (r.reason) lines.push(r.reason)
@@ -50,6 +52,7 @@ function tileTitle(tile: BandTile, outlook: readonly BandOutlook[], nowMs: numbe
 }
 
 export function BandTiles({
+  simpleModelNote = false,
   prop,
   outlook,
   rigBand,
@@ -57,6 +60,8 @@ export function BandTiles({
   onBandClick,
   nowMs = Date.now(),
 }: {
+  /** Say a model word comes from the simple model: for a station on P.533 only. */
+  simpleModelNote?: boolean
   prop: PropagationSnapshot | null
   /** The band outlook (hourly, modelled) for the "when it next changes" line of each tooltip. */
   outlook?: readonly BandOutlook[]
@@ -77,7 +82,7 @@ export function BandTiles({
           className={`bt-tile is-${tile.state}${tile.onRig ? ' is-rig' : ''}`}
           style={tile.color ? ({ '--bt-color': tile.color } as CSSProperties) : undefined}
           aria-pressed={focusBand === tile.band}
-          title={tileTitle(tile, outlook ?? [], nowMs)}
+          title={tileTitle(tile, outlook ?? [], nowMs, simpleModelNote)}
           onClick={onBandClick ? () => onBandClick(tile.band) : undefined}
         >
           <span className="bt-band">{tile.band}</span>

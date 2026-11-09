@@ -1578,6 +1578,10 @@ fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_audio_sender_bl
         })
     };
     eventually("the sender held", || on_air.sender.try_lock().is_err());
+    // Tauri's runtime is built on its first use: here that is the first press's answer, after
+    // its Stop has gone but inside the time this thread measures (about 4 ms quiet, 50-230 ms on
+    // a loaded box). In the app it runs long before any Stop, so warm it first.
+    tauri::async_runtime::block_on(async {});
     let mut took = Vec::new();
     let mut answers = Vec::new();
     let mut buffer = [0u8; 256];

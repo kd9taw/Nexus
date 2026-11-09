@@ -252,7 +252,10 @@ describe('the fence: styles.css never names a structural class', () => {
     // The 1080p pass (2026-11-01): the compact dock's meters cell and in-row status, the keyboard docks'
     // key floor, the folded top bar and now-bar, the header's ⋯ and the shorter CW speed slider. Each is a flat class a component adds; a styles.css rule naming
     // one could undo the fold or the tier from the sheet that has lost these fights before.
-    'cockpit-txstrip-meters', 'cockpit-txstrip-meters-needle', 'txmeters-pane', 'txmeters-pane-meter', 'dock-status-inrow', 'dock-fkeys', 'tier-menu-folded', 'topbar-now', 'now-bar-inbar',
+    'cockpit-txstrip-meters', 'cockpit-txstrip-meters-needle', 'txmeters-pane', 'txmeters-pane-meter', 'cockpit-txstrip-catnote', 'cq-catnote', 'dock-status-inrow', 'dock-fkeys', 'tier-menu-folded', 'topbar-now', 'now-bar-inbar',
+    // The listening level's button in the top bar (#468), the RX meter itself: a styles.css padding or
+    // border on it would widen the bar's line, which has no slack at 1366x768 on FT.
+    'listen-trigger',
     'ch-overflow', 'ch-overflow-panel', 'ch-overflow-open', 'cw-wpm-compact',
     // The My station picker in the top bar (2026-11-03): it stands over the callsign, out of the bar's
     // line; a styles.css margin or width on it would put it back in the line and wrap the bar.
@@ -271,7 +274,10 @@ describe('the fence: styles.css never names a structural class', () => {
     // …and the lane's flag floor off the operating screens: a styles.css min-width on it could undo it.
     'status-lane-keep',
     // …and the lane's own box (2026-11-08): where it stands decides whether the bar's Stop TX moves for it.
-    'status-lane', 'status-lane-gap']) {
+    'status-lane', 'status-lane-gap',
+    // SSTV's composer row (#479): picture side and options side by side, wrapping by the composer's own width.
+    // A styles.css direction, basis or floor on one could stack it again or run it past the pane sideways.
+    'sstv-compose-row', 'sstv-compose-stage', 'sstv-compose-stage-packed', 'sstv-compose-opts']) {
     it(`styles.css declares no .${cls} rule`, () => {
       const hits = STYLES_RULES
         .map((r) => r.selector)
@@ -554,6 +560,46 @@ describe('THE RTTY TUNING SCOPE: right of the waterfall in its strip, a square o
     expect(classWinner('rtty-tuning-picture', blockDecl('position'))?.value).toBe('absolute')
     expect(classWinner('rtty-tuning-canvas', blockDecl('position'))?.value).toBe('absolute')
     expect(classWinner('rtty-tuning-canvas', blockDecl('inset'))?.value).toBe('0')
+  })
+})
+
+describe("SSTV'S COMPOSER (#479): at the foot of the region, the picture beside the options, wrapping by its own width", () => {
+  // The composer is a fit="content" pane at the bottom of SSTV's one column, over the Send/Stop bar. Its body is
+  // one row: the picture side (the drop zone and the file picker), then the options (the overlays, what goes out,
+  // the ident, the warnings). The row WRAPS — the options fall under the picture where the composer is narrower
+  // than both — so the decision is the composer's own width at any zoom, never a viewport rule. Inside the
+  // region's column, which clips sideways, nothing here has a floor: every item can shrink to nothing first.
+  it('the row is a wrapping flex row, top-aligned, with the gap the composer always had', () => {
+    expect(classWinner('sstv-compose-row', blockDecl('display'))?.value).toBe('flex')
+    expect(classWinner('sstv-compose-row', blockDecl('flex-wrap'))?.value).toBe('wrap')
+    expect(classWinner('sstv-compose-row', blockDecl('align-items'))?.value).toBe('flex-start')
+    expect(classWinner('sstv-compose-row', blockDecl('gap'))?.value).toBe('var(--space-3)')
+  })
+
+  it('the picture side spans the row while empty, takes the preview\'s width once loaded, and always yields', () => {
+    const stage = classWinner('sstv-compose-stage', blockDecl('flex'))
+    expect(stage?.value).toBe('1 1 auto')
+    expect(stage?.sheet).toBe('cockpit-panes.css')
+    expect(classWinner('sstv-compose-stage', blockDecl('min-width'))?.value).toBe('0')
+    // The packed modifier is a flat class of its own, after the base: it wins the tie by order.
+    const at = (sel: string) => RULES.findIndex((r) => r.selector === sel)
+    expect(at('.sstv-compose-stage-packed'), 'the packed rule must come after the base it overrides').toBeGreaterThan(at('.sstv-compose-stage'))
+    expect(classWinner('sstv-compose-stage-packed', blockDecl('flex'))?.value).toBe('0 1 auto')
+    expect(classWinner('sstv-compose-stage', blockDecl('display'))?.value).toBe('flex')
+    expect(classWinner('sstv-compose-stage', blockDecl('flex-direction'))?.value).toBe('column')
+  })
+
+  it('the options take the rest from a 24em basis, capped at 64em, and shrink to nothing before overflowing', () => {
+    expect(classWinner('sstv-compose-opts', blockDecl('flex'))?.value).toBe('1 1 24em')
+    expect(classWinner('sstv-compose-opts', blockDecl('min-width'))?.value).toBe('0')
+    expect(classWinner('sstv-compose-opts', blockDecl('max-width'))?.value).toBe('64em')
+    expect(classWinner('sstv-compose-opts', blockDecl('display'))?.value).toBe('flex')
+    expect(classWinner('sstv-compose-opts', blockDecl('flex-direction'))?.value).toBe('column')
+    // No height of its own anywhere in the row: the pane is content-height, and a floor in a clipping column
+    // with no scroller between is the bug this sheet exists to prevent.
+    for (const cls of ['sstv-compose-row', 'sstv-compose-stage', 'sstv-compose-stage-packed', 'sstv-compose-opts']) {
+      for (const prop of ['height', 'min-height', 'max-height']) expect(classWinner(cls, blockDecl(prop)), `.${cls} ${prop}`).toBeNull()
+    }
   })
 })
 

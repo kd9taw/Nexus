@@ -340,7 +340,9 @@ impl Engine {
         SettingsWriter::of(&path)
             .save_now(&next)
             .map_err(|_| Reason::PersistenceFailed)?;
+        let link_refusals = std::mem::take(&mut self.settings.link_refusals);
         self.settings = next;
+        self.settings.link_refusals = link_refusals;
         Ok(())
     }
 }

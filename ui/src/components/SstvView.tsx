@@ -14,7 +14,7 @@ import { RfScopePane } from './RfScopePane'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
 import { TxAlarmBanner } from './TxAlarmBanner'
-import { TxMeters } from './TxMeters'
+import { TxMeters, TxMetersPane } from './TxMeters'
 import { useCompactChrome } from '../features/compactChrome'
 import { FrequencyControl } from './FrequencyControl'
 import { RotorStrip } from './RotorStrip'
@@ -242,6 +242,7 @@ const sstvPanelLabels = (): Record<SstvPanelId, string> => ({
   // whatever this box says, because the decode is not a panel. See the gate at the stage.
   scope: t('sstv.panel.waterfall'),
   rfScope: t('rfScope.title'),
+  txMetersPane: t('meters.tx.pane.title'),
   txcompose: t('sstv.panel.txcompose'),
   gallery: t('sstv.panel.gallery'),
 })
@@ -638,6 +639,8 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   const shown = (id: SstvPanelId) => (host ? host.shown(id) : !SSTV_PANELS.defaultRemoved?.includes(id))
   // The pane's own ✕ — the SAME setPanelState the ⊞ tick makes (panelHost.closeProps).
   const closeProps = (id: SstvPanelId) => (host ? host.closeProps(id) : {})
+  // THE LARGE TX METERS PANE: ships hidden, so with no panel record it stays hidden (CW's and Phone's rule).
+  const hasMetersPane = host != null && shown('txMetersPane')
   // Live decoder state — polled at 1 Hz while this is the visible view (the
   // backend keeps decoding while hidden; the first tick catches the display up).
   const [sstv, setSstv] = useState<SstvState | null>(null)
@@ -1022,6 +1025,10 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       const name = g.path.split(/[\\/]/).pop() ?? 'received-image'
       await loadImage(new File([buf], name))
       announce(t('sstv.gallery.edit.loaded', { mode: g.mode }))
+      // The composer stands UNDER the gallery, so on a short window the picture just loaded was below the
+      // fold and the click seemed to do nothing. Scrolled to the nearest way, the next frame (the loaded
+      // preview has its size by then); focus stays on ✎.
+      requestAnimationFrame(() => composeRef.current?.scrollIntoView({ block: 'nearest' }))
     }, t('sstv.gallery.edit.failed'))
   }
 
@@ -1085,6 +1092,8 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // what the operator sees is what goes out — ID plate included.
   const srcRef = useRef<{ img: CanvasImageSource; w: number; h: number } | null>(null)
   const txCanvasRef = useRef<HTMLCanvasElement>(null)
+  // The composer's body, for ✎ Edit & resend to bring into view.
+  const composeRef = useRef<HTMLElement>(null)
   const [imageName, setImageName] = useState<string | null>(null)
   const [srcSize, setSrcSize] = useState<{ w: number; h: number } | null>(null)
   const [notice, setNotice] = useState<{ kind: 'error' | 'warn'; text: string } | null>(null)
@@ -2137,15 +2146,20 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           }
           onStopTx={() => { void haltTx() }}
           meters={chrome.wide ? <TxMeters radio={snap.radio} strip /> : undefined}
+          // The way to the large meters, after the strip's meters (CW's and Phone's button): it opens a
+          // readout and moves no control in the strip.
+          metersPane={panels?.setPanelState ? { shown: hasMetersPane, onToggle: () => panels.setPanelState('txMetersPane', hasMetersPane ? 'removed' : 'docked') } : undefined}
         />
       )}
 
       {/* THE PANE REGION — the shell contract's one `.cockpit-panes` region (RTTY's and PSK's): a
-          single column holding the RF scope pane, the composer and the gallery, in the order they
-          always stood. One column group, so it fills at every width (useRegionCols `oneGroup`); the
-          composer is a content-height strip and the gallery the fill pane, and where the two do not
-          fit the COLUMN scrolls, not the shell. The header (pinned), the RX stage, the TX strip and
-          the TX bar stay shell children, so no pane can move them. */}
+          single column holding the RF scope pane, the large TX meters pane, the gallery and, LAST, the
+          composer, directly over the Send/Stop bar (#479: the gallery in the middle, the composer at
+          the bottom). One column group, so it fills at every width (useRegionCols `oneGroup`); the
+          composer is a content-height strip and the gallery the fill pane, and where they do not fit
+          the COLUMN scrolls, not the shell. The header (pinned), the RX stage, the TX strip and the TX
+          bar stay shell children, so no pane can move them. The order is this code's: SSTV stores no
+          placement, so a saved layout opens in it with every pane shown or hidden as it was. */}
       <div className="cockpit-panes" ref={panesRef}>
       <div className="cockpit-col">
       {/* THE RF SCOPE PANE — the radio's own panadapter, hidden until ticked (RF_SCOPE_PANEL_ID):
@@ -2163,16 +2177,131 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
         />
       )}
 
-      {/* THE LOWER PANES — CockpitPaneFrame with ROLES, in the region's one column. The old
-          `.sstv-lower` wrapper split the region 50/50 whatever the panes held (census
-          #10: ~440px dead per pane on an ultrawide with an empty gallery); the composer is
-          a content-height strip and the gallery the fill pane. */}
+      {/* THE LARGE TX METERS PANE (#479): FT's, Phone's and CW's readout, hidden until ticked, here or
+          from the strip's button. A fill pane under the RF scope pane and over the gallery, sharing the
+          spare height with it. Display only: it keys nothing, stops nothing, and its hide ends nothing. */}
+      {hasMetersPane && snap && <TxMetersPane radio={snap.radio} close={closeProps('txMetersPane')} />}
+
+      {shown('gallery') && (
+        <CockpitPaneFrame
+          title={t('sstv.panel.gallery')}
+          paneId="gallery"
+          {...closeProps('gallery')}
+          // #130: open the folder the pictures are saved in.
+          // From afar the station's file manager is out of reach: save its pictures here instead.
+          actions={
+            drivesAnotherStation() ? (
+              <ShackFilesSave folder="sstv" className="cockpit-popout sstv-gallery-reveal" />
+            ) : (
+              <button
+                type="button"
+                className="cockpit-popout sstv-gallery-reveal"
+                title={t('sstv.gallery.reveal.title')}
+                onClick={() => void withErrorToast(() => revealSstvGallery(), t('sstv.gallery.reveal.failed'))}
+              >
+                {t('sstv.gallery.reveal.label')}
+              </button>
+            )
+          }
+        >
+          {gallery.length > 0 && (
+            <div className="sstv-gallery-tools" role="toolbar" aria-label={t('sstv.gallery.select.toolbar')}>
+              <button type="button" className="cockpit-popout" onClick={() => setPicked(new Set(gallery.map((g) => g.path)))}>
+                {t('sstv.gallery.select.all')}
+              </button>
+              {pickedNow.length > 0 && (
+                <>
+                  <button type="button" className="cockpit-popout" onClick={() => setPicked(new Set())}>
+                    {t('sstv.gallery.select.clear')}
+                  </button>
+                  <button type="button" className="cockpit-popout sstv-gallery-delete-selected" onClick={() => void deleteSelected()}>
+                    {t('sstv.gallery.deleteSelected.label', { count: pickedNow.length })}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+          <div className="sstv-gallery-grid">
+            {gallery.length === 0 ? (
+              <div className="sstv-gallery-empty">{t('sstv.gallery.empty')}</div>
+            ) : (
+              gallery.map((g) => (
+                <figure key={g.path} className={picked.has(g.path) ? 'sstv-thumb picked' : 'sstv-thumb'} title={g.path}>
+                  <ReceivedThumb entry={g} />
+                  {/* Always shown, unlike ✕ and ✎: the ticks are what the operator checks before
+                      pressing Delete selected. A real checkbox, so Tab and Space reach it. */}
+                  <input
+                    type="checkbox"
+                    className="sstv-thumb-pick"
+                    checked={picked.has(g.path)}
+                    onChange={() => togglePicked(g.path)}
+                    aria-label={t('sstv.gallery.select.one.aria', { mode: g.mode, when: fmtUtc(g.finishedUtc) })}
+                  />
+                  {/* Irreversible — a received picture is the only copy of something somebody
+                      sent you, and there is no re-download. Confirmed before it happens, but a
+                      plain confirm rather than the Logbook's type-the-word dialog: one image is
+                      not a whole logbook, and ceremony out of proportion to the act just teaches
+                      people to click through it. */}
+                  <button
+                    type="button"
+                    className="sstv-thumb-del"
+                    aria-label={t('sstv.gallery.delete.aria', {
+                      mode: g.mode,
+                      when: fmtUtc(g.finishedUtc),
+                    })}
+                    title={t('sstv.gallery.delete.title')}
+                    onClick={() => void deleteImage(g)}
+                  >
+                    ✕
+                  </button>
+                  {/* Edit & resend: a received picture back onto the compose stage, to
+                      answer a picture with that picture plus your
+                      text. Same fetch bridge the BMP fallback proved out; the file then
+                      rides the ORDINARY loadImage path, so format sniffing, orientation
+                      and the ident all apply exactly as if it were dropped in. */}
+                  <button
+                    type="button"
+                    className="sstv-thumb-edit"
+                    aria-label={t('sstv.gallery.edit.aria', {
+                      mode: g.mode,
+                      when: fmtUtc(g.finishedUtc),
+                    })}
+                    title={t('sstv.gallery.edit.title')}
+                    onClick={() => void editAndResend(g)}
+                  >
+                    ✎
+                  </button>
+                  <figcaption className="sstv-thumb-caption">
+                    <span className="sstv-thumb-mode">{g.mode}</span>
+                    {g.fskId && <span className="sstv-thumb-call">{g.fskId}</span>}
+                    <span className="sstv-thumb-meta">
+                      {fmtUtc(g.finishedUtc)} · {g.freqMhz.toFixed(3)} {MHZ}
+                    </span>
+                  </figcaption>
+                </figure>
+              ))
+            )}
+          </div>
+        </CockpitPaneFrame>
+      )}
+
+      {/* THE COMPOSER, LAST — CockpitPaneFrame with ROLES, in the region's one column, at its foot over
+          the Send/Stop bar (#479). The old `.sstv-lower` wrapper split the region 50/50 whatever the
+          panes held (census #10: ~440px dead per pane on an ultrawide with an empty gallery); the
+          composer is a content-height strip and the gallery the fill pane.
+          ITS BODY IS ONE ROW (cockpit-panes.css `.sstv-compose-row`): the picture side (the drop zone and
+          the file picker), then the options (the overlays, what goes out, the ident, the warnings). The
+          row wraps by the composer's own width, so the options fall under the picture where both do not
+          fit, at any zoom. Empty, the picture side takes the whole row as the drop zone always did;
+          loaded, it is the preview's width. The options are drawn only once there is something in them. */}
       {shown('txcompose') && (
         <CockpitPaneFrame title={t('sstv.panel.txcompose')} paneId="txcompose" fit="content" {...closeProps('txcompose')}>
           {/* Unnamed section: the frame above is the landmark ("Transmit"); the wrapper
               stays for its column layout, with `.pane-body > .panel` stripping the
               card-in-card chrome. */}
-          <section className="sstv-compose panel">
+          <section className="sstv-compose panel" ref={composeRef}>
+            <div className="sstv-compose-row">
+            <div className={`sstv-compose-stage${packed ? ' sstv-compose-stage-packed' : ''}`}>
             <div
               className={`sstv-tx-drop${packed ? ' loaded' : ''}`}
               onDragOver={(e) => e.preventDefault()}
@@ -2237,6 +2366,9 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                 }}
               />
             </label>
+            </div>
+            {(packed != null || imageName != null || notice != null) && (
+            <div className="sstv-compose-opts">
             {/* TEXT OVERLAYS — text composed onto the picture. One-click presets that work
                 with nothing configured (the Reply pulls the other station's call from
                 the newest FSK ID heard), plus free text. Items draw UNDER the ID plate
@@ -2467,110 +2599,10 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                 {notice.text}
               </span>
             )}
-          </section>
-        </CockpitPaneFrame>
-      )}
-
-      {shown('gallery') && (
-        <CockpitPaneFrame
-          title={t('sstv.panel.gallery')}
-          paneId="gallery"
-          {...closeProps('gallery')}
-          // #130: open the folder the pictures are saved in.
-          // From afar the station's file manager is out of reach: save its pictures here instead.
-          actions={
-            drivesAnotherStation() ? (
-              <ShackFilesSave folder="sstv" className="cockpit-popout sstv-gallery-reveal" />
-            ) : (
-              <button
-                type="button"
-                className="cockpit-popout sstv-gallery-reveal"
-                title={t('sstv.gallery.reveal.title')}
-                onClick={() => void withErrorToast(() => revealSstvGallery(), t('sstv.gallery.reveal.failed'))}
-              >
-                {t('sstv.gallery.reveal.label')}
-              </button>
-            )
-          }
-        >
-          {gallery.length > 0 && (
-            <div className="sstv-gallery-tools" role="toolbar" aria-label={t('sstv.gallery.select.toolbar')}>
-              <button type="button" className="cockpit-popout" onClick={() => setPicked(new Set(gallery.map((g) => g.path)))}>
-                {t('sstv.gallery.select.all')}
-              </button>
-              {pickedNow.length > 0 && (
-                <>
-                  <button type="button" className="cockpit-popout" onClick={() => setPicked(new Set())}>
-                    {t('sstv.gallery.select.clear')}
-                  </button>
-                  <button type="button" className="cockpit-popout sstv-gallery-delete-selected" onClick={() => void deleteSelected()}>
-                    {t('sstv.gallery.deleteSelected.label', { count: pickedNow.length })}
-                  </button>
-                </>
-              )}
             </div>
-          )}
-          <div className="sstv-gallery-grid">
-            {gallery.length === 0 ? (
-              <div className="sstv-gallery-empty">{t('sstv.gallery.empty')}</div>
-            ) : (
-              gallery.map((g) => (
-                <figure key={g.path} className={picked.has(g.path) ? 'sstv-thumb picked' : 'sstv-thumb'} title={g.path}>
-                  <ReceivedThumb entry={g} />
-                  {/* Always shown, unlike ✕ and ✎: the ticks are what the operator checks before
-                      pressing Delete selected. A real checkbox, so Tab and Space reach it. */}
-                  <input
-                    type="checkbox"
-                    className="sstv-thumb-pick"
-                    checked={picked.has(g.path)}
-                    onChange={() => togglePicked(g.path)}
-                    aria-label={t('sstv.gallery.select.one.aria', { mode: g.mode, when: fmtUtc(g.finishedUtc) })}
-                  />
-                  {/* Irreversible — a received picture is the only copy of something somebody
-                      sent you, and there is no re-download. Confirmed before it happens, but a
-                      plain confirm rather than the Logbook's type-the-word dialog: one image is
-                      not a whole logbook, and ceremony out of proportion to the act just teaches
-                      people to click through it. */}
-                  <button
-                    type="button"
-                    className="sstv-thumb-del"
-                    aria-label={t('sstv.gallery.delete.aria', {
-                      mode: g.mode,
-                      when: fmtUtc(g.finishedUtc),
-                    })}
-                    title={t('sstv.gallery.delete.title')}
-                    onClick={() => void deleteImage(g)}
-                  >
-                    ✕
-                  </button>
-                  {/* Edit & resend: a received picture back onto the compose stage, to
-                      answer a picture with that picture plus your
-                      text. Same fetch bridge the BMP fallback proved out; the file then
-                      rides the ORDINARY loadImage path, so format sniffing, orientation
-                      and the ident all apply exactly as if it were dropped in. */}
-                  <button
-                    type="button"
-                    className="sstv-thumb-edit"
-                    aria-label={t('sstv.gallery.edit.aria', {
-                      mode: g.mode,
-                      when: fmtUtc(g.finishedUtc),
-                    })}
-                    title={t('sstv.gallery.edit.title')}
-                    onClick={() => void editAndResend(g)}
-                  >
-                    ✎
-                  </button>
-                  <figcaption className="sstv-thumb-caption">
-                    <span className="sstv-thumb-mode">{g.mode}</span>
-                    {g.fskId && <span className="sstv-thumb-call">{g.fskId}</span>}
-                    <span className="sstv-thumb-meta">
-                      {fmtUtc(g.finishedUtc)} · {g.freqMhz.toFixed(3)} {MHZ}
-                    </span>
-                  </figcaption>
-                </figure>
-              ))
             )}
-          </div>
+            </div>
+          </section>
         </CockpitPaneFrame>
       )}
       </div>

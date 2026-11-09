@@ -1570,6 +1570,15 @@ export function SettingsPanel({
   const [detecting, setDetecting] = useState(false)
   const [catTesting, setCatTesting] = useState(false)
   const [catResult, setCatResult] = useState<CatTestResult | null>(null)
+  // Seconds into a port Auto-test, null when none runs. It waits for each throwaway rigctld to
+  // listen, so a port nothing answers on takes over a minute: a counting line says it is working.
+  const [autoTestSecs, setAutoTestSecs] = useState<number | null>(null)
+  const autoTesting = autoTestSecs != null
+  useEffect(() => {
+    if (!autoTesting) return
+    const id = window.setInterval(() => setAutoTestSecs((s) => (s == null ? s : s + 1)), 1000)
+    return () => window.clearInterval(id)
+  }, [autoTesting])
   // Connections visibility: stored-credential status + the rolling event log —
   // the answer to "I hit save and couldn't tell anything happened".
   const [creds, setCreds] = useState<CredStatus[]>([])
@@ -3528,6 +3537,7 @@ export function SettingsPanel({
     const f = base ?? form
     if (!f) return
     setCatTesting(true)
+    setAutoTestSecs(0)
     setCatResult(null)
     setError(null)
     try {
@@ -3560,6 +3570,7 @@ export function SettingsPanel({
       setCatResult({ ok: false, detail: msg || t('settings.cat.autoTest.failed') })
     } finally {
       setCatTesting(false)
+      setAutoTestSecs(null)
     }
   }
 
@@ -7602,6 +7613,12 @@ export function SettingsPanel({
                   : t('settings.rigControl.testCat.action')}
               </button>
               {(() => {
+                if (autoTestSecs != null)
+                  return (
+                    <span className="cat-result na" role="status">
+                      {t('settings.cat.autoTest.busy', { seconds: autoTestSecs })}
+                    </span>
+                  )
                 // Show the just-run test result, else the live CAT status from the snapshot.
                 const ok = catResult ? catResult.ok : radio?.catOk
                 const raw = catResult ? catResult.detail : radio?.catDetail
@@ -13294,7 +13311,7 @@ export function SettingsPanel({
                   </span>
                   <select disabled={locked('propEngine')}
                     className="settings-input"
-                    value={form.propEngine || 'heuristic'}
+                    value={form.propEngine || 'p533'}
                     onChange={(e) => update('propEngine', e.target.value)}
                   >
                     <option value="heuristic">

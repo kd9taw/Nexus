@@ -1650,7 +1650,10 @@ const FAKE_IT_WRITE_BACK_MS: f64 = 100.0;
 /// rig. A rigctld sitting on a serial handle whose device went away at power-off is ALIVE
 /// (`is_alive` is `try_wait`) and answers `RPRT -5` forever; only reopening the port helps.
 const CAT_DEAD_PROBES_BEFORE_REBUILD: u32 = 3;
-/// Between suspect rebuilds while the link stays dead — a rebuild is a process respawn.
+/// The first wait between suspect rebuilds while the link stays dead — a rebuild is a process
+/// respawn, and the radio loop stands still for it. Doubles to [`CAT_REOPEN_MAX_MS`]; the link
+/// answering starts it over. The three failed re-probes a rebuild also needs set the floor: once
+/// the re-probes have backed off to [`CAT_RETRY_MAX_MS`] that is 90 s, whatever this says.
 const CAT_REBUILD_BACKOFF_MS: f64 = 60_000.0;
 /// How often the configured serial port is checked for presence while CAT is down.
 const CAT_PORT_CHECK_MS: f64 = 10_000.0;
@@ -1844,6 +1847,36 @@ fn agc_from_hamlib(v: u8) -> &'static str {
 /// 500 ms read timeout, so even a couple dozen tries spans seconds), then we stop
 /// retrying THAT mode until the target changes.
 const MODE_SET_MAX_TRIES: u32 = 30;
+
+/// How many reads after Nexus's own DATA-word set one watch judges ([`RadioLoop::judge_data_word`]),
+/// past the skipped first one and the cache window. Counted in READS, not time: the heavy poll holds
+/// its reads while the radio is keyed, so a watch opened before an over is finished after it.
+const DATA_WATCH_READS: u8 = 3;
+/// Reads sooner than this after the set can be Hamlib's own mode cache, and are not judged.
+const DATA_CACHE_MS: f64 = 1_000.0;
+/// The least room to the next slot boundary a mode write the DATA-word judgement causes may leave,
+/// with TX armed ([`RadioLoop::apply_owed_data_judgement`]).
+const DATA_WRITE_GUARD_MS: f64 = 2_000.0;
+/// Models whose Hamlib backend sets the DATA mode through one field and reads it through another
+/// (TX re-review F3), so a read-back of plain USB does not show the radio left DATA: TS-950S/SDX
+/// (2012/2013: set via `DT1`, read via `IF`), TS-590S/SG (2031/2037: set and read via `SF`, whose
+/// mode character may not carry DATA). Not read-back judged until a bench settles it; an explicit
+/// refusal is still acted on.
+const READBACK_UNTRUSTED: [u32; 4] = [2012, 2013, 2031, 2037];
+
+/// One watch of the reads after Nexus's own DATA-word set ([`RadioLoop::judge_data_word`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct DataWatch {
+    word: &'static str,
+    /// Loop time of the first read after the set (ms).
+    since: f64,
+    twin_reads: u8,
+    /// Reads judged so far ([`DATA_WATCH_READS`]).
+    reads: u8,
+    /// The set came with a dial write that crossed a band: its plain reads may be the band stack.
+    void: bool,
+}
+
 /// After this many consecutive failures, DATA-mode retries drop their explicit 3 kHz
 /// passband and go filter-agnostic (`M PKTUSB 0`) — the middle rung of the mode-set
 /// resilience ladder (see [`retry_passband`]). A backend that chokes on the width→DATA-
@@ -4225,6 +4258,28 @@ struct RadioLoop {
     /// faults mean the CAT link is too slow or mute — claiming "rig has no mode" there
     /// sent an IC-7610 @ 19200 baud operator chasing a mode the rig has always had.
     mode_saw_reject: bool,
+    /// The reads being judged after Nexus's own DATA-word set ([`Self::judge_data_word`]); `None`
+    /// when no such set is being watched.
+    data_watch: Option<DataWatch>,
+    /// `Rig::mode_writes` when the judgement last looked: a change is a mode write since.
+    data_seen_writes: u64,
+    /// The DATA words this connection's radio has SHOWN it takes (read back as itself, past
+    /// Hamlib's cache): latched, never judged again on this connection.
+    data_taken: Vec<&'static str>,
+    /// Consecutive watches of Nexus's own DATA set that ended on the plain twin with no band
+    /// crossing in them ([`Self::judge_data_word`]): two condemn the word.
+    data_twin_watches: u8,
+    /// Dial writes that crossed a band (or came from an unknown one), counted
+    /// (`reassert_mode_after_band_cross`), and the count when the judgement last looked.
+    dial_band_crosses: u64,
+    data_seen_crosses: u64,
+    /// The judgement's re-set of a DATA word, and its verdict, waiting for a moment no over can key
+    /// in ([`Self::apply_owed_data_judgement`]).
+    data_reset_owed: Option<&'static str>,
+    data_verdict_owed: Option<(&'static str, String)>,
+    /// A radio handoff installed another connection: the engine's judgement of the last one's DATA
+    /// word is forgotten at the next tick's engine lock, before the mode word is worked out.
+    link_judgement_stale: bool,
     /// Last CW keyer speed (WPM) pushed to the RIG over CAT (`set_keyspd`), so the command
     /// only fires on change.
     ///
@@ -4787,6 +4842,11 @@ struct RadioLoop {
     cat_down_link_fault: bool,
     /// Earliest tick a suspect rebuild may run (backoff between rebuilds).
     cat_rebuild_at: f64,
+    /// A silence rebuild has already halted TX in this outage, so the next retry only retries.
+    /// Cleared when the link answers, and by a rebuild that had another reason.
+    cat_outage_halted: bool,
+    /// The wait the next suspect rebuild sets (see [`CAT_REBUILD_BACKOFF_MS`]).
+    cat_rebuild_backoff_ms: f64,
     /// Earliest tick a FAILED reopen (no daemon, no control) is retried, and its backoff.
     cat_reopen_at: f64,
     cat_reopen_backoff_ms: f64,
@@ -5115,6 +5175,15 @@ impl RadioLoop {
             mode_fail_count: 0,
             mode_giveup: None,
             mode_saw_reject: false,
+            data_watch: None,
+            data_seen_writes: u64::MAX,
+            data_taken: Vec::new(),
+            data_twin_watches: 0,
+            dial_band_crosses: 0,
+            data_seen_crosses: 0,
+            data_reset_owed: None,
+            data_verdict_owed: None,
+            link_judgement_stale: false,
             last_cat_wpm: 0, // 0 = unset → first send pushes the speed
             cw_word_matched: None,
             cat_wpm_matched: false,
@@ -5262,6 +5331,8 @@ impl RadioLoop {
             cat_dead_probes: 0,
             cat_down_link_fault: false,
             cat_rebuild_at: 0.0,
+            cat_outage_halted: false,
+            cat_rebuild_backoff_ms: CAT_REBUILD_BACKOFF_MS,
             cat_reopen_at: 0.0,
             cat_reopen_backoff_ms: CAT_REOPEN_RETRY_MS,
             cat_port_check_at: 0.0,
@@ -5394,10 +5465,18 @@ impl RadioLoop {
         self.dial_fail_count = 0;
         self.width_unanswered = None;
         self.cat_dead_probes = 0;
+        self.end_cat_outage();
         self.cat_port_present = None;
         self.cat_reopen_backoff_ms = CAT_REOPEN_RETRY_MS;
         self.cat_reopen_at = 0.0;
         self.remember_port_identity();
+    }
+
+    /// The link answered, so the next silence is a new outage: it halts TX once again, and its
+    /// rebuilds start from the shortest wait.
+    fn end_cat_outage(&mut self) {
+        self.cat_outage_halted = false;
+        self.cat_rebuild_backoff_ms = CAT_REBUILD_BACKOFF_MS;
     }
 
     /// Capture the USB identity of the configured serial port while it is present, so a rig
@@ -5445,8 +5524,21 @@ impl RadioLoop {
     /// [`CAT_DEAD_PROBES_BEFORE_REBUILD`] failed re-probes (or no daemon at all to probe with),
     /// rate-limited by [`CAT_REBUILD_BACKOFF_MS`]. Never while the port is known absent —
     /// there is nothing to open yet.
+    ///
+    /// ⛔ NEVER DURING A KEY OF NEXUS'S OWN. `operator_keyed` is what the RADIO reports, and a
+    /// tripped breaker stops reading it, so it does not see an over, a tune, a mic PTT or a CW word
+    /// that CAT is not carrying: the radio's VOX or a serial line can be keying them over a silent
+    /// link. The retry waits for the end of it. Returning before the port watch leaves a port's
+    /// return unconsumed, to fire on the tick after.
     fn cat_rebuild_due(&mut self, want: &Transport, now: f64, rig_has_control: bool) -> bool {
-        if self.cat_ok != Some(false) || self.operator_keyed() || self.cat_hold_active {
+        if self.cat_ok != Some(false)
+            || self.operator_keyed()
+            || self.cat_hold_active
+            || self.tx_until_ms.is_some()
+            || self.tuning_keyed
+            || self.manual_ptt_applied
+            || now < self.cw_keying_until
+        {
             return false;
         }
         let port_returned = if !want.is_network()
@@ -5469,14 +5561,9 @@ impl RadioLoop {
         // No daemon AND no way to talk to a rig: the last open FAILED (or never happened) while
         // the port is present or unknowable. Retry it on the reopen backoff. A coexisting or
         // external rigctld has no handle here either but DOES give the rig control, so it
-        // takes the silence path below instead. Never during an over of Nexus's own: with no
-        // CAT channel the radio keys by the VOX fallback, so an over can be on the air, and the
-        // retry waits for its end.
+        // takes the silence path below instead.
         if !rig_has_control && self.rigctld_proc.is_none() {
-            return now >= self.cat_reopen_at
-                && self.tx_until_ms.is_none()
-                && !self.tuning_keyed
-                && !self.manual_ptt_applied;
+            return now >= self.cat_reopen_at;
         }
         self.silence_rebuild_due(now)
     }
@@ -7131,6 +7218,192 @@ impl RadioLoop {
         }
     }
 
+    /// Judge, from one receive-time mode read, whether this link took the SSB DATA word NEXUS
+    /// ITSELF last set (`tempo_app::rig_modes`). Sends nothing: it reads what the heavy poll read.
+    ///
+    /// The case it exists for is the SILENT one. Through Hamlib's SDR Console backend (2056)
+    /// `PKTUSB` goes out as `MDD;`; Hamlib answers the set `RPRT 0` (measured, whether the radio
+    /// answers `?;` or nothing) and the radio stays in USB.
+    ///
+    /// ⛔ ONLY THE READS THAT FOLLOW NEXUS'S OWN SET, and never a mode the operator or the radio
+    /// changed (TX re-review F1, delta D1/R1). A watch opens on Nexus's own DATA-word set (a mode
+    /// write, `Rig::mode_writes`, that left that word in `last_mode`). The read on which the set is
+    /// first seen is skipped (it can be Hamlib's cache), as is anything inside [`DATA_CACHE_MS`].
+    /// Then:
+    /// - the word itself read back: TAKEN, latched for the connection; a later front-panel USB or a
+    ///   band-stack recall can never condemn it;
+    /// - its plain twin on two reads (`USB` after `PKTUSB`): ONE plain watch, never a verdict on its
+    ///   own, because the operator's own USB press inside it looks the same. Nexus sets the word
+    ///   again (the retune, at the next idle tick) and judges the reads after THAT set; only two
+    ///   consecutive plain watches condemn the word. SDR Console reads plain USB after every set.
+    /// - any other mode: something else moved the radio; the watch closes, judging nothing, and the
+    ///   run of plain watches starts again.
+    /// - a watch whose set came with a dial write onto another band, or from an unknown one (the
+    ///   connection's first), counts for nothing: the band stack's mode can sit behind Hamlib's cache
+    ///   (`dial_band_crosses`); a band crossing inside a watch closes it.
+    ///
+    /// A watch judges at most [`DATA_WATCH_READS`] reads, counted in reads rather than time because
+    /// reads are held while the radio is keyed.
+    ///
+    /// Safe on the radios whose DATA mode hides behind another name, because Hamlib reads them
+    /// back as the DATA word: DIGU on a PowerSDR/SmartSDR/DDUtil emulation, piHPSDR and the QCX/QDX
+    /// (`kenwood.c` get_mode), an Icom with a data flag, the FT-1000MP's DATA-LSB as `PKTLSB`.
+    /// NOT on the TS-590S/SG and TS-950 ([`READBACK_UNTRUSTED`]), whose Hamlib backends set and read
+    /// the data mode through different fields: those keep today's behaviour until a bench settles it.
+    /// Only Hamlib's links are judged: Nexus's own daemons speak for their radios themselves.
+    fn judge_data_word(&mut self, writes: u64, now: f64, reported: Option<&str>) {
+        if READBACK_UNTRUSTED.contains(&self.applied.rig_model) {
+            return;
+        }
+        // A mode write since the last look. If it left Nexus's own DATA word applied (`last_mode`
+        // only ever holds a mode Nexus set and the link took), watch the reads after it; anything
+        // else (the plain word, a fallback, CW) closes the watch. This read may be Hamlib's cache
+        // of that very set, so it is not judged.
+        let crossed = self.dial_band_crosses != self.data_seen_crosses;
+        self.data_seen_crosses = self.dial_band_crosses;
+        if writes != self.data_seen_writes {
+            self.data_seen_writes = writes;
+            self.data_watch = tempo_app::rig_modes::data_word(&self.last_mode)
+                .filter(|w| !self.data_taken.contains(w))
+                .map(|word| DataWatch {
+                    word,
+                    since: now,
+                    twin_reads: 0,
+                    reads: 0,
+                    void: crossed,
+                });
+            return;
+        }
+        let Some(watch) = self.data_watch.as_mut() else {
+            return;
+        };
+        if crossed {
+            // A band-crossing dial write inside the watch: what follows may be the band stack.
+            self.data_watch = None;
+            return;
+        }
+        if now - watch.since < DATA_CACHE_MS {
+            return;
+        }
+        let Some(reported) = reported.map(str::trim) else {
+            return;
+        };
+        if watch.reads >= DATA_WATCH_READS {
+            self.data_watch = None; // it has said all it will about that set
+            return;
+        }
+        watch.reads += 1;
+        let word = watch.word;
+        let twin = tempo_app::rig_modes::plain_twin(word).unwrap_or("");
+        if tempo_app::rig_modes::data_word(reported) == Some(word) {
+            // The radio shows the word itself: taken, for this connection, whatever the operator
+            // or the band stack does to the radio's mode later.
+            self.data_taken.push(word);
+            self.data_watch = None;
+            self.data_twin_watches = 0;
+        } else if reported.eq_ignore_ascii_case(twin) {
+            watch.twin_reads += 1;
+            if watch.twin_reads < 2 {
+                return;
+            }
+            let void = watch.void;
+            self.data_watch = None;
+            if !void {
+                self.data_twin_watches += 1;
+            }
+            if self.data_twin_watches >= 2 {
+                self.data_twin_watches = 0;
+                // Held, not applied here: the verdict changes the word the next retune sends, so it
+                // waits for a moment no over can key in (`apply_owed_data_judgement`, delta D2).
+                self.data_verdict_owed = Some((word, format!("still reads {twin}")));
+            } else {
+                // Not yet a verdict: ONE watch can be fooled (the operator's own USB press inside
+                // it, a band stack's recall behind Hamlib's cache). Nexus sets the word again,
+                // through the retune once no over can key (`apply_owed_data_judgement`), and judges
+                // the reads after THAT set.
+                // A radio that takes the word reads it back then and is latched; SDR Console reads
+                // plain USB after every set.
+                // Held like the verdict (delta D2): applied by `apply_owed_data_judgement`.
+                self.data_reset_owed = Some(word);
+            }
+        } else {
+            self.data_watch = None; // another mode: something else moved it, judge nothing
+            self.data_twin_watches = 0;
+        }
+    }
+
+    /// Apply the judgement's owed re-set and verdict (`judge_data_word`), ONLY where nothing they cause
+    /// can reach the wire before a key (delta D2). Both work through the retune: the re-set clears
+    /// `last_mode` so this tick's retune sends the word again, and the verdict changes the word the
+    /// next tick's retune sends. So both wait while anything of Nexus's is keyed and, with TX armed
+    /// on a slotted mode, until the current slot is past the last point an over may still key
+    /// (WSJT-X's 75 %, [`crate::slot::wsjtx_may_key_at`]) with at least [`DATA_WRITE_GUARD_MS`] left
+    /// to the next boundary. Held otherwise, and applied on the first tick that may, which after an
+    /// over is the tail of its slot. Nothing about the key itself changes.
+    fn apply_owed_data_judgement(&mut self, engine: &Mutex<Engine>, rig: &Rig, now: f64) {
+        if self.data_reset_owed.is_none() && self.data_verdict_owed.is_none() {
+            return;
+        }
+        if !self.data_write_may_go(engine, rig, now) {
+            return;
+        }
+        if let Some((word, why)) = self.data_verdict_owed.take() {
+            self.data_word_not_taken(engine, word, &why);
+        }
+        if let Some(word) = self.data_reset_owed.take() {
+            // Only if the word is still Nexus's applied word: anything set since stands.
+            if tempo_app::rig_modes::data_word(&self.last_mode) == Some(word) {
+                self.last_mode.clear();
+            }
+        }
+    }
+
+    /// May a mode write the judgement causes go out now ([`Self::apply_owed_data_judgement`])?
+    fn data_write_may_go(&self, engine: &Mutex<Engine>, rig: &Rig, now: f64) -> bool {
+        if rig.keyed || self.holds_tx() || self.operator_keyed() || self.manual_ptt_applied {
+            return false;
+        }
+        let eng = engine_lock(engine);
+        if !eng.tx_enabled() {
+            return true;
+        }
+        let period = eng.active_slot_secs() * 1000.0;
+        if period.is_nan() || period <= 0.0 {
+            return false;
+        }
+        let into = now.rem_euclid(period);
+        !crate::slot::wsjtx_may_key_at(into, period) && period - into > DATA_WRITE_GUARD_MS
+    }
+
+    /// A new connection: nothing it showed about the DATA word carries over.
+    fn forget_data_judgement(&mut self) {
+        self.data_watch = None;
+        self.data_seen_writes = u64::MAX;
+        self.data_taken.clear();
+        self.data_twin_watches = 0;
+        self.data_reset_owed = None;
+        self.data_verdict_owed = None;
+    }
+
+    /// Record that this Hamlib link does not take the DATA word `md`, and say so in the log.
+    fn data_word_not_taken(&mut self, engine: &Mutex<Engine>, md: &str, why: &str) {
+        let hamlib = matches!(self.rigctld_proc, None | Some(CatDaemon::Spawned(_)));
+        let Some(twin) = tempo_app::rig_modes::plain_twin(md).filter(|_| hamlib) else {
+            return;
+        };
+        if !engine_lock(engine).refuse_link_data_word(self.applied.rig_model, md) {
+            return;
+        }
+        tempo_core::applog::info(
+            "cat",
+            &format!(
+                "{}: the radio was sent {md} and {why}; {twin} is used for the data modes on this \
+                 connection",
+                self.applied.radio_label
+            ),
+        );
+    }
+
     /// Reset the per-rig caches after a dual-radio HANDOFF adopted an already-connected Rig for a new
     /// active radio. Forces the retune block to re-assert the restored dial/mode (sentinel
     /// `last_dial`/`last_mode`) and the health / S-meter / DSP-func capabilities to re-probe for the
@@ -7756,6 +8029,12 @@ impl RadioLoop {
         dial: u64,
         engine: &Arc<Mutex<Engine>>,
     ) {
+        // For the DATA-word judgement (`judge_data_word`): a dial write onto another band (or from
+        // an unknown one) can land the radio in its band stack's mode, which Hamlib's cache hides
+        // from the read just below, so no read after it may condemn the DATA word.
+        if prev_dial == 0 || !crate::rig::tuning::same_named_band(prev_dial, dial) {
+            self.dial_band_crosses = self.dial_band_crosses.wrapping_add(1);
+        }
         if md.trim().is_empty() {
             return;
         }
@@ -8165,6 +8444,10 @@ impl RadioLoop {
 
     fn reset_for_handoff(&mut self) {
         self.remote_connection = None;
+        // Another connection: judged afresh (`judge_data_word`), by the next tick's engine lock,
+        // before it works out the mode word.
+        self.link_judgement_stale = true;
+        self.forget_data_judgement();
         self.last_dial = 0; // != any real dial → force the retune to command the restored freq
         self.last_mode = String::new(); // force the mode re-assert
         self.rig_asserted = false; // belt-and-braces: the retune re-asserts + re-latches same tick
@@ -8679,8 +8962,21 @@ impl RadioLoop {
             // a rig that had not been transmitting when it was asked. See
             // `RadioLoop::operator_keyed`.
             let remote_want_radio;
-            let (want, dial, md, reprobe_req, force_retune, split_req, fm, cat_hold, section_cw) = {
+            let (
+                want,
+                dial,
+                mut md,
+                reprobe_req,
+                force_retune,
+                split_req,
+                fm,
+                cat_hold,
+                mut section_cw,
+            ) = {
                 let mut eng = engine_lock(engine);
+                if std::mem::take(&mut self.link_judgement_stale) {
+                    eng.forget_link_refusals();
+                }
                 remote_want_radio = eng.settings().active_radio;
                 // ⚠️ W0: the engine flipped `active_radio` after this tick's handoff read it, so
                 // this read belongs to a radio the handoff has not handed over (see
@@ -8776,6 +9072,10 @@ impl RadioLoop {
             self.cur_dial = dial;
             self.cur_md = md.clone();
             self.cur_section_cw = section_cw;
+            // The DATA-word judgement's held re-set and verdict, only outside the key guard (D2).
+            if can_retune && !link_down {
+                self.apply_owed_data_judgement(engine, rig, now);
+            }
             // Falling edge of Test CAT's port hold → rebuild the CAT channel we dropped,
             // through the rig_differs branch below (same teardown-then-reopen path).
             let resume_after_hold = !cat_hold && self.cat_hold_active;
@@ -8984,14 +9284,48 @@ impl RadioLoop {
                 let was_keyed = rig.keyed || self.flex_keyed() || self.tci_keyed();
                 // Unkey through the STILL-ALIVE old rig/daemon before tearing it
                 // down — flush, unkey, clear TX state, THEN drop the daemon.
+                // ⭐ THE LINK IS SILENT, AND NOTHING ELSE HAPPENED: the same radio, the same
+                // settings, nothing of ours keyed (`cat_rebuild_due`). The first such rebuild of an
+                // outage halts TX, as WSJT-X stops transmitting when rig control fails. The ones
+                // after it only try the port again, so transmit stays as the operator last set it.
+                // The CAT status says so when this did turn transmit off, in place of the dialog
+                // WSJT-X opens here. WSJT-X's automatic retry is one, not many; these are Nexus's own.
+                // They send the same key-up through the old link and the new one, and every
+                // transmit guard stays where it is.
+                let only_silence = suspect_rebuild
+                    && !daemon_died
+                    && !resume_after_hold
+                    && !want.rig_differs(&self.applied);
+                let retry_only = only_silence && self.cat_outage_halted;
                 if !asking_again {
-                    self.unkey_before_letting_go(
-                        engine,
-                        backend,
-                        rig,
-                        "rig_differs: transport changed → teardown+rebuild daemon (unkey first)",
-                        "CAT daemon rebuild",
-                    );
+                    if retry_only {
+                        tempo_core::applog::info(
+                            "tx",
+                            "CAT link still silent: trying the port again; transmit left as it is",
+                        );
+                        crate::civ::diag::note("suspect rebuild: same outage (unkey first)");
+                        let _ = rig.ptt(false);
+                    } else {
+                        let was_on = engine_lock(engine).tx_enabled();
+                        self.unkey_before_letting_go(
+                            engine,
+                            backend,
+                            rig,
+                            "rig_differs: transport changed → teardown+rebuild daemon (unkey first)",
+                            "CAT daemon rebuild",
+                        );
+                        self.cat_outage_halted = only_silence;
+                        let mut eng = engine_lock(engine);
+                        // Only what happened: a manual mode's halt re-arms, and transmit that was
+                        // already off was not turned off by this.
+                        let link_lost =
+                            only_silence || (daemon_died && !want.rig_differs(&self.applied));
+                        if link_lost && was_on && !eng.tx_enabled() {
+                            eng.say_tx_off_for_silent_cat();
+                        } else if want.rig_differs(&self.applied) {
+                            eng.clear_tx_off_for_silent_cat();
+                        }
+                    }
                     // …and let go of a Rig split held on it, through the still-alive old link.
                     let cluster_active = engine_lock(engine).cluster_split_active();
                     self.let_go_of_rig_split(rig, cluster_active);
@@ -9049,6 +9383,24 @@ impl RadioLoop {
                 engine_lock(engine).remote_close_radio();
                 self.remote_connection = None;
                 self.remote_radio_id = Some(remote_want_radio);
+                // A NEW CONNECTION IS JUDGED AFRESH: whatever the last link showed about the DATA
+                // word (`tempo_app::rig_modes`, `Self::judge_data_word`) is forgotten, so this one
+                // is sent the DATA word again and judged on its own answers. `md` was worked out
+                // at the top of the tick, before the forget, and the retune below commands it in
+                // this same tick, so it is asked again when the forget changed anything. Only
+                // WHICH word changes; nothing is sent sooner or later. Mode word and section are
+                // re-read together, from one lock.
+                {
+                    let mut eng = engine_lock(engine);
+                    if eng.forget_link_refusals() {
+                        md = eng.rig_mode_effective();
+                        section_cw =
+                            eng.settings().operating_mode == tempo_app::settings::OperatingMode::Cw;
+                        self.cur_md = md.clone();
+                        self.cur_section_cw = section_cw;
+                    }
+                }
+                self.forget_data_judgement();
                 let (new_rig, proc, probe) = reopen_rig(&open_want, allow_coexist);
                 let (ok, detail, refused) = (probe.ok, probe.detail, probe.refused);
                 let detail = if suspect_rebuild && !daemon_died && !linkless {
@@ -9129,7 +9481,12 @@ impl RadioLoop {
                 // would dress this one's cached VFO up as a reading.
                 self.vfo_read_native = None;
                 self.cat_dead_probes = 0;
-                self.cat_rebuild_at = now + CAT_REBUILD_BACKOFF_MS;
+                if !only_silence {
+                    self.cat_rebuild_backoff_ms = CAT_REBUILD_BACKOFF_MS;
+                }
+                self.cat_rebuild_at = now + self.cat_rebuild_backoff_ms;
+                self.cat_rebuild_backoff_ms =
+                    (self.cat_rebuild_backoff_ms * 2.0).min(CAT_REOPEN_MAX_MS);
                 self.cat_port_present = None;
                 // If THIS open failed too, the next try waits out the reopen backoff.
                 self.cat_reopen_at = now + self.cat_reopen_backoff_ms;
@@ -9200,6 +9557,11 @@ impl RadioLoop {
                 }
                 self.cat_ok = ok;
                 engine_lock(engine).answer_cat_reprobe(ok, detail, refused);
+            }
+            // A rebuild or a Test CAT whose own probe found the radio answering has set `cat_ok`
+            // directly, and the recovery paths in the poll below never run for a link already up.
+            if self.cat_ok == Some(true) {
+                self.end_cat_outage();
             }
             let mut audio_rebuilt = false;
             // A stream the OS KILLED can only re-enter the loop here. Nothing in `want` changed
@@ -10147,6 +10509,16 @@ impl RadioLoop {
                                         .filter(|base| rig.set_mode(base, -1).is_ok());
                                     if let Some(base) = fallback {
                                         self.last_mode = base.to_string();
+                                        // The link REFUSED the DATA word AND took its plain twin:
+                                        // from now on, on this connection, the twin is the word
+                                        // (`judge_data_word`). Only on that evidence (TX re-review
+                                        // F2): a link that answers every set with an error says
+                                        // nothing about the DATA word, and keeps today's word.
+                                        if saw_reject
+                                            && tempo_app::rig_modes::plain_twin(&md) == Some(base)
+                                        {
+                                            self.data_word_not_taken(engine, &md, "refused it");
+                                        }
                                     }
                                     retune_note = Some(mode_giveup_note(
                                         &md,
@@ -10943,6 +11315,9 @@ impl RadioLoop {
                             // One `m` read gives BOTH the mode (mirror) and the RX passband width.
                             let remote_mode = self.remote_read(engine);
                             let (m, pb) = rig.read_mode_passband();
+                            if !rig.keyed {
+                                self.judge_data_word(rig.mode_writes, now, m.as_deref());
+                            }
                             // THE NATIVE CI-V DAEMON'S WIDTH IS ITS OWN VERB (`1A 03`), never `m`'s
                             // passband: `m` answers 0 there on purpose, so a client's `M PKTUSB
                             // <width>` never starts rewriting the operator's DATA filter (see
@@ -20497,6 +20872,7 @@ mod tests {
     use super::*;
     use crate::backend::MockBackend;
     use crate::rig::ATU_START_TUNE;
+    use tempo_app::engine::{CAT_BACK_TX_OFF, CAT_SILENT_TX_OFF};
 
     /// THE WFD-RTTY-PUSHED-AS-FT8 BUG: the core records the actual on-air mode
     /// behind a "DIG" contact (`LoggedQso::submode` — ADIF and Cabrillo already
@@ -44434,19 +44810,95 @@ mod tests {
         run(&mut state, &mut rig, &mut backend, t);
 
         let pkt = count_from(&log, mark, "M PKTUSB");
-        // POSITIVE CONTROL: the tick must have tried the mode at all, or "not twice" is
-        // vacuous — a tick that commanded nothing would pass the real assertion below.
+        // POSITIVE CONTROL: the tick must have commanded the section's mode at all, or "never
+        // the refused word" is vacuous — a tick that commanded nothing would pass it.
         assert!(
-            pkt > 0,
+            count_from(&log, mark, "M ") > 0,
             "control: the band pick must command the section's mode: {:?}",
             log.lock().unwrap()[mark..].to_vec()
         );
+        // ⭐ ZERO, NOT ONE, since the link's refusal is remembered for the connection
+        // (`RadioLoop::judge_data_word`, `tempo_app::rig_modes`): the ladder's give-up made the
+        // plain sideband this link's word, so the band pick asks for USB and never again for the
+        // `PKTUSB` it refused. That is the invariant this test exists for, in its strongest form:
+        // no doomed re-ask on the band-cross tick at all.
         assert_eq!(
             pkt,
-            1,
-            "the band-cross re-assert must not re-ask for a mode this same tick already \
-             proved the rig refuses — one attempt per tick, not two: {:?}",
+            0,
+            "the band-cross re-assert must not re-ask for a mode this link already refused: {:?}",
             log.lock().unwrap()[mark..].to_vec()
+        );
+    }
+
+    /// The band-cross guard on a word the DATA-word judgement never touches (TX re-review F4). The
+    /// test above no longer reaches `reassert_mode_after_band_cross`'s `last_mode` guard, since the
+    /// link's refusal makes its word plain USB. CW reverse is never judged: a radio that refuses
+    /// `CWR` still gets exactly ONE attempt on the band-cross tick (the force retune's), never a
+    /// second from the band-stack re-assert reading back the `CW` the ladder fell back to.
+    #[test]
+    fn a_band_cross_never_re_asks_for_a_word_that_is_never_judged() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            let mut st = e.settings().clone();
+            st.cw_keyer = tempo_app::settings::CwKeyerBackend::Cat;
+            st.cw_reverse = true;
+            e.apply_settings(st);
+            e.set_operating_mode("cw", true);
+            e.set_frequency(14.030, "20m", "CW");
+        }
+        assert_eq!(
+            engine.lock().unwrap().rig_mode_effective(),
+            "CWR",
+            "premise"
+        );
+        let peer = crate::rig::remote_tests::retuning_peer(14_030_000, "CW", |line, _| {
+            line.starts_with("M CWR").then(|| "RPRT -1\n".to_string())
+        });
+        let mut rig = Rig::rigctld(&peer.address);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut t = 0.0;
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, backend: &mut MockBackend, t: f64| {
+            state
+                .step(
+                    &engine,
+                    backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        for _ in 0..(MODE_SET_MAX_TRIES + 8) {
+            run(&mut state, &mut rig, &mut backend, t);
+            t += 20.0;
+        }
+        assert_eq!(
+            state.mode_giveup.as_deref(),
+            Some("CWR"),
+            "precondition: the rig refused CWR and the ladder gave up"
+        );
+        let cwr = |from: usize| {
+            peer.lines.lock().unwrap()[from..]
+                .iter()
+                .filter(|l| l.starts_with("M CWR"))
+                .count()
+        };
+        let mark = peer.lines.lock().unwrap().len();
+        engine.lock().unwrap().pick_band("15m", None);
+        run(&mut state, &mut rig, &mut backend, t);
+        assert_eq!(
+            cwr(mark),
+            1,
+            "one attempt on the band-cross tick, not two: {:?}",
+            peer.lines.lock().unwrap()[mark..].to_vec()
         );
     }
 
@@ -46368,6 +46820,840 @@ mod tests {
         );
     }
 
+    /// One tick with the silence watch due, as three failed re-probes leave it: the breaker open,
+    /// the backoff over, and no re-probe of its own to confuse the count. The rebuilt link is as
+    /// mute as the last. Returns how many opens the tick made.
+    fn silent_link_tick(
+        engine: &Arc<Mutex<Engine>>,
+        state: &mut RadioLoop,
+        rig: &mut Rig,
+        backend: &mut MockBackend,
+        now: f64,
+    ) -> usize {
+        state.cat_ok = Some(false);
+        state.cat_retry_at = f64::MAX;
+        state.cat_dead_probes = CAT_DEAD_PROBES_BEFORE_REBUILD;
+        let mut opens = 0;
+        let mut reopen = |_t: &Transport, _c: bool| -> RigOpen {
+            opens += 1;
+            let alive = std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .unwrap();
+            (
+                Rig::with_control(Some("127.0.0.1:1".into()), PttMode::Cat),
+                Some(CatDaemon::Spawned(
+                    crate::rigctld_proc::RigctldProc::from_child_for_test(alive),
+                )),
+                CatProbe::status(Some(false), "still mute"),
+            )
+        };
+        state
+            .step(
+                engine,
+                backend,
+                rig,
+                &no_sinks(),
+                now,
+                &mut mock_reopen_audio(),
+                &mut reopen,
+                &mut StationSinks::new(),
+            )
+            .unwrap();
+        opens
+    }
+
+    /// A rigctld of ours, alive and answering its socket, in front of a radio that says nothing.
+    fn a_silent_link(engine: &Arc<Mutex<Engine>>) -> (RadioLoop, Rig) {
+        let mut state = loop_state_for(engine);
+        let alive = std::process::Command::new("sleep")
+            .arg("300")
+            .spawn()
+            .unwrap();
+        state.rigctld_proc = Some(CatDaemon::Spawned(
+            crate::rigctld_proc::RigctldProc::from_child_for_test(alive),
+        ));
+        (
+            state,
+            Rig::with_control(Some("127.0.0.1:1".into()), PttMode::Cat),
+        )
+    }
+
+    /// ⛔ THE SILENCE WATCH WAITS FOR AN OVER OF OURS. `operator_keyed` is what the RADIO reports,
+    /// and a tripped breaker stops reading it, so it was no guard against Nexus's own key: an
+    /// over on the air through the radio's VOX or a serial line, with CAT silent, had its audio
+    /// flushed and its deadline dropped by the rebuild. Each value is (opens, flushes, the over's
+    /// deadline) mid-over, then opens once the over has ended.
+    #[test]
+    fn a_silent_link_is_not_rebuilt_under_an_over_of_ours() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tx_enabled(true); // an over only runs with transmit on
+        let (mut state, mut rig) = a_silent_link(&engine);
+        let mut backend = MockBackend::new();
+        state.tx_until_ms = Some(5_000.0);
+        let opens = silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 1_000.0);
+        assert_eq!(
+            (opens, backend.flush_calls, state.tx_until_ms),
+            (0, 0, Some(5_000.0))
+        );
+        state.tx_until_ms = None;
+        assert_eq!(
+            silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 6_000.0),
+            1
+        );
+    }
+
+    /// …nor under a tune, a mic PTT or a CW word, which an over's deadline does not cover. The
+    /// watch's own answer, on each; the unkeyed control says it is due.
+    #[test]
+    fn the_silence_watch_waits_for_a_tune_a_mic_ptt_or_a_cw_word() {
+        let due = |set: fn(&mut RadioLoop)| {
+            let mut state = loop_state();
+            state.cat_ok = Some(false);
+            state.cat_dead_probes = CAT_DEAD_PROBES_BEFORE_REBUILD;
+            state.cat_rebuild_at = 0.0;
+            set(&mut state);
+            let mut no_port = Transport::from_cfg(&RadioConfig::default());
+            no_port.serial_port.clear();
+            state.cat_rebuild_due(&no_port, 1_000.0, true)
+        };
+        assert_eq!(
+            [
+                due(|_| {}),
+                due(|s| s.tuning_keyed = true),
+                due(|s| s.manual_ptt_applied = true),
+                due(|s| s.cw_keying_until = 2_000.0),
+            ],
+            [true, false, false, false]
+        );
+    }
+
+    /// ⭐ A SILENT LINK TURNS TRANSMIT OFF ONCE, NOT EVERY TIME THE PORT IS TRIED AGAIN. WSJT-X
+    /// stops transmitting when rig control fails (`MainWindow::handle_transceiver_failure` calls
+    /// `on_stopTxButton_clicked`) and then leaves the choice to the operator; the first rebuild
+    /// does the same. An operator who turns transmit back on, knowing the state of the link, keeps
+    /// it across the retries. Every retry still sends the key-up through the old link and through
+    /// the new one, on the wire as before. A link that answered and went silent again is a new
+    /// outage and stops transmit again. The value is transmit on after each rebuild.
+    #[test]
+    fn a_silent_link_turns_transmit_off_once_an_outage_and_every_retry_still_unkeys() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let (mut state, _) = a_silent_link(&engine);
+        let (addr, wire) = mock_pkt_rejecting_rigctld();
+        let mut rig = Rig::with_control(Some(addr.clone()), PttMode::Cat);
+        let mut backend = MockBackend::new();
+        let t_0s = || {
+            wire.lock()
+                .unwrap()
+                .iter()
+                .filter(|l| l.trim() == "T 0")
+                .count()
+        };
+        let mut rebuild = |state: &mut RadioLoop, rig: &mut Rig, at: f64| {
+            engine.lock().unwrap().set_tx_enabled(true);
+            state.cat_rebuild_at = 0.0;
+            let opens = silent_link_tick(&engine, state, rig, &mut backend, at);
+            assert_eq!(opens, 1);
+            engine.lock().unwrap().tx_enabled()
+        };
+        assert!(!rebuild(&mut state, &mut rig, 1_000.0), "the first: off");
+        let first = t_0s();
+        assert!(first > 0, "the key-up went out through the old link");
+        // The next retries go through a mock of their own, to count the key-up on each.
+        rig = Rig::with_control(Some(addr.clone()), PttMode::Cat);
+        assert!(rebuild(&mut state, &mut rig, 100_000.0), "a retry: left on");
+        assert!(t_0s() > first, "a retry still sends the key-up");
+        // The link answers, then goes silent again: a new outage.
+        a_rebuild_that_cures(
+            &engine,
+            &mut state,
+            &mut rig,
+            &mut MockBackend::new(),
+            150_000.0,
+        );
+        assert!(
+            !rebuild(&mut state, &mut rig, 200_000.0),
+            "a new outage: off"
+        );
+    }
+
+    /// A silence rebuild whose own probe finds the radio answering, the usual way one succeeds.
+    fn a_rebuild_that_cures(
+        engine: &Arc<Mutex<Engine>>,
+        state: &mut RadioLoop,
+        rig: &mut Rig,
+        backend: &mut MockBackend,
+        now: f64,
+    ) {
+        state.cat_ok = Some(false);
+        state.cat_retry_at = f64::MAX;
+        state.cat_dead_probes = CAT_DEAD_PROBES_BEFORE_REBUILD;
+        state.cat_rebuild_at = 0.0;
+        let mut cured = |_t: &Transport, _c: bool| -> RigOpen {
+            let alive = std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .unwrap();
+            (
+                Rig::with_control(Some("127.0.0.1:1".into()), PttMode::Cat),
+                Some(CatDaemon::Spawned(
+                    crate::rigctld_proc::RigctldProc::from_child_for_test(alive),
+                )),
+                CatProbe::status(Some(true), "answering"),
+            )
+        };
+        state
+            .step(
+                engine,
+                backend,
+                rig,
+                &no_sinks(),
+                now,
+                &mut mock_reopen_audio(),
+                &mut cured,
+                &mut StationSinks::new(),
+            )
+            .unwrap();
+        assert_eq!(state.cat_ok, Some(true), "premise: the rebuild cured it");
+    }
+
+    /// ⭐ A REBUILD THAT CURES THE LINK ENDS THE OUTAGE. Its probe sets `cat_ok` itself, and the
+    /// poll's recovery paths only run for a link that was down, so neither reset ran: transmit never
+    /// turned off for any later outage of the session. The cure can be on the first rebuild of an
+    /// outage or on a retry, and each is followed by a second outage that halts.
+    #[test]
+    fn a_rebuild_that_cures_the_link_ends_the_outage() {
+        for retries_first in [0, 3] {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            let (mut state, mut rig) = a_silent_link(&engine);
+            let mut backend = MockBackend::new();
+            let mut now = 1_000.0;
+            // Outage 1 halts.
+            engine.lock().unwrap().set_tx_enabled(true);
+            assert_eq!(
+                silent_link_tick(&engine, &mut state, &mut rig, &mut backend, now),
+                1
+            );
+            assert!(!engine.lock().unwrap().tx_enabled());
+            for _ in 0..retries_first {
+                now += 400_000.0;
+                state.cat_rebuild_at = 0.0;
+                silent_link_tick(&engine, &mut state, &mut rig, &mut backend, now);
+            }
+            now += 400_000.0;
+            a_rebuild_that_cures(&engine, &mut state, &mut rig, &mut backend, now);
+            assert_eq!(
+                (state.cat_outage_halted, state.cat_rebuild_backoff_ms),
+                (false, CAT_REBUILD_BACKOFF_MS)
+            );
+            // Outage 2, days of session later, halts again.
+            engine.lock().unwrap().set_tx_enabled(true);
+            now += 400_000.0;
+            state.cat_rebuild_at = 0.0;
+            assert_eq!(
+                silent_link_tick(&engine, &mut state, &mut rig, &mut backend, now),
+                1
+            );
+            assert!(
+                !engine.lock().unwrap().tx_enabled(),
+                "the second outage stopped transmit"
+            );
+        }
+    }
+
+    /// A rigctld whose radio can be silenced and brought back: every command answers `RPRT -5`
+    /// while `mute` holds.
+    fn switchable_mute_rigctld() -> (String, Arc<std::sync::atomic::AtomicBool>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let mute = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mute2 = Arc::clone(&mute);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mute3 = Arc::clone(&mute2);
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut line = String::new();
+                    loop {
+                        line.clear();
+                        match reader.read_line(&mut line) {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => {}
+                        }
+                        let l = line.trim();
+                        let reply = if mute3.load(std::sync::atomic::Ordering::SeqCst) {
+                            "RPRT -5\n"
+                        } else if l == "f" {
+                            "14074000\n"
+                        } else if l == "m" {
+                            "USB\n2400\n"
+                        } else {
+                            "RPRT 0\n"
+                        };
+                        if stream.write_all(reply.as_bytes()).is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+        (addr, mute)
+    }
+
+    /// ⭐ THREE OUTAGES, NOTHING FORCED, ON A REAL CAT TRANSPORT: the breaker trips on failed reads,
+    /// re-probes fail, the silence watch earns its rebuild, and `cure` is one of the three real ways
+    /// a link comes back. (On the default transport `reprobe` answers "VOX, no CAT" and a later
+    /// retune clears the state, which would say nothing about Test CAT.) Every outage's first
+    /// rebuild turns transmit off, says so, and a retry leaves transmit as the operator set it.
+    fn three_outages_ended_by(cure: &str) {
+        use std::sync::atomic::Ordering::SeqCst;
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut st = e.settings().clone();
+            st.rig_model = 1035;
+            st.ptt_method = "cat".to_string();
+            e.apply_settings(st);
+        }
+        let (addr, mute) = switchable_mute_rigctld();
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state_for(&engine);
+        let opens = std::cell::Cell::new(0usize);
+        let cure_on_open = std::cell::Cell::new(false);
+        let (addr2, mute2) = (addr.clone(), Arc::clone(&mute));
+        let mut rr = |_t: &Transport, _c: bool| -> RigOpen {
+            opens.set(opens.get() + 1);
+            if cure_on_open.get() {
+                mute2.store(false, SeqCst);
+            }
+            let up = !mute2.load(SeqCst);
+            let alive = std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .unwrap();
+            (
+                Rig::rigctld(&addr2),
+                Some(CatDaemon::Spawned(
+                    crate::rigctld_proc::RigctldProc::from_child_for_test(alive),
+                )),
+                CatProbe::status(Some(up), "probe"),
+            )
+        };
+        let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
+        let mut station = StationSinks::new();
+        let mut now = 1_000.0f64;
+        let mut tick = |state: &mut RadioLoop,
+                        rig: &mut Rig,
+                        backend: &mut MockBackend,
+                        rr: &mut dyn FnMut(&Transport, bool) -> RigOpen| {
+            now += 500.0;
+            state.last_rig_poll = now - RIG_POLL_MS - 1.0;
+            state
+                .step(
+                    &engine,
+                    backend,
+                    rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        for _ in 0..6 {
+            tick(&mut state, &mut rig, &mut backend, &mut rr);
+        }
+        assert_ne!(state.cat_ok, Some(false), "healthy at the start");
+
+        for outage in 1..=3 {
+            engine.lock().unwrap().set_tx_enabled(true);
+            mute.store(true, SeqCst);
+            let start = opens.get();
+            let mut n = 0;
+            while opens.get() == start && n < 4000 {
+                tick(&mut state, &mut rig, &mut backend, &mut rr);
+                n += 1;
+            }
+            assert_eq!(
+                opens.get(),
+                start + 1,
+                "outage {outage}: the rebuild fired after {n}"
+            );
+            assert!(
+                !engine.lock().unwrap().tx_enabled(),
+                "outage {outage}: its first rebuild turned transmit off"
+            );
+            assert!(state.cat_outage_halted);
+            let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+            assert!(said.ends_with(CAT_SILENT_TX_OFF), "outage {outage}: {said}");
+            // The operator re-arms, which ends the words; retries leave transmit as set.
+            engine.lock().unwrap().set_tx_enabled(true);
+            let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+            assert!(!said.contains(CAT_SILENT_TX_OFF), "outage {outage}: {said}");
+            let start = opens.get();
+            let mut n = 0;
+            while opens.get() < start + 2 && n < 4000 {
+                tick(&mut state, &mut rig, &mut backend, &mut rr);
+                n += 1;
+            }
+            assert_eq!(opens.get(), start + 2, "outage {outage}: retries fired");
+            assert!(
+                engine.lock().unwrap().tx_enabled(),
+                "outage {outage}: a retry left transmit as set"
+            );
+            // The cure.
+            match cure {
+                "rebuild" => {
+                    cure_on_open.set(true);
+                    let start = opens.get();
+                    let mut n = 0;
+                    while opens.get() == start && n < 4000 {
+                        tick(&mut state, &mut rig, &mut backend, &mut rr);
+                        n += 1;
+                    }
+                    assert_eq!(opens.get(), start + 1, "the curing rebuild fired");
+                    cure_on_open.set(false);
+                }
+                "reprobe" => {
+                    mute.store(false, SeqCst);
+                    let mut n = 0;
+                    while state.cat_ok != Some(true) && n < 4000 {
+                        tick(&mut state, &mut rig, &mut backend, &mut rr);
+                        n += 1;
+                    }
+                }
+                "testcat" => {
+                    mute.store(false, SeqCst);
+                    engine.lock().unwrap().request_cat_reprobe();
+                    tick(&mut state, &mut rig, &mut backend, &mut rr);
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(state.cat_ok, Some(true), "cured by {cure}");
+            assert!(!state.cat_outage_halted, "{cure} ended the outage");
+            assert_eq!(state.cat_rebuild_backoff_ms, CAT_REBUILD_BACKOFF_MS);
+            for _ in 0..4 {
+                tick(&mut state, &mut rig, &mut backend, &mut rr);
+            }
+        }
+    }
+    #[test]
+    fn a_rebuild_that_cures_ends_every_outage() {
+        three_outages_ended_by("rebuild");
+    }
+    #[test]
+    fn a_re_probe_that_finds_the_radio_ends_every_outage() {
+        three_outages_ended_by("reprobe");
+    }
+    #[test]
+    fn a_test_cat_that_finds_the_radio_ends_every_outage() {
+        three_outages_ended_by("testcat");
+    }
+
+    /// ⭐ WHAT THE OPERATOR READS when a silent link turns transmit off: the CAT status, word for
+    /// word, ending with what happened and how to transmit again, after anything that must lead it. It stays through every later CAT
+    /// message of the outage, as those replace the status, and goes when transmit is turned back
+    /// on. Then a retry, which leaves transmit on, says nothing of it.
+    #[test]
+    fn the_status_says_when_a_silent_link_turned_transmit_off_until_transmit_is_back_on() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tx_enabled(true);
+        let (mut state, mut rig) = a_silent_link(&engine);
+        let mut backend = MockBackend::new();
+        let reads = || engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+        silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 1_000.0);
+        assert_eq!(
+            reads(),
+            "14.0740 MHz CAT link unreachable (1/3) Transmit was turned off because CAT to the radio \
+             was lost. Check the radio and its CAT cable; Nexus keeps trying. Press TX On to transmit \
+             again."
+        );
+        engine
+            .lock()
+            .unwrap()
+            .set_cat_status(Some(false), "CAT link unreachable (2/3)".to_string());
+        assert_eq!(
+            reads(),
+            format!("CAT link unreachable (2/3) {CAT_SILENT_TX_OFF}")
+        );
+        state.cat_rebuild_at = 0.0;
+        silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 100_000.0);
+        assert!(reads().ends_with(CAT_SILENT_TX_OFF), "{}", reads());
+        engine.lock().unwrap().set_tx_enabled(true);
+        assert!(!reads().contains(CAT_SILENT_TX_OFF), "{}", reads());
+        state.cat_rebuild_at = 0.0;
+        silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 200_000.0);
+        assert!(!reads().contains(CAT_SILENT_TX_OFF), "{}", reads());
+    }
+
+    /// ⭐ TRANSMIT OFF IS NEVER LEFT UNEXPLAINED. The radio answering leaves transmit off, as only
+    /// the operator turns it back on, so the status keeps saying why, in words for a link that is
+    /// back, until they do. The review's scenario: the first rebuild itself finds the radio, as a
+    /// replugged USB cable does, in the same tick that turned transmit off. Then a re-probe cure on
+    /// the real path. Then a link that goes silent again says it is lost again.
+    #[test]
+    fn the_status_explains_transmit_off_after_the_link_returns_until_tx_is_back_on() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tx_enabled(true);
+        let (mut state, mut rig) = a_silent_link(&engine);
+        let mut backend = MockBackend::new();
+        a_rebuild_that_cures(&engine, &mut state, &mut rig, &mut backend, 1_000.0);
+        {
+            let e = engine.lock().unwrap();
+            assert!(
+                !e.tx_enabled(),
+                "premise: the first rebuild turned transmit off"
+            );
+            assert_eq!(state.cat_ok, Some(true), "premise: and found the radio");
+            let said = e.snapshot().radio.cat_detail;
+            assert!(said.ends_with(CAT_BACK_TX_OFF), "{said}");
+        }
+        engine.lock().unwrap().set_tx_enabled(true);
+        let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+        assert!(!said.contains(CAT_BACK_TX_OFF), "{said}");
+
+        // The re-probe, through the real path: failed reads, a rebuild, then the radio answers.
+        use std::sync::atomic::Ordering::SeqCst;
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut st = e.settings().clone();
+            st.rig_model = 1035;
+            st.ptt_method = "cat".to_string();
+            e.apply_settings(st);
+        }
+        let (addr, mute) = switchable_mute_rigctld();
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state_for(&engine);
+        let opens = std::cell::Cell::new(0usize);
+        let (addr2, mute2) = (addr.clone(), Arc::clone(&mute));
+        let mut rr = |_t: &Transport, _c: bool| -> RigOpen {
+            opens.set(opens.get() + 1);
+            let alive = std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .unwrap();
+            (
+                Rig::rigctld(&addr2),
+                Some(CatDaemon::Spawned(
+                    crate::rigctld_proc::RigctldProc::from_child_for_test(alive),
+                )),
+                CatProbe::status(Some(!mute2.load(SeqCst)), "probe"),
+            )
+        };
+        let mut now = 1_000.0f64;
+        let mut tick = |state: &mut RadioLoop,
+                        rig: &mut Rig,
+                        rr: &mut dyn FnMut(&Transport, bool) -> RigOpen| {
+            now += 500.0;
+            state.last_rig_poll = now - RIG_POLL_MS - 1.0;
+            state
+                .step(
+                    &engine,
+                    &mut MockBackend::new(),
+                    rig,
+                    &no_sinks(),
+                    now,
+                    &mut mock_reopen_audio(),
+                    rr,
+                    &mut StationSinks::new(),
+                )
+                .unwrap();
+        };
+        for _ in 0..6 {
+            tick(&mut state, &mut rig, &mut rr);
+        }
+        engine.lock().unwrap().set_tx_enabled(true);
+        mute.store(true, SeqCst);
+        let before = opens.get(); // the first tick opened the radio these settings name
+        for _ in 0..4000 {
+            if opens.get() > before {
+                break;
+            }
+            tick(&mut state, &mut rig, &mut rr);
+        }
+        assert_eq!(opens.get(), before + 1, "the silence earned its rebuild");
+        let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+        assert!(said.ends_with(CAT_SILENT_TX_OFF), "{said}");
+        mute.store(false, SeqCst);
+        for _ in 0..4000 {
+            if state.cat_ok == Some(true) {
+                break;
+            }
+            tick(&mut state, &mut rig, &mut rr);
+        }
+        assert_eq!(state.cat_ok, Some(true), "the re-probe found the radio");
+        tick(&mut state, &mut rig, &mut rr);
+        {
+            let e = engine.lock().unwrap();
+            assert!(!e.tx_enabled());
+            let said = e.snapshot().radio.cat_detail;
+            assert!(said.ends_with(CAT_BACK_TX_OFF), "{said}");
+            assert!(!said.contains(CAT_SILENT_TX_OFF), "{said}");
+        }
+        // Silent again, transmit never turned back on: it is lost again, and it says so.
+        mute.store(true, SeqCst);
+        for _ in 0..4000 {
+            if state.cat_ok == Some(false) {
+                break;
+            }
+            tick(&mut state, &mut rig, &mut rr);
+        }
+        {
+            let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+            assert!(said.ends_with(CAT_SILENT_TX_OFF), "{said}");
+        }
+        // A saved CAT change ends it: the words were about the link that is gone.
+        {
+            let mut e = engine.lock().unwrap();
+            let mut st = e.settings().clone();
+            st.rigctld_port += 7;
+            e.apply_settings(st);
+        }
+        tick(&mut state, &mut rig, &mut rr);
+        let e = engine.lock().unwrap();
+        let said = e.snapshot().radio.cat_detail;
+        assert!(
+            !said.contains(CAT_SILENT_TX_OFF) && !said.contains(CAT_BACK_TX_OFF),
+            "{said}"
+        );
+    }
+
+    /// A rigctld that died turns transmit off the same way, and says so the same way, after the
+    /// rebuild's own words.
+    #[test]
+    fn the_status_says_it_when_a_dead_daemon_turned_transmit_off() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tx_enabled(true);
+        let (mut state, mut rig) = a_silent_link(&engine);
+        let dead = std::process::Command::new("true").spawn().unwrap();
+        let mut dead =
+            CatDaemon::Spawned(crate::rigctld_proc::RigctldProc::from_child_for_test(dead));
+        let by = Instant::now() + Duration::from_secs(30);
+        while CatDaemon::is_alive(&mut dead) {
+            assert!(Instant::now() < by, "the stand-in daemon exited");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        state.rigctld_proc = Some(dead);
+        state.cat_rebuild_at = f64::MAX; // only the death can rebuild
+        assert_eq!(
+            silent_link_tick(
+                &engine,
+                &mut state,
+                &mut rig,
+                &mut MockBackend::new(),
+                1_000.0
+            ),
+            1
+        );
+        let e = engine.lock().unwrap();
+        assert!(!e.tx_enabled());
+        let said = e.snapshot().radio.cat_detail;
+        assert!(said.ends_with(CAT_SILENT_TX_OFF), "{said}");
+    }
+
+    /// A rigctld that dies and restarts cleanly: its rebuild turns transmit off and finds the radio
+    /// in the same tick, so the outage is over before any status was read. Transmit is off, so the
+    /// reason stays, after the rebuild's own words, until transmit is back on.
+    #[test]
+    fn a_daemon_that_dies_and_restarts_cleanly_still_explains_transmit_off() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tx_enabled(true);
+        let (mut state, mut rig) = a_silent_link(&engine);
+        let dead = std::process::Command::new("true").spawn().unwrap();
+        let mut dead =
+            CatDaemon::Spawned(crate::rigctld_proc::RigctldProc::from_child_for_test(dead));
+        let by = Instant::now() + Duration::from_secs(30);
+        while CatDaemon::is_alive(&mut dead) {
+            assert!(Instant::now() < by, "the stand-in daemon exited");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        state.rigctld_proc = Some(dead);
+        let mut clean = |_t: &Transport, _c: bool| -> RigOpen {
+            let alive = std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .unwrap();
+            (
+                Rig::with_control(Some("127.0.0.1:1".into()), PttMode::Cat),
+                Some(CatDaemon::Spawned(
+                    crate::rigctld_proc::RigctldProc::from_child_for_test(alive),
+                )),
+                CatProbe::status(Some(true), "answering"),
+            )
+        };
+        state.cat_retry_at = f64::MAX;
+        state
+            .step(
+                &engine,
+                &mut MockBackend::new(),
+                &mut rig,
+                &no_sinks(),
+                1_000.0,
+                &mut mock_reopen_audio(),
+                &mut clean,
+                &mut StationSinks::new(),
+            )
+            .unwrap();
+        assert_eq!(
+            state.cat_ok,
+            Some(true),
+            "premise: the restart found the radio"
+        );
+        let reads = || engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+        assert!(
+            !engine.lock().unwrap().tx_enabled(),
+            "premise: transmit went off"
+        );
+        assert!(reads().ends_with(CAT_BACK_TX_OFF), "{}", reads());
+        engine.lock().unwrap().set_tx_enabled(true);
+        assert!(!reads().contains(CAT_BACK_TX_OFF), "{}", reads());
+    }
+
+    /// TEST CAT'S OWN RESULT carries the sentence while it holds, as its result line replaces the
+    /// status on the screen, in the words for a link that is back when it found the radio.
+    #[test]
+    fn test_cat_says_it_too_for_the_state_it_found() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tx_enabled(true);
+        let (mut state, mut rig) = a_silent_link(&engine);
+        silent_link_tick(
+            &engine,
+            &mut state,
+            &mut rig,
+            &mut MockBackend::new(),
+            1_000.0,
+        );
+        let e = engine.lock().unwrap();
+        assert_eq!(
+            e.cat_detail_with_tx_off(Some(false), "no reply".to_string()),
+            format!("no reply {CAT_SILENT_TX_OFF}")
+        );
+        assert_eq!(
+            e.cat_detail_with_tx_off(Some(true), "14.074 MHz".to_string()),
+            format!("14.074 MHz {CAT_BACK_TX_OFF}")
+        );
+    }
+
+    /// It says only what happened. A manual mode's transmit is re-armed by the same halt, and
+    /// transmit that was already off was not turned off by this.
+    #[test]
+    fn the_status_says_nothing_when_transmit_was_not_turned_off_by_the_silence() {
+        let reads_after = |phone: bool, armed: bool| {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                if phone {
+                    e.set_operating_mode("phone", false);
+                }
+                e.set_tx_enabled(armed);
+            }
+            let (mut state, mut rig) = a_silent_link(&engine);
+            silent_link_tick(
+                &engine,
+                &mut state,
+                &mut rig,
+                &mut MockBackend::new(),
+                1_000.0,
+            );
+            let e = engine.lock().unwrap();
+            let on = e.tx_enabled();
+            (
+                on,
+                e.snapshot().radio.cat_detail.contains(CAT_SILENT_TX_OFF),
+            )
+        };
+        assert_eq!(reads_after(true, true), (true, false));
+        assert_eq!(reads_after(false, false), (false, false));
+        assert_eq!(reads_after(false, true), (false, true), "the control");
+    }
+
+    /// A link that stays silent is tried less and less often, up to every five minutes, because a
+    /// retry stops the whole radio loop for seconds while a daemon starts and is asked. The port
+    /// coming back still fires at once, and the re-probes keep listening every 30 s. A link that
+    /// answers starts the ladder over. The value is the gap, in seconds, before each rebuild.
+    #[test]
+    fn a_link_that_stays_silent_is_tried_less_often_and_answering_starts_over() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let (mut state, mut rig) = a_silent_link(&engine);
+        let mut backend = MockBackend::new();
+        let now = std::cell::Cell::new(1_000.0);
+        let mut gaps = |state: &mut RadioLoop, rig: &mut Rig, n: usize| {
+            let mut last = None;
+            let mut out = Vec::new();
+            while out.len() < n {
+                if silent_link_tick(&engine, state, rig, &mut backend, now.get()) == 1 {
+                    if let Some(l) = last {
+                        out.push(((now.get() - l) / 1000.0) as u32);
+                    }
+                    last = Some(now.get());
+                }
+                now.set(now.get() + 5_000.0);
+            }
+            out
+        };
+        assert_eq!(gaps(&mut state, &mut rig, 5), [60, 120, 240, 300, 300]);
+        a_rebuild_that_cures(
+            &engine,
+            &mut state,
+            &mut rig,
+            &mut MockBackend::new(),
+            now.get(),
+        );
+        state.cat_rebuild_at = 0.0;
+        assert_eq!(gaps(&mut state, &mut rig, 2), [60, 120]);
+    }
+
+    /// A retry that is not only a retry still stops transmit: a saved CAT change, or the daemon
+    /// dying, whatever an earlier rebuild of the same outage already did.
+    #[test]
+    fn a_saved_change_or_a_dead_daemon_during_an_outage_still_turns_transmit_off() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let (mut state, mut rig) = a_silent_link(&engine);
+        let mut backend = MockBackend::new();
+        assert_eq!(
+            silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 1_000.0),
+            1
+        );
+        // The save.
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.rigctld_port += 7;
+            e.apply_settings(s);
+            e.set_tx_enabled(true);
+        }
+        state.cat_rebuild_at = 0.0;
+        assert_eq!(
+            silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 100_000.0),
+            1
+        );
+        assert!(!engine.lock().unwrap().tx_enabled(), "the save: off");
+        // The daemon dies during the next silence, which has already been halted for once.
+        state.cat_rebuild_at = 0.0;
+        silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 200_000.0);
+        engine.lock().unwrap().set_tx_enabled(true);
+        let dead = std::process::Command::new("true").spawn().unwrap();
+        let mut dead =
+            CatDaemon::Spawned(crate::rigctld_proc::RigctldProc::from_child_for_test(dead));
+        let by = Instant::now() + Duration::from_secs(30);
+        while CatDaemon::is_alive(&mut dead) {
+            assert!(Instant::now() < by, "the stand-in daemon exited");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        state.rigctld_proc = Some(dead);
+        state.cat_rebuild_at = f64::MAX;
+        assert_eq!(
+            silent_link_tick(&engine, &mut state, &mut rig, &mut backend, 300_000.0),
+            1
+        );
+        assert!(!engine.lock().unwrap().tx_enabled(), "the death: off");
+    }
+
     /// Asking again waits for a tune carrier, and for the operator's mic PTT, as it does for an
     /// over: the radio's VOX fallback keys on those too. Each value is (opens while held, the
     /// loop keyed), then opens after the release.
@@ -46703,6 +47989,7 @@ mod tests {
         let rec = seen.clone();
         std::thread::spawn(move || {
             let mut cur = start;
+            let mut mode = String::from("USB");
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { return };
                 let mut out = match stream.try_clone() {
@@ -46725,8 +48012,14 @@ mod tests {
                     } else if line.trim() == "f" {
                         format!("{cur}\n")
                     } else if line.trim() == "m" {
-                        "USB\n2400\n".to_string()
+                        // The mode it was last set to, as a radio that takes every mode reads
+                        // back: a fixed `USB` after a `PKTUSB` it took is the signature of a
+                        // radio that does NOT take the DATA word (`judge_data_word`).
+                        format!("{mode}\n2400\n")
                     } else {
+                        if let Some(m) = line.strip_prefix("M ") {
+                            mode = m.split_whitespace().next().unwrap_or("USB").to_string();
+                        }
                         "RPRT 0\n".to_string()
                     };
                     if out.write_all(reply.as_bytes()).is_err() {

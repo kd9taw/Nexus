@@ -108,6 +108,9 @@ mod cw_unassisted_tests;
 /// A CW message the radio's own keyer would not take is refused whole, before anything keys.
 #[cfg(test)]
 mod cw_whole_message_tests;
+/// MSK144 judged where it transmits, and the US data limits held by mode.
+#[cfg(test)]
+mod data_mode_licence_tests;
 /// The receive decoders a screen started, stopped when the operator leaves for another section.
 pub mod decoder_screens;
 mod field_day_display;
@@ -1868,12 +1871,12 @@ pub fn engine_try_lock(m: &std::sync::Mutex<Engine>) -> std::sync::TryLockResult
 /// **It is the `MutexGuard` and nothing more.** The lock is taken by the same `Mutex::lock` /
 /// `try_lock` call as before, derefs to the [`Engine`], and is released when the guard drops —
 /// at the same point in the same scope a bare `MutexGuard` would be. What it adds is a
-/// zero-sized [`tempo_core::logbook::io_fence::EngineHeld`] riding beside the guard, which in a
-/// DEBUG build counts the Engine guards alive on this thread, so the logbook store's disk code
-/// can assert that none is ([`tempo_core::logbook::io_fence`]): the proof that the radio loop,
-/// which needs this lock every 20 ms, never waits on the disk. In a release build the count
-/// does not exist and there is nothing to drop; the size pin below holds the two types to one
-/// layout in every build.
+/// zero-sized [`tempo_core::logbook::io_fence::EngineHeld`] riding beside the guard, which
+/// counts the Engine guards alive on this thread, so the logbook store's disk code can assert
+/// in a DEBUG build that none is ([`tempo_core::logbook::io_fence`]): the proof that the radio
+/// loop, which needs this lock every 20 ms, never waits on the disk. The count is kept in a
+/// release build too, for the panic hook, which must not wait on the disk under this lock. The
+/// size pin below holds the two types to one layout in every build.
 ///
 /// A raw `Mutex::lock()` on the Engine is invisible to that count, so production code never
 /// takes one — `tests/engine_guard.rs` scans for it.
@@ -2176,6 +2179,16 @@ const APRS_RADIO_HAS_MIC: &str = "APRS can't send while the radio has the mic: w
 const SSTV_RADIO_HAS_MIC: &str = "SSTV can't send while the radio has the mic: with Flex native \
      DAX audio on, Phone at the shack uses the radio's own mic, so the picture would not go out. \
      Nothing was keyed.";
+
+/// Ends the CAT status while a lost link has turned transmit off
+/// ([`Engine::say_tx_off_for_silent_cat`]). ⚠️ The UI matches this exact sentence to show it in the
+/// operator's language (`ui/src/features/catDetail.ts`, whose test reads this constant) — change
+/// both together.
+pub const CAT_SILENT_TX_OFF: &str = "Transmit was turned off because CAT to the radio was lost. Check the radio and its CAT cable; Nexus keeps trying. Press TX On to transmit again.";
+
+/// [`CAT_SILENT_TX_OFF`] once the radio answers again, with transmit still off. The same UI match.
+pub const CAT_BACK_TX_OFF: &str =
+    "CAT to the radio was lost and transmit was turned off. CAT is back; press TX On to transmit.";
 
 /// What a refused start says while a clock repair holds transmit
 /// ([`Engine::hold_tx_for_clock_repair`]): the answer of every up-front TX gate, and of TX On on
@@ -4486,6 +4499,8 @@ pub struct Engine {
     /// closed HRD is DETECTABLE on localhost (ICMP unreachable → ConnectionRefused), sets
     /// [`Self::hrd_link_up`], and re-queues on failure (bounded) so nothing is lost.
     hrd_pending: std::collections::VecDeque<QsoRecord>,
+    /// A purge since HRD's drain last took its queue ([`Self::hrd_cancelled`]).
+    hrd_purged_since_take: bool,
     /// Last HRD datagram outcome: `Some(true)` delivered, `Some(false)` HRD not reachable
     /// (queued), `None` nothing sent yet. Drives the cockpit's HRD link indicator.
     hrd_link_up: Option<bool>,
@@ -5205,6 +5220,9 @@ pub struct Engine {
     /// `None` for VOX (no CAT), `Some(true/false)` for a CAT/serial rig. Written
     /// by the radio loop when it (re)opens or probes the rig.
     cat_status: (Option<bool>, String),
+    /// A silent CAT link turned transmit off and nothing has answered that yet
+    /// ([`Self::say_tx_off_for_silent_cat`]).
+    cat_silence_tx_off: bool,
     /// The transmitter alarms the operator has not dismissed, oldest first (`tx_alarms.rs`).
     tx_alarms: Vec<crate::dto::TxAlarm>,
     /// The last alarm id handed out. Never reused, so a dismissal names exactly one alarm.
@@ -7044,6 +7062,27 @@ struct MeasuredOver {
     last_unix: u64,
     /// Still keyed: no unkey has been seen since its first reading.
     open: bool,
+    /// Its readings were the amplifier's output ([`Engine::note_amp_output`]), not the radio's
+    /// forward power: fixed when measured, so a later Operate or Standby cannot rename it.
+    from_amp: bool,
+}
+
+/// The power a path prediction assumes ([`Engine::prediction_power`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PredictionPower {
+    pub watts: f64,
+    pub source: PredictionPowerSource,
+    /// An amplifier is set up on the active radio.
+    pub amplifier: bool,
+}
+
+/// Where a [`PredictionPower`] came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PredictionPowerSource {
+    Setting,
+    Rig,
+    Amplifier,
+    Default,
 }
 
 /// A forward-power reading this long after the last one belongs to a new over.
@@ -7326,9 +7365,37 @@ pub(crate) struct DataFrame {
     pub(crate) f0_hz: f64,
     /// Hz the frame occupies above its lowest tone; 0 judges the lowest tone alone.
     pub(crate) bw_hz: f64,
+    /// The mode the over keys, whose own rules the gate judges too ([`Self::keyed_signal`],
+    /// [`Engine::data_mode_allowed`]). `None` for a frame that is no mode's over: Nexus's tune
+    /// tone, or the passband a program outside Nexus could send.
+    pub(crate) mode: Option<modes::ModeKind>,
 }
 
+/// Hz either side of MSK144's centre its signal occupies: the -26 dB edge of its main lobe, the
+/// width 47 CFR 97.3(a)(8) measures (dial + 105 to dial + 2895 Hz on USB). The textbook MSK
+/// spectrum at 2000 Bd puts that point at ±1390 Hz; this repo's modulator measures inside it on
+/// the low side (about 205-225 Hz above the dial, where the audio folds at 0 Hz), so the figure
+/// is the conservative one. ⚠️ The first sidelobes (about -24.6 dB, out to about ±2050 Hz) are
+/// not counted, by decision (operator ruling, 2026-11-08: the main lobe).
+const MSK144_HALF_WIDTH_HZ: f64 = 1_395.0;
+
 impl DataFrame {
+    /// The audio the over actually keys when its mode does not key on the TX offset: MSK144's,
+    /// always centred on [`modes::MSK144_TX_CENTRE_HZ`], whatever the marker says
+    /// (`Msk144Mode::gen_wave` ignores `f0`, as WSJT-X's own MSK144 does), and
+    /// [`MSK144_HALF_WIDTH_HZ`] either side of it. `None` for every other mode, which keys where
+    /// the frame says.
+    pub(crate) fn keyed_signal(&self) -> Option<DataFrame> {
+        match self.mode {
+            Some(modes::ModeKind::Msk144 { .. }) => Some(DataFrame {
+                f0_hz: f64::from(modes::MSK144_TX_CENTRE_HZ) - MSK144_HALF_WIDTH_HZ,
+                bw_hz: 2.0 * MSK144_HALF_WIDTH_HZ,
+                mode: None,
+            }),
+            _ => None,
+        }
+    }
+
     /// The width a frame of `kind` occupies above its lowest tone: its tones times their spacing.
     /// That is the bandwidth WSJT-X's User Guide gives FT8 (8 × 6.25 = 50 Hz) and FT4 (4 × 12000 /
     /// 576 = 83.3 Hz), and the one JS8Call gives each JS8 speed (`JS8::Submode::bandwidth`, 8 × the
@@ -7657,6 +7724,7 @@ impl Engine {
             space_weather: None,
             tci_device: None,
             hrd_pending: std::collections::VecDeque::new(),
+            hrd_purged_since_take: false,
             hrd_link_up: None,
             cq_dir: None,
             last_wire_decodes: Vec::new(),
@@ -7841,6 +7909,7 @@ impl Engine {
             cw_stream: tempo_core::cw_decode::CwStreamDecoder::new(tempo_fast::SAMPLE_RATE, 600.0),
             qso_audio: Vec::new(),
             cat_status: (None, String::new()),
+            cat_silence_tx_off: false,
             tx_alarms: Vec::new(),
             tx_alarm_seq: 0,
             contest_entry: None,
@@ -8125,7 +8194,10 @@ impl Engine {
         let mut s = s;
         // ⛔ A bundle whose station profile id names no profile lands on one, with its call.
         s.repair_active_station_profile();
+        // A restore is not a form: a backup's own move is due its note.
+        let note_due = s.prop_engine_note_due;
         self.apply_settings_inner(s, false);
+        self.settings.prop_engine_note_due = note_due;
     }
 
     /// Drop the Cloudlog key waiting to move to the keychain, which every apply keeps
@@ -8284,6 +8356,11 @@ impl Engine {
         // The setup wizard's "seen" record (`mark_setup_wizard_seen`) only ever goes from not seen
         // to seen: no form, restore or reset brings the first-run wizard back to a station.
         let live_setup_wizard_seen = self.settings.setup_wizard_seen;
+        // The one-time engine move (`Settings::move_prop_engine_once`): no form resets its marker
+        // or brings back its note.
+        let live_prop_engine = self.settings.prop_engine.clone();
+        let live_prop_engine_moved = self.settings.prop_engine_moved;
+        let live_prop_engine_note_due = self.settings.prop_engine_note_due;
         // The station profiles and which one is on: ONE writer each, the profile verbs
         // (`engine/station_profiles.rs`). The form's own active id says which profile its flat
         // call, grid, state and power describe (`Settings::keep_station_form`).
@@ -8402,7 +8479,11 @@ impl Engine {
         // `RttyStream::key_cfg` carries the centre), and the privilege gate judges the new pair
         // (`rtty_tx_mark_hz`) on its next per-tick check.
         let rtty_home_moved = s.rtty_low_tone() != self.settings.rtty_low_tone();
+        // Runtime only: what the radio's link has shown about the DATA word is not a setting
+        // (`crate::rig_modes`), and a save must not make the link be judged again.
+        let link_refusals = std::mem::take(&mut self.settings.link_refusals);
         self.settings = s;
+        self.settings.link_refusals = link_refusals;
         if rtty_home_moved {
             self.rtty_center = None;
             self.request_rtty_afc_reset();
@@ -8445,6 +8526,12 @@ impl Engine {
         self.settings.operating_mode = live_op_mode;
         self.settings.keyboard_modem = live_keyboard_modem;
         self.settings.setup_wizard_seen |= live_setup_wizard_seen;
+        // An engine changed here is a choice, even if the launch's save of the move was refused.
+        self.settings.prop_engine_moved |=
+            live_prop_engine_moved || self.settings.prop_engine != live_prop_engine;
+        // The note says P.533 is in use, so going back to the heuristic also answers it.
+        self.settings.prop_engine_note_due =
+            live_prop_engine_note_due && self.settings.prop_engine == "p533";
         if keep_live_roster {
             self.settings.blocked_calls = live_blocked;
         }
@@ -9122,6 +9209,13 @@ impl Engine {
         &self.settings
     }
 
+    /// The one-time note about the engine move was dismissed. The ONE writer that clears
+    /// `Settings::prop_engine_note_due`.
+    pub fn dismiss_prop_engine_note(&mut self) -> &Settings {
+        self.settings.prop_engine_note_due = false;
+        &self.settings
+    }
+
     /// ⛔ **THE ONE WRITER of the RTTY cockpit's macro sets** — `macros.rttyProfiles` and
     /// `macros.activeRttyProfile`, from the dock's editor and its Everyday/Contest switch.
     ///
@@ -9726,7 +9820,9 @@ impl Engine {
         // Port collision repair can also change the active profile when editing another.
         self.remote_actuation.revoke();
         self.remote_readings.invalidate();
+        let link_refusals = std::mem::take(&mut self.settings.link_refusals);
         self.settings = edited;
+        self.settings.link_refusals = link_refusals;
         // Mirror the ACTIVE profile back into the flat fields — a no-op for the flat mirror when
         // id != active.
         self.settings.sync_flat_from_active();
@@ -10777,27 +10873,38 @@ impl Engine {
             // every picker in the app — this one, `band_pick_default`, and the licensed-band
             // command — because two of the three used to recompute it from the bare edge.
             OperatingMode::Phone => {
-                crate::privileges::phone_home(class, &band).map(|(dial, sb)| (dial, sb.to_string()))
+                let home = |rig| crate::privileges::phone_home_for(class, &band, rig);
+                // The radio this entry's QSY lands on (`routed_rig_model`), judged at the active
+                // radio's home: both 3 cm homes are SSB, so they route alike.
+                home(self.settings.rig_model)
+                    .and_then(|(dial, _)| home(self.routed_rig_model(&band, dial, om)))
+                    .map(|(dial, sb)| (dial, sb.to_string()))
             }
-            OperatingMode::Cw => crate::privileges::segment_start(class, &band, om)
-                // Park on the CW ACTIVITY frequency (20 m → 14.030), NOT the dead band edge
-                // (14.000, where nobody works and your signal would fall out of band),
-                // clamped to the licensed CW-segment start so it never drops below privileges.
-                // This mirrors the band-dropdown path (getLicensedBandPlan) so switching TO CW
-                // mode and picking a band from the dropdown both land in the same place.
-                .map(|lo| {
-                    let dial = crate::bandplan::cw_activity_mhz(&band).map_or(lo, |a| a.max(lo));
-                    // Sideband is inert for CW (the rig-mode policy commands CW or a band-aware
-                    // tone), but keep it self-consistent with the band's convention.
-                    (
-                        dial,
-                        if dial < 10.0 {
-                            "LSB".to_string()
-                        } else {
-                            "USB".to_string()
-                        },
-                    )
-                }),
+            OperatingMode::Cw => {
+                crate::privileges::cw_home_for(class, &band, self.settings.rig_model)
+                    // The radio this entry's QSY lands on (`routed_rig_model`), as in Phone.
+                    .and_then(|dial| {
+                        let rig = self.routed_rig_model(&band, dial, om);
+                        crate::privileges::cw_home_for(class, &band, rig)
+                    })
+                    // Park on the CW ACTIVITY frequency (20 m → 14.030), NOT the dead band edge
+                    // (14.000, where nobody works and your signal would fall out of band),
+                    // clamped to the licensed CW-segment start so it never drops below privileges.
+                    // THE CW home, which the band-dropdown path (getLicensedBandPlan) reads too, so
+                    // switching TO CW mode and picking a band from the dropdown land in one place.
+                    .map(|dial| {
+                        // Sideband is inert for CW (the rig-mode policy commands CW or a band-aware
+                        // tone), but keep it self-consistent with the band's convention.
+                        (
+                            dial,
+                            if dial < 10.0 {
+                                "LSB".to_string()
+                            } else {
+                                "USB".to_string()
+                            },
+                        )
+                    })
+            }
             // RTTY: park on the band's RTTY watering hole (the built-in plan the cockpit's
             // band selector serves) — only if the operator may key the RTTY emission there.
             OperatingMode::Rtty => self
@@ -10998,7 +11105,7 @@ impl Engine {
             Some(sb) => sb,
             None => self.band_pick_default(band, om).map(|(_, sb)| sb)?,
         };
-        self.emission_allowed(om, dial, &sideband)
+        (self.emission_allowed(om, dial, &sideband) && self.recall_fits_the_radio(band, om, dial))
             .then_some((dial, sideband))
     }
 
@@ -11031,17 +11138,17 @@ impl Engine {
         om: crate::settings::OperatingMode,
     ) -> Option<(f64, String)> {
         use crate::settings::OperatingMode;
-        let class = self.settings.license_class;
         match om {
             // THE ROW THE PHONE/CW PICKER LISTED, read from the same function that lists it
-            // (`bandplan::licensed_bands`), so a listed band always tunes. These arms used to
+            // (`Engine::licensed_band_plan`), so a listed band always tunes. These arms used to
             // recompute a segment start of their own and returned `None` where the class had
             // none, which made a pick of a listed receive-only band (a General's 4 m, `Open`'s
             // 30 m phone) do nothing at all. The row carries THE phone home (an LSB home lifted
             // clear of the segment edge — the unkeyable 7.1250 an Extra once landed on) and the
             // CW activity dial; a receive-only row carries the listening dial, where the
             // transmit gate, which this does not consult, refuses the over as the row's lock says.
-            OperatingMode::Phone | OperatingMode::Cw => crate::bandplan::licensed_bands(class, om)
+            OperatingMode::Phone | OperatingMode::Cw => self
+                .licensed_band_plan(om)
                 .into_iter()
                 .find(|c| c.band == band)
                 .map(|c| (c.dial_mhz, c.mode)),
@@ -11062,6 +11169,80 @@ impl Engine {
                 .filter(|c| self.psk_emission_ok(c.dial_mhz))
                 .map(|c| (c.dial_mhz, c.mode)),
         }
+    }
+
+    /// The Phone/CW band menu's rows for this station: what the menu lists and a band pick lands
+    /// on (`get_licensed_band_plan`, [`Self::band_pick_default`]).
+    ///
+    /// Each band's row is the one for the radio a pick of it will LAND on ([`Self::routed_rig_model`]),
+    /// because the 3 cm home follows the radio: an IC-905 active beside SDR Console listing 3 cm
+    /// must not hand SDR Console the IC-905's 10368.100.
+    pub fn licensed_band_plan(
+        &self,
+        om: crate::settings::OperatingMode,
+    ) -> Vec<crate::bandplan::BandChannel> {
+        let class = self.settings.license_class;
+        let active = self.settings.rig_model;
+        crate::bandplan::licensed_bands_for(class, om, active)
+            .into_iter()
+            .map(|row| {
+                let rig = self.routed_rig_model(&row.band, row.dial_mhz, om);
+                if rig == active {
+                    return row;
+                }
+                crate::bandplan::licensed_bands_for(class, om, rig)
+                    .into_iter()
+                    .find(|r| r.band == row.band)
+                    .unwrap_or(row)
+            })
+            .collect()
+    }
+
+    /// The Hamlib model of the radio a QSY to `dial_mhz` on `band` in section `om` will land on:
+    /// the radio the routing hands the band to (`Settings::route_radio`, the decision
+    /// `set_frequency` applies), or the active radio when it is peg-locked, nothing routes, or
+    /// the routed radio is disabled or another Nexus window's (`set_frequency` stays put then).
+    fn routed_rig_model(
+        &self,
+        band: &str,
+        dial_mhz: f64,
+        om: crate::settings::OperatingMode,
+    ) -> u32 {
+        if self.settings.radio_pegged || band.is_empty() {
+            return self.settings.rig_model;
+        }
+        self.settings
+            .route_radio(band, self.route_mode_for(band, dial_mhz, om))
+            .and_then(|id| self.settings.radios.iter().find(|p| p.id == id))
+            .filter(|p| p.enabled && !crate::radio_claim::profile_held_elsewhere(p))
+            .map_or(self.settings.rig_model, |p| p.rig_model)
+    }
+
+    /// May a remembered 3 cm Phone/CW dial be recalled for the radio the QSY lands on? Only on the
+    /// side of QO-100's narrowband downlink (10489.500-10490.000) that radio's own home sits on for
+    /// this licence class ([`crate::bandplan::activity_home_mhz`]): the dial memory is station-wide per band and
+    /// mode, so without this an IC-905's 10368.100 came back on SDR Console, and SDR Console's
+    /// transponder dial on the IC-905, each the other kind's home. A cell on the wrong side falls
+    /// to the radio's own home. Every other band and section recalls as before.
+    fn recall_fits_the_radio(
+        &self,
+        band: &str,
+        om: crate::settings::OperatingMode,
+        dial: f64,
+    ) -> bool {
+        use crate::settings::OperatingMode;
+        if band != "3cm" || !matches!(om, OperatingMode::Phone | OperatingMode::Cw) {
+            return true;
+        }
+        // The side the routed radio's OWN home sits on, for this licence class: `Open` homes on
+        // the transponder unless the radio transmits on 3 cm itself; a US class homes on
+        // 10368.100 on every radio, so its terrestrial cells always come back.
+        let transponder = 10_489.5..=10_490.0;
+        let rig = self.routed_rig_model(band, dial, om);
+        let home_on_transponder =
+            crate::bandplan::activity_home_mhz(self.settings.license_class, band, om, rig)
+                .is_some_and(|h| transponder.contains(&h));
+        transponder.contains(&dial) == home_on_transponder
     }
 
     /// The operator is in the PSK section: the Keyboard section with PSK as its modem
@@ -12291,6 +12472,19 @@ impl Engine {
         override_fm || policy_fm
     }
 
+    /// The radio loop's judgement that this radio's CAT link does not take the SSB DATA word
+    /// `mode` (`crate::rig_modes`, `RadioLoop::judge_data_word` in tempo-audio): from now on, on
+    /// this connection, its plain sideband is commanded instead. `true` when that is news.
+    pub fn refuse_link_data_word(&mut self, model: u32, mode: &str) -> bool {
+        self.settings.link_refusals.refuse(model, mode)
+    }
+
+    /// A new CAT connection: whatever the last one showed about the DATA word is forgotten, so this
+    /// one is judged afresh. `true` when anything was forgotten.
+    pub fn forget_link_refusals(&mut self) -> bool {
+        self.settings.link_refusals.forget()
+    }
+
     /// The mode the radio loop should COMMAND: the operator's transient Phone override when set,
     /// else the band-derived policy (`settings.rig_mode`). Write-side canon for the rig `M` verb.
     pub fn rig_mode_effective(&self) -> String {
@@ -13010,6 +13204,7 @@ impl Engine {
             // never re-arms behind a stop; this does.
             tempo_core::applog::info("tx", &format!("CW over queued: {expanded:?}"));
             self.tx_enabled = true;
+            self.cat_silence_tx_off = false;
             self.tx_stop_hold = false;
             self.tx_watchdog = false;
             // A fresh send supersedes BOTH pending one-shot aborts: the CW abort, and the
@@ -14340,7 +14535,7 @@ impl Engine {
         {
             return;
         }
-        self.fold_over_power(w);
+        self.fold_over_power(w, false);
     }
 
     /// Fold one amplifier output reading (watts) into the over it was measured on, for the log:
@@ -14373,7 +14568,49 @@ impl Engine {
             .measured_over
             .is_some_and(|o| o.open && now.saturating_sub(o.last_unix) <= MEASURED_OVER_GAP_SECS);
         if keyed || extends_open_over {
-            self.fold_over_power(f32::from(w));
+            self.fold_over_power(f32::from(w), true);
+        }
+    }
+
+    /// The transmit power a path prediction assumes, and where it came from: Settings ▸ Station
+    /// power when set; else the last over Nexus measured, the figure the log would write
+    /// ([`Self::note_measured_power`], [`Self::note_amp_output`]: the radio's own scale, the
+    /// amplifier's output while one is set up and operating, never a tune carrier); else 100 W.
+    ///
+    /// Read-only: it reads what the radio loop's existing meter poll already left here and asks
+    /// the radio nothing, and nothing on the transmit path reads it. Never the rig's power slider,
+    /// for the reason [`Self::log_power_now`] gives. A measured figure is rounded to the nearest
+    /// whole decibel, so the next over's slightly different peak does not start the P.533 caches
+    /// again; the caches key on it.
+    pub fn prediction_power(&self) -> PredictionPower {
+        let amplifier = self.settings.amp_configured();
+        if let Some(w) = self
+            .settings
+            .station_power_w
+            .filter(|w| w.is_finite() && *w > 0.0)
+        {
+            return PredictionPower {
+                watts: w,
+                source: PredictionPowerSource::Setting,
+                amplifier,
+            };
+        }
+        if let Some(over) = self.measured_over.as_ref().filter(|o| o.peak_w > 0.0) {
+            let db = (10.0 * f64::from(over.peak_w).log10()).round();
+            return PredictionPower {
+                watts: 10f64.powf(db / 10.0),
+                source: if over.from_amp {
+                    PredictionPowerSource::Amplifier
+                } else {
+                    PredictionPowerSource::Rig
+                },
+                amplifier,
+            };
+        }
+        PredictionPower {
+            watts: 100.0,
+            source: PredictionPowerSource::Default,
+            amplifier,
         }
     }
 
@@ -14386,13 +14623,14 @@ impl Engine {
 
     /// Fold one forward-power reading (watts) into the current over's peak, or start a new over:
     /// see [`Self::note_measured_power`].
-    fn fold_over_power(&mut self, w: f32) {
+    fn fold_over_power(&mut self, w: f32, from_amp: bool) {
         let now = now_unix_secs();
         match &mut self.measured_over {
             Some(over)
                 if over.open && now.saturating_sub(over.last_unix) <= MEASURED_OVER_GAP_SECS =>
             {
                 over.peak_w = over.peak_w.max(w);
+                over.from_amp |= from_amp;
                 over.last_unix = now;
             }
             _ => {
@@ -14400,6 +14638,7 @@ impl Engine {
                     peak_w: w,
                     last_unix: now,
                     open: true,
+                    from_amp,
                 })
             }
         }
@@ -19207,6 +19446,7 @@ impl Engine {
     /// leaves.
     pub fn settle_gone_rows(&mut self) {
         let (ids, all) = self.station.take_rows_gone();
+        self.hrd_purged_since_take |= all;
         if !all && ids.is_empty() {
             return;
         }
@@ -19222,6 +19462,13 @@ impl Engine {
     /// A corrected copy keeps its id, and is not refused: only a contact that left is.
     pub fn upload_cancelled(&self, rec: &QsoRecord) -> bool {
         self.station.upload_cancelled(rec)
+    }
+
+    /// [`Self::upload_cancelled`] for what HRD Logbook's drain holds ([`Self::take_hrd_pending`]),
+    /// which is taken later in the worker's trip than the upload queue. A purge counts from its own
+    /// take: a contact logged after the purge, before HRD's drain, is not cancelled by it.
+    pub fn hrd_cancelled(&self, rec: &QsoRecord) -> bool {
+        self.hrd_purged_since_take || self.station.deleted(rec)
     }
 
     /// The contacts that were waiting for DXKeeper when contest mode's list put them out at its
@@ -19431,6 +19678,7 @@ impl Engine {
     /// Take the queued HRD records for the shell to send (drains the queue). The shell
     /// connects+sends each off the engine lock, then reports back via [`Self::note_hrd_result`].
     pub fn take_hrd_pending(&mut self) -> Vec<QsoRecord> {
+        self.hrd_purged_since_take = false;
         self.hrd_pending.drain(..).collect()
     }
 
@@ -19439,15 +19687,35 @@ impl Engine {
         self.settings.hrd_udp_addr.trim().to_string()
     }
 
-    /// Report an HRD send outcome from the shell worker. On failure the record is re-queued
-    /// (bounded) so a closed HRD never loses the contact; `hrd_link_up` drives the indicator.
+    /// Report an HRD send outcome from the shell worker. On failure the record is re-queued at the
+    /// front (bounded, [`Self::hrd_put_back`]) so a closed HRD never loses the contact; `hrd_link_up`
+    /// drives the indicator.
     pub fn note_hrd_result(&mut self, rec: QsoRecord, delivered: bool) {
         self.hrd_link_up = Some(delivered);
-        if !delivered && !self.upload_cancelled(&rec) {
-            if self.hrd_pending.len() >= 256 {
-                self.hrd_pending.pop_front();
+        if !delivered {
+            self.hrd_put_back(vec![rec]);
+        }
+    }
+
+    /// HRD Logbook refused a send and the drain stopped there: `unsent` is the record that failed and
+    /// every one after it that the drain took, in the order they were logged. The link is down, and
+    /// they all go back ([`Self::hrd_put_back`]).
+    pub fn hrd_unreachable(&mut self, unsent: Vec<QsoRecord>) {
+        self.hrd_link_up = Some(false);
+        self.hrd_put_back(unsent);
+    }
+
+    /// What HRD's drain took and did not send (`recs`, in the order it was logged) goes back ahead of
+    /// anything logged since, for the next tick. A contact deleted meanwhile is left out. Bounded as
+    /// the queue always is: past 256 the oldest goes.
+    pub fn hrd_put_back(&mut self, recs: Vec<QsoRecord>) {
+        for rec in recs.into_iter().rev() {
+            if !self.hrd_cancelled(&rec) {
+                self.hrd_pending.push_front(rec);
             }
-            self.hrd_pending.push_back(rec);
+        }
+        while self.hrd_pending.len() > 256 {
+            self.hrd_pending.pop_front();
         }
     }
 
@@ -23170,6 +23438,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
         self.tx_enabled = on;
         if on {
+            self.cat_silence_tx_off = false;
             // The operator's arm ends Clear DX's hold on the callers it dropped.
             self.cleared_dx_calls.clear();
             // Re-enabling is an operator action: clear a tripped watchdog and
@@ -25366,6 +25635,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return self.tx_allowed_for(DataFrame {
                 f0_hz: f64::from(TUNE_TONE_HZ),
                 bw_hz: 0.0,
+                mode: None,
             });
         }
         let tone = f64::from(TUNE_TONE_HZ) / 1_000_000.0;
@@ -29216,6 +29486,39 @@ contact yourself."
 
     /// Set the rig/CAT connection status the UI renders (and the Test-CAT result
     /// reads). `ok`: `None` = VOX/no CAT, `Some(true/false)` = CAT up/down.
+    /// A lost CAT link (silent, or its daemon dead) has just turned transmit off. The CAT status
+    /// says why until transmit is back on or the CAT settings change
+    /// ([`Self::clear_tx_off_for_silent_cat`]). The link answering does not end it: transmit is still
+    /// off, and only the words change ([`Self::cat_detail_with_tx_off`]). Kept apart from the status
+    /// because the status is latest-wins and the next failed read replaces it a tick later. It says
+    /// something and changes nothing: it keys nothing and arms nothing.
+    pub fn say_tx_off_for_silent_cat(&mut self) {
+        self.cat_silence_tx_off = true;
+    }
+
+    /// The CAT settings changed: the sentence was about a link that is gone. Transmit stays as it is.
+    pub fn clear_tx_off_for_silent_cat(&mut self) {
+        self.cat_silence_tx_off = false;
+    }
+
+    /// `detail`, followed by why transmit is off while that holds: [`CAT_SILENT_TX_OFF`], or
+    /// [`CAT_BACK_TX_OFF`] when this verdict (`ok`) is that the radio answers. ⛔ AFTER, NEVER BEFORE:
+    /// a client's alarm leads the status, as "it may still be transmitting" is what the operator must
+    /// read first (the rebuild's own rule, in `RadioLoop::step`). Test CAT's result reads through this
+    /// as the status does, since its result line replaces the status on screen.
+    pub fn cat_detail_with_tx_off(&self, ok: Option<bool>, detail: String) -> String {
+        if self.cat_silence_tx_off && !self.tx_enabled {
+            let lead = if ok == Some(true) {
+                CAT_BACK_TX_OFF
+            } else {
+                CAT_SILENT_TX_OFF
+            };
+            format!("{detail} {lead}").trim_start().to_string()
+        } else {
+            detail
+        }
+    }
+
     pub fn set_cat_status(&mut self, ok: Option<bool>, detail: String) {
         self.cat_status = (ok, detail);
         self.cat_probe_gen = self.cat_probe_gen.wrapping_add(1);
@@ -29568,9 +29871,11 @@ contact yourself."
     /// The data frame the operator's next over keys: its lowest tone on the TX offset, as wide as
     /// the active tier's mode occupies ([`DataFrame::width_hz`]).
     pub(crate) fn tx_data_frame(&self) -> DataFrame {
+        let mode = self.tier_mode_kind(self.app.tier());
         DataFrame {
             f0_hz: f64::from(self.tx_offset_hz),
-            bw_hz: DataFrame::width_hz(self.tier_mode_kind(self.app.tier())),
+            bw_hz: DataFrame::width_hz(mode),
+            mode,
         }
     }
 
@@ -29697,6 +30002,64 @@ contact yourself."
             && self.every_tx_frequency(OperatingMode::Phone, |mhz| {
                 self.phone_emission_allowed(mhz, "USB")
             })
+    }
+
+    /// Is the licence lock the data MODE alone, and by which of its rules? The Digital section is
+    /// refused, and the same over judged with no rule of its mode's would key (a frame of no mode,
+    /// [`Self::data_frame_allowed`]): then the mode is all that stands in the way, and the lock
+    /// names it ([`crate::dto::DataModeRule`]). MSK144 is named for its symbol rate where its signal
+    /// keys, or the dial is on 2200 m or 630 m, which no dial there cures; elsewhere for its fixed
+    /// 1500 Hz centre. Where the frame of
+    /// no mode is refused too, the frequency is a reason and the lock keeps its frequency sentence.
+    ///
+    /// DISPLAY ONLY, as [`Self::phone_mode_refused`] is: it picks the words for a refusal
+    /// [`Self::tx_allowed`] has already made.
+    pub fn data_mode_refusal(&self) -> Option<crate::dto::DataModeRefusal> {
+        use crate::dto::DataModeRule;
+        if self.settings.operating_mode != crate::settings::OperatingMode::Digital
+            || self.tx_allowed()
+        {
+            return None;
+        }
+        let frame = self.tx_data_frame();
+        let mode = frame.mode?;
+        if !self.tx_allowed_for(DataFrame {
+            mode: None,
+            ..frame
+        }) {
+            return None;
+        }
+        let rule = match mode {
+            modes::ModeKind::Q65 { .. } => DataModeRule::TooWide,
+            // Named from the term that refuses, judged where the signal is. Its marker keys (above),
+            // so if its signal keys too, through every term of the gate, the 300-baud cap is all
+            // that is left: on 630 m an LSB dial at the band top puts the whole signal inside the
+            // band, and "its signal there is outside your license privileges" would be false.
+            // Where the signal is refused too, both can be true; on 2200 m and 630 m the cap is
+            // named, which no dial there cures, and elsewhere the fixed centre.
+            modes::ModeKind::Msk144 { .. } => {
+                let signal_keys = frame.keyed_signal().is_some_and(|f| self.tx_allowed_for(f));
+                let at = self.tx_source_verdict().emission_mhz;
+                let baud = f64::from(modes::MSK144_BAUD);
+                if signal_keys
+                    || !crate::privileges::data_symbol_rate_allowed(
+                        self.settings.license_class,
+                        at,
+                        at,
+                        baud,
+                    )
+                {
+                    DataModeRule::TooFast
+                } else {
+                    DataModeRule::FixedCentre
+                }
+            }
+            _ => return None,
+        };
+        Some(crate::dto::DataModeRefusal {
+            rule,
+            mode: mode.as_str().to_string(),
+        })
     }
 
     /// Is the licence lock the phone MODE alone from 28.3 to 28.5 MHz? The Phone section is
@@ -30477,20 +30840,67 @@ contact yourself."
     /// ⚠️ IT CAN ONLY EVER REFUSE MORE than judging the lowest tone did: a frame is allowed only
     /// where its lowest tone is, and a frame of no width is judged exactly as that tone was, so a
     /// mode [`DataFrame::width_hz`] gives no width is judged as before.
+    ///
+    /// ⭐ AND WHERE ITS MODE TRANSMITS, AND BY ITS MODE'S OWN LIMITS (operator ruling, 2026-11-08),
+    /// both ANDed on, so a frame of no mode is judged exactly as before and every other frame can
+    /// only be refused more. MSK144 keys at 1500 Hz whatever the marker says
+    /// ([`DataFrame::keyed_signal`]): with the marker dragged to 4000 Hz on 50.0965 MHz the marker
+    /// was judged at 50.1005 while the whole signal went out under 50.1, in the CW-only segment.
+    /// Both are judged now, the marker and the signal. The mode's limits are
+    /// [`Self::data_mode_allowed`]'s.
     fn data_frame_allowed(&self, dial: f64, frame: DataFrame, lsb: bool) -> bool {
-        let near = frame.f0_hz / 1_000_000.0;
-        let far = (frame.f0_hz + frame.bw_hz) / 1_000_000.0;
-        let (lo, hi) = if lsb {
-            (dial - far, dial - near)
-        } else {
-            (dial + near, dial + far)
+        let class = self.settings.license_class;
+        let span = |f: DataFrame| {
+            let near = f.f0_hz / 1_000_000.0;
+            let far = (f.f0_hz + f.bw_hz) / 1_000_000.0;
+            if lsb {
+                (dial - far, dial - near)
+            } else {
+                (dial + near, dial + far)
+            }
         };
-        crate::privileges::tx_span_allowed(
-            self.settings.license_class,
-            lo,
-            hi,
-            crate::settings::OperatingMode::Digital,
-        )
+        let allowed = |(lo, hi): (f64, f64)| {
+            crate::privileges::tx_span_allowed(
+                class,
+                lo,
+                hi,
+                crate::settings::OperatingMode::Digital,
+            )
+        };
+        let signal = span(frame.keyed_signal().unwrap_or(frame));
+        allowed(span(frame))
+            && allowed(signal)
+            && Self::data_mode_allowed(class, frame.mode, signal)
+    }
+
+    /// May `class` send `mode` across `lo`..`hi` MHz by the limits US data is held to whatever
+    /// the frequency (`privileges::data_width_allowed`, `privileges::data_symbol_rate_allowed`)?
+    /// Two modes reach them, and only those two are judged (operator ruling, 2026-11-08):
+    /// * Q65 is held to 2.8 kHz below 28.3 MHz: its band ([`modes::q65_bandwidth_hz`], 65 tones)
+    ///   is 3.47 kHz at Q65-30E and Q65-15D, and 6.93 kHz at Q65-15E, which keys nothing anyway.
+    ///   Every other Q65 is 1.73 kHz or narrower. A period and submode Q65 does not know is
+    ///   never trusted to fit.
+    /// * MSK144, 2000 Bd ([`modes::MSK144_BAUD`]), is held to 300 baud on 2200 m and 630 m.
+    ///
+    /// Every other mode, and a frame of no mode, passes: their widths are not judged here.
+    fn data_mode_allowed(
+        class: crate::settings::LicenseClass,
+        mode: Option<modes::ModeKind>,
+        (lo, hi): (f64, f64),
+    ) -> bool {
+        match mode {
+            Some(modes::ModeKind::Q65 { period_s, submode }) => {
+                let width = modes::q65_bandwidth_hz(period_s, submode).map_or(f64::MAX, f64::from);
+                crate::privileges::data_width_allowed(class, lo, width)
+            }
+            Some(modes::ModeKind::Msk144 { .. }) => crate::privileges::data_symbol_rate_allowed(
+                class,
+                lo,
+                hi,
+                f64::from(modes::MSK144_BAUD),
+            ),
+            _ => true,
+        }
     }
 
     /// May the operator's class key a KEYBOARD-mode emission (PSK31's, or JTTY's while it is the
@@ -31548,6 +31958,7 @@ contact yourself."
             self.tx_source_verdict().emission_mhz,
         );
         s.radio.phone_mode_refused = self.phone_mode_refused();
+        s.radio.data_mode_refusal = self.data_mode_refusal();
         // The FM-channel hold as `rig_mode_effective` reads it, so the Phone cockpit's AUTO says
         // what is commanded on a kept FM channel.
         s.radio.fm_channel = self.fm_channel && self.settings.dial_mhz >= 29.0;
@@ -31618,7 +32029,8 @@ contact yourself."
         s.radio.flex_meter_stream = self.flex_meter_stream;
         s.radio.time_sync_ok = self.time_sync_ok();
         s.radio.cat_ok = self.cat_status.0;
-        s.radio.cat_detail = self.cat_status.1.clone();
+        s.radio.cat_detail =
+            self.cat_detail_with_tx_off(self.cat_status.0, self.cat_status.1.clone());
         // The radio's RX coverage, in MHz, for the UI to gate a "move the radio" control on. Empty
         // = unknown, which the UI must read as "allow" for the same fail-open reason the engine does.
         s.radio.rx_ranges_mhz = self
@@ -44675,7 +45087,9 @@ mod tests {
         // where the passband hangs below the dial. Each on a fresh engine so the pick reads an
         // EMPTY memory cell (a remembered dial would answer instead of the default).
         for (class, band, want) in [
-            ("extra", "160m", 1.8028),
+            // 160 m parks on the ARRL's 1.843 SSB floor, lifted: 1.8028 put the passband's foot
+            // on the 1.800 band edge (no home is an allocation edge).
+            ("extra", "160m", 1.843 + crate::privileges::SSB_BW_MHZ),
             ("extra", "80m", 3.6028),
             ("general", "80m", 3.8028),
             ("general", "40m", 7.1778),
@@ -44780,7 +45194,8 @@ mod tests {
         // 9 cm for a non-US operator, both modes.
         for mode in ["phone", "cw"] {
             let e = pick("open", "9cm", mode);
-            assert!((e.settings().dial_mhz - 3400.0).abs() < 1e-9, "{mode}");
+            // The narrowband calling frequency, not the 3400.0 parking edge.
+            assert!((e.settings().dial_mhz - 3400.1).abs() < 1e-9, "{mode}");
             assert!(e.tx_allowed(), "{mode}");
         }
         // A US General clicking 4 m: it tunes, and it is receive-only, which is what the list says.
@@ -52845,6 +53260,78 @@ mod tests {
             e.observe_rig_tx_meters(None, None, Some(*w), None);
         }
         e.clear_rig_tx_meters();
+    }
+
+    /// A prediction's power: the setting when there is one; else the radio's last measured over,
+    /// rounded to a whole decibel; else 100 W, said as such. With an amplifier set up the radio's
+    /// figure is its drive, so none is taken from it; the amplifier's own output is.
+    #[test]
+    fn a_prediction_assumes_the_setting_then_the_measured_over_then_100_w() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.station_power_w = None;
+        let p = e.prediction_power();
+        assert_eq!(
+            (p.watts, p.source, p.amplifier),
+            (100.0, PredictionPowerSource::Default, false)
+        );
+        an_over(&mut e, &[0.0, 38.6, 40.2, 39.9]);
+        let p = e.prediction_power();
+        assert_eq!(p.source, PredictionPowerSource::Rig);
+        assert!(
+            (p.watts - 39.81).abs() < 0.01,
+            "40.2 W rounded to 16 dBW: {}",
+            p.watts
+        );
+        an_over(&mut e, &[41.5]);
+        assert_eq!(
+            e.prediction_power().watts,
+            p.watts,
+            "a near peak keeps the figure"
+        );
+        e.settings.station_power_w = Some(5.0);
+        let p = e.prediction_power();
+        assert_eq!((p.watts, p.source), (5.0, PredictionPowerSource::Setting));
+        e.settings.station_power_w = Some(0.0);
+        assert_eq!(
+            e.prediction_power().source,
+            PredictionPowerSource::Rig,
+            "0 is not a power"
+        );
+    }
+
+    /// Where a measured figure came from is fixed when it is measured: an over the radio measured
+    /// stays the radio's after an amplifier is set up, rather than taking the amplifier's name.
+    #[test]
+    fn a_measured_figure_keeps_the_source_it_was_measured_from() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.station_power_w = None;
+        an_over(&mut e, &[40.0]);
+        e.settings.ensure_radio_profiles();
+        e.settings.sync_active_from_flat();
+        let id = e.settings.active_radio;
+        let p = e.settings.radios.iter_mut().find(|p| p.id == id).unwrap();
+        p.amp_model = "spe".into();
+        p.amp_port = "COM7".into();
+        let p = e.prediction_power();
+        assert_eq!((p.source, p.amplifier), (PredictionPowerSource::Rig, true));
+    }
+
+    #[test]
+    fn with_an_amplifier_the_radios_drive_is_not_taken_for_the_stations_power() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.station_power_w = None;
+        e.settings.ensure_radio_profiles();
+        e.settings.sync_active_from_flat();
+        let id = e.settings.active_radio;
+        let p = e.settings.radios.iter_mut().find(|p| p.id == id).unwrap();
+        p.amp_model = "spe".into();
+        p.amp_port = "COM7".into();
+        an_over(&mut e, &[25.0]);
+        let p = e.prediction_power();
+        assert_eq!(
+            (p.watts, p.source, p.amplifier),
+            (100.0, PredictionPowerSource::Default, true)
+        );
     }
 
     /// The operator's report: the log said 100 W, the figure in Settings, while the radio was

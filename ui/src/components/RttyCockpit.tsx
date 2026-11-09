@@ -88,6 +88,8 @@ import {
   type RttySetId,
 } from '../features/rttyMacros'
 import { pushToast, withErrorToast } from '../toast'
+import { patchSettings } from '../settings/patch'
+import { RttyBaudPicker } from './RttyBaudPicker'
 import { pollSingleFlight } from '../singleFlight'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
 import { usePinnedScroll } from '../usePinnedScroll'
@@ -1325,6 +1327,21 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           >
             {auto ? 'Auto on' : 'Auto'}
           </button>
+          {/* #488: the baud, picked on this screen (the same setting as Settings ▸ RTTY). In this
+              pane's head, not the cockpit header: the header is at its wrap point at 1366×768, and
+              a wider header moves the TX dock. Disabled while an over or the latch is up: the baud
+              is the transmitter's bit clock. */}
+          {rtty && (
+            <RttyBaudPicker
+              baud={rtty.baud}
+              disabled={sending || latched}
+              onPick={(b) =>
+                void withErrorToast(() => patchSettings(() => ({ rttyBaud: b })), t('settings.save.failed')).then((s) => {
+                  if (s) onSnap?.(s)
+                })
+              }
+            />
+          )}
           {armed && rtty && (
             <span
               className={`rtty-afc-pill${rtty.afcLocked ? ' locked' : ''}`}

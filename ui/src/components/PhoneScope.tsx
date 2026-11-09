@@ -1484,12 +1484,14 @@ export function PhoneScope({
       let committed = false
       if (wire) {
         // An empty frame: the source went quiet — or, for the RF pane, no panadapter is streaming.
-        // The RF pane says so on every window; the rig scope only on a remote one, as before.
+        // Every feed blanks and says so (#463): the rig scope and the audio view used to keep the
+        // last picture on screen, frozen, after the radio powered down. The next frame brings it
+        // back.
         if (!wire.bins || wire.bins.length === 0) {
-          if (rfOnly) setScopeAvailable(false)
+          setScopeAvailable(false)
           return
         }
-        if (rfOnly) setScopeAvailable(true)
+        setScopeAvailable(true)
         accept(wire)
         committed = true
       } else if (newest) {

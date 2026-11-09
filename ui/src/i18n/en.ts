@@ -5215,6 +5215,80 @@ export const EN = {
   'connect.pane.pathDay.basic': 'Select a station to see when its path opens today, and which way round.',
   'connect.pane.pathRegions.title': 'Paths to the regions',
   'connect.pane.pathRegions.basic': 'When and which way round each DX region opens today, modelled from your grid.',
+  'bestTimes.state.tooClose': '{{call}} is under 300 km away. That close, the model cannot tell the bands apart, so Nexus gives no answer.',
+  'callCard.bestTimes.title': 'When and on which band to work {{call}}',
+  'bestTimes.basis.callbookBase': 'Worked out from grid {{grid}}, the callbook\'s address for {{base}}, the home call. They may be elsewhere.',
+  'bestTimes.basis.homeElsewhere': 'The callbook has only {{base}}\'s home address, in another country, so it is not used.',
+  'bestTimes.next.noTxBand': 'Your licence has no band to transmit {{mode}} on, so there is nothing to suggest.',
+  'callMenu.bestTimes': 'Best times',
+  'bestTimes.card.aria': 'Best times for {{call}}',
+  'bestTimes.fullDay.failed': 'The Conditions window could not be opened.',
+  'connect.pane.bestTimes.title': 'Best times',
+  'connect.pane.bestTimes.basic': 'Type a call to see when and on which band you can work it, from your grid.',
+  'bestTimes.input.label': 'Callsign or grid square',
+  'bestTimes.input.placeholder': 'Call or grid',
+  'bestTimes.go': 'Best times',
+  'bestTimes.mode.aria': 'Mode the answer is for',
+  'bestTimes.state.loading': 'Working it out…',
+  'bestTimes.state.noGrid': 'Set your grid square in Settings to get an answer.',
+  'bestTimes.state.enterCall': 'Enter a callsign.',
+  'bestTimes.state.unplaceable': 'Nexus can\'t place this call. Type their grid if you know it.',
+  'bestTimes.state.sameEntity': 'Nexus doesn\'t know where in {{entity}} they are, and from inside {{entity}} its centre is no guide. Look them up, or type their grid.',
+  'bestTimes.state.maritime': 'Maritime or aeronautical mobile: location unknown. Type their grid if you know it.',
+  'bestTimes.state.you': 'That\'s you.',
+  'bestTimes.basis.typed': 'Worked out from grid {{grid}}, the grid you typed.',
+  'bestTimes.basis.logForm': 'Worked out from grid {{grid}}, from your log entry.',
+  'bestTimes.basis.heard': 'Worked out from grid {{grid}}, sent on the air.',
+  'bestTimes.basis.callbook': 'Worked out from grid {{grid}}, from the callbook.',
+  'bestTimes.basis.logged': 'Worked out from grid {{grid}}, from your log. It may be old.',
+  'bestTimes.basis.position': 'Worked out from the callbook\'s position for them.',
+  'bestTimes.basis.entity': 'Worked out from the centre of {{entity}}. Rough.',
+  'bestTimes.lookup': 'Look up',
+  'bestTimes.lookup.none': 'The callbook did not place them, so the answer stays rough.',
+  'bestTimes.grid.label': 'Their grid',
+  'bestTimes.grid.use': 'Use',
+  'bestTimes.now.try': 'Now: try {{band}}',
+  'bestTimes.now.until': '{{word}}, until about {{time}} UTC.',
+  'bestTimes.now.allDay': '{{word}}, all day.',
+  'bestTimes.now.runnerUp': '{{band}} possible, weaker.',
+  'bestTimes.now.longShot': 'Now: a long shot on {{band}}',
+  'bestTimes.now.notNow': 'Not now.',
+  'bestTimes.now.passedOver': '{{band}} would lead, but a flare or proton event is estimated to cost it about {{db}} dB now.',
+  'bestTimes.now.absorbed': 'A flare or proton event is estimated to cost {{band}} about {{db}} dB now.',
+  'bestTimes.next.title': 'Next best',
+  'bestTimes.next.when': '{{day}} {{from}}–{{to}} UTC',
+  'bestTimes.next.local': '{{time}} your time',
+  'bestTimes.next.none': 'The model finds no workable hour for {{mode}} in the next day.',
+  'bestTimes.day.today': 'today',
+  'bestTimes.day.tomorrow': 'tomorrow',
+  'bestTimes.tag.longShot': 'long shot',
+  'bestTimes.tag.greyline': 'greyline',
+  'bestTimes.tag.longPath': 'long path',
+  'bestTimes.tag.storm': 'Kp {{kp}} forecast',
+  'bestTimes.week.repeat': 'This week: these same hours repeat each day.',
+  'bestTimes.week.flag': '{{day}}: Kp {{kp}} forecast, and this path reaches the auroral zone.',
+  'bestTimes.week.noForecast': 'No Kp forecast is held, so no day can be told apart.',
+  'bestTimes.week.horizon': 'The Kp forecast runs to {{day}}; nothing is known past it.',
+  'bestTimes.model.p533': 'P.533 monthly median for {{month}}',
+  'bestTimes.model.heuristic': 'Simple model',
+  'bestTimes.model.noModes': 'the same for every mode',
+  'bestTimes.model.noGain': 'antenna gain not set',
+  'bestTimes.vhf': 'VHF and up are not predicted.',
+  'bestTimes.promise': 'A path forecast, not a promise they are on the air.',
+  'bestTimes.fullDay': 'See full day',
+  'bestTimes.lastSpotted': 'Last spotted {{min}} min ago on {{band}}.',
+  'bestTimes.lastSpotted.noBand': 'Last spotted {{min}} min ago.',
+  'bestTimes.chart.aria': 'Band by UTC hour',
+  'bestTimes.chart.cell': '{{band}} at {{time}} UTC: {{text}}',
+  'bestTimes.chart.short': 'short path',
+  'bestTimes.chart.long': 'long path',
+  'bestTimes.chart.unlicensed': 'not on your licence',
+  'bestTimes.chart.legend': 'Words for the mode chosen, a monthly median: a typical day, not today.',
+  'bestTimes.word.closed': 'Closed',
+  'bestTimes.word.marginal': 'Marginal',
+  'bestTimes.word.fair': 'Fair',
+  'bestTimes.word.good': 'Good',
+  'bestTimes.word.excellent': 'Excellent',
   'activation.pane.none': 'No activation running. Start one on the POTA / SOTA view.',
   'activation.pane.running': 'Running {{span}}',
   'activation.pane.midnight': '0000Z in {{span}}',
@@ -5384,6 +5458,12 @@ export const EN = {
   'ota.filter.hideWorked.hidden': 'Hide worked today · {{count}}',
   'ota.filter.hideWorked.title':
     'Hides activators you logged at this park since 0000Z. They come back at 0000Z or at a new park. Only contacts logged with the park count — HUNT adds it for you.',
+  // Only new: the rows wearing the NEW PARK badge — never logged, park or summit alike (the
+  // station keeps one index of hunter-side references, plus the imported Hunted Parks list).
+  'ota.filter.onlyNew.label': 'Only new',
+  'ota.filter.onlyNew.hidden': 'Only new · {{count}}',
+  'ota.filter.onlyNew.title':
+    'Shows only the parks and summits you have never logged — the rows marked NEW PARK. Parks in your imported Hunted Parks list count as logged.',
   'ota.badge.workedToday': 'WORKED TODAY',
   'ota.badge.workedToday.title':
     'You logged this activator at this park since 0000Z — the activation running now is hunted',
@@ -5391,6 +5471,11 @@ export const EN = {
     one: '1 activator is hidden: you worked that park today. Turn Hide worked today off to see it.',
     other:
       '{{count}} activators are hidden: you worked those parks today. Turn Hide worked today off to see them.',
+  },
+  'ota.empty.notNew': {
+    one: '1 activator is hidden: you have logged that park or summit before. Turn Only new off to see it.',
+    other:
+      '{{count}} activators are hidden: you have logged those parks or summits before. Turn Only new off to see them.',
   },
   // `{{source}}` is the feed's own name (pota.app, SOTAwatch); HUNT is the button above.
   'ota.source.hint':
@@ -6669,6 +6754,8 @@ export const EN = {
   'sat.alarm.up': '⏰ {{name}} is UP now (LOS {{los}}) · max {{maxEl}}°',
   'sat.alarm.rises': '⏰ {{name}} rises {{aos}} (~{{mins}} min) · max {{maxEl}}°',
   'sat.alarm.stop': 'Stop alarm',
+  // #478: the alarm notice's button where the Satellites screen exists: stops the alarm and opens that pass.
+  'sat.alarm.open': 'Open in Satellites',
 
   // ISS SSTV auto-arm (features/issAutoArm.ts). The dial and the mode are interpolated from
   // the module's own constants and never become text: a decimal comma reaching 145.800 is an
@@ -7770,6 +7857,9 @@ export const EN = {
   'recall.log.comment.readAria': 'Comment — open it in the row',
   'recall.qrz.title': 'Open {{call}} on QRZ (browser)',
   'recall.qrz.error': 'Could not open {{call}} on QRZ',
+  // #483: the caller card's grid square, a button that opens it on OpenStreetMap in the browser.
+  'recall.grid.map.title': 'Open {{grid}} on OpenStreetMap (browser)',
+  'recall.grid.map.error': 'Could not open {{grid}} on OpenStreetMap',
   // Names the button the operator can see: the log strip's callbook button reads "Lookup".
   'recall.where.empty': 'Tab or press Lookup for name / QTH',
   // Two whole statements, and the conjunction between the two squares is inside a message of
@@ -7857,6 +7947,10 @@ export const EN = {
   'bandPicker.planAdvice.label': 'Outside band plan',
   'bandPicker.planAdvice.title':
     'Phone here on {{band}} is outside the usual band plan: every IARU region keeps this part of the band for CW and data. Nexus does not block it — your licence and your country’s band plan decide.',
+  // The band picker's last row: opens the Satellites screen on QO-100 (it tunes nothing itself).
+  'bandPicker.qo100.label': 'QO-100 satellite',
+  'bandPicker.qo100.title':
+    'Opens QO-100 on the Satellites screen. Pick its narrowband transponder there to tune the downlink.',
 
   'freq.control.aria': 'Frequency control',
   'freq.channel.label': 'Band / Channel',
@@ -8154,6 +8248,7 @@ export const EN = {
     "Saved to {{name}}. CAT can only be tested on the radio you're operating — make {{name}} active to test it.",
   'settings.cat.test.failed': 'Could not run the CAT test.',
   'settings.cat.autoTest.failed': 'Could not run the port auto-test.',
+  'settings.cat.autoTest.busy': 'Testing ports — {{seconds}}s (a port nothing answers on can take over a minute)…',
 
   'settings.profiles.saved': 'Profile "{{name}}" saved',
   'settings.profiles.loaded': 'Loaded profile "{{name}}"',
@@ -8630,6 +8725,10 @@ export const EN = {
     "Tells Nexus what your cable actually does, instead of letting it guess. Leave it on Auto unless you have a rig that keys at launch — Auto changes nothing about how your station works today. If you change it and CAT stops working, put it back on Auto: on some rigs Hamlib quietly refuses the setting and then answers without ever having opened the radio, so you get a CAT light and a rig that ignores you.",
   'settings.rigControl.netRigctl.notConnected':
     'Rig Model is NET rigctl, which reaches a radio through a rigctld on the network and cannot open {{port}} itself, and no rigctld answered. To have Nexus run the radio on {{port}}, set Rig Model to your radio. If another program runs a rigctld for it, start that program, or set Connection to Network with its address as host:port.',
+  'settings.rigControl.catSilentTxOff':
+    'Transmit was turned off because CAT to the radio was lost. Check the radio and its CAT cable; Nexus keeps trying. Press TX On to transmit again.',
+  'settings.rigControl.catBackTxOff':
+    'CAT to the radio was lost and transmit was turned off. CAT is back; press TX On to transmit.',
   'settings.rigControl.serialHandshake.rtsKeys':
     "RTS keys your transmitter on this port, so Serial handshake can't be Hardware — set it to Auto or None.",
   'settings.rigControl.pttLineState.label': 'Keying line at startup',
@@ -8807,6 +8906,9 @@ export const EN = {
     'On Linux, pick it by its card name (hw: or plughw:): receive audio does not play on the system default, pulse or pipewire, which may be the radio’s card.',
   'settings.headphoneMonitor.level.label': 'Listening level',
   'settings.headphoneMonitor.level.aria': 'Receive listening level',
+  // #468: the same level as a slider in the top bar, shown while receive audio plays here.
+  'topbar.listen.title':
+    'Listening level {{pct}}%: how loud Nexus plays the receive audio on this computer (Settings ▸ Radio ▸ Receive audio on this computer). Click to change.',
   'settings.headphoneMonitor.level.hint':
     'Headphone listening volume (does not affect TX).',
 
@@ -9181,7 +9283,7 @@ export const EN = {
   'setup.rig.selected.baud': ' @ {{baud}} baud',
   'setup.rig.selected.unnamedRadio': 'radio',
   'setup.rig.autoTest.action': '🔎 Auto-test my ports',
-  'setup.rig.autoTest.busy': 'Testing ports — {{seconds}}s (can take up to a minute)…',
+  'setup.rig.autoTest.busy': 'Testing ports — {{seconds}}s (a port nothing answers on can take over a minute)…',
   'setup.rig.autoTest.title':
     'Probes every USB port until a radio answers — read-only, never transmits',
   'setup.rig.autoTest.failed': 'Auto-test failed: {{error}}',
@@ -9223,7 +9325,7 @@ export const EN = {
   'setup.rig.second.action': '＋ I have a second radio',
   'setup.rig.second.title': 'Adds a radio profile and probes the remaining USB ports for it',
   'setup.rig.second.probing':
-    'Probing the other ports — {{seconds}}s (radio 1’s port is skipped; this can take up to a minute)…',
+    'Probing the other ports — {{seconds}}s (radio 1’s port is skipped; a port nothing answers on can take over a minute)…',
   'setup.rig.second.saved': 'Second radio: {{radio}} on {{port}} — saved to its own profile.',
   'setup.rig.second.addFailed': "Couldn't add the radio: {{error}}",
   'setup.rig.second.model.label': 'Which radio is the second one?',
@@ -10445,9 +10547,9 @@ export const EN = {
   // and stay in the panel.
   'settings.integrations.propEngine.label': 'Prediction engine',
   'settings.integrations.propEngine.heuristic': 'Modelled (fast heuristic)',
-  'settings.integrations.propEngine.p533': 'ITU-R P.533 (full physics)',
+  'settings.integrations.propEngine.p533': 'ITU-R P.533 (full physics, default)',
   'settings.integrations.propEngine.hint':
-    'Drives the per-station path outlook + 24h band×hour grid. P.533 is the real circuit-reliability method (validated against the ITU reference; ~0.1 s per prediction, uses your station power). Live spots always win over any model.',
+    'Drives the per-station path outlook + 24h band×hour grid. P.533, the default, is the real circuit-reliability method (validated against the ITU reference; ~0.1 s per prediction, uses your station power). Live spots always win over any model.',
   // The collapsed disclosure inside Integrations & Feeds. ⚠️ dBi, TX and RX are units and the
   // radio's own two states.
   'settings.antennaGain.title': 'Antenna gain (advanced)',
@@ -11334,6 +11436,31 @@ export const EN = {
   // The engine behind a prediction. `P.533` is the ITU recommendation's number and stays in
   // the component beside it.
   'connect.engine.modelled': 'modelled',
+  // Shown where the engine's name goes when P.533 failed and the heuristic answered instead.
+  // ⚠️ `P.533` is the recommendation's number: keep it verbatim.
+  'prop.engine.fallback': 'modelled: P.533 could not run',
+  // The one-time note after an existing station is moved to P.533. The path names the Settings
+  // tab and the setting's own label, so each catalog repeats its own words for them.
+  // What a P.533 answer rests on: the storm correction laid over it and the power it assumes
+  // (components/prop/ModelBasis). ⚠️ `Kp`, `W` and `P.533` stay verbatim.
+  'prop.storm.applied': 'Adjusted for a geomagnetic storm, Kp up to {{kp}}.',
+  // The same correction below storm level (Kp under 5, NOAA's G1): unsettled, not a storm.
+  'prop.storm.unsettled': 'Adjusted for unsettled geomagnetic conditions, Kp up to {{kp}}.',
+  'prop.storm.someHours': 'Hours with no Kp forecast are not adjusted.',
+  'prop.power.setting': 'Assumes {{watts}} W, your station power setting.',
+  'prop.power.rig': 'Assumes about {{watts}} W, the radio\'s output on your last transmission.',
+  'prop.power.amplifier': 'Assumes about {{watts}} W, the amplifier\'s output on your last transmission.',
+  'prop.power.default': 'Assumes 100 W: no station power is set and the radio has not reported its output.',
+  'prop.power.amplifierSetUp': 'An amplifier is set up, so the power on the air may be higher.',
+  'prop.bands.simpleModel': 'With nothing heard, a band\'s word comes from the simple model, not P.533.',
+  // The hover on a P.533 answer's words (Band Outlook, the path card). ⚠️ The five words are
+  // the backend's, shown in English everywhere: keep them verbatim, and `P.533`, SSB, CW, FT8.
+  'prop.words.p533.title':
+    'P.533\'s words: Excellent, SSB usable on 3 days in 4 at the band\'s best hour; Good, CW usable on 3 days in 4; Fair, FT8 usable on half the days; Marginal, FT8 on 1 day in 10.',
+  'prop.words.ring.title':
+    'Toward DX, a band\'s word is the one it reaches in at least half the directions; its hours are its best direction\'s.',
+  'prop.engine.note':
+    'Predictions now use P.533, so some band answers have changed. To go back, open Settings ▸ Services ▸ Prediction engine.',
   'connect.engine.outlook': 'modelled · DX',
 
   'connect.path.heading': 'Path to {{call}}',
@@ -12153,6 +12280,8 @@ export const EN = {
   'operate.strip.state.transmitting': '▲ TRANSMITTING',
   'operate.strip.state.receiving': '▼ Receiving',
   'operate.strip.state.txOff': '■ TX off',
+  'operate.strip.state.txOffCatLost': 'CAT lost: press TX On',
+  'operate.strip.state.txOffCatBack': 'CAT is back: press TX On',
   'operate.strip.tune.radioPower': 'Radio tune power {{pct}} %',
   'operate.strip.tune.radioTimeoutSec': 'Radio TX timeout {{sec}} s',
   'operate.strip.tune.radioTimeoutMin': 'Radio TX timeout {{min}} min',
@@ -12487,6 +12616,10 @@ export const EN = {
   'rtty.panel.stream': 'Decoded Text',
   'rtty.header.mode.title':
     'RTTY — Baudot/ITA2 at the configured baud + shift (45.45 / 170 Hz is the HF standard; change it in Settings → RTTY)',
+  // #488: the baud picker beside the mode badge (the same setting as Settings → RTTY).
+  'rtty.header.baud.aria': 'RTTY baud rate',
+  'rtty.header.baud.title':
+    'Baud rate: 45.45 is the HF standard, 50 is used in parts of Europe, 75 on VHF and some nets. The same setting as Settings → RTTY. It cannot be changed while transmitting.',
   'rtty.header.backend.fsk.title':
     'True FSK — data bits on the serial keyline, rig in RTTY mode (its narrow RTTY filters work). Change the backend in Settings → RTTY.',
   'rtty.header.backend.afsk.title':
@@ -13497,7 +13630,7 @@ export const EN = {
     'Close',
   'sstv.viewer.close.title':
     'Close this window (Esc)',
-  'sstv.gallery.reveal.label': 'Reveal',
+  'sstv.gallery.reveal.label': 'Open folder',
   'sstv.gallery.reveal.title': 'Open the folder the received pictures are saved in (Pictures/Nexus SSTV)',
   'sstv.gallery.reveal.failed': 'Could not open the SSTV gallery folder',
   'sstv.gallery.thumb.alt': '{{mode}} image received {{when}}',
@@ -15135,6 +15268,10 @@ export const EN = {
   // report, as against the blank rows before the first over, which the line above answers.
   'phone.unavail.meter': 'Your radio does not report {{meter}} over CAT — the bar stays empty.',
   'meters.tx.swr.title': 'Antenna match — keep it under 2:1',
+  // #476: the same tip once the operator has switched on the high-SWR cutoff: the number it names
+  // is theirs, the one Nexus acts on, not the fixed rule of thumb above.
+  'meters.tx.swr.cutoff':
+    'Antenna match — Nexus stops transmitting above {{ratio}}:1, your setting in Settings ▸ Radio ▸ Transmit limits & sharing',
   // ⚠️ THE SAME READING, ON A SCALE NEXUS CANNOT VOUCH FOR (2026-09-20). `swrScaleVerified`
   // is false — the rig is outside the two paths whose meter curve we can point at — so the
   // line above must not be shown: "under 2:1" is a threshold on an absolute scale, and the
@@ -15380,6 +15517,14 @@ export const EN = {
   // slider (a CONFIGURATION control on the transmit path) and the CAT pill.
   'cockpit.header.readout.wheelTune.title': 'Scroll to tune',
   'cockpit.header.readout.digitTune.title': 'Scroll a digit to tune it',
+  // The red readout's words when the data MODE is the whole licence lock (`dataModeRefusal`). `{{mode}}` is the mode as
+  // picked, period and submode included ("Q65-30E", "MSK144-15").
+  'cockpit.header.readout.txLock.tooWide':
+    '{{mode}} is wider than 2.8 kHz, and below 28.3 MHz Nexus holds a US license’s data to that — transmit is blocked. Pick a narrower Q65 submode in Settings.',
+  'cockpit.header.readout.txLock.tooFast':
+    '{{mode}} keys at 2000 baud, and US data on 2200 m and 630 m may not exceed 300 baud — transmit is blocked. Pick another mode.',
+  'cockpit.header.readout.txLock.fixedCentre':
+    '{{mode}} always transmits centred 1500 Hz from the dial, above it on USB and below it on LSB, whatever the TX marker says, and its signal there is outside your license privileges — transmit is blocked. Move the dial further into the segment.',
   // Two WHOLE sentences, one per direction — the band name and the edge frequency are invariant
   // tokens formatted by the header, never by a locale-aware formatter.
   'cockpit.header.bandEdge.up':

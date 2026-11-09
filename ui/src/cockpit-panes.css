@@ -672,6 +672,72 @@
 .txmeters-pane-meter {
   min-width: 0;
 }
+/* SSTV'S COMPOSER BODY (#479). The composer is a fit="content" pane at the foot of SSTV's one column,
+   directly over the Send/Stop bar, and its body is ONE ROW: the picture side (the drop zone and the file
+   picker), then the options (the overlays, what goes out, the ident, the warnings). The row WRAPS: where the
+   composer is narrower than the picture beside a 24em options column, the options fall under the picture, as
+   the composer always read. A wrap, so it is the composer's own width at any zoom and never a viewport rule.
+   Empty, the picture side takes the whole row (the drop zone, as before); loaded (`-packed`, after the base
+   so it wins the tie) it is the preview's own width. The options grow into the rest up to 64em, so a wide
+   window never gets a window-wide text field. Everything here can shrink to nothing first: the region's
+   column clips sideways. No height anywhere: the pane is content-height and the preview carries its own
+   yielding ceiling (styles.css `.sstv-tx-preview`). Nothing here keys or stops anything; Send and Stop are
+   in the bar. */
+.sstv-compose-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+.sstv-compose-stage {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.sstv-compose-stage-packed {
+  flex: 0 1 auto;
+}
+.sstv-compose-opts {
+  flex: 1 1 24em;
+  min-width: 0;
+  max-width: 64em;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+/* WHY TRANSMIT IS OFF AFTER A CAT OUTAGE, IN THE STRIP, MOVING NOTHING. The TX state beside it keeps
+   its own words ("TX off") and so its width; these words never take room a control could need.
+   `.cockpit-txstrip-catnote` (the strip of every screen but FT): a ZERO basis growing into the line's
+   free room, as the meters cell does, with the column gap cancelled by its margin, so the strip's line
+   breaking sees a zero-wide item and can never wrap for it. The space before the words is a TEXT
+   INDENT, never padding: padding is width the breaker counts, even on a zero basis with border-box,
+   and 8 px of it wrapped Phone, CW and RTTY in Russian at 175 % (1002-1012 px), moving Stop TX 30 px. Where the
+   room is short the words end in an ellipsis, and where there is none they are not seen: the whole
+   sentence is the TX state's hover and the CAT status. Not rendered beside the meters cell, which
+   would share the room with it.
+   `.cq-catnote` (FT's strip): the words ride inside `.cq-spacer`, the strip's one absorber, which is
+   already a zero-basis grower on its line. Its min-width is the only thing to add: without it a
+   flex item cannot shrink below its text, and the absorber would push the line. */
+.cockpit-txstrip-catnote {
+  flex-grow: 1;
+  flex-shrink: 1;
+  flex-basis: 0;
+  min-width: 0;
+  margin-left: calc(-1 * var(--space-2));
+  padding-left: 0;
+  text-indent: var(--space-2);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.cq-catnote {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 /* THE KEYBOARD DOCKS' EIGHT KEYS (RTTY, PSK, JTTY: `.rtty-dock-keys`, styles.css) share their line with
    the fixed row (Call box, set switch, TX latch, Esc/Stop) only where 76em of keys fit beside it, and fold
    the row under the keys everywhere else, so the keys then take the whole line. A BASIS, deliberately, not
@@ -740,6 +806,19 @@
   padding: 0;
   background: transparent;
   border-bottom: 0;
+}
+/* THE LISTENING LEVEL'S BUTTON (#468, components/ListenLevel) IS THE TOP BAR'S RX LEVEL METER, so it adds
+   no width: the bar has no slack at 1366×768 on FT, and a slider, or even a 25 px chip, beside Help wrapped
+   it onto a second row (moving the cockpit and Stop TX down) whenever receive audio was switched on. This
+   takes away every box property a <button> brings, so the meter's box is what it is as a <div>. */
+.listen-trigger {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  line-height: inherit;
+  color: inherit;
 }
 /* THE "MY STATION" PICKER (components/TopBar, shown with two or more station profiles) is the CALLSIGN
    BLOCK ITSELF: the select stands over the call and grid, out of the bar's line, with its own text

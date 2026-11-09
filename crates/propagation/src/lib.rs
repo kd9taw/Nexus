@@ -22,6 +22,7 @@ pub mod award_status;
 pub mod awards;
 pub mod awards_more;
 pub mod beacons;
+pub mod besttimes;
 pub mod callstats;
 pub mod chirp;
 pub mod contact_path;
@@ -71,6 +72,7 @@ pub mod solar_wind;
 pub mod space_wx;
 pub mod spot;
 pub mod stats;
+pub mod storm;
 pub mod swpc_scales;
 pub mod us_counties;
 pub mod wae;
@@ -143,8 +145,8 @@ pub use pathgeo::{
 };
 pub use pota::{parse_pota_spots, parse_sota_spots, parse_wwff_spots, OtaSpot};
 pub use predict::{
-    band_outlook_ring, make_predictor, modeled_now, representative_muf, HeuristicEngine,
-    ModeledNow, PathPrediction, PathPredictor,
+    band_outlook_ring, make_predictor, modeled_now, representative_muf, with_fallback,
+    AssumedPower, HeuristicEngine, ModeledNow, PathPrediction, PathPredictor, PowerSource,
 };
 pub use province::province_for_call;
 pub use pskr_mqtt::{

@@ -152,7 +152,11 @@ pub(crate) fn segments_of(flags: &[bool], kind: SegmentKind, out: &mut Vec<PathS
 
 /// Kp for the hour starting at `unix`: the outlook sample whose 3-hour period contains it,
 /// else SWPC's latest reading, else unknown.
-fn kp_at(unix: i64, kp_now: Option<f32>, forecast: Option<&KpForecast>) -> (Option<f32>, KpSource) {
+pub(crate) fn kp_at(
+    unix: i64,
+    kp_now: Option<f32>,
+    forecast: Option<&KpForecast>,
+) -> (Option<f32>, KpSource) {
     const PERIOD: i64 = 3 * 3600;
     forecast
         .and_then(|f| {

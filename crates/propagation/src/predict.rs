@@ -64,6 +64,43 @@ pub struct PathPrediction {
     /// event, a NOAA watch. Attached by the outlook callers; absent when nothing is happening.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub space_now: Option<crate::pathnow::SpaceNow>,
+    /// The configured engine could not run, so this is the heuristic's answer
+    /// ([`with_fallback`]). The screen says so; a cache never keeps it. Absent when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub engine_fallback: bool,
+    /// The storm correction laid over this P.533 answer ([`crate::storm`]); absent when it changed
+    /// nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storm: Option<crate::storm::StormNote>,
+    /// The transmit power the answer assumes and where it came from, set by the caller that
+    /// chose it. Only P.533 uses power; absent from the engines themselves.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub power: Option<AssumedPower>,
+}
+
+/// The transmit power a prediction assumes, and where that figure came from, for the screen to
+/// say. `amplifier` is true when an amplifier is set up on the radio, so a figure that is not the
+/// amplifier's own may be below the power on the air.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssumedPower {
+    pub watts: f64,
+    pub source: PowerSource,
+    pub amplifier: bool,
+}
+
+/// Where an [`AssumedPower`] came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PowerSource {
+    /// Settings ▸ Station power.
+    Setting,
+    /// The radio's forward power on the last transmission Nexus measured.
+    Rig,
+    /// The amplifier's output on the last transmission Nexus measured.
+    Amplifier,
+    /// Nothing set and nothing measured: 100 W.
+    Default,
 }
 
 impl PathPrediction {
@@ -141,6 +178,18 @@ pub trait PathPredictor: Send + Sync {
             crate::route::Route::Long => None,
         }
     }
+
+    /// The storm correction this engine has laid over any answer since it was built
+    /// ([`crate::storm::with_storm_correction`]); none for an engine that makes none.
+    fn storm_note(&self) -> Option<crate::storm::StormNote> {
+        None
+    }
+
+    /// Whether this engine could not run and answered from the heuristic ([`with_fallback`]),
+    /// at any time since it was built. An engine that cannot fail never has.
+    fn fell_back(&self) -> bool {
+        false
+    }
 }
 
 /// Default offline engine — the physics-lite [`PathModel`]. Always available, no
@@ -192,16 +241,19 @@ impl PathPredictor for HeuristicEngine {
             day: None,
             overlay: None,
             space_now: None,
+            engine_fallback: false,
+            storm: None,
+            power: None,
         }
     }
 }
 
-/// Build the configured path-prediction engine by name. `"p533"` returns the
+/// Build the configured path-prediction engine by name. `"p533"`, the default, returns the
 /// validated ITU-R P.533/P.372 engine (its TX power taken from the station
 /// power setting when present, plus `ant_gain_dbi` — the combined TX+RX
-/// antenna gain, 0 = isotropic — as a link-budget adder); any other name —
-/// including the default `"heuristic"` — returns the always-available
-/// physics-lite fallback (which ignores gain), so a stale or unknown setting
+/// antenna gain, 0 = isotropic — as a link-budget adder), which falls back to the heuristic if
+/// it cannot run ([`with_fallback`]); any other name — including `"heuristic"` — returns the
+/// always-available physics-lite engine (which ignores gain), so a stale or unknown setting
 /// can never break predictions.
 pub fn make_predictor(
     name: &str,
@@ -215,10 +267,99 @@ pub fn make_predictor(
                 .map(crate::p533::engine::P533Config::with_power_watts)
                 .unwrap_or_default();
             cfg.ant_gain_dbi = ant_gain_dbi;
-            Box::new(crate::p533::engine::P533Engine::with_config(me_latlon, cfg))
+            with_fallback(
+                crate::p533::engine::P533Engine::with_config(me_latlon, cfg),
+                me_latlon,
+            )
         }
         _ => Box::new(HeuristicEngine::new(me_latlon)),
     }
+}
+
+/// `primary`, answering from the heuristic if it panics, so a screen shows a labelled answer and
+/// never a blank. P.533 reads no file and no network (its tables are compiled in), so a panic is
+/// the one way it can fail to run. It says `primary`'s [`PathPredictor::name`] throughout, so a
+/// caller still knows which engine was asked for; each answer it replaces carries
+/// [`PathPrediction::engine_fallback`] and names the heuristic, and
+/// [`PathPredictor::fell_back`] stays true from then on, for a caller deciding whether to keep
+/// what it just computed. The app's panic hook logs the panic itself.
+pub fn with_fallback<P: PathPredictor + 'static>(
+    primary: P,
+    me_latlon: Option<(f64, f64)>,
+) -> Box<dyn PathPredictor> {
+    Box::new(WithFallback {
+        primary,
+        floor: HeuristicEngine::new(me_latlon),
+        failed: std::sync::atomic::AtomicBool::new(false),
+    })
+}
+
+struct WithFallback<P> {
+    primary: P,
+    floor: HeuristicEngine,
+    failed: std::sync::atomic::AtomicBool,
+}
+
+impl<P: PathPredictor> WithFallback<P> {
+    /// `run` on the primary engine, or `None` if it panicked (noted).
+    fn attempt<T>(&self, run: impl FnOnce(&P) -> T) -> Option<T> {
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&self.primary)));
+        match ran {
+            Ok(answer) => Some(answer),
+            Err(_) => {
+                self.failed
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                None
+            }
+        }
+    }
+
+    fn floor_answer(&self, dx: (f64, f64), from_unix: i64, wx: &SpaceWx) -> PathPrediction {
+        let mut p = self.floor.predict(dx, from_unix, wx);
+        p.engine_fallback = true;
+        p
+    }
+}
+
+impl<P: PathPredictor> PathPredictor for WithFallback<P> {
+    fn name(&self) -> &'static str {
+        self.primary.name()
+    }
+
+    fn predict(&self, dx: (f64, f64), from_unix: i64, wx: &SpaceWx) -> PathPrediction {
+        self.attempt(|p| p.predict(dx, from_unix, wx))
+            .unwrap_or_else(|| self.floor_answer(dx, from_unix, wx))
+    }
+
+    fn predict_route(
+        &self,
+        dx: (f64, f64),
+        route: crate::route::Route,
+        from_unix: i64,
+        wx: &SpaceWx,
+    ) -> Option<PathPrediction> {
+        match self.attempt(|p| p.predict_route(dx, route, from_unix, wx)) {
+            Some(answer) => answer,
+            // The heuristic has no long path, and says so rather than borrowing the short one.
+            None => {
+                (route == crate::route::Route::Short).then(|| self.floor_answer(dx, from_unix, wx))
+            }
+        }
+    }
+
+    fn fell_back(&self) -> bool {
+        self.failed.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// The grade words, lowest first, as [`Workability`] labels them.
+const WORDS: [&str; 5] = ["Closed", "Marginal", "Fair", "Good", "Excellent"];
+
+fn word_rank(label: &str) -> u8 {
+    WORDS
+        .iter()
+        .position(|w| *w == label)
+        .map_or(0, |i| i as u8)
 }
 
 /// Instantaneous, model-only band openness "right now" (NOT a 24 h peak): for each HF
@@ -289,10 +430,18 @@ pub fn band_outlook_ring(
     let mut best: HashMap<String, BandOutlook> = HashMap::new();
     let mut muf_now = 0f32;
     let mut muf_hourly = vec![0f32; 24];
+    let mut engine_fallback = false;
+    let mut storm = None;
+    // Each band's word toward each direction, P.533's only (see below).
+    let mut words: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut all_p533 = true;
     for i in 0..n {
         let brg = (i as f64) * 360.0 / (n as f64);
         let dx = crate::geo::destination_point(me, brg, dist_km);
         let p = eng.predict(dx, now, wx);
+        engine_fallback |= p.engine_fallback;
+        crate::storm::StormNote::fold(&mut storm, p.storm);
+        all_p533 &= p.engine == "p533";
         muf_now = muf_now.max(p.muf_now);
         for (h, slot) in muf_hourly.iter_mut().enumerate() {
             if let Some(&m) = p.muf_hourly.get(h) {
@@ -303,6 +452,10 @@ pub fn band_outlook_ring(
             // The ring's bands answer "which band, any direction": one azimuth's hop
             // geometry would be read as THE path's, so it is not carried.
             bo.detail = None;
+            words
+                .entry(bo.band.clone())
+                .or_default()
+                .push(word_rank(&bo.workability));
             best.entry(bo.band.clone())
                 .and_modify(|e| {
                     if bo.score > e.score {
@@ -313,13 +466,32 @@ pub fn band_outlook_ring(
         }
     }
     let mut bands: Vec<BandOutlook> = best.into_values().collect();
+    // P.533's word for the ring is the one a band reaches toward at least half the directions.
+    // Its best direction alone reads Good or Excellent on nearly every band at almost any power,
+    // since some direction carries CW at some hour of the day: the all-alike outlook the grade
+    // exists to avoid. The hours, the heat map and the timing stay the best direction's. The
+    // heuristic keeps its own words, as before.
+    if all_p533 {
+        for bo in &mut bands {
+            if let Some(v) = words.get_mut(&bo.band) {
+                v.sort_unstable_by(|a, b| b.cmp(a));
+                let k = v.len().div_ceil(2);
+                bo.workability = WORDS[usize::from(v[k - 1])].to_string();
+            }
+        }
+    }
     bands.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     PathPrediction {
-        engine: eng.name().to_string(),
+        engine: if engine_fallback {
+            "heuristic"
+        } else {
+            eng.name()
+        }
+        .to_string(),
         bands,
         muf_now,
         muf_hourly,
@@ -329,6 +501,9 @@ pub fn band_outlook_ring(
         day: None,
         overlay: None,
         space_now: None,
+        engine_fallback,
+        storm,
+        power: None,
     }
 }
 
@@ -336,6 +511,140 @@ pub fn band_outlook_ring(
 mod tests {
     use super::*;
     use crate::geo::maidenhead_to_latlon;
+
+    /// An engine that cannot run, on every route.
+    struct Broken;
+    impl PathPredictor for Broken {
+        fn name(&self) -> &'static str {
+            "p533"
+        }
+        fn predict(&self, _: (f64, f64), _: i64, _: &SpaceWx) -> PathPrediction {
+            panic!("broken on purpose")
+        }
+        fn predict_route(
+            &self,
+            _: (f64, f64),
+            _: crate::route::Route,
+            _: i64,
+            _: &SpaceWx,
+        ) -> Option<PathPrediction> {
+            panic!("broken on purpose")
+        }
+    }
+
+    const ME: (f64, f64) = (42.36, -71.06);
+    const DX: (f64, f64) = (51.5, -0.13);
+    const FALLBACK_T: i64 = 1_794_009_600;
+
+    #[test]
+    fn an_engine_that_cannot_run_answers_from_the_heuristic_and_says_so() {
+        let wx = SpaceWx::default();
+        let eng = with_fallback(Broken, Some(ME));
+        assert!(!eng.fell_back(), "nothing has failed yet");
+        let p = eng.predict(DX, FALLBACK_T, &wx);
+        assert!(p.engine_fallback);
+        assert_eq!(p.engine, "heuristic");
+        assert!(!p.bands.is_empty(), "an answer, not a blank");
+        assert!(eng.fell_back());
+        assert_eq!(eng.name(), "p533", "still names the engine asked for");
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"engineFallback\":true"), "{json}");
+    }
+
+    #[test]
+    fn a_route_on_an_engine_that_cannot_run_keeps_the_short_path_and_has_no_long_one() {
+        let wx = SpaceWx::default();
+        let eng = with_fallback(Broken, Some(ME));
+        let short = eng.predict_route(DX, crate::route::Route::Short, FALLBACK_T, &wx);
+        assert!(short.is_some_and(|p| p.engine_fallback));
+        assert!(eng
+            .predict_route(DX, crate::route::Route::Long, FALLBACK_T, &wx)
+            .is_none());
+    }
+
+    #[test]
+    fn a_ring_on_an_engine_that_cannot_run_names_the_heuristic_and_says_so() {
+        let wx = SpaceWx::default();
+        let eng = with_fallback(Broken, Some(ME));
+        let ring = band_outlook_ring(eng.as_ref(), ME, 9000.0, 8, FALLBACK_T, &wx);
+        assert!(ring.engine_fallback);
+        assert_eq!(ring.engine, "heuristic");
+        assert!(!ring.bands.is_empty());
+    }
+
+    /// P.533's ring reads the word a band reaches toward at least half the directions, so it is
+    /// not one word for every band; its hours stay the best direction's.
+    #[test]
+    fn a_p533_ring_is_graded_toward_half_the_directions() {
+        let wx = SpaceWx::default();
+        let me = (42.1, -88.0);
+        let t = 1_794_009_600 + 21 * 3600;
+        let eng = make_predictor("p533", Some(me), Some(100.0), 0.0);
+        let ring = band_outlook_ring(eng.as_ref(), me, 9000.0, 8, t, &wx);
+        let words: std::collections::HashSet<_> =
+            ring.bands.iter().map(|b| b.workability.as_str()).collect();
+        assert!(words.len() >= 3, "a spread of words: {words:?}");
+        let most = words
+            .iter()
+            .map(|w| ring.bands.iter().filter(|b| b.workability == *w).count())
+            .max()
+            .unwrap();
+        assert!(
+            most <= 6,
+            "no one word for most bands: {most} of {}",
+            ring.bands.len()
+        );
+        assert!(
+            !words.contains("Excellent"),
+            "no band is Excellent toward half the world at 100 W"
+        );
+        let best = |band: &str| {
+            (0..8)
+                .map(|k| {
+                    let dx = crate::geo::destination_point(me, f64::from(k) * 45.0, 9000.0);
+                    let p = eng.predict(dx, t, &wx);
+                    p.bands.iter().find(|b| b.band == band).unwrap().score
+                })
+                .fold(0.0f32, f32::max)
+        };
+        let b20 = ring.bands.iter().find(|b| b.band == "20m").unwrap();
+        assert!(
+            (b20.score - best("20m")).abs() < 1e-6,
+            "the hours are the best direction's"
+        );
+    }
+
+    /// The heuristic's ring keeps the heuristic's own words.
+    #[test]
+    fn the_heuristic_ring_keeps_its_own_words() {
+        let wx = SpaceWx::default();
+        let me = (42.1, -88.0);
+        let t = 1_794_009_600 + 21 * 3600;
+        let ring = band_outlook_ring(&HeuristicEngine::new(Some(me)), me, 9000.0, 8, t, &wx);
+        for b in &ring.bands {
+            assert_eq!(
+                b.workability,
+                Workability::from_score(b.score).label(),
+                "{}",
+                b.band
+            );
+        }
+    }
+
+    #[test]
+    fn an_engine_that_runs_is_answered_untouched() {
+        let wx = SpaceWx::default();
+        let eng = make_predictor("p533", Some(ME), None, 0.0);
+        let p = eng.predict(DX, FALLBACK_T, &wx);
+        assert_eq!(p.engine, "p533");
+        assert!(!p.engine_fallback);
+        assert!(!eng.fell_back());
+        assert!(!serde_json::to_string(&p)
+            .unwrap()
+            .contains("engineFallback"));
+        let ring = band_outlook_ring(eng.as_ref(), ME, 9000.0, 1, FALLBACK_T, &wx);
+        assert_eq!(ring.engine, "p533");
+    }
 
     const MIDNIGHT_UTC: i64 = 1_718_886_000 - 13 * 3600; // ~2024-06-20 00:00 UTC
 

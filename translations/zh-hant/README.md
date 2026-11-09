@@ -15,10 +15,10 @@ Nexus 是給業餘無線電用的程式：CAT 控制、FT8/CW/SSB/RTTY 收發、
 
 | 檔案 | 用途 |
 |---|---|
-| `nexus-zh-hant-translation.csv` | 10,990 列，欄位與簡體套件相同，只填 `chinese` 欄 |
+| `nexus-zh-hant-translation.csv` | 11,101 列，欄位與簡體套件相同，只填 `chinese` 欄 |
 | `splash-zh-hant.json` | 啟動頁的 5 條文字，貼進 `ui/public/splashscreen.html` 的 `splash-strings` |
 
-`notes` 欄大多是空的：這份稿子是從已完成的簡體稿轉出來的，把 3,710 條英文註解搬過來只是雜訊。維護者為新增文案補譯、等待譯者複核的 401 列，`notes` 欄寫著 “Filled by the maintainer, pending translator review.”。
+`notes` 欄大多是空的：這份稿子是從已完成的簡體稿轉出來的，把 3,710 條英文註解搬過來只是雜訊。維護者為新增文案補譯、等待譯者複核的 516 列，`notes` 欄寫著 “Filled by the maintainer, pending translator review.”。
 要對照原文時看 `english` 欄就夠。
 
 ## 重建

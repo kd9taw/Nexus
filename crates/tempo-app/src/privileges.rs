@@ -531,6 +531,42 @@ pub fn cw_and_ssb_voice_only(class: LicenseClass, carrier_mhz: f64) -> bool {
         && (28.300..28.500).contains(&carrier_mhz)
 }
 
+/// The widest data emission a US class may send below [`DATA_WIDTH_CAP_TOP_MHZ`]: 2.8 kHz. 47 CFR
+/// 97.307(f)(3): "The authorized bandwidth is 2.8 kHz" for the HF data rows, and 97.307(f)(14) for
+/// 60 m: "Emissions must not exceed a bandwidth of 2.8 kilohertz".
+pub const DATA_WIDTH_CAP_HZ: f64 = 2_800.0;
+
+/// Where [`DATA_WIDTH_CAP_HZ`] stops: 28.3 MHz, the top of 10 m data (97.305(c)). Every US data
+/// row below it is held to the cap, 2200 m through 10 m and 60 m (operator ruling, 2026-11-08).
+/// ⚠️ 97.307(f)(3) itself says "except in the 2200 m band and 630 m band", which it holds to a
+/// symbol rate instead ([`LF_MF_DATA_MAX_BAUD`]). Holding them to 2.8 kHz too only refuses more:
+/// nothing that wide fits the 2.1 kHz of 2200 m at all.
+pub const DATA_WIDTH_CAP_TOP_MHZ: f64 = 28.3;
+
+/// The fastest data symbol rate a US class may send on 2200 m and 630 m: 300 baud. 47 CFR
+/// 97.307(f)(3): "In the 2200 m band and the 630 m band the symbol rate must not exceed 300 bauds".
+pub const LF_MF_DATA_MAX_BAUD: f64 = 300.0;
+
+/// May `class` send a data emission `width_hz` wide whose lowest frequency is `lo_mhz`? Not wider
+/// than [`DATA_WIDTH_CAP_HZ`] anywhere below [`DATA_WIDTH_CAP_TOP_MHZ`], for a US class. Whether
+/// the frequencies are the class's is [`tx_span_allowed`]'s question; this judges the width alone.
+/// `Open` is trusted, as [`tx_allowed`] trusts it.
+pub fn data_width_allowed(class: LicenseClass, lo_mhz: f64, width_hz: f64) -> bool {
+    matches!(class, LicenseClass::Open)
+        || lo_mhz >= DATA_WIDTH_CAP_TOP_MHZ
+        || width_hz <= DATA_WIDTH_CAP_HZ
+}
+
+/// May `class` send data at `baud` across `lo_mhz`..`hi_mhz`? Not faster than
+/// [`LF_MF_DATA_MAX_BAUD`] with either end on 2200 m or 630 m ([`LF_MF`]), for a US class. `Open` is
+/// trusted, as [`tx_allowed`] trusts it.
+pub fn data_symbol_rate_allowed(class: LicenseClass, lo_mhz: f64, hi_mhz: f64, baud: f64) -> bool {
+    let lf_mf = |f: f64| LF_MF.iter().any(|seg| f >= seg.lo && f < seg.hi);
+    matches!(class, LicenseClass::Open)
+        || baud <= LF_MF_DATA_MAX_BAUD
+        || !(lf_mf(lo_mhz) || lf_mf(hi_mhz))
+}
+
 /// Is upper sideband the only phone `class` may transmit with its carrier at `carrier_mhz`: LSB
 /// refused ([`lsb_phone_allowed`]) and every word that is not one sideband refused too
 /// ([`wide_phone_allowed`])? 60 m, for every US class. It decides nothing about keying, which those
@@ -564,13 +600,15 @@ pub const SSB_BW_MHZ: f64 = 0.0028;
 
 /// Where a PHONE band pick should park the dial for `class` on `band` — with the sideband
 /// that band's convention uses. `None` = no phone privilege there (the band is omitted from
-/// the dropdown).
+/// the dropdown), or no passband strictly inside the amateur allocation ([`inside_allocation`]).
 ///
 /// ⚠️ NOT [`segment_start`], which is the EDGE. On the LSB bands (<10 MHz) the passband hangs
 /// BELOW the dial, so parking ON the edge puts the lower 2.8 kHz outside the segment and the
 /// transmit gate then refuses the very dial the band picker chose. Lifting the LSB home by one
-/// passband is what makes the pick keyable. USB extends upward from `lo`, so the edge is
-/// already clear there.
+/// passband is what makes the pick keyable. USB extends upward from `lo`, so a class's phone
+/// FLOOR inside a band is clear there; a segment that starts at the BAND's edge (every US
+/// segment from 1.25 m up, 3 cm's 10000.000 above all) is not, and parks on the band's
+/// activity instead ([`crate::bandplan::activity_home_mhz`]).
 ///
 /// WHY IT IS A FUNCTION AND NOT THREE COPIES (repair, 2026-08): the lift lived in
 /// `Engine::mode_home` only. `Engine::band_pick_default` (the band dropdown's pick — the
@@ -580,14 +618,95 @@ pub const SSB_BW_MHZ: f64 = 0.0028;
 /// the cockpit showed 🔒 TX LOCKED on a band the operator is fully licensed for. 160/80/40 m
 /// are the LSB phone bands this bit. Every phone home in the app now comes from here.
 pub fn phone_home(class: LicenseClass, band: &str) -> Option<(f64, &'static str)> {
+    phone_home_for(class, band, 0)
+}
+
+/// [`phone_home`] for the radio with Hamlib model `rig_model` (0 = unknown): the 3 cm home
+/// follows whether the radio transmits there itself ([`crate::bandplan::activity_home_mhz`]).
+pub fn phone_home_for(
+    class: LicenseClass,
+    band: &str,
+    rig_model: u32,
+) -> Option<(f64, &'static str)> {
+    let lo = segment_start(class, band, OperatingMode::Phone)?;
+    // WHERE THE PASSBAND STARTS: the band's phone ACTIVITY where it has one the class may key
+    // (`bandplan::activity_home_mhz`: 10368.100 on 3 cm, not the 10000.000 band edge the QO-100
+    // report was commanded to), else the segment start, as before.
+    let floor = crate::bandplan::activity_home_mhz(class, band, OperatingMode::Phone, rig_model)
+        .filter(|&a| a >= lo && tx_span_allowed(class, a, a + SSB_BW_MHZ, OperatingMode::Phone))
+        .unwrap_or(lo);
     // The band's sideband convention, 60 m's upper sideband included (`phone_is_lsb`).
-    segment_start(class, band, OperatingMode::Phone).map(|lo| {
-        if crate::bandplan::phone_is_lsb(lo) {
-            (lo + SSB_BW_MHZ, "LSB")
-        } else {
-            (lo, "USB")
+    let (dial, sb) = if crate::bandplan::phone_is_lsb(floor) {
+        (floor + SSB_BW_MHZ, "LSB")
+    } else {
+        (floor, "USB")
+    };
+    let (p_lo, p_hi) = if sb == "LSB" {
+        (dial - SSB_BW_MHZ, dial)
+    } else {
+        (dial, dial + SSB_BW_MHZ)
+    };
+    // NEVER ON AN ALLOCATION EDGE, and never a passband the band cannot hold: 2200 m is 2.1 kHz
+    // wide, so its lifted home was 138.5 kHz, off the band. No home is the honest answer there.
+    inside_allocation(class, p_lo, p_hi).then_some((dial, sb))
+}
+
+/// Where a CW pick parks for `class` on `band`: the band's CW ACTIVITY (14.030, not the dead
+/// 14.000 edge; `bandplan::activity_home_mhz` first, then `bandplan::cw_activity_mhz`), raised
+/// to the licensed CW-segment start so it never drops below privileges. `None` = no CW
+/// privilege there, or no home strictly inside the amateur allocation (the LF/MF bands, whose
+/// only start is their edge). THE CW home: section entry and the band picker both read it.
+pub fn cw_home(class: LicenseClass, band: &str) -> Option<f64> {
+    cw_home_for(class, band, 0)
+}
+
+/// [`cw_home`] for the radio with Hamlib model `rig_model` (0 = unknown), as [`phone_home_for`].
+pub fn cw_home_for(class: LicenseClass, band: &str, rig_model: u32) -> Option<f64> {
+    let lo = segment_start(class, band, OperatingMode::Cw)?;
+    let dial = crate::bandplan::activity_home_mhz(class, band, OperatingMode::Cw, rig_model)
+        .or_else(|| crate::bandplan::cw_activity_mhz(band))
+        // Only an activity dial the class may key: 23 cm's 1296.100 is above a Novice's
+        // 1270-1295, so a Novice parks on its own segment start instead.
+        .filter(|&a| tx_allowed(class, a.max(lo), OperatingMode::Cw))
+        .map_or(lo, |a| a.max(lo));
+    inside_allocation(class, dial, dial).then_some(dial)
+}
+
+/// The amateur spectrum `class`'s regime holds, every mode, as merged `[lo, hi)` MHz spans:
+/// [`OPEN_PARKING`] for `Open`, the union of every US class's rows otherwise.
+fn regime_spans(class: LicenseClass) -> Vec<(f64, f64)> {
+    let mut segs: Vec<(f64, f64)> = if matches!(class, LicenseClass::Open) {
+        OPEN_PARKING.iter().map(|g| (g.lo, g.hi)).collect()
+    } else {
+        US_CLASSES
+            .iter()
+            .flat_map(|&c| segments(c))
+            .map(|g| (g.lo, g.hi))
+            .collect()
+    };
+    segs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    for (lo, hi) in segs {
+        match out.last_mut() {
+            Some(last) if lo <= last.1 => last.1 = last.1.max(hi),
+            _ => out.push((lo, hi)),
         }
-    })
+    }
+    out
+}
+
+/// Does an emission from `lo_mhz` to `hi_mhz` lie STRICTLY inside the amateur spectrum of
+/// `class`'s regime, touching neither end of it? The rule every home obeys: a home on an
+/// allocation edge puts half a signal outside the band (and, through a station that maps its
+/// dial to another frequency, as SDR Console maps a QO-100 downlink to its uplink, somewhere
+/// that is not amateur spectrum at all). It judges WHERE A PICK PARKS, never keying, which
+/// [`tx_allowed`] alone decides. A class's own phone floor inside the band (14.150 for an Extra)
+/// is not an edge: the class's CW and data spectrum lies below it.
+pub fn inside_allocation(class: LicenseClass, lo_mhz: f64, hi_mhz: f64) -> bool {
+    const EPS: f64 = 1e-9;
+    regime_spans(class)
+        .iter()
+        .any(|&(a, b)| lo_mhz > a + EPS && hi_mhz < b - EPS)
 }
 
 /// The PHONE (SSB/image) sub-band the operator may use on `band`, as an inclusive/exclusive
@@ -779,7 +898,9 @@ mod tests {
     #[test]
     fn open_parks_on_30m_phone_9cm_and_60m() {
         assert_eq!(phone_home(Open, "30m"), Some((10.120, "USB")));
-        assert_eq!(phone_home(Open, "9cm"), Some((3400.0, "USB")));
+        // 3400.100, the narrowband calling frequency, not the 3400.0 parking edge (no home
+        // is an allocation edge: `inside_allocation`). The parking start itself is unchanged.
+        assert_eq!(phone_home(Open, "9cm"), Some((3400.1, "USB")));
         assert_eq!(segment_start(Open, "9cm", Cw), Some(3400.0));
         // 60 m is upper sideband everywhere, so its phone home is USB though it sits below 10 MHz.
         assert_eq!(phone_home(Open, "60m"), Some((5.363, "USB")));
@@ -1629,7 +1750,10 @@ mod tests {
     /// Technician from 28.3 to 28.5 MHz by 47 CFR 97.307(f)(10) ([`cw_and_ssb_voice_only`]).
     /// And ten rows grew, General's and Extra's `spans` in every section: each gained 2200 m
     /// (0.1357–0.1378) and 630 m (0.472–0.479), 47 CFR 97.301(b)/(d) ([`LF_MF`]); nothing else
-    /// on those rows moved.
+    /// on those rows moved. And the `home` column moved where it sat on a band's own edge (the
+    /// QO-100 report, 10000.000 on 3 cm): 160 m and 1.25 m up now park on the band's phone
+    /// activity ([`crate::bandplan::activity_home_mhz`]). Every `spans`, `starts`, `shade` and
+    /// sideband row is byte-identical: no privilege moved.
     #[test]
     fn the_shipped_classes_answer_byte_for_byte_as_before() {
         let path = concat!(
@@ -1649,5 +1773,70 @@ mod tests {
             assert_eq!(g, w, "line {}: a shipped class's privileges changed", n + 1);
         }
         assert_eq!(got, want, "a shipped class's privileges changed");
+    }
+
+    /// The two data limits judged by mode: 2.8 kHz below 28.3 MHz, and 300 baud on 2200 m and
+    /// 630 m, for every US class, at their edges; never for `Open`.
+    #[test]
+    fn data_width_and_symbol_rate_limits_hold_at_their_edges() {
+        for class in US_CLASSES {
+            assert!(
+                data_width_allowed(class, 14.074, 2_800.0),
+                "{class:?}: 2.8 kHz itself keys"
+            );
+            assert!(
+                !data_width_allowed(class, 14.074, 2_800.1),
+                "{class:?}: wider is refused"
+            );
+            assert!(
+                !data_width_allowed(class, 28.2999, 3_467.0),
+                "{class:?}: just under 28.3"
+            );
+            assert!(
+                !data_width_allowed(class, 0.1357, 3_467.0),
+                "{class:?}: 2200 m"
+            );
+            assert!(
+                data_width_allowed(class, 28.3, 3_467.0),
+                "{class:?}: from 28.3 MHz, no cap"
+            );
+            assert!(
+                data_width_allowed(class, 50.275, 3_467.0),
+                "{class:?}: 6 m has no cap"
+            );
+            for (lo, hi) in [
+                (0.1357, 0.1357),
+                (0.1377, 0.1379),
+                (0.4745, 0.4773),
+                (0.4789, 0.479),
+            ] {
+                assert!(
+                    !data_symbol_rate_allowed(class, lo, hi, 2_000.0),
+                    "{class:?} {lo}-{hi}"
+                );
+                assert!(
+                    data_symbol_rate_allowed(class, lo, hi, 300.0),
+                    "{class:?}: 300 Bd keys"
+                );
+            }
+            for (lo, hi) in [
+                (0.479, 0.4818),
+                (1.8, 1.8028),
+                (5.357, 5.3598),
+                (50.26, 50.2628),
+            ] {
+                assert!(
+                    data_symbol_rate_allowed(class, lo, hi, 2_000.0),
+                    "{class:?} {lo}-{hi}"
+                );
+            }
+        }
+        assert!(data_width_allowed(LicenseClass::Open, 14.074, 3_467.0));
+        assert!(data_symbol_rate_allowed(
+            LicenseClass::Open,
+            0.4745,
+            0.4773,
+            2_000.0
+        ));
     }
 }

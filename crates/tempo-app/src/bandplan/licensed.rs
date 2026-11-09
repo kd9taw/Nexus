@@ -5,6 +5,17 @@ pub fn licensed_bands(
     class: crate::settings::LicenseClass,
     mode: crate::settings::OperatingMode,
 ) -> Vec<crate::bandplan::BandChannel> {
+    licensed_bands_for(class, mode, 0)
+}
+
+/// [`licensed_bands`] for the radio with Hamlib model `rig_model` (0 = unknown): the rows the
+/// Phone/CW menu lists and the band pick lands on, whose 3 cm home follows the radio
+/// ([`crate::bandplan::activity_home_mhz`]).
+pub fn licensed_bands_for(
+    class: crate::settings::LicenseClass,
+    mode: crate::settings::OperatingMode,
+    rig_model: u32,
+) -> Vec<crate::bandplan::BandChannel> {
     use crate::bandplan::BandChannel;
     use crate::settings::{LicenseClass, OperatingMode};
     // Band and UI group, low band to high.
@@ -42,22 +53,17 @@ pub fn licensed_bands(
     // clear of the segment edge — the bare edge is a dial the transmit gate refuses, and this
     // command recomputing it from `segment_start` is how the dropdown used to publish an
     // unkeyable 7.1250 for 40 m. Sideband comes from the same answer.
-    // CW parks in the ACTIVITY window (14.030, not the dead 14.000 edge), clamped to the
-    // licensed segment start so it never drops below privileges; digital on the start.
+    // CW parks in the ACTIVITY window (14.030, not the dead 14.000 edge) through THE CW home
+    // (`privileges::cw_home`), which section entry reads too; digital on the start.
     // Sideband is digital-safe USB for both (the rig-mode policy forces CW in the CW
     // section regardless of this field).
     let home = |class: LicenseClass, band: &str| {
         if matches!(mode, OperatingMode::Phone) {
-            crate::privileges::phone_home(class, band)
+            crate::privileges::phone_home_for(class, band, rig_model)
+        } else if matches!(mode, OperatingMode::Cw) {
+            crate::privileges::cw_home_for(class, band, rig_model).map(|dial| (dial, "USB"))
         } else {
-            crate::privileges::segment_start(class, band, mode).map(|seg| {
-                let dial = if matches!(mode, OperatingMode::Cw) {
-                    crate::bandplan::cw_activity_mhz(band).map_or(seg, |a| a.max(seg))
-                } else {
-                    seg
-                };
-                (dial, "USB")
-            })
+            crate::privileges::segment_start(class, band, mode).map(|seg| (seg, "USB"))
         }
     };
     let mut out = Vec::new();

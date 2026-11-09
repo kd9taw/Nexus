@@ -217,6 +217,16 @@ fn card_speaks_for(k: &KeptOutlook, when: i64) -> bool {
             .is_some_and(|at| when - at < kp && k.since - when < kp)
 }
 
+/// Whether any card is kept for this pair of grids (their squares) — for a test that proves a
+/// path asked about for another reason never grades a contact.
+#[cfg(test)]
+pub(crate) fn holds_outlook_for(mygrid: &str, dxgrid: &str) -> bool {
+    let (Some(me4), Some(dx4)) = (grid4(mygrid), grid4(dxgrid)) else {
+        return false;
+    };
+    lock(&OUTLOOKS).iter().any(|k| k.me4 == me4 && k.dx4 == dx4)
+}
+
 fn month_of(t: i64) -> (i64, u32) {
     propagation::solar_cycle::year_month(t)
 }

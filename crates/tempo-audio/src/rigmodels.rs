@@ -103,6 +103,11 @@ pub fn rig_models() -> Vec<(u32, &'static str)> {
         (1043, "Yaesu FT-897D"),
         (1020, "Yaesu FT-817 / FT-817ND"),
         (1041, "Yaesu FT-818 / FT-818ND"),
+        // FT-847 — moved up from the extended tier, for the IC-7600's reason above. CAT Auto-test
+        // seeds it (`port_prober::COMMON_CAT_MODELS`), and a seeded hit fills in only the port and
+        // baud, leaving the operator to pick the model: from the extended tier that is a radio
+        // its owner cannot find while "Show all models" is off. `rigctl -l`: 1001 `FT-847`.
+        (1001, "Yaesu FT-847"),
         (1046, "Yaesu FT-450D"),
         (1028, "Yaesu FT-950"),
         (1029, "Yaesu FT-2000"),
@@ -235,7 +240,6 @@ fn extended_rig_models() -> Vec<(u32, &'static str)> {
         (3047, "Icom IC-756PROII"),
         (3019, "Icom IC-735"),
         // Yaesu (backend 1)
-        (1001, "Yaesu FT-847"),
         (1010, "Yaesu FT-736R"),
         (1021, "Yaesu FT-100 / FT-100D"),
         (1023, "Yaesu FT-897"),

@@ -285,6 +285,7 @@ The panes you can assign:
 | Kp outlook | NOAA's three-day planetary-K forecast as bars, the measured hours solid and the forecast hollow, with when a storm is expected to start or settle |
 | Path over the day | the selected station's path through the 24 UTC hours: per band, how well the model expects the short and long path to work and which way round it favours, the MUF ceiling, the grey line and the Kp ribbon; click an hour to move the 2-D map to it |
 | Paths to the regions | the same strip for ten DX regions, each on its best band (▸ for every band), the regions you need or have worked most first |
+| Best times | type a call (or a grid square) and see whether you can work it now and on which band, then the next good windows over the coming day, the days this week a Kp forecast reaches the path, and a band × hour chart. It says what the answer rests on: the station's grid and where Nexus got it, or only its country's centre |
 | Getting Out | who is hearing you right now: a compass, and every station that heard you in the last half hour, with its direction and distance, band, SNR and how long ago |
 | Bands by region | the best band to reach each region |
 | Activity Matrix | a region × band grid of live activity |
@@ -444,7 +445,7 @@ leads with the top few; Chase Feed is the full ranked table.
 
 Click a station on the map (or in a pane) and the **Selection** and **Band
 Outlook** panes switch to *that call*: the modelled path, its MUF ceiling, and
-per-band workability. With the P.533 engine selected you also get per-mode
+per-band workability. With the P.533 engine, the default, you also get per-mode
 FT8/FT4/CW/SSB "workable now" chips.
 
 ![The Band Outlook pane retitled Path to G4XYZ, listing per-band workability, windows and per-mode chips.](../img/manual/connect-path-prediction.webp)
@@ -455,13 +456,70 @@ including the FT8/CW/SSB chips. The *observed* half is a different pane: **Getti
 the stations that actually reported hearing you. Both are documentation fixtures here — no path
 was solved for a real contact, and nobody reported this station.*
 
+### Find the best times to work a call
+
+The **Best times** box answers one question: when, and on which band, can I work this station?
+Type a call (or a grid square) and press **Best times**. You can also right-click a call (or press
+the Menu key, or Shift+F10, on it) and choose **Best times** at the top of the menu. The same menu
+opens everywhere a call is listed: the Call Roster, Band Activity, Spots, Needed, Chase and the
+chase feed, POTA/SOTA, DXpeditions, the Logbook (also in a row's ⋯ menu), a band map's spot labels,
+the map's selected station, a roster card and a JS8 station row. On the band map, a right-click on
+the track between labels still marks a frequency. The station card has a **Best times** button too.
+The item opens a small card beside the call and does nothing else: it does not select, tune or call
+the station. JS8's Band Activity rows (an offset and its text, with no call of their own) and the
+heartbeat button (a transmit control) have no such menu.
+
+The answer starts with now: "Now: try 20m", how good the band is and until about which hour (UTC,
+on the hour, because the model works in hours), and a second band if one is also open. If nothing
+is open you get "a long shot" or "Not now". Under that come the next good windows over the coming
+day, with the time in UTC and in your own time, then the week. The model is a monthly median, so
+every day this week has the same hours. The only thing that changes from day to day is the Kp
+forecast, so you get a warning only for a day whose forecast Kp reaches this path's auroral zone.
+Past the end of the forecast, Nexus says nothing about the weather.
+
+Every answer says what it rests on:
+
+- **Where the station is.** It uses the same place the rotator would point at: the grid on your
+  log form, a grid they sent on the air, the callbook's answer, or your last contact with them. If
+  Nexus knows only their country, it says "centre of … Rough." and asks the callbook once, after
+  you asked for the answer, never when you just hover. If a station is in your own country and
+  only the country is known, it gives no answer, because the centre of your own country says
+  nothing about where they are. For a ship or aircraft mobile it asks for their grid. You can
+  always type a grid for the call. For a portable call (EA8/DL1ABC) the callbook often answers
+  with the home call's record. If that address is in another country, Nexus leaves it out and
+  uses the country centre, marked Rough. If it is in the same country, Nexus uses it, and the
+  answer says it is the home call's address and they may be elsewhere.
+  Under 300 km there is no answer: that close, the model calls nearly every band open all day.
+- **The model and your station.** It follows your prediction engine (P.533 by default), its month,
+  the mode you picked (FT8, FT4, CW or SSB, starting from your radio's mode), and the power and
+  antenna gain it assumed.
+
+During a flare or a proton event, a band estimated to lose 10 dB or more right now is left out of
+"Now", every such band, and the answer names the one it would have been. If every band is hit that
+hard, it says "Not now". The chart and the later windows are not changed.
+
+It never gives a percentage, and it never promises that the station is on the air. One line says
+when the Spots board last saw them. That line comes from spots Nexus already has and changes no
+ranking. Bands your licence does not let you transmit on in that mode are left out of the answer
+and dimmed in the chart. VHF and up are not predicted.
+
+In a wide box the band-by-hour chart sits beside the answer, and in a narrow one it goes below.
+The card's **See full day** opens Conditions in its own window with this call, so your operating
+screen and its Stop TX stay where they are. If you have removed the box from that window's layout,
+See full day puts it back. Existing layouts get the box once, as the last tab of the right
+column's top slot, and still read as the layout they were. If you remove it, it stays removed.
+Nothing in the box or the card transmits.
+
 ### Choose the prediction engine
 
 In [Settings ▸ Services](settings-reference.md#integrations--feeds),
-**Prediction engine** selects **Modelled (fast heuristic)** or **ITU-R P.533
-(full physics)**. P.533 is the real circuit-reliability method (validated
+**Prediction engine** selects **ITU-R P.533 (full physics, default)** or
+**Modelled (fast heuristic)**. P.533 is the real circuit-reliability method (validated
 against the ITU reference, ~0.1 s per prediction, and it uses your station power
-and antenna gain). **Live spots always win over any model.**
+and antenna gain). **Live spots always win over any model.** If P.533 cannot run,
+the pane shows the heuristic's answer and says "modelled: P.533 could not run" where
+the engine's name goes. A station on the heuristic moves to P.533 once when it
+updates to the version that made it the default; set it back here and it stays.
 
 ## The Now-Bar
 
@@ -474,9 +532,23 @@ hides the dashboard rail (above).
 
 ## Honest limits
 
-- **The per-path 24-hour outlook is a physics-lite in-house heuristic** (MUF +
-  D-layer) and is labelled "modelled." The P.533 engine is a fuller model but is
-  still a *model*; live spots override both.
+- **The per-path 24-hour outlook is a model.** P.533, the default, is a monthly
+  median. In a geomagnetic storm Nexus lowers its hours with the heuristic's own
+  storm penalty: the current hour from today's Kp, later hours from SWPC's Kp
+  forecast, and an hour with no forecast is left as P.533 gave it. The pane says
+  "Adjusted for a geomagnetic storm" when it has done so from Kp 5, and "Adjusted
+  for unsettled geomagnetic conditions" at Kp 3 or 4.
+- **The power P.533 assumes is shown under the answer:** your Station power
+  setting; else the power your radio measured on your last transmission (with an
+  amplifier set up, the amplifier's output); else 100 W, said as such.
+- **The Band Advisor and the DXpedition cards' "work now" status still use the
+  physics-lite heuristic** for a band nobody has been heard on; the Band Advisor
+  says so in its caption.
+- **Band Outlook's words under P.533 follow the modes a band carries** at its best
+  hour: Excellent when SSB is usable on three days in four, Good for CW, Fair when
+  FT8 is usable on half the days, Marginal at one day in ten. The outlook to DX
+  reads the word a band reaches toward at least half the directions. Both are *models*; live spots
+  override both.
 - **VOACAP is not integrated.**
 - **PSK Reporter's MQTT band topics carry no SNR**, so SNR-derived features
   degrade gracefully where the data isn't present.

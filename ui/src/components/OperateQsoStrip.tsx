@@ -12,6 +12,7 @@ import { FtStopControl } from './FtStopControl'
 // air, the rig's mode and filter width, and every count.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { t } from '../i18n'
+import { catSaysTxOff } from '../features/catDetail'
 import { requestWindowAttention } from '../api'
 import type { ModeRequest, QsoStatus, RadioStatus } from '../types'
 import { isOnAir } from '../types'
@@ -228,6 +229,9 @@ export function OperateQsoStrip({
     setFree('')
   }
 
+  // A CAT outage turned transmit off: said in the TX state, after the controls (`catSaysTxOff`).
+  const catOff = radio && !radio.txEnabled ? catSaysTxOff(radio.catDetail) : null
+
   return (
     <section className={`cockpit-qso panel${radio ? (onAir ? ' tx' : ' rx') : ''}`}>
       {/* POSITION-STABILITY ORDER (OperateQsoStrip.geometry.test): the two button
@@ -345,7 +349,21 @@ export function OperateQsoStrip({
           screens' TX strip does (`CockpitTxStrip`), rather than "Receiving" over a Call CQ that
           cannot key. What is on the air is still shown first. */}
       {radio && (
-        <span className="cq-statecap" title={!onAir && radio.txRefusal ? radio.txRefusal : undefined}>
+        <span
+          // #482: the state rides on the caption itself, as on every other screen's strip
+          // (CockpitTxStrip): the strip's `rx` wash means "not on the air", TX off included, so
+          // painting the caption from it made "TX off" green here and white everywhere else.
+          className={`cq-statecap ${onAir ? 'tx' : radio.txRefusal ? 'off' : radio.txEnabled ? 'rx' : 'off'}`}
+          title={
+            !onAir && radio.txRefusal
+              ? radio.txRefusal
+              : !onAir && catOff === 'lost'
+                ? t('settings.rigControl.catSilentTxOff')
+                : !onAir && catOff === 'back'
+                  ? t('settings.rigControl.catBackTxOff')
+                  : undefined
+          }
+        >
           {onAir
             ? t('operate.strip.state.transmitting')
             : radio.txRefusal
@@ -491,7 +509,18 @@ export function OperateQsoStrip({
         </span>
       </form>
 
-      <span className="cq-spacer" />
+      {/* The strip's one absorber. Why transmit is off after a CAT outage rides in it: it is already a
+          zero-basis grower, so the words can never wrap the strip or move a control (`.cq-catnote`). */}
+      {catOff && !onAir && !radio?.txRefusal ? (
+        <span
+          className="cq-spacer cq-catnote cat-txoff-note"
+          title={catOff === 'lost' ? t('settings.rigControl.catSilentTxOff') : t('settings.rigControl.catBackTxOff')}
+        >
+          {catOff === 'lost' ? t('operate.strip.state.txOffCatLost') : t('operate.strip.state.txOffCatBack')}
+        </span>
+      ) : (
+        <span className="cq-spacer" />
+      )}
       {/* Active DXpedition mode badge — prominent, next to the period controls. */}
       {specialOpBadge}
       {rotor}

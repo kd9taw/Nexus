@@ -41,6 +41,7 @@ import { CONNECT_STRIP_MAX_SHARE, CONNECT_STRIP_SPLIT_MAX, CONNECT_STRIP_SPLIT_M
 import type { NeededBoard, OtaBoard, SpotsFeed } from './connect/paneContext'
 import type { DayScrub } from './prop/PathDayStrip'
 import { fmtZ } from '../propViz'
+import { claimAsk, subscribeAsk } from '../features/bestTimesAsk'
 import {
   SLOT_IDS,
   addableTo,
@@ -55,6 +56,7 @@ import {
 import {
   CONNECT_PRESET_IDS,
   CONNECT_PRESETS,
+  tableOffers,
   STANDARD_LAYOUT,
   connectLayoutNow,
   layoutOf,
@@ -310,6 +312,7 @@ function hasOwnLayout(surface: string): boolean {
 }
 
 function switchToDefaultOnce(presets: Readonly<Record<ConnectPresetId, ConnectLayout>>): void {
+  const insert = tableOffers(presets, 'bestTimes')
   const surface = surfaceId()
   const key = switchKey(surface)
   if (switchRecord(surface)) return
@@ -317,7 +320,7 @@ function switchToDefaultOnce(presets: Readonly<Record<ConnectPresetId, ConnectLa
     durableSet(key, JSON.stringify({ v: SWITCH_V, kept: switchRecord('main')?.kept ?? null }))
     return
   }
-  const cfg = loadConnectConfig()
+  const cfg = loadConnectConfig(insert)
   const panels = loadPanelLayout(CONNECT_PANELS, surface, 'main')
   const rails = loadRailWidths()
   const now = { slots: cfg.slots, tabs: cfg.tabs, panels, rails, bar: surfaceGet(BAR_KEY) === '1' }
@@ -541,7 +544,22 @@ export function ConnectView({
     return loadKeptLayout()
   })
   // Basic/Expert + the per-slot pane assignment (persisted; basic-default, remember-last).
-  const { slots, tabs, rotate, assignPane, addTab, removeTab, showTab, setRotate, resetSlots, restoreSlots } = useConnectConfig()
+  const { slots, tabs, rotate, assignPane, addTab, removeTab, showTab, setRotate, resetSlots, restoreSlots } = useConnectConfig(
+    tableOffers(table, 'bestTimes'),
+  )
+  // A call handed to Best times (a card's See full day): the box comes on screen, shown where it is
+  // or added as the last tab of the right column's top slot. Each hand-off once, those made before
+  // this view mounted included.
+  useEffect(() => {
+    const bring = () => {
+      if (!claimAsk()) return
+      const at = SLOT_IDS.find((s) => slotBoxes({ slots, tabs }, s).includes('bestTimes'))
+      if (!at) addTab('right1', 'bestTimes')
+      else if (slots[at] !== 'bestTimes') showTab(at, 'bestTimes')
+    }
+    bring()
+    return subscribeAsk(bring)
+  }, [slots, tabs, addTab, showTab])
   // Band focus (advisor/opening row click) — the map highlights that band's heat
   // + spots; click the same band again (or the clear chip) to release.
   const [focusBand, setFocusBand] = useState<string | null>(null)

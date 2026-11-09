@@ -10,6 +10,7 @@
 // and stay in the code.
 import { useEffect, useId, useState, type ReactNode } from 'react'
 import { ChevronDown } from 'lucide-react'
+import { ListenLevel } from './ListenLevel'
 import type { BandChannel, LinkState, RadioStatus, RadioSummary, StationProfileChoice, Tier } from '../types'
 import { isOnAir, isRxOnly } from '../types'
 import { Menu } from './ui/Menu'
@@ -152,6 +153,10 @@ interface Props {
    *  of drawing it as a line of its own under the bar. It is the bar's last group. Absent ⇒ the bar is
    *  exactly what it was. */
   nowBar?: ReactNode
+  /** #468: the listening level (Settings ▸ Radio ▸ Receive audio on this computer). App passes it
+   *  while that audio is switched on, and the RX level meter then opens its slider; absent ⇒ the
+   *  meter is a meter only. */
+  listenLevel?: { level: number; onCommit: (level: number) => Promise<unknown> }
 }
 
 // The robust tier is TempoDeep — a non-coherent, fading-resilient 15 s mode that
@@ -415,6 +420,7 @@ export function TopBar({
   alarmCell = false,
   showLocalClock = false,
   nowBar,
+  listenLevel,
 }: Props) {
   // md and lg (features/compactChrome): the eleven tier pills are one menu button, as they are on the
   // FT screens at the small size, so the bar is one row. xl keeps the pills, which fit there.
@@ -653,10 +659,19 @@ export function TopBar({
 
         {/* Live-polled meter (100 ms, lock-free backend) — the meter's own title carries the
             live dB readout, so the wrapper title stays static. */}
-        <div className="rx-level" title={t('topbar.rxLevel.title')}>
-          <span className="rx-level-label">{RX}</span>
-          <LiveLevelMeter label={t('topbar.rxLevel.label')} variant="compact" />
-        </div>
+        {/* #468: while receive audio plays here, the meter is also the listening level's button
+            (ListenLevel): the bar gets no new width. */}
+        {listenLevel ? (
+          <ListenLevel className="rx-level" level={listenLevel.level} onCommit={listenLevel.onCommit}>
+            <span className="rx-level-label">{RX}</span>
+            <LiveLevelMeter label={t('topbar.rxLevel.label')} variant="compact" />
+          </ListenLevel>
+        ) : (
+          <div className="rx-level" title={t('topbar.rxLevel.title')}>
+            <span className="rx-level-label">{RX}</span>
+            <LiveLevelMeter label={t('topbar.rxLevel.label')} variant="compact" />
+          </div>
+        )}
 
         {!hideTxControls && !hideDigitalChrome && (
         <div className="op-controls" role="group" aria-label={t('topbar.txControls.aria')}>

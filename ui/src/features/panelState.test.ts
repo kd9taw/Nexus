@@ -488,7 +488,7 @@ describe('cockpit vocabularies (TX-safety: the STOP line)', () => {
   })
 
   it('lists the expected content panels per cockpit', () => {
-    expect([...SSTV_PANELS.panelIds]).toEqual(['scope', 'rfScope', 'txcompose', 'gallery'])
+    expect([...SSTV_PANELS.panelIds]).toEqual(['scope', 'rfScope', 'txMetersPane', 'txcompose', 'gallery'])
     expect([...PHONE_PANELS.panelIds]).toEqual([
       'scope', 'rigscope', 'txmeters', 'txMetersPane', 'receiver', 'transmitter', 'bandActivity', 'voiceKeyer',
       'spots', 'needed', 'recent', 'stats', 'freedv', 'box1', 'box2', 'box3', 'box4', 'box5', 'box6',
@@ -628,7 +628,8 @@ describe('panes a vocabulary ships HIDDEN (#345: Phone Spots and Needed)', () =>
     expect(shipsHidden.map((v) => v.view)).toEqual(['operate', 'sstv', 'phone', 'cw', 'rtty', 'psk', 'jtty', 'js8'])
     expect([...(PHONE_PANELS.defaultRemoved ?? [])]).toEqual([...HIDDEN])
     expect([...(CW_PANELS.defaultRemoved ?? [])]).toEqual(HIDDEN.filter((id) => id !== 'freedv'))
-    expect([...(SSTV_PANELS.defaultRemoved ?? [])], 'sstv').toEqual(['rfScope'])
+    // SSTV ships the large TX meters pane hidden beside it, as FT, Phone and CW do.
+    expect([...(SSTV_PANELS.defaultRemoved ?? [])], 'sstv').toEqual(['rfScope', 'txMetersPane'])
     expect([...(panelState.JTTY_PANELS.defaultRemoved ?? [])], 'jtty').toEqual(['rfScope'])
     // RTTY and PSK ship the Stats pane hidden beside it (2026-10-14), and the Recent contacts pane.
     for (const v of [RTTY_PANELS, panelState.PSK_PANELS]) {

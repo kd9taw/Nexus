@@ -175,6 +175,40 @@ own CAT settings (Network for a TCP server, Serial for a virtual COM pair),
 and send the audio through two cables. Their menus have not been checked here,
 so this page does not name them.
 
+For FT8 and the other sound card modes, Nexus asks for the radio's data mode.
+SDR Console has none: it stays in USB, and may show its error window two or
+three times when Nexus connects. Nexus asks twice, while you receive, sees the
+radio stay in USB both times, and from then on uses plain **USB** (LSB where the mode sits on the lower side) on
+that connection, so you do not need to turn on **Data modes use plain SSB**.
+Thetis, PowerSDR and piHPSDR take the data mode as **DIGU**, and Nexus keeps
+it. The same applies when you point Nexus at a rigctld you run yourself, as
+**NET rigctl**.
+
+### QO-100 through SDR Console
+
+SDR Console handles the QO-100 converters itself. It applies the LNB offset
+and the transmit converter offset, and over CAT it reports, and takes, the
+**downlink** frequency: about 10489.7 MHz, not 2400.2. Nexus sees that dial
+as 3 cm and judges your licence on it. It sets no LNB offset of its own and
+does not tune the uplink.
+
+- In Phone or CW, pick **3cm** from the band menu. With the **Open** licence
+  class it lands on the narrowband transponder: SSB at 10489.700 and CW at
+  10489.520. A US class lands on the 10368.100 calling frequency instead,
+  because the US is outside QO-100's footprint. A radio that transmits on
+  3 cm itself (the IC-905) lands there with the Open class too: keyed
+  directly, the transponder frequency would be a terrestrial signal in the
+  satellite's downlink. Once you have tuned there, Nexus remembers your
+  frequency on 3 cm.
+- The last entry in that menu, **QO-100 satellite**, opens the Satellites
+  screen on QO-100. Picking its narrowband transponder there tunes the
+  downlink. With the satellite uplink mapping left at its default, Nexus
+  writes nothing to a transmit VFO and leaves the uplink to SDR Console. Keep
+  it that way with SDR Console: its CAT does only an emulated split.
+- Before you transmit, check that SDR Console shows the uplink you expect
+  (2400.200 for 10489.700). Nexus cannot see how SDR Console maps its
+  transmit frequency.
+
 For a program that is not in the list, tick **Show all models** for the full
 Hamlib catalog or type its model number. Or run rigctld yourself and point
 Nexus at it as **NET rigctl**, as described under

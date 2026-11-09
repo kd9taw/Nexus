@@ -71,7 +71,7 @@
 //! rewrite is in the file, and the rewrite never writes it twice.
 
 use super::mirror::{file_stamp, FileStamp, MirrorSource, Readiness, READY_WAIT};
-use super::{adif_record_own_log, Export, ExportKind, Logbook, QsoRecord, RecordId, Saved};
+use super::{adif_record_own_file, Export, ExportKind, Logbook, QsoRecord, RecordId, Saved};
 use std::collections::{HashSet, VecDeque};
 use std::ops::ControlFlow;
 use std::path::PathBuf;
@@ -484,7 +484,7 @@ impl Lane {
         for r in fresh {
             match Logbook::append_for_sync(&self.path, r).and_then(|receipt| receipt.sync()) {
                 Ok(()) => {
-                    written += adif_record_own_log(r).len() as u64;
+                    written += adif_record_own_file(r).len() as u64;
                     if let Some(id) = r.id {
                         self.file_ids().insert(id);
                     }
