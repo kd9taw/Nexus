@@ -1072,11 +1072,21 @@ fn daemon_is_foreign(
 /// settings name ([`crate::ports::virtual_port_node`]), and a udev `by-id` link names its ttyUSB
 /// the same way: one radio under two names is not a different radio. A path that does not
 /// resolve matches nothing.
+///
+/// ⚠️ Unix only, and false everywhere else. On Windows `canonicalize` is a `CreateFile`, which on
+/// a `COM5` would OPEN the port and could raise its lines; there the plain name comparison in
+/// [`daemon_is_foreign`] is all there is.
+#[cfg(unix)]
 fn same_node(a: &str, b: &str) -> bool {
     match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     }
+}
+
+#[cfg(not(unix))]
+fn same_node(_: &str, _: &str) -> bool {
+    false
 }
 
 /// operator's instruction, and comparing it against the real rig behind the daemon would refuse
@@ -25354,6 +25364,14 @@ mod tests {
         assert!(
             !daemon_is_foreign(1049, "/dev/cu.usbserial-A", false, &d(None, None)),
             "nothing known at all — the honest answer is share, and let the CAT probe judge"
+        );
+
+        // Off Unix nothing is resolved (a lookup there would open the port): names compare as
+        // names, so even a name equal to itself through the filesystem is not consulted.
+        #[cfg(not(unix))]
+        assert!(
+            !same_node("COM5", "COM5"),
+            "never touches the filesystem off Unix"
         );
 
         // ── SILENT: one radio under two names. A virtual port's daemon runs on the node the
