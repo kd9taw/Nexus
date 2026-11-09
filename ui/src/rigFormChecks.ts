@@ -145,10 +145,14 @@ export function checkRigForm(
   }
 
   const present = ports.includes(port)
+  // A typed path outside /dev — a virtual port another program makes, such as wfview's
+  // `~/Downloads/rig-pty1` — is never in the list, so its absence from it says nothing. Nexus
+  // expands the `~` itself, and the radio loop judges such a path by the file being there.
+  const neverListed = port.startsWith('~/') || (port.startsWith('/') && !port.startsWith('/dev/'))
 
   // Present at all. A saved port can legitimately be absent (rig switched off), so this is a
   // warning — but the operator should know now rather than wonder later why CAT never connects.
-  if (!present) {
+  if (!present && !neverListed) {
     out.push({ level: 'warning', message: t('settings.radio.check.portMissing', { port }) })
   }
 

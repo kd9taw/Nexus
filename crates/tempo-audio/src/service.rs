@@ -1059,10 +1059,34 @@ fn daemon_is_foreign(
 ) -> bool {
     let model_differs = d.model.is_some_and(|m| m != want_model);
     let device_differs = match (&d.device, want_port) {
-        (Some(dev), want) if !want.is_empty() && !is_network => dev != want,
+        (Some(dev), want) if !want.is_empty() && !is_network => {
+            dev != want && !same_node(dev, want)
+        }
         _ => false,
     };
     model_differs || device_differs
+}
+
+/// Do two paths name the same file once every symlink is resolved? A virtual port's daemon is
+/// started on the pseudo-terminal node itself (`-r /dev/pts/N`), never on the `rig-pty1` link the
+/// settings name ([`crate::ports::virtual_port_node`]), and a udev `by-id` link names its ttyUSB
+/// the same way: one radio under two names is not a different radio. A path that does not
+/// resolve matches nothing.
+///
+/// ⚠️ Unix only, and false everywhere else. On Windows `canonicalize` is a `CreateFile`, which on
+/// a `COM5` would OPEN the port and could raise its lines; there the plain name comparison in
+/// [`daemon_is_foreign`] is all there is.
+#[cfg(unix)]
+fn same_node(a: &str, b: &str) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn same_node(_: &str, _: &str) -> bool {
+    false
 }
 
 /// operator's instruction, and comparing it against the real rig behind the daemon would refuse
@@ -5603,11 +5627,16 @@ impl RadioLoop {
     /// One presence check of `port` against an enumeration. Returns true on the ABSENT →
     /// PRESENT edge. An empty enumeration says nothing (no `serial` feature, or the platform
     /// walk failed) and leaves the verdict untouched — it must never read as "absent".
+    ///
+    /// A typed path the enumeration cannot list is judged by the filesystem instead
+    /// ([`typed_port_exists`]): a virtual port another program makes (wfview's
+    /// `~/Downloads/rig-ptyN` on a Mac) is never enumerated, and read against the list alone it
+    /// was "absent" for good, so after a CAT drop the radio never reconnected by itself.
     fn port_watch(&mut self, port: &str, ports: &[String]) -> bool {
         if ports.is_empty() {
             return false;
         }
-        let present = ports.iter().any(|p| p == port);
+        let present = ports.iter().any(|p| p == port) || typed_port_exists(port);
         let returned = self.cat_port_present == Some(false) && present;
         if self.cat_port_present != Some(present) {
             crate::civ::diag::note(&format!(
@@ -19883,6 +19912,14 @@ fn is_link_fault(e: &std::io::Error) -> bool {
     ) || crate::rig::cat_unreachable(e)
 }
 
+/// Is `port` a typed absolute path (macOS, Linux) whose file is there right now? The presence
+/// half the enumeration cannot supply for a virtual port ([`RadioLoop::port_watch`]). A
+/// real serial device's node goes away when it is unplugged, so this cannot hold one present
+/// that is gone. A Windows `COM5` is not a path and is never judged this way.
+fn typed_port_exists(port: &str) -> bool {
+    cfg!(unix) && port.starts_with('/') && std::path::Path::new(port).exists()
+}
+
 /// The port to follow a rig to when `configured` is absent: exactly one present USB port
 /// carrying the remembered (vid, pid, product). Pure, for the test.
 fn alias_for(
@@ -25328,6 +25365,41 @@ mod tests {
             !daemon_is_foreign(1049, "/dev/cu.usbserial-A", false, &d(None, None)),
             "nothing known at all — the honest answer is share, and let the CAT probe judge"
         );
+
+        // Off Unix nothing is resolved (a lookup there would open the port): names compare as
+        // names, so even a name equal to itself through the filesystem is not consulted.
+        #[cfg(not(unix))]
+        assert!(
+            !same_node("COM5", "COM5"),
+            "never touches the filesystem off Unix"
+        );
+
+        // ── SILENT: one radio under two names. A virtual port's daemon runs on the node the
+        // settings' link resolves to; a link to ANOTHER node is still another radio.
+        #[cfg(unix)]
+        {
+            let dir = std::env::temp_dir().join(format!("nexus-same-node-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("temp dir");
+            let (node, other, link) = (dir.join("pts-3"), dir.join("pts-4"), dir.join("rig-pty1"));
+            std::fs::write(&node, b"").expect("node");
+            std::fs::write(&other, b"").expect("other");
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(&node, &link).expect("symlink");
+            let (node_s, other_s, link_s) = (
+                node.to_string_lossy().into_owned(),
+                other.to_string_lossy().into_owned(),
+                link.to_string_lossy().into_owned(),
+            );
+            assert!(
+                !daemon_is_foreign(3073, &link_s, false, &d(Some(3073), Some(&node_s))),
+                "the daemon on the node the link names is this radio's"
+            );
+            assert!(
+                daemon_is_foreign(3073, &link_s, false, &d(Some(3073), Some(&other_s))),
+                "a daemon on another node is another radio"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]
@@ -47761,6 +47833,42 @@ mod tests {
             !state.port_watch("COM5", &["COM5".to_string()]),
             "present → present is not an edge"
         );
+    }
+
+    /// ⭐ A TYPED VIRTUAL PORT IS PRESENT WHILE ITS FILE IS THERE. wfview's `~/Downloads/rig-ptyN`
+    /// is never in a Mac's enumeration (which is never empty), so read against the list alone it
+    /// stayed absent for good and a dropped CAT link never reopened by itself. The file going
+    /// away is still absence, and its return is the same rebuild edge a USB port's return is.
+    #[cfg(unix)]
+    #[test]
+    fn a_typed_path_that_exists_is_present_though_never_enumerated() {
+        let dir = std::env::temp_dir().join(format!("nexus-typed-port-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let pty = dir.join("rig-pty1");
+        let pty_s = pty.to_string_lossy().into_owned();
+        let listed = ["/dev/cu.Bluetooth-Incoming-Port".to_string()];
+        let mut state = loop_state();
+        std::fs::write(&pty, b"").expect("stand-in node");
+        assert!(
+            !state.port_watch(&pty_s, &listed),
+            "unknown → present is no edge"
+        );
+        assert_eq!(
+            state.cat_port_present,
+            Some(true),
+            "there, though not listed"
+        );
+        std::fs::remove_file(&pty).expect("rm");
+        assert!(!state.port_watch(&pty_s, &listed));
+        assert_eq!(state.cat_port_present, Some(false), "the file gone: absent");
+        std::fs::write(&pty, b"").expect("back");
+        assert!(
+            state.port_watch(&pty_s, &listed),
+            "absent → present: reopen"
+        );
+        // A Windows name is never looked up on disk, whatever the working directory holds.
+        assert!(!typed_port_exists("COM5"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Following a rig to a NEW port name: exactly one present port with the remembered USB
