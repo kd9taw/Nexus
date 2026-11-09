@@ -648,6 +648,14 @@
   max-width: max-content;
   margin-left: auto;
 }
+/* …AND EACH COLUMN OF ITS METERS' GRID (TxMeters `strip`, `.ph-txmeters.inline.strip` in styles.css, which
+   lays the meters down then across) shares the cell equally, as 1fr did, up to half of Operate's cell
+   (`.cq-telemetry`, two columns less the gap between them). That is the meters' useful width, the cell's
+   `max-content` above, so past it the strip's room goes to the alarm cell beside them. A fixed track, so no
+   reading changes it. */
+.cockpit-txstrip-meters-grid {
+  grid-auto-columns: minmax(0, calc((21em - var(--space-2)) / 2));
+}
 /* …WITH NEEDLES, a higher ceiling: the three largest faces and the COMP row beside them. The same zero
    basis and auto margin, so the same promise; it still only takes the strip's empty right side. */
 .cockpit-txstrip-meters-needle {

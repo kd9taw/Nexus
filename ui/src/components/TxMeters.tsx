@@ -506,7 +506,8 @@ export function TxMeters({
   // `inline` keeps the compact geometry THROUGH a key-down: that cell is fixed-width chrome
   // in the Operate strip and the anti-bounce ruling is that the TX cycle costs it nothing.
   const compact = inline || !live
-  const variant = `${compact ? ' pinned' : ''}${inline ? ' inline' : ''}${strip ? ' strip' : ''}`
+  // `cockpit-txstrip-meters-grid`: the TX strip's grid, whose column cap is cockpit-panes.css's (structure).
+  const variant = `${compact ? ' pinned' : ''}${inline ? ' inline' : ''}${strip ? ' strip cockpit-txstrip-meters-grid' : ''}`
   const shown = live || lastRows.current.length === 0 ? rows : lastRows.current
 
   // ⛔ THE FOUR-ROWS-ALWAYS CONTRACT IS THE DOCK'S, AND IT DOES NOT REACH THIS CELL.
