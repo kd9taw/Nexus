@@ -1139,7 +1139,7 @@ mod tests {
     }
 
     /// How many times `path` is opened while `f` runs, by anyone, as inotify sees it.
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "serial"))]
     fn opens_during(path: &std::path::Path, f: impl FnOnce()) -> usize {
         let c = std::ffi::CString::new(path.to_string_lossy().as_bytes()).expect("path");
         // SAFETY: an inotify descriptor owned here and closed before returning; `read` writes at
@@ -1175,7 +1175,7 @@ mod tests {
 
     /// A pseudo-terminal pair, as a virtual-port program makes one: the master end (held open
     /// by the caller, as that program holds it) and the slave's path.
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "serial"))]
     fn open_pty() -> (std::fs::File, String) {
         use std::os::unix::io::FromRawFd;
         // SAFETY: plain libc calls on a descriptor this function owns; `ptsname_r` writes at
