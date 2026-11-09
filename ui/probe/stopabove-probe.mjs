@@ -14,6 +14,9 @@
 //   3. THE OVERLAY STAYS OPEN, and the keyboard stays where it was (in the dialog, for the ones that had it) — for a
 //      press on a mirror. A menu that does not cover Stop TX (the band pill's at xl) leaves it no mirror: that click
 //      is Stop TX's own, and the menu closes and lets it through.
+//   4. THE MIRROR IS A SECOND STOP TX AND IS HELD TO IT: one TAP stops once too; no node of the mirror is exposed in
+//      Chrome's accessibility tree; and it follows its button before the next frame (disabled at once, enabled again
+//      at once, gone at once when the button goes behind [hidden]).
 // THE CONTROL, run at every case where a mirror took the click: the same page with the stop layer taken away (`.stop-layer { display: none }`).
 // The same click must stop NOTHING; if it stops, the check cannot fail and the probe says so instead of passing.
 //
@@ -131,7 +134,7 @@ async function run([W, H], [overlay, isOpen], control) {
     const before = await evaluate('window.__probeHalts()')
     await click(point)
     await sleep(400)
-    return {
+    const out = {
       vp,
       bare,
       box,
@@ -143,6 +146,40 @@ async function run([W, H], [overlay, isOpen], control) {
       focusBefore,
       focusAfter: await evaluate(`document.activeElement ? (document.activeElement.className || document.activeElement.tagName) : null`),
     }
+    if (control || !top.mirror) return out
+    // THE MIRROR IS A SECOND STOP TX, so three more things, on the mirror the click just used:
+    // (a) one TAP is one stop, as one click was;
+    const tapBefore = await evaluate('window.__probeHalts()')
+    await call('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 })
+    await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: point[0], y: point[1] }] })
+    await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    await sleep(400)
+    out.tapHalts = (await evaluate('window.__probeHalts()')) - tapBefore
+    await call('Emulation.setTouchEmulationEnabled', { enabled: false })
+    // (b) screen readers see no second Stop TX: no exposed node of the accessibility tree is the mirror or inside it;
+    await call('Accessibility.enable', {})
+    const { nodes } = await call('Accessibility.getFullAXTree', {})
+    const { result } = await call('Runtime.evaluate', { expression: `document.querySelector('.stop-layer')` })
+    const { node } = await call('DOM.describeNode', { objectId: result.objectId, depth: -1 })
+    const inLayer = new Set()
+    const walk = (n) => { inLayer.add(n.backendNodeId); for (const c of n.children ?? []) walk(c) }
+    walk(node)
+    out.mirrorExposed = nodes.filter((n) => !n.ignored && inLayer.has(n.backendDOMNodeId)).length
+    // (c) the mirror follows its button before the next frame: disabled, it is disabled; behind [hidden], it is gone.
+    out.follows = await evaluate(`(async () => {
+      const b = document.querySelector(${JSON.stringify(STOP)})
+      const mirror = () => document.querySelector('.stop-layer [data-stop-mirror]')
+      b.disabled = true
+      await Promise.resolve()
+      const disabled = mirror()?.disabled === true
+      b.disabled = false
+      await Promise.resolve()
+      const enabled = mirror()?.disabled === false
+      b.closest('.app').hidden = true
+      await Promise.resolve()
+      return { disabled, enabled, goneHidden: mirror() == null }
+    })()`)
+    return out
   } finally {
     await browser.call('Target.closeTarget', { targetId })
   }
@@ -175,6 +212,12 @@ try {
       if (r.mirror && !r.stillOpen) red.push('the overlay closed')
       if (r.mirror && r.focusAfter !== r.focusBefore) red.push(`the keyboard moved: ${r.focusBefore} → ${r.focusAfter}`)
       if (!r.mirror && ov[0] !== 'bandmenu') red.push('no mirror under an overlay that covers the window')
+      if (r.mirror) {
+        if (r.tapHalts !== 1) red.push(`one tap on the mirror stopped ${r.tapHalts} times, not once`)
+        if (r.mirrorExposed !== 0) red.push(`${r.mirrorExposed} node(s) of the mirror are exposed to screen readers`)
+        if (!r.follows?.disabled || !r.follows?.enabled) red.push(`the mirror did not follow its button's disabled state at once (${JSON.stringify(r.follows)})`)
+        if (!r.follows?.goneHidden) red.push('the mirror outlived its button behind [hidden]')
+      }
       if (red.length) {
         console.error(`stopabove-probe: RED at ${tag} — ${red.join('; ')}`)
         code = code || 1
@@ -194,7 +237,7 @@ try {
     console.error('stopabove-probe: no case ran')
     code = code || 1
   }
-  if (code === 0) console.log(`stopabove-probe: PASS — ${ran} cases: with ${OVERLAYS.map(([o]) => o).join(', ')} open, Stop TX is on top where it is drawn, unmoved, one real click stops once, the overlay stays open and the keyboard stays where it was, at ${SIZES.map(([w, h, v]) => `${w}×${h} (${v})`).join(' and ')}; each control (no stop layer) caught`)
+  if (code === 0) console.log(`stopabove-probe: PASS — ${ran} cases: with ${OVERLAYS.map(([o]) => o).join(', ')} open, Stop TX is on top where it is drawn, unmoved, one real click and one tap each stop once, the mirror is unseen by screen readers and follows its button at once, the overlay stays open and the keyboard stays where it was, at ${SIZES.map(([w, h, v]) => `${w}×${h} (${v})`).join(' and ')}; each control (no stop layer) caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

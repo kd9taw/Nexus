@@ -270,6 +270,10 @@ describe('the stop line, computed against the real cockpits', () => {
         expect(el.hasAttribute('data-stop-control'), `${c.cockpit}: "${label}" ${stop ? 'lacks' : 'carries'} data-stop-control`).toBe(stop)
       }
     }
+    // And the other way round: whatever carries the marker on this screen is a stop and nothing else — the stop
+    // layer draws a marked control above every dialog, so a marked Tune, PTT, latch or macro would key from there.
+    const marked = [...document.querySelectorAll('[data-stop-control]')].map((e) => (e.textContent ?? '').replace(/\s+/g, ' ').trim())
+    for (const name of marked) expect(name, `${c.cockpit}: a non-stop control carries data-stop-control`).toMatch(/^(stop tx|esc ?stop|esc ?abort|stop)$/i)
     cleanup()
   }, 30_000)
 
@@ -489,6 +493,24 @@ describe('RTTY: the macro editor never stands between the operator and a stop', 
     expect(document.querySelector('.rtty-tx-latch')?.getAttribute('aria-pressed')).toBe('true')
 
   afterEach(() => answering(rttyState))
+
+  // RTTY's sequencer Abort renders only mid-sequence, so the per-cockpit marker census above never sees it. Here it is
+  // on screen: it must carry `data-stop-control` (the stop layer keeps it on top of a dialog), and its row's keying
+  // keys (CQ, Answer) must not.
+  it("the sequencer's Abort, on screen mid-sequence, is a marked stop and its row's keying keys are not", async () => {
+    answering({ ...rttyState, auto: true, seqState: 'cq' } as RttyState)
+    const from = asked()
+    render(<RttyCockpit snap={snap} active onSetTxEnabled={() => {}} />)
+    await settle()
+    await answered(from)
+    const abort = screen.getByRole('button', { name: /^esc\s*abort$/i })
+    expect(abort.hasAttribute('data-stop-control')).toBe(true)
+    for (const key of document.querySelectorAll('.rtty-auto-cq, .rtty-auto-answer')) {
+      expect(key.hasAttribute('data-stop-control'), key.className).toBe(false)
+    }
+    const marked = [...document.querySelectorAll('[data-stop-control]')].map((e) => (e.textContent ?? '').replace(/\s+/g, ' ').trim())
+    for (const name of marked) expect(name).toMatch(/^(stop tx|esc ?stop|esc ?abort|stop)$/i)
+  })
 
   it('Stop TX and the Esc/Stop macro are on screen and enabled while an over is on the air', async () => {
     await openEditor({ ...rttyState, sending: true } as RttyState, onAir)

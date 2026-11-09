@@ -120,6 +120,7 @@ export function AtuSwitchOutMenu({
           onCloseAutoFocus={(e) => {
             e.preventDefault()
             buttonRef.current?.focus({ preventScroll: true })
+            buttonRef.current?.scrollIntoView?.({ block: 'nearest' })
           }}
           // The menu is not modal, so focus leaving it closes it. A long press ends with a click on the button it
           // was held on, and that click focuses the button: it is the press that opened the menu, not a move away.

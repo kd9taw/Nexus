@@ -26,6 +26,11 @@ import { RadioPicker } from './RadioPicker'
 import { BandMenu } from './BandMenu'
 import type { LoggedQso } from '../types'
 import type { RadioLaunchInfo } from '../api'
+import { TopBar } from './TopBar'
+import { useEscStop } from '../useEscStop'
+import type { RadioStatus } from '../types'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { join, relative, resolve } from 'node:path'
 
 vi.setConfig({ testTimeout: 15_000 })
 
@@ -260,5 +265,214 @@ describe('one click where Stop TX is drawn stops once, and the overlay stays ope
     clickWhereDrawn()
     await frames()
     expect(halt).not.toHaveBeenCalled()
+  })
+})
+
+// ── THE MIRROR IS A SECOND STOP TX, SO IT IS HELD TO THREE THINGS ───────────────────────────────────────────────
+/** A microtask: the layer's MutationObserver answers in one, before the next frame is painted. */
+const microtask = () => act(() => Promise.resolve())
+const mirror = () => document.querySelector<HTMLButtonElement>('.stop-layer [data-stop-mirror]')
+
+/** A full mouse press on `el`, as Chrome sends it. */
+function press(el: HTMLElement) {
+  fireEvent.pointerDown(el, { button: 0, pointerType: 'mouse' })
+  fireEvent.mouseDown(el, { button: 0 })
+  fireEvent.pointerUp(el, { button: 0, pointerType: 'mouse' })
+  fireEvent.mouseUp(el, { button: 0 })
+  fireEvent.click(el, { button: 0 })
+}
+/** A tap on `el`, as Chrome sends it: pointer and touch events, then the compatibility mouse events and the click. */
+function tap(el: HTMLElement) {
+  const at = { clientX: 300, clientY: 70 }
+  fireEvent.pointerDown(el, { button: 0, pointerType: 'touch' })
+  fireEvent.touchStart(el, { touches: [at], changedTouches: [at] })
+  fireEvent.pointerUp(el, { button: 0, pointerType: 'touch' })
+  fireEvent.touchEnd(el, { touches: [], changedTouches: [at] })
+  fireEvent.mouseDown(el, { button: 0 })
+  fireEvent.mouseUp(el, { button: 0 })
+  fireEvent.click(el, { button: 0 })
+}
+
+function Stops({ disabled = false, hidden = false, shown = true, onHalt }: { disabled?: boolean; hidden?: boolean; shown?: boolean; onHalt: () => void }) {
+  return (
+    <>
+      <div className="app" hidden={hidden}>
+        {shown && (
+          <button type="button" className="op-btn stop" data-stop-control disabled={disabled} onClick={onHalt}>
+            Stop TX
+          </button>
+        )}
+      </div>
+      <OpenDialog />
+      <StopLayer />
+    </>
+  )
+}
+
+describe('1. the mirror always matches its button, and never outlives it', () => {
+  it('disabled, the mirror is disabled at once; enabled again, it is enabled at once (no frame waited)', async () => {
+    const halt = vi.fn()
+    const { rerender } = render(<Stops onHalt={halt} />)
+    await frames()
+    expect(mirror()?.disabled).toBe(false)
+    rerender(<Stops onHalt={halt} disabled />)
+    await microtask()
+    expect(mirror()?.disabled).toBe(true)
+    press(mirror()!)
+    expect(halt, 'a press on a disabled stop stops nothing').not.toHaveBeenCalled()
+    rerender(<Stops onHalt={halt} />)
+    await microtask()
+    expect(mirror()?.disabled).toBe(false)
+  })
+
+  it('unmounted, or put behind [hidden], the mirror is gone at once', async () => {
+    const halt = vi.fn()
+    const { rerender } = render(<Stops onHalt={halt} />)
+    await frames()
+    expect(mirror()).not.toBeNull()
+    rerender(<Stops onHalt={halt} shown={false} />)
+    await microtask()
+    expect(mirror(), 'unmounted').toBeNull()
+    rerender(<Stops onHalt={halt} />)
+    await frames()
+    expect(mirror()).not.toBeNull()
+    rerender(<Stops onHalt={halt} hidden />)
+    await microtask()
+    expect(mirror(), 'behind [hidden]').toBeNull()
+  })
+
+  it('a press on a mirror whose button has just gone does nothing, and takes the mirror with it', async () => {
+    const halt = vi.fn()
+    const btn = document.createElement('button')
+    btn.className = 'op-btn stop'
+    btn.setAttribute('data-stop-control', '')
+    btn.textContent = 'Stop TX'
+    btn.addEventListener('click', halt)
+    document.body.appendChild(btn)
+    render(<><OpenDialog /><StopLayer /></>)
+    await frames()
+    const m = mirror()!
+    expect(m).not.toBeNull()
+    // Gone in the same task as the press: no observer has had its turn yet, so only the click's own check stands.
+    btn.remove()
+    press(m)
+    expect(halt).not.toHaveBeenCalled()
+    expect(m.isConnected).toBe(false)
+  })
+
+  it('a press in progress does not hold up the mirror of a button that went', async () => {
+    const halt = vi.fn()
+    const { rerender } = render(<Stops onHalt={halt} />)
+    await frames()
+    fireEvent.pointerDown(mirror()!, { button: 0, pointerType: 'mouse' })
+    rerender(<Stops onHalt={halt} shown={false} />)
+    await microtask()
+    expect(mirror()).toBeNull()
+  })
+})
+
+describe('2. one press is one stop', () => {
+  it('a mouse press, a tap: each stops exactly once, and the button under the mirror is never pressed too', async () => {
+    const halt = vi.fn()
+    render(<Stops onHalt={halt} />)
+    await frames()
+    press(mirror()!)
+    expect(halt).toHaveBeenCalledTimes(1)
+    await frames()
+    tap(mirror()!)
+    expect(halt).toHaveBeenCalledTimes(2)
+  })
+
+  it('takes no keyboard: not focusable, and Enter, Space and a held key are refused even if code focuses it', async () => {
+    const halt = vi.fn()
+    render(<Stops onHalt={halt} />)
+    await frames()
+    const m = mirror()!
+    expect(m.getAttribute('tabindex')).toBe('-1')
+    for (const key of ['Enter', ' ']) {
+      expect(fireEvent.keyDown(m, { key }), `${JSON.stringify(key)} is refused`).toBe(false)
+      expect(fireEvent.keyDown(m, { key, repeat: true }), `${JSON.stringify(key)} held is refused`).toBe(false)
+    }
+    expect(halt).not.toHaveBeenCalled()
+  })
+})
+
+describe('3. only stop controls carry the marker', () => {
+  const radio = {
+    dialMhz: 14.074, band: '20m', sideband: 'USB', rigMode: 'USB', rigConfirmed: true, nextSlotMs: 0, txEven: true,
+    txCycleAuto: true, txEnabled: true, txAllowed: true, transmitting: true, tuning: false, qsoRecording: false,
+    catOk: true, dtSec: 0, clockOffsetMs: 0,
+  } as unknown as RadioStatus
+
+  it('in the top bar, only Stop TX is marked (TX On, Tune, Hold are not)', () => {
+    const noop = () => {}
+    render(
+      <TopBar mycall="KD9TAW" mygrid="EN52xa" radio={radio} link={{ tier: 'FT8' } as never} bandPlan={[]}
+        onSetFrequency={noop} onSetTxEnabled={noop} onSetTune={noop} onHaltTx={noop} onSetTxEven={noop}
+        onSetTxCycleAuto={noop} onSetHoldTxFreq={noop} tier="FT8" onTierChange={noop} onOpenGuide={noop} />,
+    )
+    const marked = [...document.querySelectorAll('[data-stop-control]')].map((e) => e.textContent?.trim())
+    expect(marked).toEqual(['Stop TX'])
+    expect(screen.getByRole('button', { name: 'Tune' }).hasAttribute('data-stop-control')).toBe(false)
+  })
+
+  // Every cockpit's marked controls, rendered, are held to stops in stop-line.test.tsx. This is the census of the
+  // source: every place the marker is written, by file, so a marker added to anything is read by someone first.
+  // ONLY A CONTROL THAT STOPS A TRANSMISSION MAY BE ADDED HERE — never Tune, PTT, the TX latch or a keying control.
+  it('the marker is written only on the known stop controls', () => {
+    const SRC = resolve(__dirname, '..')
+    const walk = (dir: string): string[] =>
+      readdirSync(dir).flatMap((n) => {
+        const p = join(dir, n)
+        if (statSync(p).isDirectory()) return walk(p)
+        return /\.tsx$/.test(n) && !/\.test\.tsx$/.test(n) ? [p] : []
+      })
+    const found: Record<string, number> = {}
+    for (const p of walk(SRC)) {
+      const n = (readFileSync(p, 'utf8').match(/^\s*(?:<button[^>]*\s)?data-stop-control\b/gm) ?? []).length
+      if (n) found[relative(SRC, p)] = n
+    }
+    expect(found).toEqual({
+      'components/TopBar.tsx': 1, // Stop TX
+      'components/CockpitTxStrip.tsx': 1, // Stop TX
+      'components/FtStopControl.tsx': 1, // FT's Stop TX
+      'components/RttyCockpit.tsx': 2, // Esc Stop, the sequencer's Abort
+      'components/PskCockpit.tsx': 1, // Esc Stop
+      'components/JttyCockpit.tsx': 1, // Esc Stop
+      'components/SstvView.tsx': 1, // Stop
+    })
+  })
+})
+
+describe('screen readers and Esc', () => {
+  it('the button stays the one accessible Stop TX; the layer and the mirror are aria-hidden', async () => {
+    const halt = vi.fn()
+    page(halt, (
+      <div className="logconfirm-backdrop" role="dialog" aria-modal="true" aria-label="Erase the log?">
+        <div className="logconfirm">Erase the log?</div>
+      </div>
+    ))
+    await frames()
+    const m = mirror()!
+    expect(m).not.toBeNull()
+    const named = screen.getAllByRole('button', { name: 'Stop TX' })
+    expect(named).toHaveLength(1)
+    expect(named[0].hasAttribute('data-stop-control')).toBe(true)
+    expect(m.getAttribute('aria-hidden')).toBe('true')
+    expect(m.closest('.stop-layer')?.getAttribute('aria-hidden')).toBe('true')
+    expect(m.id).toBe('')
+  })
+
+  it('Esc still stops with a dialog and its mirror up, once', async () => {
+    const stop = vi.fn()
+    function EscStop() {
+      useEscStop(true, stop)
+      return null
+    }
+    render(<><EscStop /><Stops onHalt={() => {}} /></>)
+    await frames()
+    expect(mirror()).not.toBeNull()
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'inside', hidden: true }), { key: 'Escape' })
+    expect(stop).toHaveBeenCalledTimes(1)
   })
 })

@@ -26,6 +26,20 @@
 //   · The keyboard stays where it was (in the dialog): the mirror is not focusable (tabIndex -1, aria-hidden) and its
 //     mousedown is prevented, so the press moves no focus and a dialog's focus trap is not touched.
 //   · A disabled stop stays disabled: the mirror copies the button's `disabled`.
+//   · ONE press is ONE stop. The pointer lands on the mirror, never on the button under it, and the mirror's click
+//     calls the button's click once. The mirror takes no keyboard: not focusable, and Enter or Space on it does
+//     nothing even if code focused it, so there is no key repeat through it. The button keeps its own keyboard.
+//
+// A MIRROR NEVER OUTLIVES OR MISSTATES ITS BUTTON. While a mirror stands, a MutationObserver watches the document and
+// re-checks every mirror as soon as anything changes, before the next frame is painted: a button that is unmounted,
+// put behind `[hidden]`, scrolled or clipped out of sight, or loses its marker loses its mirror at once, and a button
+// whose markup changes (disabled, its label) gets a fresh mirror. A press that is in progress does not hold a stale
+// mirror up. And a click on a mirror checks its button first: if the button has gone, is disabled or out of sight,
+// the click does nothing but drop the mirror (a disabled button's click does nothing at all).
+//
+// Screen readers see only the button: the layer and every mirror are aria-hidden, and the mirror has no id. The
+// button stays the accessible control (under a Radix dialog it is hidden from them with the rest of the page, as it
+// always was).
 // A stop control the overlay does NOT cover keeps no mirror and is clicked as it is (a menu beside Stop TX closes and
 // lets the click through, MenuParts.tsx). With no overlay open there is no mirror at all, so nothing here can hide a
 // layout fault the shell probes exist to catch.
@@ -107,6 +121,17 @@ interface Mirror {
   key: string
 }
 
+/** A button that can still have a mirror: in the document, still marked, not behind `[hidden]`, and in sight. */
+function present(el: HTMLElement): boolean {
+  return el.isConnected && el.matches(STOP_CONTROL) && el.closest('[hidden]') == null && visibleBox(el) != null
+}
+
+/** What a mirror draws: the button's markup and where it stands. A change in either is a new mirror. */
+function keyOf(el: HTMLElement, box: Box): string {
+  const r = el.getBoundingClientRect()
+  return `${el.outerHTML}|${r.left},${r.top},${r.width},${r.height}|${box.left},${box.top},${box.right},${box.bottom}`
+}
+
 export function StopLayer() {
   useEffect(() => {
     const layer = document.createElement('div')
@@ -128,7 +153,7 @@ export function StopLayer() {
       // The app is zoomed (`.app { zoom: var(--ui-zoom) }`) and this layer is not: the box is in window px, the
       // button's own lengths are not, and the mirror takes the button's zoom to match it.
       const z = el.offsetWidth > 0 ? r.width / el.offsetWidth : 1
-      const key = `${el.outerHTML}|${r.left},${r.top},${r.width},${r.height}|${box.left},${box.top},${box.right},${box.bottom}|${z}`
+      const key = `${keyOf(el, box)}|${z}`
       const had = mirrors.get(el)
       if (had?.key === key) return
       const node = el.cloneNode(true) as HTMLElement
@@ -137,6 +162,7 @@ export function StopLayer() {
       node.removeAttribute('data-stop-control')
       node.setAttribute('data-stop-mirror', '')
       node.setAttribute('tabindex', '-1')
+      node.setAttribute('aria-hidden', 'true')
       const s = node.style
       s.position = 'fixed'
       s.margin = '0'
@@ -163,14 +189,52 @@ export function StopLayer() {
         e.preventDefault()
         e.stopPropagation()
         pressing = false
+        // The button is checked as the click lands, not as the mirror was drawn.
+        if (!present(el) || mirrors.get(el)?.node !== node) {
+          drop(el)
+          return
+        }
+        // A disabled stop stops nothing; its mirror stays, disabled, as the button is.
+        if ((el as HTMLButtonElement).disabled) return
         el.click()
+      })
+      // No keyboard through the mirror: Enter and Space would activate it, and a held key would repeat.
+      node.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') e.preventDefault()
       })
       if (had) had.node.replaceWith(node)
       else layer.appendChild(node)
       mirrors.set(el, { node, key })
+      watch()
+    }
+
+    // Every standing mirror against its button, at once: dropped if the button went, redrawn if it changed. Not
+    // held by a press, and not waiting for a frame.
+    const refresh = () => {
+      for (const [el, m] of [...mirrors]) {
+        if (!present(el)) drop(el)
+        else if (!m.key.startsWith(`${keyOf(el, visibleBox(el)!)}|`)) place(el, visibleBox(el)!)
+      }
+      if (mirrors.size === 0) unwatch()
+    }
+    // Watching the whole document costs something on a busy screen, so it runs only while a mirror stands.
+    const observer = new MutationObserver((records) => {
+      if (records.every((r) => layer.contains(r.target))) return
+      refresh()
+    })
+    let watching = false
+    const watch = () => {
+      if (watching) return
+      watching = true
+      observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true })
+    }
+    const unwatch = () => {
+      watching = false
+      observer.disconnect()
     }
 
     const sync = () => {
+      refresh()
       if (pressing) return
       if (!overlayOpen()) {
         for (const el of [...mirrors.keys()]) drop(el)
@@ -179,7 +243,7 @@ export function StopLayer() {
       const stops = new Set(document.querySelectorAll<HTMLElement>(STOP_CONTROL))
       for (const el of [...mirrors.keys()]) if (!stops.has(el)) drop(el)
       for (const el of stops) {
-        const box = visibleBox(el)
+        const box = present(el) ? visibleBox(el) : null
         if (!box || reachable(el, box, layer)) drop(el)
         else place(el, box)
       }
@@ -197,6 +261,7 @@ export function StopLayer() {
     frame = requestAnimationFrame(tick)
     return () => {
       cancelAnimationFrame(frame)
+      unwatch()
       window.removeEventListener('pointerup', released, true)
       window.removeEventListener('pointercancel', released, true)
       layer.remove()

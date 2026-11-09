@@ -293,6 +293,7 @@ export function Js8ComposeBox({ value, onChange, onEnter, toCall, pills: pillsOn
             onCloseAutoFocus={(e) => {
               e.preventDefault()
               inputRef.current?.focus({ preventScroll: true })
+              inputRef.current?.scrollIntoView?.({ block: 'nearest' })
             }}
           >
             {/* The portal escapes `.app`'s zoom, so the content re-applies it (Menu.tsx's reason). */}

@@ -236,8 +236,10 @@ try {
       }
     }
   }
-  if (ran === 0) {
-    console.error('menustop-probe: no case ran')
+  // Every case must run: a band pill the probe cannot find (a renamed trigger) would otherwise shrink it to Help.
+  const all = SIZES.length * SCREENS.length * MENUS.length
+  if (ran !== all) {
+    console.error(`menustop-probe: ${ran} of ${all} cases ran`)
     code = code || 1
   }
   if (code === 0) console.log(`menustop-probe: PASS — ${ran} cases: with Help or the band menu open, one real click on Stop TX stopped once, closed the menu and left the keyboard on Stop TX, at ${SIZES.map(([w, h, v]) => `${w}×${h} (${v})`).join(' and ')} on ${SCREENS.join(' and ')}; each planted modal lock and covering menu caught`)
