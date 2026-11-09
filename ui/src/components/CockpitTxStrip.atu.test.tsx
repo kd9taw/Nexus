@@ -225,6 +225,34 @@ describe("the rig's own ATU control", () => {
     }
   })
 
+  // ...and the keyboard is not left on ATU: Enter there would run a tune-up, keying a carrier, with the menu open.
+  // It goes back into the menu, where Enter on its one item switches the tuner out and keys nothing.
+  it('a long press on touch: the keyboard ends in the menu, not on ATU, so Enter cannot tune', () => {
+    vi.useFakeTimers()
+    try {
+      const tune = vi.fn()
+      mount(snapWith({ atu: true, atuSwitchOut: true }), tune, vi.fn())
+      const btn = screen.getByRole('button', { name: 'ATU ON' })
+      fireEvent.pointerDown(btn, { pointerType: 'touch' })
+      act(() => {
+        vi.advanceTimersByTime(ATU_LONG_PRESS_MS + 50)
+      })
+      fireEvent.pointerUp(btn, { pointerType: 'touch' })
+      act(() => btn.focus())
+      fireEvent.click(btn)
+      act(() => {
+        vi.advanceTimersByTime(50)
+      })
+      const menu = screen.getByRole('menu')
+      expect(document.activeElement, 'the keyboard is on ATU').not.toBe(btn)
+      expect(menu.contains(document.activeElement), 'the keyboard is in the menu').toBe(true)
+      fireEvent.keyDown(document.activeElement!, { key: 'Enter' })
+      expect(tune).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('the menu is offered only where the tuner can be switched out, and only while it is in', () => {
     const cases: [Record<string, unknown>, boolean, boolean][] = [
       [{ atu: true, atuSwitchOut: true }, true, true], // POSITIVE
