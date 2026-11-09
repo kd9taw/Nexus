@@ -114,30 +114,61 @@ interface Props {
  *  strip taller than the scrollport (300–400 px on a small window at 175 %, where the shell has 120–250) put its top,
  *  and Stop TX, above the window. So the rest of the strip under that line is written here as a placement input
  *  (`--cockpit-ftstrip-rest`, layout px; CSS cannot read where a child's line ends), and the strip parks that far past
- *  the scrollport's foot. Re-read on every render as well as on a resize. */
+ *  the scrollport's foot.
+ *  · THE ALARM CELL'S LINE PARKS TOO, where the strip draws one (`.ch-txalarm`, the transmitter alarm, first on the
+ *    strip's second line) and the two lines fit the scrollport: a critical alarm stands with Stop TX, and a
+ *    `scrollIntoView` of it is not spent on the sticky offset (the strip, and the cell with it, did not move). The cell
+ *    has one height empty or full, so an alarm coming or going moves nothing. Where the two do not fit, only the first
+ *    line parks: Stop TX must never be pushed above the window to make room for the words.
+ *  · WHAT PARKS IS CLEARED BY A FOCUS: its rendered height goes on the shell (`--cockpit-ftstrip-park-h`, read by the
+ *    shells' `scroll-padding-bottom`, styles.css `.layout.single`), so Tab never stops on a control behind the parked line
+ *    (36 controls at 900×600 / 175 %, measured). RENDERED, for the TX strip's reason: Chrome applies `scroll-padding`
+ *    unzoomed.
+ *  Re-read on every render as well as on a resize of the strip or the shell. */
 function useParkLine(ref: RefObject<HTMLElement | null>) {
   const apply = () => {
     const strip = ref.current
-    const line = strip?.querySelector<HTMLElement>(':scope > .cq-txctl')
     if (!strip) return
+    const shell = strip.closest<HTMLElement>('main')
+    const line = strip.querySelector<HTMLElement>(':scope > .cq-txctl')
     const q = strip.getBoundingClientRect()
     if (!line || strip.offsetHeight === 0 || q.height === 0) {
       strip.style.removeProperty('--cockpit-ftstrip-rest')
+      shell?.style.removeProperty('--cockpit-ftstrip-park-h')
       return
     }
     const cs = getComputedStyle(strip)
     const z = q.height / strip.offsetHeight
-    const rest = (q.bottom - line.getBoundingClientRect().bottom) / z - (parseFloat(cs.paddingBottom) || 0) - (parseFloat(cs.borderBottomWidth) || 0)
-    const px = `${Math.max(0, Math.floor(rest))}px`
+    // How far down the strip parks, layout px from its top: to the foot of a line, and the strip's own bottom padding
+    // and border under it.
+    const tail = (parseFloat(cs.paddingBottom) || 0) + (parseFloat(cs.borderBottomWidth) || 0)
+    const reachOf = (el: HTMLElement) => (el.getBoundingClientRect().bottom - q.top) / z + tail
+    let reach = reachOf(line)
+    const alarm = strip.querySelector<HTMLElement>(':scope > .ch-txalarm')
+    if (alarm && shell && alarm.getBoundingClientRect().height > 0) {
+      const ss = getComputedStyle(shell)
+      const room = shell.clientHeight - (parseFloat(ss.paddingTop) || 0) - (parseFloat(ss.paddingBottom) || 0)
+      const both = reachOf(alarm)
+      if (both > reach && both <= room) reach = both
+    }
+    const px = `${Math.max(0, Math.floor(strip.offsetHeight - reach))}px`
     if (strip.style.getPropertyValue('--cockpit-ftstrip-rest') !== px) strip.style.setProperty('--cockpit-ftstrip-rest', px)
+    const park = `${Math.ceil(reach * z)}px`
+    if (shell && shell.style.getPropertyValue('--cockpit-ftstrip-park-h') !== park) shell.style.setProperty('--cockpit-ftstrip-park-h', park)
   }
   useLayoutEffect(apply)
   useLayoutEffect(() => {
     const strip = ref.current
     if (!strip || typeof ResizeObserver === 'undefined') return
+    const shell = strip.closest<HTMLElement>('main')
     const observer = new ResizeObserver(apply)
     observer.observe(strip)
-    return () => observer.disconnect()
+    // The guard reads the shell's room: a shorter window may leave room for the first line only.
+    if (shell) observer.observe(shell)
+    return () => {
+      observer.disconnect()
+      shell?.style.removeProperty('--cockpit-ftstrip-park-h')
+    }
     // `apply` reads only the ref and the DOM; the observer is set up once per mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ref])

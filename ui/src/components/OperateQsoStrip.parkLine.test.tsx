@@ -27,11 +27,20 @@ const ZOOM = 1.75
 const STRIP = { top: 400, height: 350 }
 const LINE_BOTTOM = 400 + 105
 
+/** The alarm cell's line, under the cluster's (a strip that draws one: the transmitter alarm, first on its second line). */
+const ALARM_BOTTOM = 400 + 160
+let shellH = 1000
+
 function stub() {
+  shellH = 1000
+  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+    return this.tagName === 'MAIN' ? shellH : 0
+  })
   const box = (top: number, height: number) => ({ top, bottom: top + height, height, left: 0, right: 500, width: 500, x: 0, y: top, toJSON: () => ({}) }) as DOMRect
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
     if (this.classList.contains('cockpit-qso')) return box(STRIP.top, STRIP.height)
     if (this.classList.contains('cq-txctl')) return box(STRIP.top + 4, LINE_BOTTOM - STRIP.top - 4)
+    if (this.classList.contains('ch-txalarm')) return box(LINE_BOTTOM + 20, ALARM_BOTTOM - LINE_BOTTOM - 20)
     return box(0, 0)
   })
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
@@ -47,6 +56,21 @@ function Strip({ withRadio = true }: { withRadio?: boolean }) {
   )
 }
 const strip = () => document.querySelector<HTMLElement>('.cockpit-qso')!
+const rest = () => strip().style.getPropertyValue('--cockpit-ftstrip-rest')
+/** The strip in its shell, as OperateCockpit draws it (the shell is what the scroll padding goes on). */
+function InShell() {
+  return (
+    <main className="layout single operate-cockpit">
+      <Strip />
+    </main>
+  )
+}
+/** Put an alarm cell where a strip that draws one has it: its own child, after the cluster. */
+function addAlarmCell() {
+  const cell = document.createElement('div')
+  cell.className = 'ch-txalarm ch-txalarm-own'
+  strip().appendChild(cell)
+}
 
 describe("FT's strip parks only its first line, the line with Stop TX", () => {
   it('writes the height under the TX cluster’s line, in layout px', () => {
@@ -77,5 +101,33 @@ describe("FT's strip parks only its first line, the line with Stop TX", () => {
     stub()
     render(<Strip withRadio={false} />)
     expect(strip().style.getPropertyValue('--cockpit-ftstrip-rest')).toBe('')
+  })
+  it('the shell gets the parked line’s RENDERED height, which its scroll padding reads, so Tab never stops behind it', () => {
+    stub()
+    render(<InShell />)
+    const shell = document.querySelector<HTMLElement>('main')!
+    const reach = (LINE_BOTTOM - STRIP.top) / ZOOM
+    expect(shell.style.getPropertyValue('--cockpit-ftstrip-park-h'), 'what parks is not cleared by a focus').toBe(`${Math.ceil(reach * ZOOM)}px`)
+  })
+
+  it('a strip that draws an alarm cell parks through its line where both lines fit the scrollport', () => {
+    stub()
+    const { rerender } = render(<InShell />)
+    expect(rest(), 'control: without a cell, the first line parks').toBe(`${Math.floor((STRIP.top + STRIP.height - LINE_BOTTOM) / ZOOM)}px`)
+    addAlarmCell()
+    rerender(<InShell />)
+    expect(rest(), 'the alarm waits past the foot, out of sight, below Stop TX').toBe(`${Math.floor((STRIP.top + STRIP.height - ALARM_BOTTOM) / ZOOM)}px`)
+    const shell = document.querySelector<HTMLElement>('main')!
+    expect(shell.style.getPropertyValue('--cockpit-ftstrip-park-h')).toBe(`${Math.ceil(ALARM_BOTTOM - STRIP.top)}px`)
+  })
+
+  it('where the two lines do not fit, only the first parks: Stop TX is never pushed above the window for the words', () => {
+    stub()
+    const { rerender } = render(<InShell />)
+    addAlarmCell()
+    // The two lines need (ALARM_BOTTOM - STRIP.top) / ZOOM layout px; one short of that.
+    shellH = Math.ceil((ALARM_BOTTOM - STRIP.top) / ZOOM) - 1
+    rerender(<InShell />)
+    expect(rest(), 'the two lines park in a scrollport too short for them').toBe(`${Math.floor((STRIP.top + STRIP.height - LINE_BOTTOM) / ZOOM)}px`)
   })
 })

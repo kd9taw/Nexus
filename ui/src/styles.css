@@ -21766,10 +21766,12 @@ button.cq-skiptx1.on {
    The strip writes its own height on its shell (`--cockpit-txstrip-h`); a shell without one pads
    nothing. …and clear of a FOLDED dock's parked keep row, whose height the strip writes too
    (`--cockpit-txdock-keep-h`, set only while folded): Tab through the macro keys stopped behind it, and
-   Enter sent a key the operator could not see (RTTY at 900×600 at 175 %: 15 of 18 controls, measured). */
+   Enter sent a key the operator could not see (RTTY at 900×600 at 175 %: 15 of 18 controls, measured). FT has no dock:
+   what parks at its foot is its QSO strip's first line (`--cockpit-ftstrip-park-h`, OperateQsoStrip), which Tab stopped
+   behind the same way (36 controls at 900×600 at 175 %, measured). */
 .layout.single {
   scroll-padding-top: var(--cockpit-txstrip-h, 0px);
-  scroll-padding-bottom: var(--cockpit-txdock-keep-h, 0px);
+  scroll-padding-bottom: var(--cockpit-txdock-keep-h, var(--cockpit-ftstrip-park-h, 0px));
 }
 .cq-txctl .op-btn {
   display: inline-flex;

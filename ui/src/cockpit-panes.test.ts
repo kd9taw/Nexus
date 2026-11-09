@@ -1892,6 +1892,11 @@ describe('NOTHING PARKED COVERS STOP TX: the bottom surface squeezes into the ro
     expect(Number(v(strip, 'z-index')?.value)).toBe(STRIP_Z)
     expect(Number(v(strip, 'z-index')?.value)).toBeGreaterThan(SPLITTER_Z)
     expect(v(strip, 'background')?.value, 'what scrolls under the parked strip shows through it').toBe('var(--panel)')
+    // What parks is cleared by a focus: the shell's scroll padding reads the parked line's height (OperateQsoStrip writes
+    // it), as it reads a folded keep row's on the other screens, so Tab never stops on a control behind the parked line.
+    const pad = v([['app'], ['shell'], ['layout', 'single', 'operate-cockpit']], 'scroll-padding-bottom')?.value
+    expect(pad, 'Tab stops on controls behind FT’s parked line').toContain('var(--cockpit-ftstrip-park-h')
+    expect(pad, 'the keyboard docks’ parked keep row is no longer cleared').toContain('var(--cockpit-txdock-keep-h')
     // Keyed, the strip's wash is an animation of opaque colours over the same box; nothing unparks it.
     expect(v([...strip.slice(0, -1), ['cockpit-qso', 'cockpit-ftstrip', 'panel', 'tx']], 'position')?.value).toBe('sticky')
   })

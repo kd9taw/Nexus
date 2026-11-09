@@ -24,8 +24,13 @@
 // grid across its face (inset past its round corners) the topmost element is the button. While it reads, every
 // element takes pointer events, so a notice that lets clicks through still counts as covering what it hides.
 //
-// THE CONTROL, run every time: a planted box over Stop TX on FT at 900×600 / 175 % must be caught. If it is not,
-// the check cannot fail and the probe says so instead of passing.
+// AND THE TAB WALK (FT, plain, 150/175 % up to 1366×768): real Tab through the shell; no focused control may have its
+// centre behind the QSO strip's parked line (it covered 36 Tab stops at 900×600 / 175 % before the shell's scroll
+// padding read the parked line's height).
+//
+// THE CONTROLS, run every time: a planted box over Stop TX on FT at 900×600 / 175 % must be caught, and so must the
+// shell's scroll padding taken away there (a Tab stop behind the parked line). If one is not, its check cannot fail and
+// the probe says so instead of passing.
 //
 // SCOPE. The default is the CI matrix below. STOPVIS_FULL=1 runs every size × scale × language; STOPVIS_VIEWS,
 // STOPVIS_LOCS, STOPVIS_SCALES ("100,175,auto") and STOPVIS_SIZES ("900x600,700x800") narrow either one, so the full sweep can be run in parts.
@@ -187,7 +192,7 @@ async function openPage(route, [W, H], scale, loc) {
   const ls = { 'nexus.workspace': route === 'chat' ? 'msg' : 'dx', 'nexus.features.v1': FEATURES, 'tempo-theme': 'dark', 'nexus.locale': loc, ...(scale !== 'auto' ? { 'nexus-ui-scale-mode': scale } : {}) }
   await evaluate(`localStorage.clear(); ${Object.entries(ls).map(([k, v]) => `localStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(v)})`).join(';')}; 1`)
   await call('Page.navigate', { url: `${origin}/#${route}` })
-  return { told: false, evaluate, size, close: () => browser.call('Target.closeTarget', { targetId }) }
+  return { told: false, call, evaluate, size, close: () => browser.call('Target.closeTarget', { targetId }) }
 }
 
 const frames = (p) => p.evaluate('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => r(1), 30))))')
@@ -211,6 +216,35 @@ async function apply(p, st, route) {
   // The SSTV and JTTY engines are polled once a second: on their screens a state that changes them waits out one poll.
   return st.mode && POLLED.has(route) ? 1300 : 0
 }
+
+/** THE TAB WALK (FT, plain state, sizes where its strip parks): real Tab from the start of the shell, and every control it
+ *  focuses in the shell must not have its centre behind the parked QSO-strip line. Parked at the foot, the line covered
+ *  36 Tab stops at 900×600 / 175 % (measured) until the shell's scroll padding read its height. Returns the names hidden. */
+async function tabWalk(p) {
+  await p.evaluate(`(() => { document.activeElement?.blur?.(); const m = document.querySelector('main.operate-cockpit'); m.scrollTop = 0; m.querySelector('button, input, select')?.focus({ preventScroll: true }); m.scrollTop = 0; return 1 })()`)
+  const hidden = []
+  let first = null
+  for (let i = 0; i < 160; i++) {
+    await p.call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 })
+    await p.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 })
+    await frames(p)
+    const f = await p.evaluate(`(() => { const e = document.activeElement; if (!e || !e.closest('main.operate-cockpit')) return { out: true }
+      const r = e.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2
+      const name = ((e.getAttribute('aria-label') || e.textContent || e.tagName) + '').replace(/\\s+/g, ' ').trim().slice(0, 20) + '@' + Math.round(y)
+      if (!r.width || !r.height || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return { name }
+      const lift = document.createElement('style'); lift.textContent = '* { pointer-events: auto !important }'; document.head.appendChild(lift)
+      const t = document.elementFromPoint(x, y); lift.remove()
+      return { name, behind: !(t === e || e.contains(t)) && !!t?.closest('.cockpit-ftstrip') && !e.closest('.cockpit-ftstrip') } })()`).catch(() => null)
+    if (!f) continue
+    if (f.out) { if (first) break; continue }
+    if (f.name === first) break
+    first ??= f.name
+    if (f.behind) hidden.push(f.name)
+  }
+  await p.evaluate(`(() => { document.activeElement?.blur?.(); document.querySelector('main.operate-cockpit').scrollTop = 0; return 1 })()`)
+  return hidden
+}
+const TAB_SIZES = (W, H) => W <= 1366 && H <= 800
 
 const POLLED = new Set(['sstv', 'jtty'])
 const rows = []
@@ -239,6 +273,13 @@ for (const [label, route] of VIEWS.filter(([l]) => wantViews.includes(l))) {
             const row = { view: label, scale, loc, W, H, state, vp: m?.vp, stops: m?.stops ?? [], scrolled: m?.scrolled, alarmSeen: m?.alarmSeen ?? null }
             rows.push(row)
             const ok = row.stops.some((s) => s.ok)
+            if (route === 'operate' && state === 'plain' && scale !== 'auto' && Number(scale) >= 150 && TAB_SIZES(W, H)) {
+              const hidden = await tabWalk(p)
+              if (hidden.length) {
+                reds.push(`${label} ${W}×${H} ${scale} ${loc} plain: Tab focuses ${hidden.length} controls behind the parked QSO-strip line (${hidden.slice(0, 8).join(', ')})`)
+                console.log('RED ' + reds[reds.length - 1])
+              }
+            }
             if (!row.stops.length && !p.told) { p.told = true; console.log(`${label} ${W}×${H} ${scale} ${loc} ${state}: NO STOP TX — page errors: ${JSON.stringify(await p.evaluate('(window.__errs || []).slice(-4)').catch((e) => String(e)))}; page: ${await p.evaluate(`JSON.stringify({ hash: location.hash, mains: [...document.querySelectorAll('main')].map((m) => m.className.slice(0, 40) + (m.closest('[hidden]') ? ' [hidden]' : '') + ' ' + Math.round(m.getBoundingClientRect().height)), stops: [...document.querySelectorAll('.op-btn.stop')].map((b) => Math.round(b.getBoundingClientRect().width) + (b.closest('[hidden]') ? 'H' : '')), text: document.body.innerText.slice(-500) })`).catch((e) => String(e))}`) }
             if (!ok) {
               const why = row.stops.map((s) => `${s.where} Stop TX at y ${s.box[1]}–${s.box[1] + s.box[3]} of ${H}${s.inside ? '' : ' (not inside the window)'}${s.covered ? `, covered at ${s.covered}/15 by ${s.by}` : ''}`).join('; ') || 'no Stop TX drawn'
@@ -274,6 +315,24 @@ let control = null
   }
 }
 
+// THE TAB CONTROL: the shell's scroll padding taken away must leave a Tab stop behind FT's parked line.
+let tabControl = null
+{
+  const p = await openPage('operate', [900, 600], '175', 'en')
+  try {
+    let m = null
+    for (let i = 0; i < 160 && !m?.stops.length; i++) { await sleep(250); m = await p.evaluate(MEASURE).catch(() => null) }
+    await apply(p, PLAIN, 'operate')
+    await settle(p)
+    await p.evaluate(`(() => { const s = document.createElement('style'); s.textContent = '.layout.single { scroll-padding-bottom: 0 !important }'; document.head.appendChild(s); return 1 })()`)
+    const hidden = await tabWalk(p)
+    tabControl = hidden.length > 0
+    console.log(`CONTROL — FT 900×600 175 % with the shell's scroll padding taken away: ${hidden.length} Tab stops behind the parked line${hidden.length ? ' (caught)' : ''}`)
+  } finally {
+    await p.close()
+  }
+}
+
 await browser.stop?.()
 await server.close()
 await rm(cacheDir, { recursive: true, force: true })
@@ -289,6 +348,7 @@ console.log(`\n${rows.length} rows (${VIEWS.filter(([l]) => wantViews.includes(l
 }
 if (control !== true) console.log(`CONTROL FAILED: a box planted over FT's Stop TX at 900×600 / 175 % was ${control === null ? 'never measured' : 'not caught'}`)
 if (errors) { console.log(`stopvisible: ${errors} screens never drew`); process.exit(2) }
-if (reds.length || control !== true) { console.log(`stopvisible: RED — ${reds.length} rows with no Stop TX on screen and topmost`); process.exit(1) }
-console.log('stopvisible: PASS — a Stop TX fully on screen and topmost in every row; the control was caught')
+if (tabControl !== true) console.log('CONTROL FAILED: with the scroll padding taken away, no Tab stop landed behind FT’s parked line: the Tab check cannot fail')
+if (reds.length || control !== true || tabControl !== true) { console.log(`stopvisible: RED — ${reds.length} rows with no Stop TX on screen and topmost`); process.exit(1) }
+console.log('stopvisible: PASS — a Stop TX fully on screen and topmost in every row, no Tab stop behind FT’s parked line; both controls were caught')
 process.exit(0)

@@ -1114,7 +1114,8 @@ describe('a shell keeps what it scrolls to clear of what is parked', () => {
   for (const shell of ['cw-cockpit', 'phone-cockpit', 'rtty-cockpit', 'psk-cockpit', 'js8-cockpit', 'jtty-cockpit']) {
     it(`${shell}: both edges read what the strip writes`, () => {
       expect(winningValue(shellChain(shell), decl('scroll-padding-top'))?.value).toBe('var(--cockpit-txstrip-h, 0px)')
-      expect(winningValue(shellChain(shell), decl('scroll-padding-bottom'))?.value, 'a folded dock’s keep row can hide what is focused').toBe('var(--cockpit-txdock-keep-h, 0px)')
+      // FT's parked QSO-strip line is the fallback (`--cockpit-ftstrip-park-h`, written only on FT's shell, which has no dock).
+      expect(winningValue(shellChain(shell), decl('scroll-padding-bottom'))?.value, 'a folded dock’s keep row can hide what is focused').toBe('var(--cockpit-txdock-keep-h, var(--cockpit-ftstrip-park-h, 0px))')
     })
   }
 })

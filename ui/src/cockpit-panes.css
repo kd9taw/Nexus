@@ -620,7 +620,10 @@
    below it: sticky at the bottom, as every other screen's strip is. Only its FIRST LINE parks there — the TX cluster
    with Stop TX — and the rest of it waits past the foot (`--cockpit-ftstrip-rest`, the strip's height under that line,
    which OperateQsoStrip measures): FT's strip is 300–400 px on a small window at 175 %, taller than the shell's whole
-   scrollport there, and parked whole it put its top, and Stop TX, above the window. It does not park at the top: a
+   scrollport there, and parked whole it put its top, and Stop TX, above the window. Where the strip draws a
+   transmitter alarm cell on its second line and the two lines fit the scrollport, that line parks too, so the alarm
+   stands with Stop TX; otherwise only the first line does. What parks is cleared by a focus: OperateQsoStrip writes its
+   rendered height on the shell (`--cockpit-ftstrip-park-h`), which the shells' scroll padding reads. It does not park at the top: a
    strip that tall parked there would cover every pane under it at every scroll position. Above the region's dividers
    (3) at the strip's and the dock's level; opaque (`.panel`). Where the shell does not scroll, this changes nothing. */
 .cockpit-ftstrip {
