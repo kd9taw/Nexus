@@ -1837,12 +1837,9 @@ describe('THE TRANSMITTER ALARM CELL: one constant width to the TX strip’s lin
   // padding + border. With a zero basis, the margin cancelling the gap and no padding or border, that is
   // exactly `min-width`, an em length its content cannot change: an alarm, a critical lane item or none
   // leaves every line of the strip where it was. (Padding is counted: the CAT words leaked 8 px of it.)
-  // The room the TX state's line always has, measured in real Chrome beside the TX state on all seven
-  // CockpitTxStrip screens, eight languages, at 900x600 and 700x800, 150 and 175 % (the tightest): 6.32em
-  // (Russian, 900x600 175 %). A floor above it puts the cell on a line of its own, the sticky strip grows,
-  // and controls under it cannot be reached at any scroll position (digishell, RTTY and JS8 at 900x600
-  // 175 %). FT's cell stands on a line of its own by design (`ch-txalarm-own`).
-  const TX_STATE_LINE_ROOM_EM = 6.32
+  // Where the floor does not fit beside the TX state the cell stands on a line of its own, so it has ONE
+  // HEIGHT whatever it holds: an empty cell's own line was 0 px tall and an alarm grew the strip (Stop TX
+  // -26.5 px, Russian at 900x600 175 %). FT's cell stands on a line of its own by design (`ch-txalarm-own`).
   const STRIPS: Array<[string, string[][], string[]]> = [
     ['the TX strip', [['cockpit-txstrip']], ['ch-txalarm']],
     ['FT’s QSO strip', [['cockpit-qso', 'panel']], ['ch-txalarm', 'ch-txalarm-own']],
@@ -1873,12 +1870,21 @@ describe('THE TRANSMITTER ALARM CELL: one constant width to the TX strip’s lin
       expect(classChainWinner(cell, p), `${p} on the cell is width the breaker sees`).toBeNull()
     expect(classChainWinner(cell, 'min-width')?.value, 'the floor: a length no content changes').toMatch(/^\d+(\.\d+)?em$/)
     const floorEm = parseFloat(classChainWinner(cell, 'min-width')!.value)
+    expect(floorEm).toBeGreaterThan(0)
+    const height = classChainWinner(cell, 'height')
+    expect(height, 'one height, empty or full: its own line is never 0 px tall').not.toBeNull()
     if (own) {
-      expect(classChainWinner(cell, 'height')?.value, 'one height, empty or full: its own line is never 0 px tall').toMatch(/^\d+(\.\d+)?em$/)
+      expect(height!.value).toMatch(/^\d+(\.\d+)?em$/)
     } else {
-      expect(floorEm, 'the floor fits beside the TX state, so the cell never takes a line of its own').toBeLessThanOrEqual(TX_STATE_LINE_ROOM_EM)
-      expect(classChainWinner(cell, 'height'), 'beside the controls it takes no height of its own').toBeNull()
-      expect(classChainWinner([...cell, ['ch-txalarm-text']], 'line-height')?.value, 'its words are never taller than the buttons').toBe('1')
+      // Its one height is exactly its content line: line-height-1 words (and "+N") plus the words' padding and
+      // border, top and bottom. So the cell is never taller than what it holds, beside the buttons it is
+      // shorter than they are, and alone on a line that line is the same height alarm or none.
+      expect(height!.value).toBe('calc(1em + 4px)')
+      for (const part of ['ch-txalarm-text', 'ch-txalarm-queue'])
+        expect(classChainWinner([...cell, [part]], 'line-height')?.value, `${part} is line-height 1`).toBe('1')
+      const pad = classChainWinner([...cell, ['ch-txalarm-text']], 'padding')!.value.split(/\s+/)[0]
+      const border = classChainWinner([...cell, ['ch-txalarm-text']], 'border')!.value.match(/(\d+)px/)![1]
+      expect(2 * parseFloat(pad) + 2 * parseFloat(border), 'the words\u2019 padding and border, top and bottom').toBe(4)
     }
     expect(classChainWinner(cell, 'overflow')?.value).toBe('hidden')
   })

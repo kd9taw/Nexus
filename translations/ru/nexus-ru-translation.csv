@@ -3145,7 +3145,7 @@
 "3","operate.strip.holdTx.title","Hold Tx Freq: keep your TX offset where you put it when you double-click a station to work them. Off, your TX moves onto theirs (WSJT-X's behaviour). A plain waterfall click never moves TX either way.","Удерж. Tx: сохраняет ваш сдвиг TX на месте, когда вы двойным щелчком вызываете станцию. Выключено — ваш TX переходит на её частоту (как в WSJT-X). Простой щелчок по водопаду в любом случае не сдвигает TX.","WSJT-X | TX","The same English text ""Hold Tx Freq: keep your TX offset where you put it when you double-click a station to work them. Off, your TX moves onto theirs (WSJT-X's behaviour). A plain waterfall click never moves TX either way."" is used by 2 different keys (e.g. topbar.holdTx.title) — each can take a different Russian word, so choose the one that fits THIS screen."
 "3","operate.strip.state.transmitting","▲ TRANSMITTING","▲ ПЕРЕДАЧА","",""
 "3","operate.strip.state.receiving","▼ Receiving","▼ Получение","",""
-"3","operate.strip.state.txOff","■ TX off","■ TX выключено","TX",""
+"3","operate.strip.state.txOff","■ TX off","■ TX выкл.","TX","Shortened (was ""■ TX выключено"") so the TX strip keeps room beside it for the transmitter alarm at 900x600 175 %. Filled by the maintainer, pending translator review."
 "3","operate.strip.tune.radioPower","Radio tune power {{pct}} %","Мощность настройки трансивера {{pct}} %","{{pct}}",""
 "3","operate.strip.tune.radioTimeoutSec","Radio TX timeout {{sec}} s","Таймаут TX трансивера {{sec}} с","TX | {{sec}}",""
 "3","operate.strip.tune.radioTimeoutMin","Radio TX timeout {{min}} min","Таймаут TX трансивера {{min}} мин","TX | {{min}}",""

@@ -2754,7 +2754,7 @@ export const RU: PartialCatalog = {
   "operate.strip.holdTx.title": "Удерж. Tx: сохраняет ваш сдвиг TX на месте, когда вы двойным щелчком вызываете станцию. Выключено — ваш TX переходит на её частоту (как в WSJT-X). Простой щелчок по водопаду в любом случае не сдвигает TX.",
   "operate.strip.state.transmitting": "▲ ПЕРЕДАЧА",
   "operate.strip.state.receiving": "▼ Получение",
-  "operate.strip.state.txOff": "■ TX выключено",
+  "operate.strip.state.txOff": "■ TX выкл.",
   "operate.strip.tune.radioPower": "Мощность настройки трансивера {{pct}} %",
   "operate.strip.tune.radioTimeoutSec": "Таймаут TX трансивера {{sec}} с",
   "operate.strip.tune.radioTimeoutMin": "Таймаут TX трансивера {{min}} мин",

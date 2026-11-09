@@ -832,18 +832,23 @@
    width the breaker sees: the 8 px the CAT words leaked). What it holds can never change where the strip
    wraps, so no control on the strip moves when an alarm comes or goes, and it sits beside them, never
    over one. It grows into the room left on its line; the words shorten (whole on hover).
-   THE FLOOR, 6em, IS THE ROOM THE TX STATE'S LINE ALWAYS HAS, so the cell always stands BESIDE the TX state
-   and never takes a line of its own: measured beside the TX state on all seven strips, eight languages,
-   900x600 and 700x800 at 150 and 175 % (the tightest), the least room is 6.32em (Russian, 900x600 175 %).
-   A 13em floor took a line of its own there, the sticky strip grew 39 px, and controls under it could no
-   longer be reached at any scroll position (digishell, RTTY and JS8). One case is tighter still: Spanish
-   at 700x800 150 %, 2.26em, where the floor takes a line (a constant cost: nothing moves on a state change).
-   The floor holds the ⚠ and the ✕ with about 2em of words beside them (more wherever the line has room).
-   Beside the controls the cell needs no height of its own: its words and its ✕ are shorter than the
-   strip's buttons (line-height 1). FT's cell stands on a line of its own (`.ch-txalarm-own`, below). */
+   THE FLOOR, 4.5em, keeps the ⚠, the ✕ and the start of the words, and MUST fit beside the TX state at
+   900x600 175 %: there the strip parks at the top of the scrollport and a folded dock's keep row at its
+   bottom, and only one strip line fits between them, so a cell on a line of its own stood under the keep
+   row and the alarm was covered (RTTY, Russian). A 13em floor also took that line in English, the strip grew
+   39 px, and controls under it could no longer be reached (digishell, RTTY and JS8). The room there, measured
+   in real Chrome (the box's width over the UI zoom, less the cell's margin, in the cell's own em): English
+   8.5em, German 8em, Spanish 4.9em, Russian 2.95em with "■ TX выключено", which the Russian catalog now
+   shortens to "■ TX выкл.". At 700x800 150 % the room is 0.8-4.4em, so the cell stands on a line of its own
+   there (with room for it: the guard finds it on screen), so it has ONE HEIGHT, its own content line (`1em` of line-height-1 words plus their 1 px padding and
+   1 px border, top and bottom): that line is the same height with an alarm or without one, so an alarm
+   arriving never changes the strip's height, and beside the controls it is shorter than their buttons. An
+   empty cell without it was 0 px tall on its own line, and an alarm grew the strip 26.5 px and moved Stop
+   TX. FT's cell stands on a line of its own by design (`.ch-txalarm-own`, below). */
 .ch-txalarm {
   flex: 1 1 0;
-  min-width: 6em;
+  min-width: 4.5em;
+  height: calc(1em + 4px);
   margin: 0 0 0 calc(-1 * var(--space-2));
   padding: 0;
   border: 0;
@@ -873,10 +878,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* "1 of N" and the ✕ never shrink: the count says more are waiting, and Dismiss stays a button. */
+/* "+N" and the ✕ never shrink: the count says more are waiting, and Dismiss stays a button. Line height 1,
+   as the words, so nothing in the cell is taller than its one height. */
 .ch-txalarm-queue {
   flex: none;
   white-space: nowrap;
+  line-height: 1;
 }
 .ch-txalarm-dismiss {
   flex: none;

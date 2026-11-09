@@ -20,9 +20,9 @@
 //   1. the station's transmitter alarm, oldest first, with its Dismiss (✕, named "Dismiss");
 //   2. the critical status-lane items (status.ts), in the lane's order;
 //   3. "+N" when there are more ("1 of N" to a screen reader, as hidden text), every other entry whole on hover.
-// THE FLOOR THE WORDS GET (cockpit-panes.css): beside the TX state the cell's minimum is 6em, the room
-// that line always has, so it never takes a line of its own (a 13em floor did, and the taller sticky strip
-// covered controls at 900x600 175 %). That keeps the ⚠, the ✕ and about 2em of words; the cell grows
+// THE FLOOR THE WORDS GET (cockpit-panes.css): beside the TX state the cell's minimum is 4.5em, the room
+// that line has at 900x600 175 %, so it never takes a line of its own (a 13em floor did, and the taller sticky strip
+// covered controls at 900x600 175 %). That keeps the ⚠, the ✕ and the start of the words; the cell grows
 // into the line's room, which is far more at most sizes. On FT's own line (`ownLine`) the minimum is 13em:
 // the name or nearly all of it. The count and the ✕ never shrink. Dismiss clears exactly the transmitter alarm shown (by its id), never one raised
 // since; a lane item clears when its condition does. The Remote shows it without the button: the
