@@ -945,6 +945,14 @@
   min-width: 13em;
   height: 1.6em;
 }
+/* BESIDE A METERS CELL (CockpitTxStrip sets `besideMeters` whenever it draws `.cockpit-txstrip-meters`): the
+   meters take the line's free room first, so the cell grows by nothing and stands at its floor. Growing by 1
+   beside them, it took half the room the meters had (#489 put a meters cell on RTTY, PSK and JTTY). Only the
+   grow changes: the zero basis, the floor and the one height are the plain cell's, so an alarm still cannot
+   wrap the strip or move Stop TX. */
+.ch-txalarm-yield {
+  flex: 0 1 0;
+}
 /* The words: first, after the gap the cell gave back, and the one part that shortens. Line height 1, so a
    cell beside the controls is never taller than they are. */
 .ch-txalarm-text {

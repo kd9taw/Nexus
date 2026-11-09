@@ -152,6 +152,30 @@ describe('the transmitter alarm cell on the TX strip', () => {
     expect(css(banner()!, 'position'), 'positioned, it could sit over a control').toBeNull()
   })
 
+  it('beside a meters cell the strip marks it to take no free room (the meters take it first); its box is unchanged', () => {
+    const at = (meters: boolean) => {
+      render(
+        <CockpitTxStrip
+          radio={snapWith(undefined).radio}
+          onStopTx={() => {}}
+          alarm={<TxAlarmBanner alarms={[alarm(7, UNCONFIRMED, AT)]} />}
+          meters={meters ? <span>meters</span> : undefined}
+        />,
+      )
+      const out = { yields: banner()!.classList.contains('ch-txalarm-yield'), minWidth: css(banner()!, 'min-width'), height: css(banner()!, 'height') }
+      cleanup()
+      return out
+    }
+    const alone = at(false)
+    const beside = at(true)
+    expect(alone.yields, 'with no meters cell it grows into the line').toBe(false)
+    expect(beside.yields, 'beside the meters it grows by nothing').toBe(true)
+    expect(beside.minWidth, 'the same floor').toBe(alone.minWidth)
+    expect(beside.height, 'the same height').toBe(alone.height)
+    // What `ch-txalarm-yield` does to the cascade (flex 0 1 0 over 1 1 0) is computed in cockpit-panes.test.ts:
+    // jsdom drops a `flex` shorthand with a unitless zero basis, so a rendered element cannot report it.
+  })
+
   // THE CASCADE (one constant width to the strip's line breaker) is computed in cockpit-panes.test.ts,
   // "THE TRANSMITTER ALARM CELL", over the raw declarations of both sheets.
 })

@@ -61,6 +61,7 @@ export function TxAlarmBanner({
   alarms,
   onSnap,
   ownLine = false,
+  besideMeters = false,
 }: {
   alarms?: TxAlarm[]
   /** Takes the snapshot the dismissal answers with. */
@@ -68,6 +69,9 @@ export function TxAlarmBanner({
   /** The cell stands on a line of its own (FT's strip): the name's floor and a fixed height
    *  (cockpit-panes.css `.ch-txalarm-own`). Beside a TX state it does not. */
   ownLine?: boolean
+  /** The strip draws a meters cell beside it, which takes the line's free room first
+   *  (cockpit-panes.css `.ch-txalarm-yield`). CockpitTxStrip sets it; a screen never does. */
+  besideMeters?: boolean
 }) {
   const critical = useCriticalLane()
   const shown = alarms?.[0]
@@ -80,7 +84,7 @@ export function TxAlarmBanner({
   return (
     // The always-drawn cell is no alert itself (an empty one would be a standing alert region); the words
     // are, so each alarm is announced as it arrives.
-    <div className={ownLine ? 'ch-txalarm ch-txalarm-own' : 'ch-txalarm'}>
+    <div className={`ch-txalarm${ownLine ? ' ch-txalarm-own' : ''}${besideMeters ? ' ch-txalarm-yield' : ''}`}>
       {first != null && (
         <span className="ch-txalarm-text" role="alert" title={first}>
           <span aria-hidden="true">⚠ </span>

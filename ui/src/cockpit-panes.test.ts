@@ -270,7 +270,7 @@ describe('the fence: styles.css never names a structural class', () => {
     'amp-op-face', 'amp-op-word', 'amp-op-word-off',
     // …and the transmitter alarm, now the TX strip's last line (2026-11-07): a styles.css position on it
     // could set it over Stop TX.
-    'ch-txalarm', 'ch-txalarm-own',
+    'ch-txalarm', 'ch-txalarm-own', 'ch-txalarm-yield',
     // …and the lane's flag floor off the operating screens: a styles.css min-width on it could undo it.
     'status-lane-keep',
     // …and the lane's own box (2026-11-08): where it stands decides whether the bar's Stop TX moves for it.
@@ -1945,6 +1945,18 @@ describe('THE TRANSMITTER ALARM CELL: one constant width to the TX strip’s lin
   it('the top bar’s lane has no floor now: the bar never takes a line for it', () => {
     expect(classChainWinner([['topbar'], ['status-lane']], 'min-width')?.value).toBe('0')
     expect(classChainWinner([['topbar'], ['status-lane']], 'width')?.value).toBe('0')
+  })
+  it('beside a meters cell the meters take the free room first: the cell grows by nothing and keeps its box', () => {
+    // CockpitTxStrip marks the cell `ch-txalarm-yield` whenever it draws a meters cell (#489 put one on RTTY,
+    // PSK and JTTY). Both grew by 1, so the meters got half the room. The cell keeps its zero basis, its
+    // floor and its one height, so an alarm still cannot wrap the strip or move Stop TX.
+    const plain = [['cockpit-txstrip'], ['ch-txalarm']]
+    const yielding = [['cockpit-txstrip'], ['ch-txalarm', 'ch-txalarm-yield']]
+    expect(classChainWinner(plain, 'flex')?.value, 'control: alone it grows into the line').toBe('1 1 0')
+    expect(classChainWinner(yielding, 'flex')?.value).toBe('0 1 0')
+    for (const p of ['min-width', 'height', 'margin', 'padding', 'border', 'width'])
+      expect(classChainWinner(yielding, p)?.value, `${p} is the plain cell's`).toBe(classChainWinner(plain, p)?.value)
+    expect(classChainWinner([['cockpit-txstrip'], ['cockpit-txstrip-meters']], 'flex-grow')?.value ?? classChainWinner([['cockpit-txstrip'], ['cockpit-txstrip-meters']], 'flex')?.value, 'the meters cell still grows').toMatch(/^1( |$)/)
   })
 })
 
