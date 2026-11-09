@@ -578,10 +578,43 @@ pub(crate) fn apply_match(rec: &mut QsoRecord, inc: &QsoRecord, sum: &mut Reconc
 /// contacts with one call reconcile against two distinct report rows). Unmatched
 /// confirmations become orphans (a "why is this missing?" diagnostic) — they are
 /// NOT added, because a LoTW/eQSL confirmation of a QSO we never logged is a gap to
-/// surface, not a contact to fabricate.
+/// surface, not a contact to fabricate. What an eQSL card says of itself beyond [`apply_match`]'s
+/// stays on the contact it lands on ([`keep_eqsl_card`]): this is the merge of eQSL's InBox, for
+/// its sync, Check confirmations' Apply and an InBox imported by hand.
 pub fn reconcile<R: StoredRecord>(local: &mut [R], incoming: &[QsoRecord]) -> ReconcileSummary {
     let pairs = pair_report(local, incoming);
-    merge_pairs(local, incoming, pairs, |_| true, |_, _| {})
+    merge_pairs(local, incoming, pairs, |_| true, keep_eqsl_card)
+}
+
+/// What an eQSL card says of itself, kept by [`reconcile`] on the contact the card lands on
+/// (`crate::logbook::report_rows` puts it on the card's row), beyond the received day and the AG
+/// mark [`apply_match`] keeps: the sender's message ([`crate::eqsl::MESSAGE`]), set only where the
+/// contact has none, as [`apply_match`] fills a state and a country; and the sender's grid, a valid
+/// locator only, on a contact with none. Only for a row confirming on eQSL: every InBox row does.
+///
+/// Not in [`apply_match`], which also takes in the operator's own file (an import, a shared log's
+/// recovery from disk) and QRZ's book, whose copies of these fields are not eQSL's word.
+fn keep_eqsl_card(rec: &mut QsoRecord, inc: &QsoRecord) {
+    use crate::logbook::{extra_field, set_extra};
+    if !inc.qsl_rcvd.eqsl {
+        return;
+    }
+    let message = crate::eqsl::MESSAGE;
+    if extra_field(rec, message).is_none_or(|v| v.trim().is_empty()) {
+        if let Some(sent) = extra_field(inc, message).filter(|v| !v.trim().is_empty()) {
+            set_extra(rec, message, Some(sent.to_string()));
+        }
+    }
+    if rec.grid.as_deref().is_none_or(|g| g.trim().is_empty()) {
+        if let Some(grid) = inc
+            .grid
+            .as_deref()
+            .map(str::trim)
+            .filter(|g| crate::message::is_valid_grid(g))
+        {
+            rec.grid = Some(grid.to_string());
+        }
+    }
 }
 
 /// LoTW's [`reconcile`]: a row lands only on a contact made under the call it names
@@ -704,12 +737,7 @@ fn merge_pairs<R: StoredRecord>(
             }
             // Only a row that actually carries a confirmation/credit is a
             // meaningful "missing" diagnostic; a plain unconfirmed QSO row is not.
-            None if (inc.confirmed
-                || inc.award_confirmed
-                || !inc.credit_granted.is_empty()
-                || !inc.credit_submitted.is_empty())
-                && orphan(inc) =>
-            {
+            None if confirms(inc) && orphan(inc) => {
                 let mc = mode_class(&inc.mode);
                 let call_u = inc.call.to_ascii_uppercase();
                 let band_l = inc.band.to_ascii_lowercase();
@@ -731,6 +759,55 @@ fn merge_pairs<R: StoredRecord>(
         }
     }
     sum
+}
+
+/// Whether a report row carries a confirmation or a credit: only such a row matching no contact
+/// is a meaningful "missing" diagnostic (an orphan); a plain unconfirmed QSO row is not.
+fn confirms(inc: &QsoRecord) -> bool {
+    inc.confirmed
+        || inc.award_confirmed
+        || !inc.credit_granted.is_empty()
+        || !inc.credit_submitted.is_empty()
+}
+
+/// Import ADIF's "Add the unmatched rows as new contacts" for a LoTW report: the rows
+/// [`reconcile_lotw`] counts as orphans, and only those, appended to `local` as contacts, each as
+/// the report has it (its confirmation on the LoTW channel, its credit, its fields). Paired exactly
+/// as that merge pairs them ([`pair_lotw`]), so a row it matched, and one it would not count (no
+/// confirmation, or another call on the account), is never added; nor is a row of a contact a
+/// first add appended, so asking again adds none. A row matching a contact changes nothing here:
+/// the merge already put its confirmation there.
+///
+/// Each contact added is marked uploaded to LoTW (`Accepted` at `when_unix`): LoTW holds it, which
+/// is how it is in LoTW's report, so it is never owed to LoTW and never signed and sent back. The
+/// rows added.
+pub fn add_lotw_orphans<R: StoredRecord>(
+    local: &mut Vec<R>,
+    incoming: &[QsoRecord],
+    settings_call: Option<&str>,
+    when_unix: i64,
+) -> Vec<QsoRecord> {
+    use crate::logbook::{UploadOutcome, UploadStatus};
+
+    let pairs = pair_lotw(local, incoming, settings_call);
+    let added: Vec<QsoRecord> = incoming
+        .iter()
+        .zip(pairs)
+        .filter(|(inc, pair)| {
+            pair.is_none() && confirms(inc) && of_settings_call(inc, settings_call)
+        })
+        .map(|(inc, _)| {
+            let mut row = inc.clone();
+            row.upload.lotw = Some(UploadStatus {
+                outcome: UploadOutcome::Accepted,
+                when_unix,
+                detail: None,
+            });
+            row
+        })
+        .collect();
+    local.extend(added.iter().cloned().map(R::from));
+    added
 }
 
 /// Two-way merge of a DOWNLOADED logbook (a QRZ Logbook FETCH — the operator's own

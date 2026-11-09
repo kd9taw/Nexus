@@ -718,12 +718,14 @@ fn import_as(
     )
 }
 
-/// What an import answers: `(added, skipped, merged, total)` — the contacts it added, the ones the
-/// log already held, those of them it upgraded, and the log's size after it.
-pub type ImportCounts = (usize, usize, usize, usize);
+/// What an import answers: `(added, skipped, merged, total, unmatched)` — the contacts it added,
+/// the ones the log already held, those of them it upgraded, the log's size after it, and the
+/// confirmations of a LoTW report that match no contact (none for any other file).
+pub type ImportCounts = (usize, usize, usize, usize, usize);
 
 /// The Logbook's Import ([`StationCore::import_adif`]), planned with the Engine lock released:
-/// its [`ImportCounts`], the total counted once the import is made.
+/// its [`ImportCounts`], the total counted once the import is made. A LoTW report is merged as
+/// Sync confirmations' file button merges it ([`import_lotw_report`]).
 pub fn import_adif(
     engine: &Mutex<Engine>,
     text: &str,
@@ -745,26 +747,55 @@ pub fn import_adif_in_run(
 
 /// [`import_adif_in_run`] with "Import new only": a contact the log already holds is left exactly
 /// as it is, nothing the file restates about it merged in. Its own run, undone as one.
+///
+/// A LoTW report is refused: it adds no contact and only changes the ones the log holds
+/// ([`import_lotw_report`]), so "new only" would leave nothing for it to do.
 pub fn import_adif_new_only_in_run(
     engine: &Mutex<Engine>,
     text: &str,
     run: &str,
 ) -> (Result<ImportCounts, String>, Durability) {
+    if tempo_core::lotw::is_lotw_adif(text) {
+        return (
+            Err(
+                "A LoTW report confirms the contacts in your log and adds none: \
+                 use Import, not Import new only"
+                    .into(),
+            ),
+            Durability::default(),
+        );
+    }
     let (made, durability) = import_as(engine, text, Some(run), true);
     let made =
-        made.and_then(|(added, skipped, merged)| Ok((added, skipped, merged, log_len(engine)?)));
+        made.and_then(|(added, skipped, merged)| Ok((added, skipped, merged, log_len(engine)?, 0)));
     (made, durability)
 }
 
 /// What an import of `text` would do, planned on the log as it stands and then let go: nothing
-/// is written. `(added, skipped, merged)` — the contacts the log lacks, the ones it holds by its
-/// own duplicate rule, and how many of those the import would upgrade — the very plan
-/// [`import_adif_in_run`] makes, so the preview's counts are the import's.
+/// is written. `(added, skipped, merged, unmatched)` — the contacts the log lacks, the ones it
+/// holds by its own duplicate rule, and how many of those the import would upgrade — the very
+/// plan [`import_adif_in_run`] makes, so the preview's counts are the import's. `unmatched` is
+/// `Some` for a LoTW report alone ([`import_lotw_report`]): its confirmations matching no
+/// contact, which it adds none of, while `skipped` counts those that matched.
 ///
 /// ⚠️ It reads the store: never call it under the Engine lock.
-pub fn preview_import(engine: &Mutex<Engine>, text: &str) -> Result<(usize, usize, usize), String> {
+pub fn preview_import(
+    engine: &Mutex<Engine>,
+    text: &str,
+) -> Result<(usize, usize, usize, Option<usize>), String> {
+    if tempo_core::lotw::is_lotw_adif(text) {
+        let call = settings_call(engine);
+        let plan = crate::engine::log_plan(engine);
+        let (summary, planned) = station::plan_lotw_report(&plan, text, Some(&call))?;
+        return Ok((
+            0,
+            summary.matched,
+            planned.upgraded(),
+            Some(summary.orphans.len()),
+        ));
+    }
     let plan = crate::engine::log_plan(engine);
-    station::plan_import(&plan, text).map(|(counts, _)| counts)
+    station::plan_import(&plan, text).map(|((new, dupes, updates), _)| (new, dupes, updates, None))
 }
 
 fn import_adif_in(
@@ -772,9 +803,85 @@ fn import_adif_in(
     text: &str,
     run: Option<&str>,
 ) -> (Result<ImportCounts, String>, Durability) {
+    if tempo_core::lotw::is_lotw_adif(text) {
+        return import_lotw_report(engine, text, run);
+    }
     let (made, durability) = import(engine, text, run);
     let made =
-        made.and_then(|(added, skipped, merged)| Ok((added, skipped, merged, log_len(engine)?)));
+        made.and_then(|(added, skipped, merged)| Ok((added, skipped, merged, log_len(engine)?, 0)));
+    (made, durability)
+}
+
+/// Import ADIF of a LoTW report downloaded by hand at lotw.arrl.org: what Sync confirmations'
+/// file button makes of the same file ([`merge_lotw_report`]). The file is known as that merge
+/// knows it ([`tempo_core::lotw::is_lotw_adif`]: it opens with LoTW's status banner); an ADIF any
+/// other program wrote, whatever its rows hold, is a log and imports as one.
+///
+/// A report is confirmations of contacts already logged, not a log. Imported as a log, its bare
+/// `QSL_RCVD` was a paper card on the contact it restated, and a confirmation of a contact the
+/// log lacks came in as a QSO the operator never logged. Here each lands on the LoTW channel of
+/// the contact it matches, under the call in Settings as the merge pairs them, and one matching
+/// none is counted `unmatched` and kept in LoTW's last sync summary, never added. `skipped`
+/// counts the confirmations that matched, `merged` the contacts they changed. Recorded as a LoTW
+/// change in the import's `run` when one is named, so the import's Undo takes the confirmations
+/// back off.
+fn import_lotw_report(
+    engine: &Mutex<Engine>,
+    text: &str,
+    run: Option<&str>,
+) -> (Result<ImportCounts, String>, Durability) {
+    use tempo_core::logbook::history::Source;
+    let call = settings_call(engine);
+    let (made, durability) = bulk_as(
+        engine,
+        "merge_lotw_report",
+        run.map(|run| crate::loghistory::Origin::in_run(Source::Lotw, run)),
+        |plan| {
+            let (summary, planned) = station::plan_lotw_report(plan, text, Some(&call))?;
+            let upgraded = planned.upgraded();
+            Ok(((summary, upgraded), planned))
+        },
+        |e, (summary, upgraded)| {
+            let counts = (summary.matched, upgraded, summary.orphans.len());
+            e.station_mut().last_lotw_reconcile = Some(summary);
+            counts
+        },
+    );
+    let made = made.and_then(|(matched, upgraded, unmatched)| {
+        Ok((0, matched, upgraded, log_len(engine)?, unmatched))
+    });
+    (made, durability)
+}
+
+/// Import ADIF's "Add N unmatched rows as new contacts", pressed after a LoTW report's import
+/// ([`import_lotw_report`]): the report's confirmations that match no contact, and only those,
+/// added as contacts as the report has them, each marked uploaded to LoTW at `when_unix` so none is
+/// owed to LoTW ([`station::plan_lotw_orphans`]). Planned with the Engine lock released, under the
+/// call in Settings as the import pairs them, and recorded in the history under `run`, its own
+/// Undo. Each row added is a contact the next ask pairs it with, so asking again adds none. A
+/// file that is not a LoTW report is refused. `(added, total)`.
+pub fn add_lotw_unmatched(
+    engine: &Mutex<Engine>,
+    text: &str,
+    when_unix: i64,
+    run: &str,
+) -> (Result<(usize, usize), String>, Durability) {
+    use tempo_core::logbook::history::Source;
+    if !tempo_core::lotw::is_lotw_adif(text) {
+        return (
+            Err("Not a LoTW report: only a LoTW report's unmatched rows can be added".into()),
+            Durability::default(),
+        );
+    }
+    let call = settings_call(engine);
+    let (made, durability) = bulk_as(
+        engine,
+        "add_lotw_unmatched",
+        Some(crate::loghistory::Origin::in_run(Source::Import, run)),
+        |plan| station::plan_lotw_orphans(plan, text, Some(&call), when_unix),
+        |_, added| added,
+    );
+    let made = made.and_then(|added| Ok((added, log_len(engine)?)));
     (made, durability)
 }
 
@@ -1172,6 +1279,111 @@ pub fn park_states(
         }
     }
     (Err(station::LOG_BUSY.into()), Durability::default())
+}
+
+/// ★ The Logbook's eQSL sent-mark review as the operator ticked it, or its Undo: `change` made on
+/// each contact `ids` names that still holds what the change takes ([`station::card_sent_pairs`]).
+/// [`STAMP_CHUNK`] contacts to a change, as the "already uploaded" declaration is, since a log can
+/// hold thousands of these marks: each chunk planned with the Engine lock released and made under
+/// it, planned again while its contacts keep changing ([`PLANS`] plans, then it stops there), and
+/// the next planned once it is in the store. Only the sent mark moves, and nothing goes to a
+/// connector: a QSL mark is not a corrected call, and an edit re-uploads only for a call (the
+/// operator's ruling of 2026-09-10). The contacts it changed, by id: fewer than `ids` when one no
+/// longer holds what the change takes.
+///
+/// `Stamp`, as every QSL-sent mark is ([`LogOp::MarkQslSent`]): no fold reads it.
+///
+/// ⚠️ It reads the store: call it with no lock held.
+pub fn card_sent_marks(
+    engine: &Mutex<Engine>,
+    ids: &[RecordId],
+    change: station::CardSentChange,
+) -> (Result<Vec<RecordId>, String>, Durability) {
+    let (mut changed, mut durability) = (Vec::new(), Durability::default());
+    for part in ids.chunks(STAMP_CHUNK) {
+        let mut made = None;
+        for _ in 0..PLANS {
+            let plan = crate::engine::log_plan(engine);
+            let found = match plan.rows(part) {
+                Ok(found) => found,
+                Err(e) => {
+                    let why = card_sent_stopped(change, changed.len(), ids.len(), Some(e));
+                    return (Err(why), durability);
+                }
+            };
+            let rows: Vec<Arc<QsoRecord>> = part
+                .iter()
+                .filter_map(|id| found.get(id))
+                .cloned()
+                .collect();
+            let pairs = station::card_sent_pairs(&rows, change);
+            if pairs.is_empty() {
+                made = Some((Vec::new(), Durability::default()));
+                break;
+            }
+            let made_ids: Vec<RecordId> = pairs.iter().filter_map(|(row, _)| row.id).collect();
+            let bulk = pairs.len() > tempo_core::logbook::writer::CHUNK_ROWS;
+            let (ok, d) = engine_lock(engine).with_log_tickets(|e| {
+                e.station_mut()
+                    .commit_planned(
+                        &plan,
+                        tempo_core::logbook::OpClass::Stamp,
+                        pairs,
+                        bulk,
+                        Vec::new(),
+                        "eqsl sent marks",
+                    )
+                    .is_ok()
+            });
+            if ok {
+                if d.turned_back(crate::logstore::DURABLE_WAIT) {
+                    continue;
+                }
+                made = Some((made_ids, d));
+                break;
+            }
+        }
+        let Some((made_ids, d)) = made else {
+            let why = card_sent_stopped(change, changed.len(), ids.len(), None);
+            return (Err(why), durability);
+        };
+        changed.extend(made_ids);
+        // The next chunk is planned once this one is in the store, as the declaration's is.
+        let stored = d.wait_stored(crate::logstore::DURABLE_WAIT);
+        durability = durability.and(d);
+        if let Err(why) = stored {
+            let why = card_sent_stopped(change, changed.len(), ids.len(), Some(why));
+            return (Err(why), durability);
+        }
+    }
+    (Ok(changed), durability)
+}
+
+/// What [`card_sent_marks`] answers when it stopped at a chunk: `why`, the store's words, `None` for
+/// a chunk the log kept changing under (LogBusy). Before any chunk is made nothing has changed, and
+/// it says what any change says; after, the chunks made stand, and it says how far it got.
+fn card_sent_stopped(
+    change: station::CardSentChange,
+    done: usize,
+    total: usize,
+    why: Option<String>,
+) -> String {
+    let did = match change {
+        station::CardSentChange::Clear { .. } => "cleared from",
+        station::CardSentChange::Restore { .. } => "put back on",
+    };
+    match (done, why) {
+        (0, None) => station::LOG_BUSY.into(),
+        (0, Some(why)) => why,
+        (_, None) => format!(
+            "The QSL sent mark was {did} {done} of the {total} contacts, but the logbook kept \
+             changing while the rest were being changed, so they were not. Try again to finish."
+        ),
+        (_, Some(why)) => format!(
+            "The QSL sent mark was {did} {done} of the {total} contacts, but the rest could not \
+             be changed: {why}. Try again to finish."
+        ),
+    }
 }
 
 /// ★ Logbook ▸ Check confirmations' changes, as the operator ticked them: each contact still

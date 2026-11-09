@@ -4566,6 +4566,9 @@ export interface ImportStats {
   total: number
   /** The import's run in the log's history: what its Undo undoes, and nothing else. */
   run?: string | null
+  /** The confirmations of a LoTW report that match no contact in the log: reported, and added
+   *  only when the operator presses Add. 0 for any other file; absent from an older station. */
+  unmatched?: number
 }
 
 /** Sequencer status for a 1:1 QSO. */

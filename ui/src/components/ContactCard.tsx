@@ -40,7 +40,16 @@ import { useLogAnswer } from '../features/logSource'
 import { emptyAnswer } from '../features/logAnswers'
 import { fmtUtc } from '../features/logQuery'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS } from '../features/utcLog'
-import { addedColumnText, columnName, logColumn, uploadMark, uploadOf, uploadWord } from '../features/logColumns'
+import {
+  addedColumnText,
+  columnName,
+  eqslAg,
+  extraTag,
+  logColumn,
+  uploadMark,
+  uploadOf,
+  uploadWord,
+} from '../features/logColumns'
 import { ContactPath } from './prop/ContactPath'
 import {
   PROGRAMS,
@@ -363,6 +372,11 @@ function CardBody({
     col('qslRcvdDate'),
     col('lotwRcvdDate'),
     col('eqslRcvdDate'),
+    // What eQSL said of the card that confirms it: its Authenticity-Guaranteed mark and the
+    // sender's message (eQSL's own field, never the operator's QSLMSG nor a card's QSLMSG_RCVD). Only beside eQSL's
+    // confirmation, since they describe that card.
+    fact(t('contactCard.eqslAg'), rcvd?.eqsl && eqslAg(q) ? yes : null),
+    fact(t('contactCard.eqslMessage'), rcvd?.eqsl ? extraTag(q, 'APP_NEXUS_EQSL_QSLMSG') : null),
     fact(t('qso.detail.credit.granted'), q.creditGranted),
     fact(t('qso.detail.credit.submitted'), q.creditSubmitted),
     // Where the station was, under the names the Logbook's columns give these ADIF fields (each is

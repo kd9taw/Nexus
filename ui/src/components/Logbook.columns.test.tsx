@@ -120,7 +120,8 @@ describe('the default table is the one the Logbook had', () => {
     document.documentElement.setAttribute('data-viewport', 'sm')
     const { container } = await renderLog()
     expect(headers()).toEqual(['Call', 'Country', 'Band', 'QSL', 'Notes', 'Edit / delete'])
-    expect(template(container)).toBe('minmax(96px, 1fr) 1.3fr 0.7fr 0.7fr 1fr minmax(80px, 80px)')
+    // The QSL track holds an 88px floor, so every mark fits (logColumns.ts).
+    expect(template(container)).toBe('minmax(96px, 1fr) 1.3fr 0.7fr minmax(88px, 0.7fr) 1fr minmax(80px, 80px)')
     expect(row(container).querySelectorAll(':scope > .log-cell')).toHaveLength(6)
   })
 })

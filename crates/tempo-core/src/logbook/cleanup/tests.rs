@@ -859,6 +859,50 @@ fn a_copys_revision_moves_with_everything_but_a_stamp() {
 /// under whatever call was in Settings then, which nothing records, and the fill records it. The
 /// field changes and nothing else — every stamp, confirmation, date and credit stays — filled with
 /// any call, or cleared. Only one call replaced by ANOTHER is a change, and they go.
+/// ★ A STATION CALL CHANGED IN BULK KEEPS A PAPER CARD'S MESSAGE. `QSLMSG_RCVD` is ADIF's field for
+/// a message received, and other loggers keep a paper card's there: it is no service's word. With
+/// the card staying, its message stays too, whether no service, eQSL or every service also
+/// confirmed the contact; no other logger's received message on a contact without a card goes either.
+/// The message eQSL brought, kept as eQSL's own field ([`crate::eqsl::MESSAGE`]), goes with eQSL.
+#[test]
+fn a_bulk_station_call_change_keeps_a_paper_cards_message() {
+    let to = checked(&[Change {
+        field: Field::StationCallsign,
+        value: Some("W6R".into()),
+    }])
+    .unwrap();
+    for card in [true, false] {
+        let mut r = contact("W1AW", T0, 1);
+        r.station_callsign = Some("K2DEF".into());
+        r.qsl_rcvd = QslRcvd {
+            card,
+            lotw: true,
+            eqsl: true,
+            qrz: false,
+        };
+        r.confirmed = true;
+        r.award_confirmed = true;
+        set_extra(
+            &mut r,
+            "QSLMSG_RCVD",
+            Some("TNX FER QSO, PSE QSL VIA BURO".into()),
+        );
+        set_extra(&mut r, crate::eqsl::MESSAGE, Some("TNX QSO 73".into()));
+        let after = changed(&r, &to, &no_country).unwrap();
+        assert_eq!(
+            extra_value(&after, crate::eqsl::MESSAGE),
+            None,
+            "eQSL's own goes"
+        );
+        assert_eq!(
+            extra_value(&after, "QSLMSG_RCVD"),
+            Some("TNX FER QSO, PSE QSL VIA BURO"),
+            "card {card}: {after:?}"
+        );
+        assert_eq!(after.qsl_rcvd.card, card, "premise");
+    }
+}
+
 #[test]
 fn a_blank_station_call_filled_or_a_call_cleared_clears_nothing() {
     let mut r = contact("W1AW", T0, 1);

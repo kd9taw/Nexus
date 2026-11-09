@@ -66,6 +66,10 @@ export interface ImportPreview {
   new: number
   duplicates: number
   updates: number
+  /** A LoTW report alone: its confirmations that match no contact (null for any other file).
+   *  Such a file confirms the contacts it matches (`duplicates`) and adds none. Absent from an
+   *  older station. */
+  lotwUnmatched?: number | null
   notes: ImportNoteGroup[]
   coverage: { field: string; count: number }[]
   unmapped: ImportUnmapped[]

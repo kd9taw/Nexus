@@ -286,6 +286,67 @@ All three are local files once fetched.
 The Now-Bar's feed-health pills tell "connected but quiet" apart from "down", so
 a dead cluster reads as dead rather than as a quiet band.
 
+## Keep good time with no internet
+
+**When you need this:** FT8 or FT4 at a site with no internet, such as Field Day
+in a field or a park.
+
+**Why it matters.** FT8 and FT4 transmit and decode in fixed UTC slots, so your
+clock has to be within about a second of UTC. WSJT-X asks for the same ±1 second.
+Other stations' clocks are off by a little too, so a clock that is a second or
+more out starts to cost you decodes. When it is a few seconds out you decode
+nothing and nobody decodes you.
+
+**What Nexus already does.**
+
+- **It corrects its own FT timing.** With **Clock check (NTP)** on (the default,
+  [Settings ▸ Digital (FT8/FT4)](settings-reference.md#digital-ft8ft4)), Nexus
+  measures the PC's clock against internet time servers. It then moves its own
+  transmit and decode windows by the difference. The Windows clock is not
+  changed. The top bar's clock chip shows the offset it is correcting for, such
+  as "clock +0.40s ✓", and its tooltip says how old the measurement is.
+- **It keeps correcting for a while after the internet goes.** Nexus goes on
+  using the last measurement for as long as the PC's clock can be trusted not to
+  drift far. That is about 80 minutes on a PC whose drift it has not measured.
+  After that the chip reads "clock unchecked" and slot timing follows the PC's
+  own clock again.
+- **It does not correct a big error.** A clock more than a minute out is shown
+  and not corrected, because your logged contact times would be wrong by the same
+  amount. Logged times always come from the PC's own clock.
+- **It can tell from what it decodes.** Before any measurement has come back,
+  the chip reads **Sync** or **No Sync** from how far the stations you decode land
+  from the slot edge. **No Sync** means the median over your recent decodes is
+  half a second or more.
+
+None of this sets the PC's clock. With no internet Nexus has no source of true
+time. So set the clock right before you go, and keep it right on site:
+
+1. **Sync before you leave.** Connect to the internet and sync the clock. On
+   Windows use Settings ▸ Time & Language ▸ Date & time ▸ **Sync now**. On a Mac,
+   turn on "Set time and date automatically". Start Nexus while you are still
+   online, so the clock chip shows a ✓. A clock synced this way starts the day
+   right, and Nexus's correction then carries on for the first part of the event.
+2. **Use a phone's hotspot on site.** If a phone has a cell signal, connect the
+   laptop to its hotspot for a minute and sync the clock again. Nexus's clock
+   check measures the clock on that connection too.
+3. **Use a GPS receiver when there is no signal at all.** A USB GPS receiver and
+   a program that sets the clock from it give you UTC with no network. On Linux,
+   gpsd with chrony does this. A receiver that only sends NMEA sentences is good
+   to about a second, according to gpsd's own documentation. That is enough for
+   FT8 but has little to spare. A receiver with a PPS output does much better.
+4. **Check it on the air.** Once you are decoding, watch the chip and the DT on
+   each decode row. Decodes that sit near 0.0 DT mean your clock agrees with the band.
+
+**For a club event.** Set every laptop's clock before the event starts, all from
+the same good source (the internet before you leave, or the GPS on site). The
+host's club board has a **Clock** column showing how far each position's clock
+is from the host's. That tells you the positions agree with each other, not that
+any of them is right. If the host is a second out, every laptop copied from it
+is a second out too, so set the host from a true source first. Nexus never
+changes a clock on any position: put a wrong one right in that PC's own date and
+time settings. See
+[Run the whole club on Nexus](contesting-pota.md#run-the-whole-club-on-nexus-club-sync).
+
 ## Honest limits
 
 - **This page is not a substitute for the section chapters.** It carries the

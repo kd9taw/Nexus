@@ -38,6 +38,7 @@ import { ImportPreview } from './ImportPreview'
 import { importTooLarge } from '../features/logImport'
 import { ParkStateReview } from './ParkStateReview'
 import { ConfirmationReview } from './ConfirmationReview'
+import { EqslSentMarkReview } from './EqslSentMarkReview'
 import { LogCountryPicker } from './LogCountryPicker'
 import { LogColumnsMenu } from './LogColumnsMenu'
 import { announce } from '../announce'
@@ -51,9 +52,12 @@ import { activationFilter } from '../features/potaActivation'
 import { useViewportClass, useViewportSize } from '../useViewport'
 import {
   addedColumnText,
+  adifDate,
   clampLogColumns,
   columnName,
   DEFAULT_LOG_COLUMNS,
+  eqslAg,
+  extraTag,
   forgetLegacyMoreColumns,
   loadLegacyMoreColumns,
   legacyLogColumns,
@@ -104,6 +108,8 @@ import {
   setSatTagById,
   setDxccById,
   lotwSatNames,
+  eqslSentMarkReview,
+  type EqslSentMark,
   purgeLog,
   qrzLookup,
   saveTextToDownloads,
@@ -269,6 +275,13 @@ function fmtQslSent(sent: { sent: boolean; via: string | null; dateUnix: number 
   if (date) return t('logbook.qsl.sentOn', { date })
   if (via) return t('logbook.qsl.sentVia', { via })
   return t('logbook.qsl.sent')
+}
+
+/** The QSL tooltip's word on the day an eQSL card arrived (`EQSL_QSLRDATE`, which an eQSL merge
+ *  keeps), for a contact eQSL confirmed; null when it holds no such day. */
+function eqslDateNote(q: LoggedQso): string | null {
+  const day = q.qslRcvd?.eqsl ? adifDate(extraTag(q, 'EQSL_QSLRDATE')) : null
+  return day ? t('logbook.row.qsl.eqslDate', { date: day }) : null
 }
 
 // RST is a free string now (CW "599" / phone "59" / digital "-12"); just trim.
@@ -498,6 +511,25 @@ export function Logbook({
   // own records give another contact (ConfirmationReview). Opened only by its button; it downloads
   // nothing until Check, and changes nothing until Apply.
   const [showConfirmations, setShowConfirmations] = useState(false)
+  // "Check eQSL sent marks": the contacts holding the "QSL sent, electronic" mark an eQSL card
+  // copied onto them in earlier versions (EqslSentMarkReview). The list is read when the Logbook
+  // opens and after each change it makes, so the button shows only while one is left and names how
+  // many; the newest read wins.
+  const [sentMarks, setSentMarks] = useState<EqslSentMark[]>([])
+  const [showSentMarks, setShowSentMarks] = useState(false)
+  const sentMarksRead = useRef(0)
+  const readSentMarks = useCallback(() => {
+    const mine = ++sentMarksRead.current
+    // Through a promise, so a bridge without the command (an older core) only leaves the button
+    // unoffered.
+    void Promise.resolve()
+      .then(() => eqslSentMarkReview())
+      .then((rows) => {
+        if (sentMarksRead.current === mine) setSentMarks(rows)
+      })
+      .catch(() => {})
+  }, [])
+  useEffect(readSentMarks, [readSentMarks])
   // Purge-the-whole-log confirmation modal. `purgeText` must equal PURGE_WORD to
   // arm the danger button — a deliberate, typed gate for a wipe of the whole log.
   const [showPurge, setShowPurge] = useState(false)
@@ -575,10 +607,12 @@ export function Logbook({
     }
   }
 
-  // After this view's own write: bring the list up to date now, not on the next tick.
+  // After this view's own write: bring the list up to date now, not on the next tick, and the eQSL
+  // sent marks it may have changed.
   const load = useCallback(() => {
     logSource().refresh()
-  }, [])
+    readSentMarks()
+  }, [readSentMarks])
   // An update from the callbook reports its end here, whether its dialog is still open or not.
   const followCallbookUpdate = useCallbookUpdateEnd(load)
 
@@ -605,9 +639,13 @@ export function Logbook({
     // for two counts at once, so each carries its own (see the catalog's note).
     const dupes = stats.skipped ? t('logbook.import.dupes', { count: stats.skipped }) : ''
     const upgraded = stats.updated ? t('logbook.import.updated', { count: stats.updated }) : ''
+    // A LoTW report's confirmations that match no contact: reported, and added only when the
+    // operator presses the preview's Add. The words are the POTA stamp's, which says the same of
+    // its rows.
+    const unmatched = stats.unmatched ? t('logbook.pota.unmatched', { count: stats.unmatched }) : ''
     const run = stats.run
     pushToast(
-      `${t('logbook.import.imported', { count: stats.added })}${dupes}${upgraded}`,
+      `${t('logbook.import.imported', { count: stats.added })}${dupes}${upgraded}${unmatched}`,
       'success',
       10_000,
       stats.added + stats.updated > 0 && run
@@ -2460,6 +2498,16 @@ export function Logbook({
           >
             {t('logbook.confirmations.button')}
           </button>
+          {sentMarks.length > 0 && (
+            <button
+              type="button"
+              className="export-btn"
+              onClick={() => setShowSentMarks(true)}
+              title={t('logbook.eqslSentMarks.buttonTitle')}
+            >
+              {t('logbook.eqslSentMarks.button', { count: sentMarks.length })}
+            </button>
+          )}
           <button
             type="button"
             className="export-btn"
@@ -3438,12 +3486,19 @@ export function Logbook({
                             (q.qslRcvd.card || q.qslRcvd.lotw || q.qslRcvd.eqsl || q.qslRcvd.qrz) ? (
                               // Per-source detail: which channel(s) actually confirmed. QRZ has its own
                               // letter: a QRZ-only confirmation fell through to the yellow eQSL word below.
+                              // An eQSL that eQSL marks Authenticity Guaranteed reads AG in place of E,
+                              // and the day the card arrived rides in the tooltip.
                               <span
                                 className={`log-qsl ${q.awardConfirmed ? 'ok' : 'eqsl'}`}
                                 title={[
                                   q.qslRcvd.lotw ? t('logbook.row.qsl.lotw') : null,
                                   q.qslRcvd.card ? t('logbook.row.qsl.card') : null,
-                                  q.qslRcvd.eqsl ? t('logbook.row.qsl.eqsl') : null,
+                                  q.qslRcvd.eqsl
+                                    ? eqslAg(q)
+                                      ? t('logbook.row.qsl.eqslAg')
+                                      : t('logbook.row.qsl.eqsl')
+                                    : null,
+                                  eqslDateNote(q),
                                   q.qslRcvd.qrz ? t('logbook.row.qsl.qrz') : null,
                                 ]
                                   .filter(Boolean)
@@ -3452,7 +3507,7 @@ export function Logbook({
                                 {[
                                   q.qslRcvd.lotw ? 'L' : null,
                                   q.qslRcvd.card ? 'C' : null,
-                                  q.qslRcvd.eqsl ? 'E' : null,
+                                  q.qslRcvd.eqsl ? (eqslAg(q) ? 'AG' : 'E') : null,
                                   q.qslRcvd.qrz ? 'Q' : null,
                                 ]
                                   .filter(Boolean)
@@ -3908,6 +3963,12 @@ export function Logbook({
       />
       <ParkStateReview open={showParkStates} onClose={() => setShowParkStates(false)} onApplied={load} />
       <ConfirmationReview open={showConfirmations} onClose={() => setShowConfirmations(false)} onApplied={load} />
+      <EqslSentMarkReview
+        open={showSentMarks}
+        rows={sentMarks}
+        onClose={() => setShowSentMarks(false)}
+        onChanged={load}
+      />
     </section>
   )
 }

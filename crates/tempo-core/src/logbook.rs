@@ -1120,8 +1120,8 @@ impl UploadHealth {
             (&mut self.clublog, &r.upload.clublog),
         ] {
             // `when_unix == 0` is not a date. The ADIF reader synthesises an
-            // `Accepted` stamp for any imported record carrying `LOTW_QSL_SENT=Y`,
-            // with no time to give it — counting those would tell every operator with
+            // `Accepted` stamp for any imported record carrying `LOTW_QSL_SENT=Y`
+            // (or `EQSL_QSL_SENT=Y`), with no time to give it — counting those would tell every operator with
             // an imported legacy log that their last LoTW upload was 1 Jan 1970.
             let Some(s) = status.as_ref().filter(|s| s.when_unix > 0) else {
                 continue;
@@ -1479,6 +1479,9 @@ impl Logbook {
     ///
     /// `prepare` must not change what identifies a record (call, band, mode, start time): the
     /// dedup key is taken before it runs.
+    ///
+    /// eQSL's InBox is cards, not a log, and is imported as Sync eQSL merges it
+    /// ([`Self::import_eqsl_inbox`]).
     pub fn import_adif_with(
         &mut self,
         text: &str,
@@ -1500,6 +1503,9 @@ impl Logbook {
         mut prepare: impl FnMut(&mut QsoRecord),
         upgrade: bool,
     ) -> (Vec<QsoRecord>, usize, usize) {
+        if crate::eqsl::is_eqsl_adif(text) {
+            return self.import_eqsl_inbox(text, upgrade);
+        }
         // Held records by dedup identity → index, so a dupe can be upgraded in
         // place and not merely counted. First index wins (log order), matching
         // the oldest-first consume order `reconcile` uses for repeated keys.
@@ -1590,6 +1596,38 @@ impl Logbook {
             }
         }
         (added, skipped, merged)
+    }
+
+    /// Import of eQSL's InBox, downloaded by hand at eqsl.cc: what Sync eQSL makes of the same
+    /// download. The file is known as the sync knows its download
+    /// ([`crate::eqsl::is_eqsl_adif`]: its header names eQSL's DownloadInBox as the program that
+    /// wrote it, and it does not open like a page); an ADIF any other program wrote, whatever its
+    /// rows hold, is a log and imports as one.
+    ///
+    /// Each row is a card: the SENDER's record of a contact with the operator, at the sender's
+    /// time and with the sender's sent mark. Imported as a log, a card missed its contact's second
+    /// and came in as a second contact with that mark on it, and a card for a contact the log
+    /// lacks came in as a QSO the operator never logged. Here the rows are read as the sync reads
+    /// them ([`report_rows`]) and merged as it merges them ([`crate::reconcile::reconcile`]): a card
+    /// confirms the contact it pairs with, and adds none.
+    ///
+    /// `skipped` counts the cards that paired (each restates a contact the log holds), `merged`
+    /// the contacts they changed. A contact is written back only when it changed, as the import's
+    /// own upgrades are. Without `upgrade` ("Import new only") nothing is written: an InBox adds
+    /// no contact, so it leaves every contact as it is and only counts the cards that pair.
+    fn import_eqsl_inbox(&mut self, text: &str, upgrade: bool) -> (Vec<QsoRecord>, usize, usize) {
+        let mut upgraded: Vec<Arc<QsoRecord>> = self.records.to_vec();
+        let summary = crate::reconcile::reconcile(&mut upgraded[..], &report_rows(text));
+        let mut merged = 0;
+        if upgrade {
+            for (i, row) in upgraded.into_iter().enumerate() {
+                if !Arc::ptr_eq(&row, &self.records[i]) && *row != *self.records[i] {
+                    self.records[i] = row;
+                    merged += 1;
+                }
+            }
+        }
+        (Vec::new(), summary.matched, merged)
     }
 
     /// Reconcile the on-disk copy of this log back into memory — the two-instance-safe recovery.
@@ -2488,6 +2526,28 @@ impl Logbook {
         crate::reconcile::reconcile_lotw(&mut self.records[..], &report_rows(text), settings_call)
     }
 
+    /// Import ADIF's "Add the unmatched rows as new contacts" for a LoTW report: the rows
+    /// [`merge_lotw_report`](Self::merge_lotw_report) counts as matching no contact appended as
+    /// contacts, marked uploaded to LoTW at `when_unix`
+    /// ([`crate::reconcile::add_lotw_orphans`]). How many it added. Pure merge — call
+    /// [`save`](Self::save) to persist.
+    pub fn add_lotw_orphans(
+        &mut self,
+        text: &str,
+        settings_call: Option<&str>,
+        when_unix: i64,
+    ) -> usize {
+        let before = self.records.len();
+        let added = crate::reconcile::add_lotw_orphans(
+            &mut *self.records,
+            &report_rows(text),
+            settings_call,
+            when_unix,
+        );
+        self.settle_new_ids(before);
+        added.len()
+    }
+
     /// Two-way merge of a DOWNLOADED logbook (a QRZ Logbook FETCH — the operator's own
     /// book pulled back down). Unlike [`merge_report`] (confirmations only, unmatched
     /// rows become orphans), this ADDS the QSOs the download has that the local log
@@ -3056,6 +3116,14 @@ impl Activations {
 /// ITU zones, continent and county. A corrected call takes them off with the call ([`edited`]).
 const OLD_CALL_PLACE: [&str; 4] = ["CQZ", "ITUZ", "CONT", "CNTY"];
 
+/// Whether a field of a contact's `extra` names an upload a service holds under the call a
+/// callsign correction replaces ([`edited`]): an imported `LOTW_QSL_SENT=Y` or `EQSL_QSL_SENT=Y`
+/// (with its `EQSL_QSLSDATE`), which the parse would read back as an upload the service holds, so
+/// the corrected contact would never be sent under its right call. They go with the stamps.
+fn busted_call_upload(name: &str) -> bool {
+    matches!(name, "LOTW_QSL_SENT" | "EQSL_QSL_SENT" | "EQSL_QSLSDATE")
+}
+
 /// The contact `old` corrected by an operator edit whose fields are `rec` — a busted call, a
 /// wrong band, a name. The sync-DERIVED state (confirmed / award_confirmed / credit / upload) is
 /// preserved from `old` so an edit can never fabricate a confirmation; the next reconcile
@@ -3102,8 +3170,9 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
         // upload.lotw = Accepted from it on the next load — quietly
         // undoing the clear above and excluding the corrected QSO
         // from the LoTW batch forever. It described the BUSTED
-        // call's upload; it goes with the stamps.
-        rec.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
+        // call's upload; it goes with the stamps. The same for an imported
+        // EQSL_QSL_SENT=Y and its date ([`busted_call_upload`]).
+        rec.extra.retain(|(k, _)| !busted_call_upload(k));
         // Call-derived identity re-derives from the NEW call: the
         // busted call's entity/state must not ride along. dxcc/state
         // stay empty until a lookup supplies them. The country is the
@@ -3207,7 +3276,7 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
             // The preservation must not undo the resurrection guard
             // above: the busted call's LOTW_QSL_SENT goes, whether
             // the extra set came from the payload or from `old`.
-            rec.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
+            rec.extra.retain(|(k, _)| !busted_call_upload(k));
         }
     }
     if call_changed {
@@ -3900,6 +3969,29 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
     out.push_str(&upload_field("APP_TEMPO_UL_EQSL", &r.upload.eqsl));
     out.push_str(&upload_field("APP_TEMPO_UL_QRZ", &r.upload.qrz));
     out.push_str(&upload_field("APP_TEMPO_UL_CLUBLOG", &r.upload.clublog));
+    // eQSL's upload again, in the fields every logger reads: `EQSL_QSL_SENT` "Y" ("uploaded to,
+    // and accepted by, the online service") and `EQSL_QSLSDATE`, the stamp's day, when eQSL took
+    // the contact or already held it. Never "N", which ADIF defines as "do not upload" and no
+    // stamp says. Each only where the record carries none of its own: one imported from another
+    // logger carries that logger's, written from `extra` below, and a field twice is undefined
+    // territory (the `MY_GRIDSQUARE` guard's reason). A mark with no date writes no date. Only on
+    // a copy that leaves Nexus: the operator's own copy ([`Audience::OwnLog`]) carries the stamp
+    // itself, and read back these would be fields of the record's own, so it would not round-trip.
+    if let Some(sent) = r.upload.eqsl.as_ref().filter(|s| {
+        audience != Audience::OwnLog
+            && matches!(
+                s.outcome,
+                UploadOutcome::Accepted | UploadOutcome::Duplicate
+            )
+    }) {
+        if extra_field(r, "EQSL_QSL_SENT").is_none() {
+            out.push_str(&field("EQSL_QSL_SENT", "Y"));
+            if sent.when_unix > 0 && extra_field(r, "EQSL_QSLSDATE").is_none() {
+                let (sy, smo, sd, ..) = datetime_utc(sent.when_unix as u64);
+                out.push_str(&field("EQSL_QSLSDATE", &format!("{sy:04}{smo:02}{sd:02}")));
+            }
+        }
+    }
     // Parks/Summits On The Air — standard ADIF so pota.app / the SOTA DB accept the
     // export. POTA (and WWFF) → SIG/SIG_INFO, each beside its dedicated field (*_POTA_REF,
     // *_WWFF_REF); SOTA → its dedicated *_SOTA_REF fields.
@@ -4801,6 +4893,10 @@ fn lotw_channel_fixup(text: &str, incoming: &mut [QsoRecord]) {
 /// without `EQSL_QSL_RCVD`: the spec sends that field (and `EQSL_QSLRDATE`) only "if we have
 /// stored the date this record was added", so an older card carries neither.
 ///
+/// The sender's message (`QSLMSG`, or `QSLMSG_INTL` with international characters) is renamed
+/// [`crate::eqsl::MESSAGE`] (`APP_NEXUS_EQSL_QSLMSG`): ADIF's `QSLMSG` is the message on the card the
+/// operator SENDS, and an export or a re-upload would pass the sender's words off as theirs.
+///
 /// Keyed on the FETCH SOURCE, as [`lotw_channel_fixup`] is, for the same reason: the same fields
 /// in another program's ADIF are that program's own, and [`crate::reconcile`]'s sent-mark merge is
 /// what a shared log's recovery from disk needs, so neither the parse nor the merge can do this.
@@ -4819,6 +4915,13 @@ fn eqsl_inbox_fixup(text: &str, incoming: &mut Vec<QsoRecord>) {
         // mark stays the card's own field.
         r.qsl_rcvd.eqsl = true;
         r.confirmed = r.qsl_rcvd.any();
+        let message = ["QSLMSG_INTL", "QSLMSG"]
+            .into_iter()
+            .filter_map(|name| extra_field(r, name))
+            .find(|m| !m.trim().is_empty())
+            .map(str::to_string);
+        r.extra.retain(|(k, _)| k != "QSLMSG" && k != "QSLMSG_INTL");
+        set_extra(r, crate::eqsl::MESSAGE, message);
     }
 }
 
@@ -5422,7 +5525,19 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
                     detail: Some(UploadDetail::OperatorDeclared),
                 })
         }),
-        eqsl: take_upload(f, "APP_TEMPO_UL_EQSL"),
+        // The same for eQSL: `EQSL_QSL_SENT=Y` from another logger is an eQSL upload already
+        // made, so the catch-up and the "never uploaded to eQSL" diagnostic pass it by. Inspected
+        // too, never consumed: it stays in `extra`, its `EQSL_QSLSDATE` beside it, and both
+        // round-trip as that file wrote them (the writer adds none over them).
+        eqsl: take_upload(f, "APP_TEMPO_UL_EQSL").or_else(|| {
+            f.get("EQSL_QSL_SENT")
+                .is_some_and(|v| v.eq_ignore_ascii_case("Y"))
+                .then_some(UploadStatus {
+                    outcome: UploadOutcome::Accepted,
+                    when_unix: 0,
+                    detail: Some(UploadDetail::OperatorDeclared),
+                })
+        }),
         qrz: take_upload(f, "APP_TEMPO_UL_QRZ"),
         clublog: take_upload(f, "APP_TEMPO_UL_CLUBLOG"),
     };
@@ -12007,6 +12122,490 @@ mod tests {
         other.add(rec("W1AW", "20m", 1_700_000_000));
         other.merge_report(&third_party);
         assert!(other.records()[0].qsl_sent.sent);
+    }
+
+    /// ★ Import of eQSL's InBox, downloaded by hand at eqsl.cc, reads it as Sync eQSL does: a card
+    /// confirms the contact it pairs with, brings none of its sender's sent mark, and adds no
+    /// contact. Read as a log, a card timed by its sender missed its contact's second and came in
+    /// as a second contact carrying the sender's mark, and a card for a contact the log lacks came
+    /// in as a QSO the operator never logged.
+    #[test]
+    fn importing_an_eqsl_inbox_confirms_contacts_and_adds_none() {
+        let inbox = eqsl_inbox(&[inbox_card("W1AW", ""), inbox_card("K9ZZZ", "")]);
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000));
+        let (added, skipped, merged) = lb.import_adif(&inbox);
+        assert_eq!(
+            (added.len(), skipped, merged, lb.records().len()),
+            (0, 1, 1, 1),
+            "{added:?}"
+        );
+        let r = &lb.records()[0];
+        assert!(
+            r.qsl_rcvd.eqsl && r.confirmed && !r.award_confirmed,
+            "{r:?}"
+        );
+        assert_eq!(r.qsl_sent, QslSent::default(), "the operator sent nothing");
+        assert_eq!(
+            lb.import_adif(&inbox),
+            (Vec::new(), 1, 0),
+            "the same file again changes nothing"
+        );
+
+        // Control: another program's ADIF holding the same rows is a log, and imports as one:
+        // each row a contact of that log, its sent mark that log's own.
+        let other = format!(
+            "Exported by another logger\n<PROGRAMID:6>Log4OM<EOH>\n{}{}",
+            inbox_card("W1AW", ""),
+            inbox_card("K9ZZZ", "")
+        );
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000));
+        let (added, skipped, _) = lb.import_adif(&other);
+        assert_eq!((added.len(), skipped), (2, 0), "{added:?}");
+        assert!(added.iter().all(|r| r.qsl_sent.sent), "{added:?}");
+    }
+
+    /// "Import new only" of an InBox leaves every contact exactly as it is: it adds none, so it
+    /// writes nothing, and counts the cards that pair.
+    #[test]
+    fn importing_an_eqsl_inbox_new_only_changes_nothing() {
+        let inbox = eqsl_inbox(&[inbox_card("W1AW", ""), inbox_card("K9ZZZ", "")]);
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000));
+        let before = lb.records()[0].clone();
+        assert_eq!(lb.import_adif_new_only(&inbox), (Vec::new(), 1, 0));
+        assert_eq!(lb.records().len(), 1);
+        assert_eq!(lb.records()[0], before);
+    }
+
+    /// ★ THE SENT MARK A CARD LEFT IS LISTED, AND NO OTHER ([`crate::eqsl::holds_card_sent_mark`]).
+    /// Until an InBox row stopped bringing its sender's mark, the merge took it whole onto each
+    /// contact a card matched that held no mark: read here as every InBox was read then, the same
+    /// rows under another program's header. Of six contacts on that log only W1AW is listed.
+    /// K1BUR's bureau mark and K1DAT's electronic one are the operator's, set in Nexus before the
+    /// cards came; K1NOC took the mark from a card eQSL holds no received date for, which
+    /// confirmed nothing then, so it holds no eQSL card; K1CRD's card came after the fix and
+    /// brought no mark; the operator cleared K1CLR's. W1AW's mark is exactly what the copy wrote,
+    /// by value, and the log as Nexus saves it reads back with the same one listed.
+    #[test]
+    fn only_the_sent_mark_an_eqsl_card_left_is_listed() {
+        use crate::eqsl::{holds_card_sent_mark, CARD_SENT_MARK};
+        let at = 1_700_000_000;
+        let calls = ["W1AW", "K1BUR", "K1NOC", "K1CRD", "K1DAT", "K1CLR"];
+        let mut lb = Logbook::new();
+        for call in calls {
+            lb.add(rec(call, "20m", at));
+        }
+        let index =
+            |lb: &Logbook, call: &str| lb.records().iter().position(|r| r.call == call).unwrap();
+        assert!(lb.mark_qsl_sent(index(&lb, "K1BUR"), Some(QslVia::Bureau), at));
+        assert!(lb.mark_qsl_sent(index(&lb, "K1DAT"), Some(QslVia::Electronic), at));
+        let (y, mo, d, h, mi, _) = datetime_utc(at);
+        let undated_card = format!(
+            "<CALL:5>K1NOC<QSO_DATE:8>{y:04}{mo:02}{d:02}<TIME_ON:4>{h:02}{mi:02}<BAND:3>20M\
+             <MODE:3>FT8<RST_SENT:3>-10<RST_RCVD:0><QSL_SENT:1>Y<QSL_SENT_VIA:1>E<EOR>\n"
+        );
+        let as_read_then = format!(
+            "<EOH>\n{}{}{undated_card}{}{}",
+            inbox_card("W1AW", ""),
+            inbox_card("K1BUR", ""),
+            inbox_card("K1DAT", ""),
+            inbox_card("K1CLR", ""),
+        );
+        lb.merge_report(&as_read_then);
+        lb.merge_report(&eqsl_inbox(&[inbox_card("K1CRD", "")]));
+        assert!(lb.mark_qsl_sent(index(&lb, "K1CLR"), None, at + 60));
+        let mark = |sent, via, date_unix, cleared_unix| QslSent {
+            sent,
+            via,
+            date_unix,
+            cleared_unix,
+        };
+        let held = calls.map(|call| {
+            let r = &lb.records()[index(&lb, call)];
+            (r.qsl_rcvd.eqsl, r.qsl_sent)
+        });
+        assert_eq!(
+            held,
+            [
+                (true, CARD_SENT_MARK),
+                (true, mark(true, Some(QslVia::Bureau), Some(at), None)),
+                (false, CARD_SENT_MARK),
+                (true, QslSent::default()),
+                (true, mark(true, Some(QslVia::Electronic), Some(at), None)),
+                (true, mark(false, None, None, Some(at + 60))),
+            ],
+            "premise: each contact's eQSL card and sent mark, the copy's as it wrote it"
+        );
+        let listed = |records: &[QsoRecord]| -> Vec<String> {
+            records
+                .iter()
+                .filter(|r| holds_card_sent_mark(r))
+                .map(|r| r.call.clone())
+                .collect()
+        };
+        let now: Vec<QsoRecord> = lb.records().iter().map(|r| QsoRecord::clone(r)).collect();
+        assert_eq!(listed(&now), ["W1AW"]);
+        assert_eq!(
+            listed(&parse_adif(&lb.adif())),
+            ["W1AW"],
+            "and so from the log as Nexus saves it"
+        );
+    }
+
+    /// One extra field of `r`, owned: what the eQSL upload-mark tests compare.
+    fn extra_of(r: &QsoRecord, name: &str) -> Option<String> {
+        extra_field(r, name).map(str::to_string)
+    }
+
+    /// ★ An export says which contacts went to eQSL, in the fields every logger reads:
+    /// `EQSL_QSL_SENT` "Y" and `EQSL_QSLSDATE`, the day of the upload eQSL took or already held.
+    /// Never "N", which ADIF defines as "do not upload": a contact never sent, refused, or not yet
+    /// answered says nothing. A contact carrying its own (imported from another logger) writes
+    /// each once, as it carries them, and a mark with no date writes no date. Both the operator's
+    /// file copy (`log.adi`, the exports) and the one sent to a service; never the operator's own
+    /// copy, which holds the stamp itself (`a_records_own_copy_round_trips_with_its_eqsl_stamp`).
+    #[test]
+    fn an_export_says_which_contacts_went_to_eqsl() {
+        let stamp = |outcome, when_unix, detail| {
+            Some(UploadStatus {
+                outcome,
+                when_unix,
+                detail,
+            })
+        };
+        let (y, mo, d, ..) = datetime_utc(1_700_100_000);
+        let day = format!("{y:04}{mo:02}{d:02}");
+        // What one contact's export says of eQSL: each field's count, and its value read back.
+        let said = |upload: Option<UploadStatus>, own: &[(&str, &str)]| {
+            let mut r = rec("W1AW", "20m", 1_700_000_000);
+            r.upload.eqsl = upload;
+            r.extra = own
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            [adif_record_own_file(&r), adif_record(&r)].map(|out| {
+                let back = &parse_adif(&out)[0];
+                (
+                    out.matches("<EQSL_QSL_SENT:").count(),
+                    extra_of(back, "EQSL_QSL_SENT"),
+                    out.matches("<EQSL_QSLSDATE:").count(),
+                    extra_of(back, "EQSL_QSLSDATE"),
+                )
+            })
+        };
+        let sent = (1, Some("Y".to_string()), 1, Some(day.clone()));
+        for outcome in [UploadOutcome::Accepted, UploadOutcome::Duplicate] {
+            assert_eq!(
+                said(stamp(outcome, 1_700_100_000, None), &[]),
+                [sent.clone(), sent.clone()],
+                "{outcome:?}"
+            );
+        }
+        let nothing = (0, None, 0, None);
+        for upload in [
+            None,
+            stamp(
+                UploadOutcome::Rejected,
+                1_700_100_000,
+                Some(UploadDetail::RecordRefused),
+            ),
+            stamp(
+                UploadOutcome::AuthFail,
+                1_700_100_000,
+                Some(UploadDetail::Credentials),
+            ),
+            stamp(UploadOutcome::Pending, 1_700_100_000, None),
+        ] {
+            assert_eq!(
+                said(upload.clone(), &[]),
+                [nothing.clone(), nothing.clone()],
+                "{upload:?}"
+            );
+        }
+        let undated = (1, Some("Y".to_string()), 0, None);
+        assert_eq!(
+            said(
+                stamp(
+                    UploadOutcome::Accepted,
+                    0,
+                    Some(UploadDetail::OperatorDeclared)
+                ),
+                &[]
+            ),
+            [undated.clone(), undated]
+        );
+        let own = (1, Some("Y".to_string()), 1, Some("20200101".to_string()));
+        assert_eq!(
+            said(
+                stamp(UploadOutcome::Accepted, 1_700_100_000, None),
+                &[("EQSL_QSLSDATE", "20200101"), ("EQSL_QSL_SENT", "Y")]
+            ),
+            [own.clone(), own.clone()]
+        );
+        // A date of its own and no mark: the mark is written, the date only once, its own.
+        assert_eq!(
+            said(
+                stamp(UploadOutcome::Accepted, 1_700_100_000, None),
+                &[("EQSL_QSLSDATE", "20200101")]
+            ),
+            [own.clone(), own]
+        );
+    }
+
+    /// ★ The operator's own copy of a record ([`Audience::OwnLog`]: the store's round trips and the
+    /// edit history's snapshots) carries Nexus's eQSL stamp alone, never the `EQSL_QSL_SENT` and
+    /// `EQSL_QSLSDATE` an export derives from it: read back, they would be fields of the record's
+    /// own, and the record would not be the one it was. A record with an accepted eQSL stamp reads
+    /// back from its own copy exactly as it was.
+    #[test]
+    fn a_records_own_copy_round_trips_with_its_eqsl_stamp() {
+        let mut r = rec("W1AW", "20m", 1_700_000_000);
+        r.upload.eqsl = Some(UploadStatus {
+            outcome: UploadOutcome::Accepted,
+            when_unix: 1_700_100_000,
+            detail: None,
+        });
+        let own = adif_record_own_log(&r);
+        assert!(!own.contains("<EQSL_QSL_SENT:"), "{own}");
+        let back = parse_adif(&(adif_header() + &own))[0].clone();
+        assert_eq!(back.extra, r.extra);
+        assert_eq!(back.upload.eqsl, r.upload.eqsl);
+    }
+
+    /// ★ Another logger's file saying a contact went to eQSL (`EQSL_QSL_SENT` "Y") reads as an
+    /// upload already made, as `LOTW_QSL_SENT` does for LoTW: the catch-up and the "never uploaded
+    /// to eQSL" diagnostic pass it by, so moving a log from another program does not send it to
+    /// eQSL again. Its "N" ("do not upload") and a contact with no mark are owed, as before. The
+    /// fields stay as that file wrote them and round-trip once each, and the mark is no upload
+    /// Nexus made, so it dates no last eQSL upload.
+    #[test]
+    fn another_loggers_eqsl_sent_mark_reads_as_an_upload_made() {
+        let file = "<EOH>\n\
+            <CALL:5>W1ABC<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20240101<TIME_ON:6>120000\
+            <EQSL_QSL_SENT:1>Y<EQSL_QSLSDATE:8>20240102<EOR>\n\
+            <CALL:5>W1XYZ<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20240101<TIME_ON:6>130000\
+            <EQSL_QSL_SENT:1>N<EOR>\n\
+            <CALL:5>K1DEF<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20240101<TIME_ON:6>140000<EOR>\n";
+        let declared = Some(UploadStatus {
+            outcome: UploadOutcome::Accepted,
+            when_unix: 0,
+            detail: Some(UploadDetail::OperatorDeclared),
+        });
+        let eqsl = |lb: &Logbook| -> Vec<Option<UploadStatus>> {
+            lb.records().iter().map(|r| r.upload.eqsl.clone()).collect()
+        };
+        let mut lb = Logbook::new();
+        lb.import_adif(file);
+        assert_eq!(eqsl(&lb), [declared.clone(), None, None]);
+        assert_eq!(lb.upload_health().eqsl.last_success_unix, None);
+        let out = lb.adif();
+        assert_eq!(
+            (
+                out.matches("<EQSL_QSL_SENT:1>Y").count(),
+                out.matches("<EQSL_QSL_SENT:1>N").count(),
+                out.matches("<EQSL_QSLSDATE:").count(),
+                out.matches("<EQSL_QSLSDATE:8>20240102").count()
+            ),
+            (1, 1, 1, 1),
+            "{out}"
+        );
+        let mut again = Logbook::new();
+        again.import_adif(&out);
+        assert_eq!(eqsl(&again), [declared, None, None]);
+        assert_eq!(again.adif(), out, "and it round-trips as it was");
+    }
+
+    /// ★ A callsign correction takes an imported `EQSL_QSL_SENT` "Y" and its date with the upload
+    /// stamps it clears, as it takes `LOTW_QSL_SENT`: left in the record, the next read of its ADIF
+    /// would mark the corrected contact uploaded to eQSL again, and it would never be sent under
+    /// its right call. Whether the edit carries the record's fields or none.
+    #[test]
+    fn a_call_correction_takes_an_imported_eqsl_sent_mark_with_it() {
+        for carried in [true, false] {
+            let mut lb = Logbook::new();
+            lb.import_adif(
+                "<EOH>\n<CALL:4>W1AX<QSO_DATE:8>20260101<TIME_ON:6>120000<BAND:3>20m<MODE:3>FT8\
+                 <EQSL_QSL_SENT:1>Y<EQSL_QSLSDATE:8>20260102<EOR>\n",
+            );
+            assert!(
+                lb.records()[0].upload.eqsl.is_some(),
+                "premise: imported as sent"
+            );
+            let mut fixed = lb.records()[0].as_ref().clone();
+            fixed.call = "W1AW".into();
+            if !carried {
+                fixed.extra = Vec::new();
+            }
+            assert!(lb.update_record(0, fixed));
+            let back = parse_adif(&(adif_header() + &adif_record_own_log(&lb.records()[0])));
+            assert_eq!(
+                (
+                    lb.records()[0].upload.eqsl.clone(),
+                    back[0].upload.eqsl.clone(),
+                    extra_of(&back[0], "EQSL_QSLSDATE")
+                ),
+                (None, None, None),
+                "the edit carried the record's fields: {carried}"
+            );
+        }
+    }
+
+    /// The sender's message and grid a card brings to the contact it confirms, as the log keeps them.
+    fn message_and_grid(r: &QsoRecord) -> (Option<String>, Option<String>) {
+        (
+            extra_field(r, "APP_NEXUS_EQSL_QSLMSG").map(str::to_string),
+            r.grid.clone(),
+        )
+    }
+
+    /// ★ A card brings the sender's message and, to a contact with none, the sender's grid: kept
+    /// in the contact's own fields, under ADIF's names, and written out with it. A grid that is no
+    /// Maidenhead locator fills nothing.
+    #[test]
+    fn an_eqsl_card_brings_its_message_and_grid() {
+        let inbox = eqsl_inbox(&[
+            inbox_card("W1AW", "<QSLMSG:10>TNX QSO 73<GRIDSQUARE:6>FN31pr"),
+            inbox_card("K2XYZ", "<GRIDSQUARE:4>JJJJ"),
+        ]);
+        let mut lb = Logbook::new();
+        for call in ["W1AW", "K2XYZ"] {
+            let mut r = rec(call, "20m", 1_700_000_000);
+            r.grid = None;
+            lb.add(r);
+        }
+        lb.merge_report(&inbox);
+        assert_eq!(
+            message_and_grid(&lb.records()[0]),
+            (Some("TNX QSO 73".into()), Some("FN31pr".into()))
+        );
+        assert_eq!(message_and_grid(&lb.records()[1]), (None, None));
+        let out = adif_record(&lb.records()[0]);
+        for field in [
+            "<APP_NEXUS_EQSL_QSLMSG:10>TNX QSO 73",
+            "<GRIDSQUARE:6>FN31pr",
+        ] {
+            assert!(out.contains(field), "{field} in {out}");
+        }
+        assert_eq!(
+            message_and_grid(&report_rows(&inbox)[0]).0,
+            message_and_grid(&lb.records()[0]).0,
+            "Check confirmations reads the rows the merge reads"
+        );
+    }
+
+    /// ★ The sender's message never becomes the operator's own. eQSL sends it as `QSLMSG`, or as
+    /// `QSLMSG_INTL` when it has international characters, and ADIF gives `QSLMSG` to "a message
+    /// for the contacted station's operator": the operator's message for the card THEY send. Kept
+    /// under that name, an export would hand it to every logger as the operator's words, and a
+    /// re-upload would print it on the operator's own eQSL. It is kept as eQSL's own field
+    /// ([`crate::eqsl::MESSAGE`]). Another program's `QSLMSG` stays its own.
+    #[test]
+    fn the_senders_message_never_becomes_the_operators_qslmsg() {
+        let intl = "Grüße aus Köln, 73";
+        let inbox = eqsl_inbox(&[inbox_card(
+            "W1AW",
+            &format!("<QSLMSG_INTL:{}>{intl}", intl.len()),
+        )]);
+        let row = &report_rows(&inbox)[0];
+        assert_eq!(
+            (
+                extra_field(row, "APP_NEXUS_EQSL_QSLMSG"),
+                extra_field(row, "QSLMSG"),
+                extra_field(row, "QSLMSG_INTL")
+            ),
+            (Some(intl), None, None)
+        );
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000));
+        lb.merge_report(&inbox);
+        let out = adif_record(&lb.records()[0]);
+        assert!(
+            !out.contains("<QSLMSG:") && !out.contains("<QSLMSG_INTL:"),
+            "{out}"
+        );
+        assert!(
+            out.contains(&format!("<APP_NEXUS_EQSL_QSLMSG:{}>{intl}", intl.len())),
+            "{out}"
+        );
+
+        // Control: in a file that is not eQSL's InBox, `QSLMSG` is that file's own message.
+        let third_party = format!("<EOH>\n{}", inbox_card("W1AW", "<QSLMSG:3>TNX"));
+        let row = &report_rows(&third_party)[0];
+        assert_eq!(
+            (
+                extra_field(row, "QSLMSG"),
+                extra_field(row, "APP_NEXUS_EQSL_QSLMSG")
+            ),
+            (Some("TNX"), None)
+        );
+    }
+
+    /// ★ What a card brings is set where the contact has none, and what the contact holds stays:
+    /// a later card, or the same InBox read again, never rewrites the message or a grid the
+    /// contact has.
+    #[test]
+    fn a_later_card_rewrites_no_message_or_grid() {
+        let (y, mo, d, _, _, _) = datetime_utc(1_700_000_000);
+        let date = format!("{y:04}{mo:02}{d:02}");
+        let first = eqsl_inbox(&[inbox_card("W1AW", "<QSLMSG:5>FIRST<GRIDSQUARE:4>FN31")]);
+        let (_, _, _, h2, mi2, _) = datetime_utc(1_700_000_060);
+        let later = eqsl_inbox(&[format!(
+            "<CALL:4>W1AW<QSO_DATE:8>{date}<TIME_ON:4>{h2:02}{mi2:02}<BAND:3>20M<MODE:3>FT8\
+             <QSL_SENT:1>Y<QSL_SENT_VIA:1>E<QSLMSG:5>LATER<GRIDSQUARE:4>JN58\
+             <EQSL_QSL_RCVD:1>Y<EQSL_QSLRDATE:8>20991231<EOR>\n"
+        )]);
+        let mut lb = Logbook::new();
+        let mut held = rec("W1AW", "20m", 1_700_000_000);
+        held.grid = None;
+        lb.add(held);
+        lb.merge_report(&first);
+        let kept = (Some("FIRST".to_string()), Some("FN31".to_string()));
+        assert_eq!(message_and_grid(&lb.records()[0]), kept, "premise");
+        lb.merge_report(&later);
+        assert_eq!(message_and_grid(&lb.records()[0]), kept);
+    }
+
+    /// ★ A callsign correction takes what a card said of itself with the confirmation it strips:
+    /// the card was matched to the busted call, and its facts, left behind, would stand in for the
+    /// right call's own card, which a merge sets only where the contact has none. Whether the edit
+    /// carries the record's fields or none.
+    #[test]
+    fn a_call_correction_takes_the_cards_facts_with_its_confirmation() {
+        let facts: Vec<(String, String)> = [
+            ("APP_EQSL_AG", "Y"),
+            ("APP_NEXUS_EQSL_QSLMSG", "WRONG CALL"),
+            ("APP_OTHERLOG_KEEP", "kept"),
+            ("EQSL_QSLRDATE", "20231115"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        for carried in [true, false] {
+            let mut busted = rec("W1AX", "20m", 1_700_000_000);
+            busted.qsl_rcvd.eqsl = true;
+            busted.confirmed = true;
+            busted.extra = facts.clone();
+            let mut lb = Logbook::new();
+            lb.add(busted);
+            let mut fixed = lb.records()[0].as_ref().clone();
+            fixed.call = "W1AW".into();
+            if !carried {
+                fixed.extra = Vec::new();
+            }
+            assert!(lb.update_record(0, fixed));
+            assert_eq!(
+                lb.records()[0].extra,
+                [("APP_OTHERLOG_KEEP".to_string(), "kept".to_string())],
+                "the edit carried the record's fields: {carried}"
+            );
+            lb.merge_report(&eqsl_inbox(&[inbox_card("W1AW", "<QSLMSG:5>RIGHT")]));
+            assert_eq!(
+                extra_field(&lb.records()[0], "APP_NEXUS_EQSL_QSLMSG"),
+                Some("RIGHT")
+            );
+        }
     }
 
     /// ★ A card from an Authenticity-Guaranteed eQSL member keeps that mark (`APP_EQSL_AG:Y`) on

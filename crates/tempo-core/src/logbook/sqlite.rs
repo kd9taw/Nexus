@@ -3291,6 +3291,54 @@ mod tests {
         );
     }
 
+    /// ★ What an eQSL card says of itself survives the store. A sync's merge leaves the day eQSL
+    /// took the card in, its AG mark and the sender's message on the contact, in its extra fields;
+    /// the store gives each back as the merge left it, a message with international characters
+    /// included.
+    #[test]
+    fn an_eqsl_cards_facts_survive_the_store() {
+        let message = "Grüße aus Köln, 73";
+        let inbox = format!(
+            "Received eQSLs for K2DEF\n<PROGRAMID:21>eQSL.cc DownloadInBox\n<EOH>\n\
+             <CALL:4>W1AW<QSO_DATE:8>20241004<TIME_ON:4>1802<BAND:3>20M<MODE:3>FT8\
+             <QSL_SENT:1>Y<QSL_SENT_VIA:1>E<QSLMSG_INTL:{}>{message}<APP_EQSL_AG:1>Y\
+             <EQSL_QSL_RCVD:1>Y<EQSL_QSLRDATE:8>20241005<EOR>\n",
+            message.len()
+        );
+        let mut log = crate::logbook::Logbook::new();
+        log.add(
+            parse_adif(
+                "<CALL:4>W1AW<QSO_DATE:8>20241004<TIME_ON:6>180000<BAND:3>20m<MODE:3>FT8<EOR>",
+            )[0]
+            .clone(),
+        );
+        log.merge_report(&inbox);
+        let mut db = LogDb::open_in_memory().expect("open");
+        db.insert_all(log.records().iter().map(|r| (&**r, Resolved::default())))
+            .expect("insert");
+        let back = db.load_all().expect("load");
+        let facts: Vec<(String, String)> = back[0]
+            .extra
+            .iter()
+            .filter(|(k, _)| crate::eqsl::CARD_FACTS.contains(&k.as_str()))
+            .cloned()
+            .collect();
+        let want: Vec<(String, String)> = [
+            ("APP_EQSL_AG", "Y"),
+            ("APP_NEXUS_EQSL_QSLMSG", message),
+            ("EQSL_QSLRDATE", "20241005"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        assert_eq!(facts, want);
+        assert_eq!(
+            adif_record(&back[0]),
+            adif_record(&log.records()[0]),
+            "and the rest of the contact with them"
+        );
+    }
+
     /// The WHOLE PIPELINE the store now owns, on disk: an operator's `log.adi` → the real
     /// conversion (`migrate_log`, with its file-backed store) → the load the app starts from →
     /// the file the mirror writes. Every record comes out as the ADIF writer would have written

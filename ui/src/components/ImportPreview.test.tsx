@@ -12,6 +12,7 @@ import type { ImportDone, ImportPreview as Preview } from '../features/logImport
 vi.mock('../api', () => ({
   previewImport: vi.fn(),
   importLog: vi.fn(),
+  importLotwUnmatched: vi.fn(),
   saveTextToDownloads: vi.fn(async (name: string) => `/downloads/${name}`),
 }))
 
@@ -123,5 +124,65 @@ describe('the import preview', () => {
     render(<ImportPreview text="FILE" fileName="a.adi" onClose={vi.fn()} onImported={vi.fn()} />)
     await screen.findByRole('button', { name: t('logbook.import.preview.import') })
     expect(screen.queryByRole('button', { name: t('logbook.import.preview.importNew') })).toBeNull()
+  })
+})
+
+// A LoTW report downloaded by hand: its import confirms the contacts it matches and adds none, and
+// only the explicit Add, after it, adds the rows that matched no contact.
+describe('the import preview of a LoTW report', () => {
+  const LOTW: Preview = { ...PREVIEW, new: 0, duplicates: 1, updates: 1, lotwUnmatched: 2 }
+  const LOTW_DONE: ImportDone = {
+    ...DONE,
+    stats: { added: 0, skipped: 1, updated: 1, total: 10, run: 'run-1', unmatched: 2 },
+  }
+  const ADDED = { added: 2, skipped: 0, updated: 0, total: 12, run: 'run-2', unmatched: 0 }
+  const addLabel = t('logbook.import.addUnmatched', { count: 2 })
+
+  function openLotw(onImported = vi.fn()) {
+    vi.mocked(api.previewImport).mockResolvedValue(LOTW)
+    vi.mocked(api.importLog).mockResolvedValue(LOTW_DONE)
+    render(<ImportPreview text="LOTW" fileName="lotwreport.adi" onClose={vi.fn()} onImported={onImported} />)
+    return onImported
+  }
+
+  it('says it confirms and adds none, counts the unmatched, and offers no "new only"', async () => {
+    openLotw()
+    expect(await screen.findByText(t('logbook.import.preview.lotw'))).toBeTruthy()
+    expect(screen.getByText(t('logbook.import.preview.lotwUnmatched', { count: 2 }))).toBeTruthy()
+    expect(screen.queryByRole('button', { name: t('logbook.import.preview.importNew') })).toBeNull()
+  })
+
+  it('after the import counts the unmatched rows and adds them only when Add is pressed', async () => {
+    vi.mocked(api.importLotwUnmatched).mockResolvedValue(ADDED)
+    const onImported = openLotw()
+    fireEvent.click(await screen.findByRole('button', { name: t('logbook.import.preview.import') }))
+    await waitFor(() => expect(onImported).toHaveBeenCalledWith(LOTW_DONE.stats))
+    expect(document.body.textContent).toContain(t('logbook.pota.unmatched', { count: 2 }))
+    const add = await screen.findByRole('button', { name: addLabel })
+    expect(api.importLotwUnmatched).not.toHaveBeenCalled()
+    fireEvent.click(add)
+    await waitFor(() => expect(api.importLotwUnmatched).toHaveBeenCalledWith('LOTW'))
+    // The add is a run of its own, handed to the host for its toast and Undo; it is not offered again.
+    await waitFor(() => expect(onImported).toHaveBeenLastCalledWith(ADDED))
+    await waitFor(() => expect(screen.queryByRole('button', { name: addLabel })).toBeNull())
+  })
+
+  it('keeps Add when it fails, so it can be pressed again', async () => {
+    vi.mocked(api.importLotwUnmatched).mockRejectedValue('LogBusy')
+    const onImported = openLotw()
+    fireEvent.click(await screen.findByRole('button', { name: t('logbook.import.preview.import') }))
+    fireEvent.click(await screen.findByRole('button', { name: addLabel }))
+    await waitFor(() => expect(api.importLotwUnmatched).toHaveBeenCalled())
+    expect(onImported).toHaveBeenCalledTimes(1)
+    expect((await screen.findByRole('button', { name: addLabel })).hasAttribute('disabled')).toBe(false)
+  })
+
+  it('offers no Add after an import with nothing unmatched', async () => {
+    vi.mocked(api.previewImport).mockResolvedValue({ ...LOTW, lotwUnmatched: 0 })
+    vi.mocked(api.importLog).mockResolvedValue({ ...LOTW_DONE, stats: { ...LOTW_DONE.stats, unmatched: 0 } })
+    render(<ImportPreview text="LOTW" fileName="lotwreport.adi" onClose={vi.fn()} onImported={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', { name: t('logbook.import.preview.import') }))
+    expect(await screen.findByText(t('logbook.import.done.accounted'))).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /unmatched/ })).toBeNull()
   })
 })

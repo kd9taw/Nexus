@@ -69,7 +69,7 @@ If you get it on the air, honest decode reports (band, dial, distance, condition
 
 ARRL's DXCC rules accept only LoTW, paper QSL, and approved bureau cards for award credit. eQSL cards are not an accepted confirmation source for DXCC or for any other ARRL award. Nexus enforces this correctly: an eQSL confirmation sets `confirmed = true` (you did make the contact) but `award_confirmed = false` (it does not count toward DXCC, WAS, Honor Roll, or Challenge). Award tallies use `award_confirmed` exclusively, so eQSL-confirmed contacts never inflate your DXCC count. This is the technically correct behaviour — most logging software uses a single confirmed flag and silently over-counts.
 
-CQ's awards are different. CQ accepts eQSLs from Authenticity Guaranteed (AG) members for WAZ and WPX. Nexus does not count AG eQSLs toward WAZ yet, so an eQSL user's WAZ total here can be lower than the one CQ would credit.
+CQ's awards are different. CQ accepts eQSLs from Authenticity Guaranteed (AG) members for WAZ and WPX. Nexus counts AG eQSLs toward WAZ, as CQ does.
 
 ---
 
