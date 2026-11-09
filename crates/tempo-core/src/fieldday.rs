@@ -546,7 +546,11 @@ impl SpotMults {
         mode_class: &str,
         submode: Option<&str>,
     ) -> Vec<(&'static str, String)> {
-        if worked_in_banned_mode(mode_class, submode.unwrap_or(""), self.ruleset) {
+        // The mode the spot NAMES, never its class: a spot that names none has its class guessed
+        // from its frequency, and a guess is not a contact in a banned mode (a "CW" spot on 40 m
+        // during the RTTY Roundup is likely RTTY). A logged row is judged by
+        // [`worked_in_banned_mode`].
+        if submode.is_some_and(|m| self.ruleset.mode_banned(m)) {
             return Vec::new();
         }
         let call = call.trim().to_ascii_uppercase();
@@ -594,7 +598,7 @@ impl SpotMults {
     ) -> Vec<(&'static str, String)> {
         let call = call.trim().to_ascii_uppercase();
         if self.rx_by_call.contains_key(&call)
-            || worked_in_banned_mode(mode_class, submode.unwrap_or(""), self.ruleset)
+            || submode.is_some_and(|m| self.ruleset.mode_banned(m))
         {
             return Vec::new();
         }
@@ -718,9 +722,10 @@ fn record_when(f: &std::collections::HashMap<String, String>) -> u64 {
 }
 
 /// ⭐ **Was a contact of mode class `mode` (`CW` | `PH` | `DIG`), recorded as `submode`, worked
-/// in a mode `rs` bans?** The one decision every judge of a banned mode makes: a row
-/// ([`LoggedQso::banned_under`]), the dupe check that admits a row before it exists, the club's
-/// merged rows (tempo-app's `ClubLog`) and a spot's multiplier preview ([`SpotMults`]).
+/// in a mode `rs` bans?** The one decision every judge of a banned CONTACT makes: a row
+/// ([`LoggedQso::banned_under`]), the dupe check that admits a row before it exists and the
+/// club's merged rows (tempo-app's `ClubLog`). Not a spot's multiplier preview ([`SpotMults`]): a
+/// spot's class may be a guess from its frequency, so the preview reads only the mode it names.
 ///
 /// ⭐ **A `CW` contact with no recorded mode was worked in CW.** CW needs no submode, so its rows
 /// record none ([`FieldDayLog::log_mode_at`]); a contest that bans CW (the ARRL RTTY Roundup) must
