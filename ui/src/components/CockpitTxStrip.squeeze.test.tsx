@@ -274,3 +274,52 @@ describe('a squeezed surface shows its own stop where the cap can hold it', () =
   })
 })
 
+describe('a room shorter than one control', () => {
+  // JS8 in Japanese at 900×600 at 175 %: 27 px of room, shorter than one of its buttons (measured). A cap of the room
+  // shows a sliver of no control. The surface takes one control's height instead, over the strip's lower part (the TX
+  // state, the meters) and never over the line Stop TX is on; where even that is too short, it keeps the room.
+  const CTL_H = 38
+  const LINE_BOTTOM = 20 // where the strip's first line, with Stop TX, ends: layout px from the strip's top
+  function Js8() {
+    return (
+      <main className="layout single js8-cockpit">
+        <CockpitTxStrip radio={radio} onSetTxEnabled={() => {}} onTune={() => {}} onStopTx={() => {}} />
+        <div className="sstv-tx-bar"><input className="js8-msg" /></div>
+      </main>
+    )
+  }
+  function stubLine() {
+    const strip = document.querySelector<HTMLElement>('.cockpit-txstrip')!
+    strip.getBoundingClientRect = () => ({ top: 100, height: STRIP_H, bottom: 100 + STRIP_H, left: 0, right: 800, width: 800, x: 0, y: 100, toJSON: () => ({}) }) as DOMRect
+    // Stop TX's line: the cluster it stands in (as the strip draws it), or the button.
+    const stop = strip.querySelector<HTMLElement>('.op-btn.stop')!.closest<HTMLElement>('.cq-txctl') ?? strip.querySelector<HTMLElement>('.op-btn.stop')!
+    stop.getBoundingClientRect = () => ({ top: 104, height: LINE_BOTTOM - 4, bottom: 100 + LINE_BOTTOM, left: 0, right: 80, width: 80, x: 0, y: 104, toJSON: () => ({}) }) as DOMRect
+    Object.defineProperty(document.querySelector('.js8-msg')!, 'offsetHeight', { configurable: true, get: () => CTL_H })
+  }
+
+  it('the cap is one control, and the surface stands over the strip below Stop TX’s line, never over it', () => {
+    injectSheet(SHEET)
+    shellH = STRIP_H + BAR_H + SPARE
+    const { rerender } = render(<Js8 />)
+    stubLine()
+    shellH = STRIP_H + 27 + SPARE // 27 px of room
+    rerender(<Js8 />)
+    expect(bar().getAttribute('data-squeeze')).toBe('on')
+    expect(room(bar()), 'a sliver shorter than any control').toBe(`${CTL_H}px`)
+    // One control stands over the strip from the scrollport's foot: its top stays below Stop TX's line.
+    expect(shellH - CTL_H, 'the surface stands over Stop TX').toBeGreaterThanOrEqual(LINE_BOTTOM)
+  })
+
+  it('where one control would reach Stop TX’s line, it keeps the room', () => {
+    injectSheet(SHEET)
+    shellH = STRIP_H + BAR_H + SPARE
+    const { rerender } = render(<Js8 />)
+    stubLine()
+    shellH = LINE_BOTTOM + 20 + SPARE // the room below Stop TX's line is 20 px: shorter than one control
+    rerender(<Js8 />)
+    expect(bar().getAttribute('data-squeeze')).toBe('on')
+    const cap = parseFloat(room(bar()))
+    expect(cap, 'the surface would stand over Stop TX').toBeLessThanOrEqual(shellH - LINE_BOTTOM - SPARE)
+  })
+})
+

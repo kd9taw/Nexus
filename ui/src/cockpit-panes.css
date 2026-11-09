@@ -530,7 +530,9 @@
    at 175 % in Russian or Japanese, under an alarm: a 50–54 px cap, one line) that includes Send, the TX latch, the
    surface's own Stop or Esc/Stop and its notices; Stop TX, which stops all of it, is the stop in view. The strip
    scrolls the surface to its own stop when the squeeze begins and when that stop goes live, where the cap can hold it
-   (CockpitTxStrip `surfaceStop`). Everywhere the two fit, this never applies. */
+   (CockpitTxStrip `surfaceStop`). Where the room is shorter than one control (JS8 in Japanese: 27 px), the cap is one
+   control, standing over the strip's lower part and never over the line Stop TX is on (`capFor`). Everywhere the two
+   fit, this never applies. */
 .cockpit-txdock-keep[data-squeeze='on'],
 .sstv-tx-bar[data-squeeze='on'] {
   max-height: var(--cockpit-txdock-room);

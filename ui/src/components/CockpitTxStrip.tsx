@@ -385,8 +385,8 @@ function decideFold(shell: HTMLElement, strip: HTMLElement, dock: HTMLElement): 
  *  view). Stop TX, which stops everything they stop, is the one in view. To keep the surface's own stop in view too
  *  where the cap can hold it, the surface is scrolled to that stop (`surfaceStop`) when the squeeze begins, when the cap
  *  changes (a layout change: an alarm, a resize), and when the stop goes live (SSTV's Stop and Esc/Stop are disabled
- *  until an over is on the air); never on other renders, so the operator's own scroll of the surface stands. Where the cap is shorter than the stop (JS8 in Japanese at 900×600:
- *  27 px), nothing can hold it, and it is in the scroll. */
+ *  until an over is on the air); never on other renders, so the operator's own scroll of the surface stands. Where the room is shorter than one control, the cap is one control
+ *  where that leaves Stop TX's line clear (`capFor`), and the room otherwise. */
 function decideSqueeze(shell: HTMLElement, strip: HTMLElement, head: HTMLElement | undefined, parked: HTMLElement): void {
   const cs = getComputedStyle(shell)
   const room = Math.floor(
@@ -397,7 +397,7 @@ function decideSqueeze(shell: HTMLElement, strip: HTMLElement, head: HTMLElement
   const natural = parked.scrollHeight + (parseFloat(ps.borderTopWidth) || 0) + (parseFloat(ps.borderBottomWidth) || 0)
   if (shell.clientHeight > 0 && natural > room) {
     const began = parked.getAttribute('data-squeeze') !== 'on'
-    const cap = `${Math.max(0, room)}px`
+    const cap = `${Math.max(0, capFor(shell, strip, head, parked, room))}px`
     const resized = parked.style.getPropertyValue('--cockpit-txdock-room') !== cap
     if (resized) parked.style.setProperty('--cockpit-txdock-room', cap)
     if (began) parked.setAttribute('data-squeeze', 'on')
@@ -408,6 +408,28 @@ function decideSqueeze(shell: HTMLElement, strip: HTMLElement, head: HTMLElement
   } else {
     unsqueeze(parked)
   }
+}
+/** THE CAP, where the room the strip leaves is shorter than ONE CONTROL of the surface (JS8 in Japanese at 900×600 at
+ *  175 %: 27 px of room, shorter than one of its buttons, measured), so a cap of the room would show a sliver of no control at all.
+ *  There the surface takes one control's height, its padding with it, and stands that much over the strip's lower part
+ *  (the TX state, the meters): never over the line Stop TX is on. Where even that leaves less than one control, it keeps
+ *  the room, and the surface is reached by its own scroll and by Tab; Stop TX is the stop in view. In layout px. */
+function capFor(shell: HTMLElement, strip: HTMLElement, head: HTMLElement | undefined, parked: HTMLElement, room: number): number {
+  const ctl = Array.from(parked.querySelectorAll<HTMLElement>('button, input, select, textarea')).find((e) => e.offsetHeight > 0)
+  const stop = strip.querySelector<HTMLElement>('.op-btn.stop')
+  const sq = strip.getBoundingClientRect()
+  if (!ctl || !stop || strip.offsetHeight === 0 || sq.height === 0) return room
+  const ps = getComputedStyle(parked)
+  const px = (v: string) => parseFloat(v) || 0
+  const one = ctl.offsetHeight + px(ps.paddingTop) + px(ps.paddingBottom) + px(ps.borderTopWidth) + px(ps.borderBottomWidth)
+  if (room >= one) return room
+  const z = sq.height / strip.offsetHeight
+  const line = stop.closest<HTMLElement>('.cq-txctl') ?? stop
+  const cs = getComputedStyle(shell)
+  const belowStop = Math.floor(
+    shell.clientHeight - px(cs.paddingTop) - px(cs.paddingBottom) - (head?.offsetHeight ?? 0) - (line.getBoundingClientRect().bottom - sq.top) / z,
+  ) - 1
+  return Math.max(room, Math.min(Math.ceil(one), belowStop))
 }
 function unsqueeze(el: HTMLElement): void {
   if (el.hasAttribute('data-squeeze')) el.removeAttribute('data-squeeze')
