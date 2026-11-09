@@ -7,8 +7,8 @@
 // whole cockpit and Stop TX down by a row whenever receive audio was switched on. So the trigger is
 // the bar's own RX level meter (`children`, TopBar's `.rx-level`), made a button whose box is the
 // meter's exactly (`.listen-trigger`, cockpit-panes.css, resets every box property a button brings).
-// The slider lives in a portaled popover (Radix DropdownMenu, as ui/Menu, with the app zoom
-// re-applied inside it), which takes no room in the bar.
+// The slider lives in a portaled popover (Radix DropdownMenu through ui/MenuParts, as ui/Menu, with
+// the app zoom re-applied inside it), which takes no room in the bar.
 //
 // A drag is many changes and each save writes the settings file, so the slider shows the value
 // under the pointer at once (`draft`) and hands the one it settles on to `onCommit`, once, 250 ms
@@ -18,6 +18,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import * as RM from '@radix-ui/react-dropdown-menu'
 import { Volume2 } from 'lucide-react'
 import { t } from '../i18n'
+import { MenuContent, MenuRoot } from './ui/MenuParts'
 
 const SETTLE_MS = 250
 /** The unit after the level's number: an invariant token. */
@@ -67,18 +68,19 @@ export function ListenLevel({
   }
   const label = t('settings.headphoneMonitor.level.aria')
   return (
-    // NOT MODAL: a modal menu turns off pointer events everywhere else while it is open, so the
-    // first click on Stop TX would only close this popover. A volume control is open while the
-    // operator listens, which is exactly when Stop TX may be needed: a click outside closes the
-    // popover AND reaches what it lands on.
-    <RM.Root open={open} onOpenChange={setOpen} modal={false}>
+    // NOT MODAL (MenuRoot never is): a modal menu turns off pointer events everywhere else while it
+    // is open, so the first click on Stop TX would only close this popover. A volume control is open
+    // while the operator listens, which is exactly when Stop TX may be needed: a click outside closes
+    // the popover AND reaches what it lands on. MenuContent gives the keyboard back to the trigger
+    // after Esc without scrolling, and leaves it where an outside press put it.
+    <MenuRoot open={open} onOpenChange={setOpen}>
       <RM.Trigger asChild>
         <button type="button" className={`${className} listen-trigger`} title={t('topbar.listen.title', { pct })} aria-label={label}>
           {children}
         </button>
       </RM.Trigger>
       <RM.Portal>
-        <RM.Content className="ui-menu listen-pop" role="dialog" aria-label={label} sideOffset={4} align="end" collisionPadding={8}>
+        <MenuContent className="ui-menu listen-pop" role="dialog" aria-label={label} sideOffset={4} align="end" collisionPadding={8}>
           {/* The portal escapes `.app`'s zoom, so the content puts it back (ui/Menu, portal-zoom). */}
           <div style={{ zoom: 'var(--ui-zoom, 1)' }}>
             <label className="listen-pop-row">
@@ -99,8 +101,8 @@ export function ListenLevel({
               </span>
             </label>
           </div>
-        </RM.Content>
+        </MenuContent>
       </RM.Portal>
-    </RM.Root>
+    </MenuRoot>
   )
 }
