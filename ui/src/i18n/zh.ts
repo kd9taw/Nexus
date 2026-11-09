@@ -8757,6 +8757,7 @@ export const ZH: PartialCatalog = {
   "settings.rigControl.catSilentTxOff": "与电台的 CAT 连接已丢失，因此发射已关闭。请检查电台及其 CAT 线缆；Nexus 会继续尝试。要再次发射，请按 TX On（开启发射）。",
   "settings.rigControl.catBackTxOff": "与电台的 CAT 连接曾丢失，发射已关闭。CAT 已恢复；要发射，请按 TX On（开启发射）。",
   "settings.rigControl.serialHandshake.rtsKeys": "此端口上的 RTS 会键控你的发射，因此串口握手不能设为“硬件” — 请设为“自动”或“无”。",
+  "settings.rigControl.hamlibCannotConfirmHolds": "Nexus 未打开串口：无法确认此 Hamlib 会将 RTS 和 DTR 线保持为低电平；未经确认就打开端口，可能使接在其中任一条线上的发射机进入发射。请重试；如果仍然出现，请更新 Hamlib，或使用 Nexus 自带的 Hamlib。",
   "settings.rigControl.pttLineState.label": "启动时的键控线状态",
   "settings.rigControl.pttLineState.auto": "自动（推荐）",
   "settings.rigControl.pttLineState.untouched": "从不干预",
