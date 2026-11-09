@@ -77,6 +77,13 @@ const MEASURE = `(() => {
   const vis = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
   const strip = [...document.querySelectorAll('.cockpit-qso, .cockpit-txstrip')].find(vis)
   if (!strip || !document.documentElement.getAttribute('data-viewport')) return null
+  // NOT BEFORE THE APP HAS PUBLISHED THIS WINDOW'S SIZE. useViewport writes data-viewport, --vw-eff and --vh-eff
+  // (and through them the spacing scale) in an animation frame after a resize, and a page Chrome holds hidden
+  // runs none: one of four pages sharing a window was measured at 1366x768 with the 700x800 values still up
+  // (xs, not sm), and padded Stop TX 1.3 px less a side, until it came to the front between two measures and
+  // read as an alarm moving Stop TX 9 px. The app never paints that layout: the frame runs before a paint.
+  const d = document.documentElement, z = parseFloat(getComputedStyle(d).getPropertyValue('--ui-zoom')) || 1
+  if (Math.abs(parseFloat(d.style.getPropertyValue('--vw-eff')) * z - innerWidth) > 1 || Math.abs(parseFloat(d.style.getPropertyValue('--vh-eff')) * z - innerHeight) > 1) return null
   const stop = [...strip.querySelectorAll('button')].find((b) => /^stop tx$/i.test(b.textContent.trim()) && vis(b))
   const s = strip.getBoundingClientRect(), st = stop?.getBoundingClientRect()
   const w = strip.querySelector('.ch-txalarm-text')
@@ -117,7 +124,8 @@ const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
 async function openPage(route, [w, h], scale) {
-  const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
+  // A window of its own: the only tab of its window is the visible one, so its animation frames run (see MEASURE).
+  const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank', newWindow: true })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (m, p) => browser.call(m, p, sessionId)
   const evaluate = async (expression) => {
