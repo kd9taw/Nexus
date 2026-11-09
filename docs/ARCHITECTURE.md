@@ -728,7 +728,7 @@ Not yet built (tracked as Phase 2):
 
 ## 12. License & heritage
 
-Nexus is free software under the **GNU GPL v3 or later** (`COPYING`), inherited
+Nexus is free software under the **GNU GPL v3 only** (GPL-3.0-only, `COPYING`), inherited
 from its upstream lineage:
 
 - **WSJT-X** (Joe Taylor K1JT and the WSJT Development Group, GPLv3) — the FT8/FT4
