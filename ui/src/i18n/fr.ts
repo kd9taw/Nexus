@@ -8629,6 +8629,7 @@ export const FR: PartialCatalog = {
   "settings.rigControl.catSilentTxOff": "L'émission a été coupée car la liaison CAT avec la radio est perdue. Vérifiez la radio et son câble CAT ; Nexus continue d'essayer. Appuyez sur TX On pour émettre à nouveau.",
   "settings.rigControl.catBackTxOff": "La liaison CAT avec la radio a été perdue et l'émission a été coupée. Le CAT est revenu ; appuyez sur TX On pour émettre.",
   "settings.rigControl.serialHandshake.rtsKeys": "Sur ce port, RTS met votre émetteur en émission, donc le contrôle de flux série ne peut pas être Matériel — réglez-le sur Automatique ou Aucun.",
+  "settings.rigControl.hamlibCannotConfirmHolds": "Nexus n'a pas ouvert le port série : cette version de Hamlib est trop ancienne pour confirmer qu'elle maintiendra RTS et DTR au niveau bas, et ouvrir le port sans cela peut mettre en émission un émetteur câblé sur l'une ou l'autre de ces lignes. Mettez Hamlib à jour en 4.6 ou plus récent, ou utilisez le Hamlib fourni avec Nexus.",
   "settings.rigControl.pttLineState.label": "Ligne de manipulation au démarrage",
   "settings.rigControl.pttLineState.auto": "Automatique (recommandé)",
   "settings.rigControl.pttLineState.untouched": "Ne jamais y toucher",

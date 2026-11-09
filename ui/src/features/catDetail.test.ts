@@ -62,6 +62,44 @@ describe('the hardware-handshake refusal in the CAT status', () => {
   })
 })
 
+describe('the unconfirmed RTS/DTR holds refusal, in the CAT status', () => {
+  const HOLDS_KEY = 'settings.rigControl.hamlibCannotConfirmHolds'
+  const HOLDS = EN[HOLDS_KEY]
+
+  it('is the exact sentence the backend sends', () => {
+    const rust = read('../../../crates/tempo-audio/src/rigctld_proc.rs')
+    const m = rust.match(/pub const HAMLIB_CANNOT_CONFIRM_HOLDS: &str =\s*"([^"]*)";/)
+    expect(m?.[1]).toBe(HOLDS)
+  })
+
+  it.each([
+    ['de', DE],
+    ['es', ES],
+    ['fr', FR],
+    ['ja', JA],
+    ['ru', RU],
+    ['zh', ZH],
+    ['zh-hant', ZH_HANT],
+  ] as const)('%s: renders translated, keeps Hamlib, RTS and DTR, and what leads it', (lang, cat) => {
+    const text = String((cat as Record<string, unknown>)[HOLDS_KEY])
+    expect(text).not.toBe(HOLDS)
+    for (const word of ['Hamlib', 'RTS', 'DTR', '4.6']) expect(text).toContain(word)
+    installCatalog(lang, cat)
+    setLocale(lang)
+    expect(catDetailText(HOLDS)).toBe(text)
+    const lead = 'the CAT helper (rigctld) stopped and was restarted. '
+    expect(catDetailText(lead + HOLDS)).toBe(lead + text)
+  })
+
+  it.each([
+    ['ru', '../../../translations/ru/nexus-ru-translation.csv'],
+    ['zh', '../../../translations/zh/nexus-zh-translation.csv'],
+    ['zh-hant', '../../../translations/zh-hant/nexus-zh-hant-translation.csv'],
+  ])("the %s kit's row has the English the app shows", (_, file) => {
+    expect(read(file)).toContain(`"${HOLDS_KEY}","${HOLDS.replace(/"/g, '""')}"`)
+  })
+})
+
 describe('NET rigctl given a serial port, in the CAT status', () => {
   const NET_KEY = 'settings.rigControl.netRigctl.notConnected'
   const sent = (port: string) => EN[NET_KEY].split('{{port}}').join(port)

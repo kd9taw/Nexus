@@ -8629,6 +8629,7 @@ export const ES: PartialCatalog = {
   "settings.rigControl.catSilentTxOff": "Se ha desactivado la transmisión porque se ha perdido el CAT con el equipo. Comprueba el equipo y su cable CAT; Nexus sigue intentándolo. Pulsa TX On para volver a transmitir.",
   "settings.rigControl.catBackTxOff": "Se perdió el CAT con el equipo y se desactivó la transmisión. CAT ha vuelto; pulsa TX On para transmitir.",
   "settings.rigControl.serialHandshake.rtsKeys": "En este puerto RTS pone tu transmisor en emisión, así que el control de flujo serie no puede ser Hardware — ponlo en Automático o Ninguno.",
+  "settings.rigControl.hamlibCannotConfirmHolds": "Nexus no abrió el puerto serie: esta versión de Hamlib es demasiado antigua para confirmar que mantendrá RTS y DTR en bajo, y abrir el puerto sin eso puede poner en emisión un transmisor conectado a cualquiera de esas líneas. Actualiza Hamlib a la 4.6 o posterior, o usa el Hamlib que viene con Nexus.",
   "settings.rigControl.pttLineState.label": "Línea de manipulación al arrancar",
   "settings.rigControl.pttLineState.auto": "Automático (recomendado)",
   "settings.rigControl.pttLineState.untouched": "No tocarla nunca",
