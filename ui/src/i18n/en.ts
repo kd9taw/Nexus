@@ -15279,6 +15279,10 @@ export const EN = {
     "Antenna match — this is the radio's own raw figure, and Nexus has no verified scale for this model, so it cannot tell you what counts as high here. Watch which way it moves as you tune; the absolute number may be well out, and nothing stops your transmission on it.",
   'meters.tx.alc.title': 'ALC — set mic gain so SSB peaks just tickle the zone, never peg it',
   'meters.tx.po.title': 'Actual output power',
+  // #489: the PO≈ label's tooltip, where the radio gives no watts and the figure is its meter's
+  // share of the rated power (Settings ▸ Radio ▸ Rig Control ▸ Rated power).
+  'meters.tx.po.derived':
+    'Output power, estimated: this radio reports its power only as a share of its meter, so Nexus shows that share of the rated power set for it in Settings ▸ Radio. It is not written to your log.',
   'meters.tx.needle.peak.title': 'The bright mark is the peak: it holds the highest reading for a second, then falls back. Between overs it shows the last over\'s peak.',
   'meters.tx.comp.title': 'Speech compression',
   'meters.tx.comp.level.aria': 'Speech processor level',

@@ -4682,6 +4682,7 @@ export const ES: PartialCatalog = {
   "meters.tx.temp.meter.title": "Medidor de temperatura del amplificador final de la radio, como fracción de su escala: esta radio informa su medidor, no grados",
   "meters.tx.idle": "Medidores de TX — {{when}}",
   "meters.tx.po.title": "Potencia real de salida",
+  "meters.tx.po.derived": "Potencia de salida, estimada: esta radio solo informa su potencia como una fracción de su medidor, así que Nexus muestra esa fracción de la potencia nominal configurada para ella en Ajustes ▸ Radio. No se escribe en tu registro.",
   "meters.tx.needle.peak.title": "La marca brillante es el pico: retiene la lectura más alta durante un segundo y luego baja. Entre pasadas muestra el pico de la última.",
   "meters.tx.swr.title": "Adaptación de antena — mantenla por debajo de 2:1",
   "meters.tx.swr.cutoff": "Adaptación de antena — Nexus deja de transmitir por encima de {{ratio}}:1, tu ajuste en Ajustes ▸ Equipo ▸ Límites de transmisión y compartición",

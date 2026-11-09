@@ -71,11 +71,20 @@ describe('the CAT words take no room the strip lays out by', () => {
     expect(css(words, 'overflow')).toBe('hidden')
   })
 
-  it('beside the meters cell there are no words to share its room: the hover and the CAT status say it', () => {
+  // #489 (the transmit review): the words were left out beside a meters cell, which reduced the cause
+  // to a tooltip on every screen with meters from md up. They stand IN the cell now, as its one block,
+  // in place of the meters (blank while transmit is off): no item is added to the strip's line.
+  it('with a meters cell the words are the cell, in place of the meters, and nothing is added beside the state', () => {
     const { container } = render(
-      <CockpitTxStrip radio={radio} onSetTxEnabled={n} onStopTx={n} meters={<span>meters</span>} />,
+      <CockpitTxStrip radio={radio} onSetTxEnabled={n} onStopTx={n} meters={<span className="meters-stub">meters</span>} />,
     )
-    expect(container.querySelector('.cat-txoff-note')).toBeNull()
+    const notes = [...container.querySelectorAll('.cat-txoff-note')]
+    expect(notes.map((e) => e.textContent)).toEqual([EN['operate.strip.state.txOffCatLost']])
+    expect(notes[0].parentElement!.classList.contains('cockpit-txstrip-meters'), 'the meters cell holds the words').toBe(true)
+    expect(notes[0].tagName, 'a block, so its ellipsis applies inside the cell').toBe('DIV')
+    expect(container.querySelector('.meters-stub'), 'the meters give the cell up').toBeNull()
+    const strip = container.querySelector('.cockpit-txstrip')!
+    expect([...strip.children].filter((e) => e.classList.contains('cat-txoff-note')), 'no item of its own on the line').toEqual([])
     expect(container.querySelector('.cq-statecap')!.getAttribute('title')).toBe(EN['settings.rigControl.catSilentTxOff'])
   })
 })

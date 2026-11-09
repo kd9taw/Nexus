@@ -819,6 +819,15 @@ mod tests {
             "the page was shown a warning with no power reading"
         );
 
+        // A derived share of 0 (#489) is never evidence: the Kenwoods read 0 whenever Hamlib's
+        // PTT cache says unkeyed.
+        let mut s = fed(0.5, 2_200);
+        s.e.observe_rig_tx_po_share(0.0);
+        assert!(
+            !s.e.mic_no_power_out(),
+            "a derived share of 0 raised the no-power warning"
+        );
+
         // No voice arriving (the operator holding PTT in silence): no warning, whatever the meter.
         let mut s = fed(0.0, 2_200);
         s.e.observe_rig_tx_meters(None, None, Some(0.0), None);

@@ -5038,6 +5038,21 @@ struct RadioLoop {
     /// answered, the meter falls back to `l ALC` instead of being parked. Only on an over's read:
     /// a tune-up's 120 ms deadline can miss a slow radio that does answer. Reset with the ladder.
     tx_alc_raw: Option<bool>,
+    /// The rig REFUSED `l RFPOWER_METER_WATTS` ([`crate::rig::MeterRead::Refused`]), so its
+    /// forward power is read as `l RFPOWER_METER`, a share of the radio's power meter, and the
+    /// engine shows that share of the radio's rated watts, marked derived (#489).
+    ///
+    /// ⭐ THE FT-450D (Hamlib model 1046) AND SEVEN MORE CATALOG MODELS. Hamlib 4.7.1 declares
+    /// `RFPOWER_METER` and not `RFPOWER_METER_WATTS` for the FT-450 (1027), FT-450D (1046),
+    /// TS-2000 (2014), TS-480 (2028), SDRuno (2051), QCX/QDX (2052), (tr)uSDX (2055) and SDR
+    /// Console (2056) (`rigctl --dump-caps`, every catalog model swept), so rigctld refused the
+    /// watts read and the Po meter was parked for good. Keyed on the refusal itself, not on a
+    /// model list, so the operator's own rigctld, of whatever version, is answered by what it
+    /// says. A read Hamlib already exposes for exactly these radios: on the FT-450D it sends the
+    /// radio the same `RM5;` the watts read would have (`newcat.c`, both levels share one case),
+    /// and on the Kenwoods `SM0;`/`SM` (`ts480.c`, `ts2000.c`). A miss is never a refusal, so a
+    /// radio that reports watts and drops one answer keeps them. Reset with the ladder.
+    tx_po_share: bool,
     /// Whether we last surfaced the "monitor refused — would transmit into the TX
     /// device" note on the audio-error line, so we clear only our OWN message.
     /// The monitor block currently OWNS the audio-error line (it wrote either
@@ -5381,6 +5396,7 @@ impl RadioLoop {
             tx_meter_retry_at: [0; N_TX_METERS],
             tx_meter_retry_backoff: [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS],
             tx_alc_raw: None,
+            tx_po_share: false,
 
             clock_offset_ms: 0,
             clock_jump: tempo_app::clocksync::ClockJumpDetector::new(),
@@ -8555,6 +8571,7 @@ impl RadioLoop {
         self.tx_meter_retry_at = [0; N_TX_METERS];
         self.tx_meter_retry_backoff = [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS];
         self.tx_alc_raw = None;
+        self.tx_po_share = false;
         // The audio device must be (re)opened for the new radio even if its device name matches
         // (e.g. both "system default") — force it, since `audio_differs` alone would skip an
         // empty-vs-empty compare and leave the OLD radio's sound-card stream running.
@@ -10695,6 +10712,7 @@ impl RadioLoop {
                     self.tx_meter_retry_at = [0; N_TX_METERS];
                     self.tx_meter_retry_backoff = [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS];
                     self.tx_alc_raw = None;
+                    self.tx_po_share = false;
                     // The level give-ups are a rate limit, not a verdict: a write refused while
                     // the link was half-open must be retried once the link is proven alive.
                     self.rf_power_giveup = None;
@@ -10849,6 +10867,7 @@ impl RadioLoop {
                             self.tx_meter_retry_at = [0; N_TX_METERS];
                             self.tx_meter_retry_backoff = [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS];
                             self.tx_alc_raw = None;
+                            self.tx_po_share = false;
                             self.agc_giveup = None; // the refusal may have been the dead link
                             self.rf_power_giveup = None; // …and so may these three have been
                             self.mic_gain_giveup = None;
@@ -15376,6 +15395,8 @@ impl RadioLoop {
                     // RFPOWER_METER_WATTS (not RFPOWER_METER): Hamlib's plain RFPOWER_METER is a
                     // normalized 0..1, only the _WATTS variant is true watts — and the native
                     // daemon answers both with calibrated watts. So `tx_po_w` is watts on both.
+                    // A rig that REFUSES the watts is read with RFPOWER_METER instead, and that
+                    // share goes to the engine as a share (`tx_po_share`, #489).
                     // Tune-time reads are deadline-bounded (see `meters_now`); an over's are not.
                     let deadline = self.tuning_keyed.then_some(TUNE_METER_DEADLINE_MS);
                     let i = self.tx_meter_idx % N_TX_METERS;
@@ -15390,12 +15411,34 @@ impl RadioLoop {
                     let model = self.applied.rig_model;
                     let raw_alc = self.tx_alc_raw != Some(false);
                     if self.tx_meter_supported[i] != Some(false) {
-                        reading = read_tx_meter(rig, TX_METERS[i], model, raw_alc, deadline);
+                        let po_slot = TX_METERS[i] == "RFPOWER_METER_WATTS";
+                        let mut refused = false;
+                        reading = if po_slot && self.tx_po_share {
+                            rig.read_meter_f32_within("RFPOWER_METER", deadline)
+                        } else if po_slot {
+                            match rig.read_meter_within(TX_METERS[i], deadline) {
+                                crate::rig::MeterRead::Value(v) => Some(v),
+                                crate::rig::MeterRead::Refused => {
+                                    refused = true;
+                                    None
+                                }
+                                crate::rig::MeterRead::Missed => None,
+                            }
+                        } else {
+                            read_tx_meter(rig, TX_METERS[i], model, raw_alc, deadline)
+                        };
                         note_ext_read(
                             &mut self.tx_meter_supported[i],
                             &mut self.tx_meter_misses[i],
                             reading.is_some(),
                         );
+                        if refused {
+                            // The rig has no watts meter (see `tx_po_share`): its meter's share
+                            // is asked from the next Po turn on, with three strikes of its own.
+                            self.tx_po_share = true;
+                            self.tx_meter_supported[i] = None;
+                            self.tx_meter_misses[i] = 0;
+                        }
                         if TX_METERS[i] == "ALC"
                             && raw_alc
                             && crate::rigmodels::raw_alc_query(model).is_some()
@@ -15434,6 +15477,16 @@ impl RadioLoop {
                         2 => (None, None, reading, None),
                         _ => (None, None, None, reading),
                     };
+                    // A share of the radio's meter is not watts (`tx_po_share`): the engine
+                    // turns it into a derived figure for the meter, and it is asked nothing
+                    // here. ⚠️ Never the no-RF watch's: the Kenwood backends answer
+                    // RFPOWER_METER with 0 whenever Hamlib's own PTT state says unkeyed
+                    // (`ts480.c`), which is not the radio making no power.
+                    let (po, po_share) = if self.tx_po_share {
+                        (None, po)
+                    } else {
+                        (po, None)
+                    };
                     // The same reading, asked a question as well as rendered. `None` (this
                     // cycle read another meter, or the rig reports no Po at all) can never
                     // raise anything — see [`TxRfWatch`].
@@ -15442,6 +15495,9 @@ impl RadioLoop {
                     {
                         let mut eng = engine_lock(engine);
                         eng.observe_rig_tx_meters(swr, alc, po, comp);
+                        if let Some(share) = po_share {
+                            eng.observe_rig_tx_po_share(share);
+                        }
                         // The ALC reading carries where this radio's own ALC zone ends on its
                         // bar, for the bar's colours (display only).
                         // `l ALC` is Hamlib's scale, whose 1.0 is the zone's top: no zone of its own.
@@ -20687,6 +20743,7 @@ mod tests {
     mod late_key;
     mod omnirig_coverage;
     mod pc_mic;
+    mod po_derived;
     mod psk63_keying;
     mod ptt_lines;
     mod readback_coverage;

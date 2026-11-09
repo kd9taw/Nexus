@@ -43,6 +43,11 @@ const COMP_KEY_STEP = 5
  *  is actually about. Locale-independent, exactly as the token it marks is. */
 const SWR_UNSCALED = 'SWR?'
 
+/** The PO token with the mark that says the watts are DERIVED, not the radio's own (#489): the
+ *  radio reports its power only as a share of its meter, and Nexus shows that share of the rated
+ *  output. On the label for `SWR?`'s reason above, and with its rule: only over a reading. */
+const PO_DERIVED = 'PO≈'
+
 /** Transmit meters (SWR / ALC / Po / COMP) — the mirror image of the RX S-meter: only the
  *  meters the rig actually reports over CAT (each independently capability-gated, so a rig
  *  that reports just SWR shows just SWR). Values are already in engineering units from the
@@ -301,12 +306,15 @@ export function TxMeters({
     title: t('meters.tx.alc.title'),
     bar: radio.txAlc == null ? null : alcBar(radio.txAlc, radio.txAlcZone ?? 1),
   })
-  rows.push({
-    key: 'po',
-    label: PO,
-    title: t('meters.tx.po.title'),
-    bar: radio.txPoW == null ? null : poBar(radio.txPoW, radio.ratedWatts ?? 100),
-  })
+  {
+    const derived = radio.txPoW != null && radio.txPoDerived === true
+    rows.push({
+      key: 'po',
+      label: derived ? PO_DERIVED : PO,
+      title: derived ? t('meters.tx.po.derived') : t('meters.tx.po.title'),
+      bar: radio.txPoW == null ? null : poBar(radio.txPoW, radio.ratedWatts ?? 100),
+    })
+  }
   rows.push({
     key: 'comp',
     label: COMP,
