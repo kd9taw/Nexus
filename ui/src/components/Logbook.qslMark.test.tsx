@@ -6,8 +6,8 @@
 // "eQSL", so an eQSL user could not tell a card from a QRZ match. QRZ has its own letter beside
 // LoTW's, the card's and eQSL's. And the eQSL tooltips said WAZ does not accept eQSL, which CQ's
 // own rules contradict: CQ accepts eQSLs from Authenticity Guaranteed members for WAZ and WPX.
-// The ARRL's awards are the ones that turn eQSL away, and Nexus does not count an AG eQSL toward
-// WAZ yet, so the tooltip says both.
+// The ARRL's awards are the ones that turn eQSL away, and Nexus counts an AG eQSL toward WAZ as CQ
+// does, so the tooltip says both.
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { render, waitFor, cleanup } from '@testing-library/react'
 import { Logbook } from './Logbook'
@@ -78,8 +78,8 @@ const NONE: Channels = { card: false, lotw: false, eqsl: false, qrz: false }
 
 /** What an eQSL is worth, as the eQSL tooltips say it in English. */
 const EQSL_WORTH =
-  '(ARRL awards do not accept it; CQ accepts it for WAZ and WPX from AG members, and Nexus does ' +
-  'not count it toward WAZ yet)'
+  '(ARRL awards do not accept it; CQ accepts it for WAZ and WPX from AG members, and Nexus counts ' +
+  'an AG one toward WAZ)'
 
 describe('the Logbook QSL mark', () => {
   afterEach(() => {
