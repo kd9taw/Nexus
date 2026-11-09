@@ -8797,7 +8797,7 @@ export const JA: PartialCatalog = {
   "sstv.viewer.save.failed": "この画像のコピーを保存できませんでした",
   "sstv.viewer.close.label": "閉じる",
   "sstv.viewer.close.title": "このウィンドウを閉じる（Esc）",
-  "sstv.gallery.reveal.label": "フォルダーを表示",
+  "sstv.gallery.reveal.label": "フォルダーを開く",
   "sstv.gallery.reveal.title": "受信した画像の保存フォルダーを開きます（ピクチャ/Nexus SSTV）",
   "sstv.gallery.reveal.failed": "SSTVギャラリーのフォルダーを開けませんでした",
   "sstv.gallery.thumb.alt": "{{when}}に受信した{{mode}}画像",

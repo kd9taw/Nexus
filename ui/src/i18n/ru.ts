@@ -7321,7 +7321,7 @@ export const RU: PartialCatalog = {
   "sstv.viewer.save.failed": "Не удалось сохранить копию этой картинки",
   "sstv.viewer.close.label": "Закрыть",
   "sstv.viewer.close.title": "Закрыть это окно (Esc)",
-  "sstv.gallery.reveal.label": "Показать в папке",
+  "sstv.gallery.reveal.label": "Открыть папку",
   "sstv.gallery.reveal.title": "Открыть папку, в которую сохраняются принятые картинки (Pictures/Nexus SSTV)",
   "sstv.gallery.reveal.failed": "Не удалось открыть папку галереи SSTV",
   "sstv.gallery.thumb.alt": "Изображение {{mode}}, принятое {{when}}",

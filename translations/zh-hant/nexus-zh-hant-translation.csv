@@ -7451,7 +7451,7 @@ Click for internet feed controls.","{{detail}}
 "5","sstv.viewer.save.failed","Could not save a copy of this picture","無法儲存該影像的副本","",""
 "5","sstv.viewer.close.label","Close","關閉","",""
 "5","sstv.viewer.close.title","Close this window (Esc)","關閉此視窗（Esc）","",""
-"5","sstv.gallery.reveal.label","Reveal","開啟資料夾","",""
+"5","sstv.gallery.reveal.label","Open folder","開啟資料夾","",""
 "5","sstv.gallery.reveal.title","Open the folder the received pictures are saved in (Pictures/Nexus SSTV)","開啟接收影像所儲存的資料夾（Pictures/Nexus SSTV）","Nexus | SSTV",""
 "5","sstv.gallery.reveal.failed","Could not open the SSTV gallery folder","無法開啟 SSTV 相簿資料夾","SSTV",""
 "5","sstv.gallery.thumb.alt","{{mode}} image received {{when}}","{{when}} 收到的 {{mode}} 影像","{{mode}} | {{when}}",""

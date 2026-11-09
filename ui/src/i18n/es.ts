@@ -9642,7 +9642,7 @@ export const ES: PartialCatalog = {
   "sstv.viewer.save.failed": "No se pudo guardar una copia de esta imagen",
   "sstv.viewer.close.label": "Cerrar",
   "sstv.viewer.close.title": "Cerrar esta ventana (Esc)",
-  "sstv.gallery.reveal.label": "Mostrar carpeta",
+  "sstv.gallery.reveal.label": "Abrir carpeta",
   "sstv.gallery.reveal.title": "Abre la carpeta donde se guardan las imágenes recibidas (Imágenes/Nexus SSTV)",
   "sstv.gallery.reveal.failed": "No se pudo abrir la carpeta de la galería SSTV",
   "sstv.gallery.thumb.alt": "Imagen {{mode}} recibida {{when}}",
