@@ -13216,15 +13216,12 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 /* The TX strip's cell (Phone and CW in the compact dock, `md` and up): AT MOST TWO ROWS, filled down
    then across, so a rig with more readings (COMP's controls, a temperature) makes the cell wider and
    never the strip taller — two compact rows are the height of the strip's own buttons. The cell's
-   box is cockpit-panes.css's (`.cockpit-txstrip-meters`); this is only how the meters sit in it.
-   Each column shares the cell equally, as 1fr did, up to half of Operate's cell (`.cq-telemetry`, two
-   columns less the gap between them): that is the meters' useful width, the cell's `max-content`, so past
-   it the strip's room goes to the alarm cell beside them. A fixed track, so no reading changes it. */
+   box is cockpit-panes.css's (`.cockpit-txstrip-meters`), and so is how wide each column may grow
+   (`.cockpit-txstrip-meters-grid`); this is only how the meters sit in it. */
 .ph-txmeters.inline.strip {
   grid-template-columns: none;
   grid-template-rows: repeat(2, auto);
   grid-auto-flow: column;
-  grid-auto-columns: minmax(0, calc((21em - var(--space-2)) / 2));
 }
 /* #446: OPERATE'S CELL OPENS LARGER (TxMetersCell). The opener is the cell's own block wrapper, so
    the fixed-width cell keeps its geometry; its focus ring is drawn INSIDE, since the cell clips.

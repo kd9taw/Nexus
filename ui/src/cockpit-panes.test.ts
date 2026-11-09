@@ -271,6 +271,8 @@ describe('the fence: styles.css never names a structural class', () => {
     // …and the transmitter alarm, now the TX strip's last line (2026-11-07): a styles.css position on it
     // could set it over Stop TX.
     'ch-txalarm', 'ch-txalarm-own',
+    // …and the TX strip's meter grid (TxMeters `strip`): its column cap decides how much of the strip the meters take.
+    'cockpit-txstrip-meters-grid',
     // …and the lane's flag floor off the operating screens: a styles.css min-width on it could undo it.
     'status-lane-keep',
     // …and the lane's own box (2026-11-08): where it stands decides whether the bar's Stop TX moves for it.
@@ -1966,10 +1968,14 @@ describe('THE TRANSMITTER ALARM CELL: one constant width to the TX strip’s lin
     expect(classChainWinner(meters, 'max-width')?.value, 'the meters stop at their content').toBe('max-content')
     const operate = classChainWinner([['cq-telemetry']], 'width')?.value
     expect(operate, 'Operate’s cell has its fixed width').toMatch(/^\d+(\.\d+)?em$/)
-    const grid = [['cockpit-txstrip-meters'], ['ph-txmeters', 'inline', 'strip']]
+    // The strip's meter grid, as TxMeters draws it (`strip`): its column cap is structure, so it is
+    // cockpit-panes.css's, on the one fenced class, and wins there over anything styles.css says.
+    const grid = [['cockpit-txstrip-meters'], ['ph-txmeters', 'inline', 'strip', 'cockpit-txstrip-meters-grid']]
     const gap = classChainWinner(grid, 'gap')?.value.trim().split(/\s+/).pop()
-    expect(classChainWinner(grid, 'grid-auto-columns')?.value, 'each column stops at half of Operate’s cell, less the gap between them')
+    const cols = classChainWinner(grid, 'grid-auto-columns')
+    expect(cols?.value, 'each column stops at half of Operate’s cell, less the gap between them')
       .toBe(`minmax(0, calc((${operate} - ${gap}) / 2))`)
+    expect(cols?.sheet, 'the column cap is cockpit-panes.css’s; a styles.css rule on the meters would outrank it').toBe('cockpit-panes.css')
     expect(STYLES_RULES.concat(RULES).filter((r) => /\bch-txalarm-yield\b/.test(r.selector)).map((r) => r.selector), 'no rule stops the alarm growing').toEqual([])
   })
 })

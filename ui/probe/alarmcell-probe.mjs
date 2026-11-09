@@ -82,8 +82,10 @@ const MEASURE = `(() => {
   // runs none: one of four pages sharing a window was measured at 1366x768 with the 700x800 values still up
   // (xs, not sm), and padded Stop TX 1.3 px less a side, until it came to the front between two measures and
   // read as an alarm moving Stop TX 9 px. The app never paints that layout: the frame runs before a paint.
+  // Nothing published at all (no frame has run) is not a match either: NaN compares false, and passed.
   const d = document.documentElement, z = parseFloat(getComputedStyle(d).getPropertyValue('--ui-zoom')) || 1
-  if (Math.abs(parseFloat(d.style.getPropertyValue('--vw-eff')) * z - innerWidth) > 1 || Math.abs(parseFloat(d.style.getPropertyValue('--vh-eff')) * z - innerHeight) > 1) return null
+  const vw = parseFloat(d.style.getPropertyValue('--vw-eff')), vh = parseFloat(d.style.getPropertyValue('--vh-eff'))
+  if (!Number.isFinite(vw) || !Number.isFinite(vh) || Math.abs(vw * z - innerWidth) > 1 || Math.abs(vh * z - innerHeight) > 1) return null
   const stop = [...strip.querySelectorAll('button')].find((b) => /^stop tx$/i.test(b.textContent.trim()) && vis(b))
   const s = strip.getBoundingClientRect(), st = stop?.getBoundingClientRect()
   const w = strip.querySelector('.ch-txalarm-text')
@@ -139,6 +141,9 @@ async function openPage(route, [w, h], scale) {
   await sleep(300)
   const ls = { 'nexus.workspace': 'dx', 'nexus.features.v1': FEATURES, 'tempo-theme': 'dark', 'nexus-ui-scale-mode': scale, 'nexus.locale': 'en' }
   await evaluate(`localStorage.clear(); ${Object.entries(ls).map(([k, v]) => `localStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(v)})`).join(';')}; 1`)
+  // The Page domain on first: without it the script below never ran, so the page errors the probe reports were never
+  // collected (and a planted script, such as one disabling animation frames, did nothing).
+  await call('Page.enable', {})
   await call('Page.addScriptToEvaluateOnNewDocument', { source: "globalThis.__errs=[]; addEventListener('error', (e) => __errs.push(String(e.message).slice(0, 200))); addEventListener('unhandledrejection', (e) => __errs.push('rejection ' + String(e.reason && (e.reason.message || e.reason)).slice(0, 200)))" })
   await call('Page.navigate', { url: `${origin}/#${route}` })
   return { evaluate, size, close: () => browser.call('Target.closeTarget', { targetId }) }
