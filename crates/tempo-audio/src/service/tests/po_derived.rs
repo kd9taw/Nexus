@@ -174,3 +174,87 @@ fn a_watts_read_that_is_not_answered_is_not_a_refusal() {
         );
     }
 }
+
+/// Four seconds of an over Nexus runs itself in a DATA mode, the one kind the no-RF watch judges
+/// (`RadioLoop::rf_watchable`: an over of Nexus's own, a continuous carrier). The radio status it
+/// left behind.
+fn a_data_over(engine: &Arc<Mutex<Engine>>, addr: &str) -> tempo_app::dto::RadioStatus {
+    let mut rig = Rig::rigctld(addr);
+    let mut backend = MockBackend::new();
+    let mut state = loop_state_for(engine);
+    state.cur_md = "PKTUSB".to_string();
+    let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+    let mut station = StationSinks::new();
+    let mut t = 0.0;
+    for _ in 0..80 {
+        t += 50.0;
+        // The over is opened again each tick: the loop ends one it finds no transmission for
+        // (nothing here queued audio), and the watch has judged the tick by then. The control
+        // in the test below is what proves the watch judges this scene.
+        state.tx_until_ms = Some(1.0e12);
+        state
+            .step(
+                engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                t,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+    }
+    engine.lock().unwrap().snapshot().radio
+}
+
+/// ⭐ A DERIVED FIGURE IS DISPLAY ONLY (the transmit review). It is an estimate, so it is never the
+/// power the contact is logged at, and a share of 0 is never taken for "nothing radiated": on the
+/// Kenwood backends the share reads 0 whenever Hamlib's own PTT state says unkeyed. Asserted
+/// against the control that bites: the same over with the radio's own watts records the over's
+/// power, and the radio's own zero raises the no-RF note.
+#[test]
+fn a_derived_figure_is_never_logged_and_never_judged() {
+    use tempo_app::engine::PredictionPowerSource as Src;
+    // The control: the radio's own watts are the over's power, and its own zero is called out.
+    let (addr, _) = po_rigctld("45.000000\n", "0.450000\n");
+    let engine = engine_for(1035, 100);
+    an_over(&engine, &addr);
+    assert_eq!(
+        engine.lock().unwrap().prediction_power().source,
+        Src::Rig,
+        "control: the radio's own watts are recorded as the over's power"
+    );
+    let (addr, _) = po_rigctld("0.000000\n", "0.000000\n");
+    let radio = a_data_over(&engine_for(1035, 100), &addr);
+    assert!(
+        radio.cat_detail.contains("ZERO forward power"),
+        "control: the radio's own zero raises the no-RF note — {:?}",
+        radio.cat_detail
+    );
+
+    // The derived figure: shown, never recorded, never judged.
+    let (addr, _) = po_rigctld("RPRT -1\n", "0.450000\n");
+    let engine = engine_for(1046, 100);
+    let radio = an_over(&engine, &addr);
+    assert!(
+        radio.tx_po_derived && radio.tx_po_w.is_some(),
+        "scene: a derived figure is shown"
+    );
+    assert_eq!(
+        engine.lock().unwrap().prediction_power().source,
+        Src::Default,
+        "a derived figure is never the over's power"
+    );
+    let (addr, log) = po_rigctld("RPRT -1\n", "0.000000\n");
+    let radio = a_data_over(&engine_for(1046, 100), &addr);
+    assert!(
+        log.lock().unwrap().iter().any(|l| l == "l RFPOWER_METER"),
+        "scene: the share was read during the over"
+    );
+    assert!(
+        !radio.cat_detail.contains("ZERO forward power"),
+        "a share of 0 raises no no-RF note — {:?}",
+        radio.cat_detail
+    );
+}
