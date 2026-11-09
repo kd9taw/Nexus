@@ -184,13 +184,20 @@ not send while it is open.
 - **Save** keeps the change on the key, in the active macro profile: the same keys
   [Settings ▸ CW](settings-reference.md#cw) ▸ Macros shows and edits. A profile still on
   the built-in keys becomes your own set the first time you save one: the eight keys the
-  dock showed (the contest's set during a contest) with yours changed, exactly as
-  **Customize** in Settings makes it, and Enter Sends Message keeps sending the same keys
-  for the same steps. **Reset to defaults** in Settings puts the built-in keys back.
+  dock showed with yours changed, exactly as **Customize** in Settings makes it.
+  **Reset to defaults** in Settings puts the built-in keys back. During a contest, a change
+  to a profile still on the built-in keys goes instead into a profile of its own named for
+  the contest (ILQP, Field Day): the contest's eight keys with yours changed, and Enter Sends
+  Message keeps sending the same keys for the same steps. The CW screen shows that profile
+  in that contest only, so your everyday keys stay as they were. Saving a key changes
+  nothing else: an FT message waiting to go out and a Remote browser's control both stay.
 - **Send once** sends the message as it stands, one time, exactly as the key sends its
   own: the tokens are filled in from the same places, a call you typed in His call is
   taken first, and outside your license it is refused as the key is. The key keeps its
-  message.
+  message. The editor closes once the message has reached the station; if it does not
+  get there, the editor stays open with your text. A message the station takes and then
+  drops (during a clock correction, say) still closes the editor. Until the answer comes,
+  a second press sends nothing, and Esc stops as it does with an over going out.
 - **Reset this button** puts back the built-in key the dock would show (the contest's
   during a contest).
 - **Esc** closes the editor when nothing is on the air and leaves TX on. With an over

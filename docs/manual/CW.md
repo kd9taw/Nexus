@@ -219,11 +219,20 @@ step, mapped in Settings → Contesting ▸ Enter Sends Message.
 A key can also be changed where it is, in the cockpit: its **✎**, a right-click on it, or
 `Ctrl+Shift` with its F-key opens the macro editor RTTY and PSK use, and none of them sends.
 **Save** writes that one key into the ACTIVE profile (`cwProfiles[activeCwProfile]`), the list
-Settings → CW → Macros edits. A profile with no keys of its own first takes the eight the dock showed
-(the running contest's or Field Day's set during one, else the casual set), with that set's Enter
-Sends Message steps when it is one of the contest layouts, so Enter keeps sending the same keys.
+Settings → CW → Macros edits, through its own narrow save (`set_cw_macros`), never the settings form,
+so it leaves the FT queues and a Remote browser's control alone. A profile with no keys of its own
+first takes the eight the dock showed. During a contest or Field Day, a save on a profile with no
+keys of its own goes instead into the profile named for the contest (its short name, `ILQP`,
+`Field Day`), made the first time from the running contest's set with that set's Enter Sends Message
+steps, so Enter keeps sending the same keys; the active profile is left as it was. While that
+contest runs and the active profile has no keys of its own, the dock shows the contest's profile;
+outside it, the active one.
 **Send once** sends the edited text through the key's own send path (the His call commit, the
-licence check, `send_cw` and every engine gate behind it) and saves nothing.
+licence check, `send_cw` and every engine gate behind it) and saves nothing. The editor closes only
+once `send_cw` has answered; when the call fails (it never reached the station), the draft stays.
+`send_cw` answers Ok for a message the engine then drops (a clock repair holding TX, a keyer that
+will not take it), so the editor closes on those as before. One Send once is in flight at a
+time, and while it is, Esc is the full stop (`stop_cw` and `halt_tx`), not a cancel.
 
 **RST stays `5NN` regardless.** There is no per-QSO RST input, and a profile does not change that.
 

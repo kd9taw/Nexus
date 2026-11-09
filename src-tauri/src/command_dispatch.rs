@@ -729,6 +729,10 @@ fn parts(cmd: &str, args: &Value) -> Option<Vec<Vec<Step>>> {
             vec![key("macros"), key("pskProfiles")],
             vec![key("macros"), key("activePskProfile")],
         ],
+        "set_cw_macros" => vec![
+            vec![key("macros"), key("cwProfiles")],
+            vec![key("macros"), key("activeCwProfile")],
+        ],
         "set_radio_bands" => vec![vec![key("radios"), radio()?, key("bands")]],
         "update_radio_profile" => {
             let radio = radio()?;

@@ -445,7 +445,7 @@ describe('right-click, Ctrl+Shift+F-key and Send once', () => {
     await waitFor(() => expect(rttySend).toHaveBeenCalledTimes(1))
     // Expanded and framed exactly as a key's message is.
     expect(rttySend).toHaveBeenCalledWith(frameForAir('K1ABC DE W9XYZ QRZ?'))
-    expect(editor(), 'sent: the editor closes').toBeNull()
+    await waitFor(() => expect(editor(), 'sent: the editor closes').toBeNull())
     expect(setRttyMacros, 'Send once saved the key').not.toHaveBeenCalled()
     expect(setSettings).not.toHaveBeenCalled()
     // The key is as it was: its caption, and what it sends.
@@ -500,6 +500,25 @@ describe('right-click, Ctrl+Shift+F-key and Send once', () => {
     await waitFor(() => expect(rttySend).toHaveBeenCalledTimes(2))
     expect(rttySend.mock.calls[1][0]).toBe(frameForAir('CQ CQ DE W9XYZ K'))
     await waitFor(() => expect(pushToast.mock.calls.filter(([, kind]) => kind === 'error')).toHaveLength(2))
+    // Refused by the engine after it was handed over, the editor stays open with the draft, as a
+    // send refused here does.
+    expect(editor(), 'the engine refused the send and the editor closed').not.toBeNull()
+    expect(field(/^message$/i).value, 'the engine refused the send and the draft was lost').toBe('CQ CQ DE {MYCALL} K')
+  })
+
+  it('Send once keys ONCE however often it is pressed while the engine answers', async () => {
+    let answer: () => void = () => {}
+    rttySend.mockImplementation(() => new Promise((resolve) => (answer = () => resolve(state))))
+    await renderCockpit()
+    fireEvent.contextMenu(key('F1'))
+    fireEvent.click(sendOnce())
+    fireEvent.click(sendOnce())
+    await act(async () => {})
+    expect(rttySend, 'a second press keyed the message again').toHaveBeenCalledTimes(1)
+    expect(editor(), 'unanswered: the editor stays').not.toBeNull()
+    await act(async () => answer())
+    await waitFor(() => expect(editor(), 'taken: the editor closes').toBeNull())
+    expect(rttySend).toHaveBeenCalledTimes(1)
   })
 
   it('will not send a token it cannot fill — the button is off while one is flagged', async () => {
@@ -534,6 +553,23 @@ describe('right-click, Ctrl+Shift+F-key and Send once', () => {
     fireEvent.keyDown(field(/^message$/i), { key: 'Escape' })
     expect(mocked(api.rttyStop)).toHaveBeenCalled()
     expect(mocked(api.haltTx)).toHaveBeenCalled()
+  })
+
+  it('Esc while a Send once is still unanswered is the stop, not a cancel, and the editor stays', async () => {
+    // `rtty_send` held: the station has the over and may be about to key it, and nothing in the
+    // snapshot shows that yet.
+    rttySend.mockImplementation(() => new Promise(() => {}))
+    mocked(api.rttyStop).mockResolvedValue(state)
+    mocked(api.haltTx).mockResolvedValue({})
+    await renderCockpit()
+    fireEvent.contextMenu(key('F1'))
+    fireEvent.click(sendOnce())
+    await act(async () => {})
+    expect(rttySend, 'fixture: the message was handed over').toHaveBeenCalledTimes(1)
+    fireEvent.keyDown(field(/^message$/i), { key: 'Escape' })
+    expect(mocked(api.rttyStop), 'Esc after a Send once only closed the editor').toHaveBeenCalledTimes(1)
+    expect(mocked(api.haltTx)).toHaveBeenCalledTimes(1)
+    expect(editor(), 'a stop is not a cancel').not.toBeNull()
   })
 })
 

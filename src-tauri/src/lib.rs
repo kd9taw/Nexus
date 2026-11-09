@@ -32122,6 +32122,22 @@ fn set_psk_macros(
     Ok(eng.settings().macros.clone())
 }
 
+/// The CW cockpit's key editor: `macros.cwProfiles` + `macros.activeCwProfile` in one atomic write
+/// through `Engine::save_cw_macros`, NEVER the settings form, which advances the TX gate
+/// generation, revokes Remote actuation and clears the FT queues. Returns the saved `macros` for
+/// the UI's mirror. Settings ▸ CW ▸ Macros still saves the same profiles through its form.
+#[tauri::command(async)]
+fn set_cw_macros(
+    state: State<'_, SharedEngine>,
+    profiles: serde_json::Value,
+    active: serde_json::Value,
+) -> Result<tempo_app::settings::Macros, String> {
+    let mut eng = engine_lock(&state);
+    eng.save_cw_macros(profiles, active)
+        .map_err(|reason| format!("CW macros were not saved ({reason:?})"))?;
+    Ok(eng.settings().macros.clone())
+}
+
 /// The contest logger window's panel slug: the whole contest screen and the log line, for a
 /// second person logging at a second monitor and keyboard. Its strip shares the contact in
 /// progress with the main window's while it is open (`tempo_app::engine::contest_entry`).
@@ -53582,6 +53598,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_rtty_macros,
         set_contest_esm,
         set_psk_macros,
+        set_cw_macros,
         set_beta_updates,
         set_logbook_columns,
         set_logbook_filters,

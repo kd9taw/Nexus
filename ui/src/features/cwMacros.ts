@@ -109,3 +109,39 @@ export function cwVisibleMacros<M extends { key: string; label?: string; text: s
     ...extra.map((key) => macros.find((m) => m.key === key) ?? { key, label: '', text: '' }),
   ]
 }
+
+/** The profile the CW dock shows. The active one — or, during a contest, while the active one is
+ *  still on the built-ins, the contest's own profile (named `contest`, the running contest's short
+ *  name) when there is one: the keys an earlier edit made for that contest come back in it, and
+ *  only in it. */
+export function cwShownProfile(profiles: readonly CwProfile[], active: number, contest: string | null): number {
+  if (!contest || profiles[active]?.macros.length) return active
+  const at = profiles.findIndex((p) => p.name === contest)
+  return at >= 0 ? at : active
+}
+
+/** `withCwEntry` for a key saved from the dock, and the active index after it.
+ *
+ *  Outside a contest, or on a profile with keys of its own, the key goes into the profile the dock
+ *  shows, as `withCwEntry` writes it. During a contest on a profile still on the built-ins, it goes
+ *  into the contest's own profile, named for the contest (made the first time from the contest set
+ *  the dock showed), and the active index stays where it was: an everyday profile on the built-ins
+ *  that took the contest's keys kept them after the contest, CQ TEST and all, until a reset. */
+export function withCwDockEntry(
+  profiles: readonly CwProfile[],
+  active: number,
+  contest: string | null,
+  builtIn: readonly CwStoredMacro[],
+  key: string,
+  entry: { label: string; text: string },
+): { profiles: CwProfile[]; active: number } {
+  const list: CwProfile[] = profiles.length ? [...profiles] : [{ name: 'Default', macros: [] }]
+  const at = active >= 0 && active < list.length ? active : 0
+  const shown = cwShownProfile(list, at, contest)
+  if (!contest || list[shown].macros.length || list[shown].name === contest) {
+    if (shown === at) return withCwEntry(list, at, builtIn, key, entry)
+    return { profiles: withCwEntry(list, shown, builtIn, key, entry).profiles, active: at }
+  }
+  list.push({ name: contest, macros: [] })
+  return { profiles: withCwEntry(list, list.length - 1, builtIn, key, entry).profiles, active: at }
+}
