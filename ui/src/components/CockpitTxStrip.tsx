@@ -1,4 +1,4 @@
-import { cloneElement, isValidElement, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react'
+import { useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react'
 import { t } from '../i18n'
 import { catSaysTxOff } from '../features/catDetail'
 import type { RadioStatus } from '../types'
@@ -7,7 +7,6 @@ import { RadioTuneNote } from './RadioTuneNote'
 import { AtuSwitchOutMenu, useAtuSwitchOutMenu } from './AtuSwitchOutMenu'
 import { useTxMeterStyle } from '../txMeterStyle'
 import { TxMetersPaneToggle, type TxMetersPaneToggleProps } from './TxMeters'
-import { TxAlarmBanner } from './TxAlarmBanner'
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), for the same
 // deferral `CockpitHeader` carried until these controls moved here: THE TX-ENABLE LATCH (and its
 // read-only rendering), TUNE, ATU AND STOP TX stay written here, labels and tooltips. One strip
@@ -233,12 +232,8 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
               : t('operate.strip.state.txOff')}
       </span>
       {/* THE TRANSMITTER ALARM CELL, beside the TX state (`TxAlarmBanner`): always drawn at one minimum
-          width, so an alarm coming or going never changes where the strip breaks its lines. Beside a
-          meters cell it grows by nothing (`besideMeters`), so the meters take the free room first; only
-          the strip knows whether it draws one, so it says so here rather than every screen. */}
-      {meters != null && isValidElement<{ besideMeters?: boolean }>(alarm) && alarm.type === TxAlarmBanner
-        ? cloneElement(alarm, { besideMeters: true })
-        : alarm}
+          width, so an alarm coming or going never changes where the strip breaks its lines. */}
+      {alarm}
       {/* Why transmit is off after a CAT outage: a zero-basis cell after the state, so it can never
           wrap the strip or move a control (`.cockpit-txstrip-catnote`). On a strip with a meters
           cell the words stand IN that cell, in place of the meters (#489): transmit is off, so

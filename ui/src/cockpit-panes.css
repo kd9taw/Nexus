@@ -630,15 +630,22 @@
 /* THE STRIP'S METERS CELL (Phone and CW from md up, the compact dock): the read-only TX meters in the
    strip's empty right side, as Operate's QSO strip carries its own (`.cq-telemetry`). Right-packed by
    its auto margin, after the cluster and the TX state, so no reading can move Stop TX, Tune or the
-   latch. A ZERO basis growing to 30em: the strip's line breaking sees a zero-wide item, so the cell
+   latch. A ZERO basis growing to its ceiling (below): the strip's line breaking sees a zero-wide item, so the cell
    can never wrap the strip onto a second line — on a narrow `md` window it only gets narrower. The
    meters inside sit in at most two rows (styles.css
    `.ph-txmeters.inline.strip`), the height of the strip's own buttons, so the strip is the height it
    was without them. A readout: no control here keys or stops anything. */
+/* ITS CEILING IS THE METERS' USEFUL WIDTH: its content's own (`max-content`). Each column of the meters'
+   grid stops at half the width Operate's fixed cell gives the same two columns (styles.css
+   `.ph-txmeters.inline.strip`, `.cq-telemetry`), so two columns are 21em, and COMP's controls or a
+   temperature that add a column add one column's width: a constant for the rig, which no reading changes.
+   The strip's alarm cell (`.ch-txalarm`) grows by 1 beside it, so below the ceiling the two share the room
+   and above it the alarm takes the rest. A 30em ceiling gave two columns of bars 9em more, taken from the
+   alarm's words (400 px of them on RTTY, PSK and JTTY at 1366x768 100 %). */
 .cockpit-txstrip-meters {
   flex: 1 1 0;
   min-width: 0;
-  max-width: 30em;
+  max-width: max-content;
   margin-left: auto;
 }
 /* …WITH NEEDLES, a higher ceiling: the three largest faces and the COMP row beside them. The same zero
@@ -944,14 +951,6 @@
 .ch-txalarm-own {
   min-width: 13em;
   height: 1.6em;
-}
-/* BESIDE A METERS CELL (CockpitTxStrip sets `besideMeters` whenever it draws `.cockpit-txstrip-meters`): the
-   meters take the line's free room first, so the cell grows by nothing and stands at its floor. Growing by 1
-   beside them, it took half the room the meters had (#489 put a meters cell on RTTY, PSK and JTTY). Only the
-   grow changes: the zero basis, the floor and the one height are the plain cell's, so an alarm still cannot
-   wrap the strip or move Stop TX. */
-.ch-txalarm-yield {
-  flex: 0 1 0;
 }
 /* The words: first, after the gap the cell gave back, and the one part that shortens. Line height 1, so a
    cell beside the controls is never taller than they are. */

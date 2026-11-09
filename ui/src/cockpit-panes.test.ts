@@ -270,7 +270,7 @@ describe('the fence: styles.css never names a structural class', () => {
     'amp-op-face', 'amp-op-word', 'amp-op-word-off',
     // …and the transmitter alarm, now the TX strip's last line (2026-11-07): a styles.css position on it
     // could set it over Stop TX.
-    'ch-txalarm', 'ch-txalarm-own', 'ch-txalarm-yield',
+    'ch-txalarm', 'ch-txalarm-own',
     // …and the lane's flag floor off the operating screens: a styles.css min-width on it could undo it.
     'status-lane-keep',
     // …and the lane's own box (2026-11-08): where it stands decides whether the bar's Stop TX moves for it.
@@ -1703,7 +1703,7 @@ describe('THE COMPACT DOCK (1080p pass): the read-only meters stand in the TX st
     const chain = [['cockpit-txstrip'], ['cockpit-txstrip-meters']]
     expect(classChainWinner(chain, 'flex')?.value).toBe('1 1 0')
     expect(classChainWinner(chain, 'min-width')?.value).toBe('0')
-    expect(classChainWinner(chain, 'max-width')?.value).toBe('30em')
+    expect(classChainWinner(chain, 'max-width')?.value, 'its content’s width: the meters’ useful width').toBe('max-content')
     expect(classChainWinner(chain, 'margin-left')?.value, 'right-packed: after the cluster and the TX state').toBe('auto')
     // …in a strip that still wraps as it did (a control: the cluster itself may wrap on a phone).
     expect(classChainWinner([['cockpit-txstrip']], 'flex-wrap')?.value).toBe('wrap')
@@ -1946,17 +1946,26 @@ describe('THE TRANSMITTER ALARM CELL: one constant width to the TX strip’s lin
     expect(classChainWinner([['topbar'], ['status-lane']], 'min-width')?.value).toBe('0')
     expect(classChainWinner([['topbar'], ['status-lane']], 'width')?.value).toBe('0')
   })
-  it('beside a meters cell the meters take the free room first: the cell grows by nothing and keeps its box', () => {
-    // CockpitTxStrip marks the cell `ch-txalarm-yield` whenever it draws a meters cell (#489 put one on RTTY,
-    // PSK and JTTY). Both grew by 1, so the meters got half the room. The cell keeps its zero basis, its
-    // floor and its one height, so an alarm still cannot wrap the strip or move Stop TX.
-    const plain = [['cockpit-txstrip'], ['ch-txalarm']]
-    const yielding = [['cockpit-txstrip'], ['ch-txalarm', 'ch-txalarm-yield']]
-    expect(classChainWinner(plain, 'flex')?.value, 'control: alone it grows into the line').toBe('1 1 0')
-    expect(classChainWinner(yielding, 'flex')?.value).toBe('0 1 0')
-    for (const p of ['min-width', 'height', 'margin', 'padding', 'border', 'width'])
-      expect(classChainWinner(yielding, p)?.value, `${p} is the plain cell's`).toBe(classChainWinner(plain, p)?.value)
-    expect(classChainWinner([['cockpit-txstrip'], ['cockpit-txstrip-meters']], 'flex-grow')?.value ?? classChainWinner([['cockpit-txstrip'], ['cockpit-txstrip-meters']], 'flex')?.value, 'the meters cell still grows').toMatch(/^1( |$)/)
+  it('beside a meters cell the meters stop at their useful width and the alarm takes the rest', () => {
+    // Both cells grow by 1 from a zero basis, so the line breaker still sees constants. The meters' growth stops
+    // at their content's own width (`max-content`), and each meter column of the strip's grid stops at the
+    // width Operate's fixed cell gives one of its two columns (`.cq-telemetry`). So two columns are Operate's
+    // cell, and COMP's controls or a temperature that add a column add a column's width, a constant per rig
+    // that no reading changes. What is left past the meters goes to the alarm. A 30em ceiling gave two columns
+    // of bars 9em more than that, taken from the alarm's words (RTTY, PSK and JTTY, 1366x768 100 %: 400 px of
+    // words); an alarm that grew by nothing left 22 px of them at 1920x1080.
+    const meters = [['cockpit-txstrip'], ['cockpit-txstrip-meters']]
+    const cell = [['cockpit-txstrip'], ['ch-txalarm']]
+    expect(classChainWinner(meters, 'flex')?.value).toBe('1 1 0')
+    expect(classChainWinner(cell, 'flex')?.value, 'the alarm grows into what the meters leave').toBe('1 1 0')
+    expect(classChainWinner(meters, 'max-width')?.value, 'the meters stop at their content').toBe('max-content')
+    const operate = classChainWinner([['cq-telemetry']], 'width')?.value
+    expect(operate, 'Operate’s cell has its fixed width').toMatch(/^\d+(\.\d+)?em$/)
+    const grid = [['cockpit-txstrip-meters'], ['ph-txmeters', 'inline', 'strip']]
+    const gap = classChainWinner(grid, 'gap')?.value.trim().split(/\s+/).pop()
+    expect(classChainWinner(grid, 'grid-auto-columns')?.value, 'each column stops at half of Operate’s cell, less the gap between them')
+      .toBe(`minmax(0, calc((${operate} - ${gap}) / 2))`)
+    expect(STYLES_RULES.concat(RULES).filter((r) => /\bch-txalarm-yield\b/.test(r.selector)).map((r) => r.selector), 'no rule stops the alarm growing').toEqual([])
   })
 })
 

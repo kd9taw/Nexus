@@ -292,8 +292,8 @@ describe('the faces’ cells make room for them, with Needle only', () => {
     expect(win(cell, 'max-width')).toBe('65em')
   })
 
-  it('the control: with bars the TX strip’s cell has the ceiling it had', () => {
-    expect(win(txStrip(), 'max-width')).toBe('30em')
+  it('the control: with bars the TX strip’s cell stops at its bars’ content', () => {
+    expect(win(txStrip(), 'max-width')).toBe('max-content')
   })
 })
 
