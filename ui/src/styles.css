@@ -31845,12 +31845,15 @@ button.sat-chip:disabled {
   min-height: 0;
   padding: var(--space-2);
 }
-/* Native-resolution preview (pixel-exact "what you send"), upscaled crisp. */
+/* Native-resolution preview (pixel-exact "what you send"), upscaled crisp. Its ceiling is the
+   composer's height, and the composer stands at the foot of the screen over Send/Stop (#479): 320 px
+   where there is room, and about a third of the window where there is not (a fixed 320 px was 73 % of
+   an effective 439 px window at 1366×768 at 175 %), so the gallery above keeps its share. */
 .sstv-tx-preview {
   image-rendering: pixelated;
   width: auto;
   max-width: 100%;
-  max-height: 320px;
+  max-height: min(320px, calc(0.3 * var(--vh-eff, 100vh)));
   height: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);

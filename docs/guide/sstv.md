@@ -114,9 +114,13 @@ measured your radio more than 10 Hz off the transmission's leader tone it adds
 "· tuning +40 Hz", which is the one thing the spectrum would have told you and
 the picture cannot.
 
-**Transmit** (a ⊞ pane) is the image chooser: a drop zone that takes a dragged
-file, a **Choose image…** button for the file dialog, and a preview canvas that
-shows the picture already resized to the selected mode's exact pixels. **Drop a
+**Transmit** (a ⊞ pane) is the image chooser, at the bottom of the screen just
+above **Send** and **Stop**: a drop zone that takes a dragged file, a
+**Choose image…** button for the file dialog, and a preview canvas that shows
+the picture already resized to the selected mode's exact pixels. The picture is
+on the left and its text rows, the ident line and any warning stand beside it;
+on a narrow window they go under the picture. On a short window the preview is
+drawn smaller, about a third of the window's height, so the gallery keeps room. **Drop a
 photo at any size** — a 4032×3024 phone picture is fine. Nexus reads the file's
 rotation tag first (so a portrait phone photo is not sent sideways), crops it to
 the mode's shape from the middle, and scales it down in steps so fine detail
@@ -154,7 +158,8 @@ Compatible**, or Settings ▸ Photos ▸ Transfer to Mac or PC ▸ **Automatic**
 PNG, WebP, BMP and GIF all work; a GIF sends its first frame. A picture smaller
 than the mode is enlarged with a warning that stays on screen, not refused.
 
-**Gallery** (a ⊞ pane) holds the received images, newest first, each a thumbnail
+**Gallery** (a ⊞ pane) holds the received images, newest first, in the middle
+of the screen between the transmit strip and the Transmit pane, each a thumbnail
 with its mode, the decoded FSK callsign ID if the sender appended one, and the
 UTC time and dial frequency it finished on. Hovering a card shows the file's full
 path. The pane is the one on this screen that grows: it takes the height left
@@ -164,7 +169,14 @@ off the bottom. Thumbnails size to a column at least 140 px wide and keep their
 own shape, so a 640×496 PD image and a 320×240 Robot image are the same width but
 different heights and rows do not line up. Until the first image arrives the pane
 holds a dashed placeholder: "Received images collect here — auto-saved with
-callsign (FSK ID), mode, frequency, and time."
+callsign (FSK ID), mode, frequency, and time." **Open folder** at the top of
+the pane opens the folder the pictures are saved in.
+
+**TX Meters, large** (a ⊞ pane, hidden until you tick it) shows power, ALC and
+SWR as big needle meters above the gallery, as on FT, Phone and CW; the small
+button after the meters on the transmit strip opens it too. It only shows
+readings. The waterfall's height is set by dragging the divider under it, and a
+double-click puts it back.
 
 **The transmit bar** is pinned across the bottom and is not a panel. It carries
 the mode picker — grouped Scottie / Martin / Robot / PD, each option labelled
@@ -173,8 +185,8 @@ with its airtime and pixel size (`Scottie 1 · ≈111s · 320×256`) — **Send*
 "TX — Scottie 1 · 1:12 remaining". It sticks to the bottom of the scroll area, so
 on a short window **Stop** is on screen at every scroll position.
 
-**⊞ Panels** offers exactly two entries here, **Transmit** and **Gallery**, plus
-**Undo last change** and **Reset layout**. The picture, the transmit bar and the
+**⊞ Panels** offers **Waterfall**, **RF scope**, **TX Meters, large**,
+**Transmit** and **Gallery**, plus **Undo last change** and **Reset layout**. The picture, the transmit bar and the
 header are not panels: no layout you save can put Send, Stop or the TX latch out
 of reach.
 

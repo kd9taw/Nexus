@@ -1058,7 +1058,7 @@ const SHARED_IDS: ReadonlySet<string> = new Set(SHARED_PANES.map((e) => e.id))
 const STATS_PANEL_ID = 'stats'
 
 /**
- * THE LARGE TX METERS PANE'S ID, on Operate, Phone and CW (components/TxMeters `TxMetersPane`). The read-only
+ * THE LARGE TX METERS PANE'S ID, on Operate, Phone, CW and SSTV (components/TxMeters `TxMetersPane`). The read-only
  * twin of the meters in the strip, for an operator who wants them big: PO, ALC and SWR needle faces that
  * scale with the pane. It SHIPS HIDDEN, so nobody's layout shifts on the update.
  *
@@ -1236,18 +1236,24 @@ const RF_SCOPE_PANEL_ID = 'rfScope'
  *  ⊞-removable pane, which is THE STOP LINE. `txcompose` is the image chooser only; Send
  *  does not live in it.
  *
+ *  THE LARGE TX METERS PANE (TX_METERS_PANE_ID) joined with the composer re-flow, as FT, Phone and
+ *  CW have it: a readout, shipped hidden, under the RF scope pane and over the gallery. An SSTV
+ *  record saved before it has no entry for it, and an absent entry reads as hidden here, so no
+ *  stored layout changes and nothing is written. The column's order (the meters, the gallery, the
+ *  composer last, over the Send/Stop bar) is SstvView's: SSTV stores no placement.
+ *
  *  `scope` here is THE BAND WATERFALL ONLY, and the distinction is structural rather than
  *  cosmetic: SSTV has one RX stage that is the band until a VIS lands and the PICTURE after
  *  it (SstvView's `inFlight` branch). The tick hides the band half; an arriving picture
  *  still takes the stage whatever the box says, because that is the decode itself and not a
  *  panel. See the gate at the render site. */
-export const SSTV_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'txcompose', 'gallery'] as const
+export const SSTV_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, TX_METERS_PANE_ID, 'txcompose', 'gallery'] as const
 export type SstvPanelId = (typeof SSTV_PANEL_IDS)[number]
 
 export const SSTV_PANELS: PanelVocabulary<SstvPanelId> = {
   view: 'sstv',
   panelIds: SSTV_PANEL_IDS,
-  defaultRemoved: [RF_SCOPE_PANEL_ID],
+  defaultRemoved: [RF_SCOPE_PANEL_ID, TX_METERS_PANE_ID],
 }
 
 /** Phone cockpit's removable panels (Phase 3) — the scope strip plus the panes under it.

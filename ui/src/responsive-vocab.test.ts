@@ -264,6 +264,27 @@ describe('responsive vocabulary', () => {
     expect(offenders).toEqual([])
   })
 
+  it("SSTV's composer goes sideways or stacks by its OWN width: a wrapping row, never a viewport or size rule (#479)", () => {
+    const CLASSES = ['sstv-compose-row', 'sstv-compose-stage', 'sstv-compose-stage-packed', 'sstv-compose-opts']
+    const subjectOf = (sel: string) => sel.trim().split(/\s*[>+~]\s*|\s+/).pop() ?? ''
+    const on = (cls: string) => RULES.filter((r) => new RegExp(`\\.${cls}(?![a-z0-9-])`).test(subjectOf(r.selector)))
+    for (const cls of CLASSES) {
+      const rules = on(cls)
+      expect(rules.length, `.${cls}: no rule at all`).toBeGreaterThan(0)
+      const keyed = rules.filter((r) => r.media !== null || /data-viewport/.test(r.selector)).map((r) => `${r.media ?? ''} ${r.selector}`)
+      expect(keyed, `.${cls} is laid out by a viewport or size rule`).toEqual([])
+      expect(rules.filter((r) => /\b\d+(\.\d+)?v[hw]\b/.test(r.body.replace(/var\([^()]*\)/g, ''))).map((r) => r.selector), `.${cls}: a raw vh/vw`).toEqual([])
+    }
+    // The fold itself: the row wraps, and the options' basis is in em, so it follows the text size and the zoom.
+    const decl = (cls: string, prop: string) => {
+      let v: string | null = null
+      for (const r of on(cls)) for (const d of r.body.split(';')) { const m = new RegExp(`^\\s*${prop}\\s*:\\s*(.+?)\\s*$`).exec(d); if (m) v = m[1] }
+      return v
+    }
+    expect(decl('sstv-compose-row', 'flex-wrap')).toBe('wrap')
+    expect(decl('sstv-compose-opts', 'flex')).toMatch(/^1 1 [\d.]+em$/)
+  })
+
   it('the compact chrome’s classes are never keyed on [data-viewport]: the folds are decided once, in JS', () => {
     // features/compactChrome reads the size class and the components add these classes; a sheet rule
     // that ALSO keyed one on [data-viewport] would be a second, disagreeing answer to "is it folded".

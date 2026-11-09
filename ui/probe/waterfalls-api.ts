@@ -74,7 +74,8 @@ export async function getJttyState(): Promise<any> { return { ...jtty, ...(globa
 export async function jttyAutoArm(): Promise<any> { return jtty }
 export async function jttyArm(): Promise<any> { return jtty }
 export async function jttySetBand(lo: number, hi: number): Promise<any> { return { ...jtty, lowHz: lo, highHz: hi } }
-export async function getSstvState(): Promise<any> { return sstv }
+// `__sstvOver`: a probe's own fields over the idle state (the SSTV layout probe's dropped-picture alert), JTTY's way.
+export async function getSstvState(): Promise<any> { return { ...sstv, ...(globalThis as any).__sstvOver } }
 // The live meters as the backend sends them (`MeterReadout`): no tone heard is null, never absent. The
 // generated `[]`/`{}` default left `cwToneHz` undefined, which the CW zero-beat readout drew as "-NaN Hz".
 export async function getMeters(): Promise<any> { return { rxLevel: 0, smeterDb: null, cwToneHz: null } }
