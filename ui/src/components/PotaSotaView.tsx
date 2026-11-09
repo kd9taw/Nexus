@@ -403,12 +403,13 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
   const unworked = hideWorked ? inScope.filter((s) => s.huntedToday !== true) : inScope
   // Only new, the same bargain: offered only when the rows carry the flag (an observed station's
   // feed may not), and counted after every other filter, Hide worked included. A board that cannot
-  // tell applies nothing, whatever was remembered.
+  // tell applies nothing, whatever was remembered. Per row the same: only `newPark === false` is
+  // "already logged" — a row without the flag (a mixed feed) cannot tell, so it stays.
   const canOnlyNew = spots.some((s) => typeof s.newPark === 'boolean')
   const applyOnlyNew = onlyNew && canOnlyNew
-  const notNewHidden = applyOnlyNew ? unworked.filter((s) => s.newPark !== true).length : 0
+  const notNewHidden = applyOnlyNew ? unworked.filter((s) => s.newPark === false).length : 0
   const filtered = sortSpots(
-    applyOnlyNew ? unworked.filter((s) => s.newPark === true) : unworked,
+    applyOnlyNew ? unworked.filter((s) => s.newPark !== false) : unworked,
     sortKey,
     sortAsc,
   )

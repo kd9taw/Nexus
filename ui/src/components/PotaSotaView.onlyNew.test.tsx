@@ -121,6 +121,23 @@ describe('Only new', () => {
     expect(screen.queryByRole('button', { name: t('ota.filter.onlyNew.hidden', { count: 1 }) })).toBeNull()
   })
 
+  it('hides only rows the station calls logged: an unflagged row in a mixed feed stays', async () => {
+    // A row with no flag is "cannot tell", never "already logged" — the chip must not claim it.
+    localStorage.setItem('nexus.ota.onlyNew', '1')
+    const unflagged = spot('N0UNK', 'US-0009')
+    delete (unflagged as Partial<OtaSpot>).newPark
+    api.getOtaSpots.mockResolvedValue([
+      spot('K1ABC', 'US-0001', { newPark: true }),
+      spot('W9XYZ', 'US-0002'),
+      unflagged,
+    ])
+    render(<PotaSotaView snap={snap} />)
+    await screen.findByText('K1ABC')
+    expect(screen.getByText('N0UNK')).toBeTruthy()
+    expect(screen.queryByText('W9XYZ')).toBeNull()
+    expect(chip(1)).toBeTruthy()
+  })
+
   it('points at the chip when it is what empties the board', async () => {
     localStorage.setItem('nexus.ota.onlyNew', '1')
     api.getOtaSpots.mockResolvedValue([spot('W9XYZ', 'US-0002'), spot('N0OLD', 'US-0003')])
