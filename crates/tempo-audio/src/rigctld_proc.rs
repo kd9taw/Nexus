@@ -1346,7 +1346,8 @@ const HANDSHAKE_RTS_TAKEN: [&str; 1] = ["Hardware"];
 /// **the exact field `rig_open`'s refusal tests**, seeded from `caps->ptt_type` in `rig_init`
 /// (`rig.c:804`) and untouched by the clobber. `serial_handshake` likewise reads
 /// `rp->parm.serial.handshake`, the exact field refusal #2 tests. One 27 ms invocation, exit 0,
-/// no port opened (`-L` exits immediately when no `-r` was given, `rigctld.c:670-674`).
+/// no port opened (`-L` exits immediately when no `-r` was given, `rigctld.c:670-674`; NOT on
+/// Hamlib 4.5.5, which keeps running, see [`daemon_dump`]).
 ///
 /// Observed against the bundled 4.7.1: model 1007 (FT-757GXII) → `ptt_type … Value: DTR`;
 /// model 1031 (FT-980) → `Value: RTS`; 3073/1042/1/2 → `Value: RIG`/`RIGMICDATA`;
@@ -1385,16 +1386,75 @@ fn settable_lines_for(model: u32, ptt_line: Option<crate::rig::SerialLine>) -> S
 /// the operator's OWN Hamlib cannot go stale the way a table transcribed from a manual does —
 /// which is the whole lesson of the baud-entry rounds. `None` on a missing binary, a non-zero
 /// exit, or output we cannot read; every caller turns that into "claim nothing".
+///
+/// ⚠️ BOUNDED, because "print and exit" is not true of every Hamlib. Hamlib 4.5.5 (Ubuntu
+/// 24.04's `libhamlib-utils`) prints the `-L` dump and then carries on as a daemon on its default
+/// port, listening on every address (observed: `0.0.0.0:4532`, no exit after 6 s; `-u` and
+/// `--version` do exit there, and 4.6.5 and 4.7.1 exit 0 on all three). Waited on without a
+/// bound, that blocked every CAT open on such a Hamlib forever. So the dump gets
+/// [`DUMP_BUDGET`], and a child still running then is killed and reaped (never left holding a
+/// port) and answers `None`. Its partial stdout is not read: a daemon that never exits never
+/// flushes, so what arrived is a truncated dump.
 pub(crate) fn daemon_dump(args: &[&str]) -> Option<String> {
     tempo_core::applog::info("proc", &format!("run rigctld {}", args.join(" ")));
     // No console window, same as the daemon itself (Nexus is a GUI app).
     let mut cmd = tempo_core::process::command(resolve_rigctld());
     cmd.args(args);
-    cmd.stdin(Stdio::null());
-    match cmd.output() {
-        Ok(out) if out.status.success() => Some(String::from_utf8_lossy(&out.stdout).into_owned()),
-        _ => None,
+    let out = output_within(&mut cmd, DUMP_BUDGET);
+    if out.is_none() {
+        tempo_core::applog::warn(
+            "proc",
+            &format!(
+                "rigctld {} gave no answer within {} s (an older Hamlib keeps running after \
+                 -L); claiming nothing from it",
+                args.join(" "),
+                DUMP_BUDGET.as_secs()
+            ),
+        );
     }
+    out
+}
+
+/// How long a one-shot dump may take. A healthy one is tens of milliseconds; the margin is for
+/// a first launch that an antivirus scans on Windows, where a dump lost to the budget would cost
+/// the line holds (every caller reads `None` as "claim nothing").
+const DUMP_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Run `cmd` to completion within `budget` and return its stdout if it exited 0. A child still
+/// running at the deadline is killed and reaped, and answers `None`. stdout is drained on its
+/// own thread so a large dump cannot block the child on a full pipe.
+fn output_within(cmd: &mut Command, budget: std::time::Duration) -> Option<String> {
+    use std::io::Read;
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = cmd.spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        buf
+    });
+    let deadline = std::time::Instant::now() + budget;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                // The reader is not joined: anything the child left holding the pipe would hold
+                // this wait too. It ends on its own when the pipe closes.
+                return None;
+            }
+        }
+    };
+    let out = reader.join().ok()?;
+    status
+        .success()
+        .then(|| String::from_utf8_lossy(&out).into_owned())
 }
 
 /// The `rigctl` companion binary, resolved exactly like [`resolve_rigctld`]: bundled beside the
@@ -1761,6 +1821,44 @@ mod tests {
             .expect("write stub");
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         p
+    }
+
+    /// ⭐ A DUMP THAT NEVER EXITS CANNOT HOLD A CAT OPEN. Hamlib 4.5.5's `rigctld -L` prints and
+    /// then stays up as a daemon; waited on without a bound it blocked the open forever. The
+    /// stand-in here prints and then sleeps: the wait ends at the budget with `None`, and the
+    /// child is gone (killed and reaped), not left holding a port. A dump that exits 0 is read;
+    /// one that exits non-zero is not.
+    #[cfg(unix)]
+    #[test]
+    fn a_dump_that_never_exits_is_cut_off_and_killed() {
+        use std::time::{Duration, Instant};
+        let hang = stub_script(
+            "dump-hang",
+            "#!/bin/sh\necho \"$$\" > \"$0.pid\"\necho conf\nexec sleep 30\n",
+        );
+        let started = Instant::now();
+        let out = output_within(&mut Command::new(&hang), Duration::from_millis(500));
+        assert_eq!(out, None);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        let pid = std::fs::read_to_string(hang.with_extension("pid")).expect("pid");
+        assert!(
+            !std::path::Path::new(&format!("/proc/{}", pid.trim())).exists(),
+            "the child was left running"
+        );
+        let ok = stub_script("dump-ok", "#!/bin/sh\necho rts_state\n");
+        assert_eq!(
+            output_within(&mut Command::new(&ok), Duration::from_secs(5)).as_deref(),
+            Some("rts_state\n")
+        );
+        let no = stub_script("dump-no", "#!/bin/sh\necho rts_state\nexit 2\n");
+        assert_eq!(
+            output_within(&mut Command::new(&no), Duration::from_secs(5)),
+            None
+        );
     }
 
     /// [`runs_ok`] must separate "ran and said no" from "could not run at all".

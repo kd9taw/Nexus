@@ -31,6 +31,48 @@ mod common;
 /// The two tests share the process environment (one sets `PATH`), so they run one at a time.
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
+/// Each test's whole budget. Every wait below has its own bound too; this is the backstop for one
+/// inside the code under test, so a regression FAILS here with a message instead of hanging CI.
+/// A Hamlib whose `-L` dump never exits (4.5.5) costs the dump's own 10 s of it.
+const TEST_BUDGET: Duration = Duration::from_secs(35);
+
+/// Ends the whole test binary, with a message, if the test that armed it is still running at
+/// [`TEST_BUDGET`]. Disarmed on drop.
+struct Watchdog(Option<std::sync::mpsc::Sender<()>>);
+
+impl Watchdog {
+    fn arm(test: &'static str) -> Watchdog {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(TEST_BUDGET) {
+                eprintln!(
+                    "pty_cat: {test} was still running after {} s; failing it instead of hanging",
+                    TEST_BUDGET.as_secs()
+                );
+                std::process::exit(101);
+            }
+        });
+        Watchdog(Some(tx))
+    }
+}
+
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        if let Some(tx) = self.0.take() {
+            let _ = tx.send(());
+        }
+    }
+}
+
+/// A loopback port nothing is listening on right now. The window before the daemon binds it is
+/// tiny, and the test fails, rather than hangs, if something takes it.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|l| l.local_addr())
+        .map(|a| a.port())
+        .expect("a free loopback port")
+}
+
 const RIG: u8 = 0x94; // IC-7300's CI-V default
 const DIAL_HZ: u64 = 14_074_000;
 
@@ -191,9 +233,11 @@ fn ask_dial(addr: &str, within: Duration) -> Result<String, String> {
     let until = Instant::now() + within;
     let mut last = String::from("never connected");
     while Instant::now() < until {
-        match TcpStream::connect(addr) {
+        let sock: std::net::SocketAddr = addr.parse().expect("a socket address");
+        match TcpStream::connect_timeout(&sock, Duration::from_secs(1)) {
             Ok(mut s) => {
                 s.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                s.set_write_timeout(Some(Duration::from_secs(3))).unwrap();
                 if s.write_all(b"f\n").is_ok() {
                     let mut line = String::new();
                     if BufReader::new(&s).read_line(&mut line).is_ok() {
@@ -218,6 +262,7 @@ fn ask_dial(addr: &str, within: Duration) -> Result<String, String> {
 #[test]
 fn rigctld_opens_a_virtual_port_with_the_hold_low_default_and_reads_the_dial() {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let _watchdog = Watchdog::arm("rigctld_opens_a_virtual_port…");
     let Some(bin) = common::require_daemon("rigctld", "NEXUS_RIGCTLD") else {
         return;
     };
@@ -244,7 +289,7 @@ fn rigctld_opens_a_virtual_port_with_the_hold_low_default_and_reads_the_dial() {
     let (master, slave) = open_pty();
     let radio = FakeIcom::start(master);
     let port_name = wfview_style_link(&slave, "rigctld");
-    let tcp = 24_000 + (std::process::id() % 20_000) as u16;
+    let tcp = free_port();
     let daemon = spawn_rigctld(
         3073, // IC-7300
         &port_name,
@@ -262,7 +307,7 @@ fn rigctld_opens_a_virtual_port_with_the_hold_low_default_and_reads_the_dial() {
         Some(std::fs::canonicalize(&slave).expect("slave")),
         "rigctld -r"
     );
-    let answer = ask_dial(&format!("127.0.0.1:{tcp}"), Duration::from_secs(15));
+    let answer = ask_dial(&format!("127.0.0.1:{tcp}"), Duration::from_secs(12));
     let said = daemon.said().join("\n");
     assert!(
         !said.contains("Cannot change RTS") && !said.contains("Cannot change DTR"),
@@ -280,6 +325,7 @@ fn rigctld_opens_a_virtual_port_with_the_hold_low_default_and_reads_the_dial() {
 #[test]
 fn native_civ_on_a_virtual_port_reads_the_dial_takes_a_sweep_and_never_turns_the_scope_off() {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let _watchdog = Watchdog::arm("native_civ_on_a_virtual_port…");
     let (master, slave) = open_pty();
     let radio = FakeIcom::start(master);
     let port_name = wfview_style_link(&slave, "native");
