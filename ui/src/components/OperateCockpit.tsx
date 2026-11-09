@@ -453,8 +453,8 @@ export function OperateCockpit({
   boxes,
 }: Props) {
   // The waterfall strip its height divider sizes: the divider sets its CSS var on the strip's
-  // container (.cockpit-body) and measures the range the layout honours (the sheet caps the strip
-  // at 60 % of the body).
+  // parent (.cockpit-body, a box-less `.cockpit-flat` wrapper) and measures the range the layout
+  // honours in the box the strip is laid out in, the shell (the sheet caps the strip at 60 % of it).
   const wfRef = useRef<HTMLElement>(null)
   // The two resizable side-rail panes in roster mode (Band Activity above, Rx Frequency
   // below) + the seam that splits them. A sole survivor auto-fills because flex-grow is
@@ -1957,7 +1957,11 @@ export function OperateCockpit({
           the QSO strip's; its protected controls (period, Skip Tx1, next-Ns, HOUND
           badge, rotor) merged INTO the strip below. ~42px of the reported blank gray
           space lived here. */}
-      <div className="cockpit-body">
+      {/* NO BOX (`.cockpit-flat`, cockpit-panes.css): the waterfall, its divider, the QSO strip and the lower region
+          are flex items of the shell itself, so the strip's sticky edge is measured against the shell. In a box of its
+          own it could not leave that box, and at 150–175 % on a small window the header alone ran past the window's
+          foot, so Stop TX was off screen until the operator scrolled (`.cockpit-ftstrip`). */}
+      <div className="cockpit-body cockpit-flat">
         {/* Waterfall: a short full-width strip (not a tall column) — the spectrum
             is a glance tool; the real estate goes to the decode lists + roster. */}
         {wfState === 'popped' && (

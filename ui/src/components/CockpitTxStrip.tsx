@@ -357,8 +357,12 @@ function decideFold(shell: HTMLElement, strip: HTMLElement, dock: HTMLElement): 
   if (memo && memo.key === key) {
     natural = memo.natural
   } else {
+    // A squeezed keep row (decideSqueeze) is measured at its own height, not at its cap.
+    const squeezed = keep?.getAttribute('data-squeeze')
+    if (squeezed) keep!.removeAttribute('data-squeeze')
     if (was) dock.removeAttribute('data-fold')
     natural = dock.offsetHeight
+    if (squeezed) keep!.setAttribute('data-squeeze', squeezed)
   }
   const em = parseFloat(cs.fontSize) || 16
   const room = shell.clientHeight - (parseFloat(cs.paddingTop) || 0) - (parseFloat(cs.paddingBottom) || 0)
@@ -374,9 +378,93 @@ function decideFold(shell: HTMLElement, strip: HTMLElement, dock: HTMLElement): 
   } else {
     dock.removeAttribute('data-fold')
     keep?.removeAttribute('data-fold')
+    // Unfolded, the keep row parks nothing, so nothing squeezes it.
+    if (keep) unsqueeze(keep)
     foldMemo.delete(dock)
   }
   return natural
+}
+
+/** THE STRIP'S ROOM COMES FIRST: what is parked at the bottom never covers Stop TX. The strip parks at the top of the
+ *  shell's scrollport (under a pinned header) and the dock, or a folded dock's keep row, or SSTV's bar, at the bottom.
+ *  Where the two do not both fit, the bottom one painted over the strip's lower edge, and so over Stop TX: on a small
+ *  window at 175 % the top bar and the cockpit header leave the shell 120–250 px, and an alarm, a status message or
+ *  SSTV's dropped-picture sentence takes more (RTTY, JS8 and SSTV at 900×600, measured). So there the bottom surface is
+ *  SQUEEZED (`data-squeeze`, cockpit-panes.css): capped at the room the strip leaves (`--cockpit-txdock-room`) and
+ *  scrolled inside. Read as it would be unsqueezed (`scrollHeight`, which a cap does not change), so squeezing and
+ *  releasing cannot flap; a pixel is kept spare against the rounding of the zoomed sizes.
+ *  WHAT THE CAP COSTS, plainly: on the smallest windows (900×600 at 175 % in Russian or Japanese, under an alarm) it is
+ *  50–54 px, one line of the surface, and the rest of the surface — Send, the TX latch, SSTV's or the keyboard docks'
+ *  own Stop, a notice — is in the surface's own scroll, reached by scrolling it or by Tab (a focus scrolls it into
+ *  view). Stop TX, which stops everything they stop, is the one in view. To keep the surface's own stop in view too
+ *  where the cap can hold it, the surface is scrolled to that stop (`surfaceStop`) when the squeeze begins, when the cap
+ *  changes (a layout change: an alarm, a resize), and when the stop goes live (SSTV's Stop and Esc/Stop are disabled
+ *  until an over is on the air); never on other renders, so the operator's own scroll of the surface stands. Where the room is shorter than one control, the cap is one control
+ *  where that leaves Stop TX's line clear (`capFor`), and the room otherwise. */
+function decideSqueeze(shell: HTMLElement, strip: HTMLElement, head: HTMLElement | undefined, parked: HTMLElement): void {
+  const cs = getComputedStyle(shell)
+  const room = Math.floor(
+    shell.clientHeight - (parseFloat(cs.paddingTop) || 0) - (parseFloat(cs.paddingBottom) || 0) -
+      strip.offsetHeight - (head?.offsetHeight ?? 0),
+  ) - 1
+  const ps = getComputedStyle(parked)
+  const natural = parked.scrollHeight + (parseFloat(ps.borderTopWidth) || 0) + (parseFloat(ps.borderBottomWidth) || 0)
+  if (shell.clientHeight > 0 && natural > room) {
+    const began = parked.getAttribute('data-squeeze') !== 'on'
+    const cap = `${Math.max(0, capFor(shell, strip, head, parked, room))}px`
+    const resized = parked.style.getPropertyValue('--cockpit-txdock-room') !== cap
+    if (resized) parked.style.setProperty('--cockpit-txdock-room', cap)
+    if (began) parked.setAttribute('data-squeeze', 'on')
+    const stop = parked.querySelector<HTMLButtonElement>(SURFACE_STOP)
+    const live = stop != null && !stop.disabled
+    if (stop && (began || resized || (live && stopLive.get(parked) === false))) surfaceStop(parked, stop)
+    stopLive.set(parked, live)
+  } else {
+    unsqueeze(parked)
+  }
+}
+/** THE CAP, where the room the strip leaves is shorter than ONE CONTROL of the surface (JS8 in Japanese at 900×600 at
+ *  175 %: 27 px of room, shorter than one of its buttons, measured), so a cap of the room would show a sliver of no control at all.
+ *  There the surface takes one control's height, its padding with it, and stands that much over the strip's lower part
+ *  (the TX state, the meters): never over the line Stop TX is on. Where even that leaves less than one control, it keeps
+ *  the room, and the surface is reached by its own scroll and by Tab; Stop TX is the stop in view. In layout px. */
+function capFor(shell: HTMLElement, strip: HTMLElement, head: HTMLElement | undefined, parked: HTMLElement, room: number): number {
+  const ctl = Array.from(parked.querySelectorAll<HTMLElement>('button, input, select, textarea')).find((e) => e.offsetHeight > 0)
+  const stop = strip.querySelector<HTMLElement>('.op-btn.stop')
+  const sq = strip.getBoundingClientRect()
+  if (!ctl || !stop || strip.offsetHeight === 0 || sq.height === 0) return room
+  const ps = getComputedStyle(parked)
+  const px = (v: string) => parseFloat(v) || 0
+  const one = ctl.offsetHeight + px(ps.paddingTop) + px(ps.paddingBottom) + px(ps.borderTopWidth) + px(ps.borderBottomWidth)
+  if (room >= one) return room
+  const z = sq.height / strip.offsetHeight
+  const line = stop.closest<HTMLElement>('.cq-txctl') ?? stop
+  const cs = getComputedStyle(shell)
+  const belowStop = Math.floor(
+    shell.clientHeight - px(cs.paddingTop) - px(cs.paddingBottom) - (head?.offsetHeight ?? 0) - (line.getBoundingClientRect().bottom - sq.top) / z,
+  ) - 1
+  return Math.max(room, Math.min(Math.ceil(one), belowStop))
+}
+function unsqueeze(el: HTMLElement): void {
+  if (el.hasAttribute('data-squeeze')) el.removeAttribute('data-squeeze')
+  if (el.style.getPropertyValue('--cockpit-txdock-room')) el.style.removeProperty('--cockpit-txdock-room')
+  stopLive.delete(el)
+}
+/** A parked surface's OWN stop: SSTV's Stop, the keyboard docks' Esc/Stop, Phone's PTT (its release unkeys). */
+const SURFACE_STOP = '.sstv-tx-stop, .rtty-stop, .ph-ptt'
+/** Whether each squeezed surface's stop was live at the last decision: a stop going live is scrolled to once. */
+const stopLive = new WeakMap<HTMLElement, boolean>()
+/** Scroll a squeezed surface (only it: never the shell) the least that shows its stop whole, where the cap can hold it. */
+function surfaceStop(parked: HTMLElement, stop: HTMLElement): void {
+  const p = parked.getBoundingClientRect()
+  const q = stop.getBoundingClientRect()
+  if (parked.offsetHeight === 0 || p.height === 0) return
+  const z = p.height / parked.offsetHeight
+  const top = p.top + parked.clientTop * z
+  const bottom = top + parked.clientHeight * z
+  if (q.height > bottom - top) return
+  if (q.top < top) parked.scrollTop -= (top - q.top) / z
+  else if (q.bottom > bottom) parked.scrollTop += (q.bottom - bottom) / z
 }
 
 /** The focus a Tab moves follows its keydown at once; this only allows for a loaded machine. */
@@ -466,6 +554,13 @@ function useDockClearance(ref: RefObject<HTMLDivElement | null>) {
     const head = pinnedAbove(shell, strip)
     // What is parked at the bottom: the whole dock, or — folded — its keep row alone.
     const keep = dock?.getAttribute('data-fold') === 'on' ? keepRow(dock) : undefined
+    // Never over Stop TX: squeezed into the room the strip leaves, where both do not fit. A keyboard dock that does not
+    // fit whole folds first (decideFold), so it is a keep row or SSTV's bar that is squeezed.
+    const parked = keep ?? (dock && !keepRow(dock) && getComputedStyle(dock).position === 'sticky' ? dock : undefined)
+    if (parked) {
+      if (getComputedStyle(strip).position === 'sticky') decideSqueeze(shell, strip, head, parked)
+      else unsqueeze(parked)
+    }
     strip.style.setProperty('--cockpit-txstrip-bottom',
       dock && getComputedStyle(dock).position === 'sticky' ? `${keep ? keep.offsetHeight : dock.offsetHeight}px` : '0px')
     if (keep) shell.style.setProperty('--cockpit-txdock-keep-h', `${Math.ceil(parkedTop(keep).height)}px`)

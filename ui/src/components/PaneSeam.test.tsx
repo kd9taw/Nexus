@@ -800,6 +800,39 @@ describe('a STRIP divider whose parent has no box, or whose DEFAULT is a share o
     expect(again.getByRole('separator').getAttribute('aria-valuenow')).toBe('220')
   })
 
+  it('past a box-less parent, a NEIGHBOUR’s resize re-fits the strip, as the parent’s own resize did when it had a box', () => {
+    // FT's waterfall: header | flat body (waterfall, divider, QSO strip, lower). The waterfall's ceiling is the room its
+    // neighbours leave; when the header loses a line the outer box keeps its height, so only the header resizes.
+    localStorage.setItem('nexus.split.test.h', '40')
+    const shell = document.createElement('main')
+    const header = document.createElement('header')
+    const body = document.createElement('div')
+    body.style.display = 'contents'
+    const strip = document.createElement('section')
+    const lower = document.createElement('div')
+    body.append(strip, lower)
+    shell.append(header, body)
+    document.body.appendChild(shell)
+    let headH = 400
+    rectOf(shell, () => ({ height: 1000 }))
+    rectOf(body, () => ({ height: 0 }))
+    rectOf(header, () => ({ height: headH }))
+    // The strip renders its basis, capped by what the header and the lower region's 300 px floor leave.
+    rectOf(strip, () => {
+      const v = body.style.getPropertyValue('--h')
+      const basis = v.endsWith('%') ? (parseFloat(v) / 100) * 1000 : parseFloat(v) || 0
+      return { height: Math.min(basis, 1000 - headH - 300) }
+    })
+    const view = render(seam(strip))
+    const sep = view.getByRole('separator')
+    expect(sep.getAttribute('aria-valuenow'), 'control: the stored 400 px is held to the 300 px the header leaves').toBe('300')
+    headH = 300
+    resized(header)
+    expect(sep.getAttribute('aria-valuenow'), 'the header’s resize did not re-fit: the region took its room, and what stands below moved').toBe('400')
+    expect(body.style.getPropertyValue('--h')).toBe('40%')
+    expect(localStorage.getItem('nexus.split.test.h'), 'a re-fit rewrote the stored height').toBe('40')
+  })
+
   it('a NEW defaultOf function on every render does not rebuild its observer (a kept-alive cockpit re-renders all the time)', () => {
     const { shell, strip } = nest({ shell: 1000, stage: 800 })
     const view = render(seam(strip, () => shell))

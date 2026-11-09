@@ -496,6 +496,48 @@
   border-top: 1px solid var(--border);
   background: var(--panel);
 }
+/* SSTV'S BAR — mode, Send, Stop, the progress and the dropped-picture sentence (SstvView `.sstv-tx-bar`). Never a
+   pane; Stop always reachable. Sticky for the `.cockpit-txdock` discipline: with the composer and the stage/gallery
+   floors the shell's deficit valve engages routinely on short windows, and a bar that scrolls away is a Stop the
+   operator cannot reach mid-transmission. The bar is the shell's LAST child (SstvView.structure.test.tsx), so
+   bottom-sticky parks it in the scrollport at every scroll position. Z-INDEX 4, the TX strip's, the dock's and the
+   pinned header's: after the header in the shell, so at equal z it wins any overlap (Send and Stop are never under the
+   dial; at 2 the header covered them at 900×600 / 175 %), and above the region's dividers (3) for the dock's reason.
+   --bg-elev is opaque in both themes: a sticky surface must not let content ghost through. It moved here from
+   styles.css with its squeeze (below), so its whole cascade is this sheet's. */
+.sstv-tx-bar {
+  flex: 0 0 auto;
+  position: sticky;
+  bottom: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+/* …AND SQUEEZED, never over Stop TX (`data-squeeze`, written by the TX strip: CockpitTxStrip decideSqueeze). The strip
+   parks at the top of the scrollport and what is parked at the bottom — a folded dock's keep row, or SSTV's bar — under
+   it. Where the two do not both fit, the bottom one painted over the strip's lower edge and over Stop TX: on a small
+   window at 175 % the top bar and the cockpit header leave the shell 120–250 px, and an alarm, a status message or the
+   dropped-picture sentence took more (RTTY and JS8 at 900×600 / 175 % under an alarm, SSTV there under the sentence,
+   measured: `scripts/browser-probe --desktop stopvisible`). Squeezed, the surface is no taller than the room the strip
+   leaves it (`--cockpit-txdock-room`, measured, because CSS cannot read a sibling's box) and scrolls inside. What the
+   cap leaves out is in the surface's own scroll, reached by scrolling it or by Tab, and on the smallest windows (900×600
+   at 175 % in Russian or Japanese, under an alarm: a 50–54 px cap, one line) that includes Send, the TX latch, the
+   surface's own Stop or Esc/Stop and its notices; Stop TX, which stops all of it, is the stop in view. The strip
+   scrolls the surface to its own stop when the squeeze begins and when that stop goes live, where the cap can hold it
+   (CockpitTxStrip `surfaceStop`). Where the room is shorter than one control (JS8 in Japanese: 27 px), the cap is one
+   control, standing over the strip's lower part and never over the line Stop TX is on (`capFor`). Everywhere the two
+   fit, this never applies. */
+.cockpit-txdock-keep[data-squeeze='on'],
+.sstv-tx-bar[data-squeeze='on'] {
+  max-height: var(--cockpit-txdock-room);
+  overflow-y: auto;
+}
 
 /* THE MACRO BANK — a keyboard dock of 12 or 16 macro keys (Settings ▸ CW / RTTY / PSK ▸ Macro keys;
    8, the default, is the dock as it always was and wears none of these). The keys stand in GROUPS OF
@@ -574,6 +616,25 @@
   background: var(--panel);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
+}
+/* FT'S QSO STRIP (`.cockpit-qso`, OperateQsoStrip) — the same cluster, Stop TX in it, with FT's QSO controls round it.
+   It stood in `.cockpit-body`, a box of its own under the header, so it scrolled with the column: at 150–175 % on a
+   small window the header ALONE ran past the window's foot (FT at 900×600 / 175 %: the header ends at y 991 in a 600 px
+   window, measured) and Stop TX was off screen until the operator scrolled. The body is a `.cockpit-flat` wrapper now,
+   no box, so the strip is a flex item of the shell, and it PARKS AT THE FOOT of the scrollport where its own place is
+   below it: sticky at the bottom, as every other screen's strip is. Only its FIRST LINE parks there — the TX cluster
+   with Stop TX — and the rest of it waits past the foot (`--cockpit-ftstrip-rest`, the strip's height under that line,
+   which OperateQsoStrip measures): FT's strip is 300–400 px on a small window at 175 %, taller than the shell's whole
+   scrollport there, and parked whole it put its top, and Stop TX, above the window. Where the strip draws a
+   transmitter alarm cell on its second line and the two lines fit the scrollport, that line parks too, so the alarm
+   stands with Stop TX; otherwise only the first line does. What parks is cleared by a focus: OperateQsoStrip writes its
+   rendered height on the shell (`--cockpit-ftstrip-park-h`), which the shells' scroll padding reads. It does not park at the top: a
+   strip that tall parked there would cover every pane under it at every scroll position. Above the region's dividers
+   (3) at the strip's and the dock's level; opaque (`.panel`). Where the shell does not scroll, this changes nothing. */
+.cockpit-ftstrip {
+  position: sticky;
+  bottom: calc(-1 * var(--cockpit-ftstrip-rest, 0px));
+  z-index: 4;
 }
 /* THE PINNED HEADER (SSTV, RTTY, PSK; CockpitHeader `pinned`). The header is the shell's first child
    and carries the mode, the dial, the band, ⊞ Panels, power and the CAT pill. In a shell whose
