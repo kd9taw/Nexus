@@ -29,6 +29,9 @@
 // centre behind the QSO strip's parked line (it covered 36 Tab stops at 900×600 / 175 % before the shell's scroll
 // padding read the parked line's height).
 //
+// AND THE HEADER-CHANGE GUARD (FT at 100 % and fit, 1024×768 and 1366×768, en/ru, CAT lost and the alarms): Stop TX stands
+// where a fresh layout (the window resized away and back) puts it, so the waterfall's divider re-fit to the header.
+//
 // THE CONTROLS, run every time: a planted box over Stop TX on FT at 900×600 / 175 % must be caught, and so must the
 // shell's scroll padding taken away there (a Tab stop behind the parked line). If one is not, its check cannot fail and
 // the probe says so instead of passing.
@@ -167,9 +170,11 @@ const MEASURE = `(() => {
   const sq = [...document.querySelectorAll("[data-squeeze='on']")].find((x) => x.closest('[hidden]') == null)
   const own = sq?.querySelector('.sstv-tx-stop, .rtty-stop, .ph-ptt')
   const squeezed = !sq ? null : (() => { const z = sq.getBoundingClientRect().height / (sq.offsetHeight || 1); const cap = Math.round(sq.clientHeight * z)
-    if (!own) return { cap, stop: null }; const q = own.getBoundingClientRect(); const x = q.left + q.width / 2, y = q.top + q.height / 2
+    const box = sq.getBoundingClientRect(); const first = [...sq.querySelectorAll('button, input, select, textarea')].find((e) => e.offsetHeight > 0)
+    const fq = first?.getBoundingClientRect(); const ctlWhole = !!fq && fq.top >= box.top - 0.5 && fq.bottom <= box.bottom + 0.5
+    if (!own) return { cap, ctlWhole, stop: null }; const q = own.getBoundingClientRect(); const x = q.left + q.width / 2, y = q.top + q.height / 2
     const t = x >= 0 && y >= 0 && x < innerWidth && y < innerHeight ? document.elementFromPoint(x, y) : null
-    return { cap, stop: { seen: t != null && (t === own || own.contains(t)), live: !own.disabled, h: Math.round(q.height) } } })()
+    return { cap, ctlWhole, stop: { seen: t != null && (t === own || own.contains(t)), live: !own.disabled, h: Math.round(q.height) } } })()
   const span = (sel) => { const e = [...document.querySelectorAll(sel)].find((x) => x.closest('[hidden]') == null && x.getBoundingClientRect().height > 0); if (!e) return null; const q = e.getBoundingClientRect(); return Math.round(q.top) + '–' + Math.round(q.bottom) }
   return { vp: document.documentElement.getAttribute('data-viewport'), stops: rows, headBottom: head ? Math.round(head.getBoundingClientRect().bottom) : null,
     alarmSeen, squeezed, boxes: { shell: span('main'), strip: span('.cockpit-txstrip, .cockpit-qso'), dock: span('.cockpit-txdock, .cockpit-txdock-keep[data-fold], .sstv-tx-bar') },
@@ -308,6 +313,63 @@ for (const [label, route] of VIEWS.filter(([l]) => wantViews.includes(l))) {
   }
 }
 
+// THE HEADER-CHANGE GUARD (FT, 100 % and the app's fit, 1024×768 and 1366×768, en and ru): CAT lost, and the alarms (a
+// transmitter alarm, the watchdog and a critical status message), change the cockpit header's height or the window's. The
+// waterfall's divider must re-fit to that, as a fresh layout would: Stop TX is measured as the state leaves it, the window
+// is then resized away and back (every divider re-fits on that), and Stop TX must stand where it stood. A divider that
+// re-fit only on the shell's own resize left the waterfall at its old height and Stop TX 28 px off on CAT lost.
+const FRESH = [['100', [1024, 768]], ['100', [1366, 768]], ['auto', [1024, 768]], ['auto', [1366, 768]]]
+const stopY = `(() => { const b = document.querySelector('main.operate-cockpit .cockpit-qso .op-btn.stop'); return b ? Math.round(b.getBoundingClientRect().top * 10) / 10 : null })()`
+async function freshCheck(p, [W, H], plant = null) {
+  await settle(p)
+  const before = plant ? await p.evaluate(plant) : await p.evaluate(stopY)
+  await p.size(W + 40, H + 40)
+  await settle(p)
+  await p.size(W, H)
+  await settle(p)
+  const after = await p.evaluate(stopY)
+  return before == null || after == null ? null : Math.round((after - before) * 10) / 10
+}
+const freshReds = []
+if (wantViews.includes('FT') && process.env.STOPVIS_FRESH !== '0') {
+  for (const [scale, size] of FRESH) for (const loc of ['en', 'ru']) {
+    const p = await openPage('operate', size, scale, loc)
+    try {
+      let m = null
+      for (let i = 0; i < 160 && !m?.stops.length; i++) { await sleep(250); m = await p.evaluate(MEASURE).catch(() => null) }
+      for (const state of ['catDown', 'alarms']) {
+        await apply(p, PLAIN, 'operate')
+        await settle(p)
+        await apply(p, STATES[state], 'operate')
+        const dy = await freshCheck(p, size)
+        if (dy == null || Math.abs(dy) > 1) {
+          freshReds.push(`FT ${size.join('×')} ${scale} ${loc} ${state}: Stop TX stood ${dy} px from where a fresh layout puts it (the waterfall's divider did not re-fit)`)
+          console.log('RED ' + freshReds[freshReds.length - 1])
+        }
+      }
+    } finally {
+      await p.close()
+    }
+  }
+  console.log(`fresh-layout guard: ${FRESH.length * 2 * 2} rows, ${freshReds.length} red`)
+}
+// ITS CONTROL: a divider value left stale (written and read in one task, before any observer can re-fit it) must be caught.
+let freshControl = null
+if (wantViews.includes('FT') && process.env.STOPVIS_FRESH !== '0') {
+  const p = await openPage('operate', [1024, 768], '100', 'en')
+  try {
+    let m = null
+    for (let i = 0; i < 160 && !m?.stops.length; i++) { await sleep(250); m = await p.evaluate(MEASURE).catch(() => null) }
+    await apply(p, PLAIN, 'operate')
+    const dy = await freshCheck(p, [1024, 768], `(() => { const body = document.querySelector('main.operate-cockpit .cockpit-body'); const v = parseFloat(body.style.getPropertyValue('--cockpit-wf-h')) || 25
+      body.style.setProperty('--cockpit-wf-h', (v / 2) + '%'); return ${stopY} })()`)
+    freshControl = dy != null && Math.abs(dy) > 1
+    console.log(`CONTROL — FT 1024×768 100 % with the divider's value left stale: Stop TX ${dy} px from a fresh layout${freshControl ? ' (caught)' : ''}`)
+  } finally {
+    await p.close()
+  }
+}
+
 // THE CONTROL: a box planted over FT's Stop TX must be caught.
 let control = null
 {
@@ -360,6 +422,12 @@ console.log(`\n${rows.length} rows (${VIEWS.filter(([l]) => wantViews.includes(l
 if (control !== true) console.log(`CONTROL FAILED: a box planted over FT's Stop TX at 900×600 / 175 % was ${control === null ? 'never measured' : 'not caught'}`)
 if (errors) { console.log(`stopvisible: ${errors} screens never drew`); process.exit(2) }
 {
+  const all = rows.filter((r) => r.squeezed)
+  if (all.length) {
+    const sliver = all.filter((r) => !r.squeezed.ctlWhole)
+    console.log(`note: a squeezed bottom surface shows at least one whole control in ${all.length - sliver.length} of ${all.length} rows` +
+      (sliver.length ? `; a sliver only: ${sliver.slice(0, 12).map((r) => `${r.view} ${r.W}×${r.H} ${r.scale} ${r.loc} ${r.state} (cap ${r.squeezed.cap} px)`).join('; ')}` : ''))
+  }
   const sq = rows.filter((r) => r.squeezed?.stop)
   if (sq.length) {
     const hidden = sq.filter((r) => !r.squeezed.stop.seen)
@@ -368,6 +436,8 @@ if (errors) { console.log(`stopvisible: ${errors} screens never drew`); process.
   }
 }
 if (tabControl !== true) console.log('CONTROL FAILED: with the scroll padding taken away, no Tab stop landed behind FT’s parked line: the Tab check cannot fail')
-if (reds.length || control !== true || tabControl !== true) { console.log(`stopvisible: RED — ${reds.length} rows with no Stop TX on screen and topmost`); process.exit(1) }
-console.log('stopvisible: PASS — a Stop TX fully on screen and topmost in every row, no Tab stop behind FT’s parked line; both controls were caught')
+if (freshControl === false) console.log('CONTROL FAILED: a stale divider value was not caught: the fresh-layout guard cannot fail')
+if (freshReds.length) console.log(`stopvisible: RED — ${freshReds.length} rows where Stop TX stood off a fresh layout`)
+if (reds.length || freshReds.length || freshControl === false || control !== true || tabControl !== true) { console.log(`stopvisible: RED — ${reds.length} rows with no Stop TX on screen and topmost`); process.exit(1) }
+console.log('stopvisible: PASS — a Stop TX fully on screen and topmost in every row, no Tab stop behind FT’s parked line, FT’s Stop TX where a fresh layout puts it after a header change; every control was caught')
 process.exit(0)
