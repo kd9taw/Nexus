@@ -383,9 +383,9 @@ function decideFold(shell: HTMLElement, strip: HTMLElement, dock: HTMLElement): 
  *  50–54 px, one line of the surface, and the rest of the surface — Send, the TX latch, SSTV's or the keyboard docks'
  *  own Stop, a notice — is in the surface's own scroll, reached by scrolling it or by Tab (a focus scrolls it into
  *  view). Stop TX, which stops everything they stop, is the one in view. To keep the surface's own stop in view too
- *  where the cap can hold it, the surface is scrolled to that stop (`surfaceStop`) when the squeeze begins and when the
- *  stop goes live (SSTV's Stop and Esc/Stop are disabled until an over is on the air); never on other renders, so the
- *  operator's own scroll of the surface stands. Where the cap is shorter than the stop (JS8 in Japanese at 900×600:
+ *  where the cap can hold it, the surface is scrolled to that stop (`surfaceStop`) when the squeeze begins, when the cap
+ *  changes (a layout change: an alarm, a resize), and when the stop goes live (SSTV's Stop and Esc/Stop are disabled
+ *  until an over is on the air); never on other renders, so the operator's own scroll of the surface stands. Where the cap is shorter than the stop (JS8 in Japanese at 900×600:
  *  27 px), nothing can hold it, and it is in the scroll. */
 function decideSqueeze(shell: HTMLElement, strip: HTMLElement, head: HTMLElement | undefined, parked: HTMLElement): void {
   const cs = getComputedStyle(shell)
@@ -398,11 +398,12 @@ function decideSqueeze(shell: HTMLElement, strip: HTMLElement, head: HTMLElement
   if (shell.clientHeight > 0 && natural > room) {
     const began = parked.getAttribute('data-squeeze') !== 'on'
     const cap = `${Math.max(0, room)}px`
-    if (parked.style.getPropertyValue('--cockpit-txdock-room') !== cap) parked.style.setProperty('--cockpit-txdock-room', cap)
+    const resized = parked.style.getPropertyValue('--cockpit-txdock-room') !== cap
+    if (resized) parked.style.setProperty('--cockpit-txdock-room', cap)
     if (began) parked.setAttribute('data-squeeze', 'on')
     const stop = parked.querySelector<HTMLButtonElement>(SURFACE_STOP)
     const live = stop != null && !stop.disabled
-    if (stop && (began || (live && stopLive.get(parked) === false))) surfaceStop(parked, stop)
+    if (stop && (began || resized || (live && stopLive.get(parked) === false))) surfaceStop(parked, stop)
     stopLive.set(parked, live)
   } else {
     unsqueeze(parked)

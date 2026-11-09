@@ -249,6 +249,19 @@ describe('a squeezed surface shows its own stop where the cap can hold it', () =
     expect(scrolled, 'SSTV is sending and its live Stop is out of the cap').toBe(STOP_AT + STOP_H - 60)
   })
 
+  it('the cap changing (a line arriving a frame later) brings the Stop back into it', () => {
+    injectSheet(SHEET)
+    shellH = STRIP_H + BAR_H + SPARE
+    const { rerender } = render(<SstvStop live={false} />)
+    stubBar()
+    shellH = STRIP_H + 100 + SPARE
+    rerender(<SstvStop live={false} />)
+    expect(scrolled, 'control: a 100 px cap holds the Stop with a 20 px scroll').toBe(STOP_AT + STOP_H - 100)
+    shellH = STRIP_H + 60 + SPARE
+    rerender(<SstvStop live={false} />)
+    expect(scrolled, 'the cap shrank and left the Stop below it').toBe(STOP_AT + STOP_H - 60)
+  })
+
   it('a cap shorter than the Stop cannot hold it, and nothing is scrolled', () => {
     injectSheet(SHEET)
     shellH = STRIP_H + BAR_H + SPARE

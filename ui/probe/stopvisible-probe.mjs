@@ -18,6 +18,7 @@
 // subscription; the lane through src/status.ts; the mode engines' state through their polls):
 //   plain · catDown (CAT lost) · alarms (two transmitter alarms, the TX watchdog, a critical lane message) ·
 //   keyed (on the air: the strip lit, an FT contact in progress, SSTV sending with its progress bar) ·
+//   keyedAlarm (keyed under the alarms: SSTV's own Stop live while the shell is at its shortest) ·
 //   worst (CAT lost + the alarms + an FT contact + SSTV's dropped-picture sentence + JTTY's longest refusal).
 //
 // HOW "ON SCREEN AND TOPMOST" IS READ: the button's whole box is inside the window, and at each point of a 5 × 3
@@ -127,6 +128,9 @@ const STATES = {
   alarms: { ...PLAIN, radio: { ...PLAIN.radio, txWatchdog: true }, top: { txAlarms: ALARMS, qso: null }, lane: LANE },
   keyed: { ...PLAIN, radio: { ...PLAIN.radio, transmitting: true, txEnabled: true }, top: { txAlarms: [], qso: { ...QSO, running: true } },
     mode: { sstv: { sending: true, txMode: 'Martin M1', txProgress: 0.4, txElapsedSecs: 46, txTotalSecs: 114 } } },
+  // On the air under an alarm: SSTV sending (its own Stop live) while the shell is at its shortest.
+  keyedAlarm: { radio: { ...PLAIN.radio, transmitting: true, txEnabled: true, txWatchdog: true }, top: { txAlarms: ALARMS, qso: { ...QSO, running: true } }, lane: LANE,
+    mode: { sstv: { sending: true, txMode: 'Martin M1', txProgress: 0.4, txElapsedSecs: 46, txTotalSecs: 114 } } },
   worst: { radio: { ...PLAIN.radio, ...CAT_LOST, txWatchdog: true }, top: { txAlarms: ALARMS, qso: QSO }, lane: LANE,
     mode: { sstv: { txNotice: DROPPED }, jtty: { tx: { refusal: REFUSAL, txHz: 1500, serial: 1, sending: false, live: false, left: 0, pending: '', notice: null } } } },
 }
@@ -159,9 +163,16 @@ const MEASURE = `(() => {
   const cq = cell?.getBoundingClientRect()
   const alarmSeen = !cell || !cell.textContent.trim() ? null : (() => { const x = cq.left + cq.width / 2, y = cq.top + cq.height / 2
     if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return false; const t = document.elementFromPoint(x, y); return t != null && (t === cell || cell.contains(t)) })()
+  // Printed, not failed: a squeezed bottom surface's own stop (SSTV's Stop, Esc/Stop, PTT), whether it is in view.
+  const sq = [...document.querySelectorAll("[data-squeeze='on']")].find((x) => x.closest('[hidden]') == null)
+  const own = sq?.querySelector('.sstv-tx-stop, .rtty-stop, .ph-ptt')
+  const squeezed = !sq ? null : (() => { const z = sq.getBoundingClientRect().height / (sq.offsetHeight || 1); const cap = Math.round(sq.clientHeight * z)
+    if (!own) return { cap, stop: null }; const q = own.getBoundingClientRect(); const x = q.left + q.width / 2, y = q.top + q.height / 2
+    const t = x >= 0 && y >= 0 && x < innerWidth && y < innerHeight ? document.elementFromPoint(x, y) : null
+    return { cap, stop: { seen: t != null && (t === own || own.contains(t)), live: !own.disabled, h: Math.round(q.height) } } })()
   const span = (sel) => { const e = [...document.querySelectorAll(sel)].find((x) => x.closest('[hidden]') == null && x.getBoundingClientRect().height > 0); if (!e) return null; const q = e.getBoundingClientRect(); return Math.round(q.top) + '–' + Math.round(q.bottom) }
   return { vp: document.documentElement.getAttribute('data-viewport'), stops: rows, headBottom: head ? Math.round(head.getBoundingClientRect().bottom) : null,
-    alarmSeen, boxes: { shell: span('main'), strip: span('.cockpit-txstrip, .cockpit-qso'), dock: span('.cockpit-txdock, .cockpit-txdock-keep[data-fold], .sstv-tx-bar') },
+    alarmSeen, squeezed, boxes: { shell: span('main'), strip: span('.cockpit-txstrip, .cockpit-qso'), dock: span('.cockpit-txdock, .cockpit-txdock-keep[data-fold], .sstv-tx-bar') },
     scrolled: shells.map((m) => Math.round(m.scrollTop)).concat(Math.round(document.scrollingElement.scrollTop)).some((v) => v > 0),
     key: rows.map((r) => r.box.join(',') + r.covered).join('|') + '|' + document.body.scrollHeight }
 })()`
@@ -270,7 +281,7 @@ for (const [label, route] of VIEWS.filter(([l]) => wantViews.includes(l))) {
             const wait = await apply(p, st, route)
             const m = await settle(p, wait || (mode ? 1300 : 0))
             mode = !!wait
-            const row = { view: label, scale, loc, W, H, state, vp: m?.vp, stops: m?.stops ?? [], scrolled: m?.scrolled, alarmSeen: m?.alarmSeen ?? null }
+            const row = { view: label, scale, loc, W, H, state, vp: m?.vp, stops: m?.stops ?? [], scrolled: m?.scrolled, alarmSeen: m?.alarmSeen ?? null, squeezed: m?.squeezed ?? null }
             rows.push(row)
             const ok = row.stops.some((s) => s.ok)
             if (route === 'operate' && state === 'plain' && scale !== 'auto' && Number(scale) >= 150 && TAB_SIZES(W, H)) {
@@ -348,6 +359,14 @@ console.log(`\n${rows.length} rows (${VIEWS.filter(([l]) => wantViews.includes(l
 }
 if (control !== true) console.log(`CONTROL FAILED: a box planted over FT's Stop TX at 900×600 / 175 % was ${control === null ? 'never measured' : 'not caught'}`)
 if (errors) { console.log(`stopvisible: ${errors} screens never drew`); process.exit(2) }
+{
+  const sq = rows.filter((r) => r.squeezed?.stop)
+  if (sq.length) {
+    const hidden = sq.filter((r) => !r.squeezed.stop.seen)
+    console.log(`note: a squeezed bottom surface shows its own stop in ${sq.length - hidden.length} of ${sq.length} rows (live: ${sq.filter((r) => r.squeezed.stop.live && r.squeezed.stop.seen).length} of ${sq.filter((r) => r.squeezed.stop.live).length})` +
+      (hidden.length ? `; in its scroll: ${hidden.slice(0, 16).map((r) => `${r.view} ${r.W}×${r.H} ${r.scale} ${r.loc} ${r.state} (cap ${r.squeezed.cap} px, stop ${r.squeezed.stop.h} px${r.squeezed.stop.live ? ', live' : ''})`).join('; ')}` : ''))
+  }
+}
 if (tabControl !== true) console.log('CONTROL FAILED: with the scroll padding taken away, no Tab stop landed behind FT’s parked line: the Tab check cannot fail')
 if (reds.length || control !== true || tabControl !== true) { console.log(`stopvisible: RED — ${reds.length} rows with no Stop TX on screen and topmost`); process.exit(1) }
 console.log('stopvisible: PASS — a Stop TX fully on screen and topmost in every row, no Tab stop behind FT’s parked line; both controls were caught')
