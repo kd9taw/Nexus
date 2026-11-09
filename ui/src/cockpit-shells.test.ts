@@ -542,6 +542,32 @@ describe('the SSTV stamp has a real percentage base and the shell has real floor
     ).toBe(true)
   })
 
+  it('the composer preview yields to a short window: 320 px where there is room, about a third of the window where not (#479)', () => {
+    // The composer stands at the foot of the region over the Send/Stop bar, and a loaded preview is its height.
+    // A fixed 320 px preview was 73 % of the window at 1366×768 at 175 % (an effective 439 px), so the composer
+    // took the column and the gallery went to its floor. The cap is the smaller of 320 px and 0.3 × --vh-eff.
+    const chain = [
+      ...shellChain('sstv-view'),
+      new Set(['cockpit-panes']),
+      new Set(['cockpit-col']),
+      new Set(['pane-frame']),
+      new Set(['pane-body']),
+      new Set(['sstv-compose', 'panel']),
+      new Set(['sstv-compose-row']),
+      new Set(['sstv-compose-stage', 'sstv-compose-stage-packed']),
+      new Set(['sstv-tx-drop', 'loaded']),
+      new Set(['sstv-stage-wrap']),
+      new Set(['sstv-tx-preview']),
+    ]
+    const cap = winningValue(chain, blockLonghand('max-height'))
+    expect(cap, '.sstv-tx-preview: no max-height').not.toBeNull()
+    const at = (vhEff: number) => lengthPx(cap!.value, { fontPx: 14, vhEff })
+    expect(at(1440), `\`${cap!.value}\` on a tall window`).toBe(320)
+    expect(at(1080), `\`${cap!.value}\` at 1080`).toBe(320)
+    expect(at(439)!, `\`${cap!.value}\` at 1366×768 at 175 %`).toBeLessThanOrEqual(0.3 * 439 + 0.01)
+    expect(at(343)!, `\`${cap!.value}\` at 900×600 at 175 %`).toBeLessThanOrEqual(0.3 * 343 + 0.01)
+  })
+
   it('.sstv-tx-bar is sticky at bottom 0 (Stop must never leave the scrollport)', () => {
     // The dock discipline (cockpit-panes.css .cockpit-txdock): with real pane floors the
     // shell valve engages routinely, and a bar that scrolls away is a Stop the operator
