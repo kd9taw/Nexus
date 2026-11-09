@@ -16,6 +16,9 @@
 // THE CONTROL, run every time: the cell's one height taken off (`height: auto`, the shape that shipped the second
 // break) on the screens and languages where that break was measured. There an alarm must move Stop TX; if it does
 // not, the check cannot fail and the probe says so instead of passing.
+// THE REACH CONTROL: the words left unpainted (`visibility: hidden`) on FT at 900×600 175 %, the screen whose strip
+// is reached by scrolling. Every position of the shell's scroll is tried, so the words must then be judged hidden;
+// if they are not, the reach check cannot fail.
 //
 // exit: 0 every case holds · 1 a red, or a control that could not fail · 2 a page never drew its strip
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -41,6 +44,8 @@ const ALARM = { id: 1, text: 'High SWR: 3.2:1 — transmit was stopped', radioId
 const NO_HEIGHT = '.ch-txalarm{height:auto!important}'
 // Where the cell stands on a line of its own and its missing height was measured to move Stop TX (700x800 150 %).
 const CONTROL = [['RTTY', 'rtty', '150', 'es', [700, 800]], ['CW', 'cw', '150', 'de', [700, 800]]]
+const UNPAINTED = '.ch-txalarm-text{visibility:hidden!important}'
+const REACH_CONTROL = ['FT', 'operate', '175', 'en', [900, 600]]
 
 const realSrc = await readFile(REAL_API, 'utf8')
 let stubSrc = await readFile(STUB_SRC, 'utf8')
@@ -84,9 +89,18 @@ const MEASURE = `(() => {
     const saved = sc ? sc.scrollTop : null
     const wr = w.getBoundingClientRect()
     if (wr.top < 0 || wr.bottom > innerHeight) w.scrollIntoView({ block: 'nearest' })
-    const r = w.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2
-    const hit = r.width > 0 && x >= 0 && y >= 0 && x < innerWidth && y < innerHeight ? document.elementFromPoint(x, y) : null
-    seen = !!(hit && strip.querySelector('.ch-txalarm').contains(hit))
+    // Seen = the words themselves are what a point at their middle hits: on screen, topmost and painted (a word
+    // that is not painted, or anything over it, is hit through or instead).
+    const look = () => { const r = w.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2
+      const hit = r.width > 0 && x >= 0 && y >= 0 && x < innerWidth && y < innerHeight ? document.elementFromPoint(x, y) : null
+      return { r, x, y, hit, seen: !!(hit && w.contains(hit)) } }
+    let L = look()
+    // A sticky strip (Stop TX parked at the shell's foot) spends a scrollIntoView on its own offset and the words
+    // stay where they were. Then the operator's own scroll of the shell, top to end every 6 px, as digishell's
+    // reach: the words must be on screen and topmost at some position of it.
+    if (!L.seen && sc) { const max = sc.scrollHeight - sc.clientHeight; for (let p = 0; p <= max + 5 && !L.seen; p += 6) { sc.scrollTop = Math.min(p, max); L = look() } }
+    const r = L.r, x = L.x, y = L.y, hit = L.hit
+    seen = L.seen
     why = { y: Math.round(y), vh: innerHeight, hit: hit ? (hit.className?.toString?.() || hit.tagName).slice(0, 50) : null }
     if (sc && saved != null) sc.scrollTop = saved
   }
@@ -190,6 +204,13 @@ try {
     if (r && !r.error && r.moved) bit++
   }
   if (bit === 0) { console.error('alarmcell-probe: CONTROL FAILED — with the cell’s height taken off no alarm moved Stop TX; the check cannot fail'); code = code || 1 }
+  {
+    const [name, route, scale, loc, size] = REACH_CONTROL
+    const [r] = await sweep(name, route, scale, [size], [loc], UNPAINTED)
+    const caught = r && !r.error && r.hidden
+    console.log(`alarmcell-probe: CONTROL ${name} ${size.join('×')} ${scale} % ${loc}, the words unpainted: ${r?.error ?? (caught ? 'judged hidden at every scroll position (caught)' : 'judged seen')}`)
+    if (!caught) { console.error('alarmcell-probe: CONTROL FAILED — unpainted alarm words were judged seen; the reach check cannot fail'); code = code || 1 }
+  }
   if (code === 0) console.log(`alarmcell-probe: PASS — a transmitter alarm coming and going leaves every operating screen's TX strip the same height and Stop TX where it was, its words on screen, in all ${LOCALES.length} languages at ${SCALES.join(' and ')} % (${SIZES.map((s) => s.join('×')).join(', ')}); the cell without its height moves Stop TX (control, ${bit} of ${CONTROL.length})`)
   process.exitCode = code
 } finally {
