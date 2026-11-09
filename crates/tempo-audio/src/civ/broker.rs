@@ -1962,8 +1962,12 @@ impl CivDaemon {
         // pseudo-terminal at all (`ENOTTY` from serialport's speed ioctl), so the open would
         // fail at every rate. Baud 0 is serialport's own "set no rate". It is also a bus
         // another program may share ([`Link::shared`]). A real port keeps the operator's baud.
-        let virtual_port = crate::ports::has_no_modem_lines(port_name);
-        let mut port = serialport::new(port_name, open_baud(baud, virtual_port))
+        // Opened by the node it was classified as, never by a repointable name
+        // ([`crate::ports::virtual_port_node`]).
+        let virtual_node = crate::ports::virtual_port_node(port_name);
+        let virtual_port = virtual_node.is_some();
+        let opened = virtual_node.as_deref().unwrap_or(port_name);
+        let mut port = serialport::new(opened, open_baud(baud, virtual_port))
             .timeout(super::engine::READ_TIMEOUT)
             .open()
             .map_err(std::io::Error::other)?;
@@ -2197,6 +2201,15 @@ impl Drop for CivDaemon {
 
 #[cfg(test)]
 mod tests {
+    /// A virtual port opens with NO baud set (macOS refuses one on a pseudo-terminal, so a rate
+    /// here is a port that never opens there); a real port opens at the operator's.
+    #[cfg(feature = "serial")]
+    #[test]
+    fn a_virtual_port_opens_with_no_baud_and_a_real_one_at_the_operators() {
+        assert_eq!(super::open_baud(115_200, true), 0);
+        assert_eq!(super::open_baud(115_200, false), 115_200);
+    }
+
     /// The cached dial stands in for ONE crowded moment, never for a radio that is off.
     #[test]
     fn a_timed_out_dial_read_serves_the_cache_only_briefly() {

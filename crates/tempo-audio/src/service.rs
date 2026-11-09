@@ -1059,10 +1059,24 @@ fn daemon_is_foreign(
 ) -> bool {
     let model_differs = d.model.is_some_and(|m| m != want_model);
     let device_differs = match (&d.device, want_port) {
-        (Some(dev), want) if !want.is_empty() && !is_network => dev != want,
+        (Some(dev), want) if !want.is_empty() && !is_network => {
+            dev != want && !same_node(dev, want)
+        }
         _ => false,
     };
     model_differs || device_differs
+}
+
+/// Do two paths name the same file once every symlink is resolved? A virtual port's daemon is
+/// started on the pseudo-terminal node itself (`-r /dev/pts/N`), never on the `rig-pty1` link the
+/// settings name ([`crate::ports::virtual_port_node`]), and a udev `by-id` link names its ttyUSB
+/// the same way: one radio under two names is not a different radio. A path that does not
+/// resolve matches nothing.
+fn same_node(a: &str, b: &str) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }
 
 /// operator's instruction, and comparing it against the real rig behind the daemon would refuse
@@ -25341,6 +25355,33 @@ mod tests {
             !daemon_is_foreign(1049, "/dev/cu.usbserial-A", false, &d(None, None)),
             "nothing known at all — the honest answer is share, and let the CAT probe judge"
         );
+
+        // ── SILENT: one radio under two names. A virtual port's daemon runs on the node the
+        // settings' link resolves to; a link to ANOTHER node is still another radio.
+        #[cfg(unix)]
+        {
+            let dir = std::env::temp_dir().join(format!("nexus-same-node-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("temp dir");
+            let (node, other, link) = (dir.join("pts-3"), dir.join("pts-4"), dir.join("rig-pty1"));
+            std::fs::write(&node, b"").expect("node");
+            std::fs::write(&other, b"").expect("other");
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(&node, &link).expect("symlink");
+            let (node_s, other_s, link_s) = (
+                node.to_string_lossy().into_owned(),
+                other.to_string_lossy().into_owned(),
+                link.to_string_lossy().into_owned(),
+            );
+            assert!(
+                !daemon_is_foreign(3073, &link_s, false, &d(Some(3073), Some(&node_s))),
+                "the daemon on the node the link names is this radio's"
+            );
+            assert!(
+                daemon_is_foreign(3073, &link_s, false, &d(Some(3073), Some(&other_s))),
+                "a daemon on another node is another radio"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]

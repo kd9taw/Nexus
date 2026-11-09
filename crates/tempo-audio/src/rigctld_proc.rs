@@ -1655,6 +1655,14 @@ pub fn spawn_rigctld(
     want: ControlLines,
 ) -> std::io::Result<RigctldProc> {
     let ptt_line = keying.ptt_line;
+    // A virtual port is opened by the node it was classified as, never by a name that could be
+    // repointed at a real tty between the check and rigctld's open
+    // ([`crate::ports::virtual_port_node`]).
+    let virtual_node = if network || addr.is_empty() {
+        None
+    } else {
+        crate::ports::virtual_port_node(addr)
+    };
     // Ask the daemon about the rig BEFORE launching it, so it cannot come up holding the
     // transmitter keyed (see [`SettableLines`]). Skipped where there is no control line at
     // all: a TCP transport, or a model that needs no port.
@@ -1676,10 +1684,11 @@ pub fn spawn_rigctld(
         if let Some(why) = handshake_refusal(&want) {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, why));
         }
-        let want = holds_for_port(want, crate::ports::has_no_modem_lines(addr));
+        let want = holds_for_port(want, virtual_node.is_some());
         resolve_lines(settable_lines_for(model, ptt_line), want, deliberate)
     };
-    let args = rigctld_args(model, addr, baud, tcp_port, network, ptt_line, lines);
+    let opened = virtual_node.as_deref().unwrap_or(addr);
+    let args = rigctld_args(model, opened, baud, tcp_port, network, ptt_line, lines);
     let bin = resolve_rigctld();
     // Say so, so a flash can be dated. Operator report 2026-08-19: "moving to cw, I saw an ultra
     // quick flash of what looked like a terminal screen". A line per spawn turns a flash into a

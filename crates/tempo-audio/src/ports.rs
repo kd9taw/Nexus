@@ -376,14 +376,26 @@ fn expand_home_with(port: String, home: Option<&std::ffi::OsStr>) -> String {
 /// pseudo-terminals (its virtual COM pairs emulate the lines), and a build that cannot
 /// enumerate cannot do step 1.
 pub fn has_no_modem_lines(port: &str) -> bool {
+    virtual_port_node(port).is_some()
+}
+
+/// [`has_no_modem_lines`], answering with the pseudo-terminal node it classified (the resolved
+/// path, `/dev/pts/N` or `/dev/ttysNNN`) for a virtual port, and `None` for every real one.
+///
+/// ⚠️ A caller that opens a virtual port opens THIS path, not the name it was given. The name
+/// may be a symlink (wfview's `rig-pty1`), and a symlink can be repointed between the check and
+/// the open; the node itself cannot stop being a pseudo-terminal, so what is opened without the
+/// holds is always what was classified.
+pub fn virtual_port_node(port: &str) -> Option<String> {
     #[cfg(all(unix, feature = "serial"))]
     {
         let hardware = || match serialport::available_ports() {
             Ok(ports) => ports.into_iter().map(|p| p.port_name).collect(),
             Err(_) => Vec::new(),
         };
-        let absent = lacks_modem_lines_with(port, hardware, char_device_major);
-        if absent {
+        let node = virtual_node_with(port, hardware, char_device_major)
+            .map(|p| p.to_string_lossy().into_owned());
+        if node.is_some() {
             static NOTED: std::sync::Once = std::sync::Once::new();
             NOTED.call_once(|| {
                 tempo_core::applog::info(
@@ -395,35 +407,35 @@ pub fn has_no_modem_lines(port: &str) -> bool {
                 );
             });
         }
-        absent
+        node
     }
     #[cfg(not(all(unix, feature = "serial")))]
     {
         let _ = port;
-        false
+        None
     }
 }
 
-/// [`has_no_modem_lines`] with the enumeration and the `stat` as parameters, so the real-port
+/// [`virtual_port_node`] with the enumeration and the `stat` as parameters, so the real-port
 /// arms are testable with a fake device. `major` answers `Some(major)` for a character device
 /// and `None` for anything else; it is asked only of a path the enumeration did not list.
 #[cfg(unix)]
 #[cfg_attr(not(feature = "serial"), allow(dead_code))]
-fn lacks_modem_lines_with(
+fn virtual_node_with(
     port: &str,
     hardware: impl FnOnce() -> Vec<String>,
     major: impl FnOnce(&std::path::Path) -> Option<i64>,
-) -> bool {
+) -> Option<std::path::PathBuf> {
     let port = port.trim();
     if port.is_empty() {
-        return false;
+        return None;
     }
     let named = std::path::Path::new(port);
     let real = std::fs::canonicalize(named).unwrap_or_else(|_| named.to_path_buf());
     let listed = hardware()
         .iter()
         .any(|h| std::path::Path::new(h) == named || std::path::Path::new(h) == real);
-    !listed && major(&real).is_some_and(|m| is_pty_slave(&real, m))
+    (!listed && major(&real).is_some_and(|m| is_pty_slave(&real, m))).then_some(real)
 }
 
 /// The node's character-device major number, from `stat` alone (the device is not opened).
@@ -1064,6 +1076,16 @@ mod tests {
         assert_eq!(x("COM5", home), "COM5");
     }
 
+    /// [`virtual_node_with`] as a yes/no, for the cases that only ask whether.
+    #[cfg(unix)]
+    fn lacks_modem_lines_with(
+        port: &str,
+        hardware: impl FnOnce() -> Vec<String>,
+        major: impl FnOnce(&std::path::Path) -> Option<i64>,
+    ) -> bool {
+        virtual_node_with(port, hardware, major).is_some()
+    }
+
     /// ⭐ TRANSMIT SAFETY: a port shaped like a real one keeps its RTS/DTR holds. A port the OS
     /// lists as hardware, reached through a symlink, is real and its node is not even looked
     /// at. Unlisted, only a character device with the pty-slave major is virtual: a USB serial,
@@ -1196,6 +1218,11 @@ mod tests {
         assert_eq!(opens, 0, "the pty was opened to classify it");
         assert!(virtual_port, "{slave} behind a symlink is virtual");
         assert!(has_no_modem_lines(&slave));
+        // What a caller opens is the node classified, never the repointable link.
+        assert_eq!(
+            virtual_port_node(&link.to_string_lossy()).map(std::path::PathBuf::from),
+            Some(std::fs::canonicalize(&slave).expect("slave"))
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

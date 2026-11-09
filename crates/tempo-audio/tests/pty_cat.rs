@@ -255,6 +255,13 @@ fn rigctld_opens_a_virtual_port_with_the_hold_low_default_and_reads_the_dial() {
         ControlLines::hold_low(),
     )
     .expect("spawn rigctld");
+    // The daemon opens the pty node it was classified as, not the repointable link.
+    let served = tempo_audio::rigctld_proc::daemon_serving_port(tcp).and_then(|d| d.device);
+    assert_eq!(
+        served.map(std::path::PathBuf::from),
+        Some(std::fs::canonicalize(&slave).expect("slave")),
+        "rigctld -r"
+    );
     let answer = ask_dial(&format!("127.0.0.1:{tcp}"), Duration::from_secs(15));
     let said = daemon.said().join("\n");
     assert!(

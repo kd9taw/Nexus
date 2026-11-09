@@ -120,7 +120,9 @@ wfview gives Nexus the radio in two ways. Pick one; don't use both at once.
 **Rig Model: NET rigctl**, **Network Address** `127.0.0.1:4533`. The RF pane then shows the sound card's spectrum, not
 the radio's scope.
 
-**Rig control and the radio's scope through wfview's virtual serial port:**
+**Rig control, and perhaps the radio's scope, through wfview's virtual serial port.** Not yet tried with wfview
+itself, on a Mac or on Linux. It has been tested on Linux against a simulated radio behind a virtual port, so
+treat the steps below as what should happen, and please report what your station does.
 
 1. In wfview, turn on its virtual serial port. On a Mac it appears as `~/Downloads/rig-pty1`, on Linux as
    `~/rig-pty1` (the number can differ). Use that name, not the `/dev/ttys…` it points at, which changes every time
@@ -129,12 +131,15 @@ the radio's scope.
    into **Serial Port**. Nexus fills in the `~` itself, and Save does not warn that the port is missing just because
    it isn't in the list. The baud rate doesn't matter: a virtual port has none.
 3. For the radio's scope, turn on **Native Icom CI-V (early access)**. Nexus then reads the scope through the same
-   port, and it never turns the radio's scope off, so wfview's waterfall keeps running. Changing the span or the
-   reference level in Nexus moves wfview's display too: it is one scope.
+   port, if wfview passes the scope data on to it, which the check below tells you. Nexus never sends the radio's
+   scope-off command on a virtual port, so that wfview's waterfall should keep running; not yet tried with wfview.
+   A span or reference-level change from Nexus goes to the radio's one scope, so it is expected to move wfview's
+   display too; also not yet tried.
 4. **Save**, then **Test CAT**. If it fails, Test CAT says the port is virtual and has no baud rate: check that
    wfview is running and connected to the radio, and that the name is the one wfview made.
 
-Whether wfview passes the scope on to its virtual port depends on how the radio addresses it. To check, on a Mac with
+Whether wfview passes the scope on to its virtual port depends on how the radio addresses it, and nobody has checked
+yet. This check is how to find out. On a Mac with
 wfview's own scope running and Nexus not connected, run this in Terminal:
 
 ```
