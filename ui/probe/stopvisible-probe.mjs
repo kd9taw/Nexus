@@ -32,6 +32,9 @@
 // AND THE HEADER-CHANGE GUARD (FT at 100 % and fit, 1024×768 and 1366×768, en/ru, CAT lost and the alarms): Stop TX stands
 // where a fresh layout (the window resized away and back) puts it, so the waterfall's divider re-fit to the header.
 //
+// AND THE STOP LAYER (a modal open): one real click at Stop TX on FT's parked line, and at Stop TX and SSTV's own Stop in its
+// squeezed bar while sending, stops exactly once.
+//
 // THE CONTROLS, run every time: a planted box over Stop TX on FT at 900×600 / 175 % must be caught, and so must the
 // shell's scroll padding taken away there (a Tab stop behind the parked line). If one is not, its check cannot fail and
 // the probe says so instead of passing.
@@ -95,6 +98,8 @@ export function subscribeSnapshot(fn: any): () => void { __subs.push(fn); return
     'export async function getJttyState(): Promise<any> { return { ...jtty, ...(globalThis as any).__jttyOver, ...(globalThis as any).__modeOver?.jtty } }')
 // APRS reads its station list and health on mount: the APRS map probe's answers (a small local net), appended as it does.
 stubPatched += '\n' + (await readFile(join(UI, 'probe', 'aprsmap-api.ts'), 'utf8'))
+// The stops are COUNTED, for the stop layer's check: Stop TX's halt and SSTV's own Stop.
+stubPatched += "\nlet __halts = 0, __sstvStops = 0\n;(globalThis as any).__probeStops = () => ({ halts: __halts, sstv: __sstvStops })\nexport async function haltTx(): Promise<any> { __halts += 1; return snapshot }\nexport async function sstvStop(): Promise<any> { __sstvStops += 1; return sstv }\n"
 // An FT contact in progress has the recall card look its partner up; the generated `{}` answers crash it.
 stubPatched += "\nexport async function resolveEntity(): Promise<any> { return 'United States' }\nexport async function qrzLookup(): Promise<any> { return null }\n"
 for (const seam of ['__push', '__modeOver?.sstv', '__modeOver?.jtty']) if (!stubPatched.includes(seam)) throw new Error(`stopvisible: the stub seam ${seam} did not apply; probe/waterfalls-api.ts changed shape`)
@@ -138,12 +143,16 @@ const STATES = {
     mode: { sstv: { txNotice: DROPPED }, jtty: { tx: { refusal: REFUSAL, txHz: 1500, serial: 1, sending: false, live: false, left: 0, pending: '', notice: null } } } },
 }
 
+/** What lifts every element into hit-testing while the probe reads (a notice that lets clicks through still hides what
+ *  is under it), except the stop layer (components/StopLayer): a transparent, click-through layer over the whole window
+ *  that draws nothing while no overlay is open, so it covers nothing an operator sees or clicks. */
+const LIFT_CSS = '*:not(.stop-layer) { pointer-events: auto !important }'
 /** Every Stop TX on the page: where it is, and whether its whole face is on screen and topmost. */
 const MEASURE = `(() => {
   if (!document.documentElement.getAttribute('data-viewport')) return null
   const stops = [...document.querySelectorAll('.op-btn.stop')].filter((b) => b.closest('[hidden]') == null && b.getBoundingClientRect().width > 0)
   if (!stops.length) return { vp: document.documentElement.getAttribute('data-viewport'), stops: [] }
-  const lift = document.createElement('style'); lift.textContent = '* { pointer-events: auto !important }'; document.head.appendChild(lift)
+  const lift = document.createElement('style'); lift.textContent = ${JSON.stringify(LIFT_CSS)}; document.head.appendChild(lift)
   const name = (t) => !t ? 'nothing' : (t.closest('.sstv-tx-bar') ? 'sstv-tx-bar>' : t.closest('.cockpit-txdock, .cockpit-txdock-keep') ? 'dock>' : '') + (String(t.className || '').split(' ')[0] || t.tagName).slice(0, 32)
   const rows = stops.map((b) => {
     const q = b.getBoundingClientRect()
@@ -170,8 +179,9 @@ const MEASURE = `(() => {
   const sq = [...document.querySelectorAll("[data-squeeze='on']")].find((x) => x.closest('[hidden]') == null)
   const own = sq?.querySelector('.sstv-tx-stop, .rtty-stop, .ph-ptt')
   const squeezed = !sq ? null : (() => { const z = sq.getBoundingClientRect().height / (sq.offsetHeight || 1); const cap = Math.round(sq.clientHeight * z)
-    const box = sq.getBoundingClientRect(); const first = [...sq.querySelectorAll('button, input, select, textarea')].find((e) => e.offsetHeight > 0)
-    const fq = first?.getBoundingClientRect(); const ctlWhole = !!fq && fq.top >= box.top - 0.5 && fq.bottom <= box.bottom + 0.5
+    // Any control of it whole inside its box, as its own scroll stands.
+    const box = sq.getBoundingClientRect()
+    const ctlWhole = [...sq.querySelectorAll('button, input, select, textarea')].some((e) => { const q = e.getBoundingClientRect(); return q.height > 0 && q.top >= box.top - 0.5 && q.bottom <= box.bottom + 0.5 })
     if (!own) return { cap, ctlWhole, stop: null }; const q = own.getBoundingClientRect(); const x = q.left + q.width / 2, y = q.top + q.height / 2
     const t = x >= 0 && y >= 0 && x < innerWidth && y < innerHeight ? document.elementFromPoint(x, y) : null
     return { cap, ctlWhole, stop: { seen: t != null && (t === own || own.contains(t)), live: !own.disabled, h: Math.round(q.height) } } })()
@@ -248,7 +258,7 @@ async function tabWalk(p) {
       const r = e.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2
       const name = ((e.getAttribute('aria-label') || e.textContent || e.tagName) + '').replace(/\\s+/g, ' ').trim().slice(0, 20) + '@' + Math.round(y)
       if (!r.width || !r.height || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return { name }
-      const lift = document.createElement('style'); lift.textContent = '* { pointer-events: auto !important }'; document.head.appendChild(lift)
+      const lift = document.createElement('style'); lift.textContent = ${JSON.stringify(LIFT_CSS)}; document.head.appendChild(lift)
       const t = document.elementFromPoint(x, y); lift.remove()
       return { name, behind: !(t === e || e.contains(t)) && !!t?.closest('.cockpit-ftstrip') && !e.closest('.cockpit-ftstrip') } })()`).catch(() => null)
     if (!f) continue
@@ -406,6 +416,54 @@ let tabControl = null
   }
 }
 
+// THE STOP LAYER OVER A PARKED STRIP AND A SQUEEZED BAR (components/StopLayer): with a modal open over the whole window,
+// a real click at Stop TX's own place on FT's parked line (900×600 / 175 %), and at Stop TX and at SSTV's own Stop in its
+// squeezed bar while SSTV is sending under an alarm (900×600 / 175 %, ru), stops exactly once, through the layer's mirror.
+// The control: the stop layer taken away, the same click stops nothing (the modal takes it).
+async function mirrorCase(route, size, scale, loc, state, sel, kind, css = null) {
+  const p = await openPage(route, size, scale, loc)
+  try {
+    let m = null
+    for (let i = 0; i < 160 && !m?.stops.length; i++) { await sleep(250); m = await p.evaluate(MEASURE).catch(() => null) }
+    const wait = await apply(p, STATES[state], route)
+    await settle(p, wait)
+    if (css) await p.evaluate(`(() => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(css)}; document.head.appendChild(s); return 1 })()`)
+    await p.evaluate(`(() => { const d = document.createElement('div'); d.setAttribute('role', 'dialog'); d.setAttribute('aria-modal', 'true'); d.className = 'probe-modal'
+      d.style.cssText = 'position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.35)'; document.body.appendChild(d); return 1 })()`)
+    await frames(p); await frames(p)
+    const at = await p.evaluate(`(() => { const b = document.querySelector(${JSON.stringify(sel)}); if (!b) return null; const q = b.getBoundingClientRect()
+      return { x: q.left + q.width / 2, y: q.top + q.height / 2, disabled: !!b.disabled, mirrors: document.querySelectorAll('.stop-layer > *').length } })()`)
+    if (!at) return { error: 'no ' + sel }
+    const before = await p.evaluate('globalThis.__probeStops()')
+    await p.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y })
+    await p.call('Input.dispatchMouseEvent', { type: 'mousePressed', x: at.x, y: at.y, button: 'left', clickCount: 1 })
+    await p.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: at.x, y: at.y, button: 'left', clickCount: 1 })
+    await sleep(300)
+    const after = await p.evaluate('globalThis.__probeStops()')
+    return { stops: after[kind] - before[kind], mirrors: at.mirrors, disabled: at.disabled, open: await p.evaluate("!!document.querySelector('.probe-modal')") }
+  } finally {
+    await p.close()
+  }
+}
+const MIRROR = [
+  ['FT parked line, Stop TX', 'operate', [900, 600], '175', 'en', 'plain', 'main.operate-cockpit .cockpit-qso .op-btn.stop', 'halts'],
+  ['SSTV squeezed bar, Stop TX', 'sstv', [900, 600], '175', 'ru', 'keyedAlarm', 'main.sstv-view .cockpit-txstrip .op-btn.stop', 'halts'],
+  ['SSTV squeezed bar, its own Stop (sending)', 'sstv', [900, 600], '175', 'ru', 'keyedAlarm', 'main.sstv-view .sstv-tx-bar .sstv-tx-stop', 'sstv'],
+]
+const mirrorReds = []
+let mirrorControl = null
+if (process.env.STOPVIS_MIRROR !== '0' && wantViews.includes('FT')) {
+  for (const [what, ...c] of MIRROR) {
+    const r = await mirrorCase(...c)
+    console.log(`stop layer — ${what}, a modal open: ${JSON.stringify(r)}`)
+    if (r.error || r.stops !== 1 || r.disabled || !r.open) mirrorReds.push(`stop layer — ${what}: with a modal open, one real click stopped ${r.stops ?? 0} times (${r.error ?? (r.disabled ? 'the stop was disabled' : !r.open ? 'the modal closed' : 'not once')})`)
+  }
+  const c = await mirrorCase(...MIRROR[0].slice(1), '.stop-layer { display: none !important }')
+  mirrorControl = c.stops === 0
+  console.log(`CONTROL — FT parked line with the stop layer taken away: the click stopped ${c.stops} times${mirrorControl ? ' (caught)' : ''}`)
+  for (const r of mirrorReds) console.log('RED ' + r)
+}
+
 await browser.stop?.()
 await server.close()
 await rm(cacheDir, { recursive: true, force: true })
@@ -436,8 +494,9 @@ if (errors) { console.log(`stopvisible: ${errors} screens never drew`); process.
   }
 }
 if (tabControl !== true) console.log('CONTROL FAILED: with the scroll padding taken away, no Tab stop landed behind FT’s parked line: the Tab check cannot fail')
+if (mirrorControl === false) console.log('CONTROL FAILED: with the stop layer taken away the click still stopped: the stop layer check cannot fail')
 if (freshControl === false) console.log('CONTROL FAILED: a stale divider value was not caught: the fresh-layout guard cannot fail')
 if (freshReds.length) console.log(`stopvisible: RED — ${freshReds.length} rows where Stop TX stood off a fresh layout`)
-if (reds.length || freshReds.length || freshControl === false || control !== true || tabControl !== true) { console.log(`stopvisible: RED — ${reds.length} rows with no Stop TX on screen and topmost`); process.exit(1) }
-console.log('stopvisible: PASS — a Stop TX fully on screen and topmost in every row, no Tab stop behind FT’s parked line, FT’s Stop TX where a fresh layout puts it after a header change; every control was caught')
+if (reds.length || freshReds.length || mirrorReds.length || mirrorControl === false || freshControl === false || control !== true || tabControl !== true) { console.log(`stopvisible: RED — ${reds.length} rows with no Stop TX on screen and topmost`); process.exit(1) }
+console.log('stopvisible: PASS — a Stop TX fully on screen and topmost in every row, no Tab stop behind FT’s parked line, FT’s Stop TX where a fresh layout puts it after a header change, one click through the stop layer stops once over a parked strip and a squeezed bar; every control was caught')
 process.exit(0)
