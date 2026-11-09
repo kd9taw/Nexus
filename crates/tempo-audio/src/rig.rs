@@ -689,8 +689,9 @@ pub struct Rig {
     /// The TX dial and TX mode the radio last confirmed (`RPRT 0`) for Nexus's held Rig split on this
     /// connection, so an over whose split writes change nothing sends none of them. Forgotten by
     /// anything that may have moved VFO B or the dial: a new or dropped connection
-    /// ([`Self::drop_connection`]), any dial, mode or control write, a raw write, a dial read that
-    /// differs, and every refused or late split write.
+    /// ([`Self::drop_connection`]), any dial or control write, a mode write other than one of the
+    /// confirmed TX mode that the radio took, a raw write, a dial read that differs, and every
+    /// refused or late split write.
     pub(crate) split_confirmed: Option<SplitConfirmed>,
     /// True when the CAT link is a NETWORK transport (rigctld → SmartSDR / remote radio), where a
     /// reply can legitimately take seconds. Serial rigs answer in milliseconds, so a serial link
@@ -2014,9 +2015,26 @@ impl Rig {
                 Ok(())
             };
         }
-        self.split_confirmed = None;
+        // ⛔ A WRITE OF THE MODE VFO B WAS CONFIRMED IN LEAVES IT CONFIRMED, once the radio has taken
+        // it: it cannot change VFO B's mode, and Call CQ's forced retune writes it just ahead of a
+        // key that would otherwise send the TX dial and mode again inside the key's budget. Any
+        // other mode forgets it, as does any answer but `RPRT 0`. A connection renewed by the write
+        // forgets it in `drop_connection`. A backend whose `M` also reaches VFO B in split puts it
+        // in this same mode, as WSJT-X 3.0.2 does on purpose (`HamlibTransceiver.cpp:940-941`).
+        // The dial write the receive-time retune sends after a mode write still forgets it.
+        if self
+            .split_confirmed
+            .as_ref()
+            .is_some_and(|c| c.tx_mode.as_deref() != Some(mode))
+        {
+            self.split_confirmed = None;
+        }
         self.mode_writes = self.mode_writes.wrapping_add(1);
-        let reply = self.command_permitted(&mode_line(mode, passband_hz), None, permission)?;
+        let reply = self.command_permitted(&mode_line(mode, passband_hz), None, permission);
+        if !reply.as_deref().is_ok_and(reply_ok) {
+            self.split_confirmed = None;
+        }
+        let reply = reply?;
         if reply_ok(&reply) || (permission.is_none() && reply.is_empty()) {
             Ok(())
         } else {
