@@ -2861,6 +2861,120 @@ fn apply_brings_the_eqsl_card_and_not_the_senders_sent_mark() {
     );
 }
 
+/// W1AW's card of 18:01 with what eQSL says of it: AG, its sender's message and grid, and the day
+/// eQSL took it in, 2026-10-02.
+fn inbox_card_with_facts() -> String {
+    adif_row(
+        "W1AW",
+        "20m",
+        "FT8",
+        "180100",
+        "<RST_SENT:3>-10<QSL_SENT:1>Y<QSL_SENT_VIA:1>E<QSLMSG:10>TNX QSO 73<APP_EQSL_AG:1>Y\
+         <GRIDSQUARE:6>FN31pr<EQSL_QSL_RCVD:1>Y<EQSL_QSLRDATE:8>20261002",
+    )
+}
+
+/// What a contact holds of an eQSL card: the day eQSL took it in, its AG mark, the sender's
+/// message, and the contact's grid.
+fn card_facts_of(r: &QsoRecord) -> [Option<String>; 4] {
+    let extra = |name: &str| {
+        r.extra
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.clone())
+    };
+    [
+        extra("EQSL_QSLRDATE"),
+        extra("APP_EQSL_AG"),
+        extra("QSLMSG_RCVD"),
+        r.grid.clone(),
+    ]
+}
+
+/// What [`inbox_card_with_facts`] leaves on the contact it confirms.
+fn facts_the_card_leaves() -> [Option<String>; 4] {
+    ["20261002", "Y", "TNX QSO 73", "FN31pr"].map(|v| Some(v.to_string()))
+}
+
+/// ★ An eQSL sync keeps what a card says of itself on the contact it confirms, in the store: the
+/// day eQSL took it in, its AG mark, the sender's message (as `QSLMSG_RCVD`, never the operator's
+/// own `QSLMSG`); and the contact's empty grid takes the sender's.
+#[test]
+fn an_eqsl_sync_keeps_what_the_card_says_of_itself() {
+    let d = Dir::new("eqsl-sync-card-facts");
+    let engine = holding(
+        &d,
+        &contacts(&[adif_row("W1AW", "20m", "FT8", "180000", "")]),
+    );
+    let inbox = eqsl_answer(&[inbox_card_with_facts()]);
+    let (summary, durability) = until_written(|| merge_eqsl_report(&engine, &inbox));
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    assert_eq!(summary.expect("merged").newly_confirmed_any, 1, "premise");
+    let held = engine.stored_records();
+    assert_eq!(card_facts_of(&held[0]), facts_the_card_leaves());
+    assert!(
+        !held[0].extra.iter().any(|(k, _)| k == "QSLMSG"),
+        "{:?}",
+        held[0].extra
+    );
+}
+
+/// ★ Check confirmations' Apply merges eQSL's InBox as the sync does, so the contact the card
+/// confirms keeps the same facts of it.
+#[test]
+fn apply_keeps_what_the_eqsl_card_says_of_itself_as_the_sync_does() {
+    use tempo_core::reconcile::check::Channel;
+    let d = Dir::new("eqsl-apply-card-facts");
+    let engine = holding(
+        &d,
+        &contacts(&[adif_row("W1AW", "20m", "FT8", "180000", "")]),
+    );
+    let inbox = eqsl_answer(&[inbox_card_with_facts()]);
+    let lines =
+        station::check_eqsl_confirmations(&crate::engine::log_plan(&engine), &inbox, Some("K2DEF"))
+            .expect("the check reads the log")
+            .check
+            .lines;
+    assert!(lines.is_empty(), "nothing to take off: {lines:#?}");
+    let (applied, durability) =
+        apply_confirmation_check(&engine, &[(Channel::Eqsl, inbox)], &lines, APPLIED_AT);
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    applied.expect("applied");
+    let held = engine.stored_records();
+    assert_eq!(card_facts_of(&held[0]), facts_the_card_leaves());
+}
+
+/// ★ A log from another program that says a contact went to eQSL (`EQSL_QSL_SENT` "Y") imports
+/// as an upload already made, so the catch-up sweep sends eQSL only what it does not hold: moving
+/// a log to Nexus and saving the eQSL password no longer sends it all to eQSL again. The file's
+/// "N" ("do not upload") and a contact with no mark are owed, as before.
+#[test]
+fn the_catch_up_passes_by_what_another_logger_sent_to_eqsl() {
+    use crate::engine::upload_legs::EQSL;
+    let d = Dir::new("eqsl-sent-import");
+    let engine = holding(&d, &[]);
+    let file = adif_header()
+        + &adif_row(
+            "W1ABC",
+            "20m",
+            "FT8",
+            "120000",
+            "<EQSL_QSL_SENT:1>Y<EQSL_QSLSDATE:8>20261002",
+        )
+        + &adif_row("W1XYZ", "20m", "FT8", "130000", "<EQSL_QSL_SENT:1>N")
+        + &adif_row("K1DEF", "20m", "FT8", "140000", "");
+    let (made, durability) = until_written(|| import_adif(&engine, &file));
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    assert_eq!(made.expect("imported").0, 3, "premise: all three added");
+    let rows = engine_lock(&engine).log_rows();
+    let swept: Vec<String> = station::catch_up_records(&rows, EQSL, 256, Default::default())
+        .expect("the store reads")
+        .into_iter()
+        .map(|(r, _)| r.call)
+        .collect();
+    assert_eq!(swept, ["W1XYZ", "K1DEF"]);
+}
+
 /// ★ Apply takes off only what the operator ticked, service by service. #400's pair on W1AW has
 /// every service's confirmation of 18:00 on 06:00, each put there by 1.17.0's matcher, and K1ABC
 /// holds eQSL's card of a 15:00 QSO this log lacks. Of the four lines only 06:00's eQSL line is

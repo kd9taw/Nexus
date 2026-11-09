@@ -74,6 +74,7 @@ export const ACTIONS_TRACK = 'minmax(80px, 80px)'
 const CALL_TRACK = 'minmax(96px, 1fr)'
 const DATE_TRACK = 'minmax(84px, 1fr)'
 const TIME_TRACK = 'minmax(64px, 0.6fr)'
+const QSL_TRACK = 'minmax(88px, 0.7fr)'
 
 /** Every column, in the order the table shows them. */
 export const LOG_COLUMNS: readonly LogColumn[] = [
@@ -87,7 +88,10 @@ export const LOG_COLUMNS: readonly LogColumn[] = [
   { id: 'date', labelKey: 'logbook.column.date', track: DATE_TRACK, minPx: 56, group: 'contact', base: true, sort: 'time' },
   { id: 'time', labelKey: 'logbook.column.time', track: TIME_TRACK, minPx: 40, group: 'contact', base: true, sort: 'time' },
   { id: 'park', labelKey: 'logbook.column.park', track: '0.9fr', minPx: 40, group: 'location', base: true, sort: 'park' },
-  { id: 'qsl', labelKey: 'logbook.column.qsl', track: '0.7fr', minPx: 32, group: 'qsl', base: true, narrow: true, sort: 'qsl' },
+  // The QSL track's 88px floor is MEASURED (headless Chrome, 2026-10-14): its widest mark,
+  // "L·C·AG·Q" with the sent card's "✉E" beside it, is 77.4px on the widest sans face installed,
+  // and a bare 0.7fr gave it 31-38px, so the cell's ellipsis cut a confirmation off.
+  { id: 'qsl', labelKey: 'logbook.column.qsl', track: QSL_TRACK, minPx: 32, group: 'qsl', base: true, narrow: true, sort: 'qsl' },
   // The old "More columns" block, in its order.
   { id: 'end', labelKey: 'logbook.column.end', track: '0.9fr', minPx: 40, group: 'contact', more: true, sort: 'end' },
   { id: 'myGrid', labelKey: 'logbook.column.myGrid', track: '0.8fr', minPx: 40, group: 'station', more: true, sort: 'myGrid' },
@@ -392,6 +396,12 @@ export function adifNumber(v: string): number | null {
   if (/^[+-]?0[xob]/i.test(v.trim())) return null
   const n = Number(v)
   return Number.isFinite(n) ? n : null
+}
+
+/** Whether eQSL marks the card that confirms `q` Authenticity Guaranteed: the mark an eQSL merge
+ *  keeps on the contact (`APP_EQSL_AG:Y`, `tempo_core::logbook::EQSL_AG_FIELD`). */
+export function eqslAg(q: LoggedQso): boolean {
+  return extraTag(q, 'APP_EQSL_AG')?.toUpperCase() === 'Y'
 }
 
 /** An ADIF date (`YYYYMMDD`) as the table prints dates; anything else as it came. */

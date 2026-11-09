@@ -578,10 +578,43 @@ pub(crate) fn apply_match(rec: &mut QsoRecord, inc: &QsoRecord, sum: &mut Reconc
 /// contacts with one call reconcile against two distinct report rows). Unmatched
 /// confirmations become orphans (a "why is this missing?" diagnostic) — they are
 /// NOT added, because a LoTW/eQSL confirmation of a QSO we never logged is a gap to
-/// surface, not a contact to fabricate.
+/// surface, not a contact to fabricate. What an eQSL card says of itself beyond [`apply_match`]'s
+/// stays on the contact it lands on ([`keep_eqsl_card`]): this is the merge of eQSL's InBox, for
+/// its sync, Check confirmations' Apply and an InBox imported by hand.
 pub fn reconcile<R: StoredRecord>(local: &mut [R], incoming: &[QsoRecord]) -> ReconcileSummary {
     let pairs = pair_report(local, incoming);
-    merge_pairs(local, incoming, pairs, |_| true, |_, _| {})
+    merge_pairs(local, incoming, pairs, |_| true, keep_eqsl_card)
+}
+
+/// What an eQSL card says of itself, kept by [`reconcile`] on the contact the card lands on
+/// (`crate::logbook::report_rows` puts it on the card's row), beyond the received day and the AG
+/// mark [`apply_match`] keeps: the sender's message ([`crate::eqsl::MESSAGE`]), set only where the
+/// contact has none, as [`apply_match`] fills a state and a country; and the sender's grid, a valid
+/// locator only, on a contact with none. Only for a row confirming on eQSL: every InBox row does.
+///
+/// Not in [`apply_match`], which also takes in the operator's own file (an import, a shared log's
+/// recovery from disk) and QRZ's book, whose copies of these fields are not eQSL's word.
+fn keep_eqsl_card(rec: &mut QsoRecord, inc: &QsoRecord) {
+    use crate::logbook::{extra_field, set_extra};
+    if !inc.qsl_rcvd.eqsl {
+        return;
+    }
+    let message = crate::eqsl::MESSAGE;
+    if extra_field(rec, message).is_none_or(|v| v.trim().is_empty()) {
+        if let Some(sent) = extra_field(inc, message).filter(|v| !v.trim().is_empty()) {
+            set_extra(rec, message, Some(sent.to_string()));
+        }
+    }
+    if rec.grid.as_deref().is_none_or(|g| g.trim().is_empty()) {
+        if let Some(grid) = inc
+            .grid
+            .as_deref()
+            .map(str::trim)
+            .filter(|g| crate::message::is_valid_grid(g))
+        {
+            rec.grid = Some(grid.to_string());
+        }
+    }
 }
 
 /// LoTW's [`reconcile`]: a row lands only on a contact made under the call it names

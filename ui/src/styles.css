@@ -9795,6 +9795,19 @@ select optgroup {
   white-space: nowrap;
   border: 0;
 }
+/* Cancel and the action button hold to the bottom of the scrolling box: a list of thousands of
+   contacts otherwise puts them 180,000px below the window when it opens (measured, 5,000 eQSL
+   sent marks). The box's own background, so the lines scrolled under them do not show through,
+   carried down over the box's bottom padding (the negative inset and margin), where a line would
+   otherwise show below the buttons. At rest the buttons sit where they did. Held by
+   styles-review-actions.test.tsx. */
+.park-review .logconfirm-actions {
+  position: sticky;
+  bottom: calc(-1 * var(--space-5));
+  margin-bottom: calc(-1 * var(--space-5));
+  padding: var(--space-3) 0 var(--space-5);
+  background: var(--bg-elev);
+}
 .park-review-list {
   list-style: none;
   margin: 0;

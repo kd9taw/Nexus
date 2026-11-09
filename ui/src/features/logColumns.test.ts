@@ -35,6 +35,17 @@ const OLD_NARROW = 'minmax(96px, 1fr) 1.3fr 0.7fr 0.7fr 1fr minmax(80px, 80px)'
 const OLD_WIDE =
   'minmax(96px, 1fr) 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr minmax(84px, 1fr) minmax(64px, 0.6fr) 0.9fr 0.7fr 0.9fr 0.8fr 1.1fr 1fr 1fr 0.5fr 0.6fr 0.8fr 1.4fr minmax(80px, 80px)'
 
+/** The one track that moved since: the QSL column's, which gained an 88px floor so every mark
+ *  fits ("L·C·AG·Q" beside the sent card's "✉E", measured at 77.4px). `old`'s QSL track, at
+ *  `i`, as it is now. */
+const QSL_FLOOR = 'minmax(88px, 0.7fr)'
+const withQslFloor = (old: string, i: number) => {
+  const tracks = old.split(/ (?![^(]*\))/)
+  expect(tracks[i]).toBe('0.7fr')
+  tracks[i] = QSL_FLOOR
+  return tracks.join(' ')
+}
+
 const template = (saved: LogColumnsSaved, narrow = false) =>
   logGridTemplate(renderedColumns(saved, narrow), saved, narrow)
 /** A template's tracks: split on the spaces outside `minmax(…)`. */
@@ -43,20 +54,20 @@ const ids = (saved: LogColumnsSaved, narrow = false) => renderedColumns(saved, n
 
 describe('the defaults are the table the Logbook had', () => {
   it('nothing saved: the compact template, track for track', () => {
-    expect(template(DEFAULT_LOG_COLUMNS)).toBe(OLD_COMPACT)
+    expect(template(DEFAULT_LOG_COLUMNS)).toBe(withQslFloor(OLD_COMPACT, 10))
     expect(logTableMinWidth(renderedColumns(DEFAULT_LOG_COLUMNS, false), DEFAULT_LOG_COLUMNS)).toBeNull()
   })
 
   it('at sm/xs: the six columns and the template the narrow rules kept', () => {
     expect(ids(DEFAULT_LOG_COLUMNS, true)).toEqual(['call', 'country', 'band', 'qsl', 'notes', 'actions'])
-    expect(template(DEFAULT_LOG_COLUMNS, true)).toBe(OLD_NARROW)
+    expect(template(DEFAULT_LOG_COLUMNS, true)).toBe(withQslFloor(OLD_NARROW, 3))
   })
 
   it('"More columns" on in this browser: the wide table, at the width it always had', () => {
     const more = legacyLogColumns(true)
-    expect(template(more)).toBe(OLD_WIDE)
+    expect(template(more)).toBe(withQslFloor(OLD_WIDE, 10))
     // …and at a narrow window it still shows every column, scrolling sideways.
-    expect(template(more, true)).toBe(OLD_WIDE)
+    expect(template(more, true)).toBe(withQslFloor(OLD_WIDE, 10))
     expect(logTableMinWidth(renderedColumns(more, false), more)).toBe('calc(117.53rem + 80px)')
     expect(legacyLogColumns(false)).toEqual(DEFAULT_LOG_COLUMNS)
   })

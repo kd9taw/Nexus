@@ -417,3 +417,29 @@ describe('the contact card’s per-field ✕ / ↺', () => {
     expect(px(resolved(remove, 'height')), 'and 24 px tall').toBeGreaterThanOrEqual(24)
   })
 })
+
+describe('the contact card says what eQSL said of the card that confirms it', () => {
+  const fact = (card: HTMLElement, label: string) =>
+    [...card.querySelectorAll('dt')].find((dt) => dt.textContent === label)?.nextElementSibling?.textContent ?? null
+
+  it('its Authenticity-Guaranteed mark and the sender’s message, beside eQSL’s confirmation', async () => {
+    const row = await renderLog({
+      id: 'id-1',
+      confirmed: true,
+      qslRcvd: { card: false, lotw: false, eqsl: true, qrz: false },
+      extra: [['APP_EQSL_AG', 'Y'], ['QSLMSG_RCVD', 'TNX QSO 73']],
+    })
+    fireEvent.doubleClick(row)
+    const card = await waitFor(() => document.querySelector<HTMLElement>('.contact-card-dialog')!)
+    expect(fact(card, t('contactCard.eqslAg'))).toBe(t('qso.detail.qsl.yes'))
+    expect(fact(card, t('contactCard.eqslMessage'))).toBe('TNX QSO 73')
+  })
+
+  it('nothing of a card the contact does not hold', async () => {
+    const row = await renderLog({ id: 'id-1', extra: [['APP_EQSL_AG', 'Y'], ['QSLMSG_RCVD', 'TNX QSO 73']] })
+    fireEvent.doubleClick(row)
+    const card = await waitFor(() => document.querySelector<HTMLElement>('.contact-card-dialog')!)
+    expect(fact(card, t('contactCard.eqslAg'))).toBeNull()
+    expect(fact(card, t('contactCard.eqslMessage'))).toBeNull()
+  })
+})

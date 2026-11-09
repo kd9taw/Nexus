@@ -1187,6 +1187,98 @@ pub(crate) fn park_state_pairs(
         .collect()
 }
 
+/// What [`holding_card_sent_marks`] reads of each contact: what the Logbook lists of it (its call,
+/// time, band and mode), and what [`tempo_core::eqsl::holds_card_sent_mark`] decides by, eQSL's
+/// confirmation and the whole sent mark, its method, date and clear included.
+const CARD_SENT_MARKS: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::sqlite::Narrow {
+    columns: &[
+        "call",
+        "when_unix",
+        "band",
+        "mode",
+        "eqsl_rcvd_raw",
+        "qsl_sent",
+        "qsl_sent_via",
+        "qsl_sent_date_unix",
+        "qsl_sent_cleared_unix",
+    ],
+    uploads: false,
+};
+
+/// The contacts holding the sent mark an eQSL card left ([`tempo_core::eqsl::holds_card_sent_mark`]),
+/// newest first, as one narrow pass reads them: the Logbook's eQSL sent-mark review, read from the
+/// store with the Engine lock released. It writes nothing: a mark is cleared only by the
+/// operator's tick ([`card_sent_pairs`]).
+///
+/// ⚠️ It reads the store: never under the Engine lock. Take `rows` ([`StationCore::log_rows`])
+/// under it.
+pub fn holding_card_sent_marks(rows: &crate::logstore::LogRows) -> Result<Vec<QsoRecord>, String> {
+    use std::ops::ControlFlow;
+    use tempo_core::logbook::sqlite::{Order, Scope};
+    let mut held = Vec::new();
+    rows.each(CARD_SENT_MARKS, Scope::All, Order::Log, &mut |r| {
+        if tempo_core::eqsl::holds_card_sent_mark(r) {
+            held.push(r.clone());
+        }
+        ControlFlow::Continue(())
+    })
+    .map_err(|e| e.to_string())?;
+    held.sort_by(|a, b| b.when_unix.cmp(&a.when_unix));
+    Ok(held)
+}
+
+/// What the Logbook's eQSL sent-mark review makes of a contact it names ([`card_sent_pairs`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardSentChange {
+    /// Clear the sent mark a card left, as the row's QSL menu clears one ([`LogOp::MarkQslSent`]
+    /// with no method): the operator's decision, at `now_unix`, which keeps a later import of a
+    /// file still holding the mark from putting it back
+    /// ([`tempo_core::logbook::QslSent::merge`]).
+    Clear { now_unix: u64 },
+    /// Undo a [`Self::Clear`] made at `cleared_unix`: the mark it took off, back as it was.
+    Restore { cleared_unix: u64 },
+}
+
+/// The rows `change` makes of `rows`: each contact still holding what the change takes, changed in
+/// its sent mark alone. A clear takes the mark a card left
+/// ([`tempo_core::eqsl::holds_card_sent_mark`]); a restore takes exactly the clear made at its
+/// time, and puts back [`tempo_core::eqsl::CARD_SENT_MARK`], the one mark a clear here takes off.
+/// A contact changed since (marked or cleared by hand, its card taken off) is left as it is: the
+/// operator ticked the mark they were shown.
+pub(crate) fn card_sent_pairs(rows: &[Arc<QsoRecord>], change: CardSentChange) -> Vec<MadeRow> {
+    rows.iter()
+        .filter_map(|row| {
+            let id = row.id?;
+            let now = match change {
+                CardSentChange::Clear { now_unix } => {
+                    if !tempo_core::eqsl::holds_card_sent_mark(row) {
+                        return None;
+                    }
+                    let clear = LogOp::MarkQslSent {
+                        id,
+                        via: None,
+                        date_unix: now_unix,
+                    };
+                    ops_on(row, &[clear])?.1?
+                }
+                CardSentChange::Restore { cleared_unix } => {
+                    let made = tempo_core::logbook::QslSent {
+                        cleared_unix: Some(cleared_unix),
+                        ..Default::default()
+                    };
+                    if row.qsl_sent != made {
+                        return None;
+                    }
+                    let mut now = QsoRecord::clone(row);
+                    now.qsl_sent = tempo_core::eqsl::CARD_SENT_MARK;
+                    now
+                }
+            };
+            Some((Arc::clone(row), Some(Arc::new(now))))
+        })
+        .collect()
+}
+
 /// What a check of one service ([`check_lotw_confirmations`] and the others) reads of a contact it
 /// only counts: its call, the call it was logged under (the station call, else the operator), its
 /// confirmations and its upload marks. LoTW's check reads every contact's station call in the same

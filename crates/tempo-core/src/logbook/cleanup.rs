@@ -1332,12 +1332,13 @@ pub fn moves(before: &QsoRecord, after: &QsoRecord, settings_call: Option<&str>)
 }
 
 /// What a service matched under a station call, beside its confirmation flag: LoTW's and eQSL's
-/// received dates, eQSL's Authenticity-Guaranteed mark and LoTW's DXCC. A paper card's date and
-/// route (`QSLRDATE`, `QSL_RCVD_VIA`) are not among them.
-pub(super) const ELECTRONIC_EXTRAS: [&str; 4] = [
+/// received dates, eQSL's Authenticity-Guaranteed mark and the eQSL sender's message, and LoTW's
+/// DXCC. A paper card's date and route (`QSLRDATE`, `QSL_RCVD_VIA`) are not among them.
+pub(super) const ELECTRONIC_EXTRAS: [&str; 5] = [
     "LOTW_QSLRDATE",
     "EQSL_QSLRDATE",
     super::EQSL_AG_FIELD,
+    crate::eqsl::MESSAGE,
     super::LOTW_DXCC_FIELD,
 ];
 

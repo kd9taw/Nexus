@@ -362,9 +362,12 @@ pub fn check_report<R: Borrow<QsoRecord>>(
 ///
 /// A confirmation line clears the service's flag, derives `confirmed` and `award_confirmed` again
 /// from the four channels, and removes the codes the line names (only a LoTW line names any). It
-/// never touches a paper card, so a contact holding one stays award-confirmed. An upload line
-/// clears LoTW's upload state, so the contact is owed to LoTW again. Nothing else about the
-/// contact moves, and each of a contact's lines still applies once another has gone first.
+/// never touches a paper card, so a contact holding one stays award-confirmed. An eQSL line also
+/// takes what the card said of itself ([`crate::eqsl::CARD_FACTS`]): left behind, it would
+/// describe a card the contact no longer holds, and stand in for the contact's own card's, which a
+/// merge sets only where the contact has none. An upload line clears LoTW's upload state, so the
+/// contact is owed to LoTW again. Nothing else about the contact moves, and each of a contact's
+/// lines still applies once another has gone first.
 pub fn uncheck(rec: &QsoRecord, line: &CheckLine) -> Option<QsoRecord> {
     if !still_shows(rec, line) {
         return None;
@@ -379,6 +382,10 @@ pub fn uncheck(rec: &QsoRecord, line: &CheckLine) -> Option<QsoRecord> {
                 .retain(|c| !line.remove.granted.contains(c));
             now.credit_submitted
                 .retain(|c| !line.remove.submitted.contains(c));
+            if channel == Channel::Eqsl {
+                now.extra
+                    .retain(|(k, _)| !crate::eqsl::CARD_FACTS.contains(&k.as_str()));
+            }
         }
         Mark::LotwUpload => now.upload.lotw = None,
     }
@@ -783,6 +790,55 @@ mod tests {
             "1.17.0 put the 18:00 contact's confirmation on the 06:00 one"
         );
         (log, rows)
+    }
+
+    /// ★ Taking eQSL's confirmation off a contact takes what that card said of itself with it: the
+    /// day eQSL took it in, its AG mark and the sender's message. Left behind, they would describe
+    /// a card the contact no longer holds, and stand in for the contact's own card's, which a merge
+    /// sets only where the contact has none. Its other fields stay, and a LoTW line leaves eQSL's
+    /// facts alone.
+    #[test]
+    fn taking_an_eqsl_confirmation_off_takes_its_cards_facts() {
+        let foreign = ("APP_OTHERLOG_KEEP".to_string(), "kept".to_string());
+        let with_facts = |mut r: QsoRecord| {
+            r.extra = [
+                ("APP_EQSL_AG", "Y"),
+                ("APP_OTHERLOG_KEEP", "kept"),
+                ("EQSL_QSLRDATE", "20241005"),
+                ("QSLMSG_RCVD", "TNX"),
+            ]
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+            r
+        };
+        let rows = vec![eqsl(w1aw_at(D, 18, 2))];
+        let log: Vec<QsoRecord> = left_by_1_17(vec![w1aw_at(D, 6, 0), w1aw_at(D, 18, 0)], &rows)
+            .into_iter()
+            .map(with_facts)
+            .collect();
+        assert!(
+            log[0].qsl_rcvd.eqsl,
+            "premise: 1.17.0 put the card on 06:00"
+        );
+        let check = check_report(&log, &rows, &[], Channel::Eqsl, OWN);
+        let line = check
+            .lines
+            .iter()
+            .find(|l| l.index == 0 && l.mark == Mark::Confirmation(Channel::Eqsl))
+            .expect("06:00 is listed");
+        let after = uncheck(&log[0], line).expect("06:00 still holds what the line shows");
+        assert_eq!(
+            (after.qsl_rcvd.eqsl, after.extra),
+            (false, vec![foreign.clone()])
+        );
+
+        // Control: LoTW's line takes LoTW's confirmation and leaves eQSL's facts.
+        let (log, rows) = the_400_pair();
+        let log = vec![with_facts(log[0].clone()), log[1].clone()];
+        let check = check_report(&log, &rows, &[], Channel::Lotw, OWN);
+        let after = uncheck(&log[0], &check.lines[0]).expect("still holds what the line shows");
+        assert_eq!((after.qsl_rcvd.lotw, &after.extra), (false, &log[0].extra));
     }
 
     #[test]

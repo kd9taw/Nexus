@@ -35426,6 +35426,110 @@ async fn cancel_confirmation_check(
     Ok(())
 }
 
+// ----- Logbook ▸ Check eQSL sent marks ------------------------------------------------------------
+// The contacts holding the "QSL sent, electronic" an eQSL card copied onto them before a card
+// stopped bringing its sender's mark (`tempo_core::eqsl::holds_card_sent_mark`), listed for the
+// operator, and cleared only by the operator's tick.
+
+/// One contact the Logbook's eQSL sent-mark review lists.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EqslSentMarkDto {
+    id: String,
+    call: String,
+    when_unix: u64,
+    band: String,
+    mode: String,
+}
+
+/// What a clear in the review made: the contacts it cleared, and the time it recorded as the
+/// operator's clear, which its Undo names ([`restore_eqsl_sent_marks`]).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EqslSentClearedDto {
+    ids: Vec<String>,
+    cleared_unix: u64,
+}
+
+/// The review's list, newest first ([`tempo_app::station::holding_card_sent_marks`]), read with
+/// the Engine lock released. It writes nothing.
+fn eqsl_sent_mark_review_on(engine: &SharedEngine) -> Result<Vec<EqslSentMarkDto>, String> {
+    let rows = engine_lock(engine).log_rows();
+    let held = tempo_app::station::holding_card_sent_marks(&rows)?;
+    Ok(held
+        .into_iter()
+        .filter_map(|r| {
+            Some(EqslSentMarkDto {
+                id: r.id?.to_string(),
+                call: r.call,
+                when_unix: r.when_unix,
+                band: r.band,
+                mode: r.mode,
+            })
+        })
+        .collect())
+}
+
+/// The Logbook's "Check eQSL sent marks": the contacts holding the sent mark an eQSL card left
+/// ([`eqsl_sent_mark_review_on`]). It reads; it never writes.
+#[tauri::command]
+async fn eqsl_sent_mark_review(
+    state: State<'_, SharedEngine>,
+) -> Result<Vec<EqslSentMarkDto>, String> {
+    let engine = Arc::clone(&state);
+    log_folds::off_the_runtime(move || eqsl_sent_mark_review_on(&engine)).await
+}
+
+/// The contacts a review names, by the ids it was given.
+fn review_ids(ids: &[String]) -> Result<Vec<tempo_core::logbook::RecordId>, String> {
+    ids.iter()
+        .map(|id| id.parse().map_err(|_| LOG_ROW_GONE.to_string()))
+        .collect()
+}
+
+/// Clear in "Check eQSL sent marks": the sent mark of each contact the operator ticked, only while
+/// it still holds the mark a card left, cleared as the row's QSL menu clears one
+/// ([`tempo_app::logwrite::card_sent_marks`]). Nothing is uploaded. What it cleared, once it is on
+/// disk.
+#[tauri::command]
+async fn clear_eqsl_sent_marks(
+    state: State<'_, SharedEngine>,
+    ids: Vec<String>,
+) -> Result<EqslSentClearedDto, String> {
+    let ids = review_ids(&ids)?;
+    let engine = Arc::clone(&state);
+    let now = u64::try_from(now_unix()).unwrap_or(0);
+    durable_command(move || {
+        let change = tempo_app::station::CardSentChange::Clear { now_unix: now };
+        let (made, durability) = tempo_app::logwrite::card_sent_marks(&engine, &ids, change);
+        let made = made.map(|ids| EqslSentClearedDto {
+            ids: ids.iter().map(ToString::to_string).collect(),
+            cleared_unix: now,
+        });
+        (made, durability)
+    })
+    .await
+}
+
+/// Undo of a clear in "Check eQSL sent marks": the mark put back on each contact of `ids` that
+/// still holds the clear made at `cleared_unix`, and on no other
+/// ([`tempo_app::logwrite::card_sent_marks`]). How many, once it is on disk.
+#[tauri::command]
+async fn restore_eqsl_sent_marks(
+    state: State<'_, SharedEngine>,
+    ids: Vec<String>,
+    cleared_unix: u64,
+) -> Result<usize, String> {
+    let ids = review_ids(&ids)?;
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let change = tempo_app::station::CardSentChange::Restore { cleared_unix };
+        let (made, durability) = tempo_app::logwrite::card_sent_marks(&engine, &ids, change);
+        (made.map(|ids| ids.len()), durability)
+    })
+    .await
+}
+
 /// Where a park or summit is: the US states, DC and Canadian provinces it lies in, as the hunter
 /// feed writes them ("US-ND"; a park on a state line names each). Empty where nothing here places
 /// it, and its contact then takes a state as every contact did before.
@@ -53787,6 +53891,9 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         confirmation_check,
         apply_confirmation_check,
         cancel_confirmation_check,
+        eqsl_sent_mark_review,
+        clear_eqsl_sent_marks,
+        restore_eqsl_sent_marks,
         get_need_alerts,
         get_all_spots,
         get_tci_spots,
@@ -68750,6 +68857,73 @@ mod tests {
                 "{name} is not registered"
             );
         }
+    }
+
+    /// Logbook ▸ Check eQSL sent marks reaches the backend only through its three commands, each
+    /// DEFINED as an `async fn` and REGISTERED, as Check confirmations' are.
+    #[test]
+    fn the_eqsl_sent_mark_commands_are_async_and_registered() {
+        let src = include_str!("lib.rs");
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        for name in [
+            "eqsl_sent_mark_review",
+            "clear_eqsl_sent_marks",
+            "restore_eqsl_sent_marks",
+        ] {
+            // Column zero, so this test's own strings cannot satisfy it.
+            assert!(
+                src.lines()
+                    .any(|l| l.starts_with(&format!("async fn {name}("))),
+                "{name} is not an async command"
+            );
+            assert!(
+                list.lines().any(|l| l.trim() == format!("{name},")),
+                "{name} is not registered"
+            );
+        }
+    }
+
+    /// ★ "Check eQSL sent marks" lists the contacts holding the sent mark an eQSL card left, newest
+    /// first, under the names the Logbook reads, and reading it writes nothing. A bureau mark
+    /// beside a card, the undated electronic mark with no card and a card with no mark are not
+    /// listed.
+    #[test]
+    fn the_eqsl_sent_mark_review_lists_only_card_marks_and_writes_nothing() {
+        let engine = fresh_engine();
+        engine.lock().unwrap().import_adif(
+            "<CALL:4>K1AA<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>20260102<TIME_ON:6>010101<QSL_SENT:1>Y<QSL_SENT_VIA:1>E<EQSL_QSL_RCVD:1>Y<EOR>\n\
+             <CALL:4>K2BB<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>20260102<TIME_ON:6>010202<QSL_SENT:1>Y<QSL_SENT_VIA:1>E<EQSL_QSL_RCVD:1>Y<EOR>\n\
+             <CALL:4>K3CC<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>20260102<TIME_ON:6>010303<QSL_SENT:1>Y<QSL_SENT_VIA:1>B<EQSL_QSL_RCVD:1>Y<EOR>\n\
+             <CALL:4>K4DD<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>20260102<TIME_ON:6>010404<QSL_SENT:1>Y<QSL_SENT_VIA:1>E<EOR>\n\
+             <CALL:4>K5EE<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>20260102<TIME_ON:6>010505<EQSL_QSL_RCVD:1>Y<EOR>\n",
+        );
+        let before = engine.lock().unwrap().stored_log();
+        let listed = crate::eqsl_sent_mark_review_on(&engine).expect("the review reads");
+        let row = |call: &str| before.iter().find(|r| r.call == call).unwrap();
+        let line = |call: &str| {
+            serde_json::json!({
+                "id": row(call).id.unwrap().to_string(),
+                "call": call,
+                "whenUnix": row(call).when_unix,
+                "band": "20m",
+                "mode": "FT8",
+            })
+        };
+        assert_eq!(
+            serde_json::to_value(&listed).unwrap(),
+            serde_json::json!([line("K2BB"), line("K1AA")])
+        );
+        assert_eq!(
+            engine.lock().unwrap().stored_log(),
+            before,
+            "reading the review writes nothing"
+        );
     }
 
     /// One hunter-feed row, spotted `age_secs` ago. The AGE is the point: both feed paths judge

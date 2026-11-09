@@ -1281,6 +1281,111 @@ pub fn park_states(
     (Err(station::LOG_BUSY.into()), Durability::default())
 }
 
+/// ★ The Logbook's eQSL sent-mark review as the operator ticked it, or its Undo: `change` made on
+/// each contact `ids` names that still holds what the change takes ([`station::card_sent_pairs`]).
+/// [`STAMP_CHUNK`] contacts to a change, as the "already uploaded" declaration is, since a log can
+/// hold thousands of these marks: each chunk planned with the Engine lock released and made under
+/// it, planned again while its contacts keep changing ([`PLANS`] plans, then it stops there), and
+/// the next planned once it is in the store. Only the sent mark moves, and nothing goes to a
+/// connector: a QSL mark is not a corrected call, and an edit re-uploads only for a call (the
+/// operator's ruling of 2026-09-10). The contacts it changed, by id: fewer than `ids` when one no
+/// longer holds what the change takes.
+///
+/// `Stamp`, as every QSL-sent mark is ([`LogOp::MarkQslSent`]): no fold reads it.
+///
+/// ⚠️ It reads the store: call it with no lock held.
+pub fn card_sent_marks(
+    engine: &Mutex<Engine>,
+    ids: &[RecordId],
+    change: station::CardSentChange,
+) -> (Result<Vec<RecordId>, String>, Durability) {
+    let (mut changed, mut durability) = (Vec::new(), Durability::default());
+    for part in ids.chunks(STAMP_CHUNK) {
+        let mut made = None;
+        for _ in 0..PLANS {
+            let plan = crate::engine::log_plan(engine);
+            let found = match plan.rows(part) {
+                Ok(found) => found,
+                Err(e) => {
+                    let why = card_sent_stopped(change, changed.len(), ids.len(), Some(e));
+                    return (Err(why), durability);
+                }
+            };
+            let rows: Vec<Arc<QsoRecord>> = part
+                .iter()
+                .filter_map(|id| found.get(id))
+                .cloned()
+                .collect();
+            let pairs = station::card_sent_pairs(&rows, change);
+            if pairs.is_empty() {
+                made = Some((Vec::new(), Durability::default()));
+                break;
+            }
+            let made_ids: Vec<RecordId> = pairs.iter().filter_map(|(row, _)| row.id).collect();
+            let bulk = pairs.len() > tempo_core::logbook::writer::CHUNK_ROWS;
+            let (ok, d) = engine_lock(engine).with_log_tickets(|e| {
+                e.station_mut()
+                    .commit_planned(
+                        &plan,
+                        tempo_core::logbook::OpClass::Stamp,
+                        pairs,
+                        bulk,
+                        Vec::new(),
+                        "eqsl sent marks",
+                    )
+                    .is_ok()
+            });
+            if ok {
+                if d.turned_back(crate::logstore::DURABLE_WAIT) {
+                    continue;
+                }
+                made = Some((made_ids, d));
+                break;
+            }
+        }
+        let Some((made_ids, d)) = made else {
+            let why = card_sent_stopped(change, changed.len(), ids.len(), None);
+            return (Err(why), durability);
+        };
+        changed.extend(made_ids);
+        // The next chunk is planned once this one is in the store, as the declaration's is.
+        let stored = d.wait_stored(crate::logstore::DURABLE_WAIT);
+        durability = durability.and(d);
+        if let Err(why) = stored {
+            let why = card_sent_stopped(change, changed.len(), ids.len(), Some(why));
+            return (Err(why), durability);
+        }
+    }
+    (Ok(changed), durability)
+}
+
+/// What [`card_sent_marks`] answers when it stopped at a chunk: `why`, the store's words, `None` for
+/// a chunk the log kept changing under (LogBusy). Before any chunk is made nothing has changed, and
+/// it says what any change says; after, the chunks made stand, and it says how far it got.
+fn card_sent_stopped(
+    change: station::CardSentChange,
+    done: usize,
+    total: usize,
+    why: Option<String>,
+) -> String {
+    let did = match change {
+        station::CardSentChange::Clear { .. } => "cleared from",
+        station::CardSentChange::Restore { .. } => "put back on",
+    };
+    match (done, why) {
+        (0, None) => station::LOG_BUSY.into(),
+        (0, Some(why)) => why,
+        (_, None) => format!(
+            "The QSL sent mark was {did} {done} of the {total} contacts, but the logbook kept \
+             changing while the rest were being changed, so they were not. Try again to finish."
+        ),
+        (_, Some(why)) => format!(
+            "The QSL sent mark was {did} {done} of the {total} contacts, but the rest could not \
+             be changed: {why}. Try again to finish."
+        ),
+    }
+}
+
 /// ★ Logbook ▸ Check confirmations' changes, as the operator ticked them: each contact still
 /// holding what its lines showed takes their change (`tempo_core::reconcile::check::uncheck`), a
 /// confirmation taken off with the credit codes its line names, or LoTW's upload mark cleared, in

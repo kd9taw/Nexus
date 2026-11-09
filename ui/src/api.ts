@@ -1714,6 +1714,39 @@ export async function cancelConfirmationCheck(): Promise<void> {
   await invoke<void>('cancel_confirmation_check')
 }
 
+/** One contact "Check eQSL sent marks" lists: it holds the "QSL sent, electronic" mark, with no
+ *  date, beside an eQSL card, the mark an eQSL card copied onto a contact in earlier versions. */
+export interface EqslSentMark {
+  id: string
+  call: string
+  whenUnix: number
+  band: string
+  mode: string
+}
+
+/** The Logbook's "Check eQSL sent marks" list, newest first. Reads; writes nothing. */
+export async function eqslSentMarkReview(): Promise<EqslSentMark[]> {
+  return invoke<EqslSentMark[]>('eqsl_sent_mark_review')
+}
+
+/** What a clear made: the contacts it cleared, and the time of the clear, which its Undo names. */
+export interface EqslSentCleared {
+  ids: string[]
+  clearedUnix: number
+}
+
+/** Clear the sent mark of the ticked contacts, each only while it still holds the mark a card
+ *  left. Nothing is uploaded. */
+export async function clearEqslSentMarks(ids: string[]): Promise<EqslSentCleared> {
+  return invoke<EqslSentCleared>('clear_eqsl_sent_marks', { ids })
+}
+
+/** Undo a clear: the mark back on each of `ids` still holding the clear made at `clearedUnix`.
+ *  How many. */
+export async function restoreEqslSentMarks(ids: string[], clearedUnix: number): Promise<number> {
+  return invoke<number>('restore_eqsl_sent_marks', { ids, clearedUnix })
+}
+
 /** The cty.dat-resolved DXCC entity for a callsign, or null — the award
  * identity the "new one" badge keys on (never the QRZ country string). */
 export async function resolveEntity(call: string): Promise<string | null> {

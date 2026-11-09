@@ -26,7 +26,8 @@ Each row is one QSO. The columns you'll use most:
 - **QSL** — *which source* confirmed the contact. It shows one of four things:
   - **L**, **C**, **E**, **Q** — LoTW, a paper card, eQSL, your QRZ logbook,
     joined by `·` when more than one channel confirmed. Hover for the
-    eligibility tooltip.
+    eligibility tooltip. An eQSL that eQSL marks Authenticity Guaranteed reads
+    **AG** in place of E, and the tooltip says the day the card arrived.
   - **✓** — award-confirmed, on an older record that predates the per-channel
     split and so cannot say which channel.
   - the word **eQSL** in yellow — confirmed, but not by LoTW or a card, on a
@@ -36,6 +37,9 @@ Each row is one QSO. The columns you'll use most:
   **eQSL is clearly labelled non-award**: it counts as a confirmation but not
   toward DXCC/WAS (ARRL doesn't accept it). Nor does a QRZ match. This matters
   — see [Awards & Journey](awards-journey.md).
+
+  A contact's card shows, for a contact eQSL confirmed, whether eQSL marks the
+  card Authenticity Guaranteed and the message its sender wrote to you.
 
 **Search** matches callsigns *and grids*. The **"needs confirmation"** chip
 beside the search box filters to contacts without an award-eligible (LoTW/paper)
@@ -216,6 +220,12 @@ choosing the method — **bureau**, **direct**, or **electronic**. The row then
 shows a quiet "QSL sent … via …" note. Marking a request sent does **not**
 confirm the contact — it stays in the "needs confirmation" list until the reply
 comes back.
+
+Earlier versions of Nexus copied the sender's own "QSL sent, electronic" mark
+from each eQSL card onto your contact. While any contact still holds such a
+mark, the Logbook shows **Check eQSL sent marks** with how many. Untick any you
+set yourself in another program, press **Clear**, and the notice afterwards
+offers **Undo**. A mark you set in Nexus carries a date and is never listed.
 
 ### Set a contact's country by hand
 

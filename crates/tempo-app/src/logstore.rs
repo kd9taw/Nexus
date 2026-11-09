@@ -2587,6 +2587,190 @@ pub(crate) mod tests {
         }
     }
 
+    /// ★ THE eQSL SENT-MARK REVIEW LISTS AND CLEARS ONLY THE MARK A CARD LEFT, AND ITS UNDO PUTS
+    /// BACK EXACTLY WHAT IT TOOK. A log as an earlier version left it: K1AA and K2BB hold the "QSL
+    /// sent, electronic" an eQSL card copied (no date) beside the card; K3CC a bureau mark beside a
+    /// card; K4DD that undated electronic mark with no card; K5EE a card and no mark; K6FF an
+    /// electronic mark the operator dated, beside a card. The review lists K2BB and K1AA, newest
+    /// first. Of the three ticked (K1AA, K3CC, K4DD) only K1AA is cleared, and in its sent mark
+    /// alone: the whole record is the one it was but for the operator's clear, its confirmations,
+    /// eQSL card facts, upload stamp, comment, note and time as they were. Every other contact is
+    /// the record it was, K2BB unticked. Nothing goes to a connector. A restore for another time
+    /// puts nothing back; the one for the clear's own time puts the whole log back as it was, K1AA
+    /// to the byte. With both cleared the review lists nothing. No ids write nothing. On both of
+    /// the store's homes.
+    #[test]
+    fn the_eqsl_sent_mark_review_clears_only_ticked_card_marks_and_undoes_exactly() {
+        use crate::station::CardSentChange::{Clear, Restore};
+        use tempo_core::logbook::QslSent;
+        const CLEARED: u64 = 1_780_000_000;
+        let f = |name: &str, value: &str| format!("<{name}:{}>{value}", value.len());
+        let contact = |call: &str, time: &str, more: &str| {
+            [
+                f("CALL", call),
+                f("BAND", "20m"),
+                f("FREQ", "14.074"),
+                f("MODE", "FT8"),
+                f("QSO_DATE", "20260102"),
+                f("TIME_ON", time),
+                more.to_string(),
+                "<EOR>\n".to_string(),
+            ]
+            .concat()
+        };
+        let card = f("EQSL_QSL_RCVD", "Y");
+        let copied = f("QSL_SENT", "Y") + &f("QSL_SENT_VIA", "E");
+        let dated = |via: &str, date: &str| {
+            f("QSL_SENT", "Y") + &f("QSL_SENT_VIA", via) + &f("QSLSDATE", date) + &card
+        };
+        let k1aa = [
+            copied.clone(),
+            card.clone(),
+            f("LOTW_QSL_RCVD", "Y"),
+            f("APP_QRZLOG_STATUS", "C"),
+            f("EQSL_QSLRDATE", "20260105"),
+            f("APP_EQSL_AG", "Y"),
+            f("QSLMSG_RCVD", "TNX QSO 73"),
+            f("APP_TEMPO_UL_QRZ", "accepted|1767315000|"),
+            f("COMMENT", "hello"),
+            f("NOTES", "private"),
+        ]
+        .concat();
+        let log = [
+            contact("K1AA", "010101", &k1aa),
+            contact("K2BB", "010202", &(copied.clone() + &card)),
+            contact("K3CC", "010303", &dated("B", "20260103")),
+            contact("K4DD", "010404", &copied),
+            contact("K5EE", "010505", &card),
+            contact("K6FF", "010606", &dated("E", "20260104")),
+        ]
+        .concat();
+        for on_file in [false, true] {
+            let d = Dir::new(if on_file {
+                "card-sent-marks-file"
+            } else {
+                "card-sent-marks"
+            });
+            std::fs::write(d.log(), &log).unwrap();
+            let e = if on_file {
+                launch_on_log_file_with_resolvers(&d)
+            } else {
+                flush(&engine_on_store(&d));
+                launch_with_resolvers(&d)
+            };
+            let home = home(on_file);
+            let queued = e.lock().unwrap().take_pending_uploads().len();
+            flush(&e.lock().unwrap()); // the launch's own writes, settled first
+            let before = e.stored_records();
+            let row = |log: &[QsoRecord], call: &str| {
+                log.iter().find(|r| r.call == call).unwrap().clone()
+            };
+            let id = |call: &str| row(&before, call).id.unwrap();
+            let listed = || {
+                e.caught_up();
+                let rows = e.lock().unwrap().log_rows();
+                crate::station::holding_card_sent_marks(&rows)
+                    .expect("the review reads")
+                    .into_iter()
+                    .map(|r| (r.id, r.call, r.when_unix, r.band, r.mode))
+                    .collect::<Vec<_>>()
+            };
+            let line = |call: &str| {
+                let r = row(&before, call);
+                (
+                    r.id,
+                    r.call,
+                    r.when_unix,
+                    "20m".to_string(),
+                    "FT8".to_string(),
+                )
+            };
+            assert_eq!(listed(), [line("K2BB"), line("K1AA")], "{home}");
+
+            let unchanged = disk_picture(&d);
+            let (none, _) = crate::logwrite::card_sent_marks(&e, &[], Clear { now_unix: CLEARED });
+            assert_eq!(none, Ok(Vec::new()), "{home}");
+            flush(&e.lock().unwrap());
+            assert_eq!(
+                disk_picture(&d),
+                unchanged,
+                "{home}: no ids, nothing written"
+            );
+
+            let ticked = [id("K1AA"), id("K3CC"), id("K4DD")];
+            let (made, _) =
+                crate::logwrite::card_sent_marks(&e, &ticked, Clear { now_unix: CLEARED });
+            assert_eq!(made, Ok(vec![id("K1AA")]), "{home}");
+            flush(&e.lock().unwrap());
+            let after = e.stored_records();
+            let mut cleared = row(&before, "K1AA");
+            cleared.qsl_sent = QslSent {
+                cleared_unix: Some(CLEARED),
+                ..QslSent::default()
+            };
+            assert_eq!(
+                row(&after, "K1AA"),
+                cleared,
+                "{home}: the sent mark is cleared as the operator's decision, and nothing else moves"
+            );
+            for call in ["K2BB", "K3CC", "K4DD", "K5EE", "K6FF"] {
+                assert_eq!(row(&after, call), row(&before, call), "{home}: {call}");
+            }
+            assert_eq!(
+                e.lock().unwrap().take_pending_uploads().len(),
+                0,
+                "{home}: nothing goes to a connector (premise: {queued} before)"
+            );
+            if !on_file {
+                let on_disk = stored(&d).into_iter().find(|r| r.call == "K1AA").unwrap();
+                assert_eq!(on_disk, cleared, "{home}: the store");
+            }
+            assert_eq!(
+                listed().into_iter().map(|r| r.1).collect::<Vec<_>>(),
+                ["K2BB"],
+                "{home}"
+            );
+
+            let (other_time, _) = crate::logwrite::card_sent_marks(
+                &e,
+                &[id("K1AA")],
+                Restore {
+                    cleared_unix: CLEARED + 1,
+                },
+            );
+            assert_eq!(other_time, Ok(Vec::new()), "{home}");
+            let (undone, _) = crate::logwrite::card_sent_marks(
+                &e,
+                &ticked,
+                Restore {
+                    cleared_unix: CLEARED,
+                },
+            );
+            assert_eq!(undone, Ok(vec![id("K1AA")]), "{home}");
+            flush(&e.lock().unwrap());
+            let back = e.stored_records();
+            assert_eq!(back, before, "{home}: the whole log is back as it was");
+            assert_eq!(
+                adif_record_own_log(&row(&back, "K1AA")),
+                adif_record_own_log(&row(&before, "K1AA")),
+                "{home}: to the byte"
+            );
+            if !on_file {
+                let on_disk = stored(&d).into_iter().find(|r| r.call == "K1AA").unwrap();
+                assert_eq!(on_disk, row(&before, "K1AA"), "{home}: the store");
+            }
+
+            let (both, _) = crate::logwrite::card_sent_marks(
+                &e,
+                &[id("K1AA"), id("K2BB")],
+                Clear { now_unix: CLEARED },
+            );
+            assert_eq!(both.map(|ids| ids.len()), Ok(2), "{home}");
+            let left = listed();
+            assert!(left.is_empty(), "{home}: none left to list: {left:?}");
+        }
+    }
+
     /// A log.adi of `legacy_log(n)` plus a contact no resolver can place a country for, and one
     /// it can place a country but no state for.
     fn log_to_fill(n: usize) -> String {

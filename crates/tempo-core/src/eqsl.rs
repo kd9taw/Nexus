@@ -282,6 +282,49 @@ pub fn format_rcvd_since(unix_secs: i64) -> String {
     format!("{y:04}{mo:02}{d:02}{h:02}{mi:02}")
 }
 
+// ----- WHAT A CARD SAYS OF ITSELF ------------------------------------------
+//
+// An InBox row carries more than the confirmation. The merge keeps it on the contact the card
+// confirms (`crate::reconcile`), in its extra fields (`QsoRecord::extra`) under the ADIF names, so
+// an older build keeps and re-emits each and another logger reads it from an export.
+
+/// The day eQSL took the card in, as eQSL wrote it (`YYYYMMDD`).
+pub const RCVD_DATE: &str = "EQSL_QSLRDATE";
+/// The sender's message to the operator. eQSL sends it as `QSLMSG`, or `QSLMSG_INTL` when it has
+/// international characters; ADIF gives those names to the message on the card the operator
+/// SENDS, so it is kept under the one ADIF gives a message received.
+pub const MESSAGE: &str = "QSLMSG_RCVD";
+/// What goes with the card when the contact stops holding it, after a callsign correction or when
+/// Check confirmations takes eQSL's confirmation off: its received day, its Authenticity-Guaranteed
+/// mark and its message.
+pub const CARD_FACTS: [&str; 3] = [RCVD_DATE, crate::logbook::EQSL_AG_FIELD, MESSAGE];
+
+// ----- THE SENT MARK A CARD LEFT -------------------------------------------
+//
+// Every InBox row carries its sender's own "QSL sent": `QSL_SENT` ("always Y") and `QSL_SENT_VIA`
+// ("always E"), with no `QSLSDATE`. Until an InBox row stopped bringing it
+// (`crate::logbook::report_rows`), the merge took it whole onto a contact holding no sent mark
+// (`QslSent::merge`), so a sync, Check confirmations and an imported InBox left "QSL sent,
+// electronic" on the contacts their cards confirmed. Nothing stored tells such a mark from one the
+// operator set: the Logbook lists the contacts holding its shape, for the operator to clear.
+
+/// The sent mark a card left: `QSL_SENT` Y and `QSL_SENT_VIA` E as the merge took them, with no
+/// date and no clear.
+pub const CARD_SENT_MARK: crate::logbook::QslSent = crate::logbook::QslSent {
+    sent: true,
+    via: Some(crate::logbook::QslVia::Electronic),
+    date_unix: None,
+    cleared_unix: None,
+};
+
+/// Whether `rec` holds the sent mark a card left ([`CARD_SENT_MARK`]) beside eQSL's confirmation,
+/// which the same merge gave it. A mark the operator set in Nexus never matches: Nexus dates every
+/// mark it sets. One read from another program's file does when that program wrote `QSL_SENT` Y and
+/// `QSL_SENT_VIA` E with no `QSLSDATE` on a contact eQSL also confirms.
+pub fn holds_card_sent_mark(rec: &crate::logbook::QsoRecord) -> bool {
+    rec.qsl_rcvd.eqsl && rec.qsl_sent == CARD_SENT_MARK
+}
+
 // ----- eQSL ADIF UPLOAD (ImportADIF.cfm) -----------------------------------
 
 /// The eQSL ADIF-upload endpoint (POST). Hard-coded https constant so the
