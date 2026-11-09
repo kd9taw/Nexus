@@ -2228,6 +2228,10 @@ export interface RadioStatus {
    *  at the shack with native audio on, where a message waits for the radio to take DAX). Cleared by
    *  the next message the keyer accepts; absent otherwise, and from a station older than it. */
   voiceDropped?: VoiceDropped | null
+  /** The last ATU press that came to nothing after the button accepted it: dropped before it was
+   *  sent, refused by the radio, or sent with no answer. Cleared by the next press the button
+   *  accepts; absent otherwise, and from a station older than it. */
+  atuFailed?: AtuFailed | null
   /** FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — live-settable from the Operate cockpit. */
   decodeDepth: number
   /** Whether a QSO recording (audio bridge) is streaming live RX to disk. Persists across
@@ -7003,6 +7007,20 @@ export interface VoiceDropped {
    *  no longer took it when the message was to key. `keyed`: something else keyed the radio, or held
    *  the transmitter, before the message could key. */
   cause: 'noDax' | 'keyed'
+}
+
+/** An ATU press the button accepted that came to nothing in the radio loop (mirror of the Rust
+ *  AtuFailed). The words are the UI's, in features/atuFailed.ts. */
+export interface AtuFailed {
+  /** When it happened (unix seconds). */
+  at: number
+  /** `dropped`: nothing was sent (stale, a gate closed, the connection was changing over).
+   *  `refused`: the radio answered with an error. `noAnswer`: it went out and nothing came back. */
+  cause: 'dropped' | 'refused' | 'noAnswer'
+  /** Why a dropped press was dropped, in the station's words (English, as the gate wrote it). */
+  why?: string | null
+  /** `noAnswer` only: the Digital section stood transmit down in case the radio is tuning. */
+  stoodDown?: boolean
 }
 
 /** A slot over's unkey the radio did not accept (mirror of the Rust SlotUnkeyFailed). The words

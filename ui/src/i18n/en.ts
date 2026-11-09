@@ -14561,6 +14561,19 @@ export const EN = {
     'Nexus did not play the voice message at {{time}} UTC: the radio did not switch its transmit audio to DAX within 2 seconds, so nothing was keyed. The message was dropped, not held; press its key again.',
   'shell.lane.voiceDropped.keyed':
     'Nexus did not play the voice message at {{time}} UTC: something else was transmitting or keyed the radio first (your mic or PTT, a tune carrier, another program), so nothing was keyed. The message was dropped, not held.',
+  // An ATU press the button accepted that came to nothing in the radio loop: dropped before it was
+  // sent, refused by the radio, or sent with no answer. The button's own refusals are toasts; these
+  // come after it answered. The next press the button accepts clears it.
+  'shell.lane.atuFailed.dropped.message': 'ATU PRESS DROPPED',
+  'shell.lane.atuFailed.dropped.detail': 'ATU press dropped at {{time}} UTC: {{why}}; press again.',
+  'shell.lane.atuFailed.refused.message': 'ATU REFUSED',
+  'shell.lane.atuFailed.refused.detail':
+    'The radio refused the tune-up at {{time}} UTC (check its tuner is set to the internal tuner).',
+  'shell.lane.atuFailed.noAnswer.message': 'ATU: NO ANSWER',
+  'shell.lane.atuFailed.noAnswer.stoodDown':
+    'No answer from the radio to the tune-up at {{time}} UTC; TX stood down in case it is tuning.',
+  'shell.lane.atuFailed.noAnswer.detail':
+    'No answer from the radio to the tune-up at {{time}} UTC; it may be tuning.',
   // A clock repair holds transmit: from the press of Repair clock until the repair ends, two minutes
   // at most, nothing starts transmitting, so the clock cannot move in the middle of an over. The lane
   // says so for as long as it lasts.

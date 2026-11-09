@@ -377,6 +377,7 @@ impl AppState {
                 ptt_refused: None,
                 pc_mic_ended: None,
                 voice_dropped: None,
+                atu_failed: None,
                 decode_depth: 3,
                 qso_recording: false,
                 cat_ok: None,

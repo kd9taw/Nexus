@@ -1738,6 +1738,38 @@ pub enum VoiceDropCause {
     Keyed,
 }
 
+/// An ATU press Nexus accepted that did not end in a tune-up the radio took
+/// ([`RadioStatus::atu_failed`]). The button's own refusals are toasts; these happen after it
+/// answered, in the radio loop, so nothing else would tell the operator.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AtuFailed {
+    /// When, in Unix seconds.
+    pub at: u64,
+    pub cause: AtuFailCause,
+    /// Why a [`AtuFailCause::Dropped`] press was dropped, in the gate's own words. `None` for the
+    /// other causes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    /// [`AtuFailCause::NoAnswer`] only: the Digital section stood transmit down in case the radio
+    /// is tuning (`Engine::note_atu_tune_started`). The other sections have nothing to stand down.
+    #[serde(default)]
+    pub stood_down: bool,
+}
+
+/// What became of an ATU press that did not end in a tune-up the radio took ([`AtuFailed`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AtuFailCause {
+    /// Nothing was sent: the press went stale before the radio loop could send it, a transmit gate
+    /// closed in between, or the radio connection was changing over.
+    Dropped,
+    /// The radio answered the tune-up with an error, so nothing is tuning.
+    Refused,
+    /// The tune-up went out and no answer came back: the radio may be tuning.
+    NoAnswer,
+}
+
 /// A slot over's unkey the radio did not accept ([`RadioStatus::slot_unkey_failed`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -2198,6 +2230,12 @@ pub struct RadioStatus {
     /// byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice_dropped: Option<VoiceDropped>,
+    /// The last ATU press that did not end in a tune-up the radio took, after the button had
+    /// accepted it: dropped before it was sent, refused by the radio, or sent with no answer.
+    /// Cleared by the next press the button accepts. ABSENT until it happens, so every snapshot
+    /// before one is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub atu_failed: Option<AtuFailed>,
     /// FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — mirrored into the snapshot so the Operate
     /// cockpit can show + change it live (a mid-session CPU/battery lever), not only Settings.
     #[serde(default = "default_decode_depth_dto")]

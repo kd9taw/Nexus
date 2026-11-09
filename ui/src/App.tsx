@@ -226,6 +226,7 @@ import { slotOverDroppedLane } from './features/slotOverDropped'
 import { pttRefusedLane } from './features/pttRefused'
 import { pcMicLane } from './features/pcMic'
 import { voiceDroppedLane } from './features/voiceDropped'
+import { atuFailedLane } from './features/atuFailed'
 import { clockRepairHoldLane } from './features/clockRepairHold'
 import { heldLine, txOnHeldLane } from './features/txOnHeld'
 import { drivesAnotherStation } from './features/durableStore'
@@ -947,6 +948,18 @@ function App() {
   useEffect(() => {
     setStatus('voiceDropped', voiceDroppedLane(snap?.radio.voiceDropped))
   }, [snap?.radio.voiceDropped?.at, snap?.radio.voiceDropped?.cause])
+
+  // An ATU press the button accepted that came to nothing in the radio loop (dropped, refused by the
+  // radio, or no answer): the lane says which, since the button's answer came before it, until the
+  // next press the button accepts; not on the Remote page either.
+  useEffect(() => {
+    setStatus('atuFailed', atuFailedLane(snap?.radio.atuFailed))
+  }, [
+    snap?.radio.atuFailed?.at,
+    snap?.radio.atuFailed?.cause,
+    snap?.radio.atuFailed?.why,
+    snap?.radio.atuFailed?.stoodDown,
+  ])
 
   // A clock repair holds transmit: from the press of Repair clock until the repair ends, the
   // station starts no transmission, and the lane says so on every screen while it lasts. Not on
