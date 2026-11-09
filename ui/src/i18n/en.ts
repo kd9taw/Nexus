@@ -5458,6 +5458,12 @@ export const EN = {
   'ota.filter.hideWorked.hidden': 'Hide worked today · {{count}}',
   'ota.filter.hideWorked.title':
     'Hides activators you logged at this park since 0000Z. They come back at 0000Z or at a new park. Only contacts logged with the park count — HUNT adds it for you.',
+  // Only new: the rows wearing the NEW PARK badge — never logged, park or summit alike (the
+  // station keeps one index of hunter-side references, plus the imported Hunted Parks list).
+  'ota.filter.onlyNew.label': 'Only new',
+  'ota.filter.onlyNew.hidden': 'Only new · {{count}}',
+  'ota.filter.onlyNew.title':
+    'Shows only the parks and summits you have never logged — the rows marked NEW PARK. Parks in your imported Hunted Parks list count as logged.',
   'ota.badge.workedToday': 'WORKED TODAY',
   'ota.badge.workedToday.title':
     'You logged this activator at this park since 0000Z — the activation running now is hunted',
@@ -5465,6 +5471,11 @@ export const EN = {
     one: '1 activator is hidden: you worked that park today. Turn Hide worked today off to see it.',
     other:
       '{{count}} activators are hidden: you worked those parks today. Turn Hide worked today off to see them.',
+  },
+  'ota.empty.notNew': {
+    one: '1 activator is hidden: you have logged that park or summit before. Turn Only new off to see it.',
+    other:
+      '{{count}} activators are hidden: you have logged those parks or summits before. Turn Only new off to see them.',
   },
   // `{{source}}` is the feed's own name (pota.app, SOTAwatch); HUNT is the button above.
   'ota.source.hint':

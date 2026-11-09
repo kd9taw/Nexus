@@ -98,6 +98,7 @@ const OTA_KEYS = {
     sort: 'nexus.ota.sortKey',
     sortAsc: 'nexus.ota.sortAsc',
     hideWorked: 'nexus.ota.hideWorked',
+    onlyNew: 'nexus.ota.onlyNew',
   },
   box: {
     program: 'nexus.connect.ota.program',
@@ -106,6 +107,7 @@ const OTA_KEYS = {
     sort: 'nexus.connect.ota.sortKey',
     sortAsc: 'nexus.connect.ota.sortAsc',
     hideWorked: 'nexus.connect.ota.hideWorked',
+    onlyNew: 'nexus.connect.ota.onlyNew',
   },
 } as const
 
@@ -295,6 +297,13 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
   useEffect(() => {
     surfaceSet(keys.hideWorked, hideWorked ? '1' : '0')
   }, [keys, hideWorked])
+  // Only new: the references this operator has never logged (`newPark` — parks, summits and WWFF
+  // references alike, one index on the station). DEFAULT OFF — it hides most of the board — and
+  // per-surface, stored raw like Hide worked, so a stale value falls back to off.
+  const [onlyNew, setOnlyNew] = useState(() => surfaceGet(keys.onlyNew) === '1')
+  useEffect(() => {
+    surfaceSet(keys.onlyNew, onlyNew ? '1' : '0')
+  }, [keys, onlyNew])
   useEffect(() => {
     surfaceSet(keys.sort, sortKey)
   }, [keys, sortKey])
@@ -391,8 +400,15 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
   // Counted after the other filters, so the number on the chip is exactly what one click brings
   // back — the locality chip's bargain on the Spots panel, made here too.
   const workedHidden = hideWorked ? inScope.filter((s) => s.huntedToday === true).length : 0
+  const unworked = hideWorked ? inScope.filter((s) => s.huntedToday !== true) : inScope
+  // Only new, the same bargain: offered only when the rows carry the flag (an observed station's
+  // feed may not), and counted after every other filter, Hide worked included. A board that cannot
+  // tell applies nothing, whatever was remembered.
+  const canOnlyNew = spots.some((s) => typeof s.newPark === 'boolean')
+  const applyOnlyNew = onlyNew && canOnlyNew
+  const notNewHidden = applyOnlyNew ? unworked.filter((s) => s.newPark !== true).length : 0
   const filtered = sortSpots(
-    hideWorked ? inScope.filter((s) => s.huntedToday !== true) : inScope,
+    applyOnlyNew ? unworked.filter((s) => s.newPark === true) : unworked,
     sortKey,
     sortAsc,
   )
@@ -995,6 +1011,21 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
             </button>
           )}
 
+          {/* Only new — the references never logged; its count rides on the chip too. */}
+          {canOnlyNew && (
+            <button
+              type="button"
+              className={`filter-chip${onlyNew ? ' active' : ''}`}
+              aria-pressed={onlyNew}
+              onClick={() => setOnlyNew((v) => !v)}
+              title={t('ota.filter.onlyNew.title')}
+            >
+              {onlyNew && notNewHidden > 0
+                ? t('ota.filter.onlyNew.hidden', { count: notNewHidden })
+                : t('ota.filter.onlyNew.label')}
+            </button>
+          )}
+
           {/* Refresh + timestamp */}
           {!observed && <div className="pota-refresh-row">
             <button
@@ -1119,6 +1150,8 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
             ? t('ota.loading')
             : observation && observation.feeds.some(f => (program === 'Both' || f.program === program) && f.status !== 'ready')
               ? t('remote.collectionUnavailable')
+            : notNewHidden > 0
+              ? t('ota.empty.notNew', { count: notNewHidden })
             : workedHidden > 0
               ? t('ota.empty.worked', { count: workedHidden })
             : bandFilter.length > 0 || modeFilter !== 'All'
