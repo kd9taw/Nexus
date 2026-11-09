@@ -10,6 +10,7 @@
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The prefixes quoted
 // inside the note stay in the sentence, as `ADIF OPERATOR` does in the Station hint.
 import * as RM from '@radix-ui/react-dropdown-menu'
+import { MenuContent, MenuRoot } from './ui/MenuParts'
 import { useEffect, useState } from 'react'
 import { unhideScoped, useHideCalls, type ScopedHide } from '../features/hideCalls'
 import { t } from '../i18n'
@@ -35,7 +36,7 @@ export function HideCallsPicker() {
   const commit = () => setEntries(text)
 
   return (
-    <RM.Root modal={false} onOpenChange={(open) => !open && commit()}>
+    <MenuRoot onOpenChange={(open) => !open && commit()}>
       <RM.Trigger asChild>
         <button
           type="button"
@@ -47,7 +48,7 @@ export function HideCallsPicker() {
         </button>
       </RM.Trigger>
       <RM.Portal>
-        <RM.Content className="ui-menu country-menu" sideOffset={4} align="end" collisionPadding={8}>
+        <MenuContent className="ui-menu country-menu" sideOffset={4} align="end" collisionPadding={8}>
           <div style={{ zoom: 'var(--ui-zoom, 1)' }}>
             <div className="country-menu-head">{t('hideCalls.head')}</div>
             <div style={{ padding: '0.4rem 0.6rem' }}>
@@ -97,8 +98,8 @@ export function HideCallsPicker() {
               <T k="hideCalls.note" tags={{ code: <code /> }} />
             </div>
           </div>
-        </RM.Content>
+        </MenuContent>
       </RM.Portal>
-    </RM.Root>
+    </MenuRoot>
   )
 }

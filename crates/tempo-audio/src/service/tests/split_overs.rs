@@ -605,6 +605,10 @@ struct Vfos {
     /// The operator turning the radio's knob: each dial read (`f`) first moves VFO A to the last
     /// of these, until none is left.
     knob: Vec<u64>,
+    /// Every split, TX dial and TX mode write (`S`, `I`, `X`) answered this many ms late.
+    split_write_delay_ms: u64,
+    /// A mode write (`M`) answered `RPRT -9` and not taken.
+    refuse_m: bool,
 }
 
 struct Hamlib {
@@ -654,6 +658,12 @@ fn hamlib_bench_on(engine: Arc<Mutex<Engine>>, dial: u64, own_split: Option<u64>
     let peer = retuning_peer(dial, "PKTUSB", move |line, radio| {
         let mut v = v.lock().unwrap();
         let ok = || Some("RPRT 0\n".to_string());
+        if v.split_write_delay_ms > 0 && line.starts_with(['S', 'I', 'X']) {
+            std::thread::sleep(std::time::Duration::from_millis(v.split_write_delay_ms));
+        }
+        if v.refuse_m && line.starts_with("M ") {
+            return Some("RPRT -9\n".to_string());
+        }
         if line.starts_with("S 0") {
             if let Some(engine) = v.split_off_lock_probe.clone() {
                 let free = engine.try_lock().is_ok();
@@ -4187,4 +4197,279 @@ fn the_judgements_re_set_and_verdict_wait_for_a_moment_no_over_can_key_in() {
     assert!(refused(), "the verdict, in the window");
     assert!(state.last_mode.is_empty(), "the re-set, in the window");
     assert!(state.data_verdict_owed.is_none() && state.data_reset_owed.is_none());
+}
+
+// ── A write of the mode VFO B already has keeps what the radio confirmed for it ──────────────
+// Call CQ forces a retune, and the retune writes the mode (`M`) of the RX VFO. VFO B's mode is not
+// changed by writing the mode it was confirmed in, so the key has nothing to write again but split
+// on last. WSJT-X has no budget at the key to miss; this one is Nexus's own.
+
+/// The band changed with TX off and its pre-set taken, then a radio this slow at every split write,
+/// and Call CQ with the first over left pending. Returns the bench and the writes up to the key.
+fn called_after_the_pre_set(at_ms: f64, delay_ms: u64) -> (Bench<Hamlib>, Vec<String>) {
+    let mut b = held_and_tx_off();
+    let _ = b.step_to_cycle_ms(at_ms);
+    let change = b.qsy_to_40m(|_| {});
+    assert_eq!(
+        split_writes(&change),
+        BAND_CHANGE_PRESET,
+        "premise: the pre-set"
+    );
+    b.radio.vfos.lock().unwrap().split_write_delay_ms = delay_ms;
+    b.call_cq_now();
+    let key = b.ticks_to_key(800);
+    (b, key)
+}
+
+/// ⭐ CALL CQ'S OWN MODE WRITE LEAVES THE PRE-SET CONFIRMED. On a radio at 200 ms a write, in either
+/// period, the key sends split on last and the key and nothing else, and keys with TX on. It used
+/// to send `I, X, S 1`, 600 ms of writes, and was refused with TX halted.
+#[test]
+fn call_cq_on_a_radio_at_200_ms_a_write_keys_with_only_split_on_last() {
+    for (what, at_ms) in [("own period", 2_000.0), ("other period", 17_000.0)] {
+        let (b, key) = called_after_the_pre_set(at_ms, 200);
+        assert_eq!(split_writes(&key), ["S 1 VFOB", "T 1"], "{what}: {key:?}");
+        assert!(b.radio.keyed(), "{what}: the over did not key");
+        assert!(b.engine.lock().unwrap().tx_enabled(), "{what}: TX halted");
+    }
+}
+
+/// ⛔ THE BUDGET STILL GUARDS. On a radio at 800 ms a write the key sends only split on last too,
+/// with no TX dial or mode written again, and that one write misses the 500 ms: nothing keys and TX
+/// halts. Keeping the confirmation does not save a radio this slow, and does not key it late.
+#[test]
+fn call_cq_on_a_radio_at_800_ms_a_write_is_still_refused_after_only_split_on_last() {
+    for (what, at_ms) in [("own period", 2_000.0), ("other period", 17_000.0)] {
+        let (b, key) = called_after_the_pre_set(at_ms, 800);
+        assert_eq!(
+            split_writes(&key).first(),
+            Some(&"S 1 VFOB"),
+            "{what}: {key:?}"
+        );
+        assert!(
+            !key.iter().any(|l| l.starts_with(['I', 'X']) || is_key(l)),
+            "{what}: {key:?}"
+        );
+        assert!(
+            !b.engine.lock().unwrap().tx_enabled(),
+            "{what}: TX still on"
+        );
+    }
+}
+
+/// What the radio confirmed for VFO B after one write of the mode, each case from a pre-set taken.
+/// The same mode keeps it. Another mode forgets it, and so does a same-mode write the radio refused
+/// or one that went out on a connection renewed since it was confirmed.
+#[test]
+fn only_a_taken_write_of_the_confirmed_mode_keeps_the_split_confirmation() {
+    let confirmed = || {
+        let mut b = held_and_tx_off();
+        let _ = b.step_to_cycle_ms(17_000.0);
+        let _ = b.qsy_to_40m(|_| {});
+        let held = b.rig.split_confirmed.clone().expect("premise: the pre-set");
+        assert_eq!(
+            held.tx_mode.as_deref(),
+            Some("PKTUSB"),
+            "premise: the TX mode"
+        );
+        (b, held)
+    };
+
+    let (mut b, held) = confirmed();
+    b.rig.set_mode("PKTUSB", -1).expect("premise: taken");
+    assert_eq!(b.rig.split_confirmed, Some(held), "the same mode forgot it");
+
+    let (mut b, _) = confirmed();
+    b.rig.set_mode("USB", -1).expect("premise: taken");
+    assert_eq!(b.rig.split_confirmed, None, "another mode kept it");
+
+    let (mut b, _) = confirmed();
+    b.radio.vfos.lock().unwrap().refuse_m = true;
+    assert!(b.rig.set_mode("PKTUSB", -1).is_err(), "premise: refused");
+    assert_eq!(b.rig.split_confirmed, None, "a refused write kept it");
+
+    let (mut b, _) = confirmed();
+    b.rig.reconnect_for_test();
+    b.rig.set_mode("PKTUSB", -1).expect("premise: taken");
+    assert_eq!(b.rig.split_confirmed, None, "a renewed connection kept it");
+}
+
+/// The control through the loop: another mode written between the pre-set and the key, and the key
+/// writes the TX dial and its mode again before it keys.
+#[test]
+fn another_mode_written_after_the_pre_set_makes_the_key_write_the_tx_dial_again() {
+    let mut b = held_and_tx_off();
+    let _ = b.step_to_cycle_ms(17_000.0);
+    let change = b.qsy_to_40m(|_| {});
+    assert_eq!(
+        split_writes(&change),
+        BAND_CHANGE_PRESET,
+        "premise: the pre-set"
+    );
+    b.rig.set_mode("USB", -1).expect("premise: taken");
+    b.call_cq_now();
+    let key = b.ticks_to_key(800);
+    assert!(b.radio.keyed(), "the over did not key: {key:?}");
+    let key = split_writes(&key);
+    assert!(
+        key.iter().any(|l| l.starts_with("I "))
+            && key.contains(&"X PKTUSB -1")
+            && key[key.len() - 2..] == ["S 1 VFOB", "T 1"],
+        "the key's writes: {key:?}"
+    );
+}
+
+/// [`called_after_the_pre_set`] on `tier` (FT8 or FT4), the band changed to 40 m at `dial_mhz`:
+/// the pre-set taken, then a radio this slow at every split write, and Call CQ.
+fn called_after_the_pre_set_on(
+    tier: Tier,
+    dial_mhz: f64,
+    at_ms: f64,
+    delay_ms: u64,
+) -> (Bench<Hamlib>, Vec<String>) {
+    let mut b = held_and_tx_off();
+    b.engine.lock().unwrap().set_tier(tier);
+    let _ = b.step_to_cycle_ms(at_ms);
+    b.engine
+        .lock()
+        .unwrap()
+        .set_frequency(dial_mhz, "40m", "USB");
+    let _ = b.ticks(50);
+    let tx_dial = (dial_mhz * 1e6).round() as u64 - 500;
+    assert!(
+        b.rig
+            .split_confirmed
+            .as_ref()
+            .is_some_and(|c| c.tx_hz == Some(tx_dial) && c.tx_mode.as_deref() == Some("PKTUSB")),
+        "premise: the pre-set: {:?}",
+        b.rig.split_confirmed
+    );
+    b.radio.vfos.lock().unwrap().split_write_delay_ms = delay_ms;
+    b.call_cq_now();
+    let key = b.ticks_to_key(800);
+    (b, key)
+}
+
+/// ⭐ THE FIELD CASE: a radio that took 775 ms to confirm the key's three split writes, about 258 ms
+/// each. The pre-set has VFO B on the TX dial and mode, Call CQ writes the RX VFO's mode, and the
+/// key now sends split on last alone, one 258 ms write inside the 500 ms, and keys, on FT8 in
+/// either period and on FT4. It used to send `I, X, S 1` again, miss the budget, key nothing and
+/// halt TX: "the radio did not take the split TX frequency".
+#[test]
+fn call_cq_on_a_radio_at_258_ms_a_write_keys_with_one_split_write() {
+    for (what, tier, dial, at_ms) in [
+        ("FT8 own period", Tier::Ft8, 7.074, 2_000.0),
+        ("FT8 other period", Tier::Ft8, 7.074, 17_000.0),
+        ("FT4 own period", Tier::Ft4, 7.0475, 2_000.0),
+        ("FT4 other period", Tier::Ft4, 7.0475, 9_500.0),
+    ] {
+        let (b, key) = called_after_the_pre_set_on(tier, dial, at_ms, 258);
+        assert_eq!(split_writes(&key), ["S 1 VFOB", "T 1"], "{what}: {key:?}");
+        assert!(b.radio.keyed(), "{what}: the over did not key");
+        assert!(b.engine.lock().unwrap().tx_enabled(), "{what}: TX halted");
+    }
+}
+
+// ── The confirmation and the DATA-word judgement ─────────────────────────────────────────────
+// The judgement's re-set writes the word Nexus already set (`M PKTUSB`) again while receiving; its
+// verdict changes the word to the plain twin (`USB`), a different mode. The first must keep what
+// the radio confirmed for VFO B, the second must forget it, and no key may go out on VFO B in a
+// word Nexus no longer asks for.
+
+/// ⛔ THE JUDGEMENT'S OWED RE-SET IS FOLLOWED BY A DIAL WRITE, WHICH FORGETS. Two plain read-backs
+/// after Nexus's own `PKTUSB` owe a re-set of the same word; it goes out while receiving, at the
+/// tail of a period (`apply_owed_data_judgement`), between two overs whose split the radio
+/// confirmed. Its `M PKTUSB` alone would keep the confirmation, but the receive-time retune puts
+/// the dial back after any mode write it makes (for a radio whose dial moves with its mode), and a
+/// dial write may have moved VFO B: the next key writes the TX dial and mode again before split
+/// on last, never keying on a VFO B it no longer knows.
+#[test]
+fn the_data_words_owed_reset_and_its_dial_write_make_the_next_key_write_vfo_b_again() {
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    let owe_at = b.slot + 16_000.0;
+    let mut owed = false;
+    let overs = b.overs_hooked(
+        2,
+        |_| {},
+        |t, state| {
+            if !owed && t >= owe_at {
+                owed = true;
+                state.data_reset_owed = Some("PKTUSB");
+            }
+        },
+    );
+    assert!(owed, "premise: the re-set was owed");
+    assert_eq!(
+        overs[0].rx,
+        ["M PKTUSB -1", "F 14074000"],
+        "premise: the re-set and its dial went out while receiving"
+    );
+    assert_eq!(
+        split_writes(&overs[1].key),
+        ["I 14073500", "X PKTUSB -1", "S 1 VFOB", "T 1"],
+        "the key after the re-set: {:?}",
+        overs[1].key
+    );
+}
+
+/// ⛔ THE VERDICT'S PLAIN WORD FORGETS IT. The silent link (SDR Console: `PKTUSB` answered `RPRT 0`,
+/// read back `USB`) under Split = Rig. Once the word is condemned, the verdict's `M USB` is another
+/// mode than VFO B was confirmed in, so the next key writes the TX dial and `X USB` before split on
+/// last, and no key after it writes or keys behind a DATA word.
+#[test]
+fn rig_split_on_a_silent_link_writes_vfo_b_in_usb_after_the_verdict() {
+    const MODEL: u32 = 990_406;
+    let mut b = data_word_bench(SplitMode::Rig, MODEL, DataAnswer::Ignores);
+    let overs = b.overs(3);
+    assert!(refused(&b, MODEL, "PKTUSB"), "premise: the verdict");
+    let verdict = overs
+        .iter()
+        .position(|o| o.rx.iter().any(|l| l == "M USB -1"))
+        .expect("premise: the verdict's USB went out while receiving");
+    let after = &overs[verdict + 1].key;
+    let w = split_writes(after);
+    assert!(
+        w.iter().any(|l| l.starts_with("I ")) && w.ends_with(&["X USB -1", "S 1 VFOB", "T 1"]),
+        "the key after the verdict: {after:?}"
+    );
+    for (i, o) in overs.iter().enumerate().skip(verdict + 1) {
+        assert!(
+            o.key.iter().all(|l| !l.contains("PKT")),
+            "over {}: a DATA word after the verdict: {:?}",
+            i + 1,
+            o.key
+        );
+    }
+}
+
+/// ⛔ A VERDICT BETWEEN THE PRE-SET AND THE KEY. The pre-set confirmed VFO B in `PKTUSB`; the link
+/// is then found not to take it, so the word is `USB`. Call CQ's retune writes `M USB`, another mode,
+/// which forgets the confirmation, and the key writes the TX dial and `X USB` again before split on
+/// last: VFO B never keys in the word Nexus no longer asks for.
+#[test]
+fn a_verdict_after_the_pre_set_makes_the_key_write_vfo_b_in_usb() {
+    let mut b = held_and_tx_off();
+    let _ = b.step_to_cycle_ms(17_000.0);
+    let change = b.qsy_to_40m(|_| {});
+    assert_eq!(
+        split_writes(&change),
+        BAND_CHANGE_PRESET,
+        "premise: the pre-set"
+    );
+    {
+        let mut e = b.engine.lock().unwrap();
+        let model = e.settings().rig_model;
+        assert!(e.refuse_link_data_word(model, "PKTUSB"), "premise: refused");
+        assert_eq!(e.rig_mode_effective(), "USB", "premise: the word is USB");
+    }
+    b.call_cq_now();
+    let key = b.ticks_to_key(800);
+    assert!(b.radio.keyed(), "the over did not key: {key:?}");
+    assert!(!key.iter().any(|l| l.contains("PKT")), "{key:?}");
+    let w = split_writes(&key);
+    assert_eq!(
+        w[w.len() - 4..],
+        ["I 7073500", "X USB -1", "S 1 VFOB", "T 1"],
+        "the key's writes: {key:?}"
+    );
 }

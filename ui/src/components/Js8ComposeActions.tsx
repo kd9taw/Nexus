@@ -13,6 +13,7 @@
 // Migrated from birth (i18n/hardcoded-strings.test.ts): REPLY and the command words are the
 // mode's vocabulary; every sentence is from the catalog.
 import * as RM from '@radix-ui/react-dropdown-menu'
+import { MenuContent, MenuRoot } from './ui/MenuParts'
 import { t } from '../i18n'
 import { JS8_COMMANDS, REPLY } from '../js8Vocab'
 
@@ -97,7 +98,7 @@ export function Js8ComposeActions(p: Props) {
       <button type="button" className="cw-macro js8-quick js8-status" disabled={p.busy} onClick={p.onStatus} title={statusTitle}>
         <span className="cw-macro-label">{STATUS_WORD}</span>
       </button>
-      <RM.Root modal={false}>
+      <MenuRoot>
         <RM.Trigger asChild>
           <button
             type="button"
@@ -113,7 +114,7 @@ export function Js8ComposeActions(p: Props) {
           </button>
         </RM.Trigger>
         <RM.Portal>
-          <RM.Content className="ui-menu js8-saved-menu" side="top" align="start" sideOffset={4} collisionPadding={8}>
+          <MenuContent className="ui-menu js8-saved-menu" side="top" align="start" sideOffset={4} collisionPadding={8}>
             {/* The portal escapes `.app`'s zoom, so the content re-applies it (Menu.tsx's reason). */}
             <div style={{ zoom: 'var(--ui-zoom, 1)' }}>
               <RM.Item className="ui-menu-item js8-restore" disabled={!p.hasPrevious} onSelect={p.onRestore}>
@@ -141,9 +142,9 @@ export function Js8ComposeActions(p: Props) {
                 {t('js8.dock.saved.keep')}
               </RM.Item>
             </div>
-          </RM.Content>
+          </MenuContent>
         </RM.Portal>
-      </RM.Root>
+      </MenuRoot>
     </span>
   )
 }

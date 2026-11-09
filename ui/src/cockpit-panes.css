@@ -776,8 +776,8 @@
    INDENT, never padding: padding is width the breaker counts, even on a zero basis with border-box,
    and 8 px of it wrapped Phone, CW and RTTY in Russian at 175 % (1002-1012 px), moving Stop TX 30 px. Where the
    room is short the words end in an ellipsis, and where there is none they are not seen: the whole
-   sentence is the TX state's hover and the CAT status. Not rendered beside the meters cell, which
-   would share the room with it.
+   sentence is the TX state's hover and the CAT status. A strip WITH a meters cell holds the words in
+   that cell instead (#489), as its one block in place of the meters, so the line gains no item.
    `.cq-catnote` (FT's strip): the words ride inside `.cq-spacer`, the strip's one absorber, which is
    already a zero-basis grower on its line. Its min-width is the only thing to add: without it a
    flex item cannot shrink below its text, and the absorber would push the line. */

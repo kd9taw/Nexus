@@ -28,6 +28,7 @@
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). `A−`, `A+` and `⋯` are the
 // controls' glyphs — symbols of one letter or none, like ✕ — and every word is in the catalog.
 import * as RM from '@radix-ui/react-dropdown-menu'
+import { MenuContent, MenuRoot } from '../ui/MenuParts'
 import { t } from '../../i18n'
 import { BOX_SCALE_MAX, BOX_SCALE_MIN, BOX_SCALE_STEP } from '../../features/panelState'
 import { ROTATE_CHOICES, type PaneId } from '../../features/connectConfig'
@@ -69,7 +70,7 @@ export function BoxMenu({
   const pct = Math.round(textScale * 100)
   const step = (dir: 1 | -1) => onTextScale?.(Math.round((textScale + dir * BOX_SCALE_STEP) * 100) / 100)
   return (
-    <RM.Root onOpenChange={onOpenChange}>
+    <MenuRoot onOpenChange={onOpenChange}>
       <RM.Trigger asChild>
         <button
           type="button"
@@ -81,7 +82,7 @@ export function BoxMenu({
         </button>
       </RM.Trigger>
       <RM.Portal>
-        <RM.Content className="ui-menu box-menu" sideOffset={4} align="end" collisionPadding={8}>
+        <MenuContent className="ui-menu box-menu" sideOffset={4} align="end" collisionPadding={8}>
           {/* The portal escapes `.app`'s zoom, so the content re-applies it (Menu.tsx's reason). */}
           <div style={{ zoom: 'var(--ui-zoom, 1)' }}>
             {onTextScale && (
@@ -188,8 +189,8 @@ export function BoxMenu({
               </RM.Item>
             )}
           </div>
-        </RM.Content>
+        </MenuContent>
       </RM.Portal>
-    </RM.Root>
+    </MenuRoot>
   )
 }

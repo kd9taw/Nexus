@@ -152,6 +152,20 @@ describe('checkRigForm', () => {
     expect(checks[0].message).toMatch(/not connected right now/)
   })
 
+  // A virtual port another program makes is never enumerated, so "not connected right now" would
+  // be said of it every time, true or not. A /dev name that is missing still gets the warning.
+  it.each(['~/Downloads/rig-pty1', '/Users/op/Downloads/rig-pty1', '/home/op/rig-pty1'])(
+    'says nothing of a typed virtual port %s the list can never show',
+    (serialPort) => {
+      expect(checkRigForm(form({ serialPort }), PORTS, PORTLESS)).toEqual([])
+    },
+  )
+
+  it('still warns of a missing /dev port, so the exemption is only for paths outside /dev', () => {
+    const checks = checkRigForm(form({ serialPort: '/dev/cu.usbserial-Z' }), PORTS, PORTLESS)
+    expect(checks.some((c) => /not connected right now/.test(c.message))).toBe(true)
+  })
+
   // Port collisions belong to the backend (`settings::serial_port_conflicts`), which App.tsx
   // already surfaces as `radioConfigWarning`. This file must not grow a second, unqualified
   // opinion on them: the earlier version here ignored `enabled`, `rig_model` and `rig_conn`,

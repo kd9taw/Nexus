@@ -2028,6 +2028,10 @@ export interface RadioStatus {
    * the top of the zone. Display only: it moves the bar's colours, never the bar. */
   txAlcZone?: number | null
   txPoW?: number | null
+  /** `txPoW` is DERIVED (#489): the radio's Hamlib backend reports its power only as a share of
+   * its meter (`RFPOWER_METER`, no watts), shown as that share of `ratedWatts`. The meter marks
+   * it as an estimate; it is never written to the log. Absent = the radio's own watts. */
+  txPoDerived?: boolean
   txCompDb?: number | null
   /** The radio's own PA (finals) temperature in °C, as its CAT interface last reported it.
    * Absent where the radio reports none (most do not). Read while receiving and kept across

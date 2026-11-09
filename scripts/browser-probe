@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|besttimes|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|toastcorner|logwaiting|topbar|header|rttyfit|digishell|firstrun|journeys|clublog|aprsmap|logbook|profiles|sstvlayout|stopvisible
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|besttimes|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|toastcorner|logwaiting|topbar|header|rttyfit|digishell|firstrun|journeys|clublog|aprsmap|logbook|profiles|sstvlayout|menustop|stopabove|stopvisible
        scripts/browser-probe --desktop-shard <n> <of>
 
   --desktop-shard <n> <of>
@@ -169,6 +169,17 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         and a pick reaches the switch, the bar keeps its height, nothing runs
                         sideways or past the window, and Stop TX and Tune do not move, with a
                         planted overflow that must be caught (ui/probe/profiles-probe.mjs)
+  --desktop stopabove   Stop TX above every overlay: with a ui/Dialog, a confirmation, the prompt
+                        to log, the launch radio picker, a Logbook scrim or the band pill's menu
+                        open over the real top bar, at 700×800 (xs) and 2560×1440 (xl), Stop TX
+                        is on top where it is drawn and unmoved, one real click stops once and the
+                        overlay stays open with the keyboard where it was, with the stop layer
+                        taken away as the control (ui/probe/stopabove-probe.mjs; it builds nothing)
+  --desktop menustop    with a menu open (Help, and the band pill's where the screen draws it),
+                        on the Logbook and on Operate at 700×800 (xs) and 2560×1440 (xl): one
+                        real click on Stop TX stops once, closes the menu and leaves the keyboard
+                        on Stop TX, with the modal menu's pointer lock planted as the control
+                        that must swallow the click (ui/probe/menustop-probe.mjs; it builds nothing)
   --desktop topbar      the top bar on the FT screen and on CW at the common full-screen sizes
                         and 125/150 % on a 1080p screen, without and with a status-lane message,
                         asserting the message changes neither the bar's height nor the line any
@@ -258,7 +269,7 @@ USAGE
 # job, which deals this list round-robin over its shards with --desktop-shard. Slowest first, so the
 # deal balances (local seconds on 2026-11-05: toastcorner 299, digishell 330, topbar 96, waterfalls 92, logbook 67,
 # header 62, journeys 42, rttyfit 39, the rest 7-27); keep a new probe near its cost when you add it.
-DESKTOP_ALL=(toastcorner digishell sstvlayout stopvisible topbar waterfalls logbook header journeys rttyfit profiles firstrun radiosetup contestlog
+DESKTOP_ALL=(toastcorner digishell sstvlayout stopvisible topbar waterfalls logbook header journeys rttyfit menustop stopabove profiles firstrun radiosetup contestlog
   logwaiting spots atu radioswitch jtty activation clublog aprsmap callcard voicenote rotor contactcard txmeters besttimes)
 
 SCENARIO='stream'
@@ -367,6 +378,8 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = profiles ] && exec node "$ROOT/ui/probe/profiles-probe.mjs"
   [ "$DESKTOP" = sstvlayout ] && exec node "$ROOT/ui/probe/sstvlayout-probe.mjs"
   [ "$DESKTOP" = stopvisible ] && exec node "$ROOT/ui/probe/stopvisible-probe.mjs"
+  [ "$DESKTOP" = menustop ] && exec node "$ROOT/ui/probe/menustop-probe.mjs"
+  [ "$DESKTOP" = stopabove ] && exec node "$ROOT/ui/probe/stopabove-probe.mjs"
   exec node "$ROOT/ui/probe/desktop-probe.mjs" "$DESKTOP"
 fi
 

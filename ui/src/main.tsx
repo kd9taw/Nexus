@@ -4,6 +4,7 @@ import App from './App'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { ClientInput } from './components/ClientBanner'
 import { DetachedPanel } from './DetachedPanel'
+import { StopLayer } from './components/StopLayer'
 import { redockAllStalePopouts } from './features/panelState'
 import { loadDurable, setRemoteStation } from './features/durableStore'
 import { installStreamInput } from './remote-native/stream-input'
@@ -92,6 +93,8 @@ const tree = (
         <App />
       </ErrorBoundary>
     )}
+    {/* Outside both boundaries: the layer that keeps every stop control clickable above any overlay. */}
+    <StopLayer />
   </StrictMode>
 )
 

@@ -13,6 +13,7 @@
 // arrives from `features/countryExclude.ts` and the backend's entity table. Continent CODES
 // (EU, NA…) are cty.dat tokens; only the continent NAMES beside them are prose.
 import * as RM from '@radix-ui/react-dropdown-menu'
+import { MenuContent, MenuRoot } from './ui/MenuParts'
 import { useState } from 'react'
 import { CONTINENT_CODES, EXCLUDABLE_COUNTRIES, countryLabel } from '../features/countryExclude'
 import { getDxccEntityNames } from '../api'
@@ -95,7 +96,7 @@ export function CountryExcludePicker({
     // NOT modal: a modal menu marks the rest of the page aria-hidden and locks body
     // scroll, which would hide the very thing the operator is judging — they tick a
     // country and watch the pane behind thin out.
-    <RM.Root modal={false}>
+    <MenuRoot>
       <RM.Trigger asChild>
         <button
           type="button"
@@ -107,7 +108,7 @@ export function CountryExcludePicker({
         </button>
       </RM.Trigger>
       <RM.Portal>
-        <RM.Content className="ui-menu country-menu" sideOffset={4} align="end" collisionPadding={8}>
+        <MenuContent className="ui-menu country-menu" sideOffset={4} align="end" collisionPadding={8}>
           {/* Same portal-zoom re-application as Menu/Dialog/Tooltip: the portal escapes
               `.app`'s zoom:var(--ui-zoom), so the content must re-apply it. */}
           <div style={{ zoom: 'var(--ui-zoom, 1)' }}>
@@ -210,9 +211,9 @@ export function CountryExcludePicker({
             )}
             <div className="country-menu-note">{t('hideCountries.note')}</div>
           </div>
-        </RM.Content>
+        </MenuContent>
       </RM.Portal>
-    </RM.Root>
+    </MenuRoot>
   )
 }
 
