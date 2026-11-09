@@ -10,7 +10,7 @@ import { FtStopControl } from './FtStopControl'
 //
 // The readings are all data: the sequencer state, the DX call, the report, the message on the
 // air, the rig's mode and filter width, and every count.
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { t } from '../i18n'
 import { catSaysTxOff } from '../features/catDetail'
 import { requestWindowAttention } from '../api'
@@ -109,6 +109,40 @@ interface Props {
   telemetry?: ReactNode
 }
 
+/** STOP TX IS ON SCREEN AS FT OPENS (`.cockpit-ftstrip`, cockpit-panes.css). The strip parks at the foot of the shell's
+ *  scrollport where its own place is below it, but only its FIRST LINE: the TX cluster, Stop TX in it. Parked whole, a
+ *  strip taller than the scrollport (300–400 px on a small window at 175 %, where the shell has 120–250) put its top,
+ *  and Stop TX, above the window. So the rest of the strip under that line is written here as a placement input
+ *  (`--cockpit-ftstrip-rest`, layout px; CSS cannot read where a child's line ends), and the strip parks that far past
+ *  the scrollport's foot. Re-read on every render as well as on a resize. */
+function useParkLine(ref: RefObject<HTMLElement | null>) {
+  const apply = () => {
+    const strip = ref.current
+    const line = strip?.querySelector<HTMLElement>(':scope > .cq-txctl')
+    if (!strip) return
+    const q = strip.getBoundingClientRect()
+    if (!line || strip.offsetHeight === 0 || q.height === 0) {
+      strip.style.removeProperty('--cockpit-ftstrip-rest')
+      return
+    }
+    const cs = getComputedStyle(strip)
+    const z = q.height / strip.offsetHeight
+    const rest = (q.bottom - line.getBoundingClientRect().bottom) / z - (parseFloat(cs.paddingBottom) || 0) - (parseFloat(cs.borderBottomWidth) || 0)
+    const px = `${Math.max(0, Math.floor(rest))}px`
+    if (strip.style.getPropertyValue('--cockpit-ftstrip-rest') !== px) strip.style.setProperty('--cockpit-ftstrip-rest', px)
+  }
+  useLayoutEffect(apply)
+  useLayoutEffect(() => {
+    const strip = ref.current
+    if (!strip || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(apply)
+    observer.observe(strip)
+    return () => observer.disconnect()
+    // `apply` reads only the ref and the DOM; the observer is set up once per mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ref])
+}
+
 function reportLabel(rx: number | null | undefined): string | null {
   if (rx === null || rx === undefined) return null
   return `${rx > 0 ? '+' : ''}${rx} dB`
@@ -154,6 +188,8 @@ export function OperateQsoStrip({
   telemetry,
 }: Props) {
   const meterStyle = useTxMeterStyle()
+  const stripRef = useRef<HTMLElement>(null)
+  useParkLine(stripRef)
   // ⚠️ cqRunning, NOT qso.running. `running` is also true through a directed S&P call (the
   // engine's own comment at call_station_ctx says so) and nothing clears it after the QSO —
   // so this strip lit Call CQ solid through every S&P contact and forever after, and the
@@ -228,7 +264,7 @@ export function OperateQsoStrip({
   const catOff = radio && !radio.txEnabled ? catSaysTxOff(radio.catDetail) : null
 
   return (
-    <section className={`cockpit-qso panel${radio ? (onAir ? ' tx' : ' rx') : ''}`}>
+    <section ref={stripRef} className={`cockpit-qso cockpit-ftstrip panel${radio ? (onAir ? ' tx' : ' rx') : ''}`}>
       {/* POSITION-STABILITY ORDER (OperateQsoStrip.geometry.test): the two button
           clusters render FIRST, so the six panic-adjacent controls are anchored at
           the strip's start. Every state-variable readout member (state cap,

@@ -21403,13 +21403,6 @@ body.pane-dragging {
   width: 80px;
 }
 
-.cockpit-body {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2); /* density pass — see .layout.single.operate-cockpit */
-}
 /* Waterfall: a SHORT full-width strip (a glance tool), not a tall column — the
    real estate goes to the decode lists + roster below. */
 .cockpit-waterfall {
@@ -30164,31 +30157,7 @@ button.sat-chip:disabled {
   overflow-y: auto;
   min-height: 0;
 }
-/* Pinned TX dock — mode/Send/Stop/progress. Never a panel; Stop always reachable.
-   Sticky is the .cockpit-txdock discipline (cockpit-panes.css): with the composer strip
-   and the stage/gallery floors, the shell's deficit valve engages routinely on short
-   windows, and a bar that scrolls away is a Stop the operator cannot reach
-   mid-transmission. The bar is the shell's LAST child (SstvView.structure.test.tsx) so
-   bottom-sticky parks it in the scrollport at every scroll position. --bg-elev is an
-   opaque hex in both themes — a sticky surface must not let content ghost through. */
-.sstv-tx-bar {
-  flex: 0 0 auto;
-  position: sticky;
-  bottom: 0;
-  /* 4, the TX strip's and `.cockpit-txdock`'s level and the pinned header's (cockpit-panes.css):
-     the bar comes after the header in the shell, so at equal z it wins any overlap — Send and Stop
-     are never under the dial. (It was 2, under the header's 4, and at 900×600 / 175 % the header
-     covered Send and Stop.) Above the region's column dividers (3) for the dock's reason. */
-  z-index: 4;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-  padding: var(--space-2) var(--space-3);
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
+/* Pinned TX dock — `.sstv-tx-bar`, mode/Send/Stop/progress: cockpit-panes.css, with its squeeze. */
 /* (The `.sstv-lower` bounded region + its `--pane-share` panels are GONE — census #10:
    the 50/50 split gave each pane half the region whatever it held, ~440px dead per pane
    on an ultrawide with an empty gallery. The compose/gallery blocks now render through

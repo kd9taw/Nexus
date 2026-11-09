@@ -100,7 +100,7 @@ const STYLES_RULES = parseStylesRules(STYLES)
 // `[data-pin='off']`: the pinned header's one state, written by the TX strip (CockpitTxStrip decidePin);
 // `[data-menu='open']`: the pinned header while a menu it opens is open (CockpitHeader).
 // `[data-fold='on']`: a TX dock that does not fit whole, and its keep row (CockpitTxStrip decideFold).
-const FLAT = /^\.[a-z][a-z0-9-]*(\[data-(cols='[123]'|flow='(stack|fill)'|pin='off'|menu='open'|fold='on')\])?$/
+const FLAT = /^\.[a-z][a-z0-9-]*(\[data-(cols='[123]'|flow='(stack|fill)'|pin='off'|menu='open'|fold='on'|squeeze='on')\])?$/
 
 /** (classes+attributes, ids) — flat rules are all (0,1,0) or (0,2,0). */
 function specificity(sel: string): number {
@@ -262,7 +262,10 @@ describe('the fence: styles.css never names a structural class', () => {
     'mycall-picker', 'station-profile-picker',
     // The TX dock's keep row (2026-11-05): parked alone while the dock is folded. A styles.css position, offset or
     // background on it would park it, or unpark it, from the sheet that cannot see the fold.
-    'cockpit-txdock-keep']) {
+    'cockpit-txdock-keep',
+    // SSTV's bar and FT's parked strip (2026-11-08): stop surfaces parked in the scrollport, and squeezed or parked
+    // short so that nothing covers Stop TX. A styles.css offset, height or overflow on one would undo that.
+    'sstv-tx-bar', 'cockpit-ftstrip']) {
     it(`styles.css declares no .${cls} rule`, () => {
       const hits = STYLES_RULES
         .map((r) => r.selector)
@@ -1095,9 +1098,11 @@ describe('a TX dock that does not fit folds, and only its keep row parks', () =>
   })
 
   it('unfolded, nothing restyles the keep row: inside the parked dock it is the row it always was', () => {
+    // Its squeeze (below) is written by the strip only while the row is parked folded, and taken off with the fold
+    // (CockpitTxStrip.squeeze.test.tsx).
     const bare = [...RULES, ...STYLES_RULES]
       .map((r) => r.selector)
-      .filter((sel) => /\.cockpit-txdock-keep(?![a-z0-9-])/.test(sel) && sel !== ".cockpit-txdock-keep[data-fold='on']")
+      .filter((sel) => /\.cockpit-txdock-keep(?![a-z0-9-])/.test(sel) && sel !== ".cockpit-txdock-keep[data-fold='on']" && sel !== ".cockpit-txdock-keep[data-squeeze='on']")
     expect(bare).toEqual([])
   })
 
@@ -1786,5 +1791,65 @@ describe('THE ONE-ROW TOP BAR AND HEADER (1080p pass): what the folds show and h
     expect(blockDecl('width')(stock!.body)).toBe('var(--cw-wpm-w, 160px)')
     expect(classChainWinner([['cw-wpm', 'cw-wpm-compact']], '--cw-wpm-w')?.value).toBe('80px')
     expect(classChainWinner([['cw-wpm']], '--cw-wpm-w'), 'nothing sets it on the stock label').toBeNull()
+  })
+})
+
+describe('NOTHING PARKED COVERS STOP TX: the bottom surface squeezes into the room the strip leaves, and FT’s strip parks its first line', () => {
+  // Computed across both sheets for elements modelled with the classes and attributes the components give them
+  // (chainWinner), never a presence match. The geometry itself is real Chrome's: scripts/browser-probe --desktop
+  // stopvisible.
+  const v = (chain: string[][], prop: string) => chainWinner(chain.map((c) => new Set(c)), blockDecl(prop))
+  const SPLITTER_Z = Number(blockDecl('z-index')(STYLES_RULES.find((r) => r.selector === '.pane-splitter')!.body))
+  const STRIP_Z = Number(v([['layout', 'single', 'rtty-cockpit'], ['cockpit-txstrip']], 'z-index')?.value)
+  const RTTY = ['layout', 'single', 'rtty-cockpit']
+  const keep = (...attrs: string[]) => [RTTY, ['cockpit-txdock', "[data-fold='on']"], ['cw-send', 'cockpit-txdock-keep', "[data-fold='on']", ...attrs]]
+  const SSTV = ['layout', 'single', 'sstv-view']
+
+  it('a squeezed keep row is capped at the room the strip writes and scrolls inside, still parked', () => {
+    const sq = keep("[data-squeeze='on']")
+    expect(v(sq, 'max-height')?.value, 'a squeezed keep row still grows over Stop TX').toBe('var(--cockpit-txdock-room)')
+    expect(v(sq, 'overflow-y')?.value, 'what the cap leaves out could not be scrolled back').toBe('auto')
+    expect(v(sq, 'position')?.value, 'squeezing unparked the row').toBe('sticky')
+    expect(v(sq, 'bottom')?.value).toBe('0')
+    // Not squeezed, the folded keep row is uncapped and does not scroll (JTTY's refusal stands out of it, on its top edge).
+    expect(v(keep(), 'max-height'), 'the cap applies to a keep row with room').toBeNull()
+    expect(v(keep(), 'overflow-y')).toBeNull()
+  })
+
+  it('SSTV’s bar is the dock’s kind: parked at the bottom, opaque, at the strip’s level, and squeezed the same way', () => {
+    const bar = [SSTV, ['sstv-tx-bar']]
+    expect(v(bar, 'position')?.value, 'Stop scrolls away with the bar').toBe('sticky')
+    expect(v(bar, 'bottom')?.value).toBe('0')
+    expect(v(bar, 'flex')?.value, 'a grower or a shrink victim').toBe('0 0 auto')
+    expect(v(bar, 'background')?.value, 'the panes show through the parked bar').toBe('var(--bg-elev)')
+    // At the strip's level and after the header in the shell: at equal z the later box wins, so Send and Stop are never
+    // under the dial. Above the region's dividers.
+    expect(Number(v(bar, 'z-index')?.value)).toBe(STRIP_Z)
+    expect(Number(v(bar, 'z-index')?.value)).toBeGreaterThan(SPLITTER_Z)
+    expect(v(bar, 'max-height'), 'a bar with room is capped').toBeNull()
+    const sq = [SSTV, ['sstv-tx-bar', "[data-squeeze='on']"]]
+    expect(v(sq, 'max-height')?.value, 'the dropped-picture sentence grows the bar over Stop TX').toBe('var(--cockpit-txdock-room)')
+    expect(v(sq, 'overflow-y')?.value).toBe('auto')
+    expect(v(sq, 'position')?.value).toBe('sticky')
+  })
+
+  it('FT’s body has no box, so its strip is a flex item of the shell and its sticky edge is the shell’s', () => {
+    const FT = [['app'], ['shell'], ['layout', 'single', 'operate-cockpit']]
+    expect(v([...FT, ['cockpit-body', 'cockpit-flat']], 'display')?.value, 'in a box of its own the strip cannot leave it').toBe('contents')
+    // The shell is the scroller the strip parks in.
+    expect(v(FT, 'overflow-y')?.value).toBe('auto')
+  })
+
+  it('FT’s strip parks at the foot with only its first line in the window, above the dividers, and never at the top', () => {
+    const strip = [['app'], ['shell'], ['layout', 'single', 'operate-cockpit'], ['cockpit-body', 'cockpit-flat'], ['cockpit-qso', 'cockpit-ftstrip', 'panel']]
+    expect(v(strip, 'position')?.value, 'Stop TX scrolls below the window as FT opens').toBe('sticky')
+    expect(v(strip, 'bottom')?.value, 'parked whole, a strip taller than the scrollport puts Stop TX above the window').toBe('calc(-1 * var(--cockpit-ftstrip-rest, 0px))')
+    // Parked at the top, a strip of 300–400 px would cover every pane under it at every scroll position.
+    expect(v(strip, 'top'), 'FT’s strip parks at the top').toBeNull()
+    expect(Number(v(strip, 'z-index')?.value)).toBe(STRIP_Z)
+    expect(Number(v(strip, 'z-index')?.value)).toBeGreaterThan(SPLITTER_Z)
+    expect(v(strip, 'background')?.value, 'what scrolls under the parked strip shows through it').toBe('var(--panel)')
+    // Keyed, the strip's wash is an animation of opaque colours over the same box; nothing unparks it.
+    expect(v([...strip.slice(0, -1), ['cockpit-qso', 'cockpit-ftstrip', 'panel', 'tx']], 'position')?.value).toBe('sticky')
   })
 })

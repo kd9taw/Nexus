@@ -568,6 +568,23 @@ describe('the column dividers exist only where the grid consumes their tokens', 
   })
 })
 
+// THE QSO STRIP'S STICKY EDGE IS THE SHELL'S (2026-11-08). At 150–175 % on a small window FT's header alone ran past the
+// window's foot, and the strip stood in `.cockpit-body`, a box it could not leave, so Stop TX was off screen as FT opened.
+// The body is a `.cockpit-flat` wrapper (no box: cockpit-panes.css, computed in cockpit-panes.test.ts) and the strip parks
+// its first line at the foot (`.cockpit-ftstrip`). Rendered here, because a cascade test models the classes it is given.
+describe('the QSO strip parks against the shell: its wrapper has no box', () => {
+  it('the strip is the body’s child, the body is flat, and the body is the shell’s child', () => {
+    const { container } = renderCockpit({})
+    const strip = container.querySelector('.cockpit-qso')
+    expect(strip?.classList.contains('cockpit-ftstrip'), 'the strip lost its parking rule').toBe(true)
+    expect(strip?.querySelector('.cq-txctl .op-btn.stop'), 'control: Stop TX is in the line that parks').not.toBeNull()
+    const body = strip?.parentElement
+    expect(body?.classList.contains('cockpit-body')).toBe(true)
+    expect(body?.classList.contains('cockpit-flat'), 'the body is a box again: the strip cannot park outside it').toBe(true)
+    expect(body?.parentElement?.matches('main.operate-cockpit'), 'a wrapper with a box stands between the body and the shell').toBe(true)
+  })
+})
+
 describe('TX meters: a fixed strip cell, never a body row', () => {
   it('no permanent .ph-txmeters row under .cockpit-body; the cell sits in the strip', () => {
     const { container } = renderCockpit({})
