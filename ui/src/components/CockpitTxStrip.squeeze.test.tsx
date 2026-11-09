@@ -194,3 +194,70 @@ describe('only a parked strip squeezes anything', () => {
     expect(bar().getAttribute('data-squeeze')).toBeNull()
   })
 })
+
+describe('a squeezed surface shows its own stop where the cap can hold it', () => {
+  // SSTV's bar wraps its mode picker onto the first line, so at the top of its own scroll the cap showed the picker and
+  // not Send and Stop (900×600 at 175 % in Russian, measured). The surface is scrolled to its stop when the squeeze begins
+  // and when the stop goes live, and never otherwise, so an operator's own scroll of it stands.
+  const STOP_AT = 90 // the stop's top inside the bar's content, layout px
+  const STOP_H = 30
+  let scrolled = 0
+  function SstvStop({ live }: { live: boolean }) {
+    return (
+      <main className="layout single sstv-view">
+        <CockpitTxStrip radio={radio} onSetTxEnabled={() => {}} onTune={() => {}} onStopTx={() => {}} />
+        <div className="sstv-tx-bar">
+          <button type="button" className="sstv-tx-stop" disabled={!live}>Stop</button>
+        </div>
+      </main>
+    )
+  }
+  function stubBar() {
+    scrolled = 0
+    const b = bar()
+    Object.defineProperty(b, 'scrollTop', { configurable: true, get: () => scrolled, set: (v: number) => { scrolled = Math.max(0, v) } })
+    const capOf = () => parseFloat(b.style.getPropertyValue('--cockpit-txdock-room')) || BAR_H
+    // On the bar itself: a spy on an inherited getter would replace every element's, the shell's too.
+    Object.defineProperty(b, 'clientHeight', { configurable: true, get: () => (b.getAttribute('data-squeeze') === 'on' ? capOf() : BAR_H) })
+    b.getBoundingClientRect = () => ({ top: 500, height: b.clientHeight, bottom: 500 + b.clientHeight, left: 0, right: 800, width: 800, x: 0, y: 500, toJSON: () => ({}) }) as DOMRect
+    const stop = b.querySelector<HTMLElement>('.sstv-tx-stop')!
+    stop.getBoundingClientRect = () => ({ top: 500 + STOP_AT - scrolled, height: STOP_H, bottom: 500 + STOP_AT - scrolled + STOP_H, left: 0, right: 80, width: 80, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+  }
+
+  it('the squeeze begins: the bar scrolls the least that shows its Stop whole', () => {
+    injectSheet(SHEET)
+    shellH = STRIP_H + BAR_H + SPARE
+    const { rerender } = render(<SstvStop live={false} />)
+    stubBar()
+    shellH = STRIP_H + 60 + SPARE
+    rerender(<SstvStop live={false} />)
+    expect(bar().getAttribute('data-squeeze')).toBe('on')
+    expect(scrolled, 'the cap showed the top of the bar, and not its Stop').toBe(STOP_AT + STOP_H - 60)
+  })
+
+  it('the operator’s own scroll stands on later renders, and the Stop going live brings it back', () => {
+    injectSheet(SHEET)
+    shellH = STRIP_H + BAR_H + SPARE
+    const { rerender } = render(<SstvStop live={false} />)
+    stubBar()
+    shellH = STRIP_H + 60 + SPARE
+    rerender(<SstvStop live={false} />)
+    scrolled = 0 // the operator scrolls the bar back to its top, to the mode picker
+    rerender(<SstvStop live={false} />)
+    expect(scrolled, 'a render took the operator’s scroll back').toBe(0)
+    rerender(<SstvStop live={true} />)
+    expect(scrolled, 'SSTV is sending and its live Stop is out of the cap').toBe(STOP_AT + STOP_H - 60)
+  })
+
+  it('a cap shorter than the Stop cannot hold it, and nothing is scrolled', () => {
+    injectSheet(SHEET)
+    shellH = STRIP_H + BAR_H + SPARE
+    const { rerender } = render(<SstvStop live={true} />)
+    stubBar()
+    shellH = STRIP_H + STOP_H - 5 + SPARE
+    rerender(<SstvStop live={true} />)
+    expect(bar().getAttribute('data-squeeze')).toBe('on')
+    expect(scrolled).toBe(0)
+  })
+})
+

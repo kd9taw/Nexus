@@ -525,9 +525,12 @@
    window at 175 % the top bar and the cockpit header leave the shell 120–250 px, and an alarm, a status message or the
    dropped-picture sentence took more (RTTY and JS8 at 900×600 / 175 % under an alarm, SSTV there under the sentence,
    measured: `scripts/browser-probe --desktop stopvisible`). Squeezed, the surface is no taller than the room the strip
-   leaves it (`--cockpit-txdock-room`, measured, because CSS cannot read a sibling's box) and scrolls inside: its
-   controls come first in it, its notices after them, so the cap takes a notice before it takes a control, and nothing
-   is hidden that its own scroll cannot bring back. Everywhere the two fit, this never applies. */
+   leaves it (`--cockpit-txdock-room`, measured, because CSS cannot read a sibling's box) and scrolls inside. What the
+   cap leaves out is in the surface's own scroll, reached by scrolling it or by Tab, and on the smallest windows (900×600
+   at 175 % in Russian or Japanese, under an alarm: a 50–54 px cap, one line) that includes Send, the TX latch, the
+   surface's own Stop or Esc/Stop and its notices; Stop TX, which stops all of it, is the stop in view. The strip
+   scrolls the surface to its own stop when the squeeze begins and when that stop goes live, where the cap can hold it
+   (CockpitTxStrip `surfaceStop`). Everywhere the two fit, this never applies. */
 .cockpit-txdock-keep[data-squeeze='on'],
 .sstv-tx-bar[data-squeeze='on'] {
   max-height: var(--cockpit-txdock-room);

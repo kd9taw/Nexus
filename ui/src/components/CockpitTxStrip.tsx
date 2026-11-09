@@ -377,9 +377,16 @@ function decideFold(shell: HTMLElement, strip: HTMLElement, dock: HTMLElement): 
  *  window at 175 % the top bar and the cockpit header leave the shell 120–250 px, and an alarm, a status message or
  *  SSTV's dropped-picture sentence takes more (RTTY, JS8 and SSTV at 900×600, measured). So there the bottom surface is
  *  SQUEEZED (`data-squeeze`, cockpit-panes.css): capped at the room the strip leaves (`--cockpit-txdock-room`) and
- *  scrolled inside, its controls first, its notices after them. Nothing is hidden: what the cap leaves out is in the
- *  surface's own scroll. Read as it would be unsqueezed (`scrollHeight`, which a cap does not change), so squeezing and
- *  releasing cannot flap; a pixel is kept spare against the rounding of the zoomed sizes. */
+ *  scrolled inside. Read as it would be unsqueezed (`scrollHeight`, which a cap does not change), so squeezing and
+ *  releasing cannot flap; a pixel is kept spare against the rounding of the zoomed sizes.
+ *  WHAT THE CAP COSTS, plainly: on the smallest windows (900×600 at 175 % in Russian or Japanese, under an alarm) it is
+ *  50–54 px, one line of the surface, and the rest of the surface — Send, the TX latch, SSTV's or the keyboard docks'
+ *  own Stop, a notice — is in the surface's own scroll, reached by scrolling it or by Tab (a focus scrolls it into
+ *  view). Stop TX, which stops everything they stop, is the one in view. To keep the surface's own stop in view too
+ *  where the cap can hold it, the surface is scrolled to that stop (`surfaceStop`) when the squeeze begins and when the
+ *  stop goes live (SSTV's Stop and Esc/Stop are disabled until an over is on the air); never on other renders, so the
+ *  operator's own scroll of the surface stands. Where the cap is shorter than the stop (JS8 in Japanese at 900×600:
+ *  27 px), nothing can hold it, and it is in the scroll. */
 function decideSqueeze(shell: HTMLElement, strip: HTMLElement, head: HTMLElement | undefined, parked: HTMLElement): void {
   const cs = getComputedStyle(shell)
   const room = Math.floor(
@@ -389,9 +396,14 @@ function decideSqueeze(shell: HTMLElement, strip: HTMLElement, head: HTMLElement
   const ps = getComputedStyle(parked)
   const natural = parked.scrollHeight + (parseFloat(ps.borderTopWidth) || 0) + (parseFloat(ps.borderBottomWidth) || 0)
   if (shell.clientHeight > 0 && natural > room) {
+    const began = parked.getAttribute('data-squeeze') !== 'on'
     const cap = `${Math.max(0, room)}px`
     if (parked.style.getPropertyValue('--cockpit-txdock-room') !== cap) parked.style.setProperty('--cockpit-txdock-room', cap)
-    if (parked.getAttribute('data-squeeze') !== 'on') parked.setAttribute('data-squeeze', 'on')
+    if (began) parked.setAttribute('data-squeeze', 'on')
+    const stop = parked.querySelector<HTMLButtonElement>(SURFACE_STOP)
+    const live = stop != null && !stop.disabled
+    if (stop && (began || (live && stopLive.get(parked) === false))) surfaceStop(parked, stop)
+    stopLive.set(parked, live)
   } else {
     unsqueeze(parked)
   }
@@ -399,6 +411,23 @@ function decideSqueeze(shell: HTMLElement, strip: HTMLElement, head: HTMLElement
 function unsqueeze(el: HTMLElement): void {
   if (el.hasAttribute('data-squeeze')) el.removeAttribute('data-squeeze')
   if (el.style.getPropertyValue('--cockpit-txdock-room')) el.style.removeProperty('--cockpit-txdock-room')
+  stopLive.delete(el)
+}
+/** A parked surface's OWN stop: SSTV's Stop, the keyboard docks' Esc/Stop, Phone's PTT (its release unkeys). */
+const SURFACE_STOP = '.sstv-tx-stop, .rtty-stop, .ph-ptt'
+/** Whether each squeezed surface's stop was live at the last decision: a stop going live is scrolled to once. */
+const stopLive = new WeakMap<HTMLElement, boolean>()
+/** Scroll a squeezed surface (only it: never the shell) the least that shows its stop whole, where the cap can hold it. */
+function surfaceStop(parked: HTMLElement, stop: HTMLElement): void {
+  const p = parked.getBoundingClientRect()
+  const q = stop.getBoundingClientRect()
+  if (parked.offsetHeight === 0 || p.height === 0) return
+  const z = p.height / parked.offsetHeight
+  const top = p.top + parked.clientTop * z
+  const bottom = top + parked.clientHeight * z
+  if (q.height > bottom - top) return
+  if (q.top < top) parked.scrollTop -= (top - q.top) / z
+  else if (q.bottom > bottom) parked.scrollTop += (q.bottom - bottom) / z
 }
 
 /** The focus a Tab moves follows its keydown at once; this only allows for a loaded machine. */
