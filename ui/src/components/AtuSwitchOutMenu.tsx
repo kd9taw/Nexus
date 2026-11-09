@@ -103,6 +103,7 @@ export function AtuSwitchOutMenu({
   onSwitchOut: () => void
   buttonRef: RefObject<HTMLButtonElement | null>
 }) {
+  const content = useRef<HTMLDivElement>(null)
   return (
     <MenuRoot open={open} onOpenChange={onOpenChange}>
       <RM.Trigger asChild>
@@ -110,6 +111,7 @@ export function AtuSwitchOutMenu({
       </RM.Trigger>
       <RM.Portal>
         <MenuContent
+          ref={content}
           className="ui-menu box-menu"
           aria-label={t('operate.strip.atu.menu.aria')}
           // The anchor is an empty span; name the menu itself rather than point at it.
@@ -124,8 +126,11 @@ export function AtuSwitchOutMenu({
           }}
           // The menu is not modal, so focus leaving it closes it. A long press ends with a click on the button it
           // was held on, and that click focuses the button: it is the press that opened the menu, not a move away.
+          // The keyboard is then taken back into the menu: left on ATU, Enter would run a tune-up and key a carrier.
           onFocusOutside={(e) => {
-            if (e.target instanceof Node && buttonRef.current?.contains(e.target)) e.preventDefault()
+            if (!(e.target instanceof Node && buttonRef.current?.contains(e.target))) return
+            e.preventDefault()
+            content.current?.focus({ preventScroll: true })
           }}
         >
           {/* The portal escapes `.app`'s zoom, so the content re-applies it (Menu.tsx's reason). */}
