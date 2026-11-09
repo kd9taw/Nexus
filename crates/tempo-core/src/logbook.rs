@@ -3974,12 +3974,15 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
     // the contact or already held it. Never "N", which ADIF defines as "do not upload" and no
     // stamp says. Each only where the record carries none of its own: one imported from another
     // logger carries that logger's, written from `extra` below, and a field twice is undefined
-    // territory (the `MY_GRIDSQUARE` guard's reason). A mark with no date writes no date.
+    // territory (the `MY_GRIDSQUARE` guard's reason). A mark with no date writes no date. Only on
+    // a copy that leaves Nexus: the operator's own copy ([`Audience::OwnLog`]) carries the stamp
+    // itself, and read back these would be fields of the record's own, so it would not round-trip.
     if let Some(sent) = r.upload.eqsl.as_ref().filter(|s| {
-        matches!(
-            s.outcome,
-            UploadOutcome::Accepted | UploadOutcome::Duplicate
-        )
+        audience != Audience::OwnLog
+            && matches!(
+                s.outcome,
+                UploadOutcome::Accepted | UploadOutcome::Duplicate
+            )
     }) {
         if extra_field(r, "EQSL_QSL_SENT").is_none() {
             out.push_str(&field("EQSL_QSL_SENT", "Y"));
@@ -12261,7 +12264,8 @@ mod tests {
     /// Never "N", which ADIF defines as "do not upload": a contact never sent, refused, or not yet
     /// answered says nothing. A contact carrying its own (imported from another logger) writes
     /// each once, as it carries them, and a mark with no date writes no date. Both the operator's
-    /// own copy and the one sent to a service.
+    /// file copy (`log.adi`, the exports) and the one sent to a service; never the operator's own
+    /// copy, which holds the stamp itself (`a_records_own_copy_round_trips_with_its_eqsl_stamp`).
     #[test]
     fn an_export_says_which_contacts_went_to_eqsl() {
         let stamp = |outcome, when_unix, detail| {
@@ -12281,7 +12285,7 @@ mod tests {
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect();
-            [adif_record_own_log(&r), adif_record(&r)].map(|out| {
+            [adif_record_own_file(&r), adif_record(&r)].map(|out| {
                 let back = &parse_adif(&out)[0];
                 (
                     out.matches("<EQSL_QSL_SENT:").count(),
@@ -12348,6 +12352,26 @@ mod tests {
             ),
             [own.clone(), own]
         );
+    }
+
+    /// ★ The operator's own copy of a record ([`Audience::OwnLog`]: the store's round trips and the
+    /// edit history's snapshots) carries Nexus's eQSL stamp alone, never the `EQSL_QSL_SENT` and
+    /// `EQSL_QSLSDATE` an export derives from it: read back, they would be fields of the record's
+    /// own, and the record would not be the one it was. A record with an accepted eQSL stamp reads
+    /// back from its own copy exactly as it was.
+    #[test]
+    fn a_records_own_copy_round_trips_with_its_eqsl_stamp() {
+        let mut r = rec("W1AW", "20m", 1_700_000_000);
+        r.upload.eqsl = Some(UploadStatus {
+            outcome: UploadOutcome::Accepted,
+            when_unix: 1_700_100_000,
+            detail: None,
+        });
+        let own = adif_record_own_log(&r);
+        assert!(!own.contains("<EQSL_QSL_SENT:"), "{own}");
+        let back = parse_adif(&(adif_header() + &own))[0].clone();
+        assert_eq!(back.extra, r.extra);
+        assert_eq!(back.upload.eqsl, r.upload.eqsl);
     }
 
     /// ★ Another logger's file saying a contact went to eQSL (`EQSL_QSL_SENT` "Y") reads as an
