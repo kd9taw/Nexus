@@ -15,7 +15,9 @@
 //
 // A STOP CONTROL is an element carrying `data-stop-control`: Stop TX wherever it is drawn (the top bar, the TX strip,
 // FT's strip), and the docks' stop keys (RTTY's, PSK's and JTTY's Esc Stop, RTTY's sequencer Abort, SSTV's Stop).
-// stop-line.test.tsx holds every Stop TX and dock stop of every cockpit to carrying it. Tune, PTT and the TX latch are
+// Its value names the stop: `stop-tx`, `esc-stop`, `sequencer-abort`, `sstv-stop`. StopLayer.test.tsx pins the eight
+// places the app writes it, exactly, and stop-line.test.tsx holds every Stop TX and dock stop of every cockpit to
+// carrying it. Tune, PTT and the TX latch are
 // not on it: the ruling is Stop TX and the docks' stops, and the latch's other click turns transmit ON. Roam's Stop
 // stops roaming, not a transmission, and is not on it either.
 //
@@ -33,9 +35,15 @@
 // A MIRROR NEVER OUTLIVES OR MISSTATES ITS BUTTON. While a mirror stands, a MutationObserver watches the document and
 // re-checks every mirror as soon as anything changes, before the next frame is painted: a button that is unmounted,
 // put behind `[hidden]`, scrolled or clipped out of sight, or loses its marker loses its mirror at once, and a button
-// whose markup changes (disabled, its label) gets a fresh mirror. A press that is in progress does not hold a stale
-// mirror up. And a click on a mirror checks its button first: if the button has gone, is disabled or out of sight,
-// the click does nothing but drop the mirror (a disabled button's click does nothing at all).
+// whose markup changes (disabled, its label) gets a fresh mirror. The one exception is the mirror being pressed: it
+// stays until that press ends (its click, or the pointer let go elsewhere), and goes then — a mirror removed under a
+// pressed pointer would lose the press, and the stop with it. A click on a mirror checks its button as it lands:
+//   · the button is there and enabled: its click runs, once;
+//   · the button is disabled: nothing;
+//   · the button has GONE (React replaced its node, a re-render between the press and the click): the click goes to
+//     the stop that took its place — a connected, drawn, MARKED control with the SAME marker value (the stop's
+//     identity: `stop-tx`, `esc-stop`, `sequencer-abort`, `sstv-stop`) standing under the press point — and to
+//     nothing else. Never an unmarked control, never another kind of stop, never one somewhere else.
 //
 // Screen readers see only the button: the layer and every mirror are aria-hidden, and the mirror has no id. The
 // button stays the accessible control (under a Radix dialog it is hidden from them with the rest of the page, as it
@@ -126,6 +134,18 @@ function present(el: HTMLElement): boolean {
   return el.isConnected && el.matches(STOP_CONTROL) && el.closest('[hidden]') == null && visibleBox(el) != null
 }
 
+/** The stop that took a departed button's place: connected, drawn and marked with the same identity, under the press
+ *  point. Null when there is none, which is the only safe answer then. */
+function replacement(identity: string | null, x: number, y: number): HTMLElement | null {
+  if (identity == null) return null
+  for (const c of document.querySelectorAll<HTMLElement>(STOP_CONTROL)) {
+    if (c.getAttribute('data-stop-control') !== identity || !present(c)) continue
+    const r = c.getBoundingClientRect()
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return c
+  }
+  return null
+}
+
 /** What a mirror draws: the button's markup and where it stands. A change in either is a new mirror. */
 function keyOf(el: HTMLElement, box: Box): string {
   const r = el.getBoundingClientRect()
@@ -141,7 +161,7 @@ export function StopLayer() {
     const mirrors = new Map<HTMLElement, Mirror>()
     // While a press on a mirror is in progress the layer holds still: the press may close what covered the button,
     // and the mirror must still be there for the click that ends it.
-    let pressing = false
+    let pressed: { el: HTMLElement; x: number; y: number } | null = null
 
     const drop = (el: HTMLElement) => {
       mirrors.get(el)?.node.remove()
@@ -179,7 +199,7 @@ export function StopLayer() {
       s.clipPath = `inset(${(box.top - r.top) / z}px ${(r.right - box.right) / z}px ${(r.bottom - box.bottom) / z}px ${(box.left - r.left) / z}px)`
       node.addEventListener('pointerdown', (e) => {
         e.stopPropagation()
-        pressing = true
+        pressed = { el, x: e.clientX, y: e.clientY }
       })
       node.addEventListener('mousedown', (e) => {
         e.preventDefault()
@@ -188,15 +208,17 @@ export function StopLayer() {
       node.addEventListener('click', (e) => {
         e.preventDefault()
         e.stopPropagation()
-        pressing = false
+        const press = pressed?.el === el ? pressed : { el, x: e.clientX, y: e.clientY }
+        pressed = null
         // The button is checked as the click lands, not as the mirror was drawn.
-        if (!present(el) || mirrors.get(el)?.node !== node) {
+        let target: HTMLElement | null = el
+        if (!present(el)) {
+          target = replacement(el.getAttribute('data-stop-control'), press.x, press.y)
           drop(el)
-          return
         }
         // A disabled stop stops nothing; its mirror stays, disabled, as the button is.
-        if ((el as HTMLButtonElement).disabled) return
-        el.click()
+        if (!target || (target as HTMLButtonElement).disabled) return
+        target.click()
       })
       // No keyboard through the mirror: Enter and Space would activate it, and a held key would repeat.
       node.addEventListener('keydown', (e) => {
@@ -212,6 +234,8 @@ export function StopLayer() {
     // held by a press, and not waiting for a frame.
     const refresh = () => {
       for (const [el, m] of [...mirrors]) {
+        // The mirror under a pressed pointer stays as it is until the press ends (see the header).
+        if (pressed?.el === el) continue
         if (!present(el)) drop(el)
         else if (!m.key.startsWith(`${keyOf(el, visibleBox(el)!)}|`)) place(el, visibleBox(el)!)
       }
@@ -235,7 +259,7 @@ export function StopLayer() {
 
     const sync = () => {
       refresh()
-      if (pressing) return
+      if (pressed) return
       if (!overlayOpen()) {
         for (const el of [...mirrors.keys()]) drop(el)
         return
@@ -250,7 +274,11 @@ export function StopLayer() {
     }
 
     // A press that ends anywhere but on its mirror (dragged off, cancelled) lets the layer move again.
-    const released = () => setTimeout(() => (pressing = false), 0)
+    const released = () =>
+      setTimeout(() => {
+        pressed = null
+        refresh()
+      }, 0)
     window.addEventListener('pointerup', released, true)
     window.addEventListener('pointercancel', released, true)
     let frame = 0

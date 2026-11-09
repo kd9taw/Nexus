@@ -4,7 +4,7 @@ export function FtStopControl({ onHaltTx }: { onHaltTx?: () => void }) {
     <button
       type="button"
       className="op-btn stop"
-      data-stop-control
+      data-stop-control="stop-tx"
       onClick={() => onHaltTx?.()}
       title="Stop transmitting immediately — cuts even an over already in flight"
     >Stop TX</button>

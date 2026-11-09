@@ -179,7 +179,7 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
         {/* THE stop control of every screen that draws this strip; its label is the accessible
             name every stop-line sweep looks for (/^stop tx$/i). */}
         {onStopTx && (
-          <button type="button" className="op-btn stop" data-stop-control
+          <button type="button" className="op-btn stop" data-stop-control="stop-tx"
             onClick={onStopTx}
             title="Stop TX (Esc)">
             Stop TX

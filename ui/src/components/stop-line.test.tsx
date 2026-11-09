@@ -494,22 +494,27 @@ describe('RTTY: the macro editor never stands between the operator and a stop', 
 
   afterEach(() => answering(rttyState))
 
-  // RTTY's sequencer Abort renders only mid-sequence, so the per-cockpit marker census above never sees it. Here it is
-  // on screen: it must carry `data-stop-control` (the stop layer keeps it on top of a dialog), and its row's keying
-  // keys (CQ, Answer) must not.
-  it("the sequencer's Abort, on screen mid-sequence, is a marked stop and its row's keying keys are not", async () => {
-    answering({ ...rttyState, auto: true, seqState: 'cq' } as RttyState)
+  // RTTY's sequencer row is drawn only with Auto on, so the per-cockpit marker census above never sees it: idle, it
+  // holds the keying keys (Auto CQ, which STARTS a transmission, and Answer); mid-sequence, the Abort. The Abort must
+  // carry `data-stop-control` (the stop layer keeps it on top of a dialog); CQ and Answer must not.
+  async function sequencer(seqState: string) {
+    answering({ ...rttyState, auto: true, seqState } as RttyState)
     const from = asked()
     render(<RttyCockpit snap={snap} active onSetTxEnabled={() => {}} />)
     await settle()
     await answered(from)
-    const abort = screen.getByRole('button', { name: /^esc\s*abort$/i })
-    expect(abort.hasAttribute('data-stop-control')).toBe(true)
-    for (const key of document.querySelectorAll('.rtty-auto-cq, .rtty-auto-answer')) {
-      expect(key.hasAttribute('data-stop-control'), key.className).toBe(false)
-    }
     const marked = [...document.querySelectorAll('[data-stop-control]')].map((e) => (e.textContent ?? '').replace(/\s+/g, ' ').trim())
-    for (const name of marked) expect(name).toMatch(/^(stop tx|esc ?stop|esc ?abort|stop)$/i)
+    for (const name of marked) expect(name, 'a marked control that is not a stop').toMatch(/^(stop tx|esc ?stop|esc ?abort|stop)$/i)
+  }
+  it("idle, the sequencer's CQ and Answer keys are on screen and NOT marked", async () => {
+    await sequencer('idle')
+    const keys = [...document.querySelectorAll('.rtty-auto-cq, .rtty-auto-answer')]
+    expect(keys.map((k) => k.className.split(' ').pop()), 'fixture: both keying keys are drawn').toEqual(['rtty-auto-cq', 'rtty-auto-answer'])
+    for (const key of keys) expect(key.hasAttribute('data-stop-control'), key.className).toBe(false)
+  })
+  it("mid-sequence, the sequencer's Abort is on screen and marked as a stop", async () => {
+    await sequencer('cq')
+    expect(screen.getByRole('button', { name: /^esc\s*abort$/i }).getAttribute('data-stop-control')).toBe('sequencer-abort')
   })
 
   it('Stop TX and the Esc/Stop macro are on screen and enabled while an over is on the air', async () => {

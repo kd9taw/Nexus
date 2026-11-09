@@ -309,6 +309,43 @@ function Stops({ disabled = false, hidden = false, shown = true, onHalt }: { dis
   )
 }
 
+/** Every place in ui/src's app source (tests, probe pages and the layer itself aside) that writes `data-stop-control`,
+ *  as `file Component <element class="…"> = value`, in file order. Comments are not code and are skipped. */
+function markerSites(): string[] {
+  const SRC = resolve(__dirname, '..')
+  const walk = (dir: string): string[] =>
+    readdirSync(dir).flatMap((n) => {
+      const p = join(dir, n)
+      if (statSync(p).isDirectory()) return n === 'probe' ? [] : walk(p)
+      return /\.tsx?$/.test(n) && !/\.test\.tsx?$/.test(n) && !/testkit/.test(n) && n !== 'StopLayer.tsx' ? [p] : []
+    })
+  const out: string[] = []
+  for (const p of walk(SRC).sort()) {
+    const code = readFileSync(p, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ' '))
+      .replace(/(^|\s)\/\/.*$/gm, '$1')
+    for (const m of code.matchAll(/data-stop-control(?:=(?:"([^"]*)"|\{[^}]*\}))?/g)) {
+      const at = m.index!
+      const start = code.lastIndexOf('<', at)
+      // The tag's end: the first `>` outside braces (an arrow inside `onClick={() => …}` is inside them).
+      let end = start
+      for (let depth = 0; end < code.length; end++) {
+        const ch = code[end]
+        if (ch === '{') depth++
+        else if (ch === '}') depth--
+        else if (ch === '>' && depth === 0) break
+      }
+      const tag = code.slice(start, end)
+      const element = /^<([\w.]+)/.exec(tag)?.[1] ?? '?'
+      const cls = /className=(?:"([^"]*)"|\{`([^`]*)`\})/.exec(tag)
+      const comps = [...code.slice(0, at).matchAll(/^(?:export\s+)?(?:default\s+)?(?:function\s+([A-Z]\w*)|const\s+([A-Z]\w*)\s*=)/gm)]
+      const last = comps[comps.length - 1]
+      out.push(`${relative(SRC, p)} ${last?.[1] ?? last?.[2] ?? '?'} <${element} class="${cls?.[1] ?? cls?.[2] ?? ''}"> = ${m[1] ?? '(none)'}`)
+    }
+  }
+  return out.sort()
+}
+
 describe('1. the mirror always matches its button, and never outlives it', () => {
   it('disabled, the mirror is disabled at once; enabled again, it is enabled at once (no frame waited)', async () => {
     const halt = vi.fn()
@@ -360,14 +397,69 @@ describe('1. the mirror always matches its button, and never outlives it', () =>
     expect(m.isConnected).toBe(false)
   })
 
-  it('a press in progress does not hold up the mirror of a button that went', async () => {
+  it('a press in progress holds its mirror only until the press ends, then the mirror of a button that went is gone', async () => {
     const halt = vi.fn()
     const { rerender } = render(<Stops onHalt={halt} />)
     await frames()
     fireEvent.pointerDown(mirror()!, { button: 0, pointerType: 'mouse' })
     rerender(<Stops onHalt={halt} shown={false} />)
     await microtask()
+    expect(mirror(), 'held under the pressed pointer').not.toBeNull()
+    // The pointer is let go somewhere else: no click on the mirror, and the mirror goes with the press.
+    fireEvent.pointerUp(window, { button: 0, pointerType: 'mouse' })
+    await frames()
     expect(mirror()).toBeNull()
+    expect(halt).not.toHaveBeenCalled()
+  })
+})
+
+// The press that lands across a re-render. React may replace a button's node between the press and its click (a key
+// change, a remount); the press must still stop — on the stop that took the button's place, matched by its marker
+// identity at the press point — and never reach anything else.
+describe('a press that lands across a re-render', () => {
+  const at = { clientX: STOP_BOX.left + STOP_BOX.width / 2, clientY: STOP_BOX.top + STOP_BOX.height / 2 }
+  function Swap({ which, onFirst, onSecond }: { which: 'first' | 'same' | 'unmarked' | 'other'; onFirst: () => void; onSecond: () => void }) {
+    return (
+      <>
+        <div className="app">
+          {which === 'first' && <button key="a" type="button" className="op-btn stop" data-stop-control="stop-tx" onClick={onFirst}>Stop TX</button>}
+          {which === 'same' && <button key="b" type="button" className="op-btn stop" data-stop-control="stop-tx" onClick={onSecond}>Stop TX</button>}
+          {which === 'unmarked' && <button key="c" type="button" className="op-btn stop" onClick={onSecond}>Stop TX</button>}
+          {which === 'other' && <button key="d" type="button" className="cw-macro rtty-stop" data-stop-control="esc-stop" onClick={onSecond}>Esc Stop</button>}
+        </div>
+        <OpenDialog />
+        <StopLayer />
+      </>
+    )
+  }
+  async function pressAcross(to: 'same' | 'unmarked' | 'other') {
+    const first = vi.fn()
+    const second = vi.fn()
+    const { rerender } = render(<Swap which="first" onFirst={first} onSecond={second} />)
+    await frames()
+    const m = mirror()!
+    fireEvent.pointerDown(m, { button: 0, pointerType: 'mouse', ...at })
+    fireEvent.mouseDown(m, { button: 0, ...at })
+    // The node is replaced between the press and its click.
+    rerender(<Swap which={to} onFirst={first} onSecond={second} />)
+    await microtask()
+    fireEvent.pointerUp(m, { button: 0, pointerType: 'mouse', ...at })
+    fireEvent.mouseUp(m, { button: 0, ...at })
+    fireEvent.click(m, { button: 0, ...at })
+    return { first, second }
+  }
+
+  it('replaced by the same stop: the press stops, once, on the stop that took its place', async () => {
+    const { first, second } = await pressAcross('same')
+    expect([first.mock.calls.length, second.mock.calls.length]).toEqual([0, 1])
+  })
+  it('replaced by an UNMARKED control: the press does nothing', async () => {
+    const { first, second } = await pressAcross('unmarked')
+    expect([first.mock.calls.length, second.mock.calls.length]).toEqual([0, 0])
+  })
+  it('replaced by a different stop (another identity): the press does nothing', async () => {
+    const { first, second } = await pressAcross('other')
+    expect([first.mock.calls.length, second.mock.calls.length]).toEqual([0, 0])
   })
 })
 
@@ -416,31 +508,23 @@ describe('3. only stop controls carry the marker', () => {
     expect(screen.getByRole('button', { name: 'Tune' }).hasAttribute('data-stop-control')).toBe(false)
   })
 
-  // Every cockpit's marked controls, rendered, are held to stops in stop-line.test.tsx. This is the census of the
-  // source: every place the marker is written, by file, so a marker added to anything is read by someone first.
-  // ONLY A CONTROL THAT STOPS A TRANSMISSION MAY BE ADDED HERE — never Tune, PTT, the TX latch or a keying control.
-  it('the marker is written only on the known stop controls', () => {
-    const SRC = resolve(__dirname, '..')
-    const walk = (dir: string): string[] =>
-      readdirSync(dir).flatMap((n) => {
-        const p = join(dir, n)
-        if (statSync(p).isDirectory()) return walk(p)
-        return /\.tsx$/.test(n) && !/\.test\.tsx$/.test(n) ? [p] : []
-      })
-    const found: Record<string, number> = {}
-    for (const p of walk(SRC)) {
-      const n = (readFileSync(p, 'utf8').match(/^\s*(?:<button[^>]*\s)?data-stop-control\b/gm) ?? []).length
-      if (n) found[relative(SRC, p)] = n
-    }
-    expect(found).toEqual({
-      'components/TopBar.tsx': 1, // Stop TX
-      'components/CockpitTxStrip.tsx': 1, // Stop TX
-      'components/FtStopControl.tsx': 1, // FT's Stop TX
-      'components/RttyCockpit.tsx': 2, // Esc Stop, the sequencer's Abort
-      'components/PskCockpit.tsx': 1, // Esc Stop
-      'components/JttyCockpit.tsx': 1, // Esc Stop
-      'components/SstvView.tsx': 1, // Stop
-    })
+  // THE ALLOW-LIST. The stop layer draws every marked control above every dialog, so a marker on anything that is
+  // not a stop (Tune, PTT, the TX latch, ATU, RTTY's Auto CQ, a macro) would let it key from above a dialog. Every
+  // place in the app's source that writes the marker is pinned here EXACTLY: by file, by the component it is in, by
+  // the element and its class, and by the marker's value (the stop's identity, which the mirror's press uses to find
+  // the same stop again). Any extra, missing, moved or renamed marker goes red. ONLY A CONTROL THAT STOPS A
+  // TRANSMISSION MAY EVER BE ADDED.
+  it('the marker is on exactly the eight stop controls, and nowhere else', () => {
+    expect(markerSites()).toEqual([
+      'components/CockpitTxStrip.tsx CockpitTxStrip <button class="op-btn stop"> = stop-tx',
+      'components/FtStopControl.tsx FtStopControl <button class="op-btn stop"> = stop-tx',
+      'components/JttyCockpit.tsx JttyCockpit <button class="cw-macro rtty-stop jtty-stop"> = esc-stop',
+      'components/PskCockpit.tsx PskCockpit <button class="cw-macro rtty-stop psk-stop send-row-stop"> = esc-stop',
+      'components/RttyCockpit.tsx RttyCockpit <button class="cw-macro rtty-auto-stop"> = sequencer-abort',
+      'components/RttyCockpit.tsx RttyCockpit <button class="cw-macro rtty-stop send-row-stop"> = esc-stop',
+      'components/SstvView.tsx SstvView <button class="sstv-tx-stop"> = sstv-stop',
+      'components/TopBar.tsx TopBar <button class="op-btn stop"> = stop-tx',
+    ])
   })
 })
 
