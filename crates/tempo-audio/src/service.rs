@@ -19983,8 +19983,9 @@ struct CatProbe {
     freq_hz: Option<u64>,
     mode: Option<String>,
     /// Nexus refused this launch itself — a declared Hardware handshake on a port where RTS keys
-    /// the transmitter ([`crate::rigctld_proc::HandshakeRefused`]). Typed, so Test CAT never
-    /// sweeps the port the refusal kept shut, whatever the detail's words become.
+    /// the transmitter ([`crate::rigctld_proc::HandshakeRefused`]), or a Hamlib that cannot
+    /// confirm the line holds ([`crate::rigctld_proc::HoldsUnconfirmed`]). Typed, so Test CAT
+    /// never sweeps the port the refusal kept shut, whatever the detail's words become.
     refused: bool,
 }
 
@@ -20466,7 +20467,7 @@ fn open_cat(
             Rig::vox(),
             None,
             CatProbe {
-                refused: crate::rigctld_proc::is_handshake_refusal(&e),
+                refused: crate::rigctld_proc::is_launch_refusal(&e),
                 ..CatProbe::status(Some(false), rigctld_launch_failed(&e))
             },
         ),
@@ -20527,8 +20528,9 @@ fn rigctld_launch_failed(e: &std::io::Error) -> String {
 /// found them; see [`crate::rigctld_proc::hamlib_missing_for`].
 fn rigctld_launch_failed_for(mac: bool, e: &std::io::Error) -> String {
     // A launch Nexus refused itself (a declared Hardware handshake on a port where RTS keys the
-    // transmitter) is already the operator's sentence: Hamlib never ran, so no Hamlib prefix.
-    if crate::rigctld_proc::is_handshake_refusal(e) {
+    // transmitter, or a Hamlib that cannot confirm the line holds) is already the operator's
+    // sentence: no daemon ran, so no Hamlib prefix.
+    if crate::rigctld_proc::is_launch_refusal(e) {
         return e.to_string();
     }
     crate::rigctld_proc::hamlib_missing_for(mac, "rigctld", e)

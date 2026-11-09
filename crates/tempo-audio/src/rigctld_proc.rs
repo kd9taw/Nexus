@@ -416,6 +416,34 @@ pub fn is_handshake_refusal(e: &std::io::Error) -> bool {
         .is_some_and(|inner| inner.is::<HandshakeRefused>())
 }
 
+/// What the operator is told when [`spawn_rigctld`] refuses a launch because this Hamlib cannot
+/// confirm it will hold RTS and DTR ([`HoldsUnconfirmed`]).
+pub const HAMLIB_CANNOT_CONFIRM_HOLDS: &str = "Nexus did not open the serial port: this Hamlib is too old to confirm it will hold the RTS and DTR lines low, and opening the port without that can key a transmitter wired to either line. Update Hamlib to 4.6 or later, or use the Hamlib that comes with Nexus.";
+
+/// The error [`spawn_rigctld`] returns when this Hamlib cannot say whether it will hold the lines
+/// ([`ShowConf::Unconfirmable`]) and the port has lines to hold. Before the bounded dump, such a
+/// Hamlib (4.5.5) hung the open forever; opening silently without the holds instead would be a
+/// possible key-down at connect on an RTS- or DTR-keyed interface. Displays as
+/// [`HAMLIB_CANNOT_CONFIRM_HOLDS`].
+#[derive(Debug)]
+pub struct HoldsUnconfirmed;
+
+impl std::fmt::Display for HoldsUnconfirmed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(HAMLIB_CANNOT_CONFIRM_HOLDS)
+    }
+}
+
+impl std::error::Error for HoldsUnconfirmed {}
+
+/// Is this launch error one Nexus refused itself, before any daemon ran: the handshake refusal
+/// ([`HandshakeRefused`]) or the unconfirmed holds ([`HoldsUnconfirmed`])? Its words are the
+/// operator's sentence, and Test CAT must not sweep the port it kept shut.
+pub fn is_launch_refusal(e: &std::io::Error) -> bool {
+    e.get_ref()
+        .is_some_and(|inner| inner.is::<HandshakeRefused>() || inner.is::<HoldsUnconfirmed>())
+}
+
 /// Would [`spawn_rigctld`] refuse this launch? A serial port (not a network transport, not an
 /// empty address), a declared Hardware handshake, and RTS keying the transmitter
 /// ([`rts_keys_transmitter`]). The one predicate: the spawn refusal and the radio loop's Test CAT
@@ -1365,7 +1393,7 @@ const HANDSHAKE_RTS_TAKEN: [&str; 1] = ["Hardware"];
 /// (`rig.c:1241-1249` tests `rts_state`) — but it means "unreadable" is a per-line question,
 /// not a whole-dump one. What is guaranteed is the direction: no `true` is ever produced
 /// without the specific evidence that line needs.
-fn settable_lines_for(model: u32, ptt_line: Option<crate::rig::SerialLine>) -> SettableLines {
+fn settable_lines_for(model: u32, ptt_line: Option<crate::rig::SerialLine>) -> ShowConf {
     let model = model.to_string();
     let mut args = vec!["-m", model.as_str(), "-L"];
     // Ask with the SAME keying override we are about to launch with, so the answer is the
@@ -1374,9 +1402,102 @@ fn settable_lines_for(model: u32, ptt_line: Option<crate::rig::SerialLine>) -> S
         args.push("-P");
         args.push(ptt_type_token(line));
     }
-    daemon_dump(&args)
-        .map(|d| parse_settable_lines(&d))
-        .unwrap_or_default()
+    ask_show_conf(&resolve_rigctld(), &resolve_rigctl(), &args, DUMP_BUDGET)
+}
+
+/// What asking this Hamlib for its `-L` show-conf dump came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ShowConf {
+    /// A whole dump, from `rigctld` or, on a Hamlib whose `rigctld -L` never exits, from
+    /// `rigctl`.
+    Dump(String),
+    /// `rigctld` ran and gave nothing usable (a non-zero exit, no binary). As before: claim
+    /// nothing, and the daemon's own launch reports a binary that cannot run.
+    Unanswered,
+    /// `rigctld -L` never exited and `rigctl` gave no whole dump either: this Hamlib cannot say
+    /// whether it will hold the lines. The launch is refused on a port with lines to hold
+    /// ([`HoldsUnconfirmed`]).
+    Unconfirmable,
+}
+
+/// A path no open can reach: a directory in `/dev` that does not exist, which only root could
+/// make, so it cannot be planted as a link to a real port. The fallback dump points `rigctl`'s
+/// rig (and its PTT, which defaults to the rig's path) at it.
+pub(crate) const NO_SUCH_RIG: &str = "/dev/nexus-no-such-rig/rig";
+
+/// Ask for the `-L` dump: `rigctld` first, as always. If `rigctld` is still running at the
+/// budget (Hamlib 4.5.5 prints the dump and stays up as a daemon), ask `rigctl` with the same
+/// arguments plus `-r` [`NO_SUCH_RIG`].
+///
+/// ⚠️ The `-r` is not optional. 4.5.5's `rigctl -L` prints the dump and then calls `rig_open` on
+/// the rig's default port, `/dev/ttyS0` (observed, four tries over 2 s): asked as-is, the
+/// fallback would OPEN a real serial port, and its lines with it. Pointed at [`NO_SUCH_RIG`] the
+/// only open it tries fails with "no such file", and it exits (status 2, with the whole dump
+/// flushed). 4.6.5 and 4.7.1 `rigctl -L` exit 0 without opening anything. So for the fallback any
+/// exit counts, as long as the dump is whole: it names `rig_pathname`, Hamlib's first frontend
+/// parameter. A `rigctl` still running at the budget is killed and reaped like `rigctld`.
+pub(crate) fn ask_show_conf(
+    rigctld: &std::ffi::OsStr,
+    rigctl: &std::ffi::OsStr,
+    args: &[&str],
+    budget: std::time::Duration,
+) -> ShowConf {
+    tempo_core::applog::info("proc", &format!("run rigctld {}", args.join(" ")));
+    let mut cmd = tempo_core::process::command(rigctld);
+    cmd.args(args);
+    match run_within(&mut cmd, budget) {
+        Bounded::Exited { ok: true, stdout } => return ShowConf::Dump(stdout),
+        Bounded::Exited { .. } | Bounded::Unrunnable => return ShowConf::Unanswered,
+        Bounded::Overran => {}
+    }
+    tempo_core::applog::warn(
+        "proc",
+        &format!(
+            "rigctld {} was still running after {} s (an older Hamlib stays up after -L); \
+             asking rigctl instead",
+            args.join(" "),
+            budget.as_secs()
+        ),
+    );
+    let mut cmd = tempo_core::process::command(rigctl);
+    cmd.args(args).args(["-r", NO_SUCH_RIG]);
+    match run_within(&mut cmd, budget) {
+        Bounded::Exited { stdout, .. } if stdout.contains("rig_pathname:") => {
+            ShowConf::Dump(stdout)
+        }
+        _ => {
+            tempo_core::applog::warn(
+                "proc",
+                "rigctl gave no show-conf dump either: this Hamlib cannot confirm the RTS/DTR \
+                 holds",
+            );
+            ShowConf::Unconfirmable
+        }
+    }
+}
+
+/// The lines Hamlib will accept, or the refusal when it cannot say and there is something to
+/// hold. `want` is the wish after [`holds_for_port`], so a virtual port (no lines) and an
+/// operator who chose Untouched for every line have nothing to confirm and are never refused.
+/// An unanswered dump keeps its old meaning: claim nothing.
+pub(crate) fn settable_or_refusal(
+    conf: ShowConf,
+    want: &ControlLines,
+) -> Result<SettableLines, HoldsUnconfirmed> {
+    match conf {
+        ShowConf::Dump(d) => Ok(parse_settable_lines(&d)),
+        ShowConf::Unanswered => Ok(SettableLines::default()),
+        ShowConf::Unconfirmable => {
+            let nothing_to_hold = want.rts == LineState::Untouched
+                && want.dtr == LineState::Untouched
+                && want.keying_line == LineState::Untouched;
+            if nothing_to_hold {
+                Ok(SettableLines::default())
+            } else {
+                Err(HoldsUnconfirmed)
+            }
+        }
+    }
 }
 
 /// Run the daemon binary as a ONE-SHOT dump (`-L` show-conf, `-u` dump-caps) and hand back its
@@ -1400,7 +1521,10 @@ pub(crate) fn daemon_dump(args: &[&str]) -> Option<String> {
     // No console window, same as the daemon itself (Nexus is a GUI app).
     let mut cmd = tempo_core::process::command(resolve_rigctld());
     cmd.args(args);
-    let out = output_within(&mut cmd, DUMP_BUDGET);
+    let out = match run_within(&mut cmd, DUMP_BUDGET) {
+        Bounded::Exited { ok: true, stdout } => Some(stdout),
+        _ => None,
+    };
     if out.is_none() {
         tempo_core::applog::warn(
             "proc",
@@ -1420,16 +1544,33 @@ pub(crate) fn daemon_dump(args: &[&str]) -> Option<String> {
 /// the line holds (every caller reads `None` as "claim nothing").
 const DUMP_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Run `cmd` to completion within `budget` and return its stdout if it exited 0. A child still
-/// running at the deadline is killed and reaped, and answers `None`. stdout is drained on its
-/// own thread so a large dump cannot block the child on a full pipe.
-fn output_within(cmd: &mut Command, budget: std::time::Duration) -> Option<String> {
+/// How a bounded one-shot run ended.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Bounded {
+    /// It exited by itself; `ok` is a zero status. stdout is whole: the child flushed it.
+    Exited { ok: bool, stdout: String },
+    /// Still running at the budget: killed and reaped.
+    Overran,
+    /// It could not be started.
+    Unrunnable,
+}
+
+/// Run `cmd` to completion within `budget`. A child still running at the deadline is killed
+/// and reaped ([`Bounded::Overran`]). stdout is drained on its own thread so a large dump cannot
+/// block the child on a full pipe.
+pub(crate) fn run_within(cmd: &mut Command, budget: std::time::Duration) -> Bounded {
     use std::io::Read;
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    let mut child = cmd.spawn().ok()?;
-    let mut stdout = child.stdout.take()?;
+    let Ok(mut child) = cmd.spawn() else {
+        return Bounded::Unrunnable;
+    };
+    let Some(mut stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Bounded::Unrunnable;
+    };
     let reader = std::thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = stdout.read_to_end(&mut buf);
@@ -1447,14 +1588,15 @@ fn output_within(cmd: &mut Command, budget: std::time::Duration) -> Option<Strin
                 let _ = child.wait();
                 // The reader is not joined: anything the child left holding the pipe would hold
                 // this wait too. It ends on its own when the pipe closes.
-                return None;
+                return Bounded::Overran;
             }
         }
     };
-    let out = reader.join().ok()?;
-    status
-        .success()
-        .then(|| String::from_utf8_lossy(&out).into_owned())
+    let out = reader.join().unwrap_or_default();
+    Bounded::Exited {
+        ok: status.success(),
+        stdout: String::from_utf8_lossy(&out).into_owned(),
+    }
 }
 
 /// The `rigctl` companion binary, resolved exactly like [`resolve_rigctld`]: bundled beside the
@@ -1464,9 +1606,8 @@ fn output_within(cmd: &mut Command, budget: std::time::Duration) -> Option<Strin
 /// a one-shot CLI, not a daemon holding a TCP port. Both binaries ship in the same Hamlib
 /// package on every platform Nexus targets, so if `rigctld` is present `rigctl` is too.
 ///
-/// Gated on `serial` because its one caller is (`baud_ladder::rigctl_read`); without the gate the
-/// headless `cargo clippy --workspace --all-targets -- -D warnings` CI job fails it as dead code.
-#[cfg(feature = "serial")]
+/// Also the second source of the `-L` show-conf dump on a Hamlib whose `rigctld -L` never exits
+/// ([`ask_show_conf`]), which is why it is not gated on `serial` any more.
 pub(crate) fn resolve_rigctl() -> std::ffi::OsString {
     #[cfg(unix)]
     {
@@ -1745,7 +1886,9 @@ pub fn spawn_rigctld(
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, why));
         }
         let want = holds_for_port(want, virtual_node.is_some());
-        resolve_lines(settable_lines_for(model, ptt_line), want, deliberate)
+        let settable = settable_or_refusal(settable_lines_for(model, ptt_line), &want)
+            .map_err(|why| std::io::Error::new(std::io::ErrorKind::Unsupported, why))?;
+        resolve_lines(settable, want, deliberate)
     };
     let opened = virtual_node.as_deref().unwrap_or(addr);
     let args = rigctld_args(model, opened, baud, tcp_port, network, ptt_line, lines);
@@ -1837,8 +1980,8 @@ mod tests {
             "#!/bin/sh\necho \"$$\" > \"$0.pid\"\necho conf\nexec sleep 30\n",
         );
         let started = Instant::now();
-        let out = output_within(&mut Command::new(&hang), Duration::from_millis(500));
-        assert_eq!(out, None);
+        let out = run_within(&mut Command::new(&hang), Duration::from_millis(500));
+        assert_eq!(out, Bounded::Overran);
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "{:?}",
@@ -1851,13 +1994,100 @@ mod tests {
         );
         let ok = stub_script("dump-ok", "#!/bin/sh\necho rts_state\n");
         assert_eq!(
-            output_within(&mut Command::new(&ok), Duration::from_secs(5)).as_deref(),
-            Some("rts_state\n")
+            run_within(&mut Command::new(&ok), Duration::from_secs(5)),
+            Bounded::Exited {
+                ok: true,
+                stdout: "rts_state\n".into()
+            }
         );
         let no = stub_script("dump-no", "#!/bin/sh\necho rts_state\nexit 2\n");
         assert_eq!(
-            output_within(&mut Command::new(&no), Duration::from_secs(5)),
-            None
+            run_within(&mut Command::new(&no), Duration::from_secs(5)),
+            Bounded::Exited {
+                ok: false,
+                stdout: "rts_state\n".into()
+            }
+        );
+    }
+
+    /// ⭐ A HAMLIB WHOSE `rigctld -L` NEVER EXITS STILL GETS ASKED (Hamlib 4.5.5). The dump comes
+    /// from `rigctl` instead, pointed at [`NO_SUCH_RIG`] so it cannot open a real port (4.5.5's
+    /// `rigctl -L` opens the rig's default `/dev/ttyS0` otherwise), and its status-2 exit after
+    /// the failed open still counts, because the dump is whole. With no whole dump from either,
+    /// the answer is Unconfirmable, never a guess. A `rigctld` that exits keeps the old meanings.
+    #[cfg(unix)]
+    #[test]
+    fn a_rigctld_whose_dump_never_exits_is_answered_by_rigctl_aimed_at_no_port() {
+        use std::time::Duration;
+        let dump = "rig_pathname: Path\nrts_state: RTS\n";
+        let hang = stub_script(
+            "conf-hang",
+            "#!/bin/sh\necho rig_pathname:\nexec sleep 30\n",
+        );
+        let rigctl_45 = stub_script(
+            "conf-rigctl45",
+            &format!("#!/bin/sh\nprintf '{dump}'\necho \"$*\" > \"$0.args\"\nexit 2\n"),
+        );
+        let args = ["-m", "3073", "-L", "-P", "RTS"];
+        let short = Duration::from_millis(400);
+        assert_eq!(
+            ask_show_conf(hang.as_os_str(), rigctl_45.as_os_str(), &args, short),
+            ShowConf::Dump(dump.to_string())
+        );
+        let asked = std::fs::read_to_string(rigctl_45.with_extension("args")).expect("args");
+        assert_eq!(asked.trim(), format!("-m 3073 -L -P RTS -r {NO_SUCH_RIG}"));
+
+        let rigctl_none = stub_script("conf-rigctl-none", "#!/bin/sh\necho usage\nexit 1\n");
+        assert_eq!(
+            ask_show_conf(hang.as_os_str(), rigctl_none.as_os_str(), &args, short),
+            ShowConf::Unconfirmable
+        );
+        let rigctl_hang = stub_script("conf-rigctl-hang", "#!/bin/sh\nexec sleep 30\n");
+        assert_eq!(
+            ask_show_conf(hang.as_os_str(), rigctl_hang.as_os_str(), &args, short),
+            ShowConf::Unconfirmable
+        );
+        let quick = stub_script("conf-quick", &format!("#!/bin/sh\nprintf '{dump}'\n"));
+        let failing = stub_script("conf-fails", "#!/bin/sh\nexit 9\n");
+        assert_eq!(
+            ask_show_conf(quick.as_os_str(), rigctl_hang.as_os_str(), &args, short),
+            ShowConf::Dump(dump.to_string()),
+            "a rigctld that exits is read, and rigctl is not asked"
+        );
+        assert_eq!(
+            ask_show_conf(failing.as_os_str(), rigctl_45.as_os_str(), &args, short),
+            ShowConf::Unanswered
+        );
+    }
+
+    /// ⭐ TRANSMIT SAFETY: a Hamlib that cannot confirm the holds never opens a port with lines to
+    /// hold. It is refused, typed, so Test CAT does not sweep it either. A virtual port (no
+    /// lines, after [`holds_for_port`]) and an all-Untouched wish have nothing to confirm and go
+    /// ahead; an unanswered dump keeps its old "claim nothing".
+    #[test]
+    fn a_hamlib_that_cannot_confirm_the_holds_is_refused_on_a_port_with_lines() {
+        let real = ControlLines::hold_low();
+        let refused = settable_or_refusal(ShowConf::Unconfirmable, &real).expect_err("refused");
+        let e = std::io::Error::new(std::io::ErrorKind::Unsupported, refused);
+        assert!(is_launch_refusal(&e));
+        assert!(!is_handshake_refusal(&e));
+        assert_eq!(e.to_string(), HAMLIB_CANNOT_CONFIRM_HOLDS);
+        let keyed = ControlLines {
+            rts: LineState::Untouched,
+            dtr: LineState::Untouched,
+            keying_line: LineState::Low,
+            ..ControlLines::hold_low()
+        };
+        assert!(settable_or_refusal(ShowConf::Unconfirmable, &keyed).is_err());
+
+        let virtual_port = holds_for_port(real, true);
+        assert_eq!(
+            settable_or_refusal(ShowConf::Unconfirmable, &virtual_port).ok(),
+            Some(SettableLines::default())
+        );
+        assert_eq!(
+            settable_or_refusal(ShowConf::Unanswered, &real).ok(),
+            Some(SettableLines::default())
         );
     }
 
