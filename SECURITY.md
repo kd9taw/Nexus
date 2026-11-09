@@ -117,7 +117,7 @@ respects this policy and avoids harm to others' stations or data.
 
 ## No warranty
 
-Nexus is licensed under **GPL-3.0-or-later** (see `COPYING`). As stated there,
+Nexus is licensed under **GPL-3.0-only** (see `COPYING`). As stated there,
 the software is provided **"as is", without warranty of any kind**, to the
 extent permitted by law. This security policy is a statement of good-faith
 intent from a volunteer project, not a contractual guarantee.

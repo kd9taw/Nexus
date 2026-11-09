@@ -8760,6 +8760,7 @@ export const ZH_HANT: PartialCatalog = {
   "settings.rigControl.catSilentTxOff": "與電台的 CAT 連線已中斷，因此發射已關閉。請檢查電台及其 CAT 線纜；Nexus 會繼續嘗試。要再次發射，請按 TX On（開啟發射）。",
   "settings.rigControl.catBackTxOff": "與電台的 CAT 連線曾中斷，發射已關閉。CAT 已恢復；要發射，請按 TX On（開啟發射）。",
   "settings.rigControl.serialHandshake.rtsKeys": "此連線埠上的 RTS 會鍵控你的發射，因此串列埠握手不能設為「硬體」 — 請設為「自動」或「無」。",
+  "settings.rigControl.hamlibCannotConfirmHolds": "Nexus 未開啟串列埠：無法確認此 Hamlib 會將 RTS 和 DTR 線保持為低電位；未經確認就開啟連線埠，可能使接在其中任一條線上的發射機進入發射。請重試；如果仍然發生，請更新 Hamlib，或使用 Nexus 隨附的 Hamlib。",
   "settings.rigControl.pttLineState.label": "啟動時的鍵控線狀態",
   "settings.rigControl.pttLineState.auto": "自動（推薦）",
   "settings.rigControl.pttLineState.untouched": "從不干預",

@@ -56,7 +56,11 @@ md-5 = "0.10.6"
 # Brings hashlink, hashbrown, fallible-iterator and fallible-streaming-iterator newly into the
 # tree — all MIT or MIT OR Apache-2.0, all already on deny.toml's allow-list. bitflags, smallvec
 # and the `cc` build-script crate were already here at compatible versions.
-rusqlite = { version = "0.37.0", features = ["bundled"] }
+#
+# `fallible_uint`: from 0.38 rusqlite puts its u64/usize conversions behind this feature. They
+# are the same conversions 0.37 had unconditionally (a value above i64::MAX is an error, never a
+# wrap), and the store reads and writes u64 columns through them.
+rusqlite = { version = "0.41.0", features = ["bundled", "fallible_uint"] }
 
 [features]
 # `test-util`: the draw hook a test forces a log's minter with (`Minter::force_log_draws`), for

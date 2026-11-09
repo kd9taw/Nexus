@@ -8731,6 +8731,10 @@ export const EN = {
     'CAT to the radio was lost and transmit was turned off. CAT is back; press TX On to transmit.',
   'settings.rigControl.serialHandshake.rtsKeys':
     "RTS keys your transmitter on this port, so Serial handshake can't be Hardware — set it to Auto or None.",
+  // The launch Nexus refuses when this Hamlib cannot confirm the RTS/DTR holds: the backend sends
+  // exactly this (`HAMLIB_CANNOT_CONFIRM_HOLDS`, crates/tempo-audio/src/rigctld_proc.rs).
+  'settings.rigControl.hamlibCannotConfirmHolds':
+    "Nexus did not open the serial port: it could not confirm that this Hamlib will hold the RTS and DTR lines low, and opening the port without that can key a transmitter wired to either line. Try again, and if this keeps happening, update Hamlib or use the Hamlib that comes with Nexus.",
   'settings.rigControl.pttLineState.label': 'Keying line at startup',
   'settings.rigControl.pttLineState.auto': 'Auto (recommended)',
   'settings.rigControl.pttLineState.untouched': 'Never touch it',
