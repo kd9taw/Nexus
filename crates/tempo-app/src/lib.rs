@@ -330,6 +330,7 @@ impl AppState {
                 tx_alc: None,
                 tx_alc_zone: None,
                 tx_po_w: None,
+                tx_po_derived: false,
                 tx_comp_db: None,
                 pa_temp_c: None,
                 pa_temp_meter: None,

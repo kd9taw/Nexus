@@ -38,9 +38,9 @@ Do not imply on-air proof for changes that were only simulated.
 
 ## License & sign-off
 
-By submitting this pull request, I agree that my contributions are licensed under
-**GPL-3.0-or-later** (consistent with the rest of Tempo; see `COPYING`), and I have
+By submitting this pull request, I agree my contribution is licensed under
+**GPL-3.0-only**, the project's license (see `COPYING`), and I have
 signed off on the [Developer Certificate of Origin](https://developercertificate.org/)
 by adding a `Signed-off-by:` line to my commits (`git commit -s`).
 
-- [ ] My commits are signed off (DCO) and my contribution is GPL-3.0-or-later.
+- [ ] My commits are signed off (DCO) and my contribution is GPL-3.0-only.

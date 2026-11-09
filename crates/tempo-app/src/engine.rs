@@ -5026,6 +5026,9 @@ pub struct Engine {
     /// [`Self::observe_rig_tx_alc_zone`]. `None` = 1.0 is the top of the zone.
     rig_tx_alc_zone: Option<f32>,
     rig_tx_po_w: Option<f32>,
+    /// `rig_tx_po_w` is derived from a share of the radio's meter, not the radio's own watts:
+    /// see [`Self::observe_rig_tx_po_share`].
+    rig_tx_po_derived: bool,
     /// The forward power measured during the latest over (the radio's, or the amplifier's when
     /// one is on the radio), for the contact it is logged on ([`Self::log_power_now`]). Kept
     /// past the unkey, unlike `rig_tx_po_w`.
@@ -7861,6 +7864,7 @@ impl Engine {
             rig_tx_alc: None,
             rig_tx_alc_zone: None,
             rig_tx_po_w: None,
+            rig_tx_po_derived: false,
             measured_over: None,
             rig_tx_comp_db: None,
             tx_extras: tx_extras::TxExtras::default(),
@@ -14411,6 +14415,7 @@ impl Engine {
         }
         if po_w.is_some() {
             self.rig_tx_po_w = po_w;
+            self.rig_tx_po_derived = false;
         }
         if let Some(w) = po_w {
             self.note_measured_power(w);
@@ -14422,6 +14427,28 @@ impl Engine {
         if let Some(v) = swr {
             self.observe_swr_for_cutoff(v);
         }
+    }
+
+    /// Forward power from a radio whose Hamlib backend gives no watts (#489): `share` is its
+    /// `RFPOWER_METER`, a share of the radio's power meter, shown as that share of the active
+    /// radio's rated watts ([`Self::active_rated_watts`]) and marked derived
+    /// (`RadioStatus::tx_po_derived`, the meter's `PO≈`). On the FT-450D Hamlib's share is its own
+    /// watts table over 100 (`newcat.c`), so on that 100 W radio the figure is Hamlib's watts.
+    ///
+    /// ⚠️ DISPLAY ONLY. An estimate is not the radio's own scale, so it is never the contact's
+    /// power ([`Self::note_measured_power`] is not told: the log keeps Station power) and never
+    /// evidence about the microphone's power ([`Self::observe_mic_power`] is not told either).
+    pub fn observe_rig_tx_po_share(&mut self, share: f32) {
+        self.rig_tx_po_w = Some(share * self.active_rated_watts() as f32);
+        self.rig_tx_po_derived = true;
+    }
+
+    /// The ACTIVE radio's rated output in watts, 100 until the operator says otherwise.
+    fn active_rated_watts(&self) -> u32 {
+        self.settings
+            .active_profile()
+            .map(|p| p.rated_watts)
+            .unwrap_or(100)
     }
 
     /// ⭐ THE HIGH-SWR CUTOFF (operator request and ruling, 2026-09-14). DEFAULT OFF.
@@ -14508,6 +14535,7 @@ impl Engine {
         self.rig_tx_alc = None;
         self.rig_tx_alc_zone = None;
         self.rig_tx_po_w = None;
+        self.rig_tx_po_derived = false;
         self.rig_tx_comp_db = None;
         // The over is over: the next reading starts another. Its power is kept for the log.
         if let Some(over) = &mut self.measured_over {
@@ -32135,16 +32163,13 @@ contact yourself."
         s.radio.tx_alc = self.rig_tx_alc;
         s.radio.tx_alc_zone = self.rig_tx_alc_zone;
         s.radio.tx_po_w = self.rig_tx_po_w;
+        s.radio.tx_po_derived = self.rig_tx_po_derived;
         s.radio.tx_comp_db = self.rig_tx_comp_db;
         self.tx_extras.fill_snapshot(&mut s.radio);
         s.radio.swr_scale_verified = self.settings.swr_scale_is_verified();
         // The ACTIVE radio's rating, so the meter's PO scale follows a radio switch rather than
         // describing whichever rig was selected when the cockpit mounted.
-        s.radio.rated_watts = self
-            .settings
-            .active_profile()
-            .map(|p| p.rated_watts)
-            .unwrap_or(100);
+        s.radio.rated_watts = self.active_rated_watts();
         s.radio.rig_mode = self.rig_mode.clone();
         s.radio.sideband_override = self.sideband_override.clone();
         // Phone sub-band the operator may legally use, for the class, on the band the radio

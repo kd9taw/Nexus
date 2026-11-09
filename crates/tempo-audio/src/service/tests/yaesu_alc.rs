@@ -1,5 +1,5 @@
-//! The ALC meter of a Yaesu FT-991/991A (Hamlib model 1035), FT-710 (1049) and FTDX10 (1042), on
-//! the radio's own scale.
+//! The ALC meter of a Yaesu FT-991/991A (Hamlib model 1035), FT-710 (1049), FTDX10 (1042) and
+//! FT-450/450D (1027, 1046), on the radio's own scale.
 //!
 //! Both radios give their ALC meter as 0 to 255. Yaesu's FT-991A CAT manual, `RM` READ METER:
 //! `RM4;` is answered `RM4` and three digits. Its FT-710 CAT manual: the same three digits, then a
@@ -133,12 +133,20 @@ fn run_an_over(engine: &Arc<Mutex<Engine>>, addr: &str) -> tempo_app::dto::Radio
 /// against the bar position, raw / 255, for each radio's own reply shape; then how it was asked.
 /// The FTDX10's CAT manual gives the FT-710's reply shape and range, and Hamlib 4.7.1's `ftdx10.c`
 /// has no ALC table either, so it showed the same four times.
+///
+/// The FT-450D (#489, "ALC stuck at 100 %") and the FT-450 are the same Hamlib radio: 4.7.1's
+/// `yaesu.c` builds `ft450d_caps` as a copy of `ft450_caps`, which has no `alc_cal`, and newcat asks
+/// both with `RM4;` and reads three digits (`newcat.c:5285-5299`, 5572-5586). Hamlib's own tables
+/// for the same `RM` command put that radio's readings on 0 to 255, not 0 to 64:
+/// `FT450_RFPOWER_METER_CAL` (`ft450.h`) runs to raw 250 and `FT450_STR_CAL` to raw 240.
 #[test]
-fn an_ft991a_an_ft710_and_an_ftdx10_show_alc_where_the_radios_own_bar_is() {
+fn an_ft991a_an_ft710_an_ftdx10_and_the_ft450s_show_alc_where_the_radios_own_bar_is() {
     for (model, name, p3) in [
         (1035u32, "FT-991A", ""),
         (1049, "FT-710", "000"),
         (1042, "FTDX10", "000"),
+        (1046, "FT-450D", ""),
+        (1027, "FT-450", ""),
     ] {
         let overs: Vec<(u16, Option<f32>, Vec<String>)> = [0u16, 64, 128, 255]
             .into_iter()
@@ -345,13 +353,15 @@ fn a_tune_ups_alc_read_gives_up_at_the_tune_deadline() {
 /// The ALC reading carries where the radio's own ALC zone ends, so the bar's colours sit where
 /// the radio's meter marks it. The FT-991A's manual puts the zone at "up to half scale deflection"
 /// (Operating Manual p. 61), and the FT-710's meter marks the same zone (p. 40); the FTDX10 is read
-/// the same way. Every other radio's 1.0 is the top of its zone, as before: no zone is carried.
+/// the same way. The FT-450D's bar is the radio's own, but no zone is claimed for it. Every other
+/// radio's 1.0 is the top of its zone, as before: no zone is carried.
 #[test]
 fn the_alc_reading_carries_the_radios_own_zone_edge() {
     let zones: Vec<(&str, Option<f32>, Option<f32>)> = [
         (1035u32, "FT-991A", ""),
         (1049, "FT-710", "000"),
         (1042, "FTDX10", "000"),
+        (1046, "FT-450D", ""),
         (3073, "IC-7300", ""),
     ]
     .into_iter()
@@ -370,6 +380,8 @@ fn the_alc_reading_carries_the_radios_own_zone_edge() {
             ("FT-991A", Some(128.0), Some(0.5)),
             ("FT-710", Some(128.0), Some(0.5)),
             ("FTDX10", Some(128.0), Some(0.5)),
+            // The radio's own bar, and no zone claimed: its manual's zone is unsourced here.
+            ("FT-450D", Some(128.0), None),
             // Hamlib's scale for the IC-7300: raw 128 is past 64, so 1.0, and no zone of its own.
             ("IC-7300", Some(255.0), None),
         ]

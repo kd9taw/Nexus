@@ -17,6 +17,7 @@
 // Nothing on this surface keys, unkeys or stops a transmission: a pick is a band QSY exactly as
 // the select it replaces sent (BandPicker → `pickBand`, FrequencyControl → `onSet`).
 import * as RM from '@radix-ui/react-dropdown-menu'
+import { MenuContent, MenuRoot } from './ui/MenuParts'
 import { Fragment, useState, type CSSProperties, type ReactNode } from 'react'
 import { useBandConditions } from '../bandConditions'
 
@@ -58,7 +59,7 @@ export function BandMenu({ items, value, onPick, disabled = false, triggerLabel,
   }
 
   return (
-    <RM.Root open={open && !disabled} onOpenChange={setOpen}>
+    <MenuRoot open={open && !disabled} onOpenChange={setOpen}>
       <RM.Trigger asChild disabled={disabled}>
         <button type="button" className={`band-menu-trigger ${triggerClassName}`} style={triggerStyle} aria-label={ariaLabel} title={title} disabled={disabled}>
           <span className="band-menu-value">{triggerLabel}</span>
@@ -66,7 +67,7 @@ export function BandMenu({ items, value, onPick, disabled = false, triggerLabel,
         </button>
       </RM.Trigger>
       <RM.Portal>
-        <RM.Content className="ui-menu band-menu" align="start" sideOffset={4} collisionPadding={8}>
+        <MenuContent className="ui-menu band-menu" align="start" sideOffset={4} collisionPadding={8}>
           {/* The portal escapes `.app`'s zoom; re-apply it (Menu.tsx / Tooltip.tsx). */}
           <div style={{ zoom: 'var(--ui-zoom, 1)' }}>
             {note && <RM.Label className="band-menu-note">{note}</RM.Label>}
@@ -97,8 +98,8 @@ export function BandMenu({ items, value, onPick, disabled = false, triggerLabel,
               ))}
             </RM.RadioGroup>
           </div>
-        </RM.Content>
+        </MenuContent>
       </RM.Portal>
-    </RM.Root>
+    </MenuRoot>
   )
 }

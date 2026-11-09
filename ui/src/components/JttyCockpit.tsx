@@ -9,6 +9,8 @@ import type { AppSnapshot, BandChannel, JttyLine, JttyLogPromptAnswer, JttyMessa
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
 import { TxAlarmBanner } from './TxAlarmBanner'
+import { TxMeters } from './TxMeters'
+import { useCompactChrome } from '../features/compactChrome'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PaneSeam } from './PaneSeam'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
@@ -222,6 +224,9 @@ function JttyPaneLines({
  * it off signs off and lets what is queued go out.
  */
 export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, panels }: Props) {
+  // md and up, the read-only TX meters in the strip's meters cell (SSTV's, JS8's and Phone's
+  // arrangement, #489): the audio drive is set against the radio's ALC, and Po shows the carrier.
+  const chrome = useCompactChrome()
   const host = panels
     ? panelHost(panels, { menu: JTTY_PANEL_IDS, side: [], main: 'all', labels: jttyPanelLabels(), shipsHidden: JTTY_PANELS.defaultRemoved })
     : null
@@ -1011,6 +1016,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               .then((s) => onSnap?.(s))
               .catch((e) => pushToast(String(e), 'error'))
           }
+          meters={chrome.wide ? <TxMeters radio={snap.radio} strip /> : undefined}
         />
       )}
 
@@ -1196,6 +1202,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           <button
             type="button"
             className="cw-macro rtty-stop jtty-stop"
+            data-stop-control="esc-stop"
             onClick={stopJtty}
             disabled={!going}
             title={t('jtty.stop.title')}

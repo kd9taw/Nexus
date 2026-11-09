@@ -33,10 +33,9 @@ fn the_daemons_own_words_reach_the_handle_the_operator_is_told_from() {
     let bin = dir.join("rigctld");
     {
         let mut f = std::fs::File::create(&bin).expect("write stand-in");
-        // `exit 9` unless -vvv leads: `spawn_rigctld`'s own `--show-conf` probe runs first with
-        // different arguments and is EXPECTED to fail here (it falls back to "say nothing about
-        // the control lines"), while a launch that lost `-vvv` would be launching a daemon that
-        // cannot report a rig that never answered — so the stand-in refuses to play one.
+        // `exit 9` unless -vvv leads: a launch that lost `-vvv` would be launching a daemon that
+        // cannot report a rig that never answered, so the stand-in refuses to play one. (The
+        // show-conf ask goes to the `rigctl` beside it, below, not to this.)
         f.write_all(
             format!(
                 "#!/bin/sh\n\
@@ -49,6 +48,23 @@ fn the_daemons_own_words_reach_the_handle_the_operator_is_told_from() {
         .expect("write stand-in");
     }
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    // The `rigctl` beside it answers the show-conf ask `spawn_rigctld` makes before launching
+    // (it asks the `rigctl` beside the `rigctld` that will run): a whole dump, the FT-847's
+    // verbatim, so the holds are confirmed and the stand-in daemon is launched. Without it the
+    // ask finds no whole dump and COM99, a port with lines to hold, is refused before any daemon
+    // runs, which is not what this test is about.
+    std::fs::write(
+        dir.join("showconf.log"),
+        include_str!("fixtures/rigctld/showconf_ft847.log"),
+    )
+    .expect("write dump");
+    let rigctl = dir.join("rigctl");
+    std::fs::write(
+        &rigctl,
+        "#!/bin/sh\ncase \" $* \" in *' -L '*) cat \"$(dirname \"$0\")/showconf.log\"; exit 0;; esac\nexit 9\n",
+    )
+    .expect("write stand-in rigctl");
+    std::fs::set_permissions(&rigctl, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     // `resolve_rigctld` prefers a bundled binary beside the executable and falls back to PATH;
     // a test binary has no bundle, so this is the path it takes.
     let path = format!(

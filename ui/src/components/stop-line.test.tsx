@@ -259,6 +259,27 @@ describe('the stop line, computed against the real cockpits', () => {
     30_000,
   )
 
+  // STOP TX ABOVE EVERY OVERLAY (components/StopLayer.tsx) finds the controls it keeps clickable by `data-stop-control`,
+  // so a Stop TX or a dock stop drawn without it would sit under a dialog again, unclickable, with nothing red. Every
+  // case's Stop TX and dock stop (Esc Stop, SSTV's Stop) must carry it; Tune, PTT and the TX latch are not stops of
+  // that kind (the latch's other click turns transmit ON) and must not.
+  it.each(CASES.map((c) => [c.cockpit, c] as const))('%s: every Stop TX and dock stop is one the stop layer keeps on top', async (_name, c) => {
+    c.render(panelsWith<string>([]))
+    await settle()
+    const on = stopsOnScreen(c.stopControls)
+    for (const [label] of c.stopControls) {
+      const stop = /^stop/i.test(label)
+      for (const el of on.get(label)!) {
+        expect(el.hasAttribute('data-stop-control'), `${c.cockpit}: "${label}" ${stop ? 'lacks' : 'carries'} data-stop-control`).toBe(stop)
+      }
+    }
+    // And the other way round: whatever carries the marker on this screen is a stop and nothing else — the stop
+    // layer draws a marked control above every dialog, so a marked Tune, PTT, latch or macro would key from there.
+    const marked = [...document.querySelectorAll('[data-stop-control]')].map((e) => (e.textContent ?? '').replace(/\s+/g, ' ').trim())
+    for (const name of marked) expect(name, `${c.cockpit}: a non-stop control carries data-stop-control`).toMatch(/^(stop tx|esc ?stop|esc ?abort|stop)$/i)
+    cleanup()
+  }, 30_000)
+
   it('the two Sub-receiver cases really draw a SUB row — else they would sweep a copy of their twin', async () => {
     for (const c of [phoneDual, cwDual] as Array<Case<any>>) {
       c.render(panelsWith<string>([]))
@@ -475,6 +496,29 @@ describe('RTTY: the macro editor never stands between the operator and a stop', 
     expect(document.querySelector('.rtty-tx-latch')?.getAttribute('aria-pressed')).toBe('true')
 
   afterEach(() => answering(rttyState))
+
+  // RTTY's sequencer row is drawn only with Auto on, so the per-cockpit marker census above never sees it: idle, it
+  // holds the keying keys (Auto CQ, which STARTS a transmission, and Answer); mid-sequence, the Abort. The Abort must
+  // carry `data-stop-control` (the stop layer keeps it on top of a dialog); CQ and Answer must not.
+  async function sequencer(seqState: string) {
+    answering({ ...rttyState, auto: true, seqState } as RttyState)
+    const from = asked()
+    render(<RttyCockpit snap={snap} active onSetTxEnabled={() => {}} />)
+    await settle()
+    await answered(from)
+    const marked = [...document.querySelectorAll('[data-stop-control]')].map((e) => (e.textContent ?? '').replace(/\s+/g, ' ').trim())
+    for (const name of marked) expect(name, 'a marked control that is not a stop').toMatch(/^(stop tx|esc ?stop|esc ?abort|stop)$/i)
+  }
+  it("idle, the sequencer's CQ and Answer keys are on screen and NOT marked", async () => {
+    await sequencer('idle')
+    const keys = [...document.querySelectorAll('.rtty-auto-cq, .rtty-auto-answer')]
+    expect(keys.map((k) => k.className.split(' ').pop()), 'fixture: both keying keys are drawn').toEqual(['rtty-auto-cq', 'rtty-auto-answer'])
+    for (const key of keys) expect(key.hasAttribute('data-stop-control'), key.className).toBe(false)
+  })
+  it("mid-sequence, the sequencer's Abort is on screen and marked as a stop", async () => {
+    await sequencer('cq')
+    expect(screen.getByRole('button', { name: /^esc\s*abort$/i }).getAttribute('data-stop-control')).toBe('sequencer-abort')
+  })
 
   it('Stop TX and the Esc/Stop macro are on screen and enabled while an over is on the air', async () => {
     await openEditor({ ...rttyState, sending: true } as RttyState, onAir)

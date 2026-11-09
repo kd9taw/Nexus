@@ -233,6 +233,24 @@ pub fn split_mode_line(mode: &str, passband_hz: i32) -> String {
 pub fn vfo_line(vfo: &str) -> String {
     format!("V {vfo}\n")
 }
+/// What one `l METER` read established ([`Rig::read_meter_within`]): a reading, a REFUSAL (the rig
+/// has no such meter), or a miss (no answer this time, which says nothing about the meter).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MeterRead {
+    Value(f32),
+    Refused,
+    Missed,
+}
+
+/// The replies that say a meter is not there, as opposed to not answered this time. `RPRT -1`
+/// (`-RIG_EINVAL`) is rigctld's own answer for a level the rig does not declare: Hamlib 4.7.1
+/// `tests/rigctl_parse.c`, `get_level`, checks `rig_has_get_level` and, with no extra level of
+/// that name, returns it before the radio is asked (measured: a real `rigctld -m 1046` answers
+/// `l RFPOWER_METER_WATTS` with `RPRT -1`). `-4` (`-RIG_ENIMPL`) and `-11` (`-RIG_ENAVAIL`) are a
+/// backend's "not implemented" and "not available" (`src/settings.c`, `rig_get_level`). A timeout
+/// (`-5`), an I/O error (`-6`) or a protocol error (`-8`) is a miss, never a refusal.
+const METER_REFUSALS: [&str; 3] = ["RPRT -1", "RPRT -4", "RPRT -11"];
+
 /// What a `U FUNC <n>` attempt actually ESTABLISHED — three outcomes, not two.
 ///
 /// ⭐⭐ R1 (transmit review, 2026-09-19). Collapsing this into `Result` is what made a
@@ -689,8 +707,9 @@ pub struct Rig {
     /// The TX dial and TX mode the radio last confirmed (`RPRT 0`) for Nexus's held Rig split on this
     /// connection, so an over whose split writes change nothing sends none of them. Forgotten by
     /// anything that may have moved VFO B or the dial: a new or dropped connection
-    /// ([`Self::drop_connection`]), any dial, mode or control write, a raw write, a dial read that
-    /// differs, and every refused or late split write.
+    /// ([`Self::drop_connection`]), any dial or control write, a mode write other than one of the
+    /// confirmed TX mode that the radio took, a raw write, a dial read that differs, and every
+    /// refused or late split write.
     pub(crate) split_confirmed: Option<SplitConfirmed>,
     /// True when the CAT link is a NETWORK transport (rigctld → SmartSDR / remote radio), where a
     /// reply can legitimately take seconds. Serial rigs answer in milliseconds, so a serial link
@@ -2014,9 +2033,26 @@ impl Rig {
                 Ok(())
             };
         }
-        self.split_confirmed = None;
+        // ⛔ A WRITE OF THE MODE VFO B WAS CONFIRMED IN LEAVES IT CONFIRMED, once the radio has taken
+        // it: it cannot change VFO B's mode, and Call CQ's forced retune writes it just ahead of a
+        // key that would otherwise send the TX dial and mode again inside the key's budget. Any
+        // other mode forgets it, as does any answer but `RPRT 0`. A connection renewed by the write
+        // forgets it in `drop_connection`. A backend whose `M` also reaches VFO B in split puts it
+        // in this same mode, as WSJT-X 3.0.2 does on purpose (`HamlibTransceiver.cpp:940-941`).
+        // The dial write the receive-time retune sends after a mode write still forgets it.
+        if self
+            .split_confirmed
+            .as_ref()
+            .is_some_and(|c| c.tx_mode.as_deref() != Some(mode))
+        {
+            self.split_confirmed = None;
+        }
         self.mode_writes = self.mode_writes.wrapping_add(1);
-        let reply = self.command_permitted(&mode_line(mode, passband_hz), None, permission)?;
+        let reply = self.command_permitted(&mode_line(mode, passband_hz), None, permission);
+        if !reply.as_deref().is_ok_and(reply_ok) {
+            self.split_confirmed = None;
+        }
+        let reply = reply?;
         if reply_ok(&reply) || (permission.is_none() && reply.is_empty()) {
             Ok(())
         } else {
@@ -2122,17 +2158,38 @@ impl Rig {
     /// it is abandoned (the stream drops and reconnects on the next command) rather than
     /// waited for. `None` = the transport's normal deadline.
     pub fn read_meter_f32_within(&mut self, name: &str, deadline_ms: Option<u64>) -> Option<f32> {
-        self.control.as_ref()?;
+        match self.read_meter_within(name, deadline_ms) {
+            MeterRead::Value(v) => Some(v),
+            MeterRead::Refused | MeterRead::Missed => None,
+        }
+    }
+
+    /// [`read_meter_f32_within`], telling a REFUSAL from a miss: the forward-power read needs to
+    /// know whether the rig has no such meter at all (#489).
+    pub fn read_meter_within(&mut self, name: &str, deadline_ms: Option<u64>) -> MeterRead {
+        if self.control.is_none() {
+            return MeterRead::Missed;
+        }
         let line = format!("l {name}\n");
         let reply = match deadline_ms {
             Some(ms) => self.command_ending_by(&line, ms),
             None => self.command(&line),
-        }
-        .ok()?;
-        reply
+        };
+        let Ok(reply) = reply else {
+            return MeterRead::Missed;
+        };
+        if let Some(v) = reply
             .lines()
             .find_map(|l| l.trim().parse::<f32>().ok())
             .filter(|v| v.is_finite() && *v >= 0.0)
+        {
+            return MeterRead::Value(v);
+        }
+        if reply.lines().any(|l| METER_REFUSALS.contains(&l.trim())) {
+            MeterRead::Refused
+        } else {
+            MeterRead::Missed
+        }
     }
 
     /// Read a rig CAT function state (e.g. "NB", "NR", "ANF", "COMP", "VOX") via rigctld

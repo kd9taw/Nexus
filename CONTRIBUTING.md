@@ -227,9 +227,9 @@ its own.
 
 ## License & Developer Certificate of Origin
 
-Nexus is licensed under **GPL-3.0-or-later** (full text in
-[`COPYING`](COPYING)). By contributing, you agree that your contributions are
-licensed under **GPL-3.0-or-later**.
+Nexus is licensed under **GPL-3.0-only** (full text in
+[`COPYING`](COPYING)). By submitting, you agree your contribution is licensed
+under **GPL-3.0-only**, the project's license.
 
 Nexus derives from WSJT-X (Joe Taylor K1JT and the WSJT Development Group,
 GPLv3) and bundles/links other free software — see [`NOTICE`](NOTICE) for the

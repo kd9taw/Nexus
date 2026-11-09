@@ -1059,10 +1059,34 @@ fn daemon_is_foreign(
 ) -> bool {
     let model_differs = d.model.is_some_and(|m| m != want_model);
     let device_differs = match (&d.device, want_port) {
-        (Some(dev), want) if !want.is_empty() && !is_network => dev != want,
+        (Some(dev), want) if !want.is_empty() && !is_network => {
+            dev != want && !same_node(dev, want)
+        }
         _ => false,
     };
     model_differs || device_differs
+}
+
+/// Do two paths name the same file once every symlink is resolved? A virtual port's daemon is
+/// started on the pseudo-terminal node itself (`-r /dev/pts/N`), never on the `rig-pty1` link the
+/// settings name ([`crate::ports::virtual_port_node`]), and a udev `by-id` link names its ttyUSB
+/// the same way: one radio under two names is not a different radio. A path that does not
+/// resolve matches nothing.
+///
+/// ⚠️ Unix only, and false everywhere else. On Windows `canonicalize` is a `CreateFile`, which on
+/// a `COM5` would OPEN the port and could raise its lines; there the plain name comparison in
+/// [`daemon_is_foreign`] is all there is.
+#[cfg(unix)]
+fn same_node(a: &str, b: &str) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn same_node(_: &str, _: &str) -> bool {
+    false
 }
 
 /// operator's instruction, and comparing it against the real rig behind the daemon would refuse
@@ -5038,6 +5062,21 @@ struct RadioLoop {
     /// answered, the meter falls back to `l ALC` instead of being parked. Only on an over's read:
     /// a tune-up's 120 ms deadline can miss a slow radio that does answer. Reset with the ladder.
     tx_alc_raw: Option<bool>,
+    /// The rig REFUSED `l RFPOWER_METER_WATTS` ([`crate::rig::MeterRead::Refused`]), so its
+    /// forward power is read as `l RFPOWER_METER`, a share of the radio's power meter, and the
+    /// engine shows that share of the radio's rated watts, marked derived (#489).
+    ///
+    /// ⭐ THE FT-450D (Hamlib model 1046) AND SEVEN MORE CATALOG MODELS. Hamlib 4.7.1 declares
+    /// `RFPOWER_METER` and not `RFPOWER_METER_WATTS` for the FT-450 (1027), FT-450D (1046),
+    /// TS-2000 (2014), TS-480 (2028), SDRuno (2051), QCX/QDX (2052), (tr)uSDX (2055) and SDR
+    /// Console (2056) (`rigctl --dump-caps`, every catalog model swept), so rigctld refused the
+    /// watts read and the Po meter was parked for good. Keyed on the refusal itself, not on a
+    /// model list, so the operator's own rigctld, of whatever version, is answered by what it
+    /// says. A read Hamlib already exposes for exactly these radios: on the FT-450D it sends the
+    /// radio the same `RM5;` the watts read would have (`newcat.c`, both levels share one case),
+    /// and on the Kenwoods `SM0;`/`SM` (`ts480.c`, `ts2000.c`). A miss is never a refusal, so a
+    /// radio that reports watts and drops one answer keeps them. Reset with the ladder.
+    tx_po_share: bool,
     /// Whether we last surfaced the "monitor refused — would transmit into the TX
     /// device" note on the audio-error line, so we clear only our OWN message.
     /// The monitor block currently OWNS the audio-error line (it wrote either
@@ -5381,6 +5420,7 @@ impl RadioLoop {
             tx_meter_retry_at: [0; N_TX_METERS],
             tx_meter_retry_backoff: [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS],
             tx_alc_raw: None,
+            tx_po_share: false,
 
             clock_offset_ms: 0,
             clock_jump: tempo_app::clocksync::ClockJumpDetector::new(),
@@ -5603,11 +5643,16 @@ impl RadioLoop {
     /// One presence check of `port` against an enumeration. Returns true on the ABSENT →
     /// PRESENT edge. An empty enumeration says nothing (no `serial` feature, or the platform
     /// walk failed) and leaves the verdict untouched — it must never read as "absent".
+    ///
+    /// A typed path the enumeration cannot list is judged by the filesystem instead
+    /// ([`typed_port_exists`]): a virtual port another program makes (wfview's
+    /// `~/Downloads/rig-ptyN` on a Mac) is never enumerated, and read against the list alone it
+    /// was "absent" for good, so after a CAT drop the radio never reconnected by itself.
     fn port_watch(&mut self, port: &str, ports: &[String]) -> bool {
         if ports.is_empty() {
             return false;
         }
-        let present = ports.iter().any(|p| p == port);
+        let present = ports.iter().any(|p| p == port) || typed_port_exists(port);
         let returned = self.cat_port_present == Some(false) && present;
         if self.cat_port_present != Some(present) {
             crate::civ::diag::note(&format!(
@@ -8555,6 +8600,7 @@ impl RadioLoop {
         self.tx_meter_retry_at = [0; N_TX_METERS];
         self.tx_meter_retry_backoff = [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS];
         self.tx_alc_raw = None;
+        self.tx_po_share = false;
         // The audio device must be (re)opened for the new radio even if its device name matches
         // (e.g. both "system default") — force it, since `audio_differs` alone would skip an
         // empty-vs-empty compare and leave the OLD radio's sound-card stream running.
@@ -10695,6 +10741,7 @@ impl RadioLoop {
                     self.tx_meter_retry_at = [0; N_TX_METERS];
                     self.tx_meter_retry_backoff = [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS];
                     self.tx_alc_raw = None;
+                    self.tx_po_share = false;
                     // The level give-ups are a rate limit, not a verdict: a write refused while
                     // the link was half-open must be retried once the link is proven alive.
                     self.rf_power_giveup = None;
@@ -10849,6 +10896,7 @@ impl RadioLoop {
                             self.tx_meter_retry_at = [0; N_TX_METERS];
                             self.tx_meter_retry_backoff = [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS];
                             self.tx_alc_raw = None;
+                            self.tx_po_share = false;
                             self.agc_giveup = None; // the refusal may have been the dead link
                             self.rf_power_giveup = None; // …and so may these three have been
                             self.mic_gain_giveup = None;
@@ -15376,6 +15424,8 @@ impl RadioLoop {
                     // RFPOWER_METER_WATTS (not RFPOWER_METER): Hamlib's plain RFPOWER_METER is a
                     // normalized 0..1, only the _WATTS variant is true watts — and the native
                     // daemon answers both with calibrated watts. So `tx_po_w` is watts on both.
+                    // A rig that REFUSES the watts is read with RFPOWER_METER instead, and that
+                    // share goes to the engine as a share (`tx_po_share`, #489).
                     // Tune-time reads are deadline-bounded (see `meters_now`); an over's are not.
                     let deadline = self.tuning_keyed.then_some(TUNE_METER_DEADLINE_MS);
                     let i = self.tx_meter_idx % N_TX_METERS;
@@ -15390,12 +15440,34 @@ impl RadioLoop {
                     let model = self.applied.rig_model;
                     let raw_alc = self.tx_alc_raw != Some(false);
                     if self.tx_meter_supported[i] != Some(false) {
-                        reading = read_tx_meter(rig, TX_METERS[i], model, raw_alc, deadline);
+                        let po_slot = TX_METERS[i] == "RFPOWER_METER_WATTS";
+                        let mut refused = false;
+                        reading = if po_slot && self.tx_po_share {
+                            rig.read_meter_f32_within("RFPOWER_METER", deadline)
+                        } else if po_slot {
+                            match rig.read_meter_within(TX_METERS[i], deadline) {
+                                crate::rig::MeterRead::Value(v) => Some(v),
+                                crate::rig::MeterRead::Refused => {
+                                    refused = true;
+                                    None
+                                }
+                                crate::rig::MeterRead::Missed => None,
+                            }
+                        } else {
+                            read_tx_meter(rig, TX_METERS[i], model, raw_alc, deadline)
+                        };
                         note_ext_read(
                             &mut self.tx_meter_supported[i],
                             &mut self.tx_meter_misses[i],
                             reading.is_some(),
                         );
+                        if refused {
+                            // The rig has no watts meter (see `tx_po_share`): its meter's share
+                            // is asked from the next Po turn on, with three strikes of its own.
+                            self.tx_po_share = true;
+                            self.tx_meter_supported[i] = None;
+                            self.tx_meter_misses[i] = 0;
+                        }
                         if TX_METERS[i] == "ALC"
                             && raw_alc
                             && crate::rigmodels::raw_alc_query(model).is_some()
@@ -15434,6 +15506,16 @@ impl RadioLoop {
                         2 => (None, None, reading, None),
                         _ => (None, None, None, reading),
                     };
+                    // A share of the radio's meter is not watts (`tx_po_share`): the engine
+                    // turns it into a derived figure for the meter, and it is asked nothing
+                    // here. ⚠️ Never the no-RF watch's: the Kenwood backends answer
+                    // RFPOWER_METER with 0 whenever Hamlib's own PTT state says unkeyed
+                    // (`ts480.c`), which is not the radio making no power.
+                    let (po, po_share) = if self.tx_po_share {
+                        (None, po)
+                    } else {
+                        (po, None)
+                    };
                     // The same reading, asked a question as well as rendered. `None` (this
                     // cycle read another meter, or the rig reports no Po at all) can never
                     // raise anything — see [`TxRfWatch`].
@@ -15442,6 +15524,9 @@ impl RadioLoop {
                     {
                         let mut eng = engine_lock(engine);
                         eng.observe_rig_tx_meters(swr, alc, po, comp);
+                        if let Some(share) = po_share {
+                            eng.observe_rig_tx_po_share(share);
+                        }
                         // The ALC reading carries where this radio's own ALC zone ends on its
                         // bar, for the bar's colours (display only).
                         // `l ALC` is Hamlib's scale, whose 1.0 is the zone's top: no zone of its own.
@@ -19883,6 +19968,14 @@ fn is_link_fault(e: &std::io::Error) -> bool {
     ) || crate::rig::cat_unreachable(e)
 }
 
+/// Is `port` a typed absolute path (macOS, Linux) whose file is there right now? The presence
+/// half the enumeration cannot supply for a virtual port ([`RadioLoop::port_watch`]). A
+/// real serial device's node goes away when it is unplugged, so this cannot hold one present
+/// that is gone. A Windows `COM5` is not a path and is never judged this way.
+fn typed_port_exists(port: &str) -> bool {
+    cfg!(unix) && port.starts_with('/') && std::path::Path::new(port).exists()
+}
+
 /// The port to follow a rig to when `configured` is absent: exactly one present USB port
 /// carrying the remembered (vid, pid, product). Pure, for the test.
 fn alias_for(
@@ -19946,8 +20039,9 @@ struct CatProbe {
     freq_hz: Option<u64>,
     mode: Option<String>,
     /// Nexus refused this launch itself — a declared Hardware handshake on a port where RTS keys
-    /// the transmitter ([`crate::rigctld_proc::HandshakeRefused`]). Typed, so Test CAT never
-    /// sweeps the port the refusal kept shut, whatever the detail's words become.
+    /// the transmitter ([`crate::rigctld_proc::HandshakeRefused`]), or a Hamlib that cannot
+    /// confirm the line holds ([`crate::rigctld_proc::HoldsUnconfirmed`]). Typed, so Test CAT
+    /// never sweeps the port the refusal kept shut, whatever the detail's words become.
     refused: bool,
 }
 
@@ -20429,7 +20523,7 @@ fn open_cat(
             Rig::vox(),
             None,
             CatProbe {
-                refused: crate::rigctld_proc::is_handshake_refusal(&e),
+                refused: crate::rigctld_proc::is_launch_refusal(&e),
                 ..CatProbe::status(Some(false), rigctld_launch_failed(&e))
             },
         ),
@@ -20490,8 +20584,9 @@ fn rigctld_launch_failed(e: &std::io::Error) -> String {
 /// found them; see [`crate::rigctld_proc::hamlib_missing_for`].
 fn rigctld_launch_failed_for(mac: bool, e: &std::io::Error) -> String {
     // A launch Nexus refused itself (a declared Hardware handshake on a port where RTS keys the
-    // transmitter) is already the operator's sentence: Hamlib never ran, so no Hamlib prefix.
-    if crate::rigctld_proc::is_handshake_refusal(e) {
+    // transmitter, or a Hamlib that cannot confirm the line holds) is already the operator's
+    // sentence: no daemon ran, so no Hamlib prefix.
+    if crate::rigctld_proc::is_launch_refusal(e) {
         return e.to_string();
     }
     crate::rigctld_proc::hamlib_missing_for(mac, "rigctld", e)
@@ -20687,6 +20782,7 @@ mod tests {
     mod late_key;
     mod omnirig_coverage;
     mod pc_mic;
+    mod po_derived;
     mod psk63_keying;
     mod ptt_lines;
     mod readback_coverage;
@@ -25328,6 +25424,41 @@ mod tests {
             !daemon_is_foreign(1049, "/dev/cu.usbserial-A", false, &d(None, None)),
             "nothing known at all — the honest answer is share, and let the CAT probe judge"
         );
+
+        // Off Unix nothing is resolved (a lookup there would open the port): names compare as
+        // names, so even a name equal to itself through the filesystem is not consulted.
+        #[cfg(not(unix))]
+        assert!(
+            !same_node("COM5", "COM5"),
+            "never touches the filesystem off Unix"
+        );
+
+        // ── SILENT: one radio under two names. A virtual port's daemon runs on the node the
+        // settings' link resolves to; a link to ANOTHER node is still another radio.
+        #[cfg(unix)]
+        {
+            let dir = std::env::temp_dir().join(format!("nexus-same-node-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("temp dir");
+            let (node, other, link) = (dir.join("pts-3"), dir.join("pts-4"), dir.join("rig-pty1"));
+            std::fs::write(&node, b"").expect("node");
+            std::fs::write(&other, b"").expect("other");
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(&node, &link).expect("symlink");
+            let (node_s, other_s, link_s) = (
+                node.to_string_lossy().into_owned(),
+                other.to_string_lossy().into_owned(),
+                link.to_string_lossy().into_owned(),
+            );
+            assert!(
+                !daemon_is_foreign(3073, &link_s, false, &d(Some(3073), Some(&node_s))),
+                "the daemon on the node the link names is this radio's"
+            );
+            assert!(
+                daemon_is_foreign(3073, &link_s, false, &d(Some(3073), Some(&other_s))),
+                "a daemon on another node is another radio"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]
@@ -41375,8 +41506,8 @@ mod tests {
             let mut f = std::fs::File::create(&bin).expect("write stand-in");
             // Speaks once and then just lives, without binding the CAT port — the shape of a
             // daemon that came up, opened the port and got nothing back from the radio. The
-            // `--show-conf` probe inside `spawn_rigctld` runs first with other arguments and is
-            // EXPECTED to fail here (it falls back to "say nothing about the control lines").
+            // show-conf ask inside `spawn_rigctld` does not reach it: it goes to the `rigctl`
+            // beside it, below.
             f.write_all(
                 format!(
                     "#!/bin/sh\n\
@@ -41389,6 +41520,23 @@ mod tests {
             .expect("write stand-in");
         }
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        // …and the `rigctl` beside it, which `spawn_rigctld` asks for the show-conf dump first
+        // (`rigctld_proc::ask_show_conf`). It answers with a whole dump (the FT-847's, verbatim),
+        // so the holds are confirmed and the launch goes ahead: what this test is about is the
+        // connect failure AFTER the launch. Without it the ask finds no whole dump, and the
+        // port, which has lines to hold, is refused before any daemon runs.
+        std::fs::write(
+            dir.join("showconf.log"),
+            include_str!("../tests/fixtures/rigctld/showconf_ft847.log"),
+        )
+        .expect("write dump");
+        let rigctl = dir.join("rigctl");
+        std::fs::write(
+            &rigctl,
+            "#!/bin/sh\ncase \" $* \" in *' -L '*) cat \"$(dirname \"$0\")/showconf.log\"; exit 0;; esac\nexit 9\n",
+        )
+        .expect("write stand-in rigctl");
+        std::fs::set_permissions(&rigctl, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         // `resolve_rigctld` prefers a binary bundled beside the executable and falls back to
         // PATH; a test binary has no bundle, so this is the path it takes. Prepend-only, and
         // this is the only test in this binary that resolves a rigctld.
@@ -47761,6 +47909,42 @@ mod tests {
             !state.port_watch("COM5", &["COM5".to_string()]),
             "present → present is not an edge"
         );
+    }
+
+    /// ⭐ A TYPED VIRTUAL PORT IS PRESENT WHILE ITS FILE IS THERE. wfview's `~/Downloads/rig-ptyN`
+    /// is never in a Mac's enumeration (which is never empty), so read against the list alone it
+    /// stayed absent for good and a dropped CAT link never reopened by itself. The file going
+    /// away is still absence, and its return is the same rebuild edge a USB port's return is.
+    #[cfg(unix)]
+    #[test]
+    fn a_typed_path_that_exists_is_present_though_never_enumerated() {
+        let dir = std::env::temp_dir().join(format!("nexus-typed-port-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let pty = dir.join("rig-pty1");
+        let pty_s = pty.to_string_lossy().into_owned();
+        let listed = ["/dev/cu.Bluetooth-Incoming-Port".to_string()];
+        let mut state = loop_state();
+        std::fs::write(&pty, b"").expect("stand-in node");
+        assert!(
+            !state.port_watch(&pty_s, &listed),
+            "unknown → present is no edge"
+        );
+        assert_eq!(
+            state.cat_port_present,
+            Some(true),
+            "there, though not listed"
+        );
+        std::fs::remove_file(&pty).expect("rm");
+        assert!(!state.port_watch(&pty_s, &listed));
+        assert_eq!(state.cat_port_present, Some(false), "the file gone: absent");
+        std::fs::write(&pty, b"").expect("back");
+        assert!(
+            state.port_watch(&pty_s, &listed),
+            "absent → present: reopen"
+        );
+        // A Windows name is never looked up on disk, whatever the working directory holds.
+        assert!(!typed_port_exists("COM5"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Following a rig to a NEW port name: exactly one present port with the remembered USB

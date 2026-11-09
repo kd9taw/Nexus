@@ -1,14 +1,17 @@
 // Radix DropdownMenu styled with Nexus tokens — context/overflow menus (e.g.
 // per-row actions on decodes/roster in P2). Accessible roving focus for free:
-// role=menu/menuitem, arrow keys, Home/End, typeahead, Esc and a click outside close it,
-// and the keyboard goes back to the trigger — unless the chosen item has already moved it on (a
-// dialog it opened). A submenu opens with → or Enter and closes with ←.
+// role=menu/menuitem, arrow keys, Home/End, typeahead, Esc and a click outside close it. Not modal
+// (MenuParts.tsx): the click outside also lands where it was aimed, so Stop TX works on the first
+// click with the menu open. After Esc or a chosen item the keyboard goes back to the trigger — unless
+// the chosen item has already moved it on (a dialog it opened); after a click outside it stays where
+// the click put it. A submenu opens with → or Enter and closes with ←.
 //
 // An item that opens a dialog opens one with a focus trap of its own (a ui/Dialog, the confirm
 // question): the trap takes the keyboard over from the menu's, and the dialog gives it back to the
 // menu's button when it closes (focusReturn.ts). A dialog without a trap would lose the keyboard
 // to the closing menu, behind it.
 import * as RM from '@radix-ui/react-dropdown-menu'
+import { MenuContent, MenuRoot } from './MenuParts'
 import { useState, type ReactNode } from 'react'
 
 export interface MenuItem {
@@ -95,10 +98,10 @@ function Items({ items, className }: { items: MenuEntry[]; className?: string })
 export function Menu({ trigger, items, className }: MenuProps) {
   const [open, setOpen] = useState(false)
   return (
-    <RM.Root open={open} onOpenChange={setOpen}>
+    <MenuRoot open={open} onOpenChange={setOpen}>
       <RM.Trigger asChild>{trigger}</RM.Trigger>
       <RM.Portal>
-        <RM.Content
+        <MenuContent
           className={['ui-menu', className].filter(Boolean).join(' ')}
           sideOffset={4}
           align="end"
@@ -106,10 +109,7 @@ export function Menu({ trigger, items, className }: MenuProps) {
           onCloseAutoFocus={(e) => {
             // An item that opened a dialog has put the keyboard in it by the time the menu finishes
             // closing; taking it back to the button would leave it behind the dialog. Anywhere else
-            // (the item gone with the menu, Esc) it goes back to the button as usual.
-            // Preventing skips Radix's own handler too, and with it the reset of its "a click landed
-            // outside" flag; that flag is set only by a right- or Ctrl-click outside the open menu,
-            // so at worst one later close of this menu leaves the keyboard where it is.
+            // (the item gone with the menu, Esc) it goes back to the button as usual (MenuContent).
             const at = document.activeElement
             if (at instanceof HTMLElement && at !== document.body && at.isConnected && !at.closest('[role="menu"]'))
               e.preventDefault()
@@ -122,8 +122,8 @@ export function Menu({ trigger, items, className }: MenuProps) {
           <div style={{ zoom: 'var(--ui-zoom, 1)' }}>
             <Items items={items} className={className} />
           </div>
-        </RM.Content>
+        </MenuContent>
       </RM.Portal>
-    </RM.Root>
+    </MenuRoot>
   )
 }

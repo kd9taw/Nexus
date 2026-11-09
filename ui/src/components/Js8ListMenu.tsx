@@ -9,6 +9,7 @@
 // ⚠️ Migrated from birth (i18n/hardcoded-strings.test.ts): `⋯`, `▸` and `●`/`✓` are glyphs; every word
 // arrives from the caller's catalog keys.
 import * as RM from '@radix-ui/react-dropdown-menu'
+import { MenuContent, MenuRoot } from './ui/MenuParts'
 import type { ReactNode } from 'react'
 
 export type Js8MenuEntry =
@@ -118,20 +119,20 @@ export function Js8ListMenu({
   children?: ReactNode
 }) {
   return (
-    <RM.Root open={open} onOpenChange={onOpenChange}>
+    <MenuRoot open={open} onOpenChange={onOpenChange}>
       <RM.Trigger asChild>
         <button type="button" className={className} aria-label={label} title={title ?? label}>
           {children}
         </button>
       </RM.Trigger>
       <RM.Portal>
-        <RM.Content className="ui-menu box-menu js8-list-menu" sideOffset={4} align="end" collisionPadding={8}>
+        <MenuContent className="ui-menu box-menu js8-list-menu" sideOffset={4} align="end" collisionPadding={8}>
           {/* The portal escapes `.app`'s zoom, so the content re-applies it (Menu.tsx's reason). */}
           <div style={{ zoom: 'var(--ui-zoom, 1)' }}>
             <Entries entries={entries()} />
           </div>
-        </RM.Content>
+        </MenuContent>
       </RM.Portal>
-    </RM.Root>
+    </MenuRoot>
   )
 }
