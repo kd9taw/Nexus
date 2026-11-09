@@ -87,6 +87,17 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
   // A CAT outage turned transmit off: said in the TX state, after every control, so that it can
   // be read without hovering and moves none of them.
   const catOff = radio.txEnabled ? null : catSaysTxOff(radio.catDetail)
+  // …and the words that say it, unless the on-air sign or a connection that transmits nothing is
+  // said first. Where they stand: below, beside the state (an inline cell of the strip's line) or
+  // as the meters cell's one block (a block, so its ellipsis applies there too).
+  const catNoteWords =
+    catOff && !lit && !radio.txRefusal
+      ? {
+          className: 'cockpit-txstrip-catnote cat-txoff-note',
+          title: catOff === 'lost' ? t('settings.rigControl.catSilentTxOff') : t('settings.rigControl.catBackTxOff'),
+          children: catOff === 'lost' ? t('operate.strip.state.txOffCatLost') : t('operate.strip.state.txOffCatBack'),
+        }
+      : null
   const ref = useRef<HTMLDivElement>(null)
   useDockClearance(ref)
   // ⭐ ATU ON (#344, operator ruling): the label says when the radio reports its tuner in line; a
@@ -215,20 +226,14 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
               : t('operate.strip.state.txOff')}
       </span>
       {/* Why transmit is off after a CAT outage: a zero-basis cell after the state, so it can never
-          wrap the strip or move a control (`.cockpit-txstrip-catnote`). Not beside the meters cell,
-          whose room it would share; the state's hover and the CAT status carry the words there. */}
-      {catOff && !lit && !radio.txRefusal && meters == null && (
-        <span
-          className="cockpit-txstrip-catnote cat-txoff-note"
-          title={catOff === 'lost' ? t('settings.rigControl.catSilentTxOff') : t('settings.rigControl.catBackTxOff')}
-        >
-          {catOff === 'lost' ? t('operate.strip.state.txOffCatLost') : t('operate.strip.state.txOffCatBack')}
-        </span>
-      )}
+          wrap the strip or move a control (`.cockpit-txstrip-catnote`). On a strip with a meters
+          cell the words stand IN that cell, in place of the meters (#489): transmit is off, so
+          the meters have nothing live to show, and the cell's box is already where it stands. */}
+      {catNoteWords && meters == null && <span {...catNoteWords} />}
       {/* THE METERS' CELL, at the strip's right end (`.cockpit-txstrip-meters`): after the cluster and
           the TX state, so nothing it shows can move a control. Two rows at most, the strip's own
           height, and the same readings before and after a key-down (TxMeters `strip`). */}
-      {meters != null && <div className={`cockpit-txstrip-meters${needle ? ' cockpit-txstrip-meters-needle' : ''}`}>{meters}</div>}
+      {meters != null && <div className={`cockpit-txstrip-meters${needle ? ' cockpit-txstrip-meters-needle' : ''}`}>{catNoteWords ? <div {...catNoteWords} /> : meters}</div>}
       {meters != null && metersPane && <TxMetersPaneToggle {...metersPane} />}
       {/* What the radio reports beside Tune while Tune is the Flex radio's own carrier: the last
           child, on a line of its own, so it never moves the controls or the TX state. */}

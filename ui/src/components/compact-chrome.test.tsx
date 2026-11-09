@@ -163,6 +163,45 @@ describe('the compact dock: every transmit and stop control stays in the dock or
     })
   }
 
+  // A CAT OUTAGE THAT TURNED TRANSMIT OFF IS SAID IN THE STRIP, METERS OR NOT (#489, the transmit
+  // review). The words stood beside the TX state only on a strip without a meters cell, so from md up
+  // on these five screens "TX off" stood alone and the cause was a tooltip. They now stand IN the
+  // meters cell, in place of the meters, which have nothing live while transmit is off; once
+  // transmit is back on the meters return. Below md the strip has no meters cell and the words stand
+  // beside the state, as before.
+  describe('the CAT-lost words with a meters cell', () => {
+    const r = snap.radio as unknown as Record<string, unknown>
+    const was = { txEnabled: r.txEnabled, catOk: r.catOk, catDetail: r.catDetail }
+    afterEach(() => Object.assign(r, was))
+    const states = [
+      ['lost', false, `14.0740 MHz CAT link unreachable (1/3) ${t('settings.rigControl.catSilentTxOff')}`, 'operate.strip.state.txOffCatLost'],
+      ['back', true, `14.074 MHz ${t('settings.rigControl.catBackTxOff')}`, 'operate.strip.state.txOffCatBack'],
+    ] as const
+    for (const c of [sstv, js8, rtty, psk, jtty]) {
+      for (const [name, catOk, catDetail, words] of states) {
+        it.each(SIZES)(`${c.cockpit}, CAT ${name}, at %s: the words are on screen in the strip`, async (vp) => {
+          at(vp)
+          Object.assign(r, { txEnabled: false, catOk, catDetail })
+          await mount(c)
+          const strip = document.querySelector('.cockpit-txstrip')!
+          const notes = [...strip.querySelectorAll('.cat-txoff-note')]
+          expect(notes.map((n) => n.textContent), `${c.cockpit} ${vp}: the words, once`).toEqual([t(words)])
+          const inCell = notes[0].closest('.cockpit-txstrip-meters') != null
+          expect(inCell, `${c.cockpit} ${vp}: in the meters cell exactly where there is one`).toBe(WIDE.has(vp))
+          expect(strip.querySelector('.ph-txmeters'), 'the meters give the cell up while transmit is off').toBeNull()
+        })
+      }
+      it(`${c.cockpit}: with transmit back on, the meters are back and the words gone`, async () => {
+        at('lg')
+        Object.assign(r, { txEnabled: true, catOk: true, catDetail: `14.074 MHz ${t('settings.rigControl.catBackTxOff')}` })
+        await mount(c)
+        const strip = document.querySelector('.cockpit-txstrip')!
+        expect(strip.querySelector('.cat-txoff-note')).toBeNull()
+        expect(strip.querySelector('.cockpit-txstrip-meters .ph-txmeters')).not.toBeNull()
+      })
+    }
+  })
+
   it('in the strip the meters keep their four slots before the first over (Phone sets COMP, PROC and TX bandwidth there)', async () => {
     at('lg')
     await mount(phone)
