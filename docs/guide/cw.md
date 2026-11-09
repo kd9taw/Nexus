@@ -194,9 +194,10 @@ not send while it is open.
 - **Send once** sends the message as it stands, one time, exactly as the key sends its
   own: the tokens are filled in from the same places, a call you typed in His call is
   taken first, and outside your license it is refused as the key is. The key keeps its
-  message. The editor closes once the radio side has taken the message; if it refuses
-  it, the editor stays open with your text. Until that answer comes, a second press sends
-  nothing, and Esc stops as it does with an over going out.
+  message. The editor closes once the message has reached the station; if it does not
+  get there, the editor stays open with your text. A message the station takes and then
+  drops (during a clock correction, say) still closes the editor. Until the answer comes,
+  a second press sends nothing, and Esc stops as it does with an over going out.
 - **Reset this button** puts back the built-in key the dock would show (the contest's
   during a contest).
 - **Esc** closes the editor when nothing is on the air and leaves TX on. With an over

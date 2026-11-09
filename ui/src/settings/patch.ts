@@ -25,7 +25,9 @@
  *
  * Patches from this window run one after another, each reading only once the one before it has
  * been written. Two made back to back (a quick tick, tick down the Field Day bonus list) would
- * otherwise both read before either wrote, and the second would write the first away.
+ * otherwise both read before either wrote, and the second would write the first away. A narrow
+ * save that reads before it writes joins the same queue (`inSettingsQueue`), so a whole-struct
+ * patch read before it cannot write its old copy back over it.
  *
  * ⚠️ The read and the write are two calls. A change from elsewhere that lands between them — a
  * window of milliseconds — is still overwritten. Closing it needs the backend to apply the fields
@@ -40,15 +42,23 @@ import type { AppSnapshot, RadioProfile, Settings } from '../types'
 /** The last patch this window started: the next one reads only after it has been written. */
 let previous: Promise<unknown> = Promise.resolve()
 
+/** Run `save` (a read of the settings and a write made from it) in this window's queue: only once
+ *  every save started before it has been written, and before any started after it. A failed save
+ *  rejects for its caller and does not hold up the next one. `patchSettings` and `patchRadio` run
+ *  through it, and so does a narrow save that reads before it writes (the CW dock's key save), so
+ *  a whole-struct patch read before that save cannot write its old copy back over it. */
+export function inSettingsQueue<T>(save: () => Promise<T>): Promise<T> {
+  const write = previous.then(save)
+  previous = write.catch(() => undefined)
+  return write
+}
+
 /** Save `edit`'s fields over the settings the backend holds now. */
 export function patchSettings(edit: (current: Settings) => Partial<Settings>): Promise<AppSnapshot> {
-  const write = previous.then(async () => {
+  return inSettingsQueue(async () => {
     const current = await getSettings()
     return setSettings({ ...current, ...edit(current) })
   })
-  // A failed patch rejects for its caller and must not hold up the next one.
-  previous = write.catch(() => undefined)
-  return write
 }
 
 /** Save `edit`'s fields over ONE radio as the backend holds it now, through the per-radio verb
@@ -58,12 +68,10 @@ export function patchSettings(edit: (current: Settings) => Partial<Settings>): P
  *  of that radio) is kept. In the same queue as `patchSettings`. Nothing is written for a radio the
  *  station no longer has. */
 export function patchRadio(id: number, edit: (current: RadioProfile) => RadioProfilePatch): Promise<AppSnapshot | null> {
-  const write = previous.then(async () => {
+  return inSettingsQueue(async () => {
     const current = (await getSettings()).radios?.find((r) => r.id === id)
     return current ? updateRadioProfile(id, edit(current)) : null
   })
-  previous = write.catch(() => undefined)
-  return write
 }
 
 /** A list the backend adds to while a form that edits it is open — the JS8 55-minute rule puts

@@ -229,7 +229,9 @@ contest runs and the active profile has no keys of its own, the dock shows the c
 outside it, the active one.
 **Send once** sends the edited text through the key's own send path (the His call commit, the
 licence check, `send_cw` and every engine gate behind it) and saves nothing. The editor closes only
-once `send_cw` has taken the text; refused there, the draft stays. One Send once is in flight at a
+once `send_cw` has answered; when the call fails (it never reached the station), the draft stays.
+`send_cw` answers Ok for a message the engine then drops (a clock repair holding TX, a keyer that
+will not take it), so the editor closes on those as before. One Send once is in flight at a
 time, and while it is, Esc is the full stop (`stop_cw` and `halt_tx`), not a cancel.
 
 **RST stays `5NN` regardless.** There is no per-QSO RST input, and a profile does not change that.

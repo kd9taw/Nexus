@@ -17,6 +17,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { CwCockpit } from './CwCockpit'
+import { patchSettings } from '../settings/patch'
 import { SettingsPanel } from './SettingsPanel'
 import { CONTEST_LAYOUT_ROLES } from '../features/esmRoles'
 import type { AppSnapshot, FieldDayStatus } from '../types'
@@ -273,9 +274,9 @@ describe('Send once', () => {
     expect(field(/^message$/i).value, 'a refused Send once keeps the draft').toBe('CQ TEST {MYCALL} K')
   })
 
-  it('refused by the engine once it was handed over, the editor stays open with the draft', async () => {
+  it('when the send does not reach the station, the editor stays open with the draft', async () => {
     sendCw().mockImplementation(async () => {
-      throw new Error('the keyer is not connected')
+      throw new Error('the station did not answer')
     })
     await renderCockpit()
     fireEvent.contextMenu(key('F2'))
@@ -285,8 +286,8 @@ describe('Send once', () => {
     })
     await waitFor(() => expect(sendCw()).toHaveBeenCalledWith('! DE {MYCALL} PSE K'))
     await waitFor(() => expect(pushToast).toHaveBeenCalledWith('failed', 'error'))
-    expect(editor(), 'the engine refused the send and the editor closed').not.toBeNull()
-    expect(field(/^message$/i).value, 'the engine refused the send and the draft was lost').toBe('! DE {MYCALL} PSE K')
+    expect(editor(), 'the send failed and the editor closed').not.toBeNull()
+    expect(field(/^message$/i).value, 'the send failed and the draft was lost').toBe('! DE {MYCALL} PSE K')
   })
 
   it('keys ONCE however often it is pressed while the engine answers; refused, it can be pressed again', async () => {
@@ -301,7 +302,7 @@ describe('Send once', () => {
     await flush()
     expect(sendCw(), 'a second press keyed the message again').toHaveBeenCalledTimes(1)
     expect(editor(), 'unanswered: the editor stays').not.toBeNull()
-    await act(async () => answers[0](new Error('the keyer is not connected')))
+    await act(async () => answers[0](new Error('the station did not answer')))
     await flush()
     expect(editor(), 'refused: the editor stays').not.toBeNull()
     // POSITIVE CONTROL: answered, the next press sends what the editor holds now, once.
@@ -532,6 +533,40 @@ describe('Save writes the store Settings ▸ CW ▸ Macros edits', () => {
     await renderCockpit()
     fireEvent.contextMenu(key('F3'))
     expect(button('Reset this button').disabled).toBe(true)
+  })
+
+  it('waits for a settings save this window already started, so neither save undoes the other', async () => {
+    withProfiles([{ name: 'Default', macros: [] }, MINE], 1)
+    await renderCockpit()
+    // Another surface of this window saves through the patch seam, and the backend is slow to
+    // answer: it has read the settings (the old keys) and its whole-struct write is on its way.
+    let land: () => void = () => {}
+    setSettings().mockImplementationOnce(
+      (s: unknown) =>
+        new Promise((resolve) => {
+          land = () => {
+            stored = structuredClone(s as typeof stored)
+            resolve({})
+          }
+        }),
+    )
+    const other = patchSettings(() => ({ dialMhz: 7.025 }) as never)
+    await flush()
+    expect(setSettings(), 'fixture: the other save is on its way').toHaveBeenCalledTimes(1)
+    fireEvent.contextMenu(key('F3'))
+    fireEvent.change(field(/^message$/i), { target: { value: '! UR {RST} {RST} GL BK' } })
+    fireEvent.click(button('Save'))
+    await flush()
+    await act(async () => {
+      land()
+      await other
+    })
+    await waitFor(() => expect(setCwMacros()).toHaveBeenCalledTimes(1))
+    await flush()
+    const f3 = (lastSaved().macros.cwProfiles as { macros: { key: string; text: string }[] }[])[1].macros.find((m) => m.key === 'F3')
+    expect(f3?.text, 'the other save wrote the old keys back over the key just saved').toBe('! UR {RST} {RST} GL BK')
+    expect(lastSaved().dialMhz, 'the key save undid the other save').toBe(7.025)
+    expect(lastSaved().macros.activeCwProfile).toBe(1)
   })
 
   it('a failed save keeps the editor open with the draft', async () => {

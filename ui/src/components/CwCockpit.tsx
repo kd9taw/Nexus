@@ -113,7 +113,7 @@ import {
   stopQsoRecording,
   getCatCwUnprovenRigModels,
 } from '../api'
-import { patchSettings } from '../settings/patch'
+import { inSettingsQueue, patchSettings } from '../settings/patch'
 import { icomScopeCure } from '../rigFormChecks'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { pushToast, withErrorToast } from '../toast'
@@ -1453,9 +1453,10 @@ export function CwCockpit({
   // `line`, not `t` — the catalog lookup is `t()` in every migrated file, so a parameter by
   // that name would shadow it here and nowhere else.
   //
-  // It answers false when the line was refused here, and otherwise whether `send_cw` took it, for
-  // the macro editor's Send once, which keeps the operator's draft open when the send was refused,
-  // here or by the engine.
+  // It answers false when the line was refused here, and otherwise whether the `send_cw` call
+  // succeeded, for the macro editor's Send once, which keeps the operator's draft open when the send
+  // was refused here or the call failed. `send_cw` answers Ok for a message the engine then drops
+  // (a clock repair holding TX, a keyer that will not take it), so that one closes the editor.
   const send = (line: string, key: string | null = null): false | Promise<boolean> => {
     if (!line.trim()) return false
     // The engine blocks keying outside privileges anyway; surface why up front.
@@ -1503,8 +1504,9 @@ export function CwCockpit({
   //
   // SAVE writes THE STORE SETTINGS ▸ CW ▸ MACROS EDITS: the active profile's keys,
   // `settings.macros.cwProfiles[activeCwProfile]`, over the profiles the backend holds at that
-  // moment, through the dock's own narrow save (`set_cw_macros`) and NEVER the settings form, which
-  // advances the TX gate generation, revokes Remote actuation and clears the FT queues. A profile on
+  // moment, through the dock's own narrow save (`set_cw_macros`, in the settings patch queue) and
+  // NEVER the settings form, which advances the TX gate generation, revokes Remote actuation and
+  // clears the FT queues. A profile on
   // the built-ins becomes the operator's own set first, the keys the dock showed with this one
   // changed (`withCwEntry`, which also keeps the Enter Sends Message steps it was sending); during
   // a contest that set goes into a profile named for the contest instead (`withCwDockEntry`), so the
@@ -1574,12 +1576,19 @@ export function CwCockpit({
   const writeKey = async (key: string, entry: { label: string; text: string }) => {
     setSavingMacros(true)
     const out: { saved: { profiles: CwProfile[]; active: number } | null } = { saved: null }
-    const after = await withErrorToast(async () => {
-      const s = await getSettings()
-      const saved = withCwDockEntry(s.macros?.cwProfiles ?? [], s.macros?.activeCwProfile ?? 0, contestProfile, builtInStored, key, entry)
-      out.saved = saved
-      return setCwMacros(saved.profiles, saved.active)
-    }, t('cw.macros.saveFailed'))
+    // In this window's settings queue, read and write together: a profile switch or any other
+    // patch started first is written before this read, and none started after can write an older
+    // copy back over the key.
+    const after = await withErrorToast(
+      () =>
+        inSettingsQueue(async () => {
+          const s = await getSettings()
+          const saved = withCwDockEntry(s.macros?.cwProfiles ?? [], s.macros?.activeCwProfile ?? 0, contestProfile, builtInStored, key, entry)
+          out.saved = saved
+          return setCwMacros(saved.profiles, saved.active)
+        }),
+      t('cw.macros.saveFailed'),
+    )
     setSavingMacros(false)
     // A failed save keeps the editor open with the operator's draft.
     if (!after || !out.saved) return
@@ -1604,8 +1613,8 @@ export function CwCockpit({
     const stock = builtInOf(key)
     void writeKey(key, { label: stock.label, text: stock.text })
   }
-  // Sent, the editor closes; refused, here or by the engine once it was handed over, it stays open
-  // with the draft, as a failed Save does. A press while one is in flight sends nothing.
+  // Sent, the editor closes; refused here, or the `send_cw` call failed, it stays open with the
+  // draft, as a failed Save does. A press while one is in flight sends nothing.
   const sendOnce = (key: string, message: string) => {
     if (sendingOnce.current !== null) return
     const sent = macros.some((x) => x.key === key) ? sendMacro({ key, text: message }) : false
