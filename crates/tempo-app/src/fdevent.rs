@@ -2152,7 +2152,12 @@ impl ClubLog {
         // club's dupes like any row, so whether a later contact is a duplicate is what it always
         // was, but brings no section and no multiplier value: it scores nothing in the club's
         // file, so it lights no cell on any laptop's board.
-        let credited = counts && !self.ruleset().mode_banned(&row.submode);
+        let credited = counts
+            && !tempo_core::fieldday::worked_in_banned_mode(
+                &row.mode_class,
+                &row.submode,
+                self.ruleset(),
+            );
         let dkey = row.dkey(&self.dupe_rule(), self.exchange());
         let at = self.dkeys_list.len();
         if counts && self.dkeys_set.insert(dkey.clone()) {
@@ -2585,7 +2590,10 @@ impl ClubLog {
             }
             let key = self.rows[i].dkey(&rule, spec);
             let first = seen.insert(key.clone());
-            let first_credited = !rs.mode_banned(&self.rows[i].submode) && credited.insert(key);
+            let row = &self.rows[i];
+            let first_credited =
+                !tempo_core::fieldday::worked_in_banned_mode(&row.mode_class, &row.submode, rs)
+                    && credited.insert(key);
             if first || first_credited {
                 keep.push(i);
             }
@@ -2828,7 +2836,8 @@ impl ClubLog {
         let rs = self.ruleset();
         let mut uniq: HashMap<&str, u64> = HashMap::new();
         for i in self.earliest_unique_indices() {
-            if !rs.mode_banned(&self.rows[i].submode) {
+            let row = &self.rows[i];
+            if !tempo_core::fieldday::worked_in_banned_mode(&row.mode_class, &row.submode, rs) {
                 *uniq.entry(self.rows[i].posid.as_str()).or_insert(0) += 1;
             }
         }
@@ -5633,6 +5642,68 @@ mod tests {
             (numbers.4, board, uniq, club.dkeys_list == keys),
             (8, vec!["COOK".to_string(), "LAKE".to_string()], 1, true),
             "after a rebuild: (total, the board, scoring rows, the dupe keys unchanged)"
+        );
+    }
+
+    /// ⭐ **A club judges a CW contact with no recorded mode as CW, as a position's log does.**
+    /// The RTTY Roundup bans CW and keys a station on its call and band alone. A laptop works
+    /// K1ABC on 20 m CW (a CW row records no submode), then on RTTY: the RTTY contact is the one
+    /// the sponsor credits. The club's files keep both (the CW one reported, worth nothing), its
+    /// scoring log credits the RTTY one, and the CW one brings no point or multiplier.
+    ///
+    /// Measured before: the club's files kept the CW row alone and scored it; the RTTY contact
+    /// was dropped as its duplicate.
+    #[test]
+    fn a_clubs_cw_contact_with_no_recorded_mode_is_judged_as_cw() {
+        let rs = party("arrlrtty");
+        let mut club = ClubLog::for_ruleset(rs, "RTTY TEST");
+        let row = |seq: u64, mode: &str, sub: &str, when: u64| WireQso {
+            pos: "bbbb".into(),
+            seq,
+            call: "K1ABC".into(),
+            class: String::new(),
+            sect: String::new(),
+            ex: party_fields("arrlrtty", &[("RST", "599"), ("QTH", "MA")]),
+            mex: party_fields("arrlrtty", &[("RST", "599"), ("QTH", "IL")]),
+            band: "20m".into(),
+            mode: mode.into(),
+            sub: sub.into(),
+            when,
+            op: "W9XYZ".into(),
+            sat: String::new(),
+            sat_fm: false,
+        };
+        club.merge(&row(1, "CW", "", 1_000), 1);
+        club.merge(&row(2, "DIG", "RTTY", 1_060), 2);
+        let kept: Vec<&str> = club
+            .earliest_unique_indices()
+            .into_iter()
+            .map(|i| club.rows[i].submode.as_str())
+            .collect();
+        assert_eq!(
+            kept,
+            ["", "RTTY"],
+            "the files keep the CW row and the RTTY one"
+        );
+        let session = party_session("arrlrtty", "IL", "");
+        let log = club.unique_log_with("W9XYZ", session.clone());
+        let credited: Vec<&str> = log
+            .qsos()
+            .iter()
+            .filter(|q| !q.dupe && !q.banned_under(rs))
+            .map(|q| q.submode.as_str())
+            .collect();
+        assert_eq!(credited, ["RTTY"], "the RTTY contact is the one credited");
+        let uniq = club
+            .board_rows(1_100)
+            .iter()
+            .find(|r| r.pos == "bbbb")
+            .map(|r| r.uniq);
+        assert_eq!(uniq, Some(1), "one scoring contact on the laptop's line");
+        assert_eq!(
+            club.score_with("W9XYZ", session, 1, &[], &[]).qso_points,
+            1,
+            "one point, the RTTY contact's"
         );
     }
 

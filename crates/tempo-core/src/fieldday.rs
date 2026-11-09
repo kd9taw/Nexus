@@ -416,13 +416,9 @@ impl LoggedQso {
     /// mode: an empty mode is never banned, as `FdRuleset::mode_banned` says.
     ///
     /// The same answer as `FdRuleset::mode_banned(&self.submode)` without its allocation, which the
-    /// scorer's walk of every row on every snapshot must not make: the row's mode is stored trimmed
-    /// and uppercase, and the loader takes a banned mode only uppercase and non-empty.
-    ///
-    /// ⭐ **…except a `CW` row, whose CLASS is its mode.** A CW contact records no submode (CW
-    /// needs none, [`FieldDayLog::log_mode_at`]), and that is not missing evidence: it
-    /// was worked in CW. A contest that bans CW (the ARRL RTTY Roundup, RTTY only) must not
-    /// credit it for having nothing in the submode.
+    /// scorer's walk of every row on every snapshot must not make, ⭐ **except a `CW` row, whose
+    /// CLASS is its mode**: [`worked_in_banned_mode`], the one decision every judge of a banned
+    /// mode makes, the club's included.
     pub fn banned_under(&self, rs: &crate::fd_rules::FdRuleset) -> bool {
         worked_in_banned_mode(&self.mode, &self.submode, rs)
     }
@@ -550,7 +546,7 @@ impl SpotMults {
         mode_class: &str,
         submode: Option<&str>,
     ) -> Vec<(&'static str, String)> {
-        if submode.is_some_and(|m| self.ruleset.mode_banned(m)) {
+        if worked_in_banned_mode(mode_class, submode.unwrap_or(""), self.ruleset) {
             return Vec::new();
         }
         let call = call.trim().to_ascii_uppercase();
@@ -598,7 +594,7 @@ impl SpotMults {
     ) -> Vec<(&'static str, String)> {
         let call = call.trim().to_ascii_uppercase();
         if self.rx_by_call.contains_key(&call)
-            || submode.is_some_and(|m| self.ruleset.mode_banned(m))
+            || worked_in_banned_mode(mode_class, submode.unwrap_or(""), self.ruleset)
         {
             return Vec::new();
         }
@@ -721,23 +717,36 @@ fn record_when(f: &std::collections::HashMap<String, String>) -> u64 {
     }
 }
 
+/// ⭐ **Was a contact of mode class `mode` (`CW` | `PH` | `DIG`), recorded as `submode`, worked
+/// in a mode `rs` bans?** The one decision every judge of a banned mode makes: a row
+/// ([`LoggedQso::banned_under`]), the dupe check that admits a row before it exists, the club's
+/// merged rows (tempo-app's `ClubLog`) and a spot's multiplier preview ([`SpotMults`]).
+///
+/// ⭐ **A `CW` contact with no recorded mode was worked in CW.** CW needs no submode, so its rows
+/// record none ([`FieldDayLog::log_mode_at`]); a contest that bans CW (the ARRL RTTY Roundup) must
+/// not credit it for having nothing there. Any other empty mode is never banned, as
+/// [`FdRuleset::mode_banned`](crate::fd_rules::FdRuleset::mode_banned) says: a guess is not a
+/// contact in a banned mode. Case and surrounding spaces do not matter, and nothing is allocated:
+/// the scorer asks for every row on every snapshot.
+pub fn worked_in_banned_mode(mode: &str, submode: &str, rs: &crate::fd_rules::FdRuleset) -> bool {
+    let submode = submode.trim();
+    let worked = if submode.is_empty() && mode.trim().eq_ignore_ascii_case("CW") {
+        "CW"
+    } else {
+        submode
+    };
+    !worked.is_empty()
+        && rs
+            .banned_modes
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case(worked))
+}
+
 /// ADIF `MODE` and `SUBMODE` → (mode class, actual mode): how the journal reads a row's mode back
 /// ([`FieldDayLog::restore_row`]) — the reverse of the map in [`adif`](FieldDayLog::adif), so keep
 /// the two in step — and how an edit reads the mode the operator picked ([`mode_of_recorded`]),
 /// so an edited row is the row its next restore reads. A digital MODE keeps its identity as the
 /// submode so RTTY/SSTV rows survive the round-trip.
-/// ⭐ **[`LoggedQso::banned_under`]'s decision, from a row's mode class and its recorded mode**
-/// (stored trimmed and uppercase), so the dupe check that admits a row before it exists decides
-/// as the row will: a `CW` row with no recorded mode was worked in CW.
-fn worked_in_banned_mode(mode: &str, submode: &str, rs: &crate::fd_rules::FdRuleset) -> bool {
-    let worked = if submode.is_empty() && mode == "CW" {
-        "CW"
-    } else {
-        submode
-    };
-    rs.banned_modes.contains(&worked)
-}
-
 fn class_of_adif(mode: Option<&str>, submode: &str) -> (&'static str, String) {
     // ⭐ **The PHONE family is three MODEs, not one, and that is why `SSB` cannot be
     // the whole of it.** `adif` writes a phone row's recorded mode through
@@ -1354,8 +1363,7 @@ impl FieldDayLog {
         if satellite && !self.ruleset().satellite_credit {
             return Some(false);
         }
-        let submode = submode.trim().to_ascii_uppercase();
-        if worked_in_banned_mode(mode, &submode, self.ruleset()) {
+        if worked_in_banned_mode(mode, submode, self.ruleset()) {
             return self.admit(key);
         }
         self.admit(key.clone())?;
