@@ -803,9 +803,9 @@ mod tests {
         let with_facts = |mut r: QsoRecord| {
             r.extra = [
                 ("APP_EQSL_AG", "Y"),
+                ("APP_NEXUS_EQSL_QSLMSG", "TNX"),
                 ("APP_OTHERLOG_KEEP", "kept"),
                 ("EQSL_QSLRDATE", "20241005"),
-                ("QSLMSG_RCVD", "TNX"),
             ]
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -839,6 +839,37 @@ mod tests {
         let check = check_report(&log, &rows, &[], Channel::Lotw, OWN);
         let after = uncheck(&log[0], &check.lines[0]).expect("still holds what the line shows");
         assert_eq!((after.qsl_rcvd.lotw, &after.extra), (false, &log[0].extra));
+    }
+
+    /// ★ Taking eQSL's confirmation off a contact leaves a received message that is not eQSL's:
+    /// `QSLMSG_RCVD` is ADIF's field for a message received, and another logger keeps a paper card's
+    /// there. With a paper card on the contact, and with none. The message eQSL brought, kept as
+    /// eQSL's own field ([`crate::eqsl::MESSAGE`]), goes with it.
+    #[test]
+    fn taking_an_eqsl_confirmation_off_keeps_another_loggers_received_message() {
+        for card in [true, false] {
+            let rows = vec![eqsl(w1aw_at(D, 18, 2))];
+            let mut log = left_by_1_17(vec![w1aw_at(D, 6, 0), w1aw_at(D, 18, 0)], &rows);
+            log[0].qsl_rcvd.card = card;
+            log[0].award_confirmed = card;
+            let theirs = ("QSLMSG_RCVD".to_string(), "PSE QSL VIA BURO".to_string());
+            log[0].extra = vec![
+                (crate::eqsl::MESSAGE.to_string(), "TNX QSO 73".to_string()),
+                theirs.clone(),
+            ];
+            let check = check_report(&log, &rows, &[], Channel::Eqsl, OWN);
+            let line = check
+                .lines
+                .iter()
+                .find(|l| l.index == 0 && l.mark == Mark::Confirmation(Channel::Eqsl))
+                .expect("06:00 is listed");
+            let after = uncheck(&log[0], line).expect("06:00 still holds what the line shows");
+            assert_eq!(
+                (after.qsl_rcvd.eqsl, after.qsl_rcvd.card, after.extra),
+                (false, card, vec![theirs]),
+                "card {card}"
+            );
+        }
     }
 
     #[test]

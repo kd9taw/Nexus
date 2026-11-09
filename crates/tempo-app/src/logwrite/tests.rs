@@ -2886,7 +2886,7 @@ fn card_facts_of(r: &QsoRecord) -> [Option<String>; 4] {
     [
         extra("EQSL_QSLRDATE"),
         extra("APP_EQSL_AG"),
-        extra("QSLMSG_RCVD"),
+        extra("APP_NEXUS_EQSL_QSLMSG"),
         r.grid.clone(),
     ]
 }
@@ -2897,8 +2897,8 @@ fn facts_the_card_leaves() -> [Option<String>; 4] {
 }
 
 /// ★ An eQSL sync keeps what a card says of itself on the contact it confirms, in the store: the
-/// day eQSL took it in, its AG mark, the sender's message (as `QSLMSG_RCVD`, never the operator's
-/// own `QSLMSG`); and the contact's empty grid takes the sender's.
+/// day eQSL took it in, its AG mark, the sender's message (as eQSL's own field, never the
+/// operator's own `QSLMSG`); and the contact's empty grid takes the sender's.
 #[test]
 fn an_eqsl_sync_keeps_what_the_card_says_of_itself() {
     let d = Dir::new("eqsl-sync-card-facts");

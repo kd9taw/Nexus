@@ -4894,7 +4894,7 @@ fn lotw_channel_fixup(text: &str, incoming: &mut [QsoRecord]) {
 /// stored the date this record was added", so an older card carries neither.
 ///
 /// The sender's message (`QSLMSG`, or `QSLMSG_INTL` with international characters) is renamed
-/// [`crate::eqsl::MESSAGE`] (`QSLMSG_RCVD`): ADIF's `QSLMSG` is the message on the card the
+/// [`crate::eqsl::MESSAGE`] (`APP_NEXUS_EQSL_QSLMSG`): ADIF's `QSLMSG` is the message on the card the
 /// operator SENDS, and an export or a re-upload would pass the sender's words off as theirs.
 ///
 /// Keyed on the FETCH SOURCE, as [`lotw_channel_fixup`] is, for the same reason: the same fields
@@ -12455,7 +12455,7 @@ mod tests {
     /// The sender's message and grid a card brings to the contact it confirms, as the log keeps them.
     fn message_and_grid(r: &QsoRecord) -> (Option<String>, Option<String>) {
         (
-            extra_field(r, "QSLMSG_RCVD").map(str::to_string),
+            extra_field(r, "APP_NEXUS_EQSL_QSLMSG").map(str::to_string),
             r.grid.clone(),
         )
     }
@@ -12482,7 +12482,10 @@ mod tests {
         );
         assert_eq!(message_and_grid(&lb.records()[1]), (None, None));
         let out = adif_record(&lb.records()[0]);
-        for field in ["<QSLMSG_RCVD:10>TNX QSO 73", "<GRIDSQUARE:6>FN31pr"] {
+        for field in [
+            "<APP_NEXUS_EQSL_QSLMSG:10>TNX QSO 73",
+            "<GRIDSQUARE:6>FN31pr",
+        ] {
             assert!(out.contains(field), "{field} in {out}");
         }
         assert_eq!(
@@ -12496,8 +12499,8 @@ mod tests {
     /// `QSLMSG_INTL` when it has international characters, and ADIF gives `QSLMSG` to "a message
     /// for the contacted station's operator": the operator's message for the card THEY send. Kept
     /// under that name, an export would hand it to every logger as the operator's words, and a
-    /// re-upload would print it on the operator's own eQSL. It is `QSLMSG_RCVD`, "a message
-    /// addressed to the logging station's operator". Another program's `QSLMSG` stays its own.
+    /// re-upload would print it on the operator's own eQSL. It is kept as eQSL's own field
+    /// ([`crate::eqsl::MESSAGE`]). Another program's `QSLMSG` stays its own.
     #[test]
     fn the_senders_message_never_becomes_the_operators_qslmsg() {
         let intl = "Grüße aus Köln, 73";
@@ -12508,7 +12511,7 @@ mod tests {
         let row = &report_rows(&inbox)[0];
         assert_eq!(
             (
-                extra_field(row, "QSLMSG_RCVD"),
+                extra_field(row, "APP_NEXUS_EQSL_QSLMSG"),
                 extra_field(row, "QSLMSG"),
                 extra_field(row, "QSLMSG_INTL")
             ),
@@ -12523,7 +12526,7 @@ mod tests {
             "{out}"
         );
         assert!(
-            out.contains(&format!("<QSLMSG_RCVD:{}>{intl}", intl.len())),
+            out.contains(&format!("<APP_NEXUS_EQSL_QSLMSG:{}>{intl}", intl.len())),
             "{out}"
         );
 
@@ -12531,7 +12534,10 @@ mod tests {
         let third_party = format!("<EOH>\n{}", inbox_card("W1AW", "<QSLMSG:3>TNX"));
         let row = &report_rows(&third_party)[0];
         assert_eq!(
-            (extra_field(row, "QSLMSG"), extra_field(row, "QSLMSG_RCVD")),
+            (
+                extra_field(row, "QSLMSG"),
+                extra_field(row, "APP_NEXUS_EQSL_QSLMSG")
+            ),
             (Some("TNX"), None)
         );
     }
@@ -12569,9 +12575,9 @@ mod tests {
     fn a_call_correction_takes_the_cards_facts_with_its_confirmation() {
         let facts: Vec<(String, String)> = [
             ("APP_EQSL_AG", "Y"),
+            ("APP_NEXUS_EQSL_QSLMSG", "WRONG CALL"),
             ("APP_OTHERLOG_KEEP", "kept"),
             ("EQSL_QSLRDATE", "20231115"),
-            ("QSLMSG_RCVD", "WRONG CALL"),
         ]
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -12595,7 +12601,10 @@ mod tests {
                 "the edit carried the record's fields: {carried}"
             );
             lb.merge_report(&eqsl_inbox(&[inbox_card("W1AW", "<QSLMSG:5>RIGHT")]));
-            assert_eq!(extra_field(&lb.records()[0], "QSLMSG_RCVD"), Some("RIGHT"));
+            assert_eq!(
+                extra_field(&lb.records()[0], "APP_NEXUS_EQSL_QSLMSG"),
+                Some("RIGHT")
+            );
         }
     }
 

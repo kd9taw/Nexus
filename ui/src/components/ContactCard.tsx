@@ -373,10 +373,10 @@ function CardBody({
     col('lotwRcvdDate'),
     col('eqslRcvdDate'),
     // What eQSL said of the card that confirms it: its Authenticity-Guaranteed mark and the
-    // sender's message (kept as QSLMSG_RCVD, never the operator's own QSLMSG). Only beside eQSL's
+    // sender's message (eQSL's own field, never the operator's QSLMSG nor a card's QSLMSG_RCVD). Only beside eQSL's
     // confirmation, since they describe that card.
     fact(t('contactCard.eqslAg'), rcvd?.eqsl && eqslAg(q) ? yes : null),
-    fact(t('contactCard.eqslMessage'), rcvd?.eqsl ? extraTag(q, 'QSLMSG_RCVD') : null),
+    fact(t('contactCard.eqslMessage'), rcvd?.eqsl ? extraTag(q, 'APP_NEXUS_EQSL_QSLMSG') : null),
     fact(t('qso.detail.credit.granted'), q.creditGranted),
     fact(t('qso.detail.credit.submitted'), q.creditSubmitted),
     // Where the station was, under the names the Logbook's columns give these ADIF fields (each is

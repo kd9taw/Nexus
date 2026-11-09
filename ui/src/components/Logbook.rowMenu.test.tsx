@@ -427,7 +427,7 @@ describe('the contact card says what eQSL said of the card that confirms it', ()
       id: 'id-1',
       confirmed: true,
       qslRcvd: { card: false, lotw: false, eqsl: true, qrz: false },
-      extra: [['APP_EQSL_AG', 'Y'], ['QSLMSG_RCVD', 'TNX QSO 73']],
+      extra: [['APP_EQSL_AG', 'Y'], ['APP_NEXUS_EQSL_QSLMSG', 'TNX QSO 73']],
     })
     fireEvent.doubleClick(row)
     const card = await waitFor(() => document.querySelector<HTMLElement>('.contact-card-dialog')!)
@@ -436,7 +436,7 @@ describe('the contact card says what eQSL said of the card that confirms it', ()
   })
 
   it('nothing of a card the contact does not hold', async () => {
-    const row = await renderLog({ id: 'id-1', extra: [['APP_EQSL_AG', 'Y'], ['QSLMSG_RCVD', 'TNX QSO 73']] })
+    const row = await renderLog({ id: 'id-1', extra: [['APP_EQSL_AG', 'Y'], ['APP_NEXUS_EQSL_QSLMSG', 'TNX QSO 73']] })
     fireEvent.doubleClick(row)
     const card = await waitFor(() => document.querySelector<HTMLElement>('.contact-card-dialog')!)
     expect(fact(card, t('contactCard.eqslAg'))).toBeNull()

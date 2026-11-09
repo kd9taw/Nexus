@@ -3325,8 +3325,8 @@ mod tests {
             .collect();
         let want: Vec<(String, String)> = [
             ("APP_EQSL_AG", "Y"),
+            ("APP_NEXUS_EQSL_QSLMSG", message),
             ("EQSL_QSLRDATE", "20241005"),
-            ("QSLMSG_RCVD", message),
         ]
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))

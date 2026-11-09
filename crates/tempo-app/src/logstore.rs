@@ -2630,7 +2630,7 @@ pub(crate) mod tests {
             f("APP_QRZLOG_STATUS", "C"),
             f("EQSL_QSLRDATE", "20260105"),
             f("APP_EQSL_AG", "Y"),
-            f("QSLMSG_RCVD", "TNX QSO 73"),
+            f("APP_NEXUS_EQSL_QSLMSG", "TNX QSO 73"),
             f("APP_TEMPO_UL_QRZ", "accepted|1767315000|"),
             f("COMMENT", "hello"),
             f("NOTES", "private"),

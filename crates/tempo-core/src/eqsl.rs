@@ -292,8 +292,10 @@ pub fn format_rcvd_since(unix_secs: i64) -> String {
 pub const RCVD_DATE: &str = "EQSL_QSLRDATE";
 /// The sender's message to the operator. eQSL sends it as `QSLMSG`, or `QSLMSG_INTL` when it has
 /// international characters; ADIF gives those names to the message on the card the operator
-/// SENDS, so it is kept under the one ADIF gives a message received.
-pub const MESSAGE: &str = "QSLMSG_RCVD";
+/// SENDS, so it is renamed. Not to ADIF's `QSLMSG_RCVD` either: other loggers keep a paper card's
+/// message there, and what eQSL brought must go with eQSL's confirmation ([`CARD_FACTS`]) without
+/// taking a card's message with it. A field of its own, eQSL's alone.
+pub const MESSAGE: &str = "APP_NEXUS_EQSL_QSLMSG";
 /// What goes with the card when the contact stops holding it, after a callsign correction or when
 /// Check confirmations takes eQSL's confirmation off: its received day, its Authenticity-Guaranteed
 /// mark and its message.
