@@ -5720,7 +5720,14 @@ mod tests {
             .map(|r| r.uniq);
         assert_eq!(uniq, Some(1), "one scoring contact on the laptop's line");
         assert_eq!(
-            club.score_with("W9XYZ", session, 1, &[], &[]).qso_points,
+            club.score_with(
+                "W9XYZ",
+                session,
+                1,
+                tempo_core::fd_rules::BonusClaim::none(),
+                &[]
+            )
+            .qso_points,
             1,
             "one point, the RTTY contact's"
         );
