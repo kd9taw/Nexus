@@ -50,6 +50,7 @@ vi.mock('./SpotDialog', () => ({ SpotDialog: () => null }))
 
 const sendCw = () => api.get('sendCw')
 const setSettings = () => api.get('setSettings')
+const setCwMacros = () => api.get('setCwMacros')
 
 /** The operator's own profile, all sixteen keys, each saying which it is. */
 const SIXTEEN = {
@@ -62,10 +63,9 @@ let stored: Record<string, unknown> & { macros: Record<string, unknown> }
 const withMacros = (macros: Record<string, unknown>) => {
   stored = structuredClone({ ...defaultSettings, mycall: 'W9XYZ', macros: { ...defaultSettings.macros, ...macros } })
 }
-const lastSaved = () => {
-  const calls = setSettings().mock.calls
-  return calls[calls.length - 1][0] as typeof stored
-}
+/** The settings as the backend holds them after the last save: the form's (`set_settings`) or the
+ *  CW dock's two fields (`set_cw_macros`). */
+const lastSaved = () => stored
 
 const snap = {
   mycall: 'W9XYZ',
@@ -99,6 +99,11 @@ beforeEach(() => {
   api.get('setSettings').mockImplementation(async (s: unknown) => {
     stored = structuredClone(s as typeof stored)
     return {}
+  })
+  // The engine's `save_cw_macros`: the two fields, over the settings it holds, and the saved macros back.
+  api.get('setCwMacros').mockImplementation(async (cwProfiles: unknown, activeCwProfile: unknown) => {
+    stored = structuredClone({ ...stored, macros: { ...stored.macros, cwProfiles, activeCwProfile } })
+    return structuredClone(stored.macros)
   })
   api.get('getCatCwUnprovenRigModels').mockImplementation(async () => [])
   api.get('cwDecode').mockImplementation(async () => ({
@@ -171,6 +176,8 @@ describe("the CW dock's keys at each count", () => {
       fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     })
     await flush()
+    expect(setSettings(), 'a CW Save rode the settings form').not.toHaveBeenCalled()
+    expect(setCwMacros()).toHaveBeenCalledTimes(1)
     const saved = (lastSaved().macros.cwProfiles as { macros: { key: string; label: string; text: string }[] }[])[0].macros
     expect(saved.map((m) => m.key)).toEqual(['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F12'])
     expect(saved[8]).toEqual({ key: 'F12', label: 'QRL', text: 'QRL?' })

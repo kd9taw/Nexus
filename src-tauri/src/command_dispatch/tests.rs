@@ -2180,7 +2180,7 @@ fn a_whole_save_from_an_older_copy_is_refused() {
         })
         .map(|(name, ..)| *name)
         .collect();
-    assert_eq!(saves.len(), 7, "{saves:?}");
+    assert_eq!(saves.len(), 8, "{saves:?}");
     let mut id = 0;
     let mut next = || {
         id += 1;
@@ -3363,6 +3363,7 @@ fn each_list_saves_part_is_where_the_settings_keep_it() {
     );
     let mut cases = vec![
         ("set_blocked_calls", json!({"calls": []})),
+        ("set_cw_macros", json!({"profiles": [], "active": 0})),
         ("set_psk_macros", macros()),
         ("set_radio_bands", json!({"id": radio.id, "bands": []})),
         ("set_routing_rules", json!({"rules": []})),

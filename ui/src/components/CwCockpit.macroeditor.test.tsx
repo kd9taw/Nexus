@@ -8,9 +8,10 @@
 //   · THE TRANSMIT SEAM, `send_cw`: a right-click and the shortcut key nothing, and Send once
 //     hands it the EDITED message through the key's own `send()`, refused exactly where the key
 //     is — CW's tokens go out unexpanded to the engine's expander, as the key's own do;
-//   · THE STORE, `set_settings` through the settings patch seam: Save writes the ACTIVE PROFILE'S
-//     key, which is what Settings ▸ CW ▸ Macros edits (round-tripped through the real panel), and
-//     Send once writes nothing;
+//   · THE STORE, `set_cw_macros`, never the settings form (`set_settings`, whose side effects revoke
+//     Remote actuation and clear the FT queues): Save writes the ACTIVE PROFILE'S key, which is what
+//     Settings ▸ CW ▸ Macros edits (round-tripped through the real panel), and Send once writes
+//     nothing;
 //   · THE STOPS, `stop_cw` and `halt_tx`: Esc with the editor open and nothing live closes it and
 //     turns nothing off; anything live, it is the abort it always was.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -66,6 +67,7 @@ vi.mock('./SpotDialog', () => ({ SpotDialog: () => null }))
 
 const sendCw = () => api.get('sendCw')
 const setSettings = () => api.get('setSettings')
+const setCwMacros = () => api.get('setCwMacros')
 const pushToast = toast.pushToast as unknown as ReturnType<typeof vi.fn>
 
 /** The operator's own profile, all eight keys, as Settings ▸ CW ▸ Macros holds one. */
@@ -83,14 +85,21 @@ const MINE = {
   ],
 }
 
-/** The settings the backend holds: what `get_settings` answers, and what `set_settings` replaces. */
+/** The settings the backend holds: what `get_settings` answers, what `set_settings` replaces, and
+ *  whose two CW fields `set_cw_macros` replaces. */
 let stored: Record<string, unknown> & { macros: Record<string, unknown> }
 const withProfiles = (cwProfiles: unknown[], activeCwProfile: number) => {
   stored = structuredClone({ ...defaultSettings, mycall: 'KD9TAW', macros: { ...defaultSettings.macros, cwProfiles, activeCwProfile } })
 }
-const lastSaved = () => {
-  const calls = setSettings().mock.calls
-  return calls[calls.length - 1][0] as typeof stored
+/** The settings as the backend holds them after the last save. */
+const lastSaved = () => stored
+/** `send_cw` held unanswered until the test answers it. */
+function sendCwHeld() {
+  const answers: ((fail?: Error) => void)[] = []
+  sendCw().mockImplementation(
+    () => new Promise((resolve, reject) => answers.push((fail) => (fail ? reject(fail) : resolve({})))),
+  )
+  return answers
 }
 
 function snap(radio: Record<string, unknown> = {}, fieldDay?: Partial<FieldDayStatus>): AppSnapshot {
@@ -143,6 +152,11 @@ beforeEach(() => {
   api.get('setSettings').mockImplementation(async (s: unknown) => {
     stored = structuredClone(s as typeof stored)
     return {}
+  })
+  // The engine's `save_cw_macros`: the two fields, over the settings it holds, and the saved macros back.
+  api.get('setCwMacros').mockImplementation(async (cwProfiles: unknown, activeCwProfile: unknown) => {
+    stored = structuredClone({ ...stored, macros: { ...stored.macros, cwProfiles, activeCwProfile } })
+    return structuredClone(stored.macros)
   })
   api.get('getCatCwUnprovenRigModels').mockImplementation(async () => [])
   api.get('cwDecode').mockImplementation(async () => ({
@@ -218,8 +232,9 @@ describe('Send once', () => {
     await waitFor(() => expect(sendCw()).toHaveBeenCalledTimes(1))
     // The template, as the key hands over its own: the engine's expander fills `!` and the rest.
     expect(sendCw()).toHaveBeenCalledWith('! DE {MYCALL} QRZ? K')
-    expect(editor(), 'sent: the editor closes').toBeNull()
+    await waitFor(() => expect(editor(), 'sent: the editor closes').toBeNull())
     expect(setSettings(), 'Send once saved the key').not.toHaveBeenCalled()
+    expect(setCwMacros(), 'Send once saved the key').not.toHaveBeenCalled()
     expect(labelOf('F2')).toBe('Call')
     press('F2')
     await waitFor(() => expect(sendCw()).toHaveBeenCalledTimes(2))
@@ -256,6 +271,60 @@ describe('Send once', () => {
     expect(sendCw(), 'Send once went round the licence gate').not.toHaveBeenCalled()
     expect(pushToast).toHaveBeenCalledWith('Outside your privileges here', 'info', 3500)
     expect(field(/^message$/i).value, 'a refused Send once keeps the draft').toBe('CQ TEST {MYCALL} K')
+  })
+
+  it('refused by the engine once it was handed over, the editor stays open with the draft', async () => {
+    sendCw().mockImplementation(async () => {
+      throw new Error('the keyer is not connected')
+    })
+    await renderCockpit()
+    fireEvent.contextMenu(key('F2'))
+    fireEvent.change(field(/^message$/i), { target: { value: '! DE {MYCALL} PSE K' } })
+    await act(async () => {
+      fireEvent.click(button('Send once'))
+    })
+    await waitFor(() => expect(sendCw()).toHaveBeenCalledWith('! DE {MYCALL} PSE K'))
+    await waitFor(() => expect(pushToast).toHaveBeenCalledWith('failed', 'error'))
+    expect(editor(), 'the engine refused the send and the editor closed').not.toBeNull()
+    expect(field(/^message$/i).value, 'the engine refused the send and the draft was lost').toBe('! DE {MYCALL} PSE K')
+  })
+
+  it('keys ONCE however often it is pressed while the engine answers; refused, it can be pressed again', async () => {
+    const answers = sendCwHeld()
+    await renderCockpit()
+    fireEvent.contextMenu(key('F2'))
+    fireEvent.change(field(/^message$/i), { target: { value: '! DE {MYCALL} QRZ? K' } })
+    fireEvent.click(button('Send once'))
+    fireEvent.click(button('Send once'))
+    fireEvent.change(field(/^message$/i), { target: { value: '! DE {MYCALL} AGN K' } })
+    fireEvent.click(button('Send once'))
+    await flush()
+    expect(sendCw(), 'a second press keyed the message again').toHaveBeenCalledTimes(1)
+    expect(editor(), 'unanswered: the editor stays').not.toBeNull()
+    await act(async () => answers[0](new Error('the keyer is not connected')))
+    await flush()
+    expect(editor(), 'refused: the editor stays').not.toBeNull()
+    // POSITIVE CONTROL: answered, the next press sends what the editor holds now, once.
+    fireEvent.click(button('Send once'))
+    await flush()
+    expect(sendCw().mock.calls.map((c) => c[0])).toEqual(['! DE {MYCALL} QRZ? K', '! DE {MYCALL} AGN K'])
+    await act(async () => answers[1]())
+    await waitFor(() => expect(editor(), 'taken: the editor closes').toBeNull())
+  })
+
+  it('answered late, it never closes an editor opened since', async () => {
+    const answers = sendCwHeld()
+    await renderCockpit()
+    fireEvent.contextMenu(key('F2'))
+    fireEvent.click(button('Send once'))
+    await flush()
+    fireEvent.click(button('Cancel'))
+    fireEvent.contextMenu(key('F2'))
+    fireEvent.change(field(/^message$/i), { target: { value: '! DE {MYCALL} NEW' } })
+    await act(async () => answers[0]())
+    await flush()
+    expect(editor(), 'a late answer closed the editor opened after it').not.toBeNull()
+    expect(field(/^message$/i).value).toBe('! DE {MYCALL} NEW')
   })
 
   it('with TX off it goes where the key goes: to send_cw, whose engine side is the CW arm', async () => {
@@ -323,7 +392,8 @@ describe('Save writes the store Settings ▸ CW ▸ Macros edits', () => {
     await act(async () => {
       fireEvent.click(button('Save'))
     })
-    expect(setSettings()).toHaveBeenCalledTimes(1)
+    expect(setSettings(), 'a CW Save rode the settings form').not.toHaveBeenCalled()
+    expect(setCwMacros()).toHaveBeenCalledTimes(1)
     expect(lastSaved().macros.cwProfiles).toEqual([
       { name: 'Default', macros: [] },
       { name: 'Mine', macros: MINE.macros.map((m) => (m.key === 'F3' ? { ...m, text: '! UR {RST} {RST} GL BK' } : m)) },
@@ -366,8 +436,8 @@ describe('Save writes the store Settings ▸ CW ▸ Macros edits', () => {
     expect(ours).toEqual(customized.map((m) => (m.key === 'F3' ? { ...m, text: '! UR {RST} {RST} BK' } : m)))
   })
 
-  it('in a contest, on the built-ins: the contest set the dock showed, and the steps Enter Sends Message was sending', async () => {
-    await renderCockpit(snap({}, QSO_PARTY))
+  it('in a contest, on the built-ins: the contest set the dock showed, and its Enter Sends Message steps, in a profile of the contest’s own', async () => {
+    const { rerender } = await renderCockpit(snap({}, QSO_PARTY))
     expect(labelOf('F1'), 'fixture: the dock shows the contest set').toBe('CQ TEST')
     fireEvent.contextMenu(key('F3'))
     expect(field(/^message$/i).value).toBe('TU {MYCALL}')
@@ -376,8 +446,11 @@ describe('Save writes the store Settings ▸ CW ▸ Macros edits', () => {
       fireEvent.click(button('Save'))
     })
     expect(lastSaved().macros.cwProfiles).toEqual([
+      // The everyday profile is left on the built-ins: it took the contest's keys once and kept
+      // them after the contest, CQ TEST and all.
+      { name: 'Default', macros: [] },
       {
-        name: 'Default',
+        name: 'ILQP',
         macros: [
           { key: 'F1', label: 'CQ TEST', text: 'CQ TEST DE {MYCALL} {MYCALL} K' },
           { key: 'F2', label: 'Exch', text: '! {RST} {EXCH}' },
@@ -393,6 +466,36 @@ describe('Save writes the store Settings ▸ CW ▸ Macros edits', () => {
         esmRoles: CONTEST_LAYOUT_ROLES,
       },
     ])
+    expect(lastSaved().macros.activeCwProfile, 'the everyday profile is still the active one').toBe(0)
+    // In the contest the dock sends the edited key…
+    press('F3')
+    await waitFor(() => expect(sendCw()).toHaveBeenCalledWith('TU {MYCALL} GL'))
+    // …and once the contest is over it is the everyday set again.
+    await act(async () => {
+      rerender(<CwCockpit snap={snap()} theme="dark" onWorkSpot={() => {}} spots={[]} />)
+    })
+    expect(labelOf('F1'), 'the contest’s keys stayed on the dock after the contest').not.toBe('CQ TEST')
+    sendCw().mockClear()
+    press('F3')
+    await waitFor(() => expect(sendCw()).toHaveBeenCalled())
+    expect(sendCw()).not.toHaveBeenCalledWith('TU {MYCALL} GL')
+  })
+
+  it('in the next session of that contest, the dock shows the contest’s profile again, and a Save goes there', async () => {
+    const ilqp = { name: 'ILQP', macros: MINE.macros, esmRoles: CONTEST_LAYOUT_ROLES }
+    withProfiles([{ name: 'Default', macros: [] }, ilqp], 0)
+    await renderCockpit(snap({}, QSO_PARTY))
+    expect(labelOf('F1'), 'the contest’s own profile is on the dock').toBe('CQ')
+    fireEvent.contextMenu(key('F7'))
+    fireEvent.change(field(/^message$/i), { target: { value: 'AGN AGN AGN' } })
+    await act(async () => {
+      fireEvent.click(button('Save'))
+    })
+    expect(lastSaved().macros.cwProfiles).toEqual([
+      { name: 'Default', macros: [] },
+      { ...ilqp, macros: MINE.macros.map((m) => (m.key === 'F7' ? { ...m, text: 'AGN AGN AGN' } : m)) },
+    ])
+    expect(lastSaved().macros.activeCwProfile).toBe(0)
   })
 
   it('a built-in caption left as it was is stored as Settings stores it, not in the language on screen', async () => {
@@ -432,7 +535,7 @@ describe('Save writes the store Settings ▸ CW ▸ Macros edits', () => {
   })
 
   it('a failed save keeps the editor open with the draft', async () => {
-    setSettings().mockImplementation(async () => {
+    setCwMacros().mockImplementation(async () => {
       throw new Error('settings were not saved')
     })
     await renderCockpit()
@@ -470,6 +573,19 @@ describe('Esc with the editor open', () => {
     fireEvent.keyDown(field(/^message$/i), { key: 'Escape' })
     expect(api.get('stopCw')).toHaveBeenCalledTimes(1)
     expect(api.get('haltTx')).toHaveBeenCalledTimes(1)
+    expect(editor(), 'a stop is not a cancel').not.toBeNull()
+  })
+
+  it('a Send once the engine has not answered yet is live too: Esc is the abort, and the editor stays', async () => {
+    sendCwHeld()
+    await renderCockpit()
+    fireEvent.contextMenu(key('F2'))
+    fireEvent.click(button('Send once'))
+    await flush()
+    expect(sendCw(), 'fixture: the message was handed over').toHaveBeenCalledTimes(1)
+    fireEvent.keyDown(field(/^message$/i), { key: 'Escape' })
+    expect(api.get('stopCw')).toHaveBeenCalledTimes(1)
+    expect(api.get('haltTx'), 'Esc after a Send once only closed the editor').toHaveBeenCalledTimes(1)
     expect(editor(), 'a stop is not a cancel').not.toBeNull()
   })
 

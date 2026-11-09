@@ -9265,6 +9265,37 @@ impl Engine {
         self.save_remote_preferences(&values, &["macros"])
     }
 
+    /// ⛔ **The CW cockpit's macro save** — `macros.cwProfiles` and `macros.activeCwProfile`, from
+    /// the dock's key editor. [`Self::save_rtty_macros`] for CW's own storage, with its contract:
+    /// never a form save (`apply_settings` advances `tx_gate_gen`, revokes Remote actuation and
+    /// clears the FT and broadcast queues, so a key edited mid-QSO would cost the FT over the
+    /// operator had queued), the copy required to round-trip EXACTLY so a malformed entry is refused
+    /// rather than silently dropped, and nothing changed by a refused or failed save. Not the one
+    /// writer: Settings ▸ CW ▸ Macros saves the same profiles through its form, as it always has.
+    ///
+    /// The index is the profile the dock shows, so one past the list is refused here rather than
+    /// clamped on the next load to a different profile than the operator was editing.
+    pub fn save_cw_macros(
+        &mut self,
+        profiles: serde_json::Value,
+        active: serde_json::Value,
+    ) -> Result<(), crate::remote_control::Reason> {
+        use crate::remote_control::Reason;
+        let count = profiles.as_array().ok_or(Reason::InvalidAction)?.len();
+        let index = active.as_u64().ok_or(Reason::InvalidAction)?;
+        if index >= count.max(1) as u64 {
+            return Err(Reason::InvalidAction);
+        }
+        let mut macros =
+            serde_json::to_value(&self.settings.macros).map_err(|_| Reason::InvalidAction)?;
+        let fields = macros.as_object_mut().ok_or(Reason::InvalidAction)?;
+        fields.insert("cwProfiles".into(), profiles);
+        fields.insert("activeCwProfile".into(), active);
+        let mut values = serde_json::Map::new();
+        values.insert("macros".into(), macros);
+        self.save_remote_preferences(&values, &["macros"])
+    }
+
     /// The ESM switch in a cockpit's TX dock: `contest_esm_cw`, `contest_esm_rtty` or
     /// `contest_esm_phone` (`cockpit` is `cw`, `rtty` or `phone`), saved alone.
     ///
@@ -47048,6 +47079,100 @@ mod tests {
             live["rttyProfiles"], edited,
             "choosing 8 deleted the keys past F8"
         );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// Two profiles, the second with a key of its own and its Enter Sends Message steps.
+    fn cw_profiles_edit() -> serde_json::Value {
+        serde_json::json!([
+            {"name": "Default", "macros": []},
+            {"name": "Contest", "macros": [
+                {"key": "F1", "label": "CQ", "text": "CQ TEST {MYCALL}"},
+                {"key": "F2", "label": "Exch", "text": "! 5NN {EXCH}"}
+            ], "esmRoles": {"cq": ["F1"], "callExch": ["F2"]}}
+        ])
+    }
+
+    /// ⛔ **A key saved from the CW dock costs nothing on the air.** The cockpit's save used to be
+    /// a form save, which advances the TX gate generation, REVOKES REMOTE ACTUATION and CLEARS THE
+    /// FT AND BROADCAST QUEUES. Saved through `save_cw_macros`, none of the three moves, every
+    /// other setting is byte-identical, the file on disk agrees, and what was saved is what
+    /// Settings ▸ CW ▸ Macros reads back (`macros.cwProfiles`, the active one by index). The
+    /// form save run after it is the positive control: on the same engine it moves all three.
+    #[test]
+    fn saving_cw_macros_writes_two_fields_and_no_transmit_state() {
+        let (mut e, path, _lock) = rtty_macro_engine("cw-atomic");
+        // An FT over queued, a broadcast waiting, and the Remote actuation generation as it stands.
+        e.tx_queue.push_back("CQ W9XYZ EN52".into());
+        e.broadcast_queue.push_back("W9XYZ: QRV".into());
+        let generation = e.tx_gate_gen;
+        let actuation = e.remote_actuation_context_generation();
+        let mut expected = serde_json::to_value(e.settings()).unwrap();
+        expected["macros"]["cwProfiles"] = cw_profiles_edit();
+        expected["macros"]["activeCwProfile"] = serde_json::json!(1);
+
+        e.save_cw_macros(cw_profiles_edit(), serde_json::json!(1))
+            .unwrap();
+        assert_eq!(
+            e.remote_actuation_context_generation(),
+            actuation,
+            "a CW macro save revoked Remote actuation"
+        );
+        assert_eq!(
+            e.tx_queue.iter().cloned().collect::<Vec<_>>(),
+            vec!["CQ W9XYZ EN52".to_string()],
+            "a CW macro save cleared the FT queue"
+        );
+        assert_eq!(
+            e.broadcast_queue.len(),
+            1,
+            "a CW macro save cleared the broadcast queue"
+        );
+        assert_eq!(
+            e.tx_gate_gen, generation,
+            "a CW macro save advanced the TX gate generation — a queued over would not key"
+        );
+        let live = serde_json::to_value(&e.settings().macros).unwrap();
+        assert_eq!(
+            live["cwProfiles"],
+            cw_profiles_edit(),
+            "save_cw_macros did not write macros.cwProfiles"
+        );
+        assert_eq!(live["activeCwProfile"], serde_json::json!(1));
+        assert_eq!(
+            e.settings().macros.active_cw_macros()[1].text,
+            "! 5NN {EXCH}",
+            "the active profile's keys, as Settings ▸ CW ▸ Macros and the dock read them"
+        );
+        assert_eq!(serde_json::to_value(e.settings()).unwrap(), expected);
+        assert_eq!(
+            serde_json::to_value(Settings::load(&path)).unwrap()["macros"]["cwProfiles"],
+            cw_profiles_edit(),
+            "persisted"
+        );
+
+        // Refused, and nothing moved: a malformed key, an index past the list, an index that is
+        // not a number.
+        let bad = serde_json::json!([{"name": "Default", "macros": [{"key": "F1", "label": 5}]}]);
+        assert!(e.save_cw_macros(bad, serde_json::json!(0)).is_err());
+        assert!(e
+            .save_cw_macros(cw_profiles_edit(), serde_json::json!(2))
+            .is_err());
+        assert!(e
+            .save_cw_macros(cw_profiles_edit(), serde_json::json!("1"))
+            .is_err());
+        assert_eq!(
+            serde_json::to_value(e.settings()).unwrap(),
+            expected,
+            "a refused save changed something"
+        );
+
+        // POSITIVE CONTROL: the form save the cockpit used to make moves all three.
+        let s = e.settings().clone();
+        e.apply_settings(s);
+        assert_ne!(e.tx_gate_gen, generation);
+        assert_ne!(e.remote_actuation_context_generation(), actuation);
+        assert!(e.tx_queue.is_empty() && e.broadcast_queue.is_empty());
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

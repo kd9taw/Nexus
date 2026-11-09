@@ -513,6 +513,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("set_contest_esm",                RunsAtShack, "The shack's Enter Sends Message switch; keys nothing."),
     ("set_custom_awards",              RunsAtShack, "Replaces the shack's custom award definitions; touches no contact."),
     ("set_cw_keyer",                   RunsAtShack, "The shack's CW keyer setup; keys nothing."),
+    ("set_cw_macros",                  RunsAtShack, "The shack's CW macros; sends nothing."),
     ("set_cw_peer_info",               RunsAtShack, "The shack's CW macro fields."),
     ("set_cw_speed_match",             RunsAtShack, "The shack's CW speed match switch; keys nothing."),
     ("set_cw_wpm",                     RunsAtShack, "The shack's CW speed."),

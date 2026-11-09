@@ -414,6 +414,7 @@ pub enum Access {
 pub const STORES: &[(&str, Store, Access)] = &[
     ("get_settings", Store::Settings, Access::Read),
     ("set_blocked_calls", Store::Settings, Access::PartSave),
+    ("set_cw_macros", Store::Settings, Access::PartSave),
     ("set_psk_macros", Store::Settings, Access::PartSave),
     ("set_radio_bands", Store::Settings, Access::PartSave),
     ("set_routing_rules", Store::Settings, Access::PartSave),

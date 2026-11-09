@@ -5115,6 +5115,18 @@ export async function setPskMacros(
   return invoke<Settings['macros']>('set_psk_macros', { profiles, active })
 }
 
+/** Save the CW dock's profiles and which one it shows, from its key editor: `macros.cwProfiles` +
+ * `macros.activeCwProfile` in one narrow, atomic write, NEVER the settings form, whose side effects
+ * (the TX gate generation, Remote actuation revoked, the FT queues cleared) a key edited mid-QSO
+ * must not have. The payload must round-trip exactly and the index be one of the profiles, or the
+ * save is refused. Resolves with the saved `macros`, for the caller's settings mirror. */
+export async function setCwMacros(
+  profiles: NonNullable<Settings['macros']['cwProfiles']>,
+  active: number,
+): Promise<Settings['macros']> {
+  return invoke<Settings['macros']>('set_cw_macros', { profiles, active })
+}
+
 /** On a computer driving a station, each settings read comes with the station's revision of what
  *  it read (`src-tauri/src/client_mode.rs` puts it beside the settings, under this key). It is
  *  taken off and kept on the copy under a symbol: no field, no JSON and no comparison sees it, yet

@@ -505,13 +505,42 @@ describe('right-click, Ctrl+Shift+F-key and Send once', () => {
     fireEvent.click(sendOnce())
     await waitFor(() => expect(pskSend).toHaveBeenCalledTimes(1))
     expect(pskSend).toHaveBeenCalledWith('K1ABC de W9XYZ qrz?')
-    expect(editor(), 'sent: the editor closes').toBeNull()
+    await waitFor(() => expect(editor(), 'sent: the editor closes').toBeNull())
     expect(setPskMacros, 'Send once saved the key').not.toHaveBeenCalled()
     expect(setSettings).not.toHaveBeenCalled()
     expect(labelOf('F2')).toBe('Answer')
     press('F2')
     await waitFor(() => expect(pskSend).toHaveBeenCalledTimes(2))
     expect(pskSend.mock.calls[1][0]).toBe('K1ABC de W9XYZ W9XYZ k')
+  })
+
+  it('Send once refused by the engine (a clock repair holding TX, say) keeps the editor open with the draft', async () => {
+    pskSend.mockImplementation(async () => {
+      throw new Error('the clock is being corrected, TX is held')
+    })
+    await renderCockpit()
+    fireEvent.contextMenu(key('F1'))
+    fireEvent.change(field(/^message$/i), { target: { value: 'CQ de {MYCALL} pse k' } })
+    fireEvent.click(sendOnce())
+    await waitFor(() => expect(pskSend).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(pushToast.mock.calls.some(([, kind]) => kind === 'error')).toBe(true))
+    expect(editor(), 'the engine refused the send and the editor closed').not.toBeNull()
+    expect(field(/^message$/i).value, 'the engine refused the send and the draft was lost').toBe('CQ de {MYCALL} pse k')
+  })
+
+  it('Send once keys ONCE however often it is pressed while the engine answers', async () => {
+    let answer: () => void = () => {}
+    pskSend.mockImplementation(() => new Promise((resolve) => (answer = () => resolve(state))))
+    await renderCockpit()
+    fireEvent.contextMenu(key('F1'))
+    fireEvent.click(sendOnce())
+    fireEvent.click(sendOnce())
+    await act(async () => {})
+    expect(pskSend, 'a second press keyed the message again').toHaveBeenCalledTimes(1)
+    expect(editor(), 'unanswered: the editor stays').not.toBeNull()
+    await act(async () => answer())
+    await waitFor(() => expect(editor(), 'taken: the editor closes').toBeNull())
+    expect(pskSend).toHaveBeenCalledTimes(1)
   })
 
   it('Send once is refused exactly where the key is — outside the licence, nothing reaches psk_send, and the draft stays', async () => {
