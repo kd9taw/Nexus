@@ -217,9 +217,9 @@ export interface StripSeamProps {
    *  sheet may not name (styles.css `.pane-splitter.horizontal.in-column`). */
   className?: string
   /** The box the DEFAULT percentage is a share of, where that is not the strip's flex container.
-   *  FT's waterfall (2026-10-26, "width and height to be consistent") stands in `.cockpit-body`,
-   *  under the cockpit's own rows, but its default is 25 % of the whole SHELL, as every other
-   *  cockpit's waterfall is. A height the operator stored keeps its meaning (a share of the
+   *  FT's waterfall (2026-10-26, "width and height to be consistent") passed the shell here while it
+   *  stood in `.cockpit-body`, a box under the cockpit's own rows; that body is a box-less
+   *  `.cockpit-flat` wrapper now, so its container IS the shell and this is the same box. A height the operator stored keeps its meaning (a share of the
    *  container), so only the untouched default moves; a reset clears the stored value, so the next
    *  load measures the default against this box again. What is painted is still a % of the
    *  container. Absent: the flex container. A function, not a ref: it is read from the divider's
@@ -458,6 +458,14 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
     watch(el)
     watch(container())
     watch(defaultOfRef.current?.() ?? null)
+    // PAST A BOX-LESS PARENT, ITS NEIGHBOURS TOO. The range the layout honours is the room the strip's flex siblings
+    // leave it, and in a `.cockpit-flat` wrapper those siblings are the outer box's children (FT: the cockpit header,
+    // the QSO strip, the lower region). A wrapper with a box resized when one of them did; the outer box does not, so a
+    // header that lost a line left the waterfall at its old ceiling and Stop TX moved up by the difference (FT at
+    // 1024×768, CAT lost: 28 px, measured). So each of them is watched: a re-fit is idempotent, so the ones that only
+    // follow the strip cost one more measure and no loop.
+    const box = container()
+    if (box && box !== el) for (const sib of [...Array.from(box.children), ...Array.from(el.children)]) if (sib !== strip.current) watch(sib)
     if (ownSize && strip.current) ro.observe(strip.current)
     return () => ro.disconnect()
   }, [strip, ownSize, after, findTries])

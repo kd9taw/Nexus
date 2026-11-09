@@ -21183,7 +21183,7 @@ body.pane-dragging {
   font-size: 0.8rem;
   /* Wrap the control cluster onto a second row instead of clipping the trailing controls (Pwr
      slider, Pop out, Spot) off the right edge — the parent .cockpit-bar already wraps, and the
-     flex-column cockpit-body absorbs the extra height. Bites at 1366px / 110-125% zoom / Companion. */
+     waterfall under the header yields the extra height (its divider re-fits on the header's resize). Bites at 1366px / 110-125% zoom / Companion. */
   flex-wrap: wrap;
 }
 /* Signal-source toggle: native engine vs WSJT-X/JTDX/MSHV companion over UDP. */
@@ -21407,8 +21407,9 @@ body.pane-dragging {
    real estate goes to the decode lists + roster below. */
 .cockpit-waterfall {
   /* Height is operator-resizable (the PaneSeam under it drives --cockpit-wf-h and
-     clamps 88–420 px, and to what this rule honours). The untouched default is 25 % of the SHELL,
-     painted here as the body's share (OperateCockpit `defaultOf`); 25% is only the pre-paint fallback. `flex-shrink:1` + no px
+     clamps 88–420 px, and to what this rule honours). The untouched default is 25 % of the SHELL, and
+     so is every share here: `.cockpit-body` is a box-less `.cockpit-flat` wrapper, so the strip is a
+     flex item of the shell and its basis and its 60 % ceiling are the shell's; 25% is only the pre-paint fallback. `flex-shrink:1` + no px
      floor + a max lets it YIELD on short windows instead of starving the lists
      below — the fit-scale keeps it a comfortable size at normal sizes. */
   flex: 0 1 var(--cockpit-wf-h, 25%);
