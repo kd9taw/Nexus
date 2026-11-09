@@ -81,6 +81,7 @@ export const PER_SURFACE = [
   'nexus.connect.ota.bandFilter',
   'nexus.connect.ota.hideWorked',
   'nexus.connect.ota.modeFilter',
+  'nexus.connect.ota.onlyNew',
   'nexus.connect.ota.program',
   'nexus.connect.ota.sortAsc',
   'nexus.connect.ota.sortKey',
@@ -144,6 +145,8 @@ export const PER_SURFACE = [
   // POTA board and a SOTA board in two windows may answer it differently.
   'nexus.ota.hideWorked',
   'nexus.ota.modeFilter',
+  // Only new: what THIS board shows, like Hide worked today beside it.
+  'nexus.ota.onlyNew',
   'nexus.ota.program',
   'nexus.ota.sortAsc',
   'nexus.ota.sortKey',
@@ -594,7 +597,7 @@ const INDIRECT: Record<string, string[]> = {
     'nexus.connect.neededFilters',
   ],
   // The POTA/SOTA board's filters, read and written through its key table (OTA_KEYS): the view's
-  // own six, or the Connect box's six.
+  // own seven, or the Connect box's seven.
   'components/PotaSotaView.tsx:keys': [
     'nexus.ota.program',
     'nexus.ota.bandFilter',
@@ -602,12 +605,14 @@ const INDIRECT: Record<string, string[]> = {
     'nexus.ota.sortKey',
     'nexus.ota.sortAsc',
     'nexus.ota.hideWorked',
+    'nexus.ota.onlyNew',
     'nexus.connect.ota.program',
     'nexus.connect.ota.bandFilter',
     'nexus.connect.ota.modeFilter',
     'nexus.connect.ota.sortKey',
     'nexus.connect.ota.sortAsc',
     'nexus.connect.ota.hideWorked',
+    'nexus.connect.ota.onlyNew',
   ],
 }
 
