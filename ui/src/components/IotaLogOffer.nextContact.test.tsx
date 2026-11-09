@@ -28,6 +28,7 @@ vi.mock('../api', async (importOriginal) => {
     logOperators: vi.fn(async () => []),
     logActivations: vi.fn(async () => []),
     lotwSatNames: vi.fn(async () => []),
+    eqslSentMarkReview: vi.fn(async () => []),
     searchParks: vi.fn(async () => []),
     askLog: vi.fn(() => new Promise(() => {})),
   }
