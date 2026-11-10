@@ -1500,10 +1500,19 @@ const TUNE_METER_DEADLINE_MS: u64 = 120;
 /// margin; a thinner lead waits a tick rather than risk a gap.
 const TUNE_METER_MIN_LEAD_MS: f32 = 150.0;
 /// An over's meter read is bounded by the time left to the over's next end (its audio stop, then its
-/// PTT off), and is only ASKED with at least this much left: a read cut shorter than a healthy
-/// radio's answer would only miss, and a miss drops the CAT connection
-/// ([`RadioLoop::over_left_ms`]).
+/// PTT off), and is only ASKED with at least this much left on a local link
+/// ([`RadioLoop::over_left_ms`]). ⛔ A BOUNDED READ MUST NEVER CUT A HEALTHY ANSWER: a read cut short
+/// only misses, and a miss drops the CAT connection, which takes the radio's confirmed split with it
+/// (`Rig::drop_connection`). The next over's key then writes the whole split again inside its 500 ms
+/// budget, and a radio too slow for that is refused there and TX turns off. A local link answers a
+/// meter well inside the 130 ms this leaves.
 const TX_METER_OVER_MIN_LEFT_MS: f64 = 150.0;
+/// [`TX_METER_OVER_MIN_LEFT_MS`] on a slow link (`Rig::slow_transport`: a network radio link, a slow
+/// serial link, a daemon), where a healthy meter answer takes a few hundred milliseconds: a read is
+/// still bounded to at least 580 ms there. The read this skips, in an over's last 600 ms, is at most
+/// one of each meter's (one is read every 150 ms); the SWR cutoff, which needs two readings in a
+/// row over its limit, loses at most one reading per over, at its very end.
+const TX_METER_OVER_MIN_LEFT_SLOW_MS: f64 = 600.0;
 /// …and the read is bounded to end this long BEFORE that end, one loop tick: a socket read's
 /// timeout expires on the kernel's timer, measured 2-10 ms late on a quiet machine and ~25 ms
 /// under load, so a read bounded at the end itself finished past it.
@@ -15479,13 +15488,19 @@ impl RadioLoop {
                 // (about 1 s here, 2.5 s on a network or slow serial link) past the window, into
                 // the other station's period, and held a Stop TX with it. So it is bounded by the
                 // time left to that end, measured now rather than at the tick's start, as the
-                // tune's reads are bounded by the carrier's lead; with too little left it waits.
+                // tune's reads are bounded by the carrier's lead; with too little left for a
+                // healthy answer on this link it waits (`TX_METER_OVER_MIN_LEFT_MS`).
                 let over_left = if self.tuning_keyed {
                     None
                 } else {
                     self.over_left_ms(now + tick_started.elapsed().as_secs_f64() * 1000.0)
                 };
-                let left_ok = over_left.is_none_or(|left| left >= TX_METER_OVER_MIN_LEFT_MS);
+                let min_left = if rig.slow_transport() {
+                    TX_METER_OVER_MIN_LEFT_SLOW_MS
+                } else {
+                    TX_METER_OVER_MIN_LEFT_MS
+                };
+                let left_ok = over_left.is_none_or(|left| left >= min_left);
                 if lead_ok && left_ok && now - self.last_tx_meter_poll >= TX_METER_POLL_MS {
                     // RFPOWER_METER_WATTS (not RFPOWER_METER): Hamlib's plain RFPOWER_METER is a
                     // normalized 0..1, only the _WATTS variant is true watts — and the native

@@ -967,6 +967,12 @@ impl Rig {
     pub fn set_slow_transport(&mut self, slow: bool) {
         self.slow_transport = slow;
     }
+    /// Whether this link is a slow transport ([`Self::set_slow_transport`]): a network radio link,
+    /// a slow serial link, or a daemon whose answers can take hundreds of milliseconds.
+    #[cfg_attr(not(feature = "device"), allow(dead_code))] // the radio loop (service.rs, device)
+    pub(crate) fn slow_transport(&self) -> bool {
+        self.slow_transport
+    }
     /// Mark this CAT link as reaching the radio over the network, so a key-down that waits for
     /// the link ([`Self::key_awaiting_answer`]) waits [`NETWORK_KEY_DEADLINE_MS`] for its answer.
     /// Every release keeps [`PTT_DEADLINE_MS`].

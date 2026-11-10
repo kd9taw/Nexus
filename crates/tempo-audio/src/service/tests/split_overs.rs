@@ -607,6 +607,9 @@ struct Vfos {
     knob: Vec<u64>,
     /// Every split, TX dial and TX mode write (`S`, `I`, `X`) answered this many ms late.
     split_write_delay_ms: u64,
+    /// Every meter read (`l NAME`) while keyed, a transmit meter, answered with a reading this many
+    /// ms late; `0` (and every read while receiving) leaves it to the peer, which refuses it.
+    meter_delay_ms: u64,
     /// A mode write (`M`) answered `RPRT -9` and not taken.
     refuse_m: bool,
 }
@@ -663,6 +666,10 @@ fn hamlib_bench_on(engine: Arc<Mutex<Engine>>, dial: u64, own_split: Option<u64>
         }
         if v.refuse_m && line.starts_with("M ") {
             return Some("RPRT -9\n".to_string());
+        }
+        if v.meter_delay_ms > 0 && line.starts_with("l ") && radio.keyed {
+            std::thread::sleep(std::time::Duration::from_millis(v.meter_delay_ms));
+            return Some("0.5\n".to_string());
         }
         if line.starts_with("S 0") {
             if let Some(engine) = v.split_off_lock_probe.clone() {
@@ -3081,6 +3088,75 @@ fn a_band_change_just_before_an_own_boundary_does_not_delay_its_key() {
             );
         }
     }
+}
+
+/// ⛔ A METER READ NEAR AN OVER'S END NEVER CUTS A SLOW LINK'S HEALTHY ANSWER. While an over is on
+/// the air the loop reads a transmit meter, bounded by the time left to the over's end. On a slow
+/// link (a network radio link, a slow serial link) a healthy radio answers in a few hundred ms; a
+/// read bounded shorter than that only misses, and a miss drops the CAT connection, which takes
+/// the radio's confirmed split with it. The next over's key then writes the whole split again
+/// (here `I`, `X`, `S`) inside its 500 ms budget, which a radio at 200 ms a write misses: that
+/// over is refused and TX turns off. So on a slow link no read is asked with under 600 ms left.
+///
+/// Here the radio answers every meter in 300 ms and every split write in 200 ms (from the second
+/// over on), and one meter read falls due 700 ms before each over's audio stop and one 260 ms
+/// before it. Four overs: each keys, the later ones writing only `S 1 VFOB` before the key, the
+/// connection is never dropped, and TX stays on.
+#[test]
+fn a_slow_link_answering_meters_in_300_ms_keeps_its_connection_and_split_across_overs() {
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    b.rig.set_slow_transport(true);
+    b.radio.vfos.lock().unwrap().meter_delay_ms = 300;
+    let vfos = b.radio.vfos.clone();
+    let slot = b.slot;
+    // Receive up to the first over: the connection's opening dumps each end in a reconnect on a
+    // slow link (`command_multiline_inner`), and those are not what this counts.
+    let to_first = ((slot - 200.0 - b.t) / 20.0) as usize;
+    let _ = b.ticks(to_first);
+    let drops = b.rig.connection_drops();
+    let overs = b.overs_hooked(
+        4,
+        |i| {
+            if i == 0 {
+                vfos.lock().unwrap().split_write_delay_ms = 200;
+            }
+        },
+        |t, state| {
+            // FT8's audio stops 13 640 ms into the over's slot: a read is due 700 and 260 ms
+            // before it, and at no other tick.
+            let into = (t - slot).rem_euclid(30_000.0);
+            let due = [12_940.0, 13_380.0]
+                .iter()
+                .any(|&at| (at..at + 20.0).contains(&into));
+            state.last_tx_meter_poll = if due { t - 1_000.0 } else { t };
+        },
+    );
+    // The meter reads sent while keyed: one per over, the one 700 ms before its end.
+    let mut keyed = false;
+    let mut meter_reads = 0;
+    for l in b.radio.peer.lines.lock().unwrap().iter() {
+        keyed = if is_key(l) {
+            true
+        } else {
+            keyed && !is_unkey(l)
+        };
+        meter_reads += usize::from(keyed && l.starts_with("l "));
+    }
+    assert_eq!(meter_reads, 4, "premise: one meter read in each over");
+    for (i, o) in overs.iter().enumerate().skip(1) {
+        assert_eq!(
+            o.key,
+            ["S 1 VFOB", "T 1"],
+            "over {}: the split was written again",
+            i + 1
+        );
+    }
+    assert_eq!(
+        b.rig.connection_drops(),
+        drops,
+        "a meter read dropped the connection"
+    );
+    assert!(b.engine.lock().unwrap().tx_enabled(), "TX was turned off");
 }
 
 /// The band button pressed twice in quick succession (40 m, then 30 m 100 ms later): one pre-set,
