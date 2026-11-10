@@ -442,3 +442,82 @@ fn the_no_popup_path_keeps_the_exact_call_rules() {
     work(&mut e, "IA5C/P", 11);
     assert_eq!(logged(&e, "IA5C/P").ota.iota, None, "stroked");
 }
+
+/// REVIEW REPRO: a call corrected in the popup must not keep the busted call's filled reference.
+/// The hold filled IA5X's callbook group; corrected to IA5Y, the box still holding that fill, the
+/// contact logs IA5Y's own fill (its callbook answer) or none, never IA5X's, and no fill mark of
+/// IA5X's travels with it.
+#[test]
+fn a_call_corrected_in_the_popup_drops_the_busted_calls_fill_and_takes_its_own() {
+    use tempo_core::logbook::callbook::CALLBOOK_FILLED_FIELD;
+    use tempo_core::logbook::offer::OFFER_HELD_FIELD;
+    for (new_answer, want) in [(None, None), (Some("EU-001"), Some("EU-001"))] {
+        let (mut e, _) = spotted(SpotIota::Silent);
+        e.settings.prompt_to_log = true;
+        e.note_callbook_answer("IA5X", answer("IA5X"));
+        if let Some(group) = new_answer {
+            let mut a = answer("IA5Y");
+            a.iota = Some(group.into());
+            e.note_callbook_answer("IA5Y", a);
+        }
+        work(&mut e, "IA5X", 1);
+        let key = e.pending_qso_log_key().expect("held");
+        let mut shown = e.pending_log().cloned().expect("held");
+        assert_eq!(shown.ota.iota.as_deref(), Some("EU-025"), "premise: filled");
+        shown.call = "IA5Y".into();
+        assert!(e.confirm_pending_log(&key, shown));
+        let r = logged(&e, "IA5Y");
+        assert_eq!(r.ota.iota.as_deref(), want, "{new_answer:?}");
+        let marks: Vec<_> = r
+            .extra
+            .iter()
+            .filter(|(k, v)| {
+                (k == OFFER_HELD_FIELD || k == CALLBOOK_FILLED_FIELD) && v.contains("IOTA")
+            })
+            .collect();
+        assert_eq!(
+            marks.is_empty(),
+            want.is_none(),
+            "{new_answer:?}: {marks:?}"
+        );
+        assert!(
+            !r.comment.unwrap_or_default().contains("EU-025"),
+            "no trace of the other station's group"
+        );
+    }
+}
+
+/// …and a reference the operator put in the box, or one they typed onto the contact, stays when
+/// the call is corrected: only our own fill is re-derived.
+#[test]
+fn a_call_correction_keeps_a_reference_the_operator_chose() {
+    let (mut e, _) = spotted(SpotIota::Silent);
+    e.settings.prompt_to_log = true;
+    e.note_callbook_answer("IA5X", answer("IA5X"));
+    work(&mut e, "IA5X", 1);
+    let key = e.pending_qso_log_key().expect("held");
+    let mut shown = e.pending_log().cloned().expect("held");
+    shown.call = "IA5Y".into();
+    shown.ota.iota = Some("EU-031".into());
+    assert!(e.confirm_pending_log(&key, shown));
+    let r = logged(&e, "IA5Y");
+    assert_eq!(
+        r.ota.iota.as_deref(),
+        Some("EU-031"),
+        "changed in the box: theirs"
+    );
+    assert!(!is_offer_held(&r, "IOTA"));
+
+    let mut typed = bare(&e, "IA5Z");
+    typed.ota.iota = Some("EU-001".into());
+    e.load_pending_qso(typed);
+    let key = e.pending_qso_log_key().expect("held");
+    let mut shown = e.pending_log().cloned().expect("held");
+    shown.call = "IA5W".into();
+    assert!(e.confirm_pending_log(&key, shown));
+    assert_eq!(
+        logged(&e, "IA5W").ota.iota.as_deref(),
+        Some("EU-001"),
+        "typed: kept"
+    );
+}

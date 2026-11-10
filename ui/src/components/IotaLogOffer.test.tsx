@@ -125,4 +125,45 @@ describe('the confirm-before-log popup', () => {
     expect(logged(p)).toBe('EU-001')
     expect(p.onConfirm.mock.calls[0][1]).toEqual({ reference: 'EU-001', source: 'callbook' })
   })
+
+  // REVIEW REPRO: production's popup opens with the hold's fill (marked as Nexus's). A corrected
+  // call must not log the busted call's group.
+  const FILLED = {
+    ...QSO,
+    ota: { iota: 'EU-028' },
+    extra: [['APP_NEXUS_OFFER_HELD', 'IOTA']],
+  } as unknown as LoggedQso
+
+  it('a call corrected in the popup lets go of the hold’s fill: none when the new call has none', async () => {
+    api.getIotaOffer.mockImplementation(async (call: string) => (call === 'IA5X' ? { reference: 'EU-028', source: 'spot' } : null))
+    const p = open(FILLED)
+    expect(box().value, 'premise: opened filled').toBe('EU-028')
+    fireEvent.change(screen.getByDisplayValue('IA5X'), { target: { value: 'IA5Y' } })
+    await waitFor(() => expect(api.getIotaOffer).toHaveBeenCalledWith('IA5Y'))
+    await new Promise((r) => setTimeout(r, 50))
+    p.log()
+    expect(logged(p), 'not the other station’s group').toBeNull()
+  })
+
+  it('…and the corrected call’s own when it has one', async () => {
+    api.getIotaOffer.mockImplementation(async (call: string) =>
+      call === 'IA5X' ? { reference: 'EU-028', source: 'spot' } : { reference: 'EU-001', source: 'callbook' },
+    )
+    const p = open(FILLED)
+    fireEvent.change(screen.getByDisplayValue('IA5X'), { target: { value: 'IA5Y' } })
+    await waitFor(() => expect(box().value).toBe('EU-001'))
+    p.log()
+    expect(logged(p)).toBe('EU-001')
+    expect(p.onConfirm.mock.calls[0][1]).toEqual({ reference: 'EU-001', source: 'callbook' })
+  })
+
+  it('a reference the contact holds that Nexus did not fill stays through a call correction', async () => {
+    api.getIotaOffer.mockResolvedValue(null)
+    const p = open({ ...QSO, ota: { iota: 'EU-001' } } as unknown as LoggedQso)
+    fireEvent.change(screen.getByDisplayValue('IA5X'), { target: { value: 'IA5Y' } })
+    await waitFor(() => expect(api.getIotaOffer).toHaveBeenCalledWith('IA5Y'))
+    p.log()
+    expect(logged(p)).toBe('EU-001')
+  })
+
 })

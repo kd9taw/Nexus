@@ -104,6 +104,9 @@ export interface IotaPrefillState {
  * can be changed or cleared). Asked again when the call changes and when `asked` does (a callbook
  * lookup that answered); never while `off`. Fills only an empty box the operator has not touched for
  * this contact, and a reference it filled goes again when the call changes before it is touched.
+ * `seededFill` is a reference the box opened with that the station filled before the form was shown
+ * (the popup's held contact, marked as Nexus's fill): it is treated as this hook's own fill, so a
+ * corrected call empties it and takes its own. A seeded reference the operator typed is theirs.
  */
 export function useIotaPrefill(
   call: string,
@@ -111,12 +114,13 @@ export function useIotaPrefill(
   setValue: (value: string) => void,
   asked?: unknown,
   off = false,
+  seededFill: string | null = null,
 ): IotaPrefillState {
   const key = call.trim().toUpperCase()
   const [kept, setKept] = useState<{ call: string; offer: IotaOfferData | null }>({ call: '', offer: null })
   // What this contact's box holds by the operator's hand (`touched`) or by this fill (`filled`).
   const touched = useRef(false)
-  const filled = useRef<string | null>(null)
+  const filled = useRef<string | null>(seededFill ? seededFill.trim().toUpperCase() : null)
   const latest = useRef({ value, setValue })
   latest.current = { value, setValue }
   const keyRef = useRef(key)

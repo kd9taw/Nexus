@@ -227,6 +227,19 @@ pub fn unmark_offer_held(r: &mut QsoRecord, tag: &str) {
     set_mark(r, OFFER_HELD_FIELD, tags);
 }
 
+/// Take a reference Nexus filled at log time back out of `rec`, with its marks (this one and the
+/// callbook's): a call corrected before the contact was logged makes it a stranger's. `false` (and
+/// `rec` untouched) when the IOTA field holds no such fill.
+pub fn drop_filled_iota(rec: &mut QsoRecord) -> bool {
+    if !is_offer_held(rec, "IOTA") {
+        return false;
+    }
+    rec.ota.iota = None;
+    unmark_offer_held(rec, "IOTA");
+    super::callbook::unmark_callbook_filled(rec, "IOTA");
+    true
+}
+
 /// Set the mark to exactly `tags` (a merge carrying the marks of the copies it keeps).
 pub(crate) fn set_offer_held(r: &mut QsoRecord, tags: Vec<String>) {
     set_mark(r, OFFER_HELD_FIELD, tags);
@@ -678,6 +691,26 @@ mod tests {
         fields_set(&mut r, &[(OFFER_HELD_FIELD.to_string(), None)]);
         assert!(!is_offer_held(&r, "IOTA"));
         assert!(adif_record(&r).contains("<IOTA:6>EU-028"));
+    }
+
+    /// Dropping a fill takes the reference and both marks out; a typed reference is never touched.
+    #[test]
+    fn dropping_a_fill_takes_it_out_with_its_marks_and_never_a_typed_one() {
+        let mut r = rec("IA5X");
+        let from_cb = IotaOffer {
+            reference: "EU-025".into(),
+            source: OfferSource::Callbook,
+        };
+        assert!(accept_iota_offer(&mut r, &from_cb));
+        assert!(drop_filled_iota(&mut r));
+        assert_eq!(r.ota.iota, None);
+        assert!(!is_offer_held(&r, "IOTA"));
+        assert!(!crate::logbook::callbook::is_callbook_filled(&r, "IOTA"));
+
+        let mut typed = rec("IA5X");
+        typed.ota.iota = Some("EU-001".into());
+        assert!(!drop_filled_iota(&mut typed));
+        assert_eq!(typed.ota.iota.as_deref(), Some("EU-001"));
     }
 
     fn group_names(r: &str) -> Option<String> {

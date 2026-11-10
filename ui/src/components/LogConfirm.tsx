@@ -104,7 +104,12 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
   // call now (a lookup that answered after the hold). Logged as the box holds it, so the operator can
   // change or clear it first (operator ruling, 2026-11-10).
   const [iota, setIota] = useState(record.ota?.iota ?? '')
-  const iotaPrefill = useIotaPrefill(call, iota, setIota)
+  // A reference the hold filled carries Nexus's fill mark: it is the busted call's if the operator
+  // corrects the call, so the box lets go of it then and takes the corrected call's own.
+  const heldFill = record.extra?.some(([k, v]) => k === 'APP_NEXUS_OFFER_HELD' && v.split(',').some((t) => t.trim() === 'IOTA'))
+    ? (record.ota?.iota ?? null)
+    : null
+  const iotaPrefill = useIotaPrefill(call, iota, setIota, undefined, false, heldFill)
 
   // RST is a free string now (CW "599" / phone "59" / digital "-12"); just trim.
   const parseRst = (v: string): string | null => {

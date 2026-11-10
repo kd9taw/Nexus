@@ -21308,10 +21308,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // a shortened grid Nexus filled in counts as unchanged (operator rulings, 2026-10-27).
         tempo_core::logbook::settle_popup_my_grid(&mut held, &was.record);
         self.take_popup_prop_mode(&mut held, rec.prop_mode.as_deref());
-        let dropped = self.rederive_after_edits(&mut held, &was.record, was.grid_source);
         // The popup's IOTA box: it opens with what the hold filled ([`Self::hold_pending_log`]) or
         // what the station names for the call, and the operator may change or clear it. A changed
-        // one is the operator's: off the fill marks, as an edit in the Logbook makes it.
+        // one is the operator's: off the fill marks, as an edit in the Logbook makes it. Before the
+        // re-derivation below, which replaces a fill the box still holds when the call changed.
         held.ota.iota = rec
             .ota
             .iota
@@ -21319,6 +21319,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             .map(|r| r.trim().to_ascii_uppercase())
             .filter(|r| !r.is_empty());
         tempo_core::logbook::offer::unmark_edited(&was.record, &mut held);
+        let dropped = self.rederive_after_edits(&mut held, &was.record, was.grid_source);
         if let Some(offer) = iota_offer {
             tempo_core::logbook::offer::accept_iota_offer(&mut held, offer);
         }
@@ -21373,6 +21374,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Every field here follows that rule: re-derive what WE put there, never what the
     /// operator typed.
     ///
+    /// The IOTA reference the hold filled ([`Self::fill_iota_at_log`]) goes the same way: a
+    /// corrected call drops it, while it is still ours, and takes its own call's fill.
+    ///
     /// `held` is the edited copy about to be logged; `was` is the record as held, and `grid`
     /// its grid's provenance. True when the grid was dropped: the contact then has no grid from
     /// the station, and a callbook's is for the distance and the map only ([`HeldQso::gridless`]),
@@ -21404,6 +21408,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
             if stale_lookup {
                 held.grid = None;
                 dropped = true;
+            }
+            // The IOTA reference the hold FILLED for the busted call (its spots, its callbook
+            // answer) is a stranger's too: while it is still the one we filled, it goes with its
+            // marks and the corrected call gets its own fill, or none. One the operator typed, or
+            // changed in the box, is theirs and stays (operator ruling, 2026-11-10).
+            let norm = |r: &QsoRecord| r.ota.iota.as_deref().map(|v| v.trim().to_ascii_uppercase());
+            if tempo_core::logbook::offer::is_offer_held(was, "IOTA") && norm(held) == norm(was) {
+                tempo_core::logbook::offer::drop_filled_iota(held);
+                self.fill_iota_at_log(held);
             }
         }
         if held.rst_sent.as_deref() != was_sent || held.rst_rcvd.as_deref() != was_rcvd {
