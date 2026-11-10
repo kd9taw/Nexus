@@ -1543,6 +1543,24 @@ const TUNE_METER_DEADLINE_MS: u64 = 120;
 /// …and it is only ISSUED while the carrier's remaining lead can absorb that deadline with
 /// margin; a thinner lead waits a tick rather than risk a gap.
 const TUNE_METER_MIN_LEAD_MS: f32 = 150.0;
+/// An over's meter read is bounded by the time left to the over's next end (its audio stop, then its
+/// PTT off), and is only ASKED with at least this much left on a local link
+/// ([`RadioLoop::over_left_ms`]). ⛔ A BOUNDED READ MUST NEVER CUT A HEALTHY ANSWER: a read cut short
+/// only misses, and a miss drops the CAT connection, which takes the radio's confirmed split with it
+/// (`Rig::drop_connection`). The next over's key then writes the whole split again inside its 500 ms
+/// budget, and a radio too slow for that is refused there and TX turns off. A local link answers a
+/// meter well inside the 130 ms this leaves.
+const TX_METER_OVER_MIN_LEFT_MS: f64 = 150.0;
+/// [`TX_METER_OVER_MIN_LEFT_MS`] on a slow link (`Rig::slow_transport`: a network radio link, a slow
+/// serial link, a daemon), where a healthy meter answer takes a few hundred milliseconds: a read is
+/// still bounded to at least 580 ms there. The read this skips, in an over's last 600 ms, is at most
+/// one of each meter's (one is read every 150 ms); the SWR cutoff, which needs two readings in a
+/// row over its limit, loses at most one reading per over, at its very end.
+const TX_METER_OVER_MIN_LEFT_SLOW_MS: f64 = 600.0;
+/// …and the read is bounded to end this long BEFORE that end, one loop tick: a socket read's
+/// timeout expires on the kernel's timer, measured 2-10 ms late on a quiet machine and ~25 ms
+/// under load, so a read bounded at the end itself finished past it.
+const TX_METER_OVER_END_SLACK_MS: f64 = 20.0;
 /// How long past the boundary a JS8 PTT hold between frames lasts ([`RadioLoop::js8_ptt_hold_until`]):
 /// the next frame keys on the boundary's tick and takes the hold over long before this; a boundary
 /// that keys nothing unkeys this long after it. The 250 ms of a slot over's own tail
@@ -5103,8 +5121,9 @@ struct RadioLoop {
     /// never sends and prints nothing (measured, Hamlib 4.5.5 `rigctld -m 1035`), so an FT-991
     /// behind the operator's own rigctld lost its ALC meter in 1.19.0: three misses and ⊘, where
     /// 1.18.0's `l ALC` read it. So when the ladder gives the raw read up on a link where it never
-    /// answered, the meter falls back to `l ALC` instead of being parked. Only on an over's read:
-    /// a tune-up's 120 ms deadline can miss a slow radio that does answer. Reset with the ladder.
+    /// answered, the meter falls back to `l ALC` instead of being parked. Only on a read given the
+    /// raw read's whole deadline: a tune-up's 120 ms, or an over's last moments
+    /// ([`Self::over_left_ms`]), can miss a slow radio that does answer. Reset with the ladder.
     ///
     /// ⛔ AND IT IS NEVER FOUND OUT DURING AN OVER. Each unanswered raw read blocked this loop,
     /// the only thing that unkeys the radio, for the transport deadline (about 1 s measured,
@@ -7145,6 +7164,20 @@ impl RadioLoop {
         self.tx_until_ms == Some(self.slot_tx_until_ms)
     }
 
+    /// How long is left at `now` (the loop clock) before this loop must next act on the over it
+    /// holds: the FT8/FT4 audio stop while that is still due ([`Self::retest_ft_window`]), else the
+    /// PTT deadline. Negative once it has passed. `None` with no timed hold: a tune, live PTT, a CW
+    /// word on the rig's own keyer, or a radio keyed at the radio. A transmit meter read is bounded
+    /// by it ([`TX_METER_OVER_MIN_LEFT_MS`]).
+    fn over_left_ms(&self, now: f64) -> Option<f64> {
+        let until = self.tx_until_ms?;
+        let audio_stop = self
+            .slot_audio_stop
+            .filter(|&(_, held_until)| held_until == until)
+            .map_or(until, |(stop, _)| stop.min(until));
+        Some(audio_stop - now)
+    }
+
     /// ⭐ AN FT8/FT4 OVER'S WINDOW IS RE-TESTED FIRST IN EVERY TICK, BEFORE ANYTHING IN THE TICK
     /// CAN WAIT, AS WSJT-X RE-TESTS ITS OWN ON EVERY GUI TICK. WSJT-X asks every 100 ms whether the
     /// clock is still inside the over's window (`m_bTxTime`, `widgets/mainwindow.cpp:870`, `:5055`)
@@ -7875,12 +7908,14 @@ impl RadioLoop {
     /// [`crate::slot::SPLIT_PRESET_LEAD_MS`] to the next slot boundary, counted from where the tick
     /// is now (`lead_ms`), so writes started clear of a boundary are done before it.
     ///
-    /// ⚠️ A BOUNDARY'S OWN TICK HAS THE WHOLE SLOT AHEAD, so a pre-set owed as this station's own slot
-    /// starts runs ahead of its key on that tick: a band change in the last 4.3 s or so before it
-    /// (the lead and the settle), with TX on by then. The key comes late by the writes' length, up
-    /// to about 4 s on a 2.5 s link. FT8's and FT4's overs stay on the slot clock and lose leading
-    /// symbols: a slow-link FT4 over can lose so many that it does not decode. Before the pre-set
-    /// such a radio was refused at the key instead.
+    /// ⛔ AND NEVER ON A TICK WHOSE BOUNDARY IS STILL TO BE HANDLED (`last_slot` short of this slot):
+    /// a key may be due on it. A boundary's own tick has the whole slot ahead, so `lead_ms` alone let
+    /// a pre-set owed as this station's own slot starts (a band change in the last 4.3 s or so
+    /// before it, the lead and the settle, with TX on by then) run ahead of that key, and the key
+    /// came late by the writes' length, up to about 4 s on a 2.5 s link: an FT8 or FT4 over lost
+    /// that much of its start on the slot clock, a slow-link FT4 one so much that it did not decode.
+    /// Now the key writes the TX dial itself, under its own budget, and a radio too slow for that is
+    /// refused at the key as it was before the pre-set existed; the pre-set goes on a later tick.
     ///
     /// Never on a tick that opened the CAT
     /// link (`reconnected`: it may have spent a connect timeout) or with the link closed, on a radio
@@ -7923,7 +7958,8 @@ impl RadioLoop {
             && !self.tuning_keyed
             && !rig.keyed
             && !self.rig_keyed
-            && lead_ms >= crate::slot::SPLIT_PRESET_LEAD_MS;
+            && lead_ms >= crate::slot::SPLIT_PRESET_LEAD_MS
+            && self.last_slot == Some(self.clock.slot_index(now));
         let free = self.may_key()
             && rig.has_control()
             && !reconnected
@@ -15556,14 +15592,42 @@ impl RadioLoop {
                         .tune_last_chunk_ms
                         .map_or(0.0, |last| (now - last) as f32);
                 let lead_ok = !self.tuning_keyed || lead_now_ms >= TUNE_METER_MIN_LEAD_MS;
-                if lead_ok && now - self.last_tx_meter_poll >= TX_METER_POLL_MS {
+                // ⛔ AN OVER'S READ ENDS BY THE OVER'S NEXT END. This read sits in the thread that
+                // stops the audio and drops PTT, one tick upstream of both: unbounded, a radio
+                // that stalled on it near the end held the carrier for the link's whole deadline
+                // (about 1 s here, 2.5 s on a network or slow serial link) past the window, into
+                // the other station's period, and held a Stop TX with it. So it is bounded by the
+                // time left to that end, measured now rather than at the tick's start, as the
+                // tune's reads are bounded by the carrier's lead; with too little left for a
+                // healthy answer on this link it waits (`TX_METER_OVER_MIN_LEFT_MS`).
+                let over_left = if self.tuning_keyed {
+                    None
+                } else {
+                    self.over_left_ms(now + tick_started.elapsed().as_secs_f64() * 1000.0)
+                };
+                let min_left = if rig.slow_transport() {
+                    TX_METER_OVER_MIN_LEFT_SLOW_MS
+                } else {
+                    TX_METER_OVER_MIN_LEFT_MS
+                };
+                let left_ok = over_left.is_none_or(|left| left >= min_left);
+                if lead_ok && left_ok && now - self.last_tx_meter_poll >= TX_METER_POLL_MS {
                     // RFPOWER_METER_WATTS (not RFPOWER_METER): Hamlib's plain RFPOWER_METER is a
                     // normalized 0..1, only the _WATTS variant is true watts — and the native
                     // daemon answers both with calibrated watts. So `tx_po_w` is watts on both.
                     // A rig that REFUSES the watts is read with RFPOWER_METER instead, and that
                     // share goes to the engine as a share (`tx_po_share`, #489).
-                    // Tune-time reads are deadline-bounded (see `meters_now`); an over's are not.
-                    let deadline = self.tuning_keyed.then_some(TUNE_METER_DEADLINE_MS);
+                    // Tune-time reads are deadline-bounded (see `meters_now`), an over's by the
+                    // time left to its end, and only a hold with no end of its own (live PTT, a
+                    // radio keyed at the radio) waits the link's deadline.
+                    let deadline = if self.tuning_keyed {
+                        Some(TUNE_METER_DEADLINE_MS)
+                    } else {
+                        over_left.map(|left| {
+                            ((left - TX_METER_OVER_END_SLACK_MS) as u64)
+                                .min(rig.transport_deadline_ms())
+                        })
+                    };
                     let i = self.tx_meter_idx % N_TX_METERS;
                     self.tx_meter_idx = self.tx_meter_idx.wrapping_add(1);
                     self.last_tx_meter_poll = now;
@@ -15594,7 +15658,9 @@ impl RadioLoop {
                         } else if TX_METERS[i] == "ALC" && raw_alc {
                             // Strict even in an over: the link answered the probe, but one
                             // that stops answering must not hold the loop for its deadline.
-                            let strict = deadline.unwrap_or_else(|| raw_alc_over_deadline_ms(rig));
+                            // An over's own deadline (the time left to its end) bounds it too.
+                            let raw = raw_alc_over_deadline_ms(rig);
+                            let strict = deadline.map_or(raw, |d| d.min(raw));
                             read_tx_meter(rig, TX_METERS[i], model, raw_alc, Some(strict))
                         } else {
                             read_tx_meter(rig, TX_METERS[i], model, raw_alc, deadline)
@@ -15615,7 +15681,7 @@ impl RadioLoop {
                             && raw_alc
                             && crate::rigmodels::raw_alc_query(model).is_some()
                             && self.tx_meter_supported[i] == Some(false)
-                            && deadline.is_none()
+                            && deadline.is_none_or(|d| d >= raw_alc_over_deadline_ms(rig))
                         {
                             // The backstop: a link that answered the probe and has stopped
                             // answering the raw read. `l ALC` gets its own three strikes
@@ -15845,8 +15911,8 @@ impl RadioLoop {
         // ⭐ SPLIT OPERATION = RIG'S TX DIAL GOES ON THE RADIO WHILE IT RECEIVES, AFTER THE DIAL
         // CHANGES, as WSJT-X writes it from `setXIT` on a band change, so the next over's key finds
         // it confirmed and sends only split on last. ⚠️ OUTSIDE THE ENGINE LOCK, as the release
-        // retry above: a slow radio takes its time here. Writes on an own boundary's tick make that
-        // key wait (`Self::preset_rig_split_due`).
+        // retry above: a slow radio takes its time here. Never on a boundary's own tick, where a
+        // key may be due (`Self::preset_rig_split_due`).
         // The lead to the next boundary from where the tick is NOW: CAT earlier in the tick (the
         // polls, a retune, the release retry above) has already spent some of it.
         let lead_ms =
