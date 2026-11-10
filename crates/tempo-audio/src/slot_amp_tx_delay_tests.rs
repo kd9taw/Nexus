@@ -21,13 +21,21 @@ fn engine_on(tier: Tier, amp_ms: u32) -> Engine {
     eng
 }
 
-/// `tier`'s real over, as the engine builds it.
+/// `tier`'s real over, as the engine builds it, built once per tier for the whole binary: most
+/// tiers' builds take the process-wide modem lock, which other tests here time themselves against,
+/// so these tests take it as little as they can.
 fn over_on(tier: Tier) -> Vec<Vec<f32>> {
+    static BUILT: std::sync::Mutex<Vec<(Tier, Vec<Vec<f32>>)>> = std::sync::Mutex::new(Vec::new());
+    let mut built = BUILT.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, waves)) = built.iter().find(|(t, _)| *t == tier) {
+        return waves.clone();
+    }
     let waves = engine_on(tier, 0).poll_tx(0);
     assert!(
         waves.iter().flatten().any(|&x| x != 0.0),
         "premise: {tier:?} builds an over"
     );
+    built.push((tier, waves.clone()));
     waves
 }
 
