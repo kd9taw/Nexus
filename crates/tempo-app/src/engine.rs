@@ -16579,6 +16579,14 @@ impl Engine {
             for rec in &mut report.written {
                 crate::station::fill_with(rec, country, number, state);
             }
+            // THE ISLAND GROUP'S NAME, as on every other path: a merged contact holding the IOTA
+            // reference Nexus filled at log time gets `IOTA <ref> <name>` in its COMMENT, once
+            // (`tempo_core::logbook::offer::note_iota_in_comment`; operator ruling, 2026-11-10).
+            if let Some(read) = &self.station.iota_at_log {
+                for rec in &mut report.written {
+                    tempo_core::logbook::offer::note_iota_in_comment(rec, &*read.name);
+                }
+            }
             // The merge's append — the station's, as every contact's (SPEC-2 v3 C19): ids
             // minted, the hot index told, the writer handed the rows. No SQL. Its history names
             // the contest.

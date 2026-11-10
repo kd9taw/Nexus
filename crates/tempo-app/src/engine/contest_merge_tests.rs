@@ -1432,7 +1432,8 @@ fn a_contest_contact_reaches_the_logbook_with_its_grid_which_lotw_never_sees() {
 /// THE CONTEST STRIP FILLS IOTA TOO (operator ruling, 2026-11-10: every log path). A Field Day
 /// contact and a QSO-party contact, from the station's spots or its callbook answer, carry the
 /// island group on their contest row, and the merge writes it into the Logbook marked as Nexus's
-/// fill, in every upload. A call with no source gets none.
+/// fill, in every upload, with `IOTA <ref> <group name>` in its comment once, as every other path
+/// writes it. A call with no source gets neither, and a second merge adds nothing.
 #[test]
 fn the_contest_strip_fills_iota_and_the_merge_writes_it() {
     use tempo_core::logbook::callbook::{is_callbook_filled, CallbookAnswer};
@@ -1447,7 +1448,11 @@ fn the_contest_strip_fills_iota_and_the_merge_writes_it() {
                 }
             },
             |_| true,
-            |_| None,
+            |r| match r {
+                "NA-046" => Some("Maine State East group".to_string()),
+                "NA-001" => Some("Long Island".to_string()),
+                _ => None,
+            },
         );
         e.note_callbook_answer(
             "W9AAA",
@@ -1470,7 +1475,23 @@ fn the_contest_strip_fills_iota_and_the_merge_writes_it() {
     assert_eq!(k1.ota.iota.as_deref(), Some("NA-046"), "the spot's");
     assert!(is_offer_held(&k1, "IOTA") && !is_callbook_filled(&k1, "IOTA"));
     assert!(tempo_core::logbook::adif_record(&k1).contains("<IOTA:6>NA-046"));
+    assert_eq!(
+        k1.comment.as_deref(),
+        Some("IOTA NA-046 Maine State East group"),
+        "the group's name in the comment"
+    );
     assert_eq!(at("W1AW").ota.iota, None, "no source: none");
+    assert_eq!(at("W1AW").comment, None, "and no note");
+    // Merged again: the contact is already there, so nothing is written twice.
+    e.fd_merge_to_general().unwrap();
+    let again = e.stored_log();
+    let k1s: Vec<_> = again.iter().filter(|r| r.call == "K1ABC").collect();
+    assert_eq!(k1s.len(), 1);
+    assert_eq!(
+        k1s[0].comment.as_deref(),
+        Some("IOTA NA-046 Maine State East group"),
+        "once"
+    );
 
     let d = Dir::new("contest-iota-party");
     let mut e = launch(&d, &ilqp_settings());
@@ -1481,4 +1502,5 @@ fn the_contest_strip_fills_iota_and_the_merge_writes_it() {
     let w9 = log.iter().find(|r| r.call == "W9AAA").expect("merged");
     assert_eq!(w9.ota.iota.as_deref(), Some("NA-001"), "the callbook's");
     assert!(is_callbook_filled(w9, "IOTA"));
+    assert_eq!(w9.comment.as_deref(), Some("IOTA NA-001 Long Island"));
 }
