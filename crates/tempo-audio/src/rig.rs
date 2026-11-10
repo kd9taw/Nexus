@@ -1430,7 +1430,7 @@ impl Rig {
     }
 
     /// A command's reply deadline (ms) when it names none: the long window on a slow transport.
-    fn transport_deadline_ms(&self) -> u64 {
+    pub(crate) fn transport_deadline_ms(&self) -> u64 {
         if self.slow_transport {
             2_500
         } else {
