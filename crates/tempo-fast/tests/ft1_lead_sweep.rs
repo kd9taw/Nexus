@@ -203,8 +203,8 @@ fn the_early_cliff_is_the_lead_and_not_something_else() {
 /// FT1 build never carried the lead-in) and one with the shipped lead both decode on this receiver,
 /// at the key latencies and clock errors a station really has (`dt`, + = the over arrives late). The
 /// decoder is the one a 1.23.0 receiver runs too, so the new over is heard there as well. The new
-/// over also decodes 50 ms early, where an old one falls off the `istart` clamp: the point of the
-/// lead.
+/// over also decodes 50 ms early, where an old one falls off the `istart` clamp (0/8 when measured;
+/// 8/8 in every case asserted ≥ 7 here): the point of the lead.
 ///
 /// And the late limit the lead now costs, pinned as a premise: the decoder's search tops out about
 /// 0.9 s into the frame, and the lead uses 0.3 s of it, so a new over 0.60 s late still decodes. A
@@ -215,6 +215,11 @@ fn old_and_new_ft1_overs_both_decode_and_the_late_limit_holds() {
         let n = decodes(0.0, dt, -4.0, 8);
         assert!(n >= 7, "an over with no lead, {dt:+} s: {n}/8");
     }
+    let n = decodes(0.0, -0.05, -4.0, 8);
+    assert!(
+        n <= 1,
+        "an over with no lead 50 ms early falls off the istart clamp: {n}/8"
+    );
     for dt in [-0.05, 0.0, 0.12, 0.17] {
         let n = decodes(SHIPPED_LEAD_S, dt, -4.0, 8);
         assert!(n >= 7, "an over with the shipped lead, {dt:+} s: {n}/8");
