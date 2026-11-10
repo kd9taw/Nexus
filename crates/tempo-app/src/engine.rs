@@ -51660,7 +51660,7 @@ mod tests {
     /// stranger decoded after it does not get a say.
     #[test]
     fn a_call_to_a_decoded_station_still_takes_the_opposite_of_its_period() {
-        // PJ4DX heard in the slot ingested at 7 (odd) → we transmit odd; a stranger at 8 later.
+        // The DX heard in the slot ingested at 7 (odd) → we transmit odd; a stranger at 8 later.
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         e.set_tier(Tier::Ft8);
         e.set_tx_even(true);
