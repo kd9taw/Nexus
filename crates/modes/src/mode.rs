@@ -79,8 +79,7 @@ pub enum ModeKind {
     /// Carries nothing, unlike FST4/Q65/MSK144: the T/R period is FIXED at
     /// **3.75 s**, so the frame length is a constant and there is no setting to
     /// plumb. That 3.75 s is the tightest slotted period in the app — 2.52 s of
-    /// audio plus a 0.5 s lead-in leaves 0.73 s of slot, less slack than FT1's
-    /// 4 s, which already "carries no slack at all".
+    /// audio with no lead-in (`FT2_LEAD_IN_SECS` = 0.0) leaves 1.23 s of slot.
     Ft2,
     /// **JS8** (JS8Call-compatible, `crates/js8`) — keyboard-to-keyboard over an FT8-class
     /// physical layer. **Transmit-capable since B7 (operator gate G1)**: the engine's
@@ -1180,17 +1179,17 @@ impl Mode for Ft2Mode {
             // Fortran supports are not reachable through this ABI.
             contest: false,
             structured_identity: true,
-            // ⭐ EARLY PASS AT 3.05 s — and the first on-air QSOs are why (operator,
+            // ⭐ EARLY PASS AT 2.6 s — and the first on-air QSOs are why (operator,
             // 2026-08-16: "the QSO timing feels off"). This slot originally shipped
             // with NO early pass on the reasoning that 3.75 s leaves nothing worth
             // splitting — which routed FT2 into service.rs's key-IMMEDIATELY branch,
             // where the boundary keys BEFORE the just-ended slot's decode folds in:
             // every answer slipped a full cycle and every message went out twice.
-            // The reasoning missed that FT2's tones END at 3.02 s, so a pass at
-            // 3.05 s decodes the COMPLETE signal (not a partial like FT8's 11.8 s
-            // pass) 0.70 s before the boundary — measured 510 ms at depth 3, so it
-            // fits. A pass that misses the window degrades to exactly the old
-            // ordering; it can never regress. Decodium reaches the same ordering by
+            // The reasoning missed that FT2's tones END at 2.52 s, so a pass at
+            // 2.6 s (tempo-audio `service.rs`) decodes the COMPLETE signal (not a
+            // partial like FT8's 11.8 s pass) 1.15 s before the boundary — measured
+            // 510 ms at depth 3, so it fits. A pass that misses the window degrades
+            // to exactly the old ordering; it can never regress. Decodium reaches the same ordering by
             // decoding asynchronously and arming TX 100 ms after the decode.
             early_decode: true,
             // Split Operation applies for the same reason it does on FT4: a ~167 Hz

@@ -22148,7 +22148,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // 13 s or less, and trailing one out reads as "the over finishes"); the
         // four new tiers, whose overs run from 26 s to 30 MINUTES, stand down.
         //
-        // FT2 is on the SHORT side by a wide margin — a 3.02 s over in a 3.75 s
+        // FT2 is on the SHORT side by a wide margin — a 2.52 s over in a 3.75 s
         // period, the briefest of any tier here — so leaving it trails out inside a
         // second, exactly like leaving FT4.
         //
@@ -23864,11 +23864,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // the radio loop strips it on a late (mid-slot) start so the over never
             // bleeds into the next period.
             Tier::Ft4 => 5.34,
-            // FT2 = 0.5 s lead-in + 2.52 s tones (105 sym × 288 sa @ 12 kHz). Unlike
+            // FT2 = 2.52 s tones (105 sym × 288 sa @ 12 kHz) and no lead-in
+            // (`modes::mode` `FT2_LEAD_IN_SECS` = 0.0, Decodium's convention). Unlike
             // FT4 there is NO trailing padding in the buffer — `Ft2Mode::gen_wave`
-            // returns exactly lead + NWAVE — so 3.02 is the whole of it, and it is
-            // airtime rather than an over-estimate. That leaves 0.73 s of the 3.75 s
-            // slot, the tightest margin of any tier here.
+            // returns exactly lead + NWAVE — so 2.52 is the whole of it, and it is
+            // airtime rather than an over-estimate. That leaves 1.23 s of the 3.75 s
+            // slot, still the tightest margin of any tier here.
             Tier::Ft2 => 2.52,
             Tier::TempoFast => 3.55,
         }
