@@ -571,9 +571,11 @@ describe('the SSTV stamp has a real percentage base and the shell has real floor
   it('.sstv-tx-bar is sticky at bottom 0 (Stop must never leave the scrollport)', () => {
     // The dock discipline (cockpit-panes.css .cockpit-txdock): with real pane floors the
     // shell valve engages routinely, and a bar that scrolls away is a Stop the operator
-    // cannot reach mid-transmission — against the bar's own TX-LOCKED comment.
-    expect(finalDecl('.sstv-tx-bar', 'position')).toBe('sticky')
-    expect(finalDecl('.sstv-tx-bar', 'bottom')).toBe('0')
+    // cannot reach mid-transmission — against the bar's own TX-LOCKED comment. The bar's rule
+    // lives in cockpit-panes.css with its squeeze, so the winner is computed across both sheets.
+    const bar = [...shellChain('sstv-view'), new Set(['sstv-tx-bar'])]
+    expect(winningAcross(bar, declOf('position'))?.value).toBe('sticky')
+    expect(winningAcross(bar, declOf('bottom'))?.value).toBe('0')
   })
 
   for (const shell of [
@@ -795,7 +797,8 @@ describe('a y divider costs its column nothing: its margins give back the gap it
     return v == null ? null : { value: v, selector: '.cockpit-col (cockpit-panes.css)' }
   }
   const OPERATE = shellChain('operate-cockpit')
-  const BODY = [...OPERATE, new Set(['cockpit-body'])]
+  // FT's body has no box (`.cockpit-flat`): its children are flex items of the shell, so the shell is the column.
+  const BODY = [...OPERATE, new Set(['cockpit-body', 'cockpit-flat'])]
   const SIDE = [...BODY, new Set(['cockpit-lower', 'roster']), new Set(['cockpit-side'])]
   const QSOCOL = [...BODY, new Set(['cockpit-lower', 'classic']), new Set(['cockpit-qsocol'])]
   /** [what, the column's chain (null: a pane-grid column), the divider's own classes] */
@@ -813,7 +816,7 @@ describe('a y divider costs its column nothing: its margins give back the gap it
         ['pane-splitter', 'horizontal', 'seam', 'in-column'],
       ],
     ),
-    ['.operate-cockpit .cockpit-body', BODY, BODY, ['pane-splitter', 'horizontal']],
+    ['.operate-cockpit .cockpit-body', OPERATE, BODY, ['pane-splitter', 'horizontal']],
     ['.operate-cockpit .cockpit-side', SIDE, SIDE, ['pane-splitter', 'horizontal', 'seam']],
     ['.operate-cockpit .cockpit-qsocol', QSOCOL, QSOCOL, ['pane-splitter', 'horizontal']],
     // FT'S ARRANGED COLUMNS (2026-10-07) are cockpit-panes.css's (`.op-stack`, FT's own 8 px gap), which this
@@ -1111,7 +1114,8 @@ describe('a shell keeps what it scrolls to clear of what is parked', () => {
   for (const shell of ['cw-cockpit', 'phone-cockpit', 'rtty-cockpit', 'psk-cockpit', 'js8-cockpit', 'jtty-cockpit']) {
     it(`${shell}: both edges read what the strip writes`, () => {
       expect(winningValue(shellChain(shell), decl('scroll-padding-top'))?.value).toBe('var(--cockpit-txstrip-h, 0px)')
-      expect(winningValue(shellChain(shell), decl('scroll-padding-bottom'))?.value, 'a folded dock’s keep row can hide what is focused').toBe('var(--cockpit-txdock-keep-h, 0px)')
+      // FT's parked QSO-strip line is the fallback (`--cockpit-ftstrip-park-h`, written only on FT's shell, which has no dock).
+      expect(winningValue(shellChain(shell), decl('scroll-padding-bottom'))?.value, 'a folded dock’s keep row can hide what is focused').toBe('var(--cockpit-txdock-keep-h, var(--cockpit-ftstrip-park-h, 0px))')
     })
   }
 })

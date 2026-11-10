@@ -13,6 +13,7 @@ import { Waterfall } from './Waterfall'
 import { RfScopePane } from './RfScopePane'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
+import { TxAlarmBanner } from './TxAlarmBanner'
 import { TxMeters, TxMetersPane } from './TxMeters'
 import { useCompactChrome } from '../features/compactChrome'
 import { FrequencyControl } from './FrequencyControl'
@@ -2129,6 +2130,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           pins (stop-line.test.tsx) — and this is the familiar Stop TX every screen has. */}
       {snap && (
         <CockpitTxStrip
+          alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} />}
           radio={snap.radio}
           onSetTxEnabled={onSetTxEnabled}
           onTune={(on) => { void setTune(on).then((st) => onSnap?.(st)).catch((e) => pushToast(String(e), 'error')) }}

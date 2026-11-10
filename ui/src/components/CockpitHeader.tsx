@@ -9,7 +9,6 @@
 import { localizeRefusal } from '../radioRefusal'
 import { useEffect, useRef } from 'react'
 import { AmpStrip } from './AmpStrip'
-import { TxAlarmBanner } from './TxAlarmBanner'
 import { WheelRange } from './WheelRange'
 import type { ReactNode, RefObject } from 'react'
 import type { AppSnapshot } from '../types'
@@ -35,9 +34,14 @@ const CAT_BAD = 'CAT ✗'
  * and `children` for the rest) — never forced to look identical, only positioned consistently.
  *
  * Layout regions (left→right, wrapping): identity · frequency(+extras+band) ·
- * mode-extras(elastic) · actions(power·CAT, pinned right), then, while one is up, the transmitter
- * alarm on its own last row. Every region wraps + has min-width:0 so nothing clips off-screen at a
- * non-maximized width or 110–125% UI zoom.
+ * mode-extras(elastic) · actions(power·CAT, pinned right). Every region wraps + has min-width:0 so
+ * nothing clips off-screen at a non-maximized width or 110–125% UI zoom.
+ *
+ * NOTHING HERE MAY COME AND GO WITH THE RADIO'S STATE (2026-11-07). The header stands above the TX
+ * strip, so a box it adds or drops re-wraps it and moves Stop TX: Split drawn only with CAT, a state
+ * word appearing, and the transmitter alarm's own row each moved it 26 to 56 px. A control CAT cannot
+ * serve is drawn disabled; state words stand in `.ch-statecell` (zero wide to the line breaker); the
+ * transmitter alarm is the TX strip's last line (`CockpitTxStrip` `alarm`), under Stop TX.
  *
  * NO TRANSMIT CONTROLS (2026-10-01). The TX-enable latch, Tune, the rig's ATU
  * and Stop TX left this header for the TX strip under the scope (`CockpitTxStrip`), FT's cluster
@@ -396,12 +400,6 @@ export function CockpitHeader({
           keeps them flush right on whichever line they land. With no mode controls passed they
           stay the header item they always were. */}
       {children != null ? <div className="ch-mode-extras">{children}{actionsBox}</div> : actionsBox}
-
-      {/* The transmitter alarm the CAT status above cannot keep: on screen until the operator
-          dismisses it. Its own row, LAST, so the controls above it never move when it comes or
-          goes. Rendered from `snap` like the amplifier strip, so no cockpit can forget it; it
-          renders nothing while there is no alarm. */}
-      <TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} />
     </div>
   )
 }

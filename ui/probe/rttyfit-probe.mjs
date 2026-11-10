@@ -134,7 +134,7 @@ async function measure([W, H, scale], extra = {}, css = null) {
     await call('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false })
     await call('Page.navigate', { url: `${origin}/probe-blank` })
     await sleep(300)
-    const ls = { 'nexus.workspace': 'dx', 'nexus.features.v1': FEATURES, 'tempo-theme': 'dark', ...(scale ? { 'nexus-ui-scale-mode': scale } : {}), ...extra }
+    const ls = { 'nexus.workspace': 'dx', 'nexus.features.v1': FEATURES, 'tempo-theme': 'dark', ...(process.env.NEXUS_PROBE_LOCALE ? { 'nexus.locale': process.env.NEXUS_PROBE_LOCALE } : {}), ...(scale ? { 'nexus-ui-scale-mode': scale } : {}), ...extra }
     await evaluate(`localStorage.clear(); ${Object.entries(ls).map(([k, v]) => `localStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(v)})`).join(';')}; 1`)
     await call('Page.navigate', { url: `${origin}/#rtty` })
     let m = null

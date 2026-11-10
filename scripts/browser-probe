@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|besttimes|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|toastcorner|logwaiting|topbar|header|rttyfit|digishell|firstrun|journeys|clublog|aprsmap|logbook|profiles|sstvlayout|menustop|stopabove
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|besttimes|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|toastcorner|logwaiting|topbar|header|rttyfit|digishell|alarmcell|firstrun|journeys|clublog|aprsmap|logbook|profiles|sstvlayout|menustop|stopabove|stopvisible
        scripts/browser-probe --desktop-shard <n> <of>
 
   --desktop-shard <n> <of>
@@ -209,6 +209,13 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         on Operate): opened by real clicks and by real Tab + Enter, and with the
                         shell walked while it is open. Seven planted faults must be caught
                         (ui/probe/digishell-probe.mjs; it builds nothing)
+  --desktop alarmcell   the transmitter alarm cell on every operating screen's TX strip (FT, Phone,
+                        CW, RTTY, PSK, JTTY, SSTV, JS8) in the real app, at 150 and 175 % from 700×800
+                        to 1366×768, in all eight languages (switched live): an alarm coming and going
+                        leaves the strip the same height and Stop TX where it was, and the alarm's
+                        words are on screen and topmost. The cell without its one height must move
+                        Stop TX (control). ALARMCELL_SCREENS=FT,RTTY narrows a local run
+                        (ui/probe/alarmcell-probe.mjs; it builds nothing)
   --desktop sstvlayout  the SSTV screen in the real app at every size class (xs to xl) at 100 % and
                         175 %, in English and Russian: the composer stands at the foot of the panes
                         under the gallery and the meters pane, Stop TX and Stop do not move when the
@@ -216,6 +223,13 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         and topmost once scrolled to, the composer's warning and the bar's alert are
                         seen, and the waterfall's divider still sizes it, with three planted faults
                         that must be caught (ui/probe/sstvlayout-probe.mjs; it builds nothing)
+  --desktop stopvisible every cockpit in the real app (FT, Tempo, Phone, CW, RTTY, PSK, JTTY, SSTV, APRS,
+                        JS8) from 700×800 at 175 % up to 3440×1440, plain, with CAT lost, under transmitter
+                        alarms and a critical status message, on the air, and all of them at once with SSTV's
+                        dropped-picture sentence and JTTY's refusal: with nothing scrolled, a Stop TX is wholly
+                        inside the window and the topmost thing over its whole face. A box planted over FT's
+                        Stop TX must be caught. STOPVIS_FULL=1 runs every size, scale and language
+                        (ui/probe/stopvisible-probe.mjs; it builds nothing)
   --desktop firstrun    a fresh install's first-run wizard in the real app, at 1024×768 and
                         1920×1080: the About-you question and its answers on screen, Finish
                         writes the answer, the Getting started guide then the first-contact
@@ -262,7 +276,7 @@ USAGE
 # job, which deals this list round-robin over its shards with --desktop-shard. Slowest first, so the
 # deal balances (local seconds on 2026-11-05: toastcorner 299, digishell 330, topbar 96, waterfalls 92, logbook 67,
 # header 62, journeys 42, rttyfit 39, the rest 7-27); keep a new probe near its cost when you add it.
-DESKTOP_ALL=(toastcorner digishell sstvlayout topbar waterfalls logbook header journeys rttyfit menustop stopabove profiles firstrun radiosetup contestlog
+DESKTOP_ALL=(toastcorner digishell alarmcell sstvlayout stopvisible topbar waterfalls logbook header journeys rttyfit menustop stopabove profiles firstrun radiosetup contestlog
   logwaiting spots atu radioswitch jtty activation clublog aprsmap callcard voicenote rotor contactcard txmeters besttimes)
 
 SCENARIO='stream'
@@ -365,11 +379,13 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = header ] && exec node "$ROOT/ui/probe/header-probe.mjs"
   [ "$DESKTOP" = rttyfit ] && exec node "$ROOT/ui/probe/rttyfit-probe.mjs"
   [ "$DESKTOP" = digishell ] && exec node "$ROOT/ui/probe/digishell-probe.mjs"
+  [ "$DESKTOP" = alarmcell ] && exec node "$ROOT/ui/probe/alarmcell-probe.mjs"
   [ "$DESKTOP" = clublog ] && exec node "$ROOT/ui/probe/clublog-probe.mjs"
   [ "$DESKTOP" = aprsmap ] && exec node "$ROOT/ui/probe/aprsmap-probe.mjs"
   [ "$DESKTOP" = logbook ] && exec node "$ROOT/ui/probe/logbook-probe.mjs"
   [ "$DESKTOP" = profiles ] && exec node "$ROOT/ui/probe/profiles-probe.mjs"
   [ "$DESKTOP" = sstvlayout ] && exec node "$ROOT/ui/probe/sstvlayout-probe.mjs"
+  [ "$DESKTOP" = stopvisible ] && exec node "$ROOT/ui/probe/stopvisible-probe.mjs"
   [ "$DESKTOP" = menustop ] && exec node "$ROOT/ui/probe/menustop-probe.mjs"
   [ "$DESKTOP" = stopabove ] && exec node "$ROOT/ui/probe/stopabove-probe.mjs"
   exec node "$ROOT/ui/probe/desktop-probe.mjs" "$DESKTOP"

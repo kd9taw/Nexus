@@ -14554,6 +14554,9 @@ export const EN = {
   'shell.lane.pttRefused.message': 'PTT REFUSED',
   'shell.lane.pttRefused.detail':
     'Nexus did not key the {{mode}} over at {{time}} UTC: the radio was still taking its transmit audio from DAX, as Nexus had set it, not from its mic, so your voice would not have gone out. Nothing was sent. Let go of PTT and Nexus puts the radio back on its mic input within a moment; then press PTT again.',
+  // The TX watchdog's halt, a critical lane item (App): how to transmit again. `TX On` is the strip's
+  // button, whose label is not translated.
+  'shell.lane.txWatchdog.detail': 'Transmit is off. Press TX On to transmit again.',
   // A computer-microphone over that ended, or never keyed, for a reason the operator did not
   // choose (features/pcMic.ts). `{{why}}` is one of the sentences after it.
   'shell.lane.pcMic.message': 'COMPUTER MIC',
@@ -15464,6 +15467,9 @@ export const EN = {
   // Why the link is down. Four states, and `wrongModel` is the one that earns its own sentence:
   // a working link on a protocol Nexus does not speak must never read as "no amplifier".
   'amp.reason.noAnswer': 'Not answering',
+  // Before the amplifier's first answer after launch or a radio switch (the engine's not-yet-answered status: an
+  // empty reason). Not a fault: nothing has failed yet.
+  'amp.reason.waiting': 'Connecting…',
   'amp.reason.portBusy': 'Port in use by something else',
   'amp.reason.wrongModel': 'Answering, but in a protocol Nexus does not read yet',
   'amp.reason.malformed': 'Answering with something Nexus cannot read',

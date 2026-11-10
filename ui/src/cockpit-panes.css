@@ -496,6 +496,48 @@
   border-top: 1px solid var(--border);
   background: var(--panel);
 }
+/* SSTV'S BAR — mode, Send, Stop, the progress and the dropped-picture sentence (SstvView `.sstv-tx-bar`). Never a
+   pane; Stop always reachable. Sticky for the `.cockpit-txdock` discipline: with the composer and the stage/gallery
+   floors the shell's deficit valve engages routinely on short windows, and a bar that scrolls away is a Stop the
+   operator cannot reach mid-transmission. The bar is the shell's LAST child (SstvView.structure.test.tsx), so
+   bottom-sticky parks it in the scrollport at every scroll position. Z-INDEX 4, the TX strip's, the dock's and the
+   pinned header's: after the header in the shell, so at equal z it wins any overlap (Send and Stop are never under the
+   dial; at 2 the header covered them at 900×600 / 175 %), and above the region's dividers (3) for the dock's reason.
+   --bg-elev is opaque in both themes: a sticky surface must not let content ghost through. It moved here from
+   styles.css with its squeeze (below), so its whole cascade is this sheet's. */
+.sstv-tx-bar {
+  flex: 0 0 auto;
+  position: sticky;
+  bottom: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+/* …AND SQUEEZED, never over Stop TX (`data-squeeze`, written by the TX strip: CockpitTxStrip decideSqueeze). The strip
+   parks at the top of the scrollport and what is parked at the bottom — a folded dock's keep row, or SSTV's bar — under
+   it. Where the two do not both fit, the bottom one painted over the strip's lower edge and over Stop TX: on a small
+   window at 175 % the top bar and the cockpit header leave the shell 120–250 px, and an alarm, a status message or the
+   dropped-picture sentence took more (RTTY and JS8 at 900×600 / 175 % under an alarm, SSTV there under the sentence,
+   measured: `scripts/browser-probe --desktop stopvisible`). Squeezed, the surface is no taller than the room the strip
+   leaves it (`--cockpit-txdock-room`, measured, because CSS cannot read a sibling's box) and scrolls inside. What the
+   cap leaves out is in the surface's own scroll, reached by scrolling it or by Tab, and on the smallest windows (900×600
+   at 175 % in Russian or Japanese, under an alarm: a 50–54 px cap, one line) that includes Send, the TX latch, the
+   surface's own Stop or Esc/Stop and its notices; Stop TX, which stops all of it, is the stop in view. The strip
+   scrolls the surface to its own stop when the squeeze begins and when that stop goes live, where the cap can hold it
+   (CockpitTxStrip `surfaceStop`). Where the room is shorter than one control (JS8 in Japanese: 27 px), the cap is one
+   control, standing over the strip's lower part and never over the line Stop TX is on (`capFor`). Everywhere the two
+   fit, this never applies. */
+.cockpit-txdock-keep[data-squeeze='on'],
+.sstv-tx-bar[data-squeeze='on'] {
+  max-height: var(--cockpit-txdock-room);
+  overflow-y: auto;
+}
 
 /* THE MACRO BANK — a keyboard dock of 12 or 16 macro keys (Settings ▸ CW / RTTY / PSK ▸ Macro keys;
    8, the default, is the dock as it always was and wears none of these). The keys stand in GROUPS OF
@@ -575,6 +617,25 @@
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
 }
+/* FT'S QSO STRIP (`.cockpit-qso`, OperateQsoStrip) — the same cluster, Stop TX in it, with FT's QSO controls round it.
+   It stood in `.cockpit-body`, a box of its own under the header, so it scrolled with the column: at 150–175 % on a
+   small window the header ALONE ran past the window's foot (FT at 900×600 / 175 %: the header ends at y 991 in a 600 px
+   window, measured) and Stop TX was off screen until the operator scrolled. The body is a `.cockpit-flat` wrapper now,
+   no box, so the strip is a flex item of the shell, and it PARKS AT THE FOOT of the scrollport where its own place is
+   below it: sticky at the bottom, as every other screen's strip is. Only its FIRST LINE parks there — the TX cluster
+   with Stop TX — and the rest of it waits past the foot (`--cockpit-ftstrip-rest`, the strip's height under that line,
+   which OperateQsoStrip measures): FT's strip is 300–400 px on a small window at 175 %, taller than the shell's whole
+   scrollport there, and parked whole it put its top, and Stop TX, above the window. Where the strip draws a
+   transmitter alarm cell on its second line and the two lines fit the scrollport, that line parks too, so the alarm
+   stands with Stop TX; otherwise only the first line does. What parks is cleared by a focus: OperateQsoStrip writes its
+   rendered height on the shell (`--cockpit-ftstrip-park-h`), which the shells' scroll padding reads. It does not park at the top: a
+   strip that tall parked there would cover every pane under it at every scroll position. Above the region's dividers
+   (3) at the strip's and the dock's level; opaque (`.panel`). Where the shell does not scroll, this changes nothing. */
+.cockpit-ftstrip {
+  position: sticky;
+  bottom: calc(-1 * var(--cockpit-ftstrip-rest, 0px));
+  z-index: 4;
+}
 /* THE PINNED HEADER (SSTV, RTTY, PSK; CockpitHeader `pinned`). The header is the shell's first child
    and carries the mode, the dial, the band, ⊞ Panels, power and the CAT pill. In a shell whose
    deficit valve scrolls (a laptop at 150–175 %), an unpinned header scrolls out of the window with
@@ -630,16 +691,31 @@
 /* THE STRIP'S METERS CELL (Phone and CW from md up, the compact dock): the read-only TX meters in the
    strip's empty right side, as Operate's QSO strip carries its own (`.cq-telemetry`). Right-packed by
    its auto margin, after the cluster and the TX state, so no reading can move Stop TX, Tune or the
-   latch. A ZERO basis growing to 30em: the strip's line breaking sees a zero-wide item, so the cell
+   latch. A ZERO basis growing to its ceiling (below): the strip's line breaking sees a zero-wide item, so the cell
    can never wrap the strip onto a second line — on a narrow `md` window it only gets narrower. The
    meters inside sit in at most two rows (styles.css
    `.ph-txmeters.inline.strip`), the height of the strip's own buttons, so the strip is the height it
    was without them. A readout: no control here keys or stops anything. */
+/* ITS CEILING IS THE METERS' USEFUL WIDTH: its content's own (`max-content`). Each column of the meters'
+   grid stops at half the width Operate's fixed cell gives the same two columns (styles.css
+   `.ph-txmeters.inline.strip`, `.cq-telemetry`), so two columns are 21em, and COMP's controls or a
+   temperature that add a column add one column's width: a constant for the rig, which no reading changes.
+   The strip's alarm cell (`.ch-txalarm`) grows by 1 beside it, so below the ceiling the two share the room
+   and above it the alarm takes the rest. A 30em ceiling gave two columns of bars 9em more, taken from the
+   alarm's words (400 px of them on RTTY, PSK and JTTY at 1366x768 100 %). */
 .cockpit-txstrip-meters {
   flex: 1 1 0;
   min-width: 0;
-  max-width: 30em;
+  max-width: max-content;
   margin-left: auto;
+}
+/* …AND EACH COLUMN OF ITS METERS' GRID (TxMeters `strip`, `.ph-txmeters.inline.strip` in styles.css, which
+   lays the meters down then across) shares the cell equally, as 1fr did, up to half of Operate's cell
+   (`.cq-telemetry`, two columns less the gap between them). That is the meters' useful width, the cell's
+   `max-content` above, so past it the strip's room goes to the alarm cell beside them. A fixed track, so no
+   reading changes it. */
+.cockpit-txstrip-meters-grid {
+  grid-auto-columns: minmax(0, calc((21em - var(--space-2)) / 2));
 }
 /* …WITH NEEDLES, a higher ceiling: the three largest faces and the COMP row beside them. The same zero
    basis and auto margin, so the same promise; it still only takes the strip's empty right side. */
@@ -865,6 +941,151 @@
   --chrome-extras-gap: max(var(--space-2), min(var(--space-3), (var(--vh-eff, 100vh) - 1100px) * 100));
 }
 
+/* THE TOP BAR'S STATUS LANE (components/StatusLane), ALWAYS DRAWN, a direct child of the bar right after the
+   brand group: the item in front of the group that carries the bar's free room (`.radio-readout`'s
+   `margin-left: auto`, or the TX/RX group's where the readout is hidden). Flex gives free room to a grower
+   before an auto margin, so a zero-basis lane there takes EXACTLY the room that margin had, and every group
+   after it, the bar's own TX cluster and Stop TX included, stands where it stood, empty lane or full. It was
+   inside the TX/RX group, which grew only while a message was up: the readout's margin went to 0 and the
+   bar's Stop TX slid left, 937 → 450 px at 1920x1080 on the Logbook (topbar-probe).
+   ZERO WIDE TO THE BAR'S LINE BREAKER: width 0, its margin cancelling the bar's gap in front of it, no
+   padding or border; it never wraps the bar. Its first child (`.status-lane-gap`) gives the gap back inside
+   it, so the first chip does not touch the brand. Chips shorten to an ellipsis, whole on hover.
+   ⛔ SAFETY, WHERE A CRITICAL ITEM GOES WHEN THE LANE IS CUT (operator pick 2026-11-07, "Never wraps, alarms
+   also shown by Stop"): on the operating screens it is ALSO in the transmitter alarm cell beside Stop TX
+   (TxAlarmBanner, `.ch-txalarm`), so the lane there has no floor. OFF them (no TX strip, no alarm cell:
+   Logbook, Field Day, Satellites, Settings…) the lane is the only place one shows, so there it ALWAYS keeps
+   the room for a critical item's FLAG (`.status-lane-keep`, StatusLane `keepCritical`): the gap, the 13 px
+   icon, the chip's padding and border. Always, not only while one is up, so a critical item arriving never
+   wraps the bar and moves its Stop TX; critical items are drawn first and announced as alerts there. */
+.status-lane {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  margin: 0 0 0 calc(-1 * var(--chrome-bar-gap, 18px));
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+}
+.status-lane-gap {
+  flex: none;
+  width: calc(var(--chrome-bar-gap, 18px) - var(--space-2));
+}
+.status-lane-keep {
+  min-width: calc(var(--chrome-bar-gap, 18px) + 13px + 2 * var(--space-2) + 2px);
+}
+/* THE TRANSMITTER ALARM CELL (TxAlarmBanner, `.ch-txalarm`; operator pick "One line inside the strip",
+   2026-11-07): one line IN THE TX STRIP'S ROW, beside the TX state (FT: the first cell of its second line, under Stop TX). It holds
+   the station's transmitter alarm and every critical status-lane item, which the top bar's lane may cut.
+   As the header's last row an alarm moved Stop TX 26 to 38 px; as a line of the strip, the scope above
+   shrank and Stop TX moved up. So the cell is ALWAYS DRAWN, alarms or none, and to the strip's line
+   breaker it is ONE CONSTANT WIDTH, `min-width` and nothing else: zero basis, its margin cancelling the
+   strip's column gap, no padding and no border (a box cannot be narrower than those, and they would be
+   width the breaker sees: the 8 px the CAT words leaked). What it holds can never change where the strip
+   wraps, so no control on the strip moves when an alarm comes or goes, and it sits beside them, never
+   over one. It grows into the room left on its line; the words shorten (whole on hover).
+   THE FLOOR, 4.5em, keeps the ⚠, the ✕ and the start of the words, and MUST fit beside the TX state at
+   900x600 175 %: there the strip parks at the top of the scrollport and a folded dock's keep row at its
+   bottom, and only one strip line fits between them, so a cell on a line of its own stood under the keep
+   row and the alarm was covered (RTTY, Russian). A 13em floor also took that line in English, the strip grew
+   39 px, and controls under it could no longer be reached (digishell, RTTY and JS8). The room there, measured
+   in real Chrome (the box's width over the UI zoom, less the cell's margin, in the cell's own em): English
+   8.5em, German 8em, Spanish 4.9em, Russian 2.95em with "■ TX выключено", which the Russian catalog now
+   shortens to "■ TX выкл.". At 700x800 150 % the room is 0.8-4.4em, so the cell stands on a line of its own
+   there (with room for it: the guard finds it on screen), so it has ONE HEIGHT, its own content line (`1em` of line-height-1 words plus their 1 px padding and
+   1 px border, top and bottom): that line is the same height with an alarm or without one, so an alarm
+   arriving never changes the strip's height, and beside the controls it is shorter than their buttons. An
+   empty cell without it was 0 px tall on its own line, and an alarm grew the strip 26.5 px and moved Stop
+   TX. FT's cell stands on a line of its own by design (`.ch-txalarm-own`, below). */
+.ch-txalarm {
+  flex: 1 1 0;
+  min-width: 4.5em;
+  height: calc(1em + 4px);
+  margin: 0 0 0 calc(-1 * var(--space-2));
+  padding: 0;
+  border: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  overflow: hidden;
+  font-size: var(--fs-label);
+}
+/* FT's cell (OperateQsoStrip, TxAlarmBanner `ownLine`): the first cell of the strip's second line, which its
+   QSO controls already fill, so the cell always stands on a line of its own there. There the floor is the
+   alarm's name with the count and the ✕, and ONE HEIGHT: an empty cell's own line was 0 px tall, so an
+   alarm grew the strip (FT, 1366x768); fixed, that line is the same height empty or full. */
+.ch-txalarm-own {
+  min-width: 13em;
+  height: 1.6em;
+}
+/* The words: first, after the gap the cell gave back, and the one part that shortens. Line height 1, so a
+   cell beside the controls is never taller than they are. */
+.ch-txalarm-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  line-height: 1;
+  margin-inline-start: var(--space-2);
+  padding: 1px var(--space-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* "+N" and the ✕ never shrink: the count says more are waiting, and Dismiss stays a button. Line height 1,
+   as the words, so nothing in the cell is taller than its one height. */
+.ch-txalarm-queue {
+  flex: none;
+  white-space: nowrap;
+  line-height: 1;
+}
+.ch-txalarm-dismiss {
+  flex: none;
+  padding: 1px var(--space-1);
+  font-size: inherit;
+}
+/* THE AMPLIFIER'S OPERATE / STANDBY WORD (components/AmpStrip, in the cockpit header): the three words it
+   can say are stacked in one grid cell, the current one shown, so the button is the widest word's width in
+   every state. The header stands above Stop TX, and a word of its own width re-wrapped it (CW 1024x768:
+   Stop TX moved 26.6 px when the amplifier went to standby). */
+.amp-op-face {
+  display: inline-grid;
+}
+.amp-op-word {
+  grid-area: 1 / 1;
+}
+.amp-op-word-off {
+  visibility: hidden;
+}
+/* THE HEADER'S STATE WORDS (`.ch-statecell`, Phone's header: the mic held off for DAX, the rig on a mode
+   it was not told, no rig control). They come and go with the radio, and the header stands above the TX
+   strip: a word with a width of its own that appeared on a full line re-wrapped the header and moved
+   Stop TX (32 px at 1920x1080). So the cell is the status lane's shape (`.status-lane`, above):
+   ZERO WIDE TO THE LINE BREAKER. `width: 0` is its basis and its contribution to the row's own size, its
+   margin cancels the row gap in front of it, and it has no padding or border (a box cannot be narrower
+   than those): gap + margin + width = 0, so the row breaks exactly where it breaks without it. It grows
+   into the room left on its line and clips; the words in it shorten to an ellipsis (`.ch-stateword`) and
+   keep the whole text in their tooltip. Each word carries the gap the cell gave back as its own margin.
+   Always drawn, words or none, so it is a box no state adds or removes. A readout: nothing in it keys,
+   stops or tunes anything. */
+.ch-statecell {
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  margin-inline-start: calc(-1 * var(--chrome-extras-gap, var(--space-3)));
+  overflow: hidden;
+}
+.ch-stateword {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-inline-start: var(--chrome-extras-gap, var(--space-3));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* THE CW AND PHONE HEADERS' ⋯ (components/HeaderOverflow), at md and lg: memories, the rotator, split
    and REC behind one button, so the header is one row. Its group stands OUT OF FLOW under the button,
    right-aligned to it, over the scope: opening it moves no control in the header, the TX strip or the

@@ -65,6 +65,7 @@ import { TX_SPLIT_MAX, TX_SPLIT_MIN } from '../features/paneSeam'
 import { buildHighlightMap, OperateDecodes } from './OperateDecodes'
 import { DecodeHistory, type DecodeSort } from '../decodeHistory'
 import { OperateQsoStrip } from './OperateQsoStrip'
+import { TxAlarmBanner } from './TxAlarmBanner'
 import { TxMetersCell, TxMetersPane, TX_METERS_WHEN } from './TxMeters'
 import { SpotDialog } from './SpotDialog'
 import { DEFAULT_ROSTER_SORT, OperateRoster, type RosterSort } from './OperateRoster'
@@ -452,8 +453,8 @@ export function OperateCockpit({
   boxes,
 }: Props) {
   // The waterfall strip its height divider sizes: the divider sets its CSS var on the strip's
-  // container (.cockpit-body) and measures the range the layout honours (the sheet caps the strip
-  // at 60 % of the body).
+  // parent (.cockpit-body, a box-less `.cockpit-flat` wrapper) and measures the range the layout
+  // honours in the box the strip is laid out in, the shell (the sheet caps the strip at 60 % of it).
   const wfRef = useRef<HTMLElement>(null)
   // The two resizable side-rail panes in roster mode (Band Activity above, Rx Frequency
   // below) + the seam that splits them. A sole survivor auto-fills because flex-grow is
@@ -1886,14 +1887,16 @@ export function OperateCockpit({
               DXpedition pile-up is actually worked, and "UP 5" is the ordinary case: the spot
               parser already reads the offset out of the comment and commands it, but an
               operator who tuned to the DX by hand had no control at all. NOT a stop control —
-              see SplitControl's header. */}
-          {snap.radio.catOk === true && (
-            <SplitControl
-              snap={snap}
-              onSnap={onSnap}
-              onError={(m) => pushToast(m, 'error')}
-            />
-          )}
+              see SplitControl's header.
+              DRAWN WHATEVER CAT SAYS, disabled without it (2026-11-07): this header stands above
+              the QSO strip, and the control coming and going with `catOk` re-wrapped it and moved
+              Stop TX 26 to 56 px every time CAT dropped. */}
+          <SplitControl
+            snap={snap}
+            onSnap={onSnap}
+            onError={(m) => pushToast(m, 'error')}
+            unavailable={snap.radio.catOk === true ? undefined : { title: t('cockpit.header.cat.bad.title') }}
+          />
           <div className="cockpit-layout-toggle" role="group" aria-label={t('operate.header.layout.aria')}>
             <button
               type="button"
@@ -1954,7 +1957,11 @@ export function OperateCockpit({
           the QSO strip's; its protected controls (period, Skip Tx1, next-Ns, HOUND
           badge, rotor) merged INTO the strip below. ~42px of the reported blank gray
           space lived here. */}
-      <div className="cockpit-body">
+      {/* NO BOX (`.cockpit-flat`, cockpit-panes.css): the waterfall, its divider, the QSO strip and the lower region
+          are flex items of the shell itself, so the strip's sticky edge is measured against the shell. In a box of its
+          own it could not leave that box, and at 150–175 % on a small window the header alone ran past the window's
+          foot, so Stop TX was off screen until the operator scrolled (`.cockpit-ftstrip`). */}
+      <div className="cockpit-body cockpit-flat">
         {/* Waterfall: a short full-width strip (not a tall column) — the spectrum
             is a glance tool; the real estate goes to the decode lists + roster. */}
         {wfState === 'popped' && (
@@ -2065,6 +2072,7 @@ export function OperateCockpit({
             controls absorbed from the deleted status row (period, Skip Tx1, next-Ns,
             HOUND badge, rotor) and the fixed-width TX telemetry cell. */}
         <OperateQsoStrip
+          alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} ownLine />}
           qso={snap.qso}
           contestRunning={snap.fieldDay?.running}
           radio={snap.radio}

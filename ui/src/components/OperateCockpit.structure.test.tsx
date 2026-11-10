@@ -12,6 +12,7 @@
 //   - TX meters are a fixed strip cell, not a permanent body row, and the cell exists
 //     in BOTH RX and TX states (zero mount/unmount with the 15 s cycle).
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { cloneElement } from 'react'
 import { render, screen, cleanup, within } from '@testing-library/react'
 import { OperateCockpit } from './OperateCockpit'
 import type { AppSnapshot } from '../types'
@@ -568,6 +569,23 @@ describe('the column dividers exist only where the grid consumes their tokens', 
   })
 })
 
+// THE QSO STRIP'S STICKY EDGE IS THE SHELL'S (2026-11-08). At 150–175 % on a small window FT's header alone ran past the
+// window's foot, and the strip stood in `.cockpit-body`, a box it could not leave, so Stop TX was off screen as FT opened.
+// The body is a `.cockpit-flat` wrapper (no box: cockpit-panes.css, computed in cockpit-panes.test.ts) and the strip parks
+// its first line at the foot (`.cockpit-ftstrip`). Rendered here, because a cascade test models the classes it is given.
+describe('the QSO strip parks against the shell: its wrapper has no box', () => {
+  it('the strip is the body’s child, the body is flat, and the body is the shell’s child', () => {
+    const { container } = renderCockpit({})
+    const strip = container.querySelector('.cockpit-qso')
+    expect(strip?.classList.contains('cockpit-ftstrip'), 'the strip lost its parking rule').toBe(true)
+    expect(strip?.querySelector('.cq-txctl .op-btn.stop'), 'control: Stop TX is in the line that parks').not.toBeNull()
+    const body = strip?.parentElement
+    expect(body?.classList.contains('cockpit-body')).toBe(true)
+    expect(body?.classList.contains('cockpit-flat'), 'the body is a box again: the strip cannot park outside it').toBe(true)
+    expect(body?.parentElement?.matches('main.operate-cockpit'), 'a wrapper with a box stands between the body and the shell').toBe(true)
+  })
+})
+
 describe('TX meters: a fixed strip cell, never a body row', () => {
   it('no permanent .ph-txmeters row under .cockpit-body; the cell sits in the strip', () => {
     const { container } = renderCockpit({})
@@ -638,5 +656,26 @@ describe('the warn-only FD banned-mode chip in the header (a status line, never 
   it('absent with FD off — the stock header is unchanged', () => {
     const { container } = renderCockpit({})
     expect(container.querySelector('.fd-advisory, .le-fd-nocredit')).toBeNull()
+  })
+})
+
+// STOP TX STAYS PUT WHEN CAT DROPS. The header is in flow above the QSO strip, so a box the header
+// adds or drops re-wraps its rows and moves Stop TX: SplitControl rendered only while `catOk`, and
+// Stop TX jumped 26 to 56 px every time CAT went down (measured in real Chrome). A state change may
+// repaint a header box (the CAT pill, a disabled control); it may not add or remove one.
+const headerBoxes = () =>
+  [...document.querySelectorAll('.cockpit-header *')].map((e) => `${e.tagName.toLowerCase()}.${e.classList[0] ?? ''}`)
+
+describe('the header with CAT up and down', () => {
+  it('draws the same boxes either way, Split included and disabled without CAT', () => {
+    const { element } = cockpitElement({})
+    const view = render(element)
+    const up = headerBoxes()
+    expect(up).toContain('div.ph-split')
+    const snap = element.props.snap as AppSnapshot
+    view.rerender(cloneElement(element, { snap: { ...snap, radio: { ...snap.radio, catOk: false } } }))
+    expect(headerBoxes()).toEqual(up)
+    const split = document.querySelector('.cockpit-header .ph-split')!
+    for (const b of within(split as HTMLElement).getAllByRole('button')) expect((b as HTMLButtonElement).disabled).toBe(true)
   })
 })
