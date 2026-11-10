@@ -8917,7 +8917,7 @@ export const ZH: PartialCatalog = {
   "settings.amplifier.follow.hint": "无需询问即把功放步进到你所在的波段。默认关闭 — 这是唯一会自行动作的功放控件。它在发射时绝不移动功放，并且一次只步进一个波段，每步之后检查功放实际所在位置，而不是假定它已经到了。⚠️ 如果你的功放已通过其自带的波段数据线跟随电台（多数 SPE 安装方式如此），请保持关闭：硬件在做同一件事，两套东西同时操控一个波段比只用其一更糟。",
   "settings.amplifier.txDelay.label": "功放发射延迟",
   "settings.amplifier.txDelay.value": "{{ms}} 毫秒",
-  "settings.amplifier.txDelay.hint": "Nexus 让电台进入发射后，会等待这段时间再送出音频，使由电台控制的功放在射频到达前完成切换。0 = 关闭。只在由 Nexus 的音频产生射频时有效：SSB 和数据模式、话音模式下的电脑麦克风或远程麦克风、声卡 CW 以及调谐。对 FM、AM、FSK RTTY、电台自己发送的 CW、电台自带的麦克风、VOX 或靠射频检测切换的功放无效：这些请使用电台自身的发射延迟。FT8 每次发射开头已有半秒静音，因此除非电台进入发射很慢，否则不会有任何变化。FT4 保持 WSJT-X 的时序，忽略此设置。FT2 的每次发射会晚这么多开始。",
+  "settings.amplifier.txDelay.hint": "Nexus 让电台进入发射后，会等待这段时间再送出音频，使由电台控制的功放在射频到达前完成切换。0 = 关闭。只在由 Nexus 的音频产生射频时有效：SSB 和数据模式、话音模式下的电脑麦克风或远程麦克风、声卡 CW 以及调谐。对 FM、AM、FSK RTTY、电台自己发送的 CW、电台自带的麦克风、VOX 或靠射频检测切换的功放无效：这些请使用电台自身的发射延迟。FT8 每次发射开头已有半秒静音，因此除非电台进入发射很慢，否则不会有任何变化。FT4 保持 WSJT-X 的时序，忽略此设置。FT2 的每次发射会晚这么多开始。FT1 上较长的延迟会在时隙边界处截掉每次发射的末尾，但仍能解码。",
   "settings.amplifier.port.label": "功放端口",
   "settings.amplifier.port.hint": "用它自己的端口，不是 CAT 用的那个 — 串口只能打开一次，共用会让电台连不上。速率会自动推算。",
   "settings.amplifier.link.label": "连接方式",
