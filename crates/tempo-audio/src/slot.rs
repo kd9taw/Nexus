@@ -1369,7 +1369,8 @@ mod tests {
     /// nor a fake over's length is the key's any more there. Every other slot tier still holds PTT
     /// from the key ([`tx_deadline_ms`]), and FT2's 980 ms of slack, less any amplifier TX delay
     /// (`amp_shortfall_samples`), keeps an on-time or a 300 ms-late key clear of its clamp, as FT8's
-    /// 1.86 s did. These tests run with no delay; at 500 ms a 300 ms-late key cuts FT2's tail.
+    /// 1.86 s did. These tests run with no delay; at 500 ms FT2 keeps its whole tail for a key up to
+    /// 480 ms late, and past that the tail is what gives first.
     fn armed_engine_on(tier: tempo_app::dto::Tier) -> Engine {
         let mut eng = Engine::new("W9XYZ", "EN37", 0);
         eng.set_tier(tier);
