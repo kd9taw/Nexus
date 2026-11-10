@@ -3021,6 +3021,65 @@ fn a_band_change_just_before_a_boundary_pre_sets_after_it() {
     );
 }
 
+/// ⛔ A BAND CHANGE JUST BEFORE THIS STATION'S OWN SLOT DOES NOT DELAY ITS KEY. The band changes 3 s
+/// before the own boundary, inside the pre-set's lead, and Call CQ is pressed in the other period,
+/// so the over is due on the boundary's own tick. A boundary's tick has the whole slot ahead of it,
+/// so the pre-set used to run there, ahead of the key, for up to its 1 s budget plus a write's
+/// deadline, and the key waited behind it: up to about 4 s on a 2.5 s link, the over's first
+/// symbols lost on the slot clock. Nothing is pre-set on a boundary's tick now, and the key writes
+/// the TX dial, mode and split itself under its own 500 ms budget. On a radio that answers at once
+/// it keys on that tick. On one at 300 ms a write the tick no longer runs the pre-set's four
+/// writes (1.2 s) ahead of a key: the key's own writes miss its budget and it is refused, as a
+/// radio that slow was refused before the pre-set existed, instead of keying 1.2 s late.
+#[test]
+fn a_band_change_just_before_an_own_boundary_does_not_delay_its_key() {
+    for delay_ms in [0, 300] {
+        let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+        let _ = b.overs(1);
+        let _ = b.step_to_cycle_ms(27_000.0);
+        let mut before = b.qsy_to_40m(|_| {});
+        b.call_cq_now();
+        // The live loop's boundary tick lands a few ms past the boundary, with the whole slot
+        // ahead; this bench's ticks fall on it exactly, where no time is left to the next one.
+        b.t += 5.0;
+        before.extend(b.step_to_cycle_ms(0.0)); // up to, not into, the boundary's tick
+        assert!(
+            !before.iter().any(|l| l == "I 7073500" || is_key(l)),
+            "{delay_ms} ms: premise: nothing written or keyed inside the lead: {before:?}"
+        );
+        b.radio.vfos.lock().unwrap().split_write_delay_ms = delay_ms;
+        let started = std::time::Instant::now();
+        let tick = b.ticks(1);
+        let held = started.elapsed();
+        if delay_ms == 0 {
+            assert!(b.radio.keyed(), "the over did not key on its boundary's tick: {tick:?}");
+            assert_eq!(
+                split_writes(&tick),
+                ["S 1 VFOB", "I 7073500", "X PKTUSB -1", "S 1 VFOB", "T 1"],
+                "the boundary's tick"
+            );
+        } else {
+            assert!(
+                held < std::time::Duration::from_millis(1_000),
+                "{delay_ms} ms: the boundary's tick held its key {held:?} behind split writes"
+            );
+            assert!(
+                !tick.iter().any(|l| is_key(l)),
+                "{delay_ms} ms: keyed past the key's own budget: {tick:?}"
+            );
+            // The pre-set then goes while the station receives, so the next over finds it.
+            let after = b.ticks(100);
+            assert!(
+                b.rig
+                    .split_confirmed
+                    .as_ref()
+                    .is_some_and(|c| c.tx_hz == Some(FT8_40M_TX_DIAL)),
+                "{delay_ms} ms: the TX dial not put on the radio after the refusal: {after:?}"
+            );
+        }
+    }
+}
+
 /// The band button pressed twice in quick succession (40 m, then 30 m 100 ms later): one pre-set,
 /// for the band it settled on.
 #[test]

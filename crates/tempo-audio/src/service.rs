@@ -7789,12 +7789,14 @@ impl RadioLoop {
     /// [`crate::slot::SPLIT_PRESET_LEAD_MS`] to the next slot boundary, counted from where the tick
     /// is now (`lead_ms`), so writes started clear of a boundary are done before it.
     ///
-    /// ⚠️ A BOUNDARY'S OWN TICK HAS THE WHOLE SLOT AHEAD, so a pre-set owed as this station's own slot
-    /// starts runs ahead of its key on that tick: a band change in the last 4.3 s or so before it
-    /// (the lead and the settle), with TX on by then. The key comes late by the writes' length, up
-    /// to about 4 s on a 2.5 s link. FT8's and FT4's overs stay on the slot clock and lose leading
-    /// symbols: a slow-link FT4 over can lose so many that it does not decode. Before the pre-set
-    /// such a radio was refused at the key instead.
+    /// ⛔ AND NEVER ON A TICK WHOSE BOUNDARY IS STILL TO BE HANDLED (`last_slot` short of this slot):
+    /// a key may be due on it. A boundary's own tick has the whole slot ahead, so `lead_ms` alone let
+    /// a pre-set owed as this station's own slot starts (a band change in the last 4.3 s or so
+    /// before it, the lead and the settle, with TX on by then) run ahead of that key, and the key
+    /// came late by the writes' length, up to about 4 s on a 2.5 s link: an FT8 or FT4 over lost
+    /// that much of its start on the slot clock, a slow-link FT4 one so much that it did not decode.
+    /// Now the key writes the TX dial itself, under its own budget, and a radio too slow for that is
+    /// refused at the key as it was before the pre-set existed; the pre-set goes on a later tick.
     ///
     /// Never on a tick that opened the CAT
     /// link (`reconnected`: it may have spent a connect timeout) or with the link closed, on a radio
@@ -7837,7 +7839,8 @@ impl RadioLoop {
             && !self.tuning_keyed
             && !rig.keyed
             && !self.rig_keyed
-            && lead_ms >= crate::slot::SPLIT_PRESET_LEAD_MS;
+            && lead_ms >= crate::slot::SPLIT_PRESET_LEAD_MS
+            && self.last_slot == Some(self.clock.slot_index(now));
         let free = self.may_key()
             && rig.has_control()
             && !reconnected
@@ -15778,8 +15781,8 @@ impl RadioLoop {
         // ⭐ SPLIT OPERATION = RIG'S TX DIAL GOES ON THE RADIO WHILE IT RECEIVES, AFTER THE DIAL
         // CHANGES, as WSJT-X writes it from `setXIT` on a band change, so the next over's key finds
         // it confirmed and sends only split on last. ⚠️ OUTSIDE THE ENGINE LOCK, as the release
-        // retry above: a slow radio takes its time here. Writes on an own boundary's tick make that
-        // key wait (`Self::preset_rig_split_due`).
+        // retry above: a slow radio takes its time here. Never on a boundary's own tick, where a
+        // key may be due (`Self::preset_rig_split_due`).
         // The lead to the next boundary from where the tick is NOW: CAT earlier in the tick (the
         // polls, a retune, the release retry above) has already spent some of it.
         let lead_ms =
