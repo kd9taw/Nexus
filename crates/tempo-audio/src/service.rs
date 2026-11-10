@@ -16479,6 +16479,11 @@ impl RadioLoop {
             // for this station's next slot where WSJT-X keys it at once. Every other tier keys
             // only an over that still fits whole before the next boundary.
             let on_slot_clock = crate::slot::wsjtx_tx_window_ms(eng.tier()).is_some();
+            let need_ms = crate::slot::immediate_start_need_ms(
+                need_ms,
+                on_slot_clock,
+                crate::slot::slot_amp_delay_ms(&eng, self.holds_tx()),
+            );
             let deficit_ms = (need_ms - room_ms).max(0.0);
             // The decision is kept: the key's own lateness is measured from it (below).
             let period_ms = self.cur_slot_secs * 1000.0;
@@ -16557,13 +16562,27 @@ impl RadioLoop {
                                 let keyed_ms =
                                     (now_unix_ms() - self.clock_offset_ms as f64).max(now);
                                 let over = crate::slot::play_keyed_over(
-                                    &eng, backend, &waves, keyed_ms, now,
+                                    &eng,
+                                    backend,
+                                    &waves,
+                                    keyed_ms,
+                                    now,
+                                    crate::slot::slot_amp_delay_ms(&eng, held),
                                 );
                                 self.tx_until_ms = Some(over.tx_until_ms);
                                 self.slot_audio_stop =
                                     over.audio_until_ms.map(|a| (a, over.tx_until_ms));
                             } else {
                                 let mut secs = 0.0f32;
+                                // The amplifier TX delay, what the over's own lead-in leaves of it.
+                                let shortfall = crate::slot::amp_shortfall_samples(
+                                    &waves,
+                                    crate::slot::slot_amp_delay_ms(&eng, held),
+                                );
+                                if shortfall > 0 {
+                                    secs += shortfall as f32 / tempo_fast::SAMPLE_RATE;
+                                    backend.play(&vec![0.0; shortfall]);
+                                }
                                 let last = waves.len() - 1;
                                 for (i, w) in waves.iter().enumerate() {
                                     let mut w2: &[f32] = if i == 0 && trim_samples > 0 {
