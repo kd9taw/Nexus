@@ -352,8 +352,8 @@ fn ft8_and_js8_blank_inside_the_delay_and_keep_the_slot_clock() {
 const FT8_PERIOD_MS_FOR_TESTS: f64 = 15_000.0;
 
 /// ⭐ T4. A TIER PLAYED WHOLE FROM ITS KEY MOVES LATER BY WHAT ITS OWN LEAD-IN DOES NOT COVER, and
-/// is held that much longer, never past its slot: FT2 and FT1 (no lead-in) by the whole delay, the
-/// long lead-ins not at all.
+/// is held that much longer, never past its slot: FT2 (no lead-in) by the whole delay, FT1 by what
+/// is past its 0.3 s lead-in, the long lead-ins not at all.
 #[test]
 fn a_tier_off_the_slot_clock_moves_later_by_its_shortfall() {
     for (tier, lats) in tiers().into_iter().filter(|(t, _)| *t != Tier::Ft8) {
@@ -390,12 +390,14 @@ fn a_tier_off_the_slot_clock_moves_later_by_its_shortfall() {
     }
     // The tiers' own lead-ins, which decide what each takes.
     let lead = |t| first_tone(&over_on(t).concat()).unwrap();
-    for t in [Tier::Ft2, Tier::TempoFast] {
-        assert!(
-            lead(t) < 12,
-            "{t:?} starts at its key (a ramp's first sample is 0)"
-        );
-    }
+    assert!(
+        lead(Tier::Ft2) < 12,
+        "FT2 starts at its key (a ramp's first sample is 0)"
+    );
+    assert!(
+        (samples(300.0)..samples(300.0) + 12).contains(&lead(Tier::TempoFast)),
+        "FT1 starts 0.3 s after its key"
+    );
     for t in [Tier::Q65, Tier::Fst4, Tier::Jt65] {
         assert!(lead(t) >= samples(500.0), "{t:?} covers any delay");
     }
@@ -640,10 +642,11 @@ fn amp_delay_timing_sweep_decodes_as_the_other_station_hears_it() {
     sweep(&[0.0, 20.0, 50.0, 100.0, 200.0, 300.0, 400.0, 500.0]);
 }
 
-/// ⚠️ FT1'S LIMIT, PINNED: its over fills its 4 s slot to within about 0.46 s, and it starts at its
-/// key, so key latency and the delay together come out of that 0.46 s. Within it every tone goes
-/// out; past it PTT drops at the boundary on the last tones, as it does today for a key that late.
-/// The setting reaches 500 ms, so on FT1 the longest delays cost the over's last tones even on time.
+/// ⚠️ FT1'S LIMIT, PINNED: its over starts its tones 0.3 s after its key and ends them about 0.16 s
+/// before its 4 s slot does, so key latency and what of the delay is past the 0.3 s lead-in come out
+/// of that 0.16 s. Within it every tone goes out; past it PTT drops at the boundary on the last
+/// tones, as it does for a key that late with no delay. A delay up to 0.3 s costs FT1 nothing; the
+/// longest cost the over's last tones even on time.
 #[test]
 fn ft1_keeps_its_tones_while_key_and_delay_fit_its_slack() {
     let eng = engine_on(Tier::TempoFast, 0);
@@ -653,7 +656,7 @@ fn ft1_keeps_its_tones_while_key_and_delay_fit_its_slack() {
     let last_tone_ms = (all.iter().rposition(|&x| x != 0.0).unwrap() + 1) as f64 / 12.0;
     let slack_ms = period_ms - last_tone_ms;
     assert!(
-        (400.0..=500.0).contains(&slack_ms),
+        (150.0..=180.0).contains(&slack_ms),
         "FT1's slack moved: {slack_ms:.1} ms"
     );
     let slot_start = 1_000.0 * period_ms;
@@ -663,15 +666,49 @@ fn ft1_keeps_its_tones_while_key_and_delay_fit_its_slack() {
             let p = keyed_over(&eng, &waves, keyed, f64::from(d));
             let tones_end =
                 keyed + (p.samples.iter().rposition(|&x| x != 0.0).unwrap() + 1) as f64 / 12.0;
+            let past_lead = (f64::from(d) - 300.0).max(0.0);
             assert_eq!(
                 tones_end <= p.tx_until_ms,
-                lat + f64::from(d) <= slack_ms + 0.1,
+                lat + past_lead <= slack_ms + 0.1,
                 "FT1 keyed {lat} ms in, delay {d} ms: tones end {:.1} ms, PTT {:.1} ms",
                 tones_end - slot_start,
                 p.tx_until_ms - slot_start
             );
         }
     }
+}
+
+/// FT1 with no delay, keyed on its boundary, as the loop plays it: the first tone 0.3 s after the
+/// key (the lead-in the decoder needs to hear a peer a little fast), the last tone inside the slot
+/// where `tx_over_secs` says, and PTT dropped at the boundary.
+#[test]
+fn ft1_on_time_with_no_delay_sounds_from_its_lead_in_to_inside_its_slot() {
+    let eng = engine_on(Tier::TempoFast, 0);
+    let waves = over_on(Tier::TempoFast);
+    let period_ms = eng.active_slot_secs() * 1000.0;
+    let slot_start = 1_000.0 * period_ms;
+    let p = keyed_over(&eng, &waves, slot_start, 0.0);
+    let first = first_tone(&p.samples).expect("tones");
+    assert!(
+        (samples(300.0)..samples(300.0) + 12).contains(&first),
+        "FT1's first tone {:.1} ms after its key, not 300 ms",
+        first as f64 / 12.0
+    );
+    let end_ms = (p.samples.iter().rposition(|&x| x != 0.0).unwrap() + 1) as f64 / 12.0;
+    assert!(
+        end_ms < period_ms - 150.0,
+        "FT1's tones end {end_ms:.1} ms into a {period_ms} ms slot"
+    );
+    assert!(
+        (eng.tx_over_secs() * 1000.0 - end_ms).abs() < 10.0,
+        "tx_over_secs {} but the tones end at {end_ms:.1} ms",
+        eng.tx_over_secs()
+    );
+    assert_eq!(
+        p.tx_until_ms,
+        slot_start + period_ms,
+        "PTT at the boundary"
+    );
 }
 
 /// FT1 at the longest delay with a slow key, 500 ms with 200 ms of latency: well past its slack, so

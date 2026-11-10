@@ -272,8 +272,9 @@ pub(crate) fn amp_delay_samples(ms: f64) -> usize {
 
 /// The silence an over that plays whole from its key must have in front of it to keep its first
 /// tone `amp_delay_ms` after the key: the delay less the silence the over already starts with (its
-/// own lead-in), never less than none. FT2 and FT1 start at their key, so they take the whole delay;
-/// FST4, Q65, JT65 and WSPR, whose lead-ins are 0.5 s and longer, never take any.
+/// own lead-in), never less than none. FT2 starts at its key, so it takes the whole delay; FT1's
+/// 0.3 s lead-in covers a delay up to 0.3 s and it takes the rest; FST4, Q65, JT65 and WSPR, whose
+/// lead-ins are 0.5 s and longer, never take any.
 pub(crate) fn amp_shortfall_samples(waves: &[Vec<f32>], amp_delay_ms: f64) -> usize {
     let want = amp_delay_samples(amp_delay_ms);
     let mut leading = 0usize;
