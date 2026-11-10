@@ -20,6 +20,16 @@
 // THE CONTROL, run at every case where a mirror took the click: the same page with the stop layer taken away (`.stop-layer { display: none }`).
 // The same click must stop NOTHING; if it stops, the check cannot fail and the probe says so instead of passing.
 //
+// THE FILLED IOTA BOX, in the two log forms that have no box of their own: the prompt to log (`overlay=logconfirm`,
+// opened with its box filled) and the log strip (`overlay=strip`, a call typed with real key input), each with the
+// station's reference (EU-901, "from the spot") under a very long group name (`&iota=1`), at 1024×768 and 1920×1080
+// at the smallest (65 %) and largest (175 %) UI scale. Asserted: the box holds the reference and is the topmost thing
+// at its centre, the group name is drawn whole inside its form and covers the centre of no control, the source is
+// shown, nothing scrolls sideways (the page none; the form no more than the same form with no box — the prompt already
+// does at these sizes on this page, from its field labels), and Log is inside the window and topmost (the prompt's once, the
+// strip's once scrolled to). Its CONTROL, per form (`&iotacontrol=1`, 1024×768 at 175 %): the name may not wrap, and
+// must come back NOT drawn whole.
+//
 // exit: 0 every case clear · 1 a red, or a control that could not fail · 2 the page never drew
 import { createServer } from 'vite'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -187,9 +197,152 @@ async function run([W, H], [overlay, isOpen], control) {
 
 const same = (a, b) => a && b && a.every((v, i) => Math.abs(v - b[i]) <= 1)
 
+/** The filled IOTA box of `form` ('logconfirm' | 'strip'), as drawn. */
+const IOTA_MEASURE = (form) => `(() => {
+  const host = document.querySelector(${JSON.stringify(form === 'logconfirm' ? '.logconfirm' : '.probe-below')})
+  const field = host && host.querySelector('.iota-offer')
+  const input = field && field.querySelector('input')
+  const name = field && field.querySelector('.iota-name-text')
+  if (!input || input.value !== 'EU-901' || !name) return { waiting: true, value: input ? input.value : null }
+  field.scrollIntoView({ block: 'nearest' })
+  const r = (el) => el.getBoundingClientRect()
+  const top = (el) => {
+    const b = r(el)
+    if (b.width === 0 || b.height === 0) return false
+    const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)
+    return !!hit && (hit === el || el.contains(hit))
+  }
+  const h = r(host), n = r(name)
+  const controls = [...host.querySelectorAll('input, button, select, textarea')].filter((el) => r(el).width > 0)
+  const covers = controls.filter((el) => { const b = r(el); const x = b.left + b.width / 2, y = b.top + b.height / 2; return x >= n.left && x <= n.right && y >= n.top && y <= n.bottom })
+    .map((el) => el.getAttribute('aria-label') || el.textContent.trim() || el.tagName)
+  const zoom = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')) || 1
+  const line = parseFloat(getComputedStyle(name).lineHeight) || parseFloat(getComputedStyle(name).fontSize) * 1.2 * zoom
+  const inputTop = top(input)
+  const source = field.querySelector('.iota-offer-from')?.textContent.trim() ?? null
+  const log = ${form === 'logconfirm' ? `host.querySelector('.logconfirm-log')` : `[...host.querySelectorAll('button')].find((b) => /^log$/i.test(b.textContent.trim()))`}
+  if (log) log.scrollIntoView({ block: 'nearest' })
+  const l = log && r(log)
+  return {
+    zoom,
+    page: document.scrollingElement.scrollWidth - document.scrollingElement.clientWidth,
+    overflow: host.scrollWidth - host.clientWidth,
+    form: { left: Math.round(h.left), right: Math.round(h.right) },
+    name: { left: Math.round(n.left), right: Math.round(n.right), top: Math.round(n.top), bottom: Math.round(n.bottom) },
+    nameLines: Math.round(n.height / line),
+    nameWhole: n.width > 0 && n.left >= h.left - 0.5 && n.right <= h.right + 0.5 && name.scrollWidth <= name.clientWidth + 1,
+    covers, inputTop, source,
+    logInWindow: !!l && l.left >= 0 && l.top >= 0 && l.right <= innerWidth && l.bottom <= innerHeight,
+    logTop: !!log && top(log),
+  }
+})()`
+
+/** How far `form` scrolls sideways with NO IOTA box (no `&iota=1`): the baseline the box may add nothing to. The
+ *  prompt to log already scrolls sideways on this page with no box at all (its field labels), which is not the box's. */
+const BARE = (form) => `(() => {
+  const host = document.querySelector(${JSON.stringify(form === 'logconfirm' ? '.logconfirm' : '.probe-below')})
+  return host ? host.scrollWidth - host.clientWidth : null
+})()`
+
+async function measureBare(form, w, h, zoom) {
+  const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
+  const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
+  const call = (method, params) => browser.call(method, params, sessionId)
+  try {
+    await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+    await call('Page.navigate', { url: `${origin}/probe/stopabove.html?overlay=${form}&zoom=${zoom}` })
+    let last = null
+    for (let i = 0; i < 60; i++) {
+      await sleep(150)
+      const r = await call('Runtime.evaluate', { expression: BARE(form), returnByValue: true })
+      const now = r.exceptionDetails ? null : r.result.value
+      if (now != null && now === last) return now
+      last = now
+    }
+    return last
+  } finally {
+    await browser.call('Target.closeTarget', { targetId })
+  }
+}
+
+async function measureIota(form, w, h, zoom, control) {
+  const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
+  const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
+  const call = (method, params) => browser.call(method, params, sessionId)
+  const evaluate = async (expression) => {
+    const r = await call('Runtime.evaluate', { expression, returnByValue: true })
+    return r.exceptionDetails ? null : r.result.value
+  }
+  try {
+    await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+    await call('Page.navigate', { url: `${origin}/probe/stopabove.html?overlay=${form}&iota=1&zoom=${zoom}${control ? '&iotacontrol=1' : ''}` })
+    if (form === 'strip') {
+      let focused = false
+      for (let i = 0; i < 100 && !focused; i++) {
+        await sleep(100)
+        focused = await evaluate(`(() => { const i = document.querySelector('input.le-call'); if (!i) return false; i.focus(); return document.activeElement === i })()`)
+      }
+      if (!focused) return null
+      await call('Input.insertText', { text: 'IA5X' })
+    }
+    let last = null
+    for (let i = 0; i < 100; i++) {
+      await sleep(150)
+      const now = await evaluate(IOTA_MEASURE(form))
+      if (now && !now.waiting && last && !last.waiting && JSON.stringify(now) === JSON.stringify(last)) break
+      last = now
+    }
+    return last
+  } finally {
+    await browser.call('Target.closeTarget', { targetId })
+  }
+}
+
+const IOTA_SIZES = [
+  { w: 1024, h: 768, zoom: 0.65 },
+  { w: 1024, h: 768, zoom: 1.75 },
+  { w: 1920, h: 1080, zoom: 0.65 },
+  { w: 1920, h: 1080, zoom: 1.75 },
+]
+const IOTA_FORMS = ['logconfirm', 'strip']
+
 let code = 0
 let ran = 0
 try {
+  for (const form of IOTA_FORMS) {
+    for (const { w, h, zoom } of IOTA_SIZES) {
+      const at = `${form} ${w}×${h} at ${Math.round(zoom * 100)}%`
+      const m = await measureIota(form, w, h, zoom, false)
+      const bare = await measureBare(form, w, h, zoom)
+      console.log(`stopabove-probe: filled IOTA box, ${at}: ${JSON.stringify(m)} (no box: overflow ${bare})`)
+      if (!m || m.waiting) {
+        console.error(`stopabove-probe: the IOTA box never filled in the ${at}`)
+        code = 2
+        continue
+      }
+      const red = []
+      if (Math.abs(m.zoom - zoom) > 0.001) red.push(`the UI scale is ${m.zoom}, not ${zoom}`)
+      if (m.page > 0) red.push(`the page scrolls sideways by ${m.page} px`)
+      if (bare == null) red.push('the form never drew without the box')
+      else if (m.overflow > bare + 1) red.push(`the box makes the form scroll sideways: ${m.overflow} px, ${bare} without it`)
+      if (!m.nameWhole) red.push(`the group name is not drawn whole inside its form ${JSON.stringify(m.name)} vs ${JSON.stringify(m.form)}`)
+      if (m.covers.length) red.push(`the group name covers ${m.covers.join(', ')}`)
+      if (!m.inputTop) red.push('the IOTA box is covered')
+      if (m.source !== 'from the spot') red.push(`the source reads ${JSON.stringify(m.source)}`)
+      if (!m.logInWindow) red.push('Log is outside the window')
+      if (!m.logTop) red.push('Log is covered')
+      if (red.length) {
+        console.error(`stopabove-probe: RED (filled IOTA box) at ${at} — ${red.join('; ')}`)
+        code = code || 1
+      }
+    }
+    const c = await measureIota(form, 1024, 768, 1.75, true)
+    console.log(`stopabove-probe: CONTROL group name kept on one line, ${form} 1024×768 at 175%: ${JSON.stringify(c)}`)
+    if (!c || c.waiting || c.nameWhole) {
+      console.error(`stopabove-probe: CONTROL FAILED (${form}) — the unwrapped group name still read as drawn whole; the check cannot fail`)
+      code = code || 1
+    }
+  }
   for (const size of SIZES) {
     for (const ov of OVERLAYS) {
       const tag = `${size[0]}×${size[1]} ${ov[0]}`
@@ -237,7 +390,7 @@ try {
     console.error('stopabove-probe: no case ran')
     code = code || 1
   }
-  if (code === 0) console.log(`stopabove-probe: PASS — ${ran} cases: with ${OVERLAYS.map(([o]) => o).join(', ')} open, Stop TX is on top where it is drawn, unmoved, one real click and one tap each stop once, the mirror is unseen by screen readers and follows its button at once, the overlay stays open and the keyboard stays where it was, at ${SIZES.map(([w, h, v]) => `${w}×${h} (${v})`).join(' and ')}; each control (no stop layer) caught`)
+  if (code === 0) console.log(`stopabove-probe: PASS — ${ran} cases: with ${OVERLAYS.map(([o]) => o).join(', ')} open, Stop TX is on top where it is drawn, unmoved, one real click and one tap each stop once, the mirror is unseen by screen readers and follows its button at once, the overlay stays open and the keyboard stays where it was, at ${SIZES.map(([w, h, v]) => `${w}×${h} (${v})`).join(' and ')}; each control (no stop layer) caught. The filled IOTA box of the prompt to log and of the log strip at ${IOTA_SIZES.map((s) => `${s.w}×${s.h} ${Math.round(s.zoom * 100)}%`).join(', ')}: filled, its long group name whole and covering nothing, the source shown, no sideways scroll added (the page none; the prompt's form no more than without the box), Log in the window and on top; each unwrapped-name control caught`)
   process.exitCode = code
 } finally {
   await browser.stop()
