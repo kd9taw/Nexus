@@ -9069,6 +9069,10 @@ export const EN = {
   'settings.amplifier.follow.label': 'Follow the radio\u2019s band',
   'settings.amplifier.follow.hint':
     'Step the amplifier to the band you are on, without being asked. Off by default \u2014 this is the one amplifier control that acts on its own. It never moves the amplifier while you are transmitting, and it steps one band at a time, checking where the amplifier actually is after each one rather than assuming it got there. \u26a0\ufe0f If your amplifier already follows the radio through its own band-data cable, as most SPE installations do, leave this off: the hardware is doing the same job, and two things steering one band is worse than either alone.',
+  'settings.amplifier.txDelay.label': "Amplifier TX delay",
+  'settings.amplifier.txDelay.value': "{{ms}} ms",
+  'settings.amplifier.txDelay.hint':
+    "After Nexus keys the radio it waits this long before sending any audio, so an amplifier keyed from the radio has time to switch before RF reaches it. 0 = off. It helps only where Nexus\u2019s audio makes the RF: SSB and data modes, the computer or remote microphone on Phone, soundcard CW, and Tune. It cannot help with FM, AM, FSK RTTY, CW sent by the radio itself, the radio\u2019s own microphone, VOX, or an amplifier keyed by RF sense: use the radio\u2019s own TX delay for those. FT8 already has half a second of quiet at the start of each over, so this changes nothing there unless the radio is slow to key. FT4 keeps WSJT-X\u2019s own timing and ignores this. FT2 overs start later by this much.",
   'settings.amplifier.port.label': 'Amplifier port',
   'settings.amplifier.port.hint':
     'Its own port, not the one CAT uses — a serial port can only be open once, so sharing it stops the radio connecting. The speed is worked out for you.',

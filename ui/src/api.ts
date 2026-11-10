@@ -3898,6 +3898,9 @@ export interface RadioProfilePatch {
   ampModel: string
   ampPort: string
   ampFollowBand: boolean
+  /** Amplifier TX delay, ms: how long after the key this radio's audio is held back so an amplifier
+   * keyed from the radio has switched. 0 = off, 0 to 500. Set at the station only. */
+  ampTxDelayMs: number
   /** THIS radio's FlexRadio LAN IP (SmartSDR API, port 4992) for the native panadapter/DAX
    * workers. Per-radio since 2026-08-18: it was flat-only, so the per-radio Edit flow — which
    * saves through THIS patch — silently dropped it, and two Flexes could not both be configured

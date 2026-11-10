@@ -43,6 +43,7 @@
   "pcMic",
   "pcMicDevice",
   "pcMicGainDb",
+  "ampTxDelayMs",
   "cwKeyer",
   "cwKeyPort",
   "cwKeyLine",

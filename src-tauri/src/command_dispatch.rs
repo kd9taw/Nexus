@@ -304,6 +304,9 @@ pub(crate) fn keep_the_shacks_transmit_settings(
     save.flex_native_unbenched = edited.map_or(shack.flex_native_unbenched, |radio| {
         radio.flex_native_unbenched
     });
+    // The amplifier TX delay: the time the amplifier behind the shack's radio needs to switch. Set
+    // at the station, by someone who knows the amplifier; a client's form keeps the shack's.
+    save.amp_tx_delay_ms = edited.map_or(shack.amp_tx_delay_ms, |radio| radio.amp_tx_delay_ms);
     // ⛔ The one setting that names a program for the shack to run: TQSL, which signs a LoTW upload
     // from the Upload button (which runs from afar too) or the automatic batch, with nobody at the
     // shack to see what it was. Every other path a save carries is data: a voice-keyer slot's WAV,
@@ -317,10 +320,10 @@ pub(crate) fn keep_the_shacks_transmit_settings(
 }
 
 /// What one radio's edit from afar may not change ([`SETTINGS_FROM_AFAR`]): its PTT method and
-/// port, the Flex client's Beta for CW, Tune and the ATU, and the shack computer's microphone for
-/// Phone (the switch, the device and the gain), put back into `patch` as the shack has
-/// them for radio `id`. From the shack's own screen (`None`), or for a radio the shack does not
-/// have, the patch is taken as it came.
+/// port, the Flex client's Beta for CW, Tune and the ATU, the shack computer's microphone for
+/// Phone (the switch, the device and the gain) and the amplifier TX delay, put back into `patch` as
+/// the shack has them for radio `id`. From the shack's own screen (`None`), or for a radio the
+/// shack does not have, the patch is taken as it came.
 pub(crate) fn keep_the_shacks_radio_ptt(
     shack: &tempo_app::settings::Settings,
     id: u32,
@@ -338,6 +341,8 @@ pub(crate) fn keep_the_shacks_radio_ptt(
         patch.pc_mic = Some(radio.pc_mic);
         patch.pc_mic_device = Some(radio.pc_mic_device.clone());
         patch.pc_mic_gain_db = Some(radio.pc_mic_gain_db);
+        // The amplifier TX delay, set at the station only.
+        patch.amp_tx_delay_ms = Some(radio.amp_tx_delay_ms);
     }
 }
 
@@ -521,7 +526,7 @@ pub(crate) const PROFILE_CALL_SETTING: &str = "mycall";
 /// ([`keep_the_shacks_transmit_settings`]), then the addresses the shack sends a stored key or
 /// password to ([`keep_the_shacks_credential_addresses`]). A test changes each setting alone in a save from
 /// afar and holds this list to exactly the ones that come back.
-pub(crate) const STATION_ONLY_SETTINGS: [&str; 63] = [
+pub(crate) const STATION_ONLY_SETTINGS: [&str; 64] = [
     "js8AprsRelay",
     "beaconTxPercent",
     "cqPauseSecs",
@@ -566,6 +571,7 @@ pub(crate) const STATION_ONLY_SETTINGS: [&str; 63] = [
     "pcMic",
     "pcMicDevice",
     "pcMicGainDb",
+    "ampTxDelayMs",
     "cwKeyer",
     "cwKeyPort",
     "cwKeyLine",

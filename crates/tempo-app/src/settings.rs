@@ -250,6 +250,10 @@ pub enum SatUplinkOffer {
 /// Hamlib): IC-9700, IC-910, IC-9100, IC-905. Duplicated rather than imported
 /// because `tempo-app` does not depend on `tempo-audio` — the arrow points the
 /// other way.
+/// The longest amplifier TX delay a radio takes, in ms ([`RadioProfile::amp_tx_delay_ms`]): WSJT-X's
+/// own Tx delay stops at 0.5 s, and every FT budget the delay comes out of is sized for it.
+pub const AMP_TX_DELAY_MAX_MS: u32 = 500;
+
 pub const MAIN_SUB_SAT_RIGS: [u32; 4] = [3081, 3044, 3068, 3090];
 
 /// The human DX-cluster node list a fresh install starts with under **Use my list** — the
@@ -2575,6 +2579,9 @@ pub struct Settings {
     /// switch an operator can judge and one they have to guess at.
     #[serde(default)]
     pub amp_follow_band: bool,
+    /// Amplifier TX delay, ms (flat mirror of [`RadioProfile::amp_tx_delay_ms`]).
+    #[serde(default)]
+    pub amp_tx_delay_ms: u32,
     /// ADVANCED override: an external `rotctld` daemon address `host:port`
     /// (for operators who already run their own). Non-empty wins over the
     /// integrated model/port spawn. Empty + model 0 = no rotator.
@@ -5323,6 +5330,13 @@ pub struct RadioProfile {
     pub amp_model: String,
     pub amp_port: String,
     pub amp_follow_band: bool,
+    /// Amplifier TX delay: how long after the radio is keyed, in ms, before Nexus sends any audio,
+    /// so an amplifier keyed from the radio has switched before RF reaches it. 0 = off, the
+    /// default, so nothing changes for a station that never sets it. Read through
+    /// `Engine::amp_tx_delay_ms`, which holds it to 0 to [`AMP_TX_DELAY_MAX_MS`]. Per radio: it
+    /// belongs to the amplifier behind THAT radio. Set at the station only; a save from a remote
+    /// client keeps the station's value.
+    pub amp_tx_delay_ms: u32,
     pub rotator_host: String,
     /// UNIQUE across enabled profiles (validated) — each radio's own rotctld TCP port.
     pub rotctld_port: u16,
@@ -5524,6 +5538,10 @@ pub struct RadioProfilePatch {
     pub amp_model: String,
     pub amp_port: String,
     pub amp_follow_band: bool,
+    /// See `RadioProfile::amp_tx_delay_ms`. An `Option`, like the microphone's: `None` (a form from
+    /// before it) leaves the radio's stored value alone.
+    #[serde(default)]
+    pub amp_tx_delay_ms: Option<u32>,
     pub rotator_host: String,
     pub rotctld_port: u16,
     pub native_scope: String,
@@ -5683,6 +5701,9 @@ impl RadioProfilePatch {
         p.amp_model = self.amp_model;
         p.amp_port = self.amp_port;
         p.amp_follow_band = self.amp_follow_band;
+        if let Some(v) = self.amp_tx_delay_ms {
+            p.amp_tx_delay_ms = v;
+        }
         p.rotator_baud = self.rotator_baud;
         p.rotator_host = self.rotator_host;
         p.rotctld_port = self.rotctld_port;
@@ -5832,6 +5853,7 @@ impl Default for RadioProfile {
             amp_model: String::new(),
             amp_port: String::new(),
             amp_follow_band: false,
+            amp_tx_delay_ms: 0,
             rotator_host: String::new(),
             rotctld_port: 4533,
             bands: Vec::new(),
@@ -6874,6 +6896,7 @@ impl Default for Settings {
             amp_model: String::new(),
             amp_port: String::new(),
             amp_follow_band: false,
+            amp_tx_delay_ms: 0,
             rotator_host: String::new(),
             // Satellite Doppler is OFF and unmapped by default: a station
             // with no satellite interest must never have its dial moved.
@@ -7354,6 +7377,7 @@ impl Settings {
             amp_model: self.amp_model.clone(),
             amp_port: self.amp_port.clone(),
             amp_follow_band: self.amp_follow_band,
+            amp_tx_delay_ms: self.amp_tx_delay_ms,
             rotctld_port: 4533,
             bands: Vec::new(),
             last_dial_mhz: self.dial_mhz,
@@ -7862,6 +7886,7 @@ impl Settings {
         self.amp_model = p.amp_model;
         self.amp_port = p.amp_port;
         self.amp_follow_band = p.amp_follow_band;
+        self.amp_tx_delay_ms = p.amp_tx_delay_ms;
         self.rotator_baud = p.rotator_baud;
         self.rotator_host = p.rotator_host;
         // The Flex three ride the SAME mirror as every other rig field, so every existing consumer
@@ -7925,6 +7950,7 @@ impl Settings {
             amp_model,
             amp_port,
             amp_follow_band,
+            amp_tx_delay_ms,
             flex_radio_ip,
             flex_native_pan,
             flex_native_audio,
@@ -7974,6 +8000,7 @@ impl Settings {
             self.amp_model.clone(),
             self.amp_port.clone(),
             self.amp_follow_band,
+            self.amp_tx_delay_ms,
             self.flex_radio_ip.clone(),
             self.flex_native_pan,
             self.flex_native_audio,
@@ -8024,6 +8051,7 @@ impl Settings {
             p.amp_model = amp_model;
             p.amp_port = amp_port;
             p.amp_follow_band = amp_follow_band;
+            p.amp_tx_delay_ms = amp_tx_delay_ms;
             p.flex_radio_ip = flex_radio_ip;
             p.flex_native_pan = flex_native_pan;
             p.flex_native_audio = flex_native_audio;
@@ -9605,6 +9633,7 @@ mod tests {
             amp_model: String::new(),
             amp_port: String::new(),
             amp_follow_band: false,
+            amp_tx_delay_ms: Some(120),
             rotator_host: "192.0.2.20".into(),
             rotctld_port: 4534,
             native_scope: "civ".into(),
@@ -9669,6 +9698,64 @@ mod tests {
     /// are the ones `RadioProfilePatch`'s own doc names — identity, band coverage and the
     /// `last_*` tune memory the radio loop owns — and adding a field to `RadioProfile` that is
     /// neither excluded nor in the patch fails here rather than in the field.
+    /// The amplifier TX delay is per radio, 0 unless set, and survives every path a radio's
+    /// settings take: a settings file from before it reads 0 (off, nothing changes), the flat
+    /// mirror follows the active radio both ways, a patch that carries it lands on that radio
+    /// alone, and a form from before it (`None`) leaves the stored value as it was.
+    #[test]
+    fn the_amp_tx_delay_is_per_radio_off_by_default_and_kept_by_every_path() {
+        // A settings file from before the field: off.
+        let mut old = serde_json::to_value(Settings::default()).unwrap();
+        old.as_object_mut().unwrap().remove("ampTxDelayMs");
+        let loaded: Settings = serde_json::from_value(old).unwrap();
+        assert_eq!(loaded.amp_tx_delay_ms, 0);
+        let mut profile = serde_json::to_value(RadioProfile::default()).unwrap();
+        profile.as_object_mut().unwrap().remove("ampTxDelayMs");
+        let profile: RadioProfile = serde_json::from_value(profile).unwrap();
+        assert_eq!(profile.amp_tx_delay_ms, 0);
+
+        let mut s = Settings {
+            radios: vec![
+                RadioProfile {
+                    id: 0,
+                    amp_tx_delay_ms: 50,
+                    ..RadioProfile::default()
+                },
+                RadioProfile {
+                    id: 1,
+                    amp_tx_delay_ms: 200,
+                    ..RadioProfile::default()
+                },
+            ],
+            active_radio: 1,
+            ..Settings::default()
+        };
+        s.sync_flat_from_active();
+        assert_eq!(
+            s.amp_tx_delay_ms, 200,
+            "the flat mirror is the active radio's"
+        );
+        s.amp_tx_delay_ms = 300;
+        s.sync_active_from_flat();
+        assert_eq!(
+            s.radios[1].amp_tx_delay_ms, 300,
+            "the flat edit lands on the active radio"
+        );
+        assert_eq!(s.radios[0].amp_tx_delay_ms, 50, "and on no other");
+
+        let mut edit = patch_of(&s.radios[0]);
+        edit.amp_tx_delay_ms = Some(120);
+        edit.apply_to(&mut s.radios[0]);
+        assert_eq!(s.radios[0].amp_tx_delay_ms, 120);
+        let mut older_form = patch_of(&s.radios[0]);
+        older_form.amp_tx_delay_ms = None;
+        older_form.apply_to(&mut s.radios[0]);
+        assert_eq!(
+            s.radios[0].amp_tx_delay_ms, 120,
+            "a form from before it keeps the value"
+        );
+    }
+
     #[test]
     fn editing_one_radios_amplifier_leaves_the_others_alone() {
         // The SO2R case, and the reason the amplifier is a PER-RADIO field rather than a station
@@ -9969,6 +10056,7 @@ mod tests {
             amp_model: String::new(),
             amp_port: String::new(),
             amp_follow_band: false,
+            amp_tx_delay_ms: None,
             rotator_host: String::new(),
             rotctld_port: 0,
             native_scope: String::new(),
@@ -10136,6 +10224,7 @@ mod tests {
             amp_model: String::new(),
             amp_port: String::new(),
             amp_follow_band: false,
+            amp_tx_delay_ms: None,
             rotator_host: String::new(),
             rotctld_port: 0,
             native_scope: String::new(),
@@ -10490,6 +10579,7 @@ mod tests {
             amp_model: String::new(),
             amp_port: String::new(),
             amp_follow_band: false,
+            amp_tx_delay_ms: Some(p.amp_tx_delay_ms),
             rotator_host: p.rotator_host.clone(),
             rotctld_port: p.rotctld_port,
             native_scope: p.native_scope.clone(),

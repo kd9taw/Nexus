@@ -23849,6 +23849,18 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
+    /// The active radio's amplifier TX delay, in ms: how long after a fresh key Nexus holds its
+    /// audio back so an amplifier keyed from the radio has switched before RF reaches it
+    /// ([`crate::settings::RadioProfile::amp_tx_delay_ms`]). A hand-edited value past
+    /// [`crate::settings::AMP_TX_DELAY_MAX_MS`] is taken as the maximum. 0 = off.
+    pub fn amp_tx_delay_ms(&self) -> f64 {
+        f64::from(
+            self.settings
+                .amp_tx_delay_ms
+                .min(crate::settings::AMP_TX_DELAY_MAX_MS),
+        )
+    }
+
     /// Hold (or release) a steady tune carrier. While tuning, normal slot TX is
     /// suppressed (the radio loop plays a continuous f0 sine for ATU/amp tuning).
     /// Turning tuning on is an operator action and resets the watchdog count.
@@ -70789,6 +70801,7 @@ mod tests {
             amp_model: p.amp_model.clone(),
             amp_port: p.amp_port.clone(),
             amp_follow_band: p.amp_follow_band,
+            amp_tx_delay_ms: None,
             rotator_host: p.rotator_host.clone(),
             rotctld_port: p.rotctld_port,
             native_scope: p.native_scope.clone(),
@@ -71623,6 +71636,21 @@ mod tests {
     /// The per-tier over-length table feeds the "over longer than the whole watchdog limit"
     /// refusal and the snappy-first-over room check. JS8's value is the REAL wave length per
     /// speed (`Speed::slot_fit_s`: 25.78 / 13.14 / 8.10 / 4.05 s), always under its period.
+    /// The amplifier TX delay the radio loop reads: the setting as it is, 0 by default, and a
+    /// hand-edited value past the 500 ms maximum taken as the maximum.
+    #[test]
+    fn the_amp_tx_delay_is_the_setting_held_to_its_maximum() {
+        let mut e = Engine::new("N0CALL", "EN52", 0);
+        assert_eq!(e.amp_tx_delay_ms(), 0.0, "off by default");
+        e.settings.amp_tx_delay_ms = 120;
+        assert_eq!(e.amp_tx_delay_ms(), 120.0);
+        e.settings.amp_tx_delay_ms = 5_000;
+        assert_eq!(
+            e.amp_tx_delay_ms(),
+            f64::from(crate::settings::AMP_TX_DELAY_MAX_MS)
+        );
+    }
+
     #[test]
     fn tx_over_secs_at_js8_is_the_slot_fit_length_of_the_tx_speed() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
