@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 //
-// THE IOTA OFFER AT LOG TIME (operator decision, 2026-10-27): the station offers a reference from
-// the spot comment or the callbook; the log form shows it as a chip; the operator takes it with Use,
-// and only then does the contact log with it. Nothing is taken by itself, a reference the contact
-// already holds is never offered over, and a new call starts over.
+// THE IOTA REFERENCE IN THE POPUP (operator ruling, 2026-11-10): the reference the station names
+// from a spot comment or the callbook is put in the popup's IOTA box and logged with the contact as
+// the box holds it, so the operator can change or clear it first. A reference the contact already
+// holds (the hold filled it) is shown and never replaced, and a new call starts over.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import { LogConfirm } from './LogConfirm'
@@ -28,8 +28,11 @@ const QSO = {
   propMode: null,
 } as unknown as LoggedQso
 
-const GROUPS = [{ reference: 'EU-028', name: 'Example Isles group' }]
-const status = { enabled: true, count: 1, fetchedAt: 0, bundled: true, lastError: null }
+const GROUPS = [
+  { reference: 'EU-028', name: 'Example Isles group' },
+  { reference: 'EU-001', name: 'First Isles group' },
+]
+const status = { enabled: true, count: 2, fetchedAt: 0, bundled: true, lastError: null }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -46,64 +49,80 @@ function open(record: LoggedQso = QSO) {
   return { onConfirm, log: () => fireEvent.click(screen.getByRole('button', { name: t('logPrompt.log') })) }
 }
 
-const chip = () => screen.queryByRole('group', { name: t('iota.offer.aria', { ref: 'EU-028' }) })
-const use = () => screen.getByRole('button', { name: t('iota.offer.use') })
+const field = () => screen.queryByRole('group', { name: t('iota.prefill.aria') })
+const box = () => screen.getByTitle(t('iota.prefill.hint')) as HTMLInputElement
+const logged = (p: ReturnType<typeof open>, i = 0) => (p.onConfirm.mock.calls[i][0] as LoggedQso).ota?.iota ?? null
 
 describe('the confirm-before-log popup', () => {
-  it('shows the offer with its source and logs it only when Use is pressed', async () => {
+  it('fills the box from the station and logs it as shown, marked by its source', async () => {
     api.getIotaOffer.mockResolvedValue({ reference: 'EU-028', source: 'callbook' })
     const p = open()
-    await waitFor(() => expect(chip()).toBeTruthy())
+    await waitFor(() => expect(box().value).toBe('EU-028'))
     expect(api.getIotaOffer).toHaveBeenCalledWith('IA5X')
     expect(screen.getByText(t('iota.offer.fromCallbook'))).toBeTruthy()
-    expect(use().getAttribute('aria-pressed')).toBe('false')
+    expect(screen.getByText('Example Isles group')).toBeTruthy()
     p.log()
-    expect(p.onConfirm.mock.calls[0][1], 'nothing taken by itself').toBeNull()
-
-    fireEvent.click(use())
-    expect(use().getAttribute('aria-pressed')).toBe('true')
-    p.log()
-    expect(p.onConfirm.mock.calls[1][1]).toEqual({ reference: 'EU-028', source: 'callbook' })
-
-    // Pressed again, it is given back.
-    fireEvent.click(use())
-    p.log()
-    expect(p.onConfirm.mock.calls[2][1]).toBeNull()
+    expect(logged(p), 'logged with no press').toBe('EU-028')
+    expect(p.onConfirm.mock.calls[0][1]).toEqual({ reference: 'EU-028', source: 'callbook' })
   })
 
-  it('× leaves it out', async () => {
+  it('the operator can change it: their reference is logged, not marked as the station’s', async () => {
     api.getIotaOffer.mockResolvedValue({ reference: 'EU-028', source: 'spot' })
     const p = open()
-    await waitFor(() => expect(chip()).toBeTruthy())
-    expect(screen.getByText(t('iota.offer.fromSpot'))).toBeTruthy()
-    fireEvent.click(use())
-    fireEvent.click(screen.getByRole('button', { name: t('iota.offer.dismiss') }))
-    expect(chip()).toBeNull()
+    await waitFor(() => expect(box().value).toBe('EU-028'))
+    fireEvent.change(box(), { target: { value: 'eu-001' } })
+    expect(box().value).toBe('EU-001')
+    expect(screen.queryByText(t('iota.offer.fromSpot'))).toBeNull()
     p.log()
+    expect(logged(p)).toBe('EU-001')
     expect(p.onConfirm.mock.calls[0][1]).toBeNull()
   })
 
-  it('offers nothing over a reference the contact holds', async () => {
+  it('× clears it: the contact logs with none, and nothing fills it again', async () => {
+    api.getIotaOffer.mockResolvedValue({ reference: 'EU-028', source: 'spot' })
+    const p = open()
+    await waitFor(() => expect(box().value).toBe('EU-028'))
+    fireEvent.click(screen.getByRole('button', { name: t('iota.offer.dismiss') }))
+    expect(box().value).toBe('')
+    await new Promise((r) => setTimeout(r, 400))
+    expect(box().value, 'not filled again').toBe('')
+    p.log()
+    expect(logged(p)).toBeNull()
+    expect(p.onConfirm.mock.calls[0][1]).toBeNull()
+  })
+
+  it('a reference the contact holds is shown and never replaced', async () => {
     api.getIotaOffer.mockResolvedValue({ reference: 'EU-028', source: 'spot' })
     const p = open({ ...QSO, ota: { iota: 'EU-001' } } as unknown as LoggedQso)
     await new Promise((r) => setTimeout(r, 400))
-    expect(api.getIotaOffer).not.toHaveBeenCalled()
-    expect(chip()).toBeNull()
+    expect(field()).toBeTruthy()
+    expect(box().value).toBe('EU-001')
     p.log()
+    expect(logged(p)).toBe('EU-001')
     expect(p.onConfirm.mock.calls[0][1]).toBeNull()
   })
 
-  it('a call changed in the popup starts over: nothing taken for the new call', async () => {
-    api.getIotaOffer.mockResolvedValue({ reference: 'EU-028', source: 'spot' })
+  it('no source: no box, and nothing logged', async () => {
+    api.getIotaOffer.mockResolvedValue(null)
     const p = open()
-    await waitFor(() => expect(chip()).toBeTruthy())
-    fireEvent.click(use())
+    await new Promise((r) => setTimeout(r, 400))
+    expect(field()).toBeNull()
+    p.log()
+    expect(logged(p)).toBeNull()
+  })
+
+  it('a call changed in the popup starts over: the old call’s fill goes, the new one’s comes', async () => {
+    api.getIotaOffer.mockImplementation(async (call: string) =>
+      call === 'IA5X' ? { reference: 'EU-028', source: 'spot' } : { reference: 'EU-001', source: 'callbook' },
+    )
+    const p = open()
+    await waitFor(() => expect(box().value).toBe('EU-028'))
     const call = screen.getByDisplayValue('IA5X') as HTMLInputElement
     fireEvent.change(call, { target: { value: 'IA5Y' } })
     await waitFor(() => expect(api.getIotaOffer).toHaveBeenCalledWith('IA5Y'))
-    await waitFor(() => expect(chip()).toBeTruthy())
-    expect(use().getAttribute('aria-pressed')).toBe('false')
+    await waitFor(() => expect(box().value).toBe('EU-001'))
     p.log()
-    expect(p.onConfirm.mock.calls[0][1]).toBeNull()
+    expect(logged(p)).toBe('EU-001')
+    expect(p.onConfirm.mock.calls[0][1]).toEqual({ reference: 'EU-001', source: 'callbook' })
   })
 })

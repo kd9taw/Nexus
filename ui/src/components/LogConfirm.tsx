@@ -7,7 +7,7 @@ import type { LoggedQso } from '../types'
 import { t } from '../i18n'
 import { FtStopControl } from './FtStopControl'
 import { upperTyped } from '../typedInput'
-import { IotaOfferChip, useIotaOffer, type IotaOfferData } from './Iota'
+import { IotaPrefillField, iotaToLog, useIotaPrefill, type IotaOfferData } from './Iota'
 
 /** WSJT-X's Log QSO dialog's propagation modes (`widgets/logqso.cpp`, `prop_modes`): the ADIF
  *  `PROP_MODE` enumeration values, in its order. SAT is not here: it is offered only on a contact
@@ -66,7 +66,8 @@ function propModeName(code: string): string {
 interface Props {
   /** The completed contact awaiting confirm-before-log. */
   record: LoggedQso
-  /** Log the (possibly edited) record, with the IOTA offer the operator took, if any. */
+  /** Log the (possibly edited) record, with what the station filled its IOTA box with, while the
+   *  box still holds it. */
   onConfirm: (record: LoggedQso, iotaOffer?: IotaOfferData | null) => void
   /** Discard the contact without logging. */
   onDiscard: () => void
@@ -99,9 +100,11 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
   const [operator, setOperator] = useState(record.operator ?? '')
   const [myGrid, setMyGrid] = useState(record.myGrid ?? '')
   const [propMode, setPropMode] = useState(record.propMode ?? '')
-  // The IOTA reference the station offers this call, for the operator to take or leave (operator
-  // decision, 2026-10-27): nothing is stamped by itself. None over a reference the contact holds.
-  const iotaOffer = useIotaOffer(call, record.ota?.iota)
+  // The IOTA reference: what the hold filled the contact with, else what the station names for this
+  // call now (a lookup that answered after the hold). Logged as the box holds it, so the operator can
+  // change or clear it first (operator ruling, 2026-11-10).
+  const [iota, setIota] = useState(record.ota?.iota ?? '')
+  const iotaPrefill = useIotaPrefill(call, iota, setIota)
 
   // RST is a free string now (CW "599" / phone "59" / digital "-12"); just trim.
   const parseRst = (v: string): string | null => {
@@ -122,7 +125,8 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
       operator: operator.trim().toUpperCase() || null,
       myGrid: myGrid.trim().toUpperCase() || null,
       propMode: propMode || null,
-    }, iotaOffer.taken)
+      ota: { ...record.ota, iota: iotaToLog(iota) },
+    }, iotaPrefill.taken)
   }
 
   // Watts, as the log writes TX_PWR; anything that is not a positive number sends nothing.
@@ -250,7 +254,7 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
           </label>
         </div>
 
-        <IotaOfferChip state={iotaOffer} />
+        <IotaPrefillField state={iotaPrefill} value={iota} />
 
         <div className="logconfirm-actions">
           {onStop && <FtStopControl onHaltTx={onStop} />}

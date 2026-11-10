@@ -1,15 +1,15 @@
 // IOTA ON SCREEN — an island group's name beside its reference, the Settings switch for the list the
-// names come from, and the chip that OFFERS a reference to a contact being logged.
+// names come from, and the box a log form fills with the reference a spot or the callbook names.
 //
 // The names are IOTA Ltd's (© RSGB and © Islands On The Air Ltd), shipped with Nexus by its
 // permission: every name shown carries IOTA Ltd's credit and a link to its site, as a courtesy. With
 // the list switched off (`features/iotaGroups`) a reference shows bare, as it did before the list.
 //
-// An offer is never a write: the chip says where the reference came from (the spot's comment, or the
-// callbook) and the operator takes it or not. The log-time half that decides what to offer is the
-// station's (`get_iota_offer`, `tempo_core::logbook::offer::iota_offer`); this is what it shows, and
-// `useIotaOffer` is what a log form keeps of it until the contact is logged.
-import { useEffect, useState, useSyncExternalStore } from 'react'
+// The reference is logged automatically (operator ruling, 2026-11-10): a log form puts it in its IOTA
+// box, says where it came from (the spot's comment, or the callbook), and logs what the box holds, so
+// the operator can change or clear it first. What to fill is the station's (`get_iota_offer`,
+// `tempo_core::logbook::offer::iota_offer`); `useIotaPrefill` is what a form keeps of it.
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { t } from '../i18n'
 import { withErrorToast } from '../toast'
 import { getIotaOffer, type IotaOfferData } from '../api'
@@ -80,81 +80,57 @@ export function IotaReferenceNote({ reference }: { reference: string | null | un
 
 export type { IotaOfferData }
 
-/**
- * The offer chip: "IOTA EU-131 · Veneto Region group — from the spot  [Use] [×]". Use hands the
- * reference to the log (pressed again, takes it back); × leaves the field as it is. A reference
- * taken from an offer, either source, stays out of every upload until the operator confirms it on
- * the contact card, and the chip says so.
- */
-export function IotaOffer({
-  offer,
-  accepted = false,
-  onAccept,
-  onDismiss,
-}: {
-  offer: IotaOfferData
-  /** The operator pressed Use: the reference goes into the log with the contact. */
-  accepted?: boolean
-  onAccept: (reference: string) => void
-  onDismiss: () => void
-}) {
-  useIotaGroups()
-  const from = offer.source === 'spot' ? t('iota.offer.fromSpot') : t('iota.offer.fromCallbook')
-  return (
-    <div className="iota-offer" role="group" aria-label={t('iota.offer.aria', { ref: offer.reference })}>
-      <span className="need-chip need-iota">{t('iota.offer.chip', { ref: offer.reference })}</span>
-      <IotaGroupName reference={offer.reference} />
-      <span className="iota-offer-from" title={t('iota.offer.spotHeld')}>
-        {from}
-      </span>
-      <button
-        type="button"
-        className="settings-test-btn"
-        aria-pressed={accepted}
-        title={t('iota.offer.spotHeld')}
-        onClick={() => onAccept(offer.reference)}
-      >
-        {t('iota.offer.use')}
-      </button>
-      <button type="button" className="settings-test-btn" aria-label={t('iota.offer.dismiss')} title={t('iota.offer.dismiss')} onClick={onDismiss}>
-        ×
-      </button>
-    </div>
-  )
-}
+/** A reference by its shape: a continent, a hyphen and three digits. */
+const IOTA_REF = /^(AF|AN|AS|EU|NA|OC|SA)-\d{3}$/
 
-/** A form's offer before any call: nothing asked, taken or dismissed. */
-const FRESH_OFFER = { call: '', offer: null, taken: false, dismissed: false }
-
-/** What a log form keeps of the IOTA offer for the call it holds ([`useIotaOffer`]). */
-export interface IotaOfferState {
-  /** The offer to show, or null (none, dismissed, or the form holds a reference of its own). */
+/** What a log form keeps of the IOTA reference it filled its box with ([`useIotaPrefill`]). */
+export interface IotaPrefillState {
+  /** What the station names for the call (a spot's comment, or the callbook's), or null. */
   offer: IotaOfferData | null
-  /** The offer the operator took with Use: what the form logs with the contact. */
+  /** `offer` while the box still holds exactly its reference: what the form logs it as, so the
+   *  log marks it by its source. A reference the operator changed is theirs. */
   taken: IotaOfferData | null
-  /** Use: take the offer, or, taken, give it back. */
-  toggle: () => void
-  /** ×: no offer for this call. */
-  dismiss: () => void
-  /** The contact is logged: what was taken or dismissed was for it, and the next starts over. */
+  /** The operator typed in the box: what they typed stays, and nothing fills it again. */
+  edit: (value: string) => void
+  /** ×: the box emptied, and nothing fills it again for this contact. */
+  clear: () => void
+  /** The contact is logged or let go of: the next one starts over, even with the same call. */
   reset: () => void
 }
 
 /**
- * The IOTA offer for the contact a log form holds for `call` (`get_iota_offer`; operator decision,
- * 2026-10-27: offered from the spot comment and the callbook, the operator takes a chip, nothing is
- * stamped by itself). Asked again when the call changes and when `asked` does (a callbook lookup
- * that answered), never while the form holds a reference of its own (`held`: a typed one is never
- * replaced) and never while `off`. A new call starts over: nothing taken, nothing dismissed, and so
- * does the next contact once the form logs one ([`IotaOfferState.reset`]), even with the same call:
- * a Use press is for one contact.
+ * Fill a log form's IOTA box (`value`, set through `setValue`) with the reference the station names
+ * for `call` (`get_iota_offer`; operator ruling, 2026-11-10: logged automatically, shown first so it
+ * can be changed or cleared). Asked again when the call changes and when `asked` does (a callbook
+ * lookup that answered); never while `off`. Fills only an empty box the operator has not touched for
+ * this contact, and a reference it filled goes again when the call changes before it is touched.
  */
-export function useIotaOffer(call: string, held?: string | null, asked?: unknown, off = false): IotaOfferState {
+export function useIotaPrefill(
+  call: string,
+  value: string,
+  setValue: (value: string) => void,
+  asked?: unknown,
+  off = false,
+): IotaPrefillState {
   const key = call.trim().toUpperCase()
-  const holding = (held ?? '').trim() !== ''
-  const [kept, setKept] = useState<{ call: string; offer: IotaOfferData | null; taken: boolean; dismissed: boolean }>(FRESH_OFFER)
+  const [kept, setKept] = useState<{ call: string; offer: IotaOfferData | null }>({ call: '', offer: null })
+  // What this contact's box holds by the operator's hand (`touched`) or by this fill (`filled`).
+  const touched = useRef(false)
+  const filled = useRef<string | null>(null)
+  const latest = useRef({ value, setValue })
+  latest.current = { value, setValue }
+  const keyRef = useRef(key)
+  // A new call: what this hook put in the box was for the old one.
   useEffect(() => {
-    if (off || holding || key.length < 3) return
+    if (keyRef.current === key) return
+    keyRef.current = key
+    const { value: v, setValue: set } = latest.current
+    if (!touched.current && filled.current !== null && v.trim().toUpperCase() === filled.current) set('')
+    touched.current = false
+    filled.current = null
+  }, [key])
+  useEffect(() => {
+    if (off || key.length < 3) return
     let live = true
     const id = window.setTimeout(() => {
       // Inside the chain, so a station or a window with no such command (nothing to call at all)
@@ -163,37 +139,107 @@ export function useIotaOffer(call: string, held?: string | null, asked?: unknown
         .then(() => getIotaOffer(key))
         .then((offer) => {
           if (!live) return
-          setKept((k) =>
-            k.call !== key
-              ? { call: key, offer: offer ?? null, taken: false, dismissed: false }
-              : // A reference taken stays what it was, even if its spot ages out meanwhile.
-                k.taken
-                ? k
-                : { ...k, offer: offer ?? null },
-          )
+          setKept({ call: key, offer: offer ?? null })
+          const { value: v, setValue: set } = latest.current
+          if (offer && !touched.current && v.trim() === '') {
+            filled.current = offer.reference
+            set(offer.reference)
+          }
         })
-        .catch(() => {}) // a station without the command offers nothing
+        .catch(() => {}) // a station without the command fills nothing
     }, 250)
     return () => {
       live = false
       window.clearTimeout(id)
     }
-  }, [key, holding, asked, off])
-  const mine = !off && !holding && kept.call === key && !kept.dismissed
-  const offer = mine ? kept.offer : null
+  }, [key, asked, off])
+  const offer = !off && kept.call === key ? kept.offer : null
   return {
     offer,
-    taken: offer && kept.taken ? offer : null,
-    toggle: () => setKept((k) => ({ ...k, taken: !k.taken })),
-    dismiss: () => setKept((k) => ({ ...k, taken: false, dismissed: true })),
-    reset: () => setKept(FRESH_OFFER),
+    taken: offer && value.trim().toUpperCase() === offer.reference ? offer : null,
+    edit: (v: string) => {
+      touched.current = true
+      latest.current.setValue(v)
+    },
+    clear: () => {
+      touched.current = true
+      latest.current.setValue('')
+    },
+    reset: () => {
+      touched.current = false
+      filled.current = null
+    },
   }
 }
 
-/** The offer chip for a log form's [`useIotaOffer`], or nothing. */
-export function IotaOfferChip({ state }: { state: IotaOfferState }) {
-  if (!state.offer) return null
-  return <IotaOffer offer={state.offer} accepted={!!state.taken} onAccept={state.toggle} onDismiss={state.dismiss} />
+/** Where the box's reference came from, while it is the station's fill: "from the spot". */
+export function IotaPrefillSource({ state }: { state: IotaPrefillState }) {
+  if (!state.taken) return null
+  return (
+    <span className="iota-offer-from">
+      {state.taken.source === 'spot' ? t('iota.offer.fromSpot') : t('iota.offer.fromCallbook')}
+    </span>
+  )
+}
+
+/**
+ * The IOTA box of a log form with no box of its own (the log strip, the confirm-before-log popup):
+ * "IOTA [EU-131] · Veneto Region group — from the spot  [×]", shown while it holds a reference or
+ * the station names one. The reference is logged with the contact as the box holds it; × empties it.
+ */
+export function IotaPrefillField({ state, value }: { state: IotaPrefillState; value: string }) {
+  useIotaGroups()
+  if (!state.offer && value.trim() === '') return null
+  const r = value.trim().toUpperCase()
+  return (
+    <div className="iota-offer" role="group" aria-label={t('iota.prefill.aria')}>
+      <span className="need-chip need-iota" aria-hidden="true">
+        {t('iota.prefill.label')}
+      </span>
+      <input
+        className="settings-input mono"
+        value={value}
+        onChange={(e) => state.edit(e.target.value.toUpperCase())}
+        maxLength={6}
+        size={6}
+        autoComplete="off"
+        spellCheck={false}
+        aria-label={t('iota.prefill.label')}
+        aria-invalid={r !== '' && !IOTA_REF.test(r)}
+        title={t('iota.prefill.hint')}
+      />
+      <IotaGroupName reference={r} />
+      <IotaPrefillSource state={state} />
+      {r !== '' && (
+        <button type="button" className="settings-test-btn" aria-label={t('iota.offer.dismiss')} title={t('iota.offer.dismiss')} onClick={state.clear}>
+          ×
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** The box's reference as the log takes it: a reference by its shape, else none. */
+export function iotaToLog(value: string): string | null {
+  const r = value.trim().toUpperCase()
+  return IOTA_REF.test(r) ? r : null
+}
+
+/**
+ * The Logbook's IOTA cell: the contact's reference and, with the list, its group's name beside it
+ * ("EU-005 Great Britain"); the name's credit is on the cell's hover. A dash for none.
+ */
+export function IotaCell({ reference }: { reference: string | null | undefined }) {
+  useIotaGroups()
+  const r = (reference ?? '').trim()
+  const name = iotaName(r)
+  const title = name ? `${r} ${name} — ${t('iota.credit.title')}` : r
+  return (
+    <span className="log-cell mono" title={title}>
+      {r || '—'}
+      {name && <span className="iota-cell-name"> {name}</span>}
+    </span>
+  )
 }
 
 /** A Unix time as its UTC day, `2026-10-29`. */

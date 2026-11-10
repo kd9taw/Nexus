@@ -125,7 +125,7 @@ import { failureText, pushToast, withErrorToast } from '../toast'
 import { qrzPushQso, clublogPushQso, hrdlogPushQso, wrlPushQso, syncQrz, downloadLotwReport, importPotaLog } from '../api'
 import { qrzCorrectPreview, qrzCorrectApply, qrzCorrectUndoMiss } from '../api'
 import { callCardTrigger, qrzPageOf } from './CallCard'
-import { IotaOfferChip, IotaReferenceNote, useIotaOffer } from './Iota'
+import { IotaCell, IotaPrefillSource, IotaReferenceNote, useIotaPrefill } from './Iota'
 import type { FieldEdit, QrzCorrectResult, QsoEdit, RowAnswer, RowRef } from '../api'
 
 interface Props {
@@ -580,11 +580,17 @@ export function Logbook({
   const syncRef = useRef<HTMLInputElement>(null)
   const potaRef = useRef<HTMLInputElement>(null)
 
-  // The IOTA reference the station offers a contact being ADDED here (a spot comment's, or the
-  // callbook's), taken with the chip, never stamped by itself (operator decision, 2026-10-27). None
-  // while the IOTA box holds one, and none for a contact being edited: its log entry is unchanged.
+  // The IOTA reference the station names for a contact being ADDED here (a spot comment's, or the
+  // callbook's) fills the empty IOTA box, to change or clear before saving (operator ruling,
+  // 2026-11-10). None for a contact being edited: its log entry is unchanged.
   const [lookupTick, setLookupTick] = useState(0)
-  const iotaOffer = useIotaOffer(draft.call, draft.iota, lookupTick, !showForm || editing != null)
+  const iotaPrefill = useIotaPrefill(
+    draft.call,
+    draft.iota,
+    (v) => setDraft((prev) => ({ ...prev, iota: v })),
+    lookupTick,
+    !showForm || editing != null,
+  )
 
   // QRZ lookup for the QSO being logged: fills grid (subscriber-only) + shows the
   // operator name. On-demand (QRZ free tier is ~100/day), one lookup per click.
@@ -2058,10 +2064,10 @@ export function Logbook({
       setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', endTime: '', state: '', txPower: '', parkTheirRef: '', parkMyRef: '', iota: '', myGrid: '', myRig: '', qslSentVia: '', qslCard: '' }))
       return
     }
-    const snap = await withErrorToast(() => logQso(record, undefined, iotaOffer.taken), t('logbook.form.logFailed'))
+    const snap = await withErrorToast(() => logQso(record, undefined, iotaPrefill.taken), t('logbook.form.logFailed'))
     if (snap) {
       load()
-      iotaOffer.reset()
+      iotaPrefill.reset()
       setShowForm(false)
       setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', endTime: '', state: '', txPower: '', iota: '', myGrid: '', myRig: '' }))
       // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
@@ -2380,6 +2386,7 @@ export function Logbook({
     }
     if (c.id === 'path') return <PathGradeCell key={c.id} q={q} />
     if (c.id === 'parkName') return <ParkNameCell key={c.id} q={q} />
+    if (c.id === 'iota') return <IotaCell key={c.id} reference={q.ota?.iota} />
     const v = addedColumnText(q, c.id)
     return (
       <span className="log-cell mono" title={v ?? ''}>
@@ -3024,7 +3031,10 @@ export function Logbook({
               <input
                 className="settings-input"
                 value={draft.iota}
-                onChange={(e) => setField('iota', e.target.value)}
+                onChange={(e) => {
+                  setErr(null)
+                  iotaPrefill.edit(e.target.value)
+                }}
                 autoComplete="off"
                 spellCheck={false}
                 maxLength={6}
@@ -3032,7 +3042,7 @@ export function Logbook({
                 title={t('logbook.field.iota.title')}
               />
               <IotaReferenceNote reference={draft.iota} />
-              <IotaOfferChip state={iotaOffer} />
+              <IotaPrefillSource state={iotaPrefill} />
             </label>
             <label className="logbook-field">
               <span>{t('logbook.field.name.label')}</span>

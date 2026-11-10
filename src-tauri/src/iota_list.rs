@@ -344,6 +344,19 @@ pub(crate) fn known(reference: &str) -> bool {
     }
 }
 
+/// The group's name for `reference` from the list in use, for a logged contact's COMMENT
+/// (`tempo_core::logbook::offer::note_iota_in_comment`); `None` with the switch off, with no copy,
+/// or for a group the list lacks.
+pub(crate) fn name(reference: &str) -> Option<String> {
+    GROUPS
+        .read()
+        .ok()?
+        .as_ref()?
+        .groups
+        .name(reference)
+        .map(str::to_string)
+}
+
 /// The list's status: the switch, how many groups are in use, and the date of that copy.
 #[tauri::command]
 pub(crate) fn get_iota_list_status() -> IotaListStatus {

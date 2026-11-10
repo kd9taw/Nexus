@@ -273,16 +273,12 @@ pub const EQSL_AG_FIELD: &str = "APP_EQSL_AG";
 /// And the map-only mark ([`callbook::MAP_ONLY_GRID_FIELD`]): a grid a callbook filled for a
 /// contact logged with none is for the distance and the map, and counts toward nothing
 /// ([`counted_grid`]).
-///
-/// And the held mark ([`offer::OFFER_HELD_FIELD`]): an IOTA reference it names is a group worked,
-/// never one confirmed.
 pub const AWARD_EXTRAS: &[&str] = &[
     "CQZ",
     LOTW_DXCC_FIELD,
     EQSL_AG_FIELD,
     "STATE",
     callbook::MAP_ONLY_GRID_FIELD,
-    offer::OFFER_HELD_FIELD,
 ];
 
 /// A passthrough field's value, by its (uppercased) ADIF name.
@@ -583,10 +579,11 @@ pub(crate) fn set_extra(r: &mut QsoRecord, name: &str, value: Option<String>) {
 pub(crate) fn fields_set(r: &mut QsoRecord, fields: &[(String, Option<String>)]) {
     let before = r.clone();
     for (tag, value) in fields {
-        // Clearing an IOTA reference still held back (`FieldEdit::check`), the one modelled field
-        // named here: its marks follow in `offer::unmark_edited`. Any other reference stays.
+        // Clearing an IOTA reference Nexus filled at log time (`FieldEdit::check`), the one
+        // modelled field named here: its marks follow in `offer::unmark_edited`. Any other
+        // reference stays.
         if tag == "IOTA" {
-            if value.is_none() && offer::withhold_iota(r) {
+            if value.is_none() && offer::is_offer_held(r, "IOTA") {
                 r.ota.iota = None;
             }
             continue;
@@ -3311,7 +3308,7 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
         }
     }
     // The same for a field a callbook lookup filled at log time ([`callbook::CALLBOOK_FILLED_FIELD`]),
-    // and for an IOTA reference taken from a log-time offer ([`offer::OFFER_HELD_FIELD`]).
+    // and for an IOTA reference Nexus filled at log time ([`offer::OFFER_HELD_FIELD`]).
     callbook::unmark_edited(old, &mut rec);
     offer::unmark_edited(old, &mut rec);
     // The same resurrection, for a park. A side's OTHER programme's reference rides
@@ -3672,25 +3669,14 @@ pub fn adif_record_own_file(r: &QsoRecord) -> String {
 /// Logbook): [`adif_record_own_log`], private note included, but **never a grid for the distance
 /// and the map only** ([`counted_grid`]), nor its marks. Such a program counts the grid toward
 /// VUCC and its own totals, and can upload the contact itself (operator decision, 2026-10-27).
-/// For the same reason, **never an IOTA reference held back from uploads**
-/// ([`offer::withhold_iota`]), nor the marks naming it. Confirming it later in Nexus does not
-/// send it again: the program keeps the contact as it first got it.
+/// An IOTA reference Nexus filled at log time goes like any other (operator ruling, 2026-11-10).
 pub fn adif_record_own_logger(r: &QsoRecord) -> String {
-    let map_only = callbook::is_map_only_grid(r);
-    let held_iota = offer::withhold_iota(r);
-    if !map_only && !held_iota {
+    if !callbook::is_map_only_grid(r) {
         return adif_record_own_file(r);
     }
     let mut kept = r.clone();
-    if map_only {
-        kept.grid = None;
-        callbook::unmark_callbook_filled(&mut kept, "GRIDSQUARE");
-    }
-    if held_iota {
-        kept.ota.iota = None;
-        offer::unmark_offer_held(&mut kept, "IOTA");
-        callbook::unmark_callbook_filled(&mut kept, "IOTA");
-    }
+    kept.grid = None;
+    callbook::unmark_callbook_filled(&mut kept, "GRIDSQUARE");
     adif_record_own_file(&kept)
 }
 
@@ -4002,16 +3988,14 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         &r.ota.their_ref,
     ));
     // IOTA island-group reference — the standard ADIF `IOTA` field, so exports round-trip
-    // and upload cleanly (LoTW/QRZ/ClubLog all recognize it). One taken from a log-time offer that
-    // the operator has not touched since stays in their own log and is sent nowhere
-    // ([`offer::OFFER_HELD_FIELD`]).
+    // and upload cleanly (LoTW/QRZ/ClubLog all recognize it). One Nexus filled at log time from a
+    // spot or the callbook goes like one typed (operator ruling, 2026-11-10); its mark does not.
     if let Some(iota) = r
         .ota
         .iota
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .filter(|_| audience != Audience::Outbound || !offer::withhold_iota(r))
     {
         out.push_str(&field("IOTA", iota));
     }

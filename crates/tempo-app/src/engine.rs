@@ -15881,6 +15881,9 @@ impl Engine {
         if !held.stamped {
             self.stamp_hold(&mut held.record);
         }
+        // Its IOTA reference, filled now so the popup shows it for the operator to change or clear
+        // before the contact is logged, and Remote's confirm logs it ([`Self::fill_iota_at_log`]).
+        self.fill_iota_at_log(&mut held.record);
         if self.pending_logs.is_empty() {
             self.replace_pending_log(Some(held));
             self.persist_pending_qso();
@@ -18657,25 +18660,34 @@ impl Engine {
             .filter(|wx| when.abs_diff(wx.at_unix) <= SPACE_WEATHER_MAX_AGE_SECS)
     }
 
-    pub fn log_qso(&mut self, rec: QsoRecord) {
+    /// Log a contact no form showed first (an RTTY auto-log, a plain caller): its IOTA reference
+    /// is filled from the spots or the callbook ([`Self::fill_iota_at_log`]).
+    pub fn log_qso(&mut self, mut rec: QsoRecord) {
+        self.fill_iota_at_log(&mut rec);
         let _ = self.log_qso_inner(rec, false, StateSource::Operator, Vec::new(), false, false);
+    }
+
+    /// Fill an empty IOTA field of a contact no form showed the operator first: what a fresh spot
+    /// on its band names, else the answer a lookup already gave this session for exactly this call
+    /// (`tempo_core::logbook::offer::fill_iota_at_log`; operator ruling, 2026-11-10). Never a
+    /// lookup from here, and nothing without the command layer's reader (headless).
+    fn fill_iota_at_log(&self, rec: &mut QsoRecord) {
+        if let Some(read) = &self.station.iota_at_log {
+            let spots = (read.spots)(&rec.call, &rec.band, rec.when_unix);
+            let answer = self.callbook_answer(&rec.call);
+            tempo_core::logbook::offer::fill_iota_at_log(rec, &spots, answer, &*read.known);
+        }
     }
 
     /// [`Self::log_qso`] for a contact the FT8/FT4 engine built ([`HeldQso::built`]), as it was
     /// built: one with no grid of its own takes a callbook's for the map only.
     ///
     /// This is the FT contact logged with no popup, whether Auto-log wrote it or Log QSO did, so
-    /// nothing was on screen to take an IOTA offer from: what the spots name, else the answer a
-    /// lookup already gave for this call, goes in held
-    /// (`tempo_core::logbook::offer::hold_iota_at_log`). Never a lookup from here. Logging only:
-    /// the contact is already finished, and neither the sequencer nor the transmitter reads this.
+    /// nothing was on screen to show an IOTA reference in: it is filled here
+    /// ([`Self::fill_iota_at_log`]). Logging only: the contact is already finished, and neither the
+    /// sequencer nor the transmitter reads this.
     fn log_built_qso(&mut self, mut held: HeldQso) {
-        if let Some(read) = &self.station.iota_at_log {
-            let rec = &mut held.record;
-            let spots = (read.spots)(&rec.call, &rec.band, rec.when_unix);
-            let answer = self.callbook_answer(&rec.call);
-            tempo_core::logbook::offer::hold_iota_at_log(rec, &spots, answer, &*read.known);
-        }
+        self.fill_iota_at_log(&mut held.record);
         let _ = self.log_qso_inner(
             held.record,
             false,
@@ -18889,7 +18901,10 @@ impl Engine {
     /// Manual Remote logging uses the existing contact enrichment, memory-first
     /// append and connector funnel, but receives open file handles to sync outside the engine lock. This does
     /// not change FT sequencing, pending-log semantics or desktop append timing.
-    pub fn log_qso_for_sync(&mut self, rec: QsoRecord) -> LogWriteOutcome {
+    ///
+    /// Remote's log form shows no IOTA reference, so one is filled here ([`Self::fill_iota_at_log`]).
+    pub fn log_qso_for_sync(&mut self, mut rec: QsoRecord) -> LogWriteOutcome {
+        self.fill_iota_at_log(&mut rec);
         self.log_qso_inner(rec, true, StateSource::Operator, Vec::new(), false, false)
     }
 
@@ -19314,10 +19329,10 @@ impl Engine {
         // reads the grid. The rules, and the mark that lets a LoTW value replace a callbook one,
         // are `tempo_core::logbook::callbook`'s.
         //
-        // Never its IOTA reference: that is OFFERED on the log form and in the popup, and written
-        // only when the operator takes it (`tempo_core::logbook::offer`; operator decision,
-        // 2026-10-27). An FT contact logged with no popup logs it held instead, written before
-        // it reaches this funnel (`Self::log_built_qso`).
+        // Never its IOTA reference here: a form fills its box first for the operator to change
+        // (`tempo_core::logbook::offer`; operator ruling, 2026-11-10), and a contact no form showed
+        // was filled before it reached this funnel (`Self::fill_iota_at_log`), with the spot's
+        // precedence over the callbook and the stroked-call rule this fill does not have.
         //
         // An FT8/FT4 contact the station gave no grid in takes the callbook's grid for the
         // distance and the map only (`fill_gridless_from_callbook`): it counts toward no award
@@ -19328,6 +19343,12 @@ impl Engine {
             } else {
                 tempo_core::logbook::callbook::fill_from_callbook(&mut rec, answer);
             }
+        }
+        // THE ISLAND GROUP'S NAME, on every path: a contact logged with an IOTA reference the IOTA
+        // list names gets `IOTA <ref> <name>` after its COMMENT, once, the comment kept
+        // (`tempo_core::logbook::offer::note_iota_in_comment`; operator ruling, 2026-11-10).
+        if let Some(read) = &self.station.iota_at_log {
+            tempo_core::logbook::offer::note_iota_in_comment(&mut rec, &*read.name);
         }
         // WHERE THEY ARE: the worked station's continent (ADIF `CONT`), from the country
         // file's answer for the call — the same reading a contest row records — and the distance
@@ -21238,9 +21259,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.confirm_pending_log_with_offer(expected_key, rec, None)
     }
 
-    /// [`Self::confirm_pending_log`], with the IOTA offer the operator took in the popup
-    /// (`tempo_core::logbook::offer::accept_iota_offer`): written into the held record's IOTA only
-    /// when it has none, and held back from uploads until the operator touches it.
+    /// [`Self::confirm_pending_log`], with the IOTA reference the popup filled its box with
+    /// (`tempo_core::logbook::offer::accept_iota_offer`): the popup's IOTA box is taken as it was
+    /// logged, and when it holds exactly the reference `iota_offer` names, it is marked as that
+    /// source's fill.
     pub fn confirm_pending_log_with_offer(
         &mut self,
         expected_key: &str,
@@ -21287,6 +21309,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
         tempo_core::logbook::settle_popup_my_grid(&mut held, &was.record);
         self.take_popup_prop_mode(&mut held, rec.prop_mode.as_deref());
         let dropped = self.rederive_after_edits(&mut held, &was.record, was.grid_source);
+        // The popup's IOTA box: it opens with what the hold filled ([`Self::hold_pending_log`]) or
+        // what the station names for the call, and the operator may change or clear it. A changed
+        // one is the operator's: off the fill marks, as an edit in the Logbook makes it.
+        held.ota.iota = rec
+            .ota
+            .iota
+            .as_deref()
+            .map(|r| r.trim().to_ascii_uppercase())
+            .filter(|r| !r.is_empty());
+        tempo_core::logbook::offer::unmark_edited(&was.record, &mut held);
         if let Some(offer) = iota_offer {
             tempo_core::logbook::offer::accept_iota_offer(&mut held, offer);
         }
@@ -36441,8 +36473,9 @@ contact yourself."
         &mut self,
         spots: impl Fn(&str, &str, u64) -> tempo_core::logbook::offer::SpotIota + Send + Sync + 'static,
         known: impl Fn(&str) -> bool + Send + Sync + 'static,
+        name: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
     ) {
-        self.station.set_iota_at_log(spots, known)
+        self.station.set_iota_at_log(spots, known, name)
     }
 
     /// See [`StationCore::set_path_grader`].
@@ -54731,22 +54764,19 @@ mod tests {
         assert!(d.contains("<MY_GRIDSQUARE:4>FN31"), "{d}");
     }
 
-    /// HRD Logbook can upload a contact itself, so it never gets an IOTA reference taken from a
-    /// log-time offer the operator has not confirmed. One the operator typed, and an older
-    /// callbook-filled one, still go.
+    /// HRD Logbook gets an IOTA reference Nexus filled at log time like one the operator typed
+    /// (operator ruling, 2026-11-10: nothing is held back), as it gets an older callbook-filled one.
     #[test]
-    fn the_hrd_datagram_never_carries_a_held_iota() {
+    fn the_hrd_datagram_carries_a_filled_iota() {
         use tempo_core::logbook::offer::{accept_iota_offer, IotaOffer, OfferSource};
         let e = Engine::new("K2DEF", "FN31", 0);
-        let mut held = e.qso_record("IA5X".into(), None, None);
+        let mut filled = e.qso_record("IA5X".into(), None, None);
         let offer = IotaOffer {
             reference: "EU-028".into(),
             source: OfferSource::Spot,
         };
-        assert!(accept_iota_offer(&mut held, &offer));
-        let d = e.hrd_datagram(&held);
-        assert!(!d.contains("<IOTA:"), "{d}");
-        assert!(!d.contains("APP_NEXUS_OFFER_HELD"), "{d}");
+        assert!(accept_iota_offer(&mut filled, &offer));
+        assert!(e.hrd_datagram(&filled).contains("<IOTA:6>EU-028"));
         let mut typed = e.qso_record("IA5X".into(), None, None);
         typed.ota.iota = Some("EU-028".into());
         assert!(e.hrd_datagram(&typed).contains("<IOTA:6>EU-028"));
