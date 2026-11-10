@@ -20612,11 +20612,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // (set_tier / cross-band QSY). A blind call proceeds on the operator's CURRENT
         // parity, untouched — exactly WSJT-X's typed-DX-Call flow, where generating messages
         // for a typed call never touches m_txFirst: the period is the operator's standing
-        // choice and calling blind is their deliberate act.
-        if let Some(s) = context_slot
-            .or_else(|| self.latest_decode_slot_from(dxcall))
-            .or(self.last_decode_slot)
-        {
+        // choice and calling blind is their deliberate act. So there is NO `last_decode_slot`
+        // fallback here: with traffic on the band it would hand a blind call a stranger's period.
+        if let Some(s) = context_slot.or_else(|| self.latest_decode_slot_from(dxcall)) {
             self.apply_cycle_parity(s % 2 == 0);
         }
         // Move our RX onto the DX's audio frequency, and TX with it unless Hold Tx Freq is on —
@@ -21746,9 +21744,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // Smart cycle (FT8-style): when auto and not in a CQ run, answer a heard station
         // on the OPPOSITE T/R parity to the one we decoded them in, so we key while they
         // listen (the 50/50-collision fix). A decode's audio is from the slot before its
-        // ingest slot, so the opposite of the DX's period is `ingest_slot % 2`.
+        // ingest slot, so the opposite of the DX's period is `ingest_slot % 2`. A peer never
+        // decoded keeps the current cycle: the latest decode from anyone else says nothing
+        // about the peer's period.
         if self.tx_cycle_auto && !self.cq_running {
-            if let Some(s) = self.latest_decode_slot_from(peer).or(self.last_decode_slot) {
+            if let Some(s) = self.latest_decode_slot_from(peer) {
                 self.apply_cycle_parity(s % 2 == 0);
             }
         }
@@ -49824,6 +49824,27 @@ mod tests {
         assert!(!e.tx_even(), "manual cycle held — auto did not override it");
     }
 
+    /// A message to a peer never decoded keeps the current cycle: the latest decode from
+    /// someone else says nothing about the peer's period, so taking it would be a coin toss.
+    #[test]
+    fn chat_to_an_unheard_peer_keeps_the_current_cycle() {
+        for (even, stranger_slot) in [(true, 7), (false, 8)] {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.set_tier(Tier::TempoFast);
+            e.apply_cycle_parity(even); // auto stays on
+            assert!(e.tx_cycle_auto());
+            e.decode_history
+                .push_back((stranger_slot, cq_decode_from("W9XYZ")));
+            e.last_decode_slot = Some(stranger_slot);
+            e.send_message("N0NEW", "HI");
+            assert_eq!(
+                e.tx_even(),
+                even,
+                "a stranger's decode picked the cycle for an unheard peer"
+            );
+        }
+    }
+
     #[test]
     fn harq_enabled_by_default_and_toggles() {
         // IR-HARQ is ON by default (unlike beacon, it is NOT force-disabled at
@@ -51607,6 +51628,56 @@ mod tests {
             before,
             "and the operator's standing period is untouched"
         );
+    }
+
+    /// The same rule with traffic on the band, which is the case that matters on air: a typed
+    /// call to a station never decoded must NOT take its period from whoever decoded last — that
+    /// slot is a stranger's and says nothing about the DX's period, so it is a coin toss that
+    /// transmits on top of the DX half the time. WSJT-X sets `m_txFirst` only from a clicked
+    /// line (mainwindow.cpp 8963-8967); a typed DX Call leaves it alone. Both periods are pinned
+    /// so the test cannot pass by the stranger's slot happening to agree.
+    #[test]
+    fn a_typed_blind_call_with_decodes_on_the_band_keeps_the_operators_period() {
+        for (even, stranger_slot) in [(true, 5), (false, 6)] {
+            let mut e = Engine::new("W9XYZ", "EN37", 0);
+            e.set_tier(Tier::Ft8);
+            e.set_tx_even(even);
+            e.ingest_decodes_for_test(&[dec_snr("CQ K1ABC FN42", -10)], stranger_slot);
+            e.last_decode_slot = Some(stranger_slot); // what the live ingest records
+            e.call_station("PJ4DX"); // typed, never decoded
+            assert!(e.snapshot().qso.is_some(), "a typed call arms");
+            assert_eq!(
+                e.tx_even(),
+                even,
+                "it took the period from a stranger's decode instead of keeping the operator's"
+            );
+        }
+    }
+
+    /// The positive control for the rule above: a station that WAS decoded is answered on the
+    /// opposite of its own period, whether the call is typed or clicked from its line — and the
+    /// stranger decoded after it does not get a say.
+    #[test]
+    fn a_call_to_a_decoded_station_still_takes_the_opposite_of_its_period() {
+        // PJ4DX heard in the slot ingested at 7 (odd) → we transmit odd; a stranger at 8 later.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_tx_even(true);
+        e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 7);
+        e.ingest_decodes_for_test(&[dec_snr("CQ K1ABC FN42", -10)], 8);
+        e.last_decode_slot = Some(8);
+        e.call_station("PJ4DX");
+        assert!(!e.tx_even(), "typed call to a heard station: the DX's opposite");
+
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_tx_even(true);
+        e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 7);
+        e.ingest_decodes_for_test(&[dec_snr("CQ K1ABC FN42", -10)], 8);
+        e.last_decode_slot = Some(8);
+        e.call_station_ctx("PJ4DX", None, Some("CQ PJ4DX FK52"), Some(-10), None)
+            .expect("a clicked line from the history is answered");
+        assert!(!e.tx_even(), "clicked line: the DX's opposite");
     }
 
     /// The other half of the same hole: after a tier switch the roster's entries are stale in
