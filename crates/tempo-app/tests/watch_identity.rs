@@ -59,7 +59,7 @@ fn native_frame_for(kind: modes::ModeKind, msg: &str, f0: f32) -> Vec<f32> {
     let mode = modes::make_mode(kind);
     let tones = mode.encode(msg);
     assert!(!tones.is_empty(), "{} encode failed", kind.as_str());
-    // FT8/FT4 gen_wave is slot-positioned (it carries its own 0.5 s lead-in), so the
+    // FT8/FT4 gen_wave is slot-positioned (it carries its own lead-in), so the
     // waveform drops in at the slot start with no manual offset.
     let wave = mode.gen_wave(&tones, tempo_fast::SAMPLE_RATE, f0);
     let n = mode.frame_samples();

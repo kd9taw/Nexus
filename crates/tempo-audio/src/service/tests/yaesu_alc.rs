@@ -561,6 +561,63 @@ fn a_raw_read_that_stops_answering_mid_over_gives_up_quickly() {
     );
 }
 
+/// ⭐ THE SAME IN A TIMED OVER, WHOSE METER READS CARRY THE OVER'S OWN DEADLINE (the time left to
+/// its end, as every FT8/FT4 over's do). That deadline must not lift the raw read's own strict
+/// bound, and must not stop the backstop: a link that answered the question and then stops
+/// answering the raw read gives up after 300 ms a try and falls back to `l ALC`. The hold is set
+/// directly, far ahead, rather than keyed by an FT8 over.
+#[test]
+fn a_timed_over_raw_read_that_stops_answering_gives_up_quickly() {
+    let rigctld = FakeRigctld::with(64, "", 1, None);
+    let engine = engine_for(1035);
+    let mut rig = Rig::rigctld(&rigctld.addr);
+    let mut backend = MockBackend::new();
+    let mut state = loop_state_for(&engine);
+    let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+    let mut station = StationSinks::new();
+    let (mut t, mut lines_before_key, mut steps) = (0.0, 0, Vec::new());
+    for k in 0..120 {
+        t += 50.0;
+        if k == 40 {
+            lines_before_key = rigctld.log.lock().unwrap().len();
+        }
+        if k >= 40 {
+            state.tx_until_ms = Some(t + 60_000.0); // an over's own deadline, far ahead
+        }
+        let started = Instant::now();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                t,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        if k >= 40 {
+            steps.push(started.elapsed());
+        }
+    }
+    let sent = rigctld.lines();
+    let during = &sent[lines_before_key..];
+    assert!(
+        during.iter().any(|l| l == "w RM4;"),
+        "premise: the over asked raw — {sent:?}"
+    );
+    let slowest = steps.iter().max().copied().unwrap_or_default();
+    assert!(
+        slowest < Duration::from_millis(400),
+        "a step held for the transport deadline: {slowest:?} — {sent:?}"
+    );
+    assert!(
+        during.iter().any(|l| l == "l ALC"),
+        "the backstop never fell back to Hamlib's ALC — {sent:?}"
+    );
+}
+
 /// ⭐ A NETWORK RADIO LINK THAT ANSWERS THE RAW READ IN HALF A SECOND KEEPS ITS CONNECTION AND
 /// ITS ALC THROUGH THE OVER. The link is a slow transport, as every network link is, and answers
 /// the probe and every raw read in 500 ms. The over's raw read waits as long as `l ALC` would

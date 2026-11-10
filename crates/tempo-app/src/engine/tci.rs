@@ -706,6 +706,9 @@ impl Engine {
             // a standing trip ends it through G1, which reads the trip.
             watchdog_limit_secs: 0,
             watchdog_start_secs: None,
+            // No amplifier TX delay of Nexus's: the program keys when it sends audio, after its
+            // own Tx delay (WSJT-X's `TxDelay`), which is the one that governs its overs.
+            amp_delay_ms: 0,
         };
         let arrived = self.tci.feed.take();
         let budget_ms = budget_ms.clamp(0.0, TCI_OVER.max_push_ms as f64);

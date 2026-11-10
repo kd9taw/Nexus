@@ -34,9 +34,19 @@ impl Over {
     /// [`Self::cq`]. The loop's clock starts on an even (this station's) boundary of `tier`, at
     /// least 30 s ahead of the real clock.
     fn new(tier: Tier) -> Over {
+        Self::with_meters(tier, Arc::new(std::sync::atomic::AtomicBool::new(false)))
+    }
+
+    /// [`Self::new`] on a rigctld that leaves every transmit meter read (`l NAME`) unanswered
+    /// while `stall` is set, as a stalled network rigctld or a slow serial rig does. It goes on
+    /// serving the connection meanwhile, so only the read itself waits.
+    fn with_meters(tier: Tier, stall: Arc<std::sync::atomic::AtomicBool>) -> Over {
         let key_at = Arc::new(Mutex::new(None));
         let noted = Arc::clone(&key_at);
         let peer = retuning_peer(14_074_000, "PKTUSB", move |line, state| {
+            if line.starts_with("l ") && stall.load(std::sync::atomic::Ordering::SeqCst) {
+                return Some(String::new());
+            }
             (line == "T 1").then(|| {
                 noted.lock().unwrap().get_or_insert(now_unix_ms());
                 state.keyed = true;
@@ -152,9 +162,9 @@ fn an_on_time_ft8_over_stops_its_audio_and_drops_ptt_at_wsjtxs_times() {
 }
 
 /// ⭐ FT4 THE SAME WAY: AUDIO STOPPED AT 6.04 s, PTT OFF AT 6.24 s (WSJT-X's `txDuration` 6.04 s and
-/// its 200 ms). The over used to hold PTT to key + 6.548 s + 250 ms = 6.80 s. The 0.5 s lead-in is
-/// Nexus's own (WSJT-X's Modulator starts FT4 at 0.3 s; `crates/modes/src/mode.rs` says why) and is
-/// unchanged: the tones still start at 0.5 s, and end at 5.54 s.
+/// its 200 ms). The over used to hold PTT to key + 6.548 s + 250 ms = 6.80 s. The tones start 0.3 s
+/// into the slot, where WSJT-X's Modulator starts FT4 (`crates/modes/src/mode.rs`,
+/// `FT4_LEAD_IN_SECS`), and end at 5.34 s.
 #[test]
 fn an_on_time_ft4_over_stops_its_audio_and_drops_ptt_at_wsjtxs_times() {
     let mut s = Over::new(Tier::Ft4);
@@ -164,8 +174,8 @@ fn an_on_time_ft4_over_stops_its_audio_and_drops_ptt_at_wsjtxs_times() {
     assert_eq!(s.sent("T 1"), 1, "premise: the boundary keyed");
     let played = &s.backend.played;
     assert!(
-        played[..6_000].iter().all(|&x| x == 0.0) && played[6_000..6_100].iter().any(|&x| x != 0.0),
-        "FT4's tones do not start 0.5 s into the slot, as before"
+        played[..3_600].iter().all(|&x| x == 0.0) && played[3_600..3_700].iter().any(|&x| x != 0.0),
+        "FT4's tones do not start 0.3 s into the slot, as WSJT-X's do"
     );
     assert_eq!(s.state.tx_until_ms, Some(t0 + 6_240.0), "PTT off");
     let flushes = s.backend.flush_calls;
@@ -306,8 +316,8 @@ fn a_late_start_past_75_percent_waits_for_the_next_own_slot() {
     assert_eq!(s.backend.played.len(), FT8_WAVE);
 }
 
-/// FT4 THE SAME WAY: 75 % of its 7.5 s slot is 5.625 s. A CQ 5.5 s in keys at once with the 40 ms of
-/// tones still ahead of the clock (FT4's 0.5 s lead-in puts its last tone at 5.54 s) and ends with
+/// FT4 THE SAME WAY: 75 % of its 7.5 s slot is 5.625 s. A CQ 5.3 s in keys at once with the 40 ms of
+/// tones still ahead of the clock (FT4's 0.3 s lead-in puts its last tone at 5.34 s) and ends with
 /// the window; 5.7 s in, it waits for the next own slot. The old budget stopped FT4 at 3.0 s.
 #[test]
 fn an_ft4_late_start_keys_until_75_percent_and_later_waits() {
@@ -318,12 +328,12 @@ fn an_ft4_late_start_keys_until_75_percent_and_later_waits() {
 
     let mut s = Over::new(Tier::Ft4);
     let t0 = s.t;
-    s.run_to(t0 + 5_480.0);
+    s.run_to(t0 + 5_280.0);
     s.cq_now();
-    s.run_to(t0 + 5_500.0);
-    assert_eq!(s.sent("T 1"), 1, "a CQ 5.5 s in did not key at once");
-    if let Err(why) = same_audio(&s.backend.played, &on_time.backend.played[66_000..]) {
-        panic!("the CQ 5.5 s in is not the on-time over's audio from there on: {why}");
+    s.run_to(t0 + 5_300.0);
+    assert_eq!(s.sent("T 1"), 1, "a CQ 5.3 s in did not key at once");
+    if let Err(why) = same_audio(&s.backend.played, &on_time.backend.played[63_600..]) {
+        panic!("the CQ 5.3 s in is not the on-time over's audio from there on: {why}");
     }
     assert_eq!(s.state.tx_until_ms, Some(t0 + 6_240.0), "PTT off");
 
@@ -410,7 +420,7 @@ fn an_ft2_late_start_keeps_its_whole_over_rule() {
 }
 
 // ── An FT4 late start with no tone left: keyed, and held to the window ─────────────────────────────
-// FT4's tones end 5.54 s into its slot (Nexus's 0.5 s lead-in), before its latest key at 5.625 s.
+// FT4's tones end 5.34 s into its slot (its 0.3 s lead-in), before its latest key at 5.625 s.
 // WSJT-X keys a late start there all the same (`widgets/mainwindow.cpp:5126-5176`): its Modulator
 // finds every symbol behind it and sends none (`Modulator/Modulator.cpp:96-99`, `:281`), and PTT
 // falls only at the window's end (`widgets/mainwindow.cpp:5180`, `:5530`, `stopTx` `:5743-5753`,
@@ -447,7 +457,7 @@ fn an_ft4_late_start_with_no_tone_left_keys_and_holds_ptt_to_the_window() {
     );
     assert!(
         s.backend.played.is_empty(),
-        "{} samples played: FT4's tones end at 5.54 s",
+        "{} samples played: FT4's tones end at 5.34 s",
         s.backend.played.len()
     );
 
@@ -535,7 +545,7 @@ fn stop_tx_cuts_the_held_window_at_once_and_tx_off_lets_it_end_on_the_window() {
 
 // ── This station's own FT4 boundary decided with no tone left: keyed, and held to the window ──────
 // The same rule when the slot's own key comes late (a decode that drained late, a stalled computer)
-// and finds it 5.54-5.625 s into the slot: past FT4's last tone, under its latest key. WSJT-X's GUI
+// and finds it 5.34-5.625 s into the slot: past FT4's last tone, under its latest key. WSJT-X's GUI
 // tick keys it as it keys a late start (`widgets/mainwindow.cpp:5126-5176`) and holds it to the
 // window's end; Nexus keyed nothing there.
 
@@ -569,7 +579,7 @@ fn an_ft4_boundary_with_no_tone_left_keys_and_holds_ptt_to_the_window() {
     );
     assert!(
         s.backend.played.is_empty(),
-        "{} samples played: FT4's tones end at 5.54 s",
+        "{} samples played: FT4's tones end at 5.34 s",
         s.backend.played.len()
     );
 }
@@ -907,8 +917,8 @@ fn a_busy_decoder_does_not_delay_the_key_of_the_over_built_before_it() {
     }
 }
 
-/// FT4's slot-positioned wave, in samples: 0.5 s of lead-in and the 72 576-sample frame.
-const FT4_WAVE: usize = 6_000 + 72_576;
+/// FT4's slot-positioned wave, in samples: 0.3 s of lead-in and the 72 576-sample frame.
+const FT4_WAVE: usize = 3_600 + 72_576;
 
 /// ⭐ AN OVER CHANGED AFTER THE EARLY PASS KEYS ON TIME WHILE A DECODE HOLDS THE MODEM, ON FT8 AND
 /// FT4. After the early pass (11.8 s, 5.5 s) the operator changes what the boundary sends: a new TX
@@ -1497,4 +1507,89 @@ fn an_ft8_overs_audio_stop_does_not_wait_for_the_engine_lock() {
         1,
         "the audio stopped twice"
     );
+}
+
+// ── A transmit meter read near an over's end ──────────────────────────────────────────────────────
+// During an over the loop reads one transmit meter (Po, SWR, ALC, COMP) every 150 ms, a blocking CAT
+// round trip in the thread that stops the audio and drops PTT. With no deadline of its own it waited
+// the link's whole deadline (700 ms here, 2.5 s on a network or slow serial link), so a radio that
+// stalled on a read near the end held the carrier past the window, into the other station's period,
+// and held a Stop TX with it.
+
+/// ⭐ A STALLED METER READ NEAR THE END OF AN FT8 OR FT4 OVER NEVER HOLDS THE LOOP PAST THAT END: the
+/// read is bounded by the time left to the over's next end (its audio stop, then its PTT off), and
+/// with less than [`TX_METER_OVER_MIN_LEFT_MS`] left it is not asked at all. So the tick that reads
+/// it takes at most the time left plus what the same tick takes when the radio answers at once,
+/// and the audio stop, the unkey and a Stop TX come at most one tick late. The control, 2.6 s from
+/// the end, asks the meter and waits the link's whole deadline, as before: the stall is real.
+#[test]
+fn a_stalled_meter_read_near_an_overs_end_never_holds_the_loop_past_it() {
+    // One over of `tier`, run to the tick `at` ms into its slot with a meter read due there and the
+    // radio stalling on it (`stalled`) or answering at once: how long that tick held the loop,
+    // whether it asked a meter, and the over.
+    let scene = |tier: Tier, at: f64, stop: bool, stalled: bool| {
+        let stall = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut s = Over::with_meters(tier, Arc::clone(&stall));
+        let t0 = s.t;
+        s.cq();
+        s.run_to(t0 + at - 20.0);
+        assert!(s.state.tx_until_ms.is_some(), "premise: the over is on");
+        stall.store(stalled, std::sync::atomic::Ordering::SeqCst);
+        s.state.tx_meter_supported = [None; N_TX_METERS];
+        s.state.tx_meter_misses = [0; N_TX_METERS];
+        s.state.last_tx_meter_poll = t0 + at - 1_000.0;
+        if stop {
+            s.engine.lock().unwrap().halt_tx(); // the operator presses Stop TX
+        }
+        let reads = |s: &Over| {
+            let lines = s.peer.lines.lock().unwrap();
+            lines.iter().filter(|l| l.starts_with("l ")).count()
+        };
+        let asked = reads(&s);
+        let started = std::time::Instant::now();
+        s.run_to(t0 + at);
+        let held = started.elapsed().as_secs_f64() * 1_000.0;
+        let read = reads(&s) > asked;
+        (held, read, s)
+    };
+    // (tier, ms into the slot of the tick that reads, the over's next end, Stop TX on that tick)
+    for (tier, at, end, stop) in [
+        (Tier::Ft8, 11_000.0, 13_640.0, false),
+        (Tier::Ft8, 13_300.0, 13_640.0, false),
+        (Tier::Ft8, 13_300.0, 13_640.0, true),
+        (Tier::Ft8, 13_560.0, 13_640.0, false),
+        (Tier::Ft8, 13_700.0, 13_840.0, false),
+        (Tier::Ft8, 13_800.0, 13_840.0, false),
+        (Tier::Ft4, 5_700.0, 6_040.0, false),
+        (Tier::Ft4, 5_960.0, 6_040.0, false),
+        (Tier::Ft4, 6_100.0, 6_240.0, false),
+    ] {
+        let what = format!("{tier:?} at {at} ms{}", if stop { ", Stop TX" } else { "" });
+        let (base, _, _) = scene(tier, at, stop, false);
+        let (held, read, s) = scene(tier, at, stop, true);
+        let left = end - at;
+        assert!(
+            held <= left + base + 20.0,
+            "{what}: the tick held the loop {held:.0} ms with {left} ms to the over's end \
+             ({base:.0} ms when the radio answers)"
+        );
+        assert_eq!(
+            read,
+            left >= TX_METER_OVER_MIN_LEFT_MS,
+            "{what}: a meter read asked (or not) with {left} ms left"
+        );
+        if left > 2_000.0 {
+            assert!(
+                held >= 600.0,
+                "{what}: control: the stalled read waited {held:.0} ms"
+            );
+        }
+        if stop {
+            assert_eq!(
+                s.sent("T 0"),
+                1,
+                "{what}: Stop TX did not unkey on that tick"
+            );
+        }
+    }
 }

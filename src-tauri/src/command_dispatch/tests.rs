@@ -1238,6 +1238,70 @@ fn a_save_from_afar_keeps_the_flex_beta_of_the_radio_its_form_edited() {
     );
 }
 
+/// The amplifier TX delay is the station's: the time the amplifier behind the shack's radio needs to
+/// switch is known at the shack. A save or one radio's edit from afar keeps the shack's value, an
+/// older client's save that has never heard of it wipes nothing, and the client's form shows it as
+/// set at the station. CONTROL: the shack's own form and edit take it.
+#[test]
+fn a_save_from_afar_keeps_the_shacks_amp_tx_delay() {
+    let mut shack = two_radio_shack();
+    shack.radios[1].amp_tx_delay_ms = 120;
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
+    // Radio 0 (0 at the shack): a save from afar asking for 300 ms.
+    let mut asked = shack.clone();
+    asked.amp_tx_delay_ms = 300;
+    asked.cw_wpm = 31;
+    let mut save = asked.clone();
+    keep_the_shacks_settings(&shack, &mut save, Some(&afar));
+    assert_eq!(save.amp_tx_delay_ms, 0, "from afar, radio 0");
+    assert_eq!(save.cw_wpm, 31, "CONTROL: the rest of the save");
+    // Radio 1 (120 ms at the shack): the form turned it off. Kept at 120.
+    let mut save = shack.clone();
+    save.active_radio = 1;
+    save.amp_tx_delay_ms = 0;
+    keep_the_shacks_settings(&shack, &mut save, Some(&afar));
+    assert_eq!(save.amp_tx_delay_ms, 120, "from afar, radio 1");
+    // An older client's save, which has never heard of it.
+    let mut old = serde_json::to_value(&shack).unwrap();
+    old.as_object_mut().unwrap().remove("ampTxDelayMs");
+    old["activeRadio"] = json!(1);
+    let mut save: tempo_app::settings::Settings = serde_json::from_value(old).unwrap();
+    keep_the_shacks_settings(&shack, &mut save, Some(&afar));
+    assert_eq!(save.amp_tx_delay_ms, 120, "an older client's save");
+    // CONTROL: the shack's own form.
+    let mut save = asked.clone();
+    keep_the_shacks_settings(&shack, &mut save, None);
+    assert_eq!(save.amp_tx_delay_ms, 300, "CONTROL: the shack's own form");
+
+    // One radio's edit from afar, asking radio 0 for 300 ms.
+    let mut patch = serde_json::to_value(&shack.radios[0]).unwrap();
+    patch["ampTxDelayMs"] = json!(300);
+    patch["txLevel"] = json!(0.25);
+    let asked: tempo_app::settings::RadioProfilePatch = serde_json::from_value(patch).unwrap();
+    let mut patch = asked.clone();
+    keep_the_shacks_radio_ptt(&shack, 0, &mut patch, Some(&afar));
+    let mut e = tempo_app::engine::Engine::with_settings(shack.clone());
+    e.update_radio_profile(0, patch).expect("the edit is taken");
+    let r0 = &e.settings().radios[0];
+    assert_eq!(r0.amp_tx_delay_ms, 0, "a radio's edit from afar");
+    assert_eq!(r0.tx_level, 0.25, "CONTROL: the rest of the edit");
+    let mut patch = asked.clone();
+    keep_the_shacks_radio_ptt(&shack, 0, &mut patch, None);
+    assert_eq!(
+        patch.amp_tx_delay_ms,
+        Some(300),
+        "CONTROL: the shack's own edit"
+    );
+    let flagged = station_only_settings(Some(&afar), &shack).unwrap();
+    assert!(
+        flagged.contains(&"ampTxDelayMs"),
+        "the delay is not shown as set at the station"
+    );
+}
+
 /// ⛔ THE SHACK COMPUTER'S MICROPHONE IS SET AT THE SHACK ONLY. A save from a computer driving the
 /// station (the whole save, and one radio's edit) cannot turn on Phone's PTT sending the shack's
 /// microphone, pick which, or raise its gain: those are the radio's transmit audio, and the

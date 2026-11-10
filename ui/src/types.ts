@@ -5675,6 +5675,8 @@ export interface Settings {
   ampModel?: string
   ampPort?: string
   ampFollowBand?: boolean
+  /** Amplifier TX delay in ms, 0 = off (flat mirror of the ACTIVE radio's). */
+  ampTxDelayMs?: number
   /** ADVANCED: external rotctld host:port override (wins over the integrated
    * spawn). Empty + model 0 = no rotator. */
   rotatorHost: string
@@ -6593,6 +6595,7 @@ export interface RadioProfile {
   ampModel: string
   ampPort: string
   ampFollowBand: boolean
+  ampTxDelayMs: number
   rotatorHost: string
   rotctldPort: number
   /** Bands this radio covers (empty = all) — for auto band-routing (P4). */
