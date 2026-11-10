@@ -152,9 +152,9 @@ fn an_on_time_ft8_over_stops_its_audio_and_drops_ptt_at_wsjtxs_times() {
 }
 
 /// ⭐ FT4 THE SAME WAY: AUDIO STOPPED AT 6.04 s, PTT OFF AT 6.24 s (WSJT-X's `txDuration` 6.04 s and
-/// its 200 ms). The over used to hold PTT to key + 6.548 s + 250 ms = 6.80 s. The 0.5 s lead-in is
-/// Nexus's own (WSJT-X's Modulator starts FT4 at 0.3 s; `crates/modes/src/mode.rs` says why) and is
-/// unchanged: the tones still start at 0.5 s, and end at 5.54 s.
+/// its 200 ms). The over used to hold PTT to key + 6.548 s + 250 ms = 6.80 s. The tones start 0.3 s
+/// into the slot, where WSJT-X's Modulator starts FT4 (`crates/modes/src/mode.rs`,
+/// `FT4_LEAD_IN_SECS`), and end at 5.34 s.
 #[test]
 fn an_on_time_ft4_over_stops_its_audio_and_drops_ptt_at_wsjtxs_times() {
     let mut s = Over::new(Tier::Ft4);
@@ -164,8 +164,8 @@ fn an_on_time_ft4_over_stops_its_audio_and_drops_ptt_at_wsjtxs_times() {
     assert_eq!(s.sent("T 1"), 1, "premise: the boundary keyed");
     let played = &s.backend.played;
     assert!(
-        played[..6_000].iter().all(|&x| x == 0.0) && played[6_000..6_100].iter().any(|&x| x != 0.0),
-        "FT4's tones do not start 0.5 s into the slot, as before"
+        played[..3_600].iter().all(|&x| x == 0.0) && played[3_600..3_700].iter().any(|&x| x != 0.0),
+        "FT4's tones do not start 0.3 s into the slot, as WSJT-X's do"
     );
     assert_eq!(s.state.tx_until_ms, Some(t0 + 6_240.0), "PTT off");
     let flushes = s.backend.flush_calls;
@@ -306,8 +306,8 @@ fn a_late_start_past_75_percent_waits_for_the_next_own_slot() {
     assert_eq!(s.backend.played.len(), FT8_WAVE);
 }
 
-/// FT4 THE SAME WAY: 75 % of its 7.5 s slot is 5.625 s. A CQ 5.5 s in keys at once with the 40 ms of
-/// tones still ahead of the clock (FT4's 0.5 s lead-in puts its last tone at 5.54 s) and ends with
+/// FT4 THE SAME WAY: 75 % of its 7.5 s slot is 5.625 s. A CQ 5.3 s in keys at once with the 40 ms of
+/// tones still ahead of the clock (FT4's 0.3 s lead-in puts its last tone at 5.34 s) and ends with
 /// the window; 5.7 s in, it waits for the next own slot. The old budget stopped FT4 at 3.0 s.
 #[test]
 fn an_ft4_late_start_keys_until_75_percent_and_later_waits() {
@@ -318,12 +318,12 @@ fn an_ft4_late_start_keys_until_75_percent_and_later_waits() {
 
     let mut s = Over::new(Tier::Ft4);
     let t0 = s.t;
-    s.run_to(t0 + 5_480.0);
+    s.run_to(t0 + 5_280.0);
     s.cq_now();
-    s.run_to(t0 + 5_500.0);
-    assert_eq!(s.sent("T 1"), 1, "a CQ 5.5 s in did not key at once");
-    if let Err(why) = same_audio(&s.backend.played, &on_time.backend.played[66_000..]) {
-        panic!("the CQ 5.5 s in is not the on-time over's audio from there on: {why}");
+    s.run_to(t0 + 5_300.0);
+    assert_eq!(s.sent("T 1"), 1, "a CQ 5.3 s in did not key at once");
+    if let Err(why) = same_audio(&s.backend.played, &on_time.backend.played[63_600..]) {
+        panic!("the CQ 5.3 s in is not the on-time over's audio from there on: {why}");
     }
     assert_eq!(s.state.tx_until_ms, Some(t0 + 6_240.0), "PTT off");
 
@@ -410,7 +410,7 @@ fn an_ft2_late_start_keeps_its_whole_over_rule() {
 }
 
 // ── An FT4 late start with no tone left: keyed, and held to the window ─────────────────────────────
-// FT4's tones end 5.54 s into its slot (Nexus's 0.5 s lead-in), before its latest key at 5.625 s.
+// FT4's tones end 5.34 s into its slot (its 0.3 s lead-in), before its latest key at 5.625 s.
 // WSJT-X keys a late start there all the same (`widgets/mainwindow.cpp:5126-5176`): its Modulator
 // finds every symbol behind it and sends none (`Modulator/Modulator.cpp:96-99`, `:281`), and PTT
 // falls only at the window's end (`widgets/mainwindow.cpp:5180`, `:5530`, `stopTx` `:5743-5753`,
@@ -447,7 +447,7 @@ fn an_ft4_late_start_with_no_tone_left_keys_and_holds_ptt_to_the_window() {
     );
     assert!(
         s.backend.played.is_empty(),
-        "{} samples played: FT4's tones end at 5.54 s",
+        "{} samples played: FT4's tones end at 5.34 s",
         s.backend.played.len()
     );
 
@@ -535,7 +535,7 @@ fn stop_tx_cuts_the_held_window_at_once_and_tx_off_lets_it_end_on_the_window() {
 
 // ── This station's own FT4 boundary decided with no tone left: keyed, and held to the window ──────
 // The same rule when the slot's own key comes late (a decode that drained late, a stalled computer)
-// and finds it 5.54-5.625 s into the slot: past FT4's last tone, under its latest key. WSJT-X's GUI
+// and finds it 5.34-5.625 s into the slot: past FT4's last tone, under its latest key. WSJT-X's GUI
 // tick keys it as it keys a late start (`widgets/mainwindow.cpp:5126-5176`) and holds it to the
 // window's end; Nexus keyed nothing there.
 
@@ -569,7 +569,7 @@ fn an_ft4_boundary_with_no_tone_left_keys_and_holds_ptt_to_the_window() {
     );
     assert!(
         s.backend.played.is_empty(),
-        "{} samples played: FT4's tones end at 5.54 s",
+        "{} samples played: FT4's tones end at 5.34 s",
         s.backend.played.len()
     );
 }
@@ -907,8 +907,8 @@ fn a_busy_decoder_does_not_delay_the_key_of_the_over_built_before_it() {
     }
 }
 
-/// FT4's slot-positioned wave, in samples: 0.5 s of lead-in and the 72 576-sample frame.
-const FT4_WAVE: usize = 6_000 + 72_576;
+/// FT4's slot-positioned wave, in samples: 0.3 s of lead-in and the 72 576-sample frame.
+const FT4_WAVE: usize = 3_600 + 72_576;
 
 /// ⭐ AN OVER CHANGED AFTER THE EARLY PASS KEYS ON TIME WHILE A DECODE HOLDS THE MODEM, ON FT8 AND
 /// FT4. After the early pass (11.8 s, 5.5 s) the operator changes what the boundary sends: a new TX

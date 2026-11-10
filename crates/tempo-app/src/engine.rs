@@ -23856,11 +23856,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // value never disagrees with the decoder.
             Tier::Js8 => f64::from(self.js8_tx_speed().slot_fit_s()),
             Tier::TempoDeep => 12.64, // no lead-in; a safe over-estimate of the ~9.9 s frame
-            // FT4 = 0.5 s lead-in + 5.04 s tones (105 sym × 576 sa @ 12 kHz). The
-            // generated buffer also carries ~1.0 s of TRAILING silence — that is
-            // PTT-hold padding, not airtime, and the radio loop strips it on a
-            // late (mid-slot) start so the over never bleeds into the next period.
-            Tier::Ft4 => 5.54,
+            // FT4 = 0.3 s lead-in (WSJT-X's, `modes::mode` `FT4_LEAD_IN_SECS`) + 5.04 s
+            // tones (105 sym × 576 sa @ 12 kHz). The generated buffer also carries
+            // ~1.0 s of TRAILING silence — that is PTT-hold padding, not airtime, and
+            // the radio loop strips it on a late (mid-slot) start so the over never
+            // bleeds into the next period.
+            Tier::Ft4 => 5.34,
             // FT2 = 0.5 s lead-in + 2.52 s tones (105 sym × 288 sa @ 12 kHz). Unlike
             // FT4 there is NO trailing padding in the buffer — `Ft2Mode::gen_wave`
             // returns exactly lead + NWAVE — so 3.02 is the whole of it, and it is
@@ -67173,7 +67174,7 @@ mod tests {
         assert!(!tones.is_empty(), "{} encode failed", kind.as_str());
         let wave = mode.gen_wave(&tones, tempo_fast::SAMPLE_RATE, f0);
         let n = mode.frame_samples();
-        // FT8/FT4 gen_wave is now slot-positioned (includes the 0.5 s lead-in), so place
+        // FT8/FT4 gen_wave is now slot-positioned (includes the lead-in), so place
         // it at the slot start — no manual offset (a stale +6000 here would push FT8 to
         // 1.0 s, double-offsetting it).
         let off = 0;
@@ -67797,7 +67798,7 @@ mod tests {
         assert!(!tones.is_empty(), "{} encode failed", kind.as_str());
         let wave = mode.gen_wave(&tones, tempo_fast::SAMPLE_RATE, f0);
         let n = mode.frame_samples();
-        // FT8/FT4 gen_wave is now slot-positioned (includes the 0.5 s lead-in), so place
+        // FT8/FT4 gen_wave is now slot-positioned (includes the lead-in), so place
         // it at the slot start; the wave already carries its own offset.
         let off = 0;
         let sig = tempo_core::channel::snr_to_scale(snr_db, tempo_fast::SAMPLE_RATE);
@@ -71761,6 +71762,25 @@ mod tests {
                 (secs - speed.slot_fit_s()).abs() < 0.01,
                 "{speed:?}: `slot_fit_s` ({}) must describe the real wave ({secs})",
                 speed.slot_fit_s()
+            );
+        }
+    }
+
+    /// FT8's and FT4's over lengths are where their real waves' last tone ends (lead-in + tones),
+    /// read off the wave, so the table follows a lead-in change instead of restating the old one.
+    #[test]
+    fn tx_over_secs_at_ft8_and_ft4_is_where_the_real_wave_falls_silent() {
+        for (tier, kind) in [(Tier::Ft8, modes::ModeKind::Ft8), (Tier::Ft4, modes::ModeKind::Ft4)] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(tier);
+            let m = modes::make_mode(kind);
+            let wave = m.gen_wave(&m.encode("CQ KD9TAW EN52"), 12_000.0, 1_500.0);
+            let last = wave.iter().rposition(|&s| s != 0.0).expect("tones") + 1;
+            let secs = last as f64 / 12_000.0;
+            assert!(
+                (e.tx_over_secs() - secs).abs() < 0.01,
+                "{tier:?}: tx_over_secs {} but the wave ends at {secs:.3} s",
+                e.tx_over_secs()
             );
         }
     }

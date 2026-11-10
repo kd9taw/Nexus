@@ -80,7 +80,7 @@ mod tests {
         let tones = mode.encode(msg);
         assert!(!tones.is_empty(), "{} encode failed", mode.name());
         let wave = mode.gen_wave(&tones, FS, f0);
-        // FT8 and FT4 self-position (Mode::gen_wave includes the 0.5 s lead-in); FT1's
+        // FT8 and FT4 self-position (Mode::gen_wave includes the lead-in); FT1's
         // bare wave is placed at the proven ~0.4 s acquisition point by this harness.
         let off = match mode.kind() {
             ModeKind::Ft8 => 0,
@@ -322,6 +322,52 @@ mod tests {
         assert!(
             wave[lead..].iter().any(|&s| s != 0.0),
             "tones follow the lead-in"
+        );
+    }
+
+    #[test]
+    fn ft4_gen_wave_starts_its_tones_where_wsjtx_does() {
+        // WSJT-X 3.0.2 sends FT4 0.3 s into the period (`Modulator/Modulator.cpp:79`,
+        // `if(mode=="FT4") delay_ms=300`), not the 0.5 s its FT8 uses. Pinned as a literal, so
+        // the constant cannot drift without this failing.
+        assert_eq!(crate::mode::FT4_LEAD_IN_SECS, 0.3);
+        let m = make_mode(ModeKind::Ft4);
+        let msg = "CQ KD9TAW EN52";
+        let tones = m.encode(msg);
+        let wave = m.gen_wave(&tones, FS, 1500.0);
+        let lead = (0.3 * FS).round() as usize;
+        let bare = crate::wsjt77::ft4_wave(&tones, FS, 1500.0);
+        assert_eq!(wave.len(), lead + bare.len(), "FT4 wave = 0.3 s lead-in + tones");
+        assert!(wave[..lead].iter().all(|&s| s == 0.0), "lead-in is silence");
+        assert_eq!(&wave[lead..], &bare[..], "a pure delay of the tones");
+
+        // Round trip, played straight from the slot boundary (sample 0 = slot t = 0). The
+        // decoder's nominal start is 0.5 s (`ft4_decode.f90:454`, `xdt=ibest/666.67-0.5`; `ft4sim`
+        // puts a DT = 0 signal's ramp symbol at 0.452 s), so WSJT-X's own 0.3 s reads
+        // DT = 0.300 - 0.452 = -0.152 s with no sound-card latency. Nexus reads the same.
+        let dt_of = |w: &[f32]| -> f32 {
+            let frame = to_i16_frame(w, m.frame_samples(), 0, 8000.0);
+            let decs = m.decode_frame(
+                &frame, 200, 2900, 3, "KD9TAW", "", 0, 1500, 0, true, false, false,
+            );
+            decs.iter()
+                .find(|d| d.message == msg)
+                .unwrap_or_else(|| panic!("FT4 did not decode its own transmission: {decs:?}"))
+                .dt
+        };
+        let dt = dt_of(&wave);
+        assert!(
+            (dt + 0.152).abs() < 0.03,
+            "FT4 from the boundary reads WSJT-X's DT of -0.15 s, got {dt:.3} s"
+        );
+        // Positive control: the same audio 0.152 s later reads DT ~ 0, so the measurement
+        // tells the two placements apart.
+        let mut shifted = vec![0.0f32; (0.152 * FS).round() as usize];
+        shifted.extend_from_slice(&wave);
+        let dt_shifted = dt_of(&shifted);
+        assert!(
+            dt_shifted.abs() < 0.03,
+            "control: the nominal placement reads DT ~ 0, got {dt_shifted:.3} s"
         );
     }
 
