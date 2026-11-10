@@ -961,6 +961,14 @@ export function omnirigChoice(): { disabled: boolean; label: string } {
 /** Pick just the per-radio CAT/audio/PTT/rotator/native fields — the flat rig form and a radio
  * profile share these exact field names, so this serves BOTH directions: build the save patch
  * from the form, and load a radio's profile into the form (`{...form, ...radioPatch(profile)}`). */
+/** The amplifier TX delay a typed value stands for: whole 10 ms steps from 0 to 500, and 0 for
+ * anything that is not a number, so the form can only ever hold a value the radio loop takes. */
+export function ampTxDelayFromInput(raw: string): number {
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return 0
+  return Math.min(500, Math.max(0, Math.round(n / 10) * 10))
+}
+
 export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
   // `??` only fills genuinely-absent (null/undefined) fields — 0 / '' legit values are preserved.
   return {
@@ -1014,6 +1022,7 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     ampModel: s.ampModel ?? '',
     ampPort: s.ampPort ?? '',
     ampFollowBand: s.ampFollowBand ?? false,
+    ampTxDelayMs: s.ampTxDelayMs ?? 0,
     // ⚠️ THE FLEX THREE BELONG HERE, and their absence was silent data loss (2026-08-17 Flex
     // audit). Every save of the rig form while EDITING a non-active radio routes through
     // `persistRadioForm` → `updateRadioProfile(radioPatch(form))`, so a field this function does
@@ -8710,6 +8719,31 @@ export function SettingsPanel({
                   <span className="settings-hint">{t('settings.amplifier.follow.hint')}</span>
                 </div>
               )}
+              {/* The amplifier TX delay: how long after the key the radio loop holds Nexus's audio
+                  back, so an amplifier keyed from the radio switches before RF reaches it. Shown
+                  whatever the model above: an amplifier keyed from the radio's TX/linear jack needs
+                  no amplifier control in Nexus. 0 to 500 in steps of 10 (Rust holds it to 500 on
+                  read too); set at the station only. */}
+              <label className="settings-field">
+                <span className="settings-label">
+                  {t('settings.amplifier.txDelay.label')}{' '}
+                  <span className="settings-value">
+                    {t('settings.amplifier.txDelay.value', { ms: form.ampTxDelayMs ?? 0 })}
+                  </span>
+                </span>
+                <input disabled={locked('ampTxDelayMs')} data-setting="ampTxDelayMs"
+                  className="settings-slider"
+                  type="range"
+                  min="0"
+                  max="500"
+                  step="10"
+                  value={String(form.ampTxDelayMs ?? 0)}
+                  onChange={(e) => updateNum('ampTxDelayMs', ampTxDelayFromInput(e.target.value))}
+                  aria-label={t('settings.amplifier.txDelay.label')}
+                />
+                {setAtStation('ampTxDelayMs')}
+                <span className="settings-hint">{t('settings.amplifier.txDelay.hint')}</span>
+              </label>
             </div>
           </fieldset>
 

@@ -252,6 +252,84 @@ fn tones_after(waves: &[Vec<f32>], mut skip: usize) -> bool {
     false
 }
 
+/// The amplifier TX delay a slot over keyed now waits, in ms (`Engine::amp_tx_delay_ms`): no
+/// non-zero sample of it reaches the output before the key plus this. None for a key the loop
+/// already held (`held`: the radio was keyed before this over, so an amplifier on it has long
+/// switched), and none on FT4, which keeps WSJT-X's own 20 ms whatever its Tx delay says
+/// (`if(m_mode=="FT4") ms_delay=20;`, `widgets/mainwindow.cpp:12445`, v3.0.2).
+pub(crate) fn slot_amp_delay_ms(eng: &Engine, held: bool) -> f64 {
+    if held || eng.tier() == tempo_app::dto::Tier::Ft4 {
+        0.0
+    } else {
+        eng.amp_tx_delay_ms()
+    }
+}
+
+/// `ms` of 12 kHz audio, in whole samples.
+pub(crate) fn amp_delay_samples(ms: f64) -> usize {
+    (ms.max(0.0) * f64::from(tempo_fast::SAMPLE_RATE) / 1000.0).round() as usize
+}
+
+/// The silence an over that plays whole from its key must have in front of it to keep its first
+/// tone `amp_delay_ms` after the key: the delay less the silence the over already starts with (its
+/// own lead-in), never less than none. FT2 and FT1 start at their key, so they take the whole delay;
+/// FST4, Q65, JT65 and WSPR, whose lead-ins are 0.5 s and longer, never take any.
+pub(crate) fn amp_shortfall_samples(waves: &[Vec<f32>], amp_delay_ms: f64) -> usize {
+    let want = amp_delay_samples(amp_delay_ms);
+    let mut leading = 0usize;
+    for w in waves {
+        match w.iter().position(|&x| x != 0.0) {
+            Some(p) => {
+                leading += p;
+                return want.saturating_sub(leading);
+            }
+            None => leading += w.len(),
+        }
+    }
+    want.saturating_sub(leading)
+}
+
+/// The room an immediate start (a Call CQ or a double-click inside this station's own slot) needs
+/// before the next boundary, in ms, for an over of `over_ms`. A tier on the slot clock (FT8, FT4)
+/// keys on WSJT-X's latest key instead and needs none of this. Every other tier keys only an over
+/// that fits whole, and the amplifier TX delay moves it later by up to `amp_delay_ms`
+/// ([`amp_shortfall_samples`]): counted whole, before the over is built, so a start the over's own
+/// lead-in would have covered waits for the boundary rather than run past it.
+pub fn immediate_start_need_ms(over_ms: f64, on_slot_clock: bool, amp_delay_ms: f64) -> f64 {
+    if on_slot_clock {
+        over_ms
+    } else {
+        over_ms + amp_delay_ms
+    }
+}
+
+/// Hands an over's audio to the output in order with its first `left` samples kept silent: the
+/// amplifier TX delay for an over that stays on the slot clock (FT8, JS8), which blanks what would
+/// sound inside the delay rather than move it, as WSJT-X's Modulator, started late, skips the
+/// symbols already due (`Modulator/Modulator.cpp:99-103`, v3.0.2). A part with nothing to blank is
+/// handed over as it is, so a delay the lead-in already covers changes not one sample.
+pub(crate) struct QuietHead {
+    left: usize,
+}
+
+impl QuietHead {
+    pub(crate) fn new(samples: usize) -> QuietHead {
+        QuietHead { left: samples }
+    }
+
+    pub(crate) fn play(&mut self, backend: &mut impl AudioBackend, part: &[f32]) {
+        let n = self.left.min(part.len());
+        self.left -= n;
+        if part[..n].iter().all(|&x| x == 0.0) {
+            backend.play(part);
+        } else {
+            let mut quiet = part.to_vec();
+            quiet[..n].fill(0.0);
+            backend.play(&quiet);
+        }
+    }
+}
+
 /// When a keyed slot over ends, from [`play_keyed_over`].
 pub(crate) struct KeyedOver {
     /// When PTT drops.
@@ -267,16 +345,28 @@ pub(crate) struct KeyedOver {
 /// WSJT-X's window ([`wsjtx_over_end`]). An over whose every tone lies behind the key plays nothing
 /// and is still held to the window's end, as WSJT-X holds it. Every other tier as it always did: the
 /// whole wave from the key, held to [`tx_deadline_ms`].
+///
+/// `amp_delay_ms` is the amplifier TX delay ([`slot_amp_delay_ms`]): no non-zero sample is handed
+/// over before the key plus it. FT8 keeps its tones on the slot clock and blanks any that would
+/// sound inside the delay ([`QuietHead`]), which its 0.5 s lead-in covers unless the key was late.
+/// Every other tier is moved later by what its own lead-in does not cover
+/// ([`amp_shortfall_samples`]), and held that much longer. 0 changes nothing.
 pub(crate) fn play_keyed_over(
     eng: &Engine,
     backend: &mut impl AudioBackend,
     waves: &[Vec<f32>],
     keyed_ms: f64,
     now_ms: f64,
+    amp_delay_ms: f64,
 ) -> KeyedOver {
     let period_ms = eng.active_slot_secs() * 1000.0;
     let Some(window_ms) = wsjtx_tx_window_ms(eng.tier()) else {
         let mut secs = 0.0f32;
+        let shortfall = amp_shortfall_samples(waves, amp_delay_ms);
+        if shortfall > 0 {
+            secs += shortfall as f32 / tempo_fast::SAMPLE_RATE;
+            backend.play(&vec![0.0; shortfall]);
+        }
         for w in waves {
             secs += w.len() as f32 / tempo_fast::SAMPLE_RATE;
             backend.play(w);
@@ -313,11 +403,12 @@ pub(crate) fn play_keyed_over(
         // ([`wsjtx_over_end`] never ends an over before its key).
         return on_the_window;
     }
+    let mut quiet = QuietHead::new(amp_delay_samples(amp_delay_ms));
     for w in waves {
         let rest = &w[skip.min(w.len())..];
         skip = skip.saturating_sub(w.len());
         if !rest.is_empty() {
-            backend.play(rest);
+            quiet.play(backend, rest);
         }
     }
     backend.mark_unit_end();
@@ -1118,10 +1209,12 @@ pub fn slot_tx_phase(
                 rig_split_engaged: split.rig_split_engaged,
             };
         }
+        // The amplifier TX delay: nothing sounds before the key plus it (`slot_amp_delay_ms`).
+        let amp_delay_ms = slot_amp_delay_ms(eng, held);
         let over = if eng.tier() == tempo_app::dto::Tier::Js8 {
-            crate::js8_slot::play_frame(eng, backend, &waves, keyed_ms, slot)
+            crate::js8_slot::play_frame(eng, backend, &waves, keyed_ms, slot, amp_delay_ms)
         } else {
-            play_keyed_over(eng, backend, &waves, keyed_ms, now_ms)
+            play_keyed_over(eng, backend, &waves, keyed_ms, now_ms, amp_delay_ms)
         };
         rx.clear(); // our just-started carrier must not be decoded next boundary
                     // The bound the re-read above deliberately does NOT provide. Measuring the
@@ -1274,8 +1367,10 @@ mod tests {
     /// on the slot clock (`wsjtx_over_end`, pinned by the `wsjtx_*` and `an_ft8_overs_end_*` tests
     /// below) and lay their tones on that clock (`play_keyed_over`), so neither the deadline's basis
     /// nor a fake over's length is the key's any more there. Every other slot tier still holds PTT
-    /// from the key ([`tx_deadline_ms`]), and FT2's 980 ms of slack keeps an on-time or a 300 ms-late
-    /// key clear of its clamp, as FT8's 1.86 s did.
+    /// from the key ([`tx_deadline_ms`]), and FT2's 980 ms of slack, less any amplifier TX delay
+    /// (`amp_shortfall_samples`), keeps an on-time or a 300 ms-late key clear of its clamp, as FT8's
+    /// 1.86 s did. These tests run with no delay; at 500 ms FT2 keeps its whole tail for a key up to
+    /// 480 ms late, and past that the tail is what gives first.
     fn armed_engine_on(tier: tempo_app::dto::Tier) -> Engine {
         let mut eng = Engine::new("W9XYZ", "EN37", 0);
         eng.set_tier(tier);
@@ -2065,7 +2160,7 @@ mod tests {
             for ms in (0..period_ms as i64).filter(|&ms| wsjtx_may_key_at(ms as f64, period_ms)) {
                 let keyed = slot_start + ms as f64;
                 backend.played.clear();
-                let over = play_keyed_over(&eng, &mut backend, &waves, keyed, keyed);
+                let over = play_keyed_over(&eng, &mut backend, &waves, keyed, keyed, 0.0);
                 assert_eq!(
                     (over.audio_until_ms, over.tx_until_ms),
                     (Some(slot_start + window_ms), slot_start + window_ms + 200.0),
@@ -2109,7 +2204,7 @@ mod tests {
             for late_ms in [20.0, 1_000.0] {
                 let keyed = slot_start + late_ms;
                 let mut backend = MockBackend::new();
-                play_keyed_over(&eng, &mut backend, &waves, keyed, keyed);
+                play_keyed_over(&eng, &mut backend, &waves, keyed, keyed, 0.0);
                 assert!(!backend.played.is_empty(), "{tier:?}: premise: played");
                 assert_eq!(
                     backend.unit_ends,
@@ -2140,7 +2235,7 @@ mod tests {
             "premise: decided in time"
         );
         let mut backend = MockBackend::new();
-        let over = play_keyed_over(&eng, &mut backend, &waves, keyed, decided);
+        let over = play_keyed_over(&eng, &mut backend, &waves, keyed, decided, 0.0);
         assert!(backend.played.is_empty(), "FT8 carrier 13.2 s in: played");
         assert_eq!(
             (over.audio_until_ms, over.tx_until_ms),
@@ -5031,3 +5126,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "slot_amp_tx_delay_tests.rs"]
+mod amp_tx_delay_tests;

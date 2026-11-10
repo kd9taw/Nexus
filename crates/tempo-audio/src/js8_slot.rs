@@ -33,7 +33,7 @@ use tempo_core::timing::now_unix_ms;
 
 use crate::backend::AudioBackend;
 use crate::rig::Rig;
-use crate::slot::{KeyedOver, TX_TAIL_MS};
+use crate::slot::{amp_delay_samples, KeyedOver, QuietHead, TX_TAIL_MS};
 
 /// The start of the period JS8 frame `slot` is for, on the slot clock (`SlotClock::slot_index`).
 pub(crate) fn frame_start_ms(eng: &Engine, slot: u64) -> f64 {
@@ -73,25 +73,32 @@ pub(crate) fn placement(keyed_ms: f64, start_ms: f64) -> (usize, usize) {
 /// slot clock, and never past the end of the frame's own period, which a key in the TX delay lies
 /// before (the tier's other overs are bounded by the period their key is in,
 /// `slot::tx_deadline_ms`).
+///
+/// `amp_delay_ms` is the amplifier TX delay (`slot::slot_amp_delay_ms`): the frame stays on the
+/// slot clock, and anything of it that would sound before the key plus the delay is blanked
+/// (`slot::QuietHead`), as for FT8. The TX delay's own silence and the speed's start delay count
+/// toward it, so a frame keyed in its TX delay is unchanged unless the amplifier's is longer.
 pub(crate) fn play_frame(
     eng: &Engine,
     backend: &mut impl AudioBackend,
     waves: &[Vec<f32>],
     keyed_ms: f64,
     slot: u64,
+    amp_delay_ms: f64,
 ) -> KeyedOver {
     let period_ms = eng.active_slot_secs() * 1000.0;
     let start_ms = frame_start_ms(eng, slot);
     let (silence, mut skip) = placement(keyed_ms, start_ms);
+    let mut quiet = QuietHead::new(amp_delay_samples(amp_delay_ms));
     if silence > 0 {
-        backend.play(&vec![0.0; silence]);
+        quiet.play(backend, &vec![0.0; silence]);
     }
     let mut handed = silence;
     for w in waves {
         let rest = &w[skip.min(w.len())..];
         skip = skip.saturating_sub(w.len());
         if !rest.is_empty() {
-            backend.play(rest);
+            quiet.play(backend, rest);
             handed += rest.len();
         }
     }
@@ -196,7 +203,14 @@ mod tests {
             let keyed = start + key_ms;
             assert_eq!(placement(keyed, start), (silence, skip), "key at {key_s} s");
             let mut backend = MockBackend::new();
-            let over = play_frame(&e, &mut backend, std::slice::from_ref(&frame), keyed, slot);
+            let over = play_frame(
+                &e,
+                &mut backend,
+                std::slice::from_ref(&frame),
+                keyed,
+                slot,
+                0.0,
+            );
             let played = &backend.played;
             // Sample k of what plays goes out k / 12 ms after the key.
             let at_ms = |k: usize| keyed + k as f64 / 12.0;
@@ -240,6 +254,7 @@ mod tests {
                 &[stand_in(Js8Speed::Normal)],
                 start + key_ms,
                 slot,
+                0.0,
             );
             assert!(!backend.played.is_empty(), "premise: played");
             assert_eq!(
@@ -261,7 +276,14 @@ mod tests {
             let start = frame_start_ms(&e, slot);
             let period_ms = f64::from(speed.period_s()) * 1000.0;
             let mut backend = MockBackend::new();
-            let over = play_frame(&e, &mut backend, &[stand_in(speed)], start - 200.0, slot);
+            let over = play_frame(
+                &e,
+                &mut backend,
+                &[stand_in(speed)],
+                start - 200.0,
+                slot,
+                0.0,
+            );
             let end = start + f64::from(speed.delay_ms()) + 79.0 * speed.nsps() as f64 / 12.0;
             assert!(
                 (over.tx_until_ms - (end + TX_TAIL_MS)).abs() < 1e-6,
@@ -682,6 +704,7 @@ mod tests {
                 std::slice::from_ref(&frame),
                 start + end - 1.0,
                 slot,
+                0.0,
             );
             assert!(
                 backend.played[..] == frame[frame.len() - 12..],

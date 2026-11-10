@@ -281,6 +281,12 @@ impl Engine {
     /// - [`Self::poll_pc_mic`] ends the over (flush + unkey) at `at + RELEASE_TAIL_MS` by the wall
     ///   clock whatever is left, and on the first tick after a late or wedged loop comes back.
     ///
+    /// ⛔ WITH AN AMPLIFIER TX DELAY THE BOUND IS 200 MS + THE DELAY + THE RADIO'S KEY TIME (operator
+    /// ruling): the over plays behind the microphone by the delay plus the time the radio took to
+    /// answer its key ([`MicLatch::behind`]), and each bound above is exactly that much later, never
+    /// more, so the radio stays keyed until every word spoken before the release has been sent. A
+    /// delay of 0 moves nothing: exactly [`RELEASE_TAIL_MS`], however slow the key.
+    ///
     /// Only the release. Stop TX, TX Off, the watchdog, a gate going down, a handoff and every other
     /// stop still end the over at once ([`Self::drop_pc_mic`]), tail or no tail; a new press cuts
     /// the tail and starts a fresh over. An over that never keyed has put nothing on the air and
@@ -315,7 +321,11 @@ impl Engine {
         }
         self.pc_mic.held = self.pc_mic.feed.take();
         self.pc_mic.feed.close();
-        let until = at + std::time::Duration::from_millis(RELEASE_TAIL_MS);
+        // An over held back by the amplifier TX delay plays behind the microphone by the delay plus
+        // the radio's key time, so its release lets exactly that much more play out: 200 ms + the
+        // delay + the key time, and every word spoken up to the release still goes.
+        let until =
+            at + std::time::Duration::from_millis(RELEASE_TAIL_MS) + self.pc_mic.over.behind();
         self.pc_mic.over.release_by(until);
         self.pc_mic.tail = Some(until);
     }
@@ -550,6 +560,13 @@ impl Engine {
         });
     }
 
+    /// The radio answered the computer microphone over's key at `at`: with an amplifier TX delay,
+    /// how long from then the loop holds PTT before the over's first sample, in ms
+    /// ([`MicLatch::keyed_at`]); `None` without one.
+    pub fn pc_mic_keyed_at(&mut self, at: Instant) -> Option<u64> {
+        self.pc_mic.over.keyed_at(at)
+    }
+
     /// One radio-loop tick of the computer-microphone over: the ONLY path from the microphone to
     /// the transmitter, and its per-tick predicate ([`MicLatch::tick`]). `budget_ms` is what the
     /// output ring can take this tick (clamped to [`PC_MIC`]'s per-push cap here too); `route` is
@@ -580,6 +597,8 @@ impl Engine {
             now_secs: now_unix_secs(),
             watchdog_limit_secs: self.settings.tx_watchdog_min as u64 * 60,
             watchdog_start_secs: self.tx_watchdog_start,
+            // The amplifier TX delay: the over's first sample waits it, from the radio's answer.
+            amp_delay_ms: self.amp_tx_delay_ms() as u64,
         };
         let mut arrived = std::mem::take(&mut self.pc_mic.held);
         arrived.extend(self.pc_mic.feed.take());
