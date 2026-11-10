@@ -7237,6 +7237,37 @@ impl RadioLoop {
             })
     }
 
+    /// The amplifier TX delay for an over this tick just keyed through [`Self::key_over`] or
+    /// [`Self::key_up`]: its silence goes to the output ahead of the over's audio, so no sample of
+    /// it sounds before the key plus the delay (`Engine::amp_tx_delay_ms`), and the ms queued come
+    /// back for the site to move its own timing on by. Called after the key and before the site
+    /// takes its hold (`tx_until_ms`): a key the loop already held (a word or chunk after the first,
+    /// the operator's own PTT) waits nothing, as the radio was keyed already.
+    ///
+    /// ⛔ SILENCE QUEUED, NEVER A SLEEP. The tick goes on at once, so Stop TX reaches the hard-stop
+    /// block on the next tick as it always did, and its flush drops the silence and the over behind
+    /// it before either sounded. A sleep here would hold the tick, and the Engine lock with it, for
+    /// the whole delay.
+    fn queue_amp_delay<B: AudioBackend>(
+        &self,
+        engine: &Arc<Mutex<Engine>>,
+        backend: &mut B,
+    ) -> f64 {
+        if self.holds_tx() {
+            return 0.0;
+        }
+        let ms = engine_lock(engine).amp_tx_delay_ms();
+        let n = crate::slot::amp_delay_samples(ms);
+        if n == 0 {
+            return 0.0;
+        }
+        backend.play(&vec![0.0; n]);
+        crate::civ::diag::note(&format!(
+            "amplifier TX delay: audio held {ms:.0} ms after the key"
+        ));
+        ms
+    }
+
     /// [`Self::key_over`]'s second half: the key itself, once Rig split is ready for it.
     fn key_up(&self, rig: &mut Rig, plain: bool) -> KeyUp {
         let held = self.holds_tx();
@@ -12855,6 +12886,8 @@ impl RadioLoop {
                             self.publish_tx_intent_now(); // before keying
                             let key = self.key_over(engine, rig, false, "CW");
                             if key.sends() {
+                                // The amplifier TX delay, on the first word's key.
+                                self.cw_busy_until += self.queue_amp_delay(engine, backend);
                                 backend.play(&buf);
                                 // One whole word: the silence after it is the word space.
                                 backend.mark_unit_end();
@@ -13359,8 +13392,14 @@ impl RadioLoop {
                                 // A stream the rig would not key is not played (`key_over`):
                                 // the latch goes, as on the FSK backend above.
                                 if key.sends() {
+                                    let lead = if need_key {
+                                        self.queue_amp_delay(engine, backend)
+                                    } else {
+                                        0.0
+                                    };
                                     backend.play(&buf);
-                                    self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
+                                    self.rtty_busy_until =
+                                        self.rtty_busy_until.max(now) + lead + chunk_ms;
                                     let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
                                     self.tx_until_ms =
                                         Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
@@ -13514,6 +13553,7 @@ impl RadioLoop {
                             let key = self.key_over(engine, rig, false, "RTTY");
                             // An over the rig would not key is not played (`key_over`).
                             if key.sends() {
+                                self.rtty_busy_until += self.queue_amp_delay(engine, backend);
                                 backend.play(&buf);
                                 backend.mark_unit_end();
                                 let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
@@ -13696,8 +13736,13 @@ impl RadioLoop {
                         // A stream the rig would not key is not played (`key_over`): its latch
                         // goes, as RTTY's does.
                         if key.sends() {
+                            let lead = if need_key {
+                                self.queue_amp_delay(engine, backend)
+                            } else {
+                                0.0
+                            };
                             backend.play(&buf);
-                            self.psk_busy_until = self.psk_busy_until.max(now) + chunk_ms;
+                            self.psk_busy_until = self.psk_busy_until.max(now) + lead + chunk_ms;
                             let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
                             self.tx_until_ms =
                                 Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
@@ -13753,6 +13798,7 @@ impl RadioLoop {
                     let key = self.key_over(engine, rig, false, "PSK");
                     // An over the rig would not key is not played (`key_over`).
                     if key.sends() {
+                        self.psk_busy_until += self.queue_amp_delay(engine, backend);
                         backend.play(&buf);
                         backend.mark_unit_end();
                         let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
@@ -13814,7 +13860,8 @@ impl RadioLoop {
                 // Assert the rig and key once per transmission, and again after an unkey ran
                 // underneath us; frames after the first chain onto the keyed transmitter.
                 let mut key = KeyUp::Keyed;
-                if self.tx_until_ms.is_none() || now >= self.jtty_busy_until {
+                let need_key = self.tx_until_ms.is_none() || now >= self.jtty_busy_until;
+                if need_key {
                     self.ensure_commanded(rig); // read-only launch: assert before key
                     self.publish_tx_intent_now(); // before keying
                     key = self.key_over(engine, rig, false, "JTTY");
@@ -13822,8 +13869,14 @@ impl RadioLoop {
                 // A frame the rig would not key is not played (`key_over`), and a JTTY message
                 // cannot go on after a hole: the engine drops what it has going.
                 if key.sends() {
+                    let lead = if need_key {
+                        self.queue_amp_delay(engine, backend)
+                    } else {
+                        0.0
+                    };
                     backend.play(&buf);
-                    self.jtty_busy_until = self.jtty_busy_until.max(now) + buf.len() as f64 / 12.0;
+                    self.jtty_busy_until =
+                        self.jtty_busy_until.max(now) + lead + buf.len() as f64 / 12.0;
                     let until = self.jtty_busy_until + crate::slot::TX_TAIL_MS;
                     self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
                     engine_lock(engine).set_jtty_sending(true);
@@ -13860,10 +13913,11 @@ impl RadioLoop {
                     Err(why) => KeyUp::Refused(why),
                 };
                 if key.sends() {
+                    let lead = self.queue_amp_delay(engine, backend);
                     backend.play(&buf);
                     backend.mark_unit_end();
                     let dur_ms = buf.len() as f64 / 12.0; // 12 kHz mono → milliseconds
-                    self.tx_until_ms = Some(now + dur_ms + crate::slot::TX_TAIL_MS);
+                    self.tx_until_ms = Some(now + lead + dur_ms + crate::slot::TX_TAIL_MS);
                 }
                 if let KeyUp::Refused(why) = &key {
                     engine_lock(engine).aprs_key_refused(why);
@@ -14079,9 +14133,10 @@ impl RadioLoop {
                         (key, not_on_dax)
                     };
                     if key.sends() {
+                        let lead = self.queue_amp_delay(engine, backend);
                         backend.play(&buf);
                         backend.mark_unit_end();
-                        let until = now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
+                        let until = now + lead + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
                         self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
                         self.voice_until_ms = Some(until);
                         if dax {
@@ -14264,9 +14319,11 @@ impl RadioLoop {
                                                   // (`key_over`, a dropped picture, never held), and the line says why.
                     let key = self.key_over(engine, rig, false, "SSTV");
                     if key.sends() {
+                        // The amplifier TX delay: the picture's feed clock starts after it.
+                        let lead = self.queue_amp_delay(engine, backend);
                         // Hold PTT for the WHOLE image via the precomputed duration; the
                         // tx_until_ms expiry below drops it even if every other mechanism fails.
-                        let until = now + job.duration_ms + crate::slot::TX_TAIL_MS;
+                        let until = now + lead + job.duration_ms + crate::slot::TX_TAIL_MS;
                         self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
                         {
                             let mut eng = engine_lock(engine);
@@ -14275,7 +14332,7 @@ impl RadioLoop {
                         self.sstv_feed = Some(SstvFeed {
                             samples: job.samples,
                             cursor: 0,
-                            started_ms: now,
+                            started_ms: now + lead,
                             total_ms: job.duration_ms,
                         });
                     }
@@ -16035,12 +16092,20 @@ impl RadioLoop {
                         KeyUp::Keyed | KeyUp::Held => None,
                     }
                 };
+                // The amplifier TX delay, ahead of a carrier Nexus plays (never one the radio makes
+                // itself, which is on the air from its own key): counted into the queue, so the
+                // top-up below lets the silence drain before it queues any carrier.
+                let lead_ms = if refused.is_none() && !native {
+                    self.queue_amp_delay(engine, backend)
+                } else {
+                    0.0
+                };
                 self.tuning_keyed = true;
                 self.tune_native = native;
                 self.tune_started_ms = Some(now);
                 // A fresh hold starts with an empty ring and no elapsed baseline.
                 self.tune_last_chunk_ms = None;
-                self.tune_queued_ms = 0.0;
+                self.tune_queued_ms = lead_ms as f32;
                 self.tx_until_ms = None; // a tune supersedes any pending slot TX tail
                 self.slot_tx_until_ms = 0.0; // …so there is no slot over left to protect
                 if refused.is_some() {
@@ -20798,6 +20863,7 @@ fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) 
 
 #[cfg(test)]
 mod tests {
+    mod amp_tx_delay;
     mod bound_monitor;
     mod civ_coverage;
     mod clock_repair_tests;
