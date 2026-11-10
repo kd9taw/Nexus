@@ -578,3 +578,123 @@ fn a_refused_keys_halt_still_sends_the_cw_stop() {
         "the refused key's halt no longer asks the radio to stop CW"
     );
 }
+
+// ── The order of the flush and the unkey at each slot-over end ──────────────────────────────────
+// CHARACTERIZATION for the timing simplification. The mock sound card's flush and the rigctld's
+// lines go into one log (`MockBackend::events` is the peer's own line log), so a test reads which
+// came first in the tick that ended the over. Today an over's own end (the FT8/FT4 window's
+// re-test, and the deadline unkey every other slot tier ends on) flushes FIRST; Stop TX and a
+// logger's HaltTx unkey first. The remote-transmit preempt is pinned beside its code
+// (`slot::tests::order_pin_the_remote_preempt_unkeys_before_it_flushes`).
+
+/// The flushes and unkeys the log holds from `from` on, in order.
+fn flush_and_unkey_since(s: &Station, from: usize) -> Vec<String> {
+    s.peer.lines.lock().unwrap()[from..]
+        .iter()
+        .filter(|l| *l == "flush" || *l == "T 0")
+        .cloned()
+        .collect()
+}
+
+/// The log's length now: where a tick's entries start.
+fn log_len(s: &Station) -> usize {
+    s.peer.lines.lock().unwrap().len()
+}
+
+/// An FT8 over's own end flushes, then unkeys. On FT8 that end is the window's re-test
+/// (`retest_ft_window`), which runs at the top of the tick; the deadline path in the same tick
+/// sees `window_unkeyed` and sends nothing more.
+#[test]
+fn order_pin_an_ft8_overs_end_flushes_then_unkeys() {
+    let mut s = Station::new(Unkey::Accepts);
+    s.backend.events = Some(Arc::clone(&s.peer.lines));
+    let end = s.key_the_over();
+    s.run_to(end - 20.0);
+    let from = log_len(&s);
+    s.run_to(end + 20.0);
+    assert_eq!(
+        flush_and_unkey_since(&s, from),
+        ["flush", "T 0"],
+        "the window's end: flush, then one unkey"
+    );
+    assert!(!s.on_air() && !s.rig.keyed, "the radio was left keyed");
+}
+
+/// An FT2 over's own end flushes, then unkeys. FT2 has no WSJT-X window, so its over ends on the
+/// loop's deadline unkey (the `tx_until_ms` expiry), not the window's re-test.
+#[test]
+fn order_pin_a_deadline_unkey_flushes_then_unkeys() {
+    let mut s = Station::with(Unkey::Accepts, 14_084_000, "PKTUSB", |e| {
+        e.set_tier(Tier::Ft2);
+        e.set_frequency(14.084, "20m", "USB");
+        e.start_cq(None).expect("Call CQ");
+        let _ = e.take_immediate_tx();
+    });
+    assert_eq!(
+        crate::slot::wsjtx_tx_window_ms(Tier::Ft2),
+        None,
+        "premise: FT2 has no window re-test"
+    );
+    s.backend.events = Some(Arc::clone(&s.peer.lines));
+    let end = s.key_the_over();
+    s.run_to(end - 20.0);
+    let from = log_len(&s);
+    s.run_to(end + 20.0);
+    assert_eq!(
+        flush_and_unkey_since(&s, from),
+        ["flush", "T 0"],
+        "the deadline's end: flush, then one unkey"
+    );
+    assert!(!s.on_air() && !s.rig.keyed, "the radio was left keyed");
+}
+
+/// ⚠️ ORDER PIN, EXPECTED TO FLIP: Stop TX mid-over unkeys, THEN flushes, today. The change that
+/// makes every slot-over end flush first flips this to `["flush", "T 0"]`, and that flip is its
+/// whole visible diff.
+#[test]
+fn order_pin_stop_tx_mid_over_unkeys_then_flushes() {
+    let mut s = Station::new(Unkey::Accepts);
+    s.backend.events = Some(Arc::clone(&s.peer.lines));
+    s.key_the_over();
+    let cut = s.slot + 5_000.0;
+    s.run_to(cut - 20.0);
+    let from = log_len(&s);
+    s.engine.lock().unwrap().halt_tx(); // Stop TX
+    s.run_to(cut);
+    assert_eq!(s.state.tx_until_ms, None, "premise: Stop TX cut the over");
+    assert_eq!(
+        flush_and_unkey_since(&s, from),
+        ["T 0", "flush"],
+        "today Stop TX unkeys, then flushes"
+    );
+}
+
+/// ⚠️ ORDER PIN, EXPECTED TO FLIP: a logger's HaltTx mid-over unkeys, THEN flushes, today. The
+/// change that makes every slot-over end flush first flips this to `["flush", "T 0"]`.
+#[test]
+fn order_pin_a_loggers_halt_tx_unkeys_then_flushes() {
+    let logger = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let server =
+        WsjtxServer::new("127.0.0.1:0".parse().unwrap(), logger.local_addr().unwrap()).unwrap();
+    let mut s = Station::new(Unkey::Accepts);
+    s.backend.events = Some(Arc::clone(&s.peer.lines));
+    s.key_the_over();
+    let cut = s.slot + 5_000.0;
+    s.run_with(Some(&server), cut - 20.0);
+    let from = log_len(&s);
+    logger
+        .send_to(&halt_tx_datagram(), server.local_addr().unwrap())
+        .unwrap();
+    // A datagram arrives between ticks (see the HaltTx test above).
+    std::thread::sleep(Duration::from_millis(20));
+    s.run_with(Some(&server), cut);
+    assert_eq!(
+        s.state.tx_until_ms, None,
+        "premise: the HaltTx cut the over"
+    );
+    assert_eq!(
+        flush_and_unkey_since(&s, from),
+        ["T 0", "flush"],
+        "today a logger's HaltTx unkeys, then flushes"
+    );
+}

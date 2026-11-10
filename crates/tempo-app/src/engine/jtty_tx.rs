@@ -3113,6 +3113,58 @@ mod tests {
         }
     }
 
+    /// Pins today's behaviour of the one-shot JTTY watchdog copy (`poll_jtty`'s draining arm)
+    /// for the watchdog-collapse refactor: both sides of the `elapsed >= limit` boundary and
+    /// every side effect of a trip.
+    ///
+    /// The seed is relative to ONE `now_unix_secs()` read here, and `poll_jtty` reads the clock
+    /// again. A second boundary may pass between the two reads, which can only ADD a second of
+    /// elapsed time: so the hold side is seeded at limit - 2 (still < limit after such a tick)
+    /// and the trip side at exactly limit (a tick only pushes it further over).
+    #[test]
+    fn a_one_shot_jtty_over_holds_below_the_watchdog_limit_and_trips_at_it() {
+        let limit = 60; // tx_watchdog_min = 1
+        let e = jtty_engine();
+        engine_lock(&e).settings.tx_watchdog_min = 1;
+        send_text(&e, "CQ CQ CQ DE W9XYZ W9XYZ", "").unwrap();
+        frames(&e, 1);
+        let mut g = engine_lock(&e);
+        let _ = g.take_slot_tx_abort(); // only what the polls below do counts
+
+        // Below the limit: the drain carries on and nothing else changes.
+        let now = now_unix_secs();
+        g.tx_watchdog_start = Some(now - (limit - 2));
+        assert!(
+            matches!(g.poll_jtty(true, 0.0), JttyTick::Frame(_)),
+            "a frame below the limit"
+        );
+        assert!(!g.tx_watchdog && g.tx_enabled, "no trip below the limit");
+        assert_eq!(
+            g.tx_watchdog_start,
+            Some(now - (limit - 2)),
+            "the clock keeps its start"
+        );
+        assert!(
+            !g.take_jtty_abort() && !g.take_slot_tx_abort(),
+            "no cut armed"
+        );
+
+        // At the limit: tripped, disarmed, the queue dropped, both cuts armed.
+        g.tx_watchdog_start = Some(now_unix_secs() - limit);
+        assert_eq!(
+            g.poll_jtty(true, 0.0),
+            JttyTick::Idle,
+            "a trip keys nothing"
+        );
+        assert!(g.tx_watchdog, "the watchdog tripped at elapsed == limit");
+        assert!(!g.tx_enabled, "a trip disarms TX");
+        assert!(g.jtty_tx.queue.is_empty(), "a trip drops what was queued");
+        assert_eq!(g.tx_owner(), None, "nothing left keying");
+        assert!(g.take_jtty_abort(), "a trip arms the JTTY cut");
+        assert!(g.take_slot_tx_abort(), "a trip arms the PTT-tail cut");
+        assert_eq!(g.jtty_tx_state().notice.as_deref(), Some(WATCHDOG_TRIPPED));
+    }
+
     /// THE CEILING: a live session ends at ten minutes however much is typed into it.
     #[test]
     fn the_ceiling_ends_a_live_session() {

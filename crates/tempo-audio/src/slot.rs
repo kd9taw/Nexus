@@ -1337,6 +1337,69 @@ mod tests {
         }
     }
 
+    /// ⚠️ ORDER PIN, EXPECTED TO FLIP: today the remote-transmit preempt in
+    /// [`key_slot_transmitter`] sends the unkey (`T 0`) BEFORE it flushes the queued audio, at both
+    /// of its checks: the one before the key (on a radio already keyed) and the one after it (the
+    /// permit revoked while the key was in flight). The other slot-over ends flush first. This
+    /// pins today's order so the change that makes every slot-over end flush first shows up as
+    /// exactly this assertion flipping; that change updates it to `["flush", "T 0"]`.
+    #[test]
+    fn order_pin_the_remote_preempt_unkeys_before_it_flushes() {
+        use crate::rig::remote_tests::retuning_peer;
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+        use tempo_app::remote_control::transmit::TransmitAuthority;
+        for scene in ["beforeKey", "duringKey"] {
+            let authority = Arc::new(TransmitAuthority::default());
+            let revoke = authority.clone();
+            let peer = retuning_peer(14_074_000, "PKTUSB", move |line, state| match line {
+                "T 1" => {
+                    state.keyed = true;
+                    if scene == "duringKey" {
+                        revoke.revoke();
+                    }
+                    Some("RPRT 0\n".into())
+                }
+                _ => None,
+            });
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            let now = Instant::now();
+            assert!(e.hold_remote_presence(
+                authority
+                    .permit(now + Duration::from_secs(24 * 60 * 60))
+                    .unwrap(),
+                now,
+            ));
+            let mut rig = Rig::rigctld(&peer.address);
+            let mut backend = MockBackend::new();
+            if scene == "beforeKey" {
+                // The radio is already keyed (an over's hold) when the revoke is seen.
+                assert!(rig.ptt(true).is_ok(), "{scene}: premise: keyed");
+                authority.revoke();
+            }
+            peer.lines.lock().unwrap().clear();
+            backend.events = Some(Arc::clone(&peer.lines));
+            assert!(
+                !key_slot_transmitter(&mut e, &mut rig, &mut backend, false),
+                "{scene}: premise: the preempt keyed nothing"
+            );
+            let order: Vec<String> = peer
+                .lines
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|l| *l == "flush" || *l == "T 0")
+                .cloned()
+                .collect();
+            assert_eq!(
+                order,
+                ["T 0", "flush"],
+                "{scene}: today the preempt unkeys, then flushes"
+            );
+            assert!(!rig.keyed, "{scene}: the radio was left keyed");
+        }
+    }
+
     /// The clock instant a keyed [`SlotAction`]'s PTT-hold deadline was built from:
     /// strip the played audio's duration and the fixed tail back off. That basis is
     /// the whole subject of the three tests below.
