@@ -597,6 +597,67 @@ fn an_ft8_key_at_the_boundary_never_waits_behind_the_question() {
     );
 }
 
+/// ⛔ ARMED ON FT8, THE QUESTION WAITS THREE SECONDS PAST A BOUNDARY, for the automatic reply that
+/// late-starts off that boundary's decode (which can land seconds after it). A CQ armed, the link
+/// up 1.2 s into the other station's period, the question owed: it goes no sooner than 3 s into
+/// the slot and no later than 3.5 s before the next boundary.
+#[test]
+fn armed_on_ft8_the_question_waits_three_seconds_past_a_boundary() {
+    let engine = engine_for(1035);
+    {
+        let mut e = engine.lock().unwrap();
+        e.set_license_class("extra");
+        e.set_tier(tempo_app::dto::Tier::Ft8);
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_tx_offset(1500.0);
+        e.start_cq(None).expect("Call CQ");
+        let _ = e.take_immediate_tx();
+        assert!(e.tx_enabled(), "premise: TX armed");
+    }
+    let rigctld = FakeRigctld::start(64, "", true);
+    let mut rig = Rig::rigctld(&rigctld.addr);
+    let mut backend = MockBackend::new();
+    let mut state = loop_state_for(&engine);
+    let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+    let mut station = StationSinks::new();
+    // The even boundaries are this station's; start 1.2 s into an odd (receive) slot.
+    let t0 = ((now_unix_ms() + 30_000.0) / 30_000.0).ceil() * 30_000.0;
+    let mut t = t0 + 15_000.0 + 1_200.0;
+    let mut asked_at = Vec::new();
+    while t < t0 + 30_000.0 {
+        let before = rigctld.log.lock().unwrap().len();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                t,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        if rigctld.log.lock().unwrap()[before..]
+            .iter()
+            .any(|(_, l)| l == "w RM4;")
+        {
+            asked_at.push(t.rem_euclid(15_000.0));
+        }
+        t += 20.0;
+    }
+    assert_eq!(
+        asked_at.len(),
+        1,
+        "asked once in the receive slot, at these points (ms into it) — {asked_at:?}"
+    );
+    assert!(
+        (3_000.0..=11_500.0).contains(&asked_at[0]),
+        "asked {} ms into the slot: inside the margin",
+        asked_at[0]
+    );
+}
+
 /// A station on FT2 with ALC read raw: an engine on Hamlib `model`, FT2, licensed, on 20 m.
 fn ft2_engine(model: u32) -> Arc<Mutex<Engine>> {
     let engine = engine_for(model);

@@ -1503,8 +1503,10 @@ const RAW_ALC_PROBE_DEADLINE_MS: u64 = 1_000;
 const RAW_ALC_PROBE_LEAD_MS: f64 = 3_500.0;
 /// …and only this far or more into the slot. A boundary's own tick has the whole slot ahead of
 /// it, and an over due on that boundary keys on that tick or just after it, so a probe there
-/// would key it late.
-const RAW_ALC_PROBE_AFTER_BOUNDARY_MS: f64 = 1_000.0;
+/// would key it late. Three seconds, not one: an automatic reply also late-starts off the
+/// boundary's decode, which can land seconds after the boundary (WSJT-X's late start,
+/// `slot::wsjtx_may_key_at`). FT8 keeps a window from 3 s to 11.5 s, FT4 from 3 s to 4 s.
+const RAW_ALC_PROBE_AFTER_BOUNDARY_MS: f64 = 3_000.0;
 /// An over's raw ALC read on a link that has answered the probe: a strict deadline, so a link
 /// that stops answering costs the loop at most this per try, never the transport deadline.
 const RAW_ALC_OVER_DEADLINE_MS: u64 = 300;
