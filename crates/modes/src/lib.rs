@@ -346,9 +346,13 @@ mod tests {
         assert_eq!(&wave[lead..], &bare[..], "a pure delay of the tones");
 
         // Round trip, played straight from the slot boundary (sample 0 = slot t = 0). The
-        // decoder's nominal start is 0.5 s (`ft4_decode.f90:454`, `xdt=ibest/666.67-0.5`; `ft4sim`
-        // puts a DT = 0 signal's ramp symbol at 0.452 s), so WSJT-X's own 0.3 s reads
-        // DT = 0.300 - 0.452 = -0.152 s with no sound-card latency. Nexus reads the same.
+        // decoder's nominal start is 0.5 s (`lib/ft4_decode.f90:454`, `xdt=ibest/666.67 - 0.5`;
+        // `lib/ft4/ft4sim.f90:85`, `k=nint((xdt+0.5)/dt)-NSPS`, puts a DT = 0 signal's ramp symbol
+        // at 0.452 s), and WSJT-X transmits at 0.3 s (`Modulator/Modulator.cpp:79`), so WSJT-X's
+        // own FT4 reads DT = 0.300 - 0.452 = -0.152 s with no sound-card latency. Nexus reads the
+        // same. ⛔ THIS -0.15 IS CORRECT, NOT A BUG TO "FIX" BACK TO 0: on air the sound cards'
+        // latency adds to both programs alike, so matching WSJT-X's send time puts our DT where
+        // WSJT-X stations' DT sits. A lead-in of 0.452 s would read 0 here and ~0.15 s late on air.
         let dt_of = |w: &[f32]| -> f32 {
             let frame = to_i16_frame(w, m.frame_samples(), 0, 8000.0);
             let decs = m.decode_frame(
