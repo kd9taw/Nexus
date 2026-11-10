@@ -281,9 +281,11 @@ impl Engine {
     /// - [`Self::poll_pc_mic`] ends the over (flush + unkey) at `at + RELEASE_TAIL_MS` by the wall
     ///   clock whatever is left, and on the first tick after a late or wedged loop comes back.
     ///
-    /// With an amplifier TX delay the over plays that far behind the microphone
-    /// ([`MicLatch::behind`]), and each bound above is that much later, so the delay costs the
-    /// release none of the last word. 0 (the default) moves nothing.
+    /// ⛔ WITH AN AMPLIFIER TX DELAY THE BOUND IS 200 MS + THE DELAY + THE RADIO'S KEY TIME (operator
+    /// ruling): the over plays behind the microphone by the delay plus the time the radio took to
+    /// answer its key ([`MicLatch::behind`]), and each bound above is exactly that much later, never
+    /// more, so the radio stays keyed until every word spoken before the release has been sent. A
+    /// delay of 0 moves nothing: exactly [`RELEASE_TAIL_MS`], however slow the key.
     ///
     /// Only the release. Stop TX, TX Off, the watchdog, a gate going down, a handoff and every other
     /// stop still end the over at once ([`Self::drop_pc_mic`]), tail or no tail; a new press cuts
@@ -319,8 +321,9 @@ impl Engine {
         }
         self.pc_mic.held = self.pc_mic.feed.take();
         self.pc_mic.feed.close();
-        // An over held back by the amplifier TX delay plays that far behind the microphone, so its
-        // release lets that much more play out: the words spoken up to the release still go.
+        // An over held back by the amplifier TX delay plays behind the microphone by the delay plus
+        // the radio's key time, so its release lets exactly that much more play out: 200 ms + the
+        // delay + the key time, and every word spoken up to the release still goes.
         let until =
             at + std::time::Duration::from_millis(RELEASE_TAIL_MS) + self.pc_mic.over.behind();
         self.pc_mic.over.release_by(until);

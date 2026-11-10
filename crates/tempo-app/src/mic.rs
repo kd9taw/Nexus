@@ -606,8 +606,11 @@ impl MicLatch {
     /// The radio answered the keyed over's key at `at`. With an amplifier TX delay the over's first
     /// sample is moved to the answer plus the delay, if that is later than it was set at the key
     /// decision: the delay is counted from the radio's answer, however long the key took, never
-    /// from the decision before it. Says how long from `at` the loop must then hold PTT before the
-    /// first sample, in ms. `None` without one: nothing moves, and the lead-in holds as it did.
+    /// from the decision before it. The over then plays behind the microphone by the delay plus
+    /// the key's own time (the decision to the answer), and [`Self::behind`] grows by what the
+    /// answer moved the first sample, so a release lets all of that play out. Says how long from
+    /// `at` the loop must then hold PTT before the first sample, in ms. `None` without one: nothing
+    /// moves, and the lead-in holds as it did.
     pub fn keyed_at(&mut self, at: Instant) -> Option<u64> {
         match &mut self.phase {
             Phase::Keyed(over) if over.amp_lead_ms > 0 => {
@@ -621,8 +624,9 @@ impl MicLatch {
     }
 
     /// How far behind the audio arriving for it the keyed over plays because of an amplifier TX
-    /// delay ([`MicGates::amp_delay_ms`]); zero without one, or with no over keyed. A release that
-    /// lets the over's audio play out lets this much more of it.
+    /// delay ([`MicGates::amp_delay_ms`]): the delay plus the radio's key time ([`Self::keyed_at`]),
+    /// from the first frame's arrival to the first sample. Zero without a delay, or with no over
+    /// keyed. A release that lets the over's audio play out lets this much more of it.
     pub fn behind(&self) -> Duration {
         match &self.phase {
             Phase::Keyed(over) => over.behind,

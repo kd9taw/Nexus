@@ -1211,6 +1211,56 @@ fn the_release_tail_is_200_ms_at_delay_0_and_200_ms_plus_the_delay_with_one() {
     );
 }
 
+/// ⭐ A SLOW KEY: the release tail is exactly 200 ms + the delay + the radio's key time, never more.
+/// The press decided at `t0`, the radio answering 800 ms later, with a 300 ms delay: the over plays
+/// 1100 ms behind the microphone, the release's bound is 200 + 300 + 800 ms after it, and the radio
+/// unkeys by then with every word spoken before the release sent and nothing after it. CONTROL: the
+/// same slow key with no delay keeps the bound at exactly 200 ms.
+#[test]
+fn a_slow_key_makes_the_release_tail_200_ms_plus_the_delay_plus_the_key_time() {
+    for (amp_ms, want_ms) in [(300u32, 200 + 300 + 800), (0, 200)] {
+        let mut e = station();
+        let mut s = e.settings.clone();
+        s.amp_tx_delay_ms = amp_ms;
+        e.apply_restored_settings(s);
+        e.set_operating_mode("phone", false);
+        let t0 = Instant::now();
+        e.set_ptt(true);
+        assert_eq!(e.poll_pc_mic(t0, TICK, 1), MicTick::Armed);
+        e.push_pc_mic(&audio(20, VOICE), t0);
+        assert_eq!(
+            e.poll_pc_mic(t0, TICK, 1),
+            MicTick::Key,
+            "premise: audio keys"
+        );
+        let answered = e.pc_mic_keyed_at(t0 + ms(800));
+        let mut t = 20;
+        while t < 2_000 {
+            e.push_pc_mic(&audio(20, VOICE), t0 + ms(t));
+            let _ = e.poll_pc_mic(t0 + ms(t), 40.0, 1);
+            t += 20;
+        }
+        let r = t0 + ms(2_000);
+        e.release_pc_mic_at(r);
+        assert_eq!(
+            e.pc_mic.tail,
+            Some(r + ms(want_ms)),
+            "delay {amp_ms} ms, key 800 ms (answered {answered:?}): the bound is not exactly {want_ms} ms"
+        );
+        let (after, ended) = run_tail(&mut e, r, 2_000);
+        let ended = ended.expect("the over never ended");
+        assert!(
+            ended <= want_ms,
+            "delay {amp_ms} ms: unkeyed {ended} ms after the release, past {want_ms}"
+        );
+        assert_eq!(
+            count(&after, AFTER),
+            0,
+            "audio captured after the release was sent"
+        );
+    }
+}
+
 /// 150 ms queued at the release: all of it is sent, then the radio unkeys, when it has played
 /// (150 ms after the release, and never past 200 ms). Nothing captured after the release is sent.
 #[test]

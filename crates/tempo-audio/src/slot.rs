@@ -1367,8 +1367,9 @@ mod tests {
     /// on the slot clock (`wsjtx_over_end`, pinned by the `wsjtx_*` and `an_ft8_overs_end_*` tests
     /// below) and lay their tones on that clock (`play_keyed_over`), so neither the deadline's basis
     /// nor a fake over's length is the key's any more there. Every other slot tier still holds PTT
-    /// from the key ([`tx_deadline_ms`]), and FT2's 980 ms of slack keeps an on-time or a 300 ms-late
-    /// key clear of its clamp, as FT8's 1.86 s did.
+    /// from the key ([`tx_deadline_ms`]), and FT2's 980 ms of slack, less any amplifier TX delay
+    /// (`amp_shortfall_samples`), keeps an on-time or a 300 ms-late key clear of its clamp, as FT8's
+    /// 1.86 s did. These tests run with no delay; at 500 ms a 300 ms-late key cuts FT2's tail.
     fn armed_engine_on(tier: tempo_app::dto::Tier) -> Engine {
         let mut eng = Engine::new("W9XYZ", "EN37", 0);
         eng.set_tier(tier);
