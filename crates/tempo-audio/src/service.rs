@@ -1492,6 +1492,50 @@ fn read_tx_meter(
     }
 }
 
+/// The receive-time probe of whether this link answers the raw ALC read
+/// ([`RadioLoop::tx_alc_raw`]): its strict deadline. A rigctld from 4.6 answers `RM4;` in tens of
+/// milliseconds; one before 4.6 never answers, and the probe gives up here.
+const RAW_ALC_PROBE_DEADLINE_MS: u64 = 1_000;
+/// …and the probe runs only this long or more before the next slot boundary: its own deadline,
+/// plus the 2 s a rigctld before 4.6 then holds its client lock waiting for the radio's
+/// newline (the Yaesu backends' `.timeout`), plus a margin, so a key on that boundary never
+/// waits behind it.
+const RAW_ALC_PROBE_LEAD_MS: f64 = 3_500.0;
+/// …and only this far or more into the slot. A boundary's own tick has the whole slot ahead of
+/// it, and an over due on that boundary keys on that tick or just after it, so a probe there
+/// would key it late. Three seconds, not one: an automatic reply also late-starts off the
+/// boundary's decode, which can land seconds after the boundary (WSJT-X's late start,
+/// `slot::wsjtx_may_key_at`). FT8 keeps a window from 3 s to 11.5 s, FT4 from 3 s to 4 s.
+const RAW_ALC_PROBE_AFTER_BOUNDARY_MS: f64 = 3_000.0;
+/// An over's raw ALC read on a link that has answered the probe: a strict deadline, so a link
+/// that stops answering costs the loop at most this per try, never the transport deadline.
+///
+/// ⚠️ ON A FAST LINK ONLY. A network radio link or a slow serial link
+/// ([`crate::rig::Rig::set_slow_transport`]) can take longer than this to answer a read that
+/// works, and every miss drops the connection mid-over ([`raw_alc_over_deadline_ms`]).
+const RAW_ALC_OVER_DEADLINE_MS: u64 = 300;
+
+/// The deadline of an over's raw ALC read on `rig`'s link: [`RAW_ALC_OVER_DEADLINE_MS`], or on a
+/// slow transport the transport's own deadline, the one `l ALC` and every other over read there
+/// gets. Shorter, a network link that answered the probe in 500 ms missed every raw read of its
+/// first over, and each miss dropped the connection in the middle of the over: the next command
+/// (the unkey among them) opened a new one, and the drop forgot the split the radio had confirmed,
+/// so the next over wrote it again before its key.
+///
+/// ⛔ THE MISS STILL DROPS THE CONNECTION, ON PURPOSE. A late answer left in the socket would be
+/// read as the next command's (a `T 0` among them), and a `w` the radio did not answer in time may
+/// get no answer from rigctld at all (Hamlib 4.5.5 prints nothing then), so it cannot be counted
+/// as owed the way a late key is ([`crate::rig::Rig`]'s `command_lines`): a count that is never
+/// paid leaves every later answer read as the line before it. Scaled like this, the raw read
+/// misses, and drops, only where `l ALC` would.
+fn raw_alc_over_deadline_ms(rig: &Rig) -> u64 {
+    if rig.slow_transport() {
+        rig.transport_deadline_ms()
+    } else {
+        RAW_ALC_OVER_DEADLINE_MS
+    }
+}
+
 /// The tune-time meter read's deadline. A tune carrier is fed one chunk per tick from a lead of
 /// [`TUNE_LEAD_MS`]; a meter read blocks the loop, so it may take at most this long before the
 /// ring would run dry. Past it the read is abandoned, never waited for.
@@ -5061,6 +5105,17 @@ struct RadioLoop {
     /// 1.18.0's `l ALC` read it. So when the ladder gives the raw read up on a link where it never
     /// answered, the meter falls back to `l ALC` instead of being parked. Only on an over's read:
     /// a tune-up's 120 ms deadline can miss a slow radio that does answer. Reset with the ladder.
+    ///
+    /// ⛔ AND IT IS NEVER FOUND OUT DURING AN OVER. Each unanswered raw read blocked this loop,
+    /// the only thing that unkeys the radio, for the transport deadline (about 1 s measured,
+    /// up to 3 s on a slow serial link), three times in the first over after every connect: the
+    /// over's end and a Stop TX waited for it. And a rigctld before 4.6 holds its one client lock
+    /// for the radio's whole timeout (2 s on these Yaesus) behind such a read, so the next
+    /// command, an unkey among them, waits behind it too. So the question is asked once, at a
+    /// quiet point while nothing is keyed ([`Self::raw_alc_probe_due`]): an unkeyed `RM4;` reads
+    /// 000 and moves nothing. Until it has been answered, an over reads `l ALC`; after it, the
+    /// raw read has a strict deadline ([`RAW_ALC_OVER_DEADLINE_MS`]) and the ladder above is
+    /// only the backstop for a link that stops answering it.
     tx_alc_raw: Option<bool>,
     /// The rig REFUSED `l RFPOWER_METER_WATTS` ([`crate::rig::MeterRead::Refused`]), so its
     /// forward power is read as `l RFPOWER_METER`, a share of the radio's power meter, and the
@@ -7745,6 +7800,61 @@ impl RadioLoop {
         } else {
             Ok(())
         }
+    }
+
+    /// The raw ALC read ([`crate::rigmodels::raw_alc_query`]) to ask once, to learn whether this
+    /// link answers it ([`Self::tx_alc_raw`]), or `None` if not now.
+    ///
+    /// ⛔ ONLY AT A QUIET POINT: no over, tune, PTT, microphone or CW of this loop's, nothing keyed
+    /// by this loop or read as keyed at the radio.
+    ///
+    /// ⛔ AND, WHILE A SLOT CAN KEY (`slot_keys`: TX armed on the digital screens), at least
+    /// [`RAW_ALC_PROBE_LEAD_MS`] to the next slot boundary, so a rigctld before 4.6 that holds its
+    /// lock behind the unanswered read has let go before a key on that boundary, and at least
+    /// [`RAW_ALC_PROBE_AFTER_BOUNDARY_MS`] past the last one, whose own key may still be coming.
+    /// ANY boundary, either period, never only this station's own: the sequencer sets the period
+    /// itself when it answers a station (a decode landing on a boundary), so the boundary after
+    /// one of ours can become ours. With TX off nothing keys on a boundary, and the quiet point is
+    /// all: Nexus never arms TX by itself, and starts with it off, as a lost CAT link leaves it,
+    /// so the question goes at the first quiet tick after each connect, on every mode, FT2 (whose
+    /// 3.75 s slot has no room for the margin) included. Armed on FT2 with the question still
+    /// owed, it waits for TX off.
+    ///
+    /// KNOWN, AND SMALL, on a rigctld before 4.6, once per connection: an operator's own key in
+    /// the probe's second or the lock after it (a Call CQ late start, a PTT press), or the first
+    /// automatic key after TX is armed then (arming is immediate, it waits for no quiet tick),
+    /// waits for it, up to about 2 s. A late key, never a late unkey.
+    ///
+    /// Never on a tick that opened the CAT link, on a link not confirmed, on a radio this loop
+    /// does not own, or once the link's answer is known. A read: an unkeyed `RM4;` moves nothing
+    /// on the radio.
+    fn raw_alc_probe_due(
+        &self,
+        rig: &Rig,
+        now: f64,
+        lead_ms: f64,
+        reconnected: bool,
+        slot_keys: bool,
+    ) -> Option<&'static str> {
+        let quiet = self.tx_until_ms.is_none()
+            && !self.manual_ptt_applied
+            && !self.tuning_keyed
+            && self.pc_mic_open.is_none()
+            && now >= self.cw_keying_until + CW_HANG_MS
+            && !rig.keyed
+            && !self.rig_keyed;
+        let clear_of_slots = !slot_keys
+            || (lead_ms >= RAW_ALC_PROBE_LEAD_MS
+                && self.clock.phase_ms(now) >= RAW_ALC_PROBE_AFTER_BOUNDARY_MS);
+        let free = self.may_key()
+            && self.cat_ok == Some(true)
+            && rig.has_control()
+            && !reconnected
+            && rig.connection_open();
+        if self.tx_alc_raw.is_some() || !quiet || !clear_of_slots || !free {
+            return None;
+        }
+        crate::rigmodels::raw_alc_query(self.applied.rig_model)
     }
 
     /// Whether Split Operation = Rig's TX dial is due to be put on the radio now, ahead of the next
@@ -15464,7 +15574,9 @@ impl RadioLoop {
                     // alone while it transmits. See `tx_meter_supported`.
                     let mut reading = None;
                     let model = self.applied.rig_model;
-                    let raw_alc = self.tx_alc_raw != Some(false);
+                    // Only on a link that has answered the receive-time probe: never found out
+                    // during an over (see `tx_alc_raw`).
+                    let raw_alc = self.tx_alc_raw == Some(true);
                     if self.tx_meter_supported[i] != Some(false) {
                         let po_slot = TX_METERS[i] == "RFPOWER_METER_WATTS";
                         let mut refused = false;
@@ -15479,6 +15591,11 @@ impl RadioLoop {
                                 }
                                 crate::rig::MeterRead::Missed => None,
                             }
+                        } else if TX_METERS[i] == "ALC" && raw_alc {
+                            // Strict even in an over: the link answered the probe, but one
+                            // that stops answering must not hold the loop for its deadline.
+                            let strict = deadline.unwrap_or_else(|| raw_alc_over_deadline_ms(rig));
+                            read_tx_meter(rig, TX_METERS[i], model, raw_alc, Some(strict))
                         } else {
                             read_tx_meter(rig, TX_METERS[i], model, raw_alc, deadline)
                         };
@@ -15497,19 +15614,15 @@ impl RadioLoop {
                         if TX_METERS[i] == "ALC"
                             && raw_alc
                             && crate::rigmodels::raw_alc_query(model).is_some()
+                            && self.tx_meter_supported[i] == Some(false)
+                            && deadline.is_none()
                         {
-                            if reading.is_some() {
-                                self.tx_alc_raw = Some(true);
-                            } else if self.tx_meter_supported[i] == Some(false)
-                                && self.tx_alc_raw.is_none()
-                                && deadline.is_none()
-                            {
-                                // Never answered on this link: `l ALC` gets its own three
-                                // strikes instead of the meter being parked. See `tx_alc_raw`.
-                                self.tx_alc_raw = Some(false);
-                                self.tx_meter_supported[i] = None;
-                                self.tx_meter_misses[i] = 0;
-                            }
+                            // The backstop: a link that answered the probe and has stopped
+                            // answering the raw read. `l ALC` gets its own three strikes
+                            // instead of the meter being parked. See `tx_alc_raw`.
+                            self.tx_alc_raw = Some(false);
+                            self.tx_meter_supported[i] = None;
+                            self.tx_meter_misses[i] = 0;
                         }
                         if self.tx_meter_supported[i] == Some(false) {
                             // Just gave up: arm the re-probe and double the wait for the one
@@ -15739,11 +15852,33 @@ impl RadioLoop {
         let lead_ms =
             self.clock.ms_to_next_slot(now) - tick_started.elapsed().as_secs_f64() * 1000.0;
         let reconnected = !cat_open_at_tick_start;
+        let mut preset_ran = false;
         if let Some((dial, tx_dial, md)) =
             self.preset_rig_split_due(&eng, rig, now, lead_ms, reconnected)
         {
             drop(eng);
             self.preset_rig_split(rig, dial, tx_dial, &md);
+            eng = engine_lock(engine);
+            preset_ran = true;
+        }
+        // Whether this link answers the raw ALC read, asked while nothing is keyed and never in
+        // an over (see `tx_alc_raw`). ⚠️ OUTSIDE THE ENGINE LOCK, as the pre-set above: on a
+        // rigctld before 4.6 it waits out its deadline. ⛔ NEVER ON A TICK THE PRE-SET RAN: its
+        // writes spent part of `lead_ms`, measured before them, so the probe waits a tick.
+        let slot_keys = eng.tx_enabled()
+            && eng.settings().operating_mode == tempo_app::settings::OperatingMode::Digital;
+        if let Some(query) = self
+            .raw_alc_probe_due(rig, now, lead_ms, reconnected, slot_keys)
+            .filter(|_| !preset_ran)
+        {
+            drop(eng);
+            let answer = rig.send_raw_within(query, Some(RAW_ALC_PROBE_DEADLINE_MS));
+            self.tx_alc_raw = Some(
+                answer
+                    .as_deref()
+                    .and_then(crate::rigmodels::alc_bar_from_rm4)
+                    .is_some(),
+            );
             eng = engine_lock(engine);
         }
 
