@@ -278,8 +278,9 @@ keeps the message layer intact (only the waveform length differs:
 `tempo_core::timing::SlotClock` is the UTC-aligned TDMA clock:
 `SlotClock::ft1()` runs a `PERIOD_MS = 4000` period; `SlotClock::dx1()` runs a
 15 s period (`DX1_PERIOD_S`); `SlotClock::with_period_secs` runs any other tier's period. It
-exposes `phase_ms`, `ms_to_next_slot`, `slot_index` and `next_boundary_ms`, and nothing else:
-where a tier's tones start inside its slot is the waveform builder's business, not the clock's.
+exposes `phase_ms`, `ms_to_next_slot`, `slot_index` and `next_boundary_ms`, and nothing else.
+TempoFast's tones start `FT1_LEAD_IN_SECS` (0.3 s) into the slot, shifted inside the
+4 s buffer by `crates/modes/src/mode.rs`.
 
 The capture buffer must match the active tier's window. `tempo_audio::frames::RxRing`
 is a rolling buffer holding the latest `cap` samples (front-zero-padded until
