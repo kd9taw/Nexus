@@ -483,7 +483,7 @@ pub trait Mode: Send + Sync {
 
     /// Synthesize the TX audio waveform for the given tones at carrier `f0`. The
     /// returned buffer is **slot-positioned** — it includes the mode's leading silence
-    /// (FT8/FT4 start 0.5 s into the slot) so the radio loop can play it straight at the
+    /// (FT8 starts 0.5 s into the slot, FT4 0.3 s) so the radio loop can play it straight at the
     /// slot boundary without the over going out early.
     ///
     /// Defaults to empty for the same reason as [`Mode::encode`]. An empty wave is
@@ -1003,6 +1003,16 @@ impl Mode for Ft8Mode {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Ft4Mode;
 
+/// Slot lead-in for FT4, in seconds: how far into its 7.5 s T/R period the wave starts.
+///
+/// 0.3 s, what WSJT-X 3.0.2 sends: `Modulator/Modulator.cpp:79`, `if(mode=="FT4") delay_ms=300`
+/// (FT8 is 0.5 s, `:76`). It is NOT the decoder's nominal start: `ft4_decode.f90:454` reports
+/// `xdt = t − 0.5` and `ft4sim.f90:85` puts a DT = 0 signal's ramp symbol at 0.452 s, so an FT4
+/// over sent 0.3 s in reads DT ≈ −0.15 s with no sound-card latency, WSJT-X's and ours alike. This
+/// shipped as 0.5, read off the decoder, which put Nexus ~0.2 s later than every WSJT-X station.
+/// With 0.3 the 105 symbols (5.04 s) end 5.34 s into the slot, inside the 6.04 s window.
+pub(crate) const FT4_LEAD_IN_SECS: f32 = 0.3;
+
 impl Mode for Ft4Mode {
     fn kind(&self) -> ModeKind {
         ModeKind::Ft4
@@ -1036,13 +1046,12 @@ impl Mode for Ft4Mode {
         }
     }
     fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
-        // Same slot-positioning contract as FT8: WSJT-X's FT4 decoder reports
-        // `xdt = t − 0.5` (ft4_decode.f90), i.e. the nominal signal start is
-        // 0.5 s into the period — but `gen_ft4wave` places the tones at t ≈ 0
-        // (measured: signal 0.00–5.04 s of the 6.048 s buffer). Played at the
-        // boundary that put every transmission at DT ≈ −0.5 for the whole band.
-        // Prepend the lead-in so our FT4 goes out at the standard DT ≈ 0.
-        let lead = (0.5 * fsample).round().max(0.0) as usize;
+        // Same slot-positioning contract as FT8: `gen_ft4wave` places the tones at
+        // t ≈ 0 (measured: signal 0.00–5.04 s of the 6.048 s buffer), so the wave
+        // carries its own lead-in and the radio loop plays it from the boundary.
+        // The lead-in is WSJT-X's transmit delay, not the decoder's nominal start:
+        // see `FT4_LEAD_IN_SECS`.
+        let lead = (FT4_LEAD_IN_SECS * fsample).round().max(0.0) as usize;
         let tones = crate::wsjt77::ft4_wave(itone, fsample, f0);
         let mut wave = vec![0f32; lead + tones.len()];
         wave[lead..].copy_from_slice(&tones);

@@ -20469,8 +20469,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     .or_else(|| hist.map(|(_, d)| d.snr))
                     .unwrap_or(0)
                     .clamp(-30, 49);
-                // Clicked text already aged out of the ring? The latest reply from
-                // this station still beats the unrelated `last_decode_slot` below.
+                // Clicked text already aged out of the ring? Fall back to the latest
+                // reply from this station, then (below) to its latest decode of any kind.
                 if context_slot.is_none() {
                     context_slot = self.latest_reply_from(dxcall, &mycall).map(|(_, _, s)| s);
                 }
@@ -20516,10 +20516,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // taken here — the first version of this refusal returned from the parity block
         // itself, after Mode::Qso was already entered, and left a half-armed QSO behind the
         // error message. Same rule as the failed mode-set during click-to-work: bail must
-        // mean nothing happened.
+        // mean nothing happened. Only this station's own decodes place the line: the slot
+        // anyone else was last decoded in says nothing about this station's period, so a
+        // clicked line that aged out of the history, from a station not heard since, is
+        // refused even with other traffic on the band.
         if context_slot
             .or_else(|| self.latest_decode_slot_from(dxcall))
-            .or(self.last_decode_slot)
             .is_none()
             && reply_msg.is_some()
         {
@@ -20612,11 +20614,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // (set_tier / cross-band QSY). A blind call proceeds on the operator's CURRENT
         // parity, untouched — exactly WSJT-X's typed-DX-Call flow, where generating messages
         // for a typed call never touches m_txFirst: the period is the operator's standing
-        // choice and calling blind is their deliberate act.
-        if let Some(s) = context_slot
-            .or_else(|| self.latest_decode_slot_from(dxcall))
-            .or(self.last_decode_slot)
-        {
+        // choice and calling blind is their deliberate act. So there is NO `last_decode_slot`
+        // fallback here: with traffic on the band it would hand a blind call a stranger's period.
+        if let Some(s) = context_slot.or_else(|| self.latest_decode_slot_from(dxcall)) {
             self.apply_cycle_parity(s % 2 == 0);
         }
         // Move our RX onto the DX's audio frequency, and TX with it unless Hold Tx Freq is on —
@@ -20979,8 +20979,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             .rev()
             .find(|(_, d)| d.message.eq_ignore_ascii_case(text.trim()))
             .map(|(s, _)| *s)
+            // This station's decodes only: a stranger's slot is a coin toss for its period.
             .or_else(|| self.latest_decode_slot_from(de))
-            .or(self.last_decode_slot)
             .ok_or_else(|| {
                 format!(
                     "No recent decode from {de} — wait for their next transmission, \
@@ -21746,9 +21746,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // Smart cycle (FT8-style): when auto and not in a CQ run, answer a heard station
         // on the OPPOSITE T/R parity to the one we decoded them in, so we key while they
         // listen (the 50/50-collision fix). A decode's audio is from the slot before its
-        // ingest slot, so the opposite of the DX's period is `ingest_slot % 2`.
+        // ingest slot, so the opposite of the DX's period is `ingest_slot % 2`. A peer never
+        // decoded keeps the current cycle: the latest decode from anyone else says nothing
+        // about the peer's period.
         if self.tx_cycle_auto && !self.cq_running {
-            if let Some(s) = self.latest_decode_slot_from(peer).or(self.last_decode_slot) {
+            if let Some(s) = self.latest_decode_slot_from(peer) {
                 self.apply_cycle_parity(s % 2 == 0);
             }
         }
@@ -23856,11 +23858,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // value never disagrees with the decoder.
             Tier::Js8 => f64::from(self.js8_tx_speed().slot_fit_s()),
             Tier::TempoDeep => 12.64, // no lead-in; a safe over-estimate of the ~9.9 s frame
-            // FT4 = 0.5 s lead-in + 5.04 s tones (105 sym × 576 sa @ 12 kHz). The
-            // generated buffer also carries ~1.0 s of TRAILING silence — that is
-            // PTT-hold padding, not airtime, and the radio loop strips it on a
-            // late (mid-slot) start so the over never bleeds into the next period.
-            Tier::Ft4 => 5.54,
+            // FT4 = 0.3 s lead-in (WSJT-X's, `modes::mode` `FT4_LEAD_IN_SECS`) + 5.04 s
+            // tones (105 sym × 576 sa @ 12 kHz). The generated buffer also carries
+            // ~1.0 s of TRAILING silence — that is PTT-hold padding, not airtime, and
+            // the radio loop strips it on a late (mid-slot) start so the over never
+            // bleeds into the next period.
+            Tier::Ft4 => 5.34,
             // FT2 = 0.5 s lead-in + 2.52 s tones (105 sym × 288 sa @ 12 kHz). Unlike
             // FT4 there is NO trailing padding in the buffer — `Ft2Mode::gen_wave`
             // returns exactly lead + NWAVE — so 3.02 is the whole of it, and it is
@@ -49824,6 +49827,27 @@ mod tests {
         assert!(!e.tx_even(), "manual cycle held — auto did not override it");
     }
 
+    /// A message to a peer never decoded keeps the current cycle: the latest decode from
+    /// someone else says nothing about the peer's period, so taking it would be a coin toss.
+    #[test]
+    fn chat_to_an_unheard_peer_keeps_the_current_cycle() {
+        for (even, stranger_slot) in [(true, 7), (false, 8)] {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.set_tier(Tier::TempoFast);
+            e.apply_cycle_parity(even); // auto stays on
+            assert!(e.tx_cycle_auto());
+            e.decode_history
+                .push_back((stranger_slot, cq_decode_from("W9XYZ")));
+            e.last_decode_slot = Some(stranger_slot);
+            e.send_message("N0NEW", "HI");
+            assert_eq!(
+                e.tx_even(),
+                even,
+                "a stranger's decode picked the cycle for an unheard peer"
+            );
+        }
+    }
+
     #[test]
     fn harq_enabled_by_default_and_toggles() {
         // IR-HARQ is ON by default (unlike beacon, it is NOT force-disabled at
@@ -51607,6 +51631,91 @@ mod tests {
             before,
             "and the operator's standing period is untouched"
         );
+    }
+
+    /// The same rule with traffic on the band, which is the case that matters on air: a typed
+    /// call to a station never decoded must NOT take its period from whoever decoded last — that
+    /// slot is a stranger's and says nothing about the DX's period, so it is a coin toss that
+    /// transmits on top of the DX half the time. WSJT-X sets `m_txFirst` only from a clicked
+    /// line (mainwindow.cpp 8963-8967); a typed DX Call leaves it alone. Both periods are pinned
+    /// so the test cannot pass by the stranger's slot happening to agree.
+    #[test]
+    fn a_typed_blind_call_with_decodes_on_the_band_keeps_the_operators_period() {
+        for (even, stranger_slot) in [(true, 5), (false, 6)] {
+            let mut e = Engine::new("W9XYZ", "EN37", 0);
+            e.set_tier(Tier::Ft8);
+            e.set_tx_even(even);
+            e.ingest_decodes_for_test(&[dec_snr("CQ K1ABC FN42", -10)], stranger_slot);
+            e.last_decode_slot = Some(stranger_slot); // what the live ingest records
+            e.call_station("PJ4DX"); // typed, never decoded
+            assert!(e.snapshot().qso.is_some(), "a typed call arms");
+            assert_eq!(
+                e.tx_even(),
+                even,
+                "it took the period from a stranger's decode instead of keeping the operator's"
+            );
+        }
+    }
+
+    /// The clicked-line side of the same rule. A line clicked after its decode aged out of the
+    /// 240-row history, from a station not heard since, cannot be placed: none of this
+    /// station's own decodes is left. The slot someone else was last decoded in is no stand-in
+    /// for its period, so the click is refused with the plain wait-and-click-again reason, not
+    /// keyed on a guessed period. Both periods are pinned, as above.
+    #[test]
+    fn a_clicked_line_aged_out_of_the_history_with_traffic_on_the_band_is_refused() {
+        for (even, stranger_slot) in [(true, 5), (false, 6)] {
+            let mut e = Engine::new("W9XYZ", "EN37", 0);
+            e.set_tier(Tier::Ft8);
+            e.set_tx_even(even);
+            e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 3);
+            let traffic = vec![dec_snr("CQ K1ABC FN42", -10); DECODE_HISTORY_DEPTH];
+            e.ingest_decodes_for_test(&traffic, stranger_slot);
+            e.last_decode_slot = Some(stranger_slot); // what the live ingest records
+            assert!(
+                !e.decode_history
+                    .iter()
+                    .any(|(_, d)| d.message.contains("PJ4DX")),
+                "premise: the clicked line and every decode from its station aged out"
+            );
+            let r = e.call_station_ctx("PJ4DX", None, Some("CQ PJ4DX FK52"), Some(-10), None);
+            assert!(
+                r.as_ref()
+                    .is_err_and(|m| m.contains("No recent decode from PJ4DX")),
+                "a clicked line that cannot be placed must be refused: {r:?}"
+            );
+            assert!(e.snapshot().qso.is_none(), "no QSO armed");
+            assert_eq!(e.tx_even(), even, "a refused answer must not touch parity");
+        }
+    }
+
+    /// The positive control for the rule above: a station that WAS decoded is answered on the
+    /// opposite of its own period, whether the call is typed or clicked from its line — and the
+    /// stranger decoded after it does not get a say.
+    #[test]
+    fn a_call_to_a_decoded_station_still_takes_the_opposite_of_its_period() {
+        // The DX heard in the slot ingested at 7 (odd) → we transmit odd; a stranger at 8 later.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_tx_even(true);
+        e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 7);
+        e.ingest_decodes_for_test(&[dec_snr("CQ K1ABC FN42", -10)], 8);
+        e.last_decode_slot = Some(8);
+        e.call_station("PJ4DX");
+        assert!(
+            !e.tx_even(),
+            "typed call to a heard station: the DX's opposite"
+        );
+
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_tx_even(true);
+        e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 7);
+        e.ingest_decodes_for_test(&[dec_snr("CQ K1ABC FN42", -10)], 8);
+        e.last_decode_slot = Some(8);
+        e.call_station_ctx("PJ4DX", None, Some("CQ PJ4DX FK52"), Some(-10), None)
+            .expect("a clicked line from the history is answered");
+        assert!(!e.tx_even(), "clicked line: the DX's opposite");
     }
 
     /// The other half of the same hole: after a tier switch the roster's entries are stale in
@@ -67102,7 +67211,7 @@ mod tests {
         assert!(!tones.is_empty(), "{} encode failed", kind.as_str());
         let wave = mode.gen_wave(&tones, tempo_fast::SAMPLE_RATE, f0);
         let n = mode.frame_samples();
-        // FT8/FT4 gen_wave is now slot-positioned (includes the 0.5 s lead-in), so place
+        // FT8/FT4 gen_wave is now slot-positioned (includes the lead-in), so place
         // it at the slot start — no manual offset (a stale +6000 here would push FT8 to
         // 1.0 s, double-offsetting it).
         let off = 0;
@@ -67726,7 +67835,7 @@ mod tests {
         assert!(!tones.is_empty(), "{} encode failed", kind.as_str());
         let wave = mode.gen_wave(&tones, tempo_fast::SAMPLE_RATE, f0);
         let n = mode.frame_samples();
-        // FT8/FT4 gen_wave is now slot-positioned (includes the 0.5 s lead-in), so place
+        // FT8/FT4 gen_wave is now slot-positioned (includes the lead-in), so place
         // it at the slot start; the wave already carries its own offset.
         let off = 0;
         let sig = tempo_core::channel::snr_to_scale(snr_db, tempo_fast::SAMPLE_RATE);
@@ -71690,6 +71799,28 @@ mod tests {
                 (secs - speed.slot_fit_s()).abs() < 0.01,
                 "{speed:?}: `slot_fit_s` ({}) must describe the real wave ({secs})",
                 speed.slot_fit_s()
+            );
+        }
+    }
+
+    /// FT8's and FT4's over lengths are where their real waves' last tone ends (lead-in + tones),
+    /// read off the wave, so the table follows a lead-in change instead of restating the old one.
+    #[test]
+    fn tx_over_secs_at_ft8_and_ft4_is_where_the_real_wave_falls_silent() {
+        for (tier, kind) in [
+            (Tier::Ft8, modes::ModeKind::Ft8),
+            (Tier::Ft4, modes::ModeKind::Ft4),
+        ] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(tier);
+            let m = modes::make_mode(kind);
+            let wave = m.gen_wave(&m.encode("CQ KD9TAW EN52"), 12_000.0, 1_500.0);
+            let last = wave.iter().rposition(|&s| s != 0.0).expect("tones") + 1;
+            let secs = last as f64 / 12_000.0;
+            assert!(
+                (e.tx_over_secs() - secs).abs() < 0.01,
+                "{tier:?}: tx_over_secs {} but the wave ends at {secs:.3} s",
+                e.tx_over_secs()
             );
         }
     }
