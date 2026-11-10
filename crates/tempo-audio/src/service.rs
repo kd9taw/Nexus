@@ -2679,6 +2679,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             &engine,
             &pool,
             &mut rig,
+            &mut backend,
             &mut state,
             &mut last_active,
             &switch_pending,
@@ -2785,7 +2786,9 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             // deadline, the hard stop and the idle self-heal all die with it, and
             // RigctldProc's Drop kills the daemon without unkeying. An exit
             // mid-over would leave the carrier up until the operator notices, so
-            // best-effort unkey on EVERY error exit, not only the SHUTDOWN path.
+            // best-effort unkey on EVERY error exit, not only the SHUTDOWN path. The queued
+            // audio is cleared first, as at every stop.
+            backend.flush_output();
             let _ = rig.ptt(false);
             return Err(e);
         }
@@ -3459,10 +3462,11 @@ fn poll_monitors(
 /// take the (already-connected) new active out of the pool into the active slot, and push the old
 /// active back into the pool. No teardown, no reconnect — so the dial can't race back to the old rig.
 /// Non-blocking: if the monitor thread holds the pool (mid-poll), retry next 20 ms tick.
-fn handoff_if_switched(
+fn handoff_if_switched<B: AudioBackend>(
     engine: &Arc<Mutex<Engine>>,
     pool: &MonitorPool,
     rig: &mut Rig,
+    backend: &mut B,
     state: &mut RadioLoop,
     last_active: &mut u32,
     pending: &std::sync::atomic::AtomicBool,
@@ -3505,6 +3509,10 @@ fn handoff_if_switched(
         crate::civ::diag::note(
             "dual-radio handoff: unkeying the outgoing rig before it leaves the active slot",
         );
+        // The switch can come mid-over (`set_active_radio` halts TX before this runs), and with
+        // the hold cleared below the hard stop has nothing left to cut: the queued over is cleared
+        // here, before the unkey, as at every stop, so it does not play on through the unkey's wait.
+        backend.flush_output();
         let _ = rig.ptt(false);
         let _ = rig.stop_morse();
         // …and a voice memory the rig may be playing on its own (a logger's PLAY through the
@@ -16404,8 +16412,8 @@ impl RadioLoop {
             self.prev_slot_was_tx = false;
         }
 
-        // Hard Stop TX: cut the CURRENT transmission immediately — drop PTT and discard
-        // the queued TX audio rather than letting it play out to its deadline. TWO
+        // Hard Stop TX: cut the CURRENT transmission immediately — discard the queued TX
+        // audio, then drop PTT, rather than letting it play out to its deadline. TWO
         // triggers, and the whole 2026-07-31 fix is the difference between them:
         //
         //  • the one-shot `slot_tx_abort` — `engine.halt_tx` (the UI "Stop TX" button, a
@@ -16475,9 +16483,14 @@ impl RadioLoop {
             } else {
                 "hard-stop TX: TX disabled mid-over (non-slot) → unkey"
             });
+            // ⚠️ FLUSH BEFORE THE UNKEY, as every other end of an over here. The unkey waits for
+            // the radio's answer (up to the CAT deadline on a slow or network link), and the
+            // queued over went on playing for all of it while the flush waited behind. WSJT-X's
+            // `stopTx` stops the Modulator first and lowers PTT after it
+            // (`widgets/mainwindow.cpp:8564-8582`, v3.0.2).
+            backend.flush_output();
             let slot_over = self.holds_slot_over();
             let unkey = rig.ptt(false);
-            backend.flush_output();
             self.tx_until_ms = None;
             // Cutting a slot over is WSJT-X's Halt Tx, and its PTT off fails as the over's end does.
             if let Some(why) = crate::slot::slot_unkey_failure(&unkey, slot_over) {
@@ -16590,9 +16603,10 @@ impl RadioLoop {
                 match inb {
                     WsjtxInbound::HaltTx { .. } => {
                         eng.halt_tx();
+                        // The queued over is cleared before the unkey, as at Stop TX.
+                        backend.flush_output();
                         let slot_over = self.holds_slot_over();
                         let unkey = rig.ptt(false);
-                        backend.flush_output();
                         self.tx_until_ms = None;
                         // …and so is a logger's HaltTx cutting one.
                         if let Some(why) = crate::slot::slot_unkey_failure(&unkey, slot_over) {
@@ -28198,6 +28212,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -28397,6 +28412,51 @@ mod tests {
     }
 
     #[test]
+    fn a_radio_switch_mid_over_clears_the_queued_over_before_it_unkeys_the_outgoing_radio() {
+        // A switch can come mid-over: `set_active_radio` halts TX, and the handoff runs before the
+        // tick, so its unkey is the over's stop. It cleared the hold and unkeyed but never cleared
+        // the queued audio, which played on through the unkey's wait, and with the hold gone the
+        // hard stop had nothing to cut. Now the audio is cleared first, as at every other stop.
+        let (addr, wire) = recording_rigctld_stub();
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let r1 = engine.lock().unwrap().add_radio();
+        let mut state = loop_state();
+        state.applied = cat_transport(4532, None);
+        let mut rig = Rig::rigctld(&addr);
+        rig.ptt(true).unwrap();
+        assert!(rig.keyed, "premise: the over is keyed");
+        state.tx_until_ms = Some(9_999_999.0); // mid-over
+        let mut backend = MockBackend::new();
+        // The sound card's flushes go on the same log as what the outgoing radio was sent.
+        backend.events = Some(Arc::clone(&wire));
+        wire.lock().unwrap().clear();
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(Vec::new()));
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        engine.lock().unwrap().set_active_radio(r1);
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut backend,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+        let log = wire.lock().unwrap().clone();
+        let flush = log.iter().position(|l| l == "flush");
+        let unkey = log.iter().position(|l| l == "T 0");
+        assert!(
+            unkey.is_some(),
+            "premise: the outgoing radio was unkeyed: {log:?}"
+        );
+        assert!(
+            flush.is_some_and(|f| Some(f) < unkey),
+            "the queued over was not cleared before the unkey: {log:?}"
+        );
+    }
+
+    #[test]
     fn handoff_swaps_active_radio_with_the_pool_no_teardown() {
         // Durable dual-radio: switching the active radio HANDS the (already-connected) new active Rig
         // OUT of the monitor pool into the active slot, and pushes the OLD active back INTO the pool —
@@ -28442,6 +28502,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -28688,6 +28749,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut backend,
             &mut state,
             &mut last_active,
             &pending,
@@ -28720,6 +28782,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut backend,
             &mut state,
             &mut last_active,
             &pending,
@@ -28768,6 +28831,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -28780,6 +28844,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -28796,6 +28861,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -28806,6 +28872,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -28861,6 +28928,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -29013,6 +29081,7 @@ mod tests {
                     &engine,
                     &pool,
                     &mut rig,
+                    &mut MockBackend::new(),
                     &mut state,
                     &mut last_active,
                     &pending,
@@ -29043,6 +29112,7 @@ mod tests {
                 &engine,
                 &pool,
                 &mut rig,
+                &mut MockBackend::new(),
                 &mut state,
                 &mut last_active,
                 &pending,
@@ -29106,6 +29176,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -29125,6 +29196,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -29180,6 +29252,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -29190,6 +29263,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -29232,6 +29306,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -29407,6 +29482,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -29525,6 +29601,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -29606,6 +29683,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -29749,6 +29827,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -29836,6 +29915,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -29908,6 +29988,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -29956,6 +30037,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -30036,6 +30118,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -30361,6 +30444,7 @@ mod tests {
                 &engine,
                 &pool,
                 &mut rig,
+                &mut MockBackend::new(),
                 &mut state,
                 &mut last_active,
                 &pending,
@@ -30504,6 +30588,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -30589,6 +30674,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -30671,6 +30757,7 @@ mod tests {
                 &engine,
                 &pool,
                 &mut rig,
+                &mut MockBackend::new(),
                 &mut state,
                 &mut last_active,
                 &pending,
@@ -30738,6 +30825,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -30937,6 +31025,7 @@ mod tests {
                 &engine,
                 &pool,
                 &mut rig,
+                &mut MockBackend::new(),
                 &mut state,
                 &mut last_active,
                 &pending,
@@ -30976,6 +31065,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -31316,6 +31406,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -31350,7 +31441,7 @@ mod tests {
         now_ms: f64,
     ) {
         let pending = std::sync::atomic::AtomicBool::new(false);
-        handoff_if_switched(engine, pool, rig, state, last_active, &pending);
+        handoff_if_switched(engine, pool, rig, backend, state, last_active, &pending);
         let sinks = no_sinks();
         let mut ra = mock_reopen_audio();
         let mut rr = mock_reopen_rig();
@@ -33473,6 +33564,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -33542,6 +33634,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -33621,6 +33714,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -33660,6 +33754,7 @@ mod tests {
             &engine,
             &pool,
             &mut rig,
+            &mut MockBackend::new(),
             &mut state,
             &mut last_active,
             &pending,
@@ -37828,6 +37923,7 @@ mod tests {
                 &engine,
                 &pool,
                 &mut rig,
+                &mut MockBackend::new(),
                 &mut state,
                 &mut last_active,
                 &pending,

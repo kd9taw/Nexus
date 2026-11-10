@@ -3434,6 +3434,7 @@ fn switching_radio_through_the_pool_with_split_held_lets_go_through_the_outgoing
         &b.engine,
         &pool,
         &mut b.rig,
+        &mut b.backend,
         &mut b.state,
         &mut last_active,
         &pending,

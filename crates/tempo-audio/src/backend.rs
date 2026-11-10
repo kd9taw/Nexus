@@ -219,6 +219,9 @@ pub struct MockBackend {
     pub played: Vec<f32>,
     /// How many times `flush_output` was called (for hard-Stop-TX tests).
     pub flush_calls: usize,
+    /// When each `flush_output` was called: how long the sound card would have gone on playing the
+    /// queued over after a stop.
+    pub flushed_at: Vec<std::time::Instant>,
     /// Live gain updates received from the real audio owner, for headless tests.
     pub rx_gain_calls: Vec<f32>,
     pub tx_level_calls: Vec<f32>,
@@ -340,6 +343,7 @@ impl AudioBackend for MockBackend {
     }
     fn flush_output(&mut self) -> usize {
         self.flush_calls += 1;
+        self.flushed_at.push(std::time::Instant::now());
         self.note_event("flush");
         0
     }

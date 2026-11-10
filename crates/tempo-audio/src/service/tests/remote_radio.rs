@@ -752,7 +752,13 @@ fn remote_presence_immediate_over_rechecks_authority_around_key_up() {
     for scene in ["valid", "beforeTick", "duringKey"] {
         let authority = Arc::new(TransmitAuthority::default());
         let revoke = authority.clone();
+        // The sound card's flushes and the unkeys the radio was sent, in the order they happened.
+        let order = Arc::new(Mutex::new(Vec::<String>::new()));
+        let heard = Arc::clone(&order);
         let peer = retuning_peer(14_074_000, "PKTUSB", move |line, state| {
+            if line == "T 0" {
+                heard.lock().unwrap().push(line.to_string());
+            }
             if line == "T 1" {
                 state.keyed = true;
                 if scene == "duringKey" {
@@ -767,6 +773,7 @@ fn remote_presence_immediate_over_rechecks_authority_around_key_up() {
             settings.mycall = "KD9TAW".into();
             settings.mygrid = "EN52".into();
         });
+        s.backend.events = Some(Arc::clone(&order));
         {
             let mut e = engine_lock(&s.engine);
             e.set_tx_even(true);
@@ -809,11 +816,73 @@ fn remote_presence_immediate_over_rechecks_authority_around_key_up() {
             assert!(!engine_lock(&s.engine).tx_enabled(), "{scene}");
             if scene == "duringKey" {
                 assert_eq!(writes(&peer), ["T 1", "T 0"]);
+                // The output is cleared before the unkey, as at every other stop.
+                assert_eq!(*order.lock().unwrap(), ["flush", "T 0"], "{scene}");
             } else {
                 assert!(writes(&peer).is_empty());
             }
         }
     }
+}
+
+/// A remote permit that lapsed before the key, with the radio already keyed: the output is cleared
+/// before the unkey, as at every stop. A revoked permit is caught earlier in a tick, so this calls
+/// `key_slot_transmitter` itself.
+#[test]
+fn a_lapsed_permit_before_the_key_clears_the_output_before_it_unkeys() {
+    use tempo_app::remote_control::transmit::TransmitAuthority;
+    let authority = Arc::new(TransmitAuthority::default());
+    let order = Arc::new(Mutex::new(Vec::<String>::new()));
+    let heard = Arc::clone(&order);
+    let peer = retuning_peer(14_074_000, "PKTUSB", move |line, state| {
+        if line == "T 0" {
+            heard.lock().unwrap().push(line.to_string());
+        }
+        if line == "T 1" {
+            state.keyed = true;
+            Some("RPRT 0\n".into())
+        } else {
+            None
+        }
+    });
+    let mut s = Station::configured(&peer, |settings| {
+        settings.mycall = "W9XYZ".into();
+        settings.mygrid = "EN37".into();
+    });
+    {
+        let mut e = engine_lock(&s.engine);
+        e.set_tx_even(true);
+        e.take_immediate_retune();
+        e.start_cq(None).unwrap();
+        let now = Instant::now();
+        assert!(e.hold_remote_presence(authority.permit(unexpired_deadline()).unwrap(), now));
+        e.take_immediate_retune();
+        e.take_slot_tx_abort();
+        s.state.cur_tier = e.tier();
+        s.state.cur_slot_secs = e.active_slot_secs();
+        s.state.clock = SlotClock::with_period_secs(e.active_slot_secs());
+        s.state.last_slot = Some(0);
+    }
+    s.rig.ptt(true).unwrap();
+    assert!(s.rig.keyed, "premise: keyed before the tick");
+    s.backend.events = Some(Arc::clone(&order));
+    authority.revoke();
+    let keyed = {
+        let mut e = engine_lock(&s.engine);
+        crate::slot::key_slot_transmitter(&mut e, &mut s.rig, &mut s.backend, true)
+    };
+    assert!(!keyed, "premise: the lapsed permit keys nothing");
+    assert!(!s.rig.keyed, "premise: unkeyed");
+    let got = order.lock().unwrap().clone();
+    assert!(
+        got.contains(&"T 0".to_string()),
+        "premise: unkeyed: {got:?}"
+    );
+    assert_eq!(
+        got.first().map(String::as_str),
+        Some("flush"),
+        "order {got:?}"
+    );
 }
 
 /// Remote's Stop ends an FT over with `halt_tx`, as every local stop does (`transmit_stop::stop`):
