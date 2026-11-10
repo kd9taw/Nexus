@@ -311,7 +311,7 @@ use tempo_core::fieldday::{FieldDayStation, FtMessages};
 use tempo_core::logbook::QsoRecord;
 use tempo_core::qso::{State as QsoState, Station as QsoStation};
 use tempo_core::qsy::{Directive, Roamer};
-use tempo_core::{channel, spectrum, tempo_fast, tx};
+use tempo_core::{channel, spectrum, tempo_fast};
 
 /// The live waterfall row, published on its OWN lock so the UI can read it without
 /// contending for the engine mutex.
@@ -6786,9 +6786,16 @@ impl TxWaveform {
             TxWaveform::Deep { text, f0 } => {
                 tempo_fast::deep::encode_wave(text, *f0, tempo_fast::SAMPLE_RATE)
             }
-            TxWaveform::Fast { text, f0, rv } => {
-                tx::build_rv(text, tempo_fast::SAMPLE_RATE, *f0, *rv).wave
-            }
+            // Through `Ft1Mode::gen_wave`, not `tx::build_rv`: that is where FT1's 0.3 s slot
+            // lead-in lives (`FT1_LEAD_IN_SECS`), and the bare `tempo_core` wave puts the first
+            // tone on the key, where FT1's decoder, which cannot search before sample 0, loses
+            // any peer a little fast. Same tones, same 4 s buffer, shifted within it.
+            TxWaveform::Fast { text, f0, rv } => modes::Mode::gen_wave(
+                &modes::Ft1Mode,
+                &tempo_fast::encode_rv(text, *rv),
+                tempo_fast::SAMPLE_RATE,
+                *f0,
+            ),
             TxWaveform::Native { kind, text, f0 } => {
                 let Some(mode) = modes::tx_mode(*kind) else {
                     return Vec::new();
@@ -23870,7 +23877,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // airtime rather than an over-estimate. That leaves 0.73 s of the 3.75 s
             // slot, the tightest margin of any tier here.
             Tier::Ft2 => 2.52,
-            Tier::TempoFast => 3.55,
+            // FT1 = 0.3 s lead-in (`modes::mode` `FT1_LEAD_IN_SECS`) + 3.536 s tones (99 sym ×
+            // 3000/7 sa @ 12 kHz). The buffer is a fixed 4 s, so the last 164 ms are silence.
+            Tier::TempoFast => 3.84,
         }
     }
 
@@ -33473,7 +33482,7 @@ contact yourself."
                         f0: self.tx_offset_hz,
                     },
                     // FT1: 4-CPM. QSO mode escalates tx_rv for IR-HARQ
-                    // retransmissions; Chat/Field Day keep tx_rv = 0 (RV0 = tx::build).
+                    // retransmissions; Chat/Field Day keep tx_rv = 0 (RV0).
                     Tier::TempoFast => TxWaveform::Fast {
                         text: t,
                         f0: self.tx_offset_hz,
@@ -71835,6 +71844,81 @@ mod tests {
                 "{tier:?}: tx_over_secs {} but the wave ends at {secs:.3} s",
                 e.tx_over_secs()
             );
+        }
+    }
+
+    /// ⭐ FT1'S OVER, AS THE RADIO LOOP BUILDS IT, STARTS ITS TONES 0.3 s AFTER ITS KEY. The loop
+    /// plays a TempoFast over whole from its key (`slot::play_keyed_over`), so the wave's first
+    /// non-zero sample IS the tones' offset from the key. That lead-in is the 2026-07-26 on-air fix
+    /// (FT1's decoder cannot search before sample 0, so a peer a little fast lost about half its
+    /// frames), and it used to live only on `modes::Ft1Mode::gen_wave`, which the engine never
+    /// called: its over came out of `tempo_core::tx::build_rv` with the tones at sample 0.
+    ///
+    /// Measured on the plan the engine makes (`plan_tx` → `TxWaveform::build`) and on every IR-HARQ
+    /// version. POSITIVE CONTROL: `Ft1Mode::gen_wave`, which has the lead, reads 3 600 samples on
+    /// the same measure. NEGATIVE CONTROL: the bare `tempo_fast` wave reads under one ramp sample.
+    /// The over's length stays one 4 s period, and `tx_over_secs` is where its last tone ends.
+    #[test]
+    fn an_ft1_over_as_the_engine_builds_it_starts_its_tones_after_the_lead_in() {
+        const MSG: &str = "CQ TEST N0CALL EN37";
+        let first = |w: &[f32]| w.iter().position(|&s| s != 0.0).expect("tones");
+        let last = |w: &[f32]| w.iter().rposition(|&s| s != 0.0).expect("tones") + 1;
+        let lead = 3_600; // 0.300 s at 12 kHz, worked out here rather than read from the code
+
+        // The modulator's ramp starts on a zero sample, so the bare wave's first non-zero sample is
+        // a sample or so in, not 0; every measure below counts from where the bare wave's starts.
+        let bare = tempo_fast::gen_wave(&tempo_fast::encode_rv(MSG, 0), 12_000.0, 1_500.0);
+        let ramp = first(&bare);
+        assert!(ramp < 12, "negative control: the bare wave has no lead-in");
+        let lead = lead + ramp;
+        let ft1 = modes::make_mode(modes::ModeKind::TempoFast);
+        let control = ft1.gen_wave(&tempo_fast::encode_rv(MSG, 0), 12_000.0, 1_500.0);
+        assert_eq!(first(&control), lead, "positive control: Ft1Mode's lead");
+
+        let mut e = Engine::new("N0CALL", "EN37", 0);
+        e.set_tier(Tier::TempoFast);
+        e.set_tx_enabled(true);
+        e.broadcast(MSG);
+        let plan = e.plan_tx(0).expect("an FT1 over to send");
+        let TxWaveform::Fast { text, f0, .. } = &plan.waveform else {
+            panic!("an FT1 plan builds through TxWaveform::Fast");
+        };
+        let (text, f0) = (text.clone(), *f0);
+        let wave = plan.waveform.build();
+        eprintln!(
+            "FT1 over: first tone {} ({:.2} ms), last tone ends {} ({:.1} ms), {} samples, \
+             tx_over_secs {}; control first {}, bare first {}",
+            first(&wave),
+            first(&wave) as f64 / 12.0,
+            last(&wave),
+            last(&wave) as f64 / 12.0,
+            wave.len(),
+            e.tx_over_secs(),
+            first(&control),
+            ramp
+        );
+        assert_eq!(
+            first(&wave),
+            lead,
+            "FT1's first tone is {:.1} ms after its key, not 300 ms",
+            first(&wave) as f64 / 12.0
+        );
+        assert_eq!(wave.len(), tempo_fast::NMAX, "still exactly one 4 s period");
+        assert!(
+            (e.tx_over_secs() - last(&wave) as f64 / 12_000.0).abs() < 0.01,
+            "tx_over_secs {} but the wave ends at {:.3} s",
+            e.tx_over_secs(),
+            last(&wave) as f64 / 12_000.0
+        );
+        for rv in 0..=2 {
+            let w = TxWaveform::Fast {
+                text: text.clone(),
+                f0,
+                rv,
+            }
+            .build();
+            assert_eq!(first(&w), lead, "RV{rv}'s first tone");
+            assert_eq!(w.len(), tempo_fast::NMAX, "RV{rv}'s length");
         }
     }
 
