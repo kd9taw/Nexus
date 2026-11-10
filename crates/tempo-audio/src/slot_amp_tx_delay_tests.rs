@@ -665,3 +665,66 @@ fn ft1_keeps_its_tones_while_key_and_delay_fit_its_slack() {
         }
     }
 }
+
+/// FT1 at the longest delay with a slow key, 500 ms with 200 ms of latency: well past its slack, so
+/// the end of the over is cut, and PTT drops exactly at the slot boundary, never after it, so
+/// nothing of the over goes out in the next slot.
+#[test]
+fn ft1_ptt_drops_at_the_slot_boundary_with_a_long_delay() {
+    let eng = engine_on(Tier::TempoFast, 0);
+    let waves = over_on(Tier::TempoFast);
+    let period_ms = eng.active_slot_secs() * 1000.0;
+    let slot_start = 1_000.0 * period_ms;
+    let keyed = slot_start + 200.0;
+    let p = keyed_over(&eng, &waves, keyed, 500.0);
+    let tones_end = keyed + (p.samples.iter().rposition(|&x| x != 0.0).unwrap() + 1) as f64 / 12.0;
+    assert!(
+        tones_end > slot_start + period_ms,
+        "premise: the over runs past its slot"
+    );
+    assert_eq!(
+        p.tx_until_ms,
+        slot_start + period_ms,
+        "FT1's PTT not dropped at the slot boundary"
+    );
+}
+
+/// FT1 shifted by the longest delay with a slow key, 500 ms with 200 ms of latency, still decodes as
+/// the other station hears its slot, with the end of the over cut at the boundary. POSITIVE
+/// CONTROL: the over with no delay decodes; NEGATIVE CONTROL: its first quarter alone does not. The
+/// signal is noise-free. ⚠️ Ignored in the suite and run by name, as the FT8/FT2 decode sweep is:
+/// FT1's decoder takes the process-wide modem lock, which other tests in this binary time
+/// themselves against.
+#[test]
+#[ignore = "takes the process-wide modem lock; run by name"]
+fn ft1_shifted_past_its_slack_still_decodes_with_its_end_cut() {
+    let kind = tempo_core::modes::ModeKind::TempoFast;
+    let eng = engine_on(Tier::TempoFast, 0);
+    let waves = over_on(Tier::TempoFast);
+    let period_ms = eng.active_slot_secs() * 1000.0;
+    let slot_start = 1_000.0 * period_ms;
+    let frame_len = samples(period_ms);
+    let whole = waves.concat();
+    assert!(
+        decode(kind, &heard(frame_len, &whole, 0.0)).is_some(),
+        "positive control"
+    );
+    let quarter: Vec<f32> = whole[..whole.len() / 4].to_vec();
+    assert!(
+        decode(kind, &heard(frame_len, &quarter, 0.0)).is_none(),
+        "negative control: a quarter of an FT1 over decoded"
+    );
+    let lat = 200.0;
+    let p = keyed_over(&eng, &waves, slot_start + lat, 500.0);
+    // What the receiver's slot holds: the over from the key, up to the slot's end, where PTT drops.
+    let sent = samples(p.tx_until_ms - (slot_start + lat)).min(p.samples.len());
+    let heard_slot = heard(frame_len, &p.samples[..sent], lat);
+    assert!(
+        p.samples[sent..].iter().any(|&x| x != 0.0),
+        "premise: the end of the over is cut"
+    );
+    assert!(
+        decode(kind, &heard_slot).is_some(),
+        "FT1 at 500 ms + 200 ms latency, its end cut, did not decode"
+    );
+}
