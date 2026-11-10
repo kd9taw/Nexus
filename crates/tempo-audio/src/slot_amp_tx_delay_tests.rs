@@ -704,11 +704,7 @@ fn ft1_on_time_with_no_delay_sounds_from_its_lead_in_to_inside_its_slot() {
         "tx_over_secs {} but the tones end at {end_ms:.1} ms",
         eng.tx_over_secs()
     );
-    assert_eq!(
-        p.tx_until_ms,
-        slot_start + period_ms,
-        "PTT at the boundary"
-    );
+    assert_eq!(p.tx_until_ms, slot_start + period_ms, "PTT at the boundary");
 }
 
 /// FT1 at the longest delay with a slow key, 500 ms with 200 ms of latency: well past its slack, so
