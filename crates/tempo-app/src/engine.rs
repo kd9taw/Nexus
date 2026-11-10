@@ -16097,15 +16097,22 @@ impl Engine {
         // evidence for it (the rig's read-back, the station's commanded class) lives out
         // here, which is exactly why the row used to leave without it.
         let submode = submode.or(self.contest_phone_submode(mode, submode));
+        let iota = self
+            .contest_log_band()
+            .and_then(|band| self.contest_iota_at_log(call, &band, now));
         let Mode::FieldDay { station, .. } = &mut self.mode else {
             return Err("Contest mode is not active".into());
         };
+        let from = station.log.qsos().len();
         let logged = match submode {
             Some(sub) => station
                 .log
                 .log_submode_at(call, class, section, mode, sub, 0, now),
             None => station.log.log_mode_at(call, class, section, mode, 0, now),
         };
+        if let Some(offer) = iota.as_ref().filter(|_| logged) {
+            station.log.set_iota_since(from, call, offer);
+        }
         if logged {
             self.persist_fd_log(); // journal every contact — a crash loses nothing
             self.jtty_contact_logged(call);
@@ -16203,6 +16210,9 @@ impl Engine {
         // one derivation, so the two manual entry points cannot record a contact
         // differently depending on which exchange shape it was logged through.
         let submode = submode.or(self.contest_phone_submode(mode, submode));
+        let iota = self
+            .contest_log_band()
+            .and_then(|band| self.contest_iota_at_log(call, &band, now));
         let Mode::FieldDay { station, .. } = &mut self.mode else {
             return Err("Contest mode is not active".into());
         };
@@ -16210,6 +16220,7 @@ impl Engine {
         if rows.is_empty() {
             return Ok(Vec::new());
         }
+        let from = station.log.qsos().len();
         // ⭐ **Stamp the row with the number THIS STATION COPIED**, which is the number
         // bound to them by `working` — not a fresh one, and not a lookup of whatever the
         // counter has reached by now.
@@ -16234,6 +16245,9 @@ impl Engine {
         // refused contact is over — its number is spent, which no log checker can see,
         // while handing it to the next station is an error against both of them.
         station.log.session.logged(call);
+        if let Some(offer) = iota.as_ref().filter(|_| logged.contains(&true)) {
+            station.log.set_iota_since(from, call, offer);
+        }
         if logged.contains(&true) {
             self.persist_fd_log(); // journal every contact — a crash loses nothing
             self.jtty_contact_logged(call);
@@ -16340,9 +16354,11 @@ impl Engine {
         // the sideband a satellite contact was worked on is the rig's read-back like any
         // other, and the strip's three entry points must not record it differently.
         let submode = submode.or(self.contest_phone_submode(mode, submode));
+        let iota = self.contest_iota_at_log(call, &leg.band, now);
         let Mode::FieldDay { station, .. } = &mut self.mode else {
             return Err("Contest mode is not active".into());
         };
+        let from = station.log.qsos().len();
         // The serial binding, on the same terms and for the same reason as
         // `contest_log_manual` — a pass contact in a serial contest copies a number too.
         station.log.session.working(call, now);
@@ -16356,6 +16372,9 @@ impl Engine {
             sent_rst,
         );
         station.log.session.logged(call);
+        if let Some(offer) = iota.as_ref().filter(|_| logged) {
+            station.log.set_iota_since(from, call, offer);
+        }
         if logged {
             self.persist_fd_log(); // journal every contact — a crash loses nothing
             self.jtty_contact_logged(call);
@@ -18676,6 +18695,35 @@ impl Engine {
             let spots = (read.spots)(&rec.call, &rec.band, rec.when_unix);
             let answer = self.callbook_answer(&rec.call);
             tempo_core::logbook::offer::fill_iota_at_log(rec, &spots, answer, &*read.known);
+        }
+    }
+
+    /// What a contest row of `call`, made on `band` at `when`, takes for its IOTA reference: the
+    /// same reading as [`Self::fill_iota_at_log`] (operator ruling, 2026-11-10: the contest strip
+    /// too), carried on the row as an offer the merge writes
+    /// (`tempo_core::fieldday::LoggedQso::iota`). The contest strip shows no IOTA box.
+    fn contest_iota_at_log(
+        &self,
+        call: &str,
+        band: &str,
+        when: u64,
+    ) -> Option<tempo_core::logbook::offer::IotaOffer> {
+        let read = self.station.iota_at_log.as_ref()?;
+        let spots = (read.spots)(call, band, when);
+        tempo_core::logbook::offer::iota_at_log(
+            call,
+            None,
+            &spots,
+            self.callbook_answer(call),
+            &*read.known,
+        )
+    }
+
+    /// The band the running contest log stamps on its next row, if a contest is running.
+    fn contest_log_band(&self) -> Option<String> {
+        match &self.mode {
+            Mode::FieldDay { station, .. } => Some(station.log.band.clone()),
+            _ => None,
         }
     }
 

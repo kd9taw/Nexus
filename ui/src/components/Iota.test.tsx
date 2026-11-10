@@ -6,7 +6,7 @@
 // the reference the station filled it with, where it came from, and lets the operator clear it.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
-import { IotaCell, IotaPrefillField, IotaReferenceNote, IotaListSettings, iotaToLog, type IotaPrefillState } from './Iota'
+import { IotaCell, IotaPrefillField, IotaReferenceNote, IotaListSettings, iotaInvalid, iotaToLog, type IotaPrefillState } from './Iota'
 import { iotaKnown, resetIotaGroupsForTest, IOTA_SITE, IOTA_LIST_EVENT } from '../features/iotaGroups'
 import { iotaNeeded } from './SpotsPanel'
 import { t } from '../i18n'
@@ -96,10 +96,14 @@ describe('the filled IOTA box', () => {
     expect(screen.queryByText(t('iota.offer.fromSpot'))).toBeNull()
   })
 
-  it('only a reference by its shape is logged', () => {
+  it('a reference in any obvious spelling is logged in its one spelling; anything else is invalid, not empty', () => {
     expect(iotaToLog(' eu-901 ')).toBe('EU-901')
-    expect(iotaToLog('EU-9')).toBeNull()
+    expect(iotaToLog('EU-9')).toBe('EU-009')
     expect(iotaToLog('')).toBeNull()
+    expect(iotaInvalid('')).toBe(false)
+    expect(iotaInvalid('eu 9')).toBe(false)
+    expect(iotaToLog('XX-901')).toBeNull()
+    expect(iotaInvalid('XX-901')).toBe(true)
   })
 })
 

@@ -17,6 +17,7 @@
 import type { FieldEdit, QsoEdit } from '../api'
 import type { LoggedQso } from '../types'
 import { parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from './utcLog'
+import { normalizeIota } from './iotaGroups'
 
 /** Every box the card edits, as typed. Strings, so one setter serves them all. */
 export interface CardDraft {
@@ -316,7 +317,7 @@ export function cardSave(q: LoggedQso, start: CardDraft, d: CardDraft, fields: r
     edit.ota.myProgram = ref ? d.myProgram || 'POTA' : null
   }
   if (changed('iota')) {
-    const iota = d.iota.trim().toUpperCase()
+    const iota = normalizeIota(d.iota) ?? d.iota.trim().toUpperCase()
     if (!IOTA_RE.test(iota)) return no({ code: 'iota' })
     edit.ota.iota = iota
   }

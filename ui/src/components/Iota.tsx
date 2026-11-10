@@ -22,6 +22,7 @@ import {
   iotaListStatus,
   iotaName,
   loadIotaGroups,
+  normalizeIota,
   setIotaListOn,
   subscribeIotaGroups,
 } from '../features/iotaGroups'
@@ -79,9 +80,6 @@ export function IotaReferenceNote({ reference }: { reference: string | null | un
 }
 
 export type { IotaOfferData }
-
-/** A reference by its shape: a continent, a hyphen and three digits. */
-const IOTA_REF = /^(AF|AN|AS|EU|NA|OC|SA)-\d{3}$/
 
 /** What a log form keeps of the IOTA reference it filled its box with ([`useIotaPrefill`]). */
 export interface IotaPrefillState {
@@ -160,7 +158,7 @@ export function useIotaPrefill(
   const offer = !off && kept.call === key ? kept.offer : null
   return {
     offer,
-    taken: offer && value.trim().toUpperCase() === offer.reference ? offer : null,
+    taken: offer && normalizeIota(value) === offer.reference ? offer : null,
     edit: (v: string) => {
       touched.current = true
       latest.current.setValue(v)
@@ -195,6 +193,7 @@ export function IotaPrefillField({ state, value }: { state: IotaPrefillState; va
   useIotaGroups()
   if (!state.offer && value.trim() === '') return null
   const r = value.trim().toUpperCase()
+  const invalid = iotaInvalid(value)
   return (
     <div className="iota-offer" role="group" aria-label={t('iota.prefill.aria')}>
       <span className="need-chip need-iota" aria-hidden="true">
@@ -209,11 +208,16 @@ export function IotaPrefillField({ state, value }: { state: IotaPrefillState; va
         autoComplete="off"
         spellCheck={false}
         aria-label={t('iota.prefill.label')}
-        aria-invalid={r !== '' && !IOTA_REF.test(r)}
+        aria-invalid={invalid}
         title={t('iota.prefill.hint')}
       />
-      <IotaGroupName reference={r} />
+      <IotaGroupName reference={normalizeIota(r) ?? r} />
       <IotaPrefillSource state={state} />
+      {invalid && (
+        <span className="iota-unknown" role="alert">
+          {t('logbook.form.iotaInvalid')}
+        </span>
+      )}
       {r !== '' && (
         <button type="button" className="settings-test-btn" aria-label={t('iota.offer.dismiss')} title={t('iota.offer.dismiss')} onClick={state.clear}>
           ×
@@ -223,10 +227,16 @@ export function IotaPrefillField({ state, value }: { state: IotaPrefillState; va
   )
 }
 
-/** The box's reference as the log takes it: a reference by its shape, else none. */
+/** The box's reference as the log takes it, in its one spelling (`normalizeIota`: "eu-5" is
+ *  EU-005); none for an empty box. A box that holds something else is [`iotaInvalid`], and the form
+ *  says so and does not log, never logging it as nothing. */
 export function iotaToLog(value: string): string | null {
-  const r = value.trim().toUpperCase()
-  return IOTA_REF.test(r) ? r : null
+  return normalizeIota(value)
+}
+
+/** The box holds something that is not a reference in any spelling. */
+export function iotaInvalid(value: string): boolean {
+  return value.trim() !== '' && normalizeIota(value) === null
 }
 
 /**

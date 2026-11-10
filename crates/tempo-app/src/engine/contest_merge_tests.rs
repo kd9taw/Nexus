@@ -1428,3 +1428,57 @@ fn a_contest_contact_reaches_the_logbook_with_its_grid_which_lotw_never_sees() {
         );
     }
 }
+
+/// THE CONTEST STRIP FILLS IOTA TOO (operator ruling, 2026-11-10: every log path). A Field Day
+/// contact and a QSO-party contact, from the station's spots or its callbook answer, carry the
+/// island group on their contest row, and the merge writes it into the Logbook marked as Nexus's
+/// fill, in every upload. A call with no source gets none.
+#[test]
+fn the_contest_strip_fills_iota_and_the_merge_writes_it() {
+    use tempo_core::logbook::callbook::{is_callbook_filled, CallbookAnswer};
+    use tempo_core::logbook::offer::{is_offer_held, SpotIota};
+    let island = |e: &mut Engine| {
+        e.set_iota_at_log(
+            |call, _, _| {
+                if call == "K1ABC" {
+                    SpotIota::Names("NA-046".into())
+                } else {
+                    SpotIota::Silent
+                }
+            },
+            |_| true,
+            |_| None,
+        );
+        e.note_callbook_answer(
+            "W9AAA",
+            CallbookAnswer {
+                call: "W9AAA".into(),
+                iota: Some("NA-001".into()),
+                ..CallbookAnswer::default()
+            },
+        );
+    };
+    let d = Dir::new("contest-iota-fd");
+    let mut e = launch(&d, &field_day_settings());
+    island(&mut e);
+    assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+    assert!(e.fd_log_manual("W1AW", "1D", "CT", "PH").unwrap());
+    e.fd_merge_to_general().unwrap();
+    let log = e.stored_log();
+    let at = |call: &str| log.iter().find(|r| r.call == call).cloned().expect(call);
+    let k1 = at("K1ABC");
+    assert_eq!(k1.ota.iota.as_deref(), Some("NA-046"), "the spot's");
+    assert!(is_offer_held(&k1, "IOTA") && !is_callbook_filled(&k1, "IOTA"));
+    assert!(tempo_core::logbook::adif_record(&k1).contains("<IOTA:6>NA-046"));
+    assert_eq!(at("W1AW").ota.iota, None, "no source: none");
+
+    let d = Dir::new("contest-iota-party");
+    let mut e = launch(&d, &ilqp_settings());
+    island(&mut e);
+    party(&mut e, "W9AAA", "COOK");
+    e.fd_merge_to_general().unwrap();
+    let log = e.stored_log();
+    let w9 = log.iter().find(|r| r.call == "W9AAA").expect("merged");
+    assert_eq!(w9.ota.iota.as_deref(), Some("NA-001"), "the callbook's");
+    assert!(is_callbook_filled(w9, "IOTA"));
+}

@@ -7,7 +7,7 @@ import type { LoggedQso } from '../types'
 import { t } from '../i18n'
 import { FtStopControl } from './FtStopControl'
 import { upperTyped } from '../typedInput'
-import { IotaPrefillField, iotaToLog, useIotaPrefill, type IotaOfferData } from './Iota'
+import { IotaPrefillField, iotaInvalid, iotaToLog, useIotaPrefill, type IotaOfferData } from './Iota'
 
 /** WSJT-X's Log QSO dialog's propagation modes (`widgets/logqso.cpp`, `prop_modes`): the ADIF
  *  `PROP_MODE` enumeration values, in its order. SAT is not here: it is offered only on a contact
@@ -117,8 +117,10 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
     return t === '' ? null : t
   }
 
+  // A box no spelling makes a reference of holds Log, with the box saying why: never logged as none.
+  const iotaBad = iotaInvalid(iota)
   const confirm = () => {
-    if (!call.trim()) return
+    if (!call.trim() || iotaBad) return
     onConfirm({
       ...record,
       call: call.trim().toUpperCase(),
@@ -266,7 +268,7 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
           <button type="button" className="logconfirm-discard" onClick={onDiscard}>
             {t('logPrompt.discard')}
           </button>
-          <button type="button" className="logconfirm-log" onClick={confirm} disabled={!call.trim()}>
+          <button type="button" className="logconfirm-log" onClick={confirm} disabled={!call.trim() || iotaBad}>
             {t('logPrompt.log')}
           </button>
         </div>

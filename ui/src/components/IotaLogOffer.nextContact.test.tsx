@@ -120,6 +120,34 @@ describe('a fill is for one contact', () => {
   })
 })
 
+describe('a badly typed reference in the strip', () => {
+  const snap = { mycall: 'KD9TAW', mygrid: 'EN52', radio: { band: '20m', dialMhz: 14.025 }, hunt: null } as unknown as AppSnapshot
+  const call = () => document.querySelector<HTMLInputElement>('input.le-call')!
+
+  it('an obvious spelling logs as the reference it is', async () => {
+    render(<LogEntry snap={snap} mode="CW" defaultRst="599" exchange="terrestrial" titled={false} />)
+    fireEvent.change(call(), { target: { value: 'IA5X' } })
+    await filled()
+    fireEvent.change(box(), { target: { value: 'eu-5' } })
+    fireEvent.click(screen.getByRole('button', { name: /^log$/i }))
+    await waitFor(() => expect(logQso).toHaveBeenCalledTimes(1))
+    expect(loggedIota(0)).toBe('EU-005')
+  })
+
+  it('anything else is said beside the box and the contact is not logged as if it were empty', async () => {
+    const { pushToast } = await import('../toast')
+    render(<LogEntry snap={snap} mode="CW" defaultRst="599" exchange="terrestrial" titled={false} />)
+    fireEvent.change(call(), { target: { value: 'IA5X' } })
+    await filled()
+    fireEvent.change(box(), { target: { value: 'XX-001' } })
+    expect(screen.getByRole('alert').textContent).toBe(t('logbook.form.iotaInvalid'))
+    fireEvent.click(screen.getByRole('button', { name: /^log$/i }))
+    await waitFor(() => expect(pushToast).toHaveBeenCalledWith(t('logbook.form.iotaInvalid'), 'error'))
+    expect(logQso).not.toHaveBeenCalled()
+    expect(call().value, 'the contact is still on the line').toBe('IA5X')
+  })
+})
+
 describe('a contact let go of without logging starts the next one over', () => {
   const at = (tick: number, band: string, dialMhz: number) =>
     ({ mycall: 'KD9TAW', mygrid: 'EN52', radio: { band, dialMhz }, hunt: null, bandChangeTick: tick }) as unknown as AppSnapshot

@@ -126,6 +126,7 @@ import { qrzPushQso, clublogPushQso, hrdlogPushQso, wrlPushQso, syncQrz, downloa
 import { qrzCorrectPreview, qrzCorrectApply, qrzCorrectUndoMiss } from '../api'
 import { callCardTrigger, qrzPageOf } from './CallCard'
 import { IotaCell, IotaPrefillSource, IotaReferenceNote, useIotaPrefill } from './Iota'
+import { normalizeIota } from '../features/iotaGroups'
 import type { FieldEdit, QrzCorrectResult, QsoEdit, RowAnswer, RowRef } from '../api'
 
 interface Props {
@@ -1938,8 +1939,9 @@ export function Logbook({
     const existing = editing?.row
     const parkTheirRef = draft.parkTheirRef.trim().toUpperCase() || null
     const parkMyRef = draft.parkMyRef.trim().toUpperCase() || null
-    // The IOTA reference: refused unless it is one, rather than stored as junk no award counts.
-    const iota = draft.iota.trim().toUpperCase() || null
+    // The IOTA reference, in its one spelling from any obvious one ("eu-5" is EU-005); refused
+    // unless it is one, rather than stored as junk no award counts.
+    const iota = draft.iota.trim() ? (normalizeIota(draft.iota) ?? draft.iota.trim().toUpperCase()) : null
     if (iota && !IOTA_RE.test(iota)) {
       setErr(t('logbook.form.iotaInvalid'))
       return
@@ -3038,7 +3040,7 @@ export function Logbook({
                 autoComplete="off"
                 spellCheck={false}
                 maxLength={6}
-                aria-invalid={!!draft.iota.trim() && !IOTA_RE.test(draft.iota.trim().toUpperCase())}
+                aria-invalid={!!draft.iota.trim() && normalizeIota(draft.iota) === null}
                 title={t('logbook.field.iota.title')}
               />
               <IotaReferenceNote reference={draft.iota} />

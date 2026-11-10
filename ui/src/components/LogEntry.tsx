@@ -63,7 +63,7 @@ import { ContestScoreChip } from './ContestScoreChip'
 import { pushToast, withErrorToast } from '../toast'
 import { isStreamInput } from '../remote-native/stream-input'
 import { normaliseTyped, oneLineTyped, upperTyped } from '../typedInput'
-import { IotaPrefillField, iotaToLog, useIotaPrefill } from './Iota'
+import { IotaPrefillField, iotaInvalid, iotaToLog, useIotaPrefill } from './Iota'
 
 // ---------------------------------------------------------------------------
 // THE DYNAMIC ENTRY STRIP (spec §9) — Call plus one box per slot the session's role
@@ -2421,6 +2421,12 @@ export function LogEntry({
     }
 
     // Standard logbook path.
+    // A box that holds something no spelling makes a reference of is said so beside the box, and
+    // the contact is not logged as if the box were empty: the operator fixes or clears it first.
+    if (!remote && iotaInvalid(logIota)) {
+      pushToast(t('logbook.form.iotaInvalid'), 'error')
+      return false
+    }
     const rstSent = rstSentShown.trim() || defaultRst
     const rstRcvd = rstRcvdShown.trim() || defaultRst
     // Override open → the hand-entered UTC instant (one that is not a real date and time held

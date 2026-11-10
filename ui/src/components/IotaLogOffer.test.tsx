@@ -166,4 +166,32 @@ describe('the confirm-before-log popup', () => {
     expect(logged(p)).toBe('EU-001')
   })
 
+
+  // A BADLY TYPED REFERENCE IS NEVER DROPPED SILENTLY: an obvious spelling is logged in the log's
+  // own; anything else says so beside the box and holds Log.
+  it('an obvious spelling is logged as the reference it is', async () => {
+    api.getIotaOffer.mockResolvedValue(null)
+    const p = open({ ...QSO, ota: { iota: 'EU-001' } } as unknown as LoggedQso)
+    fireEvent.change(box(), { target: { value: 'eu 5' } })
+    expect(screen.queryByRole('alert')).toBeNull()
+    p.log()
+    expect(logged(p)).toBe('EU-005')
+  })
+
+  it('anything else says it is not a reference and holds Log', async () => {
+    api.getIotaOffer.mockResolvedValue(null)
+    const p = open({ ...QSO, ota: { iota: 'EU-001' } } as unknown as LoggedQso)
+    fireEvent.change(box(), { target: { value: 'XX-001' } })
+    expect(screen.getByRole('alert').textContent).toBe(t('logbook.form.iotaInvalid'))
+    const log = screen.getByRole('button', { name: t('logPrompt.log') }) as HTMLButtonElement
+    expect(log.disabled).toBe(true)
+    p.log()
+    expect(p.onConfirm).not.toHaveBeenCalled()
+    // Cleared, it logs with none, as the operator chose.
+    fireEvent.click(screen.getByRole('button', { name: t('iota.offer.dismiss') }))
+    expect(screen.queryByRole('alert')).toBeNull()
+    p.log()
+    expect(logged(p)).toBeNull()
+  })
+
 })

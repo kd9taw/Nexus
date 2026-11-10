@@ -651,8 +651,8 @@ fn record_for(
         upload: UploadState::default(),
         // MY side: the activation the row was logged during ([`LoggedQso::activation`]), as the
         // general log's funnel stamps an ordinary contact made then — so it counts for the
-        // activation too. THEIR side: no exchange carries a park, summit or island, so there is
-        // nothing to carry, not something dropped.
+        // activation too. THEIR side: no exchange carries a park, summit or island; the island
+        // group Nexus filled at log time is written below ([`LoggedQso::iota`]).
         ota: crate::logbook::Ota {
             my_program: Some(q.activation.program.clone())
                 .filter(|_| !q.activation.reference.is_empty()),
@@ -721,6 +721,11 @@ fn record_for(
     // Into the lifetime log in its one form: a phone row worked on a sideband is SSB, with the
     // sideband as its SUBMODE ([`crate::logbook::canonical`]).
     crate::logbook::canonical::contact(&mut rec);
+    // THEIR ISLAND GROUP, as Nexus filled it at log time ([`LoggedQso::iota`]): written and
+    // marked by its source as any filled reference is, so LoTW's signed one still replaces it.
+    if let Some(offer) = &q.iota {
+        crate::logbook::offer::accept_iota_offer(&mut rec, offer);
+    }
     rec
 }
 
@@ -1365,6 +1370,15 @@ mod tests {
             });
             q.station_call = "K9GOTA".into();
         }
+        // What the engine fills once the row is in: the island group a spot named.
+        log.set_iota_since(
+            0,
+            "K1ABC",
+            &crate::logbook::offer::IotaOffer {
+                reference: "NA-046".into(),
+                source: crate::logbook::offer::OfferSource::Spot,
+            },
+        );
         let row = log.qsos()[0].clone();
         let mut lb = Logbook::new();
         assert_eq!(merge_into_general(&log, "pos", &mut lb).added(), 1);
@@ -1419,6 +1433,7 @@ mod tests {
             grid,
             activation,
             natural_power,
+            iota,
         } = row.clone();
         let checks: Vec<(&str, bool)> = vec![
             ("call", rec.call == call && reborn.call == call),
@@ -1506,6 +1521,16 @@ mod tests {
             (
                 "natural_power",
                 natural_power && [&out, &back, &kept].iter().all(|f| !f.contains("NATPOWER")),
+            ),
+            // Their island group: the record's IOTA, marked as Nexus's fill, in every upload.
+            (
+                "iota",
+                iota.as_ref().is_some_and(|o| {
+                    rec.ota.iota.as_deref() == Some(o.reference.as_str())
+                        && crate::logbook::offer::is_offer_held(&rec, "IOTA")
+                        && stored.ota.iota.as_deref() == Some(o.reference.as_str())
+                        && once("IOTA", &o.reference)
+                }),
             ),
         ];
         let failed: Vec<&str> = checks

@@ -165,23 +165,29 @@ pub fn fill_iota_at_log(
     callbook: Option<&CallbookAnswer>,
     known: &dyn Fn(&str) -> bool,
 ) -> bool {
+    iota_at_log(&rec.call, rec.ota.iota.as_deref(), spots, callbook, known)
+        .is_some_and(|offer| accept_iota_offer(rec, &offer))
+}
+
+/// What [`fill_iota_at_log`] would write into a contact with `call` whose IOTA field holds `held`,
+/// without a record to write it into: the contest log's rows carry it as an offer and the merge
+/// writes it ([`accept_iota_offer`]).
+pub fn iota_at_log(
+    call: &str,
+    held: Option<&str>,
+    spots: &SpotIota,
+    callbook: Option<&CallbookAnswer>,
+    known: &dyn Fn(&str) -> bool,
+) -> Option<IotaOffer> {
     let spot = match spots {
-        SpotIota::Refused => return false,
+        SpotIota::Refused => return None,
         SpotIota::Silent | SpotIota::OtherBand(_) => None,
         SpotIota::Names(group) => Some(group.as_str()),
     };
-    let offer = iota_offer(
-        &rec.call,
-        rec.ota.iota.as_deref(),
-        spot,
-        callbook,
-        Some(known),
-    )
-    .filter(|offer| match spots {
+    iota_offer(call, held, spot, callbook, Some(known)).filter(|offer| match spots {
         SpotIota::OtherBand(group) => valid_iota(group).as_ref() == Some(&offer.reference),
         _ => true,
-    });
-    offer.is_some_and(|offer| accept_iota_offer(rec, &offer))
+    })
 }
 
 /// The fields `field` (a mark) names on this record.

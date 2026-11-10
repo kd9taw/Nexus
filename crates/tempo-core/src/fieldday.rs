@@ -369,6 +369,12 @@ pub struct LoggedQso {
     /// (`APP_NEXUS_NATPOWER`) and read by [`FieldDayLog::natural_power_list`] alone: no
     /// submitted file and no club sync carries it, so the list is this laptop's own.
     pub natural_power: bool,
+    /// The worked station's IOTA reference, as Nexus filled it at log time from a spot or the
+    /// callbook (`logbook::offer::iota_at_log`; operator ruling, 2026-11-10: every log path),
+    /// with where it came from. No exchange carries an island, so this is the only way one reaches
+    /// the general log: the merge writes it, marked by its source (`contest::merge`). In the
+    /// journal alone (`APP_NEXUS_IOTA`, `APP_NEXUS_IOTA_SRC`), never the contest's own export.
+    pub iota: Option<crate::logbook::offer::IotaOffer>,
 }
 
 /// The my-side activation a contest row was logged during ([`LoggedQso::activation`]): empty
@@ -836,6 +842,9 @@ fn set_row_call(row: &mut LoggedQso, call: &str) {
         row.entity = placed.map(|p| p.entity.to_string());
         row.continent = placed.map(|p| p.continent.to_string());
         row.prefix = crate::contest::wpx_prefix(call);
+        // …and the island group Nexus filled for the busted call is that station's, not this
+        // one's ([`LoggedQso::iota`]): it goes, as the general log's popup drops it.
+        row.iota = None;
     }
 }
 
@@ -2009,6 +2018,8 @@ impl FieldDayLog {
             grid: self.grid.clone(),
             activation: self.activation.clone(),
             natural_power: self.natural_power,
+            // Filled by the engine once the row is in ([`FieldDayLog::set_iota_since`]).
+            iota: None,
         });
         // The contact is logged, so nothing is in flight any more: the next exchange
         // composed issues its own serial instead of re-sending this one's.
@@ -2190,6 +2201,22 @@ impl FieldDayLog {
 
     /// The live rows, in log order. A contact the operator removed is not here; it is in
     /// [`removed`](Self::removed).
+    /// Give every row of `call` from index `from` on (the rows one contact just wrote: a county
+    /// line writes several) the IOTA reference Nexus filled for it ([`LoggedQso::iota`]). A row
+    /// that already holds one keeps it.
+    pub fn set_iota_since(
+        &mut self,
+        from: usize,
+        call: &str,
+        offer: &crate::logbook::offer::IotaOffer,
+    ) {
+        for q in self.qsos.iter_mut().skip(from) {
+            if q.iota.is_none() && q.call.eq_ignore_ascii_case(call) {
+                q.iota = Some(offer.clone());
+            }
+        }
+    }
+
     pub fn qsos(&self) -> &[LoggedQso] {
         &self.qsos
     }
@@ -2706,6 +2733,16 @@ impl FieldDayLog {
             // Made on natural power, in the journal alone: the separate list is built from it.
             if journal && q.natural_power {
                 s.push_str(&adif_field("APP_NEXUS_NATPOWER", "Y"));
+            }
+            // The IOTA reference Nexus filled, with its source, in the journal alone: the merge
+            // writes it into the general log ([`LoggedQso::iota`]).
+            if let Some(o) = q.iota.as_ref().filter(|_| journal) {
+                s.push_str(&adif_field("APP_NEXUS_IOTA", &o.reference));
+                let src = match o.source {
+                    crate::logbook::offer::OfferSource::Spot => "spot",
+                    crate::logbook::offer::OfferSource::Callbook => "callbook",
+                };
+                s.push_str(&adif_field("APP_NEXUS_IOTA_SRC", src));
             }
             // A contact the operator removed: kept, with when (`restore_row` reads it back).
             if let Some(at) = removed_unix {
@@ -3299,6 +3336,22 @@ impl FieldDayLog {
             natural_power: f
                 .get("APP_NEXUS_NATPOWER")
                 .is_some_and(|v| v.trim().eq_ignore_ascii_case("Y")),
+            // From the journal's own `APP_NEXUS_IOTA` and its source: none on an older row.
+            iota: f
+                .get("APP_NEXUS_IOTA")
+                .map(|r| r.trim().to_ascii_uppercase())
+                .filter(|r| !r.is_empty())
+                .map(|reference| crate::logbook::offer::IotaOffer {
+                    reference,
+                    source: if f
+                        .get("APP_NEXUS_IOTA_SRC")
+                        .is_some_and(|v| v.trim().eq_ignore_ascii_case("callbook"))
+                    {
+                        crate::logbook::offer::OfferSource::Callbook
+                    } else {
+                        crate::logbook::offer::OfferSource::Spot
+                    },
+                }),
         };
         match removed_unix {
             Some(at) => self.keep_removed(row, at),
@@ -8979,6 +9032,48 @@ mod tests {
         let row = &log.qsos()[0];
         assert_eq!(row.call, "K9AAB", "the edit took");
         assert_eq!(row.activation, activation("POTA", "US-0001", "ND"));
+    }
+
+    /// The IOTA reference Nexus filled for a contest row, with its source, survives a restart
+    /// (the journal carries it), never reaches the contest's own export, and goes when the call
+    /// is corrected (the busted call's island group is not this station's).
+    #[test]
+    fn a_rows_filled_iota_is_journaled_and_dropped_with_a_corrected_call() {
+        use crate::logbook::offer::{IotaOffer, OfferSource};
+        let mut log = ilqp_from_kane();
+        ilqp_contact(&mut log, "K9AAA", "599", "COOK", "CW");
+        let offer = IotaOffer {
+            reference: "NA-046".into(),
+            source: OfferSource::Callbook,
+        };
+        log.set_iota_since(0, "K9AAA", &offer);
+        assert_eq!(log.qsos()[0].iota.as_ref(), Some(&offer));
+        let journal = log.journal_adif();
+        assert!(journal.contains("<APP_NEXUS_IOTA:6>NA-046"), "{journal}");
+        assert!(
+            journal.contains("<APP_NEXUS_IOTA_SRC:8>callbook"),
+            "{journal}"
+        );
+        assert!(
+            !log.adif().contains("IOTA"),
+            "not in the contest's own export"
+        );
+        let mut back = ilqp_from_kane();
+        back.restore_journal(&journal, 0, log.qsos()[0].when_unix + 60);
+        assert_eq!(back.qsos()[0].iota.as_ref(), Some(&offer), "read back");
+
+        let when = log.qsos()[0].when_unix;
+        let edit = ContactEdit {
+            call: "K9AAB".into(),
+            rows: vec![vec![
+                ("RST".into(), "599".into()),
+                ("QTH".into(), "COOK".into()),
+            ]],
+            band: log.qsos()[0].band.clone(),
+            mode: "CW".into(),
+        };
+        log.edit_contact("K9AAA", when, &edit).unwrap();
+        assert_eq!(log.qsos()[0].iota, None, "a corrected call drops it");
     }
 
     /// ⭐ **ARRL Field Day 7.3.8's separate list of natural power QSOs.** A contact logged while
