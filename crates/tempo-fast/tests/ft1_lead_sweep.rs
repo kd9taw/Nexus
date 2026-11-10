@@ -17,8 +17,9 @@
 //!   protects the end of the signal from soundcard output latency: the device ring lags the
 //!   buffer by L_out, so any output latency exceeding the tail cuts FT1's RF mid-tone.
 //!
-//! At the shipped 0.400 s lead the tail is **64 ms**, and 20–100 ms cpal buffers are ordinary.
-//! At 0.214 s the tail is the full 250 ms. The question this file answers is what that costs.
+//! At the old 0.400 s lead the tail was **64 ms**, and 20–100 ms cpal buffers are ordinary; the
+//! shipped lead is 0.300 s (`modes`' `FT1_LEAD_IN_SECS`), a 164 ms tail. At 0.214 s the tail is the
+//! full 250 ms. The question this file answers is what that costs.
 //!
 //! ## What it measures
 //!
@@ -162,13 +163,17 @@ fn sweep_lead_against_timing_error() {
     );
 }
 
-// ── The two GATES. These assert the invariants the sweep is exploring, at the SHIPPED lead. ──
+// ── The GATES. These assert the invariants the sweep is exploring, at the SHIPPED lead. ──
+
+/// The lead every Nexus FT1 over carries: `FT1_LEAD_IN_SECS` in `crates/modes/src/mode.rs`, which is
+/// `pub(crate)` there, so restated here. ⚠️ MOVES WITH IT.
+const SHIPPED_LEAD_S: f64 = 0.300;
 
 #[test]
 fn the_shipped_lead_decodes_an_on_time_peer() {
     // The floor: whatever we choose, an on-time peer at a workable SNR must decode. If this ever
     // fails the sweep above is measuring noise, not timing.
-    let n = decodes(0.400, 0.0, -4.0, 8);
+    let n = decodes(SHIPPED_LEAD_S, 0.0, -4.0, 8);
     assert!(n >= 7, "an on-time peer must decode at -4 dB: {n}/8");
 }
 
@@ -179,17 +184,44 @@ fn the_early_cliff_is_the_lead_and_not_something_else() {
     // cliff rather than degrading. This is the whole reason FT1 carries a lead at all, and it is
     // what makes lead-vs-tail a real trade instead of a free choice.
     //
-    // Measured just INSIDE the shipped lead (300 ms early of a 400 ms lead) it decodes; just
-    // OUTSIDE it (500 ms early) it cannot, at an SNR where timing is the only variable.
-    let inside = decodes(0.400, -0.30, -4.0, 8);
-    let outside = decodes(0.400, -0.50, -4.0, 8);
+    // Measured just INSIDE the shipped lead (250 ms early of a 300 ms lead) it decodes; just
+    // OUTSIDE it (450 ms early) it cannot, at an SNR where timing is the only variable.
+    let inside = decodes(SHIPPED_LEAD_S, -0.25, -4.0, 8);
+    let outside = decodes(SHIPPED_LEAD_S, -0.45, -4.0, 8);
     assert!(
         inside >= 6,
-        "300 ms early is INSIDE a 400 ms lead and must decode: {inside}/8"
+        "250 ms early is INSIDE a 300 ms lead and must decode: {inside}/8"
     );
     assert!(
         outside <= 1,
-        "500 ms early is OUTSIDE a 400 ms lead — the istart clamp makes this a cliff, so a \
+        "450 ms early is OUTSIDE a 300 ms lead — the istart clamp makes this a cliff, so a \
          decode here means the scene is not testing what it claims: {outside}/8"
+    );
+}
+
+/// ⭐ OLD AND NEW OVERS BOTH DECODE. An over with no lead (what a Nexus 1.23.0 station sends: its
+/// FT1 build never carried the lead-in) and one with the shipped lead both decode on this receiver,
+/// at the key latencies and clock errors a station really has (`dt`, + = the over arrives late). The
+/// decoder is the one a 1.23.0 receiver runs too, so the new over is heard there as well. The new
+/// over also decodes 50 ms early, where an old one falls off the `istart` clamp: the point of the
+/// lead.
+///
+/// And the late limit the lead now costs, pinned as a premise: the decoder's search tops out about
+/// 0.9 s into the frame, and the lead uses 0.3 s of it, so a new over 0.60 s late still decodes. A
+/// decoder change that shrinks the search shows up here.
+#[test]
+fn old_and_new_ft1_overs_both_decode_and_the_late_limit_holds() {
+    for dt in [0.0, 0.12, 0.17] {
+        let n = decodes(0.0, dt, -4.0, 8);
+        assert!(n >= 7, "an over with no lead, {dt:+} s: {n}/8");
+    }
+    for dt in [-0.05, 0.0, 0.12, 0.17] {
+        let n = decodes(SHIPPED_LEAD_S, dt, -4.0, 8);
+        assert!(n >= 7, "an over with the shipped lead, {dt:+} s: {n}/8");
+    }
+    let n = decodes(SHIPPED_LEAD_S, 0.60, -4.0, 8);
+    assert!(
+        n >= 7,
+        "the late limit: an over with the shipped lead 0.60 s late: {n}/8"
     );
 }
