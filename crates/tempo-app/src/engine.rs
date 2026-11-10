@@ -51668,7 +51668,10 @@ mod tests {
         e.ingest_decodes_for_test(&[dec_snr("CQ K1ABC FN42", -10)], 8);
         e.last_decode_slot = Some(8);
         e.call_station("PJ4DX");
-        assert!(!e.tx_even(), "typed call to a heard station: the DX's opposite");
+        assert!(
+            !e.tx_even(),
+            "typed call to a heard station: the DX's opposite"
+        );
 
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         e.set_tier(Tier::Ft8);
@@ -71770,7 +71773,10 @@ mod tests {
     /// read off the wave, so the table follows a lead-in change instead of restating the old one.
     #[test]
     fn tx_over_secs_at_ft8_and_ft4_is_where_the_real_wave_falls_silent() {
-        for (tier, kind) in [(Tier::Ft8, modes::ModeKind::Ft8), (Tier::Ft4, modes::ModeKind::Ft4)] {
+        for (tier, kind) in [
+            (Tier::Ft8, modes::ModeKind::Ft8),
+            (Tier::Ft4, modes::ModeKind::Ft4),
+        ] {
             let mut e = Engine::new("KD9TAW", "EN52", 0);
             e.set_tier(tier);
             let m = modes::make_mode(kind);

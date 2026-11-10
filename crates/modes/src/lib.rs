@@ -337,7 +337,11 @@ mod tests {
         let wave = m.gen_wave(&tones, FS, 1500.0);
         let lead = (0.3 * FS).round() as usize;
         let bare = crate::wsjt77::ft4_wave(&tones, FS, 1500.0);
-        assert_eq!(wave.len(), lead + bare.len(), "FT4 wave = 0.3 s lead-in + tones");
+        assert_eq!(
+            wave.len(),
+            lead + bare.len(),
+            "FT4 wave = 0.3 s lead-in + tones"
+        );
         assert!(wave[..lead].iter().all(|&s| s == 0.0), "lead-in is silence");
         assert_eq!(&wave[lead..], &bare[..], "a pure delay of the tones");
 
