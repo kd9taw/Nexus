@@ -3021,6 +3021,50 @@ fn a_band_change_just_before_a_boundary_pre_sets_after_it() {
     );
 }
 
+/// ⛔ THE RAW ALC QUESTION NEVER GOES ON THE TICK OF A PRE-SET. The pre-set's writes spend part of
+/// the lead to the boundary the tick measured before them, so the question
+/// (`RadioLoop::tx_alc_raw`) waits for the next tick. On an FT-991A whose question is owed (as after
+/// a CAT re-confirmation) when the 40 m TX dial goes: no `w RM4;` on that tick, and it goes on a
+/// later one.
+#[test]
+fn the_raw_alc_question_never_goes_on_the_tick_of_a_pre_set() {
+    let engine = cq_engine(SplitMode::Rig, 1441.0, |s| s.rig_model = 1035);
+    let mut b = hamlib_bench_on(engine, FT8_DIAL, None);
+    b.state.applied.rig_model = 1035;
+    b.rig.test_reply_deadline_ms = Some(2_000);
+    b.radio.vfos.lock().unwrap().slow_band_change_ms = 800;
+    let _ = b.overs(1);
+    b.engine.lock().unwrap().set_tx_enabled(false);
+    let _ = b.step_to_cycle_ms(17_000.0);
+    b.engine.lock().unwrap().set_frequency(7.074, "40m", "USB");
+    // Each tick's lines; the question made owed again on the tick the pre-set becomes due.
+    let mut ticks: Vec<Vec<String>> = Vec::new();
+    for _ in 0..60 {
+        let moved = b.state.split_preset_moved_at;
+        let settled = moved > 0.0 && b.t - moved >= crate::slot::SPLIT_PRESET_SETTLE_MS;
+        let preset_done = ticks.iter().flatten().any(|l| l == "I 7073500");
+        if settled && !preset_done {
+            b.state.tx_alc_raw = None;
+        }
+        let before = b.radio.peer.lines.lock().unwrap().len();
+        let _ = b.ticks(1);
+        ticks.push(b.radio.peer.lines.lock().unwrap()[before..].to_vec());
+    }
+    let preset = ticks
+        .iter()
+        .position(|t| t.iter().any(|l| l == "I 7073500"))
+        .unwrap_or_else(|| panic!("premise: the 40 m TX dial was pre-set: {ticks:?}"));
+    assert!(
+        !ticks[preset].iter().any(|l| l == "w RM4;"),
+        "the question went on the pre-set's tick: {:?}",
+        ticks[preset]
+    );
+    assert!(
+        ticks[preset + 1..].iter().flatten().any(|l| l == "w RM4;"),
+        "the question goes on a later tick: {ticks:?}"
+    );
+}
+
 /// The band button pressed twice in quick succession (40 m, then 30 m 100 ms later): one pre-set,
 /// for the band it settled on.
 #[test]

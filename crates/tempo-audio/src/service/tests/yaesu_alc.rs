@@ -34,22 +34,37 @@ fn hamlib_alc(raw: u16) -> f32 {
 /// - Every other line gets `RPRT 0`, no reading, so the other meters drop out after their three
 ///   strikes and the rest of the over is ALC reads.
 ///
-/// Every line is logged with when it arrived.
+/// Every line is logged with when it arrived. [`Self::with`] adds a radio that stops answering
+/// the raw read after its first few, and rigctld 4.5's client lock.
 struct FakeRigctld {
     addr: String,
     log: Arc<Mutex<Vec<(Instant, String)>>>,
     mic: Arc<std::sync::atomic::AtomicBool>,
+    /// Each line whose reply waited for the client lock, and how long.
+    held: Arc<Mutex<Vec<(String, Duration)>>>,
 }
 
 impl FakeRigctld {
     fn start(raw: u16, p3: &'static str, answers_raw: bool) -> Self {
+        let raw_answers = if answers_raw { usize::MAX } else { 0 };
+        Self::with(raw, p3, raw_answers, None)
+    }
+
+    /// [`Self::start`], answering only the first `raw_answers` raw reads, and with `lock` set,
+    /// rigctld 4.5's one client lock: an unanswered `w` holds the radio for `lock` after it
+    /// arrived (the radio's timeout, waiting for a newline), and every reply on any connection
+    /// waits for it.
+    fn with(raw: u16, p3: &'static str, raw_answers: usize, lock: Option<Duration>) -> Self {
         use std::io::{BufRead, BufReader, Write};
         use std::sync::atomic::{AtomicBool, Ordering};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
         let log = Arc::new(Mutex::new(Vec::<(Instant, String)>::new()));
         let mic = Arc::new(AtomicBool::new(false));
-        let (log2, mic2) = (Arc::clone(&log), Arc::clone(&mic));
+        let held = Arc::new(Mutex::new(Vec::<(String, Duration)>::new()));
+        let (log2, mic2, held2) = (Arc::clone(&log), Arc::clone(&mic), Arc::clone(&held));
+        let mut raw_left = raw_answers;
+        let mut locked_until: Option<Instant> = None;
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { break };
@@ -65,13 +80,25 @@ impl FakeRigctld {
                         Ok(_) => {}
                     }
                     let l = line.trim().to_string();
-                    log2.lock().unwrap().push((Instant::now(), l.clone()));
+                    let arrived = Instant::now();
+                    log2.lock().unwrap().push((arrived, l.clone()));
+                    if let Some(until) = locked_until.filter(|u| *u > arrived) {
+                        std::thread::sleep(until - arrived);
+                        held2.lock().unwrap().push((l.clone(), until - arrived));
+                    }
                     let reply = match l.as_str() {
                         "f" => "14074000\n".to_string(),
                         "t" if mic2.load(Ordering::SeqCst) => "1\n".to_string(),
                         "t" => "0\n".to_string(),
-                        "w RM4;" if answers_raw => format!("RM4{raw:03}{p3};\0"),
-                        "w RM4;" => continue, // no reply at all
+                        "w RM4;" if raw_left > 0 => {
+                            raw_left -= 1;
+                            format!("RM4{raw:03}{p3};\0")
+                        }
+                        "w RM4;" => {
+                            // No reply at all, and the radio held behind it.
+                            locked_until = lock.map(|d| Instant::now() + d);
+                            continue;
+                        }
                         "l ALC" => format!("{:.6}\n", hamlib_alc(raw)),
                         _ => "RPRT 0\n".to_string(),
                     };
@@ -81,7 +108,12 @@ impl FakeRigctld {
                 }
             }
         });
-        Self { addr, log, mic }
+        Self {
+            addr,
+            log,
+            mic,
+            held,
+        }
     }
 
     /// Every line sent so far.
@@ -406,6 +438,273 @@ fn a_rigctld_that_answers_raw_cat_still_has_the_over_read_alc_raw() {
             "{name}: on the radio's own bar"
         );
     }
+}
+
+/// ⛔ THE QUESTION IS NEVER ASKED UNDER A CARRIER. A Phone PTT over keyed by Nexus before the
+/// link comes up, so the link is confirmed under it: while it is keyed, no `w RM4;`; once it
+/// unkeys, the question goes, while receiving.
+#[test]
+fn the_raw_alc_question_waits_for_a_keyed_over_to_end() {
+    let rigctld = FakeRigctld::start(64, "", true);
+    let engine = engine_for(1035);
+    engine.lock().unwrap().set_operating_mode("phone", false);
+    let mut rig = Rig::rigctld(&rigctld.addr);
+    let mut backend = MockBackend::new();
+    let mut state = loop_state_for(&engine);
+    let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+    let mut station = StationSinks::new();
+    {
+        let mut e = engine.lock().unwrap();
+        e.set_tx_enabled(true);
+        e.set_ptt(true);
+    }
+    let mut confirmed_keyed = false;
+    let mut t = 0.0;
+    for _ in 0..120 {
+        if t < 3_000.0 && t > 0.0 && state.cat_ok == Some(true) && rig.keyed {
+            confirmed_keyed = true;
+        }
+        if t == 3_000.0 {
+            engine.lock().unwrap().set_ptt(false);
+        }
+        t += 50.0;
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                t,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+    }
+    let sent = rigctld.lines();
+    assert!(
+        confirmed_keyed,
+        "premise: the link was confirmed while keyed — {sent:?}"
+    );
+    let key = sent.iter().position(|l| l == "T 1");
+    let unkey = sent.iter().position(|l| l == "T 0");
+    let (Some(key), Some(unkey)) = (key, unkey) else {
+        panic!("premise: keyed and unkeyed — {sent:?}");
+    };
+    assert!(
+        !sent[key..unkey].iter().any(|l| l == "w RM4;"),
+        "no question while keyed — {sent:?}"
+    );
+    assert_eq!(
+        sent[unkey..].iter().filter(|l| *l == "w RM4;").count(),
+        1,
+        "the question once, after the unkey — {sent:?}"
+    );
+}
+
+/// ⭐ A LINK THAT ANSWERED THE QUESTION AND THEN STOPS ANSWERING THE RAW READ, MID-OVER, NEVER
+/// HOLDS THE LOOP FOR THE TRANSPORT DEADLINE. Each raw read in the over gives up after 300 ms, and
+/// after three misses the over reads `l ALC`. No loop step of the over takes 400 ms.
+#[test]
+fn a_raw_read_that_stops_answering_mid_over_gives_up_quickly() {
+    let rigctld = FakeRigctld::with(64, "", 1, None);
+    let over = run_an_over(&engine_for(1035), &rigctld);
+    let sent = rigctld.lines();
+    let during = &sent[over.lines_before_key..];
+    assert!(
+        during.iter().filter(|l| *l == "w RM4;").count() >= 1,
+        "premise: the over asked raw, the question having been answered — {sent:?}"
+    );
+    assert!(
+        during.iter().any(|l| l == "l ALC"),
+        "the backstop: the over falls back to Hamlib's ALC — {sent:?}"
+    );
+    let slowest = over.keyed_steps.iter().max().copied().unwrap_or_default();
+    assert!(
+        slowest < Duration::from_millis(400),
+        "no step held for the transport deadline, the slowest took {slowest:?} — {sent:?}"
+    );
+}
+
+/// ⛔ AN FT8 OVER DUE AT A BOUNDARY NEVER WAITS BEHIND THE QUESTION, on a rigctld before 4.6
+/// whose client lock holds the radio for 2 s behind the unanswered raw read. The link comes up
+/// 1.5 s before this station's own boundary, inside the probe's 3.5 s lead: the question waits,
+/// and the over's key (`T 1`) reaches the radio on time (within 200 ms of its boundary) and is
+/// answered without waiting on the lock. The loop steps on the real clock, so the lock's 2 s are
+/// the loop's 2 s. Asked on that tick, the question cost the key over a second: the loop's next
+/// read waited out the lock.
+#[test]
+fn an_ft8_key_at_the_boundary_never_waits_behind_the_question() {
+    let engine = engine_for(1035);
+    {
+        let mut e = engine.lock().unwrap();
+        e.set_license_class("extra");
+        e.set_tier(tempo_app::dto::Tier::Ft8);
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_tx_offset(1500.0);
+        e.start_cq(None).expect("Call CQ");
+        let _ = e.take_immediate_tx();
+    }
+    let rigctld = FakeRigctld::with(64, "", 0, Some(Duration::from_secs(2)));
+    let mut rig = Rig::rigctld(&rigctld.addr);
+    let mut backend = MockBackend::new();
+    let mut state = loop_state_for(&engine);
+    let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+    let mut station = StationSinks::new();
+    // An even FT8 boundary ahead of the real clock, which the key's lateness is measured on.
+    let t0 = ((now_unix_ms() + 30_000.0) / 30_000.0).ceil() * 30_000.0;
+    let start = t0 - 1_500.0;
+    let mut t = start;
+    let w0 = Instant::now();
+    while t <= t0 + 1_000.0 {
+        let due = w0 + Duration::from_secs_f64((t - start) / 1000.0);
+        if let Some(wait) = due.checked_duration_since(Instant::now()) {
+            std::thread::sleep(wait);
+        }
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                t,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        t += 20.0;
+    }
+    let sent = rigctld.lines();
+    let key_at = rigctld
+        .log
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(_, l)| l == "T 1")
+        .map(|(at, _)| *at)
+        .unwrap_or_else(|| panic!("premise: the over keyed at the boundary — {sent:?}"));
+    let due = w0 + Duration::from_secs_f64((t0 - start) / 1000.0);
+    let late = key_at.saturating_duration_since(due);
+    assert!(
+        late < Duration::from_millis(200),
+        "the key reached the radio {late:?} after its boundary — {sent:?}"
+    );
+    let held = rigctld.held.lock().unwrap().clone();
+    assert!(
+        !held.iter().any(|(l, _)| l == "T 1"),
+        "the key waited behind the question's lock: {held:?} — {sent:?}"
+    );
+}
+
+/// A station on FT2 with ALC read raw: an engine on Hamlib `model`, FT2, licensed, on 20 m.
+fn ft2_engine(model: u32) -> Arc<Mutex<Engine>> {
+    let engine = engine_for(model);
+    {
+        let mut e = engine.lock().unwrap();
+        e.set_license_class("extra");
+        e.set_tier(tempo_app::dto::Tier::Ft2);
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_tx_offset(1500.0);
+    }
+    engine
+}
+
+/// ⭐ FT2 WITH TX OFF ASKS THE QUESTION AT ONCE AND READS THE RADIO'S OWN ALC. FT2's 3.75 s slot
+/// has no room for the slot margin, but with TX off nothing keys on a boundary and the quiet
+/// point is all: the question goes while receiving, once, and the over that follows reads
+/// `w RM4;`, on the radio's own bar, never Hamlib's `l ALC`.
+#[test]
+fn ft2_with_tx_off_asks_at_once_and_the_next_over_reads_raw() {
+    let engine = ft2_engine(1035);
+    assert!(!engine.lock().unwrap().tx_enabled(), "premise: TX off");
+    let rigctld = FakeRigctld::start(128, "", true);
+    let over = run_an_over(&engine, &rigctld);
+    let sent = rigctld.lines();
+    let (before, during) = sent.split_at(over.lines_before_key);
+    assert_eq!(
+        before.iter().filter(|l| *l == "w RM4;").count(),
+        1,
+        "asked once while receiving — {sent:?}"
+    );
+    assert!(
+        during.iter().any(|l| l == "w RM4;") && !during.iter().any(|l| l == "l ALC"),
+        "the over reads the radio's own ALC — {sent:?}"
+    );
+    assert_eq!(
+        over.radio.tx_alc.map(|a| (a * 255.0).round()),
+        Some(128.0),
+        "on the radio's own bar"
+    );
+}
+
+/// ⛔ FT2 WITH TX ARMED NEVER ASKS INSIDE THE MARGIN OF ANY BOUNDARY, EITHER PERIOD, AND SO NOT AT
+/// ALL. A CQ running on FT2, the question owed, for six slots; at the third boundary the period
+/// flips (as the sequencer flips it when it answers a station heard in our own period), so a
+/// boundary that was the other station's becomes ours. Every tick that sends `w RM4;` would have
+/// to be 3.5 s before the next boundary and 1 s after the last, and a 3.75 s slot has no such
+/// tick. Measured to this station's own period only, the question would go in the gap after our
+/// over, and the flipped boundary would key behind it.
+#[test]
+fn ft2_with_tx_armed_never_asks_inside_the_margin_of_any_boundary() {
+    let engine = ft2_engine(1035);
+    {
+        let mut e = engine.lock().unwrap();
+        e.start_cq(None).expect("Call CQ");
+        let _ = e.take_immediate_tx();
+        assert!(e.tx_enabled(), "premise: TX armed");
+    }
+    let period = engine.lock().unwrap().active_slot_secs() * 1000.0;
+    assert_eq!(period, 3_750.0, "premise: FT2's slot");
+    let rigctld = FakeRigctld::start(64, "", true);
+    let mut rig = Rig::rigctld(&rigctld.addr);
+    let mut backend = MockBackend::new();
+    let mut state = loop_state_for(&engine);
+    let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+    let mut station = StationSinks::new();
+    // A boundary pair ahead of the real clock, which a key's lateness is measured on.
+    let t0 = ((now_unix_ms() + 30_000.0) / (2.0 * period)).ceil() * (2.0 * period);
+    let mut t = t0 - 500.0;
+    let mut asked_at = Vec::new();
+    let mut flipped = false;
+    while t <= t0 + 6.0 * period {
+        if !flipped && t >= t0 + 3.0 * period {
+            let mut e = engine.lock().unwrap();
+            let even = e.tx_even();
+            e.set_tx_even(!even);
+            flipped = true;
+        }
+        let before = rigctld.log.lock().unwrap().len();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                t,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        if rigctld.log.lock().unwrap()[before..]
+            .iter()
+            .any(|(_, l)| l == "w RM4;")
+        {
+            asked_at.push(t.rem_euclid(period));
+        }
+        t += 20.0;
+    }
+    assert!(
+        engine.lock().unwrap().tx_enabled(),
+        "premise: TX stayed armed throughout"
+    );
+    assert_eq!(
+        asked_at,
+        Vec::<f64>::new(),
+        "asked at these points of the slot (ms after its boundary) — {:?}",
+        rigctld.lines()
+    );
 }
 
 /// …and every other radio reads its ALC as it did: another Yaesu (the FTDX101D, whose Hamlib

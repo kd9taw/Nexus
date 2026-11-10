@@ -7775,6 +7775,61 @@ impl RadioLoop {
         }
     }
 
+    /// The raw ALC read ([`crate::rigmodels::raw_alc_query`]) to ask once, to learn whether this
+    /// link answers it ([`Self::tx_alc_raw`]), or `None` if not now.
+    ///
+    /// ⛔ ONLY AT A QUIET POINT: no over, tune, PTT, microphone or CW of this loop's, nothing keyed
+    /// by this loop or read as keyed at the radio.
+    ///
+    /// ⛔ AND, WHILE A SLOT CAN KEY (`slot_keys`: TX armed on the digital screens), at least
+    /// [`RAW_ALC_PROBE_LEAD_MS`] to the next slot boundary, so a rigctld before 4.6 that holds its
+    /// lock behind the unanswered read has let go before a key on that boundary, and at least
+    /// [`RAW_ALC_PROBE_AFTER_BOUNDARY_MS`] past the last one, whose own key may still be coming.
+    /// ANY boundary, either period, never only this station's own: the sequencer sets the period
+    /// itself when it answers a station (a decode landing on a boundary), so the boundary after
+    /// one of ours can become ours. With TX off nothing keys on a boundary, and the quiet point is
+    /// all: Nexus never arms TX by itself, and starts with it off, as a lost CAT link leaves it,
+    /// so the question goes at the first quiet tick after each connect, on every mode, FT2 (whose
+    /// 3.75 s slot has no room for the margin) included. Armed on FT2 with the question still
+    /// owed, it waits for TX off.
+    ///
+    /// KNOWN, AND SMALL, on a rigctld before 4.6, once per connection: an operator's own key in
+    /// the probe's second or the lock after it (a Call CQ late start, a PTT press), or the first
+    /// automatic key after TX is armed then (arming is immediate, it waits for no quiet tick),
+    /// waits for it, up to about 2 s. A late key, never a late unkey.
+    ///
+    /// Never on a tick that opened the CAT link, on a link not confirmed, on a radio this loop
+    /// does not own, or once the link's answer is known. A read: an unkeyed `RM4;` moves nothing
+    /// on the radio.
+    fn raw_alc_probe_due(
+        &self,
+        rig: &Rig,
+        now: f64,
+        lead_ms: f64,
+        reconnected: bool,
+        slot_keys: bool,
+    ) -> Option<&'static str> {
+        let quiet = self.tx_until_ms.is_none()
+            && !self.manual_ptt_applied
+            && !self.tuning_keyed
+            && self.pc_mic_open.is_none()
+            && now >= self.cw_keying_until + CW_HANG_MS
+            && !rig.keyed
+            && !self.rig_keyed;
+        let clear_of_slots = !slot_keys
+            || (lead_ms >= RAW_ALC_PROBE_LEAD_MS
+                && self.clock.phase_ms(now) >= RAW_ALC_PROBE_AFTER_BOUNDARY_MS);
+        let free = self.may_key()
+            && self.cat_ok == Some(true)
+            && rig.has_control()
+            && !reconnected
+            && rig.connection_open();
+        if self.tx_alc_raw.is_some() || !quiet || !clear_of_slots || !free {
+            return None;
+        }
+        crate::rigmodels::raw_alc_query(self.applied.rig_model)
+    }
+
     /// Whether Split Operation = Rig's TX dial is due to be put on the radio now, ahead of the next
     /// over (`slot::preset_rig_split`): `Some((dial, tx_dial, tx_mode))` when it is.
     ///
@@ -7814,47 +7869,6 @@ impl RadioLoop {
     /// FT2 HOLDS SPLIT BUT NEVER PRE-SETS: its 3.75 s slot is shorter than the lead, so the lead is
     /// never met, and its key writes everything inside its budget. A radio slow to move VFO B can
     /// still be refused at the first over after a band change.
-    /// The raw ALC read ([`crate::rigmodels::raw_alc_query`]) to ask once, to learn whether this
-    /// link answers it ([`Self::tx_alc_raw`]), or `None` if not now.
-    ///
-    /// ⛔ ONLY AT A QUIET POINT, as the split pre-set: no over, tune, PTT, microphone or CW of this
-    /// loop's, nothing keyed by this loop or read as keyed at the radio, and at least
-    /// [`RAW_ALC_PROBE_LEAD_MS`] to the next slot boundary, so a rigctld before 4.6 that holds its
-    /// lock behind the unanswered read has let go before a key on that boundary, and at least
-    /// [`RAW_ALC_PROBE_AFTER_BOUNDARY_MS`] past the last one, whose own key may still be coming.
-    /// FT2's 3.75 s slot has room for neither, so on FT2 the question waits for another screen,
-    /// and its overs read `l ALC` meanwhile. KNOWN, AND SMALL: an operator's own key in the
-    /// probe's second (a Call CQ late start, a PTT press) waits for it, on a rigctld before 4.6 up
-    /// to about 3 s, once per connection. A late key, never a late unkey. Never on a tick
-    /// that opened the CAT link, on a link not confirmed, on a radio this loop does not own, or
-    /// once the link's answer is known. A read: an unkeyed `RM4;` moves nothing on the radio.
-    fn raw_alc_probe_due(
-        &self,
-        rig: &Rig,
-        now: f64,
-        lead_ms: f64,
-        reconnected: bool,
-    ) -> Option<&'static str> {
-        let quiet = self.tx_until_ms.is_none()
-            && !self.manual_ptt_applied
-            && !self.tuning_keyed
-            && self.pc_mic_open.is_none()
-            && now >= self.cw_keying_until + CW_HANG_MS
-            && !rig.keyed
-            && !self.rig_keyed
-            && lead_ms >= RAW_ALC_PROBE_LEAD_MS
-            && self.clock.phase_ms(now) >= RAW_ALC_PROBE_AFTER_BOUNDARY_MS;
-        let free = self.may_key()
-            && self.cat_ok == Some(true)
-            && rig.has_control()
-            && !reconnected
-            && rig.connection_open();
-        if self.tx_alc_raw.is_some() || !quiet || !free {
-            return None;
-        }
-        crate::rigmodels::raw_alc_query(self.applied.rig_model)
-    }
-
     fn preset_rig_split_due(
         &mut self,
         eng: &Engine,
@@ -15811,17 +15825,25 @@ impl RadioLoop {
         let lead_ms =
             self.clock.ms_to_next_slot(now) - tick_started.elapsed().as_secs_f64() * 1000.0;
         let reconnected = !cat_open_at_tick_start;
+        let mut preset_ran = false;
         if let Some((dial, tx_dial, md)) =
             self.preset_rig_split_due(&eng, rig, now, lead_ms, reconnected)
         {
             drop(eng);
             self.preset_rig_split(rig, dial, tx_dial, &md);
             eng = engine_lock(engine);
+            preset_ran = true;
         }
         // Whether this link answers the raw ALC read, asked while nothing is keyed and never in
         // an over (see `tx_alc_raw`). ⚠️ OUTSIDE THE ENGINE LOCK, as the pre-set above: on a
-        // rigctld before 4.6 it waits out its deadline.
-        if let Some(query) = self.raw_alc_probe_due(rig, now, lead_ms, reconnected) {
+        // rigctld before 4.6 it waits out its deadline. ⛔ NEVER ON A TICK THE PRE-SET RAN: its
+        // writes spent part of `lead_ms`, measured before them, so the probe waits a tick.
+        let slot_keys = eng.tx_enabled()
+            && eng.settings().operating_mode == tempo_app::settings::OperatingMode::Digital;
+        if let Some(query) = self
+            .raw_alc_probe_due(rig, now, lead_ms, reconnected, slot_keys)
+            .filter(|_| !preset_ran)
+        {
             drop(eng);
             let answer = rig.send_raw_within(query, Some(RAW_ALC_PROBE_DEADLINE_MS));
             self.tx_alc_raw = Some(
