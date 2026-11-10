@@ -20469,8 +20469,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     .or_else(|| hist.map(|(_, d)| d.snr))
                     .unwrap_or(0)
                     .clamp(-30, 49);
-                // Clicked text already aged out of the ring? The latest reply from
-                // this station still beats the unrelated `last_decode_slot` below.
+                // Clicked text already aged out of the ring? Fall back to the latest
+                // reply from this station, then (below) to its latest decode of any kind.
                 if context_slot.is_none() {
                     context_slot = self.latest_reply_from(dxcall, &mycall).map(|(_, _, s)| s);
                 }
@@ -20516,10 +20516,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // taken here — the first version of this refusal returned from the parity block
         // itself, after Mode::Qso was already entered, and left a half-armed QSO behind the
         // error message. Same rule as the failed mode-set during click-to-work: bail must
-        // mean nothing happened.
+        // mean nothing happened. Only this station's own decodes place the line: the slot
+        // anyone else was last decoded in says nothing about this station's period, so a
+        // clicked line that aged out of the history, from a station not heard since, is
+        // refused even with other traffic on the band.
         if context_slot
             .or_else(|| self.latest_decode_slot_from(dxcall))
-            .or(self.last_decode_slot)
             .is_none()
             && reply_msg.is_some()
         {
@@ -20977,8 +20979,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             .rev()
             .find(|(_, d)| d.message.eq_ignore_ascii_case(text.trim()))
             .map(|(s, _)| *s)
+            // This station's decodes only: a stranger's slot is a coin toss for its period.
             .or_else(|| self.latest_decode_slot_from(de))
-            .or(self.last_decode_slot)
             .ok_or_else(|| {
                 format!(
                     "No recent decode from {de} — wait for their next transmission, \
@@ -51652,6 +51654,38 @@ mod tests {
                 even,
                 "it took the period from a stranger's decode instead of keeping the operator's"
             );
+        }
+    }
+
+    /// The clicked-line side of the same rule. A line clicked after its decode aged out of the
+    /// 240-row history, from a station not heard since, cannot be placed: none of this
+    /// station's own decodes is left. The slot someone else was last decoded in is no stand-in
+    /// for its period, so the click is refused with the plain wait-and-click-again reason, not
+    /// keyed on a guessed period. Both periods are pinned, as above.
+    #[test]
+    fn a_clicked_line_aged_out_of_the_history_with_traffic_on_the_band_is_refused() {
+        for (even, stranger_slot) in [(true, 5), (false, 6)] {
+            let mut e = Engine::new("W9XYZ", "EN37", 0);
+            e.set_tier(Tier::Ft8);
+            e.set_tx_even(even);
+            e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 3);
+            let traffic = vec![dec_snr("CQ K1ABC FN42", -10); DECODE_HISTORY_DEPTH];
+            e.ingest_decodes_for_test(&traffic, stranger_slot);
+            e.last_decode_slot = Some(stranger_slot); // what the live ingest records
+            assert!(
+                !e.decode_history
+                    .iter()
+                    .any(|(_, d)| d.message.contains("PJ4DX")),
+                "premise: the clicked line and every decode from its station aged out"
+            );
+            let r = e.call_station_ctx("PJ4DX", None, Some("CQ PJ4DX FK52"), Some(-10), None);
+            assert!(
+                r.as_ref()
+                    .is_err_and(|m| m.contains("No recent decode from PJ4DX")),
+                "a clicked line that cannot be placed must be refused: {r:?}"
+            );
+            assert!(e.snapshot().qso.is_none(), "no QSO armed");
+            assert_eq!(e.tx_even(), even, "a refused answer must not touch parity");
         }
     }
 

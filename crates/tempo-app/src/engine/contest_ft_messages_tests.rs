@@ -2101,6 +2101,31 @@ fn a_double_click_with_no_decode_changes_nothing() {
     assert!(!e.tx_enabled, "TX stays off");
 }
 
+/// ⛔ A CQ double-clicked after its decode aged out of the 240-row history, from a station not
+/// heard since, is refused too, with other stations decoded since: the period someone else was
+/// last heard in says nothing about this station's, so answering on it would be a coin toss.
+#[test]
+fn a_double_click_on_a_cq_aged_out_of_the_history_changes_nothing() {
+    let mut e = engine_for("arrlvhf_jan", MY_GRID);
+    e.set_tier(Tier::Ft8);
+    e.ingest_decodes_for_test(&[heard("CQ TEST W9XYZ EN37")], 2);
+    let traffic = vec![heard("CQ TEST K2DEF FN31"); DECODE_HISTORY_DEPTH];
+    e.ingest_decodes_for_test(&traffic, 5);
+    e.last_decode_slot = Some(5); // what the live ingest records
+    assert!(
+        !e.decode_history.iter().any(|(_, d)| d.message.contains(DX)),
+        "premise: the CQ and every decode from its station aged out"
+    );
+    let r = e.work_station(DX, None, Some("CQ TEST W9XYZ EN37"), Some(DX_SNR), None);
+    assert!(
+        r.as_ref()
+            .is_err_and(|m| m.contains("No recent decode from W9XYZ")),
+        "aged out: {r:?}"
+    );
+    assert!(listening(&e), "the station is as it was");
+    assert!(!e.tx_enabled, "TX stays off");
+}
+
 /// ⛔ With the contest switch on and its exchange not filled in, the double-click is refused
 /// with the reason the Contest screen gives, and changes nothing.
 #[test]
