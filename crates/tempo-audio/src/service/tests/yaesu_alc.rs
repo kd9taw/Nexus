@@ -7,7 +7,7 @@
 //! ALC table, so it scales with newcat's default, raw 64 = 1.0 and clamped there. The meter showed
 //! four times the radio's reading, and full from a quarter of the radio's bar up.
 //!
-//! The rigctld here answers both ways of asking as Hamlib and the radio do (see [`alc_rigctld`]).
+//! The rigctld here answers both ways of asking as Hamlib and the radio do (see [`FakeRigctld`]).
 //! The loop is the real `RadioLoop::step`, with the radio keyed at the rig, the mic-PTT scene of
 //! `a_rig_that_answers_its_transmit_meters_keeps_being_polled`. What is asserted is what the meter
 //! is given: the engine's `tx_alc`, by value.
@@ -19,50 +19,80 @@ fn hamlib_alc(raw: u16) -> f32 {
     (f32::from(raw) / 64.0).min(1.0)
 }
 
-/// A rigctld for a radio keyed at the rig (`t` answers 1) whose ALC meter reads `raw`, 0 to 255.
+/// A fake rigctld in front of a radio whose ALC meter reads `raw`, 0 to 255.
 ///
-/// - `w RM4;` gets the radio's own reply: `RM4`, `raw` in three digits, `p3` (the FT-710's fixed
-///   `000`, empty for an FT-991A) and `;`, then a NUL and no newline. That is the shape rigctld's
-///   send_cmd hands back (`a_nul_terminated_raw_cat_reply_is_read_instead_of_timing_out`).
+/// - `t` answers 1 once `mic` is set (the operator holding the radio's mic key), 0 before.
+/// - `w RM4;` gets the radio's own reply when `answers_raw`: `RM4`, `raw` in three digits, `p3`
+///   (the FT-710's fixed `000`, empty for an FT-991A) and `;`, then a NUL and no newline, the
+///   shape rigctld's send_cmd hands back
+///   (`a_nul_terminated_raw_cat_reply_is_read_instead_of_timing_out`).
+///   Without `answers_raw` it gets NOTHING, as from a rigctld before Hamlib 4.6: measured against
+///   the real Hamlib 4.5.5 `rigctld -m 1035`, the radio answering `RM4;` with `RM4100;`, its
+///   send_cmd waits for a CR or LF the radio never sends, gives up after the radio's 2 s timeout
+///   and prints no reply at all (4.6 added the `;` terminator for Yaesu and Kenwood).
 /// - `l ALC` gets [`hamlib_alc`] of the same reading, six decimals as rigctld prints a level.
 /// - Every other line gets `RPRT 0`, no reading, so the other meters drop out after their three
 ///   strikes and the rest of the over is ALC reads.
-fn alc_rigctld(raw: u16, p3: &'static str) -> (String, Arc<Mutex<Vec<String>>>) {
-    use std::io::{BufRead, BufReader, Write};
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
-    let log = Arc::new(Mutex::new(Vec::<String>::new()));
-    let log2 = Arc::clone(&log);
-    std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(mut stream) = stream else { break };
-            let mut reader = BufReader::new(match stream.try_clone() {
-                Ok(r) => r,
-                Err(_) => continue,
-            });
-            let mut line = String::new();
-            loop {
-                line.clear();
-                match reader.read_line(&mut line) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {}
-                }
-                let l = line.trim().to_string();
-                log2.lock().unwrap().push(l.clone());
-                let reply = match l.as_str() {
-                    "f" => "14074000\n".to_string(),
-                    "t" => "1\n".to_string(), // the operator is holding the mic key
-                    "w RM4;" => format!("RM4{raw:03}{p3};\0"),
-                    "l ALC" => format!("{:.6}\n", hamlib_alc(raw)),
-                    _ => "RPRT 0\n".to_string(),
-                };
-                if stream.write_all(reply.as_bytes()).is_err() {
-                    break;
+///
+/// Every line is logged with when it arrived.
+struct FakeRigctld {
+    addr: String,
+    log: Arc<Mutex<Vec<(Instant, String)>>>,
+    mic: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl FakeRigctld {
+    fn start(raw: u16, p3: &'static str, answers_raw: bool) -> Self {
+        use std::io::{BufRead, BufReader, Write};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let log = Arc::new(Mutex::new(Vec::<(Instant, String)>::new()));
+        let mic = Arc::new(AtomicBool::new(false));
+        let (log2, mic2) = (Arc::clone(&log), Arc::clone(&mic));
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push((Instant::now(), l.clone()));
+                    let reply = match l.as_str() {
+                        "f" => "14074000\n".to_string(),
+                        "t" if mic2.load(Ordering::SeqCst) => "1\n".to_string(),
+                        "t" => "0\n".to_string(),
+                        "w RM4;" if answers_raw => format!("RM4{raw:03}{p3};\0"),
+                        "w RM4;" => continue, // no reply at all
+                        "l ALC" => format!("{:.6}\n", hamlib_alc(raw)),
+                        _ => "RPRT 0\n".to_string(),
+                    };
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
                 }
             }
-        }
-    });
-    (addr, log)
+        });
+        Self { addr, log, mic }
+    }
+
+    /// Every line sent so far.
+    fn lines(&self) -> Vec<String> {
+        self.log
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, l)| l.clone())
+            .collect()
+    }
 }
 
 /// Four seconds of an over on a radio of Hamlib `model` whose ALC reads `raw`: what the meter is
@@ -78,10 +108,9 @@ fn radio_after_an_over(
     raw: u16,
     p3: &'static str,
 ) -> (tempo_app::dto::RadioStatus, Vec<String>) {
-    let (addr, log) = alc_rigctld(raw, p3);
-    let radio = run_an_over(&engine_for(model), &addr);
-    let sent = log.lock().unwrap().clone();
-    (radio, sent)
+    let rigctld = FakeRigctld::start(raw, p3, true);
+    let over = run_an_over(&engine_for(model), &rigctld);
+    (over.radio, rigctld.lines())
 }
 
 /// An engine set to Hamlib `model`.
@@ -96,18 +125,36 @@ fn engine_for(model: u32) -> Arc<Mutex<Engine>> {
     engine
 }
 
-/// Four seconds of an over through the rigctld at `addr`: the radio status the meters are drawn
-/// from.
-fn run_an_over(engine: &Arc<Mutex<Engine>>, addr: &str) -> tempo_app::dto::RadioStatus {
+/// What [`run_an_over`] saw: the radio status the meters are drawn from, how many lines the
+/// rigctld had been sent when the mic was keyed, and how long each loop step took that began with
+/// the loop knowing the radio keyed.
+struct Over {
+    radio: tempo_app::dto::RadioStatus,
+    lines_before_key: usize,
+    keyed_steps: Vec<Duration>,
+}
+
+/// Two seconds of receiving (the link comes up and is confirmed), then four seconds of an over
+/// keyed at the radio's mic, through the fake rigctld. The loop is the real `RadioLoop::step`.
+fn run_an_over(engine: &Arc<Mutex<Engine>>, rigctld: &FakeRigctld) -> Over {
     let model = engine.lock().unwrap().settings().rig_model;
-    let mut rig = Rig::rigctld(addr);
+    let mut rig = Rig::rigctld(&rigctld.addr);
     let mut backend = MockBackend::new();
     let mut state = loop_state_for(engine);
     let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
     let mut station = StationSinks::new();
     let mut t = 0.0;
-    for _ in 0..80 {
+    let mut lines_before_key = 0;
+    let mut keyed_steps = Vec::new();
+    for k in 0..120 {
+        if k == 40 {
+            lines_before_key = rigctld.log.lock().unwrap().len();
+            rigctld.mic.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         t += 50.0;
+        // Keyed as the loop knows it: the radio's PTT read back (once a second) says so.
+        let keyed = state.rig_keyed;
+        let started = Instant::now();
         state
             .step(
                 engine,
@@ -120,12 +167,19 @@ fn run_an_over(engine: &Arc<Mutex<Engine>>, addr: &str) -> tempo_app::dto::Radio
                 &mut station,
             )
             .unwrap();
+        if keyed {
+            keyed_steps.push(started.elapsed());
+        }
     }
     assert!(
         state.rig_keyed,
         "model {model}: control: the radio must be keyed, or no meter is read at all"
     );
-    engine.lock().unwrap().snapshot().radio
+    Over {
+        radio: engine.lock().unwrap().snapshot().radio,
+        lines_before_key,
+        keyed_steps,
+    }
 }
 
 /// ⭐ THE FT-991A, THE FT-710 AND THE FTDX10 SHOW THE RADIO'S OWN BAR. Raw 64 is a quarter of the radio's bar
@@ -191,77 +245,167 @@ fn an_ft991a_an_ft710_an_ftdx10_and_the_ft450s_show_alc_where_the_radios_own_bar
     }
 }
 
-/// A rigctld from before Hamlib 4.6 in front of an FT-991 whose ALC meter reads `raw`, 0 to 255.
-///
-/// Measured against the real Hamlib 4.5.5 `rigctld -m 1035`, the radio answering `RM4;` with
-/// `RM4100;`: `w RM4;` comes back with NOTHING. Its send_cmd waits for a CR or LF the radio never
-/// sends, gives up after the FT-991's 2 s timeout and prints no reply at all (4.6 added the `;`
-/// terminator for Yaesu and Kenwood; 4.7.1 has it). `l ALC` answers at once, on Hamlib's scale.
-/// Every other line gets `RPRT 0`, as in [`alc_rigctld`].
-fn hamlib_45_rigctld(raw: u16) -> (String, Arc<Mutex<Vec<String>>>) {
-    use std::io::{BufRead, BufReader, Write};
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
-    let log = Arc::new(Mutex::new(Vec::<String>::new()));
-    let log2 = Arc::clone(&log);
-    std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(mut stream) = stream else { break };
-            let mut reader = BufReader::new(match stream.try_clone() {
-                Ok(r) => r,
-                Err(_) => continue,
-            });
-            let mut line = String::new();
-            loop {
-                line.clear();
-                match reader.read_line(&mut line) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {}
-                }
-                let l = line.trim().to_string();
-                log2.lock().unwrap().push(l.clone());
-                let reply = match l.as_str() {
-                    "f" => "14074000\n".to_string(),
-                    "t" => "1\n".to_string(),
-                    "w RM4;" => continue, // no reply at all
-                    "l ALC" => format!("{:.6}\n", hamlib_alc(raw)),
-                    _ => "RPRT 0\n".to_string(),
-                };
-                if stream.write_all(reply.as_bytes()).is_err() {
-                    break;
-                }
-            }
-        }
-    });
-    (addr, log)
+/// Every model on main that reads its ALC raw ([`crate::rigmodels::raw_alc_query`]).
+const RAW_ALC_MODELS: [(u32, &str, &str); 5] = [
+    (1035, "FT-991A", ""),
+    (1049, "FT-710", "000"),
+    (1042, "FTDX10", "000"),
+    (1046, "FT-450D", ""),
+    (1027, "FT-450", ""),
+];
+
+/// ⭐ A RAW-ALC RADIO BEHIND A RIGCTLD THAT NEVER ANSWERS RAW CAT KEEPS ITS ALC METER (the 1.19.0
+/// regression), AND ITS OVER IS NEVER HELD UP ASKING. Network connection, where the operator's
+/// own rigctld runs: Nexus shares it, and a Hamlib before 4.6 never answers the raw `w RM4;`.
+/// The question is asked ONCE, while receiving; the over then reads `l ALC`, on Hamlib's scale
+/// and so with no zone of the radio's own (raw 32 is 0.5 on Hamlib's scale, 0.125 on the
+/// radio's). Each unanswered raw read used to block the loop, the only thing that unkeys the
+/// radio, for about a second, three times in the first over after every connect: no loop step
+/// of the over may take 200 ms.
+#[test]
+fn a_raw_alc_radio_behind_a_rigctld_that_never_answers_raw_cat_reads_alc_through_hamlib() {
+    for (model, name, p3) in RAW_ALC_MODELS {
+        let rigctld = FakeRigctld::start(32, p3, false);
+        let over = run_an_over(&engine_for(model), &rigctld);
+        let sent = rigctld.lines();
+        assert_eq!(
+            (over.radio.tx_alc, over.radio.tx_alc_zone),
+            (Some(0.5), None),
+            "{name}: the meter shows Hamlib's ALC, with Hamlib's zone — {sent:?}"
+        );
+        let raw_asks: Vec<usize> = sent
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| *l == "w RM4;")
+            .map(|(at, _)| at)
+            .collect();
+        assert!(
+            raw_asks.len() == 1 && raw_asks[0] < over.lines_before_key,
+            "{name}: the raw read is asked once, while receiving, never in the over — {sent:?}"
+        );
+        assert!(
+            over.keyed_steps.len() > 40,
+            "{name}: premise: two seconds and more of the over were stepped keyed"
+        );
+        let slowest = over.keyed_steps.iter().max().copied().unwrap_or_default();
+        assert!(
+            slowest < Duration::from_millis(200),
+            "{name}: no step of the over is held up, the slowest took {slowest:?} — {sent:?}"
+        );
+    }
 }
 
-/// ⭐ AN FT-991 BEHIND ITS OWN OLDER RIGCTLD KEEPS ITS ALC METER (the 1.19.0 regression). Network
-/// connection, `127.0.0.1:4532`, where the operator's own rigctld runs: Nexus shares it, and a
-/// Hamlib before 4.6 never answers the raw `w RM4;`. Three misses parked the meter, ⊘ "not
-/// reported", where 1.18.0's `l ALC` read it. The raw read that never answered on this link gives
-/// way to `l ALC`, on Hamlib's scale and so with no zone of the radio's own. By value: raw 32 is
-/// 0.5 on Hamlib's scale and 0.125 on the radio's.
+/// ⭐ STOP TX IN THE FIRST OVER AFTER CONNECTING LANDS AT ONCE, BEHIND A RIGCTLD BEFORE 4.6. A
+/// Phone PTT over keyed by Nexus; the Stop is pressed from another thread the moment the over's
+/// first ALC read reaches the rigctld, whichever way it is asked. The unkey (`T 0`) must reach
+/// the rigctld within 200 ms of the press. It used to wait out the unanswered raw read first.
 #[test]
-fn an_ft991_behind_a_rigctld_that_never_answers_raw_cat_reads_alc_through_hamlib() {
-    let (addr, log) = hamlib_45_rigctld(32);
-    let radio = run_an_over(&engine_for(1035), &addr);
-    let sent = log.lock().unwrap().clone();
-    assert_eq!(
-        (radio.tx_alc, radio.tx_alc_zone),
-        (Some(0.5), None),
-        "the meter shows Hamlib's ALC, with Hamlib's zone — {sent:?}"
-    );
-    let first_l_alc = sent.iter().position(|l| l == "l ALC");
-    let raw_asks = sent.iter().filter(|l| *l == "w RM4;").count();
-    assert_eq!(
-        raw_asks, 3,
-        "the raw read is tried, three strikes as every meter gets — {sent:?}"
-    );
-    assert!(
-        first_l_alc.is_some_and(|at| !sent[at..].iter().any(|l| l == "w RM4;")),
-        "once it has given way, the raw read is not sent again — {sent:?}"
-    );
+fn a_stop_tx_in_the_first_over_is_not_held_up_by_the_alc_read() {
+    for (model, name, p3) in RAW_ALC_MODELS {
+        let rigctld = FakeRigctld::start(32, p3, false);
+        let engine = engine_for(model);
+        engine.lock().unwrap().set_operating_mode("phone", false);
+        let mut rig = Rig::rigctld(&rigctld.addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        // The Stop, pressed when the first ALC read after the key arrives.
+        let pressed = Arc::new(Mutex::new(None::<Instant>));
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watcher = {
+            let (log, engine, pressed, done) = (
+                Arc::clone(&rigctld.log),
+                Arc::clone(&engine),
+                Arc::clone(&pressed),
+                Arc::clone(&done),
+            );
+            std::thread::spawn(move || {
+                while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                    let alc_after_key = {
+                        let log = log.lock().unwrap();
+                        log.iter()
+                            .skip_while(|(_, l)| l != "T 1")
+                            .any(|(_, l)| l == "l ALC" || l == "w RM4;")
+                    };
+                    if alc_after_key {
+                        *pressed.lock().unwrap() = Some(Instant::now());
+                        engine.lock().unwrap().halt_tx();
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            })
+        };
+        let mut t = 0.0;
+        for k in 0..120 {
+            if k == 40 {
+                let mut e = engine.lock().unwrap();
+                e.set_tx_enabled(true);
+                e.set_ptt(true);
+            }
+            t += 50.0;
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+        done.store(true, std::sync::atomic::Ordering::SeqCst);
+        watcher.join().unwrap();
+        let sent = rigctld.lines();
+        let pressed = pressed
+            .lock()
+            .unwrap()
+            .unwrap_or_else(|| panic!("{name}: premise: the over read its ALC — {sent:?}"));
+        let unkeyed = rigctld
+            .log
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(at, l)| l == "T 0" && *at >= pressed)
+            .map(|(at, _)| *at)
+            .unwrap_or_else(|| panic!("{name}: the Stop unkeyed the radio — {sent:?}"));
+        let late = unkeyed - pressed;
+        assert!(
+            late < Duration::from_millis(200),
+            "{name}: the unkey reached the radio {late:?} after Stop TX — {sent:?}"
+        );
+    }
+}
+
+/// …and a rigctld from 4.6 on, which answers the raw read, still has the radio's own ALC read
+/// raw during the over, now that it was found out while receiving: the probe is the one raw read
+/// before the key, and the over goes on asking `w RM4;`, never `l ALC`.
+#[test]
+fn a_rigctld_that_answers_raw_cat_still_has_the_over_read_alc_raw() {
+    for (model, name, p3) in RAW_ALC_MODELS {
+        let rigctld = FakeRigctld::start(128, p3, true);
+        let over = run_an_over(&engine_for(model), &rigctld);
+        let sent = rigctld.lines();
+        let (before, during) = sent.split_at(over.lines_before_key);
+        assert_eq!(
+            before.iter().filter(|l| *l == "w RM4;").count(),
+            1,
+            "{name}: asked once while receiving — {sent:?}"
+        );
+        assert!(
+            during.iter().any(|l| l == "w RM4;") && !during.iter().any(|l| l == "l ALC"),
+            "{name}: the over reads the radio's own ALC — {sent:?}"
+        );
+        assert_eq!(
+            over.radio.tx_alc.map(|a| (a * 255.0).round()),
+            Some(128.0),
+            "{name}: on the radio's own bar"
+        );
+    }
 }
 
 /// …and every other radio reads its ALC as it did: another Yaesu (the FTDX101D, whose Hamlib

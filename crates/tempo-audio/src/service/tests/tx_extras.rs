@@ -297,14 +297,25 @@ fn a_given_up_temperature_is_cleared() {
     assert_eq!(b.radio().pa_temp_meter, None);
 }
 
-/// A radio this table does not name is asked for nothing new.
+/// A radio this table does not name is asked for nothing new. The one raw line a receiving
+/// FTDX10 or FT-710 is sent is not this table's: it is the ALC meter's single question, whether
+/// the link answers the raw ALC read (`RadioLoop::tx_alc_raw`), asked once.
 #[test]
 fn radios_without_them_are_asked_nothing() {
     for model in [1042, 1049, 1036, 2014] {
         // FTDX10, FT-710, FT-891 (parked: nothing to ask), and a Kenwood through Hamlib.
         let mut b = Bench::new(model, yaesu("0761", 0));
         b.run(15.0);
-        assert!(b.raw_sent().is_empty(), "model {model}: {:?}", b.raw_sent());
+        let alc_probe = crate::rigmodels::raw_alc_query(model).map(|q| format!("w {q}"));
+        let (probes, raw): (Vec<String>, Vec<String>) = b
+            .raw_sent()
+            .into_iter()
+            .partition(|l| Some(l) == alc_probe.as_ref());
+        assert!(
+            probes.len() <= 1,
+            "model {model}: the ALC question once: {probes:?}"
+        );
+        assert!(raw.is_empty(), "model {model}: {raw:?}");
         assert!(
             b.sent().iter().any(|l| l == "f"),
             "control: model {model} polled"
