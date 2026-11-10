@@ -967,6 +967,11 @@ impl Rig {
     pub fn set_slow_transport(&mut self, slow: bool) {
         self.slow_transport = slow;
     }
+    /// Whether this link was marked a slow transport ([`Self::set_slow_transport`]).
+    #[cfg_attr(not(feature = "device"), allow(dead_code))] // the radio loop (service.rs, device)
+    pub(crate) fn slow_transport(&self) -> bool {
+        self.slow_transport
+    }
     /// Mark this CAT link as reaching the radio over the network, so a key-down that waits for
     /// the link ([`Self::key_awaiting_answer`]) waits [`NETWORK_KEY_DEADLINE_MS`] for its answer.
     /// Every release keeps [`PTT_DEADLINE_MS`].
@@ -1430,7 +1435,7 @@ impl Rig {
     }
 
     /// A command's reply deadline (ms) when it names none: the long window on a slow transport.
-    fn transport_deadline_ms(&self) -> u64 {
+    pub(crate) fn transport_deadline_ms(&self) -> u64 {
         if self.slow_transport {
             2_500
         } else {

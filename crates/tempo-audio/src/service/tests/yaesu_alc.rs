@@ -42,6 +42,9 @@ struct FakeRigctld {
     mic: Arc<std::sync::atomic::AtomicBool>,
     /// Each line whose reply waited for the client lock, and how long.
     held: Arc<Mutex<Vec<(String, Duration)>>>,
+    /// When each connection was accepted: a new one after the first is the client having dropped
+    /// the last.
+    connects: Arc<Mutex<Vec<Instant>>>,
 }
 
 impl FakeRigctld {
@@ -55,6 +58,22 @@ impl FakeRigctld {
     /// arrived (the radio's timeout, waiting for a newline), and every reply on any connection
     /// waits for it.
     fn with(raw: u16, p3: &'static str, raw_answers: usize, lock: Option<Duration>) -> Self {
+        Self::serve(raw, p3, raw_answers, lock, Duration::ZERO)
+    }
+
+    /// [`Self::start`] answering, behind a network radio link that takes `delay` to answer each
+    /// raw read: rigctld's round trip to a radio reached over the network.
+    fn slow_raw(raw: u16, p3: &'static str, delay: Duration) -> Self {
+        Self::serve(raw, p3, usize::MAX, None, delay)
+    }
+
+    fn serve(
+        raw: u16,
+        p3: &'static str,
+        raw_answers: usize,
+        lock: Option<Duration>,
+        raw_delay: Duration,
+    ) -> Self {
         use std::io::{BufRead, BufReader, Write};
         use std::sync::atomic::{AtomicBool, Ordering};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -62,12 +81,15 @@ impl FakeRigctld {
         let log = Arc::new(Mutex::new(Vec::<(Instant, String)>::new()));
         let mic = Arc::new(AtomicBool::new(false));
         let held = Arc::new(Mutex::new(Vec::<(String, Duration)>::new()));
+        let connects = Arc::new(Mutex::new(Vec::<Instant>::new()));
         let (log2, mic2, held2) = (Arc::clone(&log), Arc::clone(&mic), Arc::clone(&held));
+        let connects2 = Arc::clone(&connects);
         let mut raw_left = raw_answers;
         let mut locked_until: Option<Instant> = None;
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { break };
+                connects2.lock().unwrap().push(Instant::now());
                 let mut reader = BufReader::new(match stream.try_clone() {
                     Ok(r) => r,
                     Err(_) => continue,
@@ -92,6 +114,7 @@ impl FakeRigctld {
                         "t" => "0\n".to_string(),
                         "w RM4;" if raw_left > 0 => {
                             raw_left -= 1;
+                            std::thread::sleep(raw_delay);
                             format!("RM4{raw:03}{p3};\0")
                         }
                         "w RM4;" => {
@@ -113,6 +136,7 @@ impl FakeRigctld {
             log,
             mic,
             held,
+            connects,
         }
     }
 
@@ -164,23 +188,33 @@ struct Over {
     radio: tempo_app::dto::RadioStatus,
     lines_before_key: usize,
     keyed_steps: Vec<Duration>,
+    /// How many connections the rigctld had accepted when the mic was keyed.
+    connects_before_key: usize,
 }
 
 /// Two seconds of receiving (the link comes up and is confirmed), then four seconds of an over
 /// keyed at the radio's mic, through the fake rigctld. The loop is the real `RadioLoop::step`.
 fn run_an_over(engine: &Arc<Mutex<Engine>>, rigctld: &FakeRigctld) -> Over {
+    run_an_over_on(engine, rigctld, false)
+}
+
+/// [`run_an_over`] on a link marked a slow transport (`slow`), as a network radio link is.
+fn run_an_over_on(engine: &Arc<Mutex<Engine>>, rigctld: &FakeRigctld, slow: bool) -> Over {
     let model = engine.lock().unwrap().settings().rig_model;
     let mut rig = Rig::rigctld(&rigctld.addr);
+    rig.set_slow_transport(slow);
     let mut backend = MockBackend::new();
     let mut state = loop_state_for(engine);
     let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
     let mut station = StationSinks::new();
     let mut t = 0.0;
     let mut lines_before_key = 0;
+    let mut connects_before_key = 0;
     let mut keyed_steps = Vec::new();
     for k in 0..120 {
         if k == 40 {
             lines_before_key = rigctld.log.lock().unwrap().len();
+            connects_before_key = rigctld.connects.lock().unwrap().len();
             rigctld.mic.store(true, std::sync::atomic::Ordering::SeqCst);
         }
         t += 50.0;
@@ -211,6 +245,7 @@ fn run_an_over(engine: &Arc<Mutex<Engine>>, rigctld: &FakeRigctld) -> Over {
         radio: engine.lock().unwrap().snapshot().radio,
         lines_before_key,
         keyed_steps,
+        connects_before_key,
     }
 }
 
@@ -523,6 +558,58 @@ fn a_raw_read_that_stops_answering_mid_over_gives_up_quickly() {
     assert!(
         slowest < Duration::from_millis(400),
         "no step held for the transport deadline, the slowest took {slowest:?} — {sent:?}"
+    );
+}
+
+/// ⭐ A NETWORK RADIO LINK THAT ANSWERS THE RAW READ IN HALF A SECOND KEEPS ITS CONNECTION AND
+/// ITS ALC THROUGH THE OVER. The link is a slow transport, as every network link is, and answers
+/// the probe and every raw read in 500 ms. The over's raw read waits as long as `l ALC` would
+/// there, so it is answered: the meter shows the radio's own bar, `l ALC` is never asked, and no
+/// raw read drops the connection. With a 300 ms deadline every raw read of the over missed and
+/// dropped the connection mid-over, and the over fell back to Hamlib's scale. No keyed loop step
+/// outlasts the slow transport's 2.5 s and one tick.
+#[test]
+fn a_network_link_slow_to_answer_the_raw_read_keeps_its_connection_and_its_alc() {
+    let rigctld = FakeRigctld::slow_raw(128, "", Duration::from_millis(500));
+    let over = run_an_over_on(&engine_for(1035), &rigctld, true);
+    let sent = rigctld.lines();
+    let during = &sent[over.lines_before_key..];
+    assert!(
+        during.iter().any(|l| l == "w RM4;"),
+        "premise: the over asked raw, the question having been answered — {sent:?}"
+    );
+    // A connection opened in the over right after a raw read is that read's miss dropping the
+    // last one. (A one-off `\dump_caps` also opens a new one on a slow transport, by design.)
+    let log = rigctld.log.lock().unwrap().clone();
+    let dropped_by_raw: Vec<Instant> = rigctld.connects.lock().unwrap()[over.connects_before_key..]
+        .iter()
+        .copied()
+        .filter(|at| {
+            log.iter()
+                .rev()
+                .find(|(line_at, _)| line_at < at)
+                .is_some_and(|(_, l)| l == "w RM4;")
+        })
+        .collect();
+    assert!(
+        dropped_by_raw.is_empty(),
+        "no raw read of the over dropped the connection: {} opened right after one — {sent:?}",
+        dropped_by_raw.len()
+    );
+    assert!(
+        !during.iter().any(|l| l == "l ALC"),
+        "the over keeps reading the radio's own ALC — {sent:?}"
+    );
+    assert_eq!(
+        over.radio.tx_alc.map(|a| (a * 255.0).round()),
+        Some(128.0),
+        "on the radio's own bar — {sent:?}"
+    );
+    let slowest = over.keyed_steps.iter().max().copied().unwrap_or_default();
+    assert!(
+        slowest < Duration::from_millis(2_500 + 50),
+        "no keyed step past the slow transport's deadline and a tick, the slowest took \
+         {slowest:?} — {sent:?}"
     );
 }
 

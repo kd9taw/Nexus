@@ -1509,7 +1509,32 @@ const RAW_ALC_PROBE_LEAD_MS: f64 = 3_500.0;
 const RAW_ALC_PROBE_AFTER_BOUNDARY_MS: f64 = 3_000.0;
 /// An over's raw ALC read on a link that has answered the probe: a strict deadline, so a link
 /// that stops answering costs the loop at most this per try, never the transport deadline.
+///
+/// ⚠️ ON A FAST LINK ONLY. A network radio link or a slow serial link
+/// ([`crate::rig::Rig::set_slow_transport`]) can take longer than this to answer a read that
+/// works, and every miss drops the connection mid-over ([`raw_alc_over_deadline_ms`]).
 const RAW_ALC_OVER_DEADLINE_MS: u64 = 300;
+
+/// The deadline of an over's raw ALC read on `rig`'s link: [`RAW_ALC_OVER_DEADLINE_MS`], or on a
+/// slow transport the transport's own deadline, the one `l ALC` and every other over read there
+/// gets. Shorter, a network link that answered the probe in 500 ms missed every raw read of its
+/// first over, and each miss dropped the connection in the middle of the over: the next command
+/// (the unkey among them) opened a new one, and the drop forgot the split the radio had confirmed,
+/// so the next over wrote it again before its key.
+///
+/// ⛔ THE MISS STILL DROPS THE CONNECTION, ON PURPOSE. A late answer left in the socket would be
+/// read as the next command's (a `T 0` among them), and a `w` the radio did not answer in time may
+/// get no answer from rigctld at all (Hamlib 4.5.5 prints nothing then), so it cannot be counted
+/// as owed the way a late key is ([`crate::rig::Rig`]'s `command_lines`): a count that is never
+/// paid leaves every later answer read as the line before it. Scaled like this, the raw read
+/// misses, and drops, only where `l ALC` would.
+fn raw_alc_over_deadline_ms(rig: &Rig) -> u64 {
+    if rig.slow_transport() {
+        rig.transport_deadline_ms()
+    } else {
+        RAW_ALC_OVER_DEADLINE_MS
+    }
+}
 
 /// The tune-time meter read's deadline. A tune carrier is fed one chunk per tick from a lead of
 /// [`TUNE_LEAD_MS`]; a meter read blocks the loop, so it may take at most this long before the
@@ -15569,7 +15594,7 @@ impl RadioLoop {
                         } else if TX_METERS[i] == "ALC" && raw_alc {
                             // Strict even in an over: the link answered the probe, but one
                             // that stops answering must not hold the loop for its deadline.
-                            let strict = deadline.unwrap_or(RAW_ALC_OVER_DEADLINE_MS);
+                            let strict = deadline.unwrap_or_else(|| raw_alc_over_deadline_ms(rig));
                             read_tx_meter(rig, TX_METERS[i], model, raw_alc, Some(strict))
                         } else {
                             read_tx_meter(rig, TX_METERS[i], model, raw_alc, deadline)
