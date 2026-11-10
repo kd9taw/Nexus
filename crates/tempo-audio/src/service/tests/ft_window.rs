@@ -1579,10 +1579,17 @@ fn a_stalled_meter_read_near_an_overs_end_never_holds_the_loop_past_it() {
             "{what}: a meter read asked (or not) with {left} ms left"
         );
         if left > 2_000.0 {
-            assert!(held >= 600.0, "{what}: control: the stalled read waited {held:.0} ms");
+            assert!(
+                held >= 600.0,
+                "{what}: control: the stalled read waited {held:.0} ms"
+            );
         }
         if stop {
-            assert_eq!(s.sent("T 0"), 1, "{what}: Stop TX did not unkey on that tick");
+            assert_eq!(
+                s.sent("T 0"),
+                1,
+                "{what}: Stop TX did not unkey on that tick"
+            );
         }
     }
 }

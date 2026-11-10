@@ -3052,7 +3052,10 @@ fn a_band_change_just_before_an_own_boundary_does_not_delay_its_key() {
         let tick = b.ticks(1);
         let held = started.elapsed();
         if delay_ms == 0 {
-            assert!(b.radio.keyed(), "the over did not key on its boundary's tick: {tick:?}");
+            assert!(
+                b.radio.keyed(),
+                "the over did not key on its boundary's tick: {tick:?}"
+            );
             assert_eq!(
                 split_writes(&tick),
                 ["S 1 VFOB", "I 7073500", "X PKTUSB -1", "S 1 VFOB", "T 1"],
