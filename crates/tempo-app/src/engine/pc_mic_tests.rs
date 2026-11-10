@@ -1146,6 +1146,71 @@ fn an_amp_delay_holds_the_computer_microphone_and_its_release_keeps_the_last_wor
     assert_eq!(e.pc_mic_keyed_at(Instant::now()), None);
 }
 
+/// The release tail with the amplifier TX delay set to 0 explicitly: exactly 200 ms of the 400 ms
+/// queued are sent and the radio unkeys exactly 200 ms after the release, as with no setting at all.
+/// Then with 300 ms: the over plays 300 ms behind the microphone, so the release lets it play past
+/// 200 ms, bounded by 200 ms plus the delay.
+#[test]
+fn the_release_tail_is_200_ms_at_delay_0_and_200_ms_plus_the_delay_with_one() {
+    // Delay 0, set explicitly.
+    let (mut e, _t0, r, before) = tail_scene(400);
+    let mut s = e.settings.clone();
+    s.amp_tx_delay_ms = 0;
+    e.apply_restored_settings(s);
+    assert_eq!(
+        e.pc_mic.over.behind(),
+        Duration::ZERO,
+        "delay 0: nothing behind"
+    );
+    e.release_pc_mic_at(r);
+    let (after, ended) = run_tail(&mut e, r, 600);
+    assert_eq!(
+        count(&before, VOICE) + count(&after, VOICE),
+        PC_MIC.samples(RELEASE_TAIL_MS) as usize,
+        "delay 0: not exactly 200 ms sent"
+    );
+    assert_eq!(
+        ended,
+        Some(RELEASE_TAIL_MS),
+        "delay 0: not unkeyed at exactly 200 ms"
+    );
+
+    // Delay 300, the radio answering at once: the tail ends 200 + 300 ms after the release.
+    let mut e = station();
+    let mut s = e.settings.clone();
+    s.amp_tx_delay_ms = 300;
+    e.apply_restored_settings(s);
+    e.set_operating_mode("phone", false);
+    let t0 = Instant::now();
+    e.set_ptt(true);
+    assert_eq!(e.poll_pc_mic(t0, TICK, 1), MicTick::Armed);
+    e.push_pc_mic(&audio(20, VOICE), t0);
+    assert_eq!(
+        e.poll_pc_mic(t0, TICK, 1),
+        MicTick::Key,
+        "premise: audio keys"
+    );
+    assert_eq!(e.pc_mic_keyed_at(t0), Some(300));
+    assert_eq!(e.pc_mic.over.behind(), ms(300), "premise: 300 ms behind");
+    let mut t = 20;
+    while t < 1_000 {
+        e.push_pc_mic(&audio(20, VOICE), t0 + ms(t));
+        let _ = e.poll_pc_mic(t0 + ms(t), 40.0, 1);
+        t += 20;
+    }
+    let r = t0 + ms(1_000);
+    e.release_pc_mic_at(r);
+    let (_after, ended) = run_tail(&mut e, r, 1_000);
+    // About 340 ms of speech is still unplayed at the release: the 300 ms delay plus the
+    // look-ahead. It all plays, past the 200 ms a release allows with no delay and within
+    // 200 + 300 ms.
+    let ended = ended.expect("delay 300: the over never ended");
+    assert!(
+        ended > RELEASE_TAIL_MS && ended <= RELEASE_TAIL_MS + 300,
+        "delay 300: unkeyed {ended} ms after the release, not past 200 and by 200 + 300"
+    );
+}
+
 /// 150 ms queued at the release: all of it is sent, then the radio unkeys, when it has played
 /// (150 ms after the release, and never past 200 ms). Nothing captured after the release is sent.
 #[test]
