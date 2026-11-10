@@ -1552,12 +1552,14 @@ mod tests {
         // A contest row holds no park or summit of THEIRS, nor a comment, note or name of the
         // other operator outside its exchange: the entry strip takes the call and the exchange,
         // nothing else. So the Logbook row has none, rather than having had one taken away. Its
-        // own side is the activation it was logged during (`activation` above).
+        // own side is the activation it was logged during (`activation` above); their island
+        // group is the one Nexus filled at log time (`iota` above).
         assert_eq!(
             rec.ota,
             crate::logbook::Ota {
                 my_program: Some("POTA".into()),
                 my_ref: Some("US-0001,US-0002".into()),
+                iota: Some("NA-046".into()),
                 ..crate::logbook::Ota::default()
             }
         );
