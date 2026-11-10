@@ -752,7 +752,13 @@ fn remote_presence_immediate_over_rechecks_authority_around_key_up() {
     for scene in ["valid", "beforeTick", "duringKey"] {
         let authority = Arc::new(TransmitAuthority::default());
         let revoke = authority.clone();
+        // The sound card's flushes and the unkeys the radio was sent, in the order they happened.
+        let order = Arc::new(Mutex::new(Vec::<String>::new()));
+        let heard = Arc::clone(&order);
         let peer = retuning_peer(14_074_000, "PKTUSB", move |line, state| {
+            if line == "T 0" {
+                heard.lock().unwrap().push(line.to_string());
+            }
             if line == "T 1" {
                 state.keyed = true;
                 if scene == "duringKey" {
@@ -767,6 +773,7 @@ fn remote_presence_immediate_over_rechecks_authority_around_key_up() {
             settings.mycall = "KD9TAW".into();
             settings.mygrid = "EN52".into();
         });
+        s.backend.events = Some(Arc::clone(&order));
         {
             let mut e = engine_lock(&s.engine);
             e.set_tx_even(true);
@@ -809,6 +816,8 @@ fn remote_presence_immediate_over_rechecks_authority_around_key_up() {
             assert!(!engine_lock(&s.engine).tx_enabled(), "{scene}");
             if scene == "duringKey" {
                 assert_eq!(writes(&peer), ["T 1", "T 0"]);
+                // The output is cleared before the unkey, as at every other stop.
+                assert_eq!(*order.lock().unwrap(), ["flush", "T 0"], "{scene}");
             } else {
                 assert!(writes(&peer).is_empty());
             }

@@ -16404,8 +16404,8 @@ impl RadioLoop {
             self.prev_slot_was_tx = false;
         }
 
-        // Hard Stop TX: cut the CURRENT transmission immediately — drop PTT and discard
-        // the queued TX audio rather than letting it play out to its deadline. TWO
+        // Hard Stop TX: cut the CURRENT transmission immediately — discard the queued TX
+        // audio, then drop PTT, rather than letting it play out to its deadline. TWO
         // triggers, and the whole 2026-07-31 fix is the difference between them:
         //
         //  • the one-shot `slot_tx_abort` — `engine.halt_tx` (the UI "Stop TX" button, a
@@ -16475,9 +16475,14 @@ impl RadioLoop {
             } else {
                 "hard-stop TX: TX disabled mid-over (non-slot) → unkey"
             });
+            // ⚠️ FLUSH BEFORE THE UNKEY, as every other end of an over here. The unkey waits for
+            // the radio's answer (up to the CAT deadline on a slow or network link), and the
+            // queued over went on playing for all of it while the flush waited behind. WSJT-X's
+            // `stopTx` stops the Modulator first and lowers PTT after it
+            // (`widgets/mainwindow.cpp:8564-8582`, v3.0.2).
+            backend.flush_output();
             let slot_over = self.holds_slot_over();
             let unkey = rig.ptt(false);
-            backend.flush_output();
             self.tx_until_ms = None;
             // Cutting a slot over is WSJT-X's Halt Tx, and its PTT off fails as the over's end does.
             if let Some(why) = crate::slot::slot_unkey_failure(&unkey, slot_over) {
@@ -16590,9 +16595,10 @@ impl RadioLoop {
                 match inb {
                     WsjtxInbound::HaltTx { .. } => {
                         eng.halt_tx();
+                        // The queued over is cleared before the unkey, as at Stop TX.
+                        backend.flush_output();
                         let slot_over = self.holds_slot_over();
                         let unkey = rig.ptt(false);
-                        backend.flush_output();
                         self.tx_until_ms = None;
                         // …and so is a logger's HaltTx cutting one.
                         if let Some(why) = crate::slot::slot_unkey_failure(&unkey, slot_over) {

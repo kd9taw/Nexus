@@ -799,7 +799,7 @@ fn within_split_budget(started: std::time::Instant, budget_ms: u64) -> std::io::
 /// ([`slot_key_failure`]). The key's answer used to be ignored, so a radio that said no had the
 /// whole over played into it while it was receiving, and TX stayed armed to try again next cycle.
 /// Now the caller plays nothing, and [`Engine::halt_tx_for_refused_key`] presses Stop TX, whose
-/// slot abort the loop's next tick turns into the unkey and the flush, and says why. `held`: the
+/// slot abort the loop's next tick turns into the flush and the unkey, and says why. `held`: the
 /// loop already holds the transmitter (an over's PTT hold, or the operator's PTT), so this key is
 /// not a new one. A key the radio accepts is untouched: nothing new runs between its answer and the
 /// audio.
@@ -817,10 +817,12 @@ pub(crate) fn key_slot_transmitter(
     held: bool,
 ) -> bool {
     if eng.poll_remote_transmit(std::time::Instant::now()) {
+        // The output is cleared before the unkey, as at every stop: the unkey waits for the
+        // radio's answer, and nothing queued may play while it does.
+        backend.flush_output();
         if rig.keyed {
             let _ = rig.ptt(false);
         }
-        backend.flush_output();
         return false;
     }
     if let Err(why) = backend.prepare_tx() {
@@ -833,8 +835,8 @@ pub(crate) fn key_slot_transmitter(
     eng.note_slot_ptt_asserted();
     let key = rig.ptt(true);
     if eng.poll_remote_transmit(std::time::Instant::now()) {
-        let _ = rig.ptt(false);
         backend.flush_output();
+        let _ = rig.ptt(false);
         return false;
     }
     if let Some(why) = slot_key_failure(&key, held) {
