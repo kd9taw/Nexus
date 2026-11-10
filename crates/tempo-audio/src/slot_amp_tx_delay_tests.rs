@@ -504,7 +504,7 @@ fn sweep_cell(eng: &Engine, waves: &[Vec<f32>], lat: f64, d: f64, decode_it: boo
 /// likely to set against keys from on time to 700 ms late: from the key to the first tone, where the
 /// tone falls in the slot, tones lost, PTT's tail, any overrun, and whether the tier's own decoder
 /// (FT8: the vendored WSJT-X decoder; FT2: Decodium's) still decodes the over as the other station
-/// hears it (at 0, 200 and 500 ms; the timing at every delay). The signal is noise-free, so a
+/// hears it (in the run that decodes). The signal is noise-free, so a
 /// decode here says the timing is right, not how much margin a weak signal keeps. Printed as a table
 /// (`--nocapture`), asserted:
 /// - the gap is never under the delay, and nothing ever runs past the slot;
@@ -516,12 +516,12 @@ fn sweep_cell(eng: &Engine, waves: &[Vec<f32>], lat: f64, d: f64, decode_it: boo
 ///
 /// POSITIVE CONTROL: the 0-delay over decodes (the decoder sees what the sweep feeds it), and
 /// NEGATIVE CONTROL: half of it does not (the check can fail).
-#[test]
-fn amp_delay_timing_sweep_with_a_decode_positive_control() {
+///
+/// `decode_at`: the delays each key is decoded at (none: the timing alone, at every delay).
+fn sweep(decode_at: &[f64]) {
     const DELAYS: [f64; 8] = [0.0, 20.0, 50.0, 100.0, 200.0, 300.0, 400.0, 500.0];
     const LATS: [f64; 5] = [0.0, 50.0, 150.0, 300.0, 700.0];
-    // The delays each key is decoded at; the timing is checked at every one.
-    const DECODED: [f64; 3] = [0.0, 200.0, 500.0];
+    let decoding = !decode_at.is_empty();
     for tier in [Tier::Ft8, Tier::Ft2] {
         let eng = engine_on(tier, 0);
         let waves = over_on(tier);
@@ -531,22 +531,24 @@ fn amp_delay_timing_sweep_with_a_decode_positive_control() {
         };
         let frame_len = tempo_core::modes::make_mode(kind).frame_samples();
         // Positive control, then negative.
-        let whole = waves.concat();
-        assert!(
-            decode(kind, &heard(frame_len, &whole, 0.0)).is_some(),
-            "{tier:?}: positive control"
-        );
-        let half: Vec<f32> = whole[..whole.len() / 2].to_vec();
-        assert!(
-            decode(kind, &heard(frame_len, &half, 0.0)).is_none(),
-            "{tier:?}: negative control"
-        );
+        if decoding {
+            let whole = waves.concat();
+            assert!(
+                decode(kind, &heard(frame_len, &whole, 0.0)).is_some(),
+                "{tier:?}: positive control"
+            );
+            let half: Vec<f32> = whole[..whole.len() / 2].to_vec();
+            assert!(
+                decode(kind, &heard(frame_len, &half, 0.0)).is_none(),
+                "{tier:?}: negative control"
+            );
+        }
 
         println!("{tier:?}: delay_ms key_late_ms | gap_ms tone_in_slot_ms lost_ms tail_ms overrun | decoded dt");
         for lat in LATS {
-            let base = sweep_cell(&eng, &waves, lat, 0.0, true);
+            let base = sweep_cell(&eng, &waves, lat, 0.0, decoding);
             for d in DELAYS {
-                let decoded = DECODED.contains(&d);
+                let decoded = decode_at.contains(&d);
                 let c = sweep_cell(&eng, &waves, lat, d, decoded);
                 println!(
                     "{tier:?}: {d:>5} {lat:>5} | {:>7.1} {:>8.1} {:>6.1} {:>6.1} {} | {:?}",
@@ -611,6 +613,23 @@ fn amp_delay_timing_sweep_with_a_decode_positive_control() {
             }
         }
     }
+}
+
+/// The timing sweep at every delay and key, without the decoder: in the suite.
+#[test]
+fn amp_delay_timing_sweep() {
+    sweep(&[]);
+}
+
+/// The timing sweep with the decode positive control, at every delay and key. ⚠️ IGNORED IN THE
+/// SUITE, RUN BY NAME: the decoders take the process-wide modem lock for most of a minute in a debug
+/// build, and other tests in this binary hold that lock themselves and time what they do against
+/// it, so running this beside them makes them fail at random. Run it alone:
+/// `cargo test -p tempo-audio --features device,serial --lib amp_delay_timing_sweep_decodes -- --ignored --nocapture`.
+#[test]
+#[ignore = "takes the process-wide modem lock for most of a minute; run by name"]
+fn amp_delay_timing_sweep_decodes_as_the_other_station_hears_it() {
+    sweep(&[0.0, 20.0, 50.0, 100.0, 200.0, 300.0, 400.0, 500.0]);
 }
 
 /// ⚠️ FT1'S LIMIT, PINNED: its over fills its 4 s slot to within about 0.46 s, and it starts at its
