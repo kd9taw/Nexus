@@ -295,7 +295,7 @@ pub(crate) fn amp_shortfall_samples(waves: &[Vec<f32>], amp_delay_ms: f64) -> us
 /// that fits whole, and the amplifier TX delay moves it later by up to `amp_delay_ms`
 /// ([`amp_shortfall_samples`]): counted whole, before the over is built, so a start the over's own
 /// lead-in would have covered waits for the boundary rather than run past it.
-pub(crate) fn immediate_start_need_ms(over_ms: f64, on_slot_clock: bool, amp_delay_ms: f64) -> f64 {
+pub fn immediate_start_need_ms(over_ms: f64, on_slot_clock: bool, amp_delay_ms: f64) -> f64 {
     if on_slot_clock {
         over_ms
     } else {

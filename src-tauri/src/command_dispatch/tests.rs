@@ -1290,7 +1290,11 @@ fn a_save_from_afar_keeps_the_shacks_amp_tx_delay() {
     assert_eq!(r0.tx_level, 0.25, "CONTROL: the rest of the edit");
     let mut patch = asked.clone();
     keep_the_shacks_radio_ptt(&shack, 0, &mut patch, None);
-    assert_eq!(patch.amp_tx_delay_ms, Some(300), "CONTROL: the shack's own edit");
+    assert_eq!(
+        patch.amp_tx_delay_ms,
+        Some(300),
+        "CONTROL: the shack's own edit"
+    );
     let flagged = station_only_settings(Some(&afar), &shack).unwrap();
     assert!(
         flagged.contains(&"ampTxDelayMs"),

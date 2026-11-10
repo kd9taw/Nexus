@@ -239,10 +239,22 @@ fn a_delay_of_zero_changes_nothing() {
     let frame = js8_stand_in();
     for key in [-200.0, 0.0, 300.0, 900.0] {
         let mut a = MockBackend::new();
-        let now =
-            crate::js8_slot::play_frame(&eng, &mut a, &[frame.clone()], start + key, slot, 0.0);
+        let now = crate::js8_slot::play_frame(
+            &eng,
+            &mut a,
+            std::slice::from_ref(&frame),
+            start + key,
+            slot,
+            0.0,
+        );
         let mut b = MockBackend::new();
-        let before = before_play_frame(&eng, &mut b, &[frame.clone()], start + key, slot);
+        let before = before_play_frame(
+            &eng,
+            &mut b,
+            std::slice::from_ref(&frame),
+            start + key,
+            slot,
+        );
         assert_eq!(
             played(a, now),
             played(b, before),
@@ -304,7 +316,7 @@ fn ft8_and_js8_blank_inside_the_delay_and_keep_the_slot_clock() {
                 let o = crate::js8_slot::play_frame(
                     &eng,
                     &mut b,
-                    &[frame.clone()],
+                    std::slice::from_ref(&frame),
                     start + key,
                     slot,
                     amp,

@@ -92,7 +92,7 @@ impl Loop {
     }
 
     /// What was queued from the key on.
-    fn from_key(&self) -> &[f32] {
+    fn since_key(&self) -> &[f32] {
         &self.backend.played[self.queued_at_key..]
     }
 
@@ -116,9 +116,14 @@ fn first_tone(s: &[f32]) -> Option<usize> {
     s.iter().position(|&x| x != 0.0)
 }
 
-/// Each non-slot over Nexus plays, by name, with what sets it going and the radio it reads back.
+/// What sets an over going.
 type Setup = fn(&mut Engine);
-fn overs() -> Vec<(&'static str, Setup, Option<(u64, &'static str)>, f64)> {
+/// The dial (Hz) and mode the radio reads back.
+type Radio = Option<(u64, &'static str)>;
+
+/// Each non-slot over Nexus plays, by name, with what sets it going, the radio it reads back and how
+/// long the run takes.
+fn overs() -> Vec<(&'static str, Setup, Radio, f64)> {
     vec![
         (
             "soundcard CW",
@@ -196,24 +201,24 @@ fn every_over_nexus_plays_waits_the_delay_after_its_key() {
         };
         let (off, on) = (run(0), run(D_MS));
         assert!(
-            first_tone(off.from_key()).is_some(),
+            first_tone(off.since_key()).is_some(),
             "{name}: premise: the over played"
         );
         assert!(
-            first_tone(off.from_key()).unwrap() < D_SAMPLES,
+            first_tone(off.since_key()).unwrap() < D_SAMPLES,
             "{name}: CONTROL: with no delay the over starts at its key"
         );
         assert!(
-            first_tone(on.from_key()).unwrap() >= D_SAMPLES,
+            first_tone(on.since_key()).unwrap() >= D_SAMPLES,
             "{name}: a tone {:.1} ms after the key",
-            first_tone(on.from_key()).unwrap() as f64 / 12.0
+            first_tone(on.since_key()).unwrap() as f64 / 12.0
         );
         let mut moved = vec![0.0f32; D_SAMPLES];
-        moved.extend_from_slice(off.from_key());
+        moved.extend_from_slice(off.since_key());
         assert!(
-            on.from_key() == &moved[..],
+            on.since_key() == &moved[..],
             "{name}: not the same over behind the delay ({} against {} samples)",
-            on.from_key().len(),
+            on.since_key().len(),
             moved.len()
         );
         let longer = on.keyed_ms(name) - off.keyed_ms(name);
@@ -246,11 +251,12 @@ fn a_keyboard_stream_waits_the_delay_once() {
             l
         };
         let (off, on) = (run(0), run(D_MS));
-        let first = |l: &Loop| first_tone(l.from_key()).expect("premise: the stream is on the air");
+        let first =
+            |l: &Loop| first_tone(l.since_key()).expect("premise: the stream is on the air");
         assert!(first(&off) < D_SAMPLES, "{mode}: CONTROL");
         assert!(first(&on) >= D_SAMPLES, "{mode}: a tone inside the delay");
         // Exactly one delay's silence: the stream's own audio from there on is unbroken by another.
-        let silent_run = on.from_key()[D_SAMPLES..]
+        let silent_run = on.since_key()[D_SAMPLES..]
             .iter()
             .take_while(|&&x| x == 0.0)
             .count();
@@ -276,7 +282,7 @@ fn a_tune_carrier_waits_the_delay() {
         });
         let mut l = Loop::new(&e, PHONE);
         l.run_to(1_000.0);
-        let first = first_tone(l.from_key()).expect("premise: the carrier went out");
+        let first = first_tone(l.since_key()).expect("premise: the carrier went out");
         if amp_ms == 0 {
             assert!(first < D_SAMPLES, "CONTROL: no delay, carrier at the key");
         } else {
@@ -294,7 +300,7 @@ fn a_tune_carrier_waits_the_delay() {
 /// FT2's (keyed on a late start), each with the delay at 500 ms.
 #[test]
 fn stop_inside_the_delay_unkeys_with_nothing_on_the_air() {
-    let cases: [(&str, Setup, Option<(u64, &'static str)>); 2] = [
+    let cases: [(&str, Setup, Radio); 2] = [
         (
             "voice keyer",
             |e| {
@@ -324,7 +330,7 @@ fn stop_inside_the_delay_unkeys_with_nothing_on_the_air() {
                 .keyed_at
                 .unwrap_or_else(|| panic!("{name}: premise: keyed"));
             assert!(
-                first_tone(l.from_key()).is_some_and(|i| i >= 6_000),
+                first_tone(l.since_key()).is_some_and(|i| i >= 6_000),
                 "{name}: premise: the over waits 500 ms"
             );
             while l.t < keyed + f64::from(after_ms) {
