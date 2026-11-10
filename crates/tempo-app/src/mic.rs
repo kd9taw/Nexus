@@ -398,6 +398,10 @@ pub struct MicGates {
     pub watchdog_limit_secs: u64,
     /// When the current unattended-transmit run began, or `None` if its clock has not started.
     pub watchdog_start_secs: Option<u64>,
+    /// The amplifier TX delay in ms (`Engine::amp_tx_delay_ms`), 0 for none: an over keyed now
+    /// feeds its first sample the longer of this and [`MicMode::lead_in_ms`] after the key, counted
+    /// from the radio's answer once the loop has it ([`MicLatch::keyed_at`]).
+    pub amp_delay_ms: u64,
 }
 
 /// What one tick decided.
@@ -464,6 +468,11 @@ struct Over {
     /// A release bounded by a moment ([`MicLatch::release_by`]): the cursor no sample is fed
     /// beyond, the sample that plays at that moment.
     play_until: Option<u64>,
+    /// The amplifier TX delay this over keyed with ([`MicGates::amp_delay_ms`]), 0 for none.
+    amp_lead_ms: u64,
+    /// How far behind its arrival the over plays because of that delay: from the first frame's
+    /// arrival to the first sample. Zero without one. A frame may be early by this much more.
+    behind: Duration,
 }
 
 impl Over {
@@ -594,6 +603,33 @@ impl MicLatch {
         matches!(&self.phase, Phase::Keyed(over) if over.released)
     }
 
+    /// The radio answered the keyed over's key at `at`. With an amplifier TX delay the over's first
+    /// sample is moved to the answer plus the delay, if that is later than it was set at the key
+    /// decision: the delay is counted from the radio's answer, however long the key took, never
+    /// from the decision before it. Says how long from `at` the loop must then hold PTT before the
+    /// first sample, in ms. `None` without one: nothing moves, and the lead-in holds as it did.
+    pub fn keyed_at(&mut self, at: Instant) -> Option<u64> {
+        match &mut self.phase {
+            Phase::Keyed(over) if over.amp_lead_ms > 0 => {
+                let start = over.start.max(at + Duration::from_millis(over.amp_lead_ms));
+                over.behind += start.saturating_duration_since(over.start);
+                over.start = start;
+                Some(over.start.saturating_duration_since(at).as_millis() as u64)
+            }
+            _ => None,
+        }
+    }
+
+    /// How far behind the audio arriving for it the keyed over plays because of an amplifier TX
+    /// delay ([`MicGates::amp_delay_ms`]); zero without one, or with no over keyed. A release that
+    /// lets the over's audio play out lets this much more of it.
+    pub fn behind(&self) -> Duration {
+        match &self.phase {
+            Phase::Keyed(over) => over.behind,
+            _ => Duration::ZERO,
+        }
+    }
+
     /// An over is armed or keyed: it owns the transmitter.
     pub fn active(&self) -> bool {
         !matches!(self.phase, Phase::Idle)
@@ -699,7 +735,7 @@ impl MicLatch {
             };
             let mut over = Over {
                 keyed_ms: gates.now_ms,
-                start: gates.now + Duration::from_millis(mode.lead_in_ms),
+                start: gates.now + Duration::from_millis(mode.lead_in_ms.max(gates.amp_delay_ms)),
                 cursor: 0,
                 media0: first.media,
                 last_arrival: first.arrived,
@@ -712,7 +748,12 @@ impl MicLatch {
                 end: first.end(),
                 released: false,
                 play_until: None,
+                amp_lead_ms: gates.amp_delay_ms,
+                behind: Duration::ZERO,
             };
+            if over.amp_lead_ms > 0 {
+                over.behind = over.start.saturating_duration_since(first.arrived);
+            }
             over.count_voice(&mode, &first);
             over.frames.push_back(first);
             for frame in arrived {
@@ -771,7 +812,10 @@ impl Over {
         if (frame.end() as i128) <= playing {
             return; // late: its moment has been played, or skipped
         }
-        if frame.media as i128 > playing + mode.samples(mode.max_early_ms) as i128 {
+        // An over held back by the amplifier TX delay plays that far behind the audio arriving for
+        // it, for the whole over: a frame may be early by that much more.
+        let behind = mode.samples_in(self.behind);
+        if frame.media as i128 > playing + (mode.samples(mode.max_early_ms) + behind) as i128 {
             return; // not this stream: the page's media clock jumped
         }
         if self
@@ -863,6 +907,7 @@ mod tests {
             now_secs: 1_000,
             watchdog_limit_secs: 0,
             watchdog_start_secs: None,
+            amp_delay_ms: 0,
         }
     }
 
@@ -973,6 +1018,81 @@ mod tests {
             voice.contains(&0.5),
             "the keying frame's audio did not follow the pre-roll"
         );
+    }
+
+    // ── The amplifier TX delay ────────────────────────────────────────────────────────────────
+
+    /// A latch keyed on a first frame at `t0` with the amplifier TX delay at `amp_ms`.
+    fn keyed_with_amp(t0: Instant, amp_ms: u64) -> MicLatch {
+        let mut latch = MicLatch::default();
+        assert!(latch.arm());
+        let gates = MicGates {
+            amp_delay_ms: amp_ms,
+            ..up(t0)
+        };
+        let res = latch.tick(gates, vec![frame(1, 0, t0, 0.5)], PLENTY);
+        assert_eq!(res.tick, MicTick::Key, "precondition: the first frame keys");
+        latch
+    }
+
+    /// ⭐ T7. AN AMPLIFIER TX DELAY IS A LONGER LEAD-IN, COUNTED FROM THE RADIO'S ANSWER: nothing is
+    /// fed before the answer plus the delay, however long the key took, and the voice that arrived
+    /// while it waited is all there after the pre-roll, not refused as too early. CONTROL: with no
+    /// delay the answer moves nothing and the lead-in is the 60 ms it always was.
+    #[test]
+    fn an_amp_delay_holds_the_microphone_from_the_radios_answer() {
+        let t0 = Instant::now();
+        // No delay: nothing moves.
+        let mut latch = keyed(t0);
+        assert_eq!(
+            latch.keyed_at(t0 + ms(200)),
+            None,
+            "CONTROL: no delay, no hold"
+        );
+        let res = latch.tick(up(t0 + ms(MIC.lead_in_ms)), Vec::new(), PLENTY);
+        assert!(
+            matches!(res.tick, MicTick::Samples(_)),
+            "CONTROL: fed at the lead-in"
+        );
+
+        // 300 ms, the radio answering 200 ms after the decision: nothing until 500 ms.
+        let mut latch = keyed_with_amp(t0, 300);
+        assert_eq!(latch.keyed_at(t0 + ms(200)), Some(300));
+        let mut fed = Vec::new();
+        for k in 1..60u64 {
+            let now = t0 + ms(20 * k);
+            let frames = vec![frame(k + 1, MIC.samples(20) * k, now, 0.5)];
+            let gates = MicGates {
+                amp_delay_ms: 300,
+                ..up(now)
+            };
+            let res = latch.tick(gates, frames, PLENTY);
+            assert_eq!(res.drop, None, "tick {k}: the over was dropped");
+            if let MicTick::Samples(s) = res.tick {
+                assert!(
+                    20 * k >= 500,
+                    "tick {k}: fed {} ms after the decision, inside the delay",
+                    20 * k
+                );
+                fed.extend(s);
+            }
+        }
+        let pre_roll = MIC.samples(MIC.ahead_ms) as usize;
+        assert!(
+            fed[..pre_roll].iter().all(|&x| x == 0.0),
+            "the pre-roll carried audio"
+        );
+        // The voice from the first frame on, none of it skipped while the over waited.
+        let voice = &fed[pre_roll..];
+        assert!(
+            voice.len() >= MIC.samples(500) as usize && voice.iter().take(6_000).all(|&x| x == 0.5),
+            "the voice that arrived inside the delay was lost ({} samples fed after the pre-roll)",
+            voice.len()
+        );
+
+        // An answer that comes before the delay's end set at the decision changes nothing.
+        let mut latch = keyed_with_amp(t0, 300);
+        assert_eq!(latch.keyed_at(t0), Some(300));
     }
 
     // ── M5: push-to-talk only ─────────────────────────────────────────────────────────────────

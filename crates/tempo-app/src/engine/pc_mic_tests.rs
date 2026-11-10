@@ -1093,6 +1093,59 @@ fn count(samples: &[f32], level: f32) -> usize {
     samples.iter().filter(|&&x| x == level).count()
 }
 
+/// ⭐ T7, the computer microphone: with an amplifier TX delay the first sample waits it from the
+/// radio's answer, and the over then plays that far behind the microphone, so a release lets that
+/// much more play out: speech up to the release still goes, none of it after. CONTROL: with no
+/// delay the answer moves nothing.
+#[test]
+fn an_amp_delay_holds_the_computer_microphone_and_its_release_keeps_the_last_word() {
+    let mut e = station();
+    let mut s = e.settings.clone();
+    s.amp_tx_delay_ms = 300;
+    e.apply_restored_settings(s);
+    e.set_operating_mode("phone", false);
+    let t0 = Instant::now();
+    e.set_ptt(true);
+    assert_eq!(e.poll_pc_mic(t0, TICK, 1), MicTick::Armed);
+    e.push_pc_mic(&audio(20, VOICE), t0);
+    assert_eq!(
+        e.poll_pc_mic(t0, TICK, 1),
+        MicTick::Key,
+        "premise: audio keys"
+    );
+    // The radio answers 100 ms after the decision: the first sample waits until 400 ms.
+    assert_eq!(e.pc_mic_keyed_at(t0 + ms(100)), Some(300));
+    let mut fed = Vec::new();
+    let mut t = 20;
+    while t < 1_000 {
+        e.push_pc_mic(&audio(20, VOICE), t0 + ms(t));
+        if let MicTick::Samples(samples) = e.poll_pc_mic(t0 + ms(t), 40.0, 1) {
+            assert!(t >= 400, "fed {t} ms after the decision, inside the delay");
+            fed.extend(samples);
+        }
+        t += 20;
+    }
+    // Released at 1 s, having spoken from 0 to 1 s: the whole second goes, nothing after it.
+    e.release_pc_mic_at(t0 + ms(1_000));
+    let (after, ended) = run_tail(&mut e, t0 + ms(1_000), 1_000);
+    assert!(ended.is_some(), "the over never ended");
+    let sent = count(&fed, VOICE) + count(&after, VOICE);
+    assert_eq!(
+        sent,
+        PC_MIC.samples(1_000) as usize,
+        "not the whole second spoken"
+    );
+    assert_eq!(
+        count(&after, AFTER),
+        0,
+        "audio captured after the release was sent"
+    );
+
+    // CONTROL: no delay, the answer moves nothing.
+    let (mut e, _t0, _r, _before) = tail_scene(150);
+    assert_eq!(e.pc_mic_keyed_at(Instant::now()), None);
+}
+
 /// 150 ms queued at the release: all of it is sent, then the radio unkeys, when it has played
 /// (150 ms after the release, and never past 200 ms). Nothing captured after the release is sent.
 #[test]

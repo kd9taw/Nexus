@@ -14509,10 +14509,16 @@ impl RadioLoop {
                             self.mic_keyed = true;
                             self.mic_busy_until = now;
                             // The lead-in and the silent pre-roll come before any audio is
-                            // queued: hold PTT across them, and no further.
-                            let until = now
-                                + (MIC.lead_in_ms + MIC.ahead_ms) as f64
-                                + crate::slot::TX_TAIL_MS;
+                            // queued: hold PTT across them, and no further. An amplifier TX delay
+                            // is a longer lead-in, counted from the radio's answer (`keyed_at`).
+                            let amp = engine_lock(engine).remote_mic_keyed_at(Instant::now());
+                            let until = match amp {
+                                None => now + (MIC.lead_in_ms + MIC.ahead_ms) as f64,
+                                Some(lead) => {
+                                    (now_unix_ms() - self.clock_offset_ms as f64).max(now)
+                                        + (lead + MIC.ahead_ms) as f64
+                                }
+                            } + crate::slot::TX_TAIL_MS;
                             self.tx_until_ms =
                                 Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
                         }
@@ -14773,9 +14779,16 @@ impl RadioLoop {
                         } else {
                             self.pc_mic_keyed = true;
                             self.pc_mic_busy_until = now;
-                            let until = now
-                                + (PC_MIC.lead_in_ms + PC_MIC.ahead_ms) as f64
-                                + crate::slot::TX_TAIL_MS;
+                            // An amplifier TX delay is a longer lead-in, counted from the radio's
+                            // answer (`keyed_at`): PTT is held across it.
+                            let amp = engine_lock(engine).pc_mic_keyed_at(Instant::now());
+                            let until = match amp {
+                                None => now + (PC_MIC.lead_in_ms + PC_MIC.ahead_ms) as f64,
+                                Some(lead) => {
+                                    (now_unix_ms() - self.clock_offset_ms as f64).max(now)
+                                        + (lead + PC_MIC.ahead_ms) as f64
+                                }
+                            } + crate::slot::TX_TAIL_MS;
                             self.tx_until_ms =
                                 Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
                         }
