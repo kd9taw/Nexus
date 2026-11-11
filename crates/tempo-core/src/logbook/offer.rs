@@ -39,7 +39,9 @@
 //!
 //! **The island is never filled** (operator ruling, 2026-11-10). No spot or callbook names one, only
 //! a group, so `IOTA_ISLAND_ID` is written only where the operator picked an island from the
-//! group's list on a log form or the contact card; nothing here writes it.
+//! group's list on a log form or the contact card; nothing here writes it. An island is one group's,
+//! so a change that moves or clears the group takes it off unless the same change picked it
+//! ([`drop_stale_island`]): an edit, a field change on the contact card, LoTW's detail.
 
 use super::callbook::{CallbookAnswer, CALLBOOK_FILLED_FIELD};
 use super::{extra_value, set_extra, valid_iota, QsoRecord};
@@ -297,6 +299,26 @@ pub fn iota_island_id(rec: &QsoRecord) -> Option<u32> {
 pub fn take_island_pick(rec: &mut QsoRecord, picked: Option<u32>) {
     let island = picked.filter(|_| rec.ota.iota.as_deref().and_then(valid_iota).is_some());
     set_extra(rec, IOTA_ISLAND_ID_FIELD, island.map(|id| id.to_string()));
+}
+
+/// An island is one group's: when a change from `old` to `rec` moves the IOTA reference to another
+/// group or clears it, and leaves [`IOTA_ISLAND_ID_FIELD`] as it was, the island comes off. An
+/// island the same change set or removed is that change's, and stays as it made it. Every path that
+/// changes a stored reference calls this: an edit (`logbook::edited`), the fields a contact card
+/// sets (`logbook::fields_set`, its Clear), and LoTW's detail replacing a filled one (`reconcile`).
+pub fn drop_stale_island(old: &QsoRecord, rec: &mut QsoRecord) {
+    let group = |r: &QsoRecord| {
+        r.ota
+            .iota
+            .as_deref()
+            .map(|v| v.trim().to_ascii_uppercase())
+            .filter(|v| !v.is_empty())
+    };
+    if group(old) != group(rec)
+        && extra_value(old, IOTA_ISLAND_ID_FIELD) == extra_value(rec, IOTA_ISLAND_ID_FIELD)
+    {
+        set_extra(rec, IOTA_ISLAND_ID_FIELD, None);
+    }
 }
 
 /// Append `IOTA <reference> <name>` to `rec`'s COMMENT, after anything already there (separated by
@@ -758,6 +780,68 @@ mod tests {
             ("OC-146", _) => Some("Example  Reef ".into()),
             _ => None,
         }
+    }
+
+    /// A contact holding a group and an island picked in it.
+    fn with_island(group: &str, island: &str) -> QsoRecord {
+        let mut r = rec("IA5X");
+        r.ota.iota = Some(group.into());
+        set_extra(&mut r, IOTA_ISLAND_ID_FIELD, Some(island.into()));
+        r
+    }
+
+    /// REVIEW REPRO: the contact card's Clear of a filled reference takes its island with it, never
+    /// leaving an island with no group. A field change that sets the island itself is kept.
+    #[test]
+    fn clearing_a_filled_reference_on_the_card_leaves_no_orphan_island() {
+        let mut r = with_island("NA-046", "9001");
+        set_extra(&mut r, OFFER_HELD_FIELD, Some("IOTA".into()));
+        fields_set(&mut r, &[("IOTA".into(), None)]);
+        assert_eq!(r.ota.iota, None, "premise: cleared");
+        assert_eq!(iota_island_id(&r), None, "the island goes with it");
+
+        let mut r = with_island("NA-046", "9001");
+        fields_set(
+            &mut r,
+            &[(IOTA_ISLAND_ID_FIELD.into(), Some("9002".into()))],
+        );
+        assert_eq!(iota_island_id(&r), Some(9002), "CONTROL: a re-pick is kept");
+    }
+
+    /// REVIEW REPRO: an edit to another group, or one that clears the group, takes the old group's
+    /// island off; one that keeps the group, or picks an island in the same edit, keeps it.
+    #[test]
+    fn an_edit_to_another_group_leaves_no_stale_island() {
+        let old = with_island("EU-005", "9001");
+        let mut moved = old.clone();
+        moved.ota.iota = Some("EU-011".into());
+        assert_eq!(iota_island_id(&edited(&old, moved)), None, "another group");
+
+        let mut same = old.clone();
+        same.ota.iota = Some(" eu-005".into());
+        same.name = Some("Ann".into());
+        assert_eq!(
+            iota_island_id(&edited(&old, same)),
+            Some(9001),
+            "the same group"
+        );
+
+        let mut repicked = old.clone();
+        repicked.ota.iota = Some("EU-011".into());
+        set_extra(&mut repicked, IOTA_ISLAND_ID_FIELD, Some("9100".into()));
+        assert_eq!(
+            iota_island_id(&edited(&old, repicked)),
+            Some(9100),
+            "picked with it"
+        );
+
+        let mut cleared = old.clone();
+        cleared.ota.iota = None;
+        cleared.ota.their_ref = Some("US-0001".into());
+        cleared.ota.their_program = Some("POTA".into());
+        let after = edited(&old, cleared);
+        assert_eq!(after.ota.iota, None, "premise: the edit cleared the group");
+        assert_eq!(iota_island_id(&after), None, "cleared");
     }
 
     /// AN ISLAND PICKED: the comment names it instead of its group; an id that is no valid island

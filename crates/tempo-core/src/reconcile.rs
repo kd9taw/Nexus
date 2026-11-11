@@ -683,7 +683,10 @@ fn keep_lotw_detail(rec: &mut QsoRecord, inc: &QsoRecord) {
     }
     if let Some(iota) = given(&inc.ota.iota) {
         if take(rec, "IOTA", rec.ota.iota.as_deref()) {
+            // An island picked in the group LoTW replaces is that group's, and goes with it.
+            let was = rec.clone();
             rec.ota.iota = Some(iota);
+            crate::logbook::offer::drop_stale_island(&was, rec);
             unmark_callbook_filled(rec, "IOTA");
             crate::logbook::offer::unmark_offer_held(rec, "IOTA");
         }
@@ -2384,6 +2387,31 @@ mod tests {
             Some("NA-047"),
             "the operator's stays"
         );
+    }
+
+    /// REVIEW REPRO: LoTW replacing a filled group takes the island picked in it off, so the contact
+    /// never says NA-001 with an NA-046 island; a LoTW row naming the same group keeps it.
+    #[test]
+    fn lotw_replacing_a_filled_group_leaves_no_stale_island() {
+        use crate::logbook::offer::{
+            accept_iota_offer, iota_island_id, IotaOffer, OfferSource, IOTA_ISLAND_ID_FIELD,
+        };
+        let d = 20_000;
+        let spot = IotaOffer {
+            reference: "NA-046".into(),
+            source: OfferSource::Spot,
+        };
+        let mut filled = under(w1aw_at(d, 12, 0), "K2DEF");
+        assert!(accept_iota_offer(&mut filled, &spot));
+        crate::logbook::set_extra(&mut filled, IOTA_ISLAND_ID_FIELD, Some("9001".into()));
+        for (signs, want) in [("NA-001", None), ("NA-046", Some(9001))] {
+            let mut signed = under(confirms(w1aw_at(d, 12, 0), "DXCC"), "K2DEF");
+            signed.ota.iota = Some(signs.into());
+            let mut log = vec![filled.clone()];
+            reconcile_lotw(&mut log, std::slice::from_ref(&signed), Some("K2DEF"));
+            assert_eq!(log[0].ota.iota.as_deref(), Some(signs), "premise");
+            assert_eq!(iota_island_id(&log[0]), want, "LoTW signs {signs}");
+        }
     }
 
     /// ★ LoTW's QSL detail keeps what it carries for the contact: the partner's grid, county,

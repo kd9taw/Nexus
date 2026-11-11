@@ -2056,10 +2056,13 @@ export function Logbook({
         qslSentVia: (draft.qslSentVia || null) as QsoEdit['qslSentVia'],
         qslCard: draft.qslCard === '1',
       }
-      // An island is one group's: a new group takes off the island the contact had.
+      // An island is one group's: a new group, or a box cleared, takes off the island the contact
+      // had. (A cleared box leaves the stored group itself, as blank does on this form; the island
+      // goes so the operator is never left with one they meant to remove.)
       const storedIsland = existing.extra?.find(([k]) => k === IOTA_ISLAND_TAG)?.[1] ?? null
-      const newGroup = iota !== null && iota !== (existing.ota?.iota ?? '').trim().toUpperCase()
-      const fields: FieldEdit[] = newGroup && storedIsland !== null ? [{ tag: IOTA_ISLAND_TAG, old: storedIsland, new: null }] : []
+      const storedGroup = (existing.ota?.iota ?? '').trim().toUpperCase() || null
+      const groupChanged = iota !== storedGroup
+      const fields: FieldEdit[] = groupChanged && storedIsland !== null ? [{ tag: IOTA_ISLAND_TAG, old: storedIsland, new: null }] : []
       const answer = await saveEdit(ref, edit, fields, existing.call)
       if (!answer || answer.kind === 'busy') return
       if (answer.kind === 'changed') {
