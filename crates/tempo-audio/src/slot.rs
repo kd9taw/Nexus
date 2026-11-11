@@ -2338,12 +2338,8 @@ mod tests {
         // WSJT-X holds it. It used to drop PTT on the next tick.
         let wave = armed_engine().poll_tx(0).remove(0);
         let mut eng = armed_engine();
-        // The wall clock 10.95 s into the slot; the tick read 11.2 s, ahead of it, so the decision is
-        // exactly 11.2 s in.
-        let offset = eng.clock_offset_ms().unwrap_or(0) - 10_950;
-        eng.set_clock_offset_ms(Some(offset));
-        assert_eq!(eng.clock_offset_ms(), Some(offset), "premise: steered");
-        let slot_start = steered_slot_start(&eng);
+        // The stand-in rigctld first, so nothing between the steer and the decision's clock read
+        // spends the 300 ms between 10.95 s and the latest key.
         let (addr, log, _) = keying_rigctld("RPRT 0", 0);
         let mut rig = Rig::rigctld(&addr);
         let mut backend = SlowOpen {
@@ -2351,6 +2347,13 @@ mod tests {
             played: Vec::new(),
         };
         let mut rx = RxRing::new();
+        // The wall clock 10.95 s into the slot; the tick read 11.2 s, ahead of it, so the decision is
+        // exactly 11.2 s in.
+        align_to_slot_start(&mut eng, 0);
+        let offset = eng.clock_offset_ms().unwrap_or(0) - 10_950;
+        eng.set_clock_offset_ms(Some(offset));
+        assert_eq!(eng.clock_offset_ms(), Some(offset), "premise: steered");
+        let slot_start = steered_slot_start(&eng);
         let act = slot_tx_phase(
             &mut eng,
             &mut rig,
@@ -2469,6 +2472,13 @@ mod tests {
             std::time::Instant::now()
         });
         held.recv().unwrap();
+        // The stand-in rigctld first: everything between the steer and the decision's clock read
+        // spends the 175 ms between 5.45 s and the latest key, and a thread started on a loaded
+        // box can take that. Steered last, as the slow-split scenes are.
+        let (addr, log, _) = keying_rigctld("RPRT 0", 0);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut rx = RxRing::new();
         // The wall clock 5.45 s into the slot; the tick read 5.60 s, ahead of it, so the decision is
         // exactly 5.60 s in.
         align_to_slot_start(&mut eng, 0);
@@ -2479,7 +2489,19 @@ mod tests {
         until_tx
             .send((offset as f64, slot_start + 5_700.0))
             .unwrap();
-        let (act, backend, sent) = tx_phase_at(&mut eng, 5_600.0, None);
+        let act = slot_tx_phase(
+            &mut eng,
+            &mut rig,
+            &mut backend,
+            &mut rx,
+            0,
+            slot_start + 5_600.0,
+            false,
+            None,
+            None,
+            false,
+        );
+        let sent = log.lock().unwrap().clone();
         let returned = std::time::Instant::now();
         let let_go = decode.join().unwrap();
         assert!(
