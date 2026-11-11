@@ -1640,7 +1640,11 @@ impl Engine {
             }
             if gates.watchdog_limit_secs > 0 {
                 let start = *self.tx_watchdog_start.get_or_insert(gates.now_secs);
-                if gates.now_secs.saturating_sub(start) >= gates.watchdog_limit_secs {
+                if crate::keyboard::watchdog_tripped(
+                    start,
+                    gates.now_secs,
+                    gates.watchdog_limit_secs,
+                ) {
                     self.jtty_watchdog_trip();
                     return JttyTick::Idle;
                 }

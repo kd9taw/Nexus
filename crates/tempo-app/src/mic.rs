@@ -724,7 +724,11 @@ impl MicLatch {
             if gates.watchdog_limit_secs > 0 {
                 let start = gates.watchdog_start_secs.unwrap_or(gates.now_secs);
                 watchdog_start = Some(start);
-                if gates.now_secs.saturating_sub(start) >= gates.watchdog_limit_secs {
+                if crate::keyboard::watchdog_tripped(
+                    start,
+                    gates.now_secs,
+                    gates.watchdog_limit_secs,
+                ) {
                     let mut res = MicTickResult::dropped(MicDrop::Watchdog);
                     res.watchdog_start = watchdog_start;
                     return res;
