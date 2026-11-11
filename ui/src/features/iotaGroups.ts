@@ -12,6 +12,19 @@ export const IOTA_SITE = 'https://www.iota-world.org/'
 /** The shape of a reference: a continent code and three digits. */
 export const IOTA_SHAPE = /^(AF|AN|AS|EU|NA|OC|SA)-\d{3}$/
 
+/** The obvious spellings of a reference an operator types: a continent code, then a hyphen, a space
+ *  or nothing, then one to three digits ("eu-5", "EU 5", "EU-05", "eu005"). */
+const IOTA_TYPED = /^(AF|AN|AS|EU|NA|OC|SA)[-\s]?(\d{1,3})$/i
+
+/**
+ * A typed IOTA reference in the log's one spelling (`EU-005`), from any obvious shape of it; null
+ * for anything else, which a form must then say is not a reference rather than log it as nothing.
+ */
+export function normalizeIota(raw: string | null | undefined): string | null {
+  const m = IOTA_TYPED.exec((raw ?? '').trim())
+  return m ? `${m[1].toUpperCase()}-${m[2].padStart(3, '0')}` : null
+}
+
 let names: Map<string, string> | null = null
 let status: IotaListStatus | null = null
 let loading: Promise<void> | null = null

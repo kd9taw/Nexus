@@ -63,7 +63,7 @@ import { ContestScoreChip } from './ContestScoreChip'
 import { pushToast, withErrorToast } from '../toast'
 import { isStreamInput } from '../remote-native/stream-input'
 import { normaliseTyped, oneLineTyped, upperTyped } from '../typedInput'
-import { IotaOfferChip, useIotaOffer } from './Iota'
+import { IotaPrefillField, iotaInvalid, iotaToLog, useIotaPrefill } from './Iota'
 
 // ---------------------------------------------------------------------------
 // THE DYNAMIC ENTRY STRIP (spec §9) — Call plus one box per slot the session's role
@@ -106,6 +106,12 @@ function fillTitle(source: FillSource | undefined, file: string): string {
   if (source === 'contest') return t('logEntry.fill.contest.title')
   if (source?.startsWith('log:')) return t('logEntry.fill.log.title', { year: source.slice(4) })
   return t('logEntry.history.title', { file })
+}
+
+/** A contact's park side with the IOTA reference the strip's box holds beside it, or the park side
+ *  alone when the box holds none. */
+function withIota(park: { theirProgram: string; theirRef: string } | undefined, iota: string | null): LoggedQso['ota'] {
+  return iota ? { ...park, iota } : park
 }
 
 /** A row's UTC time as HH:MM, the DUPE badge's "when". Digits only: an invariant token. */
@@ -1890,12 +1896,13 @@ export function LogEntry({
   const newModeSlot =
     slots.workedEver && !newBandSlot && !slots.modesWorked.includes(modeKey(mode))
 
-  // The IOTA reference the station offers this call (a spot comment's, or the callbook's): shown as
-  // a chip, logged only when the operator takes it (operator decision, 2026-10-27). Asked again when
-  // a lookup here answers. Not in a contest strip, nor from a Remote browser, whose log goes by
-  // another road.
+  // The IOTA reference the station names for this call (a spot comment's, or the callbook's): put in
+  // the strip's IOTA box and logged with the contact as the box holds it, so the operator can change
+  // or clear it first (operator ruling, 2026-11-10). Asked again when a lookup here answers. Not in a
+  // contest strip, nor from a Remote browser, whose log goes by another road (the station fills it).
   const [lookupTick, setLookupTick] = useState(0)
-  const iotaOffer = useIotaOffer(logCall, null, lookupTick, remoteMode || fdActive)
+  const [logIota, setLogIota] = useState('')
+  const iotaPrefill = useIotaPrefill(logCall, logIota, setLogIota, lookupTick, remoteMode || fdActive)
 
   // QRZ callbook autofill — fills ONLY blank fields, never clobbers operator input. The
   // explicit button toasts; the on-blur auto-lookup is silent on failure so an operator
@@ -2075,9 +2082,10 @@ export function LogEntry({
     setLogImage(null)
     setPark('')
     setWorkPark(null)
-    // A Use pressed on the IOTA offer was for this contact, logged or let go of (Clear, a band
-    // change setting the line aside): the next one, even the same call, starts with nothing taken.
-    iotaOffer.reset()
+    // The IOTA box was this contact's, logged or let go of (Clear, a band change setting the line
+    // aside): the next one, even the same call, starts empty and is filled again.
+    setLogIota('')
+    iotaPrefill.reset()
     if (!remoteMode) void setCwPeerInfo('', '', '') // clear the {HISNAME}/{HISSTATE} tokens for the next contact
     // The entry line ended WITHOUT logging (the clear button, or moving on). The serial that
     // station copied stays bound to them — come back later and they get the same one — but the
@@ -2413,6 +2421,12 @@ export function LogEntry({
     }
 
     // Standard logbook path.
+    // A box that holds something no spelling makes a reference of is said so beside the box, and
+    // the contact is not logged as if the box were empty: the operator fixes or clears it first.
+    if (!remote && iotaInvalid(logIota)) {
+      pushToast(t('logbook.form.iotaInvalid'), 'error')
+      return false
+    }
     const rstSent = rstSentShown.trim() || defaultRst
     const rstRcvd = rstRcvdShown.trim() || defaultRst
     // Override open → the hand-entered UTC instant (one that is not a real date and time held
@@ -2462,7 +2476,7 @@ export function LogEntry({
       // …the pending hunt's park FOR ITS OWN STATION. The same park in the box for another call (a
       // second activator at that park, clicked in Needed or typed) is that call's park, and the
       // auto-tag, which matches by call, would never put it on this record.
-      ota:
+      ota: withIota(
         asksForPark &&
         logParkRef.trim() &&
         !(
@@ -2471,6 +2485,8 @@ export function LogEntry({
         )
           ? { theirProgram: logParkProgram, theirRef: logParkRef.trim().toUpperCase() }
           : undefined,
+        remote ? null : iotaToLog(logIota),
+      ),
     }
     if (remote) {
       try { await remote.submit(rec, overrideOpen ? 'explicit' : 'station'); reset(); loggedFromStrip(call, effBand); return true }
@@ -2481,7 +2497,7 @@ export function LogEntry({
     // still on screen, and kept again from the next render on.
     committing.current = true
     if (draft) writeLogDraft(draft, null)
-    const r = await withErrorToast(() => logQso(rec, stateSourceRef.current, iotaOffer.taken), t('logEntry.logFailed'))
+    const r = await withErrorToast(() => logQso(rec, stateSourceRef.current, iotaPrefill.taken), t('logEntry.logFailed'))
     committing.current = false
     if (r) {
       pushToast(t('logEntry.logged', { call, mode: effMode }), 'success')
@@ -3556,7 +3572,7 @@ export function LogEntry({
         </div>
       )}
 
-      <IotaOfferChip state={iotaOffer} />
+      {!remoteMode && !fdActive && <IotaPrefillField state={iotaPrefill} value={logIota} />}
 
       <div className="le-row">
         <input

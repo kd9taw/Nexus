@@ -8,6 +8,12 @@
 // prompt to log), `radiopicker` (the launch radio picker), `scrim` (an aria-modal `.logconfirm-backdrop` as the
 // Logbook draws its confirmations), or `bandmenu` (none drawn here: the probe opens the band pill's menu with a real
 // click). `window.__probeHalts()` counts Stop TX's clicks. No station: every command is refused.
+//
+// THE FILLED IOTA BOX (`&iota=1`): the station names EU-901 for any call (`get_iota_offer`, from a spot) and the island
+// list holds it under a very long group name, so the prompt to log (`overlay=logconfirm`) opens with its IOTA box
+// filled, and `overlay=strip` (no overlay: the real log strip, LogEntry, below the top bar) fills its box once a call
+// is typed. `&zoom=<n>` sets the UI scale (`--ui-zoom`); `&iotacontrol=1` keeps the group name on one line, the
+// control that must come back NOT drawn whole.
 import '../styles.css'
 import '../cockpit-panes.css'
 import { useEffect, useState } from 'react'
@@ -18,6 +24,8 @@ import { Dialog } from '../components/ui/Dialog'
 import { ConfirmHost, confirmDialog } from '../confirm'
 import { LogConfirm } from '../components/LogConfirm'
 import { RadioPicker } from '../components/RadioPicker'
+import { LogEntry } from '../components/LogEntry'
+import type { AppSnapshot } from '../types'
 import { useViewport } from '../useViewport'
 import type { LinkState, LoggedQso, RadioStatus } from '../types'
 import type { RadioLaunchInfo } from '../api'
@@ -27,7 +35,29 @@ const overlay = params.get('overlay') ?? 'dialog'
 
 document.documentElement.setAttribute('data-theme', 'dark')
 localStorage.clear()
-window.__TAURI_INTERNALS__ = { invoke: (cmd: string) => Promise.reject(new Error(`${cmd} is not answered in the stop-above probe`)) }
+if (params.get('zoom')) document.documentElement.style.setProperty('--ui-zoom', params.get('zoom')!)
+if (params.get('iotacontrol') === '1') {
+  const s = document.createElement('style')
+  s.textContent = '.iota-name, .iota-name-text { white-space: nowrap !important; overflow-wrap: normal !important; }'
+  document.head.appendChild(s)
+}
+/** A group name as long as IOTA's longest run: a list of islands with their other names. */
+const LONG_GROUP =
+  'Eolie Islands (Lipari, Salina, Vulcano, Stromboli, Panarea, Filicudi, Alicudi and the rocks of Basiluzzo, Dattilo and Strombolicchio) - aka Aeolian Islands'
+const IOTA_ANSWERS: Record<string, unknown> =
+  params.get('iota') === '1'
+    ? {
+        get_iota_offer: { reference: 'EU-901', source: 'spot' },
+        get_iota_list_status: { enabled: true, count: 1, fetchedAt: 1_790_000_000, bundled: true, lastError: null },
+        get_iota_groups: [{ reference: 'EU-901', name: LONG_GROUP }],
+      }
+    : {}
+window.__TAURI_INTERNALS__ = {
+  invoke: <T,>(cmd: string): Promise<T> =>
+    cmd in IOTA_ANSWERS
+      ? Promise.resolve(IOTA_ANSWERS[cmd] as T)
+      : Promise.reject(new Error(`${cmd} is not answered in the stop-above probe`)),
+}
 
 let halts = 0
 ;(window as unknown as { __probeHalts: () => number }).__probeHalts = () => halts
@@ -76,6 +106,8 @@ function Overlay() {
   }
 }
 
+const SNAP = { mycall: 'KD9TAW', mygrid: 'EN52', radio: { band: '20m', dialMhz: 14.025 }, hunt: null } as unknown as AppSnapshot
+
 function Probe() {
   useViewport(1)
   const noop = () => {}
@@ -88,7 +120,9 @@ function Probe() {
           onSetTxEven={noop} onSetTxCycleAuto={noop} onSetHoldTxFreq={noop} onStopRecording={noop}
           tier="FT8" onTierChange={noop} onOpenGuide={noop} field={false} onFieldChange={noop}
         />
-        <main className="probe-below" style={{ flex: 1 }} />
+        <main className="probe-below" style={{ flex: 1 }}>
+          {overlay === 'strip' && <LogEntry snap={SNAP} mode="CW" defaultRst="599" exchange="terrestrial" titled={false} />}
+        </main>
       </div>
       <Overlay />
       <StopLayer />

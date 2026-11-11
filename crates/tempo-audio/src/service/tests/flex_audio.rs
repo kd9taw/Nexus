@@ -1783,6 +1783,7 @@ fn switch(s: &mut FlexScene, pool: &MonitorPool, from: u32, to: u32) {
         &s.engine,
         pool,
         &mut s.rig,
+        &mut s.backend,
         &mut s.state,
         &mut last_active,
         &pending,

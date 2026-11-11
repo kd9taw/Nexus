@@ -150,13 +150,13 @@ impl FieldEdit {
                 "'{tag}' is not an ADIF field name — use capitals, digits and _ only, such as CNTY."
             ));
         }
-        // The one mark the operator takes off by hand: confirming a reference taken from an offer
+        // The one mark the operator takes off by hand: owning a reference Nexus filled at log time
         // (`offer::OFFER_HELD_FIELD`) — removal only, never a value.
         if tag == super::offer::OFFER_HELD_FIELD && self.value().is_none() {
             return Ok(());
         }
         // And clearing such a reference instead (`super::fields_set`): removal only, and
-        // [`Self::check_on`] refuses it on a reference not held. Any other is changed in its box.
+        // [`Self::check_on`] refuses it on a reference Nexus did not fill. Any other is changed in its box.
         if tag == "IOTA" && self.value().is_none() {
             return Ok(());
         }
@@ -185,9 +185,9 @@ impl FieldEdit {
     /// change would be saved and shown, and reach none of them. A column holding only blanks holds
     /// the field as well: the writer writes every non-empty column, in place of a field beside it.
     pub fn check_on(&self, stored: &QsoRecord) -> Result<(), String> {
-        if self.tag == "IOTA" && !super::offer::withhold_iota(stored) {
+        if self.tag == "IOTA" && !super::offer::is_offer_held(stored, "IOTA") {
             return Err(
-                "This contact's IOTA reference is not held for your confirmation — change it in its box."
+                "This contact's IOTA reference was not filled in by Nexus — change it in its box."
                     .to_string(),
             );
         }

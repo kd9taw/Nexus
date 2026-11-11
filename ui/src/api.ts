@@ -512,15 +512,15 @@ export async function getIotaGroups(): Promise<IotaGroup[]> {
   return invoke<IotaGroup[]>('get_iota_groups')
 }
 
-/** An IOTA reference the station OFFERS a contact being logged (`tempo_core::logbook::offer::IotaOffer`),
+/** An IOTA reference the station names for a contact being logged (`tempo_core::logbook::offer::IotaOffer`),
  *  and where it came from: the spot comments for the call, or a callbook lookup made this session. */
 export interface IotaOfferData {
   reference: string
   source: 'spot' | 'callbook'
 }
 
-/** What IOTA reference the station offers the contact a form holds for `call`; null for none, and
- *  none while the form holds a reference of its own (`held`). Asking writes nothing. */
+/** What IOTA reference a log form fills its box with for `call`; null for none, and none while the
+ *  form holds a reference of its own (`held`). Asking writes nothing. */
 export async function getIotaOffer(call: string, held?: string | null): Promise<IotaOfferData | null> {
   return invoke<IotaOfferData | null>('get_iota_offer', { call, held: held ?? null })
 }
@@ -1443,8 +1443,8 @@ export async function resumeChatCq(): Promise<AppSnapshot> {
  * engine refuses an answer whose key is not the head's, so an edited call can never be filed
  * onto a contact that was promoted while the operator was typing.
  *
- * `iotaOffer` is the IOTA offer the operator took in the popup: the station writes it into an
- * empty IOTA field, held back from uploads until the operator touches it. */
+ * The popup's IOTA box is `record.ota.iota`; `iotaOffer` is what the station filled it with, while
+ * the box still holds it, so the log marks it by its source. */
 export async function confirmPendingLog(record: LoggedQso, expectedKey?: string | null, iotaOffer?: IotaOfferData | null): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('confirm_pending_log', { record, expectedKey, ...(iotaOffer ? { iotaOffer } : {}) })
 }
@@ -1565,9 +1565,9 @@ export async function logCurrentQso(): Promise<{ logged: boolean; call?: string 
  *  callbook's, and the operator's outrank both. */
 export type StateSource = 'operator' | 'callbook' | 'park'
 
-/** Append a contact to the ADIF logbook. Returns the fresh snapshot. `iotaOffer` is the IOTA offer
- *  the operator took on the form ([`getIotaOffer`]): written into an empty IOTA field, held back
- *  from uploads until the operator touches it. */
+/** Append a contact to the ADIF logbook. Returns the fresh snapshot. The form's IOTA box is
+ *  `record.ota.iota`; `iotaOffer` is what the form filled it with ([`getIotaOffer`]), while the box
+ *  still holds it, so the log marks it by its source. */
 export async function logQso(record: LoggedQso, stateSource?: StateSource, iotaOffer?: IotaOfferData | null): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('log_qso', { record, stateSource, ...(iotaOffer ? { iotaOffer } : {}) })
 }

@@ -29,10 +29,10 @@ sys.stdout.reconfigure(encoding='utf-8')
 # reports a translator's untouched file as damaged.
 # >>> make-kit pins
 EXPECTED_ROWS = 11158
-EXPECTED_KEYS_SHA = 'cec7c1078089449cfad00d5cd34da71679e516008ad0bd99b7b05969b596051b'
-EXPECTED_ENGLISH_SHA = 'f8e1b2b72487a0a7953679b57140c9e756358f9284152ad62e1f60fd3d4a6a6a'
-EXPECTED_DNT_SHA = '96b1d60d34b5647f2e04b7e51662a6da65b64f2f32221aa9e32b6a69656280bf'
-EXPECTED_TIERS = {1: 1036, 2: 366, 3: 2062, 4: 641, 5: 4560, 6: 2493}
+EXPECTED_KEYS_SHA = '74d50fff25f26aa7582264dda3de96ec94294917cec2a37d4e1f40ef82819c66'
+EXPECTED_ENGLISH_SHA = '9e29747310ea67ff27431db3cab2d804245a52eea2cea8cfa4f695ac3c6e083d'
+EXPECTED_DNT_SHA = 'adf5bf3ac38fb502f35abf217e93eb60aad56921e2cea9dbc7029efd93a64bda'
+EXPECTED_TIERS = {1: 1036, 2: 366, 3: 2062, 4: 639, 5: 4559, 6: 2496}
 # <<< make-kit pins
 COLUMNS = ['priority', 'key', 'english', 'russian', 'do_not_translate', 'notes']
 

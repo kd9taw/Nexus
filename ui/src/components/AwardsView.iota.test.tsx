@@ -98,14 +98,9 @@ describe('Awards: IOTA', () => {
     })
   })
 
-  it('says how many groups are held for the operator to confirm, and says nothing when none are', async () => {
-    await renderWith({ worked: 3, confirmed: 1, cardConfirmed: 0, held: 2 })
-    expect(screen.getByText(EN['awards.iota.note.held'].replace('{{held}}', '2'))).toBeTruthy()
-    // The count takes in callbook references and taken offers, so it may not say "from spots".
-    expect(EN['awards.iota.note.held']).not.toMatch(/spot/i)
+  it('counts a reference Nexus filled like any other: no "waiting to confirm" note', async () => {
+    await renderWith({ worked: 3, confirmed: 1, cardConfirmed: 0 })
     expect(card().value).toContain('1')
-    cleanup()
-    await renderWith({ worked: 3, confirmed: 1, cardConfirmed: 0, held: 0 })
-    expect(document.body.textContent).not.toContain('waiting for you to confirm')
+    expect(document.body.textContent).not.toMatch(/waiting for you to confirm/i)
   })
 })

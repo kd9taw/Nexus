@@ -62,6 +62,11 @@ struct Station {
     /// While set, the rigctld answers the CW stop (`\stop_morse`) only after [`LATE`]: a radio
     /// that has stopped answering it.
     slow_cw_stop: Arc<AtomicBool>,
+    /// The sound card's flushes (`flush`) and the unkeys the rigctld was sent (`T 0`, logged as it
+    /// arrives, before any answer), in the order they happened.
+    order: Arc<Mutex<Vec<String>>>,
+    /// When each unkey reached the rigctld.
+    unkey_heard: Arc<Mutex<Vec<Instant>>>,
     /// The start of the slot the first over is keyed in (ms).
     slot: f64,
     t: f64,
@@ -88,7 +93,15 @@ impl Station {
         let slow_cw_stop = Arc::new(AtomicBool::new(false));
         let slow = Arc::clone(&slow_cw_stop);
         let answered = AtomicUsize::new(0);
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let heard = Arc::clone(&order);
+        let unkey_heard = Arc::new(Mutex::new(Vec::new()));
+        let heard_at = Arc::clone(&unkey_heard);
         let peer = retuning_peer(dial_hz, mode, move |line, radio| {
+            if line == "T 0" {
+                heard_at.lock().unwrap().push(Instant::now());
+                heard.lock().unwrap().push(line.to_string());
+            }
             match line {
                 "T 1" | "T 3" if refuse.load(Ordering::SeqCst) => {
                     return Some("RPRT -1\n".into());
@@ -125,15 +138,19 @@ impl Station {
         // An even FT8 slot 10 to 40 s ahead of the real clock, so the loop's clock stays ahead
         // of it for the whole test, and an over's hold is measured on the loop's.
         let slot = ((now_unix_ms() + 10_000.0) / 30_000.0).ceil() * 30_000.0;
+        let mut backend = MockBackend::new();
+        backend.events = Some(Arc::clone(&order));
         Station {
             engine,
             state: loop_state(),
-            backend: MockBackend::new(),
+            backend,
             rig: Rig::rigctld(&peer.address),
             peer,
             on_air,
             refuses_key,
             slow_cw_stop,
+            order,
+            unkey_heard,
             slot,
             t: slot + 100.0,
         }
@@ -258,7 +275,63 @@ impl Station {
             "{what}: the unkey went on being sent after the radio took it"
         );
     }
+
+    /// Run the one tick at `cut` that sees a stop pressed mid-over on this slow radio
+    /// ([`Unkey::AnswersLate`]), and check what it sent where: the queued over is cleared before
+    /// the unkey goes out, so the sound card plays no more than [`ONE_BUFFER_MS`] of it after the
+    /// stop, and the unkey still goes out in that tick, as soon. `what` names the stop.
+    fn cuts_the_audio_before_the_unkey(
+        &mut self,
+        wsjtx: Option<&WsjtxServer>,
+        cut: f64,
+        what: &str,
+    ) {
+        assert_eq!(self.t, cut, "{what}: premise: the next tick is the cut");
+        self.order.lock().unwrap().clear();
+        let flushes = self.backend.flushed_at.len();
+        let unkeys = self.unkey_heard.lock().unwrap().len();
+        let stop = Instant::now();
+        self.run_with(wsjtx, cut);
+        let order = self.order.lock().unwrap().clone();
+        assert_eq!(
+            self.state.tx_until_ms, None,
+            "{what}: premise: the stop cut the over"
+        );
+        assert_eq!(
+            order.first().map(String::as_str),
+            Some("flush"),
+            "{what}: the unkey went out before the queued over was cleared: {order:?}"
+        );
+        let flushed = *self
+            .backend
+            .flushed_at
+            .get(flushes)
+            .unwrap_or_else(|| panic!("{what}: the queued over was never cleared"));
+        let played_on =
+            flushed.duration_since(stop).as_secs_f64() * f64::from(tempo_fast::SAMPLE_RATE);
+        let one_buffer = ONE_BUFFER_MS / 1_000.0 * f64::from(tempo_fast::SAMPLE_RATE);
+        assert!(
+            played_on <= one_buffer,
+            "{what}: the sound card went on playing the over for {played_on:.0} samples after \
+             the stop (one buffer is {one_buffer:.0})"
+        );
+        let unkeyed = *self
+            .unkey_heard
+            .lock()
+            .unwrap()
+            .get(unkeys)
+            .unwrap_or_else(|| panic!("{what}: no unkey went out in the tick that saw the stop"));
+        let waited = unkeyed.duration_since(stop);
+        assert!(
+            waited.as_secs_f64() * 1_000.0 <= ONE_BUFFER_MS,
+            "{what}: the unkey went out {waited:?} after the stop"
+        );
+    }
 }
+
+/// How much of the queued over the sound card may play after a stop: one buffer of it, tens of
+/// times shorter than the [`LATE`] answer an unkey sent first used to keep it playing for.
+const ONE_BUFFER_MS: f64 = 100.0;
 
 /// ⭐ AN FT8 OVER WHOSE UNKEY THE RADIO REFUSES HALTS TX AND SAYS SO, AND THE UNKEY IS SENT UNTIL THE
 /// RADIO TAKES IT. TX stayed on, nothing was said, and the next cycle keyed the radio again. Now TX
@@ -505,6 +578,47 @@ fn a_loggers_halt_tx_whose_unkey_the_radio_refuses_says_so_and_the_unkey_goes_on
             );
         }
     }
+}
+
+// ── Stop TX and a logger's HaltTx clear the queued over before they unkey ─────────────────────
+// Every other end of an over cleared the audio first; these two unkeyed first, and the unkey waits
+// for the radio's answer, so on a slow network radio the over's tones went on for as long as that
+// took. WSJT-X's `stopTx` stops the Modulator first and lowers PTT after it
+// (`widgets/mainwindow.cpp:8564-8582`, v3.0.2).
+
+/// ⭐ STOP TX ON A SLOW RADIO CLEARS THE QUEUED OVER BEFORE IT UNKEYS. The radio answers the unkey
+/// [`LATE`]: the tones stop at the stop, and the radio's slow answer is a silent carrier. The unkey
+/// still goes out in the tick that saw the stop.
+#[test]
+fn stop_tx_on_a_slow_radio_clears_the_queued_over_before_the_unkey() {
+    let mut s = Station::new(Unkey::AnswersLate);
+    s.key_the_over();
+    let cut = s.slot + 5_000.0;
+    s.run_to(cut - 20.0);
+    assert_eq!(s.unkeys(), 0, "premise: the over is on the air");
+    s.engine.lock().unwrap().halt_tx(); // Stop TX
+    s.cuts_the_audio_before_the_unkey(None, cut, "Stop TX");
+}
+
+/// ⭐ …AND A LOGGER'S HALTTX THE SAME.
+#[test]
+fn a_loggers_halt_tx_on_a_slow_radio_clears_the_queued_over_before_the_unkey() {
+    let logger = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let server =
+        WsjtxServer::new("127.0.0.1:0".parse().unwrap(), logger.local_addr().unwrap()).unwrap();
+    let mut s = Station::new(Unkey::AnswersLate);
+    s.key_the_over();
+    let cut = s.slot + 5_000.0;
+    s.run_with(Some(&server), cut - 20.0);
+    assert_eq!(s.unkeys(), 0, "premise: the over is on the air");
+    logger
+        .send_to(&halt_tx_datagram(), server.local_addr().unwrap())
+        .unwrap();
+    // A datagram arrives between ticks (`a_loggers_halt_tx_whose_unkey_*`); the stop is measured
+    // from the tick that reads it.
+    std::thread::sleep(Duration::from_millis(20));
+    s.cuts_the_audio_before_the_unkey(Some(&server), cut, "HaltTx");
+    assert!(!s.armed(), "premise: the HaltTx turned TX off");
 }
 
 // ── The CW stop after a failed unkey: skipped (operator, 2026-10-05: "Skip it when an unkey

@@ -7,9 +7,9 @@
 //! is never touched. It is pure: the answer is one a lookup already returned, held by the engine;
 //! nothing here asks the network.
 //!
-//! **Never the IOTA reference.** A callbook's island group describes the licensee's record, not
-//! necessarily this activation, so it is OFFERED at log time and written only when the operator
-//! takes it (`super::offer`; operator decision, 2026-10-27).
+//! **Never the IOTA reference here.** A callbook's island group is filled at log time under
+//! `super::offer`'s rules instead (a fresh spot outranks it, a log form shows it first; operator
+//! ruling, 2026-11-10).
 //!
 //! **Where the station is, only when the answer is that station's.** A lookup of a stroked call
 //! (`W1ABC/P`, `KH6/W1ABC`) falls back to the base call's record, which says where the licensee
@@ -415,11 +415,12 @@ mod tests {
         assert_eq!(r.country.as_deref(), Some("United States"));
     }
 
-    /// ★ A callbook's IOTA reference is never stamped into a contact (operator decision,
-    /// 2026-10-27): it describes the licensee's record, not necessarily this activation, so it is
-    /// OFFERED at log time (`offer::iota_offer`) and written only when the operator takes it.
+    /// ★ A callbook's IOTA reference is not part of this fill: a fresh spot outranks it, a stroked
+    /// call never takes it, and a log form shows it first, so it is filled by
+    /// `offer::fill_iota_at_log` / `offer::accept_iota_offer` under those rules (operator ruling,
+    /// 2026-11-10), never here.
     #[test]
-    fn a_callbook_iota_is_offered_never_stamped() {
+    fn a_callbook_iota_is_filled_by_the_offer_rules_not_here() {
         let mut r = rec("W1ABC");
         fill_from_callbook(&mut r, &answer("W1ABC"));
         assert_eq!(r.ota.iota, None);

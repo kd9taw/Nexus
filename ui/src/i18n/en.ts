@@ -3108,7 +3108,6 @@ export const EN = {
     '{{worked}} worked · {{cards}} on cards — IOTA credits LoTW and cards, not eQSL',
   // Island groups held on a contact, whether written with no popup or taken from an offer: in the
   // worked count, in no confirmed one, until the operator confirms each on its contact card.
-  'awards.iota.note.held': 'Waiting for you to confirm on the contact card: {{held}}',
 
   // The breakdown panels. Every band and mode name under these headings is data.
   'awards.bands.head': 'DXCC by band',
@@ -10710,16 +10709,14 @@ export const EN = {
   'iota.credit.title': 'Island group names: © Islands On The Air (IOTA) Ltd and RSGB — iota-world.org',
   'iota.list.failed': 'The IOTA island list could not be downloaded',
   'iota.notOnList': '{{ref}} is not on the IOTA island list.',
-  'iota.offer.chip': 'IOTA {{ref}}',
-  'iota.offer.aria': 'IOTA reference offered: {{ref}}',
+  'iota.prefill.label': 'IOTA',
+  'iota.prefill.aria': 'IOTA reference for this contact',
+  'iota.prefill.hint': 'Filled in from a spot or your callbook lookup. Logged and sent with the contact; change it or clear it before logging.',
   'iota.offer.fromSpot': 'from the spot',
   'iota.offer.fromCallbook': 'from the callbook',
-  'iota.offer.spotHeld': 'Kept in your log, but sent to no service until you confirm it on the contact card.',
-  'iota.offer.use': 'Use',
   'iota.offer.dismiss': 'Leave IOTA empty',
-  'iota.card.spotHeld': 'Filled from a spot: kept in your log, sent to no service until you confirm it.',
-  'iota.card.callbookHeld': 'Filled from the callbook: kept in your log, sent to no service until you confirm it.',
-  'iota.card.confirm': 'Confirm',
+  'iota.card.fromSpot': 'Filled in from a spot.',
+  'iota.card.fromCallbook': 'Filled in from your callbook lookup.',
   'iota.card.clear': 'Clear',
   'spots.row.iota.title': 'IOTA {{ref}}, from the spot comment',
   'spots.row.iota.needed': 'New IOTA: {{ref}}, from the spot comment',
