@@ -1548,10 +1548,10 @@ fn raw_alc_over_deadline_ms(rig: &Rig) -> u64 {
 /// What one transmit-meter read asks of the radio this tick ([`tx_meter_read_plan`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MeterReadPlan {
-    /// The read's deadline (ms): a tune's [`TUNE_METER_DEADLINE_MS`], an over's time left to its
-    /// next end less [`TX_METER_OVER_END_SLACK_MS`] (no more than the link's deadline), or `None`
-    /// for a hold with no end of its own (live PTT, a radio keyed at the radio): the link's own.
-    deadline: Option<u64>,
+    /// The deadline (ms) the read must end by: a tune's [`TUNE_METER_DEADLINE_MS`], an over's time
+    /// left to its next end less [`TX_METER_OVER_END_SLACK_MS`] (no more than the link's deadline),
+    /// or, for a hold with no end of its own (live PTT, a radio keyed at the radio), the link's own.
+    deadline: u64,
     /// The raw ALC read's strict deadline: [`raw_alc_over_deadline_ms`], or the read's own deadline
     /// when that is shorter.
     raw_strict: u64,
@@ -1583,15 +1583,21 @@ fn tx_meter_read_plan(
     if !over_left_ms.is_none_or(|left| left >= min_left) {
         return None;
     }
+    // A hold with no end of its own still gets a deadline the read must END by, the link's own:
+    // without one the read went through `Rig::command`, which checks the deadline only between
+    // 500 ms socket reads, so a radio that stopped answering held the loop (and a PTT release or
+    // a Stop TX behind it) about 1000 ms on a fast link, not 700.
     let deadline = if tuning {
-        Some(TUNE_METER_DEADLINE_MS)
+        TUNE_METER_DEADLINE_MS
     } else {
-        over_left_ms.map(|left| ((left - TX_METER_OVER_END_SLACK_MS) as u64).min(transport_ms))
+        over_left_ms.map_or(transport_ms, |left| {
+            ((left - TX_METER_OVER_END_SLACK_MS) as u64).min(transport_ms)
+        })
     };
     Some(MeterReadPlan {
         deadline,
-        raw_strict: deadline.map_or(raw_ms, |d| d.min(raw_ms)),
-        backstop_counts: deadline.is_none_or(|d| d >= raw_ms),
+        raw_strict: deadline.min(raw_ms),
+        backstop_counts: deadline >= raw_ms,
     })
 }
 
@@ -1611,55 +1617,55 @@ mod meter_read_plan_tests {
         };
         // (row, tuning, over left, slow, expected)
         let rows = [
-            ("tune", true, None, false, plan(Some(120), 120, false)),
+            ("tune", true, None, false, plan(120, 120, false)),
             (
                 "hold with no end, fast",
                 false,
                 None,
                 false,
-                plan(None, 300, true),
+                plan(700, 300, true),
             ),
             (
                 "hold with no end, slow",
                 false,
                 None,
                 true,
-                plan(None, 2_500, true),
+                plan(2_500, 2_500, true),
             ),
             (
                 "far from the end, fast",
                 false,
                 Some(2_640.0),
                 false,
-                plan(Some(700), 300, true),
+                plan(700, 300, true),
             ),
             (
                 "far from the end, slow",
                 false,
                 Some(2_640.0),
                 true,
-                plan(Some(2_500), 2_500, true),
+                plan(2_500, 2_500, true),
             ),
             (
                 "340 ms left, fast",
                 false,
                 Some(340.0),
                 false,
-                plan(Some(320), 300, true),
+                plan(320, 300, true),
             ),
             (
                 "180 ms left, fast",
                 false,
                 Some(180.0),
                 false,
-                plan(Some(160), 160, false),
+                plan(160, 160, false),
             ),
             (
                 "150 ms left, fast: the floor",
                 false,
                 Some(150.0),
                 false,
-                plan(Some(130), 130, false),
+                plan(130, 130, false),
             ),
             ("149 ms left, fast", false, Some(149.0), false, None),
             (
@@ -1667,14 +1673,14 @@ mod meter_read_plan_tests {
                 false,
                 Some(740.0),
                 true,
-                plan(Some(720), 720, false),
+                plan(720, 720, false),
             ),
             (
                 "600 ms left, slow: the floor",
                 false,
                 Some(600.0),
                 true,
-                plan(Some(580), 580, false),
+                plan(580, 580, false),
             ),
             ("599 ms left, slow", false, Some(599.0), true, None),
         ];
@@ -15856,9 +15862,9 @@ impl RadioLoop {
                     // A rig that REFUSES the watts is read with RFPOWER_METER instead, and that
                     // share goes to the engine as a share (`tx_po_share`, #489).
                     // Tune-time reads are deadline-bounded (see `meters_now`), an over's by the
-                    // time left to its end, and only a hold with no end of its own (live PTT, a
-                    // radio keyed at the radio) waits the link's deadline.
-                    let deadline = plan.deadline;
+                    // time left to its end, and a hold with no end of its own (live PTT, a radio
+                    // keyed at the radio) by the link's deadline, every one ending by it.
+                    let deadline = Some(plan.deadline);
                     let i = self.tx_meter_idx % N_TX_METERS;
                     self.tx_meter_idx = self.tx_meter_idx.wrapping_add(1);
                     self.last_tx_meter_poll = now;

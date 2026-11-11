@@ -13,11 +13,11 @@
 //! - its deadline is the time left less [`TX_METER_OVER_END_SLACK_MS`] (20 ms), capped at the
 //!   link's own deadline (`Rig::transport_deadline_ms`: 700 ms, 2.5 s on a slow link);
 //! - a tune's read has [`TUNE_METER_DEADLINE_MS`] (120 ms);
-//! - a hold with no end (live PTT, a radio keyed at the radio) is asked with NO deadline, which
-//!   `Rig::command` reads as the link's own (700 ms, 2.5 s slow) checked only after each 500 ms
-//!   socket read: a stall there holds the loop 1000 ms on a fast link, not 700 (measured
-//!   2026-11-10, and pinned so: a pure function that turned `None` into `Some(700)` would change
-//!   it to 700 and must fail here);
+//! - a hold with no end (live PTT, a radio keyed at the radio) is asked with the link's own deadline
+//!   (700 ms, 2.5 s slow), which the read must END by. Until 2026-11-11 it was asked with none, and
+//!   `Rig::command` checked the link's deadline only after each 500 ms socket read, so a stall held
+//!   the loop 1000 ms on a fast link, and a PTT release or Stop TX behind it unkeyed up to 0.3 s
+//!   late (moved in its own change, with its own test: the last test below);
 //! - the raw ALC read of a Yaesu that answered the probe is held to [`raw_alc_over_deadline_ms`]
 //!   (300 ms, the link's deadline on a slow link), and to the over's own deadline when shorter.
 //!
@@ -28,8 +28,9 @@
 //! deadline of a second or more, several socket reads end to end). The lower bound is the safe
 //! direction (a socket timeout never fires early); the upper slack is a loaded machine's timer
 //! lateness. Healthy, a stalled tick holds the deadline plus a few ms (measured
-//! 2026-11-10: 700 pinned held 705, 2500 held 2510, 120 held 122, base 0-1 ms; the slow no-deadline
-//! read, five socket timeouts end to end, held 2578, its slack the thinnest); a policy change shows
+//! 2026-11-10: 700 pinned held 705, 2500 held 2510, 120 held 122, base 0-1 ms; the slow no-end
+//! read held 2578 while it was five socket timeouts end to end, its slack the thinnest, and ~2520
+//! since it ends by its deadline); a policy change shows
 //! as hundreds of ms either way (300 against 700, 1000 against 700, 2500 against 700) or as a read
 //! asked where none was.
 //!
@@ -309,15 +310,15 @@ fn meter_deadline_policy_is_pinned_row_by_row() {
             "w RM4;",
             Some(160.0),
         ),
-        // A hold with no end: no deadline of its own, so `Rig::command`'s, the link's 700 ms
-        // checked after each 500 ms socket read: two reads, 1000 ms (see the module header).
+        // A hold with no end: the link's own 700 ms, which the read ends by (see the module
+        // header; it was 1000 ms, two whole socket reads, until 2026-11-11).
         (
             "live PTT, fast",
             Hold::LivePtt,
             false,
             false,
             "l SWR",
-            Some(1_000.0),
+            Some(700.0),
         ),
         (
             "radio keyed at the radio, fast",
@@ -325,9 +326,9 @@ fn meter_deadline_policy_is_pinned_row_by_row() {
             false,
             false,
             "l SWR",
-            Some(1_000.0),
+            Some(700.0),
         ),
-        // …and on a slow link its 2500, five whole reads.
+        // …and on a slow link its 2500.
         (
             "live PTT, slow",
             Hold::LivePtt,
@@ -362,4 +363,74 @@ fn meter_deadline_policy_is_pinned_row_by_row() {
         }
     }
     assert!(failed.is_empty(), "{failed:#?}");
+}
+
+/// ⛔ RELEASING LIVE PTT, OR STOP TX, DURING A STALLED METER READ UNKEYS WITHIN THE LINK'S DEADLINE
+/// PLUS ONE TICK. A hold with no end of its own (live PTT) reads its meters with the link's own
+/// deadline, 700 ms on a fast link, and the read must END by it: checked only between 500 ms
+/// socket reads, a radio that never answered held the single-threaded loop about 1000 ms, and the
+/// release or the Stop TX pressed meanwhile reached the radio up to 0.3 s late. The operator acts
+/// a few ms into the stalled tick, from another thread as the UI does; the time is taken from the
+/// press to the `T 0` on the wire.
+#[test]
+fn releasing_live_ptt_or_stop_tx_during_a_stalled_meter_read_unkeys_within_the_link_deadline() {
+    const TICK_MS: f64 = 20.0;
+    const DEADLINE_MS: f64 = 700.0;
+    for stop in [false, true] {
+        let what = if stop { "Stop TX" } else { "PTT released" };
+        let (stall, mic) = (
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let mut s = Scene::new(Hold::LivePtt, false, false, &stall, &mic);
+        let unkeys = |s: &Scene| {
+            s.peer
+                .lines
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|l| *l == "T 0")
+                .count()
+        };
+        assert_eq!(unkeys(&s), 0, "{what}: premise: still keyed");
+        let asked = s.meter_lines().len();
+        stall.store(true, Ordering::SeqCst);
+        let engine = Arc::clone(&s.engine);
+        let operator = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            let pressed = Instant::now();
+            let mut e = engine.lock().unwrap();
+            if stop {
+                e.halt_tx();
+            } else {
+                e.set_ptt(false);
+            }
+            pressed
+        });
+        let mut unkeyed = None;
+        for _ in 0..10 {
+            let next = s.t;
+            s.run_to(next); // one tick
+            if unkeys(&s) > 0 {
+                unkeyed = Some(Instant::now());
+                break;
+            }
+        }
+        let pressed = operator.join().unwrap();
+        assert_eq!(
+            s.meter_lines()[asked..].to_vec(),
+            vec!["l SWR".to_string()],
+            "{what}: premise: the stalled tick asked one meter"
+        );
+        let unkeyed = unkeyed.unwrap_or_else(|| panic!("{what}: never unkeyed"));
+        let late = unkeyed.saturating_duration_since(pressed).as_secs_f64() * 1_000.0;
+        eprintln!("{what}: unkeyed {late:.0} ms after the press");
+        // The press lands ~20 ms into the read, so the read's remaining ~680 ms, the next tick, and
+        // a loaded machine's timer slack: well under the ~980 ms of a read checked between reads.
+        assert!(
+            late <= DEADLINE_MS + TICK_MS + 100.0,
+            "{what}: unkeyed {late:.0} ms after the press, past the link's {DEADLINE_MS} ms \
+             deadline plus one tick"
+        );
+    }
 }
