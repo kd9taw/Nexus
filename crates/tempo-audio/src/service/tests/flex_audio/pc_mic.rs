@@ -621,7 +621,7 @@ fn with_the_computer_microphone_off_the_press_keys_the_radios_mic_as_before() {
     s.run(300);
     ptt(&s, false);
     run_until_seen(&mut s, since, "xmit 0");
-    s.run(300);
+    run_until_seen(&mut s, since, "idle");
     assert_eq!(voice_trace(&s, since), ["xmit 1", "xmit 0", "idle"]);
     assert!(mic_calls(&s).is_empty(), "the microphone opened");
 }
