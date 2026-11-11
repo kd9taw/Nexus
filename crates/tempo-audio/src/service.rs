@@ -21120,6 +21120,7 @@ mod tests {
     mod jtty_status;
     mod jtty_transmit;
     mod late_key;
+    mod meter_deadline;
     mod omnirig_coverage;
     mod pc_mic;
     mod po_derived;
