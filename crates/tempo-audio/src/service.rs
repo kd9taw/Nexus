@@ -8227,6 +8227,24 @@ impl RadioLoop {
         note: &str,
         why: &str,
     ) {
+        self.clear_loop_tx_for_context(backend, rig, note);
+        let mut eng = engine_lock(engine);
+        // CONTEXT halt — the loop reacting to a radio switch or a CAT-config save, never an
+        // operator Stop TX. A plain `halt_tx` here silently undid the engine-side re-arm a
+        // switch had just made, and the operator's next PTT press went nowhere.
+        eng.halt_tx_for_context_change(why);
+    }
+
+    /// The loop's half of [`Self::unkey_before_letting_go`], for a caller that halts the engine
+    /// itself under the same lock as more engine work (the Test-CAT hold): note `note` in the CI-V
+    /// diagnostic log, flush the queued audio, unkey through the still-alive rig, and clear this
+    /// loop's TX state (the hold, a tune, the operator's applied PTT).
+    fn clear_loop_tx_for_context<B: AudioBackend>(
+        &mut self,
+        backend: &mut B,
+        rig: &mut Rig,
+        note: &str,
+    ) {
         crate::civ::diag::note(note);
         backend.flush_output();
         let _ = rig.ptt(false);
@@ -8234,11 +8252,25 @@ impl RadioLoop {
         self.tuning_keyed = false;
         self.manual_ptt_applied = false;
         self.tune_started_ms = None;
-        let mut eng = engine_lock(engine);
-        // CONTEXT halt — the loop reacting to a radio switch or a CAT-config save, never an
-        // operator Stop TX. A plain `halt_tx` here silently undid the engine-side re-arm a
-        // switch had just made, and the operator's next PTT press went nowhere.
-        eng.halt_tx_for_context_change(why);
+    }
+
+    /// End an over this loop keyed for a stream or a microphone (CW, RTTY, PSK, JTTY, the voice
+    /// keyer, SSTV, the remote and computer microphones, a TCI program): drop the queued audio
+    /// first (the only thing that stops a VOX rig), then unkey, then let go of the PTT hold.
+    /// Returns how many queued samples were dropped. Each caller keeps its own "busy" evidence:
+    /// this never decides WHETHER the over is its to cut.
+    fn cut_own_over<B: AudioBackend>(&mut self, backend: &mut B, rig: &mut Rig) -> usize {
+        let dropped = backend.flush_output();
+        let _ = rig.ptt(false);
+        self.tx_until_ms = None;
+        dropped
+    }
+
+    /// Hold PTT until at least `until` (ms): a hold already running past it is kept, never
+    /// shortened, so a stream's or a microphone's over cannot cut short a longer one riding the
+    /// same transmitter.
+    fn extend_hold(&mut self, until: f64) {
+        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
     }
 
     /// After a dial push that CROSSED a band boundary, make the app the last word on the
@@ -9438,15 +9470,11 @@ impl RadioLoop {
                 // possibly-keyed rig. The hold self-expires engine-side, so a crashed
                 // prober can't leave CAT down.
                 if !self.cat_hold_active {
-                    crate::civ::diag::note(
+                    self.clear_loop_tx_for_context(
+                        backend,
+                        rig,
                         "test-cat hold: releasing the CAT port for the baud-ladder probe",
                     );
-                    backend.flush_output();
-                    let _ = rig.ptt(false);
-                    self.tx_until_ms = None;
-                    self.tuning_keyed = false;
-                    self.manual_ptt_applied = false;
-                    self.tune_started_ms = None;
                     {
                         let mut eng = engine_lock(engine);
                         // A CONTEXT halt: the loop is dropping the transport under the
@@ -9956,22 +9984,16 @@ impl RadioLoop {
                 // modem samples are already gone — and the sequencer would count
                 // that silent over as sent and wait for a reply that never comes.
                 // Mirrors the rig-rebuild path above.
-                {
-                    // UNCONDITIONAL — same desync rationale as the rig-rebuild guard.
-                    crate::civ::diag::note("audio rebuild: ending the over (flush+unkey) before reopening the sound card");
-                    backend.flush_output();
-                    let _ = rig.ptt(false);
-                    self.tx_until_ms = None;
-                    self.tuning_keyed = false;
-                    self.manual_ptt_applied = false;
-                    self.tune_started_ms = None;
-                    {
-                        let mut eng = engine_lock(engine);
-                        // CONTEXT halt, same as the rig rebuild above: swapping the sound card
-                        // to the newly active radio must not disarm the operator's mic.
-                        eng.halt_tx_for_context_change("audio backend rebuild");
-                    }
-                }
+                // UNCONDITIONAL — same desync rationale as the rig-rebuild guard. A CONTEXT
+                // halt, same as the rig rebuild above: swapping the sound card to the newly
+                // active radio must not disarm the operator's mic.
+                self.unkey_before_letting_go(
+                    engine,
+                    backend,
+                    rig,
+                    "audio rebuild: ending the over (flush+unkey) before reopening the sound card",
+                    "audio backend rebuild",
+                );
                 // ⚠️ RELEASE THE OLD CARD FIRST — see `AudioBackend::release_device`.
                 // ALSA opens a card ONCE, and until this call the rebuild probed the new
                 // device while our OWN previous streams still held it, so moving to any
@@ -12818,9 +12840,7 @@ impl RadioLoop {
                     // not cut an FT8 slot over that happens to be in flight
                     // (operator 2026-07-31 — TX Off lets the over complete; Stop TX
                     // cuts via the slot-TX abort instead).
-                    backend.flush_output();
-                    let _ = rig.ptt(false);
-                    self.tx_until_ms = None;
+                    self.cut_own_over(backend, rig);
                 }
                 // CAT keyer abort (cut the one word in the rig buffer), and the playback stop a
                 // Yaesu's own reference defines where Hamlib sends none
@@ -13305,9 +13325,7 @@ impl RadioLoop {
                 // 2026-07-31 — TX Off lets the over complete; halt_tx cuts any over
                 // via the slot-TX abort regardless).
                 if now < self.rtty_busy_until {
-                    backend.flush_output();
-                    let _ = rig.ptt(false);
-                    self.tx_until_ms = None;
+                    self.cut_own_over(backend, rig);
                 }
                 self.rtty_busy_until = 0.0; // a fresh send after Stop keys immediately
                                             // The latched generator dies with the over it was rendering. Keeping
@@ -13370,7 +13388,7 @@ impl RadioLoop {
                         }
                         self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
                         let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        self.extend_hold(until);
                     }
                 }
                 // Keyed and fed far enough ahead: nothing to render this tick. The
@@ -13805,9 +13823,7 @@ impl RadioLoop {
                 // the in-flight evidence), so a disarm can't cut an FT8 slot
                 // over riding the same PTT/ring.
                 if now < self.psk_busy_until {
-                    backend.flush_output();
-                    let _ = rig.ptt(false);
-                    self.tx_until_ms = None;
+                    self.cut_own_over(backend, rig);
                 }
                 self.psk_busy_until = 0.0; // a fresh send after Stop keys immediately
                                            // The latched generator dies with the over (a kept one would
@@ -13837,7 +13853,7 @@ impl RadioLoop {
                         }
                         self.psk_busy_until = self.psk_busy_until.max(now) + chunk_ms;
                         let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        self.extend_hold(until);
                     }
                 }
                 // Keyed and fed far enough ahead: gates re-checked, nothing to render.
@@ -13956,7 +13972,7 @@ impl RadioLoop {
                         backend.play(&buf);
                         backend.mark_unit_end();
                         let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        self.extend_hold(until);
                     } else {
                         // Nothing keyed — don't sit "busy" for a send that never started.
                         self.psk_busy_until = 0.0;
@@ -14003,9 +14019,7 @@ impl RadioLoop {
                 // Only while JTTY audio is actually going (`jtty_busy_until` is the evidence), so
                 // a cut can never take an FT8 slot over riding the same PTT and ring.
                 if now < self.jtty_busy_until {
-                    backend.flush_output();
-                    let _ = rig.ptt(false);
-                    self.tx_until_ms = None;
+                    self.cut_own_over(backend, rig);
                 }
                 self.jtty_busy_until = 0.0;
                 engine_lock(engine).set_jtty_sending(false);
@@ -14032,7 +14046,7 @@ impl RadioLoop {
                     self.jtty_busy_until =
                         self.jtty_busy_until.max(now) + lead + buf.len() as f64 / 12.0;
                     let until = self.jtty_busy_until + crate::slot::TX_TAIL_MS;
-                    self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    self.extend_hold(until);
                     engine_lock(engine).set_jtty_sending(true);
                 } else {
                     engine_lock(engine).jtty_key_refused();
@@ -14227,9 +14241,7 @@ impl RadioLoop {
                 )
             };
             if abort {
-                backend.flush_output(); // dump queued message audio + unkey now
-                let _ = rig.ptt(false);
-                self.tx_until_ms = None;
+                self.cut_own_over(backend, rig); // dump queued message audio + unkey now
             }
             if let Some((buf, dax)) = samples {
                 // ⛔ NO MESSAGE WITHOUT THE CLIENT'S DAX TEE (native audio on). The message's audio
@@ -14291,7 +14303,7 @@ impl RadioLoop {
                         backend.play(&buf);
                         backend.mark_unit_end();
                         let until = now + lead + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        self.extend_hold(until);
                         self.voice_until_ms = Some(until);
                         if dax {
                             self.flex_voice_until_ms = self.tx_until_ms;
@@ -14422,9 +14434,7 @@ impl RadioLoop {
                 // the slot-TX abort regardless).
                 if self.sstv_feed.is_some() {
                     self.sstv_feed = None;
-                    backend.flush_output();
-                    let _ = rig.ptt(false);
-                    self.tx_until_ms = None;
+                    self.cut_own_over(backend, rig);
                 }
                 {
                     let mut eng = engine_lock(engine);
@@ -14478,7 +14488,7 @@ impl RadioLoop {
                         // Hold PTT for the WHOLE image via the precomputed duration; the
                         // tx_until_ms expiry below drops it even if every other mechanism fails.
                         let until = now + lead + job.duration_ms + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        self.extend_hold(until);
                         {
                             let mut eng = engine_lock(engine);
                             eng.set_sstv_sending(true);
@@ -14601,9 +14611,7 @@ impl RadioLoop {
                 // M12: the epoch has already moved and the feed is closed (the engine's kill
                 // path); here the queued audio goes (the only thing that stops a VOX rig) and PTT
                 // drops.
-                let dropped = backend.flush_output();
-                let _ = rig.ptt(false);
-                self.tx_until_ms = None;
+                let dropped = self.cut_own_over(backend, rig);
                 crate::civ::diag::note(&format!(
                     "remote microphone over ended: unkey, {dropped} queued samples dropped"
                 ));
@@ -14685,7 +14693,7 @@ impl RadioLoop {
                         self.mic_busy_until = self.mic_busy_until.max(now)
                             + buf.len() as f64 * 1000.0 / f64::from(MIC.rate_hz);
                         let until = self.mic_busy_until + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        self.extend_hold(until);
                     }
                     MicTick::Idle | MicTick::Armed | MicTick::Ahead => {}
                 }
@@ -14743,9 +14751,7 @@ impl RadioLoop {
             if (abort || unkeyed_under) && self.program_over_keyed {
                 // A hard end: the feed is closed and its epoch moved (the engine's kill path);
                 // here the queued audio goes (the only thing that stops a VOX rig) and PTT drops.
-                let dropped = backend.flush_output();
-                let _ = rig.ptt(false);
-                self.tx_until_ms = None;
+                let dropped = self.cut_own_over(backend, rig);
                 crate::civ::diag::note(&format!(
                     "TCI program's over ended: unkey, {dropped} queued samples dropped"
                 ));
@@ -14787,7 +14793,7 @@ impl RadioLoop {
                         self.program_over_busy_until = self.program_over_busy_until.max(now)
                             + buf.len() as f64 * 1000.0 / f64::from(TCI_OVER.rate_hz);
                         let until = self.program_over_busy_until + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        self.extend_hold(until);
                     }
                     MicTick::Idle | MicTick::Armed | MicTick::Ahead => {}
                 }
@@ -14873,9 +14879,7 @@ impl RadioLoop {
             if (abort || unkeyed_under) && self.pc_mic_keyed {
                 // The feed is already closed (the engine's kill path); here the queued audio goes
                 // (the only thing that stops a VOX rig) and PTT drops, before anything else.
-                let dropped = backend.flush_output();
-                let _ = rig.ptt(false);
-                self.tx_until_ms = None;
+                let dropped = self.cut_own_over(backend, rig);
                 crate::civ::diag::note(&format!(
                     "computer microphone over ended: unkey, {dropped} queued samples dropped"
                 ));
@@ -14954,7 +14958,7 @@ impl RadioLoop {
                         self.pc_mic_busy_until = self.pc_mic_busy_until.max(now)
                             + buf.len() as f64 * 1000.0 / f64::from(PC_MIC.rate_hz);
                         let until = self.pc_mic_busy_until + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        self.extend_hold(until);
                     }
                     MicTick::Idle | MicTick::Armed | MicTick::Ahead => {}
                 }
