@@ -7188,14 +7188,14 @@ impl RadioLoop {
 
     /// ⭐ AN FT8/FT4 OVER'S WINDOW IS RE-TESTED FIRST IN EVERY TICK, BEFORE ANYTHING IN THE TICK
     /// CAN WAIT, AS WSJT-X RE-TESTS ITS OWN ON EVERY GUI TICK. WSJT-X asks every 100 ms whether the
-    /// clock is still inside the over's window (`m_bTxTime`, `widgets/mainwindow.cpp:870`, `:5055`)
-    /// and the tick that finds it outside stops the audio and lowers PTT 200 ms later (`:5180`,
-    /// `:5530`, `stopTx` `:5743-5760`). That tick runs on the GUI thread, which its CAT never stalls.
-    /// Here one thread runs the window's end and everything that can wait: the Engine lock (which a
-    /// double-click or a logger's Reply holds while a decode finishes) and every CAT call. With the
-    /// end tested only where the tick reached it, an end already due waited for whatever the tick
-    /// met first, and a stall there held PTT into the other station's period for as long as it
-    /// lasted.
+    /// clock is still inside the over's window (`m_bTxTime`, `widgets/mainwindow.cpp:1011`,
+    /// `:7715`, v3.0.2) and the tick that finds it outside stops the audio and lowers PTT 200 ms
+    /// later (`:7859`, `:8219`, `stopTx` `:8564-8591`). That tick runs on the GUI thread, which its
+    /// CAT never stalls. Here one thread runs the window's end and everything that can wait: the
+    /// Engine lock (which a double-click or a logger's Reply holds while a decode finishes) and
+    /// every CAT call. With the end tested only where the tick reached it, an end already due
+    /// waited for whatever the tick met first, and a stall there held PTT into the other station's
+    /// period for as long as it lasted.
     ///
     /// The same audio stop and PTT off as further down the tick (the over's own, on the slot clock
     /// of the slot its tick decided for), only earlier in it. The over is still ended where it was
@@ -16762,8 +16762,8 @@ impl RadioLoop {
             // 1.86 s (FT8) or 1.96 s (FT4) late and held PTT 250 ms into the next slot.
             //
             // ⭐ HOW LATE: WSJT-X'S OWN LIMIT. FT8 and FT4 key a late start while the slot is
-            // under 75 % of its period (`slot::wsjtx_may_key_at`; `mainwindow.cpp:5126`,
-            // `fTR < 0.75`): up to 11.25 s into an FT8 slot, 5.625 s into FT4, sending the
+            // under 75 % of its period (`slot::wsjtx_may_key_at`; `mainwindow.cpp:7805`,
+            // v3.0.2, `fTR < 0.75`): up to 11.25 s into an FT8 slot, 5.625 s into FT4, sending the
             // symbols that remain. Later, the request stays and the over waits for this
             // station's next slot. The slot's place is read again here, not taken from the
             // tick's clock, which CAT earlier in the tick can leave behind. This replaced a
