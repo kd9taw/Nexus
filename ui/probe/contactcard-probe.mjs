@@ -24,6 +24,12 @@
 // Log is topmost once scrolled to. Its CONTROL (`&iotacontrol=1`, 1024×768 at 175 %): the name may not
 // wrap, and must come back NOT drawn whole.
 //
+// THE ISLAND PICKER, in the same phase: beside the filled box, the group's islands to pick from, one of
+// them with a name at the 200-character limit. The probe picks that island and asserts the picker lists
+// the group's three islands, is drawn inside the form and is the topmost thing at its centre, and that
+// nothing scrolls sideways. Its CONTROL (`&islandcontrol=1`, 1024×768 at 175 %): the picker may grow to
+// its longest option, and must come back NOT inside the form.
+//
 // exit: 0 every size clear · 1 a red, or a control that could not fail · 2 the page never drew the card
 import { createServer } from 'vite'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -152,6 +158,24 @@ const IOTA_MEASURE = `(() => {
   const nameWhole = n.width > 0 && n.left >= f.left - 0.5 && n.right <= f.right + 0.5 && name.scrollWidth <= name.clientWidth + 1
   const inputTop = top(input)
   const source = field.querySelector('.iota-offer-from')?.textContent.trim() ?? null
+  // The island picker: pick the island with the longest name, as an operator would.
+  const pick = form.querySelector('.iota-island-pick')
+  if (!pick) return { waiting: true, value: input.value, pick: null }
+  const long = [...pick.options].reduce((a, o) => (o.textContent.length > a.textContent.length ? o : a))
+  if (pick.value !== long.value) {
+    pick.value = long.value
+    pick.dispatchEvent(new Event('change', { bubbles: true }))
+  }
+  pick.scrollIntoView({ block: 'nearest' })
+  const p = r(pick)
+  const island = {
+    options: pick.options.length - 1,
+    picked: pick.value,
+    longest: long.textContent.length,
+    inside: p.width > 0 && p.left >= f.left - 0.5 && p.right <= f.right + 0.5,
+    top: top(pick),
+    box: { left: Math.round(p.left), right: Math.round(p.right) },
+  }
   const log = [...form.querySelectorAll('button[type="submit"]')][0]
   log.scrollIntoView({ block: 'nearest' })
   return {
@@ -160,11 +184,11 @@ const IOTA_MEASURE = `(() => {
     formSideways: form.scrollWidth > form.clientWidth + 1,
     form: { left: Math.round(f.left), right: Math.round(f.right) },
     name: box, nameLines: Math.round(n.height / (parseFloat(getComputedStyle(name).lineHeight) || parseFloat(getComputedStyle(name).fontSize) * 1.2 * (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')) || 1))),
-    nameWhole, covers, inputTop, source, logTop: top(log),
+    nameWhole, covers, inputTop, source, logTop: top(log), island,
   }
 })()`
 
-async function measureIota(w, h, zoom, control) {
+async function measureIota(w, h, zoom, control, islandControl = false) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -177,7 +201,9 @@ async function measureIota(w, h, zoom, control) {
       await call('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons: 1, clickCount: 1 })
   }
   await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
-  await call('Page.navigate', { url: `${origin}/probe/contactcard.html?iota=1&zoom=${zoom}${control ? '&iotacontrol=1' : ''}` })
+  await call('Page.navigate', {
+    url: `${origin}/probe/contactcard.html?iota=1&zoom=${zoom}${control ? '&iotacontrol=1' : ''}${islandControl ? '&islandcontrol=1' : ''}`,
+  })
   let open = null
   for (let i = 0; i < 150 && !open; i++) {
     await sleep(100)
@@ -242,6 +268,10 @@ try {
     if (!m.inputTop) red.push('the IOTA box is covered')
     if (m.source !== 'from the spot') red.push(`the source reads ${JSON.stringify(m.source)}`)
     if (!m.logTop) red.push('Log is covered')
+    if (m.island.options !== 3) red.push(`the island picker lists ${m.island.options} islands, not the group's 3`)
+    if (m.island.picked !== '9002') red.push(`the long-named island was not picked (${m.island.picked})`)
+    if (!m.island.inside) red.push(`the island picker is not inside the form ${JSON.stringify(m.island.box)} vs ${JSON.stringify(m.form)}`)
+    if (!m.island.top) red.push('the island picker is covered')
     if (red.length) {
       console.error(`contactcard-probe: RED (filled IOTA box) at ${at} — ${red.join('; ')}`)
       code = code || 1
@@ -251,6 +281,13 @@ try {
   console.log(`contactcard-probe: CONTROL group name kept on one line, window 1024×768 at 175%: ${JSON.stringify(ic)}`)
   if (!ic || ic.waiting || ic.nameWhole) {
     console.error('contactcard-probe: CONTROL FAILED — the unwrapped group name still read as drawn whole; the check cannot fail')
+    code = code || 1
+  }
+
+  const pc = await measureIota(1024, 768, 1.75, false, true)
+  console.log(`contactcard-probe: CONTROL island picker grown to its longest option, window 1024×768 at 175%: ${JSON.stringify(pc)}`)
+  if (!pc || pc.waiting || pc.island.inside) {
+    console.error('contactcard-probe: CONTROL FAILED — the grown island picker still read as inside the form; the check cannot fail')
     code = code || 1
   }
 
@@ -278,7 +315,7 @@ try {
     console.error('contactcard-probe: CONTROL FAILED — with the Save bar in the flow it was still on screen at the top of the card; the check cannot fail')
     code = code || 1
   }
-  if (code === 0) console.log(`contactcard-probe: PASS — a double-click on the call opens the card whole at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}: inside the window, no sideways scroll, the photo drawn, Save and Cancel on screen at the top and the foot, ten recent contacts; the in-flow control hid Save. The Add form's filled IOTA box at ${IOTA_SIZES.map((s) => `${s.w}×${s.h} ${Math.round(s.zoom * 100)}%`).join(', ')}: filled, its long group name whole and covering nothing, the source shown, nothing sideways, Log reachable; the unwrapped-name control was caught`)
+  if (code === 0) console.log(`contactcard-probe: PASS — a double-click on the call opens the card whole at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}: inside the window, no sideways scroll, the photo drawn, Save and Cancel on screen at the top and the foot, ten recent contacts; the in-flow control hid Save. The Add form's filled IOTA box at ${IOTA_SIZES.map((s) => `${s.w}×${s.h} ${Math.round(s.zoom * 100)}%`).join(', ')}: filled, its long group name whole and covering nothing, the source shown, nothing sideways, Log reachable, the island picker listing the group's three islands with the 200-character one picked, inside the form and uncovered; the unwrapped-name and grown-picker controls were caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

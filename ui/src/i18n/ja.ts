@@ -6801,6 +6801,8 @@ export const JA: PartialCatalog = {
   "iota.prefill.label": "IOTA",
   "iota.prefill.aria": "この交信のIOTAリファレンス",
   "iota.prefill.hint": "スポットまたはコールブック検索から入力されました。交信と一緒にログされ送信されます。ログする前に変更または消去できます。",
+  "iota.island.label": "島",
+  "iota.island.none": "島を選択していません",
   "iota.card.fromSpot": "スポットから入力されました。",
   "iota.card.fromCallbook": "コールブック検索から入力されました。",
   "iota.offer.fromSpot": "スポットから",

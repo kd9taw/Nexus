@@ -3411,6 +3411,8 @@ export const ZH: PartialCatalog = {
   "iota.prefill.label": "IOTA",
   "iota.prefill.aria": "此联络的 IOTA 编号",
   "iota.prefill.hint": "根据报点或呼号簿查询填入。随联络一起记录并上传；记录前可修改或清除。",
+  "iota.island.label": "岛屿",
+  "iota.island.none": "未选择岛屿",
   "iota.card.fromSpot": "根据报点填入。",
   "iota.card.fromCallbook": "根据呼号簿查询填入。",
   "iota.offer.dismiss": "留空 IOTA",

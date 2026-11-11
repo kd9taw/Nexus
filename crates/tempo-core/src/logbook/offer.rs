@@ -34,7 +34,12 @@
 //! logging path never makes a lookup.
 //!
 //! **The group's name in the COMMENT** ([`note_iota_in_comment`]): the log funnel appends
-//! `IOTA <reference> <group name>` from the IOTA list, once, after anything already there.
+//! `IOTA <reference> <group name>` from the IOTA list, once, after anything already there; with an
+//! island the operator picked ([`IOTA_ISLAND_ID_FIELD`]), that island's name instead.
+//!
+//! **The island is never filled** (operator ruling, 2026-11-10). No spot or callbook names one, only
+//! a group, so `IOTA_ISLAND_ID` is written only where the operator picked an island from the
+//! group's list on a log form or the contact card; nothing here writes it.
 
 use super::callbook::{CallbookAnswer, CALLBOOK_FILLED_FIELD};
 use super::{extra_value, set_extra, valid_iota, QsoRecord};
@@ -271,15 +276,42 @@ pub fn unmark_edited(old: &QsoRecord, rec: &mut QsoRecord) {
     }
 }
 
-/// Append `IOTA <reference> <group name>` to `rec`'s COMMENT, after anything already there
-/// (separated by `; `), when it holds a valid IOTA reference and `name` gives its group's name (the
-/// IOTA list's; `None` without the list, or for a group it lacks, writes nothing). Never twice: a
-/// comment already naming the group (any case) is left as it is. `true` when it appended.
-pub fn note_iota_in_comment(rec: &mut QsoRecord, name: &dyn Fn(&str) -> Option<String>) -> bool {
+/// ADIF's field for the island of the group a contact was on (IOTA's own island id, 1 to
+/// 99999999). Kept with the contact's other fields as written; only the operator's pick writes it.
+pub const IOTA_ISLAND_ID_FIELD: &str = "IOTA_ISLAND_ID";
+
+/// The island `rec` names in [`IOTA_ISLAND_ID_FIELD`], when it is a valid id (a whole number, 1 to
+/// 99999999, leading zeros allowed as ADIF allows them).
+pub fn iota_island_id(rec: &QsoRecord) -> Option<u32> {
+    extra_value(rec, IOTA_ISLAND_ID_FIELD)
+        .map(str::trim)
+        .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|v| v.parse::<u32>().ok())
+        .filter(|id| (1..=99_999_999).contains(id))
+}
+
+/// Put the island picked on a form (`picked`, [`iota_island_id`] of the form's record) on the
+/// contact being logged (`rec`), for the confirm-before-log popup, which takes the form's boxes one
+/// by one: only while `rec` holds a reference for it to belong to (a call correction that dropped
+/// the filled reference drops the island with it). No pick logs none.
+pub fn take_island_pick(rec: &mut QsoRecord, picked: Option<u32>) {
+    let island = picked.filter(|_| rec.ota.iota.as_deref().and_then(valid_iota).is_some());
+    set_extra(rec, IOTA_ISLAND_ID_FIELD, island.map(|id| id.to_string()));
+}
+
+/// Append `IOTA <reference> <name>` to `rec`'s COMMENT, after anything already there (separated by
+/// `; `), when it holds a valid IOTA reference and `name` gives it a name from the IOTA list: the
+/// island in its [`IOTA_ISLAND_ID_FIELD`] when the list has it in that group, else the group's
+/// (`None` without the list, or for a group it lacks, writes nothing). Never twice: a comment
+/// already holding that name (any case) is left as it is. `true` when it appended.
+pub fn note_iota_in_comment(
+    rec: &mut QsoRecord,
+    name: &dyn Fn(&str, Option<u32>) -> Option<String>,
+) -> bool {
     let Some(r) = rec.ota.iota.as_deref().and_then(valid_iota) else {
         return false;
     };
-    let Some(group) = name(&r)
+    let Some(group) = name(&r, iota_island_id(rec))
         .map(|n| n.split_whitespace().collect::<Vec<_>>().join(" "))
         .filter(|n| !n.is_empty())
     else {
@@ -719,12 +751,44 @@ mod tests {
         assert_eq!(typed.ota.iota.as_deref(), Some("EU-001"));
     }
 
-    fn group_names(r: &str) -> Option<String> {
-        match r {
-            "EU-005" => Some("Great Britain".into()),
-            "OC-146" => Some("Example  Reef ".into()),
+    fn group_names(r: &str, island: Option<u32>) -> Option<String> {
+        match (r, island) {
+            ("EU-005", Some(9001)) => Some("Isle of Example".into()),
+            ("EU-005", _) => Some("Great Britain".into()),
+            ("OC-146", _) => Some("Example  Reef ".into()),
             _ => None,
         }
+    }
+
+    /// AN ISLAND PICKED: the comment names it instead of its group; an id that is no valid island
+    /// id names the group, as no pick does.
+    #[test]
+    fn a_picked_island_is_named_in_the_comment() {
+        let mut r = rec("IA5X");
+        r.ota.iota = Some("EU-005".into());
+        set_extra(&mut r, IOTA_ISLAND_ID_FIELD, Some("9001".into()));
+        assert_eq!(iota_island_id(&r), Some(9001));
+        assert!(note_iota_in_comment(&mut r, &group_names));
+        assert_eq!(r.comment.as_deref(), Some("IOTA EU-005 Isle of Example"));
+        for junk in ["0", "-3", "12a", "100000000", ""] {
+            let mut r = rec("IA5X");
+            r.ota.iota = Some("EU-005".into());
+            set_extra(&mut r, IOTA_ISLAND_ID_FIELD, Some(junk.into()));
+            assert_eq!(iota_island_id(&r), None, "{junk:?}");
+            assert!(note_iota_in_comment(&mut r, &group_names));
+            assert_eq!(
+                r.comment.as_deref(),
+                Some("IOTA EU-005 Great Britain"),
+                "{junk:?}"
+            );
+        }
+        let mut padded = rec("IA5X");
+        set_extra(&mut padded, IOTA_ISLAND_ID_FIELD, Some("00009001".into()));
+        assert_eq!(
+            iota_island_id(&padded),
+            Some(9001),
+            "leading zeros, as ADIF allows"
+        );
     }
 
     /// THE GROUP'S NAME IN THE COMMENT: `IOTA <ref> <name>` alone, or after what is there with `; `,

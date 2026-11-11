@@ -35871,6 +35871,20 @@ td.aw-cc {
 .iota-offer-from {
   color: var(--text-faint);
 }
+/* The island picker beside a group (IotaIslandPick): it wraps to its own line in the flex row and
+   never runs wider than its host, however long an island's name; the full name is its title. */
+.iota-island {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 100%;
+}
+.iota-island-pick {
+  min-width: 0;
+  max-width: 100%;
+  text-overflow: ellipsis;
+}
 /* The group's name beside the reference in the Logbook's IOTA cell: plain text, dimmer. */
 .iota-cell-name {
   font-family: var(--font-sans);

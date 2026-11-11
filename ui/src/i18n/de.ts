@@ -1272,6 +1272,8 @@ export const DE: PartialCatalog = {
   "iota.prefill.label": "IOTA",
   "iota.prefill.aria": "IOTA-Referenz für diese Verbindung",
   "iota.prefill.hint": "Aus einem Spot oder Ihrer Callbook-Abfrage übernommen. Wird mit der Verbindung geloggt und gesendet; vor dem Loggen ändern oder leeren.",
+  "iota.island.label": "Insel",
+  "iota.island.none": "Keine Insel gewählt",
   "iota.card.fromSpot": "Aus einem Spot übernommen.",
   "iota.card.fromCallbook": "Aus Ihrer Callbook-Abfrage übernommen.",
   "iota.offer.fromSpot": "aus dem Spot",

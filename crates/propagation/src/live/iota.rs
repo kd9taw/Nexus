@@ -1,4 +1,5 @@
-//! The IOTA island-group list (the `live` feature): one download of IOTA's `groups.json`.
+//! The IOTA island-group list (the `live` feature): one download of IOTA's `groups.json`, and of
+//! its `islands.json` ([`fetch_islands`], same address but the file name, same client rules).
 //!
 //! Source: <https://www.iota-world.org/islands-on-the-air/downloads/download-file.html?path=groups.json>,
 //! the address IOTA Ltd publishes for software on its Developers page
@@ -7,17 +8,22 @@
 //! (<https://www.iota-world.org/copyright-notice.html>); a copy ships with Nexus by IOTA Ltd's
 //! permission (see NOTICE), and the shell calls this to replace it with a newer one at most
 //! monthly, only while the operator has the list on. The server sends no validators to make a
-//! refresh conditional. Parsing is [`crate::iota::IotaGroups::parse`];
+//! refresh conditional. Parsing is [`crate::iota::IotaGroups::parse`] and
+//! [`crate::iota::IotaIslands::parse`];
 //! `scripts/gen-iota-groups.mjs` fetches the shipped copy from the same address with the same limits.
 
 use std::time::Duration;
 
 const GROUPS_URL: &str =
     "https://www.iota-world.org/islands-on-the-air/downloads/download-file.html?path=groups.json";
+const ISLANDS_URL: &str =
+    "https://www.iota-world.org/islands-on-the-air/downloads/download-file.html?path=islands.json";
 const UA: &str = "Nexus (amateur radio logbook; https://hamradiotools.io; kd9taw@protonmail.com)";
 
 /// The most the download is read to: the list was 294 KB in October 2026.
 const GROUPS_MAX_BYTES: u64 = 2 * 1024 * 1024;
+/// The most the islands download is read to: it was 1.3 MB in November 2026.
+const ISLANDS_MAX_BYTES: u64 = 6 * 1024 * 1024;
 
 /// Download `groups.json` (about 300 KB). `Err` on network or HTTP trouble — the caller keeps the
 /// copy it holds, or the shape-only check when it holds none.
@@ -26,7 +32,17 @@ pub fn fetch_groups() -> Result<String, String> {
         .https_only(true)
         .build()
         .map_err(|e| e.to_string())?;
-    fetch_from(&c, GROUPS_URL)
+    fetch_from(&c, GROUPS_URL, GROUPS_MAX_BYTES)
+}
+
+/// Download `islands.json` (about 1.3 MB). `Err` on network or HTTP trouble — the caller keeps the
+/// copy it holds.
+pub fn fetch_islands() -> Result<String, String> {
+    let c = builder()
+        .https_only(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    fetch_from(&c, ISLANDS_URL, ISLANDS_MAX_BYTES)
 }
 
 /// The client: IOTA serves the file at its address itself, so a redirect is never followed.
@@ -37,7 +53,7 @@ fn builder() -> reqwest::blocking::ClientBuilder {
         .redirect(reqwest::redirect::Policy::none())
 }
 
-fn fetch_from(c: &reqwest::blocking::Client, url: &str) -> Result<String, String> {
+fn fetch_from(c: &reqwest::blocking::Client, url: &str, max: u64) -> Result<String, String> {
     let resp = c
         .get(url)
         .send()
@@ -50,7 +66,7 @@ fn fetch_from(c: &reqwest::blocking::Client, url: &str) -> Result<String, String
             resp.status().as_u16()
         ));
     }
-    super::body::read_capped(resp, GROUPS_MAX_BYTES, "IOTA list")
+    super::body::read_capped(resp, max, "IOTA list")
 }
 
 #[cfg(test)]
@@ -64,6 +80,7 @@ mod tests {
         fetch_from(
             &builder().build().expect("client"),
             &format!("http://127.0.0.1:{port}/groups.json"),
+            GROUPS_MAX_BYTES,
         )
     }
 

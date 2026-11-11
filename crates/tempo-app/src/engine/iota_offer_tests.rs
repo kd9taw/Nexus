@@ -75,8 +75,18 @@ fn every_upload_carries(e: &mut Engine, call: &str, want: &str) {
 /// What the injected spot lookup was asked, so a test can name the call, band and time it read.
 type Asked = std::sync::Arc<std::sync::Mutex<Vec<(String, String, u64)>>>;
 
-/// The IOTA list's names, for the tests' groups.
-fn group_name(r: &str) -> Option<String> {
+/// The IOTA list's names, for the tests' groups, and one island of EU-005's.
+fn group_name(r: &str, island: Option<u32>) -> Option<String> {
+    match (r, island) {
+        ("EU-005", Some(ISLE_OF_EXAMPLE)) => Some("Isle of Example".into()),
+        (r, _) => group_only(r),
+    }
+}
+
+/// An island of EU-005's on the tests' list.
+const ISLE_OF_EXAMPLE: u32 = 9001;
+
+fn group_only(r: &str) -> Option<String> {
     match r {
         "EU-005" => Some("Great Britain".into()),
         "EU-025" => Some("Lipari Islands".into()),
@@ -277,6 +287,106 @@ fn a_form_logged_with_its_filled_reference_sends_it() {
     assert!(is_offer_held(&r, "IOTA"));
     assert_eq!(r.comment.as_deref(), Some("IOTA EU-028 Sicily"));
     every_upload_carries(&mut e, "IA5F", "EU-028");
+}
+
+/// The island id every upload queued for `call` carries, as the services would be sent it.
+fn uploaded_island(e: &mut Engine, call: &str) -> Vec<Option<String>> {
+    e.take_pending_uploads()
+        .iter()
+        .filter(|u| u.rec.call == call)
+        .map(|u| {
+            let sent = tempo_core::logbook::adif_record(&u.rec);
+            sent.split_once("<IOTA_ISLAND_ID:")
+                .and_then(|(_, r)| r.split_once('>'))
+                .map(|(len, r)| r[..len.parse::<usize>().unwrap()].to_string())
+        })
+        .collect()
+}
+
+fn pick_island(rec: &mut QsoRecord, id: &str) {
+    rec.extra.push(("IOTA_ISLAND_ID".into(), id.into()));
+}
+
+/// AN ISLAND PICKED on a log form (operator ruling, 2026-11-10: the island is only ever the
+/// operator's pick from the group's list): logged as IOTA_ISLAND_ID, sent with the contact, and
+/// named in the COMMENT instead of the group.
+#[test]
+fn an_island_picked_on_a_form_is_logged_sent_and_named() {
+    let (mut e, _) = spotted(SpotIota::Silent);
+    let _ = e.take_pending_uploads();
+    let mut form = bare(&e, "IA5F");
+    form.ota.iota = Some("EU-005".into());
+    pick_island(&mut form, &ISLE_OF_EXAMPLE.to_string());
+    e.log_form_qso(form, StateSource::Operator, Vec::new());
+    let r = logged(&e, "IA5F");
+    assert_eq!(
+        tempo_core::logbook::offer::iota_island_id(&r),
+        Some(ISLE_OF_EXAMPLE)
+    );
+    assert_eq!(r.comment.as_deref(), Some("IOTA EU-005 Isle of Example"));
+    let sent = uploaded_island(&mut e, "IA5F");
+    assert!(!sent.is_empty(), "premise: queued");
+    for s in sent {
+        assert_eq!(s, Some(ISLE_OF_EXAMPLE.to_string()));
+    }
+}
+
+/// NO PICK, NO ISLAND: a reference filled from a spot or the callbook, or typed, logs no island
+/// id on any path, and the COMMENT names the group.
+#[test]
+fn with_no_island_picked_none_is_logged() {
+    let (mut e, _) = spotted(names("EU-005"));
+    e.settings.auto_log = true;
+    let _ = e.take_pending_uploads();
+    work(&mut e, "IA5X", 1);
+    let r = logged(&e, "IA5X");
+    assert_eq!(r.ota.iota.as_deref(), Some("EU-005"), "premise: filled");
+    assert_eq!(tempo_core::logbook::offer::iota_island_id(&r), None);
+    assert!(!r.extra.iter().any(|(k, _)| k == "IOTA_ISLAND_ID"));
+    assert_eq!(r.comment.as_deref(), Some("IOTA EU-005 Great Britain"));
+    assert!(uploaded_island(&mut e, "IA5X").iter().all(Option::is_none));
+
+    let mut form = bare(&e, "IA5F");
+    form.ota.iota = Some("EU-005".into());
+    e.log_form_qso(form, StateSource::Operator, Vec::new());
+    let r = logged(&e, "IA5F");
+    assert!(!r.extra.iter().any(|(k, _)| k == "IOTA_ISLAND_ID"), "typed");
+}
+
+/// THE POPUP: an island picked there is logged with its reference; with the reference cleared
+/// the pick goes too; and nothing picked logs none.
+#[test]
+fn the_popup_logs_an_island_picked_there_and_only_with_its_reference() {
+    for (picked, iota, want) in [
+        (Some("9001"), Some("EU-005"), Some(ISLE_OF_EXAMPLE)),
+        (Some("9001"), None, None),
+        (None, Some("EU-005"), None),
+    ] {
+        let (mut e, _) = spotted(names("EU-005"));
+        e.settings.prompt_to_log = true;
+        work(&mut e, "IA5X", 1);
+        let key = e.pending_qso_log_key().expect("held");
+        let mut shown = e.pending_log().cloned().expect("held");
+        assert_eq!(
+            tempo_core::logbook::offer::iota_island_id(&shown),
+            None,
+            "the hold never picks one"
+        );
+        shown.ota.iota = iota.map(str::to_string);
+        if let Some(id) = picked {
+            pick_island(&mut shown, id);
+        }
+        assert!(e.confirm_pending_log(&key, shown));
+        let r = logged(&e, "IA5X");
+        assert_eq!(
+            tempo_core::logbook::offer::iota_island_id(&r),
+            want,
+            "{picked:?} {iota:?}"
+        );
+        if want.is_some() {
+            assert_eq!(r.comment.as_deref(), Some("IOTA EU-005 Isle of Example"));
+        }
+    }
 }
 
 /// THE POPUP SHOWS IT: the held contact carries the reference before the operator sees it, and

@@ -125,8 +125,8 @@ import { failureText, pushToast, withErrorToast } from '../toast'
 import { qrzPushQso, clublogPushQso, hrdlogPushQso, wrlPushQso, syncQrz, downloadLotwReport, importPotaLog } from '../api'
 import { qrzCorrectPreview, qrzCorrectApply, qrzCorrectUndoMiss } from '../api'
 import { callCardTrigger, qrzPageOf } from './CallCard'
-import { IotaCell, IotaPrefillSource, IotaReferenceNote, useIotaPrefill } from './Iota'
-import { normalizeIota } from '../features/iotaGroups'
+import { IotaCell, IotaIslandPick, IotaPrefillSource, IotaReferenceNote, useIotaIslandPick, useIotaPrefill } from './Iota'
+import { IOTA_ISLAND_TAG, normalizeIota, withIotaIsland } from '../features/iotaGroups'
 import type { FieldEdit, QrzCorrectResult, QsoEdit, RowAnswer, RowRef } from '../api'
 
 interface Props {
@@ -592,6 +592,9 @@ export function Logbook({
     lookupTick,
     !showForm || editing != null,
   )
+  // The island within that group, for a contact being added: only the operator's pick from the
+  // group's list, never filled. (A contact's island is changed on its contact card.)
+  const [formIsland, setFormIsland] = useIotaIslandPick(draft.iota)
 
   // QRZ lookup for the QSO being logged: fills grid (subscriber-only) + shows the
   // operator name. On-demand (QRZ free tier is ~100/day), one lookup per click.
@@ -2011,6 +2014,8 @@ export function Logbook({
       // what the record had (Logbook::update_record), as it does for the park refs.
       myGrid: draft.myGrid.trim().toUpperCase() || null,
       myRig: draft.myRig.trim() || null,
+      // The island picked for a contact being added (IOTA_ISLAND_ID); none picked, none logged.
+      ...(!existing && iota && formIsland !== null ? { extra: withIotaIsland(undefined, formIsland) } : {}),
     }
     if (existing) {
       // The contact the form opened, by its id and the edit key of that version (never a new
@@ -2051,7 +2056,11 @@ export function Logbook({
         qslSentVia: (draft.qslSentVia || null) as QsoEdit['qslSentVia'],
         qslCard: draft.qslCard === '1',
       }
-      const answer = await saveEdit(ref, edit, [], existing.call)
+      // An island is one group's: a new group takes off the island the contact had.
+      const storedIsland = existing.extra?.find(([k]) => k === IOTA_ISLAND_TAG)?.[1] ?? null
+      const newGroup = iota !== null && iota !== (existing.ota?.iota ?? '').trim().toUpperCase()
+      const fields: FieldEdit[] = newGroup && storedIsland !== null ? [{ tag: IOTA_ISLAND_TAG, old: storedIsland, new: null }] : []
+      const answer = await saveEdit(ref, edit, fields, existing.call)
       if (!answer || answer.kind === 'busy') return
       if (answer.kind === 'changed') {
         // The form now shows the contact as it is, and a save from it goes against that version.
@@ -3046,6 +3055,7 @@ export function Logbook({
               <IotaReferenceNote reference={draft.iota} />
               <IotaPrefillSource state={iotaPrefill} />
             </label>
+            {editing == null && <IotaIslandPick reference={draft.iota} value={formIsland} onChange={setFormIsland} className="logbook-field" />}
             <label className="logbook-field">
               <span>{t('logbook.field.name.label')}</span>
               <input className="settings-input" value={draft.name} onChange={(e) => setField('name', e.target.value)} autoComplete="off" />

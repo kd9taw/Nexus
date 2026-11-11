@@ -1117,7 +1117,7 @@ mod tests {
         e.set_iota_at_log(
             |_, _, _| tempo_core::logbook::offer::SpotIota::Silent,
             |_| true,
-            |_| None,
+            |_, _| None,
         );
         e.note_callbook_answer(
             call,

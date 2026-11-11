@@ -3559,6 +3559,8 @@ export const RU: PartialCatalog = {
   "iota.prefill.label": "IOTA",
   "iota.prefill.aria": "Референс IOTA для этой связи",
   "iota.prefill.hint": "Заполнено по споту или поиску в колбуке. Записывается в журнал и отправляется вместе со связью; измените или очистите перед записью.",
+  "iota.island.label": "Остров",
+  "iota.island.none": "Остров не выбран",
   "iota.card.fromSpot": "Заполнено по споту.",
   "iota.card.fromCallbook": "Заполнено по поиску в колбуке.",
   "iota.offer.dismiss": "Оставить IOTA пустым",

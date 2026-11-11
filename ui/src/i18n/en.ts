@@ -10712,6 +10712,8 @@ export const EN = {
   'iota.prefill.label': 'IOTA',
   'iota.prefill.aria': 'IOTA reference for this contact',
   'iota.prefill.hint': 'Filled in from a spot or your callbook lookup. Logged and sent with the contact; change it or clear it before logging.',
+  'iota.island.label': 'Island',
+  'iota.island.none': 'No island picked',
   'iota.offer.fromSpot': 'from the spot',
   'iota.offer.fromCallbook': 'from the callbook',
   'iota.offer.dismiss': 'Leave IOTA empty',

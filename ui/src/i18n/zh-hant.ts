@@ -3413,6 +3413,8 @@ export const ZH_HANT: PartialCatalog = {
   "iota.prefill.label": "IOTA",
   "iota.prefill.aria": "此聯絡的 IOTA 編號",
   "iota.prefill.hint": "根據報點或呼號簿查詢填入。隨聯絡一起記錄並上傳；記錄前可修改或清除。",
+  "iota.island.label": "島嶼",
+  "iota.island.none": "未選擇島嶼",
   "iota.card.fromSpot": "根據報點填入。",
   "iota.card.fromCallbook": "根據呼號簿查詢填入。",
   "iota.offer.dismiss": "留空 IOTA",
