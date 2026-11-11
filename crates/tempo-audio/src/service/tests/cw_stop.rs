@@ -624,3 +624,33 @@ fn the_native_flex_client_is_not_paced_as_smartsdr_cat() {
         "Nexus's Flex client is not"
     );
 }
+
+/// The soundcard keyer's cut, behind `soundcard && now < cw_busy_until`, pinned for the cut-site
+/// refactor (`cut_sites`): Stop TX mid-word flushes, then unkeys, and drops the hold.
+#[test]
+fn a_soundcard_stop_mid_word_flushes_then_unkeys_and_drops_the_hold() {
+    let engine = cw_engine(3073, "soundcard", |_| {});
+    let (addr, log) = logging_rigctld(|_| None);
+    let mut rig = Rig::rigctld(&addr);
+    let mut backend = MockBackend::new();
+    backend.events = Some(Arc::clone(&log));
+    let mut state = loop_state_for(&engine);
+    step(&mut state, &engine, &mut backend, &mut rig, 100.0);
+    assert!(rig.keyed, "premise: the soundcard word keyed the radio");
+    assert!(
+        state.cw_busy_until > 140.0,
+        "premise: the word is still keying, so the site's guard holds"
+    );
+    let (from, flushes) = (log.lock().unwrap().len(), backend.flush_calls);
+    engine.lock().unwrap().halt_tx();
+    step(&mut state, &engine, &mut backend, &mut rig, 140.0);
+    super::cut_sites::assert_cut(
+        "CW soundcard",
+        &log,
+        from,
+        flushes,
+        &backend,
+        state.tx_until_ms,
+        &["flush", "T 0"],
+    );
+}
