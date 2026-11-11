@@ -696,6 +696,28 @@ fn free_port() -> u16 {
     }
 }
 
+/// A loopback port with nothing listening on it that no other socket can take: bound, never
+/// listened on, so a connect to it is refused as at a free port. A port drawn by [`free_port`] is
+/// let go, and until a test binds it again any socket in the process (another test's `:0` bind,
+/// or an outgoing connection's own port) can be given it: a later bind then fails with
+/// AddrInUse, or the radio finds someone else's listener there. [`listen_on`] starts listening on
+/// this one, the same socket, so the port is never let go in between.
+fn unlistened_port() -> (u16, socket2::Socket) {
+    use socket2::{Domain, Socket, Type};
+    let socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
+    socket
+        .bind(&std::net::SocketAddr::from(([127, 0, 0, 1], 0)).into())
+        .unwrap();
+    let port = socket.local_addr().unwrap().as_socket().unwrap().port();
+    (port, socket)
+}
+
+/// Start listening on a port held by [`unlistened_port`].
+fn listen_on(socket: socket2::Socket) -> std::net::TcpListener {
+    socket.listen(128).unwrap();
+    socket.into()
+}
+
 /// ⭐ THE RADIO LOOP RUNS A RADIO THROUGH WFVIEW'S RIGCTLD. On the shared rigctld the loop reads
 /// the radio's range and attenuator and preamp steps from wfview's `\dump_state`, follows a turn
 /// of the radio's own dial, and tunes the radio on a QSY; every line it sends is one wfview
@@ -2179,7 +2201,7 @@ fn a_radio_on_the_operators_rigctld_at_the_sharing_ports_number_connects_once_sh
 /// the radio shares it. Each value is (CAT ok, what the status says).
 #[test]
 fn started_before_the_operators_rigctld_on_the_sharing_port_the_radio_connects_once_it_starts() {
-    let port = free_port();
+    let (port, operators_port) = unlistened_port();
     let addr = format!("127.0.0.1:{port}");
     let (engine, _) = station(&addr, free_port());
     let settings = {
@@ -2235,7 +2257,7 @@ fn started_before_the_operators_rigctld_on_the_sharing_port_the_radio_connects_o
     run(&mut state, &mut rig, 4, &|_| false);
     let waiting = (state.cat_ok, said());
     // The operator starts their rigctld on P: the port is free, so it binds.
-    let _rigctld = FakeWfview::at(&addr, true);
+    let _rigctld = FakeWfview::serving(listen_on(operators_port), true);
     run(&mut state, &mut rig, 40, &|s| s.cat_ok == Some(true));
     let shared = (state.cat_ok, said());
     assert_eq!(

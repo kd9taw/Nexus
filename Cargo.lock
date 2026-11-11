@@ -2880,6 +2880,7 @@ dependencies = [
  "rustfft",
  "serde_json",
  "serialport",
+ "socket2",
  "tempo-app",
  "tempo-codec",
  "tempo-core",
