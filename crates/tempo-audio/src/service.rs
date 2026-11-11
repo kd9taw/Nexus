@@ -17432,7 +17432,8 @@ impl RadioLoop {
                     //
                     // ⭐ AND FOR EVERY TIER THAT HAS NO EARLY PASS AT ALL.
                     // `early_done_slot` is set only by the early-pass block, whose
-                    // trigger table is FT8 11.8 s / FT4 5.5 s / everything else None
+                    // trigger table is FT8 11.8 s (early) / FT4 6.05 s (full) / FT2
+                    // 2.6 s / everything else None (MSK144's repeating passes clear it)
                     // — so Q65, FST4, MSK144, WSPR and FST4W could NEVER satisfy the
                     // condition above and always fell through to the deferred path,
                     // keyed late by however long the previous period's decode took.
