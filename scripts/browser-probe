@@ -112,7 +112,11 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         window, scrolls nowhere sideways, draws the callbook photo, keeps
                         Save and Cancel on screen at its top and foot and lists ten recent
                         contacts, with a control (the Save bar in the flow) that must hide
-                        Save (ui/probe/contactcard-probe.mjs)
+                        Save; and the Add form's IOTA box filled from a spot under a very long
+                        group name at 1024×768 and 1920×1080 at 65 % and 175 %, the name drawn
+                        whole covering nothing, nothing sideways, Log reachable, with a control
+                        (the name kept on one line) that must be caught
+                        (ui/probe/contactcard-probe.mjs)
   --desktop atu         the TX strip's ATU button and its "Switch tuner out" menu at 1024×768
                         and 1920×1080 in both themes, asserting nothing scrolls sideways, the
                         strip's four controls are on screen, Stop TX does not move for ATU ON,
@@ -174,7 +178,12 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         open over the real top bar, at 700×800 (xs) and 2560×1440 (xl), Stop TX
                         is on top where it is drawn and unmoved, one real click stops once and the
                         overlay stays open with the keyboard where it was, with the stop layer
-                        taken away as the control (ui/probe/stopabove-probe.mjs; it builds nothing)
+                        taken away as the control; and the prompt to log's and the log strip's
+                        IOTA box filled from a spot under a very long group name at 1024×768 and
+                        1920×1080 at 65 % and 175 %, the name whole covering nothing, no sideways
+                        scroll added, Log in the window and on top, with a control (the name kept
+                        on one line) that must be caught (ui/probe/stopabove-probe.mjs; it builds
+                        nothing)
   --desktop menustop    with a menu open (Help, and the band pill's where the screen draws it),
                         on the Logbook and on Operate at 700×800 (xs) and 2560×1440 (xl): one
                         real click on Stop TX stops once, closes the menu and leaves the keyboard

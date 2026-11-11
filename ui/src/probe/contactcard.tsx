@@ -9,6 +9,12 @@
 //
 // `?footer=static` is the CONTROL: the card's Save/Cancel bar is put back into the flow, so at 1024×768
 // it starts below the fold and the probe must see it NOT on screen.
+//
+// `?iota=1` is the FILLED IOTA BOX of the Logbook's Add form: the station names EU-901 for any call
+// (`get_iota_offer`, from a spot) and the island list holds it under a very long group name, so a call
+// typed into the form fills the IOTA box with the name and its source beside it. `&zoom=<n>` sets the
+// app's UI scale (`--ui-zoom`). `&iotacontrol=1` is that phase's CONTROL: the group name may not wrap,
+// so it must come back NOT drawn whole.
 import '../styles.css'
 import '../cockpit-panes.css'
 import { createRoot } from 'react-dom/client'
@@ -21,6 +27,12 @@ import type { LoggedQso, QrzLookup } from '../types'
 const params = new URLSearchParams(location.search)
 document.documentElement.setAttribute('data-theme', 'dark')
 localStorage.clear()
+if (params.get('zoom')) document.documentElement.style.setProperty('--ui-zoom', params.get('zoom')!)
+if (params.get('iotacontrol') === '1') {
+  const s = document.createElement('style')
+  s.textContent = '.iota-name, .iota-name-text { white-space: nowrap !important; overflow-wrap: normal !important; }'
+  document.head.appendChild(s)
+}
 if (params.get('footer') === 'static') {
   const s = document.createElement('style')
   s.textContent = '.contact-card-actions { position: static !important; }'
@@ -35,6 +47,10 @@ const BOOK: QrzLookup = {
 } as QrzLookup
 
 const base = 1_790_000_000
+/** A group name as long as IOTA's longest run: a list of islands with their other names. */
+const LONG_GROUP =
+  'Eolie Islands (Lipari, Salina, Vulcano, Stromboli, Panarea, Filicudi, Alicudi and the rocks of Basiluzzo, Dattilo and Strombolicchio) - aka Aeolian Islands'
+
 const LOG: LoggedQso[] = Array.from({ length: 14 }, (_, n) => ({
   id: `id-${n}`, call: 'EC1DD', grid: 'IN52TK', band: n % 2 ? '40m' : '20m', freqMhz: n % 2 ? 7.074 : 14.074, mode: n % 3 ? 'FT8' : 'CW',
   rstSent: n % 3 ? '-10' : '599', rstRcvd: n % 3 ? '-12' : '579', name: 'Pedro', qth: 'Santiago de Compostela',
@@ -51,6 +67,13 @@ const answers: Record<string, (args: Record<string, unknown>) => unknown> = {
   log_operators: () => [],
   log_activations: () => [],
   qrz_lookup: () => BOOK,
+  ...(params.get('iota') === '1'
+    ? {
+        get_iota_offer: () => ({ reference: 'EU-901', source: 'spot' }),
+        get_iota_list_status: () => ({ enabled: true, count: 1, fetchedAt: base, bundled: true, lastError: null }),
+        get_iota_groups: () => [{ reference: 'EU-901', name: LONG_GROUP }],
+      }
+    : {}),
   qso_history: () => [
     { seq: 1, kind: 'create', source: 'operator', run: 'r1', atMs: (base + 13 * 3600) * 1000, undoes: null, undoneBy: null, changes: [] },
   ],

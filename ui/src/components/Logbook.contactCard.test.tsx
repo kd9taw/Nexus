@@ -518,8 +518,8 @@ describe('Download confirmations (#348)', () => {
   })
 })
 
-describe('an IOTA reference taken from an offer (operator rulings, 2026-10-27)', () => {
-  it('says it is held back from every service, and Confirm takes the mark off and nothing else', async () => {
+describe('an IOTA reference Nexus filled at log time (operator rulings, 2026-11-10)', () => {
+  it('says it was filled from a spot, with no hold and nothing to confirm', async () => {
     const spotted: LoggedQso = {
       ...DL,
       ota: { ...DL.ota!, iota: 'EU-028' },
@@ -528,14 +528,9 @@ describe('an IOTA reference taken from an offer (operator rulings, 2026-10-27)',
     engine.log = [OTHER, spotted, ...Array.from({ length: 12 }, (_, n) => earlier(n))]
     await mounted()
     const card = await openCard()
-    expect(within(card).getByText(t('iota.card.spotHeld'))).toBeTruthy()
-    fireEvent.click(within(card).getByRole('button', { name: t('iota.card.confirm') }))
-    await waitFor(() => expect(api.editQsoById).toHaveBeenCalledTimes(1))
-    const [ref, edit, fields] = vi.mocked(api.editQsoById).mock.calls[0]
-    expect(ref.id).toBe('id-dl')
-    expect(fields).toEqual([{ tag: 'APP_NEXUS_OFFER_HELD', old: 'IOTA', new: null }])
-    expect(edit.ota.iota, 'the reference itself is as stored').toBe('EU-028')
-    expect(edit.name, 'and every box is as stored').toBeNull()
+    expect(within(card).getByText(t('iota.card.fromSpot'))).toBeTruthy()
+    expect(within(card).queryByText(/sent to no service/i)).toBeNull()
+    expect(within(card).getByRole('button', { name: t('iota.card.clear') })).toBeTruthy()
   })
 
   it('Clear takes the reference out as the backend expects, naming what it was made against', async () => {
@@ -555,7 +550,7 @@ describe('an IOTA reference taken from an offer (operator rulings, 2026-10-27)',
     expect(edit.name, 'and every box is as stored').toBeNull()
   })
 
-  it('one taken from the callbook says so, and is held back the same way', async () => {
+  it('one filled from the callbook says so', async () => {
     const looked: LoggedQso = {
       ...DL,
       ota: { ...DL.ota!, iota: 'EU-028' },
@@ -564,12 +559,12 @@ describe('an IOTA reference taken from an offer (operator rulings, 2026-10-27)',
     engine.log = [OTHER, looked, ...Array.from({ length: 12 }, (_, n) => earlier(n))]
     await mounted()
     const card = await openCard()
-    expect(within(card).getByText(t('iota.card.callbookHeld'))).toBeTruthy()
-    expect(within(card).queryByText(t('iota.card.spotHeld'))).toBeNull()
-    expect(within(card).getByRole('button', { name: t('iota.card.confirm') })).toBeTruthy()
+    expect(within(card).getByText(t('iota.card.fromCallbook'))).toBeTruthy()
+    expect(within(card).queryByText(t('iota.card.fromSpot'))).toBeNull()
+    expect(within(card).getByRole('button', { name: t('iota.card.clear') })).toBeTruthy()
   })
 
-  it('an older contact whose IOTA the callbook filled shows no such note: it was never held', async () => {
+  it('an older contact whose IOTA the callbook filled shows no such note: it carries no fill mark', async () => {
     const old: LoggedQso = {
       ...DL,
       ota: { ...DL.ota!, iota: 'EU-028' },
@@ -578,8 +573,7 @@ describe('an IOTA reference taken from an offer (operator rulings, 2026-10-27)',
     engine.log = [OTHER, old, ...Array.from({ length: 12 }, (_, n) => earlier(n))]
     await mounted()
     const card = await openCard()
-    expect(within(card).queryByText(t('iota.card.callbookHeld'))).toBeNull()
-    expect(within(card).queryByRole('button', { name: t('iota.card.confirm') })).toBeNull()
+    expect(within(card).queryByText(t('iota.card.fromCallbook'))).toBeNull()
     expect(within(card).queryByRole('button', { name: t('iota.card.clear') })).toBeNull()
   })
 
@@ -588,7 +582,7 @@ describe('an IOTA reference taken from an offer (operator rulings, 2026-10-27)',
     engine.log = [OTHER, typed, ...Array.from({ length: 12 }, (_, n) => earlier(n))]
     await mounted()
     const card = await openCard()
-    expect(within(card).queryByText(t('iota.card.spotHeld'))).toBeNull()
-    expect(within(card).queryByRole('button', { name: t('iota.card.confirm') })).toBeNull()
+    expect(within(card).queryByText(t('iota.card.fromSpot'))).toBeNull()
+    expect(within(card).queryByRole('button', { name: t('iota.card.clear') })).toBeNull()
   })
 })

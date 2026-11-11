@@ -2344,6 +2344,48 @@ mod tests {
         assert_eq!(credits, [["WAS".to_string()], ["DXCC".to_string()]]);
     }
 
+    /// ★ An IOTA reference Nexus filled at log time from a SPOT (no callbook mark, only the fill
+    /// mark, `offer::OFFER_HELD_FIELD`) is the station's guess, not the operator's word: LoTW's
+    /// signed IOTA replaces it and the mark goes. Once the operator has edited it (the mark off), it
+    /// is theirs and LoTW's leaves it alone (operator ruling, 2026-11-10).
+    #[test]
+    fn lotw_detail_replaces_a_spot_filled_iota_and_never_an_owned_one() {
+        use crate::logbook::offer::{accept_iota_offer, is_offer_held, IotaOffer, OfferSource};
+        let d = 20_000;
+        let mut signed = under(confirms(w1aw_at(d, 12, 0), "DXCC"), "K2DEF");
+        signed.ota.iota = Some("NA-001".into());
+        let spot = IotaOffer {
+            reference: "NA-046".into(),
+            source: OfferSource::Spot,
+        };
+        let mut filled = under(w1aw_at(d, 12, 0), "K2DEF");
+        assert!(accept_iota_offer(&mut filled, &spot));
+        assert!(is_offer_held(&filled, "IOTA"), "premise: Nexus's fill");
+        let mut log = vec![filled.clone()];
+        reconcile_lotw(&mut log, std::slice::from_ref(&signed), Some("K2DEF"));
+        assert_eq!(
+            log[0].ota.iota.as_deref(),
+            Some("NA-001"),
+            "LoTW's replaces it"
+        );
+        assert!(!is_offer_held(&log[0], "IOTA"), "and the mark goes");
+
+        let mut owned = filled.clone();
+        owned.ota.iota = Some("NA-047".into());
+        let owned = crate::logbook::edited(&filled, owned);
+        assert!(
+            !is_offer_held(&owned, "IOTA"),
+            "premise: the edit made it theirs"
+        );
+        let mut log = vec![owned];
+        reconcile_lotw(&mut log, std::slice::from_ref(&signed), Some("K2DEF"));
+        assert_eq!(
+            log[0].ota.iota.as_deref(),
+            Some("NA-047"),
+            "the operator's stays"
+        );
+    }
+
     /// ★ LoTW's QSL detail keeps what it carries for the contact: the partner's grid, county,
     /// IOTA, ITU zone and prefix. Each fills an empty field; a value the log holds stays, unless
     /// a callbook lookup filled it, when LoTW's replaces it and it is LoTW's from then on (CQZ

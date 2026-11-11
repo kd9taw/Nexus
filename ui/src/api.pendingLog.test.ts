@@ -42,7 +42,7 @@ describe('confirming or discarding a held contact names it, on every transport',
     })
   })
 
-  it('carries the IOTA offer the operator took, and nothing when none was', async () => {
+  it('carries the IOTA reference the form filled its box with, and nothing when none was', async () => {
     const offer = { reference: 'EU-028', source: 'spot' as const }
     await api.confirmPendingLog(record, 'hold-1', offer)
     await api.logQso(record, 'operator', offer)

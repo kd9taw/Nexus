@@ -343,10 +343,6 @@ pub struct IotaProgress {
     /// Confirmed by QSL CARD alone, shown beside the award count.
     #[serde(default)]
     pub card_confirmed: usize,
-    /// Worked only through references still held for the operator to confirm: included in
-    /// `worked`, never in `confirmed`.
-    #[serde(default)]
-    pub held: usize,
 }
 
 /// The US Counties award's standing: the 3,077 counties of [`crate::us_counties`], by the
@@ -417,9 +413,6 @@ pub struct RecordFields {
     /// the ARRL gate (LoTW or card); these add what a CQ award credits beyond it, and what the
     /// Stats pane lists per source.
     pub qsl: QslChannels,
-    /// The contact's IOTA reference is still held for the operator to confirm (a spot named it):
-    /// the group counts as worked, and no confirmation on the contact confirms it.
-    pub iota_held: bool,
 }
 
 /// The channels a contact's confirmation came through — the record's per-source truth
@@ -636,9 +629,6 @@ pub struct Awards {
     worked_iota: HashSet<String>,
     confirmed_iota: HashSet<String>,
     card_iota: HashSet<String>,
-    /// Groups worked through a reference the operator stands behind ([`RecordFields::iota_held`]
-    /// not set): the rest of `worked_iota` is [`IotaProgress::held`].
-    firm_iota: HashSet<String>,
     /// Satellite DXCC — entities via satellite (excluded from every terrestrial DXCC fold).
     worked_entity_sat: HashSet<&'static str>,
     confirmed_entity_sat: HashSet<&'static str>,
@@ -977,14 +967,11 @@ impl Awards {
             .filter(|s| !s.is_empty())
         {
             self.worked_iota.insert(i.clone());
-            if !rec.iota_held {
-                self.firm_iota.insert(i.clone());
-                if confirmed {
-                    self.confirmed_iota.insert(i.clone());
-                }
-                if card_confirmed {
-                    self.card_iota.insert(i);
-                }
+            if confirmed {
+                self.confirmed_iota.insert(i.clone());
+            }
+            if card_confirmed {
+                self.card_iota.insert(i);
             }
         }
         let resolved = dxcc::resolve(call);
@@ -1342,7 +1329,6 @@ impl Awards {
             worked: self.worked_iota.len(),
             confirmed: self.confirmed_iota.len(),
             card_confirmed: self.card_iota.len(),
-            held: self.worked_iota.len() - self.firm_iota.len(),
         };
 
         // 5-Band DXCC + the WORK chase: per-entity award-band completeness.
@@ -2214,57 +2200,6 @@ mod tests {
             !s.vucc.awards.iter().any(|x| x.band == "20m"),
             "20m is not a VUCC band"
         );
-    }
-
-    /// A reference still held for the operator to confirm is a group worked and no more: a LoTW
-    /// match or a card on the contact confirms the contact, not which island it was made from.
-    #[test]
-    fn a_held_iota_reference_counts_as_worked_and_never_as_confirmed() {
-        let mut a = Awards::new();
-        let held = RecordFields {
-            iota_held: true,
-            ..RecordFields::default()
-        };
-        let add = |a: &mut Awards, call: &str, iota: &str, rec: RecordFields| {
-            a.add_qso(
-                call,
-                "20m",
-                "FT8",
-                true,
-                false,
-                true,
-                None,
-                None,
-                Some(iota),
-                false,
-                rec,
-            )
-        };
-        add(&mut a, "IA5A", "EU-028", held);
-        let s = a.summary();
-        assert_eq!(
-            (
-                s.iota.worked,
-                s.iota.confirmed,
-                s.iota.card_confirmed,
-                s.iota.held
-            ),
-            (1, 0, 0, 1)
-        );
-        // Another contact the operator stands behind confirms the group, held or not beside it.
-        add(&mut a, "IA5B", "EU-028", RecordFields::default());
-        let s = a.summary();
-        assert_eq!(
-            (
-                s.iota.worked,
-                s.iota.confirmed,
-                s.iota.card_confirmed,
-                s.iota.held
-            ),
-            (1, 1, 1, 0)
-        );
-        // The rest of the contact still counts as it always did.
-        assert_eq!(s.confirmed_qsos, 2);
     }
 
     /// IOTA credits LoTW-matched contacts as well as QSL cards: a LoTW-only confirmation and a

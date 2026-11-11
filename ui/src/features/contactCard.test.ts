@@ -211,3 +211,13 @@ describe('what a corrected call takes off, said before the save', () => {
     expect(clearedByCallFix(Q, { ...draftOf(Q), call: 'W1AX' }, fieldsOf(Q))).toEqual(['CNTY'])
   })
 })
+
+describe('a typed IOTA reference', () => {
+  it('in an obvious spelling is saved in the log’s one spelling; anything else is refused, never dropped', () => {
+    for (const typed of ['eu-5', 'EU 5', 'EU-05', 'eu005']) {
+      const r = saved({ iota: typed })
+      expect(r.ok && r.edit.ota.iota, typed).toBe('EU-005')
+    }
+    expect(saved({ iota: 'XX-001' })).toEqual({ ok: false, error: { code: 'iota' } })
+  })
+})

@@ -32666,7 +32666,8 @@ const PENDING_LOG_MOVED_ON: &str = "pendingLogMovedOn";
 /// Confirm-and-log the contact the prompt-to-log popup is showing. `record` is the
 /// (possibly edited) contact and `expected_key` the snapshot's `pendingQsoLogKey` it was
 /// shown with. Returns the refreshed snapshot, whose `pendingLog` is the next held contact.
-/// `iota_offer` is the IOTA offer the operator took in the popup, if any ([`get_iota_offer`]).
+/// The popup's IOTA box is `record`'s reference; `iota_offer` is what the popup filled it with
+/// ([`get_iota_offer`]), which marks it as that source's when logged as it was.
 #[tauri::command]
 async fn confirm_pending_log(
     state: State<'_, SharedEngine>,
@@ -32718,7 +32719,8 @@ fn discard_pending_log(
 /// `state_source` is where the form's STATE came from ("operator", "callbook" or "park"; see
 /// [`tempo_app::engine::StateSource`]); absent is the operator's. A park or summit the record
 /// carries is placed here, before the Engine lock ([`ota_park_places`]).
-/// `iota_offer` is the IOTA offer the operator took on the form, if any ([`get_iota_offer`]).
+/// The form's IOTA box is `record`'s reference; `iota_offer` is what the form filled it with
+/// ([`get_iota_offer`]), which marks it as that source's when logged as it was.
 #[tauri::command]
 async fn log_qso(
     state: State<'_, SharedEngine>,
@@ -32744,8 +32746,8 @@ async fn log_qso(
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
             let mut rec: tempo_core::logbook::QsoRecord = record.into();
-            // The IOTA offer the operator took on the form ([`get_iota_offer`]): written into an
-            // empty field only, and held back from uploads until they touch it.
+            // The reference the form filled its IOTA box with ([`get_iota_offer`]): marked as its
+            // source's when the box still holds it (or is empty); one the operator changed is theirs.
             if let Some(offer) = &iota_offer {
                 tempo_core::logbook::offer::accept_iota_offer(&mut rec, offer);
             }
@@ -35821,7 +35823,7 @@ fn note_spot_iota(spot: &tempo_net::cluster::ClusterSpot) {
     }
 }
 
-/// What the spots say of a no-popup FT contact (`tempo_core::logbook::offer::hold_iota_at_log`;
+/// What the spots say of a contact no form shows first (`tempo_core::logbook::offer::fill_iota_at_log`;
 /// [`SpotIotaLog::group_at_contact`]), under the offer's rule ([`get_iota_offer`]): no spots in an
 /// unassisted contest entry. Called under the Engine lock: the lock it takes is held only for a
 /// read, and no holder of it waits for the Engine.
@@ -35842,13 +35844,13 @@ fn clear_spot_iota() {
     }
 }
 
-/// What IOTA reference to OFFER the contact the log form, or the confirm-before-log popup, holds
-/// for `call` (`tempo_core::logbook::offer::iota_offer`; operator decision, 2026-10-27): the group
-/// the spot comments for that call name (the Spots board's window, never in an unassisted contest
+/// What IOTA reference to FILL the box of the log form, or the confirm-before-log popup, with for
+/// `call` (`tempo_core::logbook::offer::iota_offer`; operator ruling, 2026-11-10): the group the
+/// spot comments for that call name (the Spots board's window, never in an unassisted contest
 /// entry), else the group a callbook lookup this session answered for exactly that call. Nothing
 /// when the form already holds a reference (`held`), and with the island list held, nothing it
-/// lacks. An offer writes nothing: the operator takes it, and `log_qso` / `confirm_pending_log`
-/// then write it, held back from uploads until the operator touches it.
+/// lacks. Asking writes nothing: the form puts it in its box for the operator to change or clear,
+/// and `log_qso` / `confirm_pending_log` log what the box holds.
 #[tauri::command(async)]
 fn get_iota_offer(
     state: State<'_, SharedEngine>,
@@ -43080,20 +43082,21 @@ mod upload_record_tests {
         assert!(super::dxkeeper_adif(&todays).contains("<GRIDSQUARE:6>FN31pr"));
     }
 
-    /// Nor an IOTA reference taken from a log-time offer the operator has not confirmed: DXKeeper
-    /// can upload it to LoTW and the other services. One the operator typed, and an older
-    /// callbook-filled one, are sent as before.
+    /// An IOTA reference Nexus filled at log time goes to DXKeeper like one typed (operator ruling,
+    /// 2026-11-10: nothing is held back), including one logged under the old hold.
     #[test]
-    fn dxkeeper_never_gets_a_held_iota() {
+    fn dxkeeper_gets_a_filled_iota() {
         let parse = |adif: &str| tempo_core::logbook::parse_adif(adif).remove(0);
-        let held = parse(
+        let filled = parse(
             "<CALL:4>IA5X<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20261027<TIME_ON:6>120000\
              <IOTA:6>EU-028<NOTES:4>mine<APP_NEXUS_OFFER_HELD:4>IOTA<EOR>",
         );
-        assert!(tempo_core::logbook::offer::withhold_iota(&held), "premise");
-        let sent = super::dxkeeper_adif(&held);
-        assert!(!sent.contains("<IOTA:"), "{sent}");
-        assert!(!sent.contains("APP_NEXUS_OFFER_HELD"), "{sent}");
+        assert!(
+            tempo_core::logbook::offer::is_offer_held(&filled, "IOTA"),
+            "premise"
+        );
+        let sent = super::dxkeeper_adif(&filled);
+        assert!(sent.contains("<IOTA:6>EU-028"), "{sent}");
         assert!(
             sent.contains("<NOTES:4>mine"),
             "still their own record: {sent}"
@@ -43103,11 +43106,6 @@ mod upload_record_tests {
              <IOTA:6>EU-028<EOR>",
         );
         assert!(super::dxkeeper_adif(&typed).contains("<IOTA:6>EU-028"));
-        let older = parse(
-            "<CALL:4>IA5X<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20261027<TIME_ON:6>120000\
-             <IOTA:6>EU-025<APP_NEXUS_CALLBOOK_FILLED:4>IOTA<EOR>",
-        );
-        assert!(super::dxkeeper_adif(&older).contains("<IOTA:6>EU-025"));
     }
 }
 
@@ -51740,7 +51738,7 @@ fn start_on_the_logbook(
         // administrative subdivision", so "ON" on a Canadian contact is the correct value for
         // an export and for TQSL, and no province code can collide with a WAS state.
         eng.set_state_resolver(subdivision_hint);
-        eng.set_iota_at_log(spot_iota_at_log, iota_list::known);
+        eng.set_iota_at_log(spot_iota_at_log, iota_list::known, iota_list::name);
         // Grid-rarity gems: geography table + the measured-activity census
         // (demote-only refinement). Restore the persisted census BEFORE any
         // stamping so the first snapshot already shows refined tiers.
@@ -61492,7 +61490,7 @@ mod tests {
         // Split, or this test's own source would satisfy it.
         assert!(src.contains(concat!(
             "eng.set_iota_at_log(",
-            "spot_iota_at_log, iota_list::known);"
+            "spot_iota_at_log, iota_list::known, iota_list::name);"
         )));
     }
 

@@ -241,11 +241,6 @@ impl StatusFold {
         if !self.kind.confirms(c.award_confirmed, c.rec.qsl) {
             return;
         }
-        // A reference still held for the operator to confirm: the contact may be confirmed, the
-        // island group it names is not.
-        if self.kind == AwardKind::Iota && c.rec.iota_held {
-            return;
-        }
         e.confirmed = true;
         let better = match &e.pick {
             None => true,
@@ -444,33 +439,6 @@ mod tests {
             status(AwardKind::Waz, false, &log).ready[0].confirmed_by,
             ["eqsl"]
         );
-    }
-
-    /// A held reference is no entity to submit: worked, not confirmed, whatever confirms the
-    /// contact, and the contact is not offered for an application.
-    #[test]
-    fn a_held_iota_reference_is_worked_and_not_ready_to_submit() {
-        let mut fold = StatusFold::new(AwardKind::Iota, false);
-        fold.add(&StatusContact {
-            id: "1",
-            call: "IA5X",
-            band: "20m",
-            mode: "FT8",
-            award_confirmed: true,
-            iota: Some("EU-028"),
-            rec: RecordFields {
-                iota_held: true,
-                qsl: QslChannels {
-                    lotw: true,
-                    ..QslChannels::default()
-                },
-                ..RecordFields::default()
-            },
-            ..StatusContact::default()
-        });
-        let s = fold.finish();
-        assert_eq!((s.worked, s.confirmed), (1, 0));
-        assert!(s.ready.is_empty());
     }
 
     #[test]

@@ -2,11 +2,11 @@
 //
 // IOTA ON SCREEN: the island list ships with Nexus (IOTA Ltd's permission) and is on by default, so
 // a name shows with no question asked; every island name shown carries IOTA Ltd's credit and a
-// link; with the list off a reference is checked by its shape alone; and a reference is OFFERED to
-// a contact, never written by itself.
+// link; with the list off a reference is checked by its shape alone; and a log form's IOTA box shows
+// the reference the station filled it with, where it came from, and lets the operator clear it.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
-import { IotaOffer, IotaReferenceNote, IotaListSettings } from './Iota'
+import { IotaCell, IotaPrefillField, IotaReferenceNote, IotaListSettings, iotaInvalid, iotaToLog, type IotaPrefillState } from './Iota'
 import { iotaKnown, resetIotaGroupsForTest, IOTA_SITE, IOTA_LIST_EVENT } from '../features/iotaGroups'
 import { iotaNeeded } from './SpotsPanel'
 import { t } from '../i18n'
@@ -67,20 +67,62 @@ describe('the list check', () => {
   })
 })
 
-describe('the offer', () => {
-  it('names the reference and where it came from, and writes nothing unless Use is pressed', () => {
+describe('the filled IOTA box', () => {
+  const offer = { reference: 'EU-901', source: 'spot' as const }
+  const state = (taken: boolean): IotaPrefillState => ({
+    offer,
+    taken: taken ? offer : null,
+    edit: vi.fn(),
+    clear: vi.fn(),
+    reset: vi.fn(),
+  })
+
+  it('shows the reference, its group, and where it came from while it is the station’s', () => {
     resetIotaGroupsForTest(GROUPS, status(true, 1))
-    const onAccept = vi.fn()
-    const onDismiss = vi.fn()
-    render(<IotaOffer offer={{ reference: 'EU-901', source: 'spot' }} onAccept={onAccept} onDismiss={onDismiss} />)
+    const s = state(true)
+    render(<IotaPrefillField state={s} value="EU-901" />)
+    expect((screen.getByTitle(t('iota.prefill.hint')) as HTMLInputElement).value).toBe('EU-901')
     expect(screen.getByText(t('iota.offer.fromSpot'))).toBeTruthy()
     expect(screen.getByText('Example Isles group')).toBeTruthy()
-    expect(onAccept).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByTitle(t('iota.prefill.hint')), { target: { value: 'eu-902' } })
+    expect(s.edit).toHaveBeenCalledWith('EU-902')
     fireEvent.click(screen.getByRole('button', { name: t('iota.offer.dismiss') }))
-    expect(onDismiss).toHaveBeenCalled()
-    expect(onAccept).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: t('iota.offer.use') }))
-    expect(onAccept).toHaveBeenCalledWith('EU-901')
+    expect(s.clear).toHaveBeenCalled()
+  })
+
+  it('a reference the operator changed says no source', () => {
+    resetIotaGroupsForTest(GROUPS, status(true, 1))
+    render(<IotaPrefillField state={state(false)} value="EU-902" />)
+    expect(screen.queryByText(t('iota.offer.fromSpot'))).toBeNull()
+  })
+
+  it('a reference in any obvious spelling is logged in its one spelling; anything else is invalid, not empty', () => {
+    expect(iotaToLog(' eu-901 ')).toBe('EU-901')
+    expect(iotaToLog('EU-9')).toBe('EU-009')
+    expect(iotaToLog('')).toBeNull()
+    expect(iotaInvalid('')).toBe(false)
+    expect(iotaInvalid('eu 9')).toBe(false)
+    expect(iotaToLog('XX-901')).toBeNull()
+    expect(iotaInvalid('XX-901')).toBe(true)
+  })
+})
+
+describe("the Logbook's IOTA cell", () => {
+  it('shows the group name beside the reference, with the credit on hover', () => {
+    resetIotaGroupsForTest(GROUPS, status(true, 1))
+    const { container } = render(<IotaCell reference="EU-901" />)
+    expect(container.textContent).toBe('EU-901 Example Isles group')
+    expect(container.querySelector('.log-cell')?.getAttribute('title')).toContain(t('iota.credit.title'))
+  })
+
+  it('without the list, or for a group it lacks, the reference alone; none, a dash', () => {
+    resetIotaGroupsForTest(null, status(false))
+    expect(render(<IotaCell reference="EU-901" />).container.textContent).toBe('EU-901')
+    cleanup()
+    resetIotaGroupsForTest(GROUPS, status(true, 1))
+    expect(render(<IotaCell reference="EU-999" />).container.textContent).toBe('EU-999')
+    cleanup()
+    expect(render(<IotaCell reference={null} />).container.textContent).toBe('—')
   })
 })
 

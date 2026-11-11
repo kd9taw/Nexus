@@ -522,6 +522,9 @@ impl Engine {
         let Some(mut held) = self.take_current_qso_record() else {
             return CurrentQsoLogOutcome::NoEligibleContact;
         };
+        // Its IOTA reference, as the desktop's Log QSO fills it, popup or not
+        // ([`Self::fill_iota_at_log`]).
+        self.fill_iota_at_log(&mut held.record);
         if self.settings.prompt_to_log || held.confirm_only {
             // Stamped as the desktop's hold stamps it: the confirm logs the park it was made from.
             self.stamp_hold(&mut held.record);
@@ -608,8 +611,8 @@ impl Engine {
         record.rst_sent = edits.rst_sent;
         record.rst_rcvd = edits.rst_rcvd;
         // The same R2 re-derivation the desktop confirm runs: a corrected call must not carry
-        // the busted call's COUNTRY, NAME or looked-up GRID into the log, whichever client the
-        // operator confirmed from.
+        // the busted call's COUNTRY, NAME, looked-up GRID or filled IOTA into the log, whichever
+        // client the operator confirmed from.
         let dropped = self.rederive_after_edits(&mut record, pending.record(), pending.grid_source);
         // Its park was decided when it was held.
         let outcome = self.log_qso_inner(
@@ -1107,6 +1110,67 @@ mod tests {
             Some("EN37"),
             "the grid came off the air with the contact, so the correction leaves it alone"
         );
+    }
+
+    /// An island station's callbook answer, the group the hold fills from.
+    fn island(e: &mut Engine, call: &str, group: Option<&str>) {
+        e.set_iota_at_log(
+            |_, _, _| tempo_core::logbook::offer::SpotIota::Silent,
+            |_| true,
+            |_| None,
+        );
+        e.note_callbook_answer(
+            call,
+            tempo_core::logbook::callbook::CallbookAnswer {
+                call: call.into(),
+                iota: group.map(str::to_string),
+                ..Default::default()
+            },
+        );
+    }
+
+    /// REVIEW REPRO: Remote's confirm of a corrected call drops the busted call's filled IOTA and
+    /// takes the corrected call's own, as the desktop's does.
+    #[test]
+    fn a_remote_confirm_of_a_corrected_call_drops_the_busted_calls_iota() {
+        let mut fixture = Fixture::new(Tier::Ft8, true);
+        island(&mut fixture.engine, "W9XYZ", Some("NA-046"));
+        let identity = fixture.hold();
+        assert_eq!(
+            identity.record().ota.iota.as_deref(),
+            Some("NA-046"),
+            "premise: the hold filled it"
+        );
+        let mut edits = edits(&identity);
+        edits.call = "VE9XYZ".into();
+        fixture
+            .engine
+            .confirm_pending_log_for_sync(identity, edits)
+            .unwrap()
+            .sync()
+            .unwrap();
+        let logged = fixture.engine.stored_log()[0].clone();
+        assert_eq!(logged.call, "VE9XYZ");
+        assert_eq!(logged.ota.iota, None, "not the other station's group");
+        assert!(!tempo_core::logbook::offer::is_offer_held(&logged, "IOTA"));
+    }
+
+    /// REVIEW REPRO: Remote's Log QSO with no popup fills the reference as the desktop's does.
+    #[test]
+    fn remotes_log_qso_with_no_popup_fills_the_iota() {
+        let mut at_once = Fixture::new(Tier::Ft8, false);
+        island(&mut at_once.engine, "W9XYZ", Some("NA-046"));
+        let CurrentQsoLogOutcome::Append(LogWriteOutcome::PendingSync(receipts)) =
+            at_once.engine.log_current_qso_for_sync()
+        else {
+            panic!("expected append receipts")
+        };
+        for receipt in receipts {
+            receipt.sync().unwrap();
+        }
+        let logged = at_once.engine.stored_log()[0].clone();
+        assert_eq!(logged.ota.iota.as_deref(), Some("NA-046"));
+        assert!(tempo_core::logbook::offer::is_offer_held(&logged, "IOTA"));
     }
 
     #[test]
