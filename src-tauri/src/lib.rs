@@ -35737,8 +35737,13 @@ fn spot_made_unix(time_utc: Option<&str>, received_unix: u64) -> u64 {
         .unwrap_or(received_unix)
 }
 
-/// A memory ceiling only: far above the IOTA-naming spots one window holds.
-const SPOT_IOTA_CAP: usize = 4096;
+/// A memory ceiling only, sized so a whole [`SPOT_IOTA_WINDOW`] of an IOTA contest fits: a spot
+/// dropped early is one that can no longer refuse a wrong fill. A busy cluster node at a big contest's
+/// peak passes about 100 human spots a minute (RBN skimmer spots carry no IOTA reference); in the IOTA
+/// contest nearly every one may name a group. Doubled for a burst, 200 a minute × 60 minutes is 12,000
+/// spots, rounded up to 16,384. At roughly 150 bytes a spot that is about 2.5 MB at most, and only
+/// in that contest's busiest hour.
+const SPOT_IOTA_CAP: usize = 16_384;
 
 impl SpotIotaLog {
     /// Keep the group `spot`'s comment names, if it names one, as heard at `at` (`at_unix` by the
@@ -61485,6 +61490,76 @@ mod tests {
         // Kept that long: a spot noted 59 minutes after it is not the one that lets it go.
         log.note(after(59), 0, &spot);
         assert_eq!(log.named.len(), 2);
+    }
+
+    /// The cap holds an IOTA-contest hour: a disagreeing spot an hour old still refuses the fill
+    /// after 12,000 other IOTA-naming spots (200 a minute for the hour) have come in after it.
+    #[test]
+    fn an_iota_contest_hour_of_spots_keeps_an_old_disagreeing_spot() {
+        use tempo_core::logbook::offer::SpotIota;
+        use tempo_net::cluster::ClusterSpot;
+        const T: u64 = 1_793_000_000;
+        let mk = |call: String, comment: &str| ClusterSpot {
+            spotter: "W3LPL".into(),
+            dx_call: call,
+            freq_khz: 14_260.0,
+            comment: comment.into(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: false,
+        };
+        let t0 = std::time::Instant::now();
+        let mut log = SpotIotaLog::default();
+        log.note(t0, T - 3_540, &mk("IA5X".into(), "IOTA EU-031"));
+        for n in 0..12_000u64 {
+            let at = t0 + std::time::Duration::from_millis(n * 295);
+            log.note(
+                at,
+                T - 3_540 + n * 295 / 1000,
+                &mk(format!("K{n}ABC"), "IOTA NA-046"),
+            );
+        }
+        log.note(t0, T - 60, &mk("IA5X".into(), "IOTA EU-028"));
+        assert_eq!(
+            log.group_at_contact("IA5X", "20m", T),
+            SpotIota::Refused,
+            "the hour-old EU-031 still stands against EU-028"
+        );
+    }
+
+    /// Another portable form of the same base call is another call: a spot of `IA5C/M` names
+    /// nothing for a contact with `IA5C/P`, on either read.
+    #[test]
+    fn a_sibling_portable_spot_does_not_count_for_the_contact() {
+        use tempo_core::logbook::offer::SpotIota;
+        use tempo_net::cluster::ClusterSpot;
+        const T: u64 = 1_793_000_000;
+        let spot = ClusterSpot {
+            spotter: "W3LPL".into(),
+            dx_call: "IA5C/M".into(),
+            freq_khz: 14_074.0,
+            comment: "IOTA EU-028".into(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: false,
+        };
+        let t0 = std::time::Instant::now();
+        let mut log = SpotIotaLog::default();
+        log.note(t0, T - 60, &spot);
+        assert_eq!(log.group_at_contact("IA5C/P", "20m", T), SpotIota::Silent);
+        assert_eq!(log.group_for(t0, "IA5C/P"), None);
+        assert_eq!(
+            log.group_at_contact("IA5C", "20m", T),
+            SpotIota::Silent,
+            "nor the base call"
+        );
+        assert_eq!(
+            log.group_at_contact("IA5C/M", "20m", T),
+            SpotIota::Names("EU-028".into()),
+            "CONTROL: the spotted call itself"
+        );
     }
 
     /// A node replaying an old spot at login delivers it now; the time it carries is its age.
