@@ -87,22 +87,26 @@ pub fn tx_duration_secs(period_s: u16) -> f32 {
 
 /// How much AUDIO one period carries, in seconds — always shorter than the window.
 ///
-/// From `Modulator.cpp:275`, the fast-mode branch: `i1 = m_TRperiod*48000.0 - 24000.0`.
-/// At 48 kHz those 24000 samples are **0.5 s**, so upstream's MSK144 waveform is
-/// `period - 0.5` — a quarter second shorter than [`tx_duration_secs`].
+/// From `Modulator.cpp:279-281` (v3.0.2), the fast-mode branch: `i1 = m_TRperiod*48000.0 -
+/// 24000.0`. At 48 kHz those 24000 samples are **0.5 s**, so upstream's MSK144 waveform is
+/// `period - 0.5` — a quarter second shorter than [`tx_duration_secs`]. [`gen_wave`] fills
+/// exactly that, to 14.5 s at 15 s.
 ///
 /// That difference is the whole margin between the end of the audio and the slot
 /// boundary. Measured with the waveform budgeted from the window instead: 70 / 30 /
 /// 62 / 14 ms for the 5 / 10 / 15 / 30 s periods (10 ms for an MSK40 shorthand at any
 /// period). **The radio loop ticks every 20 ms**, so MSK144-30 could not survive a
-/// single tick, let alone a CAT exchange. Budgeted from here it is 286 / 318 / 278 /
-/// 302 ms instead.
-///
-/// The cost is 3 of 204 frame repeats at 15 s — 1.5% fewer chances that a meteor
-/// trail catches a frame, and exactly what upstream sends.
+/// single tick, let alone a CAT exchange. Budgeted from here, the radio loop's 250 ms PTT
+/// tail ends 250 ms before the boundary at every period, at WSJT-X's own PTT window end
+/// ([`tx_duration_secs`]).
 pub fn tx_audio_secs(period_s: u16) -> f32 {
     f32::from(period_s) - 0.5
 }
+
+/// The fade at the end of an MSK144 over, in samples at 48 kHz: WSJT-X's fast-mode Modulator
+/// starts it 816 samples (17 ms) before its last sample, `i0 = i1 - 816`, and from there scales
+/// each sample by a further 0.98 (`Modulator.cpp:279-281`, `:321`, v3.0.2).
+pub const FADE_SAMPLES_48K: u32 = 816;
 
 /// Encode a message into MSK144 channel symbols (bits, 0 or 1).
 ///
@@ -137,14 +141,20 @@ pub fn encode(msg: &str) -> Option<Vec<i32>> {
 /// Returns `None` unless `itone` is 40 or 144 bits and the period is supported.
 ///
 /// ⭐ THE REPETITION IS THE MODE. A 72 ms frame is sent over and over for
-/// `period − 0.5 s` (the AUDIO budget, not the keying window) — ~201 copies in a 15 s
-/// period. The far end may hear exactly
+/// `period − 0.5 s` (the AUDIO budget, not the keying window) — 201 whole copies and part of a
+/// 202nd in a 15 s period. The far end may hear exactly
 /// one of them, off a meteor trail lasting a tenth of a second. Sending the frame
 /// once, as every other mode here does, would make the mode look like it worked
 /// and essentially never complete a contact.
 ///
-/// Whole frames only: a truncated trailing copy carries no decodable message, so
-/// the over ends on a frame boundary and the remainder is silence.
+/// ⭐ AS WSJT-X v3.0.2 SENDS IT, SAMPLE FOR SAMPLE IN LENGTH AND FADE. Its fast-mode Modulator
+/// (`Modulator.cpp:279-321`; MSK144 starts it with `fastMode = true`, `mainwindow.cpp:12760-12782`)
+/// repeats the frame (`isym % m_symbolsLength`) for 48 kHz samples `m_ic = 0..=i1`,
+/// `i1 = period*48000 - 24000`, so the over is cut mid-frame (a 15 s over is 201 frames and 28 ms),
+/// and fades its last [`FADE_SAMPLES_48K`] samples, each 0.98 of the one before. At `fsample`
+/// this is `(i1 + 1) * fsample / 48000` samples, rounded (174 000 at 12 kHz, 14.5 s at 15 s), with
+/// the same fade read off the 48 kHz sample each one stands for. The partial trailing frame is not
+/// decodable on its own; it is sent because WSJT-X sends it.
 pub fn gen_wave(itone: &[i32], period_s: u16, fsample: f32, f0: f32) -> Option<Vec<f32>> {
     if (itone.len() != 40 && itone.len() != NN) || itone.iter().any(|&t| !(0..=1).contains(&t)) {
         return None;
@@ -153,34 +163,38 @@ pub fn gen_wave(itone: &[i32], period_s: u16, fsample: f32, f0: f32) -> Option<V
         return None;
     }
     let nsps_out = (NSPS as f32 * fsample / SAMPLE_RATE).round().max(1.0) as usize;
-    let frame_len = itone.len() * nsps_out;
-    // The AUDIO budget, not the keying window — see `tx_audio_secs`.
-    let budget = (tx_audio_secs(period_s) * fsample) as usize;
-    let nreps = budget / frame_len;
-    if nreps == 0 {
+    // WSJT-X's last 48 kHz sample `i1` (the AUDIO budget, not the keying window — see
+    // `tx_audio_secs`) and the sample its fade starts after, `i0`.
+    let i1 = u64::from(period_s) * 48_000 - 24_000;
+    let i0 = i1 - u64::from(FADE_SAMPLES_48K);
+    let per_48k = 48_000.0 / f64::from(fsample);
+    let len = ((i1 + 1) as f64 / per_48k).round() as usize;
+    if len < itone.len() * nsps_out {
         return None;
     }
 
     // Continuous phase across symbols AND across frame repeats — the phase is never
     // reset, exactly as msk144sim.f90 builds it. A reset at each frame boundary
-    // would splatter ~204 times per over.
+    // would splatter ~200 times per over.
     let dt = 1.0 / f64::from(fsample);
     let tau = std::f64::consts::TAU;
     let lo = tau * f64::from(f0 - BAUD / 4.0) * dt;
     let hi = tau * f64::from(f0 + BAUD / 4.0) * dt;
 
-    let mut wave = vec![0f32; nreps * frame_len];
+    let mut wave = vec![0f32; len];
     let mut phi = 0f64;
-    let mut k = 0usize;
-    for _ in 0..nreps {
-        for &bit in itone {
-            let dphi = if bit == 0 { lo } else { hi };
-            for _ in 0..nsps_out {
-                wave[k] = phi.cos() as f32;
-                phi = (phi + dphi) % tau;
-                k += 1;
-            }
-        }
+    for (k, out) in wave.iter_mut().enumerate() {
+        let bit = itone[(k / nsps_out) % itone.len()];
+        let dphi = if bit == 0 { lo } else { hi };
+        // WSJT-X's `m_amp`: 0.98 more for every 48 kHz sample past `i0`.
+        let past_i0 = k as f64 * per_48k - i0 as f64;
+        let amp = if past_i0 > 0.0 {
+            0.98f64.powf(past_i0)
+        } else {
+            1.0
+        };
+        *out = (amp * phi.cos()) as f32;
+        phi = (phi + dphi) % tau;
     }
     Some(wave)
 }
@@ -332,7 +346,7 @@ mod tests {
     #[test]
     fn the_frame_is_repeated_to_fill_the_over() {
         // ⭐ THE REPETITION IS THE MODE. A 72 ms frame goes out over and over for
-        // period-0.25 s; the far end may hear exactly one copy off a meteor trail
+        // period-0.5 s; the far end may hear exactly one copy off a meteor trail
         // lasting a tenth of a second. Sending it once — as every other mode here
         // does — would look correct in a file and essentially never complete a
         // contact on the air.
@@ -341,7 +355,18 @@ mod tests {
             let w = gen_wave(&t, p, SAMPLE_RATE, TX_CENTRE_HZ).expect("supported");
             let frames = w.len() / (NN * NSPS);
             assert!(frames > 50, "MSK144-{p} sent only {frames} frames");
-            assert_eq!(w.len() % (NN * NSPS), 0, "MSK144-{p} ended mid-frame");
+            // Each whole frame is the first one again: the repetition, not one long message. (The
+            // continuous phase may carry a frame over inverted, so it is compared by magnitude.)
+            let frame = NN * NSPS;
+            for r in [1, frames / 2, frames - 1] {
+                let (a, b) = (&w[..frame], &w[r * frame..(r + 1) * frame]);
+                assert!(
+                    a.iter()
+                        .zip(b)
+                        .all(|(x, y)| (x.abs() - y.abs()).abs() < 1e-3),
+                    "MSK144-{p}: frame {r} is not the first frame repeated"
+                );
+            }
             // ⚠️ AGAINST THE AUDIO LENGTH, NOT THE KEYING WINDOW. This used to compare against
             // `tx_duration_secs` (period - 0.25), which is the PTT HOLD — so it passed while the
             // audio was over-generated by a quarter second, and that quarter second was the
@@ -369,14 +394,86 @@ mod tests {
         }
         let w15 = gen_wave(&t, 15, SAMPLE_RATE, TX_CENTRE_HZ).unwrap();
         assert_eq!(
-            w15.len() / (NN * NSPS),
-            201,
-            // 201, not the 204 this asserted before: the waveform is now budgeted from the AUDIO
-            // length (period - 0.5) rather than the keying window (period - 0.25), so three frame
-            // repeats are given back to the boundary margin. That is 1.5% fewer chances a meteor
-            // trail catches a frame — and it is exactly what upstream sends.
-            "~201 frames in a 15 s interval"
+            (w15.len() / (NN * NSPS), w15.len() % (NN * NSPS)),
+            (201, 336),
+            // 201 whole frames and 28 ms (336 samples at 12 kHz) of a 202nd, cut mid-frame where
+            // WSJT-X cuts it.
+            "MSK144-15: frames in the over"
         );
+    }
+
+    /// ⭐ THE OVER'S LENGTH AND FADE ARE WSJT-X v3.0.2's, BY ITS OWN ARITHMETIC. Its fast-mode
+    /// Modulator (`Modulator.cpp:279-321`) sends 48 kHz samples `m_ic = 0..=i1`, `i1 =
+    /// period*48000 - 24000`, and from `i0 = i1 - 816` on scales each by a further 0.98
+    /// (`m_amp`). Replayed here sample by sample at 48 kHz, its envelope bounds every sample Nexus
+    /// sends, at 48 kHz and at the 12 kHz the radio loop plays, and the carrier still reaches that
+    /// envelope inside the fade (it is faded, not cut).
+    #[test]
+    fn the_over_has_wsjtxs_length_and_fade() {
+        let full = encode("K1ABC W9XYZ EN37").unwrap();
+        // A full 144-bit frame, and a 40-bit one shaped as an MSK40 shorthand's.
+        for (msg, t) in [("144 bits", full.clone()), ("40 bits", full[..40].to_vec())] {
+            for &p in PERIODS.iter() {
+                // WSJT-X's `m_amp` (as a share of full scale) for each `m_ic`, literally.
+                let i1 = u64::from(p) * 48_000 - 24_000;
+                let i0 = i1 - 816;
+                let mut amp = 1.0f64;
+                let mut env = Vec::with_capacity(i1 as usize + 1);
+                let mut m_ic = 0u64;
+                while m_ic <= i1 {
+                    if m_ic > i0 {
+                        amp *= 0.98;
+                    }
+                    env.push(amp);
+                    m_ic += 1;
+                }
+                assert_eq!(env.len() as u64, i1 + 1);
+                for fsample in [48_000.0f32, SAMPLE_RATE] {
+                    let per = (48_000.0 / fsample) as usize;
+                    let w = gen_wave(&t, p, fsample, TX_CENTRE_HZ).unwrap();
+                    let what = format!("{msg:?} MSK144-{p} at {fsample} Hz");
+                    // The length: every 48 kHz sample WSJT-X sends, at this rate (to the nearest
+                    // sample; 174 000 at 12 kHz for 15 s, 14.5 s).
+                    let want = ((i1 + 1) as f64 / per as f64).round() as usize;
+                    assert_eq!(w.len(), want, "{what}: length");
+                    if p == 15 && fsample == SAMPLE_RATE {
+                        assert_eq!(w.len(), 174_000, "{what}: 14.5 s");
+                    }
+                    // Not faded before `i0`: full scale within each 2 ms.
+                    let fade_from = (i0 as usize).div_ceil(per);
+                    let span = (fsample / 500.0) as usize;
+                    for start in (0..fade_from.saturating_sub(span)).step_by(span) {
+                        let peak = w[start..start + span]
+                            .iter()
+                            .fold(0f32, |m, x| m.max(x.abs()));
+                        assert!(peak > 0.99, "{what}: faded at sample {start} ({peak})");
+                    }
+                    // The fade: under WSJT-X's envelope everywhere, and reaching it.
+                    for (n, &x) in w.iter().enumerate() {
+                        let e = env[n * per];
+                        assert!(
+                            f64::from(x.abs()) <= e + 1e-6,
+                            "{what}: sample {n} is {x}, over WSJT-X's {e}"
+                        );
+                    }
+                    for start in (fade_from..w.len().saturating_sub(span)).step_by(span) {
+                        let ratio = (start..start + span)
+                            .map(|n| f64::from(w[n].abs()) / env[n * per])
+                            .fold(0f64, f64::max);
+                        assert!(
+                            ratio > 0.97,
+                            "{what}: inside the fade at sample {start} the carrier reached only                              {ratio:.3} of WSJT-X's envelope"
+                        );
+                    }
+                    // …and at its end the over is silent, as WSJT-X's is.
+                    assert!(
+                        f64::from(w[w.len() - 1].abs()) < 1e-6,
+                        "{what}: the last sample is {}",
+                        w[w.len() - 1]
+                    );
+                }
+            }
+        }
     }
 
     #[test]

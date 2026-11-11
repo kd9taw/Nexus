@@ -72136,7 +72136,9 @@ mod tests {
     /// - FT2: tones from the key (no lead-in) to 2.520 s, and `tx_over_secs` is exactly that.
     /// - TempoDeep: tones from the key to 9.920 s; `tx_over_secs` (12.64) over-estimates it.
     /// - MSK144: tones from the key to 4.464 / 9.432 / 14.472 / 29.448 s at 5 / 10 / 15 / 30 s
-    ///   (period minus 0.536 to 0.552 s), and `tx_over_secs` is the whole period.
+    ///   (period minus 0.536 to 0.552 s), and `tx_over_secs` is the whole period. Moved on
+    ///   2026-11-11 to WSJT-X's own 4.5 / 9.5 / 14.5 / 29.5 s (period minus 0.5 s, cut mid-frame;
+    ///   `msk144::gen_wave`), in its own change.
     #[test]
     fn tx_over_secs_against_the_wave_each_slot_tier_really_keys() {
         const SR: f64 = 12_000.0;
@@ -72172,7 +72174,7 @@ mod tests {
                 12.64,
             ),
         ];
-        for (p, last) in [(5, 4.464), (10, 9.432), (15, 14.472), (30, 29.448)] {
+        for (p, last) in [(5, 4.5), (10, 9.5), (15, 14.5), (30, 29.5)] {
             rows.push((
                 format!("MSK144-{p}"),
                 Tier::Msk144,
