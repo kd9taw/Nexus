@@ -25,9 +25,9 @@
 // station's reference (EU-901, "from the spot") under a very long group name (`&iota=1`), at 1024×768 and 1920×1080
 // at the smallest (65 %) and largest (175 %) UI scale. Asserted: the box holds the reference and is the topmost thing
 // at its centre, the group name is drawn whole inside its form and covers the centre of no control, the source is
-// shown, nothing scrolls sideways (the page none; the form no more than the same form with no box — the prompt already
-// does at these sizes on this page, from its field labels), and Log is inside the window and topmost (the prompt's once, the
-// strip's once scrolled to). Its CONTROL, per form (`&iotacontrol=1`, 1024×768 at 175 %): the name may not wrap, and
+// shown, nothing scrolls sideways (the page none; the prompt none at all — its two columns of boxes once ran ~80 px
+// past its card at every scale; the strip no more than the same strip with no box), and Log is inside the window and
+// topmost (the prompt's once, the strip's once scrolled to). Its CONTROL, per form (`&iotacontrol=1`, 1024×768 at 175 %): the name may not wrap, and
 // must come back NOT drawn whole.
 //
 // exit: 0 every case clear · 1 a red, or a control that could not fail · 2 the page never drew
@@ -237,8 +237,7 @@ const IOTA_MEASURE = (form) => `(() => {
   }
 })()`
 
-/** How far `form` scrolls sideways with NO IOTA box (no `&iota=1`): the baseline the box may add nothing to. The
- *  prompt to log already scrolls sideways on this page with no box at all (its field labels), which is not the box's. */
+/** How far `form` scrolls sideways with NO IOTA box (no `&iota=1`): the baseline the box may add nothing to. */
 const BARE = (form) => `(() => {
   const host = document.querySelector(${JSON.stringify(form === 'logconfirm' ? '.logconfirm' : '.probe-below')})
   return host ? host.scrollWidth - host.clientWidth : null
@@ -325,6 +324,7 @@ try {
       if (m.page > 0) red.push(`the page scrolls sideways by ${m.page} px`)
       if (bare == null) red.push('the form never drew without the box')
       else if (m.overflow > bare + 1) red.push(`the box makes the form scroll sideways: ${m.overflow} px, ${bare} without it`)
+      if (form === 'logconfirm' && m.overflow > 0) red.push(`the prompt to log scrolls sideways by ${m.overflow} px`)
       if (!m.nameWhole) red.push(`the group name is not drawn whole inside its form ${JSON.stringify(m.name)} vs ${JSON.stringify(m.form)}`)
       if (m.covers.length) red.push(`the group name covers ${m.covers.join(', ')}`)
       if (!m.inputTop) red.push('the IOTA box is covered')
@@ -390,7 +390,7 @@ try {
     console.error('stopabove-probe: no case ran')
     code = code || 1
   }
-  if (code === 0) console.log(`stopabove-probe: PASS — ${ran} cases: with ${OVERLAYS.map(([o]) => o).join(', ')} open, Stop TX is on top where it is drawn, unmoved, one real click and one tap each stop once, the mirror is unseen by screen readers and follows its button at once, the overlay stays open and the keyboard stays where it was, at ${SIZES.map(([w, h, v]) => `${w}×${h} (${v})`).join(' and ')}; each control (no stop layer) caught. The filled IOTA box of the prompt to log and of the log strip at ${IOTA_SIZES.map((s) => `${s.w}×${s.h} ${Math.round(s.zoom * 100)}%`).join(', ')}: filled, its long group name whole and covering nothing, the source shown, no sideways scroll added (the page none; the prompt's form no more than without the box), Log in the window and on top; each unwrapped-name control caught`)
+  if (code === 0) console.log(`stopabove-probe: PASS — ${ran} cases: with ${OVERLAYS.map(([o]) => o).join(', ')} open, Stop TX is on top where it is drawn, unmoved, one real click and one tap each stop once, the mirror is unseen by screen readers and follows its button at once, the overlay stays open and the keyboard stays where it was, at ${SIZES.map(([w, h, v]) => `${w}×${h} (${v})`).join(' and ')}; each control (no stop layer) caught. The filled IOTA box of the prompt to log and of the log strip at ${IOTA_SIZES.map((s) => `${s.w}×${s.h} ${Math.round(s.zoom * 100)}%`).join(', ')}: filled, its long group name whole and covering nothing, the source shown, no sideways scroll (the page none; the prompt none at all; the strip no more than without the box), Log in the window and on top; each unwrapped-name control caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

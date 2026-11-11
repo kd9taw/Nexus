@@ -9632,7 +9632,10 @@ select optgroup {
 }
 .logconfirm-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* minmax(0, …): a bare 1fr track never shrinks below its content's minimum, and a text box's is
+     its default ~20-character width — two of those ran the right column ~80 px past the 420 px card
+     at every UI scale, and the card scrolled sideways. The boxes take their column's width instead. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-3);
 }
 .logconfirm-grid label {
