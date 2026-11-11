@@ -100,9 +100,14 @@ pub const WSJTX_PTT_OFF_DELAY_MS: f64 = 200.0;
 /// `1.0 + 105*576/12000` = 6.04 s, the tones plus one second whatever the over's lead-in.
 pub fn wsjtx_tx_window_ms(tier: tempo_app::dto::Tier) -> Option<f64> {
     use tempo_app::dto::Tier;
+    // The tones' span at 12 kHz (`modes::slot_over_samples_12k`), in ms: whole samples / 12, exact.
+    let tone_ms = |kind| {
+        let (_, tones) = tempo_core::modes::slot_over_samples_12k(kind).expect("FT8/FT4 geometry");
+        tones as f64 / 12.0
+    };
     match tier {
-        Tier::Ft8 => Some(1_000.0 + 79.0 * 1_920.0 / 12.0),
-        Tier::Ft4 => Some(1_000.0 + 105.0 * 576.0 / 12.0),
+        Tier::Ft8 => Some(1_000.0 + tone_ms(tempo_core::modes::ModeKind::Ft8)),
+        Tier::Ft4 => Some(1_000.0 + tone_ms(tempo_core::modes::ModeKind::Ft4)),
         _ => None,
     }
 }
