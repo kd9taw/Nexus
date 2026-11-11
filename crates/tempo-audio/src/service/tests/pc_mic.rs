@@ -931,3 +931,28 @@ fn a_key_with_no_answer_in_time_reads_not_confirmed_and_a_refusal_not_accepted()
         );
     }
 }
+
+/// The computer microphone's hard end, behind `pc_mic_keyed`, pinned for the cut-site refactor
+/// (`cut_sites`): Stop TX mid-over flushes, then unkeys, and drops the hold.
+#[test]
+fn a_stop_tx_mid_over_flushes_then_unkeys_and_drops_the_hold() {
+    let (addr, log) = mock_rigctld_ptt(14_200_000, false, "0\n");
+    let mut s = PcScene::new(true);
+    s.rig = Rig::rigctld(&addr);
+    s.backend.events = Some(Arc::clone(&log));
+    let mut s = PcScene::keyed_from(s, 600.0);
+    assert!(s.state.pc_mic_keyed, "premise: the loop keyed the over");
+    let (from, flushes) = (log.lock().unwrap().len(), s.backend.flush_calls);
+    s.engine.lock().unwrap().halt_tx();
+    s.tick(620.0, 0.5);
+    super::cut_sites::assert_cut(
+        "computer microphone",
+        &log,
+        from,
+        flushes,
+        &s.backend,
+        s.state.tx_until_ms,
+        &["flush", "T 0"],
+    );
+    assert!(!s.rig.keyed);
+}

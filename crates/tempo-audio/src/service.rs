@@ -21246,6 +21246,7 @@ mod tests {
     mod contest_logged;
     mod contest_reply;
     mod contest_status;
+    mod cut_sites;
     mod cw_cat_text;
     mod cw_speed_match;
     mod cw_stop;

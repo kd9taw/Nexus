@@ -476,3 +476,32 @@ fn dump_what_the_loop_plays_for_the_lab() {
         tempo_core::wavfile::write_wav_i16(&path, &pcm, 12_000).unwrap();
     }
 }
+
+/// JTTY's cut, behind `jtty_busy_until`, pinned for the cut-site refactor (`cut_sites`): Stop TX
+/// mid-transmission flushes, then unkeys, and drops the hold.
+#[test]
+fn a_jtty_stop_flushes_then_unkeys_and_drops_the_hold() {
+    let _modem = super::remote_radio::selection::selection_test_lock();
+    let (engine, mut state, mut backend, mut rig, log) = jtty_scene(true);
+    backend.events = Some(Arc::clone(&log));
+    jtty_tx::send_text(&engine, "CQ CQ CQ DE W9XYZ W9XYZ W9XYZ W9XYZ PSE K", "").unwrap();
+    let mut t = 100.0;
+    step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 2_500.0);
+    assert!(rig.keyed, "premise: keyed");
+    assert!(
+        state.jtty_busy_until > t,
+        "premise: JTTY is still going, so the site's guard holds"
+    );
+    let (from, flushes) = (log.lock().unwrap().len(), backend.flush_calls);
+    engine.lock().unwrap().halt_tx();
+    tick(&engine, &mut state, &mut backend, &mut rig, t);
+    super::cut_sites::assert_cut(
+        "JTTY",
+        &log,
+        from,
+        flushes,
+        &backend,
+        state.tx_until_ms,
+        &["flush", "T 0"],
+    );
+}
