@@ -1186,8 +1186,8 @@ pub fn slot_tx_phase(
         // round-trip itself — each able to spend a full CAT deadline (700 ms, 2500 ms
         // on a slow transport). A deadline built on `now_ms` is therefore measured from
         // an instant already past, and unkeys EARLY by exactly the CAT time, cutting
-        // the tail off our own over. MSK144 is where it shows: 14.688 s of audio in a
-        // 15 s slot (period − 0.25 s truncated to whole 72 ms frames) leaves ~0.31 s of
+        // the tail off our own over. MSK144 is where it shows: 14.472 s of audio in a
+        // 15 s slot (period − 0.5 s truncated to whole 72 ms frames) leaves ~0.53 s of
         // slack — less than one slow CAT exchange. FT8's 13.14 s leaves ~1.86 s, so
         // every other tier absorbs the same stall as a merely shortened tail.
         //
@@ -1595,10 +1595,10 @@ mod tests {
             (FT1_AUDIO_MS, FT1_PERIOD_MS, "FT1"),
             (12_640.0, 15_000.0, "FT8"),
             (5_040.0, 7_500.0, "FT4"),
-            (14_688.0, 15_000.0, "MSK144-15"),
+            (14_472.0, 15_000.0, "MSK144-15"),
             // FT2: 2.52 s of tones from the slot start in a 3.75 s period. The SHORTEST
             // period here, but not the tightest fit — 3020 + 250 ms of tail leaves
-            // ~980 ms of slack, more than MSK144-15's ~312 ms and unlike FT1's −250 ms
+            // ~980 ms of slack, more than MSK144-15's ~278 ms and unlike FT1's −250 ms
             // it does not clamp on an on-time over. Swept anyway: the clamp is what
             // makes a pathological stall unrepresentable rather than merely unlikely.
             (2_520.0, 3_750.0, "FT2"),
@@ -3151,8 +3151,8 @@ mod tests {
         // time we key, `now_ms` is that far in the past — so a deadline built on it
         // unkeys EARLY by exactly the CAT time and truncates the tail of the over.
         //
-        // MSK144-15 is where it shows: 14.688 s of audio in a 15 s slot leaves
-        // ~0.31 s of slack, less than one slow CAT exchange. Every other tier has
+        // MSK144-15 is where it shows: 14.472 s of audio in a 15 s slot leaves
+        // ~0.53 s of slack, less than one slow CAT exchange. Every other tier has
         // enough slack to absorb it as a merely shortened tail.
         const CAT_STALL_MS: f64 = 400.0;
         // FT2: the key-relative deadline this guards is every slot tier's but FT8's and FT4's
