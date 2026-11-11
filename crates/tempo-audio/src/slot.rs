@@ -86,16 +86,16 @@ pub fn tx_deadline_ms(keyed_ms: f64, audio_ms: f64, period_ms: f64) -> f64 {
 }
 
 /// WSJT-X's delay from the end of an FT8/FT4 over's audio to PTT off: `stopTx` stops the modulator
-/// and starts `ptt0Timer.start(200)`, whose timeout lowers PTT (`widgets/mainwindow.cpp:5743-5760`,
-/// upstream master).
+/// and starts `ptt0Timer.start(200)`, whose timeout lowers PTT (`widgets/mainwindow.cpp:8564-8591`,
+/// v3.0.2).
 pub const WSJTX_PTT_OFF_DELAY_MS: f64 = 200.0;
 
 /// WSJT-X's transmit window for an FT8 or FT4 over, in ms from the start of its slot; `None` for
 /// every other tier, which keep [`tx_deadline_ms`].
 ///
 /// WSJT-X computes no deadline. Every 100 ms GUI tick it asks whether the slot position is inside
-/// `[0, txDuration)` (`m_bTxTime = (t2p >= tx1) and (t2p < tx2)`, `widgets/mainwindow.cpp:5055`), and
-/// the tick that finds it outside stops the audio (`:5180`, `:5530`). `txDuration` is
+/// `[0, txDuration)` (`m_bTxTime = (t2p >= tx1) and (t2p < tx2)`, `widgets/mainwindow.cpp:7715`,
+/// v3.0.2), and the tick that finds it outside stops the audio (`:7859`, `:8219`). `txDuration` is
 /// `tx_duration()` (`helper_functions.cpp:6-7`): FT8 `1.0 + 79*1920/12000` = 13.64 s, FT4
 /// `1.0 + 105*576/12000` = 6.04 s, the tones plus one second whatever the over's lead-in.
 pub fn wsjtx_tx_window_ms(tier: tempo_app::dto::Tier) -> Option<f64> {
@@ -113,8 +113,8 @@ pub fn wsjtx_tx_window_ms(tier: tempo_app::dto::Tier) -> Option<f64> {
 }
 
 /// WSJT-X's latest key for an FT8 or FT4 over: PTT is asserted only while the slot is under 75 % of
-/// its period, FT8 11.25 s and FT4 5.625 s. The GUI tick that asserts it (`widgets/mainwindow.cpp:5114`
-/// and `:5126`, upstream master):
+/// its period, FT8 11.25 s and FT4 5.625 s. The GUI tick that asserts it
+/// (`widgets/mainwindow.cpp:7793` and `:7805`, v3.0.2):
 ///
 /// ```text
 /// double fTR=float((ms%int(1000.0*m_TRperiod)))/int(1000.0*m_TRperiod);
@@ -192,9 +192,9 @@ pub struct OverEnd {
 /// or with what the key cost.
 ///
 /// The window is clamped to the period as WSJT-X clamps it (`if(tx2>m_TRperiod) tx2=m_TRperiod`,
-/// `widgets/mainwindow.cpp:5015`), and PTT keeps [`tx_deadline_ms`]'s bound: never past the boundary
-/// of the slot it was keyed in, never before the key. Neither binds for FT8 (13.84 s of 15) or FT4
-/// (6.24 s of 7.5); they are what make an overrun unrepresentable rather than unlikely.
+/// `widgets/mainwindow.cpp:7675`, v3.0.2), and PTT keeps [`tx_deadline_ms`]'s bound: never past the
+/// boundary of the slot it was keyed in, never before the key. Neither binds for FT8 (13.84 s of
+/// 15) or FT4 (6.24 s of 7.5); they are what make an overrun unrepresentable rather than unlikely.
 pub fn wsjtx_over_end(keyed_ms: f64, window_ms: f64, period_ms: f64) -> OverEnd {
     if period_ms.is_nan() || period_ms <= 0.0 {
         // No period to place the window in: hold from the key, as `tx_deadline_ms` falls back.
@@ -221,9 +221,9 @@ pub fn wsjtx_over_end(keyed_ms: f64, window_ms: f64, period_ms: f64) -> OverEnd 
 ///
 /// That is WSJT-X's Modulator: it measures how far into the period it is starting (`mstr`), then
 /// sends silence up to the tones' nominal start, or skips the symbols a late start has passed
-/// (`m_silentFrames`, `m_ic`, `Modulator/Modulator.cpp:56-57, 85-101`). Here the lead-in is that
-/// silence, so one skip does both: an early start keeps the rest of the lead-in, a late one loses
-/// its first symbols, and either way the tones end where an on-time over's end.
+/// (`m_silentFrames`, `m_ic`, `Modulator/Modulator.cpp:57-58, 88-104`, v3.0.2). Here the lead-in is
+/// that silence, so one skip does both: an early start keeps the rest of the lead-in, a late one
+/// loses its first symbols, and either way the tones end where an on-time over's end.
 pub fn slot_clock_skip(at_ms: f64, period_ms: f64) -> usize {
     if period_ms.is_nan() || period_ms <= 0.0 {
         return 0;
@@ -398,15 +398,15 @@ pub(crate) fn play_keyed_over(
         // key in time whose carrier comes up after the last tone: FT8's tones run to 13.14 s, so more
         // than 1.89 s after a decision by 11.25 s (split's CAT on a slow link, a late start's build
         // waiting for a decode to let go of the modem). WSJT-X asserts PTT on the tick that decided
-        // (`widgets/mainwindow.cpp:5126-5176`) and starts its Modulator when the radio answers
-        // (`:8845-8856`, `startTx2` `:5711`); the Modulator finds `m_ic` past the last symbol and
-        // sends none (`Modulator/Modulator.cpp:96-99`, `:281`). PTT falls only at the window's end
-        // or a stop (`widgets/mainwindow.cpp:5180`, `:5530`, `stopTx` `:5743-5753`, `stopTx2`
-        // `:5758-5760`), never because the Modulator ran out (the main window's only links to it run
-        // the other way, `:525-528`): FT8's at 13.84 s, FT4's at 6.24 s. Such an over dropped PTT on
-        // the next tick. The hold is the over's own, so Stop TX, TX Off and the watchdog end it as
-        // they end any over, and a carrier that comes after the window's end still drops at once
-        // ([`wsjtx_over_end`] never ends an over before its key).
+        // (`widgets/mainwindow.cpp:7805-7855`, v3.0.2) and starts its Modulator when the radio
+        // answers (`:12436-12447`, `startTx2` `:8526`); the Modulator finds `m_ic` past the last
+        // symbol and sends none (`Modulator/Modulator.cpp:99-102`, `:286`). PTT falls only at the
+        // window's end or a stop (`widgets/mainwindow.cpp:7859`, `:8219`, `stopTx` `:8564-8578`,
+        // `stopTx2` `:8584-8591`), never because the Modulator ran out (the main window's only
+        // links to it run the other way, `:611-614`): FT8's at 13.84 s, FT4's at 6.24 s. Such an
+        // over dropped PTT on the next tick. The hold is the over's own, so Stop TX, TX Off and the
+        // watchdog end it as they end any over, and a carrier that comes after the window's end
+        // still drops at once ([`wsjtx_over_end`] never ends an over before its key).
         return on_the_window;
     }
     let mut quiet = QuietHead::new(amp_delay_samples(amp_delay_ms));
@@ -549,8 +549,9 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
             // B transmits in whatever mode it was last left in — reported on an FTDX1200 and then
             // again on an FTDX10, where FT8 went out of a VFO that was not in the data submode
             // and nothing on screen said so. WSJT-X does exactly this when split is on
-            // (HamlibTransceiver.cpp:922 `rig_set_mode(rig, RIG_VFO_B, mode, RIG_PASSBAND_NOCHANGE)`
-            // and :1093 `rig_set_split_mode(..., RIG_PASSBAND_NOCHANGE)`).
+            // (v3.0.2 HamlibTransceiver.cpp:941
+            // `rig_set_mode(rig, RIG_VFO_B, mode, RIG_PASSBAND_NOCHANGE)` and :1112
+            // `rig_set_split_mode(..., RIG_PASSBAND_NOCHANGE)`).
             //
             // ⚠️ WIDTH IS NOCHANGE (-1), NOT `passband_for(md)`. WSJT-X passes NOCHANGE, and the
             // point here is the MODE — sending a width would reach across and reset the filter
@@ -860,11 +861,12 @@ pub(crate) fn key_slot_transmitter(
 /// ONCE ([`KeyDecision::past_its_period`]), what the caller does instead of playing the over. Its
 /// tones were laid on the clock where the carrier was, the other station's slot clock, so the rest
 /// of the over went out in their period, ending on their window. WSJT-X starts an over's audio only
-/// when the radio reports PTT on and the over is "still needed" (`widgets/mainwindow.cpp:8852`,
-/// `m_tx_when_ready && g_iptt`); its 100 ms GUI tick ends the over as soon as the clock leaves its
-/// window (`:870`, `:5055`, `:5180`, `:5530`), a window in this station's own period of the pair
-/// (`:5016-5019`), and `stopTx` clears `g_iptt` and lowers PTT 200 ms later (`:5743-5760`). A
-/// radio that answers in the other station's period sends nothing there and is unkeyed.
+/// when the radio reports PTT on and the over is "still needed" (`widgets/mainwindow.cpp:12443`,
+/// v3.0.2, `m_tx_when_ready && g_iptt`); its 100 ms GUI tick ends the over as soon as the clock
+/// leaves its window (`:1011`, `:7715`, `:7859`, `:8219`), a window in this station's own period of
+/// the pair (`:7676-7679`), and `stopTx` clears `g_iptt` and lowers PTT 200 ms later
+/// (`:8564-8591`). A radio that answers in the other station's period sends nothing there and is
+/// unkeyed.
 ///
 /// The output is flushed (it holds nothing of this over); the radio is unkeyed now, unless the loop
 /// already held the transmitter (`held`: the operator's own PTT stays theirs, and an over's hold
@@ -1099,15 +1101,15 @@ pub fn slot_tx_phase(
         // AN FT8/FT4 OVER WHOSE TONES ARE ALL BEHIND THE SLOT CLOCK HAS NOTHING TO SEND (a boundary
         // keyed very late: past 13.14 s of FT8, 5.34 s of FT4). Decided in time (above), it keys,
         // and [`play_keyed_over`] holds it silent to the window's end, as WSJT-X's GUI tick keys an
-        // over at its decision (`widgets/mainwindow.cpp:5126-5176`) and holds it, however long its
-        // build took after the decision: an FT4 boundary decided 5.34-5.625 s in, or one whose
-        // build, waiting on the modem or on a slow computer, ran past its latest key. That one used
-        // to key nothing. Only an over with nothing left to hold either keys nothing, its clock past
-        // WSJT-X's PTT off for the slot its tick decided for (13.84 s of FT8, 6.24 s of FT4), as
-        // `commit_tx` keys nothing once its slot has gone, and its dial shift goes with it. The
-        // clock is read here as it is now, from the start of the tick's slot, with no fallback to
-        // the tick's clock (unlike [`into_tick_slot_ms`]): a re-read a period or more on, a clock
-        // step or a stall alike, is past it and keys nothing, as before.
+        // over at its decision (`widgets/mainwindow.cpp:7805-7855`, v3.0.2) and holds it, however
+        // long its build took after the decision: an FT4 boundary decided 5.34-5.625 s in, or one
+        // whose build, waiting on the modem or on a slow computer, ran past its latest key. That
+        // one used to key nothing. Only an over with nothing left to hold either keys nothing, its
+        // clock past WSJT-X's PTT off for the slot its tick decided for (13.84 s of FT8, 6.24 s of
+        // FT4), as `commit_tx` keys nothing once its slot has gone, and its dial shift goes with
+        // it. The clock is read here as it is now, from the start of the tick's slot, with no
+        // fallback to the tick's clock (unlike [`into_tick_slot_ms`]): a re-read a period or more
+        // on, a clock step or a stall alike, is past it and keys nothing, as before.
         if let Some(window_ms) = wsjtx_tx_window_ms(eng.tier()) {
             let now_wall = now_unix_ms() - eng.clock_offset_ms().unwrap_or(0) as f64;
             let at_ms = slot_clock_at(now_wall.max(now_ms), now_ms, period_ms);
@@ -1680,11 +1682,11 @@ mod tests {
     }
 
     // ── WSJT-X's over window, and the tones on the slot clock (FT8 and FT4) ──────────────────────
-    // Upstream master, checked line by line: the window is `txDuration` from the slot start
-    // (helper_functions.cpp:6-7; widgets/mainwindow.cpp:5008-5015, 5055), the GUI tick past it stops
-    // the audio (:5180, :5530 → stopTx :5743-5753), PTT drops 200 ms later (ptt0Timer → stopTx2,
-    // :5753-5760), and the Modulator lays the tones on the clock (Modulator/Modulator.cpp:56-57,
-    // 85-101).
+    // WSJT-X v3.0.2, checked line by line: the window is `txDuration` from the slot start
+    // (helper_functions.cpp:6-7; widgets/mainwindow.cpp:7668-7675, 7715), the GUI tick past it
+    // stops the audio (:7859, :8219 → stopTx :8564-8578), PTT drops 200 ms later (ptt0Timer →
+    // stopTx2, :8578-8591), and the Modulator lays the tones on the clock
+    // (Modulator/Modulator.cpp:57-58, 88-104).
 
     const FT8_PERIOD_MS: f64 = 15_000.0;
     const FT4_PERIOD_MS: f64 = 7_500.0;
@@ -1731,10 +1733,10 @@ mod tests {
 
     #[test]
     fn a_late_ft8_key_keeps_its_end_and_loses_its_first_symbols_on_the_slot_clock() {
-        // ⭐ WSJT-X's late start (Modulator.cpp:96-100): the symbols already gone are skipped, so
-        // what is sent sits on the slot grid (DT 0) and ends where an on-time over ends. Nexus played
-        // the whole over from the key: every tone late by the key's lateness, the end clamped at the
-        // boundary.
+        // ⭐ WSJT-X's late start (Modulator.cpp:99-103, v3.0.2): the symbols already gone are
+        // skipped, so what is sent sits on the slot grid (DT 0) and ends where an on-time over
+        // ends. Nexus played the whole over from the key: every tone late by the key's lateness,
+        // the end clamped at the boundary.
         let slot_start = 1_000.0 * FT8_PERIOD_MS;
         let on_time = wsjtx_over_end(slot_start + 20.0, 13_640.0, FT8_PERIOD_MS);
         for late_ms in [500.0, 2_000.0, 7_900.0] {
@@ -1756,8 +1758,8 @@ mod tests {
     #[test]
     fn an_early_start_keeps_the_rest_of_the_lead_in_as_wsjtxs_silent_frames() {
         // WSJT-X sends silence until the tones' nominal start (`m_silentFrames`,
-        // Modulator.cpp:91-94). The lead-in at the head of the wave is that silence: a key 100 ms
-        // into the slot skips 100 ms of it, and the tones still start at 0.5 s.
+        // Modulator.cpp:94-97, v3.0.2). The lead-in at the head of the wave is that silence: a key
+        // 100 ms into the slot skips 100 ms of it, and the tones still start at 0.5 s.
         let slot_start = 1_000.0 * FT4_PERIOD_MS;
         let skip = slot_clock_skip(slot_start + 100.0, FT4_PERIOD_MS);
         assert_eq!(skip, 1_200);
@@ -1901,9 +1903,9 @@ mod tests {
         // message for the rest of the slot.
         //
         // FT4's tones end at 5.34 s, under its latest key of 5.625 s. A boundary 5.58 s in keys there,
-        // as WSJT-X's GUI tick keys it (`widgets/mainwindow.cpp:5126-5176`): nothing plays, and PTT is
-        // held to the window's end, the audio stop at 6.04 s and PTT off at 6.24 s. It used to key
-        // nothing. 5.30 s, with 40 ms of tones still ahead, is the control.
+        // as WSJT-X's GUI tick keys it (`widgets/mainwindow.cpp:7805-7855`, v3.0.2): nothing plays,
+        // and PTT is held to the window's end, the audio stop at 6.04 s and PTT off at 6.24 s. It
+        // used to key nothing. 5.30 s, with 40 ms of tones still ahead, is the control.
         let mut eng = armed_engine();
         let late = steered_now_ms(&eng) + 13_200.0;
         let (addr, log, _) = keying_rigctld("RPRT 0", 0);
@@ -1953,7 +1955,7 @@ mod tests {
     }
 
     // ── WSJT-X's latest key: 75 % of the period (FT8 and FT4) ──────────────────────────────────
-    // Upstream master, `widgets/mainwindow.cpp:5114` and `:5126`: the GUI tick asserts PTT only while
+    // WSJT-X v3.0.2, `widgets/mainwindow.cpp:7793` and `:7805`: the GUI tick asserts PTT only while
     // `fTR`, the slot's place as a fraction of its period, is under 0.75 ("Allow late starts"), and
     // the Modulator then skips the symbols already gone. A late key past it waits for the next slot.
 
@@ -2210,9 +2212,10 @@ mod tests {
     // ── A key in time with no tone left: held to the window, FT8's and FT4's, as WSJT-X's is ──────
     // FT4's tones end 5.34 s into its slot (its 0.3 s lead-in), before its latest key at 5.625 s,
     // and any key in time whose carrier comes up after the last tone has none left either. WSJT-X keys
-    // all the same (`widgets/mainwindow.cpp:5126-5176`), its Modulator finds every symbol behind it and
-    // sends none (`Modulator/Modulator.cpp:96-99`, `:281`), and PTT falls only at the window's end
-    // (`widgets/mainwindow.cpp:5180`, `:5530`, `stopTx` `:5743-5753`, `stopTx2` `:5758-5760`).
+    // all the same (`widgets/mainwindow.cpp:7805-7855`, v3.0.2), its Modulator finds every symbol
+    // behind it and sends none (`Modulator/Modulator.cpp:99-102`, `:286`), and PTT falls only at
+    // the window's end (`widgets/mainwindow.cpp:7859`, `:8219`, `stopTx` `:8564-8578`, `stopTx2`
+    // `:8584-8591`).
 
     #[test]
     fn every_key_in_time_ends_on_the_window_and_only_ft4_can_find_no_tone_left() {
@@ -2296,8 +2299,8 @@ mod tests {
         // late start's build waiting for a decode to let go of the modem. Decided 11.2 s in, its
         // carrier up 2.0 s later at 13.2 s: nothing plays, and PTT is held to 13.84 s (the audio stop
         // at 13.64 s), as WSJT-X holds an over whose PTT was answered late (its Modulator starts on the
-        // answer, `widgets/mainwindow.cpp:8845-8856`, and finds nothing left). It used to drop PTT on
-        // the next tick.
+        // answer, `widgets/mainwindow.cpp:12436-12447` v3.0.2, and finds nothing left). It used to
+        // drop PTT on the next tick.
         let eng = armed_engine_on(tempo_app::dto::Tier::Ft8);
         let waves = vec![armed_engine_on(tempo_app::dto::Tier::Ft8)
             .poll_tx(0)
@@ -2434,11 +2437,11 @@ mod tests {
     #[test]
     fn an_over_with_no_tone_left_whose_build_ran_past_its_latest_key_is_keyed_and_held() {
         // ⭐ A BOUNDARY DECIDED IN TIME IS KEYED HOWEVER LONG ITS BUILD THEN TAKES, AND HELD SILENT TO
-        // THE WINDOW'S END, as WSJT-X's GUI tick keys at its decision (`widgets/mainwindow.cpp:5126-
-        // 5176`) and holds it. An FT4 boundary decided 5.60 s into its slot (under 5.625 s, its tones
-        // already gone) whose build waits for a decode to let go of the modem until 5.70 s, past its
-        // latest key: the key, nothing played, the audio stop at 6.04 s and PTT off at 6.24 s. It
-        // used to key nothing.
+        // THE WINDOW'S END, as WSJT-X's GUI tick keys at its decision
+        // (`widgets/mainwindow.cpp:7805-7855`, v3.0.2) and holds it. An FT4 boundary decided
+        // 5.60 s into its slot (under 5.625 s, its tones already gone) whose build waits for a
+        // decode to let go of the modem until 5.70 s, past its latest key: the key, nothing played,
+        // the audio stop at 6.04 s and PTT off at 6.24 s. It used to key nothing.
         //
         // An FT8 or FT4 over is built without the modem (`modes::wsjt77`) unless its text is one the
         // lock-free encoder leaves to the vendored one, which only typed text reaches: here in-QSO
@@ -2562,8 +2565,9 @@ mod tests {
     // the key's own 700 ms. The tones are laid on the clock where the carrier is, so a carrier that
     // came up in the other station's period sent the rest of the over there, on their slot clock.
     // WSJT-X starts an over's audio only when the radio reports PTT on and the over is still needed
-    // (`widgets/mainwindow.cpp:8852`), and its GUI tick ends the over as soon as the clock has left its
-    // window (`:5055`, `:5180`, `:5530`), a window in this station's own period (`:5016-5019`).
+    // (`widgets/mainwindow.cpp:12443`, v3.0.2), and its GUI tick ends the over as soon as the clock
+    // has left its window (`:7715`, `:7859`, `:8219`), a window in this station's own period
+    // (`:7676-7679`).
 
     type LinesWithTimes = std::sync::Arc<std::sync::Mutex<Vec<(String, std::time::Instant)>>>;
 
@@ -3009,9 +3013,10 @@ mod tests {
 
     // ── Only the over that keyed too late is dropped, and TX stays on ────────────────────────────
     // WSJT-X starts an over's audio only if it is still needed when the radio reports PTT on
-    // (`widgets/mainwindow.cpp:8852`, `m_tx_when_ready && g_iptt`). Its `stopTx` ends that over and
-    // nothing else (`:5743-5756`: `g_iptt=0`, PTT off 200 ms later); Enable Tx stays ticked, so its
-    // next own period asserts PTT again (`:5126`, `:5176`). Only Stop TX unticks it (`:8714-8717`).
+    // (`widgets/mainwindow.cpp:12443` v3.0.2, `m_tx_when_ready && g_iptt`). Its `stopTx` ends that
+    // over and nothing else (`:8564-8582`: `g_iptt=0`, PTT off 200 ms later); Enable Tx stays
+    // ticked, so its next own period asserts PTT again (`:7805`, `:7855`). Only Stop TX unticks it
+    // (`:12291-12295`).
 
     #[test]
     fn a_dropped_over_leaves_tx_on_and_the_next_own_slot_sends_a_full_over() {
@@ -3119,10 +3124,10 @@ mod tests {
     fn ft4_overs_dropped_in_a_row_leave_tx_on_and_the_lane_counts_them() {
         // ⭐ HOWEVER MANY OVERS IN A ROW THE RADIO KEYS PAST THEIR PERIOD, TX STAYS ON, AS IN WSJT-X,
         // whose next own period asserts PTT again until its Tx watchdog (6 minutes by default,
-        // `widgets/mainwindow.cpp:5109-5111`) ends the run. A Call CQ run on FT4 whose boundaries are
-        // each decided 5.6 s in, the split and the key taking 2.3 s (the carrier at 7.9 s): four in a
-        // row are each dropped, nothing sent and unkeyed at once, with TX left on and the lane
-        // counting them.
+        // `widgets/mainwindow.cpp:7788-7790` v3.0.2) ends the run. A Call CQ run on FT4 whose
+        // boundaries are each decided 5.6 s in, the split and the key taking 2.3 s (the carrier at
+        // 7.9 s): four in a row are each dropped, nothing sent and unkeyed at once, with TX left on
+        // and the lane counting them.
         let wave = rig_split_cq_run(tempo_app::dto::Tier::Ft4)
             .poll_tx(0)
             .remove(0);
@@ -3400,9 +3405,9 @@ mod tests {
         // stopped, so VFO B transmitted in whatever mode it happened to be left in. The `M` verb
         // only ever reaches the RX VFO; `X` is the only way to reach the TX VFO's mode.
         //
-        // WSJT-X is the baseline here and it does exactly this — HamlibTransceiver.cpp:922
+        // WSJT-X is the baseline here and it does exactly this — HamlibTransceiver.cpp:941 (v3.0.2)
         // `if (state().split()) rig_set_mode(rig, RIG_VFO_B, new_mode, RIG_PASSBAND_NOCHANGE)`
-        // and :1093 `rig_set_split_mode(..., RIG_PASSBAND_NOCHANGE)`. Note the WIDTH: NOCHANGE
+        // and :1112 `rig_set_split_mode(..., RIG_PASSBAND_NOCHANGE)`. Note the WIDTH: NOCHANGE
         // (-1), not an explicit passband — set the mode, leave the operator's filter alone.
         let mut eng = Engine::new("W9XYZ", "EN37", 0);
         eng.set_tier(tempo_app::dto::Tier::Ft8);

@@ -2391,7 +2391,7 @@ impl DecodePass {
     }
 
     /// This pass runs over a PARTIAL, tail-zeroed frame — WSJT-X's early decode
-    /// (`nzhsym = 41`, `mainwindow.cpp:1878`), which upstream deliberately runs
+    /// (`nzhsym = 41`, `mainwindow.cpp:2480` v3.0.2), which upstream deliberately runs
     /// cheap because the boundary pass re-decodes the same audio moments later.
     ///
     /// **Not `!a7_final`**, and the difference is load-bearing: `Redecode` is
@@ -23276,14 +23276,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
     ///
     /// ⭐ ONLY THIS OVER IS DROPPED: TX STAYS ON, AND THE NEXT OWN PERIOD KEYS ITS OVER AS USUAL, AS
     /// WSJT-X DOES. WSJT-X starts an over's audio only when the radio reports PTT on and the over
-    /// is "still needed" (`widgets/mainwindow.cpp:8852`, `m_tx_when_ready && g_iptt`), and the GUI
-    /// tick that found its window closed ends that over alone (`stopTx`, `:5743-5756`: `g_iptt=0`,
-    /// PTT off 200 ms later), leaving Enable Tx ticked for the next; only Stop TX unticks it
-    /// (`:8714-8717`). The over's records stay, as WSJT-X writes its own when it asserts PTT
-    /// (`:5201`, `:5405`).
+    /// is "still needed" (`widgets/mainwindow.cpp:12443` v3.0.2, `m_tx_when_ready && g_iptt`), and
+    /// the GUI tick that found its window closed ends that over alone (`stopTx`, `:8564-8582`:
+    /// `g_iptt=0`, PTT off 200 ms later), leaving Enable Tx ticked for the next; only Stop TX
+    /// unticks it (`:12291-12295`). The over's records stay, as WSJT-X writes its own when it
+    /// asserts PTT (`:7880-7881`, `:8088`).
     ///
     /// However many are dropped in a row, TX stays on, as in WSJT-X, whose next own period asserts
-    /// PTT again until its Tx watchdog ends the run (`:5109-5111`): here too the TX watchdog is the
+    /// PTT again until its Tx watchdog ends the run (`:7788-7790`): here too the TX watchdog is the
     /// only stop ([`Self::plan_tx`]). The operator is told in a lane of its own, with how late and
     /// how many in a row ([`crate::dto::RadioStatus::slot_over_dropped`]): the refused key's "TX
     /// STOPPED" would be wrong while TX is on. One event, one line in the log.
@@ -48401,7 +48401,7 @@ mod tests {
     /// inside the watchdog's 6 minutes leave TX on, slot TX armed, no stop for the loop, nothing on
     /// the refused key's line, and the lane counting each. At 6 minutes the next plan is refused and
     /// TX turned off by the watchdog, as WSJT-X's Tx watchdog ends it
-    /// (`widgets/mainwindow.cpp:5109-5111`).
+    /// (`widgets/mainwindow.cpp:7788-7790`, v3.0.2).
     #[test]
     fn overs_dropped_in_a_row_leave_tx_on_until_the_tx_watchdog_ends_the_run() {
         for (tier, cycle_secs, overs) in [(Tier::Ft8, 30, 12u64), (Tier::Ft4, 15, 24)] {

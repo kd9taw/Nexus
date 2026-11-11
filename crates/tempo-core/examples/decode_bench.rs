@@ -16,7 +16,9 @@
 //! * `boundary` — full slot audio, `a7_final = true` (FT8 a7 save + replay).
 //! * `early` — the WSJT-X-style partial: the first 11.8 s (FT8) / 5.5 s (FT4) of the
 //!   slot at the FRONT of a zero-tail-padded full-length frame, exactly
-//!   `RxRing::frame_latest_padded`, `a7_final = false`.
+//!   `RxRing::frame_latest_padded`, `a7_final = false`. FT8's 11.8 s is the radio loop's early
+//!   pass; the loop runs no FT4 partial (its FT4 pass is the full frame at 6.05 s), so FT4's
+//!   5.5 s here is this bench's own measure, not the loop's.
 //!
 //! `--ctx` additionally brackets each decode in `DecoderCtx::scoped` (the per-chain
 //! modem-state save/restore the multi-radio design would use), so the context overhead
@@ -365,7 +367,8 @@ fn main() {
     }
     let frame_len = kind.frame_samples();
     let slot_secs = kind.slot_secs() as f64;
-    // The early-pass trigger the shipped loop uses (service.rs ~3607).
+    // FT8's early-pass trigger as the shipped loop uses it (tempo-audio `service.rs`); FT4's 5.5 s
+    // is this bench's own partial (the loop decodes FT4's whole frame at 6.05 s).
     let early_at_s = match kind {
         ModeKind::Ft8 => 11.8,
         ModeKind::Ft4 => 5.5,

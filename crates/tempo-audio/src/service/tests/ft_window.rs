@@ -1,13 +1,14 @@
 //! FT8 and FT4 overs on WSJT-X's window, with their tones on the slot clock, on the real loop.
 //!
-//! WSJT-X (upstream master, checked line by line) keys from the clock and ends an over on it: the
+//! WSJT-X (v3.0.2, checked line by line) keys from the clock and ends an over on it: the
 //! over is on the air while the slot position is under `txDuration` (FT8 13.64 s, FT4 6.04 s;
-//! `helper_functions.cpp:6-7`, `widgets/mainwindow.cpp:5012-5015, 5055`), the GUI tick past it stops
-//! the audio (`:5180`, `:5530`, `stopTx` `:5743-5753`), and PTT drops 200 ms later (`ptt0Timer` →
-//! `stopTx2`, `:5753-5760`). Its Modulator lays the tones on the clock: silence up to their nominal
-//! start, the symbols a late start has passed skipped (`Modulator/Modulator.cpp:56-57, 85-101`).
-//! Nexus ended an over at key + wave + 250 ms and played its tones from the key, so keying latency
-//! moved the whole over late and cut its end at the boundary.
+//! `helper_functions.cpp:6-7`, `widgets/mainwindow.cpp:7672-7675, 7715`), the GUI tick past it
+//! stops the audio (`:7859`, `:8219`, `stopTx` `:8564-8578`), and PTT drops 200 ms later
+//! (`ptt0Timer` → `stopTx2`, `:8578-8591`). Its Modulator lays the tones on the clock: silence up
+//! to their nominal start, the symbols a late start has passed skipped
+//! (`Modulator/Modulator.cpp:57-58, 88-104`). Nexus ended an over at key + wave + 250 ms and played
+//! its tones from the key, so keying latency moved the whole over late and cut its end at the
+//! boundary.
 //!
 //! The loop is the real `RadioLoop::step`, on a rigctld that keys and a mock sound card. Every
 //! scene runs at a synthetic time 30 s or more ahead of the real clock: the key re-reads the clock
@@ -254,11 +255,11 @@ fn a_late_start_ft8_cq_plays_on_the_slot_clock_and_ends_with_the_window() {
 }
 
 // ── How late a late key may be: WSJT-X's 75 % of the period ────────────────────────────────────
-// WSJT-X asserts PTT only while the slot is under 75 % of its period (`widgets/mainwindow.cpp:5114`,
-// `:5126`, `fTR < 0.75`, "Allow late starts"): FT8 to 11.25 s, FT4 to 5.625 s, the symbols that remain
-// sent on the clock. Later, the over waits for the next own slot. Nexus stopped a late start at its
-// own budget (6.0 s of FT8's leading audio, 3.0 s of FT4's) and keyed a late boundary as long as any
-// tone remained.
+// WSJT-X asserts PTT only while the slot is under 75 % of its period
+// (`widgets/mainwindow.cpp:7793`, `:7805` v3.0.2, `fTR < 0.75`, "Allow late starts"): FT8 to
+// 11.25 s, FT4 to 5.625 s, the symbols that remain sent on the clock. Later, the over waits for the
+// next own slot. Nexus stopped a late start at its own budget (6.0 s of FT8's leading audio, 3.0 s
+// of FT4's) and keyed a late boundary as long as any tone remained.
 
 /// ⭐ A CALL CQ INSIDE THIS STATION'S OWN SLOT KEYS AT ONCE UNTIL 75 % OF IT, AS WSJT-X'S DOES: 6.5 s
 /// and 11.2 s into an FT8 slot, the symbols that remain on the slot clock and the over ended with
@@ -421,10 +422,11 @@ fn an_ft2_late_start_keeps_its_whole_over_rule() {
 
 // ── An FT4 late start with no tone left: keyed, and held to the window ─────────────────────────────
 // FT4's tones end 5.34 s into its slot (its 0.3 s lead-in), before its latest key at 5.625 s.
-// WSJT-X keys a late start there all the same (`widgets/mainwindow.cpp:5126-5176`): its Modulator
-// finds every symbol behind it and sends none (`Modulator/Modulator.cpp:96-99`, `:281`), and PTT
-// falls only at the window's end (`widgets/mainwindow.cpp:5180`, `:5530`, `stopTx` `:5743-5753`,
-// `stopTx2` `:5758-5760`), 6.24 s into the slot. Nexus keyed it and dropped PTT on the next tick.
+// WSJT-X keys a late start there all the same (`widgets/mainwindow.cpp:7805-7855`, v3.0.2): its
+// Modulator finds every symbol behind it and sends none (`Modulator/Modulator.cpp:99-102`, `:286`),
+// and PTT falls only at the window's end (`widgets/mainwindow.cpp:7859`, `:8219`, `stopTx`
+// `:8564-8578`, `stopTx2` `:8584-8591`), 6.24 s into the slot. Nexus keyed it and dropped PTT on
+// the next tick.
 
 /// ⭐ AN FT4 CALL CQ 5.58 s INTO THIS STATION'S OWN SLOT, PAST ITS LAST TONE AND UNDER 75 %: KEYED AT
 /// ONCE, NOTHING PLAYED, THE AUDIO STOPPED AT 6.04 s AND PTT OFF AT 6.24 s, WSJT-X'S WINDOW. It used
@@ -546,8 +548,8 @@ fn stop_tx_cuts_the_held_window_at_once_and_tx_off_lets_it_end_on_the_window() {
 // ── This station's own FT4 boundary decided with no tone left: keyed, and held to the window ──────
 // The same rule when the slot's own key comes late (a decode that drained late, a stalled computer)
 // and finds it 5.34-5.625 s into the slot: past FT4's last tone, under its latest key. WSJT-X's GUI
-// tick keys it as it keys a late start (`widgets/mainwindow.cpp:5126-5176`) and holds it to the
-// window's end; Nexus keyed nothing there.
+// tick keys it as it keys a late start (`widgets/mainwindow.cpp:7805-7855`, v3.0.2) and holds it to
+// the window's end; Nexus keyed nothing there.
 
 /// ⭐ AN FT4 BOUNDARY DECIDED 5.58 s INTO THIS STATION'S OWN SLOT: KEYED, NOTHING PLAYED, THE AUDIO
 /// STOPPED AT 6.04 s AND PTT OFF AT 6.24 s, AS FOR A CALL CQ THERE. It used to key nothing, and the
@@ -921,7 +923,8 @@ fn a_busy_decoder_does_not_delay_the_key_of_the_over_built_before_it() {
 const FT4_WAVE: usize = 3_600 + 72_576;
 
 /// ⭐ AN OVER CHANGED AFTER THE EARLY PASS KEYS ON TIME WHILE A DECODE HOLDS THE MODEM, ON FT8 AND
-/// FT4. After the early pass (11.8 s, 5.5 s) the operator changes what the boundary sends: a new TX
+/// FT4. After the early pass (FT8's at 11.8 s; FT4's is its full pass, at 6.05 s) the operator
+/// changes what the boundary sends: a new TX
 /// frequency for the CQ the early pass built, or a CQ called only after it (nothing was queued when
 /// it ran). Either way the boundary builds its over at the key, with a decode still holding the
 /// modem. That build waited for the decode: the over went out late by however long the decode
@@ -1070,9 +1073,9 @@ fn a_late_start_decides_on_the_clock_at_the_decision_not_on_its_ticks() {
 // seconds (each command up to its 2.5 s deadline). The tones are laid on the clock where the carrier
 // is, so a Call CQ whose carrier came up in the other station's period sent the rest of its over
 // there, on their slot clock. WSJT-X starts an over's audio only when the radio reports PTT on and
-// the over is still needed (`widgets/mainwindow.cpp:8852`), and its GUI tick ends the over as soon
-// as the clock has left its window (`:5055`, `:5180`, `:5530`), a window in this station's own
-// period (`:5016-5019`).
+// the over is still needed (`widgets/mainwindow.cpp:12443`, v3.0.2), and its GUI tick ends the over
+// as soon as the clock has left its window (`:7715`, `:7859`, `:8219`), a window in this station's
+// own period (`:7676-7679`).
 
 /// Lines a scene's rigctld got, each with the wall clock it came at.
 type Lines = Arc<Mutex<Vec<(String, f64)>>>;
@@ -1376,8 +1379,8 @@ fn a_slow_late_start_plays_in_its_own_period(
 /// (seconds on a slow computer). A tick that came after 13.84 s with the lock held kept PTT up until
 /// it was let go: here 1.5 s, to 15.34 s, a third of a second into the other station's period. WSJT-X
 /// re-tests its window every 100 ms on a thread its CAT and its decoder never stall (`m_bTxTime`,
-/// `widgets/mainwindow.cpp:870`, `:5055`, `:5180`, `:5530`). Now PTT drops first thing in that tick,
-/// and only then does the tick wait for the lock.
+/// `widgets/mainwindow.cpp:1011`, `:7715`, `:7859`, `:8219`, v3.0.2). Now PTT drops first thing in
+/// that tick, and only then does the tick wait for the lock.
 #[test]
 fn an_ft8_overs_end_does_not_wait_for_the_engine_lock() {
     let mut s = Over::new(Tier::Ft8);
