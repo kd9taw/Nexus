@@ -154,6 +154,12 @@ impl CatDaemon {
     }
 }
 
+/// The loop's `now` moved on by how long this tick has run so far: the moment a decision is made
+/// in the tick, on the tick's own (UTC-steered) timebase.
+fn now_in_tick(now: f64, tick_started: Instant) -> f64 {
+    now + tick_started.elapsed().as_secs_f64() * 1000.0
+}
+
 /// A rigctld TCP port is never allowed to be 0. Nexus spawns rigctld on this port and connects to
 /// `127.0.0.1:<port>`; connecting to port 0 fails on Windows with WSAEADDRNOTAVAIL ("the requested
 /// address is not valid in its context", os error 10049). Settings repair (`ensure_distinct_radio_ports`)
@@ -1496,11 +1502,14 @@ fn read_tx_meter(
 /// ([`RadioLoop::tx_alc_raw`]): its strict deadline. A rigctld from 4.6 answers `RM4;` in tens of
 /// milliseconds; one before 4.6 never answers, and the probe gives up here.
 const RAW_ALC_PROBE_DEADLINE_MS: u64 = 1_000;
+/// How long (ms) a rigctld before Hamlib 4.6 holds its client lock after a raw read the radio
+/// never ends with a newline: the Yaesu backends' `.timeout`.
+const HAMLIB_45_LOCK_MS: u64 = 2_000;
 /// …and the probe runs only this long or more before the next slot boundary: its own deadline,
-/// plus the 2 s a rigctld before 4.6 then holds its client lock waiting for the radio's
-/// newline (the Yaesu backends' `.timeout`), plus a margin, so a key on that boundary never
-/// waits behind it.
-const RAW_ALC_PROBE_LEAD_MS: f64 = 3_500.0;
+/// plus [`HAMLIB_45_LOCK_MS`], plus a 500 ms margin, so a key on that boundary never waits behind
+/// it.
+const RAW_ALC_PROBE_LEAD_MS: f64 = (RAW_ALC_PROBE_DEADLINE_MS + HAMLIB_45_LOCK_MS + 500) as f64;
+const _: () = assert!(RAW_ALC_PROBE_LEAD_MS == 3_500.0);
 /// …and only this far or more into the slot. A boundary's own tick has the whole slot ahead of
 /// it, and an over due on that boundary keys on that tick or just after it, so a probe there
 /// would key it late. Three seconds, not one: an automatic reply also late-starts off the
@@ -15681,7 +15690,7 @@ impl RadioLoop {
                 let over_left = if self.tuning_keyed {
                     None
                 } else {
-                    self.over_left_ms(now + tick_started.elapsed().as_secs_f64() * 1000.0)
+                    self.over_left_ms(now_in_tick(now, tick_started))
                 };
                 let min_left = if rig.slow_transport() {
                     TX_METER_OVER_MIN_LEFT_SLOW_MS
@@ -17660,7 +17669,7 @@ impl RadioLoop {
         // The Flex client's transmit audio source (operator ruling, 2026-10-03): written here, at
         // the end of the tick, after every keying site in it, and only at a quiet point, never
         // between a slot boundary and the key that follows it.
-        let now_end = now + tick_started.elapsed().as_secs_f64() * 1000.0;
+        let now_end = now_in_tick(now, tick_started);
         self.sync_flex_tx_routing(engine, rig, now_end);
         Ok(())
     }
