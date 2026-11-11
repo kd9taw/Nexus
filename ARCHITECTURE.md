@@ -62,9 +62,12 @@ else. The trust model, routes and limits are in [remote/README.md](remote/README
 **Sign-in, pairing and keys.** A station is paired by a code made and approved at the shack, and
 can be bound to its owner's account by a sign-in at the shack (`remote_service/account.rs`); the
 station checks the issuer's proof itself, with the issuer's keys cached for when the internet is
-down. A device listed by the service on the strength of a sign-in is still granted nothing until it
-is approved at the shack (`GRANTS_ON_SIGN_IN` is off). Each pairing has a station signing key
-(P-256, kept in the OS credential store, `remote_service/station_key.rs`) whose public half is
+down. A device listed by the service on the strength of a sign-in is granted control at once
+(`GRANTS_ON_SIGN_IN` is on), but held from transmitting: the station holds it for 15 minutes
+(`TX_HOLD`) and until the service confirms it emailed the owner. Approve or Allow to transmit at
+the shack lifts the hold; a computer paired or enrolled on the shack's own network is never held.
+Each pairing has a station signing key (P-256, kept in the OS credential store,
+`remote_service/station_key.rs`) whose public half is
 pinned at the service: the station signs every stream answer with it, and a page checks each
 answer against the key the service lists, refuses one without a good signature, keeps the first key
 it saw for the station (refusing the stream while the service lists another) and shows that key's
@@ -73,9 +76,10 @@ pinned when it was approved, signs its stream offer, and its DTLS certificate mu
 relay's operation and audio lanes carry a per-message proof from the same key
 (`remote_service/lanes.rs`), except `state` and `stopTransmit`.
 
-**Grants, the lease and presence** (`remote_service/operations.rs`). Only a control grant given at
-the shack (or restored after a restart for a device still approved) lets a device take the one
-controller lease. The lease is five seconds, renewed by heartbeats, bound to the connection that
+**Grants, the lease and presence** (`remote_service/operations.rs`). Only a control grant (given
+at the shack, given on a sign-in the station checked itself, or restored after a restart for a
+device still approved) lets a device take the one controller lease. The lease is five seconds,
+renewed by heartbeats, bound to the connection that
 took it, and shared by every road; a computer driving the station (on the LAN or through the room)
 can take control from the one holding it, whose over ends as a Stop ends it. No grant and no lease
 arms TX. While a streamed or client session is attached, the engine holds a transmit presence
@@ -105,7 +109,8 @@ loses its own oldest frames when it falls behind. Listen and a stream's audio ne
 grant and a live lease.
 
 **Entitlement and billing.** Access is the account's entitlement as the Worker reads it from D1: a
-trial that starts when a station is approved at the radio, a grant made by hand, or a subscription.
+trial that starts when a code-paired station is approved at the radio (a station bound by a
+sign-in: at its first internet use), a grant made by hand, or a subscription.
 Subscriptions go through a separate, private billing Worker that holds the payment keys. Its
 binding is written into a deploy only when that environment's `billing.deployed` is true in
 `remote/scripts/staging-common.mjs`, and both environments ship with it false, so billing is off
