@@ -1340,14 +1340,13 @@ mod tests {
         }
     }
 
-    /// ⚠️ ORDER PIN, EXPECTED TO FLIP: today the remote-transmit preempt in
-    /// [`key_slot_transmitter`] sends the unkey (`T 0`) BEFORE it flushes the queued audio, at both
-    /// of its checks: the one before the key (on a radio already keyed) and the one after it (the
-    /// permit revoked while the key was in flight). The other slot-over ends flush first. This
-    /// pins today's order so the change that makes every slot-over end flush first shows up as
-    /// exactly this assertion flipping; that change updates it to `["flush", "T 0"]`.
+    /// ORDER PIN: the remote-transmit preempt in [`key_slot_transmitter`] clears the queued audio
+    /// (`flush`) BEFORE it sends the unkey (`T 0`), at both of its checks: the one before the key
+    /// (on a radio already keyed) and the one after it (the permit revoked while the key was in
+    /// flight). Every slot-over end does the same, as WSJT-X's `stopTx` stops the Modulator before
+    /// it lowers PTT. It unkeyed first until the Stop TX order change.
     #[test]
-    fn order_pin_the_remote_preempt_unkeys_before_it_flushes() {
+    fn order_pin_the_remote_preempt_flushes_before_it_unkeys() {
         use crate::rig::remote_tests::retuning_peer;
         use std::sync::Arc;
         use std::time::{Duration, Instant};
@@ -1396,8 +1395,8 @@ mod tests {
                 .collect();
             assert_eq!(
                 order,
-                ["T 0", "flush"],
-                "{scene}: today the preempt unkeys, then flushes"
+                ["flush", "T 0"],
+                "{scene}: the preempt flushes, then unkeys"
             );
             assert!(!rig.keyed, "{scene}: the radio was left keyed");
         }

@@ -696,10 +696,11 @@ fn a_refused_keys_halt_still_sends_the_cw_stop() {
 // ── The order of the flush and the unkey at each slot-over end ──────────────────────────────────
 // CHARACTERIZATION for the timing simplification. The mock sound card's flush and the rigctld's
 // lines go into one log (`MockBackend::events` is the peer's own line log), so a test reads which
-// came first in the tick that ended the over. Today an over's own end (the FT8/FT4 window's
-// re-test, and the deadline unkey every other slot tier ends on) flushes FIRST; Stop TX and a
-// logger's HaltTx unkey first. The remote-transmit preempt is pinned beside its code
-// (`slot::tests::order_pin_the_remote_preempt_unkeys_before_it_flushes`).
+// came first in the tick that ended the over. Every end flushes FIRST: an over's own end (the
+// FT8/FT4 window's re-test, and the deadline unkey every other slot tier ends on), Stop TX and a
+// logger's HaltTx (the last two unkeyed first until the Stop TX order change). The remote-transmit
+// preempt is pinned beside its code
+// (`slot::tests::order_pin_the_remote_preempt_flushes_before_it_unkeys`).
 
 /// The flushes and unkeys the log holds from `from` on, in order.
 fn flush_and_unkey_since(s: &Station, from: usize) -> Vec<String> {
@@ -762,11 +763,11 @@ fn order_pin_a_deadline_unkey_flushes_then_unkeys() {
     assert!(!s.on_air() && !s.rig.keyed, "the radio was left keyed");
 }
 
-/// ⚠️ ORDER PIN, EXPECTED TO FLIP: Stop TX mid-over unkeys, THEN flushes, today. The change that
-/// makes every slot-over end flush first flips this to `["flush", "T 0"]`, and that flip is its
-/// whole visible diff.
+/// ORDER PIN: Stop TX mid-over clears the queued audio, THEN unkeys, so a slow link's wait for
+/// the unkey's answer is a silent carrier, not tones. It unkeyed first until the Stop TX order
+/// change.
 #[test]
-fn order_pin_stop_tx_mid_over_unkeys_then_flushes() {
+fn order_pin_stop_tx_mid_over_flushes_then_unkeys() {
     let mut s = Station::new(Unkey::Accepts);
     s.backend.events = Some(Arc::clone(&s.peer.lines));
     s.key_the_over();
@@ -778,15 +779,15 @@ fn order_pin_stop_tx_mid_over_unkeys_then_flushes() {
     assert_eq!(s.state.tx_until_ms, None, "premise: Stop TX cut the over");
     assert_eq!(
         flush_and_unkey_since(&s, from),
-        ["T 0", "flush"],
-        "today Stop TX unkeys, then flushes"
+        ["flush", "T 0"],
+        "Stop TX flushes, then unkeys"
     );
 }
 
-/// ⚠️ ORDER PIN, EXPECTED TO FLIP: a logger's HaltTx mid-over unkeys, THEN flushes, today. The
-/// change that makes every slot-over end flush first flips this to `["flush", "T 0"]`.
+/// ORDER PIN: a logger's HaltTx mid-over clears the queued audio, THEN unkeys, as Stop TX does. It
+/// unkeyed first until the Stop TX order change.
 #[test]
-fn order_pin_a_loggers_halt_tx_unkeys_then_flushes() {
+fn order_pin_a_loggers_halt_tx_flushes_then_unkeys() {
     let logger = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let server =
         WsjtxServer::new("127.0.0.1:0".parse().unwrap(), logger.local_addr().unwrap()).unwrap();
@@ -808,7 +809,7 @@ fn order_pin_a_loggers_halt_tx_unkeys_then_flushes() {
     );
     assert_eq!(
         flush_and_unkey_since(&s, from),
-        ["T 0", "flush"],
-        "today a logger's HaltTx unkeys, then flushes"
+        ["flush", "T 0"],
+        "a logger's HaltTx flushes, then unkeys"
     );
 }
