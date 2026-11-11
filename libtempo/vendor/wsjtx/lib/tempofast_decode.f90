@@ -788,6 +788,8 @@ contains
                      if(decodes(i).eq.message) idupe=1
                   enddo
                   if(idupe.eq.1) cycle
+! A full decode list (decodes and fdec both hold 100) takes no more, like a duplicate.
+                  if(ndecodes.ge.size(decodes)) cycle
 
                   ndecodes=ndecodes+1
                   decodes(ndecodes)=message
@@ -904,6 +906,8 @@ contains
                         if(decodes(i).eq.message) idupe=1
                      enddo
                      if(idupe.eq.1) exit
+! A full decode list takes no more, like a duplicate.
+                     if(ndecodes.ge.size(decodes)) exit
 
                      ndecodes=ndecodes+1
                      decodes(ndecodes)=message
@@ -987,7 +991,8 @@ contains
                            do i=1,ndecodes
                               if(decodes(i).eq.message) idupe=1
                            enddo
-                           if(idupe.eq.0) then
+! A full decode list takes no more, like a duplicate.
+                           if(idupe.eq.0 .and. ndecodes.lt.size(decodes)) then
                               ndecodes=ndecodes+1
                               decodes(ndecodes)=message
                               fdec(ndecodes)=f1
