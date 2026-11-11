@@ -17,7 +17,7 @@ transmitter past the end of an over.
 - **An amplifier TX delay**, 0 to 500 ms per radio, so an amplifier keyed from the radio has time to switch.
 - **Best times to work a station:** type a call or right-click one almost anywhere.
 - **P.533 is the default prediction engine.** Some band answers change; see Upgrading, below.
-- **IOTA references logged for you** from spots and your callbook, sent with the contact, with the island group's name.
+- **IOTA references logged for you** from spots up to an hour old and your callbook, sent with the contact, with the island group's name.
 - **Stop TX silences the tones first,** stays put on screen, and works over dialogs and menus on the first click.
 - **A large TX meters pane you can size** on FT, Phone, CW and SSTV, and TX meters on RTTY, PSK and JTTY.
 - **A memory opens the screen you saved it from,** so an SSTV memory brings you back to SSTV.
@@ -40,6 +40,10 @@ gets through. To go back, set Settings ▸ Services ▸ Prediction engine to the
 - **The IOTA reference is filled in for you** when a cluster spot or your callbook names the station's island group. The
   log strip, the Logbook's Add form and the confirm-before-log popup show it already filled, with where it came from;
   change or clear it (×) before logging. The Use button is gone.
+- **A spot counts for up to an hour,** so a station spotted early in a contest hour still gets its reference. The spot
+  must be of that exact call, on the contact's band; when spots disagree, nothing is filled.
+- **Portable calls (/P, F/ and the like):** the callbook answers for the home call, so its island group is used only when
+  a spot of the portable call names the same group, never by itself.
 - **It now goes with the contact to every service and logging program**, and counts for the award like one you typed.
 - **A reference an earlier version held back for you to confirm is no longer held.** It goes out the next time that
   contact is sent. The contact card's Confirm button and the Awards view's "waiting for you to confirm" count are gone;
@@ -109,6 +113,9 @@ gets through. To go back, set Settings ▸ Services ▸ Prediction engine to the
 - **TempoFast copies far more of what it hears.** In simulation the missed share at +15 dB falls from about 7 % to under
   1 %, and at -10 dB from about 43 % to about 9 %, with no more false decodes. It helps every station you receive, whatever
   version they run. A very crowded band takes about a fifth longer to decode.
+- **The FT1 decoder can no longer write past the end of its list of decodes.** It keeps up to 100 per slot and did not
+  check that limit. More than 100 different FT1 messages in one slot is not expected on the air, but one that reached it
+  could have corrupted the decoder's memory. A decode past the 100th is now dropped, as a repeat is.
 - **The guide explains keeping good time with no internet,** for FT8 and FT4 at a portable or club station.
 
 ## Meters and screens
@@ -138,6 +145,12 @@ gets through. To go back, set Settings ▸ Services ▸ Prediction engine to the
   DTR held low exactly as before.
 - **CAT no longer hangs with Hamlib 4.5** (Ubuntu 24.04's, for one), and asking Hamlib about the radio no longer opens your
   computer's first serial port (`/dev/ttyS0`, COM1) with nothing held low.
+- **A serial CAT port is never opened without RTS and DTR held when Hamlib's tools would not start for a moment.** Nexus
+  asks Hamlib whether it will hold those lines low before opening the port. If neither rigctl nor rigctld could start
+  for that question (an antivirus scan holding the file, say), Nexus used to open the port anyway once rigctld did
+  start, with the lines left as the driver raises them, which can key an interface wired to RTS or DTR. Now it does not
+  open the port and says to try again. A missing Hamlib still gets the message saying how to install it; a virtual port,
+  or one with every line set to Untouched, opens as before.
 - **CAT Auto-test waits for each radio it tries,** and finds radios that take longer to open. A port where nothing answers
   can now take a minute or more, and the screen shows how long it has run.
 - **Output power on the FT-450D and other radios whose Hamlib driver gives it only as a share of the meter** (FT-450,
