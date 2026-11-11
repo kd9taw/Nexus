@@ -194,6 +194,7 @@ _getsockname
 _getsockopt
 _gettimeofday
 _getuid
+_grantpt
 _hypot
 _hypotf
 _if_nametoindex
@@ -249,6 +250,7 @@ _pause
 _pipe
 _poll
 _posix_memalign
+_posix_openpt
 _posix_spawn_file_actions_adddup2
 _posix_spawn_file_actions_destroy
 _posix_spawn_file_actions_init
@@ -297,6 +299,7 @@ _pthread_self
 _pthread_setname_np
 _pthread_setspecific
 _pthread_threadid_np
+_ptsname
 _putc
 _putchar
 _puts
@@ -378,6 +381,7 @@ _time
 _umask
 _unlink
 _unlinkat
+_unlockpt
 _uselocale
 _utimes
 _vsnprintf
