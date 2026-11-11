@@ -5,7 +5,7 @@ through a settled relay. A new **Best times** box tells you whether you can work
 the next good window opens. Predictions now use the P.533 model by default, with your own power and antenna.
 
 When a spot or your callbook names a station's island group, the IOTA reference is now logged for you and sent with the
-contact. Confirmation reports and card inbox files you download by hand are read as confirmations, not as new contacts.
+contact. LoTW reports and eQSL InBox files you download by hand are read as confirmations, not as new contacts.
 A contact you delete stops going to every service it has not reached yet.
 
 Most of this release's fixes concern Stop TX and the end of an over. Stop TX silences the tones at once, stays exactly
@@ -21,7 +21,7 @@ transmitter past the end of an over.
 - **Stop TX silences the tones first,** stays put on screen, and works over dialogs and menus on the first click.
 - **A large TX meters pane you can size** on FT, Phone, CW and SSTV, and TX meters on RTTY, PSK and JTTY.
 - **A memory opens the screen you saved it from,** so an SSTV memory brings you back to SSTV.
-- **A virtual serial port can be your CAT port,** for a rig-control program that shares your radio.
+- **A virtual serial port, such as wfview's, can be your CAT port.**
 - **Field Day bonuses that count per unit,** and the natural power list.
 - **TempoFast copies far more of what it hears,** in simulation: under 1 % of strong frames missed, was about 7 %.
 
@@ -101,8 +101,8 @@ gets through. To go back, set Settings ▸ Services ▸ Prediction engine to the
 - **A band change just before your own slot no longer starts that over late** with Split Operation = Rig.
 - **FT8 and FT4 key after Call CQ on a band change, on a radio slow to answer split commands.** That over now sends only
   the split command before keying, so a radio taking up to half a second per command keys on time.
-- **The first over after connecting is on time** on some older radio drivers, which used to hold up Stop TX and the end of
-  the over for a second or more while Nexus asked about the ALC scale.
+- **The first over after connecting is on time** on the FT-991A, FT-710, FTDX10, FT-450 and FT-450D with a Hamlib older
+  than 4.6, which used to hold up Stop TX and the end of the over for a second or more while Nexus asked about the ALC scale.
 - **Calling a station you have not decoded keeps your period;** a decoded line, a roster entry or a heard station still
   answers on the opposite of theirs. Clicking a line too old to hold its decode now asks you to wait for the station's
   next transmission.
@@ -132,21 +132,23 @@ gets through. To go back, set Settings ▸ Services ▸ Prediction engine to the
 
 ## Radios and CAT
 
-- **A virtual serial port can be your CAT port,** such as one made by a rig-control program sharing your radio.
-  Nexus recognises a virtual port without opening it. Every real USB or serial port, and anything
-  Nexus cannot positively identify as virtual, still has RTS and DTR held low exactly as before.
-- **CAT no longer hangs with an older system copy of the rig-control library,** and asking it about the radio no longer
-  opens your computer's first serial port with nothing held low.
+- **A virtual serial port can be your CAT port,** such as the one wfview makes, or a socat link on Linux. Turn on Native
+  Icom CI-V too and Nexus opens it for rig control and the radio's scope. Nexus recognises a virtual port without
+  opening it. Every real USB or serial port, and anything Nexus cannot positively identify as virtual, still has RTS and
+  DTR held low exactly as before.
+- **CAT no longer hangs with Hamlib 4.5** (Ubuntu 24.04's, for one), and asking Hamlib about the radio no longer opens your
+  computer's first serial port (`/dev/ttyS0`, COM1) with nothing held low.
 - **CAT Auto-test waits for each radio it tries,** and finds radios that take longer to open. A port where nothing answers
   can now take a minute or more, and the screen shows how long it has run.
-- **Output power on radios whose driver gives it only as a share of the meter,** shown as **PO≈** against the rated power
-  you set. Your log keeps using Station power.
-- **An SDR program that refuses a data mode no longer shows an error at every transmit.** Nexus notices while you receive
+- **Output power on the FT-450D and other radios whose Hamlib driver gives it only as a share of the meter** (FT-450,
+  TS-2000, TS-480, QCX/QDX, (tr)uSDX, SDRuno, SDR Console), shown as **PO≈** against the rated power you set. The FT-450
+  and FT-450D ALC is read on the radio's own scale. Your log keeps using Station power.
+- **FT8 through SDR Console no longer brings up an error at every transmit.** Nexus notices while you receive
   and uses plain USB or LSB for that connection.
-- **Network rig control set up with a COM port now says what is wrong** and what to do, instead of "No such file or
+- **NET rigctl set up with a COM port now says what is wrong** and what to do, instead of "No such file or
   directory".
 - **An ATU press that comes to nothing now says why:** refused, no answer, or dropped and why.
-- **Rotators:** a rotator program that reports elevation moves both axes again on satellite and Moon tracks, and a high
+- **Rotators:** PstRotator moves the elevation again on satellite and Moon tracks (PstRotatorAz stays azimuth only), and a high
   satellite pass no longer lays an az/el antenna on the horizon when the rotator refuses an elevation.
 
 ## Licence checks and bands
@@ -169,35 +171,36 @@ gets through. To go back, set Settings ▸ Services ▸ Prediction engine to the
 - **P.533 is the default prediction engine,** lowered by the same storm penalty during a geomagnetic storm, and it says
   which power it assumed. Live spots still win over any model. Predictions run below normal priority, so decoding comes
   first.
-- **Only new parks and summits:** an **Only new** chip on the parks and summits board shows just the ones you have never
-  logged.
-- **The parks board always shows the band you picked,** and the Spots board remembers your modes and band.
-- **A caller's grid square opens on a web map.** Only the square goes to the website.
+- **Only new parks and summits:** an **Only new** chip on the POTA/SOTA board shows just the parks and summits you have
+  never logged, on POTA, SOTA, WWFF or All.
+- **The POTA/SOTA board always shows the band you picked,** and the Spots board remembers your modes and band.
+- **A caller's grid square opens on OpenStreetMap.** Only the square goes to the website.
 
 ## Logging and confirmations
 
-- **Confirmation reports and card inbox files you download by hand are read as confirmations.** Before, Import read them
+- **A LoTW report or an eQSL InBox file you download by hand is read as confirmations.** Before, Import read it
   as a log, adding contacts you never made and, for cards, duplicate copies of your contacts. Now each one confirms the
   contact it matches and nothing is added; Undo takes them back off.
-- **Build a log from a confirmation report:** after such an import, **Add N unmatched rows as new contacts** adds the
+- **Build a log from a LoTW report:** after such an import, **Add N unmatched rows as new contacts** adds the
   confirmations that match nothing in your log. Nothing is added unless you press it, and the added contacts are never
-  uploaded back.
-- **Check the "QSL sent" marks electronic cards left on your contacts, and clear them.** Earlier versions copied the
+  uploaded back to LoTW.
+- **Check the "QSL sent" marks eQSL cards left on your contacts, and clear them.** Earlier versions copied the
   sender's own mark onto your contact. The Logbook lists each one, all ticked; untick any you set yourself, and Clear
   takes the rest off. Undo puts them back.
-- **Electronic cards bring the sender's message,** a missing grid, and an Authenticity Guaranteed card shows as **AG** in
+- **eQSL cards bring the sender's message,** a missing grid, and an Authenticity Guaranteed eQSL shows as **AG** in
   the Logbook's QSL column, which now holds every mark in full.
-- **Moving your log from another program does not upload it again** to the card service when the file says it was sent.
-- **A contact you delete stops going anywhere it has not gone yet,** on every service, including retries, contacts held in
-  a contest, and ones waiting for a logging program. Undo brings the contact back without sending the cancelled uploads.
-- **A master logging program on the same computer gets each contact once,** instead of again on every retry elsewhere, and
-  contacts wait for it instead of being lost when it is not running, across a restart too. Copies already sent are not
-  removed.
-- **Another logbook program that was closed gets the contacts logged meanwhile,** up to 256, in order.
+- **Moving your log from another program does not upload it again** to eQSL when the file says it was sent
+  (EQSL_QSL_SENT Y).
+- **A contact you delete stops going anywhere it has not gone yet,** on every service and logging program (QRZ, Club Log,
+  eQSL, HRDLog, Cloudlog or Wavelog, World Radio League, HRD Logbook, DXKeeper and the rest), including retries,
+  contacts held in a contest, and ones waiting for DXKeeper. Undo brings the contact back without sending the cancelled uploads.
+- **DXKeeper gets each contact once,** instead of again on every retry elsewhere, and contacts wait for it instead of
+  being lost when it is not running, across a restart too. Copies already sent are not removed.
+- **HRD Logbook gets the contacts logged while it was closed,** up to 256, in order.
 - **The path Nexus grades for a contact stays in Nexus,** out of every upload and export.
-- **One click from an activation's file to the parks program's upload page,** with the file shown in its folder. Nexus
+- **One click from an activation's file to POTA's upload page,** with the file shown in its folder. Nexus
   sends nothing itself and holds no login.
-- **The logbook's database engine is updated for a security fix.** Nothing changes for your log.
+- **The built-in SQLite is updated to 3.54.1 for a security fix.** Nothing changes for your log.
 
 ## Contests and Field Day
 
@@ -229,11 +232,11 @@ yours.
 
 - The amplifier TX delay with a real amplifier.
 - Stop TX silencing the tones first, and FT1's quiet start.
-- A virtual serial port with a real rig-control program sharing the radio, on Linux or a Mac, and whether its scope comes
+- A virtual serial port with wfview itself, on Linux or a Mac, and whether its scope comes
   through.
-- The first-over ALC check on older radio drivers, CAT Auto-test's longer wait, and the ATU's new messages.
-- The SDR program data-mode fallback.
-- A rotator program reporting elevation.
+- The first-over ALC check with an older Hamlib, CAT Auto-test's longer wait, and the ATU's new messages.
+- The SDR Console data-mode fallback.
+- PstRotator's elevation.
 - TempoFast's decoding gains, which are simulation figures.
 
 FT1's limits on a radio slow to key, above, are known and still open.
