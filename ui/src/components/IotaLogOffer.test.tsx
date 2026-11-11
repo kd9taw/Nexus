@@ -194,4 +194,16 @@ describe('the confirm-before-log popup', () => {
     expect(logged(p)).toBeNull()
   })
 
+
+  it('a malformed answer ({}) fills nothing and the popup still logs', async () => {
+    api.getIotaOffer.mockResolvedValue({})
+    const p = open()
+    await waitFor(() => expect(api.getIotaOffer).toHaveBeenCalledWith('IA5X'))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(field()).toBeNull()
+    p.log()
+    expect(logged(p)).toBeNull()
+    expect(p.onConfirm.mock.calls[0][1]).toBeNull()
+  })
+
 })

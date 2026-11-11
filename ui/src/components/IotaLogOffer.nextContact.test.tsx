@@ -120,6 +120,33 @@ describe('a fill is for one contact', () => {
   })
 })
 
+describe('a malformed answer from the station never breaks the strip', () => {
+  const snap = { mycall: 'KD9TAW', mygrid: 'EN52', radio: { band: '20m', dialMhz: 14.025 }, hunt: null } as unknown as AppSnapshot
+  const call = () => document.querySelector<HTMLInputElement>('input.le-call')!
+
+  for (const [what, answer] of [
+    ['{}', {}],
+    ['null', null],
+    ['a reference that is no string', { reference: 7, source: 'spot' }],
+    ['an unknown source', { reference: 'EU-028', source: 'rumour' }],
+  ] as const) {
+    it(`${what}: no box, and the contact logs with no reference`, async () => {
+      vi.mocked(getIotaOffer).mockResolvedValue(answer as never)
+      render(<LogEntry snap={snap} mode="CW" defaultRst="599" exchange="terrestrial" titled={false} />)
+      fireEvent.change(call(), { target: { value: 'IA5X' } })
+      await waitFor(() => expect(getIotaOffer).toHaveBeenCalledWith('IA5X'))
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50))
+      })
+      expect(screen.queryByRole('group', { name: t('iota.prefill.aria') }), 'no box').toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: /^log$/i }))
+      await waitFor(() => expect(logQso).toHaveBeenCalledTimes(1))
+      expect(loggedIota(0)).toBeNull()
+      expect(vi.mocked(logQso).mock.calls[0][2], 'no offer passed').toBeNull()
+    })
+  }
+})
+
 describe('a badly typed reference in the strip', () => {
   const snap = { mycall: 'KD9TAW', mygrid: 'EN52', radio: { band: '20m', dialMhz: 14.025 }, hunt: null } as unknown as AppSnapshot
   const call = () => document.querySelector<HTMLInputElement>('input.le-call')!

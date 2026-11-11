@@ -127,7 +127,7 @@ export function useIotaPrefill(
     if (keyRef.current === key) return
     keyRef.current = key
     const { value: v, setValue: set } = latest.current
-    if (!touched.current && filled.current !== null && v.trim().toUpperCase() === filled.current) set('')
+    if (!touched.current && filled.current !== null && (v ?? '').trim().toUpperCase() === filled.current) set('')
     touched.current = false
     filled.current = null
   }, [key])
@@ -139,11 +139,14 @@ export function useIotaPrefill(
       // lands in the catch below rather than throwing out of the timer.
       Promise.resolve()
         .then(() => getIotaOffer(key))
-        .then((offer) => {
+        .then((answer) => {
           if (!live) return
-          setKept({ call: key, offer: offer ?? null })
+          // Only an answer that IS an offer: a reference by its shape and a known source. Anything
+          // else (a station that answers `{}`, an older one, a stub) fills nothing and breaks nothing.
+          const offer = asOffer(answer)
+          setKept({ call: key, offer })
           const { value: v, setValue: set } = latest.current
-          if (offer && !touched.current && v.trim() === '') {
+          if (offer && !touched.current && (v ?? '').trim() === '') {
             filled.current = offer.reference
             set(offer.reference)
           }
@@ -189,8 +192,9 @@ export function IotaPrefillSource({ state }: { state: IotaPrefillState }) {
  * "IOTA [EU-131] · Veneto Region group — from the spot  [×]", shown while it holds a reference or
  * the station names one. The reference is logged with the contact as the box holds it; × empties it.
  */
-export function IotaPrefillField({ state, value }: { state: IotaPrefillState; value: string }) {
+export function IotaPrefillField({ state, value: given }: { state: IotaPrefillState; value: string | null | undefined }) {
   useIotaGroups()
+  const value = given ?? ''
   if (!state.offer && value.trim() === '') return null
   const r = value.trim().toUpperCase()
   const invalid = iotaInvalid(value)
@@ -230,13 +234,22 @@ export function IotaPrefillField({ state, value }: { state: IotaPrefillState; va
 /** The box's reference as the log takes it, in its one spelling (`normalizeIota`: "eu-5" is
  *  EU-005); none for an empty box. A box that holds something else is [`iotaInvalid`], and the form
  *  says so and does not log, never logging it as nothing. */
-export function iotaToLog(value: string): string | null {
+export function iotaToLog(value: string | null | undefined): string | null {
   return normalizeIota(value)
 }
 
 /** The box holds something that is not a reference in any spelling. */
-export function iotaInvalid(value: string): boolean {
-  return value.trim() !== '' && normalizeIota(value) === null
+export function iotaInvalid(value: string | null | undefined): boolean {
+  return (value ?? '').trim() !== '' && normalizeIota(value) === null
+}
+
+/** `answer` when it is an offer: a reference by its shape and a source the log knows; else null. */
+function asOffer(answer: unknown): IotaOfferData | null {
+  const o = answer as Partial<IotaOfferData> | null | undefined
+  if (!o || typeof o !== 'object' || typeof o.reference !== 'string') return null
+  const reference = normalizeIota(o.reference)
+  if (!reference || (o.source !== 'spot' && o.source !== 'callbook')) return null
+  return { reference, source: o.source }
 }
 
 /**
