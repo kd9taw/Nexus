@@ -27848,7 +27848,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if limit_secs > 0 {
             let now = now_unix_secs();
             let start = *self.tx_watchdog_start.get_or_insert(now);
-            if now.saturating_sub(start) >= limit_secs {
+            if crate::keyboard::watchdog_tripped(start, now, limit_secs) {
                 self.note_tx_watchdog_trip("a PSK over");
                 self.tx_watchdog = true;
                 self.tx_enabled = false;
@@ -28285,7 +28285,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if limit_secs > 0 {
             let now = now_unix_secs();
             let start = *self.tx_watchdog_start.get_or_insert(now);
-            if now.saturating_sub(start) >= limit_secs {
+            if crate::keyboard::watchdog_tripped(start, now, limit_secs) {
                 self.note_tx_watchdog_trip("an RTTY over");
                 self.tx_watchdog = true;
                 self.tx_enabled = false;
@@ -33481,7 +33481,7 @@ contact yourself."
                 if limit_secs > 0 {
                     let now = now_unix_secs();
                     let start = *self.tx_watchdog_start.get_or_insert(now);
-                    if now.saturating_sub(start) >= limit_secs {
+                    if crate::keyboard::watchdog_tripped(start, now, limit_secs) {
                         self.note_tx_watchdog_trip(&format!("{} over", self.app.tier().label()));
                         self.tx_watchdog = true;
                         self.tx_enabled = false;
@@ -33661,7 +33661,7 @@ contact yourself."
                     if limit_secs > 0 {
                         let now = now_unix_secs();
                         let start = *self.tx_watchdog_start.get_or_insert(now);
-                        if now.saturating_sub(start) >= limit_secs {
+                        if crate::keyboard::watchdog_tripped(start, now, limit_secs) {
                             self.note_tx_watchdog_trip(
                                 "a directed call held armed by its call cap",
                             );
@@ -33676,7 +33676,8 @@ contact yourself."
     }
 
     /// The wall-clock TX watchdog, as `plan_tx`'s mode-match tail applies it (the
-    /// `Some(t)` arm above) — DUPLICATED here on purpose. The JS8 tier route returns
+    /// `Some(t)` arm above): the same check as that tail ([`crate::keyboard::watchdog_tripped`]),
+    /// applied here because the JS8 tier route returns
     /// above that tail, and a route that skipped it would leave operator, autoreply
     /// and relay JS8 traffic bounded by nothing but the 60-minute idle clock. Same
     /// fields, same three outcomes: start the clock on the first over after an
@@ -33684,7 +33685,7 @@ contact yourself."
     /// elapsed time reaches `tx_watchdog_min` (disarm + one-shot abort, and the caller
     /// RETURNS — never builds the wave); refuse an over longer than the whole limit.
     /// Heartbeats never reach this fn (G2). Returns true when the over must NOT go out.
-    /// Keep this body textually aligned with the tail above; the engine test
+    /// Keep the clock start and the outcomes aligned with the tail above; the engine test
     /// `js8_wall_clock_trips_mirrors_the_mode_match_tail` pins its outcomes.
     pub(crate) fn js8_wall_clock_trips(&mut self) -> bool {
         let limit_secs = u64::from(self.settings.tx_watchdog_min) * 60;
@@ -33694,7 +33695,7 @@ contact yourself."
         let now = now_unix_secs();
         let start = *self.tx_watchdog_start.get_or_insert(now);
         let over_secs = self.tx_over_secs() as u64;
-        if now.saturating_sub(start) >= limit_secs || over_secs > limit_secs {
+        if crate::keyboard::watchdog_tripped(start, now, limit_secs) || over_secs > limit_secs {
             self.note_tx_watchdog_trip("a JS8 over");
             self.tx_watchdog = true;
             self.tx_enabled = false;

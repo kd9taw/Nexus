@@ -235,6 +235,16 @@ pub enum KbTick {
     Diddle,
 }
 
+/// The TX watchdog's one check: an unattended-transmit run whose clock started at `start_secs` has
+/// run out its `limit_secs` by `now_secs` (wall-clock Unix seconds). A `limit_secs` of 0 is the
+/// watchdog off, and never trips. Every copy of the watchdog (the FT plan tail, the call cap, JS8,
+/// PSK, RTTY, JTTY, [`KbGates`] and the mic's gates) asks this; where its clock starts and what a
+/// trip does (which queue is cleared, which abort is armed) stay with each caller, because they
+/// differ for real reasons.
+pub(crate) fn watchdog_tripped(start_secs: u64, now_secs: u64, limit_secs: u64) -> bool {
+    limit_secs > 0 && now_secs.saturating_sub(start_secs) >= limit_secs
+}
+
 /// Why [`KeyboardLatch::tick`] decided the over has to end. The caller turns this
 /// into its mode's kill path — the abort plumbing is the caller's because the
 /// flags that unkey a rig are engine state, but the DECISION is made here, once,
@@ -467,7 +477,7 @@ impl<'a> KeyboardLatch<'a> {
         if gates.watchdog_limit_secs > 0 {
             let start = gates.watchdog_start_secs.unwrap_or(gates.now_secs);
             watchdog_start = Some(start);
-            if gates.now_secs.saturating_sub(start) >= gates.watchdog_limit_secs {
+            if watchdog_tripped(start, gates.now_secs, gates.watchdog_limit_secs) {
                 let mut res = KbTickResult::dropped(KbDrop::Watchdog);
                 res.watchdog_start = watchdog_start;
                 return res;
