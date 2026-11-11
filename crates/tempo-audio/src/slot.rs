@@ -697,11 +697,15 @@ pub(crate) const SPLIT_PRESET_BUDGET_MS: u64 = 1_000;
 pub(crate) const SPLIT_PRESET_SETTLE_MS: f64 = 300.0;
 
 /// The least time (ms) to the next slot boundary at which the radio loop starts a pre-set: its
-/// budget plus the longest CAT deadline, and a little over. Counted from the moment of the
-/// decision, not the tick's start, and never on a tick that had to open the CAT link. Longer than
-/// FT2's 3.75 s slot, so FT2 never pre-sets.
+/// budget, plus the longest CAT deadline for a write still running when the budget is gone, plus
+/// the one socket read that write may be in. Counted from the moment of the decision, not the
+/// tick's start, and never on a tick that had to open the CAT link. Longer than FT2's 3.75 s slot,
+/// so FT2 never pre-sets.
 #[cfg_attr(not(feature = "device"), allow(dead_code))] // the radio loop (service.rs, device)
-pub(crate) const SPLIT_PRESET_LEAD_MS: f64 = 4_000.0;
+pub(crate) const SPLIT_PRESET_LEAD_MS: f64 = (SPLIT_PRESET_BUDGET_MS
+    + crate::rig::SLOW_LINK_DEADLINE_MS
+    + crate::rig::SOCKET_READ_TIMEOUT_MS) as f64;
+const _: () = assert!(SPLIT_PRESET_LEAD_MS == 4_000.0);
 
 /// Put Split Operation = Rig's TX dial `tx_dial` and TX mode `md` on the radio for the RX dial
 /// `dial` while the station receives, after a change of band, so the next over finds them
