@@ -35686,14 +35686,20 @@ fn callbook_iota_for_call(call: &str) -> Option<String> {
 
 use tempo_core::logbook::offer::SpotIota;
 
-/// How far back the Spots board shows a spot, and the log-time IOTA offer reads one.
+/// How far back the Spots board shows a spot.
 const SPOTS_WINDOW: std::time::Duration = std::time::Duration::from_secs(1200);
+
+/// How old a spot naming the station's IOTA group may be and still count at log time (operator
+/// ruling, 2026-11-10; it was the Spots board's 20 minutes): an hour, for the log form's offer and
+/// for a contact no form shows first. An island activation stays on one group for hours or days,
+/// and the spots of one thin out between pileups.
+const SPOT_IOTA_WINDOW: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// Every IOTA group a cluster spot's comment named, by the call spotted and when the spot came in:
 /// the log-time offer's spot side. Kept beside the spot buffer because that buffer merges every spot
 /// of one call within a couple of kHz into one row and keeps only the newest comment, so two spots
 /// of one station on one band naming different groups would read as one. Only spots that name a
-/// group are kept, for [`SPOTS_WINDOW`]; emptied with the spot buffer ([`clear_spot_iota`]).
+/// group are kept, for [`SPOT_IOTA_WINDOW`]; emptied with the spot buffer ([`clear_spot_iota`]).
 #[derive(Default)]
 struct SpotIotaLog {
     named: std::collections::VecDeque<NamedGroup>,
@@ -35746,7 +35752,7 @@ impl SpotIotaLog {
         while self
             .named
             .front()
-            .is_some_and(|n| at.saturating_duration_since(n.at) > SPOTS_WINDOW)
+            .is_some_and(|n| at.saturating_duration_since(n.at) > SPOT_IOTA_WINDOW)
         {
             self.named.pop_front();
         }
@@ -35765,7 +35771,7 @@ impl SpotIotaLog {
         });
     }
 
-    /// The group every spot of exactly `call` within [`SPOTS_WINDOW`] of `now` names, or none
+    /// The group every spot of exactly `call` within [`SPOT_IOTA_WINDOW`] of `now` names, or none
     /// when none names one or any two name different groups (an old trip's re-spot, or a typo,
     /// is not this activation; the comment parser refuses a comment naming two groups the same
     /// way).
@@ -35773,7 +35779,8 @@ impl SpotIotaLog {
         let call = call.trim();
         let mut named: Option<&String> = None;
         for n in self.named.iter().filter(|n| {
-            now.saturating_duration_since(n.at) <= SPOTS_WINDOW && n.call.eq_ignore_ascii_case(call)
+            now.saturating_duration_since(n.at) <= SPOT_IOTA_WINDOW
+                && n.call.eq_ignore_ascii_case(call)
         }) {
             match named {
                 Some(g) if *g != n.group => return None,
@@ -35785,7 +35792,7 @@ impl SpotIotaLog {
     }
 
     /// What the spots say of an FT contact logged with no popup: stricter than the offer, since no
-    /// one looks at it first. Reading every spot of exactly `call` made within [`SPOTS_WINDOW`]
+    /// one looks at it first. Reading every spot of exactly `call` made within [`SPOT_IOTA_WINDOW`]
     /// of the contact's start (`when_unix`), on any band: none names a group; or they all name one
     /// and one of them is on the contact's `band`; or they all name one and none is, which the
     /// callbook has to agree with; or they disagree and are refused (an old trip's re-spot, a typo).
@@ -35793,7 +35800,7 @@ impl SpotIotaLog {
         let call = call.trim();
         let mut spots = self.named.iter().filter(|n| {
             n.call.eq_ignore_ascii_case(call)
-                && n.made_unix.abs_diff(when_unix) <= SPOTS_WINDOW.as_secs()
+                && n.made_unix.abs_diff(when_unix) <= SPOT_IOTA_WINDOW.as_secs()
         });
         let Some(first) = spots.next() else {
             return SpotIota::Silent;
@@ -35846,7 +35853,7 @@ fn clear_spot_iota() {
 
 /// What IOTA reference to FILL the box of the log form, or the confirm-before-log popup, with for
 /// `call` (`tempo_core::logbook::offer::iota_offer`; operator ruling, 2026-11-10): the group the
-/// spot comments for that call name (the Spots board's window, never in an unassisted contest
+/// spot comments for that call name ([`SPOT_IOTA_WINDOW`], never in an unassisted contest
 /// entry), else the group a callbook lookup this session answered for exactly that call. Nothing
 /// when the form already holds a reference (`held`), and with the island list held, nothing it
 /// lacks. Asking writes nothing: the form puts it in its box for the operator to change or clear,
@@ -59814,8 +59821,8 @@ mod tests {
         tle_seed_path, tle_set_currency, view_passes, write_json_atomic, write_qso_wav_in,
         AssistanceEvent, AssistanceSourceState, MoonRun, MoonTrackDto, SatBird, SatTrackDto,
         SatTrackLoss, SatTrackRun, SatnogsFetchState, SharedEngine, SpotIotaLog, TleFlightGuard,
-        TleSnapshot, SAT_TRACK, SAT_TRACK_GEN, SPOTS_WINDOW, TLE_ACT_STALE_DAYS, TLE_FETCHING,
-        TLE_STALE_LINE_DAYS,
+        TleSnapshot, SAT_TRACK, SAT_TRACK_GEN, SPOTS_WINDOW, SPOT_IOTA_WINDOW, TLE_ACT_STALE_DAYS,
+        TLE_FETCHING, TLE_STALE_LINE_DAYS,
     };
 
     /// A scratch file path unique to this test process (std-only — no tempfile
@@ -61361,7 +61368,7 @@ mod tests {
         use tempo_core::logbook::offer::SpotIota;
         use tempo_net::cluster::ClusterSpot;
         const T: u64 = 1_793_000_000; // the contact's start
-        const WINDOW: u64 = SPOTS_WINDOW.as_secs();
+        const WINDOW: u64 = SPOT_IOTA_WINDOW.as_secs();
         let mk = |call: &str, freq_khz: f64, comment: &str| ClusterSpot {
             spotter: "W3LPL".into(),
             dx_call: call.into(),
@@ -61430,6 +61437,56 @@ mod tests {
         assert_eq!(log.group_at_contact("IA5X", "20m", T), names());
     }
 
+    /// A spot naming the station's group counts up to an hour from the contact's start (operator
+    /// ruling, 2026-11-10; it was 20 minutes): 30 and 59 minutes old it fills, 61 it does not. The
+    /// log form's offer reads the same hour.
+    #[test]
+    fn an_iota_spot_up_to_an_hour_old_still_counts() {
+        use tempo_core::logbook::offer::SpotIota;
+        use tempo_net::cluster::ClusterSpot;
+        const T: u64 = 1_793_000_000; // the contact's start
+        let spot = ClusterSpot {
+            spotter: "W3LPL".into(),
+            dx_call: "IA5X".into(),
+            freq_khz: 14074.0,
+            comment: "IOTA EU-028".into(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: false,
+        };
+        let at_contact = |minutes_old: u64| {
+            let mut log = SpotIotaLog::default();
+            log.note(std::time::Instant::now(), T - minutes_old * 60, &spot);
+            log.group_at_contact("IA5X", "20m", T)
+        };
+        for minutes in [30, 59] {
+            assert_eq!(
+                at_contact(minutes),
+                SpotIota::Names("EU-028".into()),
+                "{minutes} minutes old"
+            );
+        }
+        assert_eq!(at_contact(61), SpotIota::Silent, "61 minutes old");
+
+        // The form's offer, by when the spot came in.
+        let t0 = std::time::Instant::now();
+        let mut log = SpotIotaLog::default();
+        log.note(t0, 0, &spot);
+        let after = |minutes: u64| t0 + std::time::Duration::from_secs(minutes * 60);
+        for minutes in [30, 59] {
+            assert_eq!(
+                log.group_for(after(minutes), "IA5X").as_deref(),
+                Some("EU-028"),
+                "{minutes} minutes old"
+            );
+        }
+        assert_eq!(log.group_for(after(61), "IA5X"), None, "61 minutes old");
+        // Kept that long: a spot noted 59 minutes after it is not the one that lets it go.
+        log.note(after(59), 0, &spot);
+        assert_eq!(log.named.len(), 2);
+    }
+
     /// A node replaying an old spot at login delivers it now; the time it carries is its age.
     #[test]
     fn a_replayed_spot_is_as_old_as_the_time_it_carries() {
@@ -61494,8 +61551,8 @@ mod tests {
         )));
     }
 
-    /// The log-time offer's spot side: the group EVERY spot of exactly this call within the
-    /// Spots board's window names, none when any two name different groups, and never another
+    /// The log-time offer's spot side: the group EVERY spot of exactly this call within
+    /// [`SPOT_IOTA_WINDOW`] names, none when any two name different groups, and never another
     /// call's. Two spots of one station on one band merge into one row of the spot buffer, which
     /// keeps only the newest comment; the offer still sees both.
     #[test]
@@ -61548,8 +61605,8 @@ mod tests {
         );
         assert_eq!(log.group_for(t0, "IT9ABC"), None, "two groups name neither");
         assert_eq!(log.group_for(t0, "K1ABC"), None);
-        // Past the Spots board's window a spot no longer counts, for or against.
-        let later = t0 + SPOTS_WINDOW + std::time::Duration::from_secs(1);
+        // Past the window a spot no longer counts, for or against.
+        let later = t0 + SPOT_IOTA_WINDOW + std::time::Duration::from_secs(1);
         assert_eq!(log.group_for(later, "IA5X"), None);
         log.note(later, 0, &mk("IA5Y", 14025.0, "IOTA EU-031"));
         assert_eq!(log.group_for(later, "IA5Y").as_deref(), Some("EU-031"));
