@@ -2171,10 +2171,12 @@ impl Controller {
         self.reflect_removals();
         self.reflect_people();
         // The transmit windows kept for the sign-in devices the service had confirmed it notified
-        // their owner about (`keep_notified`), so a restart does not hold them afresh: only this
+        // their owner about, and for those the station held (`keep_notified`), so a restart does
+        // not hold them afresh nor lose a hold the station placed: only this
         // station's, for this account. An entry that is locked, does not read, or names anything
         // but a device id restores nothing, and those devices are held as any sign-in device with
-        // no record is. The next list still decides each one (`Authority::tx_held_for`).
+        // no record is. Each restored window still waits for the next list to confirm its notice
+        // (`Authority::tx_held_for`).
         let kept = self.accounts.vault.notified().ok().flatten().filter(|k| {
             k.station_id == binding.station_id
                 && k.account_id == binding.account_id
@@ -3237,7 +3239,7 @@ impl Controller {
             }
         }
         if let Some(confirmed) = confirmed {
-            self.keep_notified(&confirmed);
+            self.keep_notified(&confirmed, devices);
         }
     }
     /// The link of each computer pinned here and paired in the LAN book whose link was never kept
@@ -3291,24 +3293,37 @@ impl Controller {
         }
     }
     /// Keeps, for a restart, what is left of the transmit window of each sign-in device this list
-    /// confirmed the service notified its owner about (`confirmed`), bound to this station and its
-    /// account: the next launch restores those windows (`resume`) rather than holding the devices
-    /// afresh. Each list replaces it, so a device the list no longer confirms, no longer names as
-    /// added by a sign-in, or that was removed here and the service not told yet, is dropped at
-    /// once; with the removals unreadable, every device is. Written only when it changed.
-    fn keep_notified(&self, confirmed: &std::collections::BTreeSet<String>) {
+    /// confirmed the service notified its owner about (`confirmed`), and of each the station holds
+    /// (`Authority::held_devices`), bound to this station and its account: the next launch restores
+    /// those windows (`resume`) rather than holding the devices afresh, and a hold the station
+    /// placed outlasts the restart whatever the service lists of it, while the list (`listed`)
+    /// names it at all: that keeps the entry no larger than the list, and a device the list stops
+    /// naming loses its pin here too (`Persist::Listed`), so nothing operates on it without a shack
+    /// press. Each list replaces it, so a device neither confirmed nor held, or that was removed
+    /// here and the service not told yet, is dropped at once; with the removals unreadable, every
+    /// device is. Written only when it changed.
+    fn keep_notified(&self, confirmed: &std::collections::BTreeSet<String>, listed: &[Device]) {
         let Some(binding) = &self.binding else {
             return;
         };
-        let kept = confirmed
-            .iter()
-            .filter(|d| self.removals.as_ref().is_some_and(|r| !r.contains(*d)))
-            .cloned()
-            .collect();
         let windows = match self.control.lock() {
-            Ok(control) => control
-                .operations
-                .transmit_windows(&kept, std::time::Instant::now()),
+            Ok(control) => {
+                let kept = confirmed
+                    .iter()
+                    .cloned()
+                    .chain(
+                        control
+                            .operations
+                            .held_devices()
+                            .into_iter()
+                            .filter(|d| listed.iter().any(|l| &l.id == d)),
+                    )
+                    .filter(|d| self.removals.as_ref().is_some_and(|r| !r.contains(d)))
+                    .collect();
+                control
+                    .operations
+                    .transmit_windows(&kept, std::time::Instant::now())
+            }
             Err(_) => return,
         };
         // Its end in unix seconds, rounded up; 0 once it has elapsed.
