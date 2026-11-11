@@ -18708,9 +18708,25 @@ impl Engine {
     fn fill_iota_at_log(&self, rec: &mut QsoRecord) {
         if let Some(read) = &self.station.iota_at_log {
             let spots = (read.spots)(&rec.call, &rec.band, rec.when_unix);
-            let answer = self.callbook_answer(&rec.call);
+            let answer = self.iota_callbook_answer(&rec.call);
             tempo_core::logbook::offer::fill_iota_at_log(rec, &spots, answer, &*read.known);
         }
+    }
+
+    /// The callbook answer the log-time IOTA fill reads for `call`, from the answers already held
+    /// (never a lookup): this call's own record, or, for a portable call, its base call's record
+    /// (operator ruling, 2026-11-10), whether a lookup of the portable call fell through to it or
+    /// the base call was looked up itself. The fill takes a portable call's base record only where
+    /// a spot of the portable call names the same group
+    /// (`tempo_core::logbook::offer::iota_at_log`).
+    fn iota_callbook_answer(
+        &self,
+        call: &str,
+    ) -> Option<&tempo_core::logbook::callbook::CallbookAnswer> {
+        let base = tempo_core::message::base_call(call);
+        self.callbook_answer(call)
+            .filter(|a| a.call.trim().eq_ignore_ascii_case(&base))
+            .or_else(|| self.callbook_answer(&base))
     }
 
     /// What a contest row of `call`, made on `band` at `when`, takes for its IOTA reference: the
@@ -18729,7 +18745,7 @@ impl Engine {
             call,
             None,
             &spots,
-            self.callbook_answer(call),
+            self.iota_callbook_answer(call),
             &*read.known,
         )
     }
