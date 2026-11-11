@@ -921,7 +921,8 @@ fn a_busy_decoder_does_not_delay_the_key_of_the_over_built_before_it() {
 const FT4_WAVE: usize = 3_600 + 72_576;
 
 /// ⭐ AN OVER CHANGED AFTER THE EARLY PASS KEYS ON TIME WHILE A DECODE HOLDS THE MODEM, ON FT8 AND
-/// FT4. After the early pass (11.8 s, 5.5 s) the operator changes what the boundary sends: a new TX
+/// FT4. After the early pass (FT8's at 11.8 s; FT4's is its full pass, at 6.05 s) the operator
+/// changes what the boundary sends: a new TX
 /// frequency for the CQ the early pass built, or a CQ called only after it (nothing was queued when
 /// it ran). Either way the boundary builds its over at the key, with a decode still holding the
 /// modem. That build waited for the decode: the over went out late by however long the decode
