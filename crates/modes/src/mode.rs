@@ -803,7 +803,7 @@ impl Mode for Ft8Mode {
         // already satisfies). Without it the radio loop plays the tones at the slot
         // boundary and the whole over goes out 0.5 s early — every receiver sees us at
         // DT ≈ −0.5 s, off-nominal and at the edge of the decode window.
-        let lead = (0.5 * fsample).round().max(0.0) as usize;
+        let lead = (FT8_LEAD_IN_SECS * fsample).round().max(0.0) as usize;
         let tones = crate::wsjt77::ft8_wave(itone, fsample, f0);
         let mut wave = vec![0f32; lead + tones.len()];
         wave[lead..].copy_from_slice(&tones);
@@ -996,6 +996,29 @@ impl Mode for Ft8Mode {
         sink: &mut dyn DecodeSink,
     ) -> usize {
         ft8::subtract_early(iwave, ndepth, &mut carry.ft8, &mut || sink.give_up())
+    }
+}
+
+/// Slot lead-in for FT8, in seconds: WSJT-X's 0.5 s transmit delay (`Modulator/Modulator.cpp:76`),
+/// which is also the decoder's nominal start (`xdt = t − 0.5`).
+pub(crate) const FT8_LEAD_IN_SECS: f32 = 0.5;
+
+/// Where an FT8, FT4 or FT2 over's tones sit in the slot-positioned wave [`Mode::gen_wave`] builds
+/// at 12 kHz, in samples: `(lead-in, tones)`. The lead-in is each mode's `*_LEAD_IN_SECS`, rounded
+/// as `gen_wave` rounds it; the tones are FT8's 79 × 1920, FT4's 105 × 576 (its 103 channel
+/// symbols and a ramp symbol at each end, without the frame's trailing silence) and FT2's
+/// `NWAVE`. The one source of the over lengths the radio loop and the engine use
+/// (`Engine::tx_over_secs`, `slot::wsjtx_tx_window_ms`). `None` for every other mode.
+pub fn slot_over_samples_12k(kind: ModeKind) -> Option<(usize, usize)> {
+    let lead = |secs: f32| (secs * 12_000.0).round().max(0.0) as usize;
+    match kind {
+        ModeKind::Ft8 => Some((lead(FT8_LEAD_IN_SECS), ft8::NZ)),
+        ModeKind::Ft4 => Some((
+            lead(FT4_LEAD_IN_SECS),
+            (ft4::NN + 2) * crate::wsjt77::wave::FT4_NSPS,
+        )),
+        ModeKind::Ft2 => Some((lead(FT2_LEAD_IN_SECS), ft2::NWAVE)),
+        _ => None,
     }
 }
 
@@ -2565,5 +2588,35 @@ fn js8_decode_row(r: &js8::RawDecode) -> Decode {
         rv: None,
         mode: Some(ModeKind::Js8 { speed: r.speed }),
         raw: Some(*r.word.as_bytes()),
+    }
+}
+
+#[cfg(test)]
+mod slot_over_geometry_tests {
+    use super::*;
+
+    /// The geometry [`slot_over_samples_12k`] states is where each mode's real wave puts its
+    /// tones: the first non-zero sample at the lead-in (the shaped ramp starts on a zero sample,
+    /// so within a couple of samples of it) and the last at lead-in + tones (within one symbol's
+    /// shaped tail of it, the wave's own ramp-down).
+    #[test]
+    fn the_slot_over_geometry_is_where_the_real_wave_puts_its_tones() {
+        for kind in [ModeKind::Ft8, ModeKind::Ft4, ModeKind::Ft2] {
+            let (lead, tones) = slot_over_samples_12k(kind).expect("geometry");
+            let m = make_mode(kind);
+            let wave = m.gen_wave(&m.encode("CQ KD9TAW EN52"), 12_000.0, 1_500.0);
+            let first = wave.iter().position(|&s| s != 0.0).expect("tones");
+            let last = wave.iter().rposition(|&s| s != 0.0).expect("tones") + 1;
+            assert!(
+                first >= lead && first <= lead + 2,
+                "{kind:?}: first tone at {first}, lead-in {lead}"
+            );
+            assert!(
+                last.abs_diff(lead + tones) <= 12,
+                "{kind:?}: last tone ends at {last}, lead-in + tones {}",
+                lead + tones
+            );
+        }
+        assert_eq!(slot_over_samples_12k(ModeKind::TempoFast), None);
     }
 }

@@ -23940,9 +23940,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
     pub fn tx_over_secs(&self) -> f64 {
         match self.app.tier() {
             // FT8 = 0.5 s lead-in + 12.64 s tones (the slot-positioned wave the radio
-            // loop actually plays). Must include the lead-in so the "snappy first over"
+            // loop actually plays): 13.14. Must include the lead-in so the "snappy first over"
             // room check doesn't admit an over that overruns the next slot by 0.5 s.
-            Tier::Ft8 => 13.14,
+            Tier::Ft8 => slot_over_secs(modes::ModeKind::Ft8),
             // FST4 / FST4W / Q65 transmit; this returns the FULL T/R period, which is conservative means
             // modes::tx_mode() returns None and the wave builder abandons the over
             // before keying. A FULL SLOT is returned rather than 0.0 so that if
@@ -23970,14 +23970,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // tones (105 sym × 576 sa @ 12 kHz). The generated buffer also carries
             // ~1.0 s of TRAILING silence — that is PTT-hold padding, not airtime, and
             // the radio loop strips it on a late (mid-slot) start so the over never
-            // bleeds into the next period.
-            Tier::Ft4 => 5.34,
+            // bleeds into the next period. 5.34.
+            Tier::Ft4 => slot_over_secs(modes::ModeKind::Ft4),
             // FT2 = 0.5 s lead-in + 2.52 s tones (105 sym × 288 sa @ 12 kHz). Unlike
             // FT4 there is NO trailing padding in the buffer — `Ft2Mode::gen_wave`
             // returns exactly lead + NWAVE — so 3.02 is the whole of it, and it is
             // airtime rather than an over-estimate. That leaves 0.73 s of the 3.75 s
             // slot, the tightest margin of any tier here.
-            Tier::Ft2 => 2.52,
+            Tier::Ft2 => slot_over_secs(modes::ModeKind::Ft2),
             // FT1 = 0.3 s lead-in (`modes::mode` `FT1_LEAD_IN_SECS`) + 3.536 s tones (99 sym ×
             // 3000/7 sa @ 12 kHz). The buffer is a fixed 4 s, so the last 164 ms are silence.
             Tier::TempoFast => 3.84,
@@ -38053,6 +38053,14 @@ fn fd_wire_row(
         sat: q.sat.as_ref().map(|s| s.bird.clone()).unwrap_or_default(),
         sat_fm: q.sat.as_ref().is_some_and(|s| s.single_channel_fm),
     }
+}
+
+/// An FT8, FT4 or FT2 over's airtime in seconds, lead-in plus tones, from the wave geometry
+/// [`modes::slot_over_samples_12k`] gives. Summed in samples and divided once, so the value is the
+/// nearest `f64` to the exact length (13.14, 5.34, 2.52), the same as the literal it replaced.
+fn slot_over_secs(kind: modes::ModeKind) -> f64 {
+    let (lead, tones) = modes::slot_over_samples_12k(kind).expect("a slot mode's over geometry");
+    (lead + tones) as f64 / 12_000.0
 }
 
 pub(crate) fn now_unix_secs() -> u64 {
@@ -71921,6 +71929,18 @@ mod tests {
                 "{speed:?}: `slot_fit_s` ({}) must describe the real wave ({secs})",
                 speed.slot_fit_s()
             );
+        }
+    }
+
+    /// The FT8, FT4 and FT2 over lengths are EXACTLY the values the table held as literals before
+    /// they came from the modes' wave geometry: the room check compares against them, so even a
+    /// last-bit difference would be a change.
+    #[test]
+    fn tx_over_secs_from_the_wave_geometry_is_exactly_the_old_literal() {
+        for (tier, secs) in [(Tier::Ft8, 13.14), (Tier::Ft4, 5.34), (Tier::Ft2, 2.52)] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(tier);
+            assert_eq!(e.tx_over_secs(), secs, "{tier:?}");
         }
     }
 
