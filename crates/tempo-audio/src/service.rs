@@ -9455,11 +9455,24 @@ impl RadioLoop {
                     || cat_hold
                     || self.cat_hold_active
                     || want.rig_differs(&self.applied);
+                // ⛔ AND NEVER WHILE THIS LOOP HOLDS A KEY OF ITS OWN: the probe is blocking CAT and
+                // runs here, ahead of this tick's deadline unkey and hard stop, so on a link that
+                // stopped answering it held an over's PTT up for its whole run (1.03 s measured,
+                // radio-loop map finding 1, 2026-11-12). `tx_until_ms` covers an unkey due THIS
+                // tick. Refused at once, typed, rather than left pending: an over can outlast Test
+                // CAT's wait. The radio's own report (`operator_keyed`) is left out on purpose: a
+                // dead link can leave it stale, and Test CAT is the button for a dead link.
+                let keyed = self.holds_tx() || self.tuning_keyed || now < self.cw_keying_until;
                 (
                     want,
                     eng.settings().dial_hz(),
                     eng.rig_mode_effective(), // operator Phone mode override, else band-derived policy
                     if rebuild_tick {
+                        false
+                    } else if keyed {
+                        if eng.take_cat_reprobe() {
+                            eng.refuse_cat_reprobe(TEST_CAT_WHILE_KEYED.to_string());
+                        }
                         false
                     } else {
                         eng.take_cat_reprobe()
@@ -21186,6 +21199,10 @@ fn probe_serial(port: &str, line: SerialLine) -> RigOpen {
     (rig, None, CatProbe::status(ok, detail))
 }
 
+/// Test CAT's answer while the loop holds any key: its probe is blocking CAT, and it must never hold
+/// up an unkey (the radio-loop map's finding 1, 2026-11-12).
+pub(crate) const TEST_CAT_WHILE_KEYED: &str = "Test CAT runs when you're not transmitting.";
+
 /// Re-probe the *current* rig (the Test-CAT button) without rebuilding it, so it
 /// doesn't fight the running rigctld for the serial port.
 fn reprobe(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) {
@@ -21302,6 +21319,7 @@ mod tests {
     mod tci_soundcard_cw;
     mod tci_spots;
     mod test_cat_refused;
+    mod test_cat_while_keyed;
     mod tx_extras;
     mod tx_unit_ends;
     mod udp_decode_time;
