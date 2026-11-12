@@ -872,18 +872,16 @@ fn a_waived_sign_in_device_may_transmit() {
     assert!(e.tx_enabled(), "it may arm when waived");
 }
 
-/// ★ A controller the LOADED service list CONFIRMS is not sign-in-added is never held, whatever
-/// stale record it carries — the hold keys only to confirmed sign-in provenance.
+/// ★ A controller the LOADED service list CONFIRMS is not sign-in-added, and for which the station
+/// placed no hold, is never held.
 #[test]
 fn a_controller_confirmed_not_sign_in_is_never_held() {
     let f = Fixture::new();
     f.engine.lock().unwrap().set_tx_enabled(false);
     let now = f.now();
-    // The list is LOADED (heard) and does not name DEVICE, even though a stale hold is recorded.
+    // The list is LOADED (heard) and does not name DEVICE; the station recorded nothing for it.
     f.authority
         .set_signin_devices(std::collections::BTreeSet::new());
-    f.authority
-        .hold_transmit_until(DEVICE, now + Duration::from_secs(15 * 60));
     let _ = acquire_controls_version(&f, now, 3);
     let mut e = f.engine.lock().unwrap();
     assert!(
@@ -892,6 +890,63 @@ fn a_controller_confirmed_not_sign_in_is_never_held() {
     );
     e.set_tx_enabled(true);
     assert!(e.tx_enabled(), "it may arm");
+}
+
+/// ★ THE STATION'S HOLD IS THE STATION'S: a hold placed on a sign-in device survives a service list
+/// that stops naming the device, in its window and past it (the list that dropped it confirms no
+/// owner notice). Only the shack lifts it here, or its window with a confirmed notice.
+#[test]
+fn a_service_list_that_drops_the_device_never_lifts_the_stations_hold() {
+    let f = Fixture::new();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    signed_in(&f);
+    f.authority
+        .hold_transmit_until(DEVICE, now + Duration::from_secs(15 * 60));
+    let state = acquire_controls_version(&f, now, 3);
+    let lease = state["leaseId"].as_str().unwrap().to_string();
+    assert!(f.engine.lock().unwrap().remote_transmit_held(), "held");
+
+    // The service's list stops naming the device, mid-window.
+    f.authority
+        .set_signin_devices(std::collections::BTreeSet::new());
+    f.authority
+        .set_notified_devices(std::collections::BTreeSet::new());
+    heartbeat(&f, &lease, now);
+    {
+        let mut e = f.engine.lock().unwrap();
+        assert!(
+            e.remote_transmit_held(),
+            "a list that drops the device does not lift the hold"
+        );
+        e.set_tx_enabled(true);
+        assert!(!e.tx_enabled(), "transmit arm refused");
+    }
+
+    // Past the window (the pure check, and a window already elapsed against the fixture clock,
+    // whose real clock is an hour behind it), the device still unlisted and no notice confirmed:
+    // still held.
+    assert!(
+        f.authority
+            .tx_held(DEVICE, now + Duration::from_secs(16 * 60)),
+        "past the window with no confirmed notice, still held"
+    );
+    f.authority.hold_transmit_until(DEVICE, Instant::now());
+    heartbeat(&f, &lease, now);
+    {
+        let mut e = f.engine.lock().unwrap();
+        assert!(e.remote_transmit_held(), "the engine's gate still holds");
+        e.set_tx_enabled(true);
+        assert!(!e.tx_enabled(), "transmit arm refused past the window");
+    }
+
+    // CONTROL: Allow to transmit at the shack lifts it.
+    f.authority.waive_transmit(DEVICE);
+    heartbeat(&f, &lease, now);
+    let mut e = f.engine.lock().unwrap();
+    assert!(!e.remote_transmit_held(), "the shack's waiver lifts it");
+    e.set_tx_enabled(true);
+    assert!(e.tx_enabled(), "it transmits once allowed at the shack");
 }
 
 /// ★ FAIL-CLOSED STARTUP: before the provenance list is heard (`None`, not an empty set), an
