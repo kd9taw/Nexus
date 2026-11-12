@@ -199,3 +199,69 @@ fn test_cat_with_nothing_keyed_still_probes() {
     assert_eq!(ok, Some(true), "the answering rig probed bad: {detail:?}");
     assert!(!e.cat_reprobe_refused());
 }
+
+/// Test CAT pressed while the loop holds a key with no over's deadline (`tx_until_ms` empty) on a
+/// link that has stopped answering: refused with the sentence, nothing sent to the rig, the CAT
+/// status as it was. `key` puts the loop in that key and asserts it holds it.
+fn refused_while(key: impl FnOnce(&mut Scene)) {
+    let mut s = Scene::new();
+    s.run_to(s.t + 200.0);
+    key(&mut s);
+    assert!(s.state.tx_until_ms.is_none(), "premise: no over's deadline");
+    s.meter_not_due();
+    let status = s.engine.lock().unwrap().snapshot().radio.cat_detail;
+    s.dead.store(true, Ordering::SeqCst);
+    let from = s.mark();
+    let asked = s.engine.lock().unwrap().request_cat_reprobe();
+    s.tick();
+    assert_eq!(
+        s.cat_lines_since(from),
+        Vec::<String>::new(),
+        "Test CAT probed the rig while it was keyed"
+    );
+    let e = s.engine.lock().unwrap();
+    assert_eq!(
+        (e.cat_reprobe_answer(asked), e.cat_reprobe_refused()),
+        (Some((None, TEST_CAT_WHILE_KEYED.to_string())), true),
+        "Test CAT while keyed is refused, typed"
+    );
+    assert_eq!(
+        e.snapshot().radio.cat_detail,
+        status,
+        "the CAT status stays as it was"
+    );
+}
+
+/// ⭐ THE OPERATOR'S PTT HELD: Test CAT is refused.
+#[test]
+fn test_cat_while_the_ptt_is_held_is_refused() {
+    refused_while(|s| {
+        s.engine.lock().unwrap().set_ptt(true);
+        let until = s.t + 200.0;
+        s.run_to(until);
+        assert!(s.state.manual_ptt_applied, "premise: the PTT is held");
+    });
+}
+
+/// ⭐ A TUNE CARRIER KEYED: Test CAT is refused.
+#[test]
+fn test_cat_while_tuning_is_refused() {
+    refused_while(|s| {
+        s.engine.lock().unwrap().set_tune(true);
+        let until = s.t + 300.0;
+        s.run_to(until);
+        assert!(s.state.tuning_keyed, "premise: the tune is keyed");
+    });
+}
+
+/// ⭐ A CW WORD ON THE AIR THROUGH A KEYER (no PTT hold of Nexus's own): Test CAT is refused.
+#[test]
+fn test_cat_while_a_cw_word_is_keying_is_refused() {
+    refused_while(|s| {
+        s.state.cw_keying_until = s.t + 5_000.0;
+        assert!(
+            !s.state.holds_tx() && !s.state.tuning_keyed,
+            "premise: only the CW word"
+        );
+    });
+}
