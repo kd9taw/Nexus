@@ -1195,7 +1195,9 @@ test('renaming a station is housekeeping: allowed on your own, and survives a la
   assert.ok(renamed.name.length > 0 && renamed.name.length <= 48, 'label() bounds it')
 
   // Above requireTrial, like revoke and forget-device: someone whose service access has lapsed
-  // can still tidy their own account. Only operating is gated, not housekeeping.
+  // can still tidy their own account. Only operating is gated, not housekeeping. The browser is
+  // approved, so that the trial is what operating is refused for (a device is checked first).
+  await app.approved(pair)
   await app.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?')
     .bind(Date.now() - 1000, pair.browser.accountId).run()
   await pair.browser.post(`stations/${pair.stationId}/rename`, { name: 'Still mine' })
@@ -2335,6 +2337,39 @@ test('LAN stays free: an ended trial streams with a LAN-only ticket, held to the
   live.browser.send({ type: 'applicationRead', requestId: crypto.randomUUID(), command: 'get_snapshot', revision: null })
   assert.equal(await nothing(live.station, type('applicationRead')), true, 'a LAN-only session reads nothing through the relay')
   live.browser.close(); live.station.close()
+})
+
+// LAN STAYS ON THE LAN (security review 2026-11-12, M1). A LAN-only ticket can be asked for from
+// anywhere, and the relay cannot tell where its holder is. So a LAN-only session is given nothing
+// the relay would carry across the internet: no observation frame, and on the operation lane only
+// what the stream needs (the lease and its `state`) and Stop. The monitor, reads and exports
+// travel only for an account with internet use.
+test('a LAN-only session gets no observation and no export through the relay, only the lease and Stop', async () => {
+  const pair = await app.paired(), deviceId = await app.approved(pair)
+  await endTrial(pair)
+  const live = await lanAdmitted(pair, deviceId)
+  try {
+  for (const evicted of [false, true]) {
+    if (evicted) await app.evict(pair.stationId)
+    assert.equal(await nothing(live.station, value => value.type === 'watch' && value.enabled), true,
+      'the station is never asked to publish for a LAN-only session')
+    // The lease's own read reaches the station: the stream is offered under the lease it names.
+    const state = { type: 'state', requestId: crypto.randomUUID() }
+    live.browser.send({ type: 'operationRequest', operationVersion: 4, request: state })
+    assert.equal((await live.station.take(type('operationRequest'))).request.requestId, state.requestId)
+    // An export is the station's data, and does not.
+    const exported = { type: 'activationExport', requestId: crypto.randomUUID(), stationBootId: crypto.randomUUID(),
+      leaseId: crypto.randomUUID(), selection: null, index: 0 }
+    live.browser.send({ type: 'operationRequest', operationVersion: 4, request: exported })
+    assert.deepEqual(await live.browser.take(value => value.type === 'operationResponse' && value.requestId === exported.requestId),
+      { type: 'operationResponse', requestId: exported.requestId, error: 'stationUnavailable' })
+    assert.equal(await nothing(live.station, type('operationRequest')), true, 'the export never reached the station')
+  }
+  } finally { live.browser.close(); live.station.close() }
+  // THE CONTROL: a station an internet session observes is asked to publish.
+  const internet = await admitted(await app.paired(), 1, OPERATION_HEADERS)
+  assert.equal((await internet.station.take(value => value.type === 'watch' && value.enabled)).enabled, true)
+  internet.browser.close(); internet.station.close()
 })
 
 test('a LAN-only session to a station that cannot hold it to the LAN is refused by name, and survives a hibernation', async () => {

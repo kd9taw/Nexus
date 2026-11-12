@@ -8,8 +8,14 @@ import { controlVersion, parseOperationVersion, type OperationVersion } from './
 import { OPERATION_RATE_LIMIT, OPERATION_RATE_WINDOW_MS } from './operation-limits'
 // `commandUntil` is how long this browser's account may still command the station: the adapter
 // sets it from the entitlement it read at admission or at the last renewal, and it is deliberately
-// shorter than the observer lease (see OPERATION_ENTITLEMENT_MS). Zero means never.
-type Browser = { sessionId: string; deviceId: string; peer: Peer; commandUntil: number }
+// shorter than the observer lease (see OPERATION_ENTITLEMENT_MS). Zero means never. `lanUntil` is
+// present only for a LAN-only session (the room's), which this lane carries `LAN_REQUESTS` alone for.
+type Browser = { sessionId: string; deviceId: string; peer: Peer; commandUntil: number; lanUntil?: number }
+/** What a LAN-only session may send through the relay (security review 2026-11-12, M1). The relay
+ *  cannot tell that its holder is on the shack's network, so it carries only what the stream held to
+ *  that network needs, the lease and the `state` it is read from, and Stop. Never a read of the
+ *  station's data (an export), which would make the relay a free monitor from anywhere. */
+const LAN_REQUESTS: ReadonlySet<unknown> = new Set(['state', 'acquire', 'heartbeat', 'release', 'stopTransmit'])
 /** The requests that may not be forwarded once the entitlement behind the session has lapsed:
  *  everything that CHANGES the station. Exported because the adapter has to recognise the same
  *  set one step earlier, to refresh the entitlement before this relay is asked - two spellings
@@ -132,6 +138,11 @@ export class OperationRelay {
       // through. An absent deadline has to mean "not entitled", never "entitled forever".
       const commandUntil = Number.isSafeInteger(browser.commandUntil) ? browser.commandUntil : 0
       if (entitledCommand(request.type) && now >= commandUntil) {
+        this.error(p, 'stationUnavailable')
+        return
+      }
+      // A LAN-only session, refused as a lapsed one is, and for the same reason: not through here.
+      if (browser.lanUntil !== undefined && !LAN_REQUESTS.has(request.type)) {
         this.error(p, 'stationUnavailable')
         return
       }

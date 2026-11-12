@@ -410,8 +410,8 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
   // into relay socket state, and the provider subject has no business travelling with it.
   // `verified` is destructured off for the same reason `subject` is: `identity` is spread into
   // the browser identity and on into relay socket state, and how this account was identified is
-  // not something the wire needs to carry. `email` likewise — it is kept nowhere (only its hashes
-  // are), and is read here only transiently to notify the owner when a device is added by sign-in.
+  // not something the wire needs to carry. `email` likewise. It is read here only for the owner-device
+  // notice, which goes to the account's own address (authority.ts `noticeAddress`), never to this one.
   const { subject, verified, email, ...identity } = await account(request, env, now)
   await rate(env, `account:${identity.accountId}`, now, 120)
   const entitlement = await readEntitlement(env, identity.accountId, now)
@@ -662,7 +662,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
         // owner's, so it sends nothing and the device stays held. A no-op too without the provider
         // secret. Once: this branch runs only on the waiting→approved transition.
         await deviceAddedNotice(env, { accountId: identity.accountId, stationId: row.id, deviceId: current.id,
-          toEmail: role === 'owner' ? email : null, stationName: row.name, deviceName: name, kind: 'browser' }, now)
+          ownerSignIn: role === 'owner' ? email : null, stationName: row.name, deviceName: name, kind: 'browser' }, now)
         return json({ deviceId: current.id, approved: true })
       }
       return json({ deviceId: current.id, approved: current.approved === 1 })
@@ -680,22 +680,21 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       // to the owner's own address, which we have only when the caller is the owner (a guest's
       // sign-in sends nothing, the device stays held); a no-op too without the provider secret.
       await deviceAddedNotice(env, { accountId: identity.accountId, stationId: row.id, deviceId,
-        toEmail: role === 'owner' ? email : null, stationName: row.name, deviceName: name, kind: 'browser' }, now)
+        ownerSignIn: role === 'owner' ? email : null, stationName: row.name, deviceName: name, kind: 'browser' }, now)
     }
     return json({ deviceId, approved: approveAs !== null }, 200, { 'set-cookie': cookie(row.id, credential) })
   }
   // What the station's use runs on: the owner's own entitlement, which a guest uses too
   // (`GUESTS_ON_OWNER_PLAN`). Its first internet use starts the trial (`TRIAL_STARTS_AT_BINDING`).
   let plan = role === 'owner' ? entitlement : await readEntitlement(env, row.account_id, now)
+  // Only the owner's own use starts the owner's one trial (security review 2026-11-12, M2): a guest on
+  // the owner's plan is refused `trialRequired` until the owner has started it. Each caller below runs
+  // this only once the device is known approved, so nothing is started for one that is not.
   const internet = async (starts: boolean) => {
-    if (starts) plan = await firstUse(env, row, plan, now)
+    if (starts && role === 'owner') plan = await firstUse(env, row, plan, now)
     requireTrial(plan, now)
     if (role !== 'owner' && !GUESTS_ON_OWNER_PLAN) requireTrial(entitlement, now)
   }
-  // Free on the shack's own network (authority.ts lanEntitlement): an account whose internet use has
-  // ended may still take a LAN-only ticket for a browser already approved, and renew it. The relay
-  // route and every other verb still need internet use.
-  if (!(plan.access === 'lan' && (verb === 'ticket' || verb === 'renew'))) await internet(verb === 'turn')
   if (verb === 'ticket' || verb === 'renew' || verb === 'turn') {
     const input = await body(request, verb === 'renew' ? ['sessionId'] : [], verb === 'turn' ? [] : ['scope'])
     // `scope: 'lan'` asks for a LAN-only session: its stream is held to the shack's own network, and an
@@ -704,9 +703,12 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     // the session was admitted with.
     requireValue(!('scope' in input) || input.scope === 'lan', 'invalidRequest', 400)
     const lan = input.scope === 'lan'
-    if (!lan) await internet(verb === 'ticket')
     const current = await device(request, env, row.id, identity.accountId, now)
     requireValue(current?.approved === 1, 'deviceNotApproved')
+    // Free on the shack's own network (authority.ts lanEntitlement): an account whose internet use has
+    // ended may still take a LAN-only ticket for a browser already approved, and renew it. The relay
+    // route and an internet session need internet use, and the first of them starts the trial.
+    if (!(lan && plan.access === 'lan')) await internet(verb !== 'renew')
     const browser = { ...identity, accountId: row.account_id, deviceId: current.id, deviceGeneration: current.generation,
       expiresAt: Math.min(identity.expiresAt, current.expires_at) }
     const policy = await access(env, row, now)
@@ -762,8 +764,11 @@ async function accountCopy(env: RemoteEnv, accountId: string, now: number): Prom
     d.expires_at AS expiresAt, d.revoked_at AS revokedAt, d.account_id=? AS yours
     FROM devices d JOIN stations s ON s.id=d.station_id WHERE d.account_id=? OR s.account_id=? ORDER BY d.station_id, d.id`, accountId, accountId, accountId)
   const truth = (row: Record<string, unknown>, ...keys: string[]) => ({ ...row, ...Object.fromEntries(keys.map(key => [key, row[key] === 1])) })
+  const notice = await env.DB.prepare('SELECT notice_address FROM accounts WHERE id=?').bind(accountId).first<{ notice_address: string | null }>()
   return {
     exportedAt: now, accountId,
+    // Where a "device added" notice goes, once the account has had one.
+    noticeAddress: notice?.notice_address ?? null,
     trial: trial && truth(trial, 'enabled'),
     subscription: subscription && truth(subscription, 'cancelAtPeriodEnd'),
     checkouts: await all('SELECT id, created_at AS createdAt FROM checkout_sessions WHERE account_id=? ORDER BY created_at', accountId),
@@ -1015,8 +1020,11 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
   const role = row.enabled === 1 ? await memberRole(env, row, caller.accountId) : null
   requireValue(role, 'stationUnavailable', 404)
   let plan = role === 'owner' ? entitlement : await readEntitlement(env, row.account_id, now)
+  // Only the owner's own use starts the owner's one trial (security review 2026-11-12, M2): a guest on
+  // the owner's plan is refused `trialRequired` until the owner has started it. Each caller below runs
+  // this only once the device is known approved, so nothing is started for one that is not.
   const internet = async (starts: boolean) => {
-    if (starts) plan = await firstUse(env, row, plan, now)
+    if (starts && role === 'owner') plan = await firstUse(env, row, plan, now)
     requireTrial(plan, now)
     if (role !== 'owner' && !GUESTS_ON_OWNER_PLAN) requireTrial(entitlement, now)
   }
@@ -1071,9 +1079,9 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
     deviceGeneration: current.generation, expiresAt: Math.min(caller.expiresAt, current.expires_at) })
   if (verb === 'pipe') {
     requireValue(request.method === 'GET' && request.headers.get('upgrade')?.toLowerCase() === 'websocket', 'webSocketRequired', 426)
-    await internet(true)
     const current = await signer(new Uint8Array())
     requireValue(current.approved === 1, 'deviceNotApproved')
+    await internet(true)
     await rate(env, `pipe:${row.id}:${current.id}`, now, 12)
     const response = await room(env, row.id, 'client-pipe', { access: await access(env, row, now), identity: identity(current), entitlement: plan })
     // Opening the station from this computer is use, as a browser's ticket is.
@@ -1115,7 +1123,7 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
       // to the owner's own address, which we have only when the caller is the owner (a guest's
       // sign-in sends nothing, the device stays held); a no-op too without the provider secret.
       await deviceAddedNotice(env, { accountId: caller.accountId, stationId: row.id, deviceId: current.id,
-        toEmail: role === 'owner' ? caller.email : null, stationName: row.name, deviceName: name, kind }, now)
+        ownerSignIn: role === 'owner' ? caller.email : null, stationName: row.name, deviceName: name, kind }, now)
       return json({ deviceId: current.id, approved: true, expiresAt: UNTIL_REMOVED, renewsUntil: null })
     }
     if (current) return json({ deviceId: current.id, approved: current.approved === 1, expiresAt: current.expires_at, renewsUntil: null })
@@ -1136,14 +1144,14 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
       // to the owner's own address, which we have only when the caller is the owner (a guest's
       // sign-in sends nothing, the device stays held); a no-op too without the provider secret.
       await deviceAddedNotice(env, { accountId: caller.accountId, stationId: row.id, deviceId,
-        toEmail: role === 'owner' ? caller.email : null, stationName: row.name, deviceName: name, kind }, now)
+        ownerSignIn: role === 'owner' ? caller.email : null, stationName: row.name, deviceName: name, kind }, now)
     }
     return json({ deviceId, approved: approveAs !== null, expiresAt, renewsUntil: null })
   }
-  await internet(verb === 'turn')
   fieldsOf(bytes, [])
   const current = await signer(bytes)
   requireValue(current.approved === 1, 'deviceNotApproved')
+  await internet(verb === 'turn')
   const policy = await access(env, row, now)
   // Past exactly the checks a browser's ticket is.
   observerDeadline(policy, identity(current), plan, now)
