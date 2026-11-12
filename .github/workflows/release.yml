@@ -1010,7 +1010,14 @@ jobs:
         run: |
           set -euo pipefail
           ( cd src-tauri && cargo tauri build --target ${{ matrix.target }} \
-              --features radio,custom-protocol --no-bundle )
+              --features radio,custom-protocol --no-bundle -- --timings )
+
+      # DRY-RUN ONLY (never lands): where the compile's minutes go, dependencies vs the LTO link.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cargo-timings-${{ matrix.suffix }}
+          path: src-tauri/target/cargo-timings/*
+          if-no-files-found: warn
 
       # The modem's CMake used the pinned Boost headers: a Boost CMake package anywhere else on the
       # runner would win over BOOST_ROOT, and the build would not say so.
