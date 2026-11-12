@@ -439,22 +439,26 @@ async fn binding_hands_back_no_secret() {
     }
 }
 
-/// The account signs in only at the service this build is for (staging, whose tenant is built in),
-/// never at another origin, production's included.
+/// The account signs in only at the service this build is for, never at another origin, the other
+/// known service's included. Staging's tenant is built in; production's is not configured yet, so a
+/// production build offers no sign-in (`accountNotReady`) until it is.
 #[test]
 fn the_account_signs_in_only_where_this_build_has_a_configured_tenant() {
-    for origin in [
-        "https://elsewhere.test.invalid",
-        "https://remote.hamradiotools.io",
-    ] {
+    use crate::remote_service::transport::{OTHER_ORIGIN, REMOTE_ORIGIN, STAGING_ORIGIN};
+    for origin in ["https://elsewhere.test.invalid", OTHER_ORIGIN] {
         assert!(
             matches!(Service::new(origin), Err("originDenied")),
             "{origin}"
         );
     }
-    let service = Service::new(crate::remote_service::REMOTE_ORIGIN)
-        .ok()
-        .unwrap();
+    if REMOTE_ORIGIN != STAGING_ORIGIN {
+        assert!(matches!(
+            Service::new(REMOTE_ORIGIN),
+            Err("accountNotReady")
+        ));
+        return;
+    }
+    let service = Service::new(REMOTE_ORIGIN).ok().unwrap();
     assert_eq!(
         service.tenant(),
         Tenant::of("https://remote-staging.hamradiotools.io").unwrap()

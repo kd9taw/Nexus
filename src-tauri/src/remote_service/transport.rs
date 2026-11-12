@@ -10,7 +10,48 @@ use tokio_tungstenite::tungstenite::{
     client::IntoClientRequest, protocol::WebSocketConfig, Message,
 };
 
-pub const REMOTE_ORIGIN: &str = "https://remote-staging.hamradiotools.io";
+/// The test service: every build until the release that moves stations (S5) is for it.
+pub const STAGING_ORIGIN: &str = "https://remote-staging.hamradiotools.io";
+/// The production service (its names are pinned in `remote/scripts/staging-common.mjs`).
+pub const PRODUCTION_ORIGIN: &str = "https://remote.hamradiotools.io";
+/// The one service this build speaks to, chosen when it is COMPILED: `NEXUS_REMOTE_ORIGIN` names one
+/// of the two known origins exactly, and unset is staging. Anything else fails the build, so no
+/// build can be pointed at a third host. Every origin allow-list
+/// (`Client::new` here, `account::Service::new`, `lan_client::internet::Service::new`) compares to
+/// this, so a production build refuses staging and a staging build refuses production.
+pub const REMOTE_ORIGIN: &str = origin_for(option_env!("NEXUS_REMOTE_ORIGIN"));
+/// The known origin this build is NOT for. A pairing saved under it is a pairing for the other
+/// service: reported as `pairingMoved`, kept, and cleared locally by Forget (`Controller::run`).
+pub const OTHER_ORIGIN: &str = if same(REMOTE_ORIGIN, STAGING_ORIGIN) {
+    PRODUCTION_ORIGIN
+} else {
+    STAGING_ORIGIN
+};
+/// What `NEXUS_REMOTE_ORIGIN` builds for. A `const fn` so a bad value stops the compile.
+pub(crate) const fn origin_for(chosen: Option<&str>) -> &'static str {
+    match chosen {
+        None => STAGING_ORIGIN,
+        Some(origin) if same(origin, STAGING_ORIGIN) => STAGING_ORIGIN,
+        Some(origin) if same(origin, PRODUCTION_ORIGIN) => PRODUCTION_ORIGIN,
+        Some(_) => panic!(
+            "NEXUS_REMOTE_ORIGIN must be https://remote.hamradiotools.io or https://remote-staging.hamradiotools.io exactly"
+        ),
+    }
+}
+const fn same(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
 const HTTP_LIMIT: usize = 16384;
 /// The RX DSP tick, which is also one Opus frame. A literal here so the socket loop is
 /// one piece of code in a build without tempo-audio; the assertion below pins it to the
@@ -151,6 +192,9 @@ impl Client {
                 Some("updateRequired") => "updateRequired",
                 // The station has invited as many people as the service keeps.
                 Some("inviteLimit") => "inviteLimit",
+                // The service has closed and named where it went (410). Unnamed it read as
+                // `pairingExpired`, which sends the operator to pair again with a closed service.
+                Some("serviceMoved") => "serviceMoved",
                 _ => match status {
                     401 | 403 => "accessDenied",
                     410 => "pairingExpired",
@@ -381,7 +425,16 @@ pub async fn connected(
         result = tokio::time::timeout(Duration::from_secs(10), connect) => {
             match result {
                 Ok(Ok(value)) => value,
-                Ok(Err(tokio_tungstenite::tungstenite::Error::Http(response))) if [401, 403].contains(&response.status().as_u16()) => return Err("accessDenied"),
+                // A closed service says so by name on the station socket (403 `serviceMoved`);
+                // any other 401/403 is this station refused.
+                Ok(Err(tokio_tungstenite::tungstenite::Error::Http(response))) if [401, 403].contains(&response.status().as_u16()) => {
+                    let moved = response
+                        .body()
+                        .as_deref()
+                        .and_then(|body| serde_json::from_slice::<Value>(body).ok())
+                        .is_some_and(|body| body.get("error").and_then(Value::as_str) == Some("serviceMoved"));
+                    return Err(if moved { "serviceMoved" } else { "accessDenied" });
+                }
                 _ => return Err("serviceUnavailable"),
             }
         }
@@ -857,12 +910,16 @@ pub async fn supervise(
         if *stop.borrow() {
             break;
         }
-        // Only a refusal of THIS STATION ends Remote: `disabled` is remembered as off across
+        // Only a refusal of THIS STATION, or a service that has closed (`serviceMoved`), ends
+        // Remote: `disabled` is remembered as off across
         // restarts, and the remote operator is then told to turn Remote on at the shack. A
         // message this build cannot parse (`invalidResponse`) is not that - it is a newer
         // service's shape or a corrupt frame, and it used to turn Remote off for good, which
         // the one person affected could not undo. It ends this connection and backs off.
-        if matches!(result, Err("accessDenied" | "credentialStoreUnavailable")) {
+        if matches!(
+            result,
+            Err("accessDenied" | "credentialStoreUnavailable" | "serviceMoved")
+        ) {
             status.set("disabled", result.err());
             return;
         }
