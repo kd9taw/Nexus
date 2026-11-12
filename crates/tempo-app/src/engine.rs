@@ -29840,8 +29840,18 @@ contact yourself."
         (*n != asked).then(|| (*ok, detail.clone()))
     }
 
-    /// Whether the latest Test CAT answer ([`Self::cat_reprobe_answer`]) is a launch Nexus
-    /// refused itself. Read under the same lock as the answer.
+    /// Answer the pending Test CAT without probing: the radio loop refused it, and `detail` says
+    /// why. Typed as refused, so the baud ladder never sweeps the port behind it. The CAT status is
+    /// left as it was, since a refusal says nothing about the link.
+    pub fn refuse_cat_reprobe(&mut self, detail: String) {
+        let n = self.cat_reprobe_answer.0.wrapping_add(1);
+        self.cat_reprobe_answer = (n, None, detail);
+        self.cat_reprobe_refused = true;
+    }
+
+    /// Whether the latest Test CAT answer ([`Self::cat_reprobe_answer`]) is one Nexus refused
+    /// itself: a launch it refused, or a press while the station was keyed
+    /// ([`Self::refuse_cat_reprobe`]). Read under the same lock as the answer.
     pub fn cat_reprobe_refused(&self) -> bool {
         self.cat_reprobe_refused
     }
