@@ -5,6 +5,11 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Smaller dials in the large TX meters pane.** The PO, ALC and SWR needle dials in ⊞ Panels ▸ "TX Meters, large" are now half as wide and half as high as in 1.24.0, on FT, Phone, CW and SSTV. The meter's name and its reading under each dial are the same size as before, the pane takes the same room, and the needle and its peak mark work as before.
+
 ## [1.24.0] — 2026-11-11
 
 ### Added

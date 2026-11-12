@@ -116,6 +116,40 @@ describe('the pane’s body is a readout', () => {
   })
 })
 
+// Operator, 1.24.0: "the dials on the new tx meters are way too large, reduce them by 50%". Half as wide and half as
+// high in the same pane, with the name and value no smaller; the pixels on the real screens are
+// ui/probe/txmeterspane-probe.mjs's.
+describe('the dial is half 1.24.0’s, the readout is not', () => {
+  const DIAL = '.ph-txneedle-scale, .ph-txneedle-zone, .ph-txneedle-tick, .txmeters-pane-scale, .ph-txneedle-peak, .ph-txneedle-needle'
+
+  it.each(['po', 'alc', 'swr'])('%s: the whole dial is drawn at half, standing on the band', (key) => {
+    const face = render(<TxMeters radio={KEYED} pane />).container.querySelector(`[data-meter="${key}"]`)!
+    const g = face.querySelector('g.txmeters-pane-dial')!
+    expect(g).not.toBeNull()
+    const m = /^translate\(([-\d.]+) ([-\d.]+)\) scale\(([\d.]+)\)$/.exec(g.getAttribute('transform') ?? '')!
+    const [tx, ty, k] = [Number(m[1]), Number(m[2]), Number(m[3])]
+    expect(k).toBe(0.5)
+    // The middle of the band's top edge (50, 38) stays where it was: the dial stands on the band.
+    expect(tx + 50 * k).toBeCloseTo(50, 6)
+    expect(ty + 38 * k).toBeCloseTo(38, 6)
+    const parts = [...face.querySelectorAll(DIAL)]
+    expect(parts.length).toBeGreaterThan(10)
+    for (const p of parts) expect(g.contains(p)).toBe(true)
+  })
+
+  it('the band, the name and the value are outside it, at 1.24.0’s size', () => {
+    const face = render(<TxMeters radio={KEYED} pane />).container.querySelector('[data-meter="po"]')!
+    const g = face.querySelector('g.txmeters-pane-dial')!
+    for (const sel of ['.txmeters-pane-band', '.txmeters-pane-label', '.txmeters-pane-value']) {
+      const el = face.querySelector(sel)!
+      expect(el).not.toBeNull()
+      expect(g.contains(el)).toBe(false)
+    }
+    expect(win(face.querySelector('.txmeters-pane-label')!, 'font-size')).toBe('6.5px')
+    expect(win(face.querySelector('.txmeters-pane-value')!, 'font-size')).toBe('9px')
+  })
+})
+
 describe('the scale reads what the bars read', () => {
   it('power: full scale is the radio’s rated output', () => {
     for (const rated of [5, 100, 1500]) {
