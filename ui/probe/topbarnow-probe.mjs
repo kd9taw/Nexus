@@ -16,9 +16,9 @@
 // state of that window, to 0.5 px, and every word of the now-bar is drawn whole, inside the bar and the window.
 // Across the two now-bar contents, the same: the now-bar's chips may never decide the bar's height.
 //
-// THE CONTROL, run every time: the now-bar's old sizing put back (its own content width, `flex: 0 1 auto`) at
-// 1920×1080 at 150 %, where the move was measured. There transmitting must move the cockpit; if it does not, the check
-// cannot fail and the probe says so instead of passing.
+// THE CONTROL, run every time: the old bar put back at 1920×1080 at 150 %, where the move was measured: the now-bar at
+// its own content width (`flex: 0 1 auto`) and the TX/RX sign and TX On/Off at their text's width. There transmitting
+// must move the cockpit; if it does not, the check cannot fail and the probe says so instead of passing.
 //
 // TOPBARNOW_SIZES ("1920x1080@150,1366x768@100") and TOPBARNOW_VIEWS ("operate,cw") narrow a local run.
 //
@@ -63,8 +63,8 @@ const NOWBARS = [
   ['empty', null],
   ['three feeds', { cluster: FEED('live', 12), phoneCluster: FEED('reconnecting', 245), pskr: FEED('live', 3), phoneClusterHost: 'dxc.example.net +2', phoneSpotsSeen: 4, clusterViaOtherWindow: false }],
 ]
-// The control: the now-bar's sizing before the fix, its own content width.
-const OLD_SIZING = '.topbar-now{flex:0 1 auto!important;width:auto!important;flex-basis:auto!important}'
+// The control: the bar before the fix — the now-bar at its own content width, the sign and the toggle at their text's.
+const OLD_SIZING = '.topbar-now{flex:0 1 auto!important}.topbar .txrx-indicator{min-width:46px!important}.topbar .op-btn.monitor{min-width:0!important}'
 
 const realSrc = await readFile(REAL_API, 'utf8')
 let stubSrc = await readFile(STUB_SRC, 'utf8')
@@ -221,10 +221,10 @@ try {
     const rows = await sweep('operate', NOWBARS[0], [[1920, 1080, 150]], OLD_SIZING)
     const ok = rows.filter((r) => !r.error)
     const d = ok.length ? Math.max(...ok.map((r) => moved(ok[0].m, r.m))) : 0
-    console.log(`topbarnow-probe: CONTROL operate at 1920×1080 @150 %, the now-bar's old sizing: ${ok.map((r) => `${r.step} ${fmt(r.m)}`).join('; ')} — moves ${Math.round(d * 10) / 10} px${d > 0.5 ? ' (caught)' : ''}`)
-    if (!(d > 0.5)) { console.error('topbarnow-probe: CONTROL FAILED — with the old sizing transmitting did not move the cockpit; the check cannot fail'); code = code || 1 }
+    console.log(`topbarnow-probe: CONTROL operate at 1920×1080 @150 %, the old bar: ${ok.map((r) => `${r.step} ${fmt(r.m)}`).join('; ')} — moves ${Math.round(d * 10) / 10} px${d > 0.5 ? ' (caught)' : ''}`)
+    if (!(d > 0.5)) { console.error('topbarnow-probe: CONTROL FAILED — with the old bar transmitting did not move the cockpit; the check cannot fail'); code = code || 1 }
   }
-  if (code === 0) console.log(`topbarnow-probe: PASS — the top bar's height, the cockpit's top and Stop TX stand still through idle, transmit, tune, recording and CAT lost, with an empty and a busy now-bar, its words whole, on ${VIEWS.join(', ')} at ${SIZES.map((s) => win(s).name).join(', ')}; the old sizing moves them (control)`)
+  if (code === 0) console.log(`topbarnow-probe: PASS — the top bar's height, the cockpit's top and Stop TX stand still through idle, transmit, tune, recording and CAT lost, with an empty and a busy now-bar, its words whole, on ${VIEWS.join(', ')} at ${SIZES.map((s) => win(s).name).join(', ')}; the old bar moves them (control)`)
   process.exitCode = code
 } finally {
   await browser.stop(); await server.close(); await rm(cacheDir, { recursive: true, force: true }); await rm(STUB_API, { force: true })
