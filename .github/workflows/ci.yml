@@ -1362,9 +1362,10 @@ jobs:
             target/vpx-mingw
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
-  # Job 5b — the client core for iOS. The only macOS job on branch and main CI.
+  # Job 5b — the client core for iOS.
   #
-  # The macOS APP is not built here. Its compile checks (one on macos-15 for Apple Silicon, one on
+  # The macOS APP is not built here for release; `macos-imports` below builds it for one check
+  # only. Its compile checks (one on macos-15 for Apple Silicon, one on
   # macos-15-intel for Intel) left this workflow because they cost too much on every run: the Intel
   # one alone took over two hours (release profile, fat LTO and one codegen unit, on GitHub's slow
   # Intel runner), and the slowest job is the whole run's wall time. Every check they made is still
@@ -1400,6 +1401,120 @@ jobs:
 
       - name: cargo check tempo-client for iOS (aarch64)
         run: cargo check -p tempo-client --target aarch64-apple-ios
+
+  # Job 5c — the macOS app's libSystem imports, on every run, so a break that only a Mac link can
+  # see is found when it lands and not when a release is cut. The 1.24.0 dry run found one: new
+  # code bound four libSystem functions that were not on scripts/macos-system-imports.txt, which
+  # nothing before release.yml's macOS legs ever links, so a tag would have failed there. This
+  # links the app for Apple Silicon and runs the same check release.yml's "Check every Mach-O
+  # against the minimum macOS before signing" runs on the app binary: every strong libSystem import
+  # on the reviewed list, and the minimum macOS and load paths with it.
+  #
+  # As cheap as a link allows. The check reads the linked binary's symbol table, so `cargo check`
+  # cannot do it, but a DEBUG link imports the libSystem functions the code calls just as the
+  # release link does: a Rust `extern` binding is a strong import in either profile. Without debug
+  # info (it changes no import), without custom-protocol (it only embeds the web UI, so no UI build
+  # is needed), and with no tauri-cli, Hamlib, DeepCW model, signing or notarization. Apple Silicon
+  # only: Intel takes hours (see above), and a binding newer than the minimum is the same source
+  # on both. What it keeps from release.yml, because each one changes what the binary imports: the
+  # macos-15 runner, the deployment target from tauri.conf.json (C code calls a newer function
+  # weakly only when built for an older minimum), the pinned gcc bottle whose static libgfortran
+  # links into the binary, and FFTW built from source at the minimum (a Homebrew FFTW would also
+  # fail the load-path rule). The x86_64-only names on the list stay release.yml's to check.
+  #
+  # No cargo cache, deliberately: a macOS target directory is gigabytes in a repository already at
+  # GitHub's 10 GB cap (see the `test` job's cache). FFTW's few megabytes are cached by its
+  # script's hash, which holds its version and flags.
+  macos-imports:
+    name: macOS app libSystem imports (Apple Silicon)
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build for the app's minimum macOS
+        run: |
+          set -euo pipefail
+          floor=$(jq -r '.bundle.macOS.minimumSystemVersion // empty' src-tauri/tauri.conf.json)
+          [ -n "$floor" ] || { echo "tauri.conf.json sets no bundle.macOS.minimumSystemVersion"; exit 1; }
+          echo "MACOSX_DEPLOYMENT_TARGET=$floor" >> "$GITHUB_ENV"
+          echo "building for macOS $floor and up"
+
+      # release.yml's step of the same name, for its Apple Silicon leg (see there for why each part
+      # is as it is): the pinned gcc bottle, poured and never built, and Boost's headers.
+      - name: Install build dependencies
+        timeout-minutes: 30
+        env:
+          GCC_BOTTLE: arm64_sequoia
+          GCC_BOTTLE_SHA256: 8c57a4e5c65c93b90b280e3e761833f946b5a7d186f2067d239af44b71c5a577
+          BOOST: boost-1.92.0
+          BOOST_SHA256: ea7b982002cc9dfbe59b0b217b206f470dc75f3de0bb2973d844118934d82411
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_UPGRADE: "1"
+        run: |
+          set -euo pipefail
+          die() { echo "::error::$*"; exit 1; }
+          command -v cmake >/dev/null || die "this runner image has no cmake, which the modem build needs"
+          os=$(sw_vers -productVersion | cut -d. -f1)
+          case "$os" in 14) tag=sonoma ;; 15) tag=sequoia ;; 26) tag=tahoe ;; *) tag="macos$os" ;; esac
+          if [ "$(uname -m)" = arm64 ]; then tag="arm64_$tag"; fi
+          [ "$tag" = "$GCC_BOTTLE" ] || die "the pinned gcc bottle is for $GCC_BOTTLE but this runner is $tag: move it with release.yml's"
+          for dep in gmp isl libmpc mpfr zstd; do
+            brew list --versions "$dep" >/dev/null || die "the gcc bottle needs $dep, which this runner image does not have; installing it may build from source"
+          done
+
+          dl="$RUNNER_TEMP/deps"
+          mkdir -p "$dl"
+          bottle="$dl/gcc--16.2.0.$GCC_BOTTLE.bottle.tar.gz"
+          token=$(curl -fsS "https://ghcr.io/token?scope=repository:homebrew/core/gcc:pull" | jq -r .token)
+          curl -fsSL --retry 3 -H "Authorization: Bearer $token" -o "$bottle" \
+            "https://ghcr.io/v2/homebrew/core/gcc/blobs/sha256:$GCC_BOTTLE_SHA256"
+          echo "$GCC_BOTTLE_SHA256  $bottle" | shasum -a 256 -c -
+          HOMEBREW_DEVELOPER=1 brew install --force-bottle --ignore-dependencies "$bottle"
+          fc=$(command -v gfortran) || die "the gcc bottle installed no gfortran"
+          [ "$fc" = "$(brew --prefix)/bin/gfortran" ] || die "gfortran on PATH is $fc, not the pinned gcc's"
+          [ "$(gfortran -dumpfullversion)" = 16.2.0 ] || die "gfortran is $(gfortran -dumpfullversion), not the pinned 16.2.0"
+
+          curl -fsSL --retry 3 -o "$dl/$BOOST.tar.xz" \
+            "https://github.com/boostorg/boost/releases/download/$BOOST/$BOOST-b2-nodocs.tar.xz"
+          echo "$BOOST_SHA256  $dl/$BOOST.tar.xz" | shasum -a 256 -c -
+          tar -xJf "$dl/$BOOST.tar.xz" -C "$dl" "$BOOST/boost"
+          [ -f "$dl/$BOOST/boost/crc.hpp" ] || die "the Boost tarball held no boost/crc.hpp"
+          echo "BOOST_ROOT=$dl/$BOOST" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
+        with:
+          toolchain: 1.93.1
+
+      - name: Cache FFTW built for the minimum macOS
+        uses: actions/cache@v6
+        with:
+          path: target/fftw-macos
+          key: fftw-macos-arm64-${{ hashFiles('scripts/fetch-fftw-macos.sh', 'src-tauri/tauri.conf.json') }}
+
+      - name: Build FFTW from source for the app's minimum macOS
+        run: |
+          set -euo pipefail
+          bash scripts/fetch-fftw-macos.sh
+          echo "PKG_CONFIG_PATH=$PWD/target/fftw-macos/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # radio, as every shipped build; the model-less AI CW decoder only warns in a debug build, and
+      # this binary is never run.
+      - name: Link the app (debug, no debug info)
+        env:
+          NEXUS_ALLOW_MISSING_AICW: "1"
+          CARGO_PROFILE_DEV_DEBUG: "0"
+        run: cargo build --manifest-path src-tauri/Cargo.toml --features radio
+
+      - name: Every strong libSystem import of the app is on the reviewed list
+        run: |
+          node scripts/check-macho-bundle.mjs --floor "$MACOSX_DEPLOYMENT_TARGET" --arch arm64 \
+            --system-imports scripts/macos-system-imports.txt src-tauri/target/debug/Nexus
 
   # Job 6 — Raspberry Pi .deb, one per live Pi OS base. Runs on GitHub's hosted
   # arm64 runner (free for public repos), so the aarch64 build is NATIVE: the same
