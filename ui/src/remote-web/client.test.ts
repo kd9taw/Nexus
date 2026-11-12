@@ -683,13 +683,13 @@ it('takes the billing page only from the provider\'s own checkout or billing dom
   }))
   const client = new BrowserClient({ getTokenSilently: async () => 'token' } as unknown as Auth0Client)
   url = 'https://checkout.stripe.com/c/pay/cs_test_fixture'
-  await expect(client.billingPage('checkout', { plan: 'annual' })).resolves.toBe(url)
+  await expect(client.billingPage('checkout', { plan: 'annual', country: 'US' })).resolves.toBe(url)
   url = 'https://billing.stripe.com/p/session/fixture'
   await expect(client.billingPage('portal')).resolves.toBe(url)
-  expect(requests).toEqual([{ path: '/api/remote/billing/checkout', body: { plan: 'annual' } }, { path: '/api/remote/billing/portal', body: {} }])
+  expect(requests).toEqual([{ path: '/api/remote/billing/checkout', body: { plan: 'annual', country: 'US' } }, { path: '/api/remote/billing/portal', body: {} }])
   for (const [kind, answer] of [['checkout', 'https://billing.stripe.com/p/session/fixture'], ['portal', 'https://checkout.stripe.com/c/pay/cs_test_fixture'],
     ['checkout', 'https://checkout.stripe.com.example.invalid/pay'], ['portal', 'javascript:alert(1)'], ['checkout', null]] as const) {
     url = answer
-    await expect(client.billingPage(kind, kind === 'checkout' ? { plan: 'monthly' } : {})).rejects.toMatchObject({ status: 503, code: 'serviceUnavailable' })
+    await expect(client.billingPage(kind, kind === 'checkout' ? { plan: 'monthly', country: 'US' } : {})).rejects.toMatchObject({ status: 503, code: 'serviceUnavailable' })
   }
 })
