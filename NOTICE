@@ -663,10 +663,10 @@ assigns for its DXCC program.
 ### IOTA island-group list and islands list — © RSGB and IOTA Ltd
 © Radio Society of Great Britain and © Islands On The Air (IOTA) Ltd (as shown on
 <https://www.iota-world.org/>). Both lists are data of the IOTA programme, published at
-<https://www.iota-world.org/>. The island-group list (`groups.json`) is included with IOTA Ltd's
-permission. The islands list (`islands.json`) is used with written permission from IOTA Ltd and the
-RSGB. Both ship in the installer as app resources, are refreshed from iota-world.org at most
-monthly, and are not in this repository.
+<https://www.iota-world.org/>. The island-group list (`iota_groups.json`) is included with IOTA
+Ltd's permission. The islands list (`iota_islands.json`) is used with written permission from IOTA
+Ltd and the RSGB. Both ship in the installer as app resources, are refreshed from iota-world.org at
+most monthly, and are not in this repository.
 
 ### Deleted DXCC entities — ARRL, from TrustedQSL
 `crates/propagation/data/dxcc_deleted.csv` lists the 62 deleted DXCC entities: each one's
