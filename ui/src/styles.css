@@ -7977,7 +7977,10 @@ select optgroup {
   letter-spacing: 0.06em;
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-sm);
-  min-width: 46px;
+  /* Wider than "RX" (1.66em) and "TX" (1.57em) both, so the sign is ONE width whichever it says: drawn
+     at its text's width, "TX" was a px narrower, and whatever stands after it in the bar — the Logbook's
+     Stop TX at 1366×768 @175 % — moved 1.5 px at every over (topbarnow-probe). */
+  min-width: calc(2em + 2 * var(--space-3) + 2px);
   text-align: center;
 }
 .txrx-indicator.rx {
@@ -8123,6 +8126,13 @@ select optgroup {
 /* TX Off in the buttons' own ink: the faint ink read under 4.5:1 on the button's face. */
 .op-btn.monitor:not(.on) {
   color: var(--text-dim);
+}
+/* The top bar's TX On/Off is ONE width whichever it says (wider than "TX Off", 3.46em): at its text's
+   width "TX On" was a px narrower, and the bar's Stop TX after it moved 0.8 px whenever transmit was
+   switched on or off (Logbook, 1366×768 @175 %; topbarnow-probe). The strip's own (`.cq-txctl`) is not
+   this rule's. */
+.topbar .op-btn.monitor {
+  min-width: calc(4em + 2 * var(--space-3) + 2px);
 }
 /* ATU ON (#344): the radio reports its tuner in line. Lit like Hold Tx's latch, from variables
    both themes define. The menu that switches it out is anchored on an empty span inside the
