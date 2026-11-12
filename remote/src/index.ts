@@ -497,7 +497,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
   // check. Only the signed-in account's id goes over. Until the billing Worker is bound these say so.
   if (path === 'billing/checkout' || path === 'billing/portal') {
     requireValue(env.BILLING, 'billingNotAvailable', 503)
-    // Subscribe carries the billing country the page asked for (ruling 550): a country is checked here, and
+    // Subscribe carries the billing country the page asked for: a country is checked here, and
     // whether Remote is sold there is the billing Worker's answer (`countryNotServed`), before Checkout opens.
     const checkout = path === 'billing/checkout', input = await body(request, checkout ? ['plan', 'country'] : [])
     requireValue(!checkout || ((input.plan === 'monthly' || input.plan === 'annual') && isBillingCountry(input.country)), 'invalidRequest', 400)

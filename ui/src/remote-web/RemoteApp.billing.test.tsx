@@ -30,7 +30,7 @@ function client(value: AccountSession, billing: boolean) {
   vi.spyOn(BrowserClient, 'load').mockResolvedValue(service as unknown as BrowserClient)
   return service
 }
-// The Billing country list (ruling 550), picked by hand: that is the operator saying it.
+// The Billing country list, picked by hand: that is the operator saying it.
 const country = () => screen.getByRole('combobox', { name: 'Billing country' }) as HTMLSelectElement
 const chooseCountry = (code: string) => fireEvent.change(country(), { target: { value: code } })
 const language = (tag: string) => vi.spyOn(navigator, 'language', 'get').mockReturnValue(tag)

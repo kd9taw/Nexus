@@ -65,7 +65,7 @@ export function RemoteApp() {
   const [code, setCode] = useState('')
   // What has been typed into Delete account's confirmation box.
   const [deleteWord, setDeleteWord] = useState('')
-  // Subscribe's billing country (ruling 550): asked before Checkout, sent only once chosen or confirmed.
+  // Subscribe's billing country: asked before Checkout, sent only once chosen or confirmed.
   const [billingCountry, setBillingCountry] = useState<BillingCountryChoice>(() => initialBillingCountry())
   // Keyed by station id: two cards must not share one edit box, and opening one must not put the
   // other into edit mode. null means nobody is renaming.
@@ -301,7 +301,7 @@ export function RemoteApp() {
     : code === 'sessionEnded' ? (beta ? t('remote.sessionEndedBeta') : t('remote.sessionEnded'))
     : code === 'alreadySubscribed' ? t('remote.billing.alreadySubscribed')
     : code === 'noSubscription' ? t('remote.billing.noSubscription')
-    // The billing Worker's answer for a country Remote is not sold in yet (ruling 550: the EU and the UK).
+    // The billing Worker's answer for a country Remote is not sold in yet (the EU and the UK).
     : code === 'countryNotServed' ? t('remote.billing.countryNotServed', { country: billingCountryName(billingCountry.code) })
     : code === 'billingNotAvailable' ? t('remote.billing.notAvailable')
     : code === 'subscriptionNotCancelled' ? t('remote.account.cancelFailed')

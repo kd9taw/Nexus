@@ -515,7 +515,7 @@ test('with the billing Worker bound, checkout and the portal pass only the signe
     assert.deepEqual((await app.client().post('billing/portal', {}, 403)).value, { error: 'originDenied' })
     assert.deepEqual(calls, [])
 
-    // The billing country (ruling 550) is required, and only as an assigned ISO 3166-1 alpha-2 code: no
+    // The billing country is required, and only as an assigned ISO 3166-1 alpha-2 code: no
     // checkout opens without one, and nothing that is not one reaches the billing Worker.
     for (const country of [undefined, '', 'us', 'USA', 'U', 'ZZ', 'XK', 'EU', 'UK', ' US', 'US ', 840, null, ['US']]) {
       const value = country === undefined ? { plan: 'monthly' } : { plan: 'monthly', country }
@@ -531,7 +531,7 @@ test('with the billing Worker bound, checkout and the portal pass only the signe
     const cases = [
       [{ error: 'alreadySubscribed', status: 409 }, 409, 'alreadySubscribed'],
       [{ error: 'noSubscription', status: 404 }, 404, 'noSubscription'],
-      // Ruling 550: a billing country Remote is not sold to yet, refused before Checkout opens.
+      // A billing country Remote is not sold to yet (the EU and the UK), refused before Checkout opens.
       [{ error: 'countryNotServed', status: 403 }, 403, 'countryNotServed'],
       [{ error: 'secret detail rk_test_fixture', status: 400 }, 503, 'serviceUnavailable'],
       [{ error: 'alreadySubscribed', status: 200 }, 503, 'serviceUnavailable'],

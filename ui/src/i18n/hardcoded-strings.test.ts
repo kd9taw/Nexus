@@ -69,7 +69,7 @@ const MIGRATED = [
   'remote-native/RemoteApprovalPrompt.tsx',
   // The Remote site's first visit and its empty state — born migrated.
   'remote-web/RemoteLanding.tsx',
-  // Subscribe's Billing country question (ruling 550, 2026-11-12) — born migrated.
+  // Subscribe's Billing country question (2026-11-12) — born migrated.
   'remote-web/BillingCountryField.tsx',
   // Remote over this network's card (2026-10-04) — born migrated: the switch, the status line, the
   // pairing window, the paired computers and the reset.

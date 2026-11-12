@@ -1,4 +1,4 @@
-// The billing country Subscribe sends (ruling 550, billing question 1 (a), 2026-11-12). Shared by the
+// The billing country Subscribe sends (2026-11-12): Remote is not sold to the EU or the UK yet. Shared by the
 // page, which offers these in its Billing country list, and the relay (remote/src/index.ts), which takes
 // no other. Whether Remote is sold in a country is the private billing Worker's answer alone (it refuses
 // `countryNotServed` for the EU and the UK, before Checkout opens); this file must never grow that list.

@@ -1,4 +1,4 @@
-// The Billing country question beside Subscribe (ruling 550, billing question 1 (a), 2026-11-12). The
+// The Billing country question beside Subscribe (2026-11-12): Remote is not sold to the EU or the UK yet. The
 // page asks it before Checkout; the relay passes it to the billing Worker, which refuses a country Remote
 // is not sold in yet (`countryNotServed`) before Checkout opens. The page holds no refused list of its own.
 //
