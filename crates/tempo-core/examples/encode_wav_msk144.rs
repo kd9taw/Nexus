@@ -5,7 +5,7 @@
 //!
 //! ⭐ MSK144 IS NOT THE OTHER MODES WITH A SHORTER PERIOD. It keys for essentially
 //! the whole period (`trPeriod − 0.25`) sending the SAME 72 ms frame over and over —
-//! ~201 copies in a 15 s interval. Meteor scatter works by transmitting continuously
+//! 14.5 s of audio, 201 copies and part of a 202nd, in a 15 s interval. Meteor scatter works by transmitting continuously
 //! and hoping one copy finds a reflection lasting a tenth of a second. A file
 //! containing one frame would decode fine here and be useless on the air.
 //!
