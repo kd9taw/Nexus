@@ -4,8 +4,9 @@ Thank you for offering to do this.
 
 Nexus is a ham radio operating program: one window that runs the radio over CAT, decodes and
 transmits FT8, CW, SSB, RTTY, PSK, SSTV and APRS, keeps the log, and shows the map, the spots and
-the satellite passes. It already speaks English, German, Spanish, French and Japanese. You would
-be adding Italian, and there are a lot of Italian operators who would rather not work in English.
+the satellite passes. It already speaks English, German, Spanish, French, Japanese, Russian and
+Chinese (simplified and traditional). You would be adding Italian, and there are a lot of Italian
+operators who would rather not work in English.
 
 ## What I am asking you to do
 
@@ -107,7 +108,7 @@ this I cannot do. Put a note back to me and I will fix the glossary, not argue.
 
 ## Plurals — a few rows come in pairs
 
-<!-- make-kit:plurals -->103<!-- /make-kit --> strings change with the count, so they appear as two rows, with `::one` and `::other` on the
+<!-- make-kit:plurals -->232<!-- /make-kit --> strings change with the count, so they appear as two rows, with `::one` and `::other` on the
 end of the key:
 
 ```
@@ -133,17 +134,17 @@ you like.
 <!-- make-kit:tiers -->
 | Tier | Rows | What it covers |
 |---:|---:|---|
-| **1** | **769** | The frame the operator never stops looking at: the navigation bar, the top bar, panes and pop-outs, connection status, errors and toasts, band and frequency controls, the log-entry form, and Settings ▸ Station. |
-| **2** | 320 | First run: the setup wizard, the Getting Started guide and the splash page. The first thing a new operator meets. |
-| **3** | 1,116 | The daily operating surfaces: the FT8/FT4 cockpit, the logbook, the station roster, spots, the Needed panel, the waterfall and band map. |
-| **4** | 479 | The settings people actually open: audio, radios, connections, alerts, transmit limits, integrations, backup, colours. |
-| **5** | 3,040 | The other cockpits and features: Phone, CW, Tempo, RTTY, PSK, SSTV, APRS, JS8, satellites, the map, awards, memories. |
-| **6** | 1,356 | The deep end: rig-control detail, confirmation-service setup, rotator and routing, the pages of the remote browser station, and the long tail. |
+| **1** | **994** | The frame the operator never stops looking at: the navigation bar, the top bar, panes and pop-outs, connection status, errors and toasts, band and frequency controls, the log-entry form, and Settings ▸ Station. |
+| **2** | 364 | First run: the setup wizard, the Getting Started guide and the splash page. The first thing a new operator meets. |
+| **3** | 1,802 | The daily operating surfaces: the FT8/FT4 cockpit, the logbook, the station roster, spots, the Needed panel, the waterfall and band map. |
+| **4** | 577 | The settings people actually open: audio, radios, connections, alerts, transmit limits, integrations, backup, colours. |
+| **5** | 4,166 | The other cockpits and features: Phone, CW, Tempo, RTTY, PSK, SSTV, APRS, JS8, satellites, Field Day, the map, awards, memories. |
+| **6** | 2,791 | The deep end: rig-control detail, confirmation-service setup, rotator and routing, the pages of the remote browser station, and the long tail. |
 <!-- /make-kit:tiers -->
 
-Tier 1 alone is <!-- make-kit:tier1 -->769<!-- /make-kit --> rows, about <!-- make-kit:tier1chars -->33,000<!-- /make-kit --> characters, roughly <!-- make-kit:tier1pct -->9<!-- /make-kit -->% of the text, and it covers
+Tier 1 alone is <!-- make-kit:tier1 -->994<!-- /make-kit --> rows, about <!-- make-kit:tier1chars -->48,000<!-- /make-kit --> characters, roughly <!-- make-kit:tier1pct -->9<!-- /make-kit -->% of the text, and it covers
 the menus, buttons, status messages and log form an operator sees all day. Tiers 1 and 2 together
-(<!-- make-kit:tier12 -->1,089<!-- /make-kit --> rows) add what a new operator meets in the first hour: the setup wizard and the
+(<!-- make-kit:tier12 -->1,358<!-- /make-kit --> rows) add what a new operator meets in the first hour: the setup wizard and the
 Getting Started guide.
 
 ## Check your work before you send it
