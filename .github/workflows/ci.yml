@@ -1412,7 +1412,10 @@ jobs:
   #
   # As cheap as a link allows. The check reads the linked binary's symbol table, so `cargo check`
   # cannot do it, but a DEBUG link imports the libSystem functions the code calls just as the
-  # release link does: a Rust `extern` binding is a strong import in either profile. Without debug
+  # release link does: a Rust `extern` binding is a strong import in either profile. (Debug keeps
+  # code fat LTO drops, so it can import a little more: _pthread_cond_timedwait, the first time,
+  # which is on the list for that reason. 6 minutes of link here against 67 for the release one.)
+  # Without debug
   # info (it changes no import), without custom-protocol (it only embeds the web UI, so no UI build
   # is needed), and with no tauri-cli, Hamlib, DeepCW model, signing or notarization. Apple Silicon
   # only: Intel takes hours (see above), and a binding newer than the minimum is the same source
