@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { chainOf, parseRules, winnerAt, type Mode } from '../cssCascade'
 import { CockpitTxStrip } from './CockpitTxStrip'
+import { paneRoleStyle } from './panes/CockpitPaneFrame'
 import { TxMeters, TxMetersCell, TxMetersPane, TX_METERS_PANE_WEIGHT, alcBar, poBar, swrBar } from './TxMeters'
 import { LARGE_FACE_FLOOR_EM, largeFaceColumns, needleScale } from './TxNeedles'
 import {
@@ -120,21 +121,40 @@ describe('the pane’s body is a readout', () => {
 // high in the same pane, with the name and value no smaller; the pixels on the real screens are
 // ui/probe/txmeterspane-probe.mjs's.
 describe('the dial is half 1.24.0’s, the readout is not', () => {
-  const DIAL = '.ph-txneedle-scale, .ph-txneedle-zone, .ph-txneedle-tick, .txmeters-pane-scale, .ph-txneedle-peak, .ph-txneedle-needle'
-
-  it.each(['po', 'alc', 'swr'])('%s: the whole dial is drawn at half, standing on the band', (key) => {
-    const face = render(<TxMeters radio={KEYED} pane />).container.querySelector(`[data-meter="${key}"]`)!
+  const DIAL = '.ph-txneedle-scale, .ph-txneedle-zone, .ph-txneedle-tick, .ph-txneedle-peak, .ph-txneedle-needle'
+  const dialOf = (face: Element) => {
     const g = face.querySelector('g.txmeters-pane-dial')!
-    expect(g).not.toBeNull()
     const m = /^translate\(([-\d.]+) ([-\d.]+)\) scale\(([\d.]+)\)$/.exec(g.getAttribute('transform') ?? '')!
-    const [tx, ty, k] = [Number(m[1]), Number(m[2]), Number(m[3])]
+    return { g, tx: Number(m[1]), ty: Number(m[2]), k: Number(m[3]) }
+  }
+
+  it.each(['po', 'alc', 'swr'])('%s: the whole dial is drawn at half, standing just above the band', (key) => {
+    const face = render(<TxMeters radio={KEYED} pane />).container.querySelector(`[data-meter="${key}"]`)!
+    const { g, tx, ty, k } = dialOf(face)
     expect(k).toBe(0.5)
-    // The middle of the band's top edge (50, 38) stays where it was: the dial stands on the band.
+    // The middle of the band's top edge (50, 38) goes to (50, 41): the dial is centred over the band and sits 3 units
+    // into it, so the needle's foot runs in under the band and the numbers have their room above.
     expect(tx + 50 * k).toBeCloseTo(50, 6)
-    expect(ty + 38 * k).toBeCloseTo(38, 6)
+    expect(ty + 38 * k).toBeCloseTo(41, 6)
     const parts = [...face.querySelectorAll(DIAL)]
     expect(parts.length).toBeGreaterThan(10)
     for (const p of parts) expect(g.contains(p)).toBe(true)
+  })
+
+  it.each(['po', 'alc', 'swr'])('%s: the scale’s numbers are NOT halved: outside the dial’s scale, at 1.24.0’s size, where the dial puts them', (key) => {
+    const face = render(<TxMeters radio={KEYED} pane />).container.querySelector(`[data-meter="${key}"]`)!
+    const { g, tx, ty, k } = dialOf(face)
+    const nums = [...face.querySelectorAll('.txmeters-pane-scale')]
+    expect(nums).toHaveLength(5)
+    for (const n of nums) {
+      expect(g.contains(n)).toBe(false)
+      expect(win(n, 'font-size')).toBe('4.6px')
+      // On the scaled dial's own frame: the point (x, y) of the dial's units lands at (tx + kx, ty + ky), so mapped
+      // back each number stands on the dial's centre line, its baseline outside the needle's tip (R + 2 = 62).
+      const x = (Number(n.getAttribute('x')) - tx) / k
+      const y = (Number(n.getAttribute('y')) - ty) / k
+      expect(Math.hypot(x - 50, y - 63)).toBeGreaterThan(62 + 4)
+    }
   })
 
   it('the band, the name and the value are outside it, no smaller than 1.24.0’s 6.5 and 9', () => {
@@ -158,6 +178,44 @@ describe('the dial is half 1.24.0’s, the readout is not', () => {
     // 1.24.0's was 0 −9 100 59: the dial from −9 down to the band at 38, then the band to 50. Half the dial
     // stands on the band from 14.5, so the drawing is 35.5 high.
     expect(svg.getAttribute('viewBox')).toBe('0 14.5 100 35.5')
+  })
+})
+
+describe('FT’s Band Activity beside it keeps its floor (review 2026-11-12, F1)', () => {
+  // Band Activity (weight 1.6) shares a divider with the meters pane in FT's arranged rail, and the pair's split is
+  // the mean of the two weights (OperateCockpit `fillPairs`): 1.3 beside 1.24.0's weight 1, 1.115 beside 0.63. So its
+  // inline style is NOT byte for byte 1.24.0's: `var(--pane-share, 1.3) / 1.3` became `var(--pane-share, 1.115) /
+  // 1.115`. What the style computes is: its floor is the stock floor times the operator's share, the same number.
+  const floorFactor = (st: ReturnType<typeof paneRoleStyle>) => {
+    const m = /var\(--pane-share, ([\d.]+)\) \/ ([\d.]+)\)/.exec(String(st.minHeight))!
+    const share = (st as Record<string, unknown>)['--pane-share']
+    return (share != null ? Number(share) : Number(m[1])) / Number(m[2])
+  }
+  const grow = (st: ReturnType<typeof paneRoleStyle>) => {
+    const share = (st as Record<string, unknown>)['--pane-share']
+    return share != null ? Number(share) : Number(/var\(--pane-share, ([\d.]+)\) 1 0/.exec(String(st.flex))![1])
+  }
+  const old = (1.6 + 1) / 2
+  const now = (1.6 + TX_METERS_PANE_WEIGHT.operate) / 2
+  it.each([
+    ['no share stored', undefined],
+    ['a 1.24.0 drag stored, Band Activity smaller', 0.7],
+    ['a 1.24.0 drag stored, Band Activity larger', 1.4],
+  ] as const)('%s: the same floor as 1.24.0', (_what, share) => {
+    const before = paneRoleStyle({ weight: 1.6, split: old, share: share != null ? share * old : undefined })
+    const after = paneRoleStyle({ weight: 1.6, split: now, share: share != null ? share * now : undefined })
+    expect(after.minHeight).not.toBe(before.minHeight) // the string moved…
+    expect(floorFactor(after)).toBeCloseTo(floorFactor(before), 9) // …the floor did not
+  })
+
+  it('a stored drag keeps its proportion: both panes of the pair scale by the same split', () => {
+    const pair = (split: number, a: number, b: number) => [
+      grow(paneRoleStyle({ weight: 1.6, split, share: a * split })),
+      grow(paneRoleStyle({ weight: TX_METERS_PANE_WEIGHT.operate, split, share: b * split, lowFloor: '--txmeters-pane-floor' })),
+    ]
+    const [b1, m1] = pair(old, 1.3, 0.7)
+    const [b2, m2] = pair(now, 1.3, 0.7)
+    expect(b2 / m2).toBeCloseTo(b1 / m1, 9)
   })
 })
 
