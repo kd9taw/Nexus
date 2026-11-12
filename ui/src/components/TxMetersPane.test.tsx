@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { chainOf, parseRules, winnerAt, type Mode } from '../cssCascade'
 import { CockpitTxStrip } from './CockpitTxStrip'
-import { TxMeters, TxMetersCell, alcBar, poBar, swrBar } from './TxMeters'
+import { TxMeters, TxMetersCell, TxMetersPane, TX_METERS_PANE_WEIGHT, alcBar, poBar, swrBar } from './TxMeters'
 import { LARGE_FACE_FLOOR_EM, largeFaceColumns, needleScale } from './TxNeedles'
 import {
   CW_PANELS,
@@ -137,7 +137,7 @@ describe('the dial is half 1.24.0’s, the readout is not', () => {
     for (const p of parts) expect(g.contains(p)).toBe(true)
   })
 
-  it('the band, the name and the value are outside it, at 1.24.0’s size', () => {
+  it('the band, the name and the value are outside it, no smaller than 1.24.0’s 6.5 and 9', () => {
     const face = render(<TxMeters radio={KEYED} pane />).container.querySelector('[data-meter="po"]')!
     const g = face.querySelector('g.txmeters-pane-dial')!
     for (const sel of ['.txmeters-pane-band', '.txmeters-pane-label', '.txmeters-pane-value']) {
@@ -145,8 +145,42 @@ describe('the dial is half 1.24.0’s, the readout is not', () => {
       expect(el).not.toBeNull()
       expect(g.contains(el)).toBe(false)
     }
-    expect(win(face.querySelector('.txmeters-pane-label')!, 'font-size')).toBe('6.5px')
-    expect(win(face.querySelector('.txmeters-pane-value')!, 'font-size')).toBe('9px')
+    const px = (sel: string) => parseFloat(win(face.querySelector(sel)!, 'font-size') ?? '')
+    expect(px('.txmeters-pane-label')).toBeGreaterThanOrEqual(6.5)
+    expect(px('.txmeters-pane-value')).toBeGreaterThanOrEqual(9)
+    // …and only a hair over: the drawing stands at about 1.24.0's scale, so these are about 1.24.0's pixels.
+    expect(px('.txmeters-pane-label')).toBeLessThanOrEqual(6.5 * 1.05)
+    expect(px('.txmeters-pane-value')).toBeLessThanOrEqual(9 * 1.05)
+  })
+
+  it('the drawing ends at the top of the half-size dial: nothing above it', () => {
+    const svg = render(<TxMeters radio={KEYED} pane />).container.querySelector('[data-meter="po"] svg')!
+    // 1.24.0's was 0 −9 100 59: the dial from −9 down to the band at 38, then the band to 50. Half the dial
+    // stands on the band from 14.5, so the drawing is 35.5 high.
+    expect(svg.getAttribute('viewBox')).toBe('0 14.5 100 35.5')
+  })
+})
+
+describe('the pane gives the room back (operator, 1.24.0: shrink the pane too)', () => {
+  it('its frame names the low floor, which only it reads, and the sheet sets it lower than a feed’s 10em', () => {
+    const c = render(<TxMetersPane radio={KEYED} weight={TX_METERS_PANE_WEIGHT.operate} />).container
+    const frame = c.querySelector<HTMLElement>('[data-pane="txMetersPane"]')!
+    expect(frame.style.minHeight).toBe('min(var(--cockpit-fill-min, 0px), var(--txmeters-pane-floor, var(--cockpit-fill-min, 0px)))')
+    const app = render(<div className="app" />).container.querySelector('.app')!
+    const floor = win(app, '--txmeters-pane-floor')
+    expect(floor).toMatch(/^min\(([\d.]+)em, 100%\)$/)
+    expect(Number(/([\d.]+)em/.exec(floor!)![1])).toBeLessThan(10)
+    // No other rule in either sheet names it: no other pane's floor can move with it.
+    expect(RULES.filter((r) => r.decls.some((d) => `${d.prop}:${d.value}`.includes('--txmeters-pane-floor'))).map((r) => r.selector)).toEqual(['.app'])
+  })
+
+  it('takes less than a feed’s share of its column in every cockpit, and its own weight as its grow', () => {
+    for (const [cockpit, w] of Object.entries(TX_METERS_PANE_WEIGHT)) {
+      expect(w, cockpit).toBeGreaterThan(0.4)
+      expect(w, cockpit).toBeLessThan(1)
+    }
+    const c = render(<TxMetersPane radio={KEYED} weight={TX_METERS_PANE_WEIGHT.sstv} />).container
+    expect(c.querySelector('[data-pane="txMetersPane"]')!.getAttribute('style')).toContain(`flex: var(--cockpit-pane-flex, ${TX_METERS_PANE_WEIGHT.sstv} 1 0)`)
   })
 })
 
@@ -211,30 +245,31 @@ describe('its size, computed', () => {
 })
 
 describe('the columns, with the floor a row of faces cannot go under', () => {
-  const FLOOR = 98
+  // 4.3em at 14 px; the face is 100 wide by 35.5 high (the half-size dial on its band).
+  const FLOOR = 60
   it.each([
-    ['two rows would not fit: all three side by side, in view', 252, 140, 3],
-    ['three rows would not fit: two rows, in view', 262, 290, 2],
-    ['two rows exactly fit', 262, 200, 2],
-    ['three rows exactly fit', 262, 302, 1],
-    ['a pane too short for one row keeps one row', 600, 60, 3],
+    ['two rows would not fit: all three side by side, in view', 252, 84, 3],
+    ['three rows would not fit: two rows, in view', 262, 175, 2],
+    ['two rows exactly fit', 262, 124, 2],
+    ['three rows exactly fit', 262, 188, 1],
+    ['a pane too short for one row keeps one row', 600, 36, 3],
   ] as const)('%s', (_what, w, h, cols) => {
     expect(largeFaceColumns(w, h, 4, FLOOR)).toBe(cols)
   })
 
   it('the control: with no floor the first two would choose more rows', () => {
-    expect(largeFaceColumns(252, 140)).toBe(2)
-    expect(largeFaceColumns(262, 290)).toBe(1)
+    expect(largeFaceColumns(252, 84)).toBe(2)
+    expect(largeFaceColumns(262, 175)).toBe(1)
   })
 })
 
 describe('the columns that draw the faces biggest', () => {
   it.each([
-    ['a short wide pane keeps all three in view', 600, 110, 3],
-    ['a wide pane', 1200, 300, 3],
-    ['a tall narrow pane stacks them', 300, 700, 1],
-    ['a pane near square takes two and one', 450, 300, 2],
-    ['a phone’s width with the floor’s height', 340, 98, 3],
+    ['a short wide pane keeps all three in view', 600, 66, 3],
+    ['a wide pane', 1200, 180, 3],
+    ['a tall narrow pane stacks them', 300, 421, 1],
+    ['a pane near square takes two and one', 450, 180, 2],
+    ['a phone’s width with the floor’s height', 340, 59, 3],
     ['not measured', 0, 0, 3],
     ['hidden by a keep-alive host', 0, 400, 3],
   ] as const)('%s', (_what, w, h, cols) => {

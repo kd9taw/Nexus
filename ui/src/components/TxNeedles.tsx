@@ -16,10 +16,12 @@
 // THE LARGE FACE (`large`, the TX meters pane, TxMeters `TxMetersPane`): the same reading and the same
 // dial, but the whole face is one drawing, its scale's numbers, finer ticks, name and value in the
 // viewBox, so all of it grows with the pane and nothing can ever be ellipsized. THE DIAL IS HALF the face's
-// dial of 1.24.0 (operator, 1.24.0: "the dials ... are way too large, reduce them by 50%"), half as wide and
-// half as high in the same pane: it is drawn at LARGE_DIAL, standing on the band, while the band, the name
-// and the value keep 1.24.0's size and the face keeps its shape, so the pane takes the room it took and
-// picks the columns it picked. A face grows with its pane as before, the dial at half the rate.
+// dial of 1.24.0 (operator, 1.24.0: "the dials ... are way too large, reduce them by 50%", and the pane gives
+// the room back): it is drawn at LARGE_DIAL, standing on the band, the band, the name and the value keep
+// their size in the drawing, and the drawing ends at the top of the half-size dial. So the face is 35.5
+// units high where 1.24.0's was 59, and the pane's stock height is that much less (its weight in each
+// cockpit, and its low floor `--txmeters-pane-floor` in cockpit-panes.css): on the same screen the drawing
+// stands at 1.24.0's scale, the dial half 1.24.0's and the name and value as large as 1.24.0's.
 //
 // A READOUT: nothing here keys, gates or sets anything. Drawn in SVG on a display well (dark in
 // both themes, styles.css DISPLAY WELLS), so it scales with `--ui-zoom` and the text size like the
@@ -118,19 +120,22 @@ function radial(r0: number, r1: number, frac: number): string {
 const TICKS = [0, 0.25, 0.5, 0.75, 1]
 /** The large face's finer ticks, between the numbered ones. */
 const FINE_TICKS = Array.from({ length: 21 }, (_, i) => i / 20).filter((f) => !TICKS.includes(f))
-// The large face's drawing, in the same units as the dial: room above the arc for the scale's numbers,
-// and the band with the name and value under it, where the needle runs in beneath the band. The dial is
-// drawn at LARGE_DIAL about the middle of the band's top edge, so it stands on the band as the full-size
-// dial did, and its needle still runs in beneath it.
-const LARGE_TOP = -9
+// The large face's drawing, in the same units as the dial: the band with the name and value at the
+// foot, and the dial standing on it, drawn at LARGE_DIAL about the middle of the band's top edge so its
+// needle still runs in beneath the band. The drawing starts at the top of that dial: 1.24.0's full-size
+// dial began at y −9, room above the arc for the scale's numbers, so the half-size one begins halfway
+// from there to the band, and nothing is left above it.
 const LARGE_BAND_TOP = 38
 const LARGE_BOTTOM = 50
-const LARGE_ASPECT = W / (LARGE_BOTTOM - LARGE_TOP)
 /** The dial's size in the face, against 1.24.0's dial: half as wide and half as high. */
 export const LARGE_DIAL = 0.5
+const LARGE_TOP = LARGE_BAND_TOP - (LARGE_BAND_TOP + 9) * LARGE_DIAL
+const LARGE_ASPECT = W / (LARGE_BOTTOM - LARGE_TOP)
 /** A row of large faces never goes under this: `.txmeters-pane`'s track floor (cockpit-panes.css), which
- *  TxMetersPane.test.tsx holds to it. */
-export const LARGE_FACE_FLOOR_EM = 7
+ *  TxMetersPane.test.tsx holds to it. About 1.24.0's 7em times the face's height against 1.24.0's
+ *  (35.5 / 59, 4.21em), so where a stacking cockpit gives the pane its floor the drawing stands at 1.24.0's
+ *  scale, a hair over. */
+export const LARGE_FACE_FLOOR_EM = 4.3
 
 /** How many columns draw the three large faces biggest in this much room: the one choice CSS cannot make,
  *  since wrapping looks at the width alone, and put SWR under a scroll in a short wide pane. `gap` is

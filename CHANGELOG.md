@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **Smaller dials in the large TX meters pane.** The PO, ALC and SWR needle dials in ⊞ Panels ▸ "TX Meters, large" are now half as wide and half as high as in 1.24.0, on FT, Phone, CW and SSTV. The meter's name and its reading under each dial are the same size as before, the pane takes the same room, and the needle and its peak mark work as before.
+- **Smaller dials in the large TX meters pane, and a shorter pane.** The PO, ALC and SWR needle dials in ⊞ Panels ▸ "TX Meters, large" are now half as wide and half as high as in 1.24.0, on FT, Phone, CW and SSTV. The meter's name and its reading under each dial are the same size as before (a pixel or so larger on some screens). The pane starts about a third shorter, and on FT the Band Activity and Rx Frequency panes, and on SSTV the gallery, get that room. On Phone and CW the room is left free under the pane, because the panes beside it there don't grow. You can still drag the pane larger, and the needle and its peak mark work as before.
 
 ## [1.24.0] — 2026-11-11
 

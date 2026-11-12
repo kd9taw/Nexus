@@ -1,8 +1,9 @@
 // The large TX meters pane on the real screens, in real Chrome: `scripts/browser-probe --desktop txmeterspane`.
 //
 // The operator's ruling on 1.24.0 (2026-11-12, "the dials on the new tx meters are way too large, reduce them by
-// 50%"): each needle dial (PO, ALC, SWR) is half as wide and half as high as 1.24.0 drew it on the same screen,
-// with the readout (the meter's name and its value) no smaller than it was. The probe serves the REAL app
+// 50%", and then: shrink the pane too, so the panes beside it get the room): each needle dial (PO, ALC, SWR) is half
+// as wide and half as high as 1.24.0 drew it on the same screen, with the readout (the meter's name and its value) no
+// smaller than it was, in a shorter pane. The probe serves the REAL app
 // (index.html, main.tsx, App) with the app's own Vite config and src/api.ts swapped for probe/waterfalls-api.ts,
 // keys the radio with readings (100 W, ALC 30 %, SWR 1.2:1), opens FT8, Phone, CW and SSTV with the large meters
 // pane ticked and otherwise fresh storage, at 1024×768, 1920×1080 and 2560×1440, each at 65 %, 100 % and 175 %,
@@ -11,8 +12,9 @@
 //      same page (BEFORE), in width and in height.
 //   2. THE READOUT IS NO SMALLER: the name's and the value's glyph boxes are at least 1.24.0's high, each whole inside
 //      its face and clear of the other and of the dial, and in view once the pane is scrolled to wherever 1.24.0's were.
-//   3. NOTHING ELSE LOSES: no other pane on the screen is shorter than in 1.24.0, the TX strip is its 1.24.0 height,
-//      and Stop TX is on screen, the topmost thing where it stands, where it stood in 1.24.0.
+//   3. THE PANE GIVES THE ROOM BACK AND NOTHING ELSE LOSES: the pane is shorter than in 1.24.0, no other pane on the
+//      screen is shorter (each one's gain is printed), the TX strip is its 1.24.0 height, and Stop TX is on screen,
+//      the topmost thing where it stands, where it stood in 1.24.0. It prints the room left above each dial.
 // THE CONTROL, run every time: FT8 at 1920×1080 100 % with 1.24.0's dial drawn back by a planted style (the dial's own
 // scale taken away) must fail check 1. If it passes, the check cannot fail and the probe says so.
 //
@@ -102,6 +104,8 @@ const MEASURE = `(async () => {
         key: f.dataset.meter,
         text: f.querySelector('.txmeters-pane-value').textContent,
         face: round(box), arc: round(arc), label: round(label), value: round(value),
+        // The room above the dial in its face (its numbers at the top): what the drawing does not fill.
+        above: Math.round(((f.querySelector('.txmeters-pane-dial') ?? f.querySelector('svg')).getBoundingClientRect().top) - box.t),
         whole: inside(label, box) && inside(value, box),
         seen: inside(label, view) && inside(value, view),
         clear: apart(label, value) && apart(label, arc) && apart(value, arc),
@@ -221,6 +225,8 @@ async function measure(hash, view, [W, H], zoom, css = null) {
       const { seenAt: p } = await evaluate(MEASURE)
       const shot = await call('Page.captureScreenshot', { format: 'png', clip: { x: p.l, y: p.t, width: p.w, height: p.h, scale: 1 } })
       await writeFile(join(SHOT, `${hash}-${W}x${H}-${zoom}.png`), Buffer.from(shot.data, 'base64'))
+      const page = await call('Page.captureScreenshot', { format: 'png' })
+      await writeFile(join(SHOT, `${hash}-${W}x${H}-${zoom}-window.png`), Buffer.from(page.data, 'base64'))
     }
     return m
   } finally {
@@ -229,47 +235,47 @@ async function measure(hash, view, [W, H], zoom, css = null) {
 }
 
 // 1.24.0's measures, taken with PROBE_TXMETERSPANE_PRINT=1 on 8f510d4ba (1.24.0's tree with this probe): per page,
-// a face's scale arc [w, h] on screen (PO, ALC and SWR are drawn alike), the value's and the name's glyph heights,
+// the pane's height, a face's scale arc [w, h] on screen (PO, ALC and SWR are drawn alike), the value's and the name's glyph heights,
 // whether every readout was in view once the pane was scrolled to, the other panes' heights, Stop TX's place and
 // the TX strip's height. Phone and CW at 1024×768 175 % (xs) had the readouts below the window with nothing left
 // to scroll in 1.24.0; check 2 holds those two to that, and the report names them.
 const BEFORE = {
-  "FT8 1024×768 65%": { arc: [80.7, 14.7], value: 11, label: 8, seen: true, panes: { callRoster: 346, bandActivity: 148, rxfreq: 96 }, stop: [189, 341], strip: 74 },
-  "FT8 1024×768 100%": { arc: [125.5, 22.8], value: 17, label: 12, seen: true, panes: { callRoster: 364, bandActivity: 140, rxfreq: 140 }, stop: [197, 394], strip: 109 },
-  "FT8 1024×768 175%": { arc: [221.6, 40.3], value: 30, label: 21, seen: true, panes: { callRoster: 637, bandActivity: 245, rxfreq: 245 }, stop: [336, 598], strip: 300 },
-  "FT8 1920×1080 65%": { arc: [190.8, 34.7], value: 26, label: 19, seen: true, panes: { callRoster: 678, bandActivity: 297, rxfreq: 189 }, stop: [189, 364], strip: 30 },
-  "FT8 1920×1080 100%": { arc: [127.3, 23.2], value: 17, label: 13, seen: true, panes: { callRoster: 573, bandActivity: 248, rxfreq: 160 }, stop: [288, 415], strip: 79 },
-  "FT8 1920×1080 175%": { arc: [221.6, 40.3], value: 30, label: 21, seen: true, panes: { callRoster: 637, bandActivity: 245, rxfreq: 245 }, stop: [342, 556], strip: 182 },
-  "FT8 2560×1440 65%": { arc: [259.6, 47.2], value: 35, label: 25, seen: true, panes: { callRoster: 1016, bandActivity: 447, rxfreq: 283 }, stop: [189, 386], strip: 30 },
-  "FT8 2560×1440 100%": { arc: [225.7, 41.1], value: 30, label: 22, seen: true, panes: { callRoster: 844, bandActivity: 369, rxfreq: 236 }, stop: [288, 539], strip: 44 },
-  "FT8 2560×1440 175%": { arc: [221.6, 40.3], value: 30, label: 21, seen: true, panes: { callRoster: 534, bandActivity: 245, rxfreq: 245 }, stop: [501, 700], strip: 182 },
-  "Phone 1024×768 65%": { arc: [80.7, 14.7], value: 11, label: 8, seen: true, panes: { bandActivity: 114, voiceKeyer: 51, receiver: 85, transmitter: 47, log: 384 }, stop: [191, 295], strip: 30 },
-  "Phone 1024×768 100%": { arc: [125.5, 22.8], value: 17, label: 12, seen: true, panes: { bandActivity: 151, voiceKeyer: 72, receiver: 126, transmitter: 66, log: 336 }, stop: [200, 435], strip: 40 },
-  "Phone 1024×768 175%": { arc: [221.6, 40.3], value: 30, label: 21, seen: false, panes: { bandActivity: 279, voiceKeyer: 117, receiver: 212, transmitter: 108, log: 633 }, stop: [339, 454], strip: 67 },
-  "Phone 1920×1080 65%": { arc: [204.2, 37.2], value: 28, label: 20, seen: true, panes: { bandActivity: 104, voiceKeyer: 51, receiver: 85, transmitter: 47, log: 451, stats: 169 }, stop: [191, 364], strip: 30 },
-  "Phone 1920×1080 100%": { arc: [162.1, 29.5], value: 22, label: 16, seen: true, panes: { bandActivity: 169, voiceKeyer: 74, receiver: 169, transmitter: 68, log: 577 }, stop: [292, 380], strip: 40 },
-  "Phone 1920×1080 175%": { arc: [221.6, 40.3], value: 30, label: 21, seen: true, panes: { bandActivity: 258, voiceKeyer: 121, receiver: 217, transmitter: 112, log: 582 }, stop: [348, 694], strip: 67 },
-  "Phone 2560×1440 65%": { arc: [307.5, 56], value: 41, label: 30, seen: true, panes: { bandActivity: 104, voiceKeyer: 51, receiver: 85, transmitter: 47, log: 721, stats: 169 }, stop: [191, 454], strip: 30 },
-  "Phone 2560×1440 100%": { arc: [257, 46.8], value: 35, label: 25, seen: true, panes: { bandActivity: 153, voiceKeyer: 74, receiver: 128, transmitter: 68, log: 547, stats: 246 }, stop: [292, 502], strip: 44 },
-  "Phone 2560×1440 175%": { arc: [221.6, 40.3], value: 30, label: 21, seen: true, panes: { bandActivity: 289, voiceKeyer: 124, receiver: 221, transmitter: 116, log: 620 }, stop: [508, 606], strip: 67 },
-  "CW 1024×768 65%": { arc: [80.7, 14.7], value: 11, label: 8, seen: true, panes: { decode: 91, bandActivity: 114, copilot: 41, log: 358 }, stop: [191, 299], strip: 30 },
-  "CW 1024×768 100%": { arc: [125.5, 22.8], value: 17, label: 12, seen: true, panes: { decode: 136, bandActivity: 151, copilot: 59, log: 321 }, stop: [200, 404], strip: 40 },
-  "CW 1024×768 175%": { arc: [221.6, 40.3], value: 30, label: 21, seen: false, panes: { decode: 232, bandActivity: 279, copilot: 96, log: 609 }, stop: [339, 405], strip: 67 },
-  "CW 1920×1080 65%": { arc: [204.2, 37.2], value: 28, label: 20, seen: true, panes: { decode: 604, bandActivity: 114, copilot: 41, log: 428, stats: 169 }, stop: [191, 364], strip: 30 },
-  "CW 1920×1080 100%": { arc: [144.1, 26.2], value: 20, label: 14, seen: true, panes: { decode: 546, bandActivity: 184, copilot: 60, log: 546 }, stop: [292, 380], strip: 40 },
-  "CW 1920×1080 175%": { arc: [221.6, 40.3], value: 30, label: 21, seen: true, panes: { decode: 235, bandActivity: 258, copilot: 99, log: 556 }, stop: [348, 688], strip: 67 },
-  "CW 2560×1440 65%": { arc: [299.2, 54.4], value: 40, label: 29, seen: true, panes: { decode: 874, bandActivity: 104, copilot: 41, log: 698, stats: 169 }, stop: [191, 454], strip: 30 },
-  "CW 2560×1440 100%": { arc: [257, 46.8], value: 35, label: 25, seen: true, panes: { decode: 770, bandActivity: 168, copilot: 60, log: 512, stats: 246 }, stop: [292, 502], strip: 44 },
-  "CW 2560×1440 175%": { arc: [221.6, 40.3], value: 30, label: 21, seen: true, panes: { decode: 245, bandActivity: 289, copilot: 102, log: 554 }, stop: [508, 616], strip: 67 },
-  "SSTV 1024×768 65%": { arc: [80.7, 14.7], value: 11, label: 8, seen: true, panes: { gallery: 91, txcompose: 92 }, stop: [191, 417], strip: 30 },
-  "SSTV 1024×768 100%": { arc: [125.5, 22.8], value: 17, label: 12, seen: true, panes: { gallery: 140, txcompose: 136 }, stop: [200, 515], strip: 40 },
-  "SSTV 1024×768 175%": { arc: [221.6, 40.3], value: 30, label: 21, seen: true, panes: { gallery: 245, txcompose: 226 }, stop: [339, 608], strip: 67 },
-  "SSTV 1920×1080 65%": { arc: [158.1, 28.8], value: 21, label: 15, seen: true, panes: { gallery: 156, txcompose: 92 }, stop: [191, 577], strip: 30 },
-  "SSTV 1920×1080 100%": { arc: [125.5, 22.8], value: 17, label: 12, seen: true, panes: { gallery: 140, txcompose: 138 }, stop: [292, 563], strip: 40 },
-  "SSTV 1920×1080 175%": { arc: [221.6, 40.3], value: 30, label: 21, seen: true, panes: { gallery: 245, txcompose: 231 }, stop: [348, 883], strip: 67 },
-  "SSTV 2560×1440 65%": { arc: [270.2, 49.2], value: 36, label: 26, seen: true, panes: { gallery: 242, txcompose: 92 }, stop: [191, 765], strip: 30 },
-  "SSTV 2560×1440 100%": { arc: [183.8, 33.5], value: 25, label: 18, seen: true, panes: { gallery: 192, txcompose: 138 }, stop: [292, 771], strip: 44 },
-  "SSTV 2560×1440 175%": { arc: [221.6, 40.3], value: 30, label: 21, seen: true, panes: { gallery: 245, txcompose: 235 }, stop: [508, 781], strip: 67 },
+  "FT8 1024×768 65%": { pane: 91, arc: [80.7, 14.7], value: 11, label: 8, seen: true, panes: { callRoster: 346, bandActivity: 148, rxfreq: 96 }, stop: [189, 341], strip: 74 },
+  "FT8 1024×768 100%": { pane: 140, arc: [125.5, 22.8], value: 17, label: 12, seen: true, panes: { callRoster: 364, bandActivity: 140, rxfreq: 140 }, stop: [197, 394], strip: 109 },
+  "FT8 1024×768 175%": { pane: 245, arc: [221.6, 40.3], value: 30, label: 21, seen: true, panes: { callRoster: 637, bandActivity: 245, rxfreq: 245 }, stop: [336, 598], strip: 300 },
+  "FT8 1920×1080 65%": { pane: 181.4, arc: [190.8, 34.7], value: 26, label: 19, seen: true, panes: { callRoster: 678, bandActivity: 297, rxfreq: 189 }, stop: [189, 364], strip: 30 },
+  "FT8 1920×1080 100%": { pane: 148.3, arc: [127.3, 23.2], value: 17, label: 13, seen: true, panes: { callRoster: 573, bandActivity: 248, rxfreq: 160 }, stop: [288, 415], strip: 79 },
+  "FT8 1920×1080 175%": { pane: 245, arc: [221.6, 40.3], value: 30, label: 21, seen: true, panes: { callRoster: 637, bandActivity: 245, rxfreq: 245 }, stop: [342, 556], strip: 182 },
+  "FT8 2560×1440 65%": { pane: 275.4, arc: [259.6, 47.2], value: 35, label: 25, seen: true, panes: { callRoster: 1016, bandActivity: 447, rxfreq: 283 }, stop: [189, 386], strip: 30 },
+  "FT8 2560×1440 100%": { pane: 223.6, arc: [225.7, 41.1], value: 30, label: 22, seen: true, panes: { callRoster: 844, bandActivity: 369, rxfreq: 236 }, stop: [288, 539], strip: 44 },
+  "FT8 2560×1440 175%": { pane: 245, arc: [221.6, 40.3], value: 30, label: 21, seen: true, panes: { callRoster: 534, bandActivity: 245, rxfreq: 245 }, stop: [501, 700], strip: 182 },
+  "Phone 1024×768 65%": { pane: 91, arc: [80.7, 14.7], value: 11, label: 8, seen: true, panes: { bandActivity: 114, voiceKeyer: 51, receiver: 85, transmitter: 47, log: 384 }, stop: [191, 295], strip: 30 },
+  "Phone 1024×768 100%": { pane: 145.5, arc: [125.5, 22.8], value: 17, label: 12, seen: true, panes: { bandActivity: 151, voiceKeyer: 72, receiver: 126, transmitter: 66, log: 336 }, stop: [200, 435], strip: 40 },
+  "Phone 1024×768 175%": { pane: 247.1, arc: [221.6, 40.3], value: 30, label: 21, seen: false, panes: { bandActivity: 279, voiceKeyer: 117, receiver: 212, transmitter: 108, log: 633 }, stop: [339, 454], strip: 67 },
+  "Phone 1920×1080 65%": { pane: 480.2, arc: [204.2, 37.2], value: 28, label: 20, seen: true, panes: { bandActivity: 104, voiceKeyer: 51, receiver: 85, transmitter: 47, log: 451, stats: 169 }, stop: [191, 364], strip: 30 },
+  "Phone 1920×1080 100%": { pane: 315.5, arc: [162.1, 29.5], value: 22, label: 16, seen: true, panes: { bandActivity: 169, voiceKeyer: 74, receiver: 169, transmitter: 68, log: 577 }, stop: [292, 380], strip: 40 },
+  "Phone 1920×1080 175%": { pane: 250.5, arc: [221.6, 40.3], value: 30, label: 21, seen: true, panes: { bandActivity: 258, voiceKeyer: 121, receiver: 217, transmitter: 112, log: 582 }, stop: [348, 694], strip: 67 },
+  "Phone 2560×1440 65%": { pane: 750.2, arc: [307.5, 56], value: 41, label: 30, seen: true, panes: { bandActivity: 104, voiceKeyer: 51, receiver: 85, transmitter: 47, log: 721, stats: 169 }, stop: [191, 454], strip: 30 },
+  "Phone 2560×1440 100%": { pane: 584.5, arc: [257, 46.8], value: 35, label: 25, seen: true, panes: { bandActivity: 153, voiceKeyer: 74, receiver: 128, transmitter: 68, log: 547, stats: 246 }, stop: [292, 502], strip: 44 },
+  "Phone 2560×1440 175%": { pane: 245, arc: [221.6, 40.3], value: 30, label: 21, seen: true, panes: { bandActivity: 289, voiceKeyer: 124, receiver: 221, transmitter: 116, log: 620 }, stop: [508, 606], strip: 67 },
+  "CW 1024×768 65%": { pane: 91, arc: [80.7, 14.7], value: 11, label: 8, seen: true, panes: { decode: 91, bandActivity: 114, copilot: 41, log: 358 }, stop: [191, 299], strip: 30 },
+  "CW 1024×768 100%": { pane: 145.5, arc: [125.5, 22.8], value: 17, label: 12, seen: true, panes: { decode: 136, bandActivity: 151, copilot: 59, log: 321 }, stop: [200, 404], strip: 40 },
+  "CW 1024×768 175%": { pane: 247.1, arc: [221.6, 40.3], value: 30, label: 21, seen: false, panes: { decode: 232, bandActivity: 279, copilot: 96, log: 609 }, stop: [339, 405], strip: 67 },
+  "CW 1920×1080 65%": { pane: 432.9, arc: [204.2, 37.2], value: 28, label: 20, seen: true, panes: { decode: 604, bandActivity: 114, copilot: 41, log: 428, stats: 169 }, stop: [191, 364], strip: 30 },
+  "CW 1920×1080 100%": { pane: 277.5, arc: [144.1, 26.2], value: 20, label: 14, seen: true, panes: { decode: 546, bandActivity: 184, copilot: 60, log: 546 }, stop: [292, 380], strip: 40 },
+  "CW 1920×1080 175%": { pane: 250.5, arc: [221.6, 40.3], value: 30, label: 21, seen: true, panes: { decode: 235, bandActivity: 258, copilot: 99, log: 556 }, stop: [348, 688], strip: 67 },
+  "CW 2560×1440 65%": { pane: 713.5, arc: [299.2, 54.4], value: 40, label: 29, seen: true, panes: { decode: 874, bandActivity: 104, copilot: 41, log: 698, stats: 169 }, stop: [191, 454], strip: 30 },
+  "CW 2560×1440 100%": { pane: 517.5, arc: [257, 46.8], value: 35, label: 25, seen: true, panes: { decode: 770, bandActivity: 168, copilot: 60, log: 512, stats: 246 }, stop: [292, 502], strip: 44 },
+  "CW 2560×1440 175%": { pane: 245, arc: [221.6, 40.3], value: 30, label: 21, seen: true, panes: { decode: 245, bandActivity: 289, copilot: 102, log: 554 }, stop: [508, 616], strip: 67 },
+  "SSTV 1024×768 65%": { pane: 91, arc: [80.7, 14.7], value: 11, label: 8, seen: true, panes: { gallery: 91, txcompose: 92 }, stop: [191, 417], strip: 30 },
+  "SSTV 1024×768 100%": { pane: 140, arc: [125.5, 22.8], value: 17, label: 12, seen: true, panes: { gallery: 140, txcompose: 136 }, stop: [200, 515], strip: 40 },
+  "SSTV 1024×768 175%": { pane: 245, arc: [221.6, 40.3], value: 30, label: 21, seen: true, panes: { gallery: 245, txcompose: 226 }, stop: [339, 608], strip: 67 },
+  "SSTV 1920×1080 65%": { pane: 156.4, arc: [158.1, 28.8], value: 21, label: 15, seen: true, panes: { gallery: 156, txcompose: 92 }, stop: [191, 577], strip: 30 },
+  "SSTV 1920×1080 100%": { pane: 140, arc: [125.5, 22.8], value: 17, label: 12, seen: true, panes: { gallery: 140, txcompose: 138 }, stop: [292, 563], strip: 40 },
+  "SSTV 1920×1080 175%": { pane: 245, arc: [221.6, 40.3], value: 30, label: 21, seen: true, panes: { gallery: 245, txcompose: 231 }, stop: [348, 883], strip: 67 },
+  "SSTV 2560×1440 65%": { pane: 242.1, arc: [270.2, 49.2], value: 36, label: 26, seen: true, panes: { gallery: 242, txcompose: 92 }, stop: [191, 765], strip: 30 },
+  "SSTV 2560×1440 100%": { pane: 191.6, arc: [183.8, 33.5], value: 25, label: 18, seen: true, panes: { gallery: 192, txcompose: 138 }, stop: [292, 771], strip: 44 },
+  "SSTV 2560×1440 175%": { pane: 245, arc: [221.6, 40.3], value: 30, label: 21, seen: true, panes: { gallery: 245, txcompose: 235 }, stop: [508, 781], strip: 67 },
 }
 
 /** What is wrong with one page against 1.24.0's; empty when nothing is. */
@@ -286,6 +292,7 @@ function faults(tag, m, before) {
     if (before.seen && !face.seen) f.push(`${face.key}'s readout is outside what the pane shows`)
     if (!face.clear) f.push(`${face.key}'s name, value and dial overlap`)
   }
+  if (!(m.pane.h < before.pane - 1)) f.push(`the pane is ${m.pane.h} px high, not shorter than 1.24.0's ${before.pane}`)
   for (const [id, h] of m.panes) if (before.panes[id] != null && h < before.panes[id] - 1) f.push(`the ${id} pane is ${h} px high, under 1.24.0's ${before.panes[id]}`)
   if (!m.stop?.reach) f.push('Stop TX is not on screen or something covers it')
   else if (JSON.stringify(m.stop.at) !== JSON.stringify(before.stop)) f.push(`Stop TX moved from ${before.stop} to ${m.stop.at}`)
@@ -314,7 +321,8 @@ try {
     }
     const before = BEFORE[tag]
     const face = m.faces[0]
-    console.log(`txmeterspane-probe: ${tag} (${m.vp}): pane ${m.pane.w}×${m.pane.h}, dial ${face.arc.w}×${face.arc.h} (1.24.0 ${before?.arc.join('×')}), value ${face.value.h} px (1.24.0 ${before?.value}), name ${face.label.h} px (1.24.0 ${before?.label}); panes ${m.panes.map(([id, h]) => `${id} ${h}`).join(', ')}; Stop TX at ${m.stop?.at}`)
+    const gains = before ? m.panes.filter(([id, h]) => before.panes[id] != null && h !== before.panes[id]).map(([id, h]) => `${id} ${h - before.panes[id] > 0 ? '+' : ''}${h - before.panes[id]}`) : []
+    console.log(`txmeterspane-probe: ${tag} (${m.vp}): pane ${before?.pane} → ${m.pane.h} px; dial ${face.arc.w}×${face.arc.h} (1.24.0 ${before?.arc.join('×')}), ${face.above} px above it; value ${face.value.h} px (1.24.0 ${before?.value}), name ${face.label.h} px (1.24.0 ${before?.label}); the others: ${gains.length ? gains.join(', ') : 'unchanged'}; Stop TX at ${m.stop?.at}`)
     if (!before) red(`${tag}: no 1.24.0 measure to hold it to`)
     else for (const r of faults(tag, m, before)) red(r)
   }
@@ -326,7 +334,7 @@ try {
     console.log(`txmeterspane-probe: CONTROL 1.24.0's dial drawn back: caught ${JSON.stringify(caught)}`)
     if (!caught.some((s) => s.includes('dial is'))) red("CONTROL FAILED: 1.24.0's dial drawn back was not seen; the check cannot fail")
   }
-  if (code === 0 && !PRINT) console.log('txmeterspane-probe: PASS — every dial half of 1.24.0\'s with its readout no smaller, whole and in view, no pane shorter and Stop TX where it stood, on FT8, Phone, CW and SSTV at every size and zoom; the control caught')
+  if (code === 0 && !PRINT) console.log('txmeterspane-probe: PASS — every dial half of 1.24.0\'s with its readout no smaller, whole and in view, in a shorter pane with no other pane shorter, and Stop TX where it stood, on FT8, Phone, CW and SSTV at every size and zoom; the control caught')
   process.exitCode = code
 } finally {
   await browser.stop()

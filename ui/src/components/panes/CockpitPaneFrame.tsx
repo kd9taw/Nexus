@@ -33,9 +33,27 @@ import { PaneCloseButton } from './PaneCloseButton'
  *  below say what each input is). Exported for the panes that draw their own head and so cannot sit in
  *  this frame, but must take a column's room exactly as a frame does: FT's arranged columns (2026-10-07).
  *  A placement input like the frame's own, never a size a pane declares. */
-export function paneRoleStyle({ fit, weight, share, split, floor }: { fit?: 'content'; weight?: number; share?: number; split?: number; floor?: string }): CSSProperties {
-  // A named floor knob raises this frame's stock floor to the larger of the two; unset, it is 0.
-  const stock = floor ? `max(var(--cockpit-fill-min, 0px), var(${floor}, 0px))` : 'var(--cockpit-fill-min, 0px)'
+export function paneRoleStyle({
+  fit,
+  weight,
+  share,
+  split,
+  floor,
+  lowFloor,
+}: {
+  fit?: 'content'
+  weight?: number
+  share?: number
+  split?: number
+  floor?: string
+  lowFloor?: string
+}): CSSProperties {
+  // A named floor knob raises this frame's stock floor to the larger of the two; unset, it is 0. A named LOW
+  // floor knob lowers it to the smaller of the two, and only for the pane that names it; unset, it is the stock.
+  const base = 'var(--cockpit-fill-min, 0px)'
+  const lowered = lowFloor ? `min(${base}, var(${lowFloor}, ${base}))` : base
+  const stock = floor ? `max(${lowered}, var(${floor}, 0px))` : lowered
+  const named = floor != null || lowFloor != null
   return fit === 'content'
     ? { flex: '0 0 auto' }
     : share != null || split != null
@@ -44,7 +62,7 @@ export function paneRoleStyle({ fit, weight, share, split, floor }: { fit?: 'con
           flex: `var(--cockpit-pane-flex, var(--pane-share, ${weight ?? 1}) 1 0)`,
           minHeight: `min(calc(${stock} * var(--pane-share, ${split ?? 1}) / ${split ?? 1}), 100%)`,
         } as CSSProperties)
-      : { flex: `var(--cockpit-pane-flex, ${weight ?? 1} 1 0)`, minHeight: floor ? stock : 'var(--cockpit-fill-min, 0)' }
+      : { flex: `var(--cockpit-pane-flex, ${weight ?? 1} 1 0)`, minHeight: named ? stock : 'var(--cockpit-fill-min, 0)' }
 }
 
 export function CockpitPaneFrame({
@@ -56,6 +74,7 @@ export function CockpitPaneFrame({
   share,
   split,
   floor,
+  lowFloor,
   paneRef,
   onPopOut,
   onRemove,
@@ -111,6 +130,12 @@ export function CockpitPaneFrame({
    *  the knob; cockpit-panes.css sets its value, so the size still lives in the sheet (RTTY's text
    *  pane under the tuning scope: `--rtty-stream-floor`). Ignored with fit. */
   floor?: string
+  /** The NAME of a custom property (`--…`) that may LOWER this fill frame's stock floor — the smaller of it
+   *  and `--cockpit-fill-min`, following the share as that floor does; unset, the stock floor. Opt-in per
+   *  pane, so no other frame's floor moves. The pane names the knob; cockpit-panes.css sets its value (the
+   *  large TX meters pane, whose half-size dials want less than a feed's 10em: `--txmeters-pane-floor`).
+   *  Ignored with fit. */
+  lowFloor?: string
   /** The frame's own box, for a PaneSeam to measure and repaint. Omitted ⇒ no ref. */
   paneRef?: Ref<HTMLElement>
   /** Tear this pane off into its own window (open_panel_window). Omitted ⇒ no button. */
@@ -135,7 +160,7 @@ export function CockpitPaneFrame({
       aria-label={title}
       // Inline, not a class: a per-pane styling hook is what this component refuses to
       // have, and an inline placement cannot be outranked or forked in either sheet.
-      style={paneRoleStyle({ fit, weight, share, split, floor })}
+      style={paneRoleStyle({ fit, weight, share, split, floor, lowFloor })}
     >
       {/* THE HEAD IS THE PANE'S GRIP (2026-10-08): in a cockpit that arranges by drag (panes/PaneDrag), a
           pane is picked up by its title. Only a pane the operator can close is marked — one with an id in
