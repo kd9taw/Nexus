@@ -2578,34 +2578,97 @@ static PROP_FETCH_BACKOFF: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 static HEARD_REPORTS: OnceLock<Option<Mutex<tempo_core::heard_reports::HeardReports>>> =
     OnceLock::new();
 
-/// Keep the reports in a nowcast's PSK Reporter answer where `mycall` was the sender. Written
-/// from the answer the nowcast already fetched: it never asks PSK Reporter itself.
-fn keep_heard_reports(mycall: &str, reports: &[propagation::PathSpot]) {
-    let rows = heard_report_rows(mycall, reports);
-    if rows.is_empty() {
-        return;
-    }
-    let store = HEARD_REPORTS.get_or_init(|| {
-        // ⛔ Never the operator's file under test, as for the callbook cache.
-        #[cfg(test)]
-        let opened = tempo_core::heard_reports::HeardReports::open_in_memory();
-        #[cfg(not(test))]
-        let opened = tempo_core::heard_reports::HeardReports::open(
-            &config_dir().join(tempo_core::heard_reports::FILE_NAME),
-        );
-        match opened {
-            Ok(s) => Some(Mutex::new(s)),
-            Err(e) => {
-                eprintln!("[heard-reports] not kept: {e}");
-                None
+/// The heard-reports store, opened on first use; `None` when it cannot be opened.
+fn heard_reports_store() -> Option<&'static Mutex<tempo_core::heard_reports::HeardReports>> {
+    HEARD_REPORTS
+        .get_or_init(|| {
+            // ⛔ Never the operator's file under test, as for the callbook cache.
+            #[cfg(test)]
+            let opened = tempo_core::heard_reports::HeardReports::open_in_memory();
+            #[cfg(not(test))]
+            let opened = tempo_core::heard_reports::HeardReports::open(
+                &config_dir().join(tempo_core::heard_reports::FILE_NAME),
+            );
+            match opened {
+                Ok(s) => Some(Mutex::new(s)),
+                Err(e) => {
+                    eprintln!("[heard-reports] not kept: {e}");
+                    None
+                }
             }
-        }
-    });
-    if let Some(Ok(mut store)) = store.as_ref().map(Mutex::lock) {
-        if let Err(e) = store.record(&rows) {
+        })
+        .as_ref()
+}
+
+/// This run's PSK Reporter polling state ([`propagation::live::pskreporter::ReportFeed`]) and
+/// the call it is for. A changed call starts over, with a catch-up.
+static PSKR_FEED: Mutex<Option<(String, propagation::live::pskreporter::ReportFeed)>> =
+    Mutex::new(None);
+
+/// The nowcast's PSK Reporter query: incremental after this run's first answer, which is a
+/// catch-up (see the `pskreporter` module header). Returns the reports of the last
+/// `window_secs`, as a fresh query over that window would have, or `None` when the query
+/// failed. Called only on the nowcast's five-minute refetch: it adds no query of its own.
+fn poll_pskr(mycall: &str, now: i64, window_secs: i64) -> Option<Vec<propagation::PathSpot>> {
+    let call = mycall.trim().to_ascii_uppercase();
+    let mut feed = PSKR_FEED.lock().ok()?;
+    if feed.as_ref().is_none_or(|(c, _)| *c != call) {
+        *feed = Some((call, Default::default()));
+    }
+    let (_, feed) = feed.as_mut()?;
+    poll_pskr_with(
+        mycall,
+        feed,
+        heard_reports_store(),
+        now,
+        window_secs,
+        propagation::live::pskreporter::fetch,
+    )
+}
+
+/// [`poll_pskr`] over a given feed, store and fetch. The query's cursor (`lastseqno`) and the
+/// catch-up's reach come from the store, per call; the answer's reports that heard `mycall` and
+/// its sequence number go back into it.
+fn poll_pskr_with(
+    mycall: &str,
+    feed: &mut propagation::live::pskreporter::ReportFeed,
+    store: Option<&Mutex<tempo_core::heard_reports::HeardReports>>,
+    now: i64,
+    window_secs: i64,
+    fetch: impl FnOnce(
+        &str,
+        &propagation::live::pskreporter::Query,
+    ) -> Result<propagation::live::pskreporter::Reply, String>,
+) -> Option<Vec<propagation::PathSpot>> {
+    let (newest_kept, cursor) = store
+        .and_then(|s| s.lock().ok())
+        .map(|s| {
+            (
+                s.newest_time(mycall).ok().flatten(),
+                s.last_seqno(mycall).ok().flatten(),
+            )
+        })
+        .unwrap_or_default();
+    let query = feed.next_query(now, window_secs, newest_kept, cursor);
+    let reply = fetch(mycall, &query).ok()?;
+    if feed.accept(&reply, now, window_secs) {
+        eprintln!(
+            "[pskreporter] an answer reached the {}-report limit; some reports may be missing, and the next poll carries on from it",
+            propagation::live::pskreporter::RPTLIMIT
+        );
+    }
+    if let Some(Ok(mut s)) = store.map(Mutex::lock) {
+        // PSK Reporter keeps a report for about a day; keep the ones that heard us.
+        if let Err(e) = s.record(&heard_report_rows(mycall, &reply.spots)) {
             eprintln!("[heard-reports] a write failed: {e}");
         }
+        if let Some(n) = reply.last_seqno {
+            if let Err(e) = s.set_last_seqno(mycall, n) {
+                eprintln!("[heard-reports] the query cursor was not kept: {e}");
+            }
+        }
     }
+    Some(feed.view().to_vec())
 }
 
 /// The rows of `reports` that heard `mycall`, as the store keeps them.
@@ -2665,6 +2728,52 @@ mod heard_report_rows_tests {
                 snr: Some(-18.0),
             }]
         );
+    }
+
+    /// A launch catch-up, then a poll: the second query carries the first answer's sequence
+    /// number, read back from the store, and the reports that heard the operator are kept.
+    #[test]
+    fn the_second_poll_carries_the_cursor_kept_from_the_first_answer() {
+        use propagation::live::pskreporter::{parse_reply, query_url, ReportFeed};
+        const FIRST: &str =
+            include_str!("../../crates/propagation/tests/fixtures/pskreporter-w1aw-2026-11-12.xml");
+        const AT: i64 = 1_794_515_117;
+        let store = Mutex::new(tempo_core::heard_reports::HeardReports::open_in_memory().unwrap());
+        let mut feed = ReportFeed::new();
+        let mut urls = Vec::new();
+
+        let view = poll_pskr_with("W1AW", &mut feed, Some(&store), AT, 1800, |call, q| {
+            urls.push(query_url(call, q));
+            Ok(parse_reply(FIRST))
+        })
+        .unwrap();
+        assert!(!view.is_empty());
+        {
+            let s = store.lock().unwrap();
+            assert_eq!(s.last_seqno("W1AW").unwrap(), Some(74_776_286_880));
+            assert!(s.len().unwrap() > 0, "the heard-me reports are kept");
+            assert!(s.all().unwrap().iter().all(|r| r.my_call == "W1AW"));
+        }
+
+        let failed = poll_pskr_with(
+            "W1AW",
+            &mut feed,
+            Some(&store),
+            AT + 300,
+            1800,
+            |call, q| {
+                urls.push(query_url(call, q));
+                Err("PSK Reporter: server returned HTTP 503".into())
+            },
+        );
+        assert!(
+            failed.is_none(),
+            "a failed query gives no XML reports, as before"
+        );
+
+        assert!(urls[0].contains("flowStartSeconds=-86400&"), "{}", urls[0]);
+        assert!(!urls[0].contains("lastseqno"), "{}", urls[0]);
+        assert!(urls[1].contains("&lastseqno=74776286880&"), "{}", urls[1]);
     }
 }
 
@@ -9815,11 +9924,8 @@ async fn get_propagation(
             let (engine, tallies) = (state.inner().clone(), tallies.inner().clone());
             tauri::async_runtime::spawn_blocking(move || {
                 let needs = needs_kept(&engine, &tallies)?;
-                let (snap, reports) =
-                    propagation::live::snapshot_with_spots(&mc, &mg, 1800, &*needs, &extra)?;
-                // PSK Reporter keeps a report for about a day; keep the ones that heard us.
-                keep_heard_reports(&mc, &reports);
-                Ok(snap)
+                let xml = poll_pskr(&mc, now_unix(), 1800);
+                propagation::live::snapshot_with_spots(&mc, &mg, xml.as_deref(), &*needs, &extra)
             })
             .await
             .map_err(|e| e.to_string())?
