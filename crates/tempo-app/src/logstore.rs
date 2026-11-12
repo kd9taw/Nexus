@@ -7660,7 +7660,13 @@ pub(crate) mod tests {
             /// The file taken in; whether anything was.
             fn take_in(&mut self, d: &Dir) -> bool {
                 match self {
-                    Here::Station(sc) => sc.take_in_shared_log(),
+                    // A station polls: while its lane still owes the file a change (the note of
+                    // the last take-in, say), a poll leaves the file alone, and the first poll
+                    // after the lane is done takes it in. That poll is this one.
+                    Here::Station(sc) => {
+                        sc.store.flush(DURABLE_WAIT).expect("the lane is done");
+                        sc.take_in_shared_log()
+                    }
                     // 1.13's `recover_external_appends`: the file read lossily, and merged in.
                     Here::Code(log) => {
                         let disk = std::fs::read(d.log()).unwrap();

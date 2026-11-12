@@ -360,6 +360,19 @@ fn a_positions_link_reads_connected_reconnecting_lost_and_connected_again_at_bot
         },
         show,
     );
+    // The tent's end closes on the same rule: its pump's 250 ms read tick finds the host silent
+    // for `DEAD_SECS` (a monotonic clock), while its own line reads Lost off the whole seconds
+    // since it last heard the host, which can turn up to a tick earlier. A link restored inside
+    // that tick delivers the host's held lines and then its close to a session still open: the
+    // tent hears the host and loses the link in one breath, and truthfully reads Reconnecting
+    // before it rejoins. The link comes back only once both ends have closed it, as on the dead
+    // Wi-Fi link this stands in for.
+    wait_showing(
+        "the CW tent closed its end too, no later than 2 s after both ends said Lost",
+        2,
+        || own_link(&cw).0 != "joined",
+        show,
+    );
 
     relay.quiet.store(false, Ordering::Relaxed);
     wait_showing(

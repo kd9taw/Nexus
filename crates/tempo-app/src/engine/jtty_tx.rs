@@ -3100,7 +3100,9 @@ mod tests {
             }
             frames(&e, 1);
             let mut g = engine_lock(&e);
-            g.tx_watchdog_start = Some(now_unix_secs() - 59);
+            // `poll_jtty` reads the clock again, and a second boundary between the two reads adds
+            // a second: so the hold side is seeded at the limit - 2, as in the one-shot case below.
+            g.tx_watchdog_start = Some(now_unix_secs() - 58);
             assert!(
                 matches!(g.poll_jtty(true, 0.0), JttyTick::Frame(_)),
                 "under the limit"
