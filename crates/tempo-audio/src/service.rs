@@ -5102,6 +5102,11 @@ struct RadioLoop {
     cat_rebuild_backoff_ms: f64,
     /// Earliest tick a FAILED reopen (no daemon, no control) is retried, and its backoff.
     cat_reopen_at: f64,
+    /// The last reopen's refusal by Nexus itself ([`CatProbe::refused`]), in its own words. Test
+    /// CAT pressed while that reopen's backoff runs is answered by the plain reprobe, which has no
+    /// open of its own to read the refusal from; it answers this one, typed, so Test CAT never
+    /// sweeps the port the refusal kept shut. Every reopen sets it again.
+    cat_open_refusal: Option<String>,
     cat_reopen_backoff_ms: f64,
     /// Next tick the serial port's presence is checked while CAT is down.
     cat_port_check_at: f64,
@@ -5614,6 +5619,7 @@ impl RadioLoop {
             cat_outage_halted: false,
             cat_rebuild_backoff_ms: CAT_REBUILD_BACKOFF_MS,
             cat_reopen_at: 0.0,
+            cat_open_refusal: None,
             cat_reopen_backoff_ms: CAT_REOPEN_RETRY_MS,
             cat_port_check_at: 0.0,
             cat_port_present: None,
@@ -9821,6 +9827,7 @@ impl RadioLoop {
                 self.forget_data_judgement();
                 let (new_rig, proc, probe) = reopen_rig(&open_want, allow_coexist);
                 let (ok, detail, refused) = (probe.ok, probe.detail, probe.refused);
+                self.cat_open_refusal = refused.then(|| detail.clone());
                 let detail = if suspect_rebuild && !daemon_died && !linkless {
                     format!("the CAT link stayed silent — the port was reopened. {detail}")
                         .trim_end()
@@ -9934,13 +9941,19 @@ impl RadioLoop {
             } else if reprobe_req {
                 let (mut ok, mut detail) = reprobe(rig, &want);
                 // A radio whose launch Nexus refused has no daemon to probe. Say why, typed, rather
-                // than "the control channel didn't open" — and so Test CAT never sweeps its port.
-                let refused = !rig.has_control() && hamlib_launch_refused(&want);
-                if refused {
-                    (ok, detail) = (
-                        Some(false),
-                        crate::rigctld_proc::HARDWARE_HANDSHAKE_RTS_KEYS.to_string(),
-                    );
+                // than "the control channel didn't open" — and so Test CAT never sweeps its port:
+                // a declared handshake refusal, or the last reopen's own refusal (a Hamlib that
+                // cannot confirm the line holds), whose backoff this Test CAT was pressed inside.
+                let refusal = if rig.has_control() {
+                    None
+                } else if hamlib_launch_refused(&want) {
+                    Some(crate::rigctld_proc::HARDWARE_HANDSHAKE_RTS_KEYS.to_string())
+                } else {
+                    self.cat_open_refusal.clone()
+                };
+                let refused = refusal.is_some();
+                if let Some(why) = refusal {
+                    (ok, detail) = (Some(false), why);
                 }
                 // Attribution only when the CAT channel itself was probed (the branches of
                 // `reprobe` that call probe_cat_or_explain) — a serial-PTT line test
@@ -21288,6 +21301,7 @@ mod tests {
     mod tci_server;
     mod tci_soundcard_cw;
     mod tci_spots;
+    mod test_cat_refused;
     mod tx_extras;
     mod tx_unit_ends;
     mod udp_decode_time;
