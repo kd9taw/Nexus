@@ -10,7 +10,10 @@
 //! **What a row holds.** The operator's call as sent, when the report was made (PSK Reporter's
 //! `flowStartSeconds`), the receiving call, its grid when it gave one, the band, the exact
 //! frequency in Hz when the report carries one, the mode, and the SNR when present. Nothing else
-//! from the answer, and never the request.
+//! from the answer, and never the request. The strings come from other stations' reports and are
+//! kept forever, so each has a limit past any real value: a call [`MAX_CALL`] bytes, a grid
+//! [`MAX_GRID`], a mode [`MAX_MODE`], a band label [`MAX_BAND`]. A report with a longer field is
+//! not kept at all; it is never truncated, which could merge two distinct reports into one.
 //!
 //! **Dedupe.** The query's half-hour window is wider than its five-minute cadence, so every
 //! report comes back on about six polls running. A report is the same report when its sender,
@@ -40,6 +43,15 @@ pub const FILE_NAME: &str = "heard-reports.sqlite";
 
 /// The schema this build writes, in SQLite's `user_version`.
 pub const SCHEMA_VERSION: i64 = 1;
+
+/// The longest call kept, bytes.
+pub const MAX_CALL: usize = 32;
+/// The longest receiver grid kept, bytes.
+pub const MAX_GRID: usize = 10;
+/// The longest mode kept, bytes.
+pub const MAX_MODE: usize = 16;
+/// The longest band label kept, bytes.
+pub const MAX_BAND: usize = 8;
 
 /// One report of the operator's signal being heard.
 #[derive(Debug, Clone, PartialEq)]
@@ -150,18 +162,24 @@ impl HeardReports {
                 if my_call.is_empty() || rx_call.is_empty() {
                     continue;
                 }
+                let rx_grid = r
+                    .rx_grid
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|g| !g.is_empty());
+                let mode = r.mode.as_deref().unwrap_or("").trim();
+                // Outside data kept forever: a field longer than any real one skips the row
+                // (never truncated, which could merge two distinct reports into one key).
+                if my_call.len() > MAX_CALL
+                    || rx_call.len() > MAX_CALL
+                    || rx_grid.is_some_and(|g| g.len() > MAX_GRID)
+                    || mode.len() > MAX_MODE
+                    || r.band.len() > MAX_BAND
+                {
+                    continue;
+                }
                 added += insert.execute(params![
-                    r.time,
-                    my_call,
-                    rx_call,
-                    r.rx_grid
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|g| !g.is_empty()),
-                    r.band,
-                    r.freq_hz,
-                    r.mode.as_deref().unwrap_or("").trim(),
-                    r.snr,
+                    r.time, my_call, rx_call, rx_grid, r.band, r.freq_hz, mode, r.snr,
                 ])?;
             }
         }
@@ -266,6 +284,30 @@ mod tests {
         assert_eq!(kept[0], report(1_000, "K1ABC", "20m", Some(-12.0)));
         assert_eq!(kept[1], report(1_015, "VE3XYZ", "20m", None));
         assert_eq!(kept[2], report(1_300, "K1ABC", "20m", Some(-8.0)));
+    }
+
+    /// A field longer than a real one is refused, not truncated (truncating could merge two
+    /// distinct reports into one key): the row is skipped, and the rest of the answer is kept.
+    #[test]
+    fn a_row_with_an_oversized_field_is_not_kept() {
+        let mut s = HeardReports::open_in_memory().unwrap();
+        let long_call = report(1_000, &"K".repeat(MAX_CALL + 1), "20m", None);
+        let mut long_mode = report(1_001, "K1ABC", "20m", None);
+        long_mode.mode = Some("M".repeat(MAX_MODE + 1));
+        let mut long_grid = report(1_002, "K1ABC", "20m", None);
+        long_grid.rx_grid = Some("G".repeat(MAX_GRID + 1));
+        let long_band = report(1_003, "K1ABC", &"b".repeat(MAX_BAND + 1), None);
+        let normal = report(1_004, "VE3XYZ", "20m", Some(-5.0));
+        let n = s
+            .record(&[long_call, long_mode, long_grid, long_band, normal.clone()])
+            .unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(s.all().unwrap(), vec![normal]);
+        // At the limits exactly, a row is kept.
+        let mut at_limit = report(1_005, &"K".repeat(MAX_CALL), "20m", None);
+        at_limit.mode = Some("M".repeat(MAX_MODE));
+        at_limit.rx_grid = Some("G".repeat(MAX_GRID));
+        assert_eq!(s.record(&[at_limit]).unwrap(), 1);
     }
 
     /// A report with no mode, grid or frequency is still kept once, not once per poll: the
