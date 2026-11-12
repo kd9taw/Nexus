@@ -294,21 +294,7 @@ mod crashlog {
     }
 }
 
-// THROWAWAY: a planted libSystem import newer than macOS 12, to prove the macos-imports job goes
-// red. Reverted in the next commit.
-#[cfg(target_os = "macos")]
-extern "C" {
-    fn os_sync_wait_on_address(
-        addr: *mut std::ffi::c_void,
-        value: u64,
-        size: usize,
-        flags: u32,
-    ) -> i32;
-}
-
 fn main() {
-    #[cfg(target_os = "macos")]
-    std::hint::black_box(os_sync_wait_on_address as *const ());
     #[cfg(windows)]
     crashlog::install();
 
