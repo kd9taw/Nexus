@@ -101,10 +101,13 @@ pub fn ft8_wave(itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
     wave
 }
 
+/// FT4's samples a symbol (at any `fsample`, as `ft4_gen_wave` takes it).
+pub(crate) const FT4_NSPS: usize = 576;
+
 /// `ft4_gen_wave`: the full FT4 frame for `itone` (`72576` samples, the shaped signal from the
 /// first, silence after it; 576 samples a symbol), Gaussian BT = 1.0.
 pub fn ft4_wave(itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
-    const NSPS: usize = 576;
+    const NSPS: usize = FT4_NSPS;
     const NMAX: usize = 21 * 3456;
     let nsym = itone.len();
     let pulse = pulse(1.0, NSPS);

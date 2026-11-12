@@ -421,7 +421,8 @@ pub fn is_handshake_refusal(e: &std::io::Error) -> bool {
 pub const HAMLIB_CANNOT_CONFIRM_HOLDS: &str = "Nexus did not open the serial port: it could not confirm that this Hamlib will hold the RTS and DTR lines low, and opening the port without that can key a transmitter wired to either line. Try again, and if this keeps happening, update Hamlib or use the Hamlib that comes with Nexus.";
 
 /// The error [`spawn_rigctld`] returns when this Hamlib cannot say whether it will hold the lines
-/// ([`ShowConf::Unconfirmable`]) and the port has lines to hold. Before the bounded dump, such a
+/// ([`ShowConf::Unconfirmable`], or [`ShowConf::Unanswered`] by a tool that is there but would not
+/// start) and the port has lines to hold. Before the bounded dump, such a
 /// Hamlib (4.5.5) hung the open forever; opening silently without the holds instead would be a
 /// possible key-down at connect on an RTS- or DTR-keyed interface. Displays as
 /// [`HAMLIB_CANNOT_CONFIRM_HOLDS`].
@@ -1382,8 +1383,8 @@ const HANDSHAKE_RTS_TAKEN: [&str; 1] = ["Hardware"];
 /// 1042 (FTDX-10) → `serial_handshake … Value: Hardware`; models 1 and 2 have no serial conf
 /// params at all.
 ///
-/// No binary, a non-zero exit, or output we cannot read at all yields
-/// [`SettableLines::default`], i.e. touch nothing — 1.0.1.
+/// Getting no whole dump never means "touch nothing" on a port with lines to hold: a tool that
+/// would not start or could not say refuses the launch ([`settable_or_refusal`]).
 ///
 /// ⚠️ Be precise about *partial* failure, because the claim this replaced ("any failure yields
 /// the default") was not true of it. The two lines are decided INDEPENDENTLY, and each `true`
@@ -1419,7 +1420,7 @@ pub(crate) fn show_conf_dump(args: &[&str]) -> Option<String> {
     let rigctld = resolve_rigctld();
     match ask_show_conf(&rigctl_beside(rigctld.clone()), &rigctld, args, DUMP_BUDGET) {
         ShowConf::Dump(d) => Some(d),
-        ShowConf::Unanswered | ShowConf::Unconfirmable => None,
+        ShowConf::Unanswered(_) | ShowConf::Unconfirmable => None,
     }
 }
 
@@ -1428,9 +1429,13 @@ pub(crate) fn show_conf_dump(args: &[&str]) -> Option<String> {
 pub(crate) enum ShowConf {
     /// A whole dump ([`whole_dump`]).
     Dump(String),
-    /// Neither `rigctl` nor `rigctld` could be started. Claim nothing: the daemon's own launch
-    /// then reports the binary that cannot run.
-    Unanswered,
+    /// Neither `rigctl` nor `rigctld` could be started; the kind is `rigctld`'s (the binary the
+    /// daemon launch would run). This Hamlib has not said whether it will hold the lines either,
+    /// so the launch is refused on a port with lines to hold ([`settable_or_refusal`]). It used to
+    /// claim nothing and leave the daemon's own launch to report the binary, which opened the port
+    /// with no hold whenever that launch then succeeded (a tool kept from starting for a moment by
+    /// resources or an antivirus lock).
+    Unanswered(std::io::ErrorKind),
     /// A tool ran and gave no whole dump (it overran the budget, was killed by a signal, or
     /// printed something short of the serial block's end): this Hamlib cannot say whether it
     /// will hold the lines. The launch is refused on a port with lines to hold
@@ -1482,6 +1487,7 @@ pub(crate) fn ask_show_conf(
     args: &[&str],
     budget: std::time::Duration,
 ) -> ShowConf {
+    let mut unrunnable = std::io::ErrorKind::NotFound;
     for (tool, bin) in [("rigctl", rigctl), ("rigctld", rigctld)] {
         tempo_core::applog::info(
             "proc",
@@ -1491,7 +1497,10 @@ pub(crate) fn ask_show_conf(
         cmd.args(args).args(["-r", NO_SUCH_RIG]);
         match run_within(&mut cmd, budget) {
             // Missing: the other tool may be there.
-            Bounded::Unrunnable => continue,
+            Bounded::Unrunnable(kind) => {
+                unrunnable = kind;
+                continue;
+            }
             Bounded::Exited {
                 code: Some(_),
                 stdout,
@@ -1513,30 +1522,38 @@ pub(crate) fn ask_show_conf(
             }
         }
     }
-    ShowConf::Unanswered
+    ShowConf::Unanswered(unrunnable)
 }
 
-/// The lines Hamlib will accept, or the refusal when it cannot say and there is something to
-/// hold. `want` is the wish after [`holds_for_port`], so a virtual port (no lines) and an
+/// The lines Hamlib will accept, or the launch error when it cannot say and there is something
+/// to hold. `want` is the wish after [`holds_for_port`], so a virtual port (no lines) and an
 /// operator who chose Untouched for every line have nothing to confirm and are never refused.
-/// An unanswered dump (no tool could be started) keeps its old meaning: claim nothing.
+///
+/// ⚠️ TRANSMIT SAFETY: no answer is never "claim nothing" on a port with lines to hold. A tool
+/// that could not be STARTED ([`ShowConf::Unanswered`]) is refused exactly like one that ran and
+/// could not say ([`ShowConf::Unconfirmable`]), because the daemon launch right after it may well
+/// start, and would then open the port with the driver's default lines (raised on Linux). The
+/// one difference is the words: a binary that is not there at all fails as the daemon launch
+/// itself would (`NotFound`, so the operator gets the install sentence,
+/// [`hamlib_missing_for`]); anything else is [`HoldsUnconfirmed`] ("try again").
 pub(crate) fn settable_or_refusal(
     conf: ShowConf,
     want: &ControlLines,
-) -> Result<SettableLines, HoldsUnconfirmed> {
+) -> std::io::Result<SettableLines> {
+    let nothing_to_hold = want.rts == LineState::Untouched
+        && want.dtr == LineState::Untouched
+        && want.keying_line == LineState::Untouched;
     match conf {
         ShowConf::Dump(d) => Ok(parse_settable_lines(&d)),
-        ShowConf::Unanswered => Ok(SettableLines::default()),
-        ShowConf::Unconfirmable => {
-            let nothing_to_hold = want.rts == LineState::Untouched
-                && want.dtr == LineState::Untouched
-                && want.keying_line == LineState::Untouched;
-            if nothing_to_hold {
-                Ok(SettableLines::default())
-            } else {
-                Err(HoldsUnconfirmed)
-            }
-        }
+        _ if nothing_to_hold => Ok(SettableLines::default()),
+        ShowConf::Unanswered(std::io::ErrorKind::NotFound) => Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "neither rigctl nor rigctld could be found",
+        )),
+        ShowConf::Unanswered(_) | ShowConf::Unconfirmable => Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            HoldsUnconfirmed,
+        )),
     }
 }
 
@@ -1602,8 +1619,8 @@ pub(crate) enum Bounded {
     Exited { code: Option<i32>, stdout: String },
     /// Still running at the budget: killed and reaped.
     Overran,
-    /// It could not be started.
-    Unrunnable,
+    /// It could not be started, and why.
+    Unrunnable(std::io::ErrorKind),
 }
 
 /// Run `cmd` to completion within `budget`. A child still running at the deadline is killed
@@ -1614,13 +1631,14 @@ pub(crate) fn run_within(cmd: &mut Command, budget: std::time::Duration) -> Boun
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    let Ok(mut child) = cmd.spawn() else {
-        return Bounded::Unrunnable;
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => return Bounded::Unrunnable(e.kind()),
     };
     let Some(mut stdout) = child.stdout.take() else {
         let _ = child.kill();
         let _ = child.wait();
-        return Bounded::Unrunnable;
+        return Bounded::Unrunnable(std::io::ErrorKind::Other);
     };
     let reader = std::thread::spawn(move || {
         let mut buf = Vec::new();
@@ -1971,8 +1989,7 @@ pub fn spawn_rigctld(
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, why));
         }
         let want = holds_for_port(want, virtual_node.is_some());
-        let settable = settable_or_refusal(settable_lines_for(model, ptt_line), &want)
-            .map_err(|why| std::io::Error::new(std::io::ErrorKind::Unsupported, why))?;
+        let settable = settable_or_refusal(settable_lines_for(model, ptt_line), &want)?;
         resolve_lines(settable, want, deliberate)
     };
     let opened = virtual_node.as_deref().unwrap_or(addr);
@@ -2172,7 +2189,19 @@ mod tests {
         );
         assert_eq!(
             ask_show_conf(missing.as_os_str(), missing.as_os_str(), &args, short),
-            ShowConf::Unanswered
+            ShowConf::Unanswered(std::io::ErrorKind::NotFound)
+        );
+        // A rigctld that is there but will not start (here: not executable) is not "missing":
+        // the kind is rigctld's own, so the refusal can tell the two apart.
+        let unstartable = tool("sc-rigctld-noexec", whole, "exit 0");
+        std::fs::set_permissions(
+            &unstartable,
+            <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o644),
+        )
+        .expect("chmod");
+        assert_eq!(
+            ask_show_conf(missing.as_os_str(), unstartable.as_os_str(), &args, short),
+            ShowConf::Unanswered(std::io::ErrorKind::PermissionDenied)
         );
     }
 
@@ -2202,12 +2231,11 @@ mod tests {
     /// ⭐ TRANSMIT SAFETY: a Hamlib that cannot confirm the holds never opens a port with lines to
     /// hold. It is refused, typed, so Test CAT does not sweep it either. A virtual port (no
     /// lines, after [`holds_for_port`]) and an all-Untouched wish have nothing to confirm and go
-    /// ahead; an unanswered dump keeps its old "claim nothing".
+    /// ahead. An unanswered dump is the next test.
     #[test]
     fn a_hamlib_that_cannot_confirm_the_holds_is_refused_on_a_port_with_lines() {
         let real = ControlLines::hold_low();
-        let refused = settable_or_refusal(ShowConf::Unconfirmable, &real).expect_err("refused");
-        let e = std::io::Error::new(std::io::ErrorKind::Unsupported, refused);
+        let e = settable_or_refusal(ShowConf::Unconfirmable, &real).expect_err("refused");
         assert!(is_launch_refusal(&e));
         assert!(!is_handshake_refusal(&e));
         assert_eq!(e.to_string(), HAMLIB_CANNOT_CONFIRM_HOLDS);
@@ -2224,9 +2252,64 @@ mod tests {
             settable_or_refusal(ShowConf::Unconfirmable, &virtual_port).ok(),
             Some(SettableLines::default())
         );
+    }
+
+    /// ⭐ TRANSMIT SAFETY (security review M-A, 1.24.0): a capability ask in which NO tool could
+    /// be started is not "claim nothing" on a port with lines to hold. The daemon launch right
+    /// after it may start (the tools were kept from starting for a moment), and would open the
+    /// port with the driver's default lines, raised on Linux. It is refused like
+    /// [`ShowConf::Unconfirmable`]; a binary that is not there at all fails as `NotFound`, so the
+    /// operator still gets the install sentence. Nothing to hold, nothing refused; and a dump
+    /// that answered is read as before.
+    #[test]
+    fn an_unanswered_capability_ask_is_refused_on_a_port_with_lines() {
+        use std::io::ErrorKind;
+        let real = ControlLines::hold_low();
+
+        let e = settable_or_refusal(ShowConf::Unanswered(ErrorKind::PermissionDenied), &real)
+            .expect_err("a tool that would not start is refused");
+        assert!(is_launch_refusal(&e), "typed, so Test CAT does not sweep");
+        assert_eq!(e.to_string(), HAMLIB_CANNOT_CONFIRM_HOLDS);
+
+        let keyed = ControlLines {
+            rts: LineState::Untouched,
+            dtr: LineState::Untouched,
+            keying_line: LineState::Low,
+            ..ControlLines::hold_low()
+        };
+        assert!(settable_or_refusal(ShowConf::Unanswered(ErrorKind::Other), &keyed).is_err());
+
+        let missing = settable_or_refusal(ShowConf::Unanswered(ErrorKind::NotFound), &real)
+            .expect_err("a missing Hamlib does not open the port either");
+        assert_eq!(missing.kind(), ErrorKind::NotFound);
+        assert!(!is_launch_refusal(&missing));
+        assert!(
+            hamlib_missing_for(false, "rigctld", &missing).contains("sudo apt install"),
+            "the operator still gets the install sentence: {}",
+            hamlib_missing_for(false, "rigctld", &missing)
+        );
+
+        // Nothing to hold: a virtual port, or every line Untouched.
+        let untouched = ControlLines {
+            rts: LineState::Untouched,
+            dtr: LineState::Untouched,
+            keying_line: LineState::Untouched,
+            ..ControlLines::hold_low()
+        };
+        for want in [holds_for_port(real, true), untouched] {
+            for kind in [ErrorKind::NotFound, ErrorKind::PermissionDenied] {
+                assert_eq!(
+                    settable_or_refusal(ShowConf::Unanswered(kind), &want).ok(),
+                    Some(SettableLines::default())
+                );
+            }
+        }
+
+        // Control: a dump that answered is read exactly as before, whatever the wish.
+        let dump = "async: x\nserial_speed: x\nrts_state: x\ndtr_state: x\n";
         assert_eq!(
-            settable_or_refusal(ShowConf::Unanswered, &real).ok(),
-            Some(SettableLines::default())
+            settable_or_refusal(ShowConf::Dump(dump.into()), &real).ok(),
+            Some(parse_settable_lines(dump))
         );
     }
 

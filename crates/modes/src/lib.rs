@@ -20,8 +20,8 @@ pub mod wsjt77;
 
 pub use decode::Decode;
 pub use mode::{
-    make_mode, tx_mode, Capabilities, Ft1Mode, Ft4Mode, Ft8Mode, Js8Mode, Js8Speed, Mode, ModeKind,
-    PassCarry,
+    make_mode, slot_over_samples_12k, tx_mode, Capabilities, Ft1Mode, Ft4Mode, Ft8Mode, Js8Mode,
+    Js8Speed, Mode, ModeKind, PassCarry,
 };
 pub use source::{DecodeRequest, DecodeSink, NativeSource, SignalSource, WsjtxUdpSource};
 

@@ -62,14 +62,27 @@ pub enum PttMode {
     Serial { port: String, line: SerialLine },
 }
 
+/// A command's reply deadline (ms) on a local link: what [`Rig::transport_deadline_ms`] gives a
+/// command that names none, and the PTT deadline on every link ([`PTT_DEADLINE_MS`]).
+pub(crate) const FAST_LINK_DEADLINE_MS: u64 = 700;
+
+/// A command's reply deadline (ms) on a slow transport ([`Rig::set_slow_transport`]: a network
+/// radio link, a slow serial link, a daemon), and a network chain's key-down
+/// ([`NETWORK_KEY_DEADLINE_MS`]).
+pub(crate) const SLOW_LINK_DEADLINE_MS: u64 = 2_500;
+
+/// One socket read's timeout (ms) on the CAT connection. A command's deadline is looked at between
+/// reads, so a read that has started runs this long whatever the deadline left.
+pub(crate) const SOCKET_READ_TIMEOUT_MS: u64 = 500;
+
 /// Reply deadline (ms) for a PTT (`T`) command — a one-line RPRT that must answer fast. Kept off
 /// the slow-transport 2.5 s read window so an un-key can never hang the single-threaded radio loop.
-const PTT_DEADLINE_MS: u64 = 700;
+const PTT_DEADLINE_MS: u64 = FAST_LINK_DEADLINE_MS;
 
 /// Reply deadline (ms) for a KEY-DOWN on a network chain ([`Rig::set_network_chain`]): the same
 /// window every other command there gets, because a rigctld reaching its radio over the network
 /// can take that long to answer a key that works. The release keeps [`PTT_DEADLINE_MS`].
-const NETWORK_KEY_DEADLINE_MS: u64 = 2_500;
+const NETWORK_KEY_DEADLINE_MS: u64 = SLOW_LINK_DEADLINE_MS;
 
 /// How long a connection may go on owing late answers before it is given up and the next command
 /// opens a new one ([`Rig::command_lines`]). Counted from the first answer that went owed and is
@@ -1055,7 +1068,7 @@ impl Rig {
             self.owed_buf.clear();
             if let Some(addr) = &self.control {
                 let s = connect_cat(addr)?;
-                s.set_read_timeout(Some(Duration::from_millis(500)))?;
+                s.set_read_timeout(Some(Duration::from_millis(SOCKET_READ_TIMEOUT_MS)))?;
                 s.set_write_timeout(Some(Duration::from_millis(500)))?;
                 self.stream = Some(s);
                 // A new connection may be to a radio (or a daemon) that holds nothing we confirmed.
@@ -1437,9 +1450,9 @@ impl Rig {
     /// A command's reply deadline (ms) when it names none: the long window on a slow transport.
     pub(crate) fn transport_deadline_ms(&self) -> u64 {
         if self.slow_transport {
-            2_500
+            SLOW_LINK_DEADLINE_MS
         } else {
-            700
+            FAST_LINK_DEADLINE_MS
         }
     }
 
@@ -1545,7 +1558,8 @@ impl Rig {
             }
             stream.set_nonblocking(false)?;
         }
-        stream.set_read_timeout(Some(Duration::from_millis(500)))?; // restore blocking-with-timeout
+        // restore blocking-with-timeout
+        stream.set_read_timeout(Some(Duration::from_millis(SOCKET_READ_TIMEOUT_MS)))?;
         #[cfg(test)]
         if let Some(before_write) = before_write {
             before_write();

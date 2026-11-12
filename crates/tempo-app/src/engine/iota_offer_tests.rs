@@ -553,6 +553,94 @@ fn the_no_popup_path_keeps_the_exact_call_rules() {
     assert_eq!(logged(&e, "IA5C/P").ota.iota, None, "stroked");
 }
 
+/// PORTABLE, AGREEING (operator ruling, 2026-11-10): for a portable call the callbook answer
+/// already held for its BASE call counts when a spot of the portable call names the same group.
+/// The answer may be held under the base call (a lookup of it) or under the portable call when
+/// that lookup fell through to the base call's record. Written as the callbook's.
+#[test]
+fn a_portable_call_takes_its_base_calls_callbook_group_when_a_spot_agrees() {
+    let group = answer("IA5C").iota.expect("the fixture names a group");
+    let (mut e, _) = spotted(SpotIota::OtherBand(group.clone()));
+    e.settings.auto_log = true;
+    e.note_callbook_answer("IA5C", answer("IA5C"));
+    work(&mut e, "IA5C/P", 1);
+    let r = logged(&e, "IA5C/P");
+    assert_eq!(
+        r.ota.iota.as_deref(),
+        Some(group.as_str()),
+        "suffix portable"
+    );
+    assert!(is_callbook_filled(&r, "IOTA"), "says from the callbook");
+    every_upload_carries(&mut e, "IA5C/P", &group);
+
+    // A prefix portable, its lookup answered with the base call's record.
+    let (mut e, _) = spotted(SpotIota::OtherBand(group.clone()));
+    e.note_callbook_answer("IT9/K1ABC", answer("K1ABC"));
+    e.log_qso(bare(&e, "IT9/K1ABC"));
+    assert_eq!(
+        logged(&e, "IT9/K1ABC").ota.iota.as_deref(),
+        Some(group.as_str()),
+        "prefix portable"
+    );
+}
+
+/// PORTABLE, CALLBOOK ALONE: the base call's callbook describes the licensee's home, so with no
+/// spot of the portable call it writes nothing, on any path.
+#[test]
+fn a_portable_call_never_takes_the_callbook_alone() {
+    let (mut e, _) = spotted(SpotIota::Silent);
+    e.settings.auto_log = true;
+    e.note_callbook_answer("IA5C", answer("IA5C"));
+    work(&mut e, "IA5C/P", 1);
+    assert_eq!(logged(&e, "IA5C/P").ota.iota, None, "no spot");
+
+    let (mut e, _) = spotted(SpotIota::Silent);
+    e.note_callbook_answer("IT9/K1ABC", answer("K1ABC"));
+    e.log_qso(bare(&e, "IT9/K1ABC"));
+    assert_eq!(logged(&e, "IT9/K1ABC").ota.iota, None, "prefix portable");
+}
+
+/// PORTABLE, DISAGREEING: a spot of the portable call naming another group writes nothing from
+/// either, and nor do spots that disagree with each other.
+#[test]
+fn a_portable_call_with_a_disagreeing_spot_takes_nothing() {
+    for spots in [SpotIota::OtherBand("EU-028".into()), SpotIota::Refused] {
+        let (mut e, _) = spotted(spots.clone());
+        e.settings.auto_log = true;
+        e.note_callbook_answer("IA5C", answer("IA5C"));
+        work(&mut e, "IA5C/P", 1);
+        let r = logged(&e, "IA5C/P");
+        assert_eq!(r.ota.iota, None, "{spots:?}");
+        assert!(!is_offer_held(&r, "IOTA"), "{spots:?}");
+    }
+}
+
+/// NOT PORTABLE: a plain call keeps its rules. Its own answer fills alone or agreeing with a spot
+/// on another band, and a portable call's answer, held under that portable call, is not its.
+#[test]
+fn a_plain_call_is_unchanged_by_the_portable_rule() {
+    for spots in [SpotIota::Silent, SpotIota::OtherBand("EU-025".into())] {
+        let (mut e, _) = spotted(spots.clone());
+        e.settings.auto_log = true;
+        e.note_callbook_answer("IA5C", answer("IA5C"));
+        work(&mut e, "IA5C", 1);
+        assert_eq!(
+            logged(&e, "IA5C").ota.iota.as_deref(),
+            Some("EU-025"),
+            "{spots:?}"
+        );
+    }
+    let (mut e, _) = spotted(SpotIota::OtherBand("EU-025".into()));
+    e.settings.auto_log = true;
+    e.note_callbook_answer("IA5C/P", answer("IA5C"));
+    work(&mut e, "IA5C", 1);
+    assert_eq!(
+        logged(&e, "IA5C").ota.iota,
+        None,
+        "the portable call's answer"
+    );
+}
+
 /// REVIEW REPRO: a call corrected in the popup must not keep the busted call's filled reference.
 /// The hold filled IA5X's callbook group; corrected to IA5Y, the box still holding that fill, the
 /// contact logs IA5Y's own fill (its callbook answer) or none, never IA5X's, and no fill mark of

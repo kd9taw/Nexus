@@ -154,6 +154,12 @@ impl CatDaemon {
     }
 }
 
+/// The loop's `now` moved on by how long this tick has run so far: the moment a decision is made
+/// in the tick, on the tick's own (UTC-steered) timebase.
+fn now_in_tick(now: f64, tick_started: Instant) -> f64 {
+    now + tick_started.elapsed().as_secs_f64() * 1000.0
+}
+
 /// A rigctld TCP port is never allowed to be 0. Nexus spawns rigctld on this port and connects to
 /// `127.0.0.1:<port>`; connecting to port 0 fails on Windows with WSAEADDRNOTAVAIL ("the requested
 /// address is not valid in its context", os error 10049). Settings repair (`ensure_distinct_radio_ports`)
@@ -1496,11 +1502,14 @@ fn read_tx_meter(
 /// ([`RadioLoop::tx_alc_raw`]): its strict deadline. A rigctld from 4.6 answers `RM4;` in tens of
 /// milliseconds; one before 4.6 never answers, and the probe gives up here.
 const RAW_ALC_PROBE_DEADLINE_MS: u64 = 1_000;
+/// How long (ms) a rigctld before Hamlib 4.6 holds its client lock after a raw read the radio
+/// never ends with a newline: the Yaesu backends' `.timeout`.
+const HAMLIB_45_LOCK_MS: u64 = 2_000;
 /// …and the probe runs only this long or more before the next slot boundary: its own deadline,
-/// plus the 2 s a rigctld before 4.6 then holds its client lock waiting for the radio's
-/// newline (the Yaesu backends' `.timeout`), plus a margin, so a key on that boundary never
-/// waits behind it.
-const RAW_ALC_PROBE_LEAD_MS: f64 = 3_500.0;
+/// plus [`HAMLIB_45_LOCK_MS`], plus a 500 ms margin, so a key on that boundary never waits behind
+/// it.
+const RAW_ALC_PROBE_LEAD_MS: f64 = (RAW_ALC_PROBE_DEADLINE_MS + HAMLIB_45_LOCK_MS + 500) as f64;
+const _: () = assert!(RAW_ALC_PROBE_LEAD_MS == 3_500.0);
 /// …and only this far or more into the slot. A boundary's own tick has the whole slot ahead of
 /// it, and an over due on that boundary keys on that tick or just after it, so a probe there
 /// would key it late. Three seconds, not one: an automatic reply also late-starts off the
@@ -1533,6 +1542,156 @@ fn raw_alc_over_deadline_ms(rig: &Rig) -> u64 {
         rig.transport_deadline_ms()
     } else {
         RAW_ALC_OVER_DEADLINE_MS
+    }
+}
+
+/// What one transmit-meter read asks of the radio this tick ([`tx_meter_read_plan`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MeterReadPlan {
+    /// The deadline (ms) the read must end by: a tune's [`TUNE_METER_DEADLINE_MS`], an over's time
+    /// left to its next end less [`TX_METER_OVER_END_SLACK_MS`] (no more than the link's deadline),
+    /// or, for a hold with no end of its own (live PTT, a radio keyed at the radio), the link's own.
+    deadline: u64,
+    /// The raw ALC read's strict deadline: [`raw_alc_over_deadline_ms`], or the read's own deadline
+    /// when that is shorter.
+    raw_strict: u64,
+    /// Whether a raw ALC read this one missed counts toward giving the raw read up (the backstop):
+    /// only when the read was given at least the raw read's own deadline, so a read cut short by an
+    /// over's end never parks it.
+    backstop_counts: bool,
+}
+
+/// The transmit-meter read policy, in one place: whether a read is asked this tick and with what
+/// deadlines, from the loop's state (`tuning`: a tune carrier is up; `over_left_ms`: the time to
+/// the over's next end, `None` for a tune or a hold with no end; `slow`: the link is a slow
+/// transport; `transport_ms`: the link's deadline; `raw_ms`: [`raw_alc_over_deadline_ms`]).
+/// `None`: too little of the over is left for a healthy answer on this link
+/// ([`TX_METER_OVER_MIN_LEFT_MS`], [`TX_METER_OVER_MIN_LEFT_SLOW_MS`]), so nothing is asked. The
+/// tune's lead and the poll cadence are the caller's.
+fn tx_meter_read_plan(
+    tuning: bool,
+    over_left_ms: Option<f64>,
+    slow: bool,
+    transport_ms: u64,
+    raw_ms: u64,
+) -> Option<MeterReadPlan> {
+    let min_left = if slow {
+        TX_METER_OVER_MIN_LEFT_SLOW_MS
+    } else {
+        TX_METER_OVER_MIN_LEFT_MS
+    };
+    if !over_left_ms.is_none_or(|left| left >= min_left) {
+        return None;
+    }
+    // A hold with no end of its own still gets a deadline the read must END by, the link's own:
+    // without one the read went through `Rig::command`, which checks the deadline only between
+    // 500 ms socket reads, so a radio that stopped answering held the loop (and a PTT release or
+    // a Stop TX behind it) about 1000 ms on a fast link, not 700.
+    let deadline = if tuning {
+        TUNE_METER_DEADLINE_MS
+    } else {
+        over_left_ms.map_or(transport_ms, |left| {
+            ((left - TX_METER_OVER_END_SLACK_MS) as u64).min(transport_ms)
+        })
+    };
+    Some(MeterReadPlan {
+        deadline,
+        raw_strict: deadline.min(raw_ms),
+        backstop_counts: deadline >= raw_ms,
+    })
+}
+
+#[cfg(test)]
+mod meter_read_plan_tests {
+    use super::*;
+
+    /// The policy row by row (fast link: 700 ms deadline, raw 300; slow link: 2500, raw 2500).
+    #[test]
+    fn the_meter_read_plan_row_by_row() {
+        let plan = |deadline, raw_strict, backstop_counts| {
+            Some(MeterReadPlan {
+                deadline,
+                raw_strict,
+                backstop_counts,
+            })
+        };
+        // (row, tuning, over left, slow, expected)
+        let rows = [
+            ("tune", true, None, false, plan(120, 120, false)),
+            (
+                "hold with no end, fast",
+                false,
+                None,
+                false,
+                plan(700, 300, true),
+            ),
+            (
+                "hold with no end, slow",
+                false,
+                None,
+                true,
+                plan(2_500, 2_500, true),
+            ),
+            (
+                "far from the end, fast",
+                false,
+                Some(2_640.0),
+                false,
+                plan(700, 300, true),
+            ),
+            (
+                "far from the end, slow",
+                false,
+                Some(2_640.0),
+                true,
+                plan(2_500, 2_500, true),
+            ),
+            (
+                "340 ms left, fast",
+                false,
+                Some(340.0),
+                false,
+                plan(320, 300, true),
+            ),
+            (
+                "180 ms left, fast",
+                false,
+                Some(180.0),
+                false,
+                plan(160, 160, false),
+            ),
+            (
+                "150 ms left, fast: the floor",
+                false,
+                Some(150.0),
+                false,
+                plan(130, 130, false),
+            ),
+            ("149 ms left, fast", false, Some(149.0), false, None),
+            (
+                "740 ms left, slow",
+                false,
+                Some(740.0),
+                true,
+                plan(720, 720, false),
+            ),
+            (
+                "600 ms left, slow: the floor",
+                false,
+                Some(600.0),
+                true,
+                plan(580, 580, false),
+            ),
+            ("599 ms left, slow", false, Some(599.0), true, None),
+        ];
+        for (row, tuning, left, slow, want) in rows {
+            let (transport, raw) = if slow { (2_500, 2_500) } else { (700, 300) };
+            assert_eq!(
+                tx_meter_read_plan(tuning, left, slow, transport, raw),
+                want,
+                "{row}"
+            );
+        }
     }
 }
 
@@ -4943,6 +5102,11 @@ struct RadioLoop {
     cat_rebuild_backoff_ms: f64,
     /// Earliest tick a FAILED reopen (no daemon, no control) is retried, and its backoff.
     cat_reopen_at: f64,
+    /// The last reopen's refusal by Nexus itself ([`CatProbe::refused`]), in its own words. Test
+    /// CAT pressed while that reopen's backoff runs is answered by the plain reprobe, which has no
+    /// open of its own to read the refusal from; it answers this one, typed, so Test CAT never
+    /// sweeps the port the refusal kept shut. Every reopen sets it again.
+    cat_open_refusal: Option<String>,
     cat_reopen_backoff_ms: f64,
     /// Next tick the serial port's presence is checked while CAT is down.
     cat_port_check_at: f64,
@@ -5455,6 +5619,7 @@ impl RadioLoop {
             cat_outage_halted: false,
             cat_rebuild_backoff_ms: CAT_REBUILD_BACKOFF_MS,
             cat_reopen_at: 0.0,
+            cat_open_refusal: None,
             cat_reopen_backoff_ms: CAT_REOPEN_RETRY_MS,
             cat_port_check_at: 0.0,
             cat_port_present: None,
@@ -7188,14 +7353,14 @@ impl RadioLoop {
 
     /// ⭐ AN FT8/FT4 OVER'S WINDOW IS RE-TESTED FIRST IN EVERY TICK, BEFORE ANYTHING IN THE TICK
     /// CAN WAIT, AS WSJT-X RE-TESTS ITS OWN ON EVERY GUI TICK. WSJT-X asks every 100 ms whether the
-    /// clock is still inside the over's window (`m_bTxTime`, `widgets/mainwindow.cpp:870`, `:5055`)
-    /// and the tick that finds it outside stops the audio and lowers PTT 200 ms later (`:5180`,
-    /// `:5530`, `stopTx` `:5743-5760`). That tick runs on the GUI thread, which its CAT never stalls.
-    /// Here one thread runs the window's end and everything that can wait: the Engine lock (which a
-    /// double-click or a logger's Reply holds while a decode finishes) and every CAT call. With the
-    /// end tested only where the tick reached it, an end already due waited for whatever the tick
-    /// met first, and a stall there held PTT into the other station's period for as long as it
-    /// lasted.
+    /// clock is still inside the over's window (`m_bTxTime`, `widgets/mainwindow.cpp:1011`,
+    /// `:7715`, v3.0.2) and the tick that finds it outside stops the audio and lowers PTT 200 ms
+    /// later (`:7859`, `:8219`, `stopTx` `:8564-8591`). That tick runs on the GUI thread, which its
+    /// CAT never stalls. Here one thread runs the window's end and everything that can wait: the
+    /// Engine lock (which a double-click or a logger's Reply holds while a decode finishes) and
+    /// every CAT call. With the end tested only where the tick reached it, an end already due
+    /// waited for whatever the tick met first, and a stall there held PTT into the other station's
+    /// period for as long as it lasted.
     ///
     /// The same audio stop and PTT off as further down the tick (the over's own, on the slot clock
     /// of the slot its tick decided for), only earlier in it. The over is still ended where it was
@@ -8227,6 +8392,24 @@ impl RadioLoop {
         note: &str,
         why: &str,
     ) {
+        self.clear_loop_tx_for_context(backend, rig, note);
+        let mut eng = engine_lock(engine);
+        // CONTEXT halt — the loop reacting to a radio switch or a CAT-config save, never an
+        // operator Stop TX. A plain `halt_tx` here silently undid the engine-side re-arm a
+        // switch had just made, and the operator's next PTT press went nowhere.
+        eng.halt_tx_for_context_change(why);
+    }
+
+    /// The loop's half of [`Self::unkey_before_letting_go`], for a caller that halts the engine
+    /// itself under the same lock as more engine work (the Test-CAT hold): note `note` in the CI-V
+    /// diagnostic log, flush the queued audio, unkey through the still-alive rig, and clear this
+    /// loop's TX state (the hold, a tune, the operator's applied PTT).
+    fn clear_loop_tx_for_context<B: AudioBackend>(
+        &mut self,
+        backend: &mut B,
+        rig: &mut Rig,
+        note: &str,
+    ) {
         crate::civ::diag::note(note);
         backend.flush_output();
         let _ = rig.ptt(false);
@@ -8234,11 +8417,25 @@ impl RadioLoop {
         self.tuning_keyed = false;
         self.manual_ptt_applied = false;
         self.tune_started_ms = None;
-        let mut eng = engine_lock(engine);
-        // CONTEXT halt — the loop reacting to a radio switch or a CAT-config save, never an
-        // operator Stop TX. A plain `halt_tx` here silently undid the engine-side re-arm a
-        // switch had just made, and the operator's next PTT press went nowhere.
-        eng.halt_tx_for_context_change(why);
+    }
+
+    /// End an over this loop keyed for a stream or a microphone (CW, RTTY, PSK, JTTY, the voice
+    /// keyer, SSTV, the remote and computer microphones, a TCI program): drop the queued audio
+    /// first (the only thing that stops a VOX rig), then unkey, then let go of the PTT hold.
+    /// Returns how many queued samples were dropped. Each caller keeps its own "busy" evidence:
+    /// this never decides WHETHER the over is its to cut.
+    fn cut_own_over<B: AudioBackend>(&mut self, backend: &mut B, rig: &mut Rig) -> usize {
+        let dropped = backend.flush_output();
+        let _ = rig.ptt(false);
+        self.tx_until_ms = None;
+        dropped
+    }
+
+    /// Hold PTT until at least `until` (ms): a hold already running past it is kept, never
+    /// shortened, so a stream's or a microphone's over cannot cut short a longer one riding the
+    /// same transmitter.
+    fn extend_hold(&mut self, until: f64) {
+        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
     }
 
     /// After a dial push that CROSSED a band boundary, make the app the last word on the
@@ -9438,15 +9635,11 @@ impl RadioLoop {
                 // possibly-keyed rig. The hold self-expires engine-side, so a crashed
                 // prober can't leave CAT down.
                 if !self.cat_hold_active {
-                    crate::civ::diag::note(
+                    self.clear_loop_tx_for_context(
+                        backend,
+                        rig,
                         "test-cat hold: releasing the CAT port for the baud-ladder probe",
                     );
-                    backend.flush_output();
-                    let _ = rig.ptt(false);
-                    self.tx_until_ms = None;
-                    self.tuning_keyed = false;
-                    self.manual_ptt_applied = false;
-                    self.tune_started_ms = None;
                     {
                         let mut eng = engine_lock(engine);
                         // A CONTEXT halt: the loop is dropping the transport under the
@@ -9634,6 +9827,7 @@ impl RadioLoop {
                 self.forget_data_judgement();
                 let (new_rig, proc, probe) = reopen_rig(&open_want, allow_coexist);
                 let (ok, detail, refused) = (probe.ok, probe.detail, probe.refused);
+                self.cat_open_refusal = refused.then(|| detail.clone());
                 let detail = if suspect_rebuild && !daemon_died && !linkless {
                     format!("the CAT link stayed silent — the port was reopened. {detail}")
                         .trim_end()
@@ -9747,13 +9941,19 @@ impl RadioLoop {
             } else if reprobe_req {
                 let (mut ok, mut detail) = reprobe(rig, &want);
                 // A radio whose launch Nexus refused has no daemon to probe. Say why, typed, rather
-                // than "the control channel didn't open" — and so Test CAT never sweeps its port.
-                let refused = !rig.has_control() && hamlib_launch_refused(&want);
-                if refused {
-                    (ok, detail) = (
-                        Some(false),
-                        crate::rigctld_proc::HARDWARE_HANDSHAKE_RTS_KEYS.to_string(),
-                    );
+                // than "the control channel didn't open" — and so Test CAT never sweeps its port:
+                // a declared handshake refusal, or the last reopen's own refusal (a Hamlib that
+                // cannot confirm the line holds), whose backoff this Test CAT was pressed inside.
+                let refusal = if rig.has_control() {
+                    None
+                } else if hamlib_launch_refused(&want) {
+                    Some(crate::rigctld_proc::HARDWARE_HANDSHAKE_RTS_KEYS.to_string())
+                } else {
+                    self.cat_open_refusal.clone()
+                };
+                let refused = refusal.is_some();
+                if let Some(why) = refusal {
+                    (ok, detail) = (Some(false), why);
                 }
                 // Attribution only when the CAT channel itself was probed (the branches of
                 // `reprobe` that call probe_cat_or_explain) — a serial-PTT line test
@@ -9956,22 +10156,16 @@ impl RadioLoop {
                 // modem samples are already gone — and the sequencer would count
                 // that silent over as sent and wait for a reply that never comes.
                 // Mirrors the rig-rebuild path above.
-                {
-                    // UNCONDITIONAL — same desync rationale as the rig-rebuild guard.
-                    crate::civ::diag::note("audio rebuild: ending the over (flush+unkey) before reopening the sound card");
-                    backend.flush_output();
-                    let _ = rig.ptt(false);
-                    self.tx_until_ms = None;
-                    self.tuning_keyed = false;
-                    self.manual_ptt_applied = false;
-                    self.tune_started_ms = None;
-                    {
-                        let mut eng = engine_lock(engine);
-                        // CONTEXT halt, same as the rig rebuild above: swapping the sound card
-                        // to the newly active radio must not disarm the operator's mic.
-                        eng.halt_tx_for_context_change("audio backend rebuild");
-                    }
-                }
+                // UNCONDITIONAL — same desync rationale as the rig-rebuild guard. A CONTEXT
+                // halt, same as the rig rebuild above: swapping the sound card to the newly
+                // active radio must not disarm the operator's mic.
+                self.unkey_before_letting_go(
+                    engine,
+                    backend,
+                    rig,
+                    "audio rebuild: ending the over (flush+unkey) before reopening the sound card",
+                    "audio backend rebuild",
+                );
                 // ⚠️ RELEASE THE OLD CARD FIRST — see `AudioBackend::release_device`.
                 // ALSA opens a card ONCE, and until this call the rebuild probed the new
                 // device while our OWN previous streams still held it, so moving to any
@@ -12818,9 +13012,7 @@ impl RadioLoop {
                     // not cut an FT8 slot over that happens to be in flight
                     // (operator 2026-07-31 — TX Off lets the over complete; Stop TX
                     // cuts via the slot-TX abort instead).
-                    backend.flush_output();
-                    let _ = rig.ptt(false);
-                    self.tx_until_ms = None;
+                    self.cut_own_over(backend, rig);
                 }
                 // CAT keyer abort (cut the one word in the rig buffer), and the playback stop a
                 // Yaesu's own reference defines where Hamlib sends none
@@ -13046,8 +13238,7 @@ impl RadioLoop {
                                 // One whole word: the silence after it is the word space.
                                 backend.mark_unit_end();
                                 let until = self.cw_busy_until + crate::slot::TX_TAIL_MS;
-                                self.tx_until_ms =
-                                    Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                                self.extend_hold(until);
                                 self.cw_keying_until = until;
                             } else {
                                 // Nothing keyed, so nothing to wait out: a new send keys at once.
@@ -13305,9 +13496,7 @@ impl RadioLoop {
                 // 2026-07-31 — TX Off lets the over complete; halt_tx cuts any over
                 // via the slot-TX abort regardless).
                 if now < self.rtty_busy_until {
-                    backend.flush_output();
-                    let _ = rig.ptt(false);
-                    self.tx_until_ms = None;
+                    self.cut_own_over(backend, rig);
                 }
                 self.rtty_busy_until = 0.0; // a fresh send after Stop keys immediately
                                             // The latched generator dies with the over it was rendering. Keeping
@@ -13370,7 +13559,7 @@ impl RadioLoop {
                         }
                         self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
                         let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        self.extend_hold(until);
                     }
                 }
                 // Keyed and fed far enough ahead: nothing to render this tick. The
@@ -13500,8 +13689,7 @@ impl RadioLoop {
                                     k.send(bits.clone(), baud);
                                     self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
                                     let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
-                                    self.tx_until_ms =
-                                        Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                                    self.extend_hold(until);
                                 }
                             }
                             {
@@ -13555,8 +13743,7 @@ impl RadioLoop {
                                     self.rtty_busy_until =
                                         self.rtty_busy_until.max(now) + lead + chunk_ms;
                                     let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
-                                    self.tx_until_ms =
-                                        Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                                    self.extend_hold(until);
                                 } else {
                                     let mut eng = engine_lock(engine);
                                     eng.drop_rtty_latch();
@@ -13646,8 +13833,7 @@ impl RadioLoop {
                             if key.sends() {
                                 k.send(bits.clone(), baud);
                                 let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
-                                self.tx_until_ms =
-                                    Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                                self.extend_hold(until);
                             }
                         }
                         let sent = !open_err && key.sends();
@@ -13711,8 +13897,7 @@ impl RadioLoop {
                                 backend.play(&buf);
                                 backend.mark_unit_end();
                                 let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
-                                self.tx_until_ms =
-                                    Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                                self.extend_hold(until);
                             } else {
                                 // Nothing keyed — don't sit "busy" for a send that never started.
                                 self.rtty_busy_until = 0.0;
@@ -13805,9 +13990,7 @@ impl RadioLoop {
                 // the in-flight evidence), so a disarm can't cut an FT8 slot
                 // over riding the same PTT/ring.
                 if now < self.psk_busy_until {
-                    backend.flush_output();
-                    let _ = rig.ptt(false);
-                    self.tx_until_ms = None;
+                    self.cut_own_over(backend, rig);
                 }
                 self.psk_busy_until = 0.0; // a fresh send after Stop keys immediately
                                            // The latched generator dies with the over (a kept one would
@@ -13837,7 +14020,7 @@ impl RadioLoop {
                         }
                         self.psk_busy_until = self.psk_busy_until.max(now) + chunk_ms;
                         let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        self.extend_hold(until);
                     }
                 }
                 // Keyed and fed far enough ahead: gates re-checked, nothing to render.
@@ -13898,8 +14081,7 @@ impl RadioLoop {
                             backend.play(&buf);
                             self.psk_busy_until = self.psk_busy_until.max(now) + lead + chunk_ms;
                             let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
-                            self.tx_until_ms =
-                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            self.extend_hold(until);
                             if let Some(st) = self.psk_stream.as_mut() {
                                 st.keyed = true;
                             }
@@ -13956,7 +14138,7 @@ impl RadioLoop {
                         backend.play(&buf);
                         backend.mark_unit_end();
                         let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        self.extend_hold(until);
                     } else {
                         // Nothing keyed — don't sit "busy" for a send that never started.
                         self.psk_busy_until = 0.0;
@@ -14003,9 +14185,7 @@ impl RadioLoop {
                 // Only while JTTY audio is actually going (`jtty_busy_until` is the evidence), so
                 // a cut can never take an FT8 slot over riding the same PTT and ring.
                 if now < self.jtty_busy_until {
-                    backend.flush_output();
-                    let _ = rig.ptt(false);
-                    self.tx_until_ms = None;
+                    self.cut_own_over(backend, rig);
                 }
                 self.jtty_busy_until = 0.0;
                 engine_lock(engine).set_jtty_sending(false);
@@ -14032,7 +14212,7 @@ impl RadioLoop {
                     self.jtty_busy_until =
                         self.jtty_busy_until.max(now) + lead + buf.len() as f64 / 12.0;
                     let until = self.jtty_busy_until + crate::slot::TX_TAIL_MS;
-                    self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    self.extend_hold(until);
                     engine_lock(engine).set_jtty_sending(true);
                 } else {
                     engine_lock(engine).jtty_key_refused();
@@ -14227,9 +14407,7 @@ impl RadioLoop {
                 )
             };
             if abort {
-                backend.flush_output(); // dump queued message audio + unkey now
-                let _ = rig.ptt(false);
-                self.tx_until_ms = None;
+                self.cut_own_over(backend, rig); // dump queued message audio + unkey now
             }
             if let Some((buf, dax)) = samples {
                 // ⛔ NO MESSAGE WITHOUT THE CLIENT'S DAX TEE (native audio on). The message's audio
@@ -14291,7 +14469,7 @@ impl RadioLoop {
                         backend.play(&buf);
                         backend.mark_unit_end();
                         let until = now + lead + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        self.extend_hold(until);
                         self.voice_until_ms = Some(until);
                         if dax {
                             self.flex_voice_until_ms = self.tx_until_ms;
@@ -14422,9 +14600,7 @@ impl RadioLoop {
                 // the slot-TX abort regardless).
                 if self.sstv_feed.is_some() {
                     self.sstv_feed = None;
-                    backend.flush_output();
-                    let _ = rig.ptt(false);
-                    self.tx_until_ms = None;
+                    self.cut_own_over(backend, rig);
                 }
                 {
                     let mut eng = engine_lock(engine);
@@ -14478,7 +14654,7 @@ impl RadioLoop {
                         // Hold PTT for the WHOLE image via the precomputed duration; the
                         // tx_until_ms expiry below drops it even if every other mechanism fails.
                         let until = now + lead + job.duration_ms + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        self.extend_hold(until);
                         {
                             let mut eng = engine_lock(engine);
                             eng.set_sstv_sending(true);
@@ -14601,9 +14777,7 @@ impl RadioLoop {
                 // M12: the epoch has already moved and the feed is closed (the engine's kill
                 // path); here the queued audio goes (the only thing that stops a VOX rig) and PTT
                 // drops.
-                let dropped = backend.flush_output();
-                let _ = rig.ptt(false);
-                self.tx_until_ms = None;
+                let dropped = self.cut_own_over(backend, rig);
                 crate::civ::diag::note(&format!(
                     "remote microphone over ended: unkey, {dropped} queued samples dropped"
                 ));
@@ -14673,8 +14847,7 @@ impl RadioLoop {
                                         + (lead + MIC.ahead_ms) as f64
                                 }
                             } + crate::slot::TX_TAIL_MS;
-                            self.tx_until_ms =
-                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            self.extend_hold(until);
                         }
                     }
                     MicTick::Samples(buf) => {
@@ -14685,7 +14858,7 @@ impl RadioLoop {
                         self.mic_busy_until = self.mic_busy_until.max(now)
                             + buf.len() as f64 * 1000.0 / f64::from(MIC.rate_hz);
                         let until = self.mic_busy_until + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        self.extend_hold(until);
                     }
                     MicTick::Idle | MicTick::Armed | MicTick::Ahead => {}
                 }
@@ -14743,9 +14916,7 @@ impl RadioLoop {
             if (abort || unkeyed_under) && self.program_over_keyed {
                 // A hard end: the feed is closed and its epoch moved (the engine's kill path);
                 // here the queued audio goes (the only thing that stops a VOX rig) and PTT drops.
-                let dropped = backend.flush_output();
-                let _ = rig.ptt(false);
-                self.tx_until_ms = None;
+                let dropped = self.cut_own_over(backend, rig);
                 crate::civ::diag::note(&format!(
                     "TCI program's over ended: unkey, {dropped} queued samples dropped"
                 ));
@@ -14776,8 +14947,7 @@ impl RadioLoop {
                             let until = now
                                 + (TCI_OVER.lead_in_ms + TCI_OVER.ahead_ms) as f64
                                 + crate::slot::TX_TAIL_MS;
-                            self.tx_until_ms =
-                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            self.extend_hold(until);
                         }
                     }
                     MicTick::Samples(buf) => {
@@ -14787,7 +14957,7 @@ impl RadioLoop {
                         self.program_over_busy_until = self.program_over_busy_until.max(now)
                             + buf.len() as f64 * 1000.0 / f64::from(TCI_OVER.rate_hz);
                         let until = self.program_over_busy_until + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        self.extend_hold(until);
                     }
                     MicTick::Idle | MicTick::Armed | MicTick::Ahead => {}
                 }
@@ -14873,9 +15043,7 @@ impl RadioLoop {
             if (abort || unkeyed_under) && self.pc_mic_keyed {
                 // The feed is already closed (the engine's kill path); here the queued audio goes
                 // (the only thing that stops a VOX rig) and PTT drops, before anything else.
-                let dropped = backend.flush_output();
-                let _ = rig.ptt(false);
-                self.tx_until_ms = None;
+                let dropped = self.cut_own_over(backend, rig);
                 crate::civ::diag::note(&format!(
                     "computer microphone over ended: unkey, {dropped} queued samples dropped"
                 ));
@@ -14943,8 +15111,7 @@ impl RadioLoop {
                                         + (lead + PC_MIC.ahead_ms) as f64
                                 }
                             } + crate::slot::TX_TAIL_MS;
-                            self.tx_until_ms =
-                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            self.extend_hold(until);
                         }
                     }
                     MicTick::Samples(buf) => {
@@ -14954,7 +15121,7 @@ impl RadioLoop {
                         self.pc_mic_busy_until = self.pc_mic_busy_until.max(now)
                             + buf.len() as f64 * 1000.0 / f64::from(PC_MIC.rate_hz);
                         let until = self.pc_mic_busy_until + crate::slot::TX_TAIL_MS;
-                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        self.extend_hold(until);
                     }
                     MicTick::Idle | MicTick::Armed | MicTick::Ahead => {}
                 }
@@ -15681,31 +15848,27 @@ impl RadioLoop {
                 let over_left = if self.tuning_keyed {
                     None
                 } else {
-                    self.over_left_ms(now + tick_started.elapsed().as_secs_f64() * 1000.0)
+                    self.over_left_ms(now_in_tick(now, tick_started))
                 };
-                let min_left = if rig.slow_transport() {
-                    TX_METER_OVER_MIN_LEFT_SLOW_MS
-                } else {
-                    TX_METER_OVER_MIN_LEFT_MS
-                };
-                let left_ok = over_left.is_none_or(|left| left >= min_left);
-                if lead_ok && left_ok && now - self.last_tx_meter_poll >= TX_METER_POLL_MS {
+                let plan = tx_meter_read_plan(
+                    self.tuning_keyed,
+                    over_left,
+                    rig.slow_transport(),
+                    rig.transport_deadline_ms(),
+                    raw_alc_over_deadline_ms(rig),
+                );
+                if let Some(plan) =
+                    plan.filter(|_| lead_ok && now - self.last_tx_meter_poll >= TX_METER_POLL_MS)
+                {
                     // RFPOWER_METER_WATTS (not RFPOWER_METER): Hamlib's plain RFPOWER_METER is a
                     // normalized 0..1, only the _WATTS variant is true watts — and the native
                     // daemon answers both with calibrated watts. So `tx_po_w` is watts on both.
                     // A rig that REFUSES the watts is read with RFPOWER_METER instead, and that
                     // share goes to the engine as a share (`tx_po_share`, #489).
                     // Tune-time reads are deadline-bounded (see `meters_now`), an over's by the
-                    // time left to its end, and only a hold with no end of its own (live PTT, a
-                    // radio keyed at the radio) waits the link's deadline.
-                    let deadline = if self.tuning_keyed {
-                        Some(TUNE_METER_DEADLINE_MS)
-                    } else {
-                        over_left.map(|left| {
-                            ((left - TX_METER_OVER_END_SLACK_MS) as u64)
-                                .min(rig.transport_deadline_ms())
-                        })
-                    };
+                    // time left to its end, and a hold with no end of its own (live PTT, a radio
+                    // keyed at the radio) by the link's deadline, every one ending by it.
+                    let deadline = Some(plan.deadline);
                     let i = self.tx_meter_idx % N_TX_METERS;
                     self.tx_meter_idx = self.tx_meter_idx.wrapping_add(1);
                     self.last_tx_meter_poll = now;
@@ -15737,9 +15900,7 @@ impl RadioLoop {
                             // Strict even in an over: the link answered the probe, but one
                             // that stops answering must not hold the loop for its deadline.
                             // An over's own deadline (the time left to its end) bounds it too.
-                            let raw = raw_alc_over_deadline_ms(rig);
-                            let strict = deadline.map_or(raw, |d| d.min(raw));
-                            read_tx_meter(rig, TX_METERS[i], model, raw_alc, Some(strict))
+                            read_tx_meter(rig, TX_METERS[i], model, raw_alc, Some(plan.raw_strict))
                         } else {
                             read_tx_meter(rig, TX_METERS[i], model, raw_alc, deadline)
                         };
@@ -15759,7 +15920,7 @@ impl RadioLoop {
                             && raw_alc
                             && crate::rigmodels::raw_alc_query(model).is_some()
                             && self.tx_meter_supported[i] == Some(false)
-                            && deadline.is_none_or(|d| d >= raw_alc_over_deadline_ms(rig))
+                            && plan.backstop_counts
                         {
                             // The backstop: a link that answered the probe and has stopped
                             // answering the raw read. `l ALC` gets its own three strikes
@@ -16762,8 +16923,8 @@ impl RadioLoop {
             // 1.86 s (FT8) or 1.96 s (FT4) late and held PTT 250 ms into the next slot.
             //
             // ⭐ HOW LATE: WSJT-X'S OWN LIMIT. FT8 and FT4 key a late start while the slot is
-            // under 75 % of its period (`slot::wsjtx_may_key_at`; `mainwindow.cpp:5126`,
-            // `fTR < 0.75`): up to 11.25 s into an FT8 slot, 5.625 s into FT4, sending the
+            // under 75 % of its period (`slot::wsjtx_may_key_at`; `mainwindow.cpp:7805`,
+            // v3.0.2, `fTR < 0.75`): up to 11.25 s into an FT8 slot, 5.625 s into FT4, sending the
             // symbols that remain. Later, the request stays and the over waits for this
             // station's next slot. The slot's place is read again here, not taken from the
             // tick's clock, which CAT earlier in the tick can leave behind. This replaced a
@@ -17432,7 +17593,8 @@ impl RadioLoop {
                     //
                     // ⭐ AND FOR EVERY TIER THAT HAS NO EARLY PASS AT ALL.
                     // `early_done_slot` is set only by the early-pass block, whose
-                    // trigger table is FT8 11.8 s / FT4 5.5 s / everything else None
+                    // trigger table is FT8 11.8 s (early) / FT4 6.05 s (full) / FT2
+                    // 2.6 s / everything else None (MSK144's repeating passes clear it)
                     // — so Q65, FST4, MSK144, WSPR and FST4W could NEVER satisfy the
                     // condition above and always fell through to the deferred path,
                     // keyed late by however long the previous period's decode took.
@@ -17660,7 +17822,7 @@ impl RadioLoop {
         // The Flex client's transmit audio source (operator ruling, 2026-10-03): written here, at
         // the end of the tick, after every keying site in it, and only at a quiet point, never
         // between a slot boundary and the key that follows it.
-        let now_end = now + tick_started.elapsed().as_secs_f64() * 1000.0;
+        let now_end = now_in_tick(now, tick_started);
         self.sync_flex_tx_routing(engine, rig, now_end);
         Ok(())
     }
@@ -21098,6 +21260,7 @@ mod tests {
     mod contest_logged;
     mod contest_reply;
     mod contest_status;
+    mod cut_sites;
     mod cw_cat_text;
     mod cw_speed_match;
     mod cw_stop;
@@ -21119,6 +21282,7 @@ mod tests {
     mod jtty_status;
     mod jtty_transmit;
     mod late_key;
+    mod meter_deadline;
     mod omnirig_coverage;
     mod pc_mic;
     mod po_derived;
@@ -21137,6 +21301,7 @@ mod tests {
     mod tci_server;
     mod tci_soundcard_cw;
     mod tci_spots;
+    mod test_cat_refused;
     mod tx_extras;
     mod tx_unit_ends;
     mod udp_decode_time;

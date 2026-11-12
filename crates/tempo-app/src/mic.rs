@@ -724,7 +724,11 @@ impl MicLatch {
             if gates.watchdog_limit_secs > 0 {
                 let start = gates.watchdog_start_secs.unwrap_or(gates.now_secs);
                 watchdog_start = Some(start);
-                if gates.now_secs.saturating_sub(start) >= gates.watchdog_limit_secs {
+                if crate::keyboard::watchdog_tripped(
+                    start,
+                    gates.now_secs,
+                    gates.watchdog_limit_secs,
+                ) {
                     let mut res = MicTickResult::dropped(MicDrop::Watchdog);
                     res.watchdog_start = watchdog_start;
                     return res;
@@ -1537,6 +1541,41 @@ mod tests {
         let res = latch.tick(late, vec![frame(3, 480, late.now, 0.5)], PLENTY);
         assert_eq!(res.drop, Some(MicDrop::Watchdog));
         assert_eq!(res.tick, MicTick::Idle);
+    }
+
+    /// Pins today's behaviour of the `MicGates` watchdog copy for the watchdog-collapse
+    /// refactor: on a keyed over, one second short of the limit carries on, exactly the limit
+    /// trips, and a zero limit is "watchdog off" — never trips and reports no clock, however
+    /// old the start. The clock is injected, so the boundary is exact (no second-tick margin).
+    #[test]
+    fn the_mic_watchdog_holds_one_short_trips_at_the_limit_and_zero_is_off() {
+        let t0 = Instant::now();
+        let mut latch = keyed(t0);
+        let mut g = up(t0 + ms(20));
+        g.watchdog_limit_secs = 60;
+        g.watchdog_start_secs = Some(100);
+
+        g.now_secs = 159; // elapsed = limit - 1
+        let res = latch.tick(g, vec![frame(2, 240, g.now, 0.5)], PLENTY);
+        assert_eq!(res.drop, None, "one second short of the limit tripped");
+        assert_eq!(res.watchdog_start, Some(100), "the start is carried");
+
+        g.now = t0 + ms(40);
+        g.now_secs = 160; // elapsed == limit
+        let res = latch.tick(g, vec![frame(3, 480, g.now, 0.5)], PLENTY);
+        assert_eq!(res.drop, Some(MicDrop::Watchdog), "the limit itself trips");
+        assert_eq!(res.tick, MicTick::Idle);
+        assert_eq!(res.watchdog_start, Some(100));
+
+        // Zero = off: an ancient start and a far-later now still carry on, and no clock.
+        let mut latch = keyed(t0);
+        let mut off = up(t0 + ms(20));
+        off.watchdog_limit_secs = 0;
+        off.watchdog_start_secs = Some(1);
+        off.now_secs = 1_000_000;
+        let res = latch.tick(off, vec![frame(2, 240, off.now, 0.5)], PLENTY);
+        assert_eq!(res.drop, None, "a zero limit tripped");
+        assert_eq!(res.watchdog_start, None, "a zero limit reported a clock");
     }
 
     // ── M12: the backstops ────────────────────────────────────────────────────────────────────

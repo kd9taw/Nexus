@@ -332,15 +332,37 @@ mod tests {
         now_unix_ms() - eng.clock_offset_ms().unwrap_or(0) as f64
     }
 
+    std::thread_local! {
+        /// When [`steer_into_period`] last steered on this thread, until [`tx_phase_held`] holds
+        /// the steered clock there.
+        static STEERED_AT: std::cell::Cell<Option<std::time::Instant>> =
+            const { std::cell::Cell::new(None) };
+    }
+
     /// Steer `eng`'s clock so that it reads `into_ms` into a period now (before its start for a
-    /// negative `into_ms`), and say that period's slot.
+    /// negative `into_ms`), and say that period's slot. The next [`tx_phase_held`] on this thread
+    /// decides there: the set-up between the two (a frame built under the process-wide modem
+    /// lock, a stand-in rigctld started and connected to) takes real time, hundreds of ms on a
+    /// loaded box, and would otherwise move the decision past the place a scene is about.
     fn steer_into_period(eng: &mut Engine, into_ms: f64) -> u64 {
         let period_ms = eng.active_slot_secs() * 1000.0;
         let phase = now_unix_ms().rem_euclid(period_ms);
         let offset = (phase - into_ms).round() as i64;
         eng.set_clock_offset_ms(Some(offset));
         assert_eq!(eng.clock_offset_ms(), Some(offset), "premise: steered");
+        STEERED_AT.set(Some(std::time::Instant::now()));
         ((steered_now_ms(eng) - into_ms) / period_ms).round() as u64
+    }
+
+    /// Take back the real time since the last [`steer_into_period`], so the steered clock reads
+    /// where it was steered to: steered last, as `slot.rs`'s slow-split scenes steer.
+    fn hold_the_steer(eng: &mut Engine) {
+        if let Some(at) = STEERED_AT.take() {
+            let offset = eng.clock_offset_ms().expect("steered");
+            let held = offset + at.elapsed().as_millis() as i64;
+            eng.set_clock_offset_ms(Some(held));
+            assert_eq!(eng.clock_offset_ms(), Some(held), "premise: steered");
+        }
     }
 
     /// A JS8 station at Normal, TX on, with a message queued.
@@ -417,6 +439,7 @@ mod tests {
             open_ms,
         };
         let mut rx = crate::frames::RxRing::new();
+        hold_the_steer(eng);
         let before = steered_now_ms(eng);
         let act = crate::slot::slot_tx_phase(
             eng,

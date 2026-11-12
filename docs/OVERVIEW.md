@@ -50,7 +50,8 @@ Double-clicking a decode jumps to exactly the Tx step stock would choose given w
 sent you.
 
 **The decode cadence is WSJT-X's cadence.** An early decode pass fires at ~11.8 s into the 15 s
-FT8 period (~5.5 s for FT4) so most decodes land before the period boundary; the boundary pass
+FT8 period (FT4 decodes its whole frame at ~6.05 s, once its tones have ended; FT2 at 2.6 s) so
+most decodes land before the period boundary; the boundary pass
 ingests only stragglers, with no duplicate rows and no double sequencer advance. A just-armed
 reply can late-start into the current period within a 2-second window, time-aligned to the period
 grid. F6 re-decodes the retained last period and adds only what the first pass missed. Decode

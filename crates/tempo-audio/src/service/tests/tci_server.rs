@@ -956,3 +956,26 @@ fn a_loop_rebuilt_under_a_keyed_over_ends_it_and_plays_none_of_it() {
         "the new loop played an over it never keyed"
     );
 }
+
+/// A program's over's hard end, behind `program_over_keyed`, pinned for the cut-site refactor
+/// (`cut_sites`): Stop TX mid-over flushes, then unkeys, and drops the hold.
+#[test]
+fn stop_tx_mid_programs_over_flushes_then_unkeys_and_drops_the_hold() {
+    let (addr, log) = rigctld_on_the_dial();
+    let mut s = Scene::with(Rig::rigctld(&addr), |_| {});
+    s.backend.events = Some(Arc::clone(&log));
+    let mut s = s.keyed(600.0);
+    let (from, flushes) = (log.lock().unwrap().len(), s.backend.flush_calls);
+    s.engine().halt_tx();
+    s.tick(620.0, Some(0.5));
+    super::cut_sites::assert_cut(
+        "TCI program",
+        &log,
+        from,
+        flushes,
+        &s.backend,
+        s.state.tx_until_ms,
+        &["flush", "T 0"],
+    );
+    assert!(!s.rig.keyed);
+}

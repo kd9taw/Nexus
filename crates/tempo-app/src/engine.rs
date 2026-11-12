@@ -2391,7 +2391,7 @@ impl DecodePass {
     }
 
     /// This pass runs over a PARTIAL, tail-zeroed frame — WSJT-X's early decode
-    /// (`nzhsym = 41`, `mainwindow.cpp:1878`), which upstream deliberately runs
+    /// (`nzhsym = 41`, `mainwindow.cpp:2480` v3.0.2), which upstream deliberately runs
     /// cheap because the boundary pass re-decodes the same audio moments later.
     ///
     /// **Not `!a7_final`**, and the difference is load-bearing: `Redecode` is
@@ -18708,9 +18708,25 @@ impl Engine {
     fn fill_iota_at_log(&self, rec: &mut QsoRecord) {
         if let Some(read) = &self.station.iota_at_log {
             let spots = (read.spots)(&rec.call, &rec.band, rec.when_unix);
-            let answer = self.callbook_answer(&rec.call);
+            let answer = self.iota_callbook_answer(&rec.call);
             tempo_core::logbook::offer::fill_iota_at_log(rec, &spots, answer, &*read.known);
         }
+    }
+
+    /// The callbook answer the log-time IOTA fill reads for `call`, from the answers already held
+    /// (never a lookup): this call's own record, or, for a portable call, its base call's record
+    /// (operator ruling, 2026-11-10), whether a lookup of the portable call fell through to it or
+    /// the base call was looked up itself. The fill takes a portable call's base record only where
+    /// a spot of the portable call names the same group
+    /// (`tempo_core::logbook::offer::iota_at_log`).
+    fn iota_callbook_answer(
+        &self,
+        call: &str,
+    ) -> Option<&tempo_core::logbook::callbook::CallbookAnswer> {
+        let base = tempo_core::message::base_call(call);
+        self.callbook_answer(call)
+            .filter(|a| a.call.trim().eq_ignore_ascii_case(&base))
+            .or_else(|| self.callbook_answer(&base))
     }
 
     /// What a contest row of `call`, made on `band` at `when`, takes for its IOTA reference: the
@@ -18729,7 +18745,7 @@ impl Engine {
             call,
             None,
             &spots,
-            self.callbook_answer(call),
+            self.iota_callbook_answer(call),
             &*read.known,
         )
     }
@@ -22260,7 +22276,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // 13 s or less, and trailing one out reads as "the over finishes"); the
         // four new tiers, whose overs run from 26 s to 30 MINUTES, stand down.
         //
-        // FT2 is on the SHORT side by a wide margin — a 3.02 s over in a 3.75 s
+        // FT2 is on the SHORT side by a wide margin — a 2.52 s over in a 3.75 s
         // period, the briefest of any tier here — so leaving it trails out inside a
         // second, exactly like leaving FT4.
         //
@@ -23280,14 +23296,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
     ///
     /// ⭐ ONLY THIS OVER IS DROPPED: TX STAYS ON, AND THE NEXT OWN PERIOD KEYS ITS OVER AS USUAL, AS
     /// WSJT-X DOES. WSJT-X starts an over's audio only when the radio reports PTT on and the over
-    /// is "still needed" (`widgets/mainwindow.cpp:8852`, `m_tx_when_ready && g_iptt`), and the GUI
-    /// tick that found its window closed ends that over alone (`stopTx`, `:5743-5756`: `g_iptt=0`,
-    /// PTT off 200 ms later), leaving Enable Tx ticked for the next; only Stop TX unticks it
-    /// (`:8714-8717`). The over's records stay, as WSJT-X writes its own when it asserts PTT
-    /// (`:5201`, `:5405`).
+    /// is "still needed" (`widgets/mainwindow.cpp:12443` v3.0.2, `m_tx_when_ready && g_iptt`), and
+    /// the GUI tick that found its window closed ends that over alone (`stopTx`, `:8564-8582`:
+    /// `g_iptt=0`, PTT off 200 ms later), leaving Enable Tx ticked for the next; only Stop TX
+    /// unticks it (`:12291-12295`). The over's records stay, as WSJT-X writes its own when it
+    /// asserts PTT (`:7880-7881`, `:8088`).
     ///
     /// However many are dropped in a row, TX stays on, as in WSJT-X, whose next own period asserts
-    /// PTT again until its Tx watchdog ends the run (`:5109-5111`): here too the TX watchdog is the
+    /// PTT again until its Tx watchdog ends the run (`:7788-7790`): here too the TX watchdog is the
     /// only stop ([`Self::plan_tx`]). The operator is told in a lane of its own, with how late and
     /// how many in a row ([`crate::dto::RadioStatus::slot_over_dropped`]): the refused key's "TX
     /// STOPPED" would be wrong while TX is on. One event, one line in the log.
@@ -23944,9 +23960,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
     pub fn tx_over_secs(&self) -> f64 {
         match self.app.tier() {
             // FT8 = 0.5 s lead-in + 12.64 s tones (the slot-positioned wave the radio
-            // loop actually plays). Must include the lead-in so the "snappy first over"
+            // loop actually plays): 13.14. Must include the lead-in so the "snappy first over"
             // room check doesn't admit an over that overruns the next slot by 0.5 s.
-            Tier::Ft8 => 13.14,
+            Tier::Ft8 => slot_over_secs(modes::ModeKind::Ft8),
             // FST4 / FST4W / Q65 transmit; this returns the FULL T/R period, which is conservative means
             // modes::tx_mode() returns None and the wave builder abandons the over
             // before keying. A FULL SLOT is returned rather than 0.0 so that if
@@ -23974,14 +23990,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // tones (105 sym × 576 sa @ 12 kHz). The generated buffer also carries
             // ~1.0 s of TRAILING silence — that is PTT-hold padding, not airtime, and
             // the radio loop strips it on a late (mid-slot) start so the over never
-            // bleeds into the next period.
-            Tier::Ft4 => 5.34,
-            // FT2 = 0.5 s lead-in + 2.52 s tones (105 sym × 288 sa @ 12 kHz). Unlike
+            // bleeds into the next period. 5.34.
+            Tier::Ft4 => slot_over_secs(modes::ModeKind::Ft4),
+            // FT2 = 2.52 s tones (105 sym × 288 sa @ 12 kHz) and no lead-in
+            // (`modes::mode` `FT2_LEAD_IN_SECS` = 0.0, Decodium's convention). Unlike
             // FT4 there is NO trailing padding in the buffer — `Ft2Mode::gen_wave`
-            // returns exactly lead + NWAVE — so 3.02 is the whole of it, and it is
-            // airtime rather than an over-estimate. That leaves 0.73 s of the 3.75 s
-            // slot, the tightest margin of any tier here.
-            Tier::Ft2 => 2.52,
+            // returns exactly lead + NWAVE — so 2.52 is the whole of it, and it is
+            // airtime rather than an over-estimate. That leaves 1.23 s of the 3.75 s
+            // slot, still the tightest margin of any tier here.
+            Tier::Ft2 => slot_over_secs(modes::ModeKind::Ft2),
             // FT1 = 0.3 s lead-in (`modes::mode` `FT1_LEAD_IN_SECS`) + 3.536 s tones (99 sym ×
             // 3000/7 sa @ 12 kHz). The buffer is a fixed 4 s, so the last 164 ms are silence.
             Tier::TempoFast => 3.84,
@@ -27851,7 +27868,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if limit_secs > 0 {
             let now = now_unix_secs();
             let start = *self.tx_watchdog_start.get_or_insert(now);
-            if now.saturating_sub(start) >= limit_secs {
+            if crate::keyboard::watchdog_tripped(start, now, limit_secs) {
                 self.note_tx_watchdog_trip("a PSK over");
                 self.tx_watchdog = true;
                 self.tx_enabled = false;
@@ -28288,7 +28305,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if limit_secs > 0 {
             let now = now_unix_secs();
             let start = *self.tx_watchdog_start.get_or_insert(now);
-            if now.saturating_sub(start) >= limit_secs {
+            if crate::keyboard::watchdog_tripped(start, now, limit_secs) {
                 self.note_tx_watchdog_trip("an RTTY over");
                 self.tx_watchdog = true;
                 self.tx_enabled = false;
@@ -33484,7 +33501,7 @@ contact yourself."
                 if limit_secs > 0 {
                     let now = now_unix_secs();
                     let start = *self.tx_watchdog_start.get_or_insert(now);
-                    if now.saturating_sub(start) >= limit_secs {
+                    if crate::keyboard::watchdog_tripped(start, now, limit_secs) {
                         self.note_tx_watchdog_trip(&format!("{} over", self.app.tier().label()));
                         self.tx_watchdog = true;
                         self.tx_enabled = false;
@@ -33664,7 +33681,7 @@ contact yourself."
                     if limit_secs > 0 {
                         let now = now_unix_secs();
                         let start = *self.tx_watchdog_start.get_or_insert(now);
-                        if now.saturating_sub(start) >= limit_secs {
+                        if crate::keyboard::watchdog_tripped(start, now, limit_secs) {
                             self.note_tx_watchdog_trip(
                                 "a directed call held armed by its call cap",
                             );
@@ -33679,7 +33696,8 @@ contact yourself."
     }
 
     /// The wall-clock TX watchdog, as `plan_tx`'s mode-match tail applies it (the
-    /// `Some(t)` arm above) — DUPLICATED here on purpose. The JS8 tier route returns
+    /// `Some(t)` arm above): the same check as that tail ([`crate::keyboard::watchdog_tripped`]),
+    /// applied here because the JS8 tier route returns
     /// above that tail, and a route that skipped it would leave operator, autoreply
     /// and relay JS8 traffic bounded by nothing but the 60-minute idle clock. Same
     /// fields, same three outcomes: start the clock on the first over after an
@@ -33687,7 +33705,7 @@ contact yourself."
     /// elapsed time reaches `tx_watchdog_min` (disarm + one-shot abort, and the caller
     /// RETURNS — never builds the wave); refuse an over longer than the whole limit.
     /// Heartbeats never reach this fn (G2). Returns true when the over must NOT go out.
-    /// Keep this body textually aligned with the tail above; the engine test
+    /// Keep the clock start and the outcomes aligned with the tail above; the engine test
     /// `js8_wall_clock_trips_mirrors_the_mode_match_tail` pins its outcomes.
     pub(crate) fn js8_wall_clock_trips(&mut self) -> bool {
         let limit_secs = u64::from(self.settings.tx_watchdog_min) * 60;
@@ -33697,7 +33715,7 @@ contact yourself."
         let now = now_unix_secs();
         let start = *self.tx_watchdog_start.get_or_insert(now);
         let over_secs = self.tx_over_secs() as u64;
-        if now.saturating_sub(start) >= limit_secs || over_secs > limit_secs {
+        if crate::keyboard::watchdog_tripped(start, now, limit_secs) || over_secs > limit_secs {
             self.note_tx_watchdog_trip("a JS8 over");
             self.tx_watchdog = true;
             self.tx_enabled = false;
@@ -38059,6 +38077,14 @@ fn fd_wire_row(
     }
 }
 
+/// An FT8, FT4 or FT2 over's airtime in seconds, lead-in plus tones, from the wave geometry
+/// [`modes::slot_over_samples_12k`] gives. Summed in samples and divided once, so the value is the
+/// nearest `f64` to the exact length (13.14, 5.34, 2.52), the same as the literal it replaced.
+fn slot_over_secs(kind: modes::ModeKind) -> f64 {
+    let (lead, tones) = modes::slot_over_samples_12k(kind).expect("a slot mode's over geometry");
+    (lead + tones) as f64 / 12_000.0
+}
+
 pub(crate) fn now_unix_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -39363,6 +39389,51 @@ mod tests {
         assert!(e.take_rtty_abort(), "a trip must unkey");
     }
 
+    /// Pins today's behaviour of the one-shot RTTY watchdog copy (`poll_rtty_one`) for the
+    /// watchdog-collapse refactor: both sides of the `elapsed >= limit` boundary and every
+    /// side effect of a trip.
+    ///
+    /// The seed is relative to ONE `now_unix_secs()` read here, and `poll_rtty_one` reads the
+    /// clock again. A second boundary may pass between the two reads, which can only ADD a
+    /// second of elapsed time: so the hold side is seeded at limit - 2 (still < limit after
+    /// such a tick) and the trip side at exactly limit (a tick only pushes it further over).
+    #[test]
+    fn a_one_shot_rtty_over_holds_below_the_watchdog_limit_and_trips_at_it() {
+        let limit = 60; // tx_watchdog_min = 1
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("rtty", false);
+        e.settings.tx_watchdog_min = 1;
+        e.set_tx_enabled(true);
+        // Two overs queued; a send restarts the clock, so the seed comes after both.
+        e.rtty_send_text("CQ DE W9XYZ").unwrap();
+        e.rtty_send_text("CQ AGAIN").unwrap();
+        assert!(!e.take_slot_tx_abort(), "precondition: no cut primed");
+
+        // Below the limit: the over keys and nothing else changes.
+        let now = now_unix_secs();
+        e.tx_watchdog_start = Some(now - (limit - 2));
+        assert_eq!(e.poll_rtty_one(), Some("CQ DE W9XYZ".to_string()));
+        assert!(!e.tx_watchdog && e.tx_enabled(), "no trip below the limit");
+        assert_eq!(
+            e.tx_watchdog_start,
+            Some(now - (limit - 2)),
+            "the clock keeps its start"
+        );
+        assert!(
+            !e.take_rtty_abort() && !e.take_slot_tx_abort(),
+            "no cut armed"
+        );
+
+        // At the limit: tripped, disarmed, queue dropped, both cuts armed.
+        e.tx_watchdog_start = Some(now_unix_secs() - limit);
+        assert_eq!(e.poll_rtty_one(), None, "a trip keys nothing");
+        assert!(e.tx_watchdog, "the watchdog tripped at elapsed == limit");
+        assert!(!e.tx_enabled(), "a trip disarms TX");
+        assert!(e.rtty_queue.is_empty(), "a trip drops what was queued");
+        assert!(e.take_rtty_abort(), "a trip arms the RTTY cut");
+        assert!(e.take_slot_tx_abort(), "a trip arms the PTT-tail cut");
+    }
+
     #[test]
     fn a_latched_over_is_bounded_by_its_own_ceiling_that_typing_cannot_extend() {
         let mut e = rtty_latched_engine();
@@ -39711,6 +39782,51 @@ mod tests {
         assert!(!e.tx_enabled(), "a trip disarms TX");
         assert!(!e.psk_latched(), "a trip must drop the latch");
         assert!(e.take_psk_abort(), "a trip must unkey");
+    }
+
+    /// Pins today's behaviour of the one-shot PSK watchdog copy (`poll_psk_one`) for the
+    /// watchdog-collapse refactor: both sides of the `elapsed >= limit` boundary and every
+    /// side effect of a trip.
+    ///
+    /// The seed is relative to ONE `now_unix_secs()` read here, and `poll_psk_one` reads the
+    /// clock again. A second boundary may pass between the two reads, which can only ADD a
+    /// second of elapsed time: so the hold side is seeded at limit - 2 (still < limit after
+    /// such a tick) and the trip side at exactly limit (a tick only pushes it further over).
+    #[test]
+    fn a_one_shot_psk_over_holds_below_the_watchdog_limit_and_trips_at_it() {
+        let limit = 60; // tx_watchdog_min = 1
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("keyboard", false);
+        e.settings.tx_watchdog_min = 1;
+        e.set_tx_enabled(true);
+        // Two overs queued; a send restarts the clock, so the seed comes after both.
+        e.psk_send_text("cq de w9xyz").unwrap();
+        e.psk_send_text("cq again").unwrap();
+        assert!(!e.take_slot_tx_abort(), "precondition: no cut primed");
+
+        // Below the limit: the over keys and nothing else changes.
+        let now = now_unix_secs();
+        e.tx_watchdog_start = Some(now - (limit - 2));
+        assert_eq!(e.poll_psk_one(), Some("cq de w9xyz".to_string()));
+        assert!(!e.tx_watchdog && e.tx_enabled(), "no trip below the limit");
+        assert_eq!(
+            e.tx_watchdog_start,
+            Some(now - (limit - 2)),
+            "the clock keeps its start"
+        );
+        assert!(
+            !e.take_psk_abort() && !e.take_slot_tx_abort(),
+            "no cut armed"
+        );
+
+        // At the limit: tripped, disarmed, queue dropped, both cuts armed.
+        e.tx_watchdog_start = Some(now_unix_secs() - limit);
+        assert_eq!(e.poll_psk_one(), None, "a trip keys nothing");
+        assert!(e.tx_watchdog, "the watchdog tripped at elapsed == limit");
+        assert!(!e.tx_enabled(), "a trip disarms TX");
+        assert!(e.psk_queue.is_empty(), "a trip drops what was queued");
+        assert!(e.take_psk_abort(), "a trip arms the PSK cut");
+        assert!(e.take_slot_tx_abort(), "a trip arms the PTT-tail cut");
     }
 
     #[test]
@@ -48305,7 +48421,7 @@ mod tests {
     /// inside the watchdog's 6 minutes leave TX on, slot TX armed, no stop for the loop, nothing on
     /// the refused key's line, and the lane counting each. At 6 minutes the next plan is refused and
     /// TX turned off by the watchdog, as WSJT-X's Tx watchdog ends it
-    /// (`widgets/mainwindow.cpp:5109-5111`).
+    /// (`widgets/mainwindow.cpp:7788-7790`, v3.0.2).
     #[test]
     fn overs_dropped_in_a_row_leave_tx_on_until_the_tx_watchdog_ends_the_run() {
         for (tier, cycle_secs, overs) in [(Tier::Ft8, 30, 12u64), (Tier::Ft4, 15, 24)] {
@@ -51283,6 +51399,56 @@ mod tests {
         assert!(
             e.tx_watchdog_start.is_none(),
             "operator action restarts the timer"
+        );
+    }
+
+    /// Pins today's behaviour of `plan_tx`'s mode-match tail watchdog copy (the FT/slot over)
+    /// for the watchdog-collapse refactor: both sides of the `elapsed >= limit` boundary and
+    /// every side effect of a trip.
+    ///
+    /// The seed is relative to ONE `now_unix_secs()` read here, and `plan_tx` reads the clock
+    /// again. A second boundary may pass between the two reads, which can only ADD a second of
+    /// elapsed time: so the hold side is seeded at limit - 2 (still < limit after such a tick)
+    /// and the trip side at exactly limit (a tick only pushes it further over). Each side runs
+    /// on its own fresh engine so both poll the same first CQ over.
+    #[test]
+    fn an_ft_over_holds_below_the_watchdog_limit_and_trips_at_it() {
+        let limit = 60; // tx_watchdog_min = 1
+        let armed = || {
+            let mut e = Engine::new("W9XYZ", "EN37", 0);
+            e.set_tier(Tier::Ft8);
+            let mut s = e.settings().clone();
+            s.tx_watchdog_min = 1;
+            e.apply_settings(s);
+            e.set_tx_enabled(true);
+            e.set_mode("qso-run").unwrap();
+            assert!(!e.take_slot_tx_abort(), "precondition: no cut primed");
+            e
+        };
+
+        // Below the limit: the over is built and nothing else changes.
+        let mut e = armed();
+        let now = now_unix_secs();
+        e.tx_watchdog_start = Some(now - (limit - 2));
+        assert!(!e.poll_tx(0).is_empty(), "an over below the limit keys");
+        assert!(!e.tx_watchdog && e.tx_enabled(), "no trip below the limit");
+        assert_eq!(
+            e.tx_watchdog_start,
+            Some(now - (limit - 2)),
+            "the clock keeps its start"
+        );
+        assert!(!e.take_slot_tx_abort(), "no cut armed below the limit");
+
+        // At the limit: no wave, tripped, disarmed, the cut armed, the TX indicator down.
+        let mut e = armed();
+        e.tx_watchdog_start = Some(now_unix_secs() - limit);
+        assert!(e.poll_tx(0).is_empty(), "a trip builds no wave");
+        assert!(e.tx_watchdog, "the watchdog tripped at elapsed == limit");
+        assert!(!e.tx_enabled(), "a trip disarms TX");
+        assert!(e.take_slot_tx_abort(), "a trip arms the mid-over cut");
+        assert!(
+            !e.snapshot().radio.transmitting,
+            "a trip leaves the TX indicator down"
         );
     }
 
@@ -71928,6 +72094,18 @@ mod tests {
         }
     }
 
+    /// The FT8, FT4 and FT2 over lengths are EXACTLY the values the table held as literals before
+    /// they came from the modes' wave geometry: the room check compares against them, so even a
+    /// last-bit difference would be a change.
+    #[test]
+    fn tx_over_secs_from_the_wave_geometry_is_exactly_the_old_literal() {
+        for (tier, secs) in [(Tier::Ft8, 13.14), (Tier::Ft4, 5.34), (Tier::Ft2, 2.52)] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(tier);
+            assert_eq!(e.tx_over_secs(), secs, "{tier:?}");
+        }
+    }
+
     /// FT8's and FT4's over lengths are where their real waves' last tone ends (lead-in + tones),
     /// read off the wave, so the table follows a lead-in change instead of restating the old one.
     #[test]
@@ -71946,6 +72124,94 @@ mod tests {
                 (e.tx_over_secs() - secs).abs() < 0.01,
                 "{tier:?}: tx_over_secs {} but the wave ends at {secs:.3} s",
                 e.tx_over_secs()
+            );
+        }
+    }
+
+    /// The real wave each slot tier keys, built the way the radio loop builds it
+    /// ([`TxWaveform::build`] on the variant `plan_tx` picks for the tier), against the
+    /// over-length table. CHARACTERIZATION: it pins today's geometry (where the first tone
+    /// starts, where the last one ends, and how `tx_over_secs` relates to that) so the "over
+    /// length from one source" refactor cannot move any of it. A value here that looks wrong is
+    /// a finding for the operator, not something to fix by editing the pin. FT8, FT4 and JS8
+    /// have their own tests above and below; FT1 (TempoFast) has its own test below.
+    ///
+    /// What it pinned on first run:
+    /// - FT2: tones from the key (no lead-in) to 2.520 s, and `tx_over_secs` is exactly that.
+    /// - TempoDeep: tones from the key to 9.920 s; `tx_over_secs` (12.64) over-estimates it.
+    /// - MSK144: tones from the key to 4.464 / 9.432 / 14.472 / 29.448 s at 5 / 10 / 15 / 30 s
+    ///   (period minus 0.536 to 0.552 s), and `tx_over_secs` is the whole period. Moved on
+    ///   2026-11-11 to WSJT-X's own 4.5 / 9.5 / 14.5 / 29.5 s (period minus 0.5 s, cut mid-frame;
+    ///   `msk144::gen_wave`), in its own change.
+    #[test]
+    fn tx_over_secs_against_the_wave_each_slot_tier_really_keys() {
+        const SR: f64 = 12_000.0;
+        // Half a millisecond: the first sample of a tone is sin(0) = 0, so "first non-zero"
+        // reads one sample (0.08 ms) after the real start.
+        const TOL_S: f64 = 0.0005;
+        let text = "CQ KD9TAW EN52";
+        let f0 = 1_500.0;
+        let native = |kind| TxWaveform::Native {
+            kind,
+            text: text.into(),
+            f0,
+        };
+        // (label, tier, msk144 period setting, waveform, last tone (s), tx_over_secs)
+        let mut rows = vec![
+            (
+                "FT2".to_string(),
+                Tier::Ft2,
+                15,
+                native(modes::ModeKind::Ft2),
+                2.520,
+                2.52,
+            ),
+            (
+                "TempoDeep".to_string(),
+                Tier::TempoDeep,
+                15,
+                TxWaveform::Deep {
+                    text: text.into(),
+                    f0,
+                },
+                9.920,
+                12.64,
+            ),
+        ];
+        for (p, last) in [(5, 4.5), (10, 9.5), (15, 14.5), (30, 29.5)] {
+            rows.push((
+                format!("MSK144-{p}"),
+                Tier::Msk144,
+                p,
+                native(modes::ModeKind::Msk144 { period_s: p }),
+                last,
+                f64::from(p),
+            ));
+        }
+        for (label, tier, msk_p, waveform, want_last, want_over) in rows {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.settings.msk144_period_s = msk_p;
+            e.set_tier(tier);
+            let wave = waveform.build();
+            let first = wave.iter().position(|&s| s != 0.0).expect("tones") as f64 / SR;
+            let last = (wave.iter().rposition(|&s| s != 0.0).expect("tones") + 1) as f64 / SR;
+            let len = wave.len() as f64 / SR;
+            assert!(
+                first < TOL_S,
+                "{label}: tones start at the key, not {first:.4} s in"
+            );
+            assert!(
+                (last - want_last).abs() < TOL_S,
+                "{label}: last tone ends at {last:.4} s, pinned {want_last} s"
+            );
+            assert!(
+                (len - last).abs() < TOL_S,
+                "{label}: the buffer ({len:.4} s) carries no trailing silence past {last:.4} s"
+            );
+            assert_eq!(e.tx_over_secs(), want_over, "{label}: tx_over_secs");
+            assert!(
+                e.tx_over_secs() + TOL_S >= last,
+                "{label}: tx_over_secs must never be shorter than the wave"
             );
         }
     }
@@ -72161,6 +72427,44 @@ mod tests {
             "0 = off, exactly as for the FT arms"
         );
         assert!(e.tx_enabled());
+    }
+
+    /// Pins today's behaviour of `js8_wall_clock_trips` at the exact boundary for the
+    /// watchdog-collapse refactor: below the limit holds with no side effect, at the limit
+    /// trips with every side effect (disarm, flag, one-shot cut, TX indicator down).
+    ///
+    /// The seed is relative to ONE `now_unix_secs()` read here, and the fn reads the clock
+    /// again. A second boundary may pass between the two reads, which can only ADD a second of
+    /// elapsed time: so the hold side is seeded at limit - 2 (still < limit after such a tick)
+    /// and the trip side at exactly limit (a tick only pushes it further over).
+    #[test]
+    fn js8_wall_clock_holds_below_the_limit_and_trips_at_it() {
+        let limit = 6 * 60;
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Js8);
+        e.settings.tx_watchdog_min = 6;
+        e.set_tx_enabled(true);
+        assert!(!e.take_slot_tx_abort(), "precondition: no cut primed");
+
+        let now = now_unix_secs();
+        e.tx_watchdog_start = Some(now - (limit - 2));
+        assert!(!e.js8_wall_clock_trips(), "below the limit: no trip");
+        assert!(!e.tx_watchdog && e.tx_enabled(), "nothing disarmed");
+        assert_eq!(
+            e.tx_watchdog_start,
+            Some(now - (limit - 2)),
+            "the clock keeps its start"
+        );
+        assert!(!e.take_slot_tx_abort(), "no cut armed below the limit");
+
+        e.tx_watchdog_start = Some(now_unix_secs() - limit);
+        assert!(e.js8_wall_clock_trips(), "elapsed == limit trips");
+        assert!(e.tx_watchdog && !e.tx_enabled(), "tripped and disarmed");
+        assert!(e.take_slot_tx_abort(), "a trip arms the one-shot cut");
+        assert!(
+            !e.snapshot().radio.transmitting,
+            "a trip leaves the TX indicator down"
+        );
     }
 
     /// Booking happens at PLAN time (the beacon / QSO precedent): one own-TX row in the
@@ -80785,6 +81089,56 @@ mod tests {
         assert!(
             !e.tx_enabled(),
             "a trip disarms TX; without this the capped QSO stays armed forever"
+        );
+    }
+
+    /// Pins today's behaviour of the call-cap watchdog copy in `plan_tx`'s `None` arm for the
+    /// watchdog-collapse refactor: both sides of the `elapsed >= limit` boundary, and that this
+    /// copy, alone among them, does NOT arm `slot_tx_abort` (there is no over in flight to cut,
+    /// and a primed one-shot would catch the operator's next deliberate over).
+    ///
+    /// The seed is relative to ONE `now_unix_secs()` read here, and `plan_tx` reads the clock
+    /// again on each poll. A second boundary may pass meanwhile, which can only ADD a second
+    /// of elapsed time: so the hold side is seeded at limit - 2 (still < limit after such a
+    /// tick) and the trip side at exactly limit (a tick only pushes it further over).
+    #[test]
+    fn a_call_capped_station_holds_below_the_watchdog_limit_and_trips_at_it_without_a_cut() {
+        let limit = 6 * 60;
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let mut s = e.settings().clone();
+        s.directed_max_calls = Some(2);
+        s.tx_watchdog_min = 6;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        e.call_station("W9XYZ");
+        let slot = cap_a_directed_call(&mut e, 2);
+        // Clear any one-shot left by the capping overs, so the assertions below see only what
+        // the capped slots themselves do.
+        let _ = e.take_slot_tx_abort();
+
+        // Below the limit: four capped slots (both parities) withhold, and nothing trips.
+        let now = now_unix_secs();
+        e.tx_watchdog_start = Some(now - (limit - 2));
+        for s in slot..slot + 4 {
+            assert!(e.poll_tx(s).is_empty(), "a capped station keys nothing");
+        }
+        assert!(!e.tx_watchdog && e.tx_enabled(), "no trip below the limit");
+        assert_eq!(
+            e.tx_watchdog_start,
+            Some(now - (limit - 2)),
+            "the clock keeps its start"
+        );
+
+        // At the limit: tripped and disarmed, and the one-shot cut deliberately NOT armed.
+        e.tx_watchdog_start = Some(now_unix_secs() - limit);
+        for s in slot + 4..slot + 8 {
+            assert!(e.poll_tx(s).is_empty(), "a capped station keys nothing");
+        }
+        assert!(e.tx_watchdog, "the watchdog tripped at elapsed == limit");
+        assert!(!e.tx_enabled(), "a trip disarms TX");
+        assert!(
+            !e.take_slot_tx_abort(),
+            "the call-cap trip must not prime the mid-over cut"
         );
     }
 

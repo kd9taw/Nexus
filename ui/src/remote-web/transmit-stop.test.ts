@@ -223,3 +223,24 @@ it('sends Stop while a heartbeat is in flight and the shown state is stale', asy
   await expect(stopping).resolves.toEqual({ stop: 'accepted' })
   c.disconnected()
 })
+
+// A LAN-only session's state answer is cut to its lease at the relay. What is left must still be an
+// answer the page takes, and a Stop composed from it must still pass: this is the session's Stop.
+it('a LAN-only session gets its lease alone, which the page still parses and a Stop is still made from', () => {
+  const relay = new OperationRelay(), station = peer(), browser = peer(), sessionId = id()
+  relay.sync({ peer: station, supported: true, operationVersion: 4 }, [{ sessionId, deviceId: id(), commandUntil: 0, lanUntil: Number.MAX_SAFE_INTEGER, peer: browser }], 1000)
+  const read = { type: 'state', requestId: id() }
+  relay.receiveBrowser(sessionId, { type: 'operationRequest', operationVersion: 4, request: read }, 1000)
+  const full = { ...state(), txArmed: true, actions: ['log.manual'],
+    controls: { context: { radioId: 1, radioConnection: 2, ampConnection: null, ampReadSequence: null }, capabilities: ['frequency'] } }
+  relay.receiveStation({ type: 'operationResponse', sessionId, requestId: read.requestId, value: full })
+  const handed = browser.frames[browser.frames.length - 1].value
+  expect(handed).toEqual({ ...state(), ...Object.fromEntries(Object.entries(full).filter(([key]) => key !== 'controls')), actions: [] })
+  const parsed = operationValue(handed) as OperationState
+  expect(parsed.phase).toBe('controlling')
+  const s = stop(parsed)
+  relay.receiveBrowser(sessionId, { type: 'operationRequest', operationVersion: 4, request: s }, 1000)
+  expect(station.frames[station.frames.length - 1].request).toEqual(s)
+  relay.receiveStation({ type: 'operationResponse', sessionId, requestId: s.requestId, value: { stop: 'accepted' } })
+  expect(browser.frames[browser.frames.length - 1]).toEqual({ type: 'operationResponse', requestId: s.requestId, value: { stop: 'accepted' } })
+})

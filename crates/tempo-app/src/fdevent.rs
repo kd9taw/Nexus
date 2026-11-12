@@ -987,6 +987,9 @@ pub struct ClubLogEntry<'a> {
 #[derive(Clone, Debug)]
 pub struct ClubJournal {
     file: std::sync::Arc<std::fs::File>,
+    /// Read only by the folder sync (unix) and the test seam, so a Windows build that is not a
+    /// test has no reader and leaves the field out rather than warn it is never read.
+    #[cfg(any(unix, test))]
     path: PathBuf,
     /// The folder is synced once, after the first sync, so the journal's own entry in it
     /// survives a power cut when the file was new.
@@ -1979,6 +1982,7 @@ impl ClubLog {
                     .append(true)
                     .open(path)?,
             ),
+            #[cfg(any(unix, test))]
             path: path.clone(),
             folder_synced: std::sync::Arc::default(),
         });

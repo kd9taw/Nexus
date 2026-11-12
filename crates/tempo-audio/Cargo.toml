@@ -202,3 +202,7 @@ tempo-net = { path = "../tempo-net", features = ["icom-sim", "flex-unbenched", "
 # program's 10-minute ceiling ages the over with `Engine::age_tci_over_for_test`. Not a new
 # dependency: tempo-app is already one, and a dev-dependency's feature is never on in a shipped build.
 tempo-app = { path = "../tempo-app", features = ["test-util"] }
+# TEST-ONLY: a loopback port held bound but not listening, so a test can keep "nothing is
+# answering here" on a port no other socket can take until the test itself listens on it. std
+# binds only by listening. Not a new crate: socket2 is already in the tree via tempo-net.
+socket2 = "0.6"

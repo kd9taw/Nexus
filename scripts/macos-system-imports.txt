@@ -19,6 +19,9 @@
 #     check reported them: ____chkstk_darwin (the stack probe, libSystem since macOS 10.15),
 #     ___bzero, _close$NOCANCEL, _fma, _lround, _lroundf and _strtold (C library and libm
 #     functions present on every macOS the app supports).
+#   - _pthread_cond_timedwait came from ci.yml's macos-imports job, whose debug link of the app
+#     imports it where the release link does not (2026-11-11); exported for arm64-macos by
+#     usr/lib/system/libsystem_pthread.tbd in the macOS 11.3 SDK.
 #   - Every name is exported by libSystem in the macOS 11.3 SDK (usr/lib/libSystem.B.tbd and the
 #     usr/lib/system/*.tbd it re-exports) for the architecture that imports it, so it exists on
 #     macOS 12.
@@ -194,6 +197,7 @@ _getsockname
 _getsockopt
 _gettimeofday
 _getuid
+_grantpt
 _hypot
 _hypotf
 _if_nametoindex
@@ -249,6 +253,7 @@ _pause
 _pipe
 _poll
 _posix_memalign
+_posix_openpt
 _posix_spawn_file_actions_adddup2
 _posix_spawn_file_actions_destroy
 _posix_spawn_file_actions_init
@@ -269,6 +274,7 @@ _pthread_cond_broadcast
 _pthread_cond_destroy
 _pthread_cond_init
 _pthread_cond_signal
+_pthread_cond_timedwait
 _pthread_cond_timedwait_relative_np
 _pthread_cond_wait
 _pthread_create
@@ -297,6 +303,7 @@ _pthread_self
 _pthread_setname_np
 _pthread_setspecific
 _pthread_threadid_np
+_ptsname
 _putc
 _putchar
 _puts
@@ -378,6 +385,7 @@ _time
 _umask
 _unlink
 _unlinkat
+_unlockpt
 _uselocale
 _utimes
 _vsnprintf

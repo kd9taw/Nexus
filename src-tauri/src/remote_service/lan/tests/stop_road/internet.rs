@@ -652,9 +652,22 @@ async fn over_the_internet_the_shack_never_probes_an_address_off_the_internet() 
             .unwrap();
         assert_eq!(hello(&mut socket, VERSIONS).await["type"], "welcome");
         let localhost = Ipv4Addr::LOCALHOST.into();
-        let (stop_loopback, audio_loopback) = (Counter::on(localhost), Counter::on(localhost));
+        // This session's own ufrag, which every check the shack sends for it names: the counters'
+        // ports were other sockets' a moment ago, and a check on its way to one of those (the
+        // first pass's shack, or another session on this machine) lands on them too.
+        let ufrag = {
+            use std::hash::BuildHasher;
+            format!(
+                "{:016x}",
+                std::hash::RandomState::new().hash_one((bind, std::process::id()))
+            )
+        };
+        let (stop_loopback, audio_loopback) = (
+            Counter::naming(localhost, &ufrag),
+            Counter::naming(localhost, &ufrag),
+        );
         let offer = |line: String| {
-            json!({"ufrag":"0011223344556677","pwd":"00112233445566778899aabbccddeeff",
+            json!({"ufrag":ufrag,"pwd":"00112233445566778899aabbccddeeff",
                 "candidates":[line]})
         };
         send(
@@ -671,7 +684,7 @@ async fn over_the_internet_the_shack_never_probes_an_address_off_the_internet() 
             .and_then(|line| line.split(' ').nth(4))
             .and_then(|ip| ip.parse().ok())
             .expect("the shack's host candidate");
-        let (stop_own, audio_own) = (Counter::on(own), Counter::on(own));
+        let (stop_own, audio_own) = (Counter::naming(own, &ufrag), Counter::naming(own, &ufrag));
         for (road, counter) in [("stop", &stop_own), ("audio", &audio_own)] {
             send(
                 &mut socket,

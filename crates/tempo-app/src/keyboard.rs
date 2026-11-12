@@ -235,6 +235,16 @@ pub enum KbTick {
     Diddle,
 }
 
+/// The TX watchdog's one check: an unattended-transmit run whose clock started at `start_secs` has
+/// run out its `limit_secs` by `now_secs` (wall-clock Unix seconds). A `limit_secs` of 0 is the
+/// watchdog off, and never trips. Every copy of the watchdog (the FT plan tail, the call cap, JS8,
+/// PSK, RTTY, JTTY, [`KbGates`] and the mic's gates) asks this; where its clock starts and what a
+/// trip does (which queue is cleared, which abort is armed) stay with each caller, because they
+/// differ for real reasons.
+pub(crate) fn watchdog_tripped(start_secs: u64, now_secs: u64, limit_secs: u64) -> bool {
+    limit_secs > 0 && now_secs.saturating_sub(start_secs) >= limit_secs
+}
+
 /// Why [`KeyboardLatch::tick`] decided the over has to end. The caller turns this
 /// into its mode's kill path — the abort plumbing is the caller's because the
 /// flags that unkey a rig are engine state, but the DECISION is made here, once,
@@ -467,7 +477,7 @@ impl<'a> KeyboardLatch<'a> {
         if gates.watchdog_limit_secs > 0 {
             let start = gates.watchdog_start_secs.unwrap_or(gates.now_secs);
             watchdog_start = Some(start);
-            if gates.now_secs.saturating_sub(start) >= gates.watchdog_limit_secs {
+            if watchdog_tripped(start, gates.now_secs, gates.watchdog_limit_secs) {
                 let mut res = KbTickResult::dropped(KbDrop::Watchdog);
                 res.watchdog_start = watchdog_start;
                 return res;
@@ -690,6 +700,43 @@ mod tests {
         assert_eq!(res.drop, Some(KbDrop::Watchdog));
         assert_eq!(res.tick, KbTick::Idle);
         assert_eq!(res.watchdog_start, Some(100));
+    }
+
+    /// Pins today's behaviour of the `KbGates` watchdog copy for the watchdog-collapse
+    /// refactor: one second short of the limit keys, exactly the limit trips, and a zero limit
+    /// is "watchdog off" — never trips and reports no clock, however old the start. The clock
+    /// is injected, so the boundary is exact (no second-tick margin needed).
+    #[test]
+    fn the_kb_watchdog_holds_one_short_trips_at_the_limit_and_zero_is_off() {
+        let mut h = Host::default();
+        h.latch(TESTMODE).latch_on(1_000);
+        let mut g = gates_up(1_020);
+        g.watchdog_limit_secs = 60;
+        g.watchdog_start_secs = Some(100);
+
+        g.now_secs = 159; // elapsed = limit - 1
+        let res = h.latch(TESTMODE).tick(g, 4);
+        assert_eq!(res.drop, None, "one second short of the limit tripped");
+        assert_eq!(res.tick, KbTick::Diddle);
+        assert_eq!(res.watchdog_start, Some(100), "the start is carried");
+
+        g.now_secs = 160; // elapsed == limit
+        let res = h.latch(TESTMODE).tick(g, 4);
+        assert_eq!(res.drop, Some(KbDrop::Watchdog), "the limit itself trips");
+        assert_eq!(res.tick, KbTick::Idle);
+        assert_eq!(res.watchdog_start, Some(100));
+
+        // Zero = off: an ancient start and a far-later now still key, and no clock is reported.
+        let mut h = Host::default();
+        h.latch(TESTMODE).latch_on(1_000);
+        let mut off = gates_up(1_020);
+        off.watchdog_limit_secs = 0;
+        off.watchdog_start_secs = Some(1);
+        off.now_secs = 1_000_000;
+        let res = h.latch(TESTMODE).tick(off, 4);
+        assert_eq!(res.drop, None, "a zero limit tripped");
+        assert_eq!(res.tick, KbTick::Diddle);
+        assert_eq!(res.watchdog_start, None, "a zero limit reported a clock");
     }
 
     #[test]

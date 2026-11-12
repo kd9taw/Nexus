@@ -30,7 +30,9 @@
 //! with each other write nothing from either ([`SpotIota::Refused`]). Spots that agree but place the
 //! station only on another band write nothing by themselves ([`SpotIota::OtherBand`]): with a
 //! callbook answer already held naming that same group, the two vouch for each other and it is
-//! written, marked as the callbook's. Judging the spots is the command layer's (it keeps them); the
+//! written, marked as the callbook's. For a portable call that answer is its base call's
+//! ([`iota_at_log`]), so a spot of `W1ABC/P` and `W1ABC`'s callbook entry agreeing is written too;
+//! the base call's answer alone never is. Judging the spots is the command layer's (it keeps them); the
 //! logging path never makes a lookup.
 //!
 //! **The group's name in the COMMENT** ([`note_iota_in_comment`]): the log funnel appends
@@ -179,6 +181,11 @@ pub fn fill_iota_at_log(
 /// What [`fill_iota_at_log`] would write into a contact with `call` whose IOTA field holds `held`,
 /// without a record to write it into: the contest log's rows carry it as an offer and the merge
 /// writes it ([`accept_iota_offer`]).
+///
+/// A portable call (`W1ABC/P`, `F/W1ABC`) is read by its base call (`crate::message::base_call`)
+/// where the spots and the callbook have to agree ([`SpotIota::OtherBand`]): the base call's
+/// callbook answer vouches for the group a spot of the portable call names (operator ruling,
+/// 2026-11-10). It never counts alone, since it describes the licensee's home.
 pub fn iota_at_log(
     call: &str,
     held: Option<&str>,
@@ -191,7 +198,11 @@ pub fn iota_at_log(
         SpotIota::Silent | SpotIota::OtherBand(_) => None,
         SpotIota::Names(group) => Some(group.as_str()),
     };
-    iota_offer(call, held, spot, callbook, Some(known)).filter(|offer| match spots {
+    let call = match spots {
+        SpotIota::OtherBand(_) => crate::message::base_call(call),
+        _ => call.to_string(),
+    };
+    iota_offer(&call, held, spot, callbook, Some(known)).filter(|offer| match spots {
         SpotIota::OtherBand(group) => valid_iota(group).as_ref() == Some(&offer.reference),
         _ => true,
     })

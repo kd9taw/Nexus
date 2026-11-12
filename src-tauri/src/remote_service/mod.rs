@@ -1561,6 +1561,7 @@ impl Service {
                             client,
                             vault,
                             binding: None,
+                            moved: None,
                             pending: None,
                             status: task_status,
                             control: task_control,
@@ -2004,6 +2005,9 @@ struct Controller {
     client: Client,
     vault: Arc<dyn Vault>,
     binding: Option<Binding>,
+    /// A pairing saved under the other known origin (`transport::OTHER_ORIGIN`): never used, kept
+    /// until the operator's Forget clears it here, since that service cannot be asked to.
+    moved: Option<Binding>,
     pending: Option<Pending>,
     status: Arc<Mutex<Status>>,
     control: Arc<Mutex<Control>>,
@@ -2106,6 +2110,12 @@ impl Controller {
                 self.binding = Some(binding.clone());
                 self.resume(binding).await;
             }
+            // Paired with the other service: a move, not a credential store that will not answer.
+            // Remote stays off and the station can pair here at once; nothing is deleted.
+            Ok(Some(binding)) if binding.origin == transport::OTHER_ORIGIN => {
+                self.moved = Some(binding);
+                phase(&self.status, "unpaired", Some("pairingMoved"));
+            }
             Ok(None) => {}
             _ => phase(&self.status, "unpaired", Some("credentialStoreUnavailable")),
         }
@@ -2171,10 +2181,12 @@ impl Controller {
         self.reflect_removals();
         self.reflect_people();
         // The transmit windows kept for the sign-in devices the service had confirmed it notified
-        // their owner about (`keep_notified`), so a restart does not hold them afresh: only this
+        // their owner about, and for those the station held (`keep_notified`), so a restart does
+        // not hold them afresh nor lose a hold the station placed: only this
         // station's, for this account. An entry that is locked, does not read, or names anything
         // but a device id restores nothing, and those devices are held as any sign-in device with
-        // no record is. The next list still decides each one (`Authority::tx_held_for`).
+        // no record is. Each restored window still waits for the next list to confirm its notice
+        // (`Authority::tx_held_for`).
         let kept = self.accounts.vault.notified().ok().flatten().filter(|k| {
             k.station_id == binding.station_id
                 && k.account_id == binding.account_id
@@ -2919,6 +2931,8 @@ impl Controller {
             control.remember(Persist::Bound(binding.clone(), None, None, None));
         }
         self.binding = Some(binding);
+        // The new pairing replaced any moved one in the store.
+        self.moved = None;
         self.pending = None;
         self.removals = Some(Vec::new());
         self.uninvites = Some(Vec::new());
@@ -3237,7 +3251,7 @@ impl Controller {
             }
         }
         if let Some(confirmed) = confirmed {
-            self.keep_notified(&confirmed);
+            self.keep_notified(&confirmed, devices);
         }
     }
     /// The link of each computer pinned here and paired in the LAN book whose link was never kept
@@ -3291,24 +3305,37 @@ impl Controller {
         }
     }
     /// Keeps, for a restart, what is left of the transmit window of each sign-in device this list
-    /// confirmed the service notified its owner about (`confirmed`), bound to this station and its
-    /// account: the next launch restores those windows (`resume`) rather than holding the devices
-    /// afresh. Each list replaces it, so a device the list no longer confirms, no longer names as
-    /// added by a sign-in, or that was removed here and the service not told yet, is dropped at
-    /// once; with the removals unreadable, every device is. Written only when it changed.
-    fn keep_notified(&self, confirmed: &std::collections::BTreeSet<String>) {
+    /// confirmed the service notified its owner about (`confirmed`), and of each the station holds
+    /// (`Authority::held_devices`), bound to this station and its account: the next launch restores
+    /// those windows (`resume`) rather than holding the devices afresh, and a hold the station
+    /// placed outlasts the restart whatever the service lists of it, while the list (`listed`)
+    /// names it at all: that keeps the entry no larger than the list, and a device the list stops
+    /// naming loses its pin here too (`Persist::Listed`), so nothing operates on it without a shack
+    /// press. Each list replaces it, so a device neither confirmed nor held, or that was removed
+    /// here and the service not told yet, is dropped at once; with the removals unreadable, every
+    /// device is. Written only when it changed.
+    fn keep_notified(&self, confirmed: &std::collections::BTreeSet<String>, listed: &[Device]) {
         let Some(binding) = &self.binding else {
             return;
         };
-        let kept = confirmed
-            .iter()
-            .filter(|d| self.removals.as_ref().is_some_and(|r| !r.contains(*d)))
-            .cloned()
-            .collect();
         let windows = match self.control.lock() {
-            Ok(control) => control
-                .operations
-                .transmit_windows(&kept, std::time::Instant::now()),
+            Ok(control) => {
+                let kept = confirmed
+                    .iter()
+                    .cloned()
+                    .chain(
+                        control
+                            .operations
+                            .held_devices()
+                            .into_iter()
+                            .filter(|d| listed.iter().any(|l| &l.id == d)),
+                    )
+                    .filter(|d| self.removals.as_ref().is_some_and(|r| !r.contains(d)))
+                    .collect();
+                control
+                    .operations
+                    .transmit_windows(&kept, std::time::Instant::now())
+            }
             Err(_) => return,
         };
         // Its end in unix seconds, rounded up; 0 once it has elapsed.
@@ -3805,6 +3832,8 @@ impl Controller {
                     }
                 }
                 self.binding = Some(binding);
+                // The new pairing replaced any moved one in the store.
+                self.moved = None;
                 self.pending = None;
                 self.reflect("disabled");
                 // Approving the pairing also turns Remote on (operator decision 2026-09-14), exactly
@@ -3976,11 +4005,20 @@ impl Controller {
                 });
             }
             Action::Forget {} => {
-                let (binding, token) = self.bound()?;
-                self.client
-                    .post(&station_path(&binding, "revoke"), Some(&token), empty())
-                    .await?;
+                // A moved pairing is cleared here only: the service it belongs to is not this
+                // build's to ask (`Controller::moved`).
+                let binding = match self.moved.clone() {
+                    Some(moved) => moved,
+                    None => {
+                        let (binding, token) = self.bound()?;
+                        self.client
+                            .post(&station_path(&binding, "revoke"), Some(&token), empty())
+                            .await?;
+                        binding
+                    }
+                };
                 self.vault.remove(&binding)?;
+                self.moved = None;
                 // What it kept of its confirmed owner notices goes with it.
                 let _ = self.accounts.vault.save_notified(&vault::Notified {
                     station_id: binding.station_id.clone(),
