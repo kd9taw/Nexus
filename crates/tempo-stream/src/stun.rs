@@ -245,7 +245,10 @@ mod tests {
             .collect();
         assert!(integrity_first(&fuzzed));
         let integrity = (0x0008, vec![0u8; 20]);
-        assert!(integrity_first(&success(&TX, &[integrity.clone()])));
+        assert!(integrity_first(&success(
+            &TX,
+            std::slice::from_ref(&integrity)
+        )));
 
         assert!(!integrity_first(&success(
             &TX,
