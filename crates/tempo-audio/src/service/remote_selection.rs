@@ -322,6 +322,8 @@ impl RadioLoop {
         eng.remote_observe_ptt(read.as_ref(), Some(false));
         let Some(decoder) = tempo_app::engine::remote_selection::Ft8A7ResetGuard::try_acquire()
         else {
+            #[cfg(test)]
+            MODEM_BUSY_REFUSALS.with(|n| n.set(n.get() + 1));
             request.refuse(Reason::StationBusy);
             self.remote_retune_uncertain = true;
             return;

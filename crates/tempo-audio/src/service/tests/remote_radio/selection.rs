@@ -1577,218 +1577,240 @@ fn workspace_return_retains_the_original_connection_and_confirms_before_native_c
         "busy",
         "save_failed",
     ] {
-        let adopted = matches!(scenario, "confirmed" | "save_failed");
-        let authority = Arc::new(Revocation::default());
-        let revoke = authority.clone();
-        let peer = retuning_peer(14_250_000, "USB", move |line, _| {
-            if line == "F 50260000" && scenario == "revoked_during" {
-                revoke.revoke();
+        let mut attempt = 0;
+        loop {
+            if attempt > 0 {
+                wait_for_free_modem();
             }
-            (scenario == "ignored" && line == "F 50260000").then(|| "RPRT 0\n".into())
-        });
-        let mut s = configured_station(&peer, |_| {});
-        {
-            let mut e = engine_lock(&s.engine);
-            e.set_radio_pegged(true);
-            e.set_tier(Tier::Msk144);
-            e.set_area("msg");
-            e.set_operating_mode("phone", false);
-            e.set_frequency(14.250, "20m", "USB");
-            e.set_tx_enabled(false);
-            e.set_routing_rules(vec![
-                RoutingRule {
-                    bands: vec!["6m".into()],
-                    mode: Some(RouteMode::Digital),
-                    radio: 0,
-                    ..RoutingRule::default()
-                },
-                RoutingRule {
-                    mode: Some(RouteMode::Digital),
-                    radio: 1,
-                    ..RoutingRule::default()
-                },
-            ]);
-            e.set_radio_pegged(false);
-            e.configure_remote_selection_host(true);
-            e.take_immediate_retune();
-        }
-        s.state.last_dial = 14_250_000;
-        s.state.last_mode = "USB".into();
-        let read = s.state.remote_read(&s.engine).unwrap();
-        let (original, receipt) = {
-            let mut e = engine_lock(&s.engine);
-            e.remote_observe_cat(Some(&read), Some(true));
-            e.remote_observe_dial(Some(&read), Some(14_250_000));
-            e.remote_observe_mode(Some(&read), Some("USB"));
-            e.remote_observe_ptt(Some(&read), Some(false));
-            let original = e.settings().clone();
-            let generation = e
-                .remote_monitor_observation()
-                .radio
-                .readings
-                .cat
-                .unwrap()
-                .connection_generation;
-            let receipt = e
-                .queue_remote_workspace(
-                    Workspace::Ft,
-                    generation,
-                    authority.permit(unexpired_deadline()).unwrap(),
-                )
-                .unwrap();
-            (original, receipt)
-        };
-        assert_eq!(receipt.outcome(), Outcome::Pending);
-        if scenario == "revoked_before" {
-            authority.revoke();
-        }
-        if scenario == "save_failed" {
-            std::fs::create_dir_all(&s.path).unwrap();
-        }
-        let modem = (scenario == "busy").then(|| loop {
-            if let Some(guard) = tempo_app::engine::remote_selection::Ft8A7ResetGuard::try_acquire()
+            attempt += 1;
+            let adopted = matches!(scenario, "confirmed" | "save_failed");
+            let authority = Arc::new(Revocation::default());
+            let revoke = authority.clone();
+            let peer = retuning_peer(14_250_000, "USB", move |line, _| {
+                if line == "F 50260000" && scenario == "revoked_during" {
+                    revoke.revoke();
+                }
+                (scenario == "ignored" && line == "F 50260000").then(|| "RPRT 0\n".into())
+            });
+            let mut s = configured_station(&peer, |_| {});
             {
-                break guard;
+                let mut e = engine_lock(&s.engine);
+                e.set_radio_pegged(true);
+                e.set_tier(Tier::Msk144);
+                e.set_area("msg");
+                e.set_operating_mode("phone", false);
+                e.set_frequency(14.250, "20m", "USB");
+                e.set_tx_enabled(false);
+                e.set_routing_rules(vec![
+                    RoutingRule {
+                        bands: vec!["6m".into()],
+                        mode: Some(RouteMode::Digital),
+                        radio: 0,
+                        ..RoutingRule::default()
+                    },
+                    RoutingRule {
+                        mode: Some(RouteMode::Digital),
+                        radio: 1,
+                        ..RoutingRule::default()
+                    },
+                ]);
+                e.set_radio_pegged(false);
+                e.configure_remote_selection_host(true);
+                e.take_immediate_retune();
             }
-            std::thread::yield_now();
-        });
-        let pool = Arc::new(MonitorConnections::new(vec![]));
-        let pending = AtomicBool::new(false);
-        let mut active = 0;
-        let notifications = std::cell::Cell::new(0);
-        s.state.apply_remote_selection(
-            &s.engine,
-            &pool,
-            &mut s.rig,
-            &mut s.backend,
-            &mut active,
-            &pending,
-            |_| panic!("returning workspace must retain the original physical connection"),
-            || {
-                assert!(s.engine.try_lock().is_ok());
-                assert!(pool.try_lock().is_ok());
-                notifications.set(notifications.get() + 1);
-            },
-        );
-        drop(modem);
-        assert_eq!(active, 0);
-        assert_eq!(
-            notifications.get(),
-            usize::from(adopted),
-            "{scenario}: {:?}",
-            receipt.outcome()
-        );
-        assert!(!pending.load(Ordering::Relaxed));
-        assert!(pool.lock().unwrap().is_empty());
-        assert!(!s.state.force_audio_rebuild);
-        assert_eq!(s.state.remote_radio_id, Some(0));
-        let before_poll = super::fm::writes(&peer);
-        assert_eq!(
-            before_poll
-                .iter()
-                .filter(|line| line.starts_with("F "))
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
+            s.state.last_dial = 14_250_000;
+            s.state.last_mode = "USB".into();
+            let read = s.state.remote_read(&s.engine).unwrap();
+            let (original, receipt) = {
+                let mut e = engine_lock(&s.engine);
+                e.remote_observe_cat(Some(&read), Some(true));
+                e.remote_observe_dial(Some(&read), Some(14_250_000));
+                e.remote_observe_mode(Some(&read), Some("USB"));
+                e.remote_observe_ptt(Some(&read), Some(false));
+                let original = e.settings().clone();
+                let generation = e
+                    .remote_monitor_observation()
+                    .radio
+                    .readings
+                    .cat
+                    .unwrap()
+                    .connection_generation;
+                let receipt = e
+                    .queue_remote_workspace(
+                        Workspace::Ft,
+                        generation,
+                        authority.permit(unexpired_deadline()).unwrap(),
+                    )
+                    .unwrap();
+                (original, receipt)
+            };
+            assert_eq!(receipt.outcome(), Outcome::Pending);
             if scenario == "revoked_before" {
-                vec![]
-            } else {
-                vec!["F 50260000"]
+                authority.revoke();
             }
-        );
-        if adopted {
             if scenario == "save_failed" {
-                assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+                std::fs::create_dir_all(&s.path).unwrap();
+            }
+            let modem = (scenario == "busy").then(|| loop {
+                if let Some(guard) =
+                    tempo_app::engine::remote_selection::Ft8A7ResetGuard::try_acquire()
+                {
+                    break guard;
+                }
+                std::thread::yield_now();
+            });
+            let pool = Arc::new(MonitorConnections::new(vec![]));
+            let pending = AtomicBool::new(false);
+            let mut active = 0;
+            let notifications = std::cell::Cell::new(0);
+            let refusals = modem_busy_refusals();
+            s.state.apply_remote_selection(
+                &s.engine,
+                &pool,
+                &mut s.rig,
+                &mut s.backend,
+                &mut active,
+                &pending,
+                |_| panic!("returning workspace must retain the original physical connection"),
+                || {
+                    assert!(s.engine.try_lock().is_ok());
+                    assert!(pool.try_lock().is_ok());
+                    notifications.set(notifications.get() + 1);
+                },
+            );
+            drop(modem);
+            // Every case but "busy" means the worker to find the modem free at its commit, but the
+            // mutex is the process's: a test elsewhere encoding or decoding can hold it at that
+            // moment, and the worker then refuses exactly as "busy" shows. That refusal is not
+            // this case's subject, so the case is set up and run again from the start, as
+            // `apply_gesture` issues a gesture again.
+            if scenario != "busy" && modem_busy_refusals() != refusals {
+                assert!(
+                    attempt < GESTURE_ATTEMPTS,
+                    "{scenario}: the modem mutex was held elsewhere on all {GESTURE_ATTEMPTS} attempts"
+                );
+                continue;
+            }
+            assert_eq!(active, 0);
+            assert_eq!(
+                notifications.get(),
+                usize::from(adopted),
+                "{scenario}: {:?}",
+                receipt.outcome()
+            );
+            assert!(!pending.load(Ordering::Relaxed));
+            assert!(pool.lock().unwrap().is_empty());
+            assert!(!s.state.force_audio_rebuild);
+            assert_eq!(s.state.remote_radio_id, Some(0));
+            let before_poll = super::fm::writes(&peer);
+            assert_eq!(
+                before_poll
+                    .iter()
+                    .filter(|line| line.starts_with("F "))
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                if scenario == "revoked_before" {
+                    vec![]
+                } else {
+                    vec!["F 50260000"]
+                }
+            );
+            if adopted {
+                if scenario == "save_failed" {
+                    assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+                } else {
+                    assert_eq!(
+                        receipt.outcome(),
+                        Outcome::Applied {
+                            evidence: Evidence::RadioReadback
+                        }
+                    );
+                }
+                let e = engine_lock(&s.engine);
+                assert_eq!(e.tier(), Tier::Msk144);
+                assert_eq!(e.settings().dial_hz(), 50_260_000);
+                assert_eq!(e.settings().audio_in, original.audio_in);
+                if scenario != "save_failed" {
+                    let saved: Settings =
+                        serde_json::from_slice(&std::fs::read(&s.path).unwrap()).unwrap();
+                    assert_eq!(&saved, e.settings());
+                }
+                assert_ne!(
+                    e.settings().radios[1].last_dial_mhz,
+                    original.radios[1].last_dial_mhz,
+                    "intermediate native profile must be banked"
+                );
+                assert!(!s.state.remote_retune_uncertain);
             } else {
                 assert_eq!(
-                    receipt.outcome(),
-                    Outcome::Applied {
-                        evidence: Evidence::RadioReadback
-                    }
+                    matches!(receipt.outcome(), Outcome::Unknown { .. }),
+                    scenario != "revoked_before"
+                );
+                assert_eq!(engine_lock(&s.engine).settings(), &original);
+                assert!(!s.path.exists());
+                assert_eq!(
+                    s.state.remote_retune_uncertain,
+                    scenario != "revoked_before"
                 );
             }
-            let e = engine_lock(&s.engine);
-            assert_eq!(e.tier(), Tier::Msk144);
-            assert_eq!(e.settings().dial_hz(), 50_260_000);
-            assert_eq!(e.settings().audio_in, original.audio_in);
-            if scenario != "save_failed" {
-                let saved: Settings =
-                    serde_json::from_slice(&std::fs::read(&s.path).unwrap()).unwrap();
-                assert_eq!(&saved, e.settings());
-            }
-            assert_ne!(
-                e.settings().radios[1].last_dial_mhz,
-                original.radios[1].last_dial_mhz,
-                "intermediate native profile must be banked"
-            );
-            assert!(!s.state.remote_retune_uncertain);
-        } else {
-            assert_eq!(
-                matches!(receipt.outcome(), Outcome::Unknown { .. }),
-                scenario != "revoked_before"
-            );
-            assert_eq!(engine_lock(&s.engine).settings(), &original);
-            assert!(!s.path.exists());
-            assert_eq!(
-                s.state.remote_retune_uncertain,
-                scenario != "revoked_before"
-            );
-        }
-        let reads = peer
-            .lines
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|line| *line == "f")
-            .count();
-        let started = now_unix_ms();
-        for delta in [200.0, 400.0, 800.0, 1600.0, 2400.0] {
-            s.state
-                .step(
-                    &s.engine,
-                    &mut s.backend,
-                    &mut s.rig,
-                    &no_sinks(),
-                    started + delta,
-                    &mut |_| panic!("unchanged capture must stay open"),
-                    &mut |_, _| panic!("unchanged radio must stay open"),
-                    &mut StationSinks::new(),
-                )
-                .unwrap();
-        }
-        assert!(
-            peer.lines
+            let reads = peer
+                .lines
                 .lock()
                 .unwrap()
                 .iter()
                 .filter(|line| *line == "f")
-                .count()
-                > reads
-        );
-        if !adopted {
-            // Ordinary observation still follows the physical dial after an
-            // uncertain write. It must not adopt the requested workspace or
-            // profile changes, nor command a retry to reconcile the mismatch.
-            let e = engine_lock(&s.engine);
-            let mut observed = original.clone();
-            let (hz, band) = match scenario {
-                "ignored" => (14_250_650, "20m"),
-                "revoked_before" => (14_250_000, "20m"),
-                _ => (50_260_000, "6m"),
-            };
-            observed.dial_mhz = hz as f64 / 1_000_000.0;
-            observed.band = band.into();
-            assert_eq!(e.settings(), &observed, "{scenario}");
-            assert_eq!(e.tier(), Tier::TempoFast);
+                .count();
+            let started = now_unix_ms();
+            for delta in [200.0, 400.0, 800.0, 1600.0, 2400.0] {
+                s.state
+                    .step(
+                        &s.engine,
+                        &mut s.backend,
+                        &mut s.rig,
+                        &no_sinks(),
+                        started + delta,
+                        &mut |_| panic!("unchanged capture must stay open"),
+                        &mut |_, _| panic!("unchanged radio must stay open"),
+                        &mut StationSinks::new(),
+                    )
+                    .unwrap();
+            }
+            assert!(
+                peer.lines
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|line| *line == "f")
+                    .count()
+                    > reads
+            );
+            if !adopted {
+                // Ordinary observation still follows the physical dial after an
+                // uncertain write. It must not adopt the requested workspace or
+                // profile changes, nor command a retry to reconcile the mismatch.
+                let e = engine_lock(&s.engine);
+                let mut observed = original.clone();
+                let (hz, band) = match scenario {
+                    "ignored" => (14_250_650, "20m"),
+                    "revoked_before" => (14_250_000, "20m"),
+                    _ => (50_260_000, "6m"),
+                };
+                observed.dial_mhz = hz as f64 / 1_000_000.0;
+                observed.band = band.into();
+                assert_eq!(e.settings(), &observed, "{scenario}");
+                assert_eq!(e.tier(), Tier::TempoFast);
+            }
+            let after_poll = super::fm::writes(&peer);
+            assert!(
+                after_poll[before_poll.len()..]
+                    .iter()
+                    .all(|line| line == "T 0"),
+                "no deferred workspace writes: {after_poll:?}"
+            );
+            assert!(!engine_lock(&s.engine).tx_enabled());
+            assert!(s.backend.played.is_empty());
+            break;
         }
-        let after_poll = super::fm::writes(&peer);
-        assert!(
-            after_poll[before_poll.len()..]
-                .iter()
-                .all(|line| line == "T 0"),
-            "no deferred workspace writes: {after_poll:?}"
-        );
-        assert!(!engine_lock(&s.engine).tx_enabled());
-        assert!(s.backend.played.is_empty());
     }
 }
 
