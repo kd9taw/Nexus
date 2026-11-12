@@ -1510,10 +1510,10 @@ type Answered = std::sync::mpsc::Receiver<Result<Value, Value>>;
 /// scheduled. A press during which the kernel preempted this thread timed the scheduler (a box
 /// running the whole suite, or a build beside it, makes that a few milliseconds often enough to
 /// carry a median of five: 21 to 94 runs in 100 failed so at four times the box's threads), so
-/// it is pressed again; the first press is not timed at all. Every press is a Stop and is waited
-/// for, timed or not. `before` and `after` run around each press, outside its time. A hundred
-/// presses with no clean five is a failure: the box was too loaded to measure, which is said,
-/// never passed.
+/// it is pressed again. Every press is timed, the first included: a slow first press would be the
+/// Stop's own, and is a failure. Every press is a Stop and is waited for, timed or not. `before`
+/// and `after` run around each press, outside its time. A hundred presses with no clean five is
+/// a failure: the box was too loaded to measure, which is said, never passed.
 fn stops_leaving(
     screen: &tauri::WebviewWindow<MockRuntime>,
     socket: &std::net::UdpSocket,
@@ -1550,9 +1550,7 @@ fn stops_leaving(
                 "Stop {stop} never left"
             );
         };
-        // The first press is never timed: it pays what only a first press does here (the
-        // path's code and data paged in, its first allocations), 90-230 ms in a full suite.
-        if stop > 1 && preemptions() == preempted {
+        if preemptions() == preempted {
             took.push(left - pressed);
         }
         after();
