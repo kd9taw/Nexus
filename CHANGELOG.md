@@ -5,6 +5,11 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **On FT, the line with your next over starts at the left again.** In 1.24.0 the space kept for transmitter alarms stood in front of the next-over box ("TX CQ …"), Free text, Send and Log, so on a wide window they started far to the right with empty space before them. The alarm space now comes after Log, and the next-over box starts at the left edge of the strip as it did in 1.23.0. An alarm still shows on the TX strip, under Stop TX.
+
 ## [1.24.0] — 2026-11-11
 
 ### Added
