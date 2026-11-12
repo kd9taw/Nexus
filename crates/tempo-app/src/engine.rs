@@ -31642,6 +31642,14 @@ contact yourself."
         self.tx_enabled = false;
     }
 
+    /// For tests outside this crate: the watchdog's wall clock as if it had started `secs` ago, so
+    /// the radio loop's tests reach the limit through the real check (`keyboard::watchdog_tripped`
+    /// at each keying point) without waiting out its minutes.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn age_tx_watchdog_for_test(&mut self, secs: u64) {
+        self.tx_watchdog_start = Some(now_unix_secs().saturating_sub(secs));
+    }
+
     /// T/R slot length (seconds) for the active tier: DX1 = 15 s; the native
     /// tiers read it from their [`modes::ModeKind`] (FT1 = 4, FT8 = 15, FT4 = 7.5).
     pub fn active_slot_secs(&self) -> f64 {

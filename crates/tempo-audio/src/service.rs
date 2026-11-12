@@ -21305,6 +21305,7 @@ mod tests {
     mod po_derived;
     mod psk63_keying;
     mod ptt_lines;
+    mod radio_loop_pins;
     mod readback_coverage;
     mod receive_source;
     mod refused_key;
