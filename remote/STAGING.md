@@ -164,6 +164,22 @@ All three paths write `source='manual'` and UPDATE rather than DELETE. The trial
 proof an account consumed its trial; removing it re-opens the reinstall and re-pair abuse the
 one-trial rule exists to refuse.
 
+### Banning an account
+
+A ban is the account's trials row with `enabled = 0`. It outranks everything, a paid plan included:
+no internet use, no home-network use, no pairing and no binding (`entitlementOf` in
+`src/authority.ts`). There is no route for it, on purpose. Run this with `wrangler d1 execute
+<database> --remote --command "..."`, with the account UUID from Support details:
+
+```sql
+INSERT INTO trials(account_id, enabled, expires_at, started_at, source) SELECT id, 0, unixepoch() * 1000, NULL, 'manual' FROM accounts WHERE id = '<account-uuid>' ON CONFLICT(account_id) DO UPDATE SET enabled = 0;
+```
+
+It writes a row for an account that never had a trial and keeps the dates of one that did. An
+account's open browser sessions and native pipes end within one lease (sixty seconds). A ban does not stop a subscription charging: cancel or refund it at the payment provider as
+well. To lift a ban, grant a trial as above (any grant sets `enabled = 1`), or, to restore exactly
+what the account had, `UPDATE trials SET enabled = 1 WHERE account_id = '<account-uuid>';`.
+
 ## The stream's relay key
 
 A stream whose direct connection fails can fall back to a relay: the `turn` route mints Cloudflare

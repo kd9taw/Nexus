@@ -35,8 +35,19 @@ const ENROLMENTS_PER_DAY = 5
 const INVITES_PER_DAY = 20
 /** The people a station may have invited at once. */
 const INVITES_PER_STATION = 20
-/** Checkouts and portal pages an account may open a minute: each one is a call to the payment provider. */
+/** Checkouts and portal pages an account may open a minute: each one is a call to the payment provider.
+ *  And a day, so one account cannot keep the provider busy at ten a minute around the clock: an operator
+ *  subscribing, changing plan or fetching an invoice opens a handful. */
 const BILLING_PER_MINUTE = 10
+const BILLING_PER_DAY = 40
+/** `health` reads a caller may make a minute (an IPv4 address or IPv6 /64), and an IPv6 /48 may. An
+ *  uptime monitor reads once a minute from each of its regions, each region its own address. */
+const HEALTH_PER_MINUTE = 6
+const HEALTH_NETWORK_PER_MINUTE = 30
+/** Each of `health`'s probes answers within this, or counts as down: a monitor waits for none of them. */
+const HEALTH_DEADLINE_MS = 2000
+/** The room `health` reaches. Never a station's: a station's room is named by its id, always a UUID. */
+const HEALTH_ROOM = 'health'
 /** Account deletions and copies an account may ask for in ten minutes. */
 const ACCOUNT_DATA_PER_TEN_MINUTES = 5
 /** A subscription in these states has ended and can charge nothing more; any other can. */
@@ -75,6 +86,43 @@ async function sync(env: RemoteEnv, row: StationRow, now: number): Promise<void>
   requireValue(response.ok, 'serviceUnavailable', 503)
 }
 
+// THE DEEP HEALTH ROUTE, for an uptime monitor: GET /api/remote/health, with no sign-in. It proves three
+// things and says nothing else: the database answers (`database`), a room can be reached (`room`), and the
+// billing Worker is bound (`billing`). Each is a fixed word, `ok` or what is wrong; 200 when all three are
+// ok, 503 otherwise. No count, id, version, revision or timing: it tells a stranger nothing `config` does not.
+//
+// The database probe IS the caller's rate counter, an UPSERT that has to read and write its row, so a
+// database that answers reads but refuses writes is down here too. A caller over its limit is refused
+// `tryLater` (429), never given a reading. While the database is down the counter cannot count, so the
+// limit cannot hold either; what is left is the room probe, which touches no station and stores nothing,
+// and a flood then is a job for an edge rule. The room is one of its own (`HEALTH_ROOM`) and answers
+// before it reads any admission; reaching it starts the room class and reads its storage, as a station's
+// room does when it wakes. Billing is presence only: calling it would reach the payment provider each time.
+type Probe = 'ok' | 'down'
+async function health(request: Request, env: RemoteEnv, now: number): Promise<Response> {
+  const { caller: from, network } = caller(request.headers.get('cf-connecting-ip'))
+  let database: Probe = 'ok'
+  try {
+    await within(rate(env, `health:${from}`, now, HEALTH_PER_MINUTE))
+    if (network) await within(rate(env, `health-network:${network}`, now, HEALTH_NETWORK_PER_MINUTE))
+  } catch (error) {
+    if (error instanceof Refusal) throw error
+    database = 'down'
+  }
+  const reached: Probe = await within(env.STATIONS.get(env.STATIONS.idFromName(HEALTH_ROOM)).fetch('https://station.internal/health'))
+    .then(response => response.status === 204 ? 'ok' : 'down', () => 'down')
+  const billing = env.BILLING !== undefined ? 'ok' : 'absent'
+  const ok = database === 'ok' && reached === 'ok' && billing === 'ok'
+  return json({ status: ok ? 'ok' : 'degraded', database, room: reached, billing }, ok ? 200 : 503)
+}
+/** `work`'s answer, or a rejection once `HEALTH_DEADLINE_MS` has passed without one. */
+async function within<T>(work: Promise<T>): Promise<T> {
+  let timer = 0
+  try {
+    return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('deadline')), HEALTH_DEADLINE_MS) })])
+  } finally { clearTimeout(timer) }
+}
+
 async function api(request: Request, env: RemoteEnv): Promise<Response> {
   const url = new URL(request.url), now = Date.now()
   requireValue(url.origin === env.PUBLIC_REMOTE_ORIGIN && !url.search, 'originDenied')
@@ -101,6 +149,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     // otherwise, and an older service never says so.
     billing: env.BILLING !== undefined,
   })
+  if (request.method === 'GET' && path === 'health') return health(request, env, now)
   const match = /^stations\/([0-9a-f-]{36})\/(.+)$/.exec(path)
   // The native client's routes (Nexus on another computer), on its own token and its device key's
   // signature, with no Origin and no cookie. No other route takes that caller, and it takes no other.
@@ -499,6 +548,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     const checkout = path === 'billing/checkout', input = await body(request, checkout ? ['plan'] : [])
     requireValue(!checkout || input.plan === 'monthly' || input.plan === 'annual', 'invalidRequest', 400)
     await rate(env, `billing:${identity.accountId}`, now, BILLING_PER_MINUTE)
+    await rate(env, `billing-day:${identity.accountId}`, now, BILLING_PER_DAY, DAY_MS)
     return checkout
       ? billingAnswer(await env.BILLING.checkout(identity.accountId, input.plan as 'monthly' | 'annual'), 'https://checkout.stripe.com/')
       : billingAnswer(await env.BILLING.portal(identity.accountId), 'https://billing.stripe.com/')
