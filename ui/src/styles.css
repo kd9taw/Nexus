@@ -7353,7 +7353,7 @@ body.resizing {
   align-items: center;
   justify-content: center;
   gap: 2px;
-  margin-top: 4px;
+  margin-top: var(--space-1);
   padding: 3px var(--space-1);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
@@ -18707,6 +18707,15 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-right: none;
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
+  /* The bar keeps its stock spacing: the short-window step (cockpit-panes.css) is the vertical rail's. */
+  --chrome-rail-gap: 6px;
+  --chrome-rail-btn-pad-y: var(--space-2);
+  --chrome-rail-sub-pad-y: 6px;
+}
+/* …and no "N more" cue: the bar scrolls sideways, nothing sits below it. */
+[data-viewport='sm'] .mode-nav-more,
+[data-viewport='xs'] .mode-nav-more {
+  display: none;
 }
 [data-viewport='sm'] .mode-nav-top,
 [data-viewport='sm'] .mode-nav-bottom,
