@@ -511,7 +511,8 @@ impl Session {
     /// the station may not try ([`may_try`]) is never read: str0m would answer a check there, and
     /// then try that address itself.
     pub fn receive(&mut self, now: Instant, source: SocketAddr, data: &[u8]) -> bool {
-        if self.closed || !may_try(source) {
+        // ⛔ Nor one str0m's ICE agent would panic on (`crate::stun::integrity_first`).
+        if self.closed || !may_try(source) || crate::stun::integrity_first(data) {
             return false;
         }
         let Ok(receive) = Receive::new(Protocol::Udp, source, self.base, data) else {
