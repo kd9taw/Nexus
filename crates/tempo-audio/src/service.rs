@@ -13219,8 +13219,7 @@ impl RadioLoop {
                                 // One whole word: the silence after it is the word space.
                                 backend.mark_unit_end();
                                 let until = self.cw_busy_until + crate::slot::TX_TAIL_MS;
-                                self.tx_until_ms =
-                                    Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                                self.extend_hold(until);
                                 self.cw_keying_until = until;
                             } else {
                                 // Nothing keyed, so nothing to wait out: a new send keys at once.
@@ -13671,8 +13670,7 @@ impl RadioLoop {
                                     k.send(bits.clone(), baud);
                                     self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
                                     let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
-                                    self.tx_until_ms =
-                                        Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                                    self.extend_hold(until);
                                 }
                             }
                             {
@@ -13726,8 +13724,7 @@ impl RadioLoop {
                                     self.rtty_busy_until =
                                         self.rtty_busy_until.max(now) + lead + chunk_ms;
                                     let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
-                                    self.tx_until_ms =
-                                        Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                                    self.extend_hold(until);
                                 } else {
                                     let mut eng = engine_lock(engine);
                                     eng.drop_rtty_latch();
@@ -13817,8 +13814,7 @@ impl RadioLoop {
                             if key.sends() {
                                 k.send(bits.clone(), baud);
                                 let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
-                                self.tx_until_ms =
-                                    Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                                self.extend_hold(until);
                             }
                         }
                         let sent = !open_err && key.sends();
@@ -13882,8 +13878,7 @@ impl RadioLoop {
                                 backend.play(&buf);
                                 backend.mark_unit_end();
                                 let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
-                                self.tx_until_ms =
-                                    Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                                self.extend_hold(until);
                             } else {
                                 // Nothing keyed — don't sit "busy" for a send that never started.
                                 self.rtty_busy_until = 0.0;
@@ -14067,8 +14062,7 @@ impl RadioLoop {
                             backend.play(&buf);
                             self.psk_busy_until = self.psk_busy_until.max(now) + lead + chunk_ms;
                             let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
-                            self.tx_until_ms =
-                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            self.extend_hold(until);
                             if let Some(st) = self.psk_stream.as_mut() {
                                 st.keyed = true;
                             }
@@ -14834,8 +14828,7 @@ impl RadioLoop {
                                         + (lead + MIC.ahead_ms) as f64
                                 }
                             } + crate::slot::TX_TAIL_MS;
-                            self.tx_until_ms =
-                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            self.extend_hold(until);
                         }
                     }
                     MicTick::Samples(buf) => {
@@ -14935,8 +14928,7 @@ impl RadioLoop {
                             let until = now
                                 + (TCI_OVER.lead_in_ms + TCI_OVER.ahead_ms) as f64
                                 + crate::slot::TX_TAIL_MS;
-                            self.tx_until_ms =
-                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            self.extend_hold(until);
                         }
                     }
                     MicTick::Samples(buf) => {
@@ -15100,8 +15092,7 @@ impl RadioLoop {
                                         + (lead + PC_MIC.ahead_ms) as f64
                                 }
                             } + crate::slot::TX_TAIL_MS;
-                            self.tx_until_ms =
-                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                            self.extend_hold(until);
                         }
                     }
                     MicTick::Samples(buf) => {
