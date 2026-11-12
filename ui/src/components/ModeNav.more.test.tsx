@@ -80,6 +80,31 @@ describe('the rail’s "more below" cue', () => {
     expect(screen.queryByRole('button', { name: 'More sections below — show them' })).toBeNull()
   })
 
+  it('counts again when the club board button comes or goes (no section setting changes)', () => {
+    const rail = (clubBoard: boolean) => (
+      <ModeNav view="operate" mode="chat" enabled={ALL_ON} onSelect={vi.fn()} tier="FT8" onDigitalMode={vi.fn()} onClubBoard={vi.fn()} clubBoard={clubBoard} />
+    )
+    const r = render(rail(false))
+    const top = document.querySelector<HTMLElement>('.mode-nav-top')!
+    Object.defineProperty(top, 'clientHeight', { configurable: true, get: () => 300 })
+    top.getBoundingClientRect = () => rect(0, 300)
+    // Boxes from the live DOM, so a button that arrives later is laid out too.
+    const real = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const all = [...top.querySelectorAll<HTMLElement>('button.mode-btn')]
+      const i = all.indexOf(this)
+      return i < 0 ? real.call(this) : rect(i * ROW, ROW)
+    })
+    act(() => {
+      fireEvent.scroll(top)
+    })
+    const cue = () => screen.getByRole('button', { name: 'More sections below — show them' }).textContent
+    const without = top.querySelectorAll('button.mode-btn').length - 7
+    expect(cue()).toBe(`${without} more`)
+    r.rerender(rail(true))
+    expect(cue()).toBe(`${without + 1} more`)
+  })
+
   it('counts nothing in a hidden (0×0) host', () => {
     renderRail()
     const { top } = layout(0)

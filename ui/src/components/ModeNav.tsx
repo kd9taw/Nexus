@@ -311,7 +311,8 @@ export function ModeNav({
       (b) => b.getBoundingClientRect().bottom > edge + 1,
     )
   }
-  const shown = items.map((it) => it.id).join(' ') + JSON.stringify(enabled)
+  // Everything that adds or removes a section: the order, the Features switches, the club board.
+  const shown = items.map((it) => it.id).join(' ') + JSON.stringify(enabled) + String(clubBoard)
   useEffect(() => {
     const el = topRef.current
     if (!el) return
