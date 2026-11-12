@@ -985,10 +985,15 @@ jobs:
           curl -fsSL --retry 3 -o "$zip" \
             "https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v$TAURI_CLI/cargo-tauri-${{ matrix.target }}.zip"
           echo "$TAURI_CLI_SHA256  $zip" | shasum -a 256 -c -
-          unzip -o -q "$zip" cargo-tauri -d "$HOME/.cargo/bin"
-          got=$(cargo tauri --version)
+          # A directory of its own, first on PATH: the runner image has no ~/.cargo/bin to put it in,
+          # and nothing else named cargo-tauri can win.
+          bin="$RUNNER_TEMP/tauri-cli"
+          mkdir -p "$bin"
+          unzip -o -q "$zip" cargo-tauri -d "$bin"
+          echo "$bin" >> "$GITHUB_PATH"
+          got=$(PATH="$bin:$PATH" cargo tauri --version)
           [ "$got" = "tauri-cli $TAURI_CLI" ] || { echo "::error::cargo tauri --version says '$got', not tauri-cli $TAURI_CLI"; exit 1; }
-          echo "$got from $(command -v cargo-tauri)"
+          echo "$got from $bin"
 
       # Hamlib for macOS. Explicit here because this job runs `cargo tauri build` directly —
       # Linux and the Pi get it inside scripts/build-linux.sh, and macOS would silently ship
