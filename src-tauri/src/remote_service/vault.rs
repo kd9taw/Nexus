@@ -475,9 +475,10 @@ pub struct Uninvites {
 }
 
 /// The sign-in devices of the station the service knows as `station_id`, bound for `account_id`,
-/// whose owner notice the service had confirmed, each with the end of its transmit window in unix
-/// seconds (0 once it had elapsed). Only a confirmation the service gave is kept, and each list
-/// replaces it: a restart restores the windows, never a confirmation the next list does not give.
+/// whose owner notice the service had confirmed or that the station held from transmit, each with
+/// the end of its transmit window in unix seconds (0 once it had elapsed). Each list replaces it:
+/// a restart restores the windows, never a confirmation the next list does not give, and a
+/// restored window still waits for that confirmation (`operations::Authority::tx_held_for`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Notified {

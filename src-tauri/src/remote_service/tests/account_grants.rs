@@ -1905,41 +1905,67 @@ async fn an_unreadable_confirmed_notice_entry_holds_the_device() {
     assert!(held_at(&service, past_the_window()), "unreadable: held");
 }
 
-/// ★ THE LIVE LIST WINS: a device the next list no longer confirms was notified is held, whatever
-/// the station kept, and is dropped from what it keeps at once.
+/// ★ THE LIVE LIST CONFIRMS, IT NEVER LIFTS: a device the next list no longer confirms was
+/// notified is held, whatever the station kept; and the hold the station placed is still kept for
+/// a restart, through that list and through one that stops naming the device as added by a
+/// sign-in.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_list_that_no_longer_confirms_the_notice_holds_and_drops_it() {
+async fn a_list_that_no_longer_confirms_the_notice_holds_and_keeps_the_hold() {
     let cloud = fake_cloud().await;
     let vault = owned_vault(&cloud.origin, Vec::new());
     let readable = serde_json::to_string(&notified_entry(STATION, ACCOUNT, 0)).unwrap();
     let service = restarted_with(&cloud, &vault, Some(&readable), 0).await;
     assert!(held_at(&service, past_the_window()), "not confirmed: held");
-    let mut kept = None;
-    for _ in 0..100 {
-        kept = vault.notified().unwrap();
-        if kept.as_ref().is_some_and(|k| k.windows.is_empty()) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert_eq!(kept.unwrap().windows, BTreeMap::new(), "dropped at once");
 
-    // And a device the list stops naming as added by a sign-in is dropped too.
-    *cloud.devices.lock().unwrap() = json!({ "devices": [notified_row(1)] }).to_string();
-    let _ = service.action(Action::Refresh {}).await.unwrap();
-    assert_eq!(
-        kept_notified(&vault).await.windows.len(),
-        1,
-        "CONTROL: confirmed, kept"
-    );
+    // A device the list stops naming as added by a sign-in stays held, and kept.
     let mut shack = notified_row(1);
     shack["addedBy"] = "shack".into();
     *cloud.devices.lock().unwrap() = json!({ "devices": [shack] }).to_string();
     let _ = service.action(Action::Refresh {}).await.unwrap();
+    assert!(
+        held_at(&service, past_the_window()),
+        "no longer a sign-in device: still held"
+    );
     assert_eq!(
-        vault.notified().unwrap().unwrap().windows,
-        BTreeMap::new(),
-        "no longer a sign-in device: dropped"
+        vault.notified().unwrap().unwrap().windows.len(),
+        1,
+        "no longer a sign-in device: the hold still kept"
+    );
+}
+
+/// ★ THE STATION'S HOLD IS THE STATION'S, ACROSS A RESTART TOO: a device held on its sign-in, its
+/// owner notice never confirmed, stays held when the service's list stops naming it as added by a
+/// sign-in, and is still held after a restart with that list.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hold_outlasts_a_list_that_stops_naming_the_device_and_a_restart() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let first = launch_granting_on_sign_in(&cloud, &vault);
+    let _ = listed(&first, &cloud, vec![notified_row(0)]).await;
+    assert!(
+        held_at(&first, past_the_window()),
+        "premise: no notice, held"
+    );
+
+    let mut shack = notified_row(0);
+    shack["addedBy"] = "shack".into();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [shack.clone()] }).to_string();
+    let _ = first.action(Action::Refresh {}).await.unwrap();
+    assert!(
+        held_at(&first, past_the_window()),
+        "the list stopped naming it as a sign-in device: still held"
+    );
+    assert!(
+        kept_notified(&vault).await.windows.contains_key(BROWSER),
+        "the hold is kept for a restart"
+    );
+    drop(first);
+
+    let service = launch_granting_on_sign_in(&cloud, &vault);
+    let _ = listed(&service, &cloud, vec![shack]).await;
+    assert!(
+        held_at(&service, past_the_window()),
+        "after a restart, with the list still not naming it: held"
     );
 }
 
