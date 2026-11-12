@@ -27,8 +27,11 @@ export type Entitlement = { accountId: string; expiresAt: number; enabled: boole
 export type StationIdentity = Identity & { stationId: string; generation: number }
 export type BrowserIdentity = Identity & { deviceId: string; deviceGeneration: number }
 export type Peer = { send: (message: string) => void; close: (code: number, reason: string) => void }
+/** `frames: false`: an observer that holds a session and its lanes but is sent no observation frame,
+ *  and never asks the station to publish (the service's LAN-only session, whose holder the relay cannot
+ *  place on the shack's network). Absent means frames, as for every observer before it existed. */
 type Observer = { peer: Peer; identity: BrowserIdentity; until: number
-  sent: { epoch: string; sequence: number; at: number } | null; awaiting: boolean }
+  sent: { epoch: string; sequence: number; at: number } | null; awaiting: boolean; frames?: false }
 export type StationCheckpoint = { peer: Peer; identity: StationIdentity }
 export type ObserverCheckpoint = Observer & { sessionId: string }
 
@@ -105,13 +108,13 @@ export class ObservationRelay {
     this.demand()
   }
 
-  connectObserver(sessionId: string, identity: BrowserIdentity, entitlement: Entitlement, peer: Peer, now: number): void {
+  connectObserver(sessionId: string, identity: BrowserIdentity, entitlement: Entitlement, peer: Peer, now: number, frames = true): void {
     this.expire(now)
     const until = observerDeadline(this.access, identity, entitlement, now)
     if (!this.station) throw new Error('stationOffline')
     if (this.observers.has(sessionId)) throw new Error('sessionAlreadyConnected')
     if (this.observers.size >= MAX_OBSERVERS) throw new Error('observerLimit')
-    const observer: Observer = { peer, identity: { ...identity }, until, sent: null, awaiting: false }
+    const observer: Observer = { peer, identity: { ...identity }, until, sent: null, awaiting: false, ...(frames ? {} : { frames: false as const }) }
     this.observers.set(sessionId, observer)
     this.demand()
     this.deliver(sessionId, observer, now)
@@ -144,7 +147,7 @@ export class ObservationRelay {
       const frame = parseFrame(JSON.parse(data), 'native')
       if (!this.order.accept(frame)) return
       // An idle station must stop producing; there is no observer queue to fill.
-      if (!this.observers.size) { this.latest = null; return }
+      if (!this.watching()) { this.latest = null; return }
       this.latest = { frame, at: now }
       for (const [id, observer] of this.observers) this.deliver(id, observer, now)
     } catch {
@@ -172,7 +175,7 @@ export class ObservationRelay {
     if (!observer) return
     this.observers.delete(sessionId)
     this.close(observer.peer, code, reason)
-    if (!this.observers.size) this.latest = null
+    if (!this.watching()) this.latest = null
     this.demand()
   }
 
@@ -200,9 +203,12 @@ export class ObservationRelay {
     return deadlines.length ? Math.min(...deadlines) : null
   }
 
+  /** Whether any observer is sent frames: what the station is asked to publish for. */
+  watching(): boolean { return [...this.observers.values()].some(o => o.frames !== false) }
+
   private deliver(id: string, observer: Observer, now: number): void {
     const latest = this.latest
-    if (observer.awaiting || !latest || now - latest.at >= STALE_MS ||
+    if (observer.frames === false || observer.awaiting || !latest || now - latest.at >= STALE_MS ||
       (observer.sent?.epoch === latest.frame.epoch && observer.sent.sequence === latest.frame.sequence)) return
     observer.sent = { epoch: latest.frame.epoch, sequence: latest.frame.sequence, at: now }
     observer.awaiting = true
@@ -212,7 +218,7 @@ export class ObservationRelay {
 
   private demand(): void {
     if (!this.station) return
-    try { this.station.peer.send(JSON.stringify({ type: 'watch', enabled: this.observers.size > 0 })) }
+    try { this.station.peer.send(JSON.stringify({ type: 'watch', enabled: this.watching() })) }
     catch { this.disconnectStation(this.station.peer) }
   }
 

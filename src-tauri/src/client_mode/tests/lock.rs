@@ -20,16 +20,18 @@ fn hold(s: &Screens, still_talking: bool) -> Result<Value, Value> {
     )
 }
 
-/// Holds the Lock every 50 ms until `until` after `from`, each answer kept with when it came.
-fn hold_until(
-    s: &Screens,
-    from: Instant,
-    until: Duration,
-) -> Vec<(Duration, Result<Value, Value>)> {
+/// One hold's answer, with when (after the test's `from`) its call was made and when it returned.
+/// The client reads its clock somewhere between the two, so a test bounds the Lock's age with
+/// both: an answer stamped only when it came read a call delayed on a loaded box as made late.
+type Said = (Duration, Duration, Result<Value, Value>);
+
+/// Holds the Lock every 50 ms until `until` after `from`, each answer kept with its call's times.
+fn hold_until(s: &Screens, from: Instant, until: Duration) -> Vec<Said> {
     let mut said = Vec::new();
     while from.elapsed() < until {
+        let made = from.elapsed();
         let answer = hold(s, false);
-        said.push((from.elapsed(), answer));
+        said.push((made, from.elapsed(), answer));
         std::thread::sleep(Duration::from_millis(50));
     }
     said
@@ -79,17 +81,28 @@ fn a_lock_nobody_answers_ends_at_its_cap() {
     short_lock(&client);
     let from = Instant::now();
     let said = hold_until(&s, from, Duration::from_millis(1100));
-    for (at, answer) in &said {
-        let answer = answer.as_ref().unwrap_or_else(|e| panic!("{at:?}: {e}"));
-        if *at < Duration::from_millis(550) {
-            assert_eq!(answer, &json!({ "ask": false }), "{at:?}");
-        } else if *at >= Duration::from_millis(650) {
-            assert_eq!(answer["ask"], true, "{at:?}: {answer}");
+    // The Lock began while the first hold was handled: after `from`, and by that call's return.
+    let began_by = said[0].1;
+    let mut asked = 0;
+    for (made, returned, answer) in &said {
+        if *returned < Duration::from_millis(550) {
+            // At most `returned` old when read: under the 600 ms the question waits.
+            let answer = answer.as_ref().unwrap_or_else(|e| panic!("{made:?}: {e}"));
+            assert_eq!(answer, &json!({ "ask": false }), "{made:?}");
+        } else if *made >= began_by + Duration::from_millis(650)
+            && *returned < Duration::from_millis(1150)
+        {
+            // At least 650 ms old when read, and under its 1200 ms cap.
+            let answer = answer.as_ref().unwrap_or_else(|e| panic!("{made:?}: {e}"));
+            assert_eq!(answer["ask"], true, "{made:?}: {answer}");
             let left = answer["leftMs"].as_u64().unwrap();
-            assert!(left <= 600 && left > 0, "{at:?}: {answer}");
+            assert!(left <= 600 && left > 0, "{made:?}: {answer}");
+            asked += 1;
         }
     }
-    while from.elapsed() < Duration::from_millis(1250) {
+    assert!(asked > 0, "CONTROL: a hold was asked: {said:?}");
+    // At least 1250 ms old when this hold is read: past its cap.
+    while from.elapsed() < began_by + Duration::from_millis(1250) {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(
@@ -131,10 +144,10 @@ fn an_answer_to_still_talking_moves_the_cap_on() {
     short_lock(&client);
     let from = Instant::now();
     let said = hold_until(&s, from, Duration::from_millis(800));
-    assert_eq!(
-        said.last().unwrap().1.as_ref().unwrap()["ask"],
-        true,
-        "CONTROL: asked"
+    assert!(
+        said.iter()
+            .any(|(.., answer)| answer.as_ref().is_ok_and(|a| a["ask"] == true)),
+        "CONTROL: asked: {said:?}"
     );
     assert!(
         end.presses()
@@ -145,19 +158,24 @@ fn an_answer_to_still_talking_moves_the_cap_on() {
     );
     let answered = Instant::now();
     assert_eq!(hold(&s, true), Ok(json!({ "ask": false })), "answered");
+    // The answer moved the count on while it was handled: after `answered`, and by its return.
+    let moved_by = answered.elapsed();
     eventually("the next press", || {
         end.presses().last() == Some(&Up::Hold { press: 2, stops: 0 })
     });
     let said = hold_until(&s, answered, Duration::from_millis(1100));
+    // Every hold read under 1150 ms after the answer is under the moved cap.
     assert!(
-        said.iter().all(|(_, answer)| answer.is_ok()),
+        said.iter()
+            .filter(|(_, returned, _)| *returned < Duration::from_millis(1150))
+            .all(|(.., answer)| answer.is_ok()),
         "on the air past the first cap: {said:?}"
     );
     assert!(
         from.elapsed() > Duration::from_millis(1700),
         "premise: past the first cap"
     );
-    while answered.elapsed() < Duration::from_millis(1250) {
+    while answered.elapsed() < moved_by + Duration::from_millis(1250) {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(

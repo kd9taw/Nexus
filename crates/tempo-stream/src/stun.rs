@@ -66,6 +66,19 @@ pub fn mapped(packet: &[u8], transaction: &[u8; 12]) -> Option<SocketAddr> {
     plain
 }
 
+/// ⛔ Whether `packet` is a STUN message whose first attribute is its MESSAGE-INTEGRITY. No end
+/// sends one (a check names its USERNAME and PRIORITY first, an answer its mapped address), and
+/// `is` 0.11.1, the ICE agent str0m runs and the internet roads run, parses it and then panics
+/// verifying it: it keeps the bytes the integrity covers only for an integrity past the first
+/// attribute, so it slices an empty buffer. As an answer it needs no key to get there, only a
+/// check's transaction id. The stream's session and every internet road drop one unread.
+pub fn integrity_first(packet: &[u8]) -> bool {
+    const MESSAGE_INTEGRITY: u16 = 0x0008;
+    packet.len() >= 24
+        && packet[4..8] == MAGIC.to_be_bytes()
+        && packet[20..22] == MESSAGE_INTEGRITY.to_be_bytes()
+}
+
 /// A (XOR-)MAPPED-ADDRESS value. `xor` carries the transaction id when the value is XOR'd.
 fn address(value: &[u8], xor: Option<&[u8; 12]>) -> Option<SocketAddr> {
     if value.len() < 4 {
@@ -217,5 +230,37 @@ mod tests {
         assert_eq!(mapped(&dtls, &TX), None);
         // CONTROL: the unaltered packet is read.
         assert!(mapped(&packet, &TX).is_some());
+    }
+
+    /// ⛔ A STUN message whose first attribute is MESSAGE-INTEGRITY is known, the fuzz's crashing
+    /// input among them (a Binding error response). CONTROL: a check and an answer as ends send
+    /// them, MESSAGE-INTEGRITY after their other attributes, are not; nor a bare request, nor
+    /// non-STUN bytes with 0x0008 at the same place.
+    #[test]
+    fn a_message_with_its_integrity_first_is_known() {
+        let hex = "011100202112a442f3f442b22b6834a9785f7e430008001498f89100e2984820b4ef6c\
+                   5545338c0581fd02b4802800044cadb2aa";
+        let fuzzed: Vec<u8> = (0..hex.len() / 2)
+            .map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap())
+            .collect();
+        assert!(integrity_first(&fuzzed));
+        let integrity = (0x0008, vec![0u8; 20]);
+        assert!(integrity_first(&success(
+            &TX,
+            std::slice::from_ref(&integrity)
+        )));
+
+        assert!(!integrity_first(&success(
+            &TX,
+            &[(XOR_MAPPED_ADDRESS, xor_v4()), integrity.clone()]
+        )));
+        assert!(!integrity_first(&success(
+            &TX,
+            &[(0x0006, b"ab:cd".to_vec()), integrity]
+        )));
+        assert!(!integrity_first(&request(&TX)));
+        let mut dtls = fuzzed.clone();
+        dtls[4] = 0xfe;
+        assert!(!integrity_first(&dtls));
     }
 }

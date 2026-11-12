@@ -76,27 +76,31 @@ pub fn snapshot(
     window_secs: i64,
     needs: &dyn OperatorNeeds,
 ) -> Result<PropagationSnapshot, String> {
-    snapshot_with_spots(mycall, mygrid, window_secs, needs, &[])
+    snapshot_with_spots(mycall, mygrid, window_secs, needs, &[]).map(|(snap, _)| snap)
 }
 
 /// As [`snapshot`], merging `extra_spots` (e.g. the live PSK Reporter MQTT
 /// firehose) with the rate-limited XML query before scoring. The advisor dedupes
 /// paths by callsign, so overlap between the two sources is harmless — the
 /// firehose just makes "who hears me / who I hear" richer and more current.
+///
+/// Also returns the XML query's own reception reports, as fetched (empty when it failed), so
+/// the caller can keep the ones that heard the operator without asking PSK Reporter again.
 pub fn snapshot_with_spots(
     mycall: &str,
     mygrid: &str,
     window_secs: i64,
     needs: &dyn OperatorNeeds,
     extra_spots: &[PathSpot],
-) -> Result<PropagationSnapshot, String> {
+) -> Result<(PropagationSnapshot, Vec<PathSpot>), String> {
     // Each feed degrades on its own — one source being down must NOT blank the whole
     // nowcast (this was the bug behind "stays in demo": a single PSK Reporter 429
     // `?`-aborted the entire snapshot).
     let reading = swpc::fetch_space_wx().ok();
     let xml_spots = pskreporter::fetch_paths(mycall, window_secs).ok();
     let xml_ok = xml_spots.is_some();
-    let mut spots = xml_spots.unwrap_or_default();
+    let xml_spots = xml_spots.unwrap_or_default();
+    let mut spots = xml_spots.clone();
     spots.extend_from_slice(extra_spots);
     let plans = dxped::fetch_plans().unwrap_or_default();
 
@@ -148,5 +152,5 @@ pub fn snapshot_with_spots(
         "partial"
     }
     .to_string();
-    Ok(snap)
+    Ok((snap, xml_spots))
 }
