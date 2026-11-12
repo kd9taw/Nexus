@@ -1795,10 +1795,12 @@ describe('THE ONE-ROW TOP BAR AND HEADER (1080p pass): what the folds show and h
     expect(classChainWinner([['topbar'], ['tier-toggle'], ['tier-btn', 'active', 'tier-menu-btn']], 'display')?.value).toBe('none')
   })
 
-  it('the now-bar in the bar is its own width and never grows (a message must not re-wrap it), and draws no frame', () => {
+  it('the now-bar in the bar always takes a whole second line of it (no state or chip decides the bar’s height), and draws no frame', () => {
     const slot = [['topbar'], ['topbar-now']]
-    expect(classChainWinner(slot, 'flex')?.value, 'a grower would share the status lane’s room').toBe('0 1 auto')
-    expect(classChainWinner(slot, 'min-width')?.value).toBe('min(100%, 18em)')
+    // A content-width now-bar stood on the first line where it fit: "TX" fit and "RX" did not at 1920×1080 at 150 %,
+    // and every transmit moved the cockpit 18.9 px (topbarnow-probe holds it in Chrome).
+    expect(classChainWinner(slot, 'flex')?.value, 'the whole line, whatever the first line or its chips hold').toBe('0 0 100%')
+    expect(classChainWinner(slot, 'min-width'), 'no floor to share a line with').toBeNull()
     const bar = [['topbar'], ['topbar-now'], ['now-bar', 'now-bar-inbar']]
     expect(classChainWinner(bar, 'padding')?.value).toBe('0')
     expect(classChainWinner(bar, 'background')?.value).toBe('transparent')
