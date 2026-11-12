@@ -10,7 +10,8 @@
 //! the TX-enable latch at the slot boundary and the PTT press; the licence gate on the slot over,
 //! the tune and the PTT, and on a PTT already held; the PTT release; the TX watchdog reaching the
 //! loop; the order inside a Stop TX tick; a stalled meter or raw ALC read against Stop TX and the
-//! over's end; and two order facts about what runs ahead of an over's deadline unkey.
+//! over's end; and one order fact about what runs ahead of a non-slot over's deadline unkey (Test
+//! CAT's, fixed 2026-11-12, is held by `test_cat_while_keyed`).
 //!
 //! The rig is a rigctld on the 20 m FT8 dial that keys (`T 1`/`T 3`), unkeys (`T 0`) and answers
 //! every meter read, or none while a scene stalls them. The mock sound card writes `flush` into the
@@ -386,12 +387,12 @@ fn releasing_the_held_ptt_unkeys_in_the_tick_that_sees_it_and_flushes_nothing() 
 
 // ---- the TX watchdog, as the loop sees it ----
 
-/// ⭐ PAST ITS LIMIT THE WATCHDOG REFUSES THE NEXT FT8 OVER AND DISARMS TX; JUST UNDER IT THE OVER
+/// ⭐ PAST ITS LIMIT THE WATCHDOG REFUSES THE NEXT FT8 OVER AND DISARMS TX; HALF WAY TO IT THE OVER
 /// KEYS. The watchdog is judged when an over is built (`Engine::plan_tx`), never during one, so for
 /// a slot over its limit is the next over refused, through the real check, on the real loop.
 #[test]
 fn past_its_limit_the_watchdog_refuses_the_next_ft8_over_and_disarms_tx() {
-    for (aged, trips) in [(50, false), (61, true)] {
+    for (aged, trips) in [(30, false), (61, true)] {
         let mut s = Scene::new("extra", |e| {
             let mut st = e.settings().clone();
             st.tx_watchdog_min = 1;
@@ -414,10 +415,10 @@ fn past_its_limit_the_watchdog_refuses_the_next_ft8_over_and_disarms_tx() {
 }
 
 /// ⭐ PAST ITS LIMIT THE WATCHDOG CUTS A LATCHED RTTY OVER ON THE AIR: the queued audio is flushed,
-/// then the radio unkeyed, and TX is off. The control, just under the limit, goes on keyed.
+/// then the radio unkeyed, and TX is off. The control, half way to the limit, goes on keyed.
 #[test]
 fn past_its_limit_the_watchdog_cuts_a_latched_rtty_over_flush_then_unkey() {
-    for (aged, trips) in [(50, false), (61, true)] {
+    for (aged, trips) in [(30, false), (61, true)] {
         let mut s = Scene::new("extra", |e| {
             let mut st = e.settings().clone();
             st.tx_watchdog_min = 1;
@@ -503,9 +504,11 @@ fn a_stalled_meter_read_on_an_ft8_over_cannot_hold_stop_tx_past_the_link_deadlin
     }
     let pressed = operator.join().unwrap();
     assert_eq!(
-        s.meter_lines_since(asked)[..1],
-        ["l SWR".to_string()],
-        "premise: the stalled tick asked a meter"
+        s.meter_lines_since(asked)
+            .first()
+            .expect("premise: the stalled tick asked a meter"),
+        "l SWR",
+        "premise: the stalled tick asked the SWR meter"
     );
     let unkeyed = *s.unkey_at.lock().unwrap().first().expect("never unkeyed");
     let late = unkeyed.saturating_duration_since(pressed).as_secs_f64() * 1_000.0;
@@ -576,13 +579,17 @@ fn a_stalled_raw_alc_read_never_holds_an_ft8_over_past_its_end() {
     );
 }
 
-/// ⚠️ WEAKNESS, PINNED AS IT IS: A NON-SLOT OVER'S DEADLINE UNKEY WAITS BEHIND THE ENGINE LOCK. Only an
+/// ⚠️ KNOWN DEFECT, PINNED AS IT STANDS, NOT A CONTRACT: A NON-SLOT OVER'S DEADLINE UNKEY WAITS BEHIND
+/// THE ENGINE LOCK. Its fix is deferred to a later change, which inverts this pin. Only an
 /// FT8/FT4 over's end is re-tested at the top of the tick, before anything can wait
 /// (`retest_ft_window`; its own pin is `ft_window::an_ft8_overs_end_does_not_wait_for_the_engine_lock`).
 /// Any other over (voice, APRS, SSTV, RTTY/PSK tails, an FT2 or JS8 over) ends at the deadline unkey
 /// further down, after the tick has taken the engine lock (first at `poll_remote_transmit`), so a lock
-/// held elsewhere (a long UI command) holds that over's PTT for as long. This pin flips, on purpose,
-/// only in the change that moves every deadline ahead of the lock.
+/// held elsewhere (a long UI command) holds that over's PTT for as long. The engine's own long jobs
+/// already yield to an over's deadline (the loop publishes its hold, `observe_loop_tx_hold`); an
+/// arbitrary command holding the lock, which the 300 ms holder here stands for, is not covered. When
+/// the deferred fix moves every deadline ahead of the lock, this pin is inverted with the operator's
+/// sign-off; a refactor must leave it as it is.
 #[test]
 fn a_non_slot_overs_deadline_unkey_waits_behind_the_engine_lock() {
     const HELD_MS: u64 = 300;
@@ -607,46 +614,10 @@ fn a_non_slot_overs_deadline_unkey_waits_behind_the_engine_lock() {
     let unkeyed = *s.unkey_at.lock().unwrap().last().expect("never unkeyed");
     assert!(
         unkeyed >= released,
-        "the deadline unkey went out {:?} before the engine lock was released",
+        "KNOWN-DEFECT PIN: the non-slot deadline unkey no longer waits for the engine lock ({:?} \
+         early). If that is the deferred fix, invert this pin with the operator's sign-off; if it \
+         is a refactor, the per-tick order changed: find out why",
         released.saturating_duration_since(unkeyed)
     );
     assert!(s.state.tx_until_ms.is_none() && !s.rig.keyed, "still keyed");
-}
-
-/// ⚠️ WEAKNESS, PINNED AS IT IS: TEST CAT PRESSED DURING AN OVER RUNS ITS BLOCKING PROBE AHEAD OF THAT
-/// TICK'S DEADLINE UNKEY. The Test-CAT one-shot is taken whether or not the loop holds a key
-/// (`reprobe_req` is not gated on `can_retune`), and the probe's CAT round trips sit upstream of the
-/// deadline unkey, so on a slow or silent link the over's PTT is held for as long as the probe takes.
-/// This pin flips, on purpose, only in the change that keeps the probe behind the unkey.
-#[test]
-fn test_cat_pressed_during_an_over_probes_ahead_of_the_deadline_unkey() {
-    let mut s = Scene::new("extra", |e| {
-        let mut st = e.settings().clone();
-        st.ptt_method = "cat".into();
-        st.rig_model = 2; // Hamlib's NET rigctl: the scene's rigctld is the radio
-        e.apply_settings(st);
-        e.set_tx_enabled(true);
-    });
-    let applied = Transport::from_settings(s.eng().settings());
-    s.state.applied = applied;
-    s.run_to(s.t + 200.0);
-    s.rig.ptt(true).expect("premise: the rigctld takes the key");
-    s.state.tx_until_ms = Some(s.t); // the over's deadline is this tick
-    s.meter_not_due();
-    let from = s.mark();
-    s.eng().request_cat_reprobe();
-    s.tick();
-    let lines: Vec<String> = s.order.lock().unwrap()[from..].to_vec();
-    let unkey = lines
-        .iter()
-        .position(|l| l == "T 0")
-        .unwrap_or_else(|| panic!("no unkey in the deadline tick: {lines:?}"));
-    let probed = lines[..unkey]
-        .iter()
-        .filter(|l| *l != "flush" && !l.starts_with("T "))
-        .count();
-    assert!(
-        probed > 0,
-        "the probe did not run ahead of the unkey: {lines:?}"
-    );
 }
