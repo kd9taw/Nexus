@@ -148,7 +148,10 @@ describe('the dial is half 1.24.0’s, the readout is not', () => {
     expect(nums).toHaveLength(5)
     for (const n of nums) {
       expect(g.contains(n)).toBe(false)
-      expect(win(n, 'font-size')).toBe('4.6px')
+      // 5 % over 1.24.0's 4.6, like the name and value: at 0.96 of 1.24.0's scale 4.6 rounded a pixel under it.
+      const fs = parseFloat(win(n, 'font-size') ?? '')
+      expect(fs).toBeGreaterThanOrEqual(4.6)
+      expect(fs).toBeLessThanOrEqual(4.6 * 1.05)
       // On the scaled dial's own frame: the point (x, y) of the dial's units lands at (tx + kx, ty + ky), so mapped
       // back each number stands on the dial's centre line, its baseline outside the needle's tip (R + 2 = 62).
       const x = (Number(n.getAttribute('x')) - tx) / k

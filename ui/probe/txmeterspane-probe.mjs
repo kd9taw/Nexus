@@ -20,7 +20,8 @@
 //      reads 100 W, so it points straight at "100"), the band, or the drawing's top edge.
 // THE CONTROLS, run every time: FT8 at 1920×1080 100 % with 1.24.0's dial drawn back by a planted style (the dial's own
 // scale taken away) must fail check 1, and FT8 at the floor (1366×768 175 %) with the numbers planted at twice 1.24.0's
-// size must fail check 4. If either passes, its check cannot fail and the probe says so.
+// size must fail check 4, and FT8 at 1920×1080 100 % with the numbers planted at half 1.24.0's size must fail check
+// 4's height. If any passes, its check cannot fail and the probe says so.
 //
 // PROBE_TXMETERSPANE_PRINT=1 prints each page's measure as one JSON line (BEFORE was taken that way on 1.24.0) and
 // asserts nothing. PROBE_TXMETERSPANE_ONLY=<prefix> runs the pages whose name starts so ("FT8 2560"), no control.
@@ -409,6 +410,14 @@ try {
     const caught = m ? faults(tag, m, BEFORE[tag]) : []
     console.log(`txmeterspane-probe: CONTROL the scale's numbers at twice 1.24.0's size: caught ${JSON.stringify(caught)}`)
     if (!caught.some((s) => s.includes('scale numbers overlap') || s.includes('needle crosses'))) red("CONTROL FAILED: crowded scale numbers were not seen; the check cannot fail")
+  }
+  if (!PRINT && !ONLY) {
+    // THE NUMBERS' HEIGHT CONTROL: the scale's numbers planted at half 1.24.0's size must be caught as smaller.
+    const tag = 'FT8 1920×1080 @100 %'
+    const m = await measure('operate', 'operate', [1920, 1080, 1], '.txmeters-pane-scale { font-size: 2.3px !important }')
+    const caught = m ? faults(tag, m, BEFORE[tag]) : []
+    console.log(`txmeterspane-probe: CONTROL the scale's numbers at half 1.24.0's size: caught ${JSON.stringify(caught)}`)
+    if (!caught.some((s) => /scale numbers are .* under 1\.24\.0's/.test(s))) red("CONTROL FAILED: halved scale numbers were not seen; the check cannot fail")
   }
   if (code === 0 && !PRINT) console.log('txmeterspane-probe: PASS — every dial half of 1.24.0\'s with its readout no smaller, whole and in view, in a shorter pane with no other pane shorter, and Stop TX where it stood, on FT8, Phone, CW and SSTV at every size and zoom; the control caught')
   process.exitCode = code
