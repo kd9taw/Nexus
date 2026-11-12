@@ -814,6 +814,7 @@ jobs:
             arch: arm64        # the Mach-O name, for scripts/check-macho-bundle.mjs
             # The gcc bottle for this runner's macOS that scripts/macos-static-runtime-imports.txt
             # was reviewed against, by its ghcr blob digest (see "Install build dependencies").
+            # ci.yml's macos-imports job pins this same bottle; scripts/release-secrets.test.mjs holds them equal.
             gcc_bottle: arm64_sequoia
             gcc_bottle_sha256: 8c57a4e5c65c93b90b280e3e761833f946b5a7d186f2067d239af44b71c5a577
             suffix: aarch64    # the file name: Nexus_<ver>_aarch64.dmg, as it always was
