@@ -2378,4 +2378,63 @@ mod tests {
             "the shack checked the onlooker's address"
         );
     }
+
+    /// ⛔ An answer is taken only from where this end sent that check (RFC 8445 §7.2.5.2.1, which
+    /// `is` 0.11.1 does not ask): this computer checks two of the other end's candidates, R1 and
+    /// R2, and a correctly signed answer to its check to R1 arrives from R2 — the pair to R1 is
+    /// not made good by it. CONTROL: the same answer from R1 is.
+    #[test]
+    fn an_answer_from_anywhere_but_where_its_check_went_is_not_taken() {
+        let computer = IceRoad::bind(loopback(), Role::Computer, host_only(), TICK).unwrap();
+        let (r1, r2) = (
+            UdpSocket::bind(loopback()).unwrap(),
+            UdpSocket::bind(loopback()).unwrap(),
+        );
+        r1.set_read_timeout(Some(Duration::from_millis(5))).unwrap();
+        let (at_r1, at_r2) = (r1.local_addr().unwrap(), r2.local_addr().unwrap());
+        let host = |at: SocketAddr| {
+            format!(
+                "candidate:1 1 udp 2130706431 {} {} typ host",
+                at.ip(),
+                at.port()
+            )
+        };
+        assert!(computer.answer(&offer_naming(vec![host(at_r1), host(at_r2)])));
+        let mut buffer = [0u8; 2048];
+        let started = Instant::now();
+        let id: [u8; 12] = loop {
+            assert!(started.elapsed() < Duration::from_secs(3), "no check to R1");
+            let _ = computer.recv(&mut buffer);
+            if let Ok((n, _)) = r1.recv_from(&mut buffer) {
+                if StunMessage::parse(&buffer[..n]).is_ok_and(|m| m.is_binding_request()) {
+                    break buffer[8..20].try_into().unwrap();
+                }
+            }
+        };
+        let answer = turn::Writer::new(0x001, turn::Class::Success, &id)
+            .address(0x0020, computer.host())
+            .finish(Some(b"00112233445566778899aabbccddeeff"));
+        let viable = |computer: &IceRoad| {
+            lock(&computer.state)
+                .agent
+                .has_viable_remote_candidate(at_r1)
+        };
+        r2.send_to(&answer, computer.host()).unwrap();
+        for _ in 0..40 {
+            let _ = computer.recv(&mut buffer);
+        }
+        assert!(
+            !viable(&computer),
+            "an answer from R2 made the pair to R1 good"
+        );
+        // CONTROL.
+        r1.send_to(&answer, computer.host()).unwrap();
+        for _ in 0..40 {
+            let _ = computer.recv(&mut buffer);
+        }
+        assert!(
+            viable(&computer),
+            "CONTROL: the answer from R1 was not taken"
+        );
+    }
 }
