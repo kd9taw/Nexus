@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **The prompt to log a contact no longer scrolls sideways.** Its two columns of boxes were wider than the popup at every window size and UI scale, so the right-hand boxes ran past its edge and the popup scrolled sideways by about 80 pixels. The boxes now share the popup's width. Log and Stop TX stay where they were.
+- **The prompt to log shows a propagation mode's whole name.** Prop mode now takes the popup's full width, like Comment, so long names such as "Non-satellite repeater or transponder" are no longer cut short in the closed box.
 
 ## [1.24.0] — 2026-11-11
 

@@ -30,6 +30,12 @@
 // topmost (the prompt's once, the strip's once scrolled to). Its CONTROL, per form (`&iotacontrol=1`, 1024×768 at 175 %): the name may not wrap, and
 // must come back NOT drawn whole.
 //
+// THE PROMPT TO LOG'S PROP MODE, on the supported screens (1366×768 at 100 % and 175 % OS scale and at 175 % UI
+// scale, 1920×1080 at 100 % and 200 %, 3840×2160 at 200 % with 100 % and 175 % UI scale; an OS scale is a smaller CSS
+// window at that many device px per px): the picker takes the grid's whole row and its box holds its longest name
+// ("Non-satellite repeater or transponder") in its own font, the prompt and the page do not scroll sideways, and Log
+// is in the window and on top. In one column the box held ~125 px of a 229 px name — red on that layout.
+//
 // exit: 0 every case clear · 1 a red, or a control that could not fail · 2 the page never drew
 import { createServer } from 'vite'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -305,9 +311,103 @@ const IOTA_SIZES = [
 ]
 const IOTA_FORMS = ['logconfirm', 'strip']
 
+/** The prompt to log's Prop mode picker, as drawn: it takes the grid's whole row, and its box is wide enough for the
+ *  longest propagation mode's name in its own font (an arrow of 1.6 em allowed for). In half the row the closed box
+ *  cut "Non-satellite repeater or transponder" to its first ~20 characters. */
+const PROPMODE_MEASURE = `(() => {
+  const card = document.querySelector('.logconfirm')
+  const grid = card && card.querySelector('.logconfirm-grid')
+  const sel = grid && grid.querySelector('select')
+  const log = card && card.querySelector('.logconfirm-log')
+  const stop = document.querySelector(${JSON.stringify(STOP)})
+  if (!sel || !log || !stop) return { waiting: true }
+  const r = (el) => el.getBoundingClientRect()
+  const box = (el) => { const b = r(el); return [b.left, b.top, b.width, b.height].map((v) => Math.round(v * 10) / 10) }
+  const cs = getComputedStyle(sel)
+  const ctx = document.createElement('canvas').getContext('2d')
+  ctx.font = cs.font
+  const zoom = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')) || 1
+  // The canvas measures in the select's own CSS px; its box is drawn at the zoom the .app carries.
+  const scale = sel.offsetWidth ? r(sel).width / sel.offsetWidth : 1
+  const widest = Math.max(...[...sel.options].map((o) => ctx.measureText(o.textContent).width)) * scale
+  const usable = (sel.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 1.6 * parseFloat(cs.fontSize)) * scale
+  const g = r(grid), b = r(sel)
+  const before = box(log)
+  log.scrollIntoView({ block: 'nearest' })
+  const l = r(log)
+  const hit = document.elementFromPoint(l.left + l.width / 2, l.top + l.height / 2)
+  return {
+    zoom, dpr: devicePixelRatio, vw: innerWidth, vh: innerHeight,
+    widest: Math.round(widest), usable: Math.round(usable),
+    spans: Math.abs(b.left - g.left) <= 1 && Math.abs(b.right - g.right) <= 1,
+    page: document.scrollingElement.scrollWidth - document.scrollingElement.clientWidth,
+    overflow: card.scrollWidth - card.clientWidth,
+    cardScrolls: card.scrollHeight > card.clientHeight + 1,
+    log: before, stop: box(stop),
+    logInWindow: l.left >= 0 && l.top >= 0 && l.right <= innerWidth && l.bottom <= innerHeight,
+    logTop: !!hit && (hit === log || log.contains(hit)),
+  }
+})()`
+
+async function measurePropMode({ w, h, os, zoom }) {
+  const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
+  const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
+  const call = (method, params) => browser.call(method, params, sessionId)
+  try {
+    // The OS scale is the screen's: a 1366×768 panel at 175 % is a 781×439 CSS window at 1.75 device px per px.
+    await call('Emulation.setDeviceMetricsOverride', { width: Math.round(w / os), height: Math.round(h / os), deviceScaleFactor: os, mobile: false })
+    await call('Page.navigate', { url: `${origin}/probe/stopabove.html?overlay=logconfirm&zoom=${zoom}` })
+    let last = null
+    for (let i = 0; i < 100; i++) {
+      await sleep(150)
+      const r = await call('Runtime.evaluate', { expression: PROPMODE_MEASURE, returnByValue: true })
+      const now = r.exceptionDetails ? null : r.result.value
+      if (now && !now.waiting && last && !last.waiting && JSON.stringify(now) === JSON.stringify(last)) break
+      last = now
+    }
+    return last
+  } finally {
+    await browser.call('Target.closeTarget', { targetId })
+  }
+}
+
+/** The supported screens: [panel W, H, OS scale, UI scale]. */
+const PROPMODE_SIZES = [
+  { w: 1366, h: 768, os: 1, zoom: 1 },
+  { w: 1366, h: 768, os: 1.75, zoom: 1 },
+  { w: 1366, h: 768, os: 1, zoom: 1.75 },
+  { w: 1920, h: 1080, os: 1, zoom: 1 },
+  { w: 1920, h: 1080, os: 2, zoom: 1 },
+  { w: 3840, h: 2160, os: 2, zoom: 1 },
+  { w: 3840, h: 2160, os: 2, zoom: 1.75 },
+]
+const propAt = (s) => `${s.w}×${s.h} at ${Math.round(s.os * 100)}% OS, ${Math.round(s.zoom * 100)}% UI`
+
 let code = 0
 let ran = 0
 try {
+  for (const size of PROPMODE_SIZES) {
+    const at = propAt(size)
+    const m = await measurePropMode(size)
+    console.log(`stopabove-probe: Prop mode, ${at}: ${JSON.stringify(m)}`)
+    if (!m || m.waiting) {
+      console.error(`stopabove-probe: the prompt to log never drew at ${at}`)
+      code = 2
+      continue
+    }
+    const red = []
+    if (Math.abs(m.zoom - size.zoom) > 0.001) red.push(`the UI scale is ${m.zoom}, not ${size.zoom}`)
+    if (!m.spans) red.push('Prop mode does not take the whole row')
+    if (m.usable < m.widest) red.push(`Prop mode's box holds ${m.usable} px of text, its longest name is ${m.widest} px`)
+    if (m.page > 0) red.push(`the page scrolls sideways by ${m.page} px`)
+    if (m.overflow > 0) red.push(`the prompt to log scrolls sideways by ${m.overflow} px`)
+    if (!m.logInWindow) red.push('Log is outside the window')
+    if (!m.logTop) red.push('Log is covered')
+    if (red.length) {
+      console.error(`stopabove-probe: RED (Prop mode) at ${at} — ${red.join('; ')}`)
+      code = code || 1
+    }
+  }
   for (const form of IOTA_FORMS) {
     for (const { w, h, zoom } of IOTA_SIZES) {
       const at = `${form} ${w}×${h} at ${Math.round(zoom * 100)}%`
@@ -390,7 +490,7 @@ try {
     console.error('stopabove-probe: no case ran')
     code = code || 1
   }
-  if (code === 0) console.log(`stopabove-probe: PASS — ${ran} cases: with ${OVERLAYS.map(([o]) => o).join(', ')} open, Stop TX is on top where it is drawn, unmoved, one real click and one tap each stop once, the mirror is unseen by screen readers and follows its button at once, the overlay stays open and the keyboard stays where it was, at ${SIZES.map(([w, h, v]) => `${w}×${h} (${v})`).join(' and ')}; each control (no stop layer) caught. The filled IOTA box of the prompt to log and of the log strip at ${IOTA_SIZES.map((s) => `${s.w}×${s.h} ${Math.round(s.zoom * 100)}%`).join(', ')}: filled, its long group name whole and covering nothing, the source shown, no sideways scroll (the page none; the prompt none at all; the strip no more than without the box), Log in the window and on top; each unwrapped-name control caught`)
+  if (code === 0) console.log(`stopabove-probe: PASS — ${ran} cases: with ${OVERLAYS.map(([o]) => o).join(', ')} open, Stop TX is on top where it is drawn, unmoved, one real click and one tap each stop once, the mirror is unseen by screen readers and follows its button at once, the overlay stays open and the keyboard stays where it was, at ${SIZES.map(([w, h, v]) => `${w}×${h} (${v})`).join(' and ')}; each control (no stop layer) caught. The filled IOTA box of the prompt to log and of the log strip at ${IOTA_SIZES.map((s) => `${s.w}×${s.h} ${Math.round(s.zoom * 100)}%`).join(', ')}: filled, its long group name whole and covering nothing, the source shown, no sideways scroll (the page none; the prompt none at all; the strip no more than without the box), Log in the window and on top; each unwrapped-name control caught. The prompt to log's Prop mode at ${PROPMODE_SIZES.map(propAt).join('; ')}: the whole row, wide enough for its longest name, no sideways scroll, Log in the window and on top`)
   process.exitCode = code
 } finally {
   await browser.stop()

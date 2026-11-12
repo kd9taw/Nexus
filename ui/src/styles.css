@@ -9650,7 +9650,7 @@ select optgroup {
   text-transform: uppercase;
   color: var(--text-faint);
 }
-/* The propagation-mode picker sits in the grid beside the boxes, and looks like one. */
+/* The propagation-mode picker sits in the grid with the boxes, and looks like one. */
 .logconfirm-grid input,
 .logconfirm-grid select {
   padding: var(--space-2) 10px;
@@ -9665,7 +9665,10 @@ select optgroup {
   outline: none;
   border-color: var(--accent);
 }
-/* The comment is free text, so it takes the whole row under the short fields. */
+/* The comment is free text, so it takes the whole row under the short fields. So does the
+   propagation-mode picker: in half the popup its longest names ("Non-satellite repeater or
+   transponder") showed only their first ~20 characters in the closed box. */
+.logconfirm-grid .logconfirm-propmode,
 .logconfirm-grid .logconfirm-comment {
   grid-column: 1 / -1;
 }

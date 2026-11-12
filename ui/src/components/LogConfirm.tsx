@@ -237,7 +237,7 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
               onChange={(e) => setMyGrid(upperTyped(e.target))}
             />
           </label>
-          <label title={t('logPrompt.propMode.hint')}>
+          <label className="logconfirm-propmode" title={t('logPrompt.propMode.hint')}>
             <span>{t('logPrompt.propMode.label')}</span>
             <select value={propMode} onChange={(e) => setPropMode(e.target.value)}>
               <option value="">—</option>
