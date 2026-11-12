@@ -2344,7 +2344,7 @@ test('LAN stays free: an ended trial streams with a LAN-only ticket, held to the
 // the relay would carry across the internet: no observation frame, and on the operation lane only
 // what the stream needs (the lease and its `state`) and Stop. The monitor, reads and exports
 // travel only for an account with internet use.
-test('a LAN-only session gets no observation and no export through the relay, only the lease and Stop', async () => {
+test('a LAN-only session gets no observation, no export and no state beyond its lease through the relay, and Stop still works', async () => {
   const pair = await app.paired(), deviceId = await app.approved(pair)
   await endTrial(pair)
   const live = await lanAdmitted(pair, deviceId)
@@ -2353,10 +2353,28 @@ test('a LAN-only session gets no observation and no export through the relay, on
     if (evicted) await app.evict(pair.stationId)
     assert.equal(await nothing(live.station, value => value.type === 'watch' && value.enabled), true,
       'the station is never asked to publish for a LAN-only session')
-    // The lease's own read reaches the station: the stream is offered under the lease it names.
+    // The lease's own read reaches the station: the stream is offered under the lease it names. Its
+    // answer comes back as the lease alone: no capability or connection the station named, no action.
     const state = { type: 'state', requestId: crypto.randomUUID() }
     live.browser.send({ type: 'operationRequest', operationVersion: 4, request: state })
-    assert.equal((await live.station.take(type('operationRequest'))).request.requestId, state.requestId)
+    const asked = await live.station.take(type('operationRequest'))
+    assert.equal(asked.request.requestId, state.requestId)
+    const boot = crypto.randomUUID(), leaseId = crypto.randomUUID(), commandWindowId = crypto.randomUUID()
+    const lease = { stationBootId: boot, allowed: true, phase: 'controlling', leaseId, revision: 2, commandWindowId,
+      nextSequence: 2, leaseRemainingMs: 5000, txArmed: true, transmitEpoch: '000000000000002a' }
+    live.station.send({ type: 'operationResponse', sessionId: asked.sessionId, requestId: state.requestId,
+      value: { ...lease, actions: ['log.manual'], controls: { context: { radioId: 7, radioConnection: 3, ampConnection: 2, ampReadSequence: 9 },
+        capabilities: ['frequency', 'mode', 'amplifier'] } } })
+    assert.deepEqual((await live.browser.take(value => value.type === 'operationResponse' && value.requestId === state.requestId)).value,
+      { ...lease, actions: [] }, 'the lease, and nothing else of the station')
+    // Stop, composed from that lease, still reaches the station and its answer the page.
+    const stop = { type: 'stopTransmit', requestId: crypto.randomUUID(), stationBootId: boot, leaseId, transmitEpoch: '000000000000002a' }
+    live.browser.send({ type: 'operationRequest', operationVersion: 4, request: stop })
+    const stopped = await live.station.take(value => value.type === 'operationRequest' && value.request.requestId === stop.requestId)
+    assert.deepEqual(stopped.request, stop)
+    live.station.send({ type: 'operationResponse', sessionId: stopped.sessionId, requestId: stop.requestId, value: { stop: 'accepted' } })
+    assert.deepEqual((await live.browser.take(value => value.type === 'operationResponse' && value.requestId === stop.requestId)).value,
+      { stop: 'accepted' })
     // An export is the station's data, and does not.
     const exported = { type: 'activationExport', requestId: crypto.randomUUID(), stationBootId: crypto.randomUUID(),
       leaseId: crypto.randomUUID(), selection: null, index: 0 }
