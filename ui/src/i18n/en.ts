@@ -14875,6 +14875,9 @@ export const EN = {
   'nav.program.label': 'Repeaters',
   'nav.program.title':
     'Repeaters — build channel lists for your radios: local repeaters → CHIRP CSV, rig memories, or tune-now',
+  // The rail's "more below" cue (ModeNav): {{n}} is how many sections sit below the fold.
+  'nav.more.label': '{{n}} more',
+  'nav.more.title': 'More sections below — show them',
   'nav.order.reset.label': 'Reset order',
   'nav.order.reset.title': 'Reset the section order to default',
   'nav.mode.title': 'Active operating mode',

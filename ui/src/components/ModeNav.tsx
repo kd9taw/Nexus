@@ -26,8 +26,9 @@ import {
   Users,
   MessagesSquare,
   Captions,
+  ChevronDown,
 } from 'lucide-react'
-import { Fragment, useState, type ButtonHTMLAttributes } from 'react'
+import { Fragment, useEffect, useRef, useState, type ButtonHTMLAttributes } from 'react'
 import { Tooltip, TooltipProvider } from './ui/Tooltip'
 import { t, type MessageKey } from '../i18n'
 import { type FeatureId, type View } from '../features/registry'
@@ -296,6 +297,41 @@ export function ModeNav({
     .filter((it) => enabled[it.id] !== false)
   const customized = order.length > 0
 
+  // THE "MORE BELOW" CUE. On a laptop the section list holds more than the rail's height
+  // (1366×768 drew 11 of 23 at rest), and a 4 px scrollbar was the only sign the rest existed.
+  // `below` counts the sections whose box ends past the scroller's lower edge; while it is
+  // above zero a button under the list says so and scrolls the first of them to the top.
+  // Measured on scroll, on a resize of the scroller, and whenever the set of sections changes.
+  // A 0×0 scroller (a hidden host) counts nothing. laptopfit-probe.mjs holds it in real Chrome.
+  const topRef = useRef<HTMLDivElement>(null)
+  const [below, setBelow] = useState(0)
+  const hiddenBelow = (el: HTMLElement): HTMLElement[] => {
+    const edge = el.getBoundingClientRect().bottom
+    return [...el.querySelectorAll<HTMLElement>('button.mode-btn')].filter(
+      (b) => b.getBoundingClientRect().bottom > edge + 1,
+    )
+  }
+  const shown = items.map((it) => it.id).join(' ') + JSON.stringify(enabled)
+  useEffect(() => {
+    const el = topRef.current
+    if (!el) return
+    const measure = () => setBelow(el.clientHeight > 0 ? hiddenBelow(el).length : 0)
+    measure()
+    el.addEventListener('scroll', measure, { passive: true })
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    ro?.observe(el)
+    return () => {
+      el.removeEventListener('scroll', measure)
+      ro?.disconnect()
+    }
+  }, [shown])
+  const showMore = () => {
+    const el = topRef.current
+    const next = el && hiddenBelow(el)[0]
+    if (!el || !next) return
+    el.scrollBy({ top: next.getBoundingClientRect().top - el.getBoundingClientRect().top, behavior: 'smooth' })
+  }
+
   const dropOn = (targetId: string | null) => {
     if (!dragId) return
     const next = moveNav(orderedIds, dragId, targetId)
@@ -336,7 +372,7 @@ export function ModeNav({
   return (
     <TooltipProvider>
       <nav className="mode-nav" aria-label={t('nav.aria')}>
-        <div className="mode-nav-top">
+        <div className="mode-nav-top" ref={topRef}>
           {/* Operating group order (operator spec): Phone · CW · Digital group
               (FT + Tempo). The FT8/FT4 pick lives in the top bar's tier pills. */}
           {enabled.phone !== false && navBtn(PHONE)}
@@ -441,6 +477,15 @@ export function ModeNav({
             </button>
           )}
         </div>
+
+        {below > 0 && (
+          <Tooltip content={t('nav.more.title')}>
+            <button type="button" className="mode-nav-more" aria-label={t('nav.more.title')} onClick={showMore}>
+              <ChevronDown size={14} strokeWidth={2} aria-hidden="true" />
+              <span className="mode-label">{t('nav.more.label', { n: below })}</span>
+            </button>
+          </Tooltip>
+        )}
 
         <div className="mode-nav-bottom">
           <span className="mode-current" title={t('nav.mode.title')}>

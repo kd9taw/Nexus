@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The left rail shows more of its sections on a laptop, and says when the rest are below.** On a 1366×768 or 1080p screen the rail drew about half its sections, and Logbook, Stats, Contest, POTA/SOTA, Memories and Repeaters sat below the edge with only a thin scrollbar to say they were there. On a window up to about 1100 pixels tall (after scaling) the sections now sit closer together, so more fit, and when some still do not, a small **N more** button under the list says how many and scrolls them into view. It goes away once you reach the end of the list. Every section you have turned on is still there, in your order; the icons and labels keep their size.
+- **The first-run wizard's Next and Finish stay on screen.** On a laptop the wizard's last step, and on a small or zoomed screen its radio step, was taller than the window, so Finish or Next sat below the edge until you found the scrollbar. The step buttons now stay at the bottom of the wizard while the step scrolls above them, and the step names wrap onto a second line instead of running off the side if they do not fit.
 - **The prompt to log a contact no longer scrolls sideways.** Its two columns of boxes were wider than the popup at every window size and UI scale, so the right-hand boxes ran past its edge and the popup scrolled sideways by about 80 pixels. The boxes now share the popup's width. Log and Stop TX stay where they were.
 
 ## [1.24.0] — 2026-11-11

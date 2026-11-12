@@ -9598,6 +9598,8 @@ export const DE: PartialCatalog = {
   "nav.memories.title": "Speicher — gespeicherte Kanäle: Relais, Runden, Anruffrequenzen; Gruppen + ★-Favoriten; ein Klick zum Abstimmen",
   "nav.program.label": "Relais",
   "nav.program.title": "Relais — Kanallisten für Ihre Geräte bauen: lokale Relais → CHIRP-CSV, Gerätespeicher oder sofort abstimmen",
+  "nav.more.label": "{{n}} weitere",
+  "nav.more.title": "Weitere Bereiche weiter unten — anzeigen",
   "nav.order.reset.label": "Reset",
   "nav.order.reset.title": "Die Reihenfolge der Bereiche auf den Standard zurücksetzen",
   "nav.mode.title": "Aktive Betriebsart",
