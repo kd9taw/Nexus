@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **The prompt to log a contact no longer scrolls sideways.** Its two columns of boxes were wider than the popup at every window size and UI scale, so the right-hand boxes ran past its edge and the popup scrolled sideways by about 80 pixels. The boxes now share the popup's width. Log and Stop TX stay where they were.
-- **Remote: the internet connection is hardened against malformed and replayed connection packets.** The Stop and audio roads between a computer and its station over the internet now ignore connection packets that are malformed or replayed from elsewhere, and keep the path they found. The station's video stream ignores the malformed ones too.
+- **Remote: the internet connection is hardened against malformed and replayed connection packets.** The Stop and audio roads between a computer and its station over the internet now ignore connection packets that are malformed or replayed from elsewhere, and follow a new address of the other end only once it answers. The station's video stream ignores the malformed ones too.
 
 ## [1.24.0] — 2026-11-11
 

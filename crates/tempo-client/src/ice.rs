@@ -54,10 +54,12 @@
 //! ⛔ **A pair is selected only once this end's own check on it was answered** (`State::drive`):
 //! a nominating check alone, which anyone who saw one on the path can replay from an address of
 //! their own, never moves it. And the agent hears a check or an answer only from where the road
-//! admits it (`State::admits`): an answer from a candidate's address; a check from a new address,
-//! which makes a peer-reflexive candidate, only before a pair is selected and only up to
-//! [`CANDIDATES`] of them. So a road is never moved to a new address of the other end's once it
-//! has its pair: roads are opened with their link, and a link opened again opens new ones. A STUN
+//! admits it (`State::admits`): an answer only from where this end sent that check; a check from
+//! a new address, which makes a peer-reflexive candidate, only up to [`CANDIDATES`] of them, and at
+//! this computer only before its pair is selected. The shack goes on taking them after, so it
+//! follows a computer whose NAT rebinds, once its own check to the new address is answered. (Under
+//! a replay the agent may already hold the observer's pair as nominated; a later rebinding then
+//! names the same priority and is not followed until the link opens the roads again.) A STUN
 //! message whose first attribute is its MESSAGE-INTEGRITY never reaches the agent
 //! (`tempo_stream::stun::integrity_first`).
 //!
@@ -69,6 +71,7 @@
 //! thread. The road's thread does everything else inside [`IceRoad::recv`]: the agent's checks and
 //! timers, the TURN client's requests and refreshes, the STUN exchange, and the pair's changes. A Stop
 //! goes by the same pair, the same way, as the press it stops.
+use std::collections::VecDeque;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -91,6 +94,9 @@ const CREDENTIAL_BYTES: usize = 256;
 /// A STUN binding to the STUN server: sent again at 0.5, 1.5 and 3.5 s, then given up.
 const STUN_SENDS: u32 = 4;
 const STUN_RTO: Duration = Duration::from_millis(500);
+/// How many of its own checks a road remembers, to know where each went: far more than the agent
+/// has outstanding at once.
+const CHECKS_KEPT: usize = 256;
 
 /// ICE's HMAC-SHA1 (its checks' MESSAGE-INTEGRITY), on ring, as the rest of the roads' crypto is.
 #[derive(Debug)]
@@ -285,6 +291,9 @@ struct State {
     /// agent last nominated, while no check this end sent on it has been answered.
     nominated: Option<(SocketAddr, SocketAddr)>,
     nominating: Option<(SocketAddr, SocketAddr)>,
+    /// The checks this end sent, newest [`CHECKS_KEPT`]: each one's transaction id and where it
+    /// went (the peer, for a check through the relay).
+    checks: VecDeque<([u8; 12], SocketAddr)>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -422,6 +431,7 @@ impl IceRoad {
                 peers: Vec::new(),
                 nominated: None,
                 nominating: None,
+                checks: VecDeque::new(),
             }),
             route: Mutex::new(None),
         })
@@ -639,7 +649,9 @@ impl State {
             // its own (`IceAgent::accepts_message`, asked inside), and is handed only those from
             // where the road admits them (`State::admits`).
             let parsed = StunMessage::parse(&buffer[..length]).ok();
-            if let Some(message) = parsed.filter(|message| self.admits(message, from)) {
+            // `turn::is_stun` holds it to at least the 20-byte header.
+            let id: [u8; 12] = buffer[8..20].try_into().ok()?;
+            if let Some(message) = parsed.filter(|message| self.admits(message, from, id)) {
                 self.agent.handle_packet(
                     now,
                     StunPacket {
@@ -659,19 +671,29 @@ impl State {
         (theirs == from && ours == local).then_some(length)
     }
 
-    /// ⛔ Whether a check or an answer from `from` may reach the agent. From an address one of the
-    /// other end's candidates names, always. From any other, only a check, before a pair is
-    /// selected, while fewer than [`CANDIDATES`] peer-reflexive candidates are held: a check from
-    /// a new address makes one (RFC 8445 §7.3.1.3), and a check captured on the path replays from
-    /// any address, so a road takes few, and none once it has its pair. An answer only ever comes
-    /// from where this end sent its check, a candidate's address.
-    fn admits(&self, message: &StunMessage, from: SocketAddr) -> bool {
+    /// ⛔ Whether a check or an answer from `from`, under transaction `id`, may reach the agent.
+    /// - An answer only from where this end sent that very check (RFC 8445 §7.2.5.2.1): `is`
+    ///   0.11.1 finds the pair by transaction id alone, so an answer whose source was forged would
+    ///   make a pair to an address that never answered succeed.
+    /// - A check from an address one of the other end's candidates names, always.
+    /// - A check from a new address makes a peer-reflexive candidate (RFC 8445 §7.3.1.3), and one
+    ///   captured on the path replays from any address, so a road takes at most [`CANDIDATES`] of
+    ///   them. At this computer only before its pair is selected, so it never answers a check
+    ///   someone relays from an address of their own. At the shack after, too, so a computer whose
+    ///   NAT rebinds is followed, once the shack's own check to its new address is answered there
+    ///   (`State::drive`).
+    fn admits(&self, message: &StunMessage, from: SocketAddr, id: [u8; 12]) -> bool {
+        if !message.is_binding_request() {
+            return self
+                .checks
+                .iter()
+                .any(|&(sent, to)| sent == id && to == from);
+        }
         let remote = self.agent.remote_candidates();
         if remote.clone().any(|candidate| candidate.addr() == from) {
             return true;
         }
-        message.is_binding_request()
-            && self.nominated.is_none()
+        (self.nominated.is_none() || !self.agent.controlling())
             && remote
                 .filter(|candidate| candidate.kind() == CandidateKind::PeerReflexive)
                 .count()
@@ -737,6 +759,18 @@ impl State {
             self.agent.handle_timeout(now);
         }
         while let Some(transmit) = self.agent.poll_transmit() {
+            // Where each of its checks went, for its answer (`State::admits`).
+            if let Some(id) = transmit
+                .contents
+                .get(8..20)
+                .filter(|_| transmit.contents.starts_with(&[0x00, 0x01]))
+                .and_then(|id| <[u8; 12]>::try_from(id).ok())
+            {
+                if self.checks.len() >= CHECKS_KEPT {
+                    self.checks.pop_front();
+                }
+                self.checks.push_back((id, transmit.destination));
+            }
             if Some(transmit.source) == self.relayed {
                 if let Some(relay) = self.relay.as_mut() {
                     relay.send(transmit.destination, &transmit.contents, now);
@@ -1781,16 +1815,28 @@ mod tests {
     }
 
     /// A check as the other end signs one: under `ufrag`s `theirs:ours` and `key`, from the
-    /// controlling end, nominating when `nominate`.
+    /// controlling end (this computer) unless `controlled`, nominating when `nominate`.
     fn check_as(theirs: &str, ours: &str, key: &str, nominate: bool, id: [u8; 12]) -> Vec<u8> {
+        signed_check(theirs, ours, key, nominate, false, id)
+    }
+
+    fn signed_check(
+        theirs: &str,
+        ours: &str,
+        key: &str,
+        nominate: bool,
+        controlled: bool,
+        id: [u8; 12],
+    ) -> Vec<u8> {
         let mut check = turn::Writer::new(0x001, turn::Class::Request, &id)
             .attribute(0x0006, format!("{theirs}:{ours}").as_bytes())
             .attribute(0x0024, &1_862_270_975u32.to_be_bytes());
         if nominate {
             check = check.attribute(0x0025, &[]);
         }
+        let role = if controlled { 0x8029 } else { 0x802A };
         check
-            .attribute(0x802A, &7u64.to_be_bytes())
+            .attribute(role, &7u64.to_be_bytes())
             .finish(Some(key.as_bytes()))
     }
 
@@ -1948,21 +1994,46 @@ mod tests {
         }
         assert_eq!(shack.route(), Some(Route::Direct(at)));
 
-        // And once a pair is selected, a check from any other address is never answered, and is
-        // no candidate.
-        let other = UdpSocket::bind(loopback()).unwrap();
-        other
-            .set_read_timeout(Some(Duration::from_millis(300)))
-            .unwrap();
-        let before = peer_reflexive(&shack);
+        // And once a pair is selected, a check from any other address never moves it, though the
+        // shack may answer it (a computer whose NAT rebinds checks from a new address).
         hand(
             &shack,
             &check_as(&ufrag, "0011223344556677", &pwd, true, [5; 12]),
-            other.local_addr().unwrap(),
+            UdpSocket::bind(loopback()).unwrap().local_addr().unwrap(),
         );
-        assert!(other.recv_from(&mut buffer).is_err(), "answered");
-        assert_eq!(peer_reflexive(&shack), before);
+        for _ in 0..80 {
+            let _ = shack.recv(&mut buffer);
+        }
         assert_eq!(shack.route(), Some(Route::Direct(at)));
+    }
+
+    /// ⛔ At this computer, once a pair is selected, a check from any address the shack's
+    /// candidates do not name is never answered and is no candidate: the computer is never
+    /// rebound, and a check relayed by someone who replayed one is not answered here. CONTROL:
+    /// before a pair is selected, the same check is answered.
+    #[test]
+    fn this_computer_takes_no_new_address_once_it_has_its_pair() {
+        let computer = IceRoad::bind(loopback(), Role::Computer, host_only(), TICK).unwrap();
+        assert!(computer.answer(&offer_naming(Vec::new())));
+        let ours = computer.offer();
+        let check = |id| signed_check(&ours.ufrag, "0011223344556677", &ours.pwd, false, true, id);
+        let mut buffer = [0u8; 512];
+        let stranger = UdpSocket::bind(loopback()).unwrap();
+        stranger
+            .set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+        hand(&computer, &check([6; 12]), stranger.local_addr().unwrap());
+        assert!(stranger.recv_from(&mut buffer).is_ok(), "CONTROL: answered");
+        assert_eq!(peer_reflexive(&computer), 1, "CONTROL: a candidate");
+
+        lock(&computer.state).nominated = Some((computer.host(), stranger.local_addr().unwrap()));
+        let later = UdpSocket::bind(loopback()).unwrap();
+        later
+            .set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+        hand(&computer, &check([7; 12]), later.local_addr().unwrap());
+        assert!(later.recv_from(&mut buffer).is_err(), "answered");
+        assert_eq!(peer_reflexive(&computer), 1, "a candidate");
     }
 
     /// One road's turn on simulated time, as `IceRoad::recv` takes it, with every packet waiting on
@@ -2032,10 +2103,9 @@ mod tests {
                 );
             }
         }
-        assert_eq!(
-            peer_reflexive(&shack),
-            before,
-            "the observer is a candidate"
+        assert!(
+            peer_reflexive(&shack) <= before + 1,
+            "more than the observer is a candidate"
         );
         let datagram = [1u8, 1, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0, 0, 0, 0, 9];
         let heard = |from| {
@@ -2058,5 +2128,176 @@ mod tests {
                 "it reached the observer"
             );
         }
+    }
+
+    /// ★ The shack follows this computer when its NAT rebinds: this computer is known to the shack
+    /// as a server-reflexive N1, a forwarding "NAT" carries both ways, and after the pair is
+    /// selected the mapping moves to N2, so the shack sees this computer's checks from N2 and
+    /// what it sends to N1 is lost. Within a second (simulated) the shack's pair is N2: once its own
+    /// check to N2 has been answered.
+    #[test]
+    fn the_shack_follows_this_computer_when_its_nat_rebinds() {
+        let computer = IceRoad::bind(loopback(), Role::Computer, host_only(), TICK).unwrap();
+        let shack = IceRoad::bind(loopback(), Role::Shack, host_only(), TICK).unwrap();
+        let front = UdpSocket::bind(loopback()).unwrap(); // the shack, as this computer sees it
+        let n1 = UdpSocket::bind(loopback()).unwrap(); // this computer's first public mapping
+        let n2 = UdpSocket::bind(loopback()).unwrap(); // and after it rebinds
+        for socket in [&computer.socket, &shack.socket, &front, &n1, &n2] {
+            socket.set_nonblocking(true).unwrap();
+        }
+        let line = |kind: &str, at: SocketAddr, preference: u32| {
+            let related = if kind == "srflx" {
+                " raddr 10.0.0.2 rport 5000"
+            } else {
+                ""
+            };
+            format!(
+                "candidate:{preference} 1 udp {} {} {} typ {kind}{related}",
+                (preference << 24) | (65535 << 8) | 255,
+                at.ip(),
+                at.port()
+            )
+        };
+        let (at_n1, at_n2) = (n1.local_addr().unwrap(), n2.local_addr().unwrap());
+        let mut to_shack = computer.offer();
+        to_shack.candidates = vec![line("srflx", at_n1, 100)];
+        let mut to_computer = shack.offer();
+        to_computer.candidates = vec![line("host", front.local_addr().unwrap(), 126)];
+        assert!(shack.answer(&to_shack) && computer.answer(&to_computer));
+        let mut buffer = [0u8; 2048];
+        let mut step = |now: Instant, rebound: bool| {
+            pump(&computer, now, &mut Vec::new());
+            let mapping = if rebound { &n2 } else { &n1 };
+            while let Ok((n, _)) = front.recv_from(&mut buffer) {
+                let _ = mapping.send_to(&buffer[..n], shack.host());
+            }
+            pump(&shack, now, &mut Vec::new());
+            while let Ok((n, _)) = mapping.recv_from(&mut buffer) {
+                let _ = front.send_to(&buffer[..n], computer.host());
+            }
+            if rebound {
+                while n1.recv_from(&mut buffer).is_ok() {}
+            }
+        };
+        let mut now = Instant::now();
+        let started = Instant::now();
+        while shack.route().is_none() || computer.route().is_none() {
+            assert!(started.elapsed() < Duration::from_secs(5), "never paired");
+            now += Duration::from_millis(10);
+            std::thread::sleep(Duration::from_micros(300));
+            step(now, false);
+        }
+        assert_eq!(shack.route(), Some(Route::Direct(at_n1)));
+        let rebound = now;
+        let mut followed = None;
+        for _ in 0..500 {
+            now += Duration::from_millis(20);
+            std::thread::sleep(Duration::from_micros(300));
+            step(now, true);
+            if shack.route() == Some(Route::Direct(at_n2)) {
+                followed = Some(now - rebound);
+                break;
+            }
+        }
+        assert!(
+            followed.is_some_and(|after| after <= Duration::from_secs(1)),
+            "followed after {followed:?} (simulated); the shack's pair {:?}",
+            shack.route()
+        );
+    }
+
+    /// An observer captures this computer's nominating check once the two ends are paired (this
+    /// computer known to the shack as server-reflexive), replays it to the shack from its own
+    /// address, and gets the shack's checks to that address answered by this computer itself:
+    /// relayed to this computer from the observer's address, or, when `forged`, handed to this
+    /// computer as if from the shack's own address, with every answer passed back to the shack.
+    /// The shack's pair at the end.
+    fn hijacked(forged: bool) -> (Option<Route>, SocketAddr) {
+        let computer = IceRoad::bind(loopback(), Role::Computer, host_only(), TICK).unwrap();
+        let shack = IceRoad::bind(loopback(), Role::Shack, host_only(), TICK).unwrap();
+        for road in [&computer, &shack] {
+            road.socket.set_nonblocking(true).unwrap();
+        }
+        let at_computer = computer.host();
+        let mut offer = computer.offer();
+        offer.candidates = vec![format!(
+            "candidate:2 1 udp {} {} {} typ srflx raddr 10.0.0.2 rport 5000",
+            (100u32 << 24) | (65535 << 8) | 255,
+            at_computer.ip(),
+            at_computer.port()
+        )];
+        assert!(shack.answer(&offer) && computer.answer(&shack.offer()));
+        let nominating = |p: &Vec<u8>| {
+            StunMessage::parse(p).is_ok_and(|m| m.is_binding_request() && m.use_candidate())
+        };
+        let mut now = Instant::now();
+        let mut taps = Vec::new();
+        let started = Instant::now();
+        while !(shack.route().is_some() && taps.iter().any(nominating)) {
+            assert!(started.elapsed() < Duration::from_secs(5), "never paired");
+            now += Duration::from_millis(10);
+            std::thread::sleep(Duration::from_millis(1));
+            pump(&computer, now, &mut Vec::new());
+            pump(&shack, now, &mut taps);
+        }
+        assert_eq!(shack.route(), Some(Route::Direct(at_computer)));
+        let captured = taps.into_iter().find(nominating).unwrap();
+        let observer = UdpSocket::bind(loopback()).unwrap();
+        observer.set_nonblocking(true).unwrap();
+        observer.send_to(&captured, shack.host()).unwrap();
+        let mut buffer = [0u8; 2048];
+        let mut relayed = 0;
+        for _ in 0..600 {
+            now += Duration::from_millis(20);
+            std::thread::sleep(Duration::from_micros(300));
+            pump(&computer, now, &mut Vec::new());
+            pump(&shack, now, &mut Vec::new());
+            while let Ok((n, _)) = observer.recv_from(&mut buffer) {
+                let Ok(message) = StunMessage::parse(&buffer[..n]) else {
+                    continue;
+                };
+                if message.is_binding_request() {
+                    relayed += 1;
+                    if forged {
+                        let mut copy = buffer;
+                        let _ = lock(&computer.state).take(
+                            &mut copy,
+                            n,
+                            shack.host(),
+                            computer.host,
+                            now,
+                        );
+                    } else {
+                        observer.send_to(&buffer[..n], at_computer).unwrap();
+                    }
+                } else if message.is_successful_binding_response() {
+                    observer.send_to(&buffer[..n], shack.host()).unwrap();
+                }
+            }
+        }
+        assert!(
+            relayed > 0,
+            "premise: the shack checked the observer's address"
+        );
+        (shack.route(), at_computer)
+    }
+
+    /// ⛔ A replayed nomination whose checks the observer relays to this computer and back never
+    /// moves the shack's pair: this computer never answers a check from a new address once it has
+    /// its pair.
+    #[test]
+    fn a_replayed_nomination_relayed_to_this_computer_never_moves_the_pair() {
+        let (route, at_computer) = hijacked(false);
+        assert_eq!(route, Some(Route::Direct(at_computer)), "hijacked");
+    }
+
+    /// ⛔ A replayed nomination whose check reaches this computer under the shack's own address
+    /// (a forged source) never moves the shack's pair: this computer's answer goes to the shack,
+    /// not from where the shack's check went, and an answer is taken only from where its check
+    /// went (RFC 8445 §7.2.5.2.1), which `is` 0.11.1 does not ask.
+    #[test]
+    fn a_replayed_nomination_answered_under_a_forged_source_never_moves_the_pair() {
+        let (route, at_computer) = hijacked(true);
+        assert_eq!(route, Some(Route::Direct(at_computer)), "hijacked");
     }
 }
