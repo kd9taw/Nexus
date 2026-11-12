@@ -473,7 +473,6 @@ test('the build steps are recognised as third-party, and the signing steps are n
     ['macos', 'Install build dependencies'],
     ['macos', 'Build FFTW from source for the app\'s minimum macOS'],
     ['macos', 'Build the web UI'],
-    ['macos', 'Install tauri-cli'],
     ['macos', 'Stage Hamlib (bundled rigctld — no brew install for the user)'],
     ['macos', 'Compile the app'],
     ['macos', 'Verify the artifacts'],

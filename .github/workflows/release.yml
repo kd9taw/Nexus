@@ -816,6 +816,8 @@ jobs:
             # was reviewed against, by its ghcr blob digest (see "Install build dependencies").
             gcc_bottle: arm64_sequoia
             gcc_bottle_sha256: 8c57a4e5c65c93b90b280e3e761833f946b5a7d186f2067d239af44b71c5a577
+            # tauri-apps' cargo-tauri-<target>.zip for the pinned tauri-cli (see "Install tauri-cli").
+            tauri_cli_sha256: 7734f1d942dbe6e5fea91c1575452f4bf2cc942e6902f2d9d78513baa8527b24
             suffix: aarch64    # the file name: Nexus_<ver>_aarch64.dmg, as it always was
           - label: Intel
             runner: macos-15-intel
@@ -823,6 +825,7 @@ jobs:
             arch: x86_64
             gcc_bottle: sequoia
             gcc_bottle_sha256: d9c228e06901cfdc5c91b01f0119a56ea634ae3ed6504d15a3af03a65ae687f0
+            tauri_cli_sha256: 535b790c9d1995f67fdb21296a2abbf8026c7846b206cff9b93984eb740eab8b
             suffix: x64        # Nexus_<ver>_x64.dmg, matching the Windows _x64-setup.exe
     steps:
       - uses: actions/checkout@v7
@@ -959,9 +962,38 @@ jobs:
 
       # Pinned, not "^2": tauri-cli 2.12.0 (2026-09-26) re-downloads linuxdeploy-plugin-gtk.sh over
       # the pinned copy (scripts/build-linux.sh refused the 1.15.0 AppImage for it). Every job builds
-      # with the version 1.14.0 shipped with; move it deliberately, all four installs together.
+      # with the version 1.14.0 shipped with; move it deliberately, all four installs together (here
+      # the version below and both legs' tauri_cli_sha256).
+      #
+      # THE PREBUILT, NOT `cargo install`. Compiling tauri-cli took 18.6 min of the Intel leg and
+      # 8.3 of the Apple Silicon one (1.24.0), and the Intel leg is the release's critical path.
+      # This is the binary tauri-apps publish for the same tag (their publish-cli-rs.yml: the
+      # tauri-cli 2.11.5 workspace, default features, so the same tauri-bundler 2.9.4 and
+      # tauri-macos-sign 2.3.4 `cargo install` resolves), pinned by digest so it cannot change
+      # under us. The trade: we run tauri-apps' build of that source instead of compiling it here,
+      # and in exchange no crates.io build script runs on this runner for it. Not actions/cache: a
+      # tag run reads caches only from its own tag and from main, which never runs this workflow,
+      # so it would never hit; and a cache any job on main can write is the wrong source for the
+      # binary the bundle step below hands the signing identity and the notarization key.
       - name: Install tauri-cli
-        run: cargo install tauri-cli --version "=2.11.5" --locked
+        env:
+          TAURI_CLI: 2.11.5
+          TAURI_CLI_SHA256: ${{ matrix.tauri_cli_sha256 }}
+        run: |
+          set -euo pipefail
+          zip="$RUNNER_TEMP/cargo-tauri.zip"
+          curl -fsSL --retry 3 -o "$zip" \
+            "https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v$TAURI_CLI/cargo-tauri-${{ matrix.target }}.zip"
+          echo "$TAURI_CLI_SHA256  $zip" | shasum -a 256 -c -
+          # A directory of its own, first on PATH: the runner image has no ~/.cargo/bin to put it in,
+          # and nothing else named cargo-tauri can win.
+          bin="$RUNNER_TEMP/tauri-cli"
+          mkdir -p "$bin"
+          unzip -o -q "$zip" cargo-tauri -d "$bin"
+          echo "$bin" >> "$GITHUB_PATH"
+          got=$(PATH="$bin:$PATH" cargo tauri --version)
+          [ "$got" = "tauri-cli $TAURI_CLI" ] || { echo "::error::cargo tauri --version says '$got', not tauri-cli $TAURI_CLI"; exit 1; }
+          echo "$got from $bin"
 
       # Hamlib for macOS. Explicit here because this job runs `cargo tauri build` directly —
       # Linux and the Pi get it inside scripts/build-linux.sh, and macOS would silently ship
