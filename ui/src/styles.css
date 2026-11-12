@@ -13570,8 +13570,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 /* THE LARGE FACE (the TX meters pane): the drawing's own ink. Its box is cockpit-panes.css's; it scales as a
    drawing, so these sizes are in the viewBox's units, and every one grows with the pane. The name and the value
-   are 3 % over 1.24.0's 6.5 and 9: with the half-size dial the pane is shorter and the drawing stands at about
-   1.24.0's scale, never quite exactly, and a hair under it rounded their glyphs a pixel smaller. */
+   are 5 % over 1.24.0's 6.5 and 9: with the half-size dial the pane is shorter and the drawing stands at about
+   1.24.0's scale (0.97 to 1.08 of it on the supported screens), never quite exactly, and a hair under it rounded
+   their glyphs a pixel smaller. */
 .txmeters-pane-finetick {
   stroke-width: 0.5;
 }
@@ -13586,12 +13587,12 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .txmeters-pane-label {
   fill: var(--text-dim);
   font-family: var(--font-mono);
-  font-size: 6.7px;
+  font-size: 6.8px;
   font-weight: 800;
 }
 .txmeters-pane-value {
   fill: var(--text);
-  font-size: 9.3px;
+  font-size: 9.45px;
   font-variant-numeric: tabular-nums;
 }
 .txmeters-pane-idle .txmeters-pane-value,
