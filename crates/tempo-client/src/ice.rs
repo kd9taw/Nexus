@@ -743,6 +743,8 @@ impl State {
 pub struct Counter {
     socket: UdpSocket,
     heard: std::sync::atomic::AtomicUsize,
+    /// Only datagrams carrying these bytes are counted ([`Counter::naming`]).
+    naming: Option<Vec<u8>>,
 }
 
 #[cfg(any(test, feature = "test-util"))]
@@ -756,6 +758,18 @@ impl Counter {
         Self {
             socket,
             heard: Default::default(),
+            naming: None,
+        }
+    }
+
+    /// A counter that counts only the checks of a session whose offer gave `ufrag`: a check's
+    /// USERNAME carries it in the clear (`<their ufrag>:<checker's ufrag>`, RFC 8445 7.2.2). Its
+    /// port was another socket's a moment ago, and a check still on its way to that socket, from
+    /// another session in the process or on the machine, lands here; it names another ufrag.
+    pub fn naming(ip: IpAddr, ufrag: &str) -> Self {
+        Self {
+            naming: Some(ufrag.as_bytes().to_vec()),
+            ..Self::on(ip)
         }
     }
 
@@ -778,8 +792,15 @@ impl Counter {
     pub fn heard(&self) -> usize {
         use std::sync::atomic::Ordering::Relaxed;
         let mut buffer = [0u8; 2048];
-        while self.socket.recv_from(&mut buffer).is_ok() {
-            self.heard.fetch_add(1, Relaxed);
+        while let Ok((n, _)) = self.socket.recv_from(&mut buffer) {
+            let ours = self.naming.as_ref().is_none_or(|ufrag| {
+                buffer[..n]
+                    .windows(ufrag.len())
+                    .any(|window| window == ufrag.as_slice())
+            });
+            if ours {
+                self.heard.fetch_add(1, Relaxed);
+            }
         }
         self.heard.load(Relaxed)
     }

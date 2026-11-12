@@ -21,9 +21,12 @@ Read this part before changing anything here.
 - **Pairing finishes at the radio.** A code is generated at the shack and approved
   by a press at the shack. There is no path that pairs a station you are not
   standing at, and that is deliberate rather than unfinished.
-- **Every browser is approved at the shack.** Approving one browser approves only
-  that browser, for that station, and gives it station control, which is all a
-  stream needs. A browser streaming the shack, where streaming is turned on,
+- **Every browser is approved at the shack, or by its owner's sign-in.** Approving
+  one browser approves only that browser, for that station, and gives it station
+  control, which is all a stream needs. A sign-in gives control only: the station
+  holds transmit for 15 minutes and until the owner notice is confirmed sent
+  (`deviceAddedNotice`), or until Allow to transmit at the shack. A browser streaming
+  the shack, where streaming is turned on,
   operates Nexus through the stream as you would at the shack, transmit included
   (the operator's ruling of 2026-10-03: an approved, streaming browser is you at the
   shack). Revoking its station control ends its stream. What an approved browser was
@@ -45,8 +48,10 @@ The browser signs in with Auth0 (Authorization Code + PKCE, public client, no
 secret). The Worker validates RS256 against a pinned issuer, API audience and SPA
 client, then maps `(issuer, subject)` to an internal account ID.
 
-Entitlement is a fourteen-day trial, and it starts when a station is **approved at
-the radio** — not at sign-in, because an account with no paired station cannot use
+Entitlement is a fourteen-day trial, and it starts when a code-paired station is
+**approved at the radio**, or, for a station bound by its owner's sign-in, at its first
+internet use (`TRIAL_STARTS_AT_BINDING`) — not at sign-in, because an account with no
+paired station cannot use
 the service and would otherwise burn its trial waiting. The clock is written in the
 same D1 batch that creates the station, with `ON CONFLICT(account_id) DO NOTHING`:
 that is both the concurrency argument and "one trial, ever" expressed in SQL, so a
@@ -71,11 +76,12 @@ Nexus on another computer can drive its station over the internet. It signs in t
 system browser to the tenant's Native application (Authorization Code + PKCE, no secret), and
 the Worker takes that access token on the native client's own routes (`client/…`) alone, only
 with no `Origin` and no cookie, and only when its `azp` is `AUTH0_NATIVE_CLIENT_ID`. No other
-route takes that token, and those routes take no other. A deploy does not set that variable
-yet, so until it does every one of them refuses `serviceNotConfigured`.
+route takes that token, and those routes take no other. A deploy without
+`REMOTE_AUTH0_NATIVE_CLIENT_ID` set leaves every one of them refusing `serviceNotConfigured`.
 
-The computer is a device of the station, approved at the shack as a browser is and on the same
-terms. Its credential is its key: every request that acts as the device is signed by it over a
+The computer is a device of the station, approved at the shack or by its owner's sign-in as a
+browser is, and on the same terms. Its credential is its key: every request that acts as the
+device is signed by it over a
 challenge the account was given within the last minute, deleted as it is read, so a signed
 request is taken once. The shack pins the same key when it approves the device, and only a
 Nexus that sends `x-nexus-device-kind: 1` is listed these devices, with their kind and platform.

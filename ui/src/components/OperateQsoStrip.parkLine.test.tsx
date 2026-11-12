@@ -27,7 +27,7 @@ const ZOOM = 1.75
 const STRIP = { top: 400, height: 350 }
 const LINE_BOTTOM = 400 + 105
 
-/** The alarm cell's line, under the cluster's (a strip that draws one: the transmitter alarm, first on its second line). */
+/** The alarm cell's line, under the cluster's (a strip that draws one: the transmitter alarm, on its second line after Log). */
 const ALARM_BOTTOM = 400 + 160
 let shellH = 1000
 

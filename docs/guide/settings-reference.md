@@ -101,8 +101,8 @@ and access could be revoked at any time; the card says so beside its switch. The
 keeps the radio and stays in charge: what you click and type in the browser goes to the
 station, the browser shows what the station reports back, and your log, settings and radio
 never leave this computer. The card holds the streaming switch, where the station stands with
-the Remote service, and your browsers with their keys. The pairing's transmit option and
-the per-browser permissions are folded under **Advanced**.
+the Remote service, and your browsers with their keys. The per-browser station controls are
+folded under **Advanced**.
 
 **Pairing.** Give the station a **Station name** and start **Pair a station**. In the
 browser, sign in, enter the code and choose **Attach this station**. Back here,
@@ -112,7 +112,7 @@ paired from. A browser streaming this station uses Nexus as you would here, tran
 included, with this approval alone. Any other browser asks with the Remote site's **Stream**
 button, and Nexus asks you wherever you are in it: **Let Chrome on Windows stream this
 station?**, with the browser's key. Approve it only if the key matches the one the browser
-shows. **Approve** there is **Approve browser**; **Deny** refuses the request, and Escape
+shows. **Approve** approves that browser; **Deny** refuses the request, and Escape
 closes the question and answers nothing.
 
 **Turn on Remote** opens an outbound encrypted connection. No port
@@ -151,7 +151,7 @@ freezes. In Phone, the browser can talk on the rig with its own microphone, at a
 that browser remembers; see [Talk from Remote](phone.md#talk-from-remote).
 
 **How long a browser stays approved.** Until you remove it. An approval never runs out, whether
-the browser is used or not: only **Revoke browser approval** (or **Remove**) here, the browser
+the browser is used or not: only **Remove** on its row here, the browser
 forgetting itself, or **Revoke station access** ends it. Nexus shows each one as approved until
 you remove it, and so does the browser (Nexus 1.17 and 1.18 show such an approval as "Approved
 until 9999-12-31 UTC"). Approvals given under the earlier rule (30 days from last use, 90 at most)
@@ -159,14 +159,14 @@ last until removed too; one that had already run out stays ended, and you approv
 again.
 
 While it holds station control, a browser can press **Listen** to hear the station's receive
-audio; **Volume** beside it sets how loud, and that browser remembers it. **Revoke browser
-approval** removes that one browser: every other browser and computer keeps what it has.
+audio; **Volume** beside it sets how loud, and that browser remembers it. **Remove** on a
+browser's row removes that one browser: every other browser and computer keeps what it has.
 **Turn off Remote** only pauses: it disconnects every browser, and turning Remote on again
 gives each still-approved browser back what it had, with the TX switch off. **End remote
 control** does the same for everyone at once: it turns Remote off (it stays off after a restart),
 disconnects every browser and every computer, and turns off Remote over this network; nobody
 is approved again afterwards, and turning Remote on gives each approved device back what it
-had. **Revoke browser approval** clears that browser's permissions for good.
+had. **Revoke station controls** takes a browser's station controls away and ends its stream.
 **Revoke station access**
 disconnects the station and removes its Remote pairing; pair again to reconnect.
 
@@ -232,9 +232,10 @@ them again afterwards. **End remote control** turns this off too. Turning
 it on or off, pairing, removing and resetting work only at the station itself, never through a
 stream.
 
-**Remote stations…** is the other end of the stream. On a Windows computer you operate from,
-it opens the Remote page in a Nexus window of its own, for a station you have paired. You sign
-in there, and approve the window at the station once, as you would a new browser. **F11** puts
+**Connect to my station…** is the other end of the stream and of **Remote over this network**.
+On a Windows computer you operate from, it opens a Nexus window of its own that looks for your
+station on this network first and, when it is not there, offers to sign in to reach it over the
+internet; under **Advanced** are the stations on this computer, an address and a code. **F11** puts
 the window in full screen and takes it out again. It is the window's own full screen, not the
 page's, so **Esc** over the picture still stops transmitting. The browser's own shortcuts are off
 in this window: F5, Ctrl+R, Ctrl+P, Ctrl+F and the like reach the page, and over the picture
@@ -243,22 +244,21 @@ window reopens where you left it, fitted to the screens attached at the time, an
 closed in full screen reopens at its last size. The page in this window can reach nothing in
 Nexus, exactly as in a browser. On Linux and macOS, use Remote in a browser for now.
 
-**Stations on this network…** is the other end of **Remote over this network**. On a Windows
-computer you operate from, it opens a Nexus window of its own for the stations on this computer.
-To add one, press **Sign in…** and sign in to Nexus Remote in your web browser with the account
+To add a station there, open **Advanced**, press **Sign in…** and sign in to Nexus Remote in
+your web browser with the account
 the station is linked to, or one its owner invited to operate it: the window finds the station on
 your network by name (or asks for its address), checks that it is the station its owner signed in
 for, and the station is then on this computer on its own network, with no code. Over the internet
-this computer waits until you approve it at the station under Remote access, as a computer paired
-with a code does: Nexus asks there, with this computer's key. A sign-in alone never lets a computer
-or a browser operate the station over the internet. The station takes this computer on its
+a sign-in gives this computer control at once, but it cannot transmit for 15 minutes, nor until
+Nexus Remote has confirmed it emailed the station's owner; **Allow to transmit** at the station
+lifts that sooner. The station takes this computer on its
 network for 30 days from that sign-in; in the last week the window offers **Sign in again**. If Nexus Remote cannot be reached, pair such a computer
 again with a code (**Pair with a code instead…**, below): the station then keeps it until you
 remove it there, with no 30 days to count, and removing it on the Nexus Remote web page no longer
 takes it off the station's network. Signing in from somewhere else (a laptop away from home,
 a friend you invited at their own house), press **Not on this network** when the window asks
-where the station is: the station is then on this computer by its name, over the internet only
-once you approve this computer at the station, until you press **Sign in** on its row once while
+where the station is: the station is then on this computer by its name, over the internet only,
+held from transmitting as above, until you press **Sign in** on its row once while
 this computer is on the station's network.
 For a station whose owner has not signed in to Nexus
 Remote at the station, choose **Pair with a code instead…**: the window looks for stations by
@@ -3095,7 +3095,7 @@ sign-in, the switch stays off and says so.
 ### This computer
 
 Shown while this computer operates a station over your own network (**Operate from this
-computer** in Stations on this network). What is set here belongs to this computer: it is kept
+computer** in Connect to my station…). What is set here belongs to this computer: it is kept
 on this computer and never sent to the station.
 
 **Audio** picks where you hear the station's receiver (**The station's audio**) and the
