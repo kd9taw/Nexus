@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **The prompt to log a contact no longer scrolls sideways.** Its two columns of boxes were wider than the popup at every window size and UI scale, so the right-hand boxes ran past its edge and the popup scrolled sideways by about 80 pixels. The boxes now share the popup's width. Log and Stop TX stay where they were.
+- **Letting go of PTT, or pressing Stop TX, unkeys on time when the radio stops answering a meter read.** While you held the PTT button, or keyed the radio at its own microphone, Nexus could wait about a second for a meter reading from a radio that had stopped answering, and letting go or pressing Stop TX during that wait unkeyed the radio up to 0.3 seconds late. The wait now ends by the link's own deadline, 0.7 seconds on a radio connected to this computer, as it already did during an over.
 
 ## [1.24.0] — 2026-11-11
 
