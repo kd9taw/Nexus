@@ -16,6 +16,9 @@ const snapshot: any = {
   link: { tier: 'FT8', periodSecs: 15, snrDb: -8, dtSec: 0.1, freqHz: 1500, rv: 0, state: 'idle', quality: 1 },
   stations: [], conversations: [], activePeer: null, qso: null, fieldDay: null, recentDecodes: [], harqRescues: 0,
 }
+// A probe's own radio fields over the idle radio, when the page's storage says so (`probe.radio`, JSON): the
+// TX meters pane probe keys the radio with readings, so the faces draw a needle and a value.
+Object.assign(snapshot.radio, JSON.parse(localStorage.getItem('probe.radio') ?? '{}'))
 const rtty: any = { armed: true, afcHz: 0, afcLocked: false, text: '', charConf: [], baud: 45.45, shiftHz: 170, backend: 'afsk',
   sending: false, latched: false, keyerError: null, markHz: 2125, spaceHz: 2295, auto: false, seqState: 'idle', peer: null, peerExchange: [], heardCq: null }
 const psk: any = { armed: true, afcHz: 0, signal: false, centerHz: 1000, text: '', charConf: [], sending: false, latched: false, keyerError: null }

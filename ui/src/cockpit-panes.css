@@ -736,11 +736,13 @@
    comfortable minimum is the TRACK's, so a row keeps it and the next row stands below: a floor on the face
    alone leaves the track short and the faces overlap. It also gives the stacking flow, where a dial has
    no height of its own, the pane's height. A pane too short for one row scrolls in its body. TxNeedles'
-   LARGE_FACE_FLOOR_EM is this number: the column choice takes no shape whose rows would not fit it. */
+   LARGE_FACE_FLOOR_EM is this number: the column choice takes no shape whose rows would not fit it.
+   4.3em, about 1.24.0's 7em times the face's height against 1.24.0's (35.5 / 59, 4.21em): the dial is half 1.24.0's and the
+   drawing ends at its top (TxNeedles LARGE_DIAL), so a stacking cockpit's pane is that much shorter. */
 .txmeters-pane {
   display: grid;
   grid-template-columns: repeat(var(--txmeters-pane-cols, 3), minmax(0, 1fr));
-  grid-auto-rows: minmax(7em, 1fr);
+  grid-auto-rows: minmax(4.3em, 1fr);
   gap: 4px;
   height: 100%;
   min-width: 0;
@@ -939,6 +941,11 @@
   --chrome-bar-gap: max(var(--space-3), min(18px, (var(--vh-eff, 100vh) - 1100px) * 100));
   --chrome-head-gap: max(var(--space-2), min(var(--gap), (var(--vh-eff, 100vh) - 1100px) * 100));
   --chrome-extras-gap: max(var(--space-2), min(var(--space-3), (var(--vh-eff, 100vh) - 1100px) * 100));
+  /* THE LARGE TX METERS PANE'S LOW FLOOR (CockpitPaneFrame `lowFloor`, named by TxMeters `TxMetersPane` alone):
+     where a fill pane floors at the yielding 10em, this one floors lower, at its head and the body's padding
+     plus 35.5 / 59 of what 10em left its faces in 1.24.0, so on a screen that stood it on its floor the drawing
+     keeps 1.24.0's scale with its dial half 1.24.0's. It only lowers: min(the stock floor, this). */
+  --txmeters-pane-floor: min(7.6em, 100%);
 }
 
 /* THE TOP BAR'S STATUS LANE (components/StatusLane), ALWAYS DRAWN, a direct child of the bar right after the
