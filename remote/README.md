@@ -111,6 +111,57 @@ socket's message shapes are unchanged for every other.
   request fails visibly, and existing leases still expire within sixty seconds.
   Re-enabling a trial or signing in again does not restore revoked device trust.
 
+## Rate limits, route by route
+
+Every counter is `rate()` in `authority.ts`: one D1 row per key, in fixed windows. A caller is an
+IPv4 address or an IPv6 /64, and its network an IPv6 /48 (`caller()`); per-caller counts come first
+everywhere, so a caller over its own limit never spends a shared one. Every account-authenticated
+route on the page also counts against the account's 120 a minute, and every native-client route
+against the account's own 120 a minute (`client:`).
+
+| Route | Limit |
+|---|---|
+| `GET config` | None. Fixed public settings: no database, no room, no input (a query is refused). |
+| `GET health` | 6 a minute a caller, 30 a minute an IPv6 /48. |
+| `POST enroll` | 5 per 10 minutes a caller, 20 a /48, then 1000 per 10 minutes for everyone. |
+| `POST enroll/check`, `enroll/approve` | 60 per 10 minutes a caller, 240 a /48, then 30 a minute a pairing id. |
+| `GET stations/:id/connect` | 20 a minute a station, after its credential. |
+| `GET stations/:id/pipe` | 60 a minute a station, after its credential; four pipes a station. |
+| `GET stations/:id/observe` | No counter of its own: it takes a one-use ticket that lives fifteen seconds, and `ticket` mints those at 12 a minute a device. |
+| `POST stations/:id/native/*` | 60 a minute a station, after its credential; `invite` also 20 a day and 20 open invites a station. |
+| `POST pair/claim`, `pair/confirm` | 5 and 10 per 10 minutes an account. |
+| `POST billing/checkout`, `billing/portal` | 10 a minute and 40 a day an account, shared by the two. Each is a call to the payment provider. |
+| `POST account/export`, `account/delete` | 5 per 10 minutes an account, each. |
+| `POST stations/:id/ticket`, `stations/:id/turn` | 12 a minute a device, each. |
+| `POST stations/:id/device` | Approved by its sign-in: 5 a day an account. Any device: eight a station. |
+| `POST client/station`, `stations/:id/client/station-proof` | 5 a day an account, shared. Two stations an account. |
+| `POST stations/:id/client/device` | As the page's `device`. |
+| `GET stations/:id/client/pipe`, `POST stations/:id/client/turn` | 12 a minute a device, each. |
+| Native reopening (no token) | 30 a minute a caller, 60 a /48, 120 a device, then the account's 120 once its key has signed. Four live challenges a device for each requester. |
+| `POST admin/grant-trial` | The account's 120, and the one pinned administrator only. |
+
+The rest have no counter beyond the account's, because each acts on that account's own rows and is
+bounded by them: `session`, `account/devices`, `account/remove-all`, `account/devices|invites/:id/remove`,
+`stations/:id/rename`, `revoke`, `forget-device` and `renew`, and the native `client/session`,
+`client/challenge`, `client/renew` and `client/forget`. A removal finds nothing the second time; a
+waiting device lasts ten minutes and counts toward the eight.
+
+What is not counted, on purpose: a request with a wrong station credential, ticket or sign-in is
+refused after one indexed read or a signature check, so a counter in front of it would spend a write
+to save a read, and every credential here is 256 bits. An account row is made once per sign-up at
+the identity provider, which has its own limits. A flood spread over many networks is a job for an
+edge rule in front of the Worker, not for these counters.
+
+## Health
+
+`GET /api/remote/health`, with no sign-in, is what an uptime monitor reads. It answers three fixed
+words and nothing else: `database` (`ok` or `down`: the caller's own rate counter, a read and a
+write, answered within two seconds), `room` (`ok` or `down`: a room of its own, never a station's,
+reached within two seconds) and `billing` (`ok` or `absent`: the billing Worker is bound; it is
+never called). All three `ok` is `200` with `status: ok`; anything else is `503` with
+`status: degraded`. So a deploy without billing reads `503` by design. The URL is exact: a query
+string is refused `403`, as on every API route.
+
 ## Verifying a change
 
 Node 24, plus the Linux dependencies in `.github/workflows/ci.yml` — that workflow

@@ -208,6 +208,8 @@ export class StationRoom extends DurableObject<RemoteEnv> {
 
   async fetch(request: Request): Promise<Response> {
     // This class has no public route or user-controlled proxy. Only index.ts calls it.
+    // `health` (index.ts) reaches its own room: answered before any admission is read, and nothing kept.
+    if (new URL(request.url).pathname === '/health') return new Response(null, { status: 204 })
     try {
       const input = request.method === 'GET' ? JSON.parse(request.headers.get('x-nexus-admission') ?? '') as Admission : await request.json<Admission>()
       await this.policy(input.access)
