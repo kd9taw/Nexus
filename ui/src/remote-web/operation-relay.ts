@@ -155,7 +155,7 @@ export class OperationRelay {
         this.error(p, 'stationUnavailable')
         return
       }
-      // And its lease only while the room allows it (security review 2026-11-12, follow-up 1): taken and
+      // And its lease only while the room allows it: taken and
       // kept through the relay off the LAN, it would hold the station occupied from anywhere. Without a
       // heartbeat the station's own five-second lease ends it. Stop, `state` and Release are never held.
       // Read defensively, as `commandUntil` is: an absent allowance is none.

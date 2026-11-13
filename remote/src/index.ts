@@ -61,6 +61,11 @@ const NOTICE_CODE_MS = 1800000
 const NOTICE_CODE_TRIES = 5
 const NOTICE_CODES_PER_DAY = 4
 const NOTICE_WAIT_MS = 2 * DAY_MS
+/** A notice address: plain mailbox characters, and a domain of plain labels. */
+const NOTICE_ADDRESS = /^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$/
+/** An address as a warning mail writes it, `op[at]example[.]com`, so no mail program turns the address a
+ *  stranger may have typed into a link or a mailto in a security mail. */
+const defanged = (address: string) => address.replace('@', '[at]').replace(/\./g, '[.]')
 /** Account deletions and copies an account may ask for in ten minutes. */
 const ACCOUNT_DATA_PER_TEN_MINUTES = 5
 /** A subscription in these states has ended and can charge nothing more; any other can. */
@@ -627,8 +632,13 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     }
     if (verb === '/change') {
       const address = typeof input.address === 'string' ? input.address.trim().toLowerCase() : ''
-      requireValue(address.length <= 320 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address), 'invalidRequest', 400)
+      // Plain mailbox characters only: no display name, quotes, angle brackets or anything a mail program
+      // could read as more than an address.
+      requireValue(address.length <= 320 && NOTICE_ADDRESS.test(address), 'invalidRequest', 400)
       requireValue(env.OWNER_NOTICE_API_KEY && env.OWNER_NOTICE_FROM, 'noticeNotConfigured', 503)
+      // Only a station's owner gets these notices, so only an account that owns one may have a code mailed:
+      // otherwise any new account could use the service's sender to mail anyone.
+      requireValue(await env.DB.prepare('SELECT 1 FROM stations WHERE account_id=? AND enabled=1 LIMIT 1').bind(self).first(), 'stationUnavailable', 404)
       await takeNoticeChange(env, self, now)
       requireValue(await captureNoticeAddress(env, self, email), 'noticeAddressUnbound')
       await rate(env, `notice-change:${self}`, now, NOTICE_CODES_PER_DAY, DAY_MS)
@@ -667,7 +677,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       // The address that gets the notices now is told, so an owner whose sign-in is someone else's
       // hears of it with two days to cancel. Its delivery decides nothing: the wait is the same either way.
       if (old?.notice_address) await sendMail(env, old.notice_address, 'Your Nexus Remote notice address is changing',
-        `Notices of devices added to your Nexus Remote account will go to ${pending.address} from ${new Date(effectiveAt).toISOString()}.\n\n` +
+        `Notices of devices added to your Nexus Remote account will go to ${defanged(pending.address)} from ${new Date(effectiveAt).toISOString()}.\n\n` +
         `If this was not you, sign in at ${env.PUBLIC_REMOTE_ORIGIN}/remote/ now, cancel the change, and remove any device you do not know.`)
       return json({ ok: true, effectiveAt })
     }
@@ -921,6 +931,8 @@ async function accountCopy(env: RemoteEnv, accountId: string, now: number): Prom
     d.expires_at AS expiresAt, d.revoked_at AS revokedAt, d.account_id=? AS yours
     FROM devices d JOIN stations s ON s.id=d.station_id WHERE d.account_id=? OR s.account_id=? ORDER BY d.station_id, d.id`, accountId, accountId, accountId)
   const truth = (row: Record<string, unknown>, ...keys: string[]) => ({ ...row, ...Object.fromEntries(keys.map(key => [key, row[key] === 1])) })
+  // A change taken over or run out is settled first, so the copy holds no address that is no longer kept.
+  await takeNoticeChange(env, accountId, now)
   const notice = await env.DB.prepare('SELECT notice_address FROM accounts WHERE id=?').bind(accountId).first<{ notice_address: string | null }>()
   return {
     exportedAt: now, accountId,
