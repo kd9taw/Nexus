@@ -295,9 +295,24 @@ pub fn psk_band_plan() -> Vec<BandChannel> {
     ]
 }
 
+/// The ISS's SSTV downlinks, MHz: 145.800 (ARISS's usual PD120 events) and 437.550 (Robot 36;
+/// listed by ARISS among its frequencies in use, and where the 22–26 October 2026 RS0ISS event
+/// ran from the Service Module). Receive-only space channels: the SSTV screen never tunes one on
+/// its own and asks before a picture is sent on one.
+pub const ISS_SSTV_DOWNLINKS_MHZ: [f64; 2] = [145.800, 437.550];
+
+/// Is this dial one of the ISS's SSTV downlinks ([`ISS_SSTV_DOWNLINKS_MHZ`]), within the 1.5 kHz
+/// the SSTV screen counts as being on a channel?
+pub fn is_iss_sstv_downlink(dial_mhz: f64) -> bool {
+    ISS_SSTV_DOWNLINKS_MHZ
+        .iter()
+        .any(|f| (f - dial_mhz).abs() < 0.0015)
+}
+
 /// The **standard SSTV calling frequencies** — where images actually appear,
-/// including the ISS downlink (the biggest SSTV driver: ARISS events transmit
-/// PD120 on 145.800 FM). Phone-segment dials, phone sideband conventions.
+/// including the ISS downlinks (the biggest SSTV driver: ARISS events transmit
+/// PD120 on 145.800 FM, and some Robot 36 on 437.550 FM). Phone-segment dials,
+/// phone sideband conventions.
 pub fn sstv_band_plan() -> Vec<BandChannel> {
     vec![
         ch("160m", "HF", 1.890, "LSB", "160 m · SSTV", "the conventional 160 m image frequency — rare, and a winter-night band"),
@@ -323,6 +338,11 @@ pub fn sstv_band_plan() -> Vec<BandChannel> {
         ch("6m", "VHF", 50.680, "USB", "6 m · SSTV", "the 6 m image frequency; activity follows sporadic-E openings"),
         ch("2m", "VHF", 145.800, "FM", "2 m · ISS downlink", "ARISS events transmit PD120 images here — the SSTV event of the year, FM"),
         ch("2m-call", "VHF", 144.500, "FM", "2 m · SSTV calling", "terrestrial VHF SSTV calling (regional conventions vary — check locally)"),
+        // ⚠️ "70cm-iss", NOT "70cm": the screen-open tune takes a band's bare row as its SSTV
+        // frequency (`sstvChannelOnOpen`), and a downlink is never where opening the screen goes.
+        // The note is the in-app hint: on 70 cm the ISS's Doppler (about ±10 kHz) pushes the
+        // signal out of an FM filter on a fixed dial for much of the pass.
+        ch("70cm-iss", "UHF", 437.550, "FM", "70 cm · ISS downlink", "the ISS's 70 cm SSTV downlink, used for some ARISS events (Robot 36 in October 2026) — check the event announcement. Doppler is about ±10 kHz here: track the ISS on Satellites and pick its 437.550 SSTV row so the dial is corrected"),
     ]
 }
 
@@ -1806,6 +1826,37 @@ mod tests {
             .find(|c| (c.dial_mhz - 14.236).abs() < 1e-9)
             .expect("14.236 stays an SSTV channel");
         assert!(alt2.note.contains("FreeDV"), "{}", alt2.note);
+    }
+
+    /// The ISS's 70 cm SSTV downlink is pickable (field report, 2026-11: a UK operator looking
+    /// for 437.550 during the October 2026 RS0ISS event found no 70 cm row). ARISS lists
+    /// "SSTV Downlink 437.550 MHz with Robot36" among its frequencies in use, and the
+    /// 22–26 October 2026 event ran there from the Service Module. FM, like 145.800, and
+    /// recognised as a downlink by the one predicate the screen-open tune and the engine read.
+    #[test]
+    fn the_iss_70cm_sstv_downlink_is_a_channel() {
+        let iss70 = sstv_band_plan()
+            .into_iter()
+            .find(|c| (c.dial_mhz - 437.550).abs() < 1e-9)
+            .expect("437.550 is the ISS's 70 cm SSTV downlink");
+        assert_eq!(iss70.mode, "FM");
+        assert_eq!(iss70.group, "UHF");
+        assert_eq!(canonical_band(&iss70.band), "70cm");
+        // NOT the bare "70cm" id: the SSTV screen's open-tune takes a band's bare row as that
+        // band's SSTV frequency, and a downlink must never be where opening the screen tunes.
+        assert_ne!(iss70.band, "70cm");
+        // The note is the in-app hint: it must say the dial is not enough on 70 cm.
+        assert!(iss70.note.contains("Doppler"), "{}", iss70.note);
+        assert!(is_iss_sstv_downlink(437.550));
+        assert!(is_iss_sstv_downlink(145.800));
+        assert!(
+            !is_iss_sstv_downlink(144.500),
+            "the calling channel is not a downlink"
+        );
+        assert!(
+            !is_iss_sstv_downlink(437.800),
+            "the crossband repeater is not this row"
+        );
     }
 }
 

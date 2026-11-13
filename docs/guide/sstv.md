@@ -72,6 +72,9 @@ the bands your license class can key phone on:
 | 6 m | 50.680 | USB | activity follows sporadic-E openings |
 | 2 m | 145.800 | FM | the ISS downlink — ARISS events transmit PD-120 here |
 | 2 m | 144.500 | FM | terrestrial VHF calling (regional conventions vary) |
+| 70 cm | 437.550 | FM | the ISS's 70 cm downlink — some ARISS events use it (Robot 36 in October 2026); see [the 70 cm downlink and Doppler](#the-70-cm-downlink-and-doppler) |
+
+Any other frequency works too: type it into the dial readout and press Enter.
 
 **One region shows the band, then the picture.** Until a header arrives that
 space is a live waterfall so you can see what is actually on the frequency; the
@@ -261,8 +264,8 @@ The status line is the diagnosis, in order of what to do about it:
 under the buttons is the identification receipt — it names where the plate went
 — and ticking the box below it skips the plate for this picture only.*
 
-On 145.800 MHz — the ISS downlink — Send asks first: "Transmit only during a
-sanctioned ARISS uplink event. Send anyway?"
+On 145.800 or 437.550 MHz — the ISS downlinks — Send asks first: "Transmit
+only during a sanctioned ARISS uplink event. Send anyway?"
 
 ### Catch an ISS pass
 
@@ -290,6 +293,27 @@ sanctioned ARISS uplink event. Send anyway?"
    on 145.800 FM, so a mid-pass QSY of your own is left alone. That automatic
    stop is not treated as your decision, so opening the section later still
    starts the receiver normally.
+
+### The 70 cm downlink and Doppler
+
+Most ARISS SSTV events send PD-120 on 145.800 MHz, but some use 437.550 MHz
+(the October 2026 event sent Robot 36 there). Check the event announcement for
+the frequency and mode. The auto-arm above always tunes 145.800.
+
+The ISS moves fast enough to shift its signal by about ±3.5 kHz on 2 m and about
+±10 kHz on 70 cm. On 2 m a fixed 145.800 dial holds the picture for most of a
+pass. On 70 cm the shift is wider than an FM receive filter's margin, so on a
+fixed 437.550 the picture breaks up or drops out near the start and end of the
+pass. The SSTV screen does not correct Doppler itself. To have it corrected:
+
+1. On the [Satellites](satellites.md) screen, arm a track on the ISS and pick its
+   437.550 SSTV row in the transponder chooser ("Mode U - SSTV - Robot-36" in the
+   SatNOGS list). Doppler then steers your receive dial in FM for the pass.
+2. Open SSTV and arm the receiver. The pass keeps the dial: SSTV does not retune
+   it.
+
+Without a track, tune by hand: start about 10 kHz high (437.560), then step down
+through 437.550 as the ISS passes overhead and on to about 437.540 by the end.
 
 See [Satellites](satellites.md) for pass prediction and the rest of the ISS
 picture.
