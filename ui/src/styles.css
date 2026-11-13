@@ -11994,6 +11994,12 @@ input.cw-pitch::-webkit-inner-spin-button {
   align-items: center;
   gap: var(--space-3);
 }
+/* In the rail, top, not centre: the avatar stands at the card's top edge, so a card capped shorter than its
+   identity (the rail's ceiling, cockpit-panes.css `.cockpit-recall`) cuts text lines, never the photo
+   (tester report, 2026-11-13: the avatar centred in a tall head fell below the cut). */
+.recall-rail .recall-head {
+  align-items: flex-start;
+}
 .recall-avatar {
   position: relative;
   flex: none;
@@ -12052,6 +12058,59 @@ button.recall-avatar:hover .recall-avatar-qrz,
 button.recall-avatar:focus-visible .recall-avatar-qrz {
   opacity: 1;
 }
+/* The ⤢ that opens the whole card (RecallCardPopover), beside the pane's ✕ in the head. */
+.recall-expand {
+  padding: 2px 7px;
+  min-height: 24px;
+  font-size: 0.85rem;
+  line-height: 1.2;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  cursor: pointer;
+}
+.recall-expand:hover,
+.recall-expand[aria-expanded='true'] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+/* THE WHOLE CARD, in its floating box (RecallCardPopover; the box is the station card's `.callcard`, placed
+   off every transmit control). Nothing in it is capped but the prior-contact list, which keeps its own 12em
+   ceiling as it does everywhere; the name may wrap here, and the photo is drawn larger: this is the place
+   to look at it. */
+.recall-full-body {
+  position: relative;
+  box-sizing: border-box;
+  width: 30em;
+  padding: var(--space-2);
+}
+.recall-full-close {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  z-index: 1;
+  padding: 2px 7px;
+  min-height: 24px;
+  font-size: 0.85rem;
+  line-height: 1.2;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  cursor: pointer;
+}
+.recall-card-full {
+  margin-top: 0;
+  border: 0;
+  /* Room for the box's ✕ at the top-right corner. */
+  padding-right: calc(var(--space-3) + 2.2em);
+}
+.recall-card-full .recall-avatar {
+  width: 96px;
+  height: 96px;
+  font-size: calc(32px * var(--text-scale));
+}
 .recall-id {
   flex: 1;
   min-width: 0;
@@ -12067,6 +12126,18 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-weight: 800;
   color: var(--text);
   line-height: 1.1;
+}
+/* THE CARD IN OPERATE'S RAIL (`.recall-rail`, RecallPanel `rail`), and only there: the log strips' card (LogEntry,
+   on CW, Phone and the other screens) is drawn as it always was. ONE LINE for the name (tester report, 2026-11-13:
+   "Barry / N / Evans", a word a line): an ellipsis only when it truly cannot fit, the whole name in its tooltip;
+   the call and the badges beside it wrap under it first (the row wraps), since the row breaks on the name's whole
+   width. */
+.recall-rail .recall-name {
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .recall-call {
   color: var(--text-dim);
@@ -12126,6 +12197,25 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   flex-wrap: wrap;
   gap: 6px;
   max-width: 42%;
+}
+/* In the rail the badges stand in the name's row after the call (RecallPanel `rail`): beside it on a wide card,
+   wrapped under the name on a narrow one. */
+.recall-name-row > .recall-badges {
+  justify-content: flex-start;
+  max-width: none;
+  align-self: center;
+}
+.recall-rail .recall-badges:empty {
+  display: none;
+}
+/* The rail's ✕ over its ⤢: one narrow column at the head's right edge. */
+.recall-acts {
+  flex: none;
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
 }
 .recall-badge {
   font-size: var(--fs-micro);
