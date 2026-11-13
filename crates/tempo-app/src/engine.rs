@@ -5331,9 +5331,9 @@ pub struct Engine {
     /// while armed; the thread empties it via [`Engine::take_rtty_audio`]. Empty
     /// (zero cost) while disarmed.
     rtty_audio: Vec<f32>,
-    /// Unix-ms until which the RTTY and PSK receive taps discard what the radio hands back,
-    /// because it is our own transmission: pushed [`OWN_TX_RX_SETTLE_MS`] ahead on every feed
-    /// while anything of ours holds the transmitter ([`Engine::tx_owner`]) and on the first feed
+    /// Unix-ms until which the RTTY, PSK, APRS and SSTV receive taps discard what the radio hands
+    /// back, because it is our own transmission: pushed [`OWN_TX_RX_SETTLE_MS`] ahead on every
+    /// feed while anything of ours is on the air (`Engine::own_tx_on_air`) and on the first feed
     /// after, never more than one tail past the present feed. 0 = never keyed.
     /// RX bookkeeping only: nothing that keys, holds or unkeys reads it.
     own_tx_rx_quiet_until_ms: u64,
@@ -5534,6 +5534,12 @@ pub struct Engine {
     aprs_auto_armed: bool,
     /// Drain buffer for the APRS decode thread (same pattern as `rtty_audio`). Empty while disarmed.
     aprs_audio: Vec<f32>,
+    /// The radio loop has an APRS packet of ours on the air (stamped every tick from its own
+    /// one-shot deadline, `tx_until_ms`). READ-ONLY REPORT: the APRS frame is keyed, held and
+    /// unkeyed by the loop alone, and this is deliberately NOT part of [`Engine::tx_owner`] — no
+    /// gate, key or arbitration reads it. Only the receive taps' own-TX gate does
+    /// ([`Engine::feed_rx_audio`]), so a frame we send is never decoded as heard.
+    aprs_on_air: bool,
     /// Recently-decoded APRS packets, newest last, capped at [`APRS_HEARD_CAP`]. Pushed by the
     /// decode thread; polled by the cockpit.
     aprs_heard: Vec<AprsHeard>,
@@ -5780,7 +5786,7 @@ const RTTY_AFSK_MARK_HZ: f64 = 2125.0;
 /// stalls, dropping oldest audio (garbling that decode) instead of growing RAM
 /// without bound.
 const RX_TAP_CAP: usize = 120_000;
-/// How long the RTTY and PSK receive taps stay shut after our own transmission ends (see
+/// How long the RTTY, PSK, APRS and SSTV receive taps stay shut after our own transmission ends (see
 /// [`Engine::feed_rx_audio`]). Many rigs hand their own transmit monitor back on the USB receive
 /// audio while keyed, so without this the decoder copies our over a second time, as received text,
 /// interleaved with the echo of what we sent, and feeds it to the RTTY auto-sequencer. The tail
@@ -6500,6 +6506,10 @@ pub struct SstvHealth {
     pub last_unknown_vis_code: Option<u8>,
     /// Unix seconds of the most recent unknown header.
     pub last_unknown_vis_unix: Option<i64>,
+    /// We are transmitting (anything of ours on the air, or within the receive tail after it,
+    /// [`OWN_TX_RX_SETTLE_MS`]): the decoder is deliberately handed nothing, so the view says
+    /// "transmitting" instead of judging the input. Read live, never stamped.
+    pub transmitting: bool,
     /// Images completed since arming.
     pub images: u64,
     /// Unix seconds of the most recent completed image.
@@ -8035,6 +8045,7 @@ impl Engine {
             aprs_auto_arm_declined: false,
             aprs_auto_armed: false,
             aprs_audio: Vec::new(),
+            aprs_on_air: false,
             aprs_heard: Vec::new(),
             aprs_health: AprsHealth::default(),
             aprs_tx_queue: VecDeque::new(),
@@ -26058,8 +26069,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // only — disarmed costs one branch, nothing else.
         //
         // ⛔ NOT WHILE WE TRANSMIT (fldigi's default: no decoding of our own transmission). What
-        // the rig returns then is our own signal, so the RTTY and PSK taps DISCARD it, and for
-        // [`OWN_TX_RX_SETTLE_MS`] after. Decoded, it printed as received text interleaved with
+        // the rig returns then is our own signal, so the RTTY and PSK taps (and APRS and SSTV,
+        // below) DISCARD it, and for [`OWN_TX_RX_SETTLE_MS`] after. Decoded, it printed as received text interleaved with
         // the echo of what we sent, and fed our own over to the RTTY auto-sequencer. Discarded,
         // not queued: the demodulator never sees our tones, so its AFC and squelch hold where the
         // far station left them.
@@ -26081,14 +26092,27 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // JTTY's tap keeps each reception's samples contiguous on its own timeline instead of
         // dropping the oldest (`jtty_rx`); disarmed it is one branch.
         self.jtty_feed(samples, now_ms as i64);
-        if self.aprs_arm.is_armed() {
+        // APRS and SSTV discard our own transmission the same way (an APRS packet of ours is the
+        // loop's own one-shot, reported by `set_aprs_on_air`). The input still ARRIVED, so their
+        // health keeps counting it as arriving: a discarded transmission is not a dead capture,
+        // and the view must not cry "nothing arriving" through our own picture.
+        if own_tx {
+            let at = (now_ms / 1000) as i64;
+            if self.aprs_arm.is_armed() {
+                self.aprs_health.last_audio_unix = Some(at);
+            }
+            if self.sstv_armed {
+                self.sstv_health.last_audio_unix = Some(at);
+            }
+        }
+        if self.aprs_arm.is_armed() && !own_tx {
             self.aprs_audio.extend_from_slice(samples);
             if self.aprs_audio.len() > RX_TAP_CAP {
                 let drop = self.aprs_audio.len() - RX_TAP_CAP;
                 self.aprs_audio.drain(0..drop);
             }
         }
-        if self.sstv_armed {
+        if self.sstv_armed && !own_tx {
             self.sstv_audio.extend_from_slice(samples);
             if self.sstv_audio.len() > RX_TAP_CAP {
                 let drop = self.sstv_audio.len() - RX_TAP_CAP;
@@ -26110,14 +26134,21 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
+    /// Anything of ours on the air: a transmit owner ([`Self::tx_owner`]), or an APRS packet the
+    /// radio loop reports ([`Self::set_aprs_on_air`] — informational, so NOT an owner).
+    fn own_tx_on_air(&self) -> bool {
+        self.tx_owner().is_some() || self.aprs_on_air
+    }
+
     /// Whether the receive audio arriving at `now_ms` is our own transmission: anything of ours
-    /// holds the transmitter ([`Self::tx_owner`] — an RTTY over by FSK or AFSK, queued or keyed,
-    /// the continuous-TX latch, and every other source), or held it within
+    /// is on the air ([`Self::own_tx_on_air`]: a transmit owner — an RTTY over by FSK or AFSK,
+    /// queued or keyed, the continuous-TX latch, an SSTV picture and every other source — or an
+    /// APRS packet the loop reports), or was within
     /// [`OWN_TX_RX_SETTLE_MS`] before the first feed that found it free. Reads the arbiter;
     /// decides nothing about transmitting.
     fn own_tx_in_rx_audio(&mut self, now_ms: u64) -> bool {
         let tail = now_ms.saturating_add(OWN_TX_RX_SETTLE_MS);
-        let owned = self.tx_owner().is_some();
+        let owned = self.own_tx_on_air();
         if owned || self.own_tx_owned_last_feed {
             // Owned, or the first feed after: the radio loop holds the engine lock across
             // blocking CAT, so one tick can stall past the tail while the over ends inside the
@@ -26126,7 +26157,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.own_tx_rx_quiet_until_ms = tail;
         } else {
             // A wall clock stepped back (clock repair, an OS time sync) never stretches the tail
-            // past one ordinary tail from now: a step must not leave RTTY and PSK deaf for it.
+            // past one ordinary tail from now: a step must not leave the receivers deaf for it.
             self.own_tx_rx_quiet_until_ms = self.own_tx_rx_quiet_until_ms.min(tail);
         }
         self.own_tx_owned_last_feed = owned;
@@ -26597,6 +26628,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Deliberately source-agnostic: BOTH kinds of arm decode. Only the ack cares which.
     pub fn aprs_armed(&self) -> bool {
         self.aprs_arm.is_armed()
+    }
+
+    /// The radio loop reports whether an APRS packet of ours is on the air (every tick). An
+    /// informational stamp for the receive taps only: see the `aprs_on_air` field.
+    pub fn set_aprs_on_air(&mut self, on: bool) {
+        self.aprs_on_air = on;
+    }
+
+    /// Whether the radio loop last reported an APRS packet of ours on the air.
+    pub fn aprs_on_air(&self) -> bool {
+        self.aprs_on_air
     }
 
     /// Drain the armed APRS audio tap (12 kHz mono since the last take). Called by the decode
@@ -29555,6 +29597,8 @@ contact yourself."
         SstvHealth {
             // Read live rather than stamped: the arm can change between drains.
             armed: self.sstv_armed,
+            // Live too: our own transmission, or the receive tail after it.
+            transmitting: self.own_tx_on_air() || now_unix_millis() < self.own_tx_rx_quiet_until_ms,
             ..self.sstv_health.clone()
         }
     }
@@ -41836,6 +41880,96 @@ mod tests {
         );
         e.feed_rx_audio_at(&[0.25; 240], T0 + 2_000 + OWN_TX_RX_SETTLE_MS);
         assert_eq!(e.take_rtty_audio().len(), 240, "the tap never reopened");
+    }
+
+    /// ⛔ OUR OWN SSTV PICTURE AND OUR OWN APRS PACKET NEVER REACH THEIR DECODERS, as RTTY and
+    /// PSK already do not: the rig hands its transmit monitor back on the receive audio, and the
+    /// SSTV receiver would save our picture as received, the APRS one list our packet as heard
+    /// and offer it to the iGate. An SSTV picture going out holds the transmitter; an APRS packet
+    /// is the loop's own one-shot, reported by `set_aprs_on_air`. Both, and the tail after,
+    /// discard. CONTROL: the same audio, unkeyed, fills both taps.
+    #[test]
+    fn the_sstv_and_aprs_taps_discard_our_own_transmission_and_its_tail() {
+        const T0: u64 = 1_800_000_000_000;
+        let audio = [0.25f32; 240];
+        type Keying = fn(&mut Engine, bool);
+        let keyings: [(&str, Keying); 3] = [
+            ("an SSTV picture on the air", |e, on| e.sstv_sending = on),
+            ("an APRS packet on the air", |e, on| e.set_aprs_on_air(on)),
+            ("an RTTY over on the air", |e, on| e.rtty_sending = on),
+        ];
+        for (what, key) in keyings {
+            let mut e = Engine::new("W9XYZ", "EN61", 0);
+            e.sstv_armed = true;
+            e.set_aprs_arm(AprsArm::Explicit);
+            e.feed_rx_audio_at(&audio, T0);
+            assert_eq!(
+                (e.take_sstv_audio().len(), e.take_aprs_audio().len()),
+                (240, 240),
+                "{what}: control, received audio fills both taps"
+            );
+            key(&mut e, true);
+            e.feed_rx_audio_at(&audio, T0 + 1_000);
+            assert!(
+                e.take_sstv_audio().is_empty() && e.take_aprs_audio().is_empty(),
+                "{what}: our own transmission was queued for the decoders"
+            );
+            let unkeyed = T0 + 1_020;
+            key(&mut e, false);
+            e.feed_rx_audio_at(&audio, unkeyed);
+            e.feed_rx_audio_at(&audio, unkeyed + OWN_TX_RX_SETTLE_MS - 1);
+            assert!(
+                e.take_sstv_audio().is_empty() && e.take_aprs_audio().is_empty(),
+                "{what}: the rig's tail after the unkey was queued for the decoders"
+            );
+            e.feed_rx_audio_at(&audio, unkeyed + OWN_TX_RX_SETTLE_MS);
+            assert_eq!(
+                (e.take_sstv_audio().len(), e.take_aprs_audio().len()),
+                (240, 240),
+                "{what}: the taps never reopened after the tail"
+            );
+        }
+    }
+
+    /// ⛔ THE APRS ON-AIR REPORT IS INFORMATIONAL: it owns nothing. A packet the loop reports on
+    /// the air is not a transmit owner, so it can refuse, hold or reorder no other keying, and
+    /// the engine's TX gates read exactly what they read before.
+    #[test]
+    fn the_aprs_on_air_report_owns_no_transmitter() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_aprs_on_air(true);
+        assert!(e.aprs_on_air());
+        assert_eq!(e.tx_owner(), None, "the report became a transmit owner");
+        assert_eq!(e.tx_owner_beside_voice(), None);
+    }
+
+    /// While we transmit the SSTV health says so, and the input still counts as arriving (it is,
+    /// and it is discarded), so the view never reads our own picture as a dead capture. After the
+    /// tail it is an ordinary receiver again.
+    #[test]
+    fn sstv_health_says_transmitting_during_our_own_picture_and_not_after() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.sstv_armed = true;
+        e.note_sstv_rx(240, 0.3, 0, None, 0, 1_000);
+        assert!(!e.sstv_health().transmitting, "control: receiving");
+        e.sstv_sending = true;
+        let now = now_unix_millis();
+        e.feed_rx_audio_at(&[0.25; 240], now);
+        let h = e.sstv_health();
+        assert!(h.transmitting, "our own picture is not 'transmitting'");
+        assert_eq!(
+            h.last_audio_unix,
+            Some((now / 1000) as i64),
+            "the discarded input stopped counting as arriving: a false capture fault"
+        );
+        e.sstv_sending = false;
+        e.feed_rx_audio_at(&[0.25; 240], now + 20);
+        e.feed_rx_audio_at(&[0.25; 240], now + 20 + OWN_TX_RX_SETTLE_MS);
+        e.own_tx_rx_quiet_until_ms = 0; // the tail is behind us on the wall clock too
+        assert!(
+            !e.sstv_health().transmitting,
+            "still 'transmitting' after the tail"
+        );
     }
 
     #[test]

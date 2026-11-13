@@ -9230,6 +9230,7 @@ export const DE: PartialCatalog = {
   "sstv.rx.off": "Der Empfänger ist gestoppt — es wird nichts dekodiert. Zum Starten auf „Starten“ klicken.{{where}}",
   "sstv.rx.nocapture": "Empfang läuft, aber beim Dekoder kommt überhaupt kein Audio an — das Aufnahmegerät liefert nichts. Prüfen, ob als Eingabegerät (RX) das Funkgerät eingestellt ist; das Signal im Lautsprecher zu hören heißt nicht, dass die Anwendung es aufnimmt.",
   "sstv.rx.starting": "Empfänger gestartet — beim Dekoder ist noch kein Audio angekommen.{{where}}",
+  "sstv.rx.transmitting": "Senden — der Empfänger ignoriert dein eigenes Bild und hört wieder zu, sobald du aufhörst.",
   "sstv.rx.unsupported": "Vor {{age}} wurde ein SSTV-Header in einer Betriebsart gehört, die dieser Build nicht dekodieren kann{{vis}}. Signal und Audioweg sind in Ordnung — Bilder in Scottie, Martin, Robot und PD werden alle dekodiert.",
   "sstv.rx.decoded": { "one": "{{count}} Bild seit dem Start dekodiert, das letzte vor {{age}}. Wartet auf den nächsten Header.", "other": "{{count}} Bilder seit dem Start dekodiert, das letzte vor {{age}}. Wartet auf den nächsten Header." },
   "sstv.rx.silent": "Es kommt Audio an, aber es ist still. Wenn das Signal im Lautsprecher hörbar ist, liegt die Anwendung auf einem anderen Eingang — Eingabegerät (RX) prüfen, und die RX-Verstärkung, falls der Pegel nur zu niedrig ist.{{where}}",

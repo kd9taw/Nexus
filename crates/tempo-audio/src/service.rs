@@ -4367,6 +4367,11 @@ struct RadioLoop {
     /// in the RX slots BETWEEN our transmissions get decoded while calling CQ.
     prev_slot_was_tx: bool,
     tx_until_ms: Option<f64>,
+    /// An APRS beacon this loop keyed is still on the air: set when it keys, and true only while
+    /// `tx_until_ms` (the one-shot deadline it rides) stands. ⛔ REPORT ONLY: stamped to the engine
+    /// each tick for the receive taps (`Engine::set_aprs_on_air`), and read by nothing that keys,
+    /// holds, extends or unkeys.
+    aprs_on_air: bool,
     /// Deadline (same clock as `tx_until_ms`) of the SLOT over this loop last keyed —
     /// the ONE over TX Off may not cut. Operator (2026-07-31): "TX Off should disable TX
     /// for the next cycle, but allow any ongoing TX to complete." Set beside `tx_until_ms`
@@ -5424,6 +5429,7 @@ impl RadioLoop {
             last_slot: None,
             prev_slot_was_tx: false,
             tx_until_ms: None,
+            aprs_on_air: false,
             slot_tx_until_ms: 0.0,
             key_refused_for_split: false,
             tick_now: 0.0,
@@ -14278,6 +14284,7 @@ impl RadioLoop {
                     backend.mark_unit_end();
                     let dur_ms = buf.len() as f64 / 12.0; // 12 kHz mono → milliseconds
                     self.tx_until_ms = Some(now + lead + dur_ms + crate::slot::TX_TAIL_MS);
+                    self.aprs_on_air = true; // a report for the receive taps, nothing more
                 }
                 if let KeyUp::Refused(why) = &key {
                     engine_lock(engine).aprs_key_refused(why);
@@ -16292,6 +16299,11 @@ impl RadioLoop {
         // the sole producer of spectrum rows, any CAT stall froze the waterfall. These mode
         // taps (CW/RTTY/APRS/SSTV/QSO) deliberately stay: the loop already holds this lock, so
         // they cost nothing here, and moving them would risk dropping audio under contention.
+        // The APRS on-air REPORT, stamped before the feed so this tick's audio is judged by it: a
+        // beacon is on the air while the one-shot deadline it keyed stands, and over once
+        // anything (its own expiry, Stop, TX Off, a halt) clears it. Read-only of `tx_until_ms`.
+        self.aprs_on_air &= self.tx_until_ms.is_some();
+        eng.set_aprs_on_air(self.aprs_on_air);
         eng.feed_rx_audio(&captured);
         // JTTY's PSK Reporter spots join the batch the flush below sends ([`jtty_psk_reports`]).
         station
@@ -37977,6 +37989,87 @@ mod tests {
             engine.lock().unwrap().aprs_tx_notice(),
             None,
             "…and the frame that keys clears the notice"
+        );
+    }
+
+    /// THE APRS ON-AIR REPORT, on the real loop: true from the tick the beacon keys until its
+    /// one-shot deadline runs out, false again after, and false at once when TX Off cuts it. It
+    /// only reports: the keying is exactly what it was (the rig keys, then unkeys on the same
+    /// deadline), and the engine's receive taps are what read it.
+    #[test]
+    fn the_loop_reports_an_aprs_packet_on_the_air_and_nothing_else() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("general");
+            e.set_operating_mode("phone", false);
+            e.aprs_tune(144.390).unwrap();
+        }
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 200.0);
+        assert!(!engine.lock().unwrap().aprs_on_air(), "control: idle");
+        engine
+            .lock()
+            .unwrap()
+            .aprs_beacon(41.88, -87.63, '/', '>', "one", &[])
+            .unwrap();
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 220.0);
+        assert!(rig.keyed, "control: the beacon keys");
+        assert!(
+            engine.lock().unwrap().aprs_on_air(),
+            "the beacon on the air was not reported"
+        );
+        assert_eq!(
+            engine.lock().unwrap().tx_owner(),
+            None,
+            "the report owns nothing"
+        );
+        step_to(
+            &engine,
+            &mut state,
+            &mut backend,
+            &mut rig,
+            &mut t,
+            10_000.0,
+        );
+        assert!(!rig.keyed, "control: the beacon unkeys on its deadline");
+        assert!(
+            !engine.lock().unwrap().aprs_on_air(),
+            "still reported on the air after it unkeyed"
+        );
+
+        // TX Off cuts a beacon on the air: the report drops with it.
+        engine
+            .lock()
+            .unwrap()
+            .aprs_beacon(41.88, -87.63, '/', '>', "two", &[])
+            .unwrap();
+        step_to(
+            &engine,
+            &mut state,
+            &mut backend,
+            &mut rig,
+            &mut t,
+            10_020.0,
+        );
+        assert!(
+            engine.lock().unwrap().aprs_on_air(),
+            "control: the second keys"
+        );
+        engine.lock().unwrap().set_tx_enabled(false);
+        step_to(
+            &engine,
+            &mut state,
+            &mut backend,
+            &mut rig,
+            &mut t,
+            10_120.0,
+        );
+        assert!(!rig.keyed, "control: TX Off cut it");
+        assert!(
+            !engine.lock().unwrap().aprs_on_air(),
+            "a cut beacon still reported on the air"
         );
     }
 

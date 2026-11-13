@@ -6768,6 +6768,7 @@ export const ZH: PartialCatalog = {
   "sstv.rx.off": "接收机已停止 — 未在解码。按“启用”启动。{{where}}",
   "sstv.rx.nocapture": "正在监听，但完全没有音频到达解码器 — 采集设备没有送出任何数据。请确认输入设备（接收）是电台；在扬声器上听到信号并不代表应用正在采集它。",
   "sstv.rx.starting": "接收机已启动 — 尚无音频到达解码器。{{where}}",
+  "sstv.rx.transmitting": "正在发射 — 接收机忽略您自己的图像，停止发射后恢复接收。",
   "sstv.rx.unsupported": "{{age}} 前听到一个 SSTV 报头，其模式本版本无法解码{{vis}}。信号和音频链路都正常 — Scottie、Martin、Robot 和 PD 图像均可解码。",
   "sstv.rx.decoded": "启用以来已解码 {{count}} 幅图像，最近一幅在 {{age}} 前。正在等待下一个报头。",
   "sstv.rx.silent": "音频已到达，但内容是静音。如果你能在扬声器上听到信号，说明应用选错了输入 — 请检查输入设备（接收），若电平只是偏低则检查接收增益。{{where}}",
