@@ -465,6 +465,10 @@ export function RecallPanel(props: Props) {
               {nm || cu}
             </span>
             {nm && <span className="recall-call mono">{cu}</span>}
+            {/* In the rail the badges join the name's row, after the call: beside the whole head they took up
+                to 42% of a ~260 px card and squeezed the name to a word a line. The row wraps, so on a wide
+                card they sit beside the call and add no height; on a narrow one they wrap under the name. */}
+            {rail && badges}
           </div>
           <div className="recall-where">
             {/* Names the button the operator actually sees: the log strip's callbook button is
@@ -489,9 +493,6 @@ export function RecallPanel(props: Props) {
               {t('recall.calling.label', { call: calling.trim().toUpperCase() })}
             </button>
           )}
-          {/* In the rail the badges stand under the name and place, in the text column: beside the
-              name they took up to 42% of a ~260 px card and squeezed the name to a word a line. */}
-          {rail && badges}
         </div>
         {!rail && badges}
         {/* Last in the identity row, after the badges — the card's head IS its pane head,

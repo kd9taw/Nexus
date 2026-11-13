@@ -20,6 +20,9 @@
 //     card and a station with no history (K9NEW, the ordinary first contact) shows its card with no scrollbar at
 //     all. Where the ceiling or the rail's sharing is shorter than the identity, that is printed as a NOTE: the share
 //     is the operator's ruling of 2026-09-15, and the ⤢ is the way to the whole card there.
+//   NO GROWTH (the layout review): wherever the name's line has room for the name, the call and the badges side by
+//     side, the badges add nothing to the identity row's height, as on main, where they stood beside it. Moved onto a line of their own they added 4-6 px on every wide
+//     rail, and the Stations list paid for it.
 //   THE ⤢, at the CORE screens: a real click opens the whole card in a floating box, drawn and topmost at its own
 //     centre; Stop TX and every transmit surface (features/txSurfaces TX_AVOID) stand exactly where they stood and
 //     are never under the box at nine points across each; the avatar's QRZ button in it still opens QRZ; Esc
@@ -124,6 +127,18 @@ const MEASURE = `(() => {
     const ok = !!t && (t === el || el.contains(t)); if (!ok) over[el.className.split(' ')[0]] = t ? String(t.className || t.tagName).split(' ')[0] + '@' + Math.round(q.top + q.height / 2) + '/' + innerHeight : 'off-window'; return ok }
   const callEl = card.querySelector('.recall-call')
   const rail = card.parentElement
+  // What the badges add to the identity row's height: the row as drawn, less the row with the badges taken out.
+  // Main stood them beside the identity, where they added nothing; read and undone in one task, nothing paints it.
+  const badgeGrowth = (() => { const b = card.querySelector('.recall-badges'); if (!b) return 0; const h1 = head.getBoundingClientRect().height
+    const d = b.style.display; b.style.display = 'none'; const h2 = head.getBoundingClientRect().height; b.style.display = d; return Math.round((h1 - h2) * 10) / 10 })()
+  // Whether the name's line has room for the name, the call and the badges side by side (layout px, zoom-free): the
+  // text column's width against their natural widths and the gaps between them. Only there may no growth be asked.
+  const badgeRoom = (() => { const b = card.querySelector('.recall-badges'), row = card.querySelector('.recall-name-row'), col = card.querySelector('.recall-id')
+    if (!b || !row || !b.children.length) return false
+    const gap = (el) => parseFloat(getComputedStyle(el).columnGap) || 0
+    const kids = [...b.children].map((k) => k.offsetWidth)
+    const want = nm.scrollWidth + (callEl ? callEl.offsetWidth + gap(row) : 0) + gap(row) + kids.reduce((x, y) => x + y, 0) + gap(b) * (kids.length - 1)
+    return want <= col.clientWidth - 1 })()
   // The card's ceiling as the cascade resolves it here (its max-height holds a share of the rail, so the computed
   // value is not px): the height it takes with content far taller than any ceiling and nothing shrinking it.
   // Read and undone in one task, so nothing paints it.
@@ -131,7 +146,7 @@ const MEASURE = `(() => {
     card.style.flexShrink = '0'; card.appendChild(sp); const h = card.getBoundingClientRect().height; sp.remove(); card.style.flexShrink = fs; return Math.round(h) })()
   return { vp: document.documentElement.getAttribute('data-viewport'), zoom: getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom').trim() || '1',
     w: Math.round(r.width), h: Math.round(r.height), name: nm.textContent, lines, cut: nm.scrollWidth > nm.clientWidth + 1,
-    avatar: seen(av), nameSeen: seen(nm), over, callSeen: callEl ? seen(callEl) : null, head: inside(head), headH: Math.round(head.getBoundingClientRect().height),
+    avatar: seen(av), nameSeen: seen(nm), over, callSeen: callEl ? seen(callEl) : null, head: inside(head), headH: Math.round(head.getBoundingClientRect().height), badgeGrowth, badgeRoom,
     scrolls: card.scrollHeight > card.clientHeight + 1, rail: Math.round(rail.clientHeight), expand: !!card.querySelector('.recall-expand'),
     // The card's ceiling (above), its padding and border above and below the identity, and what the rail's other
     // panes got.
@@ -233,6 +248,11 @@ const isCore = (s) => CORE.some((c) => c.name === s.name) || s.name === LAPTOP.n
 function judge(tag, m, ordinary, red = redAt) {
   if (m.lines !== 1) red(`${tag}: the name "${m.name}" breaks over ${m.lines} lines on a ${m.w} px card`)
   if (m.cut && m.w >= NAME_ROOM) red(`${tag}: the name "${m.name}" is cut short on a ${m.w} px card (room for it from ${NAME_ROOM} px)`)
+  // NO GROWTH ON A WIDE CARD (the layout review, 2026-11-13): main's card on a wide rail was its avatar's height or
+  // its text's, the badges beside it adding nothing, and the rail's other panes had the rest. Wherever the name's line
+  // has room for the name, the call and the badges side by side, the badges must add nothing to the identity row
+  // either, or the card grows and Stations pays for it.
+  if (m.badgeRoom && m.badgeGrowth > 0.5) red(`${tag}: the badges add ${m.badgeGrowth} px to the identity row of a ${m.w} px card with room for them beside the call (main: none)`)
   // Name, call and avatar: ASSERTED wherever the rail is RAIL_ROOM px or more (every such size, never a note).
   if (m.rail >= RAIL_ROOM) {
     if (!m.avatar) red(`${tag}: the avatar is not wholly inside the ${m.w}×${m.h} card, or not on top there (rail ${m.rail} px)`)
@@ -306,7 +326,7 @@ for (const scale of SCALES) for (const layout of LAYOUTS) {
       judge(tag, m, false)
       const n = await showCall(p, 'K9NEW', 'Dale R Hughes')
       if (n) judge(`${tag} first contact`, n, true)
-      console.log(`${tag} [${m.vp} ×${m.zoom}]: card ${m.w}×${m.h}, name ${m.lines} line${m.cut ? ' (cut)' : ''}, identity ${m.headH} px, avatar ${m.avatar ? 'whole' : 'CUT'}, rail ${m.rail} (other panes ${m.feeds.join('+')})${m.scrolls ? ', scrolls' : ''}; first contact ${n ? `${n.w}×${n.h}${n.scrolls ? ' SCROLLS' : ''}` : 'none'}`)
+      console.log(`${tag} [${m.vp} ×${m.zoom}]: card ${m.w}×${m.h}, name ${m.lines} line${m.cut ? ' (cut)' : ''}, identity ${m.headH} px (badges +${m.badgeGrowth}${m.badgeRoom ? ', room beside the call' : ''}), avatar ${m.avatar ? 'whole' : 'CUT'}, rail ${m.rail} (other panes ${m.feeds.join('+')})${m.scrolls ? ', scrolls' : ''}; first contact ${n ? `${n.w}×${n.h}${n.scrolls ? ' SCROLLS' : ''}` : 'none'}`)
       if (isCore(s)) {
         await showCall(p, 'N9BNE', 'Barry N Evans')
         await expandChecks(p, tag)

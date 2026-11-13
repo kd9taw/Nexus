@@ -12194,11 +12194,12 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   gap: 6px;
   max-width: 42%;
 }
-/* In the rail the badges stand in the text column, under the name and place (RecallPanel `rail`). */
-.recall-id > .recall-badges {
+/* In the rail the badges stand in the name's row after the call (RecallPanel `rail`): beside it on a wide card,
+   wrapped under the name on a narrow one. */
+.recall-name-row > .recall-badges {
   justify-content: flex-start;
   max-width: none;
-  margin-top: 3px;
+  align-self: center;
 }
 .recall-badges:empty {
   display: none;
