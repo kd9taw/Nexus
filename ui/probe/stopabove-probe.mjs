@@ -347,6 +347,12 @@ async function measureIota(form, size, zoom, control, extra = '') {
       if (now && !now.waiting && last && !last.waiting && JSON.stringify(now) === JSON.stringify(last)) break
       last = now
     }
+    // What the source line should read in the language on the page: the catalog's own text for it, not the English,
+    // so the check is the same check in every language (STOPABOVE_LOCALE). Read from the page's own i18n module.
+    if (last) {
+      const w = await call('Runtime.evaluate', { expression: "import('/src/i18n/index.ts').then((m) => m.t('iota.offer.fromSpot'))", awaitPromise: true, returnByValue: true })
+      last.sourceWant = w.exceptionDetails ? null : w.result.value
+    }
     return last
   } finally {
     await browser.call('Target.closeTarget', { targetId })
@@ -414,7 +420,7 @@ try {
       if (!m.nameWhole) red.push(`the group name is not drawn whole inside its form ${JSON.stringify(m.name)} vs ${JSON.stringify(m.form)}`)
       if (m.covers.length) red.push(`the group name covers ${m.covers.join(', ')}`)
       if (!m.inputTop) red.push('the IOTA box is covered')
-      if (m.source !== 'from the spot') red.push(`the source reads ${JSON.stringify(m.source)}`)
+      if (!m.sourceWant || m.source !== m.sourceWant) red.push(`the source reads ${JSON.stringify(m.source)}, not ${JSON.stringify(m.sourceWant)}`)
       if (!m.logInWindow) red.push('Log is outside the window')
       if (!m.logTop) red.push('Log is covered')
       red.push(...islandReds(m, await measureIota(form, size, zoom, false, '&islands=0'), at))
