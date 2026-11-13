@@ -228,6 +228,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("get_freq_markers",               RunsAtShack, "The shack's band map markers for this contest; changes nothing."),
     ("get_getting_out",                RunsAtShack, "Who is hearing the shack."),
     ("get_iota_groups",                RunsAtShack, "The shack's IOTA island-group list, for names beside a reference."),
+    ("get_iota_islands",               RunsAtShack, "A group's islands from the shack's IOTA islands list, for the island picker."),
     ("get_iota_list_status",           RunsAtShack, "Whether the shack holds the IOTA island-group list."),
     ("get_iota_offer",                 RunsAtShack, "The IOTA reference the shack's spots or callbook offer a contact being logged."),
     ("get_iss_pass",                   RunsAtShack, "From the shack's location."),

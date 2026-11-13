@@ -98,7 +98,7 @@ root.render(
   paneBox ? (
     <div className="app" style={appStyle}>
       <div data-probe="pane" style={{ position: 'absolute', top: 8, left: 8, width: paneBox[0], height: paneBox[1], display: 'flex', flexDirection: 'column' }}>
-        <TxMetersPane radio={RADIO} />
+        <TxMetersPane radio={RADIO} weight={1} />
       </div>
     </div>
   ) : (

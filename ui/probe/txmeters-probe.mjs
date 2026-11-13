@@ -199,7 +199,7 @@ const PANE_MEASURE = `(() => {
   body.scrollTop = body.scrollHeight
   const last = document.querySelectorAll('.txmeters-pane-meter')[2].getBoundingClientRect()
   const box = body.getBoundingClientRect()
-  return { overlap: Math.round(overlap), scrolls: body.scrollHeight > body.clientHeight + 1, lastInView: last.bottom <= box.bottom + 1, sideways: body.scrollWidth > body.clientWidth + 1, floorPx: 7 * parseFloat(getComputedStyle(face).fontSize), minFaceH: Math.round(Math.min(...faces.map((r) => r.height))), cols: document.querySelector('.txmeters-pane').style.getPropertyValue('--txmeters-pane-cols') }
+  return { overlap: Math.round(overlap), scrolls: body.scrollHeight > body.clientHeight + 1, lastInView: last.bottom <= box.bottom + 1, sideways: body.scrollWidth > body.clientWidth + 1, floorPx: parseFloat(getComputedStyle(document.querySelector('.txmeters-pane')).gridAutoRows.split('(')[1]), minFaceH: Math.round(Math.min(...faces.map((r) => r.height))), cols: document.querySelector('.txmeters-pane').style.getPropertyValue('--txmeters-pane-cols') }
 })()`
 
 async function measurePane(box, css) {
@@ -237,10 +237,11 @@ async function checkPane() {
     if (m.sideways) red.push(`in ${box} the pane scrolls sideways`)
     if (m.minFaceH < m.floorPx - 1) red.push(`in ${box} a face is ${m.minFaceH} px high, under its floor of ${m.floorPx}`)
   }
-  const forced = await measurePane('280x180', TWO)
-  console.log(`txmeters-probe: the pane in 280x180 with two rows forced: ${JSON.stringify(forced)}`)
+  // Short enough that two rows of the faces' floor (4.3em) cannot fit: it must scroll.
+  const forced = await measurePane('280x130', TWO)
+  console.log(`txmeters-probe: the pane in 280x130 with two rows forced: ${JSON.stringify(forced)}`)
   if (!forced || forced.overlap > 0 || !forced.scrolls || !forced.lastInView) red.push(`two rows forced in a short pane should scroll to the last face with no overlap: ${JSON.stringify(forced)}`)
-  const control = await measurePane('280x180', `${TWO} .txmeters-pane { grid-auto-rows: minmax(0, 1fr) !important } .txmeters-pane-meter { min-height: 7em }`)
+  const control = await measurePane('280x130', `${TWO} .txmeters-pane { grid-auto-rows: minmax(0, 1fr) !important } .txmeters-pane-meter { min-height: 4.3em }`)
   console.log(`txmeters-probe: CONTROL the pane with no track floor: ${JSON.stringify(control)}`)
   if (!(control?.overlap > 0)) red.push('CONTROL FAILED: the planted overlap was not seen; the check cannot fail')
   return red

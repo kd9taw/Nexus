@@ -27,7 +27,7 @@ import { qrzLookup } from '../api'
 import type { LoggedQso } from '../types'
 import { Dialog } from './ui/Dialog'
 import { QsoHistory } from './QsoHistory'
-import { IotaReferenceNote } from './Iota'
+import { IotaIslandPick, IotaReferenceNote } from './Iota'
 import { CardAwardStatus } from './AwardStatus'
 import { CallbookPhoto, qrzPageOf } from './CallCard'
 import { confirmDialog } from '../confirm'
@@ -54,6 +54,7 @@ import { ContactPath } from './prop/ContactPath'
 import {
   PROGRAMS,
   cardDirty,
+  cardIsland,
   cardSave,
   clearedByCallFix,
   draftOf,
@@ -61,6 +62,7 @@ import {
   multiLine,
   ownField,
   ownStationNotResent,
+  pickCardIsland,
   typedLines,
   type CallFixClear,
   type CardDraft,
@@ -462,6 +464,15 @@ function CardBody({
             {(draft.iota.trim() !== '' || filled) && (
               <div className="logbook-field logbook-field-wide iota-card-note">
                 <IotaReferenceNote reference={draft.iota.trim().toUpperCase()} />
+                <IotaIslandPick
+                  reference={draft.iota}
+                  value={cardIsland(fields)}
+                  onChange={(island) => {
+                    setErr(null)
+                    setFields((fs) => pickCardIsland(fs, island))
+                  }}
+                  disabled={!canSave}
+                />
                 {filled && (
                   <span className="iota-card-held">
                     <span className="settings-hint">{filledFromCallbook ? t('iota.card.fromCallbook') : t('iota.card.fromSpot')}</span>

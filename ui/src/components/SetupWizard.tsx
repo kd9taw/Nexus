@@ -875,6 +875,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
       }}
       title={t('setup.title')}
       hideTitle
+      className="setup-wizard"
       onCloseAutoFocus={returnFocus}
     >
       <div

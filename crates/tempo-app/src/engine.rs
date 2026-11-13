@@ -21354,6 +21354,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let Some(was) = self.pending_logs.front().cloned() else {
             return false;
         };
+        let island_pick = tempo_core::logbook::offer::iota_island_id(&rec);
         let mut held = was.record.clone();
         held.call = rec.call;
         held.grid = rec.grid;
@@ -21402,6 +21403,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if let Some(offer) = iota_offer {
             tempo_core::logbook::offer::accept_iota_offer(&mut held, offer);
         }
+        // The island the operator picked from the group's list in the popup, if any: never filled,
+        // so only a pick logs one, and only with the reference it belongs to.
+        tempo_core::logbook::offer::take_island_pick(&mut held, island_pick);
         self.replace_pending_log(None); // pops it, promoting whatever was waiting
         self.persist_pending_qso(); // journals what is left — this one is in the log now
         self.log_held_qso(held, was.gridless || dropped);
@@ -29840,8 +29844,18 @@ contact yourself."
         (*n != asked).then(|| (*ok, detail.clone()))
     }
 
-    /// Whether the latest Test CAT answer ([`Self::cat_reprobe_answer`]) is a launch Nexus
-    /// refused itself. Read under the same lock as the answer.
+    /// Answer the pending Test CAT without probing: the radio loop refused it, and `detail` says
+    /// why. Typed as refused, so the baud ladder never sweeps the port behind it. The CAT status is
+    /// left as it was, since a refusal says nothing about the link.
+    pub fn refuse_cat_reprobe(&mut self, detail: String) {
+        let n = self.cat_reprobe_answer.0.wrapping_add(1);
+        self.cat_reprobe_answer = (n, None, detail);
+        self.cat_reprobe_refused = true;
+    }
+
+    /// Whether the latest Test CAT answer ([`Self::cat_reprobe_answer`]) is one Nexus refused
+    /// itself: a launch it refused, or a press while the station was keyed
+    /// ([`Self::refuse_cat_reprobe`]). Read under the same lock as the answer.
     pub fn cat_reprobe_refused(&self) -> bool {
         self.cat_reprobe_refused
     }
@@ -31630,6 +31644,14 @@ contact yourself."
     pub fn trip_tx_watchdog_for_test(&mut self) {
         self.tx_watchdog = true;
         self.tx_enabled = false;
+    }
+
+    /// For tests outside this crate: the watchdog's wall clock as if it had started `secs` ago, so
+    /// the radio loop's tests reach the limit through the real check (`keyboard::watchdog_tripped`
+    /// at each keying point) without waiting out its minutes.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn age_tx_watchdog_for_test(&mut self, secs: u64) {
+        self.tx_watchdog_start = Some(now_unix_secs().saturating_sub(secs));
     }
 
     /// T/R slot length (seconds) for the active tier: DX1 = 15 s; the native
@@ -36584,7 +36606,7 @@ contact yourself."
         &mut self,
         spots: impl Fn(&str, &str, u64) -> tempo_core::logbook::offer::SpotIota + Send + Sync + 'static,
         known: impl Fn(&str) -> bool + Send + Sync + 'static,
-        name: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
+        name: impl Fn(&str, Option<u32>) -> Option<String> + Send + Sync + 'static,
     ) {
         self.station.set_iota_at_log(spots, known, name)
     }

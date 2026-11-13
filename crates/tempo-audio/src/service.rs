@@ -2861,18 +2861,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             // relying on Drop running before the process is killed (a half-sent
             // WinKeyer message would otherwise keep keying on the air).
             let _ = rig.stop_morse();
-            #[cfg(feature = "serial")]
-            if let Some((_, wk)) = state.winkeyer.as_mut() {
-                let _ = wk.clear();
-            }
-            // Cut any in-progress RTTY FSK keying the same way: abort the keying
-            // thread NOW (line parked at mark) rather than relying on Drop order.
-            // (The AFSK path is already covered — flush_output above dumps its
-            // queued audio and the ptt(false) unkeyed the carrier.)
-            #[cfg(feature = "serial")]
-            if let Some((_, _, k)) = state.rtty_keyer.as_ref() {
-                k.clear();
-            }
+            state.release_keyers_for_shutdown();
             // Give the RADIO its own audio routing back before we tell the app it may die. Nexus's
             // own Flex client puts the operator's DAX source back in its teardown (after the unkey
             // is proven), and it runs from the daemon's Drop. Dropping `state` happens after this
@@ -8377,6 +8366,30 @@ impl RadioLoop {
         self.let_go_of_rig_split(rig, cluster_active);
     }
 
+    /// App shutdown: let go of the hardware keyers before the app is told it may exit.
+    ///
+    /// ⛔ THE KEYLINES ARE JOINED, NOT JUST STOPPED. The serial CW keyline and the RTTY FSK
+    /// line are driven by keying threads, and a stop (`clear()`) is only taken by the thread
+    /// within about 8 ms, asynchronously. `SHUTDOWN_DONE` lets the process exit at once, and
+    /// `self` drops only after the loop returns, so leaving the keyers to `Drop` raced process
+    /// exit: a CW element in flight could keep DTR/RTS asserted until the OS closed the port
+    /// (driver-dependent), and on a break-in rig that line is the transmitter. Dropping a keyer
+    /// here stops it, closes its channel and JOINS its thread, which keys up (mark, for FSK)
+    /// before it exits, so the line is released before this returns.
+    /// (The AFSK path is already covered — `flush_output` dumps its queued audio and the
+    /// `ptt(false)` unkeyed the carrier.)
+    fn release_keyers_for_shutdown(&mut self) {
+        #[cfg(feature = "serial")]
+        if let Some((_, wk)) = self.winkeyer.as_mut() {
+            let _ = wk.clear();
+        }
+        #[cfg(feature = "serial")]
+        {
+            self.serial_keyer = None;
+            self.rtty_keyer = None;
+        }
+    }
+
     /// Unkey before the loop lets go of `rig`: flush the queued audio, key up through the
     /// STILL-ALIVE old rig and daemon, clear this loop's TX state, then halt TX for a CONTEXT
     /// change. Order matters: dropping the daemon or swapping the rig first would send the
@@ -9455,11 +9468,24 @@ impl RadioLoop {
                     || cat_hold
                     || self.cat_hold_active
                     || want.rig_differs(&self.applied);
+                // ⛔ AND NEVER WHILE THIS LOOP HOLDS A KEY OF ITS OWN: the probe is blocking CAT and
+                // runs here, ahead of this tick's deadline unkey and hard stop, so on a link that
+                // stopped answering it held an over's PTT up for its whole run (1.03 s measured,
+                // radio-loop map finding 1, 2026-11-12). `tx_until_ms` covers an unkey due THIS
+                // tick. Refused at once, typed, rather than left pending: an over can outlast Test
+                // CAT's wait. The radio's own report (`operator_keyed`) is left out on purpose: a
+                // dead link can leave it stale, and Test CAT is the button for a dead link.
+                let keyed = self.holds_tx() || self.tuning_keyed || now < self.cw_keying_until;
                 (
                     want,
                     eng.settings().dial_hz(),
                     eng.rig_mode_effective(), // operator Phone mode override, else band-derived policy
                     if rebuild_tick {
+                        false
+                    } else if keyed {
+                        if eng.take_cat_reprobe() {
+                            eng.refuse_cat_reprobe(TEST_CAT_WHILE_KEYED.to_string());
+                        }
                         false
                     } else {
                         eng.take_cat_reprobe()
@@ -21186,6 +21212,10 @@ fn probe_serial(port: &str, line: SerialLine) -> RigOpen {
     (rig, None, CatProbe::status(ok, detail))
 }
 
+/// Test CAT's answer while the loop holds any key: its probe is blocking CAT, and it must never hold
+/// up an unkey (the radio-loop map's finding 1, 2026-11-12).
+pub(crate) const TEST_CAT_WHILE_KEYED: &str = "Test CAT runs when you're not transmitting.";
+
 /// Re-probe the *current* rig (the Test-CAT button) without rebuilding it, so it
 /// doesn't fight the running rigctld for the serial port.
 fn reprobe(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) {
@@ -21288,12 +21318,14 @@ mod tests {
     mod po_derived;
     mod psk63_keying;
     mod ptt_lines;
+    mod radio_loop_pins;
     mod readback_coverage;
     mod receive_source;
     mod refused_key;
     mod remote_radio;
     mod rf_pane;
     mod sdrconnect_scope;
+    mod shutdown_keyers;
     mod split_overs;
     mod tci;
     mod tci_cw;
@@ -21302,6 +21334,7 @@ mod tests {
     mod tci_soundcard_cw;
     mod tci_spots;
     mod test_cat_refused;
+    mod test_cat_while_keyed;
     mod tx_extras;
     mod tx_unit_ends;
     mod udp_decode_time;
