@@ -358,9 +358,16 @@ test('TURN credentials go to an approved, entitled computer alone, as a browser\
     // The page (its Origin and its token), or the computer without its key's signature, gets nothing.
     assert.equal((await pair.browser.post(path, {}, 403)).value.error, 'originDenied')
     assert.equal((await c.native.post(path, {}, 400, { 'x-nexus-device-id': c.deviceId })).value.error, 'invalidRequest')
+    // The account's six an hour are the computer's and its browsers' together: five more
+    // here, one from the page, and the computer's next is refused before the provider is asked.
+    for (let ask = 0; ask < 4; ask++) await signed(c, path)
+    await relayed.approved(pair)
+    await pair.browser.post(`stations/${pair.stationId}/turn`)
+    assert.equal((await signed(c, path, {}, 429)).value.error, 'tryLater')
+    assert.equal(asked.length, 6)
     await relayed.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?').bind(Date.now() - 1000, pair.browser.accountId).run()
     assert.equal((await signed(c, path, {}, 403)).value.error, 'trialRequired')
-    assert.equal(asked.length, 1)
+    assert.equal(asked.length, 6)
   } finally { app = saved; await relayed.mf.dispose() }
 })
 

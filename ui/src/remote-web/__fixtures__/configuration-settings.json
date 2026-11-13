@@ -323,6 +323,7 @@
     "rttyReverse": false,
     "rttyAfskSideband": "lsb",
     "rttyRxAutoArm": true,
+    "rttyOverNewlines": true,
     "rttyShiftHz": 170,
     "rxGain": 1.0,
     "rxOffsetHz": 1500.0,

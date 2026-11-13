@@ -419,7 +419,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       // The rest are what the cadence is called out loud — the reporter wrote "cq, 15s rx,
       // cq", not "listen window".
       'timer', 'auto call', 'auto cq', 'cq repeat', 'repeat cq', 'listen', 'unattended',
-      'calling interval', 'give up', 'sequencer'],
+      'calling interval', 'give up', 'sequencer',
+      // Every over on its own line (`rttyOverNewlines`): what loggers and fldigi call it.
+      'new line', 'newline', 'line feed', 'crlf', 'cr lf', 'carriage return'],
   },
   {
     id: 'psk',

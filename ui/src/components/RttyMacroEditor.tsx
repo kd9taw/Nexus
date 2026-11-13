@@ -38,6 +38,7 @@ const TOKEN_HINTS: { token: (typeof RTTY_TOKENS)[number]; hintKey: MessageKey }[
   { token: '{CALL}', hintKey: 'rtty.macroEditor.token.call' },
   { token: '{RST}', hintKey: 'rtty.macroEditor.token.rst' },
   { token: '{EXCH}', hintKey: 'rtty.macroEditor.token.exch' },
+  { token: '{NL}', hintKey: 'rtty.macroEditor.token.nl' },
 ]
 
 /** A slot with neither caption nor message: clicking it opens the editor instead of sending. */

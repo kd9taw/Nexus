@@ -3158,6 +3158,8 @@ async fn the_trial_identity_refusals_are_named_at_the_shack() {
         ("403 Forbidden", "trialUsedByCallsign"),
         ("403 Forbidden", "trialUsedOnThisPc"),
         ("403 Forbidden", "updateRequired"),
+        // The mail domain has started its month's trials: also the shack's to hear by name.
+        ("403 Forbidden", "trialDomainLimit"),
     ] {
         let body: &'static str = Box::leak(format!(r#"{{"error":"{code}"}}"#).into_boxed_str());
         let origin = refusing_cloud(status, body).await;

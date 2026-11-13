@@ -156,8 +156,9 @@ const TX_PLATE = 'TX ▲'
 /** The TX line's plate before anything has gone out this session — the direction token
  *  without the on-air arrow. */
 const TX_IDLE = 'TX'
-/** How the TX line draws an on-air line break: RTTY's CR LF take air time (an F-key message
- *  opens with them), so a one-line field has to show where they are. LF is drawn as this
+/** How the TX line draws an on-air line break: RTTY's CR LF take air time (every over opens
+ *  and closes with them unless Settings ▸ RTTY says otherwise), so a one-line field has to show
+ *  where they are. The transcript above is pre-wrap and shows them as the line break they are. LF is drawn as this
  *  glyph and the CR that travels with it as nothing. */
 const LINE_BREAK = '↵'
 const CQ = 'CQ'
@@ -590,7 +591,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // {EXCH}, the running contest's exchange — none yet, so a message using it is refused exactly
   // like a {CALL} with no call. A token it does not know is refused too: RTTY cannot send
   // braces, so it would otherwise go out as a bare word. `macro` frames an F-key message for the
-  // air (a line of its own, ending in a space); what is typed in the compose bar goes as typed.
+  // air (ending in a space); what is typed in the compose bar goes as typed. {NL} is CR LF, and
+  // the new line at each end of an over is the engine's (Settings ▸ RTTY, `rttyOverNewlines`).
   //
   // `prepare` is its expansion and its checks, and Enter Sends Message sends through them too:
   // what an F-key would send, refused where the F-key would be, for the call `call`.

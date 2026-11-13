@@ -2390,6 +2390,81 @@ test('a LAN-only session gets no observation, no export and no state beyond its 
   internet.browser.close(); internet.station.close()
 })
 
+// THE LEASE STAYS ON THE LAN TOO (security review 2026-11-12, follow-up 1). The stream is offered under a
+// lease, so a LAN-only session takes one through the relay before its stream can prove where it is. The
+// relay gives it that lease for a short grace only; once the station says its LAN stream is live, the
+// session keeps the lease for as long as it lasts. A device whose graces keep ending without a live
+// stream (three in ten minutes) is held off taking the lease through the relay, so an approved device
+// off the LAN cannot keep the station occupied. Stop is never held back.
+test('a LAN-only session holds the lease only on the LAN: a few graces off it, then none; a live LAN stream keeps it', async () => {
+  const pair = await app.paired(), deviceId = await app.approved(pair)
+  await endTrial(pair)
+  const station = await pair.native.open(pair.stationId, undefined, 101, { 'x-nexus-application-version': '1', ...LAN_HEADERS })
+  await station.take(value => value.type === 'watch' && value.enabled === false)
+  const lan = async () => {
+    const { value: ticket } = await pair.browser.post(`stations/${pair.stationId}/ticket`, { scope: 'lan' })
+    const browser = await pair.browser.open(pair.stationId, ticket.ticket)
+    return { browser, sessionId: (await browser.take(type('session'))).sessionId }
+  }
+  const boot = crypto.randomUUID(), leaseId = crypto.randomUUID()
+  /** Whether `request` reached the station; the station answers it as a station would. */
+  const reaches = async (live, request) => {
+    live.browser.send({ type: 'operationRequest', operationVersion: 4, request })
+    try {
+      const asked = await station.take(value => value.type === 'operationRequest' && value.request.requestId === request.requestId, 700)
+      station.send({ type: 'operationResponse', sessionId: asked.sessionId, requestId: request.requestId, value: request.type === 'stopTransmit'
+        ? { stop: 'accepted' } : { stationBootId: boot, allowed: true, phase: 'controlling', leaseId, revision: 2, commandWindowId: crypto.randomUUID(),
+          nextSequence: 2, leaseRemainingMs: 5000, actions: [], txArmed: false } })
+      await live.browser.take(value => value.type === 'operationResponse' && value.requestId === request.requestId)
+      return true
+    } catch {
+      assert.deepEqual(await live.browser.take(value => value.type === 'operationResponse' && value.requestId === request.requestId),
+        { type: 'operationResponse', requestId: request.requestId, error: 'stationUnavailable' })
+      return false
+    }
+  }
+  const acquire = () => ({ type: 'acquire', requestId: crypto.randomUUID(), stationBootId: boot })
+  const heartbeat = () => ({ type: 'heartbeat', requestId: crypto.randomUUID(), leaseId })
+  const stopTx = () => ({ type: 'stopTransmit', requestId: crypto.randomUUID(), stationBootId: boot, leaseId, transmitEpoch: '000000000000002a' })
+  try {
+    // A session that proves itself: its acquire takes a grace, its LAN stream goes live, and from then on
+    // its lease is kept through the relay, across a hibernation too. That grace is given back.
+    const proven = await lan()
+    assert.equal(await reaches(proven, acquire()), true)
+    proven.browser.send(pageSignal('offer', leaseId))
+    await station.take(typed('streamSignal'))
+    station.send(stationMessage('streaming', proven.sessionId))
+    assert.equal((await proven.browser.take(typed('streamState'))).streaming, true)
+    await app.evict(pair.stationId)
+    assert.equal(await reaches(proven, heartbeat()), true, 'a live LAN stream keeps its lease, also in a woken room')
+    proven.browser.close()
+    // Three sessions that never stream (a page off the LAN): each takes the lease for its grace.
+    for (let i = 0; i < 3; i++) {
+      const away = await lan()
+      assert.equal(await reaches(away, acquire()), true, `grace ${i + 1}`)
+      assert.equal(await reaches(away, heartbeat()), true, `grace ${i + 1}: kept while it lasts`)
+      away.browser.close()
+    }
+    // The fourth is not given the lease, through a hibernation as well, and Stop still reaches the station.
+    const held = await lan()
+    assert.equal(await reaches(held, acquire()), false, 'no fourth grace in ten minutes')
+    assert.equal(await reaches(held, heartbeat()), false)
+    await app.evict(pair.stationId)
+    assert.equal(await reaches(held, acquire()), false, 'nor in a woken room')
+    assert.equal(await reaches(held, stopTx()), true, 'Stop always goes')
+    assert.equal(await reaches(held, { type: 'state', requestId: crypto.randomUUID() }), true, 'the lease\'s read always goes')
+    held.browser.close()
+    // THE CONTROL: an internet session of the same device takes the lease as ever.
+    await app.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?').bind(Date.now() + 3600000, pair.browser.accountId).run()
+    const { value: ticket } = await pair.browser.post(`stations/${pair.stationId}/ticket`)
+    const internet = await pair.browser.open(pair.stationId, ticket.ticket)
+    await internet.take(type('session'))
+    assert.equal(await reaches({ browser: internet }, acquire()), true)
+    internet.close()
+  } finally { station.close() }
+  assert.ok(deviceId)
+})
+
 test('a LAN-only session to a station that cannot hold it to the LAN is refused by name, and survives a hibernation', async () => {
   const pair = await app.paired(), deviceId = await app.approved(pair)
   await endTrial(pair)
@@ -2469,22 +2544,24 @@ test('the relay route mints TURN credentials for an approved, entitled browser, 
     assert.equal(asked.length, 0)
     await relayed.approved(pair)
     const entitled = until => relayed.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?').bind(until, pair.browser.accountId).run()
-    // A month of entitlement left: the credential lasts the longest session, a day (a stream is a lane
-    // of one station connection, admitted for a day).
+    // A month of entitlement left: the credential lasts an hour, never longer (a relay
+    // credential is a short-lived thing a stream asks for, not a day's general-purpose relay).
     await entitled(Date.now() + 30 * 86400000)
     const answer = relayAnswer(), [, turn] = answer.iceServers
     provider = async () => Response.json(answer)
     const { value, response } = await pair.browser.post(path)
     assert.deepEqual(asked, [{ url: `https://rtc.live.cloudflare.com/v1/turn/keys/${keyId}/credentials/generate-ice-servers`,
-      method: 'POST', authorization: `Bearer ${token}`, type: 'application/json', body: { ttl: 86400 } }])
+      method: 'POST', authorization: `Bearer ${token}`, type: 'application/json', body: { ttl: 3600 } }])
     assert.deepEqual(value, { iceServers: [{ urls: turn.urls.filter(url => !url.includes(':53?')), username: turn.username, credential: turn.credential }] },
       'the TURN entry alone: STUN is the page\'s own, and the DNS port is left out')
     assert.equal(response.headers.get('cache-control'), 'no-store')
     assert.ok(!JSON.stringify(value).includes(token) && !JSON.stringify(value).includes(keyId), 'the key and its token never reach the page')
-    // An hour left: the credential ends with the entitlement, not a day later.
-    await entitled(Date.now() + 3600000)
+    // Ten minutes left: the credential ends with the entitlement, not an hour later.
+    await entitled(Date.now() + 600000)
     await pair.browser.post(path)
-    assert.ok(asked[1].body.ttl > 3500 && asked[1].body.ttl <= 3600, `ttl ${asked[1].body.ttl}`)
+    assert.ok(asked[1].body.ttl > 500 && asked[1].body.ttl <= 600, `ttl ${asked[1].body.ttl}`)
+    // The account's hourly allowance is a separate test's; the failures below are each a request too.
+    await relayed.db.prepare('DELETE FROM rate_limits').run()
     // The provider down, or answering something else: refused by name, and nothing of its answer passes through.
     for (const [what, answerWith] of [
       ['an error status, whatever its body says', async () => Response.json(answer, { status: 500 })],
@@ -2498,19 +2575,46 @@ test('the relay route mints TURN credentials for an approved, entitled browser, 
       assert.deepEqual((await pair.browser.post(path, {}, 503)).value, { error: 'relayUnavailable' }, what)
     }
     // A provider that never answers costs the request a bounded wait, never a page left hanging.
+    await relayed.db.prepare('DELETE FROM rate_limits').run()
     provider = () => new Promise(resolve => { release = () => resolve(Response.json(answer)) })
     const answered = pair.browser.post(path, {}, 503)
     const unanswered = delay(8000).then(() => { throw new Error('the route was still waiting on the provider after 8 s') })
     assert.deepEqual((await Promise.race([answered, unanswered])).value, { error: 'relayUnavailable' })
-    // A page asking in a loop is bounded per browser: twelve a minute, like tickets. Started at the
-    // top of a minute's window, so the window cannot roll over part way through the count.
-    provider = async () => Response.json(answer)
-    const looping = await relayed.paired()
-    await relayed.approved(looping)
-    if (60000 - Date.now() % 60000 < 15000) await delay(60000 - Date.now() % 60000)
-    for (let ask = 0; ask < 12; ask++) await looping.browser.post(`stations/${looping.stationId}/turn`)
-    assert.equal((await looping.browser.post(`stations/${looping.stationId}/turn`, {}, 429)).value.error, 'tryLater')
   } finally { release(); await relayed.mf.dispose() }
+})
+
+// RELAY COST. A relay credential is minted at most six times an hour
+// per ACCOUNT, whichever of its devices and stations asks, browser or computer: the account whose plan
+// the station runs on pays for the relay, so it is the account that is bounded. Each mint is counted in
+// a durable monthly record support can read (`relay_usage`, STAGING.md).
+test('relay credentials: six an hour per account across its devices, each counted in the account\'s month', async () => {
+  const relayed = await runtime({ bindings: { TURN_KEY_ID: hex(16), TURN_KEY_TOKEN: hex(32) },
+    relay: async () => Response.json(relayAnswer()) })
+  try {
+    const pair = await relayed.paired()
+    await relayed.approved(pair)
+    // A second browser of the same account at the same station: its own device, the same account.
+    const second = relayed.client(pair.browser.jwt)
+    const { value: added, response } = await second.post(`stations/${pair.stationId}/device`, { name: 'Second browser' })
+    second.setCookie(response.headers.get('set-cookie'))
+    await pair.native.post(`stations/${pair.stationId}/native/approve-device`, { deviceId: added.deviceId })
+    // Started at the top of an hour's window would take an hour; the bucket is fixed-window, so one
+    // that rolls over part way is rolled forward by hand instead: count from an empty one.
+    await relayed.db.prepare('DELETE FROM rate_limits').run()
+    const month = new Date().toISOString().slice(0, 7)
+    for (let ask = 0; ask < 6; ask++) await (ask % 2 ? second : pair.browser).post(`stations/${pair.stationId}/turn`)
+    assert.equal((await second.post(`stations/${pair.stationId}/turn`, {}, 429)).value.error, 'tryLater', 'the seventh, from either browser')
+    assert.equal((await pair.browser.post(`stations/${pair.stationId}/turn`, {}, 429)).value.error, 'tryLater')
+    const usage = await relayed.db.prepare('SELECT account_id, month, mints, granted_seconds FROM relay_usage').all()
+    assert.deepEqual(usage.results, [{ account_id: pair.browser.accountId, month, mints: 6, granted_seconds: 6 * 3600 }],
+      'six mints of an hour each, on the station account\'s month; the refused ones are not counted')
+    // Another account is bounded on its own.
+    const other = await relayed.paired()
+    await relayed.approved(other)
+    await other.browser.post(`stations/${other.stationId}/turn`)
+    // The account's copy carries its months.
+    assert.deepEqual((await pair.browser.post('account/export')).value.relayUsage, [{ month, mints: 6, grantedSeconds: 6 * 3600 }])
+  } finally { await relayed.mf.dispose() }
 })
 
 // --- The relay's older lanes and the station's own key (security review S1-M1, S3-M1) -----------
