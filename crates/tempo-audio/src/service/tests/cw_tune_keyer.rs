@@ -427,15 +427,18 @@ mod winkeyer {
 mod keyline {
     use super::*;
 
-    /// A serial-keyline tune scene: the real keyer thread over a recording line, already open on
-    /// the configured port and line so the loop keeps it.
-    fn scene() -> (
+    /// The engine, the key line's recorded levels, the radio, the audio and the loop.
+    type Scene = (
         Arc<Mutex<Engine>>,
         Arc<Mutex<Vec<bool>>>,
         Rig,
         MockBackend,
         RadioLoop,
-    ) {
+    );
+
+    /// A serial-keyline tune scene: the real keyer thread over a recording line, already open on
+    /// the configured port and line so the loop keeps it.
+    fn scene() -> Scene {
         let engine = tune_engine("serial", |s| {
             s.cw_key_port = "KEYLINE".into();
             s.cw_key_line = "dtr".into();
