@@ -379,6 +379,48 @@ mod winkeyer {
         s.assert_ended_keyed_up("a rebuild");
     }
 
+    /// REVIEW (#500): a radio switch mid-tune (the dual-radio handoff): the keyer is let up
+    /// before the outgoing radio's unkey, as at every other exit.
+    #[test]
+    fn a_radio_switch_keys_the_winkeyer_up_before_the_unkey() {
+        let mut s = Scene::new(|_| {});
+        let r1 = s.engine.lock().unwrap().add_radio();
+        let mut last_active = s.engine.lock().unwrap().settings().active_radio;
+        assert_ne!(last_active, r1, "control: a second radio to switch to");
+        s.tune(100.0);
+        s.engine.lock().unwrap().set_active_radio(r1);
+        assert_eq!(
+            s.engine.lock().unwrap().settings().active_radio,
+            r1,
+            "control: the switch was taken"
+        );
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(Vec::new()));
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        handoff_if_switched(
+            &s.engine,
+            &pool,
+            &mut s.rig,
+            &mut s.backend,
+            &mut s.state,
+            &mut last_active,
+            &pending,
+        );
+        let wire = s.wire.sent();
+        assert_eq!(
+            last_key_immediate(&wire),
+            Some(false),
+            "a radio switch: the keyer must be keyed up (0B 00): {wire:02x?}"
+        );
+        assert_eq!(
+            s.at_unkey.lock().unwrap().first(),
+            Some(&Some(false)),
+            "the keyer must already be up when the outgoing radio is unkeyed (T 0): {:?}",
+            lines_since(&s.log, 0)
+        );
+        assert!(!s.state.tuning_keyed, "the tune is over");
+        assert!(s.state.tune_keyer.is_none(), "the keyer's tune is let go");
+    }
+
     /// The amplifier TX delay: the keyer keys down only once the delay has passed after PTT, as
     /// the tone waits out its queued silence.
     #[test]
