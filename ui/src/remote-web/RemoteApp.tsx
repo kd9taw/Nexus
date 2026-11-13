@@ -62,6 +62,11 @@ export function RemoteApp() {
   const [opened, setOpened] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Subscribe's or Manage's refusal, said in the billing card under the button pressed (`act`'s `at`), not with `error`.
+  const [billingError, setBillingError] = useState<{ at: 'checkout' | 'portal'; code: string } | null>(null)
+  // Brought into view as it appears: in a short window the button pressed can be the last thing on screen.
+  const billingAlert = useRef<HTMLParagraphElement>(null)
+  useEffect(() => { if (billingError) billingAlert.current?.scrollIntoView?.({ block: 'nearest' }) }, [billingError])
   const [code, setCode] = useState('')
   // What has been typed into Delete account's confirmation box.
   const [deleteWord, setDeleteWord] = useState('')
@@ -145,14 +150,19 @@ export function RemoteApp() {
     return () => { active = false }
   }, [session, keyAccepts])
 
-  async function act(work: () => Promise<void>) {
+  // Where the refusal is said: beside the billing card's own buttons for Subscribe and Manage (the top of the page
+  // is out of view once the card is scrolled to, in a small window), at the top for everything else.
+  async function act(work: () => Promise<void>, at: 'page' | 'checkout' | 'portal' = 'page') {
     if (busy) return
-    setBusy(true); setError(null)
+    setBusy(true); setError(null); setBillingError(null)
     // Keep the service's own word for the refusal. Collapsing every failure to one boolean is
     // why an expired trial, a full station list and a stale pairing code all used to produce
     // the same sentence, none of which told the operator what to actually do next.
     try { await work() }
-    catch (cause) { setError(cause instanceof RemoteError ? cause.code : 'remoteUnavailable') }
+    catch (cause) {
+      const code = cause instanceof RemoteError ? cause.code : 'remoteUnavailable'
+      if (at === 'page') setError(code); else setBillingError({ at, code })
+    }
     finally { setBusy(false) }
   }
   async function refresh() { if (client) setSession(await client.post<AccountSession>('session')) }
@@ -244,7 +254,7 @@ export function RemoteApp() {
   const trialLeft = trial?.state === 'active' && plan?.kind === 'trial' && session && !beta ? trial.expiresAt - session.serverNow : null
   const countryReady = billingCountry.code !== '' && billingCountry.confirmed
   const goToBilling = (kind: 'checkout' | 'portal', body: { plan: 'monthly' | 'annual'; country: string } | Record<string, never> = {}) =>
-    void act(async () => { if (client) window.location.assign(await client.billingPage(kind, body)) })
+    void act(async () => { if (client) window.location.assign(await client.billingPage(kind, body)) }, kind)
   const daysLeft = trial && session
     ? Math.max(0, Math.ceil((trial.expiresAt - session.serverNow) / 86400000))
     : 0
@@ -306,6 +316,8 @@ export function RemoteApp() {
     : code === 'billingNotAvailable' ? t('remote.billing.notAvailable')
     : code === 'subscriptionNotCancelled' ? t('remote.account.cancelFailed')
     : t('remote.requestFailed')
+  const billingRefusal = (at: 'checkout' | 'portal') =>
+    billingError?.at === at ? <p ref={billingAlert} className="rm-warning" role="alert">{refusal(billingError.code)}</p> : null
   // A sign-up that worked but whose address is not confirmed yet. Auth0 keeps its session through
   // the deny, so "continue" is one plain login and "use a different account" has to sign out of it.
   const confirmEmail = ready && client?.signInRefusal === 'emailUnverified' && !session
@@ -378,11 +390,12 @@ export function RemoteApp() {
           <h2>{t('remote.billing.title')}</h2>
           {!subscribed && <>
             <BillingCountryField choice={billingCountry} disabled={busy}
-              onChange={choice => { setBillingCountry(choice); if (error === 'countryNotServed') setError(null) }} />
+              onChange={choice => { setBillingCountry(choice); if (billingError?.code === 'countryNotServed') setBillingError(null) }} />
             <div className="remote-actions">
               <button className="remote-button remote-button--primary" disabled={busy || !countryReady} onClick={() => goToBilling('checkout', { plan: 'monthly', country: billingCountry.code })}>{t('remote.billing.subscribeMonthly')}</button>
               <button className="remote-button remote-button--primary" disabled={busy || !countryReady} onClick={() => goToBilling('checkout', { plan: 'annual', country: billingCountry.code })}>{t('remote.billing.subscribeYearly')}</button>
             </div>
+            {billingRefusal('checkout')}
             <p>{t('remote.billing.renewalTerms')}</p>
             {trialLeft !== null && <p>{trialLeft >= TRIAL_KEPT_MS ? t('remote.billing.trialKept') : t('remote.billing.chargedNow')}</p>}
           </>}
@@ -391,6 +404,7 @@ export function RemoteApp() {
             <div className="remote-actions">
               <button className="remote-button" disabled={busy} onClick={() => goToBilling('portal')}>{t('remote.billing.manage')}</button>
             </div>
+            {billingRefusal('portal')}
           </>}
         </section>}
         {(trial?.state === 'ended' || trial?.state === 'disabled') &&

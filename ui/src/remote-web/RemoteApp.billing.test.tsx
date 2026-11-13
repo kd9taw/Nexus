@@ -212,3 +212,46 @@ it('says plainly when Remote cannot be bought in the chosen country yet', async 
   expect(service.billingPage).toHaveBeenCalledWith('checkout', { plan: 'monthly', country: 'GB' })
   expect(window.location.pathname).toBe('/')
 })
+
+// A refusal of Subscribe or Manage is said IN THE BILLING CARD, right under the button pressed. At the top of the page
+// it was scrolled out of view in a small window the moment the button below was clicked, so the press looked like it
+// did nothing (measured at 1366×768 at 175 %, where the card is below the fold).
+it('says a billing refusal inside the billing card, right after its buttons, and not at the top of the page', async () => {
+  language('en')
+  const service = client(account('ended', trialPlan, -HOUR), true)
+  render(<RemoteApp />)
+  const monthly = await screen.findByRole('button', { name: 'Subscribe monthly' })
+  chooseCountry('GB')
+  service.billingPage.mockRejectedValueOnce(new RemoteError(403, 'countryNotServed'))
+  fireEvent.click(monthly)
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toBe("Nexus Remote can't be bought in United Kingdom yet.")
+  expect(screen.getAllByRole('alert')).toHaveLength(1)
+  expect(alert.closest('section'), 'the refusal is not in the billing card').toBe(monthly.closest('section'))
+  expect(alert.previousElementSibling, 'the refusal does not follow the Subscribe buttons').toBe(monthly.closest('.remote-actions'))
+  // Picking another country takes the country refusal away again.
+  chooseCountry('US')
+  expect(screen.queryByRole('alert')).toBeNull()
+})
+
+it('says a refusal of Manage subscription right after Manage, in the billing card', async () => {
+  client(account('active', subscription('active')), true)
+  render(<RemoteApp />)
+  const manage = await screen.findByRole('button', { name: 'Manage subscription' })
+  fireEvent.click(manage)
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toBe(t('remote.requestFailed'))
+  expect(alert.closest('section')).toBe(manage.closest('section'))
+  expect(alert.previousElementSibling).toBe(manage.closest('.remote-actions'))
+})
+
+it('keeps a refusal of anything else at the top of the page', async () => {
+  const service = client(account('ended', trialPlan, -HOUR), true)
+  render(<RemoteApp />)
+  await screen.findByRole('button', { name: 'Subscribe monthly' })
+  service.signOut.mockRejectedValueOnce(new RemoteError(429, 'tryLater'))
+  fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toBe(t('remote.tryLater'))
+  expect(alert.closest('section')).toBeNull()
+})
