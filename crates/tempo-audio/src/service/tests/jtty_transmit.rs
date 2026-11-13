@@ -505,3 +505,41 @@ fn a_jtty_stop_flushes_then_unkeys_and_drops_the_hold() {
         &["flush", "T 0"],
     );
 }
+
+/// JTTY'S FRAMES NEVER SHORTEN A LONGER HOLD: each frame extends the hold to its own end and the
+/// tail (`extend_hold`), so a hold already running past that (another over riding the same
+/// transmitter) stands at every tick. CONTROL: under a short hold the frames extend it, which says
+/// the site ran. Beside its scaffolding here, as the stream sites' pins are in `cut_sites`.
+#[test]
+fn a_jtty_frame_never_shortens_a_longer_hold() {
+    const LONG_HOLD: f64 = 9_999_999.0;
+    let _modem = super::remote_radio::selection::selection_test_lock();
+    let run = |hold: f64| {
+        let (engine, mut state, mut backend, mut rig, log) = jtty_scene(true);
+        jtty_tx::send_text(&engine, "CQ CQ DE W9XYZ K", "").unwrap();
+        state.tx_until_ms = Some(hold);
+        let mut holds = Vec::new();
+        let mut t = 100.0;
+        while t <= 6_000.0 {
+            tick(&engine, &mut state, &mut backend, &mut rig, t);
+            holds.push(state.tx_until_ms);
+            t += 20.0;
+        }
+        assert!(keys(&log) >= 1, "premise: the loop keyed JTTY");
+        assert!(!backend.played.is_empty(), "premise: frames were played");
+        holds
+    };
+    let holds = run(LONG_HOLD);
+    if let Some(i) = holds.iter().position(|h| *h != Some(LONG_HOLD)) {
+        panic!(
+            "the longer hold was shortened to {:?} at the tick at {} ms",
+            holds[i],
+            100.0 + 20.0 * i as f64
+        );
+    }
+    let holds = run(150.0);
+    assert!(
+        holds.iter().any(|h| h.is_some_and(|h| h > 150.0)),
+        "control: a shorter hold is never extended: {holds:?}"
+    );
+}
