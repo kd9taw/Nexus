@@ -14,7 +14,7 @@ import { RfScopePane } from './RfScopePane'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
 import { TxAlarmBanner } from './TxAlarmBanner'
-import { TxMeters, TxMetersPane } from './TxMeters'
+import { TxMeters, TxMetersPane, TX_METERS_PANE_WEIGHT } from './TxMeters'
 import { useCompactChrome } from '../features/compactChrome'
 import { FrequencyControl } from './FrequencyControl'
 import { RotorStrip } from './RotorStrip'
@@ -2180,7 +2180,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       {/* THE LARGE TX METERS PANE (#479): FT's, Phone's and CW's readout, hidden until ticked, here or
           from the strip's button. A fill pane under the RF scope pane and over the gallery, sharing the
           spare height with it. Display only: it keys nothing, stops nothing, and its hide ends nothing. */}
-      {hasMetersPane && snap && <TxMetersPane radio={snap.radio} close={closeProps('txMetersPane')} />}
+      {hasMetersPane && snap && <TxMetersPane radio={snap.radio} weight={TX_METERS_PANE_WEIGHT.sstv} close={closeProps('txMetersPane')} />}
 
       {shown('gallery') && (
         <CockpitPaneFrame

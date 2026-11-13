@@ -7,12 +7,15 @@
 // at all (a timeout, DNS, a reset) is retried the same way. A fake fetch and sleep stand in
 // for the network and the clock.
 //
+// The islands list's checks (`checkIslands`) are tested at the end, on made-up islands in IOTA's
+// islands.json shape: the real list is never in the repository.
+//
 // Run: node --test scripts/gen-iota-groups.test.mjs
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { downloadWithRetry, RETRY_DELAYS_MS } from './gen-iota-groups.mjs'
+import { checkIslands, downloadWithRetry, RETRY_DELAYS_MS } from './gen-iota-groups.mjs'
 
 /**
  * A fetch answering `statuses` in turn (200 carries `body`), and the calls it saw. `'net'` is a
@@ -114,4 +117,39 @@ test('CONTROL: a refused file (no status, not a network failure) fails at once',
   await assert.rejects(downloadWithRetry({ fetchOnce, sleep, log: quiet }), /larger than/)
   assert.deepEqual(calls, ['big'])
   assert.deepEqual(waits, [])
+})
+
+/** `n` made-up islands in islands.json's shape (every value a string), the first in AF-001 and
+ *  the second in EU-005; `edit` changes the list before it is serialized. */
+function islands(n, edit = (l) => l) {
+  const list = Array.from({ length: n }, (_, i) => ({
+    id: String(i + 1),
+    refno: i === 0 ? 'AF-001' : i === 1 ? 'EU-005' : `OC-${String(i % 1000).padStart(3, '0')}`,
+    name: `Test Island ${i + 1}`,
+    comment: '',
+    subgroup: 'OC-000-0-0',
+    excluded: '0',
+  }))
+  return Buffer.from(JSON.stringify(edit(list)))
+}
+
+test('the islands list parses: every island with an id, a reference and a name counts', () => {
+  assert.equal(checkIslands(islands(10_000)), 10_000)
+  // Numbers as well as strings; entries without a valid id or reference are skipped, not fatal.
+  const mixed = islands(10_002, (l) => {
+    l[2].id = 3
+    l[3].id = '0'
+    l[4].refno = 'XX-001'
+    return l
+  })
+  assert.equal(checkIslands(mixed), 10_000)
+})
+
+test('an islands list that is short, changed or doubtful is refused', () => {
+  assert.throws(() => checkIslands(islands(9_999)), /only 9999 islands/)
+  assert.throws(() => checkIslands(Buffer.from('{"islands":[]}')), /not a JSON array/)
+  assert.throws(() => checkIslands(Buffer.from('<html>maintenance</html>')))
+  assert.throws(() => checkIslands(islands(10_001, (l) => ((l[5].id = l[6].id), l))), /listed twice/)
+  assert.throws(() => checkIslands(islands(10_000, (l) => ((l[0].refno = 'AF-002'), l))), /no island in AF-001/)
+  assert.throws(() => checkIslands(islands(10_000, (l) => ((l[7].name = 'x'.repeat(201)), l))), /longer than 200/)
 })

@@ -8,8 +8,21 @@ import { controlVersion, parseOperationVersion, type OperationVersion } from './
 import { OPERATION_RATE_LIMIT, OPERATION_RATE_WINDOW_MS } from './operation-limits'
 // `commandUntil` is how long this browser's account may still command the station: the adapter
 // sets it from the entitlement it read at admission or at the last renewal, and it is deliberately
-// shorter than the observer lease (see OPERATION_ENTITLEMENT_MS). Zero means never.
-type Browser = { sessionId: string; deviceId: string; peer: Peer; commandUntil: number }
+// shorter than the observer lease (see OPERATION_ENTITLEMENT_MS). Zero means never. `lanUntil` is
+// present only for a LAN-only session (the room's), which this lane carries `LAN_REQUESTS` alone for.
+type Browser = { sessionId: string; deviceId: string; peer: Peer; commandUntil: number; lanUntil?: number }
+/** What a LAN-only session may send through the relay (security review 2026-11-12, M1). The relay
+ *  cannot tell that its holder is on the shack's network, so it carries only what the stream held to
+ *  that network needs, the lease and the `state` it is read from, and Stop. Never a read of the
+ *  station's data (an export), which would make the relay a free monitor from anywhere. */
+const LAN_REQUESTS: ReadonlySet<unknown> = new Set(['state', 'acquire', 'heartbeat', 'release', 'stopTransmit'])
+/** The fields of a state answer a LAN-only session is handed: its lease, what acquiring and keeping it
+ *  read (`allowed`, `phase`, the command window and sequence a heartbeat carries), and what a Stop is
+ *  composed from (`stationBootId`, `leaseId`, `transmitEpoch`, `txArmed`). Every one the page's parser
+ *  requires, so the answer stays one it takes; `actions` is handed empty. Never `controls` (what the
+ *  station can do and which radio and amplifier it is connected to), nor any field a later station adds. */
+const LAN_STATE_FIELDS = ['stationBootId', 'allowed', 'phase', 'leaseId', 'revision', 'commandWindowId', 'nextSequence',
+  'leaseRemainingMs', 'txArmed', 'transmitEpoch'] as const
 /** The requests that may not be forwarded once the entitlement behind the session has lapsed:
  *  everything that CHANGES the station. Exported because the adapter has to recognise the same
  *  set one step earlier, to refresh the entitlement before this relay is asked - two spellings
@@ -135,6 +148,11 @@ export class OperationRelay {
         this.error(p, 'stationUnavailable')
         return
       }
+      // A LAN-only session, refused as a lapsed one is, and for the same reason: not through here.
+      if (browser.lanUntil !== undefined && !LAN_REQUESTS.has(request.type)) {
+        this.error(p, 'stationUnavailable')
+        return
+      }
       if (!this.station?.supported) {
         this.error(p, 'stationUnsupported')
         return
@@ -201,8 +219,10 @@ export class OperationRelay {
       if (value.type === 'operationEvent') {
         if ((parseOperationVersion(this.station.operationVersion) ?? 1) < 5) throw Error()
         const event = operationEvent(value)
-        const peer = this.browsers.get(sessionId)?.peer
-        if (peer) deliver(peer, JSON.stringify(event))
+        const browser = this.browsers.get(sessionId)
+        // A pushed outcome carries fresh station state, and a LAN-only session sends no control for
+        // the station to push about: it is never handed one.
+        if (browser && browser.lanUntil === undefined) deliver(browser.peer, JSON.stringify(event))
         return
       }
       const response = operationResponse(value),
@@ -225,8 +245,16 @@ export class OperationRelay {
         if (version === 1) delete response.value.controls
         else if (version === 2) response.value.controls.capabilities = response.value.controls.capabilities.filter(c => ['decoder', 'radio', 'amplifier'].includes(c))
       }
-      const peer = this.browsers.get(sessionId)?.peer
-      if (peer) deliver(peer, JSON.stringify(response))
+      const browser = this.browsers.get(sessionId)
+      if (!browser) return
+      // A LAN-only session's state answer is its lease alone (security review 2026-11-12, M1). A Stop's
+      // answer, `{ stop }`, passes as it is.
+      if (browser.lanUntil !== undefined && 'value' in response && 'phase' in response.value) {
+        const state = response.value as unknown as Record<string, unknown>
+        response.value = Object.assign(Object.fromEntries(LAN_STATE_FIELDS.filter(key => key in state).map(key => [key, state[key]])),
+          { actions: [] }) as unknown as typeof response.value
+      }
+      deliver(browser.peer, JSON.stringify(response))
     } catch {
       this.station?.peer.close(1008, 'invalidOperation')
     }

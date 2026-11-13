@@ -14,7 +14,10 @@
 // (`get_iota_offer`, from a spot) and the island list holds it under a very long group name, so a call
 // typed into the form fills the IOTA box with the name and its source beside it. `&zoom=<n>` sets the
 // app's UI scale (`--ui-zoom`). `&iotacontrol=1` is that phase's CONTROL: the group name may not wrap,
-// so it must come back NOT drawn whole.
+// so it must come back NOT drawn whole. The same phase draws the ISLAND PICKER beside the box: the group
+// has three islands, one of them with a name at the 200-character limit, which the probe picks.
+// `&islandcontrol=1` is its CONTROL: the picker may grow to its longest option, so it must come back
+// NOT inside the form.
 import '../styles.css'
 import '../cockpit-panes.css'
 import { createRoot } from 'react-dom/client'
@@ -31,6 +34,11 @@ if (params.get('zoom')) document.documentElement.style.setProperty('--ui-zoom', 
 if (params.get('iotacontrol') === '1') {
   const s = document.createElement('style')
   s.textContent = '.iota-name, .iota-name-text { white-space: nowrap !important; overflow-wrap: normal !important; }'
+  document.head.appendChild(s)
+}
+if (params.get('islandcontrol') === '1') {
+  const s = document.createElement('style')
+  s.textContent = '.iota-island, .iota-island-pick { max-width: none !important; min-width: max-content !important; }'
   document.head.appendChild(s)
 }
 if (params.get('footer') === 'static') {
@@ -50,6 +58,14 @@ const base = 1_790_000_000
 /** A group name as long as IOTA's longest run: a list of islands with their other names. */
 const LONG_GROUP =
   'Eolie Islands (Lipari, Salina, Vulcano, Stromboli, Panarea, Filicudi, Alicudi and the rocks of Basiluzzo, Dattilo and Strombolicchio) - aka Aeolian Islands'
+
+/** An island name at the list's 200-character limit (`propagation::iota::NAME_MAX_CHARS`). */
+const LONG_ISLAND = `Isola grande di prova con un nome lunghissimo ${'e i suoi scogli '.repeat(10)}`.slice(0, 200)
+const ISLANDS = [
+  { id: 9001, name: 'Alicudi' },
+  { id: 9002, name: LONG_ISLAND, comment: 'in Sicily' },
+  { id: 9003, name: 'Basiluzzo' },
+]
 
 const LOG: LoggedQso[] = Array.from({ length: 14 }, (_, n) => ({
   id: `id-${n}`, call: 'EC1DD', grid: 'IN52TK', band: n % 2 ? '40m' : '20m', freqMhz: n % 2 ? 7.074 : 14.074, mode: n % 3 ? 'FT8' : 'CW',
@@ -72,6 +88,7 @@ const answers: Record<string, (args: Record<string, unknown>) => unknown> = {
         get_iota_offer: () => ({ reference: 'EU-901', source: 'spot' }),
         get_iota_list_status: () => ({ enabled: true, count: 1, fetchedAt: base, bundled: true, lastError: null }),
         get_iota_groups: () => [{ reference: 'EU-901', name: LONG_GROUP }],
+        get_iota_islands: (a: Record<string, unknown>) => (a.reference === 'EU-901' ? ISLANDS : []),
       }
     : {}),
   qso_history: () => [

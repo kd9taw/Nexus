@@ -5,7 +5,7 @@
 // reads what the station uses. With the list off every reference is checked by its shape alone, and no
 // name is shown. One store for the window, so the Logbook, the contact card, Spots and the offer chip
 // agree, and the list is read from the station once, not by every row.
-import { getIotaGroups, getIotaListStatus, setIotaListEnabled, type IotaListStatus } from '../api'
+import { getIotaGroups, getIotaIslands, getIotaListStatus, setIotaListEnabled, type IotaIsland, type IotaListStatus } from '../api'
 
 /** IOTA Ltd's own site, the link every island name carries. */
 export const IOTA_SITE = 'https://www.iota-world.org/'
@@ -72,8 +72,41 @@ export function loadIotaGroups(): Promise<void> {
 /** Read the list again: after the Settings switch changed. */
 export function reloadIotaGroups(): Promise<void> {
   loading = null
+  islands.clear()
   return loadIotaGroups()
 }
+
+/** ADIF's field for the island of the group a contact was on: only ever the operator's pick. */
+export const IOTA_ISLAND_TAG = 'IOTA_ISLAND_ID'
+
+/** Each group's islands as the station answered, by reference: read once a group is asked for. */
+const islands = new Map<string, Promise<IotaIsland[]>>()
+
+/**
+ * The islands of the group `reference` (in the log's spelling), for an island picker; empty
+ * without the list or its islands, for a group it lacks, and from a station that cannot answer.
+ */
+export function loadIotaIslands(reference: string): Promise<IotaIsland[]> {
+  const r = reference.trim().toUpperCase()
+  if (!IOTA_SHAPE.test(r)) return Promise.resolve([])
+  let held = islands.get(r)
+  if (!held) {
+    held = Promise.resolve()
+      .then(() => getIotaIslands(r))
+      .then((list) => (Array.isArray(list) ? list.filter((i) => Number.isInteger(i?.id) && typeof i?.name === 'string') : []))
+      .catch(() => [])
+    islands.set(r, held)
+  }
+  return held
+}
+
+/** A contact's fields as the log keeps them (`extra`) with the island picked set, or taken out
+ *  when none is (`id` null). The other fields are kept as they are. */
+export function withIotaIsland(extra: [string, string][] | undefined, id: number | null): [string, string][] {
+  const rest = (extra ?? []).filter(([k]) => k !== IOTA_ISLAND_TAG)
+  return id === null ? rest : [...rest, [IOTA_ISLAND_TAG, String(id)]]
+}
+
 
 /** The Settings switch; the list is read again after it. */
 export async function setIotaListOn(enabled: boolean): Promise<IotaListStatus> {
@@ -129,6 +162,7 @@ export function iotaGroupsVersion(): number {
 
 /** Tests only: forget everything this window holds. */
 export function resetIotaGroupsForTest(groups: { reference: string; name: string }[] | null = null, st: IotaListStatus | null = null): void {
+  islands.clear()
   names = groups && groups.length > 0 ? new Map(groups.map((g) => [g.reference, g.name])) : null
   status = st
   loading = groups || st ? Promise.resolve() : null

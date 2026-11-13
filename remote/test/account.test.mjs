@@ -542,6 +542,36 @@ test('a bound station\'s trial starts at its first internet use, never on the LA
   assert.equal(await errorOf(second.page.post(`stations/${s2.stationId}/ticket`, {}, 403)), 'trialActiveElsewhere')
 })
 
+// Security review 2026-11-12, M2: the owner's one trial is the owner's to start. A guest, on the
+// owner's plan, is refused until the owner has started it; and nothing is started for a device that
+// is not approved, by anyone.
+test('only the owner\'s own internet use starts the trial; a guest\'s, or an unapproved device\'s, never does', async () => {
+  const owner = await person(), shack = await bind(owner), guest = await person()
+  const trial = () => app.db.prepare('SELECT source FROM trials WHERE account_id=?').bind(owner.accountId).first()
+  await shack.shack.post(`stations/${shack.stationId}/native/invite`, { email: guest.email, role: 'listen' })
+  // No device: refused for that, and nothing is started, on any internet verb.
+  for (const verb of ['ticket', 'turn']) {
+    assert.equal(await errorOf(guest.page.post(`stations/${shack.stationId}/${verb}`, {}, 403)), 'deviceNotApproved', verb)
+    assert.equal(await errorOf(owner.page.post(`stations/${shack.stationId}/${verb}`, {}, 403)), 'deviceNotApproved', verb)
+  }
+  assert.equal(await errorOf(signed(guest.native, await keyPair(), `stations/${shack.stationId}/client/turn`, {}, 403,
+    { 'x-nexus-device-id': crypto.randomUUID() })), 'deviceNotApproved')
+  assert.equal(await trial(), null, 'no unapproved device started it')
+  // The guest's approved devices: refused, the owner's trial not started.
+  await browser(guest, shack.stationId)
+  const computer = await enrol(guest, shack.stationId)
+  assert.equal(await errorOf(guest.page.post(`stations/${shack.stationId}/ticket`, {}, 403)), 'trialRequired')
+  assert.equal(await errorOf(guest.page.post(`stations/${shack.stationId}/turn`, {}, 403)), 'trialRequired')
+  assert.equal(await errorOf(signed(guest.native, computer.road, `stations/${shack.stationId}/client/turn`, {}, 403,
+    { 'x-nexus-device-id': computer.deviceId })), 'trialRequired')
+  assert.equal(await trial(), null, 'no guest started it')
+  // THE CONTROL: the owner's own first internet use starts it, and the guest then uses it.
+  await browser(owner, shack.stationId)
+  await owner.page.post(`stations/${shack.stationId}/ticket`)
+  assert.equal((await trial()).source, 'trial')
+  await guest.page.post(`stations/${shack.stationId}/ticket`)
+})
+
 // --- Owner-device notice (the 2026-10-23 sign-in decision) ----------------------------------------------------------
 
 test('a device added by sign-in emails the owner exactly once, with who/which-station/how-to-revoke', async () => {
@@ -680,6 +710,40 @@ test('a guest sign-in emails nobody and the guest device stays un-notified', asy
     assert.equal(row.n, 1, 'the durable row is written regardless')
     assert.equal(row.sent, null, 'but it is left unsent')
     assert.equal(await notifiedOf(shack, shack.stationId, g.deviceId), 0, 'so the station holds the guest device')
+  } finally {
+    app = main
+    await rt.mf.dispose()
+  }
+})
+
+// Security review 2026-11-12, M4: the notice that lifts the transmit hold goes to the address the
+// account was made with, never to whatever address the sign-in carries now.
+test('the owner notice goes to the account\'s own address, never to a changed sign-in address', async () => {
+  const main = app, sent = []
+  const rt = await runtime({ bindings: NOTICE_BINDINGS,
+    outbound: async request => { sent.push((await request.json()).to); return Response.json({ id: 'ok' }) } })
+  app = rt
+  try {
+    const owner = await person(), shack = await bind(owner)
+    await enrol(owner, shack.stationId)
+    assert.deepEqual(sent, [owner.email], 'THE CONTROL: the account\'s own address')
+    // The same sign-in (same subject) now carrying another verified address.
+    const changed = { ...owner, email: `changed-${crypto.randomUUID()}@example.invalid` }
+    const claims = { email: changed.email, email_verified: true }
+    changed.page = app.client(await app.token(owner.subject, claims))
+    changed.native = app.client(null, '', await app.token(owner.subject, { azp: NATIVE, ...claims }))
+    const c = await enrol(changed, shack.stationId), b = await browser(changed, shack.stationId)
+    assert.equal(c.value.approved, true); assert.equal(b.value.approved, true)
+    assert.deepEqual(sent, [owner.email, owner.email, owner.email], 'every notice to the account\'s own address')
+    // An account whose address was never captured, signing in with another one: nothing is sent,
+    // so the device stays held.
+    const other = await person(), otherShack = await bind(other)
+    const moved = { ...other, email: `moved-${crypto.randomUUID()}@example.invalid` }
+    moved.native = app.client(null, '', await app.token(other.subject, { azp: NATIVE, email: moved.email, email_verified: true }))
+    const held = await enrol(moved, otherShack.stationId)
+    assert.equal(held.value.approved, true)
+    assert.equal(sent.length, 3, 'nothing to an address the account was not made with')
+    assert.equal(await notifiedOf(otherShack, otherShack.stationId, held.deviceId), 0, 'so the station holds it')
   } finally {
     app = main
     await rt.mf.dispose()

@@ -512,6 +512,20 @@ export async function getIotaGroups(): Promise<IotaGroup[]> {
   return invoke<IotaGroup[]>('get_iota_groups')
 }
 
+/** One island of an IOTA group (`propagation::iota::IotaIsland`): IOTA's id for it, which ADIF's
+ *  IOTA_ISLAND_ID carries, its name, and IOTA's note on it ("in Wales"), when it has one. */
+export interface IotaIsland {
+  id: number
+  name: string
+  comment?: string
+}
+
+/** The islands of the group `reference`, in name order, for an island picker; empty without the
+ *  list, without its islands, or for a group it lacks. */
+export async function getIotaIslands(reference: string): Promise<IotaIsland[]> {
+  return invoke<IotaIsland[]>('get_iota_islands', { reference })
+}
+
 /** An IOTA reference the station names for a contact being logged (`tempo_core::logbook::offer::IotaOffer`),
  *  and where it came from: the spot comments for the call, or a callbook lookup made this session. */
 export interface IotaOfferData {
