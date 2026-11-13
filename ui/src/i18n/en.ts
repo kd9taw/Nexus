@@ -13508,6 +13508,8 @@ export const EN = {
   'sstv.rx.nocapture':
     'Listening, but no audio is reaching the decoder at all — the capture device is not delivering anything. Check that Input Device (RX) is the radio; hearing the signal on the speaker does not mean the app is capturing it.',
   'sstv.rx.starting': 'Receiver started — no audio has reached the decoder yet.{{where}}',
+  'sstv.rx.transmitting':
+    'Transmitting — the receiver ignores your own picture and listens again when you stop.',
   'sstv.rx.unsupported':
     'Heard an SSTV header {{age}} ago in a mode this build cannot decode{{vis}}. The signal and the audio path are fine — Scottie, Martin, Robot and PD images all decode.',
   'sstv.rx.decoded': {

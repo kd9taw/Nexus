@@ -9749,6 +9749,7 @@ export const ES: PartialCatalog = {
   "sstv.dataMode.action": "Mantener el modo de datos",
   "sstv.rx.silent": "Llega audio pero está en silencio. Si oyes la señal por el altavoz, la app está en otra entrada — revisa el Dispositivo de entrada (RX), y la ganancia de RX si es que el nivel está bajo.{{where}}",
   "sstv.rx.starting": "Receptor arrancado — todavía no ha llegado audio al decodificador.{{where}}",
+  "sstv.rx.transmitting": "Transmitiendo — el receptor ignora tu propia imagen y vuelve a escuchar cuando dejes de transmitir.",
   "sstv.rx.unreachable": "No se puede leer el estado del receptor — la app no responde. El decodificador puede seguir en marcha.",
   "sstv.rx.unsupported": "Se oyó una cabecera SSTV hace {{age}} en un modo que esta build no puede decodificar{{vis}}. La señal y la ruta de audio están bien — las imágenes Scottie, Martin, Robot y PD sí decodifican.",
   "sstv.rx.where": "En esta banda las imágenes salen en {{freq}} {{mode}}.",

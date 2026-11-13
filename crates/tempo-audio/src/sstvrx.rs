@@ -544,6 +544,31 @@ mod tests {
         );
     }
 
+    /// ⛔ OUR OWN PICTURE IS NEVER DECODED OR SAVED AS RECEIVED, end to end. The rig hands its
+    /// transmit monitor back on the receive audio, so while we send a picture the armed receiver
+    /// heard it whole and the gallery kept it as a reception. Through the real engine tap, arm
+    /// gate and decoder, our own Scottie 1 now produces not one event, and the health says
+    /// "transmitting" with the input still counted as arriving, never a dead capture. CONTROL:
+    /// `opening_the_view_decodes_a_transmission_off_the_engine_tap`, the same picture received.
+    #[test]
+    fn our_own_picture_is_never_decoded_as_received() {
+        let eng = engine();
+        open_sstv_view(&eng);
+        engine_lock(&eng).set_sstv_sending(true); // the loop is sending our picture
+        let (events, health) = play_transmission(&eng, SstvMode::Scottie1);
+        assert!(
+            events.is_empty(),
+            "our own picture reached the decoder: {} events",
+            events.len()
+        );
+        assert!(health.armed);
+        assert!(health.transmitting, "the health did not say transmitting");
+        assert!(
+            health.last_audio_unix.is_some(),
+            "the discarded input read as a capture that delivers nothing"
+        );
+    }
+
     /// ⭐ THE FIX, end to end: the operator opens the SSTV view, a station transmits,
     /// and a picture comes out — through the real engine tap, the real arm gate and
     /// the real decoder, with no sound card and no thread.

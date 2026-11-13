@@ -9749,6 +9749,7 @@ export const FR: PartialCatalog = {
   "sstv.rx.openAudio": "Ouvrir les réglages audio",
   "sstv.rx.silent": "L'audio arrive mais il est silencieux. Si vous entendez le signal dans le haut-parleur, l'application est sur une autre entrée — vérifiez le périphérique d'entrée (RX), et le gain RX si le niveau est simplement faible.{{where}}",
   "sstv.rx.starting": "Récepteur démarré — aucun audio n'est encore arrivé au décodeur.{{where}}",
+  "sstv.rx.transmitting": "Émission en cours — le récepteur ignore votre propre image et se remet à l'écoute quand vous arrêtez.",
   "sstv.rx.unreachable": "Impossible de lire l'état du récepteur — l'application ne répond pas. Le décodeur tourne peut-être toujours.",
   "sstv.rx.unsupported": "En-tête SSTV entendu il y a {{age}} dans un mode que cette version ne sait pas décoder{{vis}}. Le signal et la chaîne audio sont bons — les images Scottie, Martin, Robot et PD décodent toutes.",
   "sstv.rx.where": "Les images de cette bande apparaissent sur {{freq}} {{mode}}.",

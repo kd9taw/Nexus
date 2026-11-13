@@ -41,7 +41,8 @@
       "lastUnknownVisCode": null,
       "lastUnknownVisUnix": null,
       "images": 1,
-      "lastImageUnix": 1789019700
+      "lastImageUnix": 1789019700,
+      "transmitting": false
     },
     "sending": false,
     "txMode": null,

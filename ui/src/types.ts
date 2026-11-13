@@ -3021,6 +3021,9 @@ export interface SstvHealth {
   /** Images completed since arming. */
   images: number
   lastImageUnix: number | null
+  /** We are transmitting (or within the short receive tail after): the engine hands the decoder
+   * nothing on purpose, since the radio's audio is then our own picture. Read live. */
+  transmitting: boolean
 }
 
 /** Live SSTV RX state: armed flag, in-flight decode progress + preview, receiver

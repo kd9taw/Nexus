@@ -6998,6 +6998,7 @@ export const IT: PartialCatalog = {
   "sstv.rx.off": "Il ricevitore è fermo — non si decodifica nulla. Premi Arma per avviarlo.{{where}}",
   "sstv.rx.nocapture": "In ascolto, ma al decoder non arriva alcun audio — il dispositivo di acquisizione non fornisce nulla. Verifica che Dispositivo di ingresso (RX) sia la radio; sentire il segnale dall'altoparlante non significa che l'app lo stia acquisendo.",
   "sstv.rx.starting": "Ricevitore avviato — al decoder non è ancora arrivato audio.{{where}}",
+  "sstv.rx.transmitting": "In trasmissione — il ricevitore ignora la tua immagine e torna in ascolto quando smetti.",
   "sstv.rx.unsupported": "Ascoltata {{age}} fa un'intestazione SSTV in un modo che questa build non può decodificare{{vis}}. Il segnale e il percorso audio vanno bene — le immagini Scottie, Martin, Robot e PD si decodificano tutte.",
   "sstv.rx.decoded": { "one": "{{count}} immagine decodificata da quando è stato armato, l'ultima {{age}} fa. In ascolto della prossima intestazione.", "other": "{{count}} immagini decodificate da quando è stato armato, l'ultima {{age}} fa. In ascolto della prossima intestazione." },
   "sstv.rx.silent": "L'audio arriva ma è muto. Se senti il segnale dall'altoparlante, l'app è su un ingresso diverso — controlla Dispositivo di ingresso (RX), e il Guadagno RX se il livello è solo basso.{{where}}",

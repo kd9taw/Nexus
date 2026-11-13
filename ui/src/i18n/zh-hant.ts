@@ -6771,6 +6771,7 @@ export const ZH_HANT: PartialCatalog = {
   "sstv.rx.off": "接收機已停止 — 未在解碼。按「啟用」啟動。{{where}}",
   "sstv.rx.nocapture": "正在監聽，但完全沒有音訊到達解碼器 — 採集裝置沒有送出任何資料。請確認輸入裝置（接收）是電台；在揚聲器上聽到訊號並不代表應用正在採集它。",
   "sstv.rx.starting": "接收機已啟動 — 尚無音訊到達解碼器。{{where}}",
+  "sstv.rx.transmitting": "正在發射 — 接收機忽略您自己的影像，停止發射後恢復接收。",
   "sstv.rx.unsupported": "{{age}} 前聽到一個 SSTV 報頭，其模式本版本無法解碼{{vis}}。訊號和音訊鏈路都正常 — Scottie、Martin、Robot 和 PD 影像均可解碼。",
   "sstv.rx.decoded": "啟用以來已解碼 {{count}} 幅影像，最近一幅在 {{age}} 前。正在等待下一個報頭。",
   "sstv.rx.silent": "音訊已到達，但內容是靜音。如果你能在揚聲器上聽到訊號，說明應用選錯了輸入 — 請檢查輸入裝置（接收），若電平只是偏低則檢查接收增益。{{where}}",
