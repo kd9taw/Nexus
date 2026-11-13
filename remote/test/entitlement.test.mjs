@@ -352,7 +352,7 @@ test('the new identity is required once switched on, and refuses rather than che
   try {
     assert.equal((await approve(strict, await person(strict), {}, 403)).value.error, 'updateRequired')
     assert.equal((await approve(strict, await person(strict), { callsign: 'F4AAA' }, 403)).value.error, 'updateRequired')
-    // Required, a trial is a US licence's (ruling 1406): any other call is refused as not licensed.
+    // Required, a trial is a US licence's: any other call is refused as not licensed.
     await licences(strict, [{ call: 'W4AAA', active: true, email: null }])
     assert.equal((await approve(strict, await person(strict), { callsign: 'F4AAA', pc: pc(null, 's1') }, 403)).value.error, 'callsignNotLicensed')
     await approve(strict, await person(strict), { callsign: 'W4AAA', pc: pc(null, 's1') })
@@ -363,7 +363,7 @@ test('the new identity is required once switched on, and refuses rather than che
   } finally { await Promise.all([strict.mf.dispose(), unkeyed.mf.dispose()]) }
 })
 
-// THE PAID LAUNCH'S TRIAL IDENTITY (ruling 1406, security review L6). With the identity required, a trial
+// THE PAID LAUNCH'S TRIAL IDENTITY. With the identity required, a trial
 // is a verified US callsign's: active in the FCC licence copy, which must be fresh. And a mail domain
 // starts three trials in thirty days at most, so a catch-all domain cannot farm them; the big public
 // mailbox providers, whose every address is its own account, are not counted that way.

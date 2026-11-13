@@ -1,4 +1,4 @@
--- One mail domain starts at most a few self-serve trials a month (ruling 1406, security review L6): a
+-- One mail domain starts at most a few self-serve trials a month: a
 -- catch-all domain otherwise gets one per address it invents. `domain_hash` is the SHA-256 of the
 -- domain of the account's verified mailbox (authority.ts `mailDomain`), never the domain itself, and
 -- NULL for the large public mailbox providers, whose every address is its own account and who are not

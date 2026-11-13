@@ -237,7 +237,7 @@ it('names the refusals the pairing flow really meets, on both claim and attach',
   fireEvent.click(await screen.findByRole('button', { name: /attach this station/i }))
   expect((await screen.findByRole('alert')).textContent).toMatch(/check the connection/i)
 })
-// The paid launch's trial identity (ruling 1406): a trial is a US licence's, and a mail domain starts only
+// The paid launch's trial identity: a trial is a US licence's, and a mail domain starts only
 // a few a month. The page's first internet use is where an account meets either refusal; each is named.
 it('names the trial identity refusals: a spent mail domain, and a callsign that is not a US licence', async () => {
   for (const [code, sentence] of [['trialDomainLimit', /domain has already started as many Remote trials/i],

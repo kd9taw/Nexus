@@ -296,7 +296,7 @@ export function RemoteApp() {
     // One mailbox, two sign-ins (a password once, Google once): the second account is refused a
     // trial the first one is already running.
     : code === 'trialActiveElsewhere' ? t('remote.trialActiveElsewhere')
-    // The paid launch's trial identity (ruling 1406): a mail domain's trials this month are spent, or
+    // The paid launch's trial identity: a mail domain's trials this month are spent, or
     // the station the trial would start for has no US licence the service could check.
     : code === 'trialDomainLimit' ? t('remote.trialDomainLimit')
     : code === 'callsignNotLicensed' || code === 'callsignInvalid' || code === 'updateRequired' ? t('remote.trialCallsignNeeded')

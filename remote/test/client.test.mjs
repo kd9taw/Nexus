@@ -358,7 +358,7 @@ test('TURN credentials go to an approved, entitled computer alone, as a browser\
     // The page (its Origin and its token), or the computer without its key's signature, gets nothing.
     assert.equal((await pair.browser.post(path, {}, 403)).value.error, 'originDenied')
     assert.equal((await c.native.post(path, {}, 400, { 'x-nexus-device-id': c.deviceId })).value.error, 'invalidRequest')
-    // The account's six an hour (ruling 1406) are the computer's and its browsers' together: five more
+    // The account's six an hour are the computer's and its browsers' together: five more
     // here, one from the page, and the computer's next is refused before the provider is asked.
     for (let ask = 0; ask < 4; ask++) await signed(c, path)
     await relayed.approved(pair)

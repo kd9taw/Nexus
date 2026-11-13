@@ -209,7 +209,7 @@ key; a 503 `relayUnavailable` means Cloudflare refused, answered something unusa
 answer within three seconds. `localStorage.removeItem('nexus.remote.relay')` puts streams back to
 direct first.
 
-**What the relay is allowed to cost (ruling 1406).** A credential lasts an hour, or less when the
+**What the relay is allowed to cost.** A credential lasts an hour, or less when the
 account's internet use ends sooner, and only an approved device on an account with internet use gets
 one. An account is minted six an hour, counting every device and guest of its stations, browser or
 computer; the seventh is refused `tryLater` before Cloudflare is asked, and the page streams direct.
@@ -243,7 +243,7 @@ already holds `TRIAL_KEY` is refused before any write while the environment does
   any Nexus sends a callsign. Without it, the approve route checks `callsign` and `pc` for shape only.
 - `TRIAL_IDENTITY_REQUIRED=1`: an approval that would start a trial must carry both fields
   (`updateRequired` otherwise). Turn it on only once the Nexus releases that send them are out. It is
-  also the paid launch's trial identity (ruling 1406), so it turns on two more rules wherever a trial
+  also the paid launch's trial identity, so it turns on two more rules wherever a trial
   starts, at a code pairing's approval and at a signed-in station's first internet use alike:
   - **A trial is a US licence's.** The station callsign must be a US one that is active in the licence
     copy: none is refused `callsignInvalid`, any other `callsignNotLicensed`, and a station whose

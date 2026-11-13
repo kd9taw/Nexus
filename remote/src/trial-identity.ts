@@ -94,7 +94,7 @@ export async function trialInput(env: RemoteEnv, input: Record<string, unknown>)
 export async function trialProof(env: RemoteEnv, kept: TrialInput, accountId: string, now: number): Promise<TrialClaim> {
   const key = env.TRIAL_KEY ?? ''
   requireValue(key, 'serviceNotConfigured', 503)
-  // Required (the paid launch, ruling 1406), a trial is a US licence's: a claim with no call is refused
+  // Required (the paid launch), a trial is a US licence's: a claim with no call is refused
   // as the shack's missing callsign, and a call outside the US as one the licence list does not hold.
   if (env.TRIAL_IDENTITY_REQUIRED === '1') {
     requireValue(kept.call !== null, 'callsignInvalid', 400)
@@ -115,7 +115,7 @@ export async function trialProof(env: RemoteEnv, kept: TrialInput, accountId: st
   return { call: kept.call, us: kept.us, proven, pcHw: kept.pcHw, pcOs: kept.pcOs }
 }
 
-/** THE PER-DOMAIN TRIAL COUNT, while the trial identity is required (ruling 1406, security review L6):
+/** THE PER-DOMAIN TRIAL COUNT, while the trial identity is required:
  *  self-serve trials started in the last thirty days by other accounts whose mailbox is at the same
  *  domain (`accounts.domain_hash`, none for a public provider). At DOMAIN_TRIALS, no more start there.
  *  The SQL condition over `accounts self` "this domain is spent", with its bindings: the pre-check below

@@ -49,7 +49,7 @@ const HEALTH_NETWORK_PER_MINUTE = 30
 const HEALTH_DEADLINE_MS = 2000
 /** The room `health` reaches. Never a station's: a station's room is named by its id, always a UUID. */
 const HEALTH_ROOM = 'health'
-/** THE STREAM'S RELAY, bounded (ruling 1406, security review M3). A credential lasts an hour at most, and
+/** THE STREAM'S RELAY, bounded. A credential lasts an hour at most, and
  *  never past the entitlement; an account may be minted six an hour, whichever of its devices, stations
  *  and guests asks: the station's account pays for the relay, so it is the account that is counted. */
 const RELAY_TTL_MS = 3600000
@@ -587,7 +587,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     return json({ ok: true }, 200, headers)
   }
   // THE ADDRESS THE "DEVICE ADDED" NOTICE GOES TO, moved by the owner. That notice is what lets a new
-  // device's transmit hold lift, so the owner's sign-in alone must not move it (security review M4): a
+  // device's transmit hold lift, so the owner's sign-in alone must not move it: a
   // code mailed to the new address has to come back first, and then the old address keeps getting the
   // notices for two days (`NOTICE_WAIT_MS`), is told of the change, and the owner can cancel it. Taking
   // the new address over sends nothing and marks nothing sent: every device held stays held. Above the

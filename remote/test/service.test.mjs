@@ -2544,7 +2544,7 @@ test('the relay route mints TURN credentials for an approved, entitled browser, 
     assert.equal(asked.length, 0)
     await relayed.approved(pair)
     const entitled = until => relayed.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?').bind(until, pair.browser.accountId).run()
-    // A month of entitlement left: the credential lasts an hour, never longer (ruling 1406: a relay
+    // A month of entitlement left: the credential lasts an hour, never longer (a relay
     // credential is a short-lived thing a stream asks for, not a day's general-purpose relay).
     await entitled(Date.now() + 30 * 86400000)
     const answer = relayAnswer(), [, turn] = answer.iceServers
@@ -2583,7 +2583,7 @@ test('the relay route mints TURN credentials for an approved, entitled browser, 
   } finally { release(); await relayed.mf.dispose() }
 })
 
-// RELAY COST (ruling 1406, security review M3). A relay credential is minted at most six times an hour
+// RELAY COST. A relay credential is minted at most six times an hour
 // per ACCOUNT, whichever of its devices and stations asks, browser or computer: the account whose plan
 // the station runs on pays for the relay, so it is the account that is bounded. Each mint is counted in
 // a durable monthly record support can read (`relay_usage`, STAGING.md).
