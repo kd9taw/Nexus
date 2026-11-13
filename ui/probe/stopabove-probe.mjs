@@ -211,7 +211,11 @@ const IOTA_MEASURE = (form) => `(() => {
   const input = field && field.querySelector('input')
   const name = field && field.querySelector('.iota-name-text')
   if (!input || input.value !== 'EU-901' || !name) return { waiting: true, value: input ? input.value : null }
-  field.scrollIntoView({ block: 'nearest' })
+  // The prompt's Log and Discard hold to the bottom of its scrolling card, and the IOTA box sits just above them, so
+  // the prompt is read scrolled to its end, where everything is laid out in place: scrolled only to 'nearest', the
+  // box's bottom line sits under the held buttons, as any line does while it scrolls past them.
+  if (${JSON.stringify(form)} === 'logconfirm') host.scrollTop = host.scrollHeight
+  else field.scrollIntoView({ block: 'nearest' })
   const r = (el) => el.getBoundingClientRect()
   const top = (el) => {
     const b = r(el)
