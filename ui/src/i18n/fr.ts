@@ -4745,7 +4745,7 @@ export const FR: PartialCatalog = {
   "nav.needed.label": "Manquants",
   "nav.needed.title": "Manquants — ce qui vous manque encore et qui est sur l'air ; un clic pour QSY",
   "nav.more.label": "{{n}} de plus",
-  "nav.more.title": "D'autres sections plus bas — les afficher",
+  "nav.more.title": "{{n}} de plus : des sections plus bas — les afficher",
   "nav.order.reset.label": "Réinit. ordre",
   "nav.order.reset.title": "Rétablir l'ordre des sections par défaut",
   "nav.phone.title": "Trafic phonie (SSB) — PTT, bande latérale, puissance HF, panadapter (tranquille)",

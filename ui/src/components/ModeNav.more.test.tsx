@@ -13,10 +13,13 @@ import type { FeatureId } from '../features/registry'
 
 const ALL_ON = new Proxy({}, { get: () => true }) as Record<FeatureId, boolean>
 const ROW = 40
+/** The cue, found by its accessible name (which carries the count). */
+const CUE = { name: /more sections below/i }
 
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 function rect(top: number, height: number): DOMRect {
@@ -56,13 +59,13 @@ describe('the rail’s "more below" cue', () => {
     // 300 / 40: seven sections end inside the edge, the eighth (280-320) and the rest do not.
     const hidden = btns.length - 7
     expect(btns.length).toBeGreaterThan(20)
-    const cue = screen.getByRole('button', { name: 'More sections below — show them' })
+    const cue = screen.getByRole('button', CUE)
     expect(cue.textContent).toBe(`${hidden} more`)
     act(() => {
       fireEvent.click(cue)
     })
     expect(scrollBy).toHaveBeenCalledWith({ top: 7 * ROW, behavior: 'smooth' })
-    expect(screen.getByRole('button', { name: 'More sections below — show them' }).textContent).toBe(`${hidden - 7} more`)
+    expect(screen.getByRole('button', CUE).textContent).toBe(`${hidden - 7} more`)
   })
 
   it('is gone with every section in view, and once the list is scrolled to its end', () => {
@@ -71,13 +74,13 @@ describe('the rail’s "more below" cue', () => {
     act(() => {
       fireEvent.scroll(top)
     })
-    expect(screen.queryByRole('button', { name: 'More sections below — show them' })).toBeNull()
+    expect(screen.queryByRole('button', CUE)).toBeNull()
     const short = layout(300)
     act(() => {
       short.top.scrollTop = btns.length * ROW - 300
       fireEvent.scroll(short.top)
     })
-    expect(screen.queryByRole('button', { name: 'More sections below — show them' })).toBeNull()
+    expect(screen.queryByRole('button', CUE)).toBeNull()
   })
 
   it('counts again when the club board button comes or goes (no section setting changes)', () => {
@@ -98,11 +101,49 @@ describe('the rail’s "more below" cue', () => {
     act(() => {
       fireEvent.scroll(top)
     })
-    const cue = () => screen.getByRole('button', { name: 'More sections below — show them' }).textContent
+    const cue = () => screen.getByRole('button', CUE).textContent
     const without = top.querySelectorAll('button.mode-btn').length - 7
     expect(cue()).toBe(`${without} more`)
     r.rerender(rail(true))
     expect(cue()).toBe(`${without + 1} more`)
+  })
+
+  it('says the count in its accessible name, which starts with the words it shows (WCAG 2.5.3)', () => {
+    renderRail()
+    const { top, btns } = layout(300)
+    act(() => {
+      fireEvent.scroll(top)
+    })
+    const cue = screen.getByRole('button', CUE)
+    const n = btns.length - 7
+    expect(cue.getAttribute('aria-label')).toBe(`${n} more sections below — show them`)
+    expect(cue.getAttribute('aria-label')!.startsWith(cue.textContent!)).toBe(true)
+  })
+
+  it('hands keyboard focus to the last section, not the page, when pressing it reaches the end', () => {
+    // Focus opens the cue's tooltip, whose popper measures itself; jsdom has no ResizeObserver.
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    )
+    renderRail()
+    const { top, btns } = layout(300)
+    act(() => {
+      fireEvent.scroll(top)
+    })
+    const cue = screen.getByRole('button', CUE)
+    cue.focus()
+    expect(document.activeElement).toBe(cue)
+    act(() => {
+      top.scrollTop = btns.length * ROW - 300
+      fireEvent.scroll(top)
+    })
+    expect(screen.queryByRole('button', CUE)).toBeNull()
+    expect(document.activeElement).toBe(btns[btns.length - 1])
   })
 
   it('counts nothing in a hidden (0×0) host', () => {
@@ -111,6 +152,6 @@ describe('the rail’s "more below" cue', () => {
     act(() => {
       fireEvent.scroll(top)
     })
-    expect(screen.queryByRole('button', { name: 'More sections below — show them' })).toBeNull()
+    expect(screen.queryByRole('button', CUE)).toBeNull()
   })
 })

@@ -4745,7 +4745,7 @@ export const ES: PartialCatalog = {
   "nav.needed.label": "Necesarios",
   "nav.needed.title": "Necesarios — lo que aún te falta y está en el aire ahora; un clic para QSY",
   "nav.more.label": "{{n}} más",
-  "nav.more.title": "Más secciones abajo — mostrarlas",
+  "nav.more.title": "{{n}} más: secciones abajo — mostrarlas",
   "nav.order.reset.label": "Restablecer orden",
   "nav.order.reset.title": "Devolver el orden de las secciones al predeterminado",
   "nav.phone.title": "Operar en fonía (SSB) — PTT, banda lateral, potencia de RF, panadaptador (tranquilo)",

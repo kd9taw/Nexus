@@ -709,7 +709,7 @@ export const ZH: PartialCatalog = {
   "nav.program.label": "中继",
   "nav.program.title": "中继——为你的电台建立频道列表：本地中继 → CHIRP CSV、电台记忆，或立即调谐",
   "nav.more.label": "还有{{n}}个",
-  "nav.more.title": "下方还有更多分区 — 显示",
+  "nav.more.title": "还有{{n}}个分区在下方 — 显示",
   "nav.order.reset.label": "重置顺序",
   "nav.order.reset.title": "将分区顺序重置为默认",
   "nav.mode.title": "当前操作模式",

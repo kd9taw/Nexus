@@ -771,7 +771,7 @@ export const RU: PartialCatalog = {
   "nav.program.label": "Ретрансляторы",
   "nav.program.title": "Ретрансляторы — составление списков каналов для ваших трансиверов: местные ретрансляторы → CHIRP CSV, память трансивера или настройка сразу",
   "nav.more.label": "ещё {{n}}",
-  "nav.more.title": "Ниже есть ещё разделы — показать",
+  "nav.more.title": "ещё {{n}} — разделы ниже, показать",
   "nav.order.reset.label": "Сбросить порядок",
   "nav.order.reset.title": "Вернуть порядок разделов по умолчанию",
   "nav.mode.title": "Активный режим работы",

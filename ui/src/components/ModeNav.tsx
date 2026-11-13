@@ -304,6 +304,7 @@ export function ModeNav({
   // Measured on scroll, on a resize of the scroller, and whenever the set of sections changes.
   // A 0×0 scroller (a hidden host) counts nothing. laptopfit-probe.mjs holds it in real Chrome.
   const topRef = useRef<HTMLDivElement>(null)
+  const moreRef = useRef<HTMLButtonElement>(null)
   const [below, setBelow] = useState(0)
   const hiddenBelow = (el: HTMLElement): HTMLElement[] => {
     const edge = el.getBoundingClientRect().bottom
@@ -316,7 +317,16 @@ export function ModeNav({
   useEffect(() => {
     const el = topRef.current
     if (!el) return
-    const measure = () => setBelow(el.clientHeight > 0 ? hiddenBelow(el).length : 0)
+    const measure = () => {
+      const n = el.clientHeight > 0 ? hiddenBelow(el).length : 0
+      // The cue goes at 0. If it holds keyboard focus (pressed to the end of the list), the focus goes to
+      // the list's last section, now in view, instead of falling to the page.
+      if (n === 0 && moreRef.current && document.activeElement === moreRef.current) {
+        const btns = el.querySelectorAll<HTMLElement>('button.mode-btn')
+        btns[btns.length - 1]?.focus({ preventScroll: true })
+      }
+      setBelow(n)
+    }
     measure()
     el.addEventListener('scroll', measure, { passive: true })
     const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
@@ -480,8 +490,14 @@ export function ModeNav({
         </div>
 
         {below > 0 && (
-          <Tooltip content={t('nav.more.title')}>
-            <button type="button" className="mode-nav-more" aria-label={t('nav.more.title')} onClick={showMore}>
+          <Tooltip content={t('nav.more.title', { n: below })}>
+            <button
+              ref={moreRef}
+              type="button"
+              className="mode-nav-more"
+              aria-label={t('nav.more.title', { n: below })}
+              onClick={showMore}
+            >
               <ChevronDown size={14} strokeWidth={2} aria-hidden="true" />
               <span className="mode-label">{t('nav.more.label', { n: below })}</span>
             </button>
