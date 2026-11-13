@@ -216,8 +216,9 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         scaling, the radio stepped through idle, transmit, tune, recording and CAT
                         lost with an empty and a busy now-bar, asserting the top bar's height, the
                         cockpit's top and Stop TX never move and the now-bar's words are whole,
-                        with a control (the old bar: the now-bar at its content width, the TX/RX sign and TX On/Off at their text widths) that must move them
-                        at 1920×1080 @150 % (ui/probe/topbarnow-probe.mjs; it builds nothing)
+                        with a control (the old bar: the now-bar at its content width, the TX/RX
+                        sign and TX On/Off at their text widths) that must move them at 1920×1080
+                        @150 % (ui/probe/topbarnow-probe.mjs; it builds nothing)
   --desktop header      the cockpit header with a CW header's controls, 780 (the floor) to 2560
                         wide, 110-175 % on 1920×1080 and the OS's 125-200 %, asserting ⊞ Panels and CAT never take a line of
                         their own while the mode controls' last line has room for them and

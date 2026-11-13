@@ -8,9 +8,9 @@
 // (found 2026-11-12, in 1.24.0).
 //
 // The probe serves the REAL app (index.html, App, every cockpit) with src/api.ts swapped for probe/waterfalls-api.ts, as
-// alarmcell-probe does, with a snapshot it can push live. On FT, CW and the Logbook (the bar's own Stop TX), at every
-// supported screen and OS scaling (operator ruling 2026-11-11: 1366×768 to 4K at 100-200 %; the window is the screen
-// over the scaling at that device pixel ratio, the app at its own fit), it steps the radio through idle, TX enabled,
+// alarmcell-probe does, with a snapshot it can push live. On FT, Phone, CW and the Logbook (the bar's own Stop TX), on
+// the supported screens and OS scalings (operator ruling 2026-11-11: 1366×768 to 4K at 100-200 %; probe/sizes.mjs `at()`,
+// the window is the screen over the scaling at that device pixel ratio, the app at its own fit), it steps the radio through idle, TX enabled,
 // transmitting, tuning, a QSO recording, CAT lost and idle again, with the now-bar empty and with all three feed pills
 // up, and asserts: the bar's height, the cockpit's top and every Stop TX on screen stand where they stood at the first
 // state of that window, to 0.5 px, and every word of the now-bar is drawn whole, inside the bar and the window.
@@ -29,6 +29,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { at } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
@@ -42,9 +43,9 @@ const ALL_SIZES = [[1366, 768, 100], [1366, 768, 125], [1366, 768, 150], [1366, 
   [3840, 2160, 150], [3840, 2160, 200]]
 const pick = process.env.TOPBARNOW_SIZES?.split(',').map((s) => s.match(/^(\d+)x(\d+)@(\d+)$/).slice(1).map(Number))
 const SIZES = pick ?? ALL_SIZES
-/** As the webview sees OS scaling: the CSS window is the screen over the scale, at that device pixel ratio. */
-const win = ([sw, sh, pct]) => ({ w: Math.floor(sw / (pct / 100)), h: Math.floor(sh / (pct / 100)), dpr: pct / 100, name: `${sw}×${sh} @${pct} %` })
-const VIEWS = process.env.TOPBARNOW_VIEWS?.split(',') ?? ['operate', 'cw', 'logbook']
+/** As the webview sees OS scaling (probe/sizes.mjs): the CSS window is the screen over the scale, at that device pixel ratio. */
+const win = ([sw, sh, pct]) => { const s = at(sw, sh, pct); return { w: s.w, h: s.h, dpr: s.scale, name: `${sw}×${sh} @${pct} %` } }
+const VIEWS = process.env.TOPBARNOW_VIEWS?.split(',') ?? ['operate', 'phone', 'cw', 'logbook']
 
 const IDLE = { transmitting: false, rigKeyed: false, txEnabled: false, tuning: false, txBusyReason: null, qsoRecording: false, catOk: true }
 const STEPS = [
@@ -194,7 +195,7 @@ try {
   const jobs = VIEWS.flatMap((v) => NOWBARS.map((n) => [v, n]))
   const all = []
   const worker = async () => { for (let j = jobs.shift(); j; j = jobs.shift()) all.push(...await sweep(j[0], j[1], SIZES)) }
-  await Promise.all([worker(), worker(), worker()])
+  await Promise.all([worker(), worker(), worker(), worker()])
   let reds = 0
   for (const route of VIEWS) {
     for (const s of SIZES.map(win)) {
