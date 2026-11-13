@@ -67,9 +67,21 @@ export const LOCALE_NATIVE_NAME: Record<string, string> = {
   de: 'Deutsch',
   es: 'Español',
   fr: 'Français',
-  it: 'Italiano',
+  // A beta translation says so where the operator chooses it (operator ruling 2026-11-12).
+  it: 'Italiano (beta)',
   ja: '日本語',
   ru: 'Русский',
   zh: '简体中文',
   'zh-hant': '繁體中文',
+}
+
+/**
+ * A beta translation's one-line notice, in that language's OWN words, like its name above: shown
+ * once to an operator using it (`LocaleBetaBanner`), saying the translation is new, how to switch
+ * to English, and where to report wording. It lives here rather than in the catalogs because it
+ * exists for exactly one language at a time and never needs translating into the others. The
+ * Settings path is the Italian catalog's own: settings.tabs.appearance ▸ settings.workspace.language.label.
+ */
+export const LOCALE_BETA_NOTE: Record<string, string> = {
+  it: "Italiano in beta: traduzione nuova. Per l'inglese: Impostazioni ▸ Aspetto ▸ Lingua. Correzioni: github.com/kd9taw/Nexus/issues",
 }
