@@ -8015,7 +8015,7 @@ export const EN = {
   'freq.channel.rxOnly.title':
     'Your licence class has no transmit privileges on this band. You can tune here and listen; transmitting will be refused.',
   'freq.channel.custom': '{{band}} (custom)',
-  'freq.channel.custom.title': 'The dial is not on a listed channel for this mode. Pick a channel here, or type a frequency.',
+  'freq.channel.custom.title': 'The dial is not on a listed channel for this mode. Pick a channel from this menu, or click the large MHz frequency, type a new one and press Enter.',
   'freq.dial.label': 'Dial (MHz)',
   'freq.band.title': 'Current band',
   'freq.mode.aria': 'Phone mode',
@@ -8026,9 +8026,9 @@ export const EN = {
   // measurements built in the component and never here. `megahertz` IS spelled out below: it is
   // what a screen reader must say, and `MHz` is read as three letters.
   'freq.readout.dial.label': 'Dial frequency (MHz)',
-  'freq.readout.title.editable': 'Click to enter a frequency (MHz)',
+  'freq.readout.title.editable': 'Click to type a frequency (MHz), then press Enter. Esc cancels.',
   'freq.readout.title.digitTune':
-    'Scroll a digit to tune it (100 Hz … 10 MHz) · ←/→ pick a digit, ↑/↓ spin it · click to type a frequency (MHz)',
+    'Scroll a digit to tune it (100 Hz … 10 MHz) · ←/→ pick a digit, ↑/↓ spin it · click to type a frequency (MHz) and press Enter',
   'freq.readout.announce.dial': '{{dial}} megahertz',
   'freq.readout.announce.digit': '{{step}} digit',
 

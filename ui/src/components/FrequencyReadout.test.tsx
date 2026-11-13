@@ -48,15 +48,52 @@ describe('FrequencyReadout', () => {
     expect(onCommit).not.toHaveBeenCalled()
   })
 
-  it('commitOnBlur commits a typed value on blur (staged forms)', () => {
+  // #511/#454: typing a frequency and clicking away used to throw it away without a word, on
+  // every live-rig readout (Enter was the only commit). Leaving the field with a VALID value now
+  // commits it exactly as Enter does; Esc is still the way to cancel.
+  it('leaving the field with a typed frequency commits it, as Enter does', () => {
     const onCommit = vi.fn()
-    const { container } = render(
-      <FrequencyReadout dialMhz={14.074} editable commitOnBlur onCommit={onCommit} />,
-    )
+    const { container } = render(<FrequencyReadout dialMhz={14.074} editable onCommit={onCommit} />)
     fireEvent.click(screen.getByRole('button'))
-    fireEvent.change(container.querySelector('input')!, { target: { value: '14.2' } })
+    fireEvent.change(container.querySelector('input')!, { target: { value: '14,2' } })
     fireEvent.blur(container.querySelector('input')!)
+    expect(onCommit).toHaveBeenCalledTimes(1)
     expect(onCommit).toHaveBeenCalledWith(14.2)
+    expect(container.querySelector('input')).toBeNull()
+  })
+
+  it('leaving the field with something that is not a frequency commits nothing', () => {
+    const onCommit = vi.fn()
+    const { container } = render(<FrequencyReadout dialMhz={14.074} editable onCommit={onCommit} />)
+    for (const bad of ['', 'abc', '14.0.74', '0', '-7']) {
+      fireEvent.click(screen.getByRole('button'))
+      fireEvent.change(container.querySelector('input')!, { target: { value: bad } })
+      fireEvent.blur(container.querySelector('input')!)
+      expect(container.querySelector('input'), `"${bad}" left the field open`).toBeNull()
+    }
+    expect(onCommit).not.toHaveBeenCalled()
+  })
+
+  it('Enter commits once, even when the field then loses focus', () => {
+    const onCommit = vi.fn()
+    const { container } = render(<FrequencyReadout dialMhz={14.074} editable onCommit={onCommit} />)
+    fireEvent.click(screen.getByRole('button'))
+    const input = container.querySelector('input')!
+    fireEvent.change(input, { target: { value: '14.2' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    fireEvent.blur(input)
+    expect(onCommit).toHaveBeenCalledTimes(1)
+  })
+
+  it('Esc cancels, even when the field then loses focus', () => {
+    const onCommit = vi.fn()
+    const { container } = render(<FrequencyReadout dialMhz={14.074} editable onCommit={onCommit} />)
+    fireEvent.click(screen.getByRole('button'))
+    const input = container.querySelector('input')!
+    fireEvent.change(input, { target: { value: '14.2' } })
+    fireEvent.keyDown(input, { key: 'Escape' })
+    fireEvent.blur(input)
+    expect(onCommit).not.toHaveBeenCalled()
   })
 
   it('Space activation does NOT propagate (guards the cockpit spacebar-PTT)', () => {

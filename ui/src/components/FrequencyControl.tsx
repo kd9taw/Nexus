@@ -177,7 +177,6 @@ export function FrequencyControl({
             dialMhz={dialMhz}
             size="hero"
             editable
-            commitOnBlur
             onCommit={(v) => onSet(v, bandLabelForMhz(v), mode)}
           />
         </div>

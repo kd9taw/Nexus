@@ -64,13 +64,10 @@ interface Props {
   band?: string
   /** hero = big focal readout (var(--fs-display)); compact = strip-sized (17px). */
   size?: 'hero' | 'compact'
-  /** When set, clicking (or Enter/Space) swaps to a MHz entry input; onCommit fires on Enter. */
+  /** When set, clicking (or Enter/Space) swaps to a MHz entry input; onCommit fires on Enter, or
+   * when the field is left holding a valid frequency. Esc cancels. */
   editable?: boolean
   onCommit?: (mhz: number) => void
-  /** Commit a typed value on blur too (not just Enter). Use for STAGED forms (Settings), where
-   * clicking Save blurs the field — Enter-only would silently discard it. Off for a live rig
-   * control, where blur should cancel (matching the old goto field). */
-  commitOnBlur?: boolean
   /** Out-of-band / TX-inhibited — the number renders in the TX (red) color. */
   txBlocked?: boolean
   title?: string
@@ -107,8 +104,13 @@ interface Props {
 /**
  * The shared, prominent frequency readout for all three mode families (digital, CW, Phone): big
  * accent-colored MHz, monospace + tabular-nums so digits don't jitter while tuning. When `editable`,
- * activating it (click or Enter/Space) swaps in a decimal MHz input — Enter commits, Esc/blur
- * cancels — the same contract the per-cockpit "Go to MHz" fields had, now unified in one place.
+ * activating it (click or Enter/Space) swaps in a decimal MHz input — Enter commits, and so does
+ * leaving the field with a valid frequency in it; Esc cancels.
+ *
+ * #511/#454 — BLUR COMMITS, on every surface. It used to cancel on a live rig, so typing a
+ * frequency and clicking anywhere else threw it away without a word (SSTV, the cockpit headers);
+ * only the staged Settings form committed on blur. Something that is not a frequency still
+ * commits nothing, exactly as Enter refuses it.
  */
 export function FrequencyReadout({
   dialMhz,
@@ -116,7 +118,6 @@ export function FrequencyReadout({
   size = 'hero',
   editable = false,
   onCommit,
-  commitOnBlur = false,
   txBlocked = false,
   title,
   disabled = false,
@@ -126,6 +127,9 @@ export function FrequencyReadout({
 }: Props) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
+  // Closed by Enter or Esc. Removing the focused input fires a blur in Chromium (WebView2), and
+  // that blur must not commit after an Esc, or commit a second time after an Enter.
+  const closedRef = useRef(false)
   const canEdit = editable && !disabled
   // The number ON SCREEN: what was asked for while the station catches up, its own reading
   // otherwise. Every judgement in this file that is not the digits themselves — TX blocking, the
@@ -154,6 +158,7 @@ export function FrequencyReadout({
     // the digits the operator was looking at (identical to the dial wherever there is no
     // provisional value, which is everywhere but the remote main dial).
     setDraft(shown.toFixed(5))
+    closedRef.current = false
     setEditing(true)
   }
   const commit = () => {
@@ -162,6 +167,8 @@ export function FrequencyReadout({
     // input sites in the tree each got it wrong (see `numInput.ts`). Same behaviour, one
     // implementation, and now stricter: a valid PREFIX like `14.0.74` is refused instead of
     // silently tuning the rig to 14 MHz.
+    if (closedRef.current) return
+    closedRef.current = true
     const v = parseOperatorNumber(draft)
     setEditing(false)
     if (!canEdit) return
@@ -214,10 +221,11 @@ export function FrequencyReadout({
               e.preventDefault()
               commit()
             } else if (e.key === 'Escape') {
+              closedRef.current = true
               setEditing(false)
             }
           }}
-          onBlur={() => (commitOnBlur ? commit() : setEditing(false))}
+          onBlur={commit}
           aria-label={t('freq.readout.dial.label')}
         />
         <span className="readout-unit">{MHZ}</span>
