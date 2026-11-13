@@ -29,6 +29,7 @@ pub mod eqsl;
 pub mod fd_rules;
 pub mod fieldday;
 pub mod hamqth;
+pub mod heard_reports;
 pub mod hrdlog;
 pub mod inbox;
 pub mod journal;

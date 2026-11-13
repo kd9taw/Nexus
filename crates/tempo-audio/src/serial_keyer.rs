@@ -111,7 +111,7 @@ mod imp {
         }
 
         /// Spawn the keying thread over `set`, which puts the key line down (`true`) or up.
-        fn keying(set: impl FnMut(bool) + Send + 'static) -> Self {
+        pub(crate) fn keying(set: impl FnMut(bool) + Send + 'static) -> Self {
             let (tx, rx) = mpsc::channel();
             let stops = Arc::new(AtomicU64::new(0));
             let stops_thread = stops.clone();

@@ -728,6 +728,17 @@ export interface TxMetersPaneToggleProps {
   onToggle: () => void
 }
 
+/** THE LARGE TX METERS PANE'S WEIGHT IN EACH COCKPIT: its share of the column beside that cockpit's own fill
+ *  panes. The half-size dials' face is 35.5 / 59 of 1.24.0's height (TxNeedles LARGE_DIAL), and each weight is
+ *  the one that gives the pane about that much less body on the supported screens (1366×768 to 4K, 100 to 200 %),
+ *  measured in Chrome (ui/probe/txmeterspane-probe.mjs): the dial is half 1.24.0's (48–55 %) and the rest
+ *  goes to the fill panes beside it, FT's Band Activity and Rx Frequency, SSTV's gallery. On Phone and CW the
+ *  pane is the only fill pane in its column, beside the receiver's and transmitter's strips, which cannot use
+ *  height: a weight under 1 takes that share of the column's free height and the rest stays at the column's
+ *  foot, as it does with the pane hidden. Where the pane stands on its floor instead (a short or stacking
+ *  screen) its low floor (`--txmeters-pane-floor`) or its rows' (`.txmeters-pane`) set it. */
+export const TX_METERS_PANE_WEIGHT = { operate: 0.63, phone: 0.65, cw: 0.68, sstv: 0.545 } as const
+
 /** THE LARGE TX METERS PANE: the fill pane an operator can make as big as the grid lets a pane be, ticked in ⊞
  *  Panels or opened from the strip's meters. A READOUT through and through: its body holds no control, so
  *  its ✕ and its place in the vocabulary reach nothing that keys or stops (THE STOP LINE). It keeps its
@@ -742,14 +753,25 @@ export function TxMetersPane({
 }: {
   radio: RadioStatus
   paneRef?: Ref<HTMLElement>
-  weight?: number
+  /** Its share of the column, the cockpit's: each sets the weight that gives the half-size dials' pane its
+   *  stock height beside that cockpit's own panes (TxNeedles LARGE_DIAL). */
+  weight: number
   split?: number
   share?: number
   /** The cockpit's `closeProps`: the frame's ✕, absent with no panel record. */
   close?: Pick<ComponentProps<typeof CockpitPaneFrame>, 'onRemove' | 'hideNote'>
 }) {
   return (
-    <CockpitPaneFrame title={t('meters.tx.pane.title')} paneId="txMetersPane" weight={weight ?? 1} split={split} share={share} paneRef={paneRef} {...close}>
+    <CockpitPaneFrame
+      title={t('meters.tx.pane.title')}
+      paneId="txMetersPane"
+      weight={weight}
+      split={split}
+      share={share}
+      lowFloor="--txmeters-pane-floor"
+      paneRef={paneRef}
+      {...close}
+    >
       <TxMeters radio={radio} pane />
     </CockpitPaneFrame>
   )

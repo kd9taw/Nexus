@@ -21,9 +21,12 @@ Read this part before changing anything here.
 - **Pairing finishes at the radio.** A code is generated at the shack and approved
   by a press at the shack. There is no path that pairs a station you are not
   standing at, and that is deliberate rather than unfinished.
-- **Every browser is approved at the shack.** Approving one browser approves only
-  that browser, for that station, and gives it station control, which is all a
-  stream needs. A browser streaming the shack, where streaming is turned on,
+- **Every browser is approved at the shack, or by its owner's sign-in.** Approving
+  one browser approves only that browser, for that station, and gives it station
+  control, which is all a stream needs. A sign-in gives control only: the station
+  holds transmit for 15 minutes and until the owner notice is confirmed sent
+  (`deviceAddedNotice`), or until Allow to transmit at the shack. A browser streaming
+  the shack, where streaming is turned on,
   operates Nexus through the stream as you would at the shack, transmit included
   (the operator's ruling of 2026-10-03: an approved, streaming browser is you at the
   shack). Revoking its station control ends its stream. What an approved browser was
@@ -45,8 +48,10 @@ The browser signs in with Auth0 (Authorization Code + PKCE, public client, no
 secret). The Worker validates RS256 against a pinned issuer, API audience and SPA
 client, then maps `(issuer, subject)` to an internal account ID.
 
-Entitlement is a fourteen-day trial, and it starts when a station is **approved at
-the radio** — not at sign-in, because an account with no paired station cannot use
+Entitlement is a fourteen-day trial, and it starts when a code-paired station is
+**approved at the radio**, or, for a station bound by its owner's sign-in, at its first
+internet use (`TRIAL_STARTS_AT_BINDING`) — not at sign-in, because an account with no
+paired station cannot use
 the service and would otherwise burn its trial waiting. The clock is written in the
 same D1 batch that creates the station, with `ON CONFLICT(account_id) DO NOTHING`:
 that is both the concurrency argument and "one trial, ever" expressed in SQL, so a
@@ -71,11 +76,12 @@ Nexus on another computer can drive its station over the internet. It signs in t
 system browser to the tenant's Native application (Authorization Code + PKCE, no secret), and
 the Worker takes that access token on the native client's own routes (`client/…`) alone, only
 with no `Origin` and no cookie, and only when its `azp` is `AUTH0_NATIVE_CLIENT_ID`. No other
-route takes that token, and those routes take no other. A deploy does not set that variable
-yet, so until it does every one of them refuses `serviceNotConfigured`.
+route takes that token, and those routes take no other. A deploy without
+`REMOTE_AUTH0_NATIVE_CLIENT_ID` set leaves every one of them refusing `serviceNotConfigured`.
 
-The computer is a device of the station, approved at the shack as a browser is and on the same
-terms. Its credential is its key: every request that acts as the device is signed by it over a
+The computer is a device of the station, approved at the shack or by its owner's sign-in as a
+browser is, and on the same terms. Its credential is its key: every request that acts as the
+device is signed by it over a
 challenge the account was given within the last minute, deleted as it is read, so a signed
 request is taken once. The shack pins the same key when it approves the device, and only a
 Nexus that sends `x-nexus-device-kind: 1` is listed these devices, with their kind and platform.
@@ -110,6 +116,57 @@ socket's message shapes are unchanged for every other.
 - Revocation updates D1 generations and the live Durable Object. If that fails the
   request fails visibly, and existing leases still expire within sixty seconds.
   Re-enabling a trial or signing in again does not restore revoked device trust.
+
+## Rate limits, route by route
+
+Every counter is `rate()` in `authority.ts`: one D1 row per key, in fixed windows. A caller is an
+IPv4 address or an IPv6 /64, and its network an IPv6 /48 (`caller()`); per-caller counts come first
+everywhere, so a caller over its own limit never spends a shared one. Every account-authenticated
+route on the page also counts against the account's 120 a minute, and every native-client route
+against the account's own 120 a minute (`client:`).
+
+| Route | Limit |
+|---|---|
+| `GET config` | None. Fixed public settings: no database, no room, no input (a query is refused). |
+| `GET health` | 6 a minute a caller, 30 a minute an IPv6 /48. |
+| `POST enroll` | 5 per 10 minutes a caller, 20 a /48, then 1000 per 10 minutes for everyone. |
+| `POST enroll/check`, `enroll/approve` | 60 per 10 minutes a caller, 240 a /48, then 30 a minute a pairing id. |
+| `GET stations/:id/connect` | 20 a minute a station, after its credential. |
+| `GET stations/:id/pipe` | 60 a minute a station, after its credential; four pipes a station. |
+| `GET stations/:id/observe` | No counter of its own: it takes a one-use ticket that lives fifteen seconds, and `ticket` mints those at 12 a minute a device. |
+| `POST stations/:id/native/*` | 60 a minute a station, after its credential; `invite` also 20 a day and 20 open invites a station. |
+| `POST pair/claim`, `pair/confirm` | 5 and 10 per 10 minutes an account. |
+| `POST billing/checkout`, `billing/portal` | 10 a minute and 40 a day an account, shared by the two. Each is a call to the payment provider. |
+| `POST account/export`, `account/delete` | 5 per 10 minutes an account, each. |
+| `POST stations/:id/ticket`, `stations/:id/turn` | 12 a minute a device, each. |
+| `POST stations/:id/device` | Approved by its sign-in: 5 a day an account. Any device: eight a station. |
+| `POST client/station`, `stations/:id/client/station-proof` | 5 a day an account, shared. Two stations an account. |
+| `POST stations/:id/client/device` | As the page's `device`. |
+| `GET stations/:id/client/pipe`, `POST stations/:id/client/turn` | 12 a minute a device, each. |
+| Native reopening (no token) | 30 a minute a caller, 60 a /48, 120 a device, then the account's 120 once its key has signed. Four live challenges a device for each requester. |
+| `POST admin/grant-trial` | The account's 120, and the one pinned administrator only. |
+
+The rest have no counter beyond the account's, because each acts on that account's own rows and is
+bounded by them: `session`, `account/devices`, `account/remove-all`, `account/devices|invites/:id/remove`,
+`stations/:id/rename`, `revoke`, `forget-device` and `renew`, and the native `client/session`,
+`client/challenge`, `client/renew` and `client/forget`. A removal finds nothing the second time; a
+waiting device lasts ten minutes and counts toward the eight.
+
+What is not counted, on purpose: a request with a wrong station credential, ticket or sign-in is
+refused after one indexed read or a signature check, so a counter in front of it would spend a write
+to save a read, and every credential here is 256 bits. An account row is made once per sign-up at
+the identity provider, which has its own limits. A flood spread over many networks is a job for an
+edge rule in front of the Worker, not for these counters.
+
+## Health
+
+`GET /api/remote/health`, with no sign-in, is what an uptime monitor reads. It answers three fixed
+words and nothing else: `database` (`ok` or `down`: the caller's own rate counter, a read and a
+write, answered within two seconds), `room` (`ok` or `down`: a room of its own, never a station's,
+reached within two seconds) and `billing` (`ok` or `absent`: the billing Worker is bound; it is
+never called). All three `ok` is `200` with `status: ok`; anything else is `503` with
+`status: degraded`. So a deploy without billing reads `503` by design. The URL is exact: a query
+string is refused `403`, as on every API route.
 
 ## Verifying a change
 

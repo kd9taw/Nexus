@@ -376,7 +376,8 @@ mod tests {
     /// host.
     fn remote_pages() -> [Url; 4] {
         [
-            url("https://remote-staging.hamradiotools.io/"),
+            // The Remote page of the service this build is for.
+            url(&format!("{REMOTE_ORIGIN}/")),
             url("https://tenant.us.auth0.com/u/login"),
             url("https://accounts.google.com/v3/signin/identifier"),
             url("https://login.us.auth0.com/login/callback"),
@@ -456,9 +457,10 @@ mod tests {
         ] {
             assert_eq!(route_lan(&url(here), &page), Route::InWindow, "{here}");
         }
+        let remote_page = format!("{REMOTE_ORIGIN}/");
         for elsewhere in [
             "https://www.qrz.com/db/KD9TAW",
-            "https://remote-staging.hamradiotools.io/",
+            remote_page.as_str(),
             "http://example.net/",
             "https://192.168.1.20/",
         ] {

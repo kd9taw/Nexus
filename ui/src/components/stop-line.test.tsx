@@ -673,11 +673,17 @@ describe('the transmitter alarm stands under Stop TX on every cockpit', () => {
     const stop = [...strip!.querySelectorAll('button')].find((b) => /^stop tx$/i.test(b.textContent?.trim() ?? ''))
     expect(stop, `${c.cockpit}: no Stop TX in the strip the alarm is in`).toBeDefined()
     expect(stop!.compareDocumentPosition(alarms[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    // FT's strip has two lines; the cell STARTS the second, right after the break. As the row's last cell it
-    // was below the fold where the strip is taller than its room (FT, ru, 900x600 pinned: on screen nowhere);
-    // at the end of the first line, that line's changing words pushed it off and grew the strip.
-    if (strip!.classList.contains('cockpit-qso'))
-      expect(alarms[0].previousElementSibling?.classList.contains('cq-break'), `${c.cockpit}: the cell does not start the strip's second line`).toBe(true)
+    // FT's strip has two lines; the cell is on the second, after the break, right after the next-over box, Free
+    // text, Send and Log (the form). As the row's last cell it was below the fold where the strip is taller than its
+    // room (FT, ru, 900x600 pinned: on screen nowhere); at the end of the first line, that line's changing words
+    // pushed it off and grew the strip; FIRST on the second line, empty, it stood before the next-over box and moved
+    // it 600 px right at 2560x1440 (1.24.0; ui/probe/ftline-probe.mjs measures it).
+    if (strip!.classList.contains('cockpit-qso')) {
+      const kids = [...strip!.children]
+      const at = kids.indexOf(alarms[0])
+      expect(kids.indexOf(strip!.querySelector(':scope > .cq-break')!), `${c.cockpit}: the cell is not after the break`).toBeLessThan(at)
+      expect(alarms[0].previousElementSibling?.classList.contains('cq-free'), `${c.cockpit}: the cell does not follow Free text, Send and Log`).toBe(true)
+    }
   })
 })
 

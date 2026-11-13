@@ -1486,42 +1486,147 @@ fn an_ended_press_never_keys_again_until_the_screen_lets_go() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// How often the kernel has taken the CPU from this thread against its will (Linux's
+/// `nonvoluntary_ctxt_switches`; `None` where there is no such count). A thread that waits for a
+/// lock or a socket gives the CPU up voluntarily, and that wait is the code's; a preemption is the
+/// scheduler's, on a loaded box many milliseconds of it.
+fn preemptions() -> Option<u64> {
+    std::fs::read_to_string("/proc/thread-self/status")
+        .ok()?
+        .lines()
+        .find_map(|line| line.strip_prefix("nonvoluntary_ctxt_switches:"))?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// What a Stop press must leave within for the median of five to hold (`stops_leaving`).
+const STOP_MEDIAN_BOUND: Duration = Duration::from_millis(1);
+
+/// Whether a timed press counts, or is pressed again: one the kernel preempted is pressed again
+/// only when it was slow as well (as long as the median's bound or longer), since the preemption
+/// may be all that made it slow. A fast press counts, preempted or not: on a CI machine of two
+/// cores nearly every press is preempted, and a press that left at once left at once. A slow
+/// press that was not preempted counts, and fails the bounds: that time is the Stop's own.
+fn press_counts(took: Duration, preempted: bool) -> bool {
+    !preempted || took < STOP_MEDIAN_BOUND
+}
+
+/// A call's answer, as [`send`] gives it.
+type Answered = std::sync::mpsc::Receiver<Result<Value, Value>>;
+
+/// Presses Stop from `screen` until five presses were timed with nothing but the code in them,
+/// and gives how long each took to be on `socket` (the station's end of Stop's road), with the
+/// Stops pressed so far. One thread presses and receives, so the time is the press's until the
+/// datagram is there: the handler's own work and nothing else, with no receiving thread to be
+/// scheduled. A slow press during which the kernel preempted this thread timed the scheduler (a
+/// box running the whole suite, or a build beside it, makes that a few milliseconds often enough
+/// to carry a median of five: 21 to 94 runs in 100 failed so at four times the box's threads), so
+/// it is pressed again ([`press_counts`]). Every press is timed, the first included: a slow first press would be the
+/// Stop's own, and is a failure. Every press is a Stop and is waited for, timed or not. `before`
+/// and `after` run around each press, outside its time. A hundred presses without five that count
+/// is a failure: the box was too loaded to measure, which is said, never passed.
+fn stops_leaving(
+    screen: &tauri::WebviewWindow<MockRuntime>,
+    socket: &std::net::UdpSocket,
+    keys: &mut crate::remote_service::lan::datagram::Keys,
+    mut before: impl FnMut(),
+    mut after: impl FnMut(),
+) -> (Vec<Duration>, u64, Vec<Answered>) {
+    use crate::remote_service::lan::stop_road::Up;
+    let mut took = Vec::new();
+    let mut answers = Vec::new();
+    let mut buffer = [0u8; 256];
+    let mut stop = 0;
+    while took.len() < 5 {
+        stop += 1;
+        assert!(stop <= 100, "a box too loaded to time a Stop: {took:?}");
+        before();
+        let preempted = preemptions();
+        let pressed = std::time::Instant::now();
+        answers.push(send(screen, "halt_tx", json!({})));
+        let deadline = pressed + Duration::from_secs(1);
+        let left = loop {
+            if let Ok(length) = socket.recv(&mut buffer) {
+                let at = std::time::Instant::now();
+                let up = keys
+                    .receive
+                    .open(&buffer[..length])
+                    .and_then(|(kind, body)| Up::read(kind, &body));
+                if up == Some(Up::Stop { stop }) {
+                    break at;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Stop {stop} never left"
+            );
+        };
+        if press_counts(left - pressed, preemptions() != preempted) {
+            took.push(left - pressed);
+        }
+        after();
+    }
+    (took, stop, answers)
+}
+
+/// The retake rule alone: a fast press counts whether or not it was preempted; a slow one that
+/// was not preempted counts (and so fails the bounds); a slow one that was preempted is pressed
+/// again.
+#[test]
+fn a_stop_press_is_pressed_again_only_when_preempted_and_slow() {
+    let fast = Duration::from_micros(170);
+    let slow = Duration::from_millis(60);
+    assert!(press_counts(fast, true), "fast and preempted counts");
+    assert!(press_counts(fast, false), "fast counts");
+    assert!(
+        press_counts(slow, false),
+        "slow and not preempted counts, and fails"
+    );
+    assert!(
+        !press_counts(slow, true),
+        "slow and preempted is pressed again"
+    );
+    // At the median's bound exactly, a preempted press is pressed again; just under, it counts.
+    assert!(!press_counts(STOP_MEDIAN_BOUND, true));
+    assert!(press_counts(
+        STOP_MEDIAN_BOUND - Duration::from_micros(1),
+        true
+    ));
+}
+
 /// ★ No queue at this end. A Stop press leaves on the road within a
 /// millisecond while the command link is stuck (the shack answers nothing): the handler writes it
 /// itself, before it hands the call to the link. Five presses, each its own Stop: every one leaves,
 /// and their median within the millisecond. A queue here (the road's thread sending it, or the link
-/// first) delays every press, while a receiving thread descheduled on a loaded box delays one; a
-/// single press measured 1.1 ms once beside the whole suite, and 54–99 µs alone. CONTROL: the calls
-/// went to the link too, and are still waiting there.
+/// first) delays every press; a preempted press is timed again (`stops_leaving`). CONTROL: the
+/// calls went to the link too, and are still waiting there.
 #[test]
 fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_link_stuck() {
-    use crate::remote_service::lan::stop_road::Up;
-    let (shack, end) = shack_with_a_road();
+    use crate::remote_service::lan::datagram::{End, Keys, EXPORTED};
+    let exported = [5; EXPORTED];
+    let tag = a_tag_of_its_own();
+    let socket = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    socket.set_nonblocking(true).unwrap();
+    let road =
+        StopRoad::open(socket.local_addr().unwrap(), tag, &exported, Arc::default()).unwrap();
+    let shack = FakeShack::new();
+    *lock(&shack.road) = Some(road);
     shack.hold();
+    let mut keys = Keys::new(&exported, tag, End::Shack).unwrap();
     let dir = scratch("road-stop");
     let client = client_in(&dir, &shack);
     let screens = screens(&client);
-    let mut took = Vec::new();
-    let mut answers = Vec::new();
-    for stop in 1..=5u64 {
-        let first = |heard: &[(Up, std::time::Instant)]| {
-            heard
-                .iter()
-                .find(|(up, _)| *up == Up::Stop { stop })
-                .map(|(_, at)| *at)
-        };
-        let pressed = std::time::Instant::now();
-        answers.push(send(&screens.main, "halt_tx", json!({})));
-        eventually("the Stop on the road", || {
-            first(&lock(&end.heard)[..]).is_some()
-        });
-        took.push(first(&lock(&end.heard)[..]).unwrap() - pressed);
-    }
+    // Tauri's runtime is built on its first use, the first press's answer: warm it, as the app is.
+    tauri::async_runtime::block_on(async {});
+    let (took, pressed, answers) = stops_leaving(&screens.main, &socket, &mut keys, || {}, || {});
     eprintln!("measured: the Stops left on the road {took:?} after their presses");
     let mut sorted = took.clone();
     sorted.sort();
     assert!(sorted[2] < Duration::from_millis(1), "the median: {took:?}");
-    eventually("the calls on the link", || shack.sent() == ["halt_tx"; 5]);
+    eventually("the calls on the link", || {
+        shack.sent() == vec!["halt_tx"; pressed as usize]
+    });
     assert!(
         answers.iter().all(|answered| answered.try_recv().is_err()),
         "the link answers nothing"
@@ -1532,8 +1637,8 @@ fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_link_stuck() {
     }
 }
 
-/// ★ No queue at this end, with the audio road's sender stuck as well. The five presses of the
-/// test above, with the link stuck (the shack answers nothing) and the audio road's sender held
+/// ★ No queue at this end, with the audio road's sender stuck as well. The presses of the test
+/// above, with the link stuck (the shack answers nothing) and the audio road's sender held
 /// mid-send by another thread while a press is live: every Stop leaves on Stop's road at once,
 /// their median within the millisecond, and each ends this computer's press without waiting for
 /// the sender. CONTROL: the press was live before each Stop, and the sender was still held when
@@ -1543,7 +1648,6 @@ fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_audio_sender_bl
     use crate::lan_client::audio_road::{AudioRoad, StandIn};
     use crate::lan_client::stop_road::OnAir;
     use crate::remote_service::lan::datagram::{End, Keys, EXPORTED};
-    use crate::remote_service::lan::stop_road::Up;
     let on_air = Arc::new(OnAir::default());
     let exported = [5; EXPORTED];
     let tag = a_tag_of_its_own();
@@ -1569,12 +1673,14 @@ fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_audio_sender_bl
     let screens = screens(&client);
     on_air.pressing(Some(9));
     std::thread::sleep(Duration::from_millis(50));
-    // The sender stuck: held by a thread of its own, as a send that will not return holds it.
+    // The sender stuck: held by a thread of its own, as a send that will not return holds it, until
+    // the presses are done, re-pressed ones included.
+    let (done, held_until) = std::sync::mpsc::channel::<()>();
     let holder = {
         let on_air = on_air.clone();
         std::thread::spawn(move || {
             let _held = lock(&on_air.sender);
-            std::thread::sleep(Duration::from_millis(600));
+            let _ = held_until.recv_timeout(Duration::from_secs(10));
         })
     };
     eventually("the sender held", || on_air.sender.try_lock().is_err());
@@ -1582,33 +1688,13 @@ fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_audio_sender_bl
     // its Stop has gone but inside the time this thread measures (about 4 ms quiet, 50-230 ms on
     // a loaded box). In the app it runs long before any Stop, so warm it first.
     tauri::async_runtime::block_on(async {});
-    let mut took = Vec::new();
-    let mut answers = Vec::new();
-    let mut buffer = [0u8; 256];
-    for stop in 1..=5u64 {
-        on_air.pressing(Some(9));
-        let pressed = std::time::Instant::now();
-        answers.push(send(&screens.main, "halt_tx", json!({})));
-        let deadline = pressed + Duration::from_secs(1);
-        let left = loop {
-            if let Ok(length) = socket.recv(&mut buffer) {
-                let at = std::time::Instant::now();
-                let up = keys
-                    .receive
-                    .open(&buffer[..length])
-                    .and_then(|(kind, body)| Up::read(kind, &body));
-                if up == Some(Up::Stop { stop }) {
-                    break at;
-                }
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "Stop {stop} never left"
-            );
-        };
-        took.push(left - pressed);
-        eventually("the press ended", || on_air.press().is_none());
-    }
+    let (took, _, answers) = stops_leaving(
+        &screens.main,
+        &socket,
+        &mut keys,
+        || on_air.pressing(Some(9)),
+        || eventually("the press ended", || on_air.press().is_none()),
+    );
     let held_throughout = on_air.sender.try_lock().is_err();
     eprintln!("measured: with the audio sender held, the Stops left on the road {took:?}");
     assert!(
@@ -1619,6 +1705,7 @@ fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_audio_sender_bl
     sorted.sort();
     assert!(sorted[2] < Duration::from_millis(1), "the median: {took:?}");
     assert!(held_throughout, "premise: the sender was held throughout");
+    let _ = done.send(());
     holder.join().unwrap();
     shack.let_go();
     for answered in &answers {

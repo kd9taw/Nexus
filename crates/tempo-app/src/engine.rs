@@ -29840,8 +29840,18 @@ contact yourself."
         (*n != asked).then(|| (*ok, detail.clone()))
     }
 
-    /// Whether the latest Test CAT answer ([`Self::cat_reprobe_answer`]) is a launch Nexus
-    /// refused itself. Read under the same lock as the answer.
+    /// Answer the pending Test CAT without probing: the radio loop refused it, and `detail` says
+    /// why. Typed as refused, so the baud ladder never sweeps the port behind it. The CAT status is
+    /// left as it was, since a refusal says nothing about the link.
+    pub fn refuse_cat_reprobe(&mut self, detail: String) {
+        let n = self.cat_reprobe_answer.0.wrapping_add(1);
+        self.cat_reprobe_answer = (n, None, detail);
+        self.cat_reprobe_refused = true;
+    }
+
+    /// Whether the latest Test CAT answer ([`Self::cat_reprobe_answer`]) is one Nexus refused
+    /// itself: a launch it refused, or a press while the station was keyed
+    /// ([`Self::refuse_cat_reprobe`]). Read under the same lock as the answer.
     pub fn cat_reprobe_refused(&self) -> bool {
         self.cat_reprobe_refused
     }
@@ -31630,6 +31640,14 @@ contact yourself."
     pub fn trip_tx_watchdog_for_test(&mut self) {
         self.tx_watchdog = true;
         self.tx_enabled = false;
+    }
+
+    /// For tests outside this crate: the watchdog's wall clock as if it had started `secs` ago, so
+    /// the radio loop's tests reach the limit through the real check (`keyboard::watchdog_tripped`
+    /// at each keying point) without waiting out its minutes.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn age_tx_watchdog_for_test(&mut self, secs: u64) {
+        self.tx_watchdog_start = Some(now_unix_secs().saturating_sub(secs));
     }
 
     /// T/R slot length (seconds) for the active tier: DX1 = 15 s; the native
@@ -72136,7 +72154,9 @@ mod tests {
     /// - FT2: tones from the key (no lead-in) to 2.520 s, and `tx_over_secs` is exactly that.
     /// - TempoDeep: tones from the key to 9.920 s; `tx_over_secs` (12.64) over-estimates it.
     /// - MSK144: tones from the key to 4.464 / 9.432 / 14.472 / 29.448 s at 5 / 10 / 15 / 30 s
-    ///   (period minus 0.536 to 0.552 s), and `tx_over_secs` is the whole period.
+    ///   (period minus 0.536 to 0.552 s), and `tx_over_secs` is the whole period. Moved on
+    ///   2026-11-11 to WSJT-X's own 4.5 / 9.5 / 14.5 / 29.5 s (period minus 0.5 s, cut mid-frame;
+    ///   `msk144::gen_wave`), in its own change.
     #[test]
     fn tx_over_secs_against_the_wave_each_slot_tier_really_keys() {
         const SR: f64 = 12_000.0;
@@ -72172,7 +72192,7 @@ mod tests {
                 12.64,
             ),
         ];
-        for (p, last) in [(5, 4.464), (10, 9.432), (15, 14.472), (30, 29.448)] {
+        for (p, last) in [(5, 4.5), (10, 9.5), (15, 14.5), (30, 29.5)] {
             rows.push((
                 format!("MSK144-{p}"),
                 Tier::Msk144,

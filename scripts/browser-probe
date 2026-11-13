@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|besttimes|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|toastcorner|logwaiting|topbar|header|rttyfit|digishell|alarmcell|firstrun|journeys|clublog|aprsmap|logbook|profiles|sstvlayout|menustop|stopabove|stopvisible
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|besttimes|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|txmeterspane|radioswitch|radiosetup|toastcorner|logwaiting|topbar|header|rttyfit|digishell|alarmcell|firstrun|journeys|clublog|aprsmap|logbook|profiles|sstvlayout|menustop|stopabove|stopvisible|ftline
        scripts/browser-probe --desktop-shard <n> <of>
 
   --desktop-shard <n> <of>
@@ -142,6 +142,15 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         asserting nothing scrolls sideways, every control and temperature is on
                         screen, and a real drag and clicks reach the verbs, with a planted
                         overflow that must be caught (ui/probe/txmeters-probe.mjs)
+  --desktop txmeterspane
+                        the large TX meters pane in the real app on FT8, Phone, CW and SSTV on the
+                        supported screens at the OS's scaling (1366×768 at 100-175 % to 4K at
+                        200 %), keyed: each needle dial half as wide and high as 1.24.0's on the
+                        same page (± 10 %), the name, value and scale numbers no smaller, the
+                        numbers clear of one another, the needle and the band, the pane shorter,
+                        no other pane shorter or with another computed floor, the TX strip and
+                        Stop TX unmoved; 1.24.0's dial planted back and crowded numbers must be
+                        caught (ui/probe/txmeterspane-probe.mjs; it builds nothing)
   --desktop radioswitch the radio switch notice and the Radios card in the real app, at
                         1024×768 and 1920×1080: Nexus switches radio by itself, the notice
                         and its Undo and Why? are on screen, Undo selects the radio it left,
@@ -226,6 +235,13 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         words are on screen and topmost. The cell without its one height must move
                         Stop TX (control). ALARMCELL_SCREENS=FT,RTTY narrows a local run
                         (ui/probe/alarmcell-probe.mjs; it builds nothing)
+  --desktop ftline      FT's QSO strip in the real app at 1024×768, 1366×768, 1920×1080 and 2560×1440, at
+                        65, 100 and 175 %, with the dashboard rail off and on: the next-over box ("TX CQ …",
+                        Free text, Send, Log) starts where its line does, the strip's left edge on the second
+                        line, with and without a transmitter alarm; Stop TX is on screen and topmost, and the
+                        alarm's words are seen. The empty alarm cell planted before the box must be caught
+                        (control). FTLINE_OUT=<file> writes the geometry (ui/probe/ftline-probe.mjs; it builds
+                        nothing)
   --desktop sstvlayout  the SSTV screen in the real app at every size class (xs to xl) at 100 % and
                         175 %, in English and Russian: the composer stands at the foot of the panes
                         under the gallery and the meters pane, Stop TX and Stop do not move when the
@@ -286,8 +302,8 @@ USAGE
 # job, which deals this list round-robin over its shards with --desktop-shard. Slowest first, so the
 # deal balances (local seconds on 2026-11-05: toastcorner 299, digishell 330, topbar 96, waterfalls 92, logbook 67,
 # header 62, journeys 42, rttyfit 39, the rest 7-27); keep a new probe near its cost when you add it.
-DESKTOP_ALL=(toastcorner digishell alarmcell sstvlayout stopvisible topbar waterfalls logbook header journeys rttyfit menustop stopabove profiles firstrun radiosetup contestlog
-  logwaiting spots atu radioswitch jtty activation clublog aprsmap callcard voicenote rotor contactcard txmeters besttimes)
+DESKTOP_ALL=(toastcorner digishell alarmcell sstvlayout stopvisible topbar waterfalls txmeterspane logbook header journeys rttyfit menustop stopabove profiles firstrun radiosetup contestlog
+  ftline logwaiting spots atu radioswitch jtty activation clublog aprsmap callcard voicenote rotor contactcard txmeters besttimes)
 
 SCENARIO='stream'
 SHARD=''
@@ -379,6 +395,7 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = jtty ] && exec node "$ROOT/ui/probe/jtty-probe.mjs"
   [ "$DESKTOP" = waterfalls ] && exec node "$ROOT/ui/probe/waterfalls-probe.mjs"
   [ "$DESKTOP" = txmeters ] && exec node "$ROOT/ui/probe/txmeters-probe.mjs"
+  [ "$DESKTOP" = txmeterspane ] && exec node "$ROOT/ui/probe/txmeterspane-probe.mjs"
   [ "$DESKTOP" = logwaiting ] && exec node "$ROOT/ui/probe/logwaiting-probe.mjs"
   [ "$DESKTOP" = radioswitch ] && exec node "$ROOT/ui/probe/radioswitch-probe.mjs"
   [ "$DESKTOP" = radiosetup ] && exec node "$ROOT/ui/probe/radiosetup-probe.mjs"
@@ -390,6 +407,7 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = rttyfit ] && exec node "$ROOT/ui/probe/rttyfit-probe.mjs"
   [ "$DESKTOP" = digishell ] && exec node "$ROOT/ui/probe/digishell-probe.mjs"
   [ "$DESKTOP" = alarmcell ] && exec node "$ROOT/ui/probe/alarmcell-probe.mjs"
+  [ "$DESKTOP" = ftline ] && exec node "$ROOT/ui/probe/ftline-probe.mjs"
   [ "$DESKTOP" = clublog ] && exec node "$ROOT/ui/probe/clublog-probe.mjs"
   [ "$DESKTOP" = aprsmap ] && exec node "$ROOT/ui/probe/aprsmap-probe.mjs"
   [ "$DESKTOP" = logbook ] && exec node "$ROOT/ui/probe/logbook-probe.mjs"
