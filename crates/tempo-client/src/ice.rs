@@ -585,6 +585,15 @@ impl IceRoad {
         state.connected && now.saturating_duration_since(state.answered) >= RESTART_SILENCE
     }
 
+    /// The road as one that connected and has heard no answer since `RESTART_SILENCE` before
+    /// `now`: for a test of what a stalled road leads to.
+    #[cfg(test)]
+    pub(crate) fn stall(&self, now: Instant) {
+        let mut state = lock(&self.state);
+        state.connected = true;
+        state.answered = now - RESTART_SILENCE;
+    }
+
     /// The pair ICE selected, if it has.
     pub fn route(&self) -> Option<Route> {
         *lock(&self.route)
@@ -2826,74 +2835,98 @@ mod tests {
     }
 
     /// ⛔ Only an answer under the other end's credentials, from its end of the pair, keeps a road
-    /// from being taken for a silent one: this computer's pair is R, and it has heard nothing for
-    /// longer than [`RESTART_SILENCE`]; an answer to its check to R that is signed with another
-    /// key, from R, leaves it stalled (a stranger cannot hold off a restart), and so does a
-    /// correctly signed one from anywhere else. CONTROL: the answer from R, signed, ends it.
+    /// from being taken for a silent one: this computer pairs with R (R answers its check), then
+    /// hears nothing for longer than [`RESTART_SILENCE`]. An answer to a check to R signed with
+    /// another key, from R, leaves it stalled (a stranger cannot hold off a restart); so does a
+    /// correctly signed one from anywhere else; and so does a correctly signed answer to its check
+    /// to R2, another of the other end's candidates (of lower priority, so the pair stays R), from
+    /// R2: the agent takes it, but it is not an answer on the pair. CONTROL: R's next check,
+    /// answered from R and signed, ends it.
     #[test]
     fn only_a_signed_answer_from_the_pair_keeps_a_road_from_stalling() {
         let computer = IceRoad::bind(loopback(), Role::Computer, host_only(), TICK).unwrap();
-        let (r, other) = (
+        let (r, other, r2) = (
+            UdpSocket::bind(loopback()).unwrap(),
             UdpSocket::bind(loopback()).unwrap(),
             UdpSocket::bind(loopback()).unwrap(),
         );
         r.set_read_timeout(Some(Duration::from_millis(5))).unwrap();
-        let at_r = r.local_addr().unwrap();
-        let host = |at: SocketAddr| {
+        r2.set_read_timeout(Some(Duration::from_millis(5))).unwrap();
+        let (at_r, at_r2) = (r.local_addr().unwrap(), r2.local_addr().unwrap());
+        let line = |at: SocketAddr, priority: u32| {
             format!(
-                "candidate:1 1 udp 2130706431 {} {} typ host",
+                "candidate:1 1 udp {priority} {} {} typ host",
                 at.ip(),
                 at.port()
             )
         };
-        assert!(computer.answer(&offer_naming(vec![host(at_r)])));
-        let mut buffer = [0u8; 2048];
-        let started = Instant::now();
-        let id: [u8; 12] = loop {
-            assert!(started.elapsed() < Duration::from_secs(3), "no check to R");
-            let _ = computer.recv(&mut buffer);
-            if let Ok((n, _)) = r.recv_from(&mut buffer) {
-                if StunMessage::parse(&buffer[..n]).is_ok_and(|m| m.is_binding_request()) {
-                    break buffer[8..20].try_into().unwrap();
-                }
-            }
-        };
-        {
-            let mut state = lock(&computer.state);
-            state.nominated = Some((computer.host(), at_r));
-            state.connected = true;
-            state.answered = Instant::now() - RESTART_SILENCE - Duration::from_millis(1);
-        }
-        assert!(computer.stalled(Instant::now()));
-        let answer = |key: &[u8]| {
-            turn::Writer::new(0x001, turn::Class::Success, &id)
+        assert!(computer.answer(&offer_naming(vec![
+            line(at_r, 2_130_706_431),
+            line(at_r2, 1_694_498_815),
+        ])));
+        let key = b"00112233445566778899aabbccddeeff";
+        let answer = |id: &[u8; 12], key: &[u8]| {
+            turn::Writer::new(0x001, turn::Class::Success, id)
                 .address(0x0020, computer.host())
                 .finish(Some(key))
         };
+        let mut buffer = [0u8; 2048];
+        // The next check this computer sends `socket`'s way.
+        let check_to = |socket: &UdpSocket, buffer: &mut [u8; 2048]| -> [u8; 12] {
+            let started = Instant::now();
+            loop {
+                assert!(started.elapsed() < Duration::from_secs(5), "no check");
+                let _ = computer.recv(buffer);
+                if let Ok((n, _)) = socket.recv_from(buffer) {
+                    if StunMessage::parse(&buffer[..n]).is_ok_and(|m| m.is_binding_request()) {
+                        return buffer[8..20].try_into().unwrap();
+                    }
+                }
+            }
+        };
+        let id2 = check_to(&r2, &mut buffer);
+        let id = check_to(&r, &mut buffer);
+        r.send_to(&answer(&id, key), computer.host()).unwrap();
+        let started = Instant::now();
+        while computer.route() != Some(Route::Direct(at_r)) {
+            assert!(
+                started.elapsed() < Duration::from_secs(3),
+                "premise: paired with R"
+            );
+            let _ = computer.recv(&mut buffer);
+        }
+        lock(&computer.state).answered =
+            Instant::now() - RESTART_SILENCE - Duration::from_millis(1);
+        assert!(computer.stalled(Instant::now()));
+
         r.send_to(
-            &answer(b"not-the-other-ends-password-0000"),
+            &answer(&id, b"not-the-other-ends-password-0000"),
             computer.host(),
         )
         .unwrap();
-        other
-            .send_to(
-                &answer(b"00112233445566778899aabbccddeeff"),
-                computer.host(),
-            )
-            .unwrap();
+        other.send_to(&answer(&id, key), computer.host()).unwrap();
+        r2.send_to(&answer(&id2, key), computer.host()).unwrap();
         for _ in 0..40 {
             let _ = computer.recv(&mut buffer);
         }
         assert!(
+            lock(&computer.state)
+                .agent
+                .has_viable_remote_candidate(at_r2),
+            "premise: the answer from R2 was taken"
+        );
+        assert_eq!(
+            computer.route(),
+            Some(Route::Direct(at_r)),
+            "premise: the pair is R"
+        );
+        assert!(
             computer.stalled(Instant::now()),
-            "a forged answer held off the restart"
+            "an answer that is not the pair's, signed, held off the restart"
         );
         // CONTROL.
-        r.send_to(
-            &answer(b"00112233445566778899aabbccddeeff"),
-            computer.host(),
-        )
-        .unwrap();
+        let next = check_to(&r, &mut buffer);
+        r.send_to(&answer(&next, key), computer.host()).unwrap();
         for _ in 0..40 {
             let _ = computer.recv(&mut buffer);
         }

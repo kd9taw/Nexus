@@ -768,6 +768,14 @@ impl Thread {
                 // fetched under two seconds old and no Stop of its computer's taken since it began. Said at each hold, one datagram for each, and a
                 // press refused never keys later. A press whose freshness cannot be read this moment
                 // is neither: its next hold asks again.
+                // ⛔ A hold for the press last seen is not new, so it skips the freshness and
+                // Stop-number checks. After an internet road falls silent and is restarted
+                // (`tempo_client::ice`), the screen may still be re-asserting a press the
+                // station ended at its gap meanwhile: what keeps those holds from keying it again
+                // is `PttHold`'s rule that an ended press never keys again. That rule is now the
+                // barrier on this path; the "nothing keys" end-to-end test
+                // (`over_the_internet_a_silent_road_restarts_on_the_link_and_nothing_keys_meanwhile`)
+                // goes red without it.
                 let new = road.pressing.map(|(pressing, _)| pressing) != Some(press);
                 let fresh = if new {
                     match road.clock.freshness(road.named, now) {

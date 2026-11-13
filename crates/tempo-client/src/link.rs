@@ -763,8 +763,7 @@ async fn keep(outbox: Outbox, mut writer: tokio::task::JoinHandle<()>, shared: A
             _ = every.tick() => if outbox.ping().is_err() { break },
             // Each internet road's candidates as it finds them, on the link.
             _ = trickle.tick(), if !shared.ice.is_empty() => {
-                let stalled = shared.ice.iter().any(|(_, ice)| ice.stalled(std::time::Instant::now()));
-                if lock(&shared.restarts).due(stalled, std::time::Instant::now()) {
+                if shared.restart_due(std::time::Instant::now()) {
                     shared.restart(&outbox);
                 }
                 for (name, ice) in &shared.ice {
@@ -802,6 +801,16 @@ impl Shared {
             restarts: Default::default(),
             restarting: AtomicBool::new(false),
         }
+    }
+
+    /// Whether to restart the internet roads at `now`: one of them stalled, at this computer's
+    /// pace ([`Restarts::due`]), and ⛔ never while the last restart is unanswered: a link backed
+    /// up past the pace would send a second, sooner than the station's floor after the first as
+    /// the station reads them, and the station would end the connection. A station of this build
+    /// answers every `restart` or ends the connection, so the wait always ends.
+    fn restart_due(&self, now: std::time::Instant) -> bool {
+        let stalled = self.ice.iter().any(|(_, ice)| ice.stalled(now));
+        !self.restarting.load(Ordering::SeqCst) && lock(&self.restarts).due(stalled, now)
     }
 
     /// ⛔ Every internet road restarted ([`IceRoad::restart`]) and their new offers sent in a
@@ -1005,6 +1014,55 @@ mod tests {
             station_key: None,
         };
         (Arc::new(link), theirs)
+    }
+
+    /// ⛔ No second restart while the first is unanswered: a link backed up for longer than this
+    /// computer's pace would otherwise send another, and the station ends a connection that asks
+    /// sooner than its floor after the last. A stalled road is restarted (its `restart` written to
+    /// a pipe the station never reads); still stalled past [`crate::ice::RESTART_EVERY`], with the
+    /// station's `restarted` not yet heard, it is not restarted again. CONTROL: once the station's
+    /// answer is heard, it is.
+    #[tokio::test]
+    async fn no_second_restart_while_the_first_is_unanswered() {
+        let road = Arc::new(
+            IceRoad::bind(
+                "127.0.0.1:0".parse().unwrap(),
+                crate::ice::Role::Computer,
+                Gather {
+                    direct: true,
+                    stun: None,
+                    relay: None,
+                },
+                Duration::from_millis(5),
+            )
+            .unwrap(),
+        );
+        let (ours, _theirs) = tokio::io::duplex(1 << 16);
+        let ours = WebSocketStream::from_raw_socket(ours, Role::Client, None).await;
+        let (sink, _stream) = ours.split();
+        let (outbox, _writer) = Outbox::spawn(sink);
+        let shared = Shared::new(None, None, Arc::default(), vec![("stop", road.clone())]);
+        let start = std::time::Instant::now();
+        road.stall(start);
+        assert!(
+            shared.restart_due(start),
+            "premise: a stalled road restarts"
+        );
+        assert!(shared.restart(&outbox));
+        let later = start + crate::ice::RESTART_EVERY + Duration::from_secs(1);
+        road.stall(later);
+        assert!(
+            !shared.restart_due(later),
+            "a second restart while the first was unanswered"
+        );
+        // CONTROL: the station's answer, then the road stalls again.
+        let answer = json!({"type":"restarted","roads":{"stop":{
+            "ufrag":"0011223344556677","pwd":"00112233445566778899aabbccddeeff","candidates":[]}}});
+        assert_eq!(shared.heard(Whole::Text(answer.to_string())), Ok(()));
+        assert!(
+            shared.restart_due(later),
+            "CONTROL: restarted after the answer"
+        );
     }
 
     /// ⛔ A `restarted` this computer did not ask for ends the link: a station of this build says
