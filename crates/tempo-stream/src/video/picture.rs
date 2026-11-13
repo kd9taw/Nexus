@@ -19,6 +19,13 @@
 //!   one more reason never to encode more than the page shows. That is the picture's own budget;
 //!   where the session estimates the link ([`Bound::within`]), what the link carries decides
 //!   within it (`video::rate`).
+//! - **Lighter through a TURN relay, when the operator asks** ([`Bound::on`], operator ruling 1410,
+//!   2026-11-13). A page reached only through the relay ([`Path::Relay`]) costs the service per GB,
+//!   so with "Use less data when a stream goes through the relay" on, the picture's ceiling there is
+//!   [`RELAY_LIGHT_KBPS`] instead of [`INTERNET_KBPS`]. Only the bit rate: the size stays, since
+//!   (measured 2026-10-03) the whole picture at a low bit rate reads better than a smaller one the
+//!   browser enlarges. Receive audio is not the picture's and is untouched (`video::rate` leaves it
+//!   its share first). Off, and on every other path, the bound is exactly what it was.
 //! - **BT.601, limited range.** VP8 carries no colour description, and a browser's decoder assumes
 //!   exactly that, so any other matrix would shift every colour on the page.
 use std::time::Instant;
@@ -37,6 +44,11 @@ pub const INTERNET_PIXELS: u64 = 2560 * 1600;
 pub const LAN_KBPS: u32 = 10_000;
 /// …and for one anywhere else.
 pub const INTERNET_KBPS: u32 = 4_000;
+/// …and for one reached through a TURN relay while the operator's lower-bandwidth mode is on: about
+/// 1.06 Mbit/s with receive audio, roughly 0.48 GB a relayed hour against up to 1.8 GB at
+/// [`INTERNET_KBPS`] (the cost estimate of 2026-11-11, its "low" stream). Measured 2026-10-03, the
+/// cockpit's text still reads at 150 kbit/s, so this leaves room for the waterfall's motion.
+pub const RELAY_LIGHT_KBPS: u32 = 1_000;
 /// The bit rate's floor, in kbit/s, for any picture.
 pub const MIN_KBPS: u32 = 300;
 /// The smallest side the station takes a page's picture area to have. A page that says less (its
@@ -98,8 +110,12 @@ pub enum Path {
     /// The station sends the picture to a private IPv4 address: the page is on the shack's own
     /// network.
     Lan,
-    /// Anywhere else: the internet, or a relay.
+    /// Anywhere else, the page reached directly over the internet.
     Internet,
+    /// The selected pair's remote end is a relayed (TURN) candidate the page named: every byte of
+    /// the picture crosses the relay. Bounded as [`Path::Internet`] unless the operator's
+    /// lower-bandwidth mode is on ([`Bound::on`]).
+    Relay,
 }
 
 /// The most a picture may be encoded at, and the bit rate it is given.
@@ -124,7 +140,7 @@ impl Bound {
     pub fn new(path: Option<Path>, view: Option<(u32, u32)>) -> Self {
         let (pixels, max_kbps) = match path {
             Some(Path::Lan) => (LAN_PIXELS, LAN_KBPS),
-            Some(Path::Internet) | None => (INTERNET_PIXELS, INTERNET_KBPS),
+            Some(Path::Internet | Path::Relay) | None => (INTERNET_PIXELS, INTERNET_KBPS),
         };
         let (width, height) = view.map_or((u32::MAX, u32::MAX), |(w, h)| {
             (w.max(MIN_VIEW), h.max(MIN_VIEW))
@@ -135,6 +151,21 @@ impl Bound {
             pixels,
             max_kbps,
             link: None,
+        }
+    }
+
+    /// As [`Bound::new`], and with the operator's lower-bandwidth mode (`lighter_on_relay`) on, a
+    /// page on [`Path::Relay`] gets [`RELAY_LIGHT_KBPS`] as its ceiling. Any other path, or the mode
+    /// off, is [`Bound::new`] exactly.
+    pub fn on(path: Option<Path>, view: Option<(u32, u32)>, lighter_on_relay: bool) -> Self {
+        let bound = Self::new(path, view);
+        if lighter_on_relay && path == Some(Path::Relay) {
+            Self {
+                max_kbps: bound.max_kbps.min(RELAY_LIGHT_KBPS),
+                ..bound
+            }
+        } else {
+            bound
         }
     }
 
@@ -433,6 +464,47 @@ mod tests {
             let (sw, sh) = encoded_size(w, h, &internet).unwrap();
             assert!(u64::from(sw) * u64::from(sh) <= INTERNET_PIXELS, "{w}x{h}");
         }
+    }
+
+    /// Operator ruling 1410: the lower-bandwidth mode lowers the ceiling on a relayed path only,
+    /// and only while it is on. Off, a relayed page is bounded exactly as one on the internet; on,
+    /// the shack's network, the internet and a path not known yet are untouched. The size never
+    /// changes, only the bit rate, and the floor still holds.
+    #[test]
+    fn the_lighter_mode_caps_the_bit_rate_on_a_relayed_path_only_and_only_when_on() {
+        let view = Some((1920, 1080));
+        let relayed = Bound::on(Some(Path::Relay), view, true);
+        assert_eq!(relayed.max_kbps, RELAY_LIGHT_KBPS);
+        assert_eq!(
+            relayed.kbps(1920, 1080),
+            RELAY_LIGHT_KBPS,
+            "2 Mbit/s capped to 1"
+        );
+        assert_eq!(relayed.kbps(320, 240), MIN_KBPS, "the floor still holds");
+        assert_eq!(
+            encoded_size(2560, 1600, &relayed),
+            encoded_size(2560, 1600, &Bound::new(Some(Path::Relay), view)),
+            "the size is not the mode's"
+        );
+        // Off: a relayed page is an internet one, as before the mode existed.
+        assert_eq!(
+            Bound::on(Some(Path::Relay), view, false),
+            Bound::new(Some(Path::Internet), view)
+        );
+        assert_eq!(
+            Bound::on(Some(Path::Relay), view, false).max_kbps,
+            INTERNET_KBPS
+        );
+        // On, every path that is not the relay is untouched.
+        for path in [Some(Path::Lan), Some(Path::Internet), None] {
+            assert_eq!(
+                Bound::on(path, view, true),
+                Bound::new(path, view),
+                "{path:?}"
+            );
+        }
+        // CONTROL: the cap is below what the relayed path would otherwise get.
+        assert!(RELAY_LIGHT_KBPS < INTERNET_KBPS && RELAY_LIGHT_KBPS > MIN_KBPS);
     }
 
     /// The page's picture area bounds the picture, by whichever side it reaches first: the station

@@ -5689,6 +5689,26 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.remoteStream.display')}</span>
               </div>
             )}
+            {/* Operator ruling 1410: the stream's lower-bandwidth mode through the TURN relay. OFF by
+                default; only a relayed path's picture bit rate changes (tempo_stream picture.rs
+                Bound::on), never receive audio, a direct path or the shack's network. */}
+            {IS_WINDOWS && (
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.remoteRelayLighter.label')}</span>
+                  <button data-setting="remoteRelayLighter"
+                    type="button"
+                    role="switch"
+                    aria-checked={form.remoteRelayLighter === true}
+                    className={`toggle${form.remoteRelayLighter === true ? ' on' : ''}`}
+                    onClick={() => updateBool('remoteRelayLighter', form.remoteRelayLighter !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.remoteRelayLighter.hint')}</span>
+              </div>
+            )}
             {!IS_WINDOWS && (
               <div className="settings-field">
                 <span className="settings-label">{t('settings.remoteStream.label')}</span>
