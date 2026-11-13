@@ -204,6 +204,10 @@ export const STOP_WORDS: Record<string, readonly string[]> = {
   de: ['stopp', 'stoppen', 'halt', 'anhalten', 'abbrechen', 'abbruch', 'beenden'],
   es: ['parar', 'pare', 'parada', 'detener', 'detén', 'abortar', 'anular', 'cancelar', 'dejar de'],
   fr: ['arrêter', 'arrête', 'arrêt', 'interrompre', 'abandonner', 'annuler', 'échap', 'échappement'],
+  // Italian imperatives and infinitives each stand alone, so both forms are listed: Ferma / Fermare
+  // (stop), Arresta / Arresto (halt), Interrompi (interrupt), Annulla (cancel), and the catalog's
+  // «Smetti di ascoltare» (Stop listening) and «Termina contest…» (reviewed 2026-11-12).
+  it: ['ferma', 'fermare', 'fermati', 'arresta', 'arrestare', 'arresto', 'interrompi', 'interrompere', 'annulla', 'annullare', 'abbandona', 'smetti', 'smettere', 'termina', 'terminare'],
   ja: ['停止', '停波', '中止', '中断', '止め', '止まれ', 'ストップ', 'キャンセル', '取消', '取り消', '終了', 'エスケープ'],
   // Russian inflects, and a word here must match whole, so each form a caption takes is listed.
   // The catalog says «Выключить будильник» for Stop alarm and «Завершить» for a Stop that ends.

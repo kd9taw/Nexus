@@ -60,7 +60,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 /** [label, route]. Tempo is the `chat` view. */
 const VIEWS = [['FT', 'operate'], ['Tempo', 'chat'], ['Phone', 'phone'], ['CW', 'cw'], ['RTTY', 'rtty'], ['PSK', 'psk'],
   ['JTTY', 'jtty'], ['SSTV', 'sstv'], ['APRS', 'aprs'], ['JS8', 'js8']]
-const ALL_LOCS = ['en', 'de', 'es', 'fr', 'ja', 'ru', 'zh', 'zh-hant']
+const ALL_LOCS = ['en', 'de', 'es', 'fr', 'it', 'ja', 'ru', 'zh', 'zh-hant']
 /** A window as [CSS width, CSS height, the OS's scaling as a device pixel ratio] — a screen of probe/sizes.mjs, or a
  *  bare [w, h] window off the matrix (dragged below any supported screen: 700×800, 900×600, 1200×750 hold xs). */
 const px = (s) => [s.w, s.h, s.scale]

@@ -238,7 +238,7 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         (ui/probe/digishell-probe.mjs; it builds nothing)
   --desktop alarmcell   the transmitter alarm cell on every operating screen's TX strip (FT, Phone,
                         CW, RTTY, PSK, JTTY, SSTV, JS8) in the real app, at 150 and 175 % from 700×800
-                        to 1366×768, in all eight languages (switched live): an alarm coming and going
+                        to 1366×768, in all nine languages (switched live): an alarm coming and going
                         leaves the strip the same height and Stop TX where it was, and the alarm's
                         words are on screen and topmost. The cell without its one height must move
                         Stop TX (control). ALARMCELL_SCREENS=FT,RTTY narrows a local run

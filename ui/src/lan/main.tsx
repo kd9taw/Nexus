@@ -6,6 +6,7 @@ import { initLocale, installCatalog, setLocale } from '../i18n'
 import { DE } from '../i18n/de'
 import { ES } from '../i18n/es'
 import { FR } from '../i18n/fr'
+import { IT } from '../i18n/it'
 import { JA } from '../i18n/ja'
 import { RU } from '../i18n/ru'
 import { ZH } from '../i18n/zh'
@@ -18,6 +19,7 @@ import '../styles.css'
 installCatalog('de', DE)
 installCatalog('es', ES)
 installCatalog('fr', FR)
+installCatalog('it', IT)
 installCatalog('ja', JA)
 installCatalog('ru', RU)
 installCatalog('zh', ZH)

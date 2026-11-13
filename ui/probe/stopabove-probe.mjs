@@ -58,6 +58,8 @@ const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 /** [window (probe/sizes.mjs), the size class it must come out as]. 700×800 is below any supported screen — the xs
  *  layout lives only in a window dragged that small (no supported screen reaches xs at the app's 100 %). */
 const SIZES = [[offMatrix(700, 800), 'xs'], [QHD, 'xl']]
+// STOPABOVE_LOCALE=it runs every case with the page in that language (`&lang=` on each page).
+const LANG_Q = process.env.STOPABOVE_LOCALE ? `lang=${process.env.STOPABOVE_LOCALE}&` : ''
 /** [overlay, how to tell it is open]. */
 const OVERLAYS = [
   ['dialog', `document.querySelector('.ui-dialog') != null`],
@@ -140,10 +142,10 @@ async function run([win], [overlay, isOpen], control) {
   try {
     await call('Emulation.setDeviceMetricsOverride', metrics(win))
     // The box Stop TX has with no overlay at all: the overlay must not move it.
-    await call('Page.navigate', { url: `${origin}/probe/stopabove.html?overlay=none` })
+    await call('Page.navigate', { url: `${origin}/probe/stopabove.html?${LANG_Q}overlay=none` })
     if (!(await until(`document.documentElement.getAttribute('data-viewport') && ${BOX}`))) return { error: 'the page never drew Stop TX' }
     const bare = await settled()
-    await call('Page.navigate', { url: `${origin}/probe/stopabove.html?overlay=${overlay}` })
+    await call('Page.navigate', { url: `${origin}/probe/stopabove.html?${LANG_Q}overlay=${overlay}` })
     if (!(await until(`document.documentElement.getAttribute('data-viewport') && ${BOX}`))) return { error: 'the page never drew Stop TX' }
     const vp = await evaluate(`document.documentElement.getAttribute('data-viewport')`)
     if (overlay === 'bandmenu') {
@@ -309,7 +311,7 @@ async function measureBare(form, size, zoom) {
   const call = (method, params) => browser.call(method, params, sessionId)
   try {
     await call('Emulation.setDeviceMetricsOverride', metrics(size))
-    await call('Page.navigate', { url: `${origin}/probe/stopabove.html?overlay=${form}&zoom=${zoom}` })
+    await call('Page.navigate', { url: `${origin}/probe/stopabove.html?${LANG_Q}overlay=${form}&zoom=${zoom}` })
     let last = null
     for (let i = 0; i < 60; i++) {
       await sleep(150)
@@ -334,7 +336,7 @@ async function measureIota(form, size, zoom, control, extra = '') {
   }
   try {
     await call('Emulation.setDeviceMetricsOverride', metrics(size))
-    await call('Page.navigate', { url: `${origin}/probe/stopabove.html?overlay=${form}&iota=1&zoom=${zoom}${control ? '&iotacontrol=1' : ''}${extra}` })
+    await call('Page.navigate', { url: `${origin}/probe/stopabove.html?${LANG_Q}overlay=${form}&iota=1&zoom=${zoom}${control ? '&iotacontrol=1' : ''}${extra}` })
     if (form === 'strip') {
       let focused = false
       for (let i = 0; i < 100 && !focused; i++) {
@@ -350,6 +352,12 @@ async function measureIota(form, size, zoom, control, extra = '') {
       const now = await evaluate(IOTA_MEASURE(form))
       if (now && !now.waiting && last && !last.waiting && JSON.stringify(now) === JSON.stringify(last)) break
       last = now
+    }
+    // What the source line should read in the language on the page: the catalog's own text for it, not the English,
+    // so the check is the same check in every language (STOPABOVE_LOCALE). Read from the page's own i18n module.
+    if (last) {
+      const w = await call('Runtime.evaluate', { expression: "import('/src/i18n/index.ts').then((m) => m.t('iota.offer.fromSpot'))", awaitPromise: true, returnByValue: true })
+      last.sourceWant = w.exceptionDetails ? null : w.result.value
     }
     return last
   } finally {
@@ -526,7 +534,7 @@ try {
       if (!m.nameWhole) red.push(`the group name is not drawn whole inside its form ${JSON.stringify(m.name)} vs ${JSON.stringify(m.form)}`)
       if (m.covers.length) red.push(`the group name covers ${m.covers.join(', ')}`)
       if (!m.inputTop) red.push('the IOTA box is covered')
-      if (m.source !== 'from the spot') red.push(`the source reads ${JSON.stringify(m.source)}`)
+      if (!m.sourceWant || m.source !== m.sourceWant) red.push(`the source reads ${JSON.stringify(m.source)}, not ${JSON.stringify(m.sourceWant)}`)
       if (!m.logInWindow) red.push('Log is outside the window')
       if (!m.logTop) red.push('Log is covered')
       red.push(...islandReds(m, await measureIota(form, size, zoom, false, '&islands=0'), at))

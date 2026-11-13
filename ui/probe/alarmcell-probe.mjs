@@ -57,7 +57,7 @@ const SCALES = process.env.ALARMCELL_SCALES ? process.env.ALARMCELL_SCALES.split
 // The old floor row, 1024 wide (683 / 585 px at 150 / 175 %), went with the 2026-11-11 ruling; it was NOT the same window as
 // 1366×768 there (910 / 780 px, sm). xs stays covered by 700×800 and 900×600, which is why this one could go.
 const SIZES = process.env.ALARMCELL_SIZES ? process.env.ALARMCELL_SIZES.split(',').map((s) => s.split('x').map(Number)) : [[700, 800], [900, 600], [LAPTOP.w, LAPTOP.h]]
-const LOCALES = process.env.ALARMCELL_LOCALES ? process.env.ALARMCELL_LOCALES.split(',') : ['en', 'ru', 'de', 'fr', 'es', 'ja', 'zh', 'zh-hant']
+const LOCALES = process.env.ALARMCELL_LOCALES ? process.env.ALARMCELL_LOCALES.split(',') : ['en', 'ru', 'de', 'fr', 'es', 'it', 'ja', 'zh', 'zh-hant']
 const ALARM = { id: 1, text: 'High SWR: 3.2:1 — transmit was stopped', radioId: 1, radioName: 'IC-7300', atMs: Date.UTC(2026, 10, 8, 14, 22, 33) }
 const NO_HEIGHT = '.ch-txalarm{height:auto!important}'
 // Where the cell stands on a line of its own and its missing height was measured to move Stop TX (700x800 150 %).
