@@ -9,7 +9,7 @@
 // entity, the state/province, the grid square, the distance, the bearing and the SNR. So do
 // the tokens the roster is built out of (ROSTER_TOKENS below). What moved is the prose around
 // them — the column headings, the filters, and everything a row says out loud.
-import { useEffect, useMemo, useState, type KeyboardEvent, type MouseEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
 import { t } from '../i18n'
 import { callCardTrigger, qrzPageOf } from './CallCard'
 import { useRovingList } from '../useRovingList'
@@ -246,7 +246,7 @@ export function OperateRoster({
   const centroids = useEntityCentroids()
   const me = useMemo(() => gridToLatLon(myGrid), [myGrid])
 
-  const rows = useMemo(() => {
+  const sorted = useMemo(() => {
     const built = stations.map((s) => {
       const up = s.call.toUpperCase()
       const raw = needAlertsByCall?.get(up)
@@ -450,6 +450,30 @@ export function OperateRoster({
     selectedCall,
   ])
 
+  // #510 — HOLD THE ORDER UNDER THE POINTER. The list above re-sorts on every decode batch, and
+  // two equally-needed stations swap on their live SNR, so a different station could slide under
+  // the pointer between the two clicks of a double-click and get worked instead. While the pointer
+  // is over the grid the rows keep the order they had (each row's data still updates in place); a
+  // newly heard station joins at the bottom, and one that drops off the list (aged out, filtered)
+  // leaves it. A column the operator sorts by takes effect at once, and becomes the order held. On
+  // leave the list falls back to the live sort. Display only: which row works which station is
+  // unchanged — the double-click still works the station of the row it lands on.
+  const [hovering, setHovering] = useState(false)
+  const held = useRef<{ sort: RosterSort; calls: string[] } | null>(null)
+  const rows = useMemo(() => {
+    const h = held.current
+    let out = sorted
+    if (hovering && h && h.sort.key === sort.key && h.sort.dir === sort.dir) {
+      const pos = new Map(h.calls.map((c, i) => [c, i]))
+      out = [
+        ...sorted.filter((r) => pos.has(r.s.call)).sort((a, b) => pos.get(a.s.call)! - pos.get(b.s.call)!),
+        ...sorted.filter((r) => !pos.has(r.s.call)),
+      ]
+    }
+    held.current = hovering ? { sort, calls: out.map((r) => r.s.call) } : null
+    return out
+  }, [sorted, hovering, sort])
+
   // #357 — the Park column takes room only while it has something to say: a station on the roster
   // is at a park, or the operator has sorted by it (so the sort they picked stays on screen). With
   // neither, the row keeps its old columns and its old minimum width (`.or-has-park` adds the track).
@@ -606,6 +630,8 @@ export function OperateRoster({
         aria-label={t('operate.roster.grid.aria')}
         aria-rowcount={rows.length + 1}
         onKeyDown={roving.containerProps.onKeyDown}
+        onPointerEnter={() => setHovering(true)}
+        onPointerLeave={() => setHovering(false)}
       >
         <div className="or-row or-header" role="row">
           {th('call', t('operate.roster.col.call'))}
