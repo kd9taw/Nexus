@@ -36,8 +36,19 @@ const ENROLMENTS_PER_DAY = 5
 const INVITES_PER_DAY = 20
 /** The people a station may have invited at once. */
 const INVITES_PER_STATION = 20
-/** Checkouts and portal pages an account may open a minute: each one is a call to the payment provider. */
+/** Checkouts and portal pages an account may open a minute: each one is a call to the payment provider.
+ *  And a day, so one account cannot keep the provider busy at ten a minute around the clock: an operator
+ *  subscribing, changing plan or fetching an invoice opens a handful. */
 const BILLING_PER_MINUTE = 10
+const BILLING_PER_DAY = 40
+/** `health` reads a caller may make a minute (an IPv4 address or IPv6 /64), and an IPv6 /48 may. An
+ *  uptime monitor reads once a minute from each of its regions, each region its own address. */
+const HEALTH_PER_MINUTE = 6
+const HEALTH_NETWORK_PER_MINUTE = 30
+/** Each of `health`'s probes answers within this, or counts as down: a monitor waits for none of them. */
+const HEALTH_DEADLINE_MS = 2000
+/** The room `health` reaches. Never a station's: a station's room is named by its id, always a UUID. */
+const HEALTH_ROOM = 'health'
 /** Account deletions and copies an account may ask for in ten minutes. */
 const ACCOUNT_DATA_PER_TEN_MINUTES = 5
 /** A subscription in these states has ended and can charge nothing more; any other can. */
@@ -76,6 +87,43 @@ async function sync(env: RemoteEnv, row: StationRow, now: number): Promise<void>
   requireValue(response.ok, 'serviceUnavailable', 503)
 }
 
+// THE DEEP HEALTH ROUTE, for an uptime monitor: GET /api/remote/health, with no sign-in. It proves three
+// things and says nothing else: the database answers (`database`), a room can be reached (`room`), and the
+// billing Worker is bound (`billing`). Each is a fixed word, `ok` or what is wrong; 200 when all three are
+// ok, 503 otherwise. No count, id, version, revision or timing: it tells a stranger nothing `config` does not.
+//
+// The database probe IS the caller's rate counter, an UPSERT that has to read and write its row, so a
+// database that answers reads but refuses writes is down here too. A caller over its limit is refused
+// `tryLater` (429), never given a reading. While the database is down the counter cannot count, so the
+// limit cannot hold either; what is left is the room probe, which touches no station and stores nothing,
+// and a flood then is a job for an edge rule. The room is one of its own (`HEALTH_ROOM`) and answers
+// before it reads any admission; reaching it starts the room class and reads its storage, as a station's
+// room does when it wakes. Billing is presence only: calling it would reach the payment provider each time.
+type Probe = 'ok' | 'down'
+async function health(request: Request, env: RemoteEnv, now: number): Promise<Response> {
+  const { caller: from, network } = caller(request.headers.get('cf-connecting-ip'))
+  let database: Probe = 'ok'
+  try {
+    await within(rate(env, `health:${from}`, now, HEALTH_PER_MINUTE))
+    if (network) await within(rate(env, `health-network:${network}`, now, HEALTH_NETWORK_PER_MINUTE))
+  } catch (error) {
+    if (error instanceof Refusal) throw error
+    database = 'down'
+  }
+  const reached: Probe = await within(env.STATIONS.get(env.STATIONS.idFromName(HEALTH_ROOM)).fetch('https://station.internal/health'))
+    .then(response => response.status === 204 ? 'ok' : 'down', () => 'down')
+  const billing = env.BILLING !== undefined ? 'ok' : 'absent'
+  const ok = database === 'ok' && reached === 'ok' && billing === 'ok'
+  return json({ status: ok ? 'ok' : 'degraded', database, room: reached, billing }, ok ? 200 : 503)
+}
+/** `work`'s answer, or a rejection once `HEALTH_DEADLINE_MS` has passed without one. */
+async function within<T>(work: Promise<T>): Promise<T> {
+  let timer = 0
+  try {
+    return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('deadline')), HEALTH_DEADLINE_MS) })])
+  } finally { clearTimeout(timer) }
+}
+
 async function api(request: Request, env: RemoteEnv): Promise<Response> {
   const url = new URL(request.url), now = Date.now()
   requireValue(url.origin === env.PUBLIC_REMOTE_ORIGIN && !url.search, 'originDenied')
@@ -102,6 +150,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     // otherwise, and an older service never says so.
     billing: env.BILLING !== undefined,
   })
+  if (request.method === 'GET' && path === 'health') return health(request, env, now)
   const match = /^stations\/([0-9a-f-]{36})\/(.+)$/.exec(path)
   // The native client's routes (Nexus on another computer), on its own token and its device key's
   // signature, with no Origin and no cookie. No other route takes that caller, and it takes no other.
@@ -411,8 +460,8 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
   // into relay socket state, and the provider subject has no business travelling with it.
   // `verified` is destructured off for the same reason `subject` is: `identity` is spread into
   // the browser identity and on into relay socket state, and how this account was identified is
-  // not something the wire needs to carry. `email` likewise — it is kept nowhere (only its hashes
-  // are), and is read here only transiently to notify the owner when a device is added by sign-in.
+  // not something the wire needs to carry. `email` likewise. It is read here only for the owner-device
+  // notice, which goes to the account's own address (authority.ts `noticeAddress`), never to this one.
   const { subject, verified, email, ...identity } = await account(request, env, now)
   await rate(env, `account:${identity.accountId}`, now, 120)
   const entitlement = await readEntitlement(env, identity.accountId, now)
@@ -502,6 +551,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     const checkout = path === 'billing/checkout', input = await body(request, checkout ? ['plan', 'country'] : [])
     requireValue(!checkout || ((input.plan === 'monthly' || input.plan === 'annual') && isBillingCountry(input.country)), 'invalidRequest', 400)
     await rate(env, `billing:${identity.accountId}`, now, BILLING_PER_MINUTE)
+    await rate(env, `billing-day:${identity.accountId}`, now, BILLING_PER_DAY, DAY_MS)
     return checkout
       ? billingAnswer(await env.BILLING.checkout(identity.accountId, input.plan as 'monthly' | 'annual', input.country as string), 'https://checkout.stripe.com/')
       : billingAnswer(await env.BILLING.portal(identity.accountId), 'https://billing.stripe.com/')
@@ -665,7 +715,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
         // owner's, so it sends nothing and the device stays held. A no-op too without the provider
         // secret. Once: this branch runs only on the waiting→approved transition.
         await deviceAddedNotice(env, { accountId: identity.accountId, stationId: row.id, deviceId: current.id,
-          toEmail: role === 'owner' ? email : null, stationName: row.name, deviceName: name, kind: 'browser' }, now)
+          ownerSignIn: role === 'owner' ? email : null, stationName: row.name, deviceName: name, kind: 'browser' }, now)
         return json({ deviceId: current.id, approved: true })
       }
       return json({ deviceId: current.id, approved: current.approved === 1 })
@@ -683,22 +733,21 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       // to the owner's own address, which we have only when the caller is the owner (a guest's
       // sign-in sends nothing, the device stays held); a no-op too without the provider secret.
       await deviceAddedNotice(env, { accountId: identity.accountId, stationId: row.id, deviceId,
-        toEmail: role === 'owner' ? email : null, stationName: row.name, deviceName: name, kind: 'browser' }, now)
+        ownerSignIn: role === 'owner' ? email : null, stationName: row.name, deviceName: name, kind: 'browser' }, now)
     }
     return json({ deviceId, approved: approveAs !== null }, 200, { 'set-cookie': cookie(row.id, credential) })
   }
   // What the station's use runs on: the owner's own entitlement, which a guest uses too
   // (`GUESTS_ON_OWNER_PLAN`). Its first internet use starts the trial (`TRIAL_STARTS_AT_BINDING`).
   let plan = role === 'owner' ? entitlement : await readEntitlement(env, row.account_id, now)
+  // Only the owner's own use starts the owner's one trial (security review 2026-11-12, M2): a guest on
+  // the owner's plan is refused `trialRequired` until the owner has started it. Each caller below runs
+  // this only once the device is known approved, so nothing is started for one that is not.
   const internet = async (starts: boolean) => {
-    if (starts) plan = await firstUse(env, row, plan, now)
+    if (starts && role === 'owner') plan = await firstUse(env, row, plan, now)
     requireTrial(plan, now)
     if (role !== 'owner' && !GUESTS_ON_OWNER_PLAN) requireTrial(entitlement, now)
   }
-  // Free on the shack's own network (authority.ts lanEntitlement): an account whose internet use has
-  // ended may still take a LAN-only ticket for a browser already approved, and renew it. The relay
-  // route and every other verb still need internet use.
-  if (!(plan.access === 'lan' && (verb === 'ticket' || verb === 'renew'))) await internet(verb === 'turn')
   if (verb === 'ticket' || verb === 'renew' || verb === 'turn') {
     const input = await body(request, verb === 'renew' ? ['sessionId'] : [], verb === 'turn' ? [] : ['scope'])
     // `scope: 'lan'` asks for a LAN-only session: its stream is held to the shack's own network, and an
@@ -707,9 +756,12 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     // the session was admitted with.
     requireValue(!('scope' in input) || input.scope === 'lan', 'invalidRequest', 400)
     const lan = input.scope === 'lan'
-    if (!lan) await internet(verb === 'ticket')
     const current = await device(request, env, row.id, identity.accountId, now)
     requireValue(current?.approved === 1, 'deviceNotApproved')
+    // Free on the shack's own network (authority.ts lanEntitlement): an account whose internet use has
+    // ended may still take a LAN-only ticket for a browser already approved, and renew it. The relay
+    // route and an internet session need internet use, and the first of them starts the trial.
+    if (!(lan && plan.access === 'lan')) await internet(verb !== 'renew')
     const browser = { ...identity, accountId: row.account_id, deviceId: current.id, deviceGeneration: current.generation,
       expiresAt: Math.min(identity.expiresAt, current.expires_at) }
     const policy = await access(env, row, now)
@@ -765,8 +817,11 @@ async function accountCopy(env: RemoteEnv, accountId: string, now: number): Prom
     d.expires_at AS expiresAt, d.revoked_at AS revokedAt, d.account_id=? AS yours
     FROM devices d JOIN stations s ON s.id=d.station_id WHERE d.account_id=? OR s.account_id=? ORDER BY d.station_id, d.id`, accountId, accountId, accountId)
   const truth = (row: Record<string, unknown>, ...keys: string[]) => ({ ...row, ...Object.fromEntries(keys.map(key => [key, row[key] === 1])) })
+  const notice = await env.DB.prepare('SELECT notice_address FROM accounts WHERE id=?').bind(accountId).first<{ notice_address: string | null }>()
   return {
     exportedAt: now, accountId,
+    // Where a "device added" notice goes, once the account has had one.
+    noticeAddress: notice?.notice_address ?? null,
     trial: trial && truth(trial, 'enabled'),
     subscription: subscription && truth(subscription, 'cancelAtPeriodEnd'),
     checkouts: await all('SELECT id, created_at AS createdAt FROM checkout_sessions WHERE account_id=? ORDER BY created_at', accountId),
@@ -1018,8 +1073,11 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
   const role = row.enabled === 1 ? await memberRole(env, row, caller.accountId) : null
   requireValue(role, 'stationUnavailable', 404)
   let plan = role === 'owner' ? entitlement : await readEntitlement(env, row.account_id, now)
+  // Only the owner's own use starts the owner's one trial (security review 2026-11-12, M2): a guest on
+  // the owner's plan is refused `trialRequired` until the owner has started it. Each caller below runs
+  // this only once the device is known approved, so nothing is started for one that is not.
   const internet = async (starts: boolean) => {
-    if (starts) plan = await firstUse(env, row, plan, now)
+    if (starts && role === 'owner') plan = await firstUse(env, row, plan, now)
     requireTrial(plan, now)
     if (role !== 'owner' && !GUESTS_ON_OWNER_PLAN) requireTrial(entitlement, now)
   }
@@ -1074,9 +1132,9 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
     deviceGeneration: current.generation, expiresAt: Math.min(caller.expiresAt, current.expires_at) })
   if (verb === 'pipe') {
     requireValue(request.method === 'GET' && request.headers.get('upgrade')?.toLowerCase() === 'websocket', 'webSocketRequired', 426)
-    await internet(true)
     const current = await signer(new Uint8Array())
     requireValue(current.approved === 1, 'deviceNotApproved')
+    await internet(true)
     await rate(env, `pipe:${row.id}:${current.id}`, now, 12)
     const response = await room(env, row.id, 'client-pipe', { access: await access(env, row, now), identity: identity(current), entitlement: plan })
     // Opening the station from this computer is use, as a browser's ticket is.
@@ -1118,7 +1176,7 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
       // to the owner's own address, which we have only when the caller is the owner (a guest's
       // sign-in sends nothing, the device stays held); a no-op too without the provider secret.
       await deviceAddedNotice(env, { accountId: caller.accountId, stationId: row.id, deviceId: current.id,
-        toEmail: role === 'owner' ? caller.email : null, stationName: row.name, deviceName: name, kind }, now)
+        ownerSignIn: role === 'owner' ? caller.email : null, stationName: row.name, deviceName: name, kind }, now)
       return json({ deviceId: current.id, approved: true, expiresAt: UNTIL_REMOVED, renewsUntil: null })
     }
     if (current) return json({ deviceId: current.id, approved: current.approved === 1, expiresAt: current.expires_at, renewsUntil: null })
@@ -1139,14 +1197,14 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
       // to the owner's own address, which we have only when the caller is the owner (a guest's
       // sign-in sends nothing, the device stays held); a no-op too without the provider secret.
       await deviceAddedNotice(env, { accountId: caller.accountId, stationId: row.id, deviceId,
-        toEmail: role === 'owner' ? caller.email : null, stationName: row.name, deviceName: name, kind }, now)
+        ownerSignIn: role === 'owner' ? caller.email : null, stationName: row.name, deviceName: name, kind }, now)
     }
     return json({ deviceId, approved: approveAs !== null, expiresAt, renewsUntil: null })
   }
-  await internet(verb === 'turn')
   fieldsOf(bytes, [])
   const current = await signer(bytes)
   requireValue(current.approved === 1, 'deviceNotApproved')
+  await internet(verb === 'turn')
   const policy = await access(env, row, now)
   // Past exactly the checks a browser's ticket is.
   observerDeadline(policy, identity(current), plan, now)

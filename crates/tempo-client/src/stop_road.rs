@@ -556,7 +556,9 @@ fn run(shared: Arc<Shared>, receive: Opener) {
 }
 
 fn serve(shared: &Arc<Shared>, mut receive: Opener) {
-    let mut buffer = [0u8; 256];
+    // Room for more than the station's datagrams: on the internet the road's socket also reads
+    // the TURN server's answers, which can be longer.
+    let mut buffer = [0u8; 2048];
     let mut beat: Option<Instant> = None;
     loop {
         match shared.path.recv(&mut buffer) {

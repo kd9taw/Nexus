@@ -335,6 +335,60 @@ fn cloud_commands_and_remote_origins_have_no_generic_dispatch() {
     assert!(Client::new(REMOTE_ORIGIN).is_ok());
 }
 
+/// The build-time origin (rw5 §3.1): unset is staging, exactly today's origin; each of the two known
+/// origins builds for itself; nothing else is one (a bad value stops the compile, since
+/// `REMOTE_ORIGIN` is a const).
+#[test]
+fn the_build_origin_is_one_of_exactly_two_and_unset_is_staging() {
+    use transport::{origin_for, PRODUCTION_ORIGIN, STAGING_ORIGIN};
+    assert_eq!(origin_for(None), "https://remote-staging.hamradiotools.io");
+    assert_eq!(origin_for(Some(STAGING_ORIGIN)), STAGING_ORIGIN);
+    assert_eq!(origin_for(Some(PRODUCTION_ORIGIN)), PRODUCTION_ORIGIN);
+    for bad in [
+        "",
+        "https://remote.hamradiotools.io/",
+        "http://remote.hamradiotools.io",
+        "https://REMOTE.hamradiotools.io",
+        "https://remote.example.invalid",
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| origin_for(Some(bad))).is_err(),
+            "{bad:?}"
+        );
+    }
+    assert!([STAGING_ORIGIN, PRODUCTION_ORIGIN].contains(&REMOTE_ORIGIN));
+    assert_ne!(REMOTE_ORIGIN, transport::OTHER_ORIGIN);
+    assert!([STAGING_ORIGIN, PRODUCTION_ORIGIN].contains(&transport::OTHER_ORIGIN));
+    // What this build was compiled for, so a run of this suite names the build it proved.
+    assert_eq!(
+        REMOTE_ORIGIN,
+        origin_for(option_env!("NEXUS_REMOTE_ORIGIN"))
+    );
+}
+
+/// Every origin allow-list follows the build: the station's service client, the account's, and a
+/// computer's internet road each take this build's origin and refuse the other known one. Run in
+/// both builds (default, and `NEXUS_REMOTE_ORIGIN=https://remote.hamradiotools.io`), this is a
+/// production build refusing staging and a staging build refusing production.
+#[test]
+fn every_origin_allow_list_takes_this_build_and_refuses_the_other() {
+    let other = transport::OTHER_ORIGIN;
+    assert!(Client::new(REMOTE_ORIGIN).is_ok());
+    assert!(matches!(Client::new(other), Err("originDenied")));
+    assert!(crate::lan_client::internet::Service::new(REMOTE_ORIGIN).is_ok());
+    assert!(matches!(
+        crate::lan_client::internet::Service::new(other),
+        Err("originDenied")
+    ));
+    // The account refuses the other origin before it looks for a sign-in; its own origin passes
+    // the allow-list (and is then ready, or `accountNotReady` while its tenant is unconfigured).
+    assert!(matches!(account::Service::new(other), Err("originDenied")));
+    assert!(!matches!(
+        account::Service::new(REMOTE_ORIGIN),
+        Err("originDenied")
+    ));
+}
+
 #[test]
 fn disable_preempts_a_full_command_queue() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -2896,20 +2950,19 @@ async fn a_pairing_saved_under_an_unknown_origin_is_never_used_or_removed() {
         .is_some_and(|state| state.binding == binding && state.enabled));
 }
 
-// DESIGN ONLY. Both tests below encode behaviour that changes pairing and credential handling, which
-// waits for the operator's approval; they are ignored until then and fail today. Run them with
-// `cargo test --manifest-path src-tauri/Cargo.toml --lib --features radio remote_service -- --ignored`.
-const RETIRED_STAGING_ORIGIN: &str = "https://remote-staging.hamradiotools.io";
+// The two-environment cutover, as approved: production starts clean. Each build is for one
+// of two known origins (`transport::REMOTE_ORIGIN`), and the other one is the retired one: in the
+// production build that is staging, where every desktop up to the move holds its pairing.
 
-/// Every 1.12.0 desktop holds a pairing under the staging origin. A build pointed at production must
-/// name that as a move (not "unlock your credential store", which is false), must not turn Remote on
-/// from it, must keep the record so going back to the previous release still works during the
-/// overlap, and must let the operator clear it locally, since the retired service cannot be asked to.
+/// Every desktop before the move holds a pairing under the staging origin. A build pointed at
+/// production must name that as a move (not "unlock your credential store", which is false), must
+/// not turn Remote on from it, must keep the record so going back to the previous release still
+/// works, and must let the operator clear it locally, since the retired service cannot be asked to.
+/// Written against the other known origin, so the staging build proves the same rule the other way.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "credential gate: pending operator approval of the Remote two-environment cutover design (retired-origin pairing)"]
 async fn a_pairing_under_the_retired_origin_is_named_as_moved_and_can_be_cleared_locally() {
     let cloud = fake_cloud().await;
-    let vault = paired_vault(RETIRED_STAGING_ORIGIN);
+    let vault = paired_vault(transport::OTHER_ORIGIN);
     let old = vault.binding().unwrap().unwrap();
     vault
         .save_state(&vault::State {
@@ -2951,7 +3004,6 @@ async fn a_pairing_under_the_retired_origin_is_named_as_moved_and_can_be_cleared
 /// the HTTP refusal reads as `pairingExpired` and every socket refusal as `accessDenied`, and both
 /// render as "check the connection".
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "credential gate: pending operator approval of the Remote two-environment cutover design (serviceMoved refusal)"]
 async fn a_closed_service_is_named_on_http_and_on_the_station_socket() {
     let gone = refusing_cloud("410 Gone", r#"{"error":"serviceMoved"}"#).await;
     let client = Client::new(&gone).unwrap();

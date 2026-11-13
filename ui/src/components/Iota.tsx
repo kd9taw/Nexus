@@ -9,10 +9,15 @@
 // box, says where it came from (the spot's comment, or the callbook), and logs what the box holds, so
 // the operator can change or clear it first. What to fill is the station's (`get_iota_offer`,
 // `tempo_core::logbook::offer::iota_offer`); `useIotaPrefill` is what a form keeps of it.
+//
+// The ISLAND within the group (ADIF's IOTA_ISLAND_ID) is only ever the operator's pick (operator
+// ruling, 2026-11-10): no spot or callbook names one. With a group in the box, `IotaIslandPick` lists
+// that group's islands from IOTA's islands list (shipped with the group list under the same written
+// permission); nothing is picked until the operator picks, and a new group lets go of the pick.
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { t } from '../i18n'
 import { withErrorToast } from '../toast'
-import { getIotaOffer, type IotaOfferData } from '../api'
+import { getIotaOffer, type IotaIsland, type IotaOfferData } from '../api'
 import {
   IOTA_SHAPE,
   IOTA_SITE,
@@ -22,6 +27,7 @@ import {
   iotaListStatus,
   iotaName,
   loadIotaGroups,
+  loadIotaIslands,
   normalizeIota,
   setIotaListOn,
   subscribeIotaGroups,
@@ -177,6 +183,84 @@ export function useIotaPrefill(
   }
 }
 
+/** The islands of the group `reference` the station holds, for a picker; empty until they are read,
+ *  and for no group, a group the list lacks, or no islands list. */
+export function useIotaIslands(reference: string | null | undefined): IotaIsland[] {
+  const version = useIotaGroups()
+  const r = normalizeIota(reference) ?? ''
+  const [held, setHeld] = useState<{ ref: string; list: IotaIsland[] }>({ ref: '', list: [] })
+  useEffect(() => {
+    if (!r) return
+    let live = true
+    void loadIotaIslands(r).then((list) => {
+      if (live) setHeld({ ref: r, list })
+    })
+    return () => {
+      live = false
+    }
+  }, [r, version])
+  return r && held.ref === r ? held.list : []
+}
+
+/** The island a form has picked for the group its IOTA box holds (`reference`): none until the
+ *  operator picks one, and none again whenever the group changes, since an island is one group's. */
+export function useIotaIslandPick(reference: string | null | undefined): [number | null, (id: number | null) => void] {
+  const r = normalizeIota(reference) ?? ''
+  const [pick, setPick] = useState<{ ref: string; id: number | null }>({ ref: r, id: null })
+  // A pick is forgotten with its group, not kept for a return to it.
+  useEffect(() => {
+    setPick((p) => (p.ref === r ? p : { ref: r, id: null }))
+  }, [r])
+  const id = pick.ref === r ? pick.id : null
+  return [id, (next) => setPick({ ref: r, id: next })]
+}
+
+/** An island's line in the picker: its name, and IOTA's note on it when it has one. */
+const islandLabel = (i: IotaIsland) => (i.comment ? `${i.name} (${i.comment})` : i.name)
+
+/**
+ * The island picker for the group `reference`: "Island [— none —|Brownsea (in England)|…]", listing
+ * only that group's islands, shown while the station has any for it. `value` is the island picked
+ * (null: none); `onChange` gets the pick or null.
+ */
+export function IotaIslandPick({
+  reference,
+  value,
+  onChange,
+  disabled = false,
+  className,
+}: {
+  reference: string | null | undefined
+  value: number | null
+  onChange: (id: number | null) => void
+  disabled?: boolean
+  /** The host form's field class, where the picker is a field of its own. */
+  className?: string
+}) {
+  const list = useIotaIslands(reference)
+  if (list.length === 0) return null
+  const picked = list.find((i) => i.id === value)
+  return (
+    <label className={className ? `iota-island ${className}` : 'iota-island'}>
+      <span>{t('iota.island.label')}</span>
+      <select
+        className="settings-input iota-island-pick"
+        value={picked ? String(picked.id) : ''}
+        title={picked ? islandLabel(picked) : t('iota.island.none')}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
+      >
+        <option value="">{t('iota.island.none')}</option>
+        {list.map((i) => (
+          <option key={i.id} value={String(i.id)}>
+            {islandLabel(i)}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
 /** Where the box's reference came from, while it is the station's fill: "from the spot". */
 export function IotaPrefillSource({ state }: { state: IotaPrefillState }) {
   if (!state.taken) return null
@@ -192,7 +276,16 @@ export function IotaPrefillSource({ state }: { state: IotaPrefillState }) {
  * "IOTA [EU-131] · Veneto Region group — from the spot  [×]", shown while it holds a reference or
  * the station names one. The reference is logged with the contact as the box holds it; × empties it.
  */
-export function IotaPrefillField({ state, value: given }: { state: IotaPrefillState; value: string | null | undefined }) {
+export function IotaPrefillField({
+  state,
+  value: given,
+  island,
+}: {
+  state: IotaPrefillState
+  value: string | null | undefined
+  /** The form's island pick for the reference in the box ([`useIotaIslandPick`]). */
+  island?: { value: number | null; onChange: (id: number | null) => void }
+}) {
   useIotaGroups()
   const value = given ?? ''
   if (!state.offer && value.trim() === '') return null
@@ -227,6 +320,7 @@ export function IotaPrefillField({ state, value: given }: { state: IotaPrefillSt
           ×
         </button>
       )}
+      {island && <IotaIslandPick reference={r} value={island.value} onChange={island.onChange} />}
     </div>
   )
 }

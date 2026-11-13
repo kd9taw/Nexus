@@ -626,7 +626,7 @@
    with Stop TX — and the rest of it waits past the foot (`--cockpit-ftstrip-rest`, the strip's height under that line,
    which OperateQsoStrip measures): FT's strip is 300–400 px on a small window at 175 %, taller than the shell's whole
    scrollport there, and parked whole it put its top, and Stop TX, above the window. Where the strip draws a
-   transmitter alarm cell on its second line and the two lines fit the scrollport, that line parks too, so the alarm
+   transmitter alarm cell and the lines down to the cell's fit the scrollport, those lines park too, so the alarm
    stands with Stop TX; otherwise only the first line does. What parks is cleared by a focus: OperateQsoStrip writes its
    rendered height on the shell (`--cockpit-ftstrip-park-h`), which the shells' scroll padding reads. It does not park at the top: a
    strip that tall parked there would cover every pane under it at every scroll position. Above the region's dividers
@@ -736,11 +736,13 @@
    comfortable minimum is the TRACK's, so a row keeps it and the next row stands below: a floor on the face
    alone leaves the track short and the faces overlap. It also gives the stacking flow, where a dial has
    no height of its own, the pane's height. A pane too short for one row scrolls in its body. TxNeedles'
-   LARGE_FACE_FLOOR_EM is this number: the column choice takes no shape whose rows would not fit it. */
+   LARGE_FACE_FLOOR_EM is this number: the column choice takes no shape whose rows would not fit it.
+   4.3em, about 1.24.0's 7em times the face's height against 1.24.0's (35.5 / 59, 4.21em): the dial is half 1.24.0's and the
+   drawing ends at its top (TxNeedles LARGE_DIAL), so a stacking cockpit's pane is that much shorter. */
 .txmeters-pane {
   display: grid;
   grid-template-columns: repeat(var(--txmeters-pane-cols, 3), minmax(0, 1fr));
-  grid-auto-rows: minmax(7em, 1fr);
+  grid-auto-rows: minmax(4.3em, 1fr);
   gap: 4px;
   height: 100%;
   min-width: 0;
@@ -939,6 +941,18 @@
   --chrome-bar-gap: max(var(--space-3), min(18px, (var(--vh-eff, 100vh) - 1100px) * 100));
   --chrome-head-gap: max(var(--space-2), min(var(--gap), (var(--vh-eff, 100vh) - 1100px) * 100));
   --chrome-extras-gap: max(var(--space-2), min(var(--space-3), (var(--vh-eff, 100vh) - 1100px) * 100));
+  /* The left rail's section list (styles.css `.mode-nav-top`, `.mode-btn`, `.mode-btn.sub`): the gap between
+     sections and each button's top and bottom padding. On a laptop the list holds more sections than the
+     rail's height, so the step buys back a section or two before the "N more" cue is needed (measured in
+     laptopfit-probe.mjs: at 1920×1080 ~5 more in view). Icons and labels keep their size. */
+  --chrome-rail-gap: max(2px, min(6px, (var(--vh-eff, 100vh) - 1100px) * 100));
+  --chrome-rail-btn-pad-y: max(3px, min(var(--space-2), (var(--vh-eff, 100vh) - 1100px) * 100));
+  --chrome-rail-sub-pad-y: max(3px, min(6px, (var(--vh-eff, 100vh) - 1100px) * 100));
+  /* THE LARGE TX METERS PANE'S LOW FLOOR (CockpitPaneFrame `lowFloor`, named by TxMeters `TxMetersPane` alone):
+     where a fill pane floors at the yielding 10em, this one floors lower, at its head and the body's padding
+     plus 35.5 / 59 of what 10em left its faces in 1.24.0, so on a screen that stood it on its floor the drawing
+     keeps 1.24.0's scale with its dial half 1.24.0's. It only lowers: min(the stock floor, this). */
+  --txmeters-pane-floor: min(7.6em, 100%);
 }
 
 /* THE TOP BAR'S STATUS LANE (components/StatusLane), ALWAYS DRAWN, a direct child of the bar right after the
@@ -978,7 +992,7 @@
   min-width: calc(var(--chrome-bar-gap, 18px) + 13px + 2 * var(--space-2) + 2px);
 }
 /* THE TRANSMITTER ALARM CELL (TxAlarmBanner, `.ch-txalarm`; operator pick "One line inside the strip",
-   2026-11-07): one line IN THE TX STRIP'S ROW, beside the TX state (FT: the first cell of its second line, under Stop TX). It holds
+   2026-11-07): one line IN THE TX STRIP'S ROW, beside the TX state (FT: on its second line, after Log). It holds
    the station's transmitter alarm and every critical status-lane item, which the top bar's lane may cut.
    As the header's last row an alarm moved Stop TX 26 to 38 px; as a line of the strip, the scope above
    shrank and Stop TX moved up. So the cell is ALWAYS DRAWN, alarms or none, and to the strip's line
@@ -1013,10 +1027,12 @@
   overflow: hidden;
   font-size: var(--fs-label);
 }
-/* FT's cell (OperateQsoStrip, TxAlarmBanner `ownLine`): the first cell of the strip's second line, which its
-   QSO controls already fill, so the cell always stands on a line of its own there. There the floor is the
-   alarm's name with the count and the ✕, and ONE HEIGHT: an empty cell's own line was 0 px tall, so an
-   alarm grew the strip (FT, 1366x768); fixed, that line is the same height empty or full. */
+/* FT's cell (OperateQsoStrip, TxAlarmBanner `ownLine`): on the strip's second line after the next-over box, Free
+   text, Send and Log, in the room they leave (never before the box: an empty cell there took half the line's
+   room and moved the box 600 px right at 2560x1440, 1.24.0). Where that room is short it wraps with the line's
+   tail, onto a line under them. There the floor is the alarm's name with the count and the ✕, and ONE HEIGHT:
+   an empty cell's own line was 0 px tall, so an alarm grew the strip (FT, 1366x768); fixed, its line is the
+   same height empty or full. */
 .ch-txalarm-own {
   min-width: 13em;
   height: 1.6em;

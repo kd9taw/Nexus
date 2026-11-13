@@ -1448,7 +1448,7 @@ fn the_contest_strip_fills_iota_and_the_merge_writes_it() {
                 }
             },
             |_| true,
-            |r| match r {
+            |r, _| match r {
                 "NA-046" => Some("Maine State East group".to_string()),
                 "NA-001" => Some("Long Island".to_string()),
                 _ => None,

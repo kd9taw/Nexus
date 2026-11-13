@@ -19,7 +19,7 @@ import { panelHost } from '../features/panelHost'
 import { composingText } from '../features/contestExchange'
 import type { AppSnapshot, FieldDayStatus, NeedTag, Settings, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
-import { TxMeters, TxMetersPane, TX_METERS_WHEN } from './TxMeters'
+import { TxMeters, TxMetersPane, TX_METERS_PANE_WEIGHT, TX_METERS_WHEN } from './TxMeters'
 import { BandStrip } from './BandStrip'
 import { PanelsMenu } from './PanelsMenu'
 import { ArrangePanes } from './panes/ArrangePanes'
@@ -2229,15 +2229,19 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
   // Each pane stands in one pair at most, so a feed already in the feeds' pair is not its partner.
   const metersGroup = cols >= 2 && hasMetersPane && panels != null ? groups.find((g) => g.ids.includes('txMetersPane'))?.ids : undefined
   const underMeters = metersGroup?.[metersGroup.indexOf('txMetersPane') + 1]
+  const timesSplit = (share: number | undefined, split: number) => (share != null ? share * split : undefined)
   const metersWith = !feedsSplit && (underMeters === 'spots' || underMeters === 'needed') ? underMeters : null
+  // The pair's split is the mean of its two stock weights (the meters' TX_METERS_PANE_WEIGHT and the feed's 1), as
+  // FT's pairs have it (OperateCockpit `fillPairs`), so a drag keeps the pair's stock total.
+  const metersSplit = (TX_METERS_PANE_WEIGHT.phone + 1) / 2
   const metersFrameRef = useRef<HTMLElement>(null)
   const spotsPane =
     hasSpotsPane && spotsBoard ? (
       <CockpitPaneFrame
         title={t('phone.pane.spots.title')}
         paneId="spots"
-        split={feedsSplit || metersWith === 'spots' ? 1 : undefined}
-        share={feedsSplit || metersWith === 'spots' ? panels?.layout.share.spots : undefined}
+        split={feedsSplit ? 1 : metersWith === 'spots' ? metersSplit : undefined}
+        share={feedsSplit ? panels?.layout.share.spots : metersWith === 'spots' ? timesSplit(panels?.layout.share.spots, metersSplit) : undefined}
         paneRef={spotsFrameRef}
         {...closeProps('spots')}
       >
@@ -2256,8 +2260,8 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
       <CockpitPaneFrame
         title={t('phone.pane.needed.title')}
         paneId="needed"
-        split={feedsSplit || metersWith === 'needed' ? 1 : undefined}
-        share={feedsSplit || metersWith === 'needed' ? panels?.layout.share.needed : undefined}
+        split={feedsSplit ? 1 : metersWith === 'needed' ? metersSplit : undefined}
+        share={feedsSplit ? panels?.layout.share.needed : metersWith === 'needed' ? timesSplit(panels?.layout.share.needed, metersSplit) : undefined}
         paneRef={neededFrameRef}
         {...closeProps('needed')}
       >
@@ -2779,6 +2783,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
         above={metersFrameRef}
         below={metersWith === 'spots' ? spotsFrameRef : neededFrameRef}
         varName="--pane-share"
+        scale={metersSplit}
         onCommit={(av, bv) => panels.setShares({ txMetersPane: av, [metersWith]: bv })}
         onReset={() => panels.setShares({ txMetersPane: null, [metersWith]: null })}
         label={t('operate.seam.pair.label', { above: labels.txMetersPane, below: labels[metersWith] })}
@@ -2790,8 +2795,9 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
       <TxMetersPane
         radio={snap.radio}
         paneRef={metersFrameRef}
-        split={metersWith ? 1 : undefined}
-        share={metersWith ? panels?.layout.share.txMetersPane : undefined}
+        weight={TX_METERS_PANE_WEIGHT.phone}
+        split={metersWith ? metersSplit : undefined}
+        share={metersWith ? timesSplit(panels?.layout.share.txMetersPane, metersSplit) : undefined}
         close={closeProps('txMetersPane')}
       />
     ) : null,

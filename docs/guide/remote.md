@@ -61,12 +61,14 @@ card holds:
 
 The field-by-field reference is [Settings ▸ Remote access](settings-reference.md#remote-access).
 
-### On the second PC: Stations on this network…
+### On the second PC: Connect to my station…
 
-On the second PC, **Stations on this network…** opens a window listing the stations this
-PC can operate. Each row has **Operate from this computer**, the station's key, and when the
-station was added by signing in, the date by which to sign in again. **Sign in…** adds a station
-with your account; **Pair with a code instead…** adds one with a code from the shack.
+On the second PC, **Connect to my station…** opens a window that looks for your station on this
+network first and, when it is not there, offers to sign in to reach it over the internet. Under
+**Advanced** it lists the stations this PC can operate. Each row has **Operate from this
+computer**, the station's key, and when the station was added by signing in, the date by which to
+sign in again. **Sign in…** adds a station with your account; **Pair with a code instead…** adds
+one with a code from the shack.
 
 While the second PC drives the station, a banner across the top says which station, how the
 link stands (connecting, live, not live, or another device in control) and offers **Leave**,
@@ -79,11 +81,13 @@ Nexus at the shack decides, and nothing set from afar changes it.
 - **A computer on the shack's own network**, paired there with a code or added by signing in on
   that network, transmits at once. It is never held.
 - **A browser or PC that signs in over the internet** can listen and take control at once, but
-  cannot transmit until you approve it at the shack, under Remote access, with its key.
+  cannot transmit for its first 15 minutes, and not until Nexus Remote has confirmed it emailed
+  you about it. **Allow to transmit** on its row at the shack lifts the hold sooner.
 - **A browser or PC you approved at the shack** transmits from anywhere. Each one is approved on
   its own.
-- Nexus does not email you when something signs in yet. Until it does, a computer that signs in
-  stays unable to transmit until you approve it.
+- When one of your own devices is added by signing in, Nexus Remote emails you. If that email is
+  not confirmed sent, or the device belongs to someone you invited, it stays unable to transmit
+  until you press **Allow to transmit**.
 
 ### What stops a transmission
 
@@ -124,7 +128,7 @@ Expected result: the card shows Remote on, the station's key, and the switches y
    group, the first time you see it.
 3. Press **Stream**. The first time, the shack asks **Let Chrome on Windows stream this
    station?** (or whichever browser it is), with the browser's key.
-4. At the shack, press **Approve browser** only if the key matches the one the browser shows.
+4. At the shack, press **Approve** only if the key matches the one the browser shows.
    You approve each browser once; it stays approved until you remove it.
 5. The stream opens with the shack's Nexus window. Click and type over it as you would at the
    shack.
@@ -138,15 +142,16 @@ When it is over, press **Stop TX** if anything is on the air, then close the pag
 
 1. At the shack, sign in to Nexus Remote first ([Set up the shack](#set-up-the-shack)) and turn on
    **Remote over this network**.
-2. On the second PC, open **Stations on this network…** and press **Sign in…**.
+2. On the second PC, open **Connect to my station…**, then **Advanced**, and press **Sign in…**.
 3. Sign in in the web browser that opens, with the account the station is linked to, or one its
    owner invited to operate it.
 4. Back in the window, the station is found on the network by name and added, with no code. If
    it is not found, type the address the shack's card shows, or press **Not on this network** to
    add it over the internet only.
-5. For the internet road: at the shack, approve the PC under Remote access. Nexus asks there with
-   the PC's key; approve only if it matches the key the PC shows. On your own network the PC needs
-   no approval.
+5. Over the internet the PC can take control at once, held from transmitting as in
+   [Who can transmit](#who-can-transmit). To let it transmit sooner, press **Allow to transmit** on
+   its row at the shack, after checking its key against the one the PC shows. On your own network
+   the PC is never held.
 
 Expected result: the station's row offers **Operate from this computer**. A PC added by signing
 in stays on the station's network for 30 days from that sign-in. In the last week the row says
@@ -158,7 +163,8 @@ Use this when the shack is not signed in to Nexus Remote, or the service cannot 
 
 1. At the shack, with **Remote over this network** on, press **Pair a computer**. The card shows a
    code for ten minutes. Whoever types it in that time is paired, so keep it to yourself.
-2. On the second PC, open **Stations on this network…** and choose **Pair with a code instead…**.
+2. On the second PC, open **Connect to my station…**, then **Advanced**, and choose **Pair with a
+   code instead…**.
 3. Pick the station from the list (it shows as "Nexus" and the first characters of its key), or
    type the address the shack shows.
 4. Type the code. Capitals and spaces do not matter.
@@ -168,7 +174,8 @@ count. Up to eight computers can be paired.
 
 ### Operate from the second PC
 
-1. In **Stations on this network…**, press **Operate from this computer** on the station's row.
+1. Open **Connect to my station…** and press **Connect to my station**, or under **Advanced**
+   press **Operate from this computer** on the station's row.
 2. Nexus starts again driving the station. The banner reads **Operating the station at …
    over this network**, or **over the internet (Beta)** when the station is not on your network.
 3. Operate as you would at the shack: the screens, audio, microphone and Stop are the shack's.
@@ -204,7 +211,7 @@ access** there and pair again, then compare the new key everywhere.
 
 ### Stop remote use
 
-- **One browser or PC:** at the shack, **Revoke browser approval** or **Remove** on its row.
+- **One browser or PC:** at the shack, **Remove** on its row.
   It is disconnected at once, and anything it kept on the air stops.
 - **Everyone for now:** **Turn off Remote**. Approved devices get back what they had when you turn
   it on again, with the TX switch off.
@@ -267,11 +274,10 @@ For a stuck transmission, see [Scenarios & troubleshooting](scenarios.md).
 - **Both PCs must run the same Nexus version.** The banner says which one to update.
 - **Passwords and remote-access settings stay at the shack.** Approving, inviting, pairing and
   network settings cannot be changed through a stream or from a second PC.
-- **A sign-in gives control, not transmit.** A browser or PC that signs in over the internet can
-  listen and take control, and transmits only once you approve it at the shack, with its key. A
+- **A sign-in gives control, not transmit at once.** A browser or PC that signs in over the
+  internet can listen and take control, and transmits after 15 minutes once Nexus Remote has
+  confirmed it emailed you, or sooner when you press **Allow to transmit** at the shack. A
   computer paired on the shack's own network is never held. Stop always works, from every device.
-- **No email notices yet.** Nexus does not yet email you when a browser or PC signs in to your
-  station.
 - **The station's licence class is the one checked.** Nexus at the shack applies the licence
   class set there, not a guest's. Someone you invite to operate transmits under your callsign.
 - **A PC added by signing in needs the Nexus Remote service every 30 days** to stay on the

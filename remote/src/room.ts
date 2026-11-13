@@ -123,7 +123,8 @@ export class StationRoom extends DurableObject<RemoteEnv> {
             station = { peer, identity: attachment.identity }; order = attachment.order
           } else if (attachment.role === 'browser') {
             const { lan, ...observer } = attachment
-            observers.push({ ...observer, peer })
+            // A LAN-only session is sent no frames, also from an attachment written before the flag.
+            observers.push({ ...observer, ...(lan === true ? { frames: false as const } : {}), peer })
             if (lan === true) this.lanUntil.set(attachment.sessionId, 0)
             // An attachment written before this field existed carries none, and gets 0: that
             // session may watch and read but not command until its next renewal, which is at
@@ -208,6 +209,8 @@ export class StationRoom extends DurableObject<RemoteEnv> {
 
   async fetch(request: Request): Promise<Response> {
     // This class has no public route or user-controlled proxy. Only index.ts calls it.
+    // `health` (index.ts) reaches its own room: answered before any admission is read, and nothing kept.
+    if (new URL(request.url).pathname === '/health') return new Response(null, { status: 204 })
     try {
       const input = request.method === 'GET' ? JSON.parse(request.headers.get('x-nexus-admission') ?? '') as Admission : await request.json<Admission>()
       await this.policy(input.access)
@@ -245,7 +248,9 @@ export class StationRoom extends DurableObject<RemoteEnv> {
         if (path === '/station') relay.connectStation(input.identity, peer, now)
         else {
           const lan = input.scope === 'lan'
-          relay.connectObserver(input.sessionId, input.identity, lan ? lanEntitlement(input.entitlement, now) : input.entitlement, peer, now)
+          // A LAN-only session is sent no observation frame (security review 2026-11-12, M1): the relay
+          // cannot tell that it is on the shack's network, and the monitor is the internet's.
+          relay.connectObserver(input.sessionId, input.identity, lan ? lanEntitlement(input.entitlement, now) : input.entitlement, peer, now, !lan)
           if (lan) this.lanUntil.set(input.sessionId, commandDeadline(lanEntitlement(input.entitlement, now), now))
           this.commandUntil.set(input.sessionId, commandDeadline(input.entitlement, now))
           this.accessOff.set(input.sessionId, input.entitlement?.state === 'disabled')
@@ -367,7 +372,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
         this.relay.receiveStation(peer, JSON.stringify(frame), now)
         const state = this.relay.checkpoint()
         if (state.station?.peer === peer) {
-          peer.send(JSON.stringify({ type: 'watch', enabled: state.observers.length > 0 }))
+          peer.send(JSON.stringify({ type: 'watch', enabled: this.relay.watching() }))
         }
       } catch { this.relay.disconnectStation(peer, 1008, 'invalidPublication') }
     } else this.relay.receiveObserver(attachment.sessionId, message, Date.now())
@@ -517,8 +522,9 @@ export class StationRoom extends DurableObject<RemoteEnv> {
         commandUntil: this.commandUntil.get(observer.sessionId) ?? 0, accessOff: this.accessOff.get(observer.sessionId) === true,
         ...(this.lanUntil.has(observer.sessionId) ? { lanUntil: this.lanUntil.get(observer.sessionId) } : {}) }]
     })
-    // A LAN-only session gets no lane that would carry the station across the internet: the
-    // relayed receive audio. Its lease and Stop (operations) and its stream, held to the LAN, stay.
+    // A LAN-only session gets no lane that would carry the station across the internet: no relayed
+    // receive audio, no observation frame (connectObserver), and on the operation lane only the
+    // lease and Stop (operation-relay.ts LAN_REQUESTS). Its stream, held to the LAN, stays.
     const internet = observers.filter(observer => observer.lanUntil === undefined)
     this.operations.sync(station?{peer:station.peer,supported:!!stationSocket&&parseOperationVersion(this.operationVersions.get(stationSocket))!==null,operationVersion:stationSocket?this.operationVersions.get(stationSocket):0,laneVersion:stationSocket?this.laneVersions.get(stationSocket):0}:null,observers,now)
     this.audio.sync(station ? { peer: station.peer, supported: this.audioVersions.get(stationSocket!) === 1, laneVersion: this.laneVersions.get(stationSocket!) } : null, internet)

@@ -168,19 +168,37 @@ export function mailbox(address: string): string {
 }
 
 /** What a newly signed-in device is, for the owner notice (the 2026-10-23 sign-in decision): who it belongs to, which
- *  station, and how to recognise it. `toEmail` is the STATION OWNER's verified address, read
- *  transiently and never stored; `null` when the owner's address is not available on this sign-in —
- *  a guest's sign-in carries the guest's address, not the owner's — which turns the notice into a
- *  no-op (nothing is sent, `sent_at` stays null, the device stays held: "no email, no unlock"). */
+ *  station, and how to recognise it. `ownerSignIn` is the verified address on the STATION OWNER's own
+ *  sign-in, or `null` for anyone else's (a guest's carries the guest's address). It is never where the
+ *  notice goes (`noticeAddress`): it can only be the first capture of the account's own address. `null`
+ *  with nothing captured turns the notice into a no-op (nothing is sent, `sent_at` stays null, the
+ *  device stays held: "no email, no unlock"). */
 export interface DeviceAddedNotice {
   accountId: string
   stationId: string
   deviceId: string
-  toEmail: string | null
+  ownerSignIn: string | null
   stationName: string
   deviceName: string
   kind: string
 }
+/** Where the owner notice goes (security review 2026-11-12, M4): the address the account was made
+ *  with, never whatever address a sign-in carries now. The notice lifts the station's transmit hold, so
+ *  someone who can change the verified address at the identity provider must not be able to send it to
+ *  themselves. `accounts.notice_address` holds it, written once, from a sign-in whose exact address
+ *  is the one the account was bound with (`email_hash`, written at the account's first verified sign-in
+ *  and never overwritten); nothing else writes it, and deletion clears it. No address captured and none
+ *  matching: `null`, and the device stays held. */
+async function noticeAddress(env: RemoteEnv, accountId: string, ownerSignIn: string): Promise<string | null> {
+  const row = await env.DB.prepare('SELECT notice_address, email_hash FROM accounts WHERE id=?')
+    .bind(accountId).first<{ notice_address: string | null; email_hash: string | null }>()
+  if (row?.notice_address) return row.notice_address
+  if (!row?.email_hash || await digest(`email:${ownerSignIn}`) !== row.email_hash) return null
+  await env.DB.prepare('UPDATE accounts SET notice_address=? WHERE id=? AND notice_address IS NULL AND email_hash=?')
+    .bind(ownerSignIn, accountId, row.email_hash).run()
+  return ownerSignIn
+}
+
 /** Email the account holder that a device was added to their Nexus Remote account by a sign-in
  *  (the 2026-10-23 sign-in decision). The durable `notices` row is written FIRST and is the
  *  precondition the station's transmit hold lifts against; delivery (who/when/which station, how to
@@ -192,7 +210,8 @@ export interface DeviceAddedNotice {
  *  but no mail is sent and `sent_at` stays null. `sent_at` is set ONLY when the provider accepts the
  *  send (a 2xx); a rejection or a network failure leaves it null. Since `notified` is `sent_at IS
  *  NOT NULL`, each of these leaves the device held ("no email, no unlock", operator 2026-10-24). The
- *  real key is never committed and no live mail is sent here; the address is used once and dropped. */
+ *  real key is never committed and no live mail is sent here. The address it goes to is the account's
+ *  own (`noticeAddress`), never the sign-in's. */
 export async function deviceAddedNotice(env: RemoteEnv, notice: DeviceAddedNotice, now: number): Promise<void> {
   // The DURABLE ENQUEUE comes first: one `notices` row a device, the record the station's transmit
   // hold lifts against (the native list surfaces its existence as `notified`). A store error leaves
@@ -205,7 +224,11 @@ export async function deviceAddedNotice(env: RemoteEnv, notice: DeviceAddedNotic
     return
   }
   const key = env.OWNER_NOTICE_API_KEY, from = env.OWNER_NOTICE_FROM
-  if (!key || !from || !notice.toEmail) return
+  // Only on the owner's own sign-in, as before: a guest's adds notify nobody, and stay held.
+  if (!key || !from || !notice.ownerSignIn) return
+  let to: string | null
+  try { to = await noticeAddress(env, notice.accountId, notice.ownerSignIn) } catch { return }
+  if (!to) return
   const manage = `${env.PUBLIC_REMOTE_ORIGIN}/remote/`
   const text =
     `A device was just added to your Nexus Remote account by signing in.\n\n` +
@@ -225,7 +248,7 @@ export async function deviceAddedNotice(env: RemoteEnv, notice: DeviceAddedNotic
       headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
       body: JSON.stringify({
         from,
-        to: notice.toEmail,
+        to,
         subject: 'A device was added to your Nexus Remote account',
         text,
       }),
@@ -325,9 +348,9 @@ async function signedIn(request: Request, env: RemoteEnv, now: number, clientId:
   // `subject` and `email` ride alongside Identity rather than inside it. The caller destructures
   // them off, so neither reaches the object that index.ts spreads into the browser identity and on
   // into relay socket state - the provider subject is not something the wire needs to carry, and
-  // the plaintext address is kept NOWHERE (only its hashes are stored): `email` is handed to the
-  // caller transiently for the owner-device notice (the 2026-10-23 sign-in decision) and must be used and dropped there,
-  // never stored or sent to the wire.
+  // the address is never sent to the wire. It is stored in one place only: `accounts.notice_address`,
+  // the owner's own address for the owner-device notice (the 2026-10-23 sign-in decision), captured
+  // once by `noticeAddress` from a sign-in whose address is the one this account was bound with.
   return { accountId: row.id, expiresAt: until, subject, verified: email !== null, email }
 }
 
@@ -480,8 +503,10 @@ export async function readEntitlement(env: RemoteEnv, accountId: string, now: nu
  *  network for as long as Remote is not switched off for the account, whatever its internet use. The
  *  date is a lease the session renews, never the account's: the observer and stream deadlines taken
  *  from it end the session within one lease of a switch-off, and nothing internet-only reads it. Only
- *  the session's observation, its lease and Stop, and a stream held to the LAN (stream-relay.ts) are
- *  open to such a session (room.ts); every other lane keeps the account's own entitlement. */
+ *  the session itself (with no observation frame), its lease and Stop, and a stream held to the LAN
+ *  (stream-relay.ts) are open to such a session (room.ts); every other lane keeps the account's own
+ *  entitlement. A LAN-only ticket can be asked for from anywhere, so nothing it opens may carry the
+ *  station's data across the relay (security review 2026-11-12, M1). */
 export function lanEntitlement(entitlement: AccountEntitlement, now: number): AccountEntitlement {
   // Named, never "not none": a reading without the field is no permission.
   return { ...entitlement, enabled: entitlement.access === 'lan' || entitlement.access === 'internet', expiresAt: now + OBSERVER_LEASE_MS }

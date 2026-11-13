@@ -96,6 +96,37 @@ describe('CockpitPaneFrame', () => {
     expect(frame.style.minHeight).toBe('min(calc(var(--cockpit-fill-min, 0px) * var(--pane-share, 1.5) / 1.5), 100%)')
   })
 
+  it('a LOW floor knob lowers only the pane that names it, never above the stock floor', () => {
+    // The large TX meters pane (its half-size dials want less than a feed's 10em) names
+    // `--txmeters-pane-floor`; the floor is the smaller of it and the stock knob, and unset it IS the stock.
+    render(
+      <>
+        <CockpitPaneFrame title="Meters" paneId="txMetersPane" weight={0.6} lowFloor="--txmeters-pane-floor">
+          <p>faces</p>
+        </CockpitPaneFrame>
+        <CockpitPaneFrame title="Feed" paneId="bandActivity">
+          <p>rows</p>
+        </CockpitPaneFrame>
+      </>,
+    )
+    expect(screen.getByLabelText('Meters').style.minHeight).toBe(
+      'min(var(--cockpit-fill-min, 0px), var(--txmeters-pane-floor, var(--cockpit-fill-min, 0px)))',
+    )
+    // The pane beside it keeps the stock floor, byte for byte.
+    expect(screen.getByLabelText('Feed').getAttribute('style')).toBe('flex: var(--cockpit-pane-flex, 1 1 0); min-height: var(--cockpit-fill-min, 0);')
+  })
+
+  it('…and in a divider pair the lowered floor follows the share as the stock one does', () => {
+    render(
+      <CockpitPaneFrame title="Meters" paneId="txMetersPane" weight={0.6} split={0.8} share={0.8} lowFloor="--txmeters-pane-floor">
+        <p>faces</p>
+      </CockpitPaneFrame>,
+    )
+    expect(screen.getByLabelText('Meters').style.minHeight).toBe(
+      'min(calc(min(var(--cockpit-fill-min, 0px), var(--txmeters-pane-floor, var(--cockpit-fill-min, 0px))) * var(--pane-share, 0.8) / 0.8), 100%)',
+    )
+  })
+
   it('renders pop-out / remove only when the cockpit supplies them', () => {
     const onPopOut = vi.fn()
     const onRemove = vi.fn()

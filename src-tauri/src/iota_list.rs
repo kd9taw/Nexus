@@ -1,6 +1,14 @@
 //! The IOTA island-group list: a copy ships with Nexus, a newer one is downloaded at most monthly,
 //! and the island names the Logbook and the contact card show beside a reference are read from it.
 //!
+//! **The islands list travels with it.** IOTA's `islands.json` (every island of every group, with
+//! the id ADIF's `IOTA_ISLAND_ID` carries) ships beside the group list under the written permission
+//! of IOTA Ltd and the RSGB, is downloaded with it, and goes with it when the switch is off. It is
+//! only ever offered: a log form or the contact card lists a group's islands for the operator to
+//! pick from ([`get_iota_islands`]), and a logged contact's COMMENT names the island picked
+//! ([`name`]). A copy with no islands (a build or download that missed them) lists none, and the
+//! groups work as before.
+//!
 //! **Why a copy ships.** The list is IOTA Ltd's (© Radio Society of Great Britain and © Islands On
 //! The Air (IOTA) Ltd; <https://www.iota-world.org/copyright-notice.html>). IOTA Ltd gave Nexus
 //! written permission to include it in the installer, so the copy fetched when the installer is
@@ -31,18 +39,19 @@
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, OnceLock, RwLock};
 
-use propagation::iota::{IotaGroup, IotaGroups};
+use propagation::iota::{IotaGroup, IotaGroups, IotaIsland, IotaIslands};
 
 /// At most one download a month (operator ruling, 2026-10-27).
 const REFRESH_SECS: i64 = 30 * 86_400;
 /// After a failed attempt, the next one waits at least a day.
 const RETRY_SECS: i64 = 86_400;
 
-/// The copy in use: its groups, its date (Unix seconds; 0: unknown) and whether it is the one that
-/// shipped.
+/// The copy in use: its groups, their islands (empty when the copy has none), its date (Unix
+/// seconds; 0: unknown) and whether it is the one that shipped.
 #[derive(Debug, Clone, PartialEq)]
 struct Held {
     groups: IotaGroups,
+    islands: IotaIslands,
     at: i64,
     bundled: bool,
 }
@@ -80,6 +89,18 @@ fn tell_windows() {
 
 fn data_path(dir: &Path) -> PathBuf {
     dir.join("iota_groups.json")
+}
+
+fn islands_path(dir: &Path) -> PathBuf {
+    dir.join("iota_islands.json")
+}
+
+/// The islands list in `dir`, or none (missing, or not the list).
+fn read_islands(dir: &Path) -> IotaIslands {
+    std::fs::read_to_string(islands_path(dir))
+        .ok()
+        .and_then(|s| IotaIslands::parse(&s).ok())
+        .unwrap_or_default()
 }
 
 fn meta_path(dir: &Path) -> PathBuf {
@@ -180,13 +201,15 @@ fn read_bundled(dir: &Path) -> Option<Held> {
         .unwrap_or(0);
     Some(Held {
         groups,
+        islands: read_islands(dir),
         at,
         bundled: true,
     })
 }
 
 /// The copy to use with the switch on: the operator's own download (in `dir`) while it is at least
-/// as new as the shipped copy, else the shipped copy. `None` with the switch off.
+/// as new as the shipped copy, else the shipped copy. A download with no islands beside it takes
+/// the shipped copy's. `None` with the switch off.
 fn pick(dir: &Path, m: &IotaListMeta, bundled: Option<Held>) -> Option<Held> {
     if !m.enabled() {
         return None;
@@ -197,11 +220,18 @@ fn pick(dir: &Path, m: &IotaListMeta, bundled: Option<Held>) -> Option<Held> {
         .and_then(|s| IotaGroups::parse(&s).ok())
         .map(|groups| Held {
             groups,
+            islands: read_islands(dir),
             at: m.fetched_at,
             bundled: false,
         });
     match (downloaded, bundled) {
-        (Some(d), Some(b)) => Some(if d.at >= b.at { d } else { b }),
+        (Some(mut d), Some(b)) if d.at >= b.at => {
+            if d.islands.is_empty() {
+                d.islands = b.islands;
+            }
+            Some(d)
+        }
+        (Some(_), Some(b)) => Some(b),
         (d, b) => d.or(b),
     }
 }
@@ -244,6 +274,7 @@ fn fetch_and_keep(
             write_meta(dir, &m);
             Ok(Held {
                 groups,
+                islands: IotaIslands::default(),
                 at: now,
                 bundled: false,
             })
@@ -254,6 +285,38 @@ fn fetch_and_keep(
             Err(e)
         }
     }
+}
+
+/// Fetch the islands list with `fetch`, check it, and keep it in `dir` beside the group list's
+/// download. On failure the file already there stays, and why goes in the meta. Like
+/// [`fetch_and_keep`], an off made while it ran wins: nothing is written.
+fn fetch_islands_and_keep(
+    dir: &Path,
+    fetch: impl FnOnce() -> Result<String, String>,
+) -> Result<IotaIslands, String> {
+    let fetched = fetch();
+    let _keep = keep();
+    let mut m = read_meta(dir);
+    if !m.enabled() {
+        let _ = std::fs::remove_file(islands_path(dir));
+        return Err("the IOTA list was switched off during the check".into());
+    }
+    let result = fetched.and_then(|json| {
+        let islands = IotaIslands::parse(&json)?;
+        if !islands.plausible() {
+            return Err(format!(
+                "the IOTA islands list came back with only {} islands, so the copy already held is kept",
+                islands.len()
+            ));
+        }
+        std::fs::write(islands_path(dir), &json).map_err(|e| e.to_string())?;
+        Ok(islands)
+    });
+    if let Err(e) = &result {
+        m.last_error = Some(e.clone());
+        write_meta(dir, &m);
+    }
+    result
 }
 
 /// The Settings row's status.
@@ -299,7 +362,15 @@ fn held_at() -> i64 {
 /// Download from iota-world.org and use the result. Blocking: run it off any command's thread.
 fn download(now: i64) -> Result<(), String> {
     let dir = crate::config_dir();
-    let held = fetch_and_keep(&dir, now, propagation::live::iota::fetch_groups)?;
+    let mut held = fetch_and_keep(&dir, now, propagation::live::iota::fetch_groups)?;
+    // The islands come with the groups; when they fail the islands in use stay.
+    let in_use = GROUPS
+        .read()
+        .ok()
+        .and_then(|g| g.as_ref().map(|h| h.islands.clone()))
+        .unwrap_or_default();
+    held.islands =
+        fetch_islands_and_keep(&dir, propagation::live::iota::fetch_islands).unwrap_or(in_use);
     {
         // An off between the keep above and here wins: it is the operator's latest word.
         let _keep = keep();
@@ -344,17 +415,19 @@ pub(crate) fn known(reference: &str) -> bool {
     }
 }
 
-/// The group's name for `reference` from the list in use, for a logged contact's COMMENT
-/// (`tempo_core::logbook::offer::note_iota_in_comment`); `None` with the switch off, with no copy,
-/// or for a group the list lacks.
-pub(crate) fn name(reference: &str) -> Option<String> {
-    GROUPS
-        .read()
-        .ok()?
-        .as_ref()?
-        .groups
-        .name(reference)
-        .map(str::to_string)
+/// The name a logged contact's COMMENT carries for `reference`
+/// (`tempo_core::logbook::offer::note_iota_in_comment`): the island the operator picked
+/// (`island`, its `IOTA_ISLAND_ID`) when the list has it in that group, else the group's name.
+/// `None` with the switch off, with no copy, or for a group the list lacks.
+pub(crate) fn name(reference: &str, island: Option<u32>) -> Option<String> {
+    comment_name(GROUPS.read().ok()?.as_ref()?, reference, island)
+}
+
+/// [`name`], from the copy `held`.
+fn comment_name(held: &Held, reference: &str, island: Option<u32>) -> Option<String> {
+    let group = held.groups.name(reference)?;
+    let island = island.and_then(|id| held.islands.island(reference, id));
+    Some(island.map_or(group, |i| i.name.as_str()).to_string())
 }
 
 /// The list's status: the switch, how many groups are in use, and the date of that copy.
@@ -375,6 +448,7 @@ pub(crate) async fn set_iota_list_enabled(enabled: bool) -> Result<IotaListStatu
     m.reset_after_builtin = true;
     if !enabled {
         let _ = std::fs::remove_file(data_path(&dir));
+        let _ = std::fs::remove_file(islands_path(&dir));
         m.fetched_at = 0;
         m.last_error = None;
         write_meta(&dir, &m);
@@ -404,6 +478,17 @@ pub(crate) fn get_iota_groups() -> Vec<IotaGroup> {
         .read()
         .ok()
         .and_then(|g| g.as_ref().map(|h| h.groups.groups()))
+        .unwrap_or_default()
+}
+
+/// The islands of the group `reference`, in name order, for a log form's or the contact card's
+/// island picker; empty with the switch off, with no islands list, or for a group it lacks.
+#[tauri::command]
+pub(crate) fn get_iota_islands(reference: String) -> Vec<IotaIsland> {
+    GROUPS
+        .read()
+        .ok()
+        .and_then(|g| g.as_ref().map(|h| h.islands.of_group(&reference).to_vec()))
         .unwrap_or_default()
 }
 
@@ -446,11 +531,34 @@ mod tests {
         d
     }
 
+    /// 10,000 islands in IOTA's `islands.json` shape, ten to each of the 1,000 groups: island
+    /// `g * 10 + k + 1` is the k-th of EU-`g`, EU-005's first named `first`.
+    fn islands(first: &str) -> String {
+        let islands: Vec<serde_json::Value> = (0..10_000)
+            .map(|i| {
+                let name = if i == 50 {
+                    first.to_string()
+                } else {
+                    format!("Island {i}")
+                };
+                serde_json::json!({
+                    "id": (i + 1).to_string(), "refno": format!("EU-{:03}", i / 10),
+                    "name": name, "comment": "", "subgroup": "", "excluded": "0",
+                })
+            })
+            .collect();
+        serde_json::to_string(&islands).unwrap()
+    }
+
+    /// The id of EU-005's island named by [`islands`]' `first`.
+    const EU005_FIRST: u32 = 51;
+
     /// A resource folder as `scripts/gen-iota-groups.mjs` leaves it, in this test's own folder.
     fn staged() -> PathBuf {
         let d = crate::test_dirs::root().join("resources-iota");
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(data_path(&d), list("Great Britain")).unwrap();
+        std::fs::write(islands_path(&d), islands("Isle of Example")).unwrap();
         std::fs::write(
             d.join("iota_groups.manifest.json"),
             format!(r#"{{"fetchedAt":{SHIPPED_AT},"groups":1000}}"#),
@@ -466,6 +574,95 @@ mod tests {
     /// A list unlike the shipped one, so a test can tell which copy is in use by a name.
     fn newer_list() -> String {
         list("Great Britain (newer)")
+    }
+
+    /// The islands ship beside the groups: a group's islands are listed for the picker, and a
+    /// COMMENT names the island picked, else the group.
+    #[test]
+    fn the_shipped_islands_list_each_groups_islands_and_name_the_one_picked() {
+        let h = shipped();
+        let eu005 = h.islands.of_group("EU-005");
+        assert_eq!(eu005.len(), 10, "only that group's islands");
+        assert!(eu005.iter().any(|i| i.id == EU005_FIRST));
+        assert!(
+            eu005
+                .iter()
+                .all(|i| h.islands.island("EU-005", i.id).is_some()),
+            "every one of them is EU-005's"
+        );
+        assert_eq!(
+            comment_name(&h, "EU-005", Some(EU005_FIRST)).as_deref(),
+            Some("Isle of Example")
+        );
+        assert_eq!(
+            comment_name(&h, "EU-005", None).as_deref(),
+            Some("Great Britain"),
+            "no island picked: the group"
+        );
+        assert_eq!(
+            comment_name(&h, "EU-005", Some(1)).as_deref(),
+            Some("Great Britain"),
+            "another group's island: the group"
+        );
+        // A copy with no islands file still names the groups.
+        let d = staged();
+        std::fs::remove_file(islands_path(&d)).unwrap();
+        let bare = read_bundled(&d).unwrap();
+        assert!(bare.islands.is_empty());
+        assert_eq!(
+            comment_name(&bare, "EU-005", Some(EU005_FIRST)).as_deref(),
+            Some("Great Britain")
+        );
+    }
+
+    /// The monthly check brings the islands with the groups; a failed islands download keeps the
+    /// islands file held, a download with none beside it takes the shipped copy's, and off deletes
+    /// it with the groups.
+    #[test]
+    fn the_islands_are_downloaded_kept_and_dropped_with_the_groups() {
+        let d = dir();
+        let s = shipped();
+        let now = s.at + 30 * 86_400;
+        fetch_and_keep(&d, now, || Ok(newer_list())).unwrap();
+        let m = read_meta(&d);
+        let h = pick(&d, &m, Some(s.clone())).unwrap();
+        assert!(!h.bundled);
+        assert_eq!(
+            comment_name(&h, "EU-005", Some(EU005_FIRST)).as_deref(),
+            Some("Isle of Example"),
+            "no islands downloaded yet: the shipped copy's"
+        );
+        let got = fetch_islands_and_keep(&d, || Ok(islands("Isle of Example (newer)"))).unwrap();
+        assert_eq!(got.of_group("EU-005").len(), 10);
+        let h = pick(&d, &read_meta(&d), Some(s.clone())).unwrap();
+        assert_eq!(
+            comment_name(&h, "EU-005", Some(EU005_FIRST)).as_deref(),
+            Some("Isle of Example (newer)")
+        );
+        for bad in [
+            Err("HTTP 503".to_string()),
+            Ok("<html>maintenance</html>".to_string()),
+            Ok(r#"[{"id":"1","refno":"EU-005","name":"One"}]"#.to_string()),
+        ] {
+            assert!(
+                fetch_islands_and_keep(&d, || bad.clone()).is_err(),
+                "{bad:?}"
+            );
+            assert!(read_meta(&d).last_error.is_some());
+            let h = pick(&d, &read_meta(&d), Some(s.clone())).unwrap();
+            assert_eq!(
+                comment_name(&h, "EU-005", Some(EU005_FIRST)).as_deref(),
+                Some("Isle of Example (newer)"),
+                "{bad:?}: the file held stays"
+            );
+        }
+        tauri::async_runtime::block_on(set_iota_list_enabled(false)).unwrap();
+        assert!(!islands_path(&d).exists(), "off deletes the islands too");
+        assert!(
+            fetch_islands_and_keep(&d, || Ok(islands("x"))).is_err(),
+            "and nothing is fetched into it while off"
+        );
+        assert!(!islands_path(&d).exists());
     }
 
     #[test]

@@ -2572,6 +2572,102 @@ const PROP_TTL_SECS: u64 = 300;
 /// cadence, so a failing fetch on a cold cache can't storm PSK Reporter into 429s.
 static PROP_FETCH_BACKOFF: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
+/// The PSK Reporter reports of who heard the operator ([`tempo_core::heard_reports`]), opened on
+/// first use beside `settings.json`. `None` inside when it cannot be opened: the reports are then
+/// not kept, and the nowcast is unaffected.
+static HEARD_REPORTS: OnceLock<Option<Mutex<tempo_core::heard_reports::HeardReports>>> =
+    OnceLock::new();
+
+/// Keep the reports in a nowcast's PSK Reporter answer where `mycall` was the sender. Written
+/// from the answer the nowcast already fetched: it never asks PSK Reporter itself.
+fn keep_heard_reports(mycall: &str, reports: &[propagation::PathSpot]) {
+    let rows = heard_report_rows(mycall, reports);
+    if rows.is_empty() {
+        return;
+    }
+    let store = HEARD_REPORTS.get_or_init(|| {
+        // ⛔ Never the operator's file under test, as for the callbook cache.
+        #[cfg(test)]
+        let opened = tempo_core::heard_reports::HeardReports::open_in_memory();
+        #[cfg(not(test))]
+        let opened = tempo_core::heard_reports::HeardReports::open(
+            &config_dir().join(tempo_core::heard_reports::FILE_NAME),
+        );
+        match opened {
+            Ok(s) => Some(Mutex::new(s)),
+            Err(e) => {
+                eprintln!("[heard-reports] not kept: {e}");
+                None
+            }
+        }
+    });
+    if let Some(Ok(mut store)) = store.as_ref().map(Mutex::lock) {
+        if let Err(e) = store.record(&rows) {
+            eprintln!("[heard-reports] a write failed: {e}");
+        }
+    }
+}
+
+/// The rows of `reports` that heard `mycall`, as the store keeps them.
+fn heard_report_rows(
+    mycall: &str,
+    reports: &[propagation::PathSpot],
+) -> Vec<tempo_core::heard_reports::HeardReport> {
+    reports
+        .iter()
+        .filter(|s| s.side(mycall) == propagation::Side::HeardMe)
+        .map(|s| tempo_core::heard_reports::HeardReport {
+            time: s.time,
+            my_call: s.tx_call.clone(),
+            rx_call: s.rx_call.clone(),
+            rx_grid: s.rx_grid.clone(),
+            band: s.band.label().to_string(),
+            freq_hz: s.freq_mhz.map(|mhz| (mhz * 1_000_000.0).round() as i64),
+            mode: s.mode.clone(),
+            snr: s.snr,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod heard_report_rows_tests {
+    use super::*;
+
+    fn spot(tx: &str, rx: &str) -> propagation::PathSpot {
+        propagation::PathSpot {
+            time: 1_780_683_960,
+            tx_call: tx.into(),
+            tx_grid: Some("EN52".into()),
+            rx_call: rx.into(),
+            rx_grid: Some("FN59ue".into()),
+            band: propagation::model::Band::B20,
+            mode: Some("FT8".into()),
+            snr: Some(-18.0),
+            freq_mhz: Some(14.074698),
+        }
+    }
+
+    /// Only the reports of the operator being heard are kept, with the exact frequency in Hz;
+    /// the operator's own receptions are not.
+    #[test]
+    fn only_reports_that_heard_the_operator_become_rows() {
+        let rows = heard_report_rows("w1aw", &[spot("W1AW", "VE2FVV"), spot("K4DOL", "W1AW")]);
+        assert_eq!(
+            rows,
+            vec![tempo_core::heard_reports::HeardReport {
+                time: 1_780_683_960,
+                my_call: "W1AW".into(),
+                rx_call: "VE2FVV".into(),
+                rx_grid: Some("FN59ue".into()),
+                band: "20m".into(),
+                freq_hz: Some(14_074_698),
+                mode: Some("FT8".into()),
+                snr: Some(-18.0),
+            }]
+        );
+    }
+}
+
 /// Last-good real-time solar wind (Bz/speed/…) — refreshed on each fresh SWPC-cadence poll
 /// and reused on cache hits, so the leading-indicator insight survives between refetches.
 /// `None` until the first successful fetch (SolarWind is Copy, so reads are cheap clones).
@@ -9719,7 +9815,11 @@ async fn get_propagation(
             let (engine, tallies) = (state.inner().clone(), tallies.inner().clone());
             tauri::async_runtime::spawn_blocking(move || {
                 let needs = needs_kept(&engine, &tallies)?;
-                propagation::live::snapshot_with_spots(&mc, &mg, 1800, &*needs, &extra)
+                let (snap, reports) =
+                    propagation::live::snapshot_with_spots(&mc, &mg, 1800, &*needs, &extra)?;
+                // PSK Reporter keeps a report for about a day; keep the ones that heard us.
+                keep_heard_reports(&mc, &reports);
+                Ok(snap)
             })
             .await
             .map_err(|e| e.to_string())?
@@ -53975,6 +54075,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         iota_list::get_iota_list_status,
         iota_list::set_iota_list_enabled,
         iota_list::get_iota_groups,
+        iota_list::get_iota_islands,
         get_iota_offer,
         fetch_lotw_users,
         get_fcc_states_status,

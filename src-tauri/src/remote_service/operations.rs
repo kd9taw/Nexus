@@ -155,14 +155,16 @@ struct Core {
     /// The transmit WAIVER STATE the station recorded for each sign-in auto-granted device (the
     /// 2026-10-23 sign-in decision), by device id. FAIL-CLOSED: this map does not decide whether a
     /// device is sign-in-granted — the durable service list does, through
-    /// [`Authority::signin_devices`] — it only records a POSITIVE outcome. A sign-in-granted device
+    /// [`Authority::signin_devices`] — it only records a POSITIVE outcome, and a `Held` one is the
+    /// station's own: no list lifts it (`Authority::tx_held_for`). A sign-in-granted device
     /// with an entry here is held or waived per the entry; a sign-in-granted device with NO entry is
     /// held (its grant never recorded a positive waiver/window). Written by
     /// `Controller::grant_vouched` (held with its window) and
     /// `grant_approved` (waived at the shack); a waiver is cleared on revoke. The engine's arm gate is
     /// set from the CONTROLLING device's state at each lease event ([`Authority::apply_tx_hold`]). A
-    /// restart restores only the windows of the devices the service had confirmed it notified
-    /// ([`Authority::restore_transmit_windows`]) and the waivers given at the shack
+    /// restart restores only the windows of the devices the service had confirmed it notified or
+    /// the station held ([`Authority::restore_transmit_windows`]), each still waiting for a
+    /// confirmed notice, and the waivers given at the shack
     /// ([`Authority::restore_transmit_waivers`]), and every other sign-in device is held.
     tx_grants: BTreeMap<String, TxGrant>,
 }
@@ -171,7 +173,9 @@ struct Core {
 /// a hold (fail-closed).
 #[derive(Clone, Copy)]
 enum TxGrant {
-    /// Held from transmit until this monotonic moment (its 15-minute window); past it, free.
+    /// Held from transmit until this monotonic moment (its 15-minute window); past it, free once
+    /// the service confirms the owner notice. Kept whatever the service's list says of the device
+    /// (`Authority::tx_held_for`): only the shack replaces it.
     Held { until: Instant },
     /// Waived: an Approve at the shack. Free to transmit.
     Waived,
@@ -409,7 +413,8 @@ impl Authority {
     /// What is left at `now` of the transmit window the station recorded for each of `devices`
     /// that has one: zero once it has elapsed, and for an Approve at the shack. A device with no
     /// record is left out. What the station keeps across a restart for the sign-in devices the
-    /// service confirmed it notified ([`Authority::restore_transmit_windows`]).
+    /// service confirmed it notified and for each it holds ([`Authority::held_devices`]); see
+    /// [`Authority::restore_transmit_windows`].
     pub fn transmit_windows(
         &self,
         devices: &BTreeSet<String>,
@@ -429,9 +434,24 @@ impl Authority {
             })
             .collect()
     }
+    /// The devices the station holds by a hold of its own (`TxGrant::Held`), its window elapsed or
+    /// not: kept across a restart whatever the service lists, since no list lifts them
+    /// ([`Self::tx_held_for`]). None while the lock is poisoned.
+    pub(crate) fn held_devices(&self) -> BTreeSet<String> {
+        self.core.lock().map_or_else(
+            |_| BTreeSet::new(),
+            |c| {
+                c.tx_grants
+                    .iter()
+                    .filter(|(_, grant)| matches!(grant, TxGrant::Held { .. }))
+                    .map(|(device, _)| device.clone())
+                    .collect()
+            },
+        )
+    }
     /// Restore, after a restart, the transmit window kept for each sign-in device the service had
-    /// confirmed it notified: held for what was `left` of it from `now`, never longer than a whole
-    /// window (`account::TX_HOLD`). Only ever a `Held` — an
+    /// confirmed it notified, or the station held: held for what was `left` of it from `now`, never
+    /// longer than a whole window (`account::TX_HOLD`). Only ever a `Held` — an
     /// Approve at the shack comes back as an elapsed window, which still waits for the list to
     /// confirm the device and its notice (`tx_held_for`) — and never over a record this run made.
     pub fn restore_transmit_windows(
@@ -475,10 +495,15 @@ impl Authority {
     ///   (`Restored`) frees only once the list has loaded;
     /// - the list UNKNOWN (`None`, no list heard yet) → HELD: an empty set must not read as "not
     ///   sign-in-added", so an account-road controller waits until the list confirms it;
-    /// - the list loaded and this device NOT in it → free (confirmed not sign-in-added);
-    /// - in it, `Held` → held until the window has elapsed AND the owner notice is confirmed durable
-    ///   (the 2026-10-23 sign-in decision: an absent/unconfirmed notice holds it even past 15 min);
-    ///   in it with NO record → HELD; a poisoned lock → HELD.
+    /// - a local `Held` record, once the list has loaded → held until the window has elapsed AND
+    ///   the owner notice is confirmed durable (the 2026-10-23 sign-in decision: an absent or
+    ///   unconfirmed notice holds it even past 15 min), WHETHER OR NOT the list still names the
+    ///   device: a hold the station placed is never lifted by what the service lists (a list that
+    ///   drops the device confirms no notice for it either, so it stays held until the shack
+    ///   waives it);
+    /// - the list loaded and this device NOT in it, with no `Held` record → free (confirmed not
+    ///   sign-in-added);
+    /// - in it with NO record → HELD; a poisoned lock → HELD.
     ///
     /// A computer on the room's tunnel is asked under the service's ids for it
     /// ([`Self::hold_names`]), whatever name holds the lease, and held while any of them is; a name
@@ -499,15 +524,16 @@ impl Authority {
         if matches!(grants.get(device), Some(TxGrant::Waived)) {
             return false;
         }
-        match self.signin_devices.lock().as_deref() {
-            Ok(Some(set)) if !set.contains(device) => false,
-            Ok(Some(_)) => match grants.get(device) {
-                Some(TxGrant::Waived | TxGrant::Restored) => false,
-                Some(TxGrant::Held { until }) => now < *until || !self.is_notified(device),
-                None => true,
-            },
-            Ok(None) => true,
-            Err(_) => true,
+        match (self.signin_devices.lock().as_deref(), grants.get(device)) {
+            (Err(_) | Ok(None), _) => true,
+            // A hold the station placed is the station's: a list that stops naming the device does
+            // not lift it. Only its window with a confirmed notice, or the shack, does.
+            (Ok(Some(_)), Some(TxGrant::Held { until })) => {
+                now < *until || !self.is_notified(device)
+            }
+            (Ok(Some(set)), _) if !set.contains(device) => false,
+            (Ok(Some(_)), Some(TxGrant::Waived | TxGrant::Restored)) => false,
+            (Ok(Some(_)), None) => true,
         }
     }
     /// Whether the station holds `device` from transmit at `now`, as the grants and the sign-in

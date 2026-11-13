@@ -10716,6 +10716,8 @@ export const EN = {
   'iota.prefill.label': 'IOTA',
   'iota.prefill.aria': 'IOTA reference for this contact',
   'iota.prefill.hint': 'Filled in from a spot or your callbook lookup. Logged and sent with the contact; change it or clear it before logging.',
+  'iota.island.label': 'Island',
+  'iota.island.none': 'No island picked',
   'iota.offer.fromSpot': 'from the spot',
   'iota.offer.fromCallbook': 'from the callbook',
   'iota.offer.dismiss': 'Leave IOTA empty',
@@ -14879,6 +14881,10 @@ export const EN = {
   'nav.program.label': 'Repeaters',
   'nav.program.title':
     'Repeaters — build channel lists for your radios: local repeaters → CHIRP CSV, rig memories, or tune-now',
+  // The rail's "more below" cue (ModeNav): {{n}} is how many sections sit below the fold. The title is
+  // also the button's accessible name, so it starts with the label's own words (WCAG 2.5.3, label in name).
+  'nav.more.label': '{{n}} more',
+  'nav.more.title': '{{n}} more sections below — show them',
   'nav.order.reset.label': 'Reset order',
   'nav.order.reset.title': 'Reset the section order to default',
   'nav.mode.title': 'Active operating mode',

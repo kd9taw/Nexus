@@ -41,6 +41,17 @@ if (params.get('iotacontrol') === '1') {
   s.textContent = '.iota-name, .iota-name-text { white-space: nowrap !important; overflow-wrap: normal !important; }'
   document.head.appendChild(s)
 }
+// The island picker beside the filled box: the group's islands are answered too (`get_iota_islands`), one
+// with a name at the list's 200-character limit, unless `&islands=0` (the layout as it is with no picker:
+// the baseline the probe holds the strip's controls to). `&islandcontrol=1` is the picker's CONTROL: its
+// containment taken away, so a select as wide as its longest option sizes its host again.
+if (params.get('islandcontrol') === '1') {
+  const s = document.createElement('style')
+  s.textContent = '.iota-island { contain: none !important; width: auto !important; } .iota-island-pick { width: auto !important; flex: none !important; }'
+  document.head.appendChild(s)
+}
+/** An island name at the list's 200-character limit (`propagation::iota::NAME_MAX_CHARS`). */
+const LONG_ISLAND = `Isola grande di prova con un nome lunghissimo ${'e i suoi scogli '.repeat(10)}`.slice(0, 200)
 /** A group name as long as IOTA's longest run: a list of islands with their other names. */
 const LONG_GROUP =
   'Eolie Islands (Lipari, Salina, Vulcano, Stromboli, Panarea, Filicudi, Alicudi and the rocks of Basiluzzo, Dattilo and Strombolicchio) - aka Aeolian Islands'
@@ -50,6 +61,9 @@ const IOTA_ANSWERS: Record<string, unknown> =
         get_iota_offer: { reference: 'EU-901', source: 'spot' },
         get_iota_list_status: { enabled: true, count: 1, fetchedAt: 1_790_000_000, bundled: true, lastError: null },
         get_iota_groups: [{ reference: 'EU-901', name: LONG_GROUP }],
+        ...(params.get('islands') === '0'
+          ? {}
+          : { get_iota_islands: [{ id: 9001, name: LONG_ISLAND, comment: 'in Example Land' }, { id: 9002, name: 'Short Isle' }] }),
       }
     : {}
 window.__TAURI_INTERNALS__ = {
