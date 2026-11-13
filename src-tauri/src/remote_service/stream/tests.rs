@@ -346,6 +346,40 @@ fn turning_streaming_off_at_the_shack_ends_a_running_stream() {
     );
 }
 
+/// Operator decision: the lower-bandwidth mode is off unless the operator turns it on, and a
+/// running stream follows the switch at its next recheck, both ways, without ending. What it
+/// changes (a relayed picture's ceiling only) is `tempo_stream::video::picture::Bound::on`'s.
+#[test]
+fn a_running_stream_follows_the_relay_lower_bandwidth_switch() {
+    let now = Instant::now();
+    let f = fixture(now);
+    let set = |on: bool| {
+        let mut e = tempo_app::engine::engine_lock(&f.station.engine);
+        let mut s = e.settings().clone();
+        s.remote_relay_lighter = on;
+        e.apply_settings(s);
+    };
+    let mut streaming = verified_stream(&f, now);
+    assert!(!streaming.relay_lighter(), "off by default");
+    set(true);
+    let tick = now + RECHECK;
+    assert_eq!(
+        streaming.still_admitted(tick),
+        Ok(()),
+        "the mode ends nothing"
+    );
+    assert!(
+        streaming.relay_lighter(),
+        "turned on at the shack, followed"
+    );
+    set(false);
+    assert_eq!(streaming.still_admitted(tick + RECHECK), Ok(()));
+    assert!(!streaming.relay_lighter(), "turned off again, followed");
+    // A stream that starts with it on starts lighter, before its first recheck.
+    set(true);
+    assert!(verified_stream(&f, now).relay_lighter());
+}
+
 /// The session thread never waits for the engine. A busy engine at the recheck is not the switch
 /// turned off, and the switch is read again on the next tick, not a whole recheck later.
 #[test]

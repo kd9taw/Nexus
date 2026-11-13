@@ -6058,6 +6058,8 @@ export const JA: PartialCatalog = {
   "settings.remoteStream.hint": "局の操作を承認したブラウザーは、操作権を持っている間、この Nexus ウィンドウを見て、ここと同じように操作できます（送信を含む）。クリックやキー入力は Nexus にだけ届き、このコンピューターのほかのものには届きません。配信されるのはこのウィンドウだけです。ファイル選択などウィンドウの外に開くダイアログは配信されず、最小化したウィンドウは何も配信しません。配信はエンドツーエンドで暗号化されます。ブラウザーの接続中は、接続が切れた場合は5秒以内に、映像が止まった場合は7秒以内に、すべての送信を止めます。",
   "settings.remoteStream.display": "配信されるのは、Windows がこのコンピューターに描いているこのウィンドウです。配信中は Nexus を開いたままにし、最小化しないでください。",
   "settings.remoteStream.unavailable": "現在は Windows 版でのみ使えます。",
+  "settings.remoteRelayLighter.label": "ストリームがリレーを経由するときはデータ量を減らす",
+  "settings.remoteRelayLighter.hint": "ブラウザーがこの局に直接つながらないとき、ストリームは Nexus Remote のリレーを経由します。これをオンにすると、そこでの映像は最大 4 ではなく約 1 Mbit/s で送られるため、ウィンドウとウォーターフォールは柔らかく見え、動きがなめらかでなくなることがあります。受信音声は変わらず、直接接続や自宅のネットワークには影響しません。",
   "settings.remoteStations.unavailable": "現在は Windows 版でのみ使えます。ほかの環境では、ブラウザーで Remote を開いてください。",
   "settings.connectStation.label": "このコンピューターから自分の局を操作する",
   "settings.connectStation.open": "自分の局に接続…",

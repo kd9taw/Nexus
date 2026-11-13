@@ -14,8 +14,8 @@
 // its 100 %, over screens of probe/sizes.mjs: CORE, 1366×768 unscaled and at 150 %, 1080p at 150 % and 1440×900 at
 // 125 % by default; RECALL_FULL=1 runs the whole MATRIX (1366×768 to 4K, 100-175 % and 200 % on 4K).
 //   THE CARD, at every size where it is drawn: the name is on ONE line; it is cut short (an ellipsis) only on a
-//     card under NAME_ROOM px; on a rail of RAIL_ROOM px or more the avatar is wholly inside the card with nothing
-//     scrolled; and wherever the card's ceiling (min(14em, a third of its rail): cockpit-panes.css `.cockpit-recall`)
+//     card under NAME_ROOM px; on a rail of RAIL_ROOM px or more the name, the call and the avatar are each wholly
+//     inside the card and topmost at their centres with nothing scrolled (asserted at every such size); and wherever the card's ceiling (min(14em, a third of its rail): cockpit-panes.css `.cockpit-recall`)
 //     is tall enough for the identity and the rail gives the card that much, the whole identity row is inside the
 //     card and a station with no history (K9NEW, the ordinary first contact) shows its card with no scrollbar at
 //     all. Where the ceiling or the rail's sharing is shorter than the identity, that is printed as a NOTE: the share
@@ -24,8 +24,8 @@
 //     centre; Stop TX and every transmit surface (features/txSurfaces TX_AVOID) stand exactly where they stood and
 //     are never under the box at nine points across each; the avatar's QRZ button in it still opens QRZ; Esc
 //     closes it, and so does a click outside it.
-// THE CONTROLS, run every time: the name forced back to wrapping (the squeeze's look) must be caught, and so must
-// the box planted over Stop TX. If either is not, its check cannot fail and the probe says so instead of passing.
+// THE CONTROLS, run every time: the name forced back to wrapping (the squeeze's look) must be caught, so must the
+// name, the call and the avatar each covered by a planted box, and so must the box planted over Stop TX. If either is not, its check cannot fail and the probe says so instead of passing.
 //
 // exit: 0 every check held · 1 a red, or a control that could not fail · 2 the card never drew
 import { createServer } from 'vite'
@@ -114,6 +114,9 @@ const MEASURE = `(() => {
   const range = document.createRange(); range.selectNodeContents(nm)
   const lines = new Set([...range.getClientRects()].filter((q) => q.width > 0).map((q) => Math.round(q.top))).size
   const inside = (el) => { const q = el.getBoundingClientRect(); return q.top >= r.top - 0.5 && q.bottom <= r.bottom + 0.5 && q.left >= r.left - 0.5 && q.right <= r.right + 0.5 }
+  // Wholly inside the card's visible box AND the topmost thing at its own centre: seen, not merely laid out.
+  const seen = (el) => { if (!el || !inside(el)) return false; const q = el.getBoundingClientRect(); const t = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2); return !!t && (t === el || el.contains(t)) }
+  const callEl = card.querySelector('.recall-call')
   const rail = card.parentElement
   // The card's ceiling as the cascade resolves it here (its max-height holds a share of the rail, so the computed
   // value is not px): the height it takes with content far taller than any ceiling and nothing shrinking it.
@@ -122,7 +125,7 @@ const MEASURE = `(() => {
     card.style.flexShrink = '0'; card.appendChild(sp); const h = card.getBoundingClientRect().height; sp.remove(); card.style.flexShrink = fs; return Math.round(h) })()
   return { vp: document.documentElement.getAttribute('data-viewport'), zoom: getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom').trim() || '1',
     w: Math.round(r.width), h: Math.round(r.height), name: nm.textContent, lines, cut: nm.scrollWidth > nm.clientWidth + 1,
-    avatar: inside(av), head: inside(head), headH: Math.round(head.getBoundingClientRect().height),
+    avatar: seen(av), nameSeen: seen(nm), callSeen: callEl ? seen(callEl) : null, head: inside(head), headH: Math.round(head.getBoundingClientRect().height),
     scrolls: card.scrollHeight > card.clientHeight + 1, rail: Math.round(rail.clientHeight), expand: !!card.querySelector('.recall-expand'),
     // The card's ceiling (above), its padding and border above and below the identity, and what the rail's other
     // panes got.
@@ -224,7 +227,12 @@ const isCore = (s) => CORE.some((c) => c.name === s.name) || s.name === LAPTOP.n
 function judge(tag, m, ordinary, red = redAt) {
   if (m.lines !== 1) red(`${tag}: the name "${m.name}" breaks over ${m.lines} lines on a ${m.w} px card`)
   if (m.cut && m.w >= NAME_ROOM) red(`${tag}: the name "${m.name}" is cut short on a ${m.w} px card (room for it from ${NAME_ROOM} px)`)
-  if (m.rail >= RAIL_ROOM && !m.avatar) red(`${tag}: the avatar is not wholly inside the ${m.w}×${m.h} card (rail ${m.rail} px)`)
+  // Name, call and avatar: ASSERTED wherever the rail is RAIL_ROOM px or more (every such size, never a note).
+  if (m.rail >= RAIL_ROOM) {
+    if (!m.avatar) red(`${tag}: the avatar is not wholly inside the ${m.w}×${m.h} card, or not on top there (rail ${m.rail} px)`)
+    if (!m.nameSeen) red(`${tag}: the name is not wholly inside the ${m.w}×${m.h} card, or not on top there (rail ${m.rail} px)`)
+    if (m.callSeen === false) red(`${tag}: the call is not wholly inside the ${m.w}×${m.h} card, or not on top there (rail ${m.rail} px)`)
+  }
   // The identity whole, and a first contact unscrolled, wherever the card's share of its rail (a third,
   // cockpit-panes.css `.cockpit-recall`) is tall enough to hold them; elsewhere a NOTE, never a pass.
   // Held to it where the card's ceiling is tall enough AND the rail gave the card that much (a rail whose other
@@ -306,6 +314,7 @@ for (const scale of SCALES) for (const layout of LAYOUTS) {
 // THE CONTROLS, at 1366×768 at the app's 100 % in Classic (the tester's look on main).
 let squeezeCaught = null
 let coverCaught = null
+let seenCaught = null
 {
   const p = await openPage('classic', LAPTOP, '100')
   try {
@@ -317,6 +326,15 @@ let coverCaught = null
     squeezeCaught = caught.some((x) => x.includes('breaks over'))
     console.log(`CONTROL — the name forced to wrap: ${m?.lines} lines${squeezeCaught ? ' (caught)' : ''}`)
     await p.evaluate(`document.getElementById('ctl').remove()`)
+    // The visibility control: the name, the call and the avatar each covered by a planted box must all be caught.
+    await p.evaluate(`(() => { for (const sel of ['.recall-name', '.recall-call', '.recall-avatar']) { const e = document.querySelector('main.operate-cockpit ' + sel); const q = e.getBoundingClientRect(); const d = document.createElement('div'); d.className = 'ctl-cover'
+      d.style.cssText = 'position:fixed;z-index:99999;background:#000;left:' + q.left + 'px;top:' + q.top + 'px;width:' + q.width + 'px;height:' + q.height + 'px'; document.body.appendChild(d) } return 1 })()`)
+    const v = await p.evaluate(MEASURE)
+    const hid = []
+    if (v) judge('CONTROL', v, false, (x) => hid.push(x))
+    seenCaught = ['the name is not', 'the call is not', 'the avatar is not'].every((k) => hid.some((x) => x.includes(k)))
+    console.log(`CONTROL — the name, call and avatar covered: ${seenCaught ? 'all three caught' : 'NOT all caught'}`)
+    await p.evaluate(`(() => { document.querySelectorAll('.ctl-cover').forEach((d) => d.remove()); return 1 })()`)
     const at = await p.evaluate(centre('main.operate-cockpit .recall-expand'))
     if (at) {
       await p.click(at)
@@ -337,7 +355,8 @@ await server.close()
 await rm(cacheDir, { recursive: true, force: true }).catch(() => {})
 if (!drew) { console.log('recallcard: ERROR the card never drew'); process.exit(2) }
 if (squeezeCaught !== true) red('CONTROL: the name forced to wrap was not caught — the squeeze check cannot fail')
+if (seenCaught !== true) red('CONTROL: the name, call and avatar covered were not all caught — the visibility checks cannot fail')
 if (coverCaught !== true) red('CONTROL: the whole card planted over Stop TX was not caught — the cover check cannot fail')
 for (const n of notes) console.log('NOTE ' + n)
-console.log(reds.length ? `recallcard: FAIL — ${reds.length} red` : `recallcard: PASS — ${drew} sizes drawn, every check held, both controls caught, in ${Math.round((Date.now() - t0) / 1000)} s`)
+console.log(reds.length ? `recallcard: FAIL — ${reds.length} red` : `recallcard: PASS — ${drew} sizes drawn, every check held, every control caught, in ${Math.round((Date.now() - t0) / 1000)} s`)
 process.exit(reds.length ? 1 : 0)

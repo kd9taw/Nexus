@@ -64,8 +64,9 @@
 //! - **Control must be reliable and ordered.** A `control` channel opened any other way is not used:
 //!   a Stop that the channel is allowed to drop is not a Stop.
 //! - **Where the picture goes** ([`Session::path`]): the selected pair's remote address, from
-//!   str0m's own statistics every [`STATS_EVERY`], read by [`crate::lan::path`]. The picture's size
-//!   and bit rate follow it (`video::picture::Bound`); nothing else does.
+//!   str0m's own statistics every [`STATS_EVERY`], read by [`crate::lan::path`], or
+//!   [`Path::Relay`] when it is the address of a relayed (TURN) candidate the page named. The
+//!   picture's size and bit rate follow it (`video::picture::Bound`); nothing else does.
 //! - **What the link carries** ([`Session::estimate`], 2026-10-03): str0m's own bandwidth
 //!   estimation (Google congestion control on the page's transport-wide feedback), read from the
 //!   same statistics, so the picture's bit rate follows the link (`video::rate`) instead of a fixed
@@ -83,7 +84,7 @@ use str0m::channel::{ChannelId, Reliability};
 use str0m::format::Codec;
 use str0m::media::{MediaKind, MediaTime, Mid, Pt};
 use str0m::net::{Protocol, Receive};
-use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
+use str0m::{Candidate, CandidateKind, Event, IceConnectionState, Input, Output, Rtc};
 
 use crate::frame_clock::VideoClock;
 use crate::offer::{self, OfferRefusal};
@@ -309,6 +310,10 @@ pub struct Session {
     clock: VideoClock,
     /// Where the picture goes, once ICE has selected a pair.
     path: Option<Path>,
+    /// The addresses of the relayed (TURN) candidates the page named and the session took: a
+    /// selected pair whose remote end is one of them is [`Path::Relay`]. At most
+    /// [`CANDIDATES_IN_ALL`].
+    relays: Vec<SocketAddr>,
     /// What the link carries, in kbit/s, as str0m last estimated it; `None` for a session with no
     /// estimation (an offer without transport-wide feedback).
     estimate: Option<u32>,
@@ -421,6 +426,7 @@ impl Session {
             audio: None,
             clock: VideoClock::new(now),
             path: None,
+            relays: Vec::new(),
             estimate: estimated.then_some(START_KBPS),
             wanted: None,
             tried: 0,
@@ -494,6 +500,9 @@ impl Session {
         }
         self.taken += 1;
         self.tried += usize::from(tried);
+        if candidate.kind() == CandidateKind::Relayed {
+            self.relays.push(candidate.addr());
+        }
         self.rtc.add_remote_candidate(candidate);
         self.pump(now);
         true
@@ -784,7 +793,12 @@ impl Session {
             Event::KeyframeRequest(_) => self.events.push(SessionEvent::KeyframeRequest),
             Event::PeerStats(stats) => {
                 if let Some(pair) = stats.selected_candidate_pair {
-                    self.path = Some(crate::lan::path(pair.remote.addr));
+                    let peer = pair.remote.addr;
+                    self.path = Some(if self.relays.contains(&peer) {
+                        Path::Relay
+                    } else {
+                        crate::lan::path(peer)
+                    });
                 }
                 // The estimate as str0m holds it now. Its `EgressBitrateEstimate` event is a
                 // three-second average, which would follow a link that narrows seconds late.
@@ -2398,6 +2412,17 @@ mod tests {
                 station.take_events()
             );
             assert!(page.rtc.is_connected());
+            // The picture crosses the relay: once the statistics have read the selected pair, the
+            // path is the relay's, which the lower-bandwidth mode bounds (operator decision).
+            travel(
+                &mut page,
+                &mut station,
+                &mut now,
+                STATS_EVERY * 2,
+                PUBLIC,
+                RELAY,
+            );
+            assert_eq!(station.path(), Some(Path::Relay));
         }
     }
 }

@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|besttimes|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|txmeterspane|radioswitch|radiosetup|toastcorner|logwaiting|topbar|header|rttyfit|digishell|alarmcell|firstrun|journeys|clublog|aprsmap|logbook|profiles|sstvlayout|menustop|stopabove|stopvisible|ftline|laptopfit|recallcard
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|besttimes|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|txmeterspane|radioswitch|radiosetup|toastcorner|logwaiting|topbar|topbarnow|header|rttyfit|digishell|alarmcell|firstrun|journeys|clublog|aprsmap|logbook|profiles|sstvlayout|menustop|stopabove|stopvisible|ftline|laptopfit|recallcard
        scripts/browser-probe --desktop-shard <n> <of>
 
   Window sizes: every --desktop probe takes its screens from ui/probe/sizes.mjs (the 2026-11-11
@@ -221,6 +221,13 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         group sits on, shows its flag, and nothing runs past the window, with a
                         control (the lane's old sizing) that must make the bar taller
                         (ui/probe/topbar-probe.mjs; it builds nothing)
+  --desktop topbarnow   the real app on FT, Phone, CW and the Logbook at every supported screen and OS
+                        scaling, the radio stepped through idle, transmit, tune, recording and CAT
+                        lost with an empty and a busy now-bar, asserting the top bar's height, the
+                        cockpit's top and Stop TX never move and the now-bar's words are whole,
+                        with a control (the old bar: the now-bar at its content width, the TX/RX
+                        sign and TX On/Off at their text widths) that must move them at 1920×1080
+                        @150 % (ui/probe/topbarnow-probe.mjs; it builds nothing)
   --desktop header      the cockpit header with a CW header's controls, 780 (the floor) to 2560
                         wide, 110-175 % on 1920×1080 and the OS's 125-200 %, asserting ⊞ Panels and CAT never take a line of
                         their own while the mode controls' last line has room for them and
@@ -325,7 +332,7 @@ USAGE
 # job, which deals this list round-robin over its shards with --desktop-shard. Slowest first, so the
 # deal balances (local seconds on 2026-11-05: toastcorner 299, digishell 330, topbar 96, waterfalls 92, logbook 67,
 # header 62, journeys 42, rttyfit 39, the rest 7-27); keep a new probe near its cost when you add it.
-DESKTOP_ALL=(toastcorner digishell alarmcell sstvlayout stopvisible topbar waterfalls txmeterspane logbook header journeys rttyfit menustop stopabove profiles firstrun radiosetup contestlog
+DESKTOP_ALL=(toastcorner digishell alarmcell sstvlayout stopvisible topbar topbarnow waterfalls txmeterspane logbook header journeys rttyfit menustop stopabove profiles firstrun radiosetup contestlog
   ftline logwaiting spots atu radioswitch jtty activation clublog aprsmap callcard voicenote rotor contactcard txmeters besttimes laptopfit recallcard)
 
 SCENARIO='stream'
@@ -428,6 +435,7 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = journeys ] && exec node "$ROOT/ui/probe/journeys-probe.mjs"
   [ "$DESKTOP" = laptopfit ] && exec node "$ROOT/ui/probe/laptopfit-probe.mjs"
   [ "$DESKTOP" = topbar ] && exec node "$ROOT/ui/probe/topbar-probe.mjs"
+  [ "$DESKTOP" = topbarnow ] && exec node "$ROOT/ui/probe/topbarnow-probe.mjs"
   [ "$DESKTOP" = header ] && exec node "$ROOT/ui/probe/header-probe.mjs"
   [ "$DESKTOP" = rttyfit ] && exec node "$ROOT/ui/probe/rttyfit-probe.mjs"
   [ "$DESKTOP" = digishell ] && exec node "$ROOT/ui/probe/digishell-probe.mjs"
