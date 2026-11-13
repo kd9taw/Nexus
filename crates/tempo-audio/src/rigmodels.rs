@@ -877,8 +877,8 @@ pub(crate) fn cat_cw_has_no_sure_stop(model: u32) -> bool {
 }
 
 /// The raw query that reads this radio's ALC meter on the radio's OWN scale: Yaesu's `RM4;`
-/// (READ METER, ALC) for the FT-991/991A (1035), the FT-710 (1049), the FTDX10 (1042) and the
-/// FT-450/450D (1027, 1046), sent through rigctld's `w`. `None` for every other model, which keeps
+/// (READ METER, ALC) for the FT-991/991A (1035), the FT-710 (1049), the FTDX10 (1042), the
+/// FT-450/450D (1027, 1046) and the FTX-1 (1051), sent through rigctld's `w`. `None` for every other model, which keeps
 /// Hamlib's `l ALC` unchanged.
 ///
 /// The radio is asked nothing new: Hamlib 4.7.1 answers `l ALC` by sending the same `RM4;`
@@ -905,6 +905,15 @@ pub(crate) fn cat_cw_has_no_sure_stop(model: u32) -> bool {
 /// 255 in Hamlib's own tables for that radio: `FT450_RFPOWER_METER_CAL` runs to raw 250 and
 /// `FT450_STR_CAL` to raw 240 (`ft450.h`), which a 0-to-64 meter could never reach. NEEDS-BENCH:
 /// the reporter's own radio, on the air.
+///
+/// ⭐ THE FTX-1 (1051; #502, "ALC reads 39 %, then jumps to 100 %"). Hamlib 4.7.1 reads it
+/// through its own backend, `rigs/yaesu/ftx1/`, not newcat's branch, but to the same end:
+/// `ftx1_get_meter` sends `RM4;` and parses one digit then three (`ftx1_audio.c`), and the
+/// level goes through `FTX1_ALC_CAL`, raw 0 = 0.0 and raw 64 = 1.0 (`ftx1.h`, "Using Yaesu
+/// default values — verify with hardware"). Yaesu's FTX-1 Series CAT Operation Reference
+/// Manual, `RM` READ METER (printed page 23): read `RM P1;`, answer `RM P1 P2 P2 P2 P3 P3 P3;`,
+/// P1 `4` ALC, P2 `000 - 255`, P3 `000` (fixed): the FT-710's answer. NEEDS-BENCH: the
+/// reporter's own radio, on the air.
 #[cfg_attr(not(feature = "device"), allow(dead_code))] // caller lives in service.rs (device)
 pub(crate) fn raw_alc_query(model: u32) -> Option<&'static str> {
     /// `RIG_MODEL_FT991`, `RIG_MODEL_FT710` and `RIG_MODEL_FTDX10` in Hamlib's
@@ -912,7 +921,7 @@ pub(crate) fn raw_alc_query(model: u32) -> Option<&'static str> {
     const FT991: u32 = 1035;
     const FT710: u32 = 1049;
     const FTDX10: u32 = 1042;
-    matches!(model, FT991 | FT710 | FTDX10 | FT450 | FT450D).then_some("RM4;")
+    matches!(model, FT991 | FT710 | FTDX10 | FT450 | FT450D | FTX1).then_some("RM4;")
 }
 
 /// `RIG_MODEL_FT450` and `RIG_MODEL_FT450D` in Hamlib's `include/hamlib/riglist.h`.
@@ -923,13 +932,13 @@ const FT450D: u32 = 1046;
 /// [`raw_alc_query`] reads: half scale. The FT-991A's Operating Manual (p. 61) keeps the ALC meter
 /// "within the ALC zone of the meter (up to half scale deflection)", and the FT-710's (p. 40) sets
 /// the mic gain so the needle "does not exceed the ALC zone"; the FTDX10 is read the same way
-/// (NEEDS-BENCH: its meter's zone, by eye). Not the FT-450/450D: no source for its zone was to
-/// hand, so its bar keeps the default colours. `None` for every other radio, whose reading's 1.0
+/// (NEEDS-BENCH: its meter's zone, by eye). Not the FT-450/450D or the FTX-1: no source for
+/// their zone was to hand, so their bar keeps the default colours. `None` for every other radio, whose reading's 1.0
 /// is the top of its zone. Display only: the bar's colours follow it, never the bar.
 #[cfg_attr(not(feature = "device"), allow(dead_code))] // caller lives in service.rs (device)
 pub(crate) fn alc_zone_top(model: u32) -> Option<f32> {
     raw_alc_query(model)
-        .filter(|_| !matches!(model, FT450 | FT450D))
+        .filter(|_| !matches!(model, FT450 | FT450D | FTX1))
         .map(|_| 0.5)
 }
 
@@ -1962,27 +1971,30 @@ mod tests {
         }
     }
 
-    /// Only the FT-991/991A, the FT-710, the FTDX10 and the FT-450/450D read their ALC with
-    /// Yaesu's own `RM4;`. Every other model keeps Hamlib's `l ALC`: the FTDX101D, which has a
-    /// table of its own, the FTX-1, an Icom, a Kenwood, and models nobody names.
+    /// Only the FT-991/991A, the FT-710, the FTDX10, the FT-450/450D and the FTX-1 read their
+    /// ALC with Yaesu's own `RM4;`. Every other model keeps Hamlib's `l ALC`: the FTDX101D, which
+    /// has a table of its own, an Icom, a Kenwood, and models nobody names.
     #[test]
-    fn only_the_ft991a_the_ft710_the_ftdx10_and_the_ft450s_read_their_alc_raw() {
+    fn only_the_ft991a_the_ft710_the_ftdx10_the_ft450s_and_the_ftx1_read_their_alc_raw() {
         assert_eq!(raw_alc_query(1035), Some("RM4;"), "FT-991/991A");
         assert_eq!(raw_alc_query(1049), Some("RM4;"), "FT-710");
         assert_eq!(raw_alc_query(1042), Some("RM4;"), "FTDX10");
         assert_eq!(raw_alc_query(1046), Some("RM4;"), "FT-450D");
         assert_eq!(raw_alc_query(1027), Some("RM4;"), "FT-450");
-        for model in [1040, 1051, 3073, 2031, 0, 999_999] {
+        assert_eq!(raw_alc_query(1051), Some("RM4;"), "FTX-1 (#502)");
+        for model in [1040, 3073, 2031, 0, 999_999] {
             assert_eq!(raw_alc_query(model), None, "model {model} keeps l ALC");
         }
     }
 
-    /// The FT-450/450D's ALC is read on the radio's own bar, but no zone is claimed for it: its
-    /// manuals were not to hand, so its bar keeps the default colours (1.0 the top of the zone).
+    /// The FT-450/450D's and the FTX-1's ALC is read on the radio's own bar, but no zone is
+    /// claimed for it: no source for the zone was to hand, so the bar keeps the default colours
+    /// (1.0 the top of the zone).
     #[test]
-    fn the_ft450s_alc_carries_no_zone_of_its_own() {
+    fn the_ft450s_and_the_ftx1s_alc_carries_no_zone_of_its_own() {
         assert_eq!(alc_zone_top(1046), None, "FT-450D");
         assert_eq!(alc_zone_top(1027), None, "FT-450");
+        assert_eq!(alc_zone_top(1051), None, "FTX-1");
         for model in [1035, 1049, 1042] {
             assert_eq!(
                 alc_zone_top(model),

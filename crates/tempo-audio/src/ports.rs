@@ -62,6 +62,43 @@ pub fn available_ports() -> Vec<String> {
     })
 }
 
+/// The Settings port picker's list: [`available_ports`], plus on macOS the links to a
+/// pseudo-terminal in `/dev`, `~/Downloads` and `~` ([`pty_links_in`]) — wfview's `rig-ptyN`,
+/// which it makes in Downloads (#494).
+///
+/// ⚠️ ONLY THE PICKER CALLS THIS, when the operator opens it. [`available_ports`] is also polled
+/// by the radio loop every 10 s while CAT is down, and listing `~/Downloads` on macOS 10.15+ is
+/// what raises the "would like to access files in your Downloads folder" prompt — out of nowhere,
+/// with no action from the operator, if the loop did it. The loop needs no pty scan: it finds a
+/// typed pty link by the path itself (`typed_port_exists`).
+pub fn picker_ports() -> Vec<String> {
+    #[cfg_attr(not(all(feature = "serial", target_os = "macos")), allow(unused_mut))]
+    let mut names = available_ports();
+    // Judged against the OS's own list: a node it enumerates as hardware is never added.
+    #[cfg(all(feature = "serial", target_os = "macos"))]
+    {
+        let mut dirs = vec![std::path::PathBuf::from("/dev")];
+        if let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+            let home = std::path::PathBuf::from(home);
+            dirs.push(home.join("Downloads"));
+            dirs.push(home);
+        }
+        for v in pty_links_in(&dirs, &names) {
+            if !names.contains(&v) {
+                names.push(v);
+            }
+        }
+    }
+    names
+}
+
+#[cfg(all(test, unix, feature = "serial"))]
+thread_local! {
+    /// How many times [`pty_links_in`] ran on this thread: the test's proof that
+    /// [`available_ports`], the radio loop's poll, never lists the pty directories.
+    static PTY_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Virtual serial ports on Linux that `serialport`'s udev enumeration cannot see.
 ///
 /// `serialport` 4.9 asks udev for the `tty` subsystem and then keeps a device only when
@@ -106,6 +143,36 @@ fn linux_virtual_ports(dev: &std::path::Path) -> Vec<String> {
                 .contains("pts/")
                 .then(|| path.to_string_lossy().into_owned())
         })
+        .collect();
+    out.sort(); // stable order — the picker must not reshuffle between polls
+    out
+}
+
+/// Virtual serial ports on macOS: symlinks in `dirs` that stand for a pseudo-terminal, the way
+/// wfview's `rig-pty1` does (#494). The Mac twin of [`linux_virtual_ports`].
+///
+/// IOKit lists only hardware, so a pty a program makes for another to open never reached the
+/// picker; it could only be typed. Listing the pty nodes themselves (`/dev/ttysNNN`) would offer
+/// every open Terminal window, so, as on Linux, only a LINK someone made to stand for a port is
+/// listed, and only when [`virtual_node_with`], the same classifier that drops the RTS/DTR
+/// hold, says it is a pseudo-terminal. That classifier works from `lstat`/`stat` alone and opens
+/// nothing, so listing can never raise a line on a real port. `hardware` is the OS's own list:
+/// a node it enumerates is real, and is never added here.
+///
+/// Takes the directories so it is testable with a temp-dir fixture.
+#[cfg(all(unix, feature = "serial"))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn pty_links_in(dirs: &[std::path::PathBuf], hardware: &[String]) -> Vec<String> {
+    #[cfg(test)]
+    PTY_SCANS.with(|n| n.set(n.get() + 1));
+    let mut out: Vec<String> = dirs
+        .iter()
+        .filter_map(|d| std::fs::read_dir(d).ok())
+        .flat_map(|entries| entries.flatten())
+        .map(|e| e.path())
+        .filter(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()))
+        .map(|p| p.to_string_lossy().into_owned())
+        .filter(|p| virtual_node_with(p, || hardware.to_vec(), char_device_major).is_some())
         .collect();
     out.sort(); // stable order — the picker must not reshuffle between polls
     out
@@ -1257,6 +1324,60 @@ mod tests {
             &dir.join("nothing-here").to_string_lossy()
         ));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #494: the Mac picker lists wfview's `rig-pty1` (a symlink to a pseudo-terminal) and
+    /// nothing else in the directory, by the virtual-port classifier, without opening the pty.
+    /// The rule is the Mac's, run here on Linux's ptys; the Mac's own pty major is the
+    /// classifier's business ([`is_pty_slave`]).
+    #[cfg(all(target_os = "linux", feature = "serial"))]
+    #[test]
+    fn a_pty_link_is_listed_without_being_opened_and_nothing_else_is() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!("nexus-pty-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let (_master, slave) = open_pty();
+        symlink(&slave, dir.join("rig-pty1")).expect("symlink");
+        // Decoys: a plain file, a link to it, a dangling link, and a link to a real char device.
+        std::fs::write(dir.join("notes.txt"), b"").expect("file");
+        symlink(dir.join("notes.txt"), dir.join("notes-link")).expect("symlink");
+        symlink(dir.join("gone"), dir.join("dangling")).expect("symlink");
+        symlink("/dev/null", dir.join("null-link")).expect("symlink");
+        let dirs = [dir.clone(), dir.join("missing")];
+
+        let slave_path = std::path::Path::new(&slave);
+        let mut found = Vec::new();
+        let opens = opens_during(slave_path, || found = pty_links_in(&dirs, &[]));
+        assert_eq!(opens, 0, "the pty was opened to list it");
+        assert_eq!(
+            found,
+            [dir.join("rig-pty1").to_string_lossy().into_owned()],
+            "only the pty link is a port"
+        );
+        // A pty the OS enumerates as hardware is not virtual, so this union never adds it.
+        let link = dir.join("rig-pty1").to_string_lossy().into_owned();
+        assert!(pty_links_in(&dirs, std::slice::from_ref(&link)).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #494 review: the radio loop polls [`available_ports`] every 10 s while CAT is down, and a
+    /// Downloads listing there would raise macOS's folder-access prompt unbidden. So the pty scan
+    /// is the picker's alone ([`picker_ports`]); the loop's list never runs it, on any platform.
+    #[cfg(all(unix, feature = "serial"))]
+    #[test]
+    fn the_radio_loops_port_list_never_scans_for_pty_links() {
+        let scans = || PTY_SCANS.with(std::cell::Cell::get);
+        let before = scans();
+        let _ = available_ports();
+        assert_eq!(
+            scans(),
+            before,
+            "available_ports listed the pty directories"
+        );
+        let _ = picker_ports();
+        let want = before + usize::from(cfg!(target_os = "macos"));
+        assert_eq!(scans(), want, "the picker scans on macOS, and only there");
     }
 
     /// An unknown character device (`/dev/null`, major 1) is real: only the pty-slave major is
