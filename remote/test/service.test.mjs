@@ -1322,6 +1322,24 @@ test('a flooding caller cannot spend the shared enroll budget, and cleanup keeps
   assert.equal(after.n, 0, 'the sweep reaped it')
 })
 
+// The same sweep reaps a notice-address change whose code ran out unconfirmed: it holds an address
+// someone typed, and an account that never reads its notice address again must not keep it. One
+// confirmed and waiting is the owner's, and stays.
+test('the enroll sweep also reaps a notice-address change whose code ran out unconfirmed', async () => {
+  const waiting = crypto.randomUUID(), lapsed = crypto.randomUUID(), live = crypto.randomUUID()
+  await app.db.batch([
+    app.db.prepare('INSERT INTO notice_changes(account_id,address,code_hash,expires_at,created_at) VALUES(?,?,?,?,?)')
+      .bind(lapsed, 'typed@example.invalid', 'c'.repeat(64), Date.now() - 1000, Date.now() - 1801000),
+    app.db.prepare('INSERT INTO notice_changes(account_id,address,code_hash,expires_at,created_at) VALUES(?,?,?,?,?)')
+      .bind(live, 'typing@example.invalid', 'e'.repeat(64), Date.now() + 600000, Date.now()),
+    app.db.prepare('INSERT INTO notice_changes(account_id,address,code_hash,expires_at,verified_at,effective_at,created_at) VALUES(?,?,?,?,?,?,?)')
+      .bind(waiting, 'proven@example.invalid', 'd'.repeat(64), Date.now() - 1000, Date.now() - 2000, Date.now() + 86400000, Date.now() - 1801000),
+  ])
+  await app.client().post('enroll', { name: 'Sweeper' })
+  const kept = await app.db.prepare('SELECT account_id FROM notice_changes WHERE account_id IN (?,?,?) ORDER BY address').bind(lapsed, live, waiting).all()
+  assert.deepEqual(kept.results.map(row => row.account_id), [waiting, live], 'the run-out unconfirmed change is reaped; the others are kept')
+})
+
 // rate() counts in FIXED ten-minute windows, so a run that crosses a boundary restarts every counter
 // part-way through and a limit assertion reads short - the enroll/check case below went red at
 // exactly 17:40:00. Start the timed part only when all of it fits inside the current window.

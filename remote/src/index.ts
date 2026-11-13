@@ -261,6 +261,9 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       env.DB.prepare('DELETE FROM tickets WHERE expires_at<=?').bind(now),
       env.DB.prepare('DELETE FROM rate_limits WHERE expires_at<=?').bind(now),
       env.DB.prepare('DELETE FROM challenges WHERE expires_at<=?').bind(now),
+      // A notice-address change never confirmed, its code run out: it holds an address someone typed,
+      // and is otherwise reaped only when its own account reads its notice address again.
+      env.DB.prepare('DELETE FROM notice_changes WHERE verified_at IS NULL AND expires_at<=?').bind(now),
     ])
     await rate(env, 'enroll-global', now, 1000, 600000)
     const input = await body(request, ['name']), stationId = uuid(), credential = secret(), code = secret().slice(0, 16)
