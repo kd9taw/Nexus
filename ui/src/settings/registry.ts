@@ -292,6 +292,12 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       // The high-SWR cutoff. NOT the bare word 'swr' — that belongs to the amplifier
       // section's own SWR read-out, and one term cannot land the operator on two sections.
       'high swr', 'swr cutoff', 'stop on swr', 'antenna fault',
+      // The Tune timeout, the auto-release on a key-down tune carrier, beside the SWR cutoff
+      // (#487: moved here from Digital, as it applies to Tune on every screen). `tuner`… is the
+      // same control as an operator names it, the tuner's time limit; "tuner" is not a substring
+      // of "tune", so without it the search found nothing.
+      'tune timeout', 'tune carrier', 'key down', 'tuner', 'tuner timeout', 'tuner time limit',
+      'atu timeout', 'atu time limit',
       // Parsec presence mode: the words an operator running the shack over Parsec reaches for.
       'parsec', 'remote desktop', 'dropped session', 'lost connection', 'stuck ptt',
       // "Share by TCI", under its own name and the programs that connect to it. Not the bare
@@ -321,14 +327,11 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Digital (FT8/FT4)',
     tab: 'digital',
     neededInHourOne: true,
-    // `tune`/`tune timeout` are here because the Tune timeout — the auto-release on a key-down
-    // carrier — sits in this section's "Transmit & Sequencing" group and had NO searchable word
-    // anywhere in the registry, so search returned nothing and no deep link could name it.
-    // `tuner`… (#487): the same control as an operator names it, the tuner's time limit; "tuner"
-    // is not a substring of "tune", so it found nothing.
-    keywords: ['tuner', 'tuner timeout', 'tuner time limit', 'ft8', 'ft4', 'auto sequence', 'sequencing', 'tx enable', 'watchdog', 'decode',
+    // `tune` is here for Tune power, in this section's "Transmit & Sequencing" group. The Tune
+    // timeout's own words (`tune timeout`, `tuner`…) moved to `transmit-limits` with it (#487).
+    keywords: ['ft8', 'ft4', 'auto sequence', 'sequencing', 'tx enable', 'watchdog', 'decode',
       'depth', 'deep', 'auto cq', 'cq', 'hound', 'fox', 'dxpedition', 'auto log', 'blocked',
-      'ap decode', 'f low', 'f high', 'tune', 'tune timeout', 'tune carrier', 'key down',
+      'ap decode', 'f low', 'f high', 'tune',
       'tx period', 't/r period', 'disable tx after 73', 'tune power', 'low power tune',
       'atu power', 'loop antenna', 'db reports', 'comments', 'reports to comments'],
   },

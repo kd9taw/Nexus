@@ -8908,6 +8908,31 @@ export function SettingsPanel({
               </span>
             </div>
 
+            {/* THE TUNE TIMEOUT (#487): the auto-release on a key-down tune carrier. It applies to
+                Tune on every screen, so it sits with the transmit limits, beside the SWR cutoff,
+                rather than in the FT8 group it used to be in. Same key, same save rule. */}
+            <div className="settings-field">
+              <label>
+                <span className="settings-label">{t('settings.transmit.tuneTimeout.label')}</span>
+                <input disabled={locked('tuneTimeoutSecs')} data-setting="tuneTimeoutSecs"
+                  className="settings-input"
+                  type="number"
+                  min={1}
+                  max={120}
+                  value={form.tuneTimeoutSecs || 12}
+                  onChange={(e) => {
+                    // '' must mean "back to the 12 s default" — the generic
+                    // numeric coercion turned a cleared field into a saved 0.
+                    markDirty()
+                    const n = e.target.value === '' ? 12 : Math.max(1, Number(e.target.value) || 12)
+                    setForm((prev) => (prev ? { ...prev, tuneTimeoutSecs: n } : prev))
+                  }}
+                />
+                {setAtStation('tuneTimeoutSecs')}
+              </label>
+              <span className="settings-hint">{t('settings.transmit.tuneTimeout.hint')}</span>
+            </div>
+
             {/* PARSEC PRESENCE MODE (operator sign-off 2026-09-27 — a transmit-path feature, scoped
                 exactly): when the operator's Parsec session drops, the station stops a latched PTT,
                 continuous RTTY/PSK and Tune through their own stop paths. Stop-only and OFF by
@@ -9217,8 +9242,8 @@ export function SettingsPanel({
                 here until the transmit-path batch moves them. "Transmit & Sequencing" and
                 "Auto-CQ & Caller Selection" are the FT-mode TX / timing / QSO-management
                 surface — the T/R period, the TX watchdog, disable-after-73, double-click-arms-
-                TX, the tune timeout, the CQ budget, the blocked-caller list and the best-caller
-                pick. Every label, hint and accessible name in them moves in its own batch with
+                TX, the CQ budget, the blocked-caller list and the best-caller pick. (The tune
+                timeout moved to Radio ▸ Transmit limits, #487.) Every label, hint and accessible name in them moves in its own batch with
                 the stop-line sweeps re-run, deliberately, because WSJT-X parity here is a
                 compatibility contract that cannot be checked in CI. Everything BELOW them —
                 Logging Behavior, Decoder, Station Housekeeping — is in the catalog. */}
@@ -9296,31 +9321,6 @@ export function SettingsPanel({
                   <span className="settings-hint">
                     Double-clicking a station enables TX so the answer goes straight out (WSJT-X
                     "double-click on call sets Tx enable"). Off = you arm TX yourself each time.
-                  </span>
-                </div>
-
-                <div className="settings-field">
-                  <label>
-                    <span className="settings-label">Tune timeout (s)</span>
-                    <input disabled={locked('tuneTimeoutSecs')} data-setting="tuneTimeoutSecs"
-                      className="settings-input"
-                      type="number"
-                      min={1}
-                      max={120}
-                      value={form.tuneTimeoutSecs || 12}
-                      onChange={(e) => {
-                        // '' must mean "back to the 12 s default" — the generic
-                        // numeric coercion turned a cleared field into a saved 0.
-                        markDirty()
-                        const n = e.target.value === '' ? 12 : Math.max(1, Number(e.target.value) || 12)
-                        setForm((prev) => (prev ? { ...prev, tuneTimeoutSecs: n } : prev))
-                      }}
-                    />
-                    {setAtStation('tuneTimeoutSecs')}
-                  </label>
-                  <span className="settings-hint">
-                    Auto-release the tune carrier after this many seconds — never leave a key-down
-                    unattended.
                   </span>
                 </div>
 

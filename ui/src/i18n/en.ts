@@ -8035,7 +8035,7 @@ export const EN = {
   'freq.channel.rxOnly.title':
     'Your licence class has no transmit privileges on this band. You can tune here and listen; transmitting will be refused.',
   'freq.channel.custom': '{{band}} (custom)',
-  'freq.channel.custom.title': 'The dial is not on a listed channel for this mode. Pick a channel here, or type a frequency.',
+  'freq.channel.custom.title': 'The dial is not on a listed channel for this mode. Pick a channel from this menu, or click the large MHz frequency, type a new one and press Enter.',
   'freq.dial.label': 'Dial (MHz)',
   'freq.band.title': 'Current band',
   'freq.mode.aria': 'Phone mode',
@@ -8046,9 +8046,9 @@ export const EN = {
   // measurements built in the component and never here. `megahertz` IS spelled out below: it is
   // what a screen reader must say, and `MHz` is read as three letters.
   'freq.readout.dial.label': 'Dial frequency (MHz)',
-  'freq.readout.title.editable': 'Click to enter a frequency (MHz)',
+  'freq.readout.title.editable': 'Click to type a frequency (MHz), then press Enter. Esc cancels.',
   'freq.readout.title.digitTune':
-    'Scroll a digit to tune it (100 Hz … 10 MHz) · ←/→ pick a digit, ↑/↓ spin it · click to type a frequency (MHz)',
+    'Scroll a digit to tune it (100 Hz … 10 MHz) · ←/→ pick a digit, ↑/↓ spin it · click to type a frequency (MHz) and press Enter',
   'freq.readout.announce.dial': '{{dial}} megahertz',
   'freq.readout.announce.digit': '{{step}} digit',
 
@@ -9499,6 +9499,11 @@ export const EN = {
   // it, because "it doesn't work" with no cure is what the `.unverified` line already says.
   'settings.transmit.swrStop.noMeterStream':
     'Nexus is not receiving this Flex\'s own SWR meter, so this cutoff will not stop anything, however high the SWR goes. That meter comes from the radio\'s native stream, and it is off. Turn on "Flex native panadapter (Beta)" in Settings \u25b8 Radio \u25b8 Rig & CAT to start it. Until then this setting has no effect.',
+  // #487: the Tune timeout, moved here from Settings ▸ Digital (it applies to Tune on every
+  // screen). `s` and `12 s` are units and a number: keep them exactly.
+  'settings.transmit.tuneTimeout.label': 'Tune timeout (s)',
+  'settings.transmit.tuneTimeout.hint':
+    'Auto-release the tune carrier after this many seconds, on every screen: never leave a key-down unattended. Empty = 12 s.',
 
   // Parsec presence mode (operator sign-off 2026-09-27): stop-only, off by default. The hint
   // says what it watches and what it stops, and names what it leaves alone. `Parsec`, `PTT`,
@@ -9644,7 +9649,7 @@ export const EN = {
   // ⚠️ TWO SUB-GROUPS OF THIS SECTION ARE MISSING FROM THIS FILE ON PURPOSE. "Transmit &
   // Sequencing" and "Auto-CQ & Caller Selection" are the FT-mode TX / timing / QSO-management
   // surface — the T/R period, the TX watchdog, disable-after-73, double-click-arms-TX, the
-  // tune timeout, the CQ budget, the blocked-caller list and the best-caller pick. Every label
+  // CQ budget, the blocked-caller list and the best-caller pick. Every label
   // and accessible name in them stays written in `SettingsPanel.tsx` until the transmit-path
   // batch moves them with the stop-line sweeps re-run. What follows is the REST of the
   // section (Logging Behavior, Decoder, Station Housekeeping) and the six weak-signal mode
@@ -12368,7 +12373,9 @@ export const EN = {
     "Tune keys nothing here: its 1500 Hz tone would be outside your license privileges on this frequency.",
   'operate.strip.atu.radioStatus': 'Radio ATU: {{status}}',
   'operate.strip.atu.carrierRefused':
-    "ATU keys nothing here: the radio's own carrier at your dial, {{mhz}} MHz, would be outside your license privileges.",
+    "ATU keys nothing here: its tune carrier would go out at your dial, {{mhz}} MHz, outside what your license allows for a carrier. This refuses only the ATU: your current mode may transmit here.",
+  'operate.strip.atu.carrierRefused60':
+    "ATU keys nothing here: its tune carrier would go out at your dial, {{mhz}} MHz, and on a 60 m channel a carrier must sit on the channel's centre. This refuses only the ATU: your current mode, FT8 included, may transmit here.",
   'operate.strip.atu.radioRefused':
     "ATU keys nothing here: the radio's own carrier would be outside your CW privileges on this frequency.",
 

@@ -29,8 +29,15 @@ export function RadioTuneNote({ radio }: { radio: RadioStatus }) {
   const tuneRefusals = [
     radio.tuneToneRefused && <span key="tone">{t('operate.strip.tune.toneRefused')}</span>,
     radio.tuneOverRefused && <span key="over">{t('operate.strip.tune.overRefused')}</span>,
+    // #506: shown only while the current mode MAY key (engine: `tx_allowed()`), so it says the
+    // refusal is the ATU's tune carrier alone, never the over — and on a 60 m channel, where a
+    // carrier must sit on the centre, it says so: the line used to read like a licence refusal of FT8.
     radio.atuCarrierRefusedMhz != null && (
-      <span key="atu">{t('operate.strip.atu.carrierRefused', { mhz: radio.atuCarrierRefusedMhz.toFixed(4) })}</span>
+      <span key="atu">
+        {onSixtyChannel(radio.atuCarrierRefusedMhz)
+          ? t('operate.strip.atu.carrierRefused60', { mhz: radio.atuCarrierRefusedMhz.toFixed(4) })
+          : t('operate.strip.atu.carrierRefused', { mhz: radio.atuCarrierRefusedMhz.toFixed(4) })}
+      </span>
     ),
   ].filter(Boolean)
   if (!readouts) {
@@ -55,6 +62,17 @@ export function RadioTuneNote({ radio }: { radio: RadioStatus }) {
       )}
     </span>
   )
+}
+
+/** The US 60 m channel centres (47 CFR 97.303(h)), as `privileges.rs` SIXTY models them. */
+const SIXTY_CHANNELS_MHZ = [5.332, 5.348, 5.373, 5.405]
+
+/** On a US 60 m channel: from its phone carrier 1.5 kHz below the centre to the data edge 1.4 kHz
+ *  above, mirroring the `SIXTY` rows. There the licence's rule for a carrier is the channel's
+ *  centre; a dial off every channel (just outside the 5.3515–5.3665 segment) gets the general line.
+ *  The 1e-7 slack absorbs float error at the two edges. */
+function onSixtyChannel(mhz: number): boolean {
+  return SIXTY_CHANNELS_MHZ.some((c) => mhz >= c - 0.0015 - 1e-7 && mhz <= c + 0.0014 + 1e-7)
 }
 
 /** The radio's transmit timeout in the unit it reads best in: whole minutes from two minutes up,

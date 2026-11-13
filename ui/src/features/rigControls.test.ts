@@ -105,7 +105,15 @@ describe('which cause is the one to name', () => {
     expect(causeFor(byId('BW'), state({ mode: 'USB' })), 'BW is dead on sideband').toBeNull()
   })
 
-  it('mode-inapplicability is BW’s alone — it does not leak to its neighbours', () => {
+  it('the notch controls on FM are not-on-mode too (#403), and on SSB they are nothing', () => {
+    // The FTX-1 reports its notch switches ON in FM, where a notch does nothing.
+    for (const id of ['ANF', 'MN', 'NOTCHF']) {
+      expect(causeFor(byId(id), state({ mode: 'FM' })), `${id} live on FM`).toBe('notOnMode')
+      expect(causeFor(byId(id), state({ mode: 'USB' })), `${id} dead on sideband`).toBeNull()
+    }
+  })
+
+  it('mode-inapplicability is BW’s and the notches’ alone — it does not leak to their neighbours', () => {
     // The scope guard. FM has an AF gain and a squelch like any other mode; a blanket
     // "FM disables the receive chain" would be a much larger and wrong claim.
     for (const id of ['RF', 'AF', 'SQL', 'NB', 'AGC']) {

@@ -64,13 +64,10 @@ interface Props {
   band?: string
   /** hero = big focal readout (var(--fs-display)); compact = strip-sized (17px). */
   size?: 'hero' | 'compact'
-  /** When set, clicking (or Enter/Space) swaps to a MHz entry input; onCommit fires on Enter. */
+  /** When set, clicking (or Enter/Space) swaps to a MHz entry input; onCommit fires on Enter, or
+   * when the operator clicks elsewhere in the app with a valid frequency in it. Esc cancels. */
   editable?: boolean
   onCommit?: (mhz: number) => void
-  /** Commit a typed value on blur too (not just Enter). Use for STAGED forms (Settings), where
-   * clicking Save blurs the field — Enter-only would silently discard it. Off for a live rig
-   * control, where blur should cancel (matching the old goto field). */
-  commitOnBlur?: boolean
   /** Out-of-band / TX-inhibited — the number renders in the TX (red) color. */
   txBlocked?: boolean
   title?: string
@@ -107,8 +104,15 @@ interface Props {
 /**
  * The shared, prominent frequency readout for all three mode families (digital, CW, Phone): big
  * accent-colored MHz, monospace + tabular-nums so digits don't jitter while tuning. When `editable`,
- * activating it (click or Enter/Space) swaps in a decimal MHz input — Enter commits, Esc/blur
- * cancels — the same contract the per-cockpit "Go to MHz" fields had, now unified in one place.
+ * activating it (click or Enter/Space) swaps in a decimal MHz input — Enter commits, and so does
+ * leaving the field with a valid frequency in it; Esc cancels.
+ *
+ * #511/#454 — BLUR COMMITS, on every surface. It used to cancel on a live rig, so typing a
+ * frequency and clicking anywhere else threw it away without a word (SSTV, the cockpit headers);
+ * only the staged Settings form committed on blur. Something that is not a frequency still
+ * commits nothing, exactly as Enter refuses it. Two blurs the operator did not cause never
+ * commit: the window losing focus, and a dialog opening by itself and taking focus. Both leave
+ * the draft open for the operator to finish or Esc.
  */
 export function FrequencyReadout({
   dialMhz,
@@ -116,7 +120,6 @@ export function FrequencyReadout({
   size = 'hero',
   editable = false,
   onCommit,
-  commitOnBlur = false,
   txBlocked = false,
   title,
   disabled = false,
@@ -126,6 +129,9 @@ export function FrequencyReadout({
 }: Props) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
+  // Closed by Enter or Esc. Removing the focused input fires a blur in Chromium (WebView2), and
+  // that blur must not commit after an Esc, or commit a second time after an Enter.
+  const closedRef = useRef(false)
   const canEdit = editable && !disabled
   // The number ON SCREEN: what was asked for while the station catches up, its own reading
   // otherwise. Every judgement in this file that is not the digits themselves — TX blocking, the
@@ -154,6 +160,7 @@ export function FrequencyReadout({
     // the digits the operator was looking at (identical to the dial wherever there is no
     // provisional value, which is everywhere but the remote main dial).
     setDraft(shown.toFixed(5))
+    closedRef.current = false
     setEditing(true)
   }
   const commit = () => {
@@ -162,6 +169,8 @@ export function FrequencyReadout({
     // input sites in the tree each got it wrong (see `numInput.ts`). Same behaviour, one
     // implementation, and now stricter: a valid PREFIX like `14.0.74` is refused instead of
     // silently tuning the rig to 14 MHz.
+    if (closedRef.current) return
+    closedRef.current = true
     const v = parseOperatorNumber(draft)
     setEditing(false)
     if (!canEdit) return
@@ -214,10 +223,23 @@ export function FrequencyReadout({
               e.preventDefault()
               commit()
             } else if (e.key === 'Escape') {
+              closedRef.current = true
               setEditing(false)
             }
           }}
-          onBlur={() => (commitOnBlur ? commit() : setEditing(false))}
+          onBlur={(e) => {
+            // The WINDOW lost focus (alt-tab, a notification, another program): not the operator leaving the
+            // field. Keep the draft open and uncommitted; Chromium refocuses this input when the window returns
+            // (measured: blur with document.hasFocus() false, focus again on return).
+            if (!document.hasFocus()) return
+            // A dialog that opened by itself (the log prompt's autoFocus) took focus: never tune on that.
+            // The draft stays open, uncommitted, for the operator to finish or Esc. A dialog the field is
+            // itself inside (a staged Settings form) still commits as before.
+            const to = e.relatedTarget instanceof Element ? e.relatedTarget : null
+            const dialog = to?.closest('[role="dialog"],[role="alertdialog"]')
+            if (dialog && !dialog.contains(e.currentTarget)) return
+            commit()
+          }}
           aria-label={t('freq.readout.dial.label')}
         />
         <span className="readout-unit">{MHZ}</span>

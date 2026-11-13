@@ -33,6 +33,10 @@ describe('"(custom)" says what it means', () => {
     const b = pill(3.575)
     expect(b.textContent).toContain('80m (custom)')
     expect(WHY).toMatch(/not on a listed channel/)
+    // #511/#454: "or type a frequency" sent an operator to type into this TOOLTIP. It now says
+    // WHERE (the big MHz readout) and HOW (type, then Enter).
+    expect(WHY).toMatch(/click the large MHz frequency/i)
+    expect(WHY).toMatch(/press Enter/)
     expect(b.getAttribute('title')).toBe(WHY)
     fireEvent.pointerDown(b, { button: 0, ctrlKey: false })
     expect(screen.getByText(WHY)).toBeTruthy()

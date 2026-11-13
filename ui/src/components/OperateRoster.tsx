@@ -9,7 +9,7 @@
 // entity, the state/province, the grid square, the distance, the bearing and the SNR. So do
 // the tokens the roster is built out of (ROSTER_TOKENS below). What moved is the prose around
 // them — the column headings, the filters, and everything a row says out loud.
-import { useEffect, useMemo, useState, type KeyboardEvent, type MouseEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
 import { t } from '../i18n'
 import { callCardTrigger, qrzPageOf } from './CallCard'
 import { useRovingList } from '../useRovingList'
@@ -121,6 +121,11 @@ export const DEFAULT_ROSTER_SORT: RosterSort = { key: 'need', dir: 'desc' }
 // (View-scoped — the backend roster is left intact so the Tempo/TempoFast presence
 // and store-and-forward paths keep their longer retention.)
 const ACTIVE_ROSTER_CYCLES = 3
+
+/** #510 — how long a pointerdown holds the roster's row order: past a double-click's second click
+ *  (the OS double-click time defaults to 500 ms), short enough that a parked pointer never stops
+ *  the list re-sorting. */
+export const ROSTER_HOLD_MS = 1000
 
 /**
  * The roster's invariant vocabulary — never translated, never locale-formatted.
@@ -246,7 +251,7 @@ export function OperateRoster({
   const centroids = useEntityCentroids()
   const me = useMemo(() => gridToLatLon(myGrid), [myGrid])
 
-  const rows = useMemo(() => {
+  const sorted = useMemo(() => {
     const built = stations.map((s) => {
       const up = s.call.toUpperCase()
       const raw = needAlertsByCall?.get(up)
@@ -450,6 +455,44 @@ export function OperateRoster({
     selectedCall,
   ])
 
+  // #510 — HOLD THE ORDER FOR A DOUBLE-CLICK. The list above re-sorts on every decode batch, and
+  // two equally-needed stations swap on their live SNR, so a different station could slide under
+  // the pointer between the two clicks of a double-click and get worked instead. A pointerdown on
+  // the grid holds the rows in the order they had for ROSTER_HOLD_MS (each row's data still updates
+  // in place); the second click's pointerdown restarts it, so the hold covers the whole double-click.
+  // Then the list re-sorts even with the pointer parked on it (operator decision: a BOUNDED hold, so
+  // a newly needed station still rises to the top). A newly heard station joins at the bottom while
+  // held, and one that drops off the list (aged out, filtered) leaves it. A column the operator
+  // sorts by takes effect at once and becomes the order held. Touch: a tap's pointerdown holds it
+  // the same way. Display only: the double-click still works the station of the row it lands on.
+  const [holding, setHolding] = useState(false)
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const hold = () => {
+    if (holdTimer.current) clearTimeout(holdTimer.current)
+    holdTimer.current = setTimeout(() => {
+      holdTimer.current = null
+      setHolding(false)
+    }, ROSTER_HOLD_MS)
+    setHolding(true)
+  }
+  useEffect(() => () => {
+    if (holdTimer.current) clearTimeout(holdTimer.current)
+  }, [])
+  const held = useRef<{ sort: RosterSort; calls: string[] } | null>(null)
+  const rows = useMemo(() => {
+    const h = held.current
+    let out = sorted
+    if (holding && h && h.sort.key === sort.key && h.sort.dir === sort.dir) {
+      const pos = new Map(h.calls.map((c, i) => [c, i]))
+      out = [
+        ...sorted.filter((r) => pos.has(r.s.call)).sort((a, b) => pos.get(a.s.call)! - pos.get(b.s.call)!),
+        ...sorted.filter((r) => !pos.has(r.s.call)),
+      ]
+    }
+    held.current = holding ? { sort, calls: out.map((r) => r.s.call) } : null
+    return out
+  }, [sorted, holding, sort])
+
   // #357 — the Park column takes room only while it has something to say: a station on the roster
   // is at a park, or the operator has sorted by it (so the sort they picked stays on screen). With
   // neither, the row keeps its old columns and its old minimum width (`.or-has-park` adds the track).
@@ -606,6 +649,7 @@ export function OperateRoster({
         aria-label={t('operate.roster.grid.aria')}
         aria-rowcount={rows.length + 1}
         onKeyDown={roving.containerProps.onKeyDown}
+        onPointerDown={hold}
       >
         <div className="or-row or-header" role="row">
           {th('call', t('operate.roster.col.call'))}

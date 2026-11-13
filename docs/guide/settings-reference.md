@@ -876,6 +876,11 @@ full power on every mode.*
   Hamlib with no scale Nexus can vouch for, and it can be far out — one popular
   radio reads 1.2:1 on its own meter and reports 6:1 to Nexus. A cut-off driven
   by that would take you off the air for nothing.
+- **Tune timeout (s)** — "Auto-release the tune carrier after this many seconds, on
+  every screen: never leave a key-down unattended." Empty means the default, 12 s.
+  It applies to Tune on FT8, CW, Phone and every other screen. It used to sit on the
+  Digital tab, under Transmit & Sequencing; settings search finds it under "tune
+  timeout" or "tuner".
 - **Stop latched transmissions if my Parsec session drops** — off by default,
   and on Windows only. It is for running the shack remotely over Parsec. Nexus
   watches Parsec's own log on the shack PC (`log.txt` in `%APPDATA%\Parsec` for
@@ -1131,8 +1136,6 @@ the radio.
   is unaffected: it returns to CQ."
 - **Double-click arms TX** — "Double-clicking a station enables TX so the answer
   goes straight out." Off = you arm TX yourself each time.
-- **Tune timeout (s)** — "Auto-release the tune carrier after this many seconds —
-  never leave a key-down unattended" (default 12).
 - **Tune power (%)** — the power a tune-up keys at. Leave it empty and Nexus
   never touches your power setting, which is the default behaviour. It can only
   turn the rig **down**, never up: it keys at whichever is lower, this figure or
@@ -1143,8 +1146,9 @@ the radio.
 ![The Digital tab's left-hand columns, four groups stacked: Transmit & sequencing with a TX watchdog of 6 minutes and Disable TX after sending 73 on; Auto-CQ & caller selection with Wait before calling CQ again set to 180 and an empty Blocked callsigns box; Logging behavior with Auto-log QSOs on and Prompt before logging off; and Decoder with Decode depth on Deep and the passband reading F low 200, F high 2900.](../img/manual/settings-digital.webp)
 
 *Four of the Digital tab's five groups in Nexus 1.10.3. Each group continues to
-the right — Tune timeout and Tune power finish the first row, Best caller the
-second. Every value shown is one station's.*
+the right — Tune power finishes the first row, Best caller the second. The Tune
+timeout beside Tune power in this picture is now on the Radio tab. Every value
+shown is one station's.*
 
 **Auto-CQ & Caller Selection**
 

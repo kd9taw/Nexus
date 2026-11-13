@@ -2075,8 +2075,12 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
   const funcToggle = (f: PhoneFunc) => {
     if (!show(f.chain)) return null
     const isDead = dead(f.chain)
-    const on = snap.radio[f.key] === true
-    const chain = RIG_CONTROLS.find((c) => c.id === f.chain)!.chain
+    // A dead control is never drawn lit. #403: the FTX-1 reports its notch switches ON in FM,
+    // where they do nothing — a lit button over a dead control reads as a working one.
+    const on = !isDead && snap.radio[f.key] === true
+    const control = control_(f.chain)
+    const chain = control.chain
+    const notOnMode = causeFor(control, chainState) === 'notOnMode'
     const press = () =>
       void setRigFunc(f.key, !on)
         .then((s) => s && onSnap?.(s))
@@ -2101,6 +2105,10 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
         >
           {f.label}
         </button>
+        {/* Not on this mode (the notches on FM): the mark names the MODE, as BW's does. */}
+        {notOnMode && (
+          <Unavailable mark={commandedMode} title={t('phone.unavail.notOnMode', { plate: f.label, mode: commandedMode })} />
+        )}
       </span>
     )
   }
@@ -2527,6 +2535,9 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
                 />
                 <span className="ph-power-val">{dead('NOTCHF') ? '—' : `${shownNotch} ${HZ}`}</span>
               </label>
+              {causeFor(control_('NOTCHF'), chainState) === 'notOnMode' && (
+                <Unavailable mark={commandedMode} title={t('phone.unavail.notOnMode', { plate: NOTCH, mode: commandedMode })} />
+              )}
             </div>
             )}
 
