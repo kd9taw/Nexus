@@ -2,10 +2,12 @@
 //!
 //! FT1 reuses the WSJT-X 77-bit message formats. The forms Tempo's
 //! auto-sequencer uses all take the shape `<TO> <FROM> <PAYLOAD>` (plus the
-//! `CQ <CALL> <GRID>` form), where PAYLOAD is one of:
+//! `CQ <CALL> <GRID>` form, and both with no payload at all, #512), where PAYLOAD is one of:
 //! a 4-character Maidenhead grid, a signal report (`-10`, `+05`), a rogered
 //! report (`R-12`), or `RR73` / `RRR` / `73`. These all round-trip verbatim
 //! through the modem (verified against the FT1 packer).
+
+use modes::wsjt77::pack::chkcall_ok;
 
 /// A parsed/buildable standard QSO message.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -603,11 +605,10 @@ impl Msg {
         // it LOOKS like a callsign and is NOT a standard one, therefore it can only have
         // arrived as i3=4, therefore a bare "CQ" in front of it is a CQ.
         //
-        // The guard rails the old comment named are kept by construction rather than by
-        // narrowness: "CQ W1AW" stays free text because W1AW IS standard (a standard call
-        // would have carried its grid), and "CQ <...>" is still rejected because a bracketed
-        // or punctuated token is not a callsign to `is_callsign`.
-        if t.len() == 2 && t[0] == "CQ" && is_nonstandard_call(t[1]) {
+        // "CQ <...>" is still rejected because a bracketed or punctuated token is not a callsign
+        // to `is_callsign`. A standard call is the next arm's (#512). A word of four characters
+        // or fewer is free text, as `pack77_4` has it (`packjt77.f90:1422`): "CQ RR73" is no CQ.
+        if t.len() == 2 && t[0] == "CQ" && t[1].len() > 4 && is_nonstandard_call(t[1]) {
             return Msg::Cq {
                 de: t[1].to_string(),
                 grid: String::new(),
@@ -628,6 +629,30 @@ impl Msg {
                 || is_compound(t[1]))
             && !(is_valid_hashed(t[0]) && is_valid_hashed(t[1]))
         {
+            return Msg::Grid {
+                to: t[0].to_string(),
+                de: t[1].to_string(),
+                grid: String::new(),
+            };
+        }
+        // #512 — A GRID-LESS CQ OR CALL BETWEEN STANDARD CALLS IS A STANDARD MESSAGE. The arms
+        // above used to assume that a standard call would have carried its grid; WSJT-X 3.0.2
+        // says otherwise. `pack77_1` packs "CQ W1AW" and "W9XYZ K1ABC" as ordinary Type 1 frames
+        // with a blank grid (`packjt77.f90:1225-1236`, `:1296-1302`) and `unpack77` prints the
+        // two words back (`:569-570`); "CQ W1AW/P" goes as a Type 4 CQ (`pack77_4`, `:1422`).
+        // WSJT-X's decode window calls them standard by PACKING THE DECODED TEXT AGAIN
+        // (`stdmsg.f90:27-31`, from `DecodedText`, decodedtext.cpp:83-87), not by the received
+        // i3, so the same test on the text is the faithful one here: each word is judged by
+        // `chkcall`, the routine `pack77_1` asks, and the second word of a pair may carry no `/`
+        // (`:1235`). The directed "CQ DX W1AW" is the three-word arm further up.
+        if t.len() == 2 && t[0] == "CQ" && chkcall_ok(t[1]) {
+            return Msg::Cq {
+                de: t[1].to_string(),
+                grid: String::new(),
+                dir: String::new(),
+            };
+        }
+        if t.len() == 2 && chkcall_ok(t[0]) && chkcall_ok(t[1]) && !t[1].contains('/') {
             return Msg::Grid {
                 to: t[0].to_string(),
                 de: t[1].to_string(),
@@ -894,17 +919,80 @@ mod fidelity_tests {
     /// asserting directly rather than trusting the shape of the predicate.
     #[test]
     fn a_gridless_cq_still_refuses_what_it_always_refused() {
-        // A STANDARD call with no grid is free text: a standard sender would have carried one.
-        assert!(
-            !matches!(Msg::parse("CQ W1AW"), Msg::Cq { .. }),
-            "a grid-less STANDARD call stays free text"
-        );
-        assert!(!matches!(Msg::parse("CQ KD9TAW"), Msg::Cq { .. }));
+        // (A grid-less STANDARD call used to be refused here too. It is a CQ — #512, below.)
         // A hashed placeholder is not a callsign and never names a station.
         assert!(!matches!(Msg::parse("CQ <...>"), Msg::Cq { .. }));
         // Not a callsign at all.
         assert!(!matches!(Msg::parse("CQ ..."), Msg::Cq { .. }));
         assert!(!matches!(Msg::parse("CQ ?"), Msg::Cq { .. }));
+    }
+
+    /// #512: WSJT-X 3.0.2 packs a CQ or a call between two standard calls with NO grid as an
+    /// ordinary Type 1 message — `pack77_1` (`lib/77bit/packjt77.f90:1225-1236`, `:1296-1302`)
+    /// writes `i3=1` with `igrid4=MAXGRID4+1`, and `unpack77` (`:569-570`) prints it back as the
+    /// two words. A directed CQ folds its token into the first word first (`split77`, `:954-962`;
+    /// `pack28` takes 1-4 letters or three digits, `:749-773`). A slashed CQer goes as a Type 4 CQ
+    /// (`pack77_4`, `:1422-1426`). WSJT-X calls all of these standard (`stdmsg.f90:30-31` re-packs
+    /// the decoded text) and a double-click works them. Nexus read the plain ones as free text.
+    #[test]
+    fn a_gridless_cq_or_call_between_standard_calls_is_a_standard_message() {
+        for (text, de, dir) in [
+            ("CQ W1AW", "W1AW", ""),
+            ("CQ KD9TAW", "KD9TAW", ""),
+            ("CQ K1ABC/P", "K1ABC/P", ""),
+            ("CQ K1ABC/R", "K1ABC/R", ""),
+            ("CQ DX K1ABC", "K1ABC", "DX"),
+            ("CQ NA K1ABC", "K1ABC", "NA"),
+            ("CQ POTA K1ABC", "K1ABC", "POTA"),
+            ("CQ TEST K1ABC", "K1ABC", "TEST"),
+            ("CQ 040 K1ABC", "K1ABC", "040"),
+        ] {
+            let want = Msg::Cq {
+                de: de.into(),
+                grid: String::new(),
+                dir: dir.into(),
+            };
+            assert_eq!(Msg::parse(text), want, "{text}");
+            assert_eq!(want.to_text(), text, "{text} renders back verbatim");
+        }
+        for (text, to, de) in [
+            ("W9XYZ K1ABC", "W9XYZ", "K1ABC"),
+            ("KD9TAW W1AW", "KD9TAW", "W1AW"),
+            ("K1ABC/R W9XYZ", "K1ABC/R", "W9XYZ"),
+            ("A79AA K2DEF", "A79AA", "K2DEF"),
+        ] {
+            let want = Msg::Grid {
+                to: to.into(),
+                de: de.into(),
+                grid: String::new(),
+            };
+            assert_eq!(Msg::parse(text), want, "{text}");
+            assert_eq!(want.to_text(), text, "{text} renders back verbatim");
+        }
+    }
+
+    /// The other side of #512: a line that `pack77` would NOT take for a CQ or a call pair stays
+    /// free text. Each word is judged by `chkcall` (`lib/chkcall.f90`), the routine `pack77_1`
+    /// asks, so a word with no digit in place, a digit-led prefix with no letter behind it, a
+    /// `Q` prefix, a report or a signoff is not a callsign here either.
+    #[test]
+    fn free_text_that_is_not_two_callsigns_stays_free_text() {
+        for text in [
+            "TNX K1ABC",
+            "HELLO W9XYZ",
+            "73 K1ABC",
+            "W1AW 5NN",
+            "RR73 W1AW",
+            "5/9 NJ2X",
+            "Q1ABC W1AW",
+            "CQ 1AB",
+            "CQ QRP",
+            "CQ RR73",
+            "CQ CQ",
+            "CQ <...>",
+        ] {
+            assert_eq!(Msg::parse(text), Msg::Other(text.into()), "{text}");
+        }
     }
 
     /// The predicate on its own, because it is the thing that decides and it is easier to see
@@ -1114,10 +1202,10 @@ mod fidelity_tests {
                 snr: -10
             }
         );
-        // Plain free text / a bare standard pair is NOT misread as an i3=4 call pair.
+        // Plain free text is NOT misread as an i3=4 call pair. (A bare STANDARD pair is a Type 1
+        // call with no grid, #512 — `a_gridless_cq_or_call_between_standard_calls_…` below.)
         assert!(matches!(Msg::parse("NET TONIGHT"), Msg::Other(_)));
         assert!(matches!(Msg::parse("HELLO ALL"), Msg::Other(_)));
-        assert!(matches!(Msg::parse("W9XYZ K2DEF"), Msg::Other(_)));
         // Ham free-text SLASH shorthand must NOT read as a compound call pair.
         for s in ["5/9 NJ2X", "W/L 20M", "S/N 10DB", "2X/3 W1AW", "I/O TEST"] {
             assert!(
@@ -1128,8 +1216,7 @@ mod fidelity_tests {
         // Arbitrary bracketed tokens / both-hashed are not a valid i3=4 call pair.
         assert!(matches!(Msg::parse("<X> <Y>"), Msg::Other(_)));
         assert!(matches!(Msg::parse("<...> <...>"), Msg::Other(_)));
-        // A grid-less plain CQ and "CQ <...>" stay free text (only a compound CQ is i3=4).
-        assert!(matches!(Msg::parse("CQ W1AW"), Msg::Other(_)));
+        // "CQ <...>" stays free text. (A grid-less plain CQ is a Type 1 CQ, #512.)
         assert!(matches!(Msg::parse("CQ <...>"), Msg::Other(_)));
         assert!(matches!(Msg::parse("CQ <DX>"), Msg::Other(_)));
     }
