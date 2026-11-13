@@ -167,6 +167,37 @@ describe('on a Windows station', () => {
   })
 })
 
+// Operator ruling 1410: the lower-bandwidth mode through the relay, OFF by default, in the same card,
+// and what Save writes. What it does to a stream is the Rust side's (tempo-stream picture.rs).
+describe('the lower-bandwidth relay switch', () => {
+  const lighter = () => screen.queryByRole('switch', { name: EN['settings.remoteRelayLighter.label'] })
+  it('is in Remote access, OFF, and says audio and direct paths are untouched', async () => {
+    renderPanel()
+    await openRemoteTab()
+    const sw = await waitFor(() => lighter()!)
+    expect(sw.getAttribute('aria-checked')).toBe('false')
+    expect(document.getElementById('settings-remote-access')!.contains(sw)).toBe(true)
+    expect(EN['settings.remoteRelayLighter.hint']).toMatch(/Receive audio is not changed/)
+  })
+  it('writes remoteRelayLighter: true on Save once turned on, and leaves remoteStream alone', async () => {
+    renderPanel()
+    await openRemoteTab()
+    const sw = await waitFor(() => lighter()!)
+    fireEvent.click(sw)
+    clickSave()
+    await waitFor(() => expect(api.get('setSettings')).toHaveBeenCalled())
+    expect(lastSaved().remoteRelayLighter).toBe(true)
+    expect(lastSaved().remoteStream).toBe(false)
+  })
+  it('is not offered where the station cannot stream', async () => {
+    platform.windows = false
+    renderPanel()
+    await openRemoteTab()
+    await waitFor(() => expect(screen.getByText(EN['settings.remoteStream.unavailable'])).toBeTruthy())
+    expect(lighter()).toBeNull()
+  })
+})
+
 // Remote streaming is a beta (the operator, 2026-10-02: "we need a clear warning that this is a beta
 // feature in nexus and access could be revoked at any time"): a visible mark and one plain line, in the
 // Remote access card beside the streaming switch, never behind a click.

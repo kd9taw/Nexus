@@ -5888,6 +5888,10 @@ export interface Settings {
    *  station's own Nexus window and drive it; while one is attached, every transmission stops
    *  within five seconds of the stream going away or its picture going stale. Windows only. */
   remoteStream?: boolean
+  /** Remote as a stream, lower-bandwidth through the relay. Default OFF. While on, a stream that
+   *  reaches its browser only through the TURN relay is sent at a lower bit rate; receive audio,
+   *  direct paths and the shack's own network are untouched. */
+  remoteRelayLighter?: boolean
   maxPowerPhone?: number | null
   maxPowerCw?: number | null
   maxPowerDigital?: number | null

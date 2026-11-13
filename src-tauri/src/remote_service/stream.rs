@@ -644,6 +644,11 @@ pub(super) struct Streaming {
     /// When the operator's switch was last read. A busy engine leaves it as it was, so the switch
     /// is read again next tick.
     switch_checked: Instant,
+    /// The operator's lower-bandwidth mode through the relay (`Settings::remote_relay_lighter`,
+    /// operator ruling 1410): read when the session starts and again with the switch, once a
+    /// second, so a running stream follows it. It lowers a relayed picture's ceiling only
+    /// (`tempo_stream::video::picture::Bound::on`).
+    relay_lighter: bool,
     /// Was presence live at the last look? Its lapse is when the window lets go of anything the
     /// streamed operator was holding down.
     was_live: bool,
@@ -675,12 +680,16 @@ impl Streaming {
         let mic_told = station.host.mic.status();
         // Before the session can connect, so before any picture: the screen hides its stored keys.
         let _watched = station.host.watched.watching();
+        let relay_lighter = tempo_app::engine::engine_lock(&station.engine)
+            .settings()
+            .remote_relay_lighter;
         Self {
             station,
             offer,
             presence: Presence::default(),
             checked: now,
             switch_checked: now,
+            relay_lighter,
             was_live: false,
             verified: false,
             #[cfg(feature = "radio")]
@@ -693,6 +702,11 @@ impl Streaming {
             following: None,
             _watched,
         }
+    }
+
+    /// Is the operator's lower-bandwidth mode through the relay on, as last read?
+    pub fn relay_lighter(&self) -> bool {
+        self.relay_lighter
     }
 
     /// The size the page last said it shows the picture at, in its own device pixels.
@@ -965,6 +979,7 @@ impl Streaming {
             Err(std::sync::TryLockError::WouldBlock) => return Ok(()),
         };
         self.switch_checked = now;
+        self.relay_lighter = engine.settings().remote_relay_lighter;
         if engine.settings().remote_stream {
             Ok(())
         } else {
@@ -1358,7 +1373,12 @@ fn run(
         }
         if let Some(picture) = &video {
             streaming.follow(now);
-            picture.fit(session.path(), streaming.view(), session.estimate());
+            picture.fit(
+                session.path(),
+                streaming.view(),
+                session.estimate(),
+                streaming.relay_lighter(),
+            );
             if let Some(link) = picture.wanted() {
                 session.want(link, now);
             }
