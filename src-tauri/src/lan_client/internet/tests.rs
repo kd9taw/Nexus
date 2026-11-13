@@ -550,6 +550,10 @@ fn only_known_refusals_are_named() {
         (403, "callsignNotLicensed"),
         (403, "trialDomainLimit"),
         (403, "updateRequired"),
+        // And a trial this person, callsign or PC already had.
+        (403, "trialUsedByCallsign"),
+        (403, "trialUsedOnThisPc"),
+        (403, "trialActiveElsewhere"),
     ] {
         assert_eq!(
             named(status, Some(&said(code))),

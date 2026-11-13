@@ -372,11 +372,18 @@ pub(crate) fn named(status: u16, body: Option<&Value>) -> &'static str {
         Some("trialRequired" | "trialEnded" | "trialDisabled") => "internetNotIncluded",
         // The owner's first use of the road starts the trial, and the service may refuse to start one:
         // the station's callsign is not an active US licence (or none was set or sent), or the account's
-        // mail domain has started its month's trials. No trial, so the road is not included: this
-        // computer names no trial or callsign reason of its own, and the shack says which one it was.
-        Some("callsignInvalid" | "callsignNotLicensed" | "trialDomainLimit" | "updateRequired") => {
-            "internetNotIncluded"
-        }
+        // mail domain has started its month's trials, or this person, callsign or shack PC already had
+        // one. No trial, so the road is not included: this computer names no trial or callsign reason
+        // of its own, and the shack says which one it was.
+        Some(
+            "callsignInvalid"
+            | "callsignNotLicensed"
+            | "trialDomainLimit"
+            | "updateRequired"
+            | "trialUsedByCallsign"
+            | "trialUsedOnThisPc"
+            | "trialActiveElsewhere",
+        ) => "internetNotIncluded",
         // Reopening is refused alike for a device removed, waiting, unknown or never approved.
         Some("signInRequired") => "notApprovedThere",
         Some("deviceNotApproved") => "waitingApproval",
