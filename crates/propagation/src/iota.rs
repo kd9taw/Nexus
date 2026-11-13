@@ -20,6 +20,12 @@
 //! © Islands On The Air (IOTA) Ltd, published at iota-world.org. A copy ships with Nexus by IOTA
 //! Ltd's permission and the shell refreshes it at most monthly (see NOTICE); this module only
 //! parses it. Without a list (the operator turned it off), a reference is checked by its shape alone.
+//!
+//! **The islands list ([`IotaIslands`]).** IOTA's `islands.json`, from the same publisher and
+//! shipped and refreshed with the group list under the same written permission (of IOTA Ltd and
+//! the RSGB): every island of every group, with the id ADIF's `IOTA_ISLAND_ID` carries. No spot or
+//! callbook names an island, only a group, so the islands are only ever offered for the operator to
+//! pick from on a log form or the contact card; nothing picks one for them.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -146,11 +152,7 @@ impl IotaGroups {
             let (Some(r), Some(name)) = (g.refno.as_deref().and_then(canonical), g.name) else {
                 continue;
             };
-            let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
-            let name = match name.char_indices().nth(NAME_MAX_CHARS) {
-                Some((cut, _)) => name[..cut].trim_end().to_string(),
-                None => name,
-            };
+            let name = tidy(&name);
             if !name.is_empty() {
                 by_ref.insert(r, name);
             }
@@ -193,6 +195,128 @@ impl IotaGroups {
                 name: n.clone(),
             })
             .collect()
+    }
+}
+
+/// One island of an IOTA group: the id ADIF's `IOTA_ISLAND_ID` carries (IOTA's own, 1 to
+/// 99999999), its name, and IOTA's note on it ("in Wales"), when it has one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IotaIsland {
+    pub id: u32,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+}
+
+/// The islands list, by group reference, each group's islands in name order (see the module
+/// header).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IotaIslands {
+    by_ref: BTreeMap<String, Vec<IotaIsland>>,
+    len: usize,
+}
+
+/// Fewer islands than this in a download means its shape changed: the copy is refused and the one
+/// already held is kept. The list held 13,020 islands in November 2026.
+pub const MIN_PLAUSIBLE_ISLANDS: usize = 10_000;
+
+/// The largest island id ADIF allows (`IOTA_ISLAND_ID`: 1 to 99999999).
+pub const ISLAND_ID_MAX: u32 = 99_999_999;
+
+/// One entry of IOTA's `islands.json`, as far as Nexus reads it. IOTA writes every value as a
+/// string; a number is taken too.
+#[derive(Deserialize)]
+struct RawIsland {
+    id: Option<serde_json::Value>,
+    refno: Option<String>,
+    name: Option<String>,
+    comment: Option<String>,
+    excluded: Option<serde_json::Value>,
+}
+
+/// A whole number from IOTA's JSON, written as a string or as a number.
+fn whole(v: &serde_json::Value) -> Option<u64> {
+    match v {
+        serde_json::Value::String(s) => s.trim().parse().ok(),
+        v => v.as_u64(),
+    }
+}
+
+/// Whitespace collapsed and cut to [`NAME_MAX_CHARS`], at a character.
+fn tidy(name: &str) -> String {
+    let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    match name.char_indices().nth(NAME_MAX_CHARS) {
+        Some((cut, _)) => name[..cut].trim_end().to_string(),
+        None => name,
+    }
+}
+
+impl IotaIslands {
+    /// Parse IOTA's `islands.json` (an array of objects carrying `id`, `refno` and `name`). An
+    /// entry without a valid id, reference or name is skipped, and so is one IOTA marks
+    /// `excluded` (an island it lists but does not count for its group); a document that is not
+    /// such an array is an `Err`, never a panic.
+    pub fn parse(json: &str) -> Result<IotaIslands, String> {
+        let raw: Vec<RawIsland> = serde_json::from_str(json)
+            .map_err(|e| format!("the IOTA islands list is not in the expected format: {e}"))?;
+        let mut by_ref: BTreeMap<String, Vec<IotaIsland>> = BTreeMap::new();
+        let mut len = 0;
+        for i in raw {
+            let id =
+                i.id.as_ref()
+                    .and_then(whole)
+                    .filter(|&id| (1..=u64::from(ISLAND_ID_MAX)).contains(&id));
+            let r = i.refno.as_deref().and_then(canonical);
+            let name = i.name.as_deref().map(tidy).filter(|n| !n.is_empty());
+            let excluded = i.excluded.as_ref().and_then(whole).is_some_and(|e| e != 0);
+            let (Some(id), Some(r), Some(name)) = (id, r, name) else {
+                continue;
+            };
+            if excluded {
+                continue;
+            }
+            let comment = i.comment.as_deref().map(tidy).filter(|c| !c.is_empty());
+            by_ref.entry(r).or_default().push(IotaIsland {
+                id: id as u32,
+                name,
+                comment,
+            });
+            len += 1;
+        }
+        if len == 0 {
+            return Err("the IOTA islands list holds no islands".to_string());
+        }
+        for islands in by_ref.values_mut() {
+            islands.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        }
+        Ok(IotaIslands { by_ref, len })
+    }
+
+    /// Whether a download is big enough to be the real list ([`MIN_PLAUSIBLE_ISLANDS`]).
+    pub fn plausible(&self) -> bool {
+        self.len >= MIN_PLAUSIBLE_ISLANDS
+    }
+
+    /// The islands of the group `reference` (any spelling [`canonical`] accepts), in name order;
+    /// empty for a group the list lacks.
+    pub fn of_group(&self, reference: &str) -> &[IotaIsland] {
+        canonical(reference)
+            .and_then(|r| self.by_ref.get(&r))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// The island `id`, only when it is one of the group `reference`'s.
+    pub fn island(&self, reference: &str, id: u32) -> Option<&IotaIsland> {
+        self.of_group(reference).iter().find(|i| i.id == id)
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 }
 
@@ -298,6 +422,55 @@ mod tests {
             "[]",
         ] {
             assert!(IotaGroups::parse(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    const ISLANDS: &str = include_str!("../tests/fixtures/iota_islands_sample.json");
+
+    /// The islands list: each group's islands in name order, by id; ids and excluded marks as
+    /// strings or numbers; entries without an id, a reference or a name skipped.
+    #[test]
+    fn the_islands_list_parses_each_groups_islands() {
+        let l = IotaIslands::parse(ISLANDS).expect("the sample parses");
+        assert_eq!(l.len(), 4);
+        let names: Vec<&str> = l
+            .of_group("eu-901")
+            .iter()
+            .map(|i| i.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["Alpha Test Island", "Beta Isle"],
+            "name order, any spelling"
+        );
+        assert_eq!(
+            l.island("EU-901", 12).map(|i| i.name.as_str()),
+            Some("Beta Isle")
+        );
+        assert_eq!(
+            l.island("EU-901", 11).and_then(|i| i.comment.as_deref()),
+            Some("in Example Land")
+        );
+        assert_eq!(l.of_group("OC-902").len(), 2, "a numeric id is taken too");
+        assert!(l.island("OC-902", 12).is_none(), "another group's island");
+        assert!(
+            l.of_group("NA-903").is_empty(),
+            "excluded, bad id, no name: none"
+        );
+        assert!(l.of_group("SA-999").is_empty());
+        assert!(!l.plausible(), "four islands is not the real list");
+    }
+
+    #[test]
+    fn a_changed_islands_format_is_an_error_not_a_panic() {
+        for bad in [
+            "",
+            "<html>maintenance</html>",
+            r#"{"islands":[{"id":"1","refno":"EU-001","name":"x"}]}"#,
+            r#"[{"island":"1","ref":"EU-001","title":"x"}]"#,
+            "[]",
+        ] {
+            assert!(IotaIslands::parse(bad).is_err(), "{bad:?}");
         }
     }
 }

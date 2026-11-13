@@ -2939,7 +2939,7 @@ mod tests {
         let e = launch(&d);
         {
             let mut eng = engine_lock(&e);
-            eng.set_iota_at_log(crate::spot_iota_at_log, |_| true, |_| None);
+            eng.set_iota_at_log(crate::spot_iota_at_log, |_| true, |_, _| None);
             eng.note_callbook_answer(CALL, answer);
         }
         let tallies = LogTallies::default();

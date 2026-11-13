@@ -17,7 +17,7 @@
 import type { FieldEdit, QsoEdit } from '../api'
 import type { LoggedQso } from '../types'
 import { parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from './utcLog'
-import { normalizeIota } from './iotaGroups'
+import { IOTA_ISLAND_TAG, normalizeIota } from './iotaGroups'
 
 /** Every box the card edits, as typed. Strings, so one setter serves them all. */
 export interface CardDraft {
@@ -129,6 +129,23 @@ export function draftOf(q: LoggedQso): CardDraft {
 /** The fields kept as written, as the card lists them. */
 export function fieldsOf(q: LoggedQso): CardField[] {
   return (q.extra ?? []).map(([tag, value]) => ({ tag, orig: value, value, removed: false }))
+}
+
+/** The island the card's fields name (IOTA_ISLAND_ID, the operator's pick), when one is set. */
+export function cardIsland(fields: readonly CardField[]): number | null {
+  const v = fields.find((f) => f.tag === IOTA_ISLAND_TAG && !f.removed)?.value.trim() ?? ''
+  return /^\d{1,8}$/.test(v) && Number(v) >= 1 ? Number(v) : null
+}
+
+/** The card's fields with the island picker's pick (`id`, null for none) laid over them: the
+ *  stored IOTA_ISLAND_ID changed or taken off, or a new one added, as a field typed on the card
+ *  would be, so it saves as the same `FieldEdit`. */
+export function pickCardIsland(fields: readonly CardField[], id: number | null): CardField[] {
+  const i = fields.findIndex((f) => f.tag === IOTA_ISLAND_TAG)
+  if (i < 0) return id === null ? [...fields] : [...fields, { tag: IOTA_ISLAND_TAG, orig: null, value: String(id), removed: false }]
+  const f = fields[i]
+  if (id === null) return f.orig === null ? fields.filter((_, j) => j !== i) : fields.map((g, j) => (j === i ? { ...g, removed: true } : g))
+  return fields.map((g, j) => (j === i ? { ...g, value: String(id), removed: false } : g))
 }
 
 /** The contact as the backend projects it for an edit (`QsoEdit::project`): what Save sends for
@@ -327,6 +344,11 @@ export function cardSave(q: LoggedQso, start: CardDraft, d: CardDraft, fields: r
   if (changed('qslCard')) edit.qslCard = d.qslCard === '1'
 
   const changes = fieldChanges(fields)
+  // An island is one group's: a new group takes off a stored island the operator did not pick again.
+  if (changed('iota')) {
+    const kept = fields.find((f) => f.tag === IOTA_ISLAND_TAG && f.orig !== null && !f.removed && f.value === f.orig)
+    if (kept) changes.push({ tag: IOTA_ISLAND_TAG, old: kept.orig, new: null })
+  }
   const tags = changes.map((c) => c.tag)
   for (const c of changes) {
     if (!/^[A-Z0-9_]+$/.test(c.tag)) return no({ code: 'tag', tag: c.tag })

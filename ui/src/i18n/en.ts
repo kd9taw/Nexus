@@ -171,6 +171,10 @@ export const EN = {
   "remote.billing.alreadySubscribed": "This account already has a subscription. Use Manage subscription to change it.",
   "remote.billing.noSubscription": "This account has no subscription to manage yet.",
   "remote.billing.notAvailable": "Subscriptions are not available yet.",
+  "remote.billing.country": "Billing country",
+  "remote.billing.countryChoose": "Choose a country",
+  "remote.billing.countryConfirm": "This is the country of my billing address",
+  "remote.billing.countryNotServed": "Nexus Remote can't be bought in {{country}} yet.",
   "remote.account.title": "Your account",
   "remote.account.exportHint": "Download a copy of what Nexus Remote holds about your account: your trial and plan, your stations, their devices and your invitations, as a JSON file.",
   "remote.account.export": "Download my data",
@@ -10712,6 +10716,8 @@ export const EN = {
   'iota.prefill.label': 'IOTA',
   'iota.prefill.aria': 'IOTA reference for this contact',
   'iota.prefill.hint': 'Filled in from a spot or your callbook lookup. Logged and sent with the contact; change it or clear it before logging.',
+  'iota.island.label': 'Island',
+  'iota.island.none': 'No island picked',
   'iota.offer.fromSpot': 'from the spot',
   'iota.offer.fromCallbook': 'from the callbook',
   'iota.offer.dismiss': 'Leave IOTA empty',
@@ -14875,6 +14881,10 @@ export const EN = {
   'nav.program.label': 'Repeaters',
   'nav.program.title':
     'Repeaters — build channel lists for your radios: local repeaters → CHIRP CSV, rig memories, or tune-now',
+  // The rail's "more below" cue (ModeNav): {{n}} is how many sections sit below the fold. The title is
+  // also the button's accessible name, so it starts with the label's own words (WCAG 2.5.3, label in name).
+  'nav.more.label': '{{n}} more',
+  'nav.more.title': '{{n}} more sections below — show them',
   'nav.order.reset.label': 'Reset order',
   'nav.order.reset.title': 'Reset the section order to default',
   'nav.mode.title': 'Active operating mode',

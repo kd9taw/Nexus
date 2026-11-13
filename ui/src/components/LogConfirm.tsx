@@ -7,7 +7,8 @@ import type { LoggedQso } from '../types'
 import { t } from '../i18n'
 import { FtStopControl } from './FtStopControl'
 import { upperTyped } from '../typedInput'
-import { IotaPrefillField, iotaInvalid, iotaToLog, useIotaPrefill, type IotaOfferData } from './Iota'
+import { IotaPrefillField, iotaInvalid, iotaToLog, useIotaIslandPick, useIotaPrefill, type IotaOfferData } from './Iota'
+import { withIotaIsland } from '../features/iotaGroups'
 
 /** WSJT-X's Log QSO dialog's propagation modes (`widgets/logqso.cpp`, `prop_modes`): the ADIF
  *  `PROP_MODE` enumeration values, in its order. SAT is not here: it is offered only on a contact
@@ -110,6 +111,8 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
     ? (record.ota?.iota ?? null)
     : null
   const iotaPrefill = useIotaPrefill(call, iota, setIota, undefined, false, heldFill)
+  // The island within that group: only the operator's pick from its list, never filled.
+  const [island, setIsland] = useIotaIslandPick(iota)
 
   // RST is a free string now (CW "599" / phone "59" / digital "-12"); just trim.
   const parseRst = (v: string): string | null => {
@@ -133,6 +136,7 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
       myGrid: myGrid.trim().toUpperCase() || null,
       propMode: propMode || null,
       ota: { ...record.ota, iota: iotaToLog(iota) },
+      extra: withIotaIsland(record.extra, iotaToLog(iota) ? island : null),
     }, iotaPrefill.taken)
   }
 
@@ -261,7 +265,7 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
           </label>
         </div>
 
-        <IotaPrefillField state={iotaPrefill} value={iota} />
+        <IotaPrefillField state={iotaPrefill} value={iota} island={{ value: island, onChange: setIsland }} />
 
         <div className="logconfirm-actions">
           {onStop && <FtStopControl onHaltTx={onStop} />}

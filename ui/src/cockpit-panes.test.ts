@@ -1681,6 +1681,10 @@ describe('THE SHORT-WINDOW TIER (1080p pass): the chrome tightens at an effectiv
     ['the top bar', [['app'], ['topbar', 'topbar--ft']], 'gap', [12], [18]],
     ['the cockpit header', [['app'], ['cockpit-header']], 'gap', [8], [12]],
     ['the header’s mode controls', [['app'], ['cockpit-header'], ['ch-mode-extras']], 'gap', [8], [12]],
+    // The left rail's section list: on a laptop it holds more sections than fit, so its spacing steps too.
+    ['the rail’s section list', [['app'], ['mode-nav'], ['mode-nav-top']], 'gap', [2], [6]],
+    ['a rail section', [['app'], ['mode-nav'], ['mode-nav-top'], ['mode-btn']], 'padding', [3, 4], [8, 4]],
+    ['a Digital mode in the rail', [['app'], ['mode-nav'], ['mode-nav-top'], ['mode-nav-group'], ['mode-btn', 'sub']], 'padding', [3, 4], [6, 4]],
   ]
   it.each(CASES)('%s: %s steps from STOCK above 1100 to TIGHT at 1100 and below', (name, chain, prop, tight, stock) => {
     const w = classChainWinner(chain, prop)
