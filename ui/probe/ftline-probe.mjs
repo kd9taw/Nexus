@@ -7,7 +7,9 @@
 // box and took half the line's free room, and the box started ~620 px in at 2560x1440 (operator report).
 //
 // The probe serves the REAL app (index.html, App, OperateCockpit) with src/api.ts swapped for probe/waterfalls-api.ts,
-// as alarmcell-probe does, at 1024x768, 1366x768, 1920x1080 and 2560x1440, each at 65, 100 and 175 %, and asserts:
+// as alarmcell-probe does, on the supported screens (probe/sizes.mjs: 1366×768, 1440×900, 1920×1080 and 2560×1440; the old 4:3 floor
+// was dropped by the 2026-11-11 ruling), each at the app's 65, 100 and 175 % — 1366×768 at 175 % is the size the operator
+// reported from — and asserts:
 //   (a) wherever the next-over box is NOT on Stop TX's line, its left edge is the strip's content edge (its left
 //       border and padding), to 1 px;
 //   (b) Stop TX is wholly inside the window and topmost at its centre; with a transmitter alarm up, the alarm's words
@@ -25,6 +27,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { FHD, LAPTOP, MID, QHD } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
@@ -32,11 +35,13 @@ const STUB_SRC = join(UI, 'probe', 'waterfalls-api.ts')
 const STUB_API = join(UI, 'probe', '__ftline-api.ts')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const SCALES = process.env.FTLINE_SCALES ? process.env.FTLINE_SCALES.split(',') : ['65', '100', '175']
-const SIZES = process.env.FTLINE_SIZES ? process.env.FTLINE_SIZES.split(',').map((s) => s.split('x').map(Number)) : [[1024, 768], [1366, 768], [1920, 1080], [2560, 1440]]
+const SIZES = process.env.FTLINE_SIZES ? process.env.FTLINE_SIZES.split(',').map((s) => s.split('x').map(Number)) : [LAPTOP, MID, FHD, QHD].map((z) => [z.w, z.h])
 const ALARM = { id: 1, text: 'High SWR: 3.2:1 — transmit was stopped', radioId: 1, radioName: 'IC-7300', atMs: Date.UTC(2026, 10, 8, 14, 22, 33) }
 // The 1.24.0 placement: the empty alarm cell first on the next-over line, growing into its room.
 const PLANT = '.cockpit-qso > .cq-now, .cockpit-qso > .cq-now ~ * { order: 1 } .cockpit-qso > .ch-txalarm.ch-txalarm-own { order: 0 }'
-const CONTROL = ['100', true, [2560, 1440]]
+const CONTROL = ['100', true, [QHD.w, QHD.h]]
+/** A contact with every word of the strip's first lines filled: AUTO-CQ, a long state, a portable call and a report. */
+const RUN = { state: 'AwaitRR73', dxcall: 'VP2V/JA1XYZ', rxReport: -12, running: true, cqRunning: true, txNow: 'VP2V/KD9TAW/QRP JA1XYZ/P RR73', txCount: 12, stalled: false, watchdogStopped: false }
 
 const realSrc = await readFile(REAL_API, 'utf8')
 let stubSrc = await readFile(STUB_SRC, 'utf8')
@@ -108,7 +113,14 @@ const MEASURE = `(() => {
     if (r.right <= nr.left + 0.5 && r.bottom > nr.top + 1 && r.top < nr.bottom - 1 && r.right > lead) { lead = r.right; leadGap = gap }
   }
   const brk = strip.querySelector(':scope > .cq-break')
-  return { strip: box(strip), edge: r1(edge), lead: r1(lead + leadGap), now: box(now), stop: box(stop), stopTop: top(sr),
+  // The contact's words (\`.cq-status\`), each drawn whole: wider than nothing, its text not cut, inside its box, the
+  // strip and the window (2026-11-12: a zero-basis box kept Stop TX still and cut the state to 0 px).
+  const sbox = strip.querySelector('.cq-status')
+  const cut = sbox ? [...sbox.children].filter((e) => { const r = e.getBoundingClientRect(), b = sbox.getBoundingClientRect()
+    return !(r.width > 0 && e.scrollWidth <= e.clientWidth + 1 && r.left >= b.left - 0.5 && r.right <= b.right + 0.5 && r.top >= b.top - 0.5 &&
+      r.bottom <= b.bottom + 0.5 && r.left >= s.left - 0.5 && r.right <= s.right + 0.5 && r.right <= innerWidth + 0.5) })
+    .map((e) => (e.className.toString().split(' ')[0] || e.tagName) + ' "' + e.textContent.trim().slice(0, 24) + '"') : ['no .cq-status']
+  return { cut, strip: box(strip), edge: r1(edge), lead: r1(lead + leadGap), now: box(now), stop: box(stop), stopTop: top(sr),
     ownLine: nr.top >= sr.bottom - 1, rail: !!document.querySelector('.shell[data-dash-rail="on"]'), broke: !!brk && getComputedStyle(brk).display !== 'none', ctl, words }
 })()`
 
@@ -166,12 +178,17 @@ async function sweep(scale, rail, sizes, css) {
       await push(p, []); const off = await settle(p)
       await push(p, [ALARM]); const on = await settle(p)
       await push(p, [])
-      if (!off || !on) { rows.push({ scale, w, h, error: `no measurement ${off ? 'with' : 'without'} the alarm` }); continue }
+      // A contact's words on top (Auto-CQ, a long state, a portable DX call and a report): whole, and Stop TX unmoved.
+      await p.evaluate(`globalThis.__push({ txEnabled: true }, ${JSON.stringify({ qso: RUN })})`); const run = await settle(p)
+      await p.evaluate(`globalThis.__push({ txEnabled: false }, { qso: null })`); await settle(p)
+      if (!off || !on || !run) { rows.push({ scale, w, h, error: `no measurement ${off ? (on ? 'with the contact' : 'with') : 'without'} the alarm` }); continue }
       // (a): the box stands right after what is drawn before it on its line: the strip's edge where it starts the
       // second line, the TX state's readouts on the xl one-row strip (as 1.23.0 drew both).
       const offEdge = (m) => Math.abs(m.now[0] - m.lead) > 1
       rows.push({ scale, rail, w, h, off, on, offEdge: offEdge(off) || offEdge(on),
-        stopBad: off.stopTop !== 'ok' || on.stopTop !== 'ok', hidden: !on.words || !on.words.seen })
+        stopBad: off.stopTop !== 'ok' || on.stopTop !== 'ok' || run.stopTop !== 'ok', hidden: !on.words || !on.words.seen,
+        run, cut: [...off.cut, ...on.cut, ...run.cut],
+        moved: [on, run].some((m) => Math.abs(m.stop[0] - off.stop[0]) > 0.5 || Math.abs(m.stop[1] - off.stop[1]) > 0.5) })
     }
   } finally { await p.close() }
   return rows
@@ -189,6 +206,8 @@ try {
     if (r.offEdge) { console.error(`ftline-probe: RED ${at} — the next-over box does not start where its line does: x=${r.off.now[0]} / ${r.on.now[0]} vs ${r.off.lead} / ${r.on.lead}`); code = code || 1 }
     if (r.stopBad) { console.error(`ftline-probe: RED ${at} — Stop TX is not on screen and topmost: ${r.off.stopTop} / ${r.on.stopTop}`); code = code || 1 }
     if (r.hidden) { console.error(`ftline-probe: RED ${at} — the alarm's words are not on screen and topmost`); code = code || 1 }
+    if (r.cut.length) { console.error(`ftline-probe: RED ${at} — the contact's words are cut: ${[...new Set(r.cut)].join(', ')}`); code = code || 1 }
+    if (r.moved) { console.error(`ftline-probe: RED ${at} — Stop TX moved with the alarm or the contact: ${JSON.stringify([r.off.stop, r.on.stop, r.run.stop])}`); code = code || 1 }
   }
   if (process.env.FTLINE_OUT) await writeFile(process.env.FTLINE_OUT, JSON.stringify(all, null, 1))
   const ok = all.filter((r) => !r.error)

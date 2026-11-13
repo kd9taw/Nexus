@@ -19655,8 +19655,13 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    clickable while it cannot be seen (Logbook.rowMenu.test.tsx resolves this cascade for a row the
    pointer never visited). */
 .logbook-row .log-rowbtn {
-  min-width: 32px;
-  height: calc(32px * var(--density-scale));
+  /* …AND NEVER UNDER 24 PX ON SCREEN (2026-11-12). The app's own zoom shrinks the 32 px with everything
+     else, and on the smallest supported screen (1366×768 at 175 %) the app fits itself to 65 %: the
+     targets were 20.8 px there. `24px / --ui-zoom` is 24 px on screen at any zoom; at the default
+     density it is the larger of the two only under 75 %, so every other zoom keeps exactly the 32 px
+     it had (Compact's 26 px gives way to it under 92 %). */
+  min-width: max(32px, calc(24px / var(--ui-zoom, 1)));
+  height: max(calc(32px * var(--density-scale)), calc(24px / var(--ui-zoom, 1)));
   background: transparent;
 }
 .log-rowbtn:hover {
@@ -21466,11 +21471,16 @@ body.pane-dragging {
   /* Height is operator-resizable (the PaneSeam under it drives --cockpit-wf-h and
      clamps 88–420 px, and to what this rule honours). The untouched default is 25 % of the SHELL, and
      so is every share here: `.cockpit-body` is a box-less `.cockpit-flat` wrapper, so the strip is a
-     flex item of the shell and its basis and its 60 % ceiling are the shell's; 25% is only the pre-paint fallback. `flex-shrink:1` + no px
-     floor + a max lets it YIELD on short windows instead of starving the lists
-     below — the fit-scale keeps it a comfortable size at normal sizes. */
+     flex item of the shell and its basis and its 60 % ceiling are the shell's; 25% is only the pre-paint fallback. `flex-shrink:1` + a
+     YIELDING floor + a max lets it give way on short windows instead of starving the lists
+     below — the fit-scale keeps it a comfortable size at normal sizes.
+     THE FLOOR (2026-11-12) is the keyboard cockpits' waterfall floor (WATERFALL_SPLIT_MIN, features/paneSeam.ts):
+     8em, never more than 28 % of the effective height. With none, the strip gave way to the lower region's floor
+     first and alone, and on the smallest supported screen (1366×768 at 175 %, fit to 65 %) it was 38 px, its own
+     head, with a 0 px picture: FT drew no waterfall at all. Past the two floors the shell's valve scrolls
+     (`.layout.single.operate-cockpit`), with the QSO strip and Stop TX between them. */
   flex: 0 1 var(--cockpit-wf-h, 25%);
-  min-height: 0;
+  min-height: min(8em, calc(0.28 * var(--vh-eff)));
   max-height: 60%;
   display: flex;
   overflow: hidden;
@@ -21493,8 +21503,15 @@ body.pane-dragging {
      It YIELDS to a short window, the hosted FT's own floor (`.remote-cockpit-lower`): at its
      end the valve shows the floor whole, and the QSO strip with Stop TX sits right above it,
      so a floor taller than the window can spare scrolls Stop TX away. A plain 18em did, at
-     1366×768 at 150 % (Chrome); with the share it stays on screen at every scroll position. */
-  min-height: min(18em, calc(0.35 * var(--vh-eff)));
+     1366×768 at 150 % (Chrome); with the share it stays on screen at every scroll position.
+     15 % since 2026-11-12 (the QSO strip gained a fixed line for the contact's words, `.cq-status`, and a third
+     meters row where temperatures are reported): at 35 % the smallest supported screen (1366×768 at 175 %, fit to 65 %) left
+     the waterfall above it 38 px, its own head and no picture (the waterfall has a floor of its own now,
+     `.cockpit-waterfall`); and at 1366×768 with the app at 175 % the floor and the QSO strip over it
+     were taller than the shell, so the end of the shell's scroll took Stop TX above the window (30 %
+     still did, at its last 6 px). Stop TX is on screen at every scroll position there, and the
+     floor screen at its fit holds the waterfall's floor without scrolling; alarmcell-probe measures both. */
+  min-height: min(18em, calc(0.15 * var(--vh-eff)));
   display: grid;
   /* Classic two-pane: Band Activity dominant on the left, a wider rail on the
      right now that it also carries the compact Tx1–Tx6 machine. */
@@ -21785,12 +21802,26 @@ button.cq-skiptx1.on {
   width: 21em;
   min-width: 0;
   overflow: hidden;
+  /* ONE HEIGHT IN EVERY STATE (2026-11-12): the hint before the first over (two lines, 26.6 px), two rows of
+     meters (28.6) and a row with "⊘ not reported" (30.2) were three heights, and on the floor screen at its fit
+     FT's waterfall gave way to each change of the strip, so Stop TX moved 1.4 px on the first transmit and
+     18.6 px when the watchdog stopped an over (alarmcell-probe). The tallest of the three, at the text scale, FIXED:
+     a floor let a radio's temperature rows grow it again (Stop TX moved 4 px at 2560×1440 and left the window at
+     1366×768 at 175 %). Where the rig or an amplifier reports a temperature (`has-temps`, OperateQsoStrip: stable
+     through a contact) the meters have a third row, and the cell is that much taller, fixed too (45.1 px measured,
+     at the 65 % fit). */
+  height: calc(31px * var(--text-scale));
+}
+.cq-telemetry.has-temps {
+  height: calc(46px * var(--text-scale));
 }
 /* With needles (OperateQsoStrip): faces need the room bars do not, and the row has it to give. A fixed
    basis and no shrink, so the line breaks in one place; a grow that outbids .cq-spacer up to the three
    largest faces. Nothing on this row changes width with the TX cycle (see .cq-now), so the cell does
    not either: the anti-bounce invariant above still holds, only at a size set by the row. */
 .cq-telemetry.needle {
+  /* The faces set their own height (the floor below); the bars' fixed heights are not theirs. */
+  height: auto;
   flex: 1000 0 24em;
   width: auto;
   max-width: min(43em, 100%);
@@ -23896,9 +23927,41 @@ button.cq-skiptx1.on {
 .cq-spacer {
   flex: 1;
 }
+/* THE CONTACT'S WORDS (OperateQsoStrip `.cq-status`: the rig-mode and filter chips, AUTO-CQ, the sequencer
+   state, the DX call, the report), one box whose place is the same in every state (2026-11-12).
+   As loose members on Stop TX's line they wrapped onto a line of their own when Auto-CQ came on (1366×768 at
+   150–175 %), the strip parked at the shell's foot grew upward, and Stop TX moved 29–35 px.
+   WHEREVER THE STRIP BREAKS (`.cq-break` shown: below xl, and beside the dashboard rail) the box HAS that line:
+   a whole line of the strip (basis 100 %) at one fixed height, so it is there, empty or full, and the words
+   have the strip's width to stand whole in. ON THE ONE-ROW xl STRIP it is a content-sized member, as they were:
+   that row always has room (the break's own premise), and Stop TX opens it. Its rules mirror `.cq-break`'s. */
+.cq-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  white-space: nowrap;
+  flex: 0 0 100%;
+  height: 22px;
+  min-width: 0;
+}
+[data-viewport='xl'] .cq-status {
+  flex: none;
+  height: auto;
+}
+.shell[data-dash-rail='on'] .cq-status {
+  flex: 0 0 100%;
+  height: 22px;
+}
 .cq-roles {
   display: inline-flex;
   gap: 6px;
+}
+/* STOP TX'S LINE IS ITS OWN TOP, not the middle of whatever is tallest on it (2026-11-12). On the one-row xl strip the
+   meters cell with a temperature row (46 px) set the line's height, and when the contact's words wrapped it to a line
+   of its own the cluster, centred, rose 5 px (2560×1440, alarmcell-probe). Top-aligned, the cluster stands where the
+   line starts whatever shares the line; it is the line's tallest member everywhere else, so nothing else moves. */
+.cockpit-qso > .cq-txctl {
+  align-self: flex-start;
 }
 .cq-role {
   /* Density pass (operator: "huge buttons that could be far smaller") — ~24px

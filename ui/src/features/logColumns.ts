@@ -64,8 +64,13 @@ export interface LogColumn {
  *  styles-logbook-actions.test.tsx): two 32 px targets 8 px apart need 72 px on every face installed
  *  (the glyphs sit inside the buttons' 32 px floor, so there is no spread between faces); 80 leaves
  *  room to spare. Fixed, not a share: the width the cluster does not need goes to the columns that
- *  show the contact. Never resizable and never hidden. */
-export const ACTIONS_TRACK = 'minmax(80px, 80px)'
+ *  show the contact. Never resizable and never hidden.
+ *  …AND WIDER AT THE APP'S SMALLEST ZOOMS (2026-11-12): the two buttons keep 24 px on screen there
+ *  (styles.css `.logbook-row .log-rowbtn`, `24px / --ui-zoom`), so the track holds them, the 8 px
+ *  between them and 8 px of empty end: `48px / --ui-zoom + 16px`, which passes 80 only under 75 %
+ *  (89.85 px at the 65 % the app fits itself to on a 1366×768 screen at 175 %). */
+const ACTIONS_W = 'max(80px, calc(48px / var(--ui-zoom, 1) + 16px))'
+export const ACTIONS_TRACK = `minmax(${ACTIONS_W}, ${ACTIONS_W})`
 
 /** The px a column's text needs to be read whole at the default size — a callsign with a portable
  *  prefix or suffix, a full `2026-10-28`, a full `14:06:22` — so a narrow window takes width from
