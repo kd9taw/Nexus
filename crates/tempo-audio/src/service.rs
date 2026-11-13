@@ -2861,18 +2861,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             // relying on Drop running before the process is killed (a half-sent
             // WinKeyer message would otherwise keep keying on the air).
             let _ = rig.stop_morse();
-            #[cfg(feature = "serial")]
-            if let Some((_, wk)) = state.winkeyer.as_mut() {
-                let _ = wk.clear();
-            }
-            // Cut any in-progress RTTY FSK keying the same way: abort the keying
-            // thread NOW (line parked at mark) rather than relying on Drop order.
-            // (The AFSK path is already covered — flush_output above dumps its
-            // queued audio and the ptt(false) unkeyed the carrier.)
-            #[cfg(feature = "serial")]
-            if let Some((_, _, k)) = state.rtty_keyer.as_ref() {
-                k.clear();
-            }
+            state.release_keyers_for_shutdown();
             // Give the RADIO its own audio routing back before we tell the app it may die. Nexus's
             // own Flex client puts the operator's DAX source back in its teardown (after the unkey
             // is proven), and it runs from the daemon's Drop. Dropping `state` happens after this
@@ -8375,6 +8364,30 @@ impl RadioLoop {
         let _ = rig.ptt(false);
         let cluster_active = engine_lock(engine).cluster_split_active();
         self.let_go_of_rig_split(rig, cluster_active);
+    }
+
+    /// App shutdown: let go of the hardware keyers before the app is told it may exit.
+    ///
+    /// ⛔ THE KEYLINES ARE JOINED, NOT JUST STOPPED. The serial CW keyline and the RTTY FSK
+    /// line are driven by keying threads, and a stop (`clear()`) is only taken by the thread
+    /// within about 8 ms, asynchronously. `SHUTDOWN_DONE` lets the process exit at once, and
+    /// `self` drops only after the loop returns, so leaving the keyers to `Drop` raced process
+    /// exit: a CW element in flight could keep DTR/RTS asserted until the OS closed the port
+    /// (driver-dependent), and on a break-in rig that line is the transmitter. Dropping a keyer
+    /// here stops it, closes its channel and JOINS its thread, which keys up (mark, for FSK)
+    /// before it exits, so the line is released before this returns.
+    /// (The AFSK path is already covered — `flush_output` dumps its queued audio and the
+    /// `ptt(false)` unkeyed the carrier.)
+    fn release_keyers_for_shutdown(&mut self) {
+        #[cfg(feature = "serial")]
+        if let Some((_, wk)) = self.winkeyer.as_mut() {
+            let _ = wk.clear();
+        }
+        #[cfg(feature = "serial")]
+        {
+            self.serial_keyer = None;
+            self.rtty_keyer = None;
+        }
     }
 
     /// Unkey before the loop lets go of `rig`: flush the queued audio, key up through the
@@ -21312,6 +21325,7 @@ mod tests {
     mod remote_radio;
     mod rf_pane;
     mod sdrconnect_scope;
+    mod shutdown_keyers;
     mod split_overs;
     mod tci;
     mod tci_cw;

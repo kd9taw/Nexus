@@ -1,7 +1,7 @@
 //! True-FSK RTTY transmit path — bit-bang a serial control line (DTR or RTS) with
 //! Baudot framing; the rig's FSK input does the RF shift (rig in RTTY/RTTY-L mode,
 //! which unlocks its narrow RTTY filters). Modeled on the CW serial keyline keyer
-//! ([`crate::serial_keyer`]): same dedicated keying thread + channel + abort flag +
+//! ([`crate::serial_keyer`]): same dedicated keying thread + channel + stop generation +
 //! `serial` feature gate. The serial DATA line (TxD) is useless for this — USB-serial
 //! adapters can't do 5-bit/1.5-stop UART framing — so the FSK "data" goes out on a
 //! control line, which is exactly what EXTFSK does.
@@ -68,7 +68,7 @@ pub use imp::FskKeyer;
 mod imp {
     use super::{fsk_schedule, KeyLine};
     use serialport::SerialPort;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::thread;
@@ -86,23 +86,31 @@ mod imp {
     /// absolute deadlines (so per-sleep jitter can't accumulate into baud drift),
     /// return to mark on abort (checked every ~8 ms so Stop TX is snappy), and exit
     /// when the channel closes.
+    ///
+    /// ⛔ A STOP IS A GENERATION, NOT A FLAG — the rule [`crate::serial_keyer`] documents.
+    /// Every batch carries the stop count it was handed over under, and a stop bumps the
+    /// count, so a batch handed over before a stop never keys after it, wherever the thread
+    /// was when the stop landed. A flag the thread cleared as it took each batch lost every
+    /// stop that landed between a batch's hand-over and its read: the batch then keyed in
+    /// full after Stop TX.
     fn keyer_loop(
-        mut sp: Box<dyn SerialPort>,
-        line: KeyLine,
-        rx: mpsc::Receiver<(Vec<bool>, f64)>,
-        abort: Arc<AtomicBool>,
+        mut set: impl FnMut(bool),
+        rx: mpsc::Receiver<(Vec<bool>, f64, u64)>,
+        stops: Arc<AtomicU64>,
     ) {
-        set_space(&mut *sp, line, false); // idle: mark
-        while let Ok((bits, baud)) = rx.recv() {
-            abort.store(false, Ordering::Relaxed); // a fresh batch consumes any prior abort
+        set(false); // idle: mark
+        while let Ok((bits, baud, stop)) = rx.recv() {
+            if stops.load(Ordering::SeqCst) != stop {
+                continue; // handed over before a stop: dropped, never keyed
+            }
             let sched = fsk_schedule(&bits, baud);
             let start = Instant::now();
             let mut aborted = false;
             // Sleep to `at_ms` (absolute, from `start`) in ≤8 ms slices; true = aborted.
-            let wait_until = |sp: &mut dyn SerialPort, at_ms: f64| -> bool {
+            let wait_until = |set: &mut dyn FnMut(bool), at_ms: f64| -> bool {
                 loop {
-                    if abort.load(Ordering::Relaxed) {
-                        set_space(sp, line, false); // abort: back to mark
+                    if stops.load(Ordering::SeqCst) != stop {
+                        set(false); // abort: back to mark
                         return true;
                     }
                     let now_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -114,28 +122,26 @@ mod imp {
                 }
             };
             for &(at_ms, mark) in &sched.events {
-                if wait_until(&mut *sp, at_ms) {
+                if wait_until(&mut set, at_ms) {
                     aborted = true;
                     break;
                 }
-                set_space(&mut *sp, line, !mark);
+                set(!mark);
             }
             if !aborted {
                 // Hold the final level through the end of the last stop bit.
-                aborted = wait_until(&mut *sp, sched.total_ms);
+                wait_until(&mut set, sched.total_ms);
             }
-            set_space(&mut *sp, line, false); // between sends: mark (the RTTY idle)
-            if aborted {
-                while rx.try_recv().is_ok() {} // drop the rest of the aborted message
-            }
+            set(false); // between sends: mark (the RTTY idle)
         }
-        set_space(&mut *sp, line, false); // channel closed (keyer dropped) → mark + exit
+        set(false); // channel closed (keyer dropped) → mark + exit
     }
 
     /// An open FSK keyline with its own keying thread.
     pub struct FskKeyer {
-        tx: Option<mpsc::Sender<(Vec<bool>, f64)>>,
-        abort: Arc<AtomicBool>,
+        tx: Option<mpsc::Sender<(Vec<bool>, f64, u64)>>,
+        /// How many stops there have been ([`keyer_loop`]).
+        stops: Arc<AtomicU64>,
         handle: Option<thread::JoinHandle<()>>,
     }
 
@@ -148,39 +154,144 @@ mod imp {
         /// [`crate::control_line::idle_both_lines`]. Deasserted is also the correct FSK
         /// idle: mark.
         pub fn open(port: &str, line: KeyLine) -> std::io::Result<Self> {
-            let sp = crate::control_line::open_control_line_port(port)?;
+            let mut sp = crate::control_line::open_control_line_port(port)?;
+            Ok(Self::keying(move |space| set_space(&mut *sp, line, space)))
+        }
+
+        /// Spawn the keying thread over `set`, which puts the line at space (`true`) or mark.
+        pub(crate) fn keying(set: impl FnMut(bool) + Send + 'static) -> Self {
             let (tx, rx) = mpsc::channel();
-            let abort = Arc::new(AtomicBool::new(false));
-            let abort_thread = abort.clone();
-            let handle = thread::spawn(move || keyer_loop(sp, line, rx, abort_thread));
-            Ok(Self {
+            let stops = Arc::new(AtomicU64::new(0));
+            let stops_thread = stops.clone();
+            let handle = thread::spawn(move || keyer_loop(set, rx, stops_thread));
+            Self {
                 tx: Some(tx),
-                abort,
+                stops,
                 handle: Some(handle),
-            })
+            }
         }
 
         /// Queue a framed character stream (groups of 5 data bits) to key at `baud`
         /// (non-blocking — the thread does the timing).
         pub fn send(&self, data_bits: Vec<bool>, baud: f64) {
             if let Some(tx) = &self.tx {
-                let _ = tx.send((data_bits, baud));
+                let _ = tx.send((data_bits, baud, self.stops.load(Ordering::SeqCst)));
             }
         }
 
         /// Abort NOW: back to mark and drop any queued characters (Stop TX).
         pub fn clear(&self) {
-            self.abort.store(true, Ordering::Relaxed);
+            self.stops.fetch_add(1, Ordering::SeqCst);
         }
     }
 
     impl Drop for FskKeyer {
         fn drop(&mut self) {
-            self.abort.store(true, Ordering::Relaxed); // interrupt a batch in progress
+            self.stops.fetch_add(1, Ordering::SeqCst); // interrupt a batch in progress
             self.tx = None; // close the channel → the thread returns to mark and exits
             if let Some(h) = self.handle.take() {
                 let _ = h.join();
             }
+        }
+    }
+
+    /// A stop ends the keying wherever it lands. The line is a recorder, so these run without a
+    /// serial port; the thread, the channel and the stop are the real ones.
+    #[cfg(test)]
+    mod stop_tests {
+        use super::FskKeyer;
+        use std::sync::{mpsc, Arc, Mutex};
+        use std::time::{Duration, Instant};
+
+        /// A keyer whose line records each level it is put at (`true` = space). Its thread is
+        /// held at its first (idle mark) write until `go` is sent, so a test can hand a batch
+        /// over and stop before the thread takes it.
+        fn held_keyer() -> (FskKeyer, Arc<Mutex<Vec<bool>>>, mpsc::Sender<()>) {
+            let levels = Arc::new(Mutex::new(Vec::new()));
+            let seen = Arc::clone(&levels);
+            let (go, wait) = mpsc::channel::<()>();
+            let mut held = true;
+            let keyer = FskKeyer::keying(move |space| {
+                if std::mem::take(&mut held) {
+                    let _ = wait.recv();
+                }
+                seen.lock().unwrap().push(space);
+            });
+            (keyer, levels, go)
+        }
+
+        fn spaces(levels: &Mutex<Vec<bool>>) -> usize {
+            levels.lock().unwrap().iter().filter(|s| **s).count()
+        }
+
+        /// Wait until the line has been still for 300 ms (at most 5 s).
+        fn settle(levels: &Mutex<Vec<bool>>) {
+            let start = Instant::now();
+            let mut last = (levels.lock().unwrap().len(), Instant::now());
+            while start.elapsed() < Duration::from_secs(5) {
+                std::thread::sleep(Duration::from_millis(20));
+                let n = levels.lock().unwrap().len();
+                if n != last.0 {
+                    last = (n, Instant::now());
+                } else if last.1.elapsed() > Duration::from_millis(300) {
+                    return;
+                }
+            }
+        }
+
+        /// A message is in the keyer's hands before the thread takes it, and the operator stops:
+        /// none of it may key afterwards. It used to: the thread cleared the stop as it took each
+        /// batch, so a batch handed over before the stop keyed in full.
+        #[test]
+        fn a_batch_handed_over_before_a_stop_is_never_keyed_after_it() {
+            let (keyer, levels, go) = held_keyer();
+            // RYRY…: every character has several space runs.
+            keyer.send([false, true, false, true, false].repeat(4), 45.45);
+            keyer.clear();
+            go.send(()).unwrap();
+            settle(&levels);
+            // POSITIVE CONTROL: one LTRS sent after the stop keys (one space run, the start
+            // bit), so the line is really read.
+            keyer.send(vec![true; 5], 45.45);
+            settle(&levels);
+            assert_eq!(
+                spaces(&levels),
+                1,
+                "only the LTRS sent after the stop may key; the line went {:?}",
+                levels.lock().unwrap()
+            );
+            assert_eq!(
+                levels.lock().unwrap().last(),
+                Some(&false),
+                "the line ends at mark"
+            );
+        }
+
+        /// A stop in the middle of a message returns the line to mark within one 8 ms slice, and
+        /// the rest of the message and the one queued behind it never key.
+        #[test]
+        fn a_stop_mid_message_returns_to_mark_at_once_and_drops_the_rest() {
+            let (keyer, levels, go) = held_keyer();
+            keyer.send([false, true, false, true, false].repeat(30), 45.45); // about 5 s
+            keyer.send([false, true, false, true, false].repeat(4), 45.45);
+            go.send(()).unwrap();
+            let start = Instant::now();
+            while spaces(&levels) < 2 && start.elapsed() < Duration::from_secs(5) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(spaces(&levels) >= 2, "control: the message must be keying");
+            keyer.clear();
+            let stopped = Instant::now();
+            while levels.lock().unwrap().last() != Some(&false)
+                && stopped.elapsed() < Duration::from_millis(500)
+            {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(levels.lock().unwrap().last(), Some(&false), "back to mark");
+            let n = spaces(&levels);
+            settle(&levels);
+            assert_eq!(spaces(&levels), n, "nothing keys after the stop");
+            assert!(n < 40, "the message was cut, not finished: {n} space runs");
         }
     }
 }
