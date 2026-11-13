@@ -25,6 +25,15 @@ import { ConfirmHost, confirmDialog } from '../confirm'
 import { LogConfirm } from '../components/LogConfirm'
 import { RadioPicker } from '../components/RadioPicker'
 import { LogEntry } from '../components/LogEntry'
+import { installCatalog, setLocale } from '../i18n'
+import { DE } from '../i18n/de'
+import { ES } from '../i18n/es'
+import { FR } from '../i18n/fr'
+import { IT } from '../i18n/it'
+import { JA } from '../i18n/ja'
+import { RU } from '../i18n/ru'
+import { ZH } from '../i18n/zh'
+import { ZH_HANT } from '../i18n/zh-hant'
 import type { AppSnapshot } from '../types'
 import { useViewport } from '../useViewport'
 import type { LinkState, LoggedQso, RadioStatus } from '../types'
@@ -32,6 +41,13 @@ import type { RadioLaunchInfo } from '../api'
 
 const params = new URLSearchParams(location.search)
 const overlay = params.get('overlay') ?? 'dialog'
+const CATALOGS = { de: DE, es: ES, fr: FR, it: IT, ja: JA, ru: RU, zh: ZH, 'zh-hant': ZH_HANT }
+// `&lang=it`: the page in that language (STOPABOVE_LOCALE), its catalog installed as main.tsx installs it.
+const lang = params.get('lang')
+if (lang && lang in CATALOGS) {
+  installCatalog(lang, CATALOGS[lang as keyof typeof CATALOGS])
+  setLocale(lang)
+}
 
 document.documentElement.setAttribute('data-theme', 'dark')
 localStorage.clear()

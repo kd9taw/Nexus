@@ -95,7 +95,7 @@ test('billing: forty pages a day an account on top of ten a minute, refused befo
     .bind(sha(`billing-day:${busy.accountId}`), 39, (Math.floor(now / DAY) + 1) * DAY).run()
   billingCalls = []
   await busy.post('billing/portal', {})
-  assert.deepEqual((await busy.post('billing/checkout', { plan: 'monthly' }, 429)).value, { error: 'tryLater' })
+  assert.deepEqual((await busy.post('billing/checkout', { plan: 'monthly', country: 'US' }, 429)).value, { error: 'tryLater' })
   assert.deepEqual((await busy.post('billing/portal', {}, 429)).value, { error: 'tryLater' })
   assert.deepEqual(billingCalls, [{ method: 'portal', args: [busy.accountId] }], 'the fortieth went through; nothing after it did')
   // Another account's day is its own.
@@ -119,7 +119,7 @@ test('an operator\'s ordinary day trips no limit: pair, stream, renew, subscribe
   for (let i = 0; i < 4; i++) await pair.browser.post(`${path}/renew`, { sessionId })
   for (const region of monitor) await health(billed, region, 200)
   // Subscribing and managing it: a few checkouts and portal pages, more than anyone opens in a minute.
-  for (let i = 0; i < 3; i++) await pair.browser.post('billing/checkout', { plan: i % 2 ? 'annual' : 'monthly' })
+  for (let i = 0; i < 3; i++) await pair.browser.post('billing/checkout', { plan: i % 2 ? 'annual' : 'monthly', country: 'US' })
   for (let i = 0; i < 5; i++) await pair.browser.post('billing/portal', {})
   await pair.browser.post('account/devices')
   await pair.browser.post('account/export')

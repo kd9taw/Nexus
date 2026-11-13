@@ -155,7 +155,7 @@ more often an operator sees the row.
 | **3** | 1,802 | The daily operating surfaces: the FT8/FT4 cockpit, the logbook, the station roster, spots, the Needed panel, the waterfall and band map. |
 | **4** | 577 | The settings people actually open: audio, radios, connections, alerts, transmit limits, integrations, backup, colours. |
 | **5** | 4,166 | The other cockpits and features: Phone, CW, Tempo, RTTY, PSK, SSTV, APRS, JS8, satellites, Field Day, the map, awards, memories. |
-| **6** | 2,793 | The deep end: rig-control detail, confirmation-service setup, rotator and routing, the pages of the remote browser station, and the long tail. |
+| **6** | 2,797 | The deep end: rig-control detail, confirmation-service setup, rotator and routing, the pages of the remote browser station, and the long tail. |
 <!-- /make-kit:tiers -->
 
 Tier 1 alone is <!-- make-kit:tier1 -->996<!-- /make-kit --> rows, about <!-- make-kit:tier1chars -->48,000<!-- /make-kit --> characters, roughly <!-- make-kit:tier1pct -->9<!-- /make-kit -->% of the text, and it covers

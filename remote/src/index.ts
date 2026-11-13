@@ -8,6 +8,7 @@ import { baseCall, hmac, markerInserts, requireUnspentMarkers, SPENT_MARKER, spe
 import type { TrialInput } from './trial-identity'
 import type { Identity } from '../../ui/src/remote-monitor/relay'
 import { advertisedOperationVersion } from '../../ui/src/remote-web/operation-version'
+import { isBillingCountry } from '../../ui/src/remote-web/billing-country'
 export { StationRoom } from './room'
 
 /** How long a station's connection is admitted before it has to connect again. A stream is a lane of
@@ -53,7 +54,7 @@ const ACCOUNT_DATA_PER_TEN_MINUTES = 5
 /** A subscription in these states has ended and can charge nothing more; any other can. */
 const SUBSCRIPTION_ENDED = ['canceled', 'incomplete_expired']
 /** The billing Worker's refusals the page can name. Anything else it answers is `serviceUnavailable`. */
-const BILLING_REFUSALS = new Set(['invalidRequest', 'accountNotFound', 'accessDenied', 'alreadySubscribed', 'noSubscription', 'serviceUnavailable'])
+const BILLING_REFUSALS = new Set(['invalidRequest', 'accountNotFound', 'accessDenied', 'alreadySubscribed', 'noSubscription', 'countryNotServed', 'serviceUnavailable'])
 
 function json(value: unknown, status = 200, headers?: HeadersInit): Response {
   const result = new Response(JSON.stringify(value), { status, headers })
@@ -545,12 +546,14 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
   // check. Only the signed-in account's id goes over. Until the billing Worker is bound these say so.
   if (path === 'billing/checkout' || path === 'billing/portal') {
     requireValue(env.BILLING, 'billingNotAvailable', 503)
-    const checkout = path === 'billing/checkout', input = await body(request, checkout ? ['plan'] : [])
-    requireValue(!checkout || input.plan === 'monthly' || input.plan === 'annual', 'invalidRequest', 400)
+    // Subscribe carries the billing country the page asked for: a country is checked here, and
+    // whether Remote is sold there is the billing Worker's answer (`countryNotServed`), before Checkout opens.
+    const checkout = path === 'billing/checkout', input = await body(request, checkout ? ['plan', 'country'] : [])
+    requireValue(!checkout || ((input.plan === 'monthly' || input.plan === 'annual') && isBillingCountry(input.country)), 'invalidRequest', 400)
     await rate(env, `billing:${identity.accountId}`, now, BILLING_PER_MINUTE)
     await rate(env, `billing-day:${identity.accountId}`, now, BILLING_PER_DAY, DAY_MS)
     return checkout
-      ? billingAnswer(await env.BILLING.checkout(identity.accountId, input.plan as 'monthly' | 'annual'), 'https://checkout.stripe.com/')
+      ? billingAnswer(await env.BILLING.checkout(identity.accountId, input.plan as 'monthly' | 'annual', input.country as string), 'https://checkout.stripe.com/')
       : billingAnswer(await env.BILLING.portal(identity.accountId), 'https://billing.stripe.com/')
   }
   // THE ACCOUNT ITSELF: a copy of what the service holds about it, and deleting it. Above the entitlement,

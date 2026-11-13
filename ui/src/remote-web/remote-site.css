@@ -162,7 +162,7 @@
 }
 
 /* Keyboard focus: the site's amber ring, on every focusable thing on these screens. */
-.remote-site :is(a, button, input, summary):focus-visible {
+.remote-site :is(a, button, input, select, summary):focus-visible {
   outline: 2px solid var(--rs-ink);
   outline-offset: 2px;
 }
@@ -238,7 +238,7 @@
   text-transform: uppercase;
   color: var(--rs-muted);
 }
-.remote-site .remote-section input {
+.remote-site .remote-section :is(input, select) {
   min-height: 2.75rem;
   padding: 0.5rem 0.75rem;
   font-family: var(--font-sans);
@@ -254,7 +254,28 @@
   font-family: var(--font-mono);
   letter-spacing: 0.08em;
 }
-.remote-site .remote-section input:focus-visible { border-color: var(--rs-ink); }
+.remote-site .remote-section :is(input, select):focus-visible { border-color: var(--rs-ink); }
+/* A tick box with its sentence beside it (Subscribe's "this is my billing country"): normal text, not
+   the micro-label, and the box at its own size rather than a full-width field. */
+.remote-site .remote-section label.remote-site-confirm {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--rs-fg);
+}
+.remote-site .remote-section label.remote-site-confirm input {
+  flex: none;
+  width: 1.25rem;
+  min-height: 1.25rem;
+  height: 1.25rem;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--rs-ink);
+}
 .remote-site .remote-section form > .remote-button { justify-self: start; }
 
 /* ── Buttons: the site's two — an amber fill for the one thing to do next, a bordered mono

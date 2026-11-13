@@ -28,22 +28,27 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { FHD, FHD_125, FHD_150, FLOOR, LAPTOP, MID, MID_1536, QHD, UHD_200, metrics, offMatrix } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
-// Window (CSS px) and the zoom the app's auto-fit picks there (useScale: min(w/1200, h/900) snapped down
-// to a step, capped at 100 %), plus two pinned scales on a 1080p screen.
+// A screen (probe/sizes.mjs) and the zoom the app's auto-fit picks there (useScale: min(w/1200, h/900) snapped
+// down to a step, capped at 100 %; on a fractionally scaled screen `scaledFitScale`, never under 100/ratio — so
+// 70 % at 1080p/150 %, 80 % at 1080p/125 % and 65 % on the floor), plus two pinned scales on a 1080p screen.
 const SIZES = [
-  { w: 1920, h: 1080, z: 1 }, { w: 1920, h: 1080, z: 1.25 }, { w: 1920, h: 1080, z: 1.5 },
-  { w: 1536, h: 864, z: 0.9 }, { w: 1280, h: 720, z: 0.8 }, { w: 2560, h: 1440, z: 1 },
-  { w: 1366, h: 768, z: 0.85 }, { w: 1440, h: 900, z: 1 }, { w: 1512, h: 982, z: 1 }, { w: 1024, h: 768, z: 0.85 },
+  { ...FHD, z: 1 }, { ...FHD, z: 1.25 }, { ...FHD, z: 1.5 },
+  { ...MID_1536, z: 0.9 }, { ...FHD_125, z: 0.8 }, { ...FHD_150, z: 0.7 }, { ...QHD, z: 1 },
+  { ...LAPTOP, z: 0.85 }, { ...MID, z: 1 }, { ...offMatrix(1512, 982), z: 1 }, { ...FLOOR, z: 0.65 }, { ...UHD_200, z: 1 },
 ]
 const VIEWS = ['operate', 'cw']
 // A screen with no cockpit (no TX strip, so no alarm cell): there the lane KEEPS a critical item's flag
 // (StatusLane `keepCritical`), and the bar may take a line for it. Swept at the common sizes and the small
 // and zoomed ones where the bar is fullest.
+// The floor pinned at 100 % is the fullest bar a supported screen gives; 900×600 and 1200×750 are windows
+// dragged below their screen.
 const NO_CELL_SIZES = [
-  { w: 900, h: 600, z: 0.65 }, { w: 900, h: 600, z: 1 }, { w: 1024, h: 768, z: 1 }, { w: 1200, h: 750, z: 0.8 },
-  { w: 1366, h: 768, z: 1 }, { w: 1920, h: 1080, z: 1.75 }, { w: 1280, h: 720, z: 1.5 }, { w: 1024, h: 768, z: 1.75 },
+  { ...offMatrix(900, 600), z: 0.65 }, { ...offMatrix(900, 600), z: 1 }, { ...FLOOR, z: 1 }, { ...offMatrix(1200, 750), z: 0.8 },
+  { ...LAPTOP, z: 1 }, { ...FHD, z: 1.75 }, { ...FHD_150, z: 1.5 }, { ...LAPTOP, z: 1.75 },
+  { ...offMatrix(900, 600), z: 1.75 }, // xs at the app's top zoom (514 px); 1366×768 at 175 % is sm
 ]
 // The flag check's own control: a lane squeezed below its flag must read as cut (the floor itself is
 // cockpit-panes.test.ts's: it is always held off the operating screens, so no size here can test it by removal).
@@ -99,7 +104,8 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function measure({ w, h, z }, view, lane, css) {
+async function measure(size, view, lane, css) {
+  const { z } = size
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -107,7 +113,7 @@ async function measure({ w, h, z }, view, lane, css) {
     const r = await call('Runtime.evaluate', { expression, returnByValue: true })
     return r.exceptionDetails ? null : r.result.value
   }
-  await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+  await call('Emulation.setDeviceMetricsOverride', metrics(size))
   await call('Page.navigate', { url: `${origin}/probe/topbar.html?view=${view}&zoom=${z}${lane ? '&lane=on' : ''}` })
   let last = null
   for (let i = 0; i < 80; i++) {
@@ -128,7 +134,7 @@ let tightest = null
 try {
   for (const s of SIZES) {
     for (const view of VIEWS) {
-      const at = `${view} at ${s.w}×${s.h} ${Math.round(s.z * 100)}%`
+      const at = `${view} at ${s.name} ${Math.round(s.z * 100)}%`
       const off = await measure(s, view, false)
       const on = await measure(s, view, true)
       console.log(`topbar-probe: ${at}: without ${JSON.stringify(off)}`)
@@ -153,7 +159,7 @@ try {
   // the window. CONTROL: the same sizes with the floor taken off must cut the flag somewhere, or this cannot fail.
   let cutWithout = 0, stopRows = 0, stopMovedLast = 0
   for (const s of [...SIZES, ...NO_CELL_SIZES]) {
-    const at = `logbook at ${s.w}×${s.h} ${Math.round(s.z * 100)}%`
+    const at = `logbook at ${s.name} ${Math.round(s.z * 100)}%`
     const on = await measure(s, 'logbook', true)
     const bare = await measure(s, 'logbook', true, NO_FLOOR)
     console.log(`topbar-probe: ${at}: with the floor ${JSON.stringify(on?.lane)}; without ${JSON.stringify(bare?.lane)}`)
@@ -184,12 +190,12 @@ try {
   const s = tightest?.s ?? SIZES[0]
   const off = await measure(s, 'operate', false, OLD_LANE)
   const on = await measure(s, 'operate', true, OLD_LANE)
-  console.log(`topbar-probe: CONTROL operate at ${s.w}×${s.h} ${Math.round(s.z * 100)}% (the least room on the bar, ${tightest?.free}px), the lane's old sizing: without ${off?.h}px, with ${on?.h}px ${JSON.stringify(on?.groups)}`)
+  console.log(`topbar-probe: CONTROL operate at ${s.name} ${Math.round(s.z * 100)}% (the least room on the bar, ${tightest?.free}px), the lane's old sizing: without ${off?.h}px, with ${on?.h}px ${JSON.stringify(on?.groups)}`)
   if (!off || !on || on.h === off.h) {
     console.error('topbar-probe: CONTROL FAILED — with the old sizing the message did not make the bar taller; the check cannot fail')
     code = code || 1
   }
-  if (code === 0) console.log(`topbar-probe: PASS — a status message leaves the bar's height and every group's line alone at every size, on the FT screen and on CW, at ${SIZES.map((x) => `${x.w}×${x.h}@${Math.round(x.z * 100)}%`).join(', ')}; the old sizing wraps the bar (control); on a screen with no alarm cell a critical item's flag is on screen at every size, and taking its floor off cuts it (control). Flag cut (the item is shown by Stop TX): ${tookLine.length ? tookLine.join('; ') : 'none'}`)
+  if (code === 0) console.log(`topbar-probe: PASS — a status message leaves the bar's height and every group's line alone at every size, on the FT screen and on CW, at ${SIZES.map((x) => `${x.name} → ${Math.round(x.z * 100)}%`).join(', ')}; the old sizing wraps the bar (control); on a screen with no alarm cell a critical item's flag is on screen at every size, and taking its floor off cuts it (control). Flag cut (the item is shown by Stop TX): ${tookLine.length ? tookLine.join('; ') : 'none'}`)
   process.exitCode = code
 } finally {
   await browser.stop()

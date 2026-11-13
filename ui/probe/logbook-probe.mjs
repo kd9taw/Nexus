@@ -2,7 +2,8 @@
 // `scripts/browser-probe --desktop logbook`.
 //
 // The probe serves src/probe/logbook.tsx (the real Logbook in the app's `.app` > `main.layout single`, at
-// the zoom the app picks for the window) at 1024×768, 1920×1080 and 2560×1440 and asserts, at each:
+// the zoom the app picks for the window) at the representative screens (probe/sizes.mjs CORE: 1366×768 at
+// 175 %, the floor, to 4K at 200 %) and asserts, at each:
 //   · the Logbook's panel spans the content box of the window it is in — no gutter beside it wider than
 //     the layout's own padding — and its table spans the panel;
 //   · nothing scrolls sideways at the page: not the document, not the view's host, not the panel;
@@ -20,8 +21,10 @@
 //     screen, every 4 px), and a real click on the empty end of the action cell and a real touch tap
 //     on the middle of a row send the station nothing; the ⋯ menu, opened by a real click on the LAST row on screen, lies
 //     wholly inside the window with 32 px items, its satellite submenu too, opening it sends nothing,
-//     and Escape closes it with the keyboard back on the ⋯ — at 1024×768 and 2560×1440 at the window's
-//     own zoom and at 1024×768, 1280×800 and 1920×1080 at 100% and 150%, in both themes;
+//     and Escape closes it with the keyboard back on the ⋯ — at the floor, 2560×1440 and 4K at 200 % at the
+//     window's own zoom; the floor at 100 %; 1366×768 at the OS's 125 % (1092 px, nearest the 1024 edge);
+//     1366×768 at 150 %; and 1920×1200 at 150 % (a 1280×800 window) and 1920×1080, each at the app's 100%
+//     and 150%; in both themes;
 //   · a 10,000-contact log renders only the rows in view (it stays virtualised), measured while
 //     scrolling.
 //
@@ -40,9 +43,10 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { CORE, FHD, FLOOR, FLOOR_125, LAPTOP, QHD, UHD_200, at as screenAt, metrics } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
-const SIZES = [{ w: 1024, h: 768 }, { w: 1920, h: 1080 }, { w: 2560, h: 1440 }]
+const SIZES = CORE
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** The view's boxes, in window px, and every sideways scroll that could be the page's or the table's. */
@@ -117,11 +121,14 @@ const ROW = `(() => {
     tableSideways: table.querySelector('.log-scroll').scrollWidth > table.querySelector('.log-scroll').clientWidth + 1,
   }
 })()`
-/** The row sweep: the window's own zoom at the floor and the top, 100% and 150% between. */
+/** The row sweep: the window's own zoom at the floor and the top, the app's 100% and 150% between. */
+const WUXGA_150 = screenAt(1920, 1200, 150) // a 1280×800 window
 const ROW_SIZES = [
-  { w: 1024, h: 768, zoom: null }, { w: 1024, h: 768, zoom: 1 }, { w: 1024, h: 768, zoom: 1.5 },
-  { w: 1280, h: 800, zoom: 1 }, { w: 1280, h: 800, zoom: 1.5 },
-  { w: 1920, h: 1080, zoom: 1 }, { w: 1920, h: 1080, zoom: 1.5 }, { w: 2560, h: 1440, zoom: null },
+  // 1366×768 at the OS's 125 % at the app's 100 % is 1092 px: the row nearest the 1024 px edge of the
+  // call/date/time contract (scanFaults), where a cut would show first.
+  { ...FLOOR, zoom: null }, { ...FLOOR, zoom: 1 }, { ...FLOOR_125, zoom: 1 }, { ...LAPTOP, zoom: 1.5 },
+  { ...WUXGA_150, zoom: 1 }, { ...WUXGA_150, zoom: 1.5 },
+  { ...FHD, zoom: 1 }, { ...FHD, zoom: 1.5 }, { ...QHD, zoom: null }, { ...UHD_200, zoom: null },
 ]
 /** What a whole screen of rows shows: the contacts wholly in view, whether the callsign, date and
  *  time are cut on any of them (and the width each column has, in window px), and every control a
@@ -231,7 +238,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function open(w, h, query) {
+async function open(size, query) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -239,7 +246,7 @@ async function open(w, h, query) {
     const r = await call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })
     return r.exceptionDetails ? null : r.result.value
   }
-  await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+  await call('Emulation.setDeviceMetricsOverride', metrics(size))
   await call('Page.navigate', { url: `${origin}/probe/logbook.html${query}` })
   // Settled: the table drawn, the size class published, two reads the same.
   let last = null
@@ -265,21 +272,21 @@ const red = (msg) => {
 /** The width checks: a gutter no wider than the layout's padding, the table across the panel. */
 const widthOk = (m) => m.gutter.left <= m.pad + 2 && m.gutter.right <= m.pad + 2 && m.tableInset.left <= 2 && m.tableInset.right <= 2
 try {
-  for (const { w, h } of SIZES) {
+  for (const size of SIZES) {
     // The default columns: the width, no sideways scroll anywhere, then a real drag and a real click.
-    const page = await open(w, h, '')
+    const page = await open(size, '')
     const m = page.first
-    console.log(`logbook-probe: window ${w}×${h} default columns: ${JSON.stringify(m)}`)
+    console.log(`logbook-probe: window ${size.name} default columns: ${JSON.stringify(m)}`)
     if (!m) {
-      console.error(`logbook-probe: the table never drew at ${w}×${h}`)
+      console.error(`logbook-probe: the table never drew at ${size.name}`)
       code = 2
       await page.close()
       continue
     }
-    if (m.vp === 'UNSET') red(`${w}×${h}: the size class never landed — the reading is of no layout`)
-    if (!widthOk(m)) red(`${w}×${h}: the panel does not span the window — gutters ${m.gutter.left}/${m.gutter.right} px against the layout's ${m.pad} px padding (max-width ${m.panelMaxWidth}), table inset ${m.tableInset.left}/${m.tableInset.right}`)
-    if (m.pageSideways || m.hostSideways || m.panelSideways) red(`${w}×${h}: the page scrolls sideways (document ${m.pageSideways}, host ${m.hostSideways}, panel ${m.panelSideways})`)
-    if (m.tableSideways) red(`${w}×${h}: the default table does not fit the window and scrolls sideways`)
+    if (m.vp === 'UNSET') red(`${size.name}: the size class never landed — the reading is of no layout`)
+    if (!widthOk(m)) red(`${size.name}: the panel does not span the window — gutters ${m.gutter.left}/${m.gutter.right} px against the layout's ${m.pad} px padding (max-width ${m.panelMaxWidth}), table inset ${m.tableInset.left}/${m.tableInset.right}`)
+    if (m.pageSideways || m.hostSideways || m.panelSideways) red(`${size.name}: the page scrolls sideways (document ${m.pageSideways}, host ${m.hostSideways}, panel ${m.panelSideways})`)
+    if (m.tableSideways) red(`${size.name}: the default table does not fit the window and scrolls sideways`)
 
     const from = await page.at('notes')
     const onto = await page.at('call', 0.2)
@@ -289,38 +296,38 @@ try {
     await page.mouse('mouseReleased', onto.x, onto.y)
     await sleep(400)
     const d = await page.evaluate(MEASURE)
-    console.log(`logbook-probe: window ${w}×${h} after dragging Notes onto Call: headers ${d.headers.join(' ')} · sorted ${d.sorted.join(' ')} · saved ${d.saved.join(' | ')}`)
-    if (d.headers[0] !== 'notes' || d.headers[1] !== 'call') red(`${w}×${h}: the drag did not put Notes first (${d.headers.slice(0, 3).join(' ')})`)
-    if (d.saved.length !== 1 || d.saved[0] !== 'notes,call,country') red(`${w}×${h}: the drag saved ${JSON.stringify(d.saved)}, not one order starting Notes, Call, Country`)
-    if (JSON.stringify(d.sorted) !== JSON.stringify(m.sorted)) red(`${w}×${h}: the drag changed the sort (${m.sorted.join(' ')} → ${d.sorted.join(' ')})`)
+    console.log(`logbook-probe: window ${size.name} after dragging Notes onto Call: headers ${d.headers.join(' ')} · sorted ${d.sorted.join(' ')} · saved ${d.saved.join(' | ')}`)
+    if (d.headers[0] !== 'notes' || d.headers[1] !== 'call') red(`${size.name}: the drag did not put Notes first (${d.headers.slice(0, 3).join(' ')})`)
+    if (d.saved.length !== 1 || d.saved[0] !== 'notes,call,country') red(`${size.name}: the drag saved ${JSON.stringify(d.saved)}, not one order starting Notes, Call, Country`)
+    if (JSON.stringify(d.sorted) !== JSON.stringify(m.sorted)) red(`${size.name}: the drag changed the sort (${m.sorted.join(' ')} → ${d.sorted.join(' ')})`)
     const c = await page.at('country')
     await page.mouse('mouseMoved', c.x, c.y)
     await page.mouse('mousePressed', c.x, c.y)
     await page.mouse('mouseReleased', c.x + 2, c.y)
     await sleep(400)
     const s = await page.evaluate(MEASURE)
-    if (!s.sorted.some((x) => x.startsWith('country:'))) red(`${w}×${h}: a click on Country no longer sorts (${s.sorted.join(' ')})`)
-    if (s.saved.length !== 1) red(`${w}×${h}: the click saved a column choice`)
+    if (!s.sorted.some((x) => x.startsWith('country:'))) red(`${size.name}: a click on Country no longer sorts (${s.sorted.join(' ')})`)
+    if (s.saved.length !== 1) red(`${size.name}: the click saved a column choice`)
     await page.close()
 
     // Every column: wider than the window, so the TABLE scrolls sideways and the page does not.
-    const wide = await open(w, h, '?cols=wide')
+    const wide = await open(size, '?cols=wide')
     const x = wide.first
-    console.log(`logbook-probe: window ${w}×${h} every column: ${JSON.stringify(x)}`)
+    console.log(`logbook-probe: window ${size.name} every column: ${JSON.stringify(x)}`)
     if (!x) {
-      console.error(`logbook-probe: the wide table never drew at ${w}×${h}`)
+      console.error(`logbook-probe: the wide table never drew at ${size.name}`)
       code = 2
       await wide.close()
       continue
     }
-    if (!widthOk(x)) red(`${w}×${h} wide: the panel does not span the window — gutters ${x.gutter.left}/${x.gutter.right} px`)
-    if (x.pageSideways || x.hostSideways || x.panelSideways) red(`${w}×${h} wide: the page scrolls sideways (document ${x.pageSideways}, host ${x.hostSideways}, panel ${x.panelSideways})`)
-    if (!x.tableSideways || !['auto', 'scroll'].includes(x.tableOverflowX)) red(`${w}×${h} wide: the table's own scroller does not scroll sideways (overflow-x ${x.tableOverflowX}, overflowing ${x.tableSideways})`)
+    if (!widthOk(x)) red(`${size.name} wide: the panel does not span the window — gutters ${x.gutter.left}/${x.gutter.right} px`)
+    if (x.pageSideways || x.hostSideways || x.panelSideways) red(`${size.name} wide: the page scrolls sideways (document ${x.pageSideways}, host ${x.hostSideways}, panel ${x.panelSideways})`)
+    if (!x.tableSideways || !['auto', 'scroll'].includes(x.tableOverflowX)) red(`${size.name} wide: the table's own scroller does not scroll sideways (overflow-x ${x.tableOverflowX}, overflowing ${x.tableSideways})`)
     const before = await wide.at('call')
     await wide.evaluate(`document.querySelector('.log-scroll').scrollLeft = 300`)
     await sleep(200)
     const after = await wide.at('call')
-    if (!(before.x - after.x > 100)) red(`${w}×${h} wide: the header did not scroll sideways with the rows (${Math.round(before.x)} → ${Math.round(after.x)})`)
+    if (!(before.x - after.x > 100)) red(`${size.name} wide: the header did not scroll sideways with the rows (${Math.round(before.x)} → ${Math.round(after.x)})`)
     await wide.close()
   }
 
@@ -332,10 +339,11 @@ try {
     const { data } = await page.call('Page.captureScreenshot', { format: 'png' })
     await writeFile(join(shots, `${name}.png`), Buffer.from(data, 'base64'))
   }
-  for (const { w, h, zoom } of ROW_SIZES) {
+  for (const size of ROW_SIZES) {
+    const { zoom } = size
     for (const theme of ['dark', 'light']) {
-      const page = await open(w, h, `?sat=1&theme=${theme}${zoom ? `&zoom=${zoom}` : ''}`)
-      const tag = `${w}×${h} @ ${zoom ? Math.round(zoom * 100) + '%' : 'fit'} ${theme}`
+      const page = await open(size, `?sat=1&theme=${theme}${zoom ? `&zoom=${zoom}` : ''}`)
+      const tag = `${size.name} @ ${zoom ? Math.round(zoom * 100) + '%' : 'fit'} ${theme}`
       const m = await page.evaluate(ROW)
       console.log(`logbook-probe: rows ${tag}: ${JSON.stringify(m)}`)
       if (!m || m.vp === 'UNSET') red(`${tag}: no row to measure, or the size class never landed`)
@@ -344,7 +352,7 @@ try {
       console.log(`logbook-probe: screen ${tag}: ${JSON.stringify(sc)}`)
       if (!sc) red(`${tag}: no screen of rows to scan`)
       else for (const f of scanFaults(sc)) red(`${tag}: ${f}`)
-      const name = `${w}x${h}-${zoom ? Math.round(zoom * 100) : 'fit'}-${theme}`
+      const name = `${size.name.replace(/[^0-9a-z]+/gi, '-')}-${zoom ? Math.round(zoom * 100) : 'fit'}-${theme}`
       await shoot(page, name)
 
       // A real click on the empty end of the action cell, then a real touch tap mid-row: nothing is sent.
@@ -448,7 +456,7 @@ try {
   // was virtualised (reproduced here on one core). So the page runs the scroll on its own and the
   // probe asks, in short calls, whether it has finished; two minutes is ample at any frame rate a
   // runner draws.
-  const big = await open(1920, 1080, '?n=10000&zoom=1')
+  const big = await open(FHD, '?n=10000&zoom=1')
   await big.evaluate(`(() => {
     window.__scroll = null
     const s = document.querySelector('.log-scroll')
@@ -473,7 +481,7 @@ try {
   console.log(`logbook-probe: 10,000 contacts while scrolling: ${JSON.stringify(perf)}`)
   if (!perf || perf.maxRows > 80) red(`a 10,000-contact log rendered ${perf?.maxRows} rows at once — it is not virtualised`)
   await big.close()
-  const thin = await open(1920, 1080, '?sat=1&zoom=1&control=thin')
+  const thin = await open(FHD, '?sat=1&zoom=1&control=thin')
   const tm = await thin.evaluate(ROW)
   console.log(`logbook-probe: CONTROL the old 22 px row buttons, window 1920×1080: ${JSON.stringify(tm?.controls?.map((c) => `${c.text} ${c.w}×${c.h}`))}`)
   if (!tm || rowFaults(tm).length === 0) {
@@ -482,7 +490,7 @@ try {
   }
   await thin.close()
 
-  const blindPage = await open(1920, 1080, '?sat=1&zoom=1&control=blind')
+  const blindPage = await open(FHD, '?sat=1&zoom=1&control=blind')
   const bm = await blindPage.evaluate(SCAN)
   console.log(`logbook-probe: CONTROL a row button hidden as the old rows hid theirs, window 1920×1080: ${JSON.stringify(bm?.blind)}`)
   if (!bm || scanFaults(bm).length === 0) {
@@ -491,14 +499,14 @@ try {
   }
   await blindPage.close()
 
-  const ctl = await open(1920, 1080, '?control=cap')
+  const ctl = await open(FHD, '?control=cap')
   console.log(`logbook-probe: CONTROL the old centred measure, window 1920×1080: ${JSON.stringify(ctl.first)}`)
   if (!ctl.first || widthOk(ctl.first)) {
     console.error('logbook-probe: CONTROL FAILED — with the old 1100 px measure back on the panel the width check still passed; it cannot fail')
     code = code || 1
   }
   await ctl.close()
-  if (code === 0) console.log(`logbook-probe: PASS — at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')} the Logbook spans the window, nothing scrolls sideways at the page, the default table fits, every column scrolls inside the table with its header, a drag moves Notes first without sorting and a click still sorts, each row's ✎ and ⋯ are 32×32 targets 6 px apart with no row text cut short untold, call, date and time are whole from 1024 px up, nothing invisible in a row is clickable and its empty end sends nothing, the ⋯ menu and its submenu stay in the window with 32 px items and give the keyboard back, a 10,000-contact log stays virtualised; the old measure, the old 22 px buttons and a hidden row button were caught`)
+  if (code === 0) console.log(`logbook-probe: PASS — at ${SIZES.map((s) => s.name).join(', ')} the Logbook spans the window, nothing scrolls sideways at the page, the default table fits, every column scrolls inside the table with its header, a drag moves Notes first without sorting and a click still sorts, each row's ✎ and ⋯ are 32×32 targets 6 px apart with no row text cut short untold, call, date and time are whole from 1024 px up, nothing invisible in a row is clickable and its empty end sends nothing, the ⋯ menu and its submenu stay in the window with 32 px items and give the keyboard back, a 10,000-contact log stays virtualised; the old measure, the old 22 px buttons and a hidden row button were caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

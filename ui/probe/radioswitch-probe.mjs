@@ -3,7 +3,8 @@
 //
 // The probe serves the REAL app (index.html, main.tsx, App) with the app's own Vite config and src/api.ts
 // swapped for probe/radioswitch-api.ts: a three-radio station with two routing rules and the notice on. At
-// 1024×768 (the supported floor) and 1920×1080, in the dark theme, it has Nexus switch radio by itself and
+// the representative screens (probe/sizes.mjs CORE: 1366×768 at 175 %, the floor, to 4K at 200 %), in the
+// dark theme, it has Nexus switch radio by itself and
 // asserts:
 //   1. THE NOTICE: "Switched to IC-9700 …" is drawn inside the window, nothing in it or the page scrolls
 //      sideways, and Undo and Why? are each the topmost thing where they stand;
@@ -22,13 +23,14 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { CORE, metrics } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
 const STUB_SRC = join(UI, 'probe', 'radioswitch-api.ts')
 // Served under a name with no file behind it, beside the source, as the waterfalls probe does.
 const STUB_API = join(UI, 'probe', '__radioswitch-api.ts')
-const SIZES = [[1024, 768], [1920, 1080]]
+const SIZES = CORE
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const HELPERS = `
@@ -159,7 +161,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function run([W, H], control) {
+async function run(size, control) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -177,7 +179,7 @@ async function run([W, H], control) {
     return null
   }
   try {
-    await call('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false })
+    await call('Emulation.setDeviceMetricsOverride', metrics(size))
     await call('Page.navigate', { url: `${origin}/probe-blank` })
     await sleep(300)
     await evaluate(`localStorage.clear(); localStorage.setItem('nexus.workspace', 'dx'); localStorage.setItem('tempo-theme', 'dark'); localStorage.setItem('nexus.features.wizardSeen', '1'); 1`)
@@ -214,7 +216,7 @@ async function run([W, H], control) {
 let code = 0
 try {
   for (const size of SIZES) {
-    const tag = `${size[0]}×${size[1]}`
+    const tag = size.name
     const r = await run(size, false)
     console.log(`radioswitch-probe: ${tag}: ${JSON.stringify(r)}`)
     if (r.error) {
@@ -240,7 +242,7 @@ try {
       code = code || 1
     }
   }
-  if (code === 0) console.log(`radioswitch-probe: PASS — the notice with Undo and Why? on screen, Undo back to the radio it left, Why? at the Radios cards with each radio's routing and the switch choice on screen, nothing sideways, at ${SIZES.map(([w, h]) => `${w}×${h}`).join(', ')}; each control caught`)
+  if (code === 0) console.log(`radioswitch-probe: PASS — the notice with Undo and Why? on screen, Undo back to the radio it left, Why? at the Radios cards with each radio's routing and the switch choice on screen, nothing sideways, at ${SIZES.map((s) => s.name).join(', ')}; each control caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

@@ -20,13 +20,19 @@
 //   5. THE WATERFALL STAYS RESIZABLE BY ITS DIVIDER: real ArrowUp (or ArrowDown, at the bottom of its range) keys on the
 //      divider size the stage wherever the divider offers any travel, and
 //      Backspace gives the stock size back.
+//   6. THE METERS PANE CAN BE SEEN WHOLE (2026-11-12): at some position of the shell's scroll (and its column's), the
+//      large TX meters pane is on screen from its head to its foot and topmost there, and so is every face's name and
+//      value. With the header pinned over 6em of room, 1366×768 at 175 % showed 117 px of a 140 px pane between the
+//      parked header, strip and bar, and the readouts were under the header wherever the pane was scrolled to.
+//      On the supported screens only: the xs windows are dragged smaller than any (a 900×600 window at 175 % leaves
+//      the shell 179 px under the top bar and the nav row, less the strip and the bar), and are printed there.
 //   And it prints whether the composer reads sideways or stacked at each size. It PRINTS, and does not fail on, the
 //   strip's Stop TX under a bar grown by its alert on a small window at a large zoom (the bar's own Stop stays on
 //   screen and is checked): the strip and the bar are not this layout's, and main does the same there. sm and xs
 //   hide every divider in the app, so check 5 runs from md up.
 // THE CONTROLS, run every time: the composer ordered above the gallery must fail check 1; a region sized by its
 // content (so the meters pane takes height from the stage) must fail check 2; and a composer body clipped to two
-// lines must fail checks 3 and 4.
+// lines must fail checks 3 and 4; an opaque band planted over all but the window's last 120 px must fail check 6.
 //
 // exit: 0 every check held · 1 a red, or a control that could not fail · 2 the page never drew the screen
 import { createServer } from 'vite'
@@ -35,15 +41,21 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { FHD, FLOOR, LAPTOP, QHD, UHD } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
 const STUB_SRC = join(UI, 'probe', 'waterfalls-api.ts')
 const STUB_API = join(UI, 'probe', '__sstvlayout-api.ts')
-/** [class, window W, H, pinned UI scale]: each class at 100 % and at 175 % (effective width = W / scale). */
+/** [class, window W, H, pinned UI scale, the OS's scaling as a device pixel ratio]: each class at 100 % and at 175 %
+ *  (effective width = W / scale). The screens are probe/sizes.mjs's — sm at 100 % is the floor (1366×768 at the OS's
+ *  175 %); xs (700×800, 900×600) and 4320×2160 are windows off the matrix, the only way to those classes there. */
+const S = (cls, s, scale) => [cls, s.w, s.h, scale, s.scale]
 const SIZES = [
-  ['xs', 700, 800, '100'], ['sm', 1024, 768, '100'], ['md', 1366, 768, '100'], ['lg', 1920, 1080, '100'], ['xl', 2560, 1440, '100'],
-  ['xs', 900, 600, '175'], ['sm', 1920, 1080, '175'], ['md', 2560, 1440, '175'], ['lg', 3840, 2160, '175'], ['xl', 4320, 2160, '175'],
+  ['xs', 700, 800, '100'], S('sm', FLOOR, '100'), S('md', LAPTOP, '100'), S('lg', FHD, '100'), S('xl', QHD, '100'),
+  ['xs', 900, 600, '175'], S('sm', FHD, '175'), S('md', QHD, '175'), S('lg', UHD, '175'), ['xl', 4320, 2160, '175'],
+  // The floor screen unscaled at the app's 150 and 175 % (check 6 was measured red at 175 %).
+  S('sm', LAPTOP, '150'), S('sm', LAPTOP, '175'),
 ]
 const LANGS = ['en', 'ru']
 /** SSTVLAYOUT_ONLY=<class>:<scale>:<lang> runs that one page and no controls, and SSTVLAYOUT_ONLY=controls the
@@ -176,6 +188,30 @@ const REACH_END = `(async () => {
   return { alarms, notes, sideways, page: Math.max(0, document.scrollingElement.scrollHeight - innerHeight) }
 })()`
 
+/** Check 6: the meters pane whole on screen and topmost, and its readouts, at some position of the shell's scroll and of
+ *  the column it stands in (every 8 px of the shell's, every 24 of the column's). Synchronous: a hit test lays out. */
+const METERS_WHOLE = `(() => {
+  const s = document.querySelector(${JSON.stringify(SEL)})
+  const pane = s && s.querySelector('[data-pane="txMetersPane"]')
+  if (!pane) return { pane: false }
+  const col = pane.closest('.cockpit-col')
+  const reads = [...pane.querySelectorAll('.txmeters-pane-value, .txmeters-pane-label')]
+  const hits = (e, x, y) => { if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return false; const t = document.elementFromPoint(x, y); return t != null && (t === e || e.contains(t)) }
+  const whole = () => { const r = pane.getBoundingClientRect(); const x = r.left + r.width / 2
+    return r.top >= 0 && r.bottom <= innerHeight && hits(pane, x, r.top + 2) && hits(pane, x, r.bottom - 2) &&
+      reads.every((e) => { const q = e.getBoundingClientRect(); return hits(e, q.left + q.width / 2, q.top + q.height / 2) }) }
+  const saved = [s.scrollTop, col ? col.scrollTop : 0]
+  let found = null
+  const cmax = col ? col.scrollHeight - col.clientHeight : 0, smax = s.scrollHeight - s.clientHeight
+  for (let c = 0; c <= cmax + 23 && !found; c += 24) {
+    if (col) col.scrollTop = Math.min(c, cmax)
+    for (let y = 0; y <= smax + 7 && !found; y += 8) { s.scrollTop = Math.min(y, smax); if (whole()) found = [s.scrollTop, col ? col.scrollTop : 0] }
+  }
+  s.scrollTop = saved[0]; if (col) col.scrollTop = saved[1]
+  const head = s.querySelector('.cockpit-header')
+  return { pane: true, reads: reads.length, found, h: Math.round(pane.getBoundingClientRect().height), pin: head ? head.getAttribute('data-pin') : null }
+})()`
+
 /** Load a small picture into the composer the way a drop does (an upscale, so the composer warns). */
 const DROP = `(async () => {
   const c = document.createElement('canvas'); c.width = 96; c.height = 72
@@ -197,7 +233,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function run([cls, W, H, scale], lang, plant = null) {
+async function run([cls, W, H, scale, D = 1], lang, plant = null) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -214,7 +250,7 @@ async function run([cls, W, H, scale], lang, plant = null) {
     return last
   }
   try {
-    await call('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false })
+    await call('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: D, mobile: false })
     await call('Page.navigate', { url: `${origin}/probe-blank` })
     await sleep(300)
     const ls = { 'nexus.workspace': 'dx', 'nexus.features.v1': FEATURES, 'tempo-theme': 'dark', 'nexus-ui-scale-mode': scale, 'nexus.locale': lang }
@@ -257,6 +293,8 @@ async function run([cls, W, H, scale], lang, plant = null) {
       return m
     }
     const after = [['the meters pane', await settle()]]
+    // Check 6, as the operator first sees the pane: ticked, before a picture or an alert grows the composer or the bar.
+    m.metersWhole = await evaluate(METERS_WHOLE)
     m.dropped = await evaluate(DROP)
     after.push(['a picture loaded, with its warning', await settle()])
     for (const [what, now] of after) for (const k of ['stopTx', 'stop']) if (now?.[k] !== base?.[k]) m.moved.push(`${k === 'stop' ? 'Stop' : 'Stop TX'} moved after ${what} (${base?.[k]} → ${now?.[k]})`)
@@ -305,6 +343,7 @@ function reds(name, m) {
   if (m.reach.unreached.length) out.push(`${name}: never on screen and topmost: ${m.reach.unreached.join(', ')}`)
   for (const r of m.reach.alarms) out.push(`${name}: ${r}`)
   if (m.reach.sideways) out.push(`${name}: ${m.reach.sideways}`)
+  if (m.vp !== 'xs' && m.metersWhole?.pane && !m.metersWhole.found) out.push(`${name}: the meters pane (${m.metersWhole.h} px) is never on screen whole with its readouts, at any scroll (header pin ${m.metersWhole.pin})`)
   if (m.divider.none) out.push(`${name}: no waterfall divider`)
   // sm and xs hide every divider in the app (styles.css, the narrow-window rule), SSTV's included, as before.
   else if (m.divider.hidden) { if (!['xs', 'sm'].includes(m.vp)) out.push(`${name}: the waterfall divider is hidden at ${m.vp}`) }
@@ -335,7 +374,7 @@ try {
       }
       if (m.vp !== size[0]) red(`${name}: the window classed as ${m.vp}, not ${size[0]} — the size table is wrong`)
       if (m.gone !== undefined) { for (const r of reds(name, m)) red(r); continue }
-      console.log(`sstvlayout-probe: ${name.padEnd(26)} composer ${m.order.reads}, meters via ${m.metersVia}, ${m.reach.n} controls, ` +
+      console.log(`sstvlayout-probe: ${name.padEnd(26)} composer ${m.order.reads}, meters via ${m.metersVia} (whole at scroll ${JSON.stringify(m.metersWhole?.found ?? null)}, header pin ${m.metersWhole?.pin}), ${m.reach.n} controls, ` +
         `${m.reach.unreached.length} unreachable, ${m.moved.length} stop moves, ${m.reach.alarms.length} hidden alarms, ${m.divider.hidden ? 'divider hidden (sm/xs)' : `divider ${m.divider.at}→${m.divider.grown}→${m.divider.back} (travel ${m.divider.travel} px)`}`)
       for (const n of m.reach.notes) console.log(`sstvlayout-probe:   note: ${n}`)
       for (const r of reds(name, m)) red(r)
@@ -346,6 +385,11 @@ try {
     ['the composer ordered above the gallery', ['md', 1366, 768, '100'], '[data-pane="txcompose"] { order: -1 }', (r) => r.includes('not below the gallery')],
     ['a region sized by its content', ['md', 1366, 768, '100'], '.cockpit-panes { flex: 0 0 auto !important; min-height: 0 !important }', (r) => r.includes('moved after')],
     ['a composer body clipped to two lines', ['md', 1366, 768, '100'], '[data-pane="txcompose"] .pane-body { overflow: hidden !important; max-height: 2.5em !important }', (r) => r.includes('never on screen') || r.includes('hidden')],
+    // Check 6's: an opaque band over all of the window but its bottom 120 px (a parked surface too tall for the pane, as
+    // the pinned header was): no meters pane (186 px here since the half-size dials, 245 in 1.24.0) is whole in what is
+    // left. Sized from the window's foot, not as a share of it: a 60 % band left 307 px and stopped failing once the
+    // dials' pane shrank to 186 (main 932c1c882, review round 2).
+    ['an opaque band over the window down to its last 120 px', ['sm', 1366, 768, '175'], 'body::after { content: ""; position: fixed; left: 0; right: 0; top: 0; height: calc(100% - 120px); z-index: 99999; background: #000 }', (r) => r.includes('meters pane')],
   ]
   for (const [what, size, css, hit] of ONLY && ONLY[0] !== 'controls' ? [] : controls) {
     const m = await run(size, 'en', css)

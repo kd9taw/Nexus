@@ -10,6 +10,7 @@ import { deviceKey } from './device-key'
 import { acceptStationKey, forgetStationKey, stationKeyView, type StationKeyView } from './station-key'
 import { browserLabel } from './browser-label'
 import { BetaNote } from './BetaNote'
+import { BillingCountryField, billingCountryName, initialBillingCountry, type BillingCountryChoice } from './BillingCountryField'
 import { AddStation, RemoteLanding } from './RemoteLanding'
 import { shortFingerprint } from './stream-protocol'
 import type { AccountSession } from './client'
@@ -64,6 +65,8 @@ export function RemoteApp() {
   const [code, setCode] = useState('')
   // What has been typed into Delete account's confirmation box.
   const [deleteWord, setDeleteWord] = useState('')
+  // Subscribe's billing country: asked before Checkout, sent only once chosen or confirmed.
+  const [billingCountry, setBillingCountry] = useState<BillingCountryChoice>(() => initialBillingCountry())
   // Keyed by station id: two cards must not share one edit box, and opening one must not put the
   // other into edit mode. null means nobody is renaming.
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null)
@@ -239,7 +242,8 @@ export function RemoteApp() {
   const plan = trial?.plan
   const subscribed = plan?.kind === 'subscription' && !['canceled', 'incomplete_expired'].includes(plan.status ?? '')
   const trialLeft = trial?.state === 'active' && plan?.kind === 'trial' && session && !beta ? trial.expiresAt - session.serverNow : null
-  const goToBilling = (kind: 'checkout' | 'portal', body: { plan: 'monthly' | 'annual' } | Record<string, never> = {}) =>
+  const countryReady = billingCountry.code !== '' && billingCountry.confirmed
+  const goToBilling = (kind: 'checkout' | 'portal', body: { plan: 'monthly' | 'annual'; country: string } | Record<string, never> = {}) =>
     void act(async () => { if (client) window.location.assign(await client.billingPage(kind, body)) })
   const daysLeft = trial && session
     ? Math.max(0, Math.ceil((trial.expiresAt - session.serverNow) / 86400000))
@@ -297,6 +301,8 @@ export function RemoteApp() {
     : code === 'sessionEnded' ? (beta ? t('remote.sessionEndedBeta') : t('remote.sessionEnded'))
     : code === 'alreadySubscribed' ? t('remote.billing.alreadySubscribed')
     : code === 'noSubscription' ? t('remote.billing.noSubscription')
+    // The billing Worker's answer for a country Remote is not sold in yet (the EU and the UK).
+    : code === 'countryNotServed' ? t('remote.billing.countryNotServed', { country: billingCountryName(billingCountry.code) })
     : code === 'billingNotAvailable' ? t('remote.billing.notAvailable')
     : code === 'subscriptionNotCancelled' ? t('remote.account.cancelFailed')
     : t('remote.requestFailed')
@@ -371,9 +377,11 @@ export function RemoteApp() {
         {client?.billing && trial && trial.state !== 'disabled' && <section className="rm-card remote-section remote-billing">
           <h2>{t('remote.billing.title')}</h2>
           {!subscribed && <>
+            <BillingCountryField choice={billingCountry} disabled={busy}
+              onChange={choice => { setBillingCountry(choice); if (error === 'countryNotServed') setError(null) }} />
             <div className="remote-actions">
-              <button className="remote-button remote-button--primary" disabled={busy} onClick={() => goToBilling('checkout', { plan: 'monthly' })}>{t('remote.billing.subscribeMonthly')}</button>
-              <button className="remote-button remote-button--primary" disabled={busy} onClick={() => goToBilling('checkout', { plan: 'annual' })}>{t('remote.billing.subscribeYearly')}</button>
+              <button className="remote-button remote-button--primary" disabled={busy || !countryReady} onClick={() => goToBilling('checkout', { plan: 'monthly', country: billingCountry.code })}>{t('remote.billing.subscribeMonthly')}</button>
+              <button className="remote-button remote-button--primary" disabled={busy || !countryReady} onClick={() => goToBilling('checkout', { plan: 'annual', country: billingCountry.code })}>{t('remote.billing.subscribeYearly')}</button>
             </div>
             <p>{t('remote.billing.renewalTerms')}</p>
             {trialLeft !== null && <p>{trialLeft >= TRIAL_KEPT_MS ? t('remote.billing.trialKept') : t('remote.billing.chargedNow')}</p>}

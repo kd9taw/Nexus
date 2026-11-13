@@ -2,8 +2,9 @@
 // for what jsdom cannot see: `scripts/browser-probe --desktop firstrun`.
 //
 // The probe serves the REAL app (index.html, main.tsx, App) with the app's own Vite config and src/api.ts
-// swapped for probe/firstrun-api.ts: a fresh install, so the wizard opens by itself. At 1024×768 (the
-// supported floor) and 1920×1080, in the dark theme, it asserts:
+// swapped for probe/firstrun-api.ts: a fresh install, so the wizard opens by itself. At the
+// representative screens (probe/sizes.mjs CORE: 1366×768 at 175 %, the floor, to 4K at 200 %), in the dark
+// theme, it asserts:
 //   1. ABOUT YOU: the wizard opens on "How much have you done?", inside the window, with the three answers
 //      and Next each the topmost thing where they stand, and nothing in the dialog or page sideways;
 //   2. FINISH: after "New to the hobby" and Next through the steps, the guide and walk offers are ticked and
@@ -23,13 +24,14 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { CORE, metrics } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
 const STUB_SRC = join(UI, 'probe', 'firstrun-api.ts')
 // Served under a name with no file behind it, beside the source, as the waterfalls probe does.
 const STUB_API = join(UI, 'probe', '__firstrun-api.ts')
-const SIZES = [[1024, 768], [1920, 1080]]
+const SIZES = CORE
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const HELPERS = `
@@ -174,7 +176,7 @@ const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
 
-async function run([W, H], control) {
+async function run(size, control) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -195,7 +197,7 @@ async function run([W, H], control) {
   const escape = () =>
     evaluate(`(() => { const d = document.querySelector('.gsg-dialog') ?? document.querySelector('.ui-dialog'); (d ?? document).dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); return 1 })()`)
   try {
-    await call('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false })
+    await call('Emulation.setDeviceMetricsOverride', metrics(size))
     await call('Page.navigate', { url: `${origin}/probe-blank` })
     await sleep(300)
     // A fresh install: nothing stored, so the wizard opens by itself.
@@ -252,7 +254,7 @@ async function run([W, H], control) {
 let code = 0
 try {
   for (const size of SIZES) {
-    const tag = `${size[0]}×${size[1]}`
+    const tag = size.name
     const r = await run(size, false)
     console.log(`firstrun-probe: ${tag}: ${JSON.stringify(r)}`)
     if (r.error) {
@@ -294,7 +296,7 @@ try {
       code = code || 1
     }
   }
-  if (code === 0) console.log(`firstrun-probe: PASS — About you with its three answers and Next on screen, Finish writes the answer, the guide then the walk with its four lines and Got it on screen, Settings ▸ Appearance folded with Show all reachable and opening it, nothing sideways, at ${SIZES.map(([w, h]) => `${w}×${h}`).join(', ')}; each control caught`)
+  if (code === 0) console.log(`firstrun-probe: PASS — About you with its three answers and Next on screen, Finish writes the answer, the guide then the walk with its four lines and Got it on screen, Settings ▸ Appearance folded with Show all reachable and opening it, nothing sideways, at ${SIZES.map((s) => s.name).join(', ')}; each control caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

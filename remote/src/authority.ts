@@ -55,7 +55,8 @@ export interface RemoteEnv {
 /** The billing Worker's RPC methods, as that Worker defines them: each answers `{ url }` (`cancel`:
  *  `{ cancelled }`) or `{ error, status }`. */
 export interface BillingService {
-  checkout(accountId: string, plan: 'monthly' | 'annual'): Promise<unknown>
+  /** `country`: the billing country the page asked for, an ISO 3166-1 alpha-2 code (countries.ts). */
+  checkout(accountId: string, plan: 'monthly' | 'annual', country: string): Promise<unknown>
   portal(accountId: string): Promise<unknown>
   /** Ends the account's live subscription at once, and closes its checkouts that could still be paid,
    *  answering `{ cancelled }` only once the payment provider shows nothing left that can charge. */

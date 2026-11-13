@@ -142,7 +142,10 @@ function useParkLine(ref: RefObject<HTMLElement | null>) {
       return
     }
     const cs = getComputedStyle(strip)
-    const z = q.height / strip.offsetHeight
+    // The strip's own zoom where the engine reports it (Chromium's `currentCSSZoom`); the ratio of its boxes elsewhere.
+    // Not the ratio here: `offsetHeight` is a whole number, so the ratio carries its rounding into every length below.
+    const cz = (strip as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom
+    const z = typeof cz === 'number' && cz > 0 ? cz : q.height / strip.offsetHeight
     // How far down the strip parks, layout px from its top: to the foot of a line, and the strip's own bottom padding
     // and border under it.
     const tail = (parseFloat(cs.paddingBottom) || 0) + (parseFloat(cs.borderBottomWidth) || 0)
@@ -155,7 +158,10 @@ function useParkLine(ref: RefObject<HTMLElement | null>) {
       const both = reachOf(alarm)
       if (both > reach && both <= room) reach = both
     }
-    const px = `${Math.max(0, Math.floor(strip.offsetHeight - reach))}px`
+    // EXACT, not rounded: the strip's own unrounded height (its rendered box over the zoom, not `offsetHeight`) less the
+    // reach. Rounded to a whole px, a line under Stop TX's that grew (the TX meters' first readings) moved the rounding
+    // error, and Stop TX with it: 0.8 px at 1366×768 at 175 % on the first transmit (measured in Chrome; 0.1 now).
+    const px = `${Math.max(0, Math.round((q.height / z - reach) * 100) / 100)}px`
     if (strip.style.getPropertyValue('--cockpit-ftstrip-rest') !== px) strip.style.setProperty('--cockpit-ftstrip-rest', px)
     const park = `${Math.ceil(reach * z)}px`
     if (shell && shell.style.getPropertyValue('--cockpit-ftstrip-park-h') !== park) shell.style.setProperty('--cockpit-ftstrip-park-h', park)
@@ -440,48 +446,57 @@ export function OperateQsoStrip({
                 : t('operate.strip.state.txOff')}
         </span>
       )}
-      {/* The rig has been moved out from under us — stated in the strip that is already always
-          visible, styled as the Phone/TopBar mismatch chip (one visual vocabulary, no new pane,
-          no structural size of its own: see cockpit-panes.css's contract). */}
-      {rigDiverged && (
+      {/* THE CONTACT'S WORDS, ONE BOX (2026-11-12): the rig-mode and filter chips, the AUTO-CQ pill, the sequencer
+          state, the DX call and the report change with the contact. As loose members on Stop TX's line a narrow strip
+          (1366×768 at 150–175 %) wrapped them onto a line of their own when Auto-CQ came on and again when the call
+          and report filled in, and the strip, parked at the foot of the shell, grew upward and moved Stop TX 29–35 px
+          (1.24.0, measured in Chrome). Wherever the strip breaks, the box is that line, always there at one height
+          (styles.css `.cq-status`), so nothing the contact does changes the strip's height and every word stands
+          whole; on the one-row xl strip it is sized by its words, as they were. */}
+      <span className="cq-status">
+        {/* The rig has been moved out from under us — stated in the strip that is already always
+            visible, styled as the Phone/TopBar mismatch chip (one visual vocabulary, no new pane,
+            no structural size of its own: see cockpit-panes.css's contract). */}
+        {rigDiverged && (
+          <span
+            className="cq-rigdiverge"
+            title={t('operate.strip.rigDiverge.title', {
+              rigMode: rigDiverged,
+              mode: radio?.sideband ?? '',
+            })}
+          >
+            {t('operate.strip.rigDiverge.label', { mode: rigDiverged })}
+          </span>
+        )}
+        {narrowFilter && (
+          <span
+            className="cq-rigdiverge"
+            title={t('operate.strip.narrowFilter.title', { hz: filterHz })}
+          >
+            {t('operate.strip.narrowFilter.label', { hz: filterHz })}
+          </span>
+        )}
+        {autoCq && (
+          <span
+            className="cq-autocq"
+            title={contestRun ? t('operate.strip.autoCq.contestTitle') : t('operate.strip.autoCq.title')}
+          >
+            <span className="cq-autocq-dot" aria-hidden="true" />
+            {AUTO_CQ_BADGE}
+          </span>
+        )}
+        {/* role=status: the sequencer state is THE QSO progress signal — a
+            screen reader hears "AwaitReport… RR73… Done" as the exchange runs. */}
         <span
-          className="cq-rigdiverge"
-          title={t('operate.strip.rigDiverge.title', {
-            rigMode: rigDiverged,
-            mode: radio?.sideband ?? '',
-          })}
+          className={`cq-state${running ? ' running' : ''}${watchdogStopped ? ' watchdog' : ''}`}
+          role="status"
+          title={watchdogStopped ? t('operate.strip.state.watchdog.title') : state}
         >
-          {t('operate.strip.rigDiverge.label', { mode: rigDiverged })}
+          {watchdogStopped ? t('operate.strip.state.watchdog') : state}
         </span>
-      )}
-      {narrowFilter && (
-        <span
-          className="cq-rigdiverge"
-          title={t('operate.strip.narrowFilter.title', { hz: filterHz })}
-        >
-          {t('operate.strip.narrowFilter.label', { hz: filterHz })}
-        </span>
-      )}
-      {autoCq && (
-        <span
-          className="cq-autocq"
-          title={contestRun ? t('operate.strip.autoCq.contestTitle') : t('operate.strip.autoCq.title')}
-        >
-          <span className="cq-autocq-dot" aria-hidden="true" />
-          {AUTO_CQ_BADGE}
-        </span>
-      )}
-      {/* role=status: the sequencer state is THE QSO progress signal — a
-          screen reader hears "AwaitReport… RR73… Done" as the exchange runs. */}
-      <span
-        className={`cq-state${running ? ' running' : ''}${watchdogStopped ? ' watchdog' : ''}`}
-        role="status"
-        title={watchdogStopped ? t('operate.strip.state.watchdog.title') : undefined}
-      >
-        {watchdogStopped ? t('operate.strip.state.watchdog') : state}
+        {dxcall && <span className="cq-dx mono" title={dxcall}>{dxcall}</span>}
+        {rpt && <span className="cq-rpt" title={t('operate.strip.report.title')}>{rpt}</span>}
       </span>
-      {dxcall && <span className="cq-dx mono">{dxcall}</span>}
-      {rpt && <span className="cq-rpt" title={t('operate.strip.report.title')}>{rpt}</span>}
 
       {/* Deliberate wrap point: below xl the strip breaks into a stable second row
           HERE (buttons + state readout above; sending/free-text/period/telemetry
@@ -630,7 +645,13 @@ export function OperateQsoStrip({
           {t('operate.strip.nextSlot.label', { secs: nextSlotSec })}
         </span>
       )}
-      {telemetry != null && <div className={`cq-telemetry${meterStyle === 'needle' ? ' needle' : ''}`}>{telemetry}</div>}
+      {/* `has-temps`: the radio or an amplifier reports a temperature, so the meters have a third row. Stable through a
+          contact (the rig's model and the amplifier's setup), so the cell's one height never changes mid-over. */}
+      {telemetry != null && (
+        <div className={`cq-telemetry${meterStyle === 'needle' ? ' needle' : ''}${radio && (radio.paTempC != null || radio.paTempMeter != null || radio.amp != null) ? ' has-temps' : ''}`}>
+          {telemetry}
+        </div>
+      )}
       {/* What the radio reports beside Tune while Tune is the Flex radio's own carrier: the last
           child, on a line of its own, so it never moves the clusters or the readouts. */}
       {radio && <RadioTuneNote radio={radio} />}

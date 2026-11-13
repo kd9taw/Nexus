@@ -4,7 +4,8 @@
 // Labels, Map on the left, zoom and Centre), a Layers panel, trails and labels, and the station card over the
 // map. The probe serves the REAL app (index.html, main.tsx, App) with the app's own Vite config and src/api.ts
 // swapped for probe/waterfalls-api.ts with probe/aprsmap-api.ts appended (a small local net, one car with a
-// track), opens APRS with fresh storage at 1024×768 and 1920×1080, and asserts:
+// track), opens APRS with fresh storage at the representative screens (probe/sizes.mjs CORE: 1366×768 at 175 %,
+// the floor, to 4K at 200 %), and asserts:
 //   1. Nothing scrolls sideways: not the page, not the cockpit.
 //   2. Stop TX and the TX latch are on screen and the topmost thing where they stand.
 //   3. Every control of the map's toolbar is inside the map and the topmost thing where it stands, and the
@@ -12,7 +13,7 @@
 //   4. The map draws: its canvas is the map's size and has stations and land painted on it.
 //   5. A station picked in the list opens its card inside the map, below the toolbar, with Follow on screen,
 //      and Stop TX and the latch are still on screen with the card open.
-// THE CONTROL, run every time: a planted rule that stops the toolbar wrapping (one 3000 px row) at 1024×768
+// THE CONTROL, run every time: a planted rule that stops the toolbar wrapping (one 3000 px row) at the floor
 // must make check 3 fail. If it passes, the check cannot fail and the probe says so instead of passing.
 //
 // exit: 0 every check held · 1 a red, or a control that could not fail · 2 the page never drew APRS
@@ -22,14 +23,12 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { CORE, metrics } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
 const STUB_API = join(UI, 'probe', '__aprsmap-api.ts')
-const SIZES = [
-  [1024, 768],
-  [1920, 1080],
-]
+const SIZES = CORE
 const FEATURES = JSON.stringify({ profile: 'custom', enabled: { aprs: true } })
 const PLANT = '.aprs-map-toolbar { flex-wrap: nowrap !important } .aprs-map-toolbar::after { content: ""; flex: 0 0 3000px }'
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -122,7 +121,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function measure([W, H], css = null) {
+async function measure(size, css = null) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -143,7 +142,7 @@ async function measure([W, H], css = null) {
     return m
   }
   try {
-    await call('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false })
+    await call('Emulation.setDeviceMetricsOverride', metrics(size))
     await call('Page.navigate', { url: `${origin}/probe-blank` })
     await sleep(300)
     const ls = { 'nexus.workspace': 'dx', 'nexus.features.v1': FEATURES, 'tempo-theme': 'dark' }
@@ -193,7 +192,7 @@ const red = (msg) => {
 }
 try {
   for (const size of SIZES) {
-    const tag = `${size[0]}×${size[1]}`
+    const tag = size.name
     const r = await measure(size)
     if (!r) {
       console.error(`aprsmap-probe: APRS at ${tag} never drew`)
@@ -201,15 +200,15 @@ try {
       throw new Error('no APRS')
     }
     const m = r.before
-    console.log(`aprsmap-probe: ${tag.padEnd(10)} viewport ${m.vp}, map ${m.wrap.w}×${m.wrap.h}, ${m.tools} toolbar controls, canvas painted ${m.canvas.painted}, card ${r.after.card ? 'open' : 'none'}`)
+    console.log(`aprsmap-probe: ${tag.padEnd(18)} viewport ${m.vp}, map ${m.wrap.w}×${m.wrap.h}, ${m.tools} toolbar controls, canvas painted ${m.canvas.painted}, card ${r.after.card ? 'open' : 'none'}`)
     for (const x of reds(tag, r)) red(x)
   }
   // THE CONTROL.
   const r = await measure(SIZES[0], PLANT)
-  const caught = r ? reds('1024×768 (planted)', r).filter((x) => x.includes('toolbar controls outside')) : []
+  const caught = r ? reds(`${SIZES[0].name} (planted)`, r).filter((x) => x.includes('toolbar controls outside')) : []
   if (caught.length === 0) red('CONTROL FAILED — a toolbar forced onto one 3000 px row passed check 3; the check cannot fail')
   else console.log(`aprsmap-probe: CONTROL — ${caught[0]} (caught)`)
-  if (code === 0) console.log('aprsmap-probe: PASS — the APRS map and its toolbar fit at 1024×768 and 1920×1080, the map draws, the card opens inside it, Stop TX and the TX latch stay on screen, and the control was caught')
+  if (code === 0) console.log(`aprsmap-probe: PASS — the APRS map and its toolbar fit at ${SIZES.map((s) => s.name).join(', ')}, the map draws, the card opens inside it, Stop TX and the TX latch stay on screen, and the control was caught`)
   process.exitCode = process.exitCode || code
 } catch (e) {
   if (!process.exitCode) {

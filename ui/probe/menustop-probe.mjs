@@ -30,13 +30,15 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { QHD, metrics, offMatrix } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
 const STUB_SRC = join(UI, 'probe', 'menustop-api.ts')
 const STUB_API = join(UI, 'probe', '__menustop-api.ts')
-/** [window W, H, the size class it must come out as]. */
-const SIZES = [[700, 800, 'xs'], [2560, 1440, 'xl']]
+/** [window (probe/sizes.mjs), the size class it must come out as]. 700×800 is below any supported screen — the xs
+ *  layout lives only in a window dragged that small (no supported screen reaches xs at the app's 100 %). */
+const SIZES = [[offMatrix(700, 800), 'xs'], [QHD, 'xl']]
 const SCREENS = ['logbook', 'operate']
 /** [name, the trigger's selector]: Help is on every screen; the band pill only where the screen draws it. */
 const MENUS = [['Help', `button.theme-chip[title="Help"]`], ['band', 'button.freq-channel']]
@@ -108,7 +110,7 @@ const browser = await chrome()
 
 /** One case: open `menu` on `screen` at `size` with a real click, then one real click on Stop TX. `plant` is
  *  null, 'lock' (the modal menu's pointer lock) or 'cover' (the menu over the whole window). */
-async function run([W, H], screen, [, trigger], plant) {
+async function run([win], screen, [, trigger], plant) {
   const style = (css) => `(() => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(css)}; document.head.appendChild(s); return 1 })()`
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
@@ -132,7 +134,7 @@ async function run([W, H], screen, [, trigger], plant) {
     await call('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 })
   }
   try {
-    await call('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false })
+    await call('Emulation.setDeviceMetricsOverride', metrics(win))
     await call('Page.navigate', { url: `${origin}/probe-blank` })
     await sleep(300)
     await evaluate(`localStorage.clear(); localStorage.setItem('nexus.workspace', 'dx'); localStorage.setItem('tempo-theme', 'dark'); localStorage.setItem('nexus.features.wizardSeen', '1'); localStorage.setItem('nexus-ui-scale-mode', '100'); 1`)
@@ -190,7 +192,7 @@ try {
   for (const size of SIZES) {
     for (const screen of SCREENS) {
       for (const menu of MENUS) {
-        const tag = `${size[0]}×${size[1]} ${screen} ${menu[0]}`
+        const tag = `${size[0].name} ${screen} ${menu[0]}`
         const r = await run(size, screen, menu, false)
         console.log(`menustop-probe: ${tag}: ${JSON.stringify(r)}`)
         if (r.error) {
@@ -208,7 +210,7 @@ try {
         }
         ran += 1
         const red = []
-        if (r.vp !== size[2]) red.push(`the window came out ${r.vp}, not ${size[2]}`)
+        if (r.vp !== size[1]) red.push(`the window came out ${r.vp}, not ${size[1]}`)
         // An <html> on top of the button is a page whose pointer events are locked (a modal menu), not a menu over it.
         if (r.covered) red.push(r.onTop === 'HTML' ? 'Stop TX takes no pointer events with the menu open (the page is locked)' : `the open menu covers every point of Stop TX (${r.onTop} is on top)`)
         if (r.halts !== 1) red.push(`one click on Stop TX stopped ${r.halts} times, not once`)
@@ -242,7 +244,7 @@ try {
     console.error(`menustop-probe: ${ran} of ${all} cases ran`)
     code = code || 1
   }
-  if (code === 0) console.log(`menustop-probe: PASS — ${ran} cases: with Help or the band menu open, one real click on Stop TX stopped once, closed the menu and left the keyboard on Stop TX, at ${SIZES.map(([w, h, v]) => `${w}×${h} (${v})`).join(' and ')} on ${SCREENS.join(' and ')}; each planted modal lock and covering menu caught`)
+  if (code === 0) console.log(`menustop-probe: PASS — ${ran} cases: with Help or the band menu open, one real click on Stop TX stopped once, closed the menu and left the keyboard on Stop TX, at ${SIZES.map(([s, v]) => `${s.name} (${v})`).join(' and ')} on ${SCREENS.join(' and ')}; each planted modal lock and covering menu caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

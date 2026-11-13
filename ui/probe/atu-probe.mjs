@@ -1,8 +1,9 @@
 // The TX strip's ATU button and its "Switch tuner out" menu in real Chrome, for what jsdom cannot see:
 // `scripts/browser-probe --desktop atu`.
 //
-// The probe serves src/probe/atu.tsx with the app's own Vite config at 1024×768 (the supported floor) and
-// 1920×1080, in the dark and the light theme, and asserts:
+// The probe serves src/probe/atu.tsx with the app's own Vite config at the representative screens
+// (probe/sizes.mjs CORE: 1366×768 at 175 %, the floor, to 4K at 200 %), in the dark and the light theme,
+// and asserts:
 //   · nothing scrolls sideways: the page, the strip and its control group are no wider than they show;
 //   · TX On, Tune, ATU and Stop TX are each the topmost thing where they stand;
 //   · Stop TX does not move when the button reads ATU ON instead of ATU (the label's width floor);
@@ -24,12 +25,10 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { CORE, metrics } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
-const SIZES = [
-  { w: 1024, h: 768 },
-  { w: 1920, h: 1080 },
-]
+const SIZES = CORE
 const THEMES = ['dark', 'light']
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -96,7 +95,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function page(w, h, q) {
+async function page(size, q) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -104,7 +103,7 @@ async function page(w, h, q) {
     const r = await call('Runtime.evaluate', { expression, returnByValue: true })
     return r.exceptionDetails ? { error: r.exceptionDetails.exception?.description ?? r.exceptionDetails.text } : r.result.value
   }
-  await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+  await call('Emulation.setDeviceMetricsOverride', metrics(size))
   await call('Page.navigate', { url: `${origin}/probe/atu.html?${q}` })
   let last = null
   for (let i = 0; i < 80; i++) {
@@ -139,12 +138,12 @@ function faults(m) {
 
 let code = 0
 try {
-  for (const { w, h } of SIZES) {
+  for (const size of SIZES) {
     for (const theme of THEMES) {
-      const at = `${w}×${h} ${theme}`
-      const off = await page(w, h, `atu=off&theme=${theme}`)
+      const at = `${size.name} ${theme}`
+      const off = await page(size, `atu=off&theme=${theme}`)
       await browser.call('Target.closeTarget', { targetId: off.targetId })
-      const on = await page(w, h, `atu=on&theme=${theme}`)
+      const on = await page(size, `atu=on&theme=${theme}`)
       const red = []
       if (!on.m || on.m.error || !off.m || off.m.error) {
         console.error(`atu-probe: the strip never drew at ${at}: ${JSON.stringify(on.m ?? off.m)}`)
@@ -190,7 +189,7 @@ try {
         console.error(`atu-probe: RED at ${at} — ${red.join('; ')}`)
         code = code || 1
       }
-      const c = await page(w, h, `atu=on&theme=${theme}&control=1`)
+      const c = await page(size, `atu=on&theme=${theme}&control=1`)
       await browser.call('Target.closeTarget', { targetId: c.targetId })
       const caught = c.m && !c.m.error ? faults(c.m) : []
       console.log(`atu-probe: CONTROL window ${at}: caught ${JSON.stringify(caught)}`)
@@ -200,7 +199,7 @@ try {
       }
     }
   }
-  if (code === 0) console.log(`atu-probe: PASS — TX On, Tune, ATU and Stop TX on screen with nothing sideways, Stop TX still as ATU reads ATU ON, ATU ON lit, a click tunes, the right-click and touch menu switches the tuner out clear of Stop TX, at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')} in ${THEMES.join(' and ')}; each control caught`)
+  if (code === 0) console.log(`atu-probe: PASS — TX On, Tune, ATU and Stop TX on screen with nothing sideways, Stop TX still as ATU reads ATU ON, ATU ON lit, a click tunes, the right-click and touch menu switches the tuner out clear of Stop TX, at ${SIZES.map((s) => s.name).join(', ')} in ${THEMES.join(' and ')}; each control caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

@@ -7,7 +7,11 @@
 // refused). The engine's state carries a Log QSO prompt for W1AW.
 //
 // `?edit=1` presses Edit keys once the dock is drawn. `&control=1` is the CONTROL: a box laid over the
-// Messages box and the prompt's Log QSO, which the probe must see as covered.
+// Messages box and the prompt's Log QSO, which the probe must see as covered. `&zoom=<n>` sets the UI scale
+// (`--ui-zoom`): the app's own fit on the floor screen is 0.65. `&reach=1` judges the prompt's parts as the operator
+// reaches them on a cockpit taller than its window: on screen and topmost at SOME position of the shell's own scroll
+// (the dock's parts are still judged where they stand, unscrolled). `&hide=1` is the REACH CONTROL: the prompt's words
+// left unpainted, which no scroll can bring on screen.
 import '../styles.css'
 import '../cockpit-panes.css'
 import { useEffect } from 'react'
@@ -21,6 +25,9 @@ import type { AppSnapshot, JttyState } from '../types'
 const params = new URLSearchParams(location.search)
 const control = params.get('control') === '1'
 const edit = params.get('edit') === '1'
+const reach = params.get('reach') === '1'
+if (params.get('zoom')) document.documentElement.style.setProperty('--ui-zoom', params.get('zoom')!)
+if (params.get('hide') === '1') document.head.appendChild(Object.assign(document.createElement('style'), { textContent: '.jtty-log-prompt [role="status"] { visibility: hidden }' }))
 
 document.documentElement.setAttribute('data-theme', 'dark')
 localStorage.clear()
@@ -121,6 +128,29 @@ function measure() {
   }
   const seen: Record<string, boolean> = {}
   for (const [k, v] of Object.entries(parts)) seen[k] = Array.isArray(v) ? v.length === 8 && v.every(onScreen) : onScreen(v)
+  // REACH: a prompt part off screen is looked for at every position of the scrollers over it — the shell (the layout
+  // contract's deficit valve) and the log column inside it, as the operator scrolls them — and the scrolls put back.
+  if (reach && prompt) {
+    const scrollers: HTMLElement[] = []
+    for (let a = prompt.parentElement; a; a = a.parentElement)
+      if (a.scrollHeight > a.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(a).overflowY)) scrollers.push(a)
+    const [inner, outer] = [scrollers[0], scrollers[scrollers.length - 1]]
+    if (inner && outer) {
+      const saved = scrollers.map((e) => e.scrollTop)
+      const steps = (e: HTMLElement) => { const max = e.scrollHeight - e.clientHeight; const out: number[] = []; for (let y = 0; y <= max + 5; y += 6) out.push(Math.min(y, max)); return out }
+      for (const k of ['promptText', 'promptNote', 'logQso', 'notNow']) {
+        for (const o of steps(outer)) {
+          if (seen[k]) break
+          outer.scrollTop = o
+          for (const i of inner === outer ? [o] : steps(inner)) {
+            inner.scrollTop = i
+            if ((seen[k] = onScreen(parts[k] as Element | null))) break
+          }
+        }
+      }
+      scrollers.forEach((e, n) => { e.scrollTop = saved[n] })
+    }
+  }
   return { viewport: document.documentElement.dataset.viewport, keys: (parts.keys as Element[]).length, seen, refused: [...refused] }
 }
 ;(window as unknown as { __jttyProbe: () => unknown }).__jttyProbe = () => (document.querySelector('.jtty-log-prompt') ? measure() : null)
