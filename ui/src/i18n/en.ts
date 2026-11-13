@@ -12345,7 +12345,9 @@ export const EN = {
     "Tune keys nothing here: its 1500 Hz tone would be outside your license privileges on this frequency.",
   'operate.strip.atu.radioStatus': 'Radio ATU: {{status}}',
   'operate.strip.atu.carrierRefused':
-    "ATU keys nothing here: the radio's own carrier at your dial, {{mhz}} MHz, would be outside your license privileges.",
+    "ATU keys nothing here: its tune carrier would go out at your dial, {{mhz}} MHz, outside what your license allows for a carrier. This refuses only the ATU: your current mode may transmit here.",
+  'operate.strip.atu.carrierRefused60':
+    "ATU keys nothing here: its tune carrier would go out at your dial, {{mhz}} MHz, and on a 60 m channel a carrier must sit on the channel's centre. This refuses only the ATU: your current mode, FT8 included, may transmit here.",
   'operate.strip.atu.radioRefused':
     "ATU keys nothing here: the radio's own carrier would be outside your CW privileges on this frequency.",
 

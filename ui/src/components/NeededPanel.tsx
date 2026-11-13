@@ -49,6 +49,7 @@ import { pollSingleFlight } from '../singleFlight'
 import { RarityChip } from './RarityChip'
 import { NEED_CHIP, stateChipTitle } from '../features/needVisuals'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { bandRangeForLabel } from '../band'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
 import { fmtKmTokens, useUnits } from '../units'
@@ -191,7 +192,7 @@ function saveFilters(key: string, f: NeededFilters): void {
 
 // Band list shown in the filter bar: common HF + VHF bands (always present).
 // In the rendered bar these are augmented with bands from current alerts.
-const COMMON_BANDS = ['160m', '80m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m']
+const COMMON_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m']
 
 /** The need-type chips, in the order they are shown. Each VALUE is a persisted token. */
 const NEED_TYPE_OPTS: NeedTypeFilter[] = [
@@ -433,16 +434,10 @@ export function NeededPanel({
 
   // All distinct bands present in the current alerts, merged with the common list.
   const availableBands = useMemo(() => {
-    const alertBands = new Set(alerts.map((a) => a.band))
-    // Preserve COMMON_BANDS order, then append any alert bands not in the common list.
-    const result: string[] = []
-    for (const b of COMMON_BANDS) {
-      result.push(b)
-    }
-    for (const b of alertBands) {
-      if (!result.includes(b)) result.push(b)
-    }
-    return result
+    // #506: one list in band order, low to high — an alert's band (60 m, 2 m, 70 cm) used to be
+    // appended after 6 m in the order it arrived. A label with no known edges goes last.
+    const low = (b: string) => bandRangeForLabel(b)?.lo ?? Infinity
+    return [...new Set([...COMMON_BANDS, ...alerts.map((a) => a.band)])].sort((a, b) => low(a) - low(b))
   }, [alerts])
 
   const toggleNeedType = useCallback((value: NeedTypeFilter) => {

@@ -144,13 +144,24 @@ describe('beside the ATU, while the ATU is the radio’s own', () => {
     )
   })
 
-  it('says why the ATU keys nothing on any CAT path, naming the radio’s carrier at the dial', () => {
+  // #506: the line read like a licence refusal of the over itself, and a US Extra on 60 m FT8 took
+  // it to mean he could not transmit. It is shown only while the current mode MAY key
+  // (engine: `tx_allowed()`), so it says the refusal is the ATU's tune carrier alone.
+  it('says why the ATU keys nothing on any CAT path, naming the tune carrier at the dial, and that the mode may transmit', () => {
     render(<RadioTuneNote radio={radio({ atuCarrierRefusedMhz: 14.024 })} />)
     expect(screen.getByRole('note').textContent).toBe(
-      "ATU keys nothing here: the radio's own carrier at your dial, 14.0240 MHz, would be outside your license privileges.",
+      'ATU keys nothing here: its tune carrier would go out at your dial, 14.0240 MHz, outside what your license ' +
+        'allows for a carrier. This refuses only the ATU: your current mode may transmit here.',
     )
     cleanup()
     expect(note(radio({ atuCarrierRefusedMhz: null }))).toBeNull()
+  })
+
+  it('on a 60 m channel, says the tune carrier must sit on the channel centre, and that FT8 may transmit (#506)', () => {
+    expect(note(radio({ dialMhz: 5.3715, band: '60m', atuCarrierRefusedMhz: 5.3715 }))).toBe(
+      "ATU keys nothing here: its tune carrier would go out at your dial, 5.3715 MHz, and on a 60 m channel a carrier must sit on the channel's centre. " +
+        'This refuses only the ATU: your current mode, FT8 included, may transmit here.',
+    )
   })
 
   it('says why the ATU keys nothing when the licence refuses the radio’s carrier here', () => {

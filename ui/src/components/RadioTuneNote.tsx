@@ -29,8 +29,15 @@ export function RadioTuneNote({ radio }: { radio: RadioStatus }) {
   const tuneRefusals = [
     radio.tuneToneRefused && <span key="tone">{t('operate.strip.tune.toneRefused')}</span>,
     radio.tuneOverRefused && <span key="over">{t('operate.strip.tune.overRefused')}</span>,
+    // #506: shown only while the current mode MAY key (engine: `tx_allowed()`), so it says the
+    // refusal is the ATU's tune carrier alone, never the over — and on 60 m, where a carrier must
+    // sit on a channel's centre, it says so: the line used to read like a licence refusal of FT8.
     radio.atuCarrierRefusedMhz != null && (
-      <span key="atu">{t('operate.strip.atu.carrierRefused', { mhz: radio.atuCarrierRefusedMhz.toFixed(4) })}</span>
+      <span key="atu">
+        {onSixty(radio.atuCarrierRefusedMhz)
+          ? t('operate.strip.atu.carrierRefused60', { mhz: radio.atuCarrierRefusedMhz.toFixed(4) })
+          : t('operate.strip.atu.carrierRefused', { mhz: radio.atuCarrierRefusedMhz.toFixed(4) })}
+      </span>
     ),
   ].filter(Boolean)
   if (!readouts) {
@@ -55,6 +62,12 @@ export function RadioTuneNote({ radio }: { radio: RadioStatus }) {
       )}
     </span>
   )
+}
+
+/** On 60 m (5.25–5.45 MHz, wider than every channel and the segment), where the licence's rule for a
+ *  carrier is the channel's centre. */
+function onSixty(mhz: number): boolean {
+  return mhz >= 5.25 && mhz <= 5.45
 }
 
 /** The radio's transmit timeout in the unit it reads best in: whole minutes from two minutes up,
