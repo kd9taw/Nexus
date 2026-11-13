@@ -65,7 +65,7 @@ interface Props {
   /** hero = big focal readout (var(--fs-display)); compact = strip-sized (17px). */
   size?: 'hero' | 'compact'
   /** When set, clicking (or Enter/Space) swaps to a MHz entry input; onCommit fires on Enter, or
-   * when the field is left holding a valid frequency. Esc cancels. */
+   * when the operator clicks elsewhere in the app with a valid frequency in it. Esc cancels. */
   editable?: boolean
   onCommit?: (mhz: number) => void
   /** Out-of-band / TX-inhibited — the number renders in the TX (red) color. */
@@ -110,7 +110,9 @@ interface Props {
  * #511/#454 — BLUR COMMITS, on every surface. It used to cancel on a live rig, so typing a
  * frequency and clicking anywhere else threw it away without a word (SSTV, the cockpit headers);
  * only the staged Settings form committed on blur. Something that is not a frequency still
- * commits nothing, exactly as Enter refuses it.
+ * commits nothing, exactly as Enter refuses it. Two blurs the operator did not cause never
+ * commit: the window losing focus, and a dialog opening by itself and taking focus. Both leave
+ * the draft open for the operator to finish or Esc.
  */
 export function FrequencyReadout({
   dialMhz,
@@ -225,7 +227,19 @@ export function FrequencyReadout({
               setEditing(false)
             }
           }}
-          onBlur={commit}
+          onBlur={(e) => {
+            // The WINDOW lost focus (alt-tab, a notification, another program): not the operator leaving the
+            // field. Keep the draft open and uncommitted; Chromium refocuses this input when the window returns
+            // (measured: blur with document.hasFocus() false, focus again on return).
+            if (!document.hasFocus()) return
+            // A dialog that opened by itself (the log prompt's autoFocus) took focus: never tune on that.
+            // The draft stays open, uncommitted, for the operator to finish or Esc. A dialog the field is
+            // itself inside (a staged Settings form) still commits as before.
+            const to = e.relatedTarget instanceof Element ? e.relatedTarget : null
+            const dialog = to?.closest('[role="dialog"],[role="alertdialog"]')
+            if (dialog && !dialog.contains(e.currentTarget)) return
+            commit()
+          }}
           aria-label={t('freq.readout.dial.label')}
         />
         <span className="readout-unit">{MHZ}</span>

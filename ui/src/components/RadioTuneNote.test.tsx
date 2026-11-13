@@ -164,6 +164,20 @@ describe('beside the ATU, while the ATU is the radio’s own', () => {
     )
   })
 
+  // Review of #506: off a channel the 60 m line was wrong. A dial just below the 60 m segment
+  // (5.3505, FT8 at +1500 Hz on 5.3520) is refused for the ATU and is on no channel, so it gets
+  // the general line. The 60 m line is chosen by a channel's span (centre −1.5 kHz to +1.4 kHz).
+  it('off a 60 m channel the note does not claim one', () => {
+    expect(note(radio({ dialMhz: 5.3505, band: '60m', atuCarrierRefusedMhz: 5.3505 }))).toBe(
+      'ATU keys nothing here: its tune carrier would go out at your dial, 5.3505 MHz, outside what your license ' +
+        'allows for a carrier. This refuses only the ATU: your current mode may transmit here.',
+    )
+    for (const mhz of [5.3305, 5.3334, 5.3465, 5.4035, 5.4064]) {
+      expect(note(radio({ atuCarrierRefusedMhz: mhz })), `${mhz} is on a channel`).toContain('on a 60 m channel')
+    }
+    expect(note(radio({ atuCarrierRefusedMhz: 5.3335 })), 'just above ch 5.3320').not.toContain('on a 60 m channel')
+  })
+
   it('says why the ATU keys nothing when the licence refuses the radio’s carrier here', () => {
     expect(note(radio({ flexAtu: atu({}), flexAtuRefused: true }))).toBe(
       'Radio tune power 10 %Radio TX timeout 30 s' +
