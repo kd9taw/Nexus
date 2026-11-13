@@ -1665,6 +1665,34 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
   }
 })
 
+describe("FT's waterfall has the keyboard cockpits' yielding floor, and its divider stops there (2026-11-12)", () => {
+  // It had none: the strip gave way to the lower region's floor first and alone, and on the smallest supported screen
+  // (1366×768 at 175 %, which the app fits to 65 %) it was 38 px, its own head, with a 0 px picture, under a divider
+  // that declared 88. Its ceiling is the sheet's 60 % of the SHELL, a share no declared length tracks, so only the
+  // floor is compared — at the same four geometries as every other strip's.
+  const GEOMS: Geom[] = [
+    { fontPx: 14, vhEff: 768 },
+    { fontPx: 14, vhEff: 1440 },
+    { fontPx: 16, vhEff: 768 },
+    { fontPx: 14, vhEff: 384 },
+  ]
+  const chain = [...shellChain('operate-cockpit'), new Set(['cockpit-body']), new Set(['cockpit-waterfall', 'panel'])]
+  it('.operate-cockpit .cockpit-waterfall: the divider’s min equals the sheet’s min-height at every geometry', () => {
+    const src = readFileSync(fileURLToPath(new URL('./components/OperateCockpit.tsx', import.meta.url)), 'utf8')
+    const at = src.indexOf('varName="--cockpit-wf-h"')
+    expect(at, 'no <PaneSeam varName="--cockpit-wf-h" …> in OperateCockpit').toBeGreaterThan(-1)
+    const seam = src.slice(src.lastIndexOf('<PaneSeam', at), src.indexOf('/>', at))
+    expect(/\bmin=\{WATERFALL_SPLIT_MIN\}/.test(seam), `FT's waterfall divider declares ${/\bmin=\{([^}]*)\}/.exec(seam)?.[1]}`).toBe(true)
+    const sheet = winningValue(chain, blockLonghand('min-height'))
+    expect(sheet, '.cockpit-waterfall: nothing declares min-height').not.toBeNull()
+    for (const g of GEOMS) {
+      const want = lengthPx(sheet!.value, g)
+      expect(want, `\`${sheet!.value}\` (${sheet!.selector}) is unreadable as a length`).not.toBeNull()
+      expect(want!, `FT's waterfall floor at font ${g.fontPx}px / --vh-eff ${g.vhEff}px`).toBeCloseTo(resolveClamp(WATERFALL_SPLIT_MIN, g), 6)
+    }
+  })
+})
+
 // THE REGION'S COLUMN DIVIDERS NEVER PAINT OVER A TX SURFACE. A column divider
 // (components/panes/RegionColumnSeams: `.pane-splitter.cockpit-colseam`) is the full height of the
 // pane region. While the shell's deficit valve scrolls (CW at 1920×1080 pinned at 150 %), the sticky

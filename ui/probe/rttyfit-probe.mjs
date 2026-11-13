@@ -4,8 +4,8 @@
 // had fit before (1.21.0): 117 px at 1920×1080 with the UI pinned at 150 %, and more than before at 1366×768 at
 // 125 % and 150 %. The probe serves the REAL app (index.html, main.tsx, App) with the app's own Vite config and src/api.ts
 // swapped for probe/waterfalls-api.ts (the waterfalls probe's answers), opens RTTY with fresh storage at the
-// common full-screen sizes (at the zoom the app fits there) and at 125 % and 150 % pinned on 1920×1080 and
-// 1366×768, with the tuning scope shown (its default) and hidden, and asserts:
+// common screens (probe/sizes.mjs: the floor, 1366×768 at 175 %, to 4K at 200 %, OS-scaled where named; at the
+// zoom the app fits there) and at the app's 125 % and 150 % pinned on 1920×1080 and 1366×768, with the tuning scope shown (its default) and hidden, and asserts:
 //   1. THE COCKPIT SCROLLS NO MORE THAN 1.21.0 DID: `main.rtty-cockpit`'s own scroll range (the deficit valve,
 //      which scrolls the header away) is at most BEFORE's for that size, measured with this probe on 1.21.0;
 //      0 wherever it was 0. The page itself never scrolls.
@@ -24,15 +24,16 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { FHD, FHD_125, FHD_150, FLOOR, LAPTOP, MID_1536, QHD, UHD_200, metrics } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
 const STUB_SRC = join(UI, 'probe', 'waterfalls-api.ts')
 const STUB_API = join(UI, 'probe', '__rttyfit-api.ts')
-/** [window W, H, pinned UI scale or null for the app's own fit]. */
+/** A screen (probe/sizes.mjs) and the app's pinned UI scale, or null for the app's own fit. */
 const SIZES = [
-  [1024, 768, null], [1280, 720, null], [1366, 768, null], [1536, 864, null], [1920, 1080, null], [2560, 1440, null],
-  [1920, 1080, '125'], [1920, 1080, '150'], [1366, 768, '125'], [1366, 768, '150'],
+  [FLOOR, null], [FHD_150, null], [FHD_125, null], [LAPTOP, null], [MID_1536, null], [FHD, null], [QHD, null], [UHD_200, null],
+  [FHD, '125'], [FHD, '150'], [LAPTOP, '125'], [LAPTOP, '150'],
 ]
 /** The most the cockpit may scroll at each size, its own CSS px (`scrollHeight - clientHeight` of the shell), with
  *  the tuning scope shown or hidden. Measured with this probe on 1.21.0, in its default layout (scope shown):
@@ -41,8 +42,12 @@ const SIZES = [
  *  was about (the app's own fixtures measured 0 there on 1.21.0). With the scope hidden 1.21.0 scrolled more
  *  (117 / 281 / 379); the scope no longer changes RTTY's height, so both are held to the same ceiling. */
 const BEFORE = {
-  '1024×768 fit': 0, '1280×720 fit': 0, '1366×768 fit': 0, '1536×864 fit': 0, '1920×1080 fit': 0, '2560×1440 fit': 0,
+  '1366×768 fit': 0, '1536×864 fit': 0, '1920×1080 fit': 0, '2560×1440 fit': 0,
   '1920×1080 125 %': 0, '1920×1080 150 %': 0, '1366×768 125 %': 141, '1366×768 150 %': 239,
+  // New with the 2026-11 screen matrix, so never measured on 1.21.0: OS-scaled screens. Each is a size the app fits by
+  // itself, so each is held to the fit rule's 0. (This browser runs the classic fit; the app's scaled rule is Tauri's
+  // alone and only ever picks a smaller zoom, so these are the tighter case.)
+  [`${FLOOR.name} fit`]: 0, [`${FHD_150.name} fit`]: 0, [`${FHD_125.name} fit`]: 0, [`${UHD_200.name} fit`]: 0,
 }
 const FEATURES = JSON.stringify({ profile: 'custom', enabled: { rtty: true } })
 const NO_TUNING = { 'nexus.panels.rtty.main': JSON.stringify({ v: 1, state: { tuning: 'removed' }, share: {} }) }
@@ -121,7 +126,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function measure([W, H, scale], extra = {}, css = null) {
+async function measure([size, scale], extra = {}, css = null) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -131,7 +136,7 @@ async function measure([W, H, scale], extra = {}, css = null) {
     return r.result.value
   }
   try {
-    await call('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false })
+    await call('Emulation.setDeviceMetricsOverride', metrics(size))
     await call('Page.navigate', { url: `${origin}/probe-blank` })
     await sleep(300)
     const ls = { 'nexus.workspace': 'dx', 'nexus.features.v1': FEATURES, 'tempo-theme': 'dark', ...(process.env.NEXUS_PROBE_LOCALE ? { 'nexus.locale': process.env.NEXUS_PROBE_LOCALE } : {}), ...(scale ? { 'nexus-ui-scale-mode': scale } : {}), ...extra }
@@ -157,7 +162,7 @@ async function measure([W, H, scale], extra = {}, css = null) {
   }
 }
 
-const tagOf = ([W, H, s]) => `${W}×${H} ${s ? `${s} %` : 'fit'}`
+const tagOf = ([size, s]) => `${size.name} ${s ? `${s} %` : 'fit'}`
 /** Checks 1-3 for one page; `which` 0 = scope shown, 1 = hidden. */
 function reds(tag, which, m) {
   const out = []
@@ -194,10 +199,10 @@ try {
       row.push(`${which ? 'hidden' : 'shown'}: cockpit scrolls ${m.valve} px (at most ${BEFORE[tag]}), strip ${m.strip} px, zoom ${m.z}`)
       for (const r of reds(tag, which, m)) red(r)
     }
-    console.log(`rttyfit-probe: ${tag.padEnd(16)} tuning scope ${row.join(' · tuning scope ')}`)
+    console.log(`rttyfit-probe: ${tag.padEnd(22)} tuning scope ${row.join(' · tuning scope ')}`)
   }
   // THE CONTROL.
-  const size = [1920, 1080, '150']
+  const size = [FHD, '150']
   const m = await measure(size, {}, PLANT)
   const caught = m ? reds(tagOf(size), 0, m).filter((r) => r.includes('cockpit scrolls')) : []
   if (caught.length === 0) red(`CONTROL FAILED — a planted 120 px margin under the strip passed check 1 (cockpit scrolls ${m?.valve}); the check cannot fail`)

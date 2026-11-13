@@ -9,11 +9,11 @@
 // large: the entry's parts on screen and nothing under it. Then both layouts again with the optional "RST
 // sent" box turned on, one more box in the entry, at the floor and large.
 //
-// Then THE LINE A LAST CONTACT'S EDIT LEAVES, at the 420×320 floor, 640×480, 1024×768 (the supported
-// floor) and 1920×1080: twelve contacts at a club, the newest one's Edit clicked, and the club's refusal
+// Then THE LINE A LAST CONTACT'S EDIT LEAVES, at the 420×320 floor, 640×480, the smallest supported screen
+// (1366×768 at the OS's 175 %, a 780×438 window; probe/sizes.mjs) and 1920×1080: twelve contacts at a club, the newest one's Edit clicked, and the club's refusal
 // it leaves must be wholly on screen, with every part of the entry where it was before the click (the
 // same box, to the pixel) and still on screen. Its control: the tenth row of the list, below the list's
-// scrolled edge at 1024×768, must come back NOT on screen, so the check can see a line the list's
+// scrolled edge on the smallest screen, must come back NOT on screen, so the check can see a line the list's
 // scroller hides.
 //
 // THE CONTROL, run every time: the same window 100 px shorter than the floor, where the newest contact
@@ -32,10 +32,12 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { FHD, FLOOR as SCREEN_FLOOR, QHD, offMatrix } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
-const FLOOR = { w: 420, h: 320 }
-const SIZES = [FLOOR, { w: 640, h: 480 }, { w: 2560, h: 1440 }]
+// The window's own floor and a small one are pop-out sizes, off the screen matrix on purpose.
+const FLOOR = offMatrix(420, 320)
+const SIZES = [FLOOR, offMatrix(640, 480), QHD]
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** Each part, and whether it is on screen: inside the window, held by every ancestor that clips its
@@ -128,7 +130,7 @@ async function measure(w, h, layout = 'full', rstsent = false) {
 
 /** The edit scenario at `w`×`h`: the entry's boxes before and after the newest contact's Edit, and
  *  what is on screen after it. */
-async function measureEdit(w, h) {
+async function measureEdit(w, h, scale = 1) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -136,7 +138,7 @@ async function measureEdit(w, h) {
     const r = await call('Runtime.evaluate', { expression, returnByValue: true })
     return r.exceptionDetails ? null : r.result.value
   }
-  await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+  await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: scale, mobile: false })
   await call('Page.navigate', { url: `${origin}/probe/contestlog.html?panel=contestlog&edit=club` })
   let before = null
   for (let i = 0; i < 100; i++) {
@@ -183,8 +185,8 @@ async function caret(w, h) {
 
 let code = 0
 try {
-  for (const { w, h } of [FLOOR, SIZES[1], { w: 1024, h: 768 }, { w: 1920, h: 1080 }]) {
-    const m = await measureEdit(w, h)
+  for (const { w, h, scale } of [FLOOR, SIZES[1], SCREEN_FLOOR, FHD]) {
+    const m = await measureEdit(w, h, scale)
     console.log(`contestlog-probe: edit at a club, window ${w}×${h}: ${JSON.stringify(m)}`)
     const { note, tenth, newest, dupe, ...entryParts } = m?.seen ?? {}
     if (!m || !m.clicked || !m.before) {
@@ -193,8 +195,8 @@ try {
     } else if (!note || !/club/i.test(m.note ?? '') || m.moved || !Object.values(entryParts).every(Boolean)) {
       console.error(`contestlog-probe: RED edit at ${w}×${h} — the line is off screen, or an entry part moved or is covered`)
       code = code || 1
-    } else if (w === 1024 && tenth) {
-      console.error('contestlog-probe: CONTROL FAILED — the tenth row came back on screen at 1024×768; the check cannot see the scroller')
+    } else if (w === SCREEN_FLOOR.w && tenth) {
+      console.error(`contestlog-probe: CONTROL FAILED — the tenth row came back on screen at ${SCREEN_FLOOR.name}; the check cannot see the scroller`)
       code = code || 1
     }
   }
@@ -255,7 +257,7 @@ try {
     console.error('contestlog-probe: CONTROL FAILED — the newest contact under the floor came back on screen; the check cannot fail')
     code = code || 1
   }
-  if (code === 0) console.log(`contestlog-probe: PASS — a last contact's edit line on screen, the entry unmoved, at ${FLOOR.w}×${FLOOR.h}, ${SIZES[1].w}×${SIZES[1].h}, 1024×768 and 1920×1080 (the tenth row clipped at 1024×768); the entry, the dupe warning, the newest contact and Keep in front on screen at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}; the entry alone at ${FLOOR.w}×${FLOOR.h} and ${SIZES[2].w}×${SIZES[2].h}; both again with the RST sent box on; the caret kept in the Call box; and the control below the floor clipped`)
+  if (code === 0) console.log(`contestlog-probe: PASS — a last contact's edit line on screen, the entry unmoved, at ${FLOOR.w}×${FLOOR.h}, ${SIZES[1].w}×${SIZES[1].h}, ${SCREEN_FLOOR.name} and 1920×1080 (the tenth row clipped at ${SCREEN_FLOOR.name}); the entry, the dupe warning, the newest contact and Keep in front on screen at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}; the entry alone at ${FLOOR.w}×${FLOOR.h} and ${SIZES[2].w}×${SIZES[2].h}; both again with the RST sent box on; the caret kept in the Call box; and the control below the floor clipped`)
   process.exitCode = code
 } finally {
   await browser.stop()

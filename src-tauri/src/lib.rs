@@ -166,6 +166,8 @@ mod tci_spots;
 /// Test builds only: no test reads or writes the operator's own Nexus folders.
 #[cfg(test)]
 mod test_dirs;
+/// Windows: the installer an automatic update leaves in Temp, removed at the next start.
+mod updater_leftovers;
 mod window_state;
 
 use chains::{panel_key, panel_label, Instance};
@@ -54332,6 +54334,9 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             // an unreferenced module: bug #10, the 4K operator who re-dragged the same corner
             // every session.
             window_state::install(app.handle());
+            // Clear the installer the last automatic update left in Temp (Windows; off the UI
+            // thread, best-effort, never fails the start).
+            updater_leftovers::spawn(app.handle());
             // ★ THE MILESTONE THAT MATTERS MOST. Everything that can leave an operator with a
             // window-less process — the WebView2 runtime, a corrupt user-data folder, a
             // quarantined DLL — happens BEFORE this line, inside Tauri's own window creation.

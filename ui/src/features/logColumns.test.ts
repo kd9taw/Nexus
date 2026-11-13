@@ -35,6 +35,15 @@ const OLD_NARROW = 'minmax(96px, 1fr) 1.3fr 0.7fr 0.7fr 1fr minmax(80px, 80px)'
 const OLD_WIDE =
   'minmax(96px, 1fr) 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr minmax(84px, 1fr) minmax(64px, 0.6fr) 0.9fr 0.7fr 0.9fr 0.8fr 1.1fr 1fr 1fr 0.5fr 0.6fr 0.8fr 1.4fr minmax(80px, 80px)'
 
+/** The actions track as the model writes it now: 80 px, wider only under the app's 75 % (logColumns ACTIONS_TRACK,
+ *  2026-11-12). `old`'s last track, as it is now. */
+const withActions = (old: string) => {
+  const tracks = tracksOf(old)
+  expect(tracks[tracks.length - 1]).toBe('minmax(80px, 80px)')
+  tracks[tracks.length - 1] = ACTIONS_TRACK
+  return tracks.join(' ')
+}
+
 /** The one track that moved since: the QSL column's, which gained an 88px floor so every mark
  *  fits ("L·C·AG·Q" beside the sent card's "✉E", measured at 77.4px). `old`'s QSL track, at
  *  `i`, as it is now. */
@@ -49,25 +58,37 @@ const withQslFloor = (old: string, i: number) => {
 const template = (saved: LogColumnsSaved, narrow = false) =>
   logGridTemplate(renderedColumns(saved, narrow), saved, narrow)
 /** A template's tracks: split on the spaces outside `minmax(…)`. */
-const tracksOf = (tpl: string) => tpl.split(/ (?![^(]*\))/)
+const tracksOf = (tpl: string) => {
+  // Split on the spaces at paren depth 0: a track may nest (the actions track's `minmax(max(…), max(…))`).
+  const out: string[] = []
+  let depth = 0
+  let cur = ''
+  for (const ch of tpl) {
+    if (ch === ' ' && depth === 0) { out.push(cur); cur = ''; continue }
+    if (ch === '(') depth++
+    if (ch === ')') depth--
+    cur += ch
+  }
+  return [...out, cur]
+}
 const ids = (saved: LogColumnsSaved, narrow = false) => renderedColumns(saved, narrow).map((c) => c.id)
 
 describe('the defaults are the table the Logbook had', () => {
   it('nothing saved: the compact template, track for track', () => {
-    expect(template(DEFAULT_LOG_COLUMNS)).toBe(withQslFloor(OLD_COMPACT, 10))
+    expect(template(DEFAULT_LOG_COLUMNS)).toBe(withActions(withQslFloor(OLD_COMPACT, 10)))
     expect(logTableMinWidth(renderedColumns(DEFAULT_LOG_COLUMNS, false), DEFAULT_LOG_COLUMNS)).toBeNull()
   })
 
   it('at sm/xs: the six columns and the template the narrow rules kept', () => {
     expect(ids(DEFAULT_LOG_COLUMNS, true)).toEqual(['call', 'country', 'band', 'qsl', 'notes', 'actions'])
-    expect(template(DEFAULT_LOG_COLUMNS, true)).toBe(withQslFloor(OLD_NARROW, 3))
+    expect(template(DEFAULT_LOG_COLUMNS, true)).toBe(withActions(withQslFloor(OLD_NARROW, 3)))
   })
 
   it('"More columns" on in this browser: the wide table, at the width it always had', () => {
     const more = legacyLogColumns(true)
-    expect(template(more)).toBe(withQslFloor(OLD_WIDE, 10))
+    expect(template(more)).toBe(withActions(withQslFloor(OLD_WIDE, 10)))
     // …and at a narrow window it still shows every column, scrolling sideways.
-    expect(template(more, true)).toBe(withQslFloor(OLD_WIDE, 10))
+    expect(template(more, true)).toBe(withActions(withQslFloor(OLD_WIDE, 10)))
     expect(logTableMinWidth(renderedColumns(more, false), more)).toBe('calc(117.53rem + 80px)')
     expect(legacyLogColumns(false)).toEqual(DEFAULT_LOG_COLUMNS)
   })

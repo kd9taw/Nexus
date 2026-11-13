@@ -29,7 +29,7 @@
 // centre behind the QSO strip's parked line (it covered 36 Tab stops at 900×600 / 175 % before the shell's scroll
 // padding read the parked line's height).
 //
-// AND THE HEADER-CHANGE GUARD (FT at 100 % and fit, 1024×768 and 1366×768, en/ru, CAT lost and the alarms): Stop TX stands
+// AND THE HEADER-CHANGE GUARD (FT at 100 % and fit, the floor (1366×768 at 175 %) and 1366×768, en/ru, CAT lost and the alarms): Stop TX stands
 // where a fresh layout (the window resized away and back) puts it, so the waterfall's divider re-fit to the header.
 //
 // AND THE STOP LAYER (a modal open): one real click at Stop TX on FT's parked line, and at Stop TX and SSTV's own Stop in its
@@ -49,6 +49,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { FLOOR, LAPTOP, MATRIX, UHD, UHD_200 } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
@@ -60,18 +61,24 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const VIEWS = [['FT', 'operate'], ['Tempo', 'chat'], ['Phone', 'phone'], ['CW', 'cw'], ['RTTY', 'rtty'], ['PSK', 'psk'],
   ['JTTY', 'jtty'], ['SSTV', 'sstv'], ['APRS', 'aprs'], ['JS8', 'js8']]
 const ALL_LOCS = ['en', 'de', 'es', 'fr', 'ja', 'ru', 'zh', 'zh-hant']
-const SMALL = [[700, 800], [900, 600], [1024, 768], [1280, 720], [1366, 768]]
-const LARGE = [[1600, 900], [1920, 1080], [2560, 1440], [3440, 1440]]
-/** [scale ('auto' = the app's own fit), sizes, languages]: one page per view × scale × language, resized through its sizes. */
+/** A window as [CSS width, CSS height, the OS's scaling as a device pixel ratio] — a screen of probe/sizes.mjs, or a
+ *  bare [w, h] window off the matrix (dragged below any supported screen: 700×800, 900×600, 1200×750 hold xs). */
+const px = (s) => [s.w, s.h, s.scale]
+const lab = ([W, H, D = 1]) => `${W}×${H}${D === 1 ? '' : ` (OS ${Math.round(D * 100)} %)`}`
+const OFF = [[700, 800], [900, 600], [1200, 750]]
+/** [scale ('auto' = the app's own fit), sizes, languages]: one page per view × scale × language, resized through its sizes.
+ *  The scale is the app's own; the floor's row is 1366×768 at the OS's 175 % (a 780×438 window at ratio 1.75), the same
+ *  effective window as 1366×768 at the app's 175 %, and 4K is there at 100 % (the widest) and at the OS's 200 %. */
 const CI = [
-  ['175', [[700, 800], [900, 600], [1024, 768], [1366, 768]], ['en', 'ru']],
-  ['150', [[900, 600], [1366, 768]], ['en']],
-  ['100', [[1024, 768], [3440, 1440]], ['en']],
-  ['auto', [[1200, 750]], ['en']],
+  ['175', [[700, 800], [900, 600], px(LAPTOP)], ['en', 'ru']],
+  ['150', [[900, 600], px(LAPTOP)], ['en']],
+  ['100', [px(FLOOR), px(UHD), px(UHD_200)], ['en']],
+  ['auto', [[1200, 750], px(FLOOR)], ['en']],
 ]
+const FULL_SIZES = [...OFF, ...MATRIX.map(px)]
 const FULL = [
-  ['175', [...SMALL, ...LARGE], ALL_LOCS], ['150', [...SMALL, ...LARGE], ALL_LOCS], ['125', [...SMALL, ...LARGE], ALL_LOCS],
-  ['100', [...SMALL, ...LARGE], ALL_LOCS], ['auto', [...SMALL, ...LARGE], ALL_LOCS],
+  ['175', FULL_SIZES, ALL_LOCS], ['150', FULL_SIZES, ALL_LOCS], ['125', FULL_SIZES, ALL_LOCS],
+  ['100', FULL_SIZES, ALL_LOCS], ['auto', FULL_SIZES, ALL_LOCS],
 ]
 const pick = (env, all) => (process.env[env] ? process.env[env].split(',').map((s) => s.trim()) : all)
 const wantViews = pick('STOPVIS_VIEWS', VIEWS.map((v) => v[0]))
@@ -204,7 +211,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function openPage(route, [W, H], scale, loc) {
+async function openPage(route, [W, H, D = 1], scale, loc) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (m, p) => browser.call(m, p, sessionId)
@@ -213,8 +220,8 @@ async function openPage(route, [W, H], scale, loc) {
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text)
     return r.result.value
   }
-  const size = (w, h) => call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
-  await size(W, H)
+  const size = (w, h, d = 1) => call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: d, mobile: false })
+  await size(W, H, D)
   // What broke, if a screen stops drawing: the page's own errors, kept for the report.
   await call('Page.addScriptToEvaluateOnNewDocument', { source: "window.__errs = []; addEventListener('error', (e) => __errs.push(String(e.message))); addEventListener('unhandledrejection', (e) => __errs.push(String(e.reason))); { const ce = console.error; console.error = (...a) => { __errs.push(a.map(String).join(' ').slice(0, 300)); ce(...a) } }" })
   await call('Page.navigate', { url: `${origin}/probe-blank` })
@@ -295,26 +302,27 @@ for (const [label, route] of VIEWS.filter(([l]) => wantViews.includes(l))) {
           continue
         }
         let mode = false
-        for (const [W, H] of sizes) {
-          await p.size(W, H)
+        for (const [W, H, D = 1] of sizes) {
+          await p.size(W, H, D)
+          const sz = lab([W, H, D])
           for (const [state, st] of Object.entries(STATES)) {
             const wait = await apply(p, st, route)
             const m = await settle(p, wait || (mode ? 1300 : 0))
             mode = !!wait
-            const row = { view: label, scale, loc, W, H, state, vp: m?.vp, stops: m?.stops ?? [], scrolled: m?.scrolled, alarmSeen: m?.alarmSeen ?? null, squeezed: m?.squeezed ?? null }
+            const row = { view: label, scale, loc, W, H, D, state, vp: m?.vp, stops: m?.stops ?? [], scrolled: m?.scrolled, alarmSeen: m?.alarmSeen ?? null, squeezed: m?.squeezed ?? null }
             rows.push(row)
             const ok = row.stops.some((s) => s.ok)
             if (route === 'operate' && state === 'plain' && scale !== 'auto' && Number(scale) >= 150 && TAB_SIZES(W, H)) {
               const hidden = await tabWalk(p)
               if (hidden.length) {
-                reds.push(`${label} ${W}×${H} ${scale} ${loc} plain: Tab focuses ${hidden.length} controls behind the parked QSO-strip line (${hidden.slice(0, 8).join(', ')})`)
+                reds.push(`${label} ${sz} ${scale} ${loc} plain: Tab focuses ${hidden.length} controls behind the parked QSO-strip line (${hidden.slice(0, 8).join(', ')})`)
                 console.log('RED ' + reds[reds.length - 1])
               }
             }
-            if (!row.stops.length && !p.told) { p.told = true; console.log(`${label} ${W}×${H} ${scale} ${loc} ${state}: NO STOP TX — page errors: ${JSON.stringify(await p.evaluate('(window.__errs || []).slice(-4)').catch((e) => String(e)))}; page: ${await p.evaluate(`JSON.stringify({ hash: location.hash, mains: [...document.querySelectorAll('main')].map((m) => m.className.slice(0, 40) + (m.closest('[hidden]') ? ' [hidden]' : '') + ' ' + Math.round(m.getBoundingClientRect().height)), stops: [...document.querySelectorAll('.op-btn.stop')].map((b) => Math.round(b.getBoundingClientRect().width) + (b.closest('[hidden]') ? 'H' : '')), text: document.body.innerText.slice(-500) })`).catch((e) => String(e))}`) }
+            if (!row.stops.length && !p.told) { p.told = true; console.log(`${label} ${sz} ${scale} ${loc} ${state}: NO STOP TX — page errors: ${JSON.stringify(await p.evaluate('(window.__errs || []).slice(-4)').catch((e) => String(e)))}; page: ${await p.evaluate(`JSON.stringify({ hash: location.hash, mains: [...document.querySelectorAll('main')].map((m) => m.className.slice(0, 40) + (m.closest('[hidden]') ? ' [hidden]' : '') + ' ' + Math.round(m.getBoundingClientRect().height)), stops: [...document.querySelectorAll('.op-btn.stop')].map((b) => Math.round(b.getBoundingClientRect().width) + (b.closest('[hidden]') ? 'H' : '')), text: document.body.innerText.slice(-500) })`).catch((e) => String(e))}`) }
             if (!ok) {
               const why = row.stops.map((s) => `${s.where} Stop TX at y ${s.box[1]}–${s.box[1] + s.box[3]} of ${H}${s.inside ? '' : ' (not inside the window)'}${s.covered ? `, covered at ${s.covered}/15 by ${s.by}` : ''}`).join('; ') || 'no Stop TX drawn'
-              reds.push(`${label} ${W}×${H} ${scale} ${loc} [${row.vp}] ${state}: no Stop TX fully on screen and topmost — ${why}; header ends at y ${m?.headBottom}; shell ${m?.boxes?.shell}, strip ${m?.boxes?.strip}, dock ${m?.boxes?.dock}${row.scrolled ? ' (a scroller moved)' : ''}`)
+              reds.push(`${label} ${sz} ${scale} ${loc} [${row.vp}] ${state}: no Stop TX fully on screen and topmost — ${why}; header ends at y ${m?.headBottom}; shell ${m?.boxes?.shell}, strip ${m?.boxes?.strip}, dock ${m?.boxes?.dock}${row.scrolled ? ' (a scroller moved)' : ''}`)
               // As it is found: a part of the full sweep cut short by its timeout keeps what it saw.
               console.log('RED ' + reds[reds.length - 1])
             }
@@ -328,19 +336,19 @@ for (const [label, route] of VIEWS.filter(([l]) => wantViews.includes(l))) {
   }
 }
 
-// THE HEADER-CHANGE GUARD (FT, 100 % and the app's fit, 1024×768 and 1366×768, en and ru): CAT lost, and the alarms (a
+// THE HEADER-CHANGE GUARD (FT, 100 % and the app's fit, the floor and 1366×768, en and ru): CAT lost, and the alarms (a
 // transmitter alarm, the watchdog and a critical status message), change the cockpit header's height or the window's. The
 // waterfall's divider must re-fit to that, as a fresh layout would: Stop TX is measured as the state leaves it, the window
 // is then resized away and back (every divider re-fits on that), and Stop TX must stand where it stood. A divider that
 // re-fit only on the shell's own resize left the waterfall at its old height and Stop TX 28 px off on CAT lost.
-const FRESH = [['100', [1024, 768]], ['100', [1366, 768]], ['auto', [1024, 768]], ['auto', [1366, 768]]]
+const FRESH = [['100', px(FLOOR)], ['100', px(LAPTOP)], ['auto', px(FLOOR)], ['auto', px(LAPTOP)]]
 const stopY = `(() => { const b = document.querySelector('main.operate-cockpit .cockpit-qso .op-btn.stop'); return b ? Math.round(b.getBoundingClientRect().top * 10) / 10 : null })()`
-async function freshCheck(p, [W, H], plant = null) {
+async function freshCheck(p, [W, H, D = 1], plant = null) {
   await settle(p)
   const before = plant ? await p.evaluate(plant) : await p.evaluate(stopY)
-  await p.size(W + 40, H + 40)
+  await p.size(W + 40, H + 40, D)
   await settle(p)
-  await p.size(W, H)
+  await p.size(W, H, D)
   await settle(p)
   const after = await p.evaluate(stopY)
   return before == null || after == null ? null : Math.round((after - before) * 10) / 10
@@ -358,7 +366,7 @@ if (wantViews.includes('FT') && process.env.STOPVIS_FRESH !== '0') {
         await apply(p, STATES[state], 'operate')
         const dy = await freshCheck(p, size)
         if (dy == null || Math.abs(dy) > 1) {
-          freshReds.push(`FT ${size.join('×')} ${scale} ${loc} ${state}: Stop TX stood ${dy} px from where a fresh layout puts it (the waterfall's divider did not re-fit)`)
+          freshReds.push(`FT ${lab(size)} ${scale} ${loc} ${state}: Stop TX stood ${dy} px from where a fresh layout puts it (the waterfall's divider did not re-fit)`)
           console.log('RED ' + freshReds[freshReds.length - 1])
         }
       }
@@ -369,17 +377,18 @@ if (wantViews.includes('FT') && process.env.STOPVIS_FRESH !== '0') {
   console.log(`fresh-layout guard: ${FRESH.length * 2 * 2} rows, ${freshReds.length} red`)
 }
 // ITS CONTROL: a divider value left stale (written and read in one task, before any observer can re-fit it) must be caught.
+// On 1366×768 at 100 %: at the floor the waterfall already stands on its own floor, so half the value lays out the same.
 let freshControl = null
 if (wantViews.includes('FT') && process.env.STOPVIS_FRESH !== '0') {
-  const p = await openPage('operate', [1024, 768], '100', 'en')
+  const p = await openPage('operate', px(LAPTOP), '100', 'en')
   try {
     let m = null
     for (let i = 0; i < 160 && !m?.stops.length; i++) { await sleep(250); m = await p.evaluate(MEASURE).catch(() => null) }
     await apply(p, PLAIN, 'operate')
-    const dy = await freshCheck(p, [1024, 768], `(() => { const body = document.querySelector('main.operate-cockpit .cockpit-body'); const v = parseFloat(body.style.getPropertyValue('--cockpit-wf-h')) || 25
+    const dy = await freshCheck(p, px(LAPTOP), `(() => { const body = document.querySelector('main.operate-cockpit .cockpit-body'); const v = parseFloat(body.style.getPropertyValue('--cockpit-wf-h')) || 25
       body.style.setProperty('--cockpit-wf-h', (v / 2) + '%'); return ${stopY} })()`)
     freshControl = dy != null && Math.abs(dy) > 1
-    console.log(`CONTROL — FT 1024×768 100 % with the divider's value left stale: Stop TX ${dy} px from a fresh layout${freshControl ? ' (caught)' : ''}`)
+    console.log(`CONTROL — FT ${lab(px(LAPTOP))} 100 % with the divider's value left stale: Stop TX ${dy} px from a fresh layout${freshControl ? ' (caught)' : ''}`)
   } finally {
     await p.close()
   }

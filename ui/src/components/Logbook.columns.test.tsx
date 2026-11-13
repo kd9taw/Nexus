@@ -16,7 +16,7 @@ import { Logbook } from './Logbook'
 import * as api from '../api'
 import { announce } from '../announce'
 import type { LogQuestion } from '../features/logAnswers'
-import type { LogColumnsSaved } from '../features/logColumns'
+import { ACTIONS_TRACK, type LogColumnsSaved } from '../features/logColumns'
 import { chooseRowAction } from './Logbook.rowMenu.testkit'
 import { t } from '../i18n'
 import { parksChanged } from '../features/parkNames'
@@ -88,7 +88,19 @@ const row = (c: HTMLElement) => c.querySelector('.logbook-row:not(.head):not(.pl
 const table = (c: HTMLElement) => c.querySelector('.logbook-table') as HTMLElement
 const template = (c: HTMLElement) => table(c).style.getPropertyValue('--log-cols')
 /** A template's tracks: split on the spaces outside `minmax(…)`. */
-const tracksOf = (tpl: string) => tpl.split(/ (?![^(]*\))/)
+const tracksOf = (tpl: string) => {
+  // Split on the spaces at paren depth 0: a track may nest (the actions track's `minmax(max(…), max(…))`).
+  const out: string[] = []
+  let depth = 0
+  let cur = ''
+  for (const ch of tpl) {
+    if (ch === ' ' && depth === 0) { out.push(cur); cur = ''; continue }
+    if (ch === '(') depth++
+    if (ch === ')') depth--
+    cur += ch
+  }
+  return [...out, cur]
+}
 
 async function openChooser() {
   fireEvent.keyDown(screen.getByRole('button', { name: 'Columns' }), { key: 'Enter' })
@@ -121,7 +133,7 @@ describe('the default table is the one the Logbook had', () => {
     const { container } = await renderLog()
     expect(headers()).toEqual(['Call', 'Country', 'Band', 'QSL', 'Notes', 'Edit / delete'])
     // The QSL track holds an 88px floor, so every mark fits (logColumns.ts).
-    expect(template(container)).toBe('minmax(96px, 1fr) 1.3fr 0.7fr minmax(88px, 0.7fr) 1fr minmax(80px, 80px)')
+    expect(template(container)).toBe(`minmax(96px, 1fr) 1.3fr 0.7fr minmax(88px, 0.7fr) 1fr ${ACTIONS_TRACK}`)
     expect(row(container).querySelectorAll(':scope > .log-cell')).toHaveLength(6)
   })
 })

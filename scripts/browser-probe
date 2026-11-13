@@ -51,6 +51,11 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
        scripts/browser-probe --desktop rotor|contestlog|spots|callcard|besttimes|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|txmeterspane|radioswitch|radiosetup|toastcorner|logwaiting|topbar|header|rttyfit|digishell|alarmcell|firstrun|journeys|clublog|aprsmap|logbook|profiles|sstvlayout|menustop|stopabove|stopvisible|ftline|laptopfit
        scripts/browser-probe --desktop-shard <n> <of>
 
+  Window sizes: every --desktop probe takes its screens from ui/probe/sizes.mjs (the 2026-11-11
+  ruling: 1366×768 to 4K, OS scaling 100-175 % and 200 % on 4K, emulated as the screen divided by
+  the scale at that device pixel ratio). "The floor" is 1366×768 at 175 % (a 780×438 window); "the
+  CORE screens" are the floor, 1440×900, 1920×1080, 2560×1440 and 4K at 200 %.
+
   --desktop-shard <n> <of>
                         every --desktop scenario of shard <n> of <of>, one after another,
                         exactly as the desktop-probes CI job runs them: a red does not stop
@@ -88,52 +93,52 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         (ui/probe/spots-probe.mjs; it builds nothing)
   --desktop callcard    the station card and the Best times card beside the transmit controls: a call just above
                         the TX strip and dock, and one above FT's QSO strip, clicked at
-                        1366×768 and 1024×768, asserting the card is drawn and covers no
+                        1366×768 and the floor, asserting the card is drawn and covers no
                         point of the strip, Stop TX, the dock or the QSO strip, with a
                         control (the transmit classes removed) where it must cover one
                         (ui/probe/callcard-probe.mjs; it builds nothing)
   --desktop besttimes   the Best times box in the dashboard rail beside a TX strip and dock, at
-                        1366×768, 1024×768 (and 175%) and 1920×1080: no transmit control moves or
+                        the CORE screens and 1366×768 at 175%: no transmit control moves or
                         is covered when its answer lands, with a control (the box bare above the
                         strip) where Stop TX must move (ui/probe/besttimes-probe.mjs)
   --desktop activation  the Activation pane in the dashboard rail beside a TX strip and dock,
-                        in its own window, and the "Activation over?" checklist, at 1024×768
-                        and 1920×1080, asserting nothing scrolls sideways, the pane's lines
+                        in its own window, and the "Activation over?" checklist, at the CORE
+                        screens, asserting nothing scrolls sideways, the pane's lines
                         and the checklist's buttons are on screen and no transmit control is
                         covered, with a control (a planted overflow, the TX boxes drawn over
                         the rail) that must be caught (ui/probe/activation-probe.mjs)
   --desktop voicenote   the voice keyer's Flex DAX note after F1, in a Phone-shaped pane
-                        region over a TX dock, at 1024×768, 1366×768 and 1920×1080,
+                        region over a TX dock, at the CORE screens,
                         asserting nothing scrolls sideways, the note, Got it and F1 are
                         on screen, the dock is clear and Got it dismisses it, with a
                         planted overflow that must be caught (ui/probe/voicenote-probe.mjs)
   --desktop contactcard the Logbook's contact card opened by a real double-click on a call,
-                        at 1024×768, 1366×768 and 1920×1080, asserting it is inside the
+                        at the CORE screens, asserting it is inside the
                         window, scrolls nowhere sideways, draws the callbook photo, keeps
                         Save and Cancel on screen at its top and foot and lists ten recent
                         contacts, with a control (the Save bar in the flow) that must hide
                         Save; and the Add form's IOTA box filled from a spot under a very long
-                        group name at 1024×768 and 1920×1080 at 65 % and 175 %, the name drawn
+                        group name at 1366×768 and 1920×1080 at 65 % and 175 %, the name drawn
                         whole covering nothing, nothing sideways, Log reachable, with a control
                         (the name kept on one line) that must be caught; and the island picker
                         beside it listing only the group's islands with a 200-character name
                         picked, inside the form and uncovered, with a control (the picker grown
                         to its longest option) that must be caught
                         (ui/probe/contactcard-probe.mjs)
-  --desktop atu         the TX strip's ATU button and its "Switch tuner out" menu at 1024×768
-                        and 1920×1080 in both themes, asserting nothing scrolls sideways, the
+  --desktop atu         the TX strip's ATU button and its "Switch tuner out" menu at the CORE
+                        screens in both themes, asserting nothing scrolls sideways, the
                         strip's four controls are on screen, Stop TX does not move for ATU ON,
                         ATU ON is lit, a click tunes, and the right-click and long-press menu
                         switches the tuner out clear of Stop TX, with a planted overflow and a
                         cover that must be caught (ui/probe/atu-probe.mjs)
-  --desktop jtty        the JTTY screen (the real cockpit) at 1024×768, 1366×768 and
-                        1920×1080: the dock's Messages box, Edit keys and the eight
+  --desktop jtty        the JTTY screen (the real cockpit) at the CORE screens:
+                        the dock's Messages box, Edit keys and the eight
                         F-keys (and, while editing, the eight key boxes and Defaults)
                         and the Log QSO prompt's words, Log QSO and Not now on screen,
                         with a control (a box over Messages and Log QSO) that must be
                         seen as covered (ui/probe/jtty-probe.mjs)
-  --desktop waterfalls  every mode's waterfall in the real app at 1024×768, 1366×768,
-                        1920×1080 and 2560×1440, asserting each starts at 25 % of its
+  --desktop waterfalls  every mode's waterfall in the real app at the floor, 1366×768,
+                        1920×1080, 2560×1440 and 4K at 200 %, asserting each starts at 25 % of its
                         cockpit (or the layout's ceiling) and all are the same width and,
                         where the layout lets them, the same height; Stop TX, Tune and PTT
                         on screen; Phone's scope full width beside its left side; Tempo
@@ -141,7 +146,7 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         caught (ui/probe/waterfalls-probe.mjs; it builds nothing)
   --desktop txmeters    the transmit meters in Phone's dock (with the COMP row's level bar,
                         PROC and transmit-bandwidth chip) and Operate's telemetry cell, with a
-                        radio and an amplifier temperature, at 1024×768 °C and 1920×1080 °F,
+                        radio and an amplifier temperature, at the CORE screens in °C and °F,
                         asserting nothing scrolls sideways, every control and temperature is on
                         screen, and a real drag and clicks reach the verbs, with a planted
                         overflow that must be caught (ui/probe/txmeters-probe.mjs)
@@ -155,32 +160,32 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         Stop TX unmoved; 1.24.0's dial planted back and crowded numbers must be
                         caught (ui/probe/txmeterspane-probe.mjs; it builds nothing)
   --desktop radioswitch the radio switch notice and the Radios card in the real app, at
-                        1024×768 and 1920×1080: Nexus switches radio by itself, the notice
+                        the CORE screens: Nexus switches radio by itself, the notice
                         and its Undo and Why? are on screen, Undo selects the radio it left,
                         Why? opens Settings at the Radios cards, whose routing lines and switch
                         choice are on screen with nothing sideways, with a planted overflow in
                         the notice and in a card that must be caught (ui/probe/radioswitch-probe.mjs)
   --desktop toastcorner the pop-up corner in the real app, on FT, Phone, CW and PSK at
-                        1024×768 and 1920×1080, in each corner, with a burst of nine (which
+                        the floor, 1920×1080 and 4K at 200 %, in each corner, with a burst of nine (which
                         covers the lone toast's place too): no toast covers a transmit
                         control (TX strip, TX dock, FT's QSO strip, the top bar's cluster,
                         any Stop) and the column is inside the window, with the column
                         forced back to the bare corner as a control that must be caught
                         (ui/probe/toastcorner-probe.mjs; it builds nothing)
-  --desktop radiosetup  the radio setup ("Set up radios…") in the real app, at 1024×768 and
-                        1920×1080: reached from the Radios cards, every step inside the window
+  --desktop radiosetup  the radio setup ("Set up radios…") in the real app, at the CORE
+                        screens: reached from the Radios cards, every step inside the window
                         with Next/Finish, Back and Cancel reachable and nothing sideways (the band
                         grid included), Test CAT on a radio not in use and "Where would this go?"
                         answered on screen, an untouched Finish writing nothing, with a planted
                         overflow that must be caught (ui/probe/radiosetup-probe.mjs)
   --desktop logwaiting  the Operate strip's Log button with a count of contacts waiting for
-                        Log QSO, at 1024×768 and 1920×1080 in both themes, with and without a
+                        Log QSO, at the CORE screens in both themes, with and without a
                         station on screen, asserting no control moves for the count, the count
                         is drawn whole and covers none, Log stays topmost and live and a click
                         reaches it, with a control (the count in the flow) that must be caught
                         (ui/probe/logwaiting-probe.mjs; it builds nothing)
   --desktop profiles    the "My station" picker in the real top bar, on Operate and on the Logbook
-                        at 1024×768 and 1920×1080, measured without and with three profiles (one
+                        at the CORE screens, measured without and with three profiles (one
                         with a long name), asserting the picker is topmost with its three profiles
                         and a pick reaches the switch, the bar keeps its height, nothing runs
                         sideways or past the window, and Stop TX and Tune do not move, with a
@@ -191,7 +196,7 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         is on top where it is drawn and unmoved, one real click stops once and the
                         overlay stays open with the keyboard where it was, with the stop layer
                         taken away as the control; and the prompt to log's and the log strip's
-                        IOTA box filled from a spot under a very long group name at 1024×768 and
+                        IOTA box filled from a spot under a very long group name at 1366×768 and
                         1920×1080 at 65 % and 175 %, the name whole covering nothing, no sideways
                         scroll added, Log in the window and on top, with a control (the name kept
                         on one line) that must be caught; and the prompt to log's Prop mode taking
@@ -208,12 +213,12 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         group sits on, shows its flag, and nothing runs past the window, with a
                         control (the lane's old sizing) that must make the bar taller
                         (ui/probe/topbar-probe.mjs; it builds nothing)
-  --desktop header      the cockpit header with a CW header's controls, 1024 to 2560 wide and
-                        110-175 % on 1920×1080, asserting ⊞ Panels and CAT never take a line of
+  --desktop header      the cockpit header with a CW header's controls, 780 (the floor) to 2560
+                        wide, 110-175 % on 1920×1080 and the OS's 125-200 %, asserting ⊞ Panels and CAT never take a line of
                         their own while the mode controls' last line has room for them and
                         nothing runs past the window, with the header's previous shape as the
                         control (ui/probe/header-probe.mjs; it builds nothing)
-  --desktop rttyfit     the RTTY screen in the real app at the common full-screen sizes and at
+  --desktop rttyfit     the RTTY screen in the real app at the common screens (OS-scaled too) and at
                         125/150 % on 1920×1080 and 1366×768, with the tuning scope shown and
                         hidden, asserting the cockpit scrolls no more than 1.21.0's did there
                         (not at all wherever 1.21.0 fit) and, where it does not scroll, Stop TX,
@@ -221,7 +226,7 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         screen, with a planted margin that must be caught
                         (ui/probe/rttyfit-probe.mjs; it builds nothing)
   --desktop digishell   the SSTV, RTTY and PSK screens in the real app, from 900×600 and 700×800
-                        at 175 % up to 1920×1080, and CW, Phone, JS8 and JTTY at the small sizes, at
+                        at 175 % and the floor up to 1920×1080, and CW, Phone, JS8 and JTTY at the small sizes, at
                         seven scroll positions top to end: nothing in the cockpit header covers a
                         TX strip or dock control, every stop control and Send/PTT is on screen and
                         topmost, every strip and dock control and ⊞ Panels can be clicked at
@@ -253,14 +258,14 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         seen, and the waterfall's divider still sizes it, with three planted faults
                         that must be caught (ui/probe/sstvlayout-probe.mjs; it builds nothing)
   --desktop stopvisible every cockpit in the real app (FT, Tempo, Phone, CW, RTTY, PSK, JTTY, SSTV, APRS,
-                        JS8) from 700×800 at 175 % up to 3440×1440, plain, with CAT lost, under transmitter
+                        JS8) from 700×800 at 175 % and the floor up to 4K, plain, with CAT lost, under transmitter
                         alarms and a critical status message, on the air, and all of them at once with SSTV's
                         dropped-picture sentence and JTTY's refusal: with nothing scrolled, a Stop TX is wholly
                         inside the window and the topmost thing over its whole face. A box planted over FT's
                         Stop TX must be caught. STOPVIS_FULL=1 runs every size, scale and language
                         (ui/probe/stopvisible-probe.mjs; it builds nothing)
-  --desktop firstrun    a fresh install's first-run wizard in the real app, at 1024×768 and
-                        1920×1080: the About-you question and its answers on screen, Finish
+  --desktop firstrun    a fresh install's first-run wizard in the real app, at the CORE
+                        screens: the About-you question and its answers on screen, Finish
                         writes the answer, the Getting started guide then the first-contact
                         walk on screen, and Settings folded for a new operator with Show all
                         opening it, with a planted overflow in an answer and in the walk that
@@ -272,7 +277,7 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         step in English, German and Russian, with no scrolling; with the cue taken
                         away and the step buttons put back in the flow as controls that must be
                         caught (ui/probe/laptopfit-probe.mjs)
-  --desktop journeys    the first-run journeys in the real app, at 1024×768 and 1920×1080 in the
+  --desktop journeys    the first-run journeys in the real app, at the CORE screens in the
                         dark and light themes: About you with both questions, "Two or more"
                         opening the radio setup once the second radio is saved, "Experienced"
                         showing where contacts go with QRZ's Test and the import preview with
@@ -282,23 +287,23 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         (ui/probe/journeys-probe.mjs)
   --desktop clublog     the club log on a joined laptop (five positions with long names, the
                         newest 100 of 4,321 contacts) on the Contest screen and in the club
-                        board pop-out at 1024×768 and 1920×1080, asserting it is under the club
+                        board pop-out at the CORE screens, asserting it is under the club
                         board with its head, nothing scrolls sideways, and the newest and the
                         hundredth contact's cells are on screen, with a planted wide row that
                         must be caught (ui/probe/clublog-probe.mjs; it builds nothing)
-  --desktop aprsmap     the APRS screen's map in the real app, at 1024×768 and 1920×1080: nothing
+  --desktop aprsmap     the APRS screen's map in the real app, at the CORE screens: nothing
                         scrolls sideways, Stop TX and the TX latch on screen, every control of the
                         map's toolbar inside the map, the Layers panel on it, the map drawn, and a
                         station's card opening inside the map with Follow on screen, with a toolbar
                         forced onto one row that must be caught (ui/probe/aprsmap-probe.mjs)
-  --desktop logbook     the Logbook in the app's own wrapper at 1024×768, 1920×1080 and
-                        2560×1440, asserting the panel spans the window and the table the
+  --desktop logbook     the Logbook in the app's own wrapper at the CORE screens,
+                        asserting the panel spans the window and the table the
                         panel, nothing scrolls sideways at the page, the default table fits,
                         every column scrolls sideways inside the table with its header, and a
                         real drag of a header moves the column without sorting while a click
                         still sorts; then each row's ✎ and ⋯ buttons, call/date/time whole from
                         1024 px up, nothing invisible clickable, and the ⋯ menu inside the window,
-                        from 1024 to 2560 at 100% and 150% in both themes (LOGBOOK_PROBE_SHOTS=<dir>
+                        from the floor to 4K at 100% and 150% in both themes (LOGBOOK_PROBE_SHOTS=<dir>
                         saves screenshots); the old centred measure, 22 px buttons and a hidden
                         row button are controls that must be caught (ui/probe/logbook-probe.mjs;
                         it builds nothing)

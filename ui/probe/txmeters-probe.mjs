@@ -1,8 +1,8 @@
 // The transmit meters with the finals temperature and the COMP row's controls, in real Chrome, for
 // what jsdom cannot see: `scripts/browser-probe --desktop txmeters`.
 //
-// The probe serves src/probe/txmeters.tsx with the app's own Vite config at 1024×768 (the supported
-// floor) and 1920×1080, in °C and in °F, and asserts, in Phone's dock, the TX strip's meters cell (the
+// The probe serves src/probe/txmeters.tsx with the app's own Vite config at the representative screens
+// (probe/sizes.mjs CORE: 1366×768 at 175 %, the floor, to 4K at 200 %), in °C and in °F, and asserts, in Phone's dock, the TX strip's meters cell (the
 // compact dock, md and up; there the strip must also stay one line, no taller than its own buttons, with
 // Stop TX on top) and Operate's telemetry cell:
 //   · nothing scrolls sideways: the page, the panels and every meter row are no wider than they show;
@@ -13,8 +13,9 @@
 //   · a real mouse drag on the bar sets the level where the pointer is, and real clicks on PROC and
 //     the chip ask for the processor off and the radio's next step;
 //   · all of that with the needle faces too, whose dials must be as high as the readout and, on the
-//     1920 window, about twice the old face's arc, with the strip still no taller. (The 1024 window is
-//     checked for a dial at all: at 100 % it is below the app's md, where the strip is not drawn.)
+//     windows 1920 px and wider, about twice the old face's arc, with the strip still no taller. (The floor's
+//     780 px window is checked for a dial at all: it is below the app's md, where the strip is not drawn. Between,
+//     md windows such as 1440×900 draw it about 6em, which the operator ruled fine, 2026-11-12.)
 //
 //   · after an over in which COMP stayed silent, its "⊘ not reported" note whole inside its host, and in
 //     Operate's cell (which clips) inside its row too, at xs through xl and at 100 % and 175 % zoom, with
@@ -34,12 +35,10 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { CORE, FHD, FLOOR, LAPTOP, QHD, metrics } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
-const SIZES = [
-  { w: 1024, h: 768, units: 'metric' },
-  { w: 1920, h: 1080, units: 'imperial' },
-]
+const SIZES = CORE.map((s, i) => ({ ...s, units: i % 2 ? 'imperial' : 'metric' }))
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const MEASURE = `(() => {
@@ -118,7 +117,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function measure(w, h, units, control, host, needle = false) {
+async function measure(size, units, control, host, needle = false) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -126,7 +125,7 @@ async function measure(w, h, units, control, host, needle = false) {
     const r = await call('Runtime.evaluate', { expression, returnByValue: true })
     return r.exceptionDetails ? { error: r.exceptionDetails.exception?.description ?? r.exceptionDetails.text } : r.result.value
   }
-  await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+  await call('Emulation.setDeviceMetricsOverride', metrics(size))
   await call('Page.navigate', { url: `${origin}/probe/txmeters.html?units=${units}${control ? '&control=1' : ''}${host === 'strip' ? '&host=strip' : ''}${needle ? '&needle=1' : ''}` })
   let last = null
   for (let i = 0; i < 80; i++) {
@@ -159,7 +158,8 @@ async function measure(w, h, units, control, host, needle = false) {
 function faults(m, units, needle = false, w = 0) {
   const f = []
   if (needle) {
-    if (!(m.dialEm > (w >= 1100 ? 8 : 1.5))) f.push(`the narrowest needle dial is ${m.dialEm}em wide`)
+    // 8em from 1920 px up only (operator ruling, 2026-11-12: "about 6em at md is fine"; 1440×900 draws 6.06em).
+    if (!(m.dialEm > (w >= 1920 ? 8 : 1.5))) f.push(`the narrowest needle dial is ${m.dialEm}em wide`)
     if (!(m.dialH >= 24)) f.push(`a needle dial is ${m.dialH} px high`)
   }
   if (m.page > 0) f.push(`the page scrolls sideways by ${m.page} px`)
@@ -263,12 +263,12 @@ const OVER_MEASURE = `(() => {
   return { notes, cell: [Math.round(c.left), Math.round(c.top), Math.round(c.width), Math.round(c.height)], stop: stop ? [Math.round(r(stop).left), Math.round(r(stop).top)] : null }
 })()`
 
-async function measureOver(w, h, query, css) {
+async function measureOver(size, query, css) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
   const evaluate = async (expression) => (await call('Runtime.evaluate', { expression, returnByValue: true })).result?.value
-  await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+  await call('Emulation.setDeviceMetricsOverride', metrics(size))
   await call('Page.navigate', { url: `${origin}/probe/txmeters.html?${query}` })
   // The control's style goes in once the meters have drawn: earlier, it can land in the
   // about:blank document the navigation is still replacing, and the check would see nothing planted.
@@ -294,7 +294,8 @@ async function measureOver(w, h, query, css) {
 async function checkUnreported() {
   const red = []
   const classify = (effW) => (effW < 768 ? 'xs' : effW < 1100 ? 'sm' : effW < 1600 ? 'md' : effW < 2400 ? 'lg' : 'xl')
-  const WINDOWS = [[640, 900], [1024, 768], [1366, 768], [1920, 1080], [2560, 1440], [4480, 1440]]
+  // 640×900 is below every supported screen and stays for xs at 100 %; 4480×1440 (a super-wide) for xl at 175 %.
+  const WINDOWS = [{ w: 640, h: 900, scale: 1, name: '640×900' }, FLOOR, LAPTOP, FHD, QHD, { w: 4480, h: 1440, scale: 1, name: '4480×1440' }]
   const overFaults = (m, keyed) => {
     const f = []
     if (!m) return ['the meters never drew']
@@ -309,18 +310,18 @@ async function checkUnreported() {
     if (keyed && JSON.stringify(m.stop) !== JSON.stringify(keyed.stop)) f.push(`Stop TX moved from ${keyed.stop} to ${m.stop} at unkey`)
     return f
   }
-  for (const zoom of [1, 1.75]) for (const [w, h] of WINDOWS) for (const host of ['dock', 'strip']) {
-    const vp = classify(w / zoom)
+  for (const zoom of [1, 1.75]) for (const win of WINDOWS) for (const host of ['dock', 'strip']) {
+    const vp = classify(win.w / zoom)
     // The TX strip is drawn from md up (below it the dock is), so the strip host runs only there.
     if (host === 'strip' && (vp === 'xs' || vp === 'sm')) continue
     const q = `vp=${vp}&zoom=${zoom}${host === 'strip' ? '&host=strip' : ''}`
-    const keyed = await measureOver(w, h, `over=keyed&${q}`)
-    const m = await measureOver(w, h, `over=1&${q}`)
-    console.log(`txmeters-probe: COMP silent, ${w}×${h} zoom ${zoom} (${vp}) in the ${host}: ${JSON.stringify(m)}`)
+    const keyed = await measureOver(win, `over=keyed&${q}`)
+    const m = await measureOver(win, `over=1&${q}`)
+    console.log(`txmeters-probe: COMP silent, ${win.name} zoom ${zoom} (${vp}) in the ${host}: ${JSON.stringify(m)}`)
     const f = overFaults(m, keyed)
-    if (f.length) red.push(`${w}×${h} zoom ${zoom} (${vp}) in the ${host}: ${f.join('; ')}`)
+    if (f.length) red.push(`${win.name} zoom ${zoom} (${vp}) in the ${host}: ${f.join('; ')}`)
   }
-  const control = await measureOver(1920, 1080, 'over=1&vp=lg&zoom=1', '.ph-unavail { padding-right: 30em }')
+  const control = await measureOver(FHD, 'over=1&vp=lg&zoom=1', '.ph-unavail { padding-right: 30em }')
   const caught = overFaults(control)
   console.log(`txmeters-probe: CONTROL COMP's note widened: caught ${JSON.stringify(caught)}`)
   if (!caught.some((s) => s.includes('clipped'))) red.push('CONTROL FAILED: a widened ⊘ note was not seen clipped; the check cannot fail')
@@ -339,11 +340,15 @@ try {
     console.error(`txmeters-probe: RED in the large pane — ${paneRed.join('; ')}`)
     code = 1
   }
-  for (const { w, h, units } of SIZES) for (const host of ['dock', 'strip']) for (const needle of [false, true]) {
-    const { m, asked } = await measure(w, h, units, false, host, needle)
-    console.log(`txmeters-probe: window ${w}×${h} ${units} in the ${host}${needle ? ' with needles' : ''}: ${JSON.stringify(m)} asked: ${JSON.stringify(asked)}`)
+  for (const size of SIZES) for (const host of ['dock', 'strip']) for (const needle of [false, true]) {
+    const { w, units } = size
+    // The TX strip's meters cell is the compact dock of md and up; below md (the floor's 780 px) the app draws the
+    // dock instead and the strip host is not a layout an operator can see.
+    if (host === 'strip' && w < 1100) continue
+    const { m, asked } = await measure(size, units, false, host, needle)
+    console.log(`txmeters-probe: window ${size.name} ${units} in the ${host}${needle ? ' with needles' : ''}: ${JSON.stringify(m)} asked: ${JSON.stringify(asked)}`)
     if (!m || m.error) {
-      console.error(`txmeters-probe: the meters never drew at ${w}×${h}`)
+      console.error(`txmeters-probe: the meters never drew at ${size.name}`)
       code = 2
       continue
     }
@@ -354,18 +359,18 @@ try {
     if (JSON.stringify(asked?.proc) !== '[false]') red.push(`PROC asked for ${JSON.stringify(asked?.proc)}`)
     if (JSON.stringify(asked?.bw) !== '["WIDE"]') red.push(`the chip asked for ${JSON.stringify(asked?.bw)}, not the next step`)
     if (red.length) {
-      console.error(`txmeters-probe: RED at ${w}×${h} in the ${host} — ${red.join('; ')}`)
+      console.error(`txmeters-probe: RED at ${size.name} in the ${host} — ${red.join('; ')}`)
       code = code || 1
     }
-    const c = await measure(w, h, units, true, host)
+    const c = await measure(size, units, true, host)
     const caught = c.m && !c.m.error ? faults(c.m, units) : []
-    console.log(`txmeters-probe: CONTROL window ${w}×${h} in the ${host}: caught ${JSON.stringify(caught)}`)
+    console.log(`txmeters-probe: CONTROL window ${size.name} in the ${host}: caught ${JSON.stringify(caught)}`)
     if (!caught.some((s) => s.includes('overflow') || s.includes('sideways') || s.includes('wider'))) {
-      console.error(`txmeters-probe: CONTROL FAILED at ${w}×${h} in the ${host} — the planted overflow was not seen; the check cannot fail`)
+      console.error(`txmeters-probe: CONTROL FAILED at ${size.name} in the ${host} — the planted overflow was not seen; the check cannot fail`)
       code = code || 1
     }
   }
-  if (code === 0) console.log(`txmeters-probe: PASS — level bar, PROC, bandwidth chip and both temperatures on screen with nothing sideways, drag and clicks reach the radio's verbs, in the dock and in the TX strip (which they do not make taller), at ${SIZES.map((s) => `${s.w}×${s.h} ${s.units}`).join(', ')}; each control caught`)
+  if (code === 0) console.log(`txmeters-probe: PASS — level bar, PROC, bandwidth chip and both temperatures on screen with nothing sideways, drag and clicks reach the radio's verbs, in the dock and in the TX strip (which they do not make taller), at ${SIZES.map((s) => `${s.name} ${s.units}`).join(', ')}; each control caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

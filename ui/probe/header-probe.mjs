@@ -5,8 +5,9 @@
 // taken a whole line, they did exactly that whenever the cluster wrapped: ⊞ Panels and CAT alone at the
 // right under a REC alone at the left, a band of empty header above the scope (operator photo, CW on a
 // 1080p screen above 100 %). The probe serves src/probe/header.tsx with the app's own Vite config, in a
-// CW shell with a CW header's controls, across window widths from the 1024 floor to 2560 at 100 % and at
-// 110-175 % on 1920×1080, and asserts at each: if the actions sit on a line below the last mode control,
+// CW shell with a CW header's controls, across window widths from the floor's 780 px (1366×768 at 175 %,
+// probe/sizes.mjs) to 2560 at 100 %, at the app's own 110-175 % on 1920×1080, and at the OS's scaling on the
+// floor, 1080p and 4K (its fractional CSS pixel moves a wrap by a sub-pixel), and asserts at each: if the actions sit on a line below the last mode control,
 // the room left on that control's line is less than the actions' width; and nothing runs past the window.
 //
 // THE CONTROL, run every time: the same controls in the header's previous shape (`&old=on`). There the
@@ -20,11 +21,13 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { FHD_125, FHD_150, FLOOR, UHD_150, UHD_200, metrics } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const CASES = []
-for (let w = 1024; w <= 2560; w += 64) CASES.push({ w, h: 900, z: 1 })
-for (const z of [1.1, 1.25, 1.5, 1.75]) CASES.push({ w: 1920, h: 1080, z })
+for (let w = FLOOR.w; w <= 2560; w += 64) CASES.push({ w, h: 900, scale: 1, name: `${w}×900`, z: 1 })
+for (const z of [1.1, 1.25, 1.5, 1.75]) CASES.push({ w: 1920, h: 1080, scale: 1, name: '1920×1080', z })
+for (const s of [FLOOR, FHD_125, FHD_150, UHD_150, UHD_200]) CASES.push({ ...s, z: 1 })
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const MEASURE = `(() => {
@@ -54,7 +57,8 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function measure({ w, h, z }, old) {
+async function measure(size, old) {
+  const { z } = size
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -62,7 +66,7 @@ async function measure({ w, h, z }, old) {
     const r = await call('Runtime.evaluate', { expression, returnByValue: true })
     return r.exceptionDetails ? null : r.result.value
   }
-  await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+  await call('Emulation.setDeviceMetricsOverride', metrics(size))
   await call('Page.navigate', { url: `${origin}/probe/header.html?zoom=${z}${old ? '&old=on' : ''}` })
   let last = null
   for (let i = 0; i < 60; i++) {
@@ -80,7 +84,7 @@ let code = 0
 try {
   let controlCaught = 0
   for (const c of CASES) {
-    const at = `${c.w}×${c.h} ${Math.round(c.z * 100)}%`
+    const at = `${c.name} ${Math.round(c.z * 100)}%`
     const m = await measure(c, false)
     const o = await measure(c, true)
     console.log(`header-probe: ${at}: ${JSON.stringify(m)} · previous shape ${JSON.stringify(o)}`)
@@ -104,7 +108,7 @@ try {
     console.error('header-probe: CONTROL FAILED — the previous shape never wasted a line here; the check cannot fail')
     code = code || 1
   }
-  if (code === 0) console.log(`header-probe: PASS — the header's actions never take a line they do not need, 1024 to 2560 wide and 110-175 % on 1920×1080`)
+  if (code === 0) console.log(`header-probe: PASS — the header's actions never take a line they do not need, ${FLOOR.w} to 2560 wide, 110-175 % on 1920×1080 and the OS's 125-200 %`)
   process.exitCode = code
 } finally {
   await browser.stop()

@@ -22,12 +22,12 @@
 //
 // THE FILLED IOTA BOX, in the two log forms that have no box of their own: the prompt to log (`overlay=logconfirm`,
 // opened with its box filled) and the log strip (`overlay=strip`, a call typed with real key input), each with the
-// station's reference (EU-901, "from the spot") under a very long group name (`&iota=1`), at 1024×768 and 1920×1080
-// at the smallest (65 %) and largest (175 %) UI scale. Asserted: the box holds the reference and is the topmost thing
+// station's reference (EU-901, "from the spot") under a very long group name (`&iota=1`), at 1366×768 and 1920×1080
+// (the OS at 100 %) at the app's smallest (65 %) and largest (175 %) UI scale, and 900×600 at 175 % (xs). Asserted: the box holds the reference and is the topmost thing
 // at its centre, the group name is drawn whole inside its form and covers the centre of no control, the source is
 // shown, nothing scrolls sideways (the page none; the prompt none at all — its two columns of boxes once ran ~80 px
 // past its card at every scale; the form's content runs no wider than the same form's with no box), and Log is inside
-// the window and topmost (the prompt's once, the strip's once scrolled to). Its CONTROL, per form (`&iotacontrol=1`, 1024×768 at 175 %): the name may not wrap, and
+// the window and topmost (the prompt's once, the strip's once scrolled to). Its CONTROL, per form (`&iotacontrol=1`, 1366×768 at 175 %): the name may not wrap, and
 // must come back NOT drawn whole.
 //
 // THE ISLAND PICKER beside that box (the group's islands answered, one with a 200-character name, which the probe
@@ -36,12 +36,11 @@
 //       picker (to 1 px), and the form's content runs no wider than without it;
 //   (b) the picker is usable: inside its form, the topmost thing at its centre, at least 6em wide, holding the long
 //       name, and that name in its title when the box cuts it short.
-// Its CONTROL, per form (`&islandcontrol=1`, 1024×768 at 175 %): the picker's containment taken away, so the select
+// Its CONTROL, per form (`&islandcontrol=1`, 1366×768 at 175 %): the picker's containment taken away, so the select
 // is as wide as its longest option again; it must come back RED.
 //
-// THE PROMPT TO LOG'S PROP MODE, on the supported screens (1366×768 at 100 % and 175 % OS scale and at 175 % UI
-// scale, 1920×1080 at 100 % and 200 %, 3840×2160 at 200 % with 100 % and 175 % UI scale; an OS scale is a smaller CSS
-// window at that many device px per px): the picker takes the grid's whole row and its box holds its longest name
+// THE PROMPT TO LOG'S PROP MODE, on probe/sizes.mjs's representative screens (CORE) at the app's 100 %, the floor
+// screen unscaled at the app's 100 % and 175 %, and 4K at 200 % at the app's 175 %: the picker takes the grid's whole row and its box holds its longest name
 // ("Non-satellite repeater or transponder") in its own font, the prompt and the page do not scroll sideways, Log and
 // Discard are in view and on top as the prompt opens, with no scroll (the row it adds once put them below the capped
 // card's fold at 175 %), and Log is in the window and on top. In one column the box held ~125 px of a 229 px name — red on that layout.
@@ -53,10 +52,12 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { CORE, FHD, LAPTOP, QHD, UHD_200, metrics, offMatrix } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
-/** [window W, H, the size class it must come out as]. */
-const SIZES = [[700, 800, 'xs'], [2560, 1440, 'xl']]
+/** [window (probe/sizes.mjs), the size class it must come out as]. 700×800 is below any supported screen — the xs
+ *  layout lives only in a window dragged that small (no supported screen reaches xs at the app's 100 %). */
+const SIZES = [[offMatrix(700, 800), 'xs'], [QHD, 'xl']]
 /** [overlay, how to tell it is open]. */
 const OVERLAYS = [
   ['dialog', `document.querySelector('.ui-dialog') != null`],
@@ -102,7 +103,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function run([W, H], [overlay, isOpen], control) {
+async function run([win], [overlay, isOpen], control) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -137,7 +138,7 @@ async function run([W, H], [overlay, isOpen], control) {
     await call('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 })
   }
   try {
-    await call('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false })
+    await call('Emulation.setDeviceMetricsOverride', metrics(win))
     // The box Stop TX has with no overlay at all: the overlay must not move it.
     await call('Page.navigate', { url: `${origin}/probe/stopabove.html?overlay=none` })
     if (!(await until(`document.documentElement.getAttribute('data-viewport') && ${BOX}`))) return { error: 'the page never drew Stop TX' }
@@ -284,7 +285,7 @@ const IOTA_MEASURE = (form) => `(() => {
     nameWhole: n.width > 0 && n.left >= h.left - 0.5 && n.right <= h.right + 0.5 && name.scrollWidth <= name.clientWidth + 1,
     covers, inputTop, source,
     // To half a pixel: a scroll offset is whole pixels and a box at a fractional UI scale is not, so a Log scrolled
-    // into view can sit a fraction of a pixel past the edge (0.17 px at 1024×768 175 % once the picker's line moves it).
+    // into view can sit a fraction of a pixel past the edge (0.17–0.22 px at 175 %, the picker's line moving it or not).
     logInWindow: !!l && l.left >= -0.5 && l.top >= -0.5 && l.right <= innerWidth + 0.5 && l.bottom <= innerHeight + 0.5,
     logTop: !!log && top(log),
     logWidth: l ? Math.round(l.width) : null,
@@ -302,12 +303,12 @@ const BARE = (form) => `(() => {
   return host ? host.scrollWidth : null
 })()`
 
-async function measureBare(form, w, h, zoom) {
+async function measureBare(form, size, zoom) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
   try {
-    await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+    await call('Emulation.setDeviceMetricsOverride', metrics(size))
     await call('Page.navigate', { url: `${origin}/probe/stopabove.html?overlay=${form}&zoom=${zoom}` })
     let last = null
     for (let i = 0; i < 60; i++) {
@@ -323,7 +324,7 @@ async function measureBare(form, w, h, zoom) {
   }
 }
 
-async function measureIota(form, w, h, zoom, control, extra = '') {
+async function measureIota(form, size, zoom, control, extra = '') {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -332,7 +333,7 @@ async function measureIota(form, w, h, zoom, control, extra = '') {
     return r.exceptionDetails ? null : r.result.value
   }
   try {
-    await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+    await call('Emulation.setDeviceMetricsOverride', metrics(size))
     await call('Page.navigate', { url: `${origin}/probe/stopabove.html?overlay=${form}&iota=1&zoom=${zoom}${control ? '&iotacontrol=1' : ''}${extra}` })
     if (form === 'strip') {
       let focused = false
@@ -356,11 +357,14 @@ async function measureIota(form, w, h, zoom, control, extra = '') {
   }
 }
 
+// The app's own UI zoom at its two ends, on the floor screen and on 1080p, both unscaled by the OS.
 const IOTA_SIZES = [
-  { w: 1024, h: 768, zoom: 0.65 },
-  { w: 1024, h: 768, zoom: 1.75 },
-  { w: 1920, h: 1080, zoom: 0.65 },
-  { w: 1920, h: 1080, zoom: 1.75 },
+  { ...LAPTOP, zoom: 0.65 },
+  { ...LAPTOP, zoom: 1.75 },
+  { ...FHD, zoom: 0.65 },
+  { ...FHD, zoom: 1.75 },
+  // xs: the shell's own 900×600 minimum window at the app's 175 % (514×343 effective); 1366×768 at 175 % is sm.
+  { ...offMatrix(900, 600), zoom: 1.75 },
 ]
 const IOTA_FORMS = ['logconfirm', 'strip']
 
@@ -417,13 +421,12 @@ const PROPMODE_MEASURE = `(() => {
   }
 })()`
 
-async function measurePropMode({ w, h, os, zoom }) {
+async function measurePropMode({ size, zoom }) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
   try {
-    // The OS scale is the screen's: a 1366×768 panel at 175 % is a 781×439 CSS window at 1.75 device px per px.
-    await call('Emulation.setDeviceMetricsOverride', { width: Math.round(w / os), height: Math.round(h / os), deviceScaleFactor: os, mobile: false })
+    await call('Emulation.setDeviceMetricsOverride', metrics(size))
     await call('Page.navigate', { url: `${origin}/probe/stopabove.html?overlay=logconfirm&zoom=${zoom}` })
     let last = null
     for (let i = 0; i < 100; i++) {
@@ -439,17 +442,15 @@ async function measurePropMode({ w, h, os, zoom }) {
   }
 }
 
-/** The supported screens: [panel W, H, OS scale, UI scale]. */
+/** The representative screens (probe/sizes.mjs CORE: the floor, a mid laptop, 1080p, 1440p, 4K at 200 %) at the app's
+ *  100 %, plus the floor screen unscaled at the app's 100 % and 175 %, and 4K at 200 % at the app's 175 %. */
 const PROPMODE_SIZES = [
-  { w: 1366, h: 768, os: 1, zoom: 1 },
-  { w: 1366, h: 768, os: 1.75, zoom: 1 },
-  { w: 1366, h: 768, os: 1, zoom: 1.75 },
-  { w: 1920, h: 1080, os: 1, zoom: 1 },
-  { w: 1920, h: 1080, os: 2, zoom: 1 },
-  { w: 3840, h: 2160, os: 2, zoom: 1 },
-  { w: 3840, h: 2160, os: 2, zoom: 1.75 },
+  ...CORE.map((size) => ({ size, zoom: 1 })),
+  { size: LAPTOP, zoom: 1 },
+  { size: LAPTOP, zoom: 1.75 },
+  { size: UHD_200, zoom: 1.75 },
 ]
-const propAt = (s) => `${s.w}×${s.h} at ${Math.round(s.os * 100)}% OS, ${Math.round(s.zoom * 100)}% UI`
+const propAt = (s) => `${s.size.name} at ${Math.round(s.zoom * 100)}% UI`
 
 /** What the island picker breaks, measured `m` against the same form with no picker (`base`): (a) the form's
  *  controls and Stop TX inside the window and no narrower, no more sideways scroll; (b) the picker usable. */
@@ -505,10 +506,11 @@ try {
     }
   }
   for (const form of IOTA_FORMS) {
-    for (const { w, h, zoom } of IOTA_SIZES) {
-      const at = `${form} ${w}×${h} at ${Math.round(zoom * 100)}%`
-      const m = await measureIota(form, w, h, zoom, false)
-      const bare = await measureBare(form, w, h, zoom)
+    for (const size of IOTA_SIZES) {
+      const { zoom } = size
+      const at = `${form} ${size.name} at ${Math.round(zoom * 100)}%`
+      const m = await measureIota(form, size, zoom, false)
+      const bare = await measureBare(form, size, zoom)
       console.log(`stopabove-probe: filled IOTA box, ${at}: ${JSON.stringify(m)} (no box: content extent ${bare})`)
       if (!m || m.waiting) {
         console.error(`stopabove-probe: the IOTA box never filled in the ${at}`)
@@ -527,21 +529,21 @@ try {
       if (m.source !== 'from the spot') red.push(`the source reads ${JSON.stringify(m.source)}`)
       if (!m.logInWindow) red.push('Log is outside the window')
       if (!m.logTop) red.push('Log is covered')
-      red.push(...islandReds(m, await measureIota(form, w, h, zoom, false, '&islands=0'), at))
+      red.push(...islandReds(m, await measureIota(form, size, zoom, false, '&islands=0'), at))
       if (red.length) {
         console.error(`stopabove-probe: RED (filled IOTA box) at ${at} — ${red.join('; ')}`)
         code = code || 1
       }
     }
-    const ic = await measureIota(form, 1024, 768, 1.75, false, '&islandcontrol=1')
-    const icReds = ic && !ic.waiting ? islandReds(ic, await measureIota(form, 1024, 768, 1.75, false, '&islands=0'), 'control') : ['never drew']
-    console.log(`stopabove-probe: CONTROL island picker uncontained, ${form} 1024×768 at 175%: ${JSON.stringify(icReds)}`)
+    const ic = await measureIota(form, LAPTOP, 1.75, false, '&islandcontrol=1')
+    const icReds = ic && !ic.waiting ? islandReds(ic, await measureIota(form, LAPTOP, 1.75, false, '&islands=0'), 'control') : ['never drew']
+    console.log(`stopabove-probe: CONTROL island picker uncontained, ${form} ${LAPTOP.name} at 175%: ${JSON.stringify(icReds)}`)
     if (icReds.length === 0) {
       console.error(`stopabove-probe: CONTROL FAILED (${form}) — the uncontained island picker still read as clear; the check cannot fail`)
       code = code || 1
     }
-    const c = await measureIota(form, 1024, 768, 1.75, true)
-    console.log(`stopabove-probe: CONTROL group name kept on one line, ${form} 1024×768 at 175%: ${JSON.stringify(c)}`)
+    const c = await measureIota(form, LAPTOP, 1.75, true)
+    console.log(`stopabove-probe: CONTROL group name kept on one line, ${form} ${LAPTOP.name} at 175%: ${JSON.stringify(c)}`)
     if (!c || c.waiting || c.nameWhole) {
       console.error(`stopabove-probe: CONTROL FAILED (${form}) — the unwrapped group name still read as drawn whole; the check cannot fail`)
       code = code || 1
@@ -549,7 +551,7 @@ try {
   }
   for (const size of SIZES) {
     for (const ov of OVERLAYS) {
-      const tag = `${size[0]}×${size[1]} ${ov[0]}`
+      const tag = `${size[0].name} ${ov[0]}`
       const r = await run(size, ov, false)
       console.log(`stopabove-probe: ${tag}: ${JSON.stringify(r)}`)
       if (r.error) {
@@ -559,7 +561,7 @@ try {
       }
       ran += 1
       const red = []
-      if (r.vp !== size[2]) red.push(`the window came out ${r.vp}, not ${size[2]}`)
+      if (r.vp !== size[1]) red.push(`the window came out ${r.vp}, not ${size[1]}`)
       if (!r.reach) red.push(`Stop TX is not on top anywhere (${r.onTop} is)`)
       if (!same(r.box, r.bare)) red.push(`Stop TX moved with the overlay open: ${r.bare} → ${r.box}`)
       if (r.mirror && !same(r.mirror, r.box)) red.push(`the mirror is not where Stop TX is: ${r.mirror} vs ${r.box}`)
@@ -594,7 +596,7 @@ try {
     console.error('stopabove-probe: no case ran')
     code = code || 1
   }
-  if (code === 0) console.log(`stopabove-probe: PASS — ${ran} cases: with ${OVERLAYS.map(([o]) => o).join(', ')} open, Stop TX is on top where it is drawn, unmoved, one real click and one tap each stop once, the mirror is unseen by screen readers and follows its button at once, the overlay stays open and the keyboard stays where it was, at ${SIZES.map(([w, h, v]) => `${w}×${h} (${v})`).join(' and ')}; each control (no stop layer) caught. The filled IOTA box of the prompt to log and of the log strip at ${IOTA_SIZES.map((s) => `${s.w}×${s.h} ${Math.round(s.zoom * 100)}%`).join(', ')}: filled, its long group name whole and covering nothing, the source shown, no sideways scroll (the page none; the prompt none at all; the strip no more than without the box), Log in the window and on top; each unwrapped-name control caught. The prompt to log's Prop mode at ${PROPMODE_SIZES.map(propAt).join('; ')}: the whole row, wide enough for its longest name, no sideways scroll, Log and Discard in view as it opens, Log in the window and on top. The island picker beside it, with a 200-character island picked: Log, Stop TX and every other control in the window and no narrower than without the picker, no sideways scroll added, the picker inside its form, on top, at least 6em wide and titled; each uncontained-picker control caught`)
+  if (code === 0) console.log(`stopabove-probe: PASS — ${ran} cases: with ${OVERLAYS.map(([o]) => o).join(', ')} open, Stop TX is on top where it is drawn, unmoved, one real click and one tap each stop once, the mirror is unseen by screen readers and follows its button at once, the overlay stays open and the keyboard stays where it was, at ${SIZES.map(([s, v]) => `${s.name} (${v})`).join(' and ')}; each control (no stop layer) caught. The filled IOTA box of the prompt to log and of the log strip at ${IOTA_SIZES.map((s) => `${s.name} ${Math.round(s.zoom * 100)}%`).join(', ')}: filled, its long group name whole and covering nothing, the source shown, no sideways scroll (the page none; the prompt none at all; the strip no more than without the box), Log in the window and on top; each unwrapped-name control caught. The prompt to log's Prop mode at ${PROPMODE_SIZES.map(propAt).join('; ')}: the whole row, wide enough for its longest name, no sideways scroll, Log and Discard in view as it opens, Log in the window and on top. The island picker beside it, with a 200-character island picked: Log, Stop TX and every other control in the window and no narrower than without the picker, no sideways scroll added, the picker inside its form, on top, at least 6em wide and titled; each uncontained-picker control caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

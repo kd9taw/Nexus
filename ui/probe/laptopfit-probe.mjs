@@ -30,12 +30,15 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { at } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
 const STUB_SRC = join(UI, 'probe', 'firstrun-api.ts')
 const STUB_API = join(UI, 'probe', '__laptopfit-api.ts')
-// [screen w, screen h, scaling]. The supported screens and the scalings their owners run.
+// [screen w, screen h, scaling]. The supported screens and the scalings their owners run; each window is
+// probe/sizes.mjs's `at()` for that screen (the CSS window of the screen at that scaling, floored as a real one is), less
+// the taskbar and the title bar of a maximised window.
 const SCREENS = [
   [1366, 768, 1], [1366, 768, 1.25], [1366, 768, 1.5], [1366, 768, 1.75],
   [1920, 1080, 1], [1920, 1080, 1.5],
@@ -44,7 +47,7 @@ const SCREENS = [
 ]
 const TASKBAR = 48
 const TITLE = 31
-const windowOf = ([W, H, s]) => ({ w: Math.round(W / s), h: Math.round(H / s) - TASKBAR - TITLE, s })
+const windowOf = ([W, H, s]) => { const z = at(W, H, Math.round(s * 100)); return { w: z.w, h: z.h - TASKBAR - TITLE, s: z.scale } }
 const tagOf = ([W, H, s]) => `${W}×${H}@${Math.round(s * 100)}%`
 const LOCALES = ['en', 'de', 'ru']
 // The longer languages are measured where the wizard is tightest and at 1080p; English everywhere.
