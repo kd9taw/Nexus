@@ -150,17 +150,17 @@ more often an operator sees the row.
 <!-- make-kit:tiers -->
 | Tier | Rows | What it covers |
 |---:|---:|---|
-| **1** | **994** | The frame the operator never stops looking at: the navigation bar, the top bar, panes and pop-outs, connection status, errors and toasts, band and frequency controls, the log-entry form, and Settings ▸ Station. |
+| **1** | **996** | The frame the operator never stops looking at: the navigation bar, the top bar, panes and pop-outs, connection status, errors and toasts, band and frequency controls, the log-entry form, and Settings ▸ Station. |
 | **2** | 364 | First run: the setup wizard, the Getting Started guide and the splash page. The first thing a new operator meets. |
 | **3** | 1,802 | The daily operating surfaces: the FT8/FT4 cockpit, the logbook, the station roster, spots, the Needed panel, the waterfall and band map. |
 | **4** | 577 | The settings people actually open: audio, radios, connections, alerts, transmit limits, integrations, backup, colours. |
 | **5** | 4,166 | The other cockpits and features: Phone, CW, Tempo, RTTY, PSK, SSTV, APRS, JS8, satellites, Field Day, the map, awards, memories. |
-| **6** | 2,791 | The deep end: rig-control detail, confirmation-service setup, rotator and routing, the pages of the remote browser station, and the long tail. |
+| **6** | 2,793 | The deep end: rig-control detail, confirmation-service setup, rotator and routing, the pages of the remote browser station, and the long tail. |
 <!-- /make-kit:tiers -->
 
-Tier 1 alone is <!-- make-kit:tier1 -->994<!-- /make-kit --> rows, about <!-- make-kit:tier1chars -->48,000<!-- /make-kit --> characters, roughly <!-- make-kit:tier1pct -->9<!-- /make-kit -->% of the text, and it covers
+Tier 1 alone is <!-- make-kit:tier1 -->996<!-- /make-kit --> rows, about <!-- make-kit:tier1chars -->48,000<!-- /make-kit --> characters, roughly <!-- make-kit:tier1pct -->9<!-- /make-kit -->% of the text, and it covers
 the menus, buttons, status messages and log form an operator sees all day. Tiers 1 and 2 together
-(<!-- make-kit:tier12 -->1,358<!-- /make-kit --> rows) add what a new operator meets in the first hour: the setup wizard and the
+(<!-- make-kit:tier12 -->1,360<!-- /make-kit --> rows) add what a new operator meets in the first hour: the setup wizard and the
 Getting Started guide.
 
 ## Check your work before you send it

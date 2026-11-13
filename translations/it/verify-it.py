@@ -26,11 +26,11 @@ from collections import Counter, defaultdict
 # file it just wrote. Do not edit them by hand: a pin that disagrees with the CSV beside it
 # reports a translator's untouched file as damaged.
 # >>> make-kit pins
-EXPECTED_ROWS = 10694
-EXPECTED_KEYS_SHA = '5a3233a2cdf59f9e0d4de55eca763ad82eba409006b41e5ace478d64f88fe44e'
-EXPECTED_ENGLISH_SHA = '4e5ab7822181bf2ddaf8fc6694a458fa6bc1cbb44860a38d47a95870874013ba'
-EXPECTED_DNT_SHA = '2f77a2a8720582dce6fed54ac718e4bbe0de80878df0679e94ba7f7d54650d55'
-EXPECTED_TIERS = {1: 994, 2: 364, 3: 1802, 4: 577, 5: 4166, 6: 2791}
+EXPECTED_ROWS = 10698
+EXPECTED_KEYS_SHA = '7906f732c85664b5cc0b0d56cf7d6573d05d9e9259b9a10a77aa3fc6de9b9ee9'
+EXPECTED_ENGLISH_SHA = '6cc51e59f46c400f0b4f05867d0b20ef7e06863ec08d0894bf299c85890a141b'
+EXPECTED_DNT_SHA = 'fa36c87c31dca46f8091bf79b3f179981f13939f15d62d2a327514f085c847e6'
+EXPECTED_TIERS = {1: 996, 2: 364, 3: 1802, 4: 577, 5: 4166, 6: 2793}
 # <<< make-kit pins
 COLUMNS = ['priority', 'key', 'english', 'italian', 'do_not_translate', 'notes']
 
