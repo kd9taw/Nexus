@@ -76,31 +76,28 @@ pub fn snapshot(
     window_secs: i64,
     needs: &dyn OperatorNeeds,
 ) -> Result<PropagationSnapshot, String> {
-    snapshot_with_spots(mycall, mygrid, window_secs, needs, &[]).map(|(snap, _)| snap)
+    let xml = pskreporter::fetch_paths(mycall, window_secs).ok();
+    snapshot_with_spots(mycall, mygrid, xml.as_deref(), needs, &[])
 }
 
-/// As [`snapshot`], merging `extra_spots` (e.g. the live PSK Reporter MQTT
-/// firehose) with the rate-limited XML query before scoring. The advisor dedupes
-/// paths by callsign, so overlap between the two sources is harmless — the
-/// firehose just makes "who hears me / who I hear" richer and more current.
-///
-/// Also returns the XML query's own reception reports, as fetched (empty when it failed), so
-/// the caller can keep the ones that heard the operator without asking PSK Reporter again.
+/// As [`snapshot`], with the PSK Reporter XML reports supplied by the caller (`None` when the
+/// query failed), so it can poll incrementally ([`pskreporter::ReportFeed`]) and keep what it
+/// fetched, and merging `extra_spots` (e.g. the live PSK Reporter MQTT firehose) before
+/// scoring. The advisor dedupes paths by callsign, so overlap between the two sources is
+/// harmless — the firehose just makes "who hears me / who I hear" richer and more current.
 pub fn snapshot_with_spots(
     mycall: &str,
     mygrid: &str,
-    window_secs: i64,
+    xml_spots: Option<&[PathSpot]>,
     needs: &dyn OperatorNeeds,
     extra_spots: &[PathSpot],
-) -> Result<(PropagationSnapshot, Vec<PathSpot>), String> {
+) -> Result<PropagationSnapshot, String> {
     // Each feed degrades on its own — one source being down must NOT blank the whole
     // nowcast (this was the bug behind "stays in demo": a single PSK Reporter 429
     // `?`-aborted the entire snapshot).
     let reading = swpc::fetch_space_wx().ok();
-    let xml_spots = pskreporter::fetch_paths(mycall, window_secs).ok();
     let xml_ok = xml_spots.is_some();
-    let xml_spots = xml_spots.unwrap_or_default();
-    let mut spots = xml_spots.clone();
+    let mut spots = xml_spots.unwrap_or_default().to_vec();
     spots.extend_from_slice(extra_spots);
     let plans = dxped::fetch_plans().unwrap_or_default();
 
@@ -152,5 +149,5 @@ pub fn snapshot_with_spots(
         "partial"
     }
     .to_string();
-    Ok((snap, xml_spots))
+    Ok(snap)
 }
