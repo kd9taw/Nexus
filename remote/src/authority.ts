@@ -178,11 +178,12 @@ export function mailbox(address: string): string {
  *  one at a time, so a trial from one is never counted against its domain (`mailDomain`). A guess about
  *  which domains are public, kept short on purpose: a domain missing here is only counted, never refused
  *  more than `trial-identity.ts` DOMAIN_TRIALS allows. arrl.net is the ARRL's forwarding service, which
- *  many US amateurs sign in with. */
+ *  many US amateurs sign in with, and ampr.org is AMPRNet's, which gives each amateur an address (or a
+ *  host name under it) of their own. */
 const PUBLIC_MAIL_DOMAINS = new Set(['gmail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com', 'yahoo.com',
   'ymail.com', 'icloud.com', 'me.com', 'mac.com', 'aol.com', 'proton.me', 'protonmail.com', 'pm.me', 'gmx.com',
   'mail.com', 'fastmail.com', 'zoho.com', 'comcast.net', 'att.net', 'sbcglobal.net', 'verizon.net', 'cox.net',
-  'charter.net', 'earthlink.net', 'arrl.net'])
+  'charter.net', 'earthlink.net', 'arrl.net', 'ampr.org'])
 /** Second-level suffixes a country's own registry sells names under, where the domain a person registers is
  *  one label deeper (`shack.co.uk`, not `co.uk`). An explicit list of real registry pairs, taken from the
  *  ICANN section of the Public Suffix List (https://publicsuffix.org/list/), limited to the commonly used

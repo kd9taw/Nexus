@@ -253,7 +253,7 @@ already holds `TRIAL_KEY` is refused before any write while the environment does
   - **Three trials a mail domain in thirty days.** Counted on the registrable domain of the account's
     mailbox (`club.example` for `op@x1.club.example`; one label deeper under a registry's own
     second level from a fixed list in `authority.ts`, so `shack.co.uk`; an unlisted one counts as two labels), so a wildcard mail exchanger's subdomains share one count. The large public
-    providers listed in `authority.ts` (`PUBLIC_MAIL_DOMAINS`, arrl.net among them), whose addresses are
+    providers listed in `authority.ts` (`PUBLIC_MAIL_DOMAINS`, arrl.net and ampr.org among them), whose addresses are
     each an account of their own, are excluded. The fourth is refused `trialDomainLimit`. Hand grants
     and paid plans are never counted or refused. What it cannot see: the masked addresses some of those
     excluded providers hand out without limit (iCloud Hide My Email, Fastmail masked email) are

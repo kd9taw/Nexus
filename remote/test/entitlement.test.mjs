@@ -389,7 +389,7 @@ test('required identity: a trial needs an active US licence, and a stale licence
 test('required identity: three trials a mail domain in thirty days, public mailbox providers not counted', async () => {
   const strict = await runtime({ bindings: { TRIAL_KEY, TRIAL_IDENTITY_REQUIRED: '1' } })
   try {
-    const calls = Array.from({ length: 12 }, (_, i) => `W${i % 10}D${String.fromCharCode(65 + i)}${String.fromCharCode(66 + i)}`)
+    const calls = Array.from({ length: 16 }, (_, i) => `W${i % 10}D${String.fromCharCode(65 + i)}${String.fromCharCode(66 + i)}`)
     await licences(strict, calls.map(call => ({ call, active: true, email: null })))
     let next = 0
     const start = (owner, expected) => approve(strict, owner, { callsign: calls[next], pc: pc(null, calls[next++]) }, expected)
@@ -402,6 +402,8 @@ test('required identity: three trials a mail domain in thirty days, public mailb
     // Another domain is its own; a public provider's addresses are each a person, and not counted.
     await start(await person(strict, 'op@other-club.example'))
     for (let i = 0; i < 4; i++) await start(await person(strict, `ham${i}@gmail.com`))
+    // AMPRNet's ampr.org hands each amateur an address of their own: a public provider for hams.
+    for (let i = 0; i < 4; i++) await start(await person(strict, i % 2 ? `op@w${i}amp.ampr.org` : `w${i}amp@ampr.org`))
     // A trial started more than thirty days ago no longer counts against its domain.
     await strict.db.prepare('UPDATE trials SET started_at=? WHERE account_id=?').bind(Date.now() - 31 * DAY, farm[0].accountId).run()
     await start(fourth)
