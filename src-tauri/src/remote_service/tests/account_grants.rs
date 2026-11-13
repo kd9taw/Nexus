@@ -105,6 +105,40 @@ fn bound() -> account::Bound {
 
 // ---- Signing in at the shack ---------------------------------------------------------------------
 
+/// A sign-in at the shack stages a credential, which the credential store refuses over a moved
+/// pairing's confirmed record: so, while one is held, a sign-in is refused by name, the binder is
+/// never asked, and nothing is staged over the record Forget clears.
+#[tokio::test(flavor = "multi_thread")]
+async fn signing_in_is_not_started_over_a_moved_pairing() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(transport::OTHER_ORIGIN);
+    let old = vault.binding().unwrap().unwrap();
+    let (bind, asked) = binder(vec![Ok(bound())]);
+    let service = launch_with(&cloud, &vault, accounts(&vault, bind));
+    eventually(&service, "the moved pairing was named", |s| {
+        s.error == Some("pairingMoved")
+    })
+    .await;
+
+    let signed = service
+        .action(Action::SignIn {
+            name: "Shack".into(),
+        })
+        .await;
+    assert_eq!(signed.err(), Some("pairingMoved"));
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "the binder is never asked"
+    );
+    assert!(vault.binding().unwrap() == Some(old));
+    let unbound = Binding {
+        origin: cloud.origin.clone(),
+        station_id: String::new(),
+        account_id: String::new(),
+    };
+    assert!(vault.credential(&unbound).is_err(), "nothing staged");
+}
+
 /// ★ Sign in to Nexus Remote: the station's keys and credential are made and staged before the
 /// browser opens, a sign-in tried again names the very same ones (so the service finds the station
 /// it already made for them), and once bound the credential and the signing key are kept under the

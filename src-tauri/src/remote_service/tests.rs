@@ -2978,7 +2978,7 @@ async fn a_pairing_under_the_retired_origin_is_named_as_moved_and_can_be_cleared
     assert!(!on(&status), "a moved pairing never turns Remote on");
     assert_eq!(
         status.phase, "unpaired",
-        "the station can pair with the new service straight away"
+        "unpaired here: Forget clears the moved record, then the station pairs"
     );
     assert_eq!(
         status.error,
@@ -2998,6 +2998,49 @@ async fn a_pairing_under_the_retired_origin_is_named_as_moved_and_can_be_cleared
     settle().await;
     assert!(vault.binding().unwrap().is_none());
     assert!(vault.state().unwrap().is_none());
+}
+
+/// A moved pairing is the store's one confirmed record, and the credential store refuses to stage a
+/// different pairing over a confirmed one (`vault::SystemVault`). So a pairing is not started while
+/// one is held: it is refused by name, before the service makes an enrollment, and the record is
+/// left for Forget, which still clears it, after which pairing goes ahead. Before this, pairing
+/// started, then failed at the store as "unlock your credential store".
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pairing_is_not_started_over_a_moved_one_and_forget_still_clears_it() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(transport::OTHER_ORIGIN);
+    let old = vault.binding().unwrap().unwrap();
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the moved pairing was named", |s| {
+        s.error == Some("pairingMoved")
+    })
+    .await;
+
+    let begun = service
+        .action(Action::Begin {
+            name: "Test station".into(),
+        })
+        .await;
+    assert_eq!(begun.err(), Some("pairingMoved"));
+    assert_eq!(service.status().unwrap().pairing_id, None);
+    assert!(
+        vault.binding().unwrap() == Some(old),
+        "the moved record is untouched"
+    );
+
+    let forgotten = service
+        .action(Action::Forget {})
+        .await
+        .expect("Forget clears the moved pairing");
+    assert_eq!(forgotten.error, None);
+    assert!(vault.binding().unwrap().is_none());
+    service
+        .action(Action::Begin {
+            name: "Test station".into(),
+        })
+        .await
+        .expect("with the moved pairing cleared, pairing starts");
 }
 
 /// A service that has closed must be able to say so by name, on HTTP and on the station socket. Today
