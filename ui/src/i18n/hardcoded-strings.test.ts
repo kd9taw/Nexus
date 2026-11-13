@@ -71,6 +71,8 @@ const MIGRATED = [
   'remote-web/RemoteLanding.tsx',
   // Subscribe's Billing country question (2026-11-12) — born migrated.
   'remote-web/BillingCountryField.tsx',
+  // The account card's notice address, moved through a mailed code (2026-11-13) — born migrated.
+  'remote-web/NoticeAddress.tsx',
   // Remote over this network's card (2026-10-04) — born migrated: the switch, the status line, the
   // pairing window, the paired computers and the reset.
   'remote-native/LanStation.tsx',

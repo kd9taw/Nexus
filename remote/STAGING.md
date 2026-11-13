@@ -209,6 +209,26 @@ key; a 503 `relayUnavailable` means Cloudflare refused, answered something unusa
 answer within three seconds. `localStorage.removeItem('nexus.remote.relay')` puts streams back to
 direct first.
 
+**What the relay is allowed to cost (ruling 1406).** A credential lasts an hour, or less when the
+account's internet use ends sooner, and only an approved device on an account with internet use gets
+one. An account is minted six an hour, counting every device and guest of its stations, browser or
+computer; the seventh is refused `tryLater` before Cloudflare is asked, and the page streams direct.
+Each mint is counted in `relay_usage`, a row per account and month (`YYYY-MM`, UTC): `mints` and
+`granted_seconds`, the seconds those credentials were minted for. The account is the station's owner,
+whose plan pays, even when a guest asked. There is no admin route that reads it (the admin API is one
+verb on purpose); support reads it with:
+
+```sh
+npx wrangler d1 execute <database> --remote --command \
+  "SELECT month, mints, granted_seconds FROM relay_usage WHERE account_id = '<account-uuid>' ORDER BY month"
+```
+
+and the account's own copy (Account, Download a copy) lists the same months. It counts what the Worker
+hands out, not what the relay carries: the bytes relayed are metered by Cloudflare, per TURN key, in
+the dashboard's Realtime analytics, and no per-account split of them reaches the Worker. A relayed
+connection outliving its credential's hour is not proven here: if Cloudflare ends the allocation at
+expiry, a relayed stream ends at the hour and the page has to start it again.
+
 ## Paid access and trial identity (built, not configured)
 
 Two optional Worker settings, neither in the template's `secrets.required`, so a deploy without them
@@ -222,7 +242,27 @@ already holds `TRIAL_KEY` is refused before any write while the environment does
   marker and every spent trial becomes available again. Set it, with the licence copy loaded, before
   any Nexus sends a callsign. Without it, the approve route checks `callsign` and `pc` for shape only.
 - `TRIAL_IDENTITY_REQUIRED=1`: an approval that would start a trial must carry both fields
-  (`updateRequired` otherwise). Turn it on only once the Nexus releases that send them are out.
+  (`updateRequired` otherwise). Turn it on only once the Nexus releases that send them are out. It is
+  also the paid launch's trial identity (ruling 1406), so it turns on two more rules wherever a trial
+  starts, at a code pairing's approval and at a signed-in station's first internet use alike:
+  - **A trial is a US licence's.** The station callsign must be a US one that is active in the licence
+    copy: none is refused `callsignInvalid`, any other `callsignNotLicensed`, and a station whose
+    sign-in kept no callsign `updateRequired`. A call whose licence email is the account's mailbox is
+    proven; any other active US call is an unproven claim, which one other account's marker blocks
+    (`trialUsedByCallsign`), so each call starts one trial. Support grants by hand where this is wrong.
+  - **Three trials a mail domain in thirty days.** Counted on the account's mailbox domain, excluding
+    the large public providers listed in `authority.ts` (`PUBLIC_MAIL_DOMAINS`, arrl.net among them),
+    whose addresses are each an account of their own. The fourth is refused `trialDomainLimit`. Hand
+    grants and paid plans are never counted or refused.
+
+  **How the licence copy's staleness rule reads with these.** The stale rule was "US calls fail
+  closed": once the copy is more than three days old, a US call is refused `serviceUnavailable` rather
+  than waved through, while a non-US call was still checked for shape only. With the identity required
+  there are no non-US trials, so a stale copy now refuses **every** self-serve trial with
+  `serviceUnavailable` until the next import lands. Nothing already running is touched: the copy is read
+  only when a trial starts, and paid plans, hand grants, the LAN and existing trials do not read it.
+  Keep the daily import scheduled; a missed day or two is invisible, the fourth is an outage of new
+  trials. A licence that lapses or changes hands after a trial started ends nothing either.
 - `REMOTE_BETA_FREE=1` (staging only; a production deploy refuses it): free during the beta. A trial or
   a grant no longer ends; the page says "Free during the beta" instead of counting days. Everything
   else is unchanged: an account still starts its one trial through the same checks, and a ban,
@@ -254,6 +294,22 @@ Add them in the same GitHub environment as the other secrets, as `REMOTE_OWNER_N
 environment holds one declares it in the artifact, applies it as an encrypted secret, and checks it
 reads back encrypted. Set both or neither. A Worker that already holds either one is refused before
 any write while the environment does not supply it.
+
+**Changing where the notice goes.** The notice goes to the address the account was made with, captured
+at its first notice. The owner can move it on the Remote page (Account, Device-added notices): the page
+asks for the new address, the Worker mails an eight-digit code there (half an hour, five tries, four
+codes a day), and once the code comes back the change waits 48 hours before it takes over. The current
+address is mailed when the wait starts, and the owner can cancel it until then. Taking the new address
+over sends nothing and marks nothing sent, so a device that is held stays held. A change replaces only
+the address that was warned of it, and is dropped if the notice address moved meanwhile. An account
+that has had no notice yet first captures the address it was made with, from the owner's sign-in, and
+that address is warned as above; a sign-in that does not carry that address cannot set a first address
+(`noticeAddressUnbound`), and new devices stay held until approved at the shack. Delivery of the warning
+is not a precondition: the wait runs the same through a mail outage. Without the two secrets
+above, the page is told `noticeNotConfigured` and nothing changes. A pending change is the
+`notice_changes` row of the account; support can see it with
+`SELECT address, verified_at, effective_at FROM notice_changes WHERE account_id = '<account-uuid>'`, and
+deleting that row cancels it.
 
 ## Cloudflare and deployment
 

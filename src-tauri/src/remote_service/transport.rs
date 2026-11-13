@@ -188,6 +188,9 @@ impl Client {
                 Some("callsignNotLicensed") => "callsignNotLicensed",
                 Some("trialUsedByCallsign") => "trialUsedByCallsign",
                 Some("trialUsedOnThisPc") => "trialUsedOnThisPc",
+                // The account's mail domain has started as many trials this month as one may: the
+                // way on is another address or a plan, never a retry at the shack.
+                Some("trialDomainLimit") => "trialDomainLimit",
                 // The service needs a newer Nexus at the shack to approve a station.
                 Some("updateRequired") => "updateRequired",
                 // The station has invited as many people as the service keeps.

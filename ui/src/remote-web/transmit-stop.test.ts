@@ -244,3 +244,44 @@ it('a LAN-only session gets its lease alone, which the page still parses and a S
   relay.receiveStation({ type: 'operationResponse', sessionId, requestId: s.requestId, value: { stop: 'accepted' } })
   expect(browser.frames[browser.frames.length - 1]).toEqual({ type: 'operationResponse', requestId: s.requestId, value: { stop: 'accepted' } })
 })
+
+// A LAN-only ticket can be asked for from anywhere, so the lease it takes through the relay is held to
+// the shack's own network too (security review 2026-11-12, follow-up 1). The room says until when this
+// session may hold it (`lanLeaseUntil`: the stream it started is live on the LAN, or the short grace an
+// acquire is given to bring it up); past that its acquire and heartbeat stop here, so the station's
+// five-second lease runs out by itself. Stop, the lease's read and Release always go.
+const last = <T,>(items: T[]): T | undefined => items[items.length - 1]
+it('a LAN-only session takes and keeps the lease only while the room allows it; Stop, state and release always pass', () => {
+  const relay = new OperationRelay(), station = peer(), browser = peer(), sessionId = id(), s = state()
+  const sync = (lanLeaseUntil: number | undefined, now: number) => relay.sync({ peer: station, supported: true, operationVersion: 4 },
+    [{ sessionId, deviceId: id(), commandUntil: 0, lanUntil: Number.MAX_SAFE_INTEGER, ...(lanLeaseUntil === undefined ? {} : { lanLeaseUntil }), peer: browser }], now)
+  const send = (request: { type: string; requestId: string }, now: number) => {
+    relay.receiveBrowser(sessionId, { type: 'operationRequest', operationVersion: 4, request }, now)
+    const reached = last(station.frames)?.request?.requestId === request.requestId
+    if (reached) relay.receiveStation({ type: 'operationResponse', sessionId, requestId: request.requestId,
+      value: request.type === 'stopTransmit' ? { stop: 'accepted' } : s })
+    return reached
+  }
+  const acquire = () => ({ type: 'acquire', requestId: id(), stationBootId: s.stationBootId })
+  const heartbeat = () => ({ type: 'heartbeat', requestId: id(), leaseId: s.leaseId! })
+  for (const until of [undefined, 0]) {
+    sync(until, 1000)
+    expect(send(acquire(), 1000), `lanLeaseUntil ${until}`).toBe(false)
+    expect(last(browser.frames)).toMatchObject({ type: 'operationResponse', error: 'stationUnavailable' })
+    expect(send(heartbeat(), 1000)).toBe(false)
+    expect(send({ type: 'state', requestId: id() }, 1000), 'the lease\'s read').toBe(true)
+    expect(send(stop(s), 1000), 'Stop').toBe(true)
+    expect(send({ type: 'release', requestId: id(), leaseId: s.leaseId! } as { type: string; requestId: string }, 1000), 'Release').toBe(true)
+  }
+  // Inside the allowance the lease is taken and kept; at its end the next heartbeat is not carried.
+  sync(31_000, 2000)
+  expect(send(acquire(), 2000)).toBe(true)
+  expect(send(heartbeat(), 30_999)).toBe(true)
+  expect(send(heartbeat(), 31_000)).toBe(false)
+  expect(send(stop(s), 31_000), 'Stop after the allowance').toBe(true)
+  // An internet session is untouched by any of it.
+  const other = new OperationRelay(), net = peer(), stationTwo = peer(), session = id()
+  other.sync({ peer: stationTwo, supported: true, operationVersion: 4 }, [{ sessionId: session, deviceId: id(), commandUntil: 0, peer: net }], 1000)
+  other.receiveBrowser(session, { type: 'operationRequest', operationVersion: 4, request: acquire() }, 1000)
+  expect(last(stationTwo.frames)?.request?.type).toBe('acquire')
+})

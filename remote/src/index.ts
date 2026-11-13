@@ -1,10 +1,10 @@
 // Same-origin browser API, the native client's API, and outbound station admission. No radio command router.
 import { account, access, body, bodyBytes, browserOrigin, caller, caller as callerKey, CHALLENGE_MS, cookie, device, deviceAddedNotice, deviceCookie, deviceKeys, deviceNonce, digest,
   deviceKinds, fieldsOf, id, keepApprovals, label, lifetime, mailbox, mailboxHash, memberRole, native, nativeAccount, nativeDevice, nativeKind, proof, publicKey, rate, readEntitlement, Refusal, requireAdmin,
-  lanEntitlement, requireMayPair, requireTrial, requireUnspentIdentity, requireValue, secret, signedBy, station, stationNonce, TRIAL_MS, UNTIL_REMOVED, untilRemoved, uuid, verifyProof } from './authority'
+  lanEntitlement, requireMayPair, sendMail, takeNoticeChange, captureNoticeAddress, requireTrial, requireUnspentIdentity, requireValue, secret, signedBy, station, stationNonce, TRIAL_MS, UNTIL_REMOVED, untilRemoved, uuid, verifyProof } from './authority'
 import type { AccountEntitlement, DeviceRow, RemoteEnv, Role, StationRow } from './authority'
 import { observerDeadline } from '../../ui/src/remote-monitor/relay'
-import { baseCall, hmac, markerInserts, requireUnspentMarkers, SPENT_MARKER, spentBindings, trialClaim, trialInput, trialProof } from './trial-identity'
+import { baseCall, domainGuard, hmac, markerInserts, requireUnspentDomain, requireUnspentMarkers, SPENT_MARKER, spentBindings, trialClaim, trialInput, trialProof } from './trial-identity'
 import type { TrialInput } from './trial-identity'
 import type { Identity } from '../../ui/src/remote-monitor/relay'
 import { advertisedOperationVersion } from '../../ui/src/remote-web/operation-version'
@@ -49,6 +49,18 @@ const HEALTH_NETWORK_PER_MINUTE = 30
 const HEALTH_DEADLINE_MS = 2000
 /** The room `health` reaches. Never a station's: a station's room is named by its id, always a UUID. */
 const HEALTH_ROOM = 'health'
+/** THE STREAM'S RELAY, bounded (ruling 1406, security review M3). A credential lasts an hour at most, and
+ *  never past the entitlement; an account may be minted six an hour, whichever of its devices, stations
+ *  and guests asks: the station's account pays for the relay, so it is the account that is counted. */
+const RELAY_TTL_MS = 3600000
+const RELAY_PER_HOUR = 6
+const HOUR_MS = 3600000
+/** THE NOTICE ADDRESS, CHANGED (account/notice/*). A code to a new address lasts half an hour and takes
+ *  five tries; an account is sent four codes a day; a proven address takes over after two days. */
+const NOTICE_CODE_MS = 1800000
+const NOTICE_CODE_TRIES = 5
+const NOTICE_CODES_PER_DAY = 4
+const NOTICE_WAIT_MS = 2 * DAY_MS
 /** Account deletions and copies an account may ask for in ten minutes. */
 const ACCOUNT_DATA_PER_TEN_MINUTES = 5
 /** A subscription in these states has ended and can charge nothing more; any other can. */
@@ -292,6 +304,8 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     const starts = before.state === 'none'
     const claim = starts ? await trialClaim(env, input, pending.account_id, now) : null
     if (claim) await requireUnspentMarkers(env, pending.account_id, claim)
+    if (starts) await requireUnspentDomain(env, pending.account_id, now)
+    const domain = domainGuard(env, pending.account_id, now)
     const credentialHash = await digest(proof(input.credential))
     // Approval at the shack is the moment the trial starts, so the clock is written in the same
     // batch as the station. Station insert first on purpose: a trial with no station is
@@ -337,9 +351,10 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
           WHERE self.id=? AND t.account_id<>self.id
           AND (a.mailbox_hash=self.mailbox_hash OR a.email_hash IN (self.email_hash, self.mailbox_hash)))
         ${claim ? `AND NOT EXISTS(SELECT 1 FROM trial_markers m WHERE ${SPENT_MARKER})` : ''}
+        ${domain.sql}
         ON CONFLICT(account_id) DO NOTHING`)
         .bind(pending.account_id, now + TRIAL_MS, now, stationId, credentialHash, pending.account_id,
-          ...(claim ? spentBindings(pending.account_id, claim) : [])),
+          ...(claim ? spentBindings(pending.account_id, claim) : []), ...domain.bindings),
       // What the trial spent, only if it was this approval that started it.
       ...(claim ? markerInserts(env, pending.account_id, claim, now) : [])] : []),
     ])
@@ -357,6 +372,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     if (started.state !== 'active') {
       await requireUnspentIdentity(env, pending.account_id, now)
       if (claim) await requireUnspentMarkers(env, pending.account_id, claim)
+      if (starts) await requireUnspentDomain(env, pending.account_id, now)
     }
     requireValue(started.state === 'active', 'serviceUnavailable', 503)
     // The approved pairing browser, so the shack can give it station control and logging without
@@ -570,6 +586,93 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     for (const stationId of left) headers.append('set-cookie', cookie(stationId, '', 0))
     return json({ ok: true }, 200, headers)
   }
+  // THE ADDRESS THE "DEVICE ADDED" NOTICE GOES TO, moved by the owner. That notice is what lets a new
+  // device's transmit hold lift, so the owner's sign-in alone must not move it (security review M4): a
+  // code mailed to the new address has to come back first, and then the old address keeps getting the
+  // notices for two days (`NOTICE_WAIT_MS`), is told of the change, and the owner can cancel it. Taking
+  // the new address over sends nothing and marks nothing sent: every device held stays held. Above the
+  // entitlement, as the account's other housekeeping is. Without the mail provider nothing can be proven.
+  //
+  // A FIRST ADDRESS. An account that has had no notice still has an address its notices go to: the one it
+  // was made with, captured from the owner's own sign-in at its first notice (authority.ts `noticeAddress`).
+  // So a change from it captures that address first, from this sign-in, exactly as a notice would, and is
+  // then an ordinary change: that address is warned and keeps the notices through the wait. A sign-in that
+  // does not carry that address (changed at the identity provider: what a hijacked sign-in looks like, and
+  // what an owner whose mailbox moved looks like too) can set no first address, `noticeAddressUnbound`:
+  // the service cannot tell the two apart, and holding every new device until it is approved at the shack
+  // is today's answer for both. Delivery of the warning is never a precondition: a mail outage blocks no
+  // owner, and the wait runs the same.
+  //
+  // A change replaces only the address it was confirmed against (`warned_address`, authority.ts
+  // `takeNoticeChange`): if the notice address moves by any other way during the wait, the change is dropped.
+  //   account/notice          { address, pending: { address, verified, effectiveAt } | null }
+  //   account/notice/change   { address }  a code mailed to it
+  //   account/notice/confirm  { code }     the wait starts, the old address is told
+  //   account/notice/cancel   {}           the pending change, gone
+  if (path === 'account/notice' || path.startsWith('account/notice/')) {
+    const verb = path.slice('account/notice'.length)
+    const input = await body(request, verb === '/change' ? ['address'] : verb === '/confirm' ? ['code'] : [])
+    const self = identity.accountId
+    if (verb === '') {
+      await takeNoticeChange(env, self, now)
+      const current = await env.DB.prepare('SELECT notice_address FROM accounts WHERE id=?').bind(self).first<{ notice_address: string | null }>()
+      const pending = await env.DB.prepare('SELECT address, verified_at, effective_at FROM notice_changes WHERE account_id=? AND (verified_at IS NOT NULL OR expires_at>?)')
+        .bind(self, now).first<{ address: string; verified_at: number | null; effective_at: number | null }>()
+      return json({ address: current?.notice_address ?? null,
+        pending: pending && { address: pending.address, verified: pending.verified_at !== null, effectiveAt: pending.effective_at } })
+    }
+    if (verb === '/cancel') {
+      await env.DB.prepare('DELETE FROM notice_changes WHERE account_id=?').bind(self).run()
+      return json({ ok: true })
+    }
+    if (verb === '/change') {
+      const address = typeof input.address === 'string' ? input.address.trim().toLowerCase() : ''
+      requireValue(address.length <= 320 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address), 'invalidRequest', 400)
+      requireValue(env.OWNER_NOTICE_API_KEY && env.OWNER_NOTICE_FROM, 'noticeNotConfigured', 503)
+      await takeNoticeChange(env, self, now)
+      requireValue(await captureNoticeAddress(env, self, email), 'noticeAddressUnbound')
+      await rate(env, `notice-change:${self}`, now, NOTICE_CODES_PER_DAY, DAY_MS)
+      const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 100000000).padStart(8, '0')
+      await env.DB.prepare(`INSERT INTO notice_changes(account_id,address,code_hash,expires_at,tries,created_at) VALUES(?,?,?,?,0,?)
+        ON CONFLICT(account_id) DO UPDATE SET address=excluded.address, code_hash=excluded.code_hash, expires_at=excluded.expires_at,
+          tries=0, verified_at=NULL, effective_at=NULL, created_at=excluded.created_at`)
+        .bind(self, address, await digest(`notice-code:${self}:${code}`), now + NOTICE_CODE_MS, now).run()
+      const sent = await sendMail(env, address, 'Your Nexus Remote notice code',
+        `Your code to receive Nexus Remote device notices at this address: ${code}\n\n` +
+        `Type it on the Remote page within 30 minutes. If you did not ask for this, ignore this mail.`)
+      if (!sent) {
+        await env.DB.prepare('DELETE FROM notice_changes WHERE account_id=? AND verified_at IS NULL').bind(self).run()
+        throw new Refusal('noticeNotSent', 503)
+      }
+      return json({ ok: true, expiresAt: now + NOTICE_CODE_MS })
+    }
+    if (verb === '/confirm') {
+      requireValue(typeof input.code === 'string' && /^\d{8}$/.test(input.code), 'noticeCodeInvalid')
+      const pending = await env.DB.prepare('SELECT address, code_hash FROM notice_changes WHERE account_id=? AND verified_at IS NULL AND expires_at>? AND tries<?')
+        .bind(self, now, NOTICE_CODE_TRIES).first<{ address: string; code_hash: string }>()
+      requireValue(pending, 'noticeChangeUnavailable', 404)
+      if (await digest(`notice-code:${self}:${input.code}`) !== pending.code_hash) {
+        // Each wrong code is a try; the last one ends the change, so it is asked for again from the start.
+        await env.DB.batch([
+          env.DB.prepare('UPDATE notice_changes SET tries=tries+1 WHERE account_id=? AND verified_at IS NULL').bind(self),
+          env.DB.prepare('DELETE FROM notice_changes WHERE account_id=? AND verified_at IS NULL AND tries>=?').bind(self, NOTICE_CODE_TRIES),
+        ])
+        throw new Refusal('noticeCodeInvalid')
+      }
+      const effectiveAt = now + NOTICE_WAIT_MS
+      // The address the change replaces is the one notices go to now, and the one told of it.
+      const old = await env.DB.prepare('SELECT notice_address FROM accounts WHERE id=?').bind(self).first<{ notice_address: string | null }>()
+      await env.DB.prepare('UPDATE notice_changes SET verified_at=?, effective_at=?, warned_address=? WHERE account_id=? AND verified_at IS NULL')
+        .bind(now, effectiveAt, old?.notice_address ?? null, self).run()
+      // The address that gets the notices now is told, so an owner whose sign-in is someone else's
+      // hears of it with two days to cancel. Its delivery decides nothing: the wait is the same either way.
+      if (old?.notice_address) await sendMail(env, old.notice_address, 'Your Nexus Remote notice address is changing',
+        `Notices of devices added to your Nexus Remote account will go to ${pending.address} from ${new Date(effectiveAt).toISOString()}.\n\n` +
+        `If this was not you, sign in at ${env.PUBLIC_REMOTE_ORIGIN}/remote/ now, cancel the change, and remove any device you do not know.`)
+      return json({ ok: true, effectiveAt })
+    }
+    throw new Refusal('notFound', 404)
+  }
   // THE ACCOUNT'S DEVICES, on the page: every device of every station the account owns, and its own
   // devices at stations it was invited to, each removable here. Above the entitlement, as `revoke` is:
   // removing a device is never something an account has to pay for.
@@ -768,10 +871,11 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     observerDeadline(policy, browser, lan ? lanEntitlement(plan, now) : plan, now)
     // The stream's relay, for exactly the browser a ticket is for, past exactly the same checks.
     // It renews no approval: a page asks for a relay as a stream starts, and that is not use. The
-    // credential lasts the longest session, and never past the entitlement that a stream needs.
+    // credential lasts an hour, never past the entitlement that a stream needs, and the account is
+    // minted six an hour at most (`relay`).
     if (verb === 'turn') {
       await rate(env, `turn:${row.id}:${current.id}`, now, 12)
-      return json({ iceServers: await relayServers(env, Math.min(STATION_ADMISSION_MS, plan.expiresAt - now)) })
+      return json({ iceServers: await relay(env, row.account_id, plan, now) })
     }
     if (verb === 'renew') {
       const response = await room(env, row.id, 'renew', { access: policy,
@@ -820,12 +924,16 @@ async function accountCopy(env: RemoteEnv, accountId: string, now: number): Prom
   const notice = await env.DB.prepare('SELECT notice_address FROM accounts WHERE id=?').bind(accountId).first<{ notice_address: string | null }>()
   return {
     exportedAt: now, accountId,
-    // Where a "device added" notice goes, once the account has had one.
+    // Where a "device added" notice goes, once the account has had one, and a change of it under way.
     noticeAddress: notice?.notice_address ?? null,
+    noticeChange: await env.DB.prepare(`SELECT address, verified_at IS NOT NULL AS verified, effective_at AS effectiveAt, created_at AS createdAt
+      FROM notice_changes WHERE account_id=?`).bind(accountId).first(),
     trial: trial && truth(trial, 'enabled'),
     subscription: subscription && truth(subscription, 'cancelAtPeriodEnd'),
     checkouts: await all('SELECT id, created_at AS createdAt FROM checkout_sessions WHERE account_id=? ORDER BY created_at', accountId),
     refusedPaymentEvents: await all('SELECT event_id AS eventId, type, reason, at FROM billing_refusals WHERE account_id=? ORDER BY at', accountId),
+    // The stream's relay, a month at a time: credentials minted and the seconds they were minted for.
+    relayUsage: await all('SELECT month, mints, granted_seconds AS grantedSeconds FROM relay_usage WHERE account_id=? ORDER BY month', accountId),
     markers: (await all(`SELECT kind, proven=1 AS proven, method, created_at AS createdAt, first_refund_at AS firstRefundAt
       FROM trial_markers WHERE account_id=? ORDER BY kind, created_at`, accountId)).map(row => truth(row, 'proven')),
     stations: stations.map(row => truth(row, 'enabled')),
@@ -880,6 +988,8 @@ async function deleteAccount(env: RemoteEnv, accountId: string, now: number): Pr
     env.DB.prepare(`DELETE FROM tickets WHERE account_id=? OR station_id IN (${mine}) OR device_id IN (SELECT id FROM devices WHERE account_id=?)`)
       .bind(accountId, accountId, accountId),
     env.DB.prepare('DELETE FROM challenges WHERE account_id=?').bind(accountId),
+    env.DB.prepare('DELETE FROM relay_usage WHERE account_id=?').bind(accountId),
+    env.DB.prepare('DELETE FROM notice_changes WHERE account_id=?').bind(accountId),
     env.DB.prepare(`DELETE FROM notices WHERE account_id=? OR station_id IN (${mine})`).bind(accountId, accountId),
     env.DB.prepare(`DELETE FROM invites WHERE station_id IN (${mine})`).bind(accountId),
     env.DB.prepare(`DELETE FROM devices WHERE account_id=? OR station_id IN (${mine})`).bind(accountId, accountId),
@@ -953,7 +1063,12 @@ async function firstUse(env: RemoteEnv, row: StationRow, plan: AccountEntitlemen
   await requireMayPair(env, plan, now)
   const kept = await env.DB.prepare('SELECT trial_claim FROM stations WHERE id=?').bind(row.id).first<{ trial_claim: string | null }>()
   const claim = kept?.trial_claim ? await trialProof(env, JSON.parse(kept.trial_claim) as TrialInput, row.account_id, now) : null
+  // Required, a trial is never started on the mailbox alone: a station whose sign-in kept no claim (a
+  // Nexus that sent no callsign) is told to update, as `enroll/approve` tells one.
+  requireValue(claim || env.TRIAL_IDENTITY_REQUIRED !== '1', 'updateRequired')
   if (claim) await requireUnspentMarkers(env, row.account_id, claim)
+  await requireUnspentDomain(env, row.account_id, now)
+  const domain = domainGuard(env, row.account_id, now)
   // The sibling test is the one `enroll/approve` writes in its own trial INSERT, word for word.
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO trials(account_id, enabled, expires_at, started_at, source)
@@ -961,14 +1076,16 @@ async function firstUse(env: RemoteEnv, row: StationRow, plan: AccountEntitlemen
         WHERE self.id=? AND t.account_id<>self.id
         AND (a.mailbox_hash=self.mailbox_hash OR a.email_hash IN (self.email_hash, self.mailbox_hash)))
       ${claim ? `AND NOT EXISTS(SELECT 1 FROM trial_markers m WHERE ${SPENT_MARKER})` : ''}
+      ${domain.sql}
       ON CONFLICT(account_id) DO NOTHING`)
-      .bind(row.account_id, now + TRIAL_MS, now, row.account_id, ...(claim ? spentBindings(row.account_id, claim) : [])),
+      .bind(row.account_id, now + TRIAL_MS, now, row.account_id, ...(claim ? spentBindings(row.account_id, claim) : []), ...domain.bindings),
     ...(claim ? markerInserts(env, row.account_id, claim, now) : []),
   ])
   const started = await readEntitlement(env, row.account_id, now)
   if (started.state !== 'active') {
     await requireUnspentIdentity(env, row.account_id, now)
     if (claim) await requireUnspentMarkers(env, row.account_id, claim)
+    await requireUnspentDomain(env, row.account_id, now)
   }
   requireValue(started.state === 'active', 'serviceUnavailable', 503)
   return started
@@ -1212,7 +1329,7 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
     // The relay a browser's stream has, for this device's two internet roads. Each entry is a username
     // and a password, which is what the client core's TURN client takes.
     await rate(env, `turn:${row.id}:${current.id}`, now, 12)
-    return json({ iceServers: await relayServers(env, Math.min(STATION_ADMISSION_MS, plan.expiresAt - now)) })
+    return json({ iceServers: await relay(env, row.account_id, plan, now) })
   }
   if (verb === 'renew') {
     const response = await room(env, row.id, 'pipe-renew', { access: policy, identity: identity(current), entitlement: plan })
@@ -1284,6 +1401,20 @@ function hsts(request: Request, response: Response): Response {
   const result = new Response(response.body, response)
   result.headers.set('strict-transport-security', 'max-age=31536000')
   return result
+}
+
+/** A relay credential for a device of a station whose account is `accountId`, already admitted as a
+ *  ticket or a pipe would be: counted against that account's hour first (refused `tryLater` past it,
+ *  before the provider is asked), lasting `RELAY_TTL_MS` or what is left of `plan`, whichever is less,
+ *  and recorded in the account's month once the provider has minted it. */
+async function relay(env: RemoteEnv, accountId: string, plan: AccountEntitlement, now: number): Promise<Awaited<ReturnType<typeof relayServers>>> {
+  await rate(env, `turn-account:${accountId}`, now, RELAY_PER_HOUR, HOUR_MS)
+  const seconds = Math.ceil(Math.min(RELAY_TTL_MS, plan.expiresAt - now) / 1000)
+  const servers = await relayServers(env, seconds * 1000)
+  await env.DB.prepare(`INSERT INTO relay_usage(account_id,month,mints,granted_seconds,updated_at) VALUES(?,?,1,?,?)
+    ON CONFLICT(account_id,month) DO UPDATE SET mints=mints+1, granted_seconds=granted_seconds+excluded.granted_seconds, updated_at=excluded.updated_at`)
+    .bind(accountId, new Date(now).toISOString().slice(0, 7), seconds, now).run()
+  return servers
 }
 
 // THE STREAM'S RELAY. Cloudflare Realtime TURN credentials, minted with the service's own key for
