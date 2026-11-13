@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|besttimes|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|txmeterspane|radioswitch|radiosetup|toastcorner|logwaiting|topbar|topbarnow|header|rttyfit|digishell|alarmcell|firstrun|journeys|clublog|aprsmap|logbook|profiles|sstvlayout|menustop|stopabove|stopvisible|ftline|laptopfit
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|besttimes|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|txmeterspane|radioswitch|radiosetup|toastcorner|logwaiting|topbar|topbarnow|header|rttyfit|digishell|alarmcell|firstrun|journeys|clublog|aprsmap|logbook|profiles|sstvlayout|menustop|stopabove|stopvisible|ftline|laptopfit|recallcard
        scripts/browser-probe --desktop-shard <n> <of>
 
   Window sizes: every --desktop probe takes its screens from ui/probe/sizes.mjs (the 2026-11-11
@@ -97,6 +97,16 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         point of the strip, Stop TX, the dock or the QSO strip, with a
                         control (the transmit classes removed) where it must cover one
                         (ui/probe/callcard-probe.mjs; it builds nothing)
+  --desktop recallcard  FT's callsign card in the real app, Classic and Roster, at the app's fit and 100 %,
+                        at the CORE screens and the Classic rail's narrowest (RECALL_FULL=1: every screen):
+                        the name on one line (cut short only on a card under 300 px), the name, call and
+                        avatar each whole and topmost on a rail of 220 px or more, and
+                        the identity whole with a first contact's card unscrolled wherever the card's ceiling
+                        holds it; at the CORE screens the ⤢ opens the whole card, topmost, with
+                        Stop TX and every transmit surface unmoved and uncovered, its QRZ button working,
+                        Esc and a click outside closing it; the name forced to wrap, the name, call and
+                        avatar covered, and the card planted over Stop TX are controls that must be caught
+                        (ui/probe/recallcard-probe.mjs)
   --desktop besttimes   the Best times box in the dashboard rail beside a TX strip and dock, at
                         the CORE screens and 1366×768 at 175%: no transmit control moves or
                         is covered when its answer lands, with a control (the box bare above the
@@ -325,7 +335,7 @@ USAGE
 # deal balances (local seconds on 2026-11-05: toastcorner 299, digishell 330, topbar 96, waterfalls 92, logbook 67,
 # header 62, journeys 42, rttyfit 39, the rest 7-27); keep a new probe near its cost when you add it.
 DESKTOP_ALL=(toastcorner digishell alarmcell sstvlayout stopvisible topbar topbarnow waterfalls txmeterspane logbook header journeys rttyfit menustop stopabove profiles firstrun radiosetup contestlog
-  ftline logwaiting spots atu radioswitch jtty activation clublog aprsmap callcard voicenote rotor contactcard txmeters besttimes laptopfit)
+  ftline logwaiting spots atu radioswitch jtty activation clublog aprsmap callcard voicenote rotor contactcard txmeters besttimes laptopfit recallcard)
 
 SCENARIO='stream'
 SHARD=''
@@ -410,6 +420,7 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = spots ] && exec node "$ROOT/ui/probe/spots-probe.mjs"
   [ "$DESKTOP" = callcard ] && exec node "$ROOT/ui/probe/callcard-probe.mjs"
   [ "$DESKTOP" = besttimes ] && exec node "$ROOT/ui/probe/besttimes-probe.mjs"
+  [ "$DESKTOP" = recallcard ] && exec node "$ROOT/ui/probe/recallcard-probe.mjs"
   [ "$DESKTOP" = activation ] && exec node "$ROOT/ui/probe/activation-probe.mjs"
   [ "$DESKTOP" = voicenote ] && exec node "$ROOT/ui/probe/voicenote-probe.mjs"
   [ "$DESKTOP" = contactcard ] && exec node "$ROOT/ui/probe/contactcard-probe.mjs"

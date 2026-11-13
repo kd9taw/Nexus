@@ -7911,6 +7911,9 @@ export const EN = {
   'recall.log.comment.readAria': 'Comment — open it in the row',
   'recall.qrz.title': 'Open {{call}} on QRZ (browser)',
   'recall.qrz.error': 'Could not open {{call}} on QRZ',
+  'recall.full.open': 'Open {{call}}\'s whole card',
+  'recall.full.aria': '{{call}}: the whole card',
+  'recall.full.close': 'Close the whole card',
   // #483: the caller card's grid square, a button that opens it on OpenStreetMap in the browser.
   'recall.grid.map.title': 'Open {{grid}} on OpenStreetMap (browser)',
   'recall.grid.map.error': 'Could not open {{grid}} on OpenStreetMap',
