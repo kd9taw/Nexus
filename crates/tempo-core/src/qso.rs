@@ -2349,6 +2349,57 @@ mod start_context_tests {
         assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW R-10"));
     }
 
+    /// #512: WSJT-X packs `KD9TAW W9XYZ`, two standard calls and nothing else, as an ordinary
+    /// Type 1 message (`packjt77.f90:1296-1302`). Calling CQ, WSJT-X answers that caller with its
+    /// report (`processMessage`, `mainwindow.cpp:9315-9325`: under five message words, CALLING
+    /// → Tx2), exactly as it answers a caller who sent a grid. Nexus read the line as free text
+    /// and kept calling CQ over the station that had answered.
+    #[test]
+    fn a_gridless_standard_caller_to_my_cq_gets_my_report() {
+        let mut s = Station::calling_cq(ME, MY_GRID);
+        s.observe(&[dec("KD9TAW W9XYZ", -10)]);
+        assert_eq!(s.state, State::AwaitRoger);
+        assert_eq!(s.dxcall.as_deref(), Some("W9XYZ"));
+        assert_eq!(s.dxgrid, None, "no grid was sent, so none is recorded");
+        assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW -10"));
+    }
+
+    /// #512: after our Tx1, a grid-less standard reply to us is answered with the report, as
+    /// WSJT-X's auto-sequencer does (`auto_sequence` 7543-7559 passes it on, and
+    /// `processMessage` 9315-9325 sets Tx2, REPORT).
+    #[test]
+    fn a_gridless_standard_reply_to_my_call_gets_my_report() {
+        let mut s = Station::answering(ME, MY_GRID, DX);
+        assert_eq!(s.state, State::AwaitReport);
+        s.observe(&[dec("KD9TAW W9XYZ", -8)]);
+        assert_eq!(s.state, State::AwaitRoger);
+        assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW -08"));
+    }
+
+    /// #512: answering a grid-less CQ from a standard call is answering any CQ: WSJT-X "just works
+    /// them" (`processMessage` 9361-9373) with Tx1, its own grid, or Tx2 when Tx1 is skipped. The
+    /// CQ's missing grid changes nothing we send.
+    #[test]
+    fn answering_a_gridless_standard_cq_sends_my_grid_as_usual() {
+        for cq in ["CQ W1AW", "CQ DX W1AW", "CQ POTA W1AW", "CQ 040 W1AW"] {
+            let m = Msg::parse(cq);
+            assert!(matches!(m, Msg::Cq { .. }), "{cq} is a CQ: {m:?}");
+            let s = Station::start(ME, MY_GRID, "W1AW", Some((&m, -12)), false, false);
+            assert_eq!(s.state, State::AwaitReport, "{cq}");
+            assert_eq!(
+                s.pending_text().as_deref(),
+                Some("W1AW KD9TAW EN61"),
+                "{cq}"
+            );
+            let s = Station::start(ME, MY_GRID, "W1AW", Some((&m, -12)), false, true);
+            assert_eq!(
+                s.pending_text().as_deref(),
+                Some("W1AW KD9TAW -12"),
+                "{cq} skip Tx1"
+            );
+        }
+    }
+
     /// EIGHT CQs, A BREATHER, EIGHT MORE — the resume half of the operator's auto-CQ ruling.
     /// `resume_cq_run` is the state part; the engine owns the clock.
     #[test]

@@ -117,6 +117,9 @@ mod field_day_display;
 /// WSJT-X's mid-over message switch for FT8 and FT4 (`m_restart`).
 /// The FT modes' TX drive, remembered per band and mode and brought back between overs.
 mod ft_drive;
+/// #512: a grid-less CQ or call between standard calls, read and answered as WSJT-X does.
+#[cfg(test)]
+mod ft_gridless_standard_tests;
 /// When an FT8/FT4 contact is logged by itself, offered in the confirm popup, or left for Log QSO.
 #[cfg(test)]
 mod ft_log_offer_tests;

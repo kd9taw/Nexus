@@ -5,7 +5,8 @@
 //! WHAT "THE SAME" MEANS HERE. `genft8` and `genft4` read the 77 characters `pack77` writes, `0`
 //! and `1` and, where a field was too wide for its format, gfortran's asterisks, and refuse the
 //! message when that read fails or when `unpack77` (transmit side, `nrx = 0`) rejects it. This file
-//! returns those 77 characters and that verdict, and nothing else: the text `unpack77` would print
+//! returns those 77 characters and that verdict, and nothing else (plus [`chkcall_ok`], one
+//! routine's verdict on one word, for reading decoded text): the text `unpack77` would print
 //! is never needed, and the callsign tables `pack77` writes are written by the vendored encoder
 //! itself (see the module above).
 //!
@@ -334,6 +335,22 @@ fn chkcall(w: &W13) -> ([u8; 6], bool) {
         n += 1;
     }
     (bc, (1..=3).contains(&n))
+}
+
+/// `chkcall`'s verdict on one word as `split77` hands it over (upper-cased, 13 characters kept):
+/// whether `pack77` could take it for a standard or compound callsign. Exported for a reader of
+/// DECODED text, which must call a line standard exactly where WSJT-X does, and WSJT-X decides
+/// that from the text by packing it again (`lib/stdmsg.f90`), not from the frame's `i3`.
+pub fn chkcall_ok(word: &str) -> bool {
+    let word = word.to_ascii_uppercase();
+    if word.is_empty() || !word.bytes().all(|c| c.is_ascii_graphic()) {
+        return false;
+    }
+    let mut w: W13 = [b' '; 13];
+    for (d, s) in w.iter_mut().zip(word.bytes()) {
+        *d = s;
+    }
+    chkcall(&w).1
 }
 
 /// `split77`: `msg` upper-cased with its blanks collapsed (in place, as the routine does), its

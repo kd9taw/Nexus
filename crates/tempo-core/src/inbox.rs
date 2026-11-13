@@ -114,7 +114,19 @@ impl Inbox {
             // Anything else is CONTENT — route a chunk to the reassembler and everything
             // else (bare broadcast, plain line) to push_text, which sorts a "DE <CALL>
             // <body>" broadcast from a directed line.
-            let is_standard = !matches!(m, Msg::Other(_))
+            //
+            // #512 made a grid-less call between two plain calls a standard frame, and the
+            // first chunk of a chat line can read as one: `A13DE W9XYZ` is the header `A13`
+            // and `DE W9XYZ`, and `chkcall` passes `A13DE`. Nexus's chat frames go through
+            // `pack77` like any other text, so on the air that chunk IS the Type 1 frame of a
+            // call to `A13DE`, and neither the frame's i3 nor anything else tells them apart.
+            // Here, where chat is reassembled, such a chunk-shaped pair stays chat, as it was
+            // before #512. (A slashed or hashed pair was standard before, and still is.)
+            let chunk_not_call = matches!(&m, Msg::Grid { grid, .. } if grid.is_empty())
+                && !d.message.contains(['/', '<'])
+                && text::parse_chunk(&d.message).is_some();
+            let is_standard = !chunk_not_call
+                && !matches!(m, Msg::Other(_))
                 && m.sender().is_none_or(looks_like_call)
                 && m.addressee().is_none_or(looks_like_call);
             if !is_standard {
@@ -479,6 +491,30 @@ mod tests {
         assert!(!m.directed_to_me);
     }
 
+    /// #512: a grid-less call between two standard calls is a standard message (WSJT-X packs it
+    /// Type 1), so it identifies its sender like any directed frame and is not chat.
+    #[test]
+    fn a_gridless_standard_call_identifies_and_is_not_chat() {
+        let mut inbox = Inbox::new("K2DEF");
+        inbox.observe(&[dec("K2DEF W9XYZ")], 0);
+        assert!(
+            inbox.messages.is_empty(),
+            "a call is not a chat line: {:?}",
+            inbox.messages
+        );
+        let frames = text::chunk("HELLO", 'A');
+        for (i, f) in frames.iter().enumerate() {
+            inbox.observe(&[dec(f)], (i as u64) + 1);
+        }
+        let m = inbox.messages.last().expect("the chunked line arrived");
+        assert_eq!(m.from.as_deref(), Some("W9XYZ"));
+        assert!(m.directed_to_me);
+    }
+
+    /// The collision #512 opened: the first chunk of a broadcast, `A13DE W9XYZ` (header `A13`,
+    /// then `DE W9XYZ`), is two words that `chkcall` passes, and on the air it is the same Type 1
+    /// frame as a grid-less call to `A13DE` — Nexus's chat frames go through `pack77` like
+    /// everything else. The chat reading keeps it, as before #512.
     #[test]
     fn chunked_broadcast_reassembles_and_routes() {
         let mut inbox = Inbox::new("K2DEF");
