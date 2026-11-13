@@ -313,12 +313,13 @@ fn an_ft991a_an_ft710_an_ftdx10_and_the_ft450s_show_alc_where_the_radios_own_bar
 }
 
 /// Every model on main that reads its ALC raw ([`crate::rigmodels::raw_alc_query`]).
-const RAW_ALC_MODELS: [(u32, &str, &str); 5] = [
+const RAW_ALC_MODELS: [(u32, &str, &str); 6] = [
     (1035, "FT-991A", ""),
     (1049, "FT-710", "000"),
     (1042, "FTDX10", "000"),
     (1046, "FT-450D", ""),
     (1027, "FT-450", ""),
+    (1051, "FTX-1", "000"),
 ];
 
 /// ⭐ A RAW-ALC RADIO BEHIND A RIGCTLD THAT NEVER ANSWERS RAW CAT KEEPS ITS ALC METER (the 1.19.0
@@ -1001,7 +1002,8 @@ fn a_tune_ups_alc_read_gives_up_at_the_tune_deadline() {
 /// The ALC reading carries where the radio's own ALC zone ends, so the bar's colours sit where
 /// the radio's meter marks it. The FT-991A's manual puts the zone at "up to half scale deflection"
 /// (Operating Manual p. 61), and the FT-710's meter marks the same zone (p. 40); the FTDX10 is read
-/// the same way. The FT-450D's bar is the radio's own, but no zone is claimed for it. Every other
+/// the same way. The FT-450D's and the FTX-1's bar is the radio's own, but no zone is claimed for
+/// it. Every other
 /// radio's 1.0 is the top of its zone, as before: no zone is carried.
 #[test]
 fn the_alc_reading_carries_the_radios_own_zone_edge() {
@@ -1010,6 +1012,7 @@ fn the_alc_reading_carries_the_radios_own_zone_edge() {
         (1049, "FT-710", "000"),
         (1042, "FTDX10", "000"),
         (1046, "FT-450D", ""),
+        (1051, "FTX-1", "000"),
         (3073, "IC-7300", ""),
     ]
     .into_iter()
@@ -1030,6 +1033,9 @@ fn the_alc_reading_carries_the_radios_own_zone_edge() {
             ("FTDX10", Some(128.0), Some(0.5)),
             // The radio's own bar, and no zone claimed: its manual's zone is unsourced here.
             ("FT-450D", Some(128.0), None),
+            // #502: the FTX-1 on its own bar too (it read Hamlib's 0-to-64 scale, so raw 128
+            // pegged 1.0); no zone claimed, as for the FT-450D.
+            ("FTX-1", Some(128.0), None),
             // Hamlib's scale for the IC-7300: raw 128 is past 64, so 1.0, and no zone of its own.
             ("IC-7300", Some(255.0), None),
         ]
