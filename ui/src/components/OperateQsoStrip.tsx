@@ -418,34 +418,6 @@ export function OperateQsoStrip({
           {t('operate.strip.sandp.label')}
         </button>
       </div>
-      {/* A connection that transmits nothing says so, with its reason on hover, as the other
-          screens' TX strip does (`CockpitTxStrip`), rather than "Receiving" over a Call CQ that
-          cannot key. What is on the air is still shown first. */}
-      {radio && (
-        <span
-          // #482: the state rides on the caption itself, as on every other screen's strip
-          // (CockpitTxStrip): the strip's `rx` wash means "not on the air", TX off included, so
-          // painting the caption from it made "TX off" green here and white everywhere else.
-          className={`cq-statecap ${onAir ? 'tx' : radio.txRefusal ? 'off' : radio.txEnabled ? 'rx' : 'off'}`}
-          title={
-            !onAir && radio.txRefusal
-              ? radio.txRefusal
-              : !onAir && catOff === 'lost'
-                ? t('settings.rigControl.catSilentTxOff')
-                : !onAir && catOff === 'back'
-                  ? t('settings.rigControl.catBackTxOff')
-                  : undefined
-          }
-        >
-          {onAir
-            ? t('operate.strip.state.transmitting')
-            : radio.txRefusal
-              ? t('operate.strip.state.connectionNoTx')
-              : radio.txEnabled
-                ? t('operate.strip.state.receiving')
-                : t('operate.strip.state.txOff')}
-        </span>
-      )}
       {/* THE CONTACT'S WORDS, ONE BOX (2026-11-12): the rig-mode and filter chips, the AUTO-CQ pill, the sequencer
           state, the DX call and the report change with the contact. As loose members on Stop TX's line a narrow strip
           (1366×768 at 150–175 %) wrapped them onto a line of their own when Auto-CQ came on and again when the call
@@ -454,6 +426,38 @@ export function OperateQsoStrip({
           (styles.css `.cq-status`), so nothing the contact does changes the strip's height and every word stands
           whole; on the one-row xl strip it is sized by its words, as they were. */}
       <span className="cq-status">
+        {/* THE TX STATE OPENS THE BOX (2026-11-13). On Stop TX's line it was the one member whose width changes on
+            the air ("▼ Receiving" → "▲ TRANSMITTING"): at Larger text on 1366×768 with the app at 175 % the wider word
+            no longer fit there, took a line of its own on every transmit, and moved Stop TX 41.8 px (Chrome). In the
+            box it stands where every other word that changes stands, on the line kept for them.
+            A connection that transmits nothing says so, with its reason on hover, as the other
+            screens' TX strip does (`CockpitTxStrip`), rather than "Receiving" over a Call CQ that
+            cannot key. What is on the air is still shown first. */}
+        {radio && (
+          <span
+            // #482: the state rides on the caption itself, as on every other screen's strip
+            // (CockpitTxStrip): the strip's `rx` wash means "not on the air", TX off included, so
+            // painting the caption from it made "TX off" green here and white everywhere else.
+            className={`cq-statecap ${onAir ? 'tx' : radio.txRefusal ? 'off' : radio.txEnabled ? 'rx' : 'off'}`}
+            title={
+              !onAir && radio.txRefusal
+                ? radio.txRefusal
+                : !onAir && catOff === 'lost'
+                  ? t('settings.rigControl.catSilentTxOff')
+                  : !onAir && catOff === 'back'
+                    ? t('settings.rigControl.catBackTxOff')
+                    : undefined
+            }
+          >
+            {onAir
+              ? t('operate.strip.state.transmitting')
+              : radio.txRefusal
+                ? t('operate.strip.state.connectionNoTx')
+                : radio.txEnabled
+                  ? t('operate.strip.state.receiving')
+                  : t('operate.strip.state.txOff')}
+          </span>
+        )}
         {/* The rig has been moved out from under us — stated in the strip that is already always
             visible, styled as the Phone/TopBar mismatch chip (one visual vocabulary, no new pane,
             no structural size of its own: see cockpit-panes.css's contract). */}

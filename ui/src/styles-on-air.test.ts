@@ -377,7 +377,11 @@ describe("Operate's caption holds on the strip's own keyed wash", () => {
 
   it.each(MODES)('in %s the rim stands 3:1 off every frame of the wash', (mode) => {
     const chain = SIGNS.find((s) => s.name === "Operate's strip caption")!.chain(true)
-    const strip = chain.slice(0, -1)
+    // The strip is the caption's nearest `.cockpit-qso` ancestor: since 2026-11-13 the caption opens the contact's box
+    // (`.cq-status`, which paints no background of its own) inside the strip, so the wash behind it is still the strip's.
+    let at = chain.length - 1
+    while (at >= 0 && ![...chain[at].classes].includes('cockpit-qso')) at--
+    const strip = chain.slice(0, at + 1)
     expect(strip[strip.length - 1].classes, 'the caption is not inside the keyed strip').toEqual(
       expect.arrayContaining(['cockpit-qso', 'tx']),
     )
