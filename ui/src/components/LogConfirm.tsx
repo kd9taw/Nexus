@@ -2,7 +2,7 @@
 // string comes from the catalog; a hardcoded one fails CI. What does NOT: the band and mode names
 // in the sub-heading and the `—` placeholders, which are data and a glyph, not prose.
 
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import type { LoggedQso } from '../types'
 import { t } from '../i18n'
 import { FtStopControl } from './FtStopControl'
@@ -146,6 +146,23 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
     return v.trim() !== '' && Number.isFinite(w) && w > 0 ? w : null
   }
 
+  // Log and Discard hold to the bottom of the card while it scrolls (styles.css, `.log-prompt
+  // .logconfirm-actions`), so whatever is scrolled to its end — `scrollIntoView`, a focus moving into the
+  // IOTA box — would land under them. The card keeps that much clear (`scroll-padding-bottom`): the
+  // row's whole height, since scrolled to its end the row sits in its place, bottom padding and all.
+  const actionsRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const row = actionsRef.current
+    const card = row?.parentElement
+    if (!row || !card) return
+    const apply = () => card.style.setProperty('--log-prompt-actions-h', `${row.offsetHeight}px`)
+    apply()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(apply)
+    ro.observe(row)
+    return () => ro.disconnect()
+  }, [])
+
   return (
     <div className="logconfirm-backdrop" role="dialog" aria-modal="true" aria-label={t('logPrompt.aria')}>
       <div className="logconfirm log-prompt">
@@ -267,7 +284,7 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
 
         <IotaPrefillField state={iotaPrefill} value={iota} island={{ value: island, onChange: setIsland }} />
 
-        <div className="logconfirm-actions">
+        <div className="logconfirm-actions" ref={actionsRef}>
           {onStop && <FtStopControl onHaltTx={onStop} />}
           <button type="button" className="logconfirm-discard" onClick={onDiscard}>
             {t('logPrompt.discard')}

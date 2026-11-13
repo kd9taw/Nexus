@@ -9815,6 +9815,12 @@ select optgroup {
   padding: var(--space-3) 0 var(--space-5);
   background: var(--bg-elev);
 }
+/* …and what the prompt scrolls to its end lands clear of them: LogConfirm writes the held row's height
+   on the card (`--log-prompt-actions-h`), so a field scrolled into view with 'nearest' (the IOTA box's
+   group name at 1024x768, 175 %) stops above Log and Discard, not under them. */
+.log-prompt {
+  scroll-padding-bottom: var(--log-prompt-actions-h, 0px);
+}
 .park-review-list {
   list-style: none;
   margin: 0;

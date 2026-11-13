@@ -82,4 +82,11 @@ describe('the log prompt keeps Log on screen', () => {
     expect(under, 'the card must paint an opaque colour').not.toBeNull()
     expect(paint(actions)).toEqual(under)
   })
+
+  it.each(['dark', 'light'] as Mode[])('what scrolls to the end stops above the held row (%s)', (mode) => {
+    const { box } = mounted()
+    expect(winnerAt(RULES, mode, box, 'scroll-padding-bottom', 'scroll-padding')?.value).toBe('var(--log-prompt-actions-h, 0px)')
+    const card = document.querySelector('.logconfirm') as HTMLElement
+    expect(card.style.getPropertyValue('--log-prompt-actions-h'), 'the card is not told the row height').toMatch(/^\d+px$/)
+  })
 })
