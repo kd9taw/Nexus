@@ -24061,7 +24061,9 @@ fn broadcast(
 async fn get_serial_ports() -> Vec<String> {
     #[cfg(feature = "radio")]
     {
-        tempo_audio::ports::available_ports()
+        // The picker's list (macOS adds pty links such as wfview's `rig-pty1`, #494), never
+        // the radio loop's `available_ports` poll.
+        tempo_audio::ports::picker_ports()
     }
     #[cfg(not(feature = "radio"))]
     {
@@ -24125,7 +24127,7 @@ async fn get_serial_ports_detailed() -> Vec<SerialPortInfo> {
         // where IOKit answers nothing. The label and the name are unchanged, so a picker that
         // ignores these fields behaves exactly as before.
         let (ifaces, locs, audio) = tempo_audio::usbtopo::serial_topology();
-        tempo_audio::ports::available_ports()
+        tempo_audio::ports::picker_ports()
             .into_iter()
             .map(|name| {
                 let label = usb

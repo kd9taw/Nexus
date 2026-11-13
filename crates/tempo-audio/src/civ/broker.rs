@@ -1753,8 +1753,14 @@ impl RigBackend for CivBackend {
         // above while engaged), so DATA goes off — Main's off frame, `1A 06 00 00`, while Sub
         // is still selected, a NAK tolerated as Main tolerates it (a radio may NAK a redundant
         // off). A mode/DATA setting only: no PTT, no frequency, the order otherwise unchanged.
+        // A refusal stays tolerated, but is written to the CI-V diagnostic log, so a radio that
+        // will not take it in satellite mode shows there instead of passing for "Ok".
         if ok {
-            let _ = self.answer(commands::set_data_mode(self.addr, false, None));
+            if let Err(why) = self.answer(commands::set_data_mode(self.addr, false, None)) {
+                super::diag::note(&format!(
+                    "satellite uplink: Sub band DATA off (1A 06 00 00) not taken: {why:?}"
+                ));
+            }
         }
         let restored = self.select("Main");
         g.sel_stray = !restored;
