@@ -53,6 +53,7 @@ import { EN, type MessageKey } from './index'
 import { DE } from './de'
 import { ES } from './es'
 import { FR } from './fr'
+import { IT } from './it'
 import { JA } from './ja'
 import { RU } from './ru'
 import { ZH } from './zh'
@@ -348,6 +349,7 @@ describe('translated catalogs agree with English', () => {
     ['de', DE as Record<string, unknown>],
     ['es', ES as Record<string, unknown>],
     ['fr', FR as Record<string, unknown>],
+    ['it', IT as Record<string, unknown>],
     ['ja', JA as Record<string, unknown>],
     ['ru', RU as Record<string, unknown>],
     ['zh', ZH as Record<string, unknown>],

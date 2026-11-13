@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are <!-- make-kit:rows -->10,694<!-- /make-kit --> rows in the CSV and about sixty words that appear in hundreds of them. If one
+There are <!-- make-kit:rows -->10,702<!-- /make-kit --> rows in the CSV and about sixty words that appear in hundreds of them. If one
 of those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -21,7 +21,7 @@ The checker (`verify-it.py`) enforces this list per row, using the `do_not_trans
 
 | Term | Rows | Why it stays |
 |---|---:|---|
-| Nexus | 532 | The program's name. |
+| Nexus | 533 | The program's name. |
 | QSO / QSOs | 125 / 67 | The contact itself. Universal on the air; pluralises fine as *QSOs*. |
 | LoTW | 168 | ARRL's Logbook of The World — a service name. |
 | CAT | 118 | Computer Aided Transceiver — the radio control protocol. |

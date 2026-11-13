@@ -11,7 +11,7 @@
 // heights stubbed; what is computed is that the strip finds the header, and only a pinned, sticky one.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
-import { CockpitTxStrip } from './CockpitTxStrip'
+import { CockpitTxStrip, PIN_ROOM_EM } from './CockpitTxStrip'
 import type { AppSnapshot } from '../types'
 
 vi.mock('../api', () => ({ setFrequency: vi.fn(() => Promise.resolve(null)), haltTx: vi.fn() }))
@@ -90,7 +90,8 @@ describe('the TX strip under a pinned header', () => {
 // are together taller than the scrollport, and the header covered Stop TX, Send and Esc/Stop at every
 // scroll position (900×600 / 700×800 at 175 %, measured in Chrome). The strip measures the three against
 // the shell and turns the pin off there; the header then scrolls and the strip parks at 0 again.
-// Heights stubbed: header 90, strip 0, dock 117, the room PIN_ROOM_EM × 16 = 96 ⇒ the three need 303 px.
+// Heights stubbed: header 90, strip 0, dock 117, and the room PIN_ROOM_EM × 16 (the shell's em in jsdom) ⇒ NEED px.
+const NEED = HEAD_H + DOCK_H + PIN_ROOM_EM * 16
 describe('the strip unpins the header where the three parked surfaces do not fit', () => {
   const SHEET =
     ".cockpit-header-pinned { position: sticky } .cockpit-header-pinned[data-pin='off'] { position: static } " +
@@ -111,7 +112,7 @@ describe('the strip unpins the header where the three parked surfaces do not fit
 
   it('a scrollport with room keeps it pinned, and the strip parks under it', () => {
     injectSheet(SHEET)
-    stubShell(303)
+    stubShell(NEED)
     mount()
     expect(head().getAttribute('data-pin')).toBe('on')
     expect(strip().style.getPropertyValue('--cockpit-txstrip-top')).toBe(`${HEAD_H}px`)
@@ -119,11 +120,22 @@ describe('the strip unpins the header where the three parked surfaces do not fit
 
   it('one pixel short of room unpins it: the header scrolls, and the strip parks at the top again', () => {
     injectSheet(SHEET)
-    stubShell(302)
+    stubShell(NEED - 1)
     mount()
     expect(head().getAttribute('data-pin'), 'the header stays pinned over Stop TX and the dock').toBe('off')
     expect(strip().style.getPropertyValue('--cockpit-txstrip-top')).toBe('')
     expect(main().style.getPropertyValue('--cockpit-txstrip-h'), 'the scroll padding still counts the header').toBe(`${Math.ceil(STRIP_RENDERED)}px`)
+  })
+
+  // THE ROOM IS A PANE'S FLOOR (10em, `--cockpit-fill-min`): what scrolls between the parked surfaces is all a pane
+  // can be seen through, so with less than one pane's height a pane at its floor is never on screen whole. With 6em
+  // the header stayed pinned at 1366×768 / 175 % and SSTV's TX meters pane (140 px) showed through 117 px: its
+  // readouts sat under the header at every scroll position (measured in Chrome).
+  it('room for less than one pane at its 10em floor unpins it', () => {
+    injectSheet(SHEET)
+    stubShell(HEAD_H + DOCK_H + 10 * 16 - 1)
+    mount()
+    expect(head().getAttribute('data-pin'), 'a pane at its floor would never be on screen whole').toBe('off')
   })
 
   it('a window that grows back pins it again on the next measurement', () => {

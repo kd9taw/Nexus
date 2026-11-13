@@ -12,13 +12,21 @@
 //      same page (BEFORE), in width and in height.
 //   2. THE READOUT IS NO SMALLER: the name's and the value's glyph boxes are at least 1.24.0's high, each whole inside
 //      its face and clear of the other and of the dial, and in view once the pane is scrolled to wherever 1.24.0's were.
-//   3. THE PANE GIVES THE ROOM BACK AND NOTHING ELSE LOSES: the pane is shorter than in 1.24.0, no other pane on the
-//      screen is shorter (each one's gain is printed), the TX strip is its 1.24.0 height, and Stop TX is on screen,
-//      the topmost thing where it stands, where it stood in 1.24.0. It prints the room left above each dial.
+//   3. THE PANE TAKES ROOM ONLY FROM ITSELF: the pane is shorter than in 1.24.0; and against the SAME tree with the
+//      pane hidden (a MEASUREMENT RE-BASELINE, 2026-11-12, lead's pick (a)): the TX strip is the same height, Stop TX
+//      is on screen, the topmost thing where it stands, at the same place, every other pane's computed floor is the
+//      same, and no other pane gives up more than 1 px — save the panes that SHARE the pane's column by weight (SSTV's
+//      gallery, CW's decode: measured giving up 1–148 px and 9–42 px), which together give up no more than the pane's
+//      own height and one gap (review 2026-11-12: one allowance for all let a 150 px steal from Phone's log pass). Until then these
+//      were held to 1.24.0's own layout, which fix/layout-new-sizes changes on purpose (the contact's words' own line
+//      in FT's strip, the waterfalls' floors, the region floor yielding on the floor screen), so every page of it read
+//      red for what was not the pane's doing. The dial, readout and scale-number checks (1, 2, 4) are still held to
+//      1.24.0. It prints the room left above each dial.
 //   4. THE SCALE'S NUMBERS STAY LEGIBLE (review 2026-11-12): they are drawn at 1.24.0's size around the half-size arc,
 //      so each one's glyph box is at least 1.24.0's high, and on every face none overlaps another, the needle (which
 //      reads 100 W, so it points straight at "100"), the band, or the drawing's top edge.
-// THE CONTROLS, run every time: FT8 at 1920×1080 100 % with 1.24.0's dial drawn back by a planted style (the dial's own
+// THE CONTROLS, run every time: Phone at 1920×1080 100 % with 150 px taken from its log beside the pane must fail check
+// 3; FT8 at 1920×1080 100 % with 1.24.0's dial drawn back by a planted style (the dial's own
 // scale taken away) must fail check 1, and FT8 at the floor (1366×768 175 %) with the numbers planted at twice 1.24.0's
 // size must fail check 4, and FT8 at 1920×1080 100 % with the numbers planted at half 1.24.0's size must fail check
 // 4's height. If any passes, its check cannot fail and the probe says so.
@@ -34,22 +42,23 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { at } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
 const STUB_SRC = join(UI, 'probe', 'waterfalls-api.ts')
 const STUB_API = join(UI, 'probe', '__txmeterspane-api.ts')
 // The supported screens (operator, 2026-11-12: laptops of the last 8–10 years, 1366×768 up, to 4K) at the OS's
-// display scaling, the way Windows hands them to the webview: a CSS window of the screen divided by the scale, at
-// that devicePixelRatio (the rule of ui/probe/sizes.mjs `at()` on test/probe-matrix-2026-11-12, inlined here until it
-// lands), with the app's own scale left at its default (auto-fit), so the app fits itself as it does on that laptop.
-// The floor (1366×768 at 175 %, a 780×438 window) and every scaling of it, 1080p, 1200p, 1440p and 4K.
+// display scaling, from ui/probe/sizes.mjs (`at()`: a CSS window of the screen divided by the scale, at that
+// devicePixelRatio), with the app's own scale left at its default (auto-fit), so the app fits itself as it does on
+// that laptop. The floor (1366×768 at 175 %, a 780×438 window) and every scaling of it, 1080p, 1200p, 1440p and 4K.
+// The names are this probe's own (BEFORE is keyed by them).
 /** [name, window W, H (CSS px), device scale]. */
 const PAGES = [
   [1366, 768, 100], [1366, 768, 125], [1366, 768, 150], [1366, 768, 175],
   [1920, 1080, 100], [1920, 1080, 150], [1920, 1200, 100],
   [2560, 1440, 100], [2560, 1440, 150], [3840, 2160, 150], [3840, 2160, 200],
-].map(([sw, sh, pct]) => [`${sw}×${sh} @${pct} %`, Math.floor(sw / (pct / 100)), Math.floor(sh / (pct / 100)), pct / 100])
+].map(([sw, sh, pct]) => { const s = at(sw, sh, pct); return [`${sw}×${sh} @${pct} %`, s.w, s.h, s.scale] })
 const FEATURES = JSON.stringify({ profile: 'custom', enabled: { sstv: true } })
 /** [name, hash, panel view]. */
 const VIEWS = [
@@ -236,7 +245,7 @@ const browser = await chrome()
 
 /** One page: `hash` in a W×H window at `zoom`, the meters pane ticked, measured once it settles. `css` is planted
  *  once the pane has drawn. */
-async function measure(hash, view, [W, H, dpr = 1], css = null) {
+async function measure(hash, view, [W, H, dpr = 1], css = null, hidden = false) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -255,6 +264,17 @@ async function measure(hash, view, [W, H, dpr = 1], css = null) {
     }
     await evaluate(`localStorage.clear(); ${Object.entries(ls).map(([k, v]) => `localStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(v)})`).join(';')}; 1`)
     await call('Page.navigate', { url: `${origin}/#${hash}` })
+    if (hidden) {
+      // The baseline: the screen as it opens, the pane not ticked, once it settles.
+      let last = null, b = null
+      for (let i = 0; i < 160; i++) {
+        await sleep(250)
+        b = await evaluate(BARE).catch(() => null)
+        if (b && last && JSON.stringify(b) === JSON.stringify(last)) return b
+        last = b
+      }
+      return b
+    }
     // The pane ticked the operator's way, in ⊞ Panels (FT places it as the menu does; a stored state alone does not).
     for (let i = 0; i < 120; i++) {
       await sleep(250)
@@ -340,8 +360,31 @@ const BEFORE = {
   "SSTV 3840×2160 @200 %": { pane: 140, arc: [125.5, 22.8], value: 17, label: 12, num: 9, seen: true, panes: { gallery: 140, txcompose: 138 }, floors: { gallery: "min(140px, 100%)", txcompose: "0px" }, stop: [292, 563], strip: 40 },
 }
 
-/** What is wrong with one page against 1.24.0's; empty when nothing is. */
-function faults(tag, m, before) {
+/** The panes that share the meters pane's column by weight, per view, and so give it room: measured on every page
+ *  (FT8's and Phone's give up nothing). Every other pane may give up at most 1 px. */
+const SHARED = { operate: [], phone: [], cw: ['decode'], sstv: ['gallery'] }
+/** The same page with the pane HIDDEN: the other panes, their floors, Stop TX and the strip (check 3's baseline). */
+const BARE = `(() => {
+  const vis = (el) => el && el.closest('[hidden]') == null && el.getBoundingClientRect().width > 0
+  const shell = [...document.querySelectorAll('main')].find(vis)
+  if (!shell || [...document.querySelectorAll('[data-pane="txMetersPane"]')].some(vis)) return null
+  const reach = (b) => { const q = b.getBoundingClientRect(); if (q.width < 1 || q.bottom > innerHeight || q.top < 0 || q.right > innerWidth) return false
+    const t = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2); return t != null && (t === b || b.contains(t)) }
+  const stop = [...shell.querySelectorAll('button')].find((b) => vis(b) && /^stop tx$/i.test(b.textContent.trim()))
+  const strip = [...shell.querySelectorAll('.cockpit-txstrip, .cockpit-ftstrip')].find(vis)
+  if (!stop || !strip) return null
+  const panes = [...shell.querySelectorAll('[data-pane]')].filter(vis)
+  return {
+    panes: panes.map((p) => [p.dataset.pane, Math.round(p.getBoundingClientRect().height)]),
+    floors: panes.map((p) => [p.dataset.pane, getComputedStyle(p).minHeight]),
+    stop: { at: [Math.round(stop.getBoundingClientRect().left), Math.round(stop.getBoundingClientRect().top)], reach: reach(stop) },
+    strip: Math.round(strip.getBoundingClientRect().height),
+  }
+})()`
+
+/** What is wrong with one page: its dial and readout against 1.24.0's (`before`), its room against the same page with
+ *  the pane hidden (`bare`); empty when nothing is. */
+function faults(tag, m, before, bare, view = null) {
   const f = []
   for (const face of m.faces) {
     for (const [dim, k, i] of [['wide', 'w', 0], ['high', 'h', 1]]) {
@@ -361,11 +404,23 @@ function faults(tag, m, before) {
     if (n.clipped.length) f.push(`${face.key}'s scale numbers ${n.clipped.join(', ')} are clipped at the drawing's top`)
   }
   if (!(m.pane.h < before.pane - 1)) f.push(`the pane is ${m.pane.h} px high, not shorter than 1.24.0's ${before.pane}`)
-  for (const [id, v] of m.floors) if (before.floors?.[id] != null && v !== before.floors[id]) f.push(`the ${id} pane's computed floor is ${v}, 1.24.0's ${before.floors[id]}`)
-  for (const [id, h] of m.panes) if (before.panes[id] != null && h < before.panes[id] - 1) f.push(`the ${id} pane is ${h} px high, under 1.24.0's ${before.panes[id]}`)
-  if (!m.stop?.reach) f.push('Stop TX is not on screen or something covers it')
-  else if (JSON.stringify(m.stop.at) !== JSON.stringify(before.stop)) f.push(`Stop TX moved from ${before.stop} to ${m.stop.at}`)
-  if (m.strip !== before.strip) f.push(`the TX strip is ${m.strip} px high, 1.24.0's ${before.strip}`)
+  if (!bare) f.push('the page never drew with the pane hidden')
+  else {
+    const was = Object.fromEntries(bare.floors)
+    for (const [id, v] of m.floors) if (was[id] != null && v !== was[id]) f.push(`the ${id} pane's computed floor is ${v} with the pane, ${was[id]} without`)
+    const h0 = Object.fromEntries(bare.panes)
+    const shared = new Set(SHARED[view] ?? [])
+    let given = 0
+    for (const [id, h] of m.panes) {
+      const lost = Math.max(0, (h0[id] ?? h) - h)
+      if (shared.has(id)) given += lost
+      else if (lost > 1) f.push(`the ${id} pane gives up ${lost} px to the pane (it shares no column with it)`)
+    }
+    if (given > m.pane.h + 16) f.push(`the panes sharing its column give up ${given} px for a ${m.pane.h} px pane`)
+    if (!m.stop?.reach) f.push('Stop TX is not on screen or something covers it')
+    else if (JSON.stringify(m.stop.at) !== JSON.stringify(bare.stop.at)) f.push(`Stop TX moved from ${bare.stop.at} (pane hidden) to ${m.stop.at}`)
+    if (m.strip !== bare.strip) f.push(`the TX strip is ${m.strip} px high with the pane, ${bare.strip} without`)
+  }
   return f.map((s) => `${tag}: ${s}`)
 }
 
@@ -389,11 +444,13 @@ try {
       continue
     }
     const before = BEFORE[tag]
+    const bare = await measure(hash, view, [w, h, dpr], null, true)
     const face = m.faces[0]
-    const gains = before ? m.panes.filter(([id, h]) => before.panes[id] != null && h !== before.panes[id]).map(([id, h]) => `${id} ${h - before.panes[id] > 0 ? '+' : ''}${h - before.panes[id]}`) : []
-    console.log(`txmeterspane-probe: ${tag} (${m.vp}): pane ${before?.pane} → ${m.pane.h} px; dial ${face.arc.w}×${face.arc.h} (1.24.0 ${before?.arc.join('×')}), ${face.above} px above it; value ${face.value.h} px (1.24.0 ${before?.value}), name ${face.label.h} px (1.24.0 ${before?.label}); the others: ${gains.length ? gains.join(', ') : 'unchanged'}; Stop TX at ${m.stop?.at}`)
+    const h0 = Object.fromEntries(bare?.panes ?? [])
+    const gains = m.panes.filter(([id, h]) => h0[id] != null && h !== h0[id]).map(([id, h]) => `${id} ${h - h0[id] > 0 ? '+' : ''}${h - h0[id]}`)
+    console.log(`txmeterspane-probe: ${tag} (${m.vp}): pane ${before?.pane} → ${m.pane.h} px; dial ${face.arc.w}×${face.arc.h} (1.24.0 ${before?.arc.join('×')}), ${face.above} px above it; value ${face.value.h} px (1.24.0 ${before?.value}), name ${face.label.h} px (1.24.0 ${before?.label}); the others against the pane hidden: ${gains.length ? gains.join(', ') : 'unchanged'}; Stop TX at ${m.stop?.at} (hidden: ${bare?.stop.at})`)
     if (!before) red(`${tag}: no 1.24.0 measure to hold it to`)
-    else for (const r of faults(tag, m, before)) red(r)
+    else for (const r of faults(tag, m, before, bare, view)) red(r)
   }
   if (!PRINT && !ONLY) {
     // THE CONTROL: 1.24.0's dial drawn back (the dial's own scale planted away) must fail check 1.
@@ -402,6 +459,16 @@ try {
     const caught = m ? faults(tag, m, BEFORE[tag]) : []
     console.log(`txmeterspane-probe: CONTROL 1.24.0's dial drawn back: caught ${JSON.stringify(caught)}`)
     if (!caught.some((s) => s.includes('dial is'))) red("CONTROL FAILED: 1.24.0's dial drawn back was not seen; the check cannot fail")
+  }
+  if (!PRINT && !ONLY) {
+    // CHECK 3'S CONTROL: 150 px stolen from Phone's log by the pane's page alone (a planted margin under the log, which
+    // shares no column with the meters pane) must be caught.
+    const tag = 'Phone 1920×1080 @100 %'
+    const bare = await measure('phone', 'phone', [1920, 1080, 1], null, true)
+    const m = await measure('phone', 'phone', [1920, 1080, 1], '[data-pane="log"] { margin-bottom: 150px !important }')
+    const caught = m ? faults(tag, m, BEFORE[tag], bare, 'phone') : []
+    console.log(`txmeterspane-probe: CONTROL 150 px stolen from Phone's log: caught ${JSON.stringify(caught.filter((s) => s.includes('gives up')))}`)
+    if (!caught.some((s) => s.includes('the log pane gives up'))) red("CONTROL FAILED: 150 px taken from Phone's log was not seen; check 3 cannot fail")
   }
   if (!PRINT && !ONLY) {
     // THE NUMBERS' CONTROL: the scale's numbers planted at twice 1.24.0's size must be caught crowding one another.
@@ -419,7 +486,7 @@ try {
     console.log(`txmeterspane-probe: CONTROL the scale's numbers at half 1.24.0's size: caught ${JSON.stringify(caught)}`)
     if (!caught.some((s) => /scale numbers are .* under 1\.24\.0's/.test(s))) red("CONTROL FAILED: halved scale numbers were not seen; the check cannot fail")
   }
-  if (code === 0 && !PRINT) console.log('txmeterspane-probe: PASS — every dial half of 1.24.0\'s with its readout no smaller, whole and in view, in a shorter pane with no other pane shorter, and Stop TX where it stood, on FT8, Phone, CW and SSTV at every size and zoom; the control caught')
+  if (code === 0 && !PRINT) console.log('txmeterspane-probe: PASS — every dial half of 1.24.0\'s with its readout no smaller, whole and in view, in a pane shorter than 1.24.0\'s that takes room only from itself (against the same page with it hidden: no floor changed, no pane outside its column giving up more than 1 px and those in it no more than its own height, the TX strip and Stop TX unmoved), on FT8, Phone, CW and SSTV at every size and zoom; the controls caught')
   process.exitCode = code
 } finally {
   await browser.stop()

@@ -127,6 +127,24 @@ describe('the TX cluster is start-anchored: state-variable content never precede
     }
   })
 
+  // THE CONTACT'S WORDS IN ONE BOX (2026-11-12; operate-classic-grid.test.ts computes the box's line): every
+  // member of Stop TX's line that changes with the contact stands inside `.cq-status`, so none of them can wrap the
+  // line on its own. Loose, the AUTO-CQ pill and the DX call wrapped the state onto a new line and moved Stop TX
+  // 29–35 px at 1366×768 at 150–175 % (Chrome).
+  it('the AUTO-CQ pill, the state, the DX call and the report stand in the one box of its own on the strip, before the break', () => {
+    const { container } = renderStrip('tx')
+    const strip = container.querySelector('.cockpit-qso')!
+    const box = strip.querySelector(':scope > .cq-status')
+    expect(box, 'no .cq-status box on the strip').not.toBeNull()
+    const kids = [...strip.children]
+    expect(kids.indexOf(box!), 'the box is not before the break (not on Stop TX’s line)').toBeLessThan(kids.indexOf(strip.querySelector(':scope > .cq-break')!))
+    for (const cls of ['cq-autocq', 'cq-state', 'cq-dx', 'cq-rpt']) {
+      const m = strip.querySelector(`.${cls}`)
+      expect(m, `.${cls} missing in the TX state`).not.toBeNull()
+      expect(m!.parentElement, `.${cls} stands loose on the strip, where it can wrap Stop TX's line`).toBe(box)
+    }
+  })
+
   it('the leading census is IDENTICAL across all three states', () => {
     const seen = STATES.map((s) => {
       const view = renderStrip(s)

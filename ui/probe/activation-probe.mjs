@@ -1,9 +1,10 @@
 // The Activation pane, its window and its Stop checklist in real Chrome, for what jsdom cannot see:
 // `scripts/browser-probe --desktop activation`.
 //
-// The probe serves src/probe/activation.tsx with the app's own Vite config at 1024×768 (the supported
-// floor) and 1920×1080, in three cases — the Activation box in the dashboard rail beside a cockpit's TX
-// strip and dock, the pane in its own window, and the "Activation over?" checklist — and asserts:
+// The probe serves src/probe/activation.tsx with the app's own Vite config at the representative screens
+// (probe/sizes.mjs CORE: 1366×768 at 175 %, the floor, to 4K at 200 %), in three cases — the Activation box
+// in the dashboard rail beside a cockpit's TX strip and dock, the pane in its own window, and the "Activation
+// over?" checklist — and asserts:
 //   · nothing scrolls sideways: the page, the pane's box (or window) and the checklist are no wider
 //     than they show;
 //   · the first park's count is on screen before any scroll, and the head, every park line, the rate and
@@ -24,9 +25,10 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { CORE, metrics } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
-const SIZES = [{ w: 1024, h: 768 }, { w: 1920, h: 1080 }]
+const SIZES = CORE
 const CASES = ['rail', 'window', 'over']
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -93,7 +95,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function measure(w, h, which, control) {
+async function measure(size, which, control) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -101,7 +103,7 @@ async function measure(w, h, which, control) {
     const r = await call('Runtime.evaluate', { expression, returnByValue: true })
     return r.exceptionDetails ? { error: r.exceptionDetails.exception?.description ?? r.exceptionDetails.text } : r.result.value
   }
-  await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+  await call('Emulation.setDeviceMetricsOverride', metrics(size))
   await call('Page.navigate', { url: `${origin}/probe/activation.html?case=${which}${control ? '&control=1' : ''}` })
   let last = null
   for (let i = 0; i < 80; i++) {
@@ -137,31 +139,31 @@ function faults(m, which) {
 
 let code = 0
 try {
-  for (const { w, h } of SIZES) {
+  for (const size of SIZES) {
     for (const which of CASES) {
-      const m = await measure(w, h, which, false)
-      console.log(`activation-probe: ${which}, window ${w}×${h}: ${JSON.stringify(m)}`)
+      const m = await measure(size, which, false)
+      console.log(`activation-probe: ${which}, window ${size.name}: ${JSON.stringify(m)}`)
       if (!m || m.error || (which === 'over' ? !m.ticks?.length : !m.rows)) {
-        console.error(`activation-probe: the ${which} case never drew at ${w}×${h}`)
+        console.error(`activation-probe: the ${which} case never drew at ${size.name}`)
         code = 2
         continue
       }
       const red = faults(m, which)
       if (red.length) {
-        console.error(`activation-probe: RED ${which} at ${w}×${h} — ${red.join('; ')}`)
+        console.error(`activation-probe: RED ${which} at ${size.name} — ${red.join('; ')}`)
         code = code || 1
       }
-      const c = await measure(w, h, which, true)
+      const c = await measure(size, which, true)
       const caught = c && !c.error ? faults(c, which) : []
-      console.log(`activation-probe: CONTROL ${which}, window ${w}×${h}: caught ${JSON.stringify(caught)}`)
+      console.log(`activation-probe: CONTROL ${which}, window ${size.name}: caught ${JSON.stringify(caught)}`)
       const wantCover = which === 'rail'
       if (!caught.some((s) => s.includes('sideways') || s.includes('wider')) || (wantCover && !caught.some((s) => s.includes('covered')))) {
-        console.error(`activation-probe: CONTROL FAILED ${which} at ${w}×${h} — the planted overflow${wantCover ? ' or cover' : ''} was not seen; the check cannot fail`)
+        console.error(`activation-probe: CONTROL FAILED ${which} at ${size.name} — the planted overflow${wantCover ? ' or cover' : ''} was not seen; the check cannot fail`)
         code = code || 1
       }
     }
   }
-  if (code === 0) console.log(`activation-probe: PASS — the pane in the rail and in its window, and the checklist, whole with nothing sideways and no transmit control covered, at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}; each control caught`)
+  if (code === 0) console.log(`activation-probe: PASS — the pane in the rail and in its window, and the checklist, whole with nothing sideways and no transmit control covered, at ${SIZES.map((s) => s.name).join(', ')}; each control caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

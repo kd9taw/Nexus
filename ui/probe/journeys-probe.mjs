@@ -1,9 +1,9 @@
 // The first-run journeys in real Chrome, for what jsdom cannot see: `scripts/browser-probe --desktop journeys`.
 //
 // The probe serves the REAL app (index.html, main.tsx, App) with the app's own Vite config and src/api.ts
-// swapped for probe/journeys-api.ts: a fresh install, so the wizard opens by itself. At 1024×768 (the
-// supported floor) and 1920×1080, in the dark and the light theme, it walks the two journeys this page
-// adds and asserts, each where it stands:
+// swapped for probe/journeys-api.ts: a fresh install, so the wizard opens by itself. At the
+// representative screens (probe/sizes.mjs CORE: 1366×768 at 175 %, the floor, to 4K at 200 %), in the dark
+// and the light theme, it walks the two journeys this page adds and asserts, each where it stands:
 //   1. ABOUT YOU: the three experience answers, the two radio-count answers and Next each the topmost thing
 //      where they stand, the wizard inside the window, nothing sideways;
 //   2. YOUR RIG, "Two or more": the hint on screen; the radio found picked, "＋ I have a second radio"
@@ -25,12 +25,13 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { CORE, metrics } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
 const STUB_SRC = join(UI, 'probe', 'journeys-api.ts')
 const STUB_API = join(UI, 'probe', '__journeys-api.ts')
-const SIZES = [[1024, 768], [1920, 1080]]
+const SIZES = CORE
 const THEMES = ['dark', 'light']
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 // Every api verb that sends a contact out, fetches from a logbook service, or stores a login.
@@ -187,7 +188,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function run([W, H], theme, control) {
+async function run(size, theme, control) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -206,7 +207,7 @@ async function run([W, H], theme, control) {
   }
   const next = async () => { await evaluate(CLICK('/^Next/')); await sleep(300) }
   try {
-    await call('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false })
+    await call('Emulation.setDeviceMetricsOverride', metrics(size))
     await call('Page.navigate', { url: `${origin}/probe-blank` })
     await sleep(300)
     await evaluate(`localStorage.clear(); localStorage.setItem('tempo-theme', ${JSON.stringify(theme)}); 1`)
@@ -257,7 +258,7 @@ let code = 0
 try {
   for (const size of SIZES) {
     for (const theme of THEMES) {
-      const tag = `${size[0]}×${size[1]} ${theme}`
+      const tag = `${size.name} ${theme}`
       const r = await run(size, theme, false)
       console.log(`journeys-probe: ${tag}: ${JSON.stringify(r)}`)
       if (r.error) {
@@ -310,7 +311,7 @@ try {
       }
     }
   }
-  if (code === 0) console.log(`journeys-probe: PASS — About you with its five answers, the "Two or more" hint and the radio setup it opens, where contacts go with QRZ's Test answered, the import preview with nothing imported before Import, the result line, and Settings ▸ Confirmations after Finish, all on screen and nothing sideways, no upload and no login stored, at ${SIZES.map(([w, h]) => `${w}×${h}`).join(', ')} in ${THEMES.join(' and ')}; each control caught`)
+  if (code === 0) console.log(`journeys-probe: PASS — About you with its five answers, the "Two or more" hint and the radio setup it opens, where contacts go with QRZ's Test answered, the import preview with nothing imported before Import, the result line, and Settings ▸ Confirmations after Finish, all on screen and nothing sideways, no upload and no login stored, at ${SIZES.map((s) => s.name).join(', ')} in ${THEMES.join(' and ')}; each control caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

@@ -902,8 +902,9 @@ describe('panes are sized by the grid, never by themselves', () => {
       for (const m of r.body.matchAll(/min-height\s*:\s*([^;]+)/g)) {
         const v = m[1].trim()
         if (v === '0') continue
-        // An em floor, or the one knob over an em fallback (`--cockpit-region-floor`, fenced below).
-        if (r.selector === '.cockpit-panes' && /^(\d+(\.\d+)?em|var\(--cockpit-region-floor, \d+(\.\d+)?em\))$/.test(v)) continue
+        // The one knob over the stock floor (`--cockpit-region-floor`, fenced below): an em floor that yields to a share of
+        // a short window, as FT's lower region and the hosted FT's do (2026-11-12).
+        if (r.selector === '.cockpit-panes' && /^var\(--cockpit-region-floor, max\(min\(\d+(\.\d+)?em, calc\(0?\.\d+ \* var\(--vh-eff\)\)\), min\(\d+(\.\d+)?em, \(\d+px - var\(--vh-eff\)\) \* \d+\)\)\)$/.test(v)) continue
         // The hosted FT region has the same shell-valve contract. Its smaller
         // viewport-capped floor is paired with computed overflow guards in
         // cockpit-shells.test.ts and real compiled-browser reachability tests.
@@ -929,7 +930,27 @@ describe('panes are sized by the grid, never by themselves', () => {
       r!.body.replace(/\s+/g, ' '),
       'the region must floor itself (em units — px are zoom-hostile) so vertical deficit ' +
         'overflows the shell and its valve scrolls.',
-    ).toMatch(/min-height: (var\(--cockpit-region-floor, )?\d+(\.\d+)?em/)
+    ).toMatch(/min-height: var\(--cockpit-region-floor, max\(min\(\d+(\.\d+)?em, /)
+  })
+
+  it('the stock floor is 18em and yields to 30 % of a short window from 600 px up (2026-11-12)', () => {
+    // On the smallest supported screen (1366×768 at 175 %, which the app fits to 65 %: a 674 px effective window) a
+    // plain 18em held every scope at its own 8em floor and still overflowed the shell: CW scrolled 15 px, Phone 20, and
+    // Phone's scope drew a 10 px picture (Chrome). Under 600 px every shell scrolls whatever the floor, and a yielding
+    // floor there put SSTV's composer warning out of reach (900×600 at 175 %), so it does not yield there.
+    // The declaration is RESOLVED, at the font's 14 px, across the heights that matter.
+    const r = RULES.find((x) => x.selector === '.cockpit-panes')!
+    const v = /min-height\s*:\s*var\(--cockpit-region-floor, (.*)\)\s*$/m.exec(r.body.replace(/;\s*$/gm, ''))?.[1] ?? ''
+    const at = (vh: number) => {
+      const js = v.replace(/var\(--vh-eff\)/g, `${vh}px`).replace(/(\d+(?:\.\d+)?)em/g, (_, n) => `${Number(n) * 14}px`)
+        .replace(/(\d+(?:\.\d+)?)px/g, '$1').replace(/\bmax\(/g, 'Math.max(').replace(/\bmin\(/g, 'Math.min(').replace(/\bcalc\(/g, '(')
+      return Function(`return (${js})`)() as number
+    }
+    expect(() => at(674), `\`${v}\` does not resolve`).not.toThrow()
+    expect(at(674), 'the floor screen at its fit: 30 % of 674').toBeCloseTo(0.3 * 674, 6)
+    expect(at(674), '…and room for a pane at its 10em floor under its 2em title bar').toBeGreaterThanOrEqual(12 * 14)
+    for (const vh of [840, 900, 1080, 1440]) expect(at(vh), `at ${vh} px, the 18em it always was`).toBe(18 * 14)
+    for (const vh of [343, 438, 512, 599]) expect(at(vh), `at ${vh} px (under 600), the 18em it always was`).toBe(18 * 14)
   })
 
   it('the region-floor knob is set by RTTY alone, from the frames’ own yielding floors', () => {

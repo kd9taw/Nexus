@@ -26,13 +26,26 @@ from collections import Counter, defaultdict
 # file it just wrote. Do not edit them by hand: a pin that disagrees with the CSV beside it
 # reports a translator's untouched file as damaged.
 # >>> make-kit pins
-EXPECTED_ROWS = 10694
-EXPECTED_KEYS_SHA = '5a3233a2cdf59f9e0d4de55eca763ad82eba409006b41e5ace478d64f88fe44e'
-EXPECTED_ENGLISH_SHA = '4e5ab7822181bf2ddaf8fc6694a458fa6bc1cbb44860a38d47a95870874013ba'
-EXPECTED_DNT_SHA = '2f77a2a8720582dce6fed54ac718e4bbe0de80878df0679e94ba7f7d54650d55'
-EXPECTED_TIERS = {1: 994, 2: 364, 3: 1802, 4: 577, 5: 4166, 6: 2791}
+EXPECTED_ROWS = 10702
+EXPECTED_KEYS_SHA = 'dec38b2e02d6bd2f9c2cf17eeb4c8a3e65deb6f2e945e75b944c94216c78165b'
+EXPECTED_ENGLISH_SHA = 'f8d02930a503a743b4e53275b1b57fc58a384bf0df023c4bf33d24c03f332bcc'
+EXPECTED_DNT_SHA = '2c4d467a03e653262e0d74c7c11715db1b0d643eccade8c80c93e30da8af1de1'
+EXPECTED_TIERS = {1: 996, 2: 364, 3: 1802, 4: 577, 5: 4166, 6: 2797}
 # <<< make-kit pins
 COLUMNS = ['priority', 'key', 'english', 'italian', 'do_not_translate', 'notes']
+
+# ── Deliberate exceptions to the do_not_translate column ────────────────────────────────────
+# Every plain term on a row's do_not_translate list must appear in the Italian, except where
+# Italian usage overrules the list. Each entry names the term, the spelling that must appear in
+# its place, and the rows it applies to (None = every row). The replacement is still checked: an
+# override is the same term spelt the Italian way, never permission to drop it.
+DNT_OVERRIDES = {
+    # "NO LIVE DATA" is a status chip, and DATA there is the English word for data. The
+    # jack-label rule (DATA, the rear-panel input on a radio) caught it. It reads NESSUN DATO LIVE.
+    'DATA': ('DATO', {'nowbar.prop.offline', 'map.prov.none', 'dxped.prov.none', 'connect.prov.offline'}),
+    # Italian does not inflect QSO: "i QSO", never "i QSOs". The term itself survives.
+    'QSOs': ('QSO', None),
+}
 
 RE_PLACEHOLDER = re.compile(r'\{\{(\w+)\}\}')
 RE_SINGLE_BRACE = re.compile(r'(?<!\{)\{([a-z]\w*)\}(?!\})')
@@ -119,6 +132,14 @@ def is_all_invariant(english, required):
     return not re.search(r'[A-Za-z]{2}', stripped)
 
 
+def overridden(term, key, it):
+    """True when DNT_OVERRIDES lets this row spell `term` the Italian way, and it does."""
+    if term not in DNT_OVERRIDES:
+        return False
+    spelling, keys = DNT_OVERRIDES[term]
+    return (keys is None or key in keys) and spelling in it
+
+
 def check_row(row, rep):
     key = row['key']
     english = row['english']
@@ -190,7 +211,7 @@ def check_row(row, rep):
 
     # 4. Ham vocabulary and other terms of art listed in do_not_translate.
     plain = [t for t in dnt if not (t.startswith('{') or t.startswith('<'))]
-    absent = [t for t in plain if t not in it]
+    absent = [t for t in plain if t not in it and not overridden(t, key, it)]
     if absent:
         rep.error('a term that must be copied through is not in the Italian', key,
                   'English: %s\nItalian: %s\nNot found: %s\nIf you believe one of these '

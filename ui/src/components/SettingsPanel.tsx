@@ -148,6 +148,7 @@ import {
 import { setLocale, t, type MessageKey } from '../i18n'
 import { catDetailText } from '../features/catDetail'
 import { LOCALE_NATIVE_NAME, localeChoices, useLocale } from '../i18n/useLocale'
+import { LocaleBetaNote } from './LocaleBetaNote'
 import { T } from '../i18n/T'
 import { CONTESTS, CONTESTS_SENDING_POWER, clubSyncRefusalText, contestClubRefusal, contestName, contestRoleWords, isFieldDay } from '../fdEvent'
 import { ADDR_SEP, clubLinkLines, FIND_CLUB_EVENTS_SECS } from '../features/clubLink'
@@ -4656,6 +4657,7 @@ export function SettingsPanel({
                     ))}
                   </select>
                   <span className="settings-hint">{t('settings.workspace.language.hint')}</span>
+                  <LocaleBetaNote className="settings-hint" />
                 </div>
               )}
               <div className="settings-field">

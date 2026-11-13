@@ -4,7 +4,8 @@
 // Every laptop at a club now lists the club's contacts under its club board, as the host does. The probe
 // serves src/probe/clublog.tsx (a laptop joined to an Illinois QSO Party club of five positions with long
 // names, sent the newest 100 of 4,321 contacts) with the app's own Vite config, on the Contest screen and in
-// the club board pop-out, at 1024×768 (the supported floor) and 1920×1080, and asserts:
+// the club board pop-out, at the representative screens (probe/sizes.mjs CORE: 1366×768 at 175 %, the floor,
+// to 4K at 200 %), and asserts:
 //   · the list is there, under the club board, with its head ("the newest 100 of 4321 contacts");
 //   · nothing scrolls sideways: the page, the screen's scroller, the list and its rows are no wider than
 //     they show;
@@ -13,8 +14,9 @@
 //     topmost thing where they stand;
 //   · the hundredth contact is reached by scrolling, and its cells are then on screen too.
 //
-// THE CONTROL, run every time: the same page with the newest row made 2400 px wide. There the probe must see the sideways overflow; if it does not, the check cannot fail and
-// the probe says so instead.
+// THE CONTROL, run every time: the same page with the newest row made 4000 px wide (wider than any window of the
+// screen matrix: 2400 px once was, and fits a 2560 window). There the probe must see the sideways overflow; if it
+// does not, the check cannot fail and the probe says so instead.
 //
 // exit: 0 every size clear · 1 a red, or a control that could not fail · 2 a page never drew the list
 import { createServer } from 'vite'
@@ -23,19 +25,17 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { CORE, metrics } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
-const SIZES = [
-  { w: 1024, h: 768 },
-  { w: 1920, h: 1080 },
-]
+const SIZES = CORE
 const VIEWS = ['contest', 'popout']
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const PLANT = `(() => {
   const row = document.querySelector('[role=region][aria-label="Club log"] .fd-log-row')
   if (!row) return false
-  row.style.minWidth = '2400px'
+  row.style.minWidth = '4000px'
   return true
 })()`
 
@@ -94,7 +94,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function measure(w, h, view, control) {
+async function measure(size, view, control) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -102,7 +102,7 @@ async function measure(w, h, view, control) {
     const r = await call('Runtime.evaluate', { expression, returnByValue: true })
     return r.exceptionDetails ? { error: r.exceptionDetails.exception?.description ?? r.exceptionDetails.text } : r.result.value
   }
-  await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+  await call('Emulation.setDeviceMetricsOverride', metrics(size))
   await call('Page.navigate', { url: `${origin}/probe/clublog.html?view=${view}` })
   let last = null
   for (let i = 0; i < 100; i++) {
@@ -130,31 +130,31 @@ function faults(m) {
 let code = 0
 try {
   for (const view of VIEWS) {
-    for (const { w, h } of SIZES) {
-      const m = await measure(w, h, view, false)
-      console.log(`clublog-probe: ${view} ${w}×${h}: ${JSON.stringify(m)}`)
+    for (const size of SIZES) {
+      const m = await measure(size, view, false)
+      console.log(`clublog-probe: ${view} ${size.name}: ${JSON.stringify(m)}`)
       if (!m || m.error) {
-        console.error(`clublog-probe: the list never drew in ${view} at ${w}×${h}`)
+        console.error(`clublog-probe: the list never drew in ${view} at ${size.name}`)
         code = 2
         continue
       }
       const red = faults(m)
       if (red.length) {
-        console.error(`clublog-probe: RED in ${view} at ${w}×${h} — ${red.join('; ')}`)
+        console.error(`clublog-probe: RED in ${view} at ${size.name} — ${red.join('; ')}`)
         code = code || 1
       }
-      const c = await measure(w, h, view, true)
+      const c = await measure(size, view, true)
       const caught = c && !c.error ? faults(c) : []
-      console.log(`clublog-probe: CONTROL ${view} ${w}×${h}: caught ${JSON.stringify(caught)}`)
+      console.log(`clublog-probe: CONTROL ${view} ${size.name}: caught ${JSON.stringify(caught)}`)
       if (!caught.some((s) => s.includes('sideways') || s.includes('not all on screen'))) {
-        console.error(`clublog-probe: CONTROL FAILED in ${view} at ${w}×${h} — the planted wide row was not seen; the check cannot fail`)
+        console.error(`clublog-probe: CONTROL FAILED in ${view} at ${size.name} — the planted wide row was not seen; the check cannot fail`)
         code = code || 1
       }
     }
   }
   if (code === 0)
     console.log(
-      `clublog-probe: PASS — a joined laptop's club log under its club board, its head, newest and hundredth contact on screen with nothing sideways, on the Contest screen and in the pop-out at ${SIZES.map((s) => `${s.w}×${s.h}`).join(' and ')}; each control caught`,
+      `clublog-probe: PASS — a joined laptop's club log under its club board, its head, newest and hundredth contact on screen with nothing sideways, on the Contest screen and in the pop-out at ${SIZES.map((s) => s.name).join(' and ')}; each control caught`,
     )
   process.exitCode = code
 } finally {

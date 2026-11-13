@@ -61,7 +61,7 @@ import { Waterfall, type WaterfallTag } from './Waterfall'
 import { RfScopePane } from './RfScopePane'
 import { FT_PALETTE_SCOPE } from '../waterfallPalette'
 import { PaneSeam } from './PaneSeam'
-import { TX_SPLIT_MAX, TX_SPLIT_MIN } from '../features/paneSeam'
+import { TX_SPLIT_MAX, TX_SPLIT_MIN, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
 import { buildHighlightMap, OperateDecodes } from './OperateDecodes'
 import { DecodeHistory, type DecodeSort } from '../decodeHistory'
 import { OperateQsoStrip } from './OperateQsoStrip'
@@ -1491,6 +1491,7 @@ export function OperateCockpit({
             split={split}
             share={split != null && share != null ? share * split : undefined}
             close={closeProps(id)}
+            lowFloor="--txmeters-pane-floor-ft"
           />
         )
       case 'recall':
@@ -2056,7 +2057,7 @@ export function OperateCockpit({
               varName="--cockpit-wf-h"
               strip={wfRef}
               storageKey="nexus.split.operate.waterfall"
-              min={88}
+              min={WATERFALL_SPLIT_MIN}
               max={420}
               // 25 % of the SHELL, as every cockpit's waterfall starts (2026-10-26: "width and height to
               // be consistent"). The strip stands in the body, under the cockpit's own rows, so the
