@@ -1500,6 +1500,18 @@ fn preemptions() -> Option<u64> {
         .ok()
 }
 
+/// What a Stop press must leave within for the median of five to hold (`stops_leaving`).
+const STOP_MEDIAN_BOUND: Duration = Duration::from_millis(1);
+
+/// Whether a timed press counts, or is pressed again: one the kernel preempted is pressed again
+/// only when it was slow as well (as long as the median's bound or longer), since the preemption
+/// may be all that made it slow. A fast press counts, preempted or not: on a CI machine of two
+/// cores nearly every press is preempted, and a press that left at once left at once. A slow
+/// press that was not preempted counts, and fails the bounds: that time is the Stop's own.
+fn press_counts(took: Duration, preempted: bool) -> bool {
+    !preempted || took < STOP_MEDIAN_BOUND
+}
+
 /// A call's answer, as [`send`] gives it.
 type Answered = std::sync::mpsc::Receiver<Result<Value, Value>>;
 
@@ -1507,13 +1519,13 @@ type Answered = std::sync::mpsc::Receiver<Result<Value, Value>>;
 /// and gives how long each took to be on `socket` (the station's end of Stop's road), with the
 /// Stops pressed so far. One thread presses and receives, so the time is the press's until the
 /// datagram is there: the handler's own work and nothing else, with no receiving thread to be
-/// scheduled. A press during which the kernel preempted this thread timed the scheduler (a box
-/// running the whole suite, or a build beside it, makes that a few milliseconds often enough to
-/// carry a median of five: 21 to 94 runs in 100 failed so at four times the box's threads), so
-/// it is pressed again. Every press is timed, the first included: a slow first press would be the
+/// scheduled. A slow press during which the kernel preempted this thread timed the scheduler (a
+/// box running the whole suite, or a build beside it, makes that a few milliseconds often enough
+/// to carry a median of five: 21 to 94 runs in 100 failed so at four times the box's threads), so
+/// it is pressed again ([`press_counts`]). Every press is timed, the first included: a slow first press would be the
 /// Stop's own, and is a failure. Every press is a Stop and is waited for, timed or not. `before`
-/// and `after` run around each press, outside its time. A hundred presses with no clean five is
-/// a failure: the box was too loaded to measure, which is said, never passed.
+/// and `after` run around each press, outside its time. A hundred presses without five that count
+/// is a failure: the box was too loaded to measure, which is said, never passed.
 fn stops_leaving(
     screen: &tauri::WebviewWindow<MockRuntime>,
     socket: &std::net::UdpSocket,
@@ -1550,12 +1562,37 @@ fn stops_leaving(
                 "Stop {stop} never left"
             );
         };
-        if preemptions() == preempted {
+        if press_counts(left - pressed, preemptions() != preempted) {
             took.push(left - pressed);
         }
         after();
     }
     (took, stop, answers)
+}
+
+/// The retake rule alone: a fast press counts whether or not it was preempted; a slow one that
+/// was not preempted counts (and so fails the bounds); a slow one that was preempted is pressed
+/// again.
+#[test]
+fn a_stop_press_is_pressed_again_only_when_preempted_and_slow() {
+    let fast = Duration::from_micros(170);
+    let slow = Duration::from_millis(60);
+    assert!(press_counts(fast, true), "fast and preempted counts");
+    assert!(press_counts(fast, false), "fast counts");
+    assert!(
+        press_counts(slow, false),
+        "slow and not preempted counts, and fails"
+    );
+    assert!(
+        !press_counts(slow, true),
+        "slow and preempted is pressed again"
+    );
+    // At the median's bound exactly, a preempted press is pressed again; just under, it counts.
+    assert!(!press_counts(STOP_MEDIAN_BOUND, true));
+    assert!(press_counts(
+        STOP_MEDIAN_BOUND - Duration::from_micros(1),
+        true
+    ));
 }
 
 /// ★ No queue at this end. A Stop press leaves on the road within a
