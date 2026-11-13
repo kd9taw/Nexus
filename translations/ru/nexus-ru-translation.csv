@@ -3980,6 +3980,8 @@
 "4","iota.prefill.label","IOTA","IOTA","IOTA","Filled by the maintainer, pending translator review."
 "4","iota.prefill.aria","IOTA reference for this contact","Референс IOTA для этой связи","IOTA","Filled by the maintainer, pending translator review."
 "4","iota.prefill.hint","Filled in from a spot or your callbook lookup. Logged and sent with the contact; change it or clear it before logging.","Заполнено по споту или поиску в колбуке. Записывается в журнал и отправляется вместе со связью; измените или очистите перед записью.","","Filled by the maintainer, pending translator review."
+"4","iota.island.label","Island","Остров","","Filled by the maintainer, pending translator review."
+"4","iota.island.none","No island picked","Остров не выбран","","Filled by the maintainer, pending translator review."
 "4","iota.card.fromSpot","Filled in from a spot.","Заполнено по споту.","","Filled by the maintainer, pending translator review."
 "4","iota.card.fromCallbook","Filled in from your callbook lookup.","Заполнено по поиску в колбуке.","","Filled by the maintainer, pending translator review."
 "4","iota.offer.dismiss","Leave IOTA empty","Оставить IOTA пустым","IOTA",""

@@ -54075,6 +54075,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         iota_list::get_iota_list_status,
         iota_list::set_iota_list_enabled,
         iota_list::get_iota_groups,
+        iota_list::get_iota_islands,
         get_iota_offer,
         fetch_lotw_users,
         get_fcc_states_status,

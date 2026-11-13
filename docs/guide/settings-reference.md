@@ -2037,6 +2037,11 @@ way. Most awards count band slots, not band-and-mode slots, which is why off is 
   the copy shipped with Nexus or a newer one. Turning it off shows no names, stops
   the check and deletes any downloaded copy: a reference is then checked by its
   shape (`EU-131`) only.
+  IOTA's islands list ships and is refreshed with it, under the written permission
+  of IOTA Ltd and the RSGB: with a group in the IOTA box, the log strip, the
+  confirm-before-log popup, the Logbook's Add form and the contact card offer that
+  group's islands to pick from (**Island**). Nothing is picked for you; the island
+  is logged (ADIF `IOTA_ISLAND_ID`) only when you pick one. Off offers none.
 
 ---
 

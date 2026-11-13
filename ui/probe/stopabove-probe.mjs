@@ -26,9 +26,18 @@
 // at the smallest (65 %) and largest (175 %) UI scale. Asserted: the box holds the reference and is the topmost thing
 // at its centre, the group name is drawn whole inside its form and covers the centre of no control, the source is
 // shown, nothing scrolls sideways (the page none; the prompt none at all — its two columns of boxes once ran ~80 px
-// past its card at every scale; the strip no more than the same strip with no box), and Log is inside the window and
-// topmost (the prompt's once, the strip's once scrolled to). Its CONTROL, per form (`&iotacontrol=1`, 1024×768 at 175 %): the name may not wrap, and
+// past its card at every scale; the form's content runs no wider than the same form's with no box), and Log is inside
+// the window and topmost (the prompt's once, the strip's once scrolled to). Its CONTROL, per form (`&iotacontrol=1`, 1024×768 at 175 %): the name may not wrap, and
 // must come back NOT drawn whole.
+//
+// THE ISLAND PICKER beside that box (the group's islands answered, one with a 200-character name, which the probe
+// picks). Asserted, at the same sizes, against the same form with NO picker (`&islands=0`, the layout before it):
+//   (a) Log, Stop TX and every other control of the form stay inside the window and are no narrower than without the
+//       picker (to 1 px), and the form's content runs no wider than without it;
+//   (b) the picker is usable: inside its form, the topmost thing at its centre, at least 6em wide, holding the long
+//       name, and that name in its title when the box cuts it short.
+// Its CONTROL, per form (`&islandcontrol=1`, 1024×768 at 175 %): the picker's containment taken away, so the select
+// is as wide as its longest option again; it must come back RED.
 //
 // exit: 0 every case clear · 1 a red, or a control that could not fail · 2 the page never drew
 import { createServer } from 'vite'
@@ -220,6 +229,40 @@ const IOTA_MEASURE = (form) => `(() => {
   const line = parseFloat(getComputedStyle(name).lineHeight) || parseFloat(getComputedStyle(name).fontSize) * 1.2 * zoom
   const inputTop = top(input)
   const source = field.querySelector('.iota-offer-from')?.textContent.trim() ?? null
+  // The island picker, when the station answered islands: pick the island with the longest name.
+  const pick = field.querySelector('.iota-island-pick')
+  let island = null
+  if (pick) {
+    const long = [...pick.options].reduce((a, o) => (o.textContent.length > a.textContent.length ? o : a))
+    if (pick.value !== long.value) {
+      pick.value = long.value
+      pick.dispatchEvent(new Event('change', { bubbles: true }))
+    }
+    pick.scrollIntoView({ block: 'nearest' })
+    const p = r(pick)
+    const em = parseFloat(getComputedStyle(pick).fontSize)
+    island = {
+      picked: pick.value === long.value,
+      label: long.textContent.length,
+      width: Math.round(p.width),
+      wideEnough: p.width >= 6 * em,
+      inside: p.left >= h.left - 0.5 && p.right <= h.right + 0.5,
+      top: top(pick),
+      cut: pick.scrollWidth > pick.clientWidth + 1 || long.textContent.length * em * 0.4 > p.width,
+      titled: pick.title === long.textContent,
+    }
+  }
+  // Every control of the form outside the IOTA row, and Stop TX, by a name: where each is and how wide.
+  const name_ = (el, i) => (el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent.trim().slice(0, 24) || el.tagName) + '#' + i
+  const placed = (el) => { const b = r(el); return { w: Math.round(b.width), in: b.left >= -0.5 && b.top >= -0.5 && b.right <= innerWidth + 0.5 && b.bottom <= innerHeight + 0.5 } }
+  const widths = {}
+  ;[...host.querySelectorAll('input, button, select, textarea')].filter((el) => !field.contains(el) && r(el).width > 0)
+    .forEach((el, i) => { el.scrollIntoView({ block: 'nearest' }); widths[name_(el, i)] = placed(el) })
+  const stop = document.querySelector('.topbar .op-btn.stop')
+  if (stop) {
+    stop.scrollIntoView({ block: 'nearest' })
+    widths['Stop TX'] = placed(stop)
+  }
   const log = ${form === 'logconfirm' ? `host.querySelector('.logconfirm-log')` : `[...host.querySelectorAll('button')].find((b) => /^log$/i.test(b.textContent.trim()))`}
   if (log) log.scrollIntoView({ block: 'nearest' })
   const l = log && r(log)
@@ -227,20 +270,29 @@ const IOTA_MEASURE = (form) => `(() => {
     zoom,
     page: document.scrollingElement.scrollWidth - document.scrollingElement.clientWidth,
     overflow: host.scrollWidth - host.clientWidth,
+    extent: host.scrollWidth,
     form: { left: Math.round(h.left), right: Math.round(h.right) },
     name: { left: Math.round(n.left), right: Math.round(n.right), top: Math.round(n.top), bottom: Math.round(n.bottom) },
     nameLines: Math.round(n.height / line),
     nameWhole: n.width > 0 && n.left >= h.left - 0.5 && n.right <= h.right + 0.5 && name.scrollWidth <= name.clientWidth + 1,
     covers, inputTop, source,
-    logInWindow: !!l && l.left >= 0 && l.top >= 0 && l.right <= innerWidth && l.bottom <= innerHeight,
+    // To half a pixel: a scroll offset is whole pixels and a box at a fractional UI scale is not, so a Log scrolled
+    // into view can sit a fraction of a pixel past the edge (0.17 px at 1024×768 175 % once the picker's line moves it).
+    logInWindow: !!l && l.left >= -0.5 && l.top >= -0.5 && l.right <= innerWidth + 0.5 && l.bottom <= innerHeight + 0.5,
     logTop: !!log && top(log),
+    logWidth: l ? Math.round(l.width) : null,
+    logBox: l ? [l.left, l.top, l.right, l.bottom, innerWidth, innerHeight].map((v) => Math.round(v * 100) / 100) : null,
+    island, widths,
   }
 })()`
 
-/** How far `form` scrolls sideways with NO IOTA box (no `&iota=1`): the baseline the box may add nothing to. */
+/** How wide `form`'s content runs with NO IOTA box (no `&iota=1`, its `scrollWidth`): the baseline the box may add
+ *  nothing to. Its content's extent is compared, not `scrollWidth - clientWidth`: a box that makes the prompt taller
+ *  brings in its vertical scrollbar (the internal scroll it is given), which narrows the client box by the bar's width
+ *  without anything drawn any wider. */
 const BARE = (form) => `(() => {
   const host = document.querySelector(${JSON.stringify(form === 'logconfirm' ? '.logconfirm' : '.probe-below')})
-  return host ? host.scrollWidth - host.clientWidth : null
+  return host ? host.scrollWidth : null
 })()`
 
 async function measureBare(form, w, h, zoom) {
@@ -264,7 +316,7 @@ async function measureBare(form, w, h, zoom) {
   }
 }
 
-async function measureIota(form, w, h, zoom, control) {
+async function measureIota(form, w, h, zoom, control, extra = '') {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -274,7 +326,7 @@ async function measureIota(form, w, h, zoom, control) {
   }
   try {
     await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
-    await call('Page.navigate', { url: `${origin}/probe/stopabove.html?overlay=${form}&iota=1&zoom=${zoom}${control ? '&iotacontrol=1' : ''}` })
+    await call('Page.navigate', { url: `${origin}/probe/stopabove.html?overlay=${form}&iota=1&zoom=${zoom}${control ? '&iotacontrol=1' : ''}${extra}` })
     if (form === 'strip') {
       let focused = false
       for (let i = 0; i < 100 && !focused; i++) {
@@ -305,6 +357,32 @@ const IOTA_SIZES = [
 ]
 const IOTA_FORMS = ['logconfirm', 'strip']
 
+/** What the island picker breaks, measured `m` against the same form with no picker (`base`): (a) the form's
+ *  controls and Stop TX inside the window and no narrower, no more sideways scroll; (b) the picker usable. */
+function islandReds(m, base, at) {
+  const red = []
+  if (!m.island) return ['the island picker never drew']
+  if (!base || base.waiting) return ['the form never drew without the picker']
+  console.log(`stopabove-probe: island picker, ${at}: ${JSON.stringify(m.island)}; widths with/without it: ${JSON.stringify(
+    Object.fromEntries(Object.entries(base.widths).map(([k, b]) => [k, [m.widths[k]?.w ?? null, b.w]])),
+  )}; content extent ${m.extent}/${base.extent}, sideways scroll ${m.overflow}/${base.overflow}`)
+  for (const [k, b] of Object.entries(base.widths)) {
+    const now = m.widths[k]
+    if (!now) red.push(`${k} is gone`)
+    else if (!now.in) red.push(`${k} is outside the window`)
+    else if (now.w < b.w - 1) red.push(`${k} is ${now.w} px wide, ${b.w} without the picker`)
+  }
+  if (!m.logInWindow) red.push('Log is outside the window')
+  if (m.extent > base.extent + 1) red.push(`the picker makes the form run wider: ${m.extent} px, ${base.extent} without it`)
+  const i = m.island
+  if (!i.picked) red.push('the long-named island was not picked')
+  if (!i.inside) red.push('the picker is not inside its form')
+  if (!i.top) red.push('the picker is covered')
+  if (!i.wideEnough) red.push(`the picker is ${i.width} px wide, under 6em`)
+  if (i.cut && !i.titled) red.push('the picked name is cut short with no title')
+  return red
+}
+
 let code = 0
 let ran = 0
 try {
@@ -313,7 +391,7 @@ try {
       const at = `${form} ${w}×${h} at ${Math.round(zoom * 100)}%`
       const m = await measureIota(form, w, h, zoom, false)
       const bare = await measureBare(form, w, h, zoom)
-      console.log(`stopabove-probe: filled IOTA box, ${at}: ${JSON.stringify(m)} (no box: overflow ${bare})`)
+      console.log(`stopabove-probe: filled IOTA box, ${at}: ${JSON.stringify(m)} (no box: content extent ${bare})`)
       if (!m || m.waiting) {
         console.error(`stopabove-probe: the IOTA box never filled in the ${at}`)
         code = 2
@@ -323,7 +401,7 @@ try {
       if (Math.abs(m.zoom - zoom) > 0.001) red.push(`the UI scale is ${m.zoom}, not ${zoom}`)
       if (m.page > 0) red.push(`the page scrolls sideways by ${m.page} px`)
       if (bare == null) red.push('the form never drew without the box')
-      else if (m.overflow > bare + 1) red.push(`the box makes the form scroll sideways: ${m.overflow} px, ${bare} without it`)
+      else if (m.extent > bare + 1) red.push(`the box makes the form run wider: ${m.extent} px, ${bare} without it`)
       if (form === 'logconfirm' && m.overflow > 0) red.push(`the prompt to log scrolls sideways by ${m.overflow} px`)
       if (!m.nameWhole) red.push(`the group name is not drawn whole inside its form ${JSON.stringify(m.name)} vs ${JSON.stringify(m.form)}`)
       if (m.covers.length) red.push(`the group name covers ${m.covers.join(', ')}`)
@@ -331,10 +409,18 @@ try {
       if (m.source !== 'from the spot') red.push(`the source reads ${JSON.stringify(m.source)}`)
       if (!m.logInWindow) red.push('Log is outside the window')
       if (!m.logTop) red.push('Log is covered')
+      red.push(...islandReds(m, await measureIota(form, w, h, zoom, false, '&islands=0'), at))
       if (red.length) {
         console.error(`stopabove-probe: RED (filled IOTA box) at ${at} — ${red.join('; ')}`)
         code = code || 1
       }
+    }
+    const ic = await measureIota(form, 1024, 768, 1.75, false, '&islandcontrol=1')
+    const icReds = ic && !ic.waiting ? islandReds(ic, await measureIota(form, 1024, 768, 1.75, false, '&islands=0'), 'control') : ['never drew']
+    console.log(`stopabove-probe: CONTROL island picker uncontained, ${form} 1024×768 at 175%: ${JSON.stringify(icReds)}`)
+    if (icReds.length === 0) {
+      console.error(`stopabove-probe: CONTROL FAILED (${form}) — the uncontained island picker still read as clear; the check cannot fail`)
+      code = code || 1
     }
     const c = await measureIota(form, 1024, 768, 1.75, true)
     console.log(`stopabove-probe: CONTROL group name kept on one line, ${form} 1024×768 at 175%: ${JSON.stringify(c)}`)
@@ -390,7 +476,7 @@ try {
     console.error('stopabove-probe: no case ran')
     code = code || 1
   }
-  if (code === 0) console.log(`stopabove-probe: PASS — ${ran} cases: with ${OVERLAYS.map(([o]) => o).join(', ')} open, Stop TX is on top where it is drawn, unmoved, one real click and one tap each stop once, the mirror is unseen by screen readers and follows its button at once, the overlay stays open and the keyboard stays where it was, at ${SIZES.map(([w, h, v]) => `${w}×${h} (${v})`).join(' and ')}; each control (no stop layer) caught. The filled IOTA box of the prompt to log and of the log strip at ${IOTA_SIZES.map((s) => `${s.w}×${s.h} ${Math.round(s.zoom * 100)}%`).join(', ')}: filled, its long group name whole and covering nothing, the source shown, no sideways scroll (the page none; the prompt none at all; the strip no more than without the box), Log in the window and on top; each unwrapped-name control caught`)
+  if (code === 0) console.log(`stopabove-probe: PASS — ${ran} cases: with ${OVERLAYS.map(([o]) => o).join(', ')} open, Stop TX is on top where it is drawn, unmoved, one real click and one tap each stop once, the mirror is unseen by screen readers and follows its button at once, the overlay stays open and the keyboard stays where it was, at ${SIZES.map(([w, h, v]) => `${w}×${h} (${v})`).join(' and ')}; each control (no stop layer) caught. The filled IOTA box of the prompt to log and of the log strip at ${IOTA_SIZES.map((s) => `${s.w}×${s.h} ${Math.round(s.zoom * 100)}%`).join(', ')}: filled, its long group name whole and covering nothing, the source shown, no sideways scroll (the page none; the prompt none at all; the strip no more than without the box), Log in the window and on top; each unwrapped-name control caught. The island picker beside it, with a 200-character island picked: Log, Stop TX and every other control in the window and no narrower than without the picker, no sideways scroll added, the picker inside its form, on top, at least 6em wide and titled; each uncontained-picker control caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

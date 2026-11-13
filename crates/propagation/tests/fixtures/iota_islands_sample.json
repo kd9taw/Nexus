@@ -1,0 +1,8 @@
+[{"id":"12","refno":"EU-901","name":"Beta  Isle ","comment":"","subgroup":"EU-901-0-0","excluded":"0"},
+{"id":"11","refno":"EU-901","name":"Alpha Test Island","comment":"in Example Land","subgroup":"EU-901-0-0","excluded":"0"},
+{"id":"21","refno":"OC-902","name":"Sample Reef","comment":"Hand-made test data, not IOTA's list","subgroup":"OC-902-0-0","excluded":"0"},
+{"id":22,"refno":"oc-902","name":"Test Atoll","comment":"","subgroup":"OC-902-0-0","excluded":0},
+{"id":"31","refno":"NA-903","name":"Excluded Key","comment":"","subgroup":"NA-903-0-0","excluded":"1"},
+{"id":"0","refno":"NA-903","name":"No id","comment":"","subgroup":"NA-903-0-0","excluded":"0"},
+{"id":"33","refno":"NA-903","name":" ","comment":"","subgroup":"NA-903-0-0","excluded":"0"},
+{"id":"41","refno":"XX-904","name":"Not a continent","comment":"","subgroup":"","excluded":"0"}]

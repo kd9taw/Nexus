@@ -21354,6 +21354,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let Some(was) = self.pending_logs.front().cloned() else {
             return false;
         };
+        let island_pick = tempo_core::logbook::offer::iota_island_id(&rec);
         let mut held = was.record.clone();
         held.call = rec.call;
         held.grid = rec.grid;
@@ -21402,6 +21403,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if let Some(offer) = iota_offer {
             tempo_core::logbook::offer::accept_iota_offer(&mut held, offer);
         }
+        // The island the operator picked from the group's list in the popup, if any: never filled,
+        // so only a pick logs one, and only with the reference it belongs to.
+        tempo_core::logbook::offer::take_island_pick(&mut held, island_pick);
         self.replace_pending_log(None); // pops it, promoting whatever was waiting
         self.persist_pending_qso(); // journals what is left — this one is in the log now
         self.log_held_qso(held, was.gridless || dropped);
@@ -36602,7 +36606,7 @@ contact yourself."
         &mut self,
         spots: impl Fn(&str, &str, u64) -> tempo_core::logbook::offer::SpotIota + Send + Sync + 'static,
         known: impl Fn(&str) -> bool + Send + Sync + 'static,
-        name: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
+        name: impl Fn(&str, Option<u32>) -> Option<String> + Send + Sync + 'static,
     ) {
         self.station.set_iota_at_log(spots, known, name)
     }

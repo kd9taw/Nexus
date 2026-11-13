@@ -2540,9 +2540,11 @@ pub(crate) struct IotaAtLog {
         Box<dyn Fn(&str, &str, u64) -> tempo_core::logbook::offer::SpotIota + Send + Sync>,
     /// Whether a reference is an island group.
     pub(crate) known: Box<dyn Fn(&str) -> bool + Send + Sync>,
-    /// The group's name from the IOTA list, for the contact's COMMENT; `None` without the list.
+    /// The name from the IOTA list for the contact's COMMENT: the picked island's (its
+    /// `IOTA_ISLAND_ID`) when the list has it in that group, else the group's; `None` without the
+    /// list.
     #[allow(clippy::type_complexity)]
-    pub(crate) name: Box<dyn Fn(&str) -> Option<String> + Send + Sync>,
+    pub(crate) name: Box<dyn Fn(&str, Option<u32>) -> Option<String> + Send + Sync>,
 }
 
 /// The operator's station: one log, one identity of record, one set of outbound
@@ -3919,7 +3921,7 @@ impl StationCore {
         &mut self,
         spots: impl Fn(&str, &str, u64) -> tempo_core::logbook::offer::SpotIota + Send + Sync + 'static,
         known: impl Fn(&str) -> bool + Send + Sync + 'static,
-        name: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
+        name: impl Fn(&str, Option<u32>) -> Option<String> + Send + Sync + 'static,
     ) {
         self.iota_at_log = Some(IotaAtLog {
             spots: Box::new(spots),
