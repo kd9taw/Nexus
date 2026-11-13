@@ -2597,6 +2597,21 @@ fn hot_apply_psk(e: &Engine, psk: &mut Option<PskReporter>, applied: &mut bool) 
 /// dedicated thread. Opens the default sound devices, sets the rig, then each
 /// slot transmits the engine's `poll_tx` audio (holding PTT for the over) or
 /// decodes the captured frame into the engine.
+/// What every error exit of [`run_radio`] does before it returns.
+///
+/// This thread is the ONLY thing that ever drops PTT — the tx_until_ms deadline, the hard stop
+/// and the idle self-heal all die with it, and RigctldProc's Drop kills the daemon without
+/// unkeying. An exit mid-over would leave the carrier up until the operator notices, so
+/// best-effort unkey on EVERY error exit, not only the SHUTDOWN path. The queued audio is cleared
+/// first, as at every stop. After the unkey, the APRS on-air report this loop stamped is taken
+/// back (a report only, see `RadioLoop::aprs_on_air`): nobody is left to clear it, and the
+/// receivers would say "transmitting" with nothing on the air.
+fn loop_error_exit<B: AudioBackend>(engine: &Arc<Mutex<Engine>>, backend: &mut B, rig: &mut Rig) {
+    backend.flush_output();
+    let _ = rig.ptt(false);
+    engine_lock(engine).set_aprs_on_air(false);
+}
+
 pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(), String> {
     let in_name = (!cfg.audio_in.is_empty()).then(|| cfg.audio_in.clone());
     let out_name = (!cfg.audio_out.is_empty()).then(|| cfg.audio_out.clone());
@@ -2930,14 +2945,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             &mut station,
         );
         if let Err(e) = stepped {
-            // This thread is the ONLY thing that ever drops PTT — the tx_until_ms
-            // deadline, the hard stop and the idle self-heal all die with it, and
-            // RigctldProc's Drop kills the daemon without unkeying. An exit
-            // mid-over would leave the carrier up until the operator notices, so
-            // best-effort unkey on EVERY error exit, not only the SHUTDOWN path. The queued
-            // audio is cleared first, as at every stop.
-            backend.flush_output();
-            let _ = rig.ptt(false);
+            loop_error_exit(&engine, &mut backend, &mut rig);
             return Err(e);
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -38070,6 +38078,23 @@ mod tests {
         assert!(
             !engine.lock().unwrap().aprs_on_air(),
             "a cut beacon still reported on the air"
+        );
+    }
+
+    /// The loop's error exit unkeys (as it always has) and takes back the APRS on-air report it
+    /// stamped: a loop that dies mid-beacon must not leave the receivers saying "transmitting"
+    /// with nothing on the air and nobody left to clear it.
+    #[test]
+    fn the_loop_error_exit_unkeys_and_takes_back_the_aprs_on_air_report() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let (mut backend, mut rig) = (MockBackend::new(), Rig::vox());
+        rig.ptt(true).unwrap();
+        engine.lock().unwrap().set_aprs_on_air(true);
+        loop_error_exit(&engine, &mut backend, &mut rig);
+        assert!(!rig.keyed, "the error exit left the rig keyed");
+        assert!(
+            !engine.lock().unwrap().aprs_on_air(),
+            "the error exit left the APRS packet reported on the air"
         );
     }
 

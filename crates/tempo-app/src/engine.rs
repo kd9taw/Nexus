@@ -41931,6 +41931,30 @@ mod tests {
         }
     }
 
+    /// While we transmit, the receivers' "audio arrived" stamp moves only when samples actually
+    /// arrived: a capture that dies mid-picture is reported on the normal schedule after the
+    /// tail, as the decode thread's own stamp (`note_sstv_rx`, samples > 0) would.
+    #[test]
+    fn own_tx_stamps_audio_arrival_only_when_audio_arrived() {
+        const T0: u64 = 1_800_000_000_000;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.sstv_armed = true;
+        e.set_aprs_arm(AprsArm::Explicit);
+        e.sstv_sending = true;
+        e.feed_rx_audio_at(&[0.25; 240], T0);
+        let arrived = Some((T0 / 1000) as i64);
+        assert_eq!(
+            e.sstv_health.last_audio_unix, arrived,
+            "control: audio arrived"
+        );
+        e.feed_rx_audio_at(&[], T0 + 30_000); // the capture died mid-picture
+        assert_eq!(
+            (e.sstv_health.last_audio_unix, e.aprs_health.last_audio_unix),
+            (arrived, arrived),
+            "an empty capture was stamped as audio arriving"
+        );
+    }
+
     /// ⛔ THE APRS ON-AIR REPORT IS INFORMATIONAL: it owns nothing. A packet the loop reports on
     /// the air is not a transmit owner, so it can refuse, hold or reorder no other keying, and
     /// the engine's TX gates read exactly what they read before.
