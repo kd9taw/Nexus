@@ -237,6 +237,23 @@ it('names the refusals the pairing flow really meets, on both claim and attach',
   fireEvent.click(await screen.findByRole('button', { name: /attach this station/i }))
   expect((await screen.findByRole('alert')).textContent).toMatch(/check the connection/i)
 })
+// The paid launch's trial identity: a trial is a US licence's, and a mail domain starts only
+// a few a month. The page's first internet use is where an account meets either refusal; each is named.
+it('names the trial identity refusals: a spent mail domain, and a callsign that is not a US licence', async () => {
+  for (const [code, sentence] of [['trialDomainLimit', /domain has already started as many Remote trials/i],
+    ['callsignNotLicensed', /for a US amateur licence/i], ['callsignInvalid', /for a US amateur licence/i], ['updateRequired', /update Nexus/i]] as const) {
+    const session = account(false), id = crypto.randomUUID()
+    session.pending = { id, name: 'Shack', expiresAt: session.serverNow + 9 * 60000, confirmed: false }
+    const service = client(session)
+    service.post.mockImplementation(async path => { if (path === 'pair/confirm') throw new RemoteError(403, code); return session })
+    render(<RemoteApp />)
+    fireEvent.click(await screen.findByRole('button', { name: /attach this station/i }))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent, code).toMatch(sentence)
+    expect(alert.textContent, code).not.toMatch(/check the connection/i)
+    cleanup()
+  }
+})
 it('browser enrollment displays the local comparison code and does not imply approval', async () => {
   const session = account(), stationId = crypto.randomUUID(), deviceId = crypto.randomUUID()
   session.stations.push({ id: stationId, name: 'Synthetic station', device: null })

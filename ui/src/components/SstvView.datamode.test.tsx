@@ -59,6 +59,7 @@ const NO_HEALTH: SstvHealth = {
   lastUnknownVisUnix: null,
   images: 0,
   lastImageUnix: null,
+  transmitting: false,
 }
 
 const IDLE: SstvState = {

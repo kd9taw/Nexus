@@ -2593,6 +2593,21 @@ fn hot_apply_psk(e: &Engine, psk: &mut Option<PskReporter>, applied: &mut bool) 
     }
 }
 
+/// What every error exit of [`run_radio`] does before it returns.
+///
+/// This thread is the ONLY thing that ever drops PTT — the tx_until_ms deadline, the hard stop
+/// and the idle self-heal all die with it, and RigctldProc's Drop kills the daemon without
+/// unkeying. An exit mid-over would leave the carrier up until the operator notices, so
+/// best-effort unkey on EVERY error exit, not only the SHUTDOWN path. The queued audio is cleared
+/// first, as at every stop. After the unkey, the APRS on-air report this loop stamped is taken
+/// back (a report only, see `RadioLoop::aprs_on_air`): nobody is left to clear it, and the
+/// receivers would say "transmitting" with nothing on the air.
+fn loop_error_exit<B: AudioBackend>(engine: &Arc<Mutex<Engine>>, backend: &mut B, rig: &mut Rig) {
+    backend.flush_output();
+    let _ = rig.ptt(false);
+    engine_lock(engine).set_aprs_on_air(false);
+}
+
 /// Run the radio slot loop until an unrecoverable error. Blocks — call on a
 /// dedicated thread. Opens the default sound devices, sets the rig, then each
 /// slot transmits the engine's `poll_tx` audio (holding PTT for the over) or
@@ -2930,14 +2945,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             &mut station,
         );
         if let Err(e) = stepped {
-            // This thread is the ONLY thing that ever drops PTT — the tx_until_ms
-            // deadline, the hard stop and the idle self-heal all die with it, and
-            // RigctldProc's Drop kills the daemon without unkeying. An exit
-            // mid-over would leave the carrier up until the operator notices, so
-            // best-effort unkey on EVERY error exit, not only the SHUTDOWN path. The queued
-            // audio is cleared first, as at every stop.
-            backend.flush_output();
-            let _ = rig.ptt(false);
+            loop_error_exit(&engine, &mut backend, &mut rig);
             return Err(e);
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -4367,6 +4375,11 @@ struct RadioLoop {
     /// in the RX slots BETWEEN our transmissions get decoded while calling CQ.
     prev_slot_was_tx: bool,
     tx_until_ms: Option<f64>,
+    /// An APRS beacon this loop keyed is still on the air: set when it keys, and true only while
+    /// `tx_until_ms` (the one-shot deadline it rides) stands. ⛔ REPORT ONLY: stamped to the engine
+    /// each tick for the receive taps (`Engine::set_aprs_on_air`), and read by nothing that keys,
+    /// holds, extends or unkeys.
+    aprs_on_air: bool,
     /// Deadline (same clock as `tx_until_ms`) of the SLOT over this loop last keyed —
     /// the ONE over TX Off may not cut. Operator (2026-07-31): "TX Off should disable TX
     /// for the next cycle, but allow any ongoing TX to complete." Set beside `tx_until_ms`
@@ -5424,6 +5437,7 @@ impl RadioLoop {
             last_slot: None,
             prev_slot_was_tx: false,
             tx_until_ms: None,
+            aprs_on_air: false,
             slot_tx_until_ms: 0.0,
             key_refused_for_split: false,
             tick_now: 0.0,
@@ -14278,6 +14292,7 @@ impl RadioLoop {
                     backend.mark_unit_end();
                     let dur_ms = buf.len() as f64 / 12.0; // 12 kHz mono → milliseconds
                     self.tx_until_ms = Some(now + lead + dur_ms + crate::slot::TX_TAIL_MS);
+                    self.aprs_on_air = true; // a report for the receive taps, nothing more
                 }
                 if let KeyUp::Refused(why) = &key {
                     engine_lock(engine).aprs_key_refused(why);
@@ -16292,6 +16307,11 @@ impl RadioLoop {
         // the sole producer of spectrum rows, any CAT stall froze the waterfall. These mode
         // taps (CW/RTTY/APRS/SSTV/QSO) deliberately stay: the loop already holds this lock, so
         // they cost nothing here, and moving them would risk dropping audio under contention.
+        // The APRS on-air REPORT, stamped before the feed so this tick's audio is judged by it: a
+        // beacon is on the air while the one-shot deadline it keyed stands, and over once
+        // anything (its own expiry, Stop, TX Off, a halt) clears it. Read-only of `tx_until_ms`.
+        self.aprs_on_air &= self.tx_until_ms.is_some();
+        eng.set_aprs_on_air(self.aprs_on_air);
         eng.feed_rx_audio(&captured);
         // JTTY's PSK Reporter spots join the batch the flush below sends ([`jtty_psk_reports`]).
         station
@@ -36031,13 +36051,15 @@ mod tests {
             "precondition: the over is keying"
         );
         let st = engine.lock().unwrap().rtty_state();
+        // Framed on new lines (`rtty_over_newlines`, on by default): the CR LF are on the air,
+        // so they are on the TX line and in the echo, in air order.
         assert_eq!(
-            st.tx_text, "CQ TEST DE W9XYZ",
+            st.tx_text, "\r\nCQ TEST DE W9XYZ\r\n",
             "the TX line holds the over from its first tick"
         );
         assert_eq!(st.tx_keyed, 0);
 
-        // Three stop bits out (C, Q, space end at 3 × 165 ms): exactly those three are ours.
+        // Three stop bits out (CR, LF, C end at 3 × 165 ms): exactly those three are ours.
         step_until(
             &mut state,
             &mut backend,
@@ -36047,7 +36069,7 @@ mod tests {
         );
         assert_eq!(
             rtty_sent(&engine),
-            "CQ ",
+            "\r\nC",
             "the echo follows the loop's own clock"
         );
         assert_eq!(engine.lock().unwrap().rtty_state().tx_keyed, 3);
@@ -36072,7 +36094,7 @@ mod tests {
         step_until(&mut state, &mut backend, &mut rig, &mut t, 5_000.0);
         assert_eq!(
             rtty_sent(&engine),
-            "CQ ",
+            "\r\nC",
             "text that never radiated reached the transcript"
         );
 
@@ -36083,13 +36105,13 @@ mod tests {
             &mut backend,
             &mut rig,
             &mut t,
-            5_000.0 + 5.0 * char_ms,
+            5_000.0 + 9.0 * char_ms,
         );
-        assert_eq!(rtty_sent(&engine), "CQ TEST");
+        assert_eq!(rtty_sent(&engine), "\r\nC\r\nTEST\r\n");
         let st = engine.lock().unwrap().rtty_state();
         assert_eq!(
             (st.tx_text.as_str(), st.tx_keyed, st.tx_cut),
-            ("TEST", 4, false)
+            ("\r\nTEST\r\n", 8, false)
         );
     }
 
@@ -36150,12 +36172,16 @@ mod tests {
                 "{to}: the over in flight is not as a section change has always left it"
             );
             step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 4_000.0);
-            assert_eq!(rtty_sent(&engine), "CQ", "{to}: precondition, the echo");
+            assert_eq!(
+                rtty_sent(&engine),
+                "\r\nCQ\r\n",
+                "{to}: precondition, the echo"
+            );
             engine.lock().unwrap().set_operating_mode("rtty", false);
             step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 8_000.0);
             assert_eq!(
                 rtty_sent(&engine),
-                "CQ",
+                "\r\nCQ\r\n",
                 "{to}: what was typed ahead keyed on the return"
             );
             assert!(
@@ -36163,10 +36189,18 @@ mod tests {
                 "{to}: the RTTY cockpit is told the rest was dropped"
             );
             engine.lock().unwrap().rtty_send_text("73").unwrap();
-            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 9_000.0);
+            // Six characters with its new lines (`rtty_over_newlines`): ~1 s of air at 45.45 baud.
+            step_to(
+                &engine,
+                &mut state,
+                &mut backend,
+                &mut rig,
+                &mut t,
+                10_000.0,
+            );
             assert_eq!(
                 rtty_sent(&engine),
-                "CQ73",
+                "\r\nCQ\r\n\r\n73\r\n",
                 "{to}: a send made on the return keys as before"
             );
             assert_eq!(
@@ -36204,7 +36238,7 @@ mod tests {
         step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 8_000.0);
         assert_eq!(
             rtty_sent(&engine),
-            "CQ",
+            "\r\nCQ\r\n",
             "nothing refused keys after the tune in"
         );
         assert!(
@@ -36212,10 +36246,18 @@ mod tests {
             "the RTTY cockpit is told it was dropped"
         );
         engine.lock().unwrap().rtty_send_text("73").unwrap();
-        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 9_000.0);
+        // Six characters with its new lines (`rtty_over_newlines`): ~1 s of air at 45.45 baud.
+        step_to(
+            &engine,
+            &mut state,
+            &mut backend,
+            &mut rig,
+            &mut t,
+            10_000.0,
+        );
         assert_eq!(
             rtty_sent(&engine),
-            "CQ73",
+            "\r\nCQ\r\n\r\n73\r\n",
             "a send made inside the privileges keys as before"
         );
     }
@@ -37977,6 +38019,104 @@ mod tests {
             engine.lock().unwrap().aprs_tx_notice(),
             None,
             "…and the frame that keys clears the notice"
+        );
+    }
+
+    /// THE APRS ON-AIR REPORT, on the real loop: true from the tick the beacon keys until its
+    /// one-shot deadline runs out, false again after, and false at once when TX Off cuts it. It
+    /// only reports: the keying is exactly what it was (the rig keys, then unkeys on the same
+    /// deadline), and the engine's receive taps are what read it.
+    #[test]
+    fn the_loop_reports_an_aprs_packet_on_the_air_and_nothing_else() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("general");
+            e.set_operating_mode("phone", false);
+            e.aprs_tune(144.390).unwrap();
+        }
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 200.0);
+        assert!(!engine.lock().unwrap().aprs_on_air(), "control: idle");
+        engine
+            .lock()
+            .unwrap()
+            .aprs_beacon(41.88, -87.63, '/', '>', "one", &[])
+            .unwrap();
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 220.0);
+        assert!(rig.keyed, "control: the beacon keys");
+        assert!(
+            engine.lock().unwrap().aprs_on_air(),
+            "the beacon on the air was not reported"
+        );
+        assert_eq!(
+            engine.lock().unwrap().tx_owner(),
+            None,
+            "the report owns nothing"
+        );
+        step_to(
+            &engine,
+            &mut state,
+            &mut backend,
+            &mut rig,
+            &mut t,
+            10_000.0,
+        );
+        assert!(!rig.keyed, "control: the beacon unkeys on its deadline");
+        assert!(
+            !engine.lock().unwrap().aprs_on_air(),
+            "still reported on the air after it unkeyed"
+        );
+
+        // TX Off cuts a beacon on the air: the report drops with it.
+        engine
+            .lock()
+            .unwrap()
+            .aprs_beacon(41.88, -87.63, '/', '>', "two", &[])
+            .unwrap();
+        step_to(
+            &engine,
+            &mut state,
+            &mut backend,
+            &mut rig,
+            &mut t,
+            10_020.0,
+        );
+        assert!(
+            engine.lock().unwrap().aprs_on_air(),
+            "control: the second keys"
+        );
+        engine.lock().unwrap().set_tx_enabled(false);
+        step_to(
+            &engine,
+            &mut state,
+            &mut backend,
+            &mut rig,
+            &mut t,
+            10_120.0,
+        );
+        assert!(!rig.keyed, "control: TX Off cut it");
+        assert!(
+            !engine.lock().unwrap().aprs_on_air(),
+            "a cut beacon still reported on the air"
+        );
+    }
+
+    /// The loop's error exit unkeys (as it always has) and takes back the APRS on-air report it
+    /// stamped: a loop that dies mid-beacon must not leave the receivers saying "transmitting"
+    /// with nothing on the air and nobody left to clear it.
+    #[test]
+    fn the_loop_error_exit_unkeys_and_takes_back_the_aprs_on_air_report() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let (mut backend, mut rig) = (MockBackend::new(), Rig::vox());
+        rig.ptt(true).unwrap();
+        engine.lock().unwrap().set_aprs_on_air(true);
+        loop_error_exit(&engine, &mut backend, &mut rig);
+        assert!(!rig.keyed, "the error exit left the rig keyed");
+        assert!(
+            !engine.lock().unwrap().aprs_on_air(),
+            "the error exit left the APRS packet reported on the air"
         );
     }
 

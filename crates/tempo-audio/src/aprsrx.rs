@@ -270,6 +270,48 @@ mod tests {
         (heard, seen, peak)
     }
 
+    /// The live thread's drain, on an engine: take the tap, decode, push what was heard.
+    fn drain_into(e: &mut Engine) {
+        let (mut demod, mut deframer) = (Demod::new(), Deframer::new());
+        let step = decode_step(&mut demod, &mut deframer, &e.take_aprs_audio());
+        for (pkt, tnc2) in &step.packets {
+            e.push_aprs_heard(AprsHeard::from_packet(
+                pkt,
+                1_700_000_000,
+                AprsSource::Rf,
+                String::from_utf8_lossy(tnc2).into_owned(),
+            ));
+        }
+    }
+
+    /// ⛔ A PACKET WE TRANSMIT IS NEVER HEARD AS RECEIVED, NOR OFFERED TO THE iGATE, end to end.
+    /// The rig hands its transmit monitor back on the receive audio, so the armed decoder copied
+    /// our own beacon, listed it as heard on RF and queued it for APRS-IS as if our antenna had
+    /// received it. With the loop reporting the packet on the air, the engine tap holds none of
+    /// it. CONTROL: the same audio on a station not transmitting is heard and offered.
+    #[test]
+    fn our_own_packet_is_never_heard_or_offered_to_the_igate() {
+        let station = |on_air: bool| {
+            let mut e = Engine::new("W9XYZ", "EN61", 0);
+            let mut s = e.settings().clone();
+            s.aprs_is_uplink = true;
+            e.apply_settings(s);
+            e.set_aprs_arm(tempo_app::engine::AprsArm::Explicit);
+            e.set_aprs_on_air(on_air);
+            for chunk in audio_for(b"!4903.50N/07201.75W-Nexus", "APZNEX").chunks(1200) {
+                e.feed_rx_audio(chunk);
+            }
+            drain_into(&mut e);
+            (e.aprs_heard().len(), e.take_aprs_uplink().len())
+        };
+        assert_eq!(station(true), (0, 0), "our own packet was heard or gated");
+        assert_eq!(
+            station(false),
+            (1, 1),
+            "CONTROL: a packet received is heard and gated"
+        );
+    }
+
     #[test]
     fn audio_becomes_a_station_with_a_position_on_the_map() {
         let (heard, seen, peak) = run_chain(&audio_for(b"!4903.50N/07201.75W-Nexus", "APZNEX"));

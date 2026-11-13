@@ -3021,6 +3021,9 @@ export interface SstvHealth {
   /** Images completed since arming. */
   images: number
   lastImageUnix: number | null
+  /** We are transmitting (or within the short receive tail after): the engine hands the decoder
+   * nothing on purpose, since the radio's audio is then our own picture. Read live. */
+  transmitting: boolean
 }
 
 /** Live SSTV RX state: armed flag, in-flight decode progress + preview, receiver
@@ -6221,6 +6224,10 @@ export interface Settings {
    *  decode mode with no auto-arm, which is very likely what "RTTY is not decoding" was.
    *  Absent = on (`rtty_rx_auto_arm`, settings.rs). */
   rttyRxAutoArm?: boolean
+  /** Start and end every RTTY over on a new line (CR LF), never doubling one an `{NL}` already
+   *  put there — typed sends, F-keys and the auto-sequencer alike, applied by the engine.
+   *  Absent = on (`rtty_over_newlines`, settings.rs). */
+  rttyOverNewlines?: boolean
   /** RTTY **Auto call**: the seconds it listens before repeating itself — the cq/listen/cq
    *  cadence of #304, and equally the wait before AGN inside a contact. Absent = 30, the
    *  sequencer's shipped constant, so an operator who never opens Settings is unaffected.

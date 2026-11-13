@@ -348,6 +348,7 @@ function drawBmp(canvas: HTMLCanvasElement | null, buf: ArrayBuffer): void {
 export type SstvRxState =
   | 'off'
   | 'starting'
+  | 'transmitting'
   | 'nocapture'
   | 'silent'
   | 'listening'
@@ -474,6 +475,13 @@ export function sstvDecodeStatus(
     : ''
   if (!health || !health.armed) {
     return { state: 'off', text: t('sstv.rx.off', { where }) }
+  }
+  // ⛔ OUR OWN TRANSMISSION, BEFORE ANY JUDGEMENT OF THE INPUT. While we send (and for a moment
+  // after) the engine hands the decoder nothing on purpose — the radio's audio is then our own
+  // picture, which must never be decoded as received — so nothing below can be read from it: a
+  // stale stamp would cry "nothing arriving" and a held level would claim to be listening.
+  if (health.transmitting) {
+    return { state: 'transmitting', text: t('sstv.rx.transmitting') }
   }
   // NOTHING ARRIVING — the only genuine capture fault, and held apart from a zero
   // LEVEL below because the two have opposite fixes. What you hear on the speaker

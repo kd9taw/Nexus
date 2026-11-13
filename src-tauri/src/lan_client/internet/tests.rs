@@ -542,6 +542,25 @@ fn only_known_refusals_are_named() {
         named(403, Some(&said("deviceNotApproved"))),
         "waitingApproval"
     );
+    // The owner's first use of the internet road starts the trial, and the service may refuse to start
+    // one (the station's callsign, the account's mail domain, a shack that sent no callsign): no trial,
+    // so no internet road. Unnamed, these read as access denied, and a 400 as the service being down.
+    for (status, code) in [
+        (400, "callsignInvalid"),
+        (403, "callsignNotLicensed"),
+        (403, "trialDomainLimit"),
+        (403, "updateRequired"),
+        // And a trial this person, callsign or PC already had.
+        (403, "trialUsedByCallsign"),
+        (403, "trialUsedOnThisPc"),
+        (403, "trialActiveElsewhere"),
+    ] {
+        assert_eq!(
+            named(status, Some(&said(code))),
+            "internetNotIncluded",
+            "{code}"
+        );
+    }
     assert_eq!(named(403, Some(&said("<script>"))), "accessDenied");
     assert_eq!(named(429, None), "tryLater");
     assert_eq!(named(500, None), "serviceUnavailable");

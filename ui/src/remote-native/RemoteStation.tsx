@@ -134,6 +134,7 @@ export function RemoteStation() {
       : issue === 'callsignNotLicensed' ? t('remote.nativeCallsignNotLicensed')
       : issue === 'trialUsedByCallsign' ? t('remote.nativeTrialUsedByCallsign')
       : issue === 'trialUsedOnThisPc' ? t('remote.nativeTrialUsedOnThisPc')
+      : issue === 'trialDomainLimit' ? t('remote.nativeTrialDomainLimit')
       : issue === 'updateRequired' ? t('remote.nativeUpdateRequired')
       // Approval refused because this mailbox already has a trial under another sign-in. It used to
       // read as access denied, which does not say that the sign-in is what needs changing.

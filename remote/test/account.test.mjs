@@ -749,3 +749,150 @@ test('the owner notice goes to the account\'s own address, never to a changed si
     await rt.mf.dispose()
   }
 })
+
+// THE OWNER'S NOTICE ADDRESS, CHANGED. The address that gets the "device added" notice (which is what lets
+// a new device's transmit hold lift) can be moved by the owner: a code mailed to the new address proves it
+// is theirs, and even then it takes over only after a 48-hour wait, during which the old address is told
+// and the change can be cancelled. Neither step lifts any hold: no notice is re-sent or marked sent.
+test('the notice address changes only through a code mailed to it, after a wait, and lifts no hold by itself', async () => {
+  const main = app, sent = []
+  let refuse = false
+  const rt = await runtime({ bindings: NOTICE_BINDINGS, outbound: async request => {
+    const body = await request.json()
+    sent.push({ to: body.to, subject: body.subject, text: body.text })
+    return refuse ? new Response('rejected', { status: 422 }) : Response.json({ id: 'ok' })
+  } })
+  app = rt
+  try {
+    const owner = await person(), shack = await bind(owner)
+    await enrol(owner, shack.stationId)
+    assert.deepEqual(sent.map(m => m.to), [owner.email], 'THE CONTROL: the notice goes to the account\'s own address')
+    assert.deepEqual((await owner.page.post('account/notice')).value, { address: owner.email, pending: null })
+
+    const next = `new-${crypto.randomUUID()}@example.invalid`
+    for (const address of ['', 'not an address', 'a@b', 'x'.repeat(321) + '@example.invalid', 42]) {
+      assert.equal((await owner.page.post('account/notice/change', { address }, 400)).value.error, 'invalidRequest', String(address))
+    }
+    await owner.page.post('account/notice/change', { address: next })
+    const mailed = sent.at(-1)
+    assert.equal(mailed.to, next, 'the code goes to the NEW address, nowhere else')
+    const code = /\b(\d{8})\b/.exec(mailed.text)?.[1]
+    assert.ok(code, 'an eight-digit code')
+    assert.deepEqual((await owner.page.post('account/notice')).value, { address: owner.email, pending: { address: next, verified: false, effectiveAt: null } })
+    // Unconfirmed, nothing has moved.
+    await enrol(owner, shack.stationId)
+    assert.equal(sent.at(-1).to, owner.email)
+
+    // A wrong code is refused, and the right one starts the wait; the old address is told.
+    assert.equal((await owner.page.post('account/notice/confirm', { code: code === '00000000' ? '11111111' : '00000000' }, 403)).value.error, 'noticeCodeInvalid')
+    const { value: confirmed } = await owner.page.post('account/notice/confirm', { code })
+    assert.ok(confirmed.effectiveAt >= Date.now() + 47 * 3600000 && confirmed.effectiveAt <= Date.now() + 48 * 3600000, 'forty-eight hours from now')
+    const warned = sent.at(-1)
+    assert.equal(warned.to, owner.email, 'the old address is told of the change')
+    assert.match(warned.text, new RegExp(next.replace(/[.]/g, '\\.')))
+    assert.match(warned.text, /cancel/i)
+    // During the wait the notices still go to the old address.
+    const during = await enrol(owner, shack.stationId)
+    assert.equal(sent.at(-1).to, owner.email)
+
+    // A device still held (its notice was never accepted): changing the address leaves it held.
+    await rt.db.prepare('UPDATE notices SET sent_at=NULL WHERE device_id=?').bind(during.deviceId).run()
+    assert.equal(await notifiedOf(shack, shack.stationId, during.deviceId), 0)
+    const before = sent.length
+    // The wait over (as if forty-eight hours had passed).
+    await rt.db.prepare('UPDATE notice_changes SET effective_at=? WHERE account_id=?').bind(Date.now() - 1000, owner.accountId).run()
+    assert.deepEqual((await owner.page.post('account/notice')).value, { address: next, pending: null })
+    assert.equal(sent.length, before, 'taking the new address over sends nothing')
+    assert.equal(await notifiedOf(shack, shack.stationId, during.deviceId), 0, 'and lifts no hold')
+    assert.equal((await rt.db.prepare('SELECT sent_at FROM notices WHERE device_id=?').bind(during.deviceId).first()).sent_at, null)
+    // The next device's notice goes to the new address.
+    await enrol(owner, shack.stationId)
+    assert.equal(sent.at(-1).to, next)
+
+    // Five wrong codes end a pending change; cancelling ends one too.
+    await owner.page.post('account/notice/change', { address: `third-${crypto.randomUUID()}@example.invalid` })
+    for (let i = 0; i < 5; i++) assert.equal((await owner.page.post('account/notice/confirm', { code: `9999999${i}` }, 403)).value.error, 'noticeCodeInvalid')
+    assert.equal((await owner.page.post('account/notice')).value.pending, null, 'the fifth wrong code ends it')
+    assert.equal((await owner.page.post('account/notice/confirm', { code: '12345678' }, 404)).value.error, 'noticeChangeUnavailable')
+    await owner.page.post('account/notice/change', { address: `fourth-${crypto.randomUUID()}@example.invalid` })
+    await owner.page.post('account/notice/cancel')
+    assert.deepEqual((await owner.page.post('account/notice')).value, { address: next, pending: null })
+
+    // A code the provider would not send is no change at all.
+    refuse = true
+    assert.equal((await owner.page.post('account/notice/change', { address: `fifth-${crypto.randomUUID()}@example.invalid` }, 503)).value.error, 'noticeNotSent')
+    assert.equal((await owner.page.post('account/notice')).value.pending, null)
+    refuse = false
+    // Four codes a day an account, a refused send among them.
+    assert.equal((await owner.page.post('account/notice/change', { address: `sixth-${crypto.randomUUID()}@example.invalid` }, 429)).value.error, 'tryLater')
+    // Another account can confirm nothing of this one's, and the routes are the page's alone.
+    const stranger = await person()
+    assert.equal((await stranger.page.post('account/notice/confirm', { code: '12345678' }, 404)).value.error, 'noticeChangeUnavailable')
+    assert.equal((await owner.native.post('account/notice', {}, 403)).value.error, 'originDenied')
+  } finally {
+    app = main
+    await rt.mf.dispose()
+  }
+})
+
+// A FIRST notice address (security review of the change flow, finding a). An account that has had no notice
+// yet still has an address its notices would go to: the one it was made with, captured from the owner's
+// own sign-in. A change from such an account captures that address first and is then an ordinary change:
+// it is warned and waits. A sign-in that does not carry that address (changed at the identity provider,
+// which is how a hijacked sign-in looks) cannot set a first address at all: the notices stay the bound
+// address's, and new devices stay held until they are approved at the shack.
+test('a first notice address: the bound address is captured, warned and waited out; a sign-in without it is refused', async () => {
+  const main = app, sent = []
+  const rt = await runtime({ bindings: NOTICE_BINDINGS, outbound: async request => {
+    const body = await request.json(); sent.push({ to: body.to, text: body.text }); return Response.json({ id: 'ok' }) } })
+  app = rt
+  try {
+    const owner = await person()
+    assert.deepEqual((await owner.page.post('account/notice')).value, { address: null, pending: null }, 'no notice yet')
+    const next = `first-${crypto.randomUUID()}@example.invalid`
+    await owner.page.post('account/notice/change', { address: next })
+    const code = /\b(\d{8})\b/.exec(sent.at(-1).text)[1]
+    assert.equal((await owner.page.post('account/notice')).value.address, owner.email, 'the bound address, captured from the owner\'s sign-in')
+    const { value } = await owner.page.post('account/notice/confirm', { code })
+    assert.ok(value.effectiveAt > Date.now() + 47 * 3600000, 'it waits like any change')
+    assert.equal(sent.at(-1).to, owner.email, 'and the bound address is warned')
+    // A sign-in carrying another address than the account was made with, on an account with no notice yet.
+    const other = await person()
+    const moved = app.client(await app.token(other.subject, { email: `moved-${crypto.randomUUID()}@example.invalid`, email_verified: true }))
+    const before = sent.length
+    assert.equal((await moved.post('account/notice/change', { address: `hijack-${crypto.randomUUID()}@example.invalid` }, 403)).value.error, 'noticeAddressUnbound')
+    assert.equal(sent.length, before, 'no code is mailed')
+    assert.deepEqual((await moved.post('account/notice')).value, { address: null, pending: null })
+  } finally {
+    app = main
+    await rt.mf.dispose()
+  }
+})
+
+// Finding b: a change replaces only the address that was warned of it. Should the notice address move by
+// any other way during the wait, the change is dropped rather than replacing an address nobody warned.
+test('a notice change replaces only the address that was warned; one that moved meanwhile drops it', async () => {
+  const main = app, sent = []
+  const rt = await runtime({ bindings: NOTICE_BINDINGS, outbound: async request => {
+    const body = await request.json(); sent.push({ to: body.to, text: body.text }); return Response.json({ id: 'ok' }) } })
+  app = rt
+  try {
+    const owner = await person(), next = `next-${crypto.randomUUID()}@example.invalid`
+    await owner.page.post('account/notice/change', { address: next })
+    await owner.page.post('account/notice/confirm', { code: /\b(\d{8})\b/.exec(sent.at(-1).text)[1] })
+    // The address moved by some other way during the wait.
+    await rt.db.prepare('UPDATE accounts SET notice_address=? WHERE id=?').bind('elsewhere@example.invalid', owner.accountId).run()
+    await rt.db.prepare('UPDATE notice_changes SET effective_at=? WHERE account_id=?').bind(Date.now() - 1000, owner.accountId).run()
+    assert.deepEqual((await owner.page.post('account/notice')).value, { address: 'elsewhere@example.invalid', pending: null },
+      'the change is dropped, and the address nobody warned is not replaced')
+  } finally {
+    app = main
+    await rt.mf.dispose()
+  }
+})
+
+test('without the mail provider the notice address cannot be changed, and says so', async () => {
+  const owner = await person()
+  assert.equal((await owner.page.post('account/notice/change', { address: 'new@example.invalid' }, 503)).value.error, 'noticeNotConfigured')
+  assert.deepEqual((await owner.page.post('account/notice')).value, { address: null, pending: null })
+})
