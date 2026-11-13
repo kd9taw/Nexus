@@ -15,10 +15,13 @@ pub fn available_ports() -> Vec<String> {
     // setups (Flex/virtual COM ports). This runs when the Settings tab opens, so isolate it — a
     // panic yields an empty list (the operator can still type a COM port) instead of crashing.
     std::panic::catch_unwind(|| {
-        // `mut` is only exercised by the Linux virtual-port union below; on other
+        // `mut` is only exercised by the virtual-port unions below; on other
         // targets that block compiles away (this was a warning in every Windows
         // cross-build — noise that trains eyes to skip warnings).
-        #[cfg_attr(not(any(target_os = "linux", windows)), allow(unused_mut))]
+        #[cfg_attr(
+            not(any(target_os = "linux", target_os = "macos", windows)),
+            allow(unused_mut)
+        )]
         let mut names: Vec<String> = match serialport::available_ports() {
             Ok(ports) => ports.into_iter().map(|p| p.port_name).collect(),
             Err(_) => Vec::new(),
@@ -39,6 +42,23 @@ pub fn available_ports() -> Vec<String> {
         for v in linux_virtual_ports(std::path::Path::new("/dev")) {
             if !names.contains(&v) {
                 names.push(v);
+            }
+        }
+        // On macOS, union in links to a pseudo-terminal (`pty_links_in`): `/dev` for a socat
+        // link, and wfview's `rig-ptyN`, which it makes in the home folder's Downloads (or the
+        // home folder). Judged against the OS's own list, before anything is added to it.
+        #[cfg(target_os = "macos")]
+        {
+            let mut dirs = vec![std::path::PathBuf::from("/dev")];
+            if let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+                let home = std::path::PathBuf::from(home);
+                dirs.push(home.join("Downloads"));
+                dirs.push(home);
+            }
+            for v in pty_links_in(&dirs, &names) {
+                if !names.contains(&v) {
+                    names.push(v);
+                }
             }
         }
         #[cfg(target_os = "macos")]
@@ -106,6 +126,34 @@ fn linux_virtual_ports(dev: &std::path::Path) -> Vec<String> {
                 .contains("pts/")
                 .then(|| path.to_string_lossy().into_owned())
         })
+        .collect();
+    out.sort(); // stable order — the picker must not reshuffle between polls
+    out
+}
+
+/// Virtual serial ports on macOS: symlinks in `dirs` that stand for a pseudo-terminal, the way
+/// wfview's `rig-pty1` does (#494). The Mac twin of [`linux_virtual_ports`].
+///
+/// IOKit lists only hardware, so a pty a program makes for another to open never reached the
+/// picker; it could only be typed. Listing the pty nodes themselves (`/dev/ttysNNN`) would offer
+/// every open Terminal window, so, as on Linux, only a LINK someone made to stand for a port is
+/// listed, and only when [`virtual_node_with`], the same classifier that drops the RTS/DTR
+/// hold, says it is a pseudo-terminal. That classifier works from `lstat`/`stat` alone and opens
+/// nothing, so listing can never raise a line on a real port. `hardware` is the OS's own list:
+/// a node it enumerates is real, and is never added here.
+///
+/// Takes the directories so it is testable with a temp-dir fixture.
+#[cfg(all(unix, feature = "serial"))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn pty_links_in(dirs: &[std::path::PathBuf], hardware: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = dirs
+        .iter()
+        .filter_map(|d| std::fs::read_dir(d).ok())
+        .flat_map(|entries| entries.flatten())
+        .map(|e| e.path())
+        .filter(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()))
+        .map(|p| p.to_string_lossy().into_owned())
+        .filter(|p| virtual_node_with(p, || hardware.to_vec(), char_device_major).is_some())
         .collect();
     out.sort(); // stable order — the picker must not reshuffle between polls
     out
@@ -1256,6 +1304,41 @@ mod tests {
         assert!(!has_no_modem_lines(
             &dir.join("nothing-here").to_string_lossy()
         ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #494: the Mac picker lists wfview's `rig-pty1` (a symlink to a pseudo-terminal) and
+    /// nothing else in the directory, by the virtual-port classifier, without opening the pty.
+    /// The rule is the Mac's, run here on Linux's ptys; the Mac's own pty major is the
+    /// classifier's business ([`is_pty_slave`]).
+    #[cfg(all(target_os = "linux", feature = "serial"))]
+    #[test]
+    fn a_pty_link_is_listed_without_being_opened_and_nothing_else_is() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!("nexus-pty-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let (_master, slave) = open_pty();
+        symlink(&slave, dir.join("rig-pty1")).expect("symlink");
+        // Decoys: a plain file, a link to it, a dangling link, and a link to a real char device.
+        std::fs::write(dir.join("notes.txt"), b"").expect("file");
+        symlink(dir.join("notes.txt"), dir.join("notes-link")).expect("symlink");
+        symlink(dir.join("gone"), dir.join("dangling")).expect("symlink");
+        symlink("/dev/null", dir.join("null-link")).expect("symlink");
+        let dirs = [dir.clone(), dir.join("missing")];
+
+        let slave_path = std::path::Path::new(&slave);
+        let mut found = Vec::new();
+        let opens = opens_during(slave_path, || found = pty_links_in(&dirs, &[]));
+        assert_eq!(opens, 0, "the pty was opened to list it");
+        assert_eq!(
+            found,
+            [dir.join("rig-pty1").to_string_lossy().into_owned()],
+            "only the pty link is a port"
+        );
+        // A pty the OS enumerates as hardware is not virtual, so this union never adds it.
+        let link = dir.join("rig-pty1").to_string_lossy().into_owned();
+        assert!(pty_links_in(&dirs, std::slice::from_ref(&link)).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
