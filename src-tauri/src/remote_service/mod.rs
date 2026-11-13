@@ -2111,7 +2111,8 @@ impl Controller {
                 self.resume(binding).await;
             }
             // Paired with the other service: a move, not a credential store that will not answer.
-            // Remote stays off and the station can pair here at once; nothing is deleted.
+            // Remote stays off and nothing is deleted; Forget clears it, then the station pairs here
+            // ([`Controller::not_moved`]).
             Ok(Some(binding)) if binding.origin == transport::OTHER_ORIGIN => {
                 self.moved = Some(binding);
                 phase(&self.status, "unpaired", Some("pairingMoved"));
@@ -2848,6 +2849,17 @@ impl Controller {
             device_id: device_id.to_string(),
         });
         Ok(())
+    }
+    /// A pairing (Begin) or a sign-in at the shack is not started while a moved pairing is held: the
+    /// credential store refuses to stage a different pairing over that confirmed record
+    /// (`vault::SystemVault`), so it would fail there as "unlock your credential store". Refused by
+    /// name instead, before the service makes anything; Forget clears the moved record first. The
+    /// record stays until then, so going back to the previous release still finds its pairing.
+    fn not_moved(&self) -> Result<(), &'static str> {
+        match self.moved {
+            Some(_) => Err("pairingMoved"),
+            None => Ok(()),
+        }
     }
     /// The keys and credential this station binds with: those staged for it already, or new ones,
     /// staged now. The credential store is asked to take the credential first, as for a pairing, so
@@ -3629,6 +3641,7 @@ impl Controller {
                 {
                     return Err("invalidRequest");
                 }
+                self.not_moved()?;
                 let value = self
                     .client
                     .post("enroll", None, json!({ "name": name.trim() }))
@@ -3858,6 +3871,7 @@ impl Controller {
                 {
                     return Err("invalidRequest");
                 }
+                self.not_moved()?;
                 // Not ready: no key is made and nothing is staged.
                 self.accounts.service.as_ref().map_err(|reason| *reason)?;
                 let lan_key = self

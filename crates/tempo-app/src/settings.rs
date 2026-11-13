@@ -3233,6 +3233,13 @@ pub struct Settings {
     /// settings projection like every field not listed there, so no browser can turn it on.
     #[serde(default)]
     pub remote_stream: bool,
+    /// Remote as a stream, lower-bandwidth through the relay (operator decision, 2026-11-13):
+    /// while on, a stream whose browser is reached only through the TURN relay is sent at a lower
+    /// bit-rate ceiling (`tempo_stream::video::picture::Bound::on`). Receive audio, a direct path and
+    /// the shack's own network are untouched. **Default OFF**, so the stream is as before until the
+    /// operator's listening and look test decides. Global, like `remote_stream`.
+    #[serde(default)]
+    pub remote_relay_lighter: bool,
     #[serde(default)]
     pub max_power_phone: Option<f32>,
     #[serde(default)]
@@ -7034,6 +7041,7 @@ impl Default for Settings {
             swr_stop_threshold: 2.5,
             parsec_presence_stop: false,
             remote_stream: false,
+            remote_relay_lighter: false,
             max_power_phone: None,
             max_power_cw: None,
             max_power_digital: None,
@@ -15033,6 +15041,34 @@ mod tests {
         );
         // CONTROL: the scan finds only what is declared.
         assert!(!declares("remoteStreamm") && !declares("stream"));
+    }
+
+    /// The relay's lower-bandwidth mode ships OFF (today's stream unchanged), on its exact wire key,
+    /// an upgrader's file reads it off, and the TS mirror declares it.
+    #[test]
+    fn remote_relay_lighter_ships_off_wire_key_and_ts_mirror() {
+        let s = Settings::default();
+        assert!(!s.remote_relay_lighter, "ships OFF");
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"remoteRelayLighter\":false"), "{json}");
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(!old.remote_relay_lighter);
+        let on: Settings = serde_json::from_str(r#"{"remoteRelayLighter":true}"#).unwrap();
+        assert!(
+            on.remote_relay_lighter,
+            "CONTROL: the key reaches the field"
+        );
+        let ts = include_str!("../../../ui/src/types.ts");
+        let start = ts
+            .find("export interface Settings {")
+            .expect("the UI declares Settings");
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        assert!(
+            body.lines()
+                .any(|l| l.trim_start().starts_with("remoteRelayLighter?:")),
+            "ui/src/types.ts Settings is missing `remoteRelayLighter`"
+        );
     }
 
     /// #391's pop-up switch — ships ON (the corner as it always was), its exact wire key, an
