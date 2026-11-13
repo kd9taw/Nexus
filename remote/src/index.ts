@@ -49,6 +49,12 @@ const HEALTH_NETWORK_PER_MINUTE = 30
 const HEALTH_DEADLINE_MS = 2000
 /** The room `health` reaches. Never a station's: a station's room is named by its id, always a UUID. */
 const HEALTH_ROOM = 'health'
+/** THE STREAM'S RELAY, bounded (ruling 1406, security review M3). A credential lasts an hour at most, and
+ *  never past the entitlement; an account may be minted six an hour, whichever of its devices, stations
+ *  and guests asks: the station's account pays for the relay, so it is the account that is counted. */
+const RELAY_TTL_MS = 3600000
+const RELAY_PER_HOUR = 6
+const HOUR_MS = 3600000
 /** Account deletions and copies an account may ask for in ten minutes. */
 const ACCOUNT_DATA_PER_TEN_MINUTES = 5
 /** A subscription in these states has ended and can charge nothing more; any other can. */
@@ -768,10 +774,11 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     observerDeadline(policy, browser, lan ? lanEntitlement(plan, now) : plan, now)
     // The stream's relay, for exactly the browser a ticket is for, past exactly the same checks.
     // It renews no approval: a page asks for a relay as a stream starts, and that is not use. The
-    // credential lasts the longest session, and never past the entitlement that a stream needs.
+    // credential lasts an hour, never past the entitlement that a stream needs, and the account is
+    // minted six an hour at most (`relay`).
     if (verb === 'turn') {
       await rate(env, `turn:${row.id}:${current.id}`, now, 12)
-      return json({ iceServers: await relayServers(env, Math.min(STATION_ADMISSION_MS, plan.expiresAt - now)) })
+      return json({ iceServers: await relay(env, row.account_id, plan, now) })
     }
     if (verb === 'renew') {
       const response = await room(env, row.id, 'renew', { access: policy,
@@ -826,6 +833,8 @@ async function accountCopy(env: RemoteEnv, accountId: string, now: number): Prom
     subscription: subscription && truth(subscription, 'cancelAtPeriodEnd'),
     checkouts: await all('SELECT id, created_at AS createdAt FROM checkout_sessions WHERE account_id=? ORDER BY created_at', accountId),
     refusedPaymentEvents: await all('SELECT event_id AS eventId, type, reason, at FROM billing_refusals WHERE account_id=? ORDER BY at', accountId),
+    // The stream's relay, a month at a time: credentials minted and the seconds they were minted for.
+    relayUsage: await all('SELECT month, mints, granted_seconds AS grantedSeconds FROM relay_usage WHERE account_id=? ORDER BY month', accountId),
     markers: (await all(`SELECT kind, proven=1 AS proven, method, created_at AS createdAt, first_refund_at AS firstRefundAt
       FROM trial_markers WHERE account_id=? ORDER BY kind, created_at`, accountId)).map(row => truth(row, 'proven')),
     stations: stations.map(row => truth(row, 'enabled')),
@@ -880,6 +889,7 @@ async function deleteAccount(env: RemoteEnv, accountId: string, now: number): Pr
     env.DB.prepare(`DELETE FROM tickets WHERE account_id=? OR station_id IN (${mine}) OR device_id IN (SELECT id FROM devices WHERE account_id=?)`)
       .bind(accountId, accountId, accountId),
     env.DB.prepare('DELETE FROM challenges WHERE account_id=?').bind(accountId),
+    env.DB.prepare('DELETE FROM relay_usage WHERE account_id=?').bind(accountId),
     env.DB.prepare(`DELETE FROM notices WHERE account_id=? OR station_id IN (${mine})`).bind(accountId, accountId),
     env.DB.prepare(`DELETE FROM invites WHERE station_id IN (${mine})`).bind(accountId),
     env.DB.prepare(`DELETE FROM devices WHERE account_id=? OR station_id IN (${mine})`).bind(accountId, accountId),
@@ -1212,7 +1222,7 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
     // The relay a browser's stream has, for this device's two internet roads. Each entry is a username
     // and a password, which is what the client core's TURN client takes.
     await rate(env, `turn:${row.id}:${current.id}`, now, 12)
-    return json({ iceServers: await relayServers(env, Math.min(STATION_ADMISSION_MS, plan.expiresAt - now)) })
+    return json({ iceServers: await relay(env, row.account_id, plan, now) })
   }
   if (verb === 'renew') {
     const response = await room(env, row.id, 'pipe-renew', { access: policy, identity: identity(current), entitlement: plan })
@@ -1284,6 +1294,20 @@ function hsts(request: Request, response: Response): Response {
   const result = new Response(response.body, response)
   result.headers.set('strict-transport-security', 'max-age=31536000')
   return result
+}
+
+/** A relay credential for a device of a station whose account is `accountId`, already admitted as a
+ *  ticket or a pipe would be: counted against that account's hour first (refused `tryLater` past it,
+ *  before the provider is asked), lasting `RELAY_TTL_MS` or what is left of `plan`, whichever is less,
+ *  and recorded in the account's month once the provider has minted it. */
+async function relay(env: RemoteEnv, accountId: string, plan: AccountEntitlement, now: number): Promise<Awaited<ReturnType<typeof relayServers>>> {
+  await rate(env, `turn-account:${accountId}`, now, RELAY_PER_HOUR, HOUR_MS)
+  const seconds = Math.ceil(Math.min(RELAY_TTL_MS, plan.expiresAt - now) / 1000)
+  const servers = await relayServers(env, seconds * 1000)
+  await env.DB.prepare(`INSERT INTO relay_usage(account_id,month,mints,granted_seconds,updated_at) VALUES(?,?,1,?,?)
+    ON CONFLICT(account_id,month) DO UPDATE SET mints=mints+1, granted_seconds=granted_seconds+excluded.granted_seconds, updated_at=excluded.updated_at`)
+    .bind(accountId, new Date(now).toISOString().slice(0, 7), seconds, now).run()
+  return servers
 }
 
 // THE STREAM'S RELAY. Cloudflare Realtime TURN credentials, minted with the service's own key for

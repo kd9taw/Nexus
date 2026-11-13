@@ -209,6 +209,26 @@ key; a 503 `relayUnavailable` means Cloudflare refused, answered something unusa
 answer within three seconds. `localStorage.removeItem('nexus.remote.relay')` puts streams back to
 direct first.
 
+**What the relay is allowed to cost (ruling 1406).** A credential lasts an hour, or less when the
+account's internet use ends sooner, and only an approved device on an account with internet use gets
+one. An account is minted six an hour, counting every device and guest of its stations, browser or
+computer; the seventh is refused `tryLater` before Cloudflare is asked, and the page streams direct.
+Each mint is counted in `relay_usage`, a row per account and month (`YYYY-MM`, UTC): `mints` and
+`granted_seconds`, the seconds those credentials were minted for. The account is the station's owner,
+whose plan pays, even when a guest asked. There is no admin route that reads it (the admin API is one
+verb on purpose); support reads it with:
+
+```sh
+npx wrangler d1 execute <database> --remote --command \
+  "SELECT month, mints, granted_seconds FROM relay_usage WHERE account_id = '<account-uuid>' ORDER BY month"
+```
+
+and the account's own copy (Account, Download a copy) lists the same months. It counts what the Worker
+hands out, not what the relay carries: the bytes relayed are metered by Cloudflare, per TURN key, in
+the dashboard's Realtime analytics, and no per-account split of them reaches the Worker. A relayed
+connection outliving its credential's hour is not proven here: if Cloudflare ends the allocation at
+expiry, a relayed stream ends at the hour and the page has to start it again.
+
 ## Paid access and trial identity (built, not configured)
 
 Two optional Worker settings, neither in the template's `secrets.required`, so a deploy without them
