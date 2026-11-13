@@ -184,9 +184,10 @@ export class BrowserClient {
   async post<T>(path: string, body: object = {}, signal?: AbortSignal): Promise<T> {
     return (await this.request<T>(path, body, signal)).body
   }
-  /** The payment provider's page for Subscribe (`checkout`, with the plan) or Manage (`portal`), which the
-   *  page then goes to. Only a page on the provider's own checkout or billing domain is ever returned. */
-  async billingPage(kind: 'checkout' | 'portal', body: { plan: 'monthly' | 'annual' } | Record<string, never> = {}): Promise<string> {
+  /** The payment provider's page for Subscribe (`checkout`, with the plan and the billing country, an ISO
+   *  3166-1 alpha-2 code) or Manage (`portal`), which the page then goes to. Only a page on the provider's
+   *  own checkout or billing domain is ever returned. */
+  async billingPage(kind: 'checkout' | 'portal', body: { plan: 'monthly' | 'annual'; country: string } | Record<string, never> = {}): Promise<string> {
     const { url } = await this.post<{ url?: unknown }>(`billing/${kind}`, body)
     const page = kind === 'checkout' ? 'https://checkout.stripe.com/' : 'https://billing.stripe.com/'
     if (typeof url !== 'string' || !url.startsWith(page)) throw new RemoteError(503, 'serviceUnavailable')
