@@ -258,7 +258,6 @@ import { ConfirmHost, confirmDialog } from './confirm'
 import { RemoteApprovalPrompt } from './remote-native/RemoteApprovalPrompt'
 import { LogbookSaving } from './components/LogbookSaving'
 import { OnboardingBanner } from './components/OnboardingBanner'
-import { LocaleBetaBanner } from './components/LocaleBetaBanner'
 import { PounceBanner } from './components/PounceBanner'
 import { UpdateBanner } from './components/UpdateBanner'
 import { ClientBanner } from './components/ClientBanner'
@@ -4498,8 +4497,6 @@ function App() {
           onDismiss={handleDismissOnboarding}
         />
       )}
-
-      <LocaleBetaBanner onOpenSettings={() => handleView('settings')} />
 
       {reveal.pending && (
         <RevealNudge

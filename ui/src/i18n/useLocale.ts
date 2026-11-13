@@ -76,12 +76,16 @@ export const LOCALE_NATIVE_NAME: Record<string, string> = {
 }
 
 /**
- * A beta translation's one-line notice, in that language's OWN words, like its name above: shown
- * once to an operator using it (`LocaleBetaBanner`), saying the translation is new, how to switch
- * to English, and where to report wording. It lives here rather than in the catalogs because it
- * exists for exactly one language at a time and never needs translating into the others. The
- * Settings path is the Italian catalog's own: settings.tabs.appearance ▸ settings.workspace.language.label.
+ * A beta translation's note, in that language's OWN words like its name above: the translation is
+ * new, how to switch to English, and where to report wording. Shown as a hint under the Language
+ * picker and on the setup wizard's first screen (`LocaleBetaNote`), never as a row on a cockpit.
+ * It lives here rather than in the catalogs because it exists for one language at a time and never
+ * needs translating into the others. The Settings path is the Italian catalog's own labels.
  */
-export const LOCALE_BETA_NOTE: Record<string, string> = {
-  it: "Italiano in beta: traduzione nuova. Per l'inglese: Impostazioni ▸ Aspetto ▸ Lingua. Correzioni: github.com/kd9taw/Nexus/issues",
+export const LOCALE_BETA_NOTE: Record<string, { text: string; link: string; href: string }> = {
+  it: {
+    text: "Traduzione italiana in beta. Per passare all'inglese: Impostazioni ▸ Aspetto ▸ Lingua. Segnala le correzioni su",
+    link: 'github.com/kd9taw/Nexus/issues',
+    href: 'https://github.com/kd9taw/Nexus/issues',
+  },
 }
