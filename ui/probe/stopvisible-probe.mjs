@@ -570,8 +570,9 @@ if (process.env.STOPVIS_LOG !== '0') {
     if (!r.inWindow) logReds.push(`prompt to log — ${at}: the card ${r.card.join(',')} is not wholly inside the window`)
     if (meets.length || !tx.some((x) => x.inside && x.reach) || !r.inWindow) console.log('RED ' + logReds.at(-1))
   }
-  // The control: the card's placement taken away, so it is centred over the whole window as before.
-  const c = await logCard('operate', px(FLOOR), '100', '.logconfirm { position: static !important; width: min(420px, calc(0.92 * var(--vw-eff))) !important; max-height: calc(0.9 * var(--vh-eff)) !important }')
+  // The control: the card's placement taken away, so it is centred over the whole window as before (base's layout).
+  // The room is the backdrop's padding and the card's own width and height (LogConfirm), so all three are put back.
+  const c = await logCard('operate', px(FLOOR), '100', '.logconfirm-backdrop { padding: 0 !important } .logconfirm { width: min(420px, calc(0.92 * var(--vw-eff))) !important; max-height: calc(0.9 * var(--vh-eff)) !important }')
   logControl = !!c && c.rows.some((x) => x.meets)
   console.log(`CONTROL — FT at the floor (100 %), the prompt centred over the whole window: ${c ? (logControl ? 'it meets a stop (caught)' : 'it meets none') : 'never drew'}`)
 }
