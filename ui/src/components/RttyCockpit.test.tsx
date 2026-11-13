@@ -187,11 +187,11 @@ describe('RttyCockpit TX wiring', () => {
   it('sends the CQ macro with {MYCALL} expanded — an explicit operator action', async () => {
     render(<RttyCockpit snap={snap} />)
     fireEvent.click(screen.getByText('CQ'))
-    // A MACRO goes out on a line of its own and ends in a space — the published RTTY contest
-    // convention (features/rttyMacros.ts `frameForAir`). The compose bar below still sends
-    // exactly what was typed.
+    // A MACRO ends in a space — the published RTTY contest convention (features/rttyMacros.ts
+    // `frameForAir`). The new line in front of every over is the engine's
+    // (`rtty_over_newlines`), so it is not in what the cockpit hands `rtty_send`.
     await waitFor(() =>
-      expect(rttySend).toHaveBeenCalledWith('\r\nCQ CQ CQ DE KD9TAW KD9TAW K '),
+      expect(rttySend).toHaveBeenCalledWith('CQ CQ CQ DE KD9TAW KD9TAW K '),
     )
   })
 
@@ -205,7 +205,7 @@ describe('RttyCockpit TX wiring', () => {
     })
     fireEvent.click(screen.getByText('Answer'))
     await waitFor(() =>
-      expect(rttySend).toHaveBeenCalledWith('\r\nW1ABC DE KD9TAW KD9TAW K '),
+      expect(rttySend).toHaveBeenCalledWith('W1ABC DE KD9TAW KD9TAW K '),
     )
   })
 

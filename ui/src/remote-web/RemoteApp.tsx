@@ -12,6 +12,7 @@ import { browserLabel } from './browser-label'
 import { BetaNote } from './BetaNote'
 import { BillingCountryField, billingCountryName, initialBillingCountry, type BillingCountryChoice } from './BillingCountryField'
 import { AddStation, RemoteLanding } from './RemoteLanding'
+import { NoticeAddress } from './NoticeAddress'
 import { shortFingerprint } from './stream-protocol'
 import type { AccountSession } from './client'
 import '../remote-monitor/monitor.css'
@@ -295,6 +296,10 @@ export function RemoteApp() {
     // One mailbox, two sign-ins (a password once, Google once): the second account is refused a
     // trial the first one is already running.
     : code === 'trialActiveElsewhere' ? t('remote.trialActiveElsewhere')
+    // The paid launch's trial identity: a mail domain's trials this month are spent, or
+    // the station the trial would start for has no US licence the service could check.
+    : code === 'trialDomainLimit' ? t('remote.trialDomainLimit')
+    : code === 'callsignNotLicensed' || code === 'callsignInvalid' || code === 'updateRequired' ? t('remote.trialCallsignNeeded')
     // Rate limits on the browser's routes reset within a minute (account) or ten (claim, attach).
     : code === 'tryLater' ? t('remote.tryLater')
     // Set by the page, not the service: an open session whose next ticket was refused.
@@ -305,6 +310,11 @@ export function RemoteApp() {
     : code === 'countryNotServed' ? t('remote.billing.countryNotServed', { country: billingCountryName(billingCountry.code) })
     : code === 'billingNotAvailable' ? t('remote.billing.notAvailable')
     : code === 'subscriptionNotCancelled' ? t('remote.account.cancelFailed')
+    // Moving the address the "device added" notice goes to (NoticeAddress).
+    : code === 'noticeCodeInvalid' || code === 'noticeChangeUnavailable' ? t('remote.notice.codeInvalid')
+    : code === 'noticeNotConfigured' ? t('remote.notice.notConfigured')
+    : code === 'noticeNotSent' ? t('remote.notice.notSent')
+    : code === 'noticeAddressUnbound' ? t('remote.notice.unbound')
     : t('remote.requestFailed')
   // A sign-up that worked but whose address is not confirmed yet. Auth0 keeps its session through
   // the deny, so "continue" is one plain login and "use a different account" has to sign out of it.
@@ -517,6 +527,7 @@ export function RemoteApp() {
           <div className="remote-actions">
             <button className="remote-button" disabled={busy} onClick={downloadCopy}>{t('remote.account.export')}</button>
           </div>
+          <NoticeAddress client={client} busy={busy} act={act} />
           {/* The confirmation is typed into the page, never a browser dialog. A live subscription ends with
               the account, at once and with no refund of the unused part: said before the press. */}
           <details><summary>{t('remote.account.delete')}</summary>

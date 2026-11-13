@@ -406,6 +406,8 @@ it.each([
   ['trialUsedByCallsign', /write to support from the email address on your licence/i, /this computer/i],
   ['trialUsedOnThisPc', /this computer has already had a Remote trial/i, /callsign/i],
   ['updateRequired', /needs a newer Nexus/i, /request could not be completed/i],
+  // The mail domain the account signed in with has started its month's trials.
+  ['trialDomainLimit', /domain has already started as many Remote trials/i, /request could not be completed|access/i],
   // The same mailbox already has a trial under another sign-in: it used to read as access denied.
   ['trialActiveElsewhere', /different sign-in/i, /trial has ended/i],
 ] as const)('tells the operator at the shack which refusal %s is', async (code, says, doesNotSay) => {

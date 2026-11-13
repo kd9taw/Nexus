@@ -352,12 +352,91 @@ test('the new identity is required once switched on, and refuses rather than che
   try {
     assert.equal((await approve(strict, await person(strict), {}, 403)).value.error, 'updateRequired')
     assert.equal((await approve(strict, await person(strict), { callsign: 'F4AAA' }, 403)).value.error, 'updateRequired')
-    await approve(strict, await person(strict), { callsign: 'F4AAA', pc: pc(null, 's1') })
+    // Required, a trial is a US licence's: any other call is refused as not licensed.
+    await licences(strict, [{ call: 'W4AAA', active: true, email: null }])
+    assert.equal((await approve(strict, await person(strict), { callsign: 'F4AAA', pc: pc(null, 's1') }, 403)).value.error, 'callsignNotLicensed')
+    await approve(strict, await person(strict), { callsign: 'W4AAA', pc: pc(null, 's1') })
     assert.equal((await approve(unkeyed, await person(unkeyed), { callsign: 'F4BBB', pc: pc(null, 's2') }, 503)).value.error, 'serviceNotConfigured')
     // Positive control: an account that already holds a trial pairs another station with no identity.
     const pair = await strict.paired()
     assert.ok(pair.stationId)
   } finally { await Promise.all([strict.mf.dispose(), unkeyed.mf.dispose()]) }
+})
+
+// THE PAID LAUNCH'S TRIAL IDENTITY. With the identity required, a trial
+// is a verified US callsign's: active in the FCC licence copy, which must be fresh. And a mail domain
+// starts three trials in thirty days at most, so a catch-all domain cannot farm them; the big public
+// mailbox providers, whose every address is its own account, are not counted that way.
+test('required identity: a trial needs an active US licence, and a stale licence copy refuses every trial', async () => {
+  const strict = await runtime({ bindings: { TRIAL_KEY, TRIAL_IDENTITY_REQUIRED: '1' } })
+  try {
+    await licences(strict, [{ call: 'W5ONE', active: true, email: null }, { call: 'K5GONE', active: false, email: null }])
+    for (const [call, code] of [['VE3ABC', 'callsignNotLicensed'], ['DL1ABC/P', 'callsignNotLicensed'], ['K5GONE', 'callsignNotLicensed'], ['N5NONE', 'callsignNotLicensed']]) {
+      const someone = await person(strict)
+      assert.equal((await approve(strict, someone, { callsign: call, pc: pc(null, call) }, 403)).value.error, code, call)
+      assert.equal(await trialRow(strict, someone.accountId), null, `${call}: no trial`)
+    }
+    const licensed = await person(strict)
+    await approve(strict, licensed, { callsign: 'w5one/m', pc: pc(null, 'w5') })
+    assert.equal((await session(licensed)).state, 'active')
+    // The copy four days old: no US call can be checked, and only US calls start a trial, so none starts.
+    await licences(strict, [], Date.now() - 4 * DAY)
+    assert.equal((await approve(strict, await person(strict), { callsign: 'W5TWO', pc: pc(null, 'w6') }, 503)).value.error, 'serviceUnavailable')
+  } finally { await strict.mf.dispose() }
+})
+
+test('required identity: three trials a mail domain in thirty days, public mailbox providers not counted', async () => {
+  const strict = await runtime({ bindings: { TRIAL_KEY, TRIAL_IDENTITY_REQUIRED: '1' } })
+  try {
+    const calls = Array.from({ length: 12 }, (_, i) => `W${i % 10}D${String.fromCharCode(65 + i)}${String.fromCharCode(66 + i)}`)
+    await licences(strict, calls.map(call => ({ call, active: true, email: null })))
+    let next = 0
+    const start = (owner, expected) => approve(strict, owner, { callsign: calls[next], pc: pc(null, calls[next++]) }, expected)
+    const farm = []
+    for (let i = 0; i < 3; i++) { const someone = await person(strict, `farm${i}@Catch-All.example`); farm.push(someone); await start(someone) }
+    // The fourth address at that domain, whatever its spelling, is refused by name and starts nothing.
+    const fourth = await person(strict, 'farm3+x@catch-all.EXAMPLE')
+    assert.equal((await start(fourth, 403)).value.error, 'trialDomainLimit')
+    assert.equal(await trialRow(strict, fourth.accountId), null)
+    // Another domain is its own; a public provider's addresses are each a person, and not counted.
+    await start(await person(strict, 'op@other-club.example'))
+    for (let i = 0; i < 4; i++) await start(await person(strict, `ham${i}@gmail.com`))
+    // A trial started more than thirty days ago no longer counts against its domain.
+    await strict.db.prepare('UPDATE trials SET started_at=? WHERE account_id=?').bind(Date.now() - 31 * DAY, farm[0].accountId).run()
+    await start(fourth)
+    assert.equal((await session(fourth)).state, 'active')
+  } finally { await strict.mf.dispose() }
+})
+
+test('required identity holds where the trial starts at first internet use too: no claim, a foreign call, a spent domain', async () => {
+  const strict = await runtime({ bindings: { TRIAL_KEY, TRIAL_IDENTITY_REQUIRED: '1' } })
+  try {
+    await licences(strict, [{ call: 'W7USE', active: true, email: null }, { call: 'W7FARM', active: true, email: null },
+      { call: 'W7ONE', active: true, email: null }, { call: 'W7TWO', active: true, email: null }, { call: 'W7FOUR', active: true, email: null }])
+    // A station already paired, its account with no trial yet: its first ticket starts one (index.ts firstUse),
+    // from the claim the shack's sign-in kept (stations.trial_claim), checked then.
+    const fresh = async claim => {
+      const pair = await strict.paired()
+      await strict.approved(pair)
+      await strict.db.prepare('DELETE FROM trials WHERE account_id=?').bind(pair.browser.accountId).run()
+      await strict.db.prepare('UPDATE stations SET trial_claim=? WHERE id=?').bind(claim && JSON.stringify(claim), pair.stationId).run()
+      return pair
+    }
+    const claimOf = (call, us = true) => ({ call: hmac(`call:${call}`), us, pcHw: null, pcOs: hmac(`pc:os:${sha(call)}`) })
+    const ticket = (pair, expected) => pair.browser.post(`stations/${pair.stationId}/ticket`, {}, expected)
+    assert.equal((await ticket(await fresh(null), 403)).value.error, 'updateRequired', 'a station that kept no claim')
+    assert.equal((await ticket(await fresh(claimOf('VE7ABC', false)), 403)).value.error, 'callsignNotLicensed')
+    const licensed = await fresh(claimOf('W7USE'))
+    await ticket(licensed)
+    assert.equal((await session(licensed.browser)).state, 'active')
+    // Its account's mail domain has had three trials this month: refused by name there as well.
+    for (const [i, call] of ['W7ONE', 'W7TWO', 'W7FARM'].entries()) {
+      await approve(strict, await person(strict, `n${i}@farm-domain.example`), { callsign: call, pc: pc(null, call) })
+    }
+    const farmed = await fresh(claimOf('W7FOUR'))
+    await strict.db.prepare('UPDATE accounts SET domain_hash=? WHERE id=?').bind(sha('domain:farm-domain.example'), farmed.browser.accountId).run()
+    assert.equal((await ticket(farmed, 403)).value.error, 'trialDomainLimit')
+  } finally { await strict.mf.dispose() }
 })
 
 test('markers are spent only by an approval that started the trial', async () => {
