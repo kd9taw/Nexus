@@ -9,8 +9,10 @@ import { OPERATION_RATE_LIMIT, OPERATION_RATE_WINDOW_MS } from './operation-limi
 // `commandUntil` is how long this browser's account may still command the station: the adapter
 // sets it from the entitlement it read at admission or at the last renewal, and it is deliberately
 // shorter than the observer lease (see OPERATION_ENTITLEMENT_MS). Zero means never. `lanUntil` is
-// present only for a LAN-only session (the room's), which this lane carries `LAN_REQUESTS` alone for.
-type Browser = { sessionId: string; deviceId: string; peer: Peer; commandUntil: number; lanUntil?: number }
+// present only for a LAN-only session (the room's), which this lane carries `LAN_REQUESTS` alone for,
+// and `lanLeaseUntil` is until when that session may take and keep the lease here (the room's: while its
+// stream is live on the LAN, or the grace an acquire is given to bring one up). Absent means never.
+type Browser = { sessionId: string; deviceId: string; peer: Peer; commandUntil: number; lanUntil?: number; lanLeaseUntil?: number }
 /** What a LAN-only session may send through the relay (security review 2026-11-12, M1). The relay
  *  cannot tell that its holder is on the shack's network, so it carries only what the stream held to
  *  that network needs, the lease and the `state` it is read from, and Stop. Never a read of the
@@ -150,6 +152,15 @@ export class OperationRelay {
       }
       // A LAN-only session, refused as a lapsed one is, and for the same reason: not through here.
       if (browser.lanUntil !== undefined && !LAN_REQUESTS.has(request.type)) {
+        this.error(p, 'stationUnavailable')
+        return
+      }
+      // And its lease only while the room allows it (security review 2026-11-12, follow-up 1): taken and
+      // kept through the relay off the LAN, it would hold the station occupied from anywhere. Without a
+      // heartbeat the station's own five-second lease ends it. Stop, `state` and Release are never held.
+      // Read defensively, as `commandUntil` is: an absent allowance is none.
+      if (browser.lanUntil !== undefined && (request.type === 'acquire' || request.type === 'heartbeat')
+        && now >= (Number.isSafeInteger(browser.lanLeaseUntil) ? browser.lanLeaseUntil! : 0)) {
         this.error(p, 'stationUnavailable')
         return
       }

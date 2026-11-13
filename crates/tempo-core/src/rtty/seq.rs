@@ -16,7 +16,7 @@
 //! class/section ship today — a contest serial is a spec entry
 //! ([`FieldKind::Serial`]), not an engine change), and every transmitted
 //! line is built from operator-editable [`Templates`] with
-//! `{CALL}`/`{MYCALL}`/`{RST}`/`{EXCH}` substitution — the same template layer
+//! `{CALL}`/`{MYCALL}`/`{RST}`/`{EXCH}`/`{NL}` substitution — the same template layer
 //! a manual F-key presses.
 //!
 //! HUMAN-INITIATE GATE (ARRL FD rule 6.4 bans fully-automated contacts): the
@@ -179,8 +179,8 @@ fn parse_pattern(re: &'static str) -> Option<Tolerance> {
 
 /// Operator-editable message templates. Placeholders: `{CALL}` (the peer),
 /// `{MYCALL}`, `{RST}` (my sent report), `{EXCH}` (my full exchange string,
-/// labels included), `{SERIAL}` (next serial, zero-padded), plus `{KEY}` for
-/// any key in my exchange values.
+/// labels included), `{SERIAL}` (next serial, zero-padded), `{NL}` (a new line:
+/// CR LF), plus `{KEY}` for any key in my exchange values.
 #[derive(Debug, Clone)]
 pub struct Templates {
     pub cq: String,
@@ -863,6 +863,10 @@ impl RttySeq {
         s = s.replace("{RST}", self.my_field("RST").unwrap_or("599"));
         s = s.replace("{EXCH}", &self.my_exch_string());
         s = s.replace("{SERIAL}", &format!("{:03}", self.serial_now()));
+        // A new line on the air: CR then LF, the RTTY order — what the F-key expander fills it
+        // with too (`ui/src/features/rttyMacros.ts`). Before the exchange keys, so none can
+        // shadow it.
+        s = s.replace("{NL}", "\r\n");
         for (k, v) in &self.my_exchange {
             s = s.replace(&format!("{{{k}}}"), v);
         }
@@ -1200,6 +1204,20 @@ mod tests {
     }
 
     // -- Human-initiate gate --
+
+    /// `{NL}` is a line break on the air — CR then LF, the RTTY order — wherever the
+    /// template puts it, exactly as the F-key expander (`ui/src/features/rttyMacros.ts`)
+    /// fills it. A contest logger picks a call out of a line more easily than out of a run.
+    #[test]
+    fn nl_token_renders_cr_lf_wherever_it_sits() {
+        let mut s = casual_seq();
+        s.templates.cq = "{NL}CQ DE {MYCALL}{NL}K{NL}".into();
+        s.start_cq(0);
+        assert_eq!(
+            sends(&s.take_actions()),
+            vec![format!("\r\nCQ DE {MYCALL}\r\nK\r\n")]
+        );
+    }
 
     #[test]
     fn never_self_starts() {

@@ -167,6 +167,22 @@ export function mailbox(address: string): string {
   return `${local}@${domain}`
 }
 
+/** The large public mailbox providers: every address there is an account of its own, made and verified
+ *  one at a time, so a trial from one is never counted against its domain (`mailDomain`). A guess about
+ *  which domains are public, kept short on purpose: a domain missing here is only counted, never refused
+ *  more than `trial-identity.ts` DOMAIN_TRIALS allows. arrl.net is the ARRL's forwarding service, which
+ *  many US amateurs sign in with. */
+const PUBLIC_MAIL_DOMAINS = new Set(['gmail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com', 'yahoo.com',
+  'ymail.com', 'icloud.com', 'me.com', 'mac.com', 'aol.com', 'proton.me', 'protonmail.com', 'pm.me', 'gmx.com',
+  'mail.com', 'fastmail.com', 'zoho.com', 'comcast.net', 'att.net', 'sbcglobal.net', 'verizon.net', 'cox.net',
+  'charter.net', 'earthlink.net', 'arrl.net'])
+/** The domain of a mailbox (`mailbox()`), or null for a public provider's or an address with none: what
+ *  a trial is counted against when the trial identity is required. */
+export function mailDomain(normalised: string): string | null {
+  const at = normalised.lastIndexOf('@'), domain = at < 1 ? '' : normalised.slice(at + 1)
+  return domain && !PUBLIC_MAIL_DOMAINS.has(domain) ? domain : null
+}
+
 /** What a newly signed-in device is, for the owner notice (the 2026-10-23 sign-in decision): who it belongs to, which
  *  station, and how to recognise it. `ownerSignIn` is the verified address on the STATION OWNER's own
  *  sign-in, or `null` for anyone else's (a guest's carries the guest's address). It is never where the
@@ -187,16 +203,56 @@ export interface DeviceAddedNotice {
  *  someone who can change the verified address at the identity provider must not be able to send it to
  *  themselves. `accounts.notice_address` holds it, written once, from a sign-in whose exact address
  *  is the one the account was bound with (`email_hash`, written at the account's first verified sign-in
- *  and never overwritten); nothing else writes it, and deletion clears it. No address captured and none
+ *  and never overwritten); afterwards only by a change the owner proved with a code mailed to the new
+ *  address and waited out (`takeNoticeChange`), and deletion clears it. No address captured and none
  *  matching: `null`, and the device stays held. */
-async function noticeAddress(env: RemoteEnv, accountId: string, ownerSignIn: string): Promise<string | null> {
+async function noticeAddress(env: RemoteEnv, accountId: string, ownerSignIn: string, now: number): Promise<string | null> {
+  await takeNoticeChange(env, accountId, now)
+  return captureNoticeAddress(env, accountId, ownerSignIn)
+}
+/** The account's notice address, captured first if it has none yet and `ownerSignIn` (the owner's own
+ *  verified sign-in address) is exactly the one the account was made with; null otherwise. */
+export async function captureNoticeAddress(env: RemoteEnv, accountId: string, ownerSignIn: string | null): Promise<string | null> {
   const row = await env.DB.prepare('SELECT notice_address, email_hash FROM accounts WHERE id=?')
     .bind(accountId).first<{ notice_address: string | null; email_hash: string | null }>()
   if (row?.notice_address) return row.notice_address
-  if (!row?.email_hash || await digest(`email:${ownerSignIn}`) !== row.email_hash) return null
+  if (!ownerSignIn || !row?.email_hash || await digest(`email:${ownerSignIn}`) !== row.email_hash) return null
   await env.DB.prepare('UPDATE accounts SET notice_address=? WHERE id=? AND notice_address IS NULL AND email_hash=?')
     .bind(ownerSignIn, accountId, row.email_hash).run()
   return ownerSignIn
+}
+
+/** A change of the notice address the owner proved and waited out (index.ts, account/notice/*), made the
+ *  account's notice address now, but only in place of the address that was warned of it
+ *  (`warned_address`): a change whose warned address is no longer the notice address is dropped, never
+ *  applied over an address nobody told. Nothing else: no notice is sent, re-sent or marked sent, so no
+ *  device's hold moves because the address did. Before that, the address stays as it was. */
+export async function takeNoticeChange(env: RemoteEnv, accountId: string, now: number): Promise<void> {
+  const ready = `SELECT address FROM notice_changes c WHERE c.account_id=accounts.id AND c.verified_at IS NOT NULL AND c.effective_at<=?
+    AND c.warned_address IS accounts.notice_address`
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE accounts SET notice_address=(${ready}) WHERE id=? AND EXISTS(${ready})`).bind(now, accountId, now),
+    // Taken over, or confirmed against an address that is no longer the notice address: gone either way.
+    env.DB.prepare(`DELETE FROM notice_changes WHERE account_id=? AND verified_at IS NOT NULL AND (effective_at<=?
+      OR warned_address IS NOT (SELECT notice_address FROM accounts WHERE id=?))`).bind(accountId, now, accountId),
+  ])
+}
+
+/** One mail through the notice provider (`OWNER_NOTICE_*`), and whether the provider accepted it (a 2xx).
+ *  False, never a throw, for no provider, a refusal or a network failure. */
+export async function sendMail(env: RemoteEnv, to: string, subject: string, text: string): Promise<boolean> {
+  const key = env.OWNER_NOTICE_API_KEY, from = env.OWNER_NOTICE_FROM
+  if (!key || !from) return false
+  try {
+    const res = await fetch(env.OWNER_NOTICE_ENDPOINT || 'https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ from, to, subject, text }),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
 }
 
 /** Email the account holder that a device was added to their Nexus Remote account by a sign-in
@@ -227,7 +283,7 @@ export async function deviceAddedNotice(env: RemoteEnv, notice: DeviceAddedNotic
   // Only on the owner's own sign-in, as before: a guest's adds notify nobody, and stay held.
   if (!key || !from || !notice.ownerSignIn) return
   let to: string | null
-  try { to = await noticeAddress(env, notice.accountId, notice.ownerSignIn) } catch { return }
+  try { to = await noticeAddress(env, notice.accountId, notice.ownerSignIn, now) } catch { return }
   if (!to) return
   const manage = `${env.PUBLIC_REMOTE_ORIGIN}/remote/`
   const text =
@@ -241,23 +297,7 @@ export async function deviceAddedNotice(env: RemoteEnv, notice: DeviceAddedNotic
   // the station's transmit hold lifts against — is `sent_at IS NOT NULL`, so a rejection (401/422/
   // a 5xx) or a network failure leaves `sent_at` null and the device held past its window until a
   // shack Approve ("no email, no unlock", operator 2026-10-24).
-  let accepted = false
-  try {
-    const res = await fetch(env.OWNER_NOTICE_ENDPOINT || 'https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        from,
-        to,
-        subject: 'A device was added to your Nexus Remote account',
-        text,
-      }),
-    })
-    accepted = res.ok
-  } catch {
-    accepted = false
-  }
-  if (!accepted) return
+  if (!await sendMail(env, to, 'A device was added to your Nexus Remote account', text)) return
   await env.DB.prepare('UPDATE notices SET sent_at=? WHERE device_id=? AND sent_at IS NULL')
     .bind(now, notice.deviceId).run()
 }
@@ -332,15 +372,19 @@ async function signedIn(request: Request, env: RemoteEnv, now: number, clientId:
   // same `email:` prefix, so for an address that is already normal the two are identical.
   const emailHash = email ? await digest(`email:${email}`) : null
   const mailboxHash = email ? await digest(`email:${mailbox(email)}`) : null
-  await env.DB.prepare('INSERT OR IGNORE INTO accounts(id, issuer, subject, email_hash, mailbox_hash) VALUES(?,?,?,?,?)')
-    .bind(uuid(), env.AUTH0_ISSUER, subject, emailHash, mailboxHash).run()
+  // The mailbox's domain, for the per-domain trial count; none for a public provider's.
+  const domain = email ? mailDomain(mailbox(email)) : null
+  const domainHash = domain ? await digest(`domain:${domain}`) : null
+  await env.DB.prepare('INSERT OR IGNORE INTO accounts(id, issuer, subject, email_hash, mailbox_hash, domain_hash) VALUES(?,?,?,?,?,?)')
+    .bind(uuid(), env.AUTH0_ISSUER, subject, emailHash, mailboxHash, domainHash).run()
   // Backfill only: an account created before these columns, or before its provider supplied a
   // verified address, learns its hashes on the next sign-in. Never overwrites a hash, and never
   // with null, so a provider that stops sending the claim cannot quietly unpick an account's identity.
   if (emailHash) {
-    await env.DB.prepare(`UPDATE accounts SET email_hash=COALESCE(email_hash, ?), mailbox_hash=COALESCE(mailbox_hash, ?)
-      WHERE issuer=? AND subject=? AND (email_hash IS NULL OR mailbox_hash IS NULL)`)
-      .bind(emailHash, mailboxHash, env.AUTH0_ISSUER, subject).run()
+    await env.DB.prepare(`UPDATE accounts SET email_hash=COALESCE(email_hash, ?), mailbox_hash=COALESCE(mailbox_hash, ?),
+      domain_hash=COALESCE(domain_hash, ?)
+      WHERE issuer=? AND subject=? AND (email_hash IS NULL OR mailbox_hash IS NULL OR (domain_hash IS NULL AND ? IS NOT NULL))`)
+      .bind(emailHash, mailboxHash, domainHash, env.AUTH0_ISSUER, subject, domainHash).run()
   }
   const row = await env.DB.prepare('SELECT id FROM accounts WHERE issuer=? AND subject=?')
     .bind(env.AUTH0_ISSUER, subject).first<{ id: string }>()
@@ -348,7 +392,8 @@ async function signedIn(request: Request, env: RemoteEnv, now: number, clientId:
   // `subject` and `email` ride alongside Identity rather than inside it. The caller destructures
   // them off, so neither reaches the object that index.ts spreads into the browser identity and on
   // into relay socket state - the provider subject is not something the wire needs to carry, and
-  // the address is never sent to the wire. It is stored in one place only: `accounts.notice_address`,
+  // the address is never sent to the wire. It is stored in `accounts.notice_address` (and a change of it
+  // waiting in `notice_changes`),
   // the owner's own address for the owner-device notice (the 2026-10-23 sign-in decision), captured
   // once by `noticeAddress` from a sign-in whose address is the one this account was bound with.
   return { accountId: row.id, expiresAt: until, subject, verified: email !== null, email }

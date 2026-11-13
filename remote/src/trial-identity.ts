@@ -5,7 +5,8 @@
 //
 // What this can and cannot see: a US callsign is checked against the FCC's licence list, and proven
 // when the account's verified mailbox is the licence's email on file. A non-US callsign is checked for
-// shape only. The PC identifiers change with a new VM or a registry edit: a speed bump, not a wall.
+// shape only, and refused outright while the identity is required (the paid launch is US-only, ruling
+// 1406), which also caps a mail domain's trials (`DOMAIN_TRIALS`). The PC identifiers change with a new VM or a registry edit: a speed bump, not a wall.
 // A squatted callsign is settled by support, who grant the trial by hand and can record the proven
 // owner (index.ts, admin/grant-trial).
 import { Refusal, requireValue, type RemoteEnv } from './authority'
@@ -48,7 +49,7 @@ function pcHash(value: unknown): string | null {
   return value
 }
 
-export type TrialClaim = { call: string | null; proven: boolean; pcHw: string | null; pcOs: string | null }
+export type TrialClaim = { call: string | null; us: boolean; proven: boolean; pcHw: string | null; pcOs: string | null }
 /** What a claim keeps before its callsign is checked against the licence list: the HMACs, and whether the
  *  call is a US one. Nothing in it is a value the shack sent. */
 export type TrialInput = { call: string | null; us: boolean; pcHw: string | null; pcOs: string | null }
@@ -93,6 +94,12 @@ export async function trialInput(env: RemoteEnv, input: Record<string, unknown>)
 export async function trialProof(env: RemoteEnv, kept: TrialInput, accountId: string, now: number): Promise<TrialClaim> {
   const key = env.TRIAL_KEY ?? ''
   requireValue(key, 'serviceNotConfigured', 503)
+  // Required (the paid launch), a trial is a US licence's: a claim with no call is refused
+  // as the shack's missing callsign, and a call outside the US as one the licence list does not hold.
+  if (env.TRIAL_IDENTITY_REQUIRED === '1') {
+    requireValue(kept.call !== null, 'callsignInvalid', 400)
+    requireValue(kept.us, 'callsignNotLicensed')
+  }
   let proven = false
   if (kept.call !== null && kept.us) {
     const synced = await env.DB.prepare('SELECT synced_at FROM uls_sync WHERE id=1').first<{ synced_at: number }>()
@@ -105,7 +112,31 @@ export async function trialProof(env: RemoteEnv, kept: TrialInput, accountId: st
     const self = await env.DB.prepare('SELECT mailbox_hash FROM accounts WHERE id=?').bind(accountId).first<{ mailbox_hash: string | null }>()
     proven = licence.email_hmac !== null && !!self?.mailbox_hash && licence.email_hmac === await hmac(key, `mailbox:${self.mailbox_hash}`)
   }
-  return { call: kept.call, proven, pcHw: kept.pcHw, pcOs: kept.pcOs }
+  return { call: kept.call, us: kept.us, proven, pcHw: kept.pcHw, pcOs: kept.pcOs }
+}
+
+/** THE PER-DOMAIN TRIAL COUNT, while the trial identity is required:
+ *  self-serve trials started in the last thirty days by other accounts whose mailbox is at the same
+ *  domain (`accounts.domain_hash`, none for a public provider). At DOMAIN_TRIALS, no more start there.
+ *  The SQL condition over `accounts self` "this domain is spent", with its bindings: the pre-check below
+ *  and both trial INSERTs (index.ts) make the same test, so racing starts cannot both pass it. */
+export const DOMAIN_TRIALS = 3
+export const DOMAIN_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
+export const DOMAIN_SPENT = `self.domain_hash IS NOT NULL AND (SELECT COUNT(*) FROM trials dt JOIN accounts da ON da.id=dt.account_id
+  WHERE da.domain_hash=self.domain_hash AND da.id<>self.id AND dt.source LIKE 'trial%' AND dt.started_at>?)>=${DOMAIN_TRIALS}`
+export const domainRequired = (env: RemoteEnv) => env.TRIAL_IDENTITY_REQUIRED === '1'
+/** The INSERT's guard: an empty string while the count is off, its bindings otherwise. */
+export function domainGuard(env: RemoteEnv, accountId: string, now: number): { sql: string; bindings: unknown[] } {
+  return domainRequired(env)
+    ? { sql: `AND NOT EXISTS(SELECT 1 FROM accounts self WHERE self.id=? AND ${DOMAIN_SPENT})`, bindings: [accountId, now - DOMAIN_WINDOW_MS] }
+    : { sql: '', bindings: [] }
+}
+/** Refuses, by name, a trial whose account's mail domain has started its allowance this month. */
+export async function requireUnspentDomain(env: RemoteEnv, accountId: string, now: number): Promise<void> {
+  if (!domainRequired(env)) return
+  const spent = await env.DB.prepare(`SELECT 1 AS spent FROM accounts self WHERE self.id=? AND ${DOMAIN_SPENT}`)
+    .bind(accountId, now - DOMAIN_WINDOW_MS).first()
+  if (spent) throw new Refusal('trialDomainLimit')
 }
 
 /** The SQL condition "another account already spent one of these", over `trial_markers m`, and its

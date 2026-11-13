@@ -81,7 +81,10 @@ fn run(engine: Arc<Mutex<Engine>>) {
             applied = cfg;
         }
         let audio = engine_lock(&engine).take_rtty_audio();
-        if audio.is_empty() {
+        // While we transmit the engine discards the receive audio (`Engine::feed_rx_audio`: it is
+        // our own over), so the tap is empty — but the scope must still go dark, not freeze on the
+        // last picture of the far station, so a keyed drain carries on through `scope_step`.
+        if audio.is_empty() && !keyed {
             continue;
         }
         let d = demod.get_or_insert_with(|| demod_for(applied));
@@ -277,6 +280,75 @@ mod tests {
         audio.extend(afsk_char_samples(&code_bits(&codes), &cfg));
         audio.extend(vec![0.0f32; 2400]);
         audio
+    }
+
+    /// One pass of this thread's drain over `e`: take the tap, demodulate, push the copy.
+    fn drain(e: &mut Engine) {
+        let mut d = demod_for(rx_config(e));
+        let chars = d.feed(&e.take_rtty_audio());
+        e.push_rtty_decode(&chars, d.afc_offset_hz(), d.afc_locked());
+    }
+
+    /// What the transcript holds that was NOT marked as ours: the copy off the air.
+    fn received(e: &Engine) -> String {
+        let st = e.rtty_state();
+        st.text
+            .chars()
+            .zip(st.tx)
+            .filter(|(_, ours)| !ours)
+            .map(|(c, _)| c)
+            .collect()
+    }
+
+    /// ⛔ OUR OWN OVER NEVER REACHES THE TRANSCRIPT AS RECEIVED TEXT, NOR THE AUTO-SEQUENCER (a
+    /// tester on an FT-710, AFSK on DATA-L: his CQ printed as a second, garbled copy interleaved
+    /// with the echo). The rig hands its transmit monitor back on the receive audio, and this
+    /// thread decoded it: a CQ of ours printed as a CQ heard, the Answer button offered to answer
+    /// it, and the sequencer was fed our own over as if the far station had sent it. Through the
+    /// whole chain — the loop's feed, this thread's drain and the decoder, the engine's push —
+    /// none of it now arrives. CONTROL: the same audio from a station we are not keyed over
+    /// copies verbatim, so the audio decodes and the gate is what stopped it.
+    #[test]
+    fn our_own_over_never_reaches_the_transcript_or_the_auto_sequencer() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("rtty", false);
+        e.set_rtty_armed(true);
+        e.set_rtty_auto(true).unwrap();
+        e.rtty_auto_cq().unwrap();
+        let cq = e.poll_rtty_one().expect("control: the auto CQ keys");
+        assert!(cq.contains("CQ") && cq.contains("W9XYZ"), "the CQ: {cq:?}");
+        e.set_rtty_sending(true); // the loop keyed it (FSK and AFSK stamp the same flag)
+        let monitor = keyed_by(&e, &cq);
+        for chunk in monitor.chunks(600) {
+            e.feed_rx_audio(chunk); // what the rig returns while it transmits: our own CQ
+        }
+        drain(&mut e);
+        assert_eq!(received(&e).trim(), "", "our own CQ printed as received");
+        let st = e.rtty_state();
+        assert_eq!(st.heard_cq, None, "the Answer button offered our own CQ");
+        assert_eq!(
+            st.seq_state, "calling_cq",
+            "the sequencer moved on our own over"
+        );
+
+        let mut heard = Engine::new("K1ABC", "FN31", 0);
+        heard.set_operating_mode("rtty", false);
+        heard.set_rtty_armed(true);
+        heard.set_rtty_auto(true).unwrap();
+        for chunk in monitor.chunks(600) {
+            heard.feed_rx_audio(chunk);
+        }
+        drain(&mut heard);
+        assert!(
+            received(&heard).contains("CQ CQ"),
+            "CONTROL: the same over, heard unkeyed, did not copy: {:?}",
+            received(&heard)
+        );
+        assert_eq!(
+            heard.rtty_state().heard_cq.as_deref(),
+            Some("W9XYZ"),
+            "CONTROL: a station with Auto on is offered the CQ"
+        );
     }
 
     /// 50 BAUD ON A SAVED 1275/1445 PAIR, END TO END: a station saved at 50 Bd with its low

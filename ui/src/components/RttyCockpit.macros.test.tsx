@@ -455,6 +455,22 @@ describe('right-click, Ctrl+Shift+F-key and Send once', () => {
     expect(rttySend.mock.calls[1][0]).toBe(frameForAir('K1ABC DE W9XYZ W9XYZ K'))
   })
 
+  it('the {NL} chip puts a line break in the message, and the key sends it as CR LF', async () => {
+    await renderCockpit()
+    fireEvent.change(document.querySelector('.rtty-hiscall')!, { target: { value: 'K1ABC' } })
+    fireEvent.contextMenu(key('F2'))
+    const message = field(/^message$/i)
+    fireEvent.change(message, { target: { value: '{CALL} 599' } })
+    message.setSelectionRange(0, 0)
+    fireEvent.click(screen.getByRole('button', { name: /^\{NL\}/ }))
+    expect(message.value, 'the chip inserts the token at the caret').toBe('{NL}{CALL} 599')
+    fireEvent.click(sendOnce())
+    await waitFor(() => expect(rttySend).toHaveBeenCalledTimes(1))
+    // CR then LF, in the RTTY order, where the token was; the engine adds the over's own
+    // line breaks (`rtty_over_newlines`) and never doubles this one.
+    expect(rttySend).toHaveBeenCalledWith('\r\nK1ABC 599 ')
+  })
+
   it('Save keeps the edited message on the key — the control for Send once leaving it', async () => {
     await renderCockpit()
     fireEvent.contextMenu(key('F2'))

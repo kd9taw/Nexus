@@ -90,3 +90,54 @@ it('downloads the account\'s copy as a JSON file', async () => {
   expect(made[0].type).toBe('application/json')
   expect(JSON.parse(await made[0].text())).toEqual(copy)
 })
+
+// The address that gets the "device added" notice, moved by the owner: a code mailed to the new address,
+// then a wait in which the old one is told. Opened from the account card; nothing is asked of the service
+// until it is.
+it('changes the notice address through a code, then shows the wait and can cancel it', async () => {
+  let state: { address: string | null; pending: null | { address: string; verified: boolean; effectiveAt: number | null } } = { address: 'old@example.invalid', pending: null }
+  const effectiveAt = Date.UTC(2026, 10, 15, 12)
+  const service = client(account(), {
+    'account/notice': () => state,
+    'account/notice/change': () => { state = { ...state, pending: { address: 'new@example.invalid', verified: false, effectiveAt: null } }; return { ok: true } },
+    'account/notice/confirm': () => { state = { ...state, pending: { address: 'new@example.invalid', verified: true, effectiveAt } }; return { ok: true, effectiveAt } },
+    'account/notice/cancel': () => { state = { ...state, pending: null }; return { ok: true } },
+  })
+  render(<RemoteApp />)
+  const summary = await screen.findByText(t('remote.notice.title'))
+  expect(service.post.mock.calls.some(([path]) => String(path).startsWith('account/notice')), 'not read until opened').toBe(false)
+  fireEvent.click(summary)
+  expect(await screen.findByText(/old@example\.invalid/)).toBeTruthy()
+  fireEvent.change(screen.getByLabelText(t('remote.notice.newAddress')), { target: { value: 'new@example.invalid' } })
+  fireEvent.click(screen.getByRole('button', { name: t('remote.notice.send') }))
+  await waitFor(() => expect(service.post).toHaveBeenCalledWith('account/notice/change', { address: 'new@example.invalid' }))
+  const code = await screen.findByLabelText(t('remote.notice.code'))
+  fireEvent.change(code, { target: { value: '12345678' } })
+  fireEvent.click(screen.getByRole('button', { name: t('remote.notice.confirm') }))
+  await waitFor(() => expect(service.post).toHaveBeenCalledWith('account/notice/confirm', { code: '12345678' }))
+  expect(await screen.findByText(new RegExp('2026-11-15'))).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: t('remote.notice.cancel') }))
+  await waitFor(() => expect(service.post).toHaveBeenCalledWith('account/notice/cancel', {}))
+  expect(await screen.findByLabelText(t('remote.notice.newAddress'))).toBeTruthy()
+})
+
+it('a first notice address from a sign-in the account was not made with is refused by name', async () => {
+  client(account(), { 'account/notice': () => ({ address: null, pending: null }),
+    'account/notice/change': () => { throw new RemoteError(403, 'noticeAddressUnbound') } })
+  render(<RemoteApp />)
+  fireEvent.click(await screen.findByText(t('remote.notice.title')))
+  fireEvent.change(await screen.findByLabelText(t('remote.notice.newAddress')), { target: { value: 'new@example.invalid' } })
+  fireEvent.click(screen.getByRole('button', { name: t('remote.notice.send') }))
+  expect((await screen.findByRole('alert')).textContent).toBe(t('remote.notice.unbound'))
+})
+
+it('a wrong notice code is named, and the code box stays for another try', async () => {
+  const pending = { address: 'old@example.invalid', pending: { address: 'new@example.invalid', verified: false, effectiveAt: null } }
+  client(account(), { 'account/notice': () => pending, 'account/notice/confirm': () => { throw new RemoteError(403, 'noticeCodeInvalid') } })
+  render(<RemoteApp />)
+  fireEvent.click(await screen.findByText(t('remote.notice.title')))
+  fireEvent.change(await screen.findByLabelText(t('remote.notice.code')), { target: { value: '00000000' } })
+  fireEvent.click(screen.getByRole('button', { name: t('remote.notice.confirm') }))
+  expect((await screen.findByRole('alert')).textContent).toBe(t('remote.notice.codeInvalid'))
+  expect(screen.getByLabelText(t('remote.notice.code'))).toBeTruthy()
+})

@@ -56,6 +56,7 @@ const NO_HEALTH: SstvHealth = {
   lastUnknownVisUnix: null,
   images: 0,
   lastImageUnix: null,
+  transmitting: false,
 }
 
 const IDLE: SstvState = {
@@ -312,6 +313,25 @@ describe('sstvDecodeStatus — the ladder', () => {
     expect(s.state).toBe('starting')
     expect(s.text).not.toMatch(/Input Device/)
     expect(s.text).not.toMatch(/speaker/)
+  })
+
+  // ⛔ OUR OWN PICTURE IS NOT A FAULT. While we transmit the engine hands the decoder nothing
+  // on purpose (the rig's monitor of our own picture is not a reception), so the line says we are
+  // transmitting — never the capture fault a stale stamp would read as, never "listening" — and
+  // is an ordinary receiver again once the engine stops saying so.
+  it('⛔ says transmitting through our own picture, never a capture fault, and resumes after', () => {
+    const stale = { ...HEARING, lastAudioUnix: NOW - 120, drains: 2000 }
+    const tx = sstvDecodeStatus({ ...stale, transmitting: true }, NOW, ch20)
+    expect(tx.state).toBe('transmitting')
+    expect(tx.text).toMatch(/transmitting/i)
+    expect(tx.text).not.toMatch(/speaker|Input Device/)
+    expect(sstvDecodeStatus({ ...HEARING, transmitting: true }, NOW + 5, ch20).state).toBe(
+      'transmitting',
+    )
+    expect(sstvDecodeStatus({ ...HEARING, transmitting: false }, NOW + 5, ch20).state).toBe(
+      'listening',
+    )
+    expect(sstvDecodeStatus({ ...NO_HEALTH, transmitting: true }, NOW, ch20).state).toBe('off')
   })
 
   it('still calls silence silence once audio has actually arrived', () => {

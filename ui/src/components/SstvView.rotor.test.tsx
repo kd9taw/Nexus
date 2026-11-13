@@ -22,6 +22,7 @@ vi.setConfig({ testTimeout: 15_000 })
 const NO_HEALTH: SstvHealth = {
   armed: false, audioPeak: 0, lastAudioUnix: null, drains: 0, visSeen: 0, lastVisUnix: null,
   unknownVis: 0, lastUnknownVisCode: null, lastUnknownVisUnix: null, images: 0, lastImageUnix: null,
+  transmitting: false,
 }
 const IDLE: SstvState = {
   armed: false, mode: null, linesDone: 0, linesTotal: 0, previewRgbBase64: null, previewWidth: 0,
