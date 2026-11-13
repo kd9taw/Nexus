@@ -1659,8 +1659,12 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     // interpolated into the prompt: a dial reading written inside a translatable sentence is
     // one decimal comma away from naming a different channel.
     const dial = snapRef.current?.radio.dialMhz
+    // The window covers the ISS's worst-case Doppler on each band, since a Satellites hold
+    // steers the dial off the nominal: ±3.7 kHz at 2 m (10 kHz kept), ±11.2 kHz at 70 cm (12.5).
     const downlink =
-      dial == null ? undefined : ISS_SSTV_DOWNLINKS_MHZ.find((f) => Math.abs(dial - f) <= 0.01)
+      dial == null
+        ? undefined
+        : ISS_SSTV_DOWNLINKS_MHZ.find((f) => Math.abs(dial - f) <= (f > 400 ? 0.0125 : 0.01))
     if (downlink != null) {
       // ⚠️ SAME GUARD, WORKING MECHANISM. `window.confirm` is inert in this webview, so on macOS
       // this read false every time and SSTV could not be sent on 145.800 AT ALL. It failed closed,

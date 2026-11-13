@@ -977,6 +977,22 @@ describe('SstvView TX panel', () => {
       expect(sstvSend).not.toHaveBeenCalled()
     })
 
+    // A Satellites hold steers the 70 cm dial up to ~±11.2 kHz off 437.550 near AOS/LOS, past the
+    // 2 m guard's 10 kHz: the guard must still ask there.
+    it('asks on a Doppler-steered 70 cm dial near AOS (437.561)', async () => {
+      const aos = { ...snap, radio: { ...snap.radio, dialMhz: 437.561 } } as AppSnapshot
+      render(
+        <>
+          <SstvView snap={aos} />
+          <ConfirmHost />
+        </>,
+      )
+      const send = await loadPicture()
+      fireEvent.click(send)
+      await screen.findByText(/437\.550 MHz is the ISS SSTV downlink/i)
+      expect(sstvSend).not.toHaveBeenCalled()
+    })
+
     // CONTROL: off the downlink the guard must not fire at all, or "it asked" would prove nothing.
     it('does not ask when the dial is nowhere near 145.800', async () => {
       render(
