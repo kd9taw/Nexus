@@ -71,6 +71,13 @@ export function requireValue(ok: unknown, code = 'accessDenied', status = 403): 
 }
 export const uuid = () => crypto.randomUUID()
 export const secret = () => Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join('')
+/** HMAC-SHA-256 of `value` under `key`, lowercase hex: how trial markers, the licence copy and an
+ *  account's mail domain are kept, so none of them can be reversed by guessing from a public list. */
+export async function hmac(key: string, value: string): Promise<string> {
+  const secret = await crypto.subtle.importKey('raw', new TextEncoder().encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  return Array.from(new Uint8Array(await crypto.subtle.sign('HMAC', secret, new TextEncoder().encode(value))),
+    b => b.toString(16).padStart(2, '0')).join('')
+}
 export async function digest(value: string): Promise<string> {
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))),
     b => b.toString(16).padStart(2, '0')).join('')
@@ -176,10 +183,27 @@ const PUBLIC_MAIL_DOMAINS = new Set(['gmail.com', 'outlook.com', 'hotmail.com', 
   'ymail.com', 'icloud.com', 'me.com', 'mac.com', 'aol.com', 'proton.me', 'protonmail.com', 'pm.me', 'gmx.com',
   'mail.com', 'fastmail.com', 'zoho.com', 'comcast.net', 'att.net', 'sbcglobal.net', 'verizon.net', 'cox.net',
   'charter.net', 'earthlink.net', 'arrl.net'])
-/** The domain of a mailbox (`mailbox()`), or null for a public provider's or an address with none: what
- *  a trial is counted against when the trial identity is required. */
+/** The second-level labels a country's registry sells names under (`co.uk`, `com.au`, `ne.jp`, ...), where
+ *  the domain a person registers is one label deeper. */
+const COUNTRY_SECOND_LEVELS = new Set(['co', 'com', 'net', 'org', 'ac', 'gov', 'edu', 'ne', 'or', 'go', 'gr', 'ltd', 'plc',
+  'me', 'sch', 'nom', 'gob', 'mil', 'id'])
+/** The domain a person registers, for a host name: its last two labels, or three under a country's own
+ *  second level (a two-letter top level whose second label is in COUNTRY_SECOND_LEVELS). So every
+ *  subdomain of one registration (`x1.club.example`, `x2.club.example`, a wildcard mail exchanger's
+ *  endless supply) is the one domain `club.example`, and `shack.co.uk` and `other.co.uk` stay two.
+ *
+ *  A short form of the public-suffix rule, on purpose: the full list is a dependency the Worker would
+ *  carry and keep fresh for one count. Where it is wrong, a multi-label suffix it does not know, it merges
+ *  registrants into one count, so it can refuse more trials on such a domain, never fewer. */
+export function registrableDomain(host: string): string {
+  const labels = host.split('.').filter(Boolean)
+  const keep = labels.length >= 3 && labels[labels.length - 1].length === 2 && COUNTRY_SECOND_LEVELS.has(labels[labels.length - 2]) ? 3 : 2
+  return labels.slice(-keep).join('.')
+}
+/** The registrable domain of a mailbox (`mailbox()`), or null for a public provider's or an address with
+ *  none: what a trial is counted against when the trial identity is required. */
 export function mailDomain(normalised: string): string | null {
-  const at = normalised.lastIndexOf('@'), domain = at < 1 ? '' : normalised.slice(at + 1)
+  const at = normalised.lastIndexOf('@'), domain = at < 1 ? '' : registrableDomain(normalised.slice(at + 1))
   return domain && !PUBLIC_MAIL_DOMAINS.has(domain) ? domain : null
 }
 
@@ -235,6 +259,8 @@ export async function takeNoticeChange(env: RemoteEnv, accountId: string, now: n
     // Taken over, or confirmed against an address that is no longer the notice address: gone either way.
     env.DB.prepare(`DELETE FROM notice_changes WHERE account_id=? AND verified_at IS NOT NULL AND (effective_at<=?
       OR warned_address IS NOT (SELECT notice_address FROM accounts WHERE id=?))`).bind(accountId, now, accountId),
+    // Never confirmed and its code run out: it holds only an address someone typed, perhaps not the owner's.
+    env.DB.prepare('DELETE FROM notice_changes WHERE account_id=? AND verified_at IS NULL AND expires_at<=?').bind(accountId, now),
   ])
 }
 
@@ -372,9 +398,12 @@ async function signedIn(request: Request, env: RemoteEnv, now: number, clientId:
   // same `email:` prefix, so for an address that is already normal the two are identical.
   const emailHash = email ? await digest(`email:${email}`) : null
   const mailboxHash = email ? await digest(`email:${mailbox(email)}`) : null
-  // The mailbox's domain, for the per-domain trial count; none for a public provider's.
-  const domain = email ? mailDomain(mailbox(email)) : null
-  const domainHash = domain ? await digest(`domain:${domain}`) : null
+  // The mailbox's domain, for the per-domain trial count; none for a public provider's. Kept as an HMAC
+  // under the trial key, never a bare hash: domains are few and public (a vanity domain is often the
+  // callsign), so a bare hash gives the domain back to anyone with a copy of the database. Nothing is kept
+  // without the key, and nothing needs it then: the count is read only while the identity is required.
+  const domain = email && env.TRIAL_KEY ? mailDomain(mailbox(email)) : null
+  const domainHash = domain ? await hmac(env.TRIAL_KEY!, `domain:${domain}`) : null
   await env.DB.prepare('INSERT OR IGNORE INTO accounts(id, issuer, subject, email_hash, mailbox_hash, domain_hash) VALUES(?,?,?,?,?,?)')
     .bind(uuid(), env.AUTH0_ISSUER, subject, emailHash, mailboxHash, domainHash).run()
   // Backfill only: an account created before these columns, or before its provider supplied a

@@ -38,7 +38,7 @@ function commandDeadline(entitlement: Entitlement, now: number): number {
   return Math.min(entitlement.expiresAt, now + OPERATION_ENTITLEMENT_MS)
 }
 
-/** THE LEASE OF A LAN-ONLY SESSION (security review 2026-11-12, follow-up 1). Its stream is offered under
+/** THE LEASE OF A LAN-ONLY SESSION, held to the shack's network as its stream is. Its stream is offered under
  *  a lease taken through the relay, before anything shows the session is on the shack's network. So an
  *  acquire is given LAN_LEASE_GRACE_MS to bring a LAN stream up; once the station says that stream is
  *  live the session is proven, and keeps its lease for its life. A device is given LAN_GRACES graces in
