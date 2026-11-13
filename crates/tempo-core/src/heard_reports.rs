@@ -8,7 +8,8 @@
 //!
 //! **The query cursor.** Each PSK Reporter answer carries the last sequence number in its
 //! database; the nowcast's next query sends it back as `lastseqno` so only reports added since
-//! come back. That number is kept here per call ([`HeardReports::last_seqno`]), and the newest
+//! come back. That number is kept here per call ([`HeardReports::last_seqno`]), written with the
+//! answer's reports in one transaction ([`HeardReports::record_answer`]), and the newest
 //! kept report's time ([`HeardReports::newest_time`]) sizes the catch-up query after a launch.
 //!
 //! **What a row holds.** The operator's call as sent, when the report was made (PSK Reporter's
@@ -166,38 +167,24 @@ impl HeardReports {
     /// Keep `reports`, ignoring any already kept. Returns how many were new.
     pub fn record(&mut self, reports: &[HeardReport]) -> rusqlite::Result<usize> {
         let tx = self.conn.transaction()?;
-        let mut added = 0;
-        {
-            let mut insert = tx.prepare_cached(
-                "INSERT OR IGNORE INTO heard_report
-                     (time, my_call, rx_call, rx_grid, band, freq_hz, mode, snr)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            )?;
-            for r in reports {
-                let (my_call, rx_call) = (call_key(&r.my_call), call_key(&r.rx_call));
-                if my_call.is_empty() || rx_call.is_empty() {
-                    continue;
-                }
-                let rx_grid = r
-                    .rx_grid
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|g| !g.is_empty());
-                let mode = r.mode.as_deref().unwrap_or("").trim();
-                // Outside data kept forever: a field longer than any real one skips the row
-                // (never truncated, which could merge two distinct reports into one key).
-                if my_call.len() > MAX_CALL
-                    || rx_call.len() > MAX_CALL
-                    || rx_grid.is_some_and(|g| g.len() > MAX_GRID)
-                    || mode.len() > MAX_MODE
-                    || r.band.len() > MAX_BAND
-                {
-                    continue;
-                }
-                added += insert.execute(params![
-                    r.time, my_call, rx_call, rx_grid, r.band, r.freq_hz, mode, r.snr,
-                ])?;
-            }
+        let added = insert_reports(&tx, reports)?;
+        tx.commit()?;
+        Ok(added)
+    }
+
+    /// Keep one PSK Reporter answer for `my_call`: its `reports`, and its last sequence number
+    /// as the cursor, in one transaction. If the reports cannot be kept the cursor does not
+    /// move, so the next query asks for them again. Returns how many reports were new.
+    pub fn record_answer(
+        &mut self,
+        my_call: &str,
+        reports: &[HeardReport],
+        last_seqno: Option<i64>,
+    ) -> rusqlite::Result<usize> {
+        let tx = self.conn.transaction()?;
+        let added = insert_reports(&tx, reports)?;
+        if let Some(n) = last_seqno {
+            set_cursor(&tx, my_call, n)?;
         }
         tx.commit()?;
         Ok(added)
@@ -220,12 +207,7 @@ impl HeardReports {
 
     /// Remember `seqno` as the last PSK Reporter sequence number seen for `my_call`.
     pub fn set_last_seqno(&mut self, my_call: &str, seqno: i64) -> rusqlite::Result<()> {
-        self.conn.execute(
-            "INSERT INTO pskr_cursor (my_call, last_seqno) VALUES (?1, ?2)
-             ON CONFLICT (my_call) DO UPDATE SET last_seqno = excluded.last_seqno",
-            params![call_key(my_call), seqno],
-        )?;
-        Ok(())
+        set_cursor(&self.conn, my_call, seqno)
     }
 
     /// When the newest kept report for `my_call` was made, if any is kept.
@@ -269,6 +251,52 @@ impl HeardReports {
         })?;
         rows.collect()
     }
+}
+
+/// Insert `reports` within `tx`, ignoring any already kept. Returns how many were new.
+fn insert_reports(tx: &rusqlite::Transaction, reports: &[HeardReport]) -> rusqlite::Result<usize> {
+    let mut added = 0;
+    let mut insert = tx.prepare_cached(
+        "INSERT OR IGNORE INTO heard_report
+                 (time, my_call, rx_call, rx_grid, band, freq_hz, mode, snr)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+    )?;
+    for r in reports {
+        let (my_call, rx_call) = (call_key(&r.my_call), call_key(&r.rx_call));
+        if my_call.is_empty() || rx_call.is_empty() {
+            continue;
+        }
+        let rx_grid = r
+            .rx_grid
+            .as_deref()
+            .map(str::trim)
+            .filter(|g| !g.is_empty());
+        let mode = r.mode.as_deref().unwrap_or("").trim();
+        // Outside data kept forever: a field longer than any real one skips the row
+        // (never truncated, which could merge two distinct reports into one key).
+        if my_call.len() > MAX_CALL
+            || rx_call.len() > MAX_CALL
+            || rx_grid.is_some_and(|g| g.len() > MAX_GRID)
+            || mode.len() > MAX_MODE
+            || r.band.len() > MAX_BAND
+        {
+            continue;
+        }
+        added += insert.execute(params![
+            r.time, my_call, rx_call, rx_grid, r.band, r.freq_hz, mode, r.snr,
+        ])?;
+    }
+    Ok(added)
+}
+
+/// Set `my_call`'s cursor to `seqno`.
+fn set_cursor(conn: &Connection, my_call: &str, seqno: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO pskr_cursor (my_call, last_seqno) VALUES (?1, ?2)
+         ON CONFLICT (my_call) DO UPDATE SET last_seqno = excluded.last_seqno",
+        params![call_key(my_call), seqno],
+    )?;
+    Ok(())
 }
 
 fn call_key(call: &str) -> String {
@@ -494,6 +522,27 @@ mod tests {
         assert_eq!(s.last_seqno("W1AW").unwrap(), Some(74_776_300_000));
         drop(s);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An answer is kept with its cursor in one step: kept, the cursor moves to its number; when
+    /// its reports cannot be written, the cursor stays where it was, so the next query asks for
+    /// them again.
+    #[test]
+    fn the_cursor_moves_only_with_the_answer_kept() {
+        let mut s = HeardReports::open_in_memory().unwrap();
+        let first = [report(1_000, "K1ABC", "20m", None)];
+        assert_eq!(s.record_answer("W1AW", &first, Some(500)).unwrap(), 1);
+        assert_eq!(s.last_seqno("W1AW").unwrap(), Some(500));
+        // An answer without a number keeps its reports and leaves the cursor.
+        s.record_answer("W1AW", &[report(1_100, "K1ABC", "20m", None)], None)
+            .unwrap();
+        assert_eq!(s.last_seqno("W1AW").unwrap(), Some(500));
+
+        // The reports table gone (as a write that fails): the answer is refused whole.
+        s.conn.execute_batch("DROP TABLE heard_report;").unwrap();
+        let later = [report(1_300, "VE3XYZ", "20m", None)];
+        assert!(s.record_answer("W1AW", &later, Some(900)).is_err());
+        assert_eq!(s.last_seqno("W1AW").unwrap(), Some(500));
     }
 
     /// The newest kept time is per call, and `None` when nothing is kept for that call.

@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Nexus keeps the reports of who heard you.** PSK Reporter forgets a report of your signal after about a day. Nexus now keeps every one it fetches, on your computer, so the record of who heard you, when, on which band and mode, and how strong, grows from now on instead of being lost after a day. It asks PSK Reporter nothing extra and sends nothing anywhere.
-- **PSK Reporter: Nexus asks only for new reports and catches up on the day you were away; busy stations no longer lose reports past 100.** How often Nexus asks is unchanged.
+- **PSK Reporter: Nexus asks only for new reports and catches up on the time you were away.** The first query after Nexus starts reaches back to the newest report it already has, up to the 24 hours PSK Reporter allows. How often Nexus asks is unchanged.
 
 ### Fixed
 - **The prompt to log a contact no longer scrolls sideways.** Its two columns of boxes were wider than the popup at every window size and UI scale, so the right-hand boxes ran past its edge and the popup scrolled sideways by about 80 pixels. The boxes now share the popup's width. Log and Stop TX stay where they were.

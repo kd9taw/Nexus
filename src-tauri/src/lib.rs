@@ -2658,14 +2658,12 @@ fn poll_pskr_with(
         );
     }
     if let Some(Ok(mut s)) = store.map(Mutex::lock) {
-        // PSK Reporter keeps a report for about a day; keep the ones that heard us.
-        if let Err(e) = s.record(&heard_report_rows(mycall, &reply.spots)) {
+        // PSK Reporter keeps a report for about a day; keep the ones that heard us. The cursor
+        // moves past this answer only with its reports kept (one transaction): after a failed
+        // write the next query asks for them again.
+        let rows = heard_report_rows(mycall, &reply.spots);
+        if let Err(e) = s.record_answer(mycall, &rows, reply.last_seqno) {
             eprintln!("[heard-reports] a write failed: {e}");
-        }
-        if let Some(n) = reply.last_seqno {
-            if let Err(e) = s.set_last_seqno(mycall, n) {
-                eprintln!("[heard-reports] the query cursor was not kept: {e}");
-            }
         }
     }
     Some(feed.view().to_vec())
