@@ -6825,7 +6825,7 @@ export const DE: PartialCatalog = {
   "settings.rtty.rxAutoArm.label": "Empfang starten, wenn RTTY geöffnet wird",
   "settings.rtty.rxAutoArm.hint": "Der RTTY-Bildschirm startet den Dekoder, sobald er geöffnet wird — ein Signal abstimmen, und der Text läuft ein, ganz ohne Einrichtung. Abschalten, um den Empfänger von Hand scharf zu schalten (die Schaltfläche zum Scharfschalten im Fenster mit dem dekodierten Text). Das schaltet nur den EMPFÄNGER scharf — gesendet wird nie automatisch.",
   "settings.rtty.overNewlines.label": "Jeden RTTY-Durchgang auf einer neuen Zeile beginnen und beenden",
-  "settings.rtty.overNewlines.hint": "Sendet vor und nach jedem Durchgang — getippt, per F-Taste oder per automatischem Anruf — einen Wagenrücklauf und Zeilenvorschub, damit der Bildschirm der Gegenstation und die Contest-Software, die ihn liest, jeden Durchgang in einer eigenen Zeile bekommt. Eine Nachricht, die schon mit {NL} beginnt oder endet, bekommt dort eine neue Zeile, nicht zwei. Aus sendet genau, was Sie getippt haben.",
+  "settings.rtty.overNewlines.hint": "Sendet vor und nach jedem Durchgang — getippt, per F-Taste oder per automatischem Anruf — einen Wagenrücklauf und Zeilenvorschub, damit der Bildschirm der Gegenstation und die Contest-Software, die ihn liest, jeden Durchgang in einer eigenen Zeile bekommt. Eine Nachricht, die schon mit {NL} beginnt oder endet, bekommt dort eine neue Zeile, nicht zwei. Aus fügt keine eigenen neuen Zeilen hinzu: eine getippte Zeile geht wie getippt hinaus, und eine F-Tasten-Nachricht endet weiterhin mit ihrem einen Leerzeichen.",
   "settings.rtty.keying.title": "Tastung",
   "settings.rtty.backend.label": "Tastmethode",
   "settings.rtty.backend.afsk": "AFSK — Soundkartentöne über das Gerät in LSB (Standard)",

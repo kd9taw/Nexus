@@ -9977,7 +9977,7 @@ export const EN = {
     'The RTTY screen starts the decoder as soon as you open it — tune a signal and the text prints, no setup. Turn this off to arm the receiver by hand (the Arm RX button in the decoded-text pane). This arms the RECEIVER only — transmitting is never armed for you.',
   'settings.rtty.overNewlines.label': 'Start and end each RTTY over on a new line',
   'settings.rtty.overNewlines.hint':
-    "Sends a carriage return and line feed before and after every over — typed, from an F-key or by Auto call — so the other station's screen, and the contest software reading it, gets each over on a line of its own. A message that already starts or ends with {NL} gets one new line there, not two. Off sends exactly what you typed.",
+    "Sends a carriage return and line feed before and after every over — typed, from an F-key or by Auto call — so the other station's screen, and the contest software reading it, gets each over on a line of its own. A message that already starts or ends with {NL} gets one new line there, not two. Off adds no new lines of its own: a typed line goes as typed, and an F-key message still ends in its one space.",
   'settings.rtty.keying.title': 'Keying',
   'settings.rtty.backend.label': 'Keying backend',
   'settings.rtty.backend.afsk': 'AFSK — soundcard tones through the rig in LSB (default)',

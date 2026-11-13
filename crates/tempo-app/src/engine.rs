@@ -39204,6 +39204,19 @@ mod tests {
         );
         e.rtty_stop();
 
+        // ⛔ LIVE KEYSTROKES ARE NEVER FRAMED. Continuous TX's typing (`rtty_type`) is one
+        // transmission, not a series of overs: a CR LF per keystroke would put every typed
+        // word on a line of its own.
+        e.set_rtty_latched(true).unwrap();
+        e.rtty_type("CQ").unwrap();
+        e.rtty_type(" DE").unwrap();
+        assert_eq!(
+            e.poll_rtty_stream(64),
+            RttyStreamTick::Text("CQ DE".to_string()),
+            "a live keystroke was framed"
+        );
+        e.rtty_stop();
+
         // Off: nothing is added anywhere.
         e.settings.rtty_over_newlines = false;
         assert_eq!(sent(&mut e, "CQ TEST W9XYZ "), "CQ TEST W9XYZ ");

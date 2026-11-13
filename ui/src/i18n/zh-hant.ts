@@ -9166,7 +9166,7 @@ export const ZH_HANT: PartialCatalog = {
   "settings.rtty.rxAutoArm.label": "開啟 RTTY 時開始接收",
   "settings.rtty.rxAutoArm.hint": "RTTY 介面一開啟就啟動解碼器 — 調到某個訊號上文字就會列印，無需設定。關閉此項則需手動啟用接收（解碼文字窗格中的「啟用接收」按鈕）。這只會啟用接收機 — 發射絕不會替你啟用。",
   "settings.rtty.overNewlines.label": "每次 RTTY 發送都以新行開始和結束",
-  "settings.rtty.overNewlines.hint": "在每次發送（鍵入、F 鍵或自動呼叫）的前後發送歸位和換行，讓對方電台的螢幕以及讀取它的競賽軟體把每次發送單獨顯示在一行。已經以 {NL} 開始或結束的訊息，在那裡只換一行，不會換兩行。關閉後按你鍵入的原樣發送。",
+  "settings.rtty.overNewlines.hint": "在每次發送（鍵入、F 鍵或自動呼叫）的前後發送歸位和換行，讓對方電台的螢幕以及讀取它的競賽軟體把每次發送單獨顯示在一行。已經以 {NL} 開始或結束的訊息，在那裡只換一行，不會換兩行。關閉後不額外加入換行：鍵入的行原樣發送，F 鍵訊息仍以一個空格結尾。",
   "settings.rtty.keying.title": "鍵控",
   "settings.rtty.backend.label": "鍵控後端",
   "settings.rtty.backend.afsk": "AFSK — 音效卡音調經電台以 LSB 傳送（預設）",

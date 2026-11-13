@@ -9592,7 +9592,7 @@ export const IT: PartialCatalog = {
   "settings.rtty.rxAutoArm.label": "Inizia a ricevere all'apertura di RTTY",
   "settings.rtty.rxAutoArm.hint": "La schermata RTTY avvia il decoder appena la apri — sintonizza un segnale e il testo viene stampato, senza configurazione. Disattiva questa opzione per armare il ricevitore a mano (il pulsante Arma RX nel riquadro del testo decodificato). Questo arma solo il RICEVITORE — la trasmissione non viene mai armata per te.",
   "settings.rtty.overNewlines.label": "Inizia e termina ogni passaggio RTTY su una nuova riga",
-  "settings.rtty.overNewlines.hint": "Invia un ritorno a capo e un avanzamento riga prima e dopo ogni passaggio — scritto, da un tasto F o con la chiamata automatica — così lo schermo dell'altra stazione, e il software da contest che lo legge, riceve ogni passaggio su una riga a sé. Un messaggio che inizia o finisce già con {NL} riceve lì una sola nuova riga, non due. Disattivato invia esattamente ciò che hai scritto.",
+  "settings.rtty.overNewlines.hint": "Invia un ritorno a capo e un avanzamento riga prima e dopo ogni passaggio — scritto, da un tasto F o con la chiamata automatica — così lo schermo dell'altra stazione, e il software da contest che lo legge, riceve ogni passaggio su una riga a sé. Un messaggio che inizia o finisce già con {NL} riceve lì una sola nuova riga, non due. Disattivato non aggiunge nuove righe: una riga scritta parte così com'è, e un messaggio da tasto F termina comunque con il suo spazio.",
   "settings.rtty.keying.title": "Manipolazione",
   "settings.rtty.backend.label": "Metodo di manipolazione",
   "settings.rtty.backend.afsk": "AFSK — toni della scheda audio attraverso la radio in LSB (predefinito)",

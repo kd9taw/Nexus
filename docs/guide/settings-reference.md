@@ -1382,7 +1382,8 @@ Comma-separated chip lists for the quick text you fire from each surface:
   typed and sent with Enter, from an F-key, or by Auto call — so it arrives on a
   line of its own on the other station's screen, where contest software picks the
   call out more easily. A message that already starts or ends with `{NL}` gets one
-  new line there, not two. Turn it off to send exactly what you typed. Continuous
+  new line there, not two. Turn it off and Nexus adds no new lines of its own:
+  a typed line goes out as typed, and an F-key message still ends in its one space. Continuous
   TX is one long transmission rather than a series of overs, so this does not
   touch what you type into it; an F-key pressed while it is up still starts a new
   line.

@@ -186,7 +186,7 @@ a macro, a line you type in the compose bar, an Auto call over — also starts a
 ends on a new line, so your call starts a line on their screen; that is
 **Start and end each RTTY over on a new line** in
 [Settings ▸ Digital ▸ RTTY](settings-reference.md#rtty), on by default. Turn it off
-and what you type goes out exactly as typed.
+and Nexus adds no new lines of its own; a line you type goes out as typed.
 
 The tokens: `{MYCALL}` is your callsign from
 [Settings ▸ Station](settings-reference.md#station); `{CALL}` is the Their-call field;
