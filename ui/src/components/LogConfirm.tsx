@@ -6,6 +6,7 @@ import { useLayoutEffect, useRef, useState, type CSSProperties, type RefObject }
 import type { LoggedQso } from '../types'
 import { t } from '../i18n'
 import { FtStopControl } from './FtStopControl'
+import { STOP_CONTROL } from './StopLayer'
 import { upperTyped } from '../typedInput'
 import { IotaPrefillField, iotaInvalid, iotaToLog, useIotaIslandPick, useIotaPrefill, type IotaOfferData } from './Iota'
 import { withIotaIsland } from '../features/iotaGroups'
@@ -75,22 +76,29 @@ interface Rect {
   bottom: number
 }
 
+/** Where the card stands: the backdrop's padding is the window around the room it keeps, and the card's own box. */
+interface Placement {
+  backdrop: CSSProperties
+  card: CSSProperties
+}
+
 /**
  * THE CARD STANDS CLEAR OF EVERY STOP CONTROL (2026-11-13). Centred and capped to the window's height, at 1366×768
  * with Windows or Nexus at 175 % the card stood over each cockpit's Stop TX (and RTTY's, PSK's, JTTY's and SSTV's own
  * stops). The stop layer (StopLayer) draws a stop's mirror over whatever covers it, so the mirror stood over the
  * card's own boxes, and a click meant for one of them was a Stop TX (measured in Chrome on every cockpit).
  *
- * So while the card is open it measures every stop control on screen (`[data-stop-control]`, never the card's own
- * and never a mirror) and stands in the largest room of the window that holds none of them: above the highest stop,
- * below the lowest, left of the leftmost, right of the rightmost, or between two of them side by side. The room
- * chosen is the one that shows the most of the card; the card is centred in it, no wider than its own 420 px and no
- * taller than the room (it scrolls inside, as it did under its window-height cap). With no stop on screen (the
- * Logbook, Settings, a test without layout) nothing is set and the card is centred as before. Re-measured when the
- * window or the card's content changes size.
+ * So while the card is open it measures every stop control on screen (`STOP_CONTROL`, never the card's own and never a
+ * mirror) and keeps to the largest room of the window that holds none of them: above the highest stop, below the
+ * lowest, left of the leftmost, right of the rightmost, or between two of them side by side. The room chosen gives the
+ * card the most area: its width up to its own 420 px, the room's whole height. Not its content's height: a card that
+ * grows (the IOTA box's island picker) never hops to another room. The room is the backdrop's padding, so the backdrop's
+ * own centring stands the card in it whatever its content does; the card is no wider than the room and no taller (it
+ * scrolls inside, as it did under its window-height cap). With no stop on screen (the Logbook, Settings, a test with
+ * no layout) nothing is set and the card is centred as before. Measured again when the window changes size.
  */
-function useClearOfStops(backdrop: RefObject<HTMLDivElement | null>, card: RefObject<HTMLDivElement | null>): CSSProperties | undefined {
-  const [place, setPlace] = useState<CSSProperties | undefined>(undefined)
+function useClearOfStops(backdrop: RefObject<HTMLDivElement | null>, card: RefObject<HTMLDivElement | null>): Placement | undefined {
+  const [place, setPlace] = useState<Placement | undefined>(undefined)
   useLayoutEffect(() => {
     const b = backdrop.current
     const c = card.current
@@ -99,7 +107,7 @@ function useClearOfStops(backdrop: RefObject<HTMLDivElement | null>, card: RefOb
       const win = b.getBoundingClientRect()
       // The app's zoom: the card is laid out in CSS px inside `.app`, the rects are the window's own.
       const z = b.offsetWidth > 0 ? win.width / b.offsetWidth : 1
-      const stops: Rect[] = [...document.querySelectorAll<HTMLElement>('[data-stop-control]')]
+      const stops: Rect[] = [...document.querySelectorAll<HTMLElement>(STOP_CONTROL)]
         .filter((e) => !c.contains(e) && !e.closest('[data-stop-mirror], [hidden]'))
         .map((e) => e.getBoundingClientRect())
         .filter((r) => r.width > 0 && r.height > 0 && r.right > win.left && r.left < win.right && r.bottom > win.top && r.top < win.bottom)
@@ -125,27 +133,24 @@ function useClearOfStops(backdrop: RefObject<HTMLDivElement | null>, card: RefOb
         if (r.left - g > reach + g) rooms.push({ left: reach + g, top: T, right: r.left - g, bottom: B })
         reach = Math.max(reach, r.right)
       }
-      // How much of the card each room shows: its own width (420 px) and its content's height, as far as the room allows.
       const wantW = 420 * z
-      const wantH = c.scrollHeight * z
-      const shown = (r: Rect) => Math.max(0, Math.min(r.right - r.left, wantW)) * Math.max(0, Math.min(r.bottom - r.top, wantH))
-      const best = rooms.reduce((a, d) => (shown(d) > shown(a) ? d : a))
-      const w = Math.min(best.right - best.left, wantW)
-      const h = Math.min(best.bottom - best.top, wantH)
-      const next: CSSProperties = {
-        position: 'absolute',
-        left: Math.round((best.left - win.left + (best.right - best.left - w) / 2) / z),
-        top: Math.round((best.top - win.top + (best.bottom - best.top - h) / 2) / z),
-        width: Math.floor(w / z),
-        maxHeight: Math.floor((best.bottom - best.top) / z),
+      const area = (r: Rect) => Math.max(0, Math.min(r.right - r.left, wantW)) * Math.max(0, r.bottom - r.top)
+      const best = rooms.reduce((a, d) => (area(d) > area(a) ? d : a))
+      const px = (v: number) => Math.max(0, Math.floor(v / z))
+      const next: Placement = {
+        backdrop: {
+          paddingLeft: px(best.left - win.left),
+          paddingTop: px(best.top - win.top),
+          paddingRight: px(win.right - best.right),
+          paddingBottom: px(win.bottom - best.bottom),
+        },
+        card: { width: px(Math.min(best.right - best.left, wantW)), maxHeight: px(best.bottom - best.top) },
       }
       setPlace((p) => (p && JSON.stringify(p) === JSON.stringify(next) ? p : next))
     }
     measure()
-    // The window, and the card's own parts (a line that wraps, the IOTA box's note) change what it needs.
     const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
     ro?.observe(b)
-    for (const part of c.children) ro?.observe(part)
     window.addEventListener('resize', measure)
     return () => {
       ro?.disconnect()
@@ -259,8 +264,8 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
   }, [])
 
   return (
-    <div ref={backdropRef} className="logconfirm-backdrop" role="dialog" aria-modal="true" aria-label={t('logPrompt.aria')}>
-      <div ref={cardRef} className="logconfirm log-prompt" style={place}>
+    <div ref={backdropRef} className="logconfirm-backdrop" role="dialog" aria-modal="true" aria-label={t('logPrompt.aria')} style={place?.backdrop}>
+      <div ref={cardRef} className="logconfirm log-prompt" style={place?.card}>
         <div className="logconfirm-head">
           <h2>{t('logPrompt.title')}</h2>
           <span className="logconfirm-sub">

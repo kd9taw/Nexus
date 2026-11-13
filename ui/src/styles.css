@@ -9614,6 +9614,10 @@ select optgroup {
      (same class as `.mv-packs`; --vh-eff because raw vh is zoom-blind). */
   max-height: calc(0.9 * var(--vh-eff, 100vh));
   overflow-y: auto;
+  /* The scrollbar's room is kept whether or not the card scrolls (2026-11-13): placed clear of the stop controls
+     (LogConfirm), the card is as tall as its room, so a field that grows it (the IOTA box's island picker) turned the
+     scrollbar on and every box narrowed 5 px at 900×600 at 175 % (stopabove-probe). */
+  scrollbar-gutter: stable;
   padding: var(--space-5);
   border-radius: var(--radius);
   border: 1px solid var(--border);
