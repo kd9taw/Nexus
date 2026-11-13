@@ -2413,7 +2413,7 @@ mod tests {
             );
             assert!(page.rtc.is_connected());
             // The picture crosses the relay: once the statistics have read the selected pair, the
-            // path is the relay's, which the lower-bandwidth mode bounds (operator ruling 1410).
+            // path is the relay's, which the lower-bandwidth mode bounds (operator decision).
             travel(
                 &mut page,
                 &mut station,

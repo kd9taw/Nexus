@@ -5691,7 +5691,7 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.remoteStream.display')}</span>
               </div>
             )}
-            {/* Operator ruling 1410: the stream's lower-bandwidth mode through the TURN relay. OFF by
+            {/* Operator decision: the stream's lower-bandwidth mode through the TURN relay. OFF by
                 default; only a relayed path's picture bit rate changes (tempo_stream picture.rs
                 Bound::on), never receive audio, a direct path or the shack's network. Not
                 station-only (no data-setting): it neither transmits, guards a transmission nor

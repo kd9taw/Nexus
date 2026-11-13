@@ -645,7 +645,7 @@ pub(super) struct Streaming {
     /// is read again next tick.
     switch_checked: Instant,
     /// The operator's lower-bandwidth mode through the relay (`Settings::remote_relay_lighter`,
-    /// operator ruling 1410): read when the session starts and again with the switch, once a
+    /// operator decision): read when the session starts and again with the switch, once a
     /// second, so a running stream follows it. It lowers a relayed picture's ceiling only
     /// (`tempo_stream::video::picture::Bound::on`).
     relay_lighter: bool,
