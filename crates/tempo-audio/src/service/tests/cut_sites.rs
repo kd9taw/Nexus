@@ -25,12 +25,13 @@
 //!
 //! The hold-extend sites (`extend_hold`) are pinned at the end: an over keyed under a longer hold
 //! never shortens it. One pin per site: the CW word, the RTTY stream and message on AFSK and on
-//! FSK, the PSK stream, and (beside their scaffolding) the Remote microphone's key in service.rs,
-//! a TCI program's in `tci_server.rs` and the computer microphone's in `pc_mic.rs`; each was
-//! checked to go red when its own site overwrites the hold instead. The PSK message and the voice
-//! keyer are pinned too. APRS sets its hold rather than extending one, and only ever with no hold
-//! standing (its guard), so the set never meets an existing hold to replace: that is what is
-//! pinned for it.
+//! FSK, the PSK stream, the RTTY and PSK streams' clean ends, and (beside their scaffolding) the
+//! Remote microphone's key in service.rs, a TCI program's in `tci_server.rs`, the computer
+//! microphone's in `pc_mic.rs` and JTTY's frames in `jtty_transmit.rs`; each was checked to go red
+//! when its own site overwrites the hold instead. The PSK message and the voice keyer are pinned
+//! too. APRS sets its hold rather than extending one, and SSTV extends one, but each only ever
+//! with no hold standing (its guard), so neither meets an existing hold to replace: that guard is
+//! what is pinned for them.
 
 use super::*;
 
@@ -754,5 +755,147 @@ fn a_psk_stream_never_shortens_a_longer_hold() {
             e.psk_type("CQ CQ").unwrap();
         },
         played,
+    );
+}
+
+// ---- (e) the stream ends and SSTV ----
+//
+// A latched RTTY or PSK stream that ends cleanly (the latch dropped, everything typed sent) closes
+// with one last character or ramp and extends the hold over it (`extend_hold`, in each stream's
+// `Idle` arm). Keyed under a longer hold, that close must leave the hold where it stood. The
+// CONTROL: under a short hold, the hold right after the close is the close's own end
+// (`busy_until + tail`), which says the site ran.
+
+/// The latched stream `setup` starts on a VOX rig, its hold at `hold` from the first tick; at
+/// 400 ms `stop` drops the latch and the loop runs on to `until`. The hold after each tick, and the
+/// hold and the stream's own end (`busy` + the tail) right after the tick that closed it.
+fn holds_through_stream_end(
+    hold: f64,
+    until: f64,
+    setup: impl FnOnce(&mut Engine),
+    stop: impl FnOnce(&mut Engine),
+    open: impl Fn(&RadioLoop) -> bool,
+    busy: impl Fn(&RadioLoop) -> f64,
+) -> (Vec<Option<f64>>, Option<(Option<f64>, f64)>) {
+    let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+    {
+        let mut e = engine.lock().unwrap();
+        e.set_license_class("extra");
+        setup(&mut e);
+    }
+    let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+    state.tx_until_ms = Some(hold);
+    let mut t = 100.0;
+    step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 400.0);
+    assert!(
+        open(&state),
+        "premise: the stream is open before its latch drops"
+    );
+    stop(&mut engine.lock().unwrap());
+    let mut holds = Vec::new();
+    let mut closed = None;
+    while t <= until {
+        let at = t;
+        let was_open = open(&state);
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, at);
+        holds.push(state.tx_until_ms);
+        if was_open && !open(&state) {
+            closed = Some((state.tx_until_ms, busy(&state) + crate::slot::TX_TAIL_MS));
+        }
+    }
+    (holds, closed)
+}
+
+/// The pin and its control for one stream's end.
+fn assert_stream_end_never_shortens(
+    site: &str,
+    setup: impl Fn(&mut Engine),
+    stop: impl Fn(&mut Engine),
+    open: impl Fn(&RadioLoop) -> bool,
+    busy: impl Fn(&RadioLoop) -> f64,
+) {
+    const UNTIL: f64 = 4_000.0;
+    let (holds, closed) = holds_through_stream_end(LONG_HOLD, UNTIL, &setup, &stop, &open, &busy);
+    assert!(
+        closed.is_some(),
+        "{site}: premise: the stream closed under the hold"
+    );
+    if let Some(i) = holds.iter().position(|h| *h != Some(LONG_HOLD)) {
+        panic!(
+            "{site}: the longer hold was shortened to {:?} at the tick at {} ms",
+            holds[i],
+            420.0 + 20.0 * i as f64
+        );
+    }
+    let (_, closed) = holds_through_stream_end(150.0, UNTIL, &setup, &stop, &open, &busy);
+    let (hold, end) = closed.unwrap_or_else(|| panic!("{site}: control: the stream never closed"));
+    assert_eq!(
+        hold,
+        Some(end),
+        "{site}: control: under a short hold the close extends it to its own end"
+    );
+}
+
+/// RTTY typed live on the soundcard, the latch dropped: the closing diddle extends the hold.
+#[test]
+fn an_rtty_stream_end_never_shortens_a_longer_hold() {
+    assert_stream_end_never_shortens(
+        "RTTY stream end",
+        |e| {
+            e.set_operating_mode("rtty", false);
+            e.set_rtty_latched(true).unwrap();
+            e.rtty_type("CQ").unwrap();
+        },
+        |e| e.set_rtty_latched(false).unwrap(),
+        |s| s.rtty_stream.is_some(),
+        |s| s.rtty_busy_until,
+    );
+}
+
+/// PSK typed live, the latch dropped: the shaped key-down extends the hold.
+#[test]
+fn a_psk_stream_end_never_shortens_a_longer_hold() {
+    assert_stream_end_never_shortens(
+        "PSK stream end",
+        |e| {
+            e.set_operating_mode("keyboard", false);
+            e.set_psk_latched(true).unwrap();
+            e.psk_type("CQ").unwrap();
+        },
+        |e| e.set_psk_latched(false).unwrap(),
+        |s| s.psk_stream.is_some(),
+        |s| s.psk_busy_until,
+    );
+}
+
+/// SSTV extends its hold (`now + lead + picture + tail`) but starts a picture only with no hold
+/// standing (its idle backstop), so, like APRS, the extend never meets a hold to keep: a picture
+/// queued under a hold waits and leaves the hold as it was; with none, the hold is the picture's
+/// own end. Writing the extend as an overwrite therefore changes nothing this can see; what is
+/// pinned is the guard that makes the two the same.
+#[test]
+fn an_sstv_picture_starts_only_when_no_hold_stands() {
+    let mut s = sstv_scene();
+    s.state.tx_until_ms = Some(LONG_HOLD);
+    s.run_to(500.0);
+    assert!(
+        s.state.sstv_feed.is_none(),
+        "the picture started under a hold"
+    );
+    assert!(!s.rig.keyed, "the picture keyed under a hold");
+    assert_eq!(s.state.tx_until_ms, Some(LONG_HOLD), "the hold was changed");
+    // The hold gone, the picture keys and holds to its end.
+    s.state.tx_until_ms = None;
+    let at = s.t;
+    s.tick();
+    assert!(s.rig.keyed, "control: the picture keys with no hold");
+    assert!(
+        s.state.sstv_feed.is_some(),
+        "control: the picture is feeding"
+    );
+    assert_eq!(
+        s.state.tx_until_ms,
+        Some(at + 60_000.0 + crate::slot::TX_TAIL_MS),
+        "the picture's hold is its own end and the tail"
     );
 }
