@@ -789,7 +789,8 @@ test('the notice address changes only through a code mailed to it, after a wait,
     assert.ok(confirmed.effectiveAt >= Date.now() + 47 * 3600000 && confirmed.effectiveAt <= Date.now() + 48 * 3600000, 'forty-eight hours from now')
     const warned = sent.at(-1)
     assert.equal(warned.to, owner.email, 'the old address is told of the change')
-    assert.match(warned.text, new RegExp(next.replace(/[.]/g, '\\.')))
+    assert.ok(warned.text.includes(next.replace('@', '[at]').replace(/\./g, '[.]')), 'the new address, written so no mail program makes it a link')
+    assert.ok(!warned.text.includes(next), 'never as it was typed')
     assert.match(warned.text, /cancel/i)
     // During the wait the notices still go to the old address.
     const during = await enrol(owner, shack.stationId)
@@ -848,6 +849,7 @@ test('a first notice address: the bound address is captured, warned and waited o
   app = rt
   try {
     const owner = await person()
+    await bind(owner)
     assert.deepEqual((await owner.page.post('account/notice')).value, { address: null, pending: null }, 'no notice yet')
     const next = `first-${crypto.randomUUID()}@example.invalid`
     await owner.page.post('account/notice/change', { address: next })
@@ -858,6 +860,7 @@ test('a first notice address: the bound address is captured, warned and waited o
     assert.equal(sent.at(-1).to, owner.email, 'and the bound address is warned')
     // A sign-in carrying another address than the account was made with, on an account with no notice yet.
     const other = await person()
+    await bind(other)
     const moved = app.client(await app.token(other.subject, { email: `moved-${crypto.randomUUID()}@example.invalid`, email_verified: true }))
     const before = sent.length
     assert.equal((await moved.post('account/notice/change', { address: `hijack-${crypto.randomUUID()}@example.invalid` }, 403)).value.error, 'noticeAddressUnbound')
@@ -878,6 +881,7 @@ test('a notice change replaces only the address that was warned; one that moved 
   app = rt
   try {
     const owner = await person(), next = `next-${crypto.randomUUID()}@example.invalid`
+    await bind(owner)
     await owner.page.post('account/notice/change', { address: next })
     await owner.page.post('account/notice/confirm', { code: /\b(\d{8})\b/.exec(sent.at(-1).text)[1] })
     // The address moved by some other way during the wait.
@@ -885,6 +889,33 @@ test('a notice change replaces only the address that was warned; one that moved 
     await rt.db.prepare('UPDATE notice_changes SET effective_at=? WHERE account_id=?').bind(Date.now() - 1000, owner.accountId).run()
     assert.deepEqual((await owner.page.post('account/notice')).value, { address: 'elsewhere@example.invalid', pending: null },
       'the change is dropped, and the address nobody warned is not replaced')
+  } finally {
+    app = main
+    await rt.mf.dispose()
+  }
+})
+
+// Only a station's owner gets "device added" notices, so only an account that owns a station may have a
+// code mailed anywhere: otherwise any new account could use the service's sender to mail strangers. The
+// address is held to plain mailbox characters, and the warning to the old address writes the new one so
+// no mail program turns it into a link.
+test('a notice code goes only to an owner of a station, at a plain address', async () => {
+  const main = app, sent = []
+  const rt = await runtime({ bindings: NOTICE_BINDINGS, outbound: async request => { sent.push((await request.json()).to); return Response.json({ id: 'ok' }) } })
+  app = rt
+  try {
+    const stranger = await person()
+    assert.equal((await stranger.page.post('account/notice/change', { address: 'someone@example.invalid' }, 404)).value.error, 'stationUnavailable')
+    assert.deepEqual(sent, [], 'an account with no station mails nobody')
+    const owner = await person()
+    await bind(owner)
+    for (const address of ['Name <x@example.invalid>', '"x"@example.invalid', 'x@example.invalid?subject=hi', 'x@exa:mple.invalid',
+      'x<b>@example.invalid', 'x@example', 'x@-.invalid/path', 'ü@example.invalid', 'x@example..invalid', 'x y@example.invalid']) {
+      assert.equal((await owner.page.post('account/notice/change', { address }, 400)).value.error, 'invalidRequest', address)
+    }
+    assert.deepEqual(sent, [])
+    await owner.page.post('account/notice/change', { address: 'Op.Name+remote_1%x@Mail-1.Example.invalid' })
+    assert.deepEqual(sent, ['op.name+remote_1%x@mail-1.example.invalid'], 'a plain address, lower-cased')
   } finally {
     app = main
     await rt.mf.dispose()

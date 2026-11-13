@@ -18,6 +18,12 @@ function account(plan?: Plan): AccountSession {
     entitlement: { accountId, enabled: true, expiresAt: now + 86400000, state: 'active', startedAt: now - 3600000,
       source: 'trial', access: 'internet', ...(plan ? { plan } : {}) } }
 }
+/** An account that owns a station: only an owner gets "device added" notices, so only one is offered the notice address. */
+function owning(): AccountSession {
+  const value = account()
+  value.stations.push({ id: crypto.randomUUID(), name: 'Home', device: null } as AccountSession['stations'][number])
+  return value
+}
 const subscription = (status: string): Plan => ({ kind: 'subscription', status, periodEnd: Date.now() + 30 * 86400000, renews: status === 'active' })
 
 function client(value: AccountSession, answers: Record<string, () => unknown> = {}) {
@@ -97,7 +103,7 @@ it('downloads the account\'s copy as a JSON file', async () => {
 it('changes the notice address through a code, then shows the wait and can cancel it', async () => {
   let state: { address: string | null; pending: null | { address: string; verified: boolean; effectiveAt: number | null } } = { address: 'old@example.invalid', pending: null }
   const effectiveAt = Date.UTC(2026, 10, 15, 12)
-  const service = client(account(), {
+  const service = client(owning(), {
     'account/notice': () => state,
     'account/notice/change': () => { state = { ...state, pending: { address: 'new@example.invalid', verified: false, effectiveAt: null } }; return { ok: true } },
     'account/notice/confirm': () => { state = { ...state, pending: { address: 'new@example.invalid', verified: true, effectiveAt } }; return { ok: true, effectiveAt } },
@@ -122,7 +128,7 @@ it('changes the notice address through a code, then shows the wait and can cance
 })
 
 it('a first notice address from a sign-in the account was not made with is refused by name', async () => {
-  client(account(), { 'account/notice': () => ({ address: null, pending: null }),
+  client(owning(), { 'account/notice': () => ({ address: null, pending: null }),
     'account/notice/change': () => { throw new RemoteError(403, 'noticeAddressUnbound') } })
   render(<RemoteApp />)
   fireEvent.click(await screen.findByText(t('remote.notice.title')))
@@ -133,11 +139,19 @@ it('a first notice address from a sign-in the account was not made with is refus
 
 it('a wrong notice code is named, and the code box stays for another try', async () => {
   const pending = { address: 'old@example.invalid', pending: { address: 'new@example.invalid', verified: false, effectiveAt: null } }
-  client(account(), { 'account/notice': () => pending, 'account/notice/confirm': () => { throw new RemoteError(403, 'noticeCodeInvalid') } })
+  client(owning(), { 'account/notice': () => pending, 'account/notice/confirm': () => { throw new RemoteError(403, 'noticeCodeInvalid') } })
   render(<RemoteApp />)
   fireEvent.click(await screen.findByText(t('remote.notice.title')))
   fireEvent.change(await screen.findByLabelText(t('remote.notice.code')), { target: { value: '00000000' } })
   fireEvent.click(screen.getByRole('button', { name: t('remote.notice.confirm') }))
   expect((await screen.findByRole('alert')).textContent).toBe(t('remote.notice.codeInvalid'))
   expect(screen.getByLabelText(t('remote.notice.code'))).toBeTruthy()
+})
+
+it('an account with no station of its own is not offered the notice address', async () => {
+  const service = client(account())
+  render(<RemoteApp />)
+  await screen.findByText(t('remote.account.export'))
+  expect(screen.queryByText(t('remote.notice.title'))).toBeNull()
+  expect(service.post.mock.calls.some(([path]) => String(path).startsWith('account/notice'))).toBe(false)
 })

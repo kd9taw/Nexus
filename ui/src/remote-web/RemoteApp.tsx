@@ -527,7 +527,8 @@ export function RemoteApp() {
           <div className="remote-actions">
             <button className="remote-button" disabled={busy} onClick={downloadCopy}>{t('remote.account.export')}</button>
           </div>
-          <NoticeAddress client={client} busy={busy} act={act} />
+          {/* Only a station's owner gets "device added" notices (the session lists the account's own stations). */}
+          {session.stations.length > 0 && <NoticeAddress client={client} busy={busy} act={act} />}
           {/* The confirmation is typed into the page, never a browser dialog. A live subscription ends with
               the account, at once and with no refund of the unused part: said before the press. */}
           <details><summary>{t('remote.account.delete')}</summary>
