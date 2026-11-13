@@ -144,7 +144,7 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
 
   return (
     <div className="logconfirm-backdrop" role="dialog" aria-modal="true" aria-label={t('logPrompt.aria')}>
-      <div className="logconfirm">
+      <div className="logconfirm log-prompt">
         <div className="logconfirm-head">
           <h2>{t('logPrompt.title')}</h2>
           <span className="logconfirm-sub">

@@ -33,8 +33,9 @@
 // THE PROMPT TO LOG'S PROP MODE, on the supported screens (1366×768 at 100 % and 175 % OS scale and at 175 % UI
 // scale, 1920×1080 at 100 % and 200 %, 3840×2160 at 200 % with 100 % and 175 % UI scale; an OS scale is a smaller CSS
 // window at that many device px per px): the picker takes the grid's whole row and its box holds its longest name
-// ("Non-satellite repeater or transponder") in its own font, the prompt and the page do not scroll sideways, and Log
-// is in the window and on top. In one column the box held ~125 px of a 229 px name — red on that layout.
+// ("Non-satellite repeater or transponder") in its own font, the prompt and the page do not scroll sideways, Log and
+// Discard are in view and on top as the prompt opens, with no scroll (the row it adds once put them below the capped
+// card's fold at 175 %), and Log is in the window and on top. In one column the box held ~125 px of a 229 px name — red on that layout.
 //
 // exit: 0 every case clear · 1 a red, or a control that could not fail · 2 the page never drew
 import { createServer } from 'vite'
@@ -333,9 +334,24 @@ const PROPMODE_MEASURE = `(() => {
   const usable = (sel.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 1.6 * parseFloat(cs.fontSize)) * scale
   const g = r(grid), b = r(sel)
   const before = box(log)
+  // As the prompt opens, with NO scroll: Log and Discard drawn whole inside the window and the card's
+  // visible box, and on top at their centres. (Checked again below only after scrolling Log in.)
+  const discard = card.querySelector('.logconfirm-discard')
+  const c = r(card)
+  const seen = (el) => {
+    if (!el) return false
+    const q = r(el)
+    const hit = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2)
+    return q.top >= Math.max(0, c.top) - 0.5 && q.bottom <= Math.min(innerHeight, c.bottom) + 0.5 &&
+      q.left >= 0 && q.right <= innerWidth && !!hit && (hit === el || el.contains(hit))
+  }
+  const logOnOpen = seen(log), discardOnOpen = seen(discard)
+  // This runs again until two reads agree, so the scroll is put back: every read sees the prompt as it opened.
+  const scrolled = card.scrollTop
   log.scrollIntoView({ block: 'nearest' })
   const l = r(log)
   const hit = document.elementFromPoint(l.left + l.width / 2, l.top + l.height / 2)
+  card.scrollTop = scrolled
   return {
     zoom, dpr: devicePixelRatio, vw: innerWidth, vh: innerHeight,
     widest: Math.round(widest), usable: Math.round(usable),
@@ -343,7 +359,7 @@ const PROPMODE_MEASURE = `(() => {
     page: document.scrollingElement.scrollWidth - document.scrollingElement.clientWidth,
     overflow: card.scrollWidth - card.clientWidth,
     cardScrolls: card.scrollHeight > card.clientHeight + 1,
-    log: before, stop: box(stop),
+    log: before, stop: box(stop), logOnOpen, discardOnOpen,
     logInWindow: l.left >= 0 && l.top >= 0 && l.right <= innerWidth && l.bottom <= innerHeight,
     logTop: !!hit && (hit === log || log.contains(hit)),
   }
@@ -401,6 +417,8 @@ try {
     if (m.usable < m.widest) red.push(`Prop mode's box holds ${m.usable} px of text, its longest name is ${m.widest} px`)
     if (m.page > 0) red.push(`the page scrolls sideways by ${m.page} px`)
     if (m.overflow > 0) red.push(`the prompt to log scrolls sideways by ${m.overflow} px`)
+    if (!m.logOnOpen) red.push('Log is not in view when the prompt opens (it takes a scroll)')
+    if (!m.discardOnOpen) red.push('Discard is not in view when the prompt opens (it takes a scroll)')
     if (!m.logInWindow) red.push('Log is outside the window')
     if (!m.logTop) red.push('Log is covered')
     if (red.length) {
@@ -490,7 +508,7 @@ try {
     console.error('stopabove-probe: no case ran')
     code = code || 1
   }
-  if (code === 0) console.log(`stopabove-probe: PASS — ${ran} cases: with ${OVERLAYS.map(([o]) => o).join(', ')} open, Stop TX is on top where it is drawn, unmoved, one real click and one tap each stop once, the mirror is unseen by screen readers and follows its button at once, the overlay stays open and the keyboard stays where it was, at ${SIZES.map(([w, h, v]) => `${w}×${h} (${v})`).join(' and ')}; each control (no stop layer) caught. The filled IOTA box of the prompt to log and of the log strip at ${IOTA_SIZES.map((s) => `${s.w}×${s.h} ${Math.round(s.zoom * 100)}%`).join(', ')}: filled, its long group name whole and covering nothing, the source shown, no sideways scroll (the page none; the prompt none at all; the strip no more than without the box), Log in the window and on top; each unwrapped-name control caught. The prompt to log's Prop mode at ${PROPMODE_SIZES.map(propAt).join('; ')}: the whole row, wide enough for its longest name, no sideways scroll, Log in the window and on top`)
+  if (code === 0) console.log(`stopabove-probe: PASS — ${ran} cases: with ${OVERLAYS.map(([o]) => o).join(', ')} open, Stop TX is on top where it is drawn, unmoved, one real click and one tap each stop once, the mirror is unseen by screen readers and follows its button at once, the overlay stays open and the keyboard stays where it was, at ${SIZES.map(([w, h, v]) => `${w}×${h} (${v})`).join(' and ')}; each control (no stop layer) caught. The filled IOTA box of the prompt to log and of the log strip at ${IOTA_SIZES.map((s) => `${s.w}×${s.h} ${Math.round(s.zoom * 100)}%`).join(', ')}: filled, its long group name whole and covering nothing, the source shown, no sideways scroll (the page none; the prompt none at all; the strip no more than without the box), Log in the window and on top; each unwrapped-name control caught. The prompt to log's Prop mode at ${PROPMODE_SIZES.map(propAt).join('; ')}: the whole row, wide enough for its longest name, no sideways scroll, Log and Discard in view as it opens, Log in the window and on top`)
   process.exitCode = code
 } finally {
   await browser.stop()
