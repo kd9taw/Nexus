@@ -63,7 +63,8 @@ import { ContestScoreChip } from './ContestScoreChip'
 import { pushToast, withErrorToast } from '../toast'
 import { isStreamInput } from '../remote-native/stream-input'
 import { normaliseTyped, oneLineTyped, upperTyped } from '../typedInput'
-import { IotaPrefillField, iotaInvalid, iotaToLog, useIotaPrefill } from './Iota'
+import { IotaPrefillField, iotaInvalid, iotaToLog, useIotaIslandPick, useIotaPrefill } from './Iota'
+import { withIotaIsland } from '../features/iotaGroups'
 
 // ---------------------------------------------------------------------------
 // THE DYNAMIC ENTRY STRIP (spec §9) — Call plus one box per slot the session's role
@@ -1903,6 +1904,8 @@ export function LogEntry({
   const [lookupTick, setLookupTick] = useState(0)
   const [logIota, setLogIota] = useState('')
   const iotaPrefill = useIotaPrefill(logCall, logIota, setLogIota, lookupTick, remoteMode || fdActive)
+  // The island within that group: only the operator's pick from its list, never filled.
+  const [logIsland, setLogIsland] = useIotaIslandPick(logIota)
 
   // QRZ callbook autofill — fills ONLY blank fields, never clobbers operator input. The
   // explicit button toasts; the on-blur auto-lookup is silent on failure so an operator
@@ -2487,6 +2490,8 @@ export function LogEntry({
           : undefined,
         remote ? null : iotaToLog(logIota),
       ),
+      // The island picked for that reference (IOTA_ISLAND_ID); none picked, none logged.
+      ...(!remote && logIsland !== null && iotaToLog(logIota) ? { extra: withIotaIsland(undefined, logIsland) } : {}),
     }
     if (remote) {
       try { await remote.submit(rec, overrideOpen ? 'explicit' : 'station'); reset(); loggedFromStrip(call, effBand); return true }
@@ -3572,7 +3577,9 @@ export function LogEntry({
         </div>
       )}
 
-      {!remoteMode && !fdActive && <IotaPrefillField state={iotaPrefill} value={logIota} />}
+      {!remoteMode && !fdActive && (
+        <IotaPrefillField state={iotaPrefill} value={logIota} island={{ value: logIsland, onChange: setLogIsland }} />
+      )}
 
       <div className="le-row">
         <input

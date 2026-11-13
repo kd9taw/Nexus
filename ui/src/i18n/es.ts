@@ -7306,6 +7306,8 @@ export const ES: PartialCatalog = {
   "iota.prefill.label": "IOTA",
   "iota.prefill.aria": "Referencia IOTA de este contacto",
   "iota.prefill.hint": "Rellenada a partir de un spot o de su consulta al callbook. Se registra y se envía con el contacto; cámbiela o bórrela antes de registrar.",
+  "iota.island.label": "Isla",
+  "iota.island.none": "Ninguna isla elegida",
   "iota.card.fromSpot": "Rellenada a partir de un spot.",
   "iota.card.fromCallbook": "Rellenada a partir de su consulta al callbook.",
   "iota.offer.fromSpot": "del spot",

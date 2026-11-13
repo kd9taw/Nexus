@@ -3823,6 +3823,8 @@
 "4","iota.prefill.label","IOTA","IOTA","IOTA","Filled by the maintainer, pending translator review."
 "4","iota.prefill.aria","IOTA reference for this contact","此聯絡的 IOTA 編號","IOTA","Filled by the maintainer, pending translator review."
 "4","iota.prefill.hint","Filled in from a spot or your callbook lookup. Logged and sent with the contact; change it or clear it before logging.","根據報點或呼號簿查詢填入。隨聯絡一起記錄並上傳；記錄前可修改或清除。","","Filled by the maintainer, pending translator review."
+"4","iota.island.label","Island","島嶼","","Filled by the maintainer, pending translator review."
+"4","iota.island.none","No island picked","未選擇島嶼","","Filled by the maintainer, pending translator review."
 "4","iota.card.fromSpot","Filled in from a spot.","根據報點填入。","","Filled by the maintainer, pending translator review."
 "4","iota.card.fromCallbook","Filled in from your callbook lookup.","根據呼號簿查詢填入。","","Filled by the maintainer, pending translator review."
 "4","iota.offer.dismiss","Leave IOTA empty","留空 IOTA","IOTA",""

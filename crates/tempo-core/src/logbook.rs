@@ -597,6 +597,7 @@ pub(crate) fn fields_set(r: &mut QsoRecord, fields: &[(String, Option<String>)])
     }
     callbook::unmark_edited(&before, r);
     offer::unmark_edited(&before, r);
+    offer::drop_stale_island(&before, r);
 }
 
 /// The contest provenance of one general-log row (§3).
@@ -3311,6 +3312,8 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
     // and for an IOTA reference Nexus filled at log time ([`offer::OFFER_HELD_FIELD`]).
     callbook::unmark_edited(old, &mut rec);
     offer::unmark_edited(old, &mut rec);
+    // An island is one group's: a group changed or cleared without a new pick takes it off.
+    offer::drop_stale_island(old, &mut rec);
     // The same resurrection, for a park. A side's OTHER programme's reference rides
     // in `extra` (the POTA pair beside a summit, the POTA_REF beside a WWFF park — see
     // `take_ota_side`), and it described the reference the side HAD. An edit that

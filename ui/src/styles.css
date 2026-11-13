@@ -35877,6 +35877,26 @@ td.aw-cc {
 .iota-offer-from {
   color: var(--text-faint);
 }
+/* The island picker beside a group (IotaIslandPick). A <select> is as wide as its LONGEST option,
+   and an island's name runs to 200 characters, so left to size itself it widens whatever holds it:
+   the log strip pushed Log off the window and the popup scrolled sideways. So the picker never
+   sizes its host: `contain: inline-size` keeps its options out of every intrinsic width, and it
+   takes the room its row gives it, up to 24em, wrapping to its own line in the wrap row when the
+   line is full. The select fills that and cuts the picked name short; the full name is its title. */
+.iota-island {
+  contain: inline-size;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: min(100%, 24em);
+  min-width: 0;
+}
+.iota-island-pick {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
 /* The group's name beside the reference in the Logbook's IOTA cell: plain text, dimmer. */
 .iota-cell-name {
   font-family: var(--font-sans);
