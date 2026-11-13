@@ -1,6 +1,7 @@
 import { before, after, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash, createHmac } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import { runtime } from './runtime.mjs'
 import { ulsRows, ulsSql } from '../scripts/uls-import.mjs'
 
@@ -428,6 +429,30 @@ test('required identity: the domain cap counts the registrable domain, so subdom
   } finally { await strict.mf.dispose() }
 })
 
+// The mail domain an account is counted under is kept as an HMAC under the trial key, never a bare hash:
+// domains are few and public (a ham's vanity domain is often the callsign), so a bare hash would give the
+// domain back to anyone holding a copy of the database. Without the key nothing is kept: the count is read
+// only while the identity is required, which needs the key. One kept as a bare hash before this is
+// cleared by its migration and learnt again, keyed, at that account's next sign-in.
+test('the mail domain is kept as an HMAC under the trial key, nothing without one, and a bare hash is relearnt keyed', async () => {
+  const domainOf = async (app, accountId) => (await app.db.prepare('SELECT domain_hash FROM accounts WHERE id=?').bind(accountId).first()).domain_hash
+  const unkeyed = await person(plain, 'op@club-plain.example')
+  assert.equal(await domainOf(plain, unkeyed.accountId), null, 'no key, nothing kept')
+  const subject = `auth0|${crypto.randomUUID()}`, claims = { email: 'op@x.club-keyed.example', email_verified: true }
+  const signIn = async () => (await keyed.client(await keyed.token(subject, claims)).post('session')).value.accountId
+  const accountId = await signIn()
+  assert.equal(await domainOf(keyed, accountId), hmac('domain:club-keyed.example'))
+  assert.notEqual(await domainOf(keyed, accountId), sha('domain:club-keyed.example'))
+  // A bare hash from before: the migration clears it, and the next sign-in writes the keyed one.
+  await keyed.db.prepare('UPDATE accounts SET domain_hash=? WHERE id=?').bind(sha('domain:club-keyed.example'), accountId).run()
+  const migration = (await readFile(new URL('../migrations/0018_domain_hmac.sql', import.meta.url), 'utf8'))
+    .split('\n').filter(line => !line.trimStart().startsWith('--')).join('\n')
+  for (const statement of migration.split(';').map(s => s.trim()).filter(Boolean)) await keyed.db.prepare(statement).run()
+  assert.equal(await domainOf(keyed, accountId), null)
+  await signIn()
+  assert.equal(await domainOf(keyed, accountId), hmac('domain:club-keyed.example'))
+})
+
 test('required identity holds where the trial starts at first internet use too: no claim, a foreign call, a spent domain', async () => {
   const strict = await runtime({ bindings: { TRIAL_KEY, TRIAL_IDENTITY_REQUIRED: '1' } })
   try {
@@ -454,7 +479,7 @@ test('required identity holds where the trial starts at first internet use too: 
       await approve(strict, await person(strict, `n${i}@farm-domain.example`), { callsign: call, pc: pc(null, call) })
     }
     const farmed = await fresh(claimOf('W7FOUR'))
-    await strict.db.prepare('UPDATE accounts SET domain_hash=? WHERE id=?').bind(sha('domain:farm-domain.example'), farmed.browser.accountId).run()
+    await strict.db.prepare('UPDATE accounts SET domain_hash=? WHERE id=?').bind(hmac('domain:farm-domain.example'), farmed.browser.accountId).run()
     assert.equal((await ticket(farmed, 403)).value.error, 'trialDomainLimit')
   } finally { await strict.mf.dispose() }
 })

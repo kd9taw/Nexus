@@ -71,6 +71,13 @@ export function requireValue(ok: unknown, code = 'accessDenied', status = 403): 
 }
 export const uuid = () => crypto.randomUUID()
 export const secret = () => Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join('')
+/** HMAC-SHA-256 of `value` under `key`, lowercase hex: how trial markers, the licence copy and an
+ *  account's mail domain are kept, so none of them can be reversed by guessing from a public list. */
+export async function hmac(key: string, value: string): Promise<string> {
+  const secret = await crypto.subtle.importKey('raw', new TextEncoder().encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  return Array.from(new Uint8Array(await crypto.subtle.sign('HMAC', secret, new TextEncoder().encode(value))),
+    b => b.toString(16).padStart(2, '0')).join('')
+}
 export async function digest(value: string): Promise<string> {
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))),
     b => b.toString(16).padStart(2, '0')).join('')
@@ -389,9 +396,12 @@ async function signedIn(request: Request, env: RemoteEnv, now: number, clientId:
   // same `email:` prefix, so for an address that is already normal the two are identical.
   const emailHash = email ? await digest(`email:${email}`) : null
   const mailboxHash = email ? await digest(`email:${mailbox(email)}`) : null
-  // The mailbox's domain, for the per-domain trial count; none for a public provider's.
-  const domain = email ? mailDomain(mailbox(email)) : null
-  const domainHash = domain ? await digest(`domain:${domain}`) : null
+  // The mailbox's domain, for the per-domain trial count; none for a public provider's. Kept as an HMAC
+  // under the trial key, never a bare hash: domains are few and public (a vanity domain is often the
+  // callsign), so a bare hash gives the domain back to anyone with a copy of the database. Nothing is kept
+  // without the key, and nothing needs it then: the count is read only while the identity is required.
+  const domain = email && env.TRIAL_KEY ? mailDomain(mailbox(email)) : null
+  const domainHash = domain ? await hmac(env.TRIAL_KEY!, `domain:${domain}`) : null
   await env.DB.prepare('INSERT OR IGNORE INTO accounts(id, issuer, subject, email_hash, mailbox_hash, domain_hash) VALUES(?,?,?,?,?,?)')
     .bind(uuid(), env.AUTH0_ISSUER, subject, emailHash, mailboxHash, domainHash).run()
   // Backfill only: an account created before these columns, or before its provider supplied a

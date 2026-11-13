@@ -5,11 +5,11 @@
 //
 // What this can and cannot see: a US callsign is checked against the FCC's licence list, and proven
 // when the account's verified mailbox is the licence's email on file. A non-US callsign is checked for
-// shape only, and refused outright while the identity is required (the paid launch is US-only, ruling
-// 1406), which also caps a mail domain's trials (`DOMAIN_TRIALS`). The PC identifiers change with a new VM or a registry edit: a speed bump, not a wall.
+// shape only, and refused outright while the identity is required (trials at launch are for US
+// licences only), which also caps a mail domain's trials (`DOMAIN_TRIALS`). The PC identifiers change with a new VM or a registry edit: a speed bump, not a wall.
 // A squatted callsign is settled by support, who grant the trial by hand and can record the proven
 // owner (index.ts, admin/grant-trial).
-import { Refusal, requireValue, type RemoteEnv } from './authority'
+import { hmac, Refusal, requireValue, type RemoteEnv } from './authority'
 
 /** The parts a portable or operating-condition suffix adds, which are never the station's own call. */
 const MODIFIERS = new Set(['P', 'M', 'MM', 'AM', 'QRP', 'A', 'R'])
@@ -35,11 +35,7 @@ export function baseCall(value: unknown): string {
 
 export function usCall(base: string): boolean { return US_CALL.test(base) }
 
-export async function hmac(key: string, value: string): Promise<string> {
-  const secret = await crypto.subtle.importKey('raw', new TextEncoder().encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
-  return Array.from(new Uint8Array(await crypto.subtle.sign('HMAC', secret, new TextEncoder().encode(value))),
-    b => b.toString(16).padStart(2, '0')).join('')
-}
+export { hmac }
 
 /** A PC identifier as the shack sends it: the SHA-256 of the raw value (lowercase hex), or null when
  *  the PC has none worth sending (a placeholder hardware UUID). */
