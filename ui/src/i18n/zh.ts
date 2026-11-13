@@ -7751,6 +7751,7 @@ export const ZH: PartialCatalog = {
   "remote.nativeTrialDisabled": "该账户的远程访问已被关闭，因此该台站未能加入。这与试用到期不同。你的电台、日志和设置均未改动。",
   "remote.nativeCallsignInvalid": "远程试用按呼号计算，一个呼号一次，因此请先在 设置 → 电台 中填写你的台站呼号，然后重新配对该台站。你的电台、日志和设置均未改动。",
   "remote.nativeCallsignNotLicensed": "设置 → 电台 中的呼号在 FCC 执照列表中不是有效执照，因此该台站未能加入。请检查是否有笔误。新执照约需一天才会出现在列表中。你的电台、日志和设置均未改动。",
+  "remote.nativeTrialDomainLimit": "你的邮箱域名本月开始的远程试用已达到单个域名的上限，因此无法以试用方式添加该台站。请使用其他服务商的邮箱登录，或订阅。你的电台、日志和设置均未改动。",
   "remote.nativeTrialUsedByCallsign": "该呼号已在另一账户下使用过远程试用，因此该台站未能加入。若这是你的呼号，请用执照上登记的邮箱联系支持。你的电台、日志和设置均未改动。",
   "remote.nativeTrialUsedOnThisPc": "此电脑已在另一账户下使用过远程试用，因此该台站未能加入。你的电台、日志和设置均未改动。",
   "remote.nativeUpdateRequired": "向远程功能添加台站需要更新版本的 Nexus。请更新 Nexus，然后重新配对该台站。你的电台、日志和设置均未改动。",
