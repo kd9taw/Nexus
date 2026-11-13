@@ -1701,7 +1701,9 @@ export function MapView({
     if (stormSeen.current && !storm) setAuroraDismissal(false)
     stormSeen.current = storm
   }, [storm])
-  const auroraAuto = storm && !auroraDismissed && !layers.aurora.visible
+  // Never on an embedded map (#496): the sat globe and the APRS map are a clean planet (EMBED_LAYERS),
+  // and in a storm watch the auto-on aurora covered the satellite's track.
+  const auroraAuto = !embedded && storm && !auroraDismissed && !layers.aurora.visible
   const auroraOn = layers.aurora.visible || auroraAuto
   // What is drawn: OVATION while current, else nothing at all (capsNow `auroraPicture`).
   const auroraPic = useMemo(() => (auroraOn ? auroraPicture(auroraOval, nowMs) : null), [auroraOn, auroraOval, nowMs])
@@ -4444,7 +4446,9 @@ export function MapView({
               (the flare chip unfolds) without covering the next. Later overlays add their chip here.
               Always rendered: the storm-watch chip decides for itself whether it shows, and an empty
               stack lets the pointer through and takes no room. On a narrow map it shows two chips
-              and one "+N more" for the rest (WxChipStack). */}
+              and one "+N more" for the rest (WxChipStack). Not on an embedded map (#496): the sat
+              globe carries no space-weather overlays, and NOAA's storm-watch chip sat over its track. */}
+          {!embedded && (
           <WxChipStack
             compact={size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX}
             chips={[
@@ -4490,6 +4494,7 @@ export function MapView({
                 },
             ]}
           />
+          )}
           {prop && (
             <MapInsightRail
               prop={prop}

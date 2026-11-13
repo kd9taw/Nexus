@@ -343,6 +343,37 @@ describe('the aurora layer turns itself on in a storm', () => {
   })
 })
 
+// #496 — the Satellites detail's small globe is an EMBEDDED map: a clean planet and the bird. In a
+// storm watch the aurora layer turned itself on there and the space-weather chips sat over the
+// track. The embedded map takes neither; the Connect map is unchanged (the control half).
+describe('the embedded satellite globe carries no space-weather overlays (#496)', () => {
+  const watch = () => {
+    feeds.aurora = OVAL
+    // A window in force, so NOAA's storm-watch chip has something to say.
+    feeds.arrival = { watch: { serial: 7, code: 'WATA20', issued: NOW_S - 3600, days: [], comment: null, window: [NOW_S - 3600, NOW_S + 2 * 86_400], maxG: 2 }, model: null, l1: null, rationale: null }
+  }
+
+  it('in a G watch at Kp 6: no aurora, no OVATION fetch, and no chip stack over the globe', async () => {
+    layersOn([])
+    watch()
+    const r = await mount({ prop: snap(6), embedded: { focusSat: 'ISS' } })
+    expect(getAurora, 'the storm turned the aurora on in the sat globe').not.toHaveBeenCalled()
+    expect(r.container.querySelector('.wx-chip-stack'), 'space-weather chips over the sat globe').toBeNull()
+    expect(r.container.querySelector('.aurora-chip')).toBeNull()
+  })
+
+  it('CONTROL — the same storm on the Connect map: the aurora comes on and the chips show', async () => {
+    layersOn([])
+    watch()
+    const r = await mount({ prop: snap(6) })
+    expect(getAurora).toHaveBeenCalled()
+    const stack = r.container.querySelector('.wx-chip-stack')
+    expect(stack).not.toBeNull()
+    expect(stack!.querySelector('.aurora-chip')).not.toBeNull()
+    expect(stack!.children.length, 'the storm-watch chip').toBeGreaterThanOrEqual(2)
+  })
+})
+
 describe('the aurora oval: OVATION while current, nothing when it is stale or missing', () => {
   it('a current OVATION draws its dots and its own edge, solid', async () => {
     layersOn(['aurora'])
