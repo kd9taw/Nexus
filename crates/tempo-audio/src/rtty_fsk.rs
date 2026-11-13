@@ -58,6 +58,7 @@ pub use crate::serial_keyer::KeyLine;
 pub const LEAD_IN_MS: f64 = 88.0;
 
 /// Where the keyer puts its line: an RTTY level, or released (the module doc's two idles).
+#[cfg(feature = "serial")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Level {
     Mark,
@@ -68,6 +69,7 @@ pub(crate) enum Level {
 
 /// Whether `level` asserts the line of a keyer keying `inverted` (RTTY Reverse): space is
 /// asserted in the normal sense and mark when inverted; a rest is never asserted.
+#[cfg(feature = "serial")]
 pub(crate) fn asserted(level: Level, inverted: bool) -> bool {
     match level {
         Level::Mark => inverted,
@@ -422,6 +424,7 @@ mod tests {
     const CHAR_MS: f64 = 165.0165;
 
     /// Reverse inverts mark and space on the line; a rest is released in either sense.
+    #[cfg(feature = "serial")]
     #[test]
     fn reverse_inverts_mark_and_space_and_a_rest_is_always_released() {
         assert!(!asserted(Level::Mark, false) && asserted(Level::Space, false));
