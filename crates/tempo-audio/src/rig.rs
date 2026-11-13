@@ -699,7 +699,7 @@ pub struct Rig {
     ptt_mode: PttMode,
     /// Lazily-opened serial port for [`PttMode::Serial`] (feature `serial`).
     #[cfg(feature = "serial")]
-    serial: Option<Box<dyn serialport::SerialPort>>,
+    serial: Option<crate::control_line::SharedControlLines>,
     /// Last PTT state we commanded (also lets callers/tests observe keying).
     pub keyed: bool,
     /// Split Operation (Rig) turned split on through this connection (or sent it and got no answer,
@@ -1894,8 +1894,14 @@ impl Rig {
     /// instance of the stuck-PTT defect its own headline names: on a conventional interface
     /// (DTR = key, RTS = PTT) opening the port raised both, and nothing here ever lowered the
     /// one we do not key.
+    ///
+    /// The port is HELD, not owned (#492, [`crate::control_line::SharedControlLines`]): the FSK
+    /// keyer on the other line of the same port keys through the same handle, where a second
+    /// open of the port was refused and the over never keyed. Letting go of it
+    /// ([`Self::release_ptt_port`], or the rig dropping) lowers the PTT line if it was up.
     #[cfg(feature = "serial")]
     fn serial_ptt(&mut self, on: bool) -> std::io::Result<()> {
+        use crate::control_line::ControlLinePins;
         let (port, line) = match &self.ptt_mode {
             PttMode::Serial { port, line } => (port.clone(), *line),
             _ => return Ok(()),
@@ -1904,14 +1910,13 @@ impl Rig {
             // We only toggle control lines, never data, so the rate is meaningless —
             // but some rigs refuse a given rate at open, so let `control_line` find one
             // that works instead of hardcoding a rate the port may reject.
-            self.serial = Some(crate::control_line::open_control_line_port(&port)?);
+            self.serial = Some(crate::control_line::SharedControlLines::open(&port)?);
         }
         let sp = self.serial.as_mut().unwrap();
         match line {
-            SerialLine::Rts => sp.write_request_to_send(on)?,
-            SerialLine::Dtr => sp.write_data_terminal_ready(on)?,
+            SerialLine::Rts => sp.set_rts(on),
+            SerialLine::Dtr => sp.set_dtr(on),
         }
-        Ok(())
     }
 
     /// Serial PTT no-op fallback when built without the `serial` feature.

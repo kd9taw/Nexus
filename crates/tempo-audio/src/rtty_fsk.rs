@@ -50,6 +50,13 @@ use crate::rtty_afsk::baudot_frame;
 /// RTS = PTT.
 pub use crate::serial_keyer::KeyLine;
 
+/// Mark held after PTT before the first start bit of an over, so the rig is fully in
+/// transmit and the far end's decoder is sitting on mark before the first character — without
+/// it the first character went out on the edge of the key-up and could be clipped. EXTFSK64
+/// does the same: `CFSK::SetPTT(on)` calls `SetDelay(8)`, eight ticks of its 11 ms timer of
+/// idle mark before the first bit (github.com/ja7ude/EXTFSK64, `Main.cpp`).
+pub const LEAD_IN_MS: f64 = 88.0;
+
 /// Where the keyer puts its line: an RTTY level, or released (the module doc's two idles).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Level {
@@ -109,7 +116,7 @@ pub use imp::FskKeyer;
 #[cfg(feature = "serial")]
 mod imp {
     use super::{asserted, fsk_schedule, KeyLine, Level};
-    use serialport::SerialPort;
+    use crate::control_line::{ControlLinePins, SharedControlLines};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::mpsc;
     use std::sync::Arc;
@@ -117,18 +124,19 @@ mod imp {
     use std::time::{Duration, Instant};
 
     /// Put `line` at `level` in the sense `inverted` picks (see the module doc on line sense).
-    fn set_level(sp: &mut dyn SerialPort, line: KeyLine, level: Level, inverted: bool) {
+    fn set_level(sp: &mut SharedControlLines, line: KeyLine, level: Level, inverted: bool) {
         let on = asserted(level, inverted);
         let _ = match line {
-            KeyLine::Dtr => sp.write_data_terminal_ready(on),
-            KeyLine::Rts => sp.write_request_to_send(on),
+            KeyLine::Dtr => sp.set_dtr(on),
+            KeyLine::Rts => sp.set_rts(on),
         };
     }
 
     /// What the keying thread is handed.
     enum Cmd {
-        /// A framed character stream at a baud, under the stop count it was handed over in.
-        Send(Vec<bool>, f64, u64),
+        /// A framed character stream at a baud, after a lead-in of mark (ms), under the stop
+        /// count it was handed over in.
+        Send(Vec<bool>, f64, f64, u64),
         /// The rig is unkeyed: release the line ([`Level::Rest`]).
         Rest,
     }
@@ -147,8 +155,8 @@ mod imp {
     fn keyer_loop(mut set: impl FnMut(Level), rx: mpsc::Receiver<Cmd>, stops: Arc<AtomicU64>) {
         set(Level::Rest); // nothing keyed yet
         while let Ok(cmd) = rx.recv() {
-            let (bits, baud, stop) = match cmd {
-                Cmd::Send(bits, baud, stop) => (bits, baud, stop),
+            let (bits, baud, lead_ms, stop) = match cmd {
+                Cmd::Send(bits, baud, lead_ms, stop) => (bits, baud, lead_ms, stop),
                 Cmd::Rest => {
                     set(Level::Rest);
                     continue;
@@ -159,7 +167,7 @@ mod imp {
             }
             let sched = fsk_schedule(&bits, baud);
             let start = Instant::now();
-            // The over's idle (a no-op unless the line rested, or is inverted and new).
+            // The over's idle, held through the lead-in (a no-op unless the line rested).
             set(Level::Mark);
             let mut aborted = false;
             // Sleep to `at_ms` (absolute, from `start`) in ≤8 ms slices; true = aborted.
@@ -178,7 +186,7 @@ mod imp {
                 }
             };
             for &(at_ms, mark) in &sched.events {
-                if wait_until(&mut set, at_ms) {
+                if wait_until(&mut set, lead_ms + at_ms) {
                     aborted = true;
                     break;
                 }
@@ -186,7 +194,7 @@ mod imp {
             }
             if !aborted {
                 // Hold the final level through the end of the last stop bit.
-                wait_until(&mut set, sched.total_ms);
+                wait_until(&mut set, lead_ms + sched.total_ms);
             }
             set(Level::Mark); // between sends: mark (the RTTY idle), until the rig unkeys
         }
@@ -215,9 +223,12 @@ mod imp {
         /// [`crate::control_line::idle_both_lines`]. Deasserted is also the correct FSK
         /// idle: mark — and, for an `inverted` (Reverse) keyer, the released rest (see the
         /// module doc's two idles).
+        ///
+        /// The port is HELD, not owned ([`crate::control_line::SharedControlLines`], #492):
+        /// serial PTT on the other line of the same port keys through the same handle.
         pub fn open(port: &str, line: KeyLine, inverted: bool) -> std::io::Result<Self> {
-            let mut sp = crate::control_line::open_control_line_port(port)?;
-            let mut keyer = Self::keying(move |level| set_level(&mut *sp, line, level, inverted));
+            let mut sp = crate::control_line::SharedControlLines::open(port)?;
+            let mut keyer = Self::keying(move |level| set_level(&mut sp, line, level, inverted));
             keyer.inverted = inverted;
             Ok(keyer)
         }
@@ -243,14 +254,16 @@ mod imp {
             self.inverted
         }
 
-        /// Queue a framed character stream (groups of 5 data bits) to key at `baud`
-        /// (non-blocking — the thread does the timing).
-        pub fn send(&self, data_bits: Vec<bool>, baud: f64) {
+        /// Queue a framed character stream (groups of 5 data bits) to key at `baud`, after
+        /// `lead_ms` of mark ([`super::LEAD_IN_MS`] on the batch that follows a key-up, 0 for
+        /// a batch that continues an over) — non-blocking, the thread does the timing.
+        pub fn send(&self, data_bits: Vec<bool>, baud: f64, lead_ms: f64) {
             if let Some(tx) = &self.tx {
                 self.rested.store(false, Ordering::SeqCst);
                 let _ = tx.send(Cmd::Send(
                     data_bits,
                     baud,
+                    lead_ms,
                     self.stops.load(Ordering::SeqCst),
                 ));
             }
@@ -338,13 +351,13 @@ mod imp {
         fn a_batch_handed_over_before_a_stop_is_never_keyed_after_it() {
             let (keyer, levels, go) = held_keyer();
             // RYRY…: every character has several space runs.
-            keyer.send([false, true, false, true, false].repeat(4), 45.45);
+            keyer.send([false, true, false, true, false].repeat(4), 45.45, 0.0);
             keyer.clear();
             go.send(()).unwrap();
             settle(&levels);
             // POSITIVE CONTROL: one LTRS sent after the stop keys (one space run, the start
             // bit), so the line is really read.
-            keyer.send(vec![true; 5], 45.45);
+            keyer.send(vec![true; 5], 45.45, 0.0);
             settle(&levels);
             assert_eq!(
                 spaces(&levels),
@@ -371,8 +384,8 @@ mod imp {
         #[test]
         fn a_stop_mid_message_returns_to_mark_at_once_and_drops_the_rest() {
             let (keyer, levels, go) = held_keyer();
-            keyer.send([false, true, false, true, false].repeat(30), 45.45); // about 5 s
-            keyer.send([false, true, false, true, false].repeat(4), 45.45);
+            keyer.send([false, true, false, true, false].repeat(30), 45.45, 0.0); // about 5 s
+            keyer.send([false, true, false, true, false].repeat(4), 45.45, 0.0);
             go.send(()).unwrap();
             let start = Instant::now();
             while spaces(&levels) < 2 && start.elapsed() < Duration::from_secs(5) {

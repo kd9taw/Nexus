@@ -13593,7 +13593,7 @@ impl RadioLoop {
                         #[cfg(feature = "serial")]
                         if st.key_cfg.4 {
                             if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
-                                k.send(bits.clone(), baud);
+                                k.send(bits.clone(), baud, 0.0);
                             }
                         }
                         self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
@@ -13729,8 +13729,15 @@ impl RadioLoop {
                             if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
                                 // A stream the rig would not key sends nothing (`key_over`).
                                 if key.sends() {
-                                    k.send(bits.clone(), baud);
-                                    self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
+                                    // Mark before the first bit behind a fresh key-up.
+                                    let lead = if need_key {
+                                        crate::rtty_fsk::LEAD_IN_MS
+                                    } else {
+                                        0.0
+                                    };
+                                    k.send(bits.clone(), baud, lead);
+                                    self.rtty_busy_until =
+                                        self.rtty_busy_until.max(now) + lead + chunk_ms;
                                     let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
                                     self.extend_hold(until);
                                 }
@@ -13875,10 +13882,14 @@ impl RadioLoop {
                             self.publish_tx_intent_now(); // before keying
                             key = self.key_over(engine, rig, true, "RTTY");
                         }
+                        // Mark before the first bit, behind the key-up (`LEAD_IN_MS`): the over,
+                        // its pacing and its echo all start that much later.
+                        let lead = crate::rtty_fsk::LEAD_IN_MS;
                         if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
                             // An over the rig would not key sends nothing (`key_over`).
                             if key.sends() {
-                                k.send(bits.clone(), baud);
+                                k.send(bits.clone(), baud, lead);
+                                self.rtty_busy_until += lead;
                                 let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
                                 self.extend_hold(until);
                             }
@@ -13899,7 +13910,7 @@ impl RadioLoop {
                             // refused, keyed nothing, so nothing is echoed and the TX line does
                             // not claim it.
                             if sent {
-                                eng.rtty_over_keyed(&text, baud, now);
+                                eng.rtty_over_keyed(&text, baud, now + lead);
                             }
                             eng.set_rtty_keyer_error(if open_err {
                                 open_err_msg
@@ -36620,6 +36631,174 @@ mod tests {
                 "{port}: the line is released after Stop"
             );
         }
+    }
+
+    /// The shared-port scene: FSK on DTR and serial PTT on RTS of ONE port (the wiring
+    /// `rtty_fsk.rs` names as the common one), an over keyed, and the loop's clock.
+    #[cfg(feature = "serial")]
+    fn shared_port_over(
+        port: &str,
+        text: &str,
+    ) -> (Arc<Mutex<Engine>>, RadioLoop, MockBackend, Rig, f64) {
+        use crate::control_line::fake_ports;
+        fake_ports::install(port);
+        let engine = fsk_engine(port, false, Some(port));
+        engine.lock().unwrap().rtty_send_text(text).unwrap();
+        let (mut backend, mut state) = (MockBackend::new(), loop_state());
+        // The loop has already applied these settings, so it keys this rig rather than
+        // reopening one for a transport it has not seen yet.
+        state.applied = Transport::from_settings(engine.lock().unwrap().settings());
+        let mut rig = Rig::with_control(None, ptt_mode_for(&state.applied));
+        assert_eq!(
+            rig.ptt_mode(),
+            &PttMode::Serial {
+                port: port.into(),
+                line: SerialLine::Rts
+            },
+            "premise: serial PTT on RTS of the FSK port"
+        );
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 200.0);
+        assert_eq!(
+            engine.lock().unwrap().rtty_state().keyer_error,
+            None,
+            "{port}: FSK and PTT both key on the one port"
+        );
+        assert!(rig.keyed, "{port}: PTT keyed");
+        assert!(fake_ports::state(port).rts, "{port}: PTT is up on RTS");
+        (engine, state, backend, rig, t)
+    }
+
+    /// Both lines down and, while `held`, the port still open.
+    #[cfg(feature = "serial")]
+    fn assert_lines_down(port: &str, held: bool, path: &str) {
+        let s = crate::control_line::fake_ports::state(port);
+        assert!(!s.rts, "{path}: PTT is down");
+        assert!(!s.dtr, "{path}: the FSK line is idle");
+        assert_eq!(
+            s.held, held,
+            "{path}: the port is held exactly while a user remains"
+        );
+    }
+
+    /// ★ #492: FSK ON DTR AND SERIAL PTT ON RTS OF THE SAME PORT KEY THROUGH ONE HANDLE. The
+    /// keyer and serial PTT each opened the port for themselves, and a COM port opens once:
+    /// the second open was refused ("Access is denied"), so the over never keyed. Every way an
+    /// over ends leaves PTT down and the FSK line idle.
+    #[cfg(feature = "serial")]
+    #[test]
+    fn fsk_and_serial_ptt_share_one_port_and_every_ending_leaves_both_lines_down() {
+        use crate::control_line::fake_ports;
+        // The over runs to its end.
+        let port = "tempo-test-fsk-shared-end";
+        let (engine, mut state, mut backend, mut rig, mut t) = shared_port_over(port, "RY");
+        fsk_settle(port);
+        assert!(
+            fake_ports::log(port).iter().any(|s| s.rts && s.dtr),
+            "the data bits key on DTR while PTT holds RTS"
+        );
+        step_to(
+            &engine,
+            &mut state,
+            &mut backend,
+            &mut rig,
+            &mut t,
+            10_000.0,
+        );
+        fsk_settle(port);
+        assert!(!rig.keyed);
+        assert_lines_down(port, true, "end of over");
+
+        // Stop mid-over (the watchdog's trip arms the same abort, `poll_rtty_one`).
+        let port = "tempo-test-fsk-shared-stop";
+        let (engine, mut state, mut backend, mut rig, mut t) =
+            shared_port_over(port, "RYRYRYRYRYRYRYRYRYRYRYRYRY");
+        std::thread::sleep(Duration::from_millis(300));
+        engine.lock().unwrap().rtty_stop();
+        let until = t + 40.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, until);
+        fsk_settle(port);
+        assert!(!rig.keyed);
+        assert_lines_down(port, true, "Stop");
+
+        // Halt TX mid-over.
+        let port = "tempo-test-fsk-shared-halt";
+        let (engine, mut state, mut backend, mut rig, mut t) =
+            shared_port_over(port, "RYRYRYRYRYRYRYRYRYRYRYRYRY");
+        std::thread::sleep(Duration::from_millis(300));
+        engine.lock().unwrap().halt_tx();
+        let until = t + 40.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, until);
+        fsk_settle(port);
+        assert!(!rig.keyed);
+        assert_lines_down(port, true, "halt TX");
+
+        // The rig lets go of its PTT port mid-over (a handoff demoting it): its line drops at
+        // once, the keyer keeps the port, and the over's own end unkeys as ever.
+        let port = "tempo-test-fsk-shared-release";
+        let (engine, mut state, mut backend, mut rig, mut t) = shared_port_over(port, "RYRY");
+        rig.release_ptt_port();
+        assert!(
+            !fake_ports::state(port).rts,
+            "the released PTT line drops at once"
+        );
+        assert!(
+            fake_ports::state(port).held,
+            "the keyer still holds the port"
+        );
+        fsk_settle(port);
+        step_to(
+            &engine,
+            &mut state,
+            &mut backend,
+            &mut rig,
+            &mut t,
+            10_000.0,
+        );
+        fsk_settle(port);
+        assert!(!rig.keyed);
+        assert_lines_down(port, true, "PTT port released");
+
+        // The FSK keyer goes away mid-over (the backend switched to AFSK): its line drops,
+        // PTT keeps the port and still unkeys when the over's time is up.
+        let port = "tempo-test-fsk-shared-keyer-gone";
+        let (engine, mut state, mut backend, mut rig, mut t) =
+            shared_port_over(port, "RYRYRYRYRYRYRYRYRYRYRYRYRY");
+        std::thread::sleep(Duration::from_millis(300));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.rtty_backend = "afsk".to_string();
+            e.apply_settings(s);
+        }
+        let until = t + 40.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, until);
+        fsk_settle(port);
+        assert!(
+            !fake_ports::state(port).dtr,
+            "the dropped keyer's line is idle"
+        );
+        step_to(
+            &engine,
+            &mut state,
+            &mut backend,
+            &mut rig,
+            &mut t,
+            60_000.0,
+        );
+        assert!(!rig.keyed);
+        assert_lines_down(port, true, "FSK keyer gone mid-over");
+
+        // Shutdown mid-over: unkey, release the keyers, the rig goes — nothing holds the port.
+        let port = "tempo-test-fsk-shared-shutdown";
+        let (engine, mut state, mut backend, mut rig, _) =
+            shared_port_over(port, "RYRYRYRYRYRYRYRYRYRYRYRYRY");
+        std::thread::sleep(Duration::from_millis(300));
+        state.stop_for_shutdown(&engine, &mut backend, &mut rig);
+        state.release_keyers_for_shutdown();
+        assert!(!rig.keyed);
+        drop(rig);
+        assert_lines_down(port, false, "shutdown");
     }
 
     /// A radio loop with continuous RTTY TX latched and keying, plus the clock it

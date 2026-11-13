@@ -54,7 +54,7 @@ fn shutdown_returns_with_the_fsk_line_at_mark() {
     let keyer = crate::rtty_fsk::FskKeyer::keying(move |level| {
         set(crate::rtty_fsk::asserted(level, false))
     });
-    keyer.send(vec![false; 50], 5.0); // 200 ms bits: long space runs
+    keyer.send(vec![false; 50], 5.0, 0.0); // 200 ms bits: long space runs
     state.rtty_keyer = Some(("port".into(), "dtr".into(), keyer));
     wait_down(&levels);
     state.release_keyers_for_shutdown();

@@ -132,6 +132,150 @@ pub fn open_control_line_port(port: &str) -> std::io::Result<Box<dyn serialport:
     open_control_line_port_checked(port, || Ok(()))
 }
 
+/// ⛔ ONE HANDLE PER PORT, SHARED BY THE LINES KEYED ON IT (#492).
+///
+/// A COM port opens once: a second open of a port that is already open is refused (Windows:
+/// "Access is denied."). The FSK keyer ([`crate::rtty_fsk`]) and serial PTT ([`crate::rig`])
+/// key DIFFERENT lines of what is commonly the SAME port — DTR = FSK, RTS = PTT, the wiring
+/// `rtty_fsk` itself names as the common one — and each opened the port for itself, so
+/// whichever came second failed and the over never keyed. EXTFSK keys both through one
+/// handle (`CFSK::SetHandle(hPort, nFSK, nPTT)`, github.com/ja7ude/EXTFSK64 `Main.cpp`), and
+/// so does this: [`Self::open`] hands a holder the handle already open for that port, and
+/// opens it — idling both lines, [`idle_both_lines`] — only when nobody holds it. The second
+/// holder must NOT idle the lines: one of them is the first holder's, possibly keyed.
+///
+/// Each holder owns the lines IT raises. Dropping a holder lowers every line it left asserted
+/// and touches no other, so PTT letting go never moves the FSK line and the keyer going never
+/// drops PTT under the other path's feet; the port closes when the last holder goes. That the
+/// two never claim the same line is the engine's guard (`Engine::rtty_tx_gate`), as EXTFSK's
+/// option buttons refuse to pick one line for both.
+///
+/// Names match ignoring ASCII case, as Windows port names do (and as the engine's guard and
+/// `open_serial_ptt` compare them). A holder's lock survives a panicked holder (poison is
+/// ignored): an unkey must always reach the port.
+#[cfg(feature = "serial")]
+pub struct SharedControlLines {
+    port: SharedPort,
+    /// The lines this holder last asked to assert — what its drop lowers.
+    dtr: bool,
+    rts: bool,
+}
+
+#[cfg(feature = "serial")]
+type SharedPort = std::sync::Arc<std::sync::Mutex<Box<dyn serialport::SerialPort>>>;
+
+/// The ports open now, by name. Entries are weak: the port closes with its last holder.
+#[cfg(feature = "serial")]
+type OpenPorts = std::sync::Mutex<
+    Vec<(
+        String,
+        std::sync::Weak<std::sync::Mutex<Box<dyn serialport::SerialPort>>>,
+    )>,
+>;
+
+#[cfg(all(feature = "serial", not(test)))]
+static OPEN_PORTS: OpenPorts = std::sync::Mutex::new(Vec::new());
+
+// TESTS ONLY: per thread, as [`fake_ports`] is — a test's ports, and so its handles, are its own.
+#[cfg(all(feature = "serial", test))]
+thread_local! {
+    static OPEN_PORTS: OpenPorts = const { std::sync::Mutex::new(Vec::new()) };
+}
+
+#[cfg(feature = "serial")]
+fn with_open_ports<R>(
+    f: impl FnOnce(
+        &mut Vec<(
+            String,
+            std::sync::Weak<std::sync::Mutex<Box<dyn serialport::SerialPort>>>,
+        )>,
+    ) -> R,
+) -> R {
+    #[cfg(not(test))]
+    let r = f(&mut OPEN_PORTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner));
+    #[cfg(test)]
+    let r =
+        OPEN_PORTS.with(|p| f(&mut p.lock().unwrap_or_else(std::sync::PoisonError::into_inner)));
+    r
+}
+
+#[cfg(feature = "serial")]
+impl SharedControlLines {
+    /// Hold `port`: the handle already open for it, else a fresh open
+    /// ([`open_control_line_port`], both lines idled).
+    pub fn open(port: &str) -> std::io::Result<Self> {
+        Self::open_with(port, || open_control_line_port(port))
+    }
+
+    /// [`Self::open`] for a Remote selection's serial PTT release: a fresh open carries the
+    /// permission ([`open_control_line_port_permitted`]). Holding a handle that is already
+    /// open changes no line, so it needs none; the release write checks it as it always has.
+    pub(crate) fn open_permitted(
+        port: &str,
+        permission: &tempo_app::remote_control::WritePermission,
+    ) -> std::io::Result<Self> {
+        Self::open_with(port, || open_control_line_port_permitted(port, permission))
+    }
+
+    fn open_with(
+        port: &str,
+        fresh: impl FnOnce() -> std::io::Result<Box<dyn serialport::SerialPort>>,
+    ) -> std::io::Result<Self> {
+        with_open_ports(|open| {
+            open.retain(|(_, held)| held.strong_count() > 0);
+            let shared = open
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(port))
+                .and_then(|(_, held)| held.upgrade());
+            let port = match shared {
+                Some(shared) => shared,
+                None => {
+                    let shared = std::sync::Arc::new(std::sync::Mutex::new(fresh()?));
+                    open.push((port.to_string(), std::sync::Arc::downgrade(&shared)));
+                    shared
+                }
+            };
+            Ok(Self {
+                port,
+                dtr: false,
+                rts: false,
+            })
+        })
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Box<dyn serialport::SerialPort>> {
+        self.port
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+#[cfg(feature = "serial")]
+impl ControlLinePins for SharedControlLines {
+    fn set_dtr(&mut self, on: bool) -> std::io::Result<()> {
+        self.dtr = on; // recorded first: a failed raise is still lowered on drop
+        self.lock().set_dtr(on)
+    }
+    fn set_rts(&mut self, on: bool) -> std::io::Result<()> {
+        self.rts = on;
+        self.lock().set_rts(on)
+    }
+}
+
+#[cfg(feature = "serial")]
+impl Drop for SharedControlLines {
+    fn drop(&mut self) {
+        if self.dtr {
+            let _ = self.set_dtr(false);
+        }
+        if self.rts {
+            let _ = self.set_rts(false);
+        }
+    }
+}
+
 /// TESTS ONLY: control-line ports that exist only in memory, for tests that need a keying port
 /// without hardware. A port opens EXCLUSIVELY, as a real one does: while a handle to it lives,
 /// another open fails, the way Windows answers "Access is denied." And it comes back with both
@@ -388,6 +532,49 @@ fn open_control_line_port_checked(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #492: two holders of one port key through ONE handle (the fake opens exclusively, as a
+    /// COM port does), each on its own line; a holder going lowers only its own line, and the
+    /// port closes with the last. A holder that panicked holding the lock does not stop the
+    /// other from unkeying.
+    #[cfg(feature = "serial")]
+    #[test]
+    fn holders_of_one_port_share_its_handle_and_each_lowers_only_its_own_line() {
+        let name = "tempo-test-shared-lines";
+        fake_ports::install(name);
+        let mut ptt = SharedControlLines::open(name).expect("first holder opens");
+        ptt.set_rts(true).unwrap();
+        let mut fsk = SharedControlLines::open(&name.to_ascii_uppercase())
+            .expect("the second holder shares the open handle (case-blind, as COM names are)");
+        assert!(
+            fake_ports::state(name).rts,
+            "a second holder does not idle the first's line"
+        );
+        fsk.set_dtr(true).unwrap();
+        // A holder's thread panics while holding the port: the other still unkeys.
+        let port = std::sync::Arc::clone(&fsk.port);
+        let _ = std::thread::spawn(move || {
+            let _guard = port.lock().unwrap();
+            panic!("a keyer dies holding the port");
+        })
+        .join();
+        drop(fsk);
+        let s = fake_ports::state(name);
+        assert!(
+            !s.dtr && s.rts && s.held,
+            "only the dropped holder's line drops: {s:?}"
+        );
+        ptt.set_rts(false).unwrap();
+        ptt.set_rts(true).unwrap();
+        drop(ptt);
+        let s = fake_ports::state(name);
+        assert!(
+            !s.rts && !s.held,
+            "the last holder lowers its line and closes the port: {s:?}"
+        );
+        // Closed means closed: the next holder opens it afresh.
+        assert!(SharedControlLines::open(name).is_ok());
+    }
 
     #[test]
     fn checked_open_stops_before_a_later_baud_after_permission_is_lost() {
