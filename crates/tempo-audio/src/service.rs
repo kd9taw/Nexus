@@ -2593,10 +2593,6 @@ fn hot_apply_psk(e: &Engine, psk: &mut Option<PskReporter>, applied: &mut bool) 
     }
 }
 
-/// Run the radio slot loop until an unrecoverable error. Blocks — call on a
-/// dedicated thread. Opens the default sound devices, sets the rig, then each
-/// slot transmits the engine's `poll_tx` audio (holding PTT for the over) or
-/// decodes the captured frame into the engine.
 /// What every error exit of [`run_radio`] does before it returns.
 ///
 /// This thread is the ONLY thing that ever drops PTT — the tx_until_ms deadline, the hard stop
@@ -2612,6 +2608,10 @@ fn loop_error_exit<B: AudioBackend>(engine: &Arc<Mutex<Engine>>, backend: &mut B
     engine_lock(engine).set_aprs_on_air(false);
 }
 
+/// Run the radio slot loop until an unrecoverable error. Blocks — call on a
+/// dedicated thread. Opens the default sound devices, sets the rig, then each
+/// slot transmits the engine's `poll_tx` audio (holding PTT for the over) or
+/// decodes the captured frame into the engine.
 pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(), String> {
     let in_name = (!cfg.audio_in.is_empty()).then(|| cfg.audio_in.clone());
     let out_name = (!cfg.audio_out.is_empty()).then(|| cfg.audio_out.clone());
