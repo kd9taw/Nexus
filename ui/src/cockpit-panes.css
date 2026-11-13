@@ -237,12 +237,15 @@
      is less. On the smallest supported screen (1366×768 at 175 %, where the app fits itself to 65 %: a
      674 px effective window) a plain 18em held the scope at its own 8em floor and still overflowed:
      CW's shell scrolled 15 px, Phone's 20, and the picture in Phone's scope was 10 px. At 30 % both
-     fit and the scope draws 39–63 px. FT's lower region (styles.css `.cockpit-lower`) yields the same
-     way, to 15 %. The 18em cap is unchanged, so no window from 840 effective px up is touched. And it yields only
+     fit and the scope draws 39–63 px. 25 % SINCE THE NOW-BAR TOOK A LINE OF THE TOP BAR (2026-11-13, `.topbar-now`):
+     the cockpit there is 33 px shorter, and at 30 % all of it came out of the scope (Phone's picture 26 → 6 px, CW's
+     41 → 20, waterfalls-probe); at 25 % the feeds and the log give it back (Phone 26, CW 38, JS8 61 px). FT's lower
+     region (styles.css `.cockpit-lower`) yields the same way, to 15 %. The 18em cap is unchanged, so no window from
+     1008 effective px up is touched. And it yields only
      from 600 effective px up (a STEP on --vh-eff, the chrome's idiom): under that every cockpit's shell
      scrolls whatever the floor, so yielding buys nothing there, and on a window dragged smaller than any
      supported screen (900×600 at 175 %) a yielding floor put SSTV's composer warning out of reach. */
-  min-height: var(--cockpit-region-floor, max(min(18em, calc(0.3 * var(--vh-eff))), min(18em, (600px - var(--vh-eff)) * 1000)));
+  min-height: var(--cockpit-region-floor, max(min(18em, calc(0.25 * var(--vh-eff))), min(18em, (600px - var(--vh-eff)) * 1000)));
   min-width: 0;
   display: grid;
   gap: var(--space-3);
