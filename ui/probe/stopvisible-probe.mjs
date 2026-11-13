@@ -59,7 +59,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 /** [label, route]. Tempo is the `chat` view. */
 const VIEWS = [['FT', 'operate'], ['Tempo', 'chat'], ['Phone', 'phone'], ['CW', 'cw'], ['RTTY', 'rtty'], ['PSK', 'psk'],
   ['JTTY', 'jtty'], ['SSTV', 'sstv'], ['APRS', 'aprs'], ['JS8', 'js8']]
-const ALL_LOCS = ['en', 'de', 'es', 'fr', 'ja', 'ru', 'zh', 'zh-hant']
+const ALL_LOCS = ['en', 'de', 'es', 'fr', 'it', 'ja', 'ru', 'zh', 'zh-hant']
 const SMALL = [[700, 800], [900, 600], [1024, 768], [1280, 720], [1366, 768]]
 const LARGE = [[1600, 900], [1920, 1080], [2560, 1440], [3440, 1440]]
 /** [scale ('auto' = the app's own fit), sizes, languages]: one page per view × scale × language, resized through its sizes. */

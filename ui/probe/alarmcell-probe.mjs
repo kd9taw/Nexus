@@ -39,7 +39,7 @@ const ALL_SCREENS = [['FT', 'operate'], ['Phone', 'phone'], ['CW', 'cw'], ['RTTY
 const SCREENS = process.env.ALARMCELL_SCREENS ? ALL_SCREENS.filter(([n]) => process.env.ALARMCELL_SCREENS.split(',').includes(n)) : ALL_SCREENS
 const SCALES = process.env.ALARMCELL_SCALES ? process.env.ALARMCELL_SCALES.split(',') : ['150', '175']
 const SIZES = process.env.ALARMCELL_SIZES ? process.env.ALARMCELL_SIZES.split(',').map((s) => s.split('x').map(Number)) : [[700, 800], [900, 600], [1024, 768], [1366, 768]]
-const LOCALES = process.env.ALARMCELL_LOCALES ? process.env.ALARMCELL_LOCALES.split(',') : ['en', 'ru', 'de', 'fr', 'es', 'ja', 'zh', 'zh-hant']
+const LOCALES = process.env.ALARMCELL_LOCALES ? process.env.ALARMCELL_LOCALES.split(',') : ['en', 'ru', 'de', 'fr', 'es', 'it', 'ja', 'zh', 'zh-hant']
 const ALARM = { id: 1, text: 'High SWR: 3.2:1 — transmit was stopped', radioId: 1, radioName: 'IC-7300', atMs: Date.UTC(2026, 10, 8, 14, 22, 33) }
 const NO_HEIGHT = '.ch-txalarm{height:auto!important}'
 // Where the cell stands on a line of its own and its missing height was measured to move Stop TX (700x800 150 %).

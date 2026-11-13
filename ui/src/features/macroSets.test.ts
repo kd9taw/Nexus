@@ -46,6 +46,7 @@ const REFUSED: Record<string, string[]> = {
   de: ['Stopp', 'STOPP', 'TX stoppen', 'TX-Stopp', 'Halt', 'Anhalten', 'Abbrechen', 'Abbruch', 'Beenden'],
   es: ['Parar', 'PARAR', 'Parar TX', 'Pare', 'Parada', 'Detener', 'Detén', 'Abortar', 'Anular', 'Cancelar', 'Dejar de emitir'],
   fr: ['Arrêter', 'ARRÊTER', 'ARRETER', 'Arrête !', 'Arrêt', "Arrêt d'urgence", 'Interrompre', 'Abandonner', 'Annuler', 'Échap'],
+  it: ['Ferma', 'FERMA', 'Ferma TX', 'Fermare', 'Arresta', 'Arresto', 'Interrompi', 'Annulla', 'Abbandona', 'Smetti di trasmettere', 'Termina', 'Stop TX'],
   ja: ['停止', '送信停止', 'TX停止', '停波', '中止', '中断', '止めて', '止まれ', 'ストップ', 'ｽﾄｯﾌﾟ', 'キャンセル', '取り消し', '終了', 'エスケープ', 'Stopボタン', 'ＥＳＣ'],
   ru: ['Стоп', 'СТОП', 'Стоп TX', 'Остановить', 'Остановка', 'Прервать', 'Отменить', 'Отмена', 'Выключить', 'Завершить', 'Остановить передачу'],
   zh: ['停止', '停止发射', 'Stop TX（停止发射）', '中止', '中断', '终止', '终止发射', '放弃', '结束', '结束发射', '急停', '退出', '取消', '■ 停止'],
@@ -63,6 +64,7 @@ const ALLOWED: Record<string, string[]> = {
   de: ['Antwort', 'Austausch', 'Mein Rufz.', 'Rufen', 'Danke 73', 'Wiederholen', 'Nochmal', 'Rapport', 'Gruß', 'Wetter', 'Stoppuhr', 'Unterhaltung'],
   es: ['Responder', 'Intercambio', 'Mi ind.', 'Llamar', 'Gracias 73', 'Repetir', 'Otra vez', 'Nombre', 'Saludo', 'Despedida', 'Info para QSL', 'Comparar'],
   fr: ['Répondre', 'Échange', 'Mon IND.', 'Appel', 'Merci 73', 'Répéter', 'Encore', 'Nom', 'Bonjour', 'Au revoir', 'Fin'],
+  it: ['Risposta', 'Scambio', 'Mio nom.', 'Suo nom.', 'Chiamata', 'Grazie 73', 'Ripeti', 'Ancora', 'Nome', 'Saluti', 'Fermata', 'Interno'],
   ja: ['応答', 'ナンバー', '自局コール', '相手コール', '呼出', 'ありがとう', '再送', 'もう一度', '名前', '挨拶', 'コンテスト', '最後'],
   ru: ['Ответ', 'Обмен', 'Мой позывной', 'Вызов', 'Спасибо 73', 'Повторить', 'Ещё раз', 'Имя', 'Привет', 'До связи', 'Стоповый', 'Отменённый'],
   // 暂停/暫停 is pause: the reason no bare 停 is on the lists.

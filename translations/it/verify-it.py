@@ -34,6 +34,19 @@ EXPECTED_TIERS = {1: 994, 2: 364, 3: 1802, 4: 577, 5: 4166, 6: 2791}
 # <<< make-kit pins
 COLUMNS = ['priority', 'key', 'english', 'italian', 'do_not_translate', 'notes']
 
+# ── Deliberate exceptions to the do_not_translate column ────────────────────────────────────
+# Every plain term on a row's do_not_translate list must appear in the Italian, except where
+# Italian usage overrules the list. Each entry names the term, the spelling that must appear in
+# its place, and the rows it applies to (None = every row). The replacement is still checked: an
+# override is the same term spelt the Italian way, never permission to drop it.
+DNT_OVERRIDES = {
+    # "NO LIVE DATA" is a status chip, and DATA there is the English word for data. The
+    # jack-label rule (DATA, the rear-panel input on a radio) caught it. It reads NESSUN DATO LIVE.
+    'DATA': ('DATO', {'nowbar.prop.offline', 'map.prov.none', 'dxped.prov.none', 'connect.prov.offline'}),
+    # Italian does not inflect QSO: "i QSO", never "i QSOs". The term itself survives.
+    'QSOs': ('QSO', None),
+}
+
 RE_PLACEHOLDER = re.compile(r'\{\{(\w+)\}\}')
 RE_SINGLE_BRACE = re.compile(r'(?<!\{)\{([a-z]\w*)\}(?!\})')
 RE_MARKER = re.compile(r'<(/?)([a-zA-Z][a-zA-Z0-9]*)>')
@@ -119,6 +132,14 @@ def is_all_invariant(english, required):
     return not re.search(r'[A-Za-z]{2}', stripped)
 
 
+def overridden(term, key, it):
+    """True when DNT_OVERRIDES lets this row spell `term` the Italian way, and it does."""
+    if term not in DNT_OVERRIDES:
+        return False
+    spelling, keys = DNT_OVERRIDES[term]
+    return (keys is None or key in keys) and spelling in it
+
+
 def check_row(row, rep):
     key = row['key']
     english = row['english']
@@ -190,7 +211,7 @@ def check_row(row, rep):
 
     # 4. Ham vocabulary and other terms of art listed in do_not_translate.
     plain = [t for t in dnt if not (t.startswith('{') or t.startswith('<'))]
-    absent = [t for t in plain if t not in it]
+    absent = [t for t in plain if t not in it and not overridden(t, key, it)]
     if absent:
         rep.error('a term that must be copied through is not in the Italian', key,
                   'English: %s\nItalian: %s\nNot found: %s\nIf you believe one of these '

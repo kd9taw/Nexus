@@ -1,23 +1,42 @@
-# Nexus in Italian — a translation kit
+# Nexus in Italian — please review it
 
-Thank you for offering to do this.
+**English.** Nexus now ships an Italian translation. It was made with machine assistance and has
+not yet been read by an Italian operator, so some of it will be clumsy, too literal, or simply
+wrong for the shack. That is where you come in: we are not asking anyone to translate from
+scratch, only to **use Nexus in Italian on the beta and correct what reads badly.**
 
-Nexus is a ham radio operating program: one window that runs the radio over CAT, decodes and
-transmits FT8, CW, SSB, RTTY, PSK, SSTV and APRS, keeps the log, and shows the map, the spots and
-the satellite passes. It already speaks English, German, Spanish, French, Japanese, Russian and
-Chinese (simplified and traditional). You would be adding Italian, and there are a lot of Italian
-operators who would rather not work in English.
+To report a fix, either way is welcome:
 
-## What I am asking you to do
+- **Edit the file.** Open **`nexus-it-translation.csv`**, change the cell in the **`italian`**
+  column, and send it back (email **contact@hamradiotools.io**, or a pull request). Change only
+  that column.
+- **Open an issue** at <https://github.com/kd9taw/Nexus/issues>: the words on screen, where you
+  saw them, and what they should say. A screenshot helps.
 
-Open **`nexus-it-translation.csv`** in a spreadsheet program or any text editor. Fill in the
-**`italian`** column. That is all.
+**Italiano.** Nexus ora è disponibile in italiano. La traduzione è stata fatta con l'aiuto di una
+macchina e nessun radioamatore italiano l'ha ancora riletta, quindi alcune frasi saranno goffe,
+troppo letterali o semplicemente sbagliate per lo shack. Non ti chiediamo di tradurre da zero:
+ti chiediamo di **usare Nexus in italiano nella beta e correggere ciò che suona male.**
+
+Per segnalare una correzione, va bene in tutti e due i modi:
+
+- **Modifica il file.** Apri **`nexus-it-translation.csv`**, cambia la cella nella colonna
+  **`italian`** e rimandacelo (email a **contact@hamradiotools.io**, o una pull request). Cambia
+  solo quella colonna.
+- **Apri una segnalazione** su <https://github.com/kd9taw/Nexus/issues>: le parole sullo schermo,
+  dove le hai viste e cosa dovrebbero dire. Uno screenshot aiuta.
+
+Grazie, e 73.
+
+---
+
+The rest of this page is for anyone editing the CSV directly.
+
+### Editing the file
 
 Leave the other columns exactly as they are. The program matches rows by the `key` column, so a
 changed or deleted key is a lost string. When you save, keep the file as CSV in UTF-8, or the
 accents will not survive.
-
-### Opening it in Excel or LibreOffice
 
 Don't double-click the file. Excel set to Italian expects semicolons between columns, and this
 file uses commas, so a double-click opens it with every row split across the wrong columns.
@@ -35,15 +54,12 @@ A text editor works too, if you'd rather edit the quoted lines directly.
 
 | Column | What it is |
 |---|---|
-| `priority` | 1 is the most valuable work, 6 the least. See below. |
+| `priority` | 1 is what the operator sees most, 6 the least. See below. |
 | `key` | The program's internal name for the string. **Do not change it.** |
 | `english` | The English text. **Do not change it.** |
-| `italian` | **Yours.** Empty for you to fill. |
+| `italian` | **The one to correct.** |
 | `do_not_translate` | Everything in that row that must be copied through *unchanged*. |
 | `notes` | Context, but only where the English is ambiguous on its own. Most rows have none. |
-
-Anything you leave blank simply shows in English. There is no broken state, no missing-text
-placeholder, no crash. So a half-finished file is genuinely useful.
 
 ## The one rule that can actually break something
 
@@ -116,7 +132,7 @@ logbook.import.imported::one     Imported {{count}} QSO
 logbook.import.imported::other   Imported {{count}} QSOs
 ```
 
-`::one` is used for exactly 1, `::other` for everything else, 0 included. Fill both, separately.
+`::one` is used for exactly 1, `::other` for everything else, 0 included. Correct both, separately.
 Do not merge them into one row. That mistake shipped in French and Spanish once and put *"3 QSO
 importé3 QSO importés"* on screen for three releases.
 
@@ -124,12 +140,12 @@ importé3 QSO importés"* on screen for three releases.
 
 A few rows near the end of tier 2 have keys that start with `splashscreen.`. They are the words of
 the small page that appears while Nexus moves the logbook into its new database, before the
-program itself has opened. Fill all of them, or none of them; the page needs the whole set.
+program itself has opened. Keep all of them filled; the page needs the whole set.
 
 ## The priority tiers
 
-Work down the file in order and you are always doing the most valuable rows left. Stop wherever
-you like.
+If you review the file rather than the screen, work down it in order: the earlier the tier, the
+more often an operator sees the row.
 
 <!-- make-kit:tiers -->
 | Tier | Rows | What it covers |
@@ -162,18 +178,20 @@ and again whenever you have done a session's work.
 
 ## If you see English that is not in this file
 
-A few controls are still drawn in English by the program itself rather than from this file. If you
-spot one, tell me. That one is my job, not yours.
+A few controls are still drawn in English by the program itself rather than from this file. Stop TX,
+Tune and ATU are English on purpose, in every language, so that they read the same in any shack;
+the Italian sentences that mention them say Tune and Stop TX for that reason. If you spot any
+other English, tell me. That one is my job, not yours.
 
 ## Sending it back
 
-Email the filled CSV to **contact@hamradiotools.io**. Any amount is welcome, a hundred rows or all of
-them. If it is easier to send in pieces as you go, send in pieces. If something in the English
-does not make sense, or a string is impossible to translate without seeing the screen, put a
-question in the `notes` cell of that row and I will answer it rather than guess.
+Email the corrected CSV to **contact@hamradiotools.io**, send a pull request, or open an issue.
+Any amount is welcome, one row or a hundred. If something in the English does not make sense, or
+a string is impossible to get right without seeing the screen, put a question in the `notes` cell
+of that row and I will answer it rather than guess.
 
-You will be credited by callsign in the release notes and in the program's credits, as the
-translator of the Italian catalog, unless you would rather not be named.
+Reviewers are credited by callsign in the release notes and in the program's credits, unless you
+would rather not be named.
 
 73,
 
@@ -184,6 +202,12 @@ KD9TAW
 ## For the maintainer
 
 *Not part of the translator's job. This is how the kit is made and how a filled file comes back.*
+
+**Shipped 1.25.0 (beta), machine-assisted, for review.** The CSV now carries the whole Italian
+column and `ui/src/i18n/it.ts` is built from it. Refresh the kit only with
+`make-kit.py --carry translations/it/nexus-it-translation.csv`, or the Italian is lost.
+`verify-it.py` holds a short, commented `DNT_OVERRIDES` list (DATA in NESSUN DATO LIVE, QSOs → QSO)
+where Italian usage overrules the do_not_translate column.
 
 **The kit is built, never edited.** `python3 translations/it/make-kit.py` (Python 3 and Node 22.6
 or later) writes `nexus-it-translation.csv` fresh from `ui/src/i18n/en.ts` and the splash page,

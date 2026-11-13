@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Nexus in Italian.** Choose Italiano in Settings ▸ Appearance ▸ Language (Impostazioni ▸ Aspetto ▸ Lingua once it is on), or Nexus picks it up from an Italian system language. The translation is new and was made with machine assistance, so some wording will read oddly; Italian operators are invited to report wording to fix, by editing the italian column of `translations/it/nexus-it-translation.csv` or by opening an issue. Frequencies, callsigns, reports, band and mode names stay exactly as they are in every language.
 - **Nexus keeps the reports of who heard you.** PSK Reporter forgets a report of your signal after about a day. Nexus now keeps every one it fetches, on your computer, so the record of who heard you, when, on which band and mode, and how strong, grows from now on instead of being lost after a day. It asks PSK Reporter nothing extra and sends nothing anywhere.
 
 ### Changed
