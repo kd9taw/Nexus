@@ -5,8 +5,8 @@
 // Sequencing, where an operator looking for it on the Radio tab did not find it. It now sits in
 // Settings ▸ Radio ▸ Transmit limits & sharing, right after the high-SWR cutoff, under the same
 // storage key (`tuneTimeoutSecs`) and with the same save rule (cleared = the 12 s default).
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'

@@ -43,6 +43,7 @@ describe('#506 the Needed band chips run in band order', () => {
   })
 
   it('a band label it does not know goes last rather than vanishing', () => {
-    expect(bandChips([alert('W1AW', 'QO-100')]).at(-1)).toBe('QO-100')
+    const chips = bandChips([alert('W1AW', 'QO-100')])
+    expect(chips[chips.length - 1]).toBe('QO-100')
   })
 })
