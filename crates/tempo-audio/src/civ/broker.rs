@@ -1748,6 +1748,14 @@ impl RigBackend for CivBackend {
         // Sub band, selection restored, same discipline as the frequency —
         // including the remembered stray selection on a refused restore.
         let ok = self.select("Sub") && self.ack(commands::set_mode(self.addr, m, None));
+        // ⛔ #480 / #508: `06` leaves the DATA flag alone, so a Sub band last used for FT8
+        // kept USB-D under a voice uplink. Every mode here is a plain one (`PKTUSB` is refused
+        // above while engaged), so DATA goes off — Main's off frame, `1A 06 00 00`, while Sub
+        // is still selected, a NAK tolerated as Main tolerates it (a radio may NAK a redundant
+        // off). A mode/DATA setting only: no PTT, no frequency, the order otherwise unchanged.
+        if ok {
+            let _ = self.answer(commands::set_data_mode(self.addr, false, None));
+        }
         let restored = self.select("Main");
         g.sel_stray = !restored;
         if restored {
@@ -2733,6 +2741,39 @@ mod tests {
             assert!(!r.satmode, "satellite mode released (16 5A 00)");
             assert!(!r.log.iter().any(|(cmd, _)| *cmd == 0x0F));
         }
+    }
+
+    /// ⛔ ISSUES #480 / #508 (IC-9700 linear pass): the downlink came up LSB, as asked, and
+    /// the uplink USB-D. In satellite mode the uplink's sideband went to the Sub band as a
+    /// bare `06 <mode>`, and `06` leaves the radio's separate DATA flag (`1A 06`) alone — so
+    /// a Sub band last used for FT8 kept DATA on, and a voice uplink transmitted USB-D. The
+    /// write now says DATA off (`1A 06 00 00`, Main's own off frame) while Sub is still
+    /// selected, before Main is handed back. The frame order is the claim.
+    #[test]
+    fn a_satellite_uplink_mode_turns_the_sub_bands_data_mode_off() {
+        let (_d, port, regs) = daemon_with_regs();
+        let (mut c, mut rd) = client(port);
+        assert_eq!(roundtrip(&mut c, &mut rd, "F 435640000\n"), "RPRT 0\n");
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 1 Sub\n"), "RPRT 0\n");
+        // The scene: DATA left on by an earlier FT8 session.
+        regs.lock().unwrap().data_mode = true;
+
+        let n = regs.lock().unwrap().wire.len();
+        assert_eq!(roundtrip(&mut c, &mut rd, "X USB 0\n"), "RPRT 0\n");
+        let r = regs.lock().unwrap();
+        let frames = hex_frames(&r.wire[n..]);
+        let pos = |f: &str| frames.iter().position(|w| w == f);
+        let sub = pos("FE FE A2 E0 07 D1 FD").expect("Sub selected");
+        let mode = pos("FE FE A2 E0 06 01 FD").expect("USB written");
+        let off = pos("FE FE A2 E0 1A 06 00 00 FD").expect("DATA off written");
+        let main = pos("FE FE A2 E0 07 D0 FD").expect("Main handed back");
+        assert!(
+            sub < mode && mode < off && off < main,
+            "DATA off rides the Sub selection, after the mode: {frames:?}"
+        );
+        assert!(!r.data_mode, "the uplink is plain USB, not USB-D");
+        assert_eq!(r.sub_mode, 0x01, "USB on the Sub band");
+        assert!(!r.sel_sub, "selection handed back to Main");
     }
 
     #[test]
