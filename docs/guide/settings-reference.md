@@ -1375,6 +1375,18 @@ Comma-separated chip lists for the quick text you fire from each surface:
   yourself is remembered for the rest of the session, so re-entering the section
   does not restart it behind you.
 
+**Sending**
+
+- **Start and end each RTTY over on a new line** — on by default: every over goes
+  out with a carriage return and line feed (CR LF) in front of it and after it —
+  typed and sent with Enter, from an F-key, or by Auto call — so it arrives on a
+  line of its own on the other station's screen, where contest software picks the
+  call out more easily. A message that already starts or ends with `{NL}` gets one
+  new line there, not two. Turn it off to send exactly what you typed. Continuous
+  TX is one long transmission rather than a series of overs, so this does not
+  touch what you type into it; an F-key pressed while it is up still starts a new
+  line.
+
 **Keying**
 
 - **Keying backend** — **AFSK** plays the two-tone waveform through the same TX

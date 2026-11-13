@@ -463,7 +463,7 @@ fn a_refused_rtty_over_is_not_played_or_echoed() {
     let mut s = Scene::new(Key::Accepts, send);
     s.run_to(3_000.0);
     assert!(!s.backend.played.is_empty(), "control: nothing played");
-    assert_eq!(rtty_sent(&s.engine), "CQ TEST", "control: no echo");
+    assert_eq!(rtty_sent(&s.engine), "\r\nCQ TEST\r\n", "control: no echo");
 }
 
 /// ⭐ CONTINUOUS RTTY THE RADIO REFUSES DROPS ITS LATCH. The stream played its idle into the
@@ -786,7 +786,11 @@ fn a_late_answer_to_the_rtty_key_still_plays_and_echoes_the_over() {
         st.keyer_error
     );
     assert!(!s.backend.played.is_empty(), "the over was not played");
-    assert_eq!(rtty_sent(&s.engine), "CQ TEST", "the over was not echoed");
+    assert_eq!(
+        rtty_sent(&s.engine),
+        "\r\nCQ TEST\r\n",
+        "the over was not echoed"
+    );
 }
 
 /// ⭐ A SOUNDCARD CW SEND WHOSE KEYS ARE ANSWERED LATE PLAYS WHOLE. A refused word drops the rest of
@@ -936,7 +940,7 @@ fn hamlibs_no_answer_to_the_rtty_key_still_plays_and_echoes_the_over() {
         );
         assert_eq!(
             rtty_sent(&s.engine),
-            "CQ TEST",
+            "\r\nCQ TEST\r\n",
             "RPRT {code}: the over was not echoed"
         );
     }

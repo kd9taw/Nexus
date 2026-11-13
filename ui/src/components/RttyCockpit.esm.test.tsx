@@ -153,16 +153,16 @@ describe('Enter Sends Message in the RTTY cockpit', () => {
     await renderCockpit()
     fireEvent.keyDown(window, { key: 'F1' }) // CQ, by hand: ESM goes to Run
     await flush()
-    expect(sent).toEqual(['\r\nCQ TEST KD9TAW KD9TAW CQ '])
+    expect(sent).toEqual(['CQ TEST KD9TAW KD9TAW CQ '])
     fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
     await flush()
     await enter(stripCall())
-    expect(sent[sent.length - 1], 'F2, framed for the air, to the call in the strip').toBe('\r\nK9AAA 599 COOK COOK ')
+    expect(sent[sent.length - 1], 'F2, framed for the air, to the call in the strip').toBe('K9AAA 599 COOK COOK ')
     expect(loggedCalls()).toEqual([])
     fireEvent.change(qthBox(), { target: { value: 'COOK' } })
     await flush()
     await enter(qthBox())
-    expect(sent[sent.length - 1]).toBe('\r\nTU KD9TAW CQ ')
+    expect(sent[sent.length - 1]).toBe('TU KD9TAW CQ ')
     expect(loggedCalls()).toEqual(['K9AAA'])
   })
 
@@ -171,11 +171,11 @@ describe('Enter Sends Message in the RTTY cockpit', () => {
     fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
     await flush()
     await enter(stripCall())
-    expect(sent).toEqual(['\r\nKD9TAW KD9TAW '])
+    expect(sent).toEqual(['KD9TAW KD9TAW '])
     fireEvent.change(qthBox(), { target: { value: 'COOK' } })
     await flush()
     await enter(qthBox())
-    expect(sent[sent.length - 1]).toBe('\r\nTU 599 COOK COOK ')
+    expect(sent[sent.length - 1]).toBe('TU 599 COOK COOK ')
     expect(loggedCalls()).toEqual(['K9AAA'])
   })
 
@@ -189,14 +189,14 @@ describe('Enter Sends Message in the RTTY cockpit', () => {
     await flush()
     await enter(stripCall()) // his call and the exchange
     await enter(qthBox()) // his QTH not copied yet
-    expect(sent[sent.length - 1]).toBe('\r\nAGN? AGN? ')
+    expect(sent[sent.length - 1]).toBe('AGN? AGN? ')
     expect(loggedCalls()).toEqual([])
     fireEvent.keyDown(window, { key: 'F7' })
     await flush()
-    expect(sent[sent.length - 1], 'F7 by hand').toBe('\r\nK9AAA QSO B4 TU KD9TAW ')
+    expect(sent[sent.length - 1], 'F7 by hand').toBe('K9AAA QSO B4 TU KD9TAW ')
     fireEvent.keyDown(window, { key: 'F8' })
     await flush()
-    expect(sent[sent.length - 1], 'F8 by hand').toBe('\r\nAGN? AGN? ')
+    expect(sent[sent.length - 1], 'F8 by hand').toBe('AGN? AGN? ')
   })
 
   // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule): Enter sends the
@@ -221,7 +221,7 @@ describe('Enter Sends Message in the RTTY cockpit', () => {
     fireEvent.change(qthBox(), { target: { value: 'COOK' } })
     await flush()
     await enter(qthBox())
-    expect(sent[sent.length - 1], 'F7, framed for the air').toBe('\r\nK9AAA QSO B4 TU KD9TAW ')
+    expect(sent[sent.length - 1], 'F7, framed for the air').toBe('K9AAA QSO B4 TU KD9TAW ')
     expect(loggedCalls()).toEqual([])
     const before = sent.length
     await enter(qthBox())
@@ -270,7 +270,7 @@ describe('Enter Sends Message in the RTTY cockpit', () => {
     await flush()
     sent.length = 0
     await enter(qthBox())
-    expect(sent).toEqual(['\r\nK9AAA 599 COOK COOK '])
+    expect(sent).toEqual(['K9AAA 599 COOK COOK '])
     expect(loggedCalls()).toEqual([])
   })
 })

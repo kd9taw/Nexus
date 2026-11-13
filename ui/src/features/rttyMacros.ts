@@ -110,8 +110,10 @@ export function withRttySetReset(
   return withMacroSetReset(profiles, set)
 }
 
-/** The tokens the expander fills, as the editor lists them. */
-export const RTTY_TOKENS = ['{MYCALL}', '{CALL}', '{RST}', '{EXCH}'] as const
+/** The tokens the expander fills, as the editor lists them. `{NL}` is a line break on the air:
+ *  CR then LF, the RTTY order — the auto-sequencer's templates fill it the same way
+ *  (`tempo_core::rtty::seq`, `RttySeq::render`). */
+export const RTTY_TOKENS = ['{MYCALL}', '{CALL}', '{RST}', '{EXCH}', '{NL}'] as const
 
 const KNOWN = knownTokenPattern(RTTY_TOKENS)
 
@@ -140,14 +142,21 @@ export function expandRttyMacro(
   if (uses('MYCALL') && !mycall) return { missing: 'mycall' }
   if (uses('CALL') && !call) return { missing: 'call' }
   if (uses('EXCH') && !exch) return { missing: 'exch' }
-  const value: Record<string, string> = { MYCALL: mycall, CALL: call, RST: '599', EXCH: exch }
+  const value: Record<string, string> = { MYCALL: mycall, CALL: call, RST: '599', EXCH: exch, NL: '\r\n' }
   return { text: text.replace(KNOWN, (_, token: string) => value[token.toUpperCase()]) }
 }
 
-/** How an F-key message goes on the air: on a line of its own and ending in a space — the
- *  published RTTY contest convention. The line break puts the call at the start of a line on the
- *  other station's screen; the space terminates the last word, which a receiver's parser
- *  (ours included — seq.rs drops an unterminated trailing token) otherwise holds back. */
+/** How an F-key message goes on the air: ending in a space — the published RTTY contest
+ *  convention. The space terminates the last word, which a receiver's parser (ours included —
+ *  seq.rs drops an unterminated trailing token) otherwise holds back. A message that already
+ *  ends on a line break (`{NL}`) is terminated by it and gets no space, which would open the
+ *  next line with one.
+ *
+ *  ⚠️ NO LINE BREAK IS ADDED HERE, and the operator's own `{NL}`s are kept at either end. The
+ *  line breaks around an over are the engine's (`Settings::rtty_over_newlines`, applied in
+ *  `Engine::rtty_enqueue`): one place for typed sends, F-keys and the auto-sequencer alike, so
+ *  the Settings switch decides it for all three and a break is never doubled. */
 export function frameForAir(text: string): string {
-  return `\r\n${text.trim()} `
+  const body = text.replace(/^[ \t]+|[ \t]+$/g, '')
+  return /[\r\n]$/.test(body) ? body : `${body} `
 }

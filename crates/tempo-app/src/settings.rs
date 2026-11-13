@@ -3612,6 +3612,18 @@ pub struct Settings {
     /// (`rttyRXAutoArm` compiles clean on both sides and never matches).
     #[serde(default = "default_true")]
     pub rtty_rx_auto_arm: bool,
+    /// Start and end every RTTY over on a new line: a CR LF in front of it and after it, unless
+    /// that end already is one (an `{NL}`), so a line break is never doubled. ON by default, for
+    /// a new station and an upgrader alike (a tester's request: contest software picks a call
+    /// out of a line more easily than out of a run). Applied in ONE place,
+    /// `Engine::rtty_enqueue`, which every over passes through — Enter, an F-key, the
+    /// auto-sequencer. Text only: it adds CR LF and touches nothing about keying, timing or PTT.
+    /// Continuous TX's live typing is not an over and is never framed.
+    ///
+    /// Read leniently ([`lenient_true`]): a value that is not a bool loads as on, never as a
+    /// settings file that fails to load.
+    #[serde(default = "default_true", deserialize_with = "lenient_true")]
+    pub rtty_over_newlines: bool,
     /// Whether opening the JTTY view starts its receiver: [`Settings::psk_rx_auto_arm`]'s
     /// twin for JTTY, the same doctrine and default, gated in
     /// [`crate::engine::Engine::jtty_auto_arm`].
@@ -4850,6 +4862,14 @@ fn lenient_popup_corner<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Popup
 }
 
 /// [`lenient_list`]'s scalar twin: a string, or empty for any other JSON value.
+/// A default-on switch read leniently: `true`/`false` as written, anything else (a string, a
+/// number, null) as on — the default — rather than failing the whole settings file over one key.
+fn lenient_true<'de, D: serde::Deserializer<'de>>(de: D) -> Result<bool, D::Error> {
+    Ok(serde_json::Value::deserialize(de)?
+        .as_bool()
+        .unwrap_or(true))
+}
+
 fn lenient_string<'de, D: serde::Deserializer<'de>>(de: D) -> Result<String, D::Error> {
     Ok(match serde_json::Value::deserialize(de)? {
         serde_json::Value::String(s) => s,
@@ -7093,6 +7113,7 @@ impl Default for Settings {
             sstv_tx_fsk_id: false,
             psk_rx_auto_arm: true,
             rtty_rx_auto_arm: true,
+            rtty_over_newlines: true,
             jtty_rx_auto_arm: true,
             jtty_ftol_hz: default_jtty_ftol_hz(),
             jtty_serial: default_jtty_serial(),
@@ -13773,6 +13794,34 @@ mod tests {
         assert!(old.rtty_rx_auto_arm, "an upgrader's file predates the key");
         let off: Settings = serde_json::from_str(r#"{"rttyRxAutoArm":false}"#).unwrap();
         assert!(!off.rtty_rx_auto_arm, "and an explicit opt-out survives");
+    }
+
+    /// The new-line framing of every RTTY over: on for a new station AND an upgrader (whose
+    /// file predates the key), an explicit off survives, and a value that is not a bool loads
+    /// as the default without costing the rest of the file.
+    #[test]
+    fn rtty_over_newlines_defaults_on_and_loads_leniently() {
+        assert!(Settings::default().rtty_over_newlines);
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(
+            json.contains("\"rttyOverNewlines\":true"),
+            "missing wire key rttyOverNewlines in {json}"
+        );
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(
+            old.rtty_over_newlines,
+            "an upgrader's file predates the key"
+        );
+        let off: Settings = serde_json::from_str(r#"{"rttyOverNewlines":false}"#).unwrap();
+        assert!(!off.rtty_over_newlines, "an explicit opt-out survives");
+        for junk in [r#""yes""#, "1", "null", "[]"] {
+            let s: Settings = serde_json::from_str(&format!(
+                r#"{{"mycall":"W9XYZ","rttyOverNewlines":{junk}}}"#
+            ))
+            .unwrap_or_else(|e| panic!("{junk}: {e}"));
+            assert!(s.rtty_over_newlines, "{junk} loads as the default");
+            assert_eq!(s.mycall, "W9XYZ", "{junk} costs nothing else");
+        }
     }
 
     /// ⭐ **#304 — the Auto-call timing fields, on the wire keys the UI hand-writes, and the

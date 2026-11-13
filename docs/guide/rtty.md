@@ -180,15 +180,19 @@ the next caller:
 Click a macro, or press its F-key. The keys work whenever the RTTY cockpit is on
 screen, including while you are typing in Their call…, the compose bar or the
 log strip; holding one down sends it once. On a Mac keyboard, hold **fn**.
-Every macro goes out on a line of its own and ends with a space, the way RTTY
-contest messages are written: your call starts a line on the other station's
-screen, and the last word of the message is complete for their logger. What you
-type in the compose bar goes out exactly as typed.
+Every macro ends with a space, the way RTTY contest messages are written, so the
+last word of the message is complete for the other station's logger. Every over —
+a macro, a line you type in the compose bar, an Auto call over — also starts and
+ends on a new line, so your call starts a line on their screen; that is
+**Start and end each RTTY over on a new line** in
+[Settings ▸ Digital ▸ RTTY](settings-reference.md#rtty), on by default. Turn it off
+and what you type goes out exactly as typed.
 
 The tokens: `{MYCALL}` is your callsign from
 [Settings ▸ Station](settings-reference.md#station); `{CALL}` is the Their-call field;
 `{RST}` is the report, always `599`; `{EXCH}` is your exchange for the contest you
-are running, without the report. A message that needs a value it does not have —
+are running, without the report; `{NL}` is a new line (CR LF) wherever you put it —
+the Auto call messages understand it too. A message that needs a value it does not have —
 `{CALL}` with Their call… empty, `{EXCH}` with no contest running — is not sent,
 and a toast says which. Hovering a macro shows it with your call and theirs filled
 in, so you can read what will key before you click it. The tokens also expand in the

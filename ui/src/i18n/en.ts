@@ -9975,6 +9975,9 @@ export const EN = {
   'settings.rtty.rxAutoArm.label': 'Start receiving when RTTY opens',
   'settings.rtty.rxAutoArm.hint':
     'The RTTY screen starts the decoder as soon as you open it — tune a signal and the text prints, no setup. Turn this off to arm the receiver by hand (the Arm RX button in the decoded-text pane). This arms the RECEIVER only — transmitting is never armed for you.',
+  'settings.rtty.overNewlines.label': 'Start and end each RTTY over on a new line',
+  'settings.rtty.overNewlines.hint':
+    "Sends a carriage return and line feed before and after every over — typed, from an F-key or by Auto call — so the other station's screen, and the contest software reading it, gets each over on a line of its own. A message that already starts or ends with {NL} gets one new line there, not two. Off sends exactly what you typed.",
   'settings.rtty.keying.title': 'Keying',
   'settings.rtty.backend.label': 'Keying backend',
   'settings.rtty.backend.afsk': 'AFSK — soundcard tones through the rig in LSB (default)',
@@ -12801,6 +12804,7 @@ export const EN = {
   'rtty.macroEditor.token.call': 'Their callsign, from the Call box',
   'rtty.macroEditor.token.rst': 'The signal report, 599',
   'rtty.macroEditor.token.exch': 'Your contest exchange, without the report',
+  'rtty.macroEditor.token.nl': 'A new line (CR LF)',
   'rtty.macroEditor.stopTitle': 'A macro transmits, so its title can’t look like a stop button (Stop, Esc, Abort).',
   'rtty.macroEditor.unknownToken': 'Unknown token {{token}} — RTTY can’t send braces, so it would go out as a bare word.',
   'rtty.macroEditor.save': 'Save',

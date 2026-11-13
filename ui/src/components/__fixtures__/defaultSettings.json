@@ -236,6 +236,7 @@
   "sstvTxFskId": false,
   "pskRxAutoArm": true,
   "rttyRxAutoArm": true,
+  "rttyOverNewlines": true,
   "jttyRxAutoArm": true,
   "jttyFtolHz": 20,
   "jttyFkeys": ["CQ %M CQ", "%H %E", "%H TU CQ %M CQ", "%M", "%H", "TU NOW %Q %E", "%H AGN?", "%E"],

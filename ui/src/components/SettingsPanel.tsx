@@ -10553,6 +10553,23 @@ export function SettingsPanel({
               <span className="settings-hint">{t('settings.rtty.rxAutoArm.hint')}</span>
             </div>
             {macroCountField('rttyMacroCount')}
+            {/* Every over on its own line — default ON, so `!== false` like the auto-arm above.
+                The engine applies it (`Engine::rtty_enqueue`), for every way an over is sent. */}
+            <div className="settings-field">
+              <label className="settings-toggle">
+                <span className="settings-label">{t('settings.rtty.overNewlines.label')}</span>
+                <button disabled={locked('rttyOverNewlines')}
+                  type="button"
+                  role="switch"
+                  aria-checked={form.rttyOverNewlines !== false}
+                  className={`toggle${form.rttyOverNewlines !== false ? ' on' : ''}`}
+                  onClick={() => updateBool('rttyOverNewlines', form.rttyOverNewlines === false)}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </label>
+              <span className="settings-hint">{t('settings.rtty.overNewlines.hint')}</span>
+            </div>
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">{t('settings.rtty.keying.title')}</span>
               <label className="settings-field">
