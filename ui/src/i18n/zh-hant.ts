@@ -3235,6 +3235,8 @@ export const ZH_HANT: PartialCatalog = {
   "settings.transmit.swrStop.hint": "連續兩次讀數高於此值，Nexus 即停止發射，與 Stop TX（停止發射）完全相同，並告知原因。它從不發起發射，也從不替你重新按 TX On（開啟 TX） — 待天線整理好後由你操作。預設關閉；單次輪詢的高讀數會被忽略，因此調諧器步進或按鍵瞬態不會切斷你。",
   "settings.transmit.swrStop.unverified": "此電台的 SWR 讀數尚未驗證，因此 Nexus 不會據此停止你的發射。Nexus 僅在知道電台自身刻度時才信任該數值 — 原生 CI-V 的 Icom，以及 FlexRadio。在其他電台上該數值可能偏差很大：有些在自己表上顯示近乎完美匹配，卻在此報告故障。",
   "settings.transmit.swrStop.noMeterStream": "Nexus 未收到此 Flex 自身的 SWR 表，因此無論 SWR 多高，此切斷都不會停止任何發射。該表來自電台的原生資料流，且目前關閉。在 設定 ▸ 電台 ▸ 電台與 CAT 中開啟「Flex 原生全景介面卡（測試版）」以啟動它。在此之前此設定無效。",
+  "settings.transmit.tuneTimeout.label": "Tune 逾時（秒）",
+  "settings.transmit.tuneTimeout.hint": "調諧載波在這麼多秒後自動釋放，適用於每個畫面：切勿讓按鍵發射無人看管。留空 = 12 秒。",
   "settings.transmit.parsecStop.label": "若我的 Parsec 工作階段斷開則停止鎖存發射",
   "settings.transmit.parsecStop.hint": "用於在 Parsec 上執行機房。Nexus 監視本機上 Parsec 自身的日誌。若已連線的 Parsec 工作階段斷開，或其日誌無法再讀取，Nexus 會停止鎖存的 PTT、連續 RTTY 或 PSK，以及 Tune（調諧發射），與其自身的停止完全相同，並說明原因。它從不發起發射或替你重新按 TX On（開啟 TX）。FT8/FT4 週期不受影響：它們自行結束，且 TX 看門狗仍然適用。Parsec 可能需要近一分鐘才注意到拔掉的網路線，因此這是看門狗的備份而非替代。",
   "settings.transmit.parsecStop.unavailable": "僅在 Windows 上可用，Nexus 可在其上讀取 Parsec 主機的日誌。",

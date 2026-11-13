@@ -9479,6 +9479,11 @@ export const EN = {
   // it, because "it doesn't work" with no cure is what the `.unverified` line already says.
   'settings.transmit.swrStop.noMeterStream':
     'Nexus is not receiving this Flex\'s own SWR meter, so this cutoff will not stop anything, however high the SWR goes. That meter comes from the radio\'s native stream, and it is off. Turn on "Flex native panadapter (Beta)" in Settings \u25b8 Radio \u25b8 Rig & CAT to start it. Until then this setting has no effect.',
+  // #487: the Tune timeout, moved here from Settings ▸ Digital (it applies to Tune on every
+  // screen). `s` and `12 s` are units and a number: keep them exactly.
+  'settings.transmit.tuneTimeout.label': 'Tune timeout (s)',
+  'settings.transmit.tuneTimeout.hint':
+    'Auto-release the tune carrier after this many seconds, on every screen: never leave a key-down unattended. Empty = 12 s.',
 
   // Parsec presence mode (operator sign-off 2026-09-27): stop-only, off by default. The hint
   // says what it watches and what it stops, and names what it leaves alone. `Parsec`, `PTT`,
@@ -9624,7 +9629,7 @@ export const EN = {
   // ⚠️ TWO SUB-GROUPS OF THIS SECTION ARE MISSING FROM THIS FILE ON PURPOSE. "Transmit &
   // Sequencing" and "Auto-CQ & Caller Selection" are the FT-mode TX / timing / QSO-management
   // surface — the T/R period, the TX watchdog, disable-after-73, double-click-arms-TX, the
-  // tune timeout, the CQ budget, the blocked-caller list and the best-caller pick. Every label
+  // CQ budget, the blocked-caller list and the best-caller pick. Every label
   // and accessible name in them stays written in `SettingsPanel.tsx` until the transmit-path
   // batch moves them with the stop-line sweeps re-run. What follows is the REST of the
   // section (Logging Behavior, Decoder, Station Housekeeping) and the six weak-signal mode

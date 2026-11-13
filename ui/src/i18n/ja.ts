@@ -6044,6 +6044,8 @@ export const JA: PartialCatalog = {
   "settings.transmit.swrStop.hint": "この値を超える読み取りが2回続くと、Nexus は「送信停止」と同じように送信をやめ、その理由を表示します。送信を始めることは決してなく、TX を自動で入れ直すこともありません。アンテナを直したうえで、ご自分で入れ直してください。既定はオフです。1回だけの高い読み取りは無視するので、チューナーの動作や立ち上がりの過渡で切られることはありません。",
   "settings.transmit.swrStop.unverified": "この無線機の SWR 表示はまだ検証されていないため、Nexus はこれを理由に送信を止めません。Nexus がこの数値を信頼するのは、無線機自身の目盛りが分かっている場合だけです — ネイティブ CI-V の Icom と FlexRadio です。ほかの無線機では大きく外れることがあります。自身のメーターではほぼ完全な整合を示しながら、ここでは異常として報告される機種もあります。",
   "settings.transmit.swrStop.noMeterStream": "この Flex 自身の SWR メーターを Nexus が受信していないため、SWR がどれほど高くなってもこの停止機能は何も止めません。このメーターは無線機のネイティブストリームから届きますが、それがオフになっています。設定 ▸ 無線機 ▸ Rig & CAT で「Flexネイティブパナアダプター（ベータ）」をオンにして開始してください。それまではこの設定は効果がありません。",
+  "settings.transmit.tuneTimeout.label": "Tune タイムアウト（秒）",
+  "settings.transmit.tuneTimeout.hint": "チューン用キャリアをこの秒数で自動的に止めます（すべての画面で有効）。キーダウンを放置しないでください。空欄 = 12 秒。",
   "settings.transmit.parsecStop.label": "Parsec のセッションが切れたら、保持中の送信を止める",
   "settings.transmit.parsecStop.hint": "Parsec でシャックを遠隔運用するための設定です。Nexus はこのコンピューター上の Parsec 自身のログを監視します。接続していた Parsec のセッションが切れたとき、またはログが読めなくなったときは、ロックした PTT、RTTY・PSK の連続送信、Tune を、それぞれの停止操作と同じ方法で止め、その理由を表示します。送信を始めることも、TX を入れ直すこともありません。FT8/FT4 の送信には触れません。これは自然に終わり、TX ウォッチドッグも引き続き働きます。ネットワークケーブルが抜けたことに Parsec が気づくまで最大1分ほどかかるため、これはウォッチドッグの補助であり、代わりにはなりません。",
   "settings.transmit.parsecStop.unavailable": "Windows 版でのみ使えます。Nexus が Parsec ホストのログを読めるのは Windows だけです。",
