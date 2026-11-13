@@ -197,6 +197,8 @@ export const EN = {
   "remote.confirmEmailContinue": "I’ve confirmed my email — continue",
   "remote.useDifferentAccount": "Use a different account",
   "remote.trialActiveElsewhere": "This email address already has a Remote trial running under a different sign-in, such as Google instead of a password. Sign out, then sign in the way you did the first time.",
+  "remote.trialDomainLimit": "Your email address's domain has already started as many Remote trials this month as one domain may. Sign in with an address at another provider, or subscribe.",
+  "remote.trialCallsignNeeded": "A Remote trial is for a US amateur licence. At the shack, set your station's US callsign in Settings → Station, update Nexus if it asks, and sign the station in again.",
   "remote.tryLater": "Too many tries. Wait up to ten minutes, then try again.",
   "remote.stationOffline": "That station is not reachable. Check that Nexus is running at the shack, that Remote is on there (Settings → Remote), and that the computer is awake and online.",
   "remote.sessionEnded": "Remote access to this station ended, so this browser was disconnected. Check your trial and your stations below.",

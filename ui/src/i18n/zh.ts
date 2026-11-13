@@ -7561,6 +7561,8 @@ export const ZH: PartialCatalog = {
   "remote.confirmEmailContinue": "我已确认邮箱 — 继续",
   "remote.useDifferentAccount": "使用其他账户",
   "remote.trialActiveElsewhere": "该邮箱地址已在另一种登录方式（例如 Google 而非密码）下运行了远程试用。请退出登录，然后用首次登录时的方式重新登录。",
+  "remote.trialDomainLimit": "你的邮箱域名本月开始的远程试用已达到单个域名的上限。请使用其他服务商的邮箱登录，或订阅。",
+  "remote.trialCallsignNeeded": "远程试用面向美国业余无线电执照。请在电台端的 设置 → 电台 中填写你的美国呼号，按提示更新 Nexus，然后让电台重新登录。",
   "remote.tryLater": "尝试次数过多。请等待最多十分钟后重试。",
   "remote.stationOffline": "无法连接该台站。请确认台站上的 Nexus 正在运行、远程已在那里开启（设置 → 远程），并且电脑处于唤醒且联网状态。",
   "remote.sessionEnded": "对该台站的远程访问已结束，因此此浏览器被断开。请在下方查看你的试用状态与台站。",

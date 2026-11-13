@@ -242,7 +242,27 @@ already holds `TRIAL_KEY` is refused before any write while the environment does
   marker and every spent trial becomes available again. Set it, with the licence copy loaded, before
   any Nexus sends a callsign. Without it, the approve route checks `callsign` and `pc` for shape only.
 - `TRIAL_IDENTITY_REQUIRED=1`: an approval that would start a trial must carry both fields
-  (`updateRequired` otherwise). Turn it on only once the Nexus releases that send them are out.
+  (`updateRequired` otherwise). Turn it on only once the Nexus releases that send them are out. It is
+  also the paid launch's trial identity (ruling 1406), so it turns on two more rules wherever a trial
+  starts, at a code pairing's approval and at a signed-in station's first internet use alike:
+  - **A trial is a US licence's.** The station callsign must be a US one that is active in the licence
+    copy: none is refused `callsignInvalid`, any other `callsignNotLicensed`, and a station whose
+    sign-in kept no callsign `updateRequired`. A call whose licence email is the account's mailbox is
+    proven; any other active US call is an unproven claim, which one other account's marker blocks
+    (`trialUsedByCallsign`), so each call starts one trial. Support grants by hand where this is wrong.
+  - **Three trials a mail domain in thirty days.** Counted on the account's mailbox domain, excluding
+    the large public providers listed in `authority.ts` (`PUBLIC_MAIL_DOMAINS`, arrl.net among them),
+    whose addresses are each an account of their own. The fourth is refused `trialDomainLimit`. Hand
+    grants and paid plans are never counted or refused.
+
+  **How the licence copy's staleness rule reads with these.** The stale rule was "US calls fail
+  closed": once the copy is more than three days old, a US call is refused `serviceUnavailable` rather
+  than waved through, while a non-US call was still checked for shape only. With the identity required
+  there are no non-US trials, so a stale copy now refuses **every** self-serve trial with
+  `serviceUnavailable` until the next import lands. Nothing already running is touched: the copy is read
+  only when a trial starts, and paid plans, hand grants, the LAN and existing trials do not read it.
+  Keep the daily import scheduled; a missed day or two is invisible, the fourth is an outage of new
+  trials. A licence that lapses or changes hands after a trial started ends nothing either.
 - `REMOTE_BETA_FREE=1` (staging only; a production deploy refuses it): free during the beta. A trial or
   a grant no longer ends; the page says "Free during the beta" instead of counting days. Everything
   else is unchanged: an account still starts its one trial through the same checks, and a ban,

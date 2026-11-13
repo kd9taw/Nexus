@@ -295,6 +295,10 @@ export function RemoteApp() {
     // One mailbox, two sign-ins (a password once, Google once): the second account is refused a
     // trial the first one is already running.
     : code === 'trialActiveElsewhere' ? t('remote.trialActiveElsewhere')
+    // The paid launch's trial identity (ruling 1406): a mail domain's trials this month are spent, or
+    // the station the trial would start for has no US licence the service could check.
+    : code === 'trialDomainLimit' ? t('remote.trialDomainLimit')
+    : code === 'callsignNotLicensed' || code === 'callsignInvalid' || code === 'updateRequired' ? t('remote.trialCallsignNeeded')
     // Rate limits on the browser's routes reset within a minute (account) or ten (claim, attach).
     : code === 'tryLater' ? t('remote.tryLater')
     // Set by the page, not the service: an open session whose next ticket was refused.

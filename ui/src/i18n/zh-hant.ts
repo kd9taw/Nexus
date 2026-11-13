@@ -7563,6 +7563,8 @@ export const ZH_HANT: PartialCatalog = {
   "remote.confirmEmailContinue": "我已確認信箱 — 繼續",
   "remote.useDifferentAccount": "使用其他帳戶",
   "remote.trialActiveElsewhere": "該信箱地址已在另一種登入方式（例如 Google 而非密碼）下執行了遠端試用。請退出登入，然後用首次登入時的方式重新登入。",
+  "remote.trialDomainLimit": "你的信箱網域本月開始的遠端試用已達單一網域的上限。請使用其他服務商的信箱登入，或訂閱。",
+  "remote.trialCallsignNeeded": "遠端試用適用於美國業餘無線電執照。請在電台端的 設定 → 電台 中填寫你的美國呼號，依提示更新 Nexus，然後讓電台重新登入。",
   "remote.tryLater": "嘗試次數過多。請等待最多十分鐘後重試。",
   "remote.stationOffline": "無法連線該台站。請確認台站上的 Nexus 正在執行、遠端已在那裡開啟（設定 → 遠端），並且電腦處於喚醒且聯網狀態。",
   "remote.sessionEnded": "對該台站的遠端訪問已結束，因此此瀏覽器被斷開。請在下方檢視你的試用狀態與台站。",

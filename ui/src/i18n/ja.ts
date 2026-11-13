@@ -249,6 +249,8 @@ export const JA: PartialCatalog = {
   "remote.confirmEmailContinue": "メールアドレスを確認しました — 続ける",
   "remote.useDifferentAccount": "別のアカウントを使う",
   "remote.trialActiveElsewhere": "このメールアドレスでは、別のサインイン方法（パスワードではなく Google など）で Remote の試用がすでに進行中です。サインアウトして、最初と同じ方法でサインインしてください。",
+  "remote.trialDomainLimit": "このメールアドレスのドメインでは、今月すでに1つのドメインで開始できる上限まで Remote の試用が開始されています。別のプロバイダーのアドレスでサインインするか、購読してください。",
+  "remote.trialCallsignNeeded": "Remote の試用は米国のアマチュア無線免許向けです。無線局側の 設定 → 局 に米国のコールサインを設定し、求められたら Nexus を更新して、局をもう一度サインインしてください。",
   "remote.tryLater": "試行回数が多すぎます。最大10分待ってから、もう一度お試しください。",
   "remote.stationOffline": "その局に到達できません。シャックで Nexus が動作していること、そこで Remote がオンになっていること（設定 → リモート）、PC が起動していてオンラインであることを確認してください。",
   "remote.sessionEnded": "この局へのリモートアクセスが終了したため、このブラウザーは切断されました。下で試用期間と局の状態を確認してください。",

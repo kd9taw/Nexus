@@ -4,7 +4,7 @@ import { account, access, body, bodyBytes, browserOrigin, caller, caller as call
   lanEntitlement, requireMayPair, requireTrial, requireUnspentIdentity, requireValue, secret, signedBy, station, stationNonce, TRIAL_MS, UNTIL_REMOVED, untilRemoved, uuid, verifyProof } from './authority'
 import type { AccountEntitlement, DeviceRow, RemoteEnv, Role, StationRow } from './authority'
 import { observerDeadline } from '../../ui/src/remote-monitor/relay'
-import { baseCall, hmac, markerInserts, requireUnspentMarkers, SPENT_MARKER, spentBindings, trialClaim, trialInput, trialProof } from './trial-identity'
+import { baseCall, domainGuard, hmac, markerInserts, requireUnspentDomain, requireUnspentMarkers, SPENT_MARKER, spentBindings, trialClaim, trialInput, trialProof } from './trial-identity'
 import type { TrialInput } from './trial-identity'
 import type { Identity } from '../../ui/src/remote-monitor/relay'
 import { advertisedOperationVersion } from '../../ui/src/remote-web/operation-version'
@@ -298,6 +298,8 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     const starts = before.state === 'none'
     const claim = starts ? await trialClaim(env, input, pending.account_id, now) : null
     if (claim) await requireUnspentMarkers(env, pending.account_id, claim)
+    if (starts) await requireUnspentDomain(env, pending.account_id, now)
+    const domain = domainGuard(env, pending.account_id, now)
     const credentialHash = await digest(proof(input.credential))
     // Approval at the shack is the moment the trial starts, so the clock is written in the same
     // batch as the station. Station insert first on purpose: a trial with no station is
@@ -343,9 +345,10 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
           WHERE self.id=? AND t.account_id<>self.id
           AND (a.mailbox_hash=self.mailbox_hash OR a.email_hash IN (self.email_hash, self.mailbox_hash)))
         ${claim ? `AND NOT EXISTS(SELECT 1 FROM trial_markers m WHERE ${SPENT_MARKER})` : ''}
+        ${domain.sql}
         ON CONFLICT(account_id) DO NOTHING`)
         .bind(pending.account_id, now + TRIAL_MS, now, stationId, credentialHash, pending.account_id,
-          ...(claim ? spentBindings(pending.account_id, claim) : [])),
+          ...(claim ? spentBindings(pending.account_id, claim) : []), ...domain.bindings),
       // What the trial spent, only if it was this approval that started it.
       ...(claim ? markerInserts(env, pending.account_id, claim, now) : [])] : []),
     ])
@@ -363,6 +366,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     if (started.state !== 'active') {
       await requireUnspentIdentity(env, pending.account_id, now)
       if (claim) await requireUnspentMarkers(env, pending.account_id, claim)
+      if (starts) await requireUnspentDomain(env, pending.account_id, now)
     }
     requireValue(started.state === 'active', 'serviceUnavailable', 503)
     // The approved pairing browser, so the shack can give it station control and logging without
@@ -963,7 +967,12 @@ async function firstUse(env: RemoteEnv, row: StationRow, plan: AccountEntitlemen
   await requireMayPair(env, plan, now)
   const kept = await env.DB.prepare('SELECT trial_claim FROM stations WHERE id=?').bind(row.id).first<{ trial_claim: string | null }>()
   const claim = kept?.trial_claim ? await trialProof(env, JSON.parse(kept.trial_claim) as TrialInput, row.account_id, now) : null
+  // Required, a trial is never started on the mailbox alone: a station whose sign-in kept no claim (a
+  // Nexus that sent no callsign) is told to update, as `enroll/approve` tells one.
+  requireValue(claim || env.TRIAL_IDENTITY_REQUIRED !== '1', 'updateRequired')
   if (claim) await requireUnspentMarkers(env, row.account_id, claim)
+  await requireUnspentDomain(env, row.account_id, now)
+  const domain = domainGuard(env, row.account_id, now)
   // The sibling test is the one `enroll/approve` writes in its own trial INSERT, word for word.
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO trials(account_id, enabled, expires_at, started_at, source)
@@ -971,14 +980,16 @@ async function firstUse(env: RemoteEnv, row: StationRow, plan: AccountEntitlemen
         WHERE self.id=? AND t.account_id<>self.id
         AND (a.mailbox_hash=self.mailbox_hash OR a.email_hash IN (self.email_hash, self.mailbox_hash)))
       ${claim ? `AND NOT EXISTS(SELECT 1 FROM trial_markers m WHERE ${SPENT_MARKER})` : ''}
+      ${domain.sql}
       ON CONFLICT(account_id) DO NOTHING`)
-      .bind(row.account_id, now + TRIAL_MS, now, row.account_id, ...(claim ? spentBindings(row.account_id, claim) : [])),
+      .bind(row.account_id, now + TRIAL_MS, now, row.account_id, ...(claim ? spentBindings(row.account_id, claim) : []), ...domain.bindings),
     ...(claim ? markerInserts(env, row.account_id, claim, now) : []),
   ])
   const started = await readEntitlement(env, row.account_id, now)
   if (started.state !== 'active') {
     await requireUnspentIdentity(env, row.account_id, now)
     if (claim) await requireUnspentMarkers(env, row.account_id, claim)
+    await requireUnspentDomain(env, row.account_id, now)
   }
   requireValue(started.state === 'active', 'serviceUnavailable', 503)
   return started

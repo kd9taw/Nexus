@@ -167,6 +167,22 @@ export function mailbox(address: string): string {
   return `${local}@${domain}`
 }
 
+/** The large public mailbox providers: every address there is an account of its own, made and verified
+ *  one at a time, so a trial from one is never counted against its domain (`mailDomain`). A guess about
+ *  which domains are public, kept short on purpose: a domain missing here is only counted, never refused
+ *  more than `trial-identity.ts` DOMAIN_TRIALS allows. arrl.net is the ARRL's forwarding service, which
+ *  many US amateurs sign in with. */
+const PUBLIC_MAIL_DOMAINS = new Set(['gmail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com', 'yahoo.com',
+  'ymail.com', 'icloud.com', 'me.com', 'mac.com', 'aol.com', 'proton.me', 'protonmail.com', 'pm.me', 'gmx.com',
+  'mail.com', 'fastmail.com', 'zoho.com', 'comcast.net', 'att.net', 'sbcglobal.net', 'verizon.net', 'cox.net',
+  'charter.net', 'earthlink.net', 'arrl.net'])
+/** The domain of a mailbox (`mailbox()`), or null for a public provider's or an address with none: what
+ *  a trial is counted against when the trial identity is required. */
+export function mailDomain(normalised: string): string | null {
+  const at = normalised.lastIndexOf('@'), domain = at < 1 ? '' : normalised.slice(at + 1)
+  return domain && !PUBLIC_MAIL_DOMAINS.has(domain) ? domain : null
+}
+
 /** What a newly signed-in device is, for the owner notice (the 2026-10-23 sign-in decision): who it belongs to, which
  *  station, and how to recognise it. `ownerSignIn` is the verified address on the STATION OWNER's own
  *  sign-in, or `null` for anyone else's (a guest's carries the guest's address). It is never where the
@@ -332,15 +348,19 @@ async function signedIn(request: Request, env: RemoteEnv, now: number, clientId:
   // same `email:` prefix, so for an address that is already normal the two are identical.
   const emailHash = email ? await digest(`email:${email}`) : null
   const mailboxHash = email ? await digest(`email:${mailbox(email)}`) : null
-  await env.DB.prepare('INSERT OR IGNORE INTO accounts(id, issuer, subject, email_hash, mailbox_hash) VALUES(?,?,?,?,?)')
-    .bind(uuid(), env.AUTH0_ISSUER, subject, emailHash, mailboxHash).run()
+  // The mailbox's domain, for the per-domain trial count; none for a public provider's.
+  const domain = email ? mailDomain(mailbox(email)) : null
+  const domainHash = domain ? await digest(`domain:${domain}`) : null
+  await env.DB.prepare('INSERT OR IGNORE INTO accounts(id, issuer, subject, email_hash, mailbox_hash, domain_hash) VALUES(?,?,?,?,?,?)')
+    .bind(uuid(), env.AUTH0_ISSUER, subject, emailHash, mailboxHash, domainHash).run()
   // Backfill only: an account created before these columns, or before its provider supplied a
   // verified address, learns its hashes on the next sign-in. Never overwrites a hash, and never
   // with null, so a provider that stops sending the claim cannot quietly unpick an account's identity.
   if (emailHash) {
-    await env.DB.prepare(`UPDATE accounts SET email_hash=COALESCE(email_hash, ?), mailbox_hash=COALESCE(mailbox_hash, ?)
-      WHERE issuer=? AND subject=? AND (email_hash IS NULL OR mailbox_hash IS NULL)`)
-      .bind(emailHash, mailboxHash, env.AUTH0_ISSUER, subject).run()
+    await env.DB.prepare(`UPDATE accounts SET email_hash=COALESCE(email_hash, ?), mailbox_hash=COALESCE(mailbox_hash, ?),
+      domain_hash=COALESCE(domain_hash, ?)
+      WHERE issuer=? AND subject=? AND (email_hash IS NULL OR mailbox_hash IS NULL OR (domain_hash IS NULL AND ? IS NOT NULL))`)
+      .bind(emailHash, mailboxHash, domainHash, env.AUTH0_ISSUER, subject, domainHash).run()
   }
   const row = await env.DB.prepare('SELECT id FROM accounts WHERE issuer=? AND subject=?')
     .bind(env.AUTH0_ISSUER, subject).first<{ id: string }>()

@@ -259,6 +259,8 @@ export const ES: PartialCatalog = {
   "remote.confirmEmailContinue": "Ya he confirmado mi correo — continuar",
   "remote.useDifferentAccount": "Usar otra cuenta",
   "remote.trialActiveElsewhere": "Este correo ya tiene una prueba de Remote en marcha con otro inicio de sesión, por ejemplo Google en lugar de contraseña. Cierra sesión e inicia sesión como lo hiciste la primera vez.",
+  "remote.trialDomainLimit": "El dominio de tu correo ya ha iniciado este mes tantas pruebas de Remote como permite un dominio. Inicia sesión con una dirección de otro proveedor o suscríbete.",
+  "remote.trialCallsignNeeded": "La prueba de Remote es para una licencia de radioaficionado de EE. UU. En la estación, pon tu indicativo de EE. UU. en Ajustes → Estación, actualiza Nexus si lo pide y vuelve a iniciar sesión con la estación.",
   "remote.tryLater": "Demasiados intentos. Espera hasta diez minutos y vuelve a intentarlo.",
   "remote.stationOffline": "No se puede alcanzar esa estación. Comprueba que Nexus esté funcionando en la caseta, que Remote esté activado allí (Ajustes → Remoto) y que el ordenador esté despierto y conectado.",
   "remote.sessionEnded": "El acceso remoto a esta estación terminó, así que este navegador se desconectó. Revisa abajo tu periodo de prueba y tus estaciones.",

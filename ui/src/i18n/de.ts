@@ -244,6 +244,8 @@ export const DE: PartialCatalog = {
   "remote.confirmEmailContinue": "Ich habe meine E-Mail-Adresse bestätigt — weiter",
   "remote.useDifferentAccount": "Anderes Konto verwenden",
   "remote.trialActiveElsewhere": "Für diese E-Mail-Adresse läuft schon eine Remote-Testphase unter einer anderen Anmeldung, zum Beispiel Google statt Passwort. Melde dich ab und dann so an wie beim ersten Mal.",
+  "remote.trialDomainLimit": "Die Domain deiner E-Mail-Adresse hat diesen Monat schon so viele Remote-Testphasen begonnen, wie eine Domain darf. Melde dich mit einer Adresse bei einem anderen Anbieter an oder schließe ein Abo ab.",
+  "remote.trialCallsignNeeded": "Eine Remote-Testphase gibt es für eine US-Amateurfunklizenz. Trage an der Station das US-Rufzeichen unter Einstellungen → Station ein, aktualisiere Nexus, falls es danach fragt, und melde die Station erneut an.",
   "remote.tryLater": "Zu viele Versuche. Warte bis zu zehn Minuten und versuche es dann erneut.",
   "remote.stationOffline": "Diese Station ist nicht erreichbar. Prüfe, ob Nexus in der Funkbude läuft, Remote dort eingeschaltet ist (Einstellungen → Fernzugriff) und der Rechner wach und online ist.",
   "remote.sessionEnded": "Der Remote-Zugriff auf diese Station ist beendet, deshalb wurde dieser Browser getrennt. Prüfe unten deinen Test und deine Stationen.",
