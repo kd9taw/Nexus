@@ -41,10 +41,10 @@
 # accept one. `push` and `workflow_dispatch` runs check out the commit itself; both count.
 #
 # WHY THE BRANCH MATTERS TOO. ci.yml links the Windows and Pi builds with the shipped profile
-# (fat LTO, one codegen unit) only on main, on a release/* branch and on a tag; every other
+# (thin LTO, one codegen unit) only on main, on a release/* branch and on a tag; every other
 # branch run uses cargo's ordinary release linking to finish in a fraction of the time. A green
 # run from a land/* or topic branch therefore proves the tree's tests but NOT the link that
-# ships, and a release accepted on one would meet its first fat-LTO link in release.yml itself,
+# ships, and a release accepted on one would meet its first shipped-LTO link in release.yml itself,
 # with the tag already public (a Pi link failure there publishes the release without Pi
 # packages). So the accepted run must come from main, a release/* branch, or the very tag being
 # released (a ci.yml dispatch on the tag records the tag as its branch). The run's own

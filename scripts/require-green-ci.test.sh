@@ -147,7 +147,7 @@ for want in 'conclusion=cancelled' 'NEXUS_ALLOW_UNVERIFIED_CI' "$SHA"; do
 done
 
 echo
-echo "12. WHERE THE RUN CAME FROM. ci.yml links the Windows and Pi builds with the shipped fat-LTO"
+echo "12. WHERE THE RUN CAME FROM. ci.yml links the Windows and Pi builds with the shipped thin-LTO"
 echo "    profile only on main, release/* and a tag; a green run from any other branch proves the"
 echo "    tests but not the link that ships, so it is not release evidence."
 # branch_run <headBranch JSON> [displayTitle]: the title ci.yml's run-name gives a run on the tag

@@ -253,7 +253,10 @@ strip = "debuginfo"
 # sites in this codebase; abort turns every one of them into a hard crash. It belongs to crash
 # BEHAVIOUR, not to file size, and it was in the first draft of this change until it was caught.
 #
-# The cost is build time: fat LTO with one codegen unit is slow, and it is paid on release
-# builds only.
-lto = true
+# The cost is build time, paid on release builds only. Fat LTO (`lto = true`) linked the whole
+# program as one module on one core: 82 of 198 minutes of the Intel macOS release compile (dry run
+# 43159943999, 2026-11-12). Thin LTO keeps the cross-crate optimisation and links in parallel; the
+# operator accepted its ~1-3% code-speed and size cost for that (ruling 1422, 2026-11-13).
+# codegen-units = 1 is independent of the LTO mode and stays: thin LTO parallelises across crates.
+lto = "thin"
 codegen-units = 1

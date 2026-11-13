@@ -1100,7 +1100,7 @@ test('every job that stages the IOTA list sets up Node first', () => {
   assert.deepEqual(iotaStagedWithoutNode(readWorkflow(planted)), ['pi']);
 });
 
-// The shipped link. src-tauri's [profile.release] links with fat LTO and one codegen unit. ci.yml's
+// The shipped link. src-tauri's [profile.release] links with thin LTO and one codegen unit. ci.yml's
 // land/* and topic runs build the Windows and Pi checks with cargo's ordinary release linking
 // instead, through cargo's CARGO_PROFILE_RELEASE_LTO / _CODEGEN_UNITS overrides; its runs on main, a
 // release/* branch and a tag keep the profile, and scripts/require-green-ci accepts a release only on
@@ -1339,8 +1339,8 @@ test('only ci.yml land/topic runs leave the shipped link profile; release, main,
   has(linkProfileFindings({ ...LINK, cargoConfigs: [['.cargo/config.toml', '[profile.release]\nlto = false\n']] }), 'sets a cargo profile');
   // The dotted-key spelling: [profile] with release.lto under it.
   has(linkProfileFindings({ ...LINK, cargoConfigs: [['src-tauri/.cargo/config.toml', '[profile]\nrelease.lto = false\n']] }), '[profile]');
-  const anchor = `out of release.yml and the build scripts.\n          CARGO_PROFILE_RELEASE_LTO: \${{ ${FAT_REFS} && 'true'`;
-  has(linkProfileFindings({ ...LINK, ci: plant(CI_TEXT, anchor, anchor.replace(/'true'$/, "'false'")) }), 'ci.yml: a link-profile mention that is not one of the expected lines');
+  const anchor = `out of release.yml and the build scripts.\n          CARGO_PROFILE_RELEASE_LTO: \${{ ${FAT_REFS} && 'thin'`;
+  has(linkProfileFindings({ ...LINK, ci: plant(CI_TEXT, anchor, anchor.replace(/'thin'$/, "'false'")) }), 'ci.yml: a link-profile mention that is not one of the expected lines');
   // The release/* clause itself: without it a release branch's run, the one require-green-ci
   // accepts for a tag, would link thin.
   has(linkProfileFindings({ ...LINK, ci: CI_TEXT.replaceAll(" || startsWith(github.ref, 'refs/heads/release/')", '') }), 'CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{');
@@ -1348,7 +1348,7 @@ test('only ci.yml land/topic runs leave the shipped link profile; release, main,
   const nai = '          python3 scripts/check-no-input-injection.py --self-test\n';
   has(linkProfileFindings({ ...LINK, ci: plant(CI_TEXT, nai, `          echo "CARGO_PROFILE_RELEASE_LTO=false" >> "$GITHUB_ENV"\n${nai}`) }), '>> "$GITHUB_ENV"');
   has(linkProfileFindings({ ...LINK, ci: plant(CI_TEXT, '--build-arg CARGO_PROFILE_RELEASE_LTO\n', '--build-arg CARGO_PROFILE_RELEASE_LTO=false\n') }), '--build-arg CARGO_PROFILE_RELEASE_LTO=false');
-  has(linkProfileFindings({ ...LINK, docker: plant(DOCKERFILE, 'ARG CARGO_PROFILE_RELEASE_LTO=true', 'ARG CARGO_PROFILE_RELEASE_LTO=false') }), 'defaults to false');
+  has(linkProfileFindings({ ...LINK, docker: plant(DOCKERFILE, 'ARG CARGO_PROFILE_RELEASE_LTO=thin', 'ARG CARGO_PROFILE_RELEASE_LTO=false') }), 'defaults to false');
   // `//` is no comment in bash: this line runs, and the export with it.
   has(linkProfileFindings(scripts('build-windows-cross.sh', `${cross}\n//usr/bin/env true; export CARGO_PROFILE_RELEASE_LTO=false\n`)), '//usr/bin/env true; export CARGO_PROFILE_RELEASE_LTO=false');
   // Quoted TOML key parts, in a config file and on the command line.
