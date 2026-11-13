@@ -3660,6 +3660,8 @@ fn handoff_if_switched<B: AudioBackend>(
         // The switch can come mid-over (`set_active_radio` halts TX before this runs), and with
         // the hold cleared below the hard stop has nothing left to cut: the queued over is cleared
         // here, before the unkey, as at every stop, so it does not play on through the unkey's wait.
+        // #500: a tune's keyer first, before the unkey, as at the release.
+        let _ = state.key_up_tune_keyer();
         backend.flush_output();
         let _ = rig.ptt(false);
         let _ = rig.stop_morse();
@@ -4349,6 +4351,23 @@ fn psk_software(app_version: &str) -> String {
     }
 }
 
+/// The CW keyer a tune keys its carrier through (#500), when the CW section's keyer can hold a
+/// key down: a radio in CW does not transmit the tune tone, so a tune through it keys the keyer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TuneKeyer {
+    /// K1EL WinKeyer, Key Immediate (`0B 01` / `0B 00`).
+    WinKeyer,
+    /// The serial DTR/RTS keyline, held down by its keying thread.
+    Serial,
+}
+
+/// What the cockpit says when Tune keys a radio in CW through the CAT keyer (#500): it has no way
+/// to hold a key down, so the tune is PTT and the tone, and a radio in CW mode does not transmit
+/// sound-card audio.
+const TUNE_IN_CW_NO_CARRIER: &str = "Tune keyed the radio, but in CW most radios do not transmit \
+     Nexus's tune tone, so there may be no carrier. Use the radio's own TUNE, or pick the WinKeyer \
+     or serial keyline keyer in Settings ▸ CW: Tune then keys a real CW carrier through it.";
+
 struct RadioLoop {
     cur_tier: Tier,
     /// The slot period the clock + capture ring were BUILT for. Tracked alongside
@@ -4412,6 +4431,14 @@ struct RadioLoop {
     /// The tune keyed is the radio's own carrier (Nexus's Flex client, `transmit tune`), not PTT and
     /// Nexus's tone: its release is the client's own stop. Read only while `tuning_keyed`.
     tune_native: bool,
+    /// The CW keyer this tune keyed a real carrier through (#500): the WinKeyer's Key Immediate or
+    /// the serial keyline held down, in the CW section with that keyer chosen. `None`: the tune is
+    /// Nexus's tone or the radio's own carrier. Decided at the key, taken by the key-up
+    /// ([`Self::key_up_tune_keyer`]), which every path that ends a tune sends before its unkey.
+    tune_keyer: Option<TuneKeyer>,
+    /// When that keyer's key-down is due: the key plus the amplifier TX delay, the same wait the
+    /// tone's queued silence makes. `None` once sent, and between tunes.
+    tune_key_down_at: Option<f64>,
     /// Was the operator in a DATA mode (FT8/PKTUSB → DATA-U) when this tune started? The Icom
     /// tune keys in DATA mode regardless; on release we restore THIS state, not a hardcoded OFF —
     /// else an FT8 operator gets dropped from DATA-U to plain USB.
@@ -5434,6 +5461,8 @@ impl RadioLoop {
             voice_tee_until_ms: None,
             tuning_keyed: false,
             tune_native: false,
+            tune_keyer: None,
+            tune_key_down_at: None,
             tune_was_data: false,
             tune_phase: 0.0,
             tune_started_ms: None,
@@ -7898,6 +7927,156 @@ impl RadioLoop {
         }
     }
 
+    /// Open the serial keyline on `port`/`line` if it is not already open there (reopen if either
+    /// changed). Returns the operator-facing error when the open failed, `None` otherwise.
+    #[cfg(feature = "serial")]
+    fn ensure_serial_keyer(&mut self, port: &str, line: &str) -> Option<String> {
+        let reopen = self
+            .serial_keyer
+            .as_ref()
+            .map(|(p, l, _)| p != port || l != line)
+            .unwrap_or(true);
+        if !reopen {
+            return None;
+        }
+        match crate::serial_keyer::SerialKeyer::open(
+            port,
+            crate::serial_keyer::KeyLine::parse(line),
+        ) {
+            Ok(sk) => {
+                self.serial_keyer = Some((port.to_string(), line.to_string(), sk));
+                None
+            }
+            // Report what the SYSTEM said, verbatim. Guessing at causes while hiding the OS error
+            // is what sent the FTX-1 reporter to PowerShell to diagnose a refused baud rate by hand.
+            Err(e) => {
+                self.serial_keyer = None;
+                Some(format!(
+                    "Serial keyline: {e}. If the port name is right, check that nothing else \
+                     (CAT, another app) has it open."
+                ))
+            }
+        }
+    }
+
+    /// The keyer a tune in the CW section keys its carrier through (#500), opened BEFORE the
+    /// radio is keyed so a keyer that will not open refuses the tune with no PTT asserted.
+    /// `Ok(None)`: no such keyer (not the CW section, the CAT or soundcard keyer, or no port), and
+    /// the tune is the tone, as before. `Err`: the open failed, in the words the CW send gives it.
+    fn open_tune_keyer(
+        &mut self,
+        engine: &Arc<Mutex<Engine>>,
+    ) -> Result<Option<TuneKeyer>, String> {
+        let (in_cw, winkeyer, serial) = {
+            let eng = engine_lock(engine);
+            (
+                eng.settings().operating_mode == tempo_app::settings::OperatingMode::Cw,
+                eng.cw_winkeyer_port(),
+                eng.cw_serial_key_port()
+                    .map(|p| (p, eng.cw_serial_key_line())),
+            )
+        };
+        if !in_cw {
+            return Ok(None);
+        }
+        #[cfg(feature = "serial")]
+        {
+            let (kind, err) = if let Some(port) = &winkeyer {
+                (TuneKeyer::WinKeyer, self.ensure_winkeyer(port))
+            } else if let Some((port, line)) = &serial {
+                (TuneKeyer::Serial, self.ensure_serial_keyer(port, line))
+            } else {
+                return Ok(None);
+            };
+            match err {
+                Some(why) => {
+                    engine_lock(engine).set_cw_keyer_error(Some(why.clone()));
+                    Err(why)
+                }
+                None => Ok(Some(kind)),
+            }
+        }
+        #[cfg(not(feature = "serial"))]
+        {
+            let _ = (winkeyer, serial); // only the serial build keys these
+            Ok(None)
+        }
+    }
+
+    /// Whether the keyer a tune keys through is still open: the port setting cleared, the keyer
+    /// switched, or a failed key-up drops it mid-tune, and the tune then ends.
+    fn tune_keyer_open(&self, kind: TuneKeyer) -> bool {
+        #[cfg(feature = "serial")]
+        {
+            match kind {
+                TuneKeyer::WinKeyer => self.winkeyer.is_some(),
+                TuneKeyer::Serial => self.serial_keyer.is_some(),
+            }
+        }
+        #[cfg(not(feature = "serial"))]
+        {
+            let _ = kind;
+            false
+        }
+    }
+
+    /// Key the tune's keyer down (#500). The serial keyline's thread lets the key up by itself at
+    /// `limit` should no key-up ever come; a WinKeyer has its own 100 s tune watchdog.
+    fn key_down_tune_keyer(&mut self, kind: TuneKeyer, limit: Duration) -> Result<(), String> {
+        #[cfg(feature = "serial")]
+        match kind {
+            TuneKeyer::WinKeyer => {
+                if let Some((port, wk)) = self.winkeyer.as_mut() {
+                    return wk
+                        .key_immediate(true)
+                        .map_err(|e| format!("WinKeyer on {port}: key down for Tune failed: {e}"));
+                }
+            }
+            TuneKeyer::Serial => {
+                if let Some((_, _, sk)) = self.serial_keyer.as_ref() {
+                    sk.hold(limit);
+                    return Ok(());
+                }
+            }
+        }
+        #[cfg(not(feature = "serial"))]
+        let _ = (kind, limit);
+        Err("the keyer closed before Tune could key it".to_string())
+    }
+
+    /// ⛔ KEY UP THE KEYER A TUNE KEYED DOWN (#500), before the unkey, on every path that ends a
+    /// tune: the release, Stop TX, the timeouts, a keyer error, a rebuild or the Test-CAT hold, a
+    /// radio switch and shutdown. Before, because on a break-in radio the key alone is the
+    /// transmitter: PTT dropped under a key still down keeps the carrier up. Idempotent; a key-up
+    /// with no tune keyed through a keyer sends nothing. A WinKeyer that will not take the key-up
+    /// is dropped, which sends Clear Buffer (it cancels Tune, WK3 manual p.11) and Host Close as a
+    /// last try; its own 100 s tune watchdog is the backstop. Returns that failure's words.
+    fn key_up_tune_keyer(&mut self) -> Option<String> {
+        self.tune_key_down_at = None;
+        let kind = self.tune_keyer.take()?;
+        #[cfg(feature = "serial")]
+        match kind {
+            TuneKeyer::WinKeyer => {
+                if let Some((port, wk)) = self.winkeyer.as_mut() {
+                    if let Err(e) = wk.key_immediate(false) {
+                        let why = format!("WinKeyer on {port}: key up after Tune failed: {e}");
+                        tempo_core::applog::warn("tx", &why);
+                        self.winkeyer = None;
+                        return Some(why);
+                    }
+                }
+            }
+            TuneKeyer::Serial => {
+                if let Some((_, _, sk)) = self.serial_keyer.as_ref() {
+                    sk.clear();
+                }
+            }
+        }
+        #[cfg(not(feature = "serial"))]
+        let _ = kind;
+        None
+    }
+
     fn may_key(&self) -> bool {
         !self.handoff_deferred && !self.cat_hold_active && !self.switch_unhanded
     }
@@ -8360,6 +8539,7 @@ impl RadioLoop {
         backend: &mut B,
         rig: &mut Rig,
     ) {
+        let _ = self.key_up_tune_keyer(); // #500: a tune's keyer, before the unkey
         backend.flush_output();
         let _ = rig.ptt(false);
         let cluster_active = engine_lock(engine).cluster_split_active();
@@ -8424,6 +8604,7 @@ impl RadioLoop {
         note: &str,
     ) {
         crate::civ::diag::note(note);
+        let _ = self.key_up_tune_keyer(); // #500: a tune's keyer, before the unkey
         backend.flush_output();
         let _ = rig.ptt(false);
         self.tx_until_ms = None;
@@ -13198,32 +13379,7 @@ impl RadioLoop {
                 #[cfg(feature = "serial")]
                 if !handled {
                     if let Some((port, line)) = &serial_key {
-                        let reopen = self
-                            .serial_keyer
-                            .as_ref()
-                            .map(|(p, l, _)| p != port || l != line)
-                            .unwrap_or(true);
-                        let mut open_err = None;
-                        if reopen {
-                            match crate::serial_keyer::SerialKeyer::open(
-                                port,
-                                crate::serial_keyer::KeyLine::parse(line),
-                            ) {
-                                Ok(sk) => {
-                                    self.serial_keyer = Some((port.clone(), line.clone(), sk))
-                                }
-                                // Report what the SYSTEM said, verbatim. Guessing at causes
-                                // while hiding the OS error is what sent the FTX-1 reporter
-                                // to PowerShell to diagnose a refused baud rate by hand.
-                                Err(e) => {
-                                    self.serial_keyer = None;
-                                    open_err = Some(format!(
-                                        "Serial keyline: {e}. If the port name is right, check \
-                                         that nothing else (CAT, another app) has it open."
-                                    ));
-                                }
-                            }
-                        }
+                        let open_err = self.ensure_serial_keyer(port, line);
                         if let Some((_, _, sk)) = self.serial_keyer.as_ref() {
                             sk.send(&text, wpm);
                             self.cw_keying_until = self.cw_busy_until;
@@ -16467,12 +16623,24 @@ impl RadioLoop {
                 if split_ready.is_ok() {
                     engine_lock(engine).note_tune_ptt_asserted();
                 }
+                // #500: THE CW KEYER, IN THE CW SECTION. A radio in CW does not transmit the tune
+                // tone, so where the CW keyer can hold a key down (a WinKeyer, the serial keyline)
+                // the tune keys a real CW carrier through it, under the same PTT as ever. Opened
+                // HERE, before the key: a keyer that will not open refuses the tune with no PTT.
+                let keyer = if split_ready.is_ok() && !native {
+                    self.open_tune_keyer(engine)
+                } else {
+                    Ok(None)
+                };
                 let refused = if let Err(why) = split_ready {
                     Some(why)
                 } else if native {
                     // Held at most the auto-release's time: the client's session ends it at that
                     // plus its margin even if this loop stalls.
                     self.key_radio_tune(engine, max_ms as u64)
+                } else if let Err(why) = &keyer {
+                    tempo_core::applog::warn("tx", &format!("tune not keyed: {why}"));
+                    Some(why.clone())
                 } else {
                     let key = self.key_over(engine, rig, false, "tune");
                     // The tune's line, in the words the voice keyer gives a refused key.
@@ -16511,6 +16679,20 @@ impl RadioLoop {
                 };
                 self.tuning_keyed = true;
                 self.tune_native = native;
+                // The keyer keys down once the amplifier TX delay has passed, as the tone waits
+                // out its queued silence (below, on this tick when there is none).
+                self.tune_keyer = keyer.ok().flatten().filter(|_| refused.is_none());
+                self.tune_key_down_at = self.tune_keyer.map(|_| now + lead_ms);
+                // …and where there is no such keyer, the CW section's CAT keyer, the tune is PTT
+                // and the tone as ever, and the cockpit says plainly why that may be no carrier.
+                if refused.is_none() && !native && self.tune_keyer.is_none() {
+                    let mut e = engine_lock(engine);
+                    if e.settings().operating_mode == tempo_app::settings::OperatingMode::Cw
+                        && e.settings().cw_keyer == tempo_app::settings::CwKeyerBackend::Cat
+                    {
+                        e.set_cw_keyer_error(Some(TUNE_IN_CW_NO_CARRIER.to_string()));
+                    }
+                }
                 self.tune_started_ms = Some(now);
                 // A fresh hold starts with an empty ring and no elapsed baseline.
                 self.tune_last_chunk_ms = None;
@@ -16528,6 +16710,33 @@ impl RadioLoop {
             }
             if native {
                 // The radio makes the carrier: nothing to play.
+                self.rx.clear(); // don't decode our own carrier
+                return Ok(());
+            }
+            // #500: THE CW KEYER MAKES THE CARRIER: no tone (the radio in CW would not transmit
+            // it). Its key-down goes out once due; a keyer that fails it, or closes mid-tune (its
+            // port setting cleared, the keyer switched), ends the tune, and the release below keys
+            // it up and unkeys as for every tune. The keyline's own limit sits a second past the
+            // auto-release, a backstop for a loop that never comes back to let it go.
+            if let Some(kind) = self.tune_keyer {
+                let failed = if !self.tune_keyer_open(kind) {
+                    Some("The CW keyer closed while Tune was keyed, so the tune ended.".to_string())
+                } else if self.tune_key_down_at.is_some_and(|at| now >= at) {
+                    let limit = Duration::from_millis(max_ms as u64 + 1_000);
+                    let sent = self.key_down_tune_keyer(kind, limit);
+                    if sent.is_ok() {
+                        self.tune_key_down_at = None;
+                    }
+                    sent.err()
+                } else {
+                    None
+                };
+                if let Some(why) = failed {
+                    tempo_core::applog::warn("tx", &format!("tune ended: {why}"));
+                    let mut e = engine_lock(engine);
+                    e.set_cw_keyer_error(Some(why));
+                    e.set_tune(false);
+                }
                 self.rx.clear(); // don't decode our own carrier
                 return Ok(());
             }
@@ -16566,6 +16775,11 @@ impl RadioLoop {
             // flag only clears on a SUCCESSFUL unkey (fail-safe Rig::ptt), so a miss
             // here is retried by the idle self-heal below.
             crate::civ::diag::note("tune released: unkey (tune ended or Tune toggled off)");
+            // ⛔ #500: THE KEYER FIRST. A carrier keyed through the CW keyer is let up before
+            // the unkey: on a break-in radio the key alone keys the transmitter.
+            if let Some(why) = self.key_up_tune_keyer() {
+                eng.set_cw_keyer_error(Some(why));
+            }
             // FLUSH THE LEAD FIRST, then unkey — the same order every other end-of-over site in
             // this loop uses, and with the lead now a quarter of a second it is load-bearing
             // rather than tidiness: on a VOX-keyed station the AUDIO is the key, so `ptt(false)`
@@ -21294,6 +21508,7 @@ mod tests {
     mod cw_cat_text;
     mod cw_speed_match;
     mod cw_stop;
+    mod cw_tune_keyer;
     mod decode_in_flight;
     mod failed_unkey;
     mod filter_width;
