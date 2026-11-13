@@ -23934,14 +23934,18 @@ button.cq-skiptx1.on {
    WHEREVER THE STRIP BREAKS (`.cq-break` shown: below xl, and beside the dashboard rail) the box HAS that line:
    a whole line of the strip (basis 100 %) at one fixed height, so it is there, empty or full, and the words
    have the strip's width to stand whole in. ON THE ONE-ROW xl STRIP it is a content-sized member, as they were:
-   that row always has room (the break's own premise), and Stop TX opens it. Its rules mirror `.cq-break`'s. */
+   that row always has room (the break's own premise), and Stop TX opens it. Its rules mirror `.cq-break`'s.
+   THE TX STATE OPENS IT (2026-11-13): on Stop TX's line "▲ TRANSMITTING" took a line of its own at Larger text (1366×768,
+   app 175 %) and moved Stop TX 41.8 px. Its height follows Text size, so the tallest word (the TX state's pill) stands
+   inside it at Larger (22 px held it only at Normal), and its gap is the small one, so the state, the rig chips, AUTO-CQ,
+   the call and the report share the line with it. alarmcell-probe holds every word whole at every text size. */
 .cq-status {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1);
   white-space: nowrap;
   flex: 0 0 100%;
-  height: 22px;
+  height: calc(22px * var(--text-scale));
   min-width: 0;
 }
 [data-viewport='xl'] .cq-status {
@@ -23950,7 +23954,13 @@ button.cq-skiptx1.on {
 }
 .shell[data-dash-rail='on'] .cq-status {
   flex: 0 0 100%;
-  height: 22px;
+  height: calc(22px * var(--text-scale));
+}
+/* The rig-mode and filter chips in the line take the small side padding: with both up, the TX state, AUTO-CQ, a long
+   call and the report at Larger text on 1366×768 at the app's 175 %, the line was 14 px short (Chrome). The top bar's
+   own rig chip keeps its padding. */
+.cq-status .cq-rigdiverge {
+  padding-inline: var(--space-1);
 }
 .cq-roles {
   display: inline-flex;

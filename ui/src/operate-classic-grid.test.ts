@@ -408,7 +408,9 @@ describe('TX-cluster position stability: row neighbours resolve state-independen
     it(`${vp}${rail ? ' beside the dashboard rail' : ''}: .cq-status is a whole line of one fixed height, where the strip breaks`, () => {
       const chain = statusChain(vp, rail)
       expect(winner(chain, 'flex')?.value, 'the box is not a whole line of the strip').toBe('0 0 100%')
-      expect(winner(chain, 'height')?.value ?? '', 'the line has no fixed height: the words would change the strip’s').toMatch(/^\d+(\.\d+)?(px|em)$/)
+      // A length, or one that follows Text size (`calc(<n>px * var(--text-scale))`, 2026-11-13: the TX state's pill
+      // stands in the line, and at Larger text it is taller than 22 px). Either is one height whatever the words are.
+      expect(winner(chain, 'height')?.value ?? '', 'the line has no fixed height: the words would change the strip’s').toMatch(/^(\d+(\.\d+)?(px|em)|calc\(\d+(\.\d+)?px \* var\(--text-scale\)\))$/)
       expect(winner(chain, 'overflow')?.value ?? null, 'the words are clipped').not.toBe('hidden')
       expect(winner(chain, 'max-width')?.value ?? null, 'the words are capped').toBeNull()
     })

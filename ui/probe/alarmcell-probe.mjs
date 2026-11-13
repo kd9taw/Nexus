@@ -25,8 +25,15 @@
 // leaves Stop TX wholly on screen and the topmost thing at its centre (the operator accepted FT scrolling on the floor
 // screen so its waterfall draws, on exactly this condition, 2026-11-12; at the 15 % lower floor it no longer needs to).
 // Every word of the contact (`.cq-status`) must stand whole in every state, inside its box, the strip and the window.
+// AT LARGER TEXT (Settings ▸ Text size, 1.25) too, both layouts, every one of those pages: the TX state's word ("▲
+// TRANSMITTING") on Stop TX's line wrapped to a line of its own on the first transmit at 1366×768 with the app at 175 %,
+// and Stop TX moved 41.8 px (2026-11-13); the word now stands in the contact's box, so it is held to the same.
 // THE CONTACT CONTROLS: the contact's words given back their own width and height (`.cq-status` loose) at 1366×768
 // 175 %, where they were measured to wrap: Stop TX must then move; and the box clipped to 40 px: a word must read as cut.
+//
+// THE FIRST-RUN NUDGE: every screen and zoom again, in English, with no callsign set, so the first-run nudge to set one
+// (OnboardingBanner) is wherever the app draws it, as a new operator meets it. The probe's own station has a callsign,
+// so before 2026-11-13 no row ever showed it.
 //
 // THE CONTROL, run every time: the cell's one height taken off (`height: auto`, the shape that shipped the second
 // break) on the screens and languages where that break was measured. There an alarm must move Stop TX; if it does
@@ -220,12 +227,17 @@ const push = (p, alarms) => p.evaluate(`globalThis.__push(null, ${JSON.stringify
 const locale = (p, loc) => p.evaluate(`import('/src/i18n/index.ts').then((m) => { m.setLocale(${JSON.stringify(loc)}); return m.getLocale() })`)
 
 /** One screen at one zoom: every size, every language, the alarm pushed and taken away. */
-async function sweep(name, route, scale, sizes, locales, css) {
+async function sweep(name, route, scale, sizes, locales, css, banner = false) {
   const rows = []
   const p = await openPage(route, sizes[0], scale)
   try {
     if (!(await settle(p))) return [{ name, scale, error: 'the strip never drew' }]
     if (!(await push(p, []))) return [{ name, scale, error: 'no snapshot subscriber' }]
+    if (banner) {
+      // No callsign: the first-run nudge (OnboardingBanner) is up wherever the app draws it, as a new operator meets it.
+      await p.evaluate(`globalThis.__push(null, { mycall: '' })`)
+      await settle(p)
+    }
     if (css) await p.evaluate(`(() => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(css)}; document.head.appendChild(s); return 1 })()`)
     for (const [w, h] of sizes) {
       await p.size(w, h)
@@ -242,7 +254,7 @@ async function sweep(name, route, scale, sizes, locales, css) {
           continue
         }
         const moved = off.h !== on.h || JSON.stringify(off.stop) !== JSON.stringify(on.stop) || off.top !== on.top
-        rows.push({ name, scale, w, h, loc, off, on, moved, hidden: on.words && !on.seen })
+        rows.push({ name, scale, w, h, loc, off, on, moved, hidden: on.words && !on.seen, banner })
       }
     }
   } finally { await p.close() }
@@ -252,8 +264,8 @@ async function sweep(name, route, scale, sizes, locales, css) {
 /** FT's contact stepped through CONTACT_STEPS on one page: Stop TX's place at every step, and its widest move. */
 /** A radio that reports its finals' temperature, with an amplifier that reports its own: the meters' third row. */
 const TEMPS = { paTempC: 45, amp: { linked: true, temp: 50, tempCelsius: true } }
-async function contactSweep([name, size, scale, dpr], layout, css, temps = false) {
-  const p = await openPage('operate', size, scale, layout === 'Classic' ? { 'nexus.operate.layout': 'classic' } : {}, dpr)
+async function contactSweep([name, size, scale, dpr], layout, css, temps = false, textSize = null) {
+  const p = await openPage('operate', size, scale, { ...(layout === 'Classic' ? { 'nexus.operate.layout': 'classic' } : {}), ...(textSize ? { 'nexus-text-size': textSize } : {}) }, dpr)
   try {
     if (!(await settle(p))) return { name, layout, error: 'the strip never drew' }
     if (css) await p.evaluate(`(() => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(css)}; document.head.appendChild(s); return 1 })()`)
@@ -289,24 +301,27 @@ async function contactSweep([name, size, scale, dpr], layout, css, temps = false
 let code = 0
 try {
   // Four pages at a time in the one Chrome: each page is its own target with its own viewport.
-  const jobs = SCREENS.flatMap(([name, route]) => SCALES.map((scale) => [name, route, scale]))
+  // And each screen and zoom again in English with the first-run nudge up (no callsign yet): it is a row of the window's
+  // height above every screen until it is dismissed, so it is the alarm cell's case a new operator meets first.
+  const jobs = SCREENS.flatMap(([name, route]) => SCALES.flatMap((scale) => [[name, route, scale, LOCALES, false], [name, route, scale, ['en'], true]]))
   const all = []
-  const worker = async () => { for (let j = jobs.shift(); j; j = jobs.shift()) all.push(...await sweep(j[0], j[1], j[2], SIZES, LOCALES)) }
+  const worker = async () => { for (let j = jobs.shift(); j; j = jobs.shift()) all.push(...await sweep(j[0], j[1], j[2], SIZES, j[3], null, j[4])) }
   await Promise.all([worker(), worker(), worker(), worker()])
-  all.sort((a, b) => `${a.name}${a.scale}${a.w}${a.loc}`.localeCompare(`${b.name}${b.scale}${b.w}${b.loc}`))
+  all.sort((a, b) => `${a.name}${a.scale}${a.w}${a.loc}${a.banner}`.localeCompare(`${b.name}${b.scale}${b.w}${b.loc}${b.banner}`))
   for (const r of all) {
-    const at = `${r.name} at ${r.w ?? '?'}×${r.h ?? '?'} ${r.scale} % ${r.loc ?? ''}`
+    const at = `${r.name} at ${r.w ?? '?'}×${r.h ?? '?'} ${r.scale} % ${r.loc ?? ''}${r.banner ? ' with the first-run nudge up' : ''}`
     if (r.error) { console.error(`alarmcell-probe: ${at}: ${r.error}`); code = 2; continue }
     if (r.moved) { console.error(`alarmcell-probe: RED ${at} — an alarm moved the strip or Stop TX: strip ${r.off.h} → ${r.on.h} px, Stop TX ${JSON.stringify(r.off.stop)} → ${JSON.stringify(r.on.stop)}`); code = code || 1 }
     if (r.hidden) { console.error(`alarmcell-probe: RED ${at} — the alarm's words are not on screen and topmost: ${JSON.stringify(r.on.why)}`); code = code || 1 }
   }
   const ok = all.filter((r) => !r.error)
-  console.log(`alarmcell-probe: ${ok.length} rows (${SCREENS.length} screens × ${SCALES.length} zooms × ${SIZES.length} sizes × ${LOCALES.length} languages), ${ok.filter((r) => r.moved).length} moved, ${ok.filter((r) => r.hidden).length} hidden`)
+  console.log(`alarmcell-probe: ${ok.length} rows (${SCREENS.length} screens × ${SCALES.length} zooms × ${SIZES.length} sizes × ${LOCALES.length} languages, and English with the first-run nudge up), ${ok.filter((r) => r.moved).length} moved, ${ok.filter((r) => r.hidden).length} hidden`)
   // FT'S CONTACT STATES: Stop TX at one place through a whole contact.
   for (const page of CONTACT_PAGES) {
-    for (const [layout, temps] of [['Roster', false], ['Classic', false], ['Roster', true]]) {
-      const r = await contactSweep(page, layout, null, temps)
+    for (const [layout, temps, textSize] of [['Roster', false], ['Classic', false], ['Roster', true], ['Roster', false, 'larger'], ['Classic', false, 'larger']]) {
+      const r = await contactSweep(page, layout, null, temps, textSize)
       if (temps) r.layout = `${layout} with temperatures reported`
+      if (textSize) r.layout = `${layout} at Larger text`
       if (r.error) { console.error(`alarmcell-probe: FT ${r.layout} ${r.name}, a contact: ${r.error}`); code = 2; continue }
       console.log(`alarmcell-probe: FT ${r.layout} ${r.name}, a contact: Stop TX moves ${r.moved} px (${r.at.map(([s, [x, y]]) => `${s} ${x},${y}`).join('; ')}); FT scrolls ${r.scroll?.max ?? '?'} px, Stop TX off screen or covered at ${JSON.stringify(r.scroll?.bad ?? r.scroll?.error)}`)
       if (r.moved > 0.5) { console.error(`alarmcell-probe: RED FT ${r.layout} ${r.name} — Stop TX moved ${r.moved} px through a contact`); code = code || 1 }
