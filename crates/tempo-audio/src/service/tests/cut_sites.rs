@@ -766,6 +766,10 @@ fn a_psk_stream_never_shortens_a_longer_hold() {
 // CONTROL: under a short hold, the hold right after the close is the close's own end
 // (`busy_until + tail`), which says the site ran.
 
+/// What [`holds_through_stream_end`] saw: the hold after each tick from the latch drop on, and,
+/// if the stream closed, `(the hold, the close's own end)` read right after the closing tick.
+type StreamEndHolds = (Vec<Option<f64>>, Option<(Option<f64>, f64)>);
+
 /// The latched stream `setup` starts on a VOX rig, its hold at `hold` from the first tick; at
 /// 400 ms `stop` drops the latch and the loop runs on to `until`. The hold after each tick, and the
 /// hold and the stream's own end (`busy` + the tail) right after the tick that closed it.
@@ -776,7 +780,7 @@ fn holds_through_stream_end(
     stop: impl FnOnce(&mut Engine),
     open: impl Fn(&RadioLoop) -> bool,
     busy: impl Fn(&RadioLoop) -> f64,
-) -> (Vec<Option<f64>>, Option<(Option<f64>, f64)>) {
+) -> StreamEndHolds {
     let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
     {
         let mut e = engine.lock().unwrap();
