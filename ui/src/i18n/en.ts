@@ -10013,7 +10013,7 @@ export const EN = {
     'Where the decoder and the AFSK transmitter sit until you click the waterfall: this tone, and this plus the shift. 2125 gives the standard 2125/2295; 1275 gives 1275/1445. A waterfall click still moves both for the session; changing this moves them back here.',
   'settings.rtty.reverse.label': 'Reverse (swap mark/space)',
   'settings.rtty.reverse.hint':
-    'Swaps mark and space on TX and in the RX decoder, to work a station sending upside down. Not for running USB: pick the AFSK sideband instead, which keeps the sense right on its own.',
+    "Swaps mark and space, to work a station sending upside down. It swaps them in the RX decoder and on transmit: on AFSK it swaps the two tones, and on true FSK it inverts the keying line, so mark becomes the asserted level (like Inv. FSK in MMTTY's EXTFSK). If your rig's FSK input just keys the other way round, use the rig's own FSK polarity menu instead, because Reverse flips the decoder too. Not for running USB: pick the AFSK sideband instead, which keeps the sense right on its own.",
   'settings.rtty.autoCall.title': 'Auto call',
   'settings.rtty.autoListen.label': 'Listen before repeating',
   'settings.rtty.autoListen.hint':

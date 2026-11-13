@@ -9190,7 +9190,7 @@ export const ZH: PartialCatalog = {
   "settings.rtty.lowTone.label": "低音调（Hz）",
   "settings.rtty.lowTone.hint": "在你点击瀑布图之前，解码器和 AFSK 发射机都停在这里：这个音调，以及它加上频移的音调。2125 为标准的 2125/2295；1275 为 1275/1445。点击瀑布图仍会在本次会话中同时移动两者；修改此处会让它们回到这里。",
   "settings.rtty.reverse.label": "反向（交换 mark/space）",
-  "settings.rtty.reverse.hint": "在发射和接收解码器中交换 mark 与 space，用于与颠倒发射的台站通联。不要用它来跑 USB：请改选 AFSK 边带，它会自行保持正确的极性。",
+  "settings.rtty.reverse.hint": "交换 mark 与 space，用于与颠倒发射的台站通联，接收解码器和发射都会交换：AFSK 下交换两个音调；真 FSK 下反转键控线，使 mark 成为有效（置位）电平（与 MMTTY 的 EXTFSK 中的 Inv. FSK 相同）。如果只是电台的 FSK 输入键控方向相反，请改用电台自身的 FSK 极性菜单，因为 Reverse 也会翻转解码器。不要用它来跑 USB：请改选 AFSK 边带，它会自行保持正确的极性。",
   "settings.rtty.autoCall.title": "自动呼叫",
   "settings.rtty.autoListen.label": "重发前先听",
   "settings.rtty.autoListen.hint": "自动呼叫在再次呼叫 CQ 之前等待多久（秒）— 以及向某台请求重发前的相同等待。计时从你本次发射完全结束开始，而不是从排队时开始。<b>30 秒</b>是自动呼叫一直以来的做法；只有在你想让节奏更快或更慢时才改。低于 5 秒会在你刚刚请求的答复上直接键控，因此下限是 5。",

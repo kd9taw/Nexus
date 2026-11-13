@@ -136,11 +136,14 @@ pub fn open_control_line_port(port: &str) -> std::io::Result<Box<dyn serialport:
 /// without hardware. A port opens EXCLUSIVELY, as a real one does: while a handle to it lives,
 /// another open fails, the way Windows answers "Access is denied." And it comes back with both
 /// lines deasserted, as [`idle_both_lines`] leaves a real one. Per thread, like the other test
-/// doubles: a test's ports are its own.
+/// doubles: a test's ports are its own — but an OPEN port carries its state with it, so a keying
+/// thread the test spawned (the FSK keyer's) writes the same lines the test reads. Every line
+/// write is also logged ([`log`]), for tests that need the sequence and not just the last level.
 #[cfg(all(test, feature = "serial"))]
 pub(crate) mod fake_ports {
     use std::cell::RefCell;
     use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     /// Whether a handle holds the port, and the level of its two control lines.
@@ -151,17 +154,33 @@ pub(crate) mod fake_ports {
         pub(crate) dtr: bool,
     }
 
+    /// A port's lines, and every level they have been put at (after each write).
+    #[derive(Default)]
+    struct Port {
+        state: State,
+        log: Vec<State>,
+    }
+
     thread_local! {
-        static PORTS: RefCell<HashMap<String, State>> = RefCell::new(HashMap::new());
+        static PORTS: RefCell<HashMap<String, Arc<Mutex<Port>>>> = RefCell::new(HashMap::new());
     }
 
     /// Make `name` a fake port: nobody holding it, both lines low.
     pub(crate) fn install(name: &str) {
-        PORTS.with(|p| p.borrow_mut().insert(name.to_string(), State::default()));
+        PORTS.with(|p| p.borrow_mut().insert(name.to_string(), Arc::default()));
+    }
+
+    fn port(name: &str) -> Arc<Mutex<Port>> {
+        PORTS.with(|p| Arc::clone(&p.borrow()[name]))
     }
 
     pub(crate) fn state(name: &str) -> State {
-        PORTS.with(|p| p.borrow()[name])
+        port(name).lock().unwrap().state
+    }
+
+    /// The line levels after every write since the port was installed, oldest first.
+    pub(crate) fn log(name: &str) -> Vec<State> {
+        port(name).lock().unwrap().log.clone()
     }
 
     /// The opener's door: `None` for a name that is no fake port. `before_open` is the real
@@ -170,52 +189,51 @@ pub(crate) mod fake_ports {
         name: &str,
         before_open: impl FnOnce() -> Result<(), String>,
     ) -> Option<std::io::Result<Box<dyn serialport::SerialPort>>> {
-        PORTS.with(|p| {
-            let mut ports = p.borrow_mut();
-            let state = ports.get_mut(name)?;
-            if let Err(reason) = before_open() {
-                return Some(Err(std::io::Error::other(reason)));
-            }
-            if state.held {
-                return Some(Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "Access is denied.",
-                )));
-            }
-            *state = State {
-                held: true,
-                rts: false,
-                dtr: false,
-            };
-            let port: Box<dyn serialport::SerialPort> = Box::new(FakePort {
-                name: name.to_string(),
-            });
-            Some(Ok(port))
-        })
+        let shared = PORTS.with(|p| p.borrow().get(name).cloned())?;
+        if let Err(reason) = before_open() {
+            return Some(Err(std::io::Error::other(reason)));
+        }
+        let mut port = shared.lock().unwrap();
+        if port.state.held {
+            return Some(Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Access is denied.",
+            )));
+        }
+        port.state = State {
+            held: true,
+            rts: false,
+            dtr: false,
+        };
+        drop(port);
+        let port: Box<dyn serialport::SerialPort> = Box::new(FakePort {
+            name: name.to_string(),
+            port: shared,
+        });
+        Some(Ok(port))
     }
 
     struct FakePort {
         name: String,
+        port: Arc<Mutex<Port>>,
     }
 
     impl FakePort {
         fn set(&self, line: impl FnOnce(&mut State)) {
-            PORTS.with(|p| {
-                if let Some(state) = p.borrow_mut().get_mut(&self.name) {
-                    line(state);
-                }
-            });
+            let mut port = self.port.lock().unwrap_or_else(|e| e.into_inner());
+            line(&mut port.state);
+            let now = port.state;
+            port.log.push(now);
         }
     }
 
     impl Drop for FakePort {
         fn drop(&mut self) {
-            // `try_with`: a handle outliving the thread's registry must not panic on the way out.
-            let _ = PORTS.try_with(|p| {
-                if let Some(state) = p.borrow_mut().get_mut(&self.name) {
-                    state.held = false;
-                }
-            });
+            self.port
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .state
+                .held = false;
         }
     }
 

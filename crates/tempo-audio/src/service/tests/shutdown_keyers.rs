@@ -49,8 +49,11 @@ fn shutdown_returns_with_the_serial_cw_key_line_up() {
 #[test]
 fn shutdown_returns_with_the_fsk_line_at_mark() {
     let mut state = loop_state();
-    let (levels, set) = recorder();
-    let keyer = crate::rtty_fsk::FskKeyer::keying(set);
+    let (levels, mut set) = recorder();
+    // The normal sense: space asserted, mark and rest released.
+    let keyer = crate::rtty_fsk::FskKeyer::keying(move |level| {
+        set(crate::rtty_fsk::asserted(level, false))
+    });
     keyer.send(vec![false; 50], 5.0); // 200 ms bits: long space runs
     state.rtty_keyer = Some(("port".into(), "dtr".into(), keyer));
     wait_down(&levels);
