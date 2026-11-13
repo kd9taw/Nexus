@@ -76,7 +76,8 @@ fn sweep(
     let mut removed = 0;
     for entry in entries.flatten() {
         let name = entry.file_name();
-        let Some(version) = name.to_str().and_then(|n| leftover_version(n, product)) else {
+        let Some((raw_version, version)) = name.to_str().and_then(|n| leftover_version(n, product))
+        else {
             continue;
         };
         if version > *running {
@@ -94,21 +95,52 @@ fn sweep(
             .ok()
             .and_then(|m| now.duration_since(m).ok())
             .is_some_and(|age| age >= min_age);
-        if old_enough && std::fs::remove_dir_all(entry.path()).is_ok() {
+        if old_enough && remove_leftover(&entry.path(), product, raw_version) {
             removed += 1;
         }
     }
     removed
 }
 
-/// The version in a folder name of the exact form `<product>-<semver>-updater-<suffix>`.
-fn leftover_version(name: &str, product: &str) -> Option<semver::Version> {
+/// Remove `dir` only if it holds nothing but the installer the plugin writes into it
+/// (`<product>-<version>-installer.exe` or `.msi`, a regular file) — that file, then the empty
+/// folder. No recursive delete: a folder holding anything else is left whole.
+fn remove_leftover(dir: &Path, product: &str, version: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    let mut installer = None;
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return false;
+        };
+        let name = entry.file_name();
+        let is_installer = [".exe", ".msi"]
+            .iter()
+            .any(|ext| name.to_str() == Some(&format!("{product}-{version}-installer{ext}")));
+        let is_file = entry.file_type().is_ok_and(|t| t.is_file());
+        if !is_installer || !is_file || installer.is_some() {
+            return false;
+        }
+        installer = Some(entry.path());
+    }
+    if let Some(file) = installer {
+        if std::fs::remove_file(file).is_err() {
+            return false;
+        }
+    }
+    std::fs::remove_dir(dir).is_ok()
+}
+
+/// The version in a folder name of the exact form `<product>-<semver>-updater-<suffix>`, as
+/// written and as parsed.
+fn leftover_version<'a>(name: &'a str, product: &str) -> Option<(&'a str, semver::Version)> {
     let rest = name.strip_prefix(product)?.strip_prefix('-')?;
     let (version, suffix) = rest.rsplit_once("-updater-")?;
     if suffix.is_empty() || !suffix.bytes().all(|b| b.is_ascii_alphanumeric()) {
         return None;
     }
-    semver::Version::parse(version).ok()
+    Some((version, semver::Version::parse(version).ok()?))
 }
 
 #[cfg(test)]
@@ -127,9 +159,13 @@ mod tests {
     fn folder(root: &Path, name: &str, age: Duration) -> PathBuf {
         let dir = root.join(name);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("Nexus-x-installer.exe"), b"MZ").unwrap();
+        // The installer as the plugin names it: `<product>-<version>-installer.exe`.
+        let installer = name
+            .split_once("-updater-")
+            .map_or("x".to_string(), |(pv, _)| format!("{pv}-installer.exe"));
+        fs::write(dir.join(&installer), b"MZ").unwrap();
         let when = SystemTime::now() - age;
-        fs::File::open(dir.join("Nexus-x-installer.exe"))
+        fs::File::open(dir.join(&installer))
             .unwrap()
             .set_modified(when)
             .unwrap();
@@ -147,7 +183,11 @@ mod tests {
         let same = folder(&root, "Nexus-1.24.0-updater-xYz789", HOUR);
         let older_beta = folder(&root, "Nexus-1.24.0-beta.2-updater-Q1w2E3", HOUR);
         let newer = folder(&root, "Nexus-1.25.0-updater-Ab12Cd", HOUR);
-        let fresh = folder(&root, "Nexus-1.24.0-updater-FrEsH1", Duration::from_secs(60));
+        let fresh = folder(
+            &root,
+            "Nexus-1.24.0-updater-FrEsH1",
+            Duration::from_secs(60),
+        );
         // Names that are not ours, or not exactly the plugin's shape.
         let keep: Vec<PathBuf> = [
             "Nexus-1.23.0-updater-",            // no suffix
@@ -174,8 +214,14 @@ mod tests {
         assert!(!older.exists());
         assert!(!same.exists());
         assert!(!older_beta.exists());
-        assert!(newer.exists(), "a newer version may be installing right now");
-        assert!(fresh.exists(), "a fresh folder may belong to the install that just ran");
+        assert!(
+            newer.exists(),
+            "a newer version may be installing right now"
+        );
+        assert!(
+            fresh.exists(),
+            "a fresh folder may belong to the install that just ran"
+        );
         for k in &keep {
             assert!(k.exists(), "{} must not be touched", k.display());
         }
@@ -197,14 +243,49 @@ mod tests {
         let removed = sweep(&root, "Nexus", &running(), MIN_AGE, SystemTime::now());
 
         assert_eq!(removed, 0);
-        assert!(link.symlink_metadata().is_ok(), "the link itself is left alone");
-        assert!(outside.join("Nexus-x-installer.exe").exists());
+        assert!(
+            link.symlink_metadata().is_ok(),
+            "the link itself is left alone"
+        );
+        assert!(outside.join("x").exists());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_matching_folder_holding_anything_but_the_installer_is_left_whole() {
+        let base = crate::test_dirs::root().join("updater-leftovers-content");
+        let root = base.join("temp");
+        fs::create_dir_all(&root).unwrap();
+        let extra = folder(&root, "Nexus-1.20.0-updater-Us3r01", HOUR);
+        fs::write(extra.join("notes.txt"), b"mine").unwrap();
+        let sub = folder(&root, "Nexus-1.20.0-updater-Us3r02", HOUR);
+        fs::create_dir(sub.join("photos")).unwrap();
+        let wrong = root.join("Nexus-1.20.0-updater-Us3r03");
+        fs::create_dir(&wrong).unwrap();
+        fs::write(wrong.join("Nexus-1.19.0-installer.exe"), b"MZ").unwrap();
+        for d in [&extra, &sub, &wrong] {
+            fs::File::open(d)
+                .unwrap()
+                .set_modified(SystemTime::now() - HOUR)
+                .unwrap();
+        }
+
+        let removed = sweep(&root, "Nexus", &running(), MIN_AGE, SystemTime::now());
+
+        assert_eq!(removed, 0);
+        assert!(extra.join("notes.txt").exists());
+        assert!(extra.join("Nexus-1.20.0-installer.exe").exists());
+        assert!(sub.join("photos").exists());
+        assert!(wrong.join("Nexus-1.19.0-installer.exe").exists());
         let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
     fn a_missing_temp_folder_is_not_an_error() {
         let root = crate::test_dirs::root().join("updater-leftovers-none");
-        assert_eq!(sweep(&root, "Nexus", &running(), MIN_AGE, SystemTime::now()), 0);
+        assert_eq!(
+            sweep(&root, "Nexus", &running(), MIN_AGE, SystemTime::now()),
+            0
+        );
     }
 }
