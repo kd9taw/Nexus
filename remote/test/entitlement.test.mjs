@@ -415,7 +415,7 @@ test('required identity: three trials a mail domain in thirty days, public mailb
 test('required identity: the domain cap counts the registrable domain, so subdomains share one count', async () => {
   const strict = await runtime({ bindings: { TRIAL_KEY, TRIAL_IDENTITY_REQUIRED: '1' } })
   try {
-    const calls = Array.from({ length: 8 }, (_, i) => `K${i}S${String.fromCharCode(65 + i)}${String.fromCharCode(70 + i)}`)
+    const calls = Array.from({ length: 12 }, (_, i) => `K${i % 10}S${String.fromCharCode(65 + i)}${String.fromCharCode(70 + i)}`)
     await licences(strict, calls.map(call => ({ call, active: true, email: null })))
     let next = 0
     const start = (owner, expected) => approve(strict, owner, { callsign: calls[next], pc: pc(null, calls[next++]) }, expected)
@@ -426,6 +426,10 @@ test('required identity: the domain cap counts the registrable domain, so subdom
     await start(await person(strict, 'op@shack.co.uk'))
     await start(await person(strict, 'op@other.co.uk'))
     await start(await person(strict, 'op@mail.third.co.uk'))
+    // A second level that is not a registry's own (co.de is a name somebody registered under .de, not a
+    // place .de sells names) is one domain, however many hosts it hands out.
+    for (const host of ['x1.co.de', 'x2.co.de', 'x3.co.de']) await start(await person(strict, `op@${host}`))
+    assert.equal((await start(await person(strict, 'op@x4.co.de'), 403)).value.error, 'trialDomainLimit', 'co.de is one registration')
   } finally { await strict.mf.dispose() }
 })
 

@@ -183,21 +183,45 @@ const PUBLIC_MAIL_DOMAINS = new Set(['gmail.com', 'outlook.com', 'hotmail.com', 
   'ymail.com', 'icloud.com', 'me.com', 'mac.com', 'aol.com', 'proton.me', 'protonmail.com', 'pm.me', 'gmx.com',
   'mail.com', 'fastmail.com', 'zoho.com', 'comcast.net', 'att.net', 'sbcglobal.net', 'verizon.net', 'cox.net',
   'charter.net', 'earthlink.net', 'arrl.net'])
-/** The second-level labels a country's registry sells names under (`co.uk`, `com.au`, `ne.jp`, ...), where
- *  the domain a person registers is one label deeper. */
-const COUNTRY_SECOND_LEVELS = new Set(['co', 'com', 'net', 'org', 'ac', 'gov', 'edu', 'ne', 'or', 'go', 'gr', 'ltd', 'plc',
-  'me', 'sch', 'nom', 'gob', 'mil', 'id'])
-/** The domain a person registers, for a host name: its last two labels, or three under a country's own
- *  second level (a two-letter top level whose second label is in COUNTRY_SECOND_LEVELS). So every
- *  subdomain of one registration (`x1.club.example`, `x2.club.example`, a wildcard mail exchanger's
- *  endless supply) is the one domain `club.example`, and `shack.co.uk` and `other.co.uk` stay two.
+/** Second-level suffixes a country's own registry sells names under, where the domain a person registers is
+ *  one label deeper (`shack.co.uk`, not `co.uk`). An explicit list of real registry pairs, taken from the
+ *  ICANN section of the Public Suffix List (https://publicsuffix.org/list/), limited to the commonly used
+ *  ones of the larger registries. A pair is listed only when that registry itself sells names under it:
+ *  `co.de` is a name somebody registered under .de, so it is not here. */
+const REGISTRY_SUFFIXES = new Set([
+  'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'ltd.uk', 'plc.uk', 'me.uk', 'net.uk', 'sch.uk', 'nhs.uk', 'police.uk',
+  'com.au', 'net.au', 'org.au', 'edu.au', 'gov.au', 'asn.au', 'id.au',
+  'co.nz', 'net.nz', 'org.nz', 'ac.nz', 'govt.nz', 'school.nz', 'gen.nz', 'kiwi.nz', 'maori.nz', 'geek.nz',
+  'co.jp', 'ne.jp', 'or.jp', 'ac.jp', 'ad.jp', 'ed.jp', 'go.jp', 'gr.jp', 'lg.jp',
+  'com.br', 'net.br', 'org.br', 'gov.br', 'edu.br',
+  'co.za', 'org.za', 'net.za', 'ac.za', 'gov.za', 'web.za',
+  'com.mx', 'net.mx', 'org.mx', 'edu.mx', 'gob.mx',
+  'com.ar', 'net.ar', 'org.ar', 'gob.ar',
+  'co.in', 'net.in', 'org.in', 'ac.in', 'gov.in', 'firm.in', 'gen.in', 'ind.in',
+  'co.kr', 'or.kr', 'ne.kr', 'ac.kr', 'go.kr',
+  'com.cn', 'net.cn', 'org.cn', 'gov.cn', 'edu.cn', 'ac.cn',
+  'com.hk', 'net.hk', 'org.hk', 'edu.hk', 'gov.hk',
+  'com.tw', 'net.tw', 'org.tw', 'edu.tw', 'gov.tw', 'idv.tw',
+  'com.sg', 'net.sg', 'org.sg', 'edu.sg', 'gov.sg',
+  'co.il', 'org.il', 'net.il', 'ac.il', 'gov.il',
+  'com.tr', 'net.tr', 'org.tr', 'edu.tr', 'gov.tr',
+  'com.ph', 'net.ph', 'org.ph', 'com.my', 'net.my', 'org.my',
+  'co.id', 'or.id', 'ac.id', 'go.id', 'web.id', 'net.id',
+  'co.th', 'in.th', 'or.th', 'ac.th', 'go.th',
+  'com.pl', 'net.pl', 'org.pl', 'com.ua', 'net.ua', 'org.ua',
+])
+/** The domain a person registers, for a host name: its last three labels when its last two are a registry
+ *  suffix (REGISTRY_SUFFIXES), otherwise its last two. So every subdomain of one registration
+ *  (`x1.club.example`, `x2.club.example`, a wildcard mail exchanger's endless supply) is the one domain
+ *  `club.example`, `x1.co.de` and `x2.co.de` are the one `co.de`, and `shack.co.uk` and `other.co.uk`
+ *  stay two.
  *
- *  A short form of the public-suffix rule, on purpose: the full list is a dependency the Worker would
- *  carry and keep fresh for one count. Where it is wrong, a multi-label suffix it does not know, it merges
- *  registrants into one count, so it can refuse more trials on such a domain, never fewer. */
+ *  Not the whole public-suffix list, on purpose: that is a dependency the Worker would carry and keep
+ *  fresh for one count. A real suffix missing here is taken as two labels, which merges its registrants
+ *  into one count: it can refuse more trials on such a domain, never fewer. */
 export function registrableDomain(host: string): string {
   const labels = host.split('.').filter(Boolean)
-  const keep = labels.length >= 3 && labels[labels.length - 1].length === 2 && COUNTRY_SECOND_LEVELS.has(labels[labels.length - 2]) ? 3 : 2
+  const keep = labels.length >= 3 && REGISTRY_SUFFIXES.has(labels.slice(-2).join('.')) ? 3 : 2
   return labels.slice(-keep).join('.')
 }
 /** The registrable domain of a mailbox (`mailbox()`), or null for a public provider's or an address with
