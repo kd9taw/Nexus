@@ -933,11 +933,13 @@ describe('panes are sized by the grid, never by themselves', () => {
     ).toMatch(/min-height: var\(--cockpit-region-floor, max\(min\(\d+(\.\d+)?em, /)
   })
 
-  it('the stock floor is 18em and yields to 30 % of a short window from 600 px up (2026-11-12)', () => {
+  it('the stock floor is 18em and yields to 25 % of a short window from 600 px up (2026-11-12, 25 % since 2026-11-13)', () => {
     // On the smallest supported screen (1366×768 at 175 %, which the app fits to 65 %: a 674 px effective window) a
     // plain 18em held every scope at its own 8em floor and still overflowed the shell: CW scrolled 15 px, Phone 20, and
     // Phone's scope drew a 10 px picture (Chrome). Under 600 px every shell scrolls whatever the floor, and a yielding
     // floor there put SSTV's composer warning out of reach (900×600 at 175 %), so it does not yield there.
+    // 30 % until the now-bar took a line of the top bar (2026-11-13): the cockpit lost 33 px at the floor screen and at
+    // 30 % the scope paid all of it (Phone's picture 26 → 6 px); at 25 % the feeds and the log pay it.
     // The declaration is RESOLVED, at the font's 14 px, across the heights that matter.
     const r = RULES.find((x) => x.selector === '.cockpit-panes')!
     const v = /min-height\s*:\s*var\(--cockpit-region-floor, (.*)\)\s*$/m.exec(r.body.replace(/;\s*$/gm, ''))?.[1] ?? ''
@@ -947,9 +949,10 @@ describe('panes are sized by the grid, never by themselves', () => {
       return Function(`return (${js})`)() as number
     }
     expect(() => at(674), `\`${v}\` does not resolve`).not.toThrow()
-    expect(at(674), 'the floor screen at its fit: 30 % of 674').toBeCloseTo(0.3 * 674, 6)
+    expect(at(674), 'the floor screen at its fit: 25 % of 674').toBeCloseTo(0.25 * 674, 6)
     expect(at(674), '…and room for a pane at its 10em floor under its 2em title bar').toBeGreaterThanOrEqual(12 * 14)
-    for (const vh of [840, 900, 1080, 1440]) expect(at(vh), `at ${vh} px, the 18em it always was`).toBe(18 * 14)
+    for (const vh of [840, 900]) expect(at(vh), `at ${vh} px, 25 %`).toBeCloseTo(0.25 * vh, 6)
+    for (const vh of [1008, 1080, 1440]) expect(at(vh), `at ${vh} px, the 18em it always was`).toBe(18 * 14)
     for (const vh of [343, 438, 512, 599]) expect(at(vh), `at ${vh} px (under 600), the 18em it always was`).toBe(18 * 14)
   })
 
@@ -1820,10 +1823,12 @@ describe('THE ONE-ROW TOP BAR AND HEADER (1080p pass): what the folds show and h
     expect(classChainWinner([['topbar'], ['tier-toggle'], ['tier-btn', 'active', 'tier-menu-btn']], 'display')?.value).toBe('none')
   })
 
-  it('the now-bar in the bar is its own width and never grows (a message must not re-wrap it), and draws no frame', () => {
+  it('the now-bar in the bar always takes a whole second line of it (no state or chip decides the bar’s height), and draws no frame', () => {
     const slot = [['topbar'], ['topbar-now']]
-    expect(classChainWinner(slot, 'flex')?.value, 'a grower would share the status lane’s room').toBe('0 1 auto')
-    expect(classChainWinner(slot, 'min-width')?.value).toBe('min(100%, 18em)')
+    // A content-width now-bar stood on the first line where it fit: "TX" fit and "RX" did not at 1920×1080 at 150 %,
+    // and every transmit moved the cockpit 18.9 px (topbarnow-probe holds it in Chrome).
+    expect(classChainWinner(slot, 'flex')?.value, 'the whole line, whatever the first line or its chips hold').toBe('0 0 100%')
+    expect(classChainWinner(slot, 'min-width'), 'no floor to share a line with').toBeNull()
     const bar = [['topbar'], ['topbar-now'], ['now-bar', 'now-bar-inbar']]
     expect(classChainWinner(bar, 'padding')?.value).toBe('0')
     expect(classChainWinner(bar, 'background')?.value).toBe('transparent')

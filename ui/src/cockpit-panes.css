@@ -237,12 +237,15 @@
      is less. On the smallest supported screen (1366×768 at 175 %, where the app fits itself to 65 %: a
      674 px effective window) a plain 18em held the scope at its own 8em floor and still overflowed:
      CW's shell scrolled 15 px, Phone's 20, and the picture in Phone's scope was 10 px. At 30 % both
-     fit and the scope draws 39–63 px. FT's lower region (styles.css `.cockpit-lower`) yields the same
-     way, to 15 %. The 18em cap is unchanged, so no window from 840 effective px up is touched. And it yields only
+     fit and the scope draws 39–63 px. 25 % SINCE THE NOW-BAR TOOK A LINE OF THE TOP BAR (2026-11-13, `.topbar-now`):
+     the cockpit there is 33 px shorter, and at 30 % all of it came out of the scope (Phone's picture 26 → 6 px, CW's
+     41 → 20, waterfalls-probe); at 25 % the feeds and the log give it back (Phone 26, CW 38, JS8 61 px). FT's lower
+     region (styles.css `.cockpit-lower`) yields the same way, to 15 %. The 18em cap is unchanged, so no window from
+     1008 effective px up is touched. And it yields only
      from 600 effective px up (a STEP on --vh-eff, the chrome's idiom): under that every cockpit's shell
      scrolls whatever the floor, so yielding buys nothing there, and on a window dragged smaller than any
      supported screen (900×600 at 175 %) a yielding floor put SSTV's composer warning out of reach. */
-  min-height: var(--cockpit-region-floor, max(min(18em, calc(0.3 * var(--vh-eff))), min(18em, (600px - var(--vh-eff)) * 1000)));
+  min-height: var(--cockpit-region-floor, max(min(18em, calc(0.25 * var(--vh-eff))), min(18em, (600px - var(--vh-eff)) * 1000)));
   min-width: 0;
   display: grid;
   gap: var(--space-3);
@@ -872,22 +875,22 @@
    are not drawn there; the one menu button the FT screens already use at the small size stands in their
    place, labelled with the mode in use (`.tier-menu-folded` shows it: styles.css hides `.tier-menu-btn`
    above sm, and this flat rule wins that tie by coming later). The Auto / Tx 1st / Tx 2nd group is not
-   touched. At md and lg the now-bar rides in the bar as its LAST group (`.topbar-now`). It is its OWN
-   width and does NOT GROW: where it fits it stands on the bar's line, where
-   it does not it takes a second line of the bar (still never a line of its own under the bar, as
-   before). Not a grower, deliberately: the status lane grows into the bar's free room when a message
-   comes up, and a now-bar sharing that room would re-wrap its chips and change the bar's height with
-   every message (topbar-probe's invariant; its harness carries a now-bar for exactly this). Its floor
-   (18em, or the bar) only matters on a line of its own, where its chips wrap inside it. Its own frame goes (`.now-bar-inbar`): the bar is the frame. The TX cluster (`.op-controls`)
-   is never named here. */
+   touched. At md and lg the now-bar rides in the bar as its LAST group (`.topbar-now`), ALWAYS ON A
+   SECOND LINE OF THE BAR, the whole of it (still never a line of its own under the bar, as before).
+   It stood on the first line where its own content width fit there, so which line it took followed
+   every width on that line and its own chips: at 1920×1080 at 150 % OS scaling the TX/RX sign's "TX"
+   let it fit and "RX" did not, and every transmit moved the cockpit, Stop TX with it, 18.9 px; at
+   1920×1080 a feed pill coming up did the same (topbarnow-probe). Now the bar's height never depends
+   on what the first line or the now-bar holds. It never shares the first line's room with the status
+   lane, so a message cannot re-wrap it (topbar-probe). Its own frame goes (`.now-bar-inbar`): the bar
+   is the frame. The TX cluster (`.op-controls`) is never named here. */
 .tier-menu-folded {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
 }
 .topbar-now {
-  flex: 0 1 auto;
-  min-width: min(100%, 18em);
+  flex: 0 0 100%;
 }
 .now-bar-inbar {
   padding: 0;

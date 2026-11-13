@@ -736,8 +736,12 @@ export interface TxMetersPaneToggleProps {
  *  pane is the only fill pane in its column, beside the receiver's and transmitter's strips, which cannot use
  *  height: a weight under 1 takes that share of the column's free height and the rest stays at the column's
  *  foot, as it does with the pane hidden. Where the pane stands on its floor instead (a short or stacking
- *  screen) its low floor (`--txmeters-pane-floor`) or its rows' (`.txmeters-pane`) set it. */
-export const TX_METERS_PANE_WEIGHT = { operate: 0.63, phone: 0.65, cw: 0.68, sstv: 0.545 } as const
+ *  screen) its low floor (`--txmeters-pane-floor`) or its rows' (`.txmeters-pane`) set it.
+ *  Phone 0.65 → 0.71 and CW 0.68 → 0.75 (2026-11-13): the top bar's now-bar takes a line of its own (cockpit-panes.css
+ *  `.topbar-now`), so the column is about 23 px shorter at 1920×1080 (and 4K at 200 %), and at the old weights the pane
+ *  paid ~15 px of it, a dial 44–45 % of 1.24.0's. Now the column's empty foot pays: the pane is 208.1 / 191.2 px there,
+ *  as before the bar changed (205.8 / 189.3), the dial 50 %. */
+export const TX_METERS_PANE_WEIGHT = { operate: 0.63, phone: 0.71, cw: 0.75, sstv: 0.545 } as const
 
 /** THE LARGE TX METERS PANE: the fill pane an operator can make as big as the grid lets a pane be, ticked in ⊞
  *  Panels or opened from the strip's meters. A READOUT through and through: its body holds no control, so

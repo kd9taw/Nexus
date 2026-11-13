@@ -851,10 +851,10 @@ export function TopBar({
           the bar's end — the release position. */}
       {hideDigitalChrome && chipCluster}
 
-      {/* THE NOW-BAR, IN THE BAR (md and lg): the bar's LAST group. Its own width and never growing
-          (`.topbar-now`, cockpit-panes.css): where the bar's line has room it stands at the end of it,
-          where it has not it takes a second line of the bar — so it can never push the clock, the TX
-          cluster or the Tx cycle off the first, and a status message can never re-wrap it. */}
+      {/* THE NOW-BAR, IN THE BAR (md and lg): the bar's LAST group, always a whole second line of the bar
+          (`.topbar-now`, cockpit-panes.css) — so it can never push the clock, the TX cluster or the Tx
+          cycle off the first, a status message can never re-wrap it, and neither transmitting nor its own
+          chips can change the bar's height (it once moved the cockpit and Stop TX 18.9 px on transmit). */}
       {nowSlot}
 
     </header>
