@@ -199,8 +199,9 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         IOTA box filled from a spot under a very long group name at 1366×768 and
                         1920×1080 at 65 % and 175 %, the name whole covering nothing, no sideways
                         scroll added, Log in the window and on top, with a control (the name kept
-                        on one line) that must be caught (ui/probe/stopabove-probe.mjs; it builds
-                        nothing)
+                        on one line) that must be caught; and the prompt to log's Prop mode taking
+                        its whole row, wide enough for its longest name, on the supported screens
+                        (ui/probe/stopabove-probe.mjs; it builds nothing)
   --desktop menustop    with a menu open (Help, and the band pill's where the screen draws it),
                         on the Logbook and on Operate at 700×800 (xs) and 2560×1440 (xl): one
                         real click on Stop TX stops once, closes the menu and leaves the keyboard

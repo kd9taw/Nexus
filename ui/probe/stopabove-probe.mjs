@@ -39,6 +39,12 @@
 // Its CONTROL, per form (`&islandcontrol=1`, 1366×768 at 175 %): the picker's containment taken away, so the select
 // is as wide as its longest option again; it must come back RED.
 //
+// THE PROMPT TO LOG'S PROP MODE, on probe/sizes.mjs's representative screens (CORE) at the app's 100 %, the floor
+// screen unscaled at the app's 100 % and 175 %, and 4K at 200 % at the app's 175 %: the picker takes the grid's whole row and its box holds its longest name
+// ("Non-satellite repeater or transponder") in its own font, the prompt and the page do not scroll sideways, Log and
+// Discard are in view and on top as the prompt opens, with no scroll (the row it adds once put them below the capped
+// card's fold at 175 %), and Log is in the window and on top. In one column the box held ~125 px of a 229 px name — red on that layout.
+//
 // exit: 0 every case clear · 1 a red, or a control that could not fail · 2 the page never drew
 import { createServer } from 'vite'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -46,7 +52,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
-import { FHD, LAPTOP, QHD, metrics, offMatrix } from './sizes.mjs'
+import { CORE, FHD, LAPTOP, QHD, UHD_200, metrics, offMatrix } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 /** [window (probe/sizes.mjs), the size class it must come out as]. 700×800 is below any supported screen — the xs
@@ -362,6 +368,90 @@ const IOTA_SIZES = [
 ]
 const IOTA_FORMS = ['logconfirm', 'strip']
 
+/** The prompt to log's Prop mode picker, as drawn: it takes the grid's whole row, and its box is wide enough for the
+ *  longest propagation mode's name in its own font (an arrow of 1.6 em allowed for). In half the row the closed box
+ *  cut "Non-satellite repeater or transponder" to its first ~20 characters. */
+const PROPMODE_MEASURE = `(() => {
+  const card = document.querySelector('.logconfirm')
+  const grid = card && card.querySelector('.logconfirm-grid')
+  const sel = grid && grid.querySelector('select')
+  const log = card && card.querySelector('.logconfirm-log')
+  const stop = document.querySelector(${JSON.stringify(STOP)})
+  if (!sel || !log || !stop) return { waiting: true }
+  const r = (el) => el.getBoundingClientRect()
+  const box = (el) => { const b = r(el); return [b.left, b.top, b.width, b.height].map((v) => Math.round(v * 10) / 10) }
+  const cs = getComputedStyle(sel)
+  const ctx = document.createElement('canvas').getContext('2d')
+  ctx.font = cs.font
+  const zoom = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')) || 1
+  // The canvas measures in the select's own CSS px; its box is drawn at the zoom the .app carries.
+  const scale = sel.offsetWidth ? r(sel).width / sel.offsetWidth : 1
+  const widest = Math.max(...[...sel.options].map((o) => ctx.measureText(o.textContent).width)) * scale
+  const usable = (sel.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 1.6 * parseFloat(cs.fontSize)) * scale
+  const g = r(grid), b = r(sel)
+  const before = box(log)
+  // As the prompt opens, with NO scroll: Log and Discard drawn whole inside the window and the card's
+  // visible box, and on top at their centres. (Checked again below only after scrolling Log in.)
+  const discard = card.querySelector('.logconfirm-discard')
+  const c = r(card)
+  const seen = (el) => {
+    if (!el) return false
+    const q = r(el)
+    const hit = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2)
+    return q.top >= Math.max(0, c.top) - 0.5 && q.bottom <= Math.min(innerHeight, c.bottom) + 0.5 &&
+      q.left >= 0 && q.right <= innerWidth && !!hit && (hit === el || el.contains(hit))
+  }
+  const logOnOpen = seen(log), discardOnOpen = seen(discard)
+  // This runs again until two reads agree, so the scroll is put back: every read sees the prompt as it opened.
+  const scrolled = card.scrollTop
+  log.scrollIntoView({ block: 'nearest' })
+  const l = r(log)
+  const hit = document.elementFromPoint(l.left + l.width / 2, l.top + l.height / 2)
+  card.scrollTop = scrolled
+  return {
+    zoom, dpr: devicePixelRatio, vw: innerWidth, vh: innerHeight,
+    widest: Math.round(widest), usable: Math.round(usable),
+    spans: Math.abs(b.left - g.left) <= 1 && Math.abs(b.right - g.right) <= 1,
+    page: document.scrollingElement.scrollWidth - document.scrollingElement.clientWidth,
+    overflow: card.scrollWidth - card.clientWidth,
+    cardScrolls: card.scrollHeight > card.clientHeight + 1,
+    log: before, stop: box(stop), logOnOpen, discardOnOpen,
+    logInWindow: l.left >= 0 && l.top >= 0 && l.right <= innerWidth && l.bottom <= innerHeight,
+    logTop: !!hit && (hit === log || log.contains(hit)),
+  }
+})()`
+
+async function measurePropMode({ size, zoom }) {
+  const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
+  const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
+  const call = (method, params) => browser.call(method, params, sessionId)
+  try {
+    await call('Emulation.setDeviceMetricsOverride', metrics(size))
+    await call('Page.navigate', { url: `${origin}/probe/stopabove.html?overlay=logconfirm&zoom=${zoom}` })
+    let last = null
+    for (let i = 0; i < 100; i++) {
+      await sleep(150)
+      const r = await call('Runtime.evaluate', { expression: PROPMODE_MEASURE, returnByValue: true })
+      const now = r.exceptionDetails ? null : r.result.value
+      if (now && !now.waiting && last && !last.waiting && JSON.stringify(now) === JSON.stringify(last)) break
+      last = now
+    }
+    return last
+  } finally {
+    await browser.call('Target.closeTarget', { targetId })
+  }
+}
+
+/** The representative screens (probe/sizes.mjs CORE: the floor, a mid laptop, 1080p, 1440p, 4K at 200 %) at the app's
+ *  100 %, plus the floor screen unscaled at the app's 100 % and 175 %, and 4K at 200 % at the app's 175 %. */
+const PROPMODE_SIZES = [
+  ...CORE.map((size) => ({ size, zoom: 1 })),
+  { size: LAPTOP, zoom: 1 },
+  { size: LAPTOP, zoom: 1.75 },
+  { size: UHD_200, zoom: 1.75 },
+]
+const propAt = (s) => `${s.size.name} at ${Math.round(s.zoom * 100)}% UI`
+
 /** What the island picker breaks, measured `m` against the same form with no picker (`base`): (a) the form's
  *  controls and Stop TX inside the window and no narrower, no more sideways scroll; (b) the picker usable. */
 function islandReds(m, base, at) {
@@ -391,6 +481,30 @@ function islandReds(m, base, at) {
 let code = 0
 let ran = 0
 try {
+  for (const size of PROPMODE_SIZES) {
+    const at = propAt(size)
+    const m = await measurePropMode(size)
+    console.log(`stopabove-probe: Prop mode, ${at}: ${JSON.stringify(m)}`)
+    if (!m || m.waiting) {
+      console.error(`stopabove-probe: the prompt to log never drew at ${at}`)
+      code = 2
+      continue
+    }
+    const red = []
+    if (Math.abs(m.zoom - size.zoom) > 0.001) red.push(`the UI scale is ${m.zoom}, not ${size.zoom}`)
+    if (!m.spans) red.push('Prop mode does not take the whole row')
+    if (m.usable < m.widest) red.push(`Prop mode's box holds ${m.usable} px of text, its longest name is ${m.widest} px`)
+    if (m.page > 0) red.push(`the page scrolls sideways by ${m.page} px`)
+    if (m.overflow > 0) red.push(`the prompt to log scrolls sideways by ${m.overflow} px`)
+    if (!m.logOnOpen) red.push('Log is not in view when the prompt opens (it takes a scroll)')
+    if (!m.discardOnOpen) red.push('Discard is not in view when the prompt opens (it takes a scroll)')
+    if (!m.logInWindow) red.push('Log is outside the window')
+    if (!m.logTop) red.push('Log is covered')
+    if (red.length) {
+      console.error(`stopabove-probe: RED (Prop mode) at ${at} — ${red.join('; ')}`)
+      code = code || 1
+    }
+  }
   for (const form of IOTA_FORMS) {
     for (const size of IOTA_SIZES) {
       const { zoom } = size
@@ -482,7 +596,7 @@ try {
     console.error('stopabove-probe: no case ran')
     code = code || 1
   }
-  if (code === 0) console.log(`stopabove-probe: PASS — ${ran} cases: with ${OVERLAYS.map(([o]) => o).join(', ')} open, Stop TX is on top where it is drawn, unmoved, one real click and one tap each stop once, the mirror is unseen by screen readers and follows its button at once, the overlay stays open and the keyboard stays where it was, at ${SIZES.map(([s, v]) => `${s.name} (${v})`).join(' and ')}; each control (no stop layer) caught. The filled IOTA box of the prompt to log and of the log strip at ${IOTA_SIZES.map((s) => `${s.name} ${Math.round(s.zoom * 100)}%`).join(', ')}: filled, its long group name whole and covering nothing, the source shown, no sideways scroll (the page none; the prompt none at all; the strip no more than without the box), Log in the window and on top; each unwrapped-name control caught. The island picker beside it, with a 200-character island picked: Log, Stop TX and every other control in the window and no narrower than without the picker, no sideways scroll added, the picker inside its form, on top, at least 6em wide and titled; each uncontained-picker control caught`)
+  if (code === 0) console.log(`stopabove-probe: PASS — ${ran} cases: with ${OVERLAYS.map(([o]) => o).join(', ')} open, Stop TX is on top where it is drawn, unmoved, one real click and one tap each stop once, the mirror is unseen by screen readers and follows its button at once, the overlay stays open and the keyboard stays where it was, at ${SIZES.map(([s, v]) => `${s.name} (${v})`).join(' and ')}; each control (no stop layer) caught. The filled IOTA box of the prompt to log and of the log strip at ${IOTA_SIZES.map((s) => `${s.name} ${Math.round(s.zoom * 100)}%`).join(', ')}: filled, its long group name whole and covering nothing, the source shown, no sideways scroll (the page none; the prompt none at all; the strip no more than without the box), Log in the window and on top; each unwrapped-name control caught. The prompt to log's Prop mode at ${PROPMODE_SIZES.map(propAt).join('; ')}: the whole row, wide enough for its longest name, no sideways scroll, Log and Discard in view as it opens, Log in the window and on top. The island picker beside it, with a 200-character island picked: Log, Stop TX and every other control in the window and no narrower than without the picker, no sideways scroll added, the picker inside its form, on top, at least 6em wide and titled; each uncontained-picker control caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

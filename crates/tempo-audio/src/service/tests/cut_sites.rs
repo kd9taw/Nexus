@@ -23,10 +23,14 @@
 //! `jtty_transmit.rs`, the computer microphone in `pc_mic.rs`, a TCI program's over in
 //! `tci_server.rs`.
 //!
-//! The hold-extend sites (`tx_until_ms = Some(tx_until_ms.map_or(until, |t| t.max(until)))`) are
-//! pinned at the end: an over keyed under a longer hold never shortens it. APRS sets its hold
-//! rather than extending one, and only ever with no hold standing (its guard), so the set never
-//! meets an existing hold to replace: that is what is pinned for it.
+//! The hold-extend sites (`extend_hold`) are pinned at the end: an over keyed under a longer hold
+//! never shortens it. One pin per site: the CW word, the RTTY stream and message on AFSK and on
+//! FSK, the PSK stream, and (beside their scaffolding) the Remote microphone's key in service.rs,
+//! a TCI program's in `tci_server.rs` and the computer microphone's in `pc_mic.rs`; each was
+//! checked to go red when its own site overwrites the hold instead. The PSK message and the voice
+//! keyer are pinned too. APRS sets its hold rather than extending one, and only ever with no hold
+//! standing (its guard), so the set never meets an existing hold to replace: that is what is
+//! pinned for it.
 
 use super::*;
 
@@ -575,5 +579,180 @@ fn an_aprs_beacon_sets_its_hold_only_when_none_stands() {
         state.tx_until_ms,
         Some(at + frame_ms + crate::slot::TX_TAIL_MS),
         "the beacon's hold is its frame's end and the tail"
+    );
+}
+
+// ---- (d) the stream and message hold extends, one pin per site ----
+//
+// Each site below extends the hold with `extend_hold`. An over keyed while a longer hold stands
+// (another over riding the same transmitter) must leave that hold where it was at every tick:
+// written as an overwrite, the site would cut the longer over short. The CONTROL, per site: under
+// a short hold the same over extends the hold past it, which says the site ran.
+
+/// `setup`'s over on a VOX rig, the hold standing at `hold` from the first tick: the hold after
+/// each tick to `until`, the card (what was played) and the loop (the FSK keyer).
+fn holds_through(
+    hold: f64,
+    until: f64,
+    setup: impl FnOnce(&mut Engine),
+) -> (Vec<Option<f64>>, MockBackend, RadioLoop) {
+    let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+    {
+        let mut e = engine.lock().unwrap();
+        e.set_license_class("extra");
+        setup(&mut e);
+    }
+    let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+    state.tx_until_ms = Some(hold);
+    let mut t = 100.0;
+    let mut holds = Vec::new();
+    while t <= until {
+        let at = t;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, at);
+        holds.push(state.tx_until_ms);
+    }
+    (holds, backend, state)
+}
+
+/// The pin and its control for one site: `keyed` says the over went out on that run.
+fn assert_never_shortens(
+    site: &str,
+    until: f64,
+    setup: impl Fn(&mut Engine),
+    keyed: impl Fn(&MockBackend, &RadioLoop) -> bool,
+) {
+    let (holds, backend, state) = holds_through(LONG_HOLD, until, &setup);
+    assert!(
+        keyed(&backend, &state),
+        "{site}: premise: the over keyed under the hold"
+    );
+    if let Some(i) = holds.iter().position(|h| *h != Some(LONG_HOLD)) {
+        panic!(
+            "{site}: the longer hold was shortened to {:?} at the tick at {} ms",
+            holds[i],
+            100.0 + 20.0 * i as f64
+        );
+    }
+    let (holds, backend, state) = holds_through(150.0, until, &setup);
+    assert!(
+        keyed(&backend, &state),
+        "{site}: control: the over keyed under a short hold"
+    );
+    assert!(
+        holds.iter().any(|h| h.is_some_and(|h| h > 150.0)),
+        "{site}: control: a shorter hold is never extended: {holds:?}"
+    );
+}
+
+fn played(backend: &MockBackend, _: &RadioLoop) -> bool {
+    backend.played.iter().any(|&x| x != 0.0)
+}
+
+/// The FSK backend on a keying port that exists only in memory.
+#[cfg(feature = "serial")]
+fn fsk(e: &mut Engine, port: &str) {
+    crate::control_line::fake_ports::install(port);
+    let mut s = e.settings().clone();
+    s.rtty_backend = "fsk".to_string();
+    s.rtty_fsk_port = port.to_string();
+    e.apply_settings(s);
+}
+
+#[cfg(feature = "serial")]
+fn fsk_open(_: &MockBackend, state: &RadioLoop) -> bool {
+    state.rtty_keyer.is_some()
+}
+
+/// Soundcard CW: each word extends the hold to its end and the tail.
+#[test]
+fn a_soundcard_cw_word_never_shortens_a_longer_hold() {
+    assert_never_shortens(
+        "soundcard CW word",
+        2_000.0,
+        |e| {
+            e.set_cw_keyer("soundcard", 600.0);
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.03, "40m", "CW");
+            e.set_cw_wpm(25);
+            e.send_cw("CQ TEST DE");
+        },
+        played,
+    );
+}
+
+/// RTTY typed live on the soundcard (AFSK): each chunk extends the hold.
+#[test]
+fn an_afsk_rtty_stream_never_shortens_a_longer_hold() {
+    assert_never_shortens(
+        "AFSK RTTY stream",
+        1_500.0,
+        |e| {
+            e.set_operating_mode("rtty", false);
+            e.set_rtty_latched(true).unwrap();
+            e.rtty_type("CQ CQ").unwrap();
+        },
+        played,
+    );
+}
+
+/// An RTTY message on the soundcard (AFSK): its over extends the hold.
+#[test]
+fn an_afsk_rtty_message_never_shortens_a_longer_hold() {
+    assert_never_shortens(
+        "AFSK RTTY message",
+        1_500.0,
+        |e| {
+            e.set_operating_mode("rtty", false);
+            e.rtty_send_text("CQ TEST").unwrap();
+        },
+        played,
+    );
+}
+
+/// RTTY typed live on the FSK keyline: each chunk extends the hold.
+#[cfg(feature = "serial")]
+#[test]
+fn an_fsk_rtty_stream_never_shortens_a_longer_hold() {
+    assert_never_shortens(
+        "FSK RTTY stream",
+        1_500.0,
+        |e| {
+            fsk(e, "tempo-test-fsk-stream");
+            e.set_operating_mode("rtty", false);
+            e.set_rtty_latched(true).unwrap();
+            e.rtty_type("CQ CQ").unwrap();
+        },
+        fsk_open,
+    );
+}
+
+/// An RTTY message on the FSK keyline: its over extends the hold.
+#[cfg(feature = "serial")]
+#[test]
+fn an_fsk_rtty_message_never_shortens_a_longer_hold() {
+    assert_never_shortens(
+        "FSK RTTY message",
+        1_500.0,
+        |e| {
+            fsk(e, "tempo-test-fsk-message");
+            e.set_operating_mode("rtty", false);
+            e.rtty_send_text("CQ TEST").unwrap();
+        },
+        fsk_open,
+    );
+}
+
+/// PSK typed live: each chunk extends the hold.
+#[test]
+fn a_psk_stream_never_shortens_a_longer_hold() {
+    assert_never_shortens(
+        "PSK stream",
+        1_500.0,
+        |e| {
+            e.set_operating_mode("keyboard", false);
+            e.set_psk_latched(true).unwrap();
+            e.psk_type("CQ CQ").unwrap();
+        },
+        played,
     );
 }
