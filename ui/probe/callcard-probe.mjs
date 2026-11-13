@@ -1,8 +1,11 @@
 // The station card in real Chrome, for what jsdom cannot see: `scripts/browser-probe --desktop callcard`.
 //
 // The card (ui/src/components/CallCard.tsx) must never cover a transmit control. The probe serves
-// src/probe/callcard.tsx with the app's own Vite config at 1366×768 and 1024×768: a call just above the
-// TX strip with the TX dock under it, and a call with FT's QSO strip and its Stop TX directly under it.
+// src/probe/callcard.tsx with the app's own Vite config at 1366×768 and at the floor (1366×768 at 175 %, a
+// 780×438 window; probe/sizes.mjs): a call just above the TX strip with the TX dock under it, and a call
+// with FT's QSO strip and its Stop TX directly under it. The page's boxes stand at fixed px for a 768-tall
+// window, so a window under 700 px tall (the floor, or the app at 175 %) draws only the QSO strip case. The
+// Best times card also runs at 900×600 at the app's 175 % (514×343 effective, xs).
 // It clicks the call with a real mouse press and asserts the card is drawn (placed, and the topmost thing
 // at its own centre) and that at nine points across every transmit box — the strip, Stop TX, the dock,
 // the QSO strip — and nine across any part of it the card's box overlaps, the topmost thing is never
@@ -14,11 +17,13 @@
 //
 // PHONE'S CARD BUTTON, the operator's report of 2026-10-26: the card opened from the log strip's Card
 // button for a call the strip had already looked up showed the callsign's initials instead of the photo
-// and squeezed every line of text to the callsign's width. At 1366×768, 1024×768 (and there at a 175%
-// UI scale) and 2560×1440 the probe opens it for a long callbook answer with a photo, presses nothing
-// else, and asserts the photo is drawn, there is no Look up to press, and the text column takes most
-// of the card: wider than twice the callsign and at least 60% of the card's body, with the card drawn
-// whole (it scrolls neither way: its box once came out its border narrower and shorter than its body).
+// and squeezed every line of text to the callsign's width. At 1366×768 (and there at the app's 175 % UI
+// scale), the floor, 2560×1440 and 4K at 200 % the probe opens it for a long callbook answer with a photo,
+// presses nothing else, and asserts the photo is drawn, there is no Look up to press, and the text column
+// takes most of the card: wider than twice the callsign and at least 60% of the card's body, with the card
+// drawn whole (it scrolls neither way: its box once came out its border narrower and shorter than its
+// body). Not at xs: the page's fixed Card button falls under the TX dock in a 600 px window at the app's
+// 175 %, so xs is held by the Best times card above.
 //
 // exit: 0 every case clear · 1 a red, or a control that could not fail · 2 the page never drew the card
 import { createServer } from 'vite'
@@ -27,9 +32,10 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { FLOOR, LAPTOP, QHD, UHD_200, metrics, offMatrix } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
-const SIZES = [{ w: 1366, h: 768 }, { w: 1024, h: 768 }]
+const SIZES = [LAPTOP, FLOOR]
 const CASES = ['strip', 'qso']
 /** The station card, then the Best times card (`&card=best`), each against the same boxes. */
 const CARDS = [{ name: 'station card', q: '' }, { name: 'Best times card', q: '&card=best' }]
@@ -96,7 +102,7 @@ const MEASURE_PHONE = `(() => {
 })()`
 
 /** One page: the case at `w`×`h`, the call clicked, the card measured once it has stopped moving. */
-async function measure(w, h, which, avoid, extra = '', expr = MEASURE) {
+async function measure(size, which, avoid, extra = '', expr = MEASURE) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -104,7 +110,7 @@ async function measure(w, h, which, avoid, extra = '', expr = MEASURE) {
     const r = await call('Runtime.evaluate', { expression, returnByValue: true })
     return r.exceptionDetails ? null : r.result.value
   }
-  await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+  await call('Emulation.setDeviceMetricsOverride', metrics(size))
   await call('Page.navigate', { url: `${origin}/probe/callcard.html?case=${which}${avoid ? '' : '&avoid=off'}${extra}` })
   let at = null
   for (let i = 0; i < 100 && !at; i++) {
@@ -132,13 +138,14 @@ async function measure(w, h, which, avoid, extra = '', expr = MEASURE) {
 
 let code = 0
 try {
-  for (const card of CARDS) for (const { w, h, zoom } of [...SIZES, ...(card.q ? [{ w: 1024, h: 768, zoom: 1.75 }] : [])]) {
+  for (const card of CARDS) for (const size of [...SIZES, ...(card.q ? [{ ...LAPTOP, zoom: 1.75 }, { ...offMatrix(900, 600), zoom: 1.75 }] : [])]) {
+    const { zoom } = size
     const z = zoom ? `&zoom=${zoom}` : ''
-    const where = `${w}×${h}${zoom ? ` at ${zoom * 100}%` : ''}`
-    // At 175% the page's fixed boxes scale with the app: the strip case's call (top 560) would stand
-    // below a 768 px window, so only the QSO strip case is drawn there.
-    for (const which of zoom ? ['qso'] : CASES) {
-      const m = await measure(w, h, which, true, card.q + z)
+    const where = `${size.name}${zoom ? ` at ${zoom * 100}%` : ''}`
+    // At 175% the page's fixed boxes scale with the app, and the floor's window is 438 px tall: either way the
+    // strip case's call (top 560) would stand below the window, so only the QSO strip case is drawn there.
+    for (const which of zoom || size.h < 700 ? ['qso'] : CASES) {
+      const m = await measure(size, which, true, card.q + z)
       console.log(`callcard-probe: ${card.name}, ${which}, window ${where}: ${JSON.stringify(m)}`)
       if (!m || !m.drawn) {
         console.error(`callcard-probe: the ${card.name} was never drawn for the ${which} case at ${where}`)
@@ -147,7 +154,7 @@ try {
         console.error(`callcard-probe: RED ${card.name} ${which} at ${where} — it covers a transmit control (see "covered") or one moved (txMoved: ${m.txMoved})`)
         code = code || 1
       }
-      const c = await measure(w, h, which, false, card.q + z)
+      const c = await measure(size, which, false, card.q + z)
       console.log(`callcard-probe: CONTROL ${card.name} ${which}, window ${where}, transmit classes removed: ${JSON.stringify(c)}`)
       if (!c || !Object.values(c.covered).some(Boolean)) {
         console.error(`callcard-probe: CONTROL FAILED ${card.name} ${which} at ${where} — with nothing to keep off, the card did not land on the boxes; the check cannot fail`)
@@ -155,9 +162,12 @@ try {
       }
     }
   }
-  for (const { w, h, zoom } of [{ w: 1366, h: 768 }, { w: 1024, h: 768 }, { w: 1024, h: 768, zoom: 1.75 }, { w: 2560, h: 1440 }]) {
-    const m = await measure(w, h, 'phone', true, zoom ? `&zoom=${zoom}` : '', MEASURE_PHONE)
-    const at = `${w}×${h}${zoom ? ` at ${zoom * 100}%` : ''}`
+  // Not 900×600 at 175 % (xs): the page's Card button stands at a fixed top 300 px, which the app's 175 % puts
+  // under the 90 px TX dock in a 600 px window, so the click lands on the dock (measured: no card drawn).
+  for (const size of [LAPTOP, { ...LAPTOP, zoom: 1.75 }, FLOOR, QHD, UHD_200]) {
+    const { zoom } = size
+    const m = await measure(size, 'phone', true, zoom ? `&zoom=${zoom}` : '', MEASURE_PHONE)
+    const at = `${size.name}${zoom ? ` at ${zoom * 100}%` : ''}`
     console.log(`callcard-probe: phone Card button, window ${at}: ${JSON.stringify(m)}`)
     if (!m) {
       console.error(`callcard-probe: the card was never drawn from Phone's Card button at ${at}`)
@@ -173,7 +183,7 @@ try {
       code = code || 1
     }
   }
-  if (code === 0) console.log(`callcard-probe: PASS — the station card and the Best times card clear of the TX strip, Stop TX, the TX dock and the QSO strip at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}; each control covered with the transmit classes removed; from Phone's Card button the photo shows and the text takes the card's width`)
+  if (code === 0) console.log(`callcard-probe: PASS — the station card and the Best times card clear of the TX strip, Stop TX, the TX dock and the QSO strip at ${SIZES.map((s) => s.name).join(', ')}; each control covered with the transmit classes removed; from Phone's Card button the photo shows and the text takes the card's width`)
   process.exitCode = code
 } finally {
   await browser.stop()

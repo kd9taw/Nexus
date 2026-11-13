@@ -67,8 +67,25 @@ export const LOCALE_NATIVE_NAME: Record<string, string> = {
   de: 'Deutsch',
   es: 'Español',
   fr: 'Français',
+  // A beta translation says so where the operator chooses it (operator ruling 2026-11-12).
+  it: 'Italiano (beta)',
   ja: '日本語',
   ru: 'Русский',
   zh: '简体中文',
   'zh-hant': '繁體中文',
+}
+
+/**
+ * A beta translation's note, in that language's OWN words like its name above: the translation is
+ * new, how to switch to English, and where to report wording. Shown as a hint under the Language
+ * picker and on the setup wizard's first screen (`LocaleBetaNote`), never as a row on a cockpit.
+ * It lives here rather than in the catalogs because it exists for one language at a time and never
+ * needs translating into the others. The Settings path is the Italian catalog's own labels.
+ */
+export const LOCALE_BETA_NOTE: Record<string, { text: string; link: string; href: string }> = {
+  it: {
+    text: "Traduzione italiana in beta. Per passare all'inglese: Impostazioni ▸ Aspetto ▸ Lingua. Segnala le correzioni su",
+    link: 'github.com/kd9taw/Nexus/issues',
+    href: 'https://github.com/kd9taw/Nexus/issues',
+  },
 }

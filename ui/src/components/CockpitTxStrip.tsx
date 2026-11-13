@@ -292,8 +292,12 @@ function pinCandidate(shell: HTMLElement, strip: HTMLElement): HTMLElement | und
 }
 
 /** How much of the shell's scrollport must stay free for what scrolls (the scope and the panes) before
- *  a header may pin itself, in the shell's em. */
-export const PIN_ROOM_EM = 6
+ *  a header may pin itself, in the shell's em. A PANE'S FLOOR, 10em (`--cockpit-fill-min`,
+ *  cockpit-panes.css): the room between the parked surfaces is all the operator can scroll a pane
+ *  through, so with less than one pane's height a pane at its floor is never on screen whole. It was
+ *  6em, and at 1366×768 / 175 % SSTV's pinned header, strip and TX bar left 117 px around a 140 px
+ *  TX meters pane: its readouts stayed under the header at every scroll position (measured in Chrome). */
+export const PIN_ROOM_EM = 10
 
 /** PIN THE HEADER ONLY WHERE THE THREE PARKED SURFACES FIT. Pinned, the header parks at the top, the
  *  strip under it and the dock at the bottom; on a small window at a large zoom (900×600 or 700×800 at

@@ -9,6 +9,7 @@ import { parseRules, specificity, cmpSpec } from './cssCascade'
 import { Logbook } from './components/Logbook'
 import type { LogQuestion } from './features/logAnswers'
 import { t } from './i18n'
+import { ACTIONS_TRACK } from './features/logColumns'
 
 // ─────────────────────────────────────────────────────────────────────────────────────────
 // THE LOGBOOK ROW'S ACTION CLUSTER MUST FIT ITS GRID TRACK.
@@ -107,9 +108,10 @@ function tracks(template: string): string[] {
   return out
 }
 
-/** The px floor of a `minmax(<px>, …)` track. A bare `fr` track has no floor. */
+/** The px floor of a `minmax(<px>, …)` track — or of `minmax(max(<px>, …), …)`, whose px arm is the floor at every
+ *  zoom (the actions track grows past it only under the app's 75 %). A bare `fr` track has no floor. */
 const floorOf = (track: string): number | null => {
-  const m = /^minmax\(\s*(\d+(?:\.\d+)?)px\s*,/.exec(track)
+  const m = /^minmax\(\s*(?:max\(\s*)?(\d+(?:\.\d+)?)px\s*,/.exec(track)
   return m ? Number(m[1]) : null
 }
 
@@ -369,6 +371,45 @@ describe('the Logbook row-action cluster fits its grid track', () => {
     expect(pxOf(winner(['.log-rowbtn'], 'height'))).toBe(22)
     // The ⋯ menu's items are the same 32 px targets.
     expect(pxOf(winner(['.log-rowmenu .ui-menu-item'], 'min-height')), 'a ⋯ menu item is at least 32 px tall').toBeGreaterThanOrEqual(32)
+  })
+
+  // 24 PX ON SCREEN AT EVERY ZOOM (2026-11-12). The app's own zoom (65–175 %) shrinks the 32 px with everything else,
+  // and on the smallest supported screen (1366×768 at 175 %) the app fits itself to 65 %: the probe measured ✎ and ⋯
+  // at 20.8 × 20.8 px there. The declarations are RESOLVED here at every zoom step and both densities (the sheet's
+  // own expressions, evaluated), and the pair with the gap between them must still fit the track (resolved the same
+  // way), with an empty end the probe clicks to prove the cell's empty part sends nothing.
+  it('keeps every row button 24 px on screen at every zoom, 6 px apart, inside its track with an empty end', () => {
+    const resolve = (v: string | null, vars: { zoom: number; density: number; space2: number }): number => {
+      expect(v, 'a declaration is missing').not.toBeNull()
+      const js = v!
+        .replace(/var\(--ui-zoom(?:,\s*[\d.]+)?\)/g, String(vars.zoom))
+        .replace(/var\(--density-scale\)/g, String(vars.density))
+        .replace(/var\(--space-2\)/g, String(vars.space2))
+        .replace(/(\d+(?:\.\d+)?)px/g, '$1')
+        .replace(/\bmax\(/g, 'Math.max(')
+        .replace(/\bmin\(/g, 'Math.min(')
+        .replace(/\bcalc\(/g, '(')
+      expect(/^[\d\s.+*/(),-]*$/.test(js.replace(/Math\.(max|min)/g, '')), `\`${v}\` is not plain arithmetic once resolved: ${js}`).toBe(true)
+      return Function(`return (${js})`)() as number
+    }
+    const arm = /^minmax\((.*), \1\)$/.exec(ACTIONS_TRACK)?.[1] ?? null
+    expect(arm, `the actions track \`${ACTIONS_TRACK}\` is not one fixed width`).not.toBeNull()
+    for (const zoom of [0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 1, 1.1, 1.25, 1.5, 1.75]) {
+      for (const density of [1, 0.82]) {
+        for (const space2 of [8, 8 * 0.86]) {
+          const vars = { zoom, density, space2 }
+          const w = resolve(winner(ROW_BUTTON, 'min-width'), vars)
+          const h = resolve(winner(ROW_BUTTON, 'height'), vars)
+          const gap = resolve(winner(['.log-rowactions'], 'gap'), vars)
+          const track = resolve(arm, vars)
+          const at = `zoom ${zoom}, density ${density}, --space-2 ${space2.toFixed(2)}`
+          expect(w * zoom, `${at}: a row button is ${(w * zoom).toFixed(1)} px wide on screen`).toBeGreaterThanOrEqual(24 - 1e-9)
+          expect(h * zoom, `${at}: a row button is ${(h * zoom).toFixed(1)} px tall on screen`).toBeGreaterThanOrEqual(24 - 1e-9)
+          expect(gap, `${at}: ${gap.toFixed(2)} px between ✎ and ⋯`).toBeGreaterThanOrEqual(6 - 1e-9)
+          expect(2 * w + gap + 1, `${at}: ✎ and ⋯ need ${(2 * w + gap).toFixed(1)} px of the ${track.toFixed(1)} px track, and an empty end`).toBeLessThanOrEqual(track + 1e-9)
+        }
+      }
+    }
   })
 
   it('FIRES: the floor that shipped is reported as too small', () => {

@@ -750,6 +750,7 @@ export function TxMetersPane({
   split,
   share,
   close,
+  lowFloor = '--txmeters-pane-floor',
 }: {
   radio: RadioStatus
   paneRef?: Ref<HTMLElement>
@@ -760,6 +761,8 @@ export function TxMetersPane({
   share?: number
   /** The cockpit's `closeProps`: the frame's ✕, absent with no panel record. */
   close?: Pick<ComponentProps<typeof CockpitPaneFrame>, 'onRemove' | 'hideNote'>
+  /** The low floor's knob (cockpit-panes.css): FT's own steps up on a tall window, every other cockpit's is the stock. */
+  lowFloor?: '--txmeters-pane-floor' | '--txmeters-pane-floor-ft'
 }) {
   return (
     <CockpitPaneFrame
@@ -768,7 +771,7 @@ export function TxMetersPane({
       weight={weight}
       split={split}
       share={share}
-      lowFloor="--txmeters-pane-floor"
+      lowFloor={lowFloor}
       paneRef={paneRef}
       {...close}
     >

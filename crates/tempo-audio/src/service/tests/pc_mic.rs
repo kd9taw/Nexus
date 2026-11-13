@@ -956,3 +956,38 @@ fn a_stop_tx_mid_over_flushes_then_unkeys_and_drops_the_hold() {
     );
     assert!(!s.rig.keyed);
 }
+
+/// THE COMPUTER MICROPHONE'S KEY NEVER SHORTENS A LONGER HOLD: the tick that keys its over extends
+/// the hold across the lead-in and pre-roll (`extend_hold`), so a hold already running past that
+/// (another over riding the same transmitter) stands at every tick. CONTROL: under a short hold the
+/// key extends it, which says the site ran. A characterization pin beside the stream sites' in
+/// `cut_sites`.
+#[test]
+fn the_microphones_key_never_shortens_a_longer_hold() {
+    const LONG_HOLD: f64 = 9_999_999.0;
+    let run = |hold: f64| {
+        let mut s = PcScene::new(true);
+        s.settle();
+        s.state.tx_until_ms = Some(hold);
+        s.ptt(true);
+        let mut holds = Vec::new();
+        let mut t = 60.0;
+        while t <= 600.0 {
+            s.tick(t, 0.5);
+            holds.push(s.state.tx_until_ms);
+            t += 20.0;
+        }
+        assert!(s.state.pc_mic_keyed, "premise: the loop keyed the over");
+        holds
+    };
+    let holds = run(LONG_HOLD);
+    assert!(
+        holds.iter().all(|h| *h == Some(LONG_HOLD)),
+        "the longer hold was shortened: {holds:?}"
+    );
+    let holds = run(70.0);
+    assert!(
+        holds.iter().any(|h| h.is_some_and(|h| h > 70.0)),
+        "control: a shorter hold is never extended: {holds:?}"
+    );
+}

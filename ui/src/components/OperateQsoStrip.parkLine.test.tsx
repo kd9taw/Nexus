@@ -57,6 +57,10 @@ function Strip({ withRadio = true }: { withRadio?: boolean }) {
 }
 const strip = () => document.querySelector<HTMLElement>('.cockpit-qso')!
 const rest = () => strip().style.getPropertyValue('--cockpit-ftstrip-rest')
+/** The rest as the strip writes it: EXACT, to the hundredth of a layout px, never rounded to a whole one. Rounded, a line
+ *  under Stop TX's that grew (the TX meters' first readings) moved the rounding error, and Stop TX with it (0.8 px at
+ *  1366×768 at 175 %, Chrome). */
+const exact = (layoutPx: number) => `${Math.round(layoutPx * 100) / 100}px`
 /** The strip in its shell, as OperateCockpit draws it (the shell is what the scroll padding goes on). */
 function InShell() {
   return (
@@ -78,7 +82,7 @@ describe("FT's strip parks only its first line, the line with Stop TX", () => {
     render(<Strip />)
     expect(strip().classList.contains('cockpit-ftstrip'), 'the strip lost its parking rule').toBe(true)
     expect(strip().querySelector('.cq-txctl .op-btn.stop'), 'control: Stop TX is in the parked line').not.toBeNull()
-    expect(strip().style.getPropertyValue('--cockpit-ftstrip-rest')).toBe(`${Math.floor((STRIP.top + STRIP.height - LINE_BOTTOM) / ZOOM)}px`)
+    expect(strip().style.getPropertyValue('--cockpit-ftstrip-rest')).toBe(exact((STRIP.top + STRIP.height - LINE_BOTTOM) / ZOOM))
   })
 
   it('less the strip’s own bottom padding and border, which park with the line', () => {
@@ -87,7 +91,7 @@ describe("FT's strip parks only its first line, the line with Stop TX", () => {
     s.textContent = '.cockpit-qso { padding-bottom: 3px; border-bottom: 1px solid }'
     document.head.appendChild(s)
     render(<Strip />)
-    expect(strip().style.getPropertyValue('--cockpit-ftstrip-rest')).toBe(`${Math.floor((STRIP.top + STRIP.height - LINE_BOTTOM) / ZOOM - 4)}px`)
+    expect(strip().style.getPropertyValue('--cockpit-ftstrip-rest')).toBe(exact((STRIP.top + STRIP.height - LINE_BOTTOM) / ZOOM - 4))
     s.remove()
   })
 
@@ -113,10 +117,10 @@ describe("FT's strip parks only its first line, the line with Stop TX", () => {
   it('a strip that draws an alarm cell parks through its line where both lines fit the scrollport', () => {
     stub()
     const { rerender } = render(<InShell />)
-    expect(rest(), 'control: without a cell, the first line parks').toBe(`${Math.floor((STRIP.top + STRIP.height - LINE_BOTTOM) / ZOOM)}px`)
+    expect(rest(), 'control: without a cell, the first line parks').toBe(exact((STRIP.top + STRIP.height - LINE_BOTTOM) / ZOOM))
     addAlarmCell()
     rerender(<InShell />)
-    expect(rest(), 'the alarm waits past the foot, out of sight, below Stop TX').toBe(`${Math.floor((STRIP.top + STRIP.height - ALARM_BOTTOM) / ZOOM)}px`)
+    expect(rest(), 'the alarm waits past the foot, out of sight, below Stop TX').toBe(exact((STRIP.top + STRIP.height - ALARM_BOTTOM) / ZOOM))
     const shell = document.querySelector<HTMLElement>('main')!
     expect(shell.style.getPropertyValue('--cockpit-ftstrip-park-h')).toBe(`${Math.ceil(ALARM_BOTTOM - STRIP.top)}px`)
   })
@@ -128,6 +132,6 @@ describe("FT's strip parks only its first line, the line with Stop TX", () => {
     // The two lines need (ALARM_BOTTOM - STRIP.top) / ZOOM layout px; one short of that.
     shellH = Math.ceil((ALARM_BOTTOM - STRIP.top) / ZOOM) - 1
     rerender(<InShell />)
-    expect(rest(), 'the two lines park in a scrollport too short for them').toBe(`${Math.floor((STRIP.top + STRIP.height - LINE_BOTTOM) / ZOOM)}px`)
+    expect(rest(), 'the two lines park in a scrollport too short for them').toBe(exact((STRIP.top + STRIP.height - LINE_BOTTOM) / ZOOM))
   })
 })

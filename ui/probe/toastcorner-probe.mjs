@@ -7,17 +7,18 @@
 // no transmit surface (features/toastRoom.ts, measured by Toasts.tsx).
 //
 // The probe serves the REAL app (index.html, main.tsx, App) with the app's own Vite config and src/api.ts
-// swapped for probe/toastcorner-api.ts. For each screen (FT, Phone, CW, PSK: the docks and strips the corners meet), at 1024×768 (the supported
-// floor) and 1920×1080, and Phone and CW again at the pinned 65 % and 175 % zooms (175 % at 1920×1080 too), in each of the four
-// corners, with a burst of nine (its newest toast stands where a lone
+// swapped for probe/toastcorner-api.ts. For each screen (FT, Phone, CW, PSK: the docks and strips the corners meet), at the ends of
+// the screens (probe/sizes.mjs: the floor, 1366×768 at 175 %; 1920×1080; 4K at 200 %; a page per corner per screen is this probe's
+// cost, so not the whole representative set), and Phone and CW again at the app's pinned 65 % and 175 % zooms on 1366×768 and
+// 1920×1080 and at 175 % on 900×600 (xs), in each of the four corners, with a burst of nine (its newest toast stands where a lone
 // toast would, so the burst covers the one-toast case too; PROBE_BURSTS=1,9 runs both), it pushes the
 // toasts through the real toast bus and asserts:
 //   1. NO TOAST COVERS A TRANSMIT CONTROL: no toast's box (inside the column's box) meets any button of the
 //      window's transmit surfaces (`TX_AVOID`: the TX strip, the TX dock, FT's QSO strip, the top bar's
 //      cluster, any Stop button);
 //   2. the column is inside the window, stands in the corner chosen, and is never shorter than one toast.
-// Then the first visits: FT with a burst of twenty up, switched to PSK and to JTTY, in each corner at both sizes.
-// THE CONTROL, at one page: Phone, 1024×768, bottom left, one toast, with the column forced back to the bare
+// Then the first visits: FT with a burst of twenty up, switched to PSK and to JTTY, in each corner at each size.
+// THE CONTROL, at one page: Phone, the floor, bottom left, one toast, with the column forced back to the bare
 // corner (16 px, no height cap). The probe must see the toast over PTT; if it does not, the check cannot
 // fail and the probe says so instead of passing.
 //
@@ -28,13 +29,14 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { FHD, FLOOR, LAPTOP, UHD_200, metrics, offMatrix } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
 const STUB_SRC = join(UI, 'probe', 'toastcorner-api.ts')
 // Served under a name with no file behind it, beside the source, as the other desktop probes do.
 const STUB_API = join(UI, 'probe', '__toastcorner-api.ts')
-const SIZES = [[1024, 768], [1920, 1080]]
+const SIZES = [FLOOR, FHD, UHD_200]
 const SCREENS = ['operate', 'phone', 'cw', 'psk']
 const CORNERS = ['bottom-right', 'bottom-left', 'top-right', 'top-left']
 const BURSTS = (process.env.PROBE_BURSTS ?? '9').split(',').map(Number)
@@ -42,7 +44,9 @@ const BURSTS = (process.env.PROBE_BURSTS ?? '9').split(',').map(Number)
 // corner meets (Phone's PTT, CW's Send): the column's room is window px divided by the zoom, and a wrong
 // division is exactly a toast on PTT at 65 %. PROBE_SET=base, =zoom or =switch runs one part (a loaded
 // box's foreground budget); unset, all three.
-const ZOOMED = [[[1024, 768], '65'], [[1920, 1080], '65'], [[1024, 768], '175'], [[1366, 768], '175'], [[1920, 1080], '175']]
+// xs: 900×600 (the shell's own minimum window, off the matrix) at the app's 175 % is 514×343 effective — the
+// row that keeps the xs layout here; 1366×768 at 175 % is 780 px, sm.
+const ZOOMED = [[LAPTOP, '65'], [FHD, '65'], [LAPTOP, '175'], [FHD, '175'], [offMatrix(900, 600), '175']]
 const SET = process.env.PROBE_SET ?? 'all'
 const PAGES = [
   ...(SET === 'all' || SET === 'base' ? SIZES.map((size) => [size, 'auto', SCREENS]) : []),
@@ -136,7 +140,7 @@ const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 const FEATURES = JSON.stringify({ profile: 'custom', enabled: { js8: true, jtty: true, rtty: true, psk: true, sstv: true } })
 
-async function run(screen, [W, H], corner, n, control, scale = 'auto', then = null) {
+async function run(screen, size, corner, n, control, scale = 'auto', then = null) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -154,7 +158,7 @@ async function run(screen, [W, H], corner, n, control, scale = 'auto', then = nu
     return null
   }
   try {
-    await call('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false })
+    await call('Emulation.setDeviceMetricsOverride', metrics(size))
     await call('Page.navigate', { url: `${origin}/probe-blank` })
     await sleep(300)
     const store = {
@@ -183,7 +187,7 @@ try {
     for (const screen of screens)
       for (const corner of CORNERS)
         for (const n of BURSTS) {
-          const at = `${screen} ${size.join('×')}${scale === 'auto' ? '' : ` at ${scale}%`} ${corner} ×${n}`
+          const at = `${screen} ${size.name}${scale === 'auto' ? '' : ` at ${scale}%`} ${corner} ×${n}`
           const m = await run(screen, size, corner, n, false, scale)
           if (m.error) {
             undrawn++
@@ -205,7 +209,7 @@ try {
     for (const size of SIZES)
       for (const then of ['PSK', 'JTTY'])
         for (const corner of CORNERS) {
-          const at = `operate → ${then} ${size.join('×')} ${corner} ×20`
+          const at = `operate → ${then} ${size.name} ${corner} ×20`
           const m = await run('operate', size, corner, 20, false, 'auto', then)
           if (m.error) {
             undrawn++
@@ -220,7 +224,7 @@ try {
           if (faults.length) red++
           console.log(`${faults.length ? 'RED ' : 'ok  '} ${at}: column ${m.column}, ${m.shown} toast(s) shown, ${m.controls} TX controls${faults.length ? '\n     ' + faults.join('\n     ') : ''}`)
         }
-  const c = await run('phone', [1024, 768], 'bottom-left', 1, true)
+  const c = await run('phone', SIZES[0], 'bottom-left', 1, true)
   if (c.error || c.covered.length === 0) {
     red++
     console.log(`RED  CONTROL: the column forced to the bare corner covered nothing it could see (${c.error ?? 'no cover found'}), so the check cannot fail`)

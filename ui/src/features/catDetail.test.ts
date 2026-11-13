@@ -11,6 +11,7 @@ import { EN, installCatalog, setLocale } from '../i18n'
 import { DE } from '../i18n/de'
 import { ES } from '../i18n/es'
 import { FR } from '../i18n/fr'
+import { IT } from '../i18n/it'
 import { JA } from '../i18n/ja'
 import { RU } from '../i18n/ru'
 import { ZH } from '../i18n/zh'
@@ -76,6 +77,7 @@ describe('the unconfirmed RTS/DTR holds refusal, in the CAT status', () => {
     ['de', DE],
     ['es', ES],
     ['fr', FR],
+    ['it', IT],
     ['ja', JA],
     ['ru', RU],
     ['zh', ZH],
@@ -93,6 +95,7 @@ describe('the unconfirmed RTS/DTR holds refusal, in the CAT status', () => {
 
   it.each([
     ['ru', '../../../translations/ru/nexus-ru-translation.csv'],
+    ['it', '../../../translations/it/nexus-it-translation.csv'],
     ['zh', '../../../translations/zh/nexus-zh-translation.csv'],
     ['zh-hant', '../../../translations/zh-hant/nexus-zh-hant-translation.csv'],
   ])("the %s kit's row has the English the app shows", (_, file) => {
@@ -149,6 +152,7 @@ describe('transmit turned off by a silent CAT link, in the CAT status', () => {
     ['de', DE],
     ['es', ES],
     ['fr', FR],
+    ['it', IT],
     ['ja', JA],
     ['ru', RU],
     ['zh', ZH],
@@ -177,6 +181,7 @@ describe('transmit still off once CAT is back, in the CAT status', () => {
     ['de', DE],
     ['es', ES],
     ['fr', FR],
+    ['it', IT],
     ['ja', JA],
     ['ru', RU],
     ['zh', ZH],
