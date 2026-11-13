@@ -5331,6 +5331,11 @@ pub struct Engine {
     /// while armed; the thread empties it via [`Engine::take_rtty_audio`]. Empty
     /// (zero cost) while disarmed.
     rtty_audio: Vec<f32>,
+    /// Unix-ms until which the RTTY and PSK receive taps discard what the radio hands back,
+    /// because it is our own transmission: pushed [`OWN_TX_RX_SETTLE_MS`] ahead on every feed
+    /// while anything of ours holds the transmitter ([`Engine::tx_owner`]). 0 = never keyed.
+    /// RX bookkeeping only: nothing that keys, holds or unkeys reads it.
+    own_tx_rx_quiet_until_ms: u64,
     /// Ring of decoded RTTY characters (+ per-char ATC confidence), capped at
     /// [`RTTY_TEXT_CAP`] — the cockpit transcript. Pushed by the decode thread.
     /// The RTTY transcript ring: each decoded character, and whether WE sent it.
@@ -5771,6 +5776,22 @@ const RTTY_AFSK_MARK_HZ: f64 = 2125.0;
 /// stalls, dropping oldest audio (garbling that decode) instead of growing RAM
 /// without bound.
 const RX_TAP_CAP: usize = 120_000;
+/// How long the RTTY and PSK receive taps stay shut after our own transmission ends (see
+/// [`Engine::feed_rx_audio`]). Many rigs hand their own transmit monitor back on the USB receive
+/// audio while keyed, so without this the decoder copies our over a second time, as received text,
+/// interleaved with the echo of what we sent, and feeds it to the RTTY auto-sequencer. The tail
+/// covers what still arrives after the engine stops counting the over as ours:
+///   * 250 ms: the radio loop holds PTT `TX_TAIL_MS` (tempo-audio `slot.rs`) past an over's
+///     computed end, and the engine's transmit owner drops at that computed end;
+///   * 165 ms: one framed RTTY character at 45.45 Bd (7.5 bits of 22 ms), the slowest rate
+///     offered, so a character straddling the unkey is never completed from half of it;
+///   * 185 ms: the rig's transmit-to-receive turnaround, plus the sound card's buffering on both
+///     sides (the over leaves the speaker after the loop's clock says it has, and the capture
+///     reaches the loop after the air did).
+///
+/// A station answering waits out its own receive-to-transmit turnaround and usually a carrier
+/// before its first character, so the 600 ms costs no copy in practice.
+const OWN_TX_RX_SETTLE_MS: u64 = 600;
 /// Cap on the decoded-APRS list kept for the cockpit (oldest dropped past this).
 const APRS_HEARD_CAP: usize = 300;
 
@@ -7957,6 +7978,7 @@ impl Engine {
             rtty_auto_arm_declined: false,
             rtty_auto_armed: false,
             rtty_audio: Vec::new(),
+            own_tx_rx_quiet_until_ms: 0,
             rtty_chars: VecDeque::new(),
             rtty_afc_hz: 0.0,
             rtty_afc_locked: false,
@@ -25980,6 +26002,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// updates at the loop cadence from real sound-card input, rather than only
     /// once per (4 s / 15 s) RX slot. Keeps a rolling [`SPECTRUM_WINDOW`] window.
     pub fn feed_rx_audio(&mut self, samples: &[f32]) {
+        self.feed_rx_audio_at(samples, now_unix_millis());
+    }
+
+    /// [`Self::feed_rx_audio`] at Unix-ms `now_ms` (the tests drive the clock).
+    fn feed_rx_audio_at(&mut self, samples: &[f32], now_ms: u64) {
         if samples.is_empty() {
             return;
         }
@@ -26020,14 +26047,22 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // The RTTY/SSTV RX taps: plain drain buffers the decode threads empty on
         // their own cadence (`take_rtty_audio`/`take_sstv_audio`). Session-armed
         // only — disarmed costs one branch, nothing else.
-        if self.rtty_armed {
+        //
+        // ⛔ NOT WHILE WE TRANSMIT (fldigi's default: no decoding of our own transmission). What
+        // the rig returns then is our own signal, so the RTTY and PSK taps DISCARD it, and for
+        // [`OWN_TX_RX_SETTLE_MS`] after. Decoded, it printed as received text interleaved with
+        // the echo of what we sent, and fed our own over to the RTTY auto-sequencer. Discarded,
+        // not queued: the demodulator never sees our tones, so its AFC and squelch hold where the
+        // far station left them.
+        let own_tx = self.own_tx_in_rx_audio(now_ms);
+        if self.rtty_armed && !own_tx {
             self.rtty_audio.extend_from_slice(samples);
             if self.rtty_audio.len() > RX_TAP_CAP {
                 let drop = self.rtty_audio.len() - RX_TAP_CAP;
                 self.rtty_audio.drain(0..drop);
             }
         }
-        if self.psk_armed {
+        if self.psk_armed && !own_tx {
             self.psk_audio.extend_from_slice(samples);
             if self.psk_audio.len() > RX_TAP_CAP {
                 let drop = self.psk_audio.len() - RX_TAP_CAP;
@@ -26036,7 +26071,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
         // JTTY's tap keeps each reception's samples contiguous on its own timeline instead of
         // dropping the oldest (`jtty_rx`); disarmed it is one branch.
-        self.jtty_feed(samples, now_unix_millis() as i64);
+        self.jtty_feed(samples, now_ms as i64);
         if self.aprs_arm.is_armed() {
             self.aprs_audio.extend_from_slice(samples);
             if self.aprs_audio.len() > RX_TAP_CAP {
@@ -26064,6 +26099,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
             let drop = self.qso_audio.len() - QSO_WAV_WINDOW;
             self.qso_audio.drain(0..drop);
         }
+    }
+
+    /// Whether the receive audio arriving at `now_ms` is our own transmission: anything of ours
+    /// holds the transmitter ([`Self::tx_owner`] — an RTTY over by FSK or AFSK, queued or keyed,
+    /// the continuous-TX latch, and every other source), or held it within
+    /// [`OWN_TX_RX_SETTLE_MS`]. Reads the arbiter; decides nothing about transmitting.
+    fn own_tx_in_rx_audio(&mut self, now_ms: u64) -> bool {
+        if self.tx_owner().is_some() {
+            self.own_tx_rx_quiet_until_ms = now_ms.saturating_add(OWN_TX_RX_SETTLE_MS);
+        }
+        now_ms < self.own_tx_rx_quiet_until_ms
     }
 
     /// The recent receive audio (the per-QSO WAV ring) as 16-bit PCM, for writing a WAV
@@ -41646,6 +41692,89 @@ mod tests {
         e.set_rtty_armed(false);
         e.set_rtty_armed(true);
         assert_eq!(e.rtty_scope(), RttyScope::default());
+    }
+
+    /// ⛔ OUR OWN OVER NEVER REACHES THE RTTY OR PSK DECODER (a tester on an FT-710, AFSK on
+    /// DATA-L: his own CQ printed in the receive window as a second, garbled copy interleaved with
+    /// the echo, at any power). The rig hands its transmit monitor back on the receive audio, and
+    /// the taps queued it for the decoders. Every way an over of ours holds the transmitter
+    /// discards the audio, and so does the settle tail after it; the tap fills again once the tail
+    /// has passed. CONTROL: the same audio, unkeyed, fills both taps.
+    #[test]
+    fn the_rtty_and_psk_taps_discard_our_own_transmission_and_its_tail() {
+        const T0: u64 = 1_800_000_000_000;
+        let audio = [0.25f32; 240];
+        type Keying = fn(&mut Engine, bool);
+        let keyings: [(&str, Keying); 5] = [
+            // FSK and AFSK overs both stamp the one sending flag the loop keeps.
+            ("an RTTY over on the air", |e, on| e.rtty_sending = on),
+            ("an RTTY over queued to key", |e, on| {
+                e.rtty_queue = if on {
+                    ["CQ".to_string()].into()
+                } else {
+                    VecDeque::new()
+                }
+            }),
+            ("the RTTY continuous-TX latch", |e, on| e.rtty_latched = on),
+            ("a PSK over on the air", |e, on| e.psk_sending = on),
+            ("Tune", |e, on| e.tuning = on),
+        ];
+        for (what, key) in keyings {
+            let mut e = Engine::new("W9XYZ", "EN61", 0);
+            e.set_rtty_armed(true);
+            e.set_psk_armed(true);
+            e.feed_rx_audio_at(&audio, T0);
+            assert_eq!(
+                (e.take_rtty_audio().len(), e.take_psk_audio().len()),
+                (240, 240),
+                "{what}: control, received audio fills both taps"
+            );
+
+            key(&mut e, true);
+            e.feed_rx_audio_at(&audio, T0 + 1_000);
+            e.feed_rx_audio_at(&audio, T0 + 5_000);
+            assert!(
+                e.take_rtty_audio().is_empty() && e.take_psk_audio().is_empty(),
+                "{what}: our own transmission was queued for the decoders"
+            );
+
+            let unkeyed = T0 + 5_000;
+            key(&mut e, false);
+            e.feed_rx_audio_at(&audio, unkeyed + OWN_TX_RX_SETTLE_MS - 1);
+            assert!(
+                e.take_rtty_audio().is_empty() && e.take_psk_audio().is_empty(),
+                "{what}: the rig's tail after the unkey was queued for the decoders"
+            );
+            e.feed_rx_audio_at(&audio, unkeyed + OWN_TX_RX_SETTLE_MS);
+            assert_eq!(
+                (e.take_rtty_audio().len(), e.take_psk_audio().len()),
+                (240, 240),
+                "{what}: the taps never reopened after the tail"
+            );
+        }
+    }
+
+    /// The tail is measured from the LAST moment of our transmission, not its first: a long over
+    /// holds the taps shut for its whole length, and the tail runs from its end.
+    #[test]
+    fn the_own_tx_tail_runs_from_the_end_of_the_over() {
+        const T0: u64 = 1_800_000_000_000;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_rtty_armed(true);
+        e.rtty_sending = true;
+        for t in (0..30_000).step_by(50) {
+            e.feed_rx_audio_at(&[0.25; 600], T0 + t);
+        }
+        assert!(
+            e.take_rtty_audio().is_empty(),
+            "a long over reached the decoder"
+        );
+        e.rtty_sending = false;
+        e.feed_rx_audio_at(&[0.25; 600], T0 + 30_000);
+        assert!(
+            e.take_rtty_audio().is_empty(),
+            "the tail was measured from the start of the over"
+        );
     }
 
     #[test]
