@@ -941,6 +941,13 @@
   --chrome-bar-gap: max(var(--space-3), min(18px, (var(--vh-eff, 100vh) - 1100px) * 100));
   --chrome-head-gap: max(var(--space-2), min(var(--gap), (var(--vh-eff, 100vh) - 1100px) * 100));
   --chrome-extras-gap: max(var(--space-2), min(var(--space-3), (var(--vh-eff, 100vh) - 1100px) * 100));
+  /* The left rail's section list (styles.css `.mode-nav-top`, `.mode-btn`, `.mode-btn.sub`): the gap between
+     sections and each button's top and bottom padding. On a laptop the list holds more sections than the
+     rail's height, so the step buys back a section or two before the "N more" cue is needed (measured in
+     laptopfit-probe.mjs: at 1920×1080 ~5 more in view). Icons and labels keep their size. */
+  --chrome-rail-gap: max(2px, min(6px, (var(--vh-eff, 100vh) - 1100px) * 100));
+  --chrome-rail-btn-pad-y: max(3px, min(var(--space-2), (var(--vh-eff, 100vh) - 1100px) * 100));
+  --chrome-rail-sub-pad-y: max(3px, min(6px, (var(--vh-eff, 100vh) - 1100px) * 100));
   /* THE LARGE TX METERS PANE'S LOW FLOOR (CockpitPaneFrame `lowFloor`, named by TxMeters `TxMetersPane` alone):
      where a fill pane floors at the yielding 10em, this one floors lower, at its head and the body's padding
      plus 35.5 / 59 of what 10em left its faces in 1.24.0, so on a screen that stood it on its floor the drawing

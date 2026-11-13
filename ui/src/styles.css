@@ -7332,6 +7332,8 @@ body.resizing {
 .mode-nav-top {
   flex: 1 1 0;
   min-height: 0;
+  /* 6 px, tighter on a short window (cockpit-panes.css, the short-window tier). */
+  gap: var(--chrome-rail-gap, 6px);
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
@@ -7342,6 +7344,26 @@ body.resizing {
 .mode-nav-top::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 2px;
+}
+/* "N more" under the section list while sections sit below its edge (ModeNav's cue): outside the
+   scroller, so it covers no section, and gone once the list is scrolled to its end. */
+.mode-nav-more {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  margin-top: var(--space-1);
+  padding: 3px var(--space-1);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.mode-nav-more:hover {
+  color: var(--text);
+  border-color: var(--accent);
 }
 /* The bottom cluster (settings, help, theme…) never scrolls off — always reachable. */
 .mode-nav-bottom {
@@ -7373,7 +7395,8 @@ body.resizing {
 /* Compact variant of the nav button for the Digital sub-items. */
 .mode-btn.sub {
   min-height: 0;
-  padding: 6px var(--space-1);
+  /* 6 px top and bottom, tighter on a short window (cockpit-panes.css, the short-window tier). */
+  padding: var(--chrome-rail-sub-pad-y, 6px) var(--space-1);
   gap: 3px;
 }
 .mode-btn {
@@ -7388,7 +7411,8 @@ body.resizing {
      min-height replaces the flex item's content minimum, so at --touch 30 px Phone and CW
      (the bare buttons atop the scroller) shrank and spilled past its top edge. */
   flex-shrink: 0;
-  padding: var(--space-2) var(--space-1);
+  /* --space-2 top and bottom, tighter on a short window (cockpit-panes.css, the short-window tier). */
+  padding: var(--chrome-rail-btn-pad-y, var(--space-2)) var(--space-1);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -18686,6 +18710,15 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-right: none;
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
+  /* The bar keeps its stock spacing: the short-window step (cockpit-panes.css) is the vertical rail's. */
+  --chrome-rail-gap: 6px;
+  --chrome-rail-btn-pad-y: var(--space-2);
+  --chrome-rail-sub-pad-y: 6px;
+}
+/* …and no "N more" cue: the bar scrolls sideways, nothing sits below it. */
+[data-viewport='sm'] .mode-nav-more,
+[data-viewport='xs'] .mode-nav-more {
+  display: none;
 }
 [data-viewport='sm'] .mode-nav-top,
 [data-viewport='sm'] .mode-nav-bottom,
@@ -34654,6 +34687,18 @@ tr.sel .aprs-sym {
 }
 .contest-setup-warn p {
   margin: 0 0 var(--space-1);
+}
+/* ── The first-run wizard (SetupWizard.tsx), on the radio setup's pattern below: on a laptop its radio
+   step is taller than the dialog, so the step buttons stay at the box's bottom edge, opaque, and Next
+   is on screen without finding a scrollbar; the step dots wrap inside the box in the longer languages. ── */
+.setup-wizard .wizard-dots {
+  flex-wrap: wrap;
+}
+.setup-wizard .wizard-actions {
+  position: sticky;
+  bottom: 0;
+  background: var(--panel);
+  padding-top: var(--space-2);
 }
 /* ── The radio setup (RadioSetupWizard.tsx). The dialog box is its one scroll owner (.ui-dialog);
    the band grid scrolls sideways inside its own wrapper only when a station has many radios, and

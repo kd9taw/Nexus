@@ -9517,6 +9517,8 @@ export const JA: PartialCatalog = {
   "nav.memories.title": "メモリー — 保存チャンネル:レピーター、ネット、呼出周波数。グループ+★お気に入り、ワンクリックで選局",
   "nav.program.label": "レピータ",
   "nav.program.title": "レピータ — 無線機用チャンネルリストの作成:周辺レピーターをCHIRP CSV、リグのメモリー、または即時チューンへ",
+  "nav.more.label": "あと{{n}}件",
+  "nav.more.title": "あと{{n}}件、下にセクションがあります — 表示する",
   "nav.order.reset.label": "並び順をリセット",
   "nav.order.reset.title": "セクションの並び順をデフォルトに戻します",
   "nav.mode.title": "現在の運用モード",

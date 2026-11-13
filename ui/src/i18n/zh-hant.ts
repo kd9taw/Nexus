@@ -710,6 +710,8 @@ export const ZH_HANT: PartialCatalog = {
   "nav.memories.title": "記憶——已儲存的頻道：中繼、網路、呼叫頻率；分組 + ★ 收藏；一鍵調諧",
   "nav.program.label": "中繼",
   "nav.program.title": "中繼——為你的電台建立頻道清單：本地中繼 → CHIRP CSV、電台記憶，或立即調諧",
+  "nav.more.label": "還有{{n}}個",
+  "nav.more.title": "還有{{n}}個分區在下方 — 顯示",
   "nav.order.reset.label": "重設順序",
   "nav.order.reset.title": "將分區順序重設為預設",
   "nav.mode.title": "目前操作模式",
