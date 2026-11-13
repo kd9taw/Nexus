@@ -8,6 +8,14 @@
 //! - **Set WPM Speed** `02 nn`, nn = 5–99.
 //! - **Send**: plain ASCII data bytes are keyed directly.
 //! - **Host Close** `00 03` → returns the keyer to standalone mode.
+//! - **Key Immediate** `0B nn`, nn = `01` key down, `00` key up — the tune command (#500).
+//!   WK3 IC manual Rev 1.3 p.11 and WK2 IC manual V23 p.9, verbatim: "Use this command to
+//!   implement a tune function. Once asserted, key down will remain in effect until either a
+//!   key immediate with a zero value is received or the internal tune watchdog timer expires.
+//!   The tune timer is hard coded to a value of 100 seconds and cannot be disabled. Key down
+//!   can be aborted either by the paddles or by a clear buffer command." And of **Clear
+//!   Buffer** `0A` (same page): "Tune and Pause are cancelled by this command", so the
+//!   shutdown sequence below ends a key-down too.
 
 /// Admin: Host Open — enter host mode (WK replies with its revision byte).
 pub const HOST_OPEN: [u8; 2] = [0x00, 0x02];
@@ -15,6 +23,11 @@ pub const HOST_OPEN: [u8; 2] = [0x00, 0x02];
 pub const HOST_CLOSE: [u8; 2] = [0x00, 0x03];
 /// Clear Buffer (`0A`) — immediately stops keying and flushes WK's send buffer.
 pub const CLEAR_BUFFER: [u8; 1] = [0x0A];
+/// Key Immediate, key down (`0B 01`): hold the key down for a tune until [`KEY_UP`], Clear
+/// Buffer, a paddle press or WK's own 100 s tune watchdog ends it (module header).
+pub const KEY_DOWN: [u8; 2] = [0x0B, 0x01];
+/// Key Immediate, key up (`0B 00`): end a [`KEY_DOWN`].
+pub const KEY_UP: [u8; 2] = [0x0B, 0x00];
 
 /// Set-WPM-speed command bytes (`02 nn`), clamped to the WK range 5–99.
 pub fn wpm_cmd(wpm: u32) -> [u8; 2] {
@@ -43,7 +56,7 @@ pub use imp::WinKeyer;
 
 #[cfg(feature = "serial")]
 mod imp {
-    use super::{encode_text, shutdown_seq, wpm_cmd, CLEAR_BUFFER, HOST_OPEN};
+    use super::{encode_text, shutdown_seq, wpm_cmd, CLEAR_BUFFER, HOST_OPEN, KEY_DOWN, KEY_UP};
     use serialport::SerialPort;
     use std::io::Read;
     use std::time::Duration;
@@ -81,6 +94,14 @@ mod imp {
         /// Abort: stop keying NOW and flush WinKeyer's send buffer (WK Clear Buffer).
         pub fn clear(&mut self) -> std::io::Result<()> {
             self.port.write_all(&CLEAR_BUFFER)?;
+            self.port.flush()
+        }
+
+        /// Key Immediate (#500): the key held down for a tune (`down`), or let up. Down stays
+        /// down until a key up, a Clear Buffer, a paddle press or WK's own 100 s tune watchdog.
+        pub fn key_immediate(&mut self, down: bool) -> std::io::Result<()> {
+            self.port
+                .write_all(if down { &KEY_DOWN } else { &KEY_UP })?;
             self.port.flush()
         }
 
@@ -130,6 +151,9 @@ mod tests {
         assert_eq!(HOST_OPEN, [0x00, 0x02]);
         assert_eq!(HOST_CLOSE, [0x00, 0x03]);
         assert_eq!(CLEAR_BUFFER, [0x0A]);
+        // Key Immediate: WK3 IC manual Rev 1.3 p.11, WK2 IC manual V23 p.9.
+        assert_eq!(KEY_DOWN, [0x0B, 0x01]);
+        assert_eq!(KEY_UP, [0x0B, 0x00]);
     }
 
     #[test]
