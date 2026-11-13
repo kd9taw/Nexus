@@ -1449,6 +1449,7 @@ jobs:
       - name: Install build dependencies
         timeout-minutes: 30
         env:
+          # Must equal release.yml's Apple Silicon matrix leg (gcc_bottle*); scripts/release-secrets.test.mjs holds them equal.
           GCC_BOTTLE: arm64_sequoia
           GCC_BOTTLE_SHA256: 8c57a4e5c65c93b90b280e3e761833f946b5a7d186f2067d239af44b71c5a577
           BOOST: boost-1.92.0

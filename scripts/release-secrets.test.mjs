@@ -473,7 +473,6 @@ test('the build steps are recognised as third-party, and the signing steps are n
     ['macos', 'Install build dependencies'],
     ['macos', 'Build FFTW from source for the app\'s minimum macOS'],
     ['macos', 'Build the web UI'],
-    ['macos', 'Install tauri-cli'],
     ['macos', 'Stage Hamlib (bundled rigctld — no brew install for the user)'],
     ['macos', 'Compile the app'],
     ['macos', 'Verify the artifacts'],
@@ -609,6 +608,33 @@ test('the macOS job installs gcc only as the reviewed bottle, and cannot spend h
   const mayBuild = plant(TEXT, 'brew install --force-bottle --ignore-dependencies', 'brew install --ignore-dependencies');
   assert.deepEqual(pinnedToolchain(readWorkflow(mayBuild)), [
     `job macos, step "${DEPS}": \`brew install --ignore-dependencies "$bottle"\` can build from source`,
+  ]);
+});
+
+// ci.yml's macos-imports job builds the Apple Silicon app to check its libSystem imports, and must
+// pour the same gcc bottle release.yml's Apple Silicon leg ships with, or CI passes a runtime the
+// release never links. Both pins are read out of the workflows. Returns what is wrong.
+function ciGccBottleDrift(releaseWf, ciWf) {
+  const leg = matrixLegs(releaseWf, 'macos').find((l) => l.arch === 'arm64');
+  if (!leg) return ['release.yml has no arm64 macOS leg'];
+  const deps = ciWf.jobs.get('macos-imports')?.steps.find((s) => s?.name === DEPS);
+  if (!deps) return [`no step "${DEPS}" in ci.yml job macos-imports`];
+  const bad = [];
+  for (const [env, key] of [['GCC_BOTTLE', 'gcc_bottle'], ['GCC_BOTTLE_SHA256', 'gcc_bottle_sha256']]) {
+    const ci = deps.env.get(env);
+    if (ci !== leg[key]) bad.push(`ci.yml macos-imports pins ${env}=${ci ?? '(none)'}, release.yml's arm64 leg ${key}=${leg[key]}`);
+  }
+  return bad;
+}
+
+test("ci.yml's macos-imports pours the gcc bottle release.yml's Apple Silicon leg pins", () => {
+  assert.deepEqual(ciGccBottleDrift(WF, CI_WF), []);
+  // Positive controls: the digest moved in ci.yml alone, and the bottle tag moved in release.yml alone.
+  const movedCi = plant(CI_TEXT, 'GCC_BOTTLE_SHA256: 8c57a4e5', 'GCC_BOTTLE_SHA256: 3f961040');
+  assert.match(ciGccBottleDrift(WF, readWorkflow(movedCi, 'ci.yml')).join('\n'), /^ci\.yml macos-imports pins GCC_BOTTLE_SHA256=3f961040.*arm64 leg gcc_bottle_sha256=8c57a4e5/);
+  const movedRelease = plant(TEXT, 'gcc_bottle: arm64_sequoia', 'gcc_bottle: arm64_tahoe');
+  assert.deepEqual(ciGccBottleDrift(readWorkflow(movedRelease), CI_WF), [
+    "ci.yml macos-imports pins GCC_BOTTLE=arm64_sequoia, release.yml's arm64 leg gcc_bottle=arm64_tahoe",
   ]);
 });
 

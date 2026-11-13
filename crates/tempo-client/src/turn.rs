@@ -619,7 +619,16 @@ impl Turn {
         }
         let message = Message::read(packet)?;
         if message.method == DATA && message.class == Class::Indication {
+            // Unsigned, so taken only for a peer the server would relay from: one with a live
+            // permission here.
             let peer = message.address(XOR_PEER_ADDRESS)?;
+            if !self
+                .permissions
+                .get(&peer.ip())
+                .is_some_and(|held| held.live(now))
+            {
+                return None;
+            }
             let payload = message.get(DATA_VALUE)?;
             return Some((peer, payload.to_vec()));
         }
@@ -1204,6 +1213,33 @@ mod tests {
             assert_eq!(client.delivered.len(), 1, "a stranger was relayed");
             assert_eq!(server.seen().unpermitted, 1);
         }
+    }
+
+    /// ⛔ A Data indication is taken only from a peer this end holds a live permission for: one
+    /// naming any other peer, which needs no key to send, is dropped. CONTROL: the same from the
+    /// permitted peer is delivered.
+    #[test]
+    fn a_data_indication_from_a_peer_with_no_permission_is_dropped() {
+        let server = StandIn::start("road", "throwaway-password");
+        let mut client = Pumped::new(server.address, "road", "throwaway-password");
+        assert!(client.until(|c| c.turn.relayed().is_some()));
+        let permitted: SocketAddr = "127.0.0.1:40000".parse().unwrap();
+        client.turn.permit(permitted, Instant::now());
+        assert!(client.until(|c| c.turn.wrap_for(permitted, Instant::now()).is_some()));
+        let indication = |peer| {
+            Writer::new(DATA, Class::Indication, &[9; 12])
+                .address(XOR_PEER_ADDRESS, peer)
+                .attribute(DATA_VALUE, b"data")
+                .finish(None)
+        };
+        let now = Instant::now();
+        let stranger: SocketAddr = "198.51.100.9:50000".parse().unwrap();
+        assert_eq!(client.turn.handle(&indication(stranger), now), None);
+        // CONTROL.
+        assert_eq!(
+            client.turn.handle(&indication(permitted), now),
+            Some((permitted, b"data".to_vec()))
+        );
     }
 
     /// ★ Refreshes, each a minute before it would lapse: the permission at 240 s, the allocation

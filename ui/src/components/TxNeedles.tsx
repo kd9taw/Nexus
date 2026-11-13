@@ -15,7 +15,13 @@
 //
 // THE LARGE FACE (`large`, the TX meters pane, TxMeters `TxMetersPane`): the same reading and the same
 // dial, but the whole face is one drawing, its scale's numbers, finer ticks, name and value in the
-// viewBox, so all of it grows with the pane and nothing can ever be ellipsized.
+// viewBox, so all of it grows with the pane and nothing can ever be ellipsized. THE DIAL IS HALF the face's
+// dial of 1.24.0 (operator, 1.24.0: "the dials ... are way too large, reduce them by 50%", and the pane gives
+// the room back): it is drawn at LARGE_DIAL, standing on the band, the band, the name and the value keep
+// their size in the drawing, and the drawing ends at the top of the half-size dial. So the face is 35.5
+// units high where 1.24.0's was 59, and the pane's stock height is that much less (its weight in each
+// cockpit, and its low floor `--txmeters-pane-floor` in cockpit-panes.css): on the same screen the drawing
+// stands at 1.24.0's scale, the dial half 1.24.0's and the name and value as large as 1.24.0's.
 //
 // A READOUT: nothing here keys, gates or sets anything. Drawn in SVG on a display well (dark in
 // both themes, styles.css DISPLAY WELLS), so it scales with `--ui-zoom` and the text size like the
@@ -114,15 +120,31 @@ function radial(r0: number, r1: number, frac: number): string {
 const TICKS = [0, 0.25, 0.5, 0.75, 1]
 /** The large face's finer ticks, between the numbered ones. */
 const FINE_TICKS = Array.from({ length: 21 }, (_, i) => i / 20).filter((f) => !TICKS.includes(f))
-// The large face's drawing, in the same units as the dial: room above the arc for the scale's numbers,
-// and the band with the name and value under it, where the needle runs in beneath the band.
-const LARGE_TOP = -9
+// The large face's drawing, in the same units as the dial: the band with the name and value at the
+// foot, and the dial standing on it, drawn at LARGE_DIAL about the middle of the band's top edge so its
+// needle still runs in beneath the band. The drawing starts at the top of that dial: 1.24.0's full-size
+// dial began at y −9, room above the arc for the scale's numbers, so the half-size one begins halfway
+// from there to the band, and nothing is left above it. The numbers themselves stay at 1.24.0's size
+// (LARGE_NUMBER_R), so the dial sits LARGE_DIAL_DROP lower to keep the top one inside the drawing.
 const LARGE_BAND_TOP = 38
 const LARGE_BOTTOM = 50
+/** The dial's size in the face, against 1.24.0's dial: half as wide and half as high. */
+export const LARGE_DIAL = 0.5
+const LARGE_TOP = LARGE_BAND_TOP - (LARGE_BAND_TOP + 9) * LARGE_DIAL
+/** Where the scale's numbers stand (their baseline), in the dial's own units. 1.24.0's were at R + 4.5 beside a
+ *  dial their own scale; at 1.24.0's size beside the half-size dial they are twice as large against it, so they
+ *  stand further out, clear of the needle's tip (R + 2) wherever it points. */
+const LARGE_NUMBER_R = R + 9
+/** How far the half-size dial and its numbers sit below standing on the band, in the face's units: the numbers
+ *  at 1.24.0's size need that room above the top one ("50") inside the drawing. The arc's ends stay well above the
+ *  band; only more of the needle's foot runs in under it. */
+const LARGE_DIAL_DROP = 3
 const LARGE_ASPECT = W / (LARGE_BOTTOM - LARGE_TOP)
 /** A row of large faces never goes under this: `.txmeters-pane`'s track floor (cockpit-panes.css), which
- *  TxMetersPane.test.tsx holds to it. */
-export const LARGE_FACE_FLOOR_EM = 7
+ *  TxMetersPane.test.tsx holds to it. About 1.24.0's 7em times the face's height against 1.24.0's
+ *  (35.5 / 59, 4.21em), so where a stacking cockpit gives the pane its floor the drawing stands at 1.24.0's
+ *  scale, a hair over. */
+export const LARGE_FACE_FLOOR_EM = 4.3
 
 /** How many columns draw the three large faces biggest in this much room: the one choice CSS cannot make,
  *  since wrapping looks at the width alone, and put SWR under a scroll in a short wide pane. `gap` is
@@ -245,6 +267,26 @@ export function TxNeedles({
                   role="img"
                   aria-label={`${r.label} ${silent ? t('phone.unavail.mark') : value}`}
                 >
+                  {/* The scale's numbers, OUTSIDE the dial's scale: each where the half-size dial puts it, at
+                      1.24.0's size, so they stay as legible as 1.24.0's (review 2026-11-12: halved with the dial
+                      they were 3–4 px on a laptop). Drawn first, so the needle passes over them. Their room is
+                      ui/probe/txmeterspane-probe.mjs's to prove: none overlaps another, the needle or the band. */}
+                  {needleScale(key, { ratedWatts: large.ratedWatts, swrVerified }).map(({ frac, text }) => {
+                    const [x, y] = at(LARGE_NUMBER_R, frac)
+                    return (
+                      <text
+                        key={frac}
+                        className="txmeters-pane-scale"
+                        x={(CX * (1 - LARGE_DIAL) + x * LARGE_DIAL).toFixed(2)}
+                        y={(LARGE_BAND_TOP * (1 - LARGE_DIAL) + LARGE_DIAL_DROP + y * LARGE_DIAL).toFixed(2)}
+                        textAnchor="middle"
+                      >
+                        {text}
+                      </text>
+                    )
+                  })}
+                  {/* The dial, at LARGE_DIAL about the middle of the band's top edge. */}
+                  <g className="txmeters-pane-dial" transform={`translate(${CX * (1 - LARGE_DIAL)} ${LARGE_BAND_TOP * (1 - LARGE_DIAL) + LARGE_DIAL_DROP}) scale(${LARGE_DIAL})`}>
                   <path className="ph-txneedle-scale" d={arc(R, 0, 1)} />
                   {needleZones(key, { swrVerified, alcZoneTop }).map(([f0, f1, zone]) => (
                     <path key={zone} className="ph-txneedle-zone" data-zone={zone} data-from={f0} data-to={f1} d={arc(R + 1.5, f0, f1)} style={{ stroke: ZONE_INK[zone] }} />
@@ -255,14 +297,6 @@ export function TxNeedles({
                   {TICKS.map((f) => (
                     <path key={f} className="ph-txneedle-tick" d={radial(R - 4, R + 0.5, f)} />
                   ))}
-                  {needleScale(key, { ratedWatts: large.ratedWatts, swrVerified }).map(({ frac, text }) => {
-                    const [x, y] = at(R + 4.5, frac)
-                    return (
-                      <text key={frac} className="txmeters-pane-scale" x={x.toFixed(2)} y={y.toFixed(2)} textAnchor="middle">
-                        {text}
-                      </text>
-                    )
-                  })}
                   {held && <path className="ph-txneedle-peak" data-frac={peak.toFixed(3)} d={radial(R - 7, R + 2.5, peak)} />}
                   <line
                     className="ph-txneedle-needle"
@@ -273,6 +307,7 @@ export function TxNeedles({
                     y2={CY - R - 2}
                     transform={`rotate(${needleAngle(needle).toFixed(2)} ${CX} ${CY})`}
                   />
+                  </g>
                   {/* The band, past the drawing on every side: a wide face has it edge to edge, and the
                       needle's foot, which runs on to the pivot, never shows under it. */}
                   <rect className="txmeters-pane-band" x={-W * 5} y={LARGE_BAND_TOP} width={W * 11} height={W} />

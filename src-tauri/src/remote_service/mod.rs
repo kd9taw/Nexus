@@ -1561,6 +1561,7 @@ impl Service {
                             client,
                             vault,
                             binding: None,
+                            moved: None,
                             pending: None,
                             status: task_status,
                             control: task_control,
@@ -2004,6 +2005,9 @@ struct Controller {
     client: Client,
     vault: Arc<dyn Vault>,
     binding: Option<Binding>,
+    /// A pairing saved under the other known origin (`transport::OTHER_ORIGIN`): never used, kept
+    /// until the operator's Forget clears it here, since that service cannot be asked to.
+    moved: Option<Binding>,
     pending: Option<Pending>,
     status: Arc<Mutex<Status>>,
     control: Arc<Mutex<Control>>,
@@ -2105,6 +2109,12 @@ impl Controller {
             {
                 self.binding = Some(binding.clone());
                 self.resume(binding).await;
+            }
+            // Paired with the other service: a move, not a credential store that will not answer.
+            // Remote stays off and the station can pair here at once; nothing is deleted.
+            Ok(Some(binding)) if binding.origin == transport::OTHER_ORIGIN => {
+                self.moved = Some(binding);
+                phase(&self.status, "unpaired", Some("pairingMoved"));
             }
             Ok(None) => {}
             _ => phase(&self.status, "unpaired", Some("credentialStoreUnavailable")),
@@ -2921,6 +2931,8 @@ impl Controller {
             control.remember(Persist::Bound(binding.clone(), None, None, None));
         }
         self.binding = Some(binding);
+        // The new pairing replaced any moved one in the store.
+        self.moved = None;
         self.pending = None;
         self.removals = Some(Vec::new());
         self.uninvites = Some(Vec::new());
@@ -3820,6 +3832,8 @@ impl Controller {
                     }
                 }
                 self.binding = Some(binding);
+                // The new pairing replaced any moved one in the store.
+                self.moved = None;
                 self.pending = None;
                 self.reflect("disabled");
                 // Approving the pairing also turns Remote on (operator decision 2026-09-14), exactly
@@ -3991,11 +4005,20 @@ impl Controller {
                 });
             }
             Action::Forget {} => {
-                let (binding, token) = self.bound()?;
-                self.client
-                    .post(&station_path(&binding, "revoke"), Some(&token), empty())
-                    .await?;
+                // A moved pairing is cleared here only: the service it belongs to is not this
+                // build's to ask (`Controller::moved`).
+                let binding = match self.moved.clone() {
+                    Some(moved) => moved,
+                    None => {
+                        let (binding, token) = self.bound()?;
+                        self.client
+                            .post(&station_path(&binding, "revoke"), Some(&token), empty())
+                            .await?;
+                        binding
+                    }
+                };
                 self.vault.remove(&binding)?;
+                self.moved = None;
                 // What it kept of its confirmed owner notices goes with it.
                 let _ = self.accounts.vault.save_notified(&vault::Notified {
                     station_id: binding.station_id.clone(),

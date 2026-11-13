@@ -66,7 +66,7 @@ import { buildHighlightMap, OperateDecodes } from './OperateDecodes'
 import { DecodeHistory, type DecodeSort } from '../decodeHistory'
 import { OperateQsoStrip } from './OperateQsoStrip'
 import { TxAlarmBanner } from './TxAlarmBanner'
-import { TxMetersCell, TxMetersPane, TX_METERS_WHEN } from './TxMeters'
+import { TxMetersCell, TxMetersPane, TX_METERS_PANE_WEIGHT, TX_METERS_WHEN } from './TxMeters'
 import { SpotDialog } from './SpotDialog'
 import { DEFAULT_ROSTER_SORT, OperateRoster, type RosterSort } from './OperateRoster'
 import { RecallPanel } from './RecallPanel'
@@ -375,8 +375,9 @@ type FillPane = (typeof FILL_PANES)[number]
 const isFillPane = (id: OperatePanelId): id is FillPane => (FILL_PANES as readonly string[]).includes(id)
 
 /** A fill pane's weight: the share the stock layouts give it beside another — Band Activity's 1.6 : 1
- *  over Rx Frequency in Roster's rail, Stations' 1.8 in Classic's — and 1 for the others. */
-const FILL_WEIGHT: Partial<Record<OperatePanelId, number>> = { bandActivity: 1.6, stations: 1.8 }
+ *  over Rx Frequency in Roster's rail, Stations' 1.8 in Classic's, the large TX meters pane's less than 1
+ *  (TX_METERS_PANE_WEIGHT) — and 1 for the others. */
+const FILL_WEIGHT: Partial<Record<OperatePanelId, number>> = { bandActivity: 1.6, stations: 1.8, txMetersPane: TX_METERS_PANE_WEIGHT.operate }
 const weightOf = (id: OperatePanelId): number => FILL_WEIGHT[id] ?? 1
 
 /** The dividers of one arranged column (Phone's rule: a divider stands between two fill panes that are
