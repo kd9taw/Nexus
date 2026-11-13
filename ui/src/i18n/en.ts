@@ -9507,7 +9507,7 @@ export const EN = {
   'settings.remoteStream.display':
     'The stream is this window as Windows draws it on this computer, so keep Nexus open, and not minimized, while a browser streams it.',
   'settings.remoteStream.unavailable': 'Available on Windows only, for now.',
-  // Operator ruling 1410: the lower-bandwidth mode for a stream that goes through the relay. Off by
+  // Operator decision: the lower-bandwidth mode for a stream that goes through the relay. Off by
   // default. `Nexus Remote` is a token.
   'settings.remoteRelayLighter.label': 'Use less data when a stream goes through the relay',
   'settings.remoteRelayLighter.hint':

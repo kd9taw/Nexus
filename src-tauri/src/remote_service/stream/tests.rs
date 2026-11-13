@@ -346,7 +346,7 @@ fn turning_streaming_off_at_the_shack_ends_a_running_stream() {
     );
 }
 
-/// Operator ruling 1410: the lower-bandwidth mode is off unless the operator turns it on, and a
+/// Operator decision: the lower-bandwidth mode is off unless the operator turns it on, and a
 /// running stream follows the switch at its next recheck, both ways, without ending. What it
 /// changes (a relayed picture's ceiling only) is `tempo_stream::video::picture::Bound::on`'s.
 #[test]

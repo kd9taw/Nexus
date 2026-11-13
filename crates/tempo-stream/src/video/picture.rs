@@ -19,7 +19,7 @@
 //!   one more reason never to encode more than the page shows. That is the picture's own budget;
 //!   where the session estimates the link ([`Bound::within`]), what the link carries decides
 //!   within it (`video::rate`).
-//! - **Lighter through a TURN relay, when the operator asks** ([`Bound::on`], operator ruling 1410,
+//! - **Lighter through a TURN relay, when the operator asks** ([`Bound::on`], operator decision,
 //!   2026-11-13). A page reached only through the relay ([`Path::Relay`]) costs the service per GB,
 //!   so with "Use less data when a stream goes through the relay" on, the picture's ceiling there is
 //!   [`RELAY_LIGHT_KBPS`] instead of [`INTERNET_KBPS`]. Only the bit rate: the size stays, since
@@ -466,7 +466,7 @@ mod tests {
         }
     }
 
-    /// Operator ruling 1410: the lower-bandwidth mode lowers the ceiling on a relayed path only,
+    /// Operator decision: the lower-bandwidth mode lowers the ceiling on a relayed path only,
     /// and only while it is on. Off, a relayed page is bounded exactly as one on the internet; on,
     /// the shack's network, the internet and a path not known yet are untouched. The size never
     /// changes, only the bit rate, and the floor still holds.

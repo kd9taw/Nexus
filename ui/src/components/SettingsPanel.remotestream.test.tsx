@@ -167,7 +167,7 @@ describe('on a Windows station', () => {
   })
 })
 
-// Operator ruling 1410: the lower-bandwidth mode through the relay, OFF by default, in the same card,
+// Operator decision: the lower-bandwidth mode through the relay, OFF by default, in the same card,
 // and what Save writes. What it does to a stream is the Rust side's (tempo-stream picture.rs).
 describe('the lower-bandwidth relay switch', () => {
   const lighter = () => screen.queryByRole('switch', { name: EN['settings.remoteRelayLighter.label'] })

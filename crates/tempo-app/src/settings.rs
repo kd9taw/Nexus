@@ -3233,7 +3233,7 @@ pub struct Settings {
     /// settings projection like every field not listed there, so no browser can turn it on.
     #[serde(default)]
     pub remote_stream: bool,
-    /// Remote as a stream, lower-bandwidth through the relay (operator ruling 1410, 2026-11-13):
+    /// Remote as a stream, lower-bandwidth through the relay (operator decision, 2026-11-13):
     /// while on, a stream whose browser is reached only through the TURN relay is sent at a lower
     /// bit-rate ceiling (`tempo_stream::video::picture::Bound::on`). Receive audio, a direct path and
     /// the shack's own network are untouched. **Default OFF**, so the stream is as before until the
