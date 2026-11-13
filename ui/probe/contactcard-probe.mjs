@@ -1,8 +1,8 @@
 // The Logbook contact card in real Chrome, for what jsdom cannot see: `scripts/browser-probe --desktop
 // contactcard`.
 //
-// The probe serves src/probe/contactcard.tsx (the real Logbook) with the app's own Vite config at
-// 1024×768, 1366×768 and 1920×1080, double-clicks a contact's callsign cell with a real mouse — the
+// The probe serves src/probe/contactcard.tsx (the real Logbook) with the app's own Vite config at the
+// representative screens (probe/sizes.mjs CORE: 1366×768 at 175 %, the floor, to 4K at 200 %), double-clicks a contact's callsign cell with a real mouse — the
 // gesture must reach the row through whatever the cell holds — and asserts the card is drawn whole: its
 // box inside the window, scrolling nowhere sideways, the callbook photo drawn, and Save and Cancel the
 // topmost thing at their centres. Then it scrolls the card to its foot and asserts the last of the ten
@@ -12,22 +12,23 @@
 // opening the QRZ page, so `open_qrz_page` shows among the refused commands — the gesture as the app's
 // own call cells take it, not a fault.
 //
-// THE CONTROL, run every time: at 1024×768 the card with its Save bar put back into the flow
+// THE CONTROL, run every time: at the floor the card with its Save bar put back into the flow
 // (`?footer=static`). There Save starts below the fold and must come back NOT on screen; if it does
 // not, the card is too short for the check to fail and the probe says so instead of passing.
 //
 // THE FILLED IOTA BOX (`?iota=1`): the Logbook's Add form opened with a real click, a call typed, and the
 // form's IOTA box filled by the station (EU-901, "from the spot") under a very long group name, at
-// 1024×768 and 1920×1080 at the smallest (65 %) and largest (175 %) UI scale. Asserted: the box holds
+// 1366×768 and 1920×1080 (the OS at 100 %) at the app's smallest (65 %) and largest (175 %) UI scale, and
+// 900×600 at 175 % (xs). Asserted: the box holds
 // the reference and is the topmost thing at its centre, the group name is drawn whole inside the form
 // and covers the centre of no control, the source is shown, nothing scrolls sideways (page or form), and
-// Log is topmost once scrolled to. Its CONTROL (`&iotacontrol=1`, 1024×768 at 175 %): the name may not
+// Log is topmost once scrolled to. Its CONTROL (`&iotacontrol=1`, 1366×768 at 175 %): the name may not
 // wrap, and must come back NOT drawn whole.
 //
 // THE ISLAND PICKER, in the same phase: beside the filled box, the group's islands to pick from, one of
 // them with a name at the 200-character limit. The probe picks that island and asserts the picker lists
 // the group's three islands, is drawn inside the form and is the topmost thing at its centre, and that
-// nothing scrolls sideways. Its CONTROL (`&islandcontrol=1`, 1024×768 at 175 %): the picker may grow to
+// nothing scrolls sideways. Its CONTROL (`&islandcontrol=1`, 1366×768 at 175 %): the picker may grow to
 // its longest option, and must come back NOT inside the form.
 //
 // exit: 0 every size clear · 1 a red, or a control that could not fail · 2 the page never drew the card
@@ -37,9 +38,10 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { CORE, FHD, LAPTOP, metrics, offMatrix } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
-const SIZES = [{ w: 1024, h: 768 }, { w: 1366, h: 768 }, { w: 1920, h: 1080 }]
+const SIZES = CORE
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** The card as drawn: its box against the window, the photo, and whether Save, Cancel and the last
@@ -84,9 +86,9 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-/** The card opened at `w`×`h` by a real double-click on the newest EC1DD row's call: measured as it
+/** The card opened at `size` by a real double-click on the newest EC1DD row's call: measured as it
  *  opens, and again scrolled to its foot. */
-async function measure(w, h, extra = '') {
+async function measure(size, extra = '') {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -94,7 +96,7 @@ async function measure(w, h, extra = '') {
     const r = await call('Runtime.evaluate', { expression, returnByValue: true })
     return r.exceptionDetails ? null : r.result.value
   }
-  await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+  await call('Emulation.setDeviceMetricsOverride', metrics(size))
   await call('Page.navigate', { url: `${origin}/probe/contactcard.html${extra}` })
   let at = null
   for (let i = 0; i < 150 && !at; i++) {
@@ -133,7 +135,7 @@ async function measure(w, h, extra = '') {
   return opened && { opened, foot }
 }
 
-/** The Add form's filled IOTA box at `w`×`h` and UI scale `zoom`, after a real click on Log QSO and a
+/** The Add form's filled IOTA box at `size` and UI scale `zoom`, after a real click on Log QSO and a
  *  call typed. */
 const IOTA_MEASURE = `(() => {
   const form = document.querySelector('.logbook-form')
@@ -188,7 +190,7 @@ const IOTA_MEASURE = `(() => {
   }
 })()`
 
-async function measureIota(w, h, zoom, control, islandControl = false) {
+async function measureIota(size, zoom, control, islandControl = false) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -200,7 +202,7 @@ async function measureIota(w, h, zoom, control, islandControl = false) {
     for (const type of ['mousePressed', 'mouseReleased'])
       await call('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons: 1, clickCount: 1 })
   }
-  await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+  await call('Emulation.setDeviceMetricsOverride', metrics(size))
   await call('Page.navigate', {
     url: `${origin}/probe/contactcard.html?iota=1&zoom=${zoom}${control ? '&iotacontrol=1' : ''}${islandControl ? '&islandcontrol=1' : ''}`,
   })
@@ -241,18 +243,22 @@ async function measureIota(w, h, zoom, control, islandControl = false) {
   return last
 }
 
+// The app's own UI zoom at its two ends, on the floor screen and on 1080p, both unscaled by the OS.
 const IOTA_SIZES = [
-  { w: 1024, h: 768, zoom: 0.65 },
-  { w: 1024, h: 768, zoom: 1.75 },
-  { w: 1920, h: 1080, zoom: 0.65 },
-  { w: 1920, h: 1080, zoom: 1.75 },
+  { ...LAPTOP, zoom: 0.65 },
+  { ...LAPTOP, zoom: 1.75 },
+  { ...FHD, zoom: 0.65 },
+  { ...FHD, zoom: 1.75 },
+  // xs: the shell's own 900×600 minimum window at the app's 175 % (514×343 effective); 1366×768 at 175 % is sm.
+  { ...offMatrix(900, 600), zoom: 1.75 },
 ]
 
 let code = 0
 try {
-  for (const { w, h, zoom } of IOTA_SIZES) {
-    const at = `${w}×${h} at ${Math.round(zoom * 100)}%`
-    const m = await measureIota(w, h, zoom, false)
+  for (const size of IOTA_SIZES) {
+    const { zoom } = size
+    const at = `${size.name} at ${Math.round(zoom * 100)}%`
+    const m = await measureIota(size, zoom, false)
     console.log(`contactcard-probe: filled IOTA box, window ${at}: ${JSON.stringify(m)}`)
     if (!m || m.waiting) {
       console.error(`contactcard-probe: the Add form's IOTA box never filled at ${at}`)
@@ -277,45 +283,47 @@ try {
       code = code || 1
     }
   }
-  const ic = await measureIota(1024, 768, 1.75, true)
-  console.log(`contactcard-probe: CONTROL group name kept on one line, window 1024×768 at 175%: ${JSON.stringify(ic)}`)
+  const ic = await measureIota(LAPTOP, 1.75, true)
+  console.log(`contactcard-probe: CONTROL group name kept on one line, window ${LAPTOP.name} at 175%: ${JSON.stringify(ic)}`)
   if (!ic || ic.waiting || ic.nameWhole) {
     console.error('contactcard-probe: CONTROL FAILED — the unwrapped group name still read as drawn whole; the check cannot fail')
     code = code || 1
   }
 
-  const pc = await measureIota(1024, 768, 1.75, false, true)
-  console.log(`contactcard-probe: CONTROL island picker grown to its longest option, window 1024×768 at 175%: ${JSON.stringify(pc)}`)
+  // The island picker's control on the floor screen unscaled at the app's 175 % (it was the old 4:3 floor at 175 %, dropped by
+  // the 2026-11-11 ruling; this is the narrowest form the matrix gives that zoom).
+  const pc = await measureIota(LAPTOP, 1.75, false, true)
+  console.log(`contactcard-probe: CONTROL island picker grown to its longest option, window ${LAPTOP.name} at 175%: ${JSON.stringify(pc)}`)
   if (!pc || pc.waiting || pc.island.inside) {
     console.error('contactcard-probe: CONTROL FAILED — the grown island picker still read as inside the form; the check cannot fail')
     code = code || 1
   }
 
-  for (const { w, h } of SIZES) {
-    const m = await measure(w, h)
-    console.log(`contactcard-probe: window ${w}×${h}: ${JSON.stringify(m)}`)
+  for (const size of SIZES) {
+    const m = await measure(size)
+    console.log(`contactcard-probe: window ${size.name}: ${JSON.stringify(m)}`)
     if (!m) {
-      console.error(`contactcard-probe: the double-click never opened the card at ${w}×${h}`)
+      console.error(`contactcard-probe: the double-click never opened the card at ${size.name}`)
       code = 2
       continue
     }
     const { opened: o, foot: f } = m
     if (o.call !== 'EC1DD' || !o.inside || o.sideways || !o.photo || !o.save || !o.cancel) {
-      console.error(`contactcard-probe: RED at ${w}×${h} — on opening: the card ${o.inside ? 'inside' : 'NOT inside'} the window, sideways scroll ${o.sideways}, photo ${o.photo}, Save on screen ${o.save}, Cancel on screen ${o.cancel}`)
+      console.error(`contactcard-probe: RED at ${size.name} — on opening: the card ${o.inside ? 'inside' : 'NOT inside'} the window, sideways scroll ${o.sideways}, photo ${o.photo}, Save on screen ${o.save}, Cancel on screen ${o.cancel}`)
       code = code || 1
     }
     if (f.recent !== 10 || !f.lastRecent || !f.save) {
-      console.error(`contactcard-probe: RED at ${w}×${h} — at its foot: ${f.recent} recent contacts, the last on screen ${f.lastRecent}, Save on screen ${f.save}`)
+      console.error(`contactcard-probe: RED at ${size.name} — at its foot: ${f.recent} recent contacts, the last on screen ${f.lastRecent}, Save on screen ${f.save}`)
       code = code || 1
     }
   }
-  const c = await measure(1024, 768, '?footer=static')
-  console.log(`contactcard-probe: CONTROL Save bar in the flow, window 1024×768: ${JSON.stringify(c)}`)
+  const c = await measure(SIZES[0], '?footer=static')
+  console.log(`contactcard-probe: CONTROL Save bar in the flow, window ${SIZES[0].name}: ${JSON.stringify(c)}`)
   if (!c || c.opened.save) {
     console.error('contactcard-probe: CONTROL FAILED — with the Save bar in the flow it was still on screen at the top of the card; the check cannot fail')
     code = code || 1
   }
-  if (code === 0) console.log(`contactcard-probe: PASS — a double-click on the call opens the card whole at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}: inside the window, no sideways scroll, the photo drawn, Save and Cancel on screen at the top and the foot, ten recent contacts; the in-flow control hid Save. The Add form's filled IOTA box at ${IOTA_SIZES.map((s) => `${s.w}×${s.h} ${Math.round(s.zoom * 100)}%`).join(', ')}: filled, its long group name whole and covering nothing, the source shown, nothing sideways, Log reachable, the island picker listing the group's three islands with the 200-character one picked, inside the form and uncovered; the unwrapped-name and grown-picker controls were caught`)
+  if (code === 0) console.log(`contactcard-probe: PASS — a double-click on the call opens the card whole at ${SIZES.map((s) => s.name).join(', ')}: inside the window, no sideways scroll, the photo drawn, Save and Cancel on screen at the top and the foot, ten recent contacts; the in-flow control hid Save. The Add form's filled IOTA box at ${IOTA_SIZES.map((s) => `${s.name} ${Math.round(s.zoom * 100)}%`).join(', ')}: filled, its long group name whole and covering nothing, the source shown, nothing sideways, Log reachable; the unwrapped-name control was caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

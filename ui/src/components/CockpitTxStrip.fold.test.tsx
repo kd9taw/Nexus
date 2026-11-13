@@ -169,11 +169,19 @@ describe('the dock folds only where it does not fit whole', () => {
   })
 
   it('the header pin is decided on the WHOLE dock, folded or not', () => {
-    // Folded, the dock measures 0. Pinned against that, the header (90) + strip (40) + 0 + 6em = 226 would
-    // "fit" a 260 px scrollport and park over Stop TX; against the whole dock it needs 426 and stays unpinned.
+    // Folded, the dock measures 0. Pinned against that, a short header (40) + strip (40) + 0 + PIN_ROOM_EM (10em,
+    // 160) = 240 would "fit" a 260 px scrollport and park over Stop TX; against the whole dock it needs 440 and stays
+    // unpinned. (A 40 px header: with the room a pane's 10em floor, the stock 90 px one cannot fit a scrollport this
+    // dock folds in, so it would not test the folded case.)
+    const shortHead = 40
+    const spy = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get')
+    const stock = spy.getMockImplementation()!
+    spy.mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('cockpit-header') ? shortHead : stock.call(this)
+    })
     injectSheet(SHEET)
     shellH = 260
-    expect(HEAD_H + STRIP_H + PIN_ROOM_EM * EM).toBeLessThan(shellH)
+    expect(shortHead + STRIP_H + PIN_ROOM_EM * EM).toBeLessThan(shellH)
     const r = render(<Shell header />)
     expect(dock().getAttribute('data-fold')).toBe('on')
     expect(document.querySelector('.cockpit-header')!.getAttribute('data-pin'), 'the header pinned against a folded dock').toBe('off')

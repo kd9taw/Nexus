@@ -1,9 +1,9 @@
 // The Operate strip's Log button and its count of contacts waiting for Log QSO in real Chrome, for what jsdom
 // cannot see: `scripts/browser-probe --desktop logwaiting`.
 //
-// The probe serves src/probe/logwaiting.tsx with the app's own Vite config at 1024×768 (the supported floor) and
-// 1920×1080, in the dark and the light theme, mid-contact and with no station on screen (after Call CQ), and
-// asserts:
+// The probe serves src/probe/logwaiting.tsx with the app's own Vite config at the representative screens
+// (probe/sizes.mjs CORE: 1366×768 at 175 %, the floor, to 4K at 200 %), in the dark and the light theme,
+// mid-contact and with no station on screen (after Call CQ), and asserts:
 //   · nothing scrolls sideways;
 //   · every control in the strip stands exactly where it stands with no count (1 and 12 waiting): the count never
 //     moves or wraps Log or anything beside it;
@@ -24,12 +24,10 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { CORE, metrics } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
-const SIZES = [
-  { w: 1024, h: 768 },
-  { w: 1920, h: 1080 },
-]
+const SIZES = CORE
 const THEMES = ['dark', 'light']
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -86,7 +84,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function page(w, h, q) {
+async function page(size, q) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -94,7 +92,7 @@ async function page(w, h, q) {
     const r = await call('Runtime.evaluate', { expression, returnByValue: true })
     return r.exceptionDetails ? { error: r.exceptionDetails.exception?.description ?? r.exceptionDetails.text } : r.result.value
   }
-  await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+  await call('Emulation.setDeviceMetricsOverride', metrics(size))
   await call('Page.navigate', { url: `${origin}/probe/logwaiting.html?${q}` })
   let last = null
   for (let i = 0; i < 80; i++) {
@@ -123,11 +121,11 @@ function moved(none, some) {
 
 let code = 0
 try {
-  for (const { w, h } of SIZES) {
+  for (const size of SIZES) {
     for (const theme of THEMES) {
       for (const dx of ['1', '0']) {
-        const at = `${w}×${h} ${theme}${dx === '0' ? ' (no station on screen)' : ''}`
-        const base = await page(w, h, `waiting=0&dx=${dx}&theme=${theme}`)
+        const at = `${size.name} ${theme}${dx === '0' ? ' (no station on screen)' : ''}`
+        const base = await page(size, `waiting=0&dx=${dx}&theme=${theme}`)
         await browser.call('Target.closeTarget', { targetId: base.targetId })
         if (!base.m || base.m.error) {
           console.error(`logwaiting-probe: the strip never drew at ${at}: ${JSON.stringify(base.m)}`)
@@ -144,7 +142,7 @@ try {
           code = code || 1
         }
         for (const n of [1, 12]) {
-          const p = await page(w, h, `waiting=${n}&dx=${dx}&theme=${theme}`)
+          const p = await page(size, `waiting=${n}&dx=${dx}&theme=${theme}`)
           const m = p.m
           if (!m || m.error) {
             red.push(`${n} waiting: the strip never drew`)
@@ -176,7 +174,7 @@ try {
           console.error(`logwaiting-probe: RED at ${at} — ${red.join('; ')}`)
           code = code || 1
         }
-        const c = await page(w, h, `waiting=2&dx=${dx}&theme=${theme}&control=1`)
+        const c = await page(size, `waiting=2&dx=${dx}&theme=${theme}&control=1`)
         await browser.call('Target.closeTarget', { targetId: c.targetId })
         const caught = c.m && !c.m.error ? moved(base.m, c.m) : []
         console.log(`logwaiting-probe: CONTROL window ${at}: caught ${caught.length} moves`)
@@ -187,7 +185,7 @@ try {
       }
     }
   }
-  if (code === 0) console.log(`logwaiting-probe: PASS — the count of contacts waiting for Log QSO moves no control, is drawn whole and covers none, Log stays topmost and live and a click reaches it, the count reads at 4.5:1 or better and is spoken, at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')} in ${THEMES.join(' and ')}, with and without a station on screen; each control caught`)
+  if (code === 0) console.log(`logwaiting-probe: PASS — the count of contacts waiting for Log QSO moves no control, is drawn whole and covers none, Log stays topmost and live and a click reaches it, the count reads at 4.5:1 or better and is spoken, at ${SIZES.map((s) => s.name).join(', ')} in ${THEMES.join(' and ')}, with and without a station on screen; each control caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

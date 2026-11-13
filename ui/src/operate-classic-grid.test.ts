@@ -390,6 +390,37 @@ describe('TX-cluster position stability: row neighbours resolve state-independen
     expect(grow!.value, `\`${grow!.selector}\``).toBeGreaterThanOrEqual(1)
   })
 
+  // THE CONTACT'S WORDS (2026-11-12). The AUTO-CQ pill, the sequencer state, the DX call and the report change with
+  // the contact. Loose on Stop TX's line, a narrow strip (1366×768 at 150–175 %) wrapped the state onto a line of its
+  // own when Auto-CQ came on and again when the call and report filled in; the strip, parked at the shell's foot, grew
+  // upward and Stop TX moved 29–35 px (Chrome). A zero-basis box kept Stop TX still but cut the words (the state was
+  // 0 px wide at 1366×768 at 175 %). So wherever the strip breaks, the box IS a line: the strip's whole width, at one
+  // fixed height, empty or full; on the one-row xl strip it is sized by its words, uncut.
+  const statusChain = (vp: string, dashRail = false): El[] => [
+    { classes: new Set(['app']), attrs: { 'data-viewport': vp } },
+    { classes: new Set(['shell']), attrs: dashRail ? { 'data-dash-rail': 'on' } : {} },
+    { classes: new Set(['layout', 'single', 'operate-cockpit']) },
+    { classes: new Set(['cockpit-body']) },
+    { classes: new Set(['cockpit-qso', 'panel']) },
+    { classes: new Set(['cq-status']) },
+  ]
+  for (const [vp, rail] of [['lg', false], ['md', false], ['sm', false], ['xs', false], ['xl', true], ['lg', true]] as const) {
+    it(`${vp}${rail ? ' beside the dashboard rail' : ''}: .cq-status is a whole line of one fixed height, where the strip breaks`, () => {
+      const chain = statusChain(vp, rail)
+      expect(winner(chain, 'flex')?.value, 'the box is not a whole line of the strip').toBe('0 0 100%')
+      expect(winner(chain, 'height')?.value ?? '', 'the line has no fixed height: the words would change the strip’s').toMatch(/^\d+(\.\d+)?(px|em)$/)
+      expect(winner(chain, 'overflow')?.value ?? null, 'the words are clipped').not.toBe('hidden')
+      expect(winner(chain, 'max-width')?.value ?? null, 'the words are capped').toBeNull()
+    })
+  }
+  it('xl: .cq-status is sized by its words on the one-row strip, uncut', () => {
+    const chain = statusChain('xl')
+    expect(winner(chain, 'flex')?.value).toBe('none')
+    expect(winner(chain, 'height')?.value).toBe('auto')
+    expect(winner(chain, 'overflow')?.value ?? null).not.toBe('hidden')
+    expect(winner(chain, 'max-width')?.value ?? null).toBeNull()
+  })
+
   it('the TX On/Off toggle carries a fixed em min-width (label flips with txEnabled)', () => {
     // The toggle sits in the TX cluster's group, as rendered: the sizing rule is scoped to that
     // group since every screen's TX strip draws the same cluster (2026-10-01).

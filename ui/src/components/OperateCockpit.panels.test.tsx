@@ -363,8 +363,9 @@ describe('Operate dividers answer the keyboard (PaneSeam)', () => {
     renderCockpit({})
     const sep = screen.getByRole('separator', { name: 'waterfall height' })
     expect(sep.tabIndex, 'a divider only a mouse can reach').toBe(0)
-    // 25 % of an 800 px shell = 200 px, inside the declared 88–420 px, painted as the body's own share.
-    expect([sep.getAttribute('aria-valuenow'), sep.getAttribute('aria-valuemin'), sep.getAttribute('aria-valuemax')]).toEqual(['200', '88', '420'])
+    // 25 % of an 800 px shell = 200 px, inside the declared 128–420 px (the floor is WATERFALL_SPLIT_MIN since
+    // 2026-11-12, the sheet's own: 8em at jsdom's 16 px font), painted as the body's own share.
+    expect([sep.getAttribute('aria-valuenow'), sep.getAttribute('aria-valuemin'), sep.getAttribute('aria-valuemax')]).toEqual(['200', '128', '420'])
     expect(parseFloat(body().style.getPropertyValue('--cockpit-wf-h'))).toBeCloseTo((200 / 600) * 100, 6)
     expect(localStorage.getItem('nexus.split.operate.waterfall'), 'an untouched default writes nothing').toBeNull()
     key(sep, 'ArrowDown')
@@ -377,7 +378,7 @@ describe('Operate dividers answer the keyboard (PaneSeam)', () => {
     key(sep, 'End')
     expect(body().style.getPropertyValue('--cockpit-wf-h')).toBe('70%') // 420 of 600
     key(sep, 'Home')
-    expect(sep.getAttribute('aria-valuenow')).toBe('88')
+    expect(sep.getAttribute('aria-valuenow')).toBe('128')
     key(sep, 'Backspace')
     expect(sep.getAttribute('aria-valuenow')).toBe('200')
     // Cleared, not '25': stored, 25 would read back as 25 % of the BODY.

@@ -70,7 +70,9 @@ const KEYED = { ...RADIO, rigKeyed: true, txSwr: 1.2, txAlc: 0.3, txPoW: 50, txC
 
 const page = (RADIO: RadioStatus) => (
   <div className="app" style={appStyle}>
-    <div className={`cq-telemetry${needle ? ' needle' : ''}`} data-probe="cell" style={{ position: 'absolute', top: 8, left: 8 }}>
+    {/* The cell's classes as OperateQsoStrip gives them: `has-temps` where the radio or an amplifier reports a temperature
+        (the cell's taller fixed height, 2026-11-12). */}
+    <div className={`cq-telemetry${needle ? ' needle' : ''}${RADIO.paTempC != null || RADIO.paTempMeter != null || RADIO.amp != null ? ' has-temps' : ''}`} data-probe="cell" style={{ position: 'absolute', top: 8, left: 8 }}>
       <TxMeters radio={RADIO} inline />
     </div>
     {strip ? (

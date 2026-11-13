@@ -62,8 +62,8 @@
 // the lift taken away (the header held at 4 with its menu open) at 1366×768 / 150 % on RTTY must make check 4 fail;
 // the dock's fold taken away at 900×600 / 175 % on RTTY must make check 5 fail; and the menu's clamp into the window
 // taken away at 700×800 / 175 % on RTTY must make check 4 fail; the menu's sizing taken away (0.7 × the window,
-// downward) at 1366×768 / 150 % on CW must make check 4b fail; a menu planted over the stop button at 1024×768 / 175 %
-// on Phone, and a menu held to 20 px at 1280×720 / 175 % on CW, must make check 8 fail; and a keep row planted over the
+// downward) at 1366×768 / 150 % on CW must make check 4b fail; a menu planted over the stop button at the floor (1366×768
+// at 175 %) on Phone, and a menu held to 20 px at 1280×720 / 175 % on CW, must make check 8 fail; and a keep row planted over the
 // whole shell at 900×600 / 175 % on RTTY must make check 9 fail; and a press and a regain planted to scroll the shell
 // at 900×600 / 175 % on JTTY must make checks 11 and 12 fail.
 //
@@ -74,25 +74,29 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { FHD, FLOOR, LAPTOP, metrics, offMatrix } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
 const STUB_SRC = join(UI, 'probe', 'waterfalls-api.ts')
 const STUB_API = join(UI, 'probe', '__digishell-api.ts')
-/** [window W, H, pinned UI scale or null for the app's own fit]. */
+/** [window (probe/sizes.mjs), pinned UI scale or null for the app's own fit]. The floor at the app's 100 % is the
+ *  smallest supported screen; 1366×768 at the app's 175 % is the same effective window unscaled. 900×600, 700×800,
+ *  1280×720 and 1200×750 are windows below any supported screen (dragged small), kept for the xs layout and the
+ *  measured faults this probe was written after. */
 const SIZES = [
-  [900, 600, '175'], [700, 800, '175'], [1024, 768, '175'], [1280, 720, '175'], [1366, 768, '175'], [1366, 768, '150'],
-  [1920, 1080, '150'], [1200, 750, null],
+  [offMatrix(900, 600), '175'], [offMatrix(700, 800), '175'], [FLOOR, '100'], [offMatrix(1280, 720), '175'], [LAPTOP, '175'], [LAPTOP, '150'],
+  [FHD, '150'], [offMatrix(1200, 750), null],
 ]
 /** CW and Phone at the sizes where their docks were taller than the room left (and two that fit, and the fit). */
-const SMALL = [[900, 600, '175'], [700, 800, '175'], [1024, 768, '175'], [1280, 720, '175'], [1366, 768, '150'], [1200, 750, null]]
+const SMALL = [[offMatrix(900, 600), '175'], [offMatrix(700, 800), '175'], [FLOOR, '100'], [offMatrix(1280, 720), '175'], [LAPTOP, '150'], [offMatrix(1200, 750), null]]
 const VIEWS = [['SSTV', 'sstv', 'main.sstv-view', SIZES, true], ['RTTY', 'rtty', 'main.rtty-cockpit', SIZES, true],
   ['PSK', 'psk', 'main.psk-cockpit', SIZES, true], ['CW', 'cw', 'main.cw-cockpit', SMALL, true], ['Phone', 'phone', 'main.phone-cockpit', SMALL, true],
   ['JS8', 'js8', 'main.js8-cockpit', SMALL, true], ['JTTY', 'jtty', 'main.jtty-cockpit', SMALL, true]]
 const FEATURES = JSON.stringify({ profile: 'custom', enabled: { rtty: true, psk: true, sstv: true, js8: true, jtty: true } })
 /** Check 8's other screen, which has none of the rest to run (Operate has no `.cockpit-txstrip`). */
 const COVER_ONLY = [['Operate', 'operate', 'main.operate-cockpit']]
-const COVER_SIZES = [[900, 600, '175'], [700, 800, '175'], [1024, 768, '175'], [1280, 720, '175'], [1366, 768, '150']]
+const COVER_SIZES = [[offMatrix(900, 600), '175'], [offMatrix(700, 800), '175'], [FLOOR, '100'], [offMatrix(1280, 720), '175'], [LAPTOP, '150']]
 /** The shortest a menu with more to show may be, in window px: 26 px showed less than one entry (measured). */
 const SHORTEST_MENU_PX = 60
 const PLANT = ".cockpit-header-pinned, .cockpit-header-pinned[data-pin='off'] { position: sticky !important; top: 0 !important; z-index: 9 !important }"
@@ -598,7 +602,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function measureAt(route, sel, [W, H, scale], css = null, menus = true, cover = false, coverOnly = false, plant = null) {
+async function measureAt(route, sel, [size, scale], css = null, menus = true, cover = false, coverOnly = false, plant = null) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -608,7 +612,7 @@ async function measureAt(route, sel, [W, H, scale], css = null, menus = true, co
     return r.result.value
   }
   try {
-    await call('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false })
+    await call('Emulation.setDeviceMetricsOverride', metrics(size))
     await call('Page.navigate', { url: `${origin}/probe-blank` })
     await sleep(300)
     const ls = { 'nexus.workspace': 'dx', 'nexus.features.v1': FEATURES, 'tempo-theme': 'dark', ...(process.env.NEXUS_PROBE_LOCALE ? { 'nexus.locale': process.env.NEXUS_PROBE_LOCALE } : {}), ...(scale ? { 'nexus-ui-scale-mode': scale } : {}) }
@@ -656,7 +660,7 @@ async function measureAt(route, sel, [W, H, scale], css = null, menus = true, co
   }
 }
 
-const tagOf = ([W, H, s]) => `${W}×${H} ${s ? `${s} %` : 'fit'}`
+const tagOf = ([size, s]) => `${size.name} ${s ? `${s} %` : 'fit'}`
 /** `cover`: whether an open menu's items covered by the strip or the dock are a red — on every screen now. (CW's and
  *  Phone's "covered" items were items scrolled out of view inside the menu's own scroll, which is `inmenu`.) */
 function reds(name, m, cover = true) {
@@ -731,47 +735,47 @@ try {
     }
   }
   // THE CONTROL.
-  const size = [900, 600, '175']
+  const size = [offMatrix(900, 600), '175']
   const m = await measureAt('sstv', 'main.sstv-view', size, PLANT, false)
   const caught = m ? reds(`SSTV at ${tagOf(size)} (planted)`, m).filter((r) => r.includes('the header covers')) : []
   if (caught.length === 0) red('CONTROL FAILED — a header forced to stick on top covered nothing the probe could see; check 1 cannot fail')
   else console.log(`digishell-probe: CONTROL — ${caught[0]} (caught)`)
-  const size2 = [1366, 768, '150']
+  const size2 = [LAPTOP, '150']
   const m2 = await measureAt('rtty', 'main.rtty-cockpit', size2, NO_LIFT)
   const caught2 = m2 ? reds(`RTTY at ${tagOf(size2)} (lift removed)`, m2).filter((r) => r.includes('items covered')) : []
   if (caught2.length === 0) red('CONTROL FAILED — a header held under the strip with its menu open covered no item; check 4 cannot fail')
   else console.log(`digishell-probe: CONTROL — ${caught2[0]} (caught)`)
-  const size3 = [900, 600, '175']
+  const size3 = [offMatrix(900, 600), '175']
   const m3 = await measureAt('rtty', 'main.rtty-cockpit', size3, NO_FOLD, false)
   const caught3 = m3 ? reds(`RTTY at ${tagOf(size3)} (fold removed)`, m3).filter((r) => r.includes('stop or send control not reachable')) : []
   if (caught3.length === 0) red('CONTROL FAILED — a dock kept whole where it does not fit covered no stop or send control; check 5 cannot fail')
   else console.log(`digishell-probe: CONTROL — ${caught3[0]} (caught)`)
-  const size4 = [700, 800, '175']
+  const size4 = [offMatrix(700, 800), '175']
   const m4 = await measureAt('rtty', 'main.rtty-cockpit', size4, NO_CLAMP)
   const caught4 = m4 ? reds(`RTTY at ${tagOf(size4)} (clamp removed)`, m4).filter((r) => r.includes('off the window')) : []
   if (caught4.length === 0) red('CONTROL FAILED — an unclamped ⊞ Panels menu stayed inside the window; check 4 cannot see an overhang')
   else console.log(`digishell-probe: CONTROL — ${caught4[0]} (caught)`)
-  const size5 = [1366, 768, '150']
+  const size5 = [LAPTOP, '150']
   const m5 = await measureAt('cw', 'main.cw-cockpit', size5, NO_FIT)
   const caught5 = m5 ? reds(`CW at ${tagOf(size5)} (menu sizing removed)`, m5).filter((r) => r.includes('runs past')) : []
   if (caught5.length === 0) red('CONTROL FAILED — a ⊞ Panels menu sized at 0.7 × the window, opening downward, stayed inside it; check 4b cannot fail')
   else console.log(`digishell-probe: CONTROL — ${caught5[0]} (caught)`)
-  const size6 = [1024, 768, '175']
+  const size6 = [FLOOR, '100']
   const m6 = await measureAt('phone', 'main.phone-cockpit', size6, OVER_STOP, false, true)
   const caught6 = m6 ? coverReds(`Phone at ${tagOf(size6)} (menu planted over the stop)`, m6.cover).filter((r) => r.includes('under the menu')) : []
   if (caught6.length === 0) red('CONTROL FAILED — a menu planted over the whole shell left the stop button clear; check 8 cannot fail')
   else console.log(`digishell-probe: CONTROL — ${caught6[0]} (caught)`)
-  const size7 = [1280, 720, '175']
+  const size7 = [offMatrix(1280, 720), '175']
   const m7 = await measureAt('cw', 'main.cw-cockpit', size7, TINY_MENU, false, true)
   const caught7 = m7 ? coverReds(`CW at ${tagOf(size7)} (menu held to 20 px)`, m7.cover).filter((r) => r.includes('px tall')) : []
   if (caught7.length === 0) red('CONTROL FAILED — a menu held to 20 px passed as tall enough; the short-menu check cannot fail')
   else console.log(`digishell-probe: CONTROL — ${caught7[0]} (caught)`)
-  const size8 = [900, 600, '175']
+  const size8 = [offMatrix(900, 600), '175']
   const m8 = await measureAt('rtty', 'main.rtty-cockpit', size8, KEEP_OVER_ALL, false, true)
   const caught8 = m8 ? focusReds(`RTTY at ${tagOf(size8)} (keep row planted over the shell)`, m8).filter((r) => r.includes('hidden on')) : []
   if (caught8.length === 0) red('CONTROL FAILED — a keep row planted over the whole shell hid no focused control; check 9 cannot fail')
   else console.log(`digishell-probe: CONTROL — ${caught8[0].slice(0, 110)} (caught)`)
-  const size9 = [900, 600, '175']
+  const size9 = [offMatrix(900, 600), '175']
   const m9 = await measureAt('jtty', 'main.jtty-cockpit', size9, null, false, true, false, "addEventListener('pointerup', () => setTimeout(() => { shell.scrollTop += 60 }, 0), true); addEventListener('focus', () => { shell.scrollTop += 60 })")
   const caught9 = m9 ? pinReds(`JTTY at ${tagOf(size9)} (a press and a regain planted to scroll)`, m9) : []
   for (const what of ['a press moved', 'a window regain moved']) {
