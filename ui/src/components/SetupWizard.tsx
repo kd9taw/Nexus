@@ -32,6 +32,7 @@ import {
 import { baudForRig, FREQ_BANDS, radioPatch } from './SettingsPanel'
 import { RadioSetupWizard } from './RadioSetupWizard'
 import { ImportPreview } from './ImportPreview'
+import { LocaleBetaNote } from './LocaleBetaNote'
 import { WizardServices } from './WizardServices'
 import { importTooLarge } from '../features/logImport'
 import { handsOffToRadioSetup, RADIO_COUNTS, showsServices, type RadioCount } from '../settings/journeys'
@@ -919,6 +920,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
         <>
           <h2 className="wizard-title">{t('setup.about.title')}</h2>
           <p className="wizard-sub">{t('setup.about.sub')}</p>
+          <LocaleBetaNote as="p" className="wizard-sub" />
           <div className="wizard-modes" role="group" aria-label={t('setup.about.title')}>
             {EXPERIENCE_LEVELS.map((l) => (
               <button

@@ -9674,7 +9674,7 @@ select optgroup {
   text-transform: uppercase;
   color: var(--text-faint);
 }
-/* The propagation-mode picker sits in the grid beside the boxes, and looks like one. */
+/* The propagation-mode picker sits in the grid with the boxes, and looks like one. */
 .logconfirm-grid input,
 .logconfirm-grid select {
   padding: var(--space-2) 10px;
@@ -9689,7 +9689,10 @@ select optgroup {
   outline: none;
   border-color: var(--accent);
 }
-/* The comment is free text, so it takes the whole row under the short fields. */
+/* The comment is free text, so it takes the whole row under the short fields. So does the
+   propagation-mode picker: in half the popup its longest names ("Non-satellite repeater or
+   transponder") showed only their first ~20 characters in the closed box. */
+.logconfirm-grid .logconfirm-propmode,
 .logconfirm-grid .logconfirm-comment {
   grid-column: 1 / -1;
 }
@@ -9801,13 +9804,22 @@ select optgroup {
    sent marks). The box's own background, so the lines scrolled under them do not show through,
    carried down over the box's bottom padding (the negative inset and margin), where a line would
    otherwise show below the buttons. At rest the buttons sit where they did. Held by
-   styles-review-actions.test.tsx. */
-.park-review .logconfirm-actions {
+   styles-review-actions.test.tsx. The prompt to log holds Log, Discard and its own Stop TX the same
+   way: capped at a short or scaled window (1366x768 at 175 %), its fields put them below the fold
+   when it opened. Held by LogConfirm.layout.test.tsx and the stopabove probe. */
+.park-review .logconfirm-actions,
+.log-prompt .logconfirm-actions {
   position: sticky;
   bottom: calc(-1 * var(--space-5));
   margin-bottom: calc(-1 * var(--space-5));
   padding: var(--space-3) 0 var(--space-5);
   background: var(--bg-elev);
+}
+/* …and what the prompt scrolls to its end lands clear of them: LogConfirm writes the held row's height
+   on the card (`--log-prompt-actions-h`), so a field scrolled into view with 'nearest' (the IOTA box's
+   group name and island picker, at the app's 175 %) stops above Log and Discard, not under them. */
+.log-prompt {
+  scroll-padding-bottom: var(--log-prompt-actions-h, 0px);
 }
 .park-review-list {
   list-style: none;

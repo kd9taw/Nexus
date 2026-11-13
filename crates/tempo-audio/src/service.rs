@@ -37076,6 +37076,41 @@ mod tests {
         }
     }
 
+    /// THE REMOTE MICROPHONE'S KEY NEVER SHORTENS A LONGER HOLD: the tick that keys the over
+    /// extends the hold across the lead-in and pre-roll (`extend_hold`), so a hold already running
+    /// past that (another over riding the same transmitter) stands at every tick. CONTROL: under a
+    /// short hold the key extends it, which says the site ran. A characterization pin beside the
+    /// stream sites' in `cut_sites`.
+    #[test]
+    fn a_remote_mic_key_never_shortens_a_longer_hold() {
+        const LONG_HOLD: f64 = 9_999_999.0;
+        let run = |hold: f64| {
+            let mut s = MicScene::new();
+            s.state.tx_until_ms = Some(hold);
+            s.hold.hold(MIC_PRESS, s.mono(0.0));
+            s.step(0.0);
+            let mut holds = vec![s.state.tx_until_ms];
+            let mut t = 20.0;
+            while t <= 600.0 {
+                s.tick(t, true);
+                holds.push(s.state.tx_until_ms);
+                t += 20.0;
+            }
+            assert!(s.state.mic_keyed, "premise: the loop keyed the over");
+            holds
+        };
+        let holds = run(LONG_HOLD);
+        assert!(
+            holds.iter().all(|h| *h == Some(LONG_HOLD)),
+            "the longer hold was shortened: {holds:?}"
+        );
+        let holds = run(10.0);
+        assert!(
+            holds.iter().any(|h| h.is_some_and(|h| h > 10.0)),
+            "control: a shorter hold is never extended: {holds:?}"
+        );
+    }
+
     /// ★ M1 at the transmitter (the design's `arming_without_audio_never_asserts_ptt`): a held PTT
     /// with no audio, for a hundred ticks, keys nothing and plays nothing. Then the page's first
     /// frame keys the rig, the lead-in passes with nothing played, and the audio that follows is a

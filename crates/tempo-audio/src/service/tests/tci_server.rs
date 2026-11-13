@@ -979,3 +979,37 @@ fn stop_tx_mid_programs_over_flushes_then_unkeys_and_drops_the_hold() {
     );
     assert!(!s.rig.keyed);
 }
+
+/// A PROGRAM'S KEY NEVER SHORTENS A LONGER HOLD: the tick that keys its over extends the hold across
+/// the lead-in and pre-roll (`extend_hold`), so a hold already running past that (another over
+/// riding the same transmitter) stands at every tick. CONTROL: under a short hold the key extends
+/// it, which says the site ran. A characterization pin beside the stream sites' in `cut_sites`.
+#[test]
+fn a_programs_key_never_shortens_a_longer_hold() {
+    const LONG_HOLD: f64 = 9_999_999.0;
+    let run = |hold: f64| {
+        let mut s = Scene::new();
+        s.state.tx_until_ms = Some(hold);
+        assert_eq!(s.key(P1), Ok(()), "premise: P1's key is admitted");
+        s.step(0.0);
+        let mut holds = vec![s.state.tx_until_ms];
+        let mut t = TICK;
+        while t <= 600.0 {
+            s.tick(t, Some(0.5));
+            holds.push(s.state.tx_until_ms);
+            t += TICK;
+        }
+        assert!(s.state.program_over_keyed, "premise: the loop keyed it");
+        holds
+    };
+    let holds = run(LONG_HOLD);
+    assert!(
+        holds.iter().all(|h| *h == Some(LONG_HOLD)),
+        "the longer hold was shortened: {holds:?}"
+    );
+    let holds = run(10.0);
+    assert!(
+        holds.iter().any(|h| h.is_some_and(|h| h > 10.0)),
+        "control: a shorter hold is never extended: {holds:?}"
+    );
+}
