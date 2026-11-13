@@ -485,6 +485,8 @@ const MIGRATED = [
   'components/RepeaterMap.tsx',
   'components/MemoryStrip.tsx',
   'components/RecallPanel.tsx',
+  // The recall card's ⤢ box (2026-11-13): born migrated.
+  'components/RecallCardPopover.tsx',
   'components/BandPicker.tsx',
   'components/BandStrip.tsx',
   'components/FrequencyControl.tsx',

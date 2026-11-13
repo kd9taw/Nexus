@@ -17,6 +17,7 @@ import { t } from '../i18n'
 import { fmtDistanceKm, useUnits } from '../units'
 import { useRovingList } from '../useRovingList'
 import { PaneCloseButton } from './panes/PaneCloseButton'
+import { RecallCardPopover } from './RecallCardPopover'
 import { useCallback, useState } from 'react'
 import type { ReactNode } from 'react'
 
@@ -126,6 +127,10 @@ interface Props {
   /** The warn-only POTA dupe ([`potaDupe`](../features/potaActivation.ts)): this call already
    *  worked today from the activation's park on this band and mode. Never blocks. */
   potaDupe?: PotaDupe | null
+  /** This card IS the full card, drawn inside the ⤢'s floating box (RecallCardPopover): the photo larger,
+   *  no ⤢ and no ✕ of its own (the box has its own close), no grip, and the name free to wrap. Only
+   *  RecallPanel passes it, to itself. Default false. */
+  full?: boolean
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -183,7 +188,8 @@ export function recallCardClass(bounded?: boolean, kept?: boolean): string {
   return `recall-card${bounded ? ' cockpit-recall' : ''}${bounded && kept ? ' cockpit-recall-kept' : ''}`
 }
 
-export function RecallPanel({ call, band, name, qth, state, grid, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, contestDupe = 'none', contestLogsDupes = false, contestDupeByBand = true, activating = false, potaDupe = null, hasLookup = true, bounded = false, kept = false, onOpenLog, latestNote, historyNotice, calling, onShowCall, onRemove, hideNote, paneTitle, grip }: Props) {
+export function RecallPanel(props: Props) {
+  const { call, band, name, qth, state, grid, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, contestDupe = 'none', contestLogsDupes = false, contestDupeByBand = true, activating = false, potaDupe = null, hasLookup = true, bounded = false, kept = false, onOpenLog, latestNote, historyNotice, calling, onShowCall, onRemove, hideNote, paneTitle, grip, full = false } = props
   const units = useUnits()
   const c = call.trim()
   const cu = c.toUpperCase()
@@ -217,6 +223,11 @@ export function RecallPanel({ call, band, name, qth, state, grid, country, image
   }, [])
   // The station's answer for the distance/bearing line (below), asked above the short-call return too.
   const aim = useCallBearings(c.length >= 3 ? [cu] : []).get(cu)
+  // THE ⤢ (tester report, 2026-11-13): the capped card in the Operate rail opens in full in a floating box
+  // (RecallCardPopover). Where it was opened from and whether by the keyboard; null while closed. Stable
+  // close, because the box's listeners and placement key on it.
+  const [opened, setOpened] = useState<{ anchor: HTMLElement; keyboard: boolean } | null>(null)
+  const closeFull = useCallback(() => setOpened(null), [])
   if (c.length < 3) return null
   const nm = name?.trim()
   // "KEKAHA, HI (BL01dx)" — the state rides with the town, the way an operator says it.
@@ -324,9 +335,105 @@ export function RecallPanel({ call, band, name, qth, state, grid, country, image
     </>
   )
 
+  // The card capped in the rail it shares (Operate's `bounded`), not the full card drawn from it.
+  const rail = bounded && !full
+  const badges = (
+    <div className="recall-badges">
+      {/* ⭐ FIRST in the row, and SOLID where the lifetime badge beside it is tinted — the
+          same idiom `.b4-chip.b4-band` already uses in this cockpit's roster and decode
+          feed, where solid means the narrower scope. Two chips both reading "Dupe" in the
+          same red is the misread this ordering and weight exist to prevent: at contest
+          speed the eye takes the solid one first, and that is the one that blocks. */}
+      {contestDupe === 'own' && (
+        <span
+          className="recall-badge contest-dupe"
+          /* FOUR literal call sites rather than one with a computed key: the i18n
+             extractor reads keys statically, and a ternary INSIDE `t()` hides them
+             from it — they read as orphan entries nobody references, and the
+             unreadable-call-site ratchet ticks up. Both guards caught it.
+             The `…AnyBand` pair takes no {{band}} at all, which is the fix: under a
+             ruleset that works a station once regardless of band, the band the
+             operator is sitting on is the one place the contact is NOT. */
+          title={
+            contestDupeByBand
+              ? contestLogsDupes
+                ? t('recall.contestDupe.titleLogged', { band: band ?? '' })
+                : t('recall.contestDupe.title', { band: band ?? '' })
+              : contestLogsDupes
+                ? t('recall.contestDupe.titleLoggedAnyBand')
+                : t('recall.contestDupe.titleAnyBand')
+          }
+        >
+          {t('recall.contestDupe.label')}
+        </span>
+      )}
+      {contestDupe === 'club' && (
+        <span
+          className="recall-badge club-dupe"
+          title={t('recall.clubDupe.title', { band: band ?? '' })}
+        >
+          {t('recall.clubDupe.label')}
+        </span>
+      )}
+      {potaDupe && (
+        <span
+          className="recall-badge dupe"
+          title={t('recall.potaDupe.title', {
+            park: potaDupe.park,
+            band: potaDupe.qso.band ?? '',
+            mode: potaDupe.qso.mode ?? '',
+            time: fmtTime(potaDupe.qso.whenUnix),
+          })}
+        >
+          {t('recall.potaDupe.label', { park: potaDupe.park })}
+        </span>
+      )}
+      {!activating && hist.dupeThisBand && band && (
+        <span className="recall-badge dupe" title={t('recall.dupe.title', { band })}>
+          {t('recall.dupe.label', { band })}
+        </span>
+      )}
+      {confirmed && (
+        <span
+          className="recall-badge ok"
+          title={t('recall.confirmed.title', {
+            confirmed: hist.confirmedCount,
+            count: hist.count,
+          })}
+        >
+          ✓
+        </span>
+      )}
+      {needed && (
+        <span className="recall-badge need" title={t('recall.need.title')}>
+          ★ {needed}
+        </span>
+      )}
+    </div>
+  )
+  const expand = rail && (
+    <button
+      type="button"
+      className="recall-expand"
+      aria-haspopup="dialog"
+      aria-expanded={opened != null}
+      aria-label={t('recall.full.open', { call: cu })}
+      title={t('recall.full.open', { call: cu })}
+      // The avatar's focus guard: a click must not pull the caret out of whatever has it.
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={(e) => {
+        const el = e.currentTarget
+        setOpened((o) => (o ? null : { anchor: el, keyboard: e.detail === 0 }))
+      }}
+    >
+      ⤢
+    </button>
+  )
+  const close = <PaneCloseButton title={paneTitle ?? cu} onRemove={onRemove} hideNote={hideNote} />
+
   return (
-    <div className={recallCardClass(bounded, kept)}>
-      <div className="recall-head" data-pane-grip={grip}>
+    <div className={`${recallCardClass(bounded && !full, kept && !full)}${full ? ' recall-card-full' : ''}`}>
+      <div className="recall-head" data-pane-grip={full ? undefined : grip}>
         {/* Same open_qrz_page path as the roster/logbook ↗ buttons: the Rust command derives
             and sanitizes https://www.qrz.com/db/<base call>, so nothing URL-shaped is built
             here. Failures are TOASTED, not swallowed — there is no global unhandledrejection
@@ -353,7 +460,10 @@ export function RecallPanel({ call, band, name, qth, state, grid, country, image
         </button>
         <div className="recall-id">
           <div className="recall-name-row">
-            <span className="recall-name">{nm || cu}</span>
+            {/* One line, an ellipsis only when it truly cannot fit; the whole name in the tooltip. */}
+            <span className="recall-name" title={nm || cu}>
+              {nm || cu}
+            </span>
             {nm && <span className="recall-call mono">{cu}</span>}
           </div>
           <div className="recall-where">
@@ -379,83 +489,25 @@ export function RecallPanel({ call, band, name, qth, state, grid, country, image
               {t('recall.calling.label', { call: calling.trim().toUpperCase() })}
             </button>
           )}
+          {/* In the rail the badges stand under the name and place, in the text column: beside the
+              name they took up to 42% of a ~260 px card and squeezed the name to a word a line. */}
+          {rail && badges}
         </div>
-        <div className="recall-badges">
-          {/* ⭐ FIRST in the row, and SOLID where the lifetime badge beside it is tinted — the
-              same idiom `.b4-chip.b4-band` already uses in this cockpit's roster and decode
-              feed, where solid means the narrower scope. Two chips both reading "Dupe" in the
-              same red is the misread this ordering and weight exist to prevent: at contest
-              speed the eye takes the solid one first, and that is the one that blocks. */}
-          {contestDupe === 'own' && (
-            <span
-              className="recall-badge contest-dupe"
-              /* FOUR literal call sites rather than one with a computed key: the i18n
-                 extractor reads keys statically, and a ternary INSIDE `t()` hides them
-                 from it — they read as orphan entries nobody references, and the
-                 unreadable-call-site ratchet ticks up. Both guards caught it.
-                 The `…AnyBand` pair takes no {{band}} at all, which is the fix: under a
-                 ruleset that works a station once regardless of band, the band the
-                 operator is sitting on is the one place the contact is NOT. */
-              title={
-                contestDupeByBand
-                  ? contestLogsDupes
-                    ? t('recall.contestDupe.titleLogged', { band: band ?? '' })
-                    : t('recall.contestDupe.title', { band: band ?? '' })
-                  : contestLogsDupes
-                    ? t('recall.contestDupe.titleLoggedAnyBand')
-                    : t('recall.contestDupe.titleAnyBand')
-              }
-            >
-              {t('recall.contestDupe.label')}
-            </span>
-          )}
-          {contestDupe === 'club' && (
-            <span
-              className="recall-badge club-dupe"
-              title={t('recall.clubDupe.title', { band: band ?? '' })}
-            >
-              {t('recall.clubDupe.label')}
-            </span>
-          )}
-          {potaDupe && (
-            <span
-              className="recall-badge dupe"
-              title={t('recall.potaDupe.title', {
-                park: potaDupe.park,
-                band: potaDupe.qso.band ?? '',
-                mode: potaDupe.qso.mode ?? '',
-                time: fmtTime(potaDupe.qso.whenUnix),
-              })}
-            >
-              {t('recall.potaDupe.label', { park: potaDupe.park })}
-            </span>
-          )}
-          {!activating && hist.dupeThisBand && band && (
-            <span className="recall-badge dupe" title={t('recall.dupe.title', { band })}>
-              {t('recall.dupe.label', { band })}
-            </span>
-          )}
-          {confirmed && (
-            <span
-              className="recall-badge ok"
-              title={t('recall.confirmed.title', {
-                confirmed: hist.confirmedCount,
-                count: hist.count,
-              })}
-            >
-              ✓
-            </span>
-          )}
-          {needed && (
-            <span className="recall-badge need" title={t('recall.need.title')}>
-              ★ {needed}
-            </span>
-          )}
-        </div>
+        {!rail && badges}
         {/* Last in the identity row, after the badges — the card's head IS its pane head,
             and `.cockpit-popout`'s margin-left:auto parks the ✕ at the top-right corner
-            where every other pane in the app keeps it. */}
-        <PaneCloseButton title={paneTitle ?? cu} onRemove={onRemove} hideNote={hideNote} />
+            where every other pane in the app keeps it. In the rail the ✕ and the ⤢ (only there:
+            everywhere else the card is drawn whole in a pane that scrolls) stand in ONE narrow
+            column, ✕ over ⤢, so the two cost the name one button's width, not two. The full card
+            has neither: its box closes. */}
+        {rail ? (
+          <div className="recall-acts">
+            {close}
+            {expand}
+          </div>
+        ) : (
+          !full && close
+        )}
       </div>
 
       {historyNotice}
@@ -554,6 +606,11 @@ export function RecallPanel({ call, band, name, qth, state, grid, country, image
             })}
           </div>
         </div>
+      )}
+      {opened && (
+        <RecallCardPopover anchor={opened.anchor} keyboard={opened.keyboard} label={t('recall.full.aria', { call: cu })} onClose={closeFull}>
+          <RecallPanel {...props} bounded={false} kept={false} onRemove={undefined} grip={undefined} full />
+        </RecallCardPopover>
       )}
     </div>
   )
