@@ -36,7 +36,12 @@
 //!    is a socket, ICE and thread of its own at the shack (`super::stop_road`,
 //!    `super::audio_road`), keyed from this TLS session under the internet roads' own labels; the
 //!    computer's ICE offer comes in its `open`, the shack's goes back in its `opened`, and each
-//!    end's later candidates follow on this connection, never on a relay lane.
+//!    end's later candidates follow on this connection, never on a relay lane. ⛔ A `restart`
+//!    from the computer (one of its roads fell silent: a NAT between them rebound) restarts each
+//!    of them here too (`tempo_client::ice`'s `IceRoad::restart`), and the shack's new offers go
+//!    back in a `restarted`. Only on this connection, never from anything on a road; and never
+//!    sooner than `RESTART_FLOOR` after the last, nor on a connection with no internet roads,
+//!    nor for roads other than its own: each of those ends the connection.
 //! 7. **The close.** However the connection ends (the computer closes it, it falls silent for
 //!    [`SILENCE`], LAN is switched off, the computer is removed at the shack), its stream ends with
 //!    it, the stream's presence at once, and the lease it holds goes with the connection, so the
@@ -66,7 +71,7 @@ use super::stop_road::{Opened as StopOpened, StateClock, StopRoad};
 use super::tls::{pin, Identity};
 use super::wire::{self, End, Whole};
 use crate::command_dispatch::{Call, Dispatcher, Profile, Revision, ShackStores};
-use tempo_client::ice::{Gather, IceRoad, Offer, Role};
+use tempo_client::ice::{Gather, IceRoad, Offer, Restarts, Role};
 
 /// The LAN protocol this shack speaks, and the operation version every request on this channel is
 /// answered at: the wire's (`super::wire`), which the computer's end reads too.
@@ -226,6 +231,33 @@ impl Internet {
         }
         roads
     }
+
+    /// ⛔ Each road restarted, as the computer's `restart` asked, and the computer's new offer
+    /// taken: the shack's new offers, for the `restarted`. `None` when the roads asked for are not
+    /// exactly this connection's, or an offer is none a computer of this build makes.
+    fn restart(&self, asked: RoadsAsked) -> Option<Value> {
+        #[cfg(feature = "radio")]
+        let audio = match (asked.audio, &self.audio) {
+            (Some(offer), Some((_, ice))) => Some((offer, ice)),
+            (None, None) => None,
+            _ => return None,
+        };
+        #[cfg(not(feature = "radio"))]
+        if asked.audio.is_some() {
+            return None;
+        }
+        let ice = &self.stop.1;
+        let mine = ice.restart()?;
+        ice.answer(&asked.stop).then_some(())?;
+        let mut roads = json!({ "stop": mine });
+        #[cfg(feature = "radio")]
+        if let Some((offer, ice)) = audio {
+            let mine = ice.restart()?;
+            ice.answer(&offer).then_some(())?;
+            roads["audio"] = json!(mine);
+        }
+        Some(roads)
+    }
 }
 
 /// Opens a connection's internet roads, as its `open` asked: each its own socket at `net.bind`
@@ -352,6 +384,10 @@ enum FromComputer {
     Candidate {
         road: String,
         candidate: String,
+    },
+    /// Restart each of this connection's internet roads: the computer's new offer for each.
+    Restart {
+        roads: RoadsAsked,
     },
 }
 
@@ -759,6 +795,7 @@ async fn session<S>(
         )
     });
     let mut internet: Option<Internet> = None;
+    let mut restarts = Restarts::default();
     // The lease this computer takes is bound to this connection, and goes with it.
     let connection = LanConnection::new(shared.authority.clone());
     let paired = roster.clone();
@@ -919,6 +956,15 @@ async fn session<S>(
                             net.ice().iter().any(|(road, ice)| *road == name && ice.add_candidate(&candidate))
                         });
                         if !taken { break StreamReason::StreamClosed }
+                    }
+                    // ⛔ Only on a connection with internet roads, never sooner than the floor after
+                    // the last, and only for exactly its own roads.
+                    FromComputer::Restart { roads } => {
+                        let Some(net) = internet.as_ref() else { break StreamReason::StreamClosed };
+                        if !restarts.taken(Instant::now()) { break StreamReason::StreamClosed }
+                        let Some(roads) = net.restart(roads) else { break StreamReason::StreamClosed };
+                        let restarted = json!({"type":"restarted","roads":roads});
+                        if outbox.text(restarted.to_string()).is_err() { break StreamReason::ConnectionFailed }
                     }
                     FromComputer::OperationRequest { request } => {
                         let id = request.id().to_string();

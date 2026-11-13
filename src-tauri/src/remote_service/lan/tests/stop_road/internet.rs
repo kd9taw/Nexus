@@ -797,3 +797,109 @@ async fn over_the_internet_this_computer_never_asks_its_relay_for_an_address_off
         }
     }
 }
+
+/// Waits up to `within` for every internet road's pair, as this computer's ICE holds it, to be
+/// `found` (a pair) or not; whether it was. Meanwhile, whether the held PTT or the microphone over
+/// keyed at any look.
+async fn routes_within(t: &OverTheInternet, found: bool, within: Duration) -> (bool, bool) {
+    let until = Instant::now() + within;
+    let mut keyed = false;
+    loop {
+        keyed |= t.r.ptt.keyed() || t.r.s.shared.engine.lock().unwrap().mic_armed();
+        let routes = t.link.internet_routes();
+        if !routes.is_empty() && routes.iter().all(|(_, route)| route.is_some() == found) {
+            return (true, keyed);
+        }
+        if Instant::now() >= until {
+            return (false, keyed);
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// ⛔ A road that falls silent is restarted on the link and found again, and nothing keys while it
+/// restarts. A press is keyed through the relay and its screen keeps re-asserting it; then the
+/// relay goes quiet both ways (as a NAT that rebinds looks from this computer: no answer on the
+/// pair). The held PTT ends the press at its gap; about 1.5 s on, this computer restarts its roads
+/// over the link (its pair let go); the relay comes back, and the roads pair again within 3 s. From
+/// the restart until the pair is found again nothing keys, and the press the station ended stays
+/// ended though the screen goes on re-asserting it. After it, presence is renewed on the road again
+/// and a Stop by the road is acknowledged.
+#[test]
+fn over_the_internet_a_silent_road_restarts_on_the_link_and_nothing_keys_meanwhile() {
+    let _alone = alone();
+    on_a_runtime(
+        2,
+        over_the_internet_a_silent_road_restarts_on_the_link_and_nothing_keys_meanwhile_on_a_runtime(),
+    );
+}
+
+async fn over_the_internet_a_silent_road_restarts_on_the_link_and_nothing_keys_meanwhile_on_a_runtime(
+) {
+    let app = App::new();
+    let t = OverTheInternet::new(&app).await;
+    t.present().await;
+    t.road.press(11, 0);
+    let holding = t.reassert(11, 100);
+    assert!(
+        t.keyed_within(Duration::from_millis(500)).await,
+        "premise: keyed"
+    );
+    t.turn.mute(true);
+    let muted = Instant::now();
+    let (restarted, _) = routes_within(&t, false, Duration::from_secs(3)).await;
+    let restarted_after = muted.elapsed();
+    let keyed_at_restart = t.keyed_within(Duration::from_millis(1)).await;
+    t.turn.mute(false);
+    let unmuted = Instant::now();
+    let (found, keyed_meanwhile) = routes_within(&t, true, Duration::from_secs(3)).await;
+    let found_after = unmuted.elapsed();
+    let keyed_after = t.keyed_within(Duration::from_millis(500)).await;
+    holding.abort();
+    t.present().await;
+    t.road.stop(1);
+    let stopped = t.acknowledged(1, Duration::from_secs(2)).await;
+    let ended = t.link.ended();
+    t.end().await;
+    assert!(
+        restarted && restarted_after >= Duration::from_millis(1000),
+        "restarted: {restarted}, {restarted_after:?} after the relay went quiet"
+    );
+    assert!(found, "not paired again within 3 s");
+    eprintln!("restart {restarted_after:?} after silence; paired again {found_after:?} after the relay came back");
+    assert_eq!(
+        (
+            keyed_at_restart,
+            keyed_meanwhile,
+            keyed_after,
+            stopped,
+            ended
+        ),
+        (false, false, false, true, false),
+        "(keyed at the restart, keyed while restarting, keyed after, Stop acknowledged after, \
+         link ended)"
+    );
+}
+
+/// ⛔ No storm of restarts at the station: a restart this computer asks for is taken, and the
+/// roads pair again (CONTROL); a second one asked for sooner than the station's floor ends the
+/// connection, with its lease.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn over_the_internet_a_restart_sooner_than_the_stations_floor_ends_the_connection() {
+    let app = App::new();
+    let t = OverTheInternet::new(&app).await;
+    t.present().await;
+    assert!(t.link.restart_now());
+    let (found, _) = routes_within(&t, true, Duration::from_secs(3)).await;
+    let first = (found, t.link.ended());
+    assert!(t.link.restart_now());
+    let ended = tokio::time::timeout(Duration::from_secs(2), t.link.closed())
+        .await
+        .is_ok();
+    t.end().await;
+    assert_eq!(
+        (first, ended),
+        ((true, false), true),
+        "((paired again after the first, link ended after it), link ended after the second)"
+    );
+}
