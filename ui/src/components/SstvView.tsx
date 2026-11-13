@@ -381,9 +381,11 @@ const HF_TOP_MHZ = 30
 /** How near a plan channel a dial counts as already ON it: half the 3 kHz between 20 m's SSTV
  *  channels, so 14.230 and 14.233 stay two places and a dial a little off either is on it. */
 const ON_CHANNEL_MHZ = 0.0015
-/** The ISS SSTV downlink. A dial reading, so it lives here and is interpolated into the
- *  soft-guard prompt rather than written inside it. */
-const ISS_SSTV_MHZ = 145.8
+/** The ISS SSTV downlinks: 145.800 (ARISS's usual PD120 events) and 437.550 (Robot 36, the
+ *  October 2026 RS0ISS event) — the engine's `ISS_SSTV_DOWNLINKS_MHZ`. Dial readings, so they
+ *  live here and the one in play is interpolated into the soft-guard prompt rather than written
+ *  inside it. */
+const ISS_SSTV_DOWNLINKS_MHZ = [145.8, 437.55]
 /** How far from a band-plan SSTV channel the "images appear at …" pointer still describes where
  * the operator is. Two figures, because a channel means different things either side of the FM
  * floor: on HF the calling frequency is the band's single activity centre and naming it is
@@ -449,7 +451,8 @@ export function sstvChannelOnOpen(plan: BandChannel[], dialMhz?: number): BandCh
   const own = band ? plan.find((c) => c.band === band) : undefined
   // NEVER THE ISS DOWNLINK: 2 m's own row is 145.800, a receive-only space channel, and never
   // where 2 m SSTV is. A band whose own row is a downlink is left alone, like one with none.
-  if (own && Math.abs(own.dialMhz - ISS_SSTV_MHZ) < ON_CHANNEL_MHZ) return null
+  // (437.550's row is "70cm-iss", never a band's own row — pinned in bandplan.rs.)
+  if (own && Math.abs(own.dialMhz - ISS_SSTV_DOWNLINKS_MHZ[0]) < ON_CHANNEL_MHZ) return null
   if (own) return own
   if (dialMhz >= HF_TOP_MHZ) return null
   return plan.find((c) => c.band === '20m') ?? null
@@ -1651,19 +1654,21 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       return
     }
     const m = MODE_BY_SLUG[packed.slug]
-    // Soft ISS guard: 145.800 is the ISS SSTV DOWNLINK — transmit there only for a
-    // sanctioned ARISS uplink event, never by accident. The frequency is a CONSTANT and is
+    // Soft ISS guard: 145.800 and 437.550 are the ISS SSTV DOWNLINKS — transmit there only for
+    // a sanctioned ARISS uplink event, never by accident. The frequency is a CONSTANT and is
     // interpolated into the prompt: a dial reading written inside a translatable sentence is
     // one decimal comma away from naming a different channel.
     const dial = snapRef.current?.radio.dialMhz
-    if (dial != null && Math.abs(dial - ISS_SSTV_MHZ) <= 0.01) {
+    const downlink =
+      dial == null ? undefined : ISS_SSTV_DOWNLINKS_MHZ.find((f) => Math.abs(dial - f) <= 0.01)
+    if (downlink != null) {
       // ⚠️ SAME GUARD, WORKING MECHANISM. `window.confirm` is inert in this webview, so on macOS
       // this read false every time and SSTV could not be sent on 145.800 AT ALL. It failed closed,
       // so the downlink was never transmitted on by accident — the loss was the sanctioned ARISS
       // uplink case, not the protection. `confirmDialog` also resolves false with no host mounted,
       // so the refusal survives the change; the question and its frequency are untouched.
       const ok = await confirmDialog({
-        title: t('sstv.tx.iss.confirm', { freq: ISS_SSTV_MHZ.toFixed(3) }),
+        title: t('sstv.tx.iss.confirm', { freq: downlink.toFixed(3) }),
         confirmLabel: t('sstv.tx.send.label'),
         danger: true,
       })

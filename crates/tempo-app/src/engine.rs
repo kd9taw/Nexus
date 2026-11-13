@@ -11988,12 +11988,10 @@ impl Engine {
     /// visit would otherwise have written 14.230 over their 20 m Phone dial.
     ///
     /// Refused — false, nothing tuned — while a satellite pass owns the dial (Doppler steers it,
-    /// and a retune here would end the pass's hold) and for the ISS downlink, which is a
-    /// receive-only space channel and never "this band's" SSTV frequency.
+    /// and a retune here would end the pass's hold) and for an ISS downlink (145.800 or 437.550),
+    /// which is a receive-only space channel and never "this band's" SSTV frequency.
     pub fn sstv_tune_on_open(&mut self, dial_mhz: f64, band: &str, mode: &str) -> bool {
-        let iss = crate::bandplan::sstv_band_plan()
-            .iter()
-            .any(|c| c.band == "2m" && (c.dial_mhz - dial_mhz).abs() < 0.0015);
+        let iss = crate::bandplan::is_iss_sstv_downlink(dial_mhz);
         if self.sat_dial_owner.is_some() || iss {
             return false;
         }
@@ -45597,6 +45595,13 @@ mod tests {
         assert!(
             !e.sstv_tune_on_open(145.800, "2m", "FM"),
             "never the ISS downlink"
+        );
+        assert!((e.settings().dial_mhz - 146.520).abs() < 1e-9);
+        // The 70 cm one too (437.550, the October 2026 RS0ISS event): the refusal reads the
+        // downlink predicate, not the "2m" row id.
+        assert!(
+            !e.sstv_tune_on_open(437.550, "70cm-iss", "FM"),
+            "never the ISS 70 cm downlink"
         );
         assert!((e.settings().dial_mhz - 146.520).abs() < 1e-9);
 

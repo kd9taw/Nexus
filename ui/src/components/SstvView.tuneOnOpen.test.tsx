@@ -71,6 +71,7 @@ const PLAN: BandChannel[] = [
   ch('15m', 21.34, 'USB'),
   ch('2m', 145.8, 'FM'),
   ch('2m-call', 144.5, 'FM'),
+  ch('70cm-iss', 437.55, 'FM'),
 ]
 
 const snapAt = (dialMhz: number, radio: Record<string, unknown> = {}) =>
@@ -123,6 +124,12 @@ describe('which channel the screen tunes to on opening', () => {
     expect(sstvChannelOnOpen(PLAN, 146.52)).toBeNull()
     expect(sstvChannelOnOpen(PLAN, 144.174)).toBeNull()
     expect(sstvChannelOnOpen(PLAN, 145.8034)).toBeNull()
+  })
+
+  it('never the ISS 70 cm downlink: 432 MHz SSB and 437.550 itself are left alone', () => {
+    expect(sstvChannelOnOpen(PLAN, 432.1)).toBeNull()
+    expect(sstvChannelOnOpen(PLAN, 437.55)).toBeNull()
+    expect(sstvChannelOnOpen(PLAN, 437.561)).toBeNull()
   })
 
   it('nothing on a VHF/UHF band with no SSTV channel, and nothing with no plan', () => {

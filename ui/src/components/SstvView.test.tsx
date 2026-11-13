@@ -958,6 +958,25 @@ describe('SstvView TX panel', () => {
       expect(sstvSend).not.toHaveBeenCalled()
     })
 
+    // The ISS's 70 cm SSTV downlink (437.550, the October 2026 RS0ISS event) is guarded the same
+    // way, and the prompt names THAT frequency, not 145.800.
+    it('asks before transmitting on the ISS 70 cm downlink too', async () => {
+      const uhf = { ...snap, radio: { ...snap.radio, dialMhz: 437.55 } } as AppSnapshot
+      render(
+        <>
+          <SstvView snap={uhf} />
+          <ConfirmHost />
+        </>,
+      )
+      const send = await loadPicture()
+      fireEvent.click(send)
+      await screen.findByText(/437\.550 MHz is the ISS SSTV downlink/i)
+      expect(sstvSend).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      await new Promise((r) => setTimeout(r, 20))
+      expect(sstvSend).not.toHaveBeenCalled()
+    })
+
     // CONTROL: off the downlink the guard must not fire at all, or "it asked" would prove nothing.
     it('does not ask when the dial is nowhere near 145.800', async () => {
       render(
