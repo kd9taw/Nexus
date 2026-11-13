@@ -32,6 +32,15 @@
 //!    keyed under the internet roads' own labels. This computer's credentials and candidates go in
 //!    its `open`, the station's come back in its `opened`, and each end's later candidates follow
 //!    on the link as they are found, never on any relay lane.
+//!    ⛔ **A road that falls silent is restarted on the link** (`crate::ice`'s
+//!    [`IceRoad::restart`]): when an internet road that connected hears no answer from the
+//!    station on its pair for [`crate::ice::RESTART_SILENCE`] (a NAT between them rebound, which
+//!    neither end follows), this computer restarts every internet road it has, at most once every
+//!    [`crate::ice::RESTART_EVERY`], and sends their new offers in a `restart`; the station
+//!    restarts its own and answers `restarted` with theirs. Nothing on the road carries one, so
+//!    nothing a stranger sends can ask for one. Until a pair is found again nothing goes or is
+//!    heard on the road: holds stop reaching the station and presence is not renewed there, as
+//!    for any silent road, and this link's Stop is untouched.
 //! 9. **The station's key for the internet road** ([`Link::station_key`]), when its `opened` names
 //!    one: said on a link pinned to the station, so it can be checked against the key the Remote
 //!    service lists for that station.
@@ -55,7 +64,7 @@ use super::road::{self, Ids, Socket};
 use super::stop_road::{OnAir, StopRoad};
 use crate::datagram;
 use crate::dispatch::{forwards, is_stop, route, Outcome, Profile, Refusal, Route};
-use crate::ice::{Gather, IceRoad, Offer, Relay, Role};
+use crate::ice::{Gather, IceRoad, Offer, Relay, Restarts, Role};
 use crate::outbox::Outbox;
 use crate::wire::{self, Assembly, End, Inflate, Whole, OUTCOMES};
 use crate::PairedStation;
@@ -224,6 +233,10 @@ struct Shared {
     /// The internet roads' ICE, by the road's name on the link (`stop`, `audio`): what the
     /// station's candidates go to, and where this computer's come from.
     ice: Vec<(&'static str, Arc<IceRoad>)>,
+    /// When the internet roads were last restarted, and whether the station's `restarted` is
+    /// awaited.
+    restarts: Mutex<Restarts>,
+    restarting: AtomicBool,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -653,6 +666,13 @@ impl Link {
             .collect()
     }
 
+    /// ⛔ Restarts every internet road now, as a silent one would, whatever this computer's pace:
+    /// for a test of the station's own floor and of a restarted road. Whether it was sent.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn restart_now(&self) -> bool {
+        self.shared.restart(&self.outbox)
+    }
+
     /// Whether the link has ended.
     pub fn ended(&self) -> bool {
         self.shared.ended.load(Ordering::SeqCst)
@@ -743,6 +763,9 @@ async fn keep(outbox: Outbox, mut writer: tokio::task::JoinHandle<()>, shared: A
             _ = every.tick() => if outbox.ping().is_err() { break },
             // Each internet road's candidates as it finds them, on the link.
             _ = trickle.tick(), if !shared.ice.is_empty() => {
+                if shared.restart_due(std::time::Instant::now()) {
+                    shared.restart(&outbox);
+                }
                 for (name, ice) in &shared.ice {
                     for line in ice.trickle() {
                         let said = json!({"type":"candidate","road":name,"candidate":line});
@@ -775,7 +798,34 @@ impl Shared {
             audio,
             on_air,
             ice,
+            restarts: Default::default(),
+            restarting: AtomicBool::new(false),
         }
+    }
+
+    /// Whether to restart the internet roads at `now`: one of them stalled, at this computer's
+    /// pace ([`Restarts::due`]), and ⛔ never while the last restart is unanswered: a link backed
+    /// up past the pace would send a second, sooner than the station's floor after the first as
+    /// the station reads them, and the station would end the connection. A station of this build
+    /// answers every `restart` or ends the connection, so the wait always ends.
+    fn restart_due(&self, now: std::time::Instant) -> bool {
+        let stalled = self.ice.iter().any(|(_, ice)| ice.stalled(now));
+        !self.restarting.load(Ordering::SeqCst) && lock(&self.restarts).due(stalled, now)
+    }
+
+    /// ⛔ Every internet road restarted ([`IceRoad::restart`]) and their new offers sent in a
+    /// `restart`, the station's `restarted` then awaited. Whether it was sent.
+    fn restart(&self, outbox: &Outbox) -> bool {
+        let mut roads = json!({});
+        for (name, ice) in &self.ice {
+            match ice.restart() {
+                Some(offer) => roads[*name] = json!(offer),
+                None => return false,
+            }
+        }
+        self.restarting.store(true, Ordering::SeqCst);
+        let restart = json!({"type":"restart","roads":roads});
+        outbox.send(Whole::Text(restart.to_string())).is_ok()
     }
 
     /// The link has ended: every call still waiting is answered gone, and every other question
@@ -865,6 +915,24 @@ impl Shared {
                     return Err(());
                 }
             }
+            // ⛔ The station's offers after a restart this computer asked for: one for each of
+            // its internet roads, and only while one is awaited.
+            "restarted" => {
+                if !self.restarting.swap(false, Ordering::SeqCst) {
+                    return Err(());
+                }
+                let roads = message["roads"].as_object().ok_or(())?;
+                if roads.len() != self.ice.len() {
+                    return Err(());
+                }
+                for (name, ice) in &self.ice {
+                    let offer: Offer = serde_json::from_value(roads.get(*name).ok_or(())?.clone())
+                        .map_err(|_| ())?;
+                    if !ice.answer(&offer) {
+                        return Err(());
+                    }
+                }
+            }
             _ => return Err(()),
         }
         Ok(())
@@ -946,6 +1014,70 @@ mod tests {
             station_key: None,
         };
         (Arc::new(link), theirs)
+    }
+
+    /// ⛔ No second restart while the first is unanswered: a link backed up for longer than this
+    /// computer's pace would otherwise send another, and the station ends a connection that asks
+    /// sooner than its floor after the last. A stalled road is restarted (its `restart` written to
+    /// a pipe the station never reads); still stalled past [`crate::ice::RESTART_EVERY`], with the
+    /// station's `restarted` not yet heard, it is not restarted again. CONTROL: once the station's
+    /// answer is heard, it is.
+    #[tokio::test]
+    async fn no_second_restart_while_the_first_is_unanswered() {
+        let road = Arc::new(
+            IceRoad::bind(
+                "127.0.0.1:0".parse().unwrap(),
+                crate::ice::Role::Computer,
+                Gather {
+                    direct: true,
+                    stun: None,
+                    relay: None,
+                },
+                Duration::from_millis(5),
+            )
+            .unwrap(),
+        );
+        let (ours, _theirs) = tokio::io::duplex(1 << 16);
+        let ours = WebSocketStream::from_raw_socket(ours, Role::Client, None).await;
+        let (sink, _stream) = ours.split();
+        let (outbox, _writer) = Outbox::spawn(sink);
+        let shared = Shared::new(None, None, Arc::default(), vec![("stop", road.clone())]);
+        let start = std::time::Instant::now();
+        road.stall(start);
+        assert!(
+            shared.restart_due(start),
+            "premise: a stalled road restarts"
+        );
+        assert!(shared.restart(&outbox));
+        let later = start + crate::ice::RESTART_EVERY + Duration::from_secs(1);
+        road.stall(later);
+        assert!(
+            !shared.restart_due(later),
+            "a second restart while the first was unanswered"
+        );
+        // CONTROL: the station's answer, then the road stalls again.
+        let answer = json!({"type":"restarted","roads":{"stop":{
+            "ufrag":"0011223344556677","pwd":"00112233445566778899aabbccddeeff","candidates":[]}}});
+        assert_eq!(shared.heard(Whole::Text(answer.to_string())), Ok(()));
+        assert!(
+            shared.restart_due(later),
+            "CONTROL: restarted after the answer"
+        );
+    }
+
+    /// ⛔ A `restarted` this computer did not ask for ends the link: a station of this build says
+    /// one only in answer to a `restart`. CONTROL: a `candidate` for no road this link opened ends
+    /// it too, as before; and a `status` does not.
+    #[test]
+    fn a_restarted_nobody_asked_for_ends_the_link() {
+        let shared = Shared::new(None, None, Arc::default(), Vec::new());
+        let said = |text: &str| shared.heard(Whole::Text(text.to_string()));
+        assert_eq!(said(r#"{"type":"restarted","roads":{}}"#), Err(()));
+        assert_eq!(
+            said(r#"{"type":"candidate","road":"stop","candidate":"x"}"#),
+            Err(())
+        );
+        assert_eq!(said(r#"{"type":"status","rigKeyed":false}"#), Ok(()));
     }
 
     /// Lets every task handed something run as far as it can, and the writer stall on the full

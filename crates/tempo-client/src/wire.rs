@@ -691,6 +691,40 @@ mod tests {
         );
     }
 
+    /// ⛔ A road's restart over the link is in the contract: a build before it (whose contract text
+    /// had no `restart`) and this one refuse each other at the `open`, from either end, saying
+    /// which side to update, so neither ever sends the other a message it would end the link
+    /// over. Between them the internet road stays as it was before restarts: one that falls
+    /// silent stays silent, and the operator reconnects Remote. CONTROL: this build takes its own.
+    #[test]
+    fn a_build_without_road_restarts_is_refused_either_way() {
+        let text = contract_text();
+        assert!(text.contains(" restart restarted\n"), "{text}");
+        let before: String = digest(
+            &SHA256,
+            text.replace(" restart restarted\n", "\n").as_bytes(),
+        )
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+        let ours = (APP, contract());
+        assert_ne!(before, ours.1);
+        for end in [End::Shack, End::Computer] {
+            assert_eq!(refusal(end, ours, (APP, &before)), Some("otherBuild"));
+            assert_eq!(refusal(end, ours, ours), None, "CONTROL");
+        }
+        // Across versions, the older one is told to update.
+        assert_eq!(
+            refusal(End::Computer, ("1.17.0", ours.1), ("1.16.0", &before)),
+            Some("updateStation")
+        );
+        assert_eq!(
+            refusal(End::Shack, ("1.17.0", ours.1), ("1.16.0", &before)),
+            Some("updateComputer")
+        );
+    }
+
     /// ★ The contract is this build's: a SHA-256 in hex, the same every time it is asked, made from
     /// every command's class and every feed. CONTROL: the text it digests names each command once.
     #[test]

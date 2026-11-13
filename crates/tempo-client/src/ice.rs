@@ -58,8 +58,20 @@
 //! a new address, which makes a peer-reflexive candidate, only before a pair is selected and only
 //! up to [`CANDIDATES`] of them. So after it connects, a road no longer follows the other end to a
 //! new address (a NAT that rebinds): it falls silent, which fails safe (the station's presence
-//! lapses), until the link opens the roads again. Restarting ICE over the link is the planned way
-//! back. A STUN message whose first attribute is its MESSAGE-INTEGRITY never reaches the agent
+//! lapses), until the roads restart.
+//!
+//! ⛔ **A silent road restarts over the link** ([`IceRoad::restart`]): this computer checks its
+//! pair every [`CONSENT_EVERY`] once it has one, and a road the other end has answered none of
+//! those checks on for [`RESTART_SILENCE`] ([`IceRoad::stalled`]) is restarted at both ends by
+//! messages on the command link (`crate::link`), never by anything on the road: new credentials,
+//! the other end's candidates, pairs, checks and peer-reflexive slots forgotten, and the pair let
+//! go, so the road then finds a pair as it did at first, under every rule above, and a check
+//! captured before the restart is answered by neither end. At most once every [`RESTART_EVERY`]
+//! here; the station ends a connection that asks sooner than [`RESTART_FLOOR`] ([`Restarts`]).
+//! Known limits: a road whose pair is through this computer's relay is not recovered when this
+//! computer's own NAT rebinds (its TURN allocation is bound to the old address), and an onlooker
+//! who replays a recent answer of the other end's from its address can hold a restart off; both
+//! leave the road silent, which fails safe. A STUN message whose first attribute is its MESSAGE-INTEGRITY never reaches the agent
 //! (`tempo_stream::stun::integrity_first`).
 //!
 //! ## What never waits
@@ -96,6 +108,50 @@ const STUN_RTO: Duration = Duration::from_millis(500);
 /// How many of its own checks a road remembers, to know where each went: far more than the agent
 /// has outstanding at once.
 const CHECKS_KEPT: usize = 256;
+/// ⛔ An internet road that has connected and then heard no answer from the other end on its pair
+/// for this long is restarted over the command link ([`IceRoad::stalled`], `crate::link`).
+pub const RESTART_SILENCE: Duration = Duration::from_millis(1500);
+/// ⛔ The most often this computer restarts its roads: one restart, then nothing for this long.
+pub const RESTART_EVERY: Duration = Duration::from_secs(5);
+/// ⛔ The station's own floor: a restart asked for sooner than this after the last one is no
+/// computer of this build's, and ends the connection.
+pub const RESTART_FLOOR: Duration = Duration::from_secs(2);
+/// Once this computer's road has its pair, the agent checks it at least this often (its longest
+/// retransmission time), so a live road, even one carrying nothing, answers well inside
+/// [`RESTART_SILENCE`].
+const CONSENT_EVERY: Duration = Duration::from_millis(500);
+
+/// When a set of roads was last restarted: this computer's pace ([`Restarts::due`]) and the
+/// station's floor ([`Restarts::taken`]), so no storm of restarts is ever made or taken.
+#[derive(Default)]
+pub struct Restarts {
+    last: Option<Instant>,
+}
+
+impl Restarts {
+    /// This computer: whether to restart its roads at `now`, `stalled` as they are: never more
+    /// often than once every [`RESTART_EVERY`].
+    pub fn due(&mut self, stalled: bool, now: Instant) -> bool {
+        stalled && self.after(now, RESTART_EVERY)
+    }
+
+    /// The station: whether a restart the computer asks for at `now` is taken: never one sooner
+    /// than [`RESTART_FLOOR`] after the last.
+    pub fn taken(&mut self, now: Instant) -> bool {
+        self.after(now, RESTART_FLOOR)
+    }
+
+    fn after(&mut self, now: Instant, gap: Duration) -> bool {
+        if self
+            .last
+            .is_some_and(|last| now.saturating_duration_since(last) < gap)
+        {
+            return false;
+        }
+        self.last = Some(now);
+        true
+    }
+}
 
 /// ICE's HMAC-SHA1 (its checks' MESSAGE-INTEGRITY), on ring, as the rest of the roads' crypto is.
 #[derive(Debug)]
@@ -293,6 +349,11 @@ struct State {
     /// The checks this end sent, newest [`CHECKS_KEPT`]: each one's transaction id and where it
     /// went (the peer, for a check through the relay).
     checks: VecDeque<([u8; 12], SocketAddr)>,
+    /// Whether the road has had a pair since it was bound (a restart leaves it so), and when the
+    /// other end last answered one of this end's checks on its pair, under its credentials (or
+    /// when the road was bound or restarted, if later).
+    connected: bool,
+    answered: Instant,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -337,7 +398,7 @@ pub fn reads_as_stun(tag: &crate::datagram::Tag) -> bool {
 pub fn contract_text() -> String {
     format!(
         "internet roads {} {} candidates {CANDIDATES} of {CANDIDATE_BYTES} credentials \
-         {CREDENTIAL_BYTES} open.roads opened.roads candidate\n",
+         {CREDENTIAL_BYTES} open.roads opened.roads candidate restart restarted\n",
         String::from_utf8_lossy(crate::datagram::INTERNET_STOP_LABEL),
         String::from_utf8_lossy(crate::datagram::INTERNET_AUDIO_LABEL),
     )
@@ -431,6 +492,8 @@ impl IceRoad {
                 nominated: None,
                 nominating: None,
                 checks: VecDeque::new(),
+                connected: false,
+                answered: now,
             }),
             route: Mutex::new(None),
         })
@@ -489,6 +552,46 @@ impl IceRoad {
     /// read; one it reads but will not probe is dropped, and `true` (`State::candidate`).
     pub fn add_candidate(&self, line: &str) -> bool {
         line_shaped(line) && lock(&self.state).candidate(line, Instant::now())
+    }
+
+    /// ⛔ An ICE restart (RFC 8445 §2.4), asked for over the command link only, never by anything
+    /// that arrives on the road: fresh credentials from the operating system's randomness, every
+    /// candidate of the other end's, pair, check and peer-reflexive slot forgotten, and the pair
+    /// let go, so nothing goes or is heard on the road until a pair is selected again under the
+    /// same rules as at first (`State::admits`, `State::drive`). This end's own candidates stay,
+    /// under the new credentials. The road's new offer, for the link; `None`, and nothing changed,
+    /// without randomness.
+    pub fn restart(&self) -> Option<Offer> {
+        self.restart_at(Instant::now())
+    }
+
+    fn restart_at(&self, now: Instant) -> Option<Offer> {
+        let credentials = credentials()?;
+        let mut state = lock(&self.state);
+        state.restart(credentials, now);
+        // Under the state's lock, as the road's thread sets it: no pair is followed from here.
+        *lock(&self.route) = None;
+        drop(state);
+        Some(self.offer())
+    }
+
+    /// ⛔ Whether this road connected and the other end has since answered none of its checks on
+    /// its pair for [`RESTART_SILENCE`] (counted from the last restart, too): the way a NAT that
+    /// rebinds shows itself, since neither end follows the other to a new address. Only an answer
+    /// under the other end's credentials, from where the check went, counts. At this computer, which
+    /// checks its pair every [`CONSENT_EVERY`] once it has one.
+    pub fn stalled(&self, now: Instant) -> bool {
+        let state = lock(&self.state);
+        state.connected && now.saturating_duration_since(state.answered) >= RESTART_SILENCE
+    }
+
+    /// The road as one that connected and has heard no answer since `RESTART_SILENCE` before
+    /// `now`: for a test of what a stalled road leads to.
+    #[cfg(test)]
+    pub(crate) fn stall(&self, now: Instant) {
+        let mut state = lock(&self.state);
+        state.connected = true;
+        state.answered = now - RESTART_SILENCE;
     }
 
     /// The pair ICE selected, if it has.
@@ -561,6 +664,16 @@ impl State {
         };
         if candidate.proto() != Protocol::Udp {
             return false;
+        }
+        // ⛔ A line of the other end's from before a restart, still on its way: under credentials
+        // the road no longer holds, or none yet. Dropped unread and uncounted; the link goes on.
+        let current = self.agent.remote_credentials().map(|c| c.ufrag.clone());
+        if current.is_none()
+            || candidate
+                .ufrag()
+                .is_some_and(|u| Some(u) != current.as_deref())
+        {
+            return true;
         }
         let peer = candidate.addr();
         if !self.reach.reaches(peer) || self.taken >= CANDIDATES {
@@ -651,7 +764,10 @@ impl State {
             // `turn::is_stun` holds it to at least the 20-byte header.
             let id: [u8; 12] = buffer[8..20].try_into().ok()?;
             if let Some(message) = parsed.filter(|message| self.admits(message, from, id)) {
-                self.agent.handle_packet(
+                // An answer from the pair's other end (admitted only from where its check went).
+                let on_pair = message.is_successful_binding_response()
+                    && self.nominated.is_some_and(|(_, theirs)| theirs == from);
+                let taken = self.agent.handle_packet(
                     now,
                     StunPacket {
                         proto: Protocol::Udp,
@@ -660,6 +776,10 @@ impl State {
                         message,
                     },
                 );
+                // Taken: its MESSAGE-INTEGRITY is the other end's.
+                if taken && on_pair {
+                    self.answered = now;
+                }
             }
             return None;
         }
@@ -697,6 +817,24 @@ impl State {
                 .filter(|candidate| candidate.kind() == CandidateKind::PeerReflexive)
                 .count()
                 < CANDIDATES
+    }
+
+    /// ⛔ The restart [`IceRoad::restart`] asks for, at `now`, under `credentials`.
+    fn restart(&mut self, credentials: IceCreds, now: Instant) {
+        self.agent.ice_restart(credentials, true);
+        // Its candidates again, as lines under the new credentials, each to be told afresh.
+        self.gathered = self
+            .agent
+            .local_candidates()
+            .map(|candidate| candidate.to_sdp_string())
+            .collect();
+        self.told = 0;
+        self.taken = 0;
+        self.peers.clear();
+        self.nominated = None;
+        self.nominating = None;
+        self.checks.clear();
+        self.answered = now;
     }
 
     /// The server-reflexive address `mapped`, as one of this end's candidates, based on `host`.
@@ -801,6 +939,13 @@ impl State {
         if let Some((_, theirs)) = self.nominating {
             if self.agent.has_viable_remote_candidate(theirs) {
                 self.nominated = self.nominating.take();
+                self.answered = now;
+                // Once connected, this computer checks its pair often enough that a live road
+                // is never taken for a silent one ([`IceRoad::stalled`]).
+                if !self.connected && self.agent.controlling() {
+                    self.agent.set_max_stun_rto(CONSENT_EVERY);
+                }
+                self.connected = true;
             }
         }
         let (ours, theirs) = self.nominated?;
@@ -2217,7 +2362,7 @@ mod tests {
     /// relayed to this computer from the observer's address, or, when `forged`, handed to this
     /// computer as if from the shack's own address, with every answer passed back to the shack.
     /// The shack's pair at the end.
-    fn hijacked(forged: bool) -> (Option<Route>, SocketAddr) {
+    fn hijacked(forged: bool, restarted: bool) -> (Option<Route>, SocketAddr) {
         let computer = IceRoad::bind(loopback(), Role::Computer, host_only(), TICK).unwrap();
         let shack = IceRoad::bind(loopback(), Role::Shack, host_only(), TICK).unwrap();
         for road in [&computer, &shack] {
@@ -2246,6 +2391,24 @@ mod tests {
             pump(&shack, now, &mut taps);
         }
         assert_eq!(shack.route(), Some(Route::Direct(at_computer)));
+        if restarted {
+            // Restarted over the link, and paired again: the check captured is one of the new
+            // credentials'.
+            restart_over_the_link(&computer, &shack, now, Some(offer.candidates.clone()), None);
+            taps.clear();
+            let started = Instant::now();
+            while !(shack.route().is_some() && taps.iter().any(nominating)) {
+                assert!(
+                    started.elapsed() < Duration::from_secs(5),
+                    "never paired again"
+                );
+                now += Duration::from_millis(10);
+                std::thread::sleep(Duration::from_millis(1));
+                pump(&computer, now, &mut Vec::new());
+                pump(&shack, now, &mut taps);
+            }
+            assert_eq!(shack.route(), Some(Route::Direct(at_computer)));
+        }
         let captured = taps.into_iter().find(nominating).unwrap();
         let observer = UdpSocket::bind(loopback()).unwrap();
         observer.set_nonblocking(true).unwrap();
@@ -2289,7 +2452,15 @@ mod tests {
     /// its pair.
     #[test]
     fn a_replayed_nomination_relayed_to_this_computer_never_moves_the_pair() {
-        let (route, at_computer) = hijacked(false);
+        let (route, at_computer) = hijacked(false, false);
+        assert_eq!(route, Some(Route::Direct(at_computer)), "hijacked");
+    }
+
+    /// ⛔ The same, on roads restarted over the link and paired again: a restart gives a replayed
+    /// nomination no way in.
+    #[test]
+    fn after_a_restart_a_replayed_nomination_relayed_to_this_computer_never_moves_the_pair() {
+        let (route, at_computer) = hijacked(false, true);
         assert_eq!(route, Some(Route::Direct(at_computer)), "hijacked");
     }
 
@@ -2299,7 +2470,14 @@ mod tests {
     /// went (RFC 8445 §7.2.5.2.1), which `is` 0.11.1 does not ask.
     #[test]
     fn a_replayed_nomination_answered_under_a_forged_source_never_moves_the_pair() {
-        let (route, at_computer) = hijacked(true);
+        let (route, at_computer) = hijacked(true, false);
+        assert_eq!(route, Some(Route::Direct(at_computer)), "hijacked");
+    }
+
+    /// ⛔ The same, on roads restarted over the link and paired again.
+    #[test]
+    fn after_a_restart_a_replayed_nomination_answered_under_a_forged_source_never_moves_the_pair() {
+        let (route, at_computer) = hijacked(true, true);
         assert_eq!(route, Some(Route::Direct(at_computer)), "hijacked");
     }
 
@@ -2311,6 +2489,16 @@ mod tests {
     /// the shack never checks X.
     #[test]
     fn an_onlooker_forging_and_copying_answers_never_moves_the_pair() {
+        onlooker(false);
+    }
+
+    /// ⛔ The same, on roads restarted over the link and paired again.
+    #[test]
+    fn after_a_restart_an_onlooker_forging_and_copying_answers_never_moves_the_pair() {
+        onlooker(true);
+    }
+
+    fn onlooker(restarted: bool) {
         let computer = IceRoad::bind(loopback(), Role::Computer, host_only(), TICK).unwrap();
         let shack = IceRoad::bind(loopback(), Role::Shack, host_only(), TICK).unwrap();
         for road in [&computer, &shack] {
@@ -2337,6 +2525,21 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
             pump(&computer, now, &mut Vec::new());
             pump(&shack, now, &mut taps);
+        }
+        if restarted {
+            restart_over_the_link(&computer, &shack, now, Some(offer.candidates.clone()), None);
+            taps.clear();
+            let started = Instant::now();
+            while !(shack.route().is_some() && taps.iter().any(nominating)) {
+                assert!(
+                    started.elapsed() < Duration::from_secs(5),
+                    "never paired again"
+                );
+                now += Duration::from_millis(10);
+                std::thread::sleep(Duration::from_millis(1));
+                pump(&computer, now, &mut Vec::new());
+                pump(&shack, now, &mut taps);
+            }
         }
         let captured = taps.into_iter().find(nominating).unwrap();
         let observer = UdpSocket::bind(loopback()).unwrap();
@@ -2435,6 +2638,355 @@ mod tests {
         assert!(
             viable(&computer),
             "CONTROL: the answer from R1 was not taken"
+        );
+    }
+
+    // ----- Restarting over the link -----
+
+    /// Both roads restarted as the link carries it: this computer's `restart` with its new offer
+    /// (its candidates as `to_shack` names them, when it does), the shack's restart and its new
+    /// offer back in the `restarted` (as `to_computer` names them, when it does), each end taking
+    /// the other's.
+    fn restart_over_the_link(
+        computer: &IceRoad,
+        shack: &IceRoad,
+        now: Instant,
+        to_shack: Option<Vec<String>>,
+        to_computer: Option<Vec<String>>,
+    ) {
+        let mut asked = computer.restart_at(now).expect("the computer's new offer");
+        if let Some(candidates) = to_shack {
+            asked.candidates = candidates;
+        }
+        let mut answered = shack.restart_at(now).expect("the shack's new offer");
+        if let Some(candidates) = to_computer {
+            answered.candidates = candidates;
+        }
+        assert!(shack.answer(&asked) && computer.answer(&answered));
+    }
+
+    /// ★ A rebinding is recovered by a restart over the link, within three seconds: this computer
+    /// is known to the shack as a server-reflexive N1 behind a forwarding "NAT", and the two pair.
+    /// CONTROL: for three seconds after, carrying nothing, the road is never taken for a silent one
+    /// (this computer checks its pair every half second and the shack answers). Then the mapping
+    /// moves to N2: the shack refuses N2 (as it must, `a_rebinding_after_selection_is_refused_*`),
+    /// so this computer hears no answer, finds the road stalled after 1.5 s, and the two restart
+    /// as the link carries it (this computer still naming its stale N1). The shack learns N2 from
+    /// this computer's first check under the new credentials and pairs there, through its own
+    /// answered check; a datagram from N2 is then heard, and one from N1 is not.
+    #[test]
+    fn a_rebinding_is_recovered_by_a_restart_over_the_link_within_three_seconds() {
+        let computer = IceRoad::bind(loopback(), Role::Computer, host_only(), TICK).unwrap();
+        let shack = IceRoad::bind(loopback(), Role::Shack, host_only(), TICK).unwrap();
+        let front = UdpSocket::bind(loopback()).unwrap(); // the shack, as this computer sees it
+        let n1 = UdpSocket::bind(loopback()).unwrap(); // this computer's first public mapping
+        let n2 = UdpSocket::bind(loopback()).unwrap(); // and after it rebinds
+        for socket in [&computer.socket, &shack.socket, &front, &n1, &n2] {
+            socket.set_nonblocking(true).unwrap();
+        }
+        let line = |kind: &str, at: SocketAddr, preference: u32| {
+            let related = if kind == "srflx" {
+                " raddr 10.0.0.2 rport 5000"
+            } else {
+                ""
+            };
+            format!(
+                "candidate:{preference} 1 udp {} {} {} typ {kind}{related}",
+                (preference << 24) | (65535 << 8) | 255,
+                at.ip(),
+                at.port()
+            )
+        };
+        let (at_n1, at_n2, at_front) = (
+            n1.local_addr().unwrap(),
+            n2.local_addr().unwrap(),
+            front.local_addr().unwrap(),
+        );
+        let (to_shack, to_computer) = (
+            vec![line("srflx", at_n1, 100)],
+            vec![line("host", at_front, 126)],
+        );
+        let mut asked = computer.offer();
+        asked.candidates = to_shack.clone();
+        let mut answered = shack.offer();
+        answered.candidates = to_computer.clone();
+        assert!(shack.answer(&asked) && computer.answer(&answered));
+        let mut buffer = [0u8; 2048];
+        let mut step = |now: Instant, rebound: bool| {
+            pump(&computer, now, &mut Vec::new());
+            let mapping = if rebound { &n2 } else { &n1 };
+            while let Ok((n, _)) = front.recv_from(&mut buffer) {
+                let _ = mapping.send_to(&buffer[..n], shack.host());
+            }
+            pump(&shack, now, &mut Vec::new());
+            while let Ok((n, _)) = mapping.recv_from(&mut buffer) {
+                let _ = front.send_to(&buffer[..n], computer.host());
+            }
+            if rebound {
+                while n1.recv_from(&mut buffer).is_ok() {}
+            }
+        };
+        let mut now = Instant::now();
+        let started = Instant::now();
+        while shack.route().is_none() || computer.route().is_none() {
+            assert!(started.elapsed() < Duration::from_secs(5), "never paired");
+            now += Duration::from_millis(10);
+            std::thread::sleep(Duration::from_micros(300));
+            step(now, false);
+        }
+        assert_eq!(shack.route(), Some(Route::Direct(at_n1)));
+        // CONTROL: a live road carrying nothing is never stalled.
+        for _ in 0..150 {
+            now += Duration::from_millis(20);
+            std::thread::sleep(Duration::from_micros(300));
+            step(now, false);
+            assert!(
+                !computer.stalled(now),
+                "a live road was taken for a silent one"
+            );
+        }
+
+        let rebound = now;
+        let mut restarted = None;
+        while shack.route() != Some(Route::Direct(at_n2))
+            || computer.route() != Some(Route::Direct(at_front))
+        {
+            assert!(
+                now - rebound <= Duration::from_secs(3),
+                "not recovered within 3 s (restarted after {:?})",
+                restarted.map(|at: Instant| at - rebound)
+            );
+            now += Duration::from_millis(20);
+            std::thread::sleep(Duration::from_micros(300));
+            step(now, true);
+            if restarted.is_none() && computer.stalled(now) {
+                restarted = Some(now);
+                assert!(
+                    computer.route().is_some() && shack.route().is_some(),
+                    "a pair was let go before the restart"
+                );
+                restart_over_the_link(
+                    &computer,
+                    &shack,
+                    now,
+                    Some(to_shack.clone()),
+                    Some(to_computer.clone()),
+                );
+                // ⛔ While the roads restart, nothing goes on them.
+                assert_eq!((computer.route(), shack.route()), (None, None));
+                assert!(!computer.send(DATAGRAM) && !shack.send(DATAGRAM));
+            }
+        }
+        // 1.5 s from the last answer, which came up to one consent check before the rebinding.
+        let silent = restarted.expect("restarted") - rebound;
+        assert!(
+            silent >= RESTART_SILENCE - CONSENT_EVERY
+                && silent < RESTART_SILENCE + Duration::from_millis(100),
+            "restarted {silent:?} after the rebinding"
+        );
+        let datagram = [1u8, 1, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0, 0, 0, 0, 9];
+        let heard = |from| {
+            let mut buffer = [0u8; 64];
+            buffer[..datagram.len()].copy_from_slice(&datagram);
+            lock(&shack.state).take(&mut buffer, datagram.len(), from, shack.host, now)
+        };
+        assert_eq!(
+            (heard(at_n2), heard(at_n1)),
+            (Some(datagram.len()), None),
+            "(heard from N2, from N1)"
+        );
+        assert!(!computer.stalled(now), "stalled once recovered");
+    }
+
+    /// ⛔ A restart forgets the old credentials: a check captured before it, replayed from a new
+    /// address while the road is pairing again (when a new address may still become a candidate),
+    /// is never answered and is no candidate. CONTROL: a check signed under the new credentials,
+    /// from the same address, is answered.
+    #[test]
+    fn a_check_captured_before_a_restart_is_never_answered_after_it() {
+        let (shack, ufrag) = shack_alone();
+        let pwd = shack.offer().pwd;
+        let captured = check_as(&ufrag, "0011223344556677", &pwd, true, [8; 12]);
+        let renewed = shack.restart().expect("the shack's new offer");
+        assert_ne!(
+            (renewed.ufrag.as_str(), renewed.pwd.as_str()),
+            (ufrag.as_str(), pwd.as_str())
+        );
+        assert!(shack.answer(&offer_naming(Vec::new())));
+        let observer = UdpSocket::bind(loopback()).unwrap();
+        observer
+            .set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+        let at = observer.local_addr().unwrap();
+        let mut buffer = [0u8; 512];
+        hand(&shack, &captured, at);
+        assert!(observer.recv_from(&mut buffer).is_err(), "answered");
+        assert_eq!(peer_reflexive(&shack), 0, "a candidate");
+        // CONTROL.
+        let fresh = check_as(
+            &renewed.ufrag,
+            "0011223344556677",
+            &renewed.pwd,
+            false,
+            [9; 12],
+        );
+        hand(&shack, &fresh, at);
+        assert!(observer.recv_from(&mut buffer).is_ok(), "CONTROL: answered");
+    }
+
+    /// ⛔ Only an answer under the other end's credentials, from its end of the pair, keeps a road
+    /// from being taken for a silent one: this computer pairs with R (R answers its check), then
+    /// hears nothing for longer than [`RESTART_SILENCE`]. An answer to a check to R signed with
+    /// another key, from R, leaves it stalled (a stranger cannot hold off a restart); so does a
+    /// correctly signed one from anywhere else; and so does a correctly signed answer to its check
+    /// to R2, another of the other end's candidates (of lower priority, so the pair stays R), from
+    /// R2: the agent takes it, but it is not an answer on the pair. CONTROL: R's next check,
+    /// answered from R and signed, ends it.
+    #[test]
+    fn only_a_signed_answer_from_the_pair_keeps_a_road_from_stalling() {
+        let computer = IceRoad::bind(loopback(), Role::Computer, host_only(), TICK).unwrap();
+        let (r, other, r2) = (
+            UdpSocket::bind(loopback()).unwrap(),
+            UdpSocket::bind(loopback()).unwrap(),
+            UdpSocket::bind(loopback()).unwrap(),
+        );
+        r.set_read_timeout(Some(Duration::from_millis(5))).unwrap();
+        r2.set_read_timeout(Some(Duration::from_millis(5))).unwrap();
+        let (at_r, at_r2) = (r.local_addr().unwrap(), r2.local_addr().unwrap());
+        let line = |at: SocketAddr, priority: u32| {
+            format!(
+                "candidate:1 1 udp {priority} {} {} typ host",
+                at.ip(),
+                at.port()
+            )
+        };
+        assert!(computer.answer(&offer_naming(vec![
+            line(at_r, 2_130_706_431),
+            line(at_r2, 1_694_498_815),
+        ])));
+        let key = b"00112233445566778899aabbccddeeff";
+        let answer = |id: &[u8; 12], key: &[u8]| {
+            turn::Writer::new(0x001, turn::Class::Success, id)
+                .address(0x0020, computer.host())
+                .finish(Some(key))
+        };
+        let mut buffer = [0u8; 2048];
+        // The next check this computer sends `socket`'s way.
+        let check_to = |socket: &UdpSocket, buffer: &mut [u8; 2048]| -> [u8; 12] {
+            let started = Instant::now();
+            loop {
+                assert!(started.elapsed() < Duration::from_secs(5), "no check");
+                let _ = computer.recv(buffer);
+                if let Ok((n, _)) = socket.recv_from(buffer) {
+                    if StunMessage::parse(&buffer[..n]).is_ok_and(|m| m.is_binding_request()) {
+                        return buffer[8..20].try_into().unwrap();
+                    }
+                }
+            }
+        };
+        let id2 = check_to(&r2, &mut buffer);
+        let id = check_to(&r, &mut buffer);
+        r.send_to(&answer(&id, key), computer.host()).unwrap();
+        let started = Instant::now();
+        while computer.route() != Some(Route::Direct(at_r)) {
+            assert!(
+                started.elapsed() < Duration::from_secs(3),
+                "premise: paired with R"
+            );
+            let _ = computer.recv(&mut buffer);
+        }
+        lock(&computer.state).answered =
+            Instant::now() - RESTART_SILENCE - Duration::from_millis(1);
+        assert!(computer.stalled(Instant::now()));
+
+        r.send_to(
+            &answer(&id, b"not-the-other-ends-password-0000"),
+            computer.host(),
+        )
+        .unwrap();
+        other.send_to(&answer(&id, key), computer.host()).unwrap();
+        r2.send_to(&answer(&id2, key), computer.host()).unwrap();
+        for _ in 0..40 {
+            let _ = computer.recv(&mut buffer);
+        }
+        assert!(
+            lock(&computer.state)
+                .agent
+                .has_viable_remote_candidate(at_r2),
+            "premise: the answer from R2 was taken"
+        );
+        assert_eq!(
+            computer.route(),
+            Some(Route::Direct(at_r)),
+            "premise: the pair is R"
+        );
+        assert!(
+            computer.stalled(Instant::now()),
+            "an answer that is not the pair's, signed, held off the restart"
+        );
+        // CONTROL.
+        let next = check_to(&r, &mut buffer);
+        r.send_to(&answer(&next, key), computer.host()).unwrap();
+        for _ in 0..40 {
+            let _ = computer.recv(&mut buffer);
+        }
+        assert!(
+            !computer.stalled(Instant::now()),
+            "CONTROL: the pair's answer was not taken"
+        );
+    }
+
+    /// ⛔ The other end's candidates from before a restart, still on their way on the link, are
+    /// dropped and not counted: a line under its old username fragment, or any line while the
+    /// other end's new credentials are not yet known. The link goes on (`true`). CONTROL: a line
+    /// under the new ones is taken.
+    #[test]
+    fn a_candidate_from_before_a_restart_is_dropped() {
+        let computer = IceRoad::bind(loopback(), Role::Computer, host_only(), TICK).unwrap();
+        assert!(computer.answer(&offer_naming(Vec::new())));
+        let line = |port: u16, ufrag: &str| {
+            format!("candidate:1 1 udp 2130706431 127.0.0.1 {port} typ host ufrag {ufrag}")
+        };
+        computer.restart().expect("a new offer");
+        assert!(computer.add_candidate(&line(40001, "0011223344556677")));
+        let mut renewed = offer_naming(Vec::new());
+        renewed.ufrag = "8899aabbccddeeff".into();
+        assert!(computer.answer(&renewed));
+        assert!(computer.add_candidate(&line(40002, "0011223344556677")));
+        assert_eq!(lock(&computer.state).taken, 0, "an old line was taken");
+        // CONTROL.
+        assert!(computer.add_candidate(&line(40003, "8899aabbccddeeff")));
+        assert_eq!(lock(&computer.state).taken, 1);
+    }
+
+    /// ⛔ No storm of restarts: this computer, its roads stalled at every look for 20 s, restarts
+    /// them once every [`RESTART_EVERY`] and no more; the station takes a restart no sooner than
+    /// [`RESTART_FLOOR`] after the last (and the channel ends a connection that asks sooner).
+    /// CONTROL: a road that is not stalled is never restarted.
+    #[test]
+    fn a_restart_storm_is_paced_at_both_ends() {
+        let start = Instant::now();
+        let mut computer = Restarts::default();
+        let restarted: Vec<Duration> = (0..1000u64)
+            .map(|n| start + Duration::from_millis(20 * n))
+            .filter(|&now| computer.due(true, now))
+            .map(|now| now - start)
+            .collect();
+        assert_eq!(
+            restarted,
+            [0, 5, 10, 15].map(Duration::from_secs).to_vec(),
+            "restarted at"
+        );
+        let mut quiet = Restarts::default();
+        assert!(!(0..100u64).any(|n| quiet.due(false, start + Duration::from_millis(20 * n))));
+
+        let mut station = Restarts::default();
+        assert!(station.taken(start));
+        assert!(!station.taken(start + RESTART_FLOOR - Duration::from_millis(1)));
+        assert!(station.taken(start + RESTART_FLOOR));
+        assert!(
+            RESTART_EVERY > RESTART_FLOOR,
+            "this computer's pace is under the floor"
         );
     }
 }

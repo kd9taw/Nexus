@@ -9507,6 +9507,11 @@ export const EN = {
   'settings.remoteStream.display':
     'The stream is this window as Windows draws it on this computer, so keep Nexus open, and not minimized, while a browser streams it.',
   'settings.remoteStream.unavailable': 'Available on Windows only, for now.',
+  // Operator decision: the lower-bandwidth mode for a stream that goes through the relay. Off by
+  // default. `Nexus Remote` is a token.
+  'settings.remoteRelayLighter.label': 'Use less data when a stream goes through the relay',
+  'settings.remoteRelayLighter.hint':
+    "When a browser can't reach this station directly, its stream goes through the Nexus Remote relay. With this on, the picture there is sent at about 1 Mbit/s instead of up to 4, so the window and the waterfall look softer and may move less smoothly. Receive audio is not changed, and a direct connection or your own network is not affected.",
   // Where the Connect to my station… entry is not offered (Linux, macOS). `Remote` and `Windows`
   // are tokens.
   'settings.remoteStations.unavailable':

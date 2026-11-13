@@ -91,14 +91,17 @@ impl Video {
     /// link to it carries, in kbit/s (the session's estimate): from the next frame on, the picture
     /// is encoded no larger than the view, within the path's budget ([`picture::Bound`]), at what
     /// the link carries ([`rate`]). `None` for what is not known (or, for the link, not estimated).
+    /// `lighter_on_relay` is the operator's lower-bandwidth mode: a relayed page's ceiling is lower
+    /// while it is on ([`picture::Bound::on`]).
     pub fn fit(
         &self,
         path: Option<picture::Path>,
         view: Option<(u32, u32)>,
         estimate: Option<u32>,
+        lighter_on_relay: bool,
     ) {
         self.pipeline
-            .set_bound(picture::Bound::new(path, view).within(estimate));
+            .set_bound(picture::Bound::on(path, view, lighter_on_relay).within(estimate));
     }
 
     /// The link the whole picture would need to be sent at its own budget, in kbit/s: what the

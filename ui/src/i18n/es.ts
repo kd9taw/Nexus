@@ -8967,6 +8967,8 @@ export const ES: PartialCatalog = {
   "settings.remoteStream.hint": "Un navegador que aprobaste para el control de la estación, mientras tiene el control, ve esta ventana de Nexus y puede manejarla como lo harías tú aquí, incluida la transmisión. Sus clics y teclas llegan solo a Nexus, nunca a otra cosa de este ordenador. Solo se comparte esta ventana: un diálogo que se abra fuera de ella, como un selector de archivos, no se comparte, y una ventana minimizada no envía nada. La imagen va cifrada de extremo a extremo. Mientras haya un navegador conectado, toda transmisión se detiene en un máximo de cinco segundos si su conexión se cae, y de siete si su imagen se congela.",
   "settings.remoteStream.display": "Se comparte esta ventana tal como Windows la dibuja en este ordenador, así que mantén Nexus abierto y sin minimizar mientras se comparte.",
   "settings.remoteStream.unavailable": "Por ahora, solo en Windows.",
+  "settings.remoteRelayLighter.label": "Usar menos datos cuando una transmisión pasa por el relé",
+  "settings.remoteRelayLighter.hint": "Cuando un navegador no puede llegar a esta estación directamente, su transmisión pasa por el relé de Nexus Remote. Con esto activado, la imagen se envía allí a unos 1 Mbit/s en lugar de hasta 4, así que la ventana y la cascada se ven más suaves y pueden moverse con menos fluidez. El audio de recepción no cambia, y una conexión directa o su propia red no se ven afectadas.",
   "settings.remoteStations.unavailable": "Por ahora, solo en Windows. En otros sistemas, abre Remote en tu navegador.",
   "settings.connectStation.label": "Manejar tu estación desde este ordenador",
   "settings.connectStation.open": "Conectar con mi estación…",

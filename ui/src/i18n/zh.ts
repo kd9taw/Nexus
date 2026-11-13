@@ -3243,6 +3243,8 @@ export const ZH: PartialCatalog = {
   "settings.remoteStream.hint": "你批准用于电台控制、且正持有控制的浏览器，会显示此 Nexus 窗口，并可像你在此处一样操作它，包括发射。它的点击和按键仅送达 Nexus，绝不会触及本机其他任何内容。仅发送此窗口：在窗口外打开的对话框（如文件选择器）不会发送，最小化的窗口不发送任何内容。串流端到端加密。浏览器连接期间，若连接断开，所有发射在五秒内停止；若画面冻结，在七秒内停止。",
   "settings.remoteStream.display": "串流就是 Windows 在本机上绘制的此窗口，因此在浏览器串流期间，保持 Nexus 打开且不要最小化。",
   "settings.remoteStream.unavailable": "目前仅限 Windows。",
+  "settings.remoteRelayLighter.label": "串流经过中继时减少数据用量",
+  "settings.remoteRelayLighter.hint": "当浏览器无法直接连到本电台时，其串流会经过 Nexus Remote 的中继。开启后，那里的画面以约 1 Mbit/s 发送，而不是最高 4，因此窗口和瀑布图看起来更柔和，动作可能不那么流畅。接收音频不变，直接连接或您自己的网络不受影响。",
   "settings.remoteStations.unavailable": "目前仅限 Windows。其他平台请在浏览器中打开远程。",
   "settings.transmit.note": "保存会实时应用你的电台设置（无需重启）。<b>测试 CAT</b> 会保存、启动内置的 <code>rigctld</code>（Hamlib 随 Nexus 在 Windows 上提供 — 无需单独安装），并读取你的电台频率以确认 CAT。对于 CAT，选择你的 <em>电台型号</em> 和 <em>串口</em>；串行 RTS/DTR 与 VOX 无需型号。",
   "settings.transmit.backup.label": "备份你的设置",
