@@ -504,7 +504,7 @@ mod tests {
             );
         }
         // CONTROL: the cap is below what the relayed path would otherwise get.
-        assert!(RELAY_LIGHT_KBPS < INTERNET_KBPS && RELAY_LIGHT_KBPS > MIN_KBPS);
+        const { assert!(RELAY_LIGHT_KBPS < INTERNET_KBPS && RELAY_LIGHT_KBPS > MIN_KBPS) };
     }
 
     /// The page's picture area bounds the picture, by whichever side it reaches first: the station

@@ -5691,12 +5691,14 @@ export function SettingsPanel({
             )}
             {/* Operator ruling 1410: the stream's lower-bandwidth mode through the TURN relay. OFF by
                 default; only a relayed path's picture bit rate changes (tempo_stream picture.rs
-                Bound::on), never receive audio, a direct path or the shack's network. */}
+                Bound::on), never receive audio, a direct path or the shack's network. Not
+                station-only (no data-setting): it neither transmits, guards a transmission nor
+                names a credential address, so a save from afar may set it like any such setting. */}
             {IS_WINDOWS && (
               <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">{t('settings.remoteRelayLighter.label')}</span>
-                  <button data-setting="remoteRelayLighter"
+                  <button
                     type="button"
                     role="switch"
                     aria-checked={form.remoteRelayLighter === true}
