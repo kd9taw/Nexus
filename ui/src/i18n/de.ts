@@ -245,6 +245,7 @@ export const DE: PartialCatalog = {
   "remote.notice.codeInvalid": "Dieser Code stimmt nicht oder ist abgelaufen. Sieh in der neuesten E-Mail nach oder fordere einen neuen Code an.",
   "remote.notice.notConfigured": "Dieser Dienst kann noch keine Hinweise senden, daher lässt sich die Adresse nicht ändern.",
   "remote.notice.notSent": "Der Code konnte nicht an diese Adresse gesendet werden. Prüfe sie und versuche es erneut.",
+  "remote.notice.unbound": "Dieses Konto hat noch keinen Hinweis bekommen, und du bist mit einer anderen Adresse angemeldet als der, mit der es angelegt wurde. Deshalb lässt sich die Adresse hier nicht festlegen. Neue Geräte können erst senden, wenn du sie an der Station freigibst.",
   "remote.stationLimitReached": "Dieses Konto hat bereits zwei Stationen. Entziehe einer nicht genutzten den Zugang, bevor du eine weitere koppelst.",
   "remote.pairingExpired": "Dieser Kopplungscode ist abgelaufen oder wurde bereits verwendet. Hole einen neuen aus Nexus in der Funkbude.",
   "remote.pairingCodeMalformed": "Ein Kopplungscode hat sechzehn Zeichen, nur Ziffern 0-9 und Buchstaben a-f. Achte auf ein O, wo eine Null stehen sollte.",

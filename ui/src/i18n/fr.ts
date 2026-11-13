@@ -260,6 +260,7 @@ export const FR: PartialCatalog = {
   "remote.notice.codeInvalid": "Ce code n’est pas le bon ou il a expiré. Consultez l’e-mail le plus récent ou envoyez un nouveau code.",
   "remote.notice.notConfigured": "Ce service ne peut pas encore envoyer d’avis, l’adresse ne peut donc pas être changée.",
   "remote.notice.notSent": "Le code n’a pas pu être envoyé à cette adresse. Vérifiez-la et réessayez.",
+  "remote.notice.unbound": "Ce compte n’a encore reçu aucun avis et vous êtes connecté avec une autre adresse que celle de sa création : l’adresse ne peut donc pas être fixée ici. Les nouveaux appareils ne peuvent pas émettre tant que vous ne les approuvez pas à la station.",
   "remote.stationLimitReached": "Ce compte a déjà deux stations. Révoquez-en une que vous n'utilisez pas avant d'en appairer une autre.",
   "remote.pairingExpired": "Ce code d'appairage a expiré ou a déjà été utilisé. Obtenez-en un nouveau depuis Nexus au shack.",
   "remote.pairingCodeMalformed": "Un code d'appairage comporte seize caractères, uniquement les chiffres 0-9 et les lettres a-f. Vérifiez s'il y a un O à la place d'un zéro.",

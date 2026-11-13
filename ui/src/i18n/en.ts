@@ -198,6 +198,7 @@ export const EN = {
   "remote.notice.codeInvalid": "That code isn't right, or it has run out. Check the newest email, or send a new code.",
   "remote.notice.notConfigured": "This service can't send notices yet, so the address can't be changed.",
   "remote.notice.notSent": "The code couldn't be sent to that address. Check it and try again.",
+  "remote.notice.unbound": "This account has had no notice yet, and you're signed in with a different address than the one it was made with, so the address can't be set here. New devices stay unable to transmit until you approve them at the shack.",
   "remote.stationLimitReached": "This account already has two stations. Revoke one you are not using before pairing another.",
   "remote.pairingExpired": "That pairing code has expired or has already been used. Get a fresh one from Nexus at the shack.",
   "remote.pairingCodeMalformed": "A pairing code is sixteen characters, digits 0-9 and letters a-f only. Check for a letter O where a zero should be.",

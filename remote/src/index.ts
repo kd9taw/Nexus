@@ -1,7 +1,7 @@
 // Same-origin browser API, the native client's API, and outbound station admission. No radio command router.
 import { account, access, body, bodyBytes, browserOrigin, caller, caller as callerKey, CHALLENGE_MS, cookie, device, deviceAddedNotice, deviceCookie, deviceKeys, deviceNonce, digest,
   deviceKinds, fieldsOf, id, keepApprovals, label, lifetime, mailbox, mailboxHash, memberRole, native, nativeAccount, nativeDevice, nativeKind, proof, publicKey, rate, readEntitlement, Refusal, requireAdmin,
-  lanEntitlement, requireMayPair, sendMail, takeNoticeChange, requireTrial, requireUnspentIdentity, requireValue, secret, signedBy, station, stationNonce, TRIAL_MS, UNTIL_REMOVED, untilRemoved, uuid, verifyProof } from './authority'
+  lanEntitlement, requireMayPair, sendMail, takeNoticeChange, captureNoticeAddress, requireTrial, requireUnspentIdentity, requireValue, secret, signedBy, station, stationNonce, TRIAL_MS, UNTIL_REMOVED, untilRemoved, uuid, verifyProof } from './authority'
 import type { AccountEntitlement, DeviceRow, RemoteEnv, Role, StationRow } from './authority'
 import { observerDeadline } from '../../ui/src/remote-monitor/relay'
 import { baseCall, domainGuard, hmac, markerInserts, requireUnspentDomain, requireUnspentMarkers, SPENT_MARKER, spentBindings, trialClaim, trialInput, trialProof } from './trial-identity'
@@ -592,6 +592,19 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
   // notices for two days (`NOTICE_WAIT_MS`), is told of the change, and the owner can cancel it. Taking
   // the new address over sends nothing and marks nothing sent: every device held stays held. Above the
   // entitlement, as the account's other housekeeping is. Without the mail provider nothing can be proven.
+  //
+  // A FIRST ADDRESS. An account that has had no notice still has an address its notices go to: the one it
+  // was made with, captured from the owner's own sign-in at its first notice (authority.ts `noticeAddress`).
+  // So a change from it captures that address first, from this sign-in, exactly as a notice would, and is
+  // then an ordinary change: that address is warned and keeps the notices through the wait. A sign-in that
+  // does not carry that address (changed at the identity provider: what a hijacked sign-in looks like, and
+  // what an owner whose mailbox moved looks like too) can set no first address, `noticeAddressUnbound`:
+  // the service cannot tell the two apart, and holding every new device until it is approved at the shack
+  // is today's answer for both. Delivery of the warning is never a precondition: a mail outage blocks no
+  // owner, and the wait runs the same.
+  //
+  // A change replaces only the address it was confirmed against (`warned_address`, authority.ts
+  // `takeNoticeChange`): if the notice address moves by any other way during the wait, the change is dropped.
   //   account/notice          { address, pending: { address, verified, effectiveAt } | null }
   //   account/notice/change   { address }  a code mailed to it
   //   account/notice/confirm  { code }     the wait starts, the old address is told
@@ -616,6 +629,8 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       const address = typeof input.address === 'string' ? input.address.trim().toLowerCase() : ''
       requireValue(address.length <= 320 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address), 'invalidRequest', 400)
       requireValue(env.OWNER_NOTICE_API_KEY && env.OWNER_NOTICE_FROM, 'noticeNotConfigured', 503)
+      await takeNoticeChange(env, self, now)
+      requireValue(await captureNoticeAddress(env, self, email), 'noticeAddressUnbound')
       await rate(env, `notice-change:${self}`, now, NOTICE_CODES_PER_DAY, DAY_MS)
       const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 100000000).padStart(8, '0')
       await env.DB.prepare(`INSERT INTO notice_changes(account_id,address,code_hash,expires_at,tries,created_at) VALUES(?,?,?,?,0,?)
@@ -645,11 +660,12 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
         throw new Refusal('noticeCodeInvalid')
       }
       const effectiveAt = now + NOTICE_WAIT_MS
-      await env.DB.prepare('UPDATE notice_changes SET verified_at=?, effective_at=? WHERE account_id=? AND verified_at IS NULL')
-        .bind(now, effectiveAt, self).run()
+      // The address the change replaces is the one notices go to now, and the one told of it.
+      const old = await env.DB.prepare('SELECT notice_address FROM accounts WHERE id=?').bind(self).first<{ notice_address: string | null }>()
+      await env.DB.prepare('UPDATE notice_changes SET verified_at=?, effective_at=?, warned_address=? WHERE account_id=? AND verified_at IS NULL')
+        .bind(now, effectiveAt, old?.notice_address ?? null, self).run()
       // The address that gets the notices now is told, so an owner whose sign-in is someone else's
       // hears of it with two days to cancel. Its delivery decides nothing: the wait is the same either way.
-      const old = await env.DB.prepare('SELECT notice_address FROM accounts WHERE id=?').bind(self).first<{ notice_address: string | null }>()
       if (old?.notice_address) await sendMail(env, old.notice_address, 'Your Nexus Remote notice address is changing',
         `Notices of devices added to your Nexus Remote account will go to ${pending.address} from ${new Date(effectiveAt).toISOString()}.\n\n` +
         `If this was not you, sign in at ${env.PUBLIC_REMOTE_ORIGIN}/remote/ now, cancel the change, and remove any device you do not know.`)

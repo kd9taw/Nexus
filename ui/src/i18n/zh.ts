@@ -7562,6 +7562,7 @@ export const ZH: PartialCatalog = {
   "remote.notice.codeInvalid": "验证码不正确或已过期。请查看最新的邮件，或重新发送验证码。",
   "remote.notice.notConfigured": "此服务暂时无法发送通知，因此无法更改地址。",
   "remote.notice.notSent": "无法向该地址发送验证码。请检查地址后重试。",
+  "remote.notice.unbound": "此账户尚未收到过通知，而你当前登录使用的地址与创建账户时的不同，因此无法在此设置地址。新设备在你于电台端批准之前无法发射。",
   "remote.stationLimitReached": "该账户已有两个台站。请先撤销一个不用的台站，再配对其他台站。",
   "remote.pairingExpired": "该配对码已过期或已被使用。请从台站上的 Nexus 获取新的配对码。",
   "remote.pairingCodeMalformed": "配对码为十六个字符，仅含数字 0-9 和字母 a-f。请检查是否把数字零误写成了字母 O。",

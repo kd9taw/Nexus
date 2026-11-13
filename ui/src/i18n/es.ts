@@ -260,6 +260,7 @@ export const ES: PartialCatalog = {
   "remote.notice.codeInvalid": "Ese código no es correcto o ha caducado. Mira el correo más reciente o envía un código nuevo.",
   "remote.notice.notConfigured": "Este servicio aún no puede enviar avisos, así que la dirección no se puede cambiar.",
   "remote.notice.notSent": "No se pudo enviar el código a esa dirección. Revísala e inténtalo de nuevo.",
+  "remote.notice.unbound": "Esta cuenta aún no ha recibido ningún aviso y has iniciado sesión con una dirección distinta de aquella con la que se creó, así que aquí no se puede fijar la dirección. Los dispositivos nuevos no pueden transmitir hasta que los apruebes en la estación.",
   "remote.stationLimitReached": "Esta cuenta ya tiene dos estaciones. Revoca una que no uses antes de vincular otra.",
   "remote.pairingExpired": "Ese código de vinculación ha caducado o ya se ha usado. Consigue uno nuevo en Nexus desde la caseta.",
   "remote.pairingCodeMalformed": "Un código de vinculación tiene dieciséis caracteres, solo dígitos 0-9 y letras a-f. Comprueba si hay una O donde debería ir un cero.",

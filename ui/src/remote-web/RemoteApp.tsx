@@ -314,6 +314,7 @@ export function RemoteApp() {
     : code === 'noticeCodeInvalid' || code === 'noticeChangeUnavailable' ? t('remote.notice.codeInvalid')
     : code === 'noticeNotConfigured' ? t('remote.notice.notConfigured')
     : code === 'noticeNotSent' ? t('remote.notice.notSent')
+    : code === 'noticeAddressUnbound' ? t('remote.notice.unbound')
     : t('remote.requestFailed')
   // A sign-up that worked but whose address is not confirmed yet. Auth0 keeps its session through
   // the deny, so "continue" is one plain login and "use a different account" has to sign out of it.

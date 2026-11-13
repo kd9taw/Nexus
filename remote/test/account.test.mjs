@@ -835,6 +835,62 @@ test('the notice address changes only through a code mailed to it, after a wait,
   }
 })
 
+// A FIRST notice address (security review of the change flow, finding a). An account that has had no notice
+// yet still has an address its notices would go to: the one it was made with, captured from the owner's
+// own sign-in. A change from such an account captures that address first and is then an ordinary change:
+// it is warned and waits. A sign-in that does not carry that address (changed at the identity provider,
+// which is how a hijacked sign-in looks) cannot set a first address at all: the notices stay the bound
+// address's, and new devices stay held until they are approved at the shack.
+test('a first notice address: the bound address is captured, warned and waited out; a sign-in without it is refused', async () => {
+  const main = app, sent = []
+  const rt = await runtime({ bindings: NOTICE_BINDINGS, outbound: async request => {
+    const body = await request.json(); sent.push({ to: body.to, text: body.text }); return Response.json({ id: 'ok' }) } })
+  app = rt
+  try {
+    const owner = await person()
+    assert.deepEqual((await owner.page.post('account/notice')).value, { address: null, pending: null }, 'no notice yet')
+    const next = `first-${crypto.randomUUID()}@example.invalid`
+    await owner.page.post('account/notice/change', { address: next })
+    const code = /\b(\d{8})\b/.exec(sent.at(-1).text)[1]
+    assert.equal((await owner.page.post('account/notice')).value.address, owner.email, 'the bound address, captured from the owner\'s sign-in')
+    const { value } = await owner.page.post('account/notice/confirm', { code })
+    assert.ok(value.effectiveAt > Date.now() + 47 * 3600000, 'it waits like any change')
+    assert.equal(sent.at(-1).to, owner.email, 'and the bound address is warned')
+    // A sign-in carrying another address than the account was made with, on an account with no notice yet.
+    const other = await person()
+    const moved = app.client(await app.token(other.subject, { email: `moved-${crypto.randomUUID()}@example.invalid`, email_verified: true }))
+    const before = sent.length
+    assert.equal((await moved.post('account/notice/change', { address: `hijack-${crypto.randomUUID()}@example.invalid` }, 403)).value.error, 'noticeAddressUnbound')
+    assert.equal(sent.length, before, 'no code is mailed')
+    assert.deepEqual((await moved.post('account/notice')).value, { address: null, pending: null })
+  } finally {
+    app = main
+    await rt.mf.dispose()
+  }
+})
+
+// Finding b: a change replaces only the address that was warned of it. Should the notice address move by
+// any other way during the wait, the change is dropped rather than replacing an address nobody warned.
+test('a notice change replaces only the address that was warned; one that moved meanwhile drops it', async () => {
+  const main = app, sent = []
+  const rt = await runtime({ bindings: NOTICE_BINDINGS, outbound: async request => {
+    const body = await request.json(); sent.push({ to: body.to, text: body.text }); return Response.json({ id: 'ok' }) } })
+  app = rt
+  try {
+    const owner = await person(), next = `next-${crypto.randomUUID()}@example.invalid`
+    await owner.page.post('account/notice/change', { address: next })
+    await owner.page.post('account/notice/confirm', { code: /\b(\d{8})\b/.exec(sent.at(-1).text)[1] })
+    // The address moved by some other way during the wait.
+    await rt.db.prepare('UPDATE accounts SET notice_address=? WHERE id=?').bind('elsewhere@example.invalid', owner.accountId).run()
+    await rt.db.prepare('UPDATE notice_changes SET effective_at=? WHERE account_id=?').bind(Date.now() - 1000, owner.accountId).run()
+    assert.deepEqual((await owner.page.post('account/notice')).value, { address: 'elsewhere@example.invalid', pending: null },
+      'the change is dropped, and the address nobody warned is not replaced')
+  } finally {
+    app = main
+    await rt.mf.dispose()
+  }
+})
+
 test('without the mail provider the notice address cannot be changed, and says so', async () => {
   const owner = await person()
   assert.equal((await owner.page.post('account/notice/change', { address: 'new@example.invalid' }, 503)).value.error, 'noticeNotConfigured')

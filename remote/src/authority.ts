@@ -208,23 +208,33 @@ export interface DeviceAddedNotice {
  *  matching: `null`, and the device stays held. */
 async function noticeAddress(env: RemoteEnv, accountId: string, ownerSignIn: string, now: number): Promise<string | null> {
   await takeNoticeChange(env, accountId, now)
+  return captureNoticeAddress(env, accountId, ownerSignIn)
+}
+/** The account's notice address, captured first if it has none yet and `ownerSignIn` (the owner's own
+ *  verified sign-in address) is exactly the one the account was made with; null otherwise. */
+export async function captureNoticeAddress(env: RemoteEnv, accountId: string, ownerSignIn: string | null): Promise<string | null> {
   const row = await env.DB.prepare('SELECT notice_address, email_hash FROM accounts WHERE id=?')
     .bind(accountId).first<{ notice_address: string | null; email_hash: string | null }>()
   if (row?.notice_address) return row.notice_address
-  if (!row?.email_hash || await digest(`email:${ownerSignIn}`) !== row.email_hash) return null
+  if (!ownerSignIn || !row?.email_hash || await digest(`email:${ownerSignIn}`) !== row.email_hash) return null
   await env.DB.prepare('UPDATE accounts SET notice_address=? WHERE id=? AND notice_address IS NULL AND email_hash=?')
     .bind(ownerSignIn, accountId, row.email_hash).run()
   return ownerSignIn
 }
 
 /** A change of the notice address the owner proved and waited out (index.ts, account/notice/*), made the
- *  account's notice address now. Nothing else: no notice is sent, re-sent or marked sent, so no device's
- *  hold moves because the address did. Before that, the address stays as it was. */
+ *  account's notice address now, but only in place of the address that was warned of it
+ *  (`warned_address`): a change whose warned address is no longer the notice address is dropped, never
+ *  applied over an address nobody told. Nothing else: no notice is sent, re-sent or marked sent, so no
+ *  device's hold moves because the address did. Before that, the address stays as it was. */
 export async function takeNoticeChange(env: RemoteEnv, accountId: string, now: number): Promise<void> {
-  const ready = 'SELECT address FROM notice_changes WHERE account_id=? AND verified_at IS NOT NULL AND effective_at<=?'
+  const ready = `SELECT address FROM notice_changes c WHERE c.account_id=accounts.id AND c.verified_at IS NOT NULL AND c.effective_at<=?
+    AND c.warned_address IS accounts.notice_address`
   await env.DB.batch([
-    env.DB.prepare(`UPDATE accounts SET notice_address=(${ready}) WHERE id=? AND EXISTS(${ready})`).bind(accountId, now, accountId, accountId, now),
-    env.DB.prepare('DELETE FROM notice_changes WHERE account_id=? AND verified_at IS NOT NULL AND effective_at<=?').bind(accountId, now),
+    env.DB.prepare(`UPDATE accounts SET notice_address=(${ready}) WHERE id=? AND EXISTS(${ready})`).bind(now, accountId, now),
+    // Taken over, or confirmed against an address that is no longer the notice address: gone either way.
+    env.DB.prepare(`DELETE FROM notice_changes WHERE account_id=? AND verified_at IS NOT NULL AND (effective_at<=?
+      OR warned_address IS NOT (SELECT notice_address FROM accounts WHERE id=?))`).bind(accountId, now, accountId),
   ])
 }
 

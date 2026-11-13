@@ -300,7 +300,12 @@ at its first notice. The owner can move it on the Remote page (Account, Device-a
 asks for the new address, the Worker mails an eight-digit code there (half an hour, five tries, four
 codes a day), and once the code comes back the change waits 48 hours before it takes over. The current
 address is mailed when the wait starts, and the owner can cancel it until then. Taking the new address
-over sends nothing and marks nothing sent, so a device that is held stays held. Without the two secrets
+over sends nothing and marks nothing sent, so a device that is held stays held. A change replaces only
+the address that was warned of it, and is dropped if the notice address moved meanwhile. An account
+that has had no notice yet first captures the address it was made with, from the owner's sign-in, and
+that address is warned as above; a sign-in that does not carry that address cannot set a first address
+(`noticeAddressUnbound`), and new devices stay held until approved at the shack. Delivery of the warning
+is not a precondition: the wait runs the same through a mail outage. Without the two secrets
 above, the page is told `noticeNotConfigured` and nothing changes. A pending change is the
 `notice_changes` row of the account; support can see it with
 `SELECT address, verified_at, effective_at FROM notice_changes WHERE account_id = '<account-uuid>'`, and

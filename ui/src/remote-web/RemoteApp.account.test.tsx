@@ -121,6 +121,16 @@ it('changes the notice address through a code, then shows the wait and can cance
   expect(await screen.findByLabelText(t('remote.notice.newAddress'))).toBeTruthy()
 })
 
+it('a first notice address from a sign-in the account was not made with is refused by name', async () => {
+  client(account(), { 'account/notice': () => ({ address: null, pending: null }),
+    'account/notice/change': () => { throw new RemoteError(403, 'noticeAddressUnbound') } })
+  render(<RemoteApp />)
+  fireEvent.click(await screen.findByText(t('remote.notice.title')))
+  fireEvent.change(await screen.findByLabelText(t('remote.notice.newAddress')), { target: { value: 'new@example.invalid' } })
+  fireEvent.click(screen.getByRole('button', { name: t('remote.notice.send') }))
+  expect((await screen.findByRole('alert')).textContent).toBe(t('remote.notice.unbound'))
+})
+
 it('a wrong notice code is named, and the code box stays for another try', async () => {
   const pending = { address: 'old@example.invalid', pending: { address: 'new@example.invalid', verified: false, effectiveAt: null } }
   client(account(), { 'account/notice': () => pending, 'account/notice/confirm': () => { throw new RemoteError(403, 'noticeCodeInvalid') } })
