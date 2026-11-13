@@ -259,6 +259,8 @@ export async function takeNoticeChange(env: RemoteEnv, accountId: string, now: n
     // Taken over, or confirmed against an address that is no longer the notice address: gone either way.
     env.DB.prepare(`DELETE FROM notice_changes WHERE account_id=? AND verified_at IS NOT NULL AND (effective_at<=?
       OR warned_address IS NOT (SELECT notice_address FROM accounts WHERE id=?))`).bind(accountId, now, accountId),
+    // Never confirmed and its code run out: it holds only an address someone typed, perhaps not the owner's.
+    env.DB.prepare('DELETE FROM notice_changes WHERE account_id=? AND verified_at IS NULL AND expires_at<=?').bind(accountId, now),
   ])
 }
 

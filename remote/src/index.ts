@@ -931,6 +931,8 @@ async function accountCopy(env: RemoteEnv, accountId: string, now: number): Prom
     d.expires_at AS expiresAt, d.revoked_at AS revokedAt, d.account_id=? AS yours
     FROM devices d JOIN stations s ON s.id=d.station_id WHERE d.account_id=? OR s.account_id=? ORDER BY d.station_id, d.id`, accountId, accountId, accountId)
   const truth = (row: Record<string, unknown>, ...keys: string[]) => ({ ...row, ...Object.fromEntries(keys.map(key => [key, row[key] === 1])) })
+  // A change taken over or run out is settled first, so the copy holds no address that is no longer kept.
+  await takeNoticeChange(env, accountId, now)
   const notice = await env.DB.prepare('SELECT notice_address FROM accounts WHERE id=?').bind(accountId).first<{ notice_address: string | null }>()
   return {
     exportedAt: now, accountId,

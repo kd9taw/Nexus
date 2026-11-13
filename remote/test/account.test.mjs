@@ -922,6 +922,31 @@ test('a notice code goes only to an owner of a station, at a plain address', asy
   }
 })
 
+// A code that was never confirmed keeps someone's address the owner typed, who may not be the owner. It
+// goes once its half hour is up: the next read of the account's notice address or copy of the account
+// finds nothing of it.
+test('an unconfirmed notice change is deleted once its code has run out', async () => {
+  const main = app
+  const rt = await runtime({ bindings: NOTICE_BINDINGS, outbound: async () => Response.json({ id: 'ok' }) })
+  app = rt
+  try {
+    const rows = id => rt.db.prepare('SELECT COUNT(*) AS n FROM notice_changes WHERE account_id=?').bind(id).first().then(r => r.n)
+    for (const read of ['account/notice', 'account/export']) {
+      const owner = await person()
+      await bind(owner)
+      await owner.page.post('account/notice/change', { address: `typed-${crypto.randomUUID()}@example.invalid` })
+      assert.equal(await rows(owner.accountId), 1, 'THE CONTROL: the change is kept while its code lasts')
+      await rt.db.prepare('UPDATE notice_changes SET expires_at=? WHERE account_id=?').bind(Date.now() - 1000, owner.accountId).run()
+      const { value } = await owner.page.post(read)
+      assert.equal(await rows(owner.accountId), 0, `${read}: the run-out change is gone`)
+      if (read === 'account/export') assert.equal(value.noticeChange, null)
+    }
+  } finally {
+    app = main
+    await rt.mf.dispose()
+  }
+})
+
 test('without the mail provider the notice address cannot be changed, and says so', async () => {
   const owner = await person()
   assert.equal((await owner.page.post('account/notice/change', { address: 'new@example.invalid' }, 503)).value.error, 'noticeNotConfigured')
