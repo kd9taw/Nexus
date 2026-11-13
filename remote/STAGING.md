@@ -295,6 +295,17 @@ environment holds one declares it in the artifact, applies it as an encrypted se
 reads back encrypted. Set both or neither. A Worker that already holds either one is refused before
 any write while the environment does not supply it.
 
+**Changing where the notice goes.** The notice goes to the address the account was made with, captured
+at its first notice. The owner can move it on the Remote page (Account, Device-added notices): the page
+asks for the new address, the Worker mails an eight-digit code there (half an hour, five tries, four
+codes a day), and once the code comes back the change waits 48 hours before it takes over. The current
+address is mailed when the wait starts, and the owner can cancel it until then. Taking the new address
+over sends nothing and marks nothing sent, so a device that is held stays held. Without the two secrets
+above, the page is told `noticeNotConfigured` and nothing changes. A pending change is the
+`notice_changes` row of the account; support can see it with
+`SELECT address, verified_at, effective_at FROM notice_changes WHERE account_id = '<account-uuid>'`, and
+deleting that row cancels it.
+
 ## Cloudflare and deployment
 
 The workflow `.github/workflows/remote-staging.yml` uses the **production** environment's

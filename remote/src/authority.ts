@@ -203,9 +203,11 @@ export interface DeviceAddedNotice {
  *  someone who can change the verified address at the identity provider must not be able to send it to
  *  themselves. `accounts.notice_address` holds it, written once, from a sign-in whose exact address
  *  is the one the account was bound with (`email_hash`, written at the account's first verified sign-in
- *  and never overwritten); nothing else writes it, and deletion clears it. No address captured and none
+ *  and never overwritten); afterwards only by a change the owner proved with a code mailed to the new
+ *  address and waited out (`takeNoticeChange`), and deletion clears it. No address captured and none
  *  matching: `null`, and the device stays held. */
-async function noticeAddress(env: RemoteEnv, accountId: string, ownerSignIn: string): Promise<string | null> {
+async function noticeAddress(env: RemoteEnv, accountId: string, ownerSignIn: string, now: number): Promise<string | null> {
+  await takeNoticeChange(env, accountId, now)
   const row = await env.DB.prepare('SELECT notice_address, email_hash FROM accounts WHERE id=?')
     .bind(accountId).first<{ notice_address: string | null; email_hash: string | null }>()
   if (row?.notice_address) return row.notice_address
@@ -213,6 +215,34 @@ async function noticeAddress(env: RemoteEnv, accountId: string, ownerSignIn: str
   await env.DB.prepare('UPDATE accounts SET notice_address=? WHERE id=? AND notice_address IS NULL AND email_hash=?')
     .bind(ownerSignIn, accountId, row.email_hash).run()
   return ownerSignIn
+}
+
+/** A change of the notice address the owner proved and waited out (index.ts, account/notice/*), made the
+ *  account's notice address now. Nothing else: no notice is sent, re-sent or marked sent, so no device's
+ *  hold moves because the address did. Before that, the address stays as it was. */
+export async function takeNoticeChange(env: RemoteEnv, accountId: string, now: number): Promise<void> {
+  const ready = 'SELECT address FROM notice_changes WHERE account_id=? AND verified_at IS NOT NULL AND effective_at<=?'
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE accounts SET notice_address=(${ready}) WHERE id=? AND EXISTS(${ready})`).bind(accountId, now, accountId, accountId, now),
+    env.DB.prepare('DELETE FROM notice_changes WHERE account_id=? AND verified_at IS NOT NULL AND effective_at<=?').bind(accountId, now),
+  ])
+}
+
+/** One mail through the notice provider (`OWNER_NOTICE_*`), and whether the provider accepted it (a 2xx).
+ *  False, never a throw, for no provider, a refusal or a network failure. */
+export async function sendMail(env: RemoteEnv, to: string, subject: string, text: string): Promise<boolean> {
+  const key = env.OWNER_NOTICE_API_KEY, from = env.OWNER_NOTICE_FROM
+  if (!key || !from) return false
+  try {
+    const res = await fetch(env.OWNER_NOTICE_ENDPOINT || 'https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ from, to, subject, text }),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
 }
 
 /** Email the account holder that a device was added to their Nexus Remote account by a sign-in
@@ -243,7 +273,7 @@ export async function deviceAddedNotice(env: RemoteEnv, notice: DeviceAddedNotic
   // Only on the owner's own sign-in, as before: a guest's adds notify nobody, and stay held.
   if (!key || !from || !notice.ownerSignIn) return
   let to: string | null
-  try { to = await noticeAddress(env, notice.accountId, notice.ownerSignIn) } catch { return }
+  try { to = await noticeAddress(env, notice.accountId, notice.ownerSignIn, now) } catch { return }
   if (!to) return
   const manage = `${env.PUBLIC_REMOTE_ORIGIN}/remote/`
   const text =
@@ -257,23 +287,7 @@ export async function deviceAddedNotice(env: RemoteEnv, notice: DeviceAddedNotic
   // the station's transmit hold lifts against — is `sent_at IS NOT NULL`, so a rejection (401/422/
   // a 5xx) or a network failure leaves `sent_at` null and the device held past its window until a
   // shack Approve ("no email, no unlock", operator 2026-10-24).
-  let accepted = false
-  try {
-    const res = await fetch(env.OWNER_NOTICE_ENDPOINT || 'https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        from,
-        to,
-        subject: 'A device was added to your Nexus Remote account',
-        text,
-      }),
-    })
-    accepted = res.ok
-  } catch {
-    accepted = false
-  }
-  if (!accepted) return
+  if (!await sendMail(env, to, 'A device was added to your Nexus Remote account', text)) return
   await env.DB.prepare('UPDATE notices SET sent_at=? WHERE device_id=? AND sent_at IS NULL')
     .bind(now, notice.deviceId).run()
 }
@@ -368,7 +382,8 @@ async function signedIn(request: Request, env: RemoteEnv, now: number, clientId:
   // `subject` and `email` ride alongside Identity rather than inside it. The caller destructures
   // them off, so neither reaches the object that index.ts spreads into the browser identity and on
   // into relay socket state - the provider subject is not something the wire needs to carry, and
-  // the address is never sent to the wire. It is stored in one place only: `accounts.notice_address`,
+  // the address is never sent to the wire. It is stored in `accounts.notice_address` (and a change of it
+  // waiting in `notice_changes`),
   // the owner's own address for the owner-device notice (the 2026-10-23 sign-in decision), captured
   // once by `noticeAddress` from a sign-in whose address is the one this account was bound with.
   return { accountId: row.id, expiresAt: until, subject, verified: email !== null, email }

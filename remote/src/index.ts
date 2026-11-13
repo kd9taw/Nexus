@@ -1,7 +1,7 @@
 // Same-origin browser API, the native client's API, and outbound station admission. No radio command router.
 import { account, access, body, bodyBytes, browserOrigin, caller, caller as callerKey, CHALLENGE_MS, cookie, device, deviceAddedNotice, deviceCookie, deviceKeys, deviceNonce, digest,
   deviceKinds, fieldsOf, id, keepApprovals, label, lifetime, mailbox, mailboxHash, memberRole, native, nativeAccount, nativeDevice, nativeKind, proof, publicKey, rate, readEntitlement, Refusal, requireAdmin,
-  lanEntitlement, requireMayPair, requireTrial, requireUnspentIdentity, requireValue, secret, signedBy, station, stationNonce, TRIAL_MS, UNTIL_REMOVED, untilRemoved, uuid, verifyProof } from './authority'
+  lanEntitlement, requireMayPair, sendMail, takeNoticeChange, requireTrial, requireUnspentIdentity, requireValue, secret, signedBy, station, stationNonce, TRIAL_MS, UNTIL_REMOVED, untilRemoved, uuid, verifyProof } from './authority'
 import type { AccountEntitlement, DeviceRow, RemoteEnv, Role, StationRow } from './authority'
 import { observerDeadline } from '../../ui/src/remote-monitor/relay'
 import { baseCall, domainGuard, hmac, markerInserts, requireUnspentDomain, requireUnspentMarkers, SPENT_MARKER, spentBindings, trialClaim, trialInput, trialProof } from './trial-identity'
@@ -55,6 +55,12 @@ const HEALTH_ROOM = 'health'
 const RELAY_TTL_MS = 3600000
 const RELAY_PER_HOUR = 6
 const HOUR_MS = 3600000
+/** THE NOTICE ADDRESS, CHANGED (account/notice/*). A code to a new address lasts half an hour and takes
+ *  five tries; an account is sent four codes a day; a proven address takes over after two days. */
+const NOTICE_CODE_MS = 1800000
+const NOTICE_CODE_TRIES = 5
+const NOTICE_CODES_PER_DAY = 4
+const NOTICE_WAIT_MS = 2 * DAY_MS
 /** Account deletions and copies an account may ask for in ten minutes. */
 const ACCOUNT_DATA_PER_TEN_MINUTES = 5
 /** A subscription in these states has ended and can charge nothing more; any other can. */
@@ -580,6 +586,77 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     for (const stationId of left) headers.append('set-cookie', cookie(stationId, '', 0))
     return json({ ok: true }, 200, headers)
   }
+  // THE ADDRESS THE "DEVICE ADDED" NOTICE GOES TO, moved by the owner. That notice is what lets a new
+  // device's transmit hold lift, so the owner's sign-in alone must not move it (security review M4): a
+  // code mailed to the new address has to come back first, and then the old address keeps getting the
+  // notices for two days (`NOTICE_WAIT_MS`), is told of the change, and the owner can cancel it. Taking
+  // the new address over sends nothing and marks nothing sent: every device held stays held. Above the
+  // entitlement, as the account's other housekeeping is. Without the mail provider nothing can be proven.
+  //   account/notice          { address, pending: { address, verified, effectiveAt } | null }
+  //   account/notice/change   { address }  a code mailed to it
+  //   account/notice/confirm  { code }     the wait starts, the old address is told
+  //   account/notice/cancel   {}           the pending change, gone
+  if (path === 'account/notice' || path.startsWith('account/notice/')) {
+    const verb = path.slice('account/notice'.length)
+    const input = await body(request, verb === '/change' ? ['address'] : verb === '/confirm' ? ['code'] : [])
+    const self = identity.accountId
+    if (verb === '') {
+      await takeNoticeChange(env, self, now)
+      const current = await env.DB.prepare('SELECT notice_address FROM accounts WHERE id=?').bind(self).first<{ notice_address: string | null }>()
+      const pending = await env.DB.prepare('SELECT address, verified_at, effective_at FROM notice_changes WHERE account_id=? AND (verified_at IS NOT NULL OR expires_at>?)')
+        .bind(self, now).first<{ address: string; verified_at: number | null; effective_at: number | null }>()
+      return json({ address: current?.notice_address ?? null,
+        pending: pending && { address: pending.address, verified: pending.verified_at !== null, effectiveAt: pending.effective_at } })
+    }
+    if (verb === '/cancel') {
+      await env.DB.prepare('DELETE FROM notice_changes WHERE account_id=?').bind(self).run()
+      return json({ ok: true })
+    }
+    if (verb === '/change') {
+      const address = typeof input.address === 'string' ? input.address.trim().toLowerCase() : ''
+      requireValue(address.length <= 320 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address), 'invalidRequest', 400)
+      requireValue(env.OWNER_NOTICE_API_KEY && env.OWNER_NOTICE_FROM, 'noticeNotConfigured', 503)
+      await rate(env, `notice-change:${self}`, now, NOTICE_CODES_PER_DAY, DAY_MS)
+      const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 100000000).padStart(8, '0')
+      await env.DB.prepare(`INSERT INTO notice_changes(account_id,address,code_hash,expires_at,tries,created_at) VALUES(?,?,?,?,0,?)
+        ON CONFLICT(account_id) DO UPDATE SET address=excluded.address, code_hash=excluded.code_hash, expires_at=excluded.expires_at,
+          tries=0, verified_at=NULL, effective_at=NULL, created_at=excluded.created_at`)
+        .bind(self, address, await digest(`notice-code:${self}:${code}`), now + NOTICE_CODE_MS, now).run()
+      const sent = await sendMail(env, address, 'Your Nexus Remote notice code',
+        `Your code to receive Nexus Remote device notices at this address: ${code}\n\n` +
+        `Type it on the Remote page within 30 minutes. If you did not ask for this, ignore this mail.`)
+      if (!sent) {
+        await env.DB.prepare('DELETE FROM notice_changes WHERE account_id=? AND verified_at IS NULL').bind(self).run()
+        throw new Refusal('noticeNotSent', 503)
+      }
+      return json({ ok: true, expiresAt: now + NOTICE_CODE_MS })
+    }
+    if (verb === '/confirm') {
+      requireValue(typeof input.code === 'string' && /^\d{8}$/.test(input.code), 'noticeCodeInvalid')
+      const pending = await env.DB.prepare('SELECT address, code_hash FROM notice_changes WHERE account_id=? AND verified_at IS NULL AND expires_at>? AND tries<?')
+        .bind(self, now, NOTICE_CODE_TRIES).first<{ address: string; code_hash: string }>()
+      requireValue(pending, 'noticeChangeUnavailable', 404)
+      if (await digest(`notice-code:${self}:${input.code}`) !== pending.code_hash) {
+        // Each wrong code is a try; the last one ends the change, so it is asked for again from the start.
+        await env.DB.batch([
+          env.DB.prepare('UPDATE notice_changes SET tries=tries+1 WHERE account_id=? AND verified_at IS NULL').bind(self),
+          env.DB.prepare('DELETE FROM notice_changes WHERE account_id=? AND verified_at IS NULL AND tries>=?').bind(self, NOTICE_CODE_TRIES),
+        ])
+        throw new Refusal('noticeCodeInvalid')
+      }
+      const effectiveAt = now + NOTICE_WAIT_MS
+      await env.DB.prepare('UPDATE notice_changes SET verified_at=?, effective_at=? WHERE account_id=? AND verified_at IS NULL')
+        .bind(now, effectiveAt, self).run()
+      // The address that gets the notices now is told, so an owner whose sign-in is someone else's
+      // hears of it with two days to cancel. Its delivery decides nothing: the wait is the same either way.
+      const old = await env.DB.prepare('SELECT notice_address FROM accounts WHERE id=?').bind(self).first<{ notice_address: string | null }>()
+      if (old?.notice_address) await sendMail(env, old.notice_address, 'Your Nexus Remote notice address is changing',
+        `Notices of devices added to your Nexus Remote account will go to ${pending.address} from ${new Date(effectiveAt).toISOString()}.\n\n` +
+        `If this was not you, sign in at ${env.PUBLIC_REMOTE_ORIGIN}/remote/ now, cancel the change, and remove any device you do not know.`)
+      return json({ ok: true, effectiveAt })
+    }
+    throw new Refusal('notFound', 404)
+  }
   // THE ACCOUNT'S DEVICES, on the page: every device of every station the account owns, and its own
   // devices at stations it was invited to, each removable here. Above the entitlement, as `revoke` is:
   // removing a device is never something an account has to pay for.
@@ -831,8 +908,10 @@ async function accountCopy(env: RemoteEnv, accountId: string, now: number): Prom
   const notice = await env.DB.prepare('SELECT notice_address FROM accounts WHERE id=?').bind(accountId).first<{ notice_address: string | null }>()
   return {
     exportedAt: now, accountId,
-    // Where a "device added" notice goes, once the account has had one.
+    // Where a "device added" notice goes, once the account has had one, and a change of it under way.
     noticeAddress: notice?.notice_address ?? null,
+    noticeChange: await env.DB.prepare(`SELECT address, verified_at IS NOT NULL AS verified, effective_at AS effectiveAt, created_at AS createdAt
+      FROM notice_changes WHERE account_id=?`).bind(accountId).first(),
     trial: trial && truth(trial, 'enabled'),
     subscription: subscription && truth(subscription, 'cancelAtPeriodEnd'),
     checkouts: await all('SELECT id, created_at AS createdAt FROM checkout_sessions WHERE account_id=? ORDER BY created_at', accountId),
@@ -894,6 +973,7 @@ async function deleteAccount(env: RemoteEnv, accountId: string, now: number): Pr
       .bind(accountId, accountId, accountId),
     env.DB.prepare('DELETE FROM challenges WHERE account_id=?').bind(accountId),
     env.DB.prepare('DELETE FROM relay_usage WHERE account_id=?').bind(accountId),
+    env.DB.prepare('DELETE FROM notice_changes WHERE account_id=?').bind(accountId),
     env.DB.prepare(`DELETE FROM notices WHERE account_id=? OR station_id IN (${mine})`).bind(accountId, accountId),
     env.DB.prepare(`DELETE FROM invites WHERE station_id IN (${mine})`).bind(accountId),
     env.DB.prepare(`DELETE FROM devices WHERE account_id=? OR station_id IN (${mine})`).bind(accountId, accountId),
