@@ -20,6 +20,8 @@
 //   keyed (on the air: the strip lit, an FT contact in progress, SSTV sending with its progress bar) ·
 //   keyedAlarm (keyed under the alarms: SSTV's own Stop live while the shell is at its shortest) ·
 //   worst (CAT lost + the alarms + an FT contact + SSTV's dropped-picture sentence + JTTY's longest refusal).
+//   firstRun (no callsign yet, so the first-run nudge to set one is up, keyed under the alarms: what a new operator
+//   meets; the probe's own station has a callsign, so no other state ever showed the nudge).
 //
 // HOW "ON SCREEN AND TOPMOST" IS READ: the button's whole box is inside the window, and at each point of a 5 × 3
 // grid across its face (inset past its round corners) the topmost element is the button. While it reads, every
@@ -136,7 +138,7 @@ const QSO = { state: 'AwaitRr73', dxcall: 'VP2V/W1AW', rxReport: -12, running: f
 const DROPPED = 'Picture dropped: transmit went off while it waited for the transmitter, so nothing was sent. Turn TX on and send it again.'
 const REFUSAL = "JTTY keyer: the rig didn't accept PTT, so nothing was sent and what was queued was dropped. Check your PTT method + that Nexus's audio output is routed to the rig (like FT8)."
 const CAT_LOST = { catOk: false, catDetail: '14.0740 MHz CAT link unreachable (1/3)' }
-const PLAIN = { radio: { catOk: true, catDetail: '14.0740 MHz', transmitting: false, txEnabled: false, txWatchdog: false }, top: { txAlarms: [], qso: null }, lane: null, mode: null }
+const PLAIN = { radio: { catOk: true, catDetail: '14.0740 MHz', transmitting: false, txEnabled: false, txWatchdog: false }, top: { txAlarms: [], qso: null, mycall: 'KD9TAW' }, lane: null, mode: null }
 const STATES = {
   plain: PLAIN,
   catDown: { ...PLAIN, radio: { ...PLAIN.radio, ...CAT_LOST } },
@@ -148,6 +150,10 @@ const STATES = {
     mode: { sstv: { sending: true, txMode: 'Martin M1', txProgress: 0.4, txElapsedSecs: 46, txTotalSecs: 114 } } },
   worst: { radio: { ...PLAIN.radio, ...CAT_LOST, txWatchdog: true }, top: { txAlarms: ALARMS, qso: QSO }, lane: LANE,
     mode: { sstv: { txNotice: DROPPED }, jtty: { tx: { refusal: REFUSAL, txHz: 1500, serial: 1, sending: false, live: false, left: 0, pending: '', notice: null } } } },
+  // A fresh install: no callsign yet, so the first-run nudge to set one (OnboardingBanner) is up, as a new operator
+  // meets it, and on the air under the alarms besides. Every other state puts the callsign back.
+  firstRun: { radio: { ...PLAIN.radio, transmitting: true, txEnabled: true, txWatchdog: true }, top: { txAlarms: ALARMS, qso: { ...QSO, running: true }, mycall: '' }, lane: LANE,
+    mode: { sstv: { sending: true, txMode: 'Martin M1', txProgress: 0.4, txElapsedSecs: 46, txTotalSecs: 114 } } },
 }
 
 /** What lifts every element into hit-testing while the probe reads (a notice that lets clicks through still hides what
@@ -198,7 +204,8 @@ const MEASURE = `(() => {
     const overStrip = !!st && box.top < st.getBoundingClientRect().bottom - 0.5
     return { cap, ctlWhole, overStrip, stop: { seen: t != null && (t === own || own.contains(t)), live: !own.disabled, h: Math.round(q.height) } } })()
   const span = (sel) => { const e = [...document.querySelectorAll(sel)].find((x) => x.closest('[hidden]') == null && x.getBoundingClientRect().height > 0); if (!e) return null; const q = e.getBoundingClientRect(); return Math.round(q.top) + '–' + Math.round(q.bottom) }
-  return { vp: document.documentElement.getAttribute('data-viewport'), stops: rows, headBottom: head ? Math.round(head.getBoundingClientRect().bottom) : null,
+  const nudge = [...document.querySelectorAll('.onboarding-banner')].some((x) => x.getBoundingClientRect().height > 0)
+  return { vp: document.documentElement.getAttribute('data-viewport'), stops: rows, nudge, headBottom: head ? Math.round(head.getBoundingClientRect().bottom) : null,
     alarmSeen, squeezed, boxes: { shell: span('main'), strip: span('.cockpit-txstrip, .cockpit-qso'), dock: span('.cockpit-txdock, .cockpit-txdock-keep[data-fold], .sstv-tx-bar') },
     scrolled: shells.map((m) => Math.round(m.scrollTop)).concat(Math.round(document.scrollingElement.scrollTop)).some((v) => v > 0),
     key: rows.map((r) => r.box.join(',') + r.covered).join('|') + '|' + document.body.scrollHeight }
@@ -287,6 +294,7 @@ const TAB_SIZES = (W, H) => W <= 1366 && H <= 800
 const POLLED = new Set(['sstv', 'jtty'])
 const rows = []
 const reds = []
+const nudgeRows = []
 let errors = 0
 const t0 = Date.now()
 for (const [label, route] of VIEWS.filter(([l]) => wantViews.includes(l))) {
@@ -312,6 +320,9 @@ for (const [label, route] of VIEWS.filter(([l]) => wantViews.includes(l))) {
             const row = { view: label, scale, loc, W, H, D, state, vp: m?.vp, stops: m?.stops ?? [], scrolled: m?.scrolled, alarmSeen: m?.alarmSeen ?? null, squeezed: m?.squeezed ?? null }
             rows.push(row)
             const ok = row.stops.some((s) => s.ok)
+            // The first-run state is only a test while the nudge is drawn: printed per row, so a nudge that moved off a
+            // screen reads as such, and a page that never drew it anywhere is a red below.
+            if (state === 'firstRun') { row.nudge = !!m?.nudge; nudgeRows.push(row) }
             if (route === 'operate' && state === 'plain' && scale !== 'auto' && Number(scale) >= 150 && TAB_SIZES(W, H)) {
               const hidden = await tabWalk(p)
               if (hidden.length) {
@@ -502,10 +513,75 @@ if (process.env.STOPVIS_MIRROR !== '0' && wantViews.includes('FT')) {
   for (const r of mirrorReds) console.log('RED ' + r)
 }
 
+// THE PROMPT TO LOG BESIDE THE STOPS (2026-11-13). The prompt to log (LogConfirm) is a card over the whole window, capped
+// to the window's height. At 1366×768 at 175 % (the floor, a 780×438 window) that card stood over every cockpit's stop
+// controls, so their stop-layer mirrors were drawn over the card's own boxes: a click meant for the Comment box was a Stop TX.
+// On every cockpit, at the floor (the app's fit and 100 %) and 1366×768 at the app's 175 %, with a contact waiting to be
+// logged: no stop control (`[data-stop-control]`, other than the card's own) may meet the card, the card is wholly inside the
+// window, and Stop TX must be on screen and reachable — the topmost thing at its centre is Stop TX or its mirror. Whether Log
+// shows without a scroll is printed. THE CONTROL: the card centred over the whole window again must meet one.
+const PENDING = { call: 'IA5X', grid: 'JN52', band: '20m', mode: 'FT8', rstSent: '-12', rstRcvd: '-09', comment: null, qsoDate: '2026-11-13', timeOn: '14:22:33' }
+const LOGCARD = `(() => {
+  const card = document.querySelector('.logconfirm'); if (!card) return null
+  const c = card.getBoundingClientRect()
+  const stops = [...document.querySelectorAll('[data-stop-control]:not([data-stop-mirror])')].filter((b) => !card.contains(b) && b.closest('[hidden]') == null && b.getBoundingClientRect().width > 0)
+  const rows = stops.map((b) => { const q = b.getBoundingClientRect(); const x = q.left + q.width / 2, y = q.top + q.height / 2
+    const meets = q.left < c.right - 0.5 && q.right > c.left + 0.5 && q.top < c.bottom - 0.5 && q.bottom > c.top + 0.5
+    const inside = q.left >= -0.5 && q.top >= -0.5 && q.right <= innerWidth + 0.5 && q.bottom <= innerHeight + 0.5
+    const t = inside ? document.elementFromPoint(x, y) : null
+    const m = t?.closest?.('[data-stop-mirror]')
+    const reach = !!t && (t === b || b.contains(t) || (!!m && Math.abs(m.getBoundingClientRect().left - q.left) < 1 && Math.abs(m.getBoundingClientRect().top - q.top) < 1))
+    return { kind: b.getAttribute('data-stop-control'), box: [q.left, q.top, q.width, q.height].map(Math.round), meets, inside, reach } })
+  const lb = card.querySelector('.logconfirm-log'), log = lb?.getBoundingClientRect()
+  // Log as the prompt opens, before any scroll: inside the card's visible box and the window, and topmost at its centre.
+  const logSeen = !!log && log.top >= c.top - 0.5 && log.bottom <= c.bottom + 0.5 && log.bottom <= innerHeight + 0.5 && (() => {
+    const t = document.elementFromPoint(log.left + log.width / 2, log.top + log.height / 2); return !!t && (t === lb || lb.contains(t)) })()
+  const inWindow = c.left >= -0.5 && c.top >= -0.5 && c.right <= innerWidth + 0.5 && c.bottom <= innerHeight + 0.5
+  return { card: [c.left, c.top, c.width, c.height].map(Math.round), rows, log: log ? [Math.round(log.top), Math.round(log.bottom)] : null, logSeen, inWindow }
+})()`
+async function logCard(route, size, scale, css = null) {
+  const p = await openPage(route, size, scale, 'en')
+  try {
+    let m = null
+    for (let i = 0; i < 160 && !m?.stops.length; i++) { await sleep(250); m = await p.evaluate(MEASURE).catch(() => null) }
+    await settle(p, await apply(p, PLAIN, route))
+    if (css) await p.evaluate(`(() => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(css)}; document.head.appendChild(s); return 1 })()`)
+    await p.evaluate(`globalThis.__push(null, { pendingLog: ${JSON.stringify(PENDING)} })`)
+    let r = null
+    for (let i = 0; i < 40 && !r; i++) { await frames(p); r = await p.evaluate(LOGCARD).catch(() => null) }
+    await settle(p)
+    return r ? await p.evaluate(LOGCARD) : null
+  } finally {
+    await p.close()
+  }
+}
+const logReds = []
+let logControl = null
+if (process.env.STOPVIS_LOG !== '0') {
+  const LOG_AT = [['auto', px(FLOOR)], ['100', px(FLOOR)], ['175', px(LAPTOP)]]
+  for (const [label, route] of VIEWS.filter(([l]) => wantViews.includes(l))) for (const [scale, size] of LOG_AT) {
+    const r = await logCard(route, size, scale)
+    const at = `${label} ${lab(size)} ${scale}`
+    if (!r) { logReds.push(`prompt to log — ${at}: the prompt never drew`); console.log('RED ' + logReds.at(-1)); continue }
+    const meets = r.rows.filter((x) => x.meets), tx = r.rows.filter((x) => x.kind === 'stop-tx')
+    console.log(`prompt to log — ${at}: card ${r.card.join(',')}${r.inWindow ? '' : ' (NOT inside the window)'}, Log ${r.log?.join('–')}${r.logSeen ? ' seen' : ' NOT seen without a scroll'}; stops ${r.rows.map((x) => `${x.kind}@${x.box.join(',')}${x.meets ? ' MEETS' : ''}${x.reach ? '' : ' unreachable'}`).join(' ')}`)
+    if (meets.length) logReds.push(`prompt to log — ${at}: the card ${r.card.join(',')} meets ${meets.map((x) => `${x.kind} at ${x.box.join(',')}`).join(', ')}`)
+    if (!tx.some((x) => x.inside && x.reach)) logReds.push(`prompt to log — ${at}: no Stop TX on screen and reachable with the prompt open`)
+    if (!r.inWindow) logReds.push(`prompt to log — ${at}: the card ${r.card.join(',')} is not wholly inside the window`)
+    if (meets.length || !tx.some((x) => x.inside && x.reach) || !r.inWindow) console.log('RED ' + logReds.at(-1))
+  }
+  // The control: the card's placement taken away, so it is centred over the whole window as before.
+  const c = await logCard('operate', px(FLOOR), '100', '.logconfirm { position: static !important; width: min(420px, calc(0.92 * var(--vw-eff))) !important; max-height: calc(0.9 * var(--vh-eff)) !important }')
+  logControl = !!c && c.rows.some((x) => x.meets)
+  console.log(`CONTROL — FT at the floor (100 %), the prompt centred over the whole window: ${c ? (logControl ? 'it meets a stop (caught)' : 'it meets none') : 'never drew'}`)
+}
+
 await browser.stop?.()
 await server.close()
 await rm(cacheDir, { recursive: true, force: true })
 
+if (nudgeRows.length) console.log(`note: the first-run nudge is drawn in ${nudgeRows.filter((r) => r.nudge).length} of ${nudgeRows.length} first-run rows` +
+  ` (drawn on: ${[...new Set(nudgeRows.filter((r) => r.nudge).map((r) => r.view))].join(', ') || 'none'})`)
 console.log(`\n${rows.length} rows (${VIEWS.filter(([l]) => wantViews.includes(l)).length} screens × ${Object.keys(STATES).length} states), ${Math.round((Date.now() - t0) / 1000)} s`)
 {
   const withCell = rows.filter((r) => r.alarmSeen !== null)
@@ -540,6 +616,8 @@ if (tabControl !== true) console.log('CONTROL FAILED: with the scroll padding ta
 if (mirrorControl === false) console.log('CONTROL FAILED: with the stop layer taken away the click still stopped: the stop layer check cannot fail')
 if (freshControl === false) console.log('CONTROL FAILED: a stale divider value was not caught: the fresh-layout guard cannot fail')
 if (freshReds.length) console.log(`stopvisible: RED — ${freshReds.length} rows where Stop TX stood off a fresh layout`)
-if (reds.length || freshReds.length || mirrorReds.length || mirrorControl === false || freshControl === false || control !== true || tabControl !== true) { console.log(`stopvisible: RED — ${reds.length} rows with no Stop TX on screen and topmost`); process.exit(1) }
-console.log('stopvisible: PASS — a Stop TX fully on screen and topmost in every row, no Tab stop behind FT’s parked line, FT’s Stop TX where a fresh layout puts it after a header change, one click through the stop layer stops once over a parked strip and a squeezed bar; every control was caught')
+if (logControl === false) console.log('CONTROL FAILED: the prompt to log over the whole window met no stop: the prompt check cannot fail')
+if (logReds.length) console.log(`stopvisible: RED — ${logReds.length} rows where the prompt to log met a stop control or hid Stop TX:\n  ${logReds.join('\n  ')}`)
+if (reds.length || freshReds.length || mirrorReds.length || logReds.length || logControl === false || mirrorControl === false || freshControl === false || control !== true || tabControl !== true) { console.log(`stopvisible: RED — ${reds.length} rows with no Stop TX on screen and topmost`); process.exit(1) }
+console.log('stopvisible: PASS — a Stop TX fully on screen and topmost in every row, no Tab stop behind FT’s parked line, FT’s Stop TX where a fresh layout puts it after a header change, one click through the stop layer stops once over a parked strip and a squeezed bar, the prompt to log meets no stop control and leaves Stop TX reachable; every control was caught')
 process.exit(0)
