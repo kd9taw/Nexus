@@ -2390,6 +2390,81 @@ test('a LAN-only session gets no observation, no export and no state beyond its 
   internet.browser.close(); internet.station.close()
 })
 
+// THE LEASE STAYS ON THE LAN TOO (security review 2026-11-12, follow-up 1). The stream is offered under a
+// lease, so a LAN-only session takes one through the relay before its stream can prove where it is. The
+// relay gives it that lease for a short grace only; once the station says its LAN stream is live, the
+// session keeps the lease for as long as it lasts. A device whose graces keep ending without a live
+// stream (three in ten minutes) is held off taking the lease through the relay, so an approved device
+// off the LAN cannot keep the station occupied. Stop is never held back.
+test('a LAN-only session holds the lease only on the LAN: a few graces off it, then none; a live LAN stream keeps it', async () => {
+  const pair = await app.paired(), deviceId = await app.approved(pair)
+  await endTrial(pair)
+  const station = await pair.native.open(pair.stationId, undefined, 101, { 'x-nexus-application-version': '1', ...LAN_HEADERS })
+  await station.take(value => value.type === 'watch' && value.enabled === false)
+  const lan = async () => {
+    const { value: ticket } = await pair.browser.post(`stations/${pair.stationId}/ticket`, { scope: 'lan' })
+    const browser = await pair.browser.open(pair.stationId, ticket.ticket)
+    return { browser, sessionId: (await browser.take(type('session'))).sessionId }
+  }
+  const boot = crypto.randomUUID(), leaseId = crypto.randomUUID()
+  /** Whether `request` reached the station; the station answers it as a station would. */
+  const reaches = async (live, request) => {
+    live.browser.send({ type: 'operationRequest', operationVersion: 4, request })
+    try {
+      const asked = await station.take(value => value.type === 'operationRequest' && value.request.requestId === request.requestId, 700)
+      station.send({ type: 'operationResponse', sessionId: asked.sessionId, requestId: request.requestId, value: request.type === 'stopTransmit'
+        ? { stop: 'accepted' } : { stationBootId: boot, allowed: true, phase: 'controlling', leaseId, revision: 2, commandWindowId: crypto.randomUUID(),
+          nextSequence: 2, leaseRemainingMs: 5000, actions: [], txArmed: false } })
+      await live.browser.take(value => value.type === 'operationResponse' && value.requestId === request.requestId)
+      return true
+    } catch {
+      assert.deepEqual(await live.browser.take(value => value.type === 'operationResponse' && value.requestId === request.requestId),
+        { type: 'operationResponse', requestId: request.requestId, error: 'stationUnavailable' })
+      return false
+    }
+  }
+  const acquire = () => ({ type: 'acquire', requestId: crypto.randomUUID(), stationBootId: boot })
+  const heartbeat = () => ({ type: 'heartbeat', requestId: crypto.randomUUID(), leaseId })
+  const stopTx = () => ({ type: 'stopTransmit', requestId: crypto.randomUUID(), stationBootId: boot, leaseId, transmitEpoch: '000000000000002a' })
+  try {
+    // A session that proves itself: its acquire takes a grace, its LAN stream goes live, and from then on
+    // its lease is kept through the relay, across a hibernation too. That grace is given back.
+    const proven = await lan()
+    assert.equal(await reaches(proven, acquire()), true)
+    proven.browser.send(pageSignal('offer', leaseId))
+    await station.take(typed('streamSignal'))
+    station.send(stationMessage('streaming', proven.sessionId))
+    assert.equal((await proven.browser.take(typed('streamState'))).streaming, true)
+    await app.evict(pair.stationId)
+    assert.equal(await reaches(proven, heartbeat()), true, 'a live LAN stream keeps its lease, also in a woken room')
+    proven.browser.close()
+    // Three sessions that never stream (a page off the LAN): each takes the lease for its grace.
+    for (let i = 0; i < 3; i++) {
+      const away = await lan()
+      assert.equal(await reaches(away, acquire()), true, `grace ${i + 1}`)
+      assert.equal(await reaches(away, heartbeat()), true, `grace ${i + 1}: kept while it lasts`)
+      away.browser.close()
+    }
+    // The fourth is not given the lease, through a hibernation as well, and Stop still reaches the station.
+    const held = await lan()
+    assert.equal(await reaches(held, acquire()), false, 'no fourth grace in ten minutes')
+    assert.equal(await reaches(held, heartbeat()), false)
+    await app.evict(pair.stationId)
+    assert.equal(await reaches(held, acquire()), false, 'nor in a woken room')
+    assert.equal(await reaches(held, stopTx()), true, 'Stop always goes')
+    assert.equal(await reaches(held, { type: 'state', requestId: crypto.randomUUID() }), true, 'the lease\'s read always goes')
+    held.browser.close()
+    // THE CONTROL: an internet session of the same device takes the lease as ever.
+    await app.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?').bind(Date.now() + 3600000, pair.browser.accountId).run()
+    const { value: ticket } = await pair.browser.post(`stations/${pair.stationId}/ticket`)
+    const internet = await pair.browser.open(pair.stationId, ticket.ticket)
+    await internet.take(type('session'))
+    assert.equal(await reaches({ browser: internet }, acquire()), true)
+    internet.close()
+  } finally { station.close() }
+  assert.ok(deviceId)
+})
+
 test('a LAN-only session to a station that cannot hold it to the LAN is refused by name, and survives a hibernation', async () => {
   const pair = await app.paired(), deviceId = await app.approved(pair)
   await endTrial(pair)

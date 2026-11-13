@@ -19,7 +19,9 @@ import type { PipeAttachment } from './pipe'
 type Saved = { access: StationAccess; order: FrameOrderState }
 type Sample = { requestId: string; at: number }
 type StationAttachment = { version: 1; role: 'station'; identity: StationIdentity; order: FrameOrderState; sample: Sample | null; operationVersion?: number; audioVersion?: number; streamVersion?: number; streamLanVersion?: number; laneVersion?: number; pipeVersion?: number }
-type BrowserAttachment = Omit<ObserverCheckpoint, 'peer'> & { version: 1; role: 'browser'; operations?: OperationCheckpoint; commandUntil?: number; lan?: boolean }
+type LanGrace = { at: number; until: number }
+type BrowserAttachment = Omit<ObserverCheckpoint, 'peer'> & { version: 1; role: 'browser'; operations?: OperationCheckpoint; commandUntil?: number; lan?: boolean
+  lanProven?: boolean; lanGrace?: LanGrace }
 type Attachment = StationAttachment | BrowserAttachment
 type Admission = { access: StationAccess; identity: StationIdentity & BrowserIdentity; entitlement: AccountEntitlement; sessionId: string; operationVersion?: number; audioVersion?: number; streamVersion?: number; streamLanVersion?: number; laneVersion?: number; pipeVersion?: number; pipeId?: string
   /** 'lan': a LAN-only session (index.ts, a ticket of that scope). Taken at admission and kept with the
@@ -35,6 +37,18 @@ function commandDeadline(entitlement: Entitlement, now: number): number {
   if (!entitlement?.enabled || !Number.isSafeInteger(entitlement.expiresAt) || entitlement.expiresAt <= now) return 0
   return Math.min(entitlement.expiresAt, now + OPERATION_ENTITLEMENT_MS)
 }
+
+/** THE LEASE OF A LAN-ONLY SESSION (security review 2026-11-12, follow-up 1). Its stream is offered under
+ *  a lease taken through the relay, before anything shows the session is on the shack's network. So an
+ *  acquire is given LAN_LEASE_GRACE_MS to bring a LAN stream up; once the station says that stream is
+ *  live the session is proven, and keeps its lease for its life. A device is given LAN_GRACES graces in
+ *  LAN_GRACE_WINDOW_MS that end with no live stream (kept in this room's storage, so a hibernation or a
+ *  new session does not reset them, and given back when the session proves itself). Past that, its
+ *  acquire and heartbeat stop at the relay and the station's five-second lease ends by itself. */
+const LAN_LEASE_GRACE_MS = 30000
+const LAN_GRACES = 3
+const LAN_GRACE_WINDOW_MS = 600000
+const lanGraceKey = (deviceId: string) => `lan-grace:${deviceId}`
 
 /** What `ObservationRelay.connectStation` / `connectObserver` refuse admission with, by name. */
 const ADMISSION_REFUSALS = new Set(['stationNotApproved', 'stationOffline', 'sessionAlreadyConnected', 'observerLimit', 'deviceNotApproved', 'serviceAccessExpired'])
@@ -64,6 +78,10 @@ export class StationRoom extends DurableObject<RemoteEnv> {
   // because a woken room re-reads before the first offer it forwards, as it does for commandUntil's
   // freshness. Such a session's commandUntil stays the account's own, so its commands stay refused.
   private lanUntil = new Map<string, number>()
+  // A LAN-only session whose LAN stream the station has said is live (`LAN_LEASE_GRACE_MS`), and the grace
+  // one that has not is in. Both ride the browser's attachment, so a woken room holds the same lease.
+  private lanProven = new Set<string>()
+  private lanGrace = new Map<string, LanGrace>()
   // Whether the station takes the browser's proof on the operation and audio lanes (S1-M1). It rides the
   // station's attachment, like the versions above: a station that never advertised it is never handed
   // a proof, which its parser would refuse by closing its socket.
@@ -122,10 +140,12 @@ export class StationRoom extends DurableObject<RemoteEnv> {
             if (station) throw new Error('invalidCheckpoint')
             station = { peer, identity: attachment.identity }; order = attachment.order
           } else if (attachment.role === 'browser') {
-            const { lan, ...observer } = attachment
+            const { lan, lanProven: _proven, lanGrace: _grace, ...observer } = attachment
             // A LAN-only session is sent no frames, also from an attachment written before the flag.
             observers.push({ ...observer, ...(lan === true ? { frames: false as const } : {}), peer })
             if (lan === true) this.lanUntil.set(attachment.sessionId, 0)
+            if (lan === true && attachment.lanProven === true) this.lanProven.add(attachment.sessionId)
+            if (lan === true && attachment.lanGrace) this.lanGrace.set(attachment.sessionId, attachment.lanGrace)
             // An attachment written before this field existed carries none, and gets 0: that
             // session may watch and read but not command until its next renewal, which is at
             // most thirty seconds away. Fail closed across a deploy, and heal by itself.
@@ -143,7 +163,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
         for (const ws of sockets) ws.close(1011, 'authorityUnavailable')
         this.peers.clear()
         this.samples.clear(); this.lanePeers.clear()
-        this.operations = new OperationRelay();this.operationVersions.clear();this.commandUntil.clear();this.commandChecked.clear();this.accessOff.clear();this.lanUntil.clear()
+        this.operations = new OperationRelay();this.operationVersions.clear();this.commandUntil.clear();this.commandChecked.clear();this.accessOff.clear();this.lanUntil.clear();this.lanProven.clear();this.lanGrace.clear()
         this.audio = new AudioRelay(); this.audioVersions.clear()
         this.stream = new StreamRelay(); this.streamVersions.clear(); this.streamLanVersions.clear(); this.laneVersions.clear()
         this.pipes = new Pipes(ctx, env); this.pipeVersions.clear()
@@ -313,7 +333,16 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     // stored. An OFFER starts commanding the station, so it is held to the command lane's
     // entitlement freshness first - the one await on this lane, taken only for an offer.
     if (parsed && typeof parsed === 'object' && typeof parsed.type === 'string' && parsed.type.startsWith('stream')) {
-      if (attachment.role === 'station') { this.stream.receiveStation(parsed, Date.now()); return }
+      if (attachment.role === 'station') {
+        this.stream.receiveStation(parsed, Date.now())
+        // The station's word that a LAN-only session's stream is live: that session is on the LAN.
+        const sessionId = parsed.sessionId
+        if (typeof sessionId === 'string' && this.lanUntil.has(sessionId) && !this.lanProven.has(sessionId) && this.stream.streaming(sessionId)) {
+          await this.proveLan(sessionId)
+          await this.checkpoint()
+        }
+        return
+      }
       const sessionId = attachment.sessionId, before = this.streamOrder.get(sessionId)
       const handled = (async () => {
         if (before) await before
@@ -341,6 +370,12 @@ export class StationRoom extends DurableObject<RemoteEnv> {
         // That await is the one place this handler yields to another message, and the socket can
         // be gone by the time it returns - expired, revoked, or closed by its own peer.
         if (refreshed && !this.peers.has(ws)) return
+        // A LAN-only session's acquire with no live LAN stream and no grace running asks for a grace
+        // (`LAN_LEASE_GRACE_MS`): a storage read, the other place this handler yields, never for Stop.
+        if (await this.grantLanGrace(attachment.sessionId, attachment.identity.deviceId, parsed, Date.now())) {
+          if (!this.peers.has(ws)) return
+          this.syncLanes(Date.now())
+        }
         // Publish the refreshed deadline into the relay before it reads it. Only when there is
         // one: a heartbeat spends the relay's whole budget four times a second and must not pay
         // for a second sweep of every peer to learn nothing changed.
@@ -418,6 +453,30 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     return true
   }
 
+  /** Grants a LAN-only session's acquire its grace, if its device has one left. Returns whether it awaited. */
+  private async grantLanGrace(sessionId: string, deviceId: string, raw: Record<string, unknown>, now: number): Promise<boolean> {
+    const request = (raw as { request?: { type?: unknown } }).request
+    if (!this.lanUntil.has(sessionId) || this.lanProven.has(sessionId) || request?.type !== 'acquire') return false
+    if ((this.lanGrace.get(sessionId)?.until ?? 0) > now) return false
+    const given = ((await this.ctx.storage.get<number[]>(lanGraceKey(deviceId))) ?? []).filter(at => at > now - LAN_GRACE_WINDOW_MS)
+    if (given.length < LAN_GRACES) {
+      given.push(now)
+      this.lanGrace.set(sessionId, { at: now, until: now + LAN_LEASE_GRACE_MS })
+    }
+    await this.ctx.storage.put(lanGraceKey(deviceId), given)
+    return true
+  }
+  /** A LAN-only session whose LAN stream is live: its lease is kept for its life, and its grace given back. */
+  private async proveLan(sessionId: string): Promise<void> {
+    this.lanProven.add(sessionId)
+    const grace = this.lanGrace.get(sessionId), deviceId = this.relay?.checkpoint().observers.find(o => o.sessionId === sessionId)?.identity.deviceId
+    this.lanGrace.delete(sessionId)
+    if (!grace || !deviceId) return
+    const given = (await this.ctx.storage.get<number[]>(lanGraceKey(deviceId))) ?? []
+    const at = given.indexOf(grace.at)
+    if (at >= 0) { given.splice(at, 1); await this.ctx.storage.put(lanGraceKey(deviceId), given) }
+  }
+
   async webSocketClose(ws: WebSocket): Promise<void> { await this.disconnected(ws) }
   async webSocketError(ws: WebSocket): Promise<void> { await this.disconnected(ws) }
   private async disconnected(ws: WebSocket): Promise<void> {
@@ -449,13 +508,14 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     if (!this.relay) return
     this.syncLanes(Date.now())
     const state = this.relay.checkpoint()
-    for (const id of this.commandUntil.keys()) if (!state.observers.some(o => o.sessionId === id)) { this.commandUntil.delete(id); this.commandChecked.delete(id); this.accessOff.delete(id); this.lanUntil.delete(id) }
+    for (const id of this.commandUntil.keys()) if (!state.observers.some(o => o.sessionId === id)) { this.commandUntil.delete(id); this.commandChecked.delete(id); this.accessOff.delete(id); this.lanUntil.delete(id); this.lanProven.delete(id); this.lanGrace.delete(id) }
     for (const [ws, peer] of this.peers) {
       let attachment: Attachment | undefined
       if (state.station?.peer === peer) attachment = { version: 1, role: 'station', identity: state.station.identity, order: state.order, sample: this.samples.get(ws) ?? null, operationVersion:this.operationVersions.get(ws)??0, audioVersion: this.audioVersions.get(ws) ?? 0, streamVersion: this.streamVersions.get(ws) ?? 0, streamLanVersion: this.streamLanVersions.get(ws) ?? 0, laneVersion: this.laneVersions.get(ws) ?? 0, pipeVersion: this.pipeVersions.get(ws) ?? 0 }
       else {
         const observer = state.observers.find(o => o.peer === peer)
-        if (observer) { const { peer: _peer, ...saved } = observer; attachment = { version: 1, role: 'browser', ...saved, operations:this.operations.checkpoint(observer.sessionId), commandUntil: this.commandUntil.get(observer.sessionId) ?? 0, ...(this.lanUntil.has(observer.sessionId) ? { lan: true } : {}) } }
+        if (observer) { const { peer: _peer, ...saved } = observer; attachment = { version: 1, role: 'browser', ...saved, operations:this.operations.checkpoint(observer.sessionId), commandUntil: this.commandUntil.get(observer.sessionId) ?? 0, ...(this.lanUntil.has(observer.sessionId) ? { lan: true } : {}),
+          ...(this.lanProven.has(observer.sessionId) ? { lanProven: true } : {}), ...(this.lanGrace.has(observer.sessionId) ? { lanGrace: this.lanGrace.get(observer.sessionId) } : {}) } }
       }
       if (!attachment) { ws.close(1001, 'disconnected'); this.peers.delete(ws); continue }
       if (new TextEncoder().encode(JSON.stringify(attachment)).length > 2048) {
@@ -520,7 +580,8 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       }
       return [{ sessionId: observer.sessionId, deviceId:observer.identity.deviceId, peer,
         commandUntil: this.commandUntil.get(observer.sessionId) ?? 0, accessOff: this.accessOff.get(observer.sessionId) === true,
-        ...(this.lanUntil.has(observer.sessionId) ? { lanUntil: this.lanUntil.get(observer.sessionId) } : {}) }]
+        ...(this.lanUntil.has(observer.sessionId) ? { lanUntil: this.lanUntil.get(observer.sessionId),
+          lanLeaseUntil: this.lanProven.has(observer.sessionId) ? Number.MAX_SAFE_INTEGER : this.lanGrace.get(observer.sessionId)?.until ?? 0 } : {}) }]
     })
     // A LAN-only session gets no lane that would carry the station across the internet: no relayed
     // receive audio, no observation frame (connectObserver), and on the operation lane only the
