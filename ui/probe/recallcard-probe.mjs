@@ -109,13 +109,19 @@ const MEASURE = `(() => {
   const card = [...document.querySelectorAll('main.operate-cockpit .recall-card')].find((c) => c.closest('[hidden]') == null && c.getBoundingClientRect().width > 0)
   if (!card) return null
   card.scrollTop = 0
+  // In the narrow stack (sm/xs) the card's column can stand below the window, and at the floor the region's view is
+  // shorter than the card: bring the card's TOP into view first, as an operator would scroll to it, so "seen" asks
+  // whether the identity is drawn whole, not whether the region happened to be scrolled there.
+  card.scrollIntoView({ block: 'start' })
   const r = card.getBoundingClientRect()
   const nm = card.querySelector('.recall-name'), av = card.querySelector('.recall-avatar'), head = card.querySelector('.recall-head')
   const range = document.createRange(); range.selectNodeContents(nm)
   const lines = new Set([...range.getClientRects()].filter((q) => q.width > 0).map((q) => Math.round(q.top))).size
   const inside = (el) => { const q = el.getBoundingClientRect(); return q.top >= r.top - 0.5 && q.bottom <= r.bottom + 0.5 && q.left >= r.left - 0.5 && q.right <= r.right + 0.5 }
   // Wholly inside the card's visible box AND the topmost thing at its own centre: seen, not merely laid out.
-  const seen = (el) => { if (!el || !inside(el)) return false; const q = el.getBoundingClientRect(); const t = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2); return !!t && (t === el || el.contains(t)) }
+  const over = {}
+  const seen = (el) => { if (!el || !inside(el)) return false; const q = el.getBoundingClientRect(); const t = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2)
+    const ok = !!t && (t === el || el.contains(t)); if (!ok) over[el.className.split(' ')[0]] = t ? String(t.className || t.tagName).split(' ')[0] + '@' + Math.round(q.top + q.height / 2) + '/' + innerHeight : 'off-window'; return ok }
   const callEl = card.querySelector('.recall-call')
   const rail = card.parentElement
   // The card's ceiling as the cascade resolves it here (its max-height holds a share of the rail, so the computed
@@ -125,7 +131,7 @@ const MEASURE = `(() => {
     card.style.flexShrink = '0'; card.appendChild(sp); const h = card.getBoundingClientRect().height; sp.remove(); card.style.flexShrink = fs; return Math.round(h) })()
   return { vp: document.documentElement.getAttribute('data-viewport'), zoom: getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom').trim() || '1',
     w: Math.round(r.width), h: Math.round(r.height), name: nm.textContent, lines, cut: nm.scrollWidth > nm.clientWidth + 1,
-    avatar: seen(av), nameSeen: seen(nm), callSeen: callEl ? seen(callEl) : null, head: inside(head), headH: Math.round(head.getBoundingClientRect().height),
+    avatar: seen(av), nameSeen: seen(nm), over, callSeen: callEl ? seen(callEl) : null, head: inside(head), headH: Math.round(head.getBoundingClientRect().height),
     scrolls: card.scrollHeight > card.clientHeight + 1, rail: Math.round(rail.clientHeight), expand: !!card.querySelector('.recall-expand'),
     // The card's ceiling (above), its padding and border above and below the identity, and what the rail's other
     // panes got.
@@ -230,7 +236,7 @@ function judge(tag, m, ordinary, red = redAt) {
   // Name, call and avatar: ASSERTED wherever the rail is RAIL_ROOM px or more (every such size, never a note).
   if (m.rail >= RAIL_ROOM) {
     if (!m.avatar) red(`${tag}: the avatar is not wholly inside the ${m.w}×${m.h} card, or not on top there (rail ${m.rail} px)`)
-    if (!m.nameSeen) red(`${tag}: the name is not wholly inside the ${m.w}×${m.h} card, or not on top there (rail ${m.rail} px)`)
+    if (!m.nameSeen) red(`${tag}: the name is not wholly inside the ${m.w}×${m.h} card, or not on top there (rail ${m.rail} px; ${JSON.stringify(m.over)})`)
     if (m.callSeen === false) red(`${tag}: the call is not wholly inside the ${m.w}×${m.h} card, or not on top there (rail ${m.rail} px)`)
   }
   // The identity whole, and a first contact unscrolled, wherever the card's share of its rail (a third,

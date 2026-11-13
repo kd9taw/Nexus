@@ -99,12 +99,14 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         (ui/probe/callcard-probe.mjs; it builds nothing)
   --desktop recallcard  FT's callsign card in the real app, Classic and Roster, at the app's fit and 100 %,
                         at the CORE screens and the Classic rail's narrowest (RECALL_FULL=1: every screen):
-                        the name on one line (cut short only on a card under 300 px), the avatar whole, and
+                        the name on one line (cut short only on a card under 300 px), the name, call and
+                        avatar each whole and topmost on a rail of 220 px or more, and
                         the identity whole with a first contact's card unscrolled wherever the card's ceiling
                         holds it; at the CORE screens the ⤢ opens the whole card, topmost, with
                         Stop TX and every transmit surface unmoved and uncovered, its QRZ button working,
-                        Esc and a click outside closing it; the name forced to wrap and the card planted
-                        over Stop TX are controls that must be caught (ui/probe/recallcard-probe.mjs)
+                        Esc and a click outside closing it; the name forced to wrap, the name, call and
+                        avatar covered, and the card planted over Stop TX are controls that must be caught
+                        (ui/probe/recallcard-probe.mjs)
   --desktop besttimes   the Best times box in the dashboard rail beside a TX strip and dock, at
                         the CORE screens and 1366×768 at 175%: no transmit control moves or
                         is covered when its answer lands, with a control (the box bare above the
