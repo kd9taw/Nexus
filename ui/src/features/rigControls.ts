@@ -247,6 +247,9 @@ export function stepsFor(c: RigControl, caps?: RigCapsDto): readonly number[] | 
   return c.id === 'ATT' ? caps.attDb : c.id === 'PRE' ? caps.preampDb : undefined
 }
 
+/** The controls that mean nothing on FM: the passband width and the three notch controls. */
+const FM_INAPPLICABLE: ReadonlySet<string> = new Set(['BW', 'ANF', 'MN', 'NOTCHF'])
+
 /** What the resolver needs to know. `reported` is the cockpit's STICKY answer — reported now
  *  or at some point on THIS radio — never the raw `!= null`, which a QSY blanks. */
 export interface ControlState {
@@ -271,10 +274,11 @@ export interface ControlState {
 export function causeFor(c: RigControl, s: ControlState): UnavailableCause | null {
   if (!c.built) return 'absent'
   if (!s.catOk) return 'noCat'
-  // BW is the only mode-inapplicable control today: FM's passband is fixed, so there is no
-  // width to set — a fact about the MODE, not a fault in the radio, and the row keeps its
-  // slot rather than disappearing into the foot line with the things the rig cannot do.
-  if (c.id === 'BW' && s.mode === 'FM') return 'notOnMode'
+  // The mode-inapplicable controls: on FM the passband is fixed, so there is no width to set,
+  // and a notch does nothing — a fact about the MODE, not a fault in the radio, and the row
+  // keeps its slot rather than disappearing into the foot line with the things the rig cannot
+  // do. #403: the FTX-1 reports its notch switches ON in FM, and they drew lit there.
+  if (s.mode === 'FM' && FM_INAPPLICABLE.has(c.id)) return 'notOnMode'
   // THE MASKS FIRST, because they are the sounder source: they say what the rig HAS rather
   // than what a poll has happened to bring back. `present` settles it even if no value has
   // arrived yet; `absent` settles it without waiting for a probe that will never answer.

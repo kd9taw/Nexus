@@ -25,7 +25,7 @@ import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
 import type { AppSnapshot } from '../types'
 import { PHONE_PANEL_IDS } from '../features/panelState'
-import { setAttDb, setPreampDb, setMonitorGain } from '../api'
+import { setAttDb, setPreampDb, setMonitorGain, setRigFunc } from '../api'
 import { pushToast } from '../toast'
 
 // THE BUDGET (2026-10-09). The slowest case here, "the receive chain and the transmit chain are each ONE…", takes
@@ -348,6 +348,37 @@ describe('a control the radio cannot drive does not simply disappear', () => {
     expect(mark!.textContent, 'the mark does not name the mode').toContain('FM')
     expect(mark!.getAttribute('title')).toMatch(/does not apply on FM/i)
     expect([...document.querySelectorAll<HTMLButtonElement>('.ph-filter-step')].every((b) => b.disabled)).toBe(true)
+  })
+
+  // #403 (FTX-1): the radio reports its notch switches ON in FM, where they do nothing, and
+  // the toggles drew lit. The same mode-inapplicability as BW: keep the slot, never lit, dead,
+  // and name the MODE. Display only — nothing more is sent to the radio.
+  it('the notch controls on FM keep their slots, are never lit, and name the MODE', () => {
+    vi.mocked(setRigFunc).mockClear()
+    mount({ ...FULL_RIG, notch: true, manualNotch: true }, 'fm')
+    for (const [name, chain] of [['Auto notch', 'ANF'], ['Manual notch', 'MN']] as const) {
+      const b = screen.getByRole('button', { name }) as HTMLButtonElement
+      expect(b.classList.contains('on'), `${name} drew lit on FM`).toBe(false)
+      expect(b.getAttribute('aria-disabled'), `${name} is live on FM`).toBe('true')
+      expect(b.getAttribute('aria-pressed'), `${name} announced a state on FM`).toBeNull()
+      const mark = document.querySelector(`[data-chain="${chain}"] .ph-unavail`)
+      expect(mark, `${name} is dead on FM and says nothing`).not.toBeNull()
+      expect(mark!.textContent).toContain('FM')
+      expect(mark!.getAttribute('title')).toMatch(/does not apply on FM/i)
+      fireEvent.click(b)
+    }
+    expect(vi.mocked(setRigFunc), 'a dead notch still commanded the radio').not.toHaveBeenCalled()
+    expect((screen.getByLabelText('Manual notch frequency in hertz') as HTMLInputElement).disabled).toBe(true)
+    expect(document.querySelector('[data-chain="NOTCHF"] .ph-unavail')!.getAttribute('title')).toMatch(/does not apply on FM/i)
+    // NB and NR are not notch controls: they stay live on FM.
+    expect(screen.getByRole('button', { name: 'NB' }).getAttribute('aria-disabled')).toBeNull()
+    cleanup()
+    // …and on sideband the same report draws them lit and live, as before.
+    mount({ ...FULL_RIG, notch: true, manualNotch: true })
+    const anf = screen.getByRole('button', { name: 'Auto notch' })
+    expect(anf.classList.contains('on')).toBe(true)
+    expect(anf.getAttribute('aria-disabled')).toBeNull()
+    expect(document.querySelector('[data-chain="ANF"] .ph-unavail')).toBeNull()
   })
 
   it('BW still steps on a rig that reports no width — a blank readout is not a dead control', () => {
