@@ -38,7 +38,7 @@
     <div class="pane-splitter horizontal" aria-label="Tx messages height" aria-orientation="horizontal" role="separator" tabindex="0" title="Drag, or use the arrow keys, to resize (Tx messages height). Double-click or press Backspace to reset.">
     <section class="tx-panel panel tx-panel-compact" aria-label="Standard messages (Tx1–Tx6)">
   <aside class="cockpit-side">
-    <div class="recall-card cockpit-recall">
+    <div class="recall-card cockpit-recall recall-rail">
     <div class="cockpit-roster panel">
       <div data-testid="stations-roster">
   <div class="pane-splitter col-seam seam op-colseam op-colseam-2" aria-label="Band Activity / Rx Frequency column" aria-orientation="vertical" role="separator" tabindex="0" title="Drag, or use the arrow keys, to resize (Band Activity / Rx Frequency column). Double-click or press Backspace to reset.">
@@ -54,7 +54,7 @@
     <div class="pane-splitter horizontal" aria-label="Tx messages height" aria-orientation="horizontal" role="separator" tabindex="0" title="Drag, or use the arrow keys, to resize (Tx messages height). Double-click or press Backspace to reset.">
     <section class="tx-panel panel tx-panel-compact" aria-label="Standard messages (Tx1–Tx6)">
   <aside class="cockpit-side">
-    <div class="recall-card cockpit-recall">
+    <div class="recall-card cockpit-recall recall-rail">
     <div class="cockpit-roster panel">
       <div data-testid="stations-roster">
   <div class="pane-splitter col-seam seam op-colseam op-colseam-2" aria-label="Stations roster / Band Activity" aria-orientation="vertical" role="separator" tabindex="0" title="Drag, or use the arrow keys, to resize (Stations roster / Band Activity). Double-click or press Backspace to reset.">
@@ -99,7 +99,7 @@
     <div class="pane-splitter horizontal" aria-label="Tx messages height" aria-orientation="horizontal" role="separator" tabindex="0" title="Drag, or use the arrow keys, to resize (Tx messages height). Double-click or press Backspace to reset.">
     <section class="tx-panel panel tx-panel-compact" aria-label="Standard messages (Tx1–Tx6)">
   <aside class="cockpit-side">
-    <div class="recall-card cockpit-recall">
+    <div class="recall-card cockpit-recall recall-rail">
   <div class="pane-splitter col-seam seam op-colseam op-colseam-2" aria-label="Stations roster / Band Activity" aria-orientation="vertical" role="separator" tabindex="0" title="Drag, or use the arrow keys, to resize (Stations roster / Band Activity). Double-click or press Backspace to reset.">
   <div class="pane-splitter col-seam seam op-colseam op-colseam-3" aria-label="Band Activity / Rx Frequency column" aria-orientation="vertical" role="separator" tabindex="0" title="Drag, or use the arrow keys, to resize (Band Activity / Rx Frequency column). Double-click or press Backspace to reset.">
 
@@ -132,7 +132,7 @@
   <div class="cockpit-roster-main panel">
     <div class="operate-roster">
   <aside class="cockpit-side">
-    <div class="recall-card cockpit-recall">
+    <div class="recall-card cockpit-recall recall-rail">
     <div class="cockpit-decodes-side panel">
       <section class="operate-decodes">
     <div class="pane-splitter horizontal seam" aria-label="Band Activity / Rx Frequency" aria-orientation="horizontal" role="separator" tabindex="0" title="Drag, or use the arrow keys, to resize (Band Activity / Rx Frequency). Double-click or press Backspace to reset.">
