@@ -432,7 +432,7 @@ export function RecallPanel(props: Props) {
   const close = <PaneCloseButton title={paneTitle ?? cu} onRemove={onRemove} hideNote={hideNote} />
 
   return (
-    <div className={`${recallCardClass(bounded && !full, kept && !full)}${full ? ' recall-card-full' : ''}`}>
+    <div className={`${recallCardClass(bounded && !full, kept && !full)}${rail ? ' recall-rail' : ''}${full ? ' recall-card-full' : ''}`}>
       <div className="recall-head" data-pane-grip={full ? undefined : grip}>
         {/* Same open_qrz_page path as the roster/logbook ↗ buttons: the Rust command derives
             and sanitizes https://www.qrz.com/db/<base call>, so nothing URL-shaped is built

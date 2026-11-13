@@ -11991,11 +11991,14 @@ input.cw-pitch::-webkit-inner-spin-button {
 }
 .recall-head {
   display: flex;
-  /* Top, not centre: the avatar stands at the card's top edge, so a card capped shorter than its
-     identity (the rail's ceiling, cockpit-panes.css `.cockpit-recall`) cuts text lines, never the photo
-     (tester report, 2026-11-13: the avatar centred in a tall head fell below the cut). */
-  align-items: flex-start;
+  align-items: center;
   gap: var(--space-3);
+}
+/* In the rail, top, not centre: the avatar stands at the card's top edge, so a card capped shorter than its
+   identity (the rail's ceiling, cockpit-panes.css `.cockpit-recall`) cuts text lines, never the photo
+   (tester report, 2026-11-13: the avatar centred in a tall head fell below the cut). */
+.recall-rail .recall-head {
+  align-items: flex-start;
 }
 .recall-avatar {
   position: relative;
@@ -12108,9 +12111,6 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   height: 96px;
   font-size: calc(32px * var(--text-scale));
 }
-.recall-card-full .recall-name {
-  white-space: normal;
-}
 .recall-id {
   flex: 1;
   min-width: 0;
@@ -12126,9 +12126,13 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-weight: 800;
   color: var(--text);
   line-height: 1.1;
-  /* ONE LINE (tester report, 2026-11-13: "Barry / N / Evans", a word a line). An ellipsis only when the
-     name truly cannot fit, the whole name in its tooltip (RecallPanel); the call beside it wraps under it
-     first (the row wraps), since the row breaks on the name's whole width. */
+}
+/* THE CARD IN OPERATE'S RAIL (`.recall-rail`, RecallPanel `rail`), and only there: the log strips' card (LogEntry,
+   on CW, Phone and the other screens) is drawn as it always was. ONE LINE for the name (tester report, 2026-11-13:
+   "Barry / N / Evans", a word a line): an ellipsis only when it truly cannot fit, the whole name in its tooltip;
+   the call and the badges beside it wrap under it first (the row wraps), since the row breaks on the name's whole
+   width. */
+.recall-rail .recall-name {
   min-width: 0;
   max-width: 100%;
   white-space: nowrap;
@@ -12201,7 +12205,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   max-width: none;
   align-self: center;
 }
-.recall-badges:empty {
+.recall-rail .recall-badges:empty {
   display: none;
 }
 /* The rail's ✕ over its ⤢: one narrow column at the head's right edge. */

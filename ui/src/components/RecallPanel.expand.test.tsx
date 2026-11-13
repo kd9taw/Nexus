@@ -155,6 +155,23 @@ describe('RecallPanel — the ⤢ opens the whole card', () => {
     expect(screen.queryByRole('button', { name: "Open N9BNE's whole card" })).toBeNull()
   })
 
+  it("changes only the rail card: the log strips' card keeps main's tree, and none of the rail's rules reach it", () => {
+    // The one-line name, the top-aligned avatar and the badges in the name's row are `.recall-rail` rules
+    // (styles.css); the log strips' card (LogEntry: CW, Phone and the rest) must never carry the class.
+    cockpit(false)
+    const card = document.querySelector('.recall-card')!
+    expect(card.classList.contains('recall-rail')).toBe(false)
+    expect(card.querySelector('.recall-head > .recall-badges')).not.toBeNull()
+    expect(card.querySelector('.recall-name-row .recall-badges')).toBeNull()
+    expect(card.querySelector('.recall-acts')).toBeNull()
+    cleanup()
+    cockpit(true)
+    const rail = document.querySelector('.recall-card')!
+    expect(rail.classList.contains('recall-rail')).toBe(true)
+    expect(rail.querySelector('.recall-name-row > .recall-badges')).not.toBeNull()
+    expect(rail.querySelector('.recall-head > .recall-badges')).toBeNull()
+  })
+
   it('gives the name its whole text as a tooltip, for when the rail is too narrow for it', () => {
     cockpit()
     expect(document.querySelector('.recall-name')!.getAttribute('title')).toBe('Barry N Evans')
