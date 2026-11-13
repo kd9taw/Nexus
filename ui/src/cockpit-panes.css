@@ -1514,14 +1514,14 @@
    the strip rule shared with PSK and JTTY, each falling back to its stock value, so those cockpits are
    untouched):
      --rtty-fill-floor   the two frames' floor (`--cockpit-fill-min`): the stock 10em wherever the cockpit
-                         has room for it, yielding with the cockpit's height to 6em where it has not. 30em is
+                         has room for it, yielding with the cockpit's height to 5em where it has not. 30em is
                          what everything else in the shell stands at once the strip is down to its floor
                          (header, TX strip, dock, dividers and gaps: 336 px, measured in Chrome at 1920×1080 /
                          150 %, plus the strip's 6em), so the frames share what is left; every window the
                          app fits by itself keeps 10em, so the text and the log strip split exactly as before.
      --rtty-strip-floor  the strip's floor, 6em: a header and a drawable canvas. Its divider still stops at
                          8em (WATERFALL_SPLIT_MIN); the strip goes lower only when the shell has no other room.
-   Where even the 6em floors do not fit, the shell's deficit valve scrolls, as it did in 1.21.0. No stop
+   Where even the 5em floors do not fit, the shell's deficit valve scrolls, as it did in 1.21.0. No stop
    control is in a frame or the strip: Stop TX, Tune and the latch are in the sticky TX strip, the Esc/Stop
    macro in the sticky dock. `scripts/browser-probe --desktop rttyfit` measures it.
      --cockpit-region-floor  SINCE THE REGION: the two frames' floors and the gap between them, as the pane
@@ -1531,7 +1531,12 @@
                          it, is a shell child. Inside the region the frames keep the region's own yielding
                          floor, and where the two do not fit its column scrolls (the second legal fate). */
 .rtty-cockpit {
-  --rtty-fill-floor: max(6em, min(10em, calc((100% - 30em) / 2)));
+  /* 5em, not 6em, since the now-bar took a line of the top bar (2026-11-13): at the floor screen (1366×768 at 175 %)
+     the 6em frames left the strip 59 px, its picture beside the tuning scope 28 px locally and 11 px on CI's fonts
+     (the strip's head wraps there), under check 9's 28 (waterfalls-probe). At 5em the text and the log give 12 px
+     back: the strip is its 71 px of before the bar changed, and its head wraps on every font, so the picture is a
+     stable 22 px (34 of the app's). */
+  --rtty-fill-floor: max(5em, min(10em, calc((100% - 30em) / 2)));
   --rtty-strip-floor: 6em;
   --cockpit-region-floor: calc(2 * var(--rtty-fill-floor) + var(--space-3));
 }

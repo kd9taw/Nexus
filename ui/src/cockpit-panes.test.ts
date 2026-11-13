@@ -958,15 +958,16 @@ describe('panes are sized by the grid, never by themselves', () => {
 
   it('the region-floor knob is set by RTTY alone, from the frames’ own yielding floors', () => {
     // `.cockpit-panes { min-height: var(--cockpit-region-floor, 18em) }`. RTTY's transcript and log strip
-    // stood on a yielding floor of their own before they moved into a region (`--rtty-fill-floor`, 6em to
+    // stood on a yielding floor of their own before they moved into a region (`--rtty-fill-floor`, 5em to
     // 10em with the shell's height); the knob makes the region stand on exactly that, so the shell's valve
     // fires no sooner than it did (`scripts/browser-probe --desktop rttyfit`). Anywhere else a lower floor
     // is the crush the base floor exists to stop, and a higher one is more shell scroll. Both sheets.
     const sets = [...RULES, ...STYLES_RULES].filter((r) => /--cockpit-region-floor\s*:/.test(r.body))
     expect(sets.map((r) => r.selector)).toEqual(['.rtty-cockpit'])
     expect(/--cockpit-region-floor\s*:\s*([^;]+)/.exec(sets[0].body)![1].trim()).toBe('calc(2 * var(--rtty-fill-floor) + var(--space-3))')
-    // The floor it is built from still yields and still floors at a readable 6em.
-    expect(/--rtty-fill-floor\s*:\s*([^;]+)/.exec(sets[0].body)![1].trim()).toBe('max(6em, min(10em, calc((100% - 30em) / 2)))')
+    // The floor it is built from still yields and floors at 5em (a title bar and two lines; 6em until the now-bar took
+    // a line of the top bar and RTTY's waterfall picture fell under 28 px at the floor screen on CI).
+    expect(/--rtty-fill-floor\s*:\s*([^;]+)/.exec(sets[0].body)![1].trim()).toBe('max(5em, min(10em, calc((100% - 30em) / 2)))')
   })
 
   it('the log column cap cannot out-pay the feed track (§11.6 maximize-tracks)', () => {
