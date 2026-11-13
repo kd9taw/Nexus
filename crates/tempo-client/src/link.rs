@@ -32,6 +32,15 @@
 //!    keyed under the internet roads' own labels. This computer's credentials and candidates go in
 //!    its `open`, the station's come back in its `opened`, and each end's later candidates follow
 //!    on the link as they are found, never on any relay lane.
+//!    ⛔ **A road that falls silent is restarted on the link** (`crate::ice`'s
+//!    [`IceRoad::restart`]): when an internet road that connected hears no answer from the
+//!    station on its pair for [`crate::ice::RESTART_SILENCE`] (a NAT between them rebound, which
+//!    neither end follows), this computer restarts every internet road it has, at most once every
+//!    [`crate::ice::RESTART_EVERY`], and sends their new offers in a `restart`; the station
+//!    restarts its own and answers `restarted` with theirs. Nothing on the road carries one, so
+//!    nothing a stranger sends can ask for one. Until a pair is found again nothing goes or is
+//!    heard on the road: holds stop reaching the station and presence is not renewed there, as
+//!    for any silent road, and this link's Stop is untouched.
 //! 9. **The station's key for the internet road** ([`Link::station_key`]), when its `opened` names
 //!    one: said on a link pinned to the station, so it can be checked against the key the Remote
 //!    service lists for that station.
@@ -55,7 +64,7 @@ use super::road::{self, Ids, Socket};
 use super::stop_road::{OnAir, StopRoad};
 use crate::datagram;
 use crate::dispatch::{forwards, is_stop, route, Outcome, Profile, Refusal, Route};
-use crate::ice::{Gather, IceRoad, Offer, Relay, Role};
+use crate::ice::{Gather, IceRoad, Offer, Relay, Restarts, Role};
 use crate::outbox::Outbox;
 use crate::wire::{self, Assembly, End, Inflate, Whole, OUTCOMES};
 use crate::PairedStation;
@@ -224,6 +233,10 @@ struct Shared {
     /// The internet roads' ICE, by the road's name on the link (`stop`, `audio`): what the
     /// station's candidates go to, and where this computer's come from.
     ice: Vec<(&'static str, Arc<IceRoad>)>,
+    /// When the internet roads were last restarted, and whether the station's `restarted` is
+    /// awaited.
+    restarts: Mutex<Restarts>,
+    restarting: AtomicBool,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -653,6 +666,13 @@ impl Link {
             .collect()
     }
 
+    /// ⛔ Restarts every internet road now, as a silent one would, whatever this computer's pace:
+    /// for a test of the station's own floor and of a restarted road. Whether it was sent.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn restart_now(&self) -> bool {
+        self.shared.restart(&self.outbox)
+    }
+
     /// Whether the link has ended.
     pub fn ended(&self) -> bool {
         self.shared.ended.load(Ordering::SeqCst)
@@ -743,6 +763,10 @@ async fn keep(outbox: Outbox, mut writer: tokio::task::JoinHandle<()>, shared: A
             _ = every.tick() => if outbox.ping().is_err() { break },
             // Each internet road's candidates as it finds them, on the link.
             _ = trickle.tick(), if !shared.ice.is_empty() => {
+                let stalled = shared.ice.iter().any(|(_, ice)| ice.stalled(std::time::Instant::now()));
+                if lock(&shared.restarts).due(stalled, std::time::Instant::now()) {
+                    shared.restart(&outbox);
+                }
                 for (name, ice) in &shared.ice {
                     for line in ice.trickle() {
                         let said = json!({"type":"candidate","road":name,"candidate":line});
@@ -775,7 +799,24 @@ impl Shared {
             audio,
             on_air,
             ice,
+            restarts: Default::default(),
+            restarting: AtomicBool::new(false),
         }
+    }
+
+    /// ⛔ Every internet road restarted ([`IceRoad::restart`]) and their new offers sent in a
+    /// `restart`, the station's `restarted` then awaited. Whether it was sent.
+    fn restart(&self, outbox: &Outbox) -> bool {
+        let mut roads = json!({});
+        for (name, ice) in &self.ice {
+            match ice.restart() {
+                Some(offer) => roads[*name] = json!(offer),
+                None => return false,
+            }
+        }
+        self.restarting.store(true, Ordering::SeqCst);
+        let restart = json!({"type":"restart","roads":roads});
+        outbox.send(Whole::Text(restart.to_string())).is_ok()
     }
 
     /// The link has ended: every call still waiting is answered gone, and every other question
@@ -865,6 +906,24 @@ impl Shared {
                     return Err(());
                 }
             }
+            // ⛔ The station's offers after a restart this computer asked for: one for each of
+            // its internet roads, and only while one is awaited.
+            "restarted" => {
+                if !self.restarting.swap(false, Ordering::SeqCst) {
+                    return Err(());
+                }
+                let roads = message["roads"].as_object().ok_or(())?;
+                if roads.len() != self.ice.len() {
+                    return Err(());
+                }
+                for (name, ice) in &self.ice {
+                    let offer: Offer = serde_json::from_value(roads.get(*name).ok_or(())?.clone())
+                        .map_err(|_| ())?;
+                    if !ice.answer(&offer) {
+                        return Err(());
+                    }
+                }
+            }
             _ => return Err(()),
         }
         Ok(())
@@ -946,6 +1005,21 @@ mod tests {
             station_key: None,
         };
         (Arc::new(link), theirs)
+    }
+
+    /// ⛔ A `restarted` this computer did not ask for ends the link: a station of this build says
+    /// one only in answer to a `restart`. CONTROL: a `candidate` for no road this link opened ends
+    /// it too, as before; and a `status` does not.
+    #[test]
+    fn a_restarted_nobody_asked_for_ends_the_link() {
+        let shared = Shared::new(None, None, Arc::default(), Vec::new());
+        let said = |text: &str| shared.heard(Whole::Text(text.to_string()));
+        assert_eq!(said(r#"{"type":"restarted","roads":{}}"#), Err(()));
+        assert_eq!(
+            said(r#"{"type":"candidate","road":"stop","candidate":"x"}"#),
+            Err(())
+        );
+        assert_eq!(said(r#"{"type":"status","rigKeyed":false}"#), Ok(()));
     }
 
     /// Lets every task handed something run as far as it can, and the writer stall on the full
