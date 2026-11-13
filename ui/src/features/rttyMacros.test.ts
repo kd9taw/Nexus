@@ -3,6 +3,7 @@ import {
   expandRttyMacro,
   frameForAir,
   isStopLikeLabel,
+  RTTY_TOKENS,
   resolveRttySet,
   rttySetId,
   unknownRttyTokens,
@@ -146,17 +147,32 @@ describe('a macro may not be captioned as a stop', () => {
 })
 
 describe('on the air', () => {
-  it('each message starts a line of its own and ends in one space', () => {
-    expect(frameForAir('CQ TEST W9XYZ W9XYZ CQ')).toBe('\r\nCQ TEST W9XYZ W9XYZ CQ ')
-    expect(frameForAir('  TU W9XYZ CQ  ')).toBe('\r\nTU W9XYZ CQ ')
+  it('each message ends in one space; the line breaks around an over are the engine’s', () => {
+    // `rtty_over_newlines` (Settings ▸ RTTY, on by default) opens and closes every over on a
+    // new line in `Engine::rtty_enqueue`, for typed sends and the auto-sequencer too — so the
+    // framing here no longer adds one, and switching the setting off really adds nothing.
+    expect(frameForAir('CQ TEST W9XYZ W9XYZ CQ')).toBe('CQ TEST W9XYZ W9XYZ CQ ')
+    expect(frameForAir('  TU W9XYZ CQ  ')).toBe('TU W9XYZ CQ ')
   })
 
-  it('frames ONCE: a message already on a new line, or already ending in a space, is not framed twice', () => {
+  it('frames ONCE, and keeps the operator’s {NL} line breaks at either end', () => {
     const framed = frameForAir('CQ TEST W9XYZ CQ')
     expect(frameForAir(framed)).toBe(framed)
-    expect(frameForAir('\nCQ TEST W9XYZ CQ')).toBe('\r\nCQ TEST W9XYZ CQ ')
-    expect(frameForAir('\r\n\r\nCQ TEST W9XYZ CQ   ')).toBe('\r\nCQ TEST W9XYZ CQ ')
+    expect(frameForAir('\r\nCQ TEST W9XYZ CQ   ')).toBe('\r\nCQ TEST W9XYZ CQ ')
+    // A message that ENDS on a line break is already terminated: no space after it, which
+    // would open the next line with one.
+    expect(frameForAir('TU W9XYZ CQ\r\n')).toBe('TU W9XYZ CQ\r\n')
+    expect(frameForAir('TU W9XYZ CQ \r\n  ')).toBe('TU W9XYZ CQ \r\n')
     // A line break INSIDE the message is the operator's, and it stays.
-    expect(frameForAir('W1AW 599 05 IL\r\nTU')).toBe('\r\nW1AW 599 05 IL\r\nTU ')
+    expect(frameForAir('W1AW 599 05 IL\r\nTU')).toBe('W1AW 599 05 IL\r\nTU ')
+  })
+})
+
+describe('{NL}', () => {
+  const ctx = { mycall: 'W9XYZ', call: 'K1ABC', exch: null }
+  it('is a token the editor offers, and expands to CR LF wherever it sits', () => {
+    expect(RTTY_TOKENS).toContain('{NL}')
+    expect(unknownRttyTokens('{NL}CQ{nl}')).toEqual([])
+    expect(expandRttyMacro('{NL}CQ DE {MYCALL}{NL}K{nl}', ctx)).toEqual({ text: '\r\nCQ DE W9XYZ\r\nK\r\n' })
   })
 })

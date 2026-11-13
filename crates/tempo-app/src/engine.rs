@@ -6703,6 +6703,29 @@ fn rtty_filter(text: &str) -> String {
     crate::keyboard::kb_filter(crate::keyboard::RTTY, text)
 }
 
+/// An RTTY over as it goes on the air with [`Settings::rtty_over_newlines`] on: a CR LF in front
+/// of it and after it, unless that end ALREADY is a line break (an `{NL}`, perhaps with spaces
+/// beside it) — one new line there, never two. `start`/`end` pick the ends to frame: an over
+/// takes both, an F-key typed into continuous TX's live stream only the start (its end is the
+/// rest of the stream, not the end of an over).
+///
+/// ⛔ TEXT ONLY. It adds CR (0x08) and LF (0x02), which sit in both ITA2 planes and move no
+/// shift (`tempo_core::rtty::baudot`, fldigi's convention), and changes nothing else.
+///
+/// [`Settings::rtty_over_newlines`]: crate::settings::Settings::rtty_over_newlines
+fn rtty_frame_newlines(text: &str, start: bool, end: bool) -> String {
+    let is_break = |c: char| c == '\r' || c == '\n';
+    let mut out = String::with_capacity(text.len() + 4);
+    if start && !text.trim_start_matches(' ').starts_with(is_break) {
+        out.push_str("\r\n");
+    }
+    out.push_str(text);
+    if end && !text.trim_end_matches(' ').ends_with(is_break) {
+        out.push_str("\r\n");
+    }
+    out
+}
+
 /// What the radio loop should key this tick on behalf of the continuous-TX latch
 /// ([`Engine::poll_rtty_stream`]) — the mode-generic [`crate::keyboard::KbTick`]
 /// under the name RTTY's call sites have always used.
@@ -28172,6 +28195,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     "Nothing to send — RTTY carries A–Z, 0–9 and basic punctuation".to_string(),
                 );
             }
+            // Typed into a live stream, a message still starts a line of its own (the setting's
+            // start); the stream's end is the latch's, not this message's, so no trailing break.
+            let up = if self.settings.rtty_over_newlines {
+                rtty_frame_newlines(&up, true, false)
+            } else {
+                up
+            };
             return self.rtty_type(&up);
         }
         self.rtty_enqueue(text, true)
@@ -28253,7 +28283,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         Ok(())
     }
 
-    /// Uppercase + filter to the ITA2 charset, cap a single over, and enqueue.
+    /// Uppercase + filter to the ITA2 charset, frame it on new lines (`rtty_over_newlines`), cap
+    /// a single over, and enqueue.
     /// `reset_watchdog` restarts the TX-watchdog clock — TRUE for an operator send
     /// (and a genuine sequencer state advance, handled in `rtty_drive`), FALSE for
     /// an auto-over that merely repeats, so an unanswered auto-CQ still trips the
@@ -28276,6 +28307,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
                  per over"
             ));
         }
+        // Every over on a line of its own (Settings ▸ RTTY, on by default). HERE because every
+        // over passes through here — Enter, an F-key and the auto-sequencer alike. After the cap,
+        // which bounds what the operator wrote: the framing adds at most four characters
+        // (under a second at 45.45 baud), nowhere near the watchdog margin the cap keeps.
+        let up = if self.settings.rtty_over_newlines {
+            rtty_frame_newlines(&up, true, true)
+        } else {
+            up
+        };
         tempo_core::applog::info("tx", &format!("RTTY over queued: {up:?}"));
         // An explicit operator send restarts the TX-watchdog clock (see poll_rtty_one).
         if reset_watchdog {
@@ -38988,8 +39028,9 @@ mod tests {
         let t0 = 10_000.0;
         e.rtty_over_keyed(&over, 45.45, t0);
         let st = e.rtty_state();
+        // …and the setting's closing line break after it (`rtty_over_newlines`, on by default).
         assert_eq!(
-            st.tx_text, "\r\nCQ TEST W9XYZ ",
+            st.tx_text, "\r\nCQ TEST W9XYZ \r\n",
             "the TX line holds the over"
         );
         assert_eq!((st.tx_keyed, st.tx_cut), (0, false));
@@ -39028,7 +39069,7 @@ mod tests {
         );
         let st = e.rtty_state();
         assert_eq!(
-            st.tx_text, "\r\nCQ TEST W9XYZ ",
+            st.tx_text, "\r\nCQ TEST W9XYZ \r\n",
             "the TX line keeps the stopped over"
         );
         assert_eq!(
@@ -39095,8 +39136,10 @@ mod tests {
         e.rtty_over_keyed(&first, 45.45, 0.0);
         e.rtty_over_advance(char_ms + 1.0);
         let st = e.rtty_state();
+        // Each over on its own lines (`rtty_over_newlines`): the queued one is joined on its
+        // own line break, not on a space.
         assert_eq!(
-            st.tx_text, "CQ QRZ",
+            st.tx_text, "\r\nCQ\r\n\r\nQRZ\r\n",
             "the queued over waits behind the one keying"
         );
         assert_eq!(st.tx_keyed, 1);
@@ -39181,6 +39224,72 @@ mod tests {
         assert_eq!(e.rtty_state().heard_cq.as_deref(), Some("W1AW"));
     }
 
+    /// ⭐ **EVERY OVER STARTS AND ENDS ON A NEW LINE (`rtty_over_newlines`, default on)** — a
+    /// tester's request: contest software picks a call out more easily when each over arrives
+    /// on its own line. Typed sends, F-keys and auto-sequencer overs all reach the air through
+    /// `rtty_enqueue`, so that is where the CR LF is added — and never doubled: an over that
+    /// already opens or closes on a line break (an `{NL}`, or a space after one) gets none
+    /// there. Off, the text goes exactly as it was handed in.
+    #[test]
+    fn every_rtty_over_starts_and_ends_on_one_new_line() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("rtty", false);
+        assert!(e.settings.rtty_over_newlines, "on by default");
+        let sent = |e: &mut Engine, text: &str| {
+            e.rtty_send_text(text).unwrap();
+            e.poll_rtty_one().expect("queued")
+        };
+        assert_eq!(sent(&mut e, "CQ TEST W9XYZ"), "\r\nCQ TEST W9XYZ\r\n");
+        // An F-key message, framed by the cockpit: one space ends it, and the line break follows.
+        assert_eq!(sent(&mut e, "CQ TEST W9XYZ "), "\r\nCQ TEST W9XYZ \r\n");
+        // Already on a new line at either end ({NL}): one CR LF there, not two.
+        assert_eq!(sent(&mut e, "\r\nTU W9XYZ\r\n"), "\r\nTU W9XYZ\r\n");
+        assert_eq!(sent(&mut e, "\r\nTU W9XYZ"), "\r\nTU W9XYZ\r\n");
+        assert_eq!(sent(&mut e, "TU W9XYZ\r\n "), "\r\nTU W9XYZ\r\n ");
+        // A line break inside the over is the operator's, and stays.
+        assert_eq!(sent(&mut e, "599 05\r\nTU"), "\r\n599 05\r\nTU\r\n");
+        // Lower case is filtered first, as ever — the framing is CR LF and nothing else.
+        assert_eq!(sent(&mut e, "cq"), "\r\nCQ\r\n");
+
+        // The auto-sequencer's overs go the same way.
+        let mut auto = rtty_auto_engine();
+        auto.rtty_auto_cq().unwrap();
+        let over = auto.poll_rtty_one().expect("the auto CQ is queued");
+        assert!(
+            over.starts_with("\r\nCQ") && over.ends_with("K\r\n"),
+            "{over:?}"
+        );
+
+        // An F-key typed into continuous TX's live stream starts a line of its own; its end is
+        // the stream's, so nothing trails it — and an {NL} it opens with is not doubled.
+        e.set_rtty_latched(true).unwrap();
+        e.rtty_send_text("TU ").unwrap();
+        e.rtty_send_text("\r\nQRZ").unwrap();
+        assert_eq!(
+            e.poll_rtty_stream(64),
+            RttyStreamTick::Text("\r\nTU \r\nQRZ".to_string())
+        );
+        e.rtty_stop();
+
+        // ⛔ LIVE KEYSTROKES ARE NEVER FRAMED. Continuous TX's typing (`rtty_type`) is one
+        // transmission, not a series of overs: a CR LF per keystroke would put every typed
+        // word on a line of its own.
+        e.set_rtty_latched(true).unwrap();
+        e.rtty_type("CQ").unwrap();
+        e.rtty_type(" DE").unwrap();
+        assert_eq!(
+            e.poll_rtty_stream(64),
+            RttyStreamTick::Text("CQ DE".to_string()),
+            "a live keystroke was framed"
+        );
+        e.rtty_stop();
+
+        // Off: nothing is added anywhere.
+        e.settings.rtty_over_newlines = false;
+        assert_eq!(sent(&mut e, "CQ TEST W9XYZ "), "CQ TEST W9XYZ ");
+        assert_eq!(sent(&mut e, "\r\nTU\r\n"), "\r\nTU\r\n");
+    }
+
     #[test]
     fn rtty_send_validates_every_tx_gate() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
@@ -39220,7 +39329,7 @@ mod tests {
         );
         assert!(e.tx_allowed());
         e.rtty_send_text("CQ TEST").unwrap();
-        assert_eq!(e.poll_rtty_one(), Some("CQ TEST".to_string()));
+        assert_eq!(e.poll_rtty_one(), Some("\r\nCQ TEST\r\n".to_string()));
     }
 
     #[test]
@@ -39230,7 +39339,10 @@ mod tests {
         // Uppercased + filtered to the ITA2 charset ('%' has no mapping → dropped),
         // so exactly what's queued is what keys.
         e.rtty_send_text("cq de w9xyz 100%").unwrap();
-        assert_eq!(e.poll_rtty_one(), Some("CQ DE W9XYZ 100".to_string()));
+        assert_eq!(
+            e.poll_rtty_one(),
+            Some("\r\nCQ DE W9XYZ 100\r\n".to_string())
+        );
         assert_eq!(e.poll_rtty_one(), None, "drained");
         assert!(!e.rtty_state().sending, "drained queue is not 'sending'");
         // All-unmappable text refuses outright — nothing would key.
@@ -39242,7 +39354,8 @@ mod tests {
             .unwrap_err()
             .contains("too long"));
         assert!(e.rtty_send_text(&"A".repeat(1000)).is_ok());
-        assert_eq!(e.poll_rtty_one().unwrap().len(), 1000);
+        // The cap bounds the text handed in; the over's own CR LF at each end ride on top.
+        assert_eq!(e.poll_rtty_one().unwrap().len(), 1004);
         // Disarming TX (Monitor off) aborts + DROPS the queue — nothing keys on a
         // later re-enable (mirrors the CW disarm semantics).
         e.rtty_send_text("TEST").unwrap();
@@ -39497,7 +39610,7 @@ mod tests {
         // Below the limit: the over keys and nothing else changes.
         let now = now_unix_secs();
         e.tx_watchdog_start = Some(now - (limit - 2));
-        assert_eq!(e.poll_rtty_one(), Some("CQ DE W9XYZ".to_string()));
+        assert_eq!(e.poll_rtty_one(), Some("\r\nCQ DE W9XYZ\r\n".to_string()));
         assert!(!e.tx_watchdog && e.tx_enabled(), "no trip below the limit");
         assert_eq!(
             e.tx_watchdog_start,
@@ -39642,14 +39755,15 @@ mod tests {
         );
         assert_eq!(
             e.poll_rtty_stream(99),
-            RttyStreamTick::Text("CQ DE W9XYZ K".into())
+            // Typed into the stream, the message still starts a line of its own.
+            RttyStreamTick::Text("\r\nCQ DE W9XYZ K".into())
         );
         // Unmappable-only text still refuses, exactly as a send refuses it.
         assert!(e.rtty_send_text("%*+=").is_err());
         // Unlatched, sends go back to being whole queued overs.
         e.set_rtty_latched(false).unwrap();
         e.rtty_send_text("TEST").unwrap();
-        assert_eq!(e.poll_rtty_one(), Some("TEST".to_string()));
+        assert_eq!(e.poll_rtty_one(), Some("\r\nTEST\r\n".to_string()));
     }
 
     /// ⭐ The RTTY cockpit frames every F-key macro for the air — CR LF, the message, one space
@@ -39663,15 +39777,18 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.set_operating_mode("rtty", false);
         e.rtty_send_text("\r\nCQ TEST W9XYZ W9XYZ CQ ").unwrap();
+        // The engine closes the over on a new line (`rtty_over_newlines`) and, the frame
+        // already opening on one, adds none in front.
         assert_eq!(
             e.poll_rtty_one(),
-            Some("\r\nCQ TEST W9XYZ W9XYZ CQ ".to_string()),
+            Some("\r\nCQ TEST W9XYZ W9XYZ CQ \r\n".to_string()),
             "the queued over lost its line break or its trailing space"
         );
         assert!(e
             .rtty_send_text(&format!("\r\n{} ", "A".repeat(997)))
             .is_ok());
-        assert_eq!(e.poll_rtty_one().unwrap().chars().count(), 1000);
+        // The cap bounds what was handed in; the closing CR LF rides on top.
+        assert_eq!(e.poll_rtty_one().unwrap().chars().count(), 1002);
         assert!(e
             .rtty_send_text(&format!("\r\n{} ", "A".repeat(998)))
             .unwrap_err()
@@ -40263,7 +40380,7 @@ mod tests {
             e.rtty_send_text("DE W9XYZ").unwrap();
             assert_eq!(
                 e.poll_rtty_one().as_deref(),
-                Some("CQ CQ"),
+                Some("\r\nCQ CQ\r\n"),
                 "{to}: control, the first over keys"
             );
             e.set_operating_mode("rtty", false); // the view re-asserting its own section
@@ -40287,7 +40404,7 @@ mod tests {
             e.rtty_send_text("73").unwrap();
             assert_eq!(
                 e.poll_rtty_one().as_deref(),
-                Some("73"),
+                Some("\r\n73\r\n"),
                 "{to}: a send made on the return keys as before"
             );
         }
@@ -40345,7 +40462,7 @@ mod tests {
         e.rtty_send_text("DE W9XYZ").unwrap(); // typed ahead, behind the first
         assert_eq!(
             e.poll_rtty_one().as_deref(),
-            Some("CQ CQ"),
+            Some("\r\nCQ CQ\r\n"),
             "control: the first over keys"
         );
         e.tx_enabled = false; // the latch lowered, the queue left as it is
@@ -40364,7 +40481,7 @@ mod tests {
         e.rtty_send_text("73").unwrap();
         assert_eq!(
             e.poll_rtty_one().as_deref(),
-            Some("73"),
+            Some("\r\n73\r\n"),
             "a send made once TX is on keys as before"
         );
     }
@@ -40386,7 +40503,7 @@ mod tests {
         e.rtty_send_text("DE W9XYZ").unwrap();
         assert_eq!(
             e.poll_rtty_one().as_deref(),
-            Some("CQ CQ"),
+            Some("\r\nCQ CQ\r\n"),
             "control: the first over keys"
         );
         e.set_frequency(14.020, "20m", "LSB");
@@ -40422,7 +40539,7 @@ mod tests {
         e.rtty_send_text("73").unwrap();
         assert_eq!(
             e.poll_rtty_one().as_deref(),
-            Some("73"),
+            Some("\r\n73\r\n"),
             "a send made inside the privileges keys as before"
         );
     }

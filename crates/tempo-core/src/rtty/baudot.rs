@@ -304,6 +304,33 @@ mod tests {
         assert_eq!(round_trip("A\r\nB", true), "A\r\nB");
     }
 
+    /// CR LF never moves the shift, on either side — fldigi's convention (`rtty.cxx`: its
+    /// `baudot_dec` changes plane only on LTRS, FIGS and, with UOSrx, a space; its
+    /// `tx_process` sends `\r`/`\n` as bare 0x08/0x02 with no LTRS). So a line break between
+    /// two figures groups costs no shift code, and every receiver that follows that
+    /// convention — ours included, USOS or not — still prints the second group as figures.
+    #[test]
+    fn cr_lf_keep_the_figures_plane_like_fldigi() {
+        let mut enc = BaudotEncoder::new(true);
+        let codes = enc.encode("599\r\n599");
+        assert_eq!(
+            codes,
+            vec![FIGS, 0x10, 0x18, 0x18, CR, LF, 0x10, 0x18, 0x18],
+            "one FIGS, then CR LF as bare codes, and no re-shift after them"
+        );
+        assert_eq!(enc.shift(), Shift::Figures);
+        for usos in [true, false] {
+            assert_eq!(
+                decode_all(&mut BaudotDecoder::new(usos), &codes),
+                "599\r\n599",
+                "usos={usos}"
+            );
+        }
+        // An over that opens on a line break starts in letters and stays there.
+        let codes = BaudotEncoder::new(true).encode("\r\nCQ");
+        assert_eq!(codes, vec![CR, LF, 0x0E, 0x17]);
+    }
+
     #[test]
     fn diddle_idle_never_prints() {
         let mut enc = BaudotEncoder::new(true);

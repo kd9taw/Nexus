@@ -36031,13 +36031,15 @@ mod tests {
             "precondition: the over is keying"
         );
         let st = engine.lock().unwrap().rtty_state();
+        // Framed on new lines (`rtty_over_newlines`, on by default): the CR LF are on the air,
+        // so they are on the TX line and in the echo, in air order.
         assert_eq!(
-            st.tx_text, "CQ TEST DE W9XYZ",
+            st.tx_text, "\r\nCQ TEST DE W9XYZ\r\n",
             "the TX line holds the over from its first tick"
         );
         assert_eq!(st.tx_keyed, 0);
 
-        // Three stop bits out (C, Q, space end at 3 × 165 ms): exactly those three are ours.
+        // Three stop bits out (CR, LF, C end at 3 × 165 ms): exactly those three are ours.
         step_until(
             &mut state,
             &mut backend,
@@ -36047,7 +36049,7 @@ mod tests {
         );
         assert_eq!(
             rtty_sent(&engine),
-            "CQ ",
+            "\r\nC",
             "the echo follows the loop's own clock"
         );
         assert_eq!(engine.lock().unwrap().rtty_state().tx_keyed, 3);
@@ -36072,7 +36074,7 @@ mod tests {
         step_until(&mut state, &mut backend, &mut rig, &mut t, 5_000.0);
         assert_eq!(
             rtty_sent(&engine),
-            "CQ ",
+            "\r\nC",
             "text that never radiated reached the transcript"
         );
 
@@ -36083,13 +36085,13 @@ mod tests {
             &mut backend,
             &mut rig,
             &mut t,
-            5_000.0 + 5.0 * char_ms,
+            5_000.0 + 9.0 * char_ms,
         );
-        assert_eq!(rtty_sent(&engine), "CQ TEST");
+        assert_eq!(rtty_sent(&engine), "\r\nC\r\nTEST\r\n");
         let st = engine.lock().unwrap().rtty_state();
         assert_eq!(
             (st.tx_text.as_str(), st.tx_keyed, st.tx_cut),
-            ("TEST", 4, false)
+            ("\r\nTEST\r\n", 8, false)
         );
     }
 
@@ -36150,12 +36152,16 @@ mod tests {
                 "{to}: the over in flight is not as a section change has always left it"
             );
             step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 4_000.0);
-            assert_eq!(rtty_sent(&engine), "CQ", "{to}: precondition, the echo");
+            assert_eq!(
+                rtty_sent(&engine),
+                "\r\nCQ\r\n",
+                "{to}: precondition, the echo"
+            );
             engine.lock().unwrap().set_operating_mode("rtty", false);
             step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 8_000.0);
             assert_eq!(
                 rtty_sent(&engine),
-                "CQ",
+                "\r\nCQ\r\n",
                 "{to}: what was typed ahead keyed on the return"
             );
             assert!(
@@ -36163,10 +36169,18 @@ mod tests {
                 "{to}: the RTTY cockpit is told the rest was dropped"
             );
             engine.lock().unwrap().rtty_send_text("73").unwrap();
-            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 9_000.0);
+            // Six characters with its new lines (`rtty_over_newlines`): ~1 s of air at 45.45 baud.
+            step_to(
+                &engine,
+                &mut state,
+                &mut backend,
+                &mut rig,
+                &mut t,
+                10_000.0,
+            );
             assert_eq!(
                 rtty_sent(&engine),
-                "CQ73",
+                "\r\nCQ\r\n\r\n73\r\n",
                 "{to}: a send made on the return keys as before"
             );
             assert_eq!(
@@ -36204,7 +36218,7 @@ mod tests {
         step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 8_000.0);
         assert_eq!(
             rtty_sent(&engine),
-            "CQ",
+            "\r\nCQ\r\n",
             "nothing refused keys after the tune in"
         );
         assert!(
@@ -36212,10 +36226,18 @@ mod tests {
             "the RTTY cockpit is told it was dropped"
         );
         engine.lock().unwrap().rtty_send_text("73").unwrap();
-        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 9_000.0);
+        // Six characters with its new lines (`rtty_over_newlines`): ~1 s of air at 45.45 baud.
+        step_to(
+            &engine,
+            &mut state,
+            &mut backend,
+            &mut rig,
+            &mut t,
+            10_000.0,
+        );
         assert_eq!(
             rtty_sent(&engine),
-            "CQ73",
+            "\r\nCQ\r\n\r\n73\r\n",
             "a send made inside the privileges keys as before"
         );
     }
