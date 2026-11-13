@@ -408,6 +408,26 @@ test('required identity: three trials a mail domain in thirty days, public mailb
   } finally { await strict.mf.dispose() }
 })
 
+// The cap counts the domain a person registers, not the host name: a wildcard mail exchanger hands out
+// any number of subdomains for free, and each is the same registrant's. Under a country's own second
+// level (co.uk, com.au, ...) the registrable domain is one label deeper, so two such domains stay apart.
+test('required identity: the domain cap counts the registrable domain, so subdomains share one count', async () => {
+  const strict = await runtime({ bindings: { TRIAL_KEY, TRIAL_IDENTITY_REQUIRED: '1' } })
+  try {
+    const calls = Array.from({ length: 8 }, (_, i) => `K${i}S${String.fromCharCode(65 + i)}${String.fromCharCode(70 + i)}`)
+    await licences(strict, calls.map(call => ({ call, active: true, email: null })))
+    let next = 0
+    const start = (owner, expected) => approve(strict, owner, { callsign: calls[next], pc: pc(null, calls[next++]) }, expected)
+    for (const host of ['x1.club.example', 'X2.Club.example', 'deep.x3.club.example']) await start(await person(strict, `op@${host}`))
+    assert.equal((await start(await person(strict, 'op@club.example'), 403)).value.error, 'trialDomainLimit', 'the domain itself')
+    assert.equal((await start(await person(strict, 'op@x4.club.example'), 403)).value.error, 'trialDomainLimit', 'a fourth subdomain')
+    // Two registrants under one country's second level are two domains.
+    await start(await person(strict, 'op@shack.co.uk'))
+    await start(await person(strict, 'op@other.co.uk'))
+    await start(await person(strict, 'op@mail.third.co.uk'))
+  } finally { await strict.mf.dispose() }
+})
+
 test('required identity holds where the trial starts at first internet use too: no claim, a foreign call, a spent domain', async () => {
   const strict = await runtime({ bindings: { TRIAL_KEY, TRIAL_IDENTITY_REQUIRED: '1' } })
   try {

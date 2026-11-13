@@ -250,10 +250,15 @@ already holds `TRIAL_KEY` is refused before any write while the environment does
     sign-in kept no callsign `updateRequired`. A call whose licence email is the account's mailbox is
     proven; any other active US call is an unproven claim, which one other account's marker blocks
     (`trialUsedByCallsign`), so each call starts one trial. Support grants by hand where this is wrong.
-  - **Three trials a mail domain in thirty days.** Counted on the account's mailbox domain, excluding
-    the large public providers listed in `authority.ts` (`PUBLIC_MAIL_DOMAINS`, arrl.net among them),
-    whose addresses are each an account of their own. The fourth is refused `trialDomainLimit`. Hand
-    grants and paid plans are never counted or refused.
+  - **Three trials a mail domain in thirty days.** Counted on the registrable domain of the account's
+    mailbox (`club.example` for `op@x1.club.example`; one label deeper under a country's own second
+    level, so `shack.co.uk`), so a wildcard mail exchanger's subdomains share one count. The large public
+    providers listed in `authority.ts` (`PUBLIC_MAIL_DOMAINS`, arrl.net among them), whose addresses are
+    each an account of their own, are excluded. The fourth is refused `trialDomainLimit`. Hand grants
+    and paid plans are never counted or refused. What it cannot see: the masked addresses some of those
+    excluded providers hand out without limit (iCloud Hide My Email, Fastmail masked email) are
+    distinct mailboxes on an excluded domain, so they are neither counted nor linked as one person.
+    The callsign and PC rules above still hold for each of them.
 
   **How the licence copy's staleness rule reads with these.** The stale rule was "US calls fail
   closed": once the copy is more than three days old, a US call is refused `serviceUnavailable` rather

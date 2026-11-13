@@ -176,10 +176,27 @@ const PUBLIC_MAIL_DOMAINS = new Set(['gmail.com', 'outlook.com', 'hotmail.com', 
   'ymail.com', 'icloud.com', 'me.com', 'mac.com', 'aol.com', 'proton.me', 'protonmail.com', 'pm.me', 'gmx.com',
   'mail.com', 'fastmail.com', 'zoho.com', 'comcast.net', 'att.net', 'sbcglobal.net', 'verizon.net', 'cox.net',
   'charter.net', 'earthlink.net', 'arrl.net'])
-/** The domain of a mailbox (`mailbox()`), or null for a public provider's or an address with none: what
- *  a trial is counted against when the trial identity is required. */
+/** The second-level labels a country's registry sells names under (`co.uk`, `com.au`, `ne.jp`, ...), where
+ *  the domain a person registers is one label deeper. */
+const COUNTRY_SECOND_LEVELS = new Set(['co', 'com', 'net', 'org', 'ac', 'gov', 'edu', 'ne', 'or', 'go', 'gr', 'ltd', 'plc',
+  'me', 'sch', 'nom', 'gob', 'mil', 'id'])
+/** The domain a person registers, for a host name: its last two labels, or three under a country's own
+ *  second level (a two-letter top level whose second label is in COUNTRY_SECOND_LEVELS). So every
+ *  subdomain of one registration (`x1.club.example`, `x2.club.example`, a wildcard mail exchanger's
+ *  endless supply) is the one domain `club.example`, and `shack.co.uk` and `other.co.uk` stay two.
+ *
+ *  A short form of the public-suffix rule, on purpose: the full list is a dependency the Worker would
+ *  carry and keep fresh for one count. Where it is wrong, a multi-label suffix it does not know, it merges
+ *  registrants into one count, so it can refuse more trials on such a domain, never fewer. */
+export function registrableDomain(host: string): string {
+  const labels = host.split('.').filter(Boolean)
+  const keep = labels.length >= 3 && labels[labels.length - 1].length === 2 && COUNTRY_SECOND_LEVELS.has(labels[labels.length - 2]) ? 3 : 2
+  return labels.slice(-keep).join('.')
+}
+/** The registrable domain of a mailbox (`mailbox()`), or null for a public provider's or an address with
+ *  none: what a trial is counted against when the trial identity is required. */
 export function mailDomain(normalised: string): string | null {
-  const at = normalised.lastIndexOf('@'), domain = at < 1 ? '' : normalised.slice(at + 1)
+  const at = normalised.lastIndexOf('@'), domain = at < 1 ? '' : registrableDomain(normalised.slice(at + 1))
   return domain && !PUBLIC_MAIL_DOMAINS.has(domain) ? domain : null
 }
 
