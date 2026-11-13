@@ -4,8 +4,8 @@
 // The probe serves the REAL app (index.html, main.tsx, App) with the app's own Vite config and src/api.ts
 // swapped for probe/profiles-api.ts: the radio switch probe's three-radio station with three station
 // profiles, the third with a long name. On the FT screen (Operate, whose TX cluster is its own strip) and on
-// the Logbook (where the top bar carries the TX cluster: TX, Tune, Stop TX), at 1024×768 (the supported floor)
-// and 1920×1080, in the dark theme, it measures the bar WITHOUT profiles and then WITH them, and asserts:
+// the Logbook (where the top bar carries the TX cluster: TX, Tune, Stop TX), at the representative
+// screens (probe/sizes.mjs CORE: 1366×768 at 175 %, the floor, to 4K at 200 %), in the dark theme, it measures the bar WITHOUT profiles and then WITH them, and asserts:
 //   1. THE PICKER is drawn inside the window, is the topmost thing where it stands, offers the three
 //      profiles, and a pick reaches the switch;
 //   2. THE BAR keeps its height, nothing in it or the page scrolls sideways, and no part of it runs past
@@ -23,12 +23,13 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { CORE, metrics } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
 const STUB_SRC = join(UI, 'probe', 'profiles-api.ts')
 const STUB_API = join(UI, 'probe', '__profiles-api.ts')
-const SIZES = [[1024, 768], [1920, 1080]]
+const SIZES = CORE
 const SCREENS = ['operate', 'logbook']
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -104,7 +105,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function run([W, H], screen, control) {
+async function run(size, screen, control) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -122,7 +123,7 @@ async function run([W, H], screen, control) {
     return null
   }
   try {
-    await call('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false })
+    await call('Emulation.setDeviceMetricsOverride', metrics(size))
     await call('Page.navigate', { url: `${origin}/probe-blank` })
     await sleep(300)
     await evaluate(`localStorage.clear(); localStorage.setItem('nexus.workspace', 'dx'); localStorage.setItem('tempo-theme', 'dark'); localStorage.setItem('nexus.features.wizardSeen', '1'); 1`)
@@ -170,7 +171,7 @@ let code = 0
 try {
   for (const size of SIZES) {
     for (const screen of SCREENS) {
-      const tag = `${size[0]}×${size[1]} ${screen}`
+      const tag = `${size.name} ${screen}`
       const r = await run(size, screen, false)
       console.log(`profiles-probe: ${tag}: ${JSON.stringify(r)}`)
       if (r.error) {
@@ -193,7 +194,7 @@ try {
       }
     }
   }
-  if (code === 0) console.log(`profiles-probe: PASS — the picker on screen with its three profiles and a pick reaching the switch, the bar's height unchanged, nothing sideways or past the window, Stop TX and Tune unmoved and topmost on the Logbook, at ${SIZES.map(([w, h]) => `${w}×${h}`).join(', ')} on ${SCREENS.join(' and ')}; each control caught`)
+  if (code === 0) console.log(`profiles-probe: PASS — the picker on screen with its three profiles and a pick reaching the switch, the bar's height unchanged, nothing sideways or past the window, Stop TX and Tune unmoved and topmost on the Logbook, at ${SIZES.map((s) => s.name).join(', ')} on ${SCREENS.join(' and ')}; each control caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

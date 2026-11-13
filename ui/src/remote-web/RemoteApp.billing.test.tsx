@@ -30,6 +30,10 @@ function client(value: AccountSession, billing: boolean) {
   vi.spyOn(BrowserClient, 'load').mockResolvedValue(service as unknown as BrowserClient)
   return service
 }
+// The Billing country list, picked by hand: that is the operator saying it.
+const country = () => screen.getByRole('combobox', { name: 'Billing country' }) as HTMLSelectElement
+const chooseCountry = (code: string) => fireEvent.change(country(), { target: { value: code } })
+const language = (tag: string) => vi.spyOn(navigator, 'language', 'get').mockReturnValue(tag)
 const noPrice = () => {
   // Any currency sign, or a number with a price's decimals, anywhere on the page.
   expect(document.body.textContent).not.toMatch(/[$€£¥]|\d+[.,]\d{2}\b/)
@@ -62,10 +66,11 @@ it('offers Subscribe with the renewal terms beside it, and no price, once billin
   expect(screen.queryByText(/first payment/)).toBeNull()
   noPrice()
 
+  chooseCountry('CA')
   fireEvent.click(monthly)
-  await waitFor(() => expect(service.billingPage).toHaveBeenCalledWith('checkout', { plan: 'monthly' }))
+  await waitFor(() => expect(service.billingPage).toHaveBeenCalledWith('checkout', { plan: 'monthly', country: 'CA' }))
   fireEvent.click(await screen.findByRole('button', { name: 'Subscribe yearly' }))
-  await waitFor(() => expect(service.billingPage).toHaveBeenCalledWith('checkout', { plan: 'annual' }))
+  await waitFor(() => expect(service.billingPage).toHaveBeenCalledWith('checkout', { plan: 'annual', country: 'CA' }))
   // A failure shows as the page's own sentence, and the page stays where it is.
   expect((await screen.findByRole('alert')).textContent).toBe(t('remote.requestFailed'))
   expect(window.location.pathname).toBe('/')
@@ -118,9 +123,92 @@ it('names the billing refusals the page can meet', async () => {
     ['alreadySubscribed', 'This account already has a subscription. Use Manage subscription to change it.'],
     ['billingNotAvailable', 'Subscriptions are not available yet.'],
   ]
+  await screen.findByRole('button', { name: 'Subscribe monthly' })
+  chooseCountry('US')
   for (const [code, sentence] of cases) {
     service.billingPage.mockRejectedValueOnce(new RemoteError(409, code))
     fireEvent.click(await screen.findByRole('button', { name: 'Subscribe monthly' }))
     expect((await screen.findByRole('alert')).textContent).toBe(sentence)
   }
+})
+
+it('asks the billing country before Subscribe, with no default, and goes nowhere without one', async () => {
+  language('en')
+  const service = client(account('ended', trialPlan, -HOUR), true)
+  render(<RemoteApp />)
+  const monthly = await screen.findByRole('button', { name: 'Subscribe monthly' }) as HTMLButtonElement
+  const yearly = screen.getByRole('button', { name: 'Subscribe yearly' }) as HTMLButtonElement
+  // In the Subscribe card, empty, and every assigned country on offer by name; no made-up code (EU, UK, XK).
+  expect(monthly.closest('section')!.contains(country())).toBe(true)
+  expect(country().value).toBe('')
+  const codes = [...country().options].map(option => option.value)
+  expect(codes[0]).toBe('')
+  expect(codes.length).toBe(250)
+  expect(codes).toEqual(expect.arrayContaining(['US', 'CA', 'GB', 'DE', 'JP']))
+  for (const code of ['EU', 'UK', 'XK']) expect(codes).not.toContain(code)
+  expect([...country().options].find(option => option.value === 'DE')!.textContent).toBe('Germany')
+  // No country, no Checkout.
+  expect(monthly.disabled).toBe(true)
+  expect(yearly.disabled).toBe(true)
+  fireEvent.click(monthly)
+  expect(service.billingPage).not.toHaveBeenCalled()
+  chooseCountry('JP')
+  expect(monthly.disabled).toBe(false)
+  // Back to the empty choice: no country again.
+  chooseCountry('')
+  expect(monthly.disabled).toBe(true)
+  chooseCountry('JP')
+  fireEvent.click(yearly)
+  await waitFor(() => expect(service.billingPage).toHaveBeenCalledWith('checkout', { plan: 'annual', country: 'JP' }))
+})
+
+it('preselects the country the browser names, and still waits for the operator to confirm it', async () => {
+  language('de-AT')
+  const service = client(account('ended', trialPlan, -HOUR), true)
+  render(<RemoteApp />)
+  const monthly = await screen.findByRole('button', { name: 'Subscribe monthly' }) as HTMLButtonElement
+  expect(country().value).toBe('AT')
+  expect(monthly.disabled).toBe(true)
+  const confirm = screen.getByRole('checkbox', { name: 'This is the country of my billing address' }) as HTMLInputElement
+  expect(confirm.checked).toBe(false)
+  fireEvent.click(confirm)
+  expect(monthly.disabled).toBe(false)
+  fireEvent.click(monthly)
+  await waitFor(() => expect(service.billingPage).toHaveBeenCalledWith('checkout', { plan: 'monthly', country: 'AT' }))
+  cleanup()
+
+  // Picking a country by hand is the confirmation: no box to tick.
+  language('en-CA')
+  client(account('ended', trialPlan, -HOUR), true)
+  render(<RemoteApp />)
+  await screen.findByRole('button', { name: 'Subscribe monthly' })
+  expect(country().value).toBe('CA')
+  chooseCountry('US')
+  expect(screen.queryByRole('checkbox')).toBeNull()
+  expect((screen.getByRole('button', { name: 'Subscribe monthly' }) as HTMLButtonElement).disabled).toBe(false)
+  cleanup()
+
+  // A browser that names no country, or one that is no country, preselects nothing.
+  for (const tag of ['en', 'es-419', 'en-XK']) {
+    language(tag)
+    client(account('ended', trialPlan, -HOUR), true)
+    render(<RemoteApp />)
+    await screen.findByRole('button', { name: 'Subscribe monthly' })
+    expect(country().value, tag).toBe('')
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    cleanup()
+  }
+})
+
+it('says plainly when Remote cannot be bought in the chosen country yet', async () => {
+  language('en')
+  const service = client(account('ended', trialPlan, -HOUR), true)
+  render(<RemoteApp />)
+  await screen.findByRole('button', { name: 'Subscribe monthly' })
+  chooseCountry('GB')
+  service.billingPage.mockRejectedValueOnce(new RemoteError(403, 'countryNotServed'))
+  fireEvent.click(screen.getByRole('button', { name: 'Subscribe monthly' }))
+  expect((await screen.findByRole('alert')).textContent).toBe("Nexus Remote can't be bought in United Kingdom yet.")
+  expect(service.billingPage).toHaveBeenCalledWith('checkout', { plan: 'monthly', country: 'GB' })
+  expect(window.location.pathname).toBe('/')
 })

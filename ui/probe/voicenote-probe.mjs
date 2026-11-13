@@ -1,8 +1,9 @@
 // The voice keyer's Flex DAX note in real Chrome, for what jsdom cannot see:
 // `scripts/browser-probe --desktop voicenote`.
 //
-// The probe serves src/probe/voicenote.tsx with the app's own Vite config at 1024×768 (the supported
-// floor), 1366×768 and 1920×1080 with the keyer's column beside the log, and at 1920×1080 with three
+// The probe serves src/probe/voicenote.tsx with the app's own Vite config at the representative screens
+// (probe/sizes.mjs CORE: 1366×768 at 175 %, the floor, to 4K at 200 %) with the keyer's column beside the
+// log, and at 1920×1080 with three
 // columns and the keyer's dragged to its 16em floor (the narrowest it gets), presses F1, and asserts:
 //   · the note appears, and nothing scrolls sideways: the page, the pane's box and the note are no wider
 //     than they show;
@@ -20,14 +21,10 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { CORE, FHD, metrics } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
-const SIZES = [
-  { w: 1024, h: 768, q: 'cols=2' },
-  { w: 1366, h: 768, q: 'cols=2' },
-  { w: 1920, h: 1080, q: 'cols=2' },
-  { w: 1920, h: 1080, q: 'cols=3&narrow=1' },
-]
+const SIZES = [...CORE.map((s) => ({ ...s, q: 'cols=2' })), { ...FHD, q: 'cols=3&narrow=1' }]
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // F1, pressed until the note is up. Seven slots on screen do not mean F1 plays yet: the keyer's
@@ -87,7 +84,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function measure(w, h, q, control) {
+async function measure(size, q, control) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -95,7 +92,7 @@ async function measure(w, h, q, control) {
     const r = await call('Runtime.evaluate', { expression, returnByValue: true })
     return r.exceptionDetails ? { error: r.exceptionDetails.exception?.description ?? r.exceptionDetails.text } : r.result.value
   }
-  await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+  await call('Emulation.setDeviceMetricsOverride', metrics(size))
   await call('Page.navigate', { url: `${origin}/probe/voicenote.html?${q}${control ? '&control=1' : ''}` })
   let pressed = false
   for (let i = 0; i < 80 && !pressed; i++) {
@@ -135,11 +132,12 @@ function faults(m) {
 
 let code = 0
 try {
-  for (const { w, h, q } of SIZES) {
-    const { m, after } = await measure(w, h, q, false)
-    console.log(`voicenote-probe: window ${w}×${h} ${q}: ${JSON.stringify(m)} after Got it: ${JSON.stringify(after)}`)
+  for (const size of SIZES) {
+    const { q } = size
+    const { m, after } = await measure(size, q, false)
+    console.log(`voicenote-probe: window ${size.name} ${q}: ${JSON.stringify(m)} after Got it: ${JSON.stringify(after)}`)
     if (!m || m.error) {
-      console.error(`voicenote-probe: the note never drew at ${w}×${h} ${q}`)
+      console.error(`voicenote-probe: the note never drew at ${size.name} ${q}`)
       code = 2
       continue
     }
@@ -147,18 +145,18 @@ try {
     if (!after?.gone) red.push('Got it did not take the note away')
     if (after?.stored !== '1') red.push('Got it did not record the dismissal')
     if (red.length) {
-      console.error(`voicenote-probe: RED at ${w}×${h} ${q} — ${red.join('; ')}`)
+      console.error(`voicenote-probe: RED at ${size.name} ${q} — ${red.join('; ')}`)
       code = code || 1
     }
-    const c = await measure(w, h, q, true)
+    const c = await measure(size, q, true)
     const caught = c.m && !c.m.error ? faults(c.m) : []
-    console.log(`voicenote-probe: CONTROL window ${w}×${h} ${q}: caught ${JSON.stringify(caught)}`)
+    console.log(`voicenote-probe: CONTROL window ${size.name} ${q}: caught ${JSON.stringify(caught)}`)
     if (!caught.some((s) => s.includes('sideways') || s.includes('wider'))) {
-      console.error(`voicenote-probe: CONTROL FAILED at ${w}×${h} ${q} — the planted overflow was not seen; the check cannot fail`)
+      console.error(`voicenote-probe: CONTROL FAILED at ${size.name} ${q} — the planted overflow was not seen; the check cannot fail`)
       code = code || 1
     }
   }
-  if (code === 0) console.log(`voicenote-probe: PASS — the note, Got it and F1 on screen with nothing sideways and the dock clear, dismissed by Got it, at ${SIZES.map((s) => `${s.w}×${s.h} ${s.q}`).join(', ')}; each control caught`)
+  if (code === 0) console.log(`voicenote-probe: PASS — the note, Got it and F1 on screen with nothing sideways and the dock clear, dismissed by Got it, at ${SIZES.map((s) => `${s.name} ${s.q}`).join(', ')}; each control caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

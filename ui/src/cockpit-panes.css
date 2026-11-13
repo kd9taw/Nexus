@@ -230,10 +230,19 @@
      valve (guarded by cockpit-shells.test.ts) turns it into the scrollbar + the sticky
      dock. A floor under a SCROLLING ancestor is the documented safe case; the 18em
      floors this rebuild deleted sat under a CLIPPING one.
-     A KNOB with the stock 18em as its fallback, set in exactly one place: RTTY's short cockpit
+     A KNOB with the stock floor as its fallback, set in exactly one place: RTTY's short cockpit
      (`.rtty-cockpit` below), whose two fill frames stood on a yielding floor of their own before
-     they moved into a region. Every other region floors at 18em. */
-  min-height: var(--cockpit-region-floor, 18em);
+     they moved into a region. Every other region floors at the stock.
+     THE STOCK YIELDS TO A SHORT WINDOW (2026-11-12): 18em, or 30 % of the effective height where that
+     is less. On the smallest supported screen (1366×768 at 175 %, where the app fits itself to 65 %: a
+     674 px effective window) a plain 18em held the scope at its own 8em floor and still overflowed:
+     CW's shell scrolled 15 px, Phone's 20, and the picture in Phone's scope was 10 px. At 30 % both
+     fit and the scope draws 39–63 px. FT's lower region (styles.css `.cockpit-lower`) yields the same
+     way, to 15 %. The 18em cap is unchanged, so no window from 840 effective px up is touched. And it yields only
+     from 600 effective px up (a STEP on --vh-eff, the chrome's idiom): under that every cockpit's shell
+     scrolls whatever the floor, so yielding buys nothing there, and on a window dragged smaller than any
+     supported screen (900×600 at 175 %) a yielding floor put SSTV's composer warning out of reach. */
+  min-height: var(--cockpit-region-floor, max(min(18em, calc(0.3 * var(--vh-eff))), min(18em, (600px - var(--vh-eff)) * 1000)));
   min-width: 0;
   display: grid;
   gap: var(--space-3);
@@ -953,6 +962,11 @@
      plus 35.5 / 59 of what 10em left its faces in 1.24.0, so on a screen that stood it on its floor the drawing
      keeps 1.24.0's scale with its dial half 1.24.0's. It only lowers: min(the stock floor, this). */
   --txmeters-pane-floor: min(7.6em, 100%);
+  /* …FT'S, 8.9em FROM AN EFFECTIVE HEIGHT OF 1100 px UP (the tier's step, 2026-11-12; OperateCockpit passes it, no
+     other cockpit names it): on a tall window FT's pane is its weight share of the column, and at 1920×1200 the QSO
+     strip's own line for the contact's words left it 114.5 px, a dial 44 % of 1.24.0's with the readout 1 px under
+     (txmeterspane-probe holds them to 48–55 % and no smaller). Under 1100 px it is the stock low floor. */
+  --txmeters-pane-floor-ft: max(var(--txmeters-pane-floor), min(8.9em, 100%, (var(--vh-eff, 100vh) - 1100px) * 100));
 }
 
 /* THE TOP BAR'S STATUS LANE (components/StatusLane), ALWAYS DRAWN, a direct child of the bar right after the

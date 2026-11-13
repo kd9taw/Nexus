@@ -5,7 +5,7 @@
 .remote-section { display: grid; gap: 16px; padding: 24px; min-width: 0; }
 .remote-section h2 { margin: 0; }
 .remote-section form, .remote-section label { display: grid; gap: 10px; min-width: 0; }
-.remote-section input { min-width: 0; width: 100%; min-height: 44px; box-sizing: border-box; padding: 8px; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); }
+.remote-section :is(input, select) { min-width: 0; width: 100%; min-height: 44px; box-sizing: border-box; padding: 8px; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); }
 .remote-section code, .remote-account code { overflow-wrap: anywhere; }
 .remote-actions { display: flex; flex-wrap: wrap; gap: 12px; }
 .remote-button { min-width: 44px; min-height: 44px; padding: 8px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-elev); color: var(--text); font: inherit; cursor: pointer; white-space: normal; }

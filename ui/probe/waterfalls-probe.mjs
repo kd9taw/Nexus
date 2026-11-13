@@ -4,13 +4,15 @@
 // SAME full width and the SAME default height, 25 % of its cockpit — FT8/FT4 in both layouts, Phone, CW, JS8,
 // JTTY, PSK, RTTY and Tempo. SSTV keeps its bigger stage (its decoded picture shows there): its width is checked,
 // its height is not. The probe serves the REAL app (index.html, main.tsx, App) with the app's own Vite config and
-// src/api.ts swapped for probe/waterfalls-api.ts, opens each mode with fresh storage at 1024×768, 1366×768,
-// 1920×1080 and 2560×1440 (the app fits its own zoom, as it does on those screens), and measures the strip each
+// src/api.ts swapped for probe/waterfalls-api.ts, opens each mode with fresh storage at the floor (1366×768 at
+// 175 %), 1366×768, 1920×1080, 2560×1440 and 4K at 200 % (probe/sizes.mjs; the app fits its own zoom, as it does
+// on those screens), and measures the strip each
 // waterfall's height divider sizes. It asserts:
 //   1. THE DEFAULT IS 25 % OF THE COCKPIT: the height the divider announces is 25 % of its shell's content box,
 //      clamped by the range the divider announces (the layout's own floors: on a short window a cockpit's panes
 //      and dock can hold the strip below 25 %, and the divider then stands at its ceiling, which is reported).
-//   2. THE SAME WIDTH: every waterfall's strip is as wide as every other one at that size, within 10 px (the
+//   2. THE SAME WIDTH: every waterfall's strip is as wide as every other one at that size, net of its shell's own
+//      scrollbar where the shell scrolls, within 10 px (the
 //      shells' padding differs by 4 px a side; Phone's and CW's scope panels draw the picture 8 px in from each
 //      edge, which the table reports).
 //   3. THE SAME HEIGHT: every strip the layout lets reach 25 % is the same height on the screen, within 3 px,
@@ -20,24 +22,28 @@
 //   6. RTTY (2026-10-26): its tuning scope stands RIGHT of the waterfall in the same strip, so with the scope
 //      shown the strip is exactly as tall as with it hidden (the scope costs the waterfall no height), and that is
 //      the COMMON height — 25 % of the cockpit, as tall as JS8's, which has the same cockpit — wherever RTTY's own
-//      panes let the strip reach it (from 1366×768 up; at 1024×768 the decoded text's and the log strip's floors
-//      hold it lower with or without the scope, as PSK's and CW's are held, and the table says so). The square
-//      keeps its size (at least what it was in its old place left of the decoded text, measured before the move:
-//      TUNING_BEFORE), its nudges and words are on screen with nothing scrolled, RTTY's cockpit does not scroll,
+//      panes let the strip reach it (from 1366×768 up; on a short window the decoded text's and the log strip's
+//      floors hold it lower with or without the scope, as PSK's and CW's are held, and the table says so). The
+//      square keeps its size (at least what it was in its old place left of the decoded text, measured before
+//      the move: TUNING_BEFORE, by CSS window; the floor has no such measurement and is not held to one), its nudges and words are on screen with nothing scrolled, RTTY's cockpit does not scroll,
 //      and with the scope hidden the waterfall takes the strip's full width.
 //   7. THE CW SCOPE'S HiDef/Fast SWITCH (2026-10-27): on the CW scope at every size, reading HiDef (the default),
 //      on screen, the topmost thing where it stands, inside the scope, and its header row not overflowing; a
 //      click turns it to Fast and it is still on screen. Phone shows no such switch.
 //   5. PHONE'S LEFT SIDE: with Band Activity on the side, the scope is exactly as wide as without it, and the side
-//      starts under the TX strip. TEMPO, STACKED (1024×768 at a pinned 100 %): its strip is 25 % of the window and
+//      starts under the TX strip. TEMPO, STACKED (the floor at a pinned 100 %): its strip is 25 % of the window and
 //      stands clear of the cell under it.
 //   8. CW ON A RADIO WITH ITS OWN SCOPE (2026-11-04): its scope strip opens at 40 % of the cockpit (clamped by the
 //      divider's range) in each of the RF / Audio / Both views, with Stop TX and Tune on screen; with no scope of its
 //      own it opens at 25 % (check 1).
+//   9. A PICTURE AT EVERY SIZE (2026-11-12, "the operator must see a waterfall"): every mode's waterfall draws at least
+//      2em of picture (28 CSS px of the app's own, under its zoom), not only its head. On the floor screen FT's strip gave
+//      way to its lower region alone and drew 0 px, and Phone's scope 10 px.
 // THE CONTROLS, run every time: JS8 with its divider moved one step (the default no longer 25 %) must fail check
 // 1, and Phone with a planted 360 px margin beside its scope must fail check 2. If either passes, the checks
 // cannot fail and the probe says so instead of passing.
-// Check 8's: the radio-scope CW page held to 25 % must fail. RTTY's two (6): a planted ceiling on its strip must fail the
+// Check 8's: the radio-scope CW page held to 25 % must fail. Check 9's: FT at the floor with its waterfall's floor taken off
+// (the shape that shipped) must draw too little picture. RTTY's two (6): a planted ceiling on its strip must fail the
 // common height, and a planted 60 px square must fail the scope's size. The CW switch's (7): a planted cover over
 // it must fail its reach.
 //
@@ -48,6 +54,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
+import { FHD, FLOOR, LAPTOP, QHD, UHD_200, css, metrics } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
@@ -55,7 +62,7 @@ const STUB_SRC = join(UI, 'probe', 'waterfalls-api.ts')
 // Served under a name with no file behind it, beside the source (so its relative import resolves the same):
 // the dependency scan reads files from disk, and the source alone lacks most of api.ts's exports.
 const STUB_API = join(UI, 'probe', '__waterfalls-api.ts')
-const SIZES = [[1024, 768], [1366, 768], [1920, 1080], [2560, 1440]]
+const SIZES = [FLOOR, LAPTOP, FHD, QHD, UHD_200]
 const FEATURES = JSON.stringify({ profile: 'custom', enabled: { js8: true, jtty: true, rtty: true, psk: true, sstv: true } })
 /** [name, hash, extra storage]. Roster is FT's stock layout. */
 const VIEWS = [
@@ -71,9 +78,10 @@ const VIEWS = [
   ['SSTV', 'sstv', {}],
 ]
 const NO_HEIGHT = new Set(['SSTV'])
-/** RTTY's tuning square on screen, px, in its old place left of the decoded text (measured on the tree before the
- *  2026-10-26 move, at these sizes): the size it keeps. */
-const TUNING_BEFORE = { '1024×768': 118, '1366×768': 142, '1920×1080': 201, '2560×1440': 202 }
+/** RTTY's tuning square on screen, CSS px, in its old place left of the decoded text (measured on the tree before
+ *  the 2026-10-26 move, in these CSS windows): the size it keeps. 4K at 200 % is the 1920×1080 window; the floor's
+ *  780×438 was never measured, so there is nothing to hold it to. */
+const TUNING_BEFORE = { '1366×768': 142, '1920×1080': 201, '2560×1440': 202 }
 const RTTY_NO_TUNING = { 'nexus.panels.rtty.main': JSON.stringify({ v: 1, state: { tuning: 'removed' }, share: {} }) }
 const PHONE_SIDE = { 'nexus.panels.phone.main': JSON.stringify({ v: 2, state: {}, share: {}, leftSide: ['bandActivity'] }) }
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -119,11 +127,17 @@ const MEASURE = `(() => {
     ptt: ptt ? reach(ptt) : null,
     region: region ? { h: region.getBoundingClientRect().height / zoomOf(region), floor: parseFloat(getComputedStyle(region).minHeight) || 0 } : null,
     shellScrolls: shell.scrollHeight > shell.clientHeight + 1,
+    // The shell's own scrollbar, in window px: a shell that scrolls (its deficit valve) shows one, and the strip is
+    // that much narrower. Check 2 compares widths net of it (offsetWidth less clientWidth, less the borders).
+    scrollbar: (() => { const s = getComputedStyle(shell), n = (v) => parseFloat(v) || 0
+      return Math.round((shell.offsetWidth - shell.clientWidth - n(s.borderLeftWidth) - n(s.borderRightWidth)) * zoomOf(shell) * 10) / 10 })(),
     wfW: Math.round(strip.querySelector('.waterfall-wrap')?.getBoundingClientRect().width ?? r.width),
     side: side ? { top: Math.round(side.getBoundingClientRect().top) } : null,
     txBottom: txstrip ? Math.round(txstrip.getBoundingClientRect().bottom) : null,
     next: (() => { const n = [...shell.children].find((e) => e.matches('.grid-stations')); return n ? Math.round(n.getBoundingClientRect().top) : null })(),
     vhEff: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--vh-eff')) || null,
+    // The strip's own em, which its sheet's \`8em\` is (14 px at the body font, not the root's 16).
+    fontPx: parseFloat(getComputedStyle(strip).fontSize) || null,
     // The CW scope's HiDef/Fast switch, where one is shown.
     hidef: (() => {
       const b = [...strip.querySelectorAll('button')].find((x) => vis(x) && /^(HiDef|Fast)$/.test(x.textContent.trim()))
@@ -208,9 +222,9 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-/** One page: the app at `hash` in a W×H window with fresh storage plus `extra`, measured once it settles.
+/** One page: the app at `hash` in the window of `size` (probe/sizes.mjs) with fresh storage plus `extra`, measured once it settles.
  *  `before(evaluate)` may act on the page first (a control's plant). */
-async function measure(hash, [W, H], extra = {}, before = null) {
+async function measure(hash, size, extra = {}, before = null) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -220,7 +234,7 @@ async function measure(hash, [W, H], extra = {}, before = null) {
     return r.result.value
   }
   try {
-    await call('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false })
+    await call('Emulation.setDeviceMetricsOverride', metrics(size))
     await call('Page.navigate', { url: `${origin}/probe-blank` })
     await sleep(300)
     const ls = { 'nexus.workspace': 'dx', 'nexus.features.v1': FEATURES, 'tempo-theme': 'dark', ...extra }
@@ -271,7 +285,7 @@ function defaultRed(name, m, share = 0.25) {
 /** Check 6 for RTTY with its tuning scope shown (`m`), against the same page with it hidden (`bare`): the
  *  scope costs no height, the strip is the common height wherever the cockpit's own panes allow it, and the
  *  scope's size and place. */
-function rttyRed(tag, m, bare, js8) {
+function rttyRed(tag, m, bare, js8, before) {
   const reds = []
   const want = 0.25 * m.shellCs
   if (Math.abs(m.stripCs - bare.stripCs) > 2)
@@ -286,18 +300,27 @@ function rttyRed(tag, m, bare, js8) {
   if (!t) return [...reds, `RTTY at ${tag}: no tuning scope on screen`]
   if (!t.inStrip) reds.push(`RTTY at ${tag}: the tuning scope is not in the waterfall's strip`)
   if (t.wfRight != null && t.left < t.wfRight) reds.push(`RTTY at ${tag}: the tuning scope starts at ${t.left}, left of the waterfall's right edge ${t.wfRight}`)
-  if (t.side < TUNING_BEFORE[tag] - 1) reds.push(`RTTY at ${tag}: the tuning square is ${t.side} px, smaller than its ${TUNING_BEFORE[tag]} px before the move`)
+  if (before != null && t.side < before - 1) reds.push(`RTTY at ${tag}: the tuning square is ${t.side} px, smaller than its ${before} px before the move`)
   if (!t.controls) reds.push(`RTTY at ${tag}: the tuning scope's nudges or words are cut off`)
   if (t.scrolls) reds.push(`RTTY at ${tag}: the tuning scope scrolls`)
   if (m.shellScrolls) reds.push(`RTTY at ${tag}: the cockpit scrolls`)
   return reds
 }
+/** Check 9 for one page: the picture under the strip's head is at least 2em of the app's own CSS px. */
+const PICTURE_MIN = 2 * 14
+function pictureRed(name, m) {
+  const pic = m.px.canvasH / m.z
+  return pic < PICTURE_MIN ? `${name}: the waterfall draws a ${pic.toFixed(0)} px picture (${m.px.canvasH} on screen), under ${PICTURE_MIN}` : null
+}
 /** Checks 2 and 3 across one size's pages. */
 function sameRed(size, rows) {
   const reds = []
-  const ws = rows.map(([n, m]) => [n, m.px.w])
+  // Net of each shell's own scrollbar (a measurement fix, 2026-11-12): on the floor screen the shells that scroll
+  // (JTTY, PSK, SSTV, FT) lost exactly their scrollbar's width, which is not the layout's to give back short of a
+  // reserved gutter on every shell, at every size.
+  const ws = rows.map(([n, m]) => [n, Math.round((m.px.w + (m.scrollbar || 0)) * 10) / 10, m.scrollbar || 0])
   const wMin = Math.min(...ws.map(([, w]) => w)), wMax = Math.max(...ws.map(([, w]) => w))
-  if (wMax - wMin > 10) reds.push(`${size}: waterfall widths differ by ${wMax - wMin} px: ${ws.map(([n, w]) => `${n} ${w}`).join(', ')}`)
+  if (wMax - wMin > 10) reds.push(`${size}: waterfall widths differ by ${(wMax - wMin).toFixed(1)} px (each net of its shell's scrollbar): ${ws.map(([n, w, sb]) => `${n} ${w}${sb ? ` (+${sb})` : ''}`).join(', ')}`)
   const free = rows.filter(([n, m]) => !NO_HEIGHT.has(n) && m.now < m.max - 1)
   const groups = new Map()
   for (const [n, m] of free) {
@@ -321,7 +344,7 @@ try {
   const bySize = new Map()
   const rttyBare = new Map()
   for (const size of SIZES) {
-    const tag = `${size[0]}×${size[1]}`
+    const tag = size.name
     const rows = []
     for (const [name, hash, extra] of VIEWS) {
       const m = await measure(hash, size, extra)
@@ -331,7 +354,7 @@ try {
         throw new Error('no waterfall')
       }
       rows.push([name, m])
-      table.push(`${tag.padEnd(10)} ${name.padEnd(12)} ${String(m.px.w).padStart(5)} × ${String(m.px.h).padStart(3)} px  picture ${String(m.px.canvasW).padStart(4)} × ${String(m.px.canvasH).padStart(3)}  (25 % of ${m.shellCs.toFixed(0)} CSS px = ${(0.25 * m.shellCs).toFixed(0)}, divider ${m.now} of ${m.min}–${m.max}${m.now >= m.max - 1 ? ', AT ITS CEILING' : ''})`)
+      table.push(`${tag.padEnd(16)} ${name.padEnd(12)} ${String(m.px.w).padStart(5)} × ${String(m.px.h).padStart(3)} px  picture ${String(m.px.canvasW).padStart(4)} × ${String(m.px.canvasH).padStart(3)}  (25 % of ${m.shellCs.toFixed(0)} CSS px = ${(0.25 * m.shellCs).toFixed(0)}, divider ${m.now} of ${m.min}–${m.max}${m.now >= m.max - 1 ? ', AT ITS CEILING' : ''})`)
       if (m.now == null) red(`${name} at ${tag}: no height divider beside the waterfall`)
       else if (!NO_HEIGHT.has(name)) {
         const r = defaultRed(`${name} at ${tag}`, m)
@@ -344,8 +367,8 @@ try {
         const bare = await measure('rtty', size, RTTY_NO_TUNING)
         if (!bare) throw new Error(`RTTY without its tuning scope at ${tag}: no waterfall`)
         rttyBare.set(tag, bare)
-        console.log(`waterfalls-probe: RTTY at ${tag}: strip ${m.px.h} px tall with the tuning scope, ${bare.px.h} without (25 %: ${(0.25 * m.shellCs * m.z).toFixed(0)}); square ${m.tuning?.side} px (before the move ${TUNING_BEFORE[tag]}); waterfall ${m.wfW} × picture ${m.px.canvasH} px with it, ${bare.wfW} × ${bare.px.canvasH} without, of the ${m.px.w} px strip`)
-        for (const r of rttyRed(tag, m, bare, rows.find(([n]) => n === 'JS8')?.[1])) red(r)
+        console.log(`waterfalls-probe: RTTY at ${tag}: strip ${m.px.h} px tall with the tuning scope, ${bare.px.h} without (25 %: ${(0.25 * m.shellCs * m.z).toFixed(0)}); square ${m.tuning?.side} px (before the move ${TUNING_BEFORE[css(size)] ?? 'never measured'}); waterfall ${m.wfW} × picture ${m.px.canvasH} px with it, ${bare.wfW} × ${bare.px.canvasH} without, of the ${m.px.w} px strip`)
+        for (const r of rttyRed(tag, m, bare, rows.find(([n]) => n === 'JS8')?.[1], TUNING_BEFORE[css(size)])) red(r)
         if (bare.tuning) red(`RTTY at ${tag}: the tuning scope is still shown with its entry hidden`)
         if (Math.abs(bare.wfW - bare.px.w) > 1) red(`RTTY without its tuning scope at ${tag}: the waterfall is ${bare.wfW} px of a ${bare.px.w} px strip`)
         for (const [label, ok] of bare.stops) if (!ok) red(`RTTY (no tuning) at ${tag}: ${label} is not on screen or something covers it`)
@@ -356,6 +379,8 @@ try {
         for (const r of hidefRed(`CW at ${tag}`, m, 'HiDef')) red(r)
       }
       if (name === 'Phone' && m.hidef) red(`Phone at ${tag}: shows the CW scope's HiDef/Fast switch`)
+      const r9 = pictureRed(`${name} at ${tag}`, m)
+      if (r9) red(r9)
     }
     bySize.set(tag, rows)
     for (const r of sameRed(tag, rows)) red(r)
@@ -365,7 +390,7 @@ try {
 
   // 5. Phone's left side: the scope as wide as without it, the side under the TX strip.
   for (const size of SIZES.slice(1)) {
-    const tag = `${size[0]}×${size[1]}`
+    const tag = size.name
     const plain = bySize.get(tag).find(([n]) => n === 'Phone')[1]
     const m = await measure('phone', size, PHONE_SIDE)
     if (!m?.side) red(`Phone at ${tag}: the left side did not show`)
@@ -379,8 +404,8 @@ try {
     }
   }
   // 7. The CW switch clicked to Fast stays where it was.
-  for (const size of [[1024, 768], [1920, 1080]]) {
-    const tag = `${size[0]}×${size[1]}`
+  for (const size of [FLOOR, FHD]) {
+    const tag = size.name
     const m = await measure('cw', size, {}, async (evaluate) => {
       await evaluate(`(() => { const b = [...document.querySelectorAll('.ph-scope-panel button')].find((x) => x.textContent.trim() === 'HiDef'); b?.click(); return 1 })()`)
     })
@@ -390,13 +415,15 @@ try {
       for (const r of hidefRed(`CW at ${tag} after a click`, m, 'Fast')) red(r)
     }
   }
-  // Tempo stacked: 1024×768 at a pinned 100 % is the narrow collapse.
+  // Tempo stacked: the floor at a pinned 100 % is the narrow collapse.
   {
-    const m = await measure('chat', [1024, 768], { 'nexus.workspace': 'msg', 'nexus-ui-scale-mode': '100' })
+    const m = await measure('chat', FLOOR, { 'nexus.workspace': 'msg', 'nexus-ui-scale-mode': '100' })
     if (!m) red('Tempo stacked: no waterfall')
     else {
-      const want = Math.max(Math.min(8 * 16, 0.28 * m.vhEff), 0.25 * m.vhEff)
-      console.log(`waterfalls-probe: Tempo stacked (${m.vp}) at 1024×768 100 %: strip ${m.px.w} × ${m.px.h} px (25 % of the window: ${want.toFixed(0)}), next cell at ${m.next}`)
+      // The sheet's rule, max(min(8em, 28 %), 25 %), in the strip's own em: at the floor 8em is what wins, and 8 × 16
+      // (the root's em) asked 123 px of a 112 px strip that is 25.6 % of the window.
+      const want = Math.max(Math.min(8 * m.fontPx, 0.28 * m.vhEff), 0.25 * m.vhEff)
+      console.log(`waterfalls-probe: Tempo stacked (${m.vp}) at ${FLOOR.name} 100 %: strip ${m.px.w} × ${m.px.h} px (25 % of the window: ${want.toFixed(0)}), next cell at ${m.next}`)
       if (!/^(sm|xs)$/.test(m.vp)) red(`Tempo stacked: the viewport is ${m.vp}, not the collapse — the case tests nothing`)
       if (Math.abs(m.stripCs - want) > 3) red(`Tempo stacked: the strip is ${m.stripCs.toFixed(0)} CSS px, not 25 % of the window (${want.toFixed(0)})`)
       if (m.next != null && m.next < m.px.bottom) red('Tempo stacked: the cell under the strip starts inside it')
@@ -408,7 +435,7 @@ try {
   // above is the other half: CW on a radio with no scope of its own still opens at 25 %.
   const rigScoped = new Map()
   for (const size of SIZES) {
-    const tag = `${size[0]}×${size[1]}`
+    const tag = size.name
     for (const view of ['Both', 'RF', 'Audio']) {
       const m = await measure('cw', size, { 'probe.rigScope': '1' }, view === 'Both' ? null : async (evaluate) => {
         await evaluate(`(() => { const b = [...document.querySelectorAll('[aria-label="What the scope shows"] button')].find((x) => x.textContent === ${JSON.stringify(view)}); b?.click(); return !!b })()`)
@@ -431,12 +458,12 @@ try {
     if (r == null) red('CONTROL FAILED — the radio-scope CW strip passed the 25 % check; check 1 cannot catch a no-scope CW strip opening at 40 %')
     else console.log(`waterfalls-probe: CONTROL — ${r} (caught)`)
   }
-  const step = await measure('js8', [1366, 768], {}, async (evaluate) => {
+  const step = await measure('js8', LAPTOP, {}, async (evaluate) => {
     await evaluate(`(() => { const s = document.querySelector('.js8-cockpit > .pane-splitter.horizontal'); s.focus(); s.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })); return 1 })()`)
   })
   if (!step || defaultRed('JS8 moved one step', step) == null) red('CONTROL FAILED — JS8 with its divider moved off the default passed check 1; the check cannot fail')
   else console.log(`waterfalls-probe: CONTROL — ${defaultRed('JS8 moved one step', step)} (caught)`)
-  const wide = await measure('phone', [1366, 768], {}, async (evaluate) => {
+  const wide = await measure('phone', LAPTOP, {}, async (evaluate) => {
     await evaluate(`(() => { const s = document.createElement('style'); s.textContent = '.phone-cockpit > .ph-scope-panel { margin-right: 360px }'; document.head.appendChild(s); return 1 })()`)
   })
   const planted = bySize.get('1366×768').map(([n, m]) => [n, n === 'Phone' ? wide : m])
@@ -449,17 +476,27 @@ try {
     ['a ceiling planted on its strip', '.rtty-cockpit > .rtty-wf-row, .rtty-cockpit > .waterfall-wrap { max-height: 100px !important }'],
     ['a planted 60 px square', '.rtty-tuning-box { width: 60px !important }'],
   ]) {
-    const m = await measure('rtty', [1366, 768], {}, async (evaluate) => {
+    const m = await measure('rtty', LAPTOP, {}, async (evaluate) => {
       await evaluate(`(() => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(css)}; document.head.appendChild(s); return 1 })()`)
     })
-    const caught = m ? rttyRed('1366×768', m, rttyBare.get('1366×768'), bySize.get('1366×768').find(([n]) => n === 'JS8')[1]) : []
+    const caught = m ? rttyRed('1366×768', m, rttyBare.get('1366×768'), bySize.get('1366×768').find(([n]) => n === 'JS8')[1], TUNING_BEFORE['1366×768']) : []
     if (caught.length === 0) red(`CONTROL FAILED — RTTY with ${what} passed check 6; the check cannot fail`)
     else console.log(`waterfalls-probe: CONTROL — RTTY with ${what}: ${caught[0]} (caught)`)
   }
 
+  // Check 9's control: FT at the floor as it shipped in 1.24.0 (no waterfall floor, the lower region's at 35 %).
+  {
+    const m = await measure('operate', FLOOR, {}, async (evaluate) => {
+      await evaluate(`(() => { const s = document.createElement('style'); s.textContent = '.cockpit-waterfall { min-height: 0 !important } .cockpit-lower { min-height: min(18em, calc(0.35 * var(--vh-eff))) !important }'; document.head.appendChild(s); return 1 })()`)
+    })
+    const r = m ? pictureRed(`FT at ${FLOOR.name} (its floor taken off)`, m) : null
+    if (r == null) red('CONTROL FAILED — FT with its waterfall floor taken off passed check 9; the check cannot fail')
+    else console.log(`waterfalls-probe: CONTROL — ${r} (caught)`)
+  }
+
   // The CW switch's control (7): a cover planted over the scope's header must fail its reach.
   {
-    const m = await measure('cw', [1366, 768], {}, async (evaluate) => {
+    const m = await measure('cw', LAPTOP, {}, async (evaluate) => {
       await evaluate(`(() => { const b = [...document.querySelectorAll('.ph-scope-panel button')].find((x) => x.textContent.trim() === 'HiDef'); const q = b.getBoundingClientRect(); const d = document.createElement('div'); d.style.cssText = 'position:fixed;z-index:99999;left:' + q.left + 'px;top:' + q.top + 'px;width:' + q.width + 'px;height:' + q.height + 'px'; document.body.appendChild(d); return 1 })()`)
     })
     const caught = m ? hidefRed('CW at 1366×768 (planted cover)', m, 'HiDef') : []
