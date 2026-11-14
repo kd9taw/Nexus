@@ -53,6 +53,11 @@ fn the_parse_calls_a_line_standard_exactly_when_the_packer_does() {
         ("K1ABC/R W9XYZ", "i3=1"),
         ("A79AA K2DEF", "i3=1"),
         ("A13DE W9XYZ", "i3=1"),
+        ("QRZ W1AW", "i3=1"),
+        ("DE W1AW", "i3=1"),
+        ("DE W1AW/P", "i3=0 n3=0"),
+        ("QRZ W1AW/P", "i3=0 n3=0"),
+        ("DE TNX", "i3=0 n3=0"),
         ("TNX K1ABC", "i3=0 n3=0"),
         ("HELLO W9XYZ", "i3=0 n3=0"),
         ("73 K1ABC", "i3=0 n3=0"),
@@ -119,4 +124,31 @@ fn a_double_click_on_a_gridless_standard_cq_answers_with_my_grid() {
             "{cq}"
         );
     }
+}
+
+/// `QRZ W1AW` is a standard message (`pack77_1` exempts `QRZ` in the first word,
+/// `lib/77bit/packjt77.f90:1228-1229`), and a double-click answers it as WSJT-X does: its first
+/// word is not my call nor `DE`, so `processMessage` reaches "just work them" (mainwindow.cpp
+/// 9364-9374): Tx1, my call and grid, as for a CQ. Nexus read the line as free text.
+#[test]
+fn a_double_click_on_qrz_and_a_call_answers_with_my_grid() {
+    let mut e = Engine::new(ME, MY_GRID, 0);
+    e.ingest_decodes_for_test(&[heard("QRZ W1AW")], 2);
+    let row = e
+        .snapshot()
+        .recent_decodes
+        .into_iter()
+        .find(|r| r.message == "QRZ W1AW")
+        .expect("the row");
+    assert_eq!(
+        row.from.as_deref(),
+        Some("W1AW"),
+        "the row names its caller"
+    );
+    e.work_station("W1AW", None, Some("QRZ W1AW"), Some(SNR), None)
+        .expect("the double-click is taken");
+    assert_eq!(
+        (1..5).find_map(|s| keyed(&mut e, s)).as_deref(),
+        Some("W1AW K1ABC FN42")
+    );
 }

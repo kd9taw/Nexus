@@ -667,7 +667,15 @@ impl Msg {
                 dir: String::new(),
             };
         }
-        if t.len() == 2 && chkcall_ok(t[0]) && chkcall_ok(t[1]) && !t[1].contains('/') {
+        // `QRZ W1AW` and `DE W1AW` too: `pack77_1` exempts `DE` and `QRZ` from `chkcall` in the
+        // first word (`:1228-1229`), as the three-word `QRZ W1AW FN42` already reads here. They
+        // read as a call from W1AW to `QRZ` or `DE`, the way `deCallAndGrid` takes the second word
+        // for the caller (decodedtext.cpp 212-224).
+        if t.len() == 2
+            && (chkcall_ok(t[0]) || matches!(t[0], "DE" | "QRZ"))
+            && chkcall_ok(t[1])
+            && !t[1].contains('/')
+        {
             return Msg::Grid {
                 to: t[0].to_string(),
                 de: t[1].to_string(),
@@ -1005,6 +1013,40 @@ mod fidelity_tests {
             "CQ RR73",
             "CQ CQ",
             "CQ <...>",
+        ] {
+            assert_eq!(Msg::parse(text), Msg::Other(text.into()), "{text}");
+        }
+    }
+
+    /// `QRZ W1AW` and `DE W1AW` are standard messages, as WSJT-X 3.0.2 packs them: `pack77` sends
+    /// a line that starts with `CQ `, `DE ` or `QRZ ` to `pack77_06` and then `pack77_1`
+    /// (`lib/77bit/packjt77.f90:210`, `:240-244`), which exempts `DE` and `QRZ` from `chkcall` in
+    /// the first word (`:1228-1229`) and packs the two words as Type 1 with no grid (`:1235-1236`,
+    /// `:1298-1302`); `unpack77` prints them back (`:569-570`). They read as a call from `W1AW`
+    /// with nothing in the grid, the way the three-word `QRZ W1AW FN42` already did. Still free
+    /// text: a second word `chkcall` refuses, one with a `/` (`:1235`), and `DE` or `QRZ` anywhere
+    /// but first.
+    #[test]
+    fn qrz_or_de_and_a_call_is_a_standard_message() {
+        for (text, to) in [("QRZ W1AW", "QRZ"), ("DE W1AW", "DE"), ("DE KD9TAW", "DE")] {
+            let want = Msg::Grid {
+                to: to.into(),
+                de: text.split(' ').nth(1).unwrap().into(),
+                grid: String::new(),
+            };
+            assert_eq!(Msg::parse(text), want, "{text}");
+            assert_eq!(want.to_text(), text, "{text} renders back verbatim");
+            assert_eq!(Msg::parse(text).sender(), text.split(' ').nth(1), "{text}");
+        }
+        for text in [
+            "DE TNX",
+            "QRZ 73",
+            "DE QRZ",
+            "QRZ DE",
+            "DE W1AW/P",
+            "QRZ W1AW/P",
+            "W1AW DE",
+            "W1AW QRZ",
         ] {
             assert_eq!(Msg::parse(text), Msg::Other(text.into()), "{text}");
         }
