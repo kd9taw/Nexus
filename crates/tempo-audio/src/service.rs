@@ -44114,6 +44114,31 @@ mod tests {
         );
     }
 
+    /// With no rig model there is no CAT to open, on a network connection as anywhere: the radio
+    /// keys its serial line alone, and never attaches to whatever rigctld answers at the address.
+    #[test]
+    fn a_network_rig_with_no_model_keys_its_serial_line_alone() {
+        let (port, _log) = recording_backend();
+        let mut t = cat_transport(port, None);
+        t.rig_model = 0;
+        t.rig_conn = "network".into();
+        t.rig_addr = format!("127.0.0.1:{port}");
+        t.ptt_method = "rts".into();
+        t.serial_port = "/dev/ttyUSB0".into();
+        let (rig, proc, probe) = open_rig(&t, true);
+        assert!(!rig.has_control(), "no CAT channel: {}", probe.detail);
+        assert!(proc.is_none());
+        assert_eq!(
+            rig.ptt_mode(),
+            &PttMode::Serial {
+                port: "/dev/ttyUSB0".into(),
+                line: SerialLine::Rts,
+            },
+            "keys the serial line: {}",
+            probe.detail
+        );
+    }
+
     /// The two serial-CAT shapes the network fix above must not move. A single cable (Digirig)
     /// whose keying port IS the CAT port keys through the daemon holding it; a dedicated keying
     /// port (SO2R) opens CAT on the CAT port and keys its own port beside it.
