@@ -1028,8 +1028,11 @@ impl Rig {
     /// Close the serial port this rig opened to key [`PttMode::Serial`], if it holds one. For a
     /// rig the dual-radio handoff demotes to a read-only monitor, once it has been unkeyed: a
     /// monitor never keys, and another radio's keying line can live on the same port (an SO2R
-    /// controller, RTS for one radio and DTR for the other). Keying again reopens it through
-    /// `open_control_line_port`, which idles both lines, exactly as the first open did.
+    /// controller, RTS for one radio and DTR for the other). Letting go lowers this rig's PTT line
+    /// if it was up ([`crate::control_line::SharedControlLines`]); the port itself closes only once
+    /// no other holder (the FSK keyer, #492) has it. Keying again holds it once more: a port nobody
+    /// holds is opened afresh with both lines idled, and one another holder keeps open is joined
+    /// as it is, without touching that holder's line.
     pub fn release_ptt_port(&mut self) {
         #[cfg(feature = "serial")]
         {

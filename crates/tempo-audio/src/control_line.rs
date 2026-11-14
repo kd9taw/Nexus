@@ -254,13 +254,29 @@ impl SharedControlLines {
 
 #[cfg(feature = "serial")]
 impl ControlLinePins for SharedControlLines {
+    // ⛔ A RAISE IS RECORDED BEFORE THE WRITE AND A LOWER ONLY AFTER IT SUCCEEDS: a failed raise
+    // is still lowered on drop, and a failed lower is RETRIED on drop. Recording the lower first
+    // made a failed unkey look done, so the drop skipped it — and with the other holder keeping
+    // the port open (no close to drop the lines), PTT stayed asserted: the stuck-TX class.
     fn set_dtr(&mut self, on: bool) -> std::io::Result<()> {
-        self.dtr = on; // recorded first: a failed raise is still lowered on drop
-        self.lock().set_dtr(on)
+        if on {
+            self.dtr = true;
+        }
+        let written = self.lock().set_dtr(on);
+        if !on && written.is_ok() {
+            self.dtr = false;
+        }
+        written
     }
     fn set_rts(&mut self, on: bool) -> std::io::Result<()> {
-        self.rts = on;
-        self.lock().set_rts(on)
+        if on {
+            self.rts = true;
+        }
+        let written = self.lock().set_rts(on);
+        if !on && written.is_ok() {
+            self.rts = false;
+        }
+        written
     }
 }
 
@@ -303,6 +319,8 @@ pub(crate) mod fake_ports {
     struct Port {
         state: State,
         log: Vec<State>,
+        /// The next line write fails and changes nothing ([`fail_next_write`]).
+        fail_next: bool,
     }
 
     thread_local! {
@@ -320,6 +338,12 @@ pub(crate) mod fake_ports {
 
     pub(crate) fn state(name: &str) -> State {
         port(name).lock().unwrap().state
+    }
+
+    /// Make the next line write to `name` fail, as a port that refuses a control-line write does,
+    /// leaving the line where it was.
+    pub(crate) fn fail_next_write(name: &str) {
+        port(name).lock().unwrap().fail_next = true;
     }
 
     /// The line levels after every write since the port was installed, oldest first.
@@ -363,11 +387,18 @@ pub(crate) mod fake_ports {
     }
 
     impl FakePort {
-        fn set(&self, line: impl FnOnce(&mut State)) {
+        fn set(&self, line: impl FnOnce(&mut State)) -> serialport::Result<()> {
             let mut port = self.port.lock().unwrap_or_else(|e| e.into_inner());
+            if std::mem::take(&mut port.fail_next) {
+                return Err(serialport::Error::new(
+                    serialport::ErrorKind::Unknown,
+                    "the port refused the line write",
+                ));
+            }
             line(&mut port.state);
             let now = port.state;
             port.log.push(now);
+            Ok(())
         }
     }
 
@@ -437,12 +468,10 @@ pub(crate) mod fake_ports {
             Ok(())
         }
         fn write_request_to_send(&mut self, level: bool) -> serialport::Result<()> {
-            self.set(|state| state.rts = level);
-            Ok(())
+            self.set(|state| state.rts = level)
         }
         fn write_data_terminal_ready(&mut self, level: bool) -> serialport::Result<()> {
-            self.set(|state| state.dtr = level);
-            Ok(())
+            self.set(|state| state.dtr = level)
         }
         fn read_clear_to_send(&mut self) -> serialport::Result<bool> {
             Ok(false)
@@ -574,6 +603,30 @@ mod tests {
         );
         // Closed means closed: the next holder opens it afresh.
         assert!(SharedControlLines::open(name).is_ok());
+    }
+
+    /// ⛔ A FAILED UNKEY IS RETRIED WHEN THE HOLDER GOES. PTT is up while another holder (the FSK
+    /// keyer) keeps the port open, and the write that lowers PTT fails: the line is still up, and
+    /// dropping the PTT holder must lower it — no port close will do it while the keyer holds on.
+    #[cfg(feature = "serial")]
+    #[test]
+    fn a_failed_lower_is_retried_when_the_holder_goes() {
+        let name = "tempo-test-shared-failed-lower";
+        fake_ports::install(name);
+        let mut ptt = SharedControlLines::open(name).unwrap();
+        let fsk = SharedControlLines::open(name).unwrap();
+        ptt.set_rts(true).unwrap();
+        fake_ports::fail_next_write(name);
+        assert!(
+            ptt.set_rts(false).is_err(),
+            "premise: the unkey write fails"
+        );
+        assert!(fake_ports::state(name).rts, "premise: PTT is still up");
+        drop(ptt);
+        let s = fake_ports::state(name);
+        assert!(!s.rts, "the drop retried the failed unkey: {s:?}");
+        assert!(s.held, "premise: the FSK holder keeps the port open");
+        drop(fsk);
     }
 
     #[test]

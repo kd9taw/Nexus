@@ -13723,6 +13723,10 @@ impl RadioLoop {
                                 // keys it as it always has. Keyed before the keyer is borrowed
                                 // below: `key_over` readies Rig split first, which needs the loop.
                                 self.ensure_commanded(rig);
+                                // An inverted line is at mark before PTT (`mark_before_key`).
+                                if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
+                                    k.mark_before_key();
+                                }
                                 self.publish_tx_intent_now(); // before keying
                                 key = self.key_over(engine, rig, true, "RTTY");
                             }
@@ -13879,6 +13883,10 @@ impl RadioLoop {
                             // `ptt_plain`, as on the streaming path: FSK is not audio (#381).
                             // Hoisted with it: `key_over` readies Rig split first, which needs
                             // the loop itself.
+                            // An inverted line is at mark before PTT (`mark_before_key`).
+                            if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
+                                k.mark_before_key();
+                            }
                             self.publish_tx_intent_now(); // before keying
                             key = self.key_over(engine, rig, true, "RTTY");
                         }
@@ -36640,9 +36648,19 @@ mod tests {
         port: &str,
         text: &str,
     ) -> (Arc<Mutex<Engine>>, RadioLoop, MockBackend, Rig, f64) {
+        shared_port_over_sensed(port, text, false)
+    }
+
+    /// [`shared_port_over`] with RTTY Reverse `reverse`.
+    #[cfg(feature = "serial")]
+    fn shared_port_over_sensed(
+        port: &str,
+        text: &str,
+        reverse: bool,
+    ) -> (Arc<Mutex<Engine>>, RadioLoop, MockBackend, Rig, f64) {
         use crate::control_line::fake_ports;
         fake_ports::install(port);
-        let engine = fsk_engine(port, false, Some(port));
+        let engine = fsk_engine(port, reverse, Some(port));
         engine.lock().unwrap().rtty_send_text(text).unwrap();
         let (mut backend, mut state) = (MockBackend::new(), loop_state());
         // The loop has already applied these settings, so it keys this rig rather than
@@ -36679,6 +36697,37 @@ mod tests {
             s.held, held,
             "{path}: the port is held exactly while a user remains"
         );
+    }
+
+    /// ★ #492: AN INVERTED (REVERSE) FSK LINE IS AT MARK BEFORE PTT GOES UP. Released between
+    /// overs, it is SPACE in the inverted sense, and the line used to go to mark only once the
+    /// keyer took the batch, after the key — so every key-up carried a moment of space.
+    #[cfg(feature = "serial")]
+    #[test]
+    fn an_inverted_fsk_line_is_at_mark_before_ptt_keys() {
+        use crate::control_line::fake_ports;
+        let port = "tempo-test-fsk-mark-before-key";
+        let (engine, mut state, mut backend, mut rig, mut t) =
+            shared_port_over_sensed(port, "RY", true);
+        let log = fake_ports::log(port);
+        let key_up = log.iter().position(|s| s.rts).expect("PTT went up");
+        assert!(
+            log[key_up].dtr,
+            "the line is at the inverted mark when PTT goes up: {:?}",
+            &log[..=key_up]
+        );
+        fsk_settle(port);
+        step_to(
+            &engine,
+            &mut state,
+            &mut backend,
+            &mut rig,
+            &mut t,
+            10_000.0,
+        );
+        fsk_settle(port);
+        assert!(!rig.keyed);
+        assert_lines_down(port, true, "inverted over's end");
     }
 
     /// ★ #492: FSK ON DTR AND SERIAL PTT ON RTS OF THE SAME PORT KEY THROUGH ONE HANDLE. The
@@ -36778,6 +36827,12 @@ mod tests {
             !fake_ports::state(port).dtr,
             "the dropped keyer's line is idle"
         );
+        // …and ONLY its line: PTT is still up, on the over's own schedule.
+        assert!(rig.keyed, "premise: the over is still running");
+        assert!(
+            fake_ports::state(port).rts,
+            "the keyer going did not drop PTT, which is the other holder's line"
+        );
         step_to(
             &engine,
             &mut state,
@@ -36788,6 +36843,35 @@ mod tests {
         );
         assert!(!rig.keyed);
         assert_lines_down(port, true, "FSK keyer gone mid-over");
+
+        // The other way round: the rig lets go of its PTT port while an INVERTED line holds
+        // mark (asserted, the bits out, PTT up). PTT drops; the FSK line stays at mark.
+        let port = "tempo-test-fsk-shared-release-inverted";
+        let (engine, mut state, mut backend, mut rig, mut t) =
+            shared_port_over_sensed(port, "RY", true);
+        fsk_settle(port);
+        assert!(
+            fake_ports::state(port).dtr,
+            "premise: the inverted mark is held"
+        );
+        rig.release_ptt_port();
+        let s = fake_ports::state(port);
+        assert!(!s.rts, "the released PTT line drops");
+        assert!(
+            s.dtr,
+            "the PTT holder going did not drop the FSK line, which is the keyer's: {s:?}"
+        );
+        step_to(
+            &engine,
+            &mut state,
+            &mut backend,
+            &mut rig,
+            &mut t,
+            10_000.0,
+        );
+        fsk_settle(port);
+        assert!(!rig.keyed);
+        assert_lines_down(port, true, "PTT port released under an inverted mark");
 
         // Shutdown mid-over: unkey, release the keyers, the rig goes — nothing holds the port.
         let port = "tempo-test-fsk-shared-shutdown";

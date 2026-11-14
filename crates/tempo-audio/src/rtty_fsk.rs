@@ -134,6 +134,9 @@ mod imp {
         };
     }
 
+    /// The longest [`FskKeyer::mark_before_key`] holds up a key-up for the thread's answer.
+    const MARK_WAIT_MS: u64 = 50;
+
     /// What the keying thread is handed.
     enum Cmd {
         /// A framed character stream at a baud, after a lead-in of mark (ms), under the stop
@@ -141,6 +144,8 @@ mod imp {
         Send(Vec<bool>, f64, f64, u64),
         /// The rig is unkeyed: release the line ([`Level::Rest`]).
         Rest,
+        /// A key-up is next: put the line at mark now, and say so on the sender.
+        Mark(mpsc::Sender<()>),
     }
 
     /// The keying thread: block for a character batch, walk its edge schedule against
@@ -161,6 +166,11 @@ mod imp {
                 Cmd::Send(bits, baud, lead_ms, stop) => (bits, baud, lead_ms, stop),
                 Cmd::Rest => {
                     set(Level::Rest);
+                    continue;
+                }
+                Cmd::Mark(done) => {
+                    set(Level::Mark);
+                    let _ = done.send(());
                     continue;
                 }
             };
@@ -268,6 +278,24 @@ mod imp {
                     lead_ms,
                     self.stops.load(Ordering::SeqCst),
                 ));
+            }
+        }
+
+        /// A key-up is next: an INVERTED line goes from its released rest to mark BEFORE PTT, so
+        /// the rig never keys up on a space (the CAT round trip of the key can be tens of ms).
+        /// Waits for the thread, at most [`MARK_WAIT_MS`]: an idle thread answers at once, and
+        /// one still keying a batch is at mark between its bits anyway. In the normal sense
+        /// mark is the released rest, so there is nothing to do.
+        pub fn mark_before_key(&self) {
+            if !self.inverted {
+                return;
+            }
+            if let Some(tx) = &self.tx {
+                let (done, marked) = mpsc::channel();
+                self.rested.store(false, Ordering::SeqCst); // the next unkeyed tick rests it
+                if tx.send(Cmd::Mark(done)).is_ok() {
+                    let _ = marked.recv_timeout(Duration::from_millis(MARK_WAIT_MS));
+                }
             }
         }
 
