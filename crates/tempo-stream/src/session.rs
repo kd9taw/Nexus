@@ -161,6 +161,19 @@ pub fn receive_ends_session(error: &std::io::Error) -> bool {
     !matches!(error.kind(), WouldBlock | TimedOut | Interrupted) && !one_datagram
 }
 
+/// Which path the picture takes to `peer`, the selected pair's remote address, given `relays`, the
+/// addresses of the relayed (TURN) candidates the page named and the session took: [`Path::Relay`]
+/// when `peer` is one of them, whatever range it is in (a relay may sit on the shack's own network);
+/// otherwise the shack's own network or the internet, as [`crate::lan::path`] reads the address.
+/// A pure function, so its decision is tested on every platform, not only where a session runs.
+fn path_of(relays: &[SocketAddr], peer: SocketAddr) -> Path {
+    if relays.contains(&peer) {
+        Path::Relay
+    } else {
+        crate::lan::path(peer)
+    }
+}
+
 /// The most of the page's candidates one session tries, from its offer and its trickle together.
 /// Each is an address the station sends checks to, so this bounds where one page can make it send.
 /// For each network it is on, a browser names a reflexive address, a relayed one for each of the
@@ -793,12 +806,7 @@ impl Session {
             Event::KeyframeRequest(_) => self.events.push(SessionEvent::KeyframeRequest),
             Event::PeerStats(stats) => {
                 if let Some(pair) = stats.selected_candidate_pair {
-                    let peer = pair.remote.addr;
-                    self.path = Some(if self.relays.contains(&peer) {
-                        Path::Relay
-                    } else {
-                        crate::lan::path(peer)
-                    });
+                    self.path = Some(path_of(&self.relays, pair.remote.addr));
                 }
                 // The estimate as str0m holds it now. Its `EgressBitrateEstimate` event is a
                 // three-second average, which would follow a link that narrows seconds late.
@@ -859,6 +867,24 @@ mod tests {
             Session::accept(&fixture_offer(), base, now).err(),
             Some(Refusal::Unavailable)
         );
+    }
+
+    /// The selected pair's path, on every platform (the session test that reaches it runs on
+    /// Windows only): a pair whose remote end is a relayed candidate the page named is the relay's,
+    /// even at a private address; a direct pair is the internet's, a private one the LAN's; with no
+    /// relayed candidate named, no pair is ever the relay's.
+    #[test]
+    fn the_selected_pair_is_relayed_only_at_a_relayed_candidate_the_page_named() {
+        let at = |s: &str| -> SocketAddr { s.parse().unwrap() };
+        let relays = [at("198.51.100.77:3478"), at("10.9.9.9:3478")];
+        assert_eq!(path_of(&relays, at("198.51.100.77:3478")), Path::Relay);
+        assert_eq!(path_of(&relays, at("10.9.9.9:3478")), Path::Relay);
+        // The relay's host at another port is not the relayed candidate.
+        assert_eq!(path_of(&relays, at("198.51.100.77:3479")), Path::Internet);
+        assert_eq!(path_of(&relays, at("203.0.113.8:50000")), Path::Internet);
+        assert_eq!(path_of(&relays, at("192.168.1.20:50000")), Path::Lan);
+        assert_eq!(path_of(&[], at("198.51.100.77:3478")), Path::Internet);
+        assert_eq!(path_of(&[], at("10.9.9.9:3478")), Path::Lan);
     }
 
     /// ICE sends checks to every candidate the page offered, and a destination that refuses one

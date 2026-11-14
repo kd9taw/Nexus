@@ -249,6 +249,15 @@ impl SharedControlLines {
         })
     }
 
+    /// Whether any holder still holds `port` (named as [`Self::open`] matches it). Once none
+    /// does, the port is closed, and closing it let its control lines drop.
+    pub fn held(port: &str) -> bool {
+        with_open_ports(|open| {
+            open.iter()
+                .any(|(name, held)| name.eq_ignore_ascii_case(port) && held.strong_count() > 0)
+        })
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Box<dyn serialport::SerialPort>> {
         self.port
             .lock()

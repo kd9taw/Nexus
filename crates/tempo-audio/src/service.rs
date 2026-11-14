@@ -4661,10 +4661,11 @@ struct RadioLoop {
     /// Serial — opened on demand, reopened if the configured port or line changes.
     #[cfg(feature = "serial")]
     serial_keyer: Option<(String, String, crate::serial_keyer::SerialKeyer)>,
-    /// The stuck-key warning this loop last put in the CW pane ([`cw_key_stuck_warning`]), so it
-    /// can take exactly that warning away again once the key comes up or the keyer goes.
+    /// The stuck-key warning this loop last put in the CW pane ([`cw_key_stuck_warning`]), and
+    /// the keyer it was about, so it can take exactly that warning away again once the key is
+    /// proven up ([`CwStuck`]).
     #[cfg(feature = "serial")]
-    cw_stuck_said: Option<String>,
+    cw_stuck_said: Option<CwStuck>,
     /// Unix-ms until which the current RTTY message is still keying — the next queued
     /// message is held until then (poll pacing), and the PTT drop rides `tx_until_ms`.
     /// 0.0 = idle / ready to send now.
@@ -13264,25 +13265,42 @@ impl RadioLoop {
             // retrying ([`crate::serial_keyer`]), and on a break-in radio a key stuck down is a
             // carrier with no reason on screen. Said every tick while it lasts (a word's own
             // keyer-error write would otherwise clear it); the log line is the thread's, once.
-            // And taken away once it is over — the key-up went out, or the keyer is gone — but
-            // only while the line still says exactly this warning: another error is not ours.
+            //
+            // ⛔ IT LASTS UNTIL THE KEY IS PROVEN UP, NOT UNTIL THE KEYER GOES. A keyer dropped with
+            // its key-up still failing (its port cleared, the keyer switched) may leave the line
+            // down: its drop's last key-ups can fail too, and serial PTT may keep the port open,
+            // so no close drops it. What proves the key up ([`CwStuck::proven_up`]): that keyer's
+            // own key-up going out (live, or its last try as it went), the port closing, or a
+            // later keyer's key-up on the same port and line going out. Then it is taken away,
+            // but only while the line still says exactly this warning: another error is not ours.
             #[cfg(feature = "serial")]
             {
-                let stuck = self
+                if let Some((port, line, sk)) = self
                     .serial_keyer
                     .as_ref()
                     .filter(|(_, _, sk)| sk.key_up_failing())
-                    .map(|(port, _, _)| cw_key_stuck_warning(port));
-                if let Some(why) = stuck {
+                {
+                    self.cw_stuck_said = Some(CwStuck {
+                        why: cw_key_stuck_warning(port),
+                        port: port.clone(),
+                        line: line.clone(),
+                        watch: sk.stuck_watch(),
+                    });
+                }
+                let proven_up = self
+                    .cw_stuck_said
+                    .as_ref()
+                    .is_some_and(|said| said.proven_up(self.serial_keyer.as_ref()));
+                if proven_up {
+                    let said = self.cw_stuck_said.take().map(|said| said.why);
                     let mut eng = engine_lock(engine);
-                    if eng.cw_keyer_error().as_deref() != Some(why.as_str()) {
-                        eng.set_cw_keyer_error(Some(why.clone()));
-                    }
-                    self.cw_stuck_said = Some(why);
-                } else if let Some(said) = self.cw_stuck_said.take() {
-                    let mut eng = engine_lock(engine);
-                    if eng.cw_keyer_error().as_deref() == Some(said.as_str()) {
+                    if eng.cw_keyer_error() == said {
                         eng.set_cw_keyer_error(None);
+                    }
+                } else if let Some(said) = &self.cw_stuck_said {
+                    let mut eng = engine_lock(engine);
+                    if eng.cw_keyer_error().as_deref() != Some(said.why.as_str()) {
+                        eng.set_cw_keyer_error(Some(said.why.clone()));
                     }
                 }
             }
@@ -20934,6 +20952,36 @@ impl CatProbe {
 }
 
 type RigOpen = (Rig, Option<CatDaemon>, CatProbe);
+
+/// A stuck-key warning the radio loop has put in the CW pane: its text, and the keyer's port,
+/// line and stuck flag, which outlive the keyer so the warning can outlast it.
+#[cfg(feature = "serial")]
+struct CwStuck {
+    why: String,
+    port: String,
+    line: String,
+    watch: crate::serial_keyer::StuckWatch,
+}
+
+#[cfg(feature = "serial")]
+impl CwStuck {
+    /// Whether the key is now known to be up, with `now` the keyer the loop holds. Never while
+    /// that keyer's own key-up is failing: it is the warning's subject, live. Otherwise: the
+    /// stuck keyer's own key-up went out (its flag fell, live or at its drop's last try); the
+    /// port is closed (no holder left, so its lines dropped with it); or the keyer now on the
+    /// same port and line has had a key-up go out. A key-up on the other line, or on another
+    /// port, proves nothing about this one.
+    fn proven_up(&self, now: Option<&(String, String, crate::serial_keyer::SerialKeyer)>) -> bool {
+        if now.is_some_and(|(_, _, sk)| sk.key_up_failing()) {
+            return false;
+        }
+        !self.watch.key_up_failing()
+            || !crate::control_line::SharedControlLines::held(&self.port)
+            || now.is_some_and(|(port, line, sk)| {
+                port.eq_ignore_ascii_case(&self.port) && *line == self.line && sk.key_up_went_out()
+            })
+    }
+}
 
 /// The CW pane's warning while the serial keyline's key-up keeps failing
 /// ([`crate::serial_keyer::SerialKeyer::key_up_failing`]).
