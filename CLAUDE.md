@@ -53,6 +53,7 @@ only trigger is somebody remembering is not a gate. Never pipe a gate into `grep
 | src-tauri needs `--features radio` | Without it, ~13 phantom `tempo_audio` unresolved-crate errors. They are not real. |
 | tempo-audio full tests | `cargo test -p tempo-audio --features device,serial` — and **clippy needs the same features**: CI lints `cargo clippy tempo-audio --features device,serial`; a plain `--workspace` clippy sweep misses feature-gated code (bit 2026-08-02) |
 | propagation live fetchers | `--features live` |
+| `cargo test --release -p tempo-audio` **does not compile, on purpose** | tempo-audio's tests turn on its `test-util` feature (a dev-dependency on itself), and a `compile_error!` refuses that feature in any build without debug assertions, so a test-only hook can never reach a shipped build. Run its tests in the default debug profile; `cargo build --release` is unaffected. |
 | UI typecheck is `tsc -b` | Not `--noEmit` (project references). Build = `tsc -b && vite build`; tests = `npm test` (vitest) in `ui/` |
 | Toolchain pinned 1.93.1 | CI pins exact stable; match it locally for clippy parity |
 | CI is the source of truth | `.github/workflows/ci.yml` — its comments document known traps, and `scripts/gates` derives the runnable list from it. Read them before changing build wiring. When you learn a new trap, encode it there (or here), not in session memory. |
