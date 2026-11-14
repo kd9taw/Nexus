@@ -4623,6 +4623,15 @@ impl FieldDayStation {
         crate::message::names_whole_call(to, self.mycall())
     }
 
+    /// ⛔ Running, a caller whose call is my own base call: passed by, in every set of messages,
+    /// and the next caller in the period is taken, as WSJT-X refuses one in every activity
+    /// ([`is_my_base_call`](crate::message::is_my_base_call), mainwindow.cpp 8977).
+    fn is_my_own_caller(&self, m: &Msg) -> bool {
+        self.state == FdState::CallingCq
+            && m.sender()
+                .is_some_and(|de| crate::message::is_my_base_call(de, self.mycall()))
+    }
+
     /// The caller `de` of a first call with no grid, as my report names it: WSJT-X's Tx2 to it
     /// (`genStdMsgs`, mainwindow.cpp), its call hashed where it is nonstandard (`t0a`, 9596,
     /// 9629-9631) and whole otherwise, beside my call as [`my_call_beside`](Self::my_call_beside)
@@ -4819,6 +4828,9 @@ impl FieldDayStation {
                 continue;
             }
             let m = Msg::parse(&d.message);
+            if self.is_my_own_caller(&m) {
+                continue;
+            }
             match (self.state, &m) {
                 // NOTE: there is intentionally NO (Listening, Cq) auto-answer arm. S&P listens: it
                 // must NEVER start a contact on its own (contests require the operator to start
@@ -4867,6 +4879,31 @@ impl FieldDayStation {
                     self.transcript.push(format!(
                         "caller {de} {class} {section} rogered early → log + RR73"
                     ));
+                }
+                // Running: a caller's first call, with no grid (`K1ABC W9XYZ`) or with one
+                // (`K1ABC W9XYZ EN52`) → my exchange, as WSJT-X's Field Day activity answers it.
+                // Four message words (`tokens_re`, decodedtext.cpp 14-45) pass `processMessage`'s
+                // five-word branch (9107) and reach Tx2 (9315-9325); five, a grid last, take that
+                // branch (9107-9111), where Field Day is not among the activities that answer a
+                // grid with Tx3 (9112-9116) and so sends Tx2 (9129-9135). Tx2 is Field Day's call
+                // pair and exchange (`genStdMsgs`, 9637, 9655); the grid is not logged. The
+                // caller's rogered exchange is then taken as after an S&P answer, below: logged
+                // and closed with RR73. Only a caller to my whole call
+                // ([`to_my_whole_call`](Self::to_my_whole_call), CQ: First 7021).
+                //
+                // ⛔ Only where the caller runs WSJT-X's Field Day activity
+                // ([`wsjtx_field_day`](Self::set_wsjtx_field_day): ARRL Field Day on FT8 and FT4),
+                // the one place WSJT-X's answer is the contract. Field Day's messages anywhere else
+                // are Nexus's own (FT1, DX1, FT2, Winter Field Day, and a contest that bans the
+                // mode, whose session has no class or section, so its exchange would go out as
+                // `W9XYZ K1ABC` and two blanks); there the run passes such a caller by, as before.
+                (FdState::CallingCq, Msg::Grid { to, de, .. })
+                    if self.wsjtx_field_day && self.to_my_whole_call(to) =>
+                {
+                    self.engage(de);
+                    self.pending = Some(self.my_exch_msg(de, false));
+                    self.state = FdState::AwaitExchange;
+                    self.transcript.push(format!("caller {de} → my exch"));
                 }
                 // S&P: the runner rogered + sent their exchange → log + RR73.
                 //
@@ -4952,6 +4989,9 @@ impl FieldDayStation {
     fn observe_na_vhf(&mut self, decodes: &[Decode], slot: u64) {
         for d in decodes {
             let m = Msg::parse(&d.message);
+            if self.is_my_own_caller(&m) {
+                continue;
+            }
             match (self.state, &m) {
                 // NOTE: there is intentionally NO (Listening, Cq) auto-answer arm. S&P listens: it
                 // must NEVER start a contact on its own (contests require the operator to start
@@ -5006,6 +5046,9 @@ impl FieldDayStation {
     fn observe_standard(&mut self, decodes: &[Decode], slot: u64) {
         for d in decodes {
             let m = Msg::parse(&d.message);
+            if self.is_my_own_caller(&m) {
+                continue;
+            }
             let rpt = d.snr.clamp(-30, 49);
             match (self.state, &m) {
                 // NOTE: there is intentionally NO (Listening, Cq) auto-answer arm. S&P listens: it
@@ -6446,6 +6489,99 @@ mod tests {
         assert!(run.log.is_dupe("K2DEF"), "first caller remains a dupe");
     }
 
+    /// ⭐ Running Field Day, a caller's first call WITH a grid (`W9XYZ K2DEF EN52`, the Tx1 of a
+    /// station not set up for Field Day) is answered with my exchange too, as WSJT-X's Field Day
+    /// activity answers it: five message words and a grid in the last (`tokens_re`,
+    /// decodedtext.cpp 14-45) take `processMessage`'s branch for a message to me (9107-9110),
+    /// where only NA VHF, WW Digi, ARRL Digi and Q65 Pileup answer a grid with Tx3 (9111-9116);
+    /// every other activity, Field Day included, sends Tx2 (9129-9135), the exchange. The grid
+    /// is not logged: Field Day's exchange is the class and section.
+    #[test]
+    fn field_day_run_answers_a_caller_with_a_grid_with_my_exchange() {
+        let mut run = FieldDayStation::running(
+            "W9XYZ",
+            "EN37",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20M",
+        );
+        run.set_wsjtx_field_day(true);
+        run.observe(&[dec("W9XYZ K2DEF EN52")], 0);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::AwaitExchange, "K2DEF W9XYZ 3A WI".to_string())
+        );
+        run.observe(&[dec("W9XYZ K2DEF R 2A IL")], 1);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::Done, "K2DEF W9XYZ RR73".to_string())
+        );
+        let q = &run.log.qsos()[0];
+        assert_eq!(
+            (q.call.as_str(), q.class(), q.section()),
+            ("K2DEF", "2A", "IL")
+        );
+    }
+
+    /// ⭐ Running Field Day, a caller's first call that carries no grid (`W9XYZ K2DEF`) is
+    /// answered with my exchange, as WSJT-X's Field Day activity answers it: the decode has four
+    /// message words (`tokens_re`, decodedtext.cpp 14-45), so `processMessage` passes the
+    /// five-word branch (9107) and the dual and 73 ones (9295, 9307) and sends Tx2 (9315-9325),
+    /// which in Field Day is the call pair and the exchange (`genStdMsgs`, 9637 and 9655). The
+    /// caller's rogered exchange then logs it and is closed with RR73, as after an S&P answer.
+    /// What is not a first call to me is not answered: one to somebody else, or to my call with a
+    /// suffix.
+    #[test]
+    fn field_day_run_answers_a_gridless_caller_with_my_exchange() {
+        let running = || {
+            let mut run = FieldDayStation::running(
+                "W9XYZ",
+                "EN37",
+                ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+                "20M",
+            );
+            run.set_wsjtx_field_day(true);
+            run
+        };
+        for heard in ["K1ABC K2DEF", "W9XYZ/P K2DEF", "K1ABC K2DEF EN52"] {
+            let mut run = running();
+            let cq = next(&run);
+            run.observe(&[dec(heard)], 0);
+            assert_eq!((run.state, next(&run)), (FdState::CallingCq, cq), "{heard}");
+        }
+        let mut run = running();
+        run.observe(&[dec("W9XYZ K2DEF")], 0);
+        assert_eq!(
+            (run.state, next(&run), run.dxcall.clone()),
+            (
+                FdState::AwaitExchange,
+                "K2DEF W9XYZ 3A WI".to_string(),
+                Some("K2DEF".to_string())
+            )
+        );
+        assert!(run.log.qsos().is_empty(), "nothing logged yet");
+        run.observe(&[dec("W9XYZ K2DEF R 2A IL")], 1);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::Done, "K2DEF W9XYZ RR73".to_string())
+        );
+        assert_eq!(run.log.qso_count(), 1);
+        assert_eq!(run.log.qsos()[0].call, "K2DEF");
+        assert_eq!(run.log.qsos()[0].class(), "2A");
+        assert_eq!(run.log.qsos()[0].section(), "IL");
+        // ⛔ Where the caller does not run WSJT-X's Field Day activity (FT1, DX1, FT2, Winter
+        // Field Day, a contest that bans the mode), Field Day's messages are Nexus's own and the
+        // run passes the caller by, as before.
+        let mut run = running();
+        run.set_wsjtx_field_day(false);
+        let cq = next(&run);
+        run.observe(&[dec("W9XYZ K2DEF")], 0);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::CallingCq, cq),
+            "not WSJT-X's Field Day"
+        );
+    }
+
     #[test]
     fn loopback_completes_the_exchange_on_the_happy_path() {
         // The full round-trip over the real modem still completes unchanged after
@@ -7288,6 +7424,79 @@ mod tests {
                 (state, answer.to_string()),
                 "{event} {caller}: the next caller, resolved, is answered"
             );
+        }
+    }
+
+    /// ⛔ A contest's Running never answers a caller whose call is my own base call, in Field
+    /// Day's messages, the ARRL VHF contests' or the standard ones, as WSJT-X refuses one in every
+    /// activity: `processMessage` returns on `m_bDoubleClicked && hiscall==m_baseCall`
+    /// (mainwindow.cpp 8977), which CQ: First reaches with `m_bDoubleClicked` set (7024). The
+    /// run keeps calling CQ, and the next caller in the same period, from another call, is
+    /// answered.
+    #[test]
+    fn a_run_never_answers_my_own_call() {
+        let fd = || {
+            FieldDayStation::running(
+                "K1ABC",
+                "FN42",
+                ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+                "20M",
+            )
+        };
+        for (what, mut run, mine, caller, answer) in [
+            (
+                "Field Day",
+                fd(),
+                "K1ABC K1ABC 2A IL",
+                "K1ABC W9XYZ 2A IL",
+                "W9XYZ K1ABC R 3A WI",
+            ),
+            (
+                "Field Day rogered",
+                fd(),
+                "K1ABC K1ABC R 2A IL",
+                "K1ABC W9XYZ 2A IL",
+                "W9XYZ K1ABC R 3A WI",
+            ),
+            (
+                "ARRL VHF",
+                ft8_station("arrlvhf_jan", "FN42", true),
+                "K1ABC K1ABC EN37",
+                "K1ABC W9XYZ EN37",
+                "W9XYZ K1ABC R FN42",
+            ),
+            (
+                "standard",
+                ft8_station("txqp", "FN42", true),
+                "K1ABC K1ABC EN37",
+                "K1ABC W9XYZ EN37",
+                "W9XYZ K1ABC -05",
+            ),
+            (
+                "standard, no grid",
+                ft8_station("txqp", "FN42", true),
+                "K1ABC K1ABC",
+                "K1ABC W9XYZ EN37",
+                "W9XYZ K1ABC -05",
+            ),
+            (
+                "standard, a report",
+                ft8_station("txqp", "FN42", true),
+                "K1ABC K1ABC -12",
+                "K1ABC W9XYZ EN37",
+                "W9XYZ K1ABC -05",
+            ),
+        ] {
+            let cq = next(&run);
+            run.observe(&[dec(mine)], 1);
+            assert_eq!(
+                (run.state, next(&run), run.dxcall.clone()),
+                (FdState::CallingCq, cq, None),
+                "{what} {mine}: passed by"
+            );
+            assert!(run.log.qsos().is_empty(), "{what} {mine}: nothing logged");
+            run.observe(&[dec(mine), dec(caller)], 3);
+            assert_eq!(next(&run), answer, "{what}: the next caller is answered");
         }
     }
 

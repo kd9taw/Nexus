@@ -130,6 +130,9 @@ mod ft_midover_tests;
 /// Operate's FT8/FT4 sequencer working a nonstandard call, against WSJT-X's messages.
 #[cfg(test)]
 mod ft_nonstandard_tests;
+/// A CQ run never answers a caller whose call is my own, as WSJT-X refuses one.
+#[cfg(test)]
+mod ft_own_call_tests;
 /// FT8/FT4 never key an over the encoder refuses, on every path that queues an operator's text.
 #[cfg(test)]
 mod ft_refused_text_tests;
@@ -38452,8 +38455,12 @@ fn best_caller_decodes(
             _ => continue,
         };
         answers.push(idx);
-        // Nor is a caller the decoder could not resolve, `<...>`, which the sequencer passes by.
-        if blocked.iter().any(|b| same_call(b, &de)) || de.contains("<...>") {
+        // Nor is a caller the decoder could not resolve, `<...>`, or one signing my own base call
+        // (`is_my_base_call`, WSJT-X's mainwindow.cpp 8977), which the sequencer passes by.
+        if blocked.iter().any(|b| same_call(b, &de))
+            || de.contains("<...>")
+            || tempo_core::message::is_my_base_call(&de, mycall)
+        {
             continue;
         }
         callers.push(CqCaller {

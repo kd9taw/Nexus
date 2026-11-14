@@ -322,9 +322,14 @@ impl Station {
         // Only a message addressed to *us* advances the start state; a CQ or a
         // message to someone else means we're initiating, so we start at the grid.
         // Base-call comparison so portable/compound calls (KD9TAW/P) still match.
+        //
+        // A line whose first word is `DE` (`DE W1AW`, `DE W1AW FN42`) counts as to us, as WSJT-X
+        // takes it into its branch for a message to it (`processMessage`, mainwindow.cpp
+        // 9050-9055, `firstcall == "DE"`), so it is answered with the report (Tx2, 9129-9135
+        // and 9315-9325), not the grid.
         let to_me = context
             .and_then(|(m, _)| m.addressee())
-            .map(|to| crate::message::same_call(to, &mycall_s))
+            .map(|to| to == "DE" || crate::message::same_call(to, &mycall_s))
             .unwrap_or(false);
 
         let (state, pending, log_line) = match context {
@@ -907,6 +912,15 @@ impl Station {
             // bracket form would be echoed straight back onto the air (see Msg::unhashed).
             let m = Msg::parse(&d.message).unhashed();
             let rpt = d.snr.clamp(-30, 49);
+            // ⛔ Calling CQ, a caller whose call is my own base call is passed by, and the next
+            // caller in the period is taken, as WSJT-X refuses one
+            // ([`is_my_base_call`](crate::message::is_my_base_call), mainwindow.cpp 8977).
+            if self.state == State::CallingCq
+                && m.sender()
+                    .is_some_and(|de| crate::message::is_my_base_call(de, &self.mycall))
+            {
+                continue;
+            }
             match (self.state, &m) {
                 // NOTE: there is intentionally NO (Listening, Cq) auto-answer arm.
                 // "Monitor" is passive RX — it must NEVER key up on its own (an
@@ -1770,6 +1784,43 @@ mod start_context_tests {
         assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW RR73"));
     }
 
+    /// ⛔ Calling CQ, a caller whose call is MY OWN base call is not answered, as WSJT-X 3.0.2
+    /// refuses it: `processMessage` returns at once on `m_bDoubleClicked && hiscall==m_baseCall`
+    /// (mainwindow.cpp 8977), and CQ: First and CQ: Max Dist set `m_bDoubleClicked` before they
+    /// call it (7024, 7054). `hiscall` is the decode's second word (`deCallAndGrid`,
+    /// decodedtext.cpp 212-224) with the brackets dropped (66), compared letter for letter with
+    /// my base call. So `KD9TAW KD9TAW/P EN37` IS answered as KD9TAW (its sender is not
+    /// `KD9TAW`), and `KD9TAW/P KD9TAW EN37` is not as KD9TAW/P (its sender is my base call).
+    /// CONTROL: a caller from any other call is answered as before.
+    #[test]
+    fn calling_cq_never_answers_my_own_call() {
+        for (me, heard, answered) in [
+            ("KD9TAW", "KD9TAW KD9TAW", false),
+            ("KD9TAW", "KD9TAW KD9TAW EN37", false),
+            ("KD9TAW", "KD9TAW KD9TAW -07", false),
+            ("KD9TAW", "<KD9TAW> KD9TAW", false),
+            ("KD9TAW/P", "KD9TAW/P KD9TAW EN37", false),
+            ("KD9TAW/P", "KD9TAW/P KD9TAW -07", false),
+            ("KD9TAW", "KD9TAW KD9TAW/P EN37", true),
+            ("KD9TAW", "KD9TAW W9XYZ", true),
+            ("KD9TAW", "KD9TAW W9XYZ EN37", true),
+            ("KD9TAW", "KD9TAW W9XYZ -07", true),
+        ] {
+            let mut s = Station::calling_cq(me, MY_GRID);
+            let cq = s.pending_text();
+            s.observe(&[dec(heard, -7)]);
+            assert_eq!(s.state != State::CallingCq, answered, "as {me}: {heard}");
+            if !answered {
+                assert_eq!(s.pending_text(), cq, "as {me}: {heard} keeps the CQ");
+                assert_eq!(s.dxcall, None, "as {me}: {heard}");
+            }
+        }
+        // The next caller in the same period, from another call, is still answered.
+        let mut s = Station::calling_cq(ME, MY_GRID);
+        s.observe(&[dec("KD9TAW KD9TAW EN37", 5), dec("KD9TAW W9XYZ EN37", -7)]);
+        assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW -07"));
+    }
+
     #[test]
     fn message_addressed_to_someone_else_starts_at_grid() {
         // DX is working another station — clicking DX means I initiate, so grid.
@@ -2396,6 +2447,37 @@ mod start_context_tests {
                 s.pending_text().as_deref(),
                 Some("W1AW KD9TAW -12"),
                 "{cq} skip Tx1"
+            );
+        }
+    }
+
+    /// Double-clicking a line whose first word is `DE` answers it as a message to me, as WSJT-X
+    /// does: `processMessage` takes `firstcall == "DE"` into its branch for a message to me
+    /// (mainwindow.cpp 9050-9055). `DE W1AW`, four message words, falls to Tx2 (9315-9325), my
+    /// report; `DE W1AW FN42`, five with a grid, takes the five-word branch (9107-9111) and
+    /// Tx2 too (9129-9135). Not Tx1, my grid, as a CQ gets. CONTROL: `QRZ W1AW` and a call to
+    /// somebody else are not to me and get Tx1 ("just work them", 9364-9374).
+    #[test]
+    fn a_click_on_de_and_a_call_answers_with_my_report() {
+        for (heard, grid) in [("DE W1AW", None), ("DE W1AW FN42", Some("FN42"))] {
+            let m = Msg::parse(heard);
+            let s = Station::start(ME, MY_GRID, "W1AW", Some((&m, -12)), false, false);
+            assert_eq!(s.state, State::AwaitRoger, "{heard}");
+            assert_eq!(
+                s.pending_text().as_deref(),
+                Some("W1AW KD9TAW -12"),
+                "{heard}"
+            );
+            assert_eq!(s.dxgrid.as_deref(), grid, "{heard}");
+        }
+        for heard in ["QRZ W1AW", "QRZ W1AW FN42", "W9XYZ W1AW FN42"] {
+            let m = Msg::parse(heard);
+            let s = Station::start(ME, MY_GRID, "W1AW", Some((&m, -12)), false, false);
+            assert_eq!(s.state, State::AwaitReport, "{heard}");
+            assert_eq!(
+                s.pending_text().as_deref(),
+                Some("W1AW KD9TAW EN61"),
+                "{heard}"
             );
         }
     }

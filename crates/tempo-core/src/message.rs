@@ -136,6 +136,21 @@ pub fn names_whole_call(to: &str, mycall: &str) -> bool {
     unhash_call(to).eq_ignore_ascii_case(mycall.trim())
 }
 
+/// `de`, a caller's call, IS my own base call: letter for letter, case ignored, a hashed form's
+/// brackets dropped. A CQ run never answers such a caller.
+///
+/// ⛔ WSJT-X 3.0.2's own rule, exactly: `processMessage` returns at once on
+/// `m_bDoubleClicked && hiscall==m_baseCall` (`widgets/mainwindow.cpp` 8977), and every path
+/// that answers a caller while calling CQ sets `m_bDoubleClicked` first (CQ: First 7024, CQ: Max
+/// Dist 7054). `hiscall` is the decode's second word (`deCallAndGrid`,
+/// `Decoder/decodedtext.cpp` 212-224) with the brackets dropped (66), and it is compared whole,
+/// not by base: as KD9TAW, a caller signing `KD9TAW/P` is not refused. `m_baseCall` is
+/// `Radio::base_callsign(my_callsign)`, which [`base_call`] stands in for; where the two differ
+/// (an affix longer than the call, `W1AW/PORTABLE`) is enumerated in its own doc.
+pub fn is_my_base_call(de: &str, mycall: &str) -> bool {
+    unhash_call(de).eq_ignore_ascii_case(&base_call(mycall))
+}
+
 /// A valid WSJT-X directed-CQ token: 1–4 letters ("DX", "NA", "POTA", "TEST")
 /// or exactly 3 digits (a kHz QSY like "CQ 040 …").
 fn is_cq_dir(s: &str) -> bool {
@@ -652,7 +667,15 @@ impl Msg {
                 dir: String::new(),
             };
         }
-        if t.len() == 2 && chkcall_ok(t[0]) && chkcall_ok(t[1]) && !t[1].contains('/') {
+        // `QRZ W1AW` and `DE W1AW` too: `pack77_1` exempts `DE` and `QRZ` from `chkcall` in the
+        // first word (`:1228-1229`), as the three-word `QRZ W1AW FN42` already reads here. They
+        // read as a call from W1AW to `QRZ` or `DE`, the way `deCallAndGrid` takes the second word
+        // for the caller (decodedtext.cpp 212-224).
+        if t.len() == 2
+            && (chkcall_ok(t[0]) || matches!(t[0], "DE" | "QRZ"))
+            && chkcall_ok(t[1])
+            && !t[1].contains('/')
+        {
             return Msg::Grid {
                 to: t[0].to_string(),
                 de: t[1].to_string(),
@@ -990,6 +1013,40 @@ mod fidelity_tests {
             "CQ RR73",
             "CQ CQ",
             "CQ <...>",
+        ] {
+            assert_eq!(Msg::parse(text), Msg::Other(text.into()), "{text}");
+        }
+    }
+
+    /// `QRZ W1AW` and `DE W1AW` are standard messages, as WSJT-X 3.0.2 packs them: `pack77` sends
+    /// a line that starts with `CQ `, `DE ` or `QRZ ` to `pack77_06` and then `pack77_1`
+    /// (`lib/77bit/packjt77.f90:210`, `:240-244`), which exempts `DE` and `QRZ` from `chkcall` in
+    /// the first word (`:1228-1229`) and packs the two words as Type 1 with no grid (`:1235-1236`,
+    /// `:1298-1302`); `unpack77` prints them back (`:569-570`). They read as a call from `W1AW`
+    /// with nothing in the grid, the way the three-word `QRZ W1AW FN42` already did. Still free
+    /// text: a second word `chkcall` refuses, one with a `/` (`:1235`), and `DE` or `QRZ` anywhere
+    /// but first.
+    #[test]
+    fn qrz_or_de_and_a_call_is_a_standard_message() {
+        for (text, to) in [("QRZ W1AW", "QRZ"), ("DE W1AW", "DE"), ("DE KD9TAW", "DE")] {
+            let want = Msg::Grid {
+                to: to.into(),
+                de: text.split(' ').nth(1).unwrap().into(),
+                grid: String::new(),
+            };
+            assert_eq!(Msg::parse(text), want, "{text}");
+            assert_eq!(want.to_text(), text, "{text} renders back verbatim");
+            assert_eq!(Msg::parse(text).sender(), text.split(' ').nth(1), "{text}");
+        }
+        for text in [
+            "DE TNX",
+            "QRZ 73",
+            "DE QRZ",
+            "QRZ DE",
+            "DE W1AW/P",
+            "QRZ W1AW/P",
+            "W1AW DE",
+            "W1AW QRZ",
         ] {
             assert_eq!(Msg::parse(text), Msg::Other(text.into()), "{text}");
         }
