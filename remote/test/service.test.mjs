@@ -2635,6 +2635,40 @@ test('relay credentials: six an hour per account across its devices, each counte
   } finally { await relayed.mf.dispose() }
 })
 
+// RELAY COST, GUESTS. The owner's account pays for every mint at its station, a guest's included, but
+// a guest never spends the owner's own six an hour: the station account's guests, together, draw on a
+// separate allowance of three an hour. The owner's cost stays bounded (nine an hour at most, whoever
+// asks), and no invited guest can leave the owner without a relay.
+test('relay credentials: guests share three an hour of their own and never spend the owner\'s six', async () => {
+  const relayed = await runtime({ bindings: { TURN_KEY_ID: hex(16), TURN_KEY_TOKEN: hex(32) },
+    relay: async () => Response.json(relayAnswer()) })
+  try {
+    const pair = await relayed.paired()
+    await relayed.approved(pair)
+    // A guest, invited by address, signs in with their own account and is approved at the shack.
+    const email = `guest-${crypto.randomUUID()}@example.invalid`
+    const guest = relayed.client(await relayed.token(`synthetic|${crypto.randomUUID()}`, { email, email_verified: true }))
+    await guest.post('session')
+    await pair.native.post(`stations/${pair.stationId}/native/invite`, { email, role: 'listen' })
+    const { value: added, response } = await guest.post(`stations/${pair.stationId}/device`, { name: 'Guest browser' })
+    guest.setCookie(response.headers.get('set-cookie'))
+    await pair.native.post(`stations/${pair.stationId}/native/approve-device`, { deviceId: added.deviceId })
+    // Counted from empty buckets, as in the owner's own test above.
+    await relayed.db.prepare('DELETE FROM rate_limits').run()
+    const turn = (who, expected = 200) => who.post(`stations/${pair.stationId}/turn`, {}, expected)
+    for (let ask = 0; ask < 3; ask++) await turn(guest)
+    assert.equal((await turn(guest, 429)).value.error, 'tryLater', 'the guest\'s fourth')
+    // The owner's six are all still there, and spending them does not reopen the guest's.
+    for (let ask = 0; ask < 6; ask++) await turn(pair.browser)
+    assert.equal((await turn(pair.browser, 429)).value.error, 'tryLater', 'the owner\'s seventh')
+    assert.equal((await turn(guest, 429)).value.error, 'tryLater')
+    const month = new Date().toISOString().slice(0, 7)
+    const usage = await relayed.db.prepare('SELECT account_id, mints FROM relay_usage').all()
+    assert.deepEqual(usage.results, [{ account_id: pair.browser.accountId, mints: 9 }],
+      `every mint, the guest's too, is on the station account's month (${month})`)
+  } finally { await relayed.mf.dispose() }
+})
+
 // --- The relay's older lanes and the station's own key (security review S1-M1, S3-M1) -----------
 // The page proves each message on the operation and audio lanes with its device key, and the
 // station requires it; the relay checks a proof's shape and hands it on only to a station that
