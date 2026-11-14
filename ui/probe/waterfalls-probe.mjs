@@ -39,13 +39,16 @@
 //   9. A PICTURE AT EVERY SIZE (2026-11-12, "the operator must see a waterfall"): every mode's waterfall draws at least
 //      2em of picture (28 CSS px of the app's own, under its zoom), not only its head. On the floor screen FT's strip gave
 //      way to its lower region alone and drew 0 px, and Phone's scope 10 px.
+//  10. RTTY'S HEAD IS ONE LINE (2026-11-14): beside its tuning scope at every size, the waterfall's head (title, hint and
+//      controls) stands on one line. On the floor screen it wrapped to two beside the scope (a 552-563 px waterfall)
+//      and the second line came out of the picture.
 // THE CONTROLS, run every time: JS8 with its divider moved one step (the default no longer 25 %) must fail check
 // 1, and Phone with a planted 360 px margin beside its scope must fail check 2. If either passes, the checks
 // cannot fail and the probe says so instead of passing.
 // Check 8's: the radio-scope CW page held to 25 % must fail. Check 9's: FT at the floor with its waterfall's floor taken off
 // (the shape that shipped) must draw too little picture. RTTY's two (6): a planted ceiling on its strip must fail the
 // common height, and a planted 60 px square must fail the scope's size. The CW switch's (7): a planted cover over
-// it must fail its reach.
+// it must fail its reach. Check 10's: a planted wide control in RTTY's head must wrap it.
 //
 // exit: 0 every check held · 1 a red, or a control that could not fail · 2 a page never drew its waterfall
 import { createServer } from 'vite'
@@ -132,6 +135,16 @@ const MEASURE = `(() => {
     scrollbar: (() => { const s = getComputedStyle(shell), n = (v) => parseFloat(v) || 0
       return Math.round((shell.offsetWidth - shell.clientWidth - n(s.borderLeftWidth) - n(s.borderRightWidth)) * zoomOf(shell) * 10) / 10 })(),
     wfW: Math.round(strip.querySelector('.waterfall-wrap')?.getBoundingClientRect().width ?? r.width),
+    // The waterfall's head: how many lines its shown children stand on (a child starting below the middle of the
+    // line before starts a new one), and its height on screen.
+    head: (() => {
+      const h = strip.querySelector('.waterfall-wrap > .panel-header')
+      if (!h) return null
+      const kids = [...h.children].filter(vis).map((k) => k.getBoundingClientRect()).sort((a, b) => a.top - b.top)
+      let lines = 0, mid = -Infinity
+      for (const k of kids) if (k.top >= mid) { lines++; mid = k.top + k.height / 2 }
+      return { lines, h: Math.round(h.getBoundingClientRect().height) }
+    })(),
     side: side ? { top: Math.round(side.getBoundingClientRect().top) } : null,
     txBottom: txstrip ? Math.round(txstrip.getBoundingClientRect().bottom) : null,
     next: (() => { const n = [...shell.children].find((e) => e.matches('.grid-stations')); return n ? Math.round(n.getBoundingClientRect().top) : null })(),
@@ -306,6 +319,11 @@ function rttyRed(tag, m, bare, js8, before) {
   if (m.shellScrolls) reds.push(`RTTY at ${tag}: the cockpit scrolls`)
   return reds
 }
+/** Check 10 for RTTY with its tuning scope: the waterfall's head is one line. */
+function headRed(tag, m) {
+  if (!m.head) return `RTTY at ${tag}: the waterfall has no head`
+  return m.head.lines > 1 ? `RTTY at ${tag}: the waterfall's head is ${m.head.lines} lines (${m.head.h} px) on a ${m.wfW} px waterfall, not one` : null
+}
 /** Check 9 for one page: the picture under the strip's head is at least 2em of the app's own CSS px. */
 const PICTURE_MIN = 2 * 14
 function pictureRed(name, m) {
@@ -369,6 +387,9 @@ try {
         rttyBare.set(tag, bare)
         console.log(`waterfalls-probe: RTTY at ${tag}: strip ${m.px.h} px tall with the tuning scope, ${bare.px.h} without (25 %: ${(0.25 * m.shellCs * m.z).toFixed(0)}); square ${m.tuning?.side} px (before the move ${TUNING_BEFORE[css(size)] ?? 'never measured'}); waterfall ${m.wfW} × picture ${m.px.canvasH} px with it, ${bare.wfW} × ${bare.px.canvasH} without, of the ${m.px.w} px strip`)
         for (const r of rttyRed(tag, m, bare, rows.find(([n]) => n === 'JS8')?.[1], TUNING_BEFORE[css(size)])) red(r)
+        console.log(`waterfalls-probe: RTTY at ${tag}: the waterfall's head is ${m.head?.lines} line(s), ${m.head?.h} px, on the ${m.wfW} px waterfall`)
+        const r10 = headRed(tag, m)
+        if (r10) red(r10)
         if (bare.tuning) red(`RTTY at ${tag}: the tuning scope is still shown with its entry hidden`)
         if (Math.abs(bare.wfW - bare.px.w) > 1) red(`RTTY without its tuning scope at ${tag}: the waterfall is ${bare.wfW} px of a ${bare.px.w} px strip`)
         for (const [label, ok] of bare.stops) if (!ok) red(`RTTY (no tuning) at ${tag}: ${label} is not on screen or something covers it`)
@@ -494,6 +515,16 @@ try {
     else console.log(`waterfalls-probe: CONTROL — ${r} (caught)`)
   }
 
+  // Check 10's control: a planted wide control in RTTY's head at the floor must wrap it.
+  {
+    const m = await measure('rtty', FLOOR, {}, async (evaluate) => {
+      await evaluate(`(() => { const s = document.createElement('style'); s.textContent = '.rtty-autotune { min-width: 400px !important }'; document.head.appendChild(s); return 1 })()`)
+    })
+    const r = m ? headRed(`${FLOOR.name} (a planted 400 px control)`, m) : null
+    if (r == null) red('CONTROL FAILED — RTTY with a planted 400 px control in its waterfall head passed check 10; the check cannot fail')
+    else console.log(`waterfalls-probe: CONTROL — ${r} (caught)`)
+  }
+
   // The CW switch's control (7): a cover planted over the scope's header must fail its reach.
   {
     const m = await measure('cw', LAPTOP, {}, async (evaluate) => {
@@ -504,7 +535,7 @@ try {
     else console.log(`waterfalls-probe: CONTROL — ${caught[0]} (caught)`)
   }
 
-  if (code === 0) console.log('waterfalls-probe: PASS — every waterfall starts at 25 % of its cockpit (or its layout ceiling; CW on a radio with its own scope 40 %), as wide as every other, RTTY\'s with its tuning scope beside it at its own size, the CW scope\'s HiDef switch on screen, and every control was caught')
+  if (code === 0) console.log('waterfalls-probe: PASS — every waterfall starts at 25 % of its cockpit (or its layout ceiling; CW on a radio with its own scope 40 %), as wide as every other, RTTY\'s with its tuning scope beside it at its own size and its head on one line, the CW scope\'s HiDef switch on screen, and every control was caught')
   process.exitCode = process.exitCode || code
 } catch (e) {
   if (!process.exitCode) {
