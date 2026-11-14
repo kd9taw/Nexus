@@ -1100,6 +1100,7 @@ impl AppState {
             // Filled by the engine while a contest runs whose FT8/FT4 messages apply; none here.
             contest_cq: None,
             contest_cq_typed: false,
+            contest_tx_now: None,
             freedv: None,
         }
     }

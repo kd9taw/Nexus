@@ -21120,6 +21120,26 @@ Pick the one you operate from on the Contesting tab in Settings.",
             && tempo_core::message::is_std_call(&self.settings.mycall)
     }
 
+    /// ⭐ **The over the contest's sequencer sends next**, the text `plan_tx` keys for it (its
+    /// `Mode::FieldDay` arm): what the Operate strip's TX line shows while a contest runs, as
+    /// `qso.tx_now` is outside one. A logger's Reply to a CQ hands the station to the contest's S&P
+    /// ([`Self::work_station`]), which keys its answer every period; with nothing naming it the
+    /// strip read "listening" while the radio called the station (a field
+    /// report). `None` outside a contest the snapshot shows (`field_day_status`), and for a
+    /// run's CQ held back while TX is about to go off, as `plan_tx` holds it.
+    pub fn contest_tx_now(&self) -> Option<String> {
+        let Mode::FieldDay { station, .. } = &self.mode else {
+            return None;
+        };
+        if !self.settings.fd_active
+            || (self.pending_tx_disable
+                && station.state == tempo_core::fieldday::FdState::CallingCq)
+        {
+            return None;
+        }
+        station.outgoing().map(|m| m.to_text())
+    }
+
     /// Why a double-click on a CQ from `<...>` is refused, in a contest or out of one.
     const UNRESOLVED_CQ: &str = "This CQ's call shows as <...>: Nexus has not decoded it in full \
          yet. Click the station's next CQ once its call shows.";
@@ -33011,6 +33031,7 @@ contact yourself."
         s.contest_entry = self.contest_entry_dto();
         s.contest_cq = self.contest_running_cq();
         s.contest_cq_typed = self.contest_cq_typed();
+        s.contest_tx_now = self.contest_tx_now();
         s.freedv = self.freedv.is_shown().then(|| self.freedv.clone());
         s.pending_log = self.pending_log().cloned().map(Into::into);
         s.pending_qso_log_key = self.pending_qso_log_key();

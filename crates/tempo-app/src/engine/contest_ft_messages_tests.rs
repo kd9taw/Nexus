@@ -3459,3 +3459,144 @@ fn the_strips_sp_is_the_running_contests_sp() {
     assert!(r.is_err(), "no class: {r:?}");
     assert_eq!(mode_line(&e), monitor, "still FT8 QSO mode");
 }
+
+/// ⭐ **A logger's Reply to a CQ in a contest names the over the contest's S&P sends** (a field
+/// report). GridTracker's click on a station whose latest line is a CQ is a
+/// WSJT-X Reply (`replyToCQ`, `widgets/mainwindow.cpp` 13279-13336), which hands the station to the
+/// contest's S&P as the operator's double-click does. That S&P works the station and keys its
+/// answer every period, but the snapshot carried no `qso` and nothing named the over, so the
+/// Operate screen read "TX — listening", Idle and a blank DX Call while the radio called the station.
+/// WSJT-X shows the station it calls in its DX Call box and the message in its Tx panel
+/// (`processMessage` 9419-9449). The snapshot now names the contest's next over
+/// (`contest_tx_now`), the over `plan_tx` keys, beside its station (`field_day.dxcall`), in each
+/// message set: the standard messages (a QSO party), NA VHF's and Field Day's.
+#[test]
+fn a_loggers_reply_to_a_cq_in_a_contest_names_the_over_it_sends() {
+    for (contest, cq) in [
+        ("txqp", "CQ W9XYZ EN37"),
+        ("arrlvhf_jan", "CQ TEST W9XYZ EN37"),
+        ("arrlfd", "CQ FD W9XYZ EN37"),
+    ] {
+        let mut e = engine_for(contest, MY_GRID);
+        e.set_tier(Tier::Ft8);
+        e.set_mode("qso-monitor").expect("FT8 QSO mode");
+        // Heard in an odd period, decoded at the even boundary after it.
+        e.ingest_decodes_for_test(&[heard(cq)], 2);
+        e.answer_udp_reply(DX, cq, DX_SNR, Some(1234.0))
+            .expect("the Reply is taken");
+        let s = e.snapshot();
+        assert!(s.qso.is_none(), "{contest}: the contest's S&P works it");
+        assert_eq!(
+            s.field_day.and_then(|f| f.dxcall).as_deref(),
+            Some(DX),
+            "{contest}: the station it works"
+        );
+        let sent = keyed(&mut e, 4);
+        assert!(sent.is_some(), "{contest}: control: the answer keys");
+        assert_eq!(
+            s.contest_tx_now, sent,
+            "{contest}: the over named is the over keyed"
+        );
+    }
+    // Outside a contest the QSO strip's own `tx_now` names it, and this is not sent at all.
+    let mut e = engine_for("txqp", MY_GRID);
+    let mut s = e.settings().clone();
+    s.fd_active = false;
+    e.apply_settings(s);
+    e.set_tier(Tier::Ft8);
+    e.set_mode("qso-monitor").expect("FT8 QSO mode");
+    e.ingest_decodes_for_test(&[heard("CQ W9XYZ EN37")], 2);
+    e.answer_udp_reply(DX, "CQ W9XYZ EN37", DX_SNR, None)
+        .expect("the Reply is taken");
+    let s = e.snapshot();
+    assert_eq!(s.contest_tx_now, None);
+    assert_eq!(
+        s.qso.and_then(|q| q.tx_now).as_deref(),
+        Some("W9XYZ K1ABC FN42")
+    );
+}
+
+/// ⛔ **Outside a contest, no logger's Reply leaves the station sending while the screen says it
+/// works nobody** (a field report: "TX — listening", Idle, DX Call blank, while
+/// Tx1 went out every period). The Operate strip says Idle only when the snapshot carries no
+/// `qso`, which outside a contest never happens on FT8; and every over keyed after a Reply is the
+/// one the QSO sequencer names (`qso.tx_now`) to the station named (`qso.dxcall`) — or the Reply is
+/// refused and nothing keys. Each path a GridTracker click can meet: a CQ, a line to someone else,
+/// a line to us, from S&P, from a CQ run, with Hold Tx Freq, after a contact with the same station
+/// was logged, after the operator's stop, and with the clicked line aged out. (The Reply's
+/// modifiers, time, delta time and low-confidence fields are read and dropped by the radio loop's
+/// Reply arm; only the text, SNR and audio offset reach the engine, so they cannot pick a route.)
+#[test]
+fn outside_a_contest_every_over_after_a_reply_is_the_one_the_screen_names() {
+    type Setup = fn(&mut Engine);
+    let none: Setup = |_| {};
+    let run: Setup = |e| e.set_mode("qso-run").expect("a CQ run");
+    let hold: Setup = |e| e.set_hold_tx_freq(true);
+    let stopped: Setup = |e| e.halt_tx();
+    let worked_before: Setup = |e| {
+        // A whole contact with the same station, logged, just before the click.
+        click(e, "CQ W9XYZ EN37", 1);
+        e.set_tx_enabled(true);
+        let first = keyed(e, 1).or_else(|| keyed(e, 2));
+        assert_eq!(
+            first.as_deref(),
+            Some("W9XYZ K1ABC FN42"),
+            "control: our grid"
+        );
+        e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ -07")], 3);
+        let roger = keyed(e, 3).or_else(|| keyed(e, 4));
+        assert_eq!(
+            roger.as_deref(),
+            Some("W9XYZ K1ABC R-12"),
+            "control: our roger"
+        );
+        e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ RR73")], 5);
+        let _ = keyed(e, 5).or_else(|| keyed(e, 6));
+    };
+    let aged_out: Setup = |e| e.decode_history.clear();
+    let cases: [(&str, &str, Setup, bool); 9] = [
+        ("a CQ", "CQ W9XYZ EN37", none, true),
+        ("a line to someone else", "K9AAA W9XYZ -10", none, true),
+        ("a report to us", "K1ABC W9XYZ -07", none, true),
+        ("from a CQ run", "CQ W9XYZ EN37", run, true),
+        ("with Hold Tx Freq", "CQ W9XYZ EN37", hold, true),
+        (
+            "after a logged contact",
+            "CQ W9XYZ EN37",
+            worked_before,
+            true,
+        ),
+        ("an RR73 to us", "K1ABC W9XYZ RR73", none, true),
+        ("after the operator's stop", "CQ W9XYZ EN37", stopped, false),
+        ("aged out of the history", "CQ W9XYZ EN37", aged_out, false),
+    ];
+    for (what, line, setup, taken) in cases {
+        let mut e = engine_for("txqp", MY_GRID);
+        let mut s = e.settings().clone();
+        s.fd_active = false;
+        e.apply_settings(s);
+        e.set_tier(Tier::Ft8);
+        e.set_mode("qso-monitor").expect("FT8 QSO mode");
+        setup(&mut e);
+        e.ingest_decodes_for_test(&[heard(line)], 10);
+        if what == "aged out of the history" {
+            setup(&mut e);
+        }
+        let r = e.answer_udp_reply(DX, line, DX_SNR, Some(1234.0));
+        assert_eq!(r.is_ok(), taken, "{what}: {r:?}");
+        let mut overs = 0;
+        for slot in 11..17 {
+            let shown = e.snapshot().qso;
+            let Some(sent) = keyed(&mut e, slot) else {
+                continue;
+            };
+            overs += 1;
+            assert!(taken, "{what}: a refused Reply keyed {sent:?}");
+            let shown = shown.unwrap_or_else(|| panic!("{what}: keyed {sent:?} with no qso"));
+            assert_eq!(shown.dxcall.as_deref(), Some(DX), "{what}: keyed {sent:?}");
+            assert_eq!(shown.tx_now.as_deref(), Some(sent.as_str()), "{what}");
+            assert_ne!(shown.state, "Listening", "{what}");
+        }
+        assert_eq!(overs > 0, taken, "{what}: {overs} overs keyed");
+    }
+}

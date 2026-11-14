@@ -6846,6 +6846,10 @@ export interface AppSnapshot {
    *  its direction to that Running. Absent everywhere else, from the Remote, and from an older
    *  station. */
   contestCqTyped?: boolean
+  /** The over the contest's sequencer sends next while a contest runs (`Engine::contest_tx_now`):
+   *  the Operate strip's TX line there, as `qso.txNow` is outside one. Absent everywhere else, from
+   *  the Remote, and from an older station. */
+  contestTxNow?: string
   /** FreeDV's own app beside Nexus (`tempo_app::freedv`): its two listeners, the last contact it
    *  logged, the last refusal and the calls it heard. Absent while neither listener is wanted,
    *  from the Remote, and from an older station. */
