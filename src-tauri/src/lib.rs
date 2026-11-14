@@ -2646,7 +2646,7 @@ fn poll_pskr_with(
         .and_then(|s| s.lock().ok())
         .map(|s| {
             (
-                s.newest_time(mycall).ok().flatten(),
+                s.newest_time(mycall, now).ok().flatten(),
                 s.last_seqno(mycall).ok().flatten(),
             )
         })
@@ -2664,7 +2664,7 @@ fn poll_pskr_with(
         // moves past this answer only with its reports kept (one transaction): after a failed
         // write the next query asks for them again.
         let rows = heard_report_rows(mycall, &reply.spots);
-        if let Err(e) = s.record_answer(mycall, &rows, reply.last_seqno) {
+        if let Err(e) = s.record_answer(mycall, &rows, reply.last_seqno, now) {
             eprintln!("[heard-reports] a write failed: {e}");
         }
     }
