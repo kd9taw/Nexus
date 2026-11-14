@@ -118,7 +118,7 @@ fn a_loggers_reply_during_a_decode_does_not_stall_the_radio_loop() {
 
     let e = engine.lock().unwrap();
     assert_eq!(e.qso_dxcall(), Some("W1AW"), "the Reply started the QSO");
-    assert!(e.tx_enabled(), "and armed TX, as WSJT-X's Reply does");
+    assert!(e.tx_enabled(), "and armed TX, as every Reply does here");
     assert!(
         took < Duration::from_millis(100),
         "the radio loop's tick took {took:?} handling the Reply while a decode ran"

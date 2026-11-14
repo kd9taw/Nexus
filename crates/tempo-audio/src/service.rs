@@ -17228,6 +17228,8 @@ impl RadioLoop {
                         // offset — pass all three so the sequencer resumes from that
                         // message (WSJT-X double-click semantics) AND moves our RX/TX
                         // onto the DX's frequency, not always from the grid at band-center.
+                        // Unlike WSJT-X's Reply it always arms TX and answers a stale line
+                        // too: a deliberate divergence (`Engine::answer_udp_reply`).
                         let parsed = Msg::parse(&message);
                         if let Some(sender) = parsed.sender() {
                             let dx_freq = Some(delta_freq as f32);
