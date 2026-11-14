@@ -509,6 +509,16 @@ impl Server {
             return None;
         }
         let allocation = self.allocations.get_mut(&from)?;
+        // As a real server (RFC 8656 §12.2): a number bound to another peer, or a peer bound
+        // under another number, is refused. A binding here never lapses, so a client that asks
+        // for a second number for a peer it already bound is always refused.
+        if allocation
+            .channels
+            .iter()
+            .any(|(bound, at)| (*bound == number) != (*at == peer))
+        {
+            return None;
+        }
         allocation.channels.insert(number, peer);
         allocation
             .permissions

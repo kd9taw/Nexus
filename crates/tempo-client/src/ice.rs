@@ -36,7 +36,10 @@
 //! - an IPv6 address that carries an IPv4 one (mapped, compatible, NAT64, 6to4 or Teredo) is read as
 //!   that IPv4 address, as the hosted stream reads it (`tempo_stream::session::reachable`), and port 0
 //!   is refused;
-//! - a road takes at most [`CANDIDATES`] in all, so a peer cannot have it probe a range.
+//! - a road takes at most [`CANDIDATES`] in all, per generation of credentials (a restart starts
+//!   a new one), so a peer cannot have it probe a range; and a restart lets the relay's
+//!   permissions and channels for the generation before go (all but the pair's own peer): never
+//!   renewed again, each lapses in its own time, so restarts never grow what the relay renews.
 //!
 //! A refused candidate is dropped, and noted once in this build's own words, never echoed; the link
 //! goes on, since a computer behind a NAT names its private host address as any end does. A check
@@ -830,6 +833,18 @@ impl State {
             .collect();
         self.told = 0;
         self.taken = 0;
+        // ⛔ The relay lets the old generation's peers go, all but the pair's own (most often the
+        // other end comes back there): otherwise each restart would let the other end add
+        // [`CANDIDATES`] more permissions and channels, refreshed for as long as the road lasts.
+        // Let go, they are no longer renewed, and lapse (`Turn::keep_only`).
+        if let Some(relay) = self.relay.as_mut() {
+            let kept: Vec<SocketAddr> = self
+                .nominated
+                .map(|(_, theirs)| theirs)
+                .into_iter()
+                .collect();
+            relay.keep_only(&kept);
+        }
         self.peers.clear();
         self.nominated = None;
         self.nominating = None;
@@ -1663,6 +1678,53 @@ mod tests {
             (Vec::new(), 0, 0, 0, 0),
             "(the permissions asked, what went through the relay, what reached each address)"
         );
+    }
+
+    /// ⛔ Restarts never grow what the relay renews: each restart lets the other end name up to
+    /// [`CANDIDATES`] new addresses, each given a permission and a channel at the TURN server, and
+    /// those of the generation before are let go as the road restarts (kept, unrenewed, until they
+    /// lapse), so after any number of restarts the relay renews at most one generation's worth
+    /// (and the old pair's peer). A
+    /// computer relayed only, its relayed address allocated, restarted twelve times, each time
+    /// given eight fresh addresses. CONTROL: each generation's eight are taken and permitted.
+    #[test]
+    fn restarts_never_grow_the_relays_permissions_or_channels() {
+        let turn = StandIn::start("road", "throwaway-password");
+        let road = IceRoad::bind(
+            loopback(),
+            Role::Computer,
+            Gather {
+                direct: false,
+                stun: None,
+                relay: Some(Relay {
+                    server: turn.address,
+                    username: "road".into(),
+                    password: "throwaway-password".into(),
+                }),
+            },
+            TICK,
+        )
+        .unwrap();
+        assert!(road.answer(&offer_naming(Vec::new())));
+        let road = Driven::new(road);
+        let started = Instant::now();
+        while turn.seen().allocations == 0 && started.elapsed() < Duration::from_secs(3) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(turn.seen().allocations, 1, "premise: the relayed address");
+        let held = || lock(&road.road.state).relay.as_ref().map(Turn::held);
+        for round in 1..=12u8 {
+            road.road.restart_at(Instant::now()).expect("a new offer");
+            let lines = (1..=CANDIDATES)
+                .map(|n| format!("candidate:{n} 1 udp 2130706431 127.0.{round}.{n} 9 typ host"))
+                .collect();
+            assert!(road.road.answer(&offer_naming(lines)));
+            assert_eq!(
+                held(),
+                Some((CANDIDATES, CANDIDATES)),
+                "after restart {round}: (permissions, channels) kept"
+            );
+        }
     }
 
     /// `(probed though refused, refused though taken)` for an internet road, by address.
