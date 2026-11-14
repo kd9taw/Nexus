@@ -109,6 +109,24 @@ fn a_gridless_standard_cq_row_is_a_cq_with_its_caller() {
     assert!(call.directed_to_me, "a grid-less call to me is to me");
 }
 
+/// Double-clicking a line whose first word is `DE` sends my report, as WSJT-X takes it for a message
+/// to it (`processMessage`, mainwindow.cpp 9050-9055) and sends Tx2 (9315-9325 for `DE W1AW`,
+/// 9129-9135 for `DE W1AW FN42`): not my grid, as a CQ gets.
+#[test]
+fn a_double_click_on_de_and_a_call_answers_with_my_report() {
+    for line in ["DE W1AW", "DE W1AW FN42"] {
+        let mut e = Engine::new(ME, MY_GRID, 0);
+        e.ingest_decodes_for_test(&[heard(line)], 2);
+        e.work_station("W1AW", None, Some(line), Some(SNR), None)
+            .expect("the double-click is taken");
+        assert_eq!(
+            (1..5).find_map(|s| keyed(&mut e, s)).as_deref(),
+            Some("W1AW K1ABC -12"),
+            "{line}"
+        );
+    }
+}
+
 /// Double-clicking a grid-less CQ answers it as WSJT-X does (`processMessage`, mainwindow.cpp
 /// 9361-9373, "just work them"): Tx1, this station's call and grid, and the over keys as written.
 #[test]

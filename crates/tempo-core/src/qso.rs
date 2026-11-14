@@ -322,9 +322,14 @@ impl Station {
         // Only a message addressed to *us* advances the start state; a CQ or a
         // message to someone else means we're initiating, so we start at the grid.
         // Base-call comparison so portable/compound calls (KD9TAW/P) still match.
+        //
+        // A line whose first word is `DE` (`DE W1AW`, `DE W1AW FN42`) counts as to us, as WSJT-X
+        // takes it into its branch for a message to it (`processMessage`, mainwindow.cpp
+        // 9050-9055, `firstcall == "DE"`), so it is answered with the report (Tx2, 9129-9135
+        // and 9315-9325), not the grid.
         let to_me = context
             .and_then(|(m, _)| m.addressee())
-            .map(|to| crate::message::same_call(to, &mycall_s))
+            .map(|to| to == "DE" || crate::message::same_call(to, &mycall_s))
             .unwrap_or(false);
 
         let (state, pending, log_line) = match context {
@@ -2442,6 +2447,37 @@ mod start_context_tests {
                 s.pending_text().as_deref(),
                 Some("W1AW KD9TAW -12"),
                 "{cq} skip Tx1"
+            );
+        }
+    }
+
+    /// Double-clicking a line whose first word is `DE` answers it as a message to me, as WSJT-X
+    /// does: `processMessage` takes `firstcall == "DE"` into its branch for a message to me
+    /// (mainwindow.cpp 9050-9055). `DE W1AW`, four message words, falls to Tx2 (9315-9325), my
+    /// report; `DE W1AW FN42`, five with a grid, takes the five-word branch (9107-9111) and
+    /// Tx2 too (9129-9135). Not Tx1, my grid, as a CQ gets. CONTROL: `QRZ W1AW` and a call to
+    /// somebody else are not to me and get Tx1 ("just work them", 9364-9374).
+    #[test]
+    fn a_click_on_de_and_a_call_answers_with_my_report() {
+        for (heard, grid) in [("DE W1AW", None), ("DE W1AW FN42", Some("FN42"))] {
+            let m = Msg::parse(heard);
+            let s = Station::start(ME, MY_GRID, "W1AW", Some((&m, -12)), false, false);
+            assert_eq!(s.state, State::AwaitRoger, "{heard}");
+            assert_eq!(
+                s.pending_text().as_deref(),
+                Some("W1AW KD9TAW -12"),
+                "{heard}"
+            );
+            assert_eq!(s.dxgrid.as_deref(), grid, "{heard}");
+        }
+        for heard in ["QRZ W1AW", "QRZ W1AW FN42", "W9XYZ W1AW FN42"] {
+            let m = Msg::parse(heard);
+            let s = Station::start(ME, MY_GRID, "W1AW", Some((&m, -12)), false, false);
+            assert_eq!(s.state, State::AwaitReport, "{heard}");
+            assert_eq!(
+                s.pending_text().as_deref(),
+                Some("W1AW KD9TAW EN61"),
+                "{heard}"
             );
         }
     }
