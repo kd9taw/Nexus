@@ -7976,18 +7976,21 @@ impl RadioLoop {
     /// The keyer a tune in the CW section keys its carrier through (#500), opened BEFORE the
     /// radio is keyed so a keyer that will not open refuses the tune with no PTT asserted.
     /// `Ok(None)`: no such keyer (not the CW section, the CAT or soundcard keyer, or no port), and
-    /// the tune is the tone, as before. `Err`: the open failed, in the words the CW send gives it.
+    /// the tune is the tone, as before. `Err`: the open failed, in the words the CW send gives it —
+    /// or the keyline is the very line serial PTT keys (`Engine::cw_keyline_ptt_conflict`), refused
+    /// as the CW send refuses it, before the keyer opens and before PTT.
     fn open_tune_keyer(
         &mut self,
         engine: &Arc<Mutex<Engine>>,
     ) -> Result<Option<TuneKeyer>, String> {
-        let (in_cw, winkeyer, serial) = {
+        let (in_cw, winkeyer, serial, same_line) = {
             let eng = engine_lock(engine);
             (
                 eng.settings().operating_mode == tempo_app::settings::OperatingMode::Cw,
                 eng.cw_winkeyer_port(),
                 eng.cw_serial_key_port()
                     .map(|p| (p, eng.cw_serial_key_line())),
+                eng.cw_keyline_ptt_conflict(),
             )
         };
         if !in_cw {
@@ -7997,6 +8000,8 @@ impl RadioLoop {
         {
             let (kind, err) = if let Some(port) = &winkeyer {
                 (TuneKeyer::WinKeyer, self.ensure_winkeyer(port))
+            } else if let (Some(_), Some(why)) = (&serial, same_line) {
+                (TuneKeyer::Serial, Some(why.to_string()))
             } else if let Some((port, line)) = &serial {
                 (TuneKeyer::Serial, self.ensure_serial_keyer(port, line))
             } else {
@@ -8012,7 +8017,7 @@ impl RadioLoop {
         }
         #[cfg(not(feature = "serial"))]
         {
-            let _ = (winkeyer, serial); // only the serial build keys these
+            let _ = (winkeyer, serial, same_line); // only the serial build keys these
             Ok(None)
         }
     }
@@ -21566,6 +21571,7 @@ mod tests {
     mod contest_status;
     mod cut_sites;
     mod cw_cat_text;
+    mod cw_shared_port;
     mod cw_speed_match;
     mod cw_stop;
     mod cw_tune_keyer;

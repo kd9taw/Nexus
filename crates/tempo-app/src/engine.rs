@@ -2233,6 +2233,11 @@ const CW_REFUSED_CW_PRIVILEGES: &str = "CW not sent: where it would key is outsi
 /// has no port set (#434): nothing keys, and nothing keys through another keyer instead.
 const CW_NO_KEYLINE_PORT: &str = "CW not sent: Serial keyline is your keyer, but no port is set. \
      Pick the keyline serial port in Settings ▸ CW.";
+/// …and when the chosen Serial keyline is the very control line serial PTT keys
+/// ([`Engine::cw_keyline_ptt_conflict`]).
+const CW_KEYLINE_IS_PTT_LINE: &str = "CW not sent: the CW keyline and serial PTT are the same \
+     control line of the same port. Give PTT its own path (CAT PTT, or the other of DTR/RTS) in \
+     Settings ▸ Radio, or key CW on the other line in Settings ▸ CW.";
 const CW_NO_WINKEYER_PORT: &str = "CW not sent: WinKeyer is your keyer, but no port is set. \
      Pick the WinKeyer port in Settings ▸ CW.";
 const CW_LEFT_SECTION: &str = "CW stopped: you left the CW screen, so what was still to go was \
@@ -13771,6 +13776,9 @@ impl Engine {
     /// box is blank (#434). Such a word used to fall through to the radio's CAT keyer, a keyer the
     /// operator never chose, with nothing said; now it is refused at the send and at keying time
     /// ([`Self::poll_cw_word`]), and keys through no other path. `None` for every other case.
+    ///
+    /// …and a Serial keyline on the very control line serial PTT keys
+    /// ([`Self::cw_keyline_ptt_conflict`]): refused the same way, before anything keys.
     fn cw_keyer_port_refusal(&self) -> Option<&'static str> {
         use crate::settings::CwKeyerBackend;
         match self.settings.cw_keyer {
@@ -13780,8 +13788,20 @@ impl Engine {
             CwKeyerBackend::WinKeyer if self.cw_winkeyer_port().is_none() => {
                 Some(CW_NO_WINKEYER_PORT)
             }
-            _ => None,
+            _ => self.cw_keyline_ptt_conflict(),
         }
+    }
+
+    /// ⛔ Why the CW keyline may not key: it is the SAME control line of the same port that serial
+    /// PTT keys, the mirror of the FSK guard in [`Self::rtty_tx_gate`]. The two key through one
+    /// shared handle, each lowering only what it raised — on one line, every element's key-up
+    /// would drop PTT under a transmission, and PTT's own key-up would cut a word or a tune's
+    /// key-down. So it is refused up front, at the send, at keying time and at a CW tune (the
+    /// radio loop asks before it keys PTT). `None` for any other keyer or wiring.
+    pub fn cw_keyline_ptt_conflict(&self) -> Option<&'static str> {
+        let port = self.cw_serial_key_port()?;
+        self.serial_ptt_keys(&port, &self.cw_serial_key_line())
+            .then_some(CW_KEYLINE_IS_PTT_LINE)
     }
 
     /// The WinKeyer serial port when the CW keyer backend is WinKeyer and a port is set —
@@ -28304,26 +28324,37 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // be the same physical line — PTT rides its own path (CAT PTT or the other
         // line/port), or the data bits would double as the key.
         if let Some(port) = self.rtty_fsk_port() {
-            let ptt = self.settings.ptt_method.trim().to_ascii_lowercase();
-            if ptt == "dtr" || ptt == "rts" {
-                let ptt_port = if self.settings.ptt_serial_port.trim().is_empty() {
-                    self.settings.serial_port.trim()
-                } else {
-                    self.settings.ptt_serial_port.trim()
-                };
-                if ptt_port.eq_ignore_ascii_case(&port)
-                    && ptt == self.rtty_fsk_line().trim().to_ascii_lowercase()
-                {
-                    return Err(
-                        "FSK keying and serial PTT share the same control line — give PTT its \
-                         own path (CAT PTT, or the other of DTR/RTS) so the data bits can't \
-                         double as the key"
-                            .to_string(),
-                    );
-                }
+            if self.serial_ptt_keys(&port, &self.rtty_fsk_line()) {
+                return Err(
+                    "FSK keying and serial PTT share the same control line — give PTT its \
+                     own path (CAT PTT, or the other of DTR/RTS) so the data bits can't \
+                     double as the key"
+                        .to_string(),
+                );
             }
         }
         Ok(())
+    }
+
+    /// Whether serial PTT keys control line `line` ("dtr"/"rts") of `port`: the PTT method is that
+    /// line, on the dedicated PTT port when set, else the CAT port (the radio loop's
+    /// `Transport::ptt_port`). Port names match ignoring ASCII case, as Windows COM names do.
+    ///
+    /// ⛔ ONE ANSWER FOR BOTH KEYLINE GUARDS — the FSK one ([`Self::rtty_tx_gate`]) and the CW one
+    /// ([`Self::cw_keyline_ptt_conflict`]). The keyers and serial PTT share one handle per port
+    /// (`tempo_audio::control_line::SharedControlLines`), which keeps each holder to the lines IT
+    /// raised but cannot keep two holders off ONE line: these guards are what does.
+    fn serial_ptt_keys(&self, port: &str, line: &str) -> bool {
+        let ptt = self.settings.ptt_method.trim().to_ascii_lowercase();
+        if ptt != "dtr" && ptt != "rts" {
+            return false;
+        }
+        let ptt_port = if self.settings.ptt_serial_port.trim().is_empty() {
+            self.settings.serial_port.trim()
+        } else {
+            self.settings.ptt_serial_port.trim()
+        };
+        ptt_port.eq_ignore_ascii_case(port.trim()) && ptt == line.trim().to_ascii_lowercase()
     }
 
     /// Uppercase + filter to the ITA2 charset, frame it on new lines (`rtty_over_newlines`), cap
@@ -40642,6 +40673,115 @@ mod tests {
         e.apply_settings(s);
         e.set_operating_mode("rtty", false);
         e.rtty_send_text("CQ").unwrap();
+    }
+
+    /// ⛔ THE CW KEYLINE ON THE SERIAL PTT LINE IS REFUSED, as the FSK keyline is (above). The two
+    /// key through one shared handle per port; on ONE line every element's key-up would drop PTT
+    /// and PTT's key-up would cut the key. Refused at the send (typed and Enter), and at keying
+    /// time for words queued before the wiring changed — never handed to the keyer. PTT on the
+    /// other line of the port, on another port, or over CAT keys as before.
+    #[test]
+    fn cw_keyline_refuses_the_serial_ptt_line() {
+        const SAME_LINE: &str = "same control line of the same port";
+        let station = |key_port: &str, key_line: &str, ptt: &str, ptt_port: &str, cat: &str| {
+            let mut s = Engine::new("KD9TAW", "EN52", 0).settings().clone();
+            s.cw_key_port = key_port.into();
+            s.cw_key_line = key_line.into();
+            s.ptt_method = ptt.into();
+            s.ptt_serial_port = ptt_port.into();
+            s.serial_port = cat.into();
+            let mut e = Engine::with_settings(s);
+            e.set_license_class("extra");
+            e.set_cw_keyer("serial", 600.0);
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.03, "40m", "CW");
+            assert!(e.tx_enabled() && e.tx_allowed(), "premise: armed");
+            e
+        };
+        for (scene, key_port, key_line, ptt, ptt_port, cat, refused) in [
+            (
+                "same line, same port",
+                "COM4",
+                "dtr",
+                "dtr",
+                "COM4",
+                "",
+                true,
+            ),
+            ("RTS both", "COM4", "rts", "rts", "COM4", "", true),
+            (
+                "port names ignore case",
+                "com4",
+                "DTR",
+                "dtr",
+                "COM4",
+                "",
+                true,
+            ),
+            (
+                "PTT falls back to the CAT port",
+                "COM4",
+                "dtr",
+                "dtr",
+                "",
+                "COM4",
+                true,
+            ),
+            (
+                "PTT on the other line",
+                "COM4",
+                "dtr",
+                "rts",
+                "COM4",
+                "",
+                false,
+            ),
+            (
+                "PTT on another port",
+                "COM4",
+                "dtr",
+                "dtr",
+                "COM5",
+                "",
+                false,
+            ),
+            ("CAT PTT", "COM4", "dtr", "cat", "COM4", "COM4", false),
+        ] {
+            let mut typed = station(key_port, key_line, ptt, ptt_port, cat);
+            typed.send_cw("CQ TEST");
+            let mut enter = station(key_port, key_line, ptt, ptt_port, cat);
+            let took = enter.send_cw_armed("CQ TEST");
+            if refused {
+                let said = typed.cw_keyer_error().unwrap_or_default();
+                assert!(
+                    said.contains(SAME_LINE),
+                    "{scene}: typed, refused and said: {said:?}"
+                );
+                assert_eq!(typed.poll_cw_one(), None, "{scene}: nothing keys");
+                let took = took.unwrap_err();
+                assert!(
+                    took.contains(SAME_LINE),
+                    "{scene}: Enter, refused: {took:?}"
+                );
+                assert_eq!(enter.poll_cw_one(), None, "{scene}: nothing keys");
+            } else {
+                assert_eq!(typed.cw_keyer_error(), None, "{scene}: typed, queued");
+                assert_eq!(typed.poll_cw_one().as_deref(), Some("CQ"), "{scene}: keys");
+                assert_eq!(took, Ok(()), "{scene}: Enter, queued");
+            }
+        }
+        // Queued on a legal wiring, then PTT moved onto the key line: the rest is dropped at
+        // keying time, never handed to the keyer.
+        let mut e = station("COM4", "dtr", "rts", "COM4", "");
+        e.send_cw("CQ TEST DE KD9TAW");
+        assert_eq!(e.poll_cw_one().as_deref(), Some("CQ"), "premise: keying");
+        let mut s = e.settings().clone();
+        s.ptt_method = "dtr".into();
+        e.apply_settings(s);
+        assert_eq!(e.poll_cw_one(), None, "the rest is not keyed");
+        let said = e.cw_keyer_error().unwrap_or_default();
+        assert!(said.contains(SAME_LINE), "and says why: {said:?}");
+        assert_eq!(e.poll_cw_one(), None, "and dropped, not held");
     }
 
     #[test]

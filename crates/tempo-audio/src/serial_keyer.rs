@@ -13,6 +13,14 @@
 //! time; the thread walks `tempo_core::cw::morse_key_events` and toggles the line, keying
 //! up immediately on abort. (PC-generated timing has some OS jitter — inherent to serial
 //! keying; a WinKeyer is the jitter-free upgrade.)
+//!
+//! ⛔ THE PORT IS HELD, NOT OWNED ([`crate::control_line::SharedControlLines`]). The conventional
+//! keyline interface is DTR = key, RTS = PTT on ONE port, and serial PTT ([`crate::rig`]) holds
+//! that port once it has keyed. This keyer opened it exclusively, so whichever of the two came
+//! second was refused ("Access is denied.") and nothing keyed. Both now key through one handle;
+//! each lowers only the line it raised, and a key-up whose write fails is retried (by the keying
+//! thread, and again when the holder goes). That the two never claim the SAME line is the engine's
+//! guard (`Engine::cw_keyline_ptt_conflict`), as for the FSK keyer.
 
 /// Which control line keys the rig. **Dtr** is the CW convention (RTS = PTT); **Rts** is
 /// offered because some interfaces wire it the other way.
@@ -39,19 +47,24 @@ pub use imp::SerialKeyer;
 #[cfg(feature = "serial")]
 mod imp {
     use super::KeyLine;
-    use serialport::SerialPort;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use crate::control_line::{ControlLinePins, SharedControlLines};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
 
-    fn set_key(sp: &mut dyn SerialPort, line: KeyLine, down: bool) {
-        let _ = match line {
-            KeyLine::Dtr => sp.write_data_terminal_ready(down),
-            KeyLine::Rts => sp.write_request_to_send(down),
-        };
+    /// Put the key line down (`true`) or up; whether the write went out.
+    fn set_key(sp: &mut SharedControlLines, line: KeyLine, down: bool) -> bool {
+        match line {
+            KeyLine::Dtr => sp.set_dtr(down),
+            KeyLine::Rts => sp.set_rts(down),
+        }
+        .is_ok()
     }
+
+    /// How often the keying thread retries a key-up whose write failed ([`keyer_loop`]).
+    const KEY_UP_RETRY_MS: u64 = 20;
 
     /// What the keying thread is handed: a word to key at a speed, or a tune's key-down (#500)
     /// held until a stop or its own limit, whichever comes first.
@@ -69,12 +82,25 @@ mod imp {
     /// after it, wherever the thread was when the stop landed. A flag the thread cleared as it
     /// took each word lost every stop that landed between a word's hand-over and its read: a
     /// word already waiting in the channel then keyed in full after Stop TX.
+    ///
+    /// ⛔ A KEY-UP THAT FAILS IS RETRIED HERE, NOT LEFT FOR LATER. `set` answers whether its write
+    /// went out. On a break-in rig the key line alone is the transmitter, and the port may stay
+    /// open under another holder (serial PTT), so no port close will drop it: a key-up that did
+    /// not go out is tried again every [`KEY_UP_RETRY_MS`] before the thread does anything else,
+    /// until it goes out or the keyer is dropped (`closing`) — whose holder then tries once more
+    /// as it lets go ([`SharedControlLines`]'s drop).
     fn keyer_loop(
-        mut set: impl FnMut(bool),
+        mut set: impl FnMut(bool) -> bool,
         rx: mpsc::Receiver<(Job, u64)>,
         stops: Arc<AtomicU64>,
+        closing: Arc<AtomicBool>,
     ) {
-        set(false); // idle: key up
+        let key_up = |set: &mut dyn FnMut(bool) -> bool| {
+            while !set(false) && !closing.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(KEY_UP_RETRY_MS));
+            }
+        };
+        key_up(&mut set); // idle: key up
 
         // Sleep `ms` in 8 ms slices; false the moment a stop lands.
         let wait = |ms: u64, stop: u64| {
@@ -96,7 +122,11 @@ mod imp {
             match job {
                 Job::Word(text, wpm) => {
                     for (down, ms) in tempo_core::cw::morse_key_events(&text, wpm) {
-                        set(down);
+                        if down {
+                            set(true);
+                        } else {
+                            key_up(&mut set);
+                        }
                         if !wait(ms as u64, stop) {
                             break;
                         }
@@ -110,9 +140,9 @@ mod imp {
                     wait(limit.as_millis() as u64, stop);
                 }
             }
-            set(false); // key up between jobs, and at once on a stop
+            key_up(&mut set); // key up between jobs, and at once on a stop
         }
-        set(false); // channel closed (keyer dropped) → key up + exit
+        key_up(&mut set); // channel closed (keyer dropped) → key up + exit
     }
 
     /// An open serial keyline keyer with its own keying thread.
@@ -120,6 +150,8 @@ mod imp {
         tx: Option<mpsc::Sender<(Job, u64)>>,
         /// How many stops there have been ([`keyer_loop`]).
         stops: Arc<AtomicU64>,
+        /// Set by the drop: the thread stops retrying a failed key-up and exits ([`keyer_loop`]).
+        closing: Arc<AtomicBool>,
         handle: Option<thread::JoinHandle<()>>,
     }
 
@@ -131,20 +163,41 @@ mod imp {
         /// (deasserted) — the opener guarantees it, see
         /// [`crate::control_line::idle_both_lines`] for the stuck-PTT rule that pair of
         /// writes used to live here to enforce.
+        ///
+        /// The port is HELD, not owned ([`SharedControlLines`]): serial PTT on the other line of
+        /// the same port keys through the same handle, and a port another holder already has is
+        /// joined as it is — its lines are not idled. The holder lives in the keying thread's
+        /// closure, so it goes — lowering the key line if it was left down — however that thread
+        /// ends: the keyer dropped, or a panic unwinding it.
         pub fn open(port: &str, line: KeyLine) -> std::io::Result<Self> {
-            let mut sp = crate::control_line::open_control_line_port(port)?;
-            Ok(Self::keying(move |down| set_key(&mut *sp, line, down)))
+            let mut sp = SharedControlLines::open(port)?;
+            Ok(Self::keying_checked(move |down| {
+                set_key(&mut sp, line, down)
+            }))
         }
 
-        /// Spawn the keying thread over `set`, which puts the key line down (`true`) or up.
-        pub(crate) fn keying(set: impl FnMut(bool) + Send + 'static) -> Self {
+        /// Spawn the keying thread over `set`, which puts the key line down (`true`) or up and
+        /// cannot fail (a test's recording line).
+        #[cfg(test)]
+        pub(crate) fn keying(mut set: impl FnMut(bool) + Send + 'static) -> Self {
+            Self::keying_checked(move |down| {
+                set(down);
+                true
+            })
+        }
+
+        /// [`Self::keying`] over a line whose write can fail: `set` answers whether it went out,
+        /// and a key-up that did not is retried ([`keyer_loop`]).
+        pub(crate) fn keying_checked(set: impl FnMut(bool) -> bool + Send + 'static) -> Self {
             let (tx, rx) = mpsc::channel();
             let stops = Arc::new(AtomicU64::new(0));
-            let stops_thread = stops.clone();
-            let handle = thread::spawn(move || keyer_loop(set, rx, stops_thread));
+            let closing = Arc::new(AtomicBool::new(false));
+            let (stops_thread, closing_thread) = (stops.clone(), closing.clone());
+            let handle = thread::spawn(move || keyer_loop(set, rx, stops_thread, closing_thread));
             Self {
                 tx: Some(tx),
                 stops,
+                closing,
                 handle: Some(handle),
             }
         }
@@ -174,10 +227,167 @@ mod imp {
     impl Drop for SerialKeyer {
         fn drop(&mut self) {
             self.stops.fetch_add(1, Ordering::SeqCst); // interrupt a word in progress
+            self.closing.store(true, Ordering::SeqCst); // end a failed key-up's retries
             self.tx = None; // close the channel → the thread keys up and exits
             if let Some(h) = self.handle.take() {
                 let _ = h.join();
             }
+        }
+    }
+
+    /// The keyline and serial PTT on ONE port: CW keys DTR, PTT holds RTS, through one handle
+    /// ([`SharedControlLines`]). The port is a [`crate::control_line::fake_ports`] port, which
+    /// opens exclusively as a COM port does, so a keyer that opened it for itself is refused.
+    #[cfg(test)]
+    mod shared_port_tests {
+        use super::{KeyLine, SerialKeyer};
+        use crate::control_line::fake_ports::{self, State};
+        use crate::control_line::{ControlLinePins, SharedControlLines};
+        use std::time::{Duration, Instant};
+
+        /// Wait (at most 2 s) until `port`'s lines satisfy `want`.
+        fn wait_for(port: &str, want: impl Fn(State) -> bool) -> State {
+            let start = Instant::now();
+            while start.elapsed() < Duration::from_secs(2) {
+                let s = fake_ports::state(port);
+                if want(s) {
+                    return s;
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            fake_ports::state(port)
+        }
+
+        /// Serial PTT up on RTS of `port`, held as `Rig::serial_ptt` holds it.
+        fn ptt_up(port: &str) -> SharedControlLines {
+            fake_ports::install(port);
+            let mut ptt = SharedControlLines::open(port).expect("PTT opens the port");
+            ptt.set_rts(true).unwrap();
+            ptt
+        }
+
+        /// ★ THE BUG: with serial PTT holding the port, the keyer's own open was refused ("Access
+        /// is denied.") and nothing keyed. It joins the open handle now, keys DTR without touching
+        /// RTS, and a word's end leaves the key up and PTT where PTT put it.
+        #[test]
+        fn the_keyline_keys_on_the_port_serial_ptt_holds() {
+            let port = "tempo-test-cw-shared-open";
+            let ptt = ptt_up(port);
+            let keyer =
+                SerialKeyer::open(port, KeyLine::Dtr).expect("the keyer shares the port PTT holds");
+            assert!(fake_ports::state(port).rts, "joining does not idle PTT");
+            keyer.send("E", 60);
+            let s = wait_for(port, |s| s.dtr);
+            assert!(s.dtr && s.rts, "the key goes down under PTT: {s:?}");
+            let s = wait_for(port, |s| !s.dtr);
+            assert!(
+                !s.dtr && s.rts,
+                "the word ends keyed up, PTT untouched: {s:?}"
+            );
+            // The keyer goes mid-word: its line drops, PTT's stays.
+            keyer.send("TTTT", 5);
+            assert!(wait_for(port, |s| s.dtr).dtr, "control: keying");
+            drop(keyer);
+            let s = fake_ports::state(port);
+            assert!(
+                !s.dtr && s.rts && s.held,
+                "only the keyer's line drops: {s:?}"
+            );
+            drop(ptt);
+            let s = fake_ports::state(port);
+            assert!(
+                !s.rts && !s.dtr && !s.held,
+                "the last holder closes it: {s:?}"
+            );
+        }
+
+        /// …and the other way round: PTT lets go (the rig drops its port) while a tune holds the
+        /// key down. PTT's line drops; the key, the keyer's, stays down until the keyer lets it up.
+        #[test]
+        fn ptt_letting_go_leaves_the_key_where_the_keyer_put_it() {
+            let port = "tempo-test-cw-shared-ptt-goes";
+            let ptt = ptt_up(port);
+            let keyer = SerialKeyer::open(port, KeyLine::Dtr).unwrap();
+            keyer.hold(Duration::from_secs(60));
+            assert!(wait_for(port, |s| s.dtr).dtr, "control: held down");
+            drop(ptt);
+            let s = fake_ports::state(port);
+            assert!(!s.rts && s.dtr && s.held, "only PTT's line drops: {s:?}");
+            keyer.clear();
+            let s = wait_for(port, |s| !s.dtr);
+            assert!(!s.dtr, "the stop lets the key up: {s:?}");
+        }
+
+        /// ⛔ A KEY-UP WHOSE WRITE FAILS IS RETRIED. PTT keeps the port open, so no port close will
+        /// drop the key: the keying thread tries again until the key-up goes out.
+        #[test]
+        fn a_failed_key_up_is_retried_by_the_keying_thread() {
+            let port = "tempo-test-cw-shared-retry";
+            let ptt = ptt_up(port);
+            let keyer = SerialKeyer::open(port, KeyLine::Dtr).unwrap();
+            keyer.hold(Duration::from_secs(60));
+            assert!(wait_for(port, |s| s.dtr).dtr, "control: held down");
+            fake_ports::fail_next_write(port);
+            keyer.clear();
+            let s = wait_for(port, |s| !s.dtr);
+            assert!(!s.dtr && s.rts, "the failed key-up was retried: {s:?}");
+            drop(keyer);
+            drop(ptt);
+        }
+
+        /// …and a key-up that fails as the keyer goes (the port setting cleared, shutdown) is
+        /// retried by the holder as it lets go: the drop does not return with the key down.
+        #[test]
+        fn a_failed_key_up_at_the_keyers_drop_is_retried_on_the_way_out() {
+            let port = "tempo-test-cw-shared-drop-retry";
+            let ptt = ptt_up(port);
+            let keyer = SerialKeyer::open(port, KeyLine::Dtr).unwrap();
+            keyer.hold(Duration::from_secs(60));
+            assert!(wait_for(port, |s| s.dtr).dtr, "control: held down");
+            fake_ports::fail_next_write(port);
+            drop(keyer);
+            let s = fake_ports::state(port);
+            assert!(
+                !s.dtr && s.rts && s.held,
+                "the key is up when the drop returns: {s:?}"
+            );
+            drop(ptt);
+        }
+
+        /// The keying thread dies (a panic) with the key down: unwinding drops its holder, which
+        /// lets the key up, and PTT, the other holder's, is untouched.
+        #[test]
+        fn a_keying_thread_that_panics_leaves_the_key_up() {
+            let port = "tempo-test-cw-shared-panic";
+            let ptt = ptt_up(port);
+            let mut sp = SharedControlLines::open(port).unwrap();
+            let mut was_down = false;
+            let keyer = SerialKeyer::keying(move |down| {
+                if !down && was_down {
+                    panic!("test: the keying thread dies with the key down");
+                }
+                was_down |= down;
+                let _ = sp.set_dtr(down);
+            });
+            keyer.send("E", 60);
+            let start = Instant::now();
+            while !keyer.handle.as_ref().unwrap().is_finished()
+                && start.elapsed() < Duration::from_secs(2)
+            {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            assert!(
+                fake_ports::log(port).iter().any(|s| s.dtr),
+                "premise: the key went down before the thread died"
+            );
+            // Before the keyer's own drop: the unwind alone let the key up.
+            let s = fake_ports::state(port);
+            assert!(
+                !s.dtr && s.rts && s.held,
+                "the dead thread's key is up: {s:?}"
+            );
+            drop(keyer);
+            drop(ptt);
         }
     }
 
