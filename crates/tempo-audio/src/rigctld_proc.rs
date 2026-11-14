@@ -2050,10 +2050,18 @@ mod tests {
     use super::*;
 
     /// Write `body` as an executable shell script in a fresh temp dir and return its path.
+    ///
+    /// ⚠️ WRITTEN BY A CHILD `sh`, NEVER THROUGH A DESCRIPTOR OF THIS PROCESS. The tests run on
+    /// many threads, and any of them may fork (every `Command::spawn`) while this one holds the
+    /// stub open for writing: the forked child inherits that descriptor until it execs, and
+    /// meanwhile every exec of the stub fails `ETXTBSY` (see `proc_util::runs_ok_within`). A
+    /// stub that cannot start reads as a MISSING tool, so `ask_show_conf` went on to the
+    /// `rigctld` stand-in and answered its whole dump where the cut `rigctl` should have been
+    /// Unconfirmable (CI run 43507426897; 42 of 400 asks under concurrent spawning here). Written
+    /// by a child, the only write descriptor lives in that child, and it is gone once it exits.
     #[cfg(unix)]
     fn stub_script(tag: &str, body: &str) -> std::path::PathBuf {
         use std::io::Write;
-        use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!(
             "nexus-runs-ok-{tag}-{}-{:?}",
             std::process::id(),
@@ -2061,10 +2069,19 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let p = dir.join("rigctld");
-        std::fs::File::create(&p)
-            .and_then(|mut f| f.write_all(body.as_bytes()))
+        let mut writer = Command::new("/bin/sh")
+            .args(["-c", "cat > \"$0\" && chmod 755 \"$0\""])
+            .arg(&p)
+            .stdin(Stdio::piped())
+            .spawn()
+            .expect("spawn the stub writer");
+        writer
+            .stdin
+            .take()
+            .expect("writer stdin")
+            .write_all(body.as_bytes())
             .expect("write stub");
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        assert!(writer.wait().expect("stub writer").success(), "write stub");
         p
     }
 
