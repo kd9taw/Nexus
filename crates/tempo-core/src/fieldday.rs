@@ -4623,6 +4623,15 @@ impl FieldDayStation {
         crate::message::names_whole_call(to, self.mycall())
     }
 
+    /// ⛔ Running, a caller whose call is my own base call: passed by, in every set of messages,
+    /// and the next caller in the period is taken, as WSJT-X refuses one in every activity
+    /// ([`is_my_base_call`](crate::message::is_my_base_call), mainwindow.cpp 8977).
+    fn is_my_own_caller(&self, m: &Msg) -> bool {
+        self.state == FdState::CallingCq
+            && m.sender()
+                .is_some_and(|de| crate::message::is_my_base_call(de, self.mycall()))
+    }
+
     /// The caller `de` of a first call with no grid, as my report names it: WSJT-X's Tx2 to it
     /// (`genStdMsgs`, mainwindow.cpp), its call hashed where it is nonstandard (`t0a`, 9596,
     /// 9629-9631) and whole otherwise, beside my call as [`my_call_beside`](Self::my_call_beside)
@@ -4819,6 +4828,9 @@ impl FieldDayStation {
                 continue;
             }
             let m = Msg::parse(&d.message);
+            if self.is_my_own_caller(&m) {
+                continue;
+            }
             match (self.state, &m) {
                 // NOTE: there is intentionally NO (Listening, Cq) auto-answer arm. S&P listens: it
                 // must NEVER start a contact on its own (contests require the operator to start
@@ -4952,6 +4964,9 @@ impl FieldDayStation {
     fn observe_na_vhf(&mut self, decodes: &[Decode], slot: u64) {
         for d in decodes {
             let m = Msg::parse(&d.message);
+            if self.is_my_own_caller(&m) {
+                continue;
+            }
             match (self.state, &m) {
                 // NOTE: there is intentionally NO (Listening, Cq) auto-answer arm. S&P listens: it
                 // must NEVER start a contact on its own (contests require the operator to start
@@ -5006,6 +5021,9 @@ impl FieldDayStation {
     fn observe_standard(&mut self, decodes: &[Decode], slot: u64) {
         for d in decodes {
             let m = Msg::parse(&d.message);
+            if self.is_my_own_caller(&m) {
+                continue;
+            }
             let rpt = d.snr.clamp(-30, 49);
             match (self.state, &m) {
                 // NOTE: there is intentionally NO (Listening, Cq) auto-answer arm. S&P listens: it
@@ -7288,6 +7306,79 @@ mod tests {
                 (state, answer.to_string()),
                 "{event} {caller}: the next caller, resolved, is answered"
             );
+        }
+    }
+
+    /// ⛔ A contest's Running never answers a caller whose call is my own base call, in Field
+    /// Day's messages, the ARRL VHF contests' or the standard ones, as WSJT-X refuses one in every
+    /// activity: `processMessage` returns on `m_bDoubleClicked && hiscall==m_baseCall`
+    /// (mainwindow.cpp 8977), which CQ: First reaches with `m_bDoubleClicked` set (7024). The
+    /// run keeps calling CQ, and the next caller in the same period, from another call, is
+    /// answered.
+    #[test]
+    fn a_run_never_answers_my_own_call() {
+        let fd = || {
+            FieldDayStation::running(
+                "K1ABC",
+                "FN42",
+                ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+                "20M",
+            )
+        };
+        for (what, mut run, mine, caller, answer) in [
+            (
+                "Field Day",
+                fd(),
+                "K1ABC K1ABC 2A IL",
+                "K1ABC W9XYZ 2A IL",
+                "W9XYZ K1ABC R 3A WI",
+            ),
+            (
+                "Field Day rogered",
+                fd(),
+                "K1ABC K1ABC R 2A IL",
+                "K1ABC W9XYZ 2A IL",
+                "W9XYZ K1ABC R 3A WI",
+            ),
+            (
+                "ARRL VHF",
+                ft8_station("arrlvhf_jan", "FN42", true),
+                "K1ABC K1ABC EN37",
+                "K1ABC W9XYZ EN37",
+                "W9XYZ K1ABC R FN42",
+            ),
+            (
+                "standard",
+                ft8_station("txqp", "FN42", true),
+                "K1ABC K1ABC EN37",
+                "K1ABC W9XYZ EN37",
+                "W9XYZ K1ABC -05",
+            ),
+            (
+                "standard, no grid",
+                ft8_station("txqp", "FN42", true),
+                "K1ABC K1ABC",
+                "K1ABC W9XYZ EN37",
+                "W9XYZ K1ABC -05",
+            ),
+            (
+                "standard, a report",
+                ft8_station("txqp", "FN42", true),
+                "K1ABC K1ABC -12",
+                "K1ABC W9XYZ EN37",
+                "W9XYZ K1ABC -05",
+            ),
+        ] {
+            let cq = next(&run);
+            run.observe(&[dec(mine)], 1);
+            assert_eq!(
+                (run.state, next(&run), run.dxcall.clone()),
+                (FdState::CallingCq, cq, None),
+                "{what} {mine}: passed by"
+            );
+            assert!(run.log.qsos().is_empty(), "{what} {mine}: nothing logged");
+            run.observe(&[dec(mine), dec(caller)], 3);
+            assert_eq!(next(&run), answer, "{what}: the next caller is answered");
         }
     }
 

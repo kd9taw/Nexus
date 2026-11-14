@@ -907,6 +907,15 @@ impl Station {
             // bracket form would be echoed straight back onto the air (see Msg::unhashed).
             let m = Msg::parse(&d.message).unhashed();
             let rpt = d.snr.clamp(-30, 49);
+            // ⛔ Calling CQ, a caller whose call is my own base call is passed by, and the next
+            // caller in the period is taken, as WSJT-X refuses one
+            // ([`is_my_base_call`](crate::message::is_my_base_call), mainwindow.cpp 8977).
+            if self.state == State::CallingCq
+                && m.sender()
+                    .is_some_and(|de| crate::message::is_my_base_call(de, &self.mycall))
+            {
+                continue;
+            }
             match (self.state, &m) {
                 // NOTE: there is intentionally NO (Listening, Cq) auto-answer arm.
                 // "Monitor" is passive RX — it must NEVER key up on its own (an
@@ -1768,6 +1777,43 @@ mod start_context_tests {
             "the partner's roger to KD9TAW/P"
         );
         assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW RR73"));
+    }
+
+    /// ⛔ Calling CQ, a caller whose call is MY OWN base call is not answered, as WSJT-X 3.0.2
+    /// refuses it: `processMessage` returns at once on `m_bDoubleClicked && hiscall==m_baseCall`
+    /// (mainwindow.cpp 8977), and CQ: First and CQ: Max Dist set `m_bDoubleClicked` before they
+    /// call it (7024, 7054). `hiscall` is the decode's second word (`deCallAndGrid`,
+    /// decodedtext.cpp 212-224) with the brackets dropped (66), compared letter for letter with
+    /// my base call. So `KD9TAW KD9TAW/P EN37` IS answered as KD9TAW (its sender is not
+    /// `KD9TAW`), and `KD9TAW/P KD9TAW EN37` is not as KD9TAW/P (its sender is my base call).
+    /// CONTROL: a caller from any other call is answered as before.
+    #[test]
+    fn calling_cq_never_answers_my_own_call() {
+        for (me, heard, answered) in [
+            ("KD9TAW", "KD9TAW KD9TAW", false),
+            ("KD9TAW", "KD9TAW KD9TAW EN37", false),
+            ("KD9TAW", "KD9TAW KD9TAW -07", false),
+            ("KD9TAW", "<KD9TAW> KD9TAW", false),
+            ("KD9TAW/P", "KD9TAW/P KD9TAW EN37", false),
+            ("KD9TAW/P", "KD9TAW/P KD9TAW -07", false),
+            ("KD9TAW", "KD9TAW KD9TAW/P EN37", true),
+            ("KD9TAW", "KD9TAW W9XYZ", true),
+            ("KD9TAW", "KD9TAW W9XYZ EN37", true),
+            ("KD9TAW", "KD9TAW W9XYZ -07", true),
+        ] {
+            let mut s = Station::calling_cq(me, MY_GRID);
+            let cq = s.pending_text();
+            s.observe(&[dec(heard, -7)]);
+            assert_eq!(s.state != State::CallingCq, answered, "as {me}: {heard}");
+            if !answered {
+                assert_eq!(s.pending_text(), cq, "as {me}: {heard} keeps the CQ");
+                assert_eq!(s.dxcall, None, "as {me}: {heard}");
+            }
+        }
+        // The next caller in the same period, from another call, is still answered.
+        let mut s = Station::calling_cq(ME, MY_GRID);
+        s.observe(&[dec("KD9TAW KD9TAW EN37", 5), dec("KD9TAW W9XYZ EN37", -7)]);
+        assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW -07"));
     }
 
     #[test]

@@ -136,6 +136,21 @@ pub fn names_whole_call(to: &str, mycall: &str) -> bool {
     unhash_call(to).eq_ignore_ascii_case(mycall.trim())
 }
 
+/// `de`, a caller's call, IS my own base call: letter for letter, case ignored, a hashed form's
+/// brackets dropped. A CQ run never answers such a caller.
+///
+/// ⛔ WSJT-X 3.0.2's own rule, exactly: `processMessage` returns at once on
+/// `m_bDoubleClicked && hiscall==m_baseCall` (`widgets/mainwindow.cpp` 8977), and every path
+/// that answers a caller while calling CQ sets `m_bDoubleClicked` first (CQ: First 7024, CQ: Max
+/// Dist 7054). `hiscall` is the decode's second word (`deCallAndGrid`,
+/// `Decoder/decodedtext.cpp` 212-224) with the brackets dropped (66), and it is compared whole,
+/// not by base: as KD9TAW, a caller signing `KD9TAW/P` is not refused. `m_baseCall` is
+/// `Radio::base_callsign(my_callsign)`, which [`base_call`] stands in for; where the two differ
+/// (an affix longer than the call, `W1AW/PORTABLE`) is enumerated in its own doc.
+pub fn is_my_base_call(de: &str, mycall: &str) -> bool {
+    unhash_call(de).eq_ignore_ascii_case(&base_call(mycall))
+}
+
 /// A valid WSJT-X directed-CQ token: 1–4 letters ("DX", "NA", "POTA", "TEST")
 /// or exactly 3 digits (a kHz QSY like "CQ 040 …").
 fn is_cq_dir(s: &str) -> bool {
