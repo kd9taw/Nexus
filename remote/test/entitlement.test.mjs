@@ -684,8 +684,16 @@ test('with the billing Worker bound, checkout and the portal pass only the signe
     // Each one is a call to the payment provider: ten a minute an account.
     answer = null
     const busy = await person(app)
+    // The minute is a fixed window on the wall clock (`rate`), so a burst that straddles its end
+    // starts counting again from one and the eleventh call goes through (CI run 43418583234). The
+    // account's window is opened here, empty and an hour long, so all eleven calls count in ONE
+    // window whatever the clock reads; the limit they meet is still the relay's own.
+    const minute = sha(`billing:${busy.accountId}`)
+    await app.db.prepare('INSERT INTO rate_limits(id,hits,expires_at) VALUES(?,0,?)').bind(minute, Date.now() + 3600000).run()
     for (let i = 0; i < 10; i++) await busy.post('billing/portal', {})
     assert.deepEqual((await busy.post('billing/checkout', { plan: 'monthly', country: 'US' }, 429)).value, { error: 'tryLater' })
+    // And they were counted in that window: a refused call is not counted.
+    assert.deepEqual(await app.db.prepare('SELECT hits FROM rate_limits WHERE id=?').bind(minute).first(), { hits: 10 })
 
     // Bound or not, the relay still serves no webhook.
     assert.deepEqual((await owner.post('billing/webhook', {}, 404)).value, { error: 'notFound' })
