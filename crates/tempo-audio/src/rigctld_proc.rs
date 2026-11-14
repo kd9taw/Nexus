@@ -1495,7 +1495,26 @@ pub(crate) fn ask_show_conf(
         );
         let mut cmd = tempo_core::process::command(bin);
         cmd.args(args).args(["-r", NO_SUCH_RIG]);
-        match run_within(&mut cmd, budget) {
+        // ⚠️ "COULD NOT START RIGHT NOW" IS NOT "MISSING" (`proc_util::runs_ok_within` has the
+        // whole story). ETXTBSY lasts while any process holds the binary open for writing, and a
+        // fork in another thread between a write and its close is enough; EAGAIN and EINTR pass
+        // too. Read as missing, a busy `rigctl` would hand the ask to `rigctld`, which a 4.5.x
+        // Hamlib never exits from. So those three are retried a few times, briefly, as there;
+        // one still busy after that falls through as before.
+        let mut outcome = run_within(&mut cmd, budget);
+        for _ in 0..5 {
+            let Bounded::Unrunnable(
+                std::io::ErrorKind::ExecutableFileBusy
+                | std::io::ErrorKind::WouldBlock
+                | std::io::ErrorKind::Interrupted,
+            ) = outcome
+            else {
+                break;
+            };
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            outcome = run_within(&mut cmd, budget);
+        }
+        match outcome {
             // Missing: the other tool may be there.
             Bounded::Unrunnable(kind) => {
                 unrunnable = kind;
@@ -2219,6 +2238,58 @@ mod tests {
         assert_eq!(
             ask_show_conf(missing.as_os_str(), unstartable.as_os_str(), &args, short),
             ShowConf::Unanswered(std::io::ErrorKind::PermissionDenied)
+        );
+    }
+
+    /// ⭐ A BUSY `rigctl` IS NOT A MISSING ONE. While anything holds the binary open for writing,
+    /// its exec fails ETXTBSY; that is a moment, not an answer. Held for the first try and let go
+    /// a moment later, the `rigctl` is asked again and ITS dump is the answer: `rigctld` (here a
+    /// stand-in whose dump says so) is never asked. One busy for good still falls through to
+    /// `rigctld` after a brief, bounded wait. Linux only: macOS does not refuse a busy script.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_rigctl_busy_for_a_moment_is_asked_again_not_skipped() {
+        use std::time::{Duration, Instant};
+        let whole = "rig_pathname: x\nasync: x\n";
+        let other = "rig_pathname: x\nasync: x\nfrom_rigctld: x\n";
+        let rigctl = stub_script("busy-rigctl", &format!("#!/bin/sh\nprintf '{whole}'\n"));
+        let rigctld = stub_script(
+            "busy-rigctld",
+            &format!("#!/bin/sh\necho asked >> \"$0.args\"\nprintf '{other}'\n"),
+        );
+        let args = ["-m", "3073", "-L"];
+        let budget = Duration::from_secs(5);
+        let hold = || {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&rigctl)
+                .expect("open rigctl for writing")
+        };
+
+        // Busy for the first try only: the write descriptor goes 30 ms in.
+        let writer = hold();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(30));
+            drop(writer);
+        });
+        let answer = ask_show_conf(rigctl.as_os_str(), rigctld.as_os_str(), &args, budget);
+        release.join().unwrap();
+        assert_eq!(answer, ShowConf::Dump(whole.to_string()));
+        assert!(
+            !rigctld.with_extension("args").exists(),
+            "rigctld was asked while rigctl was only busy"
+        );
+
+        // Busy for good: rigctld is asked, and soon.
+        let writer = hold();
+        let started = Instant::now();
+        let answer = ask_show_conf(rigctl.as_os_str(), rigctld.as_os_str(), &args, budget);
+        drop(writer);
+        assert_eq!(answer, ShowConf::Dump(other.to_string()));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
         );
     }
 

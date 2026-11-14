@@ -42,7 +42,7 @@ impl KeyLine {
 }
 
 #[cfg(feature = "serial")]
-pub use imp::SerialKeyer;
+pub use imp::{SerialKeyer, StuckWatch};
 
 #[cfg(feature = "serial")]
 mod imp {
@@ -204,6 +204,8 @@ mod imp {
         closing: Arc<AtomicBool>,
         /// Raised by the thread while a key-up keeps failing ([`Self::key_up_failing`]).
         failing: Arc<AtomicBool>,
+        /// Set once a key-up write has gone out ([`Self::key_up_went_out`]).
+        went_up: Arc<AtomicBool>,
         handle: Option<thread::JoinHandle<()>>,
     }
 
@@ -240,11 +242,20 @@ mod imp {
 
         /// [`Self::keying`] over a line whose write can fail: `set` answers whether it went out,
         /// and a key-up that did not is retried ([`keyer_loop`]).
-        pub(crate) fn keying_checked(set: impl FnMut(bool) -> bool + Send + 'static) -> Self {
+        pub(crate) fn keying_checked(mut set: impl FnMut(bool) -> bool + Send + 'static) -> Self {
             let (tx, rx) = mpsc::channel();
             let stops = Arc::new(AtomicU64::new(0));
             let closing = Arc::new(AtomicBool::new(false));
             let failing = Arc::new(AtomicBool::new(false));
+            let went_up = Arc::new(AtomicBool::new(false));
+            let went_up_thread = Arc::clone(&went_up);
+            let set = move |down: bool| {
+                let ok = set(down);
+                if ok && !down {
+                    went_up_thread.store(true, Ordering::SeqCst);
+                }
+                ok
+            };
             let (stops_thread, closing_thread, failing_thread) =
                 (stops.clone(), closing.clone(), failing.clone());
             let handle = thread::spawn(move || {
@@ -255,6 +266,7 @@ mod imp {
                 stops,
                 closing,
                 failing,
+                went_up,
                 handle: Some(handle),
             }
         }
@@ -281,9 +293,33 @@ mod imp {
             self.failing.load(Ordering::SeqCst)
         }
 
+        /// Whether a key-up write of this keyer's has ever gone out: its line was up at that
+        /// moment, whatever an earlier keyer on the same line left it at.
+        pub fn key_up_went_out(&self) -> bool {
+            self.went_up.load(Ordering::SeqCst)
+        }
+
+        /// This keyer's stuck flag ([`Self::key_up_failing`]), readable after the keyer is gone.
+        /// The drop's own last key-up lowers it if it goes out, so a watch still raised after the
+        /// drop means no key-up has gone out since the key may have stuck.
+        pub fn stuck_watch(&self) -> StuckWatch {
+            StuckWatch(Arc::clone(&self.failing))
+        }
+
         /// Abort NOW: key up and drop any queued words (Stop TX).
         pub fn clear(&self) {
             self.stops.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// A [`SerialKeyer`]'s stuck flag, kept past the keyer ([`SerialKeyer::stuck_watch`]).
+    #[derive(Clone)]
+    pub struct StuckWatch(Arc<AtomicBool>);
+
+    impl StuckWatch {
+        /// Whether the keyer's key-up was still failing when last tried.
+        pub fn key_up_failing(&self) -> bool {
+            self.0.load(Ordering::SeqCst)
         }
     }
 
