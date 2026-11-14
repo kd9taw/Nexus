@@ -456,9 +456,14 @@ mod tests {
         let app = installed(include_str!("../../ui/src/main.tsx"));
         let page = installed(include_str!("../../ui/src/lan/main.tsx"));
         assert!(app.len() > 2, "no installCatalog calls read: {app:?}");
-        assert_eq!(page, app, "the window's page installs other languages than the app");
         assert_eq!(
-            LOCALES.into_iter().collect::<std::collections::BTreeSet<_>>(),
+            page, app,
+            "the window's page installs other languages than the app"
+        );
+        assert_eq!(
+            LOCALES
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
             app,
             "the window passes other languages than the app speaks"
         );
