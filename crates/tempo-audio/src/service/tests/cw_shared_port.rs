@@ -459,7 +459,8 @@ fn the_stuck_warning_goes_once_the_key_comes_up_or_the_keyer_goes() {
     step(&mut state, &engine, &mut backend, &mut rig, 140.0);
     assert_eq!(said(&engine), None, "the key came up: the warning goes");
 
-    // The keyer goes while the key-up is still failing.
+    // The keyer goes while the key-up is still failing, on a port no other holder keeps open:
+    // the port is closed, which lets the line drop.
     let refuse = Arc::new(AtomicBool::new(true));
     state.serial_keyer = Some((port.into(), "dtr".into(), stuck_keyer(&refuse)));
     step(&mut state, &engine, &mut backend, &mut rig, 180.0);
@@ -481,5 +482,92 @@ fn the_stuck_warning_goes_once_the_key_comes_up_or_the_keyer_goes() {
         said(&engine).as_deref(),
         Some("Serial keyline: some other trouble"),
         "a different keyer error is left as it was"
+    );
+}
+
+/// ⛔ …BUT A KEYER DROPPED WHILE ITS KEY MAY BE STUCK DOWN ON A PORT ANOTHER HOLDER KEEPS OPEN
+/// LEAVES THE WARNING. Its drop's last key-ups may fail too, and serial PTT still holds the port,
+/// so no close drops the line: a carrier with nothing on screen if the warning went with the
+/// keyer. It stays until something proves the key up: the port closing (here the rig letting go
+/// of its PTT port, the last holder), or a later key-up on that line going out (a new keyer on the
+/// same port and line).
+#[test]
+fn a_keyer_dropped_while_stuck_on_a_held_port_keeps_the_warning_until_the_key_is_proven_up() {
+    let port = "tempo-test-cw-stuck-dropped";
+    let said = |engine: &Arc<Mutex<Engine>>| engine.lock().unwrap().cw_keyer_error();
+    let stuck =
+        |engine: &Arc<Mutex<Engine>>| said(engine).unwrap_or_default().contains("stuck down");
+    let (engine, mut state, mut backend, mut rig) = scene(port, |_| {});
+    // Every key-up refused, as on a port that stopped answering key-ups mid-tune.
+    let stuck_keyer = || {
+        let keyer = crate::serial_keyer::SerialKeyer::keying_checked(|down| down);
+        keyer.hold(Duration::from_millis(10));
+        let start = std::time::Instant::now();
+        while !keyer.key_up_failing() && start.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(keyer.key_up_failing(), "premise: the key-up keeps failing");
+        keyer
+    };
+    // Serial PTT has keyed once: the rig holds the port for the rest of the session.
+    let hold_port = |rig: &mut Rig| {
+        rig.ptt(true).expect("premise: serial PTT keys");
+        rig.ptt(false).expect("premise: and unkeys");
+        assert!(
+            fake_ports::state(port).held,
+            "premise: the rig holds the port"
+        );
+    };
+
+    // Dropped while stuck, the port still held: the warning stays, tick after tick, and is said
+    // again after a word's own keyer-error write clears it.
+    hold_port(&mut rig);
+    state.serial_keyer = Some((port.into(), "dtr".into(), stuck_keyer()));
+    step(&mut state, &engine, &mut backend, &mut rig, 100.0);
+    assert!(stuck(&engine), "premise: said");
+    state.serial_keyer = None;
+    step(&mut state, &engine, &mut backend, &mut rig, 140.0);
+    assert!(
+        stuck(&engine),
+        "the keyer went with its key maybe down on a held port: still said, {:?}",
+        said(&engine)
+    );
+    engine.lock().unwrap().set_cw_keyer_error(None);
+    step(&mut state, &engine, &mut backend, &mut rig, 180.0);
+    assert!(stuck(&engine), "said again: {:?}", said(&engine));
+
+    // The port closing proves the key up: the warning goes.
+    rig.release_ptt_port();
+    assert!(!fake_ports::state(port).held, "premise: the port is closed");
+    step(&mut state, &engine, &mut backend, &mut rig, 220.0);
+    assert_eq!(said(&engine), None, "the port closed: the warning goes");
+
+    // Again; this time a new keyer on the same port and line gets its key-up out.
+    hold_port(&mut rig);
+    state.serial_keyer = Some((port.into(), "dtr".into(), stuck_keyer()));
+    step(&mut state, &engine, &mut backend, &mut rig, 260.0);
+    state.serial_keyer = None;
+    step(&mut state, &engine, &mut backend, &mut rig, 300.0);
+    assert!(stuck(&engine), "premise: still said");
+    // On the OTHER line, a key-up going out proves nothing about this one.
+    let other_line = crate::serial_keyer::SerialKeyer::keying_checked(|_| true);
+    state.serial_keyer = Some((port.into(), "rts".into(), other_line));
+    step(&mut state, &engine, &mut backend, &mut rig, 340.0);
+    assert!(
+        stuck(&engine),
+        "a key-up on RTS says nothing of DTR: {:?}",
+        said(&engine)
+    );
+    let fresh = crate::serial_keyer::SerialKeyer::keying_checked(|_| true);
+    let start = std::time::Instant::now();
+    while !fresh.key_up_went_out() && start.elapsed() < Duration::from_secs(2) {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    state.serial_keyer = Some((port.into(), "dtr".into(), fresh));
+    step(&mut state, &engine, &mut backend, &mut rig, 380.0);
+    assert_eq!(
+        said(&engine),
+        None,
+        "a key-up on the line went out: the warning goes"
     );
 }
