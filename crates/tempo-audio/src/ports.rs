@@ -368,12 +368,12 @@ pub use tempo_app::serial_port::same_port;
 /// Logs the substitution once per session (the open path re-runs every settings tick).
 ///
 /// Also expands a leading `~/` to the home directory on macOS and Linux
-/// ([`expand_home_with`]): the path another program gives its virtual port is often written
+/// ([`tempo_app::serial_port::expand_home_with`], the rule [`same_port`] reads ports by too): the path another program gives its virtual port is often written
 /// that way (`~/Downloads/rig-pty1`), and nothing below a shell expands it — rigctld and the
 /// serial open would look for a directory literally named `~`.
 pub fn heal_stored_port(port: String) -> String {
     #[cfg(unix)]
-    let port = expand_home_with(port, std::env::var_os("HOME").as_deref());
+    let port = tempo_app::serial_port::expand_home_with(port, std::env::var_os("HOME").as_deref());
     #[cfg(target_os = "macos")]
     if let Some(cu) = heal_tty_twin_with(&port, |p| std::path::Path::new(p).exists()) {
         static NOTED: std::sync::Once = std::sync::Once::new();
@@ -387,23 +387,6 @@ pub fn heal_stored_port(port: String) -> String {
         return cu;
     }
     port
-}
-
-/// `~/rest` → `<home>/rest`; every other name (and a missing or empty home) is returned as
-/// it came. Only the `~/` form: `~user/` would need the password database, and no program
-/// that makes a virtual port hands out that spelling. The home is a parameter so the rule is
-/// testable without touching the process environment.
-#[cfg_attr(not(unix), allow(dead_code))]
-fn expand_home_with(port: String, home: Option<&std::ffi::OsStr>) -> String {
-    match (
-        port.trim_start().strip_prefix("~/"),
-        home.and_then(|h| h.to_str()),
-    ) {
-        (Some(rest), Some(home)) if !home.is_empty() => {
-            format!("{}/{rest}", home.trim_end_matches('/'))
-        }
-        _ => port,
-    }
 }
 
 /// Is this serial path a VIRTUAL port, with no modem-control lines (RTS, DTR, CTS, DSR, DCD)
@@ -1106,7 +1089,7 @@ mod tests {
     #[test]
     fn a_leading_tilde_slash_is_the_home_directory() {
         let home = Some(std::ffi::OsStr::new("/Users/op"));
-        let x = |p: &str, h| expand_home_with(p.to_string(), h);
+        let x = |p: &str, h| tempo_app::serial_port::expand_home_with(p.to_string(), h);
         assert_eq!(
             x("~/Downloads/rig-pty1", home),
             "/Users/op/Downloads/rig-pty1"
