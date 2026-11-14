@@ -190,6 +190,9 @@ pub mod remote_transmit;
 /// Stop and disarming never touched.
 #[cfg(test)]
 mod remote_transmit_hold_tests;
+/// A logger's UDP Reply arms TX only when it works the station it names.
+#[cfg(test)]
+mod reply_arms_tests;
 /// A restored backup opens its contest session as a settings save does. Debug builds only, like
 /// `session_tests`: they read the debug build's counters.
 #[cfg(all(test, debug_assertions))]
@@ -20583,6 +20586,31 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
+    /// Why a click on `dxcall` works nobody, or `None` when it may work the station:
+    /// [`Self::call_station_ctx`] answers these `Ok` and changes nothing.
+    fn click_works_nobody(&self, dxcall: &str) -> Option<&'static str> {
+        // Guard: a double-click on our OWN line (our CQ / our TX echo in the
+        // band activity) must not start a QSO with ourselves — stock WSJT-X
+        // ignores it; without this we'd key up calling our own callsign.
+        if tempo_core::message::same_call(dxcall, &self.settings.mycall) {
+            return Some("that line is this station's own");
+        }
+        // Same reasoning on a receive-only tier: this arms TX, picks answer parity
+        // and moves RX to the DX — a whole QSO the radio can never take part in.
+        // JT65 decodes real QSO traffic into the band feed, so double-clicking a
+        // heard station is the natural thing to try there; refusing here leaves it a
+        // listening view instead of a QSO that never gets answered.
+        //
+        // Beacons are refused for the opposite reason: they CAN transmit, but a
+        // WSPR spot is a propagation report, not a station calling. Answering one
+        // is not a thing the mode does.
+        let t = self.app.tier();
+        if self.tier_is_rx_only(t) || self.tier_is_beacon(t) {
+            return Some("this mode answers no station");
+        }
+        None
+    }
+
     /// The faithful WSJT-X "double-click to work" entry point. `reply_msg` is the
     /// exact decoded line the operator double-clicked (with its `reply_snr`);
     /// WSJT-X parses *that* message to choose the next Tx, so clicking a station
@@ -20604,24 +20632,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let mycall = self.settings.mycall.clone();
         let mygrid = self.settings.mygrid.clone();
 
-        // Guard: a double-click on our OWN line (our CQ / our TX echo in the
-        // band activity) must not start a QSO with ourselves — stock WSJT-X
-        // ignores it; without this we'd key up calling our own callsign.
-        if tempo_core::message::same_call(dxcall, &mycall) {
-            return Ok(()); // benign — matches the old silent behaviour (App shows its own info toast)
-        }
-        // Same reasoning on a receive-only tier: this arms TX, picks answer parity
-        // and moves RX to the DX — a whole QSO the radio can never take part in.
-        // JT65 decodes real QSO traffic into the band feed, so double-clicking a
-        // heard station is the natural thing to try there; refusing here leaves it a
-        // listening view instead of a QSO that never gets answered.
-        //
-        // Beacons are refused for the opposite reason: they CAN transmit, but a
-        // WSPR spot is a propagation report, not a station calling. Answering one
-        // is not a thing the mode does.
-        let t = self.app.tier();
-        if self.tier_is_rx_only(t) || self.tier_is_beacon(t) {
-            return Ok(()); // benign — the tier cannot answer; unchanged silent behaviour
+        // Benign — matches the old silent behaviour (App shows its own info toast for our own
+        // line). A caller that arms TX itself checks this first ([`Self::answer_udp_reply`]).
+        if self.click_works_nobody(dxcall).is_some() {
+            return Ok(());
         }
         // A CQ from a call the decoder could not resolve, `<...>`, names nobody: refused before
         // anything changes, as in a contest ([`Self::answer_cq_in_contest`]). WSJT-X builds no
@@ -20973,7 +20987,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     /// A logger's WSJT-X UDP Reply (GridTracker, JTAlert): [`Self::work_station`] on the clicked
-    /// line, then TX armed whatever "double-click sets Tx" says, as before.
+    /// line, then TX armed whatever "double-click sets Tx" says, as before — but only when that
+    /// works the station: a Reply that works nobody ([`Self::click_works_nobody`]) is refused
+    /// and arms nothing.
     ///
     /// ⛔ **Another program never overrides a stop.** While the operator's stop holds
     /// (`tx_stop_hold`) or a watchdog trip stands, the Reply is refused whole: no station is
@@ -20989,6 +21005,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
     ) -> Result<(), String> {
         if self.tx_stop_hold || self.tx_watchdog {
             return Err("TX is stopped: turn TX on in Nexus before answering from a logger".into());
+        }
+        // ⛔ A Reply that works nobody arms nothing: our own line echoed back by the logger (our
+        // CQ, an over we sent), or a tier that answers no station. The double-click answers these
+        // `Ok` without touching the contact, so arming after it put whatever contact was already
+        // up, perhaps one the operator had left, back on the air. Refused before anything changes;
+        // the reason goes to the diag log.
+        if let Some(why) = self.click_works_nobody(dxcall) {
+            return Err(format!("Reply for {dxcall} not taken: {why}"));
         }
         // A Reply on the station's RR73 or RRR is a click made in the logger, as WSJT-X takes it
         // (`processMessage`): our 73 is offered for the log as after a click here
