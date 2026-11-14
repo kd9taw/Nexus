@@ -3219,6 +3219,9 @@ function App() {
     setView('logbook')
   }, [])
   const openLogbookFor = isViewEnabled('logbook') ? openLogbook : undefined
+  // FT's "Contest: …" chip opens the Contest screen. A stable function: the hidden FT cockpit is
+  // memoised on its props, and a fresh arrow each poll would re-render it on every one.
+  const openContestScreen = useCallback(() => handleView('fieldDay'), [handleView])
 
   // Defense in depth: if the current view's feature got disabled (e.g. toggled
   // off in Settings while viewing it), fall back to the profile's landing view.
@@ -4535,6 +4538,9 @@ function App() {
           // The mode badge names the contest the engine runs: the session's, never the pick, which
           // the engine runs as ARRL Field Day when the loaded rules do not carry it.
           runningContest={snap.fieldDay?.event}
+          // With the contest switch on and the station in plain QSO mode, the badge names the picked
+          // contest instead of QSO (the engine has no session to name yet).
+          contestOn={fdActive ? settings?.fdEvent?.trim() || 'arrlfd' : undefined}
         />
         {/* CRASH CONTAINMENT — inside `.shell` and AFTER the rail, deliberately.
             A render throw in a view used to unmount the ENTIRE root (0.24.6 field
@@ -4572,6 +4578,8 @@ function App() {
               companionAddr={settings?.companionAddr}
               fdActive={settings?.fdActive ?? false}
               fdRuleset={fdRuleset}
+              fdEvent={settings?.fdEvent}
+              onOpenContest={openContestScreen}
               superFoxCalls={superFoxCalls}
               blockedCalls={settings?.blockedCalls ?? NO_CALLS}
               onToggleBlocked={handleToggleBlocked}

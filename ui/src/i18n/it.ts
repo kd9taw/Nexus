@@ -2656,6 +2656,8 @@ export const IT: PartialCatalog = {
   "operate.header.power.label": "Pilotaggio",
   "operate.header.power.title": "Pilotaggio audio TX — abbassalo finché l'ALC della radio è appena a zero",
   "operate.dxped.hound.title": "Hound di DXpedition: le chiamate partono sopra 1000 Hz, il tuo R+rapporto si sposta automaticamente sulla frequenza della Fox e il QSO termina con l'RR73 della Fox SENZA 73 di saluto — lì un 73 è QRM nel segmento della Fox. Clic per attivarlo e disattivarlo; un QSO già in corso mantiene le regole con cui è iniziato. Di nuovo disattivato a ogni avvio: attivalo per la DXpedition, non per tutta la giornata.",
+  "operate.header.contest.label": "Contest: {{contest}}",
+  "operate.header.contest.title": "La modalità contest è attiva: {{contest}}. Una risposta o un clic su un CQ collega la stazione nel contest. Fai clic per aprire la schermata Contest.",
   "operate.dxped.superfox.note": "SuperFox in aria: {{calls}} — Nexus non decodifica SuperFox in questa versione. Collegala con WSJT-X.",
   "operate.dxped.superfox.title": "Una DXpedition SuperFox trasmette in un formato per cui questa versione di Nexus non ha un decodificatore, quindi le sue trasmissioni non arrivano qui nell'elenco delle decodifiche e Hound non può aiutare. Collegala con WSJT-X e registrala poi in Nexus.",
   "operate.header.source.aria": "Sorgente del segnale",

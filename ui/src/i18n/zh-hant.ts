@@ -2584,6 +2584,8 @@ export const ZH_HANT: PartialCatalog = {
   "operate.header.power.label": "驅動力",
   "operate.header.power.title": "發射音訊驅動力 — 調低直至電台 ALC 恰好為零",
   "operate.dxped.hound.title": "DX 遠征獵手（hound）：呼叫發在 1000 Hz 以上，你的 R+ 報告自動移到 Fox 的頻率，QSO 在 Fox 的 RR73 處結束，不道別 73——此處的 73 是 Fox 自身頻段內的 QRM。點選開關；已進行的 QSO 沿用起始時的規則。每次啟動後預設關閉：為 DX 遠征開啟，而非整天開啟。",
+  "operate.header.contest.label": "比賽：{{contest}}",
+  "operate.header.contest.title": "比賽模式已開啟：{{contest}}。回覆或點擊一個 CQ 會按比賽通聯該電台。點擊開啟比賽畫面。",
   "operate.dxped.superfox.note": "SuperFox 正在空中：{{calls}} —— 本版本 Nexus 不解碼 SuperFox。請在 WSJT-X 中通聯它。",
   "operate.dxped.superfox.title": "SuperFox DX 遠征以本版本 Nexus 無解碼器的格式發射，因此其發射不會進入此處的解碼清單，獵手也無法協助。請在 WSJT-X 中通聯，並在 Nexus 中記錄回來。",
   "operate.header.source.aria": "訊號源",

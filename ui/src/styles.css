@@ -21331,6 +21331,25 @@ body.pane-dragging {
   text-overflow: ellipsis;
   max-width: 34ch;
 }
+/* "Contest: NYQP" — the contest switch is on (OperateCockpit `contestChip`). A BUTTON (it opens the
+   Contest screen), so it wears an outline, in the accent the rail badge's dot wears for the same
+   state, and a tinted face; the words stay in the body ink. Never breaks inside. Tokens only, both
+   themes. */
+.cockpit-contest-chip {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
+  cursor: pointer;
+}
+.cockpit-contest-chip:hover {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
 
 /* Active DXpedition mode badge — shown in the merged operating strip. */
 .cockpit-specialop-badge {

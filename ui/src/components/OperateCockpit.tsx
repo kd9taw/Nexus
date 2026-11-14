@@ -12,6 +12,7 @@ import { useEscStop } from '../useEscStop'
 // binding below, which is a keyboard handler with no string of its own.
 import { Fragment, createRef, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { t } from '../i18n'
+import { contestName, contestShortName } from '../fdEvent'
 import { engagedInQso } from '../alerts'
 import type {
   AppSnapshot,
@@ -122,6 +123,11 @@ interface Props {
    * ⊞-removable pane; nothing is ever removed or disabled by rule). */
   fdActive?: boolean
   fdRuleset?: FdRulesetDto | null
+  /** The picked contest's rules-file id (`settings.fdEvent`; blank is ARRL Field Day), named by the
+   *  header's "Contest: …" chip while `fdActive`, and the chip's click: the Contest screen. The chip
+   *  needs both; the pop-out passes neither switch nor screen, and draws none. */
+  fdEvent?: string
+  onOpenContest?: () => void
   /** Calls of DXpeditions that are ON THE AIR NOW and announced SuperFox (the propagation
    * snapshot's workable-now cards, `ft8Mode === 'SuperFox'`). Nexus does not decode SuperFox
    * in this version, so the header names them beside the Hound button — an operator has to
@@ -448,6 +454,8 @@ export function OperateCockpit({
   companionAddr,
   fdActive = false,
   fdRuleset = null,
+  fdEvent = '',
+  onOpenContest,
   superFoxCalls = NO_CALLS,
   onOpenSettings,
   wheelSensitivity,
@@ -1628,6 +1636,24 @@ export function OperateCockpit({
     />
   ) : null
 
+  // ⭐ CONTEST MODE IS ON, SAID IN THE HEADER. With the contest switch on and the station in plain FT8
+  // (a contest worked with standard messages: the QSO parties, CQ WW, WPX), Tx6 and Call CQ look as they
+  // always do, and a click on a CQ answers in the contest's S&P. An operator was in a contest without
+  // knowing it: the only sign was the top bar's "Set operator". So the header names the contest, by the
+  // short form the Contest screen's own header shows, whenever the switch is on (not only once S&P or Run
+  // starts), and a click opens that screen. It is the header's LAST child, so it lands on the line the
+  // header's actions end, in room nothing else uses: no header control moves when the switch flips. Not a
+  // transmit control: it starts and stops nothing, and carries no pane-vocabulary id.
+  const contestId = fdEvent.trim() || 'arrlfd'
+  const contestLabel = t('operate.header.contest.label', { contest: contestShortName(contestId) })
+  const contestTitle = t('operate.header.contest.title', { contest: contestName(contestId) })
+  const contestChip =
+    fdActive && onOpenContest ? (
+      <button type="button" className="cockpit-contest-chip" onClick={onOpenContest} title={contestTitle}>
+        {contestLabel}
+      </button>
+    ) : null
+
   return (
     <main className="layout single operate-cockpit" ref={cockpitRef} data-pane-drag={dropPane ? '' : undefined}>
       <CockpitHeader
@@ -1959,6 +1985,8 @@ export function OperateCockpit({
             </button>
           )}
         </div>
+
+        {contestChip}
       </CockpitHeader>
 
       {/* The old .cockpit-status row is GONE — its TX-state/txNow display duplicated
