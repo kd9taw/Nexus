@@ -268,7 +268,9 @@ fn keys_on_the_cat_port(t: &Transport) -> bool {
         // Nor TCI: there is no CAT serial port either, and every key goes through the TCI client.
         && !t.is_tci()
         && !t.serial_port.trim().is_empty()
-        && t.ptt_port().eq_ignore_ascii_case(t.serial_port.trim())
+        // However either is spelled (`\\.\COM7` and `COM7`, a mac `tty.*` and its `cu.*` twin):
+        // the rule the keyline guards and the shared control-line handle read ports by.
+        && crate::ports::same_port(t.ptt_port(), &t.serial_port)
 }
 
 /// The line a radio that keys on its CAT port ([`keys_on_the_cat_port`]) keys with, which the
@@ -31843,6 +31845,30 @@ mod tests {
         t.ptt_serial_port = "com5".into(); // case-insensitive on purpose
         assert!(keys_on_the_cat_port(&t));
         assert_eq!(ptt_mode_for(&t), PttMode::Cat);
+    }
+
+    /// ⛔ ONE PORT, HOWEVER IT IS SPELLED, IS THE CAT PORT: a Windows `\\.\COM7` against `COM7`,
+    /// and a mac `/dev/tty.*` against its `/dev/cu.*` twin while the cu node is absent (the
+    /// transport's heal then leaves both as stored). Read as two ports, Nexus kept its own serial
+    /// PTT on the port the daemon holds for CAT, and the rig tuned and never keyed. Who owns the
+    /// port is decided by the rule the keyline guards and the shared handle read ports by.
+    #[test]
+    fn every_spelling_of_the_cat_port_keys_through_the_daemon() {
+        for (cat, ptt) in [
+            ("COM7", "\\\\.\\COM7"),
+            (
+                "/dev/tty.tempo-test-no-cu-twin",
+                "/dev/cu.tempo-test-no-cu-twin",
+            ),
+        ] {
+            let mut t = cat_transport(4532, None);
+            t.rig_model = 3073;
+            t.ptt_method = "rts".into();
+            t.serial_port = crate::ports::heal_stored_port(cat.into());
+            t.ptt_serial_port = crate::ports::heal_stored_port(ptt.into());
+            assert!(keys_on_the_cat_port(&t), "{cat} and {ptt} are one port");
+            assert_eq!(ptt_mode_for(&t), PttMode::Cat, "{cat} / {ptt}");
+        }
     }
 
     /// The boundaries. Each of these must KEEP the old behaviour, because in each the daemon
