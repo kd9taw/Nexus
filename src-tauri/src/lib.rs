@@ -19214,6 +19214,124 @@ mod contest_session_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ⛔ A BACKUP NEVER SETS THE STATION'S TRANSMIT SAFETY: a file handed to the operator that
+    /// raises the licence class, turns the TX watchdog off, lifts the power ceilings or the tune
+    /// limit, or turns the SWR stop off restores everything else and keeps each of those as the
+    /// station has it ([`STATION_TX_SAFETY`]), in its settings and in a saved profile it carries.
+    #[test]
+    fn a_restore_keeps_the_stations_licence_class_and_transmit_safety() {
+        use tempo_app::settings::LicenseClass;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-safety", 0);
+        let station_ui = with_station_paths_set(&engine, "C:\\Shack");
+        {
+            let mut s = engine_lock(&engine).settings().clone();
+            // Advanced, so the exact class rides beside `licenseClass` (`licenseClassExact`).
+            s.license_class = LicenseClass::Advanced;
+            s.tx_watchdog_min = 4;
+            s.js8_idle_watchdog_min = 30;
+            s.tune_timeout_secs = 8;
+            s.swr_stop_enabled = true;
+            s.swr_stop_threshold = 2.0;
+            s.max_power_phone = Some(0.5);
+            s.max_power_cw = Some(0.4);
+            s.max_power_digital = Some(0.3);
+            s.max_power_am = Some(0.2);
+            s.parsec_presence_stop = true;
+            s.remote_stream = false;
+            engine_lock(&engine).apply_restored_settings(s);
+        }
+        let before = engine_lock(&engine).settings().clone();
+        let station = serde_json::to_value(before.for_storage()).unwrap();
+        for key in STATION_TX_SAFETY {
+            assert!(station.get(key).is_some(), "{key} names a stored setting");
+        }
+        let text = settings_bundle(&engine, station_ui.clone(), None).unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let crafted = serde_json::json!({
+            "licenseClass": "extra",
+            "licenseClassExact": "extra",
+            "txWatchdogMin": 0,
+            "js8IdleWatchdogMin": 0,
+            "tuneTimeoutSecs": 600,
+            "swrStopEnabled": false,
+            "swrStopThreshold": 99.0,
+            "maxPowerPhone": 1.0,
+            "maxPowerCw": 1.0,
+            "maxPowerDigital": 1.0,
+            "maxPowerAm": 1.0,
+            "parsecPresenceStop": false,
+            "remoteStream": true,
+        });
+        let mut profiles: serde_json::Value = serde_json::from_str(
+            v["uiState"][crate::command_dispatch::PROFILES]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        for (k, val) in crafted.as_object().unwrap() {
+            v["settings"][k] = val.clone();
+            profiles[0]["settings"][k] = val.clone();
+        }
+        v["settings"]["mycall"] = serde_json::json!("W9NEW");
+        v["settings"]["cwWpm"] = serde_json::json!(31);
+        v["uiState"][crate::command_dispatch::PROFILES] =
+            serde_json::Value::String(profiles.to_string());
+        let mut saved = None;
+        restore_settings_bundle(
+            &engine,
+            v.to_string(),
+            || station_ui.clone(),
+            |ui| {
+                saved = Some(ui);
+                true
+            },
+            no_key_change,
+        )
+        .unwrap();
+        let s = engine_lock(&engine).settings().clone();
+        assert_eq!(
+            (s.mycall.as_str(), s.cw_wpm),
+            ("W9NEW", 31),
+            "the rest of the backup lands"
+        );
+        assert_eq!(
+            (
+                s.license_class,
+                s.tx_watchdog_min,
+                s.js8_idle_watchdog_min,
+                s.tune_timeout_secs,
+                s.swr_stop_enabled,
+                s.swr_stop_threshold,
+            ),
+            (LicenseClass::Advanced, 4, 30, 8, true, 2.0),
+            "the licence, the watchdogs, the tune limit and the SWR stop are the station's"
+        );
+        assert_eq!(
+            (
+                s.max_power_phone,
+                s.max_power_cw,
+                s.max_power_digital,
+                s.max_power_am,
+                s.parsec_presence_stop,
+                s.remote_stream,
+            ),
+            (Some(0.5), Some(0.4), Some(0.3), Some(0.2), true, false),
+            "the power ceilings, the Parsec stop and the stream are the station's"
+        );
+        // The station's saved profile of that name sets none of them: a key it leaves out is one
+        // a profile load keeps as the station has it (`mergeProfile`).
+        let profiles: serde_json::Value =
+            serde_json::from_str(&saved.unwrap()[crate::command_dispatch::PROFILES]).unwrap();
+        for key in STATION_TX_SAFETY {
+            assert_eq!(
+                profiles[0]["settings"].get(key),
+                None,
+                "{key}: the restored profile carries none"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ⛔ A BACKUP NEVER CHANGES WHETHER OTHER COMPUTERS' WSJT-X REQUESTS ARE TAKEN: not a file
     /// that says yes where the station says no, in its settings or a saved profile, and not one
     /// that says no where the station says yes. The rest of the backup lands.
@@ -22668,6 +22786,40 @@ fn export_settings_bundle(
 /// computers to send WSJT-X requests that can arm TX: a backup can never turn it on.
 const STATION_PATHS: [&str; 3] = ["tqslPath", "js8SoundFiles", "wsjtxUdpAcceptOtherComputers"];
 
+/// ⛔ The station's transmit safety, which a restore keeps as the station has it, in its settings
+/// and in each saved profile of the same name, as it keeps [`STATION_PATHS`]
+/// ([`with_station_paths`]). A backup is a file someone can hand the operator, so it must not be
+/// able to raise what the operator is licensed for or take away a guard on the transmitter:
+/// - the licence class (`licenseClass`, and the exact class beside it,
+///   [`tempo_app::settings::LICENSE_CLASS_EXACT_KEY`]): the transmit-privilege lockout;
+/// - the TX watchdog and JS8's idle watchdog: what stops a transmitter nobody is attending;
+/// - the tune carrier's time limit;
+/// - the SWR stop and its ratio;
+/// - the per-mode RF power ceilings, which every drive level is clamped to;
+/// - the Parsec presence stop, which stops transmitting when the remote session drops;
+/// - the Remote stream, which lets a browser holding station control drive this window, transmit
+///   included: a file can never turn it on, as it can never let other computers' WSJT-X requests
+///   in.
+///
+/// The cost: a backup restored onto a new computer brings none of these, and the operator sets
+/// them in Settings there (the restore says so). The export still writes them, so an older build
+/// restores the file as it always did.
+const STATION_TX_SAFETY: [&str; 13] = [
+    "licenseClass",
+    tempo_app::settings::LICENSE_CLASS_EXACT_KEY,
+    "txWatchdogMin",
+    "js8IdleWatchdogMin",
+    "tuneTimeoutSecs",
+    "swrStopEnabled",
+    "swrStopThreshold",
+    "maxPowerPhone",
+    "maxPowerCw",
+    "maxPowerDigital",
+    "maxPowerAm",
+    "parsecPresenceStop",
+    "remoteStream",
+];
+
 /// The name a bundle exported from afar carries, `true`, beside its settings: the station's paths
 /// were left out of it ([`without_station_paths`]), so a restore keeps the station's own
 /// ([`keep_the_stations_paths`]).
@@ -22707,11 +22859,15 @@ fn without_station_paths(settings: &mut serde_json::Map<String, serde_json::Valu
 /// is never taken: the TQSL program runs with nobody pressing anything (the automatic LoTW
 /// upload), and a file could name any program, or a sound or a recording on another computer's
 /// share.
+///
+/// ⛔ The station's transmit safety ([`STATION_TX_SAFETY`]) is put back the same way: a backup
+/// never sets the licence class, a watchdog, a power ceiling or a stop, in its settings or in a
+/// saved profile.
 fn with_station_paths(
     settings: &mut serde_json::Map<String, serde_json::Value>,
     station: Option<&serde_json::Map<String, serde_json::Value>>,
 ) {
-    for key in STATION_PATHS {
+    for key in STATION_PATHS.into_iter().chain(STATION_TX_SAFETY) {
         match station.and_then(|s| s.get(key)) {
             Some(held) => settings.insert(key.into(), held.clone()),
             None => settings.remove(key),

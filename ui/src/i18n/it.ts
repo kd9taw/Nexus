@@ -3157,6 +3157,7 @@ export const IT: PartialCatalog = {
   "settings.backup.restore.done": "Impostazioni ripristinate: controlla la radio e fai Prova CAT",
   "settings.backup.restore.failed": "Ripristino non riuscito",
   "settings.backup.restore.onAir": "Termina o ferma prima la trasmissione, poi ripristina.",
+  "settings.backup.restore.keptSafety": "La tua classe di licenza e le impostazioni di sicurezza in trasmissione (watchdog TX, limite di tempo del Tune, stop per SWR, limiti di potenza) sono rimaste come erano su questo computer: un backup non le cambia mai. Se hai ripristinato su un computer nuovo, imposta ora la classe di licenza e questi limiti in Impostazioni.",
   "settings.backup.reset.confirm.title": "Ripristinare tutte le impostazioni ai valori di fabbrica?",
   "settings.backup.reset.confirm.body": "Radio, dispositivi audio, nominativo e preferenze verranno cancellati. Il log dei collegamenti non viene toccato e le password salvate restano nel portachiavi. Non si può annullare: fai prima un backup, se non l'hai fatto.",
   "settings.backup.reset.confirm.action": "Ripristina",

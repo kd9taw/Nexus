@@ -1035,6 +1035,7 @@ export const DE: PartialCatalog = {
   "settings.backup.restore.done": "Einstellungen wiederhergestellt — Funkgerät prüfen und CAT testen",
   "settings.backup.restore.failed": "Wiederherstellung fehlgeschlagen",
   "settings.backup.restore.onAir": "Beenden oder stoppen Sie zuerst die Aussendung und stellen Sie dann wieder her.",
+  "settings.backup.restore.keptSafety": "Ihre Lizenzklasse und die Einstellungen zur Sendesicherheit (TX-Watchdog, Tune-Zeitlimit, SWR-Abschaltung, Leistungsgrenzen) wurden so beibehalten, wie sie auf diesem Computer waren: Eine Sicherung ändert sie nie. Wenn Sie auf einem neuen Computer wiederhergestellt haben, stellen Sie jetzt Ihre Lizenzklasse und diese Grenzen in den Einstellungen ein.",
   "settings.audio.rxGain.failed": "RX-Verstärkung konnte nicht übernommen werden",
   "settings.audio.txPower.failed": "Aussteuerung konnte nicht gesetzt werden",
   "settings.audio.device.notInList": "{{device}} — gespeichert, nicht in der Liste",

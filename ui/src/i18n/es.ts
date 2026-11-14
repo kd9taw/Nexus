@@ -7312,6 +7312,7 @@ export const ES: PartialCatalog = {
   "settings.backup.restore.done": "Ajustes restaurados — revisa tu equipo y usa Probar CAT",
   "settings.backup.restore.failed": "Fallo al restaurar",
   "settings.backup.restore.onAir": "Termina o detén primero la transmisión y luego restaura.",
+  "settings.backup.restore.keptSafety": "Se conservaron tu clase de licencia y los ajustes de seguridad de transmisión (watchdog de TX, límite de tiempo de sintonía, corte por SWR, límites de potencia) tal como estaban en este ordenador: una copia de seguridad nunca los cambia. Si restauraste en un ordenador nuevo, configura ahora tu clase de licencia y estos límites en Ajustes.",
   "settings.beacons.hint": "Las balizas transmiten tu indicativo, locator y potencia — no hay secuencia de QSO, así que Llamar CQ y S&P están inactivos en estos niveles. La transmisión sigue teniendo que estar armada como siempre; la planificación nunca activa un equipo cuya transmisión no hayas habilitado.",
   "settings.beacons.legend": "Balizas — WSPR y FST4W",
   "settings.beacons.power.hint": "<b>Obligatorio, y tiene que ser real.</b> Los reportes WSPR se publican en una base de datos pública de propagación de la que otros operadores sacan conclusiones, así que un dato erróneo corrompe sus datos además de los tuyos. La baliza sigue en silencio hasta que se indique. 23 = 200 mW, 30 = 1 W, 37 = 5 W, 43 = 20 W.",

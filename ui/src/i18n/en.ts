@@ -8227,6 +8227,8 @@ export const EN = {
   'settings.backup.restore.done': 'Settings restored — check your radio and Test CAT',
   'settings.backup.restore.failed': 'Restore failed',
   'settings.backup.restore.onAir': 'Finish or stop the transmission first, then restore.',
+  'settings.backup.restore.keptSafety':
+    'Your license class and transmit-safety settings (TX watchdog, tune time limit, SWR stop, power limits) were kept as they were on this computer: a backup never changes them. If you restored onto a new computer, set your license class and these limits in Settings now.',
   // Reset's dialog says what SURVIVES as well as what goes: "reset" reads as total, and the two
   // things operators fear for — the log and their stored passwords — are exactly the two this
   // does not touch. Saying so in the dialog is what makes the confirm answerable.
