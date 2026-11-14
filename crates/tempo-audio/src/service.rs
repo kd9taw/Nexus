@@ -13707,6 +13707,19 @@ impl RadioLoop {
                     eng.rtty_over_cut(now);
                 }
             }
+            // #492: THE FSK LINE RESTS RELEASED WHILE THE RIG IS NOT KEYED — after the over's
+            // own end, after the Stop just above, after a handoff or a watchdog unkey alike,
+            // because it reads the rig's keyed state and not any one of the paths that unkey
+            // it. It matters only for an inverted (Reverse) line, whose mark is asserted; in
+            // the normal sense mark already is the released level (`rtty_fsk`'s two idles).
+            // `rig.keyed` stays true after a FAILED unkey, so a rig that may still be on the
+            // air keeps its mark.
+            #[cfg(feature = "serial")]
+            if !rig.keyed {
+                if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
+                    k.rest();
+                }
+            }
             // --- Continuous TX: render and key this tick's chunk. ---
             // Everything below is gated by `stream_tick`, which the engine only
             // returns as something other than `Idle` with every TX gate re-checked
@@ -13750,7 +13763,7 @@ impl RadioLoop {
                         #[cfg(feature = "serial")]
                         if st.key_cfg.4 {
                             if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
-                                k.send(bits.clone(), baud);
+                                k.send(bits.clone(), baud, 0.0);
                             }
                         }
                         self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
@@ -13844,16 +13857,20 @@ impl RadioLoop {
                         let mut handled = false;
                         #[cfg(feature = "serial")]
                         if let Some((port, line)) = &fsk_port_line {
+                            // Reverse joins the key (#492): the line's sense is the keyer's own.
                             let reopen = self
                                 .rtty_keyer
                                 .as_ref()
-                                .map(|(p, l, _)| p != port || l != line)
+                                .map(|(p, l, k)| p != port || l != line || k.inverted() != reverse)
                                 .unwrap_or(true);
                             let mut open_err_msg = None;
                             if reopen {
+                                // The old keyer lets go of the port BEFORE the new one opens it.
+                                self.rtty_keyer = None;
                                 match crate::rtty_fsk::FskKeyer::open(
                                     port,
                                     crate::rtty_fsk::KeyLine::parse(line),
+                                    reverse,
                                 ) {
                                     Ok(k) => {
                                         self.rtty_keyer = Some((port.clone(), line.clone(), k))
@@ -13876,14 +13893,25 @@ impl RadioLoop {
                                 // keys it as it always has. Keyed before the keyer is borrowed
                                 // below: `key_over` readies Rig split first, which needs the loop.
                                 self.ensure_commanded(rig);
+                                // An inverted line is at mark before PTT (`mark_before_key`).
+                                if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
+                                    k.mark_before_key();
+                                }
                                 self.publish_tx_intent_now(); // before keying
                                 key = self.key_over(engine, rig, true, "RTTY");
                             }
                             if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
                                 // A stream the rig would not key sends nothing (`key_over`).
                                 if key.sends() {
-                                    k.send(bits.clone(), baud);
-                                    self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
+                                    // Mark before the first bit behind a fresh key-up.
+                                    let lead = if need_key {
+                                        crate::rtty_fsk::LEAD_IN_MS
+                                    } else {
+                                        0.0
+                                    };
+                                    k.send(bits.clone(), baud, lead);
+                                    self.rtty_busy_until =
+                                        self.rtty_busy_until.max(now) + lead + chunk_ms;
                                     let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
                                     self.extend_hold(until);
                                 }
@@ -13984,16 +14012,20 @@ impl RadioLoop {
                     // refuses a send configured with both on one line).
                     #[cfg(feature = "serial")]
                     if let Some((port, line)) = &fsk_port_line {
+                        // Reverse joins the key (#492): the line's sense is the keyer's own.
                         let reopen = self
                             .rtty_keyer
                             .as_ref()
-                            .map(|(p, l, _)| p != port || l != line)
+                            .map(|(p, l, k)| p != port || l != line || k.inverted() != reverse)
                             .unwrap_or(true);
                         let mut open_err_msg = None;
                         if reopen {
+                            // The old keyer lets go of the port BEFORE the new one opens it.
+                            self.rtty_keyer = None;
                             match crate::rtty_fsk::FskKeyer::open(
                                 port,
                                 crate::rtty_fsk::KeyLine::parse(line),
+                                reverse,
                             ) {
                                 Ok(k) => self.rtty_keyer = Some((port.clone(), line.clone(), k)),
                                 // Same honesty rule as the CW keyline: the OS error IS the
@@ -14021,13 +14053,21 @@ impl RadioLoop {
                             // `ptt_plain`, as on the streaming path: FSK is not audio (#381).
                             // Hoisted with it: `key_over` readies Rig split first, which needs
                             // the loop itself.
+                            // An inverted line is at mark before PTT (`mark_before_key`).
+                            if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
+                                k.mark_before_key();
+                            }
                             self.publish_tx_intent_now(); // before keying
                             key = self.key_over(engine, rig, true, "RTTY");
                         }
+                        // Mark before the first bit, behind the key-up (`LEAD_IN_MS`): the over,
+                        // its pacing and its echo all start that much later.
+                        let lead = crate::rtty_fsk::LEAD_IN_MS;
                         if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
                             // An over the rig would not key sends nothing (`key_over`).
                             if key.sends() {
-                                k.send(bits.clone(), baud);
+                                k.send(bits.clone(), baud, lead);
+                                self.rtty_busy_until += lead;
                                 let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
                                 self.extend_hold(until);
                             }
@@ -14048,7 +14088,7 @@ impl RadioLoop {
                             // refused, keyed nothing, so nothing is echoed and the TX line does
                             // not claim it.
                             if sent {
-                                eng.rtty_over_keyed(&text, baud, now);
+                                eng.rtty_over_keyed(&text, baud, now + lead);
                             }
                             eng.set_rtty_keyer_error(if open_err {
                                 open_err_msg
@@ -36700,6 +36740,406 @@ mod tests {
             "an over that never keyed was echoed"
         );
         assert_eq!(st.tx_text, "", "an over that never keyed is on the TX line");
+    }
+
+    // ---- #492: the true-FSK keyline — Reverse, and sharing one port with serial PTT ----
+    //
+    // The keyer thread keys in REAL time while these tests step the loop's clock, so each
+    // waits for the line to go still ([`fsk_settle`]) before stepping past the over's end.
+
+    /// An engine on true FSK, keying DTR on the fake port `port` with RTTY Reverse `reverse`,
+    /// and serial PTT on RTS of `ptt_port` when that is `Some` (CAT/VOX otherwise). TX armed.
+    #[cfg(feature = "serial")]
+    fn fsk_engine(port: &str, reverse: bool, ptt_port: Option<&str>) -> Arc<Mutex<Engine>> {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.rtty_backend = "fsk".to_string();
+            s.rtty_fsk_port = port.to_string();
+            s.rtty_fsk_line = "dtr".to_string();
+            s.rtty_reverse = reverse;
+            if let Some(p) = ptt_port {
+                s.ptt_method = "rts".to_string();
+                s.ptt_serial_port = p.to_string();
+            }
+            e.apply_settings(s);
+            e.set_operating_mode("rtty", false);
+        }
+        engine
+    }
+
+    /// Wait (real time, at most 5 s) until `port`'s lines have not been written for 300 ms.
+    #[cfg(feature = "serial")]
+    fn fsk_settle(port: &str) {
+        use crate::control_line::fake_ports;
+        let start = std::time::Instant::now();
+        let mut last = (fake_ports::log(port).len(), std::time::Instant::now());
+        while start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+            let n = fake_ports::log(port).len();
+            if n != last.0 {
+                last = (n, std::time::Instant::now());
+            } else if last.1.elapsed() > Duration::from_millis(300) {
+                return;
+            }
+        }
+    }
+
+    /// The DTR levels `port` has been put at, with repeats collapsed: the shape of the keying.
+    #[cfg(feature = "serial")]
+    fn dtr_runs(port: &str) -> Vec<bool> {
+        let mut runs: Vec<bool> = Vec::new();
+        for s in crate::control_line::fake_ports::log(port) {
+            if runs.last() != Some(&s.dtr) {
+                runs.push(s.dtr);
+            }
+        }
+        runs
+    }
+
+    /// ★ #492: REVERSE SWAPS MARK AND SPACE ON THE FSK KEYLINE, as it swaps the AFSK tones. It
+    /// used to reach only the tones, so on FSK it flipped the decoder and left the transmitter
+    /// as it was. Inverted, mark is the ASSERTED level for the whole over (EXTFSK's Inv. FSK);
+    /// once the rig is unkeyed the line is released (deasserted) again, the level that can key
+    /// nothing.
+    #[cfg(feature = "serial")]
+    #[test]
+    fn reverse_inverts_the_fsk_keyline_and_releases_it_once_the_over_ends() {
+        use crate::control_line::fake_ports;
+        let over = |port: &str, reverse: bool| {
+            fake_ports::install(port);
+            let engine = fsk_engine(port, reverse, None);
+            engine.lock().unwrap().rtty_send_text("RY").unwrap();
+            let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+            let mut t = 100.0;
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 200.0);
+            assert!(rig.keyed, "premise: the over keyed");
+            assert_eq!(engine.lock().unwrap().rtty_state().keyer_error, None);
+            fsk_settle(port);
+            let keyed = dtr_runs(port);
+            assert!(
+                rig.keyed,
+                "premise: the rig is still keyed when the bits have gone out"
+            );
+            step_to(
+                &engine,
+                &mut state,
+                &mut backend,
+                &mut rig,
+                &mut t,
+                10_000.0,
+            );
+            assert!(!rig.keyed, "premise: the over ended");
+            fsk_settle(port);
+            (keyed, fake_ports::state(port).dtr)
+        };
+        let (normal, normal_after) = over("tempo-test-fsk-normal", false);
+        let (reversed, reversed_after) = over("tempo-test-fsk-reverse", true);
+        assert!(
+            normal.first() == Some(&false) && normal.last() == Some(&false) && normal.len() > 4,
+            "premise: normal sense keys space asserted from a released line: {normal:?}"
+        );
+        let mut want = vec![false];
+        want.extend(normal.iter().map(|asserted| !asserted));
+        assert_eq!(
+            reversed, want,
+            "Reverse keys every level the other way round, from a released line (normal {normal:?})"
+        );
+        assert!(!normal_after, "normal: the line is released after the over");
+        assert!(
+            !reversed_after,
+            "reversed: the line is released after the over"
+        );
+    }
+
+    /// ★ #492: STOP LEAVES AN INVERTED KEYLINE RELEASED. Reversed, the line holds mark
+    /// ASSERTED through the over — including after the last stop bit, while PTT is still up —
+    /// and a Stop, whether mid-character or after the bits are out, puts it back down: the
+    /// rig is unkeyed and the line can key nothing.
+    #[cfg(feature = "serial")]
+    #[test]
+    fn stop_releases_an_inverted_fsk_keyline() {
+        use crate::control_line::fake_ports;
+        for (port, text, mid_over) in [
+            ("tempo-test-fsk-stop-after", "RY", false),
+            (
+                "tempo-test-fsk-stop-mid",
+                "RYRYRYRYRYRYRYRYRYRYRYRYRY",
+                true,
+            ),
+        ] {
+            fake_ports::install(port);
+            let engine = fsk_engine(port, true, None);
+            engine.lock().unwrap().rtty_send_text(text).unwrap();
+            let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+            let mut t = 100.0;
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 200.0);
+            assert!(rig.keyed, "{port}: premise: the over keyed");
+            if mid_over {
+                std::thread::sleep(Duration::from_millis(400));
+                assert!(dtr_runs(port).len() > 3, "{port}: premise: keying");
+            } else {
+                fsk_settle(port);
+                assert!(
+                    fake_ports::state(port).dtr,
+                    "{port}: the bits are out and PTT is up: the line holds the inverted mark"
+                );
+            }
+            engine.lock().unwrap().rtty_stop();
+            let until = t + 40.0;
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, until);
+            assert!(!rig.keyed, "{port}: Stop unkeyed the rig");
+            fsk_settle(port);
+            assert!(
+                !fake_ports::state(port).dtr,
+                "{port}: the line is released after Stop"
+            );
+        }
+    }
+
+    /// The shared-port scene: FSK on DTR and serial PTT on RTS of ONE port (the wiring
+    /// `rtty_fsk.rs` names as the common one), an over keyed, and the loop's clock.
+    #[cfg(feature = "serial")]
+    fn shared_port_over(
+        port: &str,
+        text: &str,
+    ) -> (Arc<Mutex<Engine>>, RadioLoop, MockBackend, Rig, f64) {
+        shared_port_over_sensed(port, text, false)
+    }
+
+    /// [`shared_port_over`] with RTTY Reverse `reverse`.
+    #[cfg(feature = "serial")]
+    fn shared_port_over_sensed(
+        port: &str,
+        text: &str,
+        reverse: bool,
+    ) -> (Arc<Mutex<Engine>>, RadioLoop, MockBackend, Rig, f64) {
+        use crate::control_line::fake_ports;
+        fake_ports::install(port);
+        let engine = fsk_engine(port, reverse, Some(port));
+        engine.lock().unwrap().rtty_send_text(text).unwrap();
+        let (mut backend, mut state) = (MockBackend::new(), loop_state());
+        // The loop has already applied these settings, so it keys this rig rather than
+        // reopening one for a transport it has not seen yet.
+        state.applied = Transport::from_settings(engine.lock().unwrap().settings());
+        let mut rig = Rig::with_control(None, ptt_mode_for(&state.applied));
+        assert_eq!(
+            rig.ptt_mode(),
+            &PttMode::Serial {
+                port: port.into(),
+                line: SerialLine::Rts
+            },
+            "premise: serial PTT on RTS of the FSK port"
+        );
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 200.0);
+        assert_eq!(
+            engine.lock().unwrap().rtty_state().keyer_error,
+            None,
+            "{port}: FSK and PTT both key on the one port"
+        );
+        assert!(rig.keyed, "{port}: PTT keyed");
+        assert!(fake_ports::state(port).rts, "{port}: PTT is up on RTS");
+        (engine, state, backend, rig, t)
+    }
+
+    /// Both lines down and, while `held`, the port still open.
+    #[cfg(feature = "serial")]
+    fn assert_lines_down(port: &str, held: bool, path: &str) {
+        let s = crate::control_line::fake_ports::state(port);
+        assert!(!s.rts, "{path}: PTT is down");
+        assert!(!s.dtr, "{path}: the FSK line is idle");
+        assert_eq!(
+            s.held, held,
+            "{path}: the port is held exactly while a user remains"
+        );
+    }
+
+    /// ★ #492: AN INVERTED (REVERSE) FSK LINE IS AT MARK BEFORE PTT GOES UP. Released between
+    /// overs, it is SPACE in the inverted sense, and the line used to go to mark only once the
+    /// keyer took the batch, after the key — so every key-up carried a moment of space.
+    #[cfg(feature = "serial")]
+    #[test]
+    fn an_inverted_fsk_line_is_at_mark_before_ptt_keys() {
+        use crate::control_line::fake_ports;
+        let port = "tempo-test-fsk-mark-before-key";
+        let (engine, mut state, mut backend, mut rig, mut t) =
+            shared_port_over_sensed(port, "RY", true);
+        let log = fake_ports::log(port);
+        let key_up = log.iter().position(|s| s.rts).expect("PTT went up");
+        assert!(
+            log[key_up].dtr,
+            "the line is at the inverted mark when PTT goes up: {:?}",
+            &log[..=key_up]
+        );
+        fsk_settle(port);
+        step_to(
+            &engine,
+            &mut state,
+            &mut backend,
+            &mut rig,
+            &mut t,
+            10_000.0,
+        );
+        fsk_settle(port);
+        assert!(!rig.keyed);
+        assert_lines_down(port, true, "inverted over's end");
+    }
+
+    /// ★ #492: FSK ON DTR AND SERIAL PTT ON RTS OF THE SAME PORT KEY THROUGH ONE HANDLE. The
+    /// keyer and serial PTT each opened the port for themselves, and a COM port opens once:
+    /// the second open was refused ("Access is denied"), so the over never keyed. Every way an
+    /// over ends leaves PTT down and the FSK line idle.
+    #[cfg(feature = "serial")]
+    #[test]
+    fn fsk_and_serial_ptt_share_one_port_and_every_ending_leaves_both_lines_down() {
+        use crate::control_line::fake_ports;
+        // The over runs to its end.
+        let port = "tempo-test-fsk-shared-end";
+        let (engine, mut state, mut backend, mut rig, mut t) = shared_port_over(port, "RY");
+        fsk_settle(port);
+        assert!(
+            fake_ports::log(port).iter().any(|s| s.rts && s.dtr),
+            "the data bits key on DTR while PTT holds RTS"
+        );
+        step_to(
+            &engine,
+            &mut state,
+            &mut backend,
+            &mut rig,
+            &mut t,
+            10_000.0,
+        );
+        fsk_settle(port);
+        assert!(!rig.keyed);
+        assert_lines_down(port, true, "end of over");
+
+        // Stop mid-over (the watchdog's trip arms the same abort, `poll_rtty_one`).
+        let port = "tempo-test-fsk-shared-stop";
+        let (engine, mut state, mut backend, mut rig, mut t) =
+            shared_port_over(port, "RYRYRYRYRYRYRYRYRYRYRYRYRY");
+        std::thread::sleep(Duration::from_millis(300));
+        engine.lock().unwrap().rtty_stop();
+        let until = t + 40.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, until);
+        fsk_settle(port);
+        assert!(!rig.keyed);
+        assert_lines_down(port, true, "Stop");
+
+        // Halt TX mid-over.
+        let port = "tempo-test-fsk-shared-halt";
+        let (engine, mut state, mut backend, mut rig, mut t) =
+            shared_port_over(port, "RYRYRYRYRYRYRYRYRYRYRYRYRY");
+        std::thread::sleep(Duration::from_millis(300));
+        engine.lock().unwrap().halt_tx();
+        let until = t + 40.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, until);
+        fsk_settle(port);
+        assert!(!rig.keyed);
+        assert_lines_down(port, true, "halt TX");
+
+        // The rig lets go of its PTT port mid-over (a handoff demoting it): its line drops at
+        // once, the keyer keeps the port, and the over's own end unkeys as ever.
+        let port = "tempo-test-fsk-shared-release";
+        let (engine, mut state, mut backend, mut rig, mut t) = shared_port_over(port, "RYRY");
+        rig.release_ptt_port();
+        assert!(
+            !fake_ports::state(port).rts,
+            "the released PTT line drops at once"
+        );
+        assert!(
+            fake_ports::state(port).held,
+            "the keyer still holds the port"
+        );
+        fsk_settle(port);
+        step_to(
+            &engine,
+            &mut state,
+            &mut backend,
+            &mut rig,
+            &mut t,
+            10_000.0,
+        );
+        fsk_settle(port);
+        assert!(!rig.keyed);
+        assert_lines_down(port, true, "PTT port released");
+
+        // The FSK keyer goes away mid-over (the backend switched to AFSK): its line drops,
+        // PTT keeps the port and still unkeys when the over's time is up.
+        let port = "tempo-test-fsk-shared-keyer-gone";
+        let (engine, mut state, mut backend, mut rig, mut t) =
+            shared_port_over(port, "RYRYRYRYRYRYRYRYRYRYRYRYRY");
+        std::thread::sleep(Duration::from_millis(300));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.rtty_backend = "afsk".to_string();
+            e.apply_settings(s);
+        }
+        let until = t + 40.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, until);
+        fsk_settle(port);
+        assert!(
+            !fake_ports::state(port).dtr,
+            "the dropped keyer's line is idle"
+        );
+        // …and ONLY its line: PTT is still up, on the over's own schedule.
+        assert!(rig.keyed, "premise: the over is still running");
+        assert!(
+            fake_ports::state(port).rts,
+            "the keyer going did not drop PTT, which is the other holder's line"
+        );
+        step_to(
+            &engine,
+            &mut state,
+            &mut backend,
+            &mut rig,
+            &mut t,
+            60_000.0,
+        );
+        assert!(!rig.keyed);
+        assert_lines_down(port, true, "FSK keyer gone mid-over");
+
+        // The other way round: the rig lets go of its PTT port while an INVERTED line holds
+        // mark (asserted, the bits out, PTT up). PTT drops; the FSK line stays at mark.
+        let port = "tempo-test-fsk-shared-release-inverted";
+        let (engine, mut state, mut backend, mut rig, mut t) =
+            shared_port_over_sensed(port, "RY", true);
+        fsk_settle(port);
+        assert!(
+            fake_ports::state(port).dtr,
+            "premise: the inverted mark is held"
+        );
+        rig.release_ptt_port();
+        let s = fake_ports::state(port);
+        assert!(!s.rts, "the released PTT line drops");
+        assert!(
+            s.dtr,
+            "the PTT holder going did not drop the FSK line, which is the keyer's: {s:?}"
+        );
+        step_to(
+            &engine,
+            &mut state,
+            &mut backend,
+            &mut rig,
+            &mut t,
+            10_000.0,
+        );
+        fsk_settle(port);
+        assert!(!rig.keyed);
+        assert_lines_down(port, true, "PTT port released under an inverted mark");
+
+        // Shutdown mid-over: unkey, release the keyers, the rig goes — nothing holds the port.
+        let port = "tempo-test-fsk-shared-shutdown";
+        let (engine, mut state, mut backend, mut rig, _) =
+            shared_port_over(port, "RYRYRYRYRYRYRYRYRYRYRYRYRY");
+        std::thread::sleep(Duration::from_millis(300));
+        state.stop_for_shutdown(&engine, &mut backend, &mut rig);
+        state.release_keyers_for_shutdown();
+        assert!(!rig.keyed);
+        drop(rig);
+        assert_lines_down(port, false, "shutdown");
     }
 
     /// A radio loop with continuous RTTY TX latched and keying, plus the clock it

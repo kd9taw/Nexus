@@ -78,9 +78,10 @@ impl Rig {
         };
         let line = *line;
         if self.serial.is_none() {
-            let opened = crate::control_line::open_control_line_port_permitted(port, permission);
+            let opened = crate::control_line::SharedControlLines::open_permitted(port, permission);
             // Retain a successful handle even if authority expired while the
-            // OS opened it. The shared opener has already idled both lines.
+            // OS opened it. A fresh open has already idled both lines; a handle the
+            // FSK keyer already holds is shared, not reopened (#492).
             self.serial = Some(opened.map_err(|_| Reason::HardwareUnconfirmed)?);
         }
         release_line(
