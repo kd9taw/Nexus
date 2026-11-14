@@ -1075,9 +1075,11 @@ export function OperateCockpit({
   // logs correctly. Seeding from the snapshot covers every one of those paths at once, and it
   // closes a worse hazard: pressing a Tx row with a STALE dxCall retargets the live QSO to the
   // wrong station. Operator report, 2026-07-25.
+  // In a contest the station is the contest sequencer's (`fieldDay.dxcall`): a logger's Reply to a
+  // CQ is worked there with no click on this screen (a field report).
   const lastDx = useRef<string | null>(null)
   useEffect(() => {
-    const dx = snap.qso?.dxcall ?? null
+    const dx = snap.qso?.dxcall ?? snap.fieldDay?.dxcall ?? null
     // The engine resolves the grid the same way the logged GRIDSQUARE does (the exchange's
     // grid, else the roster's), so screen and log agree by construction.
     const grid = (snap.qso?.dxgrid ?? '').toUpperCase()
@@ -1085,15 +1087,18 @@ export function OperateCockpit({
       lastDx.current = dx
       setLocalNext(null)
       if (dx) {
+        // The contest's sequencer names no grid: a box already holding this station (the click
+        // that started it) keeps the grid that click put there; another station's is cleared.
+        if (snap.qso || dxCall.trim().toUpperCase() !== dx.toUpperCase()) setDxGrid(grid)
         setDxCall(dx.toUpperCase())
-        setDxGrid(grid)
       }
     } else if (dx && grid) {
       // The grid can land LATER than the call — a caller who answered with a bare report has
       // no grid until we decode one from them. Fill an empty box; never overwrite a typed one.
       setDxGrid((prev) => (prev.trim() ? prev : grid))
     }
-  }, [snap.qso?.dxcall, snap.qso?.dxgrid])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snap.qso?.dxcall, snap.qso?.dxgrid, snap.fieldDay?.dxcall])
 
   // ⭐ WHILE A CONTEST RUNS THAT WSJT-X HAS AN ACTIVITY FOR, THE TX6 ROW IS THE CONTEST'S CQ.
   // WSJT-X's Tx6 is its activity's CQ once one is set (`genCQMsg`): `CQ FD`, `CQ TEST`. The engine
@@ -1108,9 +1113,10 @@ export function OperateCockpit({
   const contestCqTyped = snap.contestCqTyped === true
 
   // The six panel rows (Tx5 + Tx6 = the live editable texts). The "next" dot
-  // follows the row qso.txNow stands for (txRowIndex), else the operator's local pick.
+  // follows the row qso.txNow stands for (txRowIndex) — in a contest the over its sequencer sends
+  // (contestTxNow) — else the operator's local pick.
   const rowTexts = stdMessageList({ ...msgs, tx5, tx6: contestCq ?? tx6 })
-  const nextIndex = txRowIndex(rowTexts, snap.qso?.txNow) ?? localNext
+  const nextIndex = txRowIndex(rowTexts, snap.qso?.txNow ?? snap.contestTxNow) ?? localNext
 
   /** #254's refusal of a Tx6 text that is not a CQ in WSJT-X's grammar, naming the form that
    *  would work when `cqSuggestionFromText` can derive one from the operator's own words. */
@@ -2077,6 +2083,11 @@ export function OperateCockpit({
           alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} ownLine />}
           qso={snap.qso}
           contestRunning={snap.fieldDay?.running}
+          contest={
+            snap.fieldDay
+              ? { state: snap.fieldDay.state, dxcall: snap.fieldDay.dxcall, txNow: snap.contestTxNow }
+              : null
+          }
           radio={snap.radio}
           rxOnly={isRxOnly(tier)}
           beacon={isBeacon(tier)}

@@ -40,6 +40,11 @@ interface Props {
   /** A contest's own run (`snap.fieldDay.running`): Call CQ starts it while a contest runs, and
    * the snapshot carries it there, not in `qso`. */
   contestRunning?: boolean
+  /** The contest's own sequencer while a contest runs (`snap.fieldDay.state`/`.dxcall`,
+   * `snap.contestTxNow`): there is no `qso` then, and the readout shows the contest's state, the
+   * station it works and the over it sends — a logger's Reply to a CQ is worked there, with no
+   * click on this screen (a field report). */
+  contest?: { state: string; dxcall?: string | null; txNow?: string | null } | null
   /** Switch the sequencer role (Call CQ / Monitor S&P). */
   onSetMode: (mode: ModeRequest) => void
   /** Start a PLAIN CQ run (clears any sticky directed token — the labelled
@@ -204,6 +209,7 @@ function reportLabel(rx: number | null | undefined): string | null {
 export function OperateQsoStrip({
   qso,
   contestRunning,
+  contest,
   onSetMode,
   onCallCq,
   onResend,
@@ -243,10 +249,10 @@ export function OperateQsoStrip({
   // operator calls CQ again, so its AUTO-CQ pill shows only while TX is on.
   const contestRun = qso == null && (contestRunning ?? false)
   const autoCq = running && (!contestRun || (radio?.txEnabled ?? false))
-  const dxcall = qso?.dxcall ?? null
+  const dxcall = qso?.dxcall ?? contest?.dxcall ?? null
   const waiting = logWaiting ?? 0
-  const state = qso?.state ?? 'Idle'
-  const txNow = qso?.txNow ?? null
+  const state = qso?.state ?? contest?.state ?? 'Idle'
+  const txNow = qso?.txNow ?? contest?.txNow ?? null
   const stalled = qso?.stalled ?? false
   // The TX watchdog ended this call (WSJT-X: a red "Runaway Tx watchdog" and a window alert).
   const watchdogStopped = qso?.watchdogStopped ?? false
@@ -526,7 +532,8 @@ export function OperateQsoStrip({
           type="button"
           className="cq-resend"
           onClick={onResend}
-          disabled={!txNow}
+          // Resend re-arms the QSO sequencer's step (`qso_resend`); the contest's has none.
+          disabled={!qso?.txNow}
           title={t('operate.strip.resend.title')}
         >
           ↻

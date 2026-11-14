@@ -5554,6 +5554,14 @@ pub struct AppSnapshot {
     /// receives this field.
     #[serde(default, skip_serializing_if = "is_false")]
     pub contest_cq_typed: bool,
+    /// The over the contest's sequencer sends next, as `plan_tx` keys it, while a contest runs
+    /// ([`crate::engine::Engine::contest_tx_now`]): what the Operate strip's TX line shows there,
+    /// as `qso.tx_now` is outside one. A logger's Reply to a CQ hands the station to the contest's
+    /// S&P, which keys its answer every period; without this the strip read "listening" while it
+    /// did. `None`, and then not sent at all, everywhere else. For the screens on this computer:
+    /// the Remote never receives this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contest_tx_now: Option<String>,
     /// FreeDV's own app beside Nexus ([`crate::freedv`]): its two listeners, the last contact it
     /// logged and the calls it heard. `None`, and then not sent at all, while neither listener is
     /// wanted, so every other snapshot is the one it always was. For the screens on this
