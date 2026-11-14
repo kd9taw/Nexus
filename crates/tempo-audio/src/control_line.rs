@@ -150,9 +150,13 @@ pub fn open_control_line_port(port: &str) -> std::io::Result<Box<dyn serialport:
 /// two never claim the same line is the engine's guard (`Engine::rtty_tx_gate`), as EXTFSK's
 /// option buttons refuse to pick one line for both.
 ///
-/// Names match ignoring ASCII case, as Windows port names do (and as the engine's guard and
-/// `open_serial_ptt` compare them). A holder's lock survives a panicked holder (poison is
-/// ignored): an unkey must always reach the port.
+/// Names match by [`crate::ports::same_port`], the rule the engine's keyline guards read ports
+/// by (`Engine::serial_ptt_keys`): case, the spaces around a name, a Win32 `\\.\` prefix and a
+/// mac `/dev/tty.*` against its `/dev/cu.*` twin change nothing. ⛔ The twins are one device, and
+/// serial PTT opens the healed `cu.*` name while a keyer opens the name as stored: matched by case
+/// alone, the second holder opened the device afresh, and a fresh open idles both lines under the
+/// first holder's key. A holder's lock survives a panicked holder (poison is ignored): an unkey
+/// must always reach the port.
 #[cfg(feature = "serial")]
 pub struct SharedControlLines {
     port: SharedPort,
@@ -227,7 +231,7 @@ impl SharedControlLines {
             open.retain(|(_, held)| held.strong_count() > 0);
             let shared = open
                 .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case(port))
+                .find(|(name, _)| crate::ports::same_port(name, port))
                 .and_then(|(_, held)| held.upgrade());
             let port = match shared {
                 Some(shared) => shared,
@@ -603,6 +607,44 @@ mod tests {
         );
         // Closed means closed: the next holder opens it afresh.
         assert!(SharedControlLines::open(name).is_ok());
+    }
+
+    /// ⛔ ONE PORT, HOWEVER IT IS SPELLED, IS ONE HANDLE: a mac `/dev/tty.*` and its `/dev/cu.*`
+    /// twin, and a Win32 `\\.\COM7` and `com7`, are each the same port, as the engine's keyline
+    /// guards read them (`tempo_app::serial_port::same_port`). Serial PTT opens the healed `cu.*`
+    /// name and a keyer the name as stored, so the second holder must share the first's handle:
+    /// a fresh open would idle both lines under the first holder's key.
+    #[cfg(feature = "serial")]
+    #[test]
+    fn spellings_of_one_port_share_its_handle() {
+        for (stored, healed) in [
+            ("/dev/tty.tempo-test-twin", "/dev/cu.tempo-test-twin"),
+            ("\\\\.\\TEMPO-TEST-COM7", " tempo-test-com7 "),
+        ] {
+            fake_ports::install(stored);
+            let mut fsk = SharedControlLines::open(stored).expect("first holder opens");
+            fsk.set_dtr(true).unwrap();
+            let mut ptt = SharedControlLines::open(healed)
+                .unwrap_or_else(|e| panic!("{healed} shares {stored}'s handle: {e}"));
+            assert!(
+                fake_ports::state(stored).dtr,
+                "{healed}: the second open does not lower the first holder's line"
+            );
+            ptt.set_rts(true).unwrap();
+            let s = fake_ports::state(stored);
+            assert!(s.dtr && s.rts, "{healed}: one handle, both lines: {s:?}");
+            drop(ptt);
+            let s = fake_ports::state(stored);
+            assert!(
+                s.dtr && !s.rts && s.held,
+                "{healed}: PTT going lowers only its own line: {s:?}"
+            );
+            drop(fsk);
+            assert!(
+                !fake_ports::state(stored).held,
+                "{stored}: closed with its last holder"
+            );
+        }
     }
 
     /// ⛔ A FAILED UNKEY IS RETRIED WHEN THE HOLDER GOES. PTT is up while another holder (the FSK
