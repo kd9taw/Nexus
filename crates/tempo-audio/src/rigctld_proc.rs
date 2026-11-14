@@ -2246,6 +2246,8 @@ mod tests {
     /// a moment later, the `rigctl` is asked again and ITS dump is the answer: `rigctld` (here a
     /// stand-in whose dump says so) is never asked. One busy for good still falls through to
     /// `rigctld` after a brief, bounded wait. Linux only: macOS does not refuse a busy script.
+    /// And only on a kernel that refuses it: one that runs a file open for writing cannot keep a
+    /// tool busy at all, and then neither leg means anything.
     #[cfg(target_os = "linux")]
     #[test]
     fn a_rigctl_busy_for_a_moment_is_asked_again_not_skipped() {
@@ -2265,6 +2267,14 @@ mod tests {
                 .open(&rigctl)
                 .expect("open rigctl for writing")
         };
+        // The kernel premise: an exec of the file while it is held fails ETXTBSY.
+        let writer = hold();
+        let ran = Command::new(&rigctl).stdout(Stdio::null()).status();
+        drop(writer);
+        if !matches!(&ran, Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy) {
+            eprintln!("skipped: this kernel ran a file open for writing ({ran:?})");
+            return;
+        }
 
         // Busy for the first try only: the write descriptor goes 30 ms in.
         let writer = hold();
