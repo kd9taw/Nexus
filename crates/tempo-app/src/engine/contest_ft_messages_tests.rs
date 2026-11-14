@@ -3516,6 +3516,28 @@ fn a_loggers_reply_to_a_cq_in_a_contest_names_the_over_it_sends() {
     );
 }
 
+/// A logger's Reply on a CQ in a contest still hands the station to the contest's S&P and arms
+/// TX, from TX off and with "Double-click on call sets Tx enable" off: the Reply arms on every
+/// station it works ([`Engine::answer_udp_reply`]).
+#[test]
+fn a_loggers_reply_in_a_contest_works_the_station_and_arms() {
+    let mut e = engine_for("txqp", MY_GRID);
+    e.settings.double_click_sets_tx = false;
+    e.set_tier(Tier::Ft8);
+    e.set_mode("fieldday-sp").expect("S&P starts");
+    assert!(!e.tx_enabled(), "premise: TX off");
+    e.ingest_decodes_for_test(&[heard("CQ W9XYZ EN37")], 2);
+    e.answer_udp_reply(DX, "CQ W9XYZ EN37", DX_SNR, Some(1234.0))
+        .expect("the Reply is taken");
+    assert!(e.tx_enabled(), "armed");
+    assert_eq!(
+        e.snapshot().field_day.and_then(|f| f.dxcall).as_deref(),
+        Some(DX),
+        "the contest's S&P works it"
+    );
+    assert_eq!(keyed(&mut e, 4).as_deref(), Some("W9XYZ K1ABC FN42"));
+}
+
 /// ⛔ **Outside a contest, no logger's Reply leaves the station sending while the screen says it
 /// works nobody** (a field report: "TX — listening", Idle, DX Call blank, while
 /// Tx1 went out every period). The Operate strip says Idle only when the snapshot carries no
