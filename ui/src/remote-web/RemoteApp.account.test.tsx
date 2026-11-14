@@ -102,7 +102,9 @@ it('downloads the account\'s copy as a JSON file', async () => {
 // until it is.
 it('changes the notice address through a code, then shows the wait and can cancel it', async () => {
   let state: { address: string | null; pending: null | { address: string; verified: boolean; effectiveAt: number | null } } = { address: 'old@example.invalid', pending: null }
-  const effectiveAt = Date.UTC(2026, 10, 15, 12)
+  // A date far from today: the trial fixture's dates move with the clock, and on the day its
+  // end fell on this date the text query found two matches.
+  const effectiveAt = Date.UTC(2031, 10, 15, 12)
   const service = client(owning(), {
     'account/notice': () => state,
     'account/notice/change': () => { state = { ...state, pending: { address: 'new@example.invalid', verified: false, effectiveAt: null } }; return { ok: true } },
@@ -121,7 +123,7 @@ it('changes the notice address through a code, then shows the wait and can cance
   fireEvent.change(code, { target: { value: '12345678' } })
   fireEvent.click(screen.getByRole('button', { name: t('remote.notice.confirm') }))
   await waitFor(() => expect(service.post).toHaveBeenCalledWith('account/notice/confirm', { code: '12345678' }))
-  expect(await screen.findByText(new RegExp('2026-11-15'))).toBeTruthy()
+  expect(await screen.findByText(new RegExp('2031-11-15'))).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: t('remote.notice.cancel') }))
   await waitFor(() => expect(service.post).toHaveBeenCalledWith('account/notice/cancel', {}))
   expect(await screen.findByLabelText(t('remote.notice.newAddress'))).toBeTruthy()
