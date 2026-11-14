@@ -51,7 +51,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
-import { FLOOR, LAPTOP, MATRIX, UHD, UHD_200 } from './sizes.mjs'
+import { FLOOR, FLOOR_150, LAPTOP, MATRIX, UHD, UHD_200 } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
@@ -577,6 +577,73 @@ if (process.env.STOPVIS_LOG !== '0') {
   console.log(`CONTROL — FT at the floor (100 %), the prompt centred over the whole window: ${c ? (logControl ? 'it meets a stop (caught)' : 'it meets none') : 'never drew'}`)
 }
 
+// THE PROMPT TO LOG WHEN A STOP MOVES WHILE IT IS OPEN (2026-11-13). The prompt measured its room only as it opened, so a
+// cockpit that went on the air or under an alarm with the prompt open moved its stops and the card stayed where it was.
+// Each case: the prompt opened with the cockpit plain, the Comment box focused and the card scrolled; then the cockpit
+// is put in the state. Asserted: the card meets no stop control, it is inside the window, the Comment box still has the
+// focus, and the card's scroll is where it was (or at its end, if the card got shorter). THE CONTROL, on the first
+// case: the card held where it opened (its room pinned) must meet a stop after the same change.
+const LOG_MOVES = [
+  // [view, route, scale, size, state] — where that change moved a stop into the room the card opened in (measured on
+  // the tree before the fix: Stop TX on the strip, and SSTV's own Stop as it starts to send).
+  ['Phone', 'phone', '175', [900, 600], 'keyed'],
+  ['CW', 'cw', '175', [900, 600], 'keyedAlarm'],
+  ['JS8', 'js8', '175', [900, 600], 'keyed'],
+  ['SSTV', 'sstv', '100', px(FLOOR_150), 'keyed'],
+  ['SSTV', 'sstv', '175', [700, 800], 'worst'],
+]
+async function logMove(route, scale, size, state, pin) {
+  const p = await openPage(route, size, scale, 'en')
+  try {
+    let m = null
+    for (let i = 0; i < 160 && !m?.stops.length; i++) { await sleep(250); m = await p.evaluate(MEASURE).catch(() => null) }
+    await settle(p, await apply(p, PLAIN, route))
+    await p.evaluate(`globalThis.__push(null, { pendingLog: ${JSON.stringify(PENDING)} })`)
+    let r = null
+    for (let i = 0; i < 40 && !r; i++) { await frames(p); r = await p.evaluate(LOGCARD).catch(() => null) }
+    await settle(p)
+    const before = await p.evaluate(`(() => {
+      const b = document.querySelector('.logconfirm-backdrop'), card = b.querySelector('.logconfirm')
+      const box = [...card.querySelectorAll('.logconfirm-comment input')][0]
+      box.focus({ preventScroll: true })
+      card.scrollTop = Math.min(40, card.scrollHeight - card.clientHeight)
+      if (${pin}) { const s = document.createElement('style'); s.textContent = '.logconfirm-backdrop { padding: ' + getComputedStyle(b).padding + ' !important } .logconfirm { width: ' + getComputedStyle(card).width + ' !important; max-height: ' + getComputedStyle(card).maxHeight + ' !important }'; document.head.appendChild(s) }
+      return { scroll: card.scrollTop }
+    })()`)
+    const meetsAtOpen = (await p.evaluate(LOGCARD)).rows.filter((x) => x.meets).length
+    await settle(p, await apply(p, STATES[state], route))
+    await settle(p, 300)
+    const after = await p.evaluate(LOGCARD)
+    const kept = await p.evaluate(`(() => {
+      const card = document.querySelector('.logconfirm'), e = document.activeElement
+      return { focus: !!e && e.matches('.logconfirm-comment input'), scroll: card.scrollTop, end: card.scrollHeight - card.clientHeight }
+    })()`)
+    return { meetsAtOpen, after, before, kept }
+  } finally {
+    await p.close()
+  }
+}
+const moveReds = []
+let moveControl = null
+if (process.env.STOPVIS_LOG !== '0') {
+  for (const [label, route, scale, size, state] of LOG_MOVES.filter(([l]) => wantViews.includes(l))) {
+    const at = `${label} ${lab(size)} ${scale} plain→${state}`
+    const r = await logMove(route, scale, size, state, false)
+    const meets = r.after?.rows.filter((x) => x.meets) ?? []
+    const scrollOk = Math.abs(r.kept.scroll - Math.min(r.before.scroll, r.kept.end)) <= 1
+    console.log(`prompt to log, a stop moves — ${at}: met ${r.meetsAtOpen} at open; card ${r.after?.card.join(',')} meets ${meets.map((x) => `${x.kind}@${x.box.join(',')}`).join(' ') || 'none'}; focus ${r.kept.focus ? 'kept' : 'LOST'}; scroll ${r.before.scroll}→${r.kept.scroll}`)
+    const why = [r.meetsAtOpen ? `the card met a stop already at open` : null,
+      meets.length ? `the card ${r.after.card.join(',')} meets ${meets.map((x) => `${x.kind} at ${x.box.join(',')}`).join(', ')}` : null,
+      r.after?.inWindow ? null : 'the card is not wholly inside the window', r.kept.focus ? null : 'the Comment box lost the focus',
+      scrollOk ? null : `the card's scroll went ${r.before.scroll}→${r.kept.scroll}`].filter(Boolean)
+    if (why.length) { moveReds.push(`prompt to log, a stop moves — ${at}: ${why.join('; ')}`); console.log('RED ' + moveReds.at(-1)) }
+  }
+  const [label, route, scale, size, state] = LOG_MOVES[0]
+  const c = await logMove(route, scale, size, state, true)
+  moveControl = !!c.after?.rows.some((x) => x.meets)
+  console.log(`CONTROL — ${label} ${lab(size)} ${scale} plain→${state}, the card held where it opened: ${moveControl ? 'it meets a stop (caught)' : 'it meets none'}`)
+}
+
 await browser.stop?.()
 await server.close()
 await rm(cacheDir, { recursive: true, force: true })
@@ -618,7 +685,9 @@ if (mirrorControl === false) console.log('CONTROL FAILED: with the stop layer ta
 if (freshControl === false) console.log('CONTROL FAILED: a stale divider value was not caught: the fresh-layout guard cannot fail')
 if (freshReds.length) console.log(`stopvisible: RED — ${freshReds.length} rows where Stop TX stood off a fresh layout`)
 if (logControl === false) console.log('CONTROL FAILED: the prompt to log over the whole window met no stop: the prompt check cannot fail')
+if (moveControl === false) console.log('CONTROL FAILED: the prompt to log held where it opened met no stop after the change: the moving-stop check cannot fail')
+if (moveReds.length) console.log(`stopvisible: RED — ${moveReds.length} rows where the prompt to log met a stop that moved while it was open:\n  ${moveReds.join('\n  ')}`)
 if (logReds.length) console.log(`stopvisible: RED — ${logReds.length} rows where the prompt to log met a stop control or hid Stop TX:\n  ${logReds.join('\n  ')}`)
-if (reds.length || freshReds.length || mirrorReds.length || logReds.length || logControl === false || mirrorControl === false || freshControl === false || control !== true || tabControl !== true) { console.log(`stopvisible: RED — ${reds.length} rows with no Stop TX on screen and topmost`); process.exit(1) }
-console.log('stopvisible: PASS — a Stop TX fully on screen and topmost in every row, no Tab stop behind FT’s parked line, FT’s Stop TX where a fresh layout puts it after a header change, one click through the stop layer stops once over a parked strip and a squeezed bar, the prompt to log meets no stop control and leaves Stop TX reachable; every control was caught')
+if (reds.length || freshReds.length || mirrorReds.length || logReds.length || moveReds.length || logControl === false || moveControl === false || mirrorControl === false || freshControl === false || control !== true || tabControl !== true) { console.log(`stopvisible: RED — ${reds.length} rows with no Stop TX on screen and topmost`); process.exit(1) }
+console.log('stopvisible: PASS — a Stop TX fully on screen and topmost in every row, no Tab stop behind FT’s parked line, FT’s Stop TX where a fresh layout puts it after a header change, one click through the stop layer stops once over a parked strip and a squeezed bar, the prompt to log meets no stop control and leaves Stop TX reachable, also after a stop moves while it is open; every control was caught')
 process.exit(0)

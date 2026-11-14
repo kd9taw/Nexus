@@ -95,7 +95,13 @@ interface Placement {
  * grows (the IOTA box's island picker) never hops to another room. The room is the backdrop's padding, so the backdrop's
  * own centring stands the card in it whatever its content does; the card is no wider than the room and no taller (it
  * scrolls inside, as it did under its window-height cap). With no stop on screen (the Logbook, Settings, a test with
- * no layout) nothing is set and the card is centred as before. Measured again when the window changes size.
+ * no layout) nothing is set and the card is centred as before.
+ *
+ * MEASURED AGAIN WHILE IT IS OPEN (2026-11-13), not only as it opens: when the window changes size, when a stop control
+ * changes size, and when anything in the document changes outside the prompt (a cockpit going keyed or alarmed moves
+ * its strip, and Stop TX with it; a stop appears; the font or the zoom changes). Once a frame at most, and never for
+ * the prompt's own move, so a measure cannot set off another. The card is the same element throughout, so the box the
+ * operator is typing in keeps the focus and the card its scroll.
  */
 function useClearOfStops(backdrop: RefObject<HTMLDivElement | null>, card: RefObject<HTMLDivElement | null>): Placement | undefined {
   const [place, setPlace] = useState<Placement | undefined>(undefined)
@@ -148,13 +154,57 @@ function useClearOfStops(backdrop: RefObject<HTMLDivElement | null>, card: RefOb
       }
       setPlace((p) => (p && JSON.stringify(p) === JSON.stringify(next) ? p : next))
     }
-    measure()
-    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
-    ro?.observe(b)
-    window.addEventListener('resize', measure)
+    // At most one measure a frame, however many changes ask for it.
+    let frame = 0
+    const later = () => {
+      if (!frame) frame = requestAnimationFrame(() => {
+        frame = 0
+        measureAndWatch()
+      })
+    }
+    // A stop control that grows or shrinks, and the backdrop (the window, in the app's zoom). Each measure adds the stops
+    // on screen then (one that appears is a change to the document, below), each once: a box is reported as soon as
+    // it is first watched, so watching it again every measure would measure every frame. The backdrop by its border
+    // box: its padding is the card's own move.
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(later)
+    const watched = new Set<Element>()
+    const watch = () => {
+      if (!ro) return
+      const now = new Set<Element>([b, ...[...document.querySelectorAll(STOP_CONTROL)].filter((e) => !c.contains(e))])
+      for (const e of watched) if (!now.has(e)) {
+        ro.unobserve(e)
+        watched.delete(e)
+      }
+      for (const e of now) if (!watched.has(e)) {
+        ro.observe(e, { box: 'border-box' })
+        watched.add(e)
+      }
+    }
+    // A stop that moves or appears without changing size: the cockpit going keyed or alarmed, a strip growing, the
+    // font or the zoom changed. Every one of them is a change to the document. Not the prompt's own (the backdrop's
+    // padding when the card moves, what is typed into it) nor the stop layer's mirrors, which follow the card: a
+    // measure that moves the card never asks for another, so it cannot loop.
+    const mo = new MutationObserver((records) => {
+      for (const r of records) {
+        const el = r.target instanceof Element ? r.target : r.target.parentElement
+        if (el && !b.contains(el) && !el.closest('.stop-layer')) {
+          later()
+          return
+        }
+      }
+    })
+    mo.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true })
+    function measureAndWatch() {
+      measure()
+      watch()
+    }
+    measureAndWatch()
+    window.addEventListener('resize', later)
     return () => {
+      cancelAnimationFrame(frame)
       ro?.disconnect()
-      window.removeEventListener('resize', measure)
+      mo.disconnect()
+      window.removeEventListener('resize', later)
     }
   }, [backdrop, card])
   return place
