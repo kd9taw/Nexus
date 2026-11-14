@@ -15623,7 +15623,7 @@ impl RadioLoop {
                 //
                 // Nothing is lost by standing down: the ceiling was already applied before the
                 // tune keyed, and only the heavy poll — also suppressed — could learn otherwise.
-                // ⚠️ AND NOT MID-OVER (#126, KD9WES FTDX-101D). WSJT-X sets power BEFORE it keys
+                // ⚠️ AND NOT MID-OVER (#126, FTDX-101D). WSJT-X sets power BEFORE it keys
                 // and never touches it during a transmission; Nexus was issuing `L RFPOWER` on a
                 // change or cap re-assert even with the carrier already up, and on the FTDX-101D
                 // that mid-over write shows as a power dip/foldback the operator sees but WSJT-X
@@ -15644,7 +15644,7 @@ impl RadioLoop {
                     giveup_blocked,
                 ) {
                     // ⚠️ THE ONE TRACE THAT WOULD HAVE ANSWERED THE FIELD REPORT. An operator
-                    // reporting the rig's power moving under them (KD9WES, FTDX-101D) sent two
+                    // reporting the rig's power moving under them (FTDX-101D) sent two
                     // machines' worth of symptoms and there was nothing on either to look at:
                     // no path logged a power write — success, failure or tune — so "did Nexus
                     // command this?" could not be answered from a log, only argued from code.
@@ -16376,7 +16376,7 @@ impl RadioLoop {
         // subsequent decode/spot/log on a wrong frequency). Deferred while the
         // operator holds live phone PTT — never move the VFO under a live over.
         // ⚠️ `!self.tuning_keyed` IS LOAD-BEARING, and its absence put a VFO write on the air
-        // (KD9WES, FTDX-101D). A tune deliberately clears `tx_until_ms` — a tune supersedes any
+        // (FTDX-101D). A tune deliberately clears `tx_until_ms` — a tune supersedes any
         // pending slot tail — so without this the teardown believed no over was in progress and
         // wrote the dial, and the split, into a TRANSMITTING radio on the very next tick. A
         // Yaesu re-locks its synthesiser on a VFO write: a blip in the waterfall and the power
@@ -17229,6 +17229,8 @@ impl RadioLoop {
                         // offset — pass all three so the sequencer resumes from that
                         // message (WSJT-X double-click semantics) AND moves our RX/TX
                         // onto the DX's frequency, not always from the grid at band-center.
+                        // Unlike WSJT-X's Reply it always arms TX and answers a stale line
+                        // too: a deliberate divergence (`Engine::answer_udp_reply`).
                         let parsed = Msg::parse(&message);
                         if let Some(sender) = parsed.sender() {
                             let dx_freq = Some(delta_freq as f32);
@@ -21832,7 +21834,7 @@ mod tests {
         );
     }
 
-    /// #126 (KD9WES, FTDX-101D). The load-bearing rule: the loop must NEVER command RF power
+    /// #126 (FTDX-101D). The load-bearing rule: the loop must NEVER command RF power
     /// while a transmission is up — WSJT-X sets power before it keys and never touches it during
     /// an over, and a mid-over `L RFPOWER` is exactly the foldback/dip the operator reported.
     /// Also never mid-tune, as before. Everything else is unchanged: a real change or a cap
@@ -42119,7 +42121,7 @@ mod tests {
 
     /// ⭐ A TUNE CARRIER IS A LIVE OVER: nothing may write the VFO while it is up.
     ///
-    /// Field report (KD9WES, FTDX-101D, 2026-08-30): "it dosnt seem to matter if im keyed up
+    /// Field report (FTDX-101D, 2026-08-30): "it dosnt seem to matter if im keyed up
     /// through the tune button or making a contact that i will see a blip in the ftdx 101d
     /// waterfall and it will cut the power back about 10 to 15 watts just for a second", the
     /// drop confirmed on an analogue MFJ-989 needle, and NOT reproducible under WSJT-X on the

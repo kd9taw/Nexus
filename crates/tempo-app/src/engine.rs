@@ -20592,7 +20592,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// when that is the newest thing heard from it, else Tx1. Every call starts the
     /// contact fresh and resets the QSO start time, as WSJT-X's double-click does
     /// (`mainwindow.cpp:9271`). Working a station also **enables TX** (so a
-    /// double-click transmits even if TX was toggled off) — matching WSJT-X.
+    /// double-click transmits even if TX was toggled off) when "Double-click arms TX"
+    /// (`double_click_sets_tx`, default on) is on, whatever the line, and leaves TX as it is when
+    /// it is off. That is WSJT-X 3.0.2's double-click: Enable Tx follows its "Double-click on call
+    /// sets Tx enable" (`quick_call`, default on, `mainwindow.cpp:9450`) on any line
+    /// (`doubleClickOnCall` sets `m_bDoubleClicked` unconditionally, :8892). WSJT-X's line-type
+    /// gate, a CQ, QRZ or 73 line or Hold Tx Freq on (:13329-13332), applies only to a UDP Reply,
+    /// which Nexus deliberately arms on every line and whatever this setting says
+    /// ([`Self::answer_udp_reply`]).
     pub fn call_station_ctx(
         &mut self,
         dxcall: &str,
@@ -20942,8 +20949,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// The cockpit's "work this station" — the `call_station` command: a double-click on a
     /// decode, a roster row, a station card, an alert — and a logger's WSJT-X UDP Reply, which is
-    /// WSJT-X's double-click from another program. Each is [`Self::call_station_ctx`], WSJT-X's
-    /// double-click, but one:
+    /// WSJT-X's double-click from another program in what it answers (when and how it arms TX,
+    /// and a stale line, deliberately differ: [`Self::answer_udp_reply`]). Each is
+    /// [`Self::call_station_ctx`], WSJT-X's double-click, but one:
     ///
     /// ⭐ **A double-click on a CQ while a contest runs whose own FT8/FT4 messages apply
     /// ([`Self::contest_ft_messages`]) hands that station to the contest's S&P**
@@ -20974,6 +20982,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// A logger's WSJT-X UDP Reply (GridTracker, JTAlert): [`Self::work_station`] on the clicked
     /// line, then TX armed whatever "double-click sets Tx" says, as before.
+    ///
+    /// ⚠️ **Deliberately NOT WSJT-X 3.0.2's Reply** (operator decision). WSJT-X's `replyToCQ`
+    /// ignores a Reply whose line its Band Activity no longer shows (`mainwindow.cpp:13342`), and
+    /// turns Enable Tx on only with "Double-click on call sets Tx enable" on AND a CQ, QRZ or 73
+    /// line (or Hold Tx Freq on) (`:13329-13332`, `:9450`). Nexus arms TX for every Reply it
+    /// takes, and answers a clicked line that aged out of the decode history, its period taken
+    /// from the station's latest decode ([`Self::call_station_ctx`]); only a station with no
+    /// decode left in the history is refused.
     ///
     /// ⛔ **Another program never overrides a stop.** While the operator's stop holds
     /// (`tx_stop_hold`) or a watchdog trip stands, the Reply is refused whole: no station is

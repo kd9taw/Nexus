@@ -432,38 +432,38 @@ describe('cqDirFromText — directed CQ parser for Tx6', () => {
 // contract); this is only what we SHOW the operator when it says no. Everything here is a
 // re-ordering of words the operator typed — an invented message is the very fault #254 is.
 describe('cqSuggestionFromText — the valid form to offer a refused Tx6', () => {
-  const MY = 'KD9WES'
+  const MY = 'W9ABC'
 
   it('re-orders the reporter’s own text into WSJT-X order', () => {
-    expect(cqSuggestionFromText('CQ KD9WES POTA', MY)).toBe('CQ POTA KD9WES')
-    expect(cqSuggestionFromText('cq kd9wes dx', MY)).toBe('CQ DX KD9WES')
-    expect(cqSuggestionFromText('CQ KD9WES 040', MY)).toBe('CQ 040 KD9WES')
+    expect(cqSuggestionFromText('CQ W9ABC POTA', MY)).toBe('CQ POTA W9ABC')
+    expect(cqSuggestionFromText('cq w9abc dx', MY)).toBe('CQ DX W9ABC')
+    expect(cqSuggestionFromText('CQ W9ABC 040', MY)).toBe('CQ 040 W9ABC')
   })
 
   it('keeps a grid, wherever it was typed', () => {
-    expect(cqSuggestionFromText('CQ KD9WES POTA EN61', MY)).toBe('CQ POTA KD9WES EN61')
-    expect(cqSuggestionFromText('CQ KD9WES EN61 POTA', MY)).toBe('CQ POTA KD9WES EN61')
+    expect(cqSuggestionFromText('CQ W9ABC POTA EN61', MY)).toBe('CQ POTA W9ABC EN61')
+    expect(cqSuggestionFromText('CQ W9ABC EN61 POTA', MY)).toBe('CQ POTA W9ABC EN61')
   })
 
   it('invents nothing — a callsign that is not ours gets no suggestion', () => {
     expect(cqSuggestionFromText('CQ POTA W1ABC', MY)).toBeNull()
     expect(cqSuggestionFromText('CQ W1ABC POTA', MY)).toBeNull()
     // A typo in our own call is a different call, and guessing it would be the #254 defect.
-    expect(cqSuggestionFromText('CQ KD9WSE POTA', MY)).toBeNull()
+    expect(cqSuggestionFromText('CQ W9ACB POTA', MY)).toBeNull()
   })
 
   it('refuses to guess when the words do not add up', () => {
-    expect(cqSuggestionFromText('CQ KD9WES POTA SOTA', MY), 'two tokens').toBeNull()
-    expect(cqSuggestionFromText('CQ KD9WES NEXUS', MY), 'not a legal token').toBeNull()
-    expect(cqSuggestionFromText('CQ KD9WES', MY), 'no token at all').toBeNull()
-    expect(cqSuggestionFromText('DE KD9WES POTA', MY), 'not a CQ').toBeNull()
-    expect(cqSuggestionFromText('CQ KD9WES POTA', ''), 'no callsign set').toBeNull()
+    expect(cqSuggestionFromText('CQ W9ABC POTA SOTA', MY), 'two tokens').toBeNull()
+    expect(cqSuggestionFromText('CQ W9ABC NEXUS', MY), 'not a legal token').toBeNull()
+    expect(cqSuggestionFromText('CQ W9ABC', MY), 'no token at all').toBeNull()
+    expect(cqSuggestionFromText('DE W9ABC POTA', MY), 'not a CQ').toBeNull()
+    expect(cqSuggestionFromText('CQ W9ABC POTA', ''), 'no callsign set').toBeNull()
   })
 
   it('has nothing to suggest for text that is already valid', () => {
     // Everything cqDirFromText accepts must produce no suggestion — the two agree on the
     // grammar or the operator is shown a "fix" identical to what they typed.
-    for (const ok of ['CQ POTA KD9WES', 'CQ DX KD9WES EN61', 'CQ 040 KD9WES', 'CQ KD9WES EN61']) {
+    for (const ok of ['CQ POTA W9ABC', 'CQ DX W9ABC EN61', 'CQ 040 W9ABC', 'CQ W9ABC EN61']) {
       expect(cqDirFromText(ok, MY), `control: ${ok} is accepted`).not.toBeUndefined()
       expect(cqSuggestionFromText(ok, MY), ok).toBeNull()
     }
