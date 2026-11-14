@@ -1424,6 +1424,27 @@ pub(crate) fn show_conf_dump(args: &[&str]) -> Option<String> {
     }
 }
 
+// A door for tests only: a shipped build runs nothing between the capability ask and the launch.
+#[cfg(all(feature = "test-util", not(debug_assertions)))]
+compile_error!("`test-util` is test support: a release build must not turn it on");
+
+/// TESTS ONLY: run once in [`spawn_rigctld`], right after the capability ask returns and before
+/// its answer is read, the binary resolved and the daemon launched
+/// ([`set_after_capability_ask`]).
+#[cfg(feature = "test-util")]
+static AFTER_CAPABILITY_ASK: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
+
+/// TESTS ONLY (`test-util`): have [`spawn_rigctld`] call `after` each time its capability ask
+/// returns, before anything reads the answer, resolves the binary or launches. The no-tool-
+/// could-start test ends its busy window there, so the ask meets a busy tool on every try and
+/// the launch a free one: a launch that went ahead without the holds would then really start.
+/// Set once per process; a second call is ignored.
+#[cfg(feature = "test-util")]
+#[doc(hidden)]
+pub fn set_after_capability_ask(after: fn()) {
+    let _ = AFTER_CAPABILITY_ASK.set(after);
+}
+
 /// What asking this Hamlib for its `-L` show-conf dump came to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ShowConf {
@@ -2008,7 +2029,12 @@ pub fn spawn_rigctld(
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, why));
         }
         let want = holds_for_port(want, virtual_node.is_some());
-        let settable = settable_or_refusal(settable_lines_for(model, ptt_line), &want)?;
+        let conf = settable_lines_for(model, ptt_line);
+        #[cfg(feature = "test-util")]
+        if let Some(after) = AFTER_CAPABILITY_ASK.get() {
+            after();
+        }
+        let settable = settable_or_refusal(conf, &want)?;
         resolve_lines(settable, want, deliberate)
     };
     let opened = virtual_node.as_deref().unwrap_or(addr);
