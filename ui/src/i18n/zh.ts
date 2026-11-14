@@ -10266,6 +10266,7 @@ export const ZH: PartialCatalog = {
   "settings.tabs.services": "服务",
   "settings.tabs.app": "应用",
   "settings.backup.restore.onAir": "请先结束或停止发射，然后再恢复。",
+  "settings.backup.restore.keptSafety": "你的执照等级和发射安全设置（TX 看门狗、调谐时间上限、SWR 停止、功率上限）保持为本机原有的值：备份从不更改它们。如果你是在新电脑上恢复的，请现在在设置中设定执照等级和这些上限。",
   "settings.rigControl.aprsDataFm.hintIcom": "请把电台的 DATA MOD 输入设为 USB（SET ▸ Connectors ▸ MOD Input ▸ DATA MOD），否则信标会静默发出。开启后，APRS 会让该电台进入 FM-D（开启 DATA 的 FM），而非普通 FM；中继语音仍为普通 FM。关闭时，APRS 一如从前使用普通 FM。",
   "settings.audio.pcMic.title": "电脑麦克风（话音）",
   "settings.audio.pcMic.label": "使用这台电脑的麦克风",

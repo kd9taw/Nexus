@@ -5316,6 +5316,7 @@ export const JA: PartialCatalog = {
   "settings.backup.restore.done": "設定を復元しました — 無線機を確認し、Test CAT を実行してください",
   "settings.backup.restore.failed": "復元に失敗しました",
   "settings.backup.restore.onAir": "先に送信を終えるか止めてから、復元してください。",
+  "settings.backup.restore.keptSafety": "免許クラスと送信安全の設定（TX ウォッチドッグ、チューン時間の上限、SWR 停止、出力上限）は、このコンピューターの値のまま保持されました。バックアップがこれらを変えることはありません。新しいコンピューターに復元した場合は、今すぐ設定で免許クラスとこれらの上限を設定してください。",
   "settings.backup.reset.confirm.title": "すべての設定を工場出荷時のデフォルトにリセットしますか？",
   "settings.backup.reset.confirm.body": "無線機、オーディオデバイス、コールサイン、各種設定が消去されます。交信ログには影響せず、保存済みパスワードはキーチェーンに残ります。この操作は元に戻せません — まだの場合は先にバックアップしてください。",
   "settings.backup.reset.confirm.action": "リセット",

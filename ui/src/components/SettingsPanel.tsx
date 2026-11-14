@@ -1293,6 +1293,10 @@ export function SettingsPanel({
       savedRef.current = fresh
       onSaved?.()
       pushToast(t('settings.backup.restore.done'), 'success')
+      // ⛔ A restore keeps the licence class and the transmit safety as this station has them
+      // (`STATION_TX_SAFETY` in the backend), whatever the file says: said every time, so an
+      // operator restoring onto a new computer knows to set them here.
+      pushToast(t('settings.backup.restore.keptSafety'), 'info')
     }, t('settings.backup.restore.failed'))
   }
 
