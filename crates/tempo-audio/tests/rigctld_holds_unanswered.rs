@@ -7,15 +7,16 @@
 //! file open for writing. Every exec of it then fails `ETXTBSY` (Text file busy): the `rigctl`
 //! beside it is missing and the `rigctld -L` ask cannot start, so no tool answered at all.
 //!
-//! ⚠️ THE WINDOW ENDS ON THE TEST'S WORD, NOT A CLOCK. The ask retries a busy tool a few times,
-//! briefly (`ask_show_conf`: 5 more tries 50 ms apart), so a window of a fixed length either
-//! ended inside those retries on a slow machine (the ask then reached the stand-in and the
-//! scenario never arose) or had to be guessed long enough for every machine. The writer holds
-//! until the test has `spawn_rigctld`'s answer, so every one of the ask's tries meets a busy
-//! file, on any machine; it gives up by itself after 30 s only so a crashed test leaves nothing.
-//! Before the fix, no tool answering claimed nothing and the launch went on to open the port with
-//! no `rts_state`/`dtr_state`, on a port whose driver raises both lines at open; here that launch
-//! meets the same busy file, and either way its answer is not the refusal this test asks for.
+//! ⚠️ THE WINDOW ENDS AT A POINT IN THE CODE, NOT ON A CLOCK. The ask and the resolve after it
+//! each retry a busy tool with the same bound (5 more tries 50 ms apart: `ask_show_conf`,
+//! `proc_util::runs_ok_within`), so no window of a fixed length ends after the ask's last try and
+//! before the resolve's on every machine. The writer holds until `release` appears, and the test
+//! writes it from `spawn_rigctld`'s hook that runs once the capability ask has returned
+//! (`set_after_capability_ask`, `test-util`), then waits for the writer to be gone. So every one
+//! of the ask's tries meets a busy file and the resolve and launch meet a free one, as in the
+//! real moment. Before the fix, no tool answering claimed nothing and the launch went on: here
+//! the stand-in daemon then really starts, with no `rts_state`/`dtr_state`, and the test says so.
+//! The writer gives up by itself after 30 s only so a crashed test leaves nothing behind.
 //!
 //! In its own file because it sets the process-wide PATH.
 #![cfg(all(target_os = "linux", feature = "serial"))]
@@ -28,8 +29,8 @@ use tempo_audio::rigctld_proc::{
 };
 
 /// The stand-in `rigctld`. Its first `--version` arms the busy window, held until `release`
-/// appears beside it; `-L` asks are recorded (none may reach it); any other launch is the daemon,
-/// recorded and kept up.
+/// appears beside it; the writer then closes the file and removes `held` before it goes. `-L`
+/// asks are recorded (none may reach it); any other launch is the daemon, recorded and kept up.
 const STAND_IN: &str = r#"#!/bin/sh
 PATH=/usr/bin:/bin
 d=$(dirname "$0")
@@ -39,6 +40,7 @@ case " $* " in
       : > "$d/armed"
       ( exec 3>>"$0"; : > "$d/held"; i=0
         while [ ! -e "$d/release" ] && [ $i -lt 3000 ]; do sleep 0.01; i=$((i+1)); done
+        exec 3>&-; rm -f "$d/held"
       ) </dev/null >/dev/null 2>&1 &
       while [ ! -e "$d/held" ]; do sleep 0.01; done
     fi
@@ -49,6 +51,28 @@ esac
 echo "$*" >> "$d/launches"
 exec sleep 60
 "#;
+
+/// The stand-in's directory, for the hook ([`after_the_ask`]), which is a plain `fn`.
+static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+/// Whether the hook ran: the window ended between the ask and the launch, not before or after.
+static ENDED_AFTER_THE_ASK: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// `spawn_rigctld`'s hook once the capability ask has returned: end the busy window, and wait
+/// until the writer has closed the file, so the resolve and the launch meet a free one.
+fn after_the_ask() {
+    let dir = DIR.get().expect("the test set the directory");
+    std::fs::write(dir.join("release"), "").expect("release the writer");
+    let start = std::time::Instant::now();
+    while dir.join("held").exists() {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "the busy window's writer never went"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    ENDED_AFTER_THE_ASK.store(true, std::sync::atomic::Ordering::SeqCst);
+}
 
 /// The kernel premise: exec of a file open for writing fails `ETXTBSY`. Linux has refused it for
 /// as long as Nexus has run there; a kernel that lets it run cannot make this moment at all.
@@ -76,6 +100,8 @@ fn a_capability_ask_no_tool_could_start_does_not_open_the_port_without_holds() {
         let _ = std::fs::remove_dir_all(&dir);
         return;
     }
+    DIR.set(dir.clone()).expect("one test in this file");
+    tempo_audio::rigctld_proc::set_after_capability_ask(after_the_ask);
     let bin = dir.join("rigctld");
     std::fs::File::create(&bin)
         .and_then(|mut f| f.write_all(STAND_IN.as_bytes()))
@@ -97,12 +123,16 @@ fn a_capability_ask_no_tool_could_start_does_not_open_the_port_without_holds() {
         KeyingFacts::default(),
         ControlLines::hold_low(),
     );
-    // The answer is in: the busy window may end now.
+    // The window is over by now; this only frees the writer if the hook never ran.
     std::fs::write(dir.join("release"), "").expect("release the writer");
     let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap_or_default();
     assert!(
         dir.join("armed").exists(),
         "premise: the resolve's --version armed the busy window"
+    );
+    assert!(
+        ENDED_AFTER_THE_ASK.load(std::sync::atomic::Ordering::SeqCst),
+        "premise: the busy window ended after the capability ask"
     );
     let asked = read("asked");
     assert!(

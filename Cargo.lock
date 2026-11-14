@@ -2882,6 +2882,7 @@ dependencies = [
  "serialport",
  "socket2",
  "tempo-app",
+ "tempo-audio",
  "tempo-codec",
  "tempo-core",
  "tempo-flexsim",

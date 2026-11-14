@@ -28,6 +28,12 @@ ai-cw = ["dep:deepcw"]
 # FTDI's library themselves; everything except the transport compiles and is tested without
 # this feature.
 yaesu-wf = []
+# TEST-ONLY hooks for this crate's own tests: the seam in `rigctld_proc::spawn_rigctld` that runs
+# once the capability ask has returned (`set_after_capability_ask`), which
+# `tests/rigctld_holds_unanswered.rs` uses to end a busy window between the ask and the launch.
+# Turned on only by the self-dependency under [dev-dependencies], and a dev-dependency's feature
+# is never on in a shipped build; a release build that turns it on does not compile.
+test-util = []
 
 # Multi-radio Phase 0 probe: opens every enabled radio profile's codec at once.
 # Needs a real sound card, so it only exists with `device`.
@@ -206,3 +212,6 @@ tempo-app = { path = "../tempo-app", features = ["test-util"] }
 # answering here" on a port no other socket can take until the test itself listens on it. std
 # binds only by listening. Not a new crate: socket2 is already in the tree via tempo-net.
 socket2 = "0.6"
+# This crate with `test-util`, for its own tests: the hook above. The same self-dependency
+# tempo-sstv and tempo-app use.
+tempo-audio = { path = ".", features = ["test-util"] }
