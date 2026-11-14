@@ -279,7 +279,9 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         alarms and a critical status message, on the air, and all of them at once with SSTV's
                         dropped-picture sentence and JTTY's refusal: with nothing scrolled, a Stop TX is wholly
                         inside the window and the topmost thing over its whole face. A box planted over FT's
-                        Stop TX must be caught. STOPVIS_FULL=1 runs every size, scale and language
+                        Stop TX must be caught. Turning contest mode on (the top bar's operator chip) at
+                        the floor in English, French and Russian leaves FT's Stop TX where it stood, with
+                        the chip's old sizing as the control. STOPVIS_FULL=1 runs every size, scale and language
                         (ui/probe/stopvisible-probe.mjs; it builds nothing)
   --desktop firstrun    a fresh install's first-run wizard in the real app, at the CORE
                         screens: the About-you question and its answers on screen, Finish

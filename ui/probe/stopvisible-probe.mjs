@@ -34,6 +34,9 @@
 // AND THE HEADER-CHANGE GUARD (FT at 100 % and fit, the floor (1366×768 at 175 %) and 1366×768, en/ru, CAT lost and the alarms): Stop TX stands
 // where a fresh layout (the window resized away and back) puts it, so the waterfall's divider re-fit to the header.
 //
+// AND THE OPERATOR-CHIP GUARD (FT at the floor, 100 % and fit, en/fr/ru): contest mode putting the top bar's operator chip up leaves
+// Stop TX exactly where it stood.
+//
 // AND THE STOP LAYER (a modal open): one real click at Stop TX on FT's parked line, and at Stop TX and SSTV's own Stop in its
 // squeezed bar while sending, stops exactly once.
 //
@@ -111,6 +114,11 @@ stubPatched += '\n' + (await readFile(join(UI, 'probe', 'aprsmap-api.ts'), 'utf8
 stubPatched += "\nlet __halts = 0, __sstvStops = 0\n;(globalThis as any).__probeStops = () => ({ halts: __halts, sstv: __sstvStops })\nexport async function haltTx(): Promise<any> { __halts += 1; return snapshot }\nexport async function sstvStop(): Promise<any> { __sstvStops += 1; return sstv }\n"
 // An FT contact in progress has the recall card look its partner up; the generated `{}` answers crash it.
 stubPatched += "\nexport async function resolveEntity(): Promise<any> { return 'United States' }\nexport async function qrzLookup(): Promise<any> { return null }\n"
+// The settings App reads at start, with `probe.settings` from localStorage over the fixture: the operator-chip guard
+// turns contest mode on through it (settings.fdActive), as the operator's own switch does.
+const SETTINGS_STUB = 'export async function getSettings(): Promise<any> { return settingsFixture }'
+if (!stubPatched.includes(SETTINGS_STUB)) throw new Error('stopvisible: the stub seam getSettings did not apply; probe/waterfalls-api.ts changed shape')
+stubPatched = stubPatched.replace(SETTINGS_STUB, 'export async function getSettings(): Promise<any> { return { ...settingsFixture, ...JSON.parse(localStorage.getItem("probe.settings") ?? "{}") } }')
 for (const seam of ['__push', '__modeOver?.sstv', '__modeOver?.jtty']) if (!stubPatched.includes(seam)) throw new Error(`stopvisible: the stub seam ${seam} did not apply; probe/waterfalls-api.ts changed shape`)
 const names = [...realSrc.matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1])
 const own = new Set([...stubPatched.matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1]))
@@ -218,7 +226,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function openPage(route, [W, H, D = 1], scale, loc) {
+async function openPage(route, [W, H, D = 1], scale, loc, settings = null) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (m, p) => browser.call(m, p, sessionId)
@@ -234,7 +242,8 @@ async function openPage(route, [W, H, D = 1], scale, loc) {
   await call('Page.navigate', { url: `${origin}/probe-blank` })
   await sleep(300)
   // Tempo is the MSG workspace's screen; on 'dx' its route opens FT.
-  const ls = { 'nexus.workspace': route === 'chat' ? 'msg' : 'dx', 'nexus.features.v1': FEATURES, 'tempo-theme': 'dark', 'nexus.locale': loc, ...(scale !== 'auto' ? { 'nexus-ui-scale-mode': scale } : {}) }
+  const ls = { 'nexus.workspace': route === 'chat' ? 'msg' : 'dx', 'nexus.features.v1': FEATURES, 'tempo-theme': 'dark', 'nexus.locale': loc, ...(scale !== 'auto' ? { 'nexus-ui-scale-mode': scale } : {}),
+    ...(settings ? { 'probe.settings': JSON.stringify(settings) } : {}) }
   await evaluate(`localStorage.clear(); ${Object.entries(ls).map(([k, v]) => `localStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(v)})`).join(';')}; 1`)
   await call('Page.navigate', { url: `${origin}/#${route}` })
   return { told: false, call, evaluate, size, close: () => browser.call('Target.closeTarget', { targetId }) }
@@ -403,6 +412,61 @@ if (wantViews.includes('FT') && process.env.STOPVIS_FRESH !== '0') {
   } finally {
     await p.close()
   }
+}
+
+// THE OPERATOR-CHIP GUARD (FT at the floor, 100 % and the app's fit, en / fr / ru): turning contest mode on puts the top bar's
+// operator chip up ("Set operator", or "OP <call>" once one is set). Stop TX must stand exactly where it stood with the switch
+// off. The chip used to take its whole text width in the bar's line, and in French and Russian at the floor that wrapped the
+// Tx-cycle group onto a second line: the bar grew a row and Stop TX moved down 31 px (fr) and 34 px (ru).
+// (At 100 % the floor's bar already takes two lines in every language, so the fit is where the chip wrapped it.)
+// ITS CONTROL: the chip's old sizing put back (its own text width in the line) must move Stop TX in French at the floor's fit.
+const OPCHIP = [['100', px(FLOOR)], ['auto', px(FLOOR)]]
+const OPCHIP_OLD = '.topbar-opchip{flex:none!important;max-width:none!important}'
+const stopBox = `(() => { const b = document.querySelector('main.operate-cockpit .cockpit-qso .op-btn.stop'); const t = document.querySelector('.topbar')
+  if (!b || !t) return null; const q = b.getBoundingClientRect(); return { stop: [q.left, q.top].map((v) => Math.round(v * 10) / 10), bar: Math.round(t.getBoundingClientRect().height * 10) / 10,
+    chip: [...document.querySelectorAll('.topbar .op-chip')].map((c) => c.textContent + (c.scrollWidth > c.clientWidth + 1 ? ' (cut)' : '')),
+    // The chip stands on the Help group's line, never alone at the end of a full line above it (cut to a sliver there).
+    besideHelp: [...document.querySelectorAll('.topbar .op-chip')].every((c) => { const h = document.querySelector('.topbar .topbar-chips'); return !!h && Math.abs((c.getBoundingClientRect().top + c.getBoundingClientRect().bottom) - (h.getBoundingClientRect().top + h.getBoundingClientRect().bottom)) <= 4 }) } })()`
+/** Contest mode off; on with nobody at the key yet ("Set operator"); on with an operator set ("OP <call>"). */
+const OPCHIP_STATES = { off: { fdActive: false, fdOperator: '' }, set: { fdActive: true, fdOperator: '' }, op: { fdActive: true, fdOperator: 'N0CALL/P' } }
+async function opchipCase(size, scale, loc, state, css = null) {
+  const on = state !== 'off'
+  const p = await openPage('operate', size, scale, loc, OPCHIP_STATES[state])
+  try {
+    let m = null
+    for (let i = 0; i < 160 && !m?.stops.length; i++) { await sleep(250); m = await p.evaluate(MEASURE).catch(() => null) }
+    if (css) await p.evaluate(`(() => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(css)}; document.head.appendChild(s); return 1 })()`)
+    await apply(p, PLAIN, 'operate')
+    // The settings arrive after the first paint: wait for the chip to come (on) or for the layout to hold (off).
+    for (let i = 0; i < 40; i++) { const b = await p.evaluate(stopBox).catch(() => null); if (b && (!on || b.chip.length)) break; await sleep(250) }
+    await settle(p, 500)
+    return await p.evaluate(stopBox).catch(() => null)
+  } finally {
+    await p.close()
+  }
+}
+const opchipReds = []
+let opchipControl = null
+if (wantViews.includes('FT') && process.env.STOPVIS_OPCHIP !== '0') {
+  // STOPVIS_LOCS, when given, names the languages here too (every one: the full sweep).
+  for (const [scale, size] of OPCHIP) for (const loc of wantLocs ?? ['en', 'fr', 'ru']) {
+    const off = await opchipCase(size, scale, loc, 'off')
+    for (const state of ['set', 'op']) {
+      const on = await opchipCase(size, scale, loc, state)
+      const at = `FT ${lab(size)} ${scale} ${loc} ${state}`
+      console.log(`operator chip: ${at}: off ${JSON.stringify(off)} on ${JSON.stringify(on)}`)
+      let red = null
+      if (!off || !on || !on.chip.length) red = `${at}: never measured, or the chip never came (off ${JSON.stringify(off)}, on ${JSON.stringify(on)})`
+      else if (Math.abs(on.stop[0] - off.stop[0]) > 0.5 || Math.abs(on.stop[1] - off.stop[1]) > 0.5) red = `${at}: Stop TX moved ${JSON.stringify(off.stop)} → ${JSON.stringify(on.stop)} when contest mode put the operator chip up (bar ${off.bar} → ${on.bar} px)`
+      else if (!on.besideHelp) red = `${at}: the operator chip is not on the Help group's line`
+      if (red) { opchipReds.push(red); console.log('RED ' + red) }
+    }
+  }
+  const off = await opchipCase(px(FLOOR), 'auto', 'fr', 'off', OPCHIP_OLD)
+  const on = await opchipCase(px(FLOOR), 'auto', 'fr', 'set', OPCHIP_OLD)
+  opchipControl = off != null && on != null && (Math.abs(on.stop[1] - off.stop[1]) > 0.5 || Math.abs(on.stop[0] - off.stop[0]) > 0.5)
+  console.log(`operator-chip guard: ${OPCHIP.length * (wantLocs ?? [0, 0, 0]).length * 2} rows, ${opchipReds.length} red`)
+  console.log(`CONTROL — FT ${lab(px(FLOOR))} fit fr with the chip's old sizing: Stop TX ${JSON.stringify(off?.stop)} → ${JSON.stringify(on?.stop)}${opchipControl ? ' (caught)' : ''}`)
 }
 
 // THE CONTROL: a box planted over FT's Stop TX must be caught.
@@ -684,10 +748,12 @@ if (tabControl !== true) console.log('CONTROL FAILED: with the scroll padding ta
 if (mirrorControl === false) console.log('CONTROL FAILED: with the stop layer taken away the click still stopped: the stop layer check cannot fail')
 if (freshControl === false) console.log('CONTROL FAILED: a stale divider value was not caught: the fresh-layout guard cannot fail')
 if (freshReds.length) console.log(`stopvisible: RED — ${freshReds.length} rows where Stop TX stood off a fresh layout`)
+if (opchipControl === false) console.log('CONTROL FAILED: the operator chip at its old sizing did not move Stop TX: the operator-chip guard cannot fail')
+if (opchipReds.length) console.log(`stopvisible: RED — ${opchipReds.length} rows where Stop TX moved when contest mode put the operator chip up:\n  ${opchipReds.join('\n  ')}`)
 if (logControl === false) console.log('CONTROL FAILED: the prompt to log over the whole window met no stop: the prompt check cannot fail')
 if (moveControl === false) console.log('CONTROL FAILED: the prompt to log held where it opened met no stop after the change: the moving-stop check cannot fail')
 if (moveReds.length) console.log(`stopvisible: RED — ${moveReds.length} rows where the prompt to log met a stop that moved while it was open:\n  ${moveReds.join('\n  ')}`)
 if (logReds.length) console.log(`stopvisible: RED — ${logReds.length} rows where the prompt to log met a stop control or hid Stop TX:\n  ${logReds.join('\n  ')}`)
-if (reds.length || freshReds.length || mirrorReds.length || logReds.length || moveReds.length || logControl === false || moveControl === false || mirrorControl === false || freshControl === false || control !== true || tabControl !== true) { console.log(`stopvisible: RED — ${reds.length} rows with no Stop TX on screen and topmost`); process.exit(1) }
-console.log('stopvisible: PASS — a Stop TX fully on screen and topmost in every row, no Tab stop behind FT’s parked line, FT’s Stop TX where a fresh layout puts it after a header change, one click through the stop layer stops once over a parked strip and a squeezed bar, the prompt to log meets no stop control and leaves Stop TX reachable, also after a stop moves while it is open; every control was caught')
+if (reds.length || freshReds.length || opchipReds.length || opchipControl === false || mirrorReds.length || logReds.length || moveReds.length || logControl === false || moveControl === false || mirrorControl === false || freshControl === false || control !== true || tabControl !== true) { console.log(`stopvisible: RED — ${reds.length} rows with no Stop TX on screen and topmost`); process.exit(1) }
+console.log('stopvisible: PASS — a Stop TX fully on screen and topmost in every row, no Tab stop behind FT’s parked line, FT’s Stop TX where a fresh layout puts it after a header change and where it stood when contest mode puts the operator chip up, one click through the stop layer stops once over a parked strip and a squeezed bar, the prompt to log meets no stop control and leaves Stop TX reachable, also after a stop moves while it is open; every control was caught')
 process.exit(0)

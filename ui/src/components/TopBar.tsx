@@ -465,15 +465,42 @@ export function TopBar({
     </button>
   )
   const chipCluster = (
+    <>
     <div className="topbar-group topbar-chips">
         {/* Help lives in the one group that renders in every section — the
             cockpits hide the TX cluster, the readout and the digital chrome,
             but never this one, so the guide is one click away everywhere. */}
+        <Menu
+          trigger={
+            <button type="button" className="theme-chip" title={t('topbar.help.label')}>
+              {t('topbar.help.label')}
+            </button>
+          }
+          items={[
+            { label: t('gettingStarted.title'), onSelect: onOpenGuide },
+            ...(onOpenWalk ? [{ label: t('firstContact.title'), onSelect: onOpenWalk }] : []),
+          ]}
+        />
+        {/* Light/Dark moved to Settings ▸ Appearance (operator, 2026-08-10) — the bar
+            keeps only the outdoor quick toggle: Field must stay one tap away, because
+            the operator who needs it is the one who cannot read Settings to find it. */}
+        {onFieldChange && (
+          <button
+            type="button"
+            title={field ? t('topbar.field.on.title') : t('topbar.field.off.title')}
+            aria-pressed={field === true}
+            className={`theme-chip field-chip${field ? ' active' : ''}`}
+            onClick={() => onFieldChange(!field)}
+          >
+            {t('topbar.field.label')}
+          </button>
+        )}
+      </div>
         {/* WHO IS AT THE KEY (#25). Shown when an operator is set — that is the multi-op
             case, and for the single-op station that is nearly everyone this costs no width
             at all. It has to be somewhere always visible rather than in Settings, because a
             wrong operator is silent: nothing misbehaves, and it is discovered at submission
-            when the log is already wrong. Same group as Help, the one group no cockpit hides.
+            when the log is already wrong. Beside Help, the one group no cockpit hides.
 
             ...AND WHEN FIELD DAY IS ON, EVEN BEFORE ONE IS (2026-08-30). "Only when set" made
             the app-wide seat-swap button invisible at the one station that swaps seats: it
@@ -482,13 +509,23 @@ export function TopBar({
             CW or Operate had to go find the screen this chip exists to save them from.
             (Operator: "when people are swapping out, there needs to be a button to swap out
             the operator easily across any mode".) The gate widens by exactly ONE case, not to
-            "always", because the width it costs is paid on every screen. */}
+            "always", because the width it costs is paid on every screen.
+
+            ...AND A ZERO-WIDE ITEM OF THE BAR'S LINE, NOT A MEMBER OF THE HELP GROUP (2026-11-14). In the group
+            its whole text width counted toward the bar's line, and in French and Russian at the smallest screen
+            "Set operator" wrapped the Tx-cycle group onto a second line: the bar grew a row the moment contest
+            mode came on and Stop TX moved down 31–34 px. Here it takes the bar's free room up to its text and
+            never wraps the bar; where the room is short it ends in an ellipsis and its tooltip and accessible
+            name keep the whole of it. RIGHT AFTER the group, not before it: zero wide, it would stay at the end
+            of a full line while Help moved down to the next, cut to a sliver there (the smallest screen at
+            100 %); after it, it is always on Help's line
+            (cockpit-panes.css `.topbar-opchip`). */}
         {(fdActive || (operator && operator.trim() !== '')) && (
           <Menu
             trigger={
               <button
                 type="button"
-                className="theme-chip op-chip"
+                className="theme-chip op-chip topbar-opchip"
                 title={
                   operator && operator.trim() !== ''
                     ? t('topbar.operator.title', { call: operator })
@@ -522,32 +559,7 @@ export function TopBar({
             ]}
           />
         )}
-        <Menu
-          trigger={
-            <button type="button" className="theme-chip" title={t('topbar.help.label')}>
-              {t('topbar.help.label')}
-            </button>
-          }
-          items={[
-            { label: t('gettingStarted.title'), onSelect: onOpenGuide },
-            ...(onOpenWalk ? [{ label: t('firstContact.title'), onSelect: onOpenWalk }] : []),
-          ]}
-        />
-        {/* Light/Dark moved to Settings ▸ Appearance (operator, 2026-08-10) — the bar
-            keeps only the outdoor quick toggle: Field must stay one tap away, because
-            the operator who needs it is the one who cannot read Settings to find it. */}
-        {onFieldChange && (
-          <button
-            type="button"
-            title={field ? t('topbar.field.on.title') : t('topbar.field.off.title')}
-            aria-pressed={field === true}
-            className={`theme-chip field-chip${field ? ' active' : ''}`}
-            onClick={() => onFieldChange(!field)}
-          >
-            {t('topbar.field.label')}
-          </button>
-        )}
-      </div>
+    </>
   )
 
   const showStationPicker = stationProfiles != null && stationProfiles.length > 1
