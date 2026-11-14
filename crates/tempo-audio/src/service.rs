@@ -314,9 +314,10 @@ pub fn settings_key_rts_on(s: &Settings, cat_port: &str) -> bool {
 /// declaration, or the CW keyline on this port's RTS ([`Transport::rts_keys_cat_port`]). A
 /// recognised keying cable is added by `rigctld_proc::rts_keys_transmitter`, which sees the port.
 ///
-/// The PTT term is read twice on purpose: [`cat_port_ptt_line`] (exact spelling — it also routes
-/// keying, which this fact must not move), and [`crate::ports::same_port`] for a dedicated PTT
-/// port that is the CAT port under another spelling, which keys the same RTS pin.
+/// The PTT term is read twice on purpose: [`cat_port_ptt_line`] (it also routes keying, and
+/// excludes network, OmniRig, Icom network and TCI radios and a radio with no model), and
+/// [`crate::ports::same_port`] alone for a dedicated PTT port that is the CAT port under any
+/// spelling, which keys the same RTS pin whatever routes the keying.
 fn radio_keys_rts(t: &Transport) -> bool {
     cat_port_ptt_line(t) == Some(SerialLine::Rts)
         || (t.ptt_method.trim().eq_ignore_ascii_case("rts")
@@ -21121,9 +21122,9 @@ fn open_rig(t: &Transport, allow_coexist: bool) -> RigOpen {
 
 /// Open serial-line (RTS/DTR) PTT, asserting the keying line on [`Transport::ptt_port`].
 /// When that port is a DIFFERENT port from the CAT `serial_port` and a rig model is set —
-/// the SO2R case, where a controller (u2R/MK2R) routes keying on its own COM port — we ALSO
-/// open CAT control (rigctld on the CAT port) so frequency/mode still track the section,
-/// exactly like the VOX+CAT path. When keying shares the CAT port (no dedicated PTT port),
+/// the SO2R case, where a controller (u2R/MK2R) routes keying on its own COM port — or CAT is
+/// not on a serial port at all (network, Icom network, TCI), we ALSO open CAT control so
+/// frequency/mode still track the section, exactly like the VOX+CAT path. When keying shares the CAT port (no dedicated PTT port),
 /// we can't also run rigctld there (it would fight for the port), so it stays pure serial
 /// keying with no CAT — the prior behavior.
 fn open_serial_ptt(t: &Transport, line: SerialLine, allow_coexist: bool) -> RigOpen {
@@ -21169,7 +21170,14 @@ fn open_serial_ptt(t: &Transport, line: SerialLine, allow_coexist: bool) -> RigO
         }
         return (rig, daemon, probe);
     }
-    let separate = t.cat_available() && !ptt_port.eq_ignore_ascii_case(t.serial_port.trim());
+    // Keying beside CAT, never instead of it, whenever CAT is not on the serial port at all: a
+    // network rig, the Icom network connection, TCI. Their `serial_port` names no CAT link (it
+    // is often left over from an earlier USB setup), so a keying cable on that same port fights
+    // nothing, and reading the two as "shared" sent such a radio to keying alone with no CAT.
+    // On a serial-CAT rig, the keying port must be a different port from the CAT port.
+    let cat_off_serial = t.is_network() || t.is_icom_lan() || t.is_tci();
+    let separate = t.cat_available()
+        && (cat_off_serial || !ptt_port.eq_ignore_ascii_case(t.serial_port.trim()));
     if separate {
         open_cat(
             t,
@@ -44048,6 +44056,120 @@ mod tests {
         assert!(
             probe.freq_hz.is_none() && probe.mode.is_none(),
             "no control channel ⇒ no read ⇒ nothing to confirm"
+        );
+    }
+
+    /// A radio whose CAT is not on a serial port at all (a network rig, the Icom network
+    /// connection) and that keys RTS on a serial cable keeps its CAT, even when a serial port
+    /// left over from an earlier USB setup names that same cable. That leftover names no CAT
+    /// link, so it cannot be a CAT port the keying line would fight over. It used to send the
+    /// radio to keying alone, with no CAT: the band never followed and nothing said why.
+    #[test]
+    fn a_network_rig_keyed_on_a_leftover_serial_port_keeps_its_cat() {
+        let (port, _log) = recording_backend();
+        let mut t = cat_transport(port, None);
+        // The manual's NET rigctl station, with its rigctld already up.
+        t.rig_model = 2;
+        t.rig_conn = "network".into();
+        t.rig_addr = format!("127.0.0.1:{port}");
+        t.ptt_method = "rts".into();
+        // Left from the USB setup.
+        t.serial_port = "/dev/ttyUSB0".into();
+        // The keying cable named in its own field, and named nowhere (keying falls back to the
+        // leftover port): both key that port, and neither may cost the radio its CAT.
+        for ptt_serial_port in ["/dev/ttyUSB0", ""] {
+            t.ptt_serial_port = ptt_serial_port.into();
+            let (rig, proc, probe) = open_rig(&t, true);
+            assert!(
+                rig.has_control(),
+                "ptt port {ptt_serial_port:?}: CAT kept: {}",
+                probe.detail
+            );
+            assert_eq!(probe.ok, Some(true), "{}", probe.detail);
+            assert!(proc.is_none(), "shared the rigctld at the address");
+            assert_eq!(
+                rig.ptt_mode(),
+                &PttMode::Serial {
+                    port: "/dev/ttyUSB0".into(),
+                    line: SerialLine::Rts,
+                },
+                "and keys RTS on the cable"
+            );
+            assert_eq!(&ptt_mode_for(&t), rig.ptt_mode(), "the adopt path agrees");
+        }
+
+        // The Icom network connection: its CAT is the network client, so the open goes there
+        // (and says what that client needs) rather than to the leftover port alone.
+        let mut lan = cat_transport(0, None);
+        lan.rig_conn = "icomlan".into();
+        lan.icom_lan_host = String::new();
+        lan.ptt_method = "rts".into();
+        lan.serial_port = "/dev/ttyUSB0".into();
+        lan.ptt_serial_port = "/dev/ttyUSB0".into();
+        let (_rig, _proc, probe) = open_rig(&lan, true);
+        assert!(
+            probe.detail.contains("Icom network connection"),
+            "CAT went to the network client, not keying alone: {}",
+            probe.detail
+        );
+    }
+
+    /// With no rig model there is no CAT to open, on a network connection as anywhere: the radio
+    /// keys its serial line alone, and never attaches to whatever rigctld answers at the address.
+    #[test]
+    fn a_network_rig_with_no_model_keys_its_serial_line_alone() {
+        let (port, _log) = recording_backend();
+        let mut t = cat_transport(port, None);
+        t.rig_model = 0;
+        t.rig_conn = "network".into();
+        t.rig_addr = format!("127.0.0.1:{port}");
+        t.ptt_method = "rts".into();
+        t.serial_port = "/dev/ttyUSB0".into();
+        let (rig, proc, probe) = open_rig(&t, true);
+        assert!(!rig.has_control(), "no CAT channel: {}", probe.detail);
+        assert!(proc.is_none());
+        assert_eq!(
+            rig.ptt_mode(),
+            &PttMode::Serial {
+                port: "/dev/ttyUSB0".into(),
+                line: SerialLine::Rts,
+            },
+            "keys the serial line: {}",
+            probe.detail
+        );
+    }
+
+    /// The two serial-CAT shapes the network fix above must not move. A single cable (Digirig)
+    /// whose keying port IS the CAT port keys through the daemon holding it; a dedicated keying
+    /// port (SO2R) opens CAT on the CAT port and keys its own port beside it.
+    #[test]
+    fn serial_cat_rigs_keep_their_keying_routes() {
+        // Single cable, keying port named or left to fall back: keys through the daemon.
+        let mut one = cat_transport(4532, None);
+        one.ptt_method = "rts".into();
+        one.serial_port = "/dev/ttyUSB0".into();
+        for ptt_serial_port in ["/dev/ttyUSB0", ""] {
+            one.ptt_serial_port = ptt_serial_port.into();
+            assert!(keys_on_the_cat_port(&one), "{ptt_serial_port:?}");
+            assert_eq!(cat_port_ptt_line(&one), Some(SerialLine::Rts));
+            assert_eq!(ptt_mode_for(&one), PttMode::Cat);
+        }
+
+        // A dedicated keying port: CAT on the CAT port, RTS on the keying port.
+        let (port, _log) = recording_backend();
+        let mut so2r = cat_transport(port, None);
+        so2r.ptt_method = "rts".into();
+        so2r.serial_port = "/dev/ttyUSB0".into();
+        so2r.ptt_serial_port = "/dev/ttyUSB9".into();
+        assert!(!keys_on_the_cat_port(&so2r));
+        let (rig, _proc, probe) = open_rig(&so2r, true);
+        assert!(rig.has_control(), "CAT open: {}", probe.detail);
+        assert_eq!(
+            rig.ptt_mode(),
+            &PttMode::Serial {
+                port: "/dev/ttyUSB9".into(),
+                line: SerialLine::Rts,
+            }
         );
     }
 
