@@ -240,7 +240,9 @@ pub struct CallbookUpdate {
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateEndDto {
-    /// `done`, `cancelled`, `limit`, `refused` (QRZ refusing lookups) or `failed`.
+    /// `done`, `cancelled`, `limit`, `refused` (QRZ refusing lookups: no record for the station's
+    /// own call either), `refused-unchecked` (the same streak, with no station call to check it
+    /// with) or `failed`.
     pub stop: String,
     /// Why a lookup failed, or why the fill could not be made.
     pub error: Option<String>,
@@ -356,6 +358,7 @@ fn asked(looked: Looked, heard: Heard) -> Asked {
         },
         qrz_count: heard.qrz_count.map(|c| c as usize),
         qrz_without_record: heard.qrz_no_record && !heard.qrz_record,
+        qrz_record: heard.qrz_record,
         logins: heard.logins,
         uncounted: stop.is_none() && later && !heard.counted_request,
     }
@@ -474,6 +477,13 @@ impl Callbook for StationCallbook {
             .state::<CallbookUpdate>()
             .cancel
             .load(Ordering::SeqCst)
+    }
+
+    /// The station call in Settings: the call a streak of no-record answers is checked with.
+    fn own_call(&self) -> Option<String> {
+        let engine = self.app.state::<SharedEngine>();
+        let call = engine_lock(&engine).settings().mycall.trim().to_uppercase();
+        (!call.is_empty()).then_some(call)
     }
 }
 
@@ -601,7 +611,8 @@ fn stop_word(stop: &Stop) -> (&'static str, Option<String>) {
         Stop::Done => ("done", None),
         Stop::Cancelled => ("cancelled", None),
         Stop::Limit => ("limit", None),
-        Stop::Refused => ("refused", None),
+        Stop::Refused(callbook_update::Refusal::OwnCallNoRecord) => ("refused", None),
+        Stop::Refused(callbook_update::Refusal::NoOwnCall) => ("refused-unchecked", None),
         Stop::Failed(why) => ("failed", Some(why.clone())),
     }
 }
@@ -1215,7 +1226,13 @@ mod tests {
             qrz_record: true,
             ..Heard::default()
         };
-        assert!(!asked(Looked::Unknown, base_found).qrz_without_record);
+        let a = asked(Looked::Unknown, base_found);
+        assert!(!a.qrz_without_record);
+        assert!(
+            a.qrz_record,
+            "QRZ's own record, which clears a streak's check"
+        );
+        assert!(!asked(Looked::Found(Box::default()), Heard::default()).qrz_record);
         assert!(
             !asked(Looked::Unknown, Heard::default()).qrz_without_record,
             "QRZ not asked"
@@ -1250,6 +1267,21 @@ mod tests {
         let status = lock(&job.status).clone();
         assert!(!status.running);
         assert_eq!(status.ended, Some(end));
+    }
+
+    /// How a refusal ends, as the Logbook reads it: checked against the station's own call, or
+    /// with no station call to check it with.
+    #[test]
+    fn a_refusal_says_whether_it_was_checked() {
+        use callbook_update::Refusal;
+        assert_eq!(
+            stop_word(&Stop::Refused(Refusal::OwnCallNoRecord)).0,
+            "refused"
+        );
+        assert_eq!(
+            stop_word(&Stop::Refused(Refusal::NoOwnCall)).0,
+            "refused-unchecked"
+        );
     }
 
     /// The one failure the update goes on after is the lookup's own "not in the callbook", word

@@ -11,6 +11,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { render, cleanup, fireEvent, screen, waitFor, act } from '@testing-library/react'
 import type { CallbookUpdateEnd, CallbookUpdatePreview, CallbookUpdateStatus } from '../api'
 import { subscribeToasts, type Toast } from '../toast'
+import { t } from '../i18n'
 import { setRemoteStation } from '../features/durableStore'
 import { DEFAULT_LOG_QUERY } from '../features/logQuery'
 
@@ -434,5 +435,45 @@ describe('update one contact from the callbook', () => {
     await waitFor(() => expect(toasts.find((x) => x.message === '1 call is not in the callbook: W9ABC')?.kind).toBe('info'))
     const raised = toasts.filter((x) => !before.has(x.id))
     expect(raised.map((x) => [x.kind, x.message])).toEqual([['info', '1 call is not in the callbook: W9ABC']])
+  })
+})
+
+// HOW A RUN THAT STOPPED ENDS: the summary names the calls nobody knows and the calls left for
+// another run; a streak of no-record answers says whether it was checked against the station's
+// own call or could not be.
+describe('the end of an update that stopped', () => {
+  async function ended(end: CallbookUpdateEnd): Promise<Toast[]> {
+    api.callbookUpdateTakeEnd.mockResolvedValueOnce(end)
+    api.callbookUpdateStatus.mockResolvedValue({ ...idle, ended: end })
+    const before = new Set(toasts.map((x) => x.id))
+    open()
+    await waitFor(() => expect(toasts.some((x) => !before.has(x.id))).toBe(true))
+    return toasts.filter((x) => !before.has(x.id))
+  }
+  const base: CallbookUpdateEnd = {
+    stop: 'refused', error: null, qrzSaid: null, qrzSkipped: false, unknown: [], notLookedUp: 0, made: null,
+  }
+
+  it('counts the calls not in the callbook and the calls not looked up yet, as a notice', async () => {
+    const raised = await ended({ ...base, stop: 'limit', unknown: ['W9ABC', 'K9AAA'], notLookedUp: 4 })
+    expect(raised.map((x) => [x.kind, x.message])).toEqual([
+      ['info', '2 calls are not in the callbook: W9ABC K9AAA · 4 calls not looked up yet: run the update again to continue.'],
+    ])
+  })
+
+  it('a streak with no station call to check it says so, and how to fix it', async () => {
+    const raised = await ended({ ...base, stop: 'refused-unchecked', notLookedUp: 3 })
+    const said = t('logbook.tools.callbook.end.refusedUnchecked')
+    expect(said).toMatch(/no station call is set/)
+    expect(raised.find((x) => x.message === said)?.kind).toBe('error')
+    await screen.findByText(said)
+  })
+
+  it('a checked refusal says the own call had no record either, and what that means for a call not on QRZ', async () => {
+    const raised = await ended({ ...base, stop: 'refused', notLookedUp: 3 })
+    const said = t('logbook.tools.callbook.end.refused')
+    expect(said).toMatch(/no record for your own call either/)
+    expect(said).toMatch(/If your own call is not listed on QRZ/)
+    expect(raised.find((x) => x.message === said)?.kind).toBe('error')
   })
 })
