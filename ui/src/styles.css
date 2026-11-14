@@ -17418,6 +17418,20 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .rtty-cockpit .waterfall-wrap > .panel-header .wf-hint {
   flex: 1 1 0;
 }
+/* Beside the tuning scope on the floor screen (1366×768 at 175 %: a 552 px waterfall) the controls alone still
+   fit one line, but the title's full width wrapped the last of them onto a second, and that line came out of the
+   picture (22 px of it). A zero basis lets the title give way too, after the hint: it grows first, to no more
+   than its own width, so wherever there is room it reads whole, and where there is not it ellipsises (its
+   tooltip names it) and the head stays one line. The wrap above is still there for a row of controls that does
+   not fit, so no control is ever lost. `scripts/browser-probe --desktop waterfalls` (check 10) measures it. */
+.rtty-cockpit .waterfall-wrap > .panel-header > h2 {
+  flex: 1000 1 0;
+  max-width: max-content;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .wf-hint {
   font-size: calc(10px * var(--text-scale));
   color: var(--text-faint);

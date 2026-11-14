@@ -47,9 +47,10 @@ use crate::remote_service::REMOTE_ORIGIN;
 /// The window's label. In no capability's `windows` list, so it gets nothing even as a local page.
 pub const LAN_LABEL: &str = "lan-stations";
 
-/// The languages the Stations on this network window's page can be opened in: the catalogs it
-/// ships with.
-const LOCALES: [&str; 6] = ["en", "de", "es", "fr", "ja", "ru"];
+/// The languages the Stations on this network window's page can be opened in: every catalog the
+/// app ships, which the page installs too. A UI list in TypeScript, so it is not read from here;
+/// `the_lan_window_speaks_every_language_the_app_does` holds the two equal.
+const LOCALES: [&str; 9] = ["en", "de", "es", "fr", "it", "ja", "ru", "zh", "zh-hant"];
 
 /// Opening size, in logical px: room for the shack's window and the page's own controls.
 const DEFAULT_INNER: (f64, f64) = (1280.0, 800.0);
@@ -436,6 +437,32 @@ mod tests {
     }
 
     // ---- the Stations on this network window ----------------------------------------------
+
+    /// The languages a UI entry point installs: English, the source, then every
+    /// `installCatalog('xx', …)` it makes.
+    fn installed(main: &str) -> std::collections::BTreeSet<&str> {
+        let mut locales = std::collections::BTreeSet::from(["en"]);
+        for call in main.split("installCatalog('").skip(1) {
+            locales.insert(call.split('\'').next().expect("a locale before the quote"));
+        }
+        locales
+    }
+
+    /// The window opens in every language the app speaks, and only those: [`LOCALES`] is the set
+    /// of catalogs the main window installs, and the window's own page installs the same set, so
+    /// an Italian or Chinese operator never gets the window in another language.
+    #[test]
+    fn the_lan_window_speaks_every_language_the_app_does() {
+        let app = installed(include_str!("../../ui/src/main.tsx"));
+        let page = installed(include_str!("../../ui/src/lan/main.tsx"));
+        assert!(app.len() > 2, "no installCatalog calls read: {app:?}");
+        assert_eq!(page, app, "the window's page installs other languages than the app");
+        assert_eq!(
+            LOCALES.into_iter().collect::<std::collections::BTreeSet<_>>(),
+            app,
+            "the window passes other languages than the app speaks"
+        );
+    }
 
     /// The page the Stations on this network window opens at, as the loopback origin makes it.
     fn lan_page() -> Url {

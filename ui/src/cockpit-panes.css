@@ -1531,11 +1531,11 @@
                          it, is a shell child. Inside the region the frames keep the region's own yielding
                          floor, and where the two do not fit its column scrolls (the second legal fate). */
 .rtty-cockpit {
-  /* 5em, not 6em, since the now-bar took a line of the top bar (2026-11-13): at the floor screen (1366×768 at 175 %)
-     the 6em frames left the strip 59 px, its picture beside the tuning scope 28 px locally and 11 px on CI's fonts
-     (the strip's head wraps there), under check 9's 28 (waterfalls-probe). At 5em the text and the log give 12 px
-     back: the strip is its 71 px of before the bar changed, and its head wraps on every font, so the picture is a
-     stable 22 px (34 of the app's). */
+  /* 5em, not 6em, since the now-bar took a line of the top bar (2026-11-13): at the floor screen (1366×768 at
+     175 %) 6em left a picture under check 9's 28 CSS px on CI's fonts (waterfalls-probe). With the strip's head one
+     line (its title gives way, styles.css), 5em gives the floor screen a 71 px strip with a 39 px picture and the
+     text and the log 162 CSS px between them; 6em would give the text and the log 18 px more (180) for an 11 px
+     smaller picture (28) and 28 px more scroll at 1366×768 / 125 % (99 against 71), so 5em stays. */
   --rtty-fill-floor: max(5em, min(10em, calc((100% - 30em) / 2)));
   --rtty-strip-floor: 6em;
   --cockpit-region-floor: calc(2 * var(--rtty-fill-floor) + var(--space-3));

@@ -1309,7 +1309,8 @@ export function Waterfall({
   return (
     <div className="waterfall-wrap" ref={stripRef}>
       <div className="panel-header">
-        <h2>{t('waterfall.title')}</h2>
+        {/* The title: RTTY's head lets it ellipsise beside the tuning scope (styles.css), so it names itself. */}
+        <h2 title={t('waterfall.title')}>{t('waterfall.title')}</h2>
         {/* MOD_LABEL: advertising "Ctrl" on a Mac names the OS right-click gesture — ⌘ there. */}
         <span className="wf-hint">{hint ?? t('waterfall.hint', { mod: MOD_LABEL })}</span>
         {headerExtra}
