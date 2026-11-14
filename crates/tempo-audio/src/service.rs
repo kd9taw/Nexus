@@ -4628,6 +4628,10 @@ struct RadioLoop {
     /// Serial — opened on demand, reopened if the configured port or line changes.
     #[cfg(feature = "serial")]
     serial_keyer: Option<(String, String, crate::serial_keyer::SerialKeyer)>,
+    /// The stuck-key warning this loop last put in the CW pane ([`cw_key_stuck_warning`]), so it
+    /// can take exactly that warning away again once the key comes up or the keyer goes.
+    #[cfg(feature = "serial")]
+    cw_stuck_said: Option<String>,
     /// Unix-ms until which the current RTTY message is still keying — the next queued
     /// message is held until then (poll pacing), and the PTT drop rides `tx_until_ms`.
     /// 0.0 = idle / ready to send now.
@@ -5525,6 +5529,8 @@ impl RadioLoop {
             winkeyer: None,
             #[cfg(feature = "serial")]
             serial_keyer: None,
+            #[cfg(feature = "serial")]
+            cw_stuck_said: None,
             rtty_busy_until: 0.0,
             rtty_stream: None,
             psk_busy_until: 0.0,
@@ -13225,13 +13231,25 @@ impl RadioLoop {
             // retrying ([`crate::serial_keyer`]), and on a break-in radio a key stuck down is a
             // carrier with no reason on screen. Said every tick while it lasts (a word's own
             // keyer-error write would otherwise clear it); the log line is the thread's, once.
+            // And taken away once it is over — the key-up went out, or the keyer is gone — but
+            // only while the line still says exactly this warning: another error is not ours.
             #[cfg(feature = "serial")]
-            if let Some((port, _, sk)) = self.serial_keyer.as_ref() {
-                if sk.key_up_failing() {
-                    let why = cw_key_stuck_warning(port);
+            {
+                let stuck = self
+                    .serial_keyer
+                    .as_ref()
+                    .filter(|(_, _, sk)| sk.key_up_failing())
+                    .map(|(port, _, _)| cw_key_stuck_warning(port));
+                if let Some(why) = stuck {
                     let mut eng = engine_lock(engine);
                     if eng.cw_keyer_error().as_deref() != Some(why.as_str()) {
-                        eng.set_cw_keyer_error(Some(why));
+                        eng.set_cw_keyer_error(Some(why.clone()));
+                    }
+                    self.cw_stuck_said = Some(why);
+                } else if let Some(said) = self.cw_stuck_said.take() {
+                    let mut eng = engine_lock(engine);
+                    if eng.cw_keyer_error().as_deref() == Some(said.as_str()) {
+                        eng.set_cw_keyer_error(None);
                     }
                 }
             }

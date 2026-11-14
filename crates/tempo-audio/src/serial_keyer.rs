@@ -102,6 +102,11 @@ mod imp {
     /// key-up has since). Some ports refuse every control-line write (some virtual and Bluetooth
     /// ports, a pty): their key never went down, so a failed key-up there is tried once, as it
     /// always was, and neither wedges the thread nor says a key is stuck that never keyed.
+    ///
+    /// ⛔ …BUT A WORKING PORT'S FAILED KEY-DOWN COUNTS AS DOWN. A write's error does not prove the
+    /// line did not move, so once the port has taken any write (`worked`), a key-down that reports
+    /// failure is held to coming up as one that went out. Only a port that has never taken a write
+    /// keeps the one-try key-up.
     fn keyer_loop(
         mut set: impl FnMut(bool) -> bool,
         rx: mpsc::Receiver<(Job, u64)>,
@@ -134,7 +139,16 @@ mod imp {
                 tempo_core::applog::info("tx", "CW serial keyline: the key-up went out");
             }
         };
-        // Whether a key-down went out with no key-up since: the key is held to coming up.
+        // Whether the port has taken any write, and whether a key-down went out (or, on such a
+        // port, may have) with no key-up since: the key is held to coming up.
+        let worked = std::cell::Cell::new(false);
+        let mut set = |level: bool| {
+            let ok = set(level);
+            if ok {
+                worked.set(true);
+            }
+            ok
+        };
         let mut down = false;
         key_up(&mut set, &mut down); // idle: key up
 
@@ -159,7 +173,7 @@ mod imp {
                 Job::Word(text, wpm) => {
                     for (key_down, ms) in tempo_core::cw::morse_key_events(&text, wpm) {
                         if key_down {
-                            down |= set(true);
+                            down |= set(true) || worked.get();
                         } else {
                             key_up(&mut set, &mut down);
                         }
@@ -172,7 +186,7 @@ mod imp {
                 // limit is this thread's own, so a loop that never comes back still lets the
                 // key up, as a WinKeyer's 100 s tune watchdog does.
                 Job::Hold(limit) => {
-                    down |= set(true);
+                    down |= set(true) || worked.get();
                     wait(limit.as_millis() as u64, stop);
                 }
             }
@@ -322,6 +336,33 @@ mod imp {
             assert!(
                 wait.recv_timeout(Duration::from_secs(2)).is_ok(),
                 "the drop returns although the key-up never goes out"
+            );
+        }
+
+        /// ⛔ A KEY-DOWN THAT REPORTS FAILURE ON A PORT THAT WORKS MAY STILL HAVE KEYED: a write's
+        /// error does not prove the line did not move. Once the port has taken a write, such a
+        /// key-down counts as down, so a key-up that then fails is retried and said, not tried once.
+        #[test]
+        fn an_ambiguous_key_down_on_a_working_port_is_held_to_coming_up() {
+            let keyups = Arc::new(AtomicUsize::new(0));
+            let k = Arc::clone(&keyups);
+            let first = AtomicBool::new(true);
+            let keyer = SerialKeyer::keying_checked(move |down| {
+                if down {
+                    return false; // the key-down "fails"
+                }
+                k.fetch_add(1, Ordering::SeqCst);
+                first.swap(false, Ordering::SeqCst) // the idle key-up works; every later one fails
+            });
+            keyer.hold(Duration::from_millis(10));
+            let start = Instant::now();
+            while !keyer.key_up_failing() && start.elapsed() < Duration::from_secs(2) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(
+                keyer.key_up_failing(),
+                "retried and said: {} key-ups",
+                keyups.load(Ordering::SeqCst)
             );
         }
 

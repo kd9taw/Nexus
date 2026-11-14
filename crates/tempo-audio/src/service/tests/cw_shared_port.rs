@@ -417,3 +417,69 @@ fn a_key_up_that_keeps_failing_is_said_in_the_cw_pane() {
         "still said while it lasts: {said:?}"
     );
 }
+
+/// …and NOT LEFT THERE ONCE IT IS OVER. The key-up going out at last, or the keyer going (its port
+/// cleared, the keyer switched), takes the warning away; a different keyer error is left alone.
+#[test]
+fn the_stuck_warning_goes_once_the_key_comes_up_or_the_keyer_goes() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let port = "tempo-test-cw-stuck-clears";
+    let (engine, mut state, mut backend, mut rig) = scene(port, |_| {});
+    let said = |engine: &Arc<Mutex<Engine>>| engine.lock().unwrap().cw_keyer_error();
+    // Key-ups refused until `refuse` is lowered.
+    let stuck_keyer = |refuse: &Arc<AtomicBool>| {
+        let r = Arc::clone(refuse);
+        let keyer = crate::serial_keyer::SerialKeyer::keying_checked(move |down| {
+            down || !r.load(Ordering::SeqCst)
+        });
+        keyer.hold(Duration::from_millis(10));
+        let start = std::time::Instant::now();
+        while !keyer.key_up_failing() && start.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(keyer.key_up_failing(), "premise: the key-up keeps failing");
+        keyer
+    };
+
+    // The key-up goes out at last.
+    let refuse = Arc::new(AtomicBool::new(true));
+    state.serial_keyer = Some((port.into(), "dtr".into(), stuck_keyer(&refuse)));
+    step(&mut state, &engine, &mut backend, &mut rig, 100.0);
+    assert!(
+        said(&engine).unwrap_or_default().contains("stuck down"),
+        "premise: said"
+    );
+    refuse.store(false, Ordering::SeqCst);
+    let start = std::time::Instant::now();
+    while state.serial_keyer.as_ref().unwrap().2.key_up_failing()
+        && start.elapsed() < Duration::from_secs(2)
+    {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    step(&mut state, &engine, &mut backend, &mut rig, 140.0);
+    assert_eq!(said(&engine), None, "the key came up: the warning goes");
+
+    // The keyer goes while the key-up is still failing.
+    let refuse = Arc::new(AtomicBool::new(true));
+    state.serial_keyer = Some((port.into(), "dtr".into(), stuck_keyer(&refuse)));
+    step(&mut state, &engine, &mut backend, &mut rig, 180.0);
+    assert!(
+        said(&engine).unwrap_or_default().contains("stuck down"),
+        "premise: said"
+    );
+    state.serial_keyer = None;
+    step(&mut state, &engine, &mut backend, &mut rig, 220.0);
+    assert_eq!(said(&engine), None, "the keyer is gone: the warning goes");
+
+    // Another keyer error is not the warning's to clear.
+    engine
+        .lock()
+        .unwrap()
+        .set_cw_keyer_error(Some("Serial keyline: some other trouble".into()));
+    step(&mut state, &engine, &mut backend, &mut rig, 260.0);
+    assert_eq!(
+        said(&engine).as_deref(),
+        Some("Serial keyline: some other trouble"),
+        "a different keyer error is left as it was"
+    );
+}
