@@ -1148,7 +1148,7 @@ export function OperateCockpit({
       //
       // `dir === undefined` means the Tx6 text is not a CQ in WSJT-X's grammar
       // (`CQ [TOKEN] MYCALL [GRID4]`). This used to fall back to `startCq(null)` — a PLAIN
-      // CQ — while the box went on showing what the operator had typed, so "CQ KD9WES POTA"
+      // CQ — while the box went on showing what the operator had typed, so "CQ W9ABC POTA"
       // put a bare CQ on the air and said nothing. That breaks the transmit path's plainest
       // rule: never transmit a message different from the one shown.
       //

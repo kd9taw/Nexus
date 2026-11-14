@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 //
-// #254 — "CQ KD9WES POTA" SILENTLY SENT A PLAIN CQ.
+// #254 — "CQ W9ABC POTA" SILENTLY SENT A PLAIN CQ.
 //
-// The reporter typed his directed CQ with the words the other way round. `cqDirFromText`
+// The reporter typed their directed CQ with the words the other way round. `cqDirFromText`
 // accepts only WSJT-X's grammar (`CQ [TOKEN] MYCALL [GRID4]`), so it returned `undefined`
 // — and `doTx(6)` read that as "fall back to a plain CQ" and called `startCq(null)`. The
-// Tx6 box still showed what he typed. The radio sent something else.
+// Tx6 box still showed what they typed. The radio sent something else.
 //
 // THE INVARIANT, and it is the transmit path's: **never transmit a message different from
 // the one shown.** The operator decision (2026-09-14) is WARN-ONLY — WSJT-X's CQ grammar is
@@ -68,8 +68,9 @@ vi.mock('./OperateDecodes', async (importOriginal) => {
   return { ...real, OperateDecodes: () => <div data-testid="od-pane" /> }
 })
 
-/** The reporter's own callsign, so the malformed text below is his verbatim. */
-const MYCALL = 'KD9WES'
+/** A fictional callsign standing in for the reporter's own; the malformed text is their
+ *  report's word order. */
+const MYCALL = 'W9ABC'
 
 function makeSnap(): AppSnapshot {
   return {
@@ -188,7 +189,7 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('#254 — a malformed directed CQ is refused, never quietly replaced', () => {
-  it('"CQ KD9WES POTA" does not key, and says so', async () => {
+  it('"CQ W9ABC POTA" does not key, and says so', async () => {
     renderCockpit()
     callCq(`CQ ${MYCALL} POTA`)
 
