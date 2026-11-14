@@ -11,6 +11,11 @@
 //! come back. That number is kept here per call ([`HeardReports::last_seqno`]), written with the
 //! answer's reports in one transaction ([`HeardReports::record_answer`]), and the newest
 //! kept report's time ([`HeardReports::newest_time`]) sizes the catch-up query after a launch.
+//! The reports come from other stations, unauthenticated, so their times are not trusted to
+//! size it: a report dated more than [`MAX_FUTURE_SECS`] (an hour, past any real clock error)
+//! after the answer was had is not kept, and one already in an older file is not counted as
+//! the newest. Otherwise a single future-dated report would cut every later launch's catch-up
+//! to its 30-minute floor, losing the day of reports PSK Reporter still holds.
 //!
 //! **What a row holds.** The operator's call as sent, when the report was made (PSK Reporter's
 //! `flowStartSeconds`), the receiving call, its grid when it gave one, the band, the exact
@@ -27,9 +32,14 @@
 //! nothing. The mode is stored as `''` when the report has none, because SQLite's `UNIQUE` treats
 //! every `NULL` as distinct and a `NULL` in the key would let a re-fetched report in again.
 //!
-//! **Retention.** Everything is kept: ten thousand reports measured 942,080 bytes on disk, the
-//! dedupe index included (`ten_thousand_reports_stay_near_their_measured_size`), about 94 bytes a
-//! report, so a station heard a thousand times a day adds about 34 MB a year.
+//! **Retention.** Up to [`MAX_REPORTS`] (500,000) are kept; past that the oldest are dropped
+//! as each answer is kept. Ten thousand reports measured 942,080 bytes on disk, the dedupe index
+//! included (`ten_thousand_reports_stay_near_their_measured_size`), about 94 bytes a report, so a
+//! full store is about 47 MB. The bound exists because anyone can upload reports naming the
+//! operator's call (PSK Reporter does not authenticate senders), up to a thousand an answer,
+//! every five minutes. What reads the store is the catch-up sizing, which needs only the newest
+//! report, so dropping the oldest never changes it; and 500,000 is about a year and a half for a
+//! station heard a thousand times a day, many years for a typical one.
 //!
 //! **Why a file of its own** (`heard-reports.sqlite`, beside the settings), not a table in the
 //! log database: for the same reasons as [`crate::callbook_cache`]. The log is the operator's
@@ -58,6 +68,16 @@ pub const MAX_GRID: usize = 10;
 pub const MAX_MODE: usize = 16;
 /// The longest band label kept, bytes.
 pub const MAX_BAND: usize = 8;
+
+/// How far past now a report's time may be and still be kept, seconds.
+pub const MAX_FUTURE_SECS: i64 = 3_600;
+
+/// The most reports kept.
+pub const MAX_REPORTS: usize = 500_000;
+
+// The cap is sized from the measured row (about 94 bytes on disk, see
+// `ten_thousand_reports_stay_near_their_measured_size`): a full store stays under 50 MB.
+const _: () = assert!(MAX_REPORTS * 100 <= 50_000_000);
 
 /// One report of the operator's signal being heard.
 #[derive(Debug, Clone, PartialEq)]
@@ -113,6 +133,8 @@ impl From<rusqlite::Error> for OpenError {
 /// The on-disk store. See the module header.
 pub struct HeardReports {
     conn: Connection,
+    /// The most reports kept ([`MAX_REPORTS`]; smaller in tests).
+    cap: usize,
 }
 
 impl HeardReports {
@@ -161,10 +183,15 @@ impl HeardReports {
                  COMMIT;",
             )?;
         }
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            cap: MAX_REPORTS,
+        })
     }
 
-    /// Keep `reports`, ignoring any already kept. Returns how many were new.
+    /// Keep `reports`, ignoring any already kept. Returns how many were new. The rows are taken
+    /// as given: the time and cap checks are [`Self::record_answer`]'s, the path PSK Reporter's
+    /// answers take.
     pub fn record(&mut self, reports: &[HeardReport]) -> rusqlite::Result<usize> {
         let tx = self.conn.transaction()?;
         let added = insert_reports(&tx, reports)?;
@@ -172,17 +199,29 @@ impl HeardReports {
         Ok(added)
     }
 
-    /// Keep one PSK Reporter answer for `my_call`: its `reports`, and its last sequence number
-    /// as the cursor, in one transaction. If the reports cannot be kept the cursor does not
-    /// move, so the next query asks for them again. Returns how many reports were new.
+    /// Keep one PSK Reporter answer for `my_call` had at `now` (Unix seconds): its `reports`,
+    /// and its last sequence number as the cursor, in one transaction. If the reports cannot be
+    /// kept the cursor does not move, so the next query asks for them again. A report dated more
+    /// than [`MAX_FUTURE_SECS`] past `now` is not kept, and past [`MAX_REPORTS`] the oldest are
+    /// dropped (see the module header). Returns how many reports were new.
     pub fn record_answer(
         &mut self,
         my_call: &str,
         reports: &[HeardReport],
         last_seqno: Option<i64>,
+        now: i64,
     ) -> rusqlite::Result<usize> {
+        let latest = now.saturating_add(MAX_FUTURE_SECS);
+        let current: Vec<HeardReport> = reports
+            .iter()
+            .filter(|r| r.time <= latest)
+            .cloned()
+            .collect();
         let tx = self.conn.transaction()?;
-        let added = insert_reports(&tx, reports)?;
+        let added = insert_reports(&tx, &current)?;
+        if added > 0 {
+            keep_newest(&tx, self.cap)?;
+        }
         if let Some(n) = last_seqno {
             set_cursor(&tx, my_call, n)?;
         }
@@ -210,11 +249,14 @@ impl HeardReports {
         set_cursor(&self.conn, my_call, seqno)
     }
 
-    /// When the newest kept report for `my_call` was made, if any is kept.
-    pub fn newest_time(&self, my_call: &str) -> rusqlite::Result<Option<i64>> {
+    /// When the newest kept report for `my_call` was made, if any is kept, as of `now` (Unix
+    /// seconds). A kept report dated more than [`MAX_FUTURE_SECS`] past `now` (in a file
+    /// written before [`Self::record_answer`] refused them) does not count: it would size the
+    /// catch-up from the future.
+    pub fn newest_time(&self, my_call: &str, now: i64) -> rusqlite::Result<Option<i64>> {
         self.conn.query_row(
-            "SELECT MAX(time) FROM heard_report WHERE my_call = ?1",
-            [call_key(my_call)],
+            "SELECT MAX(time) FROM heard_report WHERE my_call = ?1 AND time <= ?2",
+            params![call_key(my_call), now.saturating_add(MAX_FUTURE_SECS)],
             |r| r.get(0),
         )
     }
@@ -287,6 +329,20 @@ fn insert_reports(tx: &rusqlite::Transaction, reports: &[HeardReport]) -> rusqli
         ])?;
     }
     Ok(added)
+}
+
+/// Drop the oldest reports past `cap`, within `tx`.
+fn keep_newest(tx: &rusqlite::Transaction, cap: usize) -> rusqlite::Result<()> {
+    let count: i64 = tx.query_row("SELECT COUNT(*) FROM heard_report", [], |r| r.get(0))?;
+    let excess = count.saturating_sub(i64::try_from(cap).unwrap_or(i64::MAX));
+    if excess > 0 {
+        tx.execute(
+            "DELETE FROM heard_report WHERE rowid IN
+                 (SELECT rowid FROM heard_report ORDER BY time, rowid LIMIT ?1)",
+            [excess],
+        )?;
+    }
+    Ok(())
 }
 
 /// Set `my_call`'s cursor to `seqno`.
@@ -501,7 +557,7 @@ mod tests {
             s.all().unwrap()[0],
             report(1_000, "K1ABC", "20m", Some(-12.0))
         );
-        assert_eq!(s.newest_time("w1aw").unwrap(), Some(1_300));
+        assert_eq!(s.newest_time("w1aw", 2_000).unwrap(), Some(1_300));
         assert_eq!(s.last_seqno("W1AW").unwrap(), None);
         s.set_last_seqno("W1AW", 74_776_286_880).unwrap();
         s.set_last_seqno("w1aw ", 74_776_300_000).unwrap();
@@ -531,17 +587,20 @@ mod tests {
     fn the_cursor_moves_only_with_the_answer_kept() {
         let mut s = HeardReports::open_in_memory().unwrap();
         let first = [report(1_000, "K1ABC", "20m", None)];
-        assert_eq!(s.record_answer("W1AW", &first, Some(500)).unwrap(), 1);
+        assert_eq!(
+            s.record_answer("W1AW", &first, Some(500), 2_000).unwrap(),
+            1
+        );
         assert_eq!(s.last_seqno("W1AW").unwrap(), Some(500));
         // An answer without a number keeps its reports and leaves the cursor.
-        s.record_answer("W1AW", &[report(1_100, "K1ABC", "20m", None)], None)
+        s.record_answer("W1AW", &[report(1_100, "K1ABC", "20m", None)], None, 2_000)
             .unwrap();
         assert_eq!(s.last_seqno("W1AW").unwrap(), Some(500));
 
         // The reports table gone (as a write that fails): the answer is refused whole.
         s.conn.execute_batch("DROP TABLE heard_report;").unwrap();
         let later = [report(1_300, "VE3XYZ", "20m", None)];
-        assert!(s.record_answer("W1AW", &later, Some(900)).is_err());
+        assert!(s.record_answer("W1AW", &later, Some(900), 2_000).is_err());
         assert_eq!(s.last_seqno("W1AW").unwrap(), Some(500));
     }
 
@@ -549,14 +608,71 @@ mod tests {
     #[test]
     fn newest_time_is_per_call() {
         let mut s = HeardReports::open_in_memory().unwrap();
-        assert_eq!(s.newest_time("W1AW").unwrap(), None);
+        assert_eq!(s.newest_time("W1AW", 3_000).unwrap(), None);
         s.record(&[
             report(1_000, "K1ABC", "20m", None),
             report(2_000, "K1ABC", "20m", None),
         ])
         .unwrap();
-        assert_eq!(s.newest_time("W1AW").unwrap(), Some(2_000));
-        assert_eq!(s.newest_time("K9XYZ").unwrap(), None);
+        assert_eq!(s.newest_time("W1AW", 3_000).unwrap(), Some(2_000));
+        assert_eq!(s.newest_time("K9XYZ", 3_000).unwrap(), None);
+    }
+
+    /// A report dated past now (a forged upload, or a receiver with a wrong clock) is not kept,
+    /// and one already in a file kept by an older build does not count as the newest: either
+    /// would size every later launch's catch-up from the future, down to its floor, and lose
+    /// the day's reports PSK Reporter still holds.
+    #[test]
+    fn a_report_dated_in_the_future_never_sizes_the_catch_up() {
+        let now = 1_800_000_000;
+        let mut s = HeardReports::open_in_memory().unwrap();
+        let ahead = report(now + MAX_FUTURE_SECS + 1, "K1ABC", "20m", None);
+        let skewed = report(now + MAX_FUTURE_SECS, "VE3XYZ", "20m", None);
+        let recent = report(now - 600, "K1ABC", "20m", None);
+        let added = s
+            .record_answer(
+                "W1AW",
+                &[ahead, skewed.clone(), recent.clone()],
+                Some(7),
+                now,
+            )
+            .unwrap();
+        assert_eq!(added, 2, "a report past the skew is not kept");
+        assert_eq!(s.all().unwrap(), vec![recent, skewed]);
+
+        // A file written before this check, holding a report a day ahead.
+        s.conn
+            .execute(
+                "INSERT INTO heard_report VALUES (?1, 'W1AW', 'JA1XYZ', NULL, '20m', NULL, 'FT8', NULL)",
+                [now + 86_400],
+            )
+            .unwrap();
+        assert_eq!(
+            s.newest_time("W1AW", now).unwrap(),
+            Some(now + MAX_FUTURE_SECS),
+            "the newest time ignores a kept report past the skew"
+        );
+    }
+
+    /// The store keeps at most its cap of reports, dropping the oldest first: forged or
+    /// abundant uploads cannot grow the file without bound, and the newest report (what sizes
+    /// the catch-up) is never the one dropped.
+    #[test]
+    fn the_store_keeps_at_most_its_cap_dropping_the_oldest() {
+        let mut s = HeardReports::open_in_memory().unwrap();
+        s.cap = 5;
+        let now = 10_000;
+        for round in 0..4 {
+            let rows: Vec<HeardReport> = (0..3)
+                .map(|i| report(1_000 + round * 10 + i, &format!("K{i}ABC"), "20m", None))
+                .collect();
+            s.record_answer("W1AW", &rows, Some(round), now).unwrap();
+            assert!(s.len().unwrap() <= 5, "round {round}: {}", s.len().unwrap());
+        }
+        let kept: Vec<i64> = s.all().unwrap().iter().map(|r| r.time).collect();
+        assert_eq!(kept, vec![1_021, 1_022, 1_030, 1_031, 1_032]);
+        assert_eq!(s.newest_time("W1AW", now).unwrap(), Some(1_032));
+        assert_eq!(s.last_seqno("W1AW").unwrap(), Some(3));
     }
 
     /// A file written by a newer build is refused, never written under an unknown schema.

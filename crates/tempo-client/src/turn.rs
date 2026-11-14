@@ -435,11 +435,14 @@ struct Pending {
     next: Instant,
 }
 
-/// One peer address's permission, or one peer's channel: asked for, and in place until when.
+/// One peer address's permission, or one peer's channel: asked for, in place until when, and
+/// whether it was let go ([`Turn::keep_only`]): a let-go one is never refreshed, but is kept until
+/// it lapses, because the server still holds it until then.
 #[derive(Default)]
 struct Held {
     asked: bool,
     until: Option<Instant>,
+    retired: bool,
 }
 
 impl Held {
@@ -448,9 +451,10 @@ impl Held {
     }
 
     /// Due to be asked for: never asked, or in place and within a minute of lapsing, with no
-    /// request outstanding.
+    /// request outstanding; never once let go.
     fn due(&self, now: Instant) -> bool {
-        !self.asked
+        !self.retired
+            && !self.asked
             && self
                 .until
                 .is_none_or(|until| until.saturating_duration_since(now) <= EARLY)
@@ -548,6 +552,23 @@ impl Turn {
         }
     }
 
+    /// How many permissions and channels this client keeps at all, let go or not: for a test that
+    /// a let-go one goes once it lapses.
+    #[cfg(test)]
+    pub(crate) fn kept(&self) -> (usize, usize) {
+        (self.permissions.len(), self.channels.len())
+    }
+
+    /// How many permissions and channels this client keeps refreshing (asked for or in place, and
+    /// not let go): for a test of what a restart leaves.
+    #[cfg(test)]
+    pub(crate) fn held(&self) -> (usize, usize) {
+        (
+            self.permissions.values().filter(|h| !h.retired).count(),
+            self.channels.values().filter(|(_, h)| !h.retired).count(),
+        )
+    }
+
     /// The next datagram for the server.
     pub fn poll_transmit(&mut self) -> Option<Vec<u8>> {
         self.out.pop_front()
@@ -559,14 +580,40 @@ impl Turn {
         if self.relayed().is_none() {
             return;
         }
-        self.permissions.entry(peer.ip()).or_default();
-        if self.next_channel <= LAST_CHANNEL {
-            if let std::collections::hash_map::Entry::Vacant(entry) = self.channels.entry(peer) {
-                entry.insert((self.next_channel, Held::default()));
-                self.next_channel += 1;
+        // A peer let go and back again is taken up again as it was: its permission, and its
+        // channel under the same number (the server refuses another while that binding lives).
+        self.permissions.entry(peer.ip()).or_default().retired = false;
+        match self.channels.entry(peer) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                entry.get_mut().1.retired = false
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                if self.next_channel <= LAST_CHANNEL {
+                    entry.insert((self.next_channel, Held::default()));
+                    self.next_channel += 1;
+                }
             }
         }
         self.keep(now);
+    }
+
+    /// ⛔ Only `peers` stay refreshed at the relay: every other permission and channel is let go,
+    /// and what waited for it is dropped. The road calls this on an ICE restart, so a peer's
+    /// restarts cannot grow what the relay keeps renewed. A let-go one is retired, not forgotten:
+    /// never refreshed again, it is kept until it lapses (300 s for a permission, 600 s for a
+    /// channel, as at the server, which goes on relaying by it until then), so its peer's
+    /// datagrams are still heard by the channel number they come under, and a peer that comes
+    /// back ([`Turn::permit`]) takes up the same number again, the only one the server would
+    /// bind it to. So at most what a lifetime of restarts adds is kept, and only the current
+    /// peers are ever renewed.
+    pub fn keep_only(&mut self, peers: &[SocketAddr]) {
+        for (ip, held) in &mut self.permissions {
+            held.retired = !peers.iter().any(|peer| peer.ip() == *ip);
+        }
+        for (peer, (_, held)) in &mut self.channels {
+            held.retired = !peers.contains(peer);
+        }
+        self.waiting.retain(|(peer, _, _)| peers.contains(peer));
     }
 
     /// How a datagram for `peer` goes now: by its channel once bound, by Send indication while its
@@ -798,6 +845,10 @@ impl Turn {
             }
         }
         self.keep(now);
+        // A let-go permission or channel goes once it has lapsed with no request out for it.
+        let gone = |held: &Held| held.retired && !held.asked && !held.live(now);
+        self.permissions.retain(|_, held| !gone(held));
+        self.channels.retain(|_, (_, held)| !gone(held));
         self.waiting
             .retain(|(_, _, since)| now.saturating_duration_since(*since) < WAIT_FOR);
     }
@@ -1153,6 +1204,184 @@ mod tests {
         assert_eq!(wrong.turn.relayed(), None);
         assert_eq!(server.seen().allocations, 1);
         assert_eq!(server.seen().unauthorized, 1);
+    }
+
+    /// ⛔ A channel the road lets go of ([`Turn::keep_only`], on an ICE restart) is still bound at
+    /// the server until it lapses (600 s), and the server relays its peer's datagrams by it: so
+    /// they are still heard, by the number they come under, and a peer that comes back takes
+    /// that same number again (a server refuses another while the binding lives), with no second
+    /// ChannelBind. CONTROL: before the let-go, the peer's datagram arrives by its channel.
+    #[test]
+    fn a_let_go_channel_still_carries_its_peer_and_is_taken_again_by_its_number() {
+        let server = StandIn::start("road", "throwaway-password");
+        let mut client = Pumped::new(server.address, "road", "throwaway-password");
+        assert!(client.until(|c| c.turn.relayed().is_some()));
+        let relayed = client.turn.relayed().unwrap();
+        let a = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let b = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let (a_at, b_at) = (a.local_addr().unwrap(), b.local_addr().unwrap());
+        client.turn.permit(a_at, Instant::now());
+        client.turn.permit(b_at, Instant::now());
+        assert!(client.until(|c| {
+            let now = Instant::now();
+            matches!(c.turn.wrap_for(a_at, now), Some(Wrap::Channel(_)))
+                && matches!(c.turn.wrap_for(b_at, now), Some(Wrap::Channel(_)))
+        }));
+        let Some(Wrap::Channel(b_number)) = client.turn.wrap_for(b_at, Instant::now()) else {
+            unreachable!()
+        };
+        b.send_to(b"before", relayed).unwrap();
+        assert!(
+            client.until(|c| c
+                .delivered
+                .iter()
+                .any(|(p, d)| *p == b_at && d == b"before")),
+            "CONTROL: B's datagram before the let-go"
+        );
+        client.turn.keep_only(&[a_at]);
+        b.send_to(b"after", relayed).unwrap();
+        assert!(
+            client.until(|c| c.delivered.iter().any(|(p, d)| *p == b_at && d == b"after")),
+            "B's datagram, relayed by its still-bound channel, was dropped"
+        );
+        // B comes back: the same number, and the server is asked for no other.
+        client.turn.permit(b_at, Instant::now());
+        assert_eq!(
+            client.turn.wrap_for(b_at, Instant::now()),
+            Some(Wrap::Channel(b_number))
+        );
+        assert_eq!(
+            server
+                .seen()
+                .channels
+                .iter()
+                .filter(|(_, peer)| *peer == b_at)
+                .count(),
+            1,
+            "one ChannelBind for B: {:?}",
+            server.seen().channels
+        );
+    }
+
+    /// Two peers through the relay on two addresses (so each has a permission of its own), both
+    /// bound by a channel; then B let go ([`Turn::keep_only`] with A alone). Returns the client,
+    /// the stand-in, A, B, and when B was let go.
+    fn b_let_go() -> (Pumped, StandIn, SocketAddr, SocketAddr, Instant) {
+        let server = StandIn::start("road", "throwaway-password");
+        let mut client = Pumped::new(server.address, "road", "throwaway-password");
+        assert!(client.until(|c| c.turn.relayed().is_some()));
+        let a_at = UdpSocket::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let b_at = UdpSocket::bind("127.0.0.2:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        client.turn.permit(a_at, Instant::now());
+        client.turn.permit(b_at, Instant::now());
+        assert!(client.until(|c| {
+            let now = Instant::now();
+            matches!(c.turn.wrap_for(a_at, now), Some(Wrap::Channel(_)))
+                && matches!(c.turn.wrap_for(b_at, now), Some(Wrap::Channel(_)))
+        }));
+        let let_go = Instant::now();
+        client.turn.keep_only(&[a_at]);
+        (client, server, a_at, b_at, let_go)
+    }
+
+    /// Rounds at the one moment `at` (the client's clock moved on, the stand-in's not), until
+    /// `done`, for up to two seconds of real time.
+    fn at_moment(client: &mut Pumped, at: Instant, done: impl Fn(&Pumped) -> bool) -> bool {
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(2) {
+            client.round(at);
+            if done(client) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// ⛔ What a road lets go of is never renewed: past the points where a permission and a
+    /// channel are refreshed, the server is asked to refresh A's alone, never B's (or a peer's
+    /// restarts would grow what the relay keeps alive). CONTROL: A's are refreshed at each.
+    #[test]
+    fn a_let_go_permission_and_channel_are_never_refreshed() {
+        let (mut client, server, a_at, b_at, let_go) = b_let_go();
+        let (permissions_before, channels_before) = (
+            server.seen().permissions.len(),
+            server.seen().channels.len(),
+        );
+        // The permission's refresh point: A's permission is asked again.
+        let at = let_go + PERMISSION_LIFETIME - EARLY / 2;
+        assert!(
+            at_moment(&mut client, at, |_| server.seen().permissions
+                [permissions_before..]
+                .contains(&a_at.ip())),
+            "CONTROL: A's permission was not refreshed"
+        );
+        let _ = at_moment(&mut client, at, |_| false);
+        // The channel's refresh point: A's channel is bound again.
+        let at = let_go + CHANNEL_LIFETIME - EARLY / 2;
+        assert!(
+            at_moment(&mut client, at, |_| server.seen().channels
+                [channels_before..]
+                .iter()
+                .any(|(_, peer)| *peer == a_at)),
+            "CONTROL: A's channel was not refreshed"
+        );
+        // A little longer at that moment, for any request for B to reach the stand-in.
+        let _ = at_moment(&mut client, at, |_| false);
+        let seen = server.seen();
+        assert!(
+            !seen.permissions[permissions_before..].contains(&b_at.ip()),
+            "B's permission was refreshed: {:?}",
+            &seen.permissions[permissions_before..]
+        );
+        assert!(
+            !seen.channels[channels_before..]
+                .iter()
+                .any(|(_, peer)| *peer == b_at),
+            "B's channel was refreshed: {:?}",
+            &seen.channels[channels_before..]
+        );
+    }
+
+    /// ⛔ What a road lets go of is kept only until it lapses: past a channel's lifetime, B's
+    /// permission and channel are gone from the client, and A's (renewed) are still there. So
+    /// restarts never grow what is kept past a lifetime's worth.
+    #[test]
+    fn a_let_go_permission_and_channel_go_once_they_lapse() {
+        let (mut client, server, a_at, _b_at, let_go) = b_let_go();
+        assert_eq!(
+            client.turn.kept(),
+            (2, 2),
+            "premise: B's are kept while they live"
+        );
+        // A's renewed on the way, as a road's current peer's are.
+        for lifetime in [PERMISSION_LIFETIME, CHANNEL_LIFETIME] {
+            let channels = server.seen().channels.len();
+            assert!(at_moment(
+                &mut client,
+                let_go + lifetime - EARLY / 2,
+                |_| {
+                    lifetime == PERMISSION_LIFETIME
+                        || server.seen().channels[channels..]
+                            .iter()
+                            .any(|(_, peer)| *peer == a_at)
+                }
+            ));
+        }
+        assert!(
+            at_moment(
+                &mut client,
+                let_go + CHANNEL_LIFETIME + Duration::from_secs(1),
+                |c| c.turn.kept() == (1, 1)
+            ),
+            "(permissions, channels) kept past B's lifetime: {:?}",
+            client.turn.kept()
+        );
     }
 
     /// ★ A peer through the relay: a permission for its address and a channel for it are asked

@@ -50,10 +50,14 @@ const HEALTH_DEADLINE_MS = 2000
 /** The room `health` reaches. Never a station's: a station's room is named by its id, always a UUID. */
 const HEALTH_ROOM = 'health'
 /** THE STREAM'S RELAY, bounded. A credential lasts an hour at most, and
- *  never past the entitlement; an account may be minted six an hour, whichever of its devices, stations
- *  and guests asks: the station's account pays for the relay, so it is the account that is counted. */
+ *  never past the entitlement. The station's account pays for every mint at its stations, a guest's
+ *  too, so it is the account that is counted: six an hour for its own devices, whichever of them and
+ *  its stations asks, and a separate three an hour for all the guests it has invited, together. So
+ *  the account's cost stays bounded (nine an hour at most, whoever asks), and no guest can use up
+ *  the owner's six. */
 const RELAY_TTL_MS = 3600000
 const RELAY_PER_HOUR = 6
+const GUEST_RELAY_PER_HOUR = 3
 const HOUR_MS = 3600000
 /** THE NOTICE ADDRESS, CHANGED (account/notice/*). A code to a new address lasts half an hour and takes
  *  five tries; an account is sent four codes a day; a proven address takes over after two days. */
@@ -885,10 +889,10 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     // The stream's relay, for exactly the browser a ticket is for, past exactly the same checks.
     // It renews no approval: a page asks for a relay as a stream starts, and that is not use. The
     // credential lasts an hour, never past the entitlement that a stream needs, and the account is
-    // minted six an hour at most (`relay`).
+    // minted six an hour at most for its own devices, and three for its guests' (`relay`).
     if (verb === 'turn') {
       await rate(env, `turn:${row.id}:${current.id}`, now, 12)
-      return json({ iceServers: await relay(env, row.account_id, plan, now) })
+      return json({ iceServers: await relay(env, row.account_id, plan, now, role !== 'owner') })
     }
     if (verb === 'renew') {
       const response = await room(env, row.id, 'renew', { access: policy,
@@ -1344,7 +1348,7 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
     // The relay a browser's stream has, for this device's two internet roads. Each entry is a username
     // and a password, which is what the client core's TURN client takes.
     await rate(env, `turn:${row.id}:${current.id}`, now, 12)
-    return json({ iceServers: await relay(env, row.account_id, plan, now) })
+    return json({ iceServers: await relay(env, row.account_id, plan, now, role !== 'owner') })
   }
   if (verb === 'renew') {
     const response = await room(env, row.id, 'pipe-renew', { access: policy, identity: identity(current), entitlement: plan })
@@ -1419,11 +1423,13 @@ function hsts(request: Request, response: Response): Response {
 }
 
 /** A relay credential for a device of a station whose account is `accountId`, already admitted as a
- *  ticket or a pipe would be: counted against that account's hour first (refused `tryLater` past it,
- *  before the provider is asked), lasting `RELAY_TTL_MS` or what is left of `plan`, whichever is less,
- *  and recorded in the account's month once the provider has minted it. */
-async function relay(env: RemoteEnv, accountId: string, plan: AccountEntitlement, now: number): Promise<Awaited<ReturnType<typeof relayServers>>> {
-  await rate(env, `turn-account:${accountId}`, now, RELAY_PER_HOUR, HOUR_MS)
+ *  ticket or a pipe would be: counted against that account's hour first, its own or, for a `guest`'s
+ *  device, its guests' (refused `tryLater` past it, before the provider is asked), lasting
+ *  `RELAY_TTL_MS` or what is left of `plan`, whichever is less, and recorded in the account's month
+ *  once the provider has minted it. */
+async function relay(env: RemoteEnv, accountId: string, plan: AccountEntitlement, now: number, guest: boolean): Promise<Awaited<ReturnType<typeof relayServers>>> {
+  await rate(env, guest ? `turn-guests:${accountId}` : `turn-account:${accountId}`, now,
+    guest ? GUEST_RELAY_PER_HOUR : RELAY_PER_HOUR, HOUR_MS)
   const seconds = Math.ceil(Math.min(RELAY_TTL_MS, plan.expiresAt - now) / 1000)
   const servers = await relayServers(env, seconds * 1000)
   await env.DB.prepare(`INSERT INTO relay_usage(account_id,month,mints,granted_seconds,updated_at) VALUES(?,?,1,?,?)

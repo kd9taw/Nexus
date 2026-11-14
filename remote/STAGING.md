@@ -211,8 +211,10 @@ direct first.
 
 **What the relay is allowed to cost.** A credential lasts an hour, or less when the
 account's internet use ends sooner, and only an approved device on an account with internet use gets
-one. An account is minted six an hour, counting every device and guest of its stations, browser or
-computer; the seventh is refused `tryLater` before Cloudflare is asked, and the page streams direct.
+one. An account is minted six an hour for its own devices at its stations, browser or computer, and
+a separate three an hour for all the guests it has invited, together, so a guest never uses up the
+owner's six (nine an hour at most, whoever asks); one past either is refused `tryLater` before
+Cloudflare is asked, and the page streams direct.
 Each mint is counted in `relay_usage`, a row per account and month (`YYYY-MM`, UTC): `mints` and
 `granted_seconds`, the seconds those credentials were minted for. The account is the station's owner,
 whose plan pays, even when a guest asked. There is no admin route that reads it (the admin API is one
