@@ -3710,6 +3710,13 @@ fn handoff_if_switched<B: AudioBackend>(
         if let Some((_, _, k)) = state.rtty_keyer.as_ref() {
             k.clear();
         }
+        // …and the serial CW keyline: the word already handed to its thread would otherwise key
+        // out in full on the radio just switched away from (`key_up_tune_keyer` above covers only
+        // a tune). The keyer's stop lets the key up within one 8 ms slice and drops the rest.
+        #[cfg(feature = "serial")]
+        if let Some((_, _, sk)) = state.serial_keyer.as_ref() {
+            sk.clear();
+        }
     }
     // ⚠️ NEVER SWAP A STILL-KEYED RIG INTO THE BACKGROUND. The unkey above is one best-effort try,
     // and `Rig::ptt` clears `keyed` only on a SUCCESSFUL unkey — so `rig.keyed` still true here
@@ -7976,18 +7983,21 @@ impl RadioLoop {
     /// The keyer a tune in the CW section keys its carrier through (#500), opened BEFORE the
     /// radio is keyed so a keyer that will not open refuses the tune with no PTT asserted.
     /// `Ok(None)`: no such keyer (not the CW section, the CAT or soundcard keyer, or no port), and
-    /// the tune is the tone, as before. `Err`: the open failed, in the words the CW send gives it.
+    /// the tune is the tone, as before. `Err`: the open failed, in the words the CW send gives it —
+    /// or the keyline is the very line serial PTT keys (`Engine::cw_keyline_ptt_conflict`), refused
+    /// as the CW send refuses it, before the keyer opens and before PTT.
     fn open_tune_keyer(
         &mut self,
         engine: &Arc<Mutex<Engine>>,
     ) -> Result<Option<TuneKeyer>, String> {
-        let (in_cw, winkeyer, serial) = {
+        let (in_cw, winkeyer, serial, same_line) = {
             let eng = engine_lock(engine);
             (
                 eng.settings().operating_mode == tempo_app::settings::OperatingMode::Cw,
                 eng.cw_winkeyer_port(),
                 eng.cw_serial_key_port()
                     .map(|p| (p, eng.cw_serial_key_line())),
+                eng.cw_keyline_ptt_conflict(),
             )
         };
         if !in_cw {
@@ -7997,6 +8007,8 @@ impl RadioLoop {
         {
             let (kind, err) = if let Some(port) = &winkeyer {
                 (TuneKeyer::WinKeyer, self.ensure_winkeyer(port))
+            } else if let (Some(_), Some(why)) = (&serial, same_line) {
+                (TuneKeyer::Serial, Some(why.to_string()))
             } else if let Some((port, line)) = &serial {
                 (TuneKeyer::Serial, self.ensure_serial_keyer(port, line))
             } else {
@@ -8012,7 +8024,7 @@ impl RadioLoop {
         }
         #[cfg(not(feature = "serial"))]
         {
-            let _ = (winkeyer, serial); // only the serial build keys these
+            let _ = (winkeyer, serial, same_line); // only the serial build keys these
             Ok(None)
         }
     }
@@ -13208,6 +13220,20 @@ impl RadioLoop {
             #[cfg(feature = "serial")]
             if serial_key.is_none() {
                 self.serial_keyer = None;
+            }
+            // ⛔ A KEY LINE THAT WILL NOT COME UP IS SAID, not left silent: the keying thread keeps
+            // retrying ([`crate::serial_keyer`]), and on a break-in radio a key stuck down is a
+            // carrier with no reason on screen. Said every tick while it lasts (a word's own
+            // keyer-error write would otherwise clear it); the log line is the thread's, once.
+            #[cfg(feature = "serial")]
+            if let Some((port, _, sk)) = self.serial_keyer.as_ref() {
+                if sk.key_up_failing() {
+                    let why = cw_key_stuck_warning(port);
+                    let mut eng = engine_lock(engine);
+                    if eng.cw_keyer_error().as_deref() != Some(why.as_str()) {
+                        eng.set_cw_keyer_error(Some(why));
+                    }
+                }
             }
             if abort {
                 // ⛔ THE STOPS THAT ASK THE RADIO NOTHING GO FIRST. Each keyer Nexus drives itself
@@ -20860,6 +20886,17 @@ impl CatProbe {
 
 type RigOpen = (Rig, Option<CatDaemon>, CatProbe);
 
+/// The CW pane's warning while the serial keyline's key-up keeps failing
+/// ([`crate::serial_keyer::SerialKeyer::key_up_failing`]).
+#[cfg(feature = "serial")]
+fn cw_key_stuck_warning(port: &str) -> String {
+    format!(
+        "Serial keyline on {port}: the key may be stuck down — the port is not responding to \
+         key-up. Nexus keeps trying. Check the interface and its cable, or turn the radio's \
+         break-in off."
+    )
+}
+
 /// The [`PttMode`] a transport keys with — mirrors `open_rig`'s ptt_method dispatch. A monitor
 /// opens each background rig read-only (`PttMode::Vox`); when the handoff ADOPTS that rig as the
 /// active radio, it must be switched to this real mode or `ptt()` silently no-ops (the "TX dead on
@@ -21566,6 +21603,7 @@ mod tests {
     mod contest_status;
     mod cut_sites;
     mod cw_cat_text;
+    mod cw_shared_port;
     mod cw_speed_match;
     mod cw_stop;
     mod cw_tune_keyer;
