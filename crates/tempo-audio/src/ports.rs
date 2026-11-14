@@ -352,29 +352,12 @@ pub fn heal_tty_twin_with(port: &str, cu_twin_exists: impl Fn(&str) -> bool) -> 
     cu_twin_exists(&cu).then_some(cu)
 }
 
-/// Do two stored port names name the SAME serial port, whatever their spelling? For the keying
-/// decisions that must not be escaped by a spelling: the Hardware-handshake refusal's "RTS keys
-/// this radio" fact compares a CAT port with a CW keyline port and with other radios' PTT ports,
-/// and the same port may be stored as `com5`/`COM5`, `\\.\COM5` (the Win32 device path), or a
-/// mac `/dev/tty.*` and its `/dev/cu.*` callout twin (one is healed at open, the other is not).
-/// Case-insensitive, as every port comparison in Nexus already is; an empty name matches nothing.
-/// Over-matching is the safe direction here: it can only refuse a launch, never key one.
-pub fn same_port(a: &str, b: &str) -> bool {
-    fn norm(p: &str) -> String {
-        let p = p.trim();
-        let p = match p.get(..4) {
-            Some(head) if head.eq_ignore_ascii_case("\\\\.\\") => &p[4..],
-            _ => p,
-        };
-        let p = p.to_ascii_lowercase();
-        match p.strip_prefix("/dev/tty.") {
-            Some(rest) => format!("/dev/cu.{rest}"),
-            None => p,
-        }
-    }
-    let (a, b) = (norm(a), norm(b));
-    !a.is_empty() && a == b
-}
+/// Do two stored port names name the SAME serial port, whatever their spelling (`com5`/`COM5`,
+/// `\\.\COM5`, a mac `/dev/tty.*` and its `/dev/cu.*` twin)? The one rule lives in tempo-app
+/// ([`tempo_app::serial_port::same_port`]) so the engine's keyline guards read ports exactly as
+/// this crate opens and refuses them; re-exported here for the Hardware-handshake refusal and the
+/// shared control-line handle.
+pub use tempo_app::serial_port::same_port;
 
 /// The open-time heal for a STORED serial-port name: on macOS, substitute the `/dev/cu.*`
 /// twin for a saved `/dev/tty.*` when the twin is present ([`heal_tty_twin_with`]); identity

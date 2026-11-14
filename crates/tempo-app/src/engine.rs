@@ -28338,7 +28338,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// Whether serial PTT keys control line `line` ("dtr"/"rts") of `port`: the PTT method is that
     /// line, on the dedicated PTT port when set, else the CAT port (the radio loop's
-    /// `Transport::ptt_port`). Port names match ignoring ASCII case, as Windows COM names do.
+    /// `Transport::ptt_port`). Port names match by [`crate::serial_port::same_port`]: case, the
+    /// spaces around a name, a Win32 `\\.\` prefix and a mac `/dev/tty.*` against its `/dev/cu.*`
+    /// twin (one device; serial PTT opens the `cu.*` name) change nothing. The shared handle reads
+    /// ports by the same rule, so a guard can never call two names apart that open as one port.
     ///
     /// ⛔ ONE ANSWER FOR BOTH KEYLINE GUARDS — the FSK one ([`Self::rtty_tx_gate`]) and the CW one
     /// ([`Self::cw_keyline_ptt_conflict`]). The keyers and serial PTT share one handle per port
@@ -28354,7 +28357,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         } else {
             self.settings.ptt_serial_port.trim()
         };
-        ptt_port.eq_ignore_ascii_case(port.trim()) && ptt == line.trim().to_ascii_lowercase()
+        crate::serial_port::same_port(ptt_port, port) && ptt == line.trim().to_ascii_lowercase()
     }
 
     /// Uppercase + filter to the ITA2 charset, frame it on new lines (`rtty_over_newlines`), cap
@@ -40802,6 +40805,79 @@ mod tests {
         let said = e.cw_keyer_error().unwrap_or_default();
         assert!(said.contains(SAME_LINE), "and says why: {said:?}");
         assert_eq!(e.poll_cw_one(), None, "and dropped, not held");
+    }
+
+    /// ⛔ THE KEYLINE GUARDS SEE THROUGH A PORT'S SPELLING, as the shared handle does
+    /// (`tempo_audio::control_line::SharedControlLines`): a mac `/dev/tty.*` and its `/dev/cu.*`
+    /// twin are one device (serial PTT opens the `cu.*` name), a Win32 `\\.\COM7` is `COM7`, and
+    /// case and spaces around a name change nothing. FSK or the CW keyline on the PTT line of the
+    /// "same" port typed another way is refused, as typed the same way; another port is not.
+    #[test]
+    fn keyline_guards_see_through_port_spellings() {
+        for (scene, key_port, ptt_port, refused) in [
+            (
+                "tty key, cu PTT",
+                "/dev/tty.usbserial-A1",
+                "/dev/cu.usbserial-A1",
+                true,
+            ),
+            (
+                "cu key, tty PTT",
+                "/dev/cu.usbserial-A1",
+                "/dev/tty.usbserial-A1",
+                true,
+            ),
+            (
+                "case",
+                "/dev/TTY.USBSERIAL-A1",
+                "/dev/cu.usbserial-a1",
+                true,
+            ),
+            (
+                "spaces",
+                " /dev/tty.usbserial-A1 ",
+                "/dev/cu.usbserial-A1  ",
+                true,
+            ),
+            ("Win32 device path", "\\\\.\\COM7", " com7", true),
+            (
+                "another device",
+                "/dev/tty.usbserial-A1",
+                "/dev/cu.usbserial-B2",
+                false,
+            ),
+        ] {
+            // FSK, through the RTTY gate.
+            let mut e = Engine::new("W9XYZ", "EN61", 0);
+            let mut s = e.settings().clone();
+            s.rtty_backend = "fsk".into();
+            s.rtty_fsk_port = key_port.into();
+            s.rtty_fsk_line = "dtr".into();
+            s.ptt_method = "dtr".into();
+            s.ptt_serial_port = ptt_port.into();
+            e.apply_settings(s);
+            e.set_operating_mode("rtty", false);
+            let fsk = e.rtty_send_text("CQ");
+            if refused {
+                let err = fsk.unwrap_err();
+                assert!(err.contains("same control line"), "FSK, {scene}: {err}");
+            } else {
+                assert_eq!(fsk, Ok(()), "FSK, {scene}");
+            }
+            // The CW keyline.
+            let mut s = Engine::new("KD9TAW", "EN52", 0).settings().clone();
+            s.cw_key_port = key_port.into();
+            s.cw_key_line = "dtr".into();
+            s.ptt_method = "dtr".into();
+            s.ptt_serial_port = ptt_port.into();
+            let mut e = Engine::with_settings(s);
+            e.set_cw_keyer("serial", 600.0);
+            assert_eq!(
+                e.cw_keyline_ptt_conflict().is_some(),
+                refused,
+                "CW, {scene}"
+            );
+        }
     }
 
     #[test]
