@@ -25,7 +25,7 @@ const api = vi.hoisted(() => ({
 vi.mock('../api', () => api)
 
 import { LogTools } from './LogTools'
-import { POLL_MS, useCallbookUpdateEnd } from './LogCallbookUpdate'
+import { POLL_MS, updateOneFromCallbook, useCallbookUpdateEnd } from './LogCallbookUpdate'
 
 let toasts: Toast[] = []
 let unsubscribe = () => {}
@@ -382,5 +382,57 @@ describe('update from callbook', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
     const apply = await screen.findByRole('button', { name: 'Update up to 2 contacts' })
     expect((apply as HTMLButtonElement).disabled).toBe(true)
+  })
+})
+
+// THE LOGBOOK ROW'S "Update from callbook": the tab's own update on one contact — the same preview
+// and start, handed that contact's id, and its end reported by the Logbook as any update's is.
+describe('update one contact from the callbook', () => {
+  const one: CallbookUpdatePreview = { ...preview, ids: ['row-1'], selected: 1, calls: 1, kept: 0, toLookUp: 1, couldChange: 1 }
+
+  it('previews and starts exactly that contact, then follows it to its end', async () => {
+    api.callbookUpdatePreview.mockResolvedValue(one)
+    api.callbookUpdateStart.mockResolvedValue(undefined)
+    const follow = vi.fn()
+    expect(await updateOneFromCallbook('row-1', 'W9ABC', follow)).toBe(true)
+    expect(api.callbookUpdatePreview).toHaveBeenCalledWith({ ids: ['row-1'] })
+    expect(api.callbookUpdateStart).toHaveBeenCalledWith(['row-1'], 1)
+    expect(follow).toHaveBeenCalledTimes(1)
+    expect(toasts.find((x) => x.message === 'Looking up W9ABC in the callbook…')?.kind).toBe('info')
+  })
+
+  it('with no callbook set up, says so and starts nothing', async () => {
+    api.callbookUpdatePreview.mockResolvedValue({ ...one, configured: false })
+    const follow = vi.fn()
+    expect(await updateOneFromCallbook('row-1', 'W9ABC', follow)).toBe(false)
+    expect(api.callbookUpdateStart).not.toHaveBeenCalled()
+    expect(follow).not.toHaveBeenCalled()
+    expect(toasts.find((x) => x.message === 'Set up QRZ or HamQTH in Settings ▸ Logbook ▸ Callbook lookups first.')?.kind).toBe('error')
+  })
+
+  it('a contact with nothing left to fill starts nothing', async () => {
+    api.callbookUpdatePreview.mockResolvedValue({ ...one, couldChange: 0 })
+    expect(await updateOneFromCallbook('row-1', 'W9ABC', vi.fn())).toBe(false)
+    expect(api.callbookUpdateStart).not.toHaveBeenCalled()
+  })
+
+  it('driving another station, it starts nothing', async () => {
+    setRemoteStation(true)
+    api.callbookUpdatePreview.mockResolvedValue(one)
+    expect(await updateOneFromCallbook('row-1', 'W9ABC', vi.fn())).toBe(false)
+    expect(api.callbookUpdateStart).not.toHaveBeenCalled()
+  })
+
+  it('a call the callbook does not know: a notice naming it, not an error and not "nothing changed"', async () => {
+    const end: CallbookUpdateEnd = {
+      stop: 'done', error: null, qrzSaid: null, qrzSkipped: false, unknown: ['W9ABC'], notLookedUp: 0, made: null,
+    }
+    api.callbookUpdateTakeEnd.mockResolvedValueOnce(end)
+    // The toast list outlives a test: only the toasts this end raised are read.
+    const before = new Set(toasts.map((x) => x.id))
+    open()
+    await waitFor(() => expect(toasts.find((x) => x.message === '1 call is not in the callbook: W9ABC')?.kind).toBe('info'))
+    const raised = toasts.filter((x) => !before.has(x.id))
+    expect(raised.map((x) => [x.kind, x.message])).toEqual([['info', '1 call is not in the callbook: W9ABC']])
   })
 })
