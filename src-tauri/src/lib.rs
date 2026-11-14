@@ -19216,8 +19216,8 @@ mod contest_session_tests {
 
     /// ⛔ A BACKUP NEVER SETS THE STATION'S TRANSMIT SAFETY: a file handed to the operator that
     /// raises the licence class, turns the TX watchdog off, lifts the power ceilings or the tune
-    /// limit, or turns the SWR stop off restores everything else and keeps each of those as the
-    /// station has it ([`STATION_TX_SAFETY`]), in its settings and in a saved profile it carries.
+    /// limit, turns the SWR stop off, or lets a program on TCI or the JS8 API transmit restores
+    /// everything else and keeps each of those as the station has it ([`STATION_TX_SAFETY`]), in its settings and in a saved profile it carries.
     #[test]
     fn a_restore_keeps_the_stations_licence_class_and_transmit_safety() {
         use tempo_app::settings::LicenseClass;
@@ -19238,6 +19238,9 @@ mod contest_session_tests {
             s.max_power_am = Some(0.2);
             s.parsec_presence_stop = true;
             s.remote_stream = false;
+            s.tci_server_tx = false;
+            s.js8_api_tcp_accept = false;
+            s.js8_api_udp_accept = false;
             engine_lock(&engine).apply_restored_settings(s);
         }
         let before = engine_lock(&engine).settings().clone();
@@ -19261,6 +19264,9 @@ mod contest_session_tests {
             "maxPowerAm": 1.0,
             "parsecPresenceStop": false,
             "remoteStream": true,
+            "tciServerTx": true,
+            "js8ApiTcpAccept": true,
+            "js8ApiUdpAccept": true,
         });
         let mut profiles: serde_json::Value = serde_json::from_str(
             v["uiState"][crate::command_dispatch::PROFILES]
@@ -19317,6 +19323,12 @@ mod contest_session_tests {
             ),
             (Some(0.5), Some(0.4), Some(0.3), Some(0.2), true, false),
             "the power ceilings, the Parsec stop and the stream are the station's"
+        );
+        assert_eq!(
+            (s.tci_server_tx, s.js8_api_tcp_accept, s.js8_api_udp_accept),
+            (false, false, false),
+            "whether programs on TCI may transmit and whether JS8 API requests are answered are \
+             the station's"
         );
         // The station's saved profile of that name sets none of them: a key it leaves out is one
         // a profile load keeps as the station has it (`mergeProfile`).
@@ -22799,12 +22811,19 @@ const STATION_PATHS: [&str; 3] = ["tqslPath", "js8SoundFiles", "wsjtxUdpAcceptOt
 /// - the Parsec presence stop, which stops transmitting when the remote session drops;
 /// - the Remote stream, which lets a browser holding station control drive this window, transmit
 ///   included: a file can never turn it on, as it can never let other computers' WSJT-X requests
-///   in.
+///   in;
+/// - whether a program on the TCI server may transmit (`tciServerTx`) and whether Nexus answers a
+///   program's JS8 API requests, which can send a message (`js8ApiTcpAccept`, `js8ApiUdpAccept`):
+///   each lets another program key the transmitter once the operator arms it, so a file can never
+///   turn one on. All three are off by default, so a new computer has them off. The CAT broker's
+///   "a program may key PTT" (`catBrokerPtt`) is not here: it is ON by default, so keeping the
+///   station's value would land it on at a new computer even when the operator's own backup says
+///   off.
 ///
 /// The cost: a backup restored onto a new computer brings none of these, and the operator sets
 /// them in Settings there (the restore says so). The export still writes them, so an older build
 /// restores the file as it always did.
-const STATION_TX_SAFETY: [&str; 13] = [
+const STATION_TX_SAFETY: [&str; 16] = [
     "licenseClass",
     tempo_app::settings::LICENSE_CLASS_EXACT_KEY,
     "txWatchdogMin",
@@ -22818,6 +22837,9 @@ const STATION_TX_SAFETY: [&str; 13] = [
     "maxPowerAm",
     "parsecPresenceStop",
     "remoteStream",
+    "tciServerTx",
+    "js8ApiTcpAccept",
+    "js8ApiUdpAccept",
 ];
 
 /// The name a bundle exported from afar carries, `true`, beside its settings: the station's paths
