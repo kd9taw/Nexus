@@ -66,6 +66,10 @@ mod imp {
     /// How often the keying thread retries a key-up whose write failed ([`keyer_loop`]).
     const KEY_UP_RETRY_MS: u64 = 20;
 
+    /// Failed key-ups in a row (about 100 ms of them) before the thread says the key may be stuck
+    /// ([`SerialKeyer::key_up_failing`]): one refused write that the next retry clears says nothing.
+    const KEY_UP_STUCK_TRIES: u32 = 5;
+
     /// What the keying thread is handed: a word to key at a speed, or a tune's key-down (#500)
     /// held until a stop or its own limit, whichever comes first.
     enum Job {
@@ -89,18 +93,50 @@ mod imp {
     /// not go out is tried again every [`KEY_UP_RETRY_MS`] before the thread does anything else,
     /// until it goes out or the keyer is dropped (`closing`) — whose holder then tries once more
     /// as it lets go ([`SharedControlLines`]'s drop).
+    ///
+    /// After [`KEY_UP_STUCK_TRIES`] failures in a row it raises `failing` (the radio loop puts that
+    /// in the CW pane, [`SerialKeyer::key_up_failing`]) and logs ONE warning; a key-up that goes
+    /// out lowers it, and a later run of failures logs once more. Never a line per retry.
+    ///
+    /// ⚠️ ONLY A KEY THAT WENT DOWN IS HELD TO COMING UP (`down`: a key-down write went out and no
+    /// key-up has since). Some ports refuse every control-line write (some virtual and Bluetooth
+    /// ports, a pty): their key never went down, so a failed key-up there is tried once, as it
+    /// always was, and neither wedges the thread nor says a key is stuck that never keyed.
     fn keyer_loop(
         mut set: impl FnMut(bool) -> bool,
         rx: mpsc::Receiver<(Job, u64)>,
         stops: Arc<AtomicU64>,
         closing: Arc<AtomicBool>,
+        failing: Arc<AtomicBool>,
     ) {
-        let key_up = |set: &mut dyn FnMut(bool) -> bool| {
-            while !set(false) && !closing.load(Ordering::SeqCst) {
+        let key_up = |set: &mut dyn FnMut(bool) -> bool, down: &mut bool| {
+            let mut tries = 0;
+            while !set(false) {
+                if !*down {
+                    return; // the key never went down: nothing is held, one try as ever
+                }
+                tries += 1;
+                if tries == KEY_UP_STUCK_TRIES {
+                    failing.store(true, Ordering::SeqCst);
+                    tempo_core::applog::warn(
+                        "tx",
+                        "CW serial keyline: the key-up write keeps failing — the key may be stuck \
+                         down; retrying until it goes out",
+                    );
+                }
+                if closing.load(Ordering::SeqCst) {
+                    return;
+                }
                 thread::sleep(Duration::from_millis(KEY_UP_RETRY_MS));
             }
+            *down = false;
+            if failing.swap(false, Ordering::SeqCst) {
+                tempo_core::applog::info("tx", "CW serial keyline: the key-up went out");
+            }
         };
-        key_up(&mut set); // idle: key up
+        // Whether a key-down went out with no key-up since: the key is held to coming up.
+        let mut down = false;
+        key_up(&mut set, &mut down); // idle: key up
 
         // Sleep `ms` in 8 ms slices; false the moment a stop lands.
         let wait = |ms: u64, stop: u64| {
@@ -121,11 +157,11 @@ mod imp {
             }
             match job {
                 Job::Word(text, wpm) => {
-                    for (down, ms) in tempo_core::cw::morse_key_events(&text, wpm) {
-                        if down {
-                            set(true);
+                    for (key_down, ms) in tempo_core::cw::morse_key_events(&text, wpm) {
+                        if key_down {
+                            down |= set(true);
                         } else {
-                            key_up(&mut set);
+                            key_up(&mut set, &mut down);
                         }
                         if !wait(ms as u64, stop) {
                             break;
@@ -136,13 +172,13 @@ mod imp {
                 // limit is this thread's own, so a loop that never comes back still lets the
                 // key up, as a WinKeyer's 100 s tune watchdog does.
                 Job::Hold(limit) => {
-                    set(true);
+                    down |= set(true);
                     wait(limit.as_millis() as u64, stop);
                 }
             }
-            key_up(&mut set); // key up between jobs, and at once on a stop
+            key_up(&mut set, &mut down); // key up between jobs, and at once on a stop
         }
-        key_up(&mut set); // channel closed (keyer dropped) → key up + exit
+        key_up(&mut set, &mut down); // channel closed (keyer dropped) → key up + exit
     }
 
     /// An open serial keyline keyer with its own keying thread.
@@ -152,6 +188,8 @@ mod imp {
         stops: Arc<AtomicU64>,
         /// Set by the drop: the thread stops retrying a failed key-up and exits ([`keyer_loop`]).
         closing: Arc<AtomicBool>,
+        /// Raised by the thread while a key-up keeps failing ([`Self::key_up_failing`]).
+        failing: Arc<AtomicBool>,
         handle: Option<thread::JoinHandle<()>>,
     }
 
@@ -192,12 +230,17 @@ mod imp {
             let (tx, rx) = mpsc::channel();
             let stops = Arc::new(AtomicU64::new(0));
             let closing = Arc::new(AtomicBool::new(false));
-            let (stops_thread, closing_thread) = (stops.clone(), closing.clone());
-            let handle = thread::spawn(move || keyer_loop(set, rx, stops_thread, closing_thread));
+            let failing = Arc::new(AtomicBool::new(false));
+            let (stops_thread, closing_thread, failing_thread) =
+                (stops.clone(), closing.clone(), failing.clone());
+            let handle = thread::spawn(move || {
+                keyer_loop(set, rx, stops_thread, closing_thread, failing_thread)
+            });
             Self {
                 tx: Some(tx),
                 stops,
                 closing,
+                failing,
                 handle: Some(handle),
             }
         }
@@ -218,6 +261,12 @@ mod imp {
             }
         }
 
+        /// Whether the key line's key-up has been failing for a while ([`keyer_loop`]): the key
+        /// may be stuck down, and the thread is still retrying.
+        pub fn key_up_failing(&self) -> bool {
+            self.failing.load(Ordering::SeqCst)
+        }
+
         /// Abort NOW: key up and drop any queued words (Stop TX).
         pub fn clear(&self) {
             self.stops.fetch_add(1, Ordering::SeqCst);
@@ -232,6 +281,102 @@ mod imp {
             if let Some(h) = self.handle.take() {
                 let _ = h.join();
             }
+        }
+    }
+
+    /// A key line whose key-up NEVER goes out (the port died under it). The thread retries, paced,
+    /// and says so; the keyer's drop still returns.
+    #[cfg(test)]
+    mod dead_port_tests {
+        use super::SerialKeyer;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::{mpsc, Arc};
+        use std::time::{Duration, Instant};
+
+        /// ⛔ THE DROP RETURNS ON A DEAD PORT, and the retries are paced (~50 a second), not a hot
+        /// spin. Without the drop's `closing` the retry never ends and the join hangs the radio
+        /// loop: a port change, a backend change or app shutdown would wedge on a dead adapter.
+        #[test]
+        fn a_dead_port_neither_hangs_the_drop_nor_spins() {
+            let tries = Arc::new(AtomicUsize::new(0));
+            let t = Arc::clone(&tries);
+            let keyer = SerialKeyer::keying_checked(move |down| {
+                if !down {
+                    t.fetch_add(1, Ordering::SeqCst);
+                }
+                down // a key-down "works"; every key-up fails, forever
+            });
+            keyer.hold(Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(1050)); // ~1 s of failing key-ups
+            let n = tries.load(Ordering::SeqCst);
+            assert!((5..=80).contains(&n), "paced retries, ~50/s: {n}");
+            assert!(
+                keyer.key_up_failing(),
+                "the keyer says the key may be stuck"
+            );
+            let (done, wait) = mpsc::channel();
+            std::thread::spawn(move || {
+                drop(keyer);
+                let _ = done.send(());
+            });
+            assert!(
+                wait.recv_timeout(Duration::from_secs(2)).is_ok(),
+                "the drop returns although the key-up never goes out"
+            );
+        }
+
+        /// A port that refuses EVERY control-line write (some virtual and Bluetooth ports, a pty):
+        /// its key never went down, so a refused key-up is tried once as it always was. The thread
+        /// is not wedged on it (it still takes each word), and says no key is stuck.
+        #[test]
+        fn a_port_that_refuses_every_write_neither_wedges_nor_says_stuck() {
+            let downs = Arc::new(AtomicUsize::new(0));
+            let d = Arc::clone(&downs);
+            let keyer = SerialKeyer::keying_checked(move |down| {
+                if down {
+                    d.fetch_add(1, Ordering::SeqCst);
+                }
+                false
+            });
+            keyer.send("E", 60);
+            keyer.send("E", 60);
+            let start = Instant::now();
+            while downs.load(Ordering::SeqCst) < 2 && start.elapsed() < Duration::from_secs(2) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(downs.load(Ordering::SeqCst), 2, "both words were taken");
+            std::thread::sleep(Duration::from_millis(200));
+            assert!(
+                !keyer.key_up_failing(),
+                "no key went down: none is said stuck"
+            );
+        }
+
+        /// One refused key-up that the next retry clears says nothing; a run of them raises the
+        /// stuck flag, and the key-up going out lowers it again.
+        #[test]
+        fn the_stuck_flag_rises_on_a_run_of_failures_and_falls_when_the_key_comes_up() {
+            let refuse = Arc::new(AtomicBool::new(false));
+            let r = Arc::clone(&refuse);
+            let keyer = SerialKeyer::keying_checked(move |down| down || !r.load(Ordering::SeqCst));
+            keyer.hold(Duration::from_secs(60));
+            std::thread::sleep(Duration::from_millis(50));
+            refuse.store(true, Ordering::SeqCst);
+            keyer.clear();
+            let start = Instant::now();
+            while !keyer.key_up_failing() && start.elapsed() < Duration::from_secs(2) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(keyer.key_up_failing(), "a run of failed key-ups is said");
+            refuse.store(false, Ordering::SeqCst);
+            let start = Instant::now();
+            while keyer.key_up_failing() && start.elapsed() < Duration::from_secs(2) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(
+                !keyer.key_up_failing(),
+                "the key-up went out: no longer said"
+            );
         }
     }
 

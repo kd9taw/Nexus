@@ -285,6 +285,20 @@ fn a_cw_tune_on_the_ptt_line_or_a_dead_keyline_port_is_refused_with_no_ptt() {
     );
 }
 
+/// How many times the key has gone down on `port` (DTR's rising edges).
+fn key_downs(port: &str) -> usize {
+    let log = fake_ports::log(port);
+    let mut last = false;
+    let mut n = 0;
+    for s in log {
+        if s.dtr && !last {
+            n += 1;
+        }
+        last = s.dtr;
+    }
+    n
+}
+
 /// A message scene: serial PTT has keyed once already (an over in another mode), so the rig holds
 /// the port — as it does for the rest of the session — when CW is sent on the keyline.
 fn message_scene(port: &str, text: &str) -> (Arc<Mutex<Engine>>, RadioLoop, MockBackend, Rig, f64) {
@@ -337,4 +351,69 @@ fn a_cw_message_keys_on_the_port_serial_ptt_holds_and_every_ending_leaves_both_d
     let until = t + 40.0;
     step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, until);
     assert_both_down(port, true, "Halt TX");
+
+    // ★ A radio switch mid-message (the dual-radio handoff). The handoff takes the engine's CW
+    // abort itself, so the loop's own Stop never sees it: the handoff must stop the keyline as it
+    // stops the WinKeyer and the FSK keyer, or the word already handed over keys out in full on
+    // the radio the operator has just switched away from.
+    let port = "tempo-test-cw-shared-msg-switch";
+    let (engine, mut state, mut backend, mut rig, _) = message_scene(port, "0000 0000");
+    let r1 = engine.lock().unwrap().add_radio();
+    let mut last_active = engine.lock().unwrap().settings().active_radio;
+    assert_ne!(last_active, r1, "control: a second radio to switch to");
+    engine.lock().unwrap().set_active_radio(r1);
+    let pool: MonitorPool = Arc::new(MonitorConnections::new(Vec::new()));
+    let pending = std::sync::atomic::AtomicBool::new(false);
+    handoff_if_switched(
+        &engine,
+        &pool,
+        &mut rig,
+        &mut backend,
+        &mut state,
+        &mut last_active,
+        &pending,
+    );
+    let s = wait_for(port, |s| !s.dtr);
+    assert!(!s.dtr, "a radio switch lets the key up: {s:?}");
+    let keyed = key_downs(port);
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(
+        key_downs(port),
+        keyed,
+        "nothing keys after the switch (60 ms elements: 400 ms is several of them): {:?}",
+        fake_ports::log(port)
+    );
+    assert_both_down(port, true, "a radio switch mid-message");
+}
+
+/// ⛔ A KEY LINE THAT WILL NOT COME UP IS SAID IN THE CW PANE. The keying thread keeps retrying a
+/// key-up that fails; the radio loop puts its stuck flag in the CW keyer's warning line, and keeps
+/// it there while it lasts, so the operator sees why a break-in radio may still be transmitting.
+#[test]
+fn a_key_up_that_keeps_failing_is_said_in_the_cw_pane() {
+    let port = "tempo-test-cw-stuck-said";
+    let (engine, mut state, mut backend, mut rig) = scene(port, |_| {});
+    let keyer = crate::serial_keyer::SerialKeyer::keying_checked(|down| down); // key-ups fail
+    keyer.hold(Duration::from_millis(10)); // the key goes down; at its limit it will not come up
+    state.serial_keyer = Some((port.into(), "dtr".into(), keyer));
+    let start = std::time::Instant::now();
+    while !state.serial_keyer.as_ref().unwrap().2.key_up_failing()
+        && start.elapsed() < Duration::from_secs(2)
+    {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    step(&mut state, &engine, &mut backend, &mut rig, 100.0);
+    let said = engine.lock().unwrap().cw_keyer_error().unwrap_or_default();
+    assert!(
+        said.contains("stuck down") && said.contains(port),
+        "the CW pane says the key may be stuck: {said:?}"
+    );
+    // A word's own keyer-error write may clear the line; the next tick says it again.
+    engine.lock().unwrap().set_cw_keyer_error(None);
+    step(&mut state, &engine, &mut backend, &mut rig, 140.0);
+    let said = engine.lock().unwrap().cw_keyer_error().unwrap_or_default();
+    assert!(
+        said.contains("stuck down"),
+        "still said while it lasts: {said:?}"
+    );
 }
