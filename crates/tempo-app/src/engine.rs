@@ -28532,12 +28532,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// carried encoder, so a shift code costs its character the air time it really takes —
     /// at 7.5 bit times a code, which is the whole of `fsk_schedule`'s arithmetic. A
     /// character therefore reaches the transcript when its last stop bit has gone out.
+    /// The over opens on the LTRS preamble the loop keys first (`BaudotEncoder::preamble`),
+    /// which prints nothing but takes its air time ahead of the first character.
     pub fn rtty_over_keyed(&mut self, text: &str, baud: f64, now_ms: f64) {
         // Whatever the last over was, the air has moved on to this one: settle it first.
         self.rtty_over_advance(now_ms);
         let char_ms = crate::keyboard::RTTY.char_ms(baud);
         let mut enc = tempo_core::rtty::BaudotEncoder::new(true);
         let mut codes = Vec::new();
+        enc.preamble(&mut codes);
         let (mut chars, mut ends_ms) = (Vec::new(), Vec::new());
         for c in text.chars() {
             let before = codes.len();
@@ -39116,19 +39119,20 @@ mod tests {
             "nothing has finished keying the instant it starts"
         );
 
-        // Five character times later — CR, LF, C, Q, space — exactly those five are ours in
-        // the transcript, and the TX line says five have gone.
-        e.rtty_over_advance(t0 + 5.0 * char_ms + 1.0);
+        // Seven character times later — the two-LTRS preamble, then CR, LF, C, Q, space —
+        // exactly those five characters are ours in the transcript, and the TX line says five
+        // have gone.
+        e.rtty_over_advance(t0 + 7.0 * char_ms + 1.0);
         assert_eq!(rtty_sent(&e), "\r\nCQ ");
         assert_eq!(e.rtty_state().tx_keyed, 5);
         // …and not a character early: a millisecond short of the sixth stop bit, still five.
-        e.rtty_over_advance(t0 + 6.0 * char_ms - 1.0);
+        e.rtty_over_advance(t0 + 8.0 * char_ms - 1.0);
         assert_eq!(rtty_sent(&e), "\r\nCQ ");
 
         // Stop TX mid-over: the loop consumes the abort and flushes at the cut.
         e.rtty_stop();
         assert!(e.take_rtty_abort());
-        e.rtty_over_cut(t0 + 7.0 * char_ms + 1.0);
+        e.rtty_over_cut(t0 + 9.0 * char_ms + 1.0);
         assert_eq!(
             rtty_sent(&e),
             "\r\nCQ TE",
@@ -39158,7 +39162,8 @@ mod tests {
     /// The echo keeps the AIR's time, not the text's. "K1 5" is seven codes for four
     /// characters: K is one, `1` is FIGS+1, the space leaves figures with LTRS+SPACE (USOS),
     /// and `5` is FIGS+5. A per-character clock would show the `5` after four character
-    /// times, while it is still going out.
+    /// times, while it is still going out. (Every count is after the over's two-LTRS
+    /// preamble.)
     #[test]
     fn the_echo_keeps_the_air_time_of_every_shift_code() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
@@ -39173,6 +39178,21 @@ mod tests {
             (6.0, "K1 "),
             (7.0, "K1 5"),
         ] {
+            e.rtty_over_advance((2.0 + codes) * char_ms + 0.5);
+            assert_eq!(rtty_sent(&e), want, "after {codes} code times");
+        }
+    }
+
+    /// The echo waits out the LTRS preamble. Every over opens on two LTRS (fldigi's
+    /// `TTY_LTRS` default) before its first character, so the first character's stop bit
+    /// goes out three code times in, not one — an echo that ignored the preamble would show
+    /// each character two code times before the air sent it.
+    #[test]
+    fn the_echo_waits_out_the_ltrs_preamble() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let char_ms = crate::keyboard::RTTY.char_ms(45.45);
+        e.rtty_over_keyed("AB", 45.45, 0.0);
+        for (codes, want) in [(1.0, ""), (2.0, ""), (3.0, "A"), (4.0, "AB")] {
             e.rtty_over_advance(codes * char_ms + 0.5);
             assert_eq!(rtty_sent(&e), want, "after {codes} code times");
         }
@@ -39210,7 +39230,7 @@ mod tests {
         e.rtty_send_text("QRZ").unwrap(); // type-ahead: queued behind the first
         let first = e.poll_rtty_one().unwrap();
         e.rtty_over_keyed(&first, 45.45, 0.0);
-        e.rtty_over_advance(char_ms + 1.0);
+        e.rtty_over_advance(3.0 * char_ms + 1.0); // the two-LTRS preamble, then CR
         let st = e.rtty_state();
         // Each over on its own lines (`rtty_over_newlines`): the queued one is joined on its
         // own line break, not on a space.
@@ -39244,7 +39264,7 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.set_operating_mode("rtty", false);
         e.rtty_over_keyed("AB", 45.45, 0.0);
-        e.rtty_over_advance(char_ms + 1.0);
+        e.rtty_over_advance(3.0 * char_ms + 1.0); // the two-LTRS preamble, then A
         assert_eq!(
             rtty_sent(&e),
             "A",

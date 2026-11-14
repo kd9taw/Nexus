@@ -17,6 +17,11 @@
 //! Diddle: an idle transmitter sends LTRS ([`BaudotEncoder::diddle`]) instead
 //! of dead carrier; shift codes never print on decode, so idle fill is
 //! invisible by construction.
+//!
+//! Preamble: every transmission opens on [`PREAMBLE_LTRS`] LTRS codes
+//! ([`BaudotEncoder::preamble`]), so a far decoder left in figures by whatever
+//! it copied last prints our first characters as letters. fldigi does the same
+//! (`rtty::tx_process`, `progdefaults.TTY_LTRS`, default 2).
 
 /// 5-bit codes with fixed meaning in both shift planes.
 pub const NUL: u8 = 0x00;
@@ -27,6 +32,13 @@ pub const CR: u8 = 0x08;
 pub const FIGS: u8 = 0x1B;
 /// Shift to the letters plane; also the idle ("diddle") fill code.
 pub const LTRS: u8 = 0x1F;
+
+/// LTRS codes at the head of every transmission — fldigi's count: its
+/// `rtty::tx_process` sends `progdefaults.TTY_LTRS` of them when a transmission
+/// starts, and `TTY_LTRS` defaults to 2 (`configuration.h`, "0 to 10, number of
+/// LTRS bytes send at beginning of xmt"). Matched, so a far station hears the
+/// same opening from us as from fldigi.
+pub const PREAMBLE_LTRS: usize = 2;
 
 /// Letters plane, indexed by 5-bit code. `None` = NUL and the shift codes
 /// (handled by the decoder, never printed).
@@ -212,6 +224,24 @@ impl BaudotEncoder {
         LTRS
     }
 
+    /// The start-of-transmission preamble: [`PREAMBLE_LTRS`] LTRS codes, which
+    /// land the far decoder in letters whatever plane it was left in — and this
+    /// encoder with it, so the text that follows emits no LTRS of its own.
+    pub fn preamble(&mut self, out: &mut Vec<u8>) {
+        out.extend([LTRS; PREAMBLE_LTRS]);
+        self.shift = Shift::Letters;
+    }
+
+    /// Encode a whole transmission: the [`Self::preamble`], then `s`.
+    pub fn encode_over(&mut self, s: &str) -> Vec<u8> {
+        let mut out = Vec::with_capacity(PREAMBLE_LTRS + s.len() + 8);
+        self.preamble(&mut out);
+        for c in s.chars() {
+            self.push_char(c, &mut out);
+        }
+        out
+    }
+
     /// Append the code(s) for `c` (upper-cased; chars with no ITA2 mapping are
     /// dropped, as fldigi drops them), inserting shift codes as needed.
     pub fn push_char(&mut self, c: char, out: &mut Vec<u8>) {
@@ -329,6 +359,46 @@ mod tests {
         // An over that opens on a line break starts in letters and stays there.
         let codes = BaudotEncoder::new(true).encode("\r\nCQ");
         assert_eq!(codes, vec![CR, LF, 0x0E, 0x17]);
+    }
+
+    /// ⭐ EVERY OVER OPENS ON fldigi's LTRS PREAMBLE. A far decoder left in figures (the
+    /// last over it copied ended on a report, or a burst of noise read as FIGS) would print
+    /// the start of ours as figures. fldigi's `rtty::tx_process` sends
+    /// `progdefaults.TTY_LTRS` LTRS codes when a transmission starts — default 2 — and so do
+    /// we, ahead of everything else, the over's CR LF included.
+    #[test]
+    fn an_over_opens_on_the_ltrs_preamble_and_then_needs_no_ltrs() {
+        assert_eq!(PREAMBLE_LTRS, 2, "fldigi's TTY_LTRS default");
+        for usos in [true, false] {
+            // Letters text: the preamble, CR LF, then the letters with no third LTRS — the
+            // preamble already put both ends in letters.
+            let mut enc = BaudotEncoder::new(usos);
+            assert_eq!(
+                enc.encode_over("\r\nCQ"),
+                vec![LTRS, LTRS, CR, LF, 0x0E, 0x17],
+                "usos={usos}"
+            );
+            // Figures text still shifts once, after the preamble.
+            let mut enc = BaudotEncoder::new(usos);
+            assert_eq!(
+                enc.encode_over("5"),
+                vec![LTRS, LTRS, FIGS, 0x10],
+                "usos={usos}"
+            );
+            assert_eq!(enc.shift(), Shift::Figures, "usos={usos}");
+            // An encoder still in figures from an earlier over lands in letters on the
+            // preamble — and the letters after it need no LTRS of their own.
+            let mut out = Vec::new();
+            enc.preamble(&mut out);
+            assert_eq!(out, vec![LTRS, LTRS], "usos={usos}");
+            assert_eq!(enc.shift(), Shift::Letters, "usos={usos}");
+            assert_eq!(enc.encode("E"), vec![0x01], "usos={usos}");
+            // A decoder left in figures prints the over as sent.
+            let mut dec = BaudotDecoder::new(usos);
+            dec.decode(FIGS);
+            let codes = BaudotEncoder::new(usos).encode_over("RY 599");
+            assert_eq!(decode_all(&mut dec, &codes), "RY 599", "usos={usos}");
+        }
     }
 
     #[test]

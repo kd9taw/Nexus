@@ -3929,6 +3929,39 @@ struct RttyStream {
     /// Re-asserted only if the unkey has actually run underneath us
     /// (`tx_until_ms == None`), which is the case that needs it.
     keyed: bool,
+    /// The transmission's LTRS preamble ([`tempo_core::rtty::baudot::PREAMBLE_LTRS`]) has
+    /// not gone out yet: true from construction until the first chunk is encoded, so it
+    /// rides that chunk and never a later keystroke. A rebuild (a settings change re-keys
+    /// mid-over) is a new transmission and opens on a preamble of its own.
+    preamble_due: bool,
+}
+
+impl RttyStream {
+    fn new(afsk: crate::rtty_afsk::AfskConfig, key_cfg: (f64, u32, bool, u32, bool)) -> Self {
+        Self {
+            enc: tempo_core::rtty::BaudotEncoder::new(true),
+            afsk: crate::rtty_afsk::AfskStream::new(afsk),
+            key_cfg,
+            keyed: false,
+            preamble_due: true,
+        }
+    }
+
+    /// This tick's ITA2 codes — the ONE place a latched over's code stream is made, for the
+    /// AFSK and the FSK backend alike. Characters go through the CARRIED encoder, so LTRS/FIGS
+    /// shift state spans the whole latched over exactly as it spans a one-shot message; a
+    /// diddle is LTRS, the standard RTTY idle. The first chunk opens on the preamble.
+    fn codes(&mut self, tick: &RttyStreamTick) -> Vec<u8> {
+        let mut codes = Vec::new();
+        if std::mem::take(&mut self.preamble_due) {
+            self.enc.preamble(&mut codes);
+        }
+        match tick {
+            RttyStreamTick::Text(t) => codes.extend(self.enc.encode(t)),
+            _ => codes.push(self.enc.diddle()),
+        }
+        codes
+    }
 }
 
 /// The live continuous-TX ("latched") PSK stream — the generator state that
@@ -13841,37 +13874,33 @@ impl RadioLoop {
                     if self.rtty_stream.as_ref().map(|s| s.key_cfg) != Some(key_cfg) {
                         let (mark, space) =
                             tempo_core::rtty::tone_pair(center_hz, shift as f32, reverse);
-                        self.rtty_stream = Some(RttyStream {
-                            enc: tempo_core::rtty::BaudotEncoder::new(true),
-                            afsk: crate::rtty_afsk::AfskStream::new(crate::rtty_afsk::AfskConfig {
+                        self.rtty_stream = Some(RttyStream::new(
+                            crate::rtty_afsk::AfskConfig {
                                 mark_hz: mark,
                                 space_hz: space,
                                 baud,
                                 ..crate::rtty_afsk::AfskConfig::default()
-                            }),
+                            },
                             key_cfg,
-                            keyed: false,
-                        });
+                        ));
                     }
                     // Assert the rig and PTT once per stream, not once per chunk (see
                     // `RttyStream::keyed`) — but always after an unkey has run under us.
                     let need_key = self.tx_until_ms.is_none()
                         || !self.rtty_stream.as_ref().is_some_and(|s| s.keyed);
-                    // Characters → ITA2 codes through the CARRIED encoder, so LTRS/FIGS
-                    // shift state spans the whole latched over exactly as it spans a
-                    // one-shot message. Diddle is LTRS, the standard RTTY idle: it
-                    // holds the far end's decoder in sync and lands the shift plane in
-                    // letters, and it is what the far-end operator hears between words.
+                    // Characters → ITA2 codes through the CARRIED encoder (`RttyStream::codes`).
+                    // Diddle is LTRS, the standard RTTY idle: it holds the far end's decoder
+                    // in sync and lands the shift plane in letters, and it is what the far-end
+                    // operator hears between words.
                     //
                     // Rendered inside a scope that ENDS the borrow of the generator,
                     // because the keying below needs `self` (the rig assert, the PTT
                     // publish, the keyer handle) while the generator lives on `self`.
                     let (bits, chunk_ms, buf) = {
                         let st = self.rtty_stream.as_mut().expect("just built");
-                        let codes = match &stream_tick {
-                            RttyStreamTick::Text(t) => st.enc.encode(t),
-                            _ => vec![st.enc.diddle()],
-                        };
+                        // The first chunk also carries the LTRS preamble (`RttyStream::codes`);
+                        // `chunk_ms` below counts it, so the hold pays for its air time.
+                        let codes = st.codes(&stream_tick);
                         let bits = tempo_core::rtty::code_bits(&codes);
                         // Multiplied out in the ORIGINAL association ((n × frame) ×
                         // rate) rather than n × char_ms: float multiplication does
@@ -14040,9 +14069,11 @@ impl RadioLoop {
             if let Some(text) = msg {
                 // Text → ITA2 codes → the over-the-air bit stream (5 data bits per
                 // char, LSB first). The SAME framed stream drives both backends, so
-                // the schedule's total is the true on-air duration in either.
+                // the schedule's total is the true on-air duration in either — the
+                // LTRS preamble the over opens on (`encode_over`, fldigi's two LTRS,
+                // ahead of the engine's CR LF) included, in the busy time and the hold.
                 let mut enc = tempo_core::rtty::BaudotEncoder::new(true);
-                let bits = tempo_core::rtty::code_bits(&enc.encode(&text));
+                let bits = tempo_core::rtty::code_bits(&enc.encode_over(&text));
                 let sched = crate::rtty_fsk::fsk_schedule(&bits, baud);
                 if sched.total_ms > 0.0 {
                     // Hold the next queued message until this one has fully keyed
@@ -36370,13 +36401,15 @@ mod tests {
         );
         assert_eq!(st.tx_keyed, 0);
 
-        // Three stop bits out (CR, LF, C end at 3 × 165 ms): exactly those three are ours.
+        // Three stop bits out (CR, LF, C end at 5 × 165 ms, behind the two-LTRS preamble):
+        // exactly those three are ours. Stepped one whole 20 ms tick past that stop bit, so a
+        // tick lands after it wherever it falls on the grid (the fourth ends 165 ms later).
         step_until(
             &mut state,
             &mut backend,
             &mut rig,
             &mut t,
-            100.0 + 3.0 * char_ms + 5.0,
+            100.0 + 5.0 * char_ms + 20.0,
         );
         assert_eq!(
             rtty_sent(&engine),
@@ -36416,7 +36449,7 @@ mod tests {
             &mut backend,
             &mut rig,
             &mut t,
-            5_000.0 + 9.0 * char_ms,
+            5_000.0 + 11.0 * char_ms, // the preamble's two codes + the eight of "\r\nTEST\r\n"
         );
         assert_eq!(rtty_sent(&engine), "\r\nC\r\nTEST\r\n");
         let st = engine.lock().unwrap().rtty_state();
@@ -37390,6 +37423,233 @@ mod tests {
                 "{name}: audio kept being fed after the stop"
             );
         }
+    }
+
+    // ---- The LTRS preamble: every RTTY transmission opens on fldigi's two LTRS ----
+    //
+    // A far decoder left in figures prints the start of an over as figures unless the over
+    // puts it back in letters first. fldigi's `rtty::tx_process` sends `TTY_LTRS` LTRS codes
+    // (default 2) when a transmission starts; these pin that ours does too, on what actually
+    // reaches the transmitter — the AFSK audio and the FSK keyline — and that the extra air
+    // time is paid for in the hold.
+
+    /// The codes an over keys: the two-LTRS preamble, then `text` from a letters encoder.
+    fn preamble_then(text: &str) -> Vec<u8> {
+        let mut codes = vec![tempo_core::rtty::baudot::LTRS; 2];
+        codes.extend(tempo_core::rtty::BaudotEncoder::new(true).encode(text));
+        codes
+    }
+
+    /// The AFSK samples a one-shot over of `codes` renders to (the length is what matters:
+    /// it is fixed by the bit count and the baud, not the tones).
+    fn one_shot_samples(codes: &[u8]) -> usize {
+        crate::rtty_afsk::afsk_char_samples(
+            &tempo_core::rtty::code_bits(codes),
+            &crate::rtty_afsk::AfskConfig::default(),
+        )
+        .len()
+    }
+
+    /// An engine in RTTY with TX armed and `text` queued as a one-shot over.
+    fn rtty_one_shot_engine(text: &str) -> Arc<Mutex<Engine>> {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("rtty", false); // arms TX, as a manual mode does
+            e.rtty_send_text(text).unwrap();
+        }
+        engine
+    }
+
+    #[test]
+    fn a_one_shot_afsk_over_keys_the_ltrs_preamble_first_and_holds_ptt_for_it() {
+        let engine = rtty_one_shot_engine("RY");
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 100.0);
+        assert!(rig.keyed, "premise: the over keyed");
+        // On the air: LTRS LTRS, then the over's own line break, the text, the closing one.
+        let codes = preamble_then("\r\nRY\r\n");
+        assert_eq!(
+            backend.played.len(),
+            one_shot_samples(&codes),
+            "the over that reached the transmitter is not LTRS LTRS + the framed text"
+        );
+        // The hold follows the encoded length: busy until the last stop bit + one character
+        // of clear air, PTT until that + the tail.
+        let char_ms = 7.5 * (1000.0 / 45.45);
+        let sched = crate::rtty_fsk::fsk_schedule(&tempo_core::rtty::code_bits(&codes), 45.45);
+        assert!(
+            (state.rtty_busy_until - (100.0 + sched.total_ms + char_ms)).abs() < 1e-6,
+            "busy until {} — the preamble's air time is not in it",
+            state.rtty_busy_until
+        );
+        assert_eq!(
+            state.tx_until_ms,
+            Some(state.rtty_busy_until + crate::slot::TX_TAIL_MS)
+        );
+    }
+
+    /// The same preamble on the true-FSK keyline, read off the line itself: start bit at
+    /// space (asserted, normal sense), data bits LSB first, stop bit at mark (released).
+    #[cfg(feature = "serial")]
+    #[test]
+    fn a_one_shot_fsk_over_keys_the_ltrs_preamble_first_and_holds_ptt_for_it() {
+        let port = "tempo-test-fsk-ltrs-preamble";
+        crate::control_line::fake_ports::install(port);
+        let engine = fsk_engine(port, false, None);
+        engine.lock().unwrap().rtty_send_text("RY").unwrap();
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 100.0);
+        assert!(rig.keyed, "premise: the over keyed");
+        let codes = preamble_then("\r\nRY\r\n");
+        let bits = tempo_core::rtty::code_bits(&codes);
+        let char_ms = 7.5 * (1000.0 / 45.45);
+        let sched = crate::rtty_fsk::fsk_schedule(&bits, 45.45);
+        assert!(
+            (state.rtty_busy_until
+                - (100.0 + sched.total_ms + char_ms + crate::rtty_fsk::LEAD_IN_MS))
+                .abs()
+                < 1e-6,
+            "busy until {} — the preamble's air time is not in it",
+            state.rtty_busy_until
+        );
+        assert_eq!(
+            state.tx_until_ms,
+            Some(state.rtty_busy_until + crate::slot::TX_TAIL_MS)
+        );
+        fsk_settle(port);
+        // The keyline's shape, repeats collapsed, from the released (mark) line.
+        let mut want = vec![false];
+        let mut level = |asserted: bool| {
+            if want.last() != Some(&asserted) {
+                want.push(asserted);
+            }
+        };
+        for code in bits.chunks(5) {
+            level(true); // start bit: space
+            for &mark in code {
+                level(!mark);
+            }
+            level(false); // stop bit: mark
+        }
+        assert_eq!(
+            dtr_runs(port),
+            want,
+            "the keyline did not key LTRS LTRS first"
+        );
+    }
+
+    #[test]
+    fn a_latched_rtty_stream_opens_on_the_preamble_and_its_keystrokes_do_not() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("rtty", false);
+            e.set_rtty_latched(true).unwrap();
+            e.rtty_type("RY").unwrap();
+        }
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 100.0);
+        assert!(rig.keyed, "premise: the latch keyed");
+        // The stream's FIRST chunk carries the preamble, ahead of the typed text.
+        let mut afsk = crate::rtty_afsk::AfskStream::new(crate::rtty_afsk::AfskConfig::default());
+        let first = afsk
+            .char_chunk(&tempo_core::rtty::code_bits(&preamble_then("RY")), false)
+            .len();
+        assert_eq!(
+            backend.played.len(),
+            first,
+            "the latched transmission did not open on LTRS LTRS + the typed text"
+        );
+    }
+
+    /// A keystroke typed into a running stream keys its own codes only — the preamble is
+    /// the TRANSMISSION's, sent once, and a new generator (a new transmission) sends it again.
+    #[test]
+    fn only_a_new_rtty_stream_sends_the_preamble() {
+        use tempo_core::rtty::baudot::LTRS;
+        let (_engine, mut state, _backend, _rig, _t) = latched_rtty_scene();
+        let st = state.rtty_stream.as_mut().expect("premise: streaming");
+        let ry = tempo_core::rtty::BaudotEncoder::new(true).encode("RY");
+        assert_eq!(st.codes(&RttyStreamTick::Text("RY".into())), ry);
+        assert_eq!(st.codes(&RttyStreamTick::Diddle), vec![LTRS]);
+        let mut fresh = RttyStream::new(crate::rtty_afsk::AfskConfig::default(), st.key_cfg);
+        assert_eq!(
+            fresh.codes(&RttyStreamTick::Text("RY".into())),
+            preamble_then("RY")
+        );
+        assert_eq!(fresh.codes(&RttyStreamTick::Text("RY".into())), ry);
+        let mut fresh = RttyStream::new(crate::rtty_afsk::AfskConfig::default(), st.key_cfg);
+        assert_eq!(
+            fresh.codes(&RttyStreamTick::Diddle),
+            vec![LTRS; 3],
+            "a stream that opens idle still opens on the preamble"
+        );
+    }
+
+    /// ⛔ Stop cuts the preamble like any other part of the over: mid-preamble, the audio is
+    /// flushed, PTT drops in the tick, nothing reaches the transcript — and the next over
+    /// starts with a preamble of its own, not the rest of the cut one.
+    #[test]
+    fn stop_mid_preamble_drops_it_with_the_over() {
+        let engine = rtty_one_shot_engine("RY");
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 100.0);
+        assert!(rig.keyed, "premise: the over keyed");
+        // 40 ms in: still inside the first LTRS (one character is 165 ms).
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 140.0);
+        engine.lock().unwrap().rtty_stop();
+        let flushes = backend.flush_calls;
+        let next = t;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, next);
+        assert!(!rig.keyed, "Stop mid-preamble left the rig keyed");
+        assert!(
+            backend.flush_calls > flushes,
+            "the preamble's audio was not flushed"
+        );
+        assert_eq!(state.tx_until_ms, None, "the TX hold survived the Stop");
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 3_000.0);
+        assert_eq!(rtty_sent(&engine), "", "a cut over reached the transcript");
+        // The next over keys a whole preamble of its own.
+        engine.lock().unwrap().rtty_send_text("RY").unwrap();
+        let before = backend.played.len();
+        let next = t;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, next);
+        assert_eq!(
+            backend.played.len() - before,
+            one_shot_samples(&preamble_then("\r\nRY\r\n"))
+        );
+
+        // A latched stream stopped mid-preamble: the generator dies with it, and the next
+        // latch opens on a preamble again.
+        let (engine, mut state, mut backend, mut rig, mut t) = latched_rtty_scene();
+        engine.lock().unwrap().rtty_stop();
+        let next = t;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, next);
+        assert!(
+            !rig.keyed && state.rtty_stream.is_none(),
+            "premise: stopped"
+        );
+        engine.lock().unwrap().set_rtty_latched(true).unwrap();
+        let before = backend.played.len();
+        let next = t;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, next);
+        let mut afsk = crate::rtty_afsk::AfskStream::new(crate::rtty_afsk::AfskConfig::default());
+        let want = afsk
+            .char_chunk(
+                &tempo_core::rtty::code_bits(&[tempo_core::rtty::baudot::LTRS; 3]),
+                false,
+            )
+            .len();
+        assert_eq!(
+            backend.played.len() - before,
+            want,
+            "the re-latched stream did not open on the preamble (+ its first diddle)"
+        );
     }
 
     #[test]
