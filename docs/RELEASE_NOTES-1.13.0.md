@@ -682,10 +682,10 @@ its own bench.
   switch they had, and the radio's own ATU button is unaffected.
 
 - **A directed CQ typed the wrong way round is refused, not quietly turned into a plain CQ.**
-  Typing something like `CQ KD9WES POTA` into the Tx6 box used to put a bare `CQ KD9WES EN61` on
+  Typing something like `CQ W9ABC POTA` into the Tx6 box used to put a bare `CQ W9ABC EN61` on
   the air while the box went on showing what you typed. Nexus now transmits nothing and tells you
   why, and where it can work out what you meant from your own words it names the form that would
-  work — `CQ POTA KD9WES`. It does not rewrite the box for you and it does not change what a CQ
+  work — `CQ POTA W9ABC`. It does not rewrite the box for you and it does not change what a CQ
   may look like: the message that goes on the air is always the one on the screen.
 
 - **"Hide worked" stops hiding park and summit activators.** If you had ever worked a callsign —
