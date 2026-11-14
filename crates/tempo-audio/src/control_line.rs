@@ -152,10 +152,10 @@ pub fn open_control_line_port(port: &str) -> std::io::Result<Box<dyn serialport:
 ///
 /// Names match by [`crate::ports::same_port`], the rule the engine's keyline guards read ports
 /// by (`Engine::serial_ptt_keys`): case, the spaces around a name, a Win32 `\\.\` prefix and a
-/// mac `/dev/tty.*` against its `/dev/cu.*` twin change nothing. ⛔ The twins are one device, and
-/// serial PTT opens the healed `cu.*` name while a keyer opens the name as stored: matched by case
-/// alone, the second holder opened the device afresh, and a fresh open idles both lines under the
-/// first holder's key. A holder's lock survives a panicked holder (poison is ignored): an unkey
+/// mac `/dev/tty.*` against its `/dev/cu.*` twin change nothing. ⛔ The twins are one device: every
+/// holder opens the healed name now ([`Self::open`]), but a twin left unhealed (its cu node absent
+/// at one open) matched by case alone would open the device afresh, and a fresh open idles both
+/// lines under the first holder's key. A holder's lock survives a panicked holder (poison is ignored): an unkey
 /// must always reach the port.
 #[cfg(feature = "serial")]
 pub struct SharedControlLines {
@@ -208,19 +208,28 @@ fn with_open_ports<R>(
 #[cfg(feature = "serial")]
 impl SharedControlLines {
     /// Hold `port`: the handle already open for it, else a fresh open
-    /// ([`open_control_line_port`], both lines idled).
+    /// ([`open_control_line_port`], both lines idled). The stored name is healed first
+    /// ([`crate::ports::heal_stored_port`]), as the CAT and serial PTT transport heals it: a mac
+    /// `/dev/tty.*` opens as its `/dev/cu.*` twin (the tty node waits on carrier detect) and a
+    /// `~/` path as the home directory's. Every holder (the FSK keyer, the CW keyline, serial PTT)
+    /// so opens the node CAT and PTT open, whatever name it was handed.
     pub fn open(port: &str) -> std::io::Result<Self> {
-        Self::open_with(port, || open_control_line_port(port))
+        let port = crate::ports::heal_stored_port(port.to_string());
+        Self::open_with(&port, || open_control_line_port(&port))
     }
 
     /// [`Self::open`] for a Remote selection's serial PTT release: a fresh open carries the
     /// permission ([`open_control_line_port_permitted`]). Holding a handle that is already
     /// open changes no line, so it needs none; the release write checks it as it always has.
+    /// The name is healed as [`Self::open`] heals it.
     pub(crate) fn open_permitted(
         port: &str,
         permission: &tempo_app::remote_control::WritePermission,
     ) -> std::io::Result<Self> {
-        Self::open_with(port, || open_control_line_port_permitted(port, permission))
+        let port = crate::ports::heal_stored_port(port.to_string());
+        Self::open_with(&port, || {
+            open_control_line_port_permitted(&port, permission)
+        })
     }
 
     fn open_with(
@@ -654,6 +663,40 @@ mod tests {
                 "{stored}: closed with its last holder"
             );
         }
+    }
+
+    /// ⛔ THE KEYERS OPEN THE PORT AS CAT AND SERIAL PTT OPEN IT: the stored name healed
+    /// (`crate::ports::heal_stored_port`), not the name as typed. The FSK keyer and the CW keyline
+    /// opened a stored name verbatim, so on a mac a saved `/dev/tty.*` opened the node that waits
+    /// on carrier detect, and a `~/` path looked for a directory named `~` and never opened. Only
+    /// the `~/` half can run off a mac (the twin heal is the mac's alone), and it is the same seam.
+    #[cfg(all(feature = "serial", unix))]
+    #[test]
+    fn the_keyers_open_the_healed_name_and_join_ptt_there() {
+        use crate::serial_keyer::{KeyLine, SerialKeyer};
+        let home = std::env::var("HOME").expect("HOME is set where the tests run");
+        let at_home = |p: &str| format!("{}/{p}", home.trim_end_matches('/'));
+        // Each keyer alone: its fresh open is of the healed node.
+        let cw = at_home("tempo-test-cw-keyline-pty");
+        fake_ports::install(&cw);
+        let keyer = SerialKeyer::open("~/tempo-test-cw-keyline-pty", KeyLine::Dtr)
+            .expect("the CW keyline opens the healed name");
+        assert!(fake_ports::state(&cw).held, "the CW keyline holds {cw}");
+        drop(keyer);
+        let fsk = at_home("tempo-test-fsk-keyline-pty");
+        fake_ports::install(&fsk);
+        let keyer =
+            crate::rtty_fsk::FskKeyer::open("~/tempo-test-fsk-keyline-pty", KeyLine::Dtr, false)
+                .expect("the FSK keyer opens the healed name");
+        assert!(fake_ports::state(&fsk).held, "the FSK keyer holds {fsk}");
+        // And beside serial PTT, which opens the healed name: one handle, PTT's line untouched.
+        let mut ptt = SharedControlLines::open(&fsk).expect("PTT joins the keyer's handle");
+        ptt.set_rts(true).unwrap();
+        drop(keyer);
+        let s = fake_ports::state(&fsk);
+        assert!(s.held && s.rts, "the keyer going leaves PTT up: {s:?}");
+        drop(ptt);
+        assert!(!fake_ports::state(&fsk).held, "closed with its last holder");
     }
 
     /// ⛔ A FAILED UNKEY IS RETRIED WHEN THE HOLDER GOES. PTT is up while another holder (the FSK

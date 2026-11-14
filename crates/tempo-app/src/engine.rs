@@ -40832,10 +40832,19 @@ mod tests {
     /// (`tempo_audio::control_line::SharedControlLines`): a mac `/dev/tty.*` and its `/dev/cu.*`
     /// twin are one device (serial PTT opens the `cu.*` name), a Win32 `\\.\COM7` is `COM7`, and
     /// case and spaces around a name change nothing. FSK or the CW keyline on the PTT line of the
-    /// "same" port typed another way is refused, as typed the same way; another port is not.
+    /// "same" port typed another way is refused, as typed the same way; another port is not. On
+    /// macOS and Linux a `~/` path is its home-directory spelling, as the port opens it.
     #[test]
     fn keyline_guards_see_through_port_spellings() {
-        for (scene, key_port, ptt_port, refused) in [
+        #[cfg(unix)]
+        let at_home = format!(
+            "{}/rig-pty1",
+            std::env::var("HOME")
+                .expect("HOME is set where the tests run")
+                .trim_end_matches('/')
+        );
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut scenes = vec![
             (
                 "tty key, cu PTT",
                 "/dev/tty.usbserial-A1",
@@ -40867,7 +40876,14 @@ mod tests {
                 "/dev/cu.usbserial-B2",
                 false,
             ),
-        ] {
+        ];
+        #[cfg(unix)]
+        scenes.extend([
+            ("~/ key, home PTT", "~/rig-pty1", at_home.as_str(), true),
+            ("home key, ~/ PTT", at_home.as_str(), "~/rig-pty1", true),
+            ("~/ key, another ~/ PTT", "~/rig-pty1", "~/rig-pty2", false),
+        ]);
+        for (scene, key_port, ptt_port, refused) in scenes {
             // FSK, through the RTTY gate.
             let mut e = Engine::new("W9XYZ", "EN61", 0);
             let mut s = e.settings().clone();
