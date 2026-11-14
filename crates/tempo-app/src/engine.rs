@@ -20589,7 +20589,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// when that is the newest thing heard from it, else Tx1. Every call starts the
     /// contact fresh and resets the QSO start time, as WSJT-X's double-click does
     /// (`mainwindow.cpp:9271`). Working a station also **enables TX** (so a
-    /// double-click transmits even if TX was toggled off) — matching WSJT-X.
+    /// double-click transmits even if TX was toggled off) when "Double-click arms TX"
+    /// (`double_click_sets_tx`, default on) is on, whatever the line, and leaves TX as it is when
+    /// it is off. That is WSJT-X 3.0.2's double-click: Enable Tx follows its "Double-click on call
+    /// sets Tx enable" (`quick_call`, default on, `mainwindow.cpp:9450`) on any line
+    /// (`doubleClickOnCall` sets `m_bDoubleClicked` unconditionally, :8892). WSJT-X's line-type
+    /// gate, a CQ, QRZ or 73 line or Hold Tx Freq on (:13329-13332), applies only to a UDP Reply,
+    /// which Nexus deliberately arms on every line and whatever this setting says
+    /// ([`Self::answer_udp_reply`]).
     pub fn call_station_ctx(
         &mut self,
         dxcall: &str,

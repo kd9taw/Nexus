@@ -48,7 +48,7 @@ Nexus accepts and acts on:
 | Location | Updates the operator grid |
 | HighlightCallsign | Applies bg/fg color to a row; shown inline as JTAlert highlight |
 | FreeText | When `send=true` and text is non-empty, immediately queues an open broadcast via the TempoFast engine. When `send=false` or text is empty, no action is taken. |
-| Reply | Double-click equivalent — arms the sequencer for the named decode; in an FT8/FT4 contest, a reply to a CQ works the station in the contest's S&P, as a double-click does |
+| Reply | Works the station on the line you clicked in the logger, as a double-click does; in an FT8/FT4 contest, a reply to a CQ works the station in the contest's S&P. **A Reply always turns TX on and starts calling**, even when Nexus's own **Double-click arms TX** setting is off. It also answers a clicked line that Nexus has already dropped from its recent decodes, as long as it has heard that station recently. The exception is after you stop TX or the TX watchdog trips: a Reply is then refused until you turn TX back on in Nexus. WSJT-X behaves differently: it turns TX on for a Reply only when its "Double-click on call sets Tx enable" option is on and the line is a CQ, QRZ or 73 (or Hold Tx Freq is on), and it ignores a Reply to a line it no longer shows. |
 
 ### JTAlert and GridTracker
 
