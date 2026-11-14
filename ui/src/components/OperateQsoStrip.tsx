@@ -566,7 +566,8 @@ export function OperateQsoStrip({
           type="button"
           className="cq-log"
           onClick={onLog}
-          disabled={!dxcall && waiting === 0}
+          // Log QSO logs the QSO sequencer's contact; the contest logs its own as it closes.
+          disabled={!qso?.dxcall && waiting === 0}
           title={
             waiting > 0
               ? t('operate.strip.log.titleWaiting', { count: waiting })

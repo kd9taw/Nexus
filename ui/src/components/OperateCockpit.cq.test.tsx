@@ -425,6 +425,16 @@ describe("a logger's Reply worked by the contest's S&P", () => {
     ).toBe(true)
   })
 
+  it("leaves Log QSO off: the contest logs its own contact as it closes", () => {
+    renderCockpit(worked())
+    const log = document.querySelector('.cockpit-ftstrip .cq-log') as HTMLButtonElement
+    expect(log.disabled).toBe(true)
+    cleanup()
+    renderCockpit({ ...worked(), logQsoWaiting: 1 } as AppSnapshot)
+    const waiting = document.querySelector('.cockpit-ftstrip .cq-log') as HTMLButtonElement
+    expect(waiting.disabled, 'CONTROL: a contact waiting for Log QSO keeps it live').toBe(false)
+  })
+
   it('fills DX Call, and Tx 1 is the over on the air', () => {
     renderCockpit(worked())
     expect((screen.getByLabelText('DX callsign') as HTMLInputElement).value).toBe('W9XYZ')
