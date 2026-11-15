@@ -64,10 +64,19 @@ fn station() -> StationData {
 }
 
 fn log_for(event: &str) -> FieldDayLog {
+    log_at(event, "LOW")
+}
+
+/// [`log_for`], with the entry's declared power category.
+fn log_at(event: &str, power: &str) -> FieldDayLog {
     resolver();
     let rs = ruleset_by_id(event, CURRENT_RULES_YEAR)
         .unwrap_or_else(|| panic!("{event} is a shipped ruleset"));
-    let session = ContestSession::for_ruleset(rs, &station())
+    let entrant = StationData {
+        contest_category_power: power.into(),
+        ..station()
+    };
+    let session = ContestSession::for_ruleset(rs, &entrant)
         .unwrap_or_else(|e| panic!("{event} session refused: {e}"));
     FieldDayLog::new("W9XYZ", session, "20m")
 }
@@ -233,5 +242,26 @@ fn each_wae_contest_exports_its_golden_cabrillo_file() {
         let path = format!("{GOLDENS}/{event}.cbr");
         let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
         assert_eq!(got, want, "{event}: the Cabrillo file changed");
+    }
+}
+
+/// ⭐ **A QRP entry is written LOW.** §3: "SINGLE-OP LOW … Max. output 100 watts" and
+/// "SINGLE-OP HIGH" are the only power categories, so a station declared QRP enters LOW, and
+/// the file says LOW: a QRP line would name a category DARC does not score. The whole file is the
+/// golden, so nothing else moves with it. HIGH and LOW are written as declared.
+#[test]
+fn a_qrp_entry_is_written_low_and_high_and_low_as_declared() {
+    let mut log = log_at("waedc_cw", "QRP");
+    assert!(work(&mut log, "CW", "20m", "DL1ABC", "599", "1", 0));
+    let got = log.cabrillo(14_000).expect("exports");
+    let path = format!("{GOLDENS}/waedc_cw-qrp.cbr");
+    let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    assert_eq!(got, want, "a QRP entry's file");
+    for power in ["LOW", "HIGH"] {
+        let mut log = log_at("waedc_cw", power);
+        assert!(work(&mut log, "CW", "20m", "DL1ABC", "599", "1", 0));
+        let got = log.cabrillo(14_000).expect("exports");
+        let line = format!("CATEGORY-POWER: {power}");
+        assert!(got.lines().any(|l| l == line), "{power}: {got}");
     }
 }

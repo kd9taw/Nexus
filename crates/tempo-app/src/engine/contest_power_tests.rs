@@ -117,8 +117,10 @@ fn power_category_is_what_each_contests_log_declares() {
                 "nyqp" => format!("CATEGORY-POWER: {power}"),
                 // The ARRL RTTY Roundup's QRP, LP and HP sub-categories (HCAT.1.3, HCAT.2.4).
                 "arrlrtty" => format!("CATEGORY-POWER: {power}"),
-                // The WAE DX Contest's log carries the power its LOW and HIGH categories split on,
-                // written as the entry declares it.
+                // The WAE DX Contest has LOW (up to 100 W) and HIGH only: a QRP entry is LOW.
+                "waedc_cw" | "waedc_ssb" | "waedc_rtty" if power == "QRP" => {
+                    "CATEGORY-POWER: LOW".to_string()
+                }
                 "waedc_cw" | "waedc_ssb" | "waedc_rtty" => format!("CATEGORY-POWER: {power}"),
                 // Winter Field Day takes QRP or LOW, and HIGH claims nothing.
                 "wfd" if power != "HIGH" => format!("CATEGORY-POWER: {power}"),

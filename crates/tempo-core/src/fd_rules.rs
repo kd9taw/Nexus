@@ -5607,8 +5607,9 @@ mod tests {
                 }
                 // The WAE DX Contest: each running is one mode and its own CATEGORY-MODE, no band
                 // is declared (its rules have no single-band category) and nothing is required.
-                // It writes the power its categories split on, the entrant's name and email,
-                // and CLUB, and never a claimed score (its QTCs and multipliers are not computed).
+                // It writes the power its categories split on (HIGH or LOW only: a QRP entry is
+                // written LOW), the entrant's name and email, and CLUB, and never a claimed score
+                // (its QTCs and multipliers are not computed).
                 "waedc_cw" | "waedc_ssb" | "waedc_rtty" => {
                     let none: &[&str] = &[];
                     let mode = match rs.event {
@@ -5617,7 +5618,8 @@ mod tests {
                         _ => "RTTY",
                     };
                     assert_eq!(got, (none, mode, none), "{}", rs.event);
-                    assert_eq!(rs.cabrillo_headers, ["CATEGORY-POWER", "EMAIL", "NAME"]);
+                    assert_eq!(rs.cabrillo_headers, ["EMAIL", "NAME"]);
+                    assert_eq!(rs.cabrillo_power_categories, ["HIGH", "LOW"]);
                     assert_eq!(rs.cabrillo_entry_headers, ["CLUB"]);
                     continue;
                 }
