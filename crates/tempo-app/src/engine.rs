@@ -40968,6 +40968,48 @@ mod tests {
         }
     }
 
+    /// A two-port Yaesu (FT-991A, FTDX10) on Linux: CAT on the Enhanced port (`/dev/ttyUSB0`),
+    /// FSK keyed on the Standard port (`/dev/ttyUSB1`). Two ports, so the keyline guard has
+    /// nothing to refuse — whether PTT rides CAT, the Standard port's other line, or serial PTT
+    /// left on the CAT port. Only PTT on the very line FSK keys is refused.
+    #[test]
+    fn a_two_port_yaesu_keys_fsk_on_its_standard_port() {
+        for (scene, ptt_method, ptt_port, refused) in [
+            ("CAT PTT", "cat", "", false),
+            (
+                "PTT on the Standard port's RTS",
+                "rts",
+                "/dev/ttyUSB1",
+                false,
+            ),
+            ("DTR PTT on the CAT port", "dtr", "", false),
+            ("PTT on the FSK line itself", "dtr", "/dev/ttyUSB1", true),
+        ] {
+            let mut e = Engine::new("N0CALL", "EN61", 0);
+            let mut s = e.settings().clone();
+            s.serial_port = "/dev/ttyUSB0".into();
+            s.rtty_backend = "fsk".into();
+            s.rtty_fsk_port = "/dev/ttyUSB1".into();
+            s.rtty_fsk_line = "dtr".into();
+            s.ptt_method = ptt_method.into();
+            s.ptt_serial_port = ptt_port.into();
+            e.apply_settings(s);
+            assert_eq!(
+                e.rtty_fsk_port().as_deref(),
+                Some("/dev/ttyUSB1"),
+                "{scene}"
+            );
+            e.set_operating_mode("rtty", false);
+            let sent = e.rtty_send_text("CQ");
+            if refused {
+                let err = sent.unwrap_err();
+                assert!(err.contains("same control line"), "{scene}: {err}");
+            } else {
+                assert_eq!(sent, Ok(()), "{scene}");
+            }
+        }
+    }
+
     #[test]
     fn rtty_fsk_port_falls_back_to_the_cat_serial_port() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);

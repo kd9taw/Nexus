@@ -2447,9 +2447,11 @@ pub struct Settings {
     /// its OWN path (CAT or the PTT serial line) — never this line.
     #[serde(default = "default_rtty_fsk_line")]
     pub rtty_fsk_line: String,
-    /// Serial port for the FSK keying line (when `rtty_backend == "fsk"`), e.g. the
-    /// FTDX10's USB *Enhanced* COM port. Empty = the CAT `serial_port` (the same
-    /// fallback the RTS/DTR PTT line uses).
+    /// Serial port for the FSK keying line (when `rtty_backend == "fsk"`). On Yaesu's two-port
+    /// USB radios (FT-991A, FTDX10) this is the *Standard* COM port, the second of the pair:
+    /// the *Enhanced* one is CAT, and the DTR/RTS lines the rig's RTTY SHIFT PORT menu keys
+    /// from are on the Standard one. Empty = the CAT `serial_port` (the same fallback the
+    /// RTS/DTR PTT line uses), right for a one-port interface.
     #[serde(default)]
     pub rtty_fsk_port: String,
     /// RTTY baud rate — true 45.45 by default (never integerized to 45); 50 and 75 are
