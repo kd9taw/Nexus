@@ -309,8 +309,9 @@ pub struct DecodeRow {
     #[serde(default)]
     pub low_conf: bool,
     /// JTDX '^' marker: no error check accepted the message (the JTDX-style decoder's FT8S/FT8SD
-    /// and matched filters). Shown; nothing automatic acts on it.
-    #[serde(default)]
+    /// and matched filters). Shown; nothing automatic acts on it. Sent only when true, so every
+    /// other decoder's rows are on the wire exactly as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unchecked: bool,
     /// IR-HARQ redundancy versions combined to recover this decode: 0 = decoded
     /// from the initial transmission alone; 1/2 = recovered by joint-combining

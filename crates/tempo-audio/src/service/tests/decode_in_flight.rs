@@ -32,6 +32,16 @@ pub(super) fn reply_datagram(message: &str) -> Vec<u8> {
 }
 
 /// A 15 s FT8 capture of `msg` at 1500 Hz, at the engine's capture scale.
+/// These tests decode real FT8 audio to test what the engine does with a decode, not the decoder.
+/// The standard decoder keeps no table between periods that another test's period can fill; the
+/// JTDX-style one does (its per-parity message tables are process-wide without a per-chain
+/// context), and a repeat of a message another test decoded would come back from its hint path.
+pub(super) fn pin_standard_ft8(e: &mut Engine) {
+    let mut st = e.settings().clone();
+    st.ft8_decoder = tempo_app::settings::DecoderStyle::Standard;
+    e.apply_settings(st);
+}
+
 pub(super) fn ft8_frame(msg: &str) -> Vec<f32> {
     use tempo_core::modes::{make_mode, ModeKind};
     let mode = make_mode(ModeKind::Ft8);
@@ -50,6 +60,7 @@ fn a_loggers_reply_during_a_decode_does_not_stall_the_radio_loop() {
     let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
     {
         let mut e = engine.lock().unwrap();
+        pin_standard_ft8(&mut e);
         e.set_tier(Tier::Ft8);
         assert!(
             e.ingest(&ft8_frame("CQ W1AW FN31"), 3) >= 1,

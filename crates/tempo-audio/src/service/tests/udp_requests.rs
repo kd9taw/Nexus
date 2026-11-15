@@ -52,6 +52,7 @@ pub(super) fn halt_tx_datagram() -> Vec<u8> {
 /// off: a logger's Reply arms TX whatever it says.
 fn station() -> Arc<Mutex<Engine>> {
     let mut e = Engine::new("K2DEF", "FN31", 0);
+    super::decode_in_flight::pin_standard_ft8(&mut e);
     let mut s = e.settings().clone();
     s.double_click_sets_tx = false;
     e.apply_settings(s);
