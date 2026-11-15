@@ -20627,6 +20627,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.tier_is_rx_only(t) || self.tier_is_beacon(t) {
             return Some("this mode answers no station");
         }
+        // JS8 answers stations, but from its own screen (`js8_send`, `js8_answer_reply`, which
+        // never come through here). An FT press or a logger's Reply on the JS8 tier, from Remote
+        // or UDP, staged an FT contact `plan_js8_tx` never sends, and armed TX, which let JS8's
+        // own automatic sending already switched on (autoreply, relay, heartbeat) key a frame
+        // with no JS8 act behind it; with "Double-click arms TX" off the staged contact carried
+        // into FT8 instead.
+        if t == Tier::Js8 {
+            return Some("JS8 works stations from its own screen");
+        }
         None
     }
 

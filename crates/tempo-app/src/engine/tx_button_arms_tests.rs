@@ -3,7 +3,8 @@
 //! on this station's own call, or on a tier that answers no one (a beacon, or a receive-only
 //! mode) — is refused, changes nothing and arms nothing. Before, a press on a configured WSPR or
 //! FST4W beacon came back `Ok` from the double-click it shares and armed TX, and the beacon keyed
-//! every slot with no contact behind it.
+//! every slot with no contact behind it. JS8 is refused too: it works stations from its own
+//! screen, whose controls never come through this press.
 
 use super::tests::dec_snr;
 use super::*;
@@ -136,4 +137,71 @@ fn an_ft8_tx_press_works_the_station_and_arms() {
     assert!(e.tx_enabled(), "armed");
     assert!(e.take_immediate_tx(), "fires this period when it fits");
     assert!((12..16).any(|s| !e.poll_tx(s).is_empty()), "the over keys");
+}
+
+/// ⛔ An FT Tx press on the JS8 tier is refused and arms nothing. JS8 works stations from its own
+/// screen; an FT press reaching it from elsewhere (a Remote press, a logger's Reply) used to arm
+/// TX, so any JS8 automatic sending already switched on (autoreply, relay, heartbeat) could key
+/// a frame with no JS8 act behind it. With "Double-click arms TX" off, the FT contact it staged
+/// stayed loaded and carried into FT8. Checked both ways that setting can sit.
+#[test]
+fn an_ft_tx_press_on_the_js8_tier_is_refused_and_arms_nothing() {
+    for arms in [true, false] {
+        let mut e = Engine::new(ME, "EN52", 0);
+        e.settings.double_click_sets_tx = arms;
+        e.js8_enter();
+        // A station heard on the tier, so a logger's Reply has a line to answer.
+        e.hear_for_test("CQ W1AW FN31", -12, 11);
+        let before = state(&mut e);
+
+        let r = e.override_next_tx_checked(DX, Some("FN31"), TX1);
+        assert!(
+            r.is_err(),
+            "arms={arms}: the Tx press is refused, got {r:?}"
+        );
+        assert_eq!(state(&mut e), before, "arms={arms}: nothing changed");
+
+        let r = e.answer_udp_reply(DX, "CQ W1AW FN31", -12, None);
+        assert!(r.is_err(), "arms={arms}: the Reply is refused, got {r:?}");
+        assert_eq!(state(&mut e), before, "arms={arms}: nothing changed");
+        assert!(!e.tx_enabled(), "arms={arms}: TX stays off");
+
+        // Nothing staged carries into FT8.
+        e.set_tier(Tier::Ft8);
+        assert_eq!(e.qso_dxcall(), None, "arms={arms}: no contact in FT8");
+        assert!(!e.tx_enabled(), "arms={arms}: TX still off in FT8");
+    }
+}
+
+/// CONTROL: the JS8 screen's own TX On still arms on the JS8 tier, and a message sent from that
+/// screen keys a JS8 frame. The FT refusal above does not reach JS8's own controls.
+#[test]
+fn the_js8_screens_own_tx_on_and_send_still_arm_and_key() {
+    let mut e = Engine::new(ME, "EN52", 0);
+    e.js8_enter();
+    e.set_tx_offset(1500.0);
+    assert!(!e.tx_enabled(), "premise: TX off");
+    e.set_tx_enabled(true);
+    assert!(e.tx_enabled(), "the JS8 dock's TX On arms");
+    e.js8_send(None, "TEST".into()).expect("queues");
+    let period_ms = u64::from(e.js8_tx_speed().period_s()) * 1000;
+    let slot = tempo_core::timing::now_unix_ms() as u64 / period_ms + 1;
+    let plan = e.plan_tx(slot).expect("the JS8 frame keys");
+    assert!(
+        matches!(plan.waveform, TxWaveform::Js8 { .. }),
+        "a JS8 frame, not an FT over"
+    );
+}
+
+/// CONTROL: the beacon tiers keep their own refusal and its words.
+#[test]
+fn the_beacon_refusal_keeps_its_words() {
+    for tier in [Tier::Wspr, Tier::Fst4w] {
+        let mut e = configured_beacon(tier);
+        assert_eq!(
+            e.override_next_tx_checked(DX, None, TX1),
+            Err("this mode answers no station".to_string()),
+            "{tier:?}"
+        );
+    }
 }
