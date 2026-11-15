@@ -8489,6 +8489,7 @@ export const ZH: PartialCatalog = {
   "settings.contestStation.power.label": "发送的功率",
   "settings.contestStation.power.hint": "作为本竞赛交换信息一部分发送的功率，用主办方的原话（KW、500、5）。它会按你输入的原文发到空中；你的日志声明的功率则是“你的参赛”下的功率类别。",
   "settings.contestScore.incomplete": "该比分未计入本竞赛依据你的日志计算出的奖励分 — 此版本不计算这些分数，因此主办方给你的分数会更高。日志被接受所需的全部内容都已在此；但这个数字不是你的申报总分。",
+  "settings.contestScore.contactsOnly": "Nexus 不计算本竞赛的 QTC 和乘数，因此这里的数字是你的通联数，而不是你的比分。日志被接受所需的全部内容都已在此。",
   "settings.contestCategory.unassisted.label": "无辅助参赛",
   "settings.contestCategory.unassisted.aria.declare": "声明无辅助竞赛参赛",
   "settings.contestCategory.unassisted.aria.end": "结束无辅助竞赛参赛",

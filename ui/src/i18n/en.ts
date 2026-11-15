@@ -6539,6 +6539,7 @@ export const EN = {
   'settings.contestStation.power.label': 'Power sent',
   'settings.contestStation.power.hint': 'The power you send as part of this contest’s exchange, in the sponsor’s own words (KW, 500, 5). It goes on the air exactly as you type it; the power your log declares is Power category, under Your entry.',
   'settings.contestScore.incomplete': 'This score leaves out the bonus points this contest works out from your log — this build does not compute them, so what the sponsor credits you will be higher. Everything the log needs to be accepted is here; the number is not your claimed score.',
+  'settings.contestScore.contactsOnly': 'Nexus does not compute QTCs or the multipliers for this contest, so the number here is your contact count, not your score. Everything the log needs to be accepted is here.',
   'settings.contestCategory.unassisted.label': 'Unassisted entry',
   // Two whole accessible names — the switch does one of two different things, and neither is
   // the other with a word swapped.

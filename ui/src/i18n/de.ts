@@ -825,6 +825,7 @@ export const DE: PartialCatalog = {
   "settings.contestStation.power.label": "Gesendete Leistung",
   "settings.contestStation.power.hint": "Die Leistung, die du als Teil des Rapports dieses Contests sendest, in den Worten des Veranstalters (KW, 500, 5). Sie geht genau so auf Sendung, wie du sie eintippst; die Leistung, die dein Log erklärt, ist die Leistungskategorie unter Deine Teilnahme.",
   "settings.contestScore.incomplete": "In dieser Wertung fehlen die Bonuspunkte, die dieser Contest aus deinem Log errechnet — dieser Build berechnet sie nicht, der Veranstalter wird dir also mehr gutschreiben. Alles, was das Log zur Annahme braucht, ist vorhanden; die Zahl ist nicht deine eingereichte Punktzahl.",
+  "settings.contestScore.contactsOnly": "Nexus berechnet für diesen Contest weder QTCs noch die Multiplikatoren; die Zahl hier ist also die Anzahl deiner Verbindungen, nicht deine Punktzahl. Alles, was das Log zur Annahme braucht, ist vorhanden.",
   "settings.contestCategory.unassisted.label": "Unassisted-Teilnahme",
   "settings.contestCategory.unassisted.aria.declare": "Unassisted-Teilnahme am Contest erklären",
   "settings.contestCategory.unassisted.aria.end": "Unassisted-Teilnahme am Contest beenden",

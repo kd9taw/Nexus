@@ -8491,6 +8491,7 @@ export const ZH_HANT: PartialCatalog = {
   "settings.contestStation.power.label": "傳送的功率",
   "settings.contestStation.power.hint": "作為本競賽交換資訊一部分傳送的功率，用主辦方的原話（KW、500、5）。它會按你輸入的原文發到空中；你的日誌宣告的功率則是「你的參賽」下的功率類別。",
   "settings.contestScore.incomplete": "該比分未計入本競賽依據你的日誌計算出的獎勵分 — 此版本不計算這些分數，因此主辦方給你的分數會更高。日誌被接受所需的全部內容都已在此；但這個數字不是你的申報總分。",
+  "settings.contestScore.contactsOnly": "Nexus 不計算本競賽的 QTC 和乘數，因此這裡的數字是你的通聯數，而不是你的比分。日誌被接受所需的全部內容都已在此。",
   "settings.contestCategory.unassisted.label": "無輔助參賽",
   "settings.contestCategory.unassisted.aria.declare": "宣告無輔助競賽參賽",
   "settings.contestCategory.unassisted.aria.end": "結束無輔助競賽參賽",

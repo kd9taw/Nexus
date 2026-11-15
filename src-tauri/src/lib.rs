@@ -32387,7 +32387,8 @@ fn resume_chat_cq(
 
 /// WSJT-X Tx-slot click: force `text` as the next transmission to `call`
 /// (starts/retargets the QSO, arms per the double-click behavior option); refused, with the
-/// reason, when the encoder cannot send its over. `afar`: as [`set_tx_enabled`]'s.
+/// reason, when the encoder cannot send its over or the press works nobody (our own call, a
+/// beacon or receive-only tier). `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn override_next_tx(
     state: State<'_, SharedEngine>,
@@ -32398,11 +32399,9 @@ fn override_next_tx(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
-    // A row whose over the encoder refuses is never queued, and the operator is told why.
-    if let Some(why) = eng.override_next_tx_refusal(&call, &text) {
-        return Err(why);
-    }
-    eng.override_next_tx(&call, grid.as_deref(), &text);
+    // A row whose over the encoder refuses, or a press that works nobody, is never queued, and
+    // the operator is told why.
+    eng.override_next_tx_checked(&call, grid.as_deref(), &text)?;
     command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
@@ -57785,7 +57784,7 @@ mod tests {
             .into_iter()
             .filter(|c| !c.id.starts_with("custom_"))
             .count();
-        assert_eq!(shipped, 19);
+        assert_eq!(shipped, 22);
         assert_eq!(at(w.start_unix + 60), Some((w.start_unix, w.end_unix)));
         let next = rs.event_window(2027);
         assert_eq!(at(w.end_unix), Some((next.start_unix, next.end_unix)));
@@ -72146,6 +72145,73 @@ mod tests {
             "CONTROL"
         );
         assert_eq!(tx_now().as_deref(), Some("W9XYZ/M <K1ABC> 73"), "CONTROL");
+    }
+
+    /// ⛔ A Tx press from afar (the Remote client's Tx row, run through the command lane as the
+    /// lane runs it) on a configured WSPR or FST4W beacon is refused with the reason: TX stays off
+    /// and the beacon keys nothing. CONTROL: the same press on FT8 is taken and arms.
+    #[test]
+    fn a_tx_press_from_afar_on_a_beacon_tier_is_refused_and_keys_nothing() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use crate::override_next_tx;
+        use serde_json::{json, Value};
+        for (tier, dial, taken) in [
+            (tempo_app::dto::Tier::Wspr, 14.0956, false),
+            (tempo_app::dto::Tier::Fst4w, 14.0956, false),
+            (tempo_app::dto::Tier::Ft8, 14.074, true),
+        ] {
+            let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+                tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+            ));
+            {
+                // A beacon the operator has set up to transmit (Transmit % and power set).
+                let mut e = engine_lock(&engine);
+                let mut settings = e.settings().clone();
+                settings.beacon_tx_percent = 100;
+                settings.beacon_power_dbm = 37;
+                e.apply_settings(settings);
+                e.set_tier(tier);
+                e.set_frequency(dial, "20m", "USB");
+            }
+            let app = tauri::test::mock_builder()
+                .manage(engine.clone())
+                .invoke_handler(tauri::generate_handler![override_next_tx])
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .expect("a mock app");
+            let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+                .build()
+                .expect("a main window");
+            let runner: Runner = tauri_runner(app.handle().clone());
+            let stand_down = engine_lock(&engine).remote_transmit_stand_down_generation();
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                "override_next_tx".to_string(),
+                json!({"call": "K1ABC", "text": "K1ABC W9XYZ EN52", "afar": {"standDown": stand_down}}),
+                Box::new(move |result: Result<Value, String>| {
+                    let _ = answer.send(result);
+                }),
+            );
+            let r = answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered");
+            let mut e = engine_lock(&engine);
+            let keyed = (12..20).filter_map(|s| e.plan_tx(s)).count();
+            if taken {
+                assert!(r.is_ok(), "CONTROL {tier:?}: taken, got {r:?}");
+                assert!(
+                    e.tx_enabled() && keyed > 0,
+                    "CONTROL {tier:?}: armed and keys"
+                );
+            } else {
+                assert_eq!(
+                    r.as_ref().err().map(String::as_str),
+                    Some("this mode answers no station"),
+                    "{tier:?}: refused with the reason"
+                );
+                assert!(!e.tx_enabled(), "{tier:?}: TX stays off");
+                assert_eq!(keyed, 0, "{tier:?}: nothing keyed");
+            }
+        }
     }
 
     /// A mock app and its main window.

@@ -28,7 +28,7 @@ import { WfdObjectivesSection } from './WfdObjectivesSection'
 import { WFD_OBJECTIVES, wfdEarnedIds, type WfdObjective } from '../features/wfdObjectives'
 import { pushToast } from '../toast'
 import { ADDR_SEP, CLUB_DEAD_SECS, CLUB_PING_SECS, clubLinkLines, heardAgo, type ClubLinkLine } from '../features/clubLink'
-import { clubSyncRefusal, clubSyncRefusalText, contestFileStem, contestName, contestShortName, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type ClubSyncRefusal, type FdKind } from '../fdEvent'
+import { clubSyncRefusal, clubSyncRefusalText, contestFileStem, contestName, contestShortName, countsOnly, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type ClubSyncRefusal, type FdKind } from '../fdEvent'
 import type { ContestSwitch } from '../contestSwitch'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { textPx } from '../useTextSize'
@@ -62,8 +62,11 @@ import { bandColor } from '../bandColors'
  *  only through data looks unreferenced to it, and would be deleted as dead by the next
  *  person who trusted that guard. Naming it here is what keeps it alive and translated —
  *  in the `…Key` property-table shape that guard's extractor reads, which is why this is
- *  a table of one rather than a bare array of strings. */
-const SCORE_NOTES: { noteKey: MessageKey }[] = [{ noteKey: 'settings.contestScore.incomplete' }]
+ *  a table rather than a bare array of strings. */
+const SCORE_NOTES: { noteKey: MessageKey }[] = [
+  { noteKey: 'settings.contestScore.incomplete' },
+  { noteKey: 'settings.contestScore.contactsOnly' },
+]
 const SCORE_NOTE_KEYS: ReadonlySet<string> = new Set(SCORE_NOTES.map((n) => n.noteKey))
 import { modeClassOf } from '../features/needs'
 import { CONTEST_LOG_MAX_SHARE, CONTEST_LOG_SPLIT_MAX, CONTEST_LOG_SPLIT_MIN } from '../features/paneSeam'
@@ -766,6 +769,9 @@ export function buildSummaryText(a: SummaryArgs): string {
     if (mults !== null) L.push(`  × multipliers              ${mults}`)
     L.push('  --------------------------------')
     L.push(`  TOTAL                      ${a.totalScore}`)
+    // A contest with no multiplier here is one whose multipliers this build does not compute
+    // (`countsOnly`): its total is a contact count, and the document must not read as a score.
+    if (mults === null) L.push('  Multipliers and QTCs are not computed here: this total is a contact count, not the score.')
     L.push('')
     return L.join('\n')
   }
@@ -3097,6 +3103,8 @@ export function OperatorBox({
 export function ScoreMath({ fieldDay, settings }: { fieldDay: FieldDayStatus | null; settings: FdDisplaySettings | null }) {
   const isWfd = (fieldDay?.event ?? '') === 'wfd'
   const { fdPowerMult, qsoPts, poweredPoints, bonusPoints, totalScore, multCount } = computeFdScore(fieldDay, settings)
+  // A contact-count-only contest has no arithmetic to show: its score note says why.
+  if (countsOnly(fieldDay)) return null
   return multCount !== null ? (
       /* ⭐ A CONTEST WITH MULTIPLIERS scores points × mults. Showing Field Day's
          power×+bonus line here would print `× power ×1` for a contest that has no
@@ -3241,7 +3249,7 @@ export function FieldDayScoreboard({
             <span className="fd-score-val">{multCount}</span>
             <span className="fd-score-label">{t('fieldDay.score.mults')}</span>
           </div>
-        ) : (
+        ) : countsOnly(fieldDay) ? null : (
           <div className="fd-score">
             <span className="fd-score-val">{fieldDay?.sections ?? 0}</span>
             <span className="fd-score-label">{t('fieldDay.score.sections')}</span>
@@ -3272,7 +3280,7 @@ export function FieldDayScoreboard({
           the shipped component, not an empty screen. */}
       {fieldDay?.boards?.length ? (
         <MultiplierBoards boards={fieldDay.boards} />
-      ) : (
+      ) : countsOnly(fieldDay) ? null : (
         <SectionsBoard workedSet={workedSet} />
       )}
 
@@ -4438,7 +4446,7 @@ export function ContestView({
           mults={
             fieldDay?.boards?.length ? (
               <MultiplierBoards boards={fieldDay.boards} />
-            ) : (
+            ) : countsOnly(fieldDay) ? null : (
               <SectionsBoard workedSet={workedSectionSet(fieldDay)} />
             )
           }

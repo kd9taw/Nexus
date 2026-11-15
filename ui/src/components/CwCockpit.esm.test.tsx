@@ -147,6 +147,7 @@ const ILQP = {
   qsoCount: 0,
   sections: 0,
   points: 0,
+  multCount: 0,
   log: [],
   role: 'in_state',
   receives: [
@@ -474,7 +475,7 @@ describe('the contest score chip', () => {
   it('reads the running contest in the Log pane’s head', async () => {
     await renderCockpit()
     const head = document.querySelector('section.pane-frame[data-pane="log"] > .pane-head')
-    expect(head?.querySelector('.contest-score-chip')?.textContent ?? null).toBe('ILQP · 0 Q · 0 sections · —/hr')
+    expect(head?.querySelector('.contest-score-chip')?.textContent ?? null).toBe('ILQP · 0 Q · 0 mults · —/hr')
     expect(document.querySelector('.log-entry-fd')).not.toBeNull()
     expect(document.querySelector('.le-fd-score')).toBeNull()
   })

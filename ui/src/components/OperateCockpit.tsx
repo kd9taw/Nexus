@@ -1134,6 +1134,7 @@ export function OperateCockpit({
    * Tx6 = Call CQ — parse the editable Tx6 text for a directed token and call
    * startCq(dir | null) directly; apply the returned snapshot via onSnap.
    * Tx1–Tx5 force the row's text as the next transmission to the DX. */
+  const txWorksNobody = isBeacon(tier) || isRxOnly(tier)
   const doTx = (n: number) => {
     if (n === 6) {
       // In a contest: the contest's Running, as the strip's Call CQ asks for it — the station
@@ -1168,6 +1169,9 @@ export function OperateCockpit({
       void startCq(dir).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
       return
     }
+    // Tx1–Tx5 work nobody on a beacon or receive-only tier (their buttons are disabled; Alt+1..5
+    // lands here): the station refuses them there too.
+    if (txWorksNobody) return
     const call = dxCall.trim().toUpperCase()
     const text = rowTexts[n - 1]?.trim()
     if (!call || !text) return
@@ -1482,6 +1486,7 @@ export function OperateCockpit({
               tx6Contest={contestCq}
               nextIndex={nextIndex}
               onTx={doTx}
+              worksNobody={txWorksNobody}
               onGenerate={handleGenerate}
               onClear={clearDxAndContact}
               qsoMacros={qsoMacros}
@@ -2439,6 +2444,7 @@ export function OperateCockpit({
                       tx6Contest={contestCq}
                       nextIndex={nextIndex}
                       onTx={doTx}
+                      worksNobody={txWorksNobody}
                       onGenerate={handleGenerate}
                       onClear={clearDxAndContact}
                       qsoMacros={qsoMacros}

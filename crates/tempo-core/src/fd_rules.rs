@@ -5130,7 +5130,7 @@ mod tests {
                 "{id} in {ids:?}"
             );
         }
-        assert_eq!(ids.len(), 19, "{ids:?}");
+        assert_eq!(ids.len(), 22, "{ids:?}");
     }
 
     #[test]
@@ -5597,7 +5597,7 @@ mod tests {
         const CQ: &[&str] = &["ONE", "TWO", "UNLIMITED"];
         const VHF: &[&str] = &["ONE", "LIMITED", "UNLIMITED"];
         const NONE: &[&str] = &[];
-        let table: [Row; 19] = [
+        let table: [Row; 22] = [
             ("arrlfd", NONE, NONE, NONE, false),
             ("wfd", NONE, NONE, NONE, false),
             ("tnqp", NONE, NONE, &["ADDRESS"], false),
@@ -5648,6 +5648,10 @@ mod tests {
             // The RTTY Roundup's three multi-operator classes (Special Rules 3.4), no Cabrillo
             // overlay (its Limited Antennas Overlay has no Cabrillo token), no address.
             ("arrlrtty", &["ONE", "TWO", "UNLIMITED"], NONE, NONE, false),
+            // The WAE DX Contest's rules name no transmitter category, no overlay and no address.
+            ("waedc_cw", NONE, NONE, NONE, false),
+            ("waedc_ssb", NONE, NONE, NONE, false),
+            ("waedc_rtty", NONE, NONE, NONE, false),
         ];
         let shipped = build(parse_spec(SEED).expect("the seed parses"));
         assert_eq!(
@@ -5741,6 +5745,24 @@ mod tests {
                         ]
                     );
                     assert_eq!(rs.cabrillo_entry_headers, ["CLUB", "OPERATORS"]);
+                    continue;
+                }
+                // The WAE DX Contest: each running is one mode and its own CATEGORY-MODE, no band
+                // is declared (its rules have no single-band category) and nothing is required.
+                // It writes the power its categories split on (HIGH or LOW only: a QRP entry is
+                // written LOW), the entrant's name and email, and CLUB, and never a claimed score
+                // (its QTCs and multipliers are not computed).
+                "waedc_cw" | "waedc_ssb" | "waedc_rtty" => {
+                    let none: &[&str] = &[];
+                    let mode = match rs.event {
+                        "waedc_cw" => "CW",
+                        "waedc_ssb" => "SSB",
+                        _ => "RTTY",
+                    };
+                    assert_eq!(got, (none, mode, none), "{}", rs.event);
+                    assert_eq!(rs.cabrillo_headers, ["EMAIL", "NAME"]);
+                    assert_eq!(rs.cabrillo_power_categories, ["HIGH", "LOW"]);
+                    assert_eq!(rs.cabrillo_entry_headers, ["CLUB"]);
                     continue;
                 }
                 // The Illinois QSO Party declares no category line, and requires the entrant's
@@ -7112,10 +7134,10 @@ mod tests {
         let b = build(parse_spec(&twice).expect("and parses again after a round trip"));
         assert_eq!(
             a.rulesets.len(),
-            19,
+            22,
             "two Field Day events + six QSO parties + both Sweepstakes weekends + \
              CQ WW's two and CQ WPX's two + ARRL VHF's three runnings + CQ WW RTTY + \
-             the ARRL RTTY Roundup"
+             the ARRL RTTY Roundup + the WAE DX Contest's three runnings"
         );
         assert_eq!(a.rulesets.len(), b.rulesets.len());
         for (x, y) in a.rulesets.iter().zip(b.rulesets) {
