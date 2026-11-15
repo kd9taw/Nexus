@@ -2252,8 +2252,8 @@ function App() {
   // next transmission to the DX. The backend starts/retargets the QSO + arms TX;
   // applying the returned snapshot makes the Tx panel's "next" dot land at once.
   const handleOverrideTx = useCallback((call: string, grid: string | null, text: string) => {
-    // Same own-call guard as handleCall — the engine no-ops on a self-target
-    // but returns a normal snapshot, which read as silent success here.
+    // Same own-call guard as handleCall — the engine refuses a self-target too, but that
+    // would read as a failure here; this says it plainly.
     const me = mycallRef.current.trim().toUpperCase()
     if (me && sameCall(call, me)) {
       pushToast(t('shell.ownCall', { call }), 'info', 2500)

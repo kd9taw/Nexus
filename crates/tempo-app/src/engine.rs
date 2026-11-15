@@ -247,6 +247,9 @@ pub mod tci_spots;
 #[cfg(test)]
 mod ten_meter_ssb_only_tests;
 mod tx_alarms;
+/// An FT Tx button arms TX only when it works the station it names.
+#[cfg(test)]
+mod tx_button_arms_tests;
 /// Diagnostic-log words about transmit: who keyed, and why the TX watchdog tripped. Log only.
 mod tx_diag;
 /// A data frame judged across its whole width, and where it keys.
@@ -31756,23 +31759,24 @@ contact yourself."
         let _ = self.override_next_tx_checked(dxcall, dxgrid, text);
     }
 
-    // Preserve the native void command while letting Remote distinguish a
-    // refused target from a queued message. Both use this single policy path.
-    fn override_next_tx_checked(
+    /// As [`Self::override_next_tx`], with the refusal: the `override_next_tx` command (the
+    /// screen's Tx1-Tx5, Alt+1..5, the pop-out, a Remote press) answers with its reason, and the
+    /// void form keeps the engine's own callers. Both use this single policy path.
+    pub fn override_next_tx_checked(
         &mut self,
         dxcall: &str,
         dxgrid: Option<&str>,
         text: &str,
     ) -> Result<(), String> {
-        if tempo_core::message::same_call(dxcall, &self.settings.mycall) {
-            return Err("cannot target own callsign".into());
-        }
-        // Answering a decode is a TX commitment: it arms TX and asks for the
-        // current period. On a receive-only tier there is no over to send, so do
-        // not stage one — a queued reply the operator can see but the radio can
-        // never send is the phantom this whole guard exists to prevent.
-        if self.tier_is_rx_only(self.app.tier()) {
-            return Err("transmit unavailable for this tier".into());
+        // ⛔ A press that works nobody arms nothing: our own call, or a tier that answers no
+        // station. Answering is a TX commitment: it arms TX and asks for the current period. On
+        // a receive-only tier there is no over to send; on a beacon tier (WSPR, FST4W) the armed
+        // TX is the beacon schedule, which keyed every slot with no contact behind it. The
+        // double-click answers these `Ok` without working anyone, so they are refused here,
+        // before anything changes — the same rule a logger's Reply is held to
+        // ([`Self::answer_udp_reply`]), from the one place it is written.
+        if let Some(why) = self.click_works_nobody(dxcall) {
+            return Err(why.into());
         }
         // ⛔ Never an over the encoder refuses: refused here, before the QSO, TX or the over on
         // the air (`ft_restart`) changes.
