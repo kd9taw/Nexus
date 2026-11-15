@@ -115,7 +115,8 @@ module ft8var_cabi
      character(kind=c_char) :: hisgrid(6), pad(2)
   end type ft8var_params_t
 
-  ! cwfilter's `first` (decoder.f90:214-217): the callsign database is loaded once per process.
+  ! cwfilter's `first` (decoder.f90:214-217): the callsign database is loaded once per folder
+  ! (ft8var_set_share_dir clears this when the folder changes).
   logical    :: db_loaded = .false.
   ! Where the last decode's caller had its stack (see ft8var_decode_frame). 0: none yet.
   integer(c_intptr_t) :: last_stack = 0
@@ -131,18 +132,24 @@ contains
 
   !-------------------------------------------------------------------------
   ! ft8var_set_share_dir : where ALLCALL7.TXT is (prog_args%share_dir; jt9 --share-dir,
-  !                        jt9.f90:138). Call before the first decode of FT8 or FT4.
+  !                        jt9.f90:138). Call before the first decode of FT8 or FT4. A
+  !                        different folder makes the next ft8var_load_callsign_db load again:
+  !                        a decode that reached the loader before the folder was set (it
+  !                        found nothing in '.') must not leave the database empty for good.
   !-------------------------------------------------------------------------
   subroutine ft8var_set_share_dir(path, n) bind(C, name="ft8var_set_share_dir")
     use prog_args, only: share_dir
     character(kind=c_char), intent(in) :: path(*)
     integer(c_int), value, intent(in) :: n
     integer :: i, m
+    character(len=len(share_dir)) :: dir
     m = min(int(n), len(share_dir))
-    share_dir = ' '
+    dir = ' '
     do i = 1, m
-       share_dir(i:i) = path(i)
+       dir(i:i) = path(i)
     enddo
+    if (dir .ne. share_dir) db_loaded = .false.
+    share_dir = dir
   end subroutine ft8var_set_share_dir
 
   !-------------------------------------------------------------------------
@@ -152,11 +159,20 @@ contains
   !                           ldbvalid=.false., as cwfilter does, and ft8var then filters
   !                           nothing against it. Returns 1 when the database is valid.
   !                           Shared with the JTDX FT4 decoder, whose checks need it too.
+  !                           Once per FOLDER: a new ft8var_set_share_dir loads again, from
+  !                           empty arrays (cwfilter appends to them, and twice the file would
+  !                           overrun them) and a valid flag cwfilter clears if the file is
+  !                           missing or short.
   !-------------------------------------------------------------------------
   function ft8var_load_callsign_db() result(nvalid) bind(C, name="ft8var_load_callsign_db")
-    use jt65_mod9, only: ldbvalid
+    use jt65_mod9, only: ldbvalid, ncall0c, ncalld, ncallef, ncallgh, ncalli, ncallj, ncallk, &
+         ncalllm, ncalln, ncallo, ncallpq, ncallr, ncallst, ncalluv, ncallw, ncallxz
     integer(c_int) :: nvalid
     if (.not. db_loaded) then
+       ncall0c = 0; ncalld = 0; ncallef = 0; ncallgh = 0; ncalli = 0; ncallj = 0; ncallk = 0
+       ncalllm = 0; ncalln = 0; ncallo = 0; ncallpq = 0; ncallr = 0; ncallst = 0; ncalluv = 0
+       ncallw = 0; ncallxz = 0
+       ldbvalid = .true.
        call cwfilter(.true.)
        db_loaded = .true.
     endif

@@ -347,3 +347,32 @@ fn swl_searches_dt_out_to_3_5_s_where_wsjtx_stops_at_2_5_s() {
     );
     assert!(on.contains("CQ W9XYZ EN37"), "SWL found {on:?}");
 }
+
+#[test]
+fn a_callsign_database_load_that_found_no_file_is_retried_from_the_right_folder() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let nowhere = std::env::temp_dir().join("ft8var-no-allcall-here");
+    assert!(on_decoder_thread(
+        || ft8::var_load_callsign_db(&share_dir())
+    ));
+    assert!(
+        !on_decoder_thread(move || ft8::var_load_callsign_db(&nowhere)),
+        "control: no ALLCALL7.TXT there, and the folder changed"
+    );
+    assert!(
+        on_decoder_thread(|| ft8::var_load_callsign_db(&share_dir())),
+        "the load from the right folder takes effect again"
+    );
+    // Loaded twice, the arrays hold the file once (a doubled load would overrun them), and the
+    // sample decodes exactly as jt9 does.
+    fresh_var_state();
+    let got: Vec<(i32, i32, String)> = var_decode(sample(), jt9_params())
+        .iter()
+        .map(|d| (d.snr, nint(d.freq), d.message.trim().to_string()))
+        .collect();
+    let want: Vec<(i32, i32, String)> = JT9_GOLDEN
+        .iter()
+        .map(|&(s, _, f, m)| (s, f, m.to_string()))
+        .collect();
+    assert_eq!(got, want);
+}
