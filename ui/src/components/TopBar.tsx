@@ -465,7 +465,6 @@ export function TopBar({
     </button>
   )
   const chipCluster = (
-    <>
     <div className="topbar-group topbar-chips">
         {/* Help lives in the one group that renders in every section — the
             cockpits hide the TX cluster, the readout and the digital chrome,
@@ -496,11 +495,14 @@ export function TopBar({
           </button>
         )}
       </div>
+  )
+  const opChip = (
+    <>
         {/* WHO IS AT THE KEY (#25). Shown when an operator is set — that is the multi-op
             case, and for the single-op station that is nearly everyone this costs no width
             at all. It has to be somewhere always visible rather than in Settings, because a
             wrong operator is silent: nothing misbehaves, and it is discovered at submission
-            when the log is already wrong. Beside Help, the one group no cockpit hides.
+            when the log is already wrong. In the bar itself, which no cockpit hides.
 
             ...AND WHEN FIELD DAY IS ON, EVEN BEFORE ONE IS (2026-08-30). "Only when set" made
             the app-wide seat-swap button invisible at the one station that swaps seats: it
@@ -511,15 +513,15 @@ export function TopBar({
             the operator easily across any mode".) The gate widens by exactly ONE case, not to
             "always", because the width it costs is paid on every screen.
 
-            ...AND A ZERO-WIDE ITEM OF THE BAR'S LINE, NOT A MEMBER OF THE HELP GROUP (2026-11-14). In the group
-            its whole text width counted toward the bar's line, and in French and Russian at the smallest screen
-            "Set operator" wrapped the Tx-cycle group onto a second line: the bar grew a row the moment contest
-            mode came on and Stop TX moved down 31–34 px. Here it takes the bar's free room up to its text and
-            never wraps the bar; where the room is short it ends in an ellipsis and its tooltip and accessible
-            name keep the whole of it. RIGHT AFTER the group, not before it: zero wide, it would stay at the end
-            of a full line while Help moved down to the next, cut to a sliver there (the smallest screen at
-            100 %); after it, it is always on Help's line
-            (cockpit-panes.css `.topbar-opchip`). */}
+            ...AND BESIDE THE STATION'S OWN CALL, ON THE LINE THAT HOLDS THE BAR'S FREE ROOM (2026-11-14). In the
+            Help group its whole text width counted toward the bar's line, and in French and Russian at the
+            smallest screen "Set operator" wrapped the Tx-cycle group onto a second line: the bar grew a row the
+            moment contest mode came on and Stop TX moved down 31–34 px. Here, right after the brand group and in
+            front of the status lane, it counts only a small floor toward the line and takes the free room the lane
+            would have, up to its text (cockpit-panes.css `.topbar-opchip`). Where that room is short, "OP" gives
+            way first so the call stays whole, then the words end in an ellipsis; the tooltip and the accessible
+            name keep the whole of it. Beside Help it shared Help's line, which on the Logbook and Field Day is the
+            full one: the chip was cut to a sliver there while the bar's free room sat on the line above. */}
         {(fdActive || (operator && operator.trim() !== '')) && (
           <Menu
             trigger={
@@ -532,7 +534,14 @@ export function TopBar({
                     : t('topbar.operator.set.title')
                 }
               >
-                {operator && operator.trim() !== '' ? `${OP} ${operator}` : t('topbar.operator.set')}
+                {operator && operator.trim() !== '' ? (
+                  <>
+                    <span className="topbar-opchip-tag">{OP}</span>{' '}
+                    <span className="topbar-opchip-text">{operator}</span>
+                  </>
+                ) : (
+                  <span className="topbar-opchip-text">{t('topbar.operator.set')}</span>
+                )}
               </button>
             }
             items={[
@@ -614,6 +623,8 @@ export function TopBar({
           />
         )}
       </div>
+
+      {opChip}
 
       {/* THE STATUS LANE: ALWAYS DRAWN, and HERE, right after the brand group, so it is the item in front of
           the group that carries the bar's free room (the readout's `margin-left: auto`, or the TX/RX group's
