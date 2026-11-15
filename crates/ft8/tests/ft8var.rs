@@ -436,3 +436,27 @@ fn swl_noise_decodes_of_a_shape_no_station_sends_are_marked() {
         assert!(found[0].unchecked, "{file}: marked");
     }
 }
+
+/// Pure noise (seed 52889 of the review's fresh noise check) from which the decoder, as WSJT-X's own
+/// `jt9 -8 -M -C 3 -E 3 -R 3 -N 1` does, takes `CQ N8DEK/R CN77` with a-priori help at a quality
+/// under 0.17: the line WSJT-X prints with `?` (lib/decoder.f90 ft8_decodedvar, `if(nap.ne.0)` ...
+/// `if(qual.lt.0.17) decoded0(37:37)='?'`). The maintainer's ruling: match WSJT-X. It is NOT
+/// marked unchecked; it carries the a-priori type and quality that make the UDP Decode
+/// low-confidence and keep it from PSK Reporter (tempo-audio's wire and spot rules).
+#[test]
+fn a_low_confidence_noise_decode_is_wsjtx_s_question_mark_not_a_mark() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let wav = read_wav_i16(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/ft8var_noise_low_confidence.wav"
+    ));
+    fresh_var_state();
+    let d = var_decode(wav, jt9_params());
+    assert_eq!(
+        d.iter().map(|d| d.message.trim()).collect::<Vec<_>>(),
+        ["CQ N8DEK/R CN77"],
+        "jt9's one decode"
+    );
+    assert!(d[0].nap != 0 && d[0].qual < 0.17, "WSJT-X's `?`: {:?}", d[0]);
+    assert!(!d[0].unchecked, "shown as WSJT-X shows it, not marked `^`");
+}

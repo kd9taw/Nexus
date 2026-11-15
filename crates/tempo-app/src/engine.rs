@@ -36615,6 +36615,14 @@ contact yourself."
         self.fold_decodes(None, vec![d], slot, false)
     }
 
+    /// Test hook for the radio loop's tests (the `test-util` feature, never in a shipped build):
+    /// [`Self::fold_heard_for_test`] for a whole decode, as a decoder hands it on (its a-priori
+    /// type, quality and `unchecked` mark included).
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn fold_decode_for_test(&mut self, d: modes::Decode, slot: u64) -> usize {
+        self.fold_decodes(None, vec![d], slot, false)
+    }
+
     #[cfg(any(test, feature = "test-util"))]
     pub(crate) fn ingest_decodes_for_test(&mut self, decodes: &[modes::Decode], slot: u64) {
         // Mirror the live path's Hound multi-payload split.

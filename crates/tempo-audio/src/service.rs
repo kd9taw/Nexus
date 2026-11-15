@@ -21762,6 +21762,7 @@ mod tests {
     mod tx_extras;
     mod tx_unit_ends;
     mod udp_decode_time;
+    mod udp_low_confidence;
     mod udp_requests;
     mod wfview;
     mod yaesu_alc;
