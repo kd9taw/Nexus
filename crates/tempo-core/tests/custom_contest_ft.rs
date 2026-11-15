@@ -560,38 +560,38 @@ fn an_rst_serial_grid6_contest_works_a_contact_in_the_eu_vhf_messages() {
     assert_eq!(FtMessages::for_contest(rs, "FT8"), FtMessages::EuVhf);
     assert_eq!(FtMessages::for_contest(rs, "FT4"), FtMessages::EuVhf);
     assert_eq!(FtMessages::of_event("custom_air_euvhf").special_op(), 2);
-    let mut run = station(rs, true, "G4ABC", "IO91nm", "", "");
-    let mut sp = station(rs, false, "PA3XYZ", "JO22ab", "", "");
+    let mut run = station(rs, true, "K1ABC", "IO91nm", "", "");
+    let mut sp = station(rs, false, "W9XYZ", "JO22ab", "", "");
     assert_eq!(
         overs(&mut run, &mut sp, 6, 12),
         [
-            "R: CQ TEST G4ABC IO91",
-            "S: G4ABC PA3XYZ JO22",
-            "R: <PA3XYZ> <G4ABC> 570001 IO91NM",
-            "S: <G4ABC> <PA3XYZ> R 570001 JO22AB",
-            "R: PA3XYZ G4ABC RR73",
-            "S: G4ABC PA3XYZ 73",
+            "R: CQ TEST K1ABC IO91",
+            "S: K1ABC W9XYZ JO22",
+            "R: <W9XYZ> <K1ABC> 570001 IO91NM",
+            "S: <K1ABC> <W9XYZ> R 570001 JO22AB",
+            "R: W9XYZ K1ABC RR73",
+            "S: K1ABC W9XYZ 73",
         ]
     );
     assert_eq!(
         rows(&run),
-        ["PA3XYZ rx[RST=57,NR=1,GRID=JO22AB] tx[RST=57,NR=1,GRID=IO91NM]"]
+        ["W9XYZ rx[RST=57,NR=1,GRID=JO22AB] tx[RST=57,NR=1,GRID=IO91NM]"]
     );
     assert_eq!(
         rows(&sp),
-        ["G4ABC rx[RST=57,NR=1,GRID=IO91NM] tx[RST=57,NR=1,GRID=JO22AB]"]
+        ["K1ABC rx[RST=57,NR=1,GRID=IO91NM] tx[RST=57,NR=1,GRID=JO22AB]"]
     );
     for text in [
-        "<PA3XYZ> <G4ABC> 570001 IO91NM",
-        "<G4ABC> <PA3XYZ> R 570001 JO22AB",
+        "<W9XYZ> <K1ABC> 570001 IO91NM",
+        "<K1ABC> <W9XYZ> R 570001 JO22AB",
     ] {
         assert_eq!(i3n3(text).map(|(i3, _)| i3), Some(5), "{text}");
     }
-    for text in ["CQ TEST G4ABC IO91", "G4ABC PA3XYZ JO22"] {
+    for text in ["CQ TEST K1ABC IO91", "K1ABC W9XYZ JO22"] {
         assert_eq!(i3n3(text).map(|(i3, _)| i3), Some(1), "{text}");
     }
-    let mut run = station(rs, true, "G4ABC", "IO91nm", "", "");
-    let mut sp = station(rs, false, "PA3XYZ", "JO22ab", "", "");
+    let mut run = station(rs, true, "K1ABC", "IO91nm", "", "");
+    let mut sp = station(rs, false, "W9XYZ", "JO22ab", "", "");
     run_loopback_fieldday(&mut run, &mut sp, 0.0, 14);
     assert_eq!(rows(&run).len(), 1, "{:?}", run.transcript);
     assert_eq!(rows(&sp).len(), 1, "{:?}", sp.transcript);
@@ -624,25 +624,25 @@ fn the_eu_vhf_serial_is_clamped_to_2047_as_wsjtx_clamps_it() {
         (3000, "2047"),
         (9999, "2047"),
     ] {
-        let mut run = station(rs, true, "G4ABC", "IO91nm", "", "");
+        let mut run = station(rs, true, "K1ABC", "IO91nm", "", "");
         run.log.session.next_serial = next;
         assert_eq!(run.exchange_refusal(), None, "{next}: never refused");
-        run.observe(&[heard("G4ABC PA3XYZ JO22")], 1);
+        run.observe(&[heard("K1ABC W9XYZ JO22")], 1);
         let text = run.outgoing().unwrap().to_text();
-        assert_eq!(text, format!("<PA3XYZ> <G4ABC> 54{sent} IO91NM"), "{next}");
+        assert_eq!(text, format!("<W9XYZ> <K1ABC> 54{sent} IO91NM"), "{next}");
         // Bit for bit WSJT-X's own over for the real serial (`%4.4d`, mainwindow.cpp 9652).
         assert_eq!(
             modes::wsjt77::ft8_tones(&text),
-            modes::wsjt77::ft8_tones(&format!("<PA3XYZ> <G4ABC> 54{next:04} IO91NM")),
+            modes::wsjt77::ft8_tones(&format!("<W9XYZ> <K1ABC> 54{next:04} IO91NM")),
             "{next}"
         );
         run.after_tx();
-        run.observe(&[heard("<G4ABC> <PA3XYZ> R 570001 JO22AB")], 3);
-        assert_eq!(run.outgoing().unwrap().to_text(), "PA3XYZ G4ABC RR73");
+        run.observe(&[heard("<K1ABC> <W9XYZ> R 570001 JO22AB")], 3);
+        assert_eq!(run.outgoing().unwrap().to_text(), "W9XYZ K1ABC RR73");
         assert_eq!(
             rows(&run),
             [format!(
-                "PA3XYZ rx[RST=57,NR=1,GRID=JO22AB] tx[RST=54,NR={sent},GRID=IO91NM]"
+                "W9XYZ rx[RST=57,NR=1,GRID=JO22AB] tx[RST=54,NR={sent},GRID=IO91NM]"
             )]
         );
     }
@@ -660,14 +660,14 @@ fn the_eu_vhf_messages_refuse_a_four_character_locator_and_pass_by_unresolved_ca
     );
     // The contest cannot start with four characters in Settings: its GRID slot takes six.
     let four = StationData {
-        mycall: "G4ABC".into(),
+        mycall: "K1ABC".into(),
         mygrid: "IO91".into(),
         ..Default::default()
     };
     assert!(ContestSession::for_ruleset(rs, &four).is_err());
     // A contest running on a six-character GRID gives none of it up; a station whose locator is
     // not one refuses before it sends (the sequencer's own guard, the session's above it).
-    let mut run = station(rs, true, "G4ABC", "IO91nm", "", "");
+    let mut run = station(rs, true, "K1ABC", "IO91nm", "", "");
     assert_eq!(run.exchange_refusal(), None);
     run.mygrid = "IO91".into();
     assert_eq!(
@@ -675,24 +675,24 @@ fn the_eu_vhf_messages_refuse_a_four_character_locator_and_pass_by_unresolved_ca
         None,
         "the session's own GRID is what goes"
     );
-    let mut run = station(rs, true, "G4ABC", "IO91nm", "", "");
-    run.observe(&[heard("<G4ABC> <...> 570001 JO22AB")], 1);
-    assert_eq!(run.outgoing().unwrap().to_text(), "CQ TEST G4ABC IO91");
+    let mut run = station(rs, true, "K1ABC", "IO91nm", "", "");
+    run.observe(&[heard("<K1ABC> <...> 570001 JO22AB")], 1);
+    assert_eq!(run.outgoing().unwrap().to_text(), "CQ TEST K1ABC IO91");
     // S&P answers a CQ with the standard Tx1, then rogers the runner's exchange.
-    let mut sp = station(rs, false, "PA3XYZ", "JO22ab", "", "");
-    sp.answer_cq("G4ABC", "IO91", -15);
-    assert_eq!(sp.outgoing().unwrap().to_text(), "G4ABC PA3XYZ JO22");
-    sp.observe(&[heard("<PA3XYZ> <G4ABC> 590007 IO91NM")], 1);
+    let mut sp = station(rs, false, "W9XYZ", "JO22ab", "", "");
+    sp.answer_cq("K1ABC", "IO91", -15);
+    assert_eq!(sp.outgoing().unwrap().to_text(), "K1ABC W9XYZ JO22");
+    sp.observe(&[heard("<W9XYZ> <K1ABC> 590007 IO91NM")], 1);
     assert_eq!(
         sp.outgoing().unwrap().to_text(),
-        "<G4ABC> <PA3XYZ> R 540001 JO22AB"
+        "<K1ABC> <W9XYZ> R 540001 JO22AB"
     );
     sp.after_tx();
-    sp.observe(&[heard("PA3XYZ G4ABC RR73")], 3);
-    assert_eq!(sp.outgoing().unwrap().to_text(), "G4ABC PA3XYZ 73");
+    sp.observe(&[heard("W9XYZ K1ABC RR73")], 3);
+    assert_eq!(sp.outgoing().unwrap().to_text(), "K1ABC W9XYZ 73");
     assert_eq!(
         rows(&sp),
-        ["G4ABC rx[RST=59,NR=7,GRID=IO91NM] tx[RST=54,NR=1,GRID=JO22AB]"]
+        ["K1ABC rx[RST=59,NR=7,GRID=IO91NM] tx[RST=54,NR=1,GRID=JO22AB]"]
     );
 }
 
@@ -707,18 +707,18 @@ fn the_eu_vhf_messages_carry_a_nonstandard_call_hashed() {
         &["rst", "serial", "grid6"],
         None,
     );
-    let mut sp = station(rs, false, "PA/G4ABC", "JO22ab", "", "");
-    sp.answer_cq("PA3XYZ", "JO21", 6);
-    assert_eq!(sp.outgoing().unwrap().to_text(), "<PA3XYZ> PA/G4ABC");
-    let mut run = station(rs, true, "PA3XYZ", "JO21qx", "", "");
-    run.observe(&[heard("<PA3XYZ> PA/G4ABC")], 1);
+    let mut sp = station(rs, false, "PJ4/K1ABC", "JO22ab", "", "");
+    sp.answer_cq("W9XYZ", "JO21", 6);
+    assert_eq!(sp.outgoing().unwrap().to_text(), "<W9XYZ> PJ4/K1ABC");
+    let mut run = station(rs, true, "W9XYZ", "JO21qx", "", "");
+    run.observe(&[heard("<W9XYZ> PJ4/K1ABC")], 1);
     let text = run.outgoing().unwrap().to_text();
-    assert_eq!(text, "<PA/G4ABC> <PA3XYZ> 540001 JO21QX");
+    assert_eq!(text, "<PJ4/K1ABC> <W9XYZ> 540001 JO21QX");
     assert_eq!(i3n3(&text).map(|(i3, _)| i3), Some(5));
     sp.after_tx();
-    sp.observe(&[heard("<PA/G4ABC> <PA3XYZ> 540001 JO21QX")], 2);
+    sp.observe(&[heard("<PJ4/K1ABC> <W9XYZ> 540001 JO21QX")], 2);
     let text = sp.outgoing().unwrap().to_text();
-    assert_eq!(text, "<PA3XYZ> <PA/G4ABC> R 540001 JO22AB");
+    assert_eq!(text, "<W9XYZ> <PJ4/K1ABC> R 540001 JO22AB");
     assert_eq!(i3n3(&text).map(|(i3, _)| i3), Some(5));
 }
 
