@@ -2267,6 +2267,42 @@ mod tests {
         );
     }
 
+    /// A child process holding `path` open for writing, so every exec of it fails ETXTBSY until
+    /// [`Holder::release`]. The descriptor is opened by the child itself, after its own exec, so
+    /// no fork of the test process carries a copy of it.
+    #[cfg(target_os = "linux")]
+    struct Holder(std::process::Child);
+
+    #[cfg(target_os = "linux")]
+    impl Holder {
+        /// Returns once the child holds `path`.
+        fn new(path: &std::path::Path) -> Self {
+            use std::io::Read;
+            let mut child = Command::new("/bin/sh")
+                .args(["-c", "exec 3>>\"$0\" && echo held && exec sleep 60"])
+                .arg(path)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .spawn()
+                .expect("spawn the holder");
+            let mut held = [0u8; 5];
+            child
+                .stdout
+                .take()
+                .expect("holder stdout")
+                .read_exact(&mut held)
+                .expect("the holder says it holds the file");
+            assert_eq!(&held, b"held\n");
+            Self(child)
+        }
+
+        /// Kill and reap the child: when this returns, its descriptor is closed.
+        fn release(mut self) {
+            let _ = self.0.kill();
+            self.0.wait().expect("reap the holder");
+        }
+    }
+
     /// ⭐ A BUSY `rigctl` IS NOT A MISSING ONE. While anything holds the binary open for writing,
     /// its exec fails ETXTBSY; that is a moment, not an answer. Held for the first try and let go
     /// a moment later, the `rigctl` is asked again and ITS dump is the answer: `rigctld` (here a
@@ -2287,40 +2323,61 @@ mod tests {
         );
         let args = ["-m", "3073", "-L"];
         let budget = Duration::from_secs(5);
-        let hold = || {
-            std::fs::OpenOptions::new()
-                .append(true)
-                .open(&rigctl)
-                .expect("open rigctl for writing")
-        };
         // The kernel premise: an exec of the file while it is held fails ETXTBSY.
-        let writer = hold();
+        let holder = Holder::new(&rigctl);
         let ran = Command::new(&rigctl).stdout(Stdio::null()).status();
-        drop(writer);
+        holder.release();
         if !matches!(&ran, Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy) {
             eprintln!("skipped: this kernel ran a file open for writing ({ran:?})");
             return;
         }
 
         // Busy for the first try only: the write descriptor goes 30 ms in.
-        let writer = hold();
-        let release = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(30));
-            drop(writer);
-        });
-        let answer = ask_show_conf(rigctl.as_os_str(), rigctld.as_os_str(), &args, budget);
-        release.join().unwrap();
-        assert_eq!(answer, ShowConf::Dump(whole.to_string()));
+        //
+        // ⚠️ A MOMENT IS ONLY A MOMENT IF THE RELEASE LANDS INSIDE THE ASK'S RETRIES. The ask naps
+        // 50 ms five times after a busy try, so a hold let go within 250 ms of the ask's start
+        // must be answered by `rigctl`. Two things can stretch the moment past that, and neither
+        // is the code under test: the thread that lets go not getting the CPU for 250 ms on a
+        // loaded machine, and a copy of the write descriptor in a child that another test thread
+        // forked meanwhile. So the descriptor lives in a child of this test's own (no fork of
+        // this process can copy it), the release is that child's death and reaping (once reaped,
+        // its descriptors are closed), and a run whose release came after the window is not a
+        // verdict: it is run again. A release inside the window is held to the answer strictly.
+        let window = Duration::from_millis(250);
+        let mut late = Vec::new();
+        loop {
+            let holder = Holder::new(&rigctl);
+            let started = Instant::now();
+            let release = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(30));
+                holder.release();
+                started.elapsed()
+            });
+            let answer = ask_show_conf(rigctl.as_os_str(), rigctld.as_os_str(), &args, budget);
+            let released = release.join().unwrap();
+            if released >= window && answer != ShowConf::Dump(whole.to_string()) {
+                late.push(released);
+                assert!(late.len() < 20, "every release came late: {late:?}");
+                let _ = std::fs::remove_file(rigctld.with_extension("args"));
+                continue;
+            }
+            assert_eq!(
+                answer,
+                ShowConf::Dump(whole.to_string()),
+                "released at {released:?}"
+            );
+            break;
+        }
         assert!(
             !rigctld.with_extension("args").exists(),
             "rigctld was asked while rigctl was only busy"
         );
 
         // Busy for good: rigctld is asked, and soon.
-        let writer = hold();
+        let holder = Holder::new(&rigctl);
         let started = Instant::now();
         let answer = ask_show_conf(rigctl.as_os_str(), rigctld.as_os_str(), &args, budget);
-        drop(writer);
+        holder.release();
         assert_eq!(answer, ShowConf::Dump(other.to_string()));
         assert!(
             started.elapsed() < Duration::from_secs(2),
