@@ -457,6 +457,10 @@ fn a_low_confidence_noise_decode_is_wsjtx_s_question_mark_not_a_mark() {
         ["CQ N8DEK/R CN77"],
         "jt9's one decode"
     );
-    assert!(d[0].nap != 0 && d[0].qual < 0.17, "WSJT-X's `?`: {:?}", d[0]);
+    assert!(
+        d[0].nap != 0 && d[0].qual < 0.17,
+        "WSJT-X's `?`: {:?}",
+        d[0]
+    );
     assert!(!d[0].unchecked, "shown as WSJT-X shows it, not marked `^`");
 }
