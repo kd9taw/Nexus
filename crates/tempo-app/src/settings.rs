@@ -3478,6 +3478,13 @@ pub struct Settings {
     /// preset's ([`Settings::jtdx_preset`]). The early pass is the standard decoder either way.
     #[serde(default)]
     pub ft8_decoder: DecoderStyle,
+    /// Which FT4 decoder runs the full pass of each period: the JTDX-style decoder (JTDX
+    /// 2.2.159's own FT4 decoder) or WSJT-X's standard decoder. The JTDX-style one follows the
+    /// same preset as FT8's ([`Settings::jtdx_preset`]): depth 3, JTDX's default, under every
+    /// preset, and [`Settings::decode_depth`] under Custom; SWL as the preset sets it. The
+    /// early pass is the standard decoder either way.
+    #[serde(default)]
+    pub ft4_decoder: DecoderStyle,
     /// The JTDX-style decoder's preset ([`JtdxPreset`]). FT8's, and FT4's when it has one.
     #[serde(default)]
     pub jtdx_preset: JtdxPreset,
@@ -7254,6 +7261,7 @@ impl Default for Settings {
             special_op: SpecialOp::None,
             decode_depth: 3,
             ft8_decoder: DecoderStyle::default(),
+            ft4_decoder: DecoderStyle::default(),
             jtdx_preset: JtdxPreset::default(),
             jtdx_custom: JtdxCustom::default(),
             decode_flow_hz: 200,

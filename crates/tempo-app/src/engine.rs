@@ -218,6 +218,8 @@ mod decode_refill_tests;
 #[cfg(test)]
 mod experience_level_tests;
 #[cfg(test)]
+mod ft4_jtdx_tests;
+#[cfg(test)]
 mod jtdx_calls_tests;
 /// The radio switch notice's record and the switch policy's one writer.
 #[cfg(test)]
@@ -34451,13 +34453,20 @@ contact yourself."
     /// last logged. What WSJT-X passes as a constant is passed as that constant
     /// (`ft8::VarRequest::params`).
     fn jtdx_request(&self) -> Option<modes::JtdxRequest> {
-        use crate::settings::{DecoderStyle, SpecialOp};
-        if self.app.tier() != Tier::Ft8
-            || self.settings.ft8_decoder != DecoderStyle::Jtdx
-            || self.settings.special_op == SpecialOp::SuperHound
-        {
+        use crate::settings::{DecoderStyle, JtdxPreset, SpecialOp};
+        let jtdx = match self.app.tier() {
+            Tier::Ft8 => {
+                self.settings.ft8_decoder == DecoderStyle::Jtdx
+                    && self.settings.special_op != SpecialOp::SuperHound
+            }
+            // FT4 has no Fox/Hound; its JTDX-style decoder is JTDX's own FT4 decoder.
+            Tier::Ft4 => self.settings.ft4_decoder == DecoderStyle::Jtdx,
+            _ => false,
+        };
+        if !jtdx {
             return None;
         }
+        let preset = self.jtdx_preset_running();
         let mycall = self.settings.mycall.trim();
         let partner = match &self.mode {
             Mode::Qso { station, .. } => station
@@ -34483,10 +34492,7 @@ contact yourself."
             }
         };
         Some(modes::JtdxRequest {
-            knobs: self
-                .jtdx_preset_running()
-                .knobs(&self.settings.jtdx_custom)
-                .into(),
+            knobs: preset.knobs(&self.settings.jtdx_custom).into(),
             napwid: modes::jtdx::napwid_for_dial((self.settings.dial_mhz * 1e6).max(0.0) as u64),
             hisgrid: hisgrid.to_string(),
             mycall: mycall.to_string(),
@@ -34497,6 +34503,13 @@ contact yourself."
             hiscall_std: tempo_core::message::is_std_call(hiscall),
             hound: self.settings.special_op == SpecialOp::Hound,
             dx_search,
+            // JTDX's default FT4 depth is 3 (`mainwindow.cpp`, `m_nFT4depth {3}`), which every
+            // preset keeps; Custom uses the operator's Decode depth.
+            ft4_depth: if preset == JtdxPreset::Custom {
+                i32::from(self.settings.decode_depth.clamp(1, 3))
+            } else {
+                3
+            },
         })
     }
 
@@ -34755,7 +34768,10 @@ contact yourself."
             ap_cq_only: self.settings.ap_cq_only,
             activity: self.special_activity(),
             jtdx: self.jtdx_request(),
-            jtdx_preset: Some(self.jtdx_preset_running()),
+            // The CPU guard measures FT8's full pass against FT8's budget. FT4's JTDX-style pass
+            // (about 0.3 s against a 7.5 s period) follows the same preset, so a step-down FT8
+            // made applies to it too, but never makes one itself.
+            jtdx_preset: (self.app.tier() == Tier::Ft8).then(|| self.jtdx_preset_running()),
             frame_time_ms,
             harq_reset,
             pass,

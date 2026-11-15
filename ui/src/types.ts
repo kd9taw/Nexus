@@ -6207,6 +6207,9 @@ export interface Settings {
   /** Which FT8 decoder runs the full pass: the JTDX-style one (WSJT-X 3.0's multithreaded
    *  decoder, its port of JTDX's; the default) or WSJT-X's standard decoder. */
   ft8Decoder?: Ft8DecoderStyle
+  /** Which FT4 decoder runs the full pass: JTDX 2.2.159's own FT4 decoder or WSJT-X's (engine
+   *  `Settings::ft4_decoder`). It follows the same preset as FT8's. */
+  ft4Decoder?: Ft8DecoderStyle
   /** The JTDX-style decoder's preset (default Easy). */
   jtdxPreset?: JtdxPreset
   /** The JTDX-style decoder's knobs under Custom. */

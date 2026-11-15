@@ -265,7 +265,8 @@ impl From<ft4::Decode> for Decode {
             rv: None,
             mode: None,
             raw: None,
-            unchecked: false,
+            // The JTDX-style decoder marks low-quality OSD decodes; the Standard one never does.
+            unchecked: d.unchecked,
         }
     }
 }

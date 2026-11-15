@@ -1,5 +1,6 @@
-// Settings ▸ Digital ▸ Decoder: which FT8 decoder runs the full pass, and the JTDX-style decoder's
-// preset and knobs.
+// Settings ▸ Digital ▸ Decoder: which FT8 decoder and which FT4 decoder run the full pass, and the
+// JTDX-style decoders' shared preset and knobs. FT4's JTDX-style decoder (JTDX's own) reads only
+// the preset's SWL; its depth is 3 under every preset and Decode depth under Custom.
 //
 // The JTDX-style decoder is WSJT-X 3.0's multithreaded FT8 decoder, its port of JTDX's. Its presets
 // are the engine's (`crates/tempo-app/src/settings.rs`, `JtdxPreset::knobs`); PRESET_KNOBS below
@@ -50,6 +51,9 @@ export interface JtdxDecoderFieldsProps {
 
 export function JtdxDecoderFields({ form, setForm, markDirty, locked, cores }: JtdxDecoderFieldsProps) {
   const style = form.ft8Decoder ?? 'jtdx'
+  const ft4Style = form.ft4Decoder ?? 'jtdx'
+  // The preset and its knobs apply while either mode's decoder is JTDX-style.
+  const anyJtdx = style === 'jtdx' || ft4Style === 'jtdx'
   const preset = form.jtdxPreset ?? 'easy'
   const knobs = knobsOf(preset, form.jtdxCustom)
   const have = cores ?? logicalCores()
@@ -119,7 +123,22 @@ export function JtdxDecoderFields({ form, setForm, markDirty, locked, cores }: J
         <span className="settings-hint">{t('settings.digital.ft8Decoder.hint')}</span>
       </div>
 
-      {style === 'jtdx' && (
+      <div className="settings-field" data-field="ft4-decoder">
+        <span className="settings-label">{t('settings.digital.ft4Decoder.label')}</span>
+        {chips(
+          t('settings.digital.ft4Decoder.label'),
+          [
+            { value: 'jtdx', name: t('settings.digital.ft4Decoder.jtdx') },
+            { value: 'standard', name: t('settings.digital.ft4Decoder.standard') },
+          ] as const,
+          ft4Style,
+          (v) => set({ ft4Decoder: v }),
+          locked('ft4Decoder'),
+        )}
+        <span className="settings-hint">{t('settings.digital.ft4Decoder.hint')}</span>
+      </div>
+
+      {anyJtdx && (
         <div className="settings-field" data-field="jtdx-preset">
           <span className="settings-label">{t('settings.digital.jtdxPreset.label')}</span>
           {chips(
@@ -156,7 +175,7 @@ export function JtdxDecoderFields({ form, setForm, markDirty, locked, cores }: J
         </div>
       )}
 
-      {style === 'jtdx' && (
+      {anyJtdx && (
         <details className="settings-field" data-field="jtdx-advanced" open={preset === 'custom'}>
           <summary className="settings-label">{t('settings.digital.jtdx.advanced')}</summary>
           <div className="settings-field">

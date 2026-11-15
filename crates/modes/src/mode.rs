@@ -1219,6 +1219,39 @@ impl Mode for Ft4Mode {
         .map(Into::into)
         .collect()
     }
+    /// The JTDX-style decoder's full pass: JTDX 2.2.159's own FT4 decoder (`ft4::decode_frame_jtdx`)
+    /// over the whole period, as JTDX decodes FT4 once at its end. The calls are the JTDX-style
+    /// request's, as JTDX passes them (my call always, the DX call whenever one is set); depth is
+    /// the request's `ft4_depth` (3, JTDX's default, or Custom's Decode depth; `req.ndepth` is the
+    /// Standard early pass's); `ap_cq_only` is JTDX's stop hint and `swl` the preset's SWL. The early pass stays the
+    /// Standard decoder, and its decodes and these meet in the engine as the Standard decoder's two
+    /// passes do. A decode it marks `unchecked` (a low-quality OSD decode) is shown, never acted on.
+    fn decode_frame_var(
+        &self,
+        req: &crate::DecodeRequest,
+        jtdx: &crate::JtdxRequest,
+        _carry: &mut PassCarry,
+        sink: &mut dyn DecodeSink,
+    ) -> Option<Vec<Decode>> {
+        Some(
+            ft4::decode_frame_streaming_jtdx(
+                req.iwave,
+                req.nfa,
+                req.nfb,
+                jtdx.ft4_depth,
+                &jtdx.mycall,
+                &jtdx.hiscall,
+                req.nqso_progress,
+                req.nfqso,
+                req.ap_cq_only,
+                jtdx.knobs.swl,
+                &mut |d| sink.found(&d.clone().into()),
+            )
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+        )
+    }
 }
 
 /// Slot lead-in for FT2, in seconds — how far into its 3.75 s T/R period the tones start.

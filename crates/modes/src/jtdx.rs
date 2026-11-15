@@ -52,6 +52,9 @@ pub struct JtdxRequest {
     pub hound: bool,
     /// A DX call is set, transmit is off and the call is not yet logged (`lenabledxcsearch`).
     pub dx_search: bool,
+    /// FT4's decode depth for the JTDX-style FT4 decoder (1-3): 3, JTDX's default, under every
+    /// preset, and the operator's Decode depth under Custom. FT8 does not read it.
+    pub ft4_depth: i32,
 }
 
 /// WSJT-X's AP window for the dial frequency (`mainwindow.cpp:5511-5513`).

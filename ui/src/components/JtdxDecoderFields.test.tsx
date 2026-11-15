@@ -23,11 +23,17 @@ describe('Settings ▸ FT8 decoder', () => {
     expect(screen.getByRole('button', { name: 'Easy' }).getAttribute('aria-pressed')).toBe('true')
   })
 
-  it('picks the standard decoder, and then offers no preset', () => {
+  it('picks the standard decoder, and offers no preset once FT4 is standard too', () => {
     const seen: Settings[] = []
     render(<Harness start={{}} seen={seen} cores={8} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Standard (WSJT-X)' }))
+    const ft8 = screen.getByRole('group', { name: 'FT8 decoder' })
+    fireEvent.click(within(ft8).getByRole('button', { name: 'Standard (WSJT-X)' }))
     expect(last(seen).ft8Decoder).toBe('standard')
+    // FT4's decoder is still JTDX-style, and the preset is still its.
+    expect(screen.getByRole('button', { name: 'Ludicrous' })).toBeTruthy()
+    const ft4 = screen.getByRole('group', { name: 'FT4 decoder' })
+    fireEvent.click(within(ft4).getByRole('button', { name: 'Standard (WSJT-X)' }))
+    expect(last(seen).ft4Decoder).toBe('standard')
     expect(screen.queryByRole('button', { name: 'Ludicrous' })).toBeNull()
   })
 
@@ -66,5 +72,22 @@ describe('Settings ▸ FT8 decoder', () => {
     fireEvent.click(within(cycles).getByRole('button', { name: '2' }))
     expect(last(seen).jtdxPreset).toBe('custom')
     expect(last(seen).jtdxCustom).toEqual({ ...PRESET_KNOBS.keen, cycles: 2 })
+  })
+})
+
+describe('Settings ▸ FT4 decoder', () => {
+  it('defaults to the JTDX-style decoder, sharing FT8\'s preset', () => {
+    render(<Harness start={{}} seen={[]} cores={8} />)
+    const ft4 = screen.getByRole('group', { name: 'FT4 decoder' })
+    expect(within(ft4).getByRole('button', { name: 'JTDX-style' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('keeps the preset on offer for FT4 alone when FT8 runs the standard decoder', () => {
+    const seen: Settings[] = []
+    render(<Harness start={{ ft8Decoder: 'standard' }} seen={seen} cores={8} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Ludicrous' }))
+    expect(last(seen).jtdxPreset).toBe('ludicrous')
+    expect(last(seen).ft8Decoder).toBe('standard')
+    expect(last(seen).ft4Decoder ?? 'jtdx').toBe('jtdx')
   })
 })
