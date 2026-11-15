@@ -238,7 +238,10 @@ fn a_repeat_of_a_marked_noise_shape_stays_gated() {
         let mut e = station();
         for slot in [1, 3, 5] {
             full_pass(&mut e, shape, true, slot);
-            assert!(wired(&e).is_empty(), "{shape:?} slot {slot}: never handed on");
+            assert!(
+                wired(&e).is_empty(),
+                "{shape:?} slot {slot}: never handed on"
+            );
         }
     }
 }
