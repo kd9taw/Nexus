@@ -325,7 +325,16 @@ fn the_preview_names_the_ft_messages_this_build_sends() {
     settings.fd_class = "2B".into();
     settings.fd_section = "WI".into();
     settings.contest_qth_state = "IL".into();
-    let cases: &[(&str, &[&str], Option<&str>, &str, &str, &str)] = &[
+    /// `(id, exchange, CQ word, messages, the CQ, the exchange sent)`.
+    type Case<'a> = (
+        &'a str,
+        &'a [&'a str],
+        Option<&'a str>,
+        &'a str,
+        &'a str,
+        &'a str,
+    );
+    let cases: &[Case] = &[
         (
             "custom_pv_fd",
             &["fd_class", "arrl_section"],

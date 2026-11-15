@@ -226,7 +226,9 @@ fn points_are_per_mode_class_with_no_multiplier() {
 #[test]
 fn each_custom_contest_shape_sends_the_messages_its_exchange_matches() {
     use FtMessages::*;
-    let shapes: &[(&str, &[&str], Option<&str>, bool, FtMessages)] = &[
+    /// `(id, exchange, CQ word, Roundup asked, messages on FT8/FT4 when ticked)`.
+    type Shape<'a> = (&'a str, &'a [&'a str], Option<&'a str>, bool, FtMessages);
+    let shapes: &[Shape] = &[
         (
             "custom_ft_fd",
             &["fd_class", "arrl_section"],

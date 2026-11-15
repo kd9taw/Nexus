@@ -4191,7 +4191,7 @@ pub enum FtMessages {
     /// Roundup itself takes RTTY alone.
     RttyRoundup,
     /// WSJT-X's EU VHF Contest activity (`EU_VHF`), an operator's own contest whose exchange is
-    /// RST, serial and a six-character grid: `CQ TEST` (genCQMsg, mainwindow.cpp 9514), the
+    /// RST, serial and a six-character grid: `CQ TEST` (genCQMsg, mainwindow.cpp 9515), the
     /// standard Tx1 answer (Tx1 stays on, 8250-8253), then `<to> <de> 570001 IO91NP` with BOTH
     /// calls hashed and its rogered form (genStdMsgs, 9649-9657), the 77-bit EU VHF message
     /// (i3=5, packjt77.f90 `pack77_5`); RR73, and 73 (processMessage, 9138-9151, 9168-9215). No
@@ -4210,7 +4210,7 @@ impl FtMessages {
         match ruleset.ft_activity {
             Some(FtActivity::FieldDay) => Self::FieldDay,
             // `NA_VHF` and `ARRL_DIGI` are one set of messages on the air: `CQ TEST` (genCQMsg,
-            // mainwindow.cpp 9513 and 9519) and the four-character grid (genStdMsgs, 9633 and
+            // mainwindow.cpp 9514 and 9519) and the four-character grid (genStdMsgs, 9633 and
             // 9635).
             Some(FtActivity::NaVhf) => Self::NaVhf,
             // `WW_DIGI`: the NA VHF messages with `CQ WW` (genCQMsg, 9518; genStdMsgs, 9634).
@@ -4355,7 +4355,7 @@ impl FtMessages {
             Self::NaVhf => ("TEST", sent_grid(session_grid, mygrid)),
             Self::WwDigi => ("WW", sent_grid(session_grid, mygrid)),
             Self::RttyRoundup => ("RU", sent_grid(session_grid, mygrid)),
-            // `CQ TEST` with the grid's four characters (genCQMsg, 9514; `grid.left (4)`, 9490).
+            // `CQ TEST` with the grid's four characters (genCQMsg, 9515; `grid.left(4)`, 9491).
             Self::EuVhf => ("TEST", sent_grid(session_grid, mygrid)),
             Self::Standard => (dir, sent_grid(session_grid, mygrid)),
         };
@@ -4421,7 +4421,7 @@ impl FtMessages {
 ///
 /// ⚠️ **Four characters either way**: a standard message carries a four-character grid, and
 /// WSJT-X writes `my_grid().left(4)` into every one (genStdMsgs, mainwindow.cpp 9582; genCQMsg,
-/// 9490). A contest whose GRID holds six (an operator's own contest exchanging a six-character
+/// 9491). A contest whose GRID holds six (an operator's own contest exchanging a six-character
 /// locator) would otherwise send `CQ K1ABC FN42AB`, which the packer can only send as 13
 /// characters of free text. Every shipped contest's GRID holds four, and is sent as it was.
 fn sent_grid(session_grid: &str, mygrid: &str) -> String {
