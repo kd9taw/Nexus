@@ -9711,6 +9711,7 @@ export const EN = {
   'settings.digital.jtdxPreset.custom': 'Custom',
   'settings.digital.jtdxPreset.hint': 'Easy is a light decode on one core, for a slow computer. Keen is WSJT-X\'s own defaults for this decoder, on several cores. Ludicrous adds JTDX\'s SWL mode and decodes on up to 12 cores. Turning any setting under Advanced makes it Custom. If decoding cannot keep up, Nexus steps down one preset and says so.',
   'settings.digital.jtdxPreset.ludicrousWarning': 'Ludicrous decodes on up to {{cores}} cores; this computer has {{have}}. On a Raspberry Pi or a small laptop, decodes may arrive too late to answer.',
+  'settings.digital.jtdxPreset.keenWarning': 'Keen decodes on {{cores}} cores (WSJT-X picks the count from this computer); this computer has {{have}}. On a Raspberry Pi or a small laptop, decodes may arrive too late to answer.',
   'settings.digital.jtdx.advanced': 'Advanced',
   'settings.digital.jtdx.cycles.label': 'Decoding cycles',
   'settings.digital.jtdx.cycles.hint': 'More cycles find more signals on a busy band and take more time.',

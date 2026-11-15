@@ -9048,6 +9048,7 @@ export const ZH: PartialCatalog = {
   "settings.digital.jtdxPreset.custom": "自定义",
   "settings.digital.jtdxPreset.hint": "轻松是单核心上的轻量解码，适合较慢的电脑。敏锐即 WSJT-X 为此解码器的默认设置，使用多个核心。疯狂加入 JTDX 的 SWL 模式，最多在 12 个核心上解码。修改“高级”中的任何设置都会变为自定义。若解码跟不上，Nexus 会降一级预设并告知您。",
   "settings.digital.jtdxPreset.ludicrousWarning": "疯狂最多使用 {{cores}} 个核心解码；这台计算机有 {{have}} 个。在树莓派或小型笔记本上，解码结果可能来不及回复。",
+  "settings.digital.jtdxPreset.keenWarning": "敏锐使用 {{cores}} 个核心解码（数量由 WSJT-X 按这台计算机选定）；这台计算机有 {{have}} 个。在树莓派或小型笔记本上，解码结果可能来不及回复。",
   "settings.digital.jtdx.advanced": "高级",
   "settings.digital.jtdx.cycles.label": "解码轮次",
   "settings.digital.jtdx.cycles.hint": "轮次越多，在繁忙波段上找到的信号越多，耗时也越长。",

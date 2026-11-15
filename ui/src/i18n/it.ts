@@ -9470,6 +9470,7 @@ export const IT: PartialCatalog = {
   "settings.digital.jtdxPreset.custom": "Personalizzata",
   "settings.digital.jtdxPreset.hint": "Facile è una decodifica leggera su un core, per un computer lento. Acuto sono le impostazioni predefinite di WSJT-X per questo decodificatore, su più core. Folle aggiunge la modalità SWL di JTDX e decodifica su un massimo di 12 core. Cambiare un'impostazione in Avanzate la rende Personalizzata. Se la decodifica non tiene il passo, Nexus scende di una preimpostazione e lo dice.",
   "settings.digital.jtdxPreset.ludicrousWarning": "Folle decodifica su fino a {{cores}} core; questo computer ne ha {{have}}. Su un Raspberry Pi o un portatile piccolo, le decodifiche possono arrivare troppo tardi per rispondere.",
+  "settings.digital.jtdxPreset.keenWarning": "Acuto decodifica su {{cores}} core (WSJT-X sceglie il numero in base a questo computer); questo computer ne ha {{have}}. Su un Raspberry Pi o un portatile piccolo, le decodifiche possono arrivare troppo tardi per rispondere.",
   "settings.digital.jtdx.advanced": "Avanzate",
   "settings.digital.jtdx.cycles.label": "Cicli di decodifica",
   "settings.digital.jtdx.cycles.hint": "Più cicli trovano più segnali su una banda affollata e richiedono più tempo.",

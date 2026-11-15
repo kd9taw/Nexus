@@ -4,8 +4,8 @@
 // The JTDX-style decoder is WSJT-X 3.0's multithreaded FT8 decoder, its port of JTDX's. Its presets
 // are the engine's (`crates/tempo-app/src/settings.rs`, `JtdxPreset::knobs`); PRESET_KNOBS below
 // mirrors them so a knob turned under a preset starts Custom from what that preset runs. Turning
-// any knob makes the preset Custom. Ludicrous says, plainly, how many cores it may take against how
-// many this computer has.
+// any knob makes the preset Custom. Keen and Ludicrous say, plainly, how many cores they may take
+// against how many this computer has.
 import { t } from '../i18n'
 import type { JtdxKnobs, JtdxPreset, Settings } from '../types'
 
@@ -22,6 +22,15 @@ export const PRESET_KNOBS: Record<Exclude<JtdxPreset, 'custom'>, JtdxKnobs> = {
 /** The knobs a preset runs; Custom's are the form's own. */
 export function knobsOf(preset: JtdxPreset, custom: JtdxKnobs | undefined): JtdxKnobs {
   return preset === 'custom' ? (custom ?? PRESET_KNOBS.easy) : PRESET_KNOBS[preset]
+}
+
+/** WSJT-X's automatic thread count for `cores` logical cores (`decoder.f90`, ft8var_threads): Keen's. */
+export function autoThreads(cores: number): number {
+  if (cores <= 1) return 1
+  if (cores < 5) return cores - 1
+  if (cores < 9) return cores - 2
+  if (cores < 16) return cores - 3
+  return JTDX_MAX_THREADS
 }
 
 /** The logical cores this computer reports (what WSJT-X's thread count is measured against). */
@@ -131,8 +140,13 @@ export function JtdxDecoderFields({ form, setForm, markDirty, locked, cores }: J
             lockedJtdx,
           )}
           <span className="settings-hint">{t('settings.digital.jtdxPreset.hint')}</span>
+          {preset === 'keen' && (
+            <span className="settings-hint settings-warn" role="note" data-cpu-warning="keen">
+              {t('settings.digital.jtdxPreset.keenWarning', { cores: autoThreads(have), have })}
+            </span>
+          )}
           {preset === 'ludicrous' && (
-            <span className="settings-hint settings-warn" role="note" data-ludicrous-warning>
+            <span className="settings-hint settings-warn" role="note" data-cpu-warning="ludicrous" data-ludicrous-warning>
               {t('settings.digital.jtdxPreset.ludicrousWarning', {
                 cores: Math.min(JTDX_MAX_THREADS, PRESET_KNOBS.ludicrous.threads),
                 have,

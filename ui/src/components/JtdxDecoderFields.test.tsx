@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import { useState } from 'react'
 import { render, screen, fireEvent, within } from '@testing-library/react'
-import { JtdxDecoderFields, PRESET_KNOBS } from './JtdxDecoderFields'
+import { JtdxDecoderFields, PRESET_KNOBS, autoThreads } from './JtdxDecoderFields'
 import type { Settings } from '../types'
 
 /** The fields over a live form, the way SettingsPanel holds it; `seen` gets every form. */
@@ -40,6 +40,23 @@ describe('Settings ▸ FT8 decoder', () => {
     expect(container.querySelector('[data-ludicrous-warning]')?.textContent).toBe(
       'Ludicrous decodes on up to 12 cores; this computer has 4. On a Raspberry Pi or a small laptop, decodes may arrive too late to answer.',
     )
+  })
+
+  it('warns on Keen too, with the threads WSJT-X picks for this computer', () => {
+    const { container } = render(<Harness start={{ jtdxPreset: 'keen' }} seen={[]} cores={4} />)
+    expect(container.querySelector('[data-cpu-warning]')?.textContent).toBe(
+      'Keen decodes on 3 cores (WSJT-X picks the count from this computer); this computer has 4. On a Raspberry Pi or a small laptop, decodes may arrive too late to answer.',
+    )
+    // WSJT-X's automatic count: 1 core 1; 2-4 one less; 5-8 two less; 9-15 three less; then 12.
+    expect([1, 2, 4, 5, 8, 9, 15, 16, 32].map(autoThreads)).toEqual([1, 1, 3, 3, 6, 6, 12, 12, 12])
+  })
+
+  it('shows the CPU warning on Keen and Ludicrous and none on Easy', () => {
+    for (const [preset, warns] of [['easy', false], ['keen', true], ['ludicrous', true]] as const) {
+      const { container, unmount } = render(<Harness start={{ jtdxPreset: preset }} seen={[]} cores={8} />)
+      expect(container.querySelector('[data-cpu-warning]') !== null, preset).toBe(warns)
+      unmount()
+    }
   })
 
   it('turns a knob under a preset into Custom, starting from what that preset runs', () => {
