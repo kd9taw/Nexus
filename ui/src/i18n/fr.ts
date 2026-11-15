@@ -7836,7 +7836,7 @@ export const FR: PartialCatalog = {
   "settings.digital.jtdxPreset.keen": "Affûté",
   "settings.digital.jtdxPreset.ludicrous": "Démentiel",
   "settings.digital.jtdxPreset.custom": "Personnalisé",
-  "settings.digital.jtdxPreset.hint": "Facile reprend les réglages par défaut de WSJT-X pour ce décodeur, sur un thread. Affûté ajoute le mode SWL de JTDX. Démentiel pousse tout au maximum et décode sur plusieurs cœurs à la fois. Modifier un réglage sous Avancé le rend Personnalisé. Si le décodage ne suit pas, Nexus descend d'un préréglage et le signale.",
+  "settings.digital.jtdxPreset.hint": "Facile est un décodage léger sur un cœur, pour un ordinateur lent. Affûté reprend les réglages par défaut de WSJT-X pour ce décodeur, sur plusieurs cœurs. Démentiel ajoute le mode SWL de JTDX et décode sur jusqu'à 12 cœurs. Modifier un réglage sous Avancé le rend Personnalisé. Si le décodage ne suit pas, Nexus descend d'un préréglage et le signale.",
   "settings.digital.jtdxPreset.ludicrousWarning": "Démentiel décode sur jusqu'à {{cores}} cœurs ; cet ordinateur en a {{have}}. Sur un Raspberry Pi ou un petit portable, les décodages peuvent arriver trop tard pour répondre.",
   "settings.digital.jtdx.advanced": "Avancé",
   "settings.digital.jtdx.cycles.label": "Cycles de décodage",

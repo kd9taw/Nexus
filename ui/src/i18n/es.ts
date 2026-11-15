@@ -7836,7 +7836,7 @@ export const ES: PartialCatalog = {
   "settings.digital.jtdxPreset.keen": "Agudo",
   "settings.digital.jtdxPreset.ludicrous": "Delirante",
   "settings.digital.jtdxPreset.custom": "Personalizado",
-  "settings.digital.jtdxPreset.hint": "Fácil son los valores predeterminados de WSJT-X para este decodificador, en un hilo. Agudo añade el modo SWL de JTDX. Delirante lo sube todo y decodifica en varios núcleos a la vez. Cambiar cualquier ajuste en Avanzado lo convierte en Personalizado. Si la decodificación no da abasto, Nexus baja un preajuste y lo avisa.",
+  "settings.digital.jtdxPreset.hint": "Fácil es una decodificación ligera en un núcleo, para un ordenador lento. Agudo son los valores predeterminados de WSJT-X para este decodificador, en varios núcleos. Delirante añade el modo SWL de JTDX y decodifica en hasta 12 núcleos. Cambiar cualquier ajuste en Avanzado lo convierte en Personalizado. Si la decodificación no da abasto, Nexus baja un preajuste y lo avisa.",
   "settings.digital.jtdxPreset.ludicrousWarning": "Delirante decodifica en hasta {{cores}} núcleos; este ordenador tiene {{have}}. En una Raspberry Pi o un portátil pequeño, las decodificaciones pueden llegar demasiado tarde para responder.",
   "settings.digital.jtdx.advanced": "Avanzado",
   "settings.digital.jtdx.cycles.label": "Ciclos de decodificación",

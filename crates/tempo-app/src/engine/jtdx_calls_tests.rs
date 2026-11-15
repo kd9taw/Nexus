@@ -21,7 +21,9 @@ fn job(e: &Engine) -> DecodeJob {
 }
 
 fn jtdx(e: &Engine) -> modes::JtdxRequest {
-    job(e).jtdx.expect("the JTDX-style decoder runs FT8's full pass")
+    job(e)
+        .jtdx
+        .expect("the JTDX-style decoder runs FT8's full pass")
 }
 
 /// A contact with `call` on 20 m FT8, as the log holds one.
@@ -62,7 +64,10 @@ fn a_dx_call_in_the_box_is_given_with_its_grid_and_searched_for() {
     e.set_dx_box("W9XYZ", "EN37");
     let r = jtdx(&e);
     assert_eq!(r.mycall, "K2DEF");
-    assert_eq!((r.hiscall.as_str(), r.hisbcall.as_str()), ("W9XYZ", "W9XYZ"));
+    assert_eq!(
+        (r.hiscall.as_str(), r.hisbcall.as_str()),
+        ("W9XYZ", "W9XYZ")
+    );
     assert_eq!(r.hisgrid, "EN37");
     assert!(r.hiscall_std);
     assert!(r.dx_search, "a DX call set, Enable Tx off, not logged");
@@ -92,7 +97,10 @@ fn the_call_last_logged_is_not_searched_for_until_the_band_changes() {
     assert!(jtdx(&e).dx_search, "another call is");
     e.set_dx_box("W9XYZ", "");
     e.set_frequency(7.074, "40m", "USB");
-    assert!(jtdx(&e).dx_search, "a band change forgets the last logged call");
+    assert!(
+        jtdx(&e).dx_search,
+        "a band change forgets the last logged call"
+    );
 }
 
 #[test]

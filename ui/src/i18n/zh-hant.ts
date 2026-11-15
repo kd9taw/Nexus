@@ -9048,7 +9048,7 @@ export const ZH_HANT: PartialCatalog = {
   "settings.digital.jtdxPreset.keen": "敏銳",
   "settings.digital.jtdxPreset.ludicrous": "瘋狂",
   "settings.digital.jtdxPreset.custom": "自訂",
-  "settings.digital.jtdxPreset.hint": "輕鬆即 WSJT-X 為此解碼器的預設值，單執行緒。敏銳加入 JTDX 的 SWL 模式。瘋狂把一切開到最大，並在多個核心上同時解碼。修改「進階」中的任何設定都會變為自訂。若解碼跟不上，Nexus 會降一級預設並告知您。",
+  "settings.digital.jtdxPreset.hint": "輕鬆是單核心上的輕量解碼，適合較慢的電腦。敏銳即 WSJT-X 為此解碼器的預設值，使用多個核心。瘋狂加入 JTDX 的 SWL 模式，最多在 12 個核心上解碼。修改「進階」中的任何設定都會變為自訂。若解碼跟不上，Nexus 會降一級預設並告知您。",
   "settings.digital.jtdxPreset.ludicrousWarning": "瘋狂最多使用 {{cores}} 個核心解碼；這台電腦有 {{have}} 個。在樹莓派或小型筆電上，解碼結果可能來不及回覆。",
   "settings.digital.jtdx.advanced": "進階",
   "settings.digital.jtdx.cycles.label": "解碼輪次",

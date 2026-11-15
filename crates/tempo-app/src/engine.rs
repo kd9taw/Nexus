@@ -217,6 +217,8 @@ mod decode_refill_tests;
 /// The experience answer's one writer (the first-run wizard and Settings ▸ Station).
 #[cfg(test)]
 mod experience_level_tests;
+#[cfg(test)]
+mod jtdx_calls_tests;
 /// The radio switch notice's record and the switch policy's one writer.
 #[cfg(test)]
 mod radio_switch_notice_tests;
@@ -236,10 +238,6 @@ mod stop_hold_tests;
 /// the pass.
 #[cfg(test)]
 mod streamed_decode_tests;
-#[cfg(test)]
-mod unchecked_decode_tests;
-#[cfg(test)]
-mod jtdx_calls_tests;
 pub mod sub_controls;
 mod tci;
 /// A radio on the TCI connection: what Nexus may transmit through an SDR program, and a spot
@@ -264,6 +262,8 @@ mod udp_free_text_tests;
 /// What a logger's UDP Replay re-sends: Band Activity's decodes, as they went out.
 #[cfg(test)]
 mod udp_replay_tests;
+#[cfg(test)]
+mod unchecked_decode_tests;
 /// A spot worked from afar arms nothing at the shack, and its hint says where it came from.
 #[cfg(test)]
 mod work_from_afar_tests;

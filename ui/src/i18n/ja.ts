@@ -6165,7 +6165,7 @@ export const JA: PartialCatalog = {
   "settings.digital.jtdxPreset.keen": "キーン",
   "settings.digital.jtdxPreset.ludicrous": "ルーディクラス",
   "settings.digital.jtdxPreset.custom": "カスタム",
-  "settings.digital.jtdxPreset.hint": "イージーはこのデコーダーの WSJT-X 既定値を 1 スレッドで使います。キーンは JTDX の SWL モードを加えます。ルーディクラスはすべてを最大にし、複数のコアで同時にデコードします。詳細の設定を変えるとカスタムになります。デコードが間に合わない場合、Nexus はプリセットを 1 段下げてお知らせします。",
+  "settings.digital.jtdxPreset.hint": "イージーは 1 コアで動く軽いデコードで、遅いコンピューター向けです。キーンはこのデコーダーの WSJT-X 既定値を複数のコアで使います。ルーディクラスは JTDX の SWL モードを加え、最大 12 コアでデコードします。詳細の設定を変えるとカスタムになります。デコードが間に合わない場合、Nexus はプリセットを 1 段下げてお知らせします。",
   "settings.digital.jtdxPreset.ludicrousWarning": "ルーディクラスは最大 {{cores}} コアでデコードします。このコンピューターは {{have}} コアです。Raspberry Pi や小型ノートでは、デコードが応答に間に合わないことがあります。",
   "settings.digital.jtdx.advanced": "詳細",
   "settings.digital.jtdx.cycles.label": "デコード・サイクル",

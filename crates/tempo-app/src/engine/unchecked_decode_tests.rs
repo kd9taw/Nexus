@@ -65,7 +65,11 @@ fn answered_cq(unchecked: bool) -> Engine {
 #[test]
 fn an_unchecked_reply_to_my_cq_does_not_start_the_qso() {
     let e = answered_cq(true);
-    assert_eq!(e.qso_dxcall(), None, "no station taken from an unchecked decode");
+    assert_eq!(
+        e.qso_dxcall(),
+        None,
+        "no station taken from an unchecked decode"
+    );
     assert_eq!(qso_state(&e).as_deref(), Some("CallingCq"));
 }
 

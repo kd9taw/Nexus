@@ -6692,7 +6692,7 @@ export const DE: PartialCatalog = {
   "settings.digital.jtdxPreset.keen": "Scharf",
   "settings.digital.jtdxPreset.ludicrous": "Wahnsinn",
   "settings.digital.jtdxPreset.custom": "Eigene",
-  "settings.digital.jtdxPreset.hint": "Leicht entspricht den WSJT-X-Vorgaben für diesen Decoder, mit einem Thread. Scharf fügt den SWL-Modus von JTDX hinzu. Wahnsinn dreht alles auf und dekodiert auf mehreren Kernen gleichzeitig. Jede Änderung unter Erweitert macht daraus Eigene. Kommt die Dekodierung nicht hinterher, schaltet Nexus eine Voreinstellung herunter und sagt es.",
+  "settings.digital.jtdxPreset.hint": "Leicht ist eine schlanke Dekodierung auf einem Kern, für einen langsamen Rechner. Scharf entspricht den WSJT-X-Vorgaben für diesen Decoder, auf mehreren Kernen. Wahnsinn fügt den SWL-Modus von JTDX hinzu und dekodiert auf bis zu 12 Kernen. Jede Änderung unter Erweitert macht daraus Eigene. Kommt die Dekodierung nicht hinterher, schaltet Nexus eine Voreinstellung herunter und sagt es.",
   "settings.digital.jtdxPreset.ludicrousWarning": "Wahnsinn dekodiert auf bis zu {{cores}} Kernen; dieser Computer hat {{have}}. Auf einem Raspberry Pi oder einem kleinen Laptop kommen Dekodierungen womöglich zu spät für eine Antwort.",
   "settings.digital.jtdx.advanced": "Erweitert",
   "settings.digital.jtdx.cycles.label": "Dekodierzyklen",
