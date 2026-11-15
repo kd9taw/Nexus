@@ -138,6 +138,18 @@ describe("the operator's own contests in Settings", () => {
     expect((await inputFor('Your age')).value).toBe('42')
   })
 
+  it('a typed name keeps one word of letters, digits and /, and says so beside the box', async () => {
+    api.get('listCustomContests').mockImplementation(() =>
+      Promise.resolve([{ ...structuredClone(SPRINT), def: { ...SPRINT.def, exchange: [{ field: 'name' }] }, enteredSlots: ['NAME'] }]),
+    )
+    renderPanel()
+    await openContesting()
+    const box = await inputFor('Your name')
+    fireEvent.change(box, { target: { value: 'al ex!' } })
+    expect(box.value).toBe('ALEX')
+    expect(box.closest('.settings-field')!.textContent).toContain('One word: letters, digits and / only.')
+  })
+
   it('a shipped contest asks no typed value', async () => {
     stored = { ...stored, fdEvent: 'ilqp' }
     renderPanel()

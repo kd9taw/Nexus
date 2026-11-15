@@ -15040,6 +15040,7 @@ export function SettingsPanel({
                         autoComplete="off"
                         spellCheck={false}
                       />
+                      {slot !== 'AGE' && <span className="settings-hint">{t('customContest.entered.oneWord')}</span>}
                       <span className="settings-hint">{t('customContest.entered.settingsHint', { contest: contestName(event) })}</span>
                     </label>
                   ))

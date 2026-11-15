@@ -879,6 +879,7 @@ export function ContestSetupWizard({
                     autoComplete="off"
                     spellCheck={false}
                   />
+                  {slot !== 'AGE' && <span className="wizard-field-hint">{t('customContest.entered.oneWord')}</span>}
                 </label>
               ))}
             {!changing &&

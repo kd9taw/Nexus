@@ -133,6 +133,13 @@ export const isFieldDay = (id: string | undefined): boolean =>
 export const countsOnly = (fieldDay: { event?: string; multCount?: number | null } | null | undefined): boolean =>
   !!fieldDay && (fieldDay.multCount ?? null) === null && !isFieldDay(fieldDay.event)
 
+/** ⭐ **A count-only contest whose points ARE its score**: one the operator built. It has no
+ *  multipliers by its own rules, so its points (a CW contact worth 2, say) are the whole score, shown
+ *  beside the count. The WAE DX Contest's points are not its score (QTCs and multipliers are not
+ *  computed), which its score note says. */
+export const scoresOwnPoints = (fieldDay: { event?: string; multCount?: number | null } | null | undefined): boolean =>
+  countsOnly(fieldDay) && isCustomId(fieldDay?.event)
+
 /**
  * ⭐ **The contests whose exchange SENDS the station's power**, by rules-file id — the only ones
  * Settings ▸ Contesting ▸ Your station data shows **Power sent** for. None of the shipped ones does

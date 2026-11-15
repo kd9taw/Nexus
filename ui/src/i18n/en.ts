@@ -5579,6 +5579,7 @@ export const EN = {
 
   'fieldDay.score.qsos': 'QSOs',
   'fieldDay.score.sections': 'Sections',
+  'fieldDay.score.points': 'Points',
   // The multiplier tile and line, for a contest whose ruleset declares multipliers. Both
   // Field Day events declare none and show neither: a "× 0 mults" on a Field Day score
   // would be arithmetic that contest does not do.
@@ -5954,6 +5955,7 @@ export const EN = {
   'customContest.entered.age': 'Your age',
   'customContest.entered.name': 'Your name',
   'customContest.entered.text': 'Text {{n}}',
+  'customContest.entered.oneWord': 'One word: letters, digits and / only.',
   'customContest.entered.hint': 'What you type here is sent in this contest\'s exchange. It stays on this computer and is never in an exported contest file.',
   'customContest.entered.settingsHint': 'Sent in {{contest}}. Kept on this computer only.',
   'logEntry.fd.age.label': 'Age',
