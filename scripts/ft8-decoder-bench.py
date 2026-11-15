@@ -7,8 +7,9 @@ Decoders (each WAV in its own process, so no state carries between files):
   jt9        WSJT-X 3.0.2 `jt9 -8 -d 3`        (the standard decoder, Deep)
   jt9var     WSJT-X 3.0.2 `jt9 -8 -M -C 3 -E 3` (the multithreaded JTDX-derived decoder)
   easy, keen, ludicrous (--presets)
-             Nexus's JTDX-style decoder (`decodevar`) at each preset's settings: 3 cycles,
-             sensitivity 3; Easy 1 thread, Keen 1 thread + SWL, Ludicrous 12 threads + SWL
+             Nexus's JTDX-style decoder (`decodevar`) at each preset's settings: Easy 2 cycles,
+             sensitivity 2, 1 thread; Keen 3/3 on WSJT-X's automatic threads; Ludicrous 3/3,
+             12 threads, SWL
 
 Corpus:
   --real DIR   real off-air WAVs (yymmdd_hhmmss.wav). No ground truth: a decode one decoder
@@ -65,8 +66,8 @@ def decode_nexus(bench, wav, depth):
     return decs, cpu, wall
 
 
-def decode_var(bench, share, wav, threads, swl):
-    cmd = [bench, "decodevar", str(threads), share, str(wav), "3", "3"] + (["swl"] if swl else [])
+def decode_var(bench, share, wav, threads, cycles, sens, swl):
+    cmd = [bench, "decodevar", str(threads), share, str(wav), str(cycles), str(sens)] + (["swl"] if swl else [])
     out, cpu, wall = run_timed(cmd)
     decs, seen, ms = [], set(), None
     for line in out.splitlines():
@@ -146,8 +147,10 @@ def main():
         decoders["jt9"] = lambda w, work: decode_jt9(a.jt9, a.share, w, ["-d", str(a.depth)], work)
         decoders["jt9var"] = lambda w, work: decode_jt9(a.jt9, a.share, w, ["-M", "-C", "3", "-E", "3"], work)
     if a.presets:
-        for name, threads, swl in (("easy", 1, False), ("keen", 1, True), ("ludicrous", 12, True)):
-            decoders[name] = (lambda t, s: lambda w, work: decode_var(a.bench, a.share, w, t, s))(threads, swl)
+        for name, threads, cyc, sens, swl in (("easy", 1, 2, 2, False), ("keen", 0, 3, 3, False),
+                                              ("ludicrous", 12, 3, 3, True)):
+            decoders[name] = (lambda t, c, e, s: lambda w, work: decode_var(a.bench, a.share, w, t, c, e, s))(
+                threads, cyc, sens, swl)
 
     real = sorted(p for d in a.real for p in Path(d).glob("*.wav"))
     synth = sorted(Path(a.synth).glob("*.wav")) if a.synth else []
