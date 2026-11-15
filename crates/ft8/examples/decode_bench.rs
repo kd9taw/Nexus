@@ -201,17 +201,19 @@ fn decode_var(threads: i32, share: &str, path: &str, cycles: i32, sensitivity: i
         .expect("decode thread");
     // Every record as the decoder reported it, in its order (jt9 prints duplicates too unless
     // told to hide them), with the frequency unrounded: jt9 prints Fortran's nint, which rounds
-    // halves away from zero, and the comparison does the same.
+    // halves away from zero, and the comparison does the same. An unchecked decode (FT8S/FT8SD or
+    // a matched filter, JTDX's `^`) carries a sixth field, `^`.
     let out = std::io::stdout();
     let mut out = out.lock();
     for d in decodes {
         writeln!(
             out,
-            "D\t{}\t{:.1}\t{:.3}\t{}",
+            "D\t{}\t{:.1}\t{:.3}\t{}{}",
             d.snr,
             d.dt,
             d.freq,
-            d.message.trim()
+            d.message.trim(),
+            if d.unchecked { "\t^" } else { "" }
         )
         .unwrap();
     }
