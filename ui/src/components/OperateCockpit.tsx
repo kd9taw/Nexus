@@ -47,7 +47,7 @@ import { atuBypass, atuTune, closePanelWindow, openPanelWindow, getSettings, not
 import { WSPR_WATERFALL_WINDOW } from '../waterfall'
 import { ftOverlay } from '../spectrum/overlays'
 import { FdAdvisories } from './FdAdvisories'
-import { clearDxCall, pointRotatorAtCall, redecode, startCq, startRunning, startSearchAndPounce, startQsoRecording, stopQsoRecording } from '../api'
+import { clearDxCall, setDxBox, pointRotatorAtCall, redecode, startCq, startRunning, startSearchAndPounce, startQsoRecording, stopQsoRecording } from '../api'
 import { setDecodeDepth } from '../api'
 import { setSkipTx1 as setSkipTx1Cmd } from '../api'
 import { qrzLookup, resolveEntity } from '../api'
@@ -649,6 +649,14 @@ export function OperateCockpit({
     setSpotOpen(true)
   }
   const [dxGrid, setDxGrid] = useState('')
+  // The station's JTDX-style FT8 decoder is given the DX call whenever the box holds one, as
+  // WSJT-X's is. Sent when the boxes change, never on mount (the station starts with them empty).
+  const sentDxBox = useRef({ call: '', grid: '' })
+  useEffect(() => {
+    if (sentDxBox.current.call === dxCall && sentDxBox.current.grid === dxGrid) return
+    sentDxBox.current = { call: dxCall, grid: dxGrid }
+    void setDxBox(dxCall, dxGrid).catch(() => {})
+  }, [dxCall, dxGrid])
   // Tx5 free text: auto-tracks the generated baseline until the operator edits
   // it; Generate Std Msgs resets the edit and re-baselines (stock behavior).
   const [tx5, setTx5] = useState('')

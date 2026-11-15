@@ -32991,6 +32991,14 @@ fn clear_dx_call(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> 
     Ok(eng.snapshot())
 }
 
+/// The cockpit's DX Call and DX Grid boxes as they now read
+/// ([`tempo_app::engine::Engine::set_dx_box`]): the JTDX-style FT8 decoder is given the DX call
+/// whenever the box holds one, as WSJT-X's is. Keys nothing and moves no QSO.
+#[tauri::command(async)]
+fn set_dx_box(state: State<'_, SharedEngine>, call: String, grid: String) {
+    engine_lock(&state).set_dx_box(&call, &grid);
+}
+
 /// Operator in-QSO free text (WSJT-X Tx5): override the next transmission with
 /// `text`, directed to the current DX station when known. No-op outside a QSO; refused,
 /// with the reason, when the encoder cannot send its over. `afar`: as [`set_tx_enabled`]'s.
@@ -54199,6 +54207,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_area,
         qso_resend,
         clear_dx_call,
+        set_dx_box,
         qso_freetext,
         log_current_qso,
         confirm_pending_log,

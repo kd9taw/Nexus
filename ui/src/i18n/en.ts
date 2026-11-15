@@ -12587,6 +12587,7 @@ export const EN = {
   'operate.decodes.dt.title': 'DT — time offset (s); large = clock/sync skew',
   'operate.decodes.dt.title.msk144': 'T — when in the period the ping landed (s)',
   'operate.decodes.marker.lowConf.title': 'Low-confidence decode',
+  'operate.decodes.marker.unchecked.title': 'Not error-checked: matched to the expected message without LDPC or CRC. Nothing automatic acts on it; double-click to work the station by hand',
   'operate.decodes.marker.ap.title': 'AP-assisted decode',
   'operate.decodes.needs.aria': 'needs',
   'operate.decodes.harqRv.title': 'Recovered by IR-HARQ (RV0–RV{{rv}})',

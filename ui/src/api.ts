@@ -1558,6 +1558,12 @@ export async function clearDxCall(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('clear_dx_call', {})
 }
 
+/** The DX Call and DX Grid boxes as they now read. Only the JTDX-style FT8 decoder reads them, as
+ * WSJT-X gives its decoder the DX call whenever the box holds one: nothing is sent, no QSO moves. */
+export async function setDxBox(call: string, grid: string): Promise<void> {
+  return invoke<void>('set_dx_box', { call, grid })
+}
+
 /** Operator in-QSO free text (WSJT-X Tx5): override the next transmission with
  * `text`, directed to the current DX when known. Returns the fresh snapshot. */
 export async function qsoFreetext(text: string): Promise<AppSnapshot> {

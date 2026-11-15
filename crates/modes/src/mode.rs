@@ -1041,8 +1041,8 @@ impl Mode for Ft8Mode {
             ap: req.ap,
             // WSJT-X's default ("Hide FT8 dupe messages", `mainwindow.cpp:1939`).
             hide_dupes: true,
-            mycall: req.mycall,
-            hiscall: req.hiscall,
+            mycall: &jtdx.mycall,
+            hiscall: &jtdx.hiscall,
             mybcall: &jtdx.mybcall,
             hisbcall: &jtdx.hisbcall,
             hisgrid: &jtdx.hisgrid,

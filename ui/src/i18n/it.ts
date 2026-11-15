@@ -2846,6 +2846,7 @@ export const IT: PartialCatalog = {
   "operate.decodes.dt.title": "DT — scarto di tempo (s); grande = sfasamento orologio/sincronizzazione",
   "operate.decodes.dt.title.msk144": "T — quando nel periodo è arrivato il ping (s)",
   "operate.decodes.marker.lowConf.title": "Decodifica a bassa affidabilità",
+  "operate.decodes.marker.unchecked.title": "Non verificato: abbinato al messaggio atteso senza LDPC né CRC. Nessun automatismo agisce su di esso; doppio clic per collegare la stazione a mano",
   "operate.decodes.marker.ap.title": "Decodifica assistita AP",
   "operate.decodes.needs.aria": "mancanti",
   "operate.decodes.harqRv.title": "Recuperata da IR-HARQ (RV0–RV{{rv}})",

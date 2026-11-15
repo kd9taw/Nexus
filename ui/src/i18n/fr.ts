@@ -5016,6 +5016,7 @@ export const FR: PartialCatalog = {
   "operate.decodes.lotw.title": "Envoie vers LoTW — un QSO avec {{call}} devrait se confirmer (liste d'activité ARRL)",
   "operate.decodes.marker.ap.title": "Décodage assisté par AP",
   "operate.decodes.marker.lowConf.title": "Décodage peu fiable",
+  "operate.decodes.marker.unchecked.title": "Non vérifié : apparié au message attendu sans LDPC ni CRC. Aucun automatisme n'agit dessus ; double-cliquez pour contacter la station à la main",
   "operate.decodes.needs.aria": "manques",
   "operate.decodes.period.aria": "Période {{time}} UTC",
   "operate.decodes.period.heard": "{{band}} · {{mode}} · {{dial}} MHz",

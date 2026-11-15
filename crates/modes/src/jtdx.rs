@@ -36,6 +36,10 @@ pub struct JtdxRequest {
     pub knobs: JtdxKnobs,
     /// AP window, Hz, from the dial (WSJT-X: 5 below 30 MHz, 15 below 100 MHz, else 50).
     pub napwid: i32,
+    /// My call and the DX call as WSJT-X gives them (`mainwindow.cpp:5578-5581`): mine always,
+    /// the DX call whenever one is set, `""` when none.
+    pub mycall: String,
+    pub hiscall: String,
     /// The DX station's grid, `""` when none.
     pub hisgrid: String,
     /// The two calls without prefix or suffix.

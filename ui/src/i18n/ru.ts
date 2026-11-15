@@ -2908,6 +2908,7 @@ export const RU: PartialCatalog = {
   "operate.decodes.dt.title": "DT — смещение времени (с); большое = рассинхронизация часов/синхронизация",
   "operate.decodes.dt.title.msk144": "T — момент периода, когда пришёл пинг (с)",
   "operate.decodes.marker.lowConf.title": "Декод с низкой достоверностью",
+  "operate.decodes.marker.unchecked.title": "Без проверки ошибок: сопоставлено с ожидаемым сообщением без LDPC и CRC. Автоматика на него не реагирует; двойной щелчок — провести связь вручную",
   "operate.decodes.marker.ap.title": "Декод с помощью AP",
   "operate.decodes.needs.aria": "нужно",
   "operate.decodes.harqRv.title": "Восстановлено IR-HARQ (RV0–RV{{rv}})",

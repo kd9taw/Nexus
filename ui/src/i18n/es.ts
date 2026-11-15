@@ -5016,6 +5016,7 @@ export const ES: PartialCatalog = {
   "operate.decodes.lotw.title": "Sube a LoTW — un QSO con {{call}} debería confirmarse (lista de actividad de ARRL)",
   "operate.decodes.marker.ap.title": "Decodificación asistida por AP",
   "operate.decodes.marker.lowConf.title": "Decodificación de baja confianza",
+  "operate.decodes.marker.unchecked.title": "Sin comprobación de errores: emparejado con el mensaje esperado sin LDPC ni CRC. Ninguna función automática actúa sobre él; doble clic para trabajar la estación a mano",
   "operate.decodes.needs.aria": "necesarios",
   "operate.decodes.period.aria": "Periodo {{time}} UTC",
   "operate.decodes.period.heard": "{{band}} · {{mode}} · {{dial}} MHz",

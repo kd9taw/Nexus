@@ -17,6 +17,7 @@ import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/pan
 vi.setConfig({ testTimeout: 15_000 })
 
 vi.mock('../api', () => ({
+  setDxBox: vi.fn(async () => undefined),
   qrzLookup: vi.fn(async () => null),
   resolveEntity: vi.fn(async () => null),
   getSettings: vi.fn(() => Promise.resolve({})),

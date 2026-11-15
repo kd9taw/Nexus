@@ -2765,6 +2765,7 @@ export const ZH: PartialCatalog = {
   "operate.decodes.dt.title": "DT — 时间偏移（秒）；值大表示时钟/同步偏差",
   "operate.decodes.dt.title.msk144": "T — 该周期内 ping 落点所处时刻（秒）",
   "operate.decodes.marker.lowConf.title": "低置信度解码",
+  "operate.decodes.marker.unchecked.title": "未经纠错校验：未经 LDPC 或 CRC，按预期消息匹配得到。不会触发任何自动操作；双击可手动联络该电台",
   "operate.decodes.marker.ap.title": "AP 辅助解码",
   "operate.decodes.needs.aria": "需求",
   "operate.decodes.harqRv.title": "由 IR-HARQ 恢复（RV0–RV{{rv}}）",

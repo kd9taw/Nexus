@@ -29,8 +29,10 @@ const resolved: QrzLookup = {
 }
 
 const redecode = vi.fn(async () => null)
+const setDxBox = vi.fn(async (_call: string, _grid: string) => undefined)
 
 vi.mock('../api', () => ({
+  setDxBox: (call: string, grid: string) => setDxBox(call, grid),
   qrzLookup: vi.fn(async () => resolved),
   resolveEntity: vi.fn(async () => 'United States'),
   getSettings: vi.fn(() => Promise.resolve({})),
@@ -230,5 +232,19 @@ describe('a band change clears the DX call in every FT mode', () => {
     expect(dxGrid().value).toBe('EN52')
     // …and the new station's selection and card are left alone: nothing was cleared.
     expect(onClearSelection).not.toHaveBeenCalled()
+  })
+})
+
+// WSJT-X gives its decoder the DX call whenever the box holds one, in a QSO or not; the station's
+// JTDX-style FT8 decoder gets it the same way, every time the boxes change, and never on mount.
+describe('the DX boxes reach the station', () => {
+  it('sends the call and grid as the operator loads them, and the empty boxes a band change leaves', () => {
+    setDxBox.mockClear()
+    const { update } = renderCockpit('FT8')
+    expect(setDxBox, 'nothing on mount').not.toHaveBeenCalled()
+    loadK1abc()
+    expect(setDxBox).toHaveBeenLastCalledWith('K1ABC', 'FN42')
+    update({ bandChangeTick: 4 })
+    expect(setDxBox).toHaveBeenLastCalledWith('', '')
   })
 })

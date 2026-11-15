@@ -8032,6 +8032,7 @@ export const JA: PartialCatalog = {
   "operate.decodes.dt.title": "DT — 時間オフセット（s）。大きい場合は時計/同期のずれです",
   "operate.decodes.dt.title.msk144": "T — ピングが周期内のどこで届いたか（s）",
   "operate.decodes.marker.lowConf.title": "信頼度の低いデコード",
+  "operate.decodes.marker.unchecked.title": "誤り検査なし：LDPC や CRC を通さず、期待したメッセージとの照合で受け入れたデコード。自動処理は行いません。ダブルクリックで手動で交信できます",
   "operate.decodes.marker.ap.title": "AP 支援デコード",
   "operate.decodes.needs.aria": "必要項目",
   "operate.decodes.harqRv.title": "IR-HARQ による復元（RV0–RV{{rv}}）",

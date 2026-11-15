@@ -3220,6 +3220,10 @@ export interface DecodeRow {
   ap?: boolean
   /** WSJT-X '?' marker — low-confidence decode. */
   lowConf?: boolean
+  /** JTDX '^' marker — the JTDX-style FT8 decoder accepted the expected message on correlation,
+   * with no LDPC or CRC check. Shown only: nothing automatic acts on it (the engine's
+   * `error_checked`); a double-click still works the station. */
+  unchecked?: boolean
   /** IR-HARQ redundancy versions combined to recover this decode: 0 = decoded
    * from the initial transmission alone; 1/2 = recovered by joint-combining that
    * many retransmissions; -1 = not applicable. Used to badge HARQ rescues. */

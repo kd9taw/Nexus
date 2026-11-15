@@ -236,6 +236,10 @@ mod stop_hold_tests;
 /// the pass.
 #[cfg(test)]
 mod streamed_decode_tests;
+#[cfg(test)]
+mod unchecked_decode_tests;
+#[cfg(test)]
+mod jtdx_calls_tests;
 pub mod sub_controls;
 mod tci;
 /// A radio on the TCI connection: what Nexus may transmit through an SDR program, and a spot
@@ -2170,6 +2174,21 @@ pub const FLEX_VOICE_MAX_SAMPLES: usize = 20 * 12_000;
 /// The decodes Band Activity keeps, and so the most a logger's Replay re-sends: the pane's own
 /// store (`MAX_HISTORY`, `ui/src/decodeHistory.ts`).
 const BAND_ACTIVITY_DEPTH: usize = 3000;
+
+/// The decodes automation may act on. An UNCHECKED decode (`modes::Decode::unchecked`: the
+/// JTDX-style decoder's FT8S/FT8SD and matched filters, which accept the expected message on
+/// correlation alone, with no LDPC and no CRC) is shown, marked `^`, and written to ALL.TXT, and
+/// nothing automatic acts on it: it starts and advances no QSO (so it is never auto-logged),
+/// reaches no message inbox, and is not handed to other programs (WSJT-X UDP) or uploaded (PSK
+/// Reporter). The operator may still click it and work the station by hand. Borrowed when every
+/// decode is checked, which is always so for every decoder but the JTDX-style one.
+fn error_checked(decodes: &[modes::Decode]) -> std::borrow::Cow<'_, [modes::Decode]> {
+    if decodes.iter().any(|d| d.unchecked) {
+        std::borrow::Cow::Owned(decodes.iter().filter(|d| !d.unchecked).cloned().collect())
+    } else {
+        std::borrow::Cow::Borrowed(decodes)
+    }
+}
 
 /// The received decodes the engine keeps across periods (`decode_history`), newest kept.
 const DECODE_HISTORY_DEPTH: usize = 240;
@@ -4414,6 +4433,13 @@ pub struct Engine {
     /// ([`Engine::apply_decode_result`]), which also says which preset runs
     /// ([`Engine::jtdx_preset_running`]).
     ft8_step_down: Option<crate::dto::Ft8StepDown>,
+    /// The cockpit's DX Call and DX Grid boxes (WSJT-X's `hisCall`, `hisGrid`), as the operator
+    /// last set them ([`Engine::set_dx_box`]), in a QSO or not. The JTDX-style decoder is given
+    /// them ([`Engine::jtdx_request`]); the sequencer is not.
+    dx_box: (String, String),
+    /// The call of the contact last logged (WSJT-X's `m_lastloggedcall`, `mainwindow.cpp:10631`),
+    /// forgotten on a band change (`:12121`): the JTDX-style decoder's DX-call search skips it.
+    last_logged_call: String,
     /// Rolling received-decode history (slot, row) across the last several T/R
     /// cycles — NOT just the last slot. This is what makes a roster/late click on
     /// a caller resolve to the RIGHT QSO step: `last_decodes` is replaced on every
@@ -7822,6 +7848,8 @@ impl Engine {
             route_target: None,
             auto_radio_switch: None,
             ft8_step_down: None,
+            dx_box: (String::new(), String::new()),
+            last_logged_call: String::new(),
             decode_history: std::collections::VecDeque::new(),
             band_activity: std::collections::VecDeque::new(),
             early_seen: None,
@@ -19349,6 +19377,7 @@ impl Engine {
         // Every log path funnels through here, so this is the one place that can tell the UI a
         // contact was written — including a backend auto-log the frontend never initiated.
         self.logged_tick = self.logged_tick.wrapping_add(1);
+        self.last_logged_call = rec.call.trim().to_ascii_uppercase();
         // Any contact reaching the log ends the #153 rescue window. The stash is a lifeline for
         // the contact the operator just watched fail, and once ANY contact is written they have
         // moved on — keeping it past that point risks the Log button reaching back to an old
@@ -23315,6 +23344,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// `made_on` is the band and logged frequencies the dial held BEFORE the change.
     fn on_band_change(&mut self, made_on: (String, (f64, Option<f64>))) {
         self.band_change_tick = self.band_change_tick.wrapping_add(1);
+        // WSJT-X forgets the call last logged on a band change (`mainwindow.cpp:12121`).
+        self.last_logged_call.clear();
         // The FT family: the modes a mode switch halts in, the same set by the same reasoning.
         if !mode_switch_halts_off_the_waterfall(self.app.tier()) {
             return;
@@ -34382,10 +34413,13 @@ contact yourself."
     /// standard decoder runs it: another mode, the operator's choice, or a SuperFox Hound, for
     /// which WSJT-X itself runs the standard decoder (`mainwindow.cpp:5559`).
     ///
-    /// `mycall` and `hiscall` are exactly what the standard decoder is given (the AP context
-    /// above), so the two decoders see the same QSO. What WSJT-X 3.0.2 passes as a constant is
-    /// passed as that constant (`ft8::VarRequest::params`); `dx_search` is off.
-    fn jtdx_request(&self, mycall: &str, hiscall: &str) -> Option<modes::JtdxRequest> {
+    /// The calls are WSJT-X 3.0.2's (`mainwindow.cpp:5578-5592`), not the standard decoder's AP
+    /// context: MY call always; the DX call whenever there is one (the QSO partner, else the DX
+    /// Call box, [`Self::set_dx_box`]) with its grid; and the band-wide DX-call search
+    /// (`lenabledxcsearch`) while a DX call is set, Enable Tx is off and that call is not the one
+    /// last logged. What WSJT-X passes as a constant is passed as that constant
+    /// (`ft8::VarRequest::params`).
+    fn jtdx_request(&self) -> Option<modes::JtdxRequest> {
         use crate::settings::{DecoderStyle, SpecialOp};
         if self.app.tier() != Tier::Ft8
             || self.settings.ft8_decoder != DecoderStyle::Jtdx
@@ -34393,10 +34427,21 @@ contact yourself."
         {
             return None;
         }
-        let hisgrid = match &self.mode {
-            Mode::Qso { station, .. } => station.dxgrid.clone().unwrap_or_default(),
-            _ => String::new(),
+        let mycall = self.settings.mycall.trim();
+        let partner = match &self.mode {
+            Mode::Qso { station, .. } => station
+                .dxcall
+                .as_deref()
+                .map(|c| (c, station.dxgrid.as_deref().unwrap_or_default())),
+            Mode::FieldDay { station, .. } => station.dxcall.as_deref().map(|c| (c, "")),
+            Mode::Chat => None,
         };
+        let (hiscall, hisgrid) = partner.unwrap_or((&self.dx_box.0, &self.dx_box.1));
+        let hiscall = hiscall.trim();
+        // `!m_auto`: Enable Tx off; `m_lastloggedcall`: cleared by a band change.
+        let dx_search = !hiscall.is_empty()
+            && !self.tx_enabled
+            && !hiscall.eq_ignore_ascii_case(&self.last_logged_call);
         // WSJT-X: the base calls (`Radio::base_callsign`), the DX call's only when it is at
         // least 3 characters (`mainwindow.cpp:5580-5585`).
         let base = |c: &str| {
@@ -34412,14 +34457,26 @@ contact yourself."
                 .knobs(&self.settings.jtdx_custom)
                 .into(),
             napwid: modes::jtdx::napwid_for_dial((self.settings.dial_mhz * 1e6).max(0.0) as u64),
-            hisgrid,
+            hisgrid: hisgrid.to_string(),
+            mycall: mycall.to_string(),
+            hiscall: hiscall.to_string(),
             mybcall: base(mycall),
             hisbcall: base(hiscall),
             mycall_std: tempo_core::message::is_std_call(mycall),
             hiscall_std: tempo_core::message::is_std_call(hiscall),
             hound: self.settings.special_op == SpecialOp::Hound,
-            dx_search: false,
+            dx_search,
         })
+    }
+
+    /// The cockpit's DX Call and DX Grid boxes changed (a click on a decode, a typed call, Clear
+    /// DX). Only the JTDX-style decoder reads them ([`Self::jtdx_request`]): nothing is sent and
+    /// no QSO starts or changes.
+    pub fn set_dx_box(&mut self, call: &str, grid: &str) {
+        self.dx_box = (
+            call.trim().to_ascii_uppercase(),
+            grid.trim().to_ascii_uppercase(),
+        );
     }
 
     /// The preset the JTDX-style decoder runs: the one chosen in Settings, or the one the CPU guard
@@ -34642,8 +34699,6 @@ contact yourself."
             Some((lo, hi)) if self.app.tier() == Tier::Js8 => (lo as i32, hi as i32),
             _ => (nfa, nfb),
         };
-        // The calls the JTDX-style decoder gets: the standard decoder's, in the same form.
-        let (ap_mycall_for_jtdx, ap_hiscall_for_jtdx) = (ap_mycall.clone(), ap_hiscall.clone());
         DecodeJob {
             source,
             next_source,
@@ -34668,7 +34723,7 @@ contact yourself."
             ap: self.settings.ap_decode,
             ap_cq_only: self.settings.ap_cq_only,
             activity: self.special_activity(),
-            jtdx: self.jtdx_request(&ap_mycall_for_jtdx, &ap_hiscall_for_jtdx),
+            jtdx: self.jtdx_request(),
             jtdx_preset: Some(self.jtdx_preset_running()),
             frame_time_ms,
             harq_reset,
@@ -35036,14 +35091,15 @@ contact yourself."
         while self.decode_history.len() > DECODE_HISTORY_DEPTH {
             self.decode_history.pop_front();
         }
+        let checked = error_checked(&fresh).into_owned();
         let pend_before = self.app.pending_count();
-        self.app.observe(&fresh, slot);
+        self.app.observe(&checked, slot);
         // An inbound ACK may have marked queued messages delivered (or purged spent
         // ones) inside observe — journal only when the queue actually shrank.
         if self.app.pending_count() != pend_before {
             self.persist_pending_msgs();
         }
-        self.last_wire_decodes = fresh.clone();
+        self.last_wire_decodes = checked;
         self.note_band_activity(slot);
         self.last_decodes = fresh;
         n
@@ -35239,7 +35295,8 @@ contact yourself."
             self.settings.special_op,
             crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound
         );
-        let wire_copy: Option<Vec<modes::Decode>> = hound_active.then(|| decodes.clone());
+        let wire_copy: Option<Vec<modes::Decode>> =
+            hound_active.then(|| error_checked(&decodes).into_owned());
         let decodes = self.hound_split(decodes);
         let n = decodes.len();
         // Tally IR-HARQ rescues (messages recovered by combining retransmissions).
@@ -35281,21 +35338,24 @@ contact yourself."
                 self.recent_dt.pop_front();
             }
         }
+        // Automation acts on error-checked decodes only ([`error_checked`]); every decode is
+        // still shown, logged to ALL.TXT and kept in the history above and below.
+        let checked = error_checked(&decodes);
         let pend_before = self.app.pending_count();
-        self.app.observe(&decodes, slot);
+        self.app.observe(&checked, slot);
         // An inbound ACK may have marked queued messages delivered (or purged spent
         // ones) inside observe — journal only when the queue actually shrank.
         if self.app.pending_count() != pend_before {
             self.persist_pending_msgs();
         }
-        self.observe_modes(&decodes, slot);
+        self.observe_modes(&checked, slot);
         // Coordinated QSY (any role): reassemble + act on directives from our
         // partner, and track that the partner is still being heard. The directive
         // also flows through the inbox above and shows in the band feed as plain
         // text — this only *additionally* acts on it. Live in Chat only.
         if self.qsy_active() {
             let mycall = self.settings.mycall.clone();
-            for d in &decodes {
+            for d in checked.iter() {
                 if let Some(sender) = Msg::parse(&d.message).sender() {
                     self.qsy.note_heard(sender);
                 }
@@ -35322,7 +35382,7 @@ contact yourself."
         if self.app.tier() == Tier::Js8 {
             self.js8_ingest(&decodes, slot);
         }
-        self.last_wire_decodes = wire_copy.unwrap_or_else(|| decodes.clone());
+        self.last_wire_decodes = wire_copy.unwrap_or_else(|| checked.into_owned());
         self.note_band_activity(slot);
         if continues {
             self.last_decodes.extend(decodes);

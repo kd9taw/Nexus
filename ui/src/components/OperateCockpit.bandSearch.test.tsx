@@ -30,6 +30,7 @@ vi.mock('./Waterfall', () => ({
 vi.mock('../api', () => {
   const nothing = () => Promise.resolve(null)
   return {
+    setDxBox: vi.fn(async () => undefined),
     getSettings: vi.fn(() => Promise.resolve({})),
     setSettings: vi.fn(nothing),
     openPanelWindow: vi.fn(nothing),

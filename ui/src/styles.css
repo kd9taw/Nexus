@@ -19509,6 +19509,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .decode-marker-ap {
   color: var(--text-faint);
 }
+.decode-marker-unchecked {
+  color: var(--state-weak);
+}
 
 /* ===========================================================================
    Logbook (manual log form)

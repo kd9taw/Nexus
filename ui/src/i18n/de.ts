@@ -7434,6 +7434,7 @@ export const DE: PartialCatalog = {
   "operate.decodes.dt.title": "DT — Zeitversatz (s); groß = Uhr- bzw. Sync-Abweichung",
   "operate.decodes.dt.title.msk144": "T — wann in der Periode der Ping ankam (s)",
   "operate.decodes.marker.lowConf.title": "Dekodierung mit geringer Sicherheit",
+  "operate.decodes.marker.unchecked.title": "Nicht fehlergeprüft: ohne LDPC oder CRC der erwarteten Nachricht zugeordnet. Keine Automatik reagiert darauf; Doppelklick, um die Station von Hand zu arbeiten",
   "operate.decodes.marker.ap.title": "AP-gestützte Dekodierung",
   "operate.decodes.needs.aria": "Bedarf",
   "operate.decodes.harqRv.title": "Durch IR-HARQ gerettet (RV0–RV{{rv}})",
