@@ -367,6 +367,14 @@ fn the_preview_names_the_ft_messages_this_build_sends() {
             "579 IL",
         ),
         (
+            "custom_pv_eu",
+            &["rst", "serial", "grid6"],
+            None,
+            "eu_vhf",
+            "CQ TEST W9XYZ EN52",
+            "570001 EN52AB",
+        ),
+        (
             "custom_pv_none",
             &["rst", "cq_zone"],
             None,

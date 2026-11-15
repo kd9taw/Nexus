@@ -269,7 +269,7 @@ fn each_custom_contest_shape_sends_the_messages_its_exchange_matches() {
             &["rst", "serial", "grid6"],
             None,
             false,
-            Standard,
+            EuVhf,
         ),
         ("custom_ft_none", &["rst", "cq_zone"], None, false, Standard),
     ];

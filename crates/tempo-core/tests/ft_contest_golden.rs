@@ -23,7 +23,7 @@ const FIXTURE: &str = "tests/fixtures/ft-contest-messages.golden";
 fn resolver() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
-        install_call_resolver(|call: &str| {
+        let _ = install_call_resolver(|call: &str| {
             let up = call.trim().to_ascii_uppercase();
             let (entity, continent) = if up.starts_with("VE") {
                 ("Canada", "NA")

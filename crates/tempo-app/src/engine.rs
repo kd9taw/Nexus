@@ -21144,11 +21144,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// ⭐ **Why the contest's FT8/FT4 `messages` cannot carry this station's exchange**, in the
     /// operator's words ([`FtMessages::exchange_refusal`]), or `None`: asked before the contest's
     /// Running starts and before a double-click answers a CQ, so a serial past what the RTTY
-    /// Roundup message holds, or a QTH it has no word for, is said before anything changes and
-    /// never sent wrong. The session is the running contest's, else the one `set_mode` would
-    /// open from Settings; one that cannot start is `set_mode`'s to refuse.
+    /// Roundup message holds, a QTH it has no word for, or an EU VHF exchange with no
+    /// six-character locator, is said before anything changes and never sent wrong. The session
+    /// is the running contest's, else the one `set_mode` would open from Settings; one that
+    /// cannot start is `set_mode`'s to refuse.
     fn contest_exchange_refusal(&self, messages: FtMessages) -> Option<String> {
-        if !matches!(messages, FtMessages::RttyRoundup) {
+        if !matches!(messages, FtMessages::RttyRoundup | FtMessages::EuVhf) {
             return None;
         }
         let mygrid = self.settings.mygrid.trim();

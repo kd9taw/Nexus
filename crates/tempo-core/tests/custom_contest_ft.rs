@@ -257,7 +257,15 @@ fn heard(text: &str) -> modes::Decode {
 /// ⛔ S&P never starts a contact by itself in a custom contest's messages: every CQ it hears is
 /// passed by with nothing queued, as WSJT-X calls nobody the operator did not pick.
 fn sp_answers_no_cq_by_itself(rs: &'static FdRuleset, cqs: &[&str]) {
-    let mut sp = station(rs, false, "W9XYZ", "EN52", "1D", "WI");
+    // A six-character locator where the contest exchanges one, four where it exchanges four.
+    let six = rs
+        .exchange
+        .fields
+        .iter()
+        .any(|f| matches!(f.kind, tempo_core::contest::FieldKind::Grid { chars: 6 }));
+    let grid = if six { "EN52ab" } else { "EN52" };
+    let mut sp = station(rs, false, "W9XYZ", grid, "1D", "WI");
+
     for (k, cq) in cqs.iter().enumerate() {
         sp.observe(&[heard(cq)], 2 * k as u64);
         assert!(
@@ -280,6 +288,12 @@ fn sp_in_each_custom_contest_arm_answers_no_cq_by_itself() {
     let vhf = install("custom_gate_navhf", "GATE-NAVHF", &["grid4"], Some("TEST"));
     let ww = install("custom_gate_ww", "GATE-WW", &["grid4"], Some("WW"));
     let ru = install("custom_gate_ru", "GATE-RU", &["rst", "serial"], None);
+    let eu = install(
+        "custom_gate_eu",
+        "GATE-EU",
+        &["rst", "serial", "grid6"],
+        None,
+    );
     let cqs = [
         "CQ FD K1ABC FN42",
         "CQ TEST K1ABC FN42",
@@ -292,6 +306,7 @@ fn sp_in_each_custom_contest_arm_answers_no_cq_by_itself() {
     sp_answers_no_cq_by_itself(vhf, &cqs);
     sp_answers_no_cq_by_itself(ww, &cqs);
     sp_answers_no_cq_by_itself(ru, &cqs);
+    sp_answers_no_cq_by_itself(eu, &cqs);
 }
 
 // ---- F3: WSJT-X's ARRL RTTY Roundup messages ------------------------------------------------------
@@ -527,4 +542,202 @@ fn the_roundup_carries_a_nonstandard_call_whole() {
             "{me}"
         );
     }
+}
+
+// ---- F4: WSJT-X's EU VHF Contest messages ------------------------------------------------------
+
+/// RST + serial + six-character grid: `CQ TEST` with four characters of the grid, the standard
+/// Tx1, then WSJT-X's EU VHF messages with both calls hashed, the RS two digits, the serial four,
+/// and the full locator — over for over, through the modem, and logged both ways.
+#[test]
+fn an_rst_serial_grid6_contest_works_a_contact_in_the_eu_vhf_messages() {
+    let rs = install(
+        "custom_air_euvhf",
+        "AIR-EUVHF",
+        &["rst", "serial", "grid6"],
+        None,
+    );
+    assert_eq!(FtMessages::for_contest(rs, "FT8"), FtMessages::EuVhf);
+    assert_eq!(FtMessages::for_contest(rs, "FT4"), FtMessages::EuVhf);
+    assert_eq!(FtMessages::of_event("custom_air_euvhf").special_op(), 2);
+    let mut run = station(rs, true, "G4ABC", "IO91nm", "", "");
+    let mut sp = station(rs, false, "PA3XYZ", "JO22ab", "", "");
+    assert_eq!(
+        overs(&mut run, &mut sp, 6, 12),
+        [
+            "R: CQ TEST G4ABC IO91",
+            "S: G4ABC PA3XYZ JO22",
+            "R: <PA3XYZ> <G4ABC> 570001 IO91NM",
+            "S: <G4ABC> <PA3XYZ> R 570001 JO22AB",
+            "R: PA3XYZ G4ABC RR73",
+            "S: G4ABC PA3XYZ 73",
+        ]
+    );
+    assert_eq!(
+        rows(&run),
+        ["PA3XYZ rx[RST=57,NR=1,GRID=JO22AB] tx[RST=57,NR=1,GRID=IO91NM]"]
+    );
+    assert_eq!(
+        rows(&sp),
+        ["G4ABC rx[RST=57,NR=1,GRID=IO91NM] tx[RST=57,NR=1,GRID=JO22AB]"]
+    );
+    for text in [
+        "<PA3XYZ> <G4ABC> 570001 IO91NM",
+        "<G4ABC> <PA3XYZ> R 570001 JO22AB",
+    ] {
+        assert_eq!(i3n3(text).map(|(i3, _)| i3), Some(5), "{text}");
+    }
+    for text in ["CQ TEST G4ABC IO91", "G4ABC PA3XYZ JO22"] {
+        assert_eq!(i3n3(text).map(|(i3, _)| i3), Some(1), "{text}");
+    }
+    let mut run = station(rs, true, "G4ABC", "IO91nm", "", "");
+    let mut sp = station(rs, false, "PA3XYZ", "JO22ab", "", "");
+    run_loopback_fieldday(&mut run, &mut sp, 0.0, 14);
+    assert_eq!(rows(&run).len(), 1, "{:?}", run.transcript);
+    assert_eq!(rows(&sp).len(), 1, "{:?}", sp.transcript);
+    assert!(
+        rows(&run)[0].contains(",NR=1,GRID=JO22AB] tx[RST="),
+        "{:?}",
+        rows(&run)
+    );
+    assert!(
+        rows(&sp)[0].contains(",NR=1,GRID=IO91NM] tx[RST="),
+        "{:?}",
+        rows(&sp)
+    );
+}
+
+/// ⭐ A serial past 2047 goes out as 2047, as WSJT-X's packer clamps it (packjt77.f90 1511, the
+/// maintainer's ruling: match WSJT-X), bit for bit what WSJT-X sends for the real number, and is
+/// logged as 2047, what the other station copies.
+#[test]
+fn the_eu_vhf_serial_is_clamped_to_2047_as_wsjtx_clamps_it() {
+    let rs = install(
+        "custom_air_euvhf_2047",
+        "AIR-EUVHF-2047",
+        &["rst", "serial", "grid6"],
+        None,
+    );
+    for (next, sent) in [
+        (2047, "2047"),
+        (2048, "2047"),
+        (3000, "2047"),
+        (9999, "2047"),
+    ] {
+        let mut run = station(rs, true, "G4ABC", "IO91nm", "", "");
+        run.log.session.next_serial = next;
+        assert_eq!(run.exchange_refusal(), None, "{next}: never refused");
+        run.observe(&[heard("G4ABC PA3XYZ JO22")], 1);
+        let text = run.outgoing().unwrap().to_text();
+        assert_eq!(text, format!("<PA3XYZ> <G4ABC> 54{sent} IO91NM"), "{next}");
+        // Bit for bit WSJT-X's own over for the real serial (`%4.4d`, mainwindow.cpp 9652).
+        assert_eq!(
+            modes::wsjt77::ft8_tones(&text),
+            modes::wsjt77::ft8_tones(&format!("<PA3XYZ> <G4ABC> 54{next:04} IO91NM")),
+            "{next}"
+        );
+        run.after_tx();
+        run.observe(&[heard("<G4ABC> <PA3XYZ> R 570001 JO22AB")], 3);
+        assert_eq!(run.outgoing().unwrap().to_text(), "PA3XYZ G4ABC RR73");
+        assert_eq!(
+            rows(&run),
+            [format!(
+                "PA3XYZ rx[RST=57,NR=1,GRID=JO22AB] tx[RST=54,NR={sent},GRID=IO91NM]"
+            )]
+        );
+    }
+}
+
+/// No six-character locator: the contest does not start. S&P answers with the standard Tx1.
+/// A message from a call the decoder has not resolved, `<...>`, is passed by.
+#[test]
+fn the_eu_vhf_messages_refuse_a_four_character_locator_and_pass_by_unresolved_calls() {
+    let rs = install(
+        "custom_air_euvhf_g4",
+        "AIR-EUVHF-G4",
+        &["rst", "serial", "grid6"],
+        None,
+    );
+    // The contest cannot start with four characters in Settings: its GRID slot takes six.
+    let four = StationData {
+        mycall: "G4ABC".into(),
+        mygrid: "IO91".into(),
+        ..Default::default()
+    };
+    assert!(ContestSession::for_ruleset(rs, &four).is_err());
+    // A contest running on a six-character GRID gives none of it up; a station whose locator is
+    // not one refuses before it sends (the sequencer's own guard, the session's above it).
+    let mut run = station(rs, true, "G4ABC", "IO91nm", "", "");
+    assert_eq!(run.exchange_refusal(), None);
+    run.mygrid = "IO91".into();
+    assert_eq!(
+        run.exchange_refusal(),
+        None,
+        "the session's own GRID is what goes"
+    );
+    let mut run = station(rs, true, "G4ABC", "IO91nm", "", "");
+    run.observe(&[heard("<G4ABC> <...> 570001 JO22AB")], 1);
+    assert_eq!(run.outgoing().unwrap().to_text(), "CQ TEST G4ABC IO91");
+    // S&P answers a CQ with the standard Tx1, then rogers the runner's exchange.
+    let mut sp = station(rs, false, "PA3XYZ", "JO22ab", "", "");
+    sp.answer_cq("G4ABC", "IO91", -15);
+    assert_eq!(sp.outgoing().unwrap().to_text(), "G4ABC PA3XYZ JO22");
+    sp.observe(&[heard("<PA3XYZ> <G4ABC> 590007 IO91NM")], 1);
+    assert_eq!(
+        sp.outgoing().unwrap().to_text(),
+        "<G4ABC> <PA3XYZ> R 540001 JO22AB"
+    );
+    sp.after_tx();
+    sp.observe(&[heard("PA3XYZ G4ABC RR73")], 3);
+    assert_eq!(sp.outgoing().unwrap().to_text(), "G4ABC PA3XYZ 73");
+    assert_eq!(
+        rows(&sp),
+        ["G4ABC rx[RST=59,NR=7,GRID=IO91NM] tx[RST=54,NR=1,GRID=JO22AB]"]
+    );
+}
+
+/// Nonstandard calls in EU VHF: both calls are hashed in the contest message anyway, so a
+/// prefixed or suffixed call goes as WSJT-X sends it; the Tx1 from a nonstandard call is WSJT-X's
+/// `t0a`, the runner's call hashed and no grid (genStdMsgs 9596, 9601).
+#[test]
+fn the_eu_vhf_messages_carry_a_nonstandard_call_hashed() {
+    let rs = install(
+        "custom_air_euvhf_ns",
+        "AIR-EUVHF-NS",
+        &["rst", "serial", "grid6"],
+        None,
+    );
+    let mut sp = station(rs, false, "PA/G4ABC", "JO22ab", "", "");
+    sp.answer_cq("PA3XYZ", "JO21", 6);
+    assert_eq!(sp.outgoing().unwrap().to_text(), "<PA3XYZ> PA/G4ABC");
+    let mut run = station(rs, true, "PA3XYZ", "JO21qx", "", "");
+    run.observe(&[heard("<PA3XYZ> PA/G4ABC")], 1);
+    let text = run.outgoing().unwrap().to_text();
+    assert_eq!(text, "<PA/G4ABC> <PA3XYZ> 540001 JO21QX");
+    assert_eq!(i3n3(&text).map(|(i3, _)| i3), Some(5));
+    sp.after_tx();
+    sp.observe(&[heard("<PA/G4ABC> <PA3XYZ> 540001 JO21QX")], 2);
+    let text = sp.outgoing().unwrap().to_text();
+    assert_eq!(text, "<PA3XYZ> <PA/G4ABC> R 540001 JO22AB");
+    assert_eq!(i3n3(&text).map(|(i3, _)| i3), Some(5));
+}
+
+/// ⭐ A six-character grid in the exchange still goes on the air as WSJT-X's four characters
+/// wherever a standard message carries a grid (`my_grid().left(4)`, genStdMsgs 9582; genCQMsg's
+/// `grid.left (4)`, 9490): the CQ and the Tx1 of a custom contest whose exchange is a
+/// six-character grid alone (standard messages) are standard messages, not 13 characters of free
+/// text.
+#[test]
+fn a_six_character_grid_goes_out_as_four_in_the_standard_messages() {
+    let rs = install("custom_air_grid6", "AIR-GRID6", &["grid6"], None);
+    assert_eq!(FtMessages::for_contest(rs, "FT8"), FtMessages::Standard);
+    let run = station(rs, true, "K1ABC", "FN42ab", "", "");
+    let cq = run.outgoing().unwrap().to_text();
+    assert_eq!(cq, "CQ K1ABC FN42");
+    assert_eq!(i3n3(&cq).map(|(i3, _)| i3), Some(1), "{cq}");
+    let mut sp = station(rs, false, "W9XYZ", "EN52cd", "", "");
+    sp.answer_cq("K1ABC", "FN42", -7);
+    let tx1 = sp.outgoing().unwrap().to_text();
+    assert_eq!(tx1, "K1ABC W9XYZ EN52");
+    assert_eq!(i3n3(&tx1).map(|(i3, _)| i3), Some(1), "{tx1}");
 }

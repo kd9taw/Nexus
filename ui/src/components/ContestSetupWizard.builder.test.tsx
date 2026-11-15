@@ -485,6 +485,12 @@ describe('the FT8/FT4 line', () => {
     )
   })
 
+  it('names EU VHF with its locator and its serial clamp', () => {
+    expect(ftLine(p({ ftShape: 'eu_vhf', ftActivity: 'eu_vhf', ftMessages: 'eu_vhf', ftCq: 'CQ TEST K9ABC EN52', ftSends: '570001 EN52AB' }))).toBe(
+      "FT8/FT4: this exchange is WSJT-X's EU VHF message. Nexus calls CQ TEST K9ABC EN52 and sends 570001 EN52AB. Stations you work need the same contest messages: in WSJT-X, Settings ▸ Advanced ▸ Special operating activity ▸ EU VHF. That message carries your six-character locator, and sends a serial above 2047 as 2047, as WSJT-X does.",
+    )
+  })
+
   it('says standard messages where the station sends them', () => {
     expect(ftLine(p({}))).toMatch(/^FT8\/FT4: no WSJT-X contest message carries this exchange/)
     expect(ftLine(p({ ftShape: 'eu_vhf', ftActivity: 'eu_vhf' }))).toMatch(/matches WSJT-X's EU VHF message, which this version of Nexus does not send yet/)

@@ -10661,6 +10661,7 @@ export const DE: PartialCatalog = {
   "customContest.ft.notYet": "FT8/FT4: Dieser Austausch entspricht der WSJT-X-Nachricht {{activity}}, die diese Nexus-Version noch nicht sendet. Sie sendet Standardnachrichten (Locator und Rapport); dein Austausch wird nicht gesendet.",
   "customContest.ft.landed": "FT8/FT4: Dieser Austausch ist die WSJT-X-Nachricht {{activity}}. Nexus ruft {{cq}} und sendet {{sends}}. Gearbeitete Stationen brauchen dieselben Contest-Nachrichten: in WSJT-X unter Settings ▸ Advanced ▸ Special operating activity ▸ {{activity}}.",
   "customContest.ft.limit.rttyRoundup": "Diese Nachricht trägt Seriennummern von 1 bis 7999 und einen US-Bundesstaat, eine kanadische Provinz oder DC; alles andere (auch DX) verweigert Nexus, statt es falsch zu senden.",
+  "customContest.ft.limit.euVhf": "Diese Nachricht trägt deinen sechsstelligen Locator und sendet eine Seriennummer über 2047 als 2047, wie WSJT-X.",
   "customContest.rules.title": "Doppelte und Punkte",
   "customContest.rules.dupe": "Eine Station zählt",
   "customContest.rules.dupe.once": "Einmal im Contest",

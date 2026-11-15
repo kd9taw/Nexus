@@ -125,3 +125,63 @@ fn a_roundup_exchange_the_message_cannot_carry_is_refused_at_the_verb() {
     assert_eq!(mode_line(&e), before, "nothing changed");
     assert!(!e.tx_enabled());
 }
+
+/// RST + serial + six-character grid: running and double-clicking work the contact in WSJT-X's EU
+/// VHF messages through the cockpit — `CQ TEST` and the Tx1 with four characters of the locator,
+/// the exchanges with both calls hashed and all six — and the contest log holds it both ways.
+#[test]
+fn an_eu_vhf_shaped_contest_works_wsjtxs_eu_vhf_messages_through_the_cockpit() {
+    install("custom_eng_eu", "ENG-EU", &["rst", "serial", "grid6"]);
+    let ran = scene(
+        "custom_eng_eu",
+        Tier::Ft8,
+        Role::Running,
+        Act::EuVhf,
+        "FN42ab",
+    );
+    assert_eq!(ran.entered, Ok(()));
+    assert_eq!(
+        ran.sent,
+        [
+            "CQ TEST K1ABC FN42",
+            "<W9XYZ> <K1ABC> 540001 FN42AB",
+            "W9XYZ K1ABC RR73",
+        ],
+        "{:#?}",
+        ran.lines
+    );
+    assert_eq!(
+        ran.logged,
+        ["W9XYZ rx[RST=57,NR=13,GRID=EN37AB] tx[RST=54,NR=1,GRID=FN42AB] mode DIG FT8 dupe false"]
+    );
+    let clicked = scene(
+        "custom_eng_eu",
+        Tier::Ft8,
+        Role::DoubleClick,
+        Act::EuVhf,
+        "FN42ab",
+    );
+    assert_eq!(
+        clicked.sent,
+        [
+            "W9XYZ K1ABC FN42",
+            "<W9XYZ> <K1ABC> R 540001 FN42AB",
+            "W9XYZ K1ABC 73",
+        ],
+        "{:#?}",
+        clicked.lines
+    );
+    assert_eq!(
+        clicked.logged,
+        ["W9XYZ rx[RST=57,NR=13,GRID=EN37AB] tx[RST=54,NR=1,GRID=FN42AB] mode DIG FT8 dupe false"]
+    );
+    for over in [
+        "<W9XYZ> <K1ABC> 540001 FN42AB",
+        "<W9XYZ> <K1ABC> R 540001 FN42AB",
+    ] {
+        assert_eq!(air_form(over).0, "i3=5", "{over}");
+    }
+    for over in ["CQ TEST K1ABC FN42", "W9XYZ K1ABC FN42"] {
+        assert_eq!(air_form(over).0, "i3=1", "{over}");
+    }
+}

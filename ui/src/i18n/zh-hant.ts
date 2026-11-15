@@ -10627,6 +10627,7 @@ export const ZH_HANT: PartialCatalog = {
   "customContest.ft.notYet": "FT8/FT4：這一交換資訊與 WSJT-X 的 {{activity}} 訊息相符，但此版本的 Nexus 尚不傳送該訊息。它傳送標準訊息（網格和訊號報告）；你的交換資訊不會傳送。",
   "customContest.ft.landed": "FT8/FT4：這一交換資訊就是 WSJT-X 的 {{activity}} 訊息。Nexus 呼叫 {{cq}}，傳送 {{sends}}。你聯絡的電台需要使用相同的競賽訊息：在 WSJT-X 中選擇 Settings ▸ Advanced ▸ Special operating activity ▸ {{activity}}。",
   "customContest.ft.limit.rttyRoundup": "該訊息只能攜帶 1 至 7999 的序號，以及美國州、加拿大省或 DC；其他內容（包括 DX）Nexus 會拒絕傳送，而不是錯誤傳送。",
+  "customContest.ft.limit.euVhf": "該訊息攜帶你的六位網格座標，序號超過 2047 時按 2047 傳送，與 WSJT-X 相同。",
   "customContest.rules.title": "重複與得分",
   "customContest.rules.dupe": "一個電台計入",
   "customContest.rules.dupe.once": "整個競賽一次",

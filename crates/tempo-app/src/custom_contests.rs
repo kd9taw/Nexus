@@ -460,6 +460,7 @@ pub fn preview(
             FtMessages::NaVhf => "na_vhf",
             FtMessages::WwDigi => "ww_digi",
             FtMessages::RttyRoundup => "rtty_roundup",
+            FtMessages::EuVhf => "eu_vhf",
         }
         .to_string(),
         entered_slots: rs.entered_slots().into_iter().map(str::to_string).collect(),

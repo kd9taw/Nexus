@@ -76,6 +76,9 @@ enum Act {
     /// ARRL RTTY Roundup (`RTTY`), which an operator's own contest asks for
     /// ([`custom_contest`]): the partner sends `559 0013`.
     Roundup,
+    /// EU VHF (`EU_VHF`), which an operator's own contest matches: the partner sends
+    /// `570013 EN37AB`, both calls hashed.
+    EuVhf,
 }
 
 fn act_of(contest: &str) -> Act {
@@ -103,6 +106,7 @@ impl Partner {
             Act::NaVhf => format!("CQ TEST {DX} {DX_GRID}"),
             Act::None => format!("CQ {DX} {DX_GRID}"),
             Act::Roundup => format!("CQ RU {DX} {DX_GRID}"),
+            Act::EuVhf => format!("CQ TEST {DX} {DX_GRID}"),
         });
         Self {
             act,
@@ -113,7 +117,12 @@ impl Partner {
 
     /// What WSJT-X does on decoding `mine`.
     fn hear(&mut self, mine: &str) {
-        let w: Vec<&str> = mine.split_whitespace().collect();
+        // The calls as the partner's decoder prints them, brackets dropped as WSJT-X drops them
+        // (decodedtext.cpp 66): an EU VHF over hashes both.
+        let w: Vec<&str> = mine
+            .split_whitespace()
+            .map(|s| s.trim_start_matches('<').trim_end_matches('>'))
+            .collect();
         let to_me = w.len() >= 3 && w[0] == DX && w[1] == ME;
         let a_cq = w.first() == Some(&"CQ") && w.contains(&ME);
         let is_grid = |s: &str| {
@@ -135,6 +144,8 @@ impl Partner {
                 Act::FieldDay => reply("1D WI"),
                 Act::NaVhf | Act::None => reply(DX_GRID),
                 Act::Roundup => reply("559 0013"),
+                // EU VHF keeps Tx1 on (8250-8253): the standard grid answer.
+                Act::EuVhf => reply(DX_GRID),
             });
             return;
         }
@@ -153,6 +164,16 @@ impl Partner {
             Act::Roundup if w.len() == 4 => (reply("R 559 0013"), false),
             Act::Roundup if w.len() == 5 && w[2] == "R" => (reply("RR73"), true),
             Act::Roundup if closing => (reply("73"), true),
+            // processMessage's EU VHF branch (9138-9151): a grid is answered with the exchange,
+            // an exchange rogered with the partner's, a rogered one closed with RR73.
+            Act::EuVhf if w.len() == 3 && is_grid(w[2]) => {
+                (format!("<{ME}> <{DX}> 570013 EN37AB"), false)
+            }
+            Act::EuVhf if w.len() == 4 && w[2].len() == 6 => {
+                (format!("<{ME}> <{DX}> R 570013 EN37AB"), false)
+            }
+            Act::EuVhf if w.len() == 5 && w[2] == "R" => (reply("RR73"), true),
+            Act::EuVhf if closing => (reply("73"), true),
             Act::None if w.len() == 3 && is_grid(w[2]) => (reply(DX_RPT), false),
             Act::None if w.len() == 3 && w[2].starts_with('R') && is_report(&w[2][1..]) => {
                 (reply("RR73"), true)

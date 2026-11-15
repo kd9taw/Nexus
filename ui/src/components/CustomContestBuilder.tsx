@@ -130,6 +130,7 @@ export function ftLine(p: CustomContestPreview): string {
   }
   const line = [t('customContest.ft.landed', { activity: FT_ACTIVITY_NAMES[p.ftMessages], cq: p.ftCq, sends: p.ftSends })]
   if (p.ftMessages === 'rtty_roundup') line.push(t('customContest.ft.limit.rttyRoundup'))
+  if (p.ftMessages === 'eu_vhf') line.push(t('customContest.ft.limit.euVhf'))
   // The station's own refusal of this exchange with the current settings, verbatim.
   if (p.ftRefusal) line.push(p.ftRefusal)
   return line.join(' ')

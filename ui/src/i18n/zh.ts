@@ -10625,6 +10625,7 @@ export const ZH: PartialCatalog = {
   "customContest.ft.notYet": "FT8/FT4：这一交换信息与 WSJT-X 的 {{activity}} 消息相符，但此版本的 Nexus 尚不发送该消息。它发送标准消息（网格和信号报告）；你的交换信息不会发送。",
   "customContest.ft.landed": "FT8/FT4：这一交换信息就是 WSJT-X 的 {{activity}} 消息。Nexus 呼叫 {{cq}}，发送 {{sends}}。你联络的电台需要使用相同的竞赛消息：在 WSJT-X 中选择 Settings ▸ Advanced ▸ Special operating activity ▸ {{activity}}。",
   "customContest.ft.limit.rttyRoundup": "该消息只能携带 1 至 7999 的序号，以及美国州、加拿大省或 DC；其他内容（包括 DX）Nexus 会拒绝发送，而不是错误发送。",
+  "customContest.ft.limit.euVhf": "该消息携带你的六位网格坐标，序号超过 2047 时按 2047 发送，与 WSJT-X 相同。",
   "customContest.rules.title": "重复与得分",
   "customContest.rules.dupe": "一个电台计入",
   "customContest.rules.dupe.once": "整个竞赛一次",
