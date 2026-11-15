@@ -249,3 +249,155 @@ fn a_repeat_of_a_marked_noise_shape_stays_gated() {
         }
     }
 }
+
+// Every path automation reads is gated, one test per path: the boundary fold's message inbox,
+// the Hound wire copy, the QSY directive reader, and the operator's re-decode (its wire and its
+// inbox). Each mixes one unchecked decode with one checked one, so the checked one shows the path
+// ran.
+
+/// Decodes as a pass hands them over: (message, snr, unchecked).
+fn decodes_of(lines: &[(&str, i32, bool)]) -> Vec<modes::Decode> {
+    lines
+        .iter()
+        .map(|&(m, snr, unchecked)| modes::Decode {
+            snr,
+            ..decode(m, unchecked)
+        })
+        .collect()
+}
+
+/// One boundary pass of `slot` carrying `lines`.
+fn pass_of(e: &mut Engine, lines: &[(&str, i32, bool)], slot: u64) {
+    let result = DecodeResult {
+        decodes: decodes_of(lines),
+        frame: vec![0.0; 180_000],
+        pass: DecodePass::Boundary,
+        slot,
+        epoch: e.decode_epoch,
+        heard_on: None,
+        failed: false,
+        logged_adif: Vec::new(),
+        jtdx_took: None,
+    };
+    let _ = e.apply_decode_result(result);
+}
+
+/// The operator's Decode button over the period of `slot`, finding `lines`.
+fn redecode_of(e: &mut Engine, lines: &[(&str, i32, bool)], slot: u64) -> usize {
+    e.apply_redecode(DecodeResult {
+        decodes: decodes_of(lines),
+        frame: vec![0.0; 180_000],
+        pass: DecodePass::Redecode,
+        slot,
+        epoch: e.decode_epoch,
+        heard_on: None,
+        failed: false,
+        logged_adif: Vec::new(),
+        jtdx_took: None,
+    })
+}
+
+/// The stations the message inbox's roster has heard.
+fn heard(e: &Engine) -> Vec<String> {
+    e.snapshot().stations.into_iter().map(|s| s.call).collect()
+}
+
+const UNCHECKED_CQ: (&str, i32, bool) = ("CQ W9XYZ EN37", 5, true);
+const CHECKED_CQ: (&str, i32, bool) = ("CQ N7GHI DN31", -12, false);
+
+#[test]
+fn an_unchecked_decode_never_reaches_the_message_inbox() {
+    let mut e = station();
+    pass_of(&mut e, &[UNCHECKED_CQ, CHECKED_CQ], 1);
+    let heard = heard(&e);
+    assert!(
+        heard.iter().any(|c| c == "N7GHI"),
+        "premise: the inbox ran: {heard:?}"
+    );
+    assert!(
+        !heard.iter().any(|c| c == "W9XYZ"),
+        "not heard from an unchecked decode: {heard:?}"
+    );
+    assert_eq!(
+        e.snapshot().link.snr_db,
+        -12.0,
+        "the link readout follows the checked decode, not the stronger unchecked one"
+    );
+}
+
+#[test]
+fn a_hound_hands_no_unchecked_decode_to_other_programs() {
+    let mut e = station();
+    e.settings.special_op = crate::settings::SpecialOp::Hound;
+    pass_of(&mut e, &[UNCHECKED_CQ, CHECKED_CQ], 1);
+    assert_eq!(
+        wired(&e),
+        ["CQ N7GHI DN31"],
+        "the Hound's wire copy is checked too"
+    );
+}
+
+#[test]
+fn a_redecode_hands_no_unchecked_decode_to_other_programs() {
+    let mut e = station();
+    pass_of(&mut e, &[("CQ K1ABC FN42", -10, false)], 1);
+    assert_eq!(
+        redecode_of(&mut e, &[UNCHECKED_CQ, CHECKED_CQ], 1),
+        2,
+        "premise: the re-decode found both"
+    );
+    assert_eq!(wired(&e), ["CQ N7GHI DN31"], "only the checked one goes on");
+    let rows = e.snapshot().recent_decodes;
+    assert!(
+        rows.iter()
+            .any(|r| r.message == "CQ W9XYZ EN37" && r.unchecked),
+        "shown, marked"
+    );
+}
+
+#[test]
+fn a_redecode_feeds_no_unchecked_decode_to_the_message_inbox() {
+    let mut e = station();
+    pass_of(&mut e, &[("CQ K1ABC FN42", -10, false)], 1);
+    redecode_of(&mut e, &[UNCHECKED_CQ, CHECKED_CQ], 1);
+    let heard = heard(&e);
+    assert!(
+        heard.iter().any(|c| c == "N7GHI"),
+        "premise: the inbox ran: {heard:?}"
+    );
+    assert!(
+        !heard.iter().any(|c| c == "W9XYZ"),
+        "not heard from an unchecked decode: {heard:?}"
+    );
+}
+
+/// Coordinated QSY (Chat): the partner's directive, decoded unchecked, schedules no move; the same
+/// frames checked do.
+fn qsy_follower_hearing(unchecked: bool) -> Option<String> {
+    use tempo_core::{inbox, qsy, text};
+    let mut e = Engine::new("KB9BBB", "EN52", 1);
+    e.set_tx_enabled(true);
+    e.qsy_configure(vec!["20m".into(), "40m".into()], 1);
+    e.select_peer("KA9AAA");
+    e.qsy_set_enabled(true);
+    let body = format!("QSY 40M {}", qsy::encode_slot(9));
+    let frames = text::chunk(&inbox::broadcast_text("KA9AAA", &body), 'A');
+    let lines: Vec<(&str, i32, bool)> =
+        frames.iter().map(|f| (f.as_str(), -7, unchecked)).collect();
+    pass_of(&mut e, &lines, 3);
+    e.snapshot().qsy.and_then(|q| q.next_channel)
+}
+
+#[test]
+fn an_unchecked_qsy_directive_moves_nothing() {
+    assert_eq!(
+        qsy_follower_hearing(false).as_deref(),
+        Some("40M"),
+        "premise: checked, the move is scheduled"
+    );
+    assert_eq!(
+        qsy_follower_hearing(true),
+        None,
+        "unchecked, nothing is scheduled"
+    );
+}
