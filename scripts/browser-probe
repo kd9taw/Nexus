@@ -234,6 +234,9 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         wide, 110-175 % on 1920×1080 and the OS's 125-200 %, asserting ⊞ Panels and CAT never take a line of
                         their own while the mode controls' last line has room for them and
                         nothing runs past the window, with the header's previous shape as the
+                        control; then the real FT screen with the contest switch off and on at every
+                        screen of the matrix in en, de, fr and ru, asserting its "Contest:" chip adds
+                        no header line and moves Stop TX 0 px, with the chip's first sizing as the
                         control (ui/probe/header-probe.mjs; it builds nothing)
   --desktop rttyfit     the RTTY screen in the real app at the common screens (OS-scaled too) and at
                         125/150 % on 1920×1080 and 1366×768, with the tuning scope shown and

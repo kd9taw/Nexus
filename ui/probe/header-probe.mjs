@@ -14,14 +14,26 @@
 // probe must find at least one width where the actions took a line they did not need; if it does not,
 // the check cannot fail and the probe says so instead of passing.
 //
+// AND THE CONTEST SWITCH (the real app, FT): with the contest switch on, FT's header carries a "Contest: …"
+// chip. Its first build was an ordinary item of the header's wrapping row, and wherever that row was nearly
+// full it broke onto a new line: at 8 of the supported screens Stop TX dropped 21-36 px when the switch went
+// on, and no probe saw it, because none turned the switch on. So the real app (its api swapped for the
+// waterfalls probe's stub, the station in plain FT8 with the New York QSO Party picked) is drawn with the
+// switch off and on at every screen of probe/sizes.mjs MATRIX, in English, German, French and Russian, and at
+// each the header must be exactly as tall and Stop TX exactly as far below the header's top: the switch adds
+// no header line. (Measured from the header's top because the TOP BAR's "Set operator", which the switch also
+// shows, grows the top bar in French and Russian at the floor: a separate matter, printed, not failed.)
+// THE CONTROL: the chip's zero-cost slot taken away (its old sizing planted over it) must move the header at one
+// screen at least, or the check cannot fail and the probe says so.
+//
 // exit: 0 every case holds · 1 a red, or a control that could not fail · 2 the page never drew the header
 import { createServer } from 'vite'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
-import { FHD_125, FHD_150, FLOOR, UHD_150, UHD_200, metrics } from './sizes.mjs'
+import { FHD_125, FHD_150, FLOOR, MATRIX, UHD_150, UHD_200, metrics } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const CASES = []
@@ -109,9 +121,114 @@ try {
     code = code || 1
   }
   if (code === 0) console.log(`header-probe: PASS — the header's actions never take a line they do not need, ${FLOOR.w} to 2560 wide, 110-175 % on 1920×1080 and the OS's 125-200 %`)
+  code = Math.max(code, await contestSwitch())
+  if (code === 0) console.log('header-probe: PASS — the contest switch adds no line to FT\'s header at any screen of the matrix, in en, de, fr and ru')
   process.exitCode = code
 } finally {
   await browser.stop()
   await server.close()
   await rm(cacheDir, { recursive: true, force: true })
+}
+
+// ── THE CONTEST SWITCH, in the real app ────────────────────────────────────────────────────────────────────
+async function contestSwitch() {
+  const REAL_API = join(UI, 'src', 'api.ts')
+  const STUB_API = join(UI, 'probe', '__header-contest-api.ts')
+  let stub = await readFile(join(UI, 'probe', 'waterfalls-api.ts'), 'utf8')
+  const SETTINGS = 'export async function getSettings(): Promise<any> { return settingsFixture }'
+  if (!stub.includes(SETTINGS) || !stub.includes("mode: 'Normal'")) throw new Error('header-probe: probe/waterfalls-api.ts changed shape')
+  // The probe's settings over the fixture (`probe.settings`), and the station in plain QSO mode.
+  stub = stub.replace(SETTINGS, 'export async function getSettings(): Promise<any> { return { ...settingsFixture, ...JSON.parse(localStorage.getItem("probe.settings") ?? "{}") } }')
+    .replace("mode: 'Normal'", "mode: 'qso'")
+  stub += "\nexport async function resolveEntity(): Promise<any> { return 'United States' }\nexport async function qrzLookup(): Promise<any> { return null }\n"
+  const names = [...(await readFile(REAL_API, 'utf8')).matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1])
+  const own = new Set([...stub.matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1]))
+  const stubCode = stub + `\nexport * from ${JSON.stringify(REAL_API)}\n` +
+    names.filter((n) => !own.has(n)).map((n) => `export async function ${n}(..._a: unknown[]): Promise<any> { return (globalThis as any).__DEFAULT_ARR ? [] : {} }`).join('\n')
+  const swap = {
+    name: 'header-contest-api', enforce: 'pre',
+    async resolveId(source, importer, opts) {
+      if (opts?.scan) return null
+      if (source === STUB_API) return STUB_API
+      if (!importer || importer === STUB_API || !/api(\.ts)?$/.test(source)) return null
+      const r = await this.resolve(source, importer, { ...opts, skipSelf: true })
+      return r && r.id.split('?')[0] === REAL_API ? STUB_API : null
+    },
+    load(id) { return id === STUB_API ? stubCode : null },
+  }
+  const dir = await mkdtemp(join(tmpdir(), 'nexus-header-contest-'))
+  const app = await createServer({ root: UI, configFile: join(UI, 'vite.config.ts'), cacheDir: dir, logLevel: 'warn', plugins: [swap],
+    server: { host: '127.0.0.1', port: 0, strictPort: false, hmr: false } })
+  await app.listen()
+  const at = `http://127.0.0.1:${app.httpServer.address().port}`
+  // The first build's sizing, planted over the slot: an ordinary item that counts toward the actions' width.
+  const NO_CHIP = '.cockpit-contest-slot, .cockpit-contest-chip { display: none !important } .ch-actions { flex-grow: 0 !important }'
+  const OLD = '.cockpit-contest-slot { container-type: normal !important; flex: 0 0 auto !important; margin-right: 0 !important } .ch-actions:has(> .cockpit-contest-slot) { flex-grow: 0 !important } .cockpit-contest-chip { display: inline-block !important }'
+  const READ = `(() => {
+    const vis = (s) => [...document.querySelectorAll(s)].find((e) => e.closest('[hidden]') == null && e.getBoundingClientRect().height > 0)
+    const stop = vis('.op-btn.stop'), head = vis('main.operate-cockpit .cockpit-header')
+    if (!stop || !head || !document.documentElement.getAttribute('data-viewport')) return null
+    const chip = vis('.cockpit-contest-chip'), q = stop.getBoundingClientRect(), h = head.getBoundingClientRect()
+    return { stopY: Math.round(q.top), below: Math.round(q.top - h.top), headH: Math.round(h.height), chipW: chip ? Math.round(chip.getBoundingClientRect().width) : 0, slotW: Math.round(document.querySelector('main.operate-cockpit .cockpit-contest-slot')?.getBoundingClientRect().width ?? -1) }
+  })()`
+  const KEY = `[...document.querySelectorAll('.op-btn.stop, main.operate-cockpit > *, .cockpit-header, .ch-actions')].map((e) => { const q = e.getBoundingClientRect(); return Math.round(q.top) + ':' + Math.round(q.height) + ':' + Math.round(q.width) }).join(',')`
+  /** `plant`: CSS laid over the page once it draws. */
+  async function sweep(loc, on, plant) {
+    const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
+    const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
+    const call = (m, p) => browser.call(m, p, sessionId)
+    const ev = async (expression) => { const r = await call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); return r.exceptionDetails ? null : r.result.value }
+    await call('Emulation.setDeviceMetricsOverride', metrics(MATRIX[0]))
+    await call('Page.navigate', { url: `${at}/probe-blank` })
+    await sleep(300)
+    const ls = { 'nexus.workspace': 'dx', 'tempo-theme': 'dark', 'nexus.locale': loc, 'probe.settings': JSON.stringify({ fdActive: on, fdEvent: 'nyqp' }) }
+    await ev(`localStorage.clear(); ${Object.entries(ls).map(([k, v]) => `localStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(v)})`).join(';')}; 1`)
+    await call('Page.navigate', { url: `${at}/#operate` })
+    const rows = []
+    for (let i = 0; i < 160 && !(await ev(READ)); i++) await sleep(250)
+    if (plant) await ev(`(() => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(plant)}; document.head.appendChild(s); return 1 })()`)
+    for (const size of MATRIX) {
+      await call('Emulation.setDeviceMetricsOverride', metrics(size))
+      let last = null
+      for (let i = 0; i < 40; i++) {
+        await ev('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => r(1), 30))))')
+        const k = await ev(KEY)
+        if (i > 2 && k === last) break
+        last = k
+      }
+      rows.push(await ev(READ))
+    }
+    await browser.call('Target.closeTarget', { targetId })
+    return rows
+  }
+  let code = 0, caught = 0, hidden = 0
+  try {
+    for (const loc of ['en', 'de', 'fr', 'ru']) {
+      // Off, on, and on with the chip's slot taken out: the switch also shows the TOP BAR's "Set operator",
+      // which grows the top bar in French and Russian at the floor, so the chip is judged against the same
+      // page without it, and the move from off is printed.
+      const off = await sweep(loc, false, null), on = await sweep(loc, true, null)
+      const bare = await sweep(loc, true, NO_CHIP)
+      const old = loc === 'en' ? await sweep(loc, true, OLD) : null
+      MATRIX.forEach((size, i) => {
+        const a = off[i], b = on[i], n = bare[i], c = old?.[i]
+        const where = `${size.name} ${loc}`
+        if (!a || !b || !n) { console.error(`header-probe: contest switch: FT never drew at ${where}`); code = 2; return }
+        if (c && (c.headH !== n.headH || c.stopY !== n.stopY)) caught++
+        if (!b.chipW) hidden++
+        const moved = b.stopY - a.stopY
+        console.log(`header-probe: contest switch ${where}: header ${n.headH}→${b.headH} px, Stop TX ${n.stopY}→${b.stopY} px with the chip; ${moved ? `${moved > 0 ? '+' : ''}${moved} px from off (the top bar)` : 'not moved from off'}; chip ${b.chipW ? b.chipW + ' px' : 'not drawn'} in a ${b.slotW} px slot`)
+        if (b.headH !== n.headH || b.stopY !== n.stopY) {
+          console.error(`header-probe: RED contest switch ${where} — the chip took the header ${n.headH}→${b.headH} px and Stop TX ${n.stopY}→${b.stopY} px`)
+          code = code || 1
+        }
+      })
+    }
+    console.log(`header-probe: contest switch: the chip is drawn at ${MATRIX.length * 4 - hidden} of ${MATRIX.length * 4} cases; CONTROL — the slot's old sizing moved the header at ${caught} of ${MATRIX.length} screens`)
+    if (caught === 0) { console.error('header-probe: CONTROL FAILED — the chip\'s old sizing never moved the header; the contest check cannot fail'); code = code || 1 }
+  } finally {
+    await app.close()
+    await rm(dir, { recursive: true, force: true })
+  }
+  return code
 }

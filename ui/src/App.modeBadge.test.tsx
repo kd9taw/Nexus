@@ -206,7 +206,7 @@ describe('the mode badge above Settings, in the app', () => {
     await waitFor(() => expect(badge()).toBe('NYQP'))
     const chip = await waitFor(() => {
       const c = ft.querySelector<HTMLButtonElement>('.cockpit-header button.cockpit-contest-chip')
-      expect(c?.textContent).toBe('Contest: NYQP')
+      expect(c?.getAttribute('aria-label')).toBe('Contest: NYQP')
       return c!
     })
     chip.click()
