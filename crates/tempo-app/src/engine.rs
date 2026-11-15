@@ -35630,7 +35630,7 @@ contact yourself."
             !d.unchecked
                 || heard
                     .get(&message_words(&d.message))
-                    .is_some_and(|h| *h < slot && (slot - h) % 2 == 0)
+                    .is_some_and(|h| *h < slot && (slot - h).is_multiple_of(2))
         };
         let all_count = decodes.iter().all(counts);
         let kept = if all_count {
