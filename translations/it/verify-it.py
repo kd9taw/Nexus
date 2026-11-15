@@ -28,8 +28,8 @@ from collections import Counter, defaultdict
 # >>> make-kit pins
 EXPECTED_ROWS = 10702
 EXPECTED_KEYS_SHA = 'dec38b2e02d6bd2f9c2cf17eeb4c8a3e65deb6f2e945e75b944c94216c78165b'
-EXPECTED_ENGLISH_SHA = 'f8d02930a503a743b4e53275b1b57fc58a384bf0df023c4bf33d24c03f332bcc'
-EXPECTED_DNT_SHA = '2c4d467a03e653262e0d74c7c11715db1b0d643eccade8c80c93e30da8af1de1'
+EXPECTED_ENGLISH_SHA = 'a8038d53adbf7b725e27e60b72586f876e557f2c1275cfaf6ad14856c6926b0a'
+EXPECTED_DNT_SHA = '433b31759574035c63716d584d6dacd5e0d87ac53f7c80404382a3411bbb8ce4'
 EXPECTED_TIERS = {1: 996, 2: 364, 3: 1802, 4: 577, 5: 4166, 6: 2797}
 # <<< make-kit pins
 COLUMNS = ['priority', 'key', 'english', 'italian', 'do_not_translate', 'notes']
