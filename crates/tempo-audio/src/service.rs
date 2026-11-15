@@ -21137,15 +21137,17 @@ fn open_serial_ptt(t: &Transport, line: SerialLine, allow_coexist: bool) -> RigO
     // model to require. This is the operator ruling made mechanical: keying on a serial line
     // stays independent of COM while OmniRig drives CAT.
     if t.is_omnirig() {
-        return open_cat(
+        let mut open = open_cat(
             t,
             PttMode::Serial {
-                port: ptt_port,
+                port: ptt_port.clone(),
                 line,
             },
             allow_coexist,
             None,
         );
+        name_a_missing_ptt_port(&mut open, t, &ptt_port, line);
+        return open;
     }
     // Single-cable interface (Digirig Mobile): keying and CAT are the SAME port, so let rigctld
     // own it and do both. Hamlib shares the fd, so this is one open, not a fight for the port.
@@ -21182,32 +21184,16 @@ fn open_serial_ptt(t: &Transport, line: SerialLine, allow_coexist: bool) -> RigO
     let separate = t.cat_available()
         && (cat_off_serial || !ptt_port.eq_ignore_ascii_case(t.serial_port.trim()));
     if separate {
-        // A network rig with no port set in either field keys an empty port name: CAT opens,
-        // and the first over failed on a serial error. Say so at the open. `ok` stays CAT's own
-        // verdict: it is the loop's CAT health and gates the polling, and the next good read
-        // would turn a red here green anyway. The Icom network connection is left out: it
-        // refuses transmit whatever the port, so a port would not make it transmit.
-        let no_port = ptt_port.trim().is_empty() && !t.is_icom_lan();
         let mut open = open_cat(
             t,
             PttMode::Serial {
-                port: ptt_port,
+                port: ptt_port.clone(),
                 line,
             },
             allow_coexist,
             None,
         );
-        if no_port {
-            let line = match line {
-                SerialLine::Rts => "RTS",
-                SerialLine::Dtr => "DTR",
-            };
-            open.2.detail = format!(
-                "{} — but PTT is {line} and no PTT Serial Port is set, so nothing will transmit: \
-                 set it to the keying cable's port in Settings.",
-                open.2.detail
-            );
-        }
+        name_a_missing_ptt_port(&mut open, t, &ptt_port, line);
         open
     } else {
         // Pure serial keying, no CAT. After the shared-port branch above this is reached only
@@ -21223,6 +21209,27 @@ fn open_serial_ptt(t: &Transport, line: SerialLine, allow_coexist: bool) -> RigO
         }
         open
     }
+}
+
+/// A radio keying RTS or DTR on a cable beside CAT (a network radio, OmniRig) with no port set
+/// in either field keys an empty port name: CAT opens, and the first over failed on a serial
+/// error. Say so at the open, in the open's detail. `ok` stays CAT's own verdict: it is the
+/// loop's CAT health and gates the polling, and the next good read would turn a red here green
+/// anyway. The Icom network connection is left out: it refuses transmit whatever the port, so a
+/// port would not make it transmit.
+fn name_a_missing_ptt_port(open: &mut RigOpen, t: &Transport, ptt_port: &str, line: SerialLine) {
+    if !ptt_port.trim().is_empty() || t.is_icom_lan() {
+        return;
+    }
+    let line = match line {
+        SerialLine::Rts => "RTS",
+        SerialLine::Dtr => "DTR",
+    };
+    open.2.detail = format!(
+        "{} — but PTT is {line} and no PTT Serial Port is set, so nothing will transmit: \
+         set it to the keying cable's port in Settings.",
+        open.2.detail
+    );
 }
 
 /// Decide whether a rig SWITCH may auto-coexist onto a rigctld already listening on the new radio's
@@ -44307,6 +44314,54 @@ mod tests {
         let (ok, detail) = reprobe(&mut rig, &t);
         assert_eq!(ok, Some(false), "{detail}");
         assert!(detail.contains("(no port set)"), "{detail}");
+    }
+
+    /// An OmniRig radio: OmniRig drives CAT from its own setup, so no CAT serial port is set.
+    fn omnirig_transport(ptt_method: &str, ptt_serial_port: &str) -> Transport {
+        let mut t = cat_transport(0, None);
+        t.rig_model = 0;
+        t.rig_conn = "omnirig".into();
+        t.serial_port = String::new();
+        t.ptt_method = ptt_method.into();
+        t.ptt_serial_port = ptt_serial_port.into();
+        t
+    }
+
+    /// OmniRig keyed by RTS or DTR with no PTT Serial Port names the missing port at open, in
+    /// the same words as any other radio keying a cable beside CAT, instead of leaving it to the
+    /// first over's serial error. OmniRig's open used to return before that check ran. The words
+    /// do not depend on whether OmniRig itself came up (off Windows it never does).
+    #[test]
+    fn an_omnirig_rig_keyed_by_a_serial_line_with_no_port_says_so_at_open() {
+        for (method, line) in [("rts", "RTS"), ("dtr", "DTR")] {
+            let t = omnirig_transport(method, "");
+            let (_rig, _proc, probe) = open_rig(&t, true);
+            assert!(
+                probe.detail.contains(&format!(
+                    "PTT is {line} and no PTT Serial Port is set, so nothing will transmit"
+                )),
+                "names the missing port at open: {}",
+                probe.detail
+            );
+        }
+    }
+
+    /// The controls: OmniRig keying through OmniRig itself (CAT PTT) needs no serial port, and
+    /// OmniRig keyed by RTS with its port set has one, so neither is warned.
+    #[test]
+    fn an_omnirig_rig_on_cat_ptt_or_with_a_ptt_port_is_not_warned_at_open() {
+        for t in [
+            omnirig_transport("cat", ""),
+            omnirig_transport("rts", "tempo-test-omnirig-key"),
+        ] {
+            let (_rig, _proc, probe) = open_rig(&t, true);
+            assert!(
+                !probe.detail.contains("no PTT Serial Port"),
+                "{}: {}",
+                t.ptt_method,
+                probe.detail
+            );
+        }
     }
 
     /// Read-only launch #3/#4 (the latch): with the mode never asserted this session,

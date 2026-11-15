@@ -1936,11 +1936,13 @@ fn no_join_gets_past_the_key_check_whatever_its_key_holds() {
     let mut wrong = Vec::new();
     let mut check = |when: &str| {
         for (what, join, want) in &cases {
-            let got = raw_peer(
-                &addr,
-                &[join.clone(), row_line("bbbb0002", 9, "W1FAK")],
-                600,
-            );
+            // A refused JOIN is answered and then closed by the host, and the read ends at that
+            // close, so a refusal is waited for up to 10 s and costs only as long as it takes.
+            // A fixed 600 ms was a race on a loaded machine (the host's accept loop alone naps
+            // 200 ms between polls), and an answer that missed it read as no answer ("live, no
+            // key field: []" on CI). Only an answer of nothing at all is read for a fixed time.
+            let ms = if want.is_some() { 10_000 } else { 600 };
+            let got = raw_peer(&addr, &[join.clone(), row_line("bbbb0002", 9, "W1FAK")], ms);
             let ok = match want {
                 Some(sentence) => told(&got, sentence),
                 None => got.is_empty(),

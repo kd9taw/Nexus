@@ -14,9 +14,11 @@ export type Tier = 'TempoFast' | 'TempoDeep' | 'FT8' | 'FT4' | 'FT2' | 'FST4' | 
  * in the `modes` crate — the engine is the enforcement (it refuses to arm TX or
  * start a CQ run on these); this list exists so the UI does not OFFER controls the
  * engine will refuse. Keep the two in step when a mode gains a transmitter. */
-// JS8 is receive-only in this build: the modem and message layer shipped first (B5); the
-// operator-gated transmit batch flips `Js8Mode::capabilities().tx` and removes it here.
-export const RX_ONLY_TIERS: readonly Tier[] = ['JS8']
+// EMPTY — every shipped tier transmits, as the modes crate's `rx_only()` says. JS8 sat here
+// while its modem shipped receive-only, and stayed after `Js8Mode` became transmit-capable,
+// greying out the top bar's TX On and Tune on the JS8 tier. Kept so the next receive-only
+// mode has somewhere to go.
+export const RX_ONLY_TIERS: readonly Tier[] = []
 
 /** BEACON tiers: they transmit, but on a SCHEDULE and with no QSO sequence — the
  * payload is callsign, grid and power. Mirrors `Capabilities { beacon_only: true }`.

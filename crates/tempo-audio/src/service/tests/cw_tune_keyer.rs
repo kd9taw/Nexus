@@ -54,17 +54,20 @@ mod winkeyer {
         master: Arc<Mutex<serialport::TTYPort>>,
         sent: Arc<Mutex<Vec<u8>>>,
         _slave: serialport::TTYPort,
+        /// The Host Open responder. It holds a clone of the master, so the keyer's end of the
+        /// pty stays open (and every write to it succeeds) until this thread has ended.
+        responder: Option<std::thread::JoinHandle<()>>,
     }
 
     impl Wire {
         pub fn new() -> Self {
-            let (mut master, slave) = serialport::TTYPort::pair().expect("a pty pair");
+            let (mut master, slave) = pty_pair();
             let port = slave.name().expect("the pts side has a path");
             // Short reads: a pull from inside the rigctld's `T 0` answer must not hold the unkey.
             master.set_timeout(Duration::from_millis(20)).unwrap();
             let mut responder = master.try_clone().expect("clone the pty master");
             responder.set_timeout(Duration::from_millis(3000)).unwrap();
-            std::thread::spawn(move || {
+            let answered = std::thread::spawn(move || {
                 let mut host_open = [0u8; 2];
                 if responder.read_exact(&mut host_open).is_ok() {
                     let _ = responder.write_all(&[0x17]); // WK2, revision 23
@@ -76,7 +79,20 @@ mod winkeyer {
                 master: Arc::new(Mutex::new(master)),
                 sent: Arc::new(Mutex::new(Vec::new())),
                 _slave: slave,
+                responder: Some(answered),
             }
+        }
+
+        /// The keyer goes away under the open port: its end of the pty closes, and from then on
+        /// every write Nexus makes to the port fails. The responder is joined first: its clone
+        /// of the master would otherwise keep the pty open for as long as that thread had not
+        /// yet ended, and under load that outlasts the steps that follow.
+        pub fn unplug(&mut self) {
+            if let Some(r) = self.responder.take() {
+                r.join().expect("the Host Open responder");
+            }
+            let (master, _) = pty_pair();
+            *self.master.lock().unwrap() = master;
         }
 
         /// A handle the rigctld's hook can pull with.
@@ -89,6 +105,32 @@ mod winkeyer {
         pub fn sent(&self) -> Vec<u8> {
             pull(&self.master, &self.sent)
         }
+    }
+
+    /// A pty pair no child process inherits.
+    ///
+    /// ⚠️ `TTYPort::pair` opens both ends WITHOUT close-on-exec, so every process any test thread
+    /// spawns while the pair is open takes a copy of the master with it. The suite runs on many
+    /// threads, and the show-conf tests start stand-ins that stay up for hundreds of milliseconds
+    /// (a dump that never exits waits out its budget): a copy in one of them kept the keyer's end
+    /// open after [`Wire::unplug`], so the key-down did not fail and the tune went on. Every run
+    /// of this module beside `rigctld_proc`'s tests failed that way here. Marked close-on-exec at
+    /// once, a copy lives only from a spawn's fork to its exec; the gap this leaves, between the
+    /// open and the mark, is a few instructions long.
+    fn pty_pair() -> (serialport::TTYPort, serialport::TTYPort) {
+        use std::os::fd::AsRawFd;
+        let (master, slave) = serialport::TTYPort::pair().expect("a pty pair");
+        for fd in [master.as_raw_fd(), slave.as_raw_fd()] {
+            // SAFETY: `fd` belongs to a port alive for this call; F_SETFD changes only its flags.
+            let set = unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+            assert_ne!(
+                set,
+                -1,
+                "close-on-exec: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+        (master, slave)
     }
 
     fn pull(master: &Mutex<serialport::TTYPort>, sent: &Mutex<Vec<u8>>) -> Vec<u8> {
@@ -302,9 +344,7 @@ mod winkeyer {
         let mut s = Scene::new(|_| {});
         s.step(50.0); // the keyer opens, as it does once configured
         assert!(s.state.winkeyer.is_some(), "control: the keyer is open");
-        // The keyer goes away under the open port: its far end closes, and every write fails.
-        let (master, _) = serialport::TTYPort::pair().unwrap();
-        *s.wire.master.lock().unwrap() = master;
+        s.wire.unplug();
         s.engine.lock().unwrap().set_tune(true);
         s.step(100.0);
         s.step(140.0);
