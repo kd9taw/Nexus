@@ -1875,6 +1875,16 @@ pub struct Settings {
     /// verbatim, because the sponsor's own examples are not a closed set.
     #[serde(default)]
     pub contest_power: String,
+    /// ⭐ **What the operator TYPES for an own contest's exchange** — an age, a name, a text
+    /// field — by contest id, then by slot (`{"custom_club_sprint": {"AGE": "42"}}`).
+    ///
+    /// ⚠️ **Here and never in the contest's definition file** (the maintainer's ruling on
+    /// sharing): a definition is exported and passed to friends, and these values are the
+    /// operator's own. A contest deleted leaves its entry behind, harmlessly; one rebuilt under
+    /// the same id finds it again.
+    #[serde(default)]
+    pub contest_entered:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
     /// ENTER SENDS MESSAGE in the CW cockpit's contest strip: Enter sends the contact's next
     /// message from the macro set's keys, step by step. OFF by
     /// default, and nothing but the operator's own switch turns it on: it makes Enter a way to
@@ -2447,9 +2457,11 @@ pub struct Settings {
     /// its OWN path (CAT or the PTT serial line) — never this line.
     #[serde(default = "default_rtty_fsk_line")]
     pub rtty_fsk_line: String,
-    /// Serial port for the FSK keying line (when `rtty_backend == "fsk"`), e.g. the
-    /// FTDX10's USB *Enhanced* COM port. Empty = the CAT `serial_port` (the same
-    /// fallback the RTS/DTR PTT line uses).
+    /// Serial port for the FSK keying line (when `rtty_backend == "fsk"`). On Yaesu's two-port
+    /// USB radios (FT-991A, FTDX10) this is the *Standard* COM port, the second of the pair:
+    /// the *Enhanced* one is CAT, and the DTR/RTS lines the rig's RTTY SHIFT PORT menu keys
+    /// from are on the Standard one. Empty = the CAT `serial_port` (the same fallback the
+    /// RTS/DTR PTT line uses), right for a one-port interface.
     #[serde(default)]
     pub rtty_fsk_port: String,
     /// RTTY baud rate — true 45.45 by default (never integerized to 45); 50 and 75 are
@@ -6936,6 +6948,7 @@ impl Default for Settings {
             contest_cq_zone: 0,  // 0 = not set; CQ zones are 1..=40
             contest_itu_zone: 0, // 0 = not set; ITU zones are 1..=90
             contest_power: String::new(),
+            contest_entered: Default::default(),
             // Enter Sends Message: off in every cockpit until the operator turns it on.
             contest_esm_cw: false,
             contest_esm_rtty: false,

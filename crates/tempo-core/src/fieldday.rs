@@ -3572,14 +3572,23 @@ impl FieldDayLog {
                 self.session.category_assisted.clone(),
             ),
             // A sponsor that names the powers it takes (Winter Field Day: QRP or LOW) gets
-            // the declared power only when it is one of them; HIGH there claims nothing.
+            // the declared power only when it is one of them; HIGH there claims nothing. A QRP
+            // entry under a sponsor with LOW and no QRP category (the WAE DX Contest: LOW is up
+            // to 100 W) is a low-power entry, and is written LOW.
             category_power: if rs.cabrillo_power_categories.is_empty() {
                 declared("CATEGORY-POWER", self.session.category_power.clone())
             } else {
+                let power = self.session.category_power.trim();
+                let takes = |p: &str| rs.cabrillo_power_categories.contains(&p);
                 rs.cabrillo_power_categories
                     .iter()
-                    .find(|c| c.eq_ignore_ascii_case(self.session.category_power.trim()))
-                    .map_or_else(String::new, |c| c.to_string())
+                    .find(|c| c.eq_ignore_ascii_case(power))
+                    .map(|c| c.to_string())
+                    .or_else(|| {
+                        (power.eq_ignore_ascii_case("QRP") && takes("LOW") && !takes("QRP"))
+                            .then(|| "LOW".to_string())
+                    })
+                    .unwrap_or_default()
             },
             // ⭐ The band the ENTRY declares, where the sponsor lists the bands it may (CQ: "If
             // you are entering an all band category, use ALL, otherwise select one of the
@@ -6781,6 +6790,11 @@ mod tests {
             ("cqww_rtty", Standard),
             ("cqwpx_cw", Standard),
             ("cqwpx_ssb", Standard),
+            // The WAE DX Contest bans no mode and has no WSJT-X contest message: standard
+            // messages, as CQ WPX.
+            ("waedc_cw", Standard),
+            ("waedc_ssb", Standard),
+            ("waedc_rtty", Standard),
             ("cqp", Standard),
             ("ohqp", Standard),
             ("tnqp", Standard),
@@ -6833,7 +6847,7 @@ mod tests {
             .filter_map(|r| r["event"].as_str())
             .collect();
         events.push("");
-        assert_eq!(events.len(), 20);
+        assert_eq!(events.len(), 23);
         for event in events {
             let want = match event {
                 "" | "arrlfd" => (FtMessages::FieldDay, 3),
@@ -7018,7 +7032,7 @@ mod tests {
             .iter()
             .filter_map(|r| r["event"].as_str())
             .collect();
-        assert_eq!(events.len(), 19);
+        assert_eq!(events.len(), 22);
         for event in events {
             let rs = crate::fd_rules::ruleset_by_id(event, year).expect(event);
             let bans = matches!(event, "wfd" | "ilqp" | "nyqp" | "arrlrtty");

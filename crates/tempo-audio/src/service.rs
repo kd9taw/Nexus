@@ -21138,15 +21138,17 @@ fn open_serial_ptt(t: &Transport, line: SerialLine, allow_coexist: bool) -> RigO
     // model to require. This is the operator ruling made mechanical: keying on a serial line
     // stays independent of COM while OmniRig drives CAT.
     if t.is_omnirig() {
-        return open_cat(
+        let mut open = open_cat(
             t,
             PttMode::Serial {
-                port: ptt_port,
+                port: ptt_port.clone(),
                 line,
             },
             allow_coexist,
             None,
         );
+        name_a_missing_ptt_port(&mut open, t, &ptt_port, line);
+        return open;
     }
     // Single-cable interface (Digirig Mobile): keying and CAT are the SAME port, so let rigctld
     // own it and do both. Hamlib shares the fd, so this is one open, not a fight for the port.
@@ -21183,15 +21185,17 @@ fn open_serial_ptt(t: &Transport, line: SerialLine, allow_coexist: bool) -> RigO
     let separate = t.cat_available()
         && (cat_off_serial || !ptt_port.eq_ignore_ascii_case(t.serial_port.trim()));
     if separate {
-        open_cat(
+        let mut open = open_cat(
             t,
             PttMode::Serial {
-                port: ptt_port,
+                port: ptt_port.clone(),
                 line,
             },
             allow_coexist,
             None,
-        )
+        );
+        name_a_missing_ptt_port(&mut open, t, &ptt_port, line);
+        open
     } else {
         // Pure serial keying, no CAT. After the shared-port branch above this is reached only
         // when NO rig model is set, so the honest report names the missing half: keying works,
@@ -21206,6 +21210,27 @@ fn open_serial_ptt(t: &Transport, line: SerialLine, allow_coexist: bool) -> RigO
         }
         open
     }
+}
+
+/// A radio keying RTS or DTR on a cable beside CAT (a network radio, OmniRig) with no port set
+/// in either field keys an empty port name: CAT opens, and the first over failed on a serial
+/// error. Say so at the open, in the open's detail. `ok` stays CAT's own verdict: it is the
+/// loop's CAT health and gates the polling, and the next good read would turn a red here green
+/// anyway. The Icom network connection is left out: it refuses transmit whatever the port, so a
+/// port would not make it transmit.
+fn name_a_missing_ptt_port(open: &mut RigOpen, t: &Transport, ptt_port: &str, line: SerialLine) {
+    if !ptt_port.trim().is_empty() || t.is_icom_lan() {
+        return;
+    }
+    let line = match line {
+        SerialLine::Rts => "RTS",
+        SerialLine::Dtr => "DTR",
+    };
+    open.2.detail = format!(
+        "{} — but PTT is {line} and no PTT Serial Port is set, so nothing will transmit: \
+         set it to the keying cable's port in Settings.",
+        open.2.detail
+    );
 }
 
 /// Decide whether a rig SWITCH may auto-coexist onto a rigctld already listening on the new radio's
@@ -21657,18 +21682,33 @@ fn reprobe(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) {
             } else {
                 t.ptt_port()
             };
+            // Keying BESIDE CAT (a dedicated keying port, or CAT not on a serial port at all) keys
+            // through the rig CAT opened. When that open failed, the rig handed back is a
+            // control-less `Rig::vox()`, whose unkey below is Ok without touching any port: this
+            // used to report "Serial PTT on X" in green over a radio that would key nothing and
+            // had no CAT. Say CAT is down, and that the cable waits for it.
+            if t.cat_available() && !rig.has_control() {
+                let (ok, detail) = probe_cat_or_explain(rig, t);
+                return (
+                    ok,
+                    format!("{detail} Until CAT connects, the keying cable on {shown} does not key either."),
+                );
+            }
             match rig.ptt(false) {
-                Ok(()) => {
-                    // Say what is NOT happening. Keying works and the pill goes green, but with
-                    // no rig model there is no CAT at all — the band will not follow, and the
-                    // operator otherwise has to infer that from a control that looks healthy.
-                    let detail = if !t.cat_available() {
-                        format!("Serial PTT on {shown} — no CAT (no rig model set), so the radio will not follow the band.")
-                    } else {
-                        format!("Serial PTT on {shown}")
-                    };
-                    (Some(true), detail)
+                // A rig with a CAT channel keys its cable beside it, so the line opening is only
+                // half the answer: probe CAT too. Test CAT's answer becomes the loop's CAT health,
+                // and a green here used to cover a CAT link whose radio was not answering.
+                Ok(()) if t.cat_available() => {
+                    let (ok, detail) = probe_cat_or_explain(rig, t);
+                    (ok, format!("{detail} — serial PTT on {shown}"))
                 }
+                // Say what is NOT happening. Keying works and the pill goes green, but with no
+                // rig model there is no CAT at all — the band will not follow, and the operator
+                // otherwise has to infer that from a control that looks healthy.
+                Ok(()) => (
+                    Some(true),
+                    format!("Serial PTT on {shown} — no CAT (no rig model set), so the radio will not follow the band."),
+                ),
                 Err(e) => (
                     Some(false),
                     format!("Could not open serial port {shown}: {e}"),
@@ -44193,6 +44233,154 @@ mod tests {
                 line: SerialLine::Rts,
             }
         );
+    }
+
+    /// A network radio keyed RTS on a serial cable: its CAT at `127.0.0.1:port`, its cable at
+    /// `ptt_serial_port`, and no CAT serial port.
+    fn network_rig_keyed_rts(port: u16, ptt_serial_port: &str) -> Transport {
+        let mut t = cat_transport(port, None);
+        t.rig_model = 2;
+        t.rig_conn = "network".into();
+        t.rig_addr = format!("127.0.0.1:{port}");
+        t.ptt_method = "rts".into();
+        t.serial_port = String::new();
+        t.ptt_serial_port = ptt_serial_port.into();
+        t
+    }
+
+    /// Test CAT on a radio that keys a cable BESIDE CAT (a network radio, an SO2R keying port)
+    /// is red while CAT is down. A failed open hands back a rig with no CAT, which keys nothing,
+    /// and Test CAT used to report "Serial PTT on …" in green over it; a CAT channel whose radio
+    /// does not answer read green the same way, since only the keying line was tried.
+    #[cfg(feature = "serial")]
+    #[test]
+    fn test_cat_is_red_while_the_cat_beside_a_keying_cable_is_down() {
+        use crate::control_line::fake_ports;
+        let key = "tempo-test-netrig-key";
+        fake_ports::install(key);
+        // Nothing answers at this address.
+        let dead = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let net = network_rig_keyed_rts(dead, key);
+        let mut so2r = cat_transport(dead, None);
+        so2r.ptt_method = "rts".into();
+        so2r.ptt_serial_port = key.into();
+        for t in [&net, &so2r] {
+            let (ok, detail) = reprobe(&mut Rig::vox(), t);
+            assert_eq!(ok, Some(false), "a rig with no CAT: {detail}");
+            assert!(
+                detail.contains("does not key"),
+                "says the cable waits for CAT: {detail}"
+            );
+
+            let mut rig = Rig::with_control(
+                Some(format!("127.0.0.1:{dead}")),
+                PttMode::Serial {
+                    port: key.into(),
+                    line: SerialLine::Rts,
+                },
+            );
+            let (ok, detail) = reprobe(&mut rig, t);
+            assert_eq!(ok, Some(false), "a CAT nobody answers: {detail}");
+        }
+    }
+
+    /// The control: a working network radio with its keying port, and a working SO2R station,
+    /// both still answer Test CAT green, naming the keying port.
+    #[cfg(feature = "serial")]
+    #[test]
+    fn test_cat_is_green_on_a_working_keying_cable_beside_cat() {
+        use crate::control_line::fake_ports;
+        let key = "tempo-test-netrig-key";
+        fake_ports::install(key);
+        let (port, _log) = recording_backend();
+        let net = network_rig_keyed_rts(port, key);
+        let mut so2r = cat_transport(port, None);
+        so2r.ptt_method = "rts".into();
+        so2r.ptt_serial_port = key.into();
+        for t in [&net, &so2r] {
+            let (mut rig, _proc, probe) = open_rig(t, true);
+            assert_eq!(probe.ok, Some(true), "{}", probe.detail);
+            assert!(rig.has_control(), "{}", probe.detail);
+            let (ok, detail) = reprobe(&mut rig, t);
+            assert_eq!(ok, Some(true), "{detail}");
+            assert!(detail.contains(key), "names the keying port: {detail}");
+        }
+    }
+
+    /// A network radio keyed RTS with no port set anywhere opens its CAT, and the open says at
+    /// once that nothing will transmit until a PTT port is chosen, rather than leaving it to the
+    /// first over's serial error. Test CAT is red on it too.
+    #[cfg(feature = "serial")]
+    #[test]
+    fn a_network_rig_keyed_rts_with_no_port_says_so_at_open() {
+        let (port, _log) = recording_backend();
+        let t = network_rig_keyed_rts(port, "");
+        let (mut rig, _proc, probe) = open_rig(&t, true);
+        assert!(rig.has_control(), "CAT still opens: {}", probe.detail);
+        // `ok` stays CAT's own health: it gates the CAT polling, and the next good read would
+        // turn a red here green anyway. The words carry the keying fault.
+        assert_eq!(probe.ok, Some(true), "{}", probe.detail);
+        assert!(
+            probe.detail.contains("no PTT Serial Port")
+                && probe.detail.contains("nothing will transmit"),
+            "names the missing port at open: {}",
+            probe.detail
+        );
+        let (ok, detail) = reprobe(&mut rig, &t);
+        assert_eq!(ok, Some(false), "{detail}");
+        assert!(detail.contains("(no port set)"), "{detail}");
+    }
+
+    /// An OmniRig radio: OmniRig drives CAT from its own setup, so no CAT serial port is set.
+    fn omnirig_transport(ptt_method: &str, ptt_serial_port: &str) -> Transport {
+        let mut t = cat_transport(0, None);
+        t.rig_model = 0;
+        t.rig_conn = "omnirig".into();
+        t.serial_port = String::new();
+        t.ptt_method = ptt_method.into();
+        t.ptt_serial_port = ptt_serial_port.into();
+        t
+    }
+
+    /// OmniRig keyed by RTS or DTR with no PTT Serial Port names the missing port at open, in
+    /// the same words as any other radio keying a cable beside CAT, instead of leaving it to the
+    /// first over's serial error. OmniRig's open used to return before that check ran. The words
+    /// do not depend on whether OmniRig itself came up (off Windows it never does).
+    #[test]
+    fn an_omnirig_rig_keyed_by_a_serial_line_with_no_port_says_so_at_open() {
+        for (method, line) in [("rts", "RTS"), ("dtr", "DTR")] {
+            let t = omnirig_transport(method, "");
+            let (_rig, _proc, probe) = open_rig(&t, true);
+            assert!(
+                probe.detail.contains(&format!(
+                    "PTT is {line} and no PTT Serial Port is set, so nothing will transmit"
+                )),
+                "names the missing port at open: {}",
+                probe.detail
+            );
+        }
+    }
+
+    /// The controls: OmniRig keying through OmniRig itself (CAT PTT) needs no serial port, and
+    /// OmniRig keyed by RTS with its port set has one, so neither is warned.
+    #[test]
+    fn an_omnirig_rig_on_cat_ptt_or_with_a_ptt_port_is_not_warned_at_open() {
+        for t in [
+            omnirig_transport("cat", ""),
+            omnirig_transport("rts", "tempo-test-omnirig-key"),
+        ] {
+            let (_rig, _proc, probe) = open_rig(&t, true);
+            assert!(
+                !probe.detail.contains("no PTT Serial Port"),
+                "{}: {}",
+                t.ptt_method,
+                probe.detail
+            );
+        }
     }
 
     /// Read-only launch #3/#4 (the latch): with the mode never asserted this session,

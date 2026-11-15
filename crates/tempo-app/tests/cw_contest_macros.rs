@@ -55,7 +55,7 @@ fn macro_text(set: &str, key: &str) -> String {
 
 /// (contest, what F2 keys to K9AAA, what F6 keys) for W9XYZ in Cook County, Illinois, CQ
 /// zone 4, at EN52, check 05, section IL, single operator at low power.
-const CASES: [(&str, &str, &str); 17] = [
+const CASES: [(&str, &str, &str); 20] = [
     ("ilqp", "K9AAA 5NN COOK", "TU 5NN COOK"),
     ("tnqp", "K9AAA 5NN IL", "TU 5NN IL"),
     ("ohqp", "K9AAA 5NN IL", "TU 5NN IL"),
@@ -75,6 +75,11 @@ const CASES: [(&str, &str, &str); 17] = [
     // The RTTY Roundup takes RTTY only, and a CW contact in it scores nothing; the CW cockpit's
     // keys still send what a W/VE station sends (Special Rules 4.2.1).
     ("arrlrtty", "K9AAA 5NN IL", "TU 5NN IL"),
+    // The WAE DX Contest: a report and a serial, as CQ WPX; the SSB and RTTY runnings are keyed
+    // the same from the CW cockpit.
+    ("waedc_cw", "K9AAA 5NN 1", "TU 5NN 1"),
+    ("waedc_ssb", "K9AAA 5NN 1", "TU 5NN 1"),
+    ("waedc_rtty", "K9AAA 5NN 1", "TU 5NN 1"),
 ];
 
 #[test]
@@ -188,4 +193,83 @@ fn every_key_sends_the_signed_text_in_the_illinois_qso_party_and_at_field_day() 
             .collect();
         assert_eq!(keyed, want, "{event} keys {set}");
     }
+}
+
+/// ⭐ **An operator's own contest keys the value they TYPED** — RST and an age: F2 keys
+/// `K9AAA 5NN 42` through the engine's own expander, and the RTTY and PSK macros' `{EXCH}`
+/// (the snapshot's `sentExchange`) is the same `42`. The age comes from the contest's own entry
+/// in Settings. Left blank, the contest refuses to start, and nothing keys.
+#[test]
+fn a_custom_contest_keys_the_age_the_operator_typed() {
+    use tempo_core::fd_rules::custom::{self, CustomDef, CustomField, CustomWindow};
+    let def = CustomDef {
+        format: custom::FORMAT.into(),
+        version: custom::VERSION,
+        id: "custom_age_sprint".into(),
+        name: "Age Sprint".into(),
+        short: String::new(),
+        cabrillo_contest: "AGE-SPRINT".into(),
+        modes: vec!["CW".into(), "RTTY".into(), "PSK".into()],
+        window: CustomWindow::Weekend {
+            month: 3,
+            weekend: "nth_full".into(),
+            n: 1,
+            start_hour_utc: 14,
+            duration_hours: 4,
+        },
+        exchange: ["rst", "age"]
+            .iter()
+            .map(|f| CustomField {
+                field: f.to_string(),
+                label: String::new(),
+            })
+            .collect(),
+        ft_cq: None,
+        ft_roundup: false,
+        dupe: "band".into(),
+        points: Default::default(),
+    };
+    let refused = tempo_core::fd_rules::install_custom(&[def], 1_794_614_400);
+    assert!(refused.is_empty(), "{refused:?}");
+    let engine = |age: Option<&str>| {
+        let mut e = Engine::new("W9XYZ", "EN52", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_event = "custom_age_sprint".into();
+        if let Some(age) = age {
+            s.contest_entered.insert(
+                "custom_age_sprint".into(),
+                [("AGE".to_string(), age.to_string())].into(),
+            );
+        }
+        // Another contest's entry is not this one's.
+        s.contest_entered.insert(
+            "custom_other".into(),
+            [("AGE".to_string(), "77".to_string())].into(),
+        );
+        e.apply_settings(s);
+        e
+    };
+    let mut e = engine(Some("42"));
+    e.set_mode("fieldday-sp").expect("the contest starts");
+    e.select_peer("K9AAA");
+    assert_eq!(
+        (
+            e.preview_cw(&macro_text("CW_CONTEST_LAYOUT", "F2")),
+            e.preview_cw(&macro_text("CW_CONTEST_LAYOUT", "F6"))
+        ),
+        ("K9AAA 5NN 42".to_string(), "TU 5NN 42".to_string())
+    );
+    let fd = e.snapshot().field_day.expect("the contest runs");
+    assert_eq!(fd.sent_exchange, "42", "what RTTY's and PSK's {{EXCH}} key");
+
+    let mut blank = engine(None);
+    let err = blank
+        .set_mode("fieldday-sp")
+        .expect_err("a blank age refuses the contest");
+    assert!(err.contains("Your AGE is empty"), "{err}");
+    assert!(
+        blank.snapshot().field_day.is_none(),
+        "nothing runs, so nothing keys"
+    );
 }

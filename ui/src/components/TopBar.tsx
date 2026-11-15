@@ -469,59 +469,6 @@ export function TopBar({
         {/* Help lives in the one group that renders in every section — the
             cockpits hide the TX cluster, the readout and the digital chrome,
             but never this one, so the guide is one click away everywhere. */}
-        {/* WHO IS AT THE KEY (#25). Shown when an operator is set — that is the multi-op
-            case, and for the single-op station that is nearly everyone this costs no width
-            at all. It has to be somewhere always visible rather than in Settings, because a
-            wrong operator is silent: nothing misbehaves, and it is discovered at submission
-            when the log is already wrong. Same group as Help, the one group no cockpit hides.
-
-            ...AND WHEN FIELD DAY IS ON, EVEN BEFORE ONE IS (2026-08-30). "Only when set" made
-            the app-wide seat-swap button invisible at the one station that swaps seats: it
-            appeared only after somebody had already set an operator, and the only place to do
-            that first set is the Field Day dashboard — so the operator sitting down in Phone,
-            CW or Operate had to go find the screen this chip exists to save them from.
-            (Operator: "when people are swapping out, there needs to be a button to swap out
-            the operator easily across any mode".) The gate widens by exactly ONE case, not to
-            "always", because the width it costs is paid on every screen. */}
-        {(fdActive || (operator && operator.trim() !== '')) && (
-          <Menu
-            trigger={
-              <button
-                type="button"
-                className="theme-chip op-chip"
-                title={
-                  operator && operator.trim() !== ''
-                    ? t('topbar.operator.title', { call: operator })
-                    : t('topbar.operator.set.title')
-                }
-              >
-                {operator && operator.trim() !== '' ? `${OP} ${operator}` : t('topbar.operator.set')}
-              </button>
-            }
-            items={[
-              // The roster is the operators this log has already seen, so the second and
-              // every later seat swap is a click.
-              ...(operatorRoster ?? [])
-                .filter((o) => o.toUpperCase() !== (operator ?? '').toUpperCase())
-                .map((o) => ({
-                  label: t('topbar.operator.switch', { call: o }),
-                  onSelect: () => onSetOperator?.(o),
-                })),
-              // Clearing is only offered when there is something to clear; with nobody set it
-              // would be a row that does nothing.
-              ...(operator && operator.trim() !== ''
-                ? [{ label: t('topbar.operator.single'), onSelect: () => onSetOperator?.('') }]
-                : []),
-              // ...which leaves ONE case with an empty menu, and it is the first event: the
-              // roster is built from operators already in the log, so a station that has never
-              // logged one opens this chip onto nothing. Say where the first name is typed
-              // instead. Disabled on purpose — it is a signpost, not a second control.
-              ...((operatorRoster ?? []).length === 0 && !(operator && operator.trim() !== '')
-                ? [{ label: t('topbar.operator.firstSet'), onSelect: () => {}, disabled: true }]
-                : []),
-            ]}
-          />
-        )}
         <Menu
           trigger={
             <button type="button" className="theme-chip" title={t('topbar.help.label')}>
@@ -548,6 +495,80 @@ export function TopBar({
           </button>
         )}
       </div>
+  )
+  const opChip = (
+    <>
+        {/* WHO IS AT THE KEY (#25). Shown when an operator is set — that is the multi-op
+            case, and for the single-op station that is nearly everyone this costs no width
+            at all. It has to be somewhere always visible rather than in Settings, because a
+            wrong operator is silent: nothing misbehaves, and it is discovered at submission
+            when the log is already wrong. In the bar itself, which no cockpit hides.
+
+            ...AND WHEN FIELD DAY IS ON, EVEN BEFORE ONE IS (2026-08-30). "Only when set" made
+            the app-wide seat-swap button invisible at the one station that swaps seats: it
+            appeared only after somebody had already set an operator, and the only place to do
+            that first set is the Field Day dashboard — so the operator sitting down in Phone,
+            CW or Operate had to go find the screen this chip exists to save them from.
+            (Operator: "when people are swapping out, there needs to be a button to swap out
+            the operator easily across any mode".) The gate widens by exactly ONE case, not to
+            "always", because the width it costs is paid on every screen.
+
+            ...AND BESIDE THE STATION'S OWN CALL, ON THE LINE THAT HOLDS THE BAR'S FREE ROOM (2026-11-14). In the
+            Help group its whole text width counted toward the bar's line, and in French and Russian at the
+            smallest screen "Set operator" wrapped the Tx-cycle group onto a second line: the bar grew a row the
+            moment contest mode came on and Stop TX moved down 31–34 px. Here, right after the brand group and in
+            front of the status lane, it counts only a small floor toward the line and takes the free room the lane
+            would have, up to its text (cockpit-panes.css `.topbar-opchip`). Where that room is short, "OP" gives
+            way first so the call stays whole, then the words end in an ellipsis; the tooltip and the accessible
+            name keep the whole of it. Beside Help it shared Help's line, which on the Logbook and Field Day is the
+            full one: the chip was cut to a sliver there while the bar's free room sat on the line above. */}
+        {(fdActive || (operator && operator.trim() !== '')) && (
+          <Menu
+            trigger={
+              <button
+                type="button"
+                className="theme-chip op-chip topbar-opchip"
+                title={
+                  operator && operator.trim() !== ''
+                    ? t('topbar.operator.title', { call: operator })
+                    : t('topbar.operator.set.title')
+                }
+              >
+                {operator && operator.trim() !== '' ? (
+                  <>
+                    <span className="topbar-opchip-tag">{OP}</span>{' '}
+                    <span className="topbar-opchip-text">{operator}</span>
+                  </>
+                ) : (
+                  <span className="topbar-opchip-text">{t('topbar.operator.set')}</span>
+                )}
+              </button>
+            }
+            items={[
+              // The roster is the operators this log has already seen, so the second and
+              // every later seat swap is a click.
+              ...(operatorRoster ?? [])
+                .filter((o) => o.toUpperCase() !== (operator ?? '').toUpperCase())
+                .map((o) => ({
+                  label: t('topbar.operator.switch', { call: o }),
+                  onSelect: () => onSetOperator?.(o),
+                })),
+              // Clearing is only offered when there is something to clear; with nobody set it
+              // would be a row that does nothing.
+              ...(operator && operator.trim() !== ''
+                ? [{ label: t('topbar.operator.single'), onSelect: () => onSetOperator?.('') }]
+                : []),
+              // ...which leaves ONE case with an empty menu, and it is the first event: the
+              // roster is built from operators already in the log, so a station that has never
+              // logged one opens this chip onto nothing. Say where the first name is typed
+              // instead. Disabled on purpose — it is a signpost, not a second control.
+              ...((operatorRoster ?? []).length === 0 && !(operator && operator.trim() !== '')
+                ? [{ label: t('topbar.operator.firstSet'), onSelect: () => {}, disabled: true }]
+                : []),
+            ]}
+          />
+        )}
+    </>
   )
 
   const showStationPicker = stationProfiles != null && stationProfiles.length > 1
@@ -602,6 +623,8 @@ export function TopBar({
           />
         )}
       </div>
+
+      {opChip}
 
       {/* THE STATUS LANE: ALWAYS DRAWN, and HERE, right after the brand group, so it is the item in front of
           the group that carries the bar's free room (the readout's `margin-left: auto`, or the TX/RX group's

@@ -41,7 +41,7 @@ describe('formatOpTime', () => {
 
 describe('offTimeRule — the contest’s own minimum break', () => {
   it('is 60 minutes in CQ WW and CQ WPX, 30 in Sweepstakes, and 30 not from the rules elsewhere', () => {
-    for (const e of ['cqww_cw', 'cqww_ssb', 'cqww_rtty', 'cqwpx_cw', 'cqwpx_ssb']) {
+    for (const e of ['cqww_cw', 'cqww_ssb', 'cqww_rtty', 'cqwpx_cw', 'cqwpx_ssb', 'waedc_cw', 'waedc_ssb', 'waedc_rtty']) {
       expect(offTimeRule(e), e).toEqual({ minOffSec: 3600, fromRules: true })
     }
     for (const e of ['arrlss_cw', 'arrlss_ssb']) expect(offTimeRule(e), e).toEqual({ minOffSec: 1800, fromRules: true })

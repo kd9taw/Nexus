@@ -19,8 +19,14 @@ use std::time::Duration;
 
 use tempo_stream::session::receive_ends_session;
 
-/// The session loop's receive buffer (`stream.rs::run`: `vec![0u8; 2048]`).
-const SESSION_BUFFER: usize = 2048;
+/// The buffer this test receives into. The session loop's is 2048 bytes (`stream.rs::run`:
+/// `vec![0u8; 2048]`), but the error is about a datagram longer than the buffer it is read into,
+/// whatever that buffer's size: Windows reports WSAEMSGSIZE for 1025 bytes into 1024 exactly as
+/// for 2049 into 2048. The shorter buffer keeps every datagram here inside one 1500-byte frame.
+/// WSL2's mirrored networking routes 127.0.0.1 through `loopback0` (MTU 1500) by way of the
+/// Windows host and silently drops any datagram that needs IP fragmentation (over 1472 bytes), so
+/// at 2048 the CONTROL itself never arrived there.
+const RECEIVE_BUFFER: usize = 1024;
 
 /// One datagram longer than the buffer, sent to the session socket, must not end the session: the
 /// socket still receives the next one. CONTROL: a datagram that fits is read whole.
@@ -32,23 +38,23 @@ fn a_datagram_longer_than_the_session_buffer_is_not_the_end_of_the_session() {
         .unwrap();
     let to = socket.local_addr().unwrap();
     let peer = UdpSocket::bind("127.0.0.1:0").unwrap();
-    let mut buf = vec![0u8; SESSION_BUFFER];
+    let mut buf = vec![0u8; RECEIVE_BUFFER];
 
-    peer.send_to(&[7u8; SESSION_BUFFER], to).unwrap();
+    peer.send_to(&[7u8; RECEIVE_BUFFER], to).unwrap();
     let (n, _) = socket
         .recv_from(&mut buf)
         .expect("CONTROL: a datagram that fits");
     assert_eq!(
-        n, SESSION_BUFFER,
+        n, RECEIVE_BUFFER,
         "CONTROL: a datagram that fits is read whole"
     );
 
-    peer.send_to(&[7u8; SESSION_BUFFER + 1], to).unwrap();
+    peer.send_to(&[7u8; RECEIVE_BUFFER + 1], to).unwrap();
     if let Err(refused) = socket.recv_from(&mut buf) {
         assert!(
             !receive_ends_session(&refused),
             "one datagram of {} bytes ended the session: {refused} (os error {:?}, {:?})",
-            SESSION_BUFFER + 1,
+            RECEIVE_BUFFER + 1,
             refused.raw_os_error(),
             refused.kind()
         );

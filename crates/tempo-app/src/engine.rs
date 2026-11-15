@@ -249,6 +249,9 @@ pub mod tci_spots;
 #[cfg(test)]
 mod ten_meter_ssb_only_tests;
 mod tx_alarms;
+/// An FT Tx button arms TX only when it works the station it names.
+#[cfg(test)]
+mod tx_button_arms_tests;
 /// Diagnostic-log words about transmit: who keyed, and why the TX watchdog tripped. Log only.
 mod tx_diag;
 /// A data frame judged across its whole width, and where it keys.
@@ -16660,6 +16663,12 @@ impl Engine {
             contest_category_station: settings.contest_category_station.clone(),
             mygrid: settings.mygrid.clone(),
             dxcc: st.eq_ignore_ascii_case("DX"),
+            // ⭐ The values this contest's `entered` slots send: its own entry, by its id.
+            entered: settings
+                .contest_entered
+                .get(settings.fd_event.trim())
+                .cloned()
+                .unwrap_or_default(),
         }
     }
 
@@ -20321,11 +20330,21 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 // than refusing the mode, which is the same degradation
                 // `fd_rules::ruleset_by_id`'s own doc describes: the operator loses the
                 // party they picked, not Field Day.
+                //
+                // ⚠️ **Except an operator's own contest, which REFUSES.** One that is not
+                // installed was deleted, or its file could not be read; running it as Field
+                // Day would send a class and section the operator never meant to send, and
+                // log them under Field Day's token.
                 let mut s = match tempo_core::fd_rules::ruleset_by_id(
                     self.settings.fd_event.trim(),
                     tempo_core::fd_rules::CURRENT_RULES_YEAR,
                 ) {
                     Some(rs) => ContestSession::for_ruleset(rs, &self.contest_station_data())?,
+                    None if crate::custom_contests::is_custom_id(&self.settings.fd_event) => {
+                        return Err(crate::custom_contests::not_installed(
+                            &self.settings.fd_event,
+                        ));
+                    }
                     None => ContestSession::field_day(
                         tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event),
                         &self.settings.fd_class,
@@ -31848,23 +31867,24 @@ contact yourself."
         let _ = self.override_next_tx_checked(dxcall, dxgrid, text);
     }
 
-    // Preserve the native void command while letting Remote distinguish a
-    // refused target from a queued message. Both use this single policy path.
-    fn override_next_tx_checked(
+    /// As [`Self::override_next_tx`], with the refusal: the `override_next_tx` command (the
+    /// screen's Tx1-Tx5, Alt+1..5, the pop-out, a Remote press) answers with its reason, and the
+    /// void form keeps the engine's own callers. Both use this single policy path.
+    pub fn override_next_tx_checked(
         &mut self,
         dxcall: &str,
         dxgrid: Option<&str>,
         text: &str,
     ) -> Result<(), String> {
-        if tempo_core::message::same_call(dxcall, &self.settings.mycall) {
-            return Err("cannot target own callsign".into());
-        }
-        // Answering a decode is a TX commitment: it arms TX and asks for the
-        // current period. On a receive-only tier there is no over to send, so do
-        // not stage one — a queued reply the operator can see but the radio can
-        // never send is the phantom this whole guard exists to prevent.
-        if self.tier_is_rx_only(self.app.tier()) {
-            return Err("transmit unavailable for this tier".into());
+        // ⛔ A press that works nobody arms nothing: our own call, or a tier that answers no
+        // station. Answering is a TX commitment: it arms TX and asks for the current period. On
+        // a receive-only tier there is no over to send; on a beacon tier (WSPR, FST4W) the armed
+        // TX is the beacon schedule, which keyed every slot with no contact behind it. The
+        // double-click answers these `Ok` without working anyone, so they are refused here,
+        // before anything changes — the same rule a logger's Reply is held to
+        // ([`Self::answer_udp_reply`]), from the one place it is written.
+        if let Some(why) = self.click_works_nobody(dxcall) {
+            return Err(why.into());
         }
         // ⛔ Never an over the encoder refuses: refused here, before the QSO, TX or the over on
         // the air (`ft_restart`) changes.
@@ -41237,6 +41257,48 @@ mod tests {
                 refused,
                 "CW, {scene}"
             );
+        }
+    }
+
+    /// A two-port Yaesu (FT-991A, FTDX10) on Linux: CAT on the Enhanced port (`/dev/ttyUSB0`),
+    /// FSK keyed on the Standard port (`/dev/ttyUSB1`). Two ports, so the keyline guard has
+    /// nothing to refuse — whether PTT rides CAT, the Standard port's other line, or serial PTT
+    /// left on the CAT port. Only PTT on the very line FSK keys is refused.
+    #[test]
+    fn a_two_port_yaesu_keys_fsk_on_its_standard_port() {
+        for (scene, ptt_method, ptt_port, refused) in [
+            ("CAT PTT", "cat", "", false),
+            (
+                "PTT on the Standard port's RTS",
+                "rts",
+                "/dev/ttyUSB1",
+                false,
+            ),
+            ("DTR PTT on the CAT port", "dtr", "", false),
+            ("PTT on the FSK line itself", "dtr", "/dev/ttyUSB1", true),
+        ] {
+            let mut e = Engine::new("N0CALL", "EN61", 0);
+            let mut s = e.settings().clone();
+            s.serial_port = "/dev/ttyUSB0".into();
+            s.rtty_backend = "fsk".into();
+            s.rtty_fsk_port = "/dev/ttyUSB1".into();
+            s.rtty_fsk_line = "dtr".into();
+            s.ptt_method = ptt_method.into();
+            s.ptt_serial_port = ptt_port.into();
+            e.apply_settings(s);
+            assert_eq!(
+                e.rtty_fsk_port().as_deref(),
+                Some("/dev/ttyUSB1"),
+                "{scene}"
+            );
+            e.set_operating_mode("rtty", false);
+            let sent = e.rtty_send_text("CQ");
+            if refused {
+                let err = sent.unwrap_err();
+                assert!(err.contains("same control line"), "{scene}: {err}");
+            } else {
+                assert_eq!(sent, Ok(()), "{scene}");
+            }
         }
     }
 
@@ -89544,5 +89606,82 @@ mod spectrum_span_tests {
             "a 4500 Hz tone peaks near bin {want}, got {}",
             peak(&s.row)
         );
+    }
+}
+
+#[cfg(test)]
+mod custom_contest_gone_ft8_click_tests {
+    use super::tests::dec_snr;
+    use super::*;
+
+    /// FT8 on 20 m with the contest switch on and a picked own contest that is not installed,
+    /// a CQ from W9XYZ decoded.
+    fn gone() -> Engine {
+        let mut e = Engine::new("K1ABC", "FN42", 0);
+        e.set_license_class("extra");
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_event = "custom_gone_click".into();
+        s.fd_class = "2B".into();
+        s.fd_section = "EMA".into();
+        e.apply_settings(s);
+        e.set_frequency(14.074, "20m", "USB");
+        e.ingest_decodes_for_test(&[dec_snr("CQ W9XYZ EN37", -12)], 1);
+        e
+    }
+
+    /// Nothing went to W9XYZ: no contest session, Enable Tx off, and no over from the
+    /// following slots names the station clicked.
+    fn nothing_on_the_air(e: &mut Engine, path: &str) {
+        assert!(
+            e.snapshot().field_day.is_none(),
+            "{path}: no Field Day session"
+        );
+        assert!(!e.tx_enabled(), "{path}: Enable Tx stays off");
+        e.set_tx_enabled(true);
+        for slot in 2..6 {
+            for over in e.poll_tx(slot) {
+                assert!(
+                    !format!("{over:?}").contains("W9XYZ"),
+                    "{path}: nothing goes to the clicked station: {over:?}"
+                );
+            }
+        }
+    }
+
+    /// ⭐ **A double-click on a CQ, with a missing own contest picked, is refused by name** — it
+    /// opens the contest's S&P, whose entry refuses the contest, and never answers in Field
+    /// Day's messages with the station's class and section.
+    #[test]
+    fn a_double_click_on_a_cq_is_refused_and_sends_nothing() {
+        let mut e = gone();
+        let err = e
+            .work_station(
+                "W9XYZ",
+                Some("EN37"),
+                Some("CQ W9XYZ EN37"),
+                Some(-12),
+                None,
+            )
+            .expect_err("refused");
+        assert!(
+            err.contains("'custom_gone_click' is not installed"),
+            "{err}"
+        );
+        nothing_on_the_air(&mut e, "double-click");
+    }
+
+    /// …and a logger's Reply (GridTracker, JTAlert) to the same CQ the same way, arming nothing.
+    #[test]
+    fn a_logger_reply_to_a_cq_is_refused_and_arms_nothing() {
+        let mut e = gone();
+        let err = e
+            .answer_udp_reply("W9XYZ", "CQ W9XYZ EN37", -12, None)
+            .expect_err("refused");
+        assert!(
+            err.contains("'custom_gone_click' is not installed"),
+            "{err}"
+        );
+        nothing_on_the_air(&mut e, "logger reply");
     }
 }

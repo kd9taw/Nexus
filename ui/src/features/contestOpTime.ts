@@ -27,6 +27,10 @@ export const OFF_TIME_MIN_SEC = 30 * 60
  *   stations may operate up to 24 hours out of the 30-hour contest period. … each off time must be
  *   at least 30 minutes long until 24 hours have been completed." (1.2's "one or two breaks" is not
  *   counted here.)
+ * - WAE DX Contest CW, SSB and RTTY — 60 min. DARC's "Worked All Europe DX Contest - Rules 2025"
+ *   (darc.de, read 2026-11-14), 4 Off Times: "Single Operator stations may only operate 36 out of the
+ *   48-hour contest period. Off times must be a minimum of 60 minutes during which no QSO or QTC is
+ *   logged."
  *
  * Every other contest the station runs (both Field Days, the ARRL VHF contests, the QSO parties) has
  * no minimum on record here and uses `OFF_TIME_MIN_SEC`, and a surface that states the rule says so.
@@ -40,6 +44,9 @@ const OFF_TIME_RULES: Readonly<Record<string, number>> = {
   arrlss_cw: 30 * 60,
   arrlss_ssb: 30 * 60,
   arrlrtty: 30 * 60,
+  waedc_cw: 60 * 60,
+  waedc_ssb: 60 * 60,
+  waedc_rtty: 60 * 60,
 }
 
 /** The break that counts as off time in contest `event`, and whether its rules name it. */

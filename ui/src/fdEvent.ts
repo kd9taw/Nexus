@@ -12,6 +12,7 @@
  */
 
 import { t } from './i18n'
+import { customContest, isCustomId } from './features/customContests'
 
 export type FdKind = 'arrlfd' | 'wfd'
 
@@ -79,6 +80,11 @@ export const CONTESTS: { id: string; name: string; short: string; badge?: string
   { id: 'cqww_rtty', name: 'CQ World-Wide RTTY DX Contest', short: 'CQ WW RTTY', submit: 'https://cqwwrtty.com/logcheck/' },
   { id: 'cqwpx_cw', name: 'CQ World-Wide WPX Contest (CW)', short: 'CQ WPX CW', submit: 'https://cqwpx.com/logcheck/' },
   { id: 'cqwpx_ssb', name: 'CQ World-Wide WPX Contest (SSB)', short: 'CQ WPX SSB', submit: 'https://cqwpx.com/logcheck/' },
+  // The WAE DX Contest is three contests, one per mode, each on its own weekend with its own
+  // Cabrillo name and its own upload page. DARC's name, from darc.de; QTCs are not supported.
+  { id: 'waedc_cw', name: 'WAE DX Contest (CW)', short: 'WAE CW', submit: 'https://dxhf2.darc.de/~waecwlog/upload.cgi' },
+  { id: 'waedc_ssb', name: 'WAE DX Contest (SSB)', short: 'WAE SSB', submit: 'https://dxhf2.darc.de/~waessblog/upload.cgi' },
+  { id: 'waedc_rtty', name: 'WAE DX Contest (RTTY)', short: 'WAE RTTY', submit: 'https://dxhf2.darc.de/~waerttylog/upload.cgi' },
   { id: 'cqp', name: 'California QSO Party', short: 'CQP', submit: 'https://cqp.org/logsubmit-main.html' },
   // The sponsor is the Western Illinois Amateur Radio Club; the name is the one its own
   // rules and its sample log use ("Announcing the 2025 Illinois QSO Party").
@@ -93,15 +99,16 @@ export const CONTESTS: { id: string; name: string; short: string; badge?: string
 
 /** The sponsor's name for a contest by its rules-file id — the id itself for one this menu
  *  does not list (a contest a downloaded rules file added), which is a token rather than a
- *  guess. */
+ *  guess. An operator-built contest is called what its operator named it (never translated). */
 export function contestName(id: string | undefined): string {
-  return CONTESTS.find((c) => c.id === id)?.name ?? id ?? ''
+  return CONTESTS.find((c) => c.id === id)?.name ?? customContest(id)?.def.name ?? id ?? ''
 }
 
 /** The short form of that name, for the contest view's header (`short` above — every one
- *  an invariant token, never translated). */
+ *  an invariant token, never translated). An operator-built contest's short name, else its name. */
 export function contestShortName(id: string | undefined): string {
-  return CONTESTS.find((c) => c.id === id)?.short ?? id ?? ''
+  const own = customContest(id)?.def
+  return CONTESTS.find((c) => c.id === id)?.short ?? (own ? own.short?.trim() || own.name : id) ?? ''
 }
 
 /** The name the rail's mode badge shows: the short form, but `badge` where that has a word too wide
@@ -114,6 +121,24 @@ export function contestBadgeName(id: string | undefined): string {
  *  asks for? */
 export const isFieldDay = (id: string | undefined): boolean =>
   !id || id === 'arrlfd' || id === 'wfd'
+
+/**
+ * ⭐ **A contest whose screen is its contact count alone**: not Field Day, and no multiplier declared
+ * (the WAE DX Contest, whose QTCs and band-weighted multipliers this build does not compute; a custom
+ * contest, which scores a QSO count plus points). Everywhere else no multiplier count means Field Day,
+ * whose power-and-bonus line, Sections tile and ARRL Sections board would be another contest's
+ * arithmetic here. A blank event is ARRL Field Day. The engine serialises every multiplier contest's
+ * count, `0` before its first contact, so an absent one is a contest that has none.
+ */
+export const countsOnly = (fieldDay: { event?: string; multCount?: number | null } | null | undefined): boolean =>
+  !!fieldDay && (fieldDay.multCount ?? null) === null && !isFieldDay(fieldDay.event)
+
+/** ⭐ **A count-only contest whose points ARE its score**: one the operator built. It has no
+ *  multipliers by its own rules, so its points (a CW contact worth 2, say) are the whole score, shown
+ *  beside the count. The WAE DX Contest's points are not its score (QTCs and multipliers are not
+ *  computed), which its score note says. */
+export const scoresOwnPoints = (fieldDay: { event?: string; multCount?: number | null } | null | undefined): boolean =>
+  countsOnly(fieldDay) && isCustomId(fieldDay?.event)
 
 /**
  * ⭐ **The contests whose exchange SENDS the station's power**, by rules-file id — the only ones
@@ -150,8 +175,9 @@ export function contestRoleWords(role: string): string {
   return role
 }
 
-/** Why club sync cannot run a contest — the three reasons the engine refuses one for. */
-export type ClubSyncRefusal = 'serial' | 'transmitter' | 'unknown'
+/** Why club sync cannot run a contest — the four reasons the engine refuses one for
+ *  (`ClubRefusal::code`). */
+export type ClubSyncRefusal = 'serial' | 'transmitter' | 'unknown' | 'custom'
 
 /**
  * ⭐ **The contests club sync cannot run, and why**, by rules-file id.
@@ -176,6 +202,9 @@ export const CLUB_SYNC_REFUSED: Record<string, ClubSyncRefusal> = {
   arrlrtty: 'serial',
   cqwpx_cw: 'serial',
   cqwpx_ssb: 'serial',
+  waedc_cw: 'serial',
+  waedc_ssb: 'serial',
+  waedc_rtty: 'serial',
   cqww_cw: 'transmitter',
   cqww_ssb: 'transmitter',
   cqww_rtty: 'transmitter',
@@ -226,10 +255,12 @@ export function contestClubRefusal(
 ): ClubSyncRefusal | null {
   if (rulesCarry(fdEvent, preview) === false) return 'unknown'
   const id = fdEvent?.trim() || 'arrlfd'
+  // An operator-built contest (`ClubRefusal::Custom`): every position would need the same definition.
+  if (isCustomId(id)) return 'custom'
   return Object.prototype.hasOwnProperty.call(CLUB_SYNC_REFUSED, id) ? CLUB_SYNC_REFUSED[id] : null
 }
 
-/** The sentence a refusal shows — one place, for the three surfaces that show it. */
+/** The sentence a refusal shows — one place, for the surfaces that show it. */
 export function clubSyncRefusalText(why: ClubSyncRefusal, contest: string): string {
   switch (why) {
     case 'serial':
@@ -238,6 +269,8 @@ export function clubSyncRefusalText(why: ClubSyncRefusal, contest: string): stri
       return t('fieldDay.club.refused.transmitter', { contest })
     case 'unknown':
       return t('fieldDay.club.refused.unknown', { contest })
+    case 'custom':
+      return t('fieldDay.club.refused.custom', { contest })
   }
 }
 

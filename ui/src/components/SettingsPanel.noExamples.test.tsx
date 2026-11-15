@@ -198,7 +198,7 @@ describe('Settings: an empty box shows no made-up sample value', () => {
     // CW
     [t('settings.cw.winkeyerPort.label'), 'K1EL WinKeyer serial port'],
     [t('settings.cw.keyPort.label'), 'the keying interface (separate from CAT)'],
-    [t('settings.rtty.fskPort.label'), "e.g. the FTDX10's USB Enhanced COM"],
+    [t('settings.rtty.fskPort.label'), 'blank = use the CAT port'],
     // Spots & Alerts
     [t('settings.aprs.is.watchCalls.label'), ''],
     [t('settings.alerts.geo.entities.label'), 'type to search'],

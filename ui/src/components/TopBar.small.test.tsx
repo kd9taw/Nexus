@@ -346,7 +346,7 @@ describe('the top bar at the small size', () => {
       meter: one(container, 'header.topbar .rx-level'),
       utc: one(container, 'header.topbar .utc-clock'),
       chips: one(container, 'header.topbar > .topbar-chips'),
-      ...Object.fromEntries(q(container, 'header.topbar > .topbar-chips > button').map((b) => [b.textContent!, b])),
+      ...Object.fromEntries(q(container, 'header.topbar > .topbar-chips > button, header.topbar > .op-chip').map((b) => [b.textContent!, b])),
     }
     expect(Object.keys(kept)).toEqual(expect.arrayContaining(['Help', 'Field', 'Set operator']))
     expect(q(container, '.tier-menu-btn'), 'no mode button off the FT screens').toEqual([])

@@ -86,6 +86,9 @@ pub enum ClubRefusal {
     /// file that dropped one). There is nothing to run, and the Field Day fallback a
     /// position's own session takes is not one a club may take.
     NoRuleset,
+    /// The operator built this contest. Every position would need the identical definition,
+    /// and nothing carries one to the others.
+    Custom,
 }
 
 impl ClubRefusal {
@@ -95,6 +98,7 @@ impl ClubRefusal {
             ClubRefusal::Serial => "serial",
             ClubRefusal::TransmitterColumn => "transmitter",
             ClubRefusal::NoRuleset => "unknown",
+            ClubRefusal::Custom => "custom",
         }
     }
 
@@ -111,6 +115,9 @@ impl ClubRefusal {
                  number the transmitters"
             }
             ClubRefusal::NoRuleset => "the contest rules this Nexus loaded do not include it",
+            ClubRefusal::Custom => {
+                "it is a contest you built, and every position would need the same definition"
+            }
         }
     }
 }
@@ -127,6 +134,9 @@ impl ClubRefusal {
 /// contest (`CLUB_SYNC_REFUSED` in `ui/src/fdEvent.ts`), and a test holds the two
 /// together.
 pub fn club_refusal(rs: &FdRuleset) -> Option<ClubRefusal> {
+    if rs.custom {
+        return Some(ClubRefusal::Custom);
+    }
     // An arm of a `OneOf` counts: a serial is a serial in whichever slot it rides.
     fn serial(k: &FieldKind) -> bool {
         match k {
@@ -161,8 +171,12 @@ pub fn canonical_contest(event_id: &str) -> String {
 
 /// The sponsor's contest id for a rules-file id — what a refusal names — or, for one this
 /// build's rules table does not carry, the id as [`shown_id`] shows it: it can have come off
-/// the network (a JOIN's, a welcome's), and a sentence repeats it to a screen.
+/// the network (a JOIN's, a welcome's), and a sentence repeats it to a screen. An operator's
+/// own contest is named by the name they gave it.
 pub fn contest_name(event_id: &str) -> String {
+    if let Some(def) = tempo_core::fd_rules::custom_def(event_id.trim()) {
+        return def.name;
+    }
     tempo_core::fd_rules::ruleset_by_id(event_id, tempo_core::fd_rules::CURRENT_RULES_YEAR)
         .map_or_else(|| shown_id(event_id), |rs| rs.contest_id.to_string())
 }
@@ -196,6 +210,9 @@ const PICKER_NAMES: &[(&str, &str)] = &[
     ("cqww_rtty", "CQ World-Wide RTTY DX Contest"),
     ("cqwpx_cw", "CQ World-Wide WPX Contest (CW)"),
     ("cqwpx_ssb", "CQ World-Wide WPX Contest (SSB)"),
+    ("waedc_cw", "WAE DX Contest (CW)"),
+    ("waedc_ssb", "WAE DX Contest (SSB)"),
+    ("waedc_rtty", "WAE DX Contest (RTTY)"),
     ("cqp", "California QSO Party"),
     ("ilqp", "Illinois QSO Party"),
     ("nyqp", "New York QSO Party"),
@@ -6529,6 +6546,9 @@ mod tests {
             ("arrlss_ssb", Some(Serial)),
             ("cqwpx_cw", Some(Serial)),
             ("cqwpx_ssb", Some(Serial)),
+            ("waedc_cw", Some(Serial)),
+            ("waedc_ssb", Some(Serial)),
+            ("waedc_rtty", Some(Serial)),
             // The RTTY Roundup's DX role sends a serial (Special Rules 4.2.2).
             ("arrlrtty", Some(Serial)),
             ("cqww_cw", Some(TransmitterColumn)),

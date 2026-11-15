@@ -16,7 +16,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, act, cleanup } from '@testing-library/react'
 import { ContestScoreChip } from './ContestScoreChip'
-import { ContestView } from './ContestView'
+import { ContestView, contestSummaryText } from './ContestView'
 import type { FieldDayQso, FieldDayStatus } from '../types'
 
 vi.mock('../api', () => ({
@@ -213,4 +213,85 @@ describe('the chip and the Contest screen say the same thing', () => {
       expect(chipText()).toBe(`${short} · ${total} pts · ${tile('QSOs')} Q · ${counted} · ${rate}/hr`)
     })
   }
+})
+
+// ⭐ A CONTACT-COUNT-ONLY CONTEST — not Field Day and no multiplier declared (the WAE DX Contest,
+// whose QTCs and band-weighted multipliers this build does not compute, and any contest scored as a
+// count plus points). No multiplier count meant Field Day everywhere, so without this the chip and
+// the screen dressed it in Field Day's clothes: "N pts", a Sections tile, the power-and-bonus line
+// and the ARRL Sections board.
+describe('a contest whose screen is its contact count alone', () => {
+  const settle = async () => {
+    await act(async () => {
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+    })
+  }
+  const wae = (over: Partial<FieldDayStatus> = {}) =>
+    session({
+      event: 'waedc_cw',
+      qsoCount: 48,
+      points: 48,
+      totalScore: 48,
+      multCount: null,
+      sections: 3,
+      scoreNoteKey: 'settings.contestScore.contactsOnly',
+      log: ten(790),
+      ...over,
+    } as Partial<FieldDayStatus>)
+
+  it('the chip shows the contact count and the rate, and no points or sections', () => {
+    render(<ContestScoreChip fieldDay={wae()} />)
+    expect(chipText()).toBe('WAE CW · 48 Q · 41/hr')
+  })
+
+  it('reads the rule off the session, not the contest: any contest with no multiplier and no note', () => {
+    render(<ContestScoreChip fieldDay={wae({ event: 'cqp', scoreNoteKey: '' })} />)
+    expect(chipText()).toBe('CQP · 48 Q · 41/hr')
+  })
+
+  it('the screen shows the count and its note, and none of Field Day’s score, tile or board', async () => {
+    render(<ContestView fieldDay={wae()} onSetMode={() => {}} fdActive fdRuleset={null} tier="none" />)
+    await settle()
+    const labels = [...document.querySelectorAll('.fd-scoreboard .fd-score-label')].map((el) => el.textContent)
+    expect(labels).toContain('QSOs')
+    expect(labels).not.toContain('Sections')
+    expect(document.querySelector('.fd-score-math')).toBeNull()
+    expect(screen.queryByLabelText('Worked sections board')).toBeNull()
+    expect(screen.getAllByRole('note').some((n) => /your contact count, not your score/.test(n.textContent ?? ''))).toBe(true)
+  })
+
+  // ⭐ A CONTEST THE OPERATOR BUILT has no multipliers either, but its points ARE its whole score
+  // (a CW contact worth 2, say), and it has no QTCs: it shows its points, and nothing says QTCs.
+  const own = (over: Partial<FieldDayStatus> = {}) => wae({ event: 'custom_club_sprint', scoreNoteKey: '', totalScore: 61, ...over })
+
+  it('an own contest: the chip shows its points beside the count', () => {
+    render(<ContestScoreChip fieldDay={own()} />)
+    expect(chipText()).toBe('custom_club_sprint · 61 pts · 48 Q · 41/hr')
+  })
+
+  it('an own contest: the screen shows a Points tile, and no Sections, board or QTC note', async () => {
+    render(<ContestView fieldDay={own()} onSetMode={() => {}} fdActive fdRuleset={null} tier="none" />)
+    await settle()
+    const tiles = [...document.querySelectorAll('.fd-scoreboard .fd-score')].map((el) => el.textContent)
+    expect(tiles).toContain('61Points')
+    expect(tiles.join()).not.toMatch(/Sections/)
+    expect(screen.queryByLabelText('Worked sections board')).toBeNull()
+    expect(document.body.textContent).not.toMatch(/QTC/)
+  })
+
+  it('the Summary names QTCs only for the contest whose score note says they are left out', () => {
+    expect(contestSummaryText(wae(), null, 'waedc_cw')).toMatch(/Multipliers and QTCs are not computed here/)
+    const mine = contestSummaryText(own(), null, 'custom_club_sprint')
+    expect(mine).not.toMatch(/QTC/)
+    expect(mine).toMatch(/TOTAL +61/)
+  })
+
+  it('CONTROL: Field Day with the same empty multiplier count keeps its Sections tile, line and board', async () => {
+    render(<ContestView fieldDay={wae({ event: 'arrlfd', scoreNoteKey: '' })} onSetMode={() => {}} fdActive fdRuleset={null} tier="none" />)
+    await settle()
+    const labels = [...document.querySelectorAll('.fd-scoreboard .fd-score-label')].map((el) => el.textContent)
+    expect(labels).toContain('Sections')
+    expect(document.querySelector('.fd-score-math')).not.toBeNull()
+    expect(screen.getByLabelText('Worked sections board')).toBeTruthy()
+  })
 })

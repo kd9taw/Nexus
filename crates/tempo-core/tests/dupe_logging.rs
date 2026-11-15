@@ -364,6 +364,11 @@ const DUPE_POLICY: &[(&str, bool)] = &[
     ("cqww_rtty", true),
     ("cqwpx_cw", true),
     ("cqwpx_ssb", true),
+    // The WAE DX Contest's rules (DARC, "Rules 2025") say nothing about removing or keeping
+    // dupes: no evidence, so older builds refuse and this one logs it.
+    ("waedc_cw", false),
+    ("waedc_ssb", false),
+    ("waedc_rtty", false),
 ];
 
 /// The LOADER end: every shipped ruleset logs its dupes in this build, whatever the seed

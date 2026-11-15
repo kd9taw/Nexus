@@ -68,13 +68,16 @@ fn declared() -> StationData {
 ///
 /// The ARRL RTTY Roundup is one of them for its DX role only (W/VE stations send a state,
 /// Special Rules 4.2), so it is composed here from a DX entrant.
-const SERIAL_EVENTS: [&str; 6] = [
+const SERIAL_EVENTS: [&str; 9] = [
     "cqwpx_cw",
     "cqwpx_ssb",
     "arrlss_cw",
     "arrlss_ssb",
     "cqp",
     "arrlrtty",
+    "waedc_cw",
+    "waedc_ssb",
+    "waedc_rtty",
 ];
 
 #[test]

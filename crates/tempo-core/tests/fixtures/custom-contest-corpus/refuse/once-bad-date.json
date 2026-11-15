@@ -1,0 +1,30 @@
+{
+  "format": "nexus-custom-contest",
+  "version": 1,
+  "id": "custom_club_wae",
+  "name": "Club WAE Practice",
+  "short": "WAE Prac",
+  "cabrillo_contest": "CLUB-WAE-PRACTICE",
+  "modes": [
+    "CW"
+  ],
+  "window": {
+    "kind": "once",
+    "start_utc": "2026-02-30T14:00Z",
+    "duration_hours": 4
+  },
+  "exchange": [
+    {
+      "field": "rst"
+    },
+    {
+      "field": "serial"
+    }
+  ],
+  "dupe": "band",
+  "points": {
+    "CW": 1,
+    "PH": 1,
+    "DIG": 1
+  }
+}

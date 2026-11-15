@@ -518,6 +518,57 @@ the TV's own setting.
 
 ---
 
+### Build your own contest
+
+A club sprint, a local QSO party or a net's contest night that Nexus does not ship can be built in
+the contest setup. Open it with **Start contest…** (Settings ▸ Contesting) or **Set up a contest…**
+on the Contest screen. Under **Your contests**, press **Build your own…** and go through four steps:
+
+1. **Basics.** The contest's name (shown as you type it, never translated), an optional short name
+   for the header, and its **Cabrillo contest name**: the `CONTEST:` line of your log and the contest
+   in your ADIF log, in capital letters, digits and `-`, as the sponsor spells it. Tick the modes it
+   runs on; this is a reminder only, and Nexus logs a contact in any mode. Then say when it runs:
+   **every year on a weekend** (a month, the 1st to 4th or the last full weekend, the start in hours
+   after 0000Z on its Saturday, and its length) or **one date** (a UTC date and start time, and its
+   length). A contest runs for 1 to 72 hours.
+2. **Exchange.** Up to five fields both stations send, in order: signal report (RST), serial number,
+   state or province, Field Day class, ARRL/RAC section, CQ zone, ITU zone, power, a 4- or 6-character
+   grid, your age, your name, or a text field you give a caption (up to two). Each station sends the
+   same fields.
+3. **Rules.** Whether a station counts once in the contest, once per band, or once per band and mode,
+   and the points a CW, phone or digital contact is worth. There are no multipliers: the score is the
+   points of every contact added up.
+4. **Check.** What you would send, a contact as your Cabrillo log writes it, and, if something stops
+   the contest from being saved, what it is. **Save contest** installs it and picks it; the usual
+   setup steps follow, then Start.
+
+Next stays greyed while a box the step needs is empty, and the line above the buttons says which.
+
+**Your age, name or text** is typed on the setup's exchange step, or in Settings ▸ Contesting ▸ Your
+station data while the contest is picked, as one word of letters, digits and `/`. It is kept on this
+computer, for that contest only, and an exported contest file never carries it. A contest that sends one will not start while it is blank.
+
+**FT8 and FT4.** A contest you build uses the standard FT8 and FT4 messages (grid and signal report)
+and does not send its exchange; the builder says so on the Exchange and Check steps. For an exchange
+of a signal report and a serial number, the builder asks whether to use WSJT-X's RTTY Roundup messages
+(CQ RU); the answer is No unless you change it, and this version sends standard messages either way.
+
+**Edit, Export, Delete and Import.** Each of your contests has **Edit…**, **Export…** and **Delete**
+in the setup's list, and in Settings ▸ Contesting while it is picked. **Export…** saves the contest's
+definition to a file you choose, to share with your club; **Import…** in the setup reads one. If you
+already have the contest, Nexus asks whether to **Replace it** or **Keep both** (the copy gets a new
+Cabrillo name, which you can change). **Delete** asks first, and is refused while the contest is the
+picked one; contacts already logged in it stay on your computer. Once contacts are logged in a
+contest, its exchange and Cabrillo name can no longer change, because the log's contacts were made
+with them: **Save as a new contest instead** makes a new one beside it.
+
+A contest in your contests file that this version of Nexus can't use (one saved by a later version,
+say) is listed under Your contests with the reason, and stays in the file until you delete it.
+
+Club sync and RTTY Auto do not run a contest you build. If a
+contest you picked has been deleted, or its file could not be read, Nexus says so and asks you to
+pick a contest; it never runs ARRL Field Day in its place.
+
 ## POTA / SOTA hunter
 
 The hunter is for **finding activators, not running activations**. It polls the
@@ -625,10 +676,10 @@ tells you where the file is.
   you, a roster or station card click, and the Tx1 to Tx6 rows still work the
   station outside the contest with the standard FT8 messages, and the contact goes
   to your log, not the contest log.
-- **Club sync does not run serial-number contests or CQ World-Wide.** A club
-  running Sweepstakes, CQ WPX, the California QSO Party or CQ WW logs on each
-  position.
-- **A contest that is not on the list logs as one with the same exchange.** The
+- **Club sync does not run serial-number contests, CQ World-Wide or a contest
+  you built.** A club running Sweepstakes, CQ WPX, the California QSO Party, CQ WW
+  or its own contest logs on each position.
+- **A contest that is not on the list:** build your own (above), or log it as one with the same exchange. The
   Scandinavian Activity Contest (RS plus a serial number, each station once per
   band) logs as CQ WPX: pick it in Settings ▸ Contesting ▸ Contest, then switch on
   Contest mode. Before you send the log, change the Cabrillo file's `CONTEST:`
