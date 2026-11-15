@@ -16,11 +16,15 @@ static SERIAL: Mutex<()> = Mutex::new(());
 
 /// WSJT-X's FT4 sample period as captured audio.
 fn ft4_sample() -> Vec<f32> {
-    let path = concat!(
+    ft4_fixture(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../ft4/tests/fixtures/ft4_sample.wav"
-    );
-    let b = std::fs::read(path).expect("read the FT4 sample");
+    ))
+}
+
+/// An FT4 fixture period as captured audio.
+fn ft4_fixture(path: &str) -> Vec<f32> {
+    let b = std::fs::read(path).expect("read the FT4 fixture");
     let mut i = 12usize;
     while i + 8 <= b.len() {
         let size = u32::from_le_bytes([b[i + 4], b[i + 5], b[i + 6], b[i + 7]]) as usize;
@@ -40,6 +44,11 @@ fn ft4_sample() -> Vec<f32> {
 
 /// The boundary (full) pass over the sample with `style`, as the radio loop builds it.
 fn full_pass(style: DecoderStyle) -> Vec<modes::Decode> {
+    full_pass_over(style, ft4_sample())
+}
+
+/// The boundary (full) pass over `audio` with `style`, as the radio loop builds it.
+fn full_pass_over(style: DecoderStyle, audio: Vec<f32>) -> Vec<modes::Decode> {
     let mut eng = Engine::with_settings(Settings {
         mycall: "KD9TAW".to_string(),
         band: "20m".to_string(),
@@ -50,7 +59,7 @@ fn full_pass(style: DecoderStyle) -> Vec<modes::Decode> {
     eng.set_tier(Tier::Ft4);
     eng.set_frequency(14.080, "20m", "USB");
     eng.set_rx_offset(1500.0);
-    let job = eng.build_decode_job(ft4_sample(), 1, DecodePass::Boundary);
+    let job = eng.build_decode_job(audio, 1, DecodePass::Boundary);
     run_decode_job(job).decodes().to_vec()
 }
 
@@ -91,4 +100,29 @@ fn jtdx_style_is_ft4_s_default_and_an_older_settings_file_gets_it() {
     assert_eq!(json["ft4Decoder"], "standard");
     let back: Settings = serde_json::from_value(json).expect("deserialize");
     assert_eq!(back.ft4_decoder, DecoderStyle::Standard);
+}
+
+/// A decode the JTDX-style FT4 decoder marks unchecked (an OSD decode it takes from noise) is
+/// handed on by the engine still marked, so everything downstream that holds automation to
+/// checked decodes sees it as such. The period is pure noise from which JTDX's FT4 decoder
+/// decodes a free-text line that passes the CRC; the Standard decoder finds nothing in it.
+#[test]
+fn the_engine_hands_on_ft4_s_unchecked_mark() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let noise = || {
+        ft4_fixture(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../ft4/tests/fixtures/ft4_noise_osd_false_decode.wav"
+        ))
+    };
+    let jtdx = full_pass_over(DecoderStyle::Jtdx, noise());
+    assert!(
+        !jtdx.is_empty(),
+        "the JTDX-style decoder decodes the noise period"
+    );
+    assert!(
+        jtdx.iter().all(|d| d.unchecked),
+        "every decode from it arrives marked: {jtdx:?}"
+    );
+    assert!(full_pass_over(DecoderStyle::Standard, noise()).is_empty());
 }
