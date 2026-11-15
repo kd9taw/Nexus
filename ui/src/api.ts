@@ -2297,7 +2297,7 @@ export interface CallbookUpdatePreview {
  *  fill's change, undone whole by its run — a fill stopped part-way has one too. `notLookedUp`:
  *  calls a later run picks up. */
 export interface CallbookUpdateEnd {
-  stop: 'done' | 'cancelled' | 'limit' | 'refused' | 'failed'
+  stop: 'done' | 'cancelled' | 'limit' | 'refused' | 'refused-unchecked' | 'failed'
   error: string | null
   /** QRZ's last Message/Error, in its own words (shown, as QRZ asks). */
   qrzSaid: string | null

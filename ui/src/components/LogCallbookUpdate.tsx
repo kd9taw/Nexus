@@ -65,14 +65,59 @@ function QrzNotes({ skipped, said }: { skipped: boolean, said: string | null }) 
   )
 }
 
+/** The most unknown calls a toast names; the pane lists them all. */
+const TOAST_CALLS = 20
+
+/** Why a streak of no-record answers stopped the run: checked against the station's own call, or
+ *  with none set to check it with. */
+function refusedWords(stop: CallbookUpdateEnd['stop']): string | null {
+  return stop === 'refused' ? t('logbook.tools.callbook.end.refused')
+    : stop === 'refused-unchecked' ? t('logbook.tools.callbook.end.refusedUnchecked')
+    : null
+}
+
 /** Tell the operator how an update ended: the toast whose Undo takes its fill back (a fill stopped
- *  part-way too), why it stopped when it did not finish, and the list reloaded. */
+ *  part-way too) with how many it updated, why it stopped when it did not finish, and one notice
+ *  with the calls the callbook does not know (not an error: the run went on past them) and the
+ *  calls left for another run; and the list reloaded. */
 function reportEnd(end: CallbookUpdateEnd, onChanged: () => void): void {
-  const why = end.error ?? (end.stop === 'refused' ? t('logbook.tools.callbook.end.refused') : null)
+  const why = end.error ?? refusedWords(end.stop)
   if (why) pushToast(why, 'error', 12_000)
+  const notes: string[] = []
+  if (end.unknown.length > 0) {
+    const named = end.unknown.slice(0, TOAST_CALLS).join(' ') + (end.unknown.length > TOAST_CALLS ? ' …' : '')
+    notes.push(`${t('logbook.tools.callbook.unknown', { count: end.unknown.length })} ${named}`)
+  }
+  if (end.notLookedUp > 0) notes.push(t('logbook.tools.callbook.resume', { count: end.notLookedUp }))
+  if (notes.length > 0) pushToast(notes.join(' · '), 'info', 10_000)
   if (end.made) sayRun(end.made, t('logbook.tools.callbook.done', { count: end.made.changed }), onChanged)
-  else if (!why) pushToast(t('logbook.tools.nothing'), 'info', 8000)
+  else if (!why && notes.length === 0) pushToast(t('logbook.tools.nothing'), 'info', 8000)
   if (end.made && end.made.changed > 0) onChanged()
+}
+
+/** The Logbook row's "Update from callbook": the tab's update on this one contact — the same
+ *  preview and start, so the same lookup, fill, cap and end report (useCallbookUpdateEnd's toast
+ *  with its Undo). Answers whether it started; `onStarted` is the Logbook's follow. */
+export async function updateOneFromCallbook(id: string, call: string, onStarted: () => void): Promise<boolean> {
+  if (changesRefusedHere()) return false
+  const p = await withErrorToast(() => callbookUpdatePreview({ ids: [id] }), t('logbook.tools.bulk.previewFailed'))
+  if (!p) return false
+  if (!p.configured) {
+    pushToast(t('logbook.tools.callbook.notSetUp'), 'error', 8000)
+    return false
+  }
+  if (p.couldChange === 0) {
+    pushToast(t('logbook.tools.nothing'), 'info', 8000)
+    return false
+  }
+  const started = await withErrorToast(
+    () => callbookUpdateStart(p.ids, p.selected).then(() => true),
+    t('logbook.tools.callbook.failed'),
+  )
+  if (!started) return false
+  onStarted()
+  pushToast(t('logbook.row.callbook.looking', { call }), 'info', 4000)
+  return true
 }
 
 /** The Logbook's half: reports an update's end once, with the dialog open or not. Answers the
@@ -333,8 +378,7 @@ export function LogCallbookUpdate({
             {ended.stop === 'done' ? t('logbook.tools.callbook.end.done')
               : ended.stop === 'cancelled' ? t('logbook.tools.callbook.end.cancelled')
               : ended.stop === 'limit' ? t('logbook.tools.callbook.end.limit', { cap: status?.cap ?? 0 })
-              : ended.stop === 'refused' ? t('logbook.tools.callbook.end.refused')
-              : t('logbook.tools.callbook.end.failed')}
+              : refusedWords(ended.stop) ?? t('logbook.tools.callbook.end.failed')}
           </p>
           <QrzNotes skipped={ended.qrzSkipped} said={ended.qrzSaid} />
           {ended.notLookedUp > 0 && (

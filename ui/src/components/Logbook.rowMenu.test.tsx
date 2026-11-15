@@ -7,7 +7,7 @@ import { parseRules, cmpSpec } from '../cssCascade'
 import { Logbook } from './Logbook'
 import type { LogQuestion } from '../features/logAnswers'
 import {
-  clublogPushQso, deleteQsoById, hrdlogPushQso, markQslCardById, markQslSentById, postSpot, qrzCorrectPreview, qrzPushQso,
+  callbookUpdatePreview, callbookUpdateStart, clublogPushQso, deleteQsoById, hrdlogPushQso, markQslCardById, markQslSentById, postSpot, qrzCorrectPreview, qrzPushQso,
   queueQslCardById, setSatTagById, uploadLotwReportByIds, wrlPushQso,
 } from '../api'
 import { confirmDialog } from '../confirm'
@@ -57,6 +57,10 @@ vi.mock('../api', () => {
     hrdlogPushQso: vi.fn(async () => ({ result: 'ok' })),
     wrlPushQso: vi.fn(async () => ({ result: 'accepted' })),
     postSpot: vi.fn(async () => {}),
+    callbookUpdatePreview: vi.fn(async () => ({ ids: ['id-1'], selected: 1, couldChange: 1, configured: true })),
+    callbookUpdateStart: vi.fn(async () => {}),
+    callbookUpdateStatus: vi.fn(async () => ({ running: false, ended: null })),
+    callbookUpdateTakeEnd: vi.fn(async () => null),
     qsoHistory: vi.fn(async () => []), undoQsoChange: noop(), openQrzPage: noop(), getSettings: noop(),
   }
 })
@@ -177,6 +181,7 @@ describe('the row shows two buttons, and the rest is in its ⋯ menu', () => {
     expect(texts).toEqual([
       // Best times leads every call menu (BestTimesCard); the row's own items follow.
       t('callMenu.bestTimes'),
+      t('logbook.row.menu.callbook'),
       t('logbook.row.menu.spot'),
       t('logbook.row.menu.qrz') + qrzSent,
       t('logbook.row.menu.qrzCorrect'),
@@ -210,6 +215,14 @@ describe('the row shows two buttons, and the rest is in its ⋯ menu', () => {
       cleanup()
       vi.clearAllMocks()
     }
+  })
+
+  it('Update from callbook runs the callbook update on this one contact, by its id, and sends nothing', async () => {
+    await renderLog({ id: 'id-1' })
+    await chooseRowAction('K0ABC', t('logbook.row.menu.callbook'))
+    await waitFor(() => expect(callbookUpdateStart).toHaveBeenCalledWith(['id-1'], 1))
+    expect(callbookUpdatePreview).toHaveBeenCalledWith({ ids: ['id-1'] })
+    for (const f of [qrzPushQso, clublogPushQso, hrdlogPushQso, wrlPushQso, uploadLotwReportByIds]) expect(f).not.toHaveBeenCalled()
   })
 
   it('opening the menu sends nothing', async () => {
@@ -307,10 +320,13 @@ describe('Spot from the ⋯ menu', () => {
     const more = rowMore('K0ABC')
     more.focus()
     const menu = await openRowMenu('K0ABC')
-    // The keyboard lands on the first item, Best times; Spot is the next one down.
+    // The keyboard lands on the first item, Best times; Update from callbook is next, then Spot.
     const first = menuItem(menu, t('callMenu.bestTimes'))
     await waitFor(() => expect(document.activeElement).toBe(first))
     fireEvent.keyDown(first, { key: 'ArrowDown' })
+    const callbook = menuItem(menu, t('logbook.row.menu.callbook'))
+    await waitFor(() => expect(document.activeElement).toBe(callbook))
+    fireEvent.keyDown(callbook, { key: 'ArrowDown' })
     const spot = menuItem(menu, t('logbook.row.menu.spot'))
     await waitFor(() => expect(document.activeElement).toBe(spot))
     fireEvent.keyDown(spot, { key: 'Enter' })
