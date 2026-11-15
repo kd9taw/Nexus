@@ -173,8 +173,31 @@ fn link_openmp(fortran: &str) {
     // MinGW's libgomp is built on winpthreads; link that statically too (no
     // libwinpthread-1.dll), as the cross build does.
     if cfg!(windows) {
-        println!("cargo:rustc-link-lib=static=pthread");
+        link_winpthread_static(fortran);
     }
+}
+
+/// Link MinGW's winpthreads statically. Its archive is in the MinGW sysroot's `lib`, not in gcc's
+/// own library directory, so rustc (which looks for a `static=` library itself, to bundle it)
+/// is told where it is: the compiler names the archive's absolute path. `winpthread` is the
+/// library's own name; `libpthread.a` is a copy some toolchains also ship.
+fn link_winpthread_static(compiler: &str) {
+    let archive = Command::new(compiler)
+        .arg("-print-file-name=libwinpthread.a")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|p| PathBuf::from(p.trim()))
+        .filter(|p| p.is_absolute() && p.exists());
+    let Some(dir) = archive.as_ref().and_then(|p| p.parent()) else {
+        panic!(
+            "{compiler} reports no libwinpthread.a: libgomp needs MinGW's winpthreads \
+             (Debian/Ubuntu: mingw-w64-x86-64-dev; MSYS2: mingw-w64-x86_64-winpthreads)"
+        );
+    };
+    println!("cargo:rustc-link-search=native={}", dir.display());
+    println!("cargo:rustc-link-lib=static=winpthread");
 }
 
 /// Emit `rustc-link-search` entries for the gfortran and FFTW3f runtimes on macOS.
@@ -321,7 +344,7 @@ fn build_cross_windows(libtempo_src: &std::path::Path, out: &std::path::Path) {
     println!("cargo:rustc-link-lib=static=quadmath");
     println!("cargo:rustc-link-lib=static=stdc++");
     println!("cargo:rustc-link-lib=static=fftw3f");
-    println!("cargo:rustc-link-lib=static=pthread");
+    link_winpthread_static("x86_64-w64-mingw32-gcc");
     // m is part of the MinGW CRT (libmsvcrt); no separate libm. stdc++ pulls in
     // what crc14.cpp needs. gcc/pthread come from the gcc driver automatically.
 }
