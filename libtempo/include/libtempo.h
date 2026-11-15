@@ -451,24 +451,6 @@ int ft4_decode_frame_cb(const int16_t *iwave /*[FT4_NMAX]*/,
                         ft4_decode_t *out, int max_out,
                         tempo_decode_cb cb, void *user);
 
-/*
- * The JTDX-style FT4 decoder (JTDX 2.2.159's FT4 decoder, vendor/wsjtx/lib/ft4jtdx/, wrapped by
- * ft4jtdx_cabi.f90) over the same frame, with the same record and callback. `stophint` nonzero
- * restricts AP to the CQ hypothesis; `swl` nonzero is JTDX's SWL mode, a wider DT search window.
- * Every decode it reports passed the CRC; it reports no sync
- * metric (sync 0) and no quality figure (qual 1). Returns the number found, which may exceed
- * max_out (`out` holds the first max_out). It carries the running average DT its search is
- * centred on from one period to the next; ft4_jtdx_reset clears it (call it on a mode change).
- * It loads the callsign database ALLCALL7.TXT on its first call.
- */
-int ft4_jtdx_decode_frame_cb(const int16_t *iwave /*[FT4_NMAX]*/,
-                             int nfa, int nfb, int ndepth,
-                             const char *mycall, const char *hiscall,
-                             int nqso_progress, int nfqso,
-                             int stophint, int swl,
-                             ft4_decode_t *out, int max_out,
-                             tempo_decode_cb cb, void *user);
-void ft4_jtdx_reset(void);
 
 /*===========================================================================
  * FST4: WSJT-X slow weak-signal mode. Decode, and transmit (see below).
@@ -1181,6 +1163,27 @@ int ft8var_load_callsign_db(void);
 
 /* WSJT-X's mode-change reset: average DT, the decoder's callsign hash tables. */
 void ft8var_reset(void);
+
+/*
+ * The JTDX-style FT4 decoder (JTDX 2.2.159's FT4 decoder, vendor/wsjtx/lib/ft4jtdx/, wrapped by
+ * ft4jtdx_cabi.f90) over ft4_decode_frame's frame. Records and callback are ft8var's: an
+ * ft4_decode_t's fields then `unchecked`, 1 for a decode Nexus will not act on by itself (an OSD
+ * decode of low quality; see ft4jtdx_cabi.f90). `stophint` nonzero restricts AP to the CQ
+ * hypothesis; `swl` nonzero is JTDX's SWL mode, a wider DT search window. Every decode passed the
+ * CRC; sync is 0 and qual 1 (JTDX reports neither). Returns the number found, which may exceed
+ * max_out (`out` holds the first max_out). It carries the running average DT its search is
+ * centred on from one period to the next (ft8var_reset or ft4_jtdx_reset clears it), and loads
+ * the callsign database (ft8var_load_callsign_db) on its first call. Call it from the thread
+ * every ft8var call runs on: the checks it shares with ft8var keep large arrays on the stack.
+ */
+int ft4_jtdx_decode_frame_cb(const int16_t *iwave /*[FT4_NMAX]*/,
+                             int nfa, int nfb, int ndepth,
+                             const char *mycall, const char *hiscall,
+                             int nqso_progress, int nfqso,
+                             int stophint, int swl,
+                             ft8var_decode_t *out, int max_out,
+                             ft8var_decode_cb cb, void *user);
+void ft4_jtdx_reset(void);
 
 /* WSJT-X's thread count for a requested nmt on this machine. */
 int ft8var_threads(int nmt);

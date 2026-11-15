@@ -997,7 +997,9 @@ extern "C" {
     ) -> c_int;
 
     /// The JTDX-style FT4 decoder (JTDX 2.2.159's, `ft4jtdx_cabi.f90`) over the same frame, with
-    /// the same record and callback as [`ft4_decode_frame_cb`]. `stophint` nonzero restricts AP
+    /// ft8var's record and callback: an `Ft4DecodeT`'s fields then `unchecked`, set on a decode
+    /// Nexus will not act on by itself (a low-quality OSD decode). Call it on the thread every
+    /// ft8var call runs on (its checks keep large arrays on the stack). `stophint` nonzero restricts AP
     /// to the CQ hypothesis; `swl` nonzero is JTDX's SWL mode (a wider DT search window).
     /// Returns the number of decodes found, which may exceed `max_out`
     /// (`out` holds the first `max_out`). It carries one value from period to period, the
@@ -1013,9 +1015,9 @@ extern "C" {
         nfqso: c_int,
         stophint: c_int,
         swl: c_int,
-        out: *mut Ft4DecodeT,
+        out: *mut Ft8VarDecodeT,
         max_out: c_int,
-        cb: Option<DecodeCallback>,
+        cb: Option<Ft8VarDecodeCallback>,
         user: *mut c_void,
     ) -> c_int;
 

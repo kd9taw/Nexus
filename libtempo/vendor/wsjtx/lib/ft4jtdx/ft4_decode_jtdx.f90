@@ -19,8 +19,10 @@
 ! * AP cache. apbits, mycall0 and hiscall0 were SAVEd locals; they are hoisted into module
 !   ft4_decode_jtdx_apstate so each radio's decoder context can save and restore them, as for
 !   WSJT-X's FT4 decoder (a SAVEd local is a file-local symbol no other unit can name).
-! * Callback. It receives the whole 37-character message (JTDX passes 26, its display width) and
-!   the AP type of the pass that decoded it, so Nexus can mark AP decodes.
+! * Callback. It receives the whole 37-character message (JTDX passes 26, its display width), the
+!   AP type of the pass that decoded it, so Nexus can mark AP decodes, and that pass's LDPC
+!   hard-error count and OSD distance (dmin, 0 when belief propagation decoded it alone), from
+!   which Nexus marks the decodes it will not act on by itself (ft4jtdx_cabi.f90).
 ! * The ' R ' false-decode check skips the one decode it rejects, as its sibling checks do, where
 !   JTDX returns from the decoder and loses the rest of the period (see the comment there).
 !
@@ -41,7 +43,7 @@ module ft4_decode_jtdx
   end type ft4_decoder_jtdx
 
   abstract interface
-    subroutine ft4_decode_jtdx_callback (this,snr,dt,freq,decoded,servis4,nap)
+    subroutine ft4_decode_jtdx_callback (this,snr,dt,freq,decoded,servis4,nap,nhard,dmin)
       import ft4_decoder_jtdx
       implicit none
       class(ft4_decoder_jtdx), intent(inout) :: this
@@ -51,6 +53,8 @@ module ft4_decode_jtdx
       character(len=37), intent(in) :: decoded
       character(len=1), intent(in) :: servis4
       integer, intent(in) :: nap
+      integer, intent(in) :: nhard
+      real, intent(in) :: dmin
     end subroutine ft4_decode_jtdx_callback
   end interface
 
@@ -419,12 +423,12 @@ contains
               if(i3.eq.0 .and. n3.eq.1) then ! special DXpedition msg
                 call msgparservar(message,msg37_2)
                 servis4="1"
-                call this%callback(nsnr,xdt,f1,message,servis4,iaptype)
-                call this%callback(nsnr,xdt,f1,msg37_2,servis4,iaptype)
+                call this%callback(nsnr,xdt,f1,message,servis4,iaptype,nharderror,dmin)
+                call this%callback(nsnr,xdt,f1,msg37_2,servis4,iaptype,nharderror,dmin)
               else
                 servis4=""
                 if(lFreeText) then; if(abs(nfqso-nint(f1)).le.10) then; servis4=','; else; servis4='.'; endif; endif
-                if(.not.lhidemsg) call this%callback(nsnr,xdt,f1,message,servis4,iaptype)
+                if(.not.lhidemsg) call this%callback(nsnr,xdt,f1,message,servis4,iaptype,nharderror,dmin)
               endif
               nFT4decd=nFT4decd+1; sumxdtt(1)=sumxdtt(1)+xdt
               exit

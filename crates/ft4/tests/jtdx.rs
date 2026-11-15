@@ -126,6 +126,7 @@ fn jtdx_decodes_a_crowd_rx_frequency_first() {
         ]
     );
     assert_eq!(d[0].message, "W9XYZ K4JKL R-07");
+    assert!(d.iter().all(|d| !d.unchecked), "nothing marked: {d:?}");
 }
 
 /// The streaming call hands on each decode as it is found, in the order the plain call returns
@@ -243,4 +244,25 @@ fn jtdx_rejecting_one_decode_keeps_the_rest_of_the_period() {
         decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0, false).len(),
         9
     );
+}
+
+/// Pure noise (frame 1865 of `tests/ft4_false_alarm.c`'s sequence) from which JTDX's FT4 decoder,
+/// AP armed, decodes a free-text message that passes the CRC: its OSD (depth 3, no distance
+/// bound) found a codeword the CRC could not tell from a real one. JTDX's own decoder makes the
+/// same decode. Nexus shows it marked `unchecked`, so it is never sequenced, logged or uploaded on
+/// its own; the Standard decoder finds nothing here.
+#[test]
+fn jtdx_marks_an_osd_decode_from_noise() {
+    db();
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/ft4_noise_osd_false_decode.wav"
+    );
+    let mut s = read_wav_i16(path);
+    s.resize(NMAX, 0);
+    reset_jtdx();
+    let d = decode_frame_jtdx(&s, 200, 2900, 3, "KD9TAW", "W1AW", 5, 1500, false, false);
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert!(d[0].unchecked, "an OSD decode from noise is marked: {d:?}");
+    assert!(decode_frame(&s, 200, 2900, 3, "KD9TAW", "W1AW", 5, 1500, false).is_empty());
 }

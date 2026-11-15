@@ -21,20 +21,38 @@
 ! THE CALLSIGN DATABASE MUST BE LOADED FIRST. The false-decode checks this decoder calls
 ! (chkflscallvar, chkfalse8var) look calls up in ALLCALL7.TXT. With the database not yet read
 ! and not marked invalid they find nothing, so every check rejects: CQ decodes below -15 dB are
-! dropped and a `<call> <call> R <grid>` decode abandons the rest of the period. ft4_jtdx_decode
-! therefore loads it on its first call, whether or not FT8 has ever run.
+! dropped, and so is every `<call> <call> R <grid>` decode. ft4_jtdx_decode_frame_cb therefore
+! loads it on its first call, whether or not FT8 has ever run.
+!
+! DECODES NEXUS DOES NOT ACT ON BY ITSELF. JTDX accepts any codeword its OSD (depth 3, no
+! distance bound) finds that passes the CRC-14, so on pure noise it decodes now and then: 6 in
+! 10000 AP-armed noise periods with the callsign database loaded, where WSJT-X's decoder makes
+! none (JTDX's own decoder, run on the first of those periods, makes the same decodes). Every one
+! was an OSD decode at an SNR estimate of -20 or -21 dB (a candidate barely above the sync
+! threshold), most with a hard-error count plus OSD distance of 55 or more. On the bench no real
+! decode estimates below -18.5 dB, and few reach 55. An OSD decode that is either is reported
+! with `unchecked` = 1, the JTDX-style FT8 decoder's flag for decodes no error check vouches for:
+! shown, marked, and never acted on by itself (no auto-sequencing, no auto-log, no upload); the
+! operator can still click it. Every decode JTDX shows, Nexus shows.
 !
 ! NOT thread-safe: module state throughout; callers serialize behind the modem lock.
 
 module ft4jtdx_cabi
   use iso_c_binding
   use ft4_decode_jtdx, only: ft4_decoder_jtdx
-  use ft4_cabi, only: ft4_decode_t, ft4_decode_cb, F4_NMAX
+  use ft4_cabi, only: F4_NMAX
+  use ft8var_cabi, only: ft8var_decode_t, ft8var_decode_cb
   implicit none
   private
   public :: ft4_jtdx_decode_frame_cb, ft4_jtdx_reset
 
-  integer, parameter :: DD4_LEN = 73728   ! ft4_mod1's dd4 (JTDX's ft4_params NMAX)
+  ! A decode its OSD found (dmin > 0) with hard errors + OSD distance at or above MARK_QUALITY,
+  ! or with an SNR estimate at or below MARK_SNR, is marked unchecked (see the header). Measured:
+  ! the nine noise decodes of 10000 frames (database off) were all at -20/-21 dB, seven of them
+  ! at quality 55 or more; true bench decodes at quality 55 or more, 7 of 438 found blind and 15 of
+  ! 44 weak AP-armed ones, and none below -18.5 dB.
+  real, parameter :: MARK_QUALITY = 55.0
+  integer, parameter :: MARK_SNR = -20
 
   ! The caller's callback rides on the decoder object, one per call: no module state.
   type, extends(ft4_decoder_jtdx) :: ft4jtdx_stream_decoder
@@ -51,7 +69,7 @@ contains
   ! ft4_jtdx_collect : the decoder's callback. Each decode is written to the caller's `out`
   ! (while it has room) and handed to the caller's callback the moment it is found.
   !-------------------------------------------------------------------------
-  subroutine ft4_jtdx_collect(this, snr, dt, freq, decoded, servis4, nap)
+  subroutine ft4_jtdx_collect(this, snr, dt, freq, decoded, servis4, nap, nhard, dmin)
     class(ft4_decoder_jtdx), intent(inout) :: this
     integer,           intent(in) :: snr
     real,              intent(in) :: dt
@@ -59,10 +77,12 @@ contains
     character(len=37), intent(in) :: decoded
     character(len=1),  intent(in) :: servis4
     integer,           intent(in) :: nap
+    integer,           intent(in) :: nhard
+    real,              intent(in) :: dmin
 
-    type(ft4_decode_t), pointer :: out(:)
-    type(ft4_decode_t), target  :: rec
-    procedure(ft4_decode_cb), pointer :: fcb
+    type(ft8var_decode_t), pointer :: out(:)
+    type(ft8var_decode_t), target  :: rec
+    procedure(ft8var_decode_cb), pointer :: fcb
     integer(c_int) :: istop
     integer :: j, n
 
@@ -77,6 +97,8 @@ contains
        rec%freq = freq
        rec%nap  = nap
        rec%qual = 1.0
+       rec%unchecked = merge(1, 0, dmin > 0.0 .and.                                      &
+            (real(nhard) + dmin >= MARK_QUALITY .or. snr <= MARK_SNR))
        rec%message = c_null_char
        n = min(len_trim(decoded), 37)
        do j = 1, n
@@ -108,8 +130,8 @@ contains
   !                    same meaning as the Standard decoder's lapcqonly)
   !   swl            : nonzero = JTDX's SWL mode: a wider DT search, about -1.2..+1.7 s where
   !                    the default is -1.0..+1.4 s (both shifted by the running average DT)
-  !   out, max_out   : caller array of ft4_decode_t
-  !   cb, cb_user    : tempo_decode_cb or NULL; handed each decode as it is found
+  !   out, max_out   : caller array of ft8var_decode_t (ft4_decode_t's fields, then `unchecked`)
+  !   cb, cb_user    : ft8var_decode_cb or NULL; handed each decode as it is found
   !
   ! Returns the number of decodes found (may exceed max_out; `out` holds the first max_out).
   !-------------------------------------------------------------------------
@@ -123,7 +145,7 @@ contains
     integer(c_int), value,  intent(in)  :: stophint, swl
     character(kind=c_char), intent(in)  :: mycall(*)
     character(kind=c_char), intent(in)  :: hiscall(*)
-    type(ft4_decode_t),     intent(out), target :: out(*)
+    type(ft8var_decode_t),  intent(out), target :: out(*)
     type(c_funptr), value,  intent(in)  :: cb
     type(c_ptr),    value,  intent(in)  :: cb_user
     integer(c_int)                      :: ndec

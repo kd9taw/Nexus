@@ -42,6 +42,10 @@ pub struct Decode {
     pub nap: i32,
     /// Decode quality (1.0 = perfect).
     pub qual: f32,
+    /// A decode Nexus does not act on by itself: shown, marked, never auto-sequenced, auto-logged
+    /// or uploaded; the operator can still click it. Only the JTDX-style decoder sets it, on an
+    /// OSD decode of low quality (`ft4jtdx_cabi.f90`); the Standard decoder never does.
+    pub unchecked: bool,
 }
 
 // Stock WSJT-X allows 200 decodes per period (decodedtext MAXDEC); matching it
@@ -400,14 +404,14 @@ enum Reply {
 /// caller's thread at once.
 unsafe extern "C" fn on_jtdx_found(
     user: *mut std::os::raw::c_void,
-    rec: *const tempo_fast_sys::Ft4DecodeT,
+    rec: *const tempo_fast_sys::Ft8VarDecodeT,
 ) -> std::os::raw::c_int {
     if !rec.is_null() {
         // SAFETY: `user` is the job's reply sender, alive until the decode returns; `rec` is a
         // record the modem has just written.
         let reply = unsafe { &*user.cast::<std::sync::mpsc::Sender<Reply>>() };
         // The caller stops listening only after `Done`, so a send cannot fail mid-decode.
-        let _ = reply.send(Reply::Found(from_record(unsafe { &*rec })));
+        let _ = reply.send(Reply::Found(from_jtdx_record(unsafe { &*rec })));
     }
     0
 }
@@ -441,8 +445,8 @@ fn decode_jtdx(
     let worker = std::thread::spawn(move || {
         ft8::on_decoder_thread_wait(move || {
             let mut reply = tx;
-            let mut out = vec![tempo_fast_sys::Ft4DecodeT::default(); MAX_DECODES];
-            let cb: Option<tempo_fast_sys::DecodeCallback> =
+            let mut out = vec![tempo_fast_sys::Ft8VarDecodeT::default(); MAX_DECODES];
+            let cb: Option<tempo_fast_sys::Ft8VarDecodeCallback> =
                 if stream { Some(on_jtdx_found) } else { None };
             // SAFETY: iwave holds NMAX samples and `out` MAX_DECODES records; the callback's
             // `user` is `reply`, alive across the call; the caller holds the modem lock until it
@@ -466,7 +470,7 @@ fn decode_jtdx(
                 )
             };
             out.truncate(n.clamp(0, MAX_DECODES as i32) as usize);
-            let _ = reply.send(Reply::Done(out.iter().map(from_record).collect()));
+            let _ = reply.send(Reply::Done(out.iter().map(from_jtdx_record).collect()));
         })
     });
     let mut found = found;
@@ -511,6 +515,15 @@ fn from_record(r: &tempo_fast_sys::Ft4DecodeT) -> Decode {
         freq: r.freq,
         nap: r.nap,
         qual: r.qual,
+        unchecked: false,
+    }
+}
+
+/// One JTDX-style record (ft8var's shape: the FT4 fields, then `unchecked`) as a [`Decode`].
+fn from_jtdx_record(r: &tempo_fast_sys::Ft8VarDecodeT) -> Decode {
+    Decode {
+        unchecked: r.unchecked != 0,
+        ..from_record(&r.rec)
     }
 }
 

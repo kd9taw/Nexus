@@ -9,14 +9,18 @@
 //! average DT does).
 //!
 //! Output (stdout), one line per decode:
-//!     <file> <freq_hz> <snr_db> <dt_s> <nap> <message>
+//!     <file> <freq_hz> <snr_db> <dt_s> <nap>[u] <message>
+//! where a `u` after the AP type marks a decode the JTDX-style decoder reports `unchecked`.
 //! and one line per file on stderr: `#time <file> <ms> <ndecodes>`.
 //!
 //! Usage:
 //!     cargo run -q -p ft4 --example decode_wav_ft4 -- [--decoder standard|jtdx] [--depth N] [--nfa HZ] [--nfb HZ]
-//!         [--mycall C] [--hiscall C] [--progress N] [--nfqso HZ] [--cq-only] [--swl] FILE.wav [...]
+//!         [--mycall C] [--hiscall C] [--progress N] [--nfqso HZ] [--cq-only] [--swl] [--db DIR] FILE.wav [...]
+//!
+//! `--db DIR` loads the callsign database (`DIR/ALLCALL7.TXT`) the JTDX-style decoder's checks read,
+//! as the engine does at start-up; without it those checks pass every call.
 
-use ft4::{decode_frame, decode_frame_jtdx, NMAX};
+use ft4::{decode_frame, decode_frame_jtdx, load_callsign_db, NMAX};
 
 fn read_wav_i16(path: &str) -> Vec<i16> {
     let b = std::fs::read(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
@@ -58,6 +62,11 @@ fn main() {
             "--nfqso" => nfqso = val().parse().expect("--nfqso HZ"),
             "--cq-only" => cq_only = true,
             "--swl" => swl = true,
+            "--db" => {
+                let dir = val();
+                let ok = load_callsign_db(std::path::Path::new(&dir));
+                eprintln!("#db {dir} valid={ok}");
+            }
             "--decoder" => {
                 jtdx = match val().as_str() {
                     "jtdx" => true,
@@ -88,8 +97,13 @@ fn main() {
             .unwrap_or_else(|| f.clone());
         for d in &decs {
             println!(
-                "{name} {:.0} {} {:.2} {} {}",
-                d.freq, d.snr, d.dt, d.nap, d.message
+                "{name} {:.0} {} {:.2} {}{} {}",
+                d.freq,
+                d.snr,
+                d.dt,
+                d.nap,
+                if d.unchecked { "u" } else { "" },
+                d.message
             );
         }
         eprintln!("#time {name} {ms:.1} {}", decs.len());
