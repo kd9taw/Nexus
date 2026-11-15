@@ -676,6 +676,117 @@ export interface FdRulesetDto {
   /** The only `CATEGORY-POWER` values the sponsor takes, when it names some (Winter Field Day's
    *  `QRP` and `LOW`). Preview only. */
   powerCategories?: string[]
+  /** The slots of an operator-built contest's exchange the operator TYPES (`AGE`, `NAME`, `TXT1`),
+   *  kept per contest in `Settings.contestEntered`. Preview only; empty for every shipped contest. */
+  enteredSlots?: string[]
+}
+
+/** ⭐ **An operator-built contest, as its definition file holds it** (`CustomDef` in
+ *  `crates/tempo-core/src/fd_rules/custom.rs`, format v1). snake_case keys, on the wire and in the
+ *  file: the struct has no rename, and an unknown key is refused. It never holds a typed value
+ *  (an age, a name): those live in `Settings.contestEntered`, so a shared file carries none. */
+export interface CustomContestDef {
+  format: 'nexus-custom-contest'
+  version: 1
+  /** `custom_<slug>`, made once from the name and stable after: the journals name the contest by it. */
+  id: string
+  name: string
+  short?: string
+  /** The Cabrillo `CONTEST:` token and ADIF `CONTEST_ID`, `[A-Z0-9-]{1,32}`. */
+  cabrillo_contest: string
+  modes: CustomContestMode[]
+  window: CustomContestWindow
+  exchange: CustomContestField[]
+  /** A grid-only exchange's word after CQ on FT8/FT4; none is no contest message. */
+  ft_cq?: 'TEST' | 'WW'
+  /** An RST + serial exchange: the operator asked for WSJT-X's RTTY Roundup messages. Default no. */
+  ft_roundup?: boolean
+  dupe: 'once' | 'band' | 'band_mode'
+  /** Points per contact by mode class, 0-100; an absent one is 1. */
+  points?: { CW?: number; PH?: number; DIG?: number }
+}
+export type CustomContestMode = 'CW' | 'SSB' | 'FM' | 'RTTY' | 'PSK' | 'FT8' | 'FT4'
+export type CustomContestWindow =
+  | { kind: 'weekend'; month: number; weekend: 'nth_full' | 'last_full'; n?: number; start_hour_utc: number; duration_hours: number }
+  | { kind: 'once'; start_utc: string; duration_hours: number }
+export type CustomContestFieldId =
+  | 'rst'
+  | 'serial'
+  | 'state_province'
+  | 'fd_class'
+  | 'arrl_section'
+  | 'cq_zone'
+  | 'itu_zone'
+  | 'power'
+  | 'grid4'
+  | 'grid6'
+  | 'age'
+  | 'name'
+  | 'text'
+/** One exchange field from the fixed menu; `label` is a text field's caption, never sent. */
+export interface CustomContestField {
+  field: CustomContestFieldId
+  label?: string
+}
+
+/** One installed operator-built contest, with what the setup needs for it. */
+export interface CustomContest {
+  def: CustomContestDef
+  /** The slots the operator types a value for (`AGE`, `NAME`, `TXT1`). */
+  enteredSlots: string[]
+  /** The station settings its exchange sends from (Rust names). */
+  sentSettings: string[]
+  /** Contacts are logged under it: its exchange and Cabrillo name can no longer change. */
+  exchangeLocked: boolean
+}
+
+/** The WSJT-X contest message an exchange has the shape of. */
+export type FtActivity = 'field_day' | 'na_vhf' | 'ww_digi' | 'rtty_roundup' | 'eu_vhf'
+
+/** ⭐ **The builder's preview of a definition** — every line rendered in Rust by the real compiler,
+ *  session and Cabrillo exporter, so the builder never re-implements a rule. */
+export interface CustomContestPreview {
+  /** Why the definition cannot be saved, verbatim; `''` when it can (nothing below is filled then). */
+  refusal: string
+  /** What this station would send now, the serial as 1: `599 1`. */
+  youSend: string
+  /** Why the contest could not start with the current settings; `''` when it could. */
+  startProblem: string
+  /** One sample Cabrillo `QSO:` line from the real exporter. */
+  sampleQsoLine: string
+  /** The WSJT-X contest message the exchange has the shape of. */
+  ftShape: FtActivity | null
+  /** That match, when the operator chose it (an RST + serial exchange is asked). */
+  ftActivity: FtActivity | null
+  /** What FT8/FT4 really send in this build: `standard` for every custom contest today. */
+  ftMessages: string
+  enteredSlots: string[]
+}
+
+/** Every operator-built contest installed on the station. */
+export async function listCustomContests(): Promise<CustomContest[]> {
+  return invoke<CustomContest[]>('list_custom_contests')
+}
+/** Preview a definition, saved or not. Read-only. */
+export async function previewCustomContest(def: CustomContestDef): Promise<CustomContestPreview> {
+  return invoke<CustomContestPreview>('preview_custom_contest', { def })
+}
+/** Save a new or edited definition. Rejects with the reason (an exchange edit once contacts are logged). */
+export async function saveCustomContest(def: CustomContestDef): Promise<void> {
+  await invoke<null>('save_custom_contest', { def })
+}
+/** Delete a contest. Rejects while it is the picked one; its logged contacts stay on disk. */
+export async function deleteCustomContest(id: string): Promise<void> {
+  await invoke<null>('delete_custom_contest', { id })
+}
+/** A contest's definition file, as text, for the operator to save where they choose. */
+export async function exportCustomContest(id: string): Promise<string> {
+  return invoke<string>('export_custom_contest', { id })
+}
+/** Import a definition file's text. With `ask`, an id already in use rejects with
+ *  `collision:<the installed contest's name>`; ask again with `replace` or `keep_both`. */
+export async function importCustomContest(text: string, onCollision: 'ask' | 'replace' | 'keep_both'): Promise<CustomContestDef> {
+  return invoke<CustomContestDef>('import_custom_contest', { text, onCollision })
 }
 
 /** The same preview for settings not saved yet: the saved settings with `patch`'s fields over them.

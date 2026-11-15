@@ -394,6 +394,7 @@ export function ContestLogHead({
   isWfd,
   slotColumns,
   role,
+  event,
   position = false,
   numbered = false,
 }: {
@@ -402,6 +403,8 @@ export function ContestLogHead({
   slotColumns: readonly ContestFieldSpec[]
   /** The session's role, which a column's caption depends on as its box's does. */
   role?: string
+  /** The session's contest: an operator-built one captions its text columns. */
+  event?: string
   /** One more column after Mode: the position that logged each contact (`ClubLogList`). */
   position?: boolean
   /** One more column before Time: each contact's QSO number (`logIsNumbered`). */
@@ -432,7 +435,7 @@ export function ContestLogHead({
         </>
       ) : (
         slotColumns.map((f) => (
-          <span className="fd-col slot" key={f.key}>{receivedCaption(f, role)}</span>
+          <span className="fd-col slot" key={f.key}>{receivedCaption(f, role, event)}</span>
         ))
       )}
       <span className="fd-col band">{t('fieldDay.log.column.band')}</span>
@@ -4672,6 +4675,7 @@ export function ContestView({
           isWfd={isWfd}
           slotColumns={slotColumns}
           role={fieldDay?.role}
+          event={fieldDay?.event}
           numbered={numbered}
         />
         <div className="fd-log-scroll" ref={logPin.ref} onScroll={logPin.onScroll}>
@@ -4686,6 +4690,7 @@ export function ContestView({
                   rows={editRows}
                   receives={fieldDay?.receives ?? []}
                   role={fieldDay?.role}
+                  event={fieldDay?.event}
                   bands={fieldDay?.bands}
                   onSaving={() => {
                     saving.current = true
