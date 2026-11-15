@@ -817,11 +817,31 @@ pub fn ruleset_ids() -> Vec<&'static str> {
 /// table's own lifetime strategy, so a session that started under an entry keeps the ruleset it
 /// started with whatever is installed after. The lookups read the rules table FIRST, and a rules
 /// file may not use the `custom_` prefix, so neither layer can shadow the other.
-static USER: RwLock<Vec<&'static FdRuleset>> = RwLock::new(Vec::new());
+///
+/// Each entry keeps the definition it was compiled from: the name, the captions and the file
+/// Export writes are the definition's, not the ruleset's.
+static USER: RwLock<Vec<(&'static FdRuleset, custom::CustomDef)>> = RwLock::new(Vec::new());
 
 /// The installed custom rulesets, in install order.
 fn user() -> Vec<&'static FdRuleset> {
-    USER.read().unwrap_or_else(|e| e.into_inner()).clone()
+    let layer = USER.read().unwrap_or_else(|e| e.into_inner());
+    layer.iter().map(|(rs, _)| *rs).collect()
+}
+
+/// ⭐ **The operator's installed contests, as their definitions**, in install order — what the
+/// contest list shows and the contest file is written from.
+pub fn custom_defs() -> Vec<custom::CustomDef> {
+    let layer = USER.read().unwrap_or_else(|e| e.into_inner());
+    layer.iter().map(|(_, def)| def.clone()).collect()
+}
+
+/// The definition of the installed operator contest `id`, or `None`.
+pub fn custom_def(id: &str) -> Option<custom::CustomDef> {
+    let layer = USER.read().unwrap_or_else(|e| e.into_inner());
+    layer
+        .iter()
+        .find(|(rs, _)| rs.event == id)
+        .map(|(_, def)| def.clone())
 }
 
 /// ⭐ **Install operator contests**: each definition is compiled ([`custom::compile`]) and
@@ -834,9 +854,9 @@ pub fn install_custom(defs: &[custom::CustomDef], now_unix: u64) -> Vec<(String,
             Ok(rs) => {
                 let rs: &'static FdRuleset = Box::leak(Box::new(rs));
                 let mut layer = USER.write().unwrap_or_else(|e| e.into_inner());
-                match layer.iter_mut().find(|r| r.event == rs.event) {
-                    Some(slot) => *slot = rs,
-                    None => layer.push(rs),
+                match layer.iter_mut().find(|(r, _)| r.event == rs.event) {
+                    Some(slot) => *slot = (rs, def.clone()),
+                    None => layer.push((rs, def.clone())),
                 }
             }
             Err(why) => refused.push((def.id.clone(), why)),
@@ -850,7 +870,7 @@ pub fn install_custom(defs: &[custom::CustomDef], now_unix: u64) -> Vec<(String,
 pub fn remove_custom(id: &str) -> bool {
     let mut layer = USER.write().unwrap_or_else(|e| e.into_inner());
     let before = layer.len();
-    layer.retain(|r| r.event != id);
+    layer.retain(|(r, _)| r.event != id);
     layer.len() != before
 }
 

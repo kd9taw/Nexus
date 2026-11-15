@@ -1,0 +1,317 @@
+//! ⭐ **An operator's own contest through the app**: saved to `custom-contests.json`, listed,
+//! started, logged and exported; locked against an exchange edit once a journal holds its rows;
+//! imported over a collision; exported with nothing the operator typed; and, once gone, refused
+//! by name instead of running as ARRL Field Day.
+//!
+//! Own process, because the user layer is process-global. Each test uses its own id and token.
+
+use std::path::PathBuf;
+use tempo_app::custom_contests::{self, OnCollision, Store};
+use tempo_app::engine::Engine;
+use tempo_core::fd_rules::custom::{self as core_custom, CustomDef, CustomField, CustomWindow};
+
+/// 2026-11-14T00:00Z.
+const NOW: u64 = 1_794_614_400;
+
+/// A fresh folder under the system temp dir, for one test.
+fn dir(name: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!(
+        "nexus-custom-contests-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).expect("temp dir");
+    d
+}
+
+fn def(id: &str, token: &str, fields: &[&str]) -> CustomDef {
+    CustomDef {
+        format: core_custom::FORMAT.into(),
+        version: core_custom::VERSION,
+        id: id.into(),
+        name: format!("Sprint {id}"),
+        short: String::new(),
+        cabrillo_contest: token.into(),
+        modes: vec!["CW".into()],
+        window: CustomWindow::Weekend {
+            month: 3,
+            weekend: "nth_full".into(),
+            n: 1,
+            start_hour_utc: 14,
+            duration_hours: 4,
+        },
+        exchange: fields
+            .iter()
+            .map(|f| CustomField {
+                field: f.to_string(),
+                label: String::new(),
+            })
+            .collect(),
+        ft_cq: None,
+        ft_roundup: false,
+        dupe: "band".into(),
+        points: Default::default(),
+    }
+}
+
+fn store(d: &std::path::Path) -> Store {
+    let (store, problems) = Store::load(d.join(custom_contests::FILE_NAME), NOW);
+    assert!(problems.is_empty(), "{problems:?}");
+    store
+}
+
+/// An engine on `event`, journaling into `d`, with an age typed for `event`.
+fn engine(d: &std::path::Path, event: &str) -> Engine {
+    let mut e = Engine::new("W9XYZ", "EN52", 0);
+    e.set_fd_log_path(d.join("fieldday_backup_test.adi"));
+    let mut s = e.settings().clone();
+    s.fd_active = true;
+    s.fd_event = event.into();
+    s.contest_qth_state = "IL".into();
+    s.contest_category_operator = "SINGLE-OP".into();
+    s.contest_entered
+        .insert(event.into(), [("AGE".to_string(), "42".to_string())].into());
+    e.apply_settings(s);
+    e
+}
+
+/// ⭐ Save → list → start → log → Cabrillo, end to end; then the exchange locks, and the name
+/// does not.
+#[test]
+fn save_list_start_and_export_then_the_exchange_locks() {
+    let d = dir("e2e");
+    let st = store(&d);
+    let mine = def("custom_app_e2e", "APP-E2E", &["rst", "serial"]);
+    st.save_contest(&mine, &d, NOW).expect("saved");
+    let on_disk = std::fs::read_to_string(d.join(custom_contests::FILE_NAME)).expect("written");
+    assert!(on_disk.contains("\"custom_app_e2e\""), "{on_disk}");
+    let listed = custom_contests::list(&d);
+    let row = listed
+        .iter()
+        .find(|c| c.def.id == "custom_app_e2e")
+        .expect("listed");
+    assert!(!row.exchange_locked, "no contacts yet");
+
+    let mut e = engine(&d, "custom_app_e2e");
+    e.set_mode("fieldday-sp").expect("the contest starts");
+    let fields = [
+        ("RST".to_string(), "599".to_string()),
+        ("NR".to_string(), "7".to_string()),
+    ];
+    assert_eq!(e.contest_log_manual("K1ABC", &fields, "CW", None), Ok(true));
+    e.journal_mark().wait();
+    let cbr = e.export_log("cabrillo").expect("exports");
+    assert!(cbr.contains("CONTEST: APP-E2E"), "{cbr}");
+    assert!(
+        cbr.lines()
+            .any(|l| l.starts_with("QSO:") && l.ends_with("K1ABC 599 7")),
+        "{cbr}"
+    );
+
+    assert!(custom_contests::list(&d)
+        .iter()
+        .any(|c| c.def.id == "custom_app_e2e" && c.exchange_locked));
+    let mut changed = mine.clone();
+    changed.exchange.push(CustomField {
+        field: "cq_zone".into(),
+        label: String::new(),
+    });
+    let err = st
+        .save_contest(&changed, &d, NOW)
+        .expect_err("the exchange is locked");
+    assert!(err.contains("has contacts logged"), "{err}");
+    let mut retoken = mine.clone();
+    retoken.cabrillo_contest = "APP-E2E-NEW".into();
+    assert!(
+        st.save_contest(&retoken, &d, NOW).is_err(),
+        "so is the token its rows are found by"
+    );
+    let mut renamed = mine.clone();
+    renamed.name = "A better name".into();
+    renamed.points.cw = 3;
+    st.save_contest(&renamed, &d, NOW)
+        .expect("name and points stay editable");
+}
+
+/// ⭐ **THE MUST-FIX**: a picked contest that is not installed refuses to start, by name — it
+/// never runs as ARRL Field Day.
+#[test]
+fn a_custom_contest_that_is_gone_refuses_instead_of_running_field_day() {
+    let d = dir("gone");
+    let mut e = engine(&d, "custom_gone");
+    let err = e.set_mode("fieldday-sp").expect_err("refused");
+    assert_eq!(
+        err,
+        "The custom contest 'custom_gone' is not installed (deleted, or its file could not be \
+         read). Pick a contest."
+    );
+    assert!(e.snapshot().field_day.is_none(), "no Field Day session");
+}
+
+/// …and on FT8 the Operate strip's Call CQ and S&P, which open the picked contest's own Running
+/// and S&P, are refused with the same words: nothing goes on the air as Field Day.
+#[test]
+fn ft8_call_cq_and_sp_in_a_custom_contest_that_is_gone_are_refused() {
+    let d = dir("gone-ft8");
+    let mut e = engine(&d, "custom_gone_ft8");
+    let err = e.start_running_with_cq(None).expect_err("Call CQ refused");
+    assert!(err.contains("is not installed"), "{err}");
+    let err = e.start_search_and_pounce().expect_err("S&P refused");
+    assert!(err.contains("is not installed"), "{err}");
+    assert!(e.snapshot().field_day.is_none(), "no Field Day session");
+    assert!(!e.tx_enabled(), "nothing armed");
+}
+
+/// Delete is refused while the contest is the picked one; after, its id is gone.
+#[test]
+fn delete_is_refused_while_picked() {
+    let d = dir("delete");
+    let st = store(&d);
+    st.save_contest(&def("custom_app_delete", "APP-DELETE", &["rst"]), &d, NOW)
+        .expect("saved");
+    let err = st
+        .delete("custom_app_delete", " custom_app_delete ")
+        .expect_err("picked");
+    assert!(err.contains("Pick another contest"), "{err}");
+    st.delete("custom_app_delete", "arrlfd").expect("deleted");
+    assert!(tempo_core::fd_rules::custom_def("custom_app_delete").is_none());
+    assert!(!std::fs::read_to_string(d.join(custom_contests::FILE_NAME))
+        .expect("written")
+        .contains("custom_app_delete"));
+}
+
+/// An import whose id is taken asks; Keep both installs it beside, under a fresh id and token;
+/// Replace replaces.
+#[test]
+fn an_import_collision_asks_then_keeps_both_or_replaces() {
+    let d = dir("import");
+    let st = store(&d);
+    let mine = def("custom_app_import", "APP-IMPORT", &["rst"]);
+    st.save_contest(&mine, &d, NOW).expect("saved");
+    let mut theirs = mine.clone();
+    theirs.points.cw = 5;
+    let text = core_custom::to_file_text(&theirs);
+    let err = st
+        .import(&text, OnCollision::Ask, &d, NOW)
+        .expect_err("asks");
+    assert_eq!(
+        err,
+        format!(
+            "{}Sprint custom_app_import",
+            custom_contests::COLLISION_PREFIX
+        )
+    );
+    let both = st
+        .import(&text, OnCollision::KeepBoth, &d, NOW)
+        .expect("kept both");
+    assert_eq!(both.id, "custom_sprint_custom_app_import");
+    assert_eq!(both.cabrillo_contest, "APP-IMPORT-2");
+    assert_eq!(
+        tempo_core::fd_rules::custom_def("custom_app_import")
+            .expect("still there")
+            .points
+            .cw,
+        1
+    );
+    st.import(&text, OnCollision::Replace, &d, NOW)
+        .expect("replaced");
+    assert_eq!(
+        tempo_core::fd_rules::custom_def("custom_app_import")
+            .expect("replaced")
+            .points
+            .cw,
+        5
+    );
+}
+
+/// ⭐ An exported definition carries nothing the operator typed (the maintainer's ruling on
+/// sharing): the age lives in Settings.
+#[test]
+fn an_export_carries_no_typed_value() {
+    let d = dir("export");
+    let st = store(&d);
+    st.save_contest(
+        &def("custom_app_export", "APP-EXPORT", &["rst", "age"]),
+        &d,
+        NOW,
+    )
+    .expect("saved");
+    let mut e = engine(&d, "custom_app_export");
+    e.set_mode("fieldday-sp")
+        .expect("starts with the typed age");
+    let text = custom_contests::export_text("custom_app_export").expect("exports");
+    assert!(!text.contains("42"), "{text}");
+    assert!(!text.to_ascii_lowercase().contains("entered"), "{text}");
+    assert!(
+        text.contains("\"age\""),
+        "the field is named, its value is not"
+    );
+}
+
+/// A contest file that cannot be read is reported, left as it is, and never written over.
+#[test]
+fn an_unreadable_file_is_left_alone_and_never_overwritten() {
+    let d = dir("unreadable");
+    let path = d.join(custom_contests::FILE_NAME);
+    std::fs::write(&path, "{ not json").expect("written");
+    let (st, problems) = Store::load(path.clone(), NOW);
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    let err = st
+        .save_contest(&def("custom_app_locked", "APP-LOCKED", &["rst"]), &d, NOW)
+        .expect_err("refused");
+    assert!(err.contains("Move it aside first"), "{err}");
+    assert_eq!(std::fs::read_to_string(&path).expect("kept"), "{ not json");
+}
+
+/// Club sync refuses an own contest: every position would need the same definition.
+#[test]
+fn club_sync_refuses_a_custom_contest() {
+    let d = dir("club");
+    store(&d)
+        .save_contest(&def("custom_app_club", "APP-CLUB", &["rst"]), &d, NOW)
+        .expect("saved");
+    let rs = tempo_core::fd_rules::ruleset_by_id(
+        "custom_app_club",
+        tempo_core::fd_rules::CURRENT_RULES_YEAR,
+    )
+    .expect("installed");
+    assert_eq!(
+        tempo_app::fdevent::club_refusal(rs),
+        Some(tempo_app::fdevent::ClubRefusal::Custom)
+    );
+    assert_eq!(
+        tempo_app::fdevent::picker_name("custom_app_club"),
+        "Sprint custom_app_club"
+    );
+}
+
+/// The builder's preview: what this station sends, a real Cabrillo line, the FT8 match — and a
+/// definition refusal verbatim.
+#[test]
+fn the_preview_renders_from_the_real_compiler_session_and_exporter() {
+    let mut settings = Engine::new("W9XYZ", "EN52", 0).settings().clone();
+    settings.contest_qth_state = "IL".into();
+    let mut d = def("custom_app_preview", "APP-PREVIEW", &["rst", "serial"]);
+    d.modes = vec!["CW".into(), "FT8".into()];
+    let p = custom_contests::preview(&d, &settings, NOW);
+    assert_eq!(p.refusal, "");
+    assert_eq!(p.you_send, "599 1");
+    assert!(p.sample_qso_line.starts_with("QSO: 14025 CW "), "{p:?}");
+    assert!(p.sample_qso_line.ends_with("K1ABC 599 1"), "{p:?}");
+    assert_eq!(p.ft_shape, Some(core_custom::FtActivity::RttyRoundup));
+    assert_eq!(p.ft_activity, None, "not asked for");
+    assert_eq!(p.ft_messages, "standard");
+    let mut bad = d.clone();
+    bad.cabrillo_contest = "CQ-WPX-CW".into();
+    assert!(custom_contests::preview(&bad, &settings, NOW)
+        .refusal
+        .contains("use the built-in one"));
+    let mut aged = d.clone();
+    aged.exchange.push(CustomField {
+        field: "age".into(),
+        label: String::new(),
+    });
+    let p = custom_contests::preview(&aged, &settings, NOW);
+    assert!(p.start_problem.contains("Your AGE is empty"), "{p:?}");
+    assert_eq!(p.entered_slots, ["AGE"]);
+}

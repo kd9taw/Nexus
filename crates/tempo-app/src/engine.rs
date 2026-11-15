@@ -20238,11 +20238,21 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 // than refusing the mode, which is the same degradation
                 // `fd_rules::ruleset_by_id`'s own doc describes: the operator loses the
                 // party they picked, not Field Day.
+                //
+                // ⚠️ **Except an operator's own contest, which REFUSES.** One that is not
+                // installed was deleted, or its file could not be read; running it as Field
+                // Day would send a class and section the operator never meant to send, and
+                // log them under Field Day's token.
                 let mut s = match tempo_core::fd_rules::ruleset_by_id(
                     self.settings.fd_event.trim(),
                     tempo_core::fd_rules::CURRENT_RULES_YEAR,
                 ) {
                     Some(rs) => ContestSession::for_ruleset(rs, &self.contest_station_data())?,
+                    None if crate::custom_contests::is_custom_id(&self.settings.fd_event) => {
+                        return Err(crate::custom_contests::not_installed(
+                            &self.settings.fd_event,
+                        ));
+                    }
                     None => ContestSession::field_day(
                         tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event),
                         &self.settings.fd_class,
