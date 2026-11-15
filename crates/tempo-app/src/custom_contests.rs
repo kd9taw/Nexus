@@ -454,6 +454,7 @@ pub fn preview(
             FtMessages::Standard => "standard",
             FtMessages::FieldDay => "field_day",
             FtMessages::NaVhf => "na_vhf",
+            FtMessages::WwDigi => "ww_digi",
         }
         .to_string(),
         entered_slots: rs.entered_slots().into_iter().map(str::to_string).collect(),

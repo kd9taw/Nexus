@@ -343,6 +343,14 @@ fn the_preview_names_the_ft_messages_this_build_sends() {
             "EN52",
         ),
         (
+            "custom_pv_ww",
+            &["grid4"],
+            Some("WW"),
+            "ww_digi",
+            "CQ WW W9XYZ EN52",
+            "EN52",
+        ),
+        (
             "custom_pv_none",
             &["rst", "cq_zone"],
             None,

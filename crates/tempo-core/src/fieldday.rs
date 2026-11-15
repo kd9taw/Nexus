@@ -4175,6 +4175,11 @@ pub enum FtMessages {
     /// A contest WSJT-X has no activity for: the standard messages every FT8/FT4 contact
     /// outside a contest uses — a plain CQ, the grid, a report, `R` and a report, RR73, 73.
     Standard,
+    /// WSJT-X's WW Digi activity (`WW_DIGI`), an operator's own grid contest calling `CQ WW`:
+    /// [`NaVhf`](Self::NaVhf)'s messages with `CQ WW` (genCQMsg, mainwindow.cpp 9518). Tx2 is the
+    /// four-character grid in both (genStdMsgs, 9633-9634), Tx1 is off in both (8238-8248), and
+    /// both roger a grid with `R <grid>` (9111-9116). No shipped contest sends it.
+    WwDigi,
 }
 
 impl FtMessages {
@@ -4191,6 +4196,8 @@ impl FtMessages {
             // mainwindow.cpp 9513 and 9519) and the four-character grid (genStdMsgs, 9633 and
             // 9635).
             Some(FtActivity::NaVhf) => Self::NaVhf,
+            // `WW_DIGI`: the NA VHF messages with `CQ WW` (genCQMsg, 9518; genStdMsgs, 9634).
+            Some(FtActivity::WwDigi) => Self::WwDigi,
             Some(_) | None => Self::Standard,
         }
     }
@@ -4285,19 +4292,21 @@ impl FtMessages {
     }
 
     /// WSJT-X's own number for this activity, the Special Operation Mode its UDP Status carries
-    /// (`NetworkMessage.hpp`: 0 NONE, 1 NA VHF, 3 FIELD DAY; `mainwindow.cpp`'s
+    /// (`NetworkMessage.hpp` 190-201: 0 NONE, 1 NA VHF, 3 FIELD DAY, 5 WW DIGI; `mainwindow.cpp`'s
     /// `statusUpdate` sends `m_specOp` as it is set).
     pub fn special_op(self) -> u8 {
         match self {
             Self::FieldDay => 3,
             Self::NaVhf => 1,
+            Self::WwDigi => 5,
             Self::Standard => 0,
         }
     }
 
     /// The CQ a running station with these messages calls from `mycall` (`genCQMsg`,
     /// mainwindow.cpp 9466-9531): `CQ FD` with `mygrid` as Field Day has always sent it,
-    /// `CQ TEST` in the ARRL VHF contests, and where WSJT-X has no activity the CQ the operator
+    /// `CQ TEST` in the ARRL VHF contests, `CQ WW` in WW Digi, and where WSJT-X has no activity the
+    /// CQ the operator
     /// typed in Tx6, `dir` its direction ("" for a plain CQ), as WSJT-X's normal mode sends its
     /// Tx6; both with `sent_grid`: the contest's own `session_grid` where it exchanges one, else
     /// `mygrid` cut to the four characters WSJT-X sends.
@@ -4319,6 +4328,7 @@ impl FtMessages {
         let (dir, grid) = match self {
             Self::FieldDay => ("FD", mygrid.to_string()),
             Self::NaVhf => ("TEST", sent_grid(session_grid, mygrid)),
+            Self::WwDigi => ("WW", sent_grid(session_grid, mygrid)),
             Self::Standard => (dir, sent_grid(session_grid, mygrid)),
         };
         Msg::Cq {
@@ -4345,7 +4355,9 @@ impl FtMessages {
     pub fn sample_exchange(self, session: &crate::contest::ContestSession, mygrid: &str) -> String {
         match self {
             Self::FieldDay => format!("{} {}", session.field("CLASS"), session.field("SECTION")),
-            Self::NaVhf => crate::qso::air_grid(&sent_grid(session.field("GRID"), mygrid)),
+            Self::NaVhf | Self::WwDigi => {
+                crate::qso::air_grid(&sent_grid(session.field("GRID"), mygrid))
+            }
             Self::Standard => String::new(),
         }
     }
@@ -4574,7 +4586,7 @@ impl FieldDayStation {
     pub fn answer_cq(&mut self, de: &str, grid: &str) {
         let answer = match self.messages {
             FtMessages::FieldDay => self.my_exch_msg(de, false),
-            FtMessages::NaVhf | FtMessages::Standard => self.grid_answer(de),
+            FtMessages::NaVhf | FtMessages::WwDigi | FtMessages::Standard => self.grid_answer(de),
         };
         self.engage(de);
         // The standard messages never carry the runner's grid again, so its CQ's is the one
@@ -4887,7 +4899,7 @@ impl FieldDayStation {
     /// Process the signals decoded this slot and advance the exchange.
     pub fn observe(&mut self, decodes: &[Decode], slot: u64) {
         match self.messages {
-            FtMessages::NaVhf => return self.observe_na_vhf(decodes, slot),
+            FtMessages::NaVhf | FtMessages::WwDigi => return self.observe_na_vhf(decodes, slot),
             FtMessages::Standard => return self.observe_standard(decodes, slot),
             FtMessages::FieldDay => {}
         }
@@ -5055,9 +5067,10 @@ impl FieldDayStation {
         }
     }
 
-    /// [`observe`](Self::observe) in the ARRL VHF contests: WSJT-X 3.0.2's NA VHF Contest
-    /// sequence (`mainwindow.cpp`). A CQ is answered with the grid, because Tx1 is switched
-    /// off and Tx2 carries the grid (8238-8248, 9633); a caller's grid is rogered with mine as
+    /// [`observe`](Self::observe) in the ARRL VHF contests and WW Digi: WSJT-X 3.0.2's NA VHF
+    /// Contest sequence, which WW Digi runs too (`mainwindow.cpp`). A CQ is answered with the
+    /// grid, because Tx1 is switched off and Tx2 carries the grid (8238-8248, 9633-9634); a
+    /// caller's grid is rogered with mine as
     /// `R <grid>` (Tx3, 9111-9116); `R <grid>` is closed with RR73 (Tx4, 9250-9255); and the
     /// runner answers RR73 or RRR with 73 (Tx5, 9210-9215).
     fn observe_na_vhf(&mut self, decodes: &[Decode], slot: u64) {

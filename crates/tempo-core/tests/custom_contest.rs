@@ -235,7 +235,7 @@ fn each_custom_contest_shape_sends_the_messages_its_exchange_matches() {
             FieldDay,
         ),
         ("custom_ft_navhf", &["grid4"], Some("TEST"), false, NaVhf),
-        ("custom_ft_ww", &["grid4"], Some("WW"), false, Standard),
+        ("custom_ft_ww", &["grid4"], Some("WW"), false, WwDigi),
         (
             "custom_ft_ru_serial",
             &["rst", "serial"],
@@ -295,8 +295,13 @@ fn each_custom_contest_shape_sends_the_messages_its_exchange_matches() {
     d.ft_cq = Some("TEST".into());
     d.modes = vec!["FT8".into()];
     assert_eq!(install(&d).ft_activity, Some(FtActivity::NaVhf));
-    // The UDP Status number WSJT-X reports for each activity.
+    let mut d = def("custom_ft_ww", "CLUB-FT-2", &["grid4"]);
+    d.ft_cq = Some("WW".into());
+    d.modes = vec!["FT8".into()];
+    assert_eq!(install(&d).ft_activity, Some(FtActivity::WwDigi));
+    // The UDP Status number WSJT-X reports for each activity (NetworkMessage.hpp 190-201).
     assert_eq!(FtMessages::of_event("custom_ft_navhf").special_op(), 1);
+    assert_eq!(FtMessages::of_event("custom_ft_ww").special_op(), 5);
     assert_eq!(FtMessages::of_event("custom_not_installed"), Standard);
 }
 

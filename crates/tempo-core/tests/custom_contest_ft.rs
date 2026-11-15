@@ -124,6 +124,71 @@ fn a_grid_contest_calling_cq_test_works_a_contact_in_the_na_vhf_messages() {
     assert_eq!(rows(&sp), ["K1ABC rx[GRID=FN42] tx[GRID=EN52]"]);
 }
 
+/// Every over of one contact between a running station and an S&P station, as text: the run's
+/// over is decoded by S&P at `snr`, whose operator double-clicks the first CQ it hears, and back.
+/// `R:` the run's overs, `S:` S&P's, until both are done or `max` overs.
+fn overs(run: &mut FieldDayStation, sp: &mut FieldDayStation, snr: i32, max: u64) -> Vec<String> {
+    let mut out = Vec::new();
+    for slot in 0..max {
+        let (tx, rx, who) = if slot % 2 == 0 {
+            (&mut *run, &mut *sp, "R")
+        } else {
+            (&mut *sp, &mut *run, "S")
+        };
+        let Some(m) = tx.outgoing() else {
+            continue;
+        };
+        let text = m.to_text();
+        out.push(format!("{who}: {text}"));
+        let mut d = heard(&text);
+        d.snr = snr;
+        rx.observe(std::slice::from_ref(&d), slot);
+        if who == "R" && rx.state == tempo_core::fieldday::FdState::Listening {
+            if let tempo_core::message::Msg::Cq { de, grid, .. } =
+                tempo_core::message::Msg::parse(&text)
+            {
+                rx.answer_cq(&de, &grid);
+            }
+        }
+        tx.after_tx();
+        if run.done() && sp.done() {
+            break;
+        }
+    }
+    out
+}
+
+/// WW Digi: the NA VHF messages with `CQ WW`, over for over as WSJT-X's genStdMsgs writes them,
+/// and a real contact through the modem.
+#[test]
+fn a_grid_contest_calling_cq_ww_works_a_contact_in_the_ww_digi_messages() {
+    let rs = install("custom_air_ww", "AIR-WW", &["grid4"], Some("WW"));
+    assert_eq!(FtMessages::for_contest(rs, "FT8"), FtMessages::WwDigi);
+    let mut run = station(rs, true, "K1ABC", "FN42", "", "");
+    let mut sp = station(rs, false, "W9XYZ", "EN52", "", "");
+    assert_eq!(
+        overs(&mut run, &mut sp, -7, 12),
+        [
+            "R: CQ WW K1ABC FN42",
+            "S: K1ABC W9XYZ EN52",
+            "R: W9XYZ K1ABC R FN42",
+            "S: K1ABC W9XYZ RR73",
+            "R: W9XYZ K1ABC 73",
+        ]
+    );
+    assert_eq!(rows(&run), ["W9XYZ rx[GRID=EN52] tx[GRID=FN42]"]);
+    assert_eq!(rows(&sp), ["K1ABC rx[GRID=FN42] tx[GRID=EN52]"]);
+    let mut run = station(rs, true, "K1ABC", "FN42", "", "");
+    let mut sp = station(rs, false, "W9XYZ", "EN52", "", "");
+    run_loopback_fieldday(&mut run, &mut sp, 0.0, 12);
+    assert_eq!(rows(&run), ["W9XYZ rx[GRID=EN52] tx[GRID=FN42]"]);
+    assert_eq!(rows(&sp), ["K1ABC rx[GRID=FN42] tx[GRID=EN52]"]);
+    // Every over packs as WSJT-X's standard message (i3=1).
+    for text in ["CQ WW K1ABC FN42", "K1ABC W9XYZ EN52", "W9XYZ K1ABC R FN42"] {
+        assert_eq!(i3n3(text).map(|(i3, _)| i3), Some(1), "{text}");
+    }
+}
+
 /// The `(i3, n3)` WSJT-X's packer gives `text` (`packjt77.f90` `pack77`), through the port the
 /// transmitter uses; `None` where it has no frame for it.
 fn i3n3(text: &str) -> Option<(u8, u8)> {
@@ -191,7 +256,7 @@ fn sp_answers_no_cq_by_itself(rs: &'static FdRuleset, cqs: &[&str]) {
 }
 
 #[test]
-fn sp_in_a_field_day_or_grid_shaped_contest_answers_no_cq_by_itself() {
+fn sp_in_each_custom_contest_arm_answers_no_cq_by_itself() {
     let fd = install(
         "custom_gate_fd",
         "GATE-FD",
@@ -199,12 +264,15 @@ fn sp_in_a_field_day_or_grid_shaped_contest_answers_no_cq_by_itself() {
         None,
     );
     let vhf = install("custom_gate_navhf", "GATE-NAVHF", &["grid4"], Some("TEST"));
+    let ww = install("custom_gate_ww", "GATE-WW", &["grid4"], Some("WW"));
     let cqs = [
         "CQ FD K1ABC FN42",
         "CQ TEST K1ABC FN42",
+        "CQ WW K1ABC FN42",
         "CQ K1ABC FN42",
         "CQ PJ4/K1ABC",
     ];
     sp_answers_no_cq_by_itself(fd, &cqs);
     sp_answers_no_cq_by_itself(vhf, &cqs);
+    sp_answers_no_cq_by_itself(ww, &cqs);
 }
