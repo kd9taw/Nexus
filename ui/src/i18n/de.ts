@@ -7495,7 +7495,7 @@ export const DE: PartialCatalog = {
   "topbar.tier.wspr.title": "WSPR-Ausbreitungsbaken — im 2-min-Takt. Sendet nach Zeitplan; Sendeanteil in % und Leistung unter Einstellungen ▸ Baken (WSPR & FST4W) einstellen",
   "topbar.tier.q65.title": "Q65 — EME / VHF+-Scatter. Senden und Empfangen. Periode + Submodus unter Einstellungen ▸ Q65",
   "topbar.tier.msk144.title": "MSK144 — Meteorscatter. Sendet nahezu die gesamte Periode (so arbeitet diese Betriebsart). Periode unter Einstellungen ▸ MSK144",
-  "topbar.tier.jt65.title": "JT65 — klassisches EME, 60 s. In diesem Build nur Empfang (Senden ist bis zu einer Korrektur abgeschaltet). Submodus unter Einstellungen ▸ JT65",
+  "topbar.tier.jt65.title": "JT65 — klassisches EME, 60 s. Senden und Empfangen. Submodus unter Einstellungen ▸ JT65",
   "topbar.tier.fst4.title": "FST4 — langsame QSO-Betriebsart für schwache Signale (LF/MF). Senden und Empfangen",
   "topbar.tier.fst4w.title": "FST4W — Baken auf LF/MF. Sendet nach Zeitplan; Sendeanteil in % und Leistung unter Einstellungen ▸ Baken (WSPR & FST4W) einstellen. Gehashte Rufzeichen erscheinen als <...>",
   "topbar.rxOnly.why": "Diese Betriebsart ist in Nexus nur Empfang — sie dekodiert, sendet aber nicht",

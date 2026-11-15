@@ -15839,7 +15839,7 @@ export const EN = {
   'topbar.tier.msk144.title':
     'MSK144 — meteor scatter. Transmits for nearly the whole period (that is how the mode works). Period in Settings ▸ MSK144',
   'topbar.tier.jt65.title':
-    'JT65 — classic EME, 60 s. Receive only in this build (transmit is disabled pending a fix). Submode in Settings ▸ JT65',
+    'JT65 — classic EME, 60 s. Transmit and receive. Submode in Settings ▸ JT65',
   'topbar.tier.fst4.title': 'FST4 — slow weak-signal QSO mode (LF/MF). Transmit and receive',
   'topbar.tier.fst4w.title':
     'FST4W — LF/MF beacons. Transmits on a schedule; set the transmit % and power in Settings ▸ Beacons (WSPR & FST4W). Hashed calls show as <...>',

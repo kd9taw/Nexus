@@ -884,7 +884,7 @@ export const ZH_HANT: PartialCatalog = {
   "topbar.tier.wspr.title": "WSPR 傳播信標——間隔 2 分鐘。按計劃發射；在設定 ▸ 信標（WSPR 與 FST4W）中設定發射百分比與功率",
   "topbar.tier.q65.title": "Q65——EME / VHF+ 散射。可發射與接收。週期 + 子模式在設定 ▸ Q65",
   "topbar.tier.msk144.title": "MSK144——流星散射。幾乎整段週期都在發射（即該模式的工作方式）。週期在設定 ▸ MSK144",
-  "topbar.tier.jt65.title": "JT65——經典 EME，60 秒。本版本僅接收（發射因待修復而禁用）。子模式在設定 ▸ JT65",
+  "topbar.tier.jt65.title": "JT65——經典 EME，60 秒。可發射與接收。子模式在設定 ▸ JT65",
   "topbar.tier.fst4.title": "FST4——慢速弱訊號 QSO 模式（LF/MF）。可發射與接收",
   "topbar.tier.fst4w.title": "FST4W——LF/MF 信標。按計劃發射；在設定 ▸ 信標（WSPR 與 FST4W）中設定發射百分比與功率。雜湊呼號顯示為 <...>",
   "topbar.rxOnly.why": "此模式在 Nexus 中僅接收——可譯碼但不發射",

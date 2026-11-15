@@ -939,7 +939,7 @@ export const IT: PartialCatalog = {
   "topbar.tier.wspr.title": "Beacon di propagazione WSPR — intervalli di 2 min. Trasmette secondo un programma; imposta la % di trasmissione e la potenza in Impostazioni ▸ Beacon (WSPR e FST4W)",
   "topbar.tier.q65.title": "Q65 — EME / scatter VHF+. Trasmette e riceve. Periodo + sottomodo in Impostazioni ▸ Q65",
   "topbar.tier.msk144.title": "MSK144 — meteor scatter. Trasmette per quasi tutto il periodo (è così che funziona il modo). Periodo in Impostazioni ▸ MSK144",
-  "topbar.tier.jt65.title": "JT65 — EME classico, 60 s. Solo ricezione in questa build (trasmissione disattivata in attesa di una correzione). Sottomodo in Impostazioni ▸ JT65",
+  "topbar.tier.jt65.title": "JT65 — EME classico, 60 s. Trasmette e riceve. Sottomodo in Impostazioni ▸ JT65",
   "topbar.tier.fst4.title": "FST4 — modo QSO lento per segnali deboli (LF/MF). Trasmette e riceve",
   "topbar.tier.fst4w.title": "FST4W — beacon LF/MF. Trasmette secondo un programma; imposta la % di trasmissione e la potenza in Impostazioni ▸ Beacon (WSPR e FST4W). I nominativi in hash appaiono come <...>",
   "topbar.rxOnly.why": "In Nexus questo modo è solo in ricezione — decodifica ma non trasmette",
