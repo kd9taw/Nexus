@@ -1,0 +1,33 @@
+{
+  "format": "nexus-custom-contest",
+  "version": 1,
+  "id": "custom_club_wae",
+  "name": "Club WAE Practice",
+  "short": "WAE Prac",
+  "cabrillo_contest": "CLUB-WAE-PRACTICE",
+  "modes": [
+    "CW"
+  ],
+  "window": {
+    "kind": "weekend",
+    "month": 8,
+    "weekend": "nth_full",
+    "n": 2,
+    "start_hour_utc": 0,
+    "duration_hours": 48
+  },
+  "exchange": [
+    {
+      "field": "grid4"
+    },
+    {
+      "field": "grid6"
+    }
+  ],
+  "dupe": "band",
+  "points": {
+    "CW": 1,
+    "PH": 1,
+    "DIG": 1
+  }
+}
