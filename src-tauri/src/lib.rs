@@ -13194,6 +13194,12 @@ struct FdRulesetDto {
     /// when empty, for `entry_classes`' reason.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     sent_settings: Vec<String>,
+    /// ⭐ **The slots whose value the operator TYPES for this contest** (`AGE`, `NAME`, `TXT1`) —
+    /// an own contest's only ([`tempo_core::fd_rules::FdRuleset::entered_slots`]). The setup asks
+    /// for them and saves the answers in `contestEntered`, by contest id. Filled by the PREVIEW
+    /// only and absent when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    entered_slots: Vec<String>,
     /// ⭐ **The optional Cabrillo header lines the sponsor's template writes** (its `headers` and
     /// `entry_headers`: `CATEGORY-POWER`, `EMAIL`, `CLUB`…), so the setup asks only for the entry
     /// declarations this contest's log carries. Filled by the PREVIEW only and absent when empty.
@@ -13210,12 +13216,30 @@ fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
     // `FdEvent::from_code` would have called it ARRL Field Day, reporting a QSO party's
     // banned modes, assistance policy and rules year as Field Day's. The `FdEvent`
     // fallback is what an empty or unknown setting resolves to, unchanged.
+    //
+    // ⚠️ **Except an operator's own contest that is not installed**: it was deleted, or its file
+    // could not be read. Its DTO names the picked id and carries the refusal mode entry gives
+    // (`problem`), and no Field Day facts — the setup's start blocker reads `problem`.
     let event = tempo_core::fieldday::FdEvent::from_code(fd_event);
     let id = fd_event.trim();
-    let rs = tempo_core::fd_rules::ruleset_by_id(id, tempo_core::fd_rules::CURRENT_RULES_YEAR)
-        .unwrap_or_else(|| {
-            tempo_core::fd_rules::ruleset(event, tempo_core::fd_rules::CURRENT_RULES_YEAR)
-        });
+    let found = tempo_core::fd_rules::ruleset_by_id(id, tempo_core::fd_rules::CURRENT_RULES_YEAR);
+    let missing_custom = found.is_none() && tempo_app::custom_contests::is_custom_id(id);
+    let rs = found.unwrap_or_else(|| {
+        tempo_core::fd_rules::ruleset(event, tempo_core::fd_rules::CURRENT_RULES_YEAR)
+    });
+    if missing_custom {
+        return FdRulesetDto {
+            event: id.to_string(),
+            rules_year: 0,
+            banned_modes: Vec::new(),
+            spotting_allowed: true,
+            cluster_allowed: true,
+            spots_rf_only: false,
+            enforcement: String::new(),
+            problem: tempo_app::custom_contests::not_installed(id),
+            ..fd_ruleset_dto("arrlfd")
+        };
+    }
     FdRulesetDto {
         event: rs.event.to_string(),
         rules_year: rs.rules_year,
@@ -13240,6 +13264,7 @@ fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
         event_start_unix: None,
         event_end_unix: None,
         sent_settings: Vec::new(),
+        entered_slots: Vec::new(),
         cabrillo_headers: Vec::new(),
         power_categories: Vec::new(),
     }
@@ -13277,6 +13302,127 @@ fn settings_with_patch(
         fields.extend(patch);
     }
     serde_json::from_value(whole).map_err(|e| e.to_string())
+}
+
+/// ⭐ **The operator's own contests on disk** — `custom-contests.json` beside settings.json, loaded
+/// at startup ([`custom_contests_load_from_disk`]). `None` until then.
+static CUSTOM_CONTESTS: Mutex<Option<tempo_app::custom_contests::Store>> = Mutex::new(None);
+
+/// Where `custom-contests.json` lives: beside settings.json, as `activation.json` does.
+fn custom_contests_path() -> PathBuf {
+    settings_path().with_file_name(tempo_app::custom_contests::FILE_NAME)
+}
+
+/// The folder the contest journals live in (beside settings.json) — what the edit lock reads.
+fn contest_journal_dir() -> PathBuf {
+    settings_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Load and install the operator's own contests. MUST run after [`fd_rules_load_from_disk`]:
+/// compiling one reads the rules table, and the first read locks the table in. Each problem is
+/// logged once; an unreadable file is left as it is, and nothing is written over it.
+fn custom_contests_load_from_disk() {
+    let (store, problems) =
+        tempo_app::custom_contests::Store::load(custom_contests_path(), now_unix().max(0) as u64);
+    for p in problems {
+        tempo_core::applog::error("startup", &format!("custom contests: {p}"));
+    }
+    *CUSTOM_CONTESTS.lock().unwrap_or_else(|e| e.into_inner()) = Some(store);
+}
+
+/// ⭐ **Run `f` on the loaded store, holding its lock for the WHOLE call.** Every command that
+/// changes the operator's contests goes through here, so two of them never interleave: each
+/// installs and writes the file under the one lock. (They are async commands; with the lock
+/// dropped between the install and the write, two saves wrote the same temporary file and the
+/// later write could leave out the contest the other had just saved.)
+///
+/// The store is loaded here if nothing loaded it yet (a command before startup finished).
+fn with_custom_contests<R>(
+    slot: &Mutex<Option<tempo_app::custom_contests::Store>>,
+    path: PathBuf,
+    f: impl FnOnce(&mut tempo_app::custom_contests::Store) -> R,
+) -> R {
+    let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+    let store = slot.get_or_insert_with(|| {
+        tempo_app::custom_contests::Store::load(path, now_unix().max(0) as u64).0
+    });
+    f(store)
+}
+
+/// [`with_custom_contests`] on the app's own store and file.
+fn custom_contests<R>(f: impl FnOnce(&mut tempo_app::custom_contests::Store) -> R) -> R {
+    with_custom_contests(&CUSTOM_CONTESTS, custom_contests_path(), f)
+}
+
+/// ⭐ **The operator's own contests**, with what the setup needs for each (the slots to type,
+/// the settings it sends from, whether contacts lock its exchange).
+#[tauri::command]
+fn list_custom_contests() -> Vec<tempo_app::custom_contests::CustomContestDto> {
+    custom_contests(|_| tempo_app::custom_contests::list(&contest_journal_dir()))
+}
+
+/// ⭐ **The entries of the contest file this version cannot use** (a later version's, or one a
+/// newer rules download now refuses), each with why. They stay on disk through every save; the
+/// list shows them so the operator knows, and Delete removes one.
+#[tauri::command]
+fn list_unusable_custom_contests() -> Vec<tempo_app::custom_contests::UnusableContestDto> {
+    custom_contests(|store| store.unusable())
+}
+
+/// ⭐ **The builder's preview of a definition** — the refusal, what this station would send, a
+/// sample Cabrillo line and the FT8/FT4 match, all rendered by the real compiler, session and
+/// exporter. Read-only: nothing is installed or written.
+#[tauri::command(async)]
+fn preview_custom_contest(
+    state: State<'_, SharedEngine>,
+    def: tempo_core::fd_rules::custom::CustomDef,
+) -> tempo_app::custom_contests::CustomPreview {
+    let settings = engine_lock(&state).settings().clone();
+    tempo_app::custom_contests::preview(&def, &settings, now_unix().max(0) as u64)
+}
+
+/// Save a new or edited definition: installed, then the whole list written. An edit that would
+/// change the exchange or Cabrillo contest name of a contest with logged contacts is refused.
+#[tauri::command(async)]
+fn save_custom_contest(def: tempo_core::fd_rules::custom::CustomDef) -> Result<(), String> {
+    custom_contests(|store| {
+        store.save_contest(&def, &contest_journal_dir(), now_unix().max(0) as u64)
+    })
+}
+
+/// Delete a contest — refused while it is the picked one. Its journals stay on disk.
+#[tauri::command(async)]
+fn delete_custom_contest(state: State<'_, SharedEngine>, id: String) -> Result<(), String> {
+    let picked = engine_lock(&state).settings().fd_event.clone();
+    custom_contests(|store| store.delete(id.trim(), &picked))
+}
+
+/// The definition file of contest `id`, as text — the definition and nothing else. The UI saves
+/// it (as text, so a remote computer saves it where its operator sits).
+#[tauri::command(async)]
+fn export_custom_contest(id: String) -> Result<String, String> {
+    custom_contests(|_| tempo_app::custom_contests::export_text(id.trim()))
+}
+
+/// Import a definition file's `text`. With `onCollision` `ask`, an id already in use is refused
+/// as `collision:<the installed contest's name>`, and the UI asks again with `replace` or
+/// `keep_both`. Returns the definition as installed.
+#[tauri::command(async)]
+fn import_custom_contest(
+    text: String,
+    on_collision: tempo_app::custom_contests::OnCollision,
+) -> Result<tempo_core::fd_rules::custom::CustomDef, String> {
+    custom_contests(|store| {
+        store.import(
+            &text,
+            on_collision,
+            &contest_journal_dir(),
+            now_unix().max(0) as u64,
+        )
+    })
 }
 
 /// One contest's running-or-next window, for the contest setup's "this week first" list.
@@ -13341,6 +13487,7 @@ fn fd_ruleset_preview_of(settings: &Settings) -> FdRulesetDto {
         dto.soapbox = rs.cabrillo_soapbox;
         dto.band_categories = owned(rs.cabrillo_band_categories);
         dto.sent_settings = owned(&rs.sent_settings());
+        dto.entered_slots = owned(&rs.entered_slots());
         dto.cabrillo_headers = rs
             .cabrillo_headers
             .iter()
@@ -51452,6 +51599,9 @@ pub fn run() {
     // snapshot and whoever touches the table first locks the data in for the session.
     fd_rules_load_from_disk();
 
+    // The operator's own contests, which compile against the rules table just activated.
+    custom_contests_load_from_disk();
+
     // ⭐ Hand the contest scorer the country file. CQ WW's country multiplier and both CQ
     // contests' QSO points are functions of WHERE a callsign is, and `tempo-core` cannot
     // ask `propagation` (that dependency runs the other way, so calling it would be a
@@ -54372,6 +54522,13 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         get_fd_ruleset,
         preview_fd_ruleset,
         contest_windows,
+        list_custom_contests,
+        list_unusable_custom_contests,
+        preview_custom_contest,
+        save_custom_contest,
+        delete_custom_contest,
+        export_custom_contest,
+        import_custom_contest,
         get_tle_status,
         fetch_tles_now,
         import_tles,
@@ -57622,10 +57779,104 @@ mod tests {
                 .find(|c| c.id == "ilqp")
                 .map(|c| (c.start_unix, c.end_unix))
         };
-        assert_eq!(super::contest_windows_at(w.start_unix).len(), 22);
+        // The rules data's own (19 plus the three WAE rows); an operator contest another test
+        // installed is not one of them.
+        let shipped = super::contest_windows_at(w.start_unix)
+            .into_iter()
+            .filter(|c| !c.id.starts_with("custom_"))
+            .count();
+        assert_eq!(shipped, 22);
         assert_eq!(at(w.start_unix + 60), Some((w.start_unix, w.end_unix)));
         let next = rs.event_window(2027);
         assert_eq!(at(w.end_unix), Some((next.start_unix, next.end_unix)));
+    }
+
+    /// ⭐ **Concurrent saves never lose one.** Sixteen threads each save their own contest through
+    /// the store the commands use; every one succeeds and the file holds all sixteen.
+    #[test]
+    fn concurrent_custom_contest_saves_all_reach_the_file() {
+        static SLOT: std::sync::Mutex<Option<tempo_app::custom_contests::Store>> =
+            std::sync::Mutex::new(None);
+        let dir = std::env::temp_dir().join(format!("nexus-cc-concurrent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join(tempo_app::custom_contests::FILE_NAME);
+        let handles: Vec<_> = (0..16)
+            .map(|n| {
+                let (path, dir) = (path.clone(), dir.clone());
+                std::thread::spawn(move || {
+                    let def: tempo_core::fd_rules::custom::CustomDef = serde_json::from_value(
+                        serde_json::json!({"format": "nexus-custom-contest", "version": 1,
+                            "id": format!("custom_tauri_conc_{n}"), "name": format!("Conc {n}"),
+                            "cabrillo_contest": format!("TAURI-CONC-{n}"), "modes": ["CW"],
+                            "window": {"kind": "weekend", "month": 3, "weekend": "last_full",
+                                       "start_hour_utc": 0, "duration_hours": 4},
+                            "exchange": [{"field": "rst"}], "dupe": "band"}),
+                    )
+                    .expect("a definition");
+                    super::with_custom_contests(&SLOT, path, |store| {
+                        store.save_contest(&def, &dir, 1_794_614_400)
+                    })
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("joined").expect("saved");
+        }
+        let text = std::fs::read_to_string(&path).expect("written");
+        for n in 0..16 {
+            assert!(
+                text.contains(&format!("\"custom_tauri_conc_{n}\"")),
+                "{n} lost:\n{text}"
+            );
+        }
+    }
+
+    /// ⭐ An operator's own contest is listed with its window, as every rules-data contest is.
+    #[test]
+    fn contest_windows_lists_a_custom_contest() {
+        let def: tempo_core::fd_rules::custom::CustomDef = serde_json::from_str(
+            r#"{"format": "nexus-custom-contest", "version": 1, "id": "custom_tauri_windows",
+                "name": "Windows", "cabrillo_contest": "TAURI-WINDOWS", "modes": ["CW"],
+                "window": {"kind": "once", "start_utc": "2026-12-05T14:00Z", "duration_hours": 4},
+                "exchange": [{"field": "rst"}], "dupe": "band"}"#,
+        )
+        .expect("a definition");
+        let refused = tempo_core::fd_rules::install_custom(&[def], 1_794_614_400);
+        assert!(refused.is_empty(), "{refused:?}");
+        let w = super::contest_windows_at(1_794_614_400)
+            .into_iter()
+            .find(|c| c.id == "custom_tauri_windows")
+            .expect("listed");
+        assert_eq!(
+            (w.start_unix, w.end_unix),
+            (1_796_479_200, 1_796_479_200 + 4 * 3600)
+        );
+    }
+
+    /// ⭐ **THE MUST-FIX, on the preview the setup reads**: a picked custom contest that is not
+    /// installed names itself and carries the refusal, and no Field Day facts.
+    #[test]
+    fn the_preview_of_a_custom_contest_that_is_gone_refuses_and_is_not_field_day() {
+        let s = tempo_app::settings::Settings {
+            fd_event: "custom_tauri_gone".into(),
+            ..Default::default()
+        };
+        let dto = super::fd_ruleset_preview_of(&s);
+        assert_eq!(dto.event, "custom_tauri_gone");
+        assert_eq!(
+            dto.problem,
+            "The custom contest 'custom_tauri_gone' is not installed (deleted, or its file could \
+             not be read). Pick a contest."
+        );
+        assert!(dto.exchange.is_empty() && dto.role.is_empty());
+        assert_eq!(dto.event_start_unix, None);
+        // A shipped id the rules do not carry keeps today's Field Day degradation.
+        let s = tempo_app::settings::Settings {
+            fd_event: "nosuchparty".into(),
+            ..Default::default()
+        };
+        assert_eq!(super::fd_ruleset_preview_of(&s).event, "arrlfd");
     }
 
     /// ⭐ **Settings is offered the entry declarations the picked contest's sponsor names**, by

@@ -56,7 +56,9 @@ use crate::contest::{
 };
 use crate::fieldday::FdEvent;
 use std::collections::BTreeMap;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
+
+pub mod custom;
 
 /// The bundled parameters seed — the floor a downloaded file must beat, and
 /// what [`ruleset`] activates when nothing (valid) was installed.
@@ -295,6 +297,10 @@ pub struct WindowRule {
     pub start_hour_utc: u64,
     pub duration_hours: u64,
     pub overrides: &'static [(u16, EventWindow)],
+    /// ⭐ **A contest that runs ONCE** — an operator's one-date contest ([`custom`]). When set it
+    /// is the window for every year, so a contest that has run reads as past and never as next
+    /// year's. `None` for every ruleset a rules file carries.
+    pub once: Option<EventWindow>,
 }
 
 /// The complete rules for one Field Day event in one year — the single source
@@ -526,6 +532,16 @@ pub struct FdRuleset {
     /// `PEI` and `NWT`, and Canada Post (and the sponsor's LOCATION list) write `PE` and
     /// `NT`. Empty for every contest that names none.
     pub location_aliases: &'static [(&'static str, &'static str)],
+    /// ⭐ **The operator built this contest** ([`custom`]) — it lives in the user layer, not the
+    /// rules file. `false` for every shipped and downloaded ruleset.
+    pub custom: bool,
+    /// The WSJT-X contest message an operator's contest's exchange has the SHAPE of
+    /// ([`custom::ft_shape`]), or `None`. Always `None` for a shipped or downloaded ruleset.
+    ///
+    /// ⚠️ **Computed, and read by nothing on the air yet.** FT8/FT4 send standard messages for
+    /// every custom contest ([`FtMessages::for_contest`](crate::fieldday::FtMessages::for_contest)
+    /// never looks here); the builder only names the match.
+    pub ft_activity: Option<custom::FtActivity>,
 }
 
 impl FdRuleset {
@@ -659,6 +675,9 @@ impl FdRuleset {
     /// the weekday math interprets [`WindowRule`] (which weekend / start hour /
     /// duration are DATA; the full-weekend Saturday walk stays code).
     pub fn event_window(&self, year: u16) -> EventWindow {
+        if let Some(w) = self.window.once {
+            return w;
+        }
         if let Some(&(_, w)) = self.window.overrides.iter().find(|(y, _)| *y == year) {
             return w;
         }
@@ -719,6 +738,20 @@ impl FdRuleset {
         }
     }
 
+    /// ⭐ **The slots whose sent value the operator types for this contest** — every slot a role
+    /// sends from [`SENT_SOURCE_ENTERED`], in field order. Empty for every shipped contest. A
+    /// setup screen asks for these beside [`sent_settings`](Self::sent_settings), and stores the
+    /// answers per contest in Settings, never in the contest's definition file.
+    pub fn entered_slots(&self) -> Vec<&'static str> {
+        self.exchange
+            .fields
+            .iter()
+            .filter(|f| f.source == SENT_SOURCE_ENTERED)
+            .filter(|f| self.exchange.roles.iter().any(|r| r.sends.contains(&f.key)))
+            .map(|f| f.key)
+            .collect()
+    }
+
     /// ⭐ **The settings this contest's exchange sends from**: every `setting:` source, and every
     /// input of a `derived:` one, among the slots any role sends, in field order and each once.
     /// What a setup screen asks for before the contest starts, so it asks for this contest's and
@@ -765,15 +798,80 @@ impl FdRuleset {
     }
 }
 
-/// The rules-file ids of every contest the loaded table holds, in its order, each once.
+/// The rules-file ids of every contest the loaded table holds, in its order, each once — then
+/// the operator's own contests ([`custom`]), in the order they were installed.
 pub fn ruleset_ids() -> Vec<&'static str> {
     let mut ids: Vec<&'static str> = Vec::new();
-    for r in table().rulesets.iter() {
+    for r in table().rulesets.iter().chain(user().iter()) {
         if !ids.contains(&r.event) {
             ids.push(r.event);
         }
     }
     ids
+}
+
+/// ⭐ **The operator's own contests** ([`custom`]) — the USER layer beside the rules table.
+///
+/// Not the `OnceLock`: a contest is built, edited and deleted while the app runs, so this layer
+/// is swappable where the rules table is not. Each entry is a leaked `&'static`, the rules
+/// table's own lifetime strategy, so a session that started under an entry keeps the ruleset it
+/// started with whatever is installed after. The lookups read the rules table FIRST, and a rules
+/// file may not use the `custom_` prefix, so neither layer can shadow the other.
+///
+/// Each entry keeps the definition it was compiled from: the name, the captions and the file
+/// Export writes are the definition's, not the ruleset's.
+static USER: RwLock<Vec<(&'static FdRuleset, custom::CustomDef)>> = RwLock::new(Vec::new());
+
+/// The installed custom rulesets, in install order.
+fn user() -> Vec<&'static FdRuleset> {
+    let layer = USER.read().unwrap_or_else(|e| e.into_inner());
+    layer.iter().map(|(rs, _)| *rs).collect()
+}
+
+/// ⭐ **The operator's installed contests, as their definitions**, in install order — what the
+/// contest list shows and the contest file is written from.
+pub fn custom_defs() -> Vec<custom::CustomDef> {
+    let layer = USER.read().unwrap_or_else(|e| e.into_inner());
+    layer.iter().map(|(_, def)| def.clone()).collect()
+}
+
+/// The definition of the installed operator contest `id`, or `None`.
+pub fn custom_def(id: &str) -> Option<custom::CustomDef> {
+    let layer = USER.read().unwrap_or_else(|e| e.into_inner());
+    layer
+        .iter()
+        .find(|(rs, _)| rs.event == id)
+        .map(|(_, def)| def.clone())
+}
+
+/// ⭐ **Install operator contests**: each definition is compiled ([`custom::compile`]) and
+/// replaces the installed contest with its id, or joins the layer. A definition that is refused
+/// is left out and reported as `(id, why)`; the others install. `now_unix` bounds a one-off date.
+pub fn install_custom(defs: &[custom::CustomDef], now_unix: u64) -> Vec<(String, String)> {
+    let mut refused = Vec::new();
+    for def in defs {
+        match custom::compile(def, now_unix) {
+            Ok(rs) => {
+                let rs: &'static FdRuleset = Box::leak(Box::new(rs));
+                let mut layer = USER.write().unwrap_or_else(|e| e.into_inner());
+                match layer.iter_mut().find(|(r, _)| r.event == rs.event) {
+                    Some(slot) => *slot = (rs, def.clone()),
+                    None => layer.push((rs, def.clone())),
+                }
+            }
+            Err(why) => refused.push((def.id.clone(), why)),
+        }
+    }
+    refused
+}
+
+/// Remove the operator contest `id` from the layer; `false` when none was installed. A session
+/// already running under it keeps its ruleset.
+pub fn remove_custom(id: &str) -> bool {
+    let mut layer = USER.write().unwrap_or_else(|e| e.into_inner());
+    let before = layer.len();
+    layer.retain(|(r, _)| r.event != id);
+    layer.len() != before
 }
 
 /// The active ruleset for an event + year: the newest `rules_year` ≤ `year`,
@@ -804,6 +902,7 @@ pub fn ruleset_by_id(event_id: &str, year: u16) -> Option<&'static FdRuleset> {
         .filter(|r| r.rules_year <= year)
         .max_by_key(|r| r.rules_year)
         .or_else(|| mine().max_by_key(|r| r.rules_year))
+        .or_else(|| user().into_iter().find(|r| r.event == event_id))
 }
 
 /// The active ruleset whose ADIF `CONTEST_ID` is `contest_id` (trimmed, in any case) — the one
@@ -822,6 +921,11 @@ pub fn ruleset_by_contest_id(contest_id: &str, year: u16) -> Option<&'static FdR
         .filter(|r| r.rules_year <= year)
         .max_by_key(|r| r.rules_year)
         .or_else(|| mine().max_by_key(|r| r.rules_year))
+        .or_else(|| {
+            user()
+                .into_iter()
+                .find(|r| r.contest_id.eq_ignore_ascii_case(id))
+        })
 }
 
 /// The ARRL/RAC section master list — the section universe the worked-sections
@@ -1045,6 +1149,9 @@ struct RulesTable {
     generated: &'static str,
     rulesets: &'static [&'static FdRuleset],
     sections: &'static [Section],
+    /// The two derived domains, kept so an operator's contest ([`custom`]) resolves
+    /// `fd_sections` to the very domain the shipped rulesets hold.
+    reserved: Reserved,
 }
 
 static TABLE: OnceLock<RulesTable> = OnceLock::new();
@@ -1571,6 +1678,12 @@ struct FieldBlockSpec {
 const SENT_SOURCE_CONSTANT: &str = "constant";
 /// A sent slot filled from the session's serial counter.
 const SENT_SOURCE_SERIAL: &str = "serial";
+/// ⭐ **A sent slot whose value the operator TYPES for this contest** — an age, a name, a free
+/// text field. Only an operator's own contest ([`custom`]) may use it: the value lives in the
+/// operator's Settings per contest, and a rules file naming it would ask every install for a
+/// value no setup screen of a shipped contest asks for. So a rules file is refused it by name
+/// (its schema-2 vocabulary is unchanged).
+pub const SENT_SOURCE_ENTERED: &str = "entered";
 
 /// ⭐ **The settings a rules file may name as the source of a sent slot** (spec §3.4).
 ///
@@ -1649,9 +1762,10 @@ const SENT_SLOT_DERIVATIONS: &[(&str, &[&str])] = &[
 ];
 
 /// Is `s` a source this build can honour for a slot some role sends?
-fn is_sent_source(s: &str) -> bool {
+fn is_sent_source(s: &str, custom: bool) -> bool {
     match s {
         SENT_SOURCE_CONSTANT | SENT_SOURCE_SERIAL => true,
+        SENT_SOURCE_ENTERED => custom,
         _ => match s.split_once(':') {
             Some(("setting", name)) => SENT_SLOT_SETTINGS.contains(&name),
             // A derivation is named, never blank — and every one of ITS inputs is a
@@ -2168,955 +2282,20 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
     let mut seen_events: Vec<(&str, u16)> = Vec::new();
     for r in &spec.rulesets {
         let tag = format!("ruleset {}/{}", r.event, r.rules_year);
-        if !is_event_id(&r.event) {
-            return Err(format!("{tag}: event id is not ^[a-z][a-z0-9_]*$"));
-        }
         if seen_events.contains(&(r.event.as_str(), r.rules_year)) {
             return Err(format!("{tag}: duplicate event+year"));
         }
         seen_events.push((r.event.as_str(), r.rules_year));
-        if r.contest_id.is_empty() {
-            return Err(format!("{tag}: empty contest_id"));
-        }
-        // The same four checks as before the block landed, on the block's own
-        // paths. Messages are deliberately unchanged: they are what the corpus
-        // fixtures match on.
-        if !matches!(
-            r.scoring.model.as_str(),
-            "powered_multiplier" | "objectives" | "none"
-        ) {
+        // ⭐ `custom_` belongs to the operator's own contests ([`custom`]), which live in a
+        // layer of their own. A rules file that used it could make an operator's contest
+        // unreachable: the lookups read this table first.
+        if r.event.starts_with(custom::ID_PREFIX) {
             return Err(format!(
-                "{tag}: unknown scoring model {:?}",
-                r.scoring.model
+                "{tag}: the {:?} prefix is reserved for the operator's own contests",
+                custom::ID_PREFIX
             ));
         }
-        // ⭐ EXACTLY ONE point table is live. `relation_points: []` and `band_points: []`
-        // are each the explicit "this event does not price that way", and what every
-        // contest before CQ WW writes is both of them empty plus a full mode-class map.
-        // Two populated tables would leave a reader to guess which one scored the log,
-        // and there is no honest per-mode-class number for a contest whose points depend
-        // on where the other station is or on which band it was worked.
-        //
-        // The order here is the order the message names them in, and it is pinned by the
-        // corpus fixture that predates the third table.
-        let populated: Vec<&str> = [
-            (!r.scoring.relation_points.is_empty()).then_some("relation_points"),
-            (!r.scoring.points_by_mode_class.is_empty()).then_some("points_by_mode_class"),
-            (!r.scoring.band_points.is_empty()).then_some("band_points"),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
-        if populated.len() > 1 {
-            let named = match populated.as_slice() {
-                [a, b] => format!("both {a} and {b}"),
-                parts => parts.join(", "),
-            };
-            return Err(format!(
-                "{tag}: {named} are populated (a contest has ONE point table)"
-            ));
-        }
-        if r.scoring.relation_points.is_empty() && r.scoring.band_points.is_empty() {
-            for k in ["PH", "CW", "DIG"] {
-                if !r.scoring.points_by_mode_class.contains_key(k) {
-                    return Err(format!("{tag}: points_by_mode_class misses {k}"));
-                }
-            }
-        }
-        // ⭐ The BAND-GROUP table's shape. There is deliberately no COVERAGE check to
-        // match `relation_points`' one below: every contact has exactly one relation, so a
-        // missing relation arm is a hole; a band is not a closed set a rules file
-        // enumerates, and ARRL VHF's own table names the seven bands it scores and is
-        // silent about the rest. What must hold instead is that the table is a LOOKUP —
-        // one answer per band, or none.
-        {
-            let mut seen: Vec<String> = Vec::new();
-            for g in &r.scoring.band_points {
-                if g.bands.is_empty() {
-                    return Err(format!(
-                        "{tag}: a band_points row names no bands (an empty list would be a \
-                         catch-all, and it would price the bands this contest does not score)"
-                    ));
-                }
-                for b in &g.bands {
-                    if b.trim().is_empty() {
-                        return Err(format!("{tag}: band_points names an empty band label"));
-                    }
-                    let up = b.trim().to_ascii_uppercase();
-                    if seen.contains(&up) {
-                        return Err(format!(
-                            "{tag}: band {b:?} is priced by two band_points rows (the table \
-                             is a lookup, so a band in two rows has no answer)"
-                        ));
-                    }
-                    seen.push(up);
-                }
-            }
-        }
-        if !r.scoring.relation_points.is_empty() {
-            // ⚠️ The VOCABULARY first, then the coverage. A misspelt relation is also a
-            // missing one, and reporting the coverage failure for a row that is simply
-            // typed wrong sends the reader to the wrong half of the file.
-            for x in &r.scoring.relation_points {
-                if !matches!(
-                    x.relation.as_str(),
-                    "same_country"
-                        | "within_north_america"
-                        | "same_continent"
-                        | "different_continent"
-                ) {
-                    return Err(format!("{tag}: unknown relation {:?}", x.relation));
-                }
-            }
-            // ⭐ The guard the source verification earned. §14 of the design spec carried
-            // CQ WPX's two band groups and its North American exception and MISSED the
-            // third arm — *"Contacts between stations in the same country are worth 1
-            // point regardless of band"* — which would have scored every domestic contact
-            // at zero, silently, on a 48-hour contest. A relation the table names nothing
-            // for is exactly that defect, so the loader refuses it BY NAME.
-            //
-            // `within_north_america` is deliberately NOT required: it is an exception to
-            // `same_continent`, and a contest that does not grant it falls back to the arm
-            // it would have overridden (`PointsRule::points_for`).
-            for want in ["same_country", "same_continent", "different_continent"] {
-                if !r.scoring.relation_points.iter().any(|x| x.relation == want) {
-                    return Err(format!(
-                        "{tag}: relation_points declares no {want} row (every contact has \
-                         exactly one relation, so a missing arm scores those contacts at \
-                         zero without saying so)"
-                    ));
-                }
-            }
-        }
-        // `none` is the state QSO parties: QSO points × geographic multipliers and
-        // nothing after. It is the only model that may declare no power tiers, and it
-        // must declare none — a tier list under a model that applies no power
-        // multiplier is a claim the scorer would silently ignore, which is exactly how
-        // an event ends up scoring by a rule nobody can find in the file.
-        if r.scoring.model == "none" {
-            if !r.scoring.power_tiers.is_empty() {
-                return Err(format!(
-                    "{tag}: scoring model \"none\" declares power_tiers \
-                     (a model with no post-multiplier applies none)"
-                ));
-            }
-        } else if r.scoring.power_tiers.is_empty() {
-            return Err(format!("{tag}: empty power_tiers"));
-        }
-        if !r.scoring.power_tiers.windows(2).all(|w| w[0] < w[1]) {
-            return Err(format!("{tag}: power_tiers not strictly ascending"));
-        }
-        // A dupe rule that does not key on the callsign is not a dupe rule.
-        // Every contest in the researched set keys on it, so a file saying
-        // otherwise is a mistake far more often than it is a new contest shape
-        // — and the failure mode if it is wrong is a log full of contacts that
-        // should have been refused as dupes.
-        if !r.dupe.by_call {
-            return Err(format!(
-                "{tag}: dupe.by_call is false (a dupe rule must key on the callsign)"
-            ));
-        }
-        // File-declared domains. `arrl_sections` / `fd_sections` are DERIVED
-        // from the top-level section list (Ruling B0-C) — a file declaring one
-        // would be a second copy of a list it cannot fully represent, since a
-        // Domain value is a (code, label) pair and a Section also carries a
-        // division.
-        let mut domain_ids: Vec<&str> = Vec::new();
-        for d in &r.domains {
-            if !is_domain_id(&d.id) {
-                return Err(format!(
-                    "{tag}: domain id {:?} is not ^[a-z][a-z0-9_]*$",
-                    d.id
-                ));
-            }
-            if RESERVED_DOMAIN_IDS.contains(&d.id.as_str()) {
-                return Err(format!(
-                    "{tag}: domain id {:?} is reserved (derived from the section list)",
-                    d.id
-                ));
-            }
-            if domain_ids.contains(&d.id.as_str()) {
-                return Err(format!("{tag}: duplicate domain id {:?}", d.id));
-            }
-            domain_ids.push(&d.id);
-            if !is_adif_tag(&d.adif.rcvd) || !is_adif_tag(&d.adif.sent) {
-                return Err(format!("{tag}: domain {} has a malformed adif tag", d.id));
-            }
-            if d.values.is_empty() {
-                return Err(format!("{tag}: domain {} has no values", d.id));
-            }
-            let mut codes: Vec<&str> = Vec::new();
-            for v in &d.values {
-                if v.code.is_empty() || v.code != v.code.to_ascii_uppercase() {
-                    return Err(format!(
-                        "{tag}: domain {} code {:?} not uppercase",
-                        d.id, v.code
-                    ));
-                }
-                if codes.contains(&v.code.as_str()) {
-                    return Err(format!(
-                        "{tag}: domain {} duplicate code {:?}",
-                        d.id, v.code
-                    ));
-                }
-                codes.push(&v.code);
-                if v.label.is_empty() {
-                    return Err(format!(
-                        "{tag}: domain {} code {} has no label",
-                        d.id, v.code
-                    ));
-                }
-            }
-        }
-        // The exchange block (§2.5). Every rule here is a rules bug that must
-        // be a REFUSAL rather than a runtime lookup miss on the air.
-        let x = &r.exchange;
-        if x.name.is_empty() {
-            return Err(format!("{tag}: exchange has no name"));
-        }
-        let mut keys: Vec<&str> = Vec::new();
-        for f in &x.fields {
-            if f.key.is_empty() || f.key != f.key.to_ascii_uppercase() {
-                return Err(format!("{tag}: exchange slot {:?} not uppercase", f.key));
-            }
-            if keys.contains(&f.key.as_str()) {
-                return Err(format!("{tag}: duplicate exchange slot {:?}", f.key));
-            }
-            keys.push(&f.key);
-            if !is_adif_tag(&f.adif.rcvd) || !is_adif_tag(&f.adif.sent) {
-                return Err(format!("{tag}: slot {} has a malformed adif tag", f.key));
-            }
-            check_kind(r, &tag, &f.key, &f.kind)?;
-        }
-        if x.roles.is_empty() {
-            return Err(format!("{tag}: exchange has no roles"));
-        }
-        let mut role_ids: Vec<&str> = Vec::new();
-        let last_role = x.roles.last().expect("roles checked non-empty above");
-        for role in &x.roles {
-            if role_ids.contains(&role.id.as_str()) {
-                return Err(format!("{tag}: duplicate role id {:?}", role.id));
-            }
-            role_ids.push(&role.id);
-            for key in role
-                .sends
-                .iter()
-                .chain(&role.receives)
-                .chain(&role.constant_sent)
-            {
-                if !keys.contains(&key.as_str()) {
-                    return Err(format!(
-                        "{tag}: role {:?} names undeclared slot {key:?}",
-                        role.id
-                    ));
-                }
-            }
-            // constant_sent constrains something I actually transmit. Read the
-            // other way round it would refuse legal contacts, because every
-            // station I work legitimately sends a different value.
-            for key in &role.constant_sent {
-                if !role.sends.contains(key) {
-                    return Err(format!(
-                        "{tag}: role {:?} constant_sent {key:?} is not in sends",
-                        role.id
-                    ));
-                }
-            }
-            // Five is the layout budget at the 1024 px supported floor. A limit
-            // the layout cannot honour is not a limit.
-            if role.receives.len() > 5 {
-                return Err(format!(
-                    "{tag}: role {:?} receives {} fields (max 5)",
-                    role.id,
-                    role.receives.len()
-                ));
-            }
-            // ⭐ `always` may be the LAST role, not only the ONLY role. The reason the
-            // rule exists is unchanged and is what it still enforces — a role AFTER an
-            // unconditional one could never be reached — but "only" also refused the
-            // shape the QSO parties are built on: spec §2.3's own worked Ohio example
-            // ends `role "dx": Always`, three roles deep, and it is the catch-all
-            // `ContestSession::role` already documents itself as falling through to. A
-            // DX entrant matches no `my_location_in`, so without a trailing `always`
-            // the last role is reached by ordering alone and the file cannot say so.
-            if matches!(role.selector, SelectorSpec::Always) && !std::ptr::eq(role, last_role) {
-                return Err(format!(
-                    "{tag}: role {:?} selector `always` must be the LAST role \
-                     (a role after it could never be reached)",
-                    role.id
-                ));
-            }
-            if let SelectorSpec::MyLocationIn { locations } = &role.selector {
-                if locations.is_empty() {
-                    return Err(format!("{tag}: role {:?} my_location_in is empty", role.id));
-                }
-            }
-            if let SelectorSpec::MyCategoryIs { category } = &role.selector {
-                if category.is_empty() {
-                    return Err(format!("{tag}: role {:?} my_category_is is empty", role.id));
-                }
-            }
-        }
-        // The multiplier rules (§2.5). Nothing SCORES a multiplier yet — no
-        // shipped ruleset declares one — so every check here is the difference
-        // between a rules bug caught at load and a multiplier that silently
-        // counts nothing on contest Saturday. They are validated on the way in
-        // for the same reason the exchange is: the loader is the only place
-        // that sees the file and the exchange in the same breath.
-        // ⭐ A dupe key that names a slot nobody exchanges is a rule that can never
-        // fire, and the way it fails is silent: every contact keys on the empty string
-        // in that position, so the mobile rule the sponsor wrote simply does not
-        // happen. Read against the wrong direction it is worse — `by_fields` against
-        // `sends` would key my own constant exchange and refuse legal contacts — so the
-        // two lists are checked against the two directions separately.
-        // ⭐ **EVERY SLOT ANY ROLE SENDS HAS A DECLARED SOURCE** (spec §2.5, §3.4).
-        //
-        // This is the rule that makes "the batch that ships this contest forgot to add
-        // the setting its exchange needs" a red gate here rather than an operator who
-        // cannot fill their own exchange on contest Saturday. It runs after the role
-        // loop because it is the ROLES that say which slots are sent: a slot only a
-        // role RECEIVES is copied off the air and has no source to declare.
-        for f in &x.fields {
-            let sent = x.roles.iter().any(|role| role.sends.contains(&f.key));
-            if !sent {
-                // A received-only slot must say so with `""`, and must not claim a
-                // source it can never use.
-                if !f.source.is_empty() {
-                    return Err(format!(
-                        "{tag}: slot {} declares source {:?} but no role sends it",
-                        f.key, f.source
-                    ));
-                }
-                continue;
-            }
-            if f.source.is_empty() {
-                return Err(format!(
-                    "{tag}: slot {} is sent but declares no source \
-                     (spec §3.4 — name a setting, a derivation, or the serial counter)",
-                    f.key
-                ));
-            }
-            if !is_sent_source(&f.source) {
-                return Err(format!(
-                    "{tag}: slot {} declares source {:?}, which this build cannot supply",
-                    f.key, f.source
-                ));
-            }
-        }
-        for key in &r.dupe.by_fields {
-            if !x.roles.iter().any(|role| role.receives.contains(key)) {
-                return Err(format!(
-                    "{tag}: dupe.by_fields names slot {key:?}, which no role receives"
-                ));
-            }
-        }
-        for key in &r.dupe.by_sent_fields {
-            if !x.roles.iter().any(|role| role.sends.contains(key)) {
-                return Err(format!(
-                    "{tag}: dupe.by_sent_fields names slot {key:?}, which no role sends"
-                ));
-            }
-        }
-        // ⭐ THE SATELLITE DIMENSION (ARRL Field Day 7.3.8). Both refusals are a rules
-        // file that reads as a satellite rule and is not one — and the second is the
-        // dangerous shape: an emptied mode class with the real band still in the key
-        // makes an FM satellite contact collide with a TERRESTRIAL one on that band, so
-        // a legal QSO is refused and only the contest log ever held it.
-        if r.dupe.satellite_is_a_band && !r.dupe.by_band {
-            return Err(format!(
-                "{tag}: dupe.satellite_is_a_band is set but by_band is false \
-(there is no band position to put the bird in)"
-            ));
-        }
-        if r.dupe.fm_satellite_once && !r.dupe.satellite_is_a_band {
-            return Err(format!(
-                "{tag}: dupe.fm_satellite_once is set but satellite_is_a_band is false \
-(dropping the mode class while the band still travels would make an FM satellite \
-contact a duplicate of a terrestrial one on the same band)"
-            ));
-        }
-        // ⭐ MODE-CLASS GROUPS (ILQP's "phone and CW/digital"). Each refusal is a rule
-        // that would silently count a different number of modes than the sponsor does.
-        if !r.dupe.mode_class_groups.is_empty() && !r.dupe.by_mode_class {
-            return Err(format!(
-                "{tag}: dupe.mode_class_groups is set but by_mode_class is false \
-(a rule that does not key on the mode cannot group modes)"
-            ));
-        }
-        let mut grouped: Vec<&str> = Vec::new();
-        for g in &r.dupe.mode_class_groups {
-            if g.len() < 2 {
-                return Err(format!(
-                    "{tag}: dupe.mode_class_groups has a group of {} \
-(a group names the two or more classes that count as one mode)",
-                    g.len()
-                ));
-            }
-            for class in g {
-                if !MODE_CLASSES.contains(&class.as_str()) {
-                    return Err(format!(
-                        "{tag}: dupe.mode_class_groups names {class:?}, which is not a \
-mode class ({})",
-                        MODE_CLASSES.join(", ")
-                    ));
-                }
-                if grouped.contains(&class.as_str()) {
-                    return Err(format!(
-                        "{tag}: dupe.mode_class_groups names {class:?} in two groups"
-                    ));
-                }
-                grouped.push(class);
-            }
-        }
-        // ⭐ A SPONSOR'S CABRILLO TEMPLATE writes every exchange slot once, and nothing that
-        // would split a whitespace-delimited column. Each refusal is a QSO line a log robot
-        // would misread, caught at load instead of in a submitted file.
-        {
-            let cols = &r.cabrillo.columns;
-            let mut seen: Vec<&str> = Vec::new();
-            let is_call = |key: &str| {
-                matches!(
-                    x.fields.iter().find(|f| f.key == key).map(|f| &f.kind),
-                    Some(KindSpec::Call)
-                )
-            };
-            for c in cols {
-                if !x.fields.iter().any(|f| f.key == c.key) {
-                    return Err(format!(
-                        "{tag}: cabrillo column {:?} is not a slot this exchange declares",
-                        c.key
-                    ));
-                }
-                if is_call(&c.key) {
-                    return Err(format!(
-                        "{tag}: cabrillo column {:?} is a callsign slot (the QSO line's call \
-                         columns are its own)",
-                        c.key
-                    ));
-                }
-                if seen.contains(&c.key.as_str()) {
-                    return Err(format!(
-                        "{tag}: cabrillo column {:?} is listed twice",
-                        c.key
-                    ));
-                }
-                seen.push(&c.key);
-                if !c
-                    .blank
-                    .bytes()
-                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
-                {
-                    return Err(format!(
-                        "{tag}: cabrillo column {:?} placeholder {:?} is not uppercase letters \
-                         and digits (a space would split the column)",
-                        c.key, c.blank
-                    ));
-                }
-            }
-            if !cols.is_empty() {
-                for role in &x.roles {
-                    for key in role.sends.iter().chain(&role.receives) {
-                        if !is_call(key) && !seen.contains(&key.as_str()) {
-                            return Err(format!(
-                                "{tag}: role {:?} exchanges slot {key:?}, which the cabrillo \
-                                 columns never write",
-                                role.id
-                            ));
-                        }
-                    }
-                }
-            }
-            for h in &r.cabrillo.headers {
-                if !CABRILLO_OPTIONAL_HEADERS.contains(&h.as_str()) {
-                    return Err(format!(
-                        "{tag}: cabrillo header {h:?} is not one this build can write"
-                    ));
-                }
-            }
-            for h in &r.cabrillo.entry_headers {
-                if !CABRILLO_ENTRY_HEADERS.contains(&h.as_str()) {
-                    return Err(format!(
-                        "{tag}: cabrillo entry header {h:?} is not one this build can write"
-                    ));
-                }
-            }
-            // ⭐ The sponsor's X- headers. Each refusal is a line that would ship wrong: a
-            // name a Cabrillo robot does not read as an X- header, one that would pass for
-            // Nexus's own, or a slot some entrant does not send, which writes nothing.
-            for (name, slot) in &r.cabrillo.x_headers {
-                let shaped = name.len() > 2
-                    && name.starts_with("X-")
-                    && name[2..]
-                        .bytes()
-                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'-');
-                if !shaped {
-                    return Err(format!(
-                        "{tag}: cabrillo x-header {name:?} is not X- and uppercase letters, \
-                         digits or hyphens"
-                    ));
-                }
-                if name.starts_with("X-NEXUS-") {
-                    return Err(format!(
-                        "{tag}: cabrillo x-header {name:?} is one Nexus writes itself"
-                    ));
-                }
-                for role in &x.roles {
-                    if !role.sends.iter().any(|k| k == slot) {
-                        return Err(format!(
-                            "{tag}: cabrillo x-header {name:?} writes slot {slot:?}, which role \
-                             {:?} does not send",
-                            role.id
-                        ));
-                    }
-                }
-            }
-            // ⭐ The power categories a sponsor takes. CATEGORY-POWER in `headers` as well
-            // would let a build that reads only that list write any declared power.
-            let mut powers: Vec<&str> = Vec::new();
-            for p in &r.cabrillo.power_categories {
-                if !["HIGH", "LOW", "QRP"].contains(&p.as_str()) {
-                    return Err(format!(
-                        "{tag}: cabrillo power category {p:?} is not HIGH, LOW or QRP"
-                    ));
-                }
-                if powers.contains(&p.as_str()) {
-                    return Err(format!(
-                        "{tag}: cabrillo power category {p:?} is listed twice"
-                    ));
-                }
-                powers.push(p);
-            }
-            if !powers.is_empty() && r.cabrillo.headers.iter().any(|h| h == "CATEGORY-POWER") {
-                return Err(format!(
-                    "{tag}: cabrillo names power_categories and lists CATEGORY-POWER in headers \
-                     too (one says which powers are written)"
-                ));
-            }
-            // ENTRY-CLASS and its classes come as a pair: a header with no class to write
-            // ships blank, and classes nothing writes are a picker that changes nothing.
-            let writes_class = r.cabrillo.entry_headers.iter().any(|h| h == "ENTRY-CLASS");
-            if writes_class == r.cabrillo.entry_classes.is_empty() {
-                return Err(if writes_class {
-                    format!("{tag}: cabrillo writes ENTRY-CLASS but names no entry_classes")
-                } else {
-                    format!("{tag}: cabrillo names entry_classes but never writes ENTRY-CLASS")
-                });
-            }
-            let mut classes = std::collections::HashSet::new();
-            for c in &r.cabrillo.entry_classes {
-                let shaped = !c.is_empty()
-                    && c.len() <= 48
-                    && c.trim() == c
-                    && c.bytes().all(|b| {
-                        b.is_ascii_uppercase() || b.is_ascii_digit() || b == b' ' || b == b'-'
-                    });
-                if !shaped {
-                    return Err(format!(
-                        "{tag}: cabrillo entry class {c:?} is not an uppercase class name"
-                    ));
-                }
-                if !classes.insert(c.as_str()) {
-                    return Err(format!("{tag}: cabrillo entry class {c:?} is listed twice"));
-                }
-            }
-            let token = |v: &str| {
-                !v.is_empty()
-                    && v.bytes()
-                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
-            };
-            for (from, to) in &r.cabrillo.location {
-                if !token(from) || !token(to) {
-                    return Err(format!(
-                        "{tag}: cabrillo location {from:?} -> {to:?} is not two uppercase codes"
-                    ));
-                }
-            }
-            // The LOCATION slot is what each role SENDS, so a role that sends no such slot
-            // would head its file with nothing it sent.
-            let slot = r.cabrillo.location_slot.as_str();
-            if !slot.is_empty() {
-                if !x.fields.iter().any(|f| f.key == slot) {
-                    return Err(format!(
-                        "{tag}: cabrillo location_slot {slot:?} is not a slot this exchange \
-                         declares"
-                    ));
-                }
-                if let Some(role) = x
-                    .roles
-                    .iter()
-                    .find(|role| !role.sends.iter().any(|k| k == slot))
-                {
-                    return Err(format!(
-                        "{tag}: cabrillo location_slot {slot:?} is not sent by role {:?}",
-                        role.id
-                    ));
-                }
-            }
-            // The LOCATION setting is one a station carries, and one source of LOCATION only.
-            let setting = r.cabrillo.location_setting.as_str();
-            if !setting.is_empty() {
-                if !SENT_SLOT_SETTINGS.contains(&setting) {
-                    return Err(format!(
-                        "{tag}: cabrillo location_setting {setting:?} is not a station setting"
-                    ));
-                }
-                if !slot.is_empty() {
-                    return Err(format!(
-                        "{tag}: cabrillo location_setting and location_slot both name the \
-                         LOCATION"
-                    ));
-                }
-            }
-            // ⭐ The entry declarations a sponsor's template names. A value refused here is a
-            // line that would ship wrong: a transmitter class Cabrillo does not have, an overlay
-            // no robot could read as one word, an address part with no ADDRESS to belong to.
-            let mut transmitters: Vec<&str> = Vec::new();
-            for c in &r.cabrillo.transmitter_categories {
-                if !CABRILLO_TRANSMITTER_CATEGORIES.contains(&c.as_str()) {
-                    return Err(format!(
-                        "{tag}: cabrillo transmitter category {c:?} is not ONE, TWO, LIMITED, \
-                         UNLIMITED or SWL"
-                    ));
-                }
-                if transmitters.contains(&c.as_str()) {
-                    return Err(format!(
-                        "{tag}: cabrillo transmitter category {c:?} is listed twice"
-                    ));
-                }
-                transmitters.push(c);
-            }
-            let mut overlays: Vec<&str> = Vec::new();
-            for c in &r.cabrillo.overlay_categories {
-                let shaped = !c.is_empty()
-                    && c.len() <= 32
-                    && c.bytes()
-                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'-');
-                if !shaped {
-                    return Err(format!(
-                        "{tag}: cabrillo overlay category {c:?} is not uppercase letters, \
-                         digits or hyphens"
-                    ));
-                }
-                if overlays.contains(&c.as_str()) {
-                    return Err(format!(
-                        "{tag}: cabrillo overlay category {c:?} is listed twice"
-                    ));
-                }
-                overlays.push(c);
-            }
-            let mut address: Vec<&str> = Vec::new();
-            for h in &r.cabrillo.address {
-                if !crate::contest::CABRILLO_ADDRESS_HEADERS.contains(&h.as_str()) {
-                    return Err(format!(
-                        "{tag}: cabrillo address header {h:?} is not one this build can write"
-                    ));
-                }
-                if address.contains(&h.as_str()) {
-                    return Err(format!(
-                        "{tag}: cabrillo address header {h:?} is listed twice"
-                    ));
-                }
-                address.push(h);
-            }
-            if !address.is_empty() && !address.contains(&"ADDRESS") {
-                return Err(format!(
-                    "{tag}: cabrillo names address parts but not ADDRESS, which they are \
-                     details of"
-                ));
-            }
-            // ⭐ The CATEGORY lines a sponsor places an entry by. Each refusal is a line that would
-            // ship wrong, or a Contest-screen sentence nothing could clear: a band or a mode no
-            // Cabrillo robot reads, a required line this build cannot name, or one this ruleset
-            // never writes.
-            let mut bands: Vec<&str> = Vec::new();
-            for b in &r.cabrillo.band_categories {
-                if !CABRILLO_BAND_CATEGORIES.contains(&b.as_str()) {
-                    return Err(format!(
-                        "{tag}: cabrillo band category {b:?} is not a Cabrillo CATEGORY-BAND value"
-                    ));
-                }
-                if bands.contains(&b.as_str()) {
-                    return Err(format!(
-                        "{tag}: cabrillo band category {b:?} is listed twice"
-                    ));
-                }
-                bands.push(b);
-            }
-            let mode = r.cabrillo.mode_category.as_str();
-            if !mode.is_empty() && !CABRILLO_MODE_CATEGORIES.contains(&mode) {
-                return Err(format!(
-                    "{tag}: cabrillo mode category {mode:?} is not CW, DIGI, FM, RTTY, SSB or MIXED"
-                ));
-            }
-            let listed = |list: &[String], h: &str| list.iter().any(|x| x == h);
-            let mut required: Vec<&str> = Vec::new();
-            for h in &r.cabrillo.required {
-                if !CABRILLO_REQUIRABLE.contains(&h.as_str()) {
-                    return Err(format!(
-                        "{tag}: cabrillo required line {h:?} is not one this build can name as \
-                         missing"
-                    ));
-                }
-                let written = match h.as_str() {
-                    "CATEGORY-BAND" => !bands.is_empty() || listed(&r.cabrillo.headers, h),
-                    "CATEGORY-MODE" => !mode.is_empty() || listed(&r.cabrillo.headers, h),
-                    "CATEGORY-POWER" => !powers.is_empty() || listed(&r.cabrillo.headers, h),
-                    "CATEGORY-TRANSMITTER" => !transmitters.is_empty(),
-                    "OPERATORS" => !transmitters.is_empty() || listed(&r.cabrillo.entry_headers, h),
-                    _ => listed(&r.cabrillo.headers, h),
-                };
-                if !written {
-                    return Err(format!(
-                        "{tag}: cabrillo requires {h:?}, which this ruleset never writes"
-                    ));
-                }
-                if required.contains(&h.as_str()) {
-                    return Err(format!("{tag}: cabrillo requires {h:?} twice"));
-                }
-                required.push(h);
-            }
-            // …and the entrant's own lines, on a key of their own (`CABRILLO_ENTRY_REQUIRABLE`):
-            // each one this build can name, that this ruleset writes, and once.
-            for h in &r.cabrillo.entry_required {
-                if !CABRILLO_ENTRY_REQUIRABLE.contains(&h.as_str()) {
-                    return Err(format!(
-                        "{tag}: cabrillo required entry line {h:?} is not one this build can \
-                         name as missing"
-                    ));
-                }
-                let written = match h.as_str() {
-                    "ENTRY-CLASS" => listed(&r.cabrillo.entry_headers, h),
-                    _ => listed(&r.cabrillo.headers, h),
-                };
-                if !written {
-                    return Err(format!(
-                        "{tag}: cabrillo requires {h:?}, which this ruleset never writes"
-                    ));
-                }
-                if required.contains(&h.as_str()) {
-                    return Err(format!("{tag}: cabrillo requires {h:?} twice"));
-                }
-                required.push(h);
-            }
-        }
-        // ⭐ A LOCATION ALIAS picks a role, so it must land on a location a role actually
-        // lists — otherwise it silently selects nothing — and it must not re-point a code
-        // that is already listed, which would move an operator out of the role their own
-        // code puts them in.
-        {
-            let listed: Vec<&str> = x
-                .roles
-                .iter()
-                .filter_map(|role| match &role.selector {
-                    SelectorSpec::MyLocationIn { locations } => Some(locations),
-                    _ => None,
-                })
-                .flatten()
-                .map(String::as_str)
-                .collect();
-            for (from, to) in &r.location_aliases {
-                // The state field is read upper-cased, so a key that is not could never match.
-                if from.is_empty()
-                    || !from
-                        .bytes()
-                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
-                {
-                    return Err(format!(
-                        "{tag}: location alias {from:?} is not an uppercase code"
-                    ));
-                }
-                if listed.contains(&from.as_str()) {
-                    return Err(format!(
-                        "{tag}: location alias {from:?} is itself a listed location"
-                    ));
-                }
-                if !listed.contains(&to.as_str()) {
-                    return Err(format!(
-                        "{tag}: location alias {from:?} -> {to:?} names a location no role lists"
-                    ));
-                }
-            }
-        }
-        let mut mult_ids: Vec<&str> = Vec::new();
-        for m in &r.scoring.multipliers {
-            if m.id.is_empty() {
-                return Err(format!("{tag}: empty multiplier id"));
-            }
-            if mult_ids.contains(&m.id.as_str()) {
-                return Err(format!("{tag}: duplicate multiplier id {:?}", m.id));
-            }
-            mult_ids.push(&m.id);
-            if let MultSourceSpec::Field { key, domain } = &m.source {
-                // A multiplier counts values the OTHER station sent me, so its
-                // slot has to be one some role receives. Read against `sends`
-                // it would count my own constant exchange once and stop.
-                if !x.roles.iter().any(|role| role.receives.contains(key)) {
-                    return Err(format!(
-                        "{tag}: multiplier {:?} names slot {key:?}, which no role receives",
-                        m.id
-                    ));
-                }
-                if !domain.is_empty() && !resolve_domain(r, domain) {
-                    return Err(format!(
-                        "{tag}: multiplier {:?} names unknown domain {domain:?}",
-                        m.id
-                    ));
-                }
-            }
-            for role_id in &m.roles {
-                if !x.roles.iter().any(|role| &role.id == role_id) {
-                    return Err(format!(
-                        "{tag}: multiplier {:?} names undeclared role {role_id:?}",
-                        m.id
-                    ));
-                }
-            }
-        }
-        let mut ids: Vec<&str> = Vec::new();
-        for b in r.bonuses.iter().chain(&r.objectives) {
-            if b.id.is_empty() {
-                return Err(format!("{tag}: empty bonus id"));
-            }
-            if ids.contains(&b.id.as_str()) {
-                return Err(format!("{tag}: duplicate bonus id {:?}", b.id));
-            }
-            ids.push(&b.id);
-            // A per-unit key on a one-box bonus is a value nothing would score.
-            if b.per_unit == 0
-                && (b.max_units != 0
-                    || !b.class_max_units.is_empty()
-                    || b.counted_from != BonusCount::Operator)
-            {
-                return Err(format!(
-                    "{tag}: bonus {:?} sets a limit or a count source without per_unit",
-                    b.id
-                ));
-            }
-            if let Some((class, _)) = b
-                .class_max_units
-                .iter()
-                .find(|(c, _)| c.len() != 1 || !c.bytes().all(|x| x.is_ascii_uppercase()))
-            {
-                return Err(format!(
-                    "{tag}: bonus {:?} limits class {class:?}, which is not one uppercase letter",
-                    b.id
-                ));
-            }
-        }
-        // ⭐ THE OBJECTIVE MENU. Each refusal is an objective that would load and then score
-        // wrong: worth nothing, indistinguishable from another, bringing with it one that does
-        // not exist, or multiplying a score its contest does not multiply.
-        if !r.objective_menu.is_empty() {
-            if r.scoring.model != "objectives" {
-                return Err(format!(
-                    "{tag}: an objective menu needs scoring model \"objectives\", not {:?}",
-                    r.scoring.model
-                ));
-            }
-            if !r.bonuses.is_empty() {
-                return Err(format!(
-                    "{tag}: carries both a bonus menu and an objective menu (a contest scores \
-                     by one)"
-                ));
-            }
-        }
-        let mut objective_ids: Vec<&str> = Vec::new();
-        for o in &r.objective_menu {
-            if o.id.is_empty() {
-                return Err(format!("{tag}: empty objective id"));
-            }
-            if objective_ids.contains(&o.id.as_str()) {
-                return Err(format!("{tag}: duplicate objective id {:?}", o.id));
-            }
-            objective_ids.push(&o.id);
-            if o.label.trim().is_empty() {
-                return Err(format!("{tag}: objective {:?} has no label", o.id));
-            }
-            if o.multiplier == 0 {
-                return Err(format!("{tag}: objective {:?} has multiplier 0", o.id));
-            }
-        }
-        for o in &r.objective_menu {
-            for i in &o.implies {
-                if *i == o.id {
-                    return Err(format!("{tag}: objective {:?} implies itself", o.id));
-                }
-                if !objective_ids.contains(&i.as_str()) {
-                    return Err(format!(
-                        "{tag}: objective {:?} implies {i:?}, which is not on the menu",
-                        o.id
-                    ));
-                }
-            }
-        }
-        // ⭐ BONUS STATIONS. Each refusal is a bonus that would load and then never
-        // fire — the silent 100 points an entrant's submitted score is short.
-        let mut bonus_calls: Vec<&str> = Vec::new();
-        for b in &r.bonus_stations {
-            if b.call.is_empty() || b.call != b.call.trim().to_ascii_uppercase() {
-                return Err(format!(
-                    "{tag}: bonus station call {:?} is not a trimmed uppercase callsign",
-                    b.call
-                ));
-            }
-            if b.call.contains('/') {
-                return Err(format!(
-                    "{tag}: bonus station call {:?} carries a portable affix (the match \
-is against each logged call's BASE, so this one would never fire)",
-                    b.call
-                ));
-            }
-            if bonus_calls.contains(&b.call.as_str()) {
-                return Err(format!("{tag}: duplicate bonus station {:?}", b.call));
-            }
-            bonus_calls.push(&b.call);
-            if b.points == 0 {
-                return Err(format!(
-                    "{tag}: bonus station {:?} is worth 0 points",
-                    b.call
-                ));
-            }
-        }
-        for m in &r.banned_modes {
-            if m.is_empty() || *m != m.to_ascii_uppercase() {
-                return Err(format!("{tag}: banned mode {m:?} not uppercase"));
-            }
-        }
-        if r.enforcement != "warn" {
-            return Err(format!(
-                "{tag}: enforcement {:?} (this build only warns — never removes or disables)",
-                r.enforcement
-            ));
-        }
-        let w = &r.window;
-        if !(1..=12).contains(&w.month) {
-            return Err(format!("{tag}: window month {}", w.month));
-        }
-        match w.weekend.as_str() {
-            "nth_full" if (1..=4).contains(&w.n) => {}
-            "last_full" => {}
-            _ => return Err(format!("{tag}: window weekend {:?} n={}", w.weekend, w.n)),
-        }
-        // ⭐ Up to 47, not 23: the field is hours from 0000Z on the ANCHOR SATURDAY,
-        // and the Tennessee QSO Party starts at 1700Z on the SUNDAY (= 41). Capped at
-        // 23 there was no expressible rule for it at all — the sponsor's own PDF
-        // publishes the 2026 instants and no annual rule, so a build that could only
-        // anchor on the Saturday would have had to pin every year by hand and would
-        // show a window 24 hours early for any year nobody pinned.
-        if w.start_hour_utc >= 48 {
-            return Err(format!("{tag}: window start_hour_utc {}", w.start_hour_utc));
-        }
-        if !(1..=72).contains(&w.duration_hours) {
-            return Err(format!("{tag}: window duration_hours {}", w.duration_hours));
-        }
-        for (y, o) in &w.overrides {
-            if y.parse::<u16>().is_err() {
-                return Err(format!("{tag}: override year {y:?}"));
-            }
-            if o.start_unix >= o.end_unix {
-                return Err(format!("{tag}: override {y} start ≥ end"));
-            }
-        }
+        validate_ruleset(r, false)?;
     }
     // The section universe is pinned (71 US + 14 RAC): the TS mirror guard and
     // the board layout both assume it, so a file that grows or shrinks it must
@@ -3143,6 +2322,965 @@ is against each logged call's BASE, so this one would never fire)",
         }
     }
     Ok(spec)
+}
+
+/// ⭐ **The checks ONE ruleset must pass, whatever file it came from** — the seed, a
+/// downloaded rules file ([`parse_spec`]) and an operator's own contest
+/// ([`custom::compile`]) all run exactly this, so a custom contest can never be a shape the
+/// shipped validator would refuse. `custom` is true for that last one alone, and lets a slot use
+/// [`SENT_SOURCE_ENTERED`].
+fn validate_ruleset(r: &RulesetSpec, custom: bool) -> Result<(), String> {
+    let tag = format!("ruleset {}/{}", r.event, r.rules_year);
+    if !is_event_id(&r.event) {
+        return Err(format!("{tag}: event id is not ^[a-z][a-z0-9_]*$"));
+    }
+    if r.contest_id.is_empty() {
+        return Err(format!("{tag}: empty contest_id"));
+    }
+    // The same four checks as before the block landed, on the block's own
+    // paths. Messages are deliberately unchanged: they are what the corpus
+    // fixtures match on.
+    if !matches!(
+        r.scoring.model.as_str(),
+        "powered_multiplier" | "objectives" | "none"
+    ) {
+        return Err(format!(
+            "{tag}: unknown scoring model {:?}",
+            r.scoring.model
+        ));
+    }
+    // ⭐ EXACTLY ONE point table is live. `relation_points: []` and `band_points: []`
+    // are each the explicit "this event does not price that way", and what every
+    // contest before CQ WW writes is both of them empty plus a full mode-class map.
+    // Two populated tables would leave a reader to guess which one scored the log,
+    // and there is no honest per-mode-class number for a contest whose points depend
+    // on where the other station is or on which band it was worked.
+    //
+    // The order here is the order the message names them in, and it is pinned by the
+    // corpus fixture that predates the third table.
+    let populated: Vec<&str> = [
+        (!r.scoring.relation_points.is_empty()).then_some("relation_points"),
+        (!r.scoring.points_by_mode_class.is_empty()).then_some("points_by_mode_class"),
+        (!r.scoring.band_points.is_empty()).then_some("band_points"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if populated.len() > 1 {
+        let named = match populated.as_slice() {
+            [a, b] => format!("both {a} and {b}"),
+            parts => parts.join(", "),
+        };
+        return Err(format!(
+            "{tag}: {named} are populated (a contest has ONE point table)"
+        ));
+    }
+    if r.scoring.relation_points.is_empty() && r.scoring.band_points.is_empty() {
+        for k in ["PH", "CW", "DIG"] {
+            if !r.scoring.points_by_mode_class.contains_key(k) {
+                return Err(format!("{tag}: points_by_mode_class misses {k}"));
+            }
+        }
+    }
+    // ⭐ The BAND-GROUP table's shape. There is deliberately no COVERAGE check to
+    // match `relation_points`' one below: every contact has exactly one relation, so a
+    // missing relation arm is a hole; a band is not a closed set a rules file
+    // enumerates, and ARRL VHF's own table names the seven bands it scores and is
+    // silent about the rest. What must hold instead is that the table is a LOOKUP —
+    // one answer per band, or none.
+    {
+        let mut seen: Vec<String> = Vec::new();
+        for g in &r.scoring.band_points {
+            if g.bands.is_empty() {
+                return Err(format!(
+                    "{tag}: a band_points row names no bands (an empty list would be a \
+                     catch-all, and it would price the bands this contest does not score)"
+                ));
+            }
+            for b in &g.bands {
+                if b.trim().is_empty() {
+                    return Err(format!("{tag}: band_points names an empty band label"));
+                }
+                let up = b.trim().to_ascii_uppercase();
+                if seen.contains(&up) {
+                    return Err(format!(
+                        "{tag}: band {b:?} is priced by two band_points rows (the table \
+                         is a lookup, so a band in two rows has no answer)"
+                    ));
+                }
+                seen.push(up);
+            }
+        }
+    }
+    if !r.scoring.relation_points.is_empty() {
+        // ⚠️ The VOCABULARY first, then the coverage. A misspelt relation is also a
+        // missing one, and reporting the coverage failure for a row that is simply
+        // typed wrong sends the reader to the wrong half of the file.
+        for x in &r.scoring.relation_points {
+            if !matches!(
+                x.relation.as_str(),
+                "same_country" | "within_north_america" | "same_continent" | "different_continent"
+            ) {
+                return Err(format!("{tag}: unknown relation {:?}", x.relation));
+            }
+        }
+        // ⭐ The guard the source verification earned. §14 of the design spec carried
+        // CQ WPX's two band groups and its North American exception and MISSED the
+        // third arm — *"Contacts between stations in the same country are worth 1
+        // point regardless of band"* — which would have scored every domestic contact
+        // at zero, silently, on a 48-hour contest. A relation the table names nothing
+        // for is exactly that defect, so the loader refuses it BY NAME.
+        //
+        // `within_north_america` is deliberately NOT required: it is an exception to
+        // `same_continent`, and a contest that does not grant it falls back to the arm
+        // it would have overridden (`PointsRule::points_for`).
+        for want in ["same_country", "same_continent", "different_continent"] {
+            if !r.scoring.relation_points.iter().any(|x| x.relation == want) {
+                return Err(format!(
+                    "{tag}: relation_points declares no {want} row (every contact has \
+                     exactly one relation, so a missing arm scores those contacts at \
+                     zero without saying so)"
+                ));
+            }
+        }
+    }
+    // `none` is the state QSO parties: QSO points × geographic multipliers and
+    // nothing after. It is the only model that may declare no power tiers, and it
+    // must declare none — a tier list under a model that applies no power
+    // multiplier is a claim the scorer would silently ignore, which is exactly how
+    // an event ends up scoring by a rule nobody can find in the file.
+    if r.scoring.model == "none" {
+        if !r.scoring.power_tiers.is_empty() {
+            return Err(format!(
+                "{tag}: scoring model \"none\" declares power_tiers \
+                 (a model with no post-multiplier applies none)"
+            ));
+        }
+    } else if r.scoring.power_tiers.is_empty() {
+        return Err(format!("{tag}: empty power_tiers"));
+    }
+    if !r.scoring.power_tiers.windows(2).all(|w| w[0] < w[1]) {
+        return Err(format!("{tag}: power_tiers not strictly ascending"));
+    }
+    // A dupe rule that does not key on the callsign is not a dupe rule.
+    // Every contest in the researched set keys on it, so a file saying
+    // otherwise is a mistake far more often than it is a new contest shape
+    // — and the failure mode if it is wrong is a log full of contacts that
+    // should have been refused as dupes.
+    if !r.dupe.by_call {
+        return Err(format!(
+            "{tag}: dupe.by_call is false (a dupe rule must key on the callsign)"
+        ));
+    }
+    // File-declared domains. `arrl_sections` / `fd_sections` are DERIVED
+    // from the top-level section list (Ruling B0-C) — a file declaring one
+    // would be a second copy of a list it cannot fully represent, since a
+    // Domain value is a (code, label) pair and a Section also carries a
+    // division.
+    let mut domain_ids: Vec<&str> = Vec::new();
+    for d in &r.domains {
+        if !is_domain_id(&d.id) {
+            return Err(format!(
+                "{tag}: domain id {:?} is not ^[a-z][a-z0-9_]*$",
+                d.id
+            ));
+        }
+        if RESERVED_DOMAIN_IDS.contains(&d.id.as_str()) {
+            return Err(format!(
+                "{tag}: domain id {:?} is reserved (derived from the section list)",
+                d.id
+            ));
+        }
+        if domain_ids.contains(&d.id.as_str()) {
+            return Err(format!("{tag}: duplicate domain id {:?}", d.id));
+        }
+        domain_ids.push(&d.id);
+        if !is_adif_tag(&d.adif.rcvd) || !is_adif_tag(&d.adif.sent) {
+            return Err(format!("{tag}: domain {} has a malformed adif tag", d.id));
+        }
+        if d.values.is_empty() {
+            return Err(format!("{tag}: domain {} has no values", d.id));
+        }
+        let mut codes: Vec<&str> = Vec::new();
+        for v in &d.values {
+            if v.code.is_empty() || v.code != v.code.to_ascii_uppercase() {
+                return Err(format!(
+                    "{tag}: domain {} code {:?} not uppercase",
+                    d.id, v.code
+                ));
+            }
+            if codes.contains(&v.code.as_str()) {
+                return Err(format!(
+                    "{tag}: domain {} duplicate code {:?}",
+                    d.id, v.code
+                ));
+            }
+            codes.push(&v.code);
+            if v.label.is_empty() {
+                return Err(format!(
+                    "{tag}: domain {} code {} has no label",
+                    d.id, v.code
+                ));
+            }
+        }
+    }
+    // The exchange block (§2.5). Every rule here is a rules bug that must
+    // be a REFUSAL rather than a runtime lookup miss on the air.
+    let x = &r.exchange;
+    if x.name.is_empty() {
+        return Err(format!("{tag}: exchange has no name"));
+    }
+    let mut keys: Vec<&str> = Vec::new();
+    for f in &x.fields {
+        if f.key.is_empty() || f.key != f.key.to_ascii_uppercase() {
+            return Err(format!("{tag}: exchange slot {:?} not uppercase", f.key));
+        }
+        if keys.contains(&f.key.as_str()) {
+            return Err(format!("{tag}: duplicate exchange slot {:?}", f.key));
+        }
+        keys.push(&f.key);
+        if !is_adif_tag(&f.adif.rcvd) || !is_adif_tag(&f.adif.sent) {
+            return Err(format!("{tag}: slot {} has a malformed adif tag", f.key));
+        }
+        check_kind(r, &tag, &f.key, &f.kind)?;
+    }
+    if x.roles.is_empty() {
+        return Err(format!("{tag}: exchange has no roles"));
+    }
+    let mut role_ids: Vec<&str> = Vec::new();
+    let last_role = x.roles.last().expect("roles checked non-empty above");
+    for role in &x.roles {
+        if role_ids.contains(&role.id.as_str()) {
+            return Err(format!("{tag}: duplicate role id {:?}", role.id));
+        }
+        role_ids.push(&role.id);
+        for key in role
+            .sends
+            .iter()
+            .chain(&role.receives)
+            .chain(&role.constant_sent)
+        {
+            if !keys.contains(&key.as_str()) {
+                return Err(format!(
+                    "{tag}: role {:?} names undeclared slot {key:?}",
+                    role.id
+                ));
+            }
+        }
+        // constant_sent constrains something I actually transmit. Read the
+        // other way round it would refuse legal contacts, because every
+        // station I work legitimately sends a different value.
+        for key in &role.constant_sent {
+            if !role.sends.contains(key) {
+                return Err(format!(
+                    "{tag}: role {:?} constant_sent {key:?} is not in sends",
+                    role.id
+                ));
+            }
+        }
+        // Five is the layout budget at the 1024 px supported floor. A limit
+        // the layout cannot honour is not a limit.
+        if role.receives.len() > 5 {
+            return Err(format!(
+                "{tag}: role {:?} receives {} fields (max 5)",
+                role.id,
+                role.receives.len()
+            ));
+        }
+        // ⭐ `always` may be the LAST role, not only the ONLY role. The reason the
+        // rule exists is unchanged and is what it still enforces — a role AFTER an
+        // unconditional one could never be reached — but "only" also refused the
+        // shape the QSO parties are built on: spec §2.3's own worked Ohio example
+        // ends `role "dx": Always`, three roles deep, and it is the catch-all
+        // `ContestSession::role` already documents itself as falling through to. A
+        // DX entrant matches no `my_location_in`, so without a trailing `always`
+        // the last role is reached by ordering alone and the file cannot say so.
+        if matches!(role.selector, SelectorSpec::Always) && !std::ptr::eq(role, last_role) {
+            return Err(format!(
+                "{tag}: role {:?} selector `always` must be the LAST role \
+                 (a role after it could never be reached)",
+                role.id
+            ));
+        }
+        if let SelectorSpec::MyLocationIn { locations } = &role.selector {
+            if locations.is_empty() {
+                return Err(format!("{tag}: role {:?} my_location_in is empty", role.id));
+            }
+        }
+        if let SelectorSpec::MyCategoryIs { category } = &role.selector {
+            if category.is_empty() {
+                return Err(format!("{tag}: role {:?} my_category_is is empty", role.id));
+            }
+        }
+    }
+    // The multiplier rules (§2.5). Nothing SCORES a multiplier yet — no
+    // shipped ruleset declares one — so every check here is the difference
+    // between a rules bug caught at load and a multiplier that silently
+    // counts nothing on contest Saturday. They are validated on the way in
+    // for the same reason the exchange is: the loader is the only place
+    // that sees the file and the exchange in the same breath.
+    // ⭐ A dupe key that names a slot nobody exchanges is a rule that can never
+    // fire, and the way it fails is silent: every contact keys on the empty string
+    // in that position, so the mobile rule the sponsor wrote simply does not
+    // happen. Read against the wrong direction it is worse — `by_fields` against
+    // `sends` would key my own constant exchange and refuse legal contacts — so the
+    // two lists are checked against the two directions separately.
+    // ⭐ **EVERY SLOT ANY ROLE SENDS HAS A DECLARED SOURCE** (spec §2.5, §3.4).
+    //
+    // This is the rule that makes "the batch that ships this contest forgot to add
+    // the setting its exchange needs" a red gate here rather than an operator who
+    // cannot fill their own exchange on contest Saturday. It runs after the role
+    // loop because it is the ROLES that say which slots are sent: a slot only a
+    // role RECEIVES is copied off the air and has no source to declare.
+    for f in &x.fields {
+        let sent = x.roles.iter().any(|role| role.sends.contains(&f.key));
+        if !sent {
+            // A received-only slot must say so with `""`, and must not claim a
+            // source it can never use.
+            if !f.source.is_empty() {
+                return Err(format!(
+                    "{tag}: slot {} declares source {:?} but no role sends it",
+                    f.key, f.source
+                ));
+            }
+            continue;
+        }
+        if f.source.is_empty() {
+            return Err(format!(
+                "{tag}: slot {} is sent but declares no source \
+                 (spec §3.4 — name a setting, a derivation, or the serial counter)",
+                f.key
+            ));
+        }
+        if f.source == SENT_SOURCE_ENTERED && !custom {
+            return Err(format!(
+                "{tag}: slot {} declares source \"{SENT_SOURCE_ENTERED}\", which only an \
+                 operator's own contest may use",
+                f.key
+            ));
+        }
+        if !is_sent_source(&f.source, custom) {
+            return Err(format!(
+                "{tag}: slot {} declares source {:?}, which this build cannot supply",
+                f.key, f.source
+            ));
+        }
+    }
+    for key in &r.dupe.by_fields {
+        if !x.roles.iter().any(|role| role.receives.contains(key)) {
+            return Err(format!(
+                "{tag}: dupe.by_fields names slot {key:?}, which no role receives"
+            ));
+        }
+    }
+    for key in &r.dupe.by_sent_fields {
+        if !x.roles.iter().any(|role| role.sends.contains(key)) {
+            return Err(format!(
+                "{tag}: dupe.by_sent_fields names slot {key:?}, which no role sends"
+            ));
+        }
+    }
+    // ⭐ THE SATELLITE DIMENSION (ARRL Field Day 7.3.8). Both refusals are a rules
+    // file that reads as a satellite rule and is not one — and the second is the
+    // dangerous shape: an emptied mode class with the real band still in the key
+    // makes an FM satellite contact collide with a TERRESTRIAL one on that band, so
+    // a legal QSO is refused and only the contest log ever held it.
+    if r.dupe.satellite_is_a_band && !r.dupe.by_band {
+        return Err(format!(
+            "{tag}: dupe.satellite_is_a_band is set but by_band is false \
+(there is no band position to put the bird in)"
+        ));
+    }
+    if r.dupe.fm_satellite_once && !r.dupe.satellite_is_a_band {
+        return Err(format!(
+            "{tag}: dupe.fm_satellite_once is set but satellite_is_a_band is false \
+(dropping the mode class while the band still travels would make an FM satellite \
+contact a duplicate of a terrestrial one on the same band)"
+        ));
+    }
+    // ⭐ MODE-CLASS GROUPS (ILQP's "phone and CW/digital"). Each refusal is a rule
+    // that would silently count a different number of modes than the sponsor does.
+    if !r.dupe.mode_class_groups.is_empty() && !r.dupe.by_mode_class {
+        return Err(format!(
+            "{tag}: dupe.mode_class_groups is set but by_mode_class is false \
+(a rule that does not key on the mode cannot group modes)"
+        ));
+    }
+    let mut grouped: Vec<&str> = Vec::new();
+    for g in &r.dupe.mode_class_groups {
+        if g.len() < 2 {
+            return Err(format!(
+                "{tag}: dupe.mode_class_groups has a group of {} \
+(a group names the two or more classes that count as one mode)",
+                g.len()
+            ));
+        }
+        for class in g {
+            if !MODE_CLASSES.contains(&class.as_str()) {
+                return Err(format!(
+                    "{tag}: dupe.mode_class_groups names {class:?}, which is not a \
+mode class ({})",
+                    MODE_CLASSES.join(", ")
+                ));
+            }
+            if grouped.contains(&class.as_str()) {
+                return Err(format!(
+                    "{tag}: dupe.mode_class_groups names {class:?} in two groups"
+                ));
+            }
+            grouped.push(class);
+        }
+    }
+    // ⭐ A SPONSOR'S CABRILLO TEMPLATE writes every exchange slot once, and nothing that
+    // would split a whitespace-delimited column. Each refusal is a QSO line a log robot
+    // would misread, caught at load instead of in a submitted file.
+    {
+        let cols = &r.cabrillo.columns;
+        let mut seen: Vec<&str> = Vec::new();
+        let is_call = |key: &str| {
+            matches!(
+                x.fields.iter().find(|f| f.key == key).map(|f| &f.kind),
+                Some(KindSpec::Call)
+            )
+        };
+        for c in cols {
+            if !x.fields.iter().any(|f| f.key == c.key) {
+                return Err(format!(
+                    "{tag}: cabrillo column {:?} is not a slot this exchange declares",
+                    c.key
+                ));
+            }
+            if is_call(&c.key) {
+                return Err(format!(
+                    "{tag}: cabrillo column {:?} is a callsign slot (the QSO line's call \
+                     columns are its own)",
+                    c.key
+                ));
+            }
+            if seen.contains(&c.key.as_str()) {
+                return Err(format!(
+                    "{tag}: cabrillo column {:?} is listed twice",
+                    c.key
+                ));
+            }
+            seen.push(&c.key);
+            if !c
+                .blank
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+            {
+                return Err(format!(
+                    "{tag}: cabrillo column {:?} placeholder {:?} is not uppercase letters \
+                     and digits (a space would split the column)",
+                    c.key, c.blank
+                ));
+            }
+        }
+        if !cols.is_empty() {
+            for role in &x.roles {
+                for key in role.sends.iter().chain(&role.receives) {
+                    if !is_call(key) && !seen.contains(&key.as_str()) {
+                        return Err(format!(
+                            "{tag}: role {:?} exchanges slot {key:?}, which the cabrillo \
+                             columns never write",
+                            role.id
+                        ));
+                    }
+                }
+            }
+        }
+        for h in &r.cabrillo.headers {
+            if !CABRILLO_OPTIONAL_HEADERS.contains(&h.as_str()) {
+                return Err(format!(
+                    "{tag}: cabrillo header {h:?} is not one this build can write"
+                ));
+            }
+        }
+        for h in &r.cabrillo.entry_headers {
+            if !CABRILLO_ENTRY_HEADERS.contains(&h.as_str()) {
+                return Err(format!(
+                    "{tag}: cabrillo entry header {h:?} is not one this build can write"
+                ));
+            }
+        }
+        // ⭐ The sponsor's X- headers. Each refusal is a line that would ship wrong: a
+        // name a Cabrillo robot does not read as an X- header, one that would pass for
+        // Nexus's own, or a slot some entrant does not send, which writes nothing.
+        for (name, slot) in &r.cabrillo.x_headers {
+            let shaped = name.len() > 2
+                && name.starts_with("X-")
+                && name[2..]
+                    .bytes()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'-');
+            if !shaped {
+                return Err(format!(
+                    "{tag}: cabrillo x-header {name:?} is not X- and uppercase letters, \
+                     digits or hyphens"
+                ));
+            }
+            if name.starts_with("X-NEXUS-") {
+                return Err(format!(
+                    "{tag}: cabrillo x-header {name:?} is one Nexus writes itself"
+                ));
+            }
+            for role in &x.roles {
+                if !role.sends.iter().any(|k| k == slot) {
+                    return Err(format!(
+                        "{tag}: cabrillo x-header {name:?} writes slot {slot:?}, which role \
+                         {:?} does not send",
+                        role.id
+                    ));
+                }
+            }
+        }
+        // ⭐ The power categories a sponsor takes. CATEGORY-POWER in `headers` as well
+        // would let a build that reads only that list write any declared power.
+        let mut powers: Vec<&str> = Vec::new();
+        for p in &r.cabrillo.power_categories {
+            if !["HIGH", "LOW", "QRP"].contains(&p.as_str()) {
+                return Err(format!(
+                    "{tag}: cabrillo power category {p:?} is not HIGH, LOW or QRP"
+                ));
+            }
+            if powers.contains(&p.as_str()) {
+                return Err(format!(
+                    "{tag}: cabrillo power category {p:?} is listed twice"
+                ));
+            }
+            powers.push(p);
+        }
+        if !powers.is_empty() && r.cabrillo.headers.iter().any(|h| h == "CATEGORY-POWER") {
+            return Err(format!(
+                "{tag}: cabrillo names power_categories and lists CATEGORY-POWER in headers \
+                 too (one says which powers are written)"
+            ));
+        }
+        // ENTRY-CLASS and its classes come as a pair: a header with no class to write
+        // ships blank, and classes nothing writes are a picker that changes nothing.
+        let writes_class = r.cabrillo.entry_headers.iter().any(|h| h == "ENTRY-CLASS");
+        if writes_class == r.cabrillo.entry_classes.is_empty() {
+            return Err(if writes_class {
+                format!("{tag}: cabrillo writes ENTRY-CLASS but names no entry_classes")
+            } else {
+                format!("{tag}: cabrillo names entry_classes but never writes ENTRY-CLASS")
+            });
+        }
+        let mut classes = std::collections::HashSet::new();
+        for c in &r.cabrillo.entry_classes {
+            let shaped = !c.is_empty()
+                && c.len() <= 48
+                && c.trim() == c
+                && c.bytes().all(|b| {
+                    b.is_ascii_uppercase() || b.is_ascii_digit() || b == b' ' || b == b'-'
+                });
+            if !shaped {
+                return Err(format!(
+                    "{tag}: cabrillo entry class {c:?} is not an uppercase class name"
+                ));
+            }
+            if !classes.insert(c.as_str()) {
+                return Err(format!("{tag}: cabrillo entry class {c:?} is listed twice"));
+            }
+        }
+        let token = |v: &str| {
+            !v.is_empty()
+                && v.bytes()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+        };
+        for (from, to) in &r.cabrillo.location {
+            if !token(from) || !token(to) {
+                return Err(format!(
+                    "{tag}: cabrillo location {from:?} -> {to:?} is not two uppercase codes"
+                ));
+            }
+        }
+        // The LOCATION slot is what each role SENDS, so a role that sends no such slot
+        // would head its file with nothing it sent.
+        let slot = r.cabrillo.location_slot.as_str();
+        if !slot.is_empty() {
+            if !x.fields.iter().any(|f| f.key == slot) {
+                return Err(format!(
+                    "{tag}: cabrillo location_slot {slot:?} is not a slot this exchange \
+                     declares"
+                ));
+            }
+            if let Some(role) = x
+                .roles
+                .iter()
+                .find(|role| !role.sends.iter().any(|k| k == slot))
+            {
+                return Err(format!(
+                    "{tag}: cabrillo location_slot {slot:?} is not sent by role {:?}",
+                    role.id
+                ));
+            }
+        }
+        // The LOCATION setting is one a station carries, and one source of LOCATION only.
+        let setting = r.cabrillo.location_setting.as_str();
+        if !setting.is_empty() {
+            if !SENT_SLOT_SETTINGS.contains(&setting) {
+                return Err(format!(
+                    "{tag}: cabrillo location_setting {setting:?} is not a station setting"
+                ));
+            }
+            if !slot.is_empty() {
+                return Err(format!(
+                    "{tag}: cabrillo location_setting and location_slot both name the \
+                     LOCATION"
+                ));
+            }
+        }
+        // ⭐ The entry declarations a sponsor's template names. A value refused here is a
+        // line that would ship wrong: a transmitter class Cabrillo does not have, an overlay
+        // no robot could read as one word, an address part with no ADDRESS to belong to.
+        let mut transmitters: Vec<&str> = Vec::new();
+        for c in &r.cabrillo.transmitter_categories {
+            if !CABRILLO_TRANSMITTER_CATEGORIES.contains(&c.as_str()) {
+                return Err(format!(
+                    "{tag}: cabrillo transmitter category {c:?} is not ONE, TWO, LIMITED, \
+                     UNLIMITED or SWL"
+                ));
+            }
+            if transmitters.contains(&c.as_str()) {
+                return Err(format!(
+                    "{tag}: cabrillo transmitter category {c:?} is listed twice"
+                ));
+            }
+            transmitters.push(c);
+        }
+        let mut overlays: Vec<&str> = Vec::new();
+        for c in &r.cabrillo.overlay_categories {
+            let shaped = !c.is_empty()
+                && c.len() <= 32
+                && c.bytes()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'-');
+            if !shaped {
+                return Err(format!(
+                    "{tag}: cabrillo overlay category {c:?} is not uppercase letters, \
+                     digits or hyphens"
+                ));
+            }
+            if overlays.contains(&c.as_str()) {
+                return Err(format!(
+                    "{tag}: cabrillo overlay category {c:?} is listed twice"
+                ));
+            }
+            overlays.push(c);
+        }
+        let mut address: Vec<&str> = Vec::new();
+        for h in &r.cabrillo.address {
+            if !crate::contest::CABRILLO_ADDRESS_HEADERS.contains(&h.as_str()) {
+                return Err(format!(
+                    "{tag}: cabrillo address header {h:?} is not one this build can write"
+                ));
+            }
+            if address.contains(&h.as_str()) {
+                return Err(format!(
+                    "{tag}: cabrillo address header {h:?} is listed twice"
+                ));
+            }
+            address.push(h);
+        }
+        if !address.is_empty() && !address.contains(&"ADDRESS") {
+            return Err(format!(
+                "{tag}: cabrillo names address parts but not ADDRESS, which they are \
+                 details of"
+            ));
+        }
+        // ⭐ The CATEGORY lines a sponsor places an entry by. Each refusal is a line that would
+        // ship wrong, or a Contest-screen sentence nothing could clear: a band or a mode no
+        // Cabrillo robot reads, a required line this build cannot name, or one this ruleset
+        // never writes.
+        let mut bands: Vec<&str> = Vec::new();
+        for b in &r.cabrillo.band_categories {
+            if !CABRILLO_BAND_CATEGORIES.contains(&b.as_str()) {
+                return Err(format!(
+                    "{tag}: cabrillo band category {b:?} is not a Cabrillo CATEGORY-BAND value"
+                ));
+            }
+            if bands.contains(&b.as_str()) {
+                return Err(format!(
+                    "{tag}: cabrillo band category {b:?} is listed twice"
+                ));
+            }
+            bands.push(b);
+        }
+        let mode = r.cabrillo.mode_category.as_str();
+        if !mode.is_empty() && !CABRILLO_MODE_CATEGORIES.contains(&mode) {
+            return Err(format!(
+                "{tag}: cabrillo mode category {mode:?} is not CW, DIGI, FM, RTTY, SSB or MIXED"
+            ));
+        }
+        let listed = |list: &[String], h: &str| list.iter().any(|x| x == h);
+        let mut required: Vec<&str> = Vec::new();
+        for h in &r.cabrillo.required {
+            if !CABRILLO_REQUIRABLE.contains(&h.as_str()) {
+                return Err(format!(
+                    "{tag}: cabrillo required line {h:?} is not one this build can name as \
+                     missing"
+                ));
+            }
+            let written = match h.as_str() {
+                "CATEGORY-BAND" => !bands.is_empty() || listed(&r.cabrillo.headers, h),
+                "CATEGORY-MODE" => !mode.is_empty() || listed(&r.cabrillo.headers, h),
+                "CATEGORY-POWER" => !powers.is_empty() || listed(&r.cabrillo.headers, h),
+                "CATEGORY-TRANSMITTER" => !transmitters.is_empty(),
+                "OPERATORS" => !transmitters.is_empty() || listed(&r.cabrillo.entry_headers, h),
+                _ => listed(&r.cabrillo.headers, h),
+            };
+            if !written {
+                return Err(format!(
+                    "{tag}: cabrillo requires {h:?}, which this ruleset never writes"
+                ));
+            }
+            if required.contains(&h.as_str()) {
+                return Err(format!("{tag}: cabrillo requires {h:?} twice"));
+            }
+            required.push(h);
+        }
+        // …and the entrant's own lines, on a key of their own (`CABRILLO_ENTRY_REQUIRABLE`):
+        // each one this build can name, that this ruleset writes, and once.
+        for h in &r.cabrillo.entry_required {
+            if !CABRILLO_ENTRY_REQUIRABLE.contains(&h.as_str()) {
+                return Err(format!(
+                    "{tag}: cabrillo required entry line {h:?} is not one this build can \
+                     name as missing"
+                ));
+            }
+            let written = match h.as_str() {
+                "ENTRY-CLASS" => listed(&r.cabrillo.entry_headers, h),
+                _ => listed(&r.cabrillo.headers, h),
+            };
+            if !written {
+                return Err(format!(
+                    "{tag}: cabrillo requires {h:?}, which this ruleset never writes"
+                ));
+            }
+            if required.contains(&h.as_str()) {
+                return Err(format!("{tag}: cabrillo requires {h:?} twice"));
+            }
+            required.push(h);
+        }
+    }
+    // ⭐ A LOCATION ALIAS picks a role, so it must land on a location a role actually
+    // lists — otherwise it silently selects nothing — and it must not re-point a code
+    // that is already listed, which would move an operator out of the role their own
+    // code puts them in.
+    {
+        let listed: Vec<&str> = x
+            .roles
+            .iter()
+            .filter_map(|role| match &role.selector {
+                SelectorSpec::MyLocationIn { locations } => Some(locations),
+                _ => None,
+            })
+            .flatten()
+            .map(String::as_str)
+            .collect();
+        for (from, to) in &r.location_aliases {
+            // The state field is read upper-cased, so a key that is not could never match.
+            if from.is_empty()
+                || !from
+                    .bytes()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+            {
+                return Err(format!(
+                    "{tag}: location alias {from:?} is not an uppercase code"
+                ));
+            }
+            if listed.contains(&from.as_str()) {
+                return Err(format!(
+                    "{tag}: location alias {from:?} is itself a listed location"
+                ));
+            }
+            if !listed.contains(&to.as_str()) {
+                return Err(format!(
+                    "{tag}: location alias {from:?} -> {to:?} names a location no role lists"
+                ));
+            }
+        }
+    }
+    let mut mult_ids: Vec<&str> = Vec::new();
+    for m in &r.scoring.multipliers {
+        if m.id.is_empty() {
+            return Err(format!("{tag}: empty multiplier id"));
+        }
+        if mult_ids.contains(&m.id.as_str()) {
+            return Err(format!("{tag}: duplicate multiplier id {:?}", m.id));
+        }
+        mult_ids.push(&m.id);
+        if let MultSourceSpec::Field { key, domain } = &m.source {
+            // A multiplier counts values the OTHER station sent me, so its
+            // slot has to be one some role receives. Read against `sends`
+            // it would count my own constant exchange once and stop.
+            if !x.roles.iter().any(|role| role.receives.contains(key)) {
+                return Err(format!(
+                    "{tag}: multiplier {:?} names slot {key:?}, which no role receives",
+                    m.id
+                ));
+            }
+            if !domain.is_empty() && !resolve_domain(r, domain) {
+                return Err(format!(
+                    "{tag}: multiplier {:?} names unknown domain {domain:?}",
+                    m.id
+                ));
+            }
+        }
+        for role_id in &m.roles {
+            if !x.roles.iter().any(|role| &role.id == role_id) {
+                return Err(format!(
+                    "{tag}: multiplier {:?} names undeclared role {role_id:?}",
+                    m.id
+                ));
+            }
+        }
+    }
+    let mut ids: Vec<&str> = Vec::new();
+    for b in r.bonuses.iter().chain(&r.objectives) {
+        if b.id.is_empty() {
+            return Err(format!("{tag}: empty bonus id"));
+        }
+        if ids.contains(&b.id.as_str()) {
+            return Err(format!("{tag}: duplicate bonus id {:?}", b.id));
+        }
+        ids.push(&b.id);
+        // A per-unit key on a one-box bonus is a value nothing would score.
+        if b.per_unit == 0
+            && (b.max_units != 0
+                || !b.class_max_units.is_empty()
+                || b.counted_from != BonusCount::Operator)
+        {
+            return Err(format!(
+                "{tag}: bonus {:?} sets a limit or a count source without per_unit",
+                b.id
+            ));
+        }
+        if let Some((class, _)) = b
+            .class_max_units
+            .iter()
+            .find(|(c, _)| c.len() != 1 || !c.bytes().all(|x| x.is_ascii_uppercase()))
+        {
+            return Err(format!(
+                "{tag}: bonus {:?} limits class {class:?}, which is not one uppercase letter",
+                b.id
+            ));
+        }
+    }
+    // ⭐ THE OBJECTIVE MENU. Each refusal is an objective that would load and then score
+    // wrong: worth nothing, indistinguishable from another, bringing with it one that does
+    // not exist, or multiplying a score its contest does not multiply.
+    if !r.objective_menu.is_empty() {
+        if r.scoring.model != "objectives" {
+            return Err(format!(
+                "{tag}: an objective menu needs scoring model \"objectives\", not {:?}",
+                r.scoring.model
+            ));
+        }
+        if !r.bonuses.is_empty() {
+            return Err(format!(
+                "{tag}: carries both a bonus menu and an objective menu (a contest scores \
+                 by one)"
+            ));
+        }
+    }
+    let mut objective_ids: Vec<&str> = Vec::new();
+    for o in &r.objective_menu {
+        if o.id.is_empty() {
+            return Err(format!("{tag}: empty objective id"));
+        }
+        if objective_ids.contains(&o.id.as_str()) {
+            return Err(format!("{tag}: duplicate objective id {:?}", o.id));
+        }
+        objective_ids.push(&o.id);
+        if o.label.trim().is_empty() {
+            return Err(format!("{tag}: objective {:?} has no label", o.id));
+        }
+        if o.multiplier == 0 {
+            return Err(format!("{tag}: objective {:?} has multiplier 0", o.id));
+        }
+    }
+    for o in &r.objective_menu {
+        for i in &o.implies {
+            if *i == o.id {
+                return Err(format!("{tag}: objective {:?} implies itself", o.id));
+            }
+            if !objective_ids.contains(&i.as_str()) {
+                return Err(format!(
+                    "{tag}: objective {:?} implies {i:?}, which is not on the menu",
+                    o.id
+                ));
+            }
+        }
+    }
+    // ⭐ BONUS STATIONS. Each refusal is a bonus that would load and then never
+    // fire — the silent 100 points an entrant's submitted score is short.
+    let mut bonus_calls: Vec<&str> = Vec::new();
+    for b in &r.bonus_stations {
+        if b.call.is_empty() || b.call != b.call.trim().to_ascii_uppercase() {
+            return Err(format!(
+                "{tag}: bonus station call {:?} is not a trimmed uppercase callsign",
+                b.call
+            ));
+        }
+        if b.call.contains('/') {
+            return Err(format!(
+                "{tag}: bonus station call {:?} carries a portable affix (the match \
+is against each logged call's BASE, so this one would never fire)",
+                b.call
+            ));
+        }
+        if bonus_calls.contains(&b.call.as_str()) {
+            return Err(format!("{tag}: duplicate bonus station {:?}", b.call));
+        }
+        bonus_calls.push(&b.call);
+        if b.points == 0 {
+            return Err(format!(
+                "{tag}: bonus station {:?} is worth 0 points",
+                b.call
+            ));
+        }
+    }
+    for m in &r.banned_modes {
+        if m.is_empty() || *m != m.to_ascii_uppercase() {
+            return Err(format!("{tag}: banned mode {m:?} not uppercase"));
+        }
+    }
+    if r.enforcement != "warn" {
+        return Err(format!(
+            "{tag}: enforcement {:?} (this build only warns — never removes or disables)",
+            r.enforcement
+        ));
+    }
+    let w = &r.window;
+    if !(1..=12).contains(&w.month) {
+        return Err(format!("{tag}: window month {}", w.month));
+    }
+    match w.weekend.as_str() {
+        "nth_full" if (1..=4).contains(&w.n) => {}
+        "last_full" => {}
+        _ => return Err(format!("{tag}: window weekend {:?} n={}", w.weekend, w.n)),
+    }
+    // ⭐ Up to 47, not 23: the field is hours from 0000Z on the ANCHOR SATURDAY,
+    // and the Tennessee QSO Party starts at 1700Z on the SUNDAY (= 41). Capped at
+    // 23 there was no expressible rule for it at all — the sponsor's own PDF
+    // publishes the 2026 instants and no annual rule, so a build that could only
+    // anchor on the Saturday would have had to pin every year by hand and would
+    // show a window 24 hours early for any year nobody pinned.
+    if w.start_hour_utc >= 48 {
+        return Err(format!("{tag}: window start_hour_utc {}", w.start_hour_utc));
+    }
+    if !(1..=72).contains(&w.duration_hours) {
+        return Err(format!("{tag}: window duration_hours {}", w.duration_hours));
+    }
+    for (y, o) in &w.overrides {
+        if y.parse::<u16>().is_err() {
+            return Err(format!("{tag}: override year {y:?}"));
+        }
+        if o.start_unix >= o.end_unix {
+            return Err(format!("{tag}: override {y} start ≥ end"));
+        }
+    }
+    Ok(())
 }
 
 // ---- build: leak the validated spec into the existing &'static shapes ------
@@ -3345,317 +3483,321 @@ fn build(spec: FileSpec) -> RulesTable {
     let rulesets: Vec<&'static FdRuleset> = spec
         .rulesets
         .into_iter()
-        .map(|r| {
-            // ⚠️ Indexed, not `.get().unwrap_or(0)`: the validator has already proved all
-            // three keys are present whenever this map is the live table. A relation-priced
-            // contest writes `{}` here and the map is never read — a silent `0` would be a
-            // per-mode-class table nobody declared.
-            let points = if r.scoring.points_by_mode_class.is_empty() {
-                ModePoints {
-                    ph: 0,
-                    cw: 0,
-                    dig: 0,
-                }
-            } else {
-                ModePoints {
-                    ph: r.scoring.points_by_mode_class["PH"],
-                    cw: r.scoring.points_by_mode_class["CW"],
-                    dig: r.scoring.points_by_mode_class["DIG"],
-                }
-            };
-            let power_tiers: &'static [u32] = Box::leak(r.scoring.power_tiers.into_boxed_slice());
-            // The file's `model` string names a POST-multiplier profile; both
-            // profiles also carry the claimed bonus menu, which is what the two
-            // old `ScoringModel` arms each did implicitly by having the callers
-            // add `bonus_points` afterwards.
-            let post: &'static [PostMultiplier] = Box::leak(
-                match r.scoring.model.as_str() {
-                    // ⭐ No post-multiplier at all — the state QSO parties. Not even
-                    // `Bonuses`: each of the four declares an empty bonus menu, and
-                    // the two that DO have bonuses (TNQP, TXQP) compute them from the
-                    // log rather than from a menu the operator ticks, which
-                    // `PostMultiplier::Bonuses` cannot express. Declaring the arm
-                    // anyway would read as "the bonuses are handled" when they are
-                    // deliberately omitted — see the seed's `_provenance`.
-                    "none" => vec![],
-                    "powered_multiplier" => vec![
-                        PostMultiplier::PowerTier { tiers: power_tiers },
-                        PostMultiplier::Bonuses,
-                    ],
-                    // Validated to be one of the three.
-                    _ => vec![
-                        PostMultiplier::Objectives {
-                            at_submission: true,
-                        },
-                        PostMultiplier::Bonuses,
-                    ],
-                }
-                .into_boxed_slice(),
-            );
-            let multipliers: &'static [MultiplierRule] = Box::leak(
-                r.scoring
-                    .multipliers
-                    .into_iter()
-                    .map(|m| MultiplierRule {
-                        id: leak_str(m.id),
-                        source: match m.source {
-                            MultSourceSpec::Field { key, domain } => MultSource::Field {
-                                key: leak_str(key),
-                                // "" in the file means "the whole value,
-                                // whatever arm it matched" — the same statement
-                                // `None` makes in the type.
-                                domain: (!domain.is_empty()).then(|| leak_str(domain) as &str),
-                            },
-                            MultSourceSpec::DxccEntity { wae: false } => MultSource::DxccEntity,
-                            MultSourceSpec::DxccEntity { wae: true } => MultSource::WaeCountry,
-                            MultSourceSpec::Prefix => MultSource::Prefix,
-                        },
-                        scope: match m.scope {
-                            MultScopeSpec::PerLog => MultScope::PerLog,
-                            MultScopeSpec::PerBand => MultScope::PerBand,
-                            MultScopeSpec::PerMode => MultScope::PerMode,
-                            MultScopeSpec::PerBandMode => MultScope::PerBandMode,
-                        },
-                        excluding: leak_keys(m.excluding),
-                        roles: leak_keys(m.roles),
-                        // 0 (and an absent key) is "no cap", the same statement ""
-                        // makes for a domain just above.
-                        cap: (m.cap > 0).then_some(m.cap),
-                    })
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice(),
-            );
-            // The three point tables the validator has already proved are mutually
-            // exclusive: a populated `band_points` is the band-group-priced contest, a
-            // populated `relation_points` the relation-priced one, and neither is the
-            // per-mode-class map every earlier contest writes.
-            let qso_points = if !r.scoring.band_points.is_empty() {
-                PointsRule::ByBandGroup(Box::leak(
-                    r.scoring
-                        .band_points
-                        .into_iter()
-                        .map(|g| crate::contest::BandPoints {
-                            bands: leak_keys(g.bands),
-                            points: g.points,
-                        })
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice(),
-                ))
-            } else if r.scoring.relation_points.is_empty() {
-                PointsRule::ByModeClass(points)
-            } else {
-                PointsRule::ByRelation(Box::leak(
-                    r.scoring
-                        .relation_points
-                        .into_iter()
-                        .map(|x| crate::contest::RelationPoints {
-                            relation: match x.relation.as_str() {
-                                "same_country" => crate::contest::Relation::SameCountry,
-                                "within_north_america" => {
-                                    crate::contest::Relation::WithinNorthAmerica
-                                }
-                                "different_continent" => {
-                                    crate::contest::Relation::DifferentContinent
-                                }
-                                // Validated to be one of the four.
-                                _ => crate::contest::Relation::SameContinent,
-                            },
-                            bands: leak_keys(x.bands),
-                            points: x.points,
-                        })
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice(),
-                ))
-            };
-            let scoring = crate::contest::Scoring {
-                qso_points,
-                multipliers,
-                post,
-            };
-            let mut overrides: Vec<(u16, EventWindow)> = r
-                .window
-                .overrides
-                .iter()
-                .map(|(y, o)| {
-                    (
-                        y.parse::<u16>().expect("validated"),
-                        EventWindow {
-                            start_unix: o.start_unix,
-                            end_unix: o.end_unix,
-                        },
-                    )
-                })
-                .collect();
-            overrides.sort_unstable_by_key(|(y, _)| *y);
-            // Domains FIRST: the exchange's `enum` slots resolve against them,
-            // and a reserved id resolves to the derived domain instead.
-            let domains_built: &'static [&'static crate::contest::Domain] = Box::leak(
-                r.domains
-                    .into_iter()
-                    .map(|d| {
-                        let values: Vec<(&'static str, &'static str)> = d
-                            .values
-                            .into_iter()
-                            .map(|v| (leak_str(v.code) as &'static str, leak_str(v.label) as _))
-                            .collect();
-                        &*Box::leak(Box::new(crate::contest::Domain {
-                            id: leak_str(d.id),
-                            adif: crate::contest::AdifTags {
-                                // "" in the file means "no standard column this
-                                // direction" — it becomes None here, which is
-                                // the same statement in the type.
-                                rcvd: leak_opt_tag(d.adif.rcvd),
-                                sent: leak_opt_tag(d.adif.sent),
-                            },
-                            values: Box::leak(values.into_boxed_slice()),
-                        }))
-                    })
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice(),
-            );
-            let exchange_built = build_exchange(r.exchange, domains_built, &reserved);
-            &*Box::leak(Box::new(FdRuleset {
-                event: leak_str(r.event),
-                rules_year: r.rules_year,
-                contest_id: leak_str(r.contest_id),
-                scoring,
-                bonuses: leak_bonuses(r.bonuses),
-                bonus_stations: Box::leak(
-                    r.bonus_stations
-                        .into_iter()
-                        .map(|b| BonusStation {
-                            call: leak_str(b.call),
-                            points: b.points,
-                        })
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice(),
-                ),
-                domains: domains_built,
-                exchange: exchange_built,
-                dupe_rule: DupeRule {
-                    by_call: r.dupe.by_call,
-                    by_band: r.dupe.by_band,
-                    by_mode_class: r.dupe.by_mode_class,
-                    by_fields: leak_keys(r.dupe.by_fields),
-                    by_sent_fields: leak_keys(r.dupe.by_sent_fields),
-                    mode_class_groups: Box::leak(
-                        r.dupe
-                            .mode_class_groups
-                            .into_iter()
-                            .map(leak_keys)
-                            .collect::<Vec<_>>()
-                            .into_boxed_slice(),
-                    ),
-                    // ⭐ EVERY CONTEST LOGS ITS DUPES, whatever the file says (the operator's
-                    // ruling, 2026-10-11: a dupe typed, answered or called is "logged marked as a
-                    // dupe for 0 points"). No shipped sponsor's rules say to remove
-                    // dupes; one that did would be refused here, by its event id.
-                    //
-                    // ⚠️ Decided in code, not in the file, for two reasons. A downloaded file
-                    // replaces the seed whole, and one written before the ruling would turn
-                    // refusal back on. And builds before this one read the same published file
-                    // and refuse on its `false`: a `true` there would change their behaviour
-                    // with no code to go with it, starting with a Field Day club board that
-                    // counts every row it replays as unique. So the file keeps what older builds
-                    // need, and this build does not read it (`DupeSpec::log_dupes`).
-                    log_dupes: true,
-                    satellite_is_a_band: r.dupe.satellite_is_a_band,
-                    fm_satellite_once: r.dupe.fm_satellite_once,
-                },
-                satellite_credit: r.scoring.satellite_credit,
-                tempo_fd: r.tempo_fd,
-                banned_modes: Box::leak(
-                    r.banned_modes
-                        .into_iter()
-                        .map(leak_str)
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice(),
-                ),
-                objectives: leak_bonuses(r.objectives),
-                objective_menu: leak_objectives(r.objective_menu),
-                assistance: AssistancePolicy {
-                    spotting_allowed: r.assistance.spotting_allowed,
-                    cluster_allowed: r.assistance.cluster_allowed,
-                    assistance_note_key: leak_str(r.assistance.assistance_note_key),
-                    spots_rf_only: r.assistance.spots_rf_only,
-                    self_spot_allowed: r.assistance.self_spot_allowed,
-                },
-                enforcement: leak_str(r.enforcement),
-                score_note_key: leak_str(r.score_note_key),
-                transmitter_column: r.transmitter_column,
-                cabrillo_columns: Box::leak(
-                    r.cabrillo
-                        .columns
-                        .into_iter()
-                        .map(|c| crate::contest::CabrilloColumn {
-                            key: leak_str(c.key),
-                            width: c.width,
-                            blank: leak_str(c.blank),
-                        })
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice(),
-                ),
-                cabrillo_headers: leak_keys(r.cabrillo.headers),
-                cabrillo_entry_headers: leak_keys(r.cabrillo.entry_headers),
-                entry_classes: leak_keys(r.cabrillo.entry_classes),
-                cabrillo_x_headers: Box::leak(
-                    r.cabrillo
-                        .x_headers
-                        .into_iter()
-                        .map(|(name, slot)| (leak_str(name), leak_str(slot)))
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice(),
-                ),
-                cabrillo_power_categories: leak_keys(r.cabrillo.power_categories),
-                cabrillo_transmitter_categories: leak_keys(r.cabrillo.transmitter_categories),
-                cabrillo_overlay_categories: leak_keys(r.cabrillo.overlay_categories),
-                cabrillo_address_headers: leak_keys(r.cabrillo.address),
-                cabrillo_soapbox: r.cabrillo.soapbox,
-                cabrillo_band_categories: leak_keys(r.cabrillo.band_categories),
-                cabrillo_mode_category: leak_str(r.cabrillo.mode_category),
-                // The lines the Contest screen names: `required`'s, then the entrant's own.
-                cabrillo_required: leak_keys(
-                    r.cabrillo
-                        .required
-                        .into_iter()
-                        .chain(r.cabrillo.entry_required)
-                        .collect(),
-                ),
-                cabrillo_location: Box::leak(
-                    r.cabrillo
-                        .location
-                        .into_iter()
-                        .map(|(from, to)| (leak_str(from), leak_str(to)))
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice(),
-                ),
-                cabrillo_location_slot: leak_str(r.cabrillo.location_slot),
-                cabrillo_location_setting: leak_str(r.cabrillo.location_setting),
-                bands: leak_keys(r.bands),
-                location_aliases: Box::leak(
-                    r.location_aliases
-                        .into_iter()
-                        .map(|(from, to)| (leak_str(from), leak_str(to)))
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice(),
-                ),
-                window: WindowRule {
-                    month: r.window.month,
-                    weekend: match r.window.weekend.as_str() {
-                        "nth_full" => WeekendRule::NthFull(r.window.n),
-                        _ => WeekendRule::LastFull,
-                    },
-                    start_hour_utc: r.window.start_hour_utc,
-                    duration_hours: r.window.duration_hours,
-                    overrides: Box::leak(overrides.into_boxed_slice()),
-                },
-            }))
-        })
+        .map(|r| &*Box::leak(Box::new(build_ruleset(r, &reserved))))
         .collect();
     RulesTable {
         generated: leak_str(spec.generated),
         rulesets: Box::leak(rulesets.into_boxed_slice()),
         sections: sections_static,
+        reserved,
+    }
+}
+
+/// One validated [`RulesetSpec`] as an [`FdRuleset`] — what [`build`] does for every row of a
+/// rules file, and what [`custom::compile`] does for one operator contest. The caller leaks it.
+fn build_ruleset(r: RulesetSpec, reserved: &Reserved) -> FdRuleset {
+    // ⚠️ Indexed, not `.get().unwrap_or(0)`: the validator has already proved all
+    // three keys are present whenever this map is the live table. A relation-priced
+    // contest writes `{}` here and the map is never read — a silent `0` would be a
+    // per-mode-class table nobody declared.
+    let points = if r.scoring.points_by_mode_class.is_empty() {
+        ModePoints {
+            ph: 0,
+            cw: 0,
+            dig: 0,
+        }
+    } else {
+        ModePoints {
+            ph: r.scoring.points_by_mode_class["PH"],
+            cw: r.scoring.points_by_mode_class["CW"],
+            dig: r.scoring.points_by_mode_class["DIG"],
+        }
+    };
+    let power_tiers: &'static [u32] = Box::leak(r.scoring.power_tiers.into_boxed_slice());
+    // The file's `model` string names a POST-multiplier profile; both
+    // profiles also carry the claimed bonus menu, which is what the two
+    // old `ScoringModel` arms each did implicitly by having the callers
+    // add `bonus_points` afterwards.
+    let post: &'static [PostMultiplier] = Box::leak(
+        match r.scoring.model.as_str() {
+            // ⭐ No post-multiplier at all — the state QSO parties. Not even
+            // `Bonuses`: each of the four declares an empty bonus menu, and
+            // the two that DO have bonuses (TNQP, TXQP) compute them from the
+            // log rather than from a menu the operator ticks, which
+            // `PostMultiplier::Bonuses` cannot express. Declaring the arm
+            // anyway would read as "the bonuses are handled" when they are
+            // deliberately omitted — see the seed's `_provenance`.
+            "none" => vec![],
+            "powered_multiplier" => vec![
+                PostMultiplier::PowerTier { tiers: power_tiers },
+                PostMultiplier::Bonuses,
+            ],
+            // Validated to be one of the three.
+            _ => vec![
+                PostMultiplier::Objectives {
+                    at_submission: true,
+                },
+                PostMultiplier::Bonuses,
+            ],
+        }
+        .into_boxed_slice(),
+    );
+    let multipliers: &'static [MultiplierRule] = Box::leak(
+        r.scoring
+            .multipliers
+            .into_iter()
+            .map(|m| MultiplierRule {
+                id: leak_str(m.id),
+                source: match m.source {
+                    MultSourceSpec::Field { key, domain } => MultSource::Field {
+                        key: leak_str(key),
+                        // "" in the file means "the whole value,
+                        // whatever arm it matched" — the same statement
+                        // `None` makes in the type.
+                        domain: (!domain.is_empty()).then(|| leak_str(domain) as &str),
+                    },
+                    MultSourceSpec::DxccEntity { wae: false } => MultSource::DxccEntity,
+                    MultSourceSpec::DxccEntity { wae: true } => MultSource::WaeCountry,
+                    MultSourceSpec::Prefix => MultSource::Prefix,
+                },
+                scope: match m.scope {
+                    MultScopeSpec::PerLog => MultScope::PerLog,
+                    MultScopeSpec::PerBand => MultScope::PerBand,
+                    MultScopeSpec::PerMode => MultScope::PerMode,
+                    MultScopeSpec::PerBandMode => MultScope::PerBandMode,
+                },
+                excluding: leak_keys(m.excluding),
+                roles: leak_keys(m.roles),
+                // 0 (and an absent key) is "no cap", the same statement ""
+                // makes for a domain just above.
+                cap: (m.cap > 0).then_some(m.cap),
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
+    // The three point tables the validator has already proved are mutually
+    // exclusive: a populated `band_points` is the band-group-priced contest, a
+    // populated `relation_points` the relation-priced one, and neither is the
+    // per-mode-class map every earlier contest writes.
+    let qso_points = if !r.scoring.band_points.is_empty() {
+        PointsRule::ByBandGroup(Box::leak(
+            r.scoring
+                .band_points
+                .into_iter()
+                .map(|g| crate::contest::BandPoints {
+                    bands: leak_keys(g.bands),
+                    points: g.points,
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ))
+    } else if r.scoring.relation_points.is_empty() {
+        PointsRule::ByModeClass(points)
+    } else {
+        PointsRule::ByRelation(Box::leak(
+            r.scoring
+                .relation_points
+                .into_iter()
+                .map(|x| crate::contest::RelationPoints {
+                    relation: match x.relation.as_str() {
+                        "same_country" => crate::contest::Relation::SameCountry,
+                        "within_north_america" => crate::contest::Relation::WithinNorthAmerica,
+                        "different_continent" => crate::contest::Relation::DifferentContinent,
+                        // Validated to be one of the four.
+                        _ => crate::contest::Relation::SameContinent,
+                    },
+                    bands: leak_keys(x.bands),
+                    points: x.points,
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ))
+    };
+    let scoring = crate::contest::Scoring {
+        qso_points,
+        multipliers,
+        post,
+    };
+    let mut overrides: Vec<(u16, EventWindow)> = r
+        .window
+        .overrides
+        .iter()
+        .map(|(y, o)| {
+            (
+                y.parse::<u16>().expect("validated"),
+                EventWindow {
+                    start_unix: o.start_unix,
+                    end_unix: o.end_unix,
+                },
+            )
+        })
+        .collect();
+    overrides.sort_unstable_by_key(|(y, _)| *y);
+    // Domains FIRST: the exchange's `enum` slots resolve against them,
+    // and a reserved id resolves to the derived domain instead.
+    let domains_built: &'static [&'static crate::contest::Domain] = Box::leak(
+        r.domains
+            .into_iter()
+            .map(|d| {
+                let values: Vec<(&'static str, &'static str)> = d
+                    .values
+                    .into_iter()
+                    .map(|v| (leak_str(v.code) as &'static str, leak_str(v.label) as _))
+                    .collect();
+                &*Box::leak(Box::new(crate::contest::Domain {
+                    id: leak_str(d.id),
+                    adif: crate::contest::AdifTags {
+                        // "" in the file means "no standard column this
+                        // direction" — it becomes None here, which is
+                        // the same statement in the type.
+                        rcvd: leak_opt_tag(d.adif.rcvd),
+                        sent: leak_opt_tag(d.adif.sent),
+                    },
+                    values: Box::leak(values.into_boxed_slice()),
+                }))
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
+    let exchange_built = build_exchange(r.exchange, domains_built, reserved);
+    FdRuleset {
+        event: leak_str(r.event),
+        rules_year: r.rules_year,
+        contest_id: leak_str(r.contest_id),
+        scoring,
+        bonuses: leak_bonuses(r.bonuses),
+        bonus_stations: Box::leak(
+            r.bonus_stations
+                .into_iter()
+                .map(|b| BonusStation {
+                    call: leak_str(b.call),
+                    points: b.points,
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        domains: domains_built,
+        exchange: exchange_built,
+        dupe_rule: DupeRule {
+            by_call: r.dupe.by_call,
+            by_band: r.dupe.by_band,
+            by_mode_class: r.dupe.by_mode_class,
+            by_fields: leak_keys(r.dupe.by_fields),
+            by_sent_fields: leak_keys(r.dupe.by_sent_fields),
+            mode_class_groups: Box::leak(
+                r.dupe
+                    .mode_class_groups
+                    .into_iter()
+                    .map(leak_keys)
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            ),
+            // ⭐ EVERY CONTEST LOGS ITS DUPES, whatever the file says (the operator's
+            // ruling, 2026-10-11: a dupe typed, answered or called is "logged marked as a
+            // dupe for 0 points"). No shipped sponsor's rules say to remove
+            // dupes; one that did would be refused here, by its event id.
+            //
+            // ⚠️ Decided in code, not in the file, for two reasons. A downloaded file
+            // replaces the seed whole, and one written before the ruling would turn
+            // refusal back on. And builds before this one read the same published file
+            // and refuse on its `false`: a `true` there would change their behaviour
+            // with no code to go with it, starting with a Field Day club board that
+            // counts every row it replays as unique. So the file keeps what older builds
+            // need, and this build does not read it (`DupeSpec::log_dupes`).
+            log_dupes: true,
+            satellite_is_a_band: r.dupe.satellite_is_a_band,
+            fm_satellite_once: r.dupe.fm_satellite_once,
+        },
+        satellite_credit: r.scoring.satellite_credit,
+        tempo_fd: r.tempo_fd,
+        banned_modes: Box::leak(
+            r.banned_modes
+                .into_iter()
+                .map(leak_str)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        objectives: leak_bonuses(r.objectives),
+        objective_menu: leak_objectives(r.objective_menu),
+        assistance: AssistancePolicy {
+            spotting_allowed: r.assistance.spotting_allowed,
+            cluster_allowed: r.assistance.cluster_allowed,
+            assistance_note_key: leak_str(r.assistance.assistance_note_key),
+            spots_rf_only: r.assistance.spots_rf_only,
+            self_spot_allowed: r.assistance.self_spot_allowed,
+        },
+        enforcement: leak_str(r.enforcement),
+        score_note_key: leak_str(r.score_note_key),
+        transmitter_column: r.transmitter_column,
+        cabrillo_columns: Box::leak(
+            r.cabrillo
+                .columns
+                .into_iter()
+                .map(|c| crate::contest::CabrilloColumn {
+                    key: leak_str(c.key),
+                    width: c.width,
+                    blank: leak_str(c.blank),
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        cabrillo_headers: leak_keys(r.cabrillo.headers),
+        cabrillo_entry_headers: leak_keys(r.cabrillo.entry_headers),
+        entry_classes: leak_keys(r.cabrillo.entry_classes),
+        cabrillo_x_headers: Box::leak(
+            r.cabrillo
+                .x_headers
+                .into_iter()
+                .map(|(name, slot)| (leak_str(name), leak_str(slot)))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        cabrillo_power_categories: leak_keys(r.cabrillo.power_categories),
+        cabrillo_transmitter_categories: leak_keys(r.cabrillo.transmitter_categories),
+        cabrillo_overlay_categories: leak_keys(r.cabrillo.overlay_categories),
+        cabrillo_address_headers: leak_keys(r.cabrillo.address),
+        cabrillo_soapbox: r.cabrillo.soapbox,
+        cabrillo_band_categories: leak_keys(r.cabrillo.band_categories),
+        cabrillo_mode_category: leak_str(r.cabrillo.mode_category),
+        // The lines the Contest screen names: `required`'s, then the entrant's own.
+        cabrillo_required: leak_keys(
+            r.cabrillo
+                .required
+                .into_iter()
+                .chain(r.cabrillo.entry_required)
+                .collect(),
+        ),
+        cabrillo_location: Box::leak(
+            r.cabrillo
+                .location
+                .into_iter()
+                .map(|(from, to)| (leak_str(from), leak_str(to)))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        cabrillo_location_slot: leak_str(r.cabrillo.location_slot),
+        cabrillo_location_setting: leak_str(r.cabrillo.location_setting),
+        bands: leak_keys(r.bands),
+        location_aliases: Box::leak(
+            r.location_aliases
+                .into_iter()
+                .map(|(from, to)| (leak_str(from), leak_str(to)))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        window: WindowRule {
+            month: r.window.month,
+            weekend: match r.window.weekend.as_str() {
+                "nth_full" => WeekendRule::NthFull(r.window.n),
+                _ => WeekendRule::LastFull,
+            },
+            start_hour_utc: r.window.start_hour_utc,
+            duration_hours: r.window.duration_hours,
+            overrides: Box::leak(overrides.into_boxed_slice()),
+            once: None,
+        },
+        custom: false,
+        ft_activity: None,
     }
 }
 

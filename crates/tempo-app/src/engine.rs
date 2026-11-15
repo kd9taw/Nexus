@@ -16575,6 +16575,12 @@ impl Engine {
             contest_category_station: settings.contest_category_station.clone(),
             mygrid: settings.mygrid.clone(),
             dxcc: st.eq_ignore_ascii_case("DX"),
+            // ⭐ The values this contest's `entered` slots send: its own entry, by its id.
+            entered: settings
+                .contest_entered
+                .get(settings.fd_event.trim())
+                .cloned()
+                .unwrap_or_default(),
         }
     }
 
@@ -20235,11 +20241,21 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 // than refusing the mode, which is the same degradation
                 // `fd_rules::ruleset_by_id`'s own doc describes: the operator loses the
                 // party they picked, not Field Day.
+                //
+                // ⚠️ **Except an operator's own contest, which REFUSES.** One that is not
+                // installed was deleted, or its file could not be read; running it as Field
+                // Day would send a class and section the operator never meant to send, and
+                // log them under Field Day's token.
                 let mut s = match tempo_core::fd_rules::ruleset_by_id(
                     self.settings.fd_event.trim(),
                     tempo_core::fd_rules::CURRENT_RULES_YEAR,
                 ) {
                     Some(rs) => ContestSession::for_ruleset(rs, &self.contest_station_data())?,
+                    None if crate::custom_contests::is_custom_id(&self.settings.fd_event) => {
+                        return Err(crate::custom_contests::not_installed(
+                            &self.settings.fd_event,
+                        ));
+                    }
                     None => ContestSession::field_day(
                         tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event),
                         &self.settings.fd_class,
@@ -89307,5 +89323,82 @@ mod spectrum_span_tests {
             "a 4500 Hz tone peaks near bin {want}, got {}",
             peak(&s.row)
         );
+    }
+}
+
+#[cfg(test)]
+mod custom_contest_gone_ft8_click_tests {
+    use super::tests::dec_snr;
+    use super::*;
+
+    /// FT8 on 20 m with the contest switch on and a picked own contest that is not installed,
+    /// a CQ from W9XYZ decoded.
+    fn gone() -> Engine {
+        let mut e = Engine::new("K1ABC", "FN42", 0);
+        e.set_license_class("extra");
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_event = "custom_gone_click".into();
+        s.fd_class = "2B".into();
+        s.fd_section = "EMA".into();
+        e.apply_settings(s);
+        e.set_frequency(14.074, "20m", "USB");
+        e.ingest_decodes_for_test(&[dec_snr("CQ W9XYZ EN37", -12)], 1);
+        e
+    }
+
+    /// Nothing went to W9XYZ: no contest session, Enable Tx off, and no over from the
+    /// following slots names the station clicked.
+    fn nothing_on_the_air(e: &mut Engine, path: &str) {
+        assert!(
+            e.snapshot().field_day.is_none(),
+            "{path}: no Field Day session"
+        );
+        assert!(!e.tx_enabled(), "{path}: Enable Tx stays off");
+        e.set_tx_enabled(true);
+        for slot in 2..6 {
+            for over in e.poll_tx(slot) {
+                assert!(
+                    !format!("{over:?}").contains("W9XYZ"),
+                    "{path}: nothing goes to the clicked station: {over:?}"
+                );
+            }
+        }
+    }
+
+    /// ⭐ **A double-click on a CQ, with a missing own contest picked, is refused by name** — it
+    /// opens the contest's S&P, whose entry refuses the contest, and never answers in Field
+    /// Day's messages with the station's class and section.
+    #[test]
+    fn a_double_click_on_a_cq_is_refused_and_sends_nothing() {
+        let mut e = gone();
+        let err = e
+            .work_station(
+                "W9XYZ",
+                Some("EN37"),
+                Some("CQ W9XYZ EN37"),
+                Some(-12),
+                None,
+            )
+            .expect_err("refused");
+        assert!(
+            err.contains("'custom_gone_click' is not installed"),
+            "{err}"
+        );
+        nothing_on_the_air(&mut e, "double-click");
+    }
+
+    /// …and a logger's Reply (GridTracker, JTAlert) to the same CQ the same way, arming nothing.
+    #[test]
+    fn a_logger_reply_to_a_cq_is_refused_and_arms_nothing() {
+        let mut e = gone();
+        let err = e
+            .answer_udp_reply("W9XYZ", "CQ W9XYZ EN37", -12, None)
+            .expect_err("refused");
+        assert!(
+            err.contains("'custom_gone_click' is not installed"),
+            "{err}"
+        );
+        nothing_on_the_air(&mut e, "logger reply");
     }
 }

@@ -6047,6 +6047,9 @@ export interface Settings {
   /** The power I SEND as an exchange field (ARRL DX: `KW`, `500`, `5`) — free text, and
    *  ⚠️ not `fdPowerMult`, which is a scoring tier picked from a legal set. */
   contestPower?: string
+  /** What the operator types for an own contest's exchange (age, name, text), by contest id
+   *  then slot id: `{ custom_club_sprint: { AGE: '42' } }`. Never in the shared definition. */
+  contestEntered?: Record<string, Record<string, string>>
   /** ENTER SENDS MESSAGE in the CW cockpit's contest strip: Enter sends the contact's next
    *  message. OFF by default, and only the operator's own switch turns it on. */
   contestEsmCw?: boolean
