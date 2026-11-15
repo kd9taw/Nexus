@@ -5342,8 +5342,8 @@ export interface Settings {
   /** Which control line carries the FSK data bits: 'dtr' (default) or 'rts'.
    * PTT rides its OWN path (CAT or the PTT serial line) — never this line. */
   rttyFskLine?: string
-  /** Serial port for the FSK keying line (e.g. the FTDX10's USB Enhanced COM).
-   * Empty = the CAT serial port. */
+  /** Serial port for the FSK keying line (on a two-port Yaesu such as the FT-991A or FTDX10, the
+   * Standard COM port; the Enhanced one is CAT). Empty = the CAT serial port. */
   rttyFskPort?: string
   /** RTTY baud rate — true 45.45 by default (never 45); 50 and 75 are the other rates offered. */
   rttyBaud?: number

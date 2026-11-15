@@ -10021,9 +10021,9 @@ export const EN = {
   'settings.rtty.afskSideband.hint':
     'The sideband the rig runs AFSK on. LSB is the RTTY convention. On USB, Nexus puts the rig in its upper data mode (DATA-U / USB-D / DIGU) and swaps the tones itself, so mark stays high on the air and the decoder still copies — leave Reverse off.',
   'settings.rtty.fskPort.label': 'FSK serial port',
-  'settings.rtty.fskPort.placeholder': "e.g. the FTDX10's USB Enhanced COM",
+  'settings.rtty.fskPort.placeholder': 'blank = use the CAT port',
   'settings.rtty.fskPort.hint':
-    "The port whose control line feeds the rig's FSK input. Empty = the CAT serial port.",
+    "The port whose DTR or RTS line keys the rig's FSK input. Blank = the CAT serial port, right for a one-port interface. A Yaesu with two USB ports (FT-991A, FTDX10) takes CAT on its Enhanced COM port and keys FSK on its Standard COM port, the second of the pair (on Linux usually /dev/ttyUSB1): type that port here, and set the radio's RTTY SHIFT PORT menu to the line chosen below.",
   'settings.rtty.fskLine.label': 'FSK data line',
   'settings.rtty.fskLine.dtr': 'DTR (the common wiring — RTS stays free for PTT)',
   'settings.rtty.fskLine.hint':
