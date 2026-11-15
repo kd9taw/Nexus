@@ -1498,6 +1498,7 @@ dependencies = [
 name = "ft4"
 version = "0.1.0"
 dependencies = [
+ "ft8",
  "tempo-fast-sys",
 ]
 
