@@ -479,7 +479,7 @@ fn next(st: &FieldDayStation) -> String {
 /// with `section` in its exchange. Every over this station sent, in order; the station is back
 /// to listening after it.
 fn picked_contact(st: &mut FieldDayStation, event: &str, section: &str, slot: u64) -> Vec<String> {
-    st.answer_cq("W9XYZ", "EN37");
+    st.answer_cq("W9XYZ", "EN37", -10);
     finished(st, event, section, slot)
 }
 

@@ -36,7 +36,8 @@ fn install(id: &str, token: &str, fields: &[&str], ft_cq: Option<&str>) -> &'sta
             })
             .collect(),
         ft_cq: ft_cq.map(str::to_string),
-        ft_roundup: false,
+        // The operator said Yes to the RTTY Roundup messages; no other shape reads the answer.
+        ft_roundup: true,
         dupe: "band".into(),
         points: Default::default(),
     };
@@ -54,12 +55,25 @@ fn station(
     class: &str,
     section: &str,
 ) -> FieldDayStation {
+    station_in(rs, running, call, grid, class, section, "MA")
+}
+
+/// [`station`] in the state or province `qth`.
+fn station_in(
+    rs: &'static FdRuleset,
+    running: bool,
+    call: &str,
+    grid: &str,
+    class: &str,
+    section: &str,
+    qth: &str,
+) -> FieldDayStation {
     let data = StationData {
         mycall: call.into(),
         mygrid: grid.into(),
         fd_class: class.into(),
         fd_section: section.into(),
-        contest_qth_state: "MA".into(),
+        contest_qth_state: qth.into(),
         contest_category_operator: "SINGLE-OP".into(),
         ..Default::default()
     };
@@ -147,7 +161,7 @@ fn overs(run: &mut FieldDayStation, sp: &mut FieldDayStation, snr: i32, max: u64
             if let tempo_core::message::Msg::Cq { de, grid, .. } =
                 tempo_core::message::Msg::parse(&text)
             {
-                rx.answer_cq(&de, &grid);
+                rx.answer_cq(&de, &grid, snr);
             }
         }
         tx.after_tx();
@@ -265,14 +279,252 @@ fn sp_in_each_custom_contest_arm_answers_no_cq_by_itself() {
     );
     let vhf = install("custom_gate_navhf", "GATE-NAVHF", &["grid4"], Some("TEST"));
     let ww = install("custom_gate_ww", "GATE-WW", &["grid4"], Some("WW"));
+    let ru = install("custom_gate_ru", "GATE-RU", &["rst", "serial"], None);
     let cqs = [
         "CQ FD K1ABC FN42",
         "CQ TEST K1ABC FN42",
         "CQ WW K1ABC FN42",
+        "CQ RU K1ABC FN42",
         "CQ K1ABC FN42",
         "CQ PJ4/K1ABC",
     ];
     sp_answers_no_cq_by_itself(fd, &cqs);
     sp_answers_no_cq_by_itself(vhf, &cqs);
     sp_answers_no_cq_by_itself(ww, &cqs);
+    sp_answers_no_cq_by_itself(ru, &cqs);
+}
+
+// ---- F3: WSJT-X's ARRL RTTY Roundup messages ------------------------------------------------------
+
+/// WSJT-X's report from an SNR (genStdMsgs, mainwindow.cpp 9619-9622): `nn=(n+36)/6`, clamped to
+/// 2..=9, C++ integer division truncating toward zero.
+#[test]
+fn the_contest_report_is_wsjtxs_5n9() {
+    use tempo_core::fieldday::contest_rst;
+    for (snr, want) in [
+        (-30, "529"),
+        (-37, "529"),
+        (-50, "529"),
+        (-24, "529"),
+        (-18, "539"),
+        (-7, "549"),
+        (-6, "559"),
+        (0, "569"),
+        (6, "579"),
+        (12, "589"),
+        (18, "599"),
+        (20, "599"),
+        (49, "599"),
+    ] {
+        assert_eq!(contest_rst(snr), want, "{snr} dB");
+    }
+}
+
+/// RST + serial, asked for the Roundup: `CQ RU`, then WSJT-X's Tx2 / Tx3 / Tx4 / Tx5 over for
+/// over, the serial as four digits, and both logs agree (the serial logged as its number).
+#[test]
+fn an_rst_and_serial_contest_works_a_contact_in_the_roundup_messages() {
+    let rs = install("custom_air_ru", "AIR-RU", &["rst", "serial"], None);
+    assert_eq!(FtMessages::for_contest(rs, "FT8"), FtMessages::RttyRoundup);
+    assert_eq!(FtMessages::for_contest(rs, "FT4"), FtMessages::RttyRoundup);
+    let mut run = station(rs, true, "K1ABC", "FN42", "", "");
+    let mut sp = station(rs, false, "W9XYZ", "EN52", "", "");
+    assert_eq!(
+        overs(&mut run, &mut sp, 6, 12),
+        [
+            "R: CQ RU K1ABC FN42",
+            "S: K1ABC W9XYZ 579 0001",
+            "R: W9XYZ K1ABC R 579 0001",
+            "S: K1ABC W9XYZ RR73",
+            "R: W9XYZ K1ABC 73",
+        ]
+    );
+    assert_eq!(rows(&run), ["W9XYZ rx[RST=579,NR=1] tx[RST=579,NR=1]"]);
+    assert_eq!(rows(&sp), ["K1ABC rx[RST=579,NR=1] tx[RST=579,NR=1]"]);
+    // The next contact gets the next serial, and the report follows the SNR it was heard at.
+    run.rearm(true);
+    sp.rearm(false);
+    let mut sp2 = station(rs, false, "W1AW", "FN31", "", "");
+    let second = overs(&mut run, &mut sp2, -30, 12);
+    assert_eq!(second[1], "S: K1ABC W1AW 529 0001");
+    assert_eq!(second[2], "R: W1AW K1ABC R 529 0002");
+    assert_eq!(rows(&run)[1], "W1AW rx[RST=529,NR=1] tx[RST=529,NR=2]");
+    // Through the modem: every over packs as the RTTY contest message and decodes back.
+    let mut run = station(rs, true, "K1ABC", "FN42", "", "");
+    let mut sp = station(rs, false, "W9XYZ", "EN52", "", "");
+    run_loopback_fieldday(&mut run, &mut sp, 0.0, 12);
+    assert_eq!(rows(&run).len(), 1, "{:?}", run.transcript);
+    assert_eq!(rows(&sp).len(), 1, "{:?}", sp.transcript);
+    assert!(
+        rows(&run)[0].starts_with("W9XYZ rx[RST=5"),
+        "{:?}",
+        rows(&run)
+    );
+    assert!(
+        rows(&run)[0].contains(",NR=1] tx[RST=5"),
+        "{:?}",
+        rows(&run)
+    );
+}
+
+/// RST + state/province, asked for the Roundup: the state goes where the serial would.
+#[test]
+fn an_rst_and_state_contest_works_a_contact_in_the_roundup_messages() {
+    let rs = install(
+        "custom_air_ru_qth",
+        "AIR-RU-QTH",
+        &["rst", "state_province"],
+        None,
+    );
+    assert_eq!(FtMessages::for_contest(rs, "FT8"), FtMessages::RttyRoundup);
+    let mut run = station_in(rs, true, "K1ABC", "FN42", "", "", "MA");
+    let mut sp = station_in(rs, false, "W9XYZ", "EN52", "", "", "IL");
+    assert_eq!(
+        overs(&mut run, &mut sp, 6, 12),
+        [
+            "R: CQ RU K1ABC FN42",
+            "S: K1ABC W9XYZ 579 IL",
+            "R: W9XYZ K1ABC R 579 MA",
+            "S: K1ABC W9XYZ RR73",
+            "R: W9XYZ K1ABC 73",
+        ]
+    );
+    assert_eq!(rows(&run), ["W9XYZ rx[RST=579,QTH=IL] tx[RST=579,QTH=MA]"]);
+    assert_eq!(rows(&sp), ["K1ABC rx[RST=579,QTH=MA] tx[RST=579,QTH=IL]"]);
+    let mut run = station_in(rs, true, "K1ABC", "FN42", "", "", "MA");
+    let mut sp = station_in(rs, false, "W9XYZ", "EN52", "", "", "IL");
+    run_loopback_fieldday(&mut run, &mut sp, 0.0, 12);
+    assert_eq!(rows(&run).len(), 1, "{:?}", run.transcript);
+    assert!(
+        rows(&run)[0].contains("QTH=IL] tx[RST="),
+        "{:?}",
+        rows(&run)
+    );
+    assert!(rows(&sp)[0].contains("QTH=MA] tx[RST="), "{:?}", rows(&sp));
+}
+
+/// The Roundup's messages pack as WSJT-X's RTTY contest message (i3=3), AK and HI too (in the
+/// packer's `cmult` though WSJT-X's settings box leaves them out), and 0105 (a serial its settings
+/// box turns away, which the packer takes).
+#[test]
+fn the_roundup_messages_pack_as_the_rtty_contest_message() {
+    for text in [
+        "K1ABC W9XYZ 579 0013",
+        "K1ABC W9XYZ R 579 0013",
+        "K1ABC W9XYZ 579 WI",
+        "K1ABC W9XYZ R 579 WI",
+        "K1ABC W9XYZ 579 AK",
+        "K1ABC W9XYZ 579 HI",
+        "K1ABC W9XYZ 579 0105",
+        "K1ABC W9XYZ 529 7999",
+        "TU; K1ABC W9XYZ R 579 MA",
+        "K1ABC W9XYZ/QRP 579 0001",
+        "K1ABC PJ4/W9XYZ 579 0001",
+    ] {
+        assert_eq!(i3n3(text).map(|(i3, _)| i3), Some(3), "{text}");
+    }
+    // A nonstandard call goes in whole: bit for bit WSJT-X's bracketed `t0b` for a suffix…
+    assert_eq!(
+        modes::wsjt77::ft8_tones("K1ABC W9XYZ/QRP 579 0001"),
+        modes::wsjt77::ft8_tones("K1ABC <W9XYZ/QRP> 579 0001")
+    );
+    // …and the RTTY message for a prefix, where WSJT-X's own bracketed form is not one.
+    assert_ne!(
+        i3n3("K1ABC <PJ4/W9XYZ> 579 0001").map(|(i3, _)| i3),
+        Some(3)
+    );
+    // DX is no multiplier the message carries.
+    assert_ne!(i3n3("K1ABC W9XYZ 579 DX").map(|(i3, _)| i3), Some(3));
+}
+
+/// A serial past 7999 and a QTH the message has no word for (DX) are refused: nothing is sent,
+/// nothing is logged, and the reason is said.
+#[test]
+fn the_roundup_refuses_an_exchange_its_message_cannot_carry() {
+    let rs = install("custom_air_ru_lim", "AIR-RU-LIM", &["rst", "serial"], None);
+    // Running at serial 8000: a caller's exchange gets no answer, the run keeps calling CQ.
+    let mut run = station(rs, true, "K1ABC", "FN42", "", "");
+    run.log.session.next_serial = 8000;
+    let why = run.exchange_refusal().expect("refused up front");
+    assert!(why.contains("serial 8000"), "{why}");
+    assert!(why.contains("1 to 7999"), "{why}");
+    run.observe(&[heard("K1ABC W9XYZ 579 0013")], 1);
+    assert_eq!(run.outgoing().unwrap().to_text(), "CQ RU K1ABC FN42");
+    assert_eq!(run.take_refusal().as_deref(), Some(why.as_str()));
+    assert!(run.log.qsos().is_empty());
+    run.observe(&[heard("K1ABC W9XYZ R 579 0013")], 3);
+    assert!(
+        run.log.qsos().is_empty(),
+        "a rogered caller is not logged either"
+    );
+    // 7999 still goes.
+    run.log.session.next_serial = 7999;
+    assert_eq!(run.exchange_refusal(), None);
+    run.observe(&[heard("K1ABC W9XYZ 579 0013")], 5);
+    assert_eq!(run.outgoing().unwrap().to_text(), "W9XYZ K1ABC R 549 7999");
+    // S&P at serial 8000: the double-click is refused, S&P keeps listening.
+    let mut sp = station(rs, false, "W9XYZ", "EN52", "", "");
+    sp.log.session.next_serial = 8000;
+    sp.answer_cq("K1ABC", "FN42", 6);
+    assert!(sp.outgoing().is_none());
+    assert_eq!(sp.state, tempo_core::fieldday::FdState::Listening);
+    assert!(sp.take_refusal().unwrap().contains("serial 8000"));
+    // A state the message has no word for.
+    let rs = install(
+        "custom_air_ru_dx",
+        "AIR-RU-DX",
+        &["rst", "state_province"],
+        None,
+    );
+    let mut sp = station_in(rs, false, "W9XYZ", "EN52", "", "", "DX");
+    let why = sp.exchange_refusal().expect("DX refused up front");
+    assert!(why.contains("Your QTH \"DX\""), "{why}");
+    sp.answer_cq("K1ABC", "FN42", 6);
+    assert!(sp.outgoing().is_none());
+    assert_eq!(sp.take_refusal().as_deref(), Some(why.as_str()));
+    assert!(sp.log.qsos().is_empty());
+}
+
+/// `TU; ` before the runner's rogered exchange (FT4's WSJT-X sends it) is read past: logged and
+/// closed with RR73. A first call with a grid is answered with the exchange, as WSJT-X's Tx2.
+#[test]
+fn the_roundup_reads_tu_and_answers_a_grid_caller_with_the_exchange() {
+    let rs = install("custom_air_ru_tu", "AIR-RU-TU", &["rst", "serial"], None);
+    let mut sp = station(rs, false, "W9XYZ", "EN52", "", "");
+    sp.answer_cq("K1ABC", "FN42", 6);
+    assert_eq!(sp.outgoing().unwrap().to_text(), "K1ABC W9XYZ 579 0001");
+    sp.observe(&[heard("TU; W9XYZ K1ABC R 559 0042")], 1);
+    assert_eq!(sp.outgoing().unwrap().to_text(), "K1ABC W9XYZ RR73");
+    assert_eq!(rows(&sp), ["K1ABC rx[RST=559,NR=42] tx[RST=579,NR=1]"]);
+    let mut run = station(rs, true, "K1ABC", "FN42", "", "");
+    run.observe(&[heard("K1ABC W9XYZ EN52")], 1);
+    assert_eq!(run.outgoing().unwrap().to_text(), "W9XYZ K1ABC 549 0001");
+    run.after_tx();
+    run.observe(&[heard("K1ABC W9XYZ R 579 0007")], 3);
+    assert_eq!(run.outgoing().unwrap().to_text(), "W9XYZ K1ABC RR73");
+    assert_eq!(rows(&run), ["W9XYZ rx[RST=579,NR=7] tx[RST=549,NR=1]"]);
+    // A message from `<...>` is passed by (mainwindow.cpp 9098-9099).
+    let mut run = station(rs, true, "K1ABC", "FN42", "", "");
+    run.observe(&[heard("K1ABC <...> 579 0013")], 1);
+    assert_eq!(run.outgoing().unwrap().to_text(), "CQ RU K1ABC FN42");
+}
+
+/// Nonstandard calls in the Roundup: each goes in whole, and the over packs as the RTTY message.
+#[test]
+fn the_roundup_carries_a_nonstandard_call_whole() {
+    let rs = install("custom_air_ru_ns", "AIR-RU-NS", &["rst", "serial"], None);
+    for me in ["K1ABC/QRP", "PJ4/K1ABC"] {
+        let mut sp = station(rs, false, me, "FN42", "", "");
+        sp.answer_cq("W9XYZ", "EN52", 6);
+        let text = sp.outgoing().unwrap().to_text();
+        assert_eq!(text, format!("W9XYZ {me} 579 0001"));
+        assert_eq!(i3n3(&text).map(|(i3, _)| i3), Some(3), "{text}");
+        // The runner's rogered exchange to me, my call hashed as the decoder prints it.
+        sp.observe(&[heard(&format!("<{me}> W9XYZ R 579 0003"))], 1);
+        assert_eq!(
+            rows(&sp),
+            ["W9XYZ rx[RST=579,NR=3] tx[RST=579,NR=1]"],
+            "{me}"
+        );
+    }
 }

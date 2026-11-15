@@ -20,6 +20,9 @@ use super::*;
 use crate::dto::Tier;
 use crate::test_util::StoredLog;
 
+/// An operator's own contest in the WSJT-X contest messages its exchange matches, through the
+/// cockpit's verbs.
+mod custom_contest;
 /// A station already in the contest's log, worked again on FT8: logged a dupe, worth nothing.
 mod picked_dupe;
 /// The contest's Running stops after each contact until the operator calls CQ again.
@@ -70,6 +73,9 @@ enum Act {
     FieldDay,
     NaVhf,
     None,
+    /// ARRL RTTY Roundup (`RTTY`), which an operator's own contest asks for
+    /// ([`custom_contest`]): the partner sends `559 0013`.
+    Roundup,
 }
 
 fn act_of(contest: &str) -> Act {
@@ -96,6 +102,7 @@ impl Partner {
             Act::FieldDay => format!("CQ FD {DX} {DX_GRID}"),
             Act::NaVhf => format!("CQ TEST {DX} {DX_GRID}"),
             Act::None => format!("CQ {DX} {DX_GRID}"),
+            Act::Roundup => format!("CQ RU {DX} {DX_GRID}"),
         });
         Self {
             act,
@@ -127,6 +134,7 @@ impl Partner {
             self.next = Some(match self.act {
                 Act::FieldDay => reply("1D WI"),
                 Act::NaVhf | Act::None => reply(DX_GRID),
+                Act::Roundup => reply("559 0013"),
             });
             return;
         }
@@ -140,6 +148,11 @@ impl Partner {
             Act::NaVhf if w.len() == 3 && is_grid(w[2]) => (reply(&format!("R {DX_GRID}")), false),
             Act::NaVhf if w.len() == 4 && w[2] == "R" && is_grid(w[3]) => (reply("RR73"), true),
             Act::FieldDay | Act::NaVhf if closing => (reply("73"), true),
+            // genStdMsgs 9638-9657 and processMessage 9152-9160: an exchange is rogered with
+            // the partner's own, a rogered one closed with RR73, and RR73 answered with 73.
+            Act::Roundup if w.len() == 4 => (reply("R 559 0013"), false),
+            Act::Roundup if w.len() == 5 && w[2] == "R" => (reply("RR73"), true),
+            Act::Roundup if closing => (reply("73"), true),
             Act::None if w.len() == 3 && is_grid(w[2]) => (reply(DX_RPT), false),
             Act::None if w.len() == 3 && w[2].starts_with('R') && is_report(&w[2][1..]) => {
                 (reply("RR73"), true)

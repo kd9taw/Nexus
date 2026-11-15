@@ -351,6 +351,22 @@ fn the_preview_names_the_ft_messages_this_build_sends() {
             "EN52",
         ),
         (
+            "custom_pv_ru",
+            &["rst", "serial"],
+            None,
+            "rtty_roundup",
+            "CQ RU W9XYZ EN52",
+            "579 0001",
+        ),
+        (
+            "custom_pv_ru_qth",
+            &["rst", "state_province"],
+            None,
+            "rtty_roundup",
+            "CQ RU W9XYZ EN52",
+            "579 IL",
+        ),
+        (
             "custom_pv_none",
             &["rst", "cq_zone"],
             None,
@@ -363,6 +379,8 @@ fn the_preview_names_the_ft_messages_this_build_sends() {
         let mut d = def(id, &format!("APP-PV-{i}"), fields);
         d.modes = vec!["FT8".into()];
         d.ft_cq = cq.map(str::to_string);
+        // Yes to the RTTY Roundup messages; no other shape reads the answer.
+        d.ft_roundup = true;
         let p = custom_contests::preview(&d, &settings, NOW);
         assert_eq!(p.refusal, "", "{id}");
         assert_eq!(
@@ -374,7 +392,17 @@ fn the_preview_names_the_ft_messages_this_build_sends() {
             (*messages, *ft_cq, *sends),
             "{id}"
         );
+        assert_eq!(p.ft_refusal, "", "{id}");
     }
+    // A QTH the RTTY Roundup message has no word for is said in the preview, as the station
+    // would refuse it on the air.
+    settings.contest_qth_state = "DX".into();
+    let mut d = def("custom_pv_ru_dx", "APP-PV-DX", &["rst", "state_province"]);
+    d.modes = vec!["FT8".into()];
+    d.ft_roundup = true;
+    let p = custom_contests::preview(&d, &settings, NOW);
+    assert_eq!(p.ft_messages, "rtty_roundup");
+    assert!(p.ft_refusal.contains("Your QTH \"DX\""), "{p:?}");
 }
 
 /// Write a contest file holding `entries`, as a raw JSON list.

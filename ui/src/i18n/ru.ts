@@ -10633,6 +10633,7 @@ export const RU: PartialCatalog = {
   "customContest.ft.standard": "FT8/FT4: Nexus передаёт стандартные сообщения (локатор и рапорт); ваш контрольный номер не передаётся.",
   "customContest.ft.notYet": "FT8/FT4: этот контрольный номер совпадает с сообщением {{activity}} в WSJT-X, которое эта версия Nexus пока не передаёт. Она передаёт стандартные сообщения (локатор и рапорт); ваш контрольный номер не передаётся.",
   "customContest.ft.landed": "FT8/FT4: этот контрольный номер — сообщение {{activity}} в WSJT-X. Nexus зовёт {{cq}} и передаёт {{sends}}. Корреспондентам нужны те же контестные сообщения: в WSJT-X — Settings ▸ Advanced ▸ Special operating activity ▸ {{activity}}.",
+  "customContest.ft.limit.rttyRoundup": "Это сообщение несёт порядковые номера от 1 до 7999 и штат США, провинцию Канады или DC; всё остальное (включая DX) Nexus отказывается передавать, чтобы не передать неверно.",
   "customContest.rules.title": "Повторы и очки",
   "customContest.rules.dupe": "Станция засчитывается",
   "customContest.rules.dupe.once": "Один раз за соревнование",

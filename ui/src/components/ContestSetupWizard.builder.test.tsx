@@ -3,7 +3,7 @@
 // ⭐ BUILD YOUR OWN CONTEST, in the contest setup: the builder's steps (a required box empty refuses
 // Next and says which), Save installs it and comes back to the pick with it picked, Edit / Export… /
 // Delete on the operator's own contests, Import… with the Replace-or-Keep-both choice, the FT8/FT4
-// line saying what this build does (standard messages), the RTTY Roundup question defaulting to No,
+// line saying what this build does, the RTTY Roundup question defaulting to No,
 // and the typed values (an age) asked on the exchange step into `contestEntered`.
 //
 // The station's commands are mocked as the station answers them (src-tauri's
@@ -14,7 +14,7 @@ import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-li
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { ContestSetupWizard } from './ContestSetupWizard'
-import { ftLine } from './CustomContestBuilder'
+import { cleanCustomDef, ftLine } from './CustomContestBuilder'
 import type { AppSnapshot, Settings } from '../types'
 import type { CustomContest, CustomContestDef, CustomContestPreview, FdRulesetDto } from '../api'
 import { enteredTyped, setCustomContests } from '../features/customContests'
@@ -66,20 +66,26 @@ let station: Partial<Settings> = {}
 let installed: CustomContest[] = []
 
 /** The station's preview of a definition: its refusal verbatim, else what it would send, a sample
- *  line, and the FT8/FT4 answer — standard messages for every custom contest in this build. */
+ *  line, and the FT8/FT4 answer — the RTTY Roundup's messages for its shape when asked, standard
+ *  messages otherwise. */
 function previewOf(def: CustomContestDef): CustomContestPreview {
-  const blank: Omit<CustomContestPreview, 'refusal'> = { youSend: '', startProblem: '', sampleQsoLine: '', ftShape: null, ftActivity: null, ftMessages: 'standard', ftCq: '', ftSends: '', enteredSlots: [] }
+  const blank: Omit<CustomContestPreview, 'refusal'> = { youSend: '', startProblem: '', sampleQsoLine: '', ftShape: null, ftActivity: null, ftMessages: 'standard', ftCq: '', ftSends: '', ftRefusal: '', enteredSlots: [] }
   if (def.exchange.filter((f) => f.field === 'rst').length > 1) return { ...blank, refusal: 'the exchange carries rst twice' }
   const ft = def.modes.includes('FT8') || def.modes.includes('FT4')
-  const roundup = ft && def.exchange.map((f) => f.field).join() === 'rst,serial'
+  const shape = def.exchange.map((f) => f.field).join()
+  const roundup = ft && (shape === 'rst,serial' || shape === 'rst,state_province')
+  const asked = roundup && !!def.ft_roundup
   return {
     ...blank,
     refusal: '',
     youSend: def.exchange.map((f) => (f.field === 'rst' ? '599' : f.field === 'serial' ? '1' : '?')).join(' '),
     sampleQsoLine: `QSO:  7025 CW 2026-03-07 1400 K9ABC 599 1 W1AW 599 1`,
     ftShape: roundup ? 'rtty_roundup' : null,
-    ftActivity: roundup && def.ft_roundup ? 'rtty_roundup' : null,
-    ftMessages: 'standard',
+    // The station sends the Roundup's messages once the operator says Yes to them.
+    ftActivity: asked ? 'rtty_roundup' : null,
+    ftMessages: asked ? 'rtty_roundup' : 'standard',
+    ftCq: asked ? 'CQ RU K9ABC EN52' : '',
+    ftSends: asked ? '579 0001' : '',
   }
 }
 
@@ -249,9 +255,13 @@ describe('build your own contest', () => {
         'FT8/FT4: Nexus sends standard messages (grid and signal report); your exchange is not sent.',
       ),
     )
-    // Said Yes: the message is named, and still not sent by this build.
+    // Said Yes: this build sends the Roundup's messages, and the line says which, with its limits.
     fireEvent.click(within(ask).getByRole('radio', { name: 'Yes: RTTY Roundup messages' }))
-    await waitFor(() => expect(document.querySelector('[data-ft-line]')?.textContent).toMatch(/matches WSJT-X's ARRL RTTY Roundup message, which this version of Nexus does not send yet/))
+    await waitFor(() =>
+      expect(document.querySelector('[data-ft-line]')?.textContent).toBe(
+        "FT8/FT4: this exchange is WSJT-X's ARRL RTTY Roundup message. Nexus calls CQ RU K9ABC EN52 and sends 579 0001. Stations you work need the same contest messages: in WSJT-X, Settings ▸ Advanced ▸ Special operating activity ▸ ARRL RTTY Roundup. That message carries serials 1 to 7999 and a US state, Canadian province or DC; Nexus refuses anything else (DX included) rather than send it wrong.",
+      ),
+    )
     fireEvent.click(within(ask).getByRole('radio', { name: 'No: standard messages' }))
     fireEvent.click(nextButton())
     fireEvent.click(nextButton())
@@ -461,6 +471,7 @@ describe('the FT8/FT4 line', () => {
     ftMessages: 'standard',
     ftCq: '',
     ftSends: '',
+    ftRefusal: '',
     enteredSlots: [],
     ...patch,
   })
@@ -477,5 +488,44 @@ describe('the FT8/FT4 line', () => {
   it('says standard messages where the station sends them', () => {
     expect(ftLine(p({}))).toMatch(/^FT8\/FT4: no WSJT-X contest message carries this exchange/)
     expect(ftLine(p({ ftShape: 'eu_vhf', ftActivity: 'eu_vhf' }))).toMatch(/matches WSJT-X's EU VHF message, which this version of Nexus does not send yet/)
+  })
+})
+
+describe('the RTTY Roundup answer', () => {
+  it('is kept for either Roundup shape with FT8 or FT4, and dropped anywhere else', () => {
+    const base: CustomContestDef = {
+      format: 'nexus-custom-contest',
+      version: 1,
+      id: '',
+      name: 'Club RU',
+      cabrillo_contest: 'CLUB-RU',
+      modes: ['FT8'],
+      window: { kind: 'weekend', month: 1, weekend: 'nth_full', n: 1, start_hour_utc: 0, duration_hours: 24 },
+      exchange: [{ field: 'rst' }, { field: 'state_province' }],
+      ft_roundup: true,
+      dupe: 'band',
+    }
+    expect(cleanCustomDef(base, 'custom_club_ru').ft_roundup).toBe(true)
+    expect(cleanCustomDef({ ...base, exchange: [{ field: 'rst' }, { field: 'serial' }] }, 'custom_club_ru').ft_roundup).toBe(true)
+    expect('ft_roundup' in cleanCustomDef({ ...base, modes: ['CW'] }, 'custom_club_ru')).toBe(false)
+    expect('ft_roundup' in cleanCustomDef({ ...base, exchange: [{ field: 'rst' }, { field: 'cq_zone' }] }, 'custom_club_ru')).toBe(false)
+  })
+
+  it("adds the station's own refusal of the exchange, verbatim", () => {
+    const why = 'Your QTH "DX" cannot go in WSJT-X\'s RTTY Roundup message on FT8/FT4.'
+    const line = ftLine({
+      refusal: '',
+      youSend: '',
+      startProblem: '',
+      sampleQsoLine: '',
+      ftShape: 'rtty_roundup',
+      ftActivity: 'rtty_roundup',
+      ftMessages: 'rtty_roundup',
+      ftCq: 'CQ RU K9ABC EN52',
+      ftSends: '579 DX',
+      ftRefusal: why,
+      enteredSlots: [],
+    })
+    expect(line.endsWith(why)).toBe(true)
   })
 })

@@ -190,7 +190,7 @@ fn run(
     )
     .unwrap();
     if let Some(grid) = answer {
-        st.answer_cq("W9XYZ", grid);
+        st.answer_cq("W9XYZ", grid, -10);
         writeln!(
             out,
             "  answer W9XYZ {grid:?} -> {:?} {:?}",

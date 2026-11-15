@@ -73,6 +73,7 @@ const answers: Record<string, (args: Record<string, unknown>) => unknown> = {
       ftMessages: 'standard',
       ftCq: '',
       ftSends: '',
+      ftRefusal: '',
       enteredSlots: [],
     }
   },

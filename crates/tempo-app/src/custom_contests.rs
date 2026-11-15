@@ -425,6 +425,10 @@ pub struct CustomPreview {
     /// The exchange those messages carry after the two calls (`579 0001`), as the sequencer would
     /// send it first; `""` with the standard messages.
     pub ft_sends: String,
+    /// Why those messages cannot carry this station's exchange with the current settings (a QTH
+    /// the RTTY Roundup message has no word for), as the station would refuse it; `""` when they
+    /// can.
+    pub ft_refusal: String,
     /// The slots the setup will ask the operator to type.
     pub entered_slots: Vec<String>,
 }
@@ -455,6 +459,7 @@ pub fn preview(
             FtMessages::FieldDay => "field_day",
             FtMessages::NaVhf => "na_vhf",
             FtMessages::WwDigi => "ww_digi",
+            FtMessages::RttyRoundup => "rtty_roundup",
         }
         .to_string(),
         entered_slots: rs.entered_slots().into_iter().map(str::to_string).collect(),
@@ -474,6 +479,9 @@ pub fn preview(
         let grid = session.field("GRID");
         out.ft_cq = messages.cq_on_air(settings.mycall.trim(), settings.mygrid.trim(), grid);
         out.ft_sends = messages.sample_exchange(&session, settings.mygrid.trim());
+        out.ft_refusal = messages
+            .exchange_refusal(&session, settings.mygrid.trim())
+            .unwrap_or_default();
     }
     let sent: Vec<(String, String)> = session
         .my_exchange

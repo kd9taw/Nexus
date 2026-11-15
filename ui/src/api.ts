@@ -764,6 +764,8 @@ export interface CustomContestPreview {
   ftCq: string
   /** The exchange those messages carry after the calls (`579 0001`); `''` with standard messages. */
   ftSends: string
+  /** Why those messages cannot carry this station's exchange now, verbatim; `''` when they can. */
+  ftRefusal: string
   enteredSlots: string[]
 }
 

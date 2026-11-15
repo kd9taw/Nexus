@@ -21141,6 +21141,28 @@ Pick the one you operate from on the Contesting tab in Settings.",
         FtMessages::follows_contest(ruleset, mode).then(|| FtMessages::for_contest(ruleset, mode))
     }
 
+    /// ⭐ **Why the contest's FT8/FT4 `messages` cannot carry this station's exchange**, in the
+    /// operator's words ([`FtMessages::exchange_refusal`]), or `None`: asked before the contest's
+    /// Running starts and before a double-click answers a CQ, so a serial past what the RTTY
+    /// Roundup message holds, or a QTH it has no word for, is said before anything changes and
+    /// never sent wrong. The session is the running contest's, else the one `set_mode` would
+    /// open from Settings; one that cannot start is `set_mode`'s to refuse.
+    fn contest_exchange_refusal(&self, messages: FtMessages) -> Option<String> {
+        if !matches!(messages, FtMessages::RttyRoundup) {
+            return None;
+        }
+        let mygrid = self.settings.mygrid.trim();
+        if let Mode::FieldDay { station, .. } = &self.mode {
+            return messages.exchange_refusal(&station.log.session, mygrid);
+        }
+        let ruleset = tempo_core::fd_rules::ruleset_by_id(
+            self.settings.fd_event.trim(),
+            tempo_core::fd_rules::CURRENT_RULES_YEAR,
+        )?;
+        let session = ContestSession::for_ruleset(ruleset, &self.contest_station_data()).ok()?;
+        messages.exchange_refusal(&session, mygrid)
+    }
+
     /// ⭐ **The CQ the contest's Running calls, as it goes on the air** — what the Operate
     /// cockpit's Tx6 row shows while a contest runs whose own FT8/FT4 messages apply
     /// ([`Self::contest_ft_messages`]), and on this computer calls through the contest's Running,
@@ -21241,24 +21263,32 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if de.contains("<...>") {
             return Err(Self::UNRESOLVED_CQ.into());
         }
-        let slot = self
+        // The CQ's decode: its slot, and the SNR the RTTY Roundup's answer makes its report from,
+        // as WSJT-X makes its Tx2 from the double-clicked decode's (genStdMsgs, 9619-9622).
+        let (slot, snr) = self
             .decode_history
             .iter()
             .rev()
             .find(|(_, d)| d.message.eq_ignore_ascii_case(text.trim()))
-            .map(|(s, _)| *s)
             // This station's decodes only: a stranger's slot is a coin toss for its period.
-            .or_else(|| self.latest_decode_slot_from(de))
+            .or_else(|| self.latest_decode_from(de))
+            .map(|(s, d)| (*s, d.snr))
             .ok_or_else(|| {
                 format!(
                     "No recent decode from {de} — wait for their next transmission, \
                      then click again."
                 )
             })?;
-        if messages != FtMessages::FieldDay && grid.is_empty() {
+        // Field Day's and the RTTY Roundup's answer is the exchange, which needs no grid.
+        if !matches!(messages, FtMessages::FieldDay | FtMessages::RttyRoundup) && grid.is_empty() {
             return Err(format!(
                 "{de}'s CQ carries no grid: in this contest Nexus answers a CQ that carries one."
             ));
+        }
+        // An exchange these messages cannot carry (a serial past what they hold, a QTH they have
+        // no word for) is refused before anything changes, in the operator's words.
+        if let Some(why) = self.contest_exchange_refusal(messages) {
+            return Err(why);
         }
         // Field Day's answer from the station already in the contest: without a class and a
         // section it would go out as `W9XYZ K1ABC`, which completes nothing. Entering from
@@ -21276,7 +21306,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
         self.set_mode("fieldday-sp")?;
         if let Mode::FieldDay { station, .. } = &mut self.mode {
-            station.answer_cq(de, grid);
+            station.answer_cq(de, grid, snr);
+            // An answer the contest's messages cannot carry to this station (the two calls do not
+            // fit the RTTY Roundup message) is not sent: S&P keeps listening, and the click says
+            // why.
+            if let Some(why) = station.take_refusal() {
+                return Err(why);
+            }
         }
         // WSJT-X sets Tx 1st from the clicked message's time (`processMessage`): the opposite of
         // the CQ's period, whose decode lands at the boundary after it.
@@ -30301,16 +30337,17 @@ contact yourself."
     /// Slot of the most recent decode whose SENDER is `peer` — any frame (not just
     /// addressed-to-me), newest first. Drives the chat answer-cycle derivation.
     fn latest_decode_slot_from(&self, peer: &str) -> Option<u64> {
-        self.decode_history
-            .iter()
-            .rev()
-            .find(|(_, d)| {
-                Msg::parse(&d.message)
-                    .sender()
-                    .map(|s| same_call(s, peer))
-                    .unwrap_or(false)
-            })
-            .map(|(slot, _)| *slot)
+        self.latest_decode_from(peer).map(|(slot, _)| *slot)
+    }
+
+    /// The most recent decode whose SENDER is `peer`, with its slot ([`Self::latest_decode_slot_from`]).
+    fn latest_decode_from(&self, peer: &str) -> Option<&(u64, modes::Decode)> {
+        self.decode_history.iter().rev().find(|(_, d)| {
+            Msg::parse(&d.message)
+                .sender()
+                .map(|s| same_call(s, peer))
+                .unwrap_or(false)
+        })
     }
     /// Whether the operator transmits on even/"1st" slots.
     pub fn tx_even(&self) -> bool {
@@ -31708,10 +31745,14 @@ contact yourself."
     /// Running keeps it. Everywhere else it is set aside: the contests WSJT-X has an activity for
     /// call their own CQ, and outside a contest Call CQ is a plain run.
     pub fn start_running_with_cq(&mut self, dir: Option<&str>) -> Result<(), String> {
-        if self.contest_ft_messages().is_some() {
+        if let Some(messages) = self.contest_ft_messages() {
             // The screen's Running refuses a run without a valid callsign at the command (the
             // `set_mode` command's identity check), and so does this one.
             self.structured_tx_ready(false)?;
+            // …and one whose exchange its messages cannot carry, before anything changes.
+            if let Some(why) = self.contest_exchange_refusal(messages) {
+                return Err(why);
+            }
             let typed = dir
                 .map(|d| d.trim().to_uppercase())
                 .filter(|d| !d.is_empty() && self.contest_cq_typed());
@@ -35614,6 +35655,18 @@ contact yourself."
                     && (!self.tx_enabled || self.pending_tx_disable);
                 if !stopped {
                     station.observe(decodes, slot);
+                }
+                // ⛔ A caller the contest's messages could not answer: nothing was sent to it, and
+                // the reason goes to the log. Where it is the exchange itself (the RTTY Roundup's
+                // serial run past 7999 mid-run), no caller can be answered, so the run stops, TX
+                // going off as after a contact, and the operator's next Call CQ says why
+                // ([`Self::contest_exchange_refusal`]). One caller's calls the message cannot
+                // carry leave the run calling.
+                if let Some(why) = station.take_refusal() {
+                    tempo_core::applog::info("tx", &format!("contest over not sent: {why}"));
+                    if *running && station.exchange_refusal().is_some() {
+                        self.pending_tx_disable = true;
+                    }
                 }
                 sequence_advanced = station.state != state_before;
                 self.ft_seq_moved = sequence_advanced || station.outgoing() != next_before;

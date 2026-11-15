@@ -10653,6 +10653,7 @@ export const JA: PartialCatalog = {
   "customContest.ft.standard": "FT8/FT4: Nexus は標準メッセージ (グリッドとレポート) を送り、ナンバーは送りません。",
   "customContest.ft.notYet": "FT8/FT4: このナンバーは WSJT-X の {{activity}} メッセージに一致しますが、このバージョンの Nexus はまだ送信しません。標準メッセージ (グリッドとレポート) を送り、ナンバーは送りません。",
   "customContest.ft.landed": "FT8/FT4: このナンバーは WSJT-X の {{activity}} メッセージです。Nexus は {{cq}} を送信し、ナンバーとして {{sends}} を送ります。交信相手も同じコンテストメッセージが必要です: WSJT-X の Settings ▸ Advanced ▸ Special operating activity ▸ {{activity}}。",
+  "customContest.ft.limit.rttyRoundup": "このメッセージで送れるのはシリアル番号 1〜7999 と米国の州、カナダの州・準州、DC だけです。それ以外 (DX を含む) は誤って送らず、Nexus が送信を拒否します。",
   "customContest.rules.title": "重複と得点",
   "customContest.rules.dupe": "1局を数えるのは",
   "customContest.rules.dupe.once": "コンテスト中に1回",
