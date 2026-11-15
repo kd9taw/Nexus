@@ -24,7 +24,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { ModeNav } from './ModeNav'
 import type { FeatureId } from '../features/registry'
-import { parseRules, winnerAt, chainOf, MODES, type El } from '../cssCascade'
+import { parseRules, winnerAt, chainOf, subjectCut, MODES, type El } from '../cssCascade'
 
 const sheet = (name: string) =>
   readFileSync(resolve(process.cwd(), 'src', name), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
@@ -52,10 +52,17 @@ function renderRail() {
   return top!
 }
 
+/** The rules that can reach the chain's element: those whose subject compound matches it. The
+ *  sweep below asks every mode about every item, and run against the whole sheet nearly all of its
+ *  time went on rejecting rules at their subject: about 1.3 s on two cores here, and past the 5 s
+ *  default timeout on a loaded CI runner. `subjectCut` cuts them once per element (about 0.2 s),
+ *  and every winner stays the same (see cssCascade). */
+const reaching = (chain: El[]) => subjectCut(RULES, chain[chain.length - 1])
+
 /** The shrink factor the cascade gives the chain's element: the winner between `flex` and
  *  `flex-shrink` (they compete as one cascade), or CSS's initial 1. */
 function shrinkOf(mode: (typeof MODES)[number], chain: El[]): number {
-  const w = winnerAt(RULES, mode, chain, 'flex', 'flex-shrink')
+  const w = winnerAt(reaching(chain), mode, chain, 'flex', 'flex-shrink')
   if (!w) return 1
   if (w.prop === 'flex-shrink') return Number(w.value)
   const v = w.value.trim()
@@ -67,8 +74,8 @@ function shrinkOf(mode: (typeof MODES)[number], chain: El[]): number {
 
 /** Does the element keep its automatic (content) minimum height in a flex column? */
 function autoMin(mode: (typeof MODES)[number], chain: El[]): boolean {
-  const min = winnerAt(RULES, mode, chain, 'min-height')
-  const ov = winnerAt(RULES, mode, chain, 'overflow', 'overflow-y')
+  const min = winnerAt(reaching(chain), mode, chain, 'min-height')
+  const ov = winnerAt(reaching(chain), mode, chain, 'overflow', 'overflow-y')
   return (!min || min.value === 'auto') && (!ov || ov.value === 'visible')
 }
 
@@ -91,7 +98,7 @@ describe('the left rail under overflow', () => {
         const chain = chainOf(kid)
         if (shrinkOf(mode, chain) === 0 || autoMin(mode, chain)) continue
         const label = kid.querySelector('.mode-label')?.textContent ?? kid.className
-        const min = winnerAt(RULES, mode, chain, 'min-height')
+        const min = winnerAt(reaching(chain), mode, chain, 'min-height')
         bad.push(`${mode}: ${label} shrinks (min-height ${min?.value} from \`${min?.rule.selector}\`)`)
       }
     }
