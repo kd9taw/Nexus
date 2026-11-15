@@ -132,6 +132,7 @@ export function CustomContestBuilder({
   editing,
   onSaved,
   onCancel,
+  onAsNew,
 }: {
   /** The installed contest to edit; absent to build a new one. */
   editing?: CustomContest
@@ -139,6 +140,8 @@ export function CustomContestBuilder({
   onSaved: (id: string) => void
   /** Back to the pick, nothing saved. */
   onCancel: () => void
+  /** "Save as a new contest instead" was pressed: this is no longer an edit (the dialog's title). */
+  onAsNew?: () => void
 }) {
   const [def, setDef] = useState<CustomContestDef>(() => (editing ? structuredClone(editing.def) : blankCustomDef()))
   const [asNew, setAsNew] = useState(false)
@@ -210,7 +213,7 @@ export function CustomContestBuilder({
           <h3 className="wizard-modes-title">{t('customContest.ft.roundup.ask')}</h3>
           {([false, true] as const).map((yes) => (
             <label key={String(yes)} className="contest-setup-tick">
-              <input type="radio" name="cc-roundup" checked={!!def.ft_roundup === yes} onChange={() => patch({ ft_roundup: yes })} />
+              <input type="radio" name="cc-roundup" checked={!!def.ft_roundup === yes} disabled={locked} onChange={() => patch({ ft_roundup: yes })} />
               <span>{yes ? t('customContest.ft.roundup.yes') : t('customContest.ft.roundup.no')}</span>
             </label>
           ))}
@@ -221,6 +224,7 @@ export function CustomContestBuilder({
           <span>{t('customContest.ft.cq.label')}</span>
           <select
             value={def.ft_cq ?? ''}
+            disabled={locked}
             onChange={(e) => patch({ ft_cq: (e.target.value || undefined) as CustomContestDef['ft_cq'] })}
           >
             <option value="">{t('customContest.ft.cq.none')}</option>
@@ -258,12 +262,15 @@ export function CustomContestBuilder({
 
       {step === 0 && (
         <>
-          <h2 className="wizard-title">{editing ? t('customContest.basics.titleEdit', { contest: editing.def.name }) : t('customContest.basics.title')}</h2>
+          <h2 className="wizard-title">{editing && !asNew ? t('customContest.basics.titleEdit', { contest: editing.def.name }) : t('customContest.basics.title')}</h2>
           <p className="wizard-sub">{t('customContest.basics.sub')}</p>
           {locked && (
             <div className="contest-setup-warn" role="status">
               <p>{t('customContest.locked')}</p>
-              <button type="button" className="settings-linkbtn" onClick={() => setAsNew(true)}>
+              <button type="button" className="settings-linkbtn" onClick={() => {
+                  setAsNew(true)
+                  onAsNew?.()
+                }}>
                 {t('customContest.saveAsNew')}
               </button>
             </div>

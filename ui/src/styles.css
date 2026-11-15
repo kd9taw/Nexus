@@ -34901,6 +34901,12 @@ tr.sel .aprs-sym {
   background: var(--panel);
   padding-top: var(--space-2);
 }
+/* …and a control the keyboard focuses, or a scroll brings into view, stops above the pinned buttons
+   instead of under them: the scroll padding is the buttons' height plus the box's own bottom padding
+   (measured: 5em covers nothing at the floor, 1366×768 or 2560×1440). */
+.ui-dialog.contest-setup {
+  scroll-padding-bottom: 5em;
+}
 /* ── Your contests and the builder (CustomContestBuilder.tsx) ── */
 .cc-pick-row {
   display: flex;

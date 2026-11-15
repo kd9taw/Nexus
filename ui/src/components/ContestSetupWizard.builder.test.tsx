@@ -298,6 +298,8 @@ describe('your contests: edit, export, delete, import', () => {
     expect((screen.getByLabelText('Cabrillo contest name') as HTMLInputElement).disabled).toBe(true)
     fireEvent.click(button('Save as a new contest instead'))
     expect((screen.getByLabelText('Cabrillo contest name') as HTMLInputElement).disabled).toBe(false)
+    // No longer an edit: the dialog says so.
+    expect(screen.getByRole('dialog', { name: 'Build your own contest' })).toBeTruthy()
     typeIn('Cabrillo contest name', 'CLUB-SPRINT-2')
     fireEvent.click(nextButton())
     fireEvent.click(nextButton())
@@ -414,6 +416,11 @@ describe('typed values keep what the station sends', () => {
     expect(enteredTyped('NAME', box)).toBe('ALEX2/P')
     box.value = '4a2'
     expect(enteredTyped('AGE', box)).toBe('42')
+    // Upper-casing can lengthen a word (ß → SS): the box still holds no more than the station sends.
+    box.value = 'straße'.repeat(2)
+    expect(enteredTyped('NAME', box)).toBe('STRASSESTRAS')
+    box.value = '1234'
+    expect(enteredTyped('AGE', box)).toBe('12')
   })
 })
 
@@ -437,5 +444,7 @@ describe('layout: the step buttons stay reachable', () => {
     // …inside the dialog box, which is the one that scrolls.
     const box = chainOf(document.querySelector('.ui-dialog.contest-setup')!)
     expect(winnerAt(rules, 'dark', box, 'overflow-y')?.value).toBe('auto')
+    // A focused control stops above the pinned buttons, not under them (the probe measures 5em).
+    expect(winnerAt(rules, 'dark', box, 'scroll-padding-bottom', 'scroll-padding')?.value).toBe('5em')
   })
 })

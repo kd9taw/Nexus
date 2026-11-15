@@ -155,7 +155,11 @@ export function blankCustomDef(): CustomContestDef {
  *  word of capital letters, digits and `/`, the only thing the station will send
  *  (`contest/session.rs` refuses anything else). */
 export function enteredTyped(slot: string, el: HTMLInputElement): string {
-  return normaliseTyped(el, (s) => (slot === 'AGE' ? s.replace(/\D/g, '') : s.toUpperCase().replace(/[^A-Z0-9/]/g, '')))
+  // Cut to the box's length AFTER upper-casing: `ß` upper-cases to `SS`, so twelve typed letters can
+  // become more than the twelve the station sends.
+  return normaliseTyped(el, (s) =>
+    slot === 'AGE' ? s.replace(/\D/g, '').slice(0, 2) : s.toUpperCase().replace(/[^A-Z0-9/]/g, '').slice(0, 12),
+  )
 }
 
 /** ⭐ What a TYPED slot is called (`AGE`, `NAME`, `TXT1`): a text field by the caption the operator

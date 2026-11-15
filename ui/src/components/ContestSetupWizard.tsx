@@ -287,7 +287,7 @@ export function ContestSetupWizard({
   // `stopped`: the save found no contest running (it was stopped elsewhere while this was open).
   const [started, setStarted] = useState<{ event: string; running: boolean; sends: string; stopped?: boolean } | null>(null)
   // The builder, when it is open: a new contest, or one of the operator's to edit.
-  const [builder, setBuilder] = useState<{ editing?: CustomContest } | null>(null)
+  const [builder, setBuilder] = useState<{ editing?: CustomContest; asNew?: boolean } | null>(null)
   // A line on the pick step: what an export, import or delete did, or why it was refused.
   const [note, setNote] = useState<{ text: string; bad?: boolean } | null>(null)
   // An import whose contest is already here: the file, and the installed contest's name.
@@ -620,11 +620,12 @@ export function ContestSetupWizard({
         onOpenChange={(o) => {
           if (!o) onClose()
         }}
-        title={builder.editing ? t('customContest.titleEdit', { contest: builder.editing.def.name }) : t('customContest.titleNew')}
+        title={builder.editing && !builder.asNew ? t('customContest.titleEdit', { contest: builder.editing.def.name }) : t('customContest.titleNew')}
         className="contest-setup"
       >
         <CustomContestBuilder
           editing={builder.editing}
+          onAsNew={() => setBuilder((b) => (b ? { ...b, asNew: true } : b))}
           onCancel={() => setBuilder(null)}
           onSaved={(id) => {
             setBuilder(null)

@@ -13,9 +13,13 @@
 //      so an operator never hunts for a scrollbar to find Next (the pick list is taller than the dialog
 //      on a laptop);
 //   3. on the pick step, Build your own… and Import… are reachable (scrolled to), and on Check the
-//      sample line is on screen.
+//      sample line is on screen;
+//   4. THE KEYBOARD: on the pick step, the setup's exchange and entry steps and the builder's Basics,
+//      every enabled control, focused from the top and then scrolled to with block 'nearest', stops
+//      clear of the pinned buttons (the dialog's scroll-padding-bottom).
 // THE CONTROLS, run at every size: a 2400 px unbreakable line planted in the dialog's heading must be
-// seen to overflow; and at the floor the step buttons un-pinned (`position: static`) must leave Next
+// seen to overflow; at the floor, the dialog without its scroll padding must leave a focused control
+// under the buttons; and at the floor the step buttons un-pinned (`position: static`) must leave Next
 // OFF screen on the pick step. If a control is not caught, the check cannot fail and the probe says so.
 //
 // CONTESTSETUP_PICK_ONLY=1 measures the pick step alone, for a tree with no builder (the two-sided run
@@ -108,6 +112,35 @@ const STEP = (control) => `(() => { ${HELPERS}
   return out
 })()`
 
+/** ⭐ No control hides under the pinned buttons when it gets the keyboard: each enabled control outside
+ *  the buttons, focused from the top of the dialog (the browser's own focus scroll), then brought into
+ *  view with scrollIntoView({block:'nearest'}), must not overlap the buttons. The dialog's
+ *  scroll-padding-bottom is what keeps them apart. Returns the covered ones. */
+const FOCUS = `(() => { ${HELPERS}
+  const d = dlg()
+  if (!d) return null
+  const foot = d.querySelector('.wizard-actions')
+  const overlap = (el) => {
+    const a = el.getBoundingClientRect(), f = foot.getBoundingClientRect()
+    return Math.max(0, Math.min(a.bottom, f.bottom) - Math.max(a.top, f.top))
+  }
+  const controls = [...d.querySelectorAll('button, input, select, textarea')].filter(
+    (c) => !foot.contains(c) && !c.disabled && c.getClientRects().length > 0,
+  )
+  const covered = []
+  for (const c of controls) {
+    d.scrollTop = 0
+    c.focus()
+    const byFocus = overlap(c)
+    c.scrollIntoView({ block: 'nearest' })
+    const byNearest = overlap(c)
+    if (byFocus > 0.5 || byNearest > 0.5) covered.push(\`\${(c.textContent || c.getAttribute('aria-label') || c.closest('label')?.textContent || c.tagName).trim().slice(0, 30)} (focus \${Math.round(byFocus)} px, nearest \${Math.round(byNearest)} px)\`)
+  }
+  document.activeElement?.blur?.()
+  d.scrollTop = 0
+  return { controls: controls.length, covered }
+})()`
+
 const click = (re) => `(() => { ${HELPERS} const b = buttonNamed(dlg(), ${re}); if (!b || b.disabled) return false; b.click(); return true })()`
 const FILL_BASICS = `(() => { ${HELPERS}
   const name = inputLabelled(/^Contest name/), token = inputLabelled(/^Cabrillo contest name/)
@@ -183,16 +216,32 @@ async function run(size, control) {
     if (!PICK_ONLY && !(await until(`document.querySelectorAll('[data-custom-contests] .contest-setup-pick').length === 3`))) {
       return { error: 'the operator\'s own contests never drew' }
     }
+    if (control === 'unpadded') {
+      await evaluate(`(() => { const s = document.createElement('style'); s.textContent = '.ui-dialog.contest-setup { scroll-padding-bottom: 0 !important }'; document.head.appendChild(s); return 1 })()`)
+      await settled()
+      return { focus: [{ step: 'pick', ...(await evaluate(FOCUS)) }] }
+    }
     if (control === 'unpinned') {
       await evaluate(`(() => { const s = document.createElement('style'); s.textContent = '.contest-setup .wizard-actions { position: static !important }'; document.head.appendChild(s); return 1 })()`)
     }
     const steps = [{ step: 'pick', ...(await settled(control === 'wide')) }]
     if (control || PICK_ONLY) return { steps }
+    // The keyboard on the pick step, and on the shipped setup's exchange and entry steps.
+    const focus = [{ step: 'pick', ...(await evaluate(FOCUS)) }]
+    for (const name of ['exchange', 'entry']) {
+      if (!(await evaluate(click('/^Next$/')))) return { steps, focus, error: `Next refused on the way to the ${name} step` }
+      await settled()
+      focus.push({ step: name, ...(await evaluate(FOCUS)) })
+    }
+    await evaluate(click('/^Back$/'))
+    await evaluate(click('/^Back$/'))
+    await settled()
     if (!(await evaluate(click('/^Build your own/')))) return { steps, error: 'no Build your own… button' }
     if (!(await until(`document.querySelector('.ui-dialog.contest-setup')?.textContent.includes('Name it, and say when it runs')`))) return { steps, error: 'the builder never drew' }
     steps.push({ step: 'basics, empty', ...(await settled()) })
     if (!(await evaluate(FILL_BASICS))) return { steps, error: 'the Basics boxes were not found' }
     steps.push({ step: 'basics', ...(await settled()) })
+    focus.push({ step: 'basics', ...(await evaluate(FOCUS)) })
     if (!(await evaluate(click('/^Next$/')))) return { steps, error: 'Next stayed refused on a filled Basics step' }
     steps.push({ step: 'exchange, Roundup asked', ...(await settled()) })
     for (let i = 0; i < 3; i++) await evaluate(click('/^Add a field$/'))
@@ -201,7 +250,7 @@ async function run(size, control) {
     steps.push({ step: 'rules', ...(await settled()) })
     await evaluate(click('/^Next$/'))
     steps.push({ step: 'check', ...(await settled()) })
-    return { steps }
+    return { steps, focus }
   } finally {
     await browser.call('Target.closeTarget', { targetId })
   }
@@ -225,6 +274,11 @@ try {
       if (!r.steps.find((m) => m.step === 'exchange, Roundup asked')?.roundup) red.push(`${tag}: the RTTY Roundup question is not asked`)
       if (r.steps.find((m) => m.step === 'exchange, five fields')?.rows !== 5) red.push(`${tag}: five exchange fields were not drawn`)
       if (r.steps.at(-1)?.go !== 'Save contest') red.push(`${tag}: the last step has no Save contest`)
+      for (const f of r.focus ?? []) {
+        if (!f.controls) red.push(`${tag}: the ${f.step} step's controls were not measured`)
+        if (f.covered?.length) red.push(`${tag}: on the ${f.step} step the pinned buttons cover ${f.covered.join(', ')}`)
+      }
+      if ((r.focus ?? []).length !== 4) red.push(`${tag}: the keyboard was checked on ${(r.focus ?? []).length} steps, not 4`)
     }
     if (red.length) {
       console.error(`contestsetup-probe: RED at ${tag} — ${red.join('; ')}`)
@@ -236,6 +290,15 @@ try {
     if (!caught.length) {
       console.error(`contestsetup-probe: CONTROL FAILED at ${tag} — a planted overflow was not seen; the check cannot fail`)
       code = code || 1
+    }
+    if (size === FLOOR && !PICK_ONLY) {
+      const bare = await run(size, 'unpadded')
+      const f = bare.focus?.[0]
+      console.log(`contestsetup-probe: CONTROL unpadded ${tag}: ${JSON.stringify(f)}`)
+      if (!f?.covered?.length) {
+        console.error(`contestsetup-probe: CONTROL FAILED at ${tag} — without the scroll padding no focused control was covered; the focus check cannot fail`)
+        code = code || 1
+      }
     }
     if (size === FLOOR) {
       const loose = await run(size, 'unpinned')

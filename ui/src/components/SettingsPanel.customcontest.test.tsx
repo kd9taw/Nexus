@@ -150,6 +150,19 @@ describe("the operator's own contests in Settings", () => {
     expect(box.closest('.settings-field')!.textContent).toContain('One word: letters, digits and / only.')
   })
 
+  it('deleting the contest the form picked but has not saved goes back to the saved pick', async () => {
+    stored = { ...stored, fdEvent: 'ilqp' }
+    renderPanel()
+    await openContesting()
+    fireEvent.click(await screen.findByRole('button', { name: 'Club Sprint' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete it' }))
+    await screen.findByText('Deleted Club Sprint.')
+    expect(api.get('deleteCustomContest')).toHaveBeenCalledWith('custom_club_sprint')
+    expect(screen.getByRole('button', { name: 'Illinois QSO Party' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: 'Club Sprint' }).getAttribute('aria-pressed')).toBe('false')
+  })
+
   it('a shipped contest asks no typed value', async () => {
     stored = { ...stored, fdEvent: 'ilqp' }
     renderPanel()

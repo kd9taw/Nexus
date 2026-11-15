@@ -14703,6 +14703,12 @@ export function SettingsPanel({
                         setSetupOpen(true)
                       }}
                       onNote={setOwnNote}
+                      onDeleted={(id) => {
+                        // An unsaved pick of the contest just deleted goes back to the saved pick.
+                        setForm((prev) =>
+                          prev && prev.fdEvent === id ? { ...prev, fdEvent: savedRef.current?.fdEvent ?? '' } : prev,
+                        )
+                      }}
                     />
                   ) : null
                 })()}
