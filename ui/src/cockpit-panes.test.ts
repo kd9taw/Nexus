@@ -2073,13 +2073,13 @@ describe('THE TOP BAR’S OPERATOR CHIP: a small floor to the bar’s line break
   // In the Help group at its text width, "Set operator" wrapped the Tx-cycle group in French and Russian at the floor when
   // contest mode came on, and FT's Stop TX moved down a row. The geometry is real Chrome's (stopvisible's operator-chip guard).
   const chip = [['app'], ['topbar'], ['theme-chip', 'op-chip', 'topbar-opchip']]
-  it('a zero basis and a 4em floor, never its text width, so the bar decides its lines without its words', () => {
+  it('a zero basis and a 6.5em floor, never its text width, so the bar decides its lines without its words', () => {
     const flex = classChainWinner(chip, 'flex')
     expect(flex?.sheet).toBe('cockpit-panes.css')
     const [grow, shrink, basis] = flex!.value.split(/\s+/)
     expect(basis).toBe('0')
     expect(shrink).toBe('1')
-    expect(classChainWinner(chip, 'min-width')?.value).toBe('4em')
+    expect(classChainWinner(chip, 'min-width')?.value).toBe('6.5em')
     // …and it takes the free room before the lane does, so its text is whole wherever the line has the room.
     const lane = classChainWinner([['app'], ['topbar'], ['status-lane']], 'flex')!.value.split(/\s+/)[0]
     expect(Number(grow), 'it grows ahead of the lane').toBeGreaterThan(100 * Number(lane))

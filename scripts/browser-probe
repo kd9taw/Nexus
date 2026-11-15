@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|besttimes|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|txmeterspane|radioswitch|radiosetup|toastcorner|logwaiting|topbar|topbarnow|header|rttyfit|digishell|alarmcell|firstrun|journeys|clublog|aprsmap|logbook|profiles|sstvlayout|menustop|stopabove|stopvisible|ftline|laptopfit|recallcard
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|besttimes|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|txmeterspane|radioswitch|radiosetup|toastcorner|logwaiting|topbar|topbarnow|header|rttyfit|digishell|alarmcell|firstrun|journeys|clublog|aprsmap|logbook|profiles|sstvlayout|menustop|stopabove|stopvisible|opchip|ftline|laptopfit|recallcard
        scripts/browser-probe --desktop-shard <n> <of>
 
   Window sizes: every --desktop probe takes its screens from ui/probe/sizes.mjs (the 2026-11-11
@@ -279,11 +279,14 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         alarms and a critical status message, on the air, and all of them at once with SSTV's
                         dropped-picture sentence and JTTY's refusal: with nothing scrolled, a Stop TX is wholly
                         inside the window and the topmost thing over its whole face. A box planted over FT's
-                        Stop TX must be caught. Turning contest mode on (the top bar's operator chip) at
-                        the floor in English, French and Russian, on FT, CW, the Logbook and Field Day,
-                        leaves every Stop TX where it stood and the chip readable (its call whole), with
-                        the chip's old sizing and a 2em chip as the controls. STOPVIS_FULL=1 runs every size, scale and language
+                        Stop TX must be caught. STOPVIS_FULL=1 runs every size, scale and language
                         (ui/probe/stopvisible-probe.mjs; it builds nothing)
+  --desktop opchip      the top bar's operator chip in the real app at the floor (1366×768 at 175 %), at 100 %
+                        and the fit, in English, French and Russian: turning contest mode on leaves every
+                        Stop TX where it stood on FT, Field Day, the Logbook and CW, and the chip shows the
+                        whole call (or half its words with nobody set). Controls: the chip's old sizing
+                        must move FT's Stop TX, a 2em chip must read as cut. OPCHIP_LOCS widens the
+                        languages (ui/probe/opchip-probe.mjs; it builds nothing)
   --desktop firstrun    a fresh install's first-run wizard in the real app, at the CORE
                         screens: the About-you question and its answers on screen, Finish
                         writes the answer, the Getting started guide then the first-contact
@@ -337,8 +340,11 @@ USAGE
 # job, which deals this list round-robin over its shards with --desktop-shard. Slowest first, so the
 # deal balances (local seconds on 2026-11-05: toastcorner 299, digishell 330, topbar 96, waterfalls 92, logbook 67,
 # header 62, journeys 42, rttyfit 39, the rest 7-27); keep a new probe near its cost when you add it.
+# opchip (2026-11-15, 111 s locally) is LAST, not by its cost: every other probe keeps the shard it
+# had (a slot in the middle would move every probe after it to the other shard). It lands on shard 0.
 DESKTOP_ALL=(toastcorner digishell alarmcell sstvlayout stopvisible topbar topbarnow waterfalls txmeterspane logbook header journeys rttyfit menustop stopabove profiles firstrun radiosetup contestlog
-  ftline logwaiting spots atu radioswitch jtty activation clublog aprsmap callcard voicenote rotor contactcard txmeters besttimes laptopfit recallcard)
+  ftline logwaiting spots atu radioswitch jtty activation clublog aprsmap callcard voicenote rotor contactcard txmeters besttimes laptopfit recallcard
+  opchip)
 
 SCENARIO='stream'
 SHARD=''
@@ -452,6 +458,7 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = profiles ] && exec node "$ROOT/ui/probe/profiles-probe.mjs"
   [ "$DESKTOP" = sstvlayout ] && exec node "$ROOT/ui/probe/sstvlayout-probe.mjs"
   [ "$DESKTOP" = stopvisible ] && exec node "$ROOT/ui/probe/stopvisible-probe.mjs"
+  [ "$DESKTOP" = opchip ] && exec node "$ROOT/ui/probe/opchip-probe.mjs"
   [ "$DESKTOP" = menustop ] && exec node "$ROOT/ui/probe/menustop-probe.mjs"
   [ "$DESKTOP" = stopabove ] && exec node "$ROOT/ui/probe/stopabove-probe.mjs"
   exec node "$ROOT/ui/probe/desktop-probe.mjs" "$DESKTOP"

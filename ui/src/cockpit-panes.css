@@ -1012,19 +1012,19 @@
 /* THE TOP BAR'S OPERATOR CHIP (components/TopBar: "Set operator" while contest mode is on with nobody set,
    "OP <call>" once someone is), a direct child of the bar right after the brand group, in front of the status lane:
    on the line that holds the bar's free room, on every screen. A SMALL FLOOR TO THE BAR'S LINE BREAKER, not its
-   text: a zero basis and a 4em floor, then a grower ahead of the lane (1000 to the lane's 1) that stops at its own
+   text: a zero basis and a 6.5em floor, then a grower ahead of the lane (1000 to the lane's 1) that stops at its own
    text (`max-content`), so it takes the line's free room first and the lane what is left.
    It sat in the Help group at its text width, and in French and Russian at the smallest screen (1366x768 at 175 %)
    "Set operator" wrapped the Tx-cycle group onto a second line the moment contest mode came on: the bar grew a row
    and FT's Stop TX moved down 31 / 33 px. Zero wide beside Help, it was cut to a sliver on the Logbook and Field
    Day, whose Help line is full while the free room is on the line above (13 px, "S.", in English at the fit).
-   THE FLOOR: 4em counts toward the line, far less than any of its texts did, so where the line is that full the
-   bar's last item moves down to a line that already exists (FT at the floor at 100 % in French, Italian and
-   Russian: the mode button joins Help's line, the bar is 9 px shorter, Stop TX stands where it stood) and the chip
-   takes its place. On a one-line bar every language leaves more than 4em free (FT at the
-   floor's fit: 83 px in Russian, the least), so the floor never adds a line there (stopvisible, the operator-chip
-   guard). INSIDE IT, "OP" gives way before the call (`.topbar-opchip-tag`, shrinking 1000 to 1), so the call is
-   whole wherever its own width is free; then the words end in an ellipsis (`.topbar-opchip-text`). Its tooltip and
+   THE FLOOR: 6.5em counts toward the line, less than its texts did, so where the line is that full the bar's last
+   item moves down to a line that already exists (FT at the floor at 100 %: the mode button joins Help's line, the
+   bar is 9 px shorter, Stop TX stands where it stood) and the chip takes its place. 4em left the call cut in German
+   and Spanish there, where the line had 4em but not the call. On a one-line bar every language leaves more than
+   6.5em free (FT at the floor's fit: Russian, the least, about 7.5em), so the floor never adds a line there
+   (stopvisible, the operator-chip guard, every language). INSIDE IT, "OP" gives way before the call
+   (`.topbar-opchip-tag`, shrinking 1000 to 1), so the call is whole wherever its own width is free; then the words end in an ellipsis (`.topbar-opchip-text`). Its tooltip and
    its accessible name carry the whole of it. Only box properties here; its colours are styles.css's `.op-chip`. */
 .topbar-opchip {
   display: inline-flex;
@@ -1032,7 +1032,7 @@
   justify-content: center;
   gap: 0.3em;
   flex: 1000 1 0;
-  min-width: 4em;
+  min-width: 6.5em;
   max-width: max-content;
   overflow: hidden;
   white-space: nowrap;
