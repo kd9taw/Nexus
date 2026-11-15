@@ -541,6 +541,10 @@ set(LIBTEMPO_SOURCES
     ${LIB}/fftw3mod.f90                   # module fftw3 (wraps fftw3.f03)
     ${LIB}/four2a.f90                     # FFT via FFTW3f
 
+    # --- OpenMP runtime (this project): the self-check and the worker stack size ---
+    ${CMAKE_CURRENT_SOURCE_DIR}/omp_probe.f90   # tempo_omp_probe (compiled -fopenmp, below)
+    ${CMAKE_CURRENT_SOURCE_DIR}/omp_env.c       # OMP_STACKSIZE=10M before libgomp starts
+
     # --- C / C++ infra ---
     ${LIB}/crc14.cpp                      # Boost CRC-14 (crc14 / crc14_check)
     ${LIB}/crc13.cpp                      # Boost CRC-13, for MSK144's (128,90)
@@ -598,6 +602,20 @@ set_source_files_properties(
     ${LIB}/ftrsd/init_rs.c
     PROPERTIES COMPILE_DEFINITIONS "BIGSYM=1")
 
+# ---------------------------------------------------------------------------
+# OpenMP, for the multithreaded FT8 decoder (WSJT-X lib/ft8var) and its self-check.
+# -fopenmp goes ONLY on the files listed in LIBTEMPO_OPENMP_SOURCES, never globally: it implies
+# -frecursive, which moves large local arrays from .bss to the stack, and the per-radio decoder
+# context (ft8_cabi.f90) and libtempo/modem-state-manifest.toml were audited against the .bss
+# layout the other files have today. The runtime, libgomp, is linked statically on every target
+# by crates/tempo-fast-sys/build.rs (omp_env.c says why it must be static).
+# ---------------------------------------------------------------------------
+set(LIBTEMPO_OPENMP_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/omp_probe.f90
+)
+set_source_files_properties(${LIBTEMPO_OPENMP_SOURCES}
+    PROPERTIES COMPILE_OPTIONS "-fopenmp")
+
 add_library(tempo_static STATIC ${LIBTEMPO_SOURCES})
 add_library(tempo_shared SHARED ${LIBTEMPO_SOURCES})
 set_target_properties(tempo_static PROPERTIES OUTPUT_NAME tempo)
@@ -612,6 +630,9 @@ foreach(tgt tempo_static tempo_shared)
     target_link_libraries(${tgt} PUBLIC ${FFTW3F_LIBRARIES})
     target_link_directories(${tgt} PUBLIC ${FFTW3F_LIBRARY_DIRS})
     target_link_libraries(${tgt} PUBLIC ${BOOST_CRC_TARGET})
+    # Whatever links libtempo (the shared library itself, the verification executables) links
+    # the OpenMP runtime too. Cargo builds only tempo_static and links libgomp itself.
+    target_link_options(${tgt} PUBLIC $<$<LINK_LANGUAGE:Fortran>:-fopenmp>)
     # crc14.cpp #include <boost/crc.hpp>: add host Boost headers as a last-resort
     # search path (cross build only; empty natively).
     if(BOOST_HEADER_FLAG)

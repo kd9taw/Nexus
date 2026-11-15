@@ -1462,6 +1462,66 @@ impl std::fmt::Debug for DecoderCtx {
     }
 }
 
+/// What [`openmp_selfcheck`] found: the OpenMP runtime libtempo links is present and runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpenMpCheck {
+    /// Threads asked for.
+    pub requested: i32,
+    /// Threads that ran the probe's parallel region, each through a 4 MB stack array, and got the
+    /// right answer. Equal to `requested` when the runtime and the worker stack size are right.
+    pub ran: i32,
+    /// The runtime's default team size (`omp_get_max_threads`).
+    pub max_threads: i32,
+}
+
+extern "C" {
+    /// `libtempo/omp_probe.f90`: a `requested`-thread parallel region whose workers each use 4 MB
+    /// of stack.
+    fn tempo_omp_probe(nreq: c_int, nran: *mut c_int, nmax: *mut c_int);
+}
+
+/// The stack, in bytes, a thread needs to call into libtempo's OpenMP code: WSJT-X's
+/// `OMP_STACKSIZE` of 10M.
+///
+/// Code compiled with `-fopenmp` keeps its local arrays on the stack, megabytes of them in the
+/// multithreaded FT8 decoder. `libtempo/omp_env.c` gives every OpenMP WORKER this much, but the
+/// thread that enters a parallel region works in it too, on its own stack, and a Rust thread
+/// gets 2 MiB unless it asks. So a thread that calls such code is spawned with this size.
+pub const OPENMP_THREAD_STACK: usize = 10 << 20;
+
+/// Run libtempo's OpenMP self-check with `requested` threads (see `libtempo/omp_probe.f90`), on a
+/// thread of its own with [`OPENMP_THREAD_STACK`], as a decode thread must be.
+///
+/// It touches no modem state, so it takes no [`MODEM_LOCK`]. A broken runtime link fails the
+/// build; a worker stack too small for the multithreaded FT8 decoder crashes here, where the
+/// cause is plain, rather than inside a decode.
+pub fn openmp_selfcheck(requested: i32) -> OpenMpCheck {
+    let requested = requested.max(1);
+    let probe = move || {
+        let (mut ran, mut max_threads) = (0, 0);
+        // SAFETY: two out-pointers to locals; the probe reads and writes nothing else of ours.
+        unsafe { tempo_omp_probe(requested, &mut ran, &mut max_threads) };
+        OpenMpCheck {
+            requested,
+            ran,
+            max_threads,
+        }
+    };
+    std::thread::Builder::new()
+        .name("openmp-probe".into())
+        .stack_size(OPENMP_THREAD_STACK)
+        .spawn(probe)
+        .and_then(|t| {
+            t.join()
+                .map_err(|_| std::io::Error::other("the OpenMP probe panicked"))
+        })
+        .unwrap_or(OpenMpCheck {
+            requested,
+            ran: 0,
+            max_threads: 0,
+        })
+}
+
 /// The manifest gate's scanners, compiled into the TEST target only.
 ///
 /// `manifest_gate.rs` is a build-script module (`#[path] mod manifest_gate;` in build.rs), and
@@ -1483,6 +1543,24 @@ mod manifest_gate;
 mod tests {
     use super::*;
     use std::mem::{align_of, offset_of, size_of};
+
+    /// libtempo's OpenMP runtime links, starts a team of the size asked for, and every worker has
+    /// the 4 MB of stack the multithreaded FT8 decoder's arrays need (omp_env.c sets WSJT-X's
+    /// OMP_STACKSIZE of 10M before libgomp starts; without it a worker would crash here).
+    #[test]
+    fn openmp_runtime_runs_a_team_with_decoder_sized_stacks() {
+        let check = openmp_selfcheck(4);
+        assert_eq!(check.ran, 4, "{check:?}");
+        assert!(check.max_threads >= 1, "{check:?}");
+        if std::env::var_os("OMP_STACKSIZE").is_some_and(|v| v != "10M") {
+            return; // an operator's own setting is left alone, by design
+        }
+        assert_eq!(
+            std::env::var("OMP_STACKSIZE").as_deref(),
+            Ok("10M"),
+            "libtempo's constructor sets WSJT-X's worker stack size before libgomp reads it"
+        );
+    }
 
     /// Lock the C-ABI byte layout of `Ft1DecodeT` to `ft1_decode_t` in
     /// `libtempo.h` / `tempofast_cabi.f90`. A drift here would silently corrupt every

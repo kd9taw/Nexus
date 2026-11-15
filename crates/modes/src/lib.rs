@@ -29,6 +29,7 @@ pub use source::{DecodeRequest, DecodeSink, NativeSource, SignalSource, WsjtxUdp
 /// calls this on band QSY / tier switch — analogous to `tempo_fast::harq_reset` — so a
 /// new band's audio is not probed with stale prior-cycle AP hypotheses.
 pub use ft8::a7_reset as reset_ft8_a7;
+pub use ft8::openmp_selfcheck as ft8_openmp_selfcheck;
 pub use ft8::A7ResetGuard as Ft8A7ResetGuard;
 
 /// FT2's tone count and tone spacing (Hz), from its modulator, so the engine can size the band an

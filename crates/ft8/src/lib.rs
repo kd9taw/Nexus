@@ -16,6 +16,10 @@ use tempo_fast_sys::modem_lock;
 
 pub use tempo_fast_sys::{FT8_NMAX as NMAX, FT8_NN as NN, FT8_NZ as NZ};
 
+/// libtempo's OpenMP self-check (the runtime the multithreaded FT8 decoder runs on); see
+/// [`tempo_fast_sys::openmp_selfcheck`].
+pub use tempo_fast_sys::{openmp_selfcheck, OpenMpCheck};
+
 /// WSJT-X audio sample rate (Hz).
 pub const SAMPLE_RATE: f32 = 12_000.0;
 

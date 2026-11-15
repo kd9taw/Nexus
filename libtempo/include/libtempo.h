@@ -1095,6 +1095,17 @@ void tempo_ctx_save(void *ctx);
 /* Copy ctx IN over the live modem state. Caller holds the modem lock. */
 void tempo_ctx_restore(void *ctx);
 
+/*===========================================================================
+ * OpenMP runtime self-check (omp_probe.f90, omp_env.c)
+ *
+ * The multithreaded FT8 decoder runs on the GNU OpenMP runtime, linked
+ * statically. omp_env.c sets OMP_STACKSIZE=10M (WSJT-X's value) before libgomp
+ * starts, unless the environment already sets it. tempo_omp_probe runs an
+ * nreq-thread parallel region whose workers each use 4 MB of stack: nran is how
+ * many ran it correctly, nmax is omp_get_max_threads(). No modem state, no lock.
+ *===========================================================================*/
+void tempo_omp_probe(int nreq, int *nran, int *nmax);
+
 #ifdef __cplusplus
 }
 #endif

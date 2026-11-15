@@ -51354,6 +51354,21 @@ pub fn run() {
         ),
     );
     install_panic_logger();
+    // The OpenMP runtime the FT8 decoder's threads run on (libtempo links it statically): checked
+    // once, off the startup path, so a broken runtime is named in this log rather than showing
+    // up as decodes that never arrive.
+    let _ = std::thread::Builder::new()
+        .name("openmp-check".into())
+        .spawn(|| {
+            let c = tempo_core::modes::ft8_openmp_selfcheck(4);
+            tempo_core::applog::info(
+                "startup",
+                &format!(
+                    "OpenMP runtime: {}/{} threads ran the check (default team {})",
+                    c.ran, c.requested, c.max_threads
+                ),
+            );
+        });
 
     // ⛔ A computer that drives another station opens nothing of its own station: no settings
     // opened for writing, no logbook, no Engine, no radio, no daemon, no listener and no feed.

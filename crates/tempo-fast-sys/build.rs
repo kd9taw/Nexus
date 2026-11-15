@@ -103,6 +103,10 @@ fn main() {
         // libstdc++ would be both wrong and another Homebrew dylib dependency.
         println!("cargo:rustc-link-lib=static=gfortran");
         println!("cargo:rustc-link-lib=static=quadmath");
+        // libgomp.a sits beside libgfortran.a in the same gcc lib dir (search path above).
+        // Static for the same ship-time reason as gfortran, and because omp_env.c must run
+        // before libgomp's own constructor (see link_openmp()).
+        println!("cargo:rustc-link-lib=static=gomp");
         println!("cargo:rustc-link-lib=static=fftw3f");
         // Static libgfortran on Darwin uses EMULATED TLS, and ___emutls_get_address
         // lives in GCC's own libemutls_w.a — Apple's linker and compiler-rt provide
@@ -125,6 +129,7 @@ fn main() {
         }
         println!("cargo:rustc-link-lib=dylib=c++");
     } else {
+        link_openmp(&env::var("FC").unwrap_or_else(|_| "gfortran".into()));
         println!("cargo:rustc-link-lib=dylib=gfortran");
         println!("cargo:rustc-link-lib=dylib=fftw3f");
         println!("cargo:rustc-link-lib=dylib=stdc++");
@@ -136,6 +141,40 @@ fn main() {
     }
 
     emit_rerun(&libtempo_src);
+}
+
+/// Link the GNU OpenMP runtime (libgomp), STATICALLY, for a native Linux or Windows build.
+///
+/// libtempo's multithreaded FT8 decoder (WSJT-X `lib/ft8var`) and `omp_probe.f90` are compiled
+/// with `-fopenmp`. Static, not the system `libgomp.so`, for one reason beyond packaging (no new
+/// runtime package dependency): `libtempo/omp_env.c` must set `OMP_STACKSIZE` before libgomp's
+/// own load-time constructor reads it, and constructor order can only be arranged inside one
+/// image. A dynamic libgomp initialises before the executable's constructors run. The archive
+/// is found by asking the Fortran compiler, as `emit_macos_runtime_search_paths` does; gcc
+/// builds it position-independent, so it links into Rust's PIE executables.
+fn link_openmp(fortran: &str) {
+    println!("cargo:rerun-if-env-changed=FC");
+    let archive = Command::new(fortran)
+        .arg("-print-file-name=libgomp.a")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|p| PathBuf::from(p.trim()))
+        .filter(|p| p.is_absolute() && p.exists());
+    let Some(dir) = archive.as_ref().and_then(|p| p.parent()) else {
+        panic!(
+            "{fortran} reports no libgomp.a: libtempo's FT8 decoder needs the GNU OpenMP \
+             runtime (Debian/Ubuntu: it ships with gfortran's libgcc-<N>-dev)"
+        );
+    };
+    println!("cargo:rustc-link-search=native={}", dir.display());
+    println!("cargo:rustc-link-lib=static=gomp");
+    // MinGW's libgomp is built on winpthreads; link that statically too (no
+    // libwinpthread-1.dll), as the cross build does.
+    if cfg!(windows) {
+        println!("cargo:rustc-link-lib=static=pthread");
+    }
 }
 
 /// Emit `rustc-link-search` entries for the gfortran and FFTW3f runtimes on macOS.
@@ -274,11 +313,15 @@ fn build_cross_windows(libtempo_src: &std::path::Path, out: &std::path::Path) {
         println!("cargo:rustc-link-search=native={gcc_lib}");
     }
     println!("cargo:rustc-link-lib=static=tempo");
-    // Order matters: ft1 -> fortran runtime -> quadmath, then C++ runtime, fftw.
+    // Order matters: ft1 -> OpenMP runtime -> fortran runtime -> quadmath, then C++ runtime,
+    // fftw, and last the winpthreads libgomp is built on, static so that no
+    // libwinpthread-1.dll is needed either.
+    println!("cargo:rustc-link-lib=static=gomp");
     println!("cargo:rustc-link-lib=static=gfortran");
     println!("cargo:rustc-link-lib=static=quadmath");
     println!("cargo:rustc-link-lib=static=stdc++");
     println!("cargo:rustc-link-lib=static=fftw3f");
+    println!("cargo:rustc-link-lib=static=pthread");
     // m is part of the MinGW CRT (libmsvcrt); no separate libm. stdc++ pulls in
     // what crc14.cpp needs. gcc/pthread come from the gcc driver automatically.
 }
