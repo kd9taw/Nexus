@@ -1273,9 +1273,10 @@ mod tests {
     /// JTTY's class-and-section atom indexes upstream's 3.3 section registry
     /// (`packjt77_grammar.f90`); Nexus's FT8 Field Day messages index the
     /// `csec` tables of its own 3.0.2-era `packjt77.f90`, one in the unpacker
-    /// and one in the packer. The three lists must be the same 86 sections in
-    /// the same order, and JTTY must put every one on the air under its FT8
-    /// index (section field: source bits 13-19).
+    /// and one in the packer, and the JTDX-style decoder's copies of both
+    /// (`unpack77var`, `pack77_03var`). All five lists must be the same 86
+    /// sections in the same order, and JTTY must put every one on the air under
+    /// its FT8 index (section field: source bits 13-19).
     #[test]
     fn the_arrl_rac_sections_match_the_ft8_tables() {
         const GRAMMAR: &str = include_str!(concat!(
@@ -1293,9 +1294,12 @@ mod tests {
             .match_indices("data csec/")
             .map(|(at, _)| section_list(&PACKJT77[at..], "data csec/", "/"));
         let (unpacker, packer) = (tables.next().unwrap(), tables.next().unwrap());
-        assert!(tables.next().is_none(), "two csec tables, no more");
+        let (unpacker_var, packer_var) = (tables.next().unwrap(), tables.next().unwrap());
+        assert!(tables.next().is_none(), "four csec tables, no more");
         assert_eq!(unpacker, jtty, "packjt77 unpacker's csec");
         assert_eq!(packer, jtty, "packjt77 packer's csec");
+        assert_eq!(unpacker_var, jtty, "unpack77var's csec");
+        assert_eq!(packer_var, jtty, "pack77_03var's csec");
         // Control: the comparison sees a single changed name.
         assert_ne!(
             grammar(&GRAMMAR.replacen("\"EMA\"", "\"EMB\"", 1)),
