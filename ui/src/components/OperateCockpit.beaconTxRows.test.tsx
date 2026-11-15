@@ -174,7 +174,10 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('Tx1-Tx5 on a tier that answers no station', () => {
-  for (const tier of ['WSPR', 'FST4W', 'JS8'] as Tier[]) {
+  // JS8 is not here: it transmits (the modes crate's `Js8Mode`), so it is not a receive-only
+  // tier, and it works stations from its own screen. App never shows this cockpit on the JS8
+  // tier: entering the FT screen puts the tier back on one the screen owns.
+  for (const tier of ['WSPR', 'FST4W'] as Tier[]) {
     it(`${tier}: the five rows are disabled and Alt+1..5 presses none`, () => {
       const pressed = vi.fn()
       renderCockpit(tier, pressed)
