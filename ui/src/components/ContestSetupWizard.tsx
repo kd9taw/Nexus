@@ -296,10 +296,15 @@ export function ContestSetupWizard({
   const mine = useCustomContests()
   // The contest file's entries this version cannot use: shown, with why, until deleted.
   const [unusable, setUnusable] = useState<UnusableCustomContest[]>([])
-  const readUnusable = () =>
-    listUnusableCustomContests()
-      .then((u) => setUnusable(Array.isArray(u) ? u : []))
-      .catch(() => {})
+  // A station that cannot answer (an older one, a host with no bridge) lists none.
+  const readUnusable = async () => {
+    try {
+      const u = await listUnusableCustomContests()
+      setUnusable(Array.isArray(u) ? u : [])
+    } catch {
+      // none to show
+    }
+  }
 
   useEffect(() => {
     let live = true
