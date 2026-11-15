@@ -126,3 +126,105 @@ fn an_unchecked_decode_is_shown_marked_and_handed_to_no_other_program() {
     full_pass(&mut e, "CQ N7GHI DN31", false, 2);
     assert_eq!(e.last_wire_decodes.len(), 1, "a checked one is, as always");
 }
+
+// ⭐ A REPEAT OF A CHECKED MESSAGE COUNTS AS CHECKED. A station calling CQ over and over is
+// error-checked the first time; the JTDX-style decoder then often finds the later copies of the
+// same parity through FT8SD1, which matches the message it decoded there 30 s before and so comes
+// out unchecked. Such a copy, word for word a message decoded WITH the error check from the same
+// station on the same parity within `UNCHECKED_REPEAT_PERIODS` same-parity periods, is treated as
+// checked ([`Engine::error_checked`]). It stays marked `^` on screen.
+
+/// The messages handed to other programs (WSJT-X UDP, PSK Reporter) for the last period.
+fn wired(e: &Engine) -> Vec<String> {
+    e.last_wire_decodes
+        .iter()
+        .map(|d| d.message.clone())
+        .collect()
+}
+
+#[test]
+fn the_unchecked_copies_of_a_repeated_cq_reach_other_programs_and_a_loggers_reply() {
+    let mut e = station();
+    full_pass(&mut e, "CQ W9XYZ EN37", false, 1);
+    assert_eq!(
+        wired(&e),
+        ["CQ W9XYZ EN37"],
+        "premise: the checked first copy"
+    );
+    for (copy, slot) in [(2, 3), (3, 5)] {
+        full_pass(&mut e, "CQ W9XYZ EN37", true, slot);
+        assert_eq!(
+            wired(&e),
+            ["CQ W9XYZ EN37"],
+            "copy {copy}: handed to WSJT-X UDP and PSK Reporter"
+        );
+        let row = e
+            .snapshot()
+            .recent_decodes
+            .into_iter()
+            .find(|r| r.message == "CQ W9XYZ EN37")
+            .expect("shown");
+        assert!(row.unchecked, "copy {copy}: still marked `^` on screen");
+    }
+    // A logger's auto-reply on the third copy (Nexus answers no CQ by itself: qso.rs) works it.
+    e.answer_udp_reply("W9XYZ", "CQ W9XYZ EN37", -12, Some(1500.0))
+        .expect("the logger's Reply is taken");
+    assert_eq!(e.qso_dxcall(), Some("W9XYZ"));
+    assert!(e.tx_enabled());
+}
+
+#[test]
+fn an_unchecked_guess_with_new_content_stays_gated() {
+    // The CQ was checked; the caller's next over, found only by a guess, is new content.
+    for guess in ["CQ W9XYZ EN38", "CQ DX W9XYZ EN37", "N7GHI W9XYZ -05"] {
+        let mut e = station();
+        full_pass(&mut e, "CQ W9XYZ EN37", false, 1);
+        full_pass(&mut e, guess, true, 3);
+        assert!(wired(&e).is_empty(), "{guess:?} is not a repeat");
+    }
+    // An unchecked answer to my CQ from a station whose CQ was checked starts nothing.
+    let mut e = station();
+    full_pass(&mut e, "CQ W9XYZ EN37", false, 1);
+    e.start_cq(None).expect("premise: the CQ run starts");
+    full_pass(&mut e, "K2DEF W9XYZ EN37", true, 3);
+    assert_eq!(e.qso_dxcall(), None, "no station taken from the guess");
+}
+
+#[test]
+fn a_repeat_of_a_message_only_ever_unchecked_stays_gated() {
+    let mut e = station();
+    for slot in [1, 3, 5, 7] {
+        full_pass(&mut e, "CQ W9XYZ EN37", true, slot);
+        assert!(
+            wired(&e).is_empty(),
+            "slot {slot}: never checked, never handed on"
+        );
+    }
+}
+
+#[test]
+fn a_repeat_counts_only_on_the_same_parity_and_within_the_window() {
+    // The other parity is another transmission schedule, not a repeat.
+    let mut e = station();
+    full_pass(&mut e, "CQ W9XYZ EN37", false, 1);
+    full_pass(&mut e, "CQ W9XYZ EN37", true, 2);
+    assert!(wired(&e).is_empty(), "the other parity");
+    // The last same-parity period inside the window counts; the next one does not, and the
+    // unchecked copies in between do not stretch it.
+    let last = 1 + 2 * UNCHECKED_REPEAT_PERIODS;
+    let mut e = station();
+    full_pass(&mut e, "CQ W9XYZ EN37", false, 1);
+    full_pass(&mut e, "CQ W9XYZ EN37", true, last);
+    assert_eq!(wired(&e), ["CQ W9XYZ EN37"], "within the window");
+    full_pass(&mut e, "CQ W9XYZ EN37", true, last + 2);
+    assert!(
+        wired(&e).is_empty(),
+        "past it: counted from the checked copy"
+    );
+    // A band change forgets what was checked.
+    let mut e = station();
+    full_pass(&mut e, "CQ W9XYZ EN37", false, 1);
+    e.set_frequency(7.074, "40m", "USB");
+    full_pass(&mut e, "CQ W9XYZ EN37", true, 3);
+    assert!(wired(&e).is_empty(), "checked on another band");
+}

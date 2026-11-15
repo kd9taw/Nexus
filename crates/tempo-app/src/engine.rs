@@ -2175,19 +2175,24 @@ pub const FLEX_VOICE_MAX_SAMPLES: usize = 20 * 12_000;
 /// store (`MAX_HISTORY`, `ui/src/decodeHistory.ts`).
 const BAND_ACTIVITY_DEPTH: usize = 3000;
 
-/// The decodes automation may act on. An UNCHECKED decode (`modes::Decode::unchecked`: the
-/// JTDX-style decoder's FT8S/FT8SD and matched filters, which accept the expected message on
-/// correlation alone, with no LDPC and no CRC) is shown, marked `^`, and written to ALL.TXT, and
-/// nothing automatic acts on it: it starts and advances no QSO (so it is never auto-logged),
-/// reaches no message inbox, and is not handed to other programs (WSJT-X UDP) or uploaded (PSK
-/// Reporter). The operator may still click it and work the station by hand. Borrowed when every
-/// decode is checked, which is always so for every decoder but the JTDX-style one.
-fn error_checked(decodes: &[modes::Decode]) -> std::borrow::Cow<'_, [modes::Decode]> {
-    if decodes.iter().any(|d| d.unchecked) {
-        std::borrow::Cow::Owned(decodes.iter().filter(|d| !d.unchecked).cloned().collect())
-    } else {
-        std::borrow::Cow::Borrowed(decodes)
-    }
+/// How many same-parity periods back an error-checked copy of a message vouches for an unchecked
+/// repeat of it ([`Engine::error_checked`]): 4, two minutes of FT8.
+///
+/// Why bounded, and why 4. The JTDX-style decoder's FT8SD1 matches a candidate against the message
+/// decoded at the same frequency and DT one same-parity period before, and files what it finds
+/// back into that table, so one checked copy can seed an endless chain of unchecked ones, which
+/// would keep "hearing" a station for as long as the noise there correlates. The window caps that
+/// chain, counted from the last copy that passed the error check (an unchecked copy never extends
+/// it). It must still cover an ordinary CQ run in which the weak caller's later copies miss the
+/// error check: 4 same-parity periods lets three in a row miss and still counts the fourth. A
+/// station whose every copy misses the check for longer than that has faded below where a
+/// correlation match alone should start a QSO or reach other programs; it stays on screen,
+/// marked, for the operator to judge.
+const UNCHECKED_REPEAT_PERIODS: u64 = 4;
+
+/// A message word for word, for comparing one decode's text with another's.
+fn message_words(message: &str) -> String {
+    message.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The received decodes the engine keeps across periods (`decode_history`), newest kept.
@@ -4447,6 +4452,10 @@ pub struct Engine {
     /// and the sequencer silently fell back to Tx1 (the "sent my grid instead of a
     /// report" on-air bug). Also the source for answer parity.
     decode_history: std::collections::VecDeque<(u64, modes::Decode)>,
+    /// Each message heard error-checked lately ([`message_words`]), with the latest slot it was
+    /// heard in: what lets an unchecked repeat of it count as checked ([`Engine::error_checked`]).
+    /// Entries past the window are dropped as decodes come in; forgotten with the decode history.
+    checked_heard: std::collections::HashMap<String, u64>,
     /// What Band Activity holds, oldest first, for a logger's UDP Replay: each decode as its UDP
     /// Decode went out (the on-air text, `last_wire_decodes`) with the start of the period it was
     /// heard in. WSJT-X replays every decode still in its Band Activity window (`replayDecodes`,
@@ -7851,6 +7860,7 @@ impl Engine {
             dx_box: (String::new(), String::new()),
             last_logged_call: String::new(),
             decode_history: std::collections::VecDeque::new(),
+            checked_heard: std::collections::HashMap::new(),
             band_activity: std::collections::VecDeque::new(),
             early_seen: None,
             shown_pass: None,
@@ -21360,6 +21370,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// where stale rows would answer a station that isn't in this activity.
     fn clear_decode_context(&mut self) {
         self.decode_history.clear();
+        self.checked_heard.clear();
         self.band_activity.clear();
         self.last_decode_slot = None;
         // Kept aside for the period still decoding, if one is (`fold_late`).
@@ -35091,7 +35102,7 @@ contact yourself."
         while self.decode_history.len() > DECODE_HISTORY_DEPTH {
             self.decode_history.pop_front();
         }
-        let checked = error_checked(&fresh).into_owned();
+        let checked = self.error_checked(&fresh, slot).into_owned();
         let pend_before = self.app.pending_count();
         self.app.observe(&checked, slot);
         // An inbound ACK may have marked queued messages delivered (or purged spent
@@ -35296,7 +35307,7 @@ contact yourself."
             crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound
         );
         let wire_copy: Option<Vec<modes::Decode>> =
-            hound_active.then(|| error_checked(&decodes).into_owned());
+            hound_active.then(|| self.error_checked(&decodes, slot).into_owned());
         let decodes = self.hound_split(decodes);
         let n = decodes.len();
         // Tally IR-HARQ rescues (messages recovered by combining retransmissions).
@@ -35338,9 +35349,9 @@ contact yourself."
                 self.recent_dt.pop_front();
             }
         }
-        // Automation acts on error-checked decodes only ([`error_checked`]); every decode is
+        // Automation acts on error-checked decodes only ([`Self::error_checked`]); every decode is
         // still shown, logged to ALL.TXT and kept in the history above and below.
-        let checked = error_checked(&decodes);
+        let checked = self.error_checked(&decodes, slot);
         let pend_before = self.app.pending_count();
         self.app.observe(&checked, slot);
         // An inbound ACK may have marked queued messages delivered (or purged spent
@@ -35587,6 +35598,54 @@ contact yourself."
                 return;
             }
         }
+    }
+
+    /// The decodes of `slot` automation may act on. An UNCHECKED decode (`modes::Decode::unchecked`:
+    /// the JTDX-style decoder's FT8S/FT8SD and matched filters, which accept the expected message
+    /// on correlation alone, with no LDPC and no CRC) is shown, marked `^`, and written to ALL.TXT,
+    /// and nothing automatic acts on it: it starts and advances no QSO (so it is never
+    /// auto-logged), reaches no message inbox, and is not handed to other programs (WSJT-X UDP) or
+    /// uploaded (PSK Reporter). The operator may still click it and work the station by hand.
+    ///
+    /// ⭐ Except a REPEAT: an unchecked decode that is word for word a message heard error-checked
+    /// on the same parity (an even number of slots before) within [`UNCHECKED_REPEAT_PERIODS`]
+    /// same-parity periods counts as checked. The message names its sender, so it is the same
+    /// station sending the same thing again, as a station calling CQ does every other period;
+    /// JTDX's FT8SD1 finds those later copies by matching the earlier one, and without this they
+    /// never reached a logger's auto-reply or PSK Reporter. It stays marked `^` on screen. A
+    /// message only ever heard unchecked never counts, and a guess with new content is new.
+    ///
+    /// Records the checked decodes of `slot` for the repeats to come. Borrowed when every decode
+    /// counts, which is always so for every decoder but the JTDX-style one.
+    fn error_checked<'a>(
+        &mut self,
+        decodes: &'a [modes::Decode],
+        slot: u64,
+    ) -> std::borrow::Cow<'a, [modes::Decode]> {
+        let window = 2 * UNCHECKED_REPEAT_PERIODS;
+        self.checked_heard
+            .retain(|_, heard| slot.saturating_sub(*heard) <= window);
+        let heard = &self.checked_heard;
+        let counts = |d: &modes::Decode| {
+            !d.unchecked
+                || heard
+                    .get(&message_words(&d.message))
+                    .is_some_and(|h| *h < slot && (slot - h) % 2 == 0)
+        };
+        let all_count = decodes.iter().all(counts);
+        let kept = if all_count {
+            std::borrow::Cow::Borrowed(decodes)
+        } else {
+            std::borrow::Cow::Owned(decodes.iter().filter(|d| counts(d)).cloned().collect())
+        };
+        for d in decodes.iter().filter(|d| !d.unchecked) {
+            let latest = self
+                .checked_heard
+                .entry(message_words(&d.message))
+                .or_insert(slot);
+            *latest = (*latest).max(slot);
+        }
+        kept
     }
 
     fn observe_modes(&mut self, decodes: &[modes::Decode], slot: u64) {
