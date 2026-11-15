@@ -1096,6 +1096,80 @@ void tempo_ctx_save(void *ctx);
 void tempo_ctx_restore(void *ctx);
 
 /*===========================================================================
+ * FT8, WSJT-X 3.0.2's multithreaded decoder (lib/ft8var, the WSJT-X port of
+ * JTDX's decoder), via ft8var_cabi.f90, which re-expresses WSJT-X's
+ * lib/decoder.f90 dispatch. The full pass of a period only.
+ *
+ * The calling thread needs OMP-sized stack (10 MiB; tempo_fast_sys::
+ * OPENMP_THREAD_STACK): the decoder is compiled -fopenmp and keeps its local
+ * arrays on the stack. Caller holds the modem lock. With nmt = 1 the decode is
+ * deterministic; with more threads the threads share the audio they subtract
+ * from (upstream) and the result varies run to run.
+ *===========================================================================*/
+
+/* Everything one decode takes besides the audio. ints are 0/1 for the logical
+ * fields; callsign fields are blank-padded, NOT NUL-terminated. 220 bytes. */
+typedef struct {
+    int nzhsym;            /* samples decoded = nzhsym*3456 (WSJT-X: 49)      */
+    int nutc;              /* period start, hhmmss                            */
+    int nfa, nfb;          /* search band, Hz                                 */
+    int nfqso, nftx;       /* RX and TX frequency, Hz                         */
+    int nqso_progress;
+    int napwid;            /* AP window, Hz: 5/15/50 below 30 MHz/100 MHz/else */
+    int nmt;               /* threads: 0 auto, 1..12                          */
+    int nft8cycles;        /* 1..3                                            */
+    int nft8rxfsens;       /* 1..3                                            */
+    int ncandthin;         /* percent, 100 keeps all                          */
+    int ndtcenter;         /* WSJT-X: 0                                       */
+    int nstophint;         /* WSJT-X: 0 (hint decoders on)                    */
+    int ncontest;          /* 0, or 7 as a Hound                              */
+    int lft8lowth, lft8subpass, lft8apon, lhideft8dupes;
+    int lmycallstd, lhiscallstd, lhound, lcommonft8b;
+    int lenabledxcsearch, lwidedxcsearch;
+    int ltxing, lapmyc, nlasttx, lskiptx1, lmultinst;   /* WSJT-X 3.0.2: 0    */
+    int lswl;              /* JTDX's SWL mode (Nexus)                         */
+    int nreserved[10];     /* zero                                            */
+    char mycall[12], hiscall[12], mybcall[12], hisbcall[12];
+    char hisgrid[6], pad[2];
+} ft8var_params_t;
+
+/* A decode: ft8_decode_t's fields, then `unchecked`, 1 for a message no error
+ * check accepted (JTDX's FT8S/FT8SD and matched filters, its '^'). 68 bytes. */
+typedef struct {
+    float sync;            /* 0: ft8var reports none */
+    int   snr;
+    float dt;
+    float freq;
+    char  message[38];
+    int   nap;
+    float qual;
+    int   unchecked;
+} ft8var_decode_t;
+
+typedef int (*ft8var_decode_cb)(void *user, const ft8var_decode_t *rec);
+
+/* One period: up to max_out records into out; cb (or NULL) sees each as it is
+ * accepted, its answer ignored. Returns the count. */
+int ft8var_decode_frame(const short *iwave, const ft8var_params_t *p,
+                        ft8var_decode_t *out, int max_out,
+                        ft8var_decode_cb cb, void *cb_user);
+
+/* Where ALLCALL7.TXT is (before the first decode of FT8 or FT4). */
+void ft8var_set_share_dir(const char *path, int n);
+
+/* Load ALLCALL7.TXT once per process; idempotent. 1 = database valid. */
+int ft8var_load_callsign_db(void);
+
+/* WSJT-X's mode-change reset: average DT, the decoder's callsign hash tables. */
+void ft8var_reset(void);
+
+/* WSJT-X's thread count for a requested nmt on this machine. */
+int ft8var_threads(int nmt);
+
+/* The frequency slice each of n threads decodes: lo[0..n), hi[0..n). */
+void ft8var_slices(int nfa, int nfb, int n, int *lo, int *hi);
+
+/*===========================================================================
  * OpenMP runtime self-check (omp_probe.f90, omp_env.c)
  *
  * The multithreaded FT8 decoder runs on the GNU OpenMP runtime, linked

@@ -6,6 +6,9 @@ Decoders (each WAV in its own process, so no state carries between files):
              (crates/ft8/examples/decode_bench.rs, `decode 3`)
   jt9        WSJT-X 3.0.2 `jt9 -8 -d 3`        (the standard decoder, Deep)
   jt9var     WSJT-X 3.0.2 `jt9 -8 -M -C 3 -E 3` (the multithreaded JTDX-derived decoder)
+  easy, keen, ludicrous (--presets)
+             Nexus's JTDX-style decoder (`decodevar`) at each preset's settings: 3 cycles,
+             sensitivity 3; Easy 1 thread, Keen 1 thread + SWL, Ludicrous 12 threads + SWL
 
 Corpus:
   --real DIR   real off-air WAVs (yymmdd_hhmmss.wav). No ground truth: a decode one decoder
@@ -60,6 +63,20 @@ def decode_nexus(bench, wav, depth):
         if f[0] == "D":
             decs.append({"snr": int(f[1]), "dt": float(f[2]), "freq": float(f[3]), "msg": f[4]})
     return decs, cpu, wall
+
+
+def decode_var(bench, share, wav, threads, swl):
+    cmd = [bench, "decodevar", str(threads), share, str(wav), "3", "3"] + (["swl"] if swl else [])
+    out, cpu, wall = run_timed(cmd)
+    decs, seen, ms = [], set(), None
+    for line in out.splitlines():
+        f = line.split("\t")
+        if f[0] == "D" and f[4] not in seen:
+            seen.add(f[4])
+            decs.append({"snr": int(f[1]), "dt": float(f[2]), "freq": float(f[3]), "msg": f[4]})
+        elif f[0] == "T":
+            ms = float(f[1])
+    return decs, cpu, wall, ms
 
 
 def decode_jt9(jt9, share, wav, extra, work):
@@ -121,12 +138,16 @@ def main():
     ap.add_argument("--synth", help="synthetic corpus directory (with truth.tsv)")
     ap.add_argument("--depth", type=int, default=3)
     ap.add_argument("--json", help="write per-decode results here")
+    ap.add_argument("--presets", action="store_true", help="also run Nexus's JTDX-style presets")
     a = ap.parse_args()
 
     decoders = {"nexus": lambda w, work: decode_nexus(a.bench, w, a.depth)}
     if a.jt9:
         decoders["jt9"] = lambda w, work: decode_jt9(a.jt9, a.share, w, ["-d", str(a.depth)], work)
         decoders["jt9var"] = lambda w, work: decode_jt9(a.jt9, a.share, w, ["-M", "-C", "3", "-E", "3"], work)
+    if a.presets:
+        for name, threads, swl in (("easy", 1, False), ("keen", 1, True), ("ludicrous", 12, True)):
+            decoders[name] = (lambda t, s: lambda w, work: decode_var(a.bench, a.share, w, t, s))(threads, swl)
 
     real = sorted(p for d in a.real for p in Path(d).glob("*.wav"))
     synth = sorted(Path(a.synth).glob("*.wav")) if a.synth else []
@@ -134,8 +155,10 @@ def main():
     with tempfile.TemporaryDirectory() as work:
         for wav in real + synth:
             for name, fn in decoders.items():
-                decs, cpu, wall = fn(wav, work)
-                results[name][wav.name] = {"decodes": decs, "cpu": cpu, "wall": wall}
+                r = fn(wav, work)
+                decs, cpu, wall = r[:3]
+                results[name][wav.name] = {"decodes": decs, "cpu": cpu, "wall": wall,
+                                           "ms": r[3] if len(r) > 3 else None}
 
     allcall = load_allcall(a.share)
     names = list(decoders)
@@ -231,12 +254,17 @@ def main():
 
     say("")
     say("== CPU per period (one process per WAV: user+sys, and wall)")
-    say(f"{'decoder':10}{'cpu mean':>10}{'cpu max':>10}{'wall mean':>11}{'wall max':>10}")
+    say("(decode = the decoder's own time, without loading ALLCALL7; the JTDX-style presets only.")
+    say(" Nexus's budget for it is 2.1 s: JTDX_FULL_PASS_BUDGET.)")
+    say(f"{'decoder':10}{'cpu mean':>10}{'cpu max':>10}{'wall mean':>11}{'wall max':>10}{'decode mean':>13}{'decode max':>12}{'> 2.1 s':>9}")
     for n in names:
         rs = list(results[n].values())
         cpu = [r['cpu'] for r in rs]
         wall = [r['wall'] for r in rs]
-        say(f"{n:10}{sum(cpu) / len(cpu):>9.2f}s{max(cpu):>9.2f}s{sum(wall) / len(wall):>10.2f}s{max(wall):>9.2f}s")
+        ms = [r['ms'] for r in rs if r.get('ms') is not None]
+        dec = (f"{sum(ms) / len(ms) / 1000:>12.2f}s{max(ms) / 1000:>11.2f}s{sum(m > 2100 for m in ms):>9}"
+               if ms else "")
+        say(f"{n:10}{sum(cpu) / len(cpu):>9.2f}s{max(cpu):>9.2f}s{sum(wall) / len(wall):>10.2f}s{max(wall):>9.2f}s" + dec)
 
     print("\n".join(lines))
     if a.json:

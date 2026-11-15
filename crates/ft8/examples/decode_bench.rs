@@ -145,6 +145,79 @@ fn decode(depth: i32, path: &str) {
     writeln!(out, "T\t{ms:.1}").unwrap();
 }
 
+/// One period through the multithreaded decoder with exactly the parameters
+/// `jt9 -8 -M -C <cycles> -E <sensitivity> -R 3 -N <threads>` gives it from disk (jt9.f90:336-412: nzhsym 49 for
+/// the default decoder start, napwid 75, K1ABC / W9XYZ / EN37, RX 1500 Hz, 200-4000 Hz, AP on,
+/// and every field jt9 does not set left zero: no TX frequency, calls not flagged standard, NUL
+/// base calls). Run on a thread with the stack OpenMP code needs. `swl`: JTDX's SWL mode on
+/// (Nexus's Keen and Ludicrous; jt9 has no such option).
+fn decode_var(threads: i32, share: &str, path: &str, cycles: i32, sensitivity: i32, swl: bool) {
+    let iwave = read_wav_i16(path);
+    let nutc_s = nutc_of(path);
+    let threads_c = threads;
+    let share = share.to_string();
+    // FT8VAR_STACK (bytes) overrides the decoding thread's stack, to measure what it needs.
+    let stack = std::env::var("FT8VAR_STACK")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(ft8::OPENMP_THREAD_STACK);
+    let (decodes, ms) = std::thread::Builder::new()
+        .stack_size(stack)
+        .spawn(move || {
+            assert!(
+                ft8::var_load_callsign_db(std::path::Path::new(&share)),
+                "ALLCALL7.TXT not found or short in {share}"
+            );
+            let mut p = ft8::Ft8VarParams {
+                nzhsym: 49,
+                nutc: (nutc_s / 3600) * 10_000 + (nutc_s / 60 % 60) * 100 + nutc_s % 60,
+                nfa: NFA,
+                nfb: NFB,
+                nfqso: NFQSO,
+                napwid: 75,
+                nmt: threads_c,
+                nft8cycles: cycles,
+                nft8rxfsens: 3,
+                ncandthin: 100,
+                lft8lowth: (sensitivity >= 2).into(),
+                lft8subpass: (sensitivity >= 3).into(),
+                lft8apon: 1,
+                lcommonft8b: 1,
+                lwidedxcsearch: 1,
+                lswl: swl.into(),
+                ..ft8::Ft8VarParams::default()
+            };
+            p.mycall = *b"K1ABC       ";
+            p.hiscall = *b"W9XYZ       ";
+            p.mybcall = [0; 12];
+            p.hisbcall = [0; 12];
+            p.hisgrid = *b"EN37  ";
+            let t = Instant::now();
+            let d = ft8::decode_frame_var_raw(&iwave, &p, &mut |_| {});
+            (d, t.elapsed().as_secs_f64() * 1000.0)
+        })
+        .expect("spawn decode thread")
+        .join()
+        .expect("decode thread");
+    // Every record as the decoder reported it, in its order (jt9 prints duplicates too unless
+    // told to hide them), with the frequency unrounded: jt9 prints Fortran's nint, which rounds
+    // halves away from zero, and the comparison does the same.
+    let out = std::io::stdout();
+    let mut out = out.lock();
+    for d in decodes {
+        writeln!(
+            out,
+            "D\t{}\t{:.1}\t{:.3}\t{}",
+            d.snr,
+            d.dt,
+            d.freq,
+            d.message.trim()
+        )
+        .unwrap();
+    }
+    writeln!(out, "T\t{ms:.1}").unwrap();
+}
+
 /// Deterministic LCG + Box-Muller, as the decode-parity tests use.
 struct Rng(u64);
 impl Rng {
@@ -275,6 +348,14 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("decode") if args.len() == 3 => decode(args[1].parse().expect("depth"), &args[2]),
+        Some("decodevar") if (4..=7).contains(&args.len()) => decode_var(
+            args[1].parse().expect("threads"),
+            &args[2],
+            &args[3],
+            args.get(4).map_or(3, |a| a.parse().expect("cycles")),
+            args.get(5).map_or(3, |a| a.parse().expect("sensitivity")),
+            args.get(6).is_some_and(|a| a == "swl"),
+        ),
         Some("synth") if args.len() == 6 => synth(
             &args[1],
             &args[2],
@@ -285,6 +366,7 @@ fn main() {
         _ => {
             eprintln!(
                 "usage: decode_bench decode <depth> <wav>\n       \
+                 decode_bench decodevar <threads> <dir with ALLCALL7.TXT> <wav> [cycles] [sensitivity] [swl]\n       \
                  decode_bench synth <outdir> <ALLCALL7.TXT> <nfiles> <nsig> <seed>"
             );
             std::process::exit(2);

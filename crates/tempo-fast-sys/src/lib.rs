@@ -305,6 +305,21 @@ impl Default for Ft8DecodeT {
     }
 }
 
+/// A decode of the multithreaded FT8 decoder (`ft8var_decode_t` in `libtempo.h`): [`Ft8DecodeT`]'s
+/// fields, then `unchecked` (68 bytes).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Ft8VarDecodeT {
+    pub rec: Ft8DecodeT,
+    /// 1 for a message no error check accepted: JTDX's FT8S/FT8SD and matched filters (its `^`).
+    pub unchecked: c_int,
+}
+
+/// What [`ft8var_decode_frame`] calls with each decode as it is accepted (`ft8var_decode_cb` in
+/// `libtempo.h`); its answer is ignored.
+pub type Ft8VarDecodeCallback =
+    unsafe extern "C" fn(user: *mut c_void, rec: *const Ft8VarDecodeT) -> c_int;
+
 /// FT4 decode record — byte-identical C-ABI layout to [`Ft8DecodeT`].
 pub type Ft4DecodeT = Ft8DecodeT;
 
@@ -1462,6 +1477,143 @@ impl std::fmt::Debug for DecoderCtx {
     }
 }
 
+/// Everything one [`ft8var_decode_frame`] takes besides the audio: `ft8var_params_t` in
+/// `libtempo.h` and `libtempo/ft8var_cabi.f90`, field for field. Logical fields are 0/1; the
+/// callsign fields are blank-padded, not NUL-terminated. The comments name WSJT-X's
+/// `dec_data.params` field each one is.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Ft8VarParams {
+    /// Samples decoded = `nzhsym * 3456` (WSJT-X's full pass: 49).
+    pub nzhsym: c_int,
+    /// Period start, hhmmss (`nutc`).
+    pub nutc: c_int,
+    /// Search band, Hz.
+    pub nfa: c_int,
+    pub nfb: c_int,
+    /// RX frequency, Hz (`nfqso`).
+    pub nfqso: c_int,
+    /// TX frequency, Hz (`nftx`).
+    pub nftx: c_int,
+    /// `nQSOProgress`.
+    pub nqso_progress: c_int,
+    /// AP window, Hz (`napwid`).
+    pub napwid: c_int,
+    /// Threads: 0 = auto, 1..=12 (`nmt`).
+    pub nmt: c_int,
+    /// Decoding cycles 1..=3 (`nft8cycles`).
+    pub nft8cycles: c_int,
+    /// QSO RX-frequency sensitivity 1..=3 (`nft8rxfsens`).
+    pub nft8rxfsens: c_int,
+    /// Candidate thinning, percent; 100 keeps all (`ncandthin`).
+    pub ncandthin: c_int,
+    /// DT centre, 1/100 s (`ndtcenter`; WSJT-X always 0).
+    pub ndtcenter: c_int,
+    /// 0 keeps the hint decoders on (`nstophint`; WSJT-X always 0).
+    pub nstophint: c_int,
+    /// `ncontest`: 0, or 7 as a Hound.
+    pub ncontest: c_int,
+    pub lft8lowth: c_int,
+    pub lft8subpass: c_int,
+    pub lft8apon: c_int,
+    pub lhideft8dupes: c_int,
+    pub lmycallstd: c_int,
+    pub lhiscallstd: c_int,
+    pub lhound: c_int,
+    pub lcommonft8b: c_int,
+    pub lenabledxcsearch: c_int,
+    pub lwidedxcsearch: c_int,
+    pub ltxing: c_int,
+    pub lapmyc: c_int,
+    pub nlasttx: c_int,
+    pub lskiptx1: c_int,
+    pub lmultinst: c_int,
+    /// JTDX's SWL mode (Nexus; 0 = as WSJT-X).
+    pub lswl: c_int,
+    pub nreserved: [c_int; 10],
+    pub mycall: [u8; 12],
+    pub hiscall: [u8; 12],
+    pub mybcall: [u8; 12],
+    pub hisbcall: [u8; 12],
+    pub hisgrid: [u8; 6],
+    pub pad: [u8; 2],
+}
+
+impl Default for Ft8VarParams {
+    fn default() -> Self {
+        Self {
+            nzhsym: 0,
+            nutc: 0,
+            nfa: 0,
+            nfb: 0,
+            nfqso: 0,
+            nftx: 0,
+            nqso_progress: 0,
+            napwid: 0,
+            nmt: 0,
+            nft8cycles: 0,
+            nft8rxfsens: 0,
+            ncandthin: 0,
+            ndtcenter: 0,
+            nstophint: 0,
+            ncontest: 0,
+            lft8lowth: 0,
+            lft8subpass: 0,
+            lft8apon: 0,
+            lhideft8dupes: 0,
+            lmycallstd: 0,
+            lhiscallstd: 0,
+            lhound: 0,
+            lcommonft8b: 0,
+            lenabledxcsearch: 0,
+            lwidedxcsearch: 0,
+            ltxing: 0,
+            lapmyc: 0,
+            nlasttx: 0,
+            lskiptx1: 0,
+            lmultinst: 0,
+            lswl: 0,
+            nreserved: [0; 10],
+            mycall: [b' '; 12],
+            hiscall: [b' '; 12],
+            mybcall: [b' '; 12],
+            hisbcall: [b' '; 12],
+            hisgrid: [b' '; 6],
+            pad: [0; 2],
+        }
+    }
+}
+
+extern "C" {
+    /// One period through WSJT-X 3.0.2's multithreaded FT8 decoder (`libtempo/ft8var_cabi.f90`).
+    /// Writes up to `max_out` records to `out` (`sync` is 0) and returns how many; `cb`, if
+    /// given, sees each one as it is accepted (its answer is ignored). Caller holds the modem
+    /// lock and runs on a thread with [`OPENMP_THREAD_STACK`].
+    pub fn ft8var_decode_frame(
+        iwave: *const i16, // [FT8_NMAX]
+        p: *const Ft8VarParams,
+        out: *mut Ft8VarDecodeT,
+        max_out: c_int,
+        cb: Option<Ft8VarDecodeCallback>,
+        user: *mut c_void,
+    ) -> c_int;
+
+    /// Where `ALLCALL7.TXT` is (`prog_args%share_dir`). Before the first decode.
+    pub fn ft8var_set_share_dir(path: *const c_char, n: c_int);
+
+    /// Load `ALLCALL7.TXT` once per process (idempotent); 1 when the database is valid.
+    pub fn ft8var_load_callsign_db() -> c_int;
+
+    /// The mode-change reset (WSJT-X `decoder.f90:190-196`): average DT, *var hash tables.
+    pub fn ft8var_reset();
+
+    /// The thread count WSJT-X uses for a requested `nmt` on this machine.
+    pub fn ft8var_threads(nmt: c_int) -> c_int;
+
+    /// The frequency slice each of `n` threads decodes: `lo[0..n]`, `hi[0..n]`.
+    pub fn ft8var_slices(nfa: c_int, nfb: c_int, n: c_int, lo: *mut c_int, hi: *mut c_int);
+}
+
 /// What [`openmp_selfcheck`] found: the OpenMP runtime libtempo links is present and runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpenMpCheck {
@@ -1543,6 +1695,30 @@ mod manifest_gate;
 mod tests {
     use super::*;
     use std::mem::{align_of, offset_of, size_of};
+
+    /// Lock `Ft8VarDecodeT` to `ft8var_decode_t`: `ft8_decode_t`, then the flag.
+    #[test]
+    fn ft8var_decode_t_layout() {
+        assert_eq!(size_of::<Ft8VarDecodeT>(), 68);
+        assert_eq!(offset_of!(Ft8VarDecodeT, unchecked), 64);
+    }
+
+    /// Lock `Ft8VarParams` to `ft8var_params_t` (libtempo.h, ft8var_cabi.f90): 41 ints, then the
+    /// four 12-byte callsigns, the 6-byte grid and 2 pad bytes.
+    #[test]
+    fn ft8var_params_t_layout() {
+        assert_eq!(size_of::<Ft8VarParams>(), 220);
+        assert_eq!(align_of::<Ft8VarParams>(), 4);
+        assert_eq!(offset_of!(Ft8VarParams, nzhsym), 0);
+        assert_eq!(offset_of!(Ft8VarParams, ncontest), 14 * 4);
+        assert_eq!(offset_of!(Ft8VarParams, lswl), 30 * 4);
+        assert_eq!(offset_of!(Ft8VarParams, nreserved), 31 * 4);
+        assert_eq!(offset_of!(Ft8VarParams, mycall), 164);
+        assert_eq!(offset_of!(Ft8VarParams, hiscall), 176);
+        assert_eq!(offset_of!(Ft8VarParams, mybcall), 188);
+        assert_eq!(offset_of!(Ft8VarParams, hisbcall), 200);
+        assert_eq!(offset_of!(Ft8VarParams, hisgrid), 212);
+    }
 
     /// libtempo's OpenMP runtime links, starts a team of the size asked for, and every worker has
     /// the 4 MB of stack the multithreaded FT8 decoder's arrays need (omp_env.c sets WSJT-X's

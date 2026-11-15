@@ -69,6 +69,7 @@
       "resources/deepcw/*": "resources/deepcw/",
       "resources/tles/*": "resources/tles/",
       "resources/iota/*": "resources/iota/",
+      "../libtempo/vendor/wsjtx/ALLCALL7.TXT": "resources/ft8var/ALLCALL7.TXT",
       "../licenses/remote/*": "resources/remote/",
       "../licenses/stream/*": "resources/stream/",
       "../licenses/openssl/*": "resources/openssl/",

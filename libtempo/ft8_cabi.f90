@@ -59,6 +59,48 @@ module ft8_cabi
        cxv_hashmy10 => hashmy10, cxv_hashmy12 => hashmy12,              &
        cxv_hashmy22 => hashmy22, cxv_hashdx10 => hashdx10,              &
        cxv_hashdx12 => hashdx12, cxv_hashdx22 => hashdx22
+  ! ft8var (WSJT-X 3.0.2 lib/ft8var), see the ft8var block of tempo_ctx_t.
+  use ft8_mod1, only: cxv_v_odd => odd, cxv_v_even => even, cxv_v_oddcopy => oddcopy, &
+       cxv_v_evencopy => evencopy, cxv_v_lastrxmsg => lastrxmsg, &
+       cxv_v_calldtodd => calldtodd, cxv_v_calldteven => calldteven, &
+       cxv_v_incall => incall, cxv_v_evencq => evencq, cxv_v_oddcq => oddcq, &
+       cxv_v_evenmyc => evenmyc, cxv_v_oddmyc => oddmyc, cxv_v_evenqso => evenqso, &
+       cxv_v_oddqso => oddqso, cxv_v_avexdt => avexdt, cxv_v_sumxdtt => sumxdtt, &
+       cxv_v_lasthcall => lasthcall, cxv_v_mycall12_0 => mycall12_0, &
+       cxv_v_mycall12_00 => mycall12_00, cxv_v_hiscall12_0 => hiscall12_0, &
+       cxv_v_itone56 => itone56, cxv_v_idtone56 => idtone56, cxv_v_msg => msg, &
+       cxv_v_csynce => csynce, cxv_v_idtonecqdxcns => idtonecqdxcns, &
+       cxv_v_idtonedxcns73 => idtonedxcns73, cxv_v_idtonefox73 => idtonefox73, &
+       cxv_v_idtonespec => idtonespec, cxv_v_idtonemyc => idtonemyc, &
+       cxv_v_itone76 => itone76, cxv_v_idtone76 => idtone76, cxv_v_msgsd76 => msgsd76, &
+       cxv_v_csyncsd => csyncsd, cxv_v_csyncsdcq => csyncsdcq, cxv_v_apsym => apsym, &
+       cxv_v_apcqsym => apcqsym, cxv_v_apsymsp => apsymsp, cxv_v_apsymdxns1 => apsymdxns1, &
+       cxv_v_apsymdxnsrrr => apsymdxnsrrr, cxv_v_apsymdxnsrr73 => apsymdxnsrr73, &
+       cxv_v_apsymdxns73 => apsymdxns73, cxv_v_apsymmyns1 => apsymmyns1, &
+       cxv_v_apsymmyns2 => apsymmyns2, cxv_v_apsymmynsrr73 => apsymmynsrr73, &
+       cxv_v_apsymmyns73 => apsymmyns73, cxv_v_apsymdxstd => apsymdxstd, &
+       cxv_v_apsymdxnsr73 => apsymdxnsr73, cxv_v_apsymdxns732 => apsymdxns732, &
+       cxv_v_apsymmynsrrr => apsymmynsrrr, callsigndteven_struct, callsigndtodd_struct, &
+       even_struct, evencopy_struct, evencq_struct, evenmyc_struct, evenqso_struct, &
+       incall_struct, lastrxmsg_struct, odd_struct, oddcopy_struct, oddcq_struct, &
+       oddmyc_struct, oddqso_struct
+  use packjt77, only: cxv_v_calls10var => calls10var, cxv_v_calls12var => calls12var, &
+       cxv_v_calls22var => calls22var, cxv_v_ihash22var => ihash22var, &
+       cxv_v_nzhashvar => nzhashvar, cxv_v_txcalls10var => txcalls10var, &
+       cxv_v_txcalls12var => txcalls12var, cxv_v_txcalls22var => txcalls22var, &
+       cxv_v_itxhash22var => itxhash22var, cxv_v_nztxhashvar => nztxhashvar, &
+       cxv_v_last_callsvar => last_callsvar, &
+       cxv_v_nlast_callsvar => nlast_callsvar, cxv_v_mycall13var => mycall13var, &
+       cxv_v_dxcall13var => dxcall13var, cxv_v_mycall13_0var => mycall13_0var, &
+       cxv_v_dxcall13_0var => dxcall13_0var, cxv_v_hashmy10var => hashmy10var, &
+       cxv_v_hashmy12var => hashmy12var, cxv_v_hashmy22var => hashmy22var, &
+       cxv_v_hashdx10var => hashdx10var, cxv_v_dxcall13_setvar => dxcall13_setvar, &
+       cxv_v_mycall13_setvar => mycall13_setvar
+  use ft8apsetvar_state, only: cxv_v_ap_mycallprev => mycallprev, &
+       cxv_v_ap_hiscallprev => hiscallprev, cxv_v_ap_lhoundprev => lhoundprev, &
+       cxv_v_ap_first => first
+  use ft8var_dispatch_state, only: cxv_v_recent_shadow => recent_shadow, cxv_v_d_lhoundprev => lhoundprev, &
+       cxv_v_d_nintcount => nintcount
   use ft4_decode_apstate, only: cxv_ft4_apbits => apbits,               &
        cxv_ft4_apmy_ru => apmy_ru, cxv_ft4_aphis_fd => aphis_fd,        &
        cxv_ft4_mycall0 => mycall0, cxv_ft4_hiscall0 => hiscall0
@@ -303,6 +345,99 @@ module ft8_cabi
      ! compound call. Per-QSO; a wrong prefix is a well-formed WRONG callsign.
      ! Declared character*8 at packjt.f90:753 (re-declared in ctx_xfer).
      character(len=8)  :: addpfx
+     ! --- FT8, the multithreaded decoder (lib/ft8var) --------------------------
+     ! Every row here is class 1 in modem-state-manifest.toml (ft8var/, 77bit/packjt77.f90's *var
+     ! tables, ft8apsetvar_state, ft8var_dispatch_state). What they are, by group:
+     ! - the per-parity message tables FT8S/FT8SD correlate against (odd/even and their copies),
+     !   the last QSO message, the per-parity DTs of calls, the incoming-call list, and the raw
+     !   symbols of up to 20 CQ, 5 MyCall and 1 QSO signals per thread kept for the next
+     !   same-parity period: shared, chain A's expected messages are matched in chain B's audio;
+     ! - the running average DT the search is centred on, and its fast-track counter;
+     ! - the tone and AP-mask caches built from the callsign pair (tone8/tone8myc/tonesdvar,
+     !   ft8apsetvar), each WITH the keys that decide whether to rebuild (cache and key move as
+     !   one unit, as for the FT4 AP cache above);
+     ! - packjt77's *var callsign hash tables and memos, ft8var's own copy of the hash machinery.
+     ! Held as typed components (derived types as their own types), so ctx_xfer stays checked.
+     type(odd_struct) :: v_odd(size(cxv_v_odd))
+     type(even_struct) :: v_even(size(cxv_v_even))
+     type(oddcopy_struct) :: v_oddcopy(size(cxv_v_oddcopy))
+     type(evencopy_struct) :: v_evencopy(size(cxv_v_evencopy))
+     type(lastrxmsg_struct) :: v_lastrxmsg(size(cxv_v_lastrxmsg))
+     type(callsigndtodd_struct) :: v_calldtodd(size(cxv_v_calldtodd))
+     type(callsigndteven_struct) :: v_calldteven(size(cxv_v_calldteven))
+     type(incall_struct) :: v_incall(size(cxv_v_incall))
+     type(evencq_struct) :: v_evencq(size(cxv_v_evencq,1), size(cxv_v_evencq,2))
+     type(oddcq_struct) :: v_oddcq(size(cxv_v_oddcq,1), size(cxv_v_oddcq,2))
+     type(evenmyc_struct) :: v_evenmyc(size(cxv_v_evenmyc,1), size(cxv_v_evenmyc,2))
+     type(oddmyc_struct) :: v_oddmyc(size(cxv_v_oddmyc,1), size(cxv_v_oddmyc,2))
+     type(evenqso_struct) :: v_evenqso(size(cxv_v_evenqso,1), size(cxv_v_evenqso,2))
+     type(oddqso_struct) :: v_oddqso(size(cxv_v_oddqso,1), size(cxv_v_oddqso,2))
+     real :: v_avexdt
+     real :: v_sumxdtt(size(cxv_v_sumxdtt))
+     character(len=len(cxv_v_lasthcall)) :: v_lasthcall
+     character(len=len(cxv_v_mycall12_0)) :: v_mycall12_0
+     character(len=len(cxv_v_mycall12_00)) :: v_mycall12_00
+     character(len=len(cxv_v_hiscall12_0)) :: v_hiscall12_0
+     integer :: v_itone56(size(cxv_v_itone56,1), size(cxv_v_itone56,2))
+     integer :: v_idtone56(size(cxv_v_idtone56,1), size(cxv_v_idtone56,2))
+     character(len=len(cxv_v_msg)) :: v_msg(size(cxv_v_msg))
+     complex :: v_csynce(size(cxv_v_csynce,1), size(cxv_v_csynce,2))
+     integer :: v_idtonecqdxcns(size(cxv_v_idtonecqdxcns))
+     integer :: v_idtonedxcns73(size(cxv_v_idtonedxcns73))
+     integer :: v_idtonefox73(size(cxv_v_idtonefox73))
+     integer :: v_idtonespec(size(cxv_v_idtonespec))
+     integer :: v_idtonemyc(size(cxv_v_idtonemyc))
+     integer :: v_itone76(size(cxv_v_itone76,1), size(cxv_v_itone76,2))
+     integer :: v_idtone76(size(cxv_v_idtone76,1), size(cxv_v_idtone76,2))
+     character(len=len(cxv_v_msgsd76)) :: v_msgsd76(size(cxv_v_msgsd76))
+     complex :: v_csyncsd(size(cxv_v_csyncsd,1), size(cxv_v_csyncsd,2))
+     complex :: v_csyncsdcq(size(cxv_v_csyncsdcq,1), size(cxv_v_csyncsdcq,2))
+     integer :: v_apsym(size(cxv_v_apsym))
+     integer :: v_apcqsym(size(cxv_v_apcqsym))
+     integer :: v_apsymsp(size(cxv_v_apsymsp))
+     integer :: v_apsymdxns1(size(cxv_v_apsymdxns1))
+     integer :: v_apsymdxnsrrr(size(cxv_v_apsymdxnsrrr))
+     integer :: v_apsymdxnsrr73(size(cxv_v_apsymdxnsrr73))
+     integer :: v_apsymdxns73(size(cxv_v_apsymdxns73))
+     integer :: v_apsymmyns1(size(cxv_v_apsymmyns1))
+     integer :: v_apsymmyns2(size(cxv_v_apsymmyns2))
+     integer :: v_apsymmynsrr73(size(cxv_v_apsymmynsrr73))
+     integer :: v_apsymmyns73(size(cxv_v_apsymmyns73))
+     integer :: v_apsymdxstd(size(cxv_v_apsymdxstd))
+     integer :: v_apsymdxnsr73(size(cxv_v_apsymdxnsr73))
+     integer :: v_apsymdxns732(size(cxv_v_apsymdxns732))
+     integer :: v_apsymmynsrrr(size(cxv_v_apsymmynsrrr))
+     character(len=len(cxv_v_calls10var)) :: v_calls10var(size(cxv_v_calls10var))
+     character(len=len(cxv_v_calls12var)) :: v_calls12var(size(cxv_v_calls12var))
+     character(len=len(cxv_v_calls22var)) :: v_calls22var(size(cxv_v_calls22var))
+     integer :: v_ihash22var(size(cxv_v_ihash22var))
+     integer :: v_nzhashvar
+     character(len=len(cxv_v_txcalls10var)) :: v_txcalls10var(size(cxv_v_txcalls10var))
+     character(len=len(cxv_v_txcalls12var)) :: v_txcalls12var(size(cxv_v_txcalls12var))
+     character(len=len(cxv_v_txcalls22var)) :: v_txcalls22var(size(cxv_v_txcalls22var))
+     integer :: v_itxhash22var(size(cxv_v_itxhash22var))
+     integer :: v_nztxhashvar
+     ! packjt77's recent_callsvar is `!$omp threadprivate` (thread-local); the decoder copies it
+     ! to and from this module copy around every decode (ft8var_dispatch_state).
+     character(len=len(cxv_v_recent_shadow)) :: v_recent_shadow(size(cxv_v_recent_shadow))
+     character(len=len(cxv_v_last_callsvar)) :: v_last_callsvar(size(cxv_v_last_callsvar))
+     integer :: v_nlast_callsvar(size(cxv_v_nlast_callsvar))
+     character(len=len(cxv_v_mycall13var)) :: v_mycall13var
+     character(len=len(cxv_v_dxcall13var)) :: v_dxcall13var
+     character(len=len(cxv_v_mycall13_0var)) :: v_mycall13_0var
+     character(len=len(cxv_v_dxcall13_0var)) :: v_dxcall13_0var
+     integer :: v_hashmy10var
+     integer :: v_hashmy12var
+     integer :: v_hashmy22var
+     integer :: v_hashdx10var
+     logical :: v_dxcall13_setvar
+     logical :: v_mycall13_setvar
+     character(len=len(cxv_v_ap_mycallprev)) :: v_ap_mycallprev
+     character(len=len(cxv_v_ap_hiscallprev)) :: v_ap_hiscallprev
+     logical(1) :: v_ap_lhoundprev
+     logical :: v_ap_first
+     logical(1) :: v_d_lhoundprev
+     integer :: v_d_nintcount
   end type tempo_ctx_t
 
   ! What ctx_xfer's single list is being walked FOR.
@@ -315,6 +450,11 @@ module ft8_cabi
   ! the SAME list and cannot drift apart. The compiler resolves the generic by
   ! type+rank, so a component that drifts from its symbol fails to compile.
   interface ctx_move
+     module procedure ctx_move_c2, ctx_move_r0, ctx_move_r1, ctx_move_b0
+     module procedure ctx_move_t_odd, ctx_move_t_even, ctx_move_t_oddcopy, ctx_move_t_evencopy
+     module procedure ctx_move_t_lastrxmsg, ctx_move_t_calldtodd, ctx_move_t_calldteven, ctx_move_t_incall
+     module procedure ctx_move_t_evencq, ctx_move_t_oddcq, ctx_move_t_evenmyc, ctx_move_t_oddmyc
+     module procedure ctx_move_t_evenqso, ctx_move_t_oddqso
      module procedure ctx_move_c1, ctx_move_r3, ctx_move_a3, ctx_move_i2, &
           ctx_move_i1, ctx_move_i0, ctx_move_l0, ctx_move_a1, ctx_move_a0, &
           ctx_move_h1
@@ -1329,11 +1469,330 @@ contains
     call ctx_move(p%hashdx12,      cxv_hashdx12,  mode, 0)
     call ctx_move(p%hashdx22,      cxv_hashdx22,  mode, 0)
     call ctx_move(p%addpfx,        addpfx,        mode, ' ')
+    ! --- FT8, the multithreaded decoder (lib/ft8var). Load-time values: the loader's image
+    !     (.bss zero: NUL strings, .false., 0), or the DATA value where there is one.
+    call ctx_move(p%v_odd, cxv_v_odd, mode)
+    call ctx_move(p%v_even, cxv_v_even, mode)
+    call ctx_move(p%v_oddcopy, cxv_v_oddcopy, mode)
+    call ctx_move(p%v_evencopy, cxv_v_evencopy, mode)
+    call ctx_move(p%v_lastrxmsg, cxv_v_lastrxmsg, mode)
+    call ctx_move(p%v_calldtodd, cxv_v_calldtodd, mode)
+    call ctx_move(p%v_calldteven, cxv_v_calldteven, mode)
+    call ctx_move(p%v_incall, cxv_v_incall, mode)
+    call ctx_move(p%v_evencq, cxv_v_evencq, mode)
+    call ctx_move(p%v_oddcq, cxv_v_oddcq, mode)
+    call ctx_move(p%v_evenmyc, cxv_v_evenmyc, mode)
+    call ctx_move(p%v_oddmyc, cxv_v_oddmyc, mode)
+    call ctx_move(p%v_evenqso, cxv_v_evenqso, mode)
+    call ctx_move(p%v_oddqso, cxv_v_oddqso, mode)
+    call ctx_move(p%v_avexdt, cxv_v_avexdt, mode, 0.0)
+    call ctx_move(p%v_sumxdtt, cxv_v_sumxdtt, mode, 0.0)
+    call ctx_move(p%v_lasthcall, cxv_v_lasthcall, mode, repeat(achar(0), len(p%v_lasthcall)))
+    call ctx_move(p%v_mycall12_0, cxv_v_mycall12_0, mode, 'dummy')
+    call ctx_move(p%v_mycall12_00, cxv_v_mycall12_00, mode, 'dummy')
+    call ctx_move(p%v_hiscall12_0, cxv_v_hiscall12_0, mode, 'dummy')
+    call ctx_move(p%v_itone56, cxv_v_itone56, mode, 0)
+    call ctx_move(p%v_idtone56, cxv_v_idtone56, mode, 0)
+    call ctx_move(p%v_msg, cxv_v_msg, mode, repeat(achar(0), len(p%v_msg)))
+    call ctx_move(p%v_csynce, cxv_v_csynce, mode, (0.0, 0.0))
+    call ctx_move(p%v_idtonecqdxcns, cxv_v_idtonecqdxcns, mode, 0)
+    call ctx_move(p%v_idtonedxcns73, cxv_v_idtonedxcns73, mode, 0)
+    call ctx_move(p%v_idtonefox73, cxv_v_idtonefox73, mode, 0)
+    call ctx_move(p%v_idtonespec, cxv_v_idtonespec, mode, 0)
+    call ctx_move(p%v_idtonemyc, cxv_v_idtonemyc, mode, 0)
+    call ctx_move(p%v_itone76, cxv_v_itone76, mode, 0)
+    call ctx_move(p%v_idtone76, cxv_v_idtone76, mode, 0)
+    call ctx_move(p%v_msgsd76, cxv_v_msgsd76, mode, repeat(achar(0), len(p%v_msgsd76)))
+    call ctx_move(p%v_csyncsd, cxv_v_csyncsd, mode, (0.0, 0.0))
+    call ctx_move(p%v_csyncsdcq, cxv_v_csyncsdcq, mode, (0.0, 0.0))
+    call ctx_move(p%v_apsym, cxv_v_apsym, mode, 0)
+    call ctx_move(p%v_apcqsym, cxv_v_apcqsym, mode, 0)
+    call ctx_move(p%v_apsymsp, cxv_v_apsymsp, mode, 0)
+    call ctx_move(p%v_apsymdxns1, cxv_v_apsymdxns1, mode, 0)
+    call ctx_move(p%v_apsymdxnsrrr, cxv_v_apsymdxnsrrr, mode, 0)
+    call ctx_move(p%v_apsymdxnsrr73, cxv_v_apsymdxnsrr73, mode, 0)
+    call ctx_move(p%v_apsymdxns73, cxv_v_apsymdxns73, mode, 0)
+    call ctx_move(p%v_apsymmyns1, cxv_v_apsymmyns1, mode, 0)
+    call ctx_move(p%v_apsymmyns2, cxv_v_apsymmyns2, mode, 0)
+    call ctx_move(p%v_apsymmynsrr73, cxv_v_apsymmynsrr73, mode, 0)
+    call ctx_move(p%v_apsymmyns73, cxv_v_apsymmyns73, mode, 0)
+    call ctx_move(p%v_apsymdxstd, cxv_v_apsymdxstd, mode, 0)
+    call ctx_move(p%v_apsymdxnsr73, cxv_v_apsymdxnsr73, mode, 0)
+    call ctx_move(p%v_apsymdxns732, cxv_v_apsymdxns732, mode, 0)
+    call ctx_move(p%v_apsymmynsrrr, cxv_v_apsymmynsrrr, mode, 0)
+    call ctx_move(p%v_calls10var, cxv_v_calls10var, mode, ' ')
+    call ctx_move(p%v_calls12var, cxv_v_calls12var, mode, ' ')
+    call ctx_move(p%v_calls22var, cxv_v_calls22var, mode, ' ')
+    call ctx_move(p%v_ihash22var, cxv_v_ihash22var, mode, -1)
+    call ctx_move(p%v_nzhashvar, cxv_v_nzhashvar, mode, 0)
+    call ctx_move(p%v_txcalls10var, cxv_v_txcalls10var, mode, ' ')
+    call ctx_move(p%v_txcalls12var, cxv_v_txcalls12var, mode, ' ')
+    call ctx_move(p%v_txcalls22var, cxv_v_txcalls22var, mode, ' ')
+    call ctx_move(p%v_itxhash22var, cxv_v_itxhash22var, mode, -1)
+    call ctx_move(p%v_nztxhashvar, cxv_v_nztxhashvar, mode, 0)
+    call ctx_move(p%v_recent_shadow, cxv_v_recent_shadow, mode, ' ')
+    call ctx_move(p%v_last_callsvar, cxv_v_last_callsvar, mode, ' ')
+    call ctx_move(p%v_nlast_callsvar, cxv_v_nlast_callsvar, mode, 0)
+    call ctx_move(p%v_mycall13var, cxv_v_mycall13var, mode, ' ')
+    call ctx_move(p%v_dxcall13var, cxv_v_dxcall13var, mode, ' ')
+    call ctx_move(p%v_mycall13_0var, cxv_v_mycall13_0var, mode, ' ')
+    call ctx_move(p%v_dxcall13_0var, cxv_v_dxcall13_0var, mode, ' ')
+    call ctx_move(p%v_hashmy10var, cxv_v_hashmy10var, mode, 0)
+    call ctx_move(p%v_hashmy12var, cxv_v_hashmy12var, mode, 0)
+    call ctx_move(p%v_hashmy22var, cxv_v_hashmy22var, mode, 0)
+    call ctx_move(p%v_hashdx10var, cxv_v_hashdx10var, mode, 0)
+    call ctx_move(p%v_dxcall13_setvar, cxv_v_dxcall13_setvar, mode, .false.)
+    call ctx_move(p%v_mycall13_setvar, cxv_v_mycall13_setvar, mode, .false.)
+    call ctx_move(p%v_ap_mycallprev, cxv_v_ap_mycallprev, mode, 'QQ2QQ')
+    call ctx_move(p%v_ap_hiscallprev, cxv_v_ap_hiscallprev, mode, 'QQ1QQ')
+    call ctx_move(p%v_ap_lhoundprev, cxv_v_ap_lhoundprev, mode, .false._1)
+    call ctx_move(p%v_ap_first, cxv_v_ap_first, mode, .true.)
+    call ctx_move(p%v_d_lhoundprev, cxv_v_d_lhoundprev, mode, .false._1)
+    call ctx_move(p%v_d_nintcount, cxv_v_d_nintcount, mode, 0)
   end subroutine ctx_xfer
 
   ! --- ctx_move specifics. `a` is always the context side, `b` the live symbol.
   !     One per (type, rank) the context holds; the generic resolves by type and
   !     rank, so a component that drifts from its symbol fails to compile.
+
+  subroutine ctx_move_c2(a, b, mode, init)      ! complex, rank 2
+    complex, intent(inout) :: a(:,:), b(:,:)
+    integer, intent(in)    :: mode
+    complex, intent(in)    :: init
+    select case (mode)
+    case (CTX_SAVE)    ; a = b
+    case (CTX_RESTORE) ; b = a
+    case (CTX_INIT)    ; a = init
+    end select
+  end subroutine ctx_move_c2
+
+  subroutine ctx_move_r0(a, b, mode, init)      ! real scalar
+    real,    intent(inout) :: a, b
+    integer, intent(in)    :: mode
+    real,    intent(in)    :: init
+    select case (mode)
+    case (CTX_SAVE)    ; a = b
+    case (CTX_RESTORE) ; b = a
+    case (CTX_INIT)    ; a = init
+    end select
+  end subroutine ctx_move_r0
+
+  subroutine ctx_move_r1(a, b, mode, init)      ! real, rank 1
+    real,    intent(inout) :: a(:), b(:)
+    integer, intent(in)    :: mode
+    real,    intent(in)    :: init
+    select case (mode)
+    case (CTX_SAVE)    ; a = b
+    case (CTX_RESTORE) ; b = a
+    case (CTX_INIT)    ; a = init
+    end select
+  end subroutine ctx_move_r1
+
+  subroutine ctx_move_b0(a, b, mode, init)      ! logical(1) scalar
+    logical(1), intent(inout) :: a, b
+    integer,    intent(in)    :: mode
+    logical(1), intent(in)    :: init
+    select case (mode)
+    case (CTX_SAVE)    ; a = b
+    case (CTX_RESTORE) ; b = a
+    case (CTX_INIT)    ; a = init
+    end select
+  end subroutine ctx_move_b0
+
+  ! ft8var's derived-type tables, one specific per type (the types are distinct even where their
+  ! components agree). No `init` argument: the load-time value of every one of them is the
+  ! loader's all-zero image, which `a = empty` reproduces with every component zeroed.
+  subroutine ctx_move_t_odd(a, b, mode)
+    type(odd_struct), intent(inout) :: a(:), b(:)
+    integer, intent(in) :: mode
+    type(odd_struct), target :: empty
+    select case (mode)
+    case (CTX_SAVE)    ; a = b
+    case (CTX_RESTORE) ; b = a
+    case (CTX_INIT)
+       call ctx_zero(c_loc(empty), int(storage_size(empty) / 8, c_size_t))
+       a = empty
+    end select
+  end subroutine ctx_move_t_odd
+
+  subroutine ctx_move_t_even(a, b, mode)
+    type(even_struct), intent(inout) :: a(:), b(:)
+    integer, intent(in) :: mode
+    type(even_struct), target :: empty
+    select case (mode)
+    case (CTX_SAVE)    ; a = b
+    case (CTX_RESTORE) ; b = a
+    case (CTX_INIT)
+       call ctx_zero(c_loc(empty), int(storage_size(empty) / 8, c_size_t))
+       a = empty
+    end select
+  end subroutine ctx_move_t_even
+
+  subroutine ctx_move_t_oddcopy(a, b, mode)
+    type(oddcopy_struct), intent(inout) :: a(:), b(:)
+    integer, intent(in) :: mode
+    type(oddcopy_struct), target :: empty
+    select case (mode)
+    case (CTX_SAVE)    ; a = b
+    case (CTX_RESTORE) ; b = a
+    case (CTX_INIT)
+       call ctx_zero(c_loc(empty), int(storage_size(empty) / 8, c_size_t))
+       a = empty
+    end select
+  end subroutine ctx_move_t_oddcopy
+
+  subroutine ctx_move_t_evencopy(a, b, mode)
+    type(evencopy_struct), intent(inout) :: a(:), b(:)
+    integer, intent(in) :: mode
+    type(evencopy_struct), target :: empty
+    select case (mode)
+    case (CTX_SAVE)    ; a = b
+    case (CTX_RESTORE) ; b = a
+    case (CTX_INIT)
+       call ctx_zero(c_loc(empty), int(storage_size(empty) / 8, c_size_t))
+       a = empty
+    end select
+  end subroutine ctx_move_t_evencopy
+
+  subroutine ctx_move_t_lastrxmsg(a, b, mode)
+    type(lastrxmsg_struct), intent(inout) :: a(:), b(:)
+    integer, intent(in) :: mode
+    type(lastrxmsg_struct), target :: empty
+    select case (mode)
+    case (CTX_SAVE)    ; a = b
+    case (CTX_RESTORE) ; b = a
+    case (CTX_INIT)
+       call ctx_zero(c_loc(empty), int(storage_size(empty) / 8, c_size_t))
+       a = empty
+    end select
+  end subroutine ctx_move_t_lastrxmsg
+
+  subroutine ctx_move_t_calldtodd(a, b, mode)
+    type(callsigndtodd_struct), intent(inout) :: a(:), b(:)
+    integer, intent(in) :: mode
+    type(callsigndtodd_struct), target :: empty
+    select case (mode)
+    case (CTX_SAVE)    ; a = b
+    case (CTX_RESTORE) ; b = a
+    case (CTX_INIT)
+       call ctx_zero(c_loc(empty), int(storage_size(empty) / 8, c_size_t))
+       a = empty
+    end select
+  end subroutine ctx_move_t_calldtodd
+
+  subroutine ctx_move_t_calldteven(a, b, mode)
+    type(callsigndteven_struct), intent(inout) :: a(:), b(:)
+    integer, intent(in) :: mode
+    type(callsigndteven_struct), target :: empty
+    select case (mode)
+    case (CTX_SAVE)    ; a = b
+    case (CTX_RESTORE) ; b = a
+    case (CTX_INIT)
+       call ctx_zero(c_loc(empty), int(storage_size(empty) / 8, c_size_t))
+       a = empty
+    end select
+  end subroutine ctx_move_t_calldteven
+
+  subroutine ctx_move_t_incall(a, b, mode)
+    type(incall_struct), intent(inout) :: a(:), b(:)
+    integer, intent(in) :: mode
+    type(incall_struct), target :: empty
+    select case (mode)
+    case (CTX_SAVE)    ; a = b
+    case (CTX_RESTORE) ; b = a
+    case (CTX_INIT)
+       call ctx_zero(c_loc(empty), int(storage_size(empty) / 8, c_size_t))
+       a = empty
+    end select
+  end subroutine ctx_move_t_incall
+
+  subroutine ctx_move_t_evencq(a, b, mode)
+    type(evencq_struct), intent(inout) :: a(:,:), b(:,:)
+    integer, intent(in) :: mode
+    type(evencq_struct), target :: empty
+    select case (mode)
+    case (CTX_SAVE)    ; a = b
+    case (CTX_RESTORE) ; b = a
+    case (CTX_INIT)
+       call ctx_zero(c_loc(empty), int(storage_size(empty) / 8, c_size_t))
+       a = empty
+    end select
+  end subroutine ctx_move_t_evencq
+
+  subroutine ctx_move_t_oddcq(a, b, mode)
+    type(oddcq_struct), intent(inout) :: a(:,:), b(:,:)
+    integer, intent(in) :: mode
+    type(oddcq_struct), target :: empty
+    select case (mode)
+    case (CTX_SAVE)    ; a = b
+    case (CTX_RESTORE) ; b = a
+    case (CTX_INIT)
+       call ctx_zero(c_loc(empty), int(storage_size(empty) / 8, c_size_t))
+       a = empty
+    end select
+  end subroutine ctx_move_t_oddcq
+
+  subroutine ctx_move_t_evenmyc(a, b, mode)
+    type(evenmyc_struct), intent(inout) :: a(:,:), b(:,:)
+    integer, intent(in) :: mode
+    type(evenmyc_struct), target :: empty
+    select case (mode)
+    case (CTX_SAVE)    ; a = b
+    case (CTX_RESTORE) ; b = a
+    case (CTX_INIT)
+       call ctx_zero(c_loc(empty), int(storage_size(empty) / 8, c_size_t))
+       a = empty
+    end select
+  end subroutine ctx_move_t_evenmyc
+
+  subroutine ctx_move_t_oddmyc(a, b, mode)
+    type(oddmyc_struct), intent(inout) :: a(:,:), b(:,:)
+    integer, intent(in) :: mode
+    type(oddmyc_struct), target :: empty
+    select case (mode)
+    case (CTX_SAVE)    ; a = b
+    case (CTX_RESTORE) ; b = a
+    case (CTX_INIT)
+       call ctx_zero(c_loc(empty), int(storage_size(empty) / 8, c_size_t))
+       a = empty
+    end select
+  end subroutine ctx_move_t_oddmyc
+
+  subroutine ctx_move_t_evenqso(a, b, mode)
+    type(evenqso_struct), intent(inout) :: a(:,:), b(:,:)
+    integer, intent(in) :: mode
+    type(evenqso_struct), target :: empty
+    select case (mode)
+    case (CTX_SAVE)    ; a = b
+    case (CTX_RESTORE) ; b = a
+    case (CTX_INIT)
+       call ctx_zero(c_loc(empty), int(storage_size(empty) / 8, c_size_t))
+       a = empty
+    end select
+  end subroutine ctx_move_t_evenqso
+
+  subroutine ctx_move_t_oddqso(a, b, mode)
+    type(oddqso_struct), intent(inout) :: a(:,:), b(:,:)
+    integer, intent(in) :: mode
+    type(oddqso_struct), target :: empty
+    select case (mode)
+    case (CTX_SAVE)    ; a = b
+    case (CTX_RESTORE) ; b = a
+    case (CTX_INIT)
+       call ctx_zero(c_loc(empty), int(storage_size(empty) / 8, c_size_t))
+       a = empty
+    end select
+  end subroutine ctx_move_t_oddqso
+
+  ! Zero `n` bytes at `p`: a derived-type value with every component zero, as the loader leaves
+  ! .bss (NUL characters included, which a component-wise `= 0` cannot express for CHARACTER).
+  subroutine ctx_zero(p, n)
+    type(c_ptr),       value :: p
+    integer(c_size_t), value :: n
+    integer(c_int8_t), pointer :: bytes(:)
+    call c_f_pointer(p, bytes, [n])
+    bytes = 0_c_int8_t
+  end subroutine ctx_zero
 
   subroutine ctx_move_c1(a, b, mode, init)      ! complex, rank 1
     complex, intent(inout) :: a(:), b(:)

@@ -192,6 +192,45 @@ the tag, the commit and the blob ids in `crates/tempo-fast-sys/tests/jtty_proven
 and in `NOTICE`; drop the pre-release paragraphs here and in `NOTICE` and the pre-release
 clause of the README credit; and compare the routines under *Lineage* again.
 
+## ft8var — the multithreaded FT8 decoder, vendored from WSJT-X 3.0.2
+
+`lib/ft8var/` (53 files) is WSJT-X's multithreaded FT8 decoder, the WSJT-X developers' port of
+**JTDX**'s decoder (Igor Chernikov UA3DJY, Arvo Järve ES1JA and the JTDX team; see NOTICE), taken
+from <https://github.com/WSJTX/wsjtx> at the tag `v3.0.2` (commit `ccdfaf3c1`), byte for byte,
+with what it needs that this tree did not have: `lib/ft8/ft8_a8d.f90`, `lib/jt65_mod6.f90`,
+`lib/prog_args.f90`, `lib/fftw3.f90` (FFTW's Fortran constants, included by `four2avar.f90`) and
+the callsign database `ALLCALL7.TXT` at this directory's root. The files carry no per-file
+headers, like the rest of WSJT-X's `lib/`; GPL-3.0-only, as above. No Qt.
+
+Compiled: 45 of the 53, as upstream's `CMakeLists.txt` lists them (its lines 671-716 and 422),
+less `filbigvar.f90` (JT65's filter; it needs FFTW's threads library and nothing on the FT8 path
+calls it). Vendored but not compiled: `filbigvar.f90`, `osd174var.f90` (nothing calls it) and the
+include-only `call_q.f90`, `callsign_q.f90`, `syncdist.f90`, `ft8_params.f90` and
+`ldpc_174_91_c_reordered_parity.f90`. All 45 are compiled with OpenMP (`-fopenmp`), as WSJT-X
+compiles them for `jt9`.
+
+Eight files carry a `MODIFIED FOR NEXUS` note, and a refresh must re-apply each:
+- `lib/77bit/packjt77.f90` gains the `*var` half of WSJT-X 3.0.2's `packjt77.f90` (its own
+  callsign hash tables and the `pack77var`/`unpack77var` family), unchanged, between
+  `BEGIN/END WSJT-X 3.0.2 *var ADDITION` markers; this copy is older and had none of it.
+- `lib/ft8/ft8_a7.f90` gains WSJT-X 3.0.2's `getmsg` (called by `ft8_a8d.f90`), unchanged,
+  between markers.
+- `lib/ft8var/ft8apsetvar.f90`: the SAVEd keys of its AP-mask cache move to a module,
+  `ft8apsetvar_state`, so the per-radio decoder context can carry them with the masks.
+- `lib/ft8var/subtractft8var.f90`: its filter buffer `cfilt` is an ordinary local instead of
+  `save` + `!$omp threadprivate`, whose 1.44 MB of thread-local storage every thread of the
+  process paid out of its stack.
+- `lib/ft8var/ft8_decodevar.f90` sets `ft8var_hint%lhintdec` (`libtempo/ft8var_hint.f90`) before
+  each callback: whether the decode came from FT8S/FT8SD or a matched filter, with no error check.
+- JTDX's SWL mode, which WSJT-X's port left out, from JTDX 2.2.159
+  (<https://github.com/jtdx-project/jtdx>, tag `159`): `ft8_decodevar.f90`, `sync8var.f90`,
+  `ft8bvar.f90`, `subtractft8var.f90` and `cwfilter.f90` gain JTDX's `swl` conditions on
+  `ft8var_swl%lswl` (`libtempo/ft8var_swl.f90`, which lists them). With SWL off they decode as
+  upstream.
+
+Nexus drives the decoder through `libtempo/ft8var_cabi.f90`, which re-expresses WSJT-X's
+`lib/decoder.f90` dispatch; `scripts/ft8var-parity.py` holds it to `jt9 -8 -M -N 1`.
+
 ## Third-party code with its OWN copyright (not the WSJT group's)
 
 `lib/qra/` — **qracodes**, © 2016 Nico Palermo (IV3NWV) / Microtelecom Srl, **GPL-3.0-or-later**.

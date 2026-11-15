@@ -157,6 +157,66 @@ set(LIBTEMPO_SOURCES
     ${LIB}/ft8/twkfreq1.f90               # fine frequency tweak (called by ft8b + ft4)
     ${LIB}/peakup.f90                     # parabolic peak interpolation (subtractft8)
 
+    # --- FT8 multithreaded decoder (lib/ft8var, WSJT-X 3.0.2's port of JTDX's) : Nexus ---
+    #     Driven by ft8var_cabi.f90, which re-expresses WSJT-X's decoder.f90 dispatch.
+    #     Compiled: upstream's CMakeLists list (its lines 671-716, plus ft8_decodevar from
+    #     :422), less filbigvar.f90 (JT65's filter: it needs FFTW's threads library, and nothing
+    #     on the FT8 path calls it). Vendored but not compiled: osd174var.f90 (nothing calls it)
+    #     and the include-only call_q, callsign_q, syncdist, ft8_params and
+    #     ldpc_174_91_c_reordered_parity. All compiled -fopenmp (LIBTEMPO_OPENMP_SOURCES).
+    ${CMAKE_CURRENT_SOURCE_DIR}/ft8var_hint.f90
+    ${CMAKE_CURRENT_SOURCE_DIR}/ft8var_swl.f90
+    ${CMAKE_CURRENT_SOURCE_DIR}/ft8var_cabi.f90
+    ${LIB}/ft8var/agccft8.f90
+    ${LIB}/ft8var/baddatavar.f90
+    ${LIB}/ft8var/bpdecode174_91var.f90
+    ${LIB}/ft8var/chkfalse8var.f90
+    ${LIB}/ft8var/chkflscallvar.f90
+    ${LIB}/ft8var/chkgridvar.f90
+    ${LIB}/ft8var/chklong8.f90
+    ${LIB}/ft8var/chkspecial8var.f90
+    ${LIB}/ft8var/cwfilter.f90
+    ${LIB}/ft8var/datacor.f90
+    ${LIB}/ft8var/encode174_91var.f90
+    ${LIB}/ft8var/extract_callvar.f90
+    ${LIB}/ft8var/fillhashvar.f90
+    ${LIB}/ft8var/filtersfreevar.f90
+    ${LIB}/ft8var/four2avar.f90
+    ${LIB}/ft8var/ft4_mod1.f90
+    ${LIB}/ft8var/ft8apsetvar.f90
+    ${LIB}/ft8var/ft8bvar.f90
+    ${LIB}/ft8var/ft8_decodevar.f90
+    ${LIB}/ft8var/ft8_downsamplevar.f90
+    ${LIB}/ft8var/ft8_mod1.f90
+    ${LIB}/ft8var/ft8mf1var.f90
+    ${LIB}/ft8var/ft8mfcqvar.f90
+    ${LIB}/ft8var/ft8svar.f90
+    ${LIB}/ft8var/ft8sdvar.f90
+    ${LIB}/ft8var/ft8sd1var.f90
+    ${LIB}/ft8var/genft8var.f90
+    ${LIB}/ft8var/gen_ft8wavevar.f90
+    ${LIB}/ft8var/genft8sdvar.f90
+    ${LIB}/ft8var/jt65_mod2var.f90
+    ${LIB}/ft8var/jt65_mod5.f90
+    ${LIB}/ft8var/jt65_mod9.f90
+    ${LIB}/ft8var/msgparservar.f90
+    ${LIB}/ft8var/osd174_91var.f90
+    ${LIB}/ft8var/packjt77sdvar.f90
+    ${LIB}/ft8var/partint.f90
+    ${LIB}/ft8var/partintft8.f90
+    ${LIB}/ft8var/rms_augapvar.f90
+    ${LIB}/ft8var/searchcallsvar.f90
+    ${LIB}/ft8var/subtractft8var.f90
+    ${LIB}/ft8var/sync8var.f90
+    ${LIB}/ft8var/sync8dvar.f90
+    ${LIB}/ft8var/tone8.f90
+    ${LIB}/ft8var/tone8myc.f90
+    ${LIB}/ft8var/tonesdvar.f90
+    ${LIB}/ft8var/twkfreq1var.f90
+    ${LIB}/ft8/ft8_a8d.f90                # ft8_decodevar's a8 pass (WSJT-X 3.0.2)
+    ${LIB}/jt65_mod6.f90                  # module jt65_mod6 (ft8var uses it)
+    ${LIB}/prog_args.f90                  # module prog_args: share_dir, where ALLCALL7.TXT is
+
     # --- FT4 native decode (lib/ft4 + ft4_decode.f90) : Nexus ---
     #     Clean OO decoder (getcandidates4 -> sync4d -> get_ft4_bitmetrics ->
     #     decode174_91 -> subtractft4), wrapped behind a C ABI in ft4_cabi.f90.
@@ -564,6 +624,8 @@ set(LIBTEMPO_SOURCES
 # -Wmissing-include-dirs warning instead of a build failure, and sat unnoticed.
 # ---------------------------------------------------------------------------
 set(LIBFT1_INCLUDE_DIRS
+    ${WX}                    # ft8var's `include '/lib/fftw3.f90'` and '/lib/ft8/...':
+                             #   gfortran tries each -I dir as a prefix of the absolute name
     ${LIB}/tempofast
     ${LIB}/ft8
     ${LIB}
@@ -612,6 +674,58 @@ set_source_files_properties(
 # ---------------------------------------------------------------------------
 set(LIBTEMPO_OPENMP_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/omp_probe.f90
+    ${CMAKE_CURRENT_SOURCE_DIR}/ft8var_hint.f90
+    ${CMAKE_CURRENT_SOURCE_DIR}/ft8var_swl.f90
+    ${CMAKE_CURRENT_SOURCE_DIR}/ft8var_cabi.f90
+    ${LIB}/ft8var/agccft8.f90
+    ${LIB}/ft8var/baddatavar.f90
+    ${LIB}/ft8var/bpdecode174_91var.f90
+    ${LIB}/ft8var/chkfalse8var.f90
+    ${LIB}/ft8var/chkflscallvar.f90
+    ${LIB}/ft8var/chkgridvar.f90
+    ${LIB}/ft8var/chklong8.f90
+    ${LIB}/ft8var/chkspecial8var.f90
+    ${LIB}/ft8var/cwfilter.f90
+    ${LIB}/ft8var/datacor.f90
+    ${LIB}/ft8var/encode174_91var.f90
+    ${LIB}/ft8var/extract_callvar.f90
+    ${LIB}/ft8var/fillhashvar.f90
+    ${LIB}/ft8var/filtersfreevar.f90
+    ${LIB}/ft8var/four2avar.f90
+    ${LIB}/ft8var/ft4_mod1.f90
+    ${LIB}/ft8var/ft8apsetvar.f90
+    ${LIB}/ft8var/ft8bvar.f90
+    ${LIB}/ft8var/ft8_decodevar.f90
+    ${LIB}/ft8var/ft8_downsamplevar.f90
+    ${LIB}/ft8var/ft8_mod1.f90
+    ${LIB}/ft8var/ft8mf1var.f90
+    ${LIB}/ft8var/ft8mfcqvar.f90
+    ${LIB}/ft8var/ft8svar.f90
+    ${LIB}/ft8var/ft8sdvar.f90
+    ${LIB}/ft8var/ft8sd1var.f90
+    ${LIB}/ft8var/genft8var.f90
+    ${LIB}/ft8var/gen_ft8wavevar.f90
+    ${LIB}/ft8var/genft8sdvar.f90
+    ${LIB}/ft8var/jt65_mod2var.f90
+    ${LIB}/ft8var/jt65_mod5.f90
+    ${LIB}/ft8var/jt65_mod9.f90
+    ${LIB}/ft8var/msgparservar.f90
+    ${LIB}/ft8var/osd174_91var.f90
+    ${LIB}/ft8var/packjt77sdvar.f90
+    ${LIB}/ft8var/partint.f90
+    ${LIB}/ft8var/partintft8.f90
+    ${LIB}/ft8var/rms_augapvar.f90
+    ${LIB}/ft8var/searchcallsvar.f90
+    ${LIB}/ft8var/subtractft8var.f90
+    ${LIB}/ft8var/sync8var.f90
+    ${LIB}/ft8var/sync8dvar.f90
+    ${LIB}/ft8var/tone8.f90
+    ${LIB}/ft8var/tone8myc.f90
+    ${LIB}/ft8var/tonesdvar.f90
+    ${LIB}/ft8var/twkfreq1var.f90
+    # Its `!$omp threadprivate` (recent_callsvar, n28avar, n28bvar) is only real when compiled
+    # -fopenmp, and ft8var's threads call its *var routines.
+    ${LIB}/77bit/packjt77.f90
 )
 set_source_files_properties(${LIBTEMPO_OPENMP_SOURCES}
     PROPERTIES COMPILE_OPTIONS "-fopenmp")
