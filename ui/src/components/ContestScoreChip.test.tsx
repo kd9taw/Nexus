@@ -214,3 +214,52 @@ describe('the chip and the Contest screen say the same thing', () => {
     })
   }
 })
+
+// ⭐ A CONTACT-COUNT-ONLY CONTEST — not Field Day and no multiplier declared (the WAE DX Contest,
+// whose QTCs and band-weighted multipliers this build does not compute). No multiplier count
+// means Field Day everywhere else, so without this the chip and the screen dressed it in Field
+// Day's clothes: "N pts", a Sections tile, the power-and-bonus line and the ARRL Sections board.
+describe('a contest whose screen is its contact count alone', () => {
+  const settle = async () => {
+    await act(async () => {
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+    })
+  }
+  const wae = (over: Partial<FieldDayStatus> = {}) =>
+    session({
+      event: 'waedc_cw',
+      qsoCount: 48,
+      points: 48,
+      totalScore: 48,
+      multCount: null,
+      sections: 3,
+      scoreNoteKey: 'settings.contestScore.contactsOnly',
+      log: ten(790),
+      ...over,
+    } as Partial<FieldDayStatus>)
+
+  it('the chip shows the contact count and the rate, and no points or sections', () => {
+    render(<ContestScoreChip fieldDay={wae()} />)
+    expect(chipText()).toBe('WAE CW · 48 Q · 41/hr')
+  })
+
+  it('the screen shows the count and its note, and none of Field Day’s score, tile or board', async () => {
+    render(<ContestView fieldDay={wae()} onSetMode={() => {}} fdActive fdRuleset={null} tier="none" />)
+    await settle()
+    const labels = [...document.querySelectorAll('.fd-scoreboard .fd-score-label')].map((el) => el.textContent)
+    expect(labels).toContain('QSOs')
+    expect(labels).not.toContain('Sections')
+    expect(document.querySelector('.fd-score-math')).toBeNull()
+    expect(screen.queryByLabelText('Worked sections board')).toBeNull()
+    expect(screen.getAllByRole('note').some((n) => /your contact count, not your score/.test(n.textContent ?? ''))).toBe(true)
+  })
+
+  it('CONTROL: Field Day with the same empty multiplier count keeps its Sections tile, line and board', async () => {
+    render(<ContestView fieldDay={wae({ event: 'arrlfd', scoreNoteKey: '' })} onSetMode={() => {}} fdActive fdRuleset={null} tier="none" />)
+    await settle()
+    const labels = [...document.querySelectorAll('.fd-scoreboard .fd-score-label')].map((el) => el.textContent)
+    expect(labels).toContain('Sections')
+    expect(document.querySelector('.fd-score-math')).not.toBeNull()
+    expect(screen.getByLabelText('Worked sections board')).toBeTruthy()
+  })
+})

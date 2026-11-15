@@ -4225,6 +4225,7 @@ export const JA: PartialCatalog = {
   "settings.contestStation.power.label": "送る電力",
   "settings.contestStation.power.hint": "このコンテストの交換内容として送る電力を、主催者の書き方のまま（KW、500、5）。入力したとおりに電波に乗ります。ログで申告する電力は「自局のエントリー」の「電力カテゴリー」です。",
   "settings.contestScore.incomplete": "このスコアには、このコンテストがログから計算するボーナス点が入っていません。このビルドは計算しないため、主催者の集計はこれより高くなります。ログが受理されるのに必要なものはすべて揃っていますが、この数字は申告スコアではありません。",
+  "settings.contestScore.contactsOnly": "Nexus はこのコンテストの QTC とマルチプライヤーを計算しないため、ここの数字はスコアではなく交信数です。ログが受理されるのに必要なものはすべて揃っています。",
   "settings.contestCategory.unassisted.label": "アンアシステッド・エントリー",
   "settings.contestCategory.unassisted.aria.declare": "アンアシステッドでのコンテスト参加を宣言",
   "settings.contestCategory.unassisted.aria.end": "アンアシステッド参加を終了",

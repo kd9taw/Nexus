@@ -79,6 +79,11 @@ export const CONTESTS: { id: string; name: string; short: string; badge?: string
   { id: 'cqww_rtty', name: 'CQ World-Wide RTTY DX Contest', short: 'CQ WW RTTY', submit: 'https://cqwwrtty.com/logcheck/' },
   { id: 'cqwpx_cw', name: 'CQ World-Wide WPX Contest (CW)', short: 'CQ WPX CW', submit: 'https://cqwpx.com/logcheck/' },
   { id: 'cqwpx_ssb', name: 'CQ World-Wide WPX Contest (SSB)', short: 'CQ WPX SSB', submit: 'https://cqwpx.com/logcheck/' },
+  // The WAE DX Contest is three contests, one per mode, each on its own weekend with its own
+  // Cabrillo name and its own upload page. DARC's name, from darc.de; QTCs are not supported.
+  { id: 'waedc_cw', name: 'WAE DX Contest (CW)', short: 'WAE CW', submit: 'https://dxhf2.darc.de/~waecwlog/upload.cgi' },
+  { id: 'waedc_ssb', name: 'WAE DX Contest (SSB)', short: 'WAE SSB', submit: 'https://dxhf2.darc.de/~waessblog/upload.cgi' },
+  { id: 'waedc_rtty', name: 'WAE DX Contest (RTTY)', short: 'WAE RTTY', submit: 'https://dxhf2.darc.de/~waerttylog/upload.cgi' },
   { id: 'cqp', name: 'California QSO Party', short: 'CQP', submit: 'https://cqp.org/logsubmit-main.html' },
   // The sponsor is the Western Illinois Amateur Radio Club; the name is the one its own
   // rules and its sample log use ("Announcing the 2025 Illinois QSO Party").
@@ -114,6 +119,20 @@ export function contestBadgeName(id: string | undefined): string {
  *  asks for? */
 export const isFieldDay = (id: string | undefined): boolean =>
   !id || id === 'arrlfd' || id === 'wfd'
+
+/** The score note a ruleset names when its score is its contact count alone (`countsOnly`). */
+export const CONTACTS_ONLY_NOTE = 'settings.contestScore.contactsOnly'
+
+/**
+ * ⭐ **A contest whose screen is its contact count alone**: one whose ruleset says so with its score
+ * note (the WAE DX Contest, whose QTCs and band-weighted multipliers this build does not compute). It
+ * declares no multiplier, and no multiplier count otherwise means Field Day, whose power-and-bonus
+ * line, Sections tile and ARRL Sections board would be another contest's arithmetic here. Read off the
+ * ruleset's own note, never guessed from a missing count: an older station's snapshot of another
+ * contest may carry none. Field Day is never one.
+ */
+export const countsOnly = (fieldDay: { event?: string; scoreNoteKey?: string } | null | undefined): boolean =>
+  !!fieldDay && fieldDay.scoreNoteKey === CONTACTS_ONLY_NOTE && !isFieldDay(fieldDay.event)
 
 /**
  * ⭐ **The contests whose exchange SENDS the station's power**, by rules-file id — the only ones
@@ -176,6 +195,9 @@ export const CLUB_SYNC_REFUSED: Record<string, ClubSyncRefusal> = {
   arrlrtty: 'serial',
   cqwpx_cw: 'serial',
   cqwpx_ssb: 'serial',
+  waedc_cw: 'serial',
+  waedc_ssb: 'serial',
+  waedc_rtty: 'serial',
   cqww_cw: 'transmitter',
   cqww_ssb: 'transmitter',
   cqww_rtty: 'transmitter',

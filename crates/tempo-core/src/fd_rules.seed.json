@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "generated": "2026-11-08T12:00:00Z",
+  "generated": "2026-11-14T13:00:00Z",
   "_provenance": {
     "qso_parties": "The four state QSO parties (TNQP, OhQP, CQP, TXQP) were written from each sponsor's own current page or PDF, all read 2026-09-09. TNQP: https://tnqp.org/rules/ renders only navigation (an EmbedPress wrapper), so the source is the PDF that page embeds, https://tnqp.org/wp-content/uploads/2026/08/Tennessee-QSO-Party-2026-Rules.pdf, \"Tennessee QSO Party 2026 Rules\". OhQP: https://www.ohqp.org/index.php/rules/ plus /official-list-of-mults-for-ohio-stations/ and /official-list-of-mults-for-non-ohio-stations/. CQP: https://www.cqp.org/Rules.html (Last Update 19-July-2026, 61st running) plus https://www.cqp.org/cqp_multipliers.html. TXQP: https://www.txqp.net/?page_id=23 plus https://www.txqp.net/?page_id=90 (the previously-cited https://www.txqp.net/index.php/rules/operating-rules is DEAD, HTTP 404 — the sponsor rebuilt the site). Each county list was PARSED off the sponsor's own table and its size counted, never read off a stated total: 95 TN, 88 OH (+62 non-county codes = 150), 58 CA (+63 state/province codes), 254 TX.",
     "txqp_county_codes": "⚠️ THE SPONSOR'S PROSE AND THE SPONSOR'S LIST DISAGREE, AND THE LIST WINS. txqp.net/?page_id=23 says \"Log submissions must use the approved four-letter county abbreviation for the exchange.\" The official list on ?page_id=90 has 254 entries, of which TWO ARE THREE LETTERS: BEE (Bee) and LEE (Lee). A domain or validator written to the prose (len == 4) rejects two real Texas counties, and a Texas mobile operating in either one produces an unsubmittable log for every QSO made from it. The domain below is the sponsor's 254 codes verbatim. Do not normalise, pad or \"fix\" BEE and LEE, and do not generate codes from county names — the scheme is irregular (Brazoria=BZIA, Brazos=BZOS, Cameron=CMRN, Collin=COLN, Collingsworth=COLW, Comal=COML, Comanche=COMA, Dallam=DALM, Dallas=DALS).",
@@ -53,7 +53,8 @@
     "wfd_satellites": "The sponsor's 2027 rules PDF (https://winterfieldday.org/downloads/2027-rules-v3.pdf, read 2026-10-08), p.5: \"You may only claim credit for contacts that are on one band, one mode, simplex, and made directly to the receiving station. Cross-band, repeated, relayed, meshed, and/or internet-linked contacts do not count. Do not log any such contacts.\"; p.3: \"Satellite objectives are gone\". A satellite contact is cross-band and relayed, so wfd.scoring.satellite_credit is false: such a contact is kept in the log (and reaches the general log and LoTW at the merge), scores nothing, enters no dupe index and is left out of the WFD Cabrillo and contest ADIF. The key is new (1.14 to 1.17 ignore it) and absent means true, the credit every ruleset before it gives and ARRL Field Day's rule 7.3.8 states.",
     "cabrillo_declarations": "THE ENTRY DECLARATIONS A SPONSOR'S CABRILLO TEMPLATE NAMES: cabrillo.transmitter_categories (CATEGORY-TRANSMITTER, a multi-operator entry's class), cabrillo.overlay_categories (CATEGORY-OVERLAY), cabrillo.address (the ADDRESS headers) and cabrillo.soapbox (SOAPBOX). Each is written from the entrant's own declaration in Settings, only for a contest listed here, and only when it holds a value: a header nobody set is a claim nobody made, so a log with none of them set exports the file it always did (tests/cabrillo_declarations.rs holds all eighteen contests to the bytes the writer produced before these keys existed, a CQ file with the lines cabrillo_category_lines describes put in). Every source below was read 2026-10-11 unless it says otherwise. ⚠️ KEYS OF THEIR OWN, NEVER NAMES IN cabrillo.headers OR cabrillo.entry_headers: 1.17.0 refuses the whole rules file over a cabrillo.headers name it cannot write, every build since does the same over cabrillo.entry_headers (the refuse fixture cabrillo-entry-header-unknown pins SOAPBOX there as refused), and every build ignores a key it does not know. THE SPECIFICATION, WWROF's Cabrillo V3 header page (https://wwrof.org/cabrillo/cabrillo-v3-header/, \"Last update: 5 June 2025\"): \"CATEGORY-TRANSMITTER: The category-transmitter is required for multi-operator entries and must be one of the following. ONE TWO LIMITED UNLIMITED SWL\"; \"ADDRESS: text Mailing address. Each line should be a maximum of 45 characters long. Up to 6 address lines are permitted.\" with ADDRESS-CITY, ADDRESS-STATE-PROVINCE, ADDRESS-POSTALCODE and ADDRESS-COUNTRY as \"Optional fields for providing mailing address details.\"; \"SOAPBOX: text Soapbox comments. Enter as many lines of soapbox text as you wish. Each line is a maximum of 75 characters long and must begin with SOAPBOX: followed by a space.\" So a transmitter class is written only for a MULTI-OP entry, and with it the OPERATORS line, because every sponsor here that takes one asks a multi-operator entry for its operators: CQ WW and CQ WPX \"If you select a multi-operator category and do not enter operator callsigns in this field, the robot will reject your log\", ARRL's Sweepstakes and VHF rules \"ELOG.4. Multioperator logs must include the complete list of operators in the Cabrillo OPERATORS: field\", and the CQ WW RTTY and NYQP sample headers carry the line. A part of the address a sponsor's template does not name rides an ADDRESS line, as its own template writes it. PER CONTEST. CQ WW CW and SSB (https://www.cqww.com/cabrillo.htm): \"The category-transmitter is required for multi-operator entries and must be one of the following. ONE TWO UNLIMITED\", the rules' Multi-Single, Multi-Two and Multi-Multi; \"If you are entering an Overlay category, you must also provide CATEGORY-OVERLAY information\" with \"For CLASSIC, enter: CATEGORY-OVERLAY: CLASSIC\", \"For ROOKIE, enter: CATEGORY-OVERLAY: ROOKIE\" and \"For YOUTH , enter: CATEGORY-OVERLAY: YOUTH\" (https://www.cqww.com/rules/ V.B: \"Any Single Operator entrant who meets the requirements may ALSO enter one of the categories shown below by adding the appropriate CATEGORY-OVERLAY line in the Cabrillo log file header\", and of Rookie \"Indicate the date first licensed in the SOAPBOX field\", of Youth \"Indicate the birth year in the SOAPBOX field\"); all five ADDRESS headers (\"ADDRESS-COUNTRY: US Postal Service name for the country of your mailing address. Only required for mailing addresses outside of the United States.\"); SOAPBOX. CQ WPX CW and SSB (https://cqwpx.com/cabrillo.htm): the same, with the overlays CLASSIC, ROOKIE, TB-WIRES (\"For TRIBANDER/SINGLE ELEMENT , enter: CATEGORY-OVERLAY: TB-WIRES\") and YOUTH. CQ WW RTTY (https://cqwwrtty.com/cabrillo.htm): ONE TWO UNLIMITED; \"If you are entering the \"Classic\" or \"Rookie\" Overlay categories, you must also provide CATEGORY-OVERLAY information\" (CLASSIC, ROOKIE); all five ADDRESS headers, though its own sample writes two ADDRESS lines; SOAPBOX. ⚠️ Multi-Distributed is offered for none of the CQ contests: \"The Cabrillo log header must include the following lines: CATEGORY-OPERATOR: MULTI-OP, CATEGORY-STATION: DISTRIBUTED\", and this build writes no CATEGORY-STATION. ⚠️ The transmitter column of a QSO line stays 0 for every contact this build logs (one position), so a Multi-Two log needs its second transmitter's contacts added before it goes in. ARRL Sweepstakes CW and Phone (the sponsor's own templates, https://www.arrl.org/cabrillo-format-tutorial): every template, the Multioperator one included, carries \"CATEGORY-TRANSMITTER: ONE\" (the rules' only multi-operator category is \"Multioperator, Single-Transmitter\"), and \"ADDRESS: 225 Main St.\" over \"ADDRESS: Newington, CT 06111\": ADDRESS alone, so the city, state and postal code ride one more ADDRESS line exactly as there. No SOAPBOX and no overlay line. ⚠️ The rules' \"Limited Antennas Overlay\" has no token the sponsor names: the WA7BNM form ARRL points to (https://www.b4h.net/cabforms/arrlsscw_cab3.php) writes LIMITED-ANT, which is not one of the specification's overlays, so it is not offered; that form also offers TWO, which no Sweepstakes category has. ARRL January, June and September VHF (https://www.arrl.org/january-vhf, https://www.arrl.org/june-vhf and https://www.arrl.org/september-vhf, \"Cabrillo Templates for the new SO3B and SOFM Categories\"): \"CATEGORY-TRANSMITTER: ONE\", \"SOAPBOX:\" twice and \"ADDRESS: 225 Main St\" over \"ADDRESS: Newington, CT 06111\". The rules' multioperator categories, \"3.3.1 Unlimited Multioperator (UM)\" and \"3.3.2 Limited Multioperator (LM)\", are the specification's UNLIMITED and LIMITED, which the converter those pages point to (\"visit www.b4h.net/cabforms/ and select the event of interest\") writes for these contests (https://www.b4h.net/cabforms/arrlvhfjan_cab3.php: ONE, LIMITED, UNLIMITED); so ONE, LIMITED, UNLIMITED. New York QSO Party (the 2026 rules v1.1, \"Sample Cabrillo header\"): \"CATEGORY-TRANSMITTER: ONE\", \"CATEGORY-OVERLAY: ROOKIE\", and ADDRESS, ADDRESS-CITY, ADDRESS-STATE-PROVINCE, ADDRESS-POSTALCODE and ADDRESS-COUNTRY; \"For CATEGORY-OVERLAY, use the applicable overlay designators if you are entering in one of the overlay categories. The Overlay table above lists the valid overlays. Only these values are valid in the Overlay field: Rookie, Youth12, Youth17, YL\", written in the sample's capitals. Its classes Multi-One (\"Multiple operators with only a single transmitted signal at a time\") and Multi-Multi (\"Multiple operators, multiple transmitters at same time\") are ONE and UNLIMITED, the two values of the generator the rules link (\"Please use the Cabrillo generator at https://b4h.net/cabforms/nyqp_cab3.php if you need to generate a Cabrillo file\"); that generator spells the youth overlays YOUTH-13 and YOUTH-17, and the rules' own list wins. The sample carries no SOAPBOX line. Illinois QSO Party (Sample_Excel_Log, https://w9awe.org/ilqp/): ADDRESS, ADDRESS-CITY, ADDRESS-STATE-PROVINCE, \"ADDRESS-POTALCODE\" (the sample's spelling of the specification's ADDRESS-POSTALCODE, which is written as the specification spells it, a reading worth confirming with the sponsor) and three SOAPBOX lines; no ADDRESS-COUNTRY, so a country rides an ADDRESS line. ILQP's entry for several transmitters is its ENTRY-CLASS UNLIMITED, not a CATEGORY-TRANSMITTER. California QSO Party (https://www.cqp.org/Rules.html, \"Last Update: 19-July-2026\"): \"Please indicate if any of these award categories applied to you by using a text editor to insert any of these lines in your Cabrillo log file header: SOAPBOX : EXPEDITION / SOAPBOX: COUNTY-LINE EXPEDITION / SOAPBOX: ONE-DAY EXPEDITION / SOAPBOX: MOBILE / SOAPBOX: YL / SOAPBOX : YOUTH / SOAPBOX: NEW CONTESTER\": SOAPBOX only; its Multi-Single, Multi-Two and Multi-Multi are picked on the robot's form. Tennessee QSO Party (the 2026 rules PDF): \"make sure entry class, personal information, call sign, station location (state, province or DXCC entity, NOT ARRL section), and email address are correctly shown. The header information is used by the processing software and must be complete and accurate\" and \"Don't forget your mailing address - you might win something!\": the mailing address as ADDRESS lines, a reading, because the sponsor names the address and no header. NOTHING NEW for ARRL Field Day (its 2026 rules 8.7: \"Cabrillo format log files are NOT required for Field Day entries, but they will be accepted in lieu of the dupe sheets\"; the entry is the web app's summary sheet), Winter Field Day (2027 rules p.10: \"The main body must follow this format or we will reject your log\", and that format carries none of these), the Ohio QSO Party (\"OhQP does NOT use Cabrillo header info as it has been found over the years to be incorrect\", read 2026-09-09) or the Texas QSO Party (its rules name only \"The club name and call sign\" for the header).",
     "cabrillo_category_lines": "THE CQ CONTESTS' CATEGORY LINES AND THE ENTRANT'S LINES (cqww_cw, cqww_ssb, cqwpx_cw, cqwpx_ssb, cqww_rtty), read 2026-10-12, byte-identical to the copies read 2026-10-11: https://www.cqww.com/cabrillo.htm, https://www.cqwpx.com/cabrillo.htm, https://www.cqwwrtty.com/cabrillo.htm and each contest's rules.htm. Every page lists, each \"must be one of the following\": CATEGORY-ASSISTED (ASSISTED NON-ASSISTED), CATEGORY-MODE (CQ WW and WPX: SSB CW; CQ WW RTTY: \"The category-mode must be the following. RTTY\"), CATEGORY-BAND (\"If you are entering an all band category, use ALL, otherwise select one of the individual bands shown.\": ALL 160M 80M 40M 20M 15M 10M; CQ WW RTTY: ALL 80M 40M 20M 15M 10M) and CATEGORY-POWER (HIGH LOW QRP); CATEGORY-TRANSMITTER \"is required for multi-operator entries\"; CLUB \"Name of the radio club with which the score should be aggregated. PLEASE SPELL OUT THE FULL CLUB NAME!\"; EMAIL (CQ WW and WPX: \"This field is optional.\"); NAME \"Maximum of 75 characters long.\"; and each sample header carries every one of them. Every rules page: \"Failure to fill out the header correctly may result in the entry being placed in the wrong category or reclassified as a Checklog.\" and \"Single band entrants are required to include all contacts made during the contest period, even if made on other bands. Only contacts made on the band specified in the Cabrillo header will be considered for scoring purposes. Logs with contacts only on one band will be classified as single band entries.\" So: cabrillo.headers lists CATEGORY-ASSISTED, CATEGORY-POWER, EMAIL and NAME for the four (names every build since 1.14.0 writes, each from a declaration: the entry's assistance and power as the session starts, the entrant's email and operator name at export); cabrillo.entry_headers lists CLUB for all five; cabrillo.band_categories is the bands an entry may declare, and CATEGORY-BAND is written only as declared (CQ WW RTTY's band read off the log stays for an entry that declares none, and a declaration replaces it); cabrillo.mode_category is the contest's own CATEGORY-MODE, written for every entry in it; cabrillo.required is what the Contest screen names when an entry has left it out, CATEGORY-TRANSMITTER and OPERATORS of a MULTI-OP entry only (CQ WW and WPX: \"If you select a multi-operator category and do not enter operator callsigns in this field, the robot will reject your log\"; CQ WW RTTY: \"the upload page will give a warning\") and nothing of a CHECKLOG, which is placed in no category. The four keys are new, and every older build ignores a key it does not know. Not written: CLAIMED-SCORE for the four (in each sample, a computed value rather than a declaration), GRID-LOCATOR (\"This field is optional.\"), CERTIFICATE (\"YES is the default.\") and CATEGORY-STATION. The seed carries no CQ WPX RTTY ruleset.",
-    "arrl_rtty": "The ARRL RTTY Roundup ships as ONE ruleset, arrlrtty, written from the sponsor's own sources, all read 2026-10-26: https://www.arrl.org/rtty-roundup, the rules PDF it links (https://contests.arrl.org/ContestRules/RTTY-RU-Rules.pdf, \"ARRL RTTY Roundup Contest Rules Version 3.0b\", all 10 pages extracted), the contest page https://contests.arrl.org/rttyru/, the calendar https://contests.arrl.org/rttyru/cal/ (\"Version: 1.5.2, Revised: July 9, 2025\"), the ARRL Contest Multipliers List (https://contests.arrl.org/contestmultipliers.php?a=usa and ?a=ve, \"Version: 1.2.0, Revised: May 12, 2023\") and the Summary Sheet (arrl.org/files/file/Contest Forms/RTTYRUSummary 7-22.pdf, \"Rev 07/22\"). MODE. arrl.org/rtty-roundup: \"Only contacts using Radioteletype (RTTY) mode are allowed. The new ARRL International Digital Contest has been created as an event in which participants using digital modes (excluding RTTY) may compete.\" Rules p.1: \"Use only the 3.5, 7, 14, 21, and 28 MHz bands. Use only the Radioteletype (RTTY) mode. Automated operation is not permitted. Log QSOs with the RY (RTTY) mode abbreviation.\"; Special Rules 2.2 \"Use only the Radioteletype (RTTY) mode.\" and 2.4 \"In the Cabrillo formatted log, contacts must be coded as RY (RTTY).\"; contests.arrl.org/rttyru/: \"using the radioteletype mode (Baudot RTTY only)\". So banned_modes lists every other mode a contest row can carry (the FT and WSJT tiers, JS8, the Tempo modes, JTTY, PSK31, QPSK31, SSTV, CW and the voice modes). Advisory like every other ban: the contact is logged and kept, the screen says it scores nothing, nothing is refused. FT8/FT4 being banned also means the FT sequencer sends Field Day's messages unchanged there, as at the Illinois and New York QSO parties; Nexus adds no RTTY Roundup FT exchange. WINDOW. Rules p.1: \"First full weekend of January (but never on January 1)\" and \"Begins 1800 UTC Saturday and runs through 2359 UTC Sunday.\" nth_full 1, 1800Z, 30 hours. The calendar prints 2026 Jan 3-4, 2027 Jan 2-3, 2028 Jan 8-9, 2029 Jan 6-7, 2030 Jan 5-6, 2031 Jan 4-5. 2028 is the year January 1 is a Saturday and the rule moves the contest a week: the window math alone would put it on Jan 1-2, so each such year to 2060 carries an override to the following weekend (2028 is the sponsor's printed date; 2033, 2039, 2050 and 2056 apply the same printed rule). OPERATING TIME. Rules p.1: \"Single-Op stations may operate for 24 hours out of the 30-hour contest period. Multioperator stations may operate the entire 30 hours.\"; Special Rules 1.1 \"each off time must be at least 30 minutes long until 24 hours have been completed\", 1.2 \"Off time must be taken in one or two breaks that are at least 30 minutes long.\" The 30-minute minimum is the UI's off-time table (contestOpTime.ts), not this file. EXCHANGE. Special Rules 4.2.1 \"W/VE stations send a signal report and their state or province. (See the ARRL Contest Multipliers List for a list of abbreviations.)\" 4.2.2 \"DX stations send a signal report and serial number beginning with 1.\" ROLES: w_ve (my location is one of the 63 codes below) sends RST QTH; dx (everyone else) sends RST NR. The glossary: \"W/VE stations: stations operating in the United States and District of Columbia with the exception of Alaska and Hawaii, and stations operating within the Canadian provinces and territories with the exception of the DXCC entities St Paul Island and Sable Island.\" so Alaska and Hawaii are the dx role. Both roles receive RST, QTH and NR, and QTH and NR are each optional: a station's received exchange holds one or the other, by where the OTHER station is, which no slot can know in advance. Received QTH carries no ADIF column; NR is SRX/STX. LOCATION ALIAS NL -> NF: the multipliers list names NF \"Newfoundland and Labrador (VO1/VO2)\", Canada Post's code for it is NL. QTH VALUES (`arrl_rtty_qth`). Special Rules 5.2.2 \"All Stations count DXCC entities (Except USA and Canada), US states plus the District of Columbia, and Canadian Provinces and Territories plus Labrador. (See the ARRL Contest Multipliers List.) Hawaii (KH6) and Alaska (KL7) count as DXCC entities.\" The US codes are the multipliers list's United States page less AK and HI (49 with DC); the Canadian codes are its Canadian page verbatim: AB, BC, LB, MB, NB, NF, NS, NT, NU, ON, PE, QC, SK, YT (14). The Summary Sheet's Multiplier Check-Off List prints the same 49 and 14. 63 codes. SCORING. Rules p.2: \"Each contact counts for one (1) QSO point. Multiply total QSO points by the number of DXCC entities (not including the US and Canada), plus US states, and Canadian provinces contacted to get your final score. Each multiplier counts once, not once per band.\" Special Rules 5.1 \"QSO points: Each contact counts for one (1) point.\" 5.2.1 \"Multipliers count only once, not once per band.\" 5.3 \"Final score equals the total QSO points times the total multipliers contacted.\" So points_by_mode_class all 1 (the flat point, written as SS writes its two), and two multipliers, both per_log: qth over arrl_rtty_qth, and dxcc over the country file's entity excluding United States and Canada (Alaska and Hawaii are their own entities there, so they count). DUPE. Rules p.1 \"Contact stations only once per band.\"; Special Rules 2.3 \"Contact each station only once per band.\"; arrl.org/rtty-roundup \"Stations may be worked once per band, regardless of mode.\" by_call and by_band, by_mode_class false. CATEGORIES. Special Rules 3: \"3.2 Single Operator 3.3 Single Operator Unlimited 3.4 Multioperator-Single Transmitter (LP and HP), -Two Transmitter (HP), and Multitransmitter (HP).\"; HCAT.1.1 \"Use of spotting assistance is not permitted.\" (Single Operator), HCAT.2.1 \"Use of spotting assistance is permitted.\" (Single Operator Unlimited), power QRP/LP/HP. So CATEGORY-ASSISTED (NON-ASSISTED for Single Operator, ASSISTED for Single Operator Unlimited), CATEGORY-POWER and CATEGORY-TRANSMITTER ONE/TWO/UNLIMITED for the three multi-operator classes. The Limited Antennas Overlay has no Cabrillo 3.0 CATEGORY-OVERLAY token, so none is declared. ELOG.4 \"Multioperator logs must include the complete list of operators in the Cabrillo OPERATORS: field.\" ELOG.5 asks a Multioperator Two Transmitter log to show which transmitter made each contact; transmitter_column stays false, as ARRL Sweepstakes', because the WWROF QSO template says the column is \"Not used in single-op or M/M\" and a column of 0s would be written on every single-operator line: an M2 entry is not supported by this build's file. SELF-SPOT: the rules say nothing about spotting yourself (the glossary: \"Generating spotting information for use by other stations is not considered to be spotting assistance.\"), so self_spot_allowed stays unknown. CABRILLO TOKEN. ARRL-RTTY: ADIF 3.1.7's CONTEST_ID enumeration (https://adif.org/317/ADIF_317.htm) \"ARRL-RTTY ARRL RTTY Round-Up\" and the WA7BNM list WWROF's header page links (https://www.contestcalendar.com/cabnames.php) \"ARRL RTTY Roundup | ARRL-RTTY\" agree; ARRL's own pages print no token. QSO LINE. ARRL publishes no RTTY Roundup QSO template (arrl.org/cabrillo-format-tutorial carries Sweepstakes' only). The line is the structural one, WWROF's generic \"QSO: freq mo date time call rst exch call rst exch\" (https://wwrof.org/cabrillo/cabrillo-qso-data/), each side's slots in its role's order with the blank one left out: RST then the state or province, or RST then the serial, matching the rules' own examples (\"K9CT 599 CT\" / \"599 IL\", \"WK6I 599 428\" / \"599 CA\") and the two exchange items (\"RST Sent\", \"QTH_or_Serial Sent\") of the ARRL-linked b4h.net Cabrillo form (http://b4h.net/cabforms/arrlrttyroundup_cab3.php). Rows are written RY. HEADERS: CATEGORY-ASSISTED, CATEGORY-MODE (RTTY, the b4h form's only mode), CATEGORY-POWER and CLAIMED-SCORE; CLUB (Club Competition) and OPERATORS. LOCATION (`cabrillo.location_setting`: fd_section) is the entrant's ARRL/RAC section, DX for the dx role. ARRL's log upload (https://contest-log-submission.arrl.org/, read 2026-10-26): \"Location During Contest: Select ARRL/RAC sections or DX Outside US/Canada\"; the Cabrillo header specification (https://wwrof.org/cabrillo/cabrillo-v3-header/, read 2026-10-26): \"For USA and Canada stations LOCATION must be the ARRL section abbreviation. For foreign stations LOCATION must be 'DX'. This information is required for IARU-HF and for all ARRL and CQ contests.\" The exchange sends the STATE, so unlike Field Day and Sweepstakes the section is not read off what the entry sends: it is the operator's ARRL section setting, which the setup asks for. A blank section falls back to the state."
+    "arrl_rtty": "The ARRL RTTY Roundup ships as ONE ruleset, arrlrtty, written from the sponsor's own sources, all read 2026-10-26: https://www.arrl.org/rtty-roundup, the rules PDF it links (https://contests.arrl.org/ContestRules/RTTY-RU-Rules.pdf, \"ARRL RTTY Roundup Contest Rules Version 3.0b\", all 10 pages extracted), the contest page https://contests.arrl.org/rttyru/, the calendar https://contests.arrl.org/rttyru/cal/ (\"Version: 1.5.2, Revised: July 9, 2025\"), the ARRL Contest Multipliers List (https://contests.arrl.org/contestmultipliers.php?a=usa and ?a=ve, \"Version: 1.2.0, Revised: May 12, 2023\") and the Summary Sheet (arrl.org/files/file/Contest Forms/RTTYRUSummary 7-22.pdf, \"Rev 07/22\"). MODE. arrl.org/rtty-roundup: \"Only contacts using Radioteletype (RTTY) mode are allowed. The new ARRL International Digital Contest has been created as an event in which participants using digital modes (excluding RTTY) may compete.\" Rules p.1: \"Use only the 3.5, 7, 14, 21, and 28 MHz bands. Use only the Radioteletype (RTTY) mode. Automated operation is not permitted. Log QSOs with the RY (RTTY) mode abbreviation.\"; Special Rules 2.2 \"Use only the Radioteletype (RTTY) mode.\" and 2.4 \"In the Cabrillo formatted log, contacts must be coded as RY (RTTY).\"; contests.arrl.org/rttyru/: \"using the radioteletype mode (Baudot RTTY only)\". So banned_modes lists every other mode a contest row can carry (the FT and WSJT tiers, JS8, the Tempo modes, JTTY, PSK31, QPSK31, SSTV, CW and the voice modes). Advisory like every other ban: the contact is logged and kept, the screen says it scores nothing, nothing is refused. FT8/FT4 being banned also means the FT sequencer sends Field Day's messages unchanged there, as at the Illinois and New York QSO parties; Nexus adds no RTTY Roundup FT exchange. WINDOW. Rules p.1: \"First full weekend of January (but never on January 1)\" and \"Begins 1800 UTC Saturday and runs through 2359 UTC Sunday.\" nth_full 1, 1800Z, 30 hours. The calendar prints 2026 Jan 3-4, 2027 Jan 2-3, 2028 Jan 8-9, 2029 Jan 6-7, 2030 Jan 5-6, 2031 Jan 4-5. 2028 is the year January 1 is a Saturday and the rule moves the contest a week: the window math alone would put it on Jan 1-2, so each such year to 2060 carries an override to the following weekend (2028 is the sponsor's printed date; 2033, 2039, 2050 and 2056 apply the same printed rule). OPERATING TIME. Rules p.1: \"Single-Op stations may operate for 24 hours out of the 30-hour contest period. Multioperator stations may operate the entire 30 hours.\"; Special Rules 1.1 \"each off time must be at least 30 minutes long until 24 hours have been completed\", 1.2 \"Off time must be taken in one or two breaks that are at least 30 minutes long.\" The 30-minute minimum is the UI's off-time table (contestOpTime.ts), not this file. EXCHANGE. Special Rules 4.2.1 \"W/VE stations send a signal report and their state or province. (See the ARRL Contest Multipliers List for a list of abbreviations.)\" 4.2.2 \"DX stations send a signal report and serial number beginning with 1.\" ROLES: w_ve (my location is one of the 63 codes below) sends RST QTH; dx (everyone else) sends RST NR. The glossary: \"W/VE stations: stations operating in the United States and District of Columbia with the exception of Alaska and Hawaii, and stations operating within the Canadian provinces and territories with the exception of the DXCC entities St Paul Island and Sable Island.\" so Alaska and Hawaii are the dx role. Both roles receive RST, QTH and NR, and QTH and NR are each optional: a station's received exchange holds one or the other, by where the OTHER station is, which no slot can know in advance. Received QTH carries no ADIF column; NR is SRX/STX. LOCATION ALIAS NL -> NF: the multipliers list names NF \"Newfoundland and Labrador (VO1/VO2)\", Canada Post's code for it is NL. QTH VALUES (`arrl_rtty_qth`). Special Rules 5.2.2 \"All Stations count DXCC entities (Except USA and Canada), US states plus the District of Columbia, and Canadian Provinces and Territories plus Labrador. (See the ARRL Contest Multipliers List.) Hawaii (KH6) and Alaska (KL7) count as DXCC entities.\" The US codes are the multipliers list's United States page less AK and HI (49 with DC); the Canadian codes are its Canadian page verbatim: AB, BC, LB, MB, NB, NF, NS, NT, NU, ON, PE, QC, SK, YT (14). The Summary Sheet's Multiplier Check-Off List prints the same 49 and 14. 63 codes. SCORING. Rules p.2: \"Each contact counts for one (1) QSO point. Multiply total QSO points by the number of DXCC entities (not including the US and Canada), plus US states, and Canadian provinces contacted to get your final score. Each multiplier counts once, not once per band.\" Special Rules 5.1 \"QSO points: Each contact counts for one (1) point.\" 5.2.1 \"Multipliers count only once, not once per band.\" 5.3 \"Final score equals the total QSO points times the total multipliers contacted.\" So points_by_mode_class all 1 (the flat point, written as SS writes its two), and two multipliers, both per_log: qth over arrl_rtty_qth, and dxcc over the country file's entity excluding United States and Canada (Alaska and Hawaii are their own entities there, so they count). DUPE. Rules p.1 \"Contact stations only once per band.\"; Special Rules 2.3 \"Contact each station only once per band.\"; arrl.org/rtty-roundup \"Stations may be worked once per band, regardless of mode.\" by_call and by_band, by_mode_class false. CATEGORIES. Special Rules 3: \"3.2 Single Operator 3.3 Single Operator Unlimited 3.4 Multioperator-Single Transmitter (LP and HP), -Two Transmitter (HP), and Multitransmitter (HP).\"; HCAT.1.1 \"Use of spotting assistance is not permitted.\" (Single Operator), HCAT.2.1 \"Use of spotting assistance is permitted.\" (Single Operator Unlimited), power QRP/LP/HP. So CATEGORY-ASSISTED (NON-ASSISTED for Single Operator, ASSISTED for Single Operator Unlimited), CATEGORY-POWER and CATEGORY-TRANSMITTER ONE/TWO/UNLIMITED for the three multi-operator classes. The Limited Antennas Overlay has no Cabrillo 3.0 CATEGORY-OVERLAY token, so none is declared. ELOG.4 \"Multioperator logs must include the complete list of operators in the Cabrillo OPERATORS: field.\" ELOG.5 asks a Multioperator Two Transmitter log to show which transmitter made each contact; transmitter_column stays false, as ARRL Sweepstakes', because the WWROF QSO template says the column is \"Not used in single-op or M/M\" and a column of 0s would be written on every single-operator line: an M2 entry is not supported by this build's file. SELF-SPOT: the rules say nothing about spotting yourself (the glossary: \"Generating spotting information for use by other stations is not considered to be spotting assistance.\"), so self_spot_allowed stays unknown. CABRILLO TOKEN. ARRL-RTTY: ADIF 3.1.7's CONTEST_ID enumeration (https://adif.org/317/ADIF_317.htm) \"ARRL-RTTY ARRL RTTY Round-Up\" and the WA7BNM list WWROF's header page links (https://www.contestcalendar.com/cabnames.php) \"ARRL RTTY Roundup | ARRL-RTTY\" agree; ARRL's own pages print no token. QSO LINE. ARRL publishes no RTTY Roundup QSO template (arrl.org/cabrillo-format-tutorial carries Sweepstakes' only). The line is the structural one, WWROF's generic \"QSO: freq mo date time call rst exch call rst exch\" (https://wwrof.org/cabrillo/cabrillo-qso-data/), each side's slots in its role's order with the blank one left out: RST then the state or province, or RST then the serial, matching the rules' own examples (\"K9CT 599 CT\" / \"599 IL\", \"WK6I 599 428\" / \"599 CA\") and the two exchange items (\"RST Sent\", \"QTH_or_Serial Sent\") of the ARRL-linked b4h.net Cabrillo form (http://b4h.net/cabforms/arrlrttyroundup_cab3.php). Rows are written RY. HEADERS: CATEGORY-ASSISTED, CATEGORY-MODE (RTTY, the b4h form's only mode), CATEGORY-POWER and CLAIMED-SCORE; CLUB (Club Competition) and OPERATORS. LOCATION (`cabrillo.location_setting`: fd_section) is the entrant's ARRL/RAC section, DX for the dx role. ARRL's log upload (https://contest-log-submission.arrl.org/, read 2026-10-26): \"Location During Contest: Select ARRL/RAC sections or DX Outside US/Canada\"; the Cabrillo header specification (https://wwrof.org/cabrillo/cabrillo-v3-header/, read 2026-10-26): \"For USA and Canada stations LOCATION must be the ARRL section abbreviation. For foreign stations LOCATION must be 'DX'. This information is required for IARU-HF and for all ARRL and CQ contests.\" The exchange sends the STATE, so unlike Field Day and Sweepstakes the section is not read off what the entry sends: it is the operator's ARRL section setting, which the setup asks for. A blank section falls back to the state.",
+    "waedc": "The WAE DX Contest ships as THREE rulesets, waedc_cw, waedc_ssb and waedc_rtty, written from DARC's own rules page, read 2026-11-14: https://www.darc.de/der-club/referate/conteste/wae-dx-contest/en/wae-rules/ (\"Worked All Europe DX Contest - Rules 2025\", revision 2025-06-17, which prints the 2026 dates; the older /en/rules/ address is a 404). WINDOW. §1: \"CW: August, second full weekend / Saturday, August 8th 2026, 00:00 UTC until Sunday, August 9th 2026, 23:59 UTC\"; \"SSB: September, second full weekend / Saturday, September 12th 2026 ...\"; \"RTTY: November, second full weekend / Saturday, November 14th 2026 ...\". nth_full 2, 0000Z, 48 hours reproduces all three. BANDS. §2: \"3.5 - 7 - 14 - 21 - 28 MHz.\" The advisory `bands` list; nothing is refused over it. EXCHANGE. §5: \"The exchange consists of RS/RST and a progressive serial number starting with 001. If the station worked does not send a serial number, log the contact with number 000.\" RST (2 digits on SSB, 3 on CW and RTTY) and NR, a per-contest serial, SRX/STX. The serial starts at 1, which the keyer sends as 1 and the Cabrillo QSO line writes three wide (001); a copied 000 is logged as it was copied. DUPE. §5: \"Each station can be credited only once per band.\" by_call and by_band; each running is one mode, so by_mode_class is false, as CQ WW's. The rules say nothing about removing or keeping dupes in the submitted log, so log_dupes is false, as for the QSO parties whose sponsors say nothing either (this build logs them whatever the file says). POINTS. §8: \"total QSOs plus QTCs on all bands multiplied by the sum of all multipliers weighted by the band bonus factor\". The rules print no per-QSO point table; one point a contact is this build's READING of \"total QSOs\". NOT MODELLED, on purpose: QTC traffic and QTC: lines (§7, §12); the multipliers (§6, WAE list or DXCC per band, call-area multipliers, weighted x4 on 3.5 MHz, x3 on 7 MHz, x2 above), so the screen shows the contact count only and the file carries NO CLAIMED-SCORE, which without QTCs and the weighted multipliers would be a false claim; the CW and SSB rule that a contest QSO is between a European (WAE list) and a non-European (DXCC list) station (§5; RTTY has no continental limit, §12), so a same-side contact is logged and counted, a known over-count; the single operator's 36 hours of 48 (§4: \"Off times must be a minimum of 60 minutes during which no QSO or QTC is logged\", which the Contest screen's operating-time count uses); the SPECIFIC (DOK) header (§11), which is not in this build's header vocabulary. NOT USED, and unreconciled on the sponsor's own pages: the CW log deadline (§10 prints August 17th 2026, §13's seven days after the contest gives August 16th); the SSB no-contest segment on 7 MHz (the rules say 7040-7060 kHz, the overview page 7050-7060 kHz), which Nexus does not enforce for any contest; the upload address (§10 names dxhf2.darc.de/~waecwlog, ~waessblog and ~waerttylog/upload.cgi, the overview page dxhf2.darc.de/cont_hub/; both answered as live upload pages on 2026-11-14, and the per-mode §10 pages, each headed \"DARC Contest Log Upload WAE-Contest\" and its mode, are the ones the end-of-contest checklist shows). CATEGORIES. §3: \"SINGLE-OP LOW ... Max. output 100 watts\", \"SINGLE-OP HIGH\", \"MULTI-OP\"; \"The use of DX spotting nets is allowed in all categories.\" So CATEGORY-POWER, no CATEGORY-ASSISTED and spotting allowed; the rules say nothing of spotting yourself, so self_spot_allowed is left unknown. CLUB per §11 (\"a separate header line using the keyword CLUB\"). CABRILLO TOKEN. DARC-WAEDC-CW, DARC-WAEDC-SSB, DARC-WAEDC-RTTY: the WA7BNM list (https://www.contestcalendar.com/cabnames.php, revision February 23, 2026) and ADIF 3.1.7's CONTEST_ID enumeration (https://adif.org/317/ADIF_317.htm) agree. QSO LINE. DARC publishes no QSO template (its upload page says only \"Please logs as Cabrillo only\"); the line is WWROF's generic one, the report and serial on each side, as CQ WPX's."
   },
   "rulesets": [
     {
@@ -8961,6 +8962,384 @@
       "location_aliases": {
         "NL": "NF"
       }
+    },
+    {
+      "event": "waedc_cw",
+      "rules_year": 2026,
+      "contest_id": "DARC-WAEDC-CW",
+      "window": {
+        "month": 8,
+        "weekend": "nth_full",
+        "n": 2,
+        "start_hour_utc": 0,
+        "duration_hours": 48,
+        "overrides": {}
+      },
+      "scoring": {
+        "model": "none",
+        "points_by_mode_class": {
+          "PH": 1,
+          "CW": 1,
+          "DIG": 1
+        },
+        "power_tiers": [],
+        "multipliers": [],
+        "relation_points": [],
+        "band_points": []
+      },
+      "transmitter_column": false,
+      "dupe": {
+        "by_call": true,
+        "by_band": true,
+        "by_mode_class": false,
+        "by_fields": [],
+        "by_sent_fields": [],
+        "log_dupes": false
+      },
+      "domains": [],
+      "exchange": {
+        "name": "waedc",
+        "fields": [
+          {
+            "key": "RST",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "RST_RCVD",
+              "sent": "RST_SENT"
+            },
+            "source": "constant",
+            "kind": {
+              "type": "rst",
+              "digits": 3
+            }
+          },
+          {
+            "key": "NR",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "SRX",
+              "sent": "STX"
+            },
+            "source": "serial",
+            "kind": {
+              "type": "serial",
+              "scope": "per_contest"
+            }
+          }
+        ],
+        "roles": [
+          {
+            "id": "",
+            "selector": {
+              "type": "always"
+            },
+            "sends": [
+              "RST",
+              "NR"
+            ],
+            "receives": [
+              "RST",
+              "NR"
+            ],
+            "constant_sent": []
+          }
+        ]
+      },
+      "bonuses": [],
+      "banned_modes": [],
+      "tempo_fd": false,
+      "assistance": {
+        "spotting_allowed": true,
+        "cluster_allowed": true,
+        "assistance_note_key": ""
+      },
+      "enforcement": "warn",
+      "objectives": [],
+      "score_note_key": "settings.contestScore.contactsOnly",
+      "cabrillo": {
+        "columns": [
+          {
+            "key": "RST",
+            "width": 0,
+            "blank": ""
+          },
+          {
+            "key": "NR",
+            "width": 3,
+            "blank": ""
+          }
+        ],
+        "headers": [
+          "CATEGORY-POWER",
+          "EMAIL",
+          "NAME"
+        ],
+        "entry_headers": [
+          "CLUB"
+        ],
+        "mode_category": "CW"
+      },
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ]
+    },
+    {
+      "event": "waedc_ssb",
+      "rules_year": 2026,
+      "contest_id": "DARC-WAEDC-SSB",
+      "window": {
+        "month": 9,
+        "weekend": "nth_full",
+        "n": 2,
+        "start_hour_utc": 0,
+        "duration_hours": 48,
+        "overrides": {}
+      },
+      "scoring": {
+        "model": "none",
+        "points_by_mode_class": {
+          "PH": 1,
+          "CW": 1,
+          "DIG": 1
+        },
+        "power_tiers": [],
+        "multipliers": [],
+        "relation_points": [],
+        "band_points": []
+      },
+      "transmitter_column": false,
+      "dupe": {
+        "by_call": true,
+        "by_band": true,
+        "by_mode_class": false,
+        "by_fields": [],
+        "by_sent_fields": [],
+        "log_dupes": false
+      },
+      "domains": [],
+      "exchange": {
+        "name": "waedc",
+        "fields": [
+          {
+            "key": "RST",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "RST_RCVD",
+              "sent": "RST_SENT"
+            },
+            "source": "constant",
+            "kind": {
+              "type": "rst",
+              "digits": 2
+            }
+          },
+          {
+            "key": "NR",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "SRX",
+              "sent": "STX"
+            },
+            "source": "serial",
+            "kind": {
+              "type": "serial",
+              "scope": "per_contest"
+            }
+          }
+        ],
+        "roles": [
+          {
+            "id": "",
+            "selector": {
+              "type": "always"
+            },
+            "sends": [
+              "RST",
+              "NR"
+            ],
+            "receives": [
+              "RST",
+              "NR"
+            ],
+            "constant_sent": []
+          }
+        ]
+      },
+      "bonuses": [],
+      "banned_modes": [],
+      "tempo_fd": false,
+      "assistance": {
+        "spotting_allowed": true,
+        "cluster_allowed": true,
+        "assistance_note_key": ""
+      },
+      "enforcement": "warn",
+      "objectives": [],
+      "score_note_key": "settings.contestScore.contactsOnly",
+      "cabrillo": {
+        "columns": [
+          {
+            "key": "RST",
+            "width": 0,
+            "blank": ""
+          },
+          {
+            "key": "NR",
+            "width": 3,
+            "blank": ""
+          }
+        ],
+        "headers": [
+          "CATEGORY-POWER",
+          "EMAIL",
+          "NAME"
+        ],
+        "entry_headers": [
+          "CLUB"
+        ],
+        "mode_category": "SSB"
+      },
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ]
+    },
+    {
+      "event": "waedc_rtty",
+      "rules_year": 2026,
+      "contest_id": "DARC-WAEDC-RTTY",
+      "window": {
+        "month": 11,
+        "weekend": "nth_full",
+        "n": 2,
+        "start_hour_utc": 0,
+        "duration_hours": 48,
+        "overrides": {}
+      },
+      "scoring": {
+        "model": "none",
+        "points_by_mode_class": {
+          "PH": 1,
+          "CW": 1,
+          "DIG": 1
+        },
+        "power_tiers": [],
+        "multipliers": [],
+        "relation_points": [],
+        "band_points": []
+      },
+      "transmitter_column": false,
+      "dupe": {
+        "by_call": true,
+        "by_band": true,
+        "by_mode_class": false,
+        "by_fields": [],
+        "by_sent_fields": [],
+        "log_dupes": false
+      },
+      "domains": [],
+      "exchange": {
+        "name": "waedc",
+        "fields": [
+          {
+            "key": "RST",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "RST_RCVD",
+              "sent": "RST_SENT"
+            },
+            "source": "constant",
+            "kind": {
+              "type": "rst",
+              "digits": 3
+            }
+          },
+          {
+            "key": "NR",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "SRX",
+              "sent": "STX"
+            },
+            "source": "serial",
+            "kind": {
+              "type": "serial",
+              "scope": "per_contest"
+            }
+          }
+        ],
+        "roles": [
+          {
+            "id": "",
+            "selector": {
+              "type": "always"
+            },
+            "sends": [
+              "RST",
+              "NR"
+            ],
+            "receives": [
+              "RST",
+              "NR"
+            ],
+            "constant_sent": []
+          }
+        ]
+      },
+      "bonuses": [],
+      "banned_modes": [],
+      "tempo_fd": false,
+      "assistance": {
+        "spotting_allowed": true,
+        "cluster_allowed": true,
+        "assistance_note_key": ""
+      },
+      "enforcement": "warn",
+      "objectives": [],
+      "score_note_key": "settings.contestScore.contactsOnly",
+      "cabrillo": {
+        "columns": [
+          {
+            "key": "RST",
+            "width": 0,
+            "blank": ""
+          },
+          {
+            "key": "NR",
+            "width": 3,
+            "blank": ""
+          }
+        ],
+        "headers": [
+          "CATEGORY-POWER",
+          "EMAIL",
+          "NAME"
+        ],
+        "entry_headers": [
+          "CLUB"
+        ],
+        "mode_category": "RTTY"
+      },
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ]
     }
   ],
   "sections": [

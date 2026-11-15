@@ -6780,6 +6780,11 @@ mod tests {
             ("cqww_rtty", Standard),
             ("cqwpx_cw", Standard),
             ("cqwpx_ssb", Standard),
+            // The WAE DX Contest bans no mode and has no WSJT-X contest message: standard
+            // messages, as CQ WPX.
+            ("waedc_cw", Standard),
+            ("waedc_ssb", Standard),
+            ("waedc_rtty", Standard),
             ("cqp", Standard),
             ("ohqp", Standard),
             ("tnqp", Standard),
@@ -6832,7 +6837,7 @@ mod tests {
             .filter_map(|r| r["event"].as_str())
             .collect();
         events.push("");
-        assert_eq!(events.len(), 20);
+        assert_eq!(events.len(), 23);
         for event in events {
             let want = match event {
                 "" | "arrlfd" => (FtMessages::FieldDay, 3),
@@ -7017,7 +7022,7 @@ mod tests {
             .iter()
             .filter_map(|r| r["event"].as_str())
             .collect();
-        assert_eq!(events.len(), 19);
+        assert_eq!(events.len(), 22);
         for event in events {
             let rs = crate::fd_rules::ruleset_by_id(event, year).expect(event);
             let bans = matches!(event, "wfd" | "ilqp" | "nyqp" | "arrlrtty");
