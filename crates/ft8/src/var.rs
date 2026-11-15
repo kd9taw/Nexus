@@ -185,8 +185,7 @@ fn from_var_record(r: &Ft8VarDecodeT) -> Decode {
 /// of pure noise it decoded three (as WSJT-X's own `jt9 -M` does), all of these two shapes:
 /// - a line whose calls are BOTH unresolved hashes (`<...> <...> R 521761 CG33TI`): no station
 ///   is named, so nothing could answer or log it anyway;
-/// - a CQ with no call in it (`CQ GI576RBFOEB`): no word after `CQ` is a standard call, a compound
-///   call or a special-event call ([`plausible_call`]).
+/// - a CQ that is not a CQ a station sends ([`station_cq`]), such as `CQ GI576RBFOEB`.
 ///
 /// Nothing is dropped: JTDX shows these, and so does Nexus, marked.
 fn noise_shape(message: &str) -> bool {
@@ -194,30 +193,56 @@ fn noise_shape(message: &str) -> bool {
     if words.iter().filter(|w| **w == "<...>").count() >= 2 {
         return true;
     }
-    words.first() == Some(&"CQ") && !words[1..].iter().any(|w| plausible_call(w))
+    words.first() == Some(&"CQ") && !station_cq(&words[1..])
+}
+
+/// Whether the words after `CQ` read as a station's CQ: `CQ [modifier] CALL [GRID]`, as WSJT-X
+/// builds one. The modifier is 1-4 letters (`DX`, `POTA`, `TEST`) or 3 digits (`290`); the call is
+/// a [`plausible_call`]; the grid is a 4-character locator (`FN42`). A call-shaped word anywhere
+/// else, or a word a CQ does not carry, does not make it one.
+fn station_cq(rest: &[&str]) -> bool {
+    let modifier = |w: &str| {
+        let b = w.as_bytes();
+        ((1..=4).contains(&b.len()) && b.iter().all(u8::is_ascii_uppercase))
+            || (b.len() == 3 && b.iter().all(u8::is_ascii_digit))
+    };
+    let grid = |w: &str| {
+        let b = w.as_bytes();
+        b.len() == 4
+            && (b'A'..=b'R').contains(&b[0])
+            && (b'A'..=b'R').contains(&b[1])
+            && b[2].is_ascii_digit()
+            && b[3].is_ascii_digit()
+    };
+    match rest {
+        [call] => plausible_call(call),
+        [a, b] => (modifier(a) && plausible_call(b)) || (plausible_call(a) && grid(b)),
+        [m, call, g] => modifier(m) && plausible_call(call) && grid(g),
+        _ => false,
+    }
 }
 
 /// A callsign a station could hold, for [`noise_shape`]: a standard call (WSJT-X's 28-bit field,
 /// with `/P` or `/R`), a compound call (`PJ4/K1ABC`, `KD9TAW/QRP`, `EA1/PE5X`: a standard call
-/// beside a short prefix or suffix), or a special-event call (`II7MGBR`, `YW18FIFA`: one or two
+/// beside one short prefix or suffix), or a special-event call (`II7MGBR`, `YW18FIFA`: one or two
 /// prefix characters, one to four digits, one to four letters, ten characters at most). A resolved
 /// hash (`<PJ4/K1ABC>`) is read without its brackets; `<...>` is no call.
 fn plausible_call(word: &str) -> bool {
     let w = word.trim_start_matches('<').trim_end_matches('>');
     let alnum = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_alphanumeric());
     match w.split_once('/') {
-        Some(_) => {
-            let parts: Vec<&str> = w.split('/').collect();
+        Some((a, b)) => {
             w.len() <= 11
-                && parts.iter().all(|p| alnum(p) && p.len() <= 6)
-                && parts.iter().any(|p| std_call(p))
+                && [a, b].iter().all(|p| alnum(p) && p.len() <= 6)
+                && (std_call(a) || std_call(b))
         }
         None => w.len() <= 10 && (std_call(w) || special_event_call(w)),
     }
 }
 
-/// WSJT-X's standard 28-bit call: zero to two prefix characters (letters, or a letter and a digit
-/// either way round), a digit, then up to three letters; `/P` or `/R` rides its own bit.
+/// WSJT-X's standard 28-bit call: one or two prefix characters (a letter, two letters, or a letter
+/// and a digit either way round), a digit, then up to three letters; `/P` or `/R` rides its own
+/// bit. A digit with nothing before it (`5`, `1AB`) is no call.
 fn std_call(call: &str) -> bool {
     let body = call
         .strip_suffix("/P")
@@ -226,13 +251,12 @@ fn std_call(call: &str) -> bool {
         .as_bytes();
     let al = |c: u8| c.is_ascii_uppercase();
     let di = |c: u8| c.is_ascii_digit();
-    (0..=2).any(|k| {
+    (1..=2).any(|k| {
         if k > body.len() {
             return false;
         }
         let (p1, p2) = body.split_at(k);
         let prefix = match p1 {
-            [] => true,
             [a] => al(*a),
             [a, b] => (al(*a) && al(*b)) || (al(*a) && di(*b)) || (di(*a) && al(*b)),
             _ => false,
@@ -449,6 +473,19 @@ mod tests {
             "CQ DX GI576RBFOEB",
             "CQ <...>",
             "CQ",
+            "CQ 0Q5VXYZWT8",
+            // No prefix before the digit is no call (WSJT-X's standard call needs one).
+            "CQ 5",
+            "CQ 5 QRZ",
+            "CQ QRP 7",
+            "CQ 1AB",
+            "CQ ZZ 9A",
+            // A call-shaped word in the wrong place, or around words a CQ does not carry.
+            "CQ GI5 6RBFOEB",
+            "CQ S8TL8YY70 5",
+            "CQ 1 7DZ1I7FWQ",
+            "CQ F1C JPMAI3C",
+            "CQ Z6D/2Z/O2D1",
         ] {
             assert!(noise_shape(m), "{m:?} is marked");
         }
@@ -477,6 +514,13 @@ mod tests {
             "CQ EN3SUKR",
             "CQ YW18FIFA",
             "CQ <PJ4/K1ABC>",
+            "CQ 4U1ITU",
+            "CQ 3Y0J JD15",
+            "CQ 9A1A JN75",
+            "CQ 290 W9XYZ EN37",
+            "CQ W9XYZ/P EN37",
+            "CQ DX K1ABC",
+            "CQ TEST K1ABC FN42",
             "TNX BOB 73 GL",
             "",
         ] {
