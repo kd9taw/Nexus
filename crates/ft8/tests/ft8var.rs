@@ -376,3 +376,39 @@ fn a_callsign_database_load_that_found_no_file_is_retried_from_the_right_folder(
         .collect();
     assert_eq!(got, want);
 }
+
+/// Pure noise (Gaussian, σ 300, seeds 1219 and 1294 of the 3000-period AP-armed noise check) from
+/// which the decoder, as `jt9 -8 -M -C 3 -E 3 -R 3 -N 1` (and WSJT-X's own jt9 the same), takes a
+/// message that passes the CRC: a line whose two calls are both unresolved hashes, and a CQ whose
+/// call is no call. Nexus shows each marked unchecked, so it is never sequenced, logged, handed
+/// to other programs or uploaded on its own; the standard decoder finds nothing in either.
+#[test]
+fn noise_decodes_of_a_shape_no_station_sends_are_marked() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for (file, want) in [
+        ("ft8var_noise_two_hashes.wav", "<...> <...> R 521761 CG33TI"),
+        ("ft8var_noise_cq_no_call.wav", "CQ GI576RBFOEB"),
+    ] {
+        let wav = read_wav_i16(&format!(
+            "{}/tests/fixtures/{file}",
+            env!("CARGO_MANIFEST_DIR")
+        ));
+        fresh_var_state();
+        let d = var_decode(wav.clone(), jt9_params());
+        assert_eq!(
+            d.iter().map(|d| d.message.trim()).collect::<Vec<_>>(),
+            [want],
+            "{file}: jt9's one decode"
+        );
+        assert!(d[0].unchecked, "{file}: marked");
+        let standard = on_decoder_thread(move || {
+            decode_frame(
+                &wav, 200, 4000, 3, "K1ABC", "W9XYZ", 0, 1500, true, false, false,
+            )
+        });
+        assert!(
+            standard.is_empty(),
+            "{file}: the standard decoder finds nothing"
+        );
+    }
+}

@@ -172,10 +172,92 @@ unsafe extern "C" fn on_var_decode(
 }
 
 fn from_var_record(r: &Ft8VarDecodeT) -> Decode {
+    let d = from_record(&r.rec);
     Decode {
-        unchecked: r.unchecked != 0,
-        ..from_record(&r.rec)
+        unchecked: r.unchecked != 0 || noise_shape(&d.message),
+        ..d
     }
+}
+
+/// A message of a shape the decoder takes from noise and stations do not send, so it is marked
+/// unchecked like an FT8S/FT8SD decode (shown, never acted on), though it passed the CRC. ft8var's
+/// deep passes accept codewords WSJT-X's standard decoder never reaches; on 3000 AP-armed periods
+/// of pure noise it decoded three (as WSJT-X's own `jt9 -M` does), all of these two shapes:
+/// - a line whose calls are BOTH unresolved hashes (`<...> <...> R 521761 CG33TI`): no station
+///   is named, so nothing could answer or log it anyway;
+/// - a CQ with no call in it (`CQ GI576RBFOEB`): no word after `CQ` is a standard call, a compound
+///   call or a special-event call ([`plausible_call`]).
+///
+/// Nothing is dropped: JTDX shows these, and so does Nexus, marked.
+fn noise_shape(message: &str) -> bool {
+    let words: Vec<&str> = message.split_whitespace().collect();
+    if words.iter().filter(|w| **w == "<...>").count() >= 2 {
+        return true;
+    }
+    words.first() == Some(&"CQ") && !words[1..].iter().any(|w| plausible_call(w))
+}
+
+/// A callsign a station could hold, for [`noise_shape`]: a standard call (WSJT-X's 28-bit field,
+/// with `/P` or `/R`), a compound call (`PJ4/K1ABC`, `KD9TAW/QRP`, `EA1/PE5X`: a standard call
+/// beside a short prefix or suffix), or a special-event call (`II7MGBR`, `YW18FIFA`: one or two
+/// prefix characters, one to four digits, one to four letters, ten characters at most). A resolved
+/// hash (`<PJ4/K1ABC>`) is read without its brackets; `<...>` is no call.
+fn plausible_call(word: &str) -> bool {
+    let w = word.trim_start_matches('<').trim_end_matches('>');
+    let alnum = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_alphanumeric());
+    match w.split_once('/') {
+        Some(_) => {
+            let parts: Vec<&str> = w.split('/').collect();
+            w.len() <= 11
+                && parts.iter().all(|p| alnum(p) && p.len() <= 6)
+                && parts.iter().any(|p| std_call(p))
+        }
+        None => w.len() <= 10 && (std_call(w) || special_event_call(w)),
+    }
+}
+
+/// WSJT-X's standard 28-bit call: zero to two prefix characters (letters, or a letter and a digit
+/// either way round), a digit, then up to three letters; `/P` or `/R` rides its own bit.
+fn std_call(call: &str) -> bool {
+    let body = call
+        .strip_suffix("/P")
+        .or_else(|| call.strip_suffix("/R"))
+        .unwrap_or(call)
+        .as_bytes();
+    let al = |c: u8| c.is_ascii_uppercase();
+    let di = |c: u8| c.is_ascii_digit();
+    (0..=2).any(|k| {
+        if k > body.len() {
+            return false;
+        }
+        let (p1, p2) = body.split_at(k);
+        let prefix = match p1 {
+            [] => true,
+            [a] => al(*a),
+            [a, b] => (al(*a) && al(*b)) || (al(*a) && di(*b)) || (di(*a) && al(*b)),
+            _ => false,
+        };
+        prefix && (1..=4).contains(&p2.len()) && di(p2[0]) && p2[1..].iter().all(|c| al(*c))
+    })
+}
+
+/// A special-event call, which the protocol sends in the clear (`CQ II7MGBR`): one or two prefix
+/// characters with a letter among them, one to four digits, then one to four letters.
+fn special_event_call(call: &str) -> bool {
+    let b = call.as_bytes();
+    (1..=2).any(|k| {
+        if k >= b.len() {
+            return false;
+        }
+        let (prefix, rest) = b.split_at(k);
+        let ndig = rest.iter().take_while(|c| c.is_ascii_digit()).count();
+        let suffix = &rest[ndig..];
+        prefix.iter().all(|c| c.is_ascii_alphanumeric())
+            && prefix.iter().any(|c| c.is_ascii_uppercase())
+            && (1..=4).contains(&ndig)
+            && (1..=4).contains(&suffix.len())
+            && suffix.iter().all(|c| c.is_ascii_uppercase())
+    })
 }
 
 /// Run `f` on the one thread every call into ft8var runs on, for the life of the process, as
@@ -347,4 +429,58 @@ pub fn var_slices(nfa: i32, nfb: i32, n: usize) -> Vec<(i32, i32)> {
         .copied()
         .zip(hi[..n].iter().copied())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::noise_shape;
+
+    /// The shapes the 3000-period AP-armed noise check decoded (every one CRC-checked, and
+    /// WSJT-X's own `jt9 -M` decodes the same): a line whose two calls are both unresolved hashes,
+    /// and a CQ whose call is no call at all.
+    #[test]
+    fn the_noise_shapes_are_marked() {
+        for m in [
+            "<...> <...> R 521761 CG33TI",
+            "<...> <...> 530061 EO64HL",
+            "<...> <...> R 551326 OA65UK",
+            "<...> <...> RR73",
+            "CQ GI576RBFOEB",
+            "CQ DX GI576RBFOEB",
+            "CQ <...>",
+            "CQ",
+        ] {
+            assert!(noise_shape(m), "{m:?} is marked");
+        }
+    }
+
+    /// What real stations send is not: one call resolved beside a hash, a CQ from a standard call,
+    /// a compound call, or a special-event call (the gridless CQs operators reported), with or
+    /// without a direction.
+    #[test]
+    fn real_shapes_are_not_marked() {
+        for m in [
+            "<...> W9XYZ -10",
+            "K1ABC <...> R-05",
+            "<PJ4/K1ABC> W9XYZ RR73",
+            "W9XYZ <KD9TAW/QRP> 73",
+            "K1ABC W9XYZ EN37",
+            "CQ K1ABC FN42",
+            "CQ DX K1ABC FN42",
+            "CQ POTA W9XYZ EN37",
+            "CQ 291 K1ABC FN42",
+            "CQ F4CYH/P JN18",
+            "CQ PJ4/K1ABC",
+            "CQ EA1/PE5X",
+            "CQ KD9TAW/QRP",
+            "CQ II7MGBR",
+            "CQ EN3SUKR",
+            "CQ YW18FIFA",
+            "CQ <PJ4/K1ABC>",
+            "TNX BOB 73 GL",
+            "",
+        ] {
+            assert!(!noise_shape(m), "{m:?} is not marked");
+        }
+    }
 }

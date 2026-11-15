@@ -228,3 +228,17 @@ fn a_repeat_counts_only_on_the_same_parity_and_within_the_window() {
     full_pass(&mut e, "CQ W9XYZ EN37", true, 3);
     assert!(wired(&e).is_empty(), "checked on another band");
 }
+
+/// The shapes the JTDX-style decoder marks though they passed the CRC (both calls unresolved
+/// hashes; a CQ with no call: `ft8::var`) come marked every time it decodes them, so they never
+/// have a checked copy for a repeat to lean on: a repeat of one stays gated.
+#[test]
+fn a_repeat_of_a_marked_noise_shape_stays_gated() {
+    for shape in ["<...> <...> R 521761 CG33TI", "CQ GI576RBFOEB"] {
+        let mut e = station();
+        for slot in [1, 3, 5] {
+            full_pass(&mut e, shape, true, slot);
+            assert!(wired(&e).is_empty(), "{shape:?} slot {slot}: never handed on");
+        }
+    }
+}
