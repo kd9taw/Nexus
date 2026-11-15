@@ -34,7 +34,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { t } from '../i18n'
 import type { FieldDayStatus } from '../types'
 import { contestRate } from '../features/contestRate'
-import { contestShortName } from '../fdEvent'
+import { contestShortName, countsOnly } from '../fdEvent'
 
 /** No rate yet — the scoreboard tile's own symbol (`RATE_NONE`, ContestView.tsx): one contact
  *  is not a rate, and "0/hr" would claim one. A symbol, not prose. */
@@ -57,16 +57,16 @@ function useNowUnix(): number {
 export function scoreChipText(fieldDay: FieldDayStatus, nowUnix: number): string {
   // A blank event is ARRL Field Day everywhere else in the app, so it is here.
   const parts = [contestShortName(fieldDay.event || 'arrlfd')]
-  if (typeof fieldDay.totalScore === 'number') {
+  // A contact-count-only contest (`countsOnly`) shows no points and no sections: its total is a
+  // count, not its score, and sections are Field Day's.
+  const count = countsOnly(fieldDay)
+  if (typeof fieldDay.totalScore === 'number' && !count) {
     parts.push(t('logEntry.score.points', { count: fieldDay.totalScore }))
   }
   parts.push(t('logEntry.score.qsos', { count: fieldDay.qsoCount }))
   const mults = fieldDay.multCount
-  parts.push(
-    typeof mults === 'number'
-      ? t('logEntry.score.mults', { count: mults })
-      : t('logEntry.score.sections', { count: fieldDay.sections }),
-  )
+  if (typeof mults === 'number') parts.push(t('logEntry.score.mults', { count: mults }))
+  else if (!count) parts.push(t('logEntry.score.sections', { count: fieldDay.sections }))
   const perHour = contestRate(fieldDay.log ?? [], nowUnix).windows[0].perHour
   parts.push(t('logEntry.score.rate', { rate: perHour === null ? RATE_NONE : Math.round(perHour) }))
   return parts.join(SEP)

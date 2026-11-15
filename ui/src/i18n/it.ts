@@ -8882,6 +8882,7 @@ export const IT: PartialCatalog = {
   "settings.contestStation.power.label": "Potenza inviata",
   "settings.contestStation.power.hint": "La potenza che invii come parte dello scambio di questo contest, con le parole dell'organizzatore (KW, 500, 5). Va in aria esattamente come la digiti; la potenza dichiarata dal tuo log è Categoria di potenza, in La tua partecipazione.",
   "settings.contestScore.incomplete": "Questo punteggio non include i punti bonus che questo contest ricava dal tuo log: questa versione non li calcola, quindi ciò che l'organizzatore ti accrediterà sarà più alto. C'è tutto ciò che serve perché il log sia accettato; il numero non è il tuo punteggio dichiarato.",
+  "settings.contestScore.contactsOnly": "Nexus non calcola i QTC né i moltiplicatori di questo contest, quindi il numero qui è il conteggio dei tuoi collegamenti, non il tuo punteggio. C'è tutto ciò che serve perché il log sia accettato.",
   "settings.contestCategory.unassisted.label": "Partecipazione non assistita",
   "settings.contestCategory.unassisted.aria.declare": "Dichiara una partecipazione al contest non assistita",
   "settings.contestCategory.unassisted.aria.end": "Termina una partecipazione al contest non assistita",

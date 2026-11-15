@@ -7744,6 +7744,7 @@ export const FR: PartialCatalog = {
   "settings.contestStation.power.label": "Puissance envoyée",
   "settings.contestStation.power.hint": "La puissance que tu envoies dans l’échange de ce concours, dans les termes de l’organisateur (KW, 500, 5). Elle part sur l’air exactement comme tu la saisis ; la puissance que ton log déclare est la Catégorie de puissance, dans Ta participation.",
   "settings.contestScore.incomplete": "Ce score laisse de côté les points bonus que ce concours calcule à partir de ton log — cette version ne les calcule pas, l’organisateur t’en créditera donc davantage. Tout ce qu’il faut au log pour être accepté est là ; le nombre n’est pas ton score revendiqué.",
+  "settings.contestScore.contactsOnly": "Nexus ne calcule ni les QTC ni les multiplicateurs de ce concours : le nombre ici est ton nombre de contacts, pas ton score. Tout ce qu’il faut au log pour être accepté est là.",
   "settings.contestCategory.unassisted.aria.declare": "Déclarer une participation non assistée",
   "settings.contestCategory.unassisted.aria.end": "Terminer une participation non assistée",
   "settings.contestCategory.unassisted.hint": "Désactive d'un coup le décodeur CW (par IA et classique), les spots DX cluster / RBN, le flux des manquants PSK Reporter, Super Check Partial et l'historique des indicatifs, et enregistre le changement avec un horodatage. Effet immédiat. Vos réglages pour chacun d'eux restent intacts et reviennent quand vous désactivez ceci.",

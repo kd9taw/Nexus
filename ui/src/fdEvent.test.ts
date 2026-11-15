@@ -107,7 +107,7 @@ describe('clubSyncRefusal', () => {
   it('answers for every contest on the picker, refused or not, and an inherited key is not a contest', () => {
     const refused = CONTESTS.filter((c) => contestClubRefusal(c.id) !== null).map((c) => c.id)
     expect(refused.sort()).toEqual(
-      ['arrlrtty', 'arrlss_cw', 'arrlss_ssb', 'cqp', 'cqwpx_cw', 'cqwpx_ssb', 'cqww_cw', 'cqww_rtty', 'cqww_ssb'],
+      ['arrlrtty', 'arrlss_cw', 'arrlss_ssb', 'cqp', 'cqwpx_cw', 'cqwpx_ssb', 'cqww_cw', 'cqww_rtty', 'cqww_ssb', 'waedc_cw', 'waedc_rtty', 'waedc_ssb'],
     )
     expect(contestClubRefusal('constructor')).toBeNull()
   })

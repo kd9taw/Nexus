@@ -57622,7 +57622,7 @@ mod tests {
                 .find(|c| c.id == "ilqp")
                 .map(|c| (c.start_unix, c.end_unix))
         };
-        assert_eq!(super::contest_windows_at(w.start_unix).len(), 19);
+        assert_eq!(super::contest_windows_at(w.start_unix).len(), 22);
         assert_eq!(at(w.start_unix + 60), Some((w.start_unix, w.end_unix)));
         let next = rs.event_window(2027);
         assert_eq!(at(w.end_unix), Some((next.start_unix, next.end_unix)));
