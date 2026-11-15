@@ -243,6 +243,7 @@ import { SpotsPanel } from './components/SpotsPanel'
 import { LogConfirm } from './components/LogConfirm'
 import { ContestView } from './components/ContestView'
 import { CONTEST_SETUP_SAVED_EVENT } from './components/ContestSetupWizard'
+import { reloadCustomContests } from './features/customContests'
 import { ContestLargeEntry } from './components/ContestLogger'
 import { openContestLogger } from './features/contestLoggerLayout'
 import { ContestScreenAway, useContestScreenWindow } from './components/ContestScreenWindow'
@@ -3091,6 +3092,10 @@ function App() {
     window.addEventListener(CONTEST_SETUP_SAVED_EVENT, handleSettingsSaved)
     return () => window.removeEventListener(CONTEST_SETUP_SAVED_EVENT, handleSettingsSaved)
   }, [handleSettingsSaved])
+  // The operator's own contests, read once, so every contest name on screen is the one they gave it.
+  useEffect(() => {
+    void reloadCustomContests()
+  }, [])
 
   const handleDismissOnboarding = useCallback(() => {
     localStorage.setItem(ONBOARD_KEY, '1')

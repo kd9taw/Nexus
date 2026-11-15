@@ -34963,6 +34963,82 @@ tr.sel .aprs-sym {
 .contest-setup-warn p {
   margin: 0 0 var(--space-1);
 }
+/* The step buttons stay at the dialog box's bottom edge, opaque, as the first-run and radio setups'
+   do: the pick list (22 contests and the operator's own) and the builder's Basics step are taller
+   than the box on a laptop, and Next must be on screen without finding a scrollbar. The box
+   (.ui-dialog) is the one scroll owner. */
+.contest-setup .wizard-actions {
+  position: sticky;
+  bottom: 0;
+  background: var(--panel);
+  padding-top: var(--space-2);
+}
+/* …and a control the keyboard focuses, or a scroll brings into view, stops above the pinned buttons
+   instead of under them: the scroll padding is the buttons' height plus the box's own bottom padding
+   (measured: 5em covers nothing at the floor, 1366×768 or 2560×1440). */
+.ui-dialog.contest-setup {
+  scroll-padding-bottom: 5em;
+}
+/* ── Your contests and the builder (CustomContestBuilder.tsx) ── */
+.cc-pick-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cc-actions,
+.cc-own-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  font-size: var(--fs-body);
+}
+.cc-own-tools {
+  margin-top: var(--space-1);
+}
+.cc-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+}
+.cc-rows {
+  list-style: none;
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.cc-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+.cc-row select,
+.cc-row input {
+  min-width: 0;
+  max-width: 100%;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: calc(14px * var(--text-scale));
+  padding: var(--space-1) var(--space-2);
+}
+.cc-row-tools {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.cc-ft {
+  margin-top: var(--space-2);
+}
+.cc-sample {
+  margin: 0 0 var(--space-2);
+  font-size: calc(12px * var(--text-scale));
+  overflow-wrap: anywhere;
+}
 /* ── The first-run wizard (SetupWizard.tsx), on the radio setup's pattern below: on a laptop its radio
    step is taller than the dialog, so the step buttons stay at the box's bottom edge, opaque, and Next
    is on screen without finding a scrollbar; the step dots wrap inside the box in the longer languages. ── */

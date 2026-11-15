@@ -3147,6 +3147,7 @@ export function LogEntry({
             rows={editRows}
             receives={fdReceives}
             role={fieldDay?.role}
+            event={fieldDay?.event}
             bands={fieldDay?.bands}
             onSaving={() => {
               saving.current = true
@@ -3223,7 +3224,7 @@ export function LogEntry({
             const fromHistory = fillMarks[f.key]?.value === fdValue(f)
             const fillSource = fillMarks[f.key]?.source
             // What the box holds for this station's role: "County / State" in Illinois.
-            const caption = receivedCaption(f, fieldDay?.role)
+            const caption = receivedCaption(f, fieldDay?.role, fieldDay?.event)
             // The "RST sent" box stands just before the received report, sent then received, as
             // N1MM lays out Snt and Rcv (before the first box, for a contest that receives none).
             const sentHere = sentRstConst !== undefined && i === Math.max(0, fdReceives.findIndex((r) => r.kind === 'rst'))

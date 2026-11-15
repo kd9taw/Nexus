@@ -58,6 +58,7 @@ export function ContestContactEdit({
   rows,
   receives,
   role,
+  event,
   bands,
   onSaving,
   onDone,
@@ -68,6 +69,8 @@ export function ContestContactEdit({
   receives: readonly ContestFieldSpec[]
   /** The session's role, which each box's caption depends on as the strip's does. */
   role?: string
+  /** The session's contest: an operator-built one captions its text boxes. */
+  event?: string
   /** The contest's bands. */
   bands?: readonly string[]
   /** This edit's save is under way: its answer, through `onDone`, says what it did. */
@@ -174,7 +177,7 @@ export function ContestContactEdit({
       </label>
       {receives.map((f) => (
         <label className="contest-edit-field" key={f.key}>
-          <span className="contest-edit-cap">{receivedCaption(f, role)}</span>
+          <span className="contest-edit-cap">{receivedCaption(f, role, event)}</span>
           <input
             className="settings-input mono"
             value={form.fields[f.key] ?? ''}

@@ -25,6 +25,12 @@
 //
 // ⚠️ A CONTEST ALREADY RUNNING ends when a different one starts (`save_switches_contest`); its
 // contacts stay in its own journal. The pick step says so and asks for a tick before it goes on.
+//
+// ⭐ THE OPERATOR'S OWN CONTESTS. The pick step lists them ("Your contests"), each with Edit,
+// Export… and Delete, plus Build your own… and Import…. Building one runs the builder's steps
+// (CustomContestBuilder.tsx) in this same dialog; Save installs it on the station and comes back
+// here with it picked, for the usual exchange, entry, radio and Start. What its exchange has the
+// operator TYPE (an age, a name, text) is asked on the exchange step, into `contestEntered`.
 // ---------------------------------------------------------------------------
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { Dialog } from './ui/Dialog'
@@ -37,10 +43,16 @@ import {
   getFdRuleset,
   getSnapshot,
   getSettings,
+  importCustomContest,
+  listUnusableCustomContests,
   previewFdRuleset,
   type ContestWindow,
+  type CustomContest,
   type FdRulesetDto,
+  type UnusableCustomContest,
 } from '../api'
+import { CustomContestActions, CustomContestBuilder, UnusableContestRow } from './CustomContestBuilder'
+import { enteredSlotLabel, enteredTyped, reloadCustomContests, useCustomContests } from '../features/customContests'
 import { patchSettings } from '../settings/patch'
 import { CONTESTS, contestName, contestRoleWords, isFieldDay } from '../fdEvent'
 import { blockerText, startBlocker } from '../features/contestStart'
@@ -139,6 +151,7 @@ export const SETUP_KEYS: readonly (keyof Settings)[] = [
   'contestOperators',
   'contestEmail',
   'fdPowerMult',
+  'contestEntered',
 ]
 
 type Step = 0 | 1 | 2 | 3 | 4
@@ -239,8 +252,11 @@ export function ContestSetupWizard({
   initial,
   onSaved,
   onWorkIn,
+  editCustom,
 }: {
   onClose: () => void
+  /** Open on the builder, editing this one of the operator's contests (Settings' Edit…). */
+  editCustom?: string
   /** Answers to start from over the saved settings: the quiet line's contest, or what Settings' form
    *  holds and has not saved (only the fields this setup asks, `SETUP_KEYS`). */
   initial?: Partial<Settings>
@@ -270,6 +286,25 @@ export function ContestSetupWizard({
   const [error, setError] = useState<string | null>(null)
   // `stopped`: the save found no contest running (it was stopped elsewhere while this was open).
   const [started, setStarted] = useState<{ event: string; running: boolean; sends: string; stopped?: boolean } | null>(null)
+  // The builder, when it is open: a new contest, or one of the operator's to edit.
+  const [builder, setBuilder] = useState<{ editing?: CustomContest; asNew?: boolean } | null>(null)
+  // A line on the pick step: what an export, import or delete did, or why it was refused.
+  const [note, setNote] = useState<{ text: string; bad?: boolean } | null>(null)
+  // An import whose contest is already here: the file, and the installed contest's name.
+  const [collision, setCollision] = useState<{ text: string; name: string } | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const mine = useCustomContests()
+  // The contest file's entries this version cannot use: shown, with why, until deleted.
+  const [unusable, setUnusable] = useState<UnusableCustomContest[]>([])
+  // A station that cannot answer (an older one, a host with no bridge) lists none.
+  const readUnusable = async () => {
+    try {
+      const u = await listUnusableCustomContests()
+      setUnusable(Array.isArray(u) ? u : [])
+    } catch {
+      // none to show
+    }
+  }
 
   useEffect(() => {
     let live = true
@@ -283,6 +318,11 @@ export function ContestSetupWizard({
     contestWindows()
       .then((w) => live && setWindows(Array.isArray(w) ? w : []))
       .catch(() => live && setWindows([]))
+    void readUnusable()
+    void reloadCustomContests().then((list) => {
+      const own = editCustom ? list.find((c) => c.def.id === editCustom) : undefined
+      if (live && own) setBuilder({ editing: own })
+    })
     return () => {
       live = false
     }
@@ -333,6 +373,15 @@ export function ContestSetupWizard({
 
   const sent = preview?.event === event ? (preview.sentSettings ?? []) : []
   const sendBoxes = sent.map((n) => sendBox(n, event)).filter((b): b is SendBox => b !== null)
+  // What this contest's exchange has the operator TYPE (an own contest's age, name or text), kept per
+  // contest in `contestEntered`, never in its definition.
+  const enteredSlots = preview?.event === event ? (preview.enteredSlots ?? []) : []
+  const entered = merged.contestEntered?.[event] ?? {}
+  const setEntered = (slot: string, value: string) =>
+    setDraft((d) => {
+      const all = { ...(base?.contestEntered ?? {}), ...(d.contestEntered ?? {}) }
+      return { ...d, contestEntered: { ...all, [event]: { ...(all[event] ?? {}), [slot]: value } } }
+    })
   const sentAxes = sent.filter((n) => n in CATEGORY_AXES)
   // The movable boxes this contest really shows: a slot that is not one of its sent location boxes
   // (the VHF grid, from the station's own grid) is not a move the engine takes.
@@ -345,6 +394,7 @@ export function ContestSetupWizard({
     ? [
         ...sendBoxes.filter((b) => !moves[b.key] && !(moves.contestQthState && b.key === 'contestQthCounty')).map((b) => b.label()),
         ...sentAxes.map((n) => CATEGORY_AXES[n].label()),
+        ...enteredSlots.map((slot) => enteredSlotLabel(event, slot)),
       ]
     : []
   const headers = preview?.cabrilloHeaders ?? []
@@ -377,6 +427,7 @@ export function ContestSetupWizard({
       ? (['contestOperators'] as const)
       : []),
     ...(headers.includes('EMAIL') ? (['contestEmail'] as const) : []),
+    ...(enteredSlots.length > 0 ? (['contestEntered'] as const) : []),
   ])
   const shownAnswers = (): Partial<Settings> =>
     Object.fromEntries(Object.entries(draft).filter(([k]) => shownKeys.has(k as keyof Settings))) as Partial<Settings>
@@ -405,7 +456,11 @@ export function ContestSetupWizard({
     const moved = (Object.entries(moves) as [keyof Settings, string][]).filter(
       ([k, slot]) => k in draft && norm(draft[k]) !== norm(liveSlot(slot)),
     )
-    const sentKeys = new Set<keyof Settings>([...sendBoxes.map((b) => b.key), ...sentAxes.map((n) => CATEGORY_AXES[n].key)])
+    const sentKeys = new Set<keyof Settings>([
+      ...sendBoxes.map((b) => b.key),
+      ...sentAxes.map((n) => CATEGORY_AXES[n].key),
+      'contestEntered',
+    ])
     const rest = Object.fromEntries(
       Object.entries(shownAnswers()).filter(([k]) => !sentKeys.has(k as keyof Settings) && k !== 'fdEvent'),
     ) as Partial<Settings>
@@ -529,6 +584,61 @@ export function ContestSetupWizard({
     { key: 'later', label: t('contestSetup.pick.later'), list: soonFirst.filter((c) => !isSoon(c.id)) },
   ]
 
+  // ⭐ IMPORT a definition file: the station reads and checks it. A contest already here by the same
+  // id is the operator's call — Replace it, or Keep both (a fresh id and Cabrillo name).
+  const runImport = async (text: string, onCollision: 'ask' | 'replace' | 'keep_both') => {
+    setNote(null)
+    setCollision(null)
+    try {
+      const def = await importCustomContest(text, onCollision)
+      await reloadCustomContests()
+      set('fdEvent', def.id)
+      setSwitchOk(false)
+      setNote({ text: t('customContest.imported', { contest: def.name }) })
+    } catch (e) {
+      const why = errorText(e)
+      if (why.startsWith('collision:')) setCollision({ text, name: why.slice('collision:'.length) })
+      else setNote({ text: t('customContest.importFailed', { error: why }), bad: true })
+    }
+  }
+  const pickFile = async (file: File | undefined) => {
+    if (!file) return
+    let text: string
+    try {
+      text = await file.text()
+    } catch (e) {
+      setNote({ text: t('customContest.importFailed', { error: errorText(e) }), bad: true })
+      return
+    }
+    await runImport(text, 'ask')
+  }
+
+  if (builder && !started) {
+    return (
+      <Dialog
+        open
+        onOpenChange={(o) => {
+          if (!o) onClose()
+        }}
+        title={builder.editing && !builder.asNew ? t('customContest.titleEdit', { contest: builder.editing.def.name }) : t('customContest.titleNew')}
+        className="contest-setup"
+      >
+        <CustomContestBuilder
+          editing={builder.editing}
+          onAsNew={() => setBuilder((b) => (b ? { ...b, asNew: true } : b))}
+          onCancel={() => setBuilder(null)}
+          onSaved={(id) => {
+            setBuilder(null)
+            setStep(0)
+            set('fdEvent', id)
+            setSwitchOk(false)
+            setNote({ text: t('customContest.saved', { contest: contestName(id) }) })
+          }}
+        />
+      </Dialog>
+    )
+  }
+
   if (started) {
     return (
       <Dialog open onOpenChange={(o) => !o && onClose()} title={title} className="contest-setup">
@@ -618,6 +728,99 @@ export function ContestSetupWizard({
                 </div>
               ),
           )}
+          <div className="contest-setup-group" role="radiogroup" aria-label={t('customContest.pick.yours')} data-custom-contests>
+            <h3 className="wizard-modes-title">{t('customContest.pick.yours')}</h3>
+            {mine.map((c) => {
+              const w = windowOf(c.def.id)
+              const on = c.def.id === event
+              return (
+                <div key={c.def.id} className="cc-pick-row">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    className={`contest-setup-pick${on ? ' sel' : ''}`}
+                    onClick={() => {
+                      set('fdEvent', c.def.id)
+                      setSwitchOk(false)
+                    }}
+                  >
+                    <span className="contest-setup-pick-name">{c.def.name}</span>
+                    {w && (
+                      <span className="contest-setup-pick-when">
+                        {w.startUnix <= now
+                          ? t('contestSetup.pick.running', { end: utcStamp(w.endUnix) })
+                          : t('contestSetup.pick.window', { start: utcStamp(w.startUnix), end: utcStamp(w.endUnix) })}
+                      </span>
+                    )}
+                  </button>
+                  <CustomContestActions
+                    contest={c}
+                    onEdit={() => {
+                      setNote(null)
+                      setBuilder({ editing: c })
+                    }}
+                    onNote={setNote}
+                    onDeleted={(id) => {
+                      // A draft pick of the contest just deleted goes back to the saved pick.
+                      if (draft.fdEvent === id) setDraft(({ fdEvent: _gone, ...rest }) => rest)
+                    }}
+                  />
+                </div>
+              )
+            })}
+            {unusable.map((u) => (
+              <UnusableContestRow key={u.id} entry={u} onNote={setNote} onDeleted={() => void readUnusable()} />
+            ))}
+            <span className="cc-own-tools">
+              <button
+                type="button"
+                className="wizard-skip"
+                onClick={() => {
+                  setNote(null)
+                  setBuilder({})
+                }}
+              >
+                {t('customContest.pick.build')}
+              </button>
+              <button type="button" className="wizard-skip" onClick={() => fileRef.current?.click()}>
+                {t('customContest.pick.import')}
+              </button>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".json"
+                hidden
+                data-import-file
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  e.target.value = ''
+                  void pickFile(file)
+                }}
+              />
+            </span>
+            {collision && (
+              <div className="contest-setup-warn" role="alert" data-collision>
+                <p>{t('customContest.collision', { contest: collision.name })}</p>
+                <span className="cc-own-tools">
+                  <button type="button" className="settings-linkbtn" onClick={() => void runImport(collision.text, 'replace')}>
+                    {t('customContest.collision.replace')}
+                  </button>
+                  <button type="button" className="settings-linkbtn" onClick={() => void runImport(collision.text, 'keep_both')}>
+                    {t('customContest.collision.keepBoth')}
+                  </button>
+                  <button type="button" className="settings-linkbtn" onClick={() => setCollision(null)}>
+                    {t('contestSetup.nav.cancel')}
+                  </button>
+                </span>
+              </div>
+            )}
+            {note && (
+              <p className={note.bad ? 'contest-setup-bad' : 'wizard-field-hint'} role={note.bad ? 'alert' : 'status'}>
+                {note.text}
+              </p>
+            )}
+          </div>
           {switching && runningEvent && (
             <div className="contest-setup-warn" role="status">
               <p>{t('contestSetup.pick.switch', { running: contestName(runningEvent), contest: name })}</p>
@@ -664,6 +867,23 @@ export function ContestSetupWizard({
               </label>
             ))}
             {!changing &&
+              enteredSlots.map((slot) => (
+                <label key={slot} className="wizard-field">
+                  <span>{enteredSlotLabel(event, slot)}</span>
+                  <input
+                    type="text"
+                    className="mono"
+                    inputMode={slot === 'AGE' ? 'numeric' : undefined}
+                    maxLength={slot === 'AGE' ? 2 : 12}
+                    value={entered[slot] ?? ''}
+                    onChange={(e) => setEntered(slot, enteredTyped(slot, e.target))}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  {slot !== 'AGE' && <span className="wizard-field-hint">{t('customContest.entered.oneWord')}</span>}
+                </label>
+              ))}
+            {!changing &&
               sentAxes.map((n) => {
                 const axis = CATEGORY_AXES[n]
                 return <AxisSelect key={n} axis={axis} value={str(axis.key)} onChange={(v) => set(axis.key, v as never)} />
@@ -676,7 +896,8 @@ export function ContestSetupWizard({
               />
             )}
           </div>
-          {!previewing && sendBoxes.length === 0 && sentAxes.length === 0 && (
+          {!changing && enteredSlots.length > 0 && <p className="wizard-field-hint">{t('customContest.entered.hint')}</p>}
+          {!previewing && sendBoxes.length === 0 && sentAxes.length === 0 && enteredSlots.length === 0 && (
             <p className="wizard-sub">{t('contestSetup.sends.none')}</p>
           )}
           {previewing ? (
