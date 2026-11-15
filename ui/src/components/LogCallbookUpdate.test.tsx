@@ -11,6 +11,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { render, cleanup, fireEvent, screen, waitFor, act } from '@testing-library/react'
 import type { CallbookUpdateEnd, CallbookUpdatePreview, CallbookUpdateStatus } from '../api'
 import { subscribeToasts, type Toast } from '../toast'
+import { t } from '../i18n'
 import { setRemoteStation } from '../features/durableStore'
 import { DEFAULT_LOG_QUERY } from '../features/logQuery'
 
@@ -25,7 +26,7 @@ const api = vi.hoisted(() => ({
 vi.mock('../api', () => api)
 
 import { LogTools } from './LogTools'
-import { POLL_MS, useCallbookUpdateEnd } from './LogCallbookUpdate'
+import { POLL_MS, updateOneFromCallbook, useCallbookUpdateEnd } from './LogCallbookUpdate'
 
 let toasts: Toast[] = []
 let unsubscribe = () => {}
@@ -382,5 +383,97 @@ describe('update from callbook', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
     const apply = await screen.findByRole('button', { name: 'Update up to 2 contacts' })
     expect((apply as HTMLButtonElement).disabled).toBe(true)
+  })
+})
+
+// THE LOGBOOK ROW'S "Update from callbook": the tab's own update on one contact — the same preview
+// and start, handed that contact's id, and its end reported by the Logbook as any update's is.
+describe('update one contact from the callbook', () => {
+  const one: CallbookUpdatePreview = { ...preview, ids: ['row-1'], selected: 1, calls: 1, kept: 0, toLookUp: 1, couldChange: 1 }
+
+  it('previews and starts exactly that contact, then follows it to its end', async () => {
+    api.callbookUpdatePreview.mockResolvedValue(one)
+    api.callbookUpdateStart.mockResolvedValue(undefined)
+    const follow = vi.fn()
+    expect(await updateOneFromCallbook('row-1', 'W9ABC', follow)).toBe(true)
+    expect(api.callbookUpdatePreview).toHaveBeenCalledWith({ ids: ['row-1'] })
+    expect(api.callbookUpdateStart).toHaveBeenCalledWith(['row-1'], 1)
+    expect(follow).toHaveBeenCalledTimes(1)
+    expect(toasts.find((x) => x.message === 'Looking up W9ABC in the callbook…')?.kind).toBe('info')
+  })
+
+  it('with no callbook set up, says so and starts nothing', async () => {
+    api.callbookUpdatePreview.mockResolvedValue({ ...one, configured: false })
+    const follow = vi.fn()
+    expect(await updateOneFromCallbook('row-1', 'W9ABC', follow)).toBe(false)
+    expect(api.callbookUpdateStart).not.toHaveBeenCalled()
+    expect(follow).not.toHaveBeenCalled()
+    expect(toasts.find((x) => x.message === 'Set up QRZ or HamQTH in Settings ▸ Logbook ▸ Callbook lookups first.')?.kind).toBe('error')
+  })
+
+  it('a contact with nothing left to fill starts nothing', async () => {
+    api.callbookUpdatePreview.mockResolvedValue({ ...one, couldChange: 0 })
+    expect(await updateOneFromCallbook('row-1', 'W9ABC', vi.fn())).toBe(false)
+    expect(api.callbookUpdateStart).not.toHaveBeenCalled()
+  })
+
+  it('driving another station, it starts nothing', async () => {
+    setRemoteStation(true)
+    api.callbookUpdatePreview.mockResolvedValue(one)
+    expect(await updateOneFromCallbook('row-1', 'W9ABC', vi.fn())).toBe(false)
+    expect(api.callbookUpdateStart).not.toHaveBeenCalled()
+  })
+
+  it('a call the callbook does not know: a notice naming it, not an error and not "nothing changed"', async () => {
+    const end: CallbookUpdateEnd = {
+      stop: 'done', error: null, qrzSaid: null, qrzSkipped: false, unknown: ['W9ABC'], notLookedUp: 0, made: null,
+    }
+    api.callbookUpdateTakeEnd.mockResolvedValueOnce(end)
+    // The toast list outlives a test: only the toasts this end raised are read.
+    const before = new Set(toasts.map((x) => x.id))
+    open()
+    await waitFor(() => expect(toasts.find((x) => x.message === '1 call is not in the callbook: W9ABC')?.kind).toBe('info'))
+    const raised = toasts.filter((x) => !before.has(x.id))
+    expect(raised.map((x) => [x.kind, x.message])).toEqual([['info', '1 call is not in the callbook: W9ABC']])
+  })
+})
+
+// HOW A RUN THAT STOPPED ENDS: the summary names the calls nobody knows and the calls left for
+// another run; a streak of no-record answers says whether it was checked against the station's
+// own call or could not be.
+describe('the end of an update that stopped', () => {
+  async function ended(end: CallbookUpdateEnd): Promise<Toast[]> {
+    api.callbookUpdateTakeEnd.mockResolvedValueOnce(end)
+    api.callbookUpdateStatus.mockResolvedValue({ ...idle, ended: end })
+    const before = new Set(toasts.map((x) => x.id))
+    open()
+    await waitFor(() => expect(toasts.some((x) => !before.has(x.id))).toBe(true))
+    return toasts.filter((x) => !before.has(x.id))
+  }
+  const base: CallbookUpdateEnd = {
+    stop: 'refused', error: null, qrzSaid: null, qrzSkipped: false, unknown: [], notLookedUp: 0, made: null,
+  }
+
+  it('counts the calls not in the callbook and the calls not looked up yet, as a notice', async () => {
+    const raised = await ended({ ...base, stop: 'limit', unknown: ['W9ABC', 'K9AAA'], notLookedUp: 4 })
+    expect(raised.map((x) => [x.kind, x.message])).toEqual([
+      ['info', '2 calls are not in the callbook: W9ABC K9AAA · 4 calls not looked up yet: run the update again to continue.'],
+    ])
+  })
+
+  it('a streak with no station call to check it says so, and how to fix it', async () => {
+    const raised = await ended({ ...base, stop: 'refused-unchecked', notLookedUp: 3 })
+    const said = t('logbook.tools.callbook.end.refusedUnchecked')
+    expect(said).toMatch(/no station call is set/)
+    expect(raised.find((x) => x.message === said)?.kind).toBe('error')
+    await screen.findByText(said)
+  })
+
+  it('a checked refusal says the own call had no record either, and what that means for a call not on QRZ', async () => {
+    const raised = await ended({ ...base, stop: 'refused', notLookedUp: 3 })
+    const said = t('logbook.tools.callbook.end.refused')
+    expect(said).toMatch(/no record for your own call either/)
+    expect(said).toMatch(/If your own call is not listed on QRZ/)
+    expect(raised.find((x) => x.message === said)?.kind).toBe('error')
   })
 })

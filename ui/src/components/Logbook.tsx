@@ -17,7 +17,7 @@ import { useCallMenu } from './useCallMenu'
 import { openBestTimesCard } from './BestTimesCard'
 import { RecentlyDeleted } from './RecentlyDeleted'
 import { LogTools, type LogTool } from './LogTools'
-import { useCallbookUpdateEnd } from './LogCallbookUpdate'
+import { updateOneFromCallbook, useCallbookUpdateEnd } from './LogCallbookUpdate'
 import { sayUndone } from './QsoHistory'
 import { gpuCapableForGlobe } from '../gpu'
 import { GlobeGuard } from './GlobeGuard'
@@ -2276,6 +2276,17 @@ export function Logbook({
           q.call,
           document.querySelector<HTMLElement>('.log-rowmore[data-state="open"], .log-rowmore[aria-expanded="true"]') ?? document.body,
         ),
+    },
+    {
+      // Beside Best times, with the other item that asks about the call: it brings the callbook's
+      // answer IN to this contact, where everything below the separator sends the contact OUT. It
+      // is the Logbook tab's update on this one contact (same lookup, fill, cap and Undo), so a
+      // call the bulk run could not reach can be filled on its own.
+      label: t('logbook.row.menu.callbook'),
+      title: t('logbook.row.callbook.title', { call: q.call }),
+      onSelect: () => {
+        if (ref) void updateOneFromCallbook(ref.id, q.call, followCallbookUpdate)
+      },
     },
     {
       label: t('logbook.row.menu.spot'),

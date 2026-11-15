@@ -36,9 +36,16 @@
 //! - **QRZ refusing** stops the run, [`Stop::Refused`]. QRZ answers an unknown call and a refused
 //!   lookup (its daily limit, a lapsed subscription, a suspended account) the same way, with no
 //!   record, and only its wording differs, which Nexus does not read. One such answer is an
-//!   unknown call. [`REFUSALS`] in a row, with no record from QRZ between them, is read as QRZ
-//!   refusing: the run stops rather than go on asking, and the calls of that streak are left for
-//!   another run instead of being listed as unknown.
+//!   unknown call. [`REFUSALS`] in a row, with no record from QRZ between them, is CHECKED
+//!   ([`Callbook::own_call`]): the station's own call is looked up like any call, paced and
+//!   counted against the cap. QRZ's record for it says QRZ is answering, so the streak was calls it
+//!   does not know: they stay listed and the run goes on, the next check only after another
+//!   streak. No record for it either is read as QRZ refusing, [`Refusal::OwnCallNoRecord`]: the
+//!   run stops rather than go on asking, and the calls of that streak are left for another run
+//!   instead of being listed as unknown. With no own call set the streak stops the run unchecked,
+//!   [`Refusal::NoOwnCall`]. An operator whose own call is not on QRZ keeps that stop: Nexus
+//!   cannot tell their streak from a refusal. (A user report: three unknown calls together
+//!   stopped every run, read as QRZ refusing.)
 //!
 //! Whatever stops the run, the answers already in hand are the run's: the caller fills them as
 //! ONE change, and a later run picks the rest up from the lookup cache at no cost.
@@ -79,6 +86,8 @@ pub struct Asked {
     pub qrz_count: Option<usize>,
     /// QRZ was asked for the call and gave no record for it: an unknown call, or a refusal.
     pub qrz_without_record: bool,
+    /// QRZ itself answered with a record (for the call, or its base), whatever else answered.
+    pub qrz_record: bool,
     /// The sign-ins the lookup made, beyond the lookups [`Callbook::cost`] counted.
     pub logins: usize,
     /// The lookup reached no service that counts ([`Looked::Later`] from callook.info alone): what
@@ -93,6 +102,7 @@ impl Asked {
             looked,
             qrz_count: None,
             qrz_without_record: false,
+            qrz_record: false,
             logins: 0,
             uncounted: false,
         }
@@ -125,6 +135,11 @@ pub trait Callbook {
     fn wait(&mut self, d: Duration) -> bool;
     /// Whether the operator cancelled the run.
     fn cancelled(&self) -> bool;
+    /// The station's own call, looked up to check a streak of no-record answers; `None` when it
+    /// is not set.
+    fn own_call(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Why a run ended.
@@ -138,7 +153,16 @@ pub enum Stop {
     /// A lookup failed: the reason.
     Failed(String),
     /// QRZ answered [`REFUSALS`] calls in a row with no record: read as a refusal.
-    Refused,
+    Refused(Refusal),
+}
+
+/// Why a streak of no-record answers was read as QRZ refusing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// QRZ had no record for the station's own call either.
+    OwnCallNoRecord,
+    /// No own call is set, so the streak could not be checked.
+    NoOwnCall,
 }
 
 /// How far a run has got.
@@ -201,28 +225,13 @@ pub fn look_up(
             progress(&out.progress);
             continue;
         }
-        let spent = callbook.spent();
-        out.progress.spent = spent;
-        let cost = callbook.cost(call);
-        if spent + cost > limits.daily_cap {
-            out.stop = Stop::Limit;
-            break;
-        }
-        if !callbook.wait(limits.pace) {
-            out.stop = Stop::Cancelled;
-            break;
-        }
-        // Noted before it is made: a lookup that fails was still a request.
-        callbook.note_spent(cost);
-        let asked = callbook.live(call);
-        out.progress.looked_up += 1;
-        if asked.uncounted {
-            callbook.forget_spent(cost);
-        }
-        if asked.logins > 0 {
-            callbook.note_spent(asked.logins);
-        }
-        out.progress.spent = callbook.spent();
+        let asked = match ask_network(call, limits, callbook, &mut out.progress) {
+            Ok(asked) => asked,
+            Err(stop) => {
+                out.stop = stop;
+                break;
+            }
+        };
         if asked.qrz_without_record {
             streak += 1;
         } else {
@@ -250,16 +259,81 @@ pub fn look_up(
         }
         out.progress.done += 1;
         if streak >= REFUSALS {
-            // Refused, not unknown: those calls are left for another run.
-            out.unknown.retain(|c| !streak_unknown.contains(c));
-            out.progress.done -= streak_unknown.len();
-            out.stop = Stop::Refused;
-            progress(&out.progress);
-            break;
+            match check_streak(limits, callbook, &mut out.progress) {
+                // Genuine misses: they stay listed, and the next check only after another streak.
+                None => {
+                    streak = 0;
+                    streak_unknown.clear();
+                }
+                // Refused (or the check could not be made): not unknown, those calls are left for
+                // another run.
+                Some(stop) => {
+                    out.unknown.retain(|c| !streak_unknown.contains(c));
+                    out.progress.done -= streak_unknown.len();
+                    out.stop = stop;
+                    progress(&out.progress);
+                    break;
+                }
+            }
         }
         progress(&out.progress);
     }
     out
+}
+
+/// One network lookup of `call`, held to the cap and the pace and noted in the tally, as every
+/// network lookup is: `Err` is why the run stops before it is made.
+fn ask_network(
+    call: &str,
+    limits: Limits,
+    callbook: &mut impl Callbook,
+    progress: &mut Progress,
+) -> Result<Asked, Stop> {
+    let spent = callbook.spent();
+    progress.spent = spent;
+    let cost = callbook.cost(call);
+    if spent + cost > limits.daily_cap {
+        return Err(Stop::Limit);
+    }
+    if !callbook.wait(limits.pace) {
+        return Err(Stop::Cancelled);
+    }
+    // Noted before it is made: a lookup that fails was still a request.
+    callbook.note_spent(cost);
+    let asked = callbook.live(call);
+    progress.looked_up += 1;
+    if asked.uncounted {
+        callbook.forget_spent(cost);
+    }
+    if asked.logins > 0 {
+        callbook.note_spent(asked.logins);
+    }
+    progress.spent = callbook.spent();
+    Ok(asked)
+}
+
+/// ★ A streak of [`REFUSALS`] no-record answers, checked: the station's own call is looked up
+/// like any call (paced, capped, counted), and QRZ's own record for it says QRZ is answering, so
+/// the streak was calls it does not know (`None`: go on). Anything else stops the run: no record
+/// from QRZ (read as refusing, as before the check), no own call to check with, or the check's
+/// own lookup failing, passing the cap or being cancelled.
+fn check_streak(
+    limits: Limits,
+    callbook: &mut impl Callbook,
+    progress: &mut Progress,
+) -> Option<Stop> {
+    let Some(own) = callbook.own_call() else {
+        return Some(Stop::Refused(Refusal::NoOwnCall));
+    };
+    match ask_network(&own, limits, callbook, progress) {
+        Err(stop) => Some(stop),
+        Ok(Asked {
+            looked: Looked::Failed(why),
+            ..
+        }) => Some(Stop::Failed(why)),
+        Ok(asked) if asked.qrz_record => None,
+        Ok(_) => Some(Stop::Refused(Refusal::OwnCallNoRecord)),
+    }
 }
 
 #[cfg(test)]
@@ -292,6 +366,8 @@ mod tests {
         logins: usize,
         /// Calls only a service that is down would answer: left for later, uncounted.
         down: Vec<&'static str>,
+        /// The station's own call, the probe of a no-record streak; `None`: not set.
+        own: Option<&'static str>,
         cancelled: Cell<bool>,
     }
 
@@ -348,6 +424,7 @@ mod tests {
             };
             Asked {
                 qrz_without_record: !self.known.contains(&call) && !self.failing.contains(&call),
+                qrz_record: self.known.contains(&call),
                 looked,
                 qrz_count: count,
                 logins: self.logins,
@@ -363,6 +440,9 @@ mod tests {
         }
         fn cancelled(&self) -> bool {
             self.cancelled.get()
+        }
+        fn own_call(&self) -> Option<String> {
+            self.own.map(str::to_string)
         }
     }
 
@@ -580,7 +660,7 @@ mod tests {
             &mut cb,
             &mut |_| {},
         );
-        assert_eq!(run.stop, Stop::Refused);
+        assert_eq!(run.stop, Stop::Refused(Refusal::NoOwnCall));
         let asked: Vec<&str> = cb.lookups.iter().map(|(c, _)| c.as_str()).collect();
         assert_eq!(asked, ["A1A", "B1B", "C1C", "D1D"], "F1F never asked");
         assert!(
@@ -657,5 +737,165 @@ mod tests {
         assert_eq!(run.answers.len(), 2);
         assert_eq!(run.progress.done, 2, "W1AW left for another run");
         assert_eq!(cb.spent(), 2, "W1AW's lookup not counted");
+    }
+
+    /// The operator's report: a few calls QRZ does not know, in a row, stopped the whole update
+    /// as "QRZ refusing". QRZ words a miss and a refusal alike and Nexus does not read the words,
+    /// so the streak is CHECKED instead: the station's own call is looked up, and a record for it
+    /// says QRZ is answering, so the streak was genuine misses.
+    fn probing(own: Option<&'static str>, known: Vec<&'static str>) -> Script {
+        Script {
+            own,
+            known,
+            ..Script::default()
+        }
+    }
+
+    fn asked_calls(cb: &Script) -> Vec<&str> {
+        cb.lookups.iter().map(|(c, _)| c.as_str()).collect()
+    }
+
+    /// ★ THREE GENUINE UNKNOWNS: the probe finds the station's own call, the calls are listed
+    /// unknown and the run goes on to the end.
+    #[test]
+    fn a_streak_the_probe_shows_genuine_is_listed_and_the_run_goes_on() {
+        let mut cb = probing(Some("W9OWN"), vec!["A1A", "F1F", "W9OWN"]);
+        let run = look_up(
+            &calls(&["A1A", "B1B", "C1C", "D1D", "F1F"]),
+            limits(250),
+            &mut cb,
+            &mut |_| {},
+        );
+        assert_eq!(run.stop, Stop::Done);
+        assert_eq!(
+            asked_calls(&cb),
+            ["A1A", "B1B", "C1C", "D1D", "W9OWN", "F1F"]
+        );
+        assert_eq!(run.unknown, ["B1B", "C1C", "D1D"]);
+        assert_eq!(run.answers.len(), 2);
+        assert_eq!(run.progress.done, 5);
+    }
+
+    /// ★ The probe is not made on every miss after it: the streak starts again, so the next probe
+    /// comes only after another [`REFUSALS`].
+    #[test]
+    fn the_probe_comes_once_per_streak() {
+        let mut cb = probing(Some("W9OWN"), vec!["W9OWN"]);
+        let run = look_up(
+            &calls(&["B1B", "C1C", "D1D", "E1E", "G1G", "H1H", "J1J"]),
+            limits(250),
+            &mut cb,
+            &mut |_| {},
+        );
+        assert_eq!(run.stop, Stop::Done);
+        assert_eq!(
+            asked_calls(&cb),
+            ["B1B", "C1C", "D1D", "W9OWN", "E1E", "G1G", "H1H", "W9OWN", "J1J"]
+        );
+        assert_eq!(run.unknown.len(), 7);
+    }
+
+    /// ★ THE PROBE FINDS NO RECORD for the station's own call either: QRZ is read as refusing and
+    /// the run stops as before, the streak's calls left for another run.
+    #[test]
+    fn a_streak_the_probe_cannot_clear_stops_the_run() {
+        let mut cb = probing(Some("W9OWN"), vec!["A1A", "F1F"]);
+        let run = look_up(
+            &calls(&["A1A", "B1B", "C1C", "D1D", "F1F"]),
+            limits(250),
+            &mut cb,
+            &mut |_| {},
+        );
+        assert_eq!(run.stop, Stop::Refused(Refusal::OwnCallNoRecord));
+        assert_eq!(asked_calls(&cb), ["A1A", "B1B", "C1C", "D1D", "W9OWN"]);
+        assert!(
+            run.unknown.is_empty(),
+            "left for another run: {:?}",
+            run.unknown
+        );
+        assert_eq!(run.progress.done, 1);
+    }
+
+    /// A record from another callbook for the station's own call says nothing about QRZ: only
+    /// QRZ's own record clears the streak.
+    #[test]
+    fn only_qrzs_record_for_the_own_call_clears_the_streak() {
+        let mut cb = Script {
+            own: Some("W9OWN"),
+            elsewhere: vec!["W9OWN"],
+            ..Script::default()
+        };
+        let run = look_up(
+            &calls(&["B1B", "C1C", "D1D", "F1F"]),
+            limits(250),
+            &mut cb,
+            &mut |_| {},
+        );
+        assert_eq!(run.stop, Stop::Refused(Refusal::OwnCallNoRecord));
+    }
+
+    /// ★ THE PROBE COUNTS AGAINST THE CAP: noted like any lookup; and a probe that would pass the
+    /// cap is not made, the run stopping at the limit.
+    #[test]
+    fn the_probe_counts_against_the_cap() {
+        let mut cb = probing(Some("W9OWN"), vec!["W9OWN"]);
+        let run = look_up(
+            &calls(&["B1B", "C1C", "D1D", "E1E"]),
+            limits(250),
+            &mut cb,
+            &mut |_| {},
+        );
+        assert_eq!(run.stop, Stop::Done);
+        assert_eq!(cb.spent(), 5, "four calls and the probe");
+        assert_eq!(run.progress.spent, 5);
+
+        let mut cb = probing(Some("W9OWN"), vec!["W9OWN"]);
+        let run = look_up(
+            &calls(&["B1B", "C1C", "D1D", "E1E"]),
+            limits(3),
+            &mut cb,
+            &mut |_| {},
+        );
+        assert_eq!(run.stop, Stop::Limit);
+        assert_eq!(
+            asked_calls(&cb),
+            ["B1B", "C1C", "D1D"],
+            "no probe past the cap"
+        );
+        assert_eq!(cb.spent(), 3);
+    }
+
+    /// ★ NO OWN CALL SET: nothing to probe with, so the streak stops the run as before, and the
+    /// stop says it could not be checked.
+    #[test]
+    fn with_no_own_call_the_streak_stops_the_run_unchecked() {
+        let mut cb = probing(None, vec!["A1A", "F1F"]);
+        let run = look_up(
+            &calls(&["A1A", "B1B", "C1C", "D1D", "F1F"]),
+            limits(250),
+            &mut cb,
+            &mut |_| {},
+        );
+        assert_eq!(run.stop, Stop::Refused(Refusal::NoOwnCall));
+        assert_eq!(asked_calls(&cb), ["A1A", "B1B", "C1C", "D1D"]);
+    }
+
+    /// A probe that fails (a sign-in turned down, the network down) is the failure: the run
+    /// stops on it as on any failed lookup.
+    #[test]
+    fn a_failed_probe_stops_the_run_as_a_failure() {
+        let mut cb = Script {
+            own: Some("W9OWN"),
+            failing: vec!["W9OWN"],
+            ..Script::default()
+        };
+        let run = look_up(
+            &calls(&["B1B", "C1C", "D1D", "F1F"]),
+            limits(250),
+            &mut cb,
+            &mut |_| {},
+        );
+        assert_eq!(run.stop, Stop::Failed("QRZ could not be reached".into()));
+        assert!(run.unknown.is_empty());
     }
 }
