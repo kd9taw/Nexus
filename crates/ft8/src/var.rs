@@ -172,10 +172,41 @@ unsafe extern "C" fn on_var_decode(
 }
 
 fn from_var_record(r: &Ft8VarDecodeT) -> Decode {
-    let d = from_record(&r.rec);
     Decode {
-        unchecked: r.unchecked != 0 || noise_shape(&d.message),
-        ..d
+        unchecked: r.unchecked != 0,
+        ..from_record(&r.rec)
+    }
+}
+
+/// A decode as Nexus hands it on: marked unchecked as the decoder said (FT8S/FT8SD, matched
+/// filters), and also when its text is a shape noise makes ([`noise_shape`], and with SWL on
+/// [`swl_noise_shape`]).
+fn marked(d: Decode, swl: bool) -> Decode {
+    let unchecked = d.unchecked || noise_shape(&d.message) || (swl && swl_noise_shape(&d.message));
+    Decode { unchecked, ..d }
+}
+
+/// What SWL mode's wider search (JTDX's, not WSJT-X's) takes from noise and stations do not send,
+/// though it passes the CRC. In 3000 fresh AP-armed noise periods it decoded four such lines that
+/// WSJT-X's decoder (no SWL) does not:
+/// - telemetry (i3=0 n3=5), shown as one word of up to 18 hex digits (`4BDB9B0B2A69EBA968`); a
+///   free-text line cannot be one hex word of 10 or more characters (free text holds 13, and no
+///   station sends that), so 10-18 hex digits is telemetry;
+/// - a nonstandard call beside an unresolved hash (`<...> K38MCFJYGQX 73`): the i3=4 shape, with
+///   the one call that is not hashed failing WSJT-X's standard-call shape.
+fn swl_noise_shape(message: &str) -> bool {
+    let words: Vec<&str> = message.split_whitespace().collect();
+    let hex = |w: &str| {
+        w.bytes()
+            .all(|c| c.is_ascii_digit() || (b'A'..=b'F').contains(&c))
+    };
+    let nonstd =
+        |w: &str| w != "<...>" && !std_call(w.trim_start_matches('<').trim_end_matches('>'));
+    match words.as_slice() {
+        [w] => (10..=18).contains(&w.len()) && hex(w),
+        [a, b, ..] if *a == "<...>" => nonstd(b),
+        [a, b, ..] if *b == "<...>" => nonstd(a),
+        _ => false,
     }
 }
 
@@ -354,6 +385,7 @@ pub fn decode_frame_var_raw(
     let (tx, rx) = std::sync::mpsc::channel();
     let iwave = iwave[..crate::NMAX].to_vec();
     let params = *p;
+    let swl = p.lswl != 0;
     on_decoder_thread(Box::new(move || {
         let mut reply = tx;
         let mut out = vec![Ft8VarDecodeT::default(); crate::MAX_DECODES];
@@ -379,6 +411,7 @@ pub fn decode_frame_var_raw(
             .expect("the ft8var decoder thread died mid-decode")
         {
             Reply::Found(d) => {
+                let d = marked(d, swl);
                 if panic.is_none() {
                     if let Err(e) =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| found(&d)))
@@ -391,7 +424,7 @@ pub fn decode_frame_var_raw(
                 if let Some(e) = panic {
                     std::panic::resume_unwind(e);
                 }
-                return all;
+                return all.into_iter().map(|d| marked(d, swl)).collect();
             }
         }
     }
@@ -457,7 +490,55 @@ pub fn var_slices(nfa: i32, nfb: i32, n: usize) -> Vec<(i32, i32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::noise_shape;
+    use super::{marked, noise_shape, swl_noise_shape};
+    use crate::Decode;
+
+    /// SWL mode's wider search found these in fresh noise (seeds 50000+), each passing the CRC:
+    /// telemetry (i3=0 n3=5, shown as up to 18 hex digits) and a nonstandard call beside an
+    /// unresolved hash. Marked only with SWL on: WSJT-X has no SWL, and without it the decoder is
+    /// WSJT-X's.
+    #[test]
+    fn swl_noise_shapes_are_marked_with_swl_on_only() {
+        for m in [
+            "4BDB9B0B2A69EBA968",
+            "717884D34F20EDF218",
+            "5E3E3B54158FF9E672",
+            "3E3B54158FF9E672",
+            "<...> K38MCFJYGQX 73",
+            "<...> K38MCFJYGQX",
+            "K38MCFJYGQX <...> RR73",
+        ] {
+            assert!(swl_noise_shape(m), "{m:?} is marked under SWL");
+            let d = |unchecked| Decode {
+                message: m.into(),
+                sync: 0.0,
+                snr: -23,
+                dt: 0.0,
+                freq: 1000.0,
+                nap: 0,
+                qual: 1.0,
+                unchecked,
+            };
+            assert!(marked(d(false), true).unchecked, "{m:?}: SWL on");
+            assert!(
+                !marked(d(false), false).unchecked,
+                "{m:?}: SWL off leaves it"
+            );
+        }
+        for m in [
+            "<...> W9XYZ -10",
+            "K1ABC <...> RR73",
+            "<...> W9XYZ/P R-05",
+            "CQ W9XYZ EN37",
+            "K1ABC W9XYZ EN37",
+            "TNX BOB 73 GL",
+            "73",
+            "CAFE",
+            "",
+        ] {
+            assert!(!swl_noise_shape(m), "{m:?} is not marked under SWL");
+        }
+    }
 
     /// The shapes the 3000-period AP-armed noise check decoded (every one CRC-checked, and
     /// WSJT-X's own `jt9 -M` decodes the same): a line whose two calls are both unresolved hashes,

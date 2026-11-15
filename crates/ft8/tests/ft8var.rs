@@ -412,3 +412,27 @@ fn noise_decodes_of_a_shape_no_station_sends_are_marked() {
         );
     }
 }
+
+/// Pure noise (seeds 50365 and 52560 of the review's fresh noise check) from which SWL mode's
+/// wider search takes a CRC-passing message: telemetry, and a nonstandard call beside an unresolved
+/// hash. Both are marked unchecked with SWL on.
+#[test]
+fn swl_noise_decodes_of_a_shape_no_station_sends_are_marked() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for (file, want) in [
+        ("ft8var_noise_swl_telemetry.wav", "4BDB9B0B2A69EBA968"),
+        ("ft8var_noise_swl_nonstd_hash.wav", "<...> K38MCFJYGQX 73"),
+    ] {
+        let wav = read_wav_i16(&format!(
+            "{}/tests/fixtures/{file}",
+            env!("CARGO_MANIFEST_DIR")
+        ));
+        fresh_var_state();
+        let mut p = jt9_params();
+        p.lswl = 1;
+        let d = var_decode(wav, p);
+        let found: Vec<_> = d.iter().filter(|d| d.message.trim() == want).collect();
+        assert_eq!(found.len(), 1, "{file}: SWL decodes {want:?}: {d:?}");
+        assert!(found[0].unchecked, "{file}: marked");
+    }
+}
