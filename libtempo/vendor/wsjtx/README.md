@@ -26,6 +26,10 @@ and `qra/qracodes/qra13_64_64_irr_e.c`, and the noise generator `qra/q65/normrnd
 `ft8/ft8_testmsg.f90` is used by nothing. `tests/` holds 19 of upstream's Fortran unit tests
 for the JTTY files and the message list one of them reads; they are not compiled into
 `libtempo`.
+Since then the JTDX-style decoders added 70 `.f90` files: `lib/ft8var/` (53, WSJT-X 3.0.2's
+port of JTDX's FT8 decoder) with `lib/fftw3.f90`, `lib/ft8/ft8_a8d.f90`, `lib/jt65_mod6.f90` and
+`lib/prog_args.f90`, and `lib/ft4jtdx/` (13, JTDX's FT4 decoder; see below), so `lib/` now holds
+**289 source files** (259 `.f90`, 28 `.c`, 2 `.cpp`) plus the same 22 headers.
 
 **None of WSJT-X's Qt/GUI code is included, and that claim is about THIS DIRECTORY.**
 Measured: zero occurrences of `#include <Q…>`, `QString`, `QRegularExpression`, `QObject`,
@@ -61,6 +65,36 @@ is K1JT's `sync4d` with a single IU8LMC change, and the decoder chain
 (`ft2_triggered_decode`, `decode174_91_ft2`, `get_ft2_bitmetrics`, `ft2_channel_est`,
 `ft2_params`) is IU8LMC's. `gfsk_pulse.f90` in the same directory predates this and is
 upstream's. Same license terms as the rest of the tree (GPL-3.0-only, no per-file headers).
+
+## JTDX FT4 — `lib/ft4jtdx/`, vendored from JTDX
+
+`lib/ft4jtdx/` is **JTDX's FT4 decoder, not WSJT-X's**: JTDX 2.2.159
+(<https://github.com/jtdx-project/jtdx>, `master` commit `2a0e2bea8`, 2022-03-01), by Igor
+Chernikov UA3DJY, Arvo Järve ES1JA and the JTDX team, a GPL-3.0 fork of WSJT-X (its COPYING grants
+no later version, so GPL-3.0-only here). Nexus links it as the JTDX-style FT4 decoder, beside
+WSJT-X's `lib/ft4/` decoder, which stays as the Standard one; `libtempo/ft4jtdx_cabi.f90` wraps it.
+Provenance and the marked modifications are in `NOTICE`.
+
+| File | JTDX source | Changed for Nexus |
+|---|---|---|
+| `ft4_decode_jtdx.f90` | `lib/ft4_decode.f90` | yes: renames, call sites, AP-cache module, callback (see its header) |
+| `ft4_params.f90` | `lib/ft4/ft4_params.f90` | no (include-only) |
+| `getcandidates4_jtdx.f90` | `lib/ft4/getcandidates4.f90` | renamed only |
+| `ft4_baseline_jtdx.f90` | `lib/ft4/ft4_baseline.f90` | renamed only |
+| `ft4_downsample_jtdx.f90` | `lib/ft4/ft4_downsample.f90` | renamed; state moved into a module |
+| `sync4d_jtdx.f90` | `lib/ft4/sync4d.f90` | renamed only |
+| `get_ft4_bitmetrics_jtdx.f90` | `lib/ft4/get_ft4_bitmetrics.f90` | renamed only |
+| `subtractft4_jtdx.f90` | `lib/ft4/subtractft4.f90` | renamed; COMMON block renamed |
+| `bpdecode174_91_jtdx.f90` | `lib/ft8v2/bpdecode174_91.f90` | renamed only |
+| `normalizebmet_jtdx.f90` | `lib/ft8b.f90`, the `normalizebmet` routine only | renamed |
+| `osd4_174_91.f90` | `lib/ft4/osd4_174_91.f90` | no |
+| `ldpc_174_91_c_generator.f90`, `ldpc_174_91_c_reordered_parity.f90` | `lib/ft4/` | no (include-only) |
+
+"Renamed" means the routine names that WSJT-X's FT4 decoder also uses carry a `_jtdx` suffix, so
+both decoders link into one library; each such file has a MODIFIED FOR NEXUS header, and the
+notes of Igor UA3DJY that several files carry are kept verbatim below it. The decoder's
+false-decode checks are the `lib/ft8var` copies (`chkfalse8var`, `chkflscallvar`, `msgparservar`),
+which share one callsign database, ALLCALL7.TXT.
 
 ## JTTY — vendored from WSJT-X
 

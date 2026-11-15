@@ -27,7 +27,12 @@
  * PASS iff zero decodes across all N frames. Any decode is printed in full so a
  * regression names the message, frequency and AP type that produced it.
  *
- * Usage: ft4_false_alarm [N]   (default below; raise it when chasing a rate)
+ * The JTDX-style decoder (ft4_jtdx_decode_frame_cb) runs the same frames when the second argument
+ * is `jtdx`, AP unrestricted and SWL off. Its false-decode checks need the callsign database, so
+ * a run without one measures the decoder with those checks passing everything (the database
+ * marked invalid), i.e. the decoder alone: the stricter case for this gate.
+ *
+ * Usage: ft4_false_alarm [N] [jtdx]   (N default below; raise it when chasing a rate)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,6 +62,7 @@ static void trim(char *s) {
 
 int main(int argc, char **argv) {
     int nframes = DEFAULT_FRAMES;
+    const int jtdx = (argc > 2 && strcmp(argv[2], "jtdx") == 0);
     if (argc > 1) {
         nframes = atoi(argv[1]);
         if (nframes <= 0) {
@@ -73,9 +79,9 @@ int main(int argc, char **argv) {
     const char *hiscall = "W1AW";
     const int   nfqso   = 1500;
 
-    printf("FT4 false-alarm test: %d AWGN-only frames, ndepth=3, "
+    printf("FT4 false-alarm test (%s decoder): %d AWGN-only frames, ndepth=3, "
            "AP armed (mycall=%s hiscall=%s nfqso=%d Hz, nqso_progress cycling 0-5)\n",
-           nframes, mycall, hiscall, nfqso);
+           jtdx ? "JTDX-style" : "Standard", nframes, mycall, hiscall, nfqso);
 
     int total_false = 0;
     int frames_with_decodes = 0;
@@ -92,9 +98,13 @@ int main(int argc, char **argv) {
         int nqso_progress = f % 6;
         /* lapcqonly=0: AP unrestricted (all hypotheses), the worst case this
          * gate exists to measure. Do not narrow it to shrink a regression. */
-        int ndec = ft4_decode_frame(iwave, 200, 2900, 3, mycall, hiscall,
-                                    nqso_progress, nfqso, /*lapcqonly*/0,
-                                    out, MAXOUT);
+        int ndec = jtdx
+            ? ft4_jtdx_decode_frame_cb(iwave, 200, 2900, 3, mycall, hiscall,
+                                       nqso_progress, nfqso, /*stophint*/0, /*swl*/0,
+                                       out, MAXOUT, NULL, NULL)
+            : ft4_decode_frame(iwave, 200, 2900, 3, mycall, hiscall,
+                               nqso_progress, nfqso, /*lapcqonly*/0,
+                               out, MAXOUT);
         if (ndec < 0) {
             printf("RESULT: FAIL (decoder error on frame %d, ndec=%d)\n", f, ndec);
             return 1;

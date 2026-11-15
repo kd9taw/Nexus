@@ -996,6 +996,33 @@ extern "C" {
         user: *mut c_void,
     ) -> c_int;
 
+    /// The JTDX-style FT4 decoder (JTDX 2.2.159's, `ft4jtdx_cabi.f90`) over the same frame, with
+    /// the same record and callback as [`ft4_decode_frame_cb`]. `stophint` nonzero restricts AP
+    /// to the CQ hypothesis; `swl` nonzero is JTDX's SWL mode (a wider DT search window).
+    /// Returns the number of decodes found, which may exceed `max_out`
+    /// (`out` holds the first `max_out`). It carries one value from period to period, the
+    /// running average DT its search is centred on; [`ft4_jtdx_reset`] clears it.
+    pub fn ft4_jtdx_decode_frame_cb(
+        iwave: *const i16, // [FT4_NMAX]
+        nfa: c_int,
+        nfb: c_int,
+        ndepth: c_int,
+        mycall: *const c_char,
+        hiscall: *const c_char,
+        nqso_progress: c_int,
+        nfqso: c_int,
+        stophint: c_int,
+        swl: c_int,
+        out: *mut Ft4DecodeT,
+        max_out: c_int,
+        cb: Option<DecodeCallback>,
+        user: *mut c_void,
+    ) -> c_int;
+
+    /// What JTDX does on a mode change: the JTDX-style FT4 decoder's running average DT starts
+    /// again from 0.
+    pub fn ft4_jtdx_reset();
+
     /// Encode a message into the 160 FST4 channel symbols (values 0..3).
     ///
     /// `iwspr`: 0 = FST4 (77-bit QSO message, LDPC(240,101)), 1 = FST4W (50-bit

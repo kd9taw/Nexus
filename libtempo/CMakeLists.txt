@@ -231,6 +231,24 @@ set(LIBTEMPO_SOURCES
     ${LIB}/ft4/get_ft4_bitmetrics.f90     # bit metrics (calls normalizebmet from ft8b)
     ${LIB}/ft4/subtractft4.f90            # signal subtraction (calls gen_ft4wave)
 
+    # --- FT4 JTDX-style decode (lib/ft4jtdx, JTDX 2.2.159's FT4 decoder) : Nexus ---
+    #     Linked beside the Standard decoder above; every routine whose name the Standard one
+    #     also uses carries a _jtdx suffix. ft4_params.f90 (JTDX's frame constants) and the two
+    #     LDPC tables are include-only. Needs the ft8var modules ft8_mod1 / ft4_mod1 /
+    #     jt65_mod9 and the checks chkfalse8var / chkflscallvar / msgparservar. Reuses
+    #     twkfreq1, encode174_91, chkcrc14a, gen_ft4wave and get_ft4_tones_from_77bits above.
+    ${CMAKE_CURRENT_SOURCE_DIR}/ft4jtdx_cabi.f90
+    ${LIB}/ft4jtdx/ft4_decode_jtdx.f90        # module ft4_decode_jtdx (+ its AP-cache module)
+    ${LIB}/ft4jtdx/getcandidates4_jtdx.f90    # candidate search (calls ft4_baseline_jtdx)
+    ${LIB}/ft4jtdx/ft4_baseline_jtdx.f90      # spectral baseline
+    ${LIB}/ft4jtdx/ft4_downsample_jtdx.f90    # dd4 -> complex baseband (+ its state module)
+    ${LIB}/ft4jtdx/sync4d_jtdx.f90            # sync power metric
+    ${LIB}/ft4jtdx/get_ft4_bitmetrics_jtdx.f90 # bit metrics (calls normalizebmet_jtdx)
+    ${LIB}/ft4jtdx/normalizebmet_jtdx.f90     # JTDX's RMS bit-metric normalisation
+    ${LIB}/ft4jtdx/subtractft4_jtdx.f90       # signal subtraction (calls gen_ft4wave)
+    ${LIB}/ft4jtdx/bpdecode174_91_jtdx.f90    # belief propagation, 40 iterations
+    ${LIB}/ft4jtdx/osd4_174_91.f90            # ordered-statistics decoding, depth 3
+
     # --- FST4 native decode (lib/fst4 + fst4_decode.f90) : Nexus, RX-ONLY ---
     #     Same clean OO+callback shape as FT4 (no nzhsym/a7/shmem), wrapped behind
     #     a C ABI in fst4_cabi.f90. Decode only: there is no fst4_encode /

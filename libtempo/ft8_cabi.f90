@@ -46,6 +46,7 @@ module ft8_cabi
   use ft8_a7, only: cxv_a7_dt0 => dt0, cxv_a7_f0 => f0, cxv_a7_msg0 => msg0
   use ft8_downsample_state,       only: cxv_ft8_spec => cx
   use ft4_downsample_state,       only: cxv_ft4_spec => cx
+  use ft4_downsample_jtdx_state,  only: cxv_ft4jtdx_spec => cx
   use tempofast_downsample_state, only: cxv_ft1_spec => cx
   use ir_harq_combine_mod,        only: harq_slot, cxv_slots => slots, &
        cxv_harq_init => harq_initialized
@@ -104,6 +105,8 @@ module ft8_cabi
   use ft4_decode_apstate, only: cxv_ft4_apbits => apbits,               &
        cxv_ft4_apmy_ru => apmy_ru, cxv_ft4_aphis_fd => aphis_fd,        &
        cxv_ft4_mycall0 => mycall0, cxv_ft4_hiscall0 => hiscall0
+  use ft4_decode_jtdx_apstate, only: cxv_ft4jtdx_apbits => apbits,      &
+       cxv_ft4jtdx_mycall0 => mycall0, cxv_ft4jtdx_hiscall0 => hiscall0
   use ft1_decode_apstate, only: cxv_ft1_apbits => apbits,               &
        cxv_ft1_mycall0 => mycall0, cxv_ft1_hiscall0 => hiscall0
   implicit none
@@ -295,6 +298,16 @@ module ft8_cabi
      integer           :: ft4_aphis_fd(size(cxv_ft4_aphis_fd))
      character(len=len(cxv_ft4_mycall0))  :: ft4_mycall0
      character(len=len(cxv_ft4_hiscall0)) :: ft4_hiscall0
+     ! --- FT4, JTDX-style decoder (vendor/wsjtx/lib/ft4jtdx) ------------------
+     ! The same two things as the Standard FT4 decoder above, in the JTDX copies: the wideband
+     ! spectrum ft4_downsample_jtdx keeps between the candidates of one subtraction pass, and the
+     ! AP codeword cache with its callsign key (moving as one unit, for the same reason). Its
+     ! third piece of cross-period state, the running average DT, is ft8_mod1's avexdt and
+     ! travels with the JTDX-style FT8 decoder's rows.
+     complex           :: ft4jtdx_spec(size(cxv_ft4jtdx_spec))
+     integer           :: ft4jtdx_apbits(size(cxv_ft4jtdx_apbits))
+     character(len=len(cxv_ft4jtdx_mycall0))  :: ft4jtdx_mycall0
+     character(len=len(cxv_ft4jtdx_hiscall0)) :: ft4jtdx_hiscall0
      ! --- FT1 / TempoFast --------------------------------------------------
      complex           :: ft1_spec(size(cxv_ft1_spec))
      ! ft1_decode_apstate: same cache and same key, for TempoFast.
@@ -1442,6 +1455,11 @@ contains
     call ctx_move(p%ft4_aphis_fd,  cxv_ft4_aphis_fd, mode, 0)
     call ctx_move(p%ft4_mycall0,   cxv_ft4_mycall0,  mode, ' ')
     call ctx_move(p%ft4_hiscall0,  cxv_ft4_hiscall0, mode, ' ')
+    ! --- FT4, JTDX-style ---
+    call ctx_move(p%ft4jtdx_spec,     cxv_ft4jtdx_spec,     mode, (0.0, 0.0))
+    call ctx_move(p%ft4jtdx_apbits,   cxv_ft4jtdx_apbits,   mode, 0)
+    call ctx_move(p%ft4jtdx_mycall0,  cxv_ft4jtdx_mycall0,  mode, ' ')
+    call ctx_move(p%ft4jtdx_hiscall0, cxv_ft4jtdx_hiscall0, mode, ' ')
     ! --- FT1 / TempoFast ---
     call ctx_move(p%ft1_spec,      cxv_ft1_spec,  mode, (0.0, 0.0))
     call ctx_move(ctx_slots,       cxv_slots,     mode)
