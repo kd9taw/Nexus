@@ -535,12 +535,14 @@ pub struct FdRuleset {
     /// ⭐ **The operator built this contest** ([`custom`]) — it lives in the user layer, not the
     /// rules file. `false` for every shipped and downloaded ruleset.
     pub custom: bool,
-    /// The WSJT-X contest message an operator's contest's exchange has the SHAPE of
-    /// ([`custom::ft_shape`]), or `None`. Always `None` for a shipped or downloaded ruleset.
+    /// The WSJT-X contest message an operator's contest's exchange has the SHAPE of, as the
+    /// operator chose to use it ([`custom::ft_activity`]), or `None`. Always `None` for a shipped
+    /// or downloaded ruleset.
     ///
-    /// ⚠️ **Computed, and read by nothing on the air yet.** FT8/FT4 send standard messages for
-    /// every custom contest ([`FtMessages::for_contest`](crate::fieldday::FtMessages::for_contest)
-    /// never looks here); the builder only names the match.
+    /// ⚠️ **What FT8/FT4 send for a custom contest**
+    /// ([`FtMessages::for_contest`](crate::fieldday::FtMessages::for_contest) reads it, and only
+    /// where `custom` is set): that activity's messages where this build sends them, the standard
+    /// messages otherwise. A shipped contest's messages go by its id and never look here.
     pub ft_activity: Option<custom::FtActivity>,
 }
 

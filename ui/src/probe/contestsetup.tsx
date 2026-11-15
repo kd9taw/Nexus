@@ -71,6 +71,8 @@ const answers: Record<string, (args: Record<string, unknown>) => unknown> = {
       ftShape: roundup ? 'rtty_roundup' : null,
       ftActivity: null,
       ftMessages: 'standard',
+      ftCq: '',
+      ftSends: '',
       enteredSlots: [],
     }
   },

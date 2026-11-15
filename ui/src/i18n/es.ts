@@ -10669,6 +10669,7 @@ export const ES: PartialCatalog = {
   "customContest.ft.none": "FT8/FT4: ningún mensaje de concurso de WSJT-X lleva este intercambio. Nexus envía mensajes estándar (locator y reporte); tu intercambio no se envía.",
   "customContest.ft.standard": "FT8/FT4: Nexus envía mensajes estándar (locator y reporte); tu intercambio no se envía.",
   "customContest.ft.notYet": "FT8/FT4: este intercambio coincide con el mensaje {{activity}} de WSJT-X, que esta versión de Nexus aún no envía. Envía mensajes estándar (locator y reporte); tu intercambio no se envía.",
+  "customContest.ft.landed": "FT8/FT4: este intercambio es el mensaje {{activity}} de WSJT-X. Nexus llama {{cq}} y envía {{sends}}. Las estaciones que trabajes necesitan los mismos mensajes de concurso: en WSJT-X, Settings ▸ Advanced ▸ Special operating activity ▸ {{activity}}.",
   "customContest.rules.title": "Duplicados y puntos",
   "customContest.rules.dupe": "Una estación cuenta",
   "customContest.rules.dupe.once": "Una vez en el concurso",

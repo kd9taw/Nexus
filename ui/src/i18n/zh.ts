@@ -10623,6 +10623,7 @@ export const ZH: PartialCatalog = {
   "customContest.ft.none": "FT8/FT4：没有任何 WSJT-X 竞赛消息能携带这一交换信息。Nexus 发送标准消息（网格和信号报告）；你的交换信息不会发送。",
   "customContest.ft.standard": "FT8/FT4：Nexus 发送标准消息（网格和信号报告）；你的交换信息不会发送。",
   "customContest.ft.notYet": "FT8/FT4：这一交换信息与 WSJT-X 的 {{activity}} 消息相符，但此版本的 Nexus 尚不发送该消息。它发送标准消息（网格和信号报告）；你的交换信息不会发送。",
+  "customContest.ft.landed": "FT8/FT4：这一交换信息就是 WSJT-X 的 {{activity}} 消息。Nexus 呼叫 {{cq}}，发送 {{sends}}。你联络的电台需要使用相同的竞赛消息：在 WSJT-X 中选择 Settings ▸ Advanced ▸ Special operating activity ▸ {{activity}}。",
   "customContest.rules.title": "重复与得分",
   "customContest.rules.dupe": "一个电台计入",
   "customContest.rules.dupe.once": "整个竞赛一次",

@@ -4178,6 +4178,46 @@ pub enum FtMessages {
 }
 
 impl FtMessages {
+    /// The messages an operator's own contest sends on FT8/FT4: the WSJT-X activity its exchange
+    /// has the shape of, as the operator chose it ([`FdRuleset::ft_activity`]), where this build
+    /// sends that activity's messages; the standard messages otherwise.
+    ///
+    /// [`FdRuleset::ft_activity`]: crate::fd_rules::FdRuleset::ft_activity
+    fn of_custom(ruleset: &crate::fd_rules::FdRuleset) -> Self {
+        use crate::fd_rules::custom::FtActivity;
+        match ruleset.ft_activity {
+            Some(FtActivity::FieldDay) => Self::FieldDay,
+            // `NA_VHF` and `ARRL_DIGI` are one set of messages on the air: `CQ TEST` (genCQMsg,
+            // mainwindow.cpp 9513 and 9519) and the four-character grid (genStdMsgs, 9633 and
+            // 9635).
+            Some(FtActivity::NaVhf) => Self::NaVhf,
+            Some(_) | None => Self::Standard,
+        }
+    }
+
+    /// The activity `ruleset`'s own stations run, whatever the tier: a shipped contest's by its
+    /// id ([`of_contest`](Self::of_contest)), an operator's own by its exchange
+    /// ([`of_custom`](Self::of_custom)).
+    fn activity(ruleset: &crate::fd_rules::FdRuleset) -> Self {
+        if ruleset.custom {
+            Self::of_custom(ruleset)
+        } else {
+            Self::of_contest(ruleset.event)
+        }
+    }
+
+    /// [`of_contest`](Self::of_contest) for any event id the picker can hold: an operator's own
+    /// contest, installed, by its exchange ([`of_custom`](Self::of_custom)); every other id as
+    /// [`of_contest`](Self::of_contest) has it. What a running contest reports to WSJT-X's UDP
+    /// listeners as its Special Operation Mode.
+    pub fn of_event(event: &str) -> Self {
+        crate::fd_rules::ruleset_by_id(event, crate::fd_rules::CURRENT_RULES_YEAR)
+            .filter(|rs| rs.custom)
+            .map_or_else(|| Self::of_contest(event), Self::of_custom)
+    }
+}
+
+impl FtMessages {
     /// The WSJT-X activity a contest's own stations run, by the rules file's event id (blank is
     /// a fresh install's contest, ARRL Field Day).
     ///
@@ -4199,7 +4239,19 @@ impl FtMessages {
     /// `"FT4"`, `"FT2"`, `"TempoFast"`, …): its contest's own ([`of_contest`](Self::of_contest))
     /// on FT8 and FT4, and Field Day's, unchanged, on every other tier, wherever the rules ban
     /// the mode, and in Winter Field Day.
+    ///
+    /// ⭐ **An operator's own contest never sends Field Day's messages by that fallback**: its
+    /// session has no class or section unless its exchange is Field Day's, so the fallback would
+    /// put `W9XYZ K1ABC` and two blanks on the air. It sends the standard messages there, and on
+    /// FT8 and FT4 the activity its exchange matches ([`of_custom`](Self::of_custom)).
     pub fn for_contest(ruleset: &crate::fd_rules::FdRuleset, mode: &str) -> Self {
+        if ruleset.custom {
+            return if Self::follows_contest(ruleset, mode) {
+                Self::of_custom(ruleset)
+            } else {
+                Self::Standard
+            };
+        }
         if !Self::follows_contest(ruleset, mode) {
             return Self::FieldDay;
         }
@@ -4226,8 +4278,10 @@ impl FtMessages {
     /// mode is `mode` runs WSJT-X's Field Day activity: ARRL Field Day on FT8 and FT4. Field
     /// Day's messages anywhere else (FT1, DX1, FT2, Winter Field Day, a mode the rules ban) are
     /// Nexus's own sequencer's and close as they always have.
+    /// An operator's own contest whose exchange is Field Day's runs that activity too
+    /// ([`activity`](Self::activity)).
     pub fn wsjtx_field_day(ruleset: &crate::fd_rules::FdRuleset, mode: &str) -> bool {
-        Self::follows_contest(ruleset, mode) && Self::of_contest(ruleset.event) == Self::FieldDay
+        Self::follows_contest(ruleset, mode) && Self::activity(ruleset) == Self::FieldDay
     }
 
     /// WSJT-X's own number for this activity, the Special Operation Mode its UDP Status carries
@@ -4283,6 +4337,17 @@ impl FtMessages {
             *grid = crate::qso::air_grid(grid);
         }
         cq.to_text()
+    }
+
+    /// ⭐ **The exchange these messages carry after the two calls**, as the sequencer would send
+    /// it now from `session` (its next serial) and the Settings locator `mygrid`: what the custom
+    /// contest builder shows as "sends". Empty for the standard messages, which carry none.
+    pub fn sample_exchange(self, session: &crate::contest::ContestSession, mygrid: &str) -> String {
+        match self {
+            Self::FieldDay => format!("{} {}", session.field("CLASS"), session.field("SECTION")),
+            Self::NaVhf => crate::qso::air_grid(&sent_grid(session.field("GRID"), mygrid)),
+            Self::Standard => String::new(),
+        }
     }
 }
 

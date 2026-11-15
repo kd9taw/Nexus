@@ -23,11 +23,11 @@
 //! ([`parse_spec`](super::parse_spec)) and the lookups read the rules table first, so a custom
 //! contest can never shadow a shipped one, nor be shadowed by a download.
 //!
-//! **FT8/FT4.** A custom contest sends WSJT-X's standard messages on FT8/FT4: its id is no
-//! activity [`FtMessages::of_contest`](crate::fieldday::FtMessages::of_contest) knows, and it never
-//! bans a mode, so [`FtMessages::for_contest`](crate::fieldday::FtMessages::for_contest) never
-//! hands it Field Day's. [`ft_shape`] NAMES the WSJT-X contest message an exchange matches, for the
-//! builder to say so; nothing on the air reads it.
+//! **FT8/FT4.** [`ft_shape`] names the WSJT-X contest message an exchange matches, and
+//! [`ft_activity`] the one the operator chose to use; on FT8 and FT4 a custom contest sends that
+//! activity's messages ([`FtMessages::for_contest`](crate::fieldday::FtMessages::for_contest)),
+//! and WSJT-X's standard messages where there is none. It never bans a mode, and on every other
+//! tier it sends the standard messages, never Field Day's.
 
 use super::{
     days_from_civil, table, validate_ruleset, EventWindow, FdRuleset, RulesetSpec,
@@ -750,8 +750,9 @@ fn spec_of(def: &CustomDef) -> Result<(RulesetSpec, Option<EventWindow>), String
             }],
         },
         "bonuses": [],
-        // ⚠️ Never a banned mode, FT8 and FT4 above all: `FtMessages::for_contest` hands a
-        // contest that bans the tier's mode Field Day's messages, with a blank class.
+        // ⚠️ Never a banned mode, FT8 and FT4 above all: `FtMessages::for_contest` does not
+        // follow a contest on a tier whose mode it bans, so an unticked FT mode would lose the
+        // contest messages its exchange matches.
         "banned_modes": [],
         "tempo_fd": false,
         "assistance": {"spotting_allowed": true, "cluster_allowed": true},

@@ -18531,9 +18531,10 @@ impl RadioLoop {
                 // active contest session (review catch). 6=FOX stays unbuilt.
                 // A running contest reports the activity WSJT-X itself would
                 // be set to for it: 3 (Field Day) in ARRL Field Day only,
-                // 1 (NA VHF) in the ARRL VHF contests, 0 everywhere else.
+                // 1 (NA VHF) in the ARRL VHF contests, 0 everywhere else; an
+                // operator's own contest the activity its exchange runs.
                 let special_op = if let Some(fd) = &snap.field_day {
-                    tempo_core::fieldday::FtMessages::of_contest(&fd.event).special_op()
+                    tempo_core::fieldday::FtMessages::of_event(&fd.event).special_op()
                 } else if matches!(
                     eng.settings().special_op,
                     tempo_app::settings::SpecialOp::Hound

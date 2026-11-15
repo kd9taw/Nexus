@@ -9,8 +9,10 @@
 // refusal, verbatim; this file checks only that a required box is filled before Next, and says
 // which. Nothing is installed or written until Save.
 //
-// ⭐ FT8/FT4 SAY WHAT THIS BUILD DOES. The line reads the preview's `ftMessages` — in this build
-// always standard messages, the exchange not sent — never what a matching exchange might one day do.
+// ⭐ FT8/FT4 SAY WHAT THIS BUILD DOES. The line reads the preview's `ftMessages`, the sequencer's own
+// choice: the WSJT-X activity whose messages this build sends for the exchange, with its CQ and
+// exchange as the station renders them, or standard messages, the exchange not sent — never what a
+// matching exchange might one day do.
 // An RST + serial exchange ASKS whether to use WSJT-X's RTTY Roundup messages (`ft_roundup`),
 // defaulting to No: it is the most common club exchange, and most clubs do not mean the Roundup.
 //
@@ -122,7 +124,7 @@ export function ftLine(p: CustomContestPreview): string {
     if (p.ftShape) return t('customContest.ft.standard')
     return t('customContest.ft.none')
   }
-  return t('customContest.ft.standard')
+  return t('customContest.ft.landed', { activity: FT_ACTIVITY_NAMES[p.ftMessages], cq: p.ftCq, sends: p.ftSends })
 }
 
 /** A number box's value: a whole number, or 0 for a cleared box. */

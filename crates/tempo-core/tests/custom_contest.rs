@@ -1,6 +1,6 @@
 //! ⭐ **An operator's own contest, end to end through tempo-core**: compiled from its definition,
 //! installed in the user layer, found by id and by `CONTEST_ID`, duped, scored and exported like a
-//! shipped contest — and FT8/FT4 still send standard messages for it.
+//! shipped contest — and on FT8/FT4 the WSJT-X contest messages its exchange matches.
 //!
 //! ⚠️ The user layer is process-global and these tests run in parallel, so each one installs
 //! under its OWN id and Cabrillo token.
@@ -217,46 +217,87 @@ fn points_are_per_mode_class_with_no_multiplier() {
     assert!(rs.scoring.multipliers.is_empty());
 }
 
-/// ⚠️ **FT REGRESSION PIN — FT8/FT4 send standard messages for EVERY custom contest**, the
-/// FT-shaped ones included, and whichever FT mode is or is not ticked. Changing what goes on the
-/// air for a custom contest is a separately signed-off change, and it changes THIS test on purpose.
+/// ⚠️ **FT PIN — what FT8/FT4 send for each custom contest shape.** A contest whose exchange
+/// matches a WSJT-X contest message, with FT8 or FT4 ticked, sends that activity's messages where
+/// this build has them; every other one, and every one on a tier that is not FT8 or FT4, sends the
+/// standard messages — never Field Day's by the fallback a shipped contest keeps. Changing what
+/// goes on the air for a custom contest is a separately signed-off change, and it changes THIS
+/// table on purpose.
 #[test]
-fn every_custom_contest_sends_standard_messages_on_ft8_and_ft4() {
-    let shapes: &[(&str, &[&str], Option<&str>, bool)] = &[
-        ("custom_ft_fd", &["fd_class", "arrl_section"], None, false),
-        ("custom_ft_navhf", &["grid4"], Some("TEST"), false),
-        ("custom_ft_ww", &["grid4"], Some("WW"), false),
-        ("custom_ft_ru_serial", &["rst", "serial"], None, true),
+fn each_custom_contest_shape_sends_the_messages_its_exchange_matches() {
+    use FtMessages::*;
+    let shapes: &[(&str, &[&str], Option<&str>, bool, FtMessages)] = &[
+        (
+            "custom_ft_fd",
+            &["fd_class", "arrl_section"],
+            None,
+            false,
+            FieldDay,
+        ),
+        ("custom_ft_navhf", &["grid4"], Some("TEST"), false, NaVhf),
+        ("custom_ft_ww", &["grid4"], Some("WW"), false, Standard),
+        (
+            "custom_ft_ru_serial",
+            &["rst", "serial"],
+            None,
+            true,
+            Standard,
+        ),
         (
             "custom_ft_ru_state",
             &["rst", "state_province"],
             None,
             false,
+            Standard,
         ),
-        ("custom_ft_euvhf", &["rst", "serial", "grid6"], None, false),
-        ("custom_ft_none", &["rst", "cq_zone"], None, false),
+        (
+            "custom_ft_euvhf",
+            &["rst", "serial", "grid6"],
+            None,
+            false,
+            Standard,
+        ),
+        ("custom_ft_none", &["rst", "cq_zone"], None, false, Standard),
     ];
-    for (i, (id, fields, cq, roundup)) in shapes.iter().enumerate() {
-        for modes in [&["FT8", "FT4"][..], &["CW"][..]] {
+    for (i, (id, fields, cq, roundup, want)) in shapes.iter().enumerate() {
+        for modes in [&["FT8", "FT4"][..], &["FT4"][..], &["CW"][..]] {
             let mut d = def(id, &format!("CLUB-FT-{i}"), fields);
             d.ft_cq = cq.map(str::to_string);
             d.ft_roundup = *roundup;
             d.modes = modes.iter().map(|m| m.to_string()).collect();
             let rs = install(&d);
+            let ticked = modes.iter().any(|m| m.starts_with("FT"));
+            let on_ft = if ticked { *want } else { Standard };
             for mode in ["FT8", "FT4"] {
                 assert_eq!(
                     FtMessages::for_contest(rs, mode),
-                    FtMessages::Standard,
+                    on_ft,
                     "{id} on {mode}, ticked {modes:?}"
                 );
+                assert_eq!(
+                    FtMessages::wsjtx_field_day(rs, mode),
+                    on_ft == FieldDay,
+                    "{id} on {mode}: the caller runs WSJT-X's Field Day activity"
+                );
+            }
+            assert_eq!(FtMessages::of_event(id), on_ft, "{id} reports");
+            for mode in ["FT2", "TempoFast", "TempoDeep", "RTTY", ""] {
+                assert_eq!(
+                    FtMessages::for_contest(rs, mode),
+                    Standard,
+                    "{id} on {mode:?}: never Field Day's by the fallback"
+                );
+                assert!(!FtMessages::wsjtx_field_day(rs, mode), "{id} on {mode:?}");
             }
         }
     }
-    // The shape IS computed — it is only not read on the air.
     let mut d = def("custom_ft_navhf", "CLUB-FT-1", &["grid4"]);
     d.ft_cq = Some("TEST".into());
     d.modes = vec!["FT8".into()];
     assert_eq!(install(&d).ft_activity, Some(FtActivity::NaVhf));
+    // The UDP Status number WSJT-X reports for each activity.
+    assert_eq!(FtMessages::of_event("custom_ft_navhf").special_op(), 1);
+    assert_eq!(FtMessages::of_event("custom_not_installed"), Standard);
 }
 
 /// A one-off contest's window is its one date in every year: past it reads as past, never as next

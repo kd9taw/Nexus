@@ -14,6 +14,7 @@ import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-li
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { ContestSetupWizard } from './ContestSetupWizard'
+import { ftLine } from './CustomContestBuilder'
 import type { AppSnapshot, Settings } from '../types'
 import type { CustomContest, CustomContestDef, CustomContestPreview, FdRulesetDto } from '../api'
 import { enteredTyped, setCustomContests } from '../features/customContests'
@@ -67,7 +68,7 @@ let installed: CustomContest[] = []
 /** The station's preview of a definition: its refusal verbatim, else what it would send, a sample
  *  line, and the FT8/FT4 answer — standard messages for every custom contest in this build. */
 function previewOf(def: CustomContestDef): CustomContestPreview {
-  const blank = { youSend: '', startProblem: '', sampleQsoLine: '', ftShape: null, ftActivity: null, ftMessages: '', enteredSlots: [] }
+  const blank: Omit<CustomContestPreview, 'refusal'> = { youSend: '', startProblem: '', sampleQsoLine: '', ftShape: null, ftActivity: null, ftMessages: 'standard', ftCq: '', ftSends: '', enteredSlots: [] }
   if (def.exchange.filter((f) => f.field === 'rst').length > 1) return { ...blank, refusal: 'the exchange carries rst twice' }
   const ft = def.modes.includes('FT8') || def.modes.includes('FT4')
   const roundup = ft && def.exchange.map((f) => f.field).join() === 'rst,serial'
@@ -446,5 +447,35 @@ describe('layout: the step buttons stay reachable', () => {
     expect(winnerAt(rules, 'dark', box, 'overflow-y')?.value).toBe('auto')
     // A focused control stops above the pinned buttons, not under them (the probe measures 5em).
     expect(winnerAt(rules, 'dark', box, 'scroll-padding-bottom', 'scroll-padding')?.value).toBe('5em')
+  })
+})
+
+describe('the FT8/FT4 line', () => {
+  const p = (patch: Partial<CustomContestPreview>): CustomContestPreview => ({
+    refusal: '',
+    youSend: '',
+    startProblem: '',
+    sampleQsoLine: '',
+    ftShape: null,
+    ftActivity: null,
+    ftMessages: 'standard',
+    ftCq: '',
+    ftSends: '',
+    enteredSlots: [],
+    ...patch,
+  })
+
+  it('names the WSJT-X activity this build sends, with the CQ and exchange the station rendered', () => {
+    expect(ftLine(p({ ftShape: 'field_day', ftActivity: 'field_day', ftMessages: 'field_day', ftCq: 'CQ FD K9ABC EN52', ftSends: '1D WI' }))).toBe(
+      "FT8/FT4: this exchange is WSJT-X's ARRL Field Day message. Nexus calls CQ FD K9ABC EN52 and sends 1D WI. Stations you work need the same contest messages: in WSJT-X, Settings ▸ Advanced ▸ Special operating activity ▸ ARRL Field Day.",
+    )
+    expect(ftLine(p({ ftShape: 'na_vhf', ftActivity: 'na_vhf', ftMessages: 'na_vhf', ftCq: 'CQ TEST K9ABC EN52', ftSends: 'EN52' }))).toMatch(
+      /^FT8\/FT4: this exchange is WSJT-X's NA VHF message\. Nexus calls CQ TEST K9ABC EN52 and sends EN52\./,
+    )
+  })
+
+  it('says standard messages where the station sends them', () => {
+    expect(ftLine(p({}))).toMatch(/^FT8\/FT4: no WSJT-X contest message carries this exchange/)
+    expect(ftLine(p({ ftShape: 'eu_vhf', ftActivity: 'eu_vhf' }))).toMatch(/matches WSJT-X's EU VHF message, which this version of Nexus does not send yet/)
   })
 })

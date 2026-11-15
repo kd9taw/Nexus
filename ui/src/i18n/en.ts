@@ -5938,6 +5938,7 @@ export const EN = {
   'customContest.ft.none': 'FT8/FT4: no WSJT-X contest message carries this exchange. Nexus sends standard messages (grid and signal report); your exchange is not sent.',
   'customContest.ft.standard': 'FT8/FT4: Nexus sends standard messages (grid and signal report); your exchange is not sent.',
   'customContest.ft.notYet': 'FT8/FT4: this exchange matches WSJT-X\'s {{activity}} message, which this version of Nexus does not send yet. It sends standard messages (grid and signal report); your exchange is not sent.',
+  'customContest.ft.landed': 'FT8/FT4: this exchange is WSJT-X\'s {{activity}} message. Nexus calls {{cq}} and sends {{sends}}. Stations you work need the same contest messages: in WSJT-X, Settings ▸ Advanced ▸ Special operating activity ▸ {{activity}}.',
   'customContest.rules.title': 'Duplicates and points',
   'customContest.rules.dupe': 'A station counts',
   'customContest.rules.dupe.once': 'Once in the contest',
