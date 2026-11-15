@@ -1351,6 +1351,21 @@ an RST slot",
                 super::FieldKind::Text { max_len } if v.chars().count() > max_len as usize => Err(
                     format!("Your {} is longer than {max_len} characters.", field.key),
                 ),
+                // ⭐ **One word of A-Z, 0-9 and `/`, and nothing else**, the one rule for CW, RTTY
+                // and PSK. Each wider character keyed something the operator never typed: `!` is
+                // the CW macros' worked-call shorthand, expanded AFTER `{EXCH}` (`cw::expand`), so
+                // `HI!` went out as `HI` and the other station's call; a letter with no Morse
+                // (`Ü`) refused every CW message and was dropped on RTTY; `;` ends a radio
+                // keyer's command; a control character rode PSK's varicode; braces read as a
+                // macro token; and a space split one slot into two words and two Cabrillo columns.
+                super::FieldKind::Text { .. }
+                    if !v.chars().all(|c| c.is_ascii_alphanumeric() || c == '/') =>
+                {
+                    Err(format!(
+                        "Your {} may only use letters, digits and / — no spaces or punctuation.",
+                        field.key
+                    ))
+                }
                 _ => Ok(v),
             }
         }

@@ -303,12 +303,12 @@ fn typed_values_are_sent_and_a_blank_or_bad_one_refuses_the_session() {
     let full = [
         ("AGE", "42"),
         ("NAME", "alex"),
-        ("TXT1", "w9 club"),
+        ("TXT1", "w9/club"),
         ("TXT2", "7"),
     ];
     let s = ContestSession::for_ruleset(rs, &with(&full)).expect("starts");
     let sent: Vec<&str> = s.my_exchange.iter().map(|v| v.raw.as_str()).collect();
-    assert_eq!(sent, ["599", "42", "ALEX", "W9 CLUB", "7"]);
+    assert_eq!(sent, ["599", "42", "ALEX", "W9/CLUB", "7"]);
     for (pairs, want) in [
         (&full[1..], "Your AGE is empty"),
         (
@@ -330,4 +330,41 @@ fn typed_values_are_sent_and_a_blank_or_bad_one_refuses_the_session() {
     assert!(ContestSession::for_ruleset(rs, &with(&full[..3]))
         .expect_err("a blank text field refuses")
         .contains("Fill it in when you set up the contest"),);
+}
+
+/// ⭐ **Typed text is ONE word of letters, digits and `/`, or the contest does not start.**
+/// Each case is something a looser rule let through and that keyed what the operator never
+/// typed: `!` became the worked call inside the name on CW, `Ü` refused every CW F2 and was
+/// dropped on RTTY, `;` ends a radio keyer's command, a control character rode PSK, and a space
+/// added a column to the Cabrillo QSO line.
+#[test]
+fn typed_text_must_be_one_word_of_letters_digits_and_slash() {
+    let rs = install(&def(
+        "custom_typed_text",
+        "CLUB-TYPED-TEXT",
+        &["rst", "name"],
+    ));
+    let start = |name: &str| {
+        let st = StationData {
+            entered: [("NAME".to_string(), name.to_string())].into(),
+            ..station()
+        };
+        ContestSession::for_ruleset(rs, &st)
+    };
+    let want = "Your NAME may only use letters, digits and / — no spaces or punctuation.";
+    for bad in [
+        "HI!",
+        "MÜLLER",
+        "A;B",
+        "A\u{7}B",
+        "JOHN SMITH",
+        "{EXCH}",
+        "A=B",
+    ] {
+        let err = start(bad).expect_err(bad);
+        assert_eq!(err, want, "{bad:?}");
+    }
+    let ok = start(" k9/abc ").expect("one word of letters, digits and /");
+    let sent: Vec<&str> = ok.my_exchange.iter().map(|v| v.raw.as_str()).collect();
+    assert_eq!(sent, ["599", "K9/ABC"]);
 }
