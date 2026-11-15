@@ -277,3 +277,57 @@ fn a_one_off_contest_never_runs_again() {
     assert_eq!(rs.event_window(2027), w);
     assert_eq!(rs.next_or_running(w.end_unix + 86_400 * 400), w);
 }
+
+/// ⭐ **The values an operator types reach the exchange they send** — and a blank one, a number
+/// out of range or a text too long refuses the session, so nothing goes on the air.
+#[test]
+fn typed_values_are_sent_and_a_blank_or_bad_one_refuses_the_session() {
+    let d = def(
+        "custom_typed",
+        "CLUB-TYPED",
+        &["rst", "age", "name", "text", "text"],
+    );
+    let rs = install(&d);
+    assert_eq!(rs.entered_slots(), ["AGE", "NAME", "TXT1", "TXT2"]);
+    assert!(
+        rs.sent_settings().is_empty(),
+        "a typed value is not a station setting"
+    );
+    let with = |pairs: &[(&str, &str)]| StationData {
+        entered: pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+        ..station()
+    };
+    let full = [
+        ("AGE", "42"),
+        ("NAME", "alex"),
+        ("TXT1", "w9 club"),
+        ("TXT2", "7"),
+    ];
+    let s = ContestSession::for_ruleset(rs, &with(&full)).expect("starts");
+    let sent: Vec<&str> = s.my_exchange.iter().map(|v| v.raw.as_str()).collect();
+    assert_eq!(sent, ["599", "42", "ALEX", "W9 CLUB", "7"]);
+    for (pairs, want) in [
+        (&full[1..], "Your AGE is empty"),
+        (
+            &[("AGE", "142"), full[1], full[2], full[3]][..],
+            "AGE is \"142\" — it must be a number from 0 to 99",
+        ),
+        (
+            &[("AGE", "4x"), full[1], full[2], full[3]][..],
+            "must be a number from 0 to 99",
+        ),
+        (
+            &[full[0], ("NAME", "ALEXANDRA-JANE"), full[2], full[3]][..],
+            "Your NAME is longer than 12 characters",
+        ),
+    ] {
+        let err = ContestSession::for_ruleset(rs, &with(pairs)).expect_err("refused");
+        assert!(err.contains(want), "{err}");
+    }
+    assert!(ContestSession::for_ruleset(rs, &with(&full[..3]))
+        .expect_err("a blank text field refuses")
+        .contains("Fill it in when you set up the contest"),);
+}

@@ -738,6 +738,20 @@ impl FdRuleset {
         }
     }
 
+    /// ⭐ **The slots whose sent value the operator types for this contest** — every slot a role
+    /// sends from [`SENT_SOURCE_ENTERED`], in field order. Empty for every shipped contest. A
+    /// setup screen asks for these beside [`sent_settings`](Self::sent_settings), and stores the
+    /// answers per contest in Settings, never in the contest's definition file.
+    pub fn entered_slots(&self) -> Vec<&'static str> {
+        self.exchange
+            .fields
+            .iter()
+            .filter(|f| f.source == SENT_SOURCE_ENTERED)
+            .filter(|f| self.exchange.roles.iter().any(|r| r.sends.contains(&f.key)))
+            .map(|f| f.key)
+            .collect()
+    }
+
     /// ⭐ **The settings this contest's exchange sends from**: every `setting:` source, and every
     /// input of a `derived:` one, among the slots any role sends, in field order and each once.
     /// What a setup screen asks for before the contest starts, so it asks for this contest's and
@@ -1644,6 +1658,12 @@ struct FieldBlockSpec {
 const SENT_SOURCE_CONSTANT: &str = "constant";
 /// A sent slot filled from the session's serial counter.
 const SENT_SOURCE_SERIAL: &str = "serial";
+/// ⭐ **A sent slot whose value the operator TYPES for this contest** — an age, a name, a free
+/// text field. Only an operator's own contest ([`custom`]) may use it: the value lives in the
+/// operator's Settings per contest, and a rules file naming it would ask every install for a
+/// value no setup screen of a shipped contest asks for. So a rules file is refused it by name
+/// (its schema-2 vocabulary is unchanged).
+pub const SENT_SOURCE_ENTERED: &str = "entered";
 
 /// ⭐ **The settings a rules file may name as the source of a sent slot** (spec §3.4).
 ///
@@ -1722,9 +1742,10 @@ const SENT_SLOT_DERIVATIONS: &[(&str, &[&str])] = &[
 ];
 
 /// Is `s` a source this build can honour for a slot some role sends?
-fn is_sent_source(s: &str) -> bool {
+fn is_sent_source(s: &str, custom: bool) -> bool {
     match s {
         SENT_SOURCE_CONSTANT | SENT_SOURCE_SERIAL => true,
+        SENT_SOURCE_ENTERED => custom,
         _ => match s.split_once(':') {
             Some(("setting", name)) => SENT_SLOT_SETTINGS.contains(&name),
             // A derivation is named, never blank — and every one of ITS inputs is a
@@ -2254,7 +2275,7 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
                 custom::ID_PREFIX
             ));
         }
-        validate_ruleset(r)?;
+        validate_ruleset(r, false)?;
     }
     // The section universe is pinned (71 US + 14 RAC): the TS mirror guard and
     // the board layout both assume it, so a file that grows or shrinks it must
@@ -2286,8 +2307,9 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
 /// ⭐ **The checks ONE ruleset must pass, whatever file it came from** — the seed, a
 /// downloaded rules file ([`parse_spec`]) and an operator's own contest
 /// ([`custom::compile`]) all run exactly this, so a custom contest can never be a shape the
-/// shipped validator would refuse.
-fn validate_ruleset(r: &RulesetSpec) -> Result<(), String> {
+/// shipped validator would refuse. `custom` is true for that last one alone, and lets a slot use
+/// [`SENT_SOURCE_ENTERED`].
+fn validate_ruleset(r: &RulesetSpec, custom: bool) -> Result<(), String> {
     let tag = format!("ruleset {}/{}", r.event, r.rules_year);
     if !is_event_id(&r.event) {
         return Err(format!("{tag}: event id is not ^[a-z][a-z0-9_]*$"));
@@ -2610,7 +2632,14 @@ fn validate_ruleset(r: &RulesetSpec) -> Result<(), String> {
                 f.key
             ));
         }
-        if !is_sent_source(&f.source) {
+        if f.source == SENT_SOURCE_ENTERED && !custom {
+            return Err(format!(
+                "{tag}: slot {} declares source \"{SENT_SOURCE_ENTERED}\", which only an \
+                 operator's own contest may use",
+                f.key
+            ));
+        }
+        if !is_sent_source(&f.source, custom) {
             return Err(format!(
                 "{tag}: slot {} declares source {:?}, which this build cannot supply",
                 f.key, f.source

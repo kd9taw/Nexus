@@ -171,6 +171,11 @@ pub struct StationData {
     /// filled the form in is not a DX entrant, and treating them as one would send
     /// `DX` on the air from Ohio.
     pub dxcc: bool,
+    /// ⭐ **What the operator TYPED for this contest's `entered` slots**, by slot id (`AGE`,
+    /// `NAME`, `TXT1`) — an operator's own contest only
+    /// ([`SENT_SOURCE_ENTERED`](crate::fd_rules::SENT_SOURCE_ENTERED)). Filled from the
+    /// contest's own entry in Settings, never from its shared definition file.
+    pub entered: std::collections::BTreeMap<String, String>,
 }
 
 impl StationData {
@@ -537,6 +542,12 @@ impl ContestSession {
                 .ok_or_else(|| format!("{key} is not a slot this exchange declares"))?;
             let raw = normalise_sent(field, &sent_value(field, role, station, &s.my_location)?);
             if raw.is_empty() {
+                if field.required && field.source == crate::fd_rules::SENT_SOURCE_ENTERED {
+                    return Err(format!(
+                        "Your {key} is empty — it is part of the exchange you transmit. \
+Fill it in when you set up the contest."
+                    ));
+                }
                 if field.required {
                     return Err(format!(
                         "Your {key} is empty — it is part of the exchange you transmit. \
@@ -1317,6 +1328,32 @@ an RST slot",
         // `in_flight`, and the row copies it from there (§2.6, batch 3) — this is the
         // template's shape, and the one thing it must not be is the live counter.
         "serial" => Ok("0".to_string()),
+        // ⭐ What the operator typed for this contest, checked against the slot's shape HERE —
+        // the one moment before it goes on the air. A blank is returned blank, and the caller
+        // refuses a required slot that is. A number out of range or a text too long is
+        // refused rather than cut: it is the operator's own value, and a cut one would go on
+        // the air as something they never typed.
+        crate::fd_rules::SENT_SOURCE_ENTERED => {
+            let v = station
+                .entered
+                .get(field.key)
+                .map(|v| v.trim().to_ascii_uppercase())
+                .unwrap_or_default();
+            match field.kind {
+                _ if v.is_empty() => Ok(v),
+                super::FieldKind::Number { min, max } => match v.parse::<u32>() {
+                    Ok(n) if (min..=max).contains(&n) => Ok(n.to_string()),
+                    _ => Err(format!(
+                        "Your {} is \"{v}\" — it must be a number from {min} to {max}.",
+                        field.key
+                    )),
+                },
+                super::FieldKind::Text { max_len } if v.chars().count() > max_len as usize => Err(
+                    format!("Your {} is longer than {max_len} characters.", field.key),
+                ),
+                _ => Ok(v),
+            }
+        }
         // ⭐ §3.4's `QTH`: one slot, county or state or DX, chosen by ROLE.
         //
         // The role decides rather than the value being probed against each domain in

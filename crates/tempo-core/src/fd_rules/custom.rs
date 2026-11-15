@@ -62,7 +62,12 @@ pub const FIELDS: &[&str] = &[
     "power",
     "grid4",
     "grid6",
+    "age",
+    "name",
+    "text",
 ];
+/// The most free-text fields a definition may declare (`TXT1`, `TXT2`).
+pub const MAX_TEXT_FIELDS: usize = 2;
 /// The longest a text field's caption may be.
 const MAX_LABEL_CHARS: usize = 24;
 /// The highest points a contact may be worth.
@@ -375,7 +380,12 @@ const US_VE_QTH: &[(&str, &str)] = &[
 const US_VE_QTH_ID: &str = "us_ve_qth";
 
 /// The rules-file slot one menu entry compiles to: `(key, adif rcvd, adif sent, source, kind)`.
-fn slot(field: &str, rst_digits: u8) -> Option<serde_json::Value> {
+///
+/// `nth_text` numbers a `text` field (1, 2): its slot is `TXT1` or `TXT2`.
+///
+/// ⭐ `age`, `name` and `text` send what the operator TYPES for this contest
+/// ([`SENT_SOURCE_ENTERED`](super::SENT_SOURCE_ENTERED)), kept in Settings and never in this file.
+fn slot(field: &str, rst_digits: u8, nth_text: usize) -> Option<serde_json::Value> {
     use serde_json::json;
     let (key, rcvd, sent, source, kind) = match field {
         "rst" => (
@@ -442,6 +452,27 @@ fn slot(field: &str, rst_digits: u8) -> Option<serde_json::Value> {
             "MY_GRIDSQUARE",
             "setting:mygrid",
             json!({"type": "grid", "chars": if field == "grid4" { 4 } else { 6 }}),
+        ),
+        "age" => (
+            "AGE".into(),
+            "AGE",
+            "",
+            super::SENT_SOURCE_ENTERED,
+            json!({"type": "number", "min": 0, "max": 99}),
+        ),
+        "name" => (
+            "NAME".into(),
+            "NAME",
+            "",
+            super::SENT_SOURCE_ENTERED,
+            json!({"type": "text", "max_len": 12}),
+        ),
+        "text" => (
+            format!("TXT{nth_text}"),
+            "",
+            "",
+            super::SENT_SOURCE_ENTERED,
+            json!({"type": "text", "max_len": 12}),
         ),
         _ => return None,
     };
@@ -591,7 +622,13 @@ fn check(def: &CustomDef, now_unix: u64) -> Result<(), String> {
         } else {
             f.field.as_str()
         };
-        if slots.contains(&slot) {
+        if slot == "text" {
+            if slots.iter().filter(|s| **s == "text").count() == MAX_TEXT_FIELDS {
+                return Err(format!(
+                    "the exchange carries more than {MAX_TEXT_FIELDS} text fields"
+                ));
+            }
+        } else if slots.contains(&slot) {
             return Err(format!("the exchange carries {} twice", f.field));
         }
         slots.push(slot);
@@ -622,10 +659,14 @@ fn spec_of(def: &CustomDef) -> Result<(RulesetSpec, Option<EventWindow>), String
     use serde_json::json;
     let phone_only = def.modes.iter().all(|m| m == "SSB" || m == "FM");
     let rst_digits = if phone_only { 2 } else { 3 };
+    let mut nth_text = 0;
     let fields: Vec<serde_json::Value> = def
         .exchange
         .iter()
-        .map(|f| slot(&f.field, rst_digits).expect("checked: a menu field"))
+        .map(|f| {
+            nth_text += usize::from(f.field == "text");
+            slot(&f.field, rst_digits, nth_text).expect("checked: a menu field")
+        })
         .collect();
     let keys: Vec<serde_json::Value> = fields.iter().map(|f| f["key"].clone()).collect();
     let domains = if def.exchange.iter().any(|f| f.field == "state_province") {
@@ -732,7 +773,7 @@ fn spec_of(def: &CustomDef) -> Result<(RulesetSpec, Option<EventWindow>), String
 pub fn compile(def: &CustomDef, now_unix: u64) -> Result<FdRuleset, String> {
     check(def, now_unix)?;
     let (spec, once) = spec_of(def)?;
-    validate_ruleset(&spec)?;
+    validate_ruleset(&spec, true)?;
     let mut rs = super::build_ruleset(spec, &table().reserved);
     rs.window.once = once;
     rs.custom = true;
@@ -744,7 +785,7 @@ pub fn compile(def: &CustomDef, now_unix: u64) -> Result<FdRuleset, String> {
 /// verdict as [`compile`], and nothing is leaked.
 pub fn validate(def: &CustomDef, now_unix: u64) -> Result<(), String> {
     check(def, now_unix)?;
-    validate_ruleset(&spec_of(def)?.0)
+    validate_ruleset(&spec_of(def)?.0, true)
 }
 
 /// Parse a definition file's text: the JSON, then [`validate`].

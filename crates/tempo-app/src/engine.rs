@@ -16572,6 +16572,12 @@ impl Engine {
             contest_category_station: settings.contest_category_station.clone(),
             mygrid: settings.mygrid.clone(),
             dxcc: st.eq_ignore_ascii_case("DX"),
+            // ⭐ The values this contest's `entered` slots send: its own entry, by its id.
+            entered: settings
+                .contest_entered
+                .get(settings.fd_event.trim())
+                .cloned()
+                .unwrap_or_default(),
         }
     }
 
