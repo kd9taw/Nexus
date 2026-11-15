@@ -21371,6 +21371,11 @@ body.pane-dragging {
 .cockpit-contest-chip:hover {
   background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
+/* The focus ring drawn INSIDE the chip: the slot clips (`overflow: hidden`), and the house ring outside
+   the border box lost 3 px top and bottom to it. */
+.cockpit-contest-chip:focus-visible {
+  outline-offset: -3px;
+}
 /* One line, right to left, wrapping: the name stays and the words before it ("Contest: ") wrap onto a
    second line that is clipped, so a tight slot reads "NYQP" rather than "Contest: N…". */
 .ccc-text {

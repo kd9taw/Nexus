@@ -169,7 +169,18 @@ async function contestSwitch() {
     const stop = vis('.op-btn.stop'), head = vis('main.operate-cockpit .cockpit-header')
     if (!stop || !head || !document.documentElement.getAttribute('data-viewport')) return null
     const chip = vis('.cockpit-contest-chip'), q = stop.getBoundingClientRect(), h = head.getBoundingClientRect()
-    return { stopY: Math.round(q.top), below: Math.round(q.top - h.top), headH: Math.round(h.height), chipW: chip ? Math.round(chip.getBoundingClientRect().width) : 0, slotW: Math.round(document.querySelector('main.operate-cockpit .cockpit-contest-slot')?.getBoundingClientRect().width ?? -1) }
+    // The chip's keyboard focus ring, whole inside the slot that clips it: focused, its ring's box (the
+    // border box grown by outline-offset + outline-width) must lie inside the slot's box.
+    let ring = null
+    if (chip) {
+      chip.focus({ preventScroll: true })
+      const cs = getComputedStyle(chip), grow = parseFloat(cs.outlineOffset) + parseFloat(cs.outlineWidth)
+      const c = chip.getBoundingClientRect(), sl = chip.parentElement.getBoundingClientRect()
+      ring = { fv: chip.matches(':focus-visible'), inside: c.top - grow >= sl.top - 0.5 && c.bottom + grow <= sl.bottom + 0.5 && c.left - grow >= sl.left - 0.5 && c.right + grow <= sl.right + 0.5,
+        cut: Math.round(Math.max(sl.top - (c.top - grow), (c.bottom + grow) - sl.bottom, 0)) }
+      chip.blur()
+    }
+    return { ring, stopY: Math.round(q.top), below: Math.round(q.top - h.top), headH: Math.round(h.height), chipW: chip ? Math.round(chip.getBoundingClientRect().width) : 0, slotW: Math.round(document.querySelector('main.operate-cockpit .cockpit-contest-slot')?.getBoundingClientRect().width ?? -1) }
   })()`
   const KEY = `[...document.querySelectorAll('.op-btn.stop, main.operate-cockpit > *, .cockpit-header, .ch-actions')].map((e) => { const q = e.getBoundingClientRect(); return Math.round(q.top) + ':' + Math.round(q.height) + ':' + Math.round(q.width) }).join(',')`
   /** `plant`: CSS laid over the page once it draws. */
@@ -218,6 +229,10 @@ async function contestSwitch() {
         if (!b.chipW) hidden++
         const moved = b.stopY - a.stopY
         console.log(`header-probe: contest switch ${where}: header ${n.headH}→${b.headH} px, Stop TX ${n.stopY}→${b.stopY} px with the chip; ${moved ? `${moved > 0 ? '+' : ''}${moved} px from off (the top bar)` : 'not moved from off'}; chip ${b.chipW ? b.chipW + ' px' : 'not drawn'} in a ${b.slotW} px slot`)
+        if (b.ring && (!b.ring.fv || !b.ring.inside)) {
+          console.error(`header-probe: RED contest switch ${where} — the chip's focus ring ${b.ring.fv ? `is cut ${b.ring.cut} px by its slot` : 'never showed (no :focus-visible), so it was not checked'}`)
+          code = code || 1
+        }
         if (b.headH !== n.headH || b.stopY !== n.stopY) {
           console.error(`header-probe: RED contest switch ${where} — the chip took the header ${n.headH}→${b.headH} px and Stop TX ${n.stopY}→${b.stopY} px`)
           code = code || 1
