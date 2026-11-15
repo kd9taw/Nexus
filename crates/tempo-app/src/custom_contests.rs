@@ -36,6 +36,31 @@ pub struct Store {
     pub path: PathBuf,
     /// Set when the file exists and could not be read: every write refuses (see the module doc).
     pub locked: Option<String>,
+    /// ⭐ **The entries this build could not use**, as the file held them: one a later version
+    /// wrote (a downgrade), or one a newer rules download now refuses (its token became a shipped
+    /// contest's). Written back untouched beside the installed set, so a save never deletes one.
+    skipped: Vec<Unusable>,
+}
+
+/// An entry of the contest file this build cannot use, kept as the file held it.
+#[derive(Debug, Clone)]
+struct Unusable {
+    raw: serde_json::Value,
+    /// Its `id` and `name`, read off the raw JSON (`""` when it carries none).
+    id: String,
+    name: String,
+    why: String,
+}
+
+/// One entry of the contest file this version cannot use — shown so the operator sees it is
+/// still there, and kept on disk.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnusableContestDto {
+    pub id: String,
+    pub name: String,
+    /// Why this version cannot use it, in words.
+    pub why: String,
 }
 
 /// What [`import`] does when the file's id is already one of the operator's contests.
@@ -61,7 +86,14 @@ impl Store {
         let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return (Store { path, locked: None }, Vec::new())
+                return (
+                    Store {
+                        path,
+                        locked: None,
+                        skipped: Vec::new(),
+                    },
+                    Vec::new(),
+                )
             }
             Err(e) => {
                 let why = format!(
@@ -72,6 +104,7 @@ impl Store {
                     Store {
                         path,
                         locked: Some(why.clone()),
+                        skipped: Vec::new(),
                     },
                     vec![why],
                 );
@@ -88,28 +121,58 @@ impl Store {
                     Store {
                         path,
                         locked: Some(why.clone()),
+                        skipped: Vec::new(),
                     },
                     vec![why],
                 );
             }
         };
         let mut problems = Vec::new();
-        let mut defs = Vec::new();
-        for v in file.contests {
-            match serde_json::from_value::<CustomDef>(v) {
-                Ok(d) => defs.push(d),
-                Err(e) => {
-                    problems.push(format!("a contest in {} was skipped: {e}", path.display()))
-                }
-            }
+        let mut skipped = Vec::new();
+        for raw in file.contests {
+            let text = |key: &str| raw[key].as_str().unwrap_or_default().to_string();
+            let (id, name) = (text("id"), text("name"));
+            let why = match serde_json::from_value::<CustomDef>(raw.clone()) {
+                Ok(def) => match fd_rules::install_custom(std::slice::from_ref(&def), now_unix)
+                    .into_iter()
+                    .next()
+                {
+                    None => continue,
+                    Some((_, why)) => why,
+                },
+                Err(e) => format!("not a contest this version can read ({e})"),
+            };
+            problems.push(format!(
+                "your contest {id:?} in {} can't be used by this version, and is kept as it is: {why}",
+                path.display()
+            ));
+            skipped.push(Unusable { raw, id, name, why });
         }
-        for (id, why) in fd_rules::install_custom(&defs, now_unix) {
-            problems.push(format!("your contest {id:?} was not loaded: {why}"));
-        }
-        (Store { path, locked: None }, problems)
+        (
+            Store {
+                path,
+                locked: None,
+                skipped,
+            },
+            problems,
+        )
     }
 
-    /// Write the installed set back, whole.
+    /// ⭐ **The file's entries this version cannot use** — each still on disk, and written back
+    /// untouched by every save.
+    pub fn unusable(&self) -> Vec<UnusableContestDto> {
+        self.skipped
+            .iter()
+            .map(|u| UnusableContestDto {
+                id: u.id.clone(),
+                name: u.name.clone(),
+                why: u.why.clone(),
+            })
+            .collect()
+    }
+
+    /// Write the installed set back, whole, and after it every entry this version could not use,
+    /// as the file held it.
     fn write(&self) -> Result<(), String> {
         if let Some(why) = &self.locked {
             return Err(format!(
@@ -121,6 +184,7 @@ impl Store {
             contests: fd_rules::custom_defs()
                 .iter()
                 .map(|d| serde_json::to_value(d).expect("a definition serialises"))
+                .chain(self.skipped.iter().map(|u| u.raw.clone()))
                 .collect(),
         };
         let text = serde_json::to_vec_pretty(&file).map_err(|e| e.to_string())?;
@@ -140,7 +204,7 @@ impl Store {
     /// them. Its name, window and points stay editable. The operator saves it as a new contest
     /// instead.
     pub fn save_contest(
-        &self,
+        &mut self,
         def: &CustomDef,
         journal_dir: &Path,
         now_unix: u64,
@@ -148,6 +212,13 @@ impl Store {
         if let Some(why) = &self.locked {
             return Err(format!(
                 "Your contests were not saved: {why}. Move it aside first."
+            ));
+        }
+        if self.skipped.iter().any(|u| u.id == def.id) {
+            return Err(format!(
+                "Your contest file already holds a contest {:?} this version can't use. Delete \
+                 that one first, or give this contest another name.",
+                def.id
             ));
         }
         let next = custom::compile(def, now_unix)?;
@@ -174,7 +245,8 @@ impl Store {
 
     /// ⭐ **Delete a contest** — refused while it is the picked one (`picked`, the settings'
     /// `fd_event`). Its journals stay on disk.
-    pub fn delete(&self, id: &str, picked: &str) -> Result<(), String> {
+    /// An entry this version cannot use is deleted from the file the same way.
+    pub fn delete(&mut self, id: &str, picked: &str) -> Result<(), String> {
         if let Some(why) = &self.locked {
             return Err(format!(
                 "Your contests were not saved: {why}. Move it aside first."
@@ -186,7 +258,9 @@ impl Store {
                     .into(),
             );
         }
-        if !fd_rules::remove_custom(id) {
+        let before = self.skipped.len();
+        self.skipped.retain(|u| u.id != id);
+        if !fd_rules::remove_custom(id) && self.skipped.len() == before {
             return Err(format!("There is no contest {id:?} to delete."));
         }
         self.write()
@@ -197,7 +271,7 @@ impl Store {
     /// operator then picks Replace or Keep both. Returns the definition as installed (Keep both
     /// changes its id and token).
     pub fn import(
-        &self,
+        &mut self,
         text: &str,
         on_collision: OnCollision,
         journal_dir: &Path,
@@ -214,6 +288,7 @@ impl Store {
                 OnCollision::KeepBoth => {
                     def.id = custom::id_for_name(&def.name, |id| {
                         fd_rules::ruleset_by_id(id, CURRENT_RULES_YEAR).is_some()
+                            || self.skipped.iter().any(|u| u.id == id)
                     });
                     def.cabrillo_contest = free_token(&def.cabrillo_contest);
                 }

@@ -80,7 +80,7 @@ fn engine(d: &std::path::Path, event: &str) -> Engine {
 #[test]
 fn save_list_start_and_export_then_the_exchange_locks() {
     let d = dir("e2e");
-    let st = store(&d);
+    let mut st = store(&d);
     let mine = def("custom_app_e2e", "APP-E2E", &["rst", "serial"]);
     st.save_contest(&mine, &d, NOW).expect("saved");
     let on_disk = std::fs::read_to_string(d.join(custom_contests::FILE_NAME)).expect("written");
@@ -166,7 +166,7 @@ fn ft8_call_cq_and_sp_in_a_custom_contest_that_is_gone_are_refused() {
 #[test]
 fn delete_is_refused_while_picked() {
     let d = dir("delete");
-    let st = store(&d);
+    let mut st = store(&d);
     st.save_contest(&def("custom_app_delete", "APP-DELETE", &["rst"]), &d, NOW)
         .expect("saved");
     let err = st
@@ -185,7 +185,7 @@ fn delete_is_refused_while_picked() {
 #[test]
 fn an_import_collision_asks_then_keeps_both_or_replaces() {
     let d = dir("import");
-    let st = store(&d);
+    let mut st = store(&d);
     let mine = def("custom_app_import", "APP-IMPORT", &["rst"]);
     st.save_contest(&mine, &d, NOW).expect("saved");
     let mut theirs = mine.clone();
@@ -229,7 +229,7 @@ fn an_import_collision_asks_then_keeps_both_or_replaces() {
 #[test]
 fn an_export_carries_no_typed_value() {
     let d = dir("export");
-    let st = store(&d);
+    let mut st = store(&d);
     st.save_contest(
         &def("custom_app_export", "APP-EXPORT", &["rst", "age"]),
         &d,
@@ -254,7 +254,7 @@ fn an_unreadable_file_is_left_alone_and_never_overwritten() {
     let d = dir("unreadable");
     let path = d.join(custom_contests::FILE_NAME);
     std::fs::write(&path, "{ not json").expect("written");
-    let (st, problems) = Store::load(path.clone(), NOW);
+    let (mut st, problems) = Store::load(path.clone(), NOW);
     assert_eq!(problems.len(), 1, "{problems:?}");
     let err = st
         .save_contest(&def("custom_app_locked", "APP-LOCKED", &["rst"]), &d, NOW)
@@ -314,4 +314,87 @@ fn the_preview_renders_from_the_real_compiler_session_and_exporter() {
     let p = custom_contests::preview(&aged, &settings, NOW);
     assert!(p.start_problem.contains("Your AGE is empty"), "{p:?}");
     assert_eq!(p.entered_slots, ["AGE"]);
+}
+
+/// Write a contest file holding `entries`, as a raw JSON list.
+fn write_file(path: &std::path::Path, entries: Vec<serde_json::Value>) {
+    let file = serde_json::json!({"version": 1, "contests": entries});
+    std::fs::write(path, serde_json::to_vec_pretty(&file).expect("json")).expect("written");
+}
+
+/// ⭐ **An entry this version cannot use stays on disk through the next save** — one a later
+/// version wrote (a downgrade), one with a key this version does not know, and one a newer rules
+/// download now refuses (its token is a shipped contest's). Each is listed as unusable, the good
+/// one installs, and saving another contest writes all three back untouched.
+#[test]
+fn entries_this_version_cannot_use_survive_the_next_save() {
+    let d = dir("skipped");
+    let path = d.join(custom_contests::FILE_NAME);
+    let good = serde_json::to_value(def("custom_app_good", "APP-GOOD", &["rst"])).expect("json");
+    let mut later =
+        serde_json::to_value(def("custom_app_later", "APP-LATER", &["rst"])).expect("json");
+    later["version"] = serde_json::json!(2);
+    let mut unknown_key =
+        serde_json::to_value(def("custom_app_newkey", "APP-NEWKEY", &["rst"])).expect("json");
+    unknown_key["multipliers"] = serde_json::json!(["dxcc"]);
+    let shipped_token =
+        serde_json::to_value(def("custom_app_owned", "CQ-WPX-CW", &["rst"])).expect("json");
+    write_file(
+        &path,
+        vec![
+            good,
+            later.clone(),
+            unknown_key.clone(),
+            shipped_token.clone(),
+        ],
+    );
+    let (mut st, problems) = Store::load(path.clone(), NOW);
+    assert_eq!(problems.len(), 3, "{problems:?}");
+    assert!(tempo_core::fd_rules::custom_def("custom_app_good").is_some());
+    let unusable: Vec<String> = st.unusable().into_iter().map(|u| u.id).collect();
+    assert_eq!(
+        unusable,
+        ["custom_app_later", "custom_app_newkey", "custom_app_owned"]
+    );
+    assert!(
+        st.unusable()[0].why.contains("version 2"),
+        "{:?}",
+        st.unusable()
+    );
+
+    st.save_contest(&def("custom_app_after", "APP-AFTER", &["rst"]), &d, NOW)
+        .expect("saved");
+    let back: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("kept")).expect("json");
+    let entries = back["contests"].as_array().expect("a list");
+    for kept in [&later, &unknown_key, &shipped_token] {
+        assert!(
+            entries.contains(kept),
+            "{kept} was not written back untouched"
+        );
+    }
+    assert!(entries.iter().any(|e| e["id"] == "custom_app_after"));
+    assert!(entries.iter().any(|e| e["id"] == "custom_app_good"));
+}
+
+/// A new contest may not take the id of an entry this version cannot use (saving it would drop
+/// that entry); deleting the unusable entry removes it from the file.
+#[test]
+fn an_unusable_entry_keeps_its_id_until_it_is_deleted() {
+    let d = dir("unusable-id");
+    let path = d.join(custom_contests::FILE_NAME);
+    let mut later =
+        serde_json::to_value(def("custom_app_held", "APP-HELD", &["rst"])).expect("json");
+    later["version"] = serde_json::json!(2);
+    write_file(&path, vec![later]);
+    let (mut st, _) = Store::load(path.clone(), NOW);
+    let err = st
+        .save_contest(&def("custom_app_held", "APP-HELD-NEW", &["rst"]), &d, NOW)
+        .expect_err("the id is held");
+    assert!(err.contains("can't use"), "{err}");
+    st.delete("custom_app_held", "arrlfd").expect("deleted");
+    assert!(st.unusable().is_empty());
+    assert!(!std::fs::read_to_string(&path)
+        .expect("written")
+        .contains("custom_app_held"));
 }

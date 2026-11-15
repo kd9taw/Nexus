@@ -357,6 +357,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("leave_client_mode",              RunsHere,    "Starts this computer's Nexus again as itself."),
     ("leave_decoder_screen",           RunsAtShack, "Stops the shack decoder a screen started when that screen is left; receive only."),
     ("list_custom_contests",           RunsAtShack, "The shack's own contests."),
+    ("list_unusable_custom_contests",  RunsAtShack, "Entries of the shack's contest file this version cannot use."),
     ("log_activations",                RunsAtShack, "From the shack's logbook."),
     ("log_current_qso",                RunsAtShack, "Logs the current contact at the shack."),
     ("log_grid_fill",                  RefusedHere, "Changes many contacts of the shack's logbook at once, as large as a purge."),

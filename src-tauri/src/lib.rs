@@ -13333,26 +13333,43 @@ fn custom_contests_load_from_disk() {
     *CUSTOM_CONTESTS.lock().unwrap_or_else(|e| e.into_inner()) = Some(store);
 }
 
-/// The loaded store, or the startup path's if nothing loaded it (a test, a command before
-/// startup finished): the file is read and installed then.
-fn custom_contests_store() -> tempo_app::custom_contests::Store {
-    let mut slot = CUSTOM_CONTESTS.lock().unwrap_or_else(|e| e.into_inner());
-    if slot.is_none() {
-        let (store, _) = tempo_app::custom_contests::Store::load(
-            custom_contests_path(),
-            now_unix().max(0) as u64,
-        );
-        *slot = Some(store);
-    }
-    slot.clone().expect("filled above")
+/// ⭐ **Run `f` on the loaded store, holding its lock for the WHOLE call.** Every command that
+/// changes the operator's contests goes through here, so two of them never interleave: each
+/// installs and writes the file under the one lock. (They are async commands; with the lock
+/// dropped between the install and the write, two saves wrote the same temporary file and the
+/// later write could leave out the contest the other had just saved.)
+///
+/// The store is loaded here if nothing loaded it yet (a command before startup finished).
+fn with_custom_contests<R>(
+    slot: &Mutex<Option<tempo_app::custom_contests::Store>>,
+    path: PathBuf,
+    f: impl FnOnce(&mut tempo_app::custom_contests::Store) -> R,
+) -> R {
+    let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+    let store = slot.get_or_insert_with(|| {
+        tempo_app::custom_contests::Store::load(path, now_unix().max(0) as u64).0
+    });
+    f(store)
+}
+
+/// [`with_custom_contests`] on the app's own store and file.
+fn custom_contests<R>(f: impl FnOnce(&mut tempo_app::custom_contests::Store) -> R) -> R {
+    with_custom_contests(&CUSTOM_CONTESTS, custom_contests_path(), f)
 }
 
 /// ⭐ **The operator's own contests**, with what the setup needs for each (the slots to type,
 /// the settings it sends from, whether contacts lock its exchange).
 #[tauri::command]
 fn list_custom_contests() -> Vec<tempo_app::custom_contests::CustomContestDto> {
-    custom_contests_store();
-    tempo_app::custom_contests::list(&contest_journal_dir())
+    custom_contests(|_| tempo_app::custom_contests::list(&contest_journal_dir()))
+}
+
+/// ⭐ **The entries of the contest file this version cannot use** (a later version's, or one a
+/// newer rules download now refuses), each with why. They stay on disk through every save; the
+/// list shows them so the operator knows, and Delete removes one.
+#[tauri::command]
+fn list_unusable_custom_contests() -> Vec<tempo_app::custom_contests::UnusableContestDto> {
+    custom_contests(|store| store.unusable())
 }
 
 /// ⭐ **The builder's preview of a definition** — the refusal, what this station would send, a
@@ -13371,22 +13388,23 @@ fn preview_custom_contest(
 /// change the exchange or Cabrillo contest name of a contest with logged contacts is refused.
 #[tauri::command(async)]
 fn save_custom_contest(def: tempo_core::fd_rules::custom::CustomDef) -> Result<(), String> {
-    custom_contests_store().save_contest(&def, &contest_journal_dir(), now_unix().max(0) as u64)
+    custom_contests(|store| {
+        store.save_contest(&def, &contest_journal_dir(), now_unix().max(0) as u64)
+    })
 }
 
 /// Delete a contest — refused while it is the picked one. Its journals stay on disk.
 #[tauri::command(async)]
 fn delete_custom_contest(state: State<'_, SharedEngine>, id: String) -> Result<(), String> {
     let picked = engine_lock(&state).settings().fd_event.clone();
-    custom_contests_store().delete(id.trim(), &picked)
+    custom_contests(|store| store.delete(id.trim(), &picked))
 }
 
 /// The definition file of contest `id`, as text — the definition and nothing else. The UI saves
 /// it (as text, so a remote computer saves it where its operator sits).
 #[tauri::command(async)]
 fn export_custom_contest(id: String) -> Result<String, String> {
-    custom_contests_store();
-    tempo_app::custom_contests::export_text(id.trim())
+    custom_contests(|_| tempo_app::custom_contests::export_text(id.trim()))
 }
 
 /// Import a definition file's `text`. With `onCollision` `ask`, an id already in use is refused
@@ -13397,12 +13415,14 @@ fn import_custom_contest(
     text: String,
     on_collision: tempo_app::custom_contests::OnCollision,
 ) -> Result<tempo_core::fd_rules::custom::CustomDef, String> {
-    custom_contests_store().import(
-        &text,
-        on_collision,
-        &contest_journal_dir(),
-        now_unix().max(0) as u64,
-    )
+    custom_contests(|store| {
+        store.import(
+            &text,
+            on_collision,
+            &contest_journal_dir(),
+            now_unix().max(0) as u64,
+        )
+    })
 }
 
 /// One contest's running-or-next window, for the contest setup's "this week first" list.
@@ -54504,6 +54524,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         preview_fd_ruleset,
         contest_windows,
         list_custom_contests,
+        list_unusable_custom_contests,
         preview_custom_contest,
         save_custom_contest,
         delete_custom_contest,
@@ -57768,6 +57789,47 @@ mod tests {
         assert_eq!(at(w.start_unix + 60), Some((w.start_unix, w.end_unix)));
         let next = rs.event_window(2027);
         assert_eq!(at(w.end_unix), Some((next.start_unix, next.end_unix)));
+    }
+
+    /// ⭐ **Concurrent saves never lose one.** Sixteen threads each save their own contest through
+    /// the store the commands use; every one succeeds and the file holds all sixteen.
+    #[test]
+    fn concurrent_custom_contest_saves_all_reach_the_file() {
+        static SLOT: std::sync::Mutex<Option<tempo_app::custom_contests::Store>> =
+            std::sync::Mutex::new(None);
+        let dir = std::env::temp_dir().join(format!("nexus-cc-concurrent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join(tempo_app::custom_contests::FILE_NAME);
+        let handles: Vec<_> = (0..16)
+            .map(|n| {
+                let (path, dir) = (path.clone(), dir.clone());
+                std::thread::spawn(move || {
+                    let def: tempo_core::fd_rules::custom::CustomDef = serde_json::from_value(
+                        serde_json::json!({"format": "nexus-custom-contest", "version": 1,
+                            "id": format!("custom_tauri_conc_{n}"), "name": format!("Conc {n}"),
+                            "cabrillo_contest": format!("TAURI-CONC-{n}"), "modes": ["CW"],
+                            "window": {"kind": "weekend", "month": 3, "weekend": "last_full",
+                                       "start_hour_utc": 0, "duration_hours": 4},
+                            "exchange": [{"field": "rst"}], "dupe": "band"}),
+                    )
+                    .expect("a definition");
+                    super::with_custom_contests(&SLOT, path, |store| {
+                        store.save_contest(&def, &dir, 1_794_614_400)
+                    })
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("joined").expect("saved");
+        }
+        let text = std::fs::read_to_string(&path).expect("written");
+        for n in 0..16 {
+            assert!(
+                text.contains(&format!("\"custom_tauri_conc_{n}\"")),
+                "{n} lost:\n{text}"
+            );
+        }
     }
 
     /// ⭐ An operator's own contest is listed with its window, as every rules-data contest is.
