@@ -632,7 +632,11 @@ foreach(tgt tempo_static tempo_shared)
     target_link_libraries(${tgt} PUBLIC ${BOOST_CRC_TARGET})
     # Whatever links libtempo (the shared library itself, the verification executables) links
     # the OpenMP runtime too. Cargo builds only tempo_static and links libgomp itself.
-    target_link_options(${tgt} PUBLIC $<$<LINK_LANGUAGE:Fortran>:-fopenmp>)
+    # tempo_shared links as C++ (crc14.cpp makes CXX its link language: g++ drives the link), so
+    # a GNU C++ link takes -fopenmp as well: without it a MinGW DLL, which must resolve every
+    # symbol, fails on GOMP_parallel (a Linux .so leaves them undefined and links).
+    target_link_options(${tgt} PUBLIC
+        $<$<OR:$<LINK_LANGUAGE:Fortran>,$<LINK_LANG_AND_ID:CXX,GNU>>:-fopenmp>)
     # crc14.cpp #include <boost/crc.hpp>: add host Boost headers as a last-resort
     # search path (cross build only; empty natively).
     if(BOOST_HEADER_FLAG)
