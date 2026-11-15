@@ -209,14 +209,18 @@ fn a_repeat_counts_only_on_the_same_parity_and_within_the_window() {
     full_pass(&mut e, "CQ W9XYZ EN37", false, 1);
     full_pass(&mut e, "CQ W9XYZ EN37", true, 2);
     assert!(wired(&e).is_empty(), "the other parity");
-    // The last same-parity period inside the window counts; the next one does not, and the
-    // unchecked copies in between do not stretch it.
-    let last = 1 + 2 * UNCHECKED_REPEAT_PERIODS;
+    // The window is 4 same-parity periods, written out: checked at slot 1, an unchecked copy at
+    // slot 9 (the 4th same-parity period after) counts; one at slot 11 does not, and the unchecked
+    // copy at 9 does not stretch it.
+    assert_eq!(
+        UNCHECKED_REPEAT_PERIODS, 4,
+        "the window is two minutes of FT8"
+    );
     let mut e = station();
     full_pass(&mut e, "CQ W9XYZ EN37", false, 1);
-    full_pass(&mut e, "CQ W9XYZ EN37", true, last);
+    full_pass(&mut e, "CQ W9XYZ EN37", true, 9);
     assert_eq!(wired(&e), ["CQ W9XYZ EN37"], "within the window");
-    full_pass(&mut e, "CQ W9XYZ EN37", true, last + 2);
+    full_pass(&mut e, "CQ W9XYZ EN37", true, 11);
     assert!(
         wired(&e).is_empty(),
         "past it: counted from the checked copy"
