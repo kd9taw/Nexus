@@ -466,8 +466,51 @@ mod tests {
         (1800, 0x7a33_b2a5_8ce1_4bfd),
     ];
 
+    /// The toolchain GOLDEN was taken with: gfortran's full version, and glibc's (its libm).
+    const PINNED_TOOLCHAIN: (&str, &str) = ("13.3.0", "2.39");
+
+    /// This box's (gfortran, glibc) versions. The gfortran asked is the one the build script
+    /// compiles libtempo with (`FC`, else `gfortran`).
+    fn toolchain() -> (String, String) {
+        let fc = std::env::var("FC").unwrap_or_else(|_| "gfortran".into());
+        let gfortran = std::process::Command::new(&fc)
+            .arg("-dumpfullversion")
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+            .unwrap_or_else(|| format!("unknown ({fc} did not run)"));
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        let glibc = {
+            extern "C" {
+                fn gnu_get_libc_version() -> *const std::os::raw::c_char;
+            }
+            // SAFETY: glibc returns a pointer to a static NUL-terminated string.
+            unsafe { std::ffi::CStr::from_ptr(gnu_get_libc_version()) }
+                .to_string_lossy()
+                .into_owned()
+        };
+        #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+        let glibc = "none (not glibc)".to_owned();
+        (gfortran, glibc)
+    }
+
     #[test]
     fn the_transmitted_samples_are_pinned_at_every_period() {
+        // The pins are only evidence on the toolchain they were taken with (see GOLDEN), so on
+        // another one this test says so and stops instead of going red. Ubuntu 26.04 (gfortran
+        // 15.2, glibc 2.43) moves FST4-120 alone. CI never skips: a runner whose toolchain has
+        // moved must fail here, so the pins are re-recorded as a deliberate step.
+        let (gfortran, glibc) = toolchain();
+        if (gfortran.as_str(), glibc.as_str()) != PINNED_TOOLCHAIN
+            && std::env::var_os("CI").is_none()
+        {
+            eprintln!(
+                "SKIP the_transmitted_samples_are_pinned_at_every_period: pinned on gfortran {} / \
+                 glibc {}, this box has gfortran {gfortran} / glibc {glibc}; a digest here proves nothing",
+                PINNED_TOOLCHAIN.0, PINNED_TOOLCHAIN.1
+            );
+            return;
+        }
         let itone = encode("K1ABC W9XYZ EN37", false).expect("message packs");
         let got: Vec<(u16, u64)> = PERIODS
             .iter()
