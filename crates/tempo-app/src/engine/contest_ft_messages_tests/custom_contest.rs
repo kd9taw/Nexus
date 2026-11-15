@@ -185,3 +185,39 @@ fn an_eu_vhf_shaped_contest_works_wsjtxs_eu_vhf_messages_through_the_cockpit() {
         assert_eq!(air_form(over).0, "i3=1", "{over}");
     }
 }
+
+/// ⛔ A Roundup run whose serial reaches 8000 mid-contest can answer no caller: the caller's
+/// exchange gets nothing (no `… R 549 8000`, which the message would read as a multiplier), and the
+/// run stops by the safe path — TX goes off once the over in hand has played, as after a contact
+/// (`pending_tx_disable`), with no CQ keyed meanwhile — and the next Call CQ says why.
+#[test]
+fn a_roundup_run_reaching_serial_8000_turns_tx_off_and_sends_nothing() {
+    install("custom_eng_ru_8000", "ENG-RU-8000", &["rst", "serial"]);
+    let mut e = engine_for("custom_eng_ru_8000", MY_GRID);
+    e.set_tier(Tier::Ft8);
+    e.start_running().expect("the run starts at serial 1");
+    e.set_tx_enabled(true);
+    assert!(!e.take_pending_tx_disable(), "premise: nothing pending");
+    assert_eq!(keyed(&mut e, 0).as_deref(), Some("CQ RU K1ABC FN42"));
+    // The run's serial has reached 8000.
+    if let Mode::FieldDay { station, .. } = &mut e.mode {
+        station.log.session.next_serial = 8000;
+    }
+    e.ingest_decodes_for_test(&[heard(&format!("{ME} {DX} 559 0013"))], 2);
+    // Nothing goes to the caller, and no CQ is keyed while TX is going off.
+    assert_eq!(e.contest_tx_now(), None);
+    assert_eq!(keyed(&mut e, 2), None);
+    if let Mode::FieldDay { station, .. } = &e.mode {
+        assert!(station.log.qsos().is_empty(), "nothing logged");
+        assert!(
+            station
+                .outgoing()
+                .is_some_and(|m| !m.to_text().contains("8000")),
+            "no malformed exchange queued"
+        );
+    }
+    assert!(e.take_pending_tx_disable(), "the run turns TX off");
+    e.set_tx_enabled(false);
+    let why = e.start_running().expect_err("Call CQ says why");
+    assert!(why.contains("serial 8000"), "{why}");
+}
