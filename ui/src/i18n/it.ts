@@ -10540,6 +10540,7 @@ export const IT: PartialCatalog = {
   "customContest.delete.yes": "Eliminalo",
   "customContest.delete.no": "Tienilo",
   "customContest.deleted": "{{contest}} eliminato.",
+  "customContest.unusable": "Questa versione di Nexus non può usare {{contest}}: {{why}} Resta nel tuo file dei contest finché non lo elimini.",
   "customContest.deleteFailed": "{{contest}} non è stato eliminato: {{error}}",
   "customContest.exported": "{{contest}} salvato in {{path}}",
   "customContest.exportFailed": "{{contest}} non è stato esportato: {{error}}",

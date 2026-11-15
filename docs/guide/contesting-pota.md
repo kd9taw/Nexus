@@ -545,8 +545,8 @@ on the Contest screen. Under **Your contests**, press **Build your own…** and 
 Next stays greyed while a box the step needs is empty, and the line above the buttons says which.
 
 **Your age, name or text** is typed on the setup's exchange step, or in Settings ▸ Contesting ▸ Your
-station data while the contest is picked. It is kept on this computer, for that contest only, and an
-exported contest file never carries it. A contest that sends one will not start while it is blank.
+station data while the contest is picked, as one word of letters, digits and `/`. It is kept on this
+computer, for that contest only, and an exported contest file never carries it. A contest that sends one will not start while it is blank.
 
 **FT8 and FT4.** A contest you build uses the standard FT8 and FT4 messages (grid and signal report)
 and does not send its exchange; the builder says so on the Exchange and Check steps. For an exchange
@@ -561,6 +561,9 @@ Cabrillo name, which you can change). **Delete** asks first, and is refused whil
 picked one; contacts already logged in it stay on your computer. Once contacts are logged in a
 contest, its exchange and Cabrillo name can no longer change, because the log's contacts were made
 with them: **Save as a new contest instead** makes a new one beside it.
+
+A contest in your contests file that this version of Nexus can't use (one saved by a later version,
+say) is listed under Your contests with the reason, and stays in the file until you delete it.
 
 Club sync and RTTY Auto do not run a contest you build. If a
 contest you picked has been deleted, or its file could not be read, Nexus says so and asks you to

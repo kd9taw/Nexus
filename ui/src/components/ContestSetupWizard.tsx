@@ -44,13 +44,15 @@ import {
   getSnapshot,
   getSettings,
   importCustomContest,
+  listUnusableCustomContests,
   previewFdRuleset,
   type ContestWindow,
   type CustomContest,
   type FdRulesetDto,
+  type UnusableCustomContest,
 } from '../api'
-import { CustomContestActions, CustomContestBuilder } from './CustomContestBuilder'
-import { enteredSlotLabel, reloadCustomContests, useCustomContests } from '../features/customContests'
+import { CustomContestActions, CustomContestBuilder, UnusableContestRow } from './CustomContestBuilder'
+import { enteredSlotLabel, enteredTyped, reloadCustomContests, useCustomContests } from '../features/customContests'
 import { patchSettings } from '../settings/patch'
 import { CONTESTS, contestName, contestRoleWords, isFieldDay } from '../fdEvent'
 import { blockerText, startBlocker } from '../features/contestStart'
@@ -292,6 +294,12 @@ export function ContestSetupWizard({
   const [collision, setCollision] = useState<{ text: string; name: string } | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const mine = useCustomContests()
+  // The contest file's entries this version cannot use: shown, with why, until deleted.
+  const [unusable, setUnusable] = useState<UnusableCustomContest[]>([])
+  const readUnusable = () =>
+    listUnusableCustomContests()
+      .then((u) => setUnusable(Array.isArray(u) ? u : []))
+      .catch(() => {})
 
   useEffect(() => {
     let live = true
@@ -305,6 +313,7 @@ export function ContestSetupWizard({
     contestWindows()
       .then((w) => live && setWindows(Array.isArray(w) ? w : []))
       .catch(() => live && setWindows([]))
+    void readUnusable()
     void reloadCustomContests().then((list) => {
       const own = editCustom ? list.find((c) => c.def.id === editCustom) : undefined
       if (live && own) setBuilder({ editing: own })
@@ -754,6 +763,9 @@ export function ContestSetupWizard({
                 </div>
               )
             })}
+            {unusable.map((u) => (
+              <UnusableContestRow key={u.id} entry={u} onNote={setNote} onDeleted={() => void readUnusable()} />
+            ))}
             <span className="cc-own-tools">
               <button
                 type="button"
@@ -858,7 +870,7 @@ export function ContestSetupWizard({
                     inputMode={slot === 'AGE' ? 'numeric' : undefined}
                     maxLength={slot === 'AGE' ? 2 : 12}
                     value={entered[slot] ?? ''}
-                    onChange={(e) => setEntered(slot, upperTyped(e.target))}
+                    onChange={(e) => setEntered(slot, enteredTyped(slot, e.target))}
                     autoComplete="off"
                     spellCheck={false}
                   />

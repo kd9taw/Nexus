@@ -41,6 +41,7 @@ const answers: Record<string, (args: Record<string, unknown>) => unknown> = {
   get_snapshot: () => ({ fieldDay: null, mode: 'Normal', radio: { catOk: true, operatingMode: 'CW' }, link: { tier: 'Ft8' } }),
   contest_windows: () => [],
   list_custom_contests: () => mine,
+  list_unusable_custom_contests: () => [],
   preview_fd_ruleset: (a) => {
     const patch = (a.patch ?? {}) as { fdEvent?: string }
     const event = patch.fdEvent || 'arrlfd'

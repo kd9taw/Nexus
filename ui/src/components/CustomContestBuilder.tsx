@@ -34,6 +34,7 @@ import {
   type CustomContestMode,
   type CustomContestPreview,
   type CustomContestWindow,
+  type UnusableCustomContest,
 } from '../api'
 import {
   CUSTOM_FIELDS,
@@ -567,6 +568,53 @@ export function CustomContestBuilder({
         </div>
       </div>
     </>
+  )
+}
+
+/** ⭐ An entry of the contest file this version cannot use: named, with why, and Delete (asked first).
+ *  It stays in the file until the operator deletes it, so a later version can still use it. */
+export function UnusableContestRow({
+  entry,
+  onDeleted,
+  onNote,
+}: {
+  entry: UnusableCustomContest
+  onDeleted: () => void
+  onNote: (note: { text: string; bad?: boolean }) => void
+}) {
+  const [asking, setAsking] = useState(false)
+  const name = entry.name || entry.id
+  const doDelete = async () => {
+    setAsking(false)
+    try {
+      await deleteCustomContest(entry.id)
+      onNote({ text: t('customContest.deleted', { contest: name }) })
+      onDeleted()
+    } catch (e) {
+      onNote({ text: t('customContest.deleteFailed', { contest: name, error: errorText(e) }), bad: true })
+    }
+  }
+  return (
+    <div className="contest-setup-warn" role="status" data-unusable>
+      <p>{t('customContest.unusable', { contest: name, why: entry.why })}</p>
+      <span className="cc-actions">
+        {asking ? (
+          <>
+            <span>{t('customContest.delete.ask', { contest: name })}</span>
+            <button type="button" className="settings-linkbtn" onClick={() => void doDelete()}>
+              {t('customContest.delete.yes')}
+            </button>
+            <button type="button" className="settings-linkbtn" onClick={() => setAsking(false)}>
+              {t('customContest.delete.no')}
+            </button>
+          </>
+        ) : (
+          <button type="button" className="settings-linkbtn" onClick={() => setAsking(true)}>
+            {t('customContest.action.delete')}
+          </button>
+        )}
+      </span>
+    </div>
   )
 }
 

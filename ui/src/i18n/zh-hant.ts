@@ -10534,6 +10534,7 @@ export const ZH_HANT: PartialCatalog = {
   "customContest.delete.yes": "刪除",
   "customContest.delete.no": "保留",
   "customContest.deleted": "已刪除 {{contest}}。",
+  "customContest.unusable": "此版本的 Nexus 無法使用 {{contest}}：{{why}} 在你刪除之前，它會保留在你的競賽檔案中。",
   "customContest.deleteFailed": "{{contest}} 未刪除：{{error}}",
   "customContest.exported": "已將 {{contest}} 儲存到 {{path}}",
   "customContest.exportFailed": "{{contest}} 未匯出：{{error}}",

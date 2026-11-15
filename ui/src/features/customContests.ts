@@ -13,6 +13,7 @@
 // ---------------------------------------------------------------------------
 import { useSyncExternalStore } from 'react'
 import { t } from '../i18n'
+import { normaliseTyped } from '../typedInput'
 import {
   listCustomContests,
   type CustomContest,
@@ -148,6 +149,13 @@ export function blankCustomDef(): CustomContestDef {
     dupe: 'band',
     points: { CW: 1, PH: 1, DIG: 1 },
   }
+}
+
+/** ⭐ What a typed slot's box keeps as the operator types: an age is digits; a name or a text is ONE
+ *  word of capital letters, digits and `/`, the only thing the station will send
+ *  (`contest/session.rs` refuses anything else). */
+export function enteredTyped(slot: string, el: HTMLInputElement): string {
+  return normaliseTyped(el, (s) => (slot === 'AGE' ? s.replace(/\D/g, '') : s.toUpperCase().replace(/[^A-Z0-9/]/g, '')))
 }
 
 /** ⭐ What a TYPED slot is called (`AGE`, `NAME`, `TXT1`): a text field by the caption the operator

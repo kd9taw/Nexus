@@ -763,6 +763,18 @@ export interface CustomContestPreview {
   enteredSlots: string[]
 }
 
+/** An entry of the station's contest file this version cannot use (a later version's, or one a newer
+ *  rules download refuses), with why. It stays on disk; Delete removes it. */
+export interface UnusableCustomContest {
+  id: string
+  name: string
+  why: string
+}
+/** The contest file's entries this version cannot use. */
+export async function listUnusableCustomContests(): Promise<UnusableCustomContest[]> {
+  return invoke<UnusableCustomContest[]>('list_unusable_custom_contests')
+}
+
 /** Every operator-built contest installed on the station. */
 export async function listCustomContests(): Promise<CustomContest[]> {
   return invoke<CustomContest[]>('list_custom_contests')

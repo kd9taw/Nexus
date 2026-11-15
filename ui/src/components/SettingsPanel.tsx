@@ -279,7 +279,7 @@ import { SettingsLicenses } from './SettingsLicenses'
 import { ContestOverDialog, contestOverOffer, hasOffer, type ContestOverOffer } from './ContestOverDialog'
 import { ContestSetupWizard, SETUP_KEYS } from './ContestSetupWizard'
 import { CustomContestActions } from './CustomContestBuilder'
-import { customContest, enteredSlotLabel, reloadCustomContests, useCustomContests } from '../features/customContests'
+import { customContest, enteredSlotLabel, enteredTyped, reloadCustomContests, useCustomContests } from '../features/customContests'
 import { contestSummaryText } from './ContestView'
 import { blockerText, startBlocker } from '../features/contestStart'
 import { Js8HeartbeatSettings } from './Js8HeartbeatSettings'
@@ -15029,7 +15029,7 @@ export function SettingsPanel({
                         maxLength={slot === 'AGE' ? 2 : 12}
                         value={form.contestEntered?.[event]?.[slot] ?? ''}
                         onChange={(e) => {
-                          const value = upperTyped(e.target)
+                          const value = enteredTyped(slot, e.target)
                           markDirty()
                           setForm((prev) => {
                             if (!prev) return prev

@@ -5850,6 +5850,7 @@ export const EN = {
   'customContest.delete.yes': 'Delete it',
   'customContest.delete.no': 'Keep it',
   'customContest.deleted': 'Deleted {{contest}}.',
+  'customContest.unusable': '{{contest}} can\'t be used by this version of Nexus: {{why}} It stays in your contests file until you delete it.',
   'customContest.deleteFailed': '{{contest}} was not deleted: {{error}}',
   'customContest.exported': 'Saved {{contest}} to {{path}}',
   'customContest.exportFailed': '{{contest}} was not exported: {{error}}',

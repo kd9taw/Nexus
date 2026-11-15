@@ -16,7 +16,7 @@ import { resolve } from 'node:path'
 import { ContestSetupWizard } from './ContestSetupWizard'
 import type { AppSnapshot, Settings } from '../types'
 import type { CustomContest, CustomContestDef, CustomContestPreview, FdRulesetDto } from '../api'
-import { setCustomContests } from '../features/customContests'
+import { enteredTyped, setCustomContests } from '../features/customContests'
 import { contestName, contestClubRefusal, clubSyncRefusalText } from '../fdEvent'
 import { chainOf, parseRules, winnerAt } from '../cssCascade'
 
@@ -384,6 +384,36 @@ describe('your contests: edit, export, delete, import', () => {
     await screen.findByText('Club Sprint is on · S&P')
     expect(station.contestEntered).toEqual({ custom_club_sprint: { AGE: '42' } })
     expect(station.fdEvent).toBe('custom_club_sprint')
+  })
+})
+
+describe('what the contest file holds that this version cannot use', () => {
+  it('is named with why, and Delete asks first, then removes it', async () => {
+    let left = [{ id: 'custom_future', name: 'Future Sprint', why: 'custom contest file version 2 (this build reads version 1)' }]
+    api.get('listUnusableCustomContests').mockImplementation(() => Promise.resolve(structuredClone(left)))
+    api.get('deleteCustomContest').mockImplementation(() => {
+      left = []
+      return Promise.resolve()
+    })
+    await open()
+    const row = (await screen.findByText(/^Future Sprint can't be used by this version of Nexus/)).closest('[data-unusable]') as HTMLElement
+    expect(row.textContent).toContain('custom contest file version 2 (this build reads version 1)')
+    fireEvent.click(within(row).getByRole('button', { name: 'Delete' }))
+    expect(api.get('deleteCustomContest')).not.toHaveBeenCalled()
+    fireEvent.click(within(row).getByRole('button', { name: 'Delete it' }))
+    await screen.findByText('Deleted Future Sprint.')
+    expect(api.get('deleteCustomContest')).toHaveBeenCalledWith('custom_future')
+    await waitFor(() => expect(document.querySelector('[data-unusable]')).toBeNull())
+  })
+})
+
+describe('typed values keep what the station sends', () => {
+  it('an age is digits, a name one word of capitals, digits and /', () => {
+    const box = document.createElement('input')
+    box.value = 'al ex-2/p!'
+    expect(enteredTyped('NAME', box)).toBe('ALEX2/P')
+    box.value = '4a2'
+    expect(enteredTyped('AGE', box)).toBe('42')
   })
 })
 

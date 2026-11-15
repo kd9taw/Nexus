@@ -10561,6 +10561,7 @@ export const JA: PartialCatalog = {
   "customContest.delete.yes": "削除する",
   "customContest.delete.no": "残す",
   "customContest.deleted": "{{contest}} を削除しました。",
+  "customContest.unusable": "このバージョンの Nexus では {{contest}} を使えません: {{why}} 削除するまでコンテストファイルに残ります。",
   "customContest.deleteFailed": "{{contest}} は削除されませんでした: {{error}}",
   "customContest.exported": "{{contest}} を {{path}} に保存しました",
   "customContest.exportFailed": "{{contest}} はエクスポートされませんでした: {{error}}",
