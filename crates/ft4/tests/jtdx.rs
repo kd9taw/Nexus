@@ -209,3 +209,38 @@ fn jtdx_decodes_nothing_from_noise() {
     }
 }
 
+/// A decode JTDX's checks reject costs only that decode. A `<call> <call> R <grid>` message from
+/// two calls the callsign database does not hold is a false decode by JTDX's rule, and is dropped
+/// exactly as JTDX drops it; JTDX then also abandoned every other signal in the period (it
+/// returned from the decoder where its other checks skip one decode). Here it is tried first (the
+/// lowest frequency, nothing near the RX frequency) and the eight ordinary signals after it must
+/// all still decode.
+#[test]
+fn jtdx_rejecting_one_decode_keeps_the_rest_of_the_period() {
+    db();
+    let mut signals = vec![("K9QZX W8QZJ R EN52", 400.0, -8.0)];
+    let others = [
+        "CQ K1ABC FN42",
+        "W9XYZ G4ABC IO91",
+        "CQ KD9TAW EN52",
+        "W1AW K1ABC -12",
+        "G4ABC W9XYZ R-08",
+        "CQ W1AW FN31",
+        "KD9TAW G4ABC RR73",
+        "K1ABC W1AW 73",
+    ];
+    for (i, m) in others.iter().enumerate() {
+        signals.push((m, 700.0 + 230.0 * i as f32, -8.0));
+    }
+    let iwave = frame(&signals, 0xC1C1E);
+    reset_jtdx();
+    let d = decode_frame_jtdx(&iwave, 200, 2900, 3, "", "", 0, 0, false, false);
+    let mut want: Vec<String> = others.iter().map(|m| m.to_string()).collect();
+    want.sort();
+    assert_eq!(messages(&d), want);
+    // The Standard decoder has no such check and shows all nine.
+    assert_eq!(
+        decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0, false).len(),
+        9
+    );
+}

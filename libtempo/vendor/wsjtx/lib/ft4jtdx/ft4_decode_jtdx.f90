@@ -21,6 +21,8 @@
 !   WSJT-X's FT4 decoder (a SAVEd local is a file-local symbol no other unit can name).
 ! * Callback. It receives the whole 37-character message (JTDX passes 26, its display width) and
 !   the AP type of the pass that decoded it, so Nexus can mark AP decodes.
+! * The ' R ' false-decode check skips the one decode it rejects, as its sibling checks do, where
+!   JTDX returns from the decoder and loses the rest of the period (see the comment there).
 !
 module ft4_decode_jtdx_apstate
 ! MODIFIED FOR NEXUS: the SAVEd AP codeword cache and its callsign key, hoisted out of decode
@@ -405,7 +407,11 @@ contains
                     call_b=message(ispc1+1:ispc2-1)
                   endif
                   falsedec=.false.; call chkflscallvar(call_a,call_b,falsedec)
-                  if(falsedec) then; nbadcrc=1; message=''; return; endif
+! MODIFIED FOR NEXUS: JTDX has `return` here, which leaves the decoder and so abandons every
+! candidate after this one: one '<call> <call> R <grid>' decode whose two calls are not in the
+! callsign database silenced the whole period. Its sibling checks above skip only the decode
+! they reject, which is plainly what this check means too, so it does the same.
+                  if(falsedec) then; nbadcrc=1; message=''; cycle; endif
                 endif
               endif
 !write(21,'(i6.6,i5,2x,f4.1,i6,2x,a37,2x,f4.1,3i3,f5.1,i4,i4,i4)') &
