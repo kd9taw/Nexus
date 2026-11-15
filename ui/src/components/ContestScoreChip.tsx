@@ -34,7 +34,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { t } from '../i18n'
 import type { FieldDayStatus } from '../types'
 import { contestRate } from '../features/contestRate'
-import { contestShortName, countsOnly } from '../fdEvent'
+import { contestShortName, countsOnly, scoresOwnPoints } from '../fdEvent'
 
 /** No rate yet — the scoreboard tile's own symbol (`RATE_NONE`, ContestView.tsx): one contact
  *  is not a rate, and "0/hr" would claim one. A symbol, not prose. */
@@ -60,7 +60,7 @@ export function scoreChipText(fieldDay: FieldDayStatus, nowUnix: number): string
   // A contact-count-only contest (`countsOnly`) shows no points and no sections: its total is a
   // count, not its score, and sections are Field Day's.
   const count = countsOnly(fieldDay)
-  if (typeof fieldDay.totalScore === 'number' && !count) {
+  if (typeof fieldDay.totalScore === 'number' && (!count || scoresOwnPoints(fieldDay))) {
     parts.push(t('logEntry.score.points', { count: fieldDay.totalScore }))
   }
   parts.push(t('logEntry.score.qsos', { count: fieldDay.qsoCount }))

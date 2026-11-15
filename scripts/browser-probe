@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|besttimes|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|txmeterspane|radioswitch|radiosetup|toastcorner|logwaiting|topbar|topbarnow|header|rttyfit|digishell|alarmcell|firstrun|journeys|clublog|aprsmap|logbook|profiles|sstvlayout|menustop|stopabove|stopvisible|ftline|laptopfit|recallcard
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|besttimes|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|txmeterspane|radioswitch|radiosetup|contestsetup|toastcorner|logwaiting|topbar|topbarnow|header|rttyfit|digishell|alarmcell|firstrun|journeys|clublog|aprsmap|logbook|profiles|sstvlayout|menustop|stopabove|stopvisible|ftline|laptopfit|recallcard
        scripts/browser-probe --desktop-shard <n> <of>
 
   Window sizes: every --desktop probe takes its screens from ui/probe/sizes.mjs (the 2026-11-11
@@ -316,6 +316,14 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         map's toolbar inside the map, the Layers panel on it, the map drawn, and a
                         station's card opening inside the map with Follow on screen, with a toolbar
                         forced onto one row that must be caught (ui/probe/aprsmap-probe.mjs)
+  --desktop contestsetup
+                        the contest setup and its Build your own contest steps at the floor,
+                        1366×768 and 2560×1440: on the pick step (every contest and the
+                        operator's own) and on every builder step, the dialog inside the
+                        window, nothing sideways, and Next/Save contest, Back and Cancel on
+                        screen WITHOUT scrolling (the step buttons are pinned); a planted
+                        overflow, and at the floor the buttons un-pinned, are controls that
+                        must be caught (ui/probe/contestsetup-probe.mjs; it builds nothing)
   --desktop logbook     the Logbook in the app's own wrapper at the CORE screens,
                         asserting the panel spans the window and the table the
                         panel, nothing scrolls sideways at the page, the default table fits,
@@ -337,7 +345,7 @@ USAGE
 # job, which deals this list round-robin over its shards with --desktop-shard. Slowest first, so the
 # deal balances (local seconds on 2026-11-05: toastcorner 299, digishell 330, topbar 96, waterfalls 92, logbook 67,
 # header 62, journeys 42, rttyfit 39, the rest 7-27); keep a new probe near its cost when you add it.
-DESKTOP_ALL=(toastcorner digishell alarmcell sstvlayout stopvisible topbar topbarnow waterfalls txmeterspane logbook header journeys rttyfit menustop stopabove profiles firstrun radiosetup contestlog
+DESKTOP_ALL=(toastcorner digishell alarmcell sstvlayout stopvisible topbar topbarnow waterfalls txmeterspane logbook header journeys rttyfit menustop stopabove profiles firstrun radiosetup contestsetup contestlog
   ftline logwaiting spots atu radioswitch jtty activation clublog aprsmap callcard voicenote rotor contactcard txmeters besttimes laptopfit recallcard)
 
 SCENARIO='stream'
@@ -435,6 +443,7 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = logwaiting ] && exec node "$ROOT/ui/probe/logwaiting-probe.mjs"
   [ "$DESKTOP" = radioswitch ] && exec node "$ROOT/ui/probe/radioswitch-probe.mjs"
   [ "$DESKTOP" = radiosetup ] && exec node "$ROOT/ui/probe/radiosetup-probe.mjs"
+  [ "$DESKTOP" = contestsetup ] && exec node "$ROOT/ui/probe/contestsetup-probe.mjs"
   [ "$DESKTOP" = toastcorner ] && exec node "$ROOT/ui/probe/toastcorner-probe.mjs"
   [ "$DESKTOP" = firstrun ] && exec node "$ROOT/ui/probe/firstrun-probe.mjs"
   [ "$DESKTOP" = journeys ] && exec node "$ROOT/ui/probe/journeys-probe.mjs"

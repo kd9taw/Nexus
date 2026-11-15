@@ -235,6 +235,7 @@ export function LastContacts({
         rows={editRows}
         receives={fieldDay.receives ?? []}
         role={fieldDay.role}
+        event={fieldDay.event}
         bands={fieldDay.bands}
         onSaving={() => {
           saving.current = true
@@ -254,6 +255,7 @@ export function LastContacts({
             isWfd={fieldDay.event === 'wfd'}
             slotColumns={slotColumns}
             role={fieldDay.role}
+            event={fieldDay.event}
             numbered={numbered}
           />
           {rows.length === 0 && <p className="empty">{t('fieldDay.log.empty')}</p>}

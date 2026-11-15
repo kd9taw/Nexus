@@ -278,6 +278,8 @@ import { SettingsSearch } from './SettingsSearch'
 import { SettingsLicenses } from './SettingsLicenses'
 import { ContestOverDialog, contestOverOffer, hasOffer, type ContestOverOffer } from './ContestOverDialog'
 import { ContestSetupWizard, SETUP_KEYS } from './ContestSetupWizard'
+import { CustomContestActions } from './CustomContestBuilder'
+import { customContest, enteredSlotLabel, enteredTyped, reloadCustomContests, useCustomContests } from '../features/customContests'
 import { contestSummaryText } from './ContestView'
 import { blockerText, startBlocker } from '../features/contestStart'
 import { Js8HeartbeatSettings } from './Js8HeartbeatSettings'
@@ -2262,8 +2264,16 @@ export function SettingsPanel({
   // while Stop contest… does (`overVia`), whose Turn off is its own save of the mode alone.
   const [overOffer, setOverOffer] = useState<ContestOverOffer | null>(null)
   const [overVia, setOverVia] = useState<'save' | 'stop'>('save')
-  // The contest setup (ContestSetupWizard.tsx), opened by Start contest….
+  // The contest setup (ContestSetupWizard.tsx), opened by Start contest…, or by Edit… on one of the
+  // operator's own contests (`setupEdit`, its id), which opens it on the builder.
   const [setupOpen, setSetupOpen] = useState(false)
+  const [setupEdit, setSetupEdit] = useState<string | undefined>(undefined)
+  // The operator's own contests, for the picker, and a line saying what Export or Delete did.
+  const ownContests = useCustomContests()
+  const [ownNote, setOwnNote] = useState<{ text: string; bad?: boolean } | null>(null)
+  useEffect(() => {
+    void reloadCustomContests()
+  }, [])
   /** Marks the position-name box when a save is refused for it — the callsign refusal has
    *  always marked ITS field, and a refusal that routes you to a tab without saying which box
    *  is the problem is only half an answer. Cleared as soon as the operator types. */
@@ -4577,7 +4587,11 @@ export function SettingsPanel({
           initial={Object.fromEntries(
             Object.entries(changedSince(savedRef.current, form)).filter(([k]) => SETUP_KEYS.includes(k as keyof Settings)),
           )}
-          onClose={() => setSetupOpen(false)}
+          editCustom={setupEdit}
+          onClose={() => {
+            setSetupOpen(false)
+            setSetupEdit(undefined)
+          }}
           onSaved={(written) => {
             adoptSaved(written)
             onSaved?.()
@@ -14660,7 +14674,49 @@ export function SettingsPanel({
                       {ev.name}
                     </button>
                   ))}
+                  {/* The operator's own contests, by the names they gave them (never translated). */}
+                  {ownContests.map((c) => (
+                    <button
+                      key={c.def.id}
+                      type="button"
+                      className={`theme-chip${(form.fdEvent || 'arrlfd') === c.def.id ? ' active' : ''}`}
+                      aria-pressed={(form.fdEvent || 'arrlfd') === c.def.id}
+                      onClick={() => {
+                        markDirty()
+                        setForm((prev) => prev ? { ...prev, fdEvent: c.def.id } : prev)
+                      }}
+                    >
+                      {c.def.name}
+                    </button>
+                  ))}
                 </div>
+                {/* Edit…, Export… and Delete for the picked one of the operator's own contests. Building
+                    a new one, and importing one, are in the contest setup (Start contest…). */}
+                {(() => {
+                  const own = customContest(form.fdEvent)
+                  return own ? (
+                    <CustomContestActions
+                      contest={own}
+                      onEdit={() => {
+                        setOwnNote(null)
+                        setSetupEdit(own.def.id)
+                        setSetupOpen(true)
+                      }}
+                      onNote={setOwnNote}
+                      onDeleted={(id) => {
+                        // An unsaved pick of the contest just deleted goes back to the saved pick.
+                        setForm((prev) =>
+                          prev && prev.fdEvent === id ? { ...prev, fdEvent: savedRef.current?.fdEvent ?? '' } : prev,
+                        )
+                      }}
+                    />
+                  ) : null
+                })()}
+                {ownNote && (
+                  <span className={ownNote.bad ? 'fd-section-warn' : 'settings-hint'} role={ownNote.bad ? 'alert' : 'status'}>
+                    {ownNote.text}
+                  </span>
+                )}
                 <span className="settings-hint">{t('settings.contestPick.contest.hint')}</span>
                 {/* While a contest runs, saving a different pick ends it and starts the new one
                     at once, as turning Contest mode off and on does (`Engine::save_switches_contest`);
@@ -14961,6 +15017,40 @@ export function SettingsPanel({
                   <span className="settings-hint">{t('settings.contestStation.power.hint')}</span>
                 </label>
                 )}
+
+                {/* ⭐ WHAT AN OWN CONTEST HAS THE OPERATOR TYPE (an age, a name, text), for the picked
+                    one: kept per contest in `contestEntered`, on this computer only — an exported
+                    contest file never carries it. */}
+                {(() => {
+                  const event = (form.fdEvent ?? '').trim()
+                  const slots = customContest(event)?.enteredSlots ?? []
+                  return slots.map((slot) => (
+                    <label className="settings-field" key={slot}>
+                      <span className="settings-label">{enteredSlotLabel(event, slot)}</span>
+                      <input
+                        className="settings-input mono"
+                        type="text"
+                        data-entered={slot}
+                        inputMode={slot === 'AGE' ? 'numeric' : undefined}
+                        maxLength={slot === 'AGE' ? 2 : 12}
+                        value={form.contestEntered?.[event]?.[slot] ?? ''}
+                        onChange={(e) => {
+                          const value = enteredTyped(slot, e.target)
+                          markDirty()
+                          setForm((prev) => {
+                            if (!prev) return prev
+                            const all = prev.contestEntered ?? {}
+                            return { ...prev, contestEntered: { ...all, [event]: { ...(all[event] ?? {}), [slot]: value } } }
+                          })
+                        }}
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                      {slot !== 'AGE' && <span className="settings-hint">{t('customContest.entered.oneWord')}</span>}
+                      <span className="settings-hint">{t('customContest.entered.settingsHint', { contest: contestName(event) })}</span>
+                    </label>
+                  ))
+                })()}
               </div>
             </fieldset>
           )}

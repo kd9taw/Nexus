@@ -28,7 +28,7 @@ import { WfdObjectivesSection } from './WfdObjectivesSection'
 import { WFD_OBJECTIVES, wfdEarnedIds, type WfdObjective } from '../features/wfdObjectives'
 import { pushToast } from '../toast'
 import { ADDR_SEP, CLUB_DEAD_SECS, CLUB_PING_SECS, clubLinkLines, heardAgo, type ClubLinkLine } from '../features/clubLink'
-import { clubSyncRefusal, clubSyncRefusalText, contestFileStem, contestName, contestShortName, countsOnly, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type ClubSyncRefusal, type FdKind } from '../fdEvent'
+import { clubSyncRefusal, clubSyncRefusalText, contestFileStem, contestName, contestShortName, countsOnly, scoresOwnPoints, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type ClubSyncRefusal, type FdKind } from '../fdEvent'
 import type { ContestSwitch } from '../contestSwitch'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { textPx } from '../useTextSize'
@@ -397,6 +397,7 @@ export function ContestLogHead({
   isWfd,
   slotColumns,
   role,
+  event,
   position = false,
   numbered = false,
 }: {
@@ -405,6 +406,8 @@ export function ContestLogHead({
   slotColumns: readonly ContestFieldSpec[]
   /** The session's role, which a column's caption depends on as its box's does. */
   role?: string
+  /** The session's contest: an operator-built one captions its text columns. */
+  event?: string
   /** One more column after Mode: the position that logged each contact (`ClubLogList`). */
   position?: boolean
   /** One more column before Time: each contact's QSO number (`logIsNumbered`). */
@@ -435,7 +438,7 @@ export function ContestLogHead({
         </>
       ) : (
         slotColumns.map((f) => (
-          <span className="fd-col slot" key={f.key}>{receivedCaption(f, role)}</span>
+          <span className="fd-col slot" key={f.key}>{receivedCaption(f, role, event)}</span>
         ))
       )}
       <span className="fd-col band">{t('fieldDay.log.column.band')}</span>
@@ -636,7 +639,7 @@ interface SummaryArgs {
   /** A contest that is NOT Field Day: what the session sends and how many multipliers the
    *  log has. Absent means Field Day's summary, byte for byte — class, section, sections
    *  worked, power multiplier and bonuses are Field Day's words and nobody else's. */
-  contest?: { sending: string; multCount: number | null }
+  contest?: { sending: string; multCount: number | null; contactsOnly?: boolean }
   /** The running contest's dupe rule, whose mode classes are the grid's columns
    *  ([`modeColumns`]); absent on an older build, which counted the three. */
   dupeRule?: DupeRule
@@ -694,7 +697,11 @@ export function contestSummaryText(
     // vector's "0" placeholder, which a serial contest's summary used to print.
     contest: fdEventIsFieldDay
       ? undefined
-      : { sending: fieldDay?.composingText ?? '', multCount: fieldDay?.multCount ?? null },
+      : {
+          sending: fieldDay?.composingText ?? '',
+          multCount: fieldDay?.multCount ?? null,
+          contactsOnly: fieldDay?.scoreNoteKey === 'settings.contestScore.contactsOnly',
+        },
     dupeRule: fieldDay?.dupeRule,
     fieldDaySheet: fdEventIsFieldDay && !isWfd,
     operators: fieldDay?.operators,
@@ -766,9 +773,12 @@ export function buildSummaryText(a: SummaryArgs): string {
     if (mults !== null) L.push(`  × multipliers              ${mults}`)
     L.push('  --------------------------------')
     L.push(`  TOTAL                      ${a.totalScore}`)
-    // A contest with no multiplier here is one whose multipliers this build does not compute
-    // (`countsOnly`): its total is a contact count, and the document must not read as a score.
-    if (mults === null) L.push('  Multipliers and QTCs are not computed here: this total is a contact count, not the score.')
+    // A contest whose score note says its total is a contact count (WAE: its multipliers and QTCs are
+    // not computed here) says so, and the document must not read as a score. An operator-built
+    // contest has no multipliers and no QTCs: its total IS its score, and nothing is added.
+    if (mults === null && a.contest.contactsOnly) {
+      L.push('  Multipliers and QTCs are not computed here: this total is a contact count, not the score.')
+    }
     L.push('')
     return L.join('\n')
   }
@@ -3246,6 +3256,12 @@ export function FieldDayScoreboard({
             <span className="fd-score-val">{multCount}</span>
             <span className="fd-score-label">{t('fieldDay.score.mults')}</span>
           </div>
+        ) : scoresOwnPoints(fieldDay) ? (
+          // An operator-built contest's points are its whole score (`scoresOwnPoints`).
+          <div className="fd-score">
+            <span className="fd-score-val">{fieldDay?.totalScore ?? 0}</span>
+            <span className="fd-score-label">{t('fieldDay.score.points')}</span>
+          </div>
         ) : countsOnly(fieldDay) ? null : (
           <div className="fd-score">
             <span className="fd-score-val">{fieldDay?.sections ?? 0}</span>
@@ -4680,6 +4696,7 @@ export function ContestView({
           isWfd={isWfd}
           slotColumns={slotColumns}
           role={fieldDay?.role}
+          event={fieldDay?.event}
           numbered={numbered}
         />
         <div className="fd-log-scroll" ref={logPin.ref} onScroll={logPin.onScroll}>
@@ -4694,6 +4711,7 @@ export function ContestView({
                   rows={editRows}
                   receives={fieldDay?.receives ?? []}
                   role={fieldDay?.role}
+                  event={fieldDay?.event}
                   bands={fieldDay?.bands}
                   onSaving={() => {
                     saving.current = true

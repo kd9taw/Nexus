@@ -17,6 +17,7 @@ import { t, type MessageKey } from '../i18n'
 import type { ContestFieldSpec } from '../types'
 import { domainSuggestions, inDomain, resolveDomainValue } from './contestDomains'
 import { codeChoice, isCountyLine, readCountyLine, resolveCountyLine } from './countyLine'
+import { customTextCaption } from './customContests'
 
 /** The catalog keys for one slot's caption and tooltip, for the slots only an id can name. Field
  *  Day's two slots keep the captions and tooltips they shipped with. */
@@ -29,6 +30,13 @@ export const SLOT_TEXT: Record<string, { labelKey: MessageKey; titleKey: Message
   // nothing but the id says what the box holds.
   PREC: { labelKey: 'logEntry.fd.precedence.label', titleKey: 'logEntry.fd.precedence.title' },
   CK: { labelKey: 'logEntry.fd.check.label', titleKey: 'logEntry.fd.check.title' },
+  // The slots an operator-built contest adds (`fd_rules/custom.rs`): its age, name, power and ITU
+  // zone, which no shipped contest has. A text field (`TXT1`, `TXT2`) is called what its operator
+  // captioned it (`receivedCaption`'s `event`).
+  AGE: { labelKey: 'logEntry.fd.age.label', titleKey: 'logEntry.fd.age.title' },
+  NAME: { labelKey: 'logEntry.fd.name.label', titleKey: 'logEntry.fd.name.title' },
+  PWR: { labelKey: 'logEntry.fd.power.label', titleKey: 'logEntry.fd.power.title' },
+  ITU: { labelKey: 'logEntry.fd.itu.label', titleKey: 'logEntry.fd.itu.title' },
 }
 
 /** The operator-facing caption for a slot, by id alone: a SENT slot's box, and the slots in
@@ -64,15 +72,16 @@ const countyList = (spec: ContestFieldSpec): string | undefined => spec.domains?
 /** ⭐ **What a RECEIVED box is called, for this station's role** — by what it holds, first match:
  *
  *  1. the rules file's own label, when it declares one (the on-air word that introduces the
- *     field, `NAME` in "NAME ALEX"); no shipped slot has one;
+ *     field, `NAME` in "NAME ALEX"); no shipped slot has one; for an operator-built contest
+ *     (`event`), the caption its operator gave a text field;
  *  2. the catalog's words for the slots only an id can name (`SLOT_TEXT`);
  *  3. a county box: "IL county" for a station outside the state, since those are all it can
  *     work; inside it "County / State" when the box takes more than the county list (the states,
  *     provinces and countries everyone else sends, as a list or as free text), else "County";
  *  4. a state list, a section list; a serial, a grid, a call;
  *  5. otherwise the slot id, a token: `RST`, which hams read as it is. */
-export function receivedCaption(spec: ContestFieldSpec, role: string | undefined): string {
-  const own = spec.label?.trim()
+export function receivedCaption(spec: ContestFieldSpec, role: string | undefined, event?: string): string {
+  const own = spec.label?.trim() || customTextCaption(event, spec.key)
   if (own) return own
   if (SLOT_TEXT[spec.key]) return slotCaption(spec.key)
   const county = countyList(spec)
