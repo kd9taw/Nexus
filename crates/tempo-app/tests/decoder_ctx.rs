@@ -77,6 +77,8 @@ fn chain_as(mycall: &str, flow: u32, fhigh: u32) -> Engine {
         sideband: "USB".to_string(),
         decode_flow_hz: flow,
         decode_fhigh_hz: fhigh,
+        // The standard decoder: the a7 rescues and the AP masks these tests reach are its.
+        ft8_decoder: tempo_app::settings::DecoderStyle::Standard,
         ..Settings::default()
     });
     eng.set_tier(Tier::Ft8);

@@ -13,6 +13,7 @@ import { js8CqTextRefused } from '../js8Compose'
 import { confirmDialog } from '../confirm'
 import { Js8FrequencySettings } from './Js8FrequencySettings'
 import { DraftNumberInput } from './DraftNumberInput'
+import { JtdxDecoderFields } from './JtdxDecoderFields'
 import { checkRigForm, blocks, netRigctlSerialPort, dataModePickerShown, APRS_DATA_FM_MODELS, ICOM_LAN_MODELS, NATIVE_CIV_MODELS, NO_CAT_PTT_TRANSCEIVERS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
   confirmSatUplink,
@@ -9630,6 +9631,7 @@ export function SettingsPanel({
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">{t('settings.digital.decoder.title')}</span>
               <div className="settings-grid">
+                <JtdxDecoderFields form={form} setForm={setForm} markDirty={markDirty} locked={locked} />
                 <div className="settings-field">
                   <span className="settings-label">{t('settings.digital.decodeDepth.label')}</span>
                   {/* The chip row is a radio group whose accessible name IS the field label —

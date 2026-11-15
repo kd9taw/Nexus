@@ -14,11 +14,13 @@
 //! Every decode, whatever its mode or source, is normalized to one [`Decode`].
 
 pub mod decode;
+pub mod jtdx;
 pub mod mode;
 pub mod source;
 pub mod wsjt77;
 
 pub use decode::Decode;
+pub use jtdx::{JtdxKnobs, JtdxRequest};
 pub use mode::{
     make_mode, slot_over_samples_12k, tx_mode, Capabilities, Ft1Mode, Ft4Mode, Ft8Mode, Js8Mode,
     Js8Speed, Mode, ModeKind, PassCarry,

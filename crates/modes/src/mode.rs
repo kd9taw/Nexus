@@ -672,6 +672,23 @@ pub trait Mode: Send + Sync {
         )
     }
 
+    /// The JTDX-style decoder's full pass (WSJT-X 3.0.2's multithreaded decoder, `lib/ft8var`),
+    /// for a mode that has one: `Some` with the period's decodes, or `None` (every mode but FT8),
+    /// and the caller decodes as without it. FT8's opens with the early pass's decodes carried in
+    /// `carry` and adds what ft8var finds that they do not already hold, handing only those to
+    /// `sink`, as WSJT-X's two-stage decoder start shows an early decode once
+    /// (`mainwindow.cpp:6191`). There is no give-up: ft8var runs to the end of its passes.
+    fn decode_frame_var(
+        &self,
+        req: &crate::DecodeRequest,
+        jtdx: &crate::JtdxRequest,
+        carry: &mut PassCarry,
+        sink: &mut dyn DecodeSink,
+    ) -> Option<Vec<Decode>> {
+        let _ = (req, jtdx, carry, sink);
+        None
+    }
+
     /// WSJT-X's FT8 47 step, between the early and the full pass: subtract the early pass's
     /// decodes carried in `carry` from the period's first 13.536 s, `iwave`
     /// (`lib/ft8_decode.f90:124-149`), asking `sink`'s give-up after each. Decodes nothing.
@@ -995,6 +1012,61 @@ impl Mode for Ft8Mode {
         sink: &mut dyn DecodeSink,
     ) -> usize {
         ft8::subtract_early(iwave, ndepth, &mut carry.ft8, &mut || sink.give_up())
+    }
+    fn decode_frame_var(
+        &self,
+        req: &crate::DecodeRequest,
+        jtdx: &crate::JtdxRequest,
+        carry: &mut PassCarry,
+        sink: &mut dyn DecodeSink,
+    ) -> Option<Vec<Decode>> {
+        let k = jtdx.knobs;
+        let var = ft8::VarRequest {
+            // WSJT-X's full pass at its default decoder start (`mainwindow.cpp:2213-2219`): the
+            // first 49 x 3456 samples, 14.11 s.
+            nzhsym: 49,
+            // The slot key the standard decoder gets (`decode_frame_carry` above).
+            utc_seconds: (req.frame_time_ms / 1000).rem_euclid(86_400) as i32,
+            nfa: req.nfa,
+            nfb: req.nfb,
+            nfqso: req.nfqso,
+            nftx: req.nftx,
+            nqso_progress: req.nqso_progress,
+            napwid: jtdx.napwid,
+            threads: i32::from(k.threads),
+            cycles: i32::from(k.cycles),
+            sensitivity: i32::from(k.sensitivity),
+            rx_freq_sensitivity: i32::from(k.rx_freq_sensitivity),
+            cand_thin: i32::from(k.cand_thin),
+            ap: req.ap,
+            // WSJT-X's default ("Hide FT8 dupe messages", `mainwindow.cpp:1939`).
+            hide_dupes: true,
+            mycall: req.mycall,
+            hiscall: req.hiscall,
+            mybcall: &jtdx.mybcall,
+            hisbcall: &jtdx.hisbcall,
+            hisgrid: &jtdx.hisgrid,
+            mycall_std: jtdx.mycall_std,
+            hiscall_std: jtdx.hiscall_std,
+            hound: jtdx.hound,
+            dx_search: jtdx.dx_search,
+            wide_dx_search: k.wide_dx_search,
+            swl: k.swl,
+        };
+        // The early pass's decodes open the period's list and are never reported again; ft8var
+        // decodes the audio afresh (it has no use for the 47 step's residual).
+        let early: Vec<Decode> = carry.ft8.take_early().into_iter().map(Into::into).collect();
+        let shown: std::collections::HashSet<String> =
+            early.iter().map(|d| d.message.trim().to_string()).collect();
+        let mut new = Vec::new();
+        ft8::decode_frame_var(req.iwave, &var, &mut |d| {
+            if !shown.contains(d.message.trim()) {
+                let d: Decode = d.clone().into();
+                sink.found(&d);
+                new.push(d);
+            }
+        });
+        Some(early.into_iter().chain(new).collect())
     }
 }
 
@@ -2587,6 +2659,7 @@ fn js8_decode_row(r: &js8::RawDecode) -> Decode {
         rv: None,
         mode: Some(ModeKind::Js8 { speed: r.speed }),
         raw: Some(*r.word.as_bytes()),
+        unchecked: false,
     }
 }
 

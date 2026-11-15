@@ -5241,6 +5241,39 @@ export interface ContestBefore {
   unassistedMode: boolean
 }
 
+/** Which FT8 decoder runs the full pass (`Settings.ft8Decoder`). */
+export type Ft8DecoderStyle = 'jtdx' | 'standard'
+/** The JTDX-style decoder's presets (`Settings.jtdxPreset`). */
+export type JtdxPreset = 'easy' | 'keen' | 'ludicrous' | 'custom'
+/** The JTDX-style decoder's knobs (`Settings.jtdxCustom`; the engine's `JtdxCustom`). */
+export interface JtdxKnobs {
+  /** Decoding cycles 1..3. */
+  cycles: number
+  /** FT8 sensitivity 1..3: minimum, low thresholds, low thresholds + sub-pass. */
+  sensitivity: number
+  /** QSO RX-frequency sensitivity 1..3. */
+  rxFreqSensitivity: number
+  /** Threads: 0 = automatic, 1..12. */
+  threads: number
+  /** The band-wide DX-call search. */
+  wideDxSearch: boolean
+  /** Candidate thinning, percent (100 keeps every candidate). */
+  candThin: number
+  /** JTDX's SWL mode. */
+  swl: boolean
+}
+
+/** The CPU guard stepped the JTDX-style decoder's preset down: a full pass took longer than a
+ *  reply can wait. `to` is null when `from` was Easy, the floor. */
+export interface Ft8StepDown {
+  seq: number
+  chosen: JtdxPreset
+  from: JtdxPreset
+  to: JtdxPreset | null
+  decodeMs: number
+  budgetMs: number
+}
+
 export interface Settings {
   mycall: string
   mygrid: string
@@ -6162,6 +6195,13 @@ export interface Settings {
   workingFrequencies?: { band: string; mode: string; mhz: number }[]
   /** FT8/FT4 decode depth: 1=Fast 2=Normal 3=Deep (stock Deep). */
   decodeDepth?: number
+  /** Which FT8 decoder runs the full pass: the JTDX-style one (WSJT-X 3.0's multithreaded
+   *  decoder, its port of JTDX's; the default) or WSJT-X's standard decoder. */
+  ft8Decoder?: Ft8DecoderStyle
+  /** The JTDX-style decoder's preset (default Easy). */
+  jtdxPreset?: JtdxPreset
+  /** The JTDX-style decoder's knobs under Custom. */
+  jtdxCustom?: JtdxKnobs
   /** Decoder passband (Hz) — WSJT-X F Low / F High. */
   decodeFLowHz?: number
   decodeFHighHz?: number
@@ -6717,6 +6757,9 @@ export interface AppSnapshot {
   stationProfileLocked?: boolean
   /** The last radio switch Nexus made by itself this session (absent until one happens). */
   autoRadioSwitch?: AutoRadioSwitch
+  /** The JTDX-style FT8 decoder's last CPU-guard step this session (engine `Ft8StepDown`), for
+   *  its notice. Absent until one happens. */
+  ft8StepDown?: Ft8StepDown
   /** Mirror of Settings b4MatchMode — the B4/Dupe scope every surface applies. */
   b4MatchMode?: boolean
   /** AI CW decoder (beta): toggle state, status line, rolling stitched transcript. */

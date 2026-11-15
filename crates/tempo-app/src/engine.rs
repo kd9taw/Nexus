@@ -1676,6 +1676,13 @@ type NextSource = Arc<Mutex<Option<Box<dyn SignalSource>>>>;
 /// native decode makes it before it reads the buffers. Process-wide, as the buffers are.
 static HARQ_RESET_OWED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// The longest the JTDX-style decoder's full pass may take before the CPU guard steps its preset
+/// down ([`Engine::jtdx_preset_running`]). The full pass starts at 14.40 s (50 half-symbols); 2.1 s
+/// later is 1.5 s into the next period, the latest a reply keyed then (or switched in mid-over)
+/// still lands within the ±2.5 s every FT8 decoder searches. WSJT-X's own multithreaded decoder,
+/// started at 14.11 s, is done in about a second on a desktop.
+pub const JTDX_FULL_PASS_BUDGET: std::time::Duration = std::time::Duration::from_millis(2_100);
+
 /// The same for the FT8 a7 table.
 static A7_RESET_OWED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -2163,6 +2170,7 @@ pub const FLEX_VOICE_MAX_SAMPLES: usize = 20 * 12_000;
 /// The decodes Band Activity keeps, and so the most a logger's Replay re-sends: the pane's own
 /// store (`MAX_HISTORY`, `ui/src/decodeHistory.ts`).
 const BAND_ACTIVITY_DEPTH: usize = 3000;
+
 /// The received decodes the engine keeps across periods (`decode_history`), newest kept.
 const DECODE_HISTORY_DEPTH: usize = 240;
 /// A logger's free text refused while TX is off ([`Engine::udp_free_text`]).
@@ -2462,6 +2470,11 @@ pub struct DecodeJob {
     /// ([`Engine::special_activity`]). Without one FT8 drops rover (`/R`) and `TU; ` decodes,
     /// as WSJT-X does. Native branch only.
     activity: bool,
+    /// The JTDX-style decoder's request for FT8's full pass ([`Engine::jtdx_request`]), or
+    /// `None` for the standard decoder. Native branch only.
+    jtdx: Option<modes::JtdxRequest>,
+    /// The preset `jtdx` was resolved from, for the CPU guard.
+    jtdx_preset: Option<crate::settings::JtdxPreset>,
     frame_time_ms: i64,
     /// Native branch: clear FT1 IR-HARQ buffers before decoding (HARQ disabled).
     harq_reset: bool,
@@ -2595,6 +2608,9 @@ pub struct DecodeResult {
     /// the result, and hands them to the import. A contained panic carries none: what the source
     /// holds stays there for the next decode.
     logged_adif: Vec<String>,
+    /// How long the JTDX-style decoder's full pass took, and the preset it ran, for the CPU
+    /// guard ([`Engine::apply_decode_result`]); `None` for every other pass.
+    jtdx_took: Option<(std::time::Duration, crate::settings::JtdxPreset)>,
 }
 
 /// One decode a running pass has just found, on its way to the engine before the pass ends
@@ -2691,6 +2707,16 @@ impl modes::DecodeSink for JobSink<'_> {
 }
 
 impl DecodeResult {
+    /// This result as if its JTDX-style full pass had taken `took` (the CPU guard's input): how a
+    /// test injects a slow decode.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn with_jtdx_took(mut self, took: std::time::Duration) -> Self {
+        if let Some((t, _)) = self.jtdx_took.as_mut() {
+            *t = took;
+        }
+        self
+    }
+
     /// The decodes this job produced, in decoder order.
     pub fn decodes(&self) -> &[modes::Decode] {
         &self.decodes
@@ -2792,6 +2818,7 @@ pub fn run_js8_multi_job(job: Js8MultiJob) -> Vec<DecodeResult> {
             heard_on: None,
             failed: false,
             logged_adif: Vec::new(),
+            jtdx_took: None,
         })
         .collect()
 }
@@ -2907,6 +2934,7 @@ pub fn run_decode_job_streaming(job: DecodeJob, progress: &mut dyn DecodeProgres
                 heard_on: None,
                 failed: true,
                 logged_adif: Vec::new(),
+                jtdx_took: None,
             }
         }
     }
@@ -2929,6 +2957,8 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
         ap,
         ap_cq_only,
         activity,
+        jtdx,
+        jtdx_preset,
         frame_time_ms,
         harq_reset,
         pass,
@@ -2992,6 +3022,11 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
             // The 47 step: the source subtracts this period's early decodes for its full pass.
             // Nothing is decoded.
             if pass == DecodePass::Residual {
+                // The JTDX-style full pass decodes the audio afresh: the 47 step's residual is
+                // the standard decoder's alone.
+                if jtdx.is_some() {
+                    return Vec::new();
+                }
                 let req = modes::DecodeRequest {
                     ndepth,
                     ..modes::DecodeRequest::full_band(&iwave)
@@ -3014,10 +3049,14 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
                 ap_cq_only,
                 activity,
                 partial: pass.is_partial(),
+                jtdx: jtdx.as_ref(),
             };
             src.decode_streaming(&req, pass.a7_final(), &mut sink)
         }
     };
+    // The CPU guard's measurement: the JTDX-style full pass, start to finish.
+    let jtdx_preset = jtdx_preset.filter(|_| jtdx.is_some() && pass == DecodePass::Boundary);
+    let started = std::time::Instant::now();
     let decodes = match ctx {
         // Single radio: the process-global modem statics ARE this chain's state.
         None => decode(),
@@ -3040,6 +3079,7 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
         // and pre-existing in shape, but it must be closed before two chains transmit.
         Some(ctx) => ctx.lock().unwrap_or_else(|e| e.into_inner()).scoped(decode),
     };
+    let jtdx_took = jtdx_preset.map(|p| (started.elapsed(), p));
     // What the companion source received besides decodes, taken before a decoder swapped in below
     // drops the source holding it.
     let logged_adif = src.take_logged_adif();
@@ -3061,6 +3101,7 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
         heard_on,
         failed: false,
         logged_adif,
+        jtdx_took,
     }
 }
 
@@ -4369,6 +4410,10 @@ pub struct Engine {
     /// written after the switch and read by nothing that decides one. The operator's own pick
     /// (`set_active_radio`) never writes it.
     auto_radio_switch: Option<crate::dto::AutoRadioSwitch>,
+    /// The JTDX-style FT8 decoder's CPU guard: the last step down this session
+    /// ([`Engine::apply_decode_result`]), which also says which preset runs
+    /// ([`Engine::jtdx_preset_running`]).
+    ft8_step_down: Option<crate::dto::Ft8StepDown>,
     /// Rolling received-decode history (slot, row) across the last several T/R
     /// cycles — NOT just the last slot. This is what makes a roster/late click on
     /// a caller resolve to the RIGHT QSO step: `last_decodes` is replaced on every
@@ -7776,6 +7821,7 @@ impl Engine {
             route_intent: None,
             route_target: None,
             auto_radio_switch: None,
+            ft8_step_down: None,
             decode_history: std::collections::VecDeque::new(),
             band_activity: std::collections::VecDeque::new(),
             early_seen: None,
@@ -8328,6 +8374,10 @@ impl Engine {
 
     fn apply_settings_inner(&mut self, s: Settings, keep_live_roster: bool) {
         self.remote_readings.invalidate();
+        // A preset picked in Settings is a fresh start for the CPU guard (`ft8_cpu_guard`).
+        if s.jtdx_preset != self.settings.jtdx_preset {
+            self.ft8_step_down = None;
+        }
         // The station's call before the save ([`Self::note_call_saved`], at the end).
         let call_was = self.settings.mycall.clone();
         // The address the club link line is about, before the save: a save that moves it
@@ -32379,6 +32429,7 @@ contact yourself."
             // '?' = low-confidence (qual below the stock 0.17 line).
             ap: d.nap > 0,
             low_conf: d.qual < 0.17,
+            unchecked: d.unchecked,
             // Label each decode by the mode that actually produced it
             // (native source's mode, or a companion stream's per-decode
             // WSJT-X mode); fall back to the selected tier when unknown
@@ -32791,6 +32842,7 @@ contact yourself."
         s.station_profile_locked =
             !s.station_profiles.is_empty() && self.station_profile_switch_refusal().is_some();
         s.auto_radio_switch = self.auto_radio_switch.clone();
+        s.ft8_step_down = self.ft8_step_down.clone();
         // No AI copy or status from an unassisted entry, however it was declared (`cw_decode`).
         let decoding = self.settings.cw_decoder_active();
         s.ai_cw = crate::dto::AiCwStatus {
@@ -33023,6 +33075,7 @@ contact yourself."
                 tier: s.link.tier,
                 ap: false,
                 low_conf: false,
+                unchecked: false,
             });
         }
         s.highlights = self
@@ -34325,6 +34378,87 @@ contact yourself."
     /// `ncontest /= 0` (`decoder.f90:137`, from `int(m_specOp)` at `mainwindow.cpp:5492`): any
     /// contest it runs, or a Hound. Here that is Contest mode on, whichever contest is picked, or
     /// a Hound. Without one, FT8 drops rover (`/R`) and `TU; ` decodes (`ft8b.f90:452-455`).
+    /// The JTDX-style decoder's request for this FT8 period's full pass, or `None` when the
+    /// standard decoder runs it: another mode, the operator's choice, or a SuperFox Hound, for
+    /// which WSJT-X itself runs the standard decoder (`mainwindow.cpp:5559`).
+    ///
+    /// `mycall` and `hiscall` are exactly what the standard decoder is given (the AP context
+    /// above), so the two decoders see the same QSO. What WSJT-X 3.0.2 passes as a constant is
+    /// passed as that constant (`ft8::VarRequest::params`); `dx_search` is off.
+    fn jtdx_request(&self, mycall: &str, hiscall: &str) -> Option<modes::JtdxRequest> {
+        use crate::settings::{DecoderStyle, SpecialOp};
+        if self.app.tier() != Tier::Ft8
+            || self.settings.ft8_decoder != DecoderStyle::Jtdx
+            || self.settings.special_op == SpecialOp::SuperHound
+        {
+            return None;
+        }
+        let hisgrid = match &self.mode {
+            Mode::Qso { station, .. } => station.dxgrid.clone().unwrap_or_default(),
+            _ => String::new(),
+        };
+        // WSJT-X: the base calls (`Radio::base_callsign`), the DX call's only when it is at
+        // least 3 characters (`mainwindow.cpp:5580-5585`).
+        let base = |c: &str| {
+            if c.trim().len() < 3 {
+                String::new()
+            } else {
+                tempo_core::message::base_call(c)
+            }
+        };
+        Some(modes::JtdxRequest {
+            knobs: self
+                .jtdx_preset_running()
+                .knobs(&self.settings.jtdx_custom)
+                .into(),
+            napwid: modes::jtdx::napwid_for_dial((self.settings.dial_mhz * 1e6).max(0.0) as u64),
+            hisgrid,
+            mybcall: base(mycall),
+            hisbcall: base(hiscall),
+            mycall_std: tempo_core::message::is_std_call(mycall),
+            hiscall_std: tempo_core::message::is_std_call(hiscall),
+            hound: self.settings.special_op == SpecialOp::Hound,
+            dx_search: false,
+        })
+    }
+
+    /// The preset the JTDX-style decoder runs: the one chosen in Settings, or the one the CPU guard
+    /// stepped down to from it this session. Choosing a preset in Settings is a fresh start.
+    pub fn jtdx_preset_running(&self) -> crate::settings::JtdxPreset {
+        match &self.ft8_step_down {
+            Some(sd) if sd.chosen == self.settings.jtdx_preset => sd.to.unwrap_or(sd.from),
+            _ => self.settings.jtdx_preset,
+        }
+    }
+
+    /// The CPU guard. A JTDX-style full pass that took longer than [`JTDX_FULL_PASS_BUDGET`]
+    /// steps the preset down one (Ludicrous to Keen, Keen and Custom to Easy), for the rest of
+    /// the session or until the operator picks a preset, and says so (`ft8_step_down`). Easy is
+    /// the floor: a late Easy pass is said once, and the decoder stays on Easy; it never switches
+    /// to the standard decoder by itself. Only a pass of the preset now running counts, so two
+    /// late results in flight step down once.
+    fn ft8_cpu_guard(&mut self, took: std::time::Duration, ran: crate::settings::JtdxPreset) {
+        if took <= JTDX_FULL_PASS_BUDGET || ran != self.jtdx_preset_running() {
+            return;
+        }
+        let chosen = self.settings.jtdx_preset;
+        let to = ran.step_down();
+        let floor_already_said = matches!(&self.ft8_step_down,
+            Some(sd) if sd.chosen == chosen && sd.to.is_none() && to.is_none());
+        if floor_already_said {
+            return;
+        }
+        let seq = self.ft8_step_down.as_ref().map_or(0, |sd| sd.seq) + 1;
+        self.ft8_step_down = Some(crate::dto::Ft8StepDown {
+            seq,
+            chosen,
+            from: ran,
+            to,
+            decode_ms: took.as_millis().min(u128::from(u32::MAX)) as u32,
+            budget_ms: JTDX_FULL_PASS_BUDGET.as_millis() as u32,
+        });
+    }
+
     fn special_activity(&self) -> bool {
         self.settings.fd_active
             || matches!(
@@ -34369,6 +34503,8 @@ contact yourself."
                 ap: true, // ignored: companion decodes arrive pre-made over UDP
                 ap_cq_only: false,
                 activity: false,
+                jtdx: None,
+                jtdx_preset: None,
                 frame_time_ms: 0,
                 harq_reset: false,
                 pass,
@@ -34399,6 +34535,8 @@ contact yourself."
                 ap: true, // ignored: DX1's robust path has no WSJT-X AP machinery
                 ap_cq_only: false,
                 activity: false,
+                jtdx: None,
+                jtdx_preset: None,
                 frame_time_ms: 0,
                 harq_reset: false,
                 pass,
@@ -34504,6 +34642,8 @@ contact yourself."
             Some((lo, hi)) if self.app.tier() == Tier::Js8 => (lo as i32, hi as i32),
             _ => (nfa, nfb),
         };
+        // The calls the JTDX-style decoder gets: the standard decoder's, in the same form.
+        let (ap_mycall_for_jtdx, ap_hiscall_for_jtdx) = (ap_mycall.clone(), ap_hiscall.clone());
         DecodeJob {
             source,
             next_source,
@@ -34528,6 +34668,8 @@ contact yourself."
             ap: self.settings.ap_decode,
             ap_cq_only: self.settings.ap_cq_only,
             activity: self.special_activity(),
+            jtdx: self.jtdx_request(&ap_mycall_for_jtdx, &ap_hiscall_for_jtdx),
+            jtdx_preset: Some(self.jtdx_preset_running()),
             frame_time_ms,
             harq_reset,
             pass,
@@ -34559,6 +34701,10 @@ contact yourself."
     /// flight (epoch moved), preserving exactly the semantics of the synchronous
     /// [`Engine::ingest`] / [`Engine::ingest_early`] for the case that survives.
     pub fn apply_decode_result(&mut self, result: DecodeResult) -> DecodeApplied {
+        // The CPU guard reads every JTDX-style full pass, a stale one too: it was as slow.
+        if let Some((took, ran)) = result.jtdx_took {
+            self.ft8_cpu_guard(took, ran);
+        }
         if result.epoch != self.decode_epoch {
             // Built in a decode context that no longer exists (tier/source/band
             // switch since dispatch) — its slot indices / AP context are meaningless.
@@ -36322,6 +36468,7 @@ contact yourself."
             qual: 1.0,
             rv: None,
             raw: None,
+            unchecked: false,
             mode: None,
         };
         self.ingest_decodes_for_test(&[d], slot);
@@ -36343,6 +36490,7 @@ contact yourself."
             qual: 1.0,
             rv: None,
             raw: None,
+            unchecked: false,
             mode: None,
         };
         self.fold_decodes(None, vec![d], slot, false)
@@ -38912,6 +39060,7 @@ mod tests {
             qual: 1.0,
             rv: None,
             raw: None,
+            unchecked: false,
             mode: None,
         }
     }
@@ -50528,6 +50677,7 @@ mod tests {
             qual: 1.0,
             rv: None,
             raw: None,
+            unchecked: false,
             mode: None,
         }
     }
@@ -50589,6 +50739,7 @@ mod tests {
             qual: 1.0,
             rv: None,
             raw: None,
+            unchecked: false,
             mode: Some(modes::ModeKind::Wspr),
         };
         e.last_decodes = vec![wspr.clone()];
@@ -50631,6 +50782,7 @@ mod tests {
             qual: 1.0,
             rv: None,
             raw: None,
+            unchecked: false,
             mode: Some(modes::ModeKind::Wspr),
         };
         e.ingest_decodes_for_test(std::slice::from_ref(&wspr), 1);
@@ -50677,6 +50829,7 @@ mod tests {
             qual: 1.0,
             rv: None,
             raw: None,
+            unchecked: false,
             mode,
         };
         vec![
@@ -54208,6 +54361,7 @@ mod tests {
             qual: 1.0,
             rv: None,
             raw: None,
+            unchecked: false,
             mode: None,
         }
     }
@@ -55473,6 +55627,7 @@ mod tests {
             qual: 1.0,
             rv: None,
             raw: None,
+            unchecked: false,
             mode: None,
         };
         let mut e = Engine::new("K2DEF", "FN31", 0);
@@ -73415,6 +73570,7 @@ mod tests {
             rv: None,
             mode: Some(modes::ModeKind::JS8_NORMAL),
             raw: Some(*word.as_bytes()),
+            unchecked: false,
         }
     }
 

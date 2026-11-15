@@ -3460,6 +3460,18 @@ pub struct Settings {
     /// right default on modern hardware; Fast trades sensitivity for CPU.
     #[serde(default = "default_decode_depth")]
     pub decode_depth: u8,
+    /// Which FT8 decoder runs the full pass of each period: the JTDX-style decoder (WSJT-X 3.0's
+    /// multithreaded one, its port of JTDX's) or WSJT-X's standard decoder. Fast/Normal/Deep
+    /// ([`Settings::decode_depth`]) are the standard decoder's; the JTDX-style decoder's are the
+    /// preset's ([`Settings::jtdx_preset`]). The early pass is the standard decoder either way.
+    #[serde(default)]
+    pub ft8_decoder: DecoderStyle,
+    /// The JTDX-style decoder's preset ([`JtdxPreset`]). FT8's, and FT4's when it has one.
+    #[serde(default)]
+    pub jtdx_preset: JtdxPreset,
+    /// The JTDX-style decoder's knobs under [`JtdxPreset::Custom`].
+    #[serde(default)]
+    pub jtdx_custom: JtdxCustom,
     /// Decoder passband low edge (Hz) — WSJT-X "F Low". Signals below this are
     /// not searched. 200 = the modem floor. The explicit `rename` matches the UI's
     /// `decodeFLowHz` key exactly; the struct's `camelCase` rule would emit
@@ -4547,6 +4559,130 @@ fn default_n3fjp_port() -> u16 {
 
 fn default_decode_depth() -> u8 {
     3
+}
+
+/// Which FT8 decoder runs the full pass ([`Settings::ft8_decoder`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DecoderStyle {
+    /// WSJT-X 3.0.2's multithreaded decoder (`lib/ft8var`), the WSJT-X port of JTDX's.
+    #[default]
+    Jtdx,
+    /// WSJT-X's standard decoder, at [`Settings::decode_depth`]. WSJT-X's documentation names it
+    /// the one for extreme weak-signal work (single-threaded Deep).
+    Standard,
+}
+
+/// The JTDX-style decoder's preset ([`Settings::jtdx_preset`]). The knobs each one sets are
+/// [`JtdxPreset::knobs`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum JtdxPreset {
+    #[default]
+    Easy,
+    Keen,
+    Ludicrous,
+    /// [`Settings::jtdx_custom`], knob by knob.
+    Custom,
+}
+
+/// The JTDX-style decoder's knobs, as Custom keeps them ([`modes::JtdxKnobs`], with serde).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct JtdxCustom {
+    /// Decoding cycles 1..=3.
+    pub cycles: u8,
+    /// FT8 sensitivity 1..=3 (minimum, low thresholds, low thresholds and the sub-pass).
+    pub sensitivity: u8,
+    /// QSO RX-frequency sensitivity 1..=3.
+    pub rx_freq_sensitivity: u8,
+    /// Threads: 0 = automatic, 1..=12.
+    pub threads: u8,
+    /// The band-wide DX-call search.
+    pub wide_dx_search: bool,
+    /// Candidate thinning, percent (100 keeps every candidate).
+    pub cand_thin: u8,
+    /// JTDX's SWL mode.
+    pub swl: bool,
+}
+
+impl Default for JtdxCustom {
+    /// Custom starts from Easy's knobs.
+    fn default() -> Self {
+        JtdxPreset::Easy.knobs(&EASY)
+    }
+}
+
+/// The presets' knobs (the maintainer's ruling). KEEN is WSJT-X 3.0.2's own defaults for its
+/// multithreaded decoder (`mainwindow.cpp:1911-1955`: 3 cycles, sensitivity 3, RX-frequency
+/// sensitivity 3, wideband DX-call search on, no thinning) on WSJT-X's automatic thread count,
+/// so it finishes inside the budget. EASY is the light rung under it, for a slow computer and
+/// the floor of the CPU guard: 2 cycles and sensitivity 2 on one thread (about half KEEN's work
+/// on one core). LUDICROUS is KEEN with JTDX's SWL mode and up to ft8var's ceiling of 12
+/// threads (never more than the computer's logical cores).
+const KEEN: JtdxCustom = JtdxCustom {
+    cycles: 3,
+    sensitivity: 3,
+    rx_freq_sensitivity: 3,
+    threads: 0,
+    wide_dx_search: true,
+    cand_thin: 100,
+    swl: false,
+};
+const EASY: JtdxCustom = JtdxCustom {
+    cycles: 2,
+    sensitivity: 2,
+    threads: 1,
+    ..KEEN
+};
+const LUDICROUS: JtdxCustom = JtdxCustom {
+    threads: 12,
+    swl: true,
+    ..KEEN
+};
+
+impl JtdxPreset {
+    /// The knobs this preset sets; Custom's are `custom`'s, each clamped to its range.
+    pub fn knobs(self, custom: &JtdxCustom) -> JtdxCustom {
+        match self {
+            JtdxPreset::Easy => EASY,
+            JtdxPreset::Keen => KEEN,
+            JtdxPreset::Ludicrous => LUDICROUS,
+            JtdxPreset::Custom => JtdxCustom {
+                cycles: custom.cycles.clamp(1, 3),
+                sensitivity: custom.sensitivity.clamp(1, 3),
+                rx_freq_sensitivity: custom.rx_freq_sensitivity.clamp(1, 3),
+                threads: custom.threads.min(12),
+                cand_thin: custom.cand_thin.clamp(1, 100),
+                ..*custom
+            },
+        }
+    }
+
+    /// One preset down, for a computer that cannot keep up: Ludicrous to Keen, Keen and Custom
+    /// to Easy; `None` from Easy, which is the floor (the standard decoder is never chosen for
+    /// the operator).
+    pub fn step_down(self) -> Option<JtdxPreset> {
+        match self {
+            JtdxPreset::Ludicrous => Some(JtdxPreset::Keen),
+            JtdxPreset::Keen | JtdxPreset::Custom => Some(JtdxPreset::Easy),
+            JtdxPreset::Easy => None,
+        }
+    }
+}
+
+impl From<JtdxCustom> for modes::JtdxKnobs {
+    fn from(k: JtdxCustom) -> Self {
+        modes::JtdxKnobs {
+            cycles: k.cycles,
+            sensitivity: k.sensitivity,
+            rx_freq_sensitivity: k.rx_freq_sensitivity,
+            threads: k.threads,
+            wide_dx_search: k.wide_dx_search,
+            cand_thin: k.cand_thin,
+            swl: k.swl,
+        }
+    }
 }
 
 fn default_decode_flow() -> u32 {
@@ -7104,6 +7240,9 @@ impl Default for Settings {
             split_mode: SplitMode::None,
             special_op: SpecialOp::None,
             decode_depth: 3,
+            ft8_decoder: DecoderStyle::default(),
+            jtdx_preset: JtdxPreset::default(),
+            jtdx_custom: JtdxCustom::default(),
             decode_flow_hz: 200,
             decode_fhigh_hz: 2900,
             ap_decode: true,      // stock WSJT-X: Enable AP on

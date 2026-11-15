@@ -46,6 +46,7 @@ fn req(iwave: &[i16], activity: bool, partial: bool) -> DecodeRequest<'_> {
         ap_cq_only: false,
         activity,
         partial,
+        jtdx: None,
     }
 }
 

@@ -75,6 +75,7 @@ fn run_lossless_qso(a: &mut Station, b: &mut Station, max_slots: u64) -> Vec<Air
                     rv: None,
                     mode: None,
                     raw: None,
+                    unchecked: false,
                 })
                 .collect();
             log.push(AirLog {

@@ -276,6 +276,7 @@ import { BestTimesCardHost } from './components/BestTimesCard'
 import { noteRadioMode } from './features/bestTimesAsk'
 import { radioModeOf } from './features/bestTimes'
 import { useRadioSwitchNotice } from './useRadioSwitchNotice'
+import { useFt8StepDownNotice } from './useFt8StepDownNotice'
 
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). It is the shell: it
 // renders no cockpit control of its own, so what moved is its OWN prose — the loading line,
@@ -2941,6 +2942,9 @@ function App() {
     },
     [],
   )
+
+  // When the JTDX-style FT8 decoder's CPU guard steps its preset down: one line saying why.
+  useFt8StepDownNotice(snap)
 
   // When Nexus switches radio by itself and the station asked to be told: one line with Undo
   // (the operator's own radio pick, back to the radio it left) and Why? (the routing rules).

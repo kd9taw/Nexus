@@ -46,6 +46,7 @@ fn hear(e: &mut Engine, from: &str, to: Option<&str>, text: &str, freq: f32, snr
                 speed: Js8Speed::Normal,
             }),
             raw: Some(*word.as_bytes()),
+            unchecked: false,
         };
         e.js8_ingest(&[d], 0);
     }
@@ -79,6 +80,7 @@ fn hear_heartbeat(e: &mut Engine, call: &str, freq: f32, snr: i32) {
             speed: Js8Speed::Normal,
         }),
         raw: Some(*word.as_bytes()),
+        unchecked: false,
     };
     e.js8_ingest(&[d], 0);
 }

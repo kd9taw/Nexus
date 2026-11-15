@@ -1043,6 +1043,7 @@ impl AppState {
             active_station_profile: String::new(),
             station_profile_locked: false,
             auto_radio_switch: None,
+            ft8_step_down: None,
             b4_match_mode: false,
             link: self.link.clone(),
             chat_cq: String::new(), // Engine fills the run state in snapshot()
@@ -1151,6 +1152,7 @@ mod tests {
             qual: 1.0,
             rv: None,
             raw: None,
+            unchecked: false,
             mode: None,
         }
     }

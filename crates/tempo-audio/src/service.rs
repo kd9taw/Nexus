@@ -22702,6 +22702,10 @@ mod tests {
     fn in_flight_guard_serializes_dispatch() {
         let mut eng = Engine::new("KD9TAW", "EN52", 0);
         eng.set_tier(Tier::Ft8);
+        // The standard decoder's full pass, as `wsjt_engine`'s.
+        let mut st = eng.settings().clone();
+        st.ft8_decoder = tempo_app::settings::DecoderStyle::Standard;
+        eng.apply_settings(st);
         let worker = DecodeWorker::spawn();
         let mut in_flight = false;
 
@@ -26005,6 +26009,7 @@ mod tests {
             qual: 1.0,
             rv: None,
             raw: None,
+            unchecked: false,
             mode,
         }
     }
@@ -34620,6 +34625,7 @@ mod tests {
             // Read what went on the air whole: a rover or `TU; ` over is ours, not a false decode.
             activity: true,
             partial: false,
+            jtdx: None,
         };
         NativeSource::from_kind(kind)
             .decode_a7(&req, false)
@@ -34632,7 +34638,18 @@ mod tests {
     fn wsjt_engine(tier: Tier) -> Arc<Mutex<Engine>> {
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
         engine.lock().unwrap().set_tier(tier);
+        standard_ft8_decoder(&engine);
         engine
+    }
+
+    /// Run FT8's full pass on WSJT-X's standard decoder: the pass schedule these tests pin (the
+    /// early pass, the 47 step, the full pass landing before the boundary, the rescue) is its.
+    /// The JTDX-style decoder's own schedule is tested apart.
+    fn standard_ft8_decoder(engine: &Arc<Mutex<Engine>>) {
+        let mut e = engine.lock().unwrap();
+        let mut st = e.settings().clone();
+        st.ft8_decoder = tempo_app::settings::DecoderStyle::Standard;
+        e.apply_settings(st);
     }
 
     /// Put W9XYZ on even slots, mid-QSO with K1ABC: the R-report is the next over (K1ABC's

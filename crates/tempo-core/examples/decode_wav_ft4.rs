@@ -103,6 +103,7 @@ fn decode_file(path: &str) -> Result<usize, String> {
             ap_cq_only: false,                    // stock: all AP hypotheses
             activity: false,
             partial: false, // full slot audio
+            jtdx: None,
         };
         let mut decs = src.decode(&req);
         decs.sort_by(|a, b| {

@@ -309,6 +309,7 @@ mod tests {
             rv: None,
             mode,
             raw: None,
+            unchecked: false,
         };
         for mode in [Some(modes::ModeKind::Ft8), None] {
             assert_eq!(

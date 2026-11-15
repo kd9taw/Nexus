@@ -4,12 +4,13 @@
 
 use super::*;
 
-/// A station on 20 m FT8.
+/// A station on 20 m FT8, on the standard decoder: the 47 step and the rescue are its.
 fn station() -> Engine {
     let mut e = Engine::new("KD9TAW", "EN52", 0);
     e.set_tier(Tier::Ft8);
     e.set_frequency(14.074, "20m", "USB");
     e.settings.write_all_txt = true;
+    e.settings.ft8_decoder = crate::settings::DecoderStyle::Standard;
     e
 }
 

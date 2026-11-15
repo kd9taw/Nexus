@@ -1374,6 +1374,7 @@ impl Engine {
                 speed: Js8Speed::Normal,
             }),
             raw: Some(*word.as_bytes()),
+            unchecked: false,
         };
         self.js8_ingest(&[decode], 0);
     }
@@ -1412,6 +1413,7 @@ impl Engine {
                 speed: Js8Speed::Normal,
             }),
             raw: Some(*word.as_bytes()),
+            unchecked: false,
         };
         self.js8_ingest(&[decode], 0);
     }
@@ -1914,6 +1916,7 @@ mod tests {
             rv: None,
             mode: Some(modes::ModeKind::Js8 { speed }),
             raw: Some(*word.as_bytes()),
+            unchecked: false,
         }
     }
 

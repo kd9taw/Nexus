@@ -54494,6 +54494,29 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             // the TLE seed loader can use, and the first satellite/Now-Bar poll may arrive
             // the moment setup returns. See RESOURCE_DIR / `tle_seed_path`.
             if let Ok(res) = app.path().resource_dir() {
+                // The JTDX-style FT8 decoder's callsign database (JTDX's ALLCALL7.TXT, which it
+                // filters false decodes against), loaded once, off the startup path. Missing, the
+                // decoder filters nothing against it: worth a line in the log.
+                let dir = res.join("resources").join("ft8var");
+                let _ = std::thread::Builder::new()
+                    .name("allcall-load".into())
+                    .spawn(move || {
+                        let ok = tempo_core::modes::jtdx::load_callsign_db(&dir);
+                        let msg = if ok {
+                            format!("FT8 callsign database loaded from {}", dir.display())
+                        } else {
+                            format!(
+                                "FT8 callsign database NOT loaded ({} missing or short): the \
+                                 JTDX-style decoder filters no false decodes against it",
+                                dir.join("ALLCALL7.TXT").display()
+                            )
+                        };
+                        if ok {
+                            tempo_core::applog::info("startup", &msg);
+                        } else {
+                            tempo_core::applog::warn("startup", &msg);
+                        }
+                    });
                 let _ = RESOURCE_DIR.set(res);
             }
             // The TV page's asset + RPC closures read this at call time (see TV_APP).
