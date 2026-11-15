@@ -120,19 +120,16 @@ export function contestBadgeName(id: string | undefined): string {
 export const isFieldDay = (id: string | undefined): boolean =>
   !id || id === 'arrlfd' || id === 'wfd'
 
-/** The score note a ruleset names when its score is its contact count alone (`countsOnly`). */
-export const CONTACTS_ONLY_NOTE = 'settings.contestScore.contactsOnly'
-
 /**
- * ⭐ **A contest whose screen is its contact count alone**: one whose ruleset says so with its score
- * note (the WAE DX Contest, whose QTCs and band-weighted multipliers this build does not compute). It
- * declares no multiplier, and no multiplier count otherwise means Field Day, whose power-and-bonus
- * line, Sections tile and ARRL Sections board would be another contest's arithmetic here. Read off the
- * ruleset's own note, never guessed from a missing count: an older station's snapshot of another
- * contest may carry none. Field Day is never one.
+ * ⭐ **A contest whose screen is its contact count alone**: not Field Day, and no multiplier declared
+ * (the WAE DX Contest, whose QTCs and band-weighted multipliers this build does not compute; a custom
+ * contest, which scores a QSO count plus points). Everywhere else no multiplier count means Field Day,
+ * whose power-and-bonus line, Sections tile and ARRL Sections board would be another contest's
+ * arithmetic here. A blank event is ARRL Field Day. The engine serialises every multiplier contest's
+ * count, `0` before its first contact, so an absent one is a contest that has none.
  */
-export const countsOnly = (fieldDay: { event?: string; scoreNoteKey?: string } | null | undefined): boolean =>
-  !!fieldDay && fieldDay.scoreNoteKey === CONTACTS_ONLY_NOTE && !isFieldDay(fieldDay.event)
+export const countsOnly = (fieldDay: { event?: string; multCount?: number | null } | null | undefined): boolean =>
+  !!fieldDay && (fieldDay.multCount ?? null) === null && !isFieldDay(fieldDay.event)
 
 /**
  * ⭐ **The contests whose exchange SENDS the station's power**, by rules-file id — the only ones
