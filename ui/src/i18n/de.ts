@@ -7211,6 +7211,8 @@ export const DE: PartialCatalog = {
   "operate.header.power.label": "Aussteuerung",
   "operate.header.power.title": "TX-Audio-Aussteuerung — so weit zurücknehmen, bis die ALC des Geräts gerade null ist",
   "operate.dxped.hound.title": "DXpedition-Hound: Anrufe gehen oberhalb 1000 Hz raus, Ihr R+Rapport wechselt automatisch auf die Frequenz des Fox, und das QSO endet mit dem RR73 des Fox — ohne abschließendes 73, denn ein 73 wäre dort QRM im eigenen Segment des Fox. Wird bei jedem Programmstart wieder abgeschaltet: für die DXpedition einschalten, nicht für den ganzen Tag. Zum Ein- und Ausschalten anklicken; ein bereits laufendes QSO behält die Regeln, mit denen es begonnen hat.",
+  "operate.header.contest.label": "Contest: {{contest}}",
+  "operate.header.contest.title": "Der Contest-Modus ist an: {{contest}}. Eine Antwort oder ein Klick auf einen CQ arbeitet die Station im Contest. Klicken öffnet den Contest-Bildschirm.",
   "operate.dxped.superfox.note": "SuperFox ist QRV: {{calls}} — Nexus dekodiert SuperFox in dieser Version nicht. Arbeiten Sie diese Station mit WSJT-X.",
   "operate.dxped.superfox.title": "Eine SuperFox-DXpedition sendet in einem Format, für das diese Nexus-Version keinen Dekoder hat: Ihre Aussendungen erscheinen hier nicht in der Dekodierliste, und Hound hilft dabei nicht. Arbeiten Sie sie mit WSJT-X und tragen Sie das QSO danach in Nexus nach.",
   "operate.header.source.aria": "Signalquelle",

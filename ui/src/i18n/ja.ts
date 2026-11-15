@@ -7809,6 +7809,8 @@ export const JA: PartialCatalog = {
   "operate.header.power.label": "ドライブ",
   "operate.header.power.title": "送信オーディオのドライブ — 無線機の ALC がちょうどゼロになるまで絞ってください",
   "operate.dxped.hound.title": "DXペディションの Hound モード: 呼び出しは 1000 Hz より上で送信し、R+レポートは自動的に Fox の周波数へ移動、交信は Fox の RR73 で終了して別れの 73 は送りません — そこでの 73 は Fox のセグメントへの QRM になります。起動のたびにオフに戻ります。DXペディションのときだけオンにしてください。クリックでオン/オフを切り替えます。すでに進行中の交信は、開始時のルールのまま続きます。",
+  "operate.header.contest.label": "コンテスト: {{contest}}",
+  "operate.header.contest.title": "コンテストモードがオンです: {{contest}}。CQ への応答やクリックは、コンテストの交信になります。クリックするとコンテスト画面を開きます。",
   "operate.dxped.superfox.note": "SuperFox 運用中: {{calls}} — このバージョンの Nexus は SuperFox をデコードしません。その局は WSJT-X で交信してください。",
   "operate.dxped.superfox.title": "SuperFox の DXペディションは、このバージョンの Nexus にデコーダーがない形式で送信します。そのためここではデコードリストに現れず、Hound モードでも解決しません。WSJT-X で交信し、ログは Nexus に記入してください。",
   "operate.header.source.aria": "信号ソース",

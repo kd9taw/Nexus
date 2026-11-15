@@ -12238,6 +12238,11 @@ export const EN = {
   // it describes what Hound IS, which is what an operator hovering it wants to know.
   'operate.dxped.hound.title':
     "DXpedition hound: calls go out above 1000 Hz, your R+report auto-moves to the Fox's frequency, and the QSO ends on the Fox's RR73 with NO parting 73 — a 73 there is QRM in the Fox's own segment. Click to turn it on and off; a QSO already running keeps the rules it started under. Off again at every launch: turn it on for the DXpedition, not for the day.",
+  // The FT header's chip while the contest switch is on. `{{contest}}` is the contest's own name
+  // (an invariant token); the chip opens the Contest screen.
+  'operate.header.contest.label': 'Contest: {{contest}}',
+  'operate.header.contest.title':
+    'Contest mode is on: {{contest}}. A reply or a click on a CQ works the station in the contest. Click to open the Contest screen.',
   // SuperFox, named before the operator calls. `{{calls}}` is a list of callsigns — data.
   // Deliberately "in this version": the retirement is a licence ruling on the decoder, not a
   // property of the protocol, and it is being re-examined.

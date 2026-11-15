@@ -2718,6 +2718,8 @@ export const RU: PartialCatalog = {
   "operate.header.power.label": "Раскачка",
   "operate.header.power.title": "Раскачка TX по звуку — уменьшайте, пока ALC трансивера не станет едва нулевым",
   "operate.dxped.hound.title": "Hound для DXpedition: вызовы уходят выше 1000 Hz, ваш R+рапорт автоматически переходит на частоту Fox, и QSO заканчивается на RR73 от Fox БЕЗ прощального 73 — 73 там является QRM в собственном сегменте Fox. Нажмите, чтобы включить или выключить; уже идущее QSO сохраняет правила, по которым началось. Выключается при каждом запуске: включайте на время DXpedition, а не на весь день.",
+  "operate.header.contest.label": "Соревнования: {{contest}}",
+  "operate.header.contest.title": "Режим соревнований включён: {{contest}}. Ответ или щелчок по CQ проводит связь в соревнованиях. Щёлкните, чтобы открыть экран соревнований.",
   "operate.dxped.superfox.note": "SuperFox в эфире: {{calls}} — Nexus в этой версии не декодирует SuperFox. Проведите эту связь в WSJT-X.",
   "operate.dxped.superfox.title": "DXpedition в режиме SuperFox передаёт в формате, для которого в этой версии Nexus нет декодера, поэтому её передачи не попадают здесь в список декодов, и Hound не поможет. Проведите связь в WSJT-X и запишите её в журнал Nexus.",
   "operate.header.source.aria": "Источник сигнала",

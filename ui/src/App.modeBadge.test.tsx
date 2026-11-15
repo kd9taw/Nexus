@@ -93,6 +93,12 @@ const snapshot = () => ({
 })
 
 function respond(cmd: string): unknown {
+  // Entering the contest (the Contest screen opened with the switch on): the engine's S&P session.
+  if (cmd === 'set_mode') {
+    mode = 'fieldDay'
+    fieldDay = NYQP
+    return snapshot()
+  }
   if (/^(get_snapshot|halt_tx|set_operating_mode|set_area|select_peer)$/.test(cmd)) return snapshot()
   if (cmd === 'get_settings') return settingsAnswer
   if (cmd === 'cw_decode') return CW_DECODE
@@ -187,5 +193,34 @@ describe('the mode badge above Settings, in the app', () => {
     settingsAnswer = { ...settingsAnswer, fdActive: false }
     await mount('cw', 'main.cw-cockpit')
     await waitFor(() => expect(badge()).toBe('QSO'))
+  })
+
+  // THE CONTEST SWITCH ON, THE STATION IN PLAIN FT8 (QSO mode, no contest session yet): a QSO party worked
+  // with standard messages, where a click on a CQ enters the contest's S&P. The badge read QSO and the FT
+  // header said nothing; an operator did not know a contest was on. Both now name it, and the header's chip
+  // opens the Contest screen.
+  it('switch on in plain QSO mode: the badge reads NYQP, FT names the contest in its header, and the chip opens the Contest screen', async () => {
+    mode = 'qso'
+    fieldDay = null
+    const ft = await mount('operate', 'main.operate-cockpit')
+    await waitFor(() => expect(badge()).toBe('NYQP'))
+    const chip = await waitFor(() => {
+      const c = ft.querySelector<HTMLButtonElement>('.cockpit-header button.cockpit-contest-chip')
+      expect(c?.getAttribute('aria-label')).toBe('Contest: NYQP')
+      return c!
+    })
+    chip.click()
+    await waitFor(() => expect(document.querySelector('.contest-screen section.panel.fieldday')).toBeTruthy(), { timeout: 15_000 })
+  })
+
+  it('CONTROL: switch off in plain QSO mode, the party still picked: QSO, and no chip on FT', async () => {
+    mode = 'qso'
+    fieldDay = null
+    settingsAnswer = { ...settingsAnswer, fdActive: false }
+    const ft = await mount('operate', 'main.operate-cockpit')
+    // The settings have landed (the rail's Contest item names the picked party) before anything is read.
+    await waitFor(() => expect(document.querySelector('[aria-label="Contest — New York QSO Party"]')).toBeTruthy())
+    expect(badge()).toBe('QSO')
+    expect(ft.querySelector('.cockpit-contest-chip')).toBeNull()
   })
 })

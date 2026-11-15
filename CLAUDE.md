@@ -346,6 +346,8 @@ read the cascade, not the screen, so geometry, stacking and hit-testing are chec
   size-based `@media`, never raw `vh/vw` inside `.app` (zoom-blind) — the portaled
   `.ui-dialog`/`.ui-tooltip` are the one permanent exception (their content re-applies
   `--ui-zoom`; their boxes measure the real window).
+- CSS container queries (`@container`) are allowed only to fit content inside its own component,
+  never for window-size layout; the first use is FT's contest chip (`.cockpit-contest-slot`).
 - Anything persisted that encodes a size/position/scale is **clamped on load** against the
   current window/monitors, not just at drag time.
 - **The supported floor is 1024×768** (operator, 2026-08-03). Design for 1024 and up; do not

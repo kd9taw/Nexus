@@ -21345,6 +21345,78 @@ body.pane-dragging {
   text-overflow: ellipsis;
   max-width: 34ch;
 }
+/* "Contest: NYQP" — the contest switch is on (OperateCockpit `contestChip`). A BUTTON (it opens the
+   Contest screen), so it wears an outline, in the accent the rail badge's dot wears for the same
+   state, and a tinted face; the words stay in the body ink. Tokens only, both themes.
+   ⭐ IT CANNOT ADD A HEADER LINE. It rides a ZERO-COST SLOT at the head of the actions box: an inline-size
+   container (so its content adds nothing to the actions' width), basis 0, and a negative margin that
+   cancels the one `gap` it brings. The header therefore wraps into exactly the lines it has with the
+   switch off, at every width and text size, and Stop TX stays put. While the slot is there the actions
+   box grows into the empty room on its line instead of being pushed there by its auto margin: the slot
+   takes that room and the actions' own controls end at the right edge, where they always stood. The chip
+   sits at the slot's right end, just left of the actions; in a tight slot it drops its words and keeps
+   the name (its title has the whole sentence), and in a slot too narrow even for that it is not drawn. */
+.ch-actions:has(> .cockpit-contest-slot) {
+  flex-grow: 1;
+}
+.cockpit-contest-slot {
+  flex: 1 1 0;
+  min-width: 0;
+  container-type: inline-size;
+  display: flex;
+  justify-content: flex-end;
+  overflow: hidden;
+  margin-right: calc(-1 * var(--space-2));
+}
+.cockpit-contest-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-right: var(--space-2);
+  overflow: hidden;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
+  cursor: pointer;
+}
+.cockpit-contest-chip:hover {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+/* The focus ring drawn INSIDE the chip: the slot clips (`overflow: hidden`), and the house ring outside
+   the border box lost 3 px top and bottom to it. */
+.cockpit-contest-chip:focus-visible {
+  outline-offset: -3px;
+}
+/* One line, right to left, wrapping: the name stays and the words before it ("Contest: ") wrap onto a
+   second line that is clipped, so a tight slot reads "NYQP" rather than "Contest: N…". */
+.ccc-text {
+  display: flex;
+  flex-direction: row-reverse;
+  flex-wrap: wrap;
+  justify-content: center;
+  height: 1.3em;
+  line-height: 1.3em;
+  overflow: hidden;
+}
+.ccc-lead {
+  flex: 0 0 auto;
+  white-space: pre;
+}
+.ccc-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@container (width < 3em) {
+  .cockpit-contest-chip {
+    display: none;
+  }
+}
 
 /* Active DXpedition mode badge — shown in the merged operating strip. */
 .cockpit-specialop-badge {

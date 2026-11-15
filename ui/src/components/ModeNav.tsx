@@ -71,6 +71,11 @@ interface Props {
   /** The rules-file id of the contest the engine runs (`snap.fieldDay.event`), which the mode badge
    *  names in Contest mode. Blank or absent is ARRL Field Day, as it is everywhere else. */
   runningContest?: string
+  /** The picked contest's rules-file id while the contest switch is on (`settings.fdEvent`; blank is
+   *  ARRL Field Day), absent while it is off. In plain QSO mode the badge names it in place of `QSO`:
+   *  with the switch on, a click on a CQ works the station in the contest's S&P, so the badge must not
+   *  read as if no contest were on. */
+  contestOn?: string
   /** Whether the Club Board button shows under the Contest item: the Field Day master switch.
    *  The Contest item itself stays with the mode off (its screen is where the mode is turned
    *  on), so the board cannot ride the item's own visibility. */
@@ -255,10 +260,12 @@ export const ITEMS: Item[] = [
 // form, the one the Contest screen's header shows, in the badge's capitals (`FIELD DAY`, `NYQP`;
 // `contestBadgeName` has the VHF contests' shorter ones): the sponsor's own name, invariant, so only
 // the conversational mode's word resolves from the catalog. A contest the picker does not list reads
-// its rules-file id, as that header does.
-function modeLabel(mode: OpMode, runningContest: string | undefined): string {
+// its rules-file id, as that header does. With the contest switch on and the station in plain QSO
+// mode (a contest worked with standard FT8 messages, before S&P or Run starts) it names the picked
+// contest the same way, not `QSO`: an operator read `QSO` there and did not know a contest was on.
+function modeLabel(mode: OpMode, runningContest: string | undefined, contestOn: string | undefined): string {
   if (mode === 'chat') return t('nav.mode.chat')
-  if (mode === 'qso') return 'QSO'
+  if (mode === 'qso') return contestOn === undefined ? 'QSO' : contestBadgeName(contestOn || 'arrlfd').toUpperCase()
   return contestBadgeName(runningContest || 'arrlfd').toUpperCase()
 }
 
@@ -272,6 +279,7 @@ export function ModeNav({
   onClubBoard,
   contest,
   runningContest,
+  contestOn,
   clubBoard = true,
 }: Props) {
   // A button's tooltip and accessible name. The Contest item's names the picked contest.
@@ -507,7 +515,7 @@ export function ModeNav({
         <div className="mode-nav-bottom">
           <span className="mode-current" title={t('nav.mode.title')}>
             <span className="mode-current-dot" aria-hidden="true" />
-            {modeLabel(mode, runningContest)}
+            {modeLabel(mode, runningContest, contestOn)}
           </span>
           {/* One word for the gear: tooltip, accessible name and visible label are the same
               claim about the same button, so they are one entry. */}

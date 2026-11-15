@@ -91,7 +91,7 @@ describe('the rail item for the contest screen', () => {
 // shorter one, since "September" (and "January" at the larger text sizes) is wider than the rail; and
 // a contest the picker does not list (one a downloaded rules file added) by its rules-file id, as
 // that header does.
-function badge(mode: OpMode, runningContest?: string): string | null {
+function badge(mode: OpMode, runningContest?: string, contestOn?: string): string | null {
   render(
     <ModeNav
       view="cw"
@@ -102,6 +102,7 @@ function badge(mode: OpMode, runningContest?: string): string | null {
       onDigitalMode={vi.fn()}
       contest="New York QSO Party"
       runningContest={runningContest}
+      contestOn={contestOn}
     />,
   )
   const text = document.querySelector('.mode-current')!.textContent
@@ -155,5 +156,27 @@ describe('the mode badge above Settings', () => {
     expect(Object.keys(want).sort()).toEqual(CONTESTS.map((c) => c.id).sort())
     const got = Object.fromEntries([...Object.keys(want), 'mnqp'].map((id) => [id, badge('fieldDay', id)]))
     expect(got).toEqual({ ...want, mnqp: 'MNQP' })
+  })
+})
+
+// THE CONTEST SWITCH ON, THE STATION IN PLAIN QSO MODE. A contest that uses standard FT8 messages (a QSO
+// party, CQ WW, WPX) is worked from plain FT8 with the switch on, and a click on a CQ enters its S&P; the
+// badge read QSO there, and an operator did not know a contest was on. With the switch on it names the
+// picked contest (`contestOn`, the pick: the engine has no session to name yet), whatever has started.
+describe('the mode badge with the contest switch on and the station in plain QSO mode', () => {
+  it('reads NYQP with the New York QSO Party picked', () => {
+    expect(badge('qso', undefined, 'nyqp')).toBe('NYQP')
+  })
+
+  it('a blank pick is ARRL Field Day, as it is everywhere else', () => {
+    expect(badge('qso', undefined, '')).toBe('FIELD DAY')
+  })
+
+  it('CONTROL: the switch off reads QSO, the party still picked', () => {
+    expect(badge('qso', 'nyqp', undefined)).toBe('QSO')
+  })
+
+  it('CONTROL: in the contest (S&P or Running) it still names the contest the engine runs', () => {
+    expect(badge('fieldDay', 'nyqp', 'nyqp')).toBe('NYQP')
   })
 })

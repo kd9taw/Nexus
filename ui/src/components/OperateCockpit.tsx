@@ -12,6 +12,7 @@ import { useEscStop } from '../useEscStop'
 // binding below, which is a keyboard handler with no string of its own.
 import { Fragment, createRef, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { t } from '../i18n'
+import { contestName, contestShortName } from '../fdEvent'
 import { engagedInQso } from '../alerts'
 import type {
   AppSnapshot,
@@ -122,6 +123,11 @@ interface Props {
    * ⊞-removable pane; nothing is ever removed or disabled by rule). */
   fdActive?: boolean
   fdRuleset?: FdRulesetDto | null
+  /** The picked contest's rules-file id (`settings.fdEvent`; blank is ARRL Field Day), named by the
+   *  header's "Contest: …" chip while `fdActive`, and the chip's click: the Contest screen. The chip
+   *  needs both; the pop-out passes neither switch nor screen, and draws none. */
+  fdEvent?: string
+  onOpenContest?: () => void
   /** Calls of DXpeditions that are ON THE AIR NOW and announced SuperFox (the propagation
    * snapshot's workable-now cards, `ft8Mode === 'SuperFox'`). Nexus does not decode SuperFox
    * in this version, so the header names them beside the Hound button — an operator has to
@@ -448,6 +454,8 @@ export function OperateCockpit({
   companionAddr,
   fdActive = false,
   fdRuleset = null,
+  fdEvent = '',
+  onOpenContest,
   superFoxCalls = NO_CALLS,
   onOpenSettings,
   wheelSensitivity,
@@ -1633,6 +1641,43 @@ export function OperateCockpit({
     />
   ) : null
 
+  // ⭐ CONTEST MODE IS ON, SAID IN THE HEADER. With the contest switch on and the station in plain FT8
+  // (a contest worked with standard messages: the QSO parties, CQ WW, WPX), Tx6 and Call CQ look as they
+  // always do, and a click on a CQ answers in the contest's S&P. An operator was in a contest without
+  // knowing it: the only sign was the top bar's "Set operator". So the header names the contest, by the
+  // short form the Contest screen's own header shows, whenever the switch is on (not only once S&P or Run
+  // starts), and a click opens that screen. Not a transmit control: it starts and stops nothing, and
+  // carries no pane-vocabulary id.
+  // A ZERO-COST SLOT AT THE HEAD OF THE ACTIONS (styles.css `.cockpit-contest-slot`). The first build put
+  // the chip in the header's wrapping row as an ordinary item, and wherever that row was nearly full it
+  // broke onto a new line and moved Stop TX down 21-36 px. In the slot it adds nothing to the actions'
+  // width, so the header breaks into exactly the lines it does with the switch off; it takes only the
+  // room the actions' line leaves empty, just left of the actions, and shortens to fit.
+  const contestId = fdEvent.trim() || 'arrlfd'
+  const contestShort = contestShortName(contestId)
+  const contestLabel = t('operate.header.contest.label', { contest: contestShort })
+  const contestTitle = t('operate.header.contest.title', { contest: contestName(contestId) })
+  // The label in two parts, the contest's name and the words before it ("Contest: "), so a slot too narrow
+  // for both keeps the name and lets the words go (styles.css). Split on the placeholder, in any language.
+  const [contestLead, contestTail = ''] = t('operate.header.contest.label', { contest: '\u0001' }).split('\u0001')
+  const contestChip =
+    fdActive && onOpenContest ? (
+      <button
+        type="button"
+        className="cockpit-contest-chip"
+        onClick={onOpenContest}
+        title={contestTitle}
+        aria-label={contestLabel}
+      >
+        {/* Laid out right to left and wrapping: the name first, the words after it in the DOM, so it is the
+            words that wrap away (clipped) when both do not fit. */}
+        <span className="ccc-text">
+          <span className="ccc-name">{contestShort + contestTail}</span>
+          {contestLead && <span className="ccc-lead">{contestLead}</span>}
+        </span>
+      </button>
+    ) : null
+
   return (
     <main className="layout single operate-cockpit" ref={cockpitRef} data-pane-drag={dropPane ? '' : undefined}>
       <CockpitHeader
@@ -1692,6 +1737,7 @@ export function OperateCockpit({
         wheelSensitivity={wheelSensitivity}
         actions={
           <>
+            {contestChip && <span className="cockpit-contest-slot">{contestChip}</span>}
             <div
               className="cockpit-decode-depth"
               role="group"

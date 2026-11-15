@@ -5048,6 +5048,8 @@ export const ES: PartialCatalog = {
   "operate.decodes.gap": "Periodos no recibidos: {{n}}",
   "operate.decodes.gap.title": "Este panel no recibía decodificaciones en estos periodos y la estación ya no los conserva. ALL.TXT tiene todas las decodificaciones.",
   "operate.dxped.hound.title": "Hound de DXpedición: tus llamadas salen por encima de 1000 Hz, tu R+reporte se mueve solo a la frecuencia del Fox y el QSO termina con el RR73 del Fox SIN 73 de despedida — un 73 ahí es QRM en el propio segmento del Fox. Vuelve a Off en cada arranque: actívalo para la DXpedición, no para todo el día. Haz clic para activarlo y desactivarlo; un QSO ya en marcha conserva las reglas con las que empezó.",
+  "operate.header.contest.label": "Concurso: {{contest}}",
+  "operate.header.contest.title": "El modo concurso está activado: {{contest}}. Una respuesta o un clic en un CQ trabaja la estación en el concurso. Haz clic para abrir la pantalla de Concurso.",
   "operate.dxped.superfox.note": "SuperFox en el aire: {{calls}} — Nexus no decodifica SuperFox en esta versión. Trabaja esa con WSJT-X.",
   "operate.dxped.superfox.title": "Una DXpedición SuperFox transmite en un formato para el que esta versión de Nexus no tiene decodificador: sus transmisiones no llegan a la lista de decodificación aquí, y el modo Hound no ayuda. Trabájala con WSJT-X y anótala después en Nexus.",
   "operate.header.decode.label": "Decodif.",
