@@ -20,7 +20,8 @@
 //     width; nothing a click or a tap can reach in a row is invisible (a sweep across every row on
 //     screen, every 4 px), and a real click on the empty end of the action cell and a real touch tap
 //     on the middle of a row send the station nothing; the ⋯ menu, opened by a real click on the LAST row on screen, lies
-//     wholly inside the window with 32 px items, its satellite submenu too, opening it sends nothing,
+//     wholly inside the window with 32 px items (scrolling inside itself where the window is too short for
+//     them, its satellite item then reached with the wheel), its satellite submenu too, opening it sends nothing,
 //     and Escape closes it with the keyboard back on the ⋯ — at the floor, 2560×1440 and 4K at 200 % at the
 //     window's own zoom; the floor at 100 %; 1366×768 at the OS's 125 % (1092 px, nearest the 1024 edge);
 //     1366×768 at 150 %; and 1920×1200 at 150 % (a 1280×800 window) and 1920×1080, each at the app's 100%
@@ -417,12 +418,29 @@ try {
           for (const i of mm.items) if (i.h < 31.5) red(`${tag}: menu item "${i.text}" is ${i.h} px tall, under 32`)
         }
         await shoot(page, `${name}-menu`)
-        const sat = await page.evaluate(`(() => {
+        // Where the window leaves the menu less room than its items, it scrolls inside itself
+        // (`.log-rowmenu`): the satellite item is then reached as an operator reaches it, with the
+        // wheel over the menu, and must come wholly into the menu's visible box before it is clicked.
+        const SAT = `(() => {
           const i = [...document.querySelectorAll('[role="menuitem"][aria-haspopup="menu"]')].pop()
           if (!i) return null
           const r = i.getBoundingClientRect()
-          return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
-        })()`)
+          const m = i.closest('[role="menu"]').getBoundingClientRect()
+          return {
+            x: r.left + r.width / 2, y: r.top + r.height / 2,
+            seen: r.top >= m.top - 0.5 && r.bottom <= m.bottom + 0.5,
+            menu: { x: (m.left + m.right) / 2, y: (m.top + m.bottom) / 2 },
+          }
+        })()`
+        let sat = await page.evaluate(SAT)
+        if (sat && !sat.seen) {
+          await page.call('Input.dispatchMouseEvent', { type: 'mouseWheel', x: sat.menu.x, y: sat.menu.y, deltaX: 0, deltaY: 600 })
+          await sleep(300)
+          sat = await page.evaluate(SAT)
+          console.log(`logbook-probe: ${tag}: the ⋯ menu scrolls inside itself; the wheel ${sat?.seen ? 'brought' : 'did NOT bring'} the satellite item into view`)
+          if (sat && !sat.seen) red(`${tag}: the satellite item cannot be scrolled into the ⋯ menu's view`)
+          await shoot(page, `${name}-menu-scrolled`)
+        }
         if (!sat) red(`${tag}: the ⋯ menu has no satellite submenu`)
         else {
           await page.mouse('mouseMoved', sat.x, sat.y)
