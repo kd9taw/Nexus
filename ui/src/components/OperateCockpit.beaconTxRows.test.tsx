@@ -29,6 +29,7 @@ vi.mock('../api', () => ({
   startQsoRecording: vi.fn(async () => null),
   stopQsoRecording: vi.fn(async () => null),
   setSkipTx1: vi.fn(async () => null),
+  setDxBox: vi.fn(async () => undefined),
   getDeclination: vi.fn(async () => null),
   getSatTrackStatus: vi.fn(async () => null),
   getSatTransponder: vi.fn(async () => null),
