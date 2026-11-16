@@ -11623,6 +11623,8 @@ export const EN = {
   'connect.solar.stale': 'NOAA daily indices not updated since {{date}}',
   'connect.solar.unavailable': '30-day SFI and sunspot trend unavailable.',
   'connect.solar.trend.aria': '{{index}} daily, {{from}} to {{to}}: low {{low}}, high {{high}}',
+  'connect.solar.today': '{{index}} today so far {{value}} · {{time}}',
+  'connect.solar.today.title': 'Today\'s running sunspot count (UTC day), fetched {{time}}. NOAA revises it during the day; the dated value beside the line is the last finished day\'s final count.',
   'connect.pane.spacewx.title': 'Space Wx',
   'connect.pane.getout.title': 'Getting Out',
   'connect.pane.bestband.title': 'Bands by region',

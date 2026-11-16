@@ -6215,6 +6215,8 @@ export const RU: PartialCatalog = {
   "connect.solar.stale": "Ежедневные индексы NOAA не обновлялись с {{date}}",
   "connect.solar.unavailable": "30-дневный тренд SFI и солнечных пятен недоступен.",
   "connect.solar.trend.aria": "{{index}} по дням, с {{from}} по {{to}}: мин. {{low}}, макс. {{high}}",
+  "connect.solar.today": "{{index}} за сегодня пока {{value}} · {{time}}",
+  "connect.solar.today.title": "Текущее число солнечных пятен за сегодня (сутки UTC), получено в {{time}}. NOAA уточняет его в течение дня; датированное значение рядом с линией — окончательное за последние завершённые сутки.",
   "connect.pane.spacewx.title": "Космическая погода",
   "connect.pane.getout.title": "Меня слышат",
   "connect.pane.bestband.title": "Диапазоны по регионам",

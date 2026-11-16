@@ -17,11 +17,22 @@
 // The sunspot number here is SWPC's DAILY count. The propagation model's sunspot input is the
 // smoothed R12, a different quantity, and nothing here reaches it.
 //
+// TODAY SO FAR. The file's days are finished UTC days, so its newest count is yesterday's. The
+// station also reads NOAA's observed-SSN file, which carries a running count for today that NOAA
+// revises during the day (`DailySolarIndices.today`). It shows on the caption line, never in the
+// SSN line or as its value: "SSN today so far 95 · 2:04 PM", with the fetch time in the
+// operator's own clock format. It shows only while it is the current UTC day's and newer than the
+// file's newest day (`todaySoFar`); otherwise the box shows yesterday's count alone, with no
+// notice — a missing running count is ordinary just after 00:00 UTC. On the caption line it never
+// adds height: the line does not wrap and the count shortens with an ellipsis, its full wording
+// in the hover.
+//
 // The dashboard bar shows the same count (components/DashboardBar.tsx): it reads the file through
 // `useSolarIndices`, picks the day with `newest` and words its hover with `trendsCaption`, so the
 // bar and this block cannot show two different counts or dates for one file.
-import type { DailySolarIndex, DailySolarIndices } from '../../types'
+import type { DailySolarIndex, DailySolarIndices, SsnToday } from '../../types'
 import { SOLAR_INDICES, useFeed } from '../../features/connectFeeds'
+import { localHm } from '../../features/bestTimes'
 import { t } from '../../i18n'
 
 /** The index names — technical tokens, the same on every ham's screen (SpaceWxGauges' rule). */
@@ -116,6 +127,25 @@ export function trendsCaption(days: DailySolarIndex[]): { text: string; stale: b
   return { text, stale }
 }
 
+/** Today's running count while it is still today's (the current UTC day) and newer than the
+ * file's newest finished day; null otherwise, and the box shows yesterday's count alone. */
+export function todaySoFar(ix: DailySolarIndices, nowMs = Date.now()): SsnToday | null {
+  const today = Math.floor(nowMs / 1000 / DAY_S) * DAY_S
+  const t0 = ix.today
+  if (!t0 || t0.dayUnix !== today) return null
+  const newestDay = ix.days.length > 0 ? ix.days[ix.days.length - 1].dayUnix : -Infinity
+  return t0.dayUnix > newestDay ? t0 : null
+}
+
+/** The running count's line text and hover: "SSN today so far 95 · 2:04 PM". */
+export function todayWords(today: SsnToday): { text: string; title: string } {
+  const time = localHm(today.fetchedAt)
+  return {
+    text: t('connect.solar.today', { index: SSN, value: today.ssn.toFixed(0), time }),
+    title: t('connect.solar.today.title', { time }),
+  }
+}
+
 /** NOAA's daily solar indices: undefined while still asking, null when there is nothing to show.
  * The window's one poll of the file (features/connectFeeds, on the server's one-hour cache), so
  * this box in Connect, in the dashboard rail and in the pop-out shares it with the dashboard bar.
@@ -134,9 +164,20 @@ export function SolarTrends() {
 
   const days = ix.days
   const caption = trendsCaption(days)
+  const today = todaySoFar(ix)
+  const words = today ? todayWords(today) : null
   return (
     <div className="swx-trends">
-      <div className={`swx-trend-head${caption.stale ? ' stale' : ''}`}>{caption.text}</div>
+      {words ? (
+        <div className={`swx-trend-head has-today${caption.stale ? ' stale' : ''}`}>
+          <span className="swx-trend-cap">{caption.text}</span>
+          <span className="swx-trend-today" title={words.title}>
+            {words.text}
+          </span>
+        </div>
+      ) : (
+        <div className={`swx-trend-head${caption.stale ? ' stale' : ''}`}>{caption.text}</div>
+      )}
       <TrendRow index={SFI} days={days} pick={(d) => d.sfi} />
       <TrendRow index={SSN} days={days} pick={(d) => d.ssn} />
     </div>

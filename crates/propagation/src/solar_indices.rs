@@ -23,6 +23,19 @@
 //! fixture carries that day — so only the flux, which is never physically zero, treats 0 as
 //! missing.
 //!
+//! TODAY'S COUNT SO FAR. The text file carries finished UTC days only, so its newest sunspot
+//! number is yesterday's. SWPC's observed-SSN JSON (`json/solar-cycle/swpc_observed_ssn.json`)
+//! carries the same daily counts plus a row dated today, which SWPC revises as the day goes on:
+//!
+//! ```text
+//! [{"Obsdate":"1996-03-12T00:00:00","swpc_ssn":0}, ... ,{"Obsdate":"2026-11-16T00:00:00","swpc_ssn":95}]
+//! ```
+//!
+//! oldest first, one record per UTC day back to 1996. [`ssn_today`] takes only the row dated the
+//! current UTC day, never "the newest row": just after 00:00 UTC the newest is yesterday's, and
+//! yesterday is the text file's job. The value is a running count, so it travels with the time
+//! Nexus fetched it ([`SsnToday::fetched_at`]); like the daily counts, it never reaches the model.
+//!
 //! Pure parsing only (no `live` feature needed); the HTTP fetch lives in [`crate::live::swpc`].
 
 use serde::Serialize;
@@ -45,6 +58,30 @@ pub struct DailySolarIndex {
 #[serde(rename_all = "camelCase")]
 pub struct DailySolarIndices {
     pub days: Vec<DailySolarIndex>,
+    /// Today's sunspot number so far, from the observed-SSN JSON; `None` when that file has no
+    /// row for the current UTC day or has not arrived. Never folded into `days`, which stay the
+    /// finished days.
+    pub today: Option<SsnToday>,
+}
+
+/// The current UTC day's running sunspot count, and when Nexus read it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SsnToday {
+    /// 00:00 UTC of the day the count is for, unix seconds.
+    pub day_unix: i64,
+    /// SWPC's count so far today. SWPC revises it during the day.
+    pub ssn: f32,
+    /// When Nexus fetched the file this count came from, unix seconds.
+    pub fetched_at: i64,
+}
+
+/// One record of the observed-SSN JSON.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ObservedSsn {
+    /// 00:00 UTC of the record's `Obsdate`, unix seconds.
+    pub day_unix: i64,
+    pub ssn: f32,
 }
 
 /// Parse `daily-solar-indices.txt`. `None` when the text holds no dated row at all.
@@ -80,7 +117,48 @@ pub fn parse_daily_solar_indices(text: &str) -> Option<DailySolarIndices> {
     }
     (!days.is_empty()).then(|| DailySolarIndices {
         days: days.into_values().collect(),
+        today: None,
     })
+}
+
+/// Parse `swpc_observed_ssn.json`. `None` when the body holds no dated record at all (an error
+/// page, a changed format), the same stale-honesty contract as [`parse_daily_solar_indices`]:
+/// the fetcher turns it into an error and the command keeps what it held. A record whose date or
+/// count does not read is skipped, never zero.
+pub fn parse_observed_ssn(text: &str) -> Option<Vec<ObservedSsn>> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    let records: Vec<ObservedSsn> = v
+        .as_array()?
+        .iter()
+        .filter_map(|r| {
+            // "YYYY-MM-DDT00:00:00": the date is all that is read.
+            let date = r.get("Obsdate")?.as_str()?.get(..10)?;
+            let mut ymd = date.split('-');
+            let day_unix = day_of(ymd.next()?, ymd.next()?, ymd.next()?)?;
+            let ssn = r.get("swpc_ssn")?.as_f64()?;
+            (ssn.is_finite() && ssn >= 0.0).then_some(ObservedSsn {
+                day_unix,
+                ssn: ssn as f32,
+            })
+        })
+        .collect();
+    (!records.is_empty()).then_some(records)
+}
+
+/// The record dated the current UTC day of `now_unix`, stamped as fetched at `now_unix`. `None`
+/// when there is no such record: SWPC has not started today's row, or the file is old.
+pub fn ssn_today(records: &[ObservedSsn], now_unix: i64) -> Option<SsnToday> {
+    let today = now_unix.div_euclid(86_400) * 86_400;
+    // The last record for the day: a repeated day keeps its later row, as the text file's does.
+    records
+        .iter()
+        .rev()
+        .find(|r| r.day_unix == today)
+        .map(|r| SsnToday {
+            day_unix: today,
+            ssn: r.ssn,
+            fetched_at: now_unix,
+        })
 }
 
 /// A cell as a value, or `None` for SWPC's markers: `*`, and the negative fillers (`-999`,
@@ -112,6 +190,96 @@ mod tests {
 
     fn day(y: i64, m: u32, d: u32) -> i64 {
         crate::geo::days_from_civil(y, m, d) * 86_400
+    }
+
+    /// `swpc_observed_ssn.json` as SWPC served it on 16 Nov 2026 at 21:04 UTC (public domain),
+    /// trimmed to its first two and last 45 records; each record is byte for byte. The whole
+    /// file is 9,911 records back to 1996.
+    const OBSERVED: &str =
+        include_str!("../tests/fixtures/swpc-observed-ssn-2026-11-16-trimmed.json");
+
+    #[test]
+    fn parses_the_real_observed_ssn_file() {
+        let r = parse_observed_ssn(OBSERVED).expect("the real file has dated records");
+        assert_eq!(r.len(), 47);
+        assert_eq!(
+            r[0],
+            ObservedSsn {
+                day_unix: day(1996, 3, 12),
+                ssn: 0.0
+            },
+            "a spotless day is a zero reading, not a skipped record"
+        );
+        let last2: Vec<_> = r[r.len() - 2..].to_vec();
+        assert_eq!(
+            last2,
+            [
+                ObservedSsn {
+                    day_unix: day(2026, 11, 15),
+                    ssn: 83.0
+                },
+                ObservedSsn {
+                    day_unix: day(2026, 11, 16),
+                    ssn: 95.0
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_body_that_is_not_the_observed_file_is_none() {
+        assert!(parse_observed_ssn("").is_none());
+        assert!(parse_observed_ssn("<html>503</html>").is_none());
+        assert!(parse_observed_ssn("[]").is_none());
+        assert!(parse_observed_ssn(r#"{"Obsdate":"2026-11-16T00:00:00","swpc_ssn":95}"#).is_none());
+    }
+
+    #[test]
+    fn a_record_that_does_not_read_is_skipped_never_zero() {
+        let text = r#"[{"Obsdate":"2026-11-14T00:00:00","swpc_ssn":null},
+            {"Obsdate":"2026-02-30T00:00:00","swpc_ssn":10},
+            {"Obsdate":"2026-11-15T00:00:00","swpc_ssn":-1},
+            {"Obsdate":"garbage","swpc_ssn":5},
+            {"Obsdate":"2026-11-16T00:00:00","swpc_ssn":95}]"#;
+        let r = parse_observed_ssn(text).unwrap();
+        assert_eq!(
+            r,
+            [ObservedSsn {
+                day_unix: day(2026, 11, 16),
+                ssn: 95.0
+            }]
+        );
+    }
+
+    /// Today is the current UTC date's row, read at that moment: late on the 16th it is the
+    /// 16th's partial count; one second before midnight it is still the 16th's.
+    #[test]
+    fn today_is_the_current_utc_dates_row() {
+        let r = parse_observed_ssn(OBSERVED).unwrap();
+        let at = day(2026, 11, 16) + 21 * 3600 + 4 * 60;
+        assert_eq!(
+            ssn_today(&r, at),
+            Some(SsnToday {
+                day_unix: day(2026, 11, 16),
+                ssn: 95.0,
+                fetched_at: at
+            })
+        );
+        let last_second = day(2026, 11, 17) - 1;
+        assert_eq!(ssn_today(&r, last_second).map(|t| t.ssn), Some(95.0));
+        // Earlier in the file's history, the 15th's row was "today" on the 15th.
+        let on_15th = day(2026, 11, 15) + 12 * 3600;
+        assert_eq!(ssn_today(&r, on_15th).map(|t| t.ssn), Some(83.0));
+    }
+
+    /// Just after 00:00 UTC SWPC has not started the new day's row: the newest record is
+    /// yesterday's, and it is NOT today's count.
+    #[test]
+    fn just_after_midnight_with_no_new_row_there_is_no_today() {
+        let r = parse_observed_ssn(OBSERVED).unwrap();
+        assert_eq!(ssn_today(&r, day(2026, 11, 17)), None);
+        assert_eq!(ssn_today(&r, day(2026, 11, 17) + 5), None);
+        assert_eq!(ssn_today(&[], day(2026, 11, 16) + 60), None);
     }
 
     #[test]

@@ -5871,6 +5871,8 @@ export const ZH_HANT: PartialCatalog = {
   "connect.solar.stale": "NOAA 每日指數自 {{date}} 起未更新",
   "connect.solar.unavailable": "30 天 SFI 與太陽黑子趨勢不可用。",
   "connect.solar.trend.aria": "{{index}} 每日值，{{from}} 至 {{to}}：最低 {{low}}，最高 {{high}}",
+  "connect.solar.today": "{{index}} 今日迄今 {{value}} · {{time}}",
+  "connect.solar.today.title": "今日（UTC）迄今的太陽黑子數，取得於 {{time}}。NOAA 會在當天內修訂；曲線旁帶日期的數值是最近一個完整日的最終值。",
   "connect.pane.spacewx.title": "空間天氣",
   "connect.pane.getout.title": "能否通聯",
   "connect.pane.bestband.title": "按地區看波段",

@@ -7704,6 +7704,8 @@ export const DE: PartialCatalog = {
   "connect.solar.stale": "NOAA-Tageswerte seit {{date}} nicht aktualisiert",
   "connect.solar.unavailable": "30-Tage-Verlauf von SFI und Sonnenflecken nicht verfügbar.",
   "connect.solar.trend.aria": "{{index}} täglich, {{from}} bis {{to}}: Tiefstwert {{low}}, Höchstwert {{high}}",
+  "connect.solar.today": "{{index}} heute bisher {{value}} · {{time}}",
+  "connect.solar.today.title": "Laufende Sonnenfleckenzahl des heutigen UTC-Tages, abgerufen {{time}}. NOAA korrigiert sie im Tagesverlauf; der datierte Wert neben der Linie ist der Endwert des letzten abgeschlossenen Tages.",
   "connect.pane.spacewx.title": "Weltraumwetter",
   "connect.pane.getout.title": "Reichweite",
   "connect.pane.bestband.title": "Bänder nach Region",

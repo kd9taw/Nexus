@@ -18026,36 +18026,49 @@ async fn get_kp_forecast(
 /// within the hour for ~3 KB. Serves the last good copy on a failed fetch and an EMPTY one if
 /// there never was one — never fabricated. The copy stays honest however long the fetch keeps
 /// failing, because every row carries its own date: the box says how old the newest day is.
+///
+/// `today` (today's running count) comes from a second SWPC file, the observed-SSN JSON, on the
+/// same hourly read. Each file stands alone: one failing keeps the other's fresh value and its
+/// own last good one. A held `today` carries its own UTC day and fetch time, so the box drops it
+/// once the day has turned.
 #[tauri::command]
 async fn get_solar_indices(
     cache: State<'_, SolarIndicesCache>,
 ) -> Result<propagation::DailySolarIndices, String> {
     const SOLAR_INDICES_TTL_SECS: u64 = 3600;
-    {
+    let held = {
         let g = cache.lock().map_err(|e| e.to_string())?;
         if let Some((when, v)) = g.as_ref() {
             if when.elapsed().as_secs() < SOLAR_INDICES_TTL_SECS {
                 return Ok(v.clone());
             }
         }
-    }
+        g.as_ref().map(|(_, v)| v.clone())
+    };
     // Blocking HTTP: on the blocking pool (see `get_aurora`).
-    let fetched =
-        tauri::async_runtime::spawn_blocking(propagation::live::swpc::fetch_daily_solar_indices)
-            .await
-            .unwrap_or_else(|e| Err(e.to_string()));
-    match fetched {
-        Ok(v) => {
-            if let Ok(mut g) = cache.lock() {
-                *g = Some((std::time::Instant::now(), v.clone()));
-            }
-            Ok(v)
-        }
-        Err(_) => {
-            let g = cache.lock().map_err(|e| e.to_string())?;
-            Ok(g.as_ref().map(|(_, v)| v.clone()).unwrap_or_default())
+    let (indices, observed) = tauri::async_runtime::spawn_blocking(|| {
+        (
+            propagation::live::swpc::fetch_daily_solar_indices(),
+            propagation::live::swpc::fetch_observed_ssn(),
+        )
+    })
+    .await
+    .unwrap_or_else(|e| (Err(e.to_string()), Err(e.to_string())));
+    let fetched_any = indices.is_ok() || observed.is_ok();
+    let mut v = match indices {
+        Ok(v) => v,
+        Err(_) => held.clone().unwrap_or_default(),
+    };
+    v.today = match observed {
+        Ok(records) => propagation::ssn_today(&records, now_unix()),
+        Err(_) => held.and_then(|h| h.today),
+    };
+    if fetched_any {
+        if let Ok(mut g) = cache.lock() {
+            *g = Some((std::time::Instant::now(), v.clone()));
         }
     }
+    Ok(v)
 }
 
 /// Real-time KC2G ionosonde MUF/foF2 station fixes for the Connect map's MUF

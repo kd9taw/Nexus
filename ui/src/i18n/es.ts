@@ -1595,6 +1595,8 @@ export const ES: PartialCatalog = {
   "connect.solar.stale": "Índices diarios de NOAA sin actualizar desde el {{date}}",
   "connect.solar.unavailable": "Tendencia de 30 días de SFI y manchas solares no disponible.",
   "connect.solar.trend.aria": "{{index}} diario, del {{from}} al {{to}}: mínimo {{low}}, máximo {{high}}",
+  "connect.solar.today": "{{index}} hoy hasta ahora {{value}} · {{time}}",
+  "connect.solar.today.title": "Número de manchas solares de hoy en curso (día UTC), obtenido a las {{time}}. NOAA lo revisa a lo largo del día; el valor fechado junto a la línea es el definitivo del último día completo.",
   "connect.pane.spacewx.title": "Clima espacial",
   "connect.path.greyline.title": "Apertura de greyline (terminador)",
   "pathWhy.lead.band": "Trayecto corto en {{band}}",

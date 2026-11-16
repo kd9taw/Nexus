@@ -6079,6 +6079,8 @@ export const IT: PartialCatalog = {
   "connect.solar.stale": "Indici giornalieri NOAA non aggiornati dal {{date}}",
   "connect.solar.unavailable": "Andamento a 30 giorni di SFI e macchie solari non disponibile.",
   "connect.solar.trend.aria": "{{index}} giornaliero, da {{from}} a {{to}}: minimo {{low}}, massimo {{high}}",
+  "connect.solar.today": "{{index}} oggi finora {{value}} · {{time}}",
+  "connect.solar.today.title": "Numero di macchie solari di oggi in corso (giorno UTC), letto alle {{time}}. La NOAA lo rivede nel corso della giornata; il valore datato accanto alla linea è quello definitivo dell'ultimo giorno concluso.",
   "connect.pane.spacewx.title": "Meteo spaziale",
   "connect.pane.getout.title": "Chi mi sente",
   "connect.pane.bestband.title": "Bande per regione",

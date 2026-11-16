@@ -912,6 +912,25 @@ button.nb-chip:hover {
 .swx-trend-head.stale {
   color: var(--alert-warning);
 }
+/* With today's running count beside the caption: one line, never two — both parts shorten with
+   an ellipsis rather than wrap, so the box keeps its height (the count's hover has its words). */
+.swx-trend-head.has-today {
+  display: flex;
+  gap: var(--space-2);
+  min-width: 0;
+  white-space: nowrap;
+}
+.swx-trend-cap,
+.swx-trend-today {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.swx-trend-today {
+  margin-left: auto;
+  color: var(--text);
+}
 .swx-trend {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto auto;
