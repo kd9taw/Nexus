@@ -3469,7 +3469,7 @@ export const IT: PartialCatalog = {
   "settings.integrations.qsoWav.path": "Salvati in <code>{{path}}</code>, cartella creata la prima volta che registri.",
   "settings.integrations.qsoWav.reveal": "Apri la cartella delle registrazioni",
   "settings.integrations.catTrace.label": "Registra il traffico CAT",
-  "settings.integrations.catTrace.hint": "Scrive nel log diagnostico i comandi di frequenza, modo, split, VFO e PTT che Nexus invia alla radio, e le sue risposte, e nient’altro. Ciò che riceve la radio non cambia. Si spegne da solo dopo 30 minuti ed è spento a ogni avvio di Nexus.",
+  "settings.integrations.catTrace.hint": "Scrive nel log diagnostico i comandi di frequenza, modo, split, VFO e PTT che Nexus chiede a Hamlib o alla propria connessione con la radio, e le impostazioni della radio che cambia (preamplificatore, attenuatore, accordatore, livelli), con le risposte. Non vede i byte che Hamlib scrive poi sul cavo della radio, dove Hamlib fa i propri cambi di VFO: mostra quale comando di Nexus coincide con un clic. Niente nominativi né testo del manipolatore, e ciò che riceve la radio non cambia. Si spegne da solo dopo 30 minuti o 2 MB ed è spento a ogni avvio di Nexus.",
   "settings.integrations.catTrace.recording": { "one": "Registrazione del traffico CAT: manca {{count}} minuto. Riproduci il problema, poi invia il log diagnostico.", "other": "Registrazione del traffico CAT: mancano {{count}} minuti. Riproduci il problema, poi invia il log diagnostico." },
   "settings.integrations.catTrace.failed": "Impossibile attivare o disattivare la registrazione del traffico CAT",
   "settings.integrations.saveWav.label": "Salva l'audio ricevuto (.wav per periodo)",

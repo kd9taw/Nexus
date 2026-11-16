@@ -124,7 +124,9 @@ describe('Record CAT traffic', () => {
     await openServices()
     expect((await switchOf()).getAttribute('aria-checked')).toBe('false')
     expect(screen.getByText(/frequency, mode, split, VFO and PTT commands/)).toBeTruthy()
-    expect(screen.getByText(/Turns itself off after 30 minutes/)).toBeTruthy()
+    expect(screen.getByText(/Turns itself off after 30 minutes or 2 MB/)).toBeTruthy()
+    // It records what Nexus asks for, and says it cannot see Hamlib's own bytes to the radio.
+    expect(screen.getByText(/does not see the bytes Hamlib then writes/)).toBeTruthy()
   })
 
   it('turns on through the backend and shows the minutes left', async () => {

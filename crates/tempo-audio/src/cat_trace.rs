@@ -8,18 +8,24 @@
 //! Every single-line command Nexus sends a radio passes [`crate::rig::Rig::command_lines`],
 //! whatever serves the other end of that link: Hamlib's rigctld, or Nexus's own rigctld-protocol
 //! shims for Icom CI-V, OmniRig, FlexRadio and TCI. The trace is taken there, once the exchange
-//! is over, so it sees every backend's commands in the one protocol they share. What it does NOT
-//! see is the translation below that protocol: the bytes rigctld writes to the radio's serial
-//! port, or the CI-V frames and TCI/Flex text the shims write (the CI-V bus has its own log).
+//! is over, so it sees every backend's commands in the one protocol they share: what Nexus ASKS
+//! the link to do. What it does NOT see is the translation below that protocol: the bytes
+//! rigctld writes to the radio's cable (where Hamlib's own VFO swaps for a split happen), or the
+//! CI-V frames and TCI/Flex text the shims write (the CI-V bus has its own log). So it shows
+//! which Nexus command lines up with what the radio did, not Hamlib's internal sequence.
 //!
-//! ## Frequencies and modes only
-//! A command is written only when its verb is on the list below AND every argument is a number or
-//! a short word (a mode or VFO name): frequency, mode, split, VFO and PTT, set or read. Every
-//! other SET (levels, functions, raw CAT, Morse text, voice memories) is written as a bare
-//! "other command" with nothing of its content, so the timeline still shows that something went
-//! out; every other READ (meters, levels, capability dumps) is not written at all. A reply is
-//! written only when each of its lines is a number, a short word or an `RPRT` code. A failed
-//! exchange is written as its error KIND only, never the error's text, which can quote bytes.
+//! ## Radio control only
+//! A command is written with its arguments only when its verb is on the list below AND every
+//! argument is a number or a short word (a mode, VFO, level or function name): frequency, mode,
+//! split, VFO and PTT, set or read, and the radio-setting SETS (levels, functions such as the
+//! preamp, attenuator and tuner, RIT/XIT and repeater shift, offset and tone). Their READS are
+//! not written: the meter polling would fill the cap. Raw CAT (`w`/`W`) is written by its
+//! two-letter command name only, and never at all, not even by name, when that is `KY` (a
+//! keyer's text). Every other SET (Morse text, voice memories) is written as a bare "other
+//! command" with nothing of its content, so the timeline still shows that something went out;
+//! every other READ (capability dumps) is not written at all. A reply is written only when each
+//! of its lines is a number, a short word or an `RPRT` code. A failed exchange is written as its
+//! error KIND only, never the error's text, which can quote bytes.
 //!
 //! ## No behaviour change
 //! The hook runs after the command was written AND its reply read, so nothing is added between
@@ -98,6 +104,17 @@ impl Session {
     fn minutes(&self, now: Instant) -> u64 {
         now.saturating_duration_since(self.started).as_secs() / 60
     }
+
+    /// The end of a trace whose time ran out, noticed at `now`: possibly well after the deadline,
+    /// when nothing happened in between, so the line gives the deadline on the trace's own clock.
+    fn time_up_words(&self, now: Instant) -> String {
+        format!(
+            "stopped by itself: the {} min limit was reached at +{:.3}s (noticed at +{:.3}s)",
+            AUTO_OFF.as_secs() / 60,
+            AUTO_OFF.as_secs_f64(),
+            now.saturating_duration_since(self.started).as_secs_f64()
+        )
+    }
 }
 
 fn emit(text: &str) {
@@ -120,8 +137,8 @@ pub fn start() -> Duration {
         bytes: 0,
     });
     emit(&format!(
-        "started: frequency, mode, split, VFO and PTT commands are recorded for {} min or {} MB, \
-         whichever comes first",
+        "started: the frequency, mode, split, VFO, PTT and radio-setting commands Nexus asks the \
+         radio link to carry out are recorded for {} min or {} MB, whichever comes first",
         AUTO_OFF.as_secs() / 60,
         BYTE_CAP / (1024 * 1024)
     ));
@@ -163,10 +180,7 @@ fn end(session: &mut Option<Session>, why: Admit, now: Instant) {
     };
     ON.store(false, Ordering::Relaxed);
     match why {
-        Admit::TimeUp => emit(&format!(
-            "stopped by itself: the {} min limit was reached",
-            AUTO_OFF.as_secs() / 60
-        )),
+        Admit::TimeUp => emit(&s.time_up_words(now)),
         Admit::Full => emit(&format!(
             "stopped by itself: the {} MB cap was reached after {} min",
             BYTE_CAP / (1024 * 1024),
@@ -204,12 +218,13 @@ pub(crate) fn exchange(
     };
     let took = sent.elapsed();
     let answer = match (&command, reply) {
-        (Command::Other, Ok(_)) => "answered".to_string(),
+        (Command::Other | Command::Raw(_), Ok(_)) => "answered".to_string(),
         (_, Ok(reply)) => describe_reply(reply),
         (_, Err(kind)) => format!("failed ({kind:?})"),
     };
     let command = match command {
         Command::Recorded(c) => c,
+        Command::Raw(name) => format!("raw CAT {name} (value not recorded)"),
         Command::Other => "other command (not recorded)".to_string(),
     };
     let port = control
@@ -239,11 +254,14 @@ pub(crate) fn ptt_event(on: bool, via: &'static str) {
 enum Command {
     /// The command as written: a radio-control verb with radio-control arguments.
     Recorded(String),
+    /// Raw CAT: its two-letter command name, never its value.
+    Raw(String),
     /// Some other set: that one went out, and nothing of what it said.
     Other,
 }
 
-/// The rigctld verbs the trace records, short form and long, set and read.
+/// The rigctld verbs the trace records, short form and long: set and read for the dial, mode,
+/// split, VFO and PTT; set only for the radio's settings, whose reads are the meter polling.
 #[rustfmt::skip]
 const RECORDED_VERBS: &[&str] = &[
     "F", "f", "\\set_freq", "\\get_freq",
@@ -253,17 +271,25 @@ const RECORDED_VERBS: &[&str] = &[
     "S", "s", "\\set_split_vfo", "\\get_split_vfo",
     "V", "v", "\\set_vfo", "\\get_vfo",
     "T", "t", "\\set_ptt", "\\get_ptt",
+    "L", "\\set_level", "U", "\\set_func",
+    "J", "\\set_rit", "Z", "\\set_xit",
+    "R", "\\set_rptr_shift", "O", "\\set_rptr_offs", "C", "\\set_ctcss_tone",
 ];
 
-/// A number, or a short word such as a mode or VFO name: nothing else is ever written.
+/// A number, a short word such as a mode, VFO or level name, or a repeater shift's sign: nothing
+/// else is ever written.
 fn plain_token(t: &str) -> bool {
+    if t == "+" || t == "-" {
+        return true;
+    }
     let number = {
         let digits = t.strip_prefix('-').unwrap_or(t);
         !digits.is_empty()
             && digits.len() <= 12
             && digits.chars().all(|c| c.is_ascii_digit() || c == '.')
     };
-    let word = !t.is_empty() && t.len() <= 8 && t.chars().all(|c| c.is_ascii_alphanumeric());
+    let word =
+        !t.is_empty() && t.len() <= 16 && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
     number || word
 }
 
@@ -280,10 +306,22 @@ fn describe_command(line: &str) -> Option<Command> {
             "{verb} (arguments not recorded)"
         )));
     }
-    // Any other set, raw CAT (`w`/`W`, which can carry a keyer's text) and Morse (`b`): that it
-    // went out, never what it said. Any other read is not written.
+    // Raw CAT: the radio's own two-letter command, which says what it changes, but never its
+    // value, and never `KY` at all, not even by name: a keyer's text.
+    if verb == "w" || verb == "W" {
+        let name: String = words.next().unwrap_or("").chars().take(2).collect();
+        let named = name.len() == 2
+            && name.chars().all(|c| c.is_ascii_alphabetic())
+            && !name.eq_ignore_ascii_case("KY");
+        return Some(if named {
+            Command::Raw(name.to_ascii_uppercase())
+        } else {
+            Command::Other
+        });
+    }
+    // Any other set (Morse `b`, voice memories): that it went out, never what it said. Any other
+    // read is not written.
     let is_set = verb.starts_with(|c: char| c.is_ascii_uppercase())
-        || verb == "w"
         || verb == "b"
         || verb.starts_with("\\set_")
         || verb.starts_with("\\send_")
@@ -330,6 +368,19 @@ mod tests {
             "T 3\n",
             "T 0\n",
             "t\n",
+            "L RFPOWER 0.5\n",
+            "L ATT 12\n",
+            "L Sub AF 0.500\n",
+            "L MONITOR_GAIN 0.3\n",
+            "U TUNER 1\n",
+            "U PREAMP 1\n",
+            "J 120\n",
+            "Z -50\n",
+            "R +\n",
+            "O 600000\n",
+            "C 885\n",
+            "\\set_level RFPOWER 0.5\n",
+            "\\set_func TUNER 0\n",
         ] {
             assert_eq!(
                 describe_command(line),
@@ -346,16 +397,32 @@ mod tests {
             "b CQ W1AW W1AW\n",
             "w KY CQ TEST K1ABC;\n",
             "W KY W9ABC; 0\n",
-            "L RFPOWER 0.5\n",
-            "U TUNER 1\n",
+            "W ky w9abc; 0\n",
+            "W KYW9ABC; 0\n",
             "\\send_voice_mem 1\n",
             "\\send_morse CQ\n",
             "\\stop_morse\n",
         ] {
             assert_eq!(describe_command(line), Some(Command::Other), "{line:?}");
         }
-        // Other reads are not written at all.
-        for line in ["l STRENGTH\n", "u NB\n", "\\dump_state\n", "\\chk_vfo\n"] {
+        // Raw CAT that is not keyer text: its two-letter command name, never its value.
+        assert_eq!(
+            describe_command("W SS0570000; 0\n"),
+            Some(Command::Raw("SS".into()))
+        );
+        assert_eq!(
+            describe_command("w EX0300;\n"),
+            Some(Command::Raw("EX".into()))
+        );
+        // Other reads are not written at all: meter polling would fill the cap.
+        for line in [
+            "l STRENGTH\n",
+            "u NB\n",
+            "\\get_level RFPOWER\n",
+            "\\get_func TUNER\n",
+            "\\dump_state\n",
+            "\\chk_vfo\n",
+        ] {
             assert_eq!(describe_command(line), None, "{line:?}");
         }
         // A recorded verb carrying anything but numbers and short words is written bare.
@@ -392,6 +459,20 @@ mod tests {
             Admit::Write
         );
         assert_eq!(s.admit(t0 + AUTO_OFF, 40), Admit::TimeUp);
+    }
+
+    #[test]
+    fn a_trace_ended_late_says_when_its_time_was_up() {
+        // Nothing may notice the deadline for a while (no traffic, Settings closed): the line
+        // gives the real expiry on the trace's clock, not the moment it was noticed.
+        let t0 = Instant::now();
+        let s = Session {
+            started: t0,
+            bytes: 0,
+        };
+        let words = s.time_up_words(t0 + AUTO_OFF + Duration::from_secs(600));
+        assert!(words.contains("at +1800.000s"), "{words}");
+        assert!(words.contains("noticed at +2400.000s"), "{words}");
     }
 
     #[test]
@@ -432,6 +513,12 @@ mod tests {
             Err(std::io::ErrorKind::TimedOut),
         );
         ptt_event(true, "serial line");
+        exchange(
+            Some("127.0.0.1:4532"),
+            "L RFPOWER 0.5\n",
+            sent,
+            Ok("RPRT 0\n"),
+        );
         stop();
         assert!(!is_on());
         let captured = CAPTURED.lock().unwrap();
@@ -445,6 +532,9 @@ mod tests {
         assert!(captured
             .iter()
             .any(|l| l.contains("PTT on via serial line")));
+        assert!(captured
+            .iter()
+            .any(|l| l.contains(":4532 L RFPOWER 0.5 -> RPRT 0 (")));
         assert!(captured
             .iter()
             .any(|l| l.contains("stopped by the operator")));

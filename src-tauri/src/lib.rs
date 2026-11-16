@@ -24367,7 +24367,8 @@ fn civ_diagnostic_status() -> String {
 }
 
 /// Turn Record CAT traffic on or off ([`tempo_audio::cat_trace`]): the frequency, mode, split,
-/// VFO and PTT commands Nexus sends the radio, into the diagnostic log, for at most 30 minutes.
+/// VFO, PTT and radio-setting commands Nexus asks the radio link to carry out, into the
+/// diagnostic log, for at most 30 minutes or 2 MB.
 /// Returns the seconds the trace has left, 0 when it is off. Not a setting: it is off at every
 /// launch, so a trace left running never survives a restart.
 #[tauri::command]

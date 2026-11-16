@@ -1898,6 +1898,12 @@ impl Rig {
             match &self.ptt_mode {
                 PttMode::Vox => crate::cat_trace::ptt_event(on, "VOX (nothing sent)"),
                 PttMode::Serial { .. } => crate::cat_trace::ptt_event(on, "serial line"),
+                PttMode::Cat | PttMode::CatData if self.control.is_none() => {
+                    crate::cat_trace::ptt_event(
+                        on,
+                        "VOX (CAT keying with no CAT link; nothing sent)",
+                    )
+                }
                 PttMode::Cat | PttMode::CatData => {}
             }
         }
@@ -3252,7 +3258,7 @@ mod tests {
     }
 
     /// The same session of radio control, from a new connection: every command the trace
-    /// records, and two it must not (Morse text, a power level).
+    /// records, and the raw CAT and Morse it may name but never quote.
     fn traced_session(addr: &str) {
         let mut rig = Rig::rigctld(addr);
         rig.set_freq(14_074_123).unwrap();
@@ -3265,6 +3271,9 @@ mod tests {
         assert_eq!(rig.read_freq().unwrap(), 14_074_123);
         rig.send_morse("CQ W1AW").unwrap();
         rig.set_power(0.5).unwrap();
+        rig.set_func("TUNER", true).unwrap();
+        assert!(rig.send_raw_set("KY CQ W1AW;"));
+        assert!(rig.send_raw_set("SS0570000;"));
     }
 
     #[test]
@@ -3285,6 +3294,11 @@ mod tests {
         crate::cat_trace::start();
         let (on_addr, on_bytes) = mock_rigctld_bytes();
         traced_session(&on_addr);
+        // CAT keying chosen with no CAT link falls back to VOX: nothing is sent, and the trace
+        // says the key happened.
+        let mut no_link = Rig::with_control(None, PttMode::Cat);
+        no_link.ptt(true).unwrap();
+        no_link.ptt(false).unwrap();
         crate::cat_trace::stop();
         let on = settled(&on_bytes);
 
@@ -3304,6 +3318,10 @@ mod tests {
             "T 1 -> RPRT 0",
             "T 0 -> RPRT 0",
             "f -> 14074123",
+            "L RFPOWER 0.500 -> RPRT 0",
+            "U TUNER 1 -> RPRT 0",
+            "raw CAT SS (value not recorded) -> answered",
+            "PTT on via VOX (CAT keying with no CAT link; nothing sent)",
         ] {
             assert!(
                 captured.iter().any(|l| l.contains(sent)),
@@ -3319,8 +3337,8 @@ mod tests {
         assert!(
             !captured
                 .iter()
-                .any(|l| l.contains("W1AW") || l.contains("RFPOWER")),
-            "the trace wrote more than radio control: {captured:#?}"
+                .any(|l| l.contains("W1AW") || l.contains("KY") || l.contains("0570000")),
+            "the trace wrote a callsign, keyer text or a raw value: {captured:#?}"
         );
     }
 

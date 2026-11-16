@@ -6760,7 +6760,7 @@ export const JA: PartialCatalog = {
   "settings.integrations.qsoWav.path": "<code>{{path}}</code>に保存されます（初回録音時に作成）。",
   "settings.integrations.qsoWav.reveal": "録音フォルダーを開く",
   "settings.integrations.catTrace.label": "CATトラフィックを記録",
-  "settings.integrations.catTrace.hint": "Nexusが無線機に送る周波数・モード・スプリット・VFO・PTTのコマンドとその応答だけを診断ログに書き込みます。無線機に送られる内容は変わりません。30分後に自動でオフになり、Nexusの起動時は常にオフです。",
+  "settings.integrations.catTrace.hint": "NexusがHamlibまたは自身の無線機接続に指示する周波数・モード・スプリット・VFO・PTTのコマンドと、変更する無線機の設定（プリアンプ、アッテネーター、チューナー、レベル）を、その応答とともに診断ログに書き込みます。Hamlibがその後無線機のケーブルに書き込むバイト（Hamlib独自のVFO切り替えはここで行われます）は見えないため、カチッという音と重なるNexusのコマンドがわかります。コールサインやキーヤーの文字は記録せず、無線機に送られる内容は変わりません。30分または2 MBで自動的にオフになり、Nexusの起動時は常にオフです。",
   "settings.integrations.catTrace.recording": "CATトラフィックを記録中：残り{{count}}分。問題を再現してから診断ログを送ってください。",
   "settings.integrations.catTrace.failed": "CATトラフィックの記録をオンまたはオフにできませんでした",
   "settings.integrations.saveWav.label": "受信音声を保存（周期ごとに.wav）",

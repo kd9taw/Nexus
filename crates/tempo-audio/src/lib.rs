@@ -40,8 +40,9 @@ pub mod backend;
 /// the exact "fix the app / fix the rig menu" verdict. Pure logic unit-tested; the real
 /// probe rides the `serial` feature and runs only in the `test_cat` command context.
 pub mod baud_ladder;
-/// Record CAT traffic: the operator's self-ending trace of the frequency, mode, split, VFO and
-/// PTT commands Nexus sends a radio, written into the diagnostic log. Off at every launch.
+/// Record CAT traffic: the operator's self-ending trace of the frequency, mode, split, VFO, PTT
+/// and radio-setting commands Nexus asks a radio link to carry out, written into the diagnostic
+/// log. Off at every launch.
 pub mod cat_trace;
 // The audio a remote over carries each way and what feeds and plays it: tempo-codec's, below the
 // engine, so that the client core builds without this crate; named here as they always were.

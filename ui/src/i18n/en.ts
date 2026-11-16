@@ -10742,7 +10742,7 @@ export const EN = {
   'settings.integrations.qsoWav.reveal': 'Open recordings folder',
   'settings.integrations.catTrace.label': 'Record CAT traffic',
   'settings.integrations.catTrace.hint':
-    'Writes the frequency, mode, split, VFO and PTT commands Nexus sends the radio, and its answers, into the diagnostic log, and nothing else. What the radio is sent does not change. Turns itself off after 30 minutes and is off whenever Nexus starts.',
+    "Writes the frequency, mode, split, VFO and PTT commands Nexus asks Hamlib or its own radio connection to carry out, and the radio settings it changes (preamp, attenuator, tuner, levels), with their answers, into the diagnostic log. It does not see the bytes Hamlib then writes to the radio's cable, where Hamlib makes its own VFO swaps: it shows which Nexus command lines up with a click. No callsigns or keyer text, and what the radio is sent does not change. Turns itself off after 30 minutes or 2 MB, and is off whenever Nexus starts.",
   'settings.integrations.catTrace.recording': {
     one: 'Recording CAT traffic: {{count}} minute left. Reproduce the problem, then send the diagnostic log.',
     other:

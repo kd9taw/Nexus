@@ -5776,9 +5776,9 @@ export async function civDiagnosticLog(enable: boolean): Promise<string> {
 }
 
 /**
- * Turn Record CAT traffic on or off: the radio's frequency, mode, split, VFO and PTT commands go
- * into the diagnostic log for at most 30 minutes. Returns the seconds left, 0 when off. Not a
- * setting: off at every launch.
+ * Turn Record CAT traffic on or off: the frequency, mode, split, VFO, PTT and radio-setting
+ * commands Nexus asks the radio link to carry out go into the diagnostic log for at most 30
+ * minutes or 2 MB. Returns the seconds left, 0 when off. Not a setting: off at every launch.
  */
 export async function catTrace(enable: boolean): Promise<number> {
   return invoke<number>('cat_trace', { enable })
