@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { findDaxDevices, isDaxPaired } from './dax'
+import { findDaxDevices, flexDaxAudioMissing, isDaxPaired } from './dax'
 
 describe('findDaxDevices', () => {
   it('pairs DAX RX 1 with DAX TX, preferring RX 1 over other RX channels', () => {
@@ -35,5 +35,40 @@ describe('findDaxDevices', () => {
     expect(findDaxDevices(['DAX Audio RX 1'], ['Speakers'])).toBeNull()
     expect(findDaxDevices(['Microphone'], ['DAX Audio TX'])).toBeNull()
     expect(findDaxDevices([], [])).toBeNull()
+  })
+})
+
+// #522: with Nexus's own Flex client on, the radio's native DAX audio is a separate switch that is
+// off by default, so the waterfall hears whatever sound card Settings picks (a laptop's mic).
+describe('flexDaxAudioMissing', () => {
+  const reporter = {
+    rigModel: 2036,
+    rigConn: 'network',
+    flexRadioIp: '192.0.2.10',
+    flexNativeCat: true,
+    flexNativeAudio: false,
+    audioIn: 'Microphone Array (Realtek)',
+  }
+
+  it("is true for the reporter's setup: the client on, native audio off, a microphone picked", () => {
+    expect(flexDaxAudioMissing(reporter)).toBe(true)
+    expect(flexDaxAudioMissing({ ...reporter, rigModel: 23005 })).toBe(true)
+    expect(flexDaxAudioMissing({ ...reporter, rigConn: 'serial' })).toBe(true)
+    // System default is no DAX device either.
+    expect(flexDaxAudioMissing({ ...reporter, audioIn: '' })).toBe(true)
+  })
+
+  it('is false once the audio comes from the radio: native audio on, or a DAX input picked', () => {
+    expect(flexDaxAudioMissing({ ...reporter, flexNativeAudio: true })).toBe(false)
+    expect(flexDaxAudioMissing({ ...reporter, audioIn: 'DAX Audio RX 1 (FlexRadio DAX)' })).toBe(false)
+  })
+
+  it('is false where the Flex client does not run', () => {
+    expect(flexDaxAudioMissing({ ...reporter, flexNativeCat: false })).toBe(false)
+    expect(flexDaxAudioMissing({ ...reporter, flexRadioIp: ' ' })).toBe(false)
+    expect(flexDaxAudioMissing({ ...reporter, rigModel: 1035 })).toBe(false)
+    for (const rigConn of ['omnirig', 'icomlan', 'tci', 'OmniRig']) {
+      expect(flexDaxAudioMissing({ ...reporter, rigConn }), rigConn).toBe(false)
+    }
   })
 })
