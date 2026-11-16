@@ -40,6 +40,7 @@ const OTHER_PROGRAMS: Record<string, string> = {
   'remote.lan.firewall.public': "Windows' network settings",
   'gettingStarted.wsjtx.mac': "macOS's keyboard settings",
   'settings.connections.qrz.test.fail': "QRZ.com's account settings",
+  'settings.n3fjp.test.refused': "N3FJP's own Settings menu (its TCP API switch)",
 }
 
 /** The "Settings ▸ a ▸ b" paths in a catalog string, each as its steps. */
