@@ -67562,6 +67562,27 @@ mod tests {
         }
     }
 
+    /// ⛔ A backup whose licence class this build does not know is REFUSED, never restored as
+    /// `Open`, which would lift the band limits and the station-profile call check. Only a settings
+    /// file read at launch forgives an unknown class (a newer build wrote it); a restore is the
+    /// operator asking for exactly what the backup says, and this build cannot say it.
+    /// CONTROL: the same backup with a known class restores it.
+    #[test]
+    fn a_backup_with_an_unknown_licence_class_is_refused() {
+        let s = tempo_app::settings::Settings {
+            mycall: "W9XYZ".into(),
+            license_class: tempo_app::settings::LicenseClass::Technician,
+            ..Default::default()
+        };
+        let mut v = serde_json::to_value(s.for_storage()).unwrap();
+        assert_eq!(
+            super::settings_from_bundle(v.clone()).unwrap().license_class,
+            tempo_app::settings::LicenseClass::Technician
+        );
+        v["licenseClass"] = serde_json::json!("zz-from-a-newer-build");
+        assert!(super::settings_from_bundle(v).is_err());
+    }
+
     /// The FT drive the operator set per band and mode is a station setting: a settings backup
     /// carries each radio's, and a restore brings it back. In a backup hand-edited to a level the
     /// slider cannot reach, that entry is dropped (never clamped to full drive), as is one that is
