@@ -38,7 +38,7 @@
 //! missing one.
 
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(4);
@@ -51,25 +51,29 @@ fn esc(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
-fn connect(host: &str, port: u16) -> std::io::Result<TcpStream> {
+/// Where `host:port` is: an IP literal as written, a name through the system resolver.
+/// `None` when the name does not resolve.
+fn resolve(host: &str, port: u16) -> Option<SocketAddr> {
     let addr = format!("{host}:{port}");
-    let stream = TcpStream::connect_timeout(
-        &addr.parse().or_else(|_| {
-            // Hostname: resolve via ToSocketAddrs.
-            use std::net::ToSocketAddrs;
-            addr.to_socket_addrs()
-                .ok()
-                .and_then(|mut a| a.next())
-                .ok_or(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "unresolvable host",
-                ))
-        })?,
-        TIMEOUT,
-    )?;
-    stream.set_read_timeout(Some(TIMEOUT))?;
-    stream.set_write_timeout(Some(TIMEOUT))?;
+    addr.parse()
+        .ok()
+        .or_else(|| addr.to_socket_addrs().ok().and_then(|mut a| a.next()))
+}
+
+/// Connect to `addr`, giving up after `timeout`, with reads and writes bounded the same way.
+fn open(addr: SocketAddr, timeout: Duration) -> std::io::Result<TcpStream> {
+    let stream = TcpStream::connect_timeout(&addr, timeout)?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
     Ok(stream)
+}
+
+fn connect(host: &str, port: u16) -> std::io::Result<TcpStream> {
+    let addr = resolve(host, port).ok_or(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        "unresolvable host",
+    ))?;
+    open(addr, TIMEOUT)
 }
 
 /// One Field Day contact for the push.
@@ -451,16 +455,79 @@ pub fn dupecheck(
     Ok(parse_dupe_response(&String::from_utf8_lossy(&buf[..n])))
 }
 
+/// Why the Test could not open a connection, as far as the operator can act on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectFailure {
+    /// The computer answered and turned the connection away: nothing listens on that port,
+    /// which is N3FJP's TCP API switched off or the wrong port.
+    Refused,
+    /// Nothing answered in time, or there is no route to it: the wrong IP, a different
+    /// network, or a firewall on the master PC dropping the connection.
+    Unreachable,
+    /// The host name could not be looked up.
+    HostNotFound,
+    /// Anything else; the system's own message is all there is to say.
+    Other,
+}
+
+impl ConnectFailure {
+    fn of(e: &std::io::Error) -> Self {
+        use std::io::ErrorKind;
+        match e.kind() {
+            ErrorKind::ConnectionRefused => Self::Refused,
+            ErrorKind::TimedOut | ErrorKind::HostUnreachable | ErrorKind::NetworkUnreachable => {
+                Self::Unreachable
+            }
+            _ => Self::Other,
+        }
+    }
+}
+
+/// A failed [`test_connection`]. Its `Display` is the English line for the connection log;
+/// the [`ConnectFailure`] is what lets a caller say what to do about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TestError {
+    /// No connection was made. `detail` is the system's own message.
+    Connect {
+        failure: ConnectFailure,
+        detail: String,
+    },
+    /// Connected, but the handshake failed; the sentence says how.
+    Handshake(String),
+}
+
+impl std::fmt::Display for TestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Connect { detail, .. } => write!(f, "connect failed: {detail}"),
+            Self::Handshake(s) => f.write_str(s),
+        }
+    }
+}
+
 /// Test the connection: handshake `<CMD><PROGRAM></CMD>` and report what's on
 /// the other end ("N3FJP's Field Day Contest Log v6.6").
-pub fn test_connection(host: &str, port: u16) -> Result<String, String> {
-    let mut stream = connect(host, port).map_err(|e| format!("connect failed: {e}"))?;
+pub fn test_connection(host: &str, port: u16) -> Result<String, TestError> {
+    test_connection_within(host, port, TIMEOUT)
+}
+
+fn test_connection_within(host: &str, port: u16, timeout: Duration) -> Result<String, TestError> {
+    let addr = resolve(host, port).ok_or(TestError::Connect {
+        failure: ConnectFailure::HostNotFound,
+        detail: "unresolvable host".into(),
+    })?;
+    let mut stream = open(addr, timeout).map_err(|e| TestError::Connect {
+        failure: ConnectFailure::of(&e),
+        detail: e.to_string(),
+    })?;
     stream
         .write_all(b"<CMD><PROGRAM></CMD>\r\n")
-        .map_err(|e| format!("send failed: {e}"))?;
+        .map_err(|e| TestError::Handshake(format!("send failed: {e}")))?;
     let mut buf = [0u8; 1024];
     let n = stream.read(&mut buf).map_err(|e| {
-        format!("no response: {e} (is the TCP API enabled in N3FJP ▸ Settings ▸ API?)")
+        TestError::Handshake(format!(
+            "no response: {e} (is the TCP API enabled in N3FJP ▸ Settings ▸ API?)"
+        ))
     })?;
     let resp = String::from_utf8_lossy(&buf[..n]);
     let pgm = resp
@@ -899,6 +966,44 @@ mod tests {
                 serial_sent: None,
                 ..q.clone()
             })
+        );
+    }
+
+    /// The Test's connect failure, or a panic naming what came back instead.
+    fn connect_failure(r: Result<String, TestError>) -> ConnectFailure {
+        match r {
+            Err(TestError::Connect { failure, .. }) => failure,
+            other => panic!("expected a connect failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_closed_port_is_a_refused_connection() {
+        // A port that was just free: nothing listens there, so the OS turns the connect away.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .map(|a| a.port())
+            .expect("a port");
+        assert_eq!(
+            connect_failure(test_connection("127.0.0.1", port)),
+            ConnectFailure::Refused
+        );
+    }
+
+    #[test]
+    fn an_address_that_never_answers_is_unreachable() {
+        // TEST-NET-1 is reserved for documentation and never routed, so the connect hangs until
+        // the timeout (or the OS says there is no route); both are "can't reach that computer".
+        let r = test_connection_within("192.0.2.1", 1100, Duration::from_millis(300));
+        assert_eq!(connect_failure(r), ConnectFailure::Unreachable);
+    }
+
+    #[test]
+    fn a_name_that_does_not_resolve_is_host_not_found() {
+        // `.invalid` is reserved never to resolve.
+        assert_eq!(
+            connect_failure(test_connection("no-such-host.invalid", 1100)),
+            ConnectFailure::HostNotFound
         );
     }
 }

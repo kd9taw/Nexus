@@ -170,6 +170,25 @@ const SERVICE_TESTS: Record<string, () => Promise<string>> = {
   clublog: () => clublogTestConnection(),
 }
 
+// A failed N3FJP Test, worded. The failures the backend can explain arrive as a CODE and the
+// words (and what to do next) are ours, so they read in the operator's language. Any other
+// failure shows the backend's own text, because an unknown failure must not be dressed up as a
+// known one.
+function n3fjpTestFailure(said: string): string {
+  switch (said) {
+    case 'n3fjpNoHost':
+      return t('settings.n3fjp.test.noHost')
+    case 'n3fjpRefused':
+      return t('settings.n3fjp.test.refused')
+    case 'n3fjpUnreachable':
+      return t('settings.n3fjp.test.unreachable')
+    case 'n3fjpHostNotFound':
+      return t('settings.n3fjp.test.hostNotFound')
+    default:
+      return said
+  }
+}
+
 /** The Cabrillo `CATEGORY-OPERATOR` tokens, in the order a sponsor's template lists
  *  them. INVARIANT: each goes into the file verbatim, so none is ever translated and
  *  none is ever locale-formatted. Mirrors `contest::OperatorCategory`; a token this
@@ -1691,7 +1710,7 @@ export function SettingsPanel({
     setN3fjpTest({ state: 'testing', msg: t('settings.connections.test.testing') })
     n3fjpTestConnection()
       .then((msg) => setN3fjpTest({ state: 'ok', msg }))
-      .catch((e) => setN3fjpTest({ state: 'fail', msg: String(e) }))
+      .catch((e) => setN3fjpTest({ state: 'fail', msg: n3fjpTestFailure(String(e)) }))
   }
   useEffect(() => {
     if (status !== 'saved') return
@@ -13636,8 +13655,9 @@ export function SettingsPanel({
                   </button>
                 </div>
                 {n3fjpTest.state !== 'idle' && n3fjpTest.state !== 'testing' && (
-                  // A pass/fail glyph and the answer the connection itself gave — neither is
-                  // this panel's prose, so neither is in the catalog.
+                  // A pass/fail glyph and the answer the connection itself gave. Only the
+                  // failures the backend names by a code are this panel's prose, from the
+                  // catalog (n3fjpTestFailure).
                   <span className={`cat-result ${n3fjpTest.state}`} role="status">
                     {n3fjpTest.state === 'ok' ? '✓ ' : '✗ '}{n3fjpTest.msg}
                   </span>

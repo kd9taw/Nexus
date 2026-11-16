@@ -42106,13 +42106,35 @@ async fn n3fjp_test_connection(state: State<'_, SharedEngine>) -> Result<String,
         (st.n3fjp_host.trim().to_string(), st.n3fjp_port)
     };
     if host.is_empty() {
-        return Err("No N3FJP host configured — set it in Settings ▸ Field Day.".into());
+        return Err(N3FJP_NO_HOST.into());
     }
-    conn_logged(
+    let res = tempo_net::n3fjp::test_connection(&host, port);
+    // The connection log keeps the system's own reason; the Test answers with a code where it
+    // can say what to do.
+    let _ = conn_logged(
         "N3FJP",
         |s: &String| format!("connection test OK — {s}"),
-        tempo_net::n3fjp::test_connection(&host, port),
-    )
+        res.clone().map_err(|e| e.to_string()),
+    );
+    res.map_err(|e| n3fjp_test_reason(&e))
+}
+
+/// What a failed N3FJP Test answers. ⛔ The failures Nexus can explain are CODES, not
+/// sentences, and the UI owns the words: they say what to do next in the operator's language,
+/// which a sentence from here could not. Anything else is the English reason as before.
+const N3FJP_NO_HOST: &str = "n3fjpNoHost";
+
+fn n3fjp_test_reason(e: &tempo_net::n3fjp::TestError) -> String {
+    use tempo_net::n3fjp::{ConnectFailure, TestError};
+    match e {
+        TestError::Connect { failure, .. } => match failure {
+            ConnectFailure::Refused => "n3fjpRefused".into(),
+            ConnectFailure::Unreachable => "n3fjpUnreachable".into(),
+            ConnectFailure::HostNotFound => "n3fjpHostNotFound".into(),
+            ConnectFailure::Other => e.to_string(),
+        },
+        TestError::Handshake(_) => e.to_string(),
+    }
 }
 
 /// Test the QRZ Logbook connection: a real STATUS round-trip that validates
@@ -75147,7 +75169,8 @@ mod remote_credential_reply_tests {
     }
 
     /// An N3FJP Test, run as the command lane runs it for a remote client, answers ok with what
-    /// is listening, or the error. N3FJP takes no credential at all.
+    /// is listening, or the error: a closed port and a blank host each by the code the UI words.
+    /// N3FJP takes no credential at all.
     #[test]
     fn an_n3fjp_test_from_afar_answers_ok_or_an_error() {
         use crate::command_dispatch::{tauri_runner, Runner};
@@ -75168,10 +75191,14 @@ mod remote_credential_reply_tests {
             .and_then(|l| l.local_addr())
             .map(|a| a.port())
             .expect("a port no one listens on");
-        for (to, expected) in [(port, Some("N3FJP's Test Log v6.6")), (closed, None)] {
+        for (host, to, expected) in [
+            ("127.0.0.1", port, Ok("N3FJP's Test Log v6.6")),
+            ("127.0.0.1", closed, Err("n3fjpRefused")),
+            ("", port, Err("n3fjpNoHost")),
+        ] {
             let engine: SharedEngine = Arc::new(Mutex::new(Engine::with_settings(
                 tempo_app::settings::Settings {
-                    n3fjp_host: "127.0.0.1".into(),
+                    n3fjp_host: host.into(),
                     n3fjp_port: to,
                     ..Default::default()
                 },
@@ -75197,11 +75224,8 @@ mod remote_credential_reply_tests {
                 .recv_timeout(std::time::Duration::from_secs(10))
                 .expect("the handler answered");
             match expected {
-                Some(listening) => assert_eq!(said, Ok(serde_json::json!(listening))),
-                None => {
-                    let error = said.expect_err("nothing listening is an error");
-                    assert!(error.starts_with("connect failed"), "{error}");
-                }
+                Ok(listening) => assert_eq!(said, Ok(serde_json::json!(listening))),
+                Err(code) => assert_eq!(said.expect_err("a failed Test is an error"), code),
             }
         }
         serving.join().expect("the fake N3FJP served");

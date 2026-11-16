@@ -10862,6 +10862,14 @@ export const EN = {
   'settings.n3fjp.test.action': 'Test N3FJP',
   'settings.n3fjp.test.hint':
     'Run this at the club site before the event starts to confirm the API link works.',
+  'settings.n3fjp.test.noHost':
+    "No N3FJP host is set: enter the master PC's IP address in Settings ▸ Services ▸ N3FJP Integration.",
+  'settings.n3fjp.test.refused':
+    "Connection refused: N3FJP's TCP API is off on that computer, or the port is wrong. In N3FJP, turn on Settings ▸ Application Program Interface ▸ TCP API (port 1100 by default).",
+  'settings.n3fjp.test.unreachable':
+    "That computer can't be reached: check the IP address, that both computers are on the same network, and that Windows Firewall on the master PC allows N3FJP / port 1100.",
+  'settings.n3fjp.test.hostNotFound':
+    "That host name couldn't be found: check the spelling, or enter the master PC's IP address instead.",
 
   // ── Settings ▸ Services ▸ N1MM+ ────────────────────────────────────────
   // ⚠️ The port number 12060 is the contest logger's own broadcast port and stays in the
