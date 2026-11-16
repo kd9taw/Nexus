@@ -3176,7 +3176,9 @@ pub struct Settings {
     /// Headphone-monitor output device name. Empty = system default output.
     #[serde(default)]
     pub monitor_device: String,
-    /// Headphone-monitor playback level (0.0–1.0). Default 0.5.
+    /// Headphone-monitor playback level: a plain gain on the receive audio, 0.0 to 10.0 (+20 dB).
+    /// Up to 1.0 is what it always was; above it is boost, for a radio whose USB audio is set
+    /// quiet. Default 0.5. Only what the operator hears changes; the decoders never see it.
     #[serde(default = "default_monitor_level")]
     pub monitor_level: f32,
     /// Station transmit power in WATTS (RF out), used by the Journey miles-per-watt
@@ -15582,6 +15584,13 @@ mod tests {
         let old: Settings = serde_json::from_str(partial).unwrap();
         assert!(!old.monitor_enabled);
         assert_eq!(old.monitor_level, 0.5);
+        // A level saved before the boost existed loads as the same gain, and a boosted one
+        // round-trips as itself.
+        for level in [0.3f32, 1.0, 4.0, 10.0] {
+            let saved = format!(r#"{{"mycall":"W9XYZ","monitorLevel":{level}}}"#);
+            let loaded: Settings = serde_json::from_str(&saved).unwrap();
+            assert_eq!(loaded.monitor_level, level);
+        }
     }
 
     /// The decode-config settings ride the UI round-trip on exactly the keys

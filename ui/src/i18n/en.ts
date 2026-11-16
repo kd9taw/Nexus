@@ -9107,9 +9107,12 @@ export const EN = {
   'settings.headphoneMonitor.level.aria': 'Receive listening level',
   // #468: the same level as a slider in the top bar, shown while receive audio plays here.
   'topbar.listen.title':
-    'Listening level {{pct}}%: how loud Nexus plays the receive audio on this computer (Settings ▸ Radio ▸ Receive audio on this computer). Click to change.',
+    'Listening level {{pct}}%: how loud Nexus plays the receive audio on this computer (Settings ▸ Radio ▸ Receive audio on this computer). Past 100% it boosts up to +20 dB, for a radio whose USB audio is quiet. Click to change.',
+  // #480: past 100% the listening level is a boost, in dB.
+  'topbar.listen.boostTitle':
+    'Listening level 100% + {{db}} dB of boost, for a radio whose USB audio is quiet: how loud Nexus plays the receive audio on this computer (Settings ▸ Radio ▸ Receive audio on this computer). The decoders hear the radio’s audio unchanged. Click to change.',
   'settings.headphoneMonitor.level.hint':
-    'Headphone listening volume (does not affect TX).',
+    'Headphone listening volume. Past 100% the slider boosts up to +20 dB, for a radio whose USB audio is quiet even with its volume turned up. Only what you hear changes: the decoders and TX are not affected.',
 
   // ── Settings ▸ Radio ▸ Scope source ─────────────────────────────────────────────────
   // SDRconnect, SDRplay, RSP, RSP1, RX OUT, CAT, WebSocket API, 127.0.0.1, 5454, 0 dBm, 100 W and

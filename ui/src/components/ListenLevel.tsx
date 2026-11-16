@@ -19,10 +19,9 @@ import * as RM from '@radix-ui/react-dropdown-menu'
 import { Volume2 } from 'lucide-react'
 import { t } from '../i18n'
 import { MenuContent, MenuRoot } from './ui/MenuParts'
+import { SLIDER_MAX, boostDb, levelPct, levelText, levelToSlider, sliderToLevel } from './listeningLevel'
 
 const SETTLE_MS = 250
-/** The unit after the level's number: an invariant token. */
-const PCT = '%'
 
 export function ListenLevel({
   level,
@@ -34,9 +33,9 @@ export function ListenLevel({
   className: string
   /** What the trigger shows: the RX level meter it stands in for. */
   children: ReactNode
-  /** The saved listening level, 0..1. */
+  /** The saved listening level: a gain, 0..1, and above 1 boost up to +20 dB (listeningLevel). */
   level: number
-  /** Save a level, 0..1. A rejection puts the slider back on the saved level. */
+  /** Save a level, as above. A rejection puts the slider back on the saved level. */
   onCommit: (level: number) => Promise<unknown> | void
 }) {
   const [open, setOpen] = useState(false)
@@ -57,7 +56,10 @@ export function ListenLevel({
     return () => cancelAnimationFrame(id)
   }, [open])
   const shown = draft ?? level
-  const pct = Math.round(shown * 100)
+  const pct = levelPct(shown)
+  // #480: past 100% the level is a boost, shown in dB.
+  const db = boostDb(shown)
+  const title = db > 0 ? t('topbar.listen.boostTitle', { db }) : t('topbar.listen.title', { pct })
   const change = (v: number) => {
     setDraft(v)
     if (timer.current != null) clearTimeout(timer.current)
@@ -75,7 +77,7 @@ export function ListenLevel({
     // after Esc without scrolling, and leaves it where an outside press put it.
     <MenuRoot open={open} onOpenChange={setOpen}>
       <RM.Trigger asChild>
-        <button type="button" className={`${className} listen-trigger`} title={t('topbar.listen.title', { pct })} aria-label={label}>
+        <button type="button" className={`${className} listen-trigger`} title={title} aria-label={label}>
           {children}
         </button>
       </RM.Trigger>
@@ -89,15 +91,16 @@ export function ListenLevel({
                 ref={input}
                 type="range"
                 min="0"
-                max="1"
+                max={String(SLIDER_MAX)}
                 step="0.01"
-                value={String(shown)}
+                value={String(Math.round(levelToSlider(shown) * 100) / 100)}
                 aria-label={label}
-                onChange={(e) => change(Number(e.target.value))}
+                aria-valuetext={levelText(shown)}
+                title={t('settings.headphoneMonitor.level.hint')}
+                onChange={(e) => change(sliderToLevel(Number(e.target.value)))}
               />
               <span className="listen-pop-value">
-                {pct}
-                {PCT}
+                {levelText(shown)}
               </span>
             </label>
           </div>

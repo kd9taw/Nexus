@@ -26604,6 +26604,32 @@ mod tests {
         );
     }
 
+    /// The listening level's boost is for the operator's ears only. The decoders hear the capture
+    /// ring, folded and scaled by RX gain in the capture callback; the listening level is read by
+    /// the monitor's output callback alone. So the whole range, up to +20 dB, reconfigures the
+    /// monitor in place and leaves everything the decode path is built from as it was.
+    #[test]
+    fn a_boosted_listening_level_leaves_the_decode_path_alone() {
+        let mut s = test_settings();
+        s.monitor_enabled = true;
+        let base = Transport::from_settings(&s);
+        s.monitor_level = crate::monitor::MONITOR_LEVEL_MAX;
+        let boosted = Transport::from_settings(&s);
+        assert!(
+            base.monitor_differs(&boosted),
+            "the monitor follows the boost"
+        );
+        assert!(
+            !base.audio_differs(&boosted),
+            "capture/TX streams are not re-opened"
+        );
+        assert!(!base.rig_differs(&boosted), "the rig is not rebuilt");
+        assert_eq!(
+            base.rx_gain, boosted.rx_gain,
+            "the decoders' gain is untouched"
+        );
+    }
+
     #[test]
     fn transport_audio_differs_on_device_change_only() {
         let base = Transport::from_settings(&test_settings());

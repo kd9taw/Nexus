@@ -327,6 +327,7 @@ import { ampPortIsNetwork, joinAmpAddress, KPA_NET_PORT, splitAmpAddress } from 
 import { normaliseTyped, upperTyped } from '../typedInput'
 import { IotaListSettings } from './Iota'
 import { setTxMeterStyle, useTxMeterStyle } from '../txMeterStyle'
+import { SLIDER_MAX, levelText, levelToSlider, sliderToLevel } from './listeningLevel'
 
 /** The call a running contest entry is operated under, when saving `form` over `saved` would
  *  change the station's call (`mycall`) while the entry runs (the live snapshot, `fieldDay`) and
@@ -7977,16 +7978,17 @@ export function SettingsPanel({
               <label className="settings-field">
                 <span className="settings-label">
                   {t('settings.headphoneMonitor.level.label')}{' '}
-                  <span className="settings-value">{Math.round((form.monitorLevel ?? 0.5) * 100)}%</span>
+                  {/* #480: past 100% the level is a boost, shown in dB (listeningLevel). */}
+                  <span className="settings-value">{levelText(form.monitorLevel ?? 0.5)}</span>
                 </span>
                 <input
                   className="settings-slider"
                   type="range"
                   min="0"
-                  max="1"
+                  max={String(SLIDER_MAX)}
                   step="0.01"
-                  value={String(form.monitorLevel ?? 0.5)}
-                  onChange={(e) => updateNum('monitorLevel', Number(e.target.value))}
+                  value={String(Math.round(levelToSlider(form.monitorLevel ?? 0.5) * 100) / 100)}
+                  onChange={(e) => updateNum('monitorLevel', sliderToLevel(Number(e.target.value)))}
                   disabled={!form.monitorEnabled}
                   aria-label={t('settings.headphoneMonitor.level.aria')}
                 />
