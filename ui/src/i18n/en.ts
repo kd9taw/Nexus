@@ -9041,6 +9041,10 @@ export const EN = {
   'settings.audio.device.systemDefault': 'System default',
   'settings.audio.input.label': 'Input Device (RX)',
   'settings.audio.input.hint': 'Sound card carrying receive audio.',
+  // #522: under the input device while Nexus's own Flex client runs, its native DAX audio is off and
+  // the input is not a DAX device. The <link> opens the switch it names.
+  'settings.audio.flexDax.note':
+    "Nexus's Flex client is on, but its native DAX audio is off and this input is not a DAX device, so the waterfall hears this sound card, not the radio. Turn on <link>Flex native DAX audio (Beta) in Settings ▸ Radio ▸ Rig & CAT ▸ Advanced</link>, or pick a DAX Audio RX device here.",
   'settings.audio.refresh.action': 'Refresh',
   'settings.audio.refresh.title': 'Re-scan audio devices',
   'settings.audio.output.label': 'Output Device (TX)',
@@ -10713,6 +10717,10 @@ export const EN = {
     'for JTAlert / GridTracker / loggers — and FT8 contest scorers. Several at once: separate addresses with a comma.',
   'settings.integrations.udpAddr.label': 'UDP Address',
   'settings.integrations.udpAddr.hint': 'host:port for the UDP feed',
+  // #498: a saved profile carries the UDP address, so loading one replaces it. The <link> opens
+  // the Profiles section.
+  'settings.integrations.udpAddr.profiles':
+    'Each saved profile in <link>Settings ▸ Radio ▸ Profiles</link> keeps its own UDP address; loading a profile puts its address here.',
   'settings.integrations.wsjtxUdpAccept.label': 'Accept requests from other computers',
   'settings.integrations.wsjtxUdpAccept.hint':
     "Off: a program can answer a station, send or fill in free text, or change your grid only if it sends from this computer's 127.0.0.1. Any other program can still stop TX. That includes a program on this computer reached through a multicast address: to keep it without this switch, list one 127.0.0.1 address per program, with commas (127.0.0.1:2237, 127.0.0.1:2238). On: anyone who can reach this computer over the network can turn TX on and send under your call, because a UDP sender's address can be faked. Stop TX and a tripped watchdog still refuse them, but each accepted answer restarts the watchdog's clock, as in WSJT-X.",

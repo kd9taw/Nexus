@@ -22,11 +22,14 @@ export function levelToSlider(level: number): number {
   return l <= 1 ? l : 1 + (20 * Math.log10(l)) / BOOST_DB
 }
 
-/** The slider's position → the level to save (rounded, so a drag saves a tidy number). */
+/** The slider's position → the level to save (rounded, so a drag saves a tidy number). Just past
+ *  the middle, a boost that rounds to 0 dB saves exactly unity: the readout says "100%" there, and
+ *  the level saved must be the level it reads. */
 export function sliderToLevel(pos: number): number {
   const p = Math.min(Math.max(pos, 0), SLIDER_MAX)
   if (p <= 1) return Math.round(p * 100) / 100
-  return Math.round(10 ** (((p - 1) * BOOST_DB) / 20) * 1000) / 1000
+  const level = Math.round(10 ** (((p - 1) * BOOST_DB) / 20) * 1000) / 1000
+  return boostDb(level) === 0 ? 1 : level
 }
 
 /** The boost a level gives, in whole dB; 0 at or below unity. */

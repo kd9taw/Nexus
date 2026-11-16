@@ -270,7 +270,7 @@ import { allTxtLocation, diagLogLocation, recordingsLocation, revealAllTxt, reve
 import { drivesAnotherStation } from '../features/durableStore'
 import { ShackFilesSave } from './ShackFilesSave'
 import { getCloudlogStations, type CloudlogStation } from '../api'
-import { findDaxDevices, isDaxPaired } from '../features/dax'
+import { findDaxDevices, flexDaxAudioMissing, isDaxPaired } from '../features/dax'
 import { sayExportLacks } from '../features/exportLacks'
 import type { AssistanceEvent, ClubFirewall, ClubLink, ConnEvent, CredStatus, FieldDayStatus, FreedvState, ParsecPresence } from '../types'
 import { parsecStatusText, parsecSwitchPlacement } from '../features/parsecPresence'
@@ -7765,6 +7765,25 @@ export function SettingsPanel({
                 </div>
                 {useInstead('audioIn', 'input')}
                 <span className="settings-hint">{t('settings.audio.input.hint')}</span>
+                {/* #522: with Nexus's own Flex client on, the radio's native DAX audio is a separate
+                    switch, off as it ships, so the waterfall hears this input. Said here, where the
+                    operator looks, until the audio comes from the radio (`flexDaxAudioMissing`). */}
+                {flexDaxAudioMissing(form) && (
+                  <span className="settings-hint">
+                    <T
+                      k="settings.audio.flexDax.note"
+                      tags={{
+                        link: (
+                          <button
+                            type="button"
+                            className="settings-linkbtn"
+                            onClick={() => setOpenTarget('rig-advanced')}
+                          />
+                        ),
+                      }}
+                    />
+                  </span>
+                )}
               </label>
 
               <label className="settings-field">
@@ -13040,6 +13059,24 @@ export function SettingsPanel({
                   />
                   {setAtStation('wsjtxUdpAddr')}
                   <span className="settings-hint">{t('settings.integrations.udpAddr.hint')}</span>
+                  {/* #498: a saved profile carries this address, so loading one replaces it. */}
+                  <span className="settings-hint">
+                    <T
+                      k="settings.integrations.udpAddr.profiles"
+                      tags={{
+                        link: (
+                          <button
+                            type="button"
+                            className="settings-linkbtn"
+                            onClick={() => {
+                              setTab('radio')
+                              setOpenTarget('profiles')
+                            }}
+                          />
+                        ),
+                      }}
+                    />
+                  </span>
                 </label>
 
                 <div className="settings-field">
