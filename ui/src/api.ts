@@ -5776,6 +5776,20 @@ export async function civDiagnosticLog(enable: boolean): Promise<string> {
 }
 
 /**
+ * Turn Record CAT traffic on or off: the frequency, mode, split, VFO, PTT and radio-setting
+ * commands Nexus asks the radio link to carry out go into the diagnostic log for at most 30
+ * minutes or 2 MB. Returns the seconds left, 0 when off. Not a setting: off at every launch.
+ */
+export async function catTrace(enable: boolean): Promise<number> {
+  return invoke<number>('cat_trace', { enable })
+}
+
+/** The seconds Record CAT traffic has left, 0 when it is off (or has turned itself off). */
+export async function catTraceStatus(): Promise<number> {
+  return invoke<number>('cat_trace_status', {})
+}
+
+/**
  * The active CI-V diagnostic-log path, or '' when logging is off. The Settings toggle
  * queries this on mount so it reflects the real backend state — logging keeps running while
  * you leave Settings to transmit, so the switch must not appear to reset (re-arming would

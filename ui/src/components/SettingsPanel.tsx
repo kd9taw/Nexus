@@ -266,6 +266,7 @@ import { tleRefreshMessage } from '../features/tleMessages'
 import { elementBandParts } from '../features/elementBands'
 import { discoverFlex } from '../api'
 import { civDiagnosticLog, civDiagnosticStatus } from '../api'
+import { catTrace, catTraceStatus } from '../api'
 import { allTxtLocation, diagLogLocation, recordingsLocation, revealAllTxt, revealDiagLog, revealRecordings } from '../api'
 import { drivesAnotherStation } from '../features/durableStore'
 import { ShackFilesSave } from './ShackFilesSave'
@@ -1538,6 +1539,27 @@ export function SettingsPanel({
   // backend keeps logging while Settings is closed (so the operator can go transmit), so the
   // toggle reads its real state on mount instead of resetting to "off" on every return here.
   const [civLogPath, setCivLogPath] = useState<string | null>(null)
+  // Record CAT traffic: the seconds the backend's trace has left, 0 = off. Not a setting (off at
+  // every launch); read on mount and, while on, every 15 s so the minutes left count down and a
+  // trace that turned itself off reads as off.
+  const [catTraceLeft, setCatTraceLeft] = useState(0)
+  const catTraceOn = catTraceLeft > 0
+  useEffect(() => {
+    let alive = true
+    const read = () => {
+      catTraceStatus()
+        .then((secs) => {
+          if (alive) setCatTraceLeft(secs)
+        })
+        .catch(() => {})
+    }
+    read()
+    const timer = catTraceOn ? window.setInterval(read, 15_000) : undefined
+    return () => {
+      alive = false
+      if (timer !== undefined) window.clearInterval(timer)
+    }
+  }, [catTraceOn])
   useEffect(() => {
     let alive = true
     civDiagnosticStatus()
@@ -13272,10 +13294,41 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    Records each transmission, per-period decode counts and CAT traffic. Leave
+                    Records when each transmission keys and unkeys, and per-period decode counts. Leave
                     this OFF for normal operating — it is for a session where something is being
                     chased, and the extra volume shortens how far back the log reaches. The log
                     says at the top when it was on.
+                  </span>
+                </div>
+
+                {/* Record CAT traffic: a session switch like the one above, but never a setting.
+                    The backend owns the state (it turns itself off), so the switch shows it. */}
+                <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">{t('settings.integrations.catTrace.label')}</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={catTraceOn}
+                      className={`toggle${catTraceOn ? ' on' : ''}`}
+                      onClick={() =>
+                        void withErrorToast(
+                          () => catTrace(!catTraceOn),
+                          t('settings.integrations.catTrace.failed'),
+                        ).then((secs) => {
+                          if (secs !== null) setCatTraceLeft(secs) // null: the failure is toasted
+                        })
+                      }
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">
+                    {catTraceOn
+                      ? t('settings.integrations.catTrace.recording', {
+                          count: Math.ceil(catTraceLeft / 60),
+                        })
+                      : t('settings.integrations.catTrace.hint')}
                   </span>
                 </div>
 
