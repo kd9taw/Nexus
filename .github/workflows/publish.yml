@@ -65,7 +65,7 @@
 # is why the last step polls the real cache-busted URL and fails if it does not answer
 # with the new version. Never trust a deploy tool's exit code as proof of delivery.
 #
-# SECRETS: four, all repository secrets on this repo, all listed with setup steps in
+# SECRETS: four (a beta needs three: no SF_SSH_KEY), all listed with setup steps in
 # docs/publish-secrets.md. A missing one fails the run in the first twenty seconds and
 # names every secret that is absent. Nothing here degrades to a no-op.
 
@@ -88,6 +88,9 @@ permissions:
 # Two releases must never interleave: they would race on the SF mirror ref and on the site
 # repo's main. Queue rather than cancel — a half-finished publish is the worst of the three
 # possible outcomes.
+# GitHub keeps at most ONE pending run per group: a run already waiting is cancelled when a
+# newer one joins (site-deploy.yml shares this group). That shows as a cancelled run, never a
+# silent one; re-dispatch it once the group is idle.
 concurrency:
   group: publish-downstream
   cancel-in-progress: false
@@ -129,39 +132,6 @@ jobs:
       # `stable` runs the `publish` job, `beta` (a prerelease) runs `publish-beta`. Never both.
       channel: ${{ steps.rel.outputs.channel }}
     steps:
-      # Every secret is checked in ONE pass so the operator sees the complete list rather
-      # than the first failure alphabetically. The `secrets` context cannot be used in a
-      # job-level `if:`, so this is a step that reads them as env and asserts non-empty —
-      # the only shape that cannot quietly turn into a skipped job.
-      - name: Every secret this run needs must exist
-        env:
-          SF_SSH_KEY: ${{ secrets.SF_SSH_KEY }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          SITE_REPO_TOKEN: ${{ secrets.SITE_REPO_TOKEN }}
-        run: |
-          set -euo pipefail
-          missing=''
-          [ -n "${SF_SSH_KEY:-}" ]           || missing="$missing SF_SSH_KEY"
-          [ -n "${CLOUDFLARE_API_TOKEN:-}" ] || missing="$missing CLOUDFLARE_API_TOKEN"
-          [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || missing="$missing CLOUDFLARE_ACCOUNT_ID"
-          [ -n "${SITE_REPO_TOKEN:-}" ]      || missing="$missing SITE_REPO_TOKEN"
-          if [ -n "$missing" ]; then
-            {
-              echo "### Publish blocked — missing repository secrets"
-              echo
-              for s in $missing; do echo "- \`$s\`"; done
-              echo
-              echo "Add them under Settings -> Secrets and variables -> Actions ->"
-              echo "New repository secret, on \`${GITHUB_REPOSITORY}\`."
-              echo "What each one is and how to mint it: \`docs/publish-secrets.md\`."
-              echo
-              echo "Nothing was published. The GitHub Release itself is unaffected."
-            } | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-          echo "all four publish secrets are present"
-
       - name: Resolve the tag and read the release
         id: rel
         env:
@@ -192,6 +162,15 @@ jobs:
           draft=$(printf '%s' "$rel" | jq -r .isDraft)
           pre=$(printf '%s' "$rel" | jq -r .isPrerelease)
           [ "$draft" = "false" ] || { echo "$tag is still a draft — nothing to publish downstream"; exit 1; }
+          # The channel follows the prerelease flag, so the flag must agree with the tag's shape.
+          # A plain tag ticked "pre-release" by hand would otherwise write a plain version into
+          # the site's beta object, which the site refuses to build; a suffixed tag not marked
+          # prerelease would head for the stable feed.
+          case "$ver" in *-*) want=true ;; *) want=false ;; esac
+          [ "$pre" = "$want" ] || {
+            echo "::error::$tag: prerelease flag ($pre) does not match the tag shape — fix the release, then re-run"
+            exit 1
+          }
 
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "ver=$ver" >> "$GITHUB_OUTPUT"
@@ -216,6 +195,43 @@ jobs:
           fi
           echo "proceed=true" >> "$GITHUB_OUTPUT"
           echo "publishing $tag ($ver) downstream"
+
+      # Every secret is checked in ONE pass so the operator sees the complete list rather
+      # than the first failure alphabetically. It runs after the tag is resolved (an API read,
+      # still inside the first half-minute) because which secrets are needed depends on the
+      # channel. The `secrets` context cannot be used in a
+      # job-level `if:`, so this is a step that reads them as env and asserts non-empty —
+      # the only shape that cannot quietly turn into a skipped job.
+      - name: Every secret this run needs must exist
+        env:
+          # A beta never touches SourceForge, so it does not need the SF key.
+          CHANNEL: ${{ steps.rel.outputs.channel }}
+          SF_SSH_KEY: ${{ secrets.SF_SSH_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SITE_REPO_TOKEN: ${{ secrets.SITE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          missing=''
+          [ "$CHANNEL" = beta ] || [ -n "${SF_SSH_KEY:-}" ] || missing="$missing SF_SSH_KEY"
+          [ -n "${CLOUDFLARE_API_TOKEN:-}" ] || missing="$missing CLOUDFLARE_API_TOKEN"
+          [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || missing="$missing CLOUDFLARE_ACCOUNT_ID"
+          [ -n "${SITE_REPO_TOKEN:-}" ]      || missing="$missing SITE_REPO_TOKEN"
+          if [ -n "$missing" ]; then
+            {
+              echo "### Publish blocked — missing repository secrets"
+              echo
+              for s in $missing; do echo "- \`$s\`"; done
+              echo
+              echo "Add them under Settings -> Secrets and variables -> Actions ->"
+              echo "New repository secret, on \`${GITHUB_REPOSITORY}\`."
+              echo "What each one is and how to mint it: \`docs/publish-secrets.md\`."
+              echo
+              echo "Nothing was published. The GitHub Release itself is unaffected."
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "every secret the $CHANNEL channel needs is present"
 
       # ── THE CI-EVIDENCE GATE ──────────────────────────────────────────────────────────
       # This is the SECOND door into a publish and it has to be gated separately, because it
@@ -638,12 +654,22 @@ jobs:
           # The beta object, if one is live, survives a stable release only while it is still
           # ahead of it: 1.25.0 shipping removes 1.25.0-beta.N (and anything older), a 1.24.1
           # patch keeps a live 1.25.0-beta.N on the download page.
+          # Read defensively: SourceForge has already been updated by now, so a hand-edited or
+          # malformed beta must never stop this step. One that cannot be read is removed.
           feed = pathlib.Path("public/nexus/version.json")
           old_beta = json.loads(feed.read_text(encoding="utf-8")).get("beta")
-          keep_beta = bool(old_beta) and semver_key(old_beta["version"]) > semver_key(ver)
+          keep_beta = False
           if old_beta:
-              print(f"beta {old_beta['version']}: " + ("kept, still ahead of " if keep_beta
-                    else "removed, at or below ") + ver)
+              bver = old_beta.get("version") if isinstance(old_beta, dict) else None
+              try:
+                  keep_beta = semver_key(bver) > semver_key(ver)
+                  print(f"beta {bver}: " + ("kept, still ahead of " if keep_beta
+                        else "removed, at or below ") + ver)
+              except (AttributeError, TypeError, ValueError):
+                  print(f"::warning::the site's beta object is malformed (version {bver!r}) — removing it")
+          # The live-feed check below proves the beta left (or stayed) as decided here.
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"BETA_KEPT={old_beta['version'] if keep_beta else ''}\n")
 
           base = f"https://github.com/kd9taw/Nexus/releases/download/{tag}"
           assets = {
@@ -751,16 +777,20 @@ jobs:
             body=$(curl -fsSL --max-time 20 \
                      -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
                      "${VERSION_URL}?cb=${GITHUB_RUN_ID}-${attempt}" 2>/dev/null || true)
+            # `latest`, and the beta the feed step decided on (BETA_KEPT: its version, or empty
+            # when the release removed it), so a beta that should have left the page cannot stay.
             got=$(printf '%s' "$body" | python3 -c \
-                    'import json,sys;print(json.load(sys.stdin).get("latest",""))' 2>/dev/null || true)
-            if [ "$got" = "$VER" ]; then
-              echo "live feed serves $VER (attempt $attempt)"
+                    'import json,sys;d=json.load(sys.stdin);b=d.get("beta");print(d.get("latest",""),(b.get("version","") if isinstance(b,dict) else ""))' \
+                    2>/dev/null || true)
+            want="$VER ${BETA_KEPT:-}"
+            if [ "$got" = "$want" ]; then
+              echo "live feed serves $VER, beta '${BETA_KEPT:-none}' (attempt $attempt)"
               exit 0
             fi
-            echo "attempt $attempt: live feed serves '${got:-<unreadable>}', want $VER"
+            echo "attempt $attempt: live feed serves '${got:-<unreadable>}', want '$want'"
             sleep 15
           done
-          echo "::error::${VERSION_URL} still does not serve $VER after ten minutes."
+          echo "::error::${VERSION_URL} still does not serve $VER (beta '${BETA_KEPT:-none}') after ten minutes."
           echo "wrangler exits 0 on a deploy that shipped nothing. Open the Cloudflare Pages"
           echo "deployment list: if the newest deployment is a PREVIEW, the --branch=main"
           echo "flag did not take effect. Last response body:"
@@ -992,6 +1022,9 @@ jobs:
           feed = pathlib.Path("public/nexus/version.json")
           doc = json.loads(feed.read_text(encoding="utf-8"))
 
+          if "-" not in ver:
+              sys.exit(f"{ver} is not a prerelease version — the beta leg publishes only vX.Y.Z-suffix tags")
+
           def semver_key(v):
               """SemVer 2.0 precedence, the same function as the stable job's."""
               core, _, pre = v.partition("-")
@@ -1015,6 +1048,8 @@ jobs:
           if not notes:
               notes = f"Nexus {ver}. See the release notes."
 
+          # PUBLISHED WORD FOR WORD: every "- " bullet under "## Known issues" in the release
+          # notes goes on hamradiotools.io/download as written, so write them for testers.
           # Known issues: the bullets of the notes' "## Known issues" section, as plain
           # one-line strings (a wrapped bullet's continuation lines are joined, and the
           # Markdown emphasis and code marks dropped, because the page shows them as text).
