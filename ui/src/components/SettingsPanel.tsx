@@ -3497,14 +3497,19 @@ export function SettingsPanel({
     // The station's record of the TX cards, too: the "" a pick put there asked for one read, at this
     // Save, and must not ride a later save, when the cards may have been renumbered since.
     const { radios, txCardModels } = await getSettings()
-    setForm((prev) => (prev ? { ...prev, radios, txCardModels } : prev))
+    // …and the radio on the form's "Data modes use plain SSB" as the station now holds it: the save
+    // that gives a radio its first model starts it ON for a radio with no DATA mode (a TS-480), so
+    // the switch shows what that radio will be commanded in.
+    const shown = radios?.find((r) => r.id === (editingRadioId ?? next.activeRadio))
+    const plainSsb = shown ? { dataModesPlainSsb: shown.dataModesPlainSsb } : {}
+    setForm((prev) => (prev ? { ...prev, radios, txCardModels, ...plainSsb } : prev))
     // The baseline the next Save is diffed against (`saveForm`) holds the radio fields as the form
     // now holds them: the radio on the form, whichever it is, so only the operator's next edit of it
     // reads as a change. (The station-wide save of a form showing another radio leaves the radio
     // fields out, so the radio in use's drive and gain, moved in the cockpit since, are not sent.)
     // Test CAT and Auto-test save through here too, so the radio fields move here for every caller;
     // `commitSave` then takes the whole of what this returns.
-    const saved = { ...next, radios, txCardModels }
+    const saved = { ...next, radios, txCardModels, ...plainSsb }
     if (savedRef.current) savedRef.current = { ...savedRef.current, ...radioPatch(saved), radios, txCardModels }
     return saved
   }

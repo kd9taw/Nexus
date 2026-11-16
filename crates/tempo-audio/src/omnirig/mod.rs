@@ -539,6 +539,11 @@ pub trait OmniRigClient {
     fn select_vfo_a(&self) -> Result<(), OmniError> {
         Err(OmniError::Com("this client cannot select a VFO".into()))
     }
+    /// OmniRig's `RigType`: the rig file this slot runs, its file name without `.ini` ("TS-480").
+    /// `None` for a client without it, or when it would not read.
+    fn rig_type(&self) -> Option<String> {
+        None
+    }
 }
 
 /// What [`OmniRigClient::vfo_params`] reads: each field `None` when that property would not read.
@@ -909,8 +914,28 @@ impl RigBackend for OmniBackend {
             return Err(SetFault::Refused);
         };
         self.write_gate()?;
-        self.link
-            .call(move |c| c.set_mode(m))
+        // ⭐ A DATA WORD ON A RADIO WITH NO DATA SUBMODE IS PLAIN SSB (#524). OmniRig's stock rig
+        // files for those radios send `pmDIG_U`/`pmDIG_L` as the radio's FSK or RTTY mode (the
+        // TS-480's is `MD9;`, FSK-R), where sound-card audio radiates nothing, so every FT8 band
+        // change and key-down put a TS-480 in FSK-R. Their one path for a sound-card mode is plain
+        // SSB through the accessory jack. Only the DATA words: `RTTY` is FSK RTTY asking for that
+        // very FSK mode, and keeps it. Read off the rig file in use at each mode write, so a
+        // file changed in OmniRig is followed (`tempo_app::rig_modes`, the list and its sources).
+        let data = tempo_app::rig_modes::data_word(mode).is_some();
+        let m = self
+            .link
+            .call(move |c| {
+                let plain = data
+                    && c.rig_type().is_some_and(|t| {
+                        tempo_app::rig_modes::omnirig_rig_type_has_no_data_submode(&t)
+                    });
+                let m = match m {
+                    OmniMode::DigU if plain => OmniMode::SsbU,
+                    OmniMode::DigL if plain => OmniMode::SsbL,
+                    m => m,
+                };
+                c.set_mode(m).map(|()| m)
+            })
             .map_err(|_| SetFault::Refused)?;
         *self
             .last_mode
@@ -1405,6 +1430,8 @@ pub(crate) mod tests {
         pub split: StdMutex<bool>,
         /// What `vfo_params` answers; `None` = a client without the VFO properties.
         pub vfo_params: StdMutex<Option<VfoParams>>,
+        /// What `rig_type` answers: OmniRig's `RigType`, the rig file in use; `None` = unread.
+        pub rig_type: StdMutex<Option<String>>,
         /// Every call that reached the COM boundary, in order — so a test can prove a
         /// refusal never touched the radio.
         pub calls: StdMutex<Vec<String>>,
@@ -1419,6 +1446,7 @@ pub(crate) mod tests {
                 ptt: StdMutex::new(false),
                 split: StdMutex::new(false),
                 vfo_params: StdMutex::new(None),
+                rig_type: StdMutex::new(None),
                 calls: StdMutex::new(Vec::new()),
             }
         }
@@ -1460,6 +1488,9 @@ pub(crate) mod tests {
         }
         fn vfo_params(&self) -> Option<VfoParams> {
             *self.vfo_params.lock().unwrap()
+        }
+        fn rig_type(&self) -> Option<String> {
+            self.rig_type.lock().unwrap().clone()
         }
         fn select_vfo_a(&self) -> Result<(), OmniError> {
             self.note("select_vfo_a");
@@ -1641,6 +1672,45 @@ pub(crate) mod tests {
             mock.calls.lock().unwrap().is_empty(),
             "a refused mode must never reach the radio: {:?}",
             mock.calls.lock().unwrap()
+        );
+    }
+
+    /// ⭐ A RADIO WITH NO DATA SUBMODE GETS PLAIN SSB FOR A DATA WORD (#524): OmniRig's stock
+    /// TS-480 file sends its `pmDIG_U` as `MD9;`, FSK-R, so an FT8 band change or key-down put the
+    /// radio in FSK, where the sound card's audio radiates nothing. On such a rig file the shim
+    /// sends `PKTUSB`/`PKTLSB` as plain USB/LSB, and reports the USB it reads back as USB.
+    ///
+    /// Only the DATA words: `RTTY` stays OmniRig's `pmDIG_L`, the radio's FSK mode, which is what
+    /// FSK RTTY wants. And a rig file with a real data mode (IC-7300-DATA) is sent the DATA word,
+    /// as is a rig file the shim has not been able to read the name of.
+    #[test]
+    fn a_rig_file_with_no_data_mode_is_sent_plain_ssb_for_a_data_word() {
+        let sent = |rig_type: Option<&str>, word: &str| {
+            let mock = Arc::new(MockOmni::online());
+            *mock.rig_type.lock().unwrap() = rig_type.map(str::to_string);
+            let (b, _w) = backend_over(mock.clone());
+            assert_eq!(reply(&format!("M {word} 3000"), &b), "RPRT 0\n", "{word}");
+            let mode = *mock.mode.lock().unwrap();
+            (mode, reply("m", &b))
+        };
+        assert_eq!(
+            sent(Some("TS-480"), "PKTUSB"),
+            (Some(OmniMode::SsbU), "USB\n0\n".to_string()),
+            "FT8 on a TS-480 is USB, never FSK-R"
+        );
+        assert_eq!(sent(Some("TS-480"), "PKTLSB").0, Some(OmniMode::SsbL));
+        assert_eq!(sent(Some("IC-706 MKIIG"), "PKTUSB").0, Some(OmniMode::SsbU));
+        assert_eq!(
+            sent(Some("TS-480"), "RTTY").0,
+            Some(OmniMode::DigL),
+            "FSK RTTY keeps the radio's FSK mode"
+        );
+        assert_eq!(sent(Some("IC-7300-DATA"), "PKTUSB").0, Some(OmniMode::DigU));
+        assert_eq!(sent(Some("TS-590"), "PKTUSB").0, Some(OmniMode::DigU));
+        assert_eq!(
+            sent(None, "PKTUSB").0,
+            Some(OmniMode::DigU),
+            "unread: as before"
         );
     }
 
