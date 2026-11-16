@@ -1035,8 +1035,8 @@ jobs:
       # BEFORE ANYTHING IS SIGNED: the app binary and the staged Hamlib, against the minimum and
       # the paths an operator's Mac has. Failing here costs no notarization.
       #
-      # Then the static gcc runtime the modem links (crates/tempo-fast-sys/build.rs: libgfortran.a
-      # and libquadmath.a beside the libgfortran.dylib gfortran reports, and libemutls_w.a where
+      # Then the static gcc runtime the modem links (crates/tempo-fast-sys/build.rs: libgfortran.a,
+      # libquadmath.a and libgomp.a beside the libgfortran.dylib gfortran reports, and libemutls_w.a where
       # gfortran reports it; the same lookups, so these are the files the link used). Its objects
       # are built for the runner's macOS, above the minimum, and the linked binary does not carry
       # that over; the linker's warning about it never reaches this log, because rustc hides a
@@ -1060,7 +1060,7 @@ jobs:
           gcc_lib=$(dirname "$("$fc" -print-file-name=libgfortran.dylib)")
           node scripts/check-macho-bundle.mjs --arch ${{ matrix.arch }} \
             --imports scripts/macos-static-runtime-imports.txt \
-            --archive "$gcc_lib/libgfortran.a" --archive "$gcc_lib/libquadmath.a" \
+            --archive "$gcc_lib/libgfortran.a" --archive "$gcc_lib/libquadmath.a" --archive "$gcc_lib/libgomp.a" \
             --archive "$("$fc" -print-file-name=libemutls_w.a)"
 
       # Imported only now, after the last build. From here until the bundle step deletes the

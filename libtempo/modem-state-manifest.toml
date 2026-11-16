@@ -2144,7 +2144,7 @@ file = "ft8/osd174_91.f90"
 line = 338
 class = 3
 size_bytes = 2100004
-reason = "CONFIRMED 3, but size corrected from 0 to 2100004. `integer fp(0:525000)` in `common/boxes/indexes,fp,np` — 525001*4. nm confirms the whole block: `C boxes_` = 0x20f584 = 2160004 = 40000+2100004+20000. Declared twice (:338 boxit91, :373 fetchit91); grep for `common.*boxes` over the entire lib returns ONLY those two lines, so no other translation unit aliases the block (checked because COMMON names are global — a second /boxes/ in ft4's or tempofast's OSD would have silently shared this memory; there is none). Whole-array wipe `fp=-1` at :344 executes under the reset latch on the FIRST boxit91 call of every invocation, before boxit91's own read at :360 and before fetchit91's read at :391. Entry paths are exhaustive: boxit91 only from :237, fetchit91 only from :258, both inside `if(npre2.eq.1)` (:230) with reset armed at :231. The boxit91 fill loop (:233-239) always runs before the fetchit91 loop and is never zero-trip (k=91 gives 4095 iterations). On calls where npre2==0 the array is neither read nor written, so the predicate holds vacuously. Index range safe: max ipat = 2^ntau-1 = 131071 for the largest ntau (17, ndeep=4) << 525000. Precondition: serialized calls."
+reason = "CONFIRMED 3, but size corrected from 0 to 2100004. `integer fp(0:525000)` in `common/boxes/indexes,fp,np` — 525001*4. nm confirms the whole block: `C boxes_` = 0x20f584 = 2160004 = 40000+2100004+20000. Declared twice (:338 boxit91, :373 fetchit91); grep for `common.*boxes` over the entire lib returns ONLY those two lines, so no other translation unit aliases the block (checked because COMMON names are global — a second /boxes/ in ft4's or tempofast's OSD would have silently shared this memory; there is none) (2026-11: the JTDX-style FT4 decoder's ft4jtdx/osd4_174_91.f90 now declares /boxes/ with the same layout and the same per-invocation reset, so the two OSDs share this storage; still class 3 because calls serialize behind the modem lock; see its rows). Whole-array wipe `fp=-1` at :344 executes under the reset latch on the FIRST boxit91 call of every invocation, before boxit91's own read at :360 and before fetchit91's read at :391. Entry paths are exhaustive: boxit91 only from :237, fetchit91 only from :258, both inside `if(npre2.eq.1)` (:230) with reset armed at :231. The boxit91 fill loop (:233-239) always runs before the fetchit91 loop and is never zero-trip (k=91 gives 4095 iterations). On calls where npre2==0 the array is neither read nor written, so the predicate holds vacuously. Index range safe: max ipat = 2^ntau-1 = 131071 for the largest ntau (17, ndeep=4) << 525000. Precondition: serialized calls."
 
 [[symbol]]
 name = "indexes"
@@ -5134,6 +5134,501 @@ class = 4
 size_bytes = 332
 reason = "DATA-initialized LDPC(174,91) parity-check table. Code definition, never written at runtime."
 
+
+# =============================================================================================
+# JTDX-STYLE FT4 (libtempo/vendor/wsjtx/lib/ft4jtdx/, JTDX 2.2.159's FT4 decoder; 2026-11-14).
+# Classified file by file against the source, mirroring the verdicts of the WSJT-X FT4 files they
+# descend from. The decoder's other cross-period state, ft8_mod1's avexdt and ft4_mod1's dd4,
+# lives in the ft8var modules and is classified with them.
+# =============================================================================================
+
+[[symbol]]
+name = "apbits"
+file = "ft4jtdx/ft4_decode_jtdx.f90"
+line = 29
+class = 1
+size_bytes = 696
+reason = "From JTDX 2.2.159. integer apbits(2*ND)=174*4, module ft4_decode_jtdx_apstate (hoisted out of decode, where JTDX SAVEs it). The a-priori LDPC codeword for THIS chain's (mycall,hiscall), rebuilt only when the pair differs from mycall0/hiscall0 and read on every AP pass. Moves as one group with mycall0/hiscall0: a shared key in front of a per-chain value gives chain B a cache hit on chain A's codeword, the same trap as the Standard decoder's ft4_decode_apstate. IN THE PER-CHAIN CONTEXT as p%ft4jtdx_apbits (ft8_cabi.f90)."
+
+[[symbol]]
+name = "mycall0"
+file = "ft4jtdx/ft4_decode_jtdx.f90"
+line = 30
+class = 1
+size_bytes = 12
+reason = "From JTDX 2.2.159. character(len=12), module ft4_decode_jtdx_apstate, blank-initialised so a reset context and a virgin process hold the same bytes. Half the AP cache key; class 1 with apbits. IN THE PER-CHAIN CONTEXT as p%ft4jtdx_mycall0 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "hiscall0"
+file = "ft4jtdx/ft4_decode_jtdx.f90"
+line = 30
+class = 1
+size_bytes = 12
+reason = "From JTDX 2.2.159. character(len=12), module ft4_decode_jtdx_apstate, blank-initialised. The other half of the AP cache key (and scratch inside the rebuild block, restored to hiscall at its end); class 1 with apbits. IN THE PER-CHAIN CONTEXT as p%ft4jtdx_hiscall0 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "ctwk2"
+file = "ft4jtdx/ft4_decode_jtdx.f90"
+line = 75
+class = 2
+size_bytes = 16896
+reason = "From JTDX 2.2.159. complex ctwk2(2*NSS,-16:16)=64*33*8, SAVEd. The +/-16 Hz frequency-tweak bank, written only in the first-call block from constants. Class 2."
+
+[[symbol]]
+name = "fs"
+file = "ft4jtdx/ft4_decode_jtdx.f90"
+line = 98
+class = 2
+size_bytes = 4
+reason = "From JTDX 2.2.159. SAVEd, set once in the first-call block to 12000/NDOWN. Class 2."
+
+[[symbol]]
+name = "dt1"
+file = "ft4jtdx/ft4_decode_jtdx.f90"
+line = 98
+class = 2
+size_bytes = 4
+reason = "From JTDX 2.2.159. SAVEd, set once in the first-call block (1/fs). Class 2."
+
+[[symbol]]
+name = "tt"
+file = "ft4jtdx/ft4_decode_jtdx.f90"
+line = 98
+class = 2
+size_bytes = 4
+reason = "From JTDX 2.2.159. SAVEd, set once in the first-call block. Class 2."
+
+[[symbol]]
+name = "txt"
+file = "ft4jtdx/ft4_decode_jtdx.f90"
+line = 98
+class = 2
+size_bytes = 4
+reason = "From JTDX 2.2.159. SAVEd, set once in the first-call block. Class 2."
+
+[[symbol]]
+name = "twopi"
+file = "ft4jtdx/ft4_decode_jtdx.f90"
+line = 98
+class = 2
+size_bytes = 4
+reason = "From JTDX 2.2.159. SAVEd local (not ft8_mod1's twopi), set once in the first-call block. Class 2."
+
+[[symbol]]
+name = "h"
+file = "ft4jtdx/ft4_decode_jtdx.f90"
+line = 98
+class = 2
+size_bytes = 4
+reason = "From JTDX 2.2.159. SAVEd, set once in the first-call block. Class 2."
+
+[[symbol]]
+name = "first"
+file = "ft4jtdx/ft4_decode_jtdx.f90"
+line = 86
+class = 2
+size_bytes = 4
+reason = "From JTDX 2.2.159. `data first/.true./`, SAVEd; latches the first-call block (ctwk2, the m* masks, nappasses/naptypes). Must never be reset on its own: the mask transform it guards is not idempotent. Class 2."
+
+[[symbol]]
+name = "mcq"
+file = "ft4jtdx/ft4_decode_jtdx.f90"
+line = 85
+class = 2
+size_bytes = 116
+reason = "From JTDX 2.2.159. integer mcq(29), DATA-initialised, transformed ONCE in the first-call block (2*mod(mcq+rvec,2)-1, not idempotent) and read-only after. Chain-independent. Class 2, latched by `first`."
+
+[[symbol]]
+name = "mrrr"
+file = "ft4jtdx/ft4_decode_jtdx.f90"
+line = 85
+class = 2
+size_bytes = 76
+reason = "From JTDX 2.2.159. integer mrrr(19), DATA-initialised, transformed once in the first-call block. Class 2 with mcq."
+
+[[symbol]]
+name = "m73"
+file = "ft4jtdx/ft4_decode_jtdx.f90"
+line = 85
+class = 2
+size_bytes = 76
+reason = "From JTDX 2.2.159. integer m73(19), DATA-initialised, transformed once in the first-call block. Class 2 with mcq."
+
+[[symbol]]
+name = "mrr73"
+file = "ft4jtdx/ft4_decode_jtdx.f90"
+line = 85
+class = 2
+size_bytes = 76
+reason = "From JTDX 2.2.159. integer mrr73(19), DATA-initialised, transformed once in the first-call block. Class 2 with mcq."
+
+[[symbol]]
+name = "rvec"
+file = "ft4jtdx/ft4_decode_jtdx.f90"
+line = 80
+class = 4
+size_bytes = 77
+reason = "From JTDX 2.2.159. integer*1 rvec(77), DATA, never written: the 77-bit scrambling vector. Class 4."
+
+[[symbol]]
+name = "nappasses"
+file = "ft4jtdx/ft4_decode_jtdx.f90"
+line = 83
+class = 2
+size_bytes = 24
+reason = "From JTDX 2.2.159. integer nappasses(0:5), SAVEd, set once in the first-call block. Class 2."
+
+[[symbol]]
+name = "naptypes"
+file = "ft4jtdx/ft4_decode_jtdx.f90"
+line = 84
+class = 2
+size_bytes = 96
+reason = "From JTDX 2.2.159. integer naptypes(0:5,4), SAVEd, set once in the first-call block. Class 2."
+
+[[symbol]]
+name = "cx"
+file = "ft4jtdx/ft4_downsample_jtdx.f90"
+line = 11
+class = 1
+size_bytes = 294920
+reason = "From JTDX 2.2.159. complex cx(0:NMAX/2), NMAX=73728 (JTDX's frame), module ft4_downsample_jtdx_state (hoisted, as for WSJT-X's ft4_downsample), EQUIVALENCEd with x. Written only when the caller passes newdata=.true. (once per subtraction pass), read on every call: it carries this chain's wideband spectrum between calls within a pass. Copy the 294920-byte block ONCE for the pair. IN THE PER-CHAIN CONTEXT as p%ft4jtdx_spec (ft8_cabi.f90)."
+
+[[symbol]]
+name = "x"
+file = "ft4jtdx/ft4_downsample_jtdx.f90"
+line = 12
+class = 1
+size_bytes = 0
+reason = "From JTDX 2.2.159. real x(NMAX), EQUIVALENCEd with cx: SAME STORAGE, counted under cx. Class 1 for the same reason. IN THE PER-CHAIN CONTEXT as p%ft4jtdx_spec (EQUIVALENCE alias of cx) (ft8_cabi.f90)."
+
+[[symbol]]
+name = "window"
+file = "ft4jtdx/ft4_downsample_jtdx.f90"
+line = 12
+class = 2
+size_bytes = 16384
+reason = "From JTDX 2.2.159. real window(0:NFFT2S-1), NFFT2S=4096, module ft4_downsample_jtdx_state; written only in the first-call block from constants. Class 2."
+
+[[symbol]]
+name = "first"
+file = "ft4jtdx/ft4_downsample_jtdx.f90"
+line = 13
+class = 2
+size_bytes = 4
+reason = "From JTDX 2.2.159. `data first/.true./`, module ft4_downsample_jtdx_state; latches window. Class 2."
+
+[[symbol]]
+name = "first"
+file = "ft4jtdx/get_ft4_bitmetrics_jtdx.f90"
+line = 17
+class = 2
+size_bytes = 4
+reason = "From JTDX 2.2.159. `data first/.true./`, SAVEd; latches `one`. Class 2."
+
+[[symbol]]
+name = "one"
+file = "ft4jtdx/get_ft4_bitmetrics_jtdx.f90"
+line = 16
+class = 2
+size_bytes = 8192
+reason = "From JTDX 2.2.159. logical one(0:255,0:7), SAVEd, filled once in the first-call block from bit positions alone. Class 2."
+
+[[symbol]]
+name = "graymap"
+file = "ft4jtdx/get_ft4_bitmetrics_jtdx.f90"
+line = 15
+class = 4
+size_bytes = 16
+reason = "From JTDX 2.2.159. DATA, never written. Class 4."
+
+[[symbol]]
+name = "icos4a"
+file = "ft4jtdx/get_ft4_bitmetrics_jtdx.f90"
+line = 15
+class = 4
+size_bytes = 16
+reason = "From JTDX 2.2.159. DATA, never written (Costas array A). Class 4."
+
+[[symbol]]
+name = "icos4b"
+file = "ft4jtdx/get_ft4_bitmetrics_jtdx.f90"
+line = 15
+class = 4
+size_bytes = 16
+reason = "From JTDX 2.2.159. DATA, never written. Class 4."
+
+[[symbol]]
+name = "icos4c"
+file = "ft4jtdx/get_ft4_bitmetrics_jtdx.f90"
+line = 15
+class = 4
+size_bytes = 16
+reason = "From JTDX 2.2.159. DATA, never written. Class 4."
+
+[[symbol]]
+name = "icos4d"
+file = "ft4jtdx/get_ft4_bitmetrics_jtdx.f90"
+line = 15
+class = 4
+size_bytes = 16
+reason = "From JTDX 2.2.159. DATA, never written. Class 4."
+
+[[symbol]]
+name = "first"
+file = "ft4jtdx/getcandidates4_jtdx.f90"
+line = 17
+class = 2
+size_bytes = 4
+reason = "From JTDX 2.2.159. `data first/.true./`, SAVEd; latches window. Class 2."
+
+[[symbol]]
+name = "window"
+file = "ft4jtdx/getcandidates4_jtdx.f90"
+line = 13
+class = 2
+size_bytes = 1024
+reason = "From JTDX 2.2.159. real window(256), SAVEd, written once in the first-call block from constants. Class 2."
+
+[[symbol]]
+name = "nseg"
+file = "ft4jtdx/ft4_baseline_jtdx.f90"
+line = 19
+class = 4
+size_bytes = 4
+reason = "From JTDX 2.2.159. `data nseg/10/`, never written. Class 4."
+
+[[symbol]]
+name = "npct"
+file = "ft4jtdx/ft4_baseline_jtdx.f90"
+line = 19
+class = 4
+size_bytes = 4
+reason = "From JTDX 2.2.159. `data npct/10/`, never written. Class 4."
+
+[[symbol]]
+name = "csynca"
+file = "ft4jtdx/sync4d_jtdx.f90"
+line = 12
+class = 2
+size_bytes = 512
+reason = "From JTDX 2.2.159. complex csynca(2*NSS), SAVEd, written fully once in the first-call block (Costas-A reference tones). Class 2, as WSJT-X's sync4d."
+
+[[symbol]]
+name = "csyncb"
+file = "ft4jtdx/sync4d_jtdx.f90"
+line = 12
+class = 2
+size_bytes = 512
+reason = "From JTDX 2.2.159. As csynca (Costas B). Class 2."
+
+[[symbol]]
+name = "csyncc"
+file = "ft4jtdx/sync4d_jtdx.f90"
+line = 12
+class = 2
+size_bytes = 512
+reason = "From JTDX 2.2.159. As csynca (Costas C). Class 2."
+
+[[symbol]]
+name = "csyncd"
+file = "ft4jtdx/sync4d_jtdx.f90"
+line = 12
+class = 2
+size_bytes = 512
+reason = "From JTDX 2.2.159. As csynca (Costas D). Class 2."
+
+[[symbol]]
+name = "fac"
+file = "ft4jtdx/sync4d_jtdx.f90"
+line = 23
+class = 2
+size_bytes = 4
+reason = "From JTDX 2.2.159. SAVEd, set once in the first-call block. Class 2."
+
+[[symbol]]
+name = "twopi"
+file = "ft4jtdx/sync4d_jtdx.f90"
+line = 23
+class = 2
+size_bytes = 4
+reason = "From JTDX 2.2.159. SAVEd, set once in the first-call block. Class 2."
+
+[[symbol]]
+name = "first"
+file = "ft4jtdx/sync4d_jtdx.f90"
+line = 16
+class = 2
+size_bytes = 4
+reason = "From JTDX 2.2.159. `data first/.true./`, SAVEd; latches the csync* bank. Class 2."
+
+[[symbol]]
+name = "icos4a"
+file = "ft4jtdx/sync4d_jtdx.f90"
+line = 17
+class = 4
+size_bytes = 16
+reason = "From JTDX 2.2.159. DATA, never written. Class 4."
+
+[[symbol]]
+name = "icos4b"
+file = "ft4jtdx/sync4d_jtdx.f90"
+line = 17
+class = 4
+size_bytes = 16
+reason = "From JTDX 2.2.159. DATA, never written. Class 4."
+
+[[symbol]]
+name = "icos4c"
+file = "ft4jtdx/sync4d_jtdx.f90"
+line = 17
+class = 4
+size_bytes = 16
+reason = "From JTDX 2.2.159. DATA, never written. Class 4."
+
+[[symbol]]
+name = "icos4d"
+file = "ft4jtdx/sync4d_jtdx.f90"
+line = 17
+class = 4
+size_bytes = 16
+reason = "From JTDX 2.2.159. DATA, never written. Class 4."
+
+[[symbol]]
+name = "cref"
+file = "ft4jtdx/subtractft4_jtdx.f90"
+line = 25
+class = 3
+size_bytes = 483840
+reason = "From JTDX 2.2.159. complex cref(NFRAME) in COMMON /heap4jtdx/ (renamed from JTDX's heap8, which is subtractft8's block at another size). Fully written by gen_ft4wave at the top of every call before any read. Class 3; calls serialize behind the modem lock."
+
+[[symbol]]
+name = "camp"
+file = "ft4jtdx/subtractft4_jtdx.f90"
+line = 25
+class = 3
+size_bytes = 589824
+reason = "From JTDX 2.2.159. complex camp(NMAX) in /heap4jtdx/; zeroed then filled at the top of every call. Class 3."
+
+[[symbol]]
+name = "cfilt"
+file = "ft4jtdx/subtractft4_jtdx.f90"
+line = 25
+class = 3
+size_bytes = 589824
+reason = "From JTDX 2.2.159. complex cfilt(NMAX) in /heap4jtdx/; zeroed then filled every call. Class 3."
+
+[[symbol]]
+name = "cw"
+file = "ft4jtdx/subtractft4_jtdx.f90"
+line = 25
+class = 2
+size_bytes = 589824
+reason = "From JTDX 2.2.159. complex cw(NMAX) in /heap4jtdx/: the subtraction filter's spectrum, built once under `first` from constants and read every call. Class 2."
+
+[[symbol]]
+name = "xjunk"
+file = "ft4jtdx/subtractft4_jtdx.f90"
+line = 24
+class = 3
+size_bytes = 241920
+reason = "From JTDX 2.2.159. real xjunk(NFRAME) in /heap4jtdx/; gen_ft4wave's unused real output, written every call, never read. Class 3."
+
+[[symbol]]
+name = "first"
+file = "ft4jtdx/subtractft4_jtdx.f90"
+line = 27
+class = 2
+size_bytes = 4
+reason = "From JTDX 2.2.159. `data first/.true./`, SAVEd; latches cw. Class 2."
+
+[[symbol]]
+name = "gen"
+file = "ft4jtdx/osd4_174_91.f90"
+line = 10
+class = 2
+size_bytes = 15834
+reason = "From JTDX 2.2.159. integer*1 gen(K,N)=91*174, SAVEd, filled once in the first-call block from the generator table. Class 2, as WSJT-X's osd174_91 gen."
+
+[[symbol]]
+name = "first"
+file = "ft4jtdx/osd4_174_91.f90"
+line = 23
+class = 2
+size_bytes = 4
+reason = "From JTDX 2.2.159. `data first/.true./`, SAVEd; latches gen. Class 2."
+
+[[symbol]]
+name = "fp"
+file = "ft4jtdx/osd4_174_91.f90"
+line = 306
+class = 3
+size_bytes = 2100004
+reason = "From JTDX 2.2.159. integer fp(0:525000) in COMMON /boxes/, the SAME block with the SAME layout as WSJT-X's osd174_91 (boxit91/fetchit91): the two OSDs share its storage. Wiped by the first boxit4_91 call of every osd4_174_91 invocation (reset=.true. before each loop) before any read. Class 3, as the osd174_91 row; calls serialize behind the modem lock."
+
+[[symbol]]
+name = "indexes"
+file = "ft4jtdx/osd4_174_91.f90"
+line = 306
+class = 3
+size_bytes = 40000
+reason = "From JTDX 2.2.159. integer indexes(5000,2) in COMMON /boxes/ (shared with osd174_91, same layout). Wiped under the same per-invocation reset as fp. Class 3."
+
+[[symbol]]
+name = "np"
+file = "ft4jtdx/osd4_174_91.f90"
+line = 306
+class = 3
+size_bytes = 20000
+reason = "From JTDX 2.2.159. integer np(5000) in COMMON /boxes/ (shared with osd174_91, same layout). Wiped under the same per-invocation reset as fp. Class 3."
+
+[[symbol]]
+name = "lastpat"
+file = "ft4jtdx/osd4_174_91.f90"
+line = 342
+class = 3
+size_bytes = 4
+reason = "From JTDX 2.2.159. SAVEd in fetchit4_91; forced to -1 by the reset that precedes every use. Class 3, as osd174_91's lastpat."
+
+[[symbol]]
+name = "inext"
+file = "ft4jtdx/osd4_174_91.f90"
+line = 346
+class = 1
+size_bytes = 4
+reason = "From JTDX 2.2.159. SAVEd in fetchit4_91; the same linked-list cursor as osd174_91's inext, with the same provably-unreachable stale read on entry (lastpat=-1 and ipat>=0 make the branch that reads it false on the first call). Class 1 by the when-in-doubt rule, NOT IN CONTEXT for the same reason as osd174_91's row: its partner lastpat is class 3, and moving only the cursor is worse than moving neither."
+
+[[symbol]]
+name = "g"
+file = "ft4jtdx/ldpc_174_91_c_generator.f90"
+line = 1
+class = 4
+size_bytes = 1909
+reason = "From JTDX 2.2.159. character*23 g(83), DATA, never written: the LDPC(174,91) generator (identical to lib/ft8's copy). Included by osd4_174_91. Class 4."
+
+[[symbol]]
+name = "Mn"
+file = "ft4jtdx/ldpc_174_91_c_reordered_parity.f90"
+line = 1
+class = 4
+size_bytes = 2088
+reason = "From JTDX 2.2.159. integer Mn(3,174), DATA, never written: the parity-check matrix, check-row order JTDX uses. Included by bpdecode174_91_jtdx. Class 4."
+
+[[symbol]]
+name = "Nm"
+file = "ft4jtdx/ldpc_174_91_c_reordered_parity.f90"
+line = 177
+class = 4
+size_bytes = 2324
+reason = "From JTDX 2.2.159. integer Nm(7,83), DATA, never written. Class 4."
+
+[[symbol]]
+name = "nrw"
+file = "ft4jtdx/ldpc_174_91_c_reordered_parity.f90"
+line = 262
+class = 4
+size_bytes = 332
+reason = "From JTDX 2.2.159. integer nrw(83), DATA, never written. Class 4."
 
 [summary]
 status = "AUTHORITATIVE - build the per-chain context from this file"
@@ -13897,3 +14392,2133 @@ line = 1064
 class = 3
 size_bytes = 202752
 reason = "complex c(NSTATES,0:3,NSYM), a local of ft1_timefreq_search, spilled to .bss for exceeding -fmax-stack-var-size (nm: c.12, size 0x31800). Scratch: load_correlations writes every element before viterbi_metric reads any, within one call, and calls serialize under the modem lock. Nothing is carried between calls, so sharing is safe; one chain's values cannot reach another."
+
+# =============================================================================================
+# GROUP P - the multithreaded FT8 decoder: WSJT-X 3.0.2 lib/ft8var (its port of JTDX's
+# decoder), its dependencies ft8/ft8_a8d.f90, jt65_mod6.f90 and prog_args.f90, and the *var half
+# of WSJT-X 3.0.2's packjt77 added to 77bit/packjt77.f90 (2026-11-14).
+#
+# HOW IT WAS CLASSIFIED. Every compiled file is built -fopenmp (libtempo/CMakeLists.txt), which
+# implies -frecursive, so no ordinary local is spilled to .bss: `nm -S` on every object lists
+# only module variables, SAVE/DATA locals, OpenMP critical-section locks and gfortran's vtabs.
+# Those were read against the source one by one; the rows below are the module/SAVE symbols the
+# gate reports plus those nm shows. The 15 + 4 filbigvar/osd174var rows are for files vendored
+# but NOT compiled (they say so).
+#
+# THE CONTEXT. ft8var keeps a lot of one radio's QSO across calls: the per-parity message
+# tables FT8S/FT8SD correlate against, the raw symbols of saved CQ/MyCall/QSO signals re-tried
+# next same-parity period, the average DT the search is centred on, tone and AP caches built from
+# the callsign pair, and its own callsign hash tables. All of it is class 1 and all of it is in
+# tempo_ctx_t (ft8_cabi.f90, "FT8, the multithreaded decoder"): about 6.6 MB per chain, two
+# thirds of it the saved CQ symbols. ft8apsetvar.f90's SAVEd cache keys were hoisted to module
+# ft8apsetvar_state for this (MODIFIED FOR NEXUS header there), the precedent of the FT4 AP
+# cache. packjt77's threadprivate recent_callsvar is carried through a module copy that
+# ft8var_cabi.f90 swaps in and out around every decode. Every call into ft8var runs on one
+# long-lived thread of its own (crates/ft8, the decoder thread).
+#
+# THREADS. With one thread a decode is deterministic and the context is exact. With several,
+# ft8var's threads share dd8 and its downsample cache by design (upstream), so the result varies
+# run to run; each worker thread also keeps its own threadprivate copies (recent_callsvar,
+# encode174_91var's generator) across calls. Only the generator is a cache that survives; it is
+# constant. subtractft8var's 1.44 MB threadprivate scratch is a stack local here (MODIFIED FOR
+# NEXUS there): as thread-local storage it was carved out of every thread of the process.
+#
+# dd8 (720 KB) is class 3: ft8var_decode_frame rewrites all of it before every decode.
+# =============================================================================================
+
+[[symbol]]
+name = "calls10var"
+file = "77bit/packjt77.f90"
+line = 55
+class = 1
+size_bytes = 13312
+reason = "ft8var's own callsign hash tables (the *var half added from WSJT-X 3.0.2): how a received hashed <...> call resolves. THE cross-contamination vector for ft8var, as calls10/12/22 are for the standard decoder. Class 1. IN THE PER-CHAIN CONTEXT as p%v_calls10var (ft8_cabi.f90)."
+
+[[symbol]]
+name = "calls12var"
+file = "77bit/packjt77.f90"
+line = 56
+class = 1
+size_bytes = 53248
+reason = "ft8var's own callsign hash tables (the *var half added from WSJT-X 3.0.2): how a received hashed <...> call resolves. THE cross-contamination vector for ft8var, as calls10/12/22 are for the standard decoder. Class 1. IN THE PER-CHAIN CONTEXT as p%v_calls12var (ft8_cabi.f90)."
+
+[[symbol]]
+name = "calls22var"
+file = "77bit/packjt77.f90"
+line = 57
+class = 1
+size_bytes = 13000
+reason = "ft8var's own callsign hash tables (the *var half added from WSJT-X 3.0.2): how a received hashed <...> call resolves. THE cross-contamination vector for ft8var, as calls10/12/22 are for the standard decoder. Class 1. IN THE PER-CHAIN CONTEXT as p%v_calls22var (ft8_cabi.f90)."
+
+[[symbol]]
+name = "dxcall13_0var"
+file = "77bit/packjt77.f90"
+line = 66
+class = 1
+size_bytes = 13
+reason = "unpack77var's callsign-substitution memos, the *var twins of the hoisted mycall13_0/dxcall13_0/hash* above, with the same latch shape. Class 1. IN THE PER-CHAIN CONTEXT as p%v_dxcall13_0var (ft8_cabi.f90)."
+
+[[symbol]]
+name = "dxcall13_setvar"
+file = "77bit/packjt77.f90"
+line = 68
+class = 1
+size_bytes = 4
+reason = "unpack77var's callsign-substitution memos, the *var twins of the hoisted mycall13_0/dxcall13_0/hash* above, with the same latch shape. Class 1. IN THE PER-CHAIN CONTEXT as p%v_dxcall13_setvar (ft8_cabi.f90)."
+
+[[symbol]]
+name = "dxcall13var"
+file = "77bit/packjt77.f90"
+line = 64
+class = 1
+size_bytes = 13
+reason = "unpack77var's callsign-substitution memos, the *var twins of the hoisted mycall13_0/dxcall13_0/hash* above, with the same latch shape. Class 1. IN THE PER-CHAIN CONTEXT as p%v_dxcall13var (ft8_cabi.f90)."
+
+[[symbol]]
+name = "hashdx10var"
+file = "77bit/packjt77.f90"
+line = 67
+class = 1
+size_bytes = 4
+reason = "unpack77var's callsign-substitution memos, the *var twins of the hoisted mycall13_0/dxcall13_0/hash* above, with the same latch shape. Class 1. IN THE PER-CHAIN CONTEXT as p%v_hashdx10var (ft8_cabi.f90)."
+
+[[symbol]]
+name = "hashmy10var"
+file = "77bit/packjt77.f90"
+line = 67
+class = 1
+size_bytes = 4
+reason = "unpack77var's callsign-substitution memos, the *var twins of the hoisted mycall13_0/dxcall13_0/hash* above, with the same latch shape. Class 1. IN THE PER-CHAIN CONTEXT as p%v_hashmy10var (ft8_cabi.f90)."
+
+[[symbol]]
+name = "hashmy12var"
+file = "77bit/packjt77.f90"
+line = 67
+class = 1
+size_bytes = 4
+reason = "unpack77var's callsign-substitution memos, the *var twins of the hoisted mycall13_0/dxcall13_0/hash* above, with the same latch shape. Class 1. IN THE PER-CHAIN CONTEXT as p%v_hashmy12var (ft8_cabi.f90)."
+
+[[symbol]]
+name = "hashmy22var"
+file = "77bit/packjt77.f90"
+line = 67
+class = 1
+size_bytes = 4
+reason = "unpack77var's callsign-substitution memos, the *var twins of the hoisted mycall13_0/dxcall13_0/hash* above, with the same latch shape. Class 1. IN THE PER-CHAIN CONTEXT as p%v_hashmy22var (ft8_cabi.f90)."
+
+[[symbol]]
+name = "ihash22var"
+file = "77bit/packjt77.f90"
+line = 70
+class = 1
+size_bytes = 4000
+reason = "ft8var's own callsign hash tables (the *var half added from WSJT-X 3.0.2): how a received hashed <...> call resolves. THE cross-contamination vector for ft8var, as calls10/12/22 are for the standard decoder. Class 1. IN THE PER-CHAIN CONTEXT as p%v_ihash22var (ft8_cabi.f90)."
+
+[[symbol]]
+name = "itxhash22var"
+file = "77bit/packjt77.f90"
+line = 71
+class = 1
+size_bytes = 20
+reason = "Hash tables of the calls this station transmits, filled by pack77var. Per-chain. Class 1. IN THE PER-CHAIN CONTEXT as p%v_itxhash22var (ft8_cabi.f90)."
+
+[[symbol]]
+name = "last_callsvar"
+file = "77bit/packjt77.f90"
+line = 62
+class = 1
+size_bytes = 10920
+reason = "Recently decoded calls per thread slice, kept across calls. Class 1. IN THE PER-CHAIN CONTEXT as p%v_last_callsvar (ft8_cabi.f90)."
+
+[[symbol]]
+name = "lcommonft8b"
+file = "77bit/packjt77.f90"
+line = 78
+class = 3
+size_bytes = 1
+reason = "Set from the call's parameters by ft8var_decode_frame before decodevar runs. Class 3."
+
+[[symbol]]
+name = "mycall13_0var"
+file = "77bit/packjt77.f90"
+line = 65
+class = 1
+size_bytes = 13
+reason = "unpack77var's callsign-substitution memos, the *var twins of the hoisted mycall13_0/dxcall13_0/hash* above, with the same latch shape. Class 1. IN THE PER-CHAIN CONTEXT as p%v_mycall13_0var (ft8_cabi.f90)."
+
+[[symbol]]
+name = "mycall13_setvar"
+file = "77bit/packjt77.f90"
+line = 69
+class = 1
+size_bytes = 4
+reason = "unpack77var's callsign-substitution memos, the *var twins of the hoisted mycall13_0/dxcall13_0/hash* above, with the same latch shape. Class 1. IN THE PER-CHAIN CONTEXT as p%v_mycall13_setvar (ft8_cabi.f90)."
+
+[[symbol]]
+name = "mycall13var"
+file = "77bit/packjt77.f90"
+line = 63
+class = 1
+size_bytes = 13
+reason = "unpack77var's callsign-substitution memos, the *var twins of the hoisted mycall13_0/dxcall13_0/hash* above, with the same latch shape. Class 1. IN THE PER-CHAIN CONTEXT as p%v_mycall13var (ft8_cabi.f90)."
+
+[[symbol]]
+name = "n28avar"
+file = "77bit/packjt77.f90"
+line = 77
+class = 3
+size_bytes = 4
+reason = "pack28var scratch (threadprivate), written before read within a call. Class 3."
+
+[[symbol]]
+name = "n28bvar"
+file = "77bit/packjt77.f90"
+line = 77
+class = 3
+size_bytes = 4
+reason = "pack28var scratch (threadprivate), written before read within a call. Class 3."
+
+[[symbol]]
+name = "nlast_callsvar"
+file = "77bit/packjt77.f90"
+line = 72
+class = 1
+size_bytes = 96
+reason = "Recently decoded calls per thread slice, kept across calls. Class 1. IN THE PER-CHAIN CONTEXT as p%v_nlast_callsvar (ft8_cabi.f90)."
+
+[[symbol]]
+name = "nthrindexvar"
+file = "77bit/packjt77.f90"
+line = 73
+class = 4
+size_bytes = 100
+reason = "DATA constant thread-slice offsets, never written. Class 4."
+
+[[symbol]]
+name = "nzhashvar"
+file = "77bit/packjt77.f90"
+line = 75
+class = 1
+size_bytes = 4
+reason = "ft8var's own callsign hash tables (the *var half added from WSJT-X 3.0.2): how a received hashed <...> call resolves. THE cross-contamination vector for ft8var, as calls10/12/22 are for the standard decoder. Class 1. IN THE PER-CHAIN CONTEXT as p%v_nzhashvar (ft8_cabi.f90)."
+
+[[symbol]]
+name = "nztxhashvar"
+file = "77bit/packjt77.f90"
+line = 76
+class = 1
+size_bytes = 4
+reason = "Hash tables of the calls this station transmits, filled by pack77var. Per-chain. Class 1. IN THE PER-CHAIN CONTEXT as p%v_nztxhashvar (ft8_cabi.f90)."
+
+[[symbol]]
+name = "recent_callsvar"
+file = "77bit/packjt77.f90"
+line = 61
+class = 1
+size_bytes = 130
+reason = "The recent-calls list, `!$omp threadprivate` (thread-local). Class 1. IN THE PER-CHAIN CONTEXT through a module copy: ft8var_cabi.f90 copies ft8var_dispatch_state's recent_shadow into the decoding thread's list before each decode and back out after it, and the context carries recent_shadow (p%v_recent_shadow). With several threads each worker keeps its own list across calls; multithreaded decoding is not deterministic in any case."
+
+[[symbol]]
+name = "txcalls10var"
+file = "77bit/packjt77.f90"
+line = 58
+class = 1
+size_bytes = 13312
+reason = "Hash tables of the calls this station transmits, filled by pack77var. Per-chain. Class 1. IN THE PER-CHAIN CONTEXT as p%v_txcalls10var (ft8_cabi.f90)."
+
+[[symbol]]
+name = "txcalls12var"
+file = "77bit/packjt77.f90"
+line = 59
+class = 1
+size_bytes = 53248
+reason = "Hash tables of the calls this station transmits, filled by pack77var. Per-chain. Class 1. IN THE PER-CHAIN CONTEXT as p%v_txcalls12var (ft8_cabi.f90)."
+
+[[symbol]]
+name = "txcalls22var"
+file = "77bit/packjt77.f90"
+line = 60
+class = 1
+size_bytes = 65
+reason = "Hash tables of the calls this station transmits, filled by pack77var. Per-chain. Class 1. IN THE PER-CHAIN CONTEXT as p%v_txcalls22var (ft8_cabi.f90)."
+
+[[symbol]]
+name = "first"
+file = "ft8var/agccft8.f90"
+line = 11
+class = 2
+size_bytes = 1
+reason = "First-call window. Class 2."
+
+[[symbol]]
+name = "w11"
+file = "ft8var/agccft8.f90"
+line = 6
+class = 2
+size_bytes = 4096
+reason = "First-call window. Class 2."
+
+[[symbol]]
+name = "mask6"
+file = "ft8var/chkfalse8var.f90"
+line = 6
+class = 4
+size_bytes = 18
+reason = "DATA constant, never written. Class 4."
+
+[[symbol]]
+name = "mask10"
+file = "ft8var/chklong8.f90"
+line = 6
+class = 4
+size_bytes = 108
+reason = "DATA constant, never written. Class 4."
+
+[[symbol]]
+name = "mask11"
+file = "ft8var/chklong8.f90"
+line = 6
+class = 4
+size_bytes = 84
+reason = "DATA constant, never written. Class 4."
+
+[[symbol]]
+name = "first"
+file = "ft8var/encode174_91var.f90"
+line = 17
+class = 2
+size_bytes = 4
+reason = "The LDPC generator, built on each thread's first call (threadprivate). Constant. Class 2."
+
+[[symbol]]
+name = "gen"
+file = "ft8var/encode174_91var.f90"
+line = 12
+class = 2
+size_bytes = 7553
+reason = "The LDPC generator, built on each thread's first call (threadprivate). Constant. Class 2."
+
+[[symbol]]
+name = "ca"
+file = "ft8var/filbigvar.f90"
+line = 16
+class = 2
+size_bytes = 0
+reason = "NOT COMPILED (libtempo/CMakeLists.txt: JT65's filter, needs FFTW's threads library). Vendored only. Class 2 if it is ever compiled: plan and filter caches as filbig's (GROUP J)."
+
+[[symbol]]
+name = "cfilt"
+file = "ft8var/filbigvar.f90"
+line = 21
+class = 2
+size_bytes = 0
+reason = "NOT COMPILED (libtempo/CMakeLists.txt: JT65's filter, needs FFTW's threads library). Vendored only. Class 2 if it is ever compiled: plan and filter caches as filbig's (GROUP J)."
+
+[[symbol]]
+name = "cfilt2"
+file = "ft8var/filbigvar.f90"
+line = 21
+class = 2
+size_bytes = 0
+reason = "NOT COMPILED (libtempo/CMakeLists.txt: JT65's filter, needs FFTW's threads library). Vendored only. Class 2 if it is ever compiled: plan and filter caches as filbig's (GROUP J)."
+
+[[symbol]]
+name = "first"
+file = "ft8var/filbigvar.f90"
+line = 24
+class = 2
+size_bytes = 0
+reason = "NOT COMPILED (libtempo/CMakeLists.txt: JT65's filter, needs FFTW's threads library). Vendored only. Class 2 if it is ever compiled: plan and filter caches as filbig's (GROUP J)."
+
+[[symbol]]
+name = "halfpulse"
+file = "ft8var/filbigvar.f90"
+line = 20
+class = 2
+size_bytes = 0
+reason = "NOT COMPILED (libtempo/CMakeLists.txt: JT65's filter, needs FFTW's threads library). Vendored only. Class 2 if it is ever compiled: plan and filter caches as filbig's (GROUP J)."
+
+[[symbol]]
+name = "halfpulse2"
+file = "ft8var/filbigvar.f90"
+line = 20
+class = 2
+size_bytes = 0
+reason = "NOT COMPILED (libtempo/CMakeLists.txt: JT65's filter, needs FFTW's threads library). Vendored only. Class 2 if it is ever compiled: plan and filter caches as filbig's (GROUP J)."
+
+[[symbol]]
+name = "npatience"
+file = "ft8var/filbigvar.f90"
+line = 50
+class = 2
+size_bytes = 0
+reason = "NOT COMPILED (libtempo/CMakeLists.txt: JT65's filter, needs FFTW's threads library). Vendored only. Class 2 if it is ever compiled: plan and filter caches as filbig's (GROUP J)."
+
+[[symbol]]
+name = "nthreads"
+file = "ft8var/filbigvar.f90"
+line = 50
+class = 2
+size_bytes = 0
+reason = "NOT COMPILED (libtempo/CMakeLists.txt: JT65's filter, needs FFTW's threads library). Vendored only. Class 2 if it is ever compiled: plan and filter caches as filbig's (GROUP J)."
+
+[[symbol]]
+name = "plan1"
+file = "ft8var/filbigvar.f90"
+line = 23
+class = 2
+size_bytes = 0
+reason = "NOT COMPILED (libtempo/CMakeLists.txt: JT65's filter, needs FFTW's threads library). Vendored only. Class 2 if it is ever compiled: plan and filter caches as filbig's (GROUP J)."
+
+[[symbol]]
+name = "plan2"
+file = "ft8var/filbigvar.f90"
+line = 23
+class = 2
+size_bytes = 0
+reason = "NOT COMPILED (libtempo/CMakeLists.txt: JT65's filter, needs FFTW's threads library). Vendored only. Class 2 if it is ever compiled: plan and filter caches as filbig's (GROUP J)."
+
+[[symbol]]
+name = "plan3"
+file = "ft8var/filbigvar.f90"
+line = 23
+class = 2
+size_bytes = 0
+reason = "NOT COMPILED (libtempo/CMakeLists.txt: JT65's filter, needs FFTW's threads library). Vendored only. Class 2 if it is ever compiled: plan and filter caches as filbig's (GROUP J)."
+
+[[symbol]]
+name = "plan4"
+file = "ft8var/filbigvar.f90"
+line = 23
+class = 2
+size_bytes = 0
+reason = "NOT COMPILED (libtempo/CMakeLists.txt: JT65's filter, needs FFTW's threads library). Vendored only. Class 2 if it is ever compiled: plan and filter caches as filbig's (GROUP J)."
+
+[[symbol]]
+name = "plan5"
+file = "ft8var/filbigvar.f90"
+line = 23
+class = 2
+size_bytes = 0
+reason = "NOT COMPILED (libtempo/CMakeLists.txt: JT65's filter, needs FFTW's threads library). Vendored only. Class 2 if it is ever compiled: plan and filter caches as filbig's (GROUP J)."
+
+[[symbol]]
+name = "rfilt"
+file = "ft8var/filbigvar.f90"
+line = 22
+class = 2
+size_bytes = 0
+reason = "NOT COMPILED (libtempo/CMakeLists.txt: JT65's filter, needs FFTW's threads library). Vendored only. Class 2 if it is ever compiled: plan and filter caches as filbig's (GROUP J)."
+
+[[symbol]]
+name = "rfilt2"
+file = "ft8var/filbigvar.f90"
+line = 22
+class = 2
+size_bytes = 0
+reason = "NOT COMPILED (libtempo/CMakeLists.txt: JT65's filter, needs FFTW's threads library). Vendored only. Class 2 if it is ever compiled: plan and filter caches as filbig's (GROUP J)."
+
+[[symbol]]
+name = "nf"
+file = "ft8var/four2avar.f90"
+line = 26
+class = 2
+size_bytes = 8400
+reason = "FFTW plan cache (and the /patience/ common), as four2a's. Chain-independent. Class 2."
+
+[[symbol]]
+name = "nl"
+file = "ft8var/four2avar.f90"
+line = 27
+class = 2
+size_bytes = 16800
+reason = "FFTW plan cache (and the /patience/ common), as four2a's. Chain-independent. Class 2."
+
+[[symbol]]
+name = "nn"
+file = "ft8var/four2avar.f90"
+line = 26
+class = 2
+size_bytes = 8400
+reason = "FFTW plan cache (and the /patience/ common), as four2a's. Chain-independent. Class 2."
+
+[[symbol]]
+name = "npatience"
+file = "ft8var/four2avar.f90"
+line = 31
+class = 2
+size_bytes = 0
+reason = "FFTW plan cache (and the /patience/ common), as four2a's. Chain-independent. Class 2."
+
+[[symbol]]
+name = "nplan"
+file = "ft8var/four2avar.f90"
+line = 30
+class = 2
+size_bytes = 4
+reason = "FFTW plan cache (and the /patience/ common), as four2a's. Chain-independent. Class 2."
+
+[[symbol]]
+name = "ns"
+file = "ft8var/four2avar.f90"
+line = 26
+class = 2
+size_bytes = 8400
+reason = "FFTW plan cache (and the /patience/ common), as four2a's. Chain-independent. Class 2."
+
+[[symbol]]
+name = "nthreads"
+file = "ft8var/four2avar.f90"
+line = 31
+class = 2
+size_bytes = 0
+reason = "FFTW plan cache (and the /patience/ common), as four2a's. Chain-independent. Class 2."
+
+[[symbol]]
+name = "plan"
+file = "ft8var/four2avar.f90"
+line = 28
+class = 2
+size_bytes = 16800
+reason = "FFTW plan cache (and the /patience/ common), as four2a's. Chain-independent. Class 2."
+
+[[symbol]]
+name = "dd4"
+file = "ft8var/ft4_mod1.f90"
+line = 3
+class = 2
+size_bytes = 294912
+reason = "JTDX FT4 state that WSJT-X 3.0.2 compiles but nothing calls (decoder.f90 runs the stock FT4 decoder); no reader in this build. If the JTDX FT4 port wires it up, it re-classifies these. Class 2 here."
+
+[[symbol]]
+name = "lfilter"
+file = "ft8var/ft4_mod1.f90"
+line = 4
+class = 2
+size_bytes = 1
+reason = "JTDX FT4 state that WSJT-X 3.0.2 compiles but nothing calls (decoder.f90 runs the stock FT4 decoder); no reader in this build. If the JTDX FT4 port wires it up, it re-classifies these. Class 2 here."
+
+[[symbol]]
+name = "lhidetelemetry"
+file = "ft8var/ft4_mod1.f90"
+line = 4
+class = 2
+size_bytes = 1
+reason = "JTDX FT4 state that WSJT-X 3.0.2 compiles but nothing calls (decoder.f90 runs the stock FT4 decoder); no reader in this build. If the JTDX FT4 port wires it up, it re-classifies these. Class 2 here."
+
+[[symbol]]
+name = "lhidetest"
+file = "ft8var/ft4_mod1.f90"
+line = 4
+class = 2
+size_bytes = 1
+reason = "JTDX FT4 state that WSJT-X 3.0.2 compiles but nothing calls (decoder.f90 runs the stock FT4 decoder); no reader in this build. If the JTDX FT4 port wires it up, it re-classifies these. Class 2 here."
+
+[[symbol]]
+name = "llagcc"
+file = "ft8var/ft4_mod1.f90"
+line = 4
+class = 2
+size_bytes = 1
+reason = "JTDX FT4 state that WSJT-X 3.0.2 compiles but nothing calls (decoder.f90 runs the stock FT4 decoder); no reader in this build. If the JTDX FT4 port wires it up, it re-classifies these. Class 2 here."
+
+[[symbol]]
+name = "nFT4decd"
+file = "ft8var/ft4_mod1.f90"
+line = 5
+class = 2
+size_bytes = 4
+reason = "JTDX FT4 state that WSJT-X 3.0.2 compiles but nothing calls (decoder.f90 runs the stock FT4 decoder); no reader in this build. If the JTDX FT4 port wires it up, it re-classifies these. Class 2 here."
+
+[[symbol]]
+name = "nfafilt"
+file = "ft8var/ft4_mod1.f90"
+line = 5
+class = 2
+size_bytes = 4
+reason = "JTDX FT4 state that WSJT-X 3.0.2 compiles but nothing calls (decoder.f90 runs the stock FT4 decoder); no reader in this build. If the JTDX FT4 port wires it up, it re-classifies these. Class 2 here."
+
+[[symbol]]
+name = "nfbfilt"
+file = "ft8var/ft4_mod1.f90"
+line = 5
+class = 2
+size_bytes = 4
+reason = "JTDX FT4 state that WSJT-X 3.0.2 compiles but nothing calls (decoder.f90 runs the stock FT4 decoder); no reader in this build. If the JTDX FT4 port wires it up, it re-classifies these. Class 2 here."
+
+[[symbol]]
+name = "ltry_a8"
+file = "ft8var/ft8_decodevar.f90"
+line = 3
+class = 3
+size_bytes = 4
+reason = "Set .true. by the dispatch at the start of every call (decoder.f90:120) and cleared by the callback within it. Class 3."
+
+[[symbol]]
+name = "cxx"
+file = "ft8var/ft8_downsamplevar.f90"
+line = 9
+class = 3
+size_bytes = 768008
+reason = "The cached long FFT of dd8. decodevar sets newdat1=.true. at the start of every pass (ft8_decodevar.f90:215), so the first read in a call follows a refresh. Class 3. (Shared between threads within one multithreaded call, upstream's design.)"
+
+[[symbol]]
+name = "allfreq"
+file = "ft8var/ft8_mod1.f90"
+line = 14
+class = 3
+size_bytes = 800
+reason = "Per-call decode lists and counts, reset by the dispatch before decodevar (decoder.f90:249-252, :303). Class 3."
+
+[[symbol]]
+name = "allmessages"
+file = "ft8var/ft8_mod1.f90"
+line = 10
+class = 3
+size_bytes = 7400
+reason = "Per-call decode lists and counts, reset by the dispatch before decodevar (decoder.f90:249-252, :303). Class 3."
+
+[[symbol]]
+name = "allsnrs"
+file = "ft8var/ft8_mod1.f90"
+line = 17
+class = 3
+size_bytes = 800
+reason = "Per-call decode lists and counts, reset by the dispatch before decodevar (decoder.f90:249-252, :303). Class 3."
+
+[[symbol]]
+name = "apcqsym"
+file = "ft8var/ft8_mod1.f90"
+line = 21
+class = 1
+size_bytes = 308
+reason = "The a-priori bit masks ft8apsetvar builds from the callsign pair and hisgrid4, rebuilt only when ft8apsetvar_state's keys change. One chain's QSO. Class 1 with its keys (ft8apsetvar_state, hoisted for this). IN THE PER-CHAIN CONTEXT as p%v_apcqsym (ft8_cabi.f90)."
+
+[[symbol]]
+name = "apsym"
+file = "ft8var/ft8_mod1.f90"
+line = 17
+class = 1
+size_bytes = 232
+reason = "The a-priori bit masks ft8apsetvar builds from the callsign pair and hisgrid4, rebuilt only when ft8apsetvar_state's keys change. One chain's QSO. Class 1 with its keys (ft8apsetvar_state, hoisted for this). IN THE PER-CHAIN CONTEXT as p%v_apsym (ft8_cabi.f90)."
+
+[[symbol]]
+name = "apsymdxns1"
+file = "ft8var/ft8_mod1.f90"
+line = 21
+class = 1
+size_bytes = 232
+reason = "The a-priori bit masks ft8apsetvar builds from the callsign pair and hisgrid4, rebuilt only when ft8apsetvar_state's keys change. One chain's QSO. Class 1 with its keys (ft8apsetvar_state, hoisted for this). IN THE PER-CHAIN CONTEXT as p%v_apsymdxns1 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "apsymdxns73"
+file = "ft8var/ft8_mod1.f90"
+line = 22
+class = 1
+size_bytes = 308
+reason = "The a-priori bit masks ft8apsetvar builds from the callsign pair and hisgrid4, rebuilt only when ft8apsetvar_state's keys change. One chain's QSO. Class 1 with its keys (ft8apsetvar_state, hoisted for this). IN THE PER-CHAIN CONTEXT as p%v_apsymdxns73 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "apsymdxns732"
+file = "ft8var/ft8_mod1.f90"
+line = 26
+class = 1
+size_bytes = 308
+reason = "The a-priori bit masks ft8apsetvar builds from the callsign pair and hisgrid4, rebuilt only when ft8apsetvar_state's keys change. One chain's QSO. Class 1 with its keys (ft8apsetvar_state, hoisted for this). IN THE PER-CHAIN CONTEXT as p%v_apsymdxns732 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "apsymdxnsr73"
+file = "ft8var/ft8_mod1.f90"
+line = 25
+class = 1
+size_bytes = 308
+reason = "The a-priori bit masks ft8apsetvar builds from the callsign pair and hisgrid4, rebuilt only when ft8apsetvar_state's keys change. One chain's QSO. Class 1 with its keys (ft8apsetvar_state, hoisted for this). IN THE PER-CHAIN CONTEXT as p%v_apsymdxnsr73 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "apsymdxnsrr73"
+file = "ft8var/ft8_mod1.f90"
+line = 22
+class = 1
+size_bytes = 308
+reason = "The a-priori bit masks ft8apsetvar builds from the callsign pair and hisgrid4, rebuilt only when ft8apsetvar_state's keys change. One chain's QSO. Class 1 with its keys (ft8apsetvar_state, hoisted for this). IN THE PER-CHAIN CONTEXT as p%v_apsymdxnsrr73 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "apsymdxnsrrr"
+file = "ft8var/ft8_mod1.f90"
+line = 21
+class = 1
+size_bytes = 308
+reason = "The a-priori bit masks ft8apsetvar builds from the callsign pair and hisgrid4, rebuilt only when ft8apsetvar_state's keys change. One chain's QSO. Class 1 with its keys (ft8apsetvar_state, hoisted for this). IN THE PER-CHAIN CONTEXT as p%v_apsymdxnsrrr (ft8_cabi.f90)."
+
+[[symbol]]
+name = "apsymdxstd"
+file = "ft8var/ft8_mod1.f90"
+line = 25
+class = 1
+size_bytes = 232
+reason = "The a-priori bit masks ft8apsetvar builds from the callsign pair and hisgrid4, rebuilt only when ft8apsetvar_state's keys change. One chain's QSO. Class 1 with its keys (ft8apsetvar_state, hoisted for this). IN THE PER-CHAIN CONTEXT as p%v_apsymdxstd (ft8_cabi.f90)."
+
+[[symbol]]
+name = "apsymmyns1"
+file = "ft8var/ft8_mod1.f90"
+line = 23
+class = 1
+size_bytes = 116
+reason = "The a-priori bit masks ft8apsetvar builds from the callsign pair and hisgrid4, rebuilt only when ft8apsetvar_state's keys change. One chain's QSO. Class 1 with its keys (ft8apsetvar_state, hoisted for this). IN THE PER-CHAIN CONTEXT as p%v_apsymmyns1 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "apsymmyns2"
+file = "ft8var/ft8_mod1.f90"
+line = 24
+class = 1
+size_bytes = 232
+reason = "The a-priori bit masks ft8apsetvar builds from the callsign pair and hisgrid4, rebuilt only when ft8apsetvar_state's keys change. One chain's QSO. Class 1 with its keys (ft8apsetvar_state, hoisted for this). IN THE PER-CHAIN CONTEXT as p%v_apsymmyns2 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "apsymmyns73"
+file = "ft8var/ft8_mod1.f90"
+line = 24
+class = 1
+size_bytes = 308
+reason = "The a-priori bit masks ft8apsetvar builds from the callsign pair and hisgrid4, rebuilt only when ft8apsetvar_state's keys change. One chain's QSO. Class 1 with its keys (ft8apsetvar_state, hoisted for this). IN THE PER-CHAIN CONTEXT as p%v_apsymmyns73 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "apsymmynsrr73"
+file = "ft8var/ft8_mod1.f90"
+line = 24
+class = 1
+size_bytes = 308
+reason = "The a-priori bit masks ft8apsetvar builds from the callsign pair and hisgrid4, rebuilt only when ft8apsetvar_state's keys change. One chain's QSO. Class 1 with its keys (ft8apsetvar_state, hoisted for this). IN THE PER-CHAIN CONTEXT as p%v_apsymmynsrr73 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "apsymmynsrrr"
+file = "ft8var/ft8_mod1.f90"
+line = 26
+class = 1
+size_bytes = 308
+reason = "The a-priori bit masks ft8apsetvar builds from the callsign pair and hisgrid4, rebuilt only when ft8apsetvar_state's keys change. One chain's QSO. Class 1 with its keys (ft8apsetvar_state, hoisted for this). IN THE PER-CHAIN CONTEXT as p%v_apsymmynsrrr (ft8_cabi.f90)."
+
+[[symbol]]
+name = "apsymsp"
+file = "ft8var/ft8_mod1.f90"
+line = 20
+class = 1
+size_bytes = 264
+reason = "The a-priori bit masks ft8apsetvar builds from the callsign pair and hisgrid4, rebuilt only when ft8apsetvar_state's keys change. One chain's QSO. Class 1 with its keys (ft8apsetvar_state, hoisted for this). IN THE PER-CHAIN CONTEXT as p%v_apsymsp (ft8_cabi.f90)."
+
+[[symbol]]
+name = "avexdt"
+file = "ft8var/ft8_mod1.f90"
+line = 100
+class = 1
+size_bytes = 4
+reason = "The running average DT the whole search is centred on (ft8_decodevar.f90 jzb/jzt), updated after every decode from the decodes' median DT (decoder.f90:1074-1135, ft8var_cabi.f90). Shared, chain A's clock offset steers chain B's search window. Class 1. IN THE PER-CHAIN CONTEXT as p%v_avexdt (ft8_cabi.f90)."
+
+[[symbol]]
+name = "calldteven"
+file = "ft8var/ft8_mod1.f90"
+line = 153
+class = 1
+size_bytes = 2400
+reason = "Per-parity call -> DT table, written as calls decode and read on the next same-parity period to centre the search for that call. One chain's stations and timing. Class 1. IN THE PER-CHAIN CONTEXT as p%v_calldteven (ft8_cabi.f90)."
+
+[[symbol]]
+name = "calldtodd"
+file = "ft8var/ft8_mod1.f90"
+line = 147
+class = 1
+size_bytes = 2400
+reason = "Per-parity call -> DT table, written as calls decode and read on the next same-parity period to centre the search for that call. One chain's stations and timing. Class 1. IN THE PER-CHAIN CONTEXT as p%v_calldtodd (ft8_cabi.f90)."
+
+[[symbol]]
+name = "csync"
+file = "ft8var/ft8_mod1.f90"
+line = 7
+class = 2
+size_bytes = 1792
+reason = "Built once per process from constants (cwfilter's first call, guarded by ft8var_load_callsign_db; gen/first_osd by osd174_91var's first call): filters, windows, sync and tweak tables, the LDPC generator. Chain-independent. Class 2."
+
+[[symbol]]
+name = "csynccq"
+file = "ft8var/ft8_mod1.f90"
+line = 8
+class = 2
+size_bytes = 2048
+reason = "Built once per process from constants (cwfilter's first call, guarded by ft8var_load_callsign_db; gen/first_osd by osd174_91var's first call): filters, windows, sync and tweak tables, the LDPC generator. Chain-independent. Class 2."
+
+[[symbol]]
+name = "csynce"
+file = "ft8var/ft8_mod1.f90"
+line = 7
+class = 1
+size_bytes = 4864
+reason = "Built by tone8 from the callsign pair (the expected QSO messages, their tones and sync for FT8S), keyed by mycall12_0/hiscall12_0; ft8svar also rewrites row 53 from lastrxmsg. One chain's QSO hypotheses. Class 1 with its keys. IN THE PER-CHAIN CONTEXT as p%v_csynce (ft8_cabi.f90)."
+
+[[symbol]]
+name = "csyncsd"
+file = "ft8var/ft8_mod1.f90"
+line = 7
+class = 1
+size_bytes = 4864
+reason = "Built by tonesdvar from a candidate's decoded message (ft8bvar.f90:247) and read by ft8mf1var/ft8sdvar. Whether every read is preceded by a write in the same call is not provable from the call graph without running it, so class 1 by the manifest's tie-break. IN THE PER-CHAIN CONTEXT as p%v_csyncsd (ft8_cabi.f90)."
+
+[[symbol]]
+name = "csyncsdcq"
+file = "ft8var/ft8_mod1.f90"
+line = 8
+class = 1
+size_bytes = 14848
+reason = "Built by tonesdvar from a candidate's decoded message (ft8bvar.f90:247) and read by ft8mf1var/ft8sdvar. Whether every read is preceded by a write in the same call is not provable from the call graph without running it, so class 1 by the manifest's tie-break. IN THE PER-CHAIN CONTEXT as p%v_csyncsdcq (ft8_cabi.f90)."
+
+[[symbol]]
+name = "ctwk256"
+file = "ft8var/ft8_mod1.f90"
+line = 9
+class = 2
+size_bytes = 2048
+reason = "Built once per process from constants (cwfilter's first call, guarded by ft8var_load_callsign_db; gen/first_osd by osd174_91var's first call): filters, windows, sync and tweak tables, the LDPC generator. Chain-independent. Class 2."
+
+[[symbol]]
+name = "ctwkn"
+file = "ft8var/ft8_mod1.f90"
+line = 8
+class = 2
+size_bytes = 2816
+reason = "Built once per process from constants (cwfilter's first call, guarded by ft8var_load_callsign_db; gen/first_osd by osd174_91var's first call): filters, windows, sync and tweak tables, the LDPC generator. Chain-independent. Class 2."
+
+[[symbol]]
+name = "ctwkw"
+file = "ft8var/ft8_mod1.f90"
+line = 8
+class = 2
+size_bytes = 2816
+reason = "Built once per process from constants (cwfilter's first call, guarded by ft8var_load_callsign_db; gen/first_osd by osd174_91var's first call): filters, windows, sync and tweak tables, the LDPC generator. Chain-independent. Class 2."
+
+[[symbol]]
+name = "cw"
+file = "ft8var/ft8_mod1.f90"
+line = 7
+class = 2
+size_bytes = 1440000
+reason = "Built once per process from constants (cwfilter's first call, guarded by ft8var_load_callsign_db; gen/first_osd by osd174_91var's first call): filters, windows, sync and tweak tables, the LDPC generator. Chain-independent. Class 2."
+
+[[symbol]]
+name = "dd8"
+file = "ft8var/ft8_mod1.f90"
+line = 5
+class = 3
+size_bytes = 720000
+reason = "The period's audio and its subtraction residual. ft8var_decode_frame writes all 180000 samples (zero, then the period's samples) before decodevar runs; within a call the passes subtract from and re-filter it in place. Nothing survives a call that the next one reads. Class 3 (720 KB that need no copy)."
+
+[[symbol]]
+name = "dt"
+file = "ft8var/ft8_mod1.f90"
+line = 105
+class = 2
+size_bytes = 4
+reason = "Built once per process from constants (cwfilter's first call, guarded by ft8var_load_callsign_db; gen/first_osd by osd174_91var's first call): filters, windows, sync and tweak tables, the LDPC generator. Chain-independent. Class 2."
+
+[[symbol]]
+name = "endcorr"
+file = "ft8var/ft8_mod1.f90"
+line = 6
+class = 2
+size_bytes = 8004
+reason = "Built once per process from constants (cwfilter's first call, guarded by ft8var_load_callsign_db; gen/first_osd by osd174_91var's first call): filters, windows, sync and tweak tables, the LDPC generator. Chain-independent. Class 2."
+
+[[symbol]]
+name = "even"
+file = "ft8var/ft8_mod1.f90"
+line = 117
+class = 1
+size_bytes = 6760
+reason = "The per-parity table of the messages decoded in the last odd/even period (freq, dt, lstate, msg), and the copies the dispatch takes at each period boundary (ft8var_cabi.f90 / decoder.f90:300-332). FT8S/FT8SD correlate the next same-parity period's audio against them, so they carry one chain's QSO traffic across calls; shared, chain A's expected messages are matched in chain B's audio and come out as chain-B decodes (the hint decoders accept on correlation, without CRC). Class 1. IN THE PER-CHAIN CONTEXT as p%v_even (ft8_cabi.f90)."
+
+[[symbol]]
+name = "evencopy"
+file = "ft8var/ft8_mod1.f90"
+line = 133
+class = 1
+size_bytes = 6760
+reason = "The per-parity table of the messages decoded in the last odd/even period (freq, dt, lstate, msg), and the copies the dispatch takes at each period boundary (ft8var_cabi.f90 / decoder.f90:300-332). FT8S/FT8SD correlate the next same-parity period's audio against them, so they carry one chain's QSO traffic across calls; shared, chain A's expected messages are matched in chain B's audio and come out as chain-B decodes (the hint decoders accept on correlation, without CRC). Class 1. IN THE PER-CHAIN CONTEXT as p%v_evencopy (ft8_cabi.f90)."
+
+[[symbol]]
+name = "evencq"
+file = "ft8var/ft8_mod1.f90"
+line = 166
+class = 1
+size_bytes = 2430720
+reason = "Raw 8x79 complex symbol spectra of up to 20 CQ, 5 MyCall and 1 QSO signals per thread, kept from one period and re-tried against the next same-parity period (JTDX's averaging). One chain's signals; shared, chain A's saved symbols are re-decoded and reported on chain B. The largest per-chain objects (2.43 MB each for the CQ pair). Class 1. IN THE PER-CHAIN CONTEXT as p%v_evencq (ft8_cabi.f90)."
+
+[[symbol]]
+name = "evenmyc"
+file = "ft8var/ft8_mod1.f90"
+line = 180
+class = 1
+size_bytes = 607680
+reason = "Raw 8x79 complex symbol spectra of up to 20 CQ, 5 MyCall and 1 QSO signals per thread, kept from one period and re-tried against the next same-parity period (JTDX's averaging). One chain's signals; shared, chain A's saved symbols are re-decoded and reported on chain B. The largest per-chain objects (2.43 MB each for the CQ pair). Class 1. IN THE PER-CHAIN CONTEXT as p%v_evenmyc (ft8_cabi.f90)."
+
+[[symbol]]
+name = "evenqso"
+file = "ft8var/ft8_mod1.f90"
+line = 194
+class = 1
+size_bytes = 121536
+reason = "Raw 8x79 complex symbol spectra of up to 20 CQ, 5 MyCall and 1 QSO signals per thread, kept from one period and re-tried against the next same-parity period (JTDX's averaging). One chain's signals; shared, chain A's saved symbols are re-decoded and reported on chain B. The largest per-chain objects (2.43 MB each for the CQ pair). Class 1. IN THE PER-CHAIN CONTEXT as p%v_evenqso (ft8_cabi.f90)."
+
+[[symbol]]
+name = "facc1"
+file = "ft8var/ft8_mod1.f90"
+line = 15
+class = 2
+size_bytes = 4
+reason = "Built once per process from constants (cwfilter's first call, guarded by ft8var_load_callsign_db; gen/first_osd by osd174_91var's first call): filters, windows, sync and tweak tables, the LDPC generator. Chain-independent. Class 2."
+
+[[symbol]]
+name = "facx"
+file = "ft8var/ft8_mod1.f90"
+line = 14
+class = 2
+size_bytes = 4
+reason = "Built once per process from constants (cwfilter's first call, guarded by ft8var_load_callsign_db; gen/first_osd by osd174_91var's first call): filters, windows, sync and tweak tables, the LDPC generator. Chain-independent. Class 2."
+
+[[symbol]]
+name = "first_osd"
+file = "ft8var/ft8_mod1.f90"
+line = 29
+class = 2
+size_bytes = 4
+reason = "Built once per process from constants (cwfilter's first call, guarded by ft8var_load_callsign_db; gen/first_osd by osd174_91var's first call): filters, windows, sync and tweak tables, the LDPC generator. Chain-independent. Class 2."
+
+[[symbol]]
+name = "gen"
+file = "ft8var/ft8_mod1.f90"
+line = 28
+class = 2
+size_bytes = 15834
+reason = "Built once per process from constants (cwfilter's first call, guarded by ft8var_load_callsign_db; gen/first_osd by osd174_91var's first call): filters, windows, sync and tweak tables, the LDPC generator. Chain-independent. Class 2."
+
+[[symbol]]
+name = "graymap"
+file = "ft8var/ft8_mod1.f90"
+line = 39
+class = 4
+size_bytes = 32
+reason = "DATA constants, never written. Class 4."
+
+[[symbol]]
+name = "hisbcall"
+file = "ft8var/ft8_mod1.f90"
+line = 13
+class = 3
+size_bytes = 12
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "hiscall"
+file = "ft8var/ft8_mod1.f90"
+line = 13
+class = 3
+size_bytes = 12
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "hiscall12_0"
+file = "ft8var/ft8_mod1.f90"
+line = 11
+class = 1
+size_bytes = 12
+reason = "The KEYS of the tone caches: tone8 runs when the DX call or my call differs from these (decoder.f90:233-247), tone8myc when my call differs from mycall12_00. A cache and its key move as one unit (see the FT4 AP cache in ft8_cabi.f90): a key shared while its cache is per-chain would suppress chain B's rebuild. DATA 'dummy'. Class 1. IN THE PER-CHAIN CONTEXT as p%v_hiscall12_0 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "hisgrid"
+file = "ft8var/ft8_mod1.f90"
+line = 12
+class = 3
+size_bytes = 6
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "hisgrid4"
+file = "ft8var/ft8_mod1.f90"
+line = 12
+class = 3
+size_bytes = 4
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "icos7"
+file = "ft8var/ft8_mod1.f90"
+line = 38
+class = 4
+size_bytes = 28
+reason = "DATA constants, never written. Class 4."
+
+[[symbol]]
+name = "idtone25"
+file = "ft8var/ft8_mod1.f90"
+line = 17
+class = 3
+size_bytes = 5800
+reason = "CQ tones for ft8mfcqvar: rows 2-25 built once by cwfilter, row 1 rewritten from the candidate before each read (ft8mfcqvar.f90:15-16). Class 3."
+
+[[symbol]]
+name = "idtone56"
+file = "ft8var/ft8_mod1.f90"
+line = 16
+class = 1
+size_bytes = 12992
+reason = "Built by tone8 from the callsign pair (the expected QSO messages, their tones and sync for FT8S), keyed by mycall12_0/hiscall12_0; ft8svar also rewrites row 53 from lastrxmsg. One chain's QSO hypotheses. Class 1 with its keys. IN THE PER-CHAIN CONTEXT as p%v_idtone56 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "idtone76"
+file = "ft8var/ft8_mod1.f90"
+line = 16
+class = 1
+size_bytes = 17632
+reason = "Built by tonesdvar from a candidate's decoded message (ft8bvar.f90:247) and read by ft8mf1var/ft8sdvar. Whether every read is preceded by a write in the same call is not provable from the call graph without running it, so class 1 by the manifest's tie-break. IN THE PER-CHAIN CONTEXT as p%v_idtone76 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "idtonecqdxcns"
+file = "ft8var/ft8_mod1.f90"
+line = 23
+class = 1
+size_bytes = 232
+reason = "Built by tone8 from the callsign pair (the expected QSO messages, their tones and sync for FT8S), keyed by mycall12_0/hiscall12_0; ft8svar also rewrites row 53 from lastrxmsg. One chain's QSO hypotheses. Class 1 with its keys. IN THE PER-CHAIN CONTEXT as p%v_idtonecqdxcns (ft8_cabi.f90)."
+
+[[symbol]]
+name = "idtonedxcns73"
+file = "ft8var/ft8_mod1.f90"
+line = 26
+class = 1
+size_bytes = 232
+reason = "Built by tone8 from the callsign pair (the expected QSO messages, their tones and sync for FT8S), keyed by mycall12_0/hiscall12_0; ft8svar also rewrites row 53 from lastrxmsg. One chain's QSO hypotheses. Class 1 with its keys. IN THE PER-CHAIN CONTEXT as p%v_idtonedxcns73 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "idtonefox73"
+file = "ft8var/ft8_mod1.f90"
+line = 27
+class = 1
+size_bytes = 232
+reason = "Built by tone8 from the callsign pair (the expected QSO messages, their tones and sync for FT8S), keyed by mycall12_0/hiscall12_0; ft8svar also rewrites row 53 from lastrxmsg. One chain's QSO hypotheses. Class 1 with its keys. IN THE PER-CHAIN CONTEXT as p%v_idtonefox73 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "idtonemyc"
+file = "ft8var/ft8_mod1.f90"
+line = 17
+class = 1
+size_bytes = 232
+reason = "Built by tone8myc from my call, keyed by mycall12_00. Class 1 with its key. IN THE PER-CHAIN CONTEXT as p%v_idtonemyc (ft8_cabi.f90)."
+
+[[symbol]]
+name = "idtonespec"
+file = "ft8var/ft8_mod1.f90"
+line = 27
+class = 1
+size_bytes = 232
+reason = "Built by tone8 from the callsign pair (the expected QSO messages, their tones and sync for FT8S), keyed by mycall12_0/hiscall12_0; ft8svar also rewrites row 53 from lastrxmsg. One chain's QSO hypotheses. Class 1 with its keys. IN THE PER-CHAIN CONTEXT as p%v_idtonespec (ft8_cabi.f90)."
+
+[[symbol]]
+name = "incall"
+file = "ft8var/ft8_mod1.f90"
+line = 159
+class = 1
+size_bytes = 1320
+reason = "The incoming-call list (last 30 messages addressed to my call, with DT), shuffled in after every decode (decoder.f90:1062-1069, ft8var_cabi.f90) and read by the next decodes. Class 1. IN THE PER-CHAIN CONTEXT as p%v_incall (ft8_cabi.f90)."
+
+[[symbol]]
+name = "itone56"
+file = "ft8var/ft8_mod1.f90"
+line = 16
+class = 1
+size_bytes = 17696
+reason = "Built by tone8 from the callsign pair (the expected QSO messages, their tones and sync for FT8S), keyed by mycall12_0/hiscall12_0; ft8svar also rewrites row 53 from lastrxmsg. One chain's QSO hypotheses. Class 1 with its keys. IN THE PER-CHAIN CONTEXT as p%v_itone56 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "itone76"
+file = "ft8var/ft8_mod1.f90"
+line = 16
+class = 1
+size_bytes = 24016
+reason = "Built by tonesdvar from a candidate's decoded message (ft8bvar.f90:247) and read by ft8mf1var/ft8sdvar. Whether every read is preceded by a write in the same call is not provable from the call graph without running it, so class 1 by the manifest's tie-break. IN THE PER-CHAIN CONTEXT as p%v_itone76 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "lagcc"
+file = "ft8var/ft8_mod1.f90"
+line = 30
+class = 2
+size_bytes = 1
+reason = "Written only by agccft8, which nothing in this build calls: they stay at their .bss .false. Class 2."
+
+[[symbol]]
+name = "lagccbail"
+file = "ft8var/ft8_mod1.f90"
+line = 30
+class = 2
+size_bytes = 1
+reason = "Written only by agccft8, which nothing in this build calls: they stay at their .bss .false. Class 2."
+
+[[symbol]]
+name = "lapmyc"
+file = "ft8var/ft8_mod1.f90"
+line = 30
+class = 3
+size_bytes = 1
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "lasthcall"
+file = "ft8var/ft8_mod1.f90"
+line = 11
+class = 1
+size_bytes = 12
+reason = "The last QSO message received and the last DX call heard, written by ft8bvar during a decode and read by ft8svar on later calls to build the expected-message list (ft8svar.f90:57-61). Carries one chain's QSO across calls. Class 1. IN THE PER-CHAIN CONTEXT as p%v_lasthcall (ft8_cabi.f90)."
+
+[[symbol]]
+name = "lastrxmsg"
+file = "ft8var/ft8_mod1.f90"
+line = 140
+class = 1
+size_bytes = 48
+reason = "The last QSO message received and the last DX call heard, written by ft8bvar during a decode and read by ft8svar on later calls to build the expected-message list (ft8svar.f90:57-61). Carries one chain's QSO across calls. Class 1. IN THE PER-CHAIN CONTEXT as p%v_lastrxmsg (ft8_cabi.f90)."
+
+[[symbol]]
+name = "lenabledxcsearch"
+file = "ft8var/ft8_mod1.f90"
+line = 30
+class = 3
+size_bytes = 1
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "lhound"
+file = "ft8var/ft8_mod1.f90"
+line = 30
+class = 3
+size_bytes = 1
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "lmultinst"
+file = "ft8var/ft8_mod1.f90"
+line = 31
+class = 3
+size_bytes = 1
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "lqsomsgdcd"
+file = "ft8var/ft8_mod1.f90"
+line = 29
+class = 3
+size_bytes = 4
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "lskiptx1"
+file = "ft8var/ft8_mod1.f90"
+line = 31
+class = 3
+size_bytes = 1
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "ltxing"
+file = "ft8var/ft8_mod1.f90"
+line = 31
+class = 3
+size_bytes = 1
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "lwidedxcsearch"
+file = "ft8var/ft8_mod1.f90"
+line = 31
+class = 3
+size_bytes = 1
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "m73"
+file = "ft8var/ft8_mod1.f90"
+line = 36
+class = 2
+size_bytes = 76
+reason = "DATA-initialised, then transformed in place (x=2*x-1) ONCE, inside cwfilter's first-call block, which ft8var_load_callsign_db runs once per process. Unlike ft8b's mcq there is no ncontest re-fire. Fixed content. Class 2."
+
+[[symbol]]
+name = "maskincallthr"
+file = "ft8var/ft8_mod1.f90"
+line = 32
+class = 4
+size_bytes = 100
+reason = "DATA constants, never written. Class 4."
+
+[[symbol]]
+name = "mcq"
+file = "ft8var/ft8_mod1.f90"
+line = 34
+class = 2
+size_bytes = 116
+reason = "DATA-initialised, then transformed in place (x=2*x-1) ONCE, inside cwfilter's first-call block, which ft8var_load_callsign_db runs once per process. Unlike ft8b's mcq there is no ncontest re-fire. Fixed content. Class 2."
+
+[[symbol]]
+name = "mrr73"
+file = "ft8var/ft8_mod1.f90"
+line = 37
+class = 2
+size_bytes = 76
+reason = "DATA-initialised, then transformed in place (x=2*x-1) ONCE, inside cwfilter's first-call block, which ft8var_load_callsign_db runs once per process. Unlike ft8b's mcq there is no ncontest re-fire. Fixed content. Class 2."
+
+[[symbol]]
+name = "mrrr"
+file = "ft8var/ft8_mod1.f90"
+line = 35
+class = 2
+size_bytes = 76
+reason = "DATA-initialised, then transformed in place (x=2*x-1) ONCE, inside cwfilter's first-call block, which ft8var_load_callsign_db runs once per process. Unlike ft8b's mcq there is no ncontest re-fire. Fixed content. Class 2."
+
+[[symbol]]
+name = "msg"
+file = "ft8var/ft8_mod1.f90"
+line = 10
+class = 1
+size_bytes = 2072
+reason = "Built by tone8 from the callsign pair (the expected QSO messages, their tones and sync for FT8S), keyed by mycall12_0/hiscall12_0; ft8svar also rewrites row 53 from lastrxmsg. One chain's QSO hypotheses. Class 1 with its keys. IN THE PER-CHAIN CONTEXT as p%v_msg (ft8_cabi.f90)."
+
+[[symbol]]
+name = "msgincall"
+file = "ft8var/ft8_mod1.f90"
+line = 10
+class = 3
+size_bytes = 6438
+reason = "Per-thread incoming-call scratch: nincallthr(nthr) is zeroed at decodevar entry (ft8_decodevar.f90:145), msgincall/xdtincall written before the dispatch reads them into incall. Class 3."
+
+[[symbol]]
+name = "msgroot"
+file = "ft8var/ft8_mod1.f90"
+line = 10
+class = 3
+size_bytes = 37
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "msgrootlen"
+file = "ft8var/ft8_mod1.f90"
+line = 20
+class = 3
+size_bytes = 4
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "msgsd76"
+file = "ft8var/ft8_mod1.f90"
+line = 10
+class = 1
+size_bytes = 2812
+reason = "Built by tonesdvar from a candidate's decoded message (ft8bvar.f90:247) and read by ft8mf1var/ft8sdvar. Whether every read is preceded by a write in the same call is not provable from the call graph without running it, so class 1 by the manifest's tie-break. IN THE PER-CHAIN CONTEXT as p%v_msgsd76 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "mybcall"
+file = "ft8var/ft8_mod1.f90"
+line = 13
+class = 3
+size_bytes = 12
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "mycall"
+file = "ft8var/ft8_mod1.f90"
+line = 13
+class = 3
+size_bytes = 12
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "mycall12_0"
+file = "ft8var/ft8_mod1.f90"
+line = 11
+class = 1
+size_bytes = 12
+reason = "The KEYS of the tone caches: tone8 runs when the DX call or my call differs from these (decoder.f90:233-247), tone8myc when my call differs from mycall12_00. A cache and its key move as one unit (see the FT4 AP cache in ft8_cabi.f90): a key shared while its cache is per-chain would suppress chain B's rebuild. DATA 'dummy'. Class 1. IN THE PER-CHAIN CONTEXT as p%v_mycall12_0 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "mycall12_00"
+file = "ft8var/ft8_mod1.f90"
+line = 11
+class = 1
+size_bytes = 12
+reason = "The KEYS of the tone caches: tone8 runs when the DX call or my call differs from these (decoder.f90:233-247), tone8myc when my call differs from mycall12_00. A cache and its key move as one unit (see the FT4 AP cache in ft8_cabi.f90): a key shared while its cache is per-chain would suppress chain B's rebuild. DATA 'dummy'. Class 1. IN THE PER-CHAIN CONTEXT as p%v_mycall12_00 (ft8_cabi.f90)."
+
+[[symbol]]
+name = "mycalllen1"
+file = "ft8var/ft8_mod1.f90"
+line = 19
+class = 3
+size_bytes = 4
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "nappasses"
+file = "ft8var/ft8_mod1.f90"
+line = 19
+class = 4
+size_bytes = 24
+reason = "Declared, never written. Class 4."
+
+[[symbol]]
+name = "naptypes"
+file = "ft8var/ft8_mod1.f90"
+line = 45
+class = 4
+size_bytes = 648
+reason = "DATA constants, never written. Class 4."
+
+[[symbol]]
+name = "ncandallthr"
+file = "ft8var/ft8_mod1.f90"
+line = 22
+class = 3
+size_bytes = 96
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "ndecodes"
+file = "ft8var/ft8_mod1.f90"
+line = 19
+class = 3
+size_bytes = 4
+reason = "Per-call decode lists and counts, reset by the dispatch before decodevar (decoder.f90:249-252, :303). Class 3."
+
+[[symbol]]
+name = "ndxnsaptypes"
+file = "ft8var/ft8_mod1.f90"
+line = 87
+class = 4
+size_bytes = 648
+reason = "DATA constants, never written. Class 4."
+
+[[symbol]]
+name = "nfawide"
+file = "ft8var/ft8_mod1.f90"
+line = 20
+class = 3
+size_bytes = 4
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "nfbwide"
+file = "ft8var/ft8_mod1.f90"
+line = 20
+class = 3
+size_bytes = 4
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "nft8cycles"
+file = "ft8var/ft8_mod1.f90"
+line = 22
+class = 3
+size_bytes = 4
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "nhaptypes"
+file = "ft8var/ft8_mod1.f90"
+line = 73
+class = 4
+size_bytes = 648
+reason = "DATA constants, never written. Class 4."
+
+[[symbol]]
+name = "nincallthr"
+file = "ft8var/ft8_mod1.f90"
+line = 23
+class = 3
+size_bytes = 96
+reason = "Per-thread incoming-call scratch: nincallthr(nthr) is zeroed at decodevar entry (ft8_decodevar.f90:145), msgincall/xdtincall written before the dispatch reads them into incall. Class 3."
+
+[[symbol]]
+name = "nintcount"
+file = "ft8var/ft8_mod1.f90"
+line = 99
+class = 4
+size_bytes = 4
+reason = "Declared here but never read or written anywhere: decoder.f90 (and ft8var_dispatch_state) keep their own nintcount. DATA 0. Class 4."
+
+[[symbol]]
+name = "nlasttx"
+file = "ft8var/ft8_mod1.f90"
+line = 19
+class = 3
+size_bytes = 4
+reason = "Set from this call's parameters by ft8var_decode_frame before decodevar runs (decoder.f90:96-103, :197-288, :334-336). Class 3."
+
+[[symbol]]
+name = "nmsg"
+file = "ft8var/ft8_mod1.f90"
+line = 19
+class = 3
+size_bytes = 4
+reason = "Per-call decode lists and counts, reset by the dispatch before decodevar (decoder.f90:249-252, :303). Class 3."
+
+[[symbol]]
+name = "nmycnsaptypes"
+file = "ft8var/ft8_mod1.f90"
+line = 59
+class = 4
+size_bytes = 648
+reason = "DATA constants, never written. Class 4."
+
+[[symbol]]
+name = "odd"
+file = "ft8var/ft8_mod1.f90"
+line = 109
+class = 1
+size_bytes = 6760
+reason = "The per-parity table of the messages decoded in the last odd/even period (freq, dt, lstate, msg), and the copies the dispatch takes at each period boundary (ft8var_cabi.f90 / decoder.f90:300-332). FT8S/FT8SD correlate the next same-parity period's audio against them, so they carry one chain's QSO traffic across calls; shared, chain A's expected messages are matched in chain B's audio and come out as chain-B decodes (the hint decoders accept on correlation, without CRC). Class 1. IN THE PER-CHAIN CONTEXT as p%v_odd (ft8_cabi.f90)."
+
+[[symbol]]
+name = "oddcopy"
+file = "ft8var/ft8_mod1.f90"
+line = 125
+class = 1
+size_bytes = 6760
+reason = "The per-parity table of the messages decoded in the last odd/even period (freq, dt, lstate, msg), and the copies the dispatch takes at each period boundary (ft8var_cabi.f90 / decoder.f90:300-332). FT8S/FT8SD correlate the next same-parity period's audio against them, so they carry one chain's QSO traffic across calls; shared, chain A's expected messages are matched in chain B's audio and come out as chain-B decodes (the hint decoders accept on correlation, without CRC). Class 1. IN THE PER-CHAIN CONTEXT as p%v_oddcopy (ft8_cabi.f90)."
+
+[[symbol]]
+name = "oddcq"
+file = "ft8var/ft8_mod1.f90"
+line = 173
+class = 1
+size_bytes = 2430720
+reason = "Raw 8x79 complex symbol spectra of up to 20 CQ, 5 MyCall and 1 QSO signals per thread, kept from one period and re-tried against the next same-parity period (JTDX's averaging). One chain's signals; shared, chain A's saved symbols are re-decoded and reported on chain B. The largest per-chain objects (2.43 MB each for the CQ pair). Class 1. IN THE PER-CHAIN CONTEXT as p%v_oddcq (ft8_cabi.f90)."
+
+[[symbol]]
+name = "oddmyc"
+file = "ft8var/ft8_mod1.f90"
+line = 187
+class = 1
+size_bytes = 607680
+reason = "Raw 8x79 complex symbol spectra of up to 20 CQ, 5 MyCall and 1 QSO signals per thread, kept from one period and re-tried against the next same-parity period (JTDX's averaging). One chain's signals; shared, chain A's saved symbols are re-decoded and reported on chain B. The largest per-chain objects (2.43 MB each for the CQ pair). Class 1. IN THE PER-CHAIN CONTEXT as p%v_oddmyc (ft8_cabi.f90)."
+
+[[symbol]]
+name = "oddqso"
+file = "ft8var/ft8_mod1.f90"
+line = 201
+class = 1
+size_bytes = 121536
+reason = "Raw 8x79 complex symbol spectra of up to 20 CQ, 5 MyCall and 1 QSO signals per thread, kept from one period and re-tried against the next same-parity period (JTDX's averaging). One chain's signals; shared, chain A's saved symbols are re-decoded and reported on chain B. The largest per-chain objects (2.43 MB each for the CQ pair). Class 1. IN THE PER-CHAIN CONTEXT as p%v_oddqso (ft8_cabi.f90)."
+
+[[symbol]]
+name = "one"
+file = "ft8var/ft8_mod1.f90"
+line = 29
+class = 2
+size_bytes = 18432
+reason = "Built once per process from constants (cwfilter's first call, guarded by ft8var_load_callsign_db; gen/first_osd by osd174_91var's first call): filters, windows, sync and tweak tables, the LDPC generator. Chain-independent. Class 2."
+
+[[symbol]]
+name = "pivalue"
+file = "ft8var/ft8_mod1.f90"
+line = 14
+class = 2
+size_bytes = 4
+reason = "Built once per process from constants (cwfilter's first call, guarded by ft8var_load_callsign_db; gen/first_osd by osd174_91var's first call): filters, windows, sync and tweak tables, the LDPC generator. Chain-independent. Class 2."
+
+[[symbol]]
+name = "sumxdtt"
+file = "ft8var/ft8_mod1.f90"
+line = 15
+class = 1
+size_bytes = 96
+reason = "Per-thread DT sums, the FT4 counterpart of avexdt's input (decoder.f90 resets it in FT4 only); JTDX FT4 reads it across calls. Class 1 by the tie-break. IN THE PER-CHAIN CONTEXT as p%v_sumxdtt (ft8_cabi.f90)."
+
+[[symbol]]
+name = "twopi"
+file = "ft8var/ft8_mod1.f90"
+line = 14
+class = 2
+size_bytes = 4
+reason = "Built once per process from constants (cwfilter's first call, guarded by ft8var_load_callsign_db; gen/first_osd by osd174_91var's first call): filters, windows, sync and tweak tables, the LDPC generator. Chain-independent. Class 2."
+
+[[symbol]]
+name = "windowc1"
+file = "ft8var/ft8_mod1.f90"
+line = 14
+class = 2
+size_bytes = 220
+reason = "Built once per process from constants (cwfilter's first call, guarded by ft8var_load_callsign_db; gen/first_osd by osd174_91var's first call): filters, windows, sync and tweak tables, the LDPC generator. Chain-independent. Class 2."
+
+[[symbol]]
+name = "windowx"
+file = "ft8var/ft8_mod1.f90"
+line = 14
+class = 2
+size_bytes = 804
+reason = "Built once per process from constants (cwfilter's first call, guarded by ft8var_load_callsign_db; gen/first_osd by osd174_91var's first call): filters, windows, sync and tweak tables, the LDPC generator. Chain-independent. Class 2."
+
+[[symbol]]
+name = "xdtincall"
+file = "ft8var/ft8_mod1.f90"
+line = 15
+class = 3
+size_bytes = 696
+reason = "Per-thread incoming-call scratch: nincallthr(nthr) is zeroed at decodevar entry (ft8_decodevar.f90:145), msgincall/xdtincall written before the dispatch reads them into incall. Class 3."
+
+[[symbol]]
+name = "first"
+file = "ft8var/ft8apsetvar.f90"
+line = 9
+class = 1
+size_bytes = 4
+reason = "The keys of the AP-mask cache (apsym and family), hoisted from SAVEd locals to module ft8apsetvar_state (MODIFIED FOR NEXUS header there) so they can move with the masks. Class 1. IN THE PER-CHAIN CONTEXT as p%v_ap_first (ft8_cabi.f90)."
+
+[[symbol]]
+name = "hiscallprev"
+file = "ft8var/ft8apsetvar.f90"
+line = 8
+class = 1
+size_bytes = 12
+reason = "The keys of the AP-mask cache (apsym and family), hoisted from SAVEd locals to module ft8apsetvar_state (MODIFIED FOR NEXUS header there) so they can move with the masks. Class 1. IN THE PER-CHAIN CONTEXT as p%v_ap_hiscallprev (ft8_cabi.f90)."
+
+[[symbol]]
+name = "lhoundprev"
+file = "ft8var/ft8apsetvar.f90"
+line = 10
+class = 1
+size_bytes = 1
+reason = "The keys of the AP-mask cache (apsym and family), hoisted from SAVEd locals to module ft8apsetvar_state (MODIFIED FOR NEXUS header there) so they can move with the masks. Class 1. IN THE PER-CHAIN CONTEXT as p%v_ap_lhoundprev (ft8_cabi.f90)."
+
+[[symbol]]
+name = "mycallprev"
+file = "ft8var/ft8apsetvar.f90"
+line = 8
+class = 1
+size_bytes = 12
+reason = "The keys of the AP-mask cache (apsym and family), hoisted from SAVEd locals to module ft8apsetvar_state (MODIFIED FOR NEXUS header there) so they can move with the masks. Class 1. IN THE PER-CHAIN CONTEXT as p%v_ap_mycallprev (ft8_cabi.f90)."
+
+[[symbol]]
+name = "ctab"
+file = "ft8var/gen_ft8wavevar.f90"
+line = 7
+class = 2
+size_bytes = 524288
+reason = "Pulse and phase tables built on the first call, rebuilt only when bt changes (bt is always 2.0). Chain-independent. Class 2."
+
+[[symbol]]
+name = "dt"
+file = "ft8var/gen_ft8wavevar.f90"
+line = 12
+class = 2
+size_bytes = 4
+reason = "Pulse and phase tables built on the first call, rebuilt only when bt changes (bt is always 2.0). Chain-independent. Class 2."
+
+[[symbol]]
+name = "hmod"
+file = "ft8var/gen_ft8wavevar.f90"
+line = 12
+class = 2
+size_bytes = 4
+reason = "Pulse and phase tables built on the first call, rebuilt only when bt changes (bt is always 2.0). Chain-independent. Class 2."
+
+[[symbol]]
+name = "ibt0"
+file = "ft8var/gen_ft8wavevar.f90"
+line = 11
+class = 2
+size_bytes = 4
+reason = "Pulse and phase tables built on the first call, rebuilt only when bt changes (bt is always 2.0). Chain-independent. Class 2."
+
+[[symbol]]
+name = "pulse"
+file = "ft8var/gen_ft8wavevar.f90"
+line = 8
+class = 2
+size_bytes = 92160
+reason = "Pulse and phase tables built on the first call, rebuilt only when bt changes (bt is always 2.0). Chain-independent. Class 2."
+
+[[symbol]]
+name = "twopi"
+file = "ft8var/gen_ft8wavevar.f90"
+line = 12
+class = 2
+size_bytes = 4
+reason = "Pulse and phase tables built on the first call, rebuilt only when bt changes (bt is always 2.0). Chain-independent. Class 2."
+
+[[symbol]]
+name = "correct"
+file = "ft8var/jt65_mod2var.f90"
+line = 5
+class = 3
+size_bytes = 252
+reason = "JT65 symbol scratch used only by datacor/baddatavar, which nothing on the FT8 path calls. Class 3."
+
+[[symbol]]
+name = "correct_hint"
+file = "ft8var/jt65_mod2var.f90"
+line = 5
+class = 3
+size_bytes = 252
+reason = "JT65 symbol scratch used only by datacor/baddatavar, which nothing on the FT8 path calls. Class 3."
+
+[[symbol]]
+name = "s3"
+file = "ft8var/jt65_mod2var.f90"
+line = 4
+class = 3
+size_bytes = 16128
+reason = "JT65 symbol scratch used only by datacor/baddatavar, which nothing on the FT8 path calls. Class 3."
+
+[[symbol]]
+name = "s3a"
+file = "ft8var/jt65_mod2var.f90"
+line = 4
+class = 3
+size_bytes = 16128
+reason = "JT65 symbol scratch used only by datacor/baddatavar, which nothing on the FT8 path calls. Class 3."
+
+[[symbol]]
+name = "ref"
+file = "ft8var/jt65_mod5.f90"
+line = 4
+class = 3
+size_bytes = 13652
+reason = "filbig's reference spectrum; filbigvar is not compiled. Class 3."
+
+[[symbol]]
+name = "call0c"
+file = "ft8var/jt65_mod9.f90"
+line = 6
+class = 2
+size_bytes = 80500
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "calld"
+file = "ft8var/jt65_mod9.f90"
+line = 6
+class = 2
+size_bytes = 77700
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "callef"
+file = "ft8var/jt65_mod9.f90"
+line = 6
+class = 2
+size_bytes = 63000
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "callgh"
+file = "ft8var/jt65_mod9.f90"
+line = 6
+class = 2
+size_bytes = 52500
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "calli"
+file = "ft8var/jt65_mod9.f90"
+line = 6
+class = 2
+size_bytes = 53200
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "callj"
+file = "ft8var/jt65_mod9.f90"
+line = 6
+class = 2
+size_bytes = 70000
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "callk"
+file = "ft8var/jt65_mod9.f90"
+line = 6
+class = 2
+size_bytes = 168000
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "calllm"
+file = "ft8var/jt65_mod9.f90"
+line = 6
+class = 2
+size_bytes = 45500
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "calln"
+file = "ft8var/jt65_mod9.f90"
+line = 7
+class = 2
+size_bytes = 65800
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "callo"
+file = "ft8var/jt65_mod9.f90"
+line = 7
+class = 2
+size_bytes = 46900
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "callpq"
+file = "ft8var/jt65_mod9.f90"
+line = 7
+class = 2
+size_bytes = 40600
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "callr"
+file = "ft8var/jt65_mod9.f90"
+line = 7
+class = 2
+size_bytes = 45500
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "callsign"
+file = "ft8var/jt65_mod9.f90"
+line = 8
+class = 3
+size_bytes = 12
+reason = "cwfilter's read buffers, written before read while loading. Class 3."
+
+[[symbol]]
+name = "callst"
+file = "ft8var/jt65_mod9.f90"
+line = 7
+class = 2
+size_bytes = 52500
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "calluv"
+file = "ft8var/jt65_mod9.f90"
+line = 7
+class = 2
+size_bytes = 72800
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "callw"
+file = "ft8var/jt65_mod9.f90"
+line = 7
+class = 2
+size_bytes = 95900
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "callxz"
+file = "ft8var/jt65_mod9.f90"
+line = 7
+class = 2
+size_bytes = 40600
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "ldbvalid"
+file = "ft8var/jt65_mod9.f90"
+line = 12
+class = 2
+size_bytes = 4
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "line"
+file = "ft8var/jt65_mod9.f90"
+line = 9
+class = 3
+size_bytes = 180
+reason = "cwfilter's read buffers, written before read while loading. Class 3."
+
+[[symbol]]
+name = "ncall0c"
+file = "ft8var/jt65_mod9.f90"
+line = 10
+class = 2
+size_bytes = 4
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "ncalld"
+file = "ft8var/jt65_mod9.f90"
+line = 10
+class = 2
+size_bytes = 4
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "ncallef"
+file = "ft8var/jt65_mod9.f90"
+line = 10
+class = 2
+size_bytes = 4
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "ncallgh"
+file = "ft8var/jt65_mod9.f90"
+line = 10
+class = 2
+size_bytes = 4
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "ncalli"
+file = "ft8var/jt65_mod9.f90"
+line = 10
+class = 2
+size_bytes = 4
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "ncallj"
+file = "ft8var/jt65_mod9.f90"
+line = 10
+class = 2
+size_bytes = 4
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "ncallk"
+file = "ft8var/jt65_mod9.f90"
+line = 10
+class = 2
+size_bytes = 4
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "ncalllm"
+file = "ft8var/jt65_mod9.f90"
+line = 10
+class = 2
+size_bytes = 4
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "ncalln"
+file = "ft8var/jt65_mod9.f90"
+line = 10
+class = 2
+size_bytes = 4
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "ncallo"
+file = "ft8var/jt65_mod9.f90"
+line = 10
+class = 2
+size_bytes = 4
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "ncallpq"
+file = "ft8var/jt65_mod9.f90"
+line = 10
+class = 2
+size_bytes = 4
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "ncallr"
+file = "ft8var/jt65_mod9.f90"
+line = 10
+class = 2
+size_bytes = 4
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "ncallst"
+file = "ft8var/jt65_mod9.f90"
+line = 10
+class = 2
+size_bytes = 4
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "ncalluv"
+file = "ft8var/jt65_mod9.f90"
+line = 10
+class = 2
+size_bytes = 4
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "ncallw"
+file = "ft8var/jt65_mod9.f90"
+line = 14
+class = 2
+size_bytes = 4
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "ncallxz"
+file = "ft8var/jt65_mod9.f90"
+line = 11
+class = 2
+size_bytes = 4
+reason = "The ALLCALL7.TXT callsign database, loaded once per process by ft8var_load_callsign_db (cwfilter's first call) and only read afterwards. The same file for every chain. Class 2."
+
+[[symbol]]
+name = "Mn"
+file = "ft8var/ldpc_174_91_c_reordered_parity.f90"
+line = 1
+class = 4
+size_bytes = 0
+reason = "DATA constants (include file). Class 4."
+
+[[symbol]]
+name = "Nm"
+file = "ft8var/ldpc_174_91_c_reordered_parity.f90"
+line = 177
+class = 4
+size_bytes = 0
+reason = "DATA constants (include file). Class 4."
+
+[[symbol]]
+name = "nrw"
+file = "ft8var/ldpc_174_91_c_reordered_parity.f90"
+line = 262
+class = 4
+size_bytes = 0
+reason = "DATA constants (include file). Class 4."
+
+[[symbol]]
+name = "inext"
+file = "ft8var/osd174_91var.f90"
+line = 366
+class = 3
+size_bytes = 96
+reason = "Per-thread OSD pattern cursors; lastpat(nthr) is reset to -1 on every entry, as in osd174_91.f90. Class 3."
+
+[[symbol]]
+name = "lastpat"
+file = "ft8var/osd174_91var.f90"
+line = 366
+class = 3
+size_bytes = 96
+reason = "Per-thread OSD pattern cursors; lastpat(nthr) is reset to -1 on every entry, as in osd174_91.f90. Class 3."
+
+[[symbol]]
+name = "first"
+file = "ft8var/osd174var.f90"
+line = 18
+class = 2
+size_bytes = 0
+reason = "NOT COMPILED (nothing calls osd174var). Vendored only."
+
+[[symbol]]
+name = "gen"
+file = "ft8var/osd174var.f90"
+line = 9
+class = 2
+size_bytes = 0
+reason = "NOT COMPILED (nothing calls osd174var). Vendored only."
+
+[[symbol]]
+name = "inext"
+file = "ft8var/osd174var.f90"
+line = 364
+class = 2
+size_bytes = 0
+reason = "NOT COMPILED (nothing calls osd174var). Vendored only."
+
+[[symbol]]
+name = "lastpat"
+file = "ft8var/osd174var.f90"
+line = 364
+class = 2
+size_bytes = 0
+reason = "NOT COMPILED (nothing calls osd174var). Vendored only."
+
+[[symbol]]
+name = "a1"
+file = "ft8var/packjt77sdvar.f90"
+line = 147
+class = 4
+size_bytes = 37
+reason = "DATA character constants, never written. Class 4."
+
+[[symbol]]
+name = "a2"
+file = "ft8var/packjt77sdvar.f90"
+line = 148
+class = 4
+size_bytes = 36
+reason = "DATA character constants, never written. Class 4."
+
+[[symbol]]
+name = "a3"
+file = "ft8var/packjt77sdvar.f90"
+line = 149
+class = 4
+size_bytes = 10
+reason = "DATA character constants, never written. Class 4."
+
+[[symbol]]
+name = "a4"
+file = "ft8var/packjt77sdvar.f90"
+line = 150
+class = 4
+size_bytes = 27
+reason = "DATA character constants, never written. Class 4."
+
+[[symbol]]
+name = "c"
+file = "ft8var/packjt77sdvar.f90"
+line = 43
+class = 4
+size_bytes = 122
+reason = "DATA character constants, never written. Class 4."
+
+[[symbol]]
+name = "c1"
+file = "ft8var/packjt77sdvar.f90"
+line = 255
+class = 4
+size_bytes = 37
+reason = "DATA character constants, never written. Class 4."
+
+[[symbol]]
+name = "c2"
+file = "ft8var/packjt77sdvar.f90"
+line = 256
+class = 4
+size_bytes = 36
+reason = "DATA character constants, never written. Class 4."
+
+[[symbol]]
+name = "c3"
+file = "ft8var/packjt77sdvar.f90"
+line = 257
+class = 4
+size_bytes = 10
+reason = "DATA character constants, never written. Class 4."
+
+[[symbol]]
+name = "c4"
+file = "ft8var/packjt77sdvar.f90"
+line = 146
+class = 4
+size_bytes = 27
+reason = "DATA character constants, never written. Class 4."
+
+[[symbol]]
+name = "ii1"
+file = "ft8var/packjt77sdvar.f90"
+line = 515
+class = 2
+size_bytes = 4
+reason = "Set by the mp_short_init entry from a constant register, as packjt77's. Class 2."
+
+[[symbol]]
+name = "ii2"
+file = "ft8var/packjt77sdvar.f90"
+line = 515
+class = 2
+size_bytes = 4
+reason = "Set by the mp_short_init entry from a constant register, as packjt77's. Class 2."
+
+[[symbol]]
+name = "cfilt"
+file = "ft8var/subtractft8var.f90"
+line = 21
+class = 3
+size_bytes = 1440000
+reason = "NO STORAGE in this build: an ordinary local since the MODIFIED FOR NEXUS edit (upstream's `save` + `!$omp threadprivate` made it 1.44 MB of thread-local storage in every thread of the process). Fully written before read on every call. The row stays so a refresh that restores upstream's declaration lands on it. Class 3."
+
+[[symbol]]
+name = "rpt"
+file = "ft8var/tone8.f90"
+line = 7
+class = 4
+size_bytes = 224
+reason = "DATA constant, never written. Class 4."
+
+[[symbol]]
+name = "rpt"
+file = "ft8var/tonesdvar.f90"
+line = 7
+class = 4
+size_bytes = 300
+reason = "DATA constant, never written. Class 4."
+
+[[symbol]]
+name = "NPTS"
+file = "jt65_mod6.f90"
+line = 6
+class = 4
+size_bytes = 0
+reason = "PARAMETER. Class 4."
+
+[[symbol]]
+name = "dd"
+file = "jt65_mod6.f90"
+line = 7
+class = 3
+size_bytes = 2496000
+reason = "JT65 audio buffer used only by partint/rms_augapvar/baddatavar, not on the FT8 path. Class 3."
+
+[[symbol]]
+name = "nnmode"
+file = "jt65_mod6.f90"
+line = 8
+class = 3
+size_bytes = 4
+reason = "JT65 audio buffer used only by partint/rms_augapvar/baddatavar, not on the FT8 path. Class 3."
+
+[[symbol]]
+name = "data_dir"
+file = "prog_args.f90"
+line = 3
+class = 2
+size_bytes = 500
+reason = "Paths; share_dir is set once by ft8var_set_share_dir before the first decode, the rest are never set. Process-wide. Class 2."
+
+[[symbol]]
+name = "exe_dir"
+file = "prog_args.f90"
+line = 3
+class = 2
+size_bytes = 500
+reason = "Paths; share_dir is set once by ft8var_set_share_dir before the first decode, the rest are never set. Process-wide. Class 2."
+
+[[symbol]]
+name = "lquiet"
+file = "prog_args.f90"
+line = 5
+class = 2
+size_bytes = 4
+reason = "Paths; share_dir is set once by ft8var_set_share_dir before the first decode, the rest are never set. Process-wide. Class 2."
+
+[[symbol]]
+name = "share_dir"
+file = "prog_args.f90"
+line = 4
+class = 2
+size_bytes = 500
+reason = "Paths; share_dir is set once by ft8var_set_share_dir before the first decode, the rest are never set. Process-wide. Class 2."
+
+[[symbol]]
+name = "shm_key"
+file = "prog_args.f90"
+line = 2
+class = 2
+size_bytes = 80
+reason = "Paths; share_dir is set once by ft8var_set_share_dir before the first decode, the rest are never set. Process-wide. Class 2."
+
+[[symbol]]
+name = "temp_dir"
+file = "prog_args.f90"
+line = 3
+class = 2
+size_bytes = 500
+reason = "Paths; share_dir is set once by ft8var_set_share_dir before the first decode, the rest are never set. Process-wide. Class 2."
+

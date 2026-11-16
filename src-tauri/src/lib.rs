@@ -33137,6 +33137,14 @@ fn clear_dx_call(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> 
     Ok(eng.snapshot())
 }
 
+/// The cockpit's DX Call and DX Grid boxes as they now read
+/// ([`tempo_app::engine::Engine::set_dx_box`]): the JTDX-style FT8 decoder is given the DX call
+/// whenever the box holds one, as WSJT-X's is. Keys nothing and moves no QSO.
+#[tauri::command(async)]
+fn set_dx_box(state: State<'_, SharedEngine>, call: String, grid: String) {
+    engine_lock(&state).set_dx_box(&call, &grid);
+}
+
 /// Operator in-QSO free text (WSJT-X Tx5): override the next transmission with
 /// `text`, directed to the current DX station when known. No-op outside a QSO; refused,
 /// with the reason, when the encoder cannot send its over. `afar`: as [`set_tx_enabled`]'s.
@@ -51500,6 +51508,21 @@ pub fn run() {
         ),
     );
     install_panic_logger();
+    // The OpenMP runtime the FT8 decoder's threads run on (libtempo links it statically): checked
+    // once, off the startup path, so a broken runtime is named in this log rather than showing
+    // up as decodes that never arrive.
+    let _ = std::thread::Builder::new()
+        .name("openmp-check".into())
+        .spawn(|| {
+            let c = tempo_core::modes::ft8_openmp_selfcheck(4);
+            tempo_core::applog::info(
+                "startup",
+                &format!(
+                    "OpenMP runtime: {}/{} threads ran the check (default team {})",
+                    c.ran, c.requested, c.max_threads
+                ),
+            );
+        });
 
     // ⛔ A computer that drives another station opens nothing of its own station: no settings
     // opened for writing, no logbook, no Engine, no radio, no daemon, no listener and no feed.
@@ -54333,6 +54356,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_area,
         qso_resend,
         clear_dx_call,
+        set_dx_box,
         qso_freetext,
         log_current_qso,
         confirm_pending_log,
@@ -54635,6 +54659,29 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             // the TLE seed loader can use, and the first satellite/Now-Bar poll may arrive
             // the moment setup returns. See RESOURCE_DIR / `tle_seed_path`.
             if let Ok(res) = app.path().resource_dir() {
+                // The JTDX-style FT8 decoder's callsign database (JTDX's ALLCALL7.TXT, which it
+                // filters false decodes against), loaded once, off the startup path. Missing, the
+                // decoder filters nothing against it: worth a line in the log.
+                let dir = res.join("resources").join("ft8var");
+                let _ = std::thread::Builder::new()
+                    .name("allcall-load".into())
+                    .spawn(move || {
+                        let ok = tempo_core::modes::jtdx::load_callsign_db(&dir);
+                        let msg = if ok {
+                            format!("FT8 callsign database loaded from {}", dir.display())
+                        } else {
+                            format!(
+                                "FT8 callsign database NOT loaded ({} missing or short): the \
+                                 JTDX-style decoder filters no false decodes against it",
+                                dir.join("ALLCALL7.TXT").display()
+                            )
+                        };
+                        if ok {
+                            tempo_core::applog::info("startup", &msg);
+                        } else {
+                            tempo_core::applog::warn("startup", &msg);
+                        }
+                    });
                 let _ = RESOURCE_DIR.set(res);
             }
             // The TV page's asset + RPC closures read this at call time (see TV_APP).

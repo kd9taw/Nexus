@@ -115,6 +115,7 @@ fn decode_sent_in(section: &str) -> bool {
         psk: None,
     };
     let mut e = Engine::new("KD9TAW", "EN52", 0);
+    super::decode_in_flight::pin_standard_ft8(&mut e);
     e.set_tier(Tier::Ft8);
     assert!(
         e.ingest(&super::decode_in_flight::ft8_frame("CQ W1AW FN31"), 3) >= 1,

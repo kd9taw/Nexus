@@ -157,6 +157,66 @@ set(LIBTEMPO_SOURCES
     ${LIB}/ft8/twkfreq1.f90               # fine frequency tweak (called by ft8b + ft4)
     ${LIB}/peakup.f90                     # parabolic peak interpolation (subtractft8)
 
+    # --- FT8 multithreaded decoder (lib/ft8var, WSJT-X 3.0.2's port of JTDX's) : Nexus ---
+    #     Driven by ft8var_cabi.f90, which re-expresses WSJT-X's decoder.f90 dispatch.
+    #     Compiled: upstream's CMakeLists list (its lines 671-716, plus ft8_decodevar from
+    #     :422), less filbigvar.f90 (JT65's filter: it needs FFTW's threads library, and nothing
+    #     on the FT8 path calls it). Vendored but not compiled: osd174var.f90 (nothing calls it)
+    #     and the include-only call_q, callsign_q, syncdist, ft8_params and
+    #     ldpc_174_91_c_reordered_parity. All compiled -fopenmp (LIBTEMPO_OPENMP_SOURCES).
+    ${CMAKE_CURRENT_SOURCE_DIR}/ft8var_hint.f90
+    ${CMAKE_CURRENT_SOURCE_DIR}/ft8var_swl.f90
+    ${CMAKE_CURRENT_SOURCE_DIR}/ft8var_cabi.f90
+    ${LIB}/ft8var/agccft8.f90
+    ${LIB}/ft8var/baddatavar.f90
+    ${LIB}/ft8var/bpdecode174_91var.f90
+    ${LIB}/ft8var/chkfalse8var.f90
+    ${LIB}/ft8var/chkflscallvar.f90
+    ${LIB}/ft8var/chkgridvar.f90
+    ${LIB}/ft8var/chklong8.f90
+    ${LIB}/ft8var/chkspecial8var.f90
+    ${LIB}/ft8var/cwfilter.f90
+    ${LIB}/ft8var/datacor.f90
+    ${LIB}/ft8var/encode174_91var.f90
+    ${LIB}/ft8var/extract_callvar.f90
+    ${LIB}/ft8var/fillhashvar.f90
+    ${LIB}/ft8var/filtersfreevar.f90
+    ${LIB}/ft8var/four2avar.f90
+    ${LIB}/ft8var/ft4_mod1.f90
+    ${LIB}/ft8var/ft8apsetvar.f90
+    ${LIB}/ft8var/ft8bvar.f90
+    ${LIB}/ft8var/ft8_decodevar.f90
+    ${LIB}/ft8var/ft8_downsamplevar.f90
+    ${LIB}/ft8var/ft8_mod1.f90
+    ${LIB}/ft8var/ft8mf1var.f90
+    ${LIB}/ft8var/ft8mfcqvar.f90
+    ${LIB}/ft8var/ft8svar.f90
+    ${LIB}/ft8var/ft8sdvar.f90
+    ${LIB}/ft8var/ft8sd1var.f90
+    ${LIB}/ft8var/genft8var.f90
+    ${LIB}/ft8var/gen_ft8wavevar.f90
+    ${LIB}/ft8var/genft8sdvar.f90
+    ${LIB}/ft8var/jt65_mod2var.f90
+    ${LIB}/ft8var/jt65_mod5.f90
+    ${LIB}/ft8var/jt65_mod9.f90
+    ${LIB}/ft8var/msgparservar.f90
+    ${LIB}/ft8var/osd174_91var.f90
+    ${LIB}/ft8var/packjt77sdvar.f90
+    ${LIB}/ft8var/partint.f90
+    ${LIB}/ft8var/partintft8.f90
+    ${LIB}/ft8var/rms_augapvar.f90
+    ${LIB}/ft8var/searchcallsvar.f90
+    ${LIB}/ft8var/subtractft8var.f90
+    ${LIB}/ft8var/sync8var.f90
+    ${LIB}/ft8var/sync8dvar.f90
+    ${LIB}/ft8var/tone8.f90
+    ${LIB}/ft8var/tone8myc.f90
+    ${LIB}/ft8var/tonesdvar.f90
+    ${LIB}/ft8var/twkfreq1var.f90
+    ${LIB}/ft8/ft8_a8d.f90                # ft8_decodevar's a8 pass (WSJT-X 3.0.2)
+    ${LIB}/jt65_mod6.f90                  # module jt65_mod6 (ft8var uses it)
+    ${LIB}/prog_args.f90                  # module prog_args: share_dir, where ALLCALL7.TXT is
+
     # --- FT4 native decode (lib/ft4 + ft4_decode.f90) : Nexus ---
     #     Clean OO decoder (getcandidates4 -> sync4d -> get_ft4_bitmetrics ->
     #     decode174_91 -> subtractft4), wrapped behind a C ABI in ft4_cabi.f90.
@@ -170,6 +230,24 @@ set(LIBTEMPO_SOURCES
     ${LIB}/ft4/sync4d.f90                 # sync power metric
     ${LIB}/ft4/get_ft4_bitmetrics.f90     # bit metrics (calls normalizebmet from ft8b)
     ${LIB}/ft4/subtractft4.f90            # signal subtraction (calls gen_ft4wave)
+
+    # --- FT4 JTDX-style decode (lib/ft4jtdx, JTDX 2.2.159's FT4 decoder) : Nexus ---
+    #     Linked beside the Standard decoder above; every routine whose name the Standard one
+    #     also uses carries a _jtdx suffix. ft4_params.f90 (JTDX's frame constants) and the two
+    #     LDPC tables are include-only. Needs the ft8var modules ft8_mod1 / ft4_mod1 /
+    #     jt65_mod9 and the checks chkfalse8var / chkflscallvar / msgparservar. Reuses
+    #     twkfreq1, encode174_91, chkcrc14a, gen_ft4wave and get_ft4_tones_from_77bits above.
+    ${CMAKE_CURRENT_SOURCE_DIR}/ft4jtdx_cabi.f90
+    ${LIB}/ft4jtdx/ft4_decode_jtdx.f90        # module ft4_decode_jtdx (+ its AP-cache module)
+    ${LIB}/ft4jtdx/getcandidates4_jtdx.f90    # candidate search (calls ft4_baseline_jtdx)
+    ${LIB}/ft4jtdx/ft4_baseline_jtdx.f90      # spectral baseline
+    ${LIB}/ft4jtdx/ft4_downsample_jtdx.f90    # dd4 -> complex baseband (+ its state module)
+    ${LIB}/ft4jtdx/sync4d_jtdx.f90            # sync power metric
+    ${LIB}/ft4jtdx/get_ft4_bitmetrics_jtdx.f90 # bit metrics (calls normalizebmet_jtdx)
+    ${LIB}/ft4jtdx/normalizebmet_jtdx.f90     # JTDX's RMS bit-metric normalisation
+    ${LIB}/ft4jtdx/subtractft4_jtdx.f90       # signal subtraction (calls gen_ft4wave)
+    ${LIB}/ft4jtdx/bpdecode174_91_jtdx.f90    # belief propagation, 40 iterations
+    ${LIB}/ft4jtdx/osd4_174_91.f90            # ordered-statistics decoding, depth 3
 
     # --- FST4 native decode (lib/fst4 + fst4_decode.f90) : Nexus, RX-ONLY ---
     #     Same clean OO+callback shape as FT4 (no nzhsym/a7/shmem), wrapped behind
@@ -541,6 +619,10 @@ set(LIBTEMPO_SOURCES
     ${LIB}/fftw3mod.f90                   # module fftw3 (wraps fftw3.f03)
     ${LIB}/four2a.f90                     # FFT via FFTW3f
 
+    # --- OpenMP runtime (this project): the self-check and the worker stack size ---
+    ${CMAKE_CURRENT_SOURCE_DIR}/omp_probe.f90   # tempo_omp_probe (compiled -fopenmp, below)
+    ${CMAKE_CURRENT_SOURCE_DIR}/omp_env.c       # OMP_STACKSIZE=10M before libgomp starts
+
     # --- C / C++ infra ---
     ${LIB}/crc14.cpp                      # Boost CRC-14 (crc14 / crc14_check)
     ${LIB}/crc13.cpp                      # Boost CRC-13, for MSK144's (128,90)
@@ -560,6 +642,8 @@ set(LIBTEMPO_SOURCES
 # -Wmissing-include-dirs warning instead of a build failure, and sat unnoticed.
 # ---------------------------------------------------------------------------
 set(LIBFT1_INCLUDE_DIRS
+    ${WX}                    # ft8var's `include '/lib/fftw3.f90'` and '/lib/ft8/...':
+                             #   gfortran tries each -I dir as a prefix of the absolute name
     ${LIB}/tempofast
     ${LIB}/ft8
     ${LIB}
@@ -598,6 +682,72 @@ set_source_files_properties(
     ${LIB}/ftrsd/init_rs.c
     PROPERTIES COMPILE_DEFINITIONS "BIGSYM=1")
 
+# ---------------------------------------------------------------------------
+# OpenMP, for the multithreaded FT8 decoder (WSJT-X lib/ft8var) and its self-check.
+# -fopenmp goes ONLY on the files listed in LIBTEMPO_OPENMP_SOURCES, never globally: it implies
+# -frecursive, which moves large local arrays from .bss to the stack, and the per-radio decoder
+# context (ft8_cabi.f90) and libtempo/modem-state-manifest.toml were audited against the .bss
+# layout the other files have today. The runtime, libgomp, is linked statically on every target
+# by crates/tempo-fast-sys/build.rs (omp_env.c says why it must be static).
+# ---------------------------------------------------------------------------
+set(LIBTEMPO_OPENMP_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/omp_probe.f90
+    ${CMAKE_CURRENT_SOURCE_DIR}/ft8var_hint.f90
+    ${CMAKE_CURRENT_SOURCE_DIR}/ft8var_swl.f90
+    ${CMAKE_CURRENT_SOURCE_DIR}/ft8var_cabi.f90
+    ${LIB}/ft8var/agccft8.f90
+    ${LIB}/ft8var/baddatavar.f90
+    ${LIB}/ft8var/bpdecode174_91var.f90
+    ${LIB}/ft8var/chkfalse8var.f90
+    ${LIB}/ft8var/chkflscallvar.f90
+    ${LIB}/ft8var/chkgridvar.f90
+    ${LIB}/ft8var/chklong8.f90
+    ${LIB}/ft8var/chkspecial8var.f90
+    ${LIB}/ft8var/cwfilter.f90
+    ${LIB}/ft8var/datacor.f90
+    ${LIB}/ft8var/encode174_91var.f90
+    ${LIB}/ft8var/extract_callvar.f90
+    ${LIB}/ft8var/fillhashvar.f90
+    ${LIB}/ft8var/filtersfreevar.f90
+    ${LIB}/ft8var/four2avar.f90
+    ${LIB}/ft8var/ft4_mod1.f90
+    ${LIB}/ft8var/ft8apsetvar.f90
+    ${LIB}/ft8var/ft8bvar.f90
+    ${LIB}/ft8var/ft8_decodevar.f90
+    ${LIB}/ft8var/ft8_downsamplevar.f90
+    ${LIB}/ft8var/ft8_mod1.f90
+    ${LIB}/ft8var/ft8mf1var.f90
+    ${LIB}/ft8var/ft8mfcqvar.f90
+    ${LIB}/ft8var/ft8svar.f90
+    ${LIB}/ft8var/ft8sdvar.f90
+    ${LIB}/ft8var/ft8sd1var.f90
+    ${LIB}/ft8var/genft8var.f90
+    ${LIB}/ft8var/gen_ft8wavevar.f90
+    ${LIB}/ft8var/genft8sdvar.f90
+    ${LIB}/ft8var/jt65_mod2var.f90
+    ${LIB}/ft8var/jt65_mod5.f90
+    ${LIB}/ft8var/jt65_mod9.f90
+    ${LIB}/ft8var/msgparservar.f90
+    ${LIB}/ft8var/osd174_91var.f90
+    ${LIB}/ft8var/packjt77sdvar.f90
+    ${LIB}/ft8var/partint.f90
+    ${LIB}/ft8var/partintft8.f90
+    ${LIB}/ft8var/rms_augapvar.f90
+    ${LIB}/ft8var/searchcallsvar.f90
+    ${LIB}/ft8var/subtractft8var.f90
+    ${LIB}/ft8var/sync8var.f90
+    ${LIB}/ft8var/sync8dvar.f90
+    ${LIB}/ft8var/tone8.f90
+    ${LIB}/ft8var/tone8myc.f90
+    ${LIB}/ft8var/tonesdvar.f90
+    ${LIB}/ft8var/twkfreq1var.f90
+    # Its `!$omp threadprivate` (recent_callsvar, n28avar, n28bvar) is only real when compiled
+    # -fopenmp, and ft8var's threads call its *var routines.
+    ${LIB}/77bit/packjt77.f90
+)
+set_source_files_properties(${LIBTEMPO_OPENMP_SOURCES}
+    PROPERTIES COMPILE_OPTIONS "-fopenmp")
+
 add_library(tempo_static STATIC ${LIBTEMPO_SOURCES})
 add_library(tempo_shared SHARED ${LIBTEMPO_SOURCES})
 set_target_properties(tempo_static PROPERTIES OUTPUT_NAME tempo)
@@ -612,6 +762,13 @@ foreach(tgt tempo_static tempo_shared)
     target_link_libraries(${tgt} PUBLIC ${FFTW3F_LIBRARIES})
     target_link_directories(${tgt} PUBLIC ${FFTW3F_LIBRARY_DIRS})
     target_link_libraries(${tgt} PUBLIC ${BOOST_CRC_TARGET})
+    # Whatever links libtempo (the shared library itself, the verification executables) links
+    # the OpenMP runtime too. Cargo builds only tempo_static and links libgomp itself.
+    # tempo_shared links as C++ (crc14.cpp makes CXX its link language: g++ drives the link), so
+    # a GNU C++ link takes -fopenmp as well: without it a MinGW DLL, which must resolve every
+    # symbol, fails on GOMP_parallel (a Linux .so leaves them undefined and links).
+    target_link_options(${tgt} PUBLIC
+        $<$<OR:$<LINK_LANGUAGE:Fortran>,$<LINK_LANG_AND_ID:CXX,GNU>>:-fopenmp>)
     # crc14.cpp #include <boost/crc.hpp>: add host Boost headers as a last-resort
     # search path (cross build only; empty natively).
     if(BOOST_HEADER_FLAG)

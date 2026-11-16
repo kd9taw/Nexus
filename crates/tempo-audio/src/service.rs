@@ -4198,9 +4198,11 @@ const TCI_TAP_RING_CAP: usize = 1 << 15;
 /// either side (see `RadioLoop::tx_routing_quiet`): longer than any tick plus the write.
 const ROUTING_GUARD_MS: f64 = 1_000.0;
 
-/// What a decode worker runs: the ordinary per-slot job, or one JS8 multi-speed job.
+/// What a decode worker runs: the ordinary per-slot job, or one JS8 multi-speed job. The slot
+/// job is boxed: it carries the period's audio and the decoder's whole request, several times the
+/// size of the other variant.
 enum WorkerJob {
-    Slot(DecodeJob),
+    Slot(Box<DecodeJob>),
     Js8Multi(Js8MultiJob),
 }
 
@@ -4227,7 +4229,7 @@ fn run_worker_job(job: WorkerJob, out: &mut dyn FnMut(WorkerOut)) {
     }
     match job {
         WorkerJob::Slot(j) => {
-            let result = run_decode_job_streaming(j, &mut Forward(out));
+            let result = run_decode_job_streaming(*j, &mut Forward(out));
             out(WorkerOut::Done(result));
         }
         WorkerJob::Js8Multi(j) => {
@@ -17891,7 +17893,7 @@ impl RadioLoop {
                             std::time::Instant::now() + Duration::from_secs_f64(left_ms / 1000.0),
                         );
                     }
-                    self.decode.dispatch(WorkerJob::Slot(job));
+                    self.decode.dispatch(WorkerJob::Slot(Box::new(job)));
                     self.decode_in_flight = true;
                 }
             }
@@ -18020,7 +18022,7 @@ impl RadioLoop {
                             .key_boundary_tx(&mut eng, rig, backend, now, slot, false, None, lead);
                     }
                     let job = eng.build_decode_job(frame, slot, DecodePass::Boundary);
-                    self.decode.dispatch(WorkerJob::Slot(job));
+                    self.decode.dispatch(WorkerJob::Slot(Box::new(job)));
                     self.decode_in_flight = true;
                     // TX decision (when not already keyed above) deferred until this
                     // result is drained (next ticks).
@@ -18264,7 +18266,7 @@ impl RadioLoop {
         let job = eng
             .build_decode_job(frame, slot + 1, DecodePass::Residual)
             .with_give_up_at(std::time::Instant::now() + Duration::from_secs_f64(left_ms / 1000.0));
-        self.decode.dispatch(WorkerJob::Slot(job));
+        self.decode.dispatch(WorkerJob::Slot(Box::new(job)));
         self.decode_in_flight = true;
     }
 
@@ -21800,6 +21802,7 @@ mod tests {
     mod tx_extras;
     mod tx_unit_ends;
     mod udp_decode_time;
+    mod udp_low_confidence;
     mod udp_requests;
     mod wfview;
     mod yaesu_alc;
@@ -22711,7 +22714,7 @@ mod tests {
             4,
             DecodePass::Boundary,
         );
-        worker.dispatch(WorkerJob::Slot(job));
+        worker.dispatch(WorkerJob::Slot(Box::new(job)));
         // Wait (bounded) for the worker to finish — it runs on its own thread, behind the one
         // process-wide modem lock, which another test's decode can hold for over a second.
         let mut result = None;
@@ -22742,6 +22745,10 @@ mod tests {
     fn in_flight_guard_serializes_dispatch() {
         let mut eng = Engine::new("KD9TAW", "EN52", 0);
         eng.set_tier(Tier::Ft8);
+        // The standard decoder's full pass, as `wsjt_engine`'s.
+        let mut st = eng.settings().clone();
+        st.ft8_decoder = tempo_app::settings::DecoderStyle::Standard;
+        eng.apply_settings(st);
         let worker = DecodeWorker::spawn();
         let mut in_flight = false;
 
@@ -22750,21 +22757,21 @@ mod tests {
         assert!(wants);
         let mut dispatched = 0;
         if wants && !in_flight {
-            worker.dispatch(WorkerJob::Slot(eng.build_decode_job(
+            worker.dispatch(WorkerJob::Slot(Box::new(eng.build_decode_job(
                 vec![0.0f32; eng.active_capture_samples()],
                 1,
                 DecodePass::Boundary,
-            )));
+            ))));
             in_flight = true;
             dispatched += 1;
         }
         // A second boundary arriving before the first drains must NOT dispatch.
         if wants && !in_flight {
-            worker.dispatch(WorkerJob::Slot(eng.build_decode_job(
+            worker.dispatch(WorkerJob::Slot(Box::new(eng.build_decode_job(
                 vec![0.0f32; eng.active_capture_samples()],
                 2,
                 DecodePass::Boundary,
-            )));
+            ))));
             dispatched += 1;
         }
         assert_eq!(
@@ -26045,6 +26052,7 @@ mod tests {
             qual: 1.0,
             rv: None,
             raw: None,
+            unchecked: false,
             mode,
         }
     }
@@ -34660,6 +34668,7 @@ mod tests {
             // Read what went on the air whole: a rover or `TU; ` over is ours, not a false decode.
             activity: true,
             partial: false,
+            jtdx: None,
         };
         NativeSource::from_kind(kind)
             .decode_a7(&req, false)
@@ -34672,7 +34681,18 @@ mod tests {
     fn wsjt_engine(tier: Tier) -> Arc<Mutex<Engine>> {
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
         engine.lock().unwrap().set_tier(tier);
+        standard_ft8_decoder(&engine);
         engine
+    }
+
+    /// Run FT8's full pass on WSJT-X's standard decoder: the pass schedule these tests pin (the
+    /// early pass, the 47 step, the full pass landing before the boundary, the rescue) is its.
+    /// The JTDX-style decoder's own schedule is tested apart.
+    fn standard_ft8_decoder(engine: &Arc<Mutex<Engine>>) {
+        let mut e = engine.lock().unwrap();
+        let mut st = e.settings().clone();
+        st.ft8_decoder = tempo_app::settings::DecoderStyle::Standard;
+        e.apply_settings(st);
     }
 
     /// Put W9XYZ on even slots, mid-QSO with K1ABC: the R-report is the next over (K1ABC's

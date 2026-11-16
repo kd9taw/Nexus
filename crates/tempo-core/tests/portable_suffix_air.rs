@@ -168,6 +168,7 @@ fn dec(text: &str, snr: i32) -> modes::Decode {
         qual: 1.0,
         rv: None,
         raw: None,
+        unchecked: false,
         mode: Some(ModeKind::Ft8),
     }
 }

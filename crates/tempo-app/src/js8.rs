@@ -1743,6 +1743,7 @@ mod tests {
             rv: None,
             mode: Some(modes::ModeKind::Js8 { speed }),
             raw: Some(*word.as_bytes()),
+            unchecked: false,
         }
     }
 
@@ -1914,6 +1915,7 @@ mod tests {
         // Rows that are not JS8 pass straight through, untouched.
         let ft8 = modes::Decode {
             raw: None,
+            unchecked: false,
             mode: Some(modes::ModeKind::Ft8),
             ..d.clone()
         };

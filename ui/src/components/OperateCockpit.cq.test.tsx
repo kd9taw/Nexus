@@ -26,6 +26,7 @@ const startRunning = vi.fn(async (_dir?: string | null): Promise<null> => null)
 const pushToast = vi.fn()
 
 vi.mock('../api', () => ({
+  setDxBox: vi.fn(async () => undefined),
   qrzLookup: vi.fn(async () => null),
   resolveEntity: vi.fn(async () => null),
   getSettings: vi.fn(async () => ({})),

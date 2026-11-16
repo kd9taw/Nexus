@@ -532,6 +532,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("set_data_folder",                RefusedHere, "Moves the shack's data folder at its next launch."),
     ("set_decode_depth",               RunsAtShack, "The shack's FT decode depth."),
     ("set_default_radio",              RunsAtShack, "The shack's band routing."),
+    ("set_dx_box",                     RunsAtShack, "The shack's DX Call box, which only its JTDX-style FT8 decoder reads; keys nothing."),
     ("set_dxcc_by_id",                 RunsAtShack, "Edits a contact in the shack's logbook."),
     ("set_eqsl_password",              RefusedHere, "Credentials are set at the shack only."),
     ("set_experience_level",           RunsAtShack, "The shack's answer to how much its operator has done; it picks starting screens and keys nothing."),

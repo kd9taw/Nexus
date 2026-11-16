@@ -1,3 +1,5 @@
+! MODIFIED FOR NEXUS (KD9TAW, 2026): getmsg is ADDED at the end of this module, copied unchanged
+! from WSJT-X 3.0.2 (see the note there). Nothing else in this file is changed.
 module ft8_a7
 
   parameter(MAXDEC=200)
@@ -374,5 +376,54 @@ subroutine ft8_a7d(dd0,newdat,call_1,call_2,grid4,xdt,f1,xbase,nharderrors,dmin,
 
   return
 end subroutine ft8_a7d
+
+! ---- BEGIN WSJT-X 3.0.2 ADDITION (MODIFIED FOR NEXUS) ----
+! getmsg, from WSJT-X 3.0.2 lib/ft8/ft8_a7.f90 (git blob 7c7f0288c1e7195802b3997e44fb6a75a4f66eef) lines 377-419,
+! unchanged. ft8_a8d.f90 (the multithreaded decoder's a8 pass) calls it; this module is the
+! older copy the standard decoder is built on, which does not have it.
+subroutine getmsg(i,mycall,hiscall,hisgrid,msg)
+
+  character*12 mycall,hiscall
+  character*6 hisgrid
+  character*37 msg
+  logical my_std,his_std
+
+  call stdcall(mycall,my_std)
+  call stdcall(hiscall,his_std)
+
+  isnr=0
+  msg=trim(mycall)//' '//trim(hiscall)
+  if(.not.my_std) then
+     if(i.eq.1 .or. i.ge.6)  msg='<'//trim(mycall)//'> '//trim(hiscall)
+     if(i.ge.2 .and. i.le.4) msg=trim(mycall)//' <'//trim(hiscall)//'>'
+  else if(.not.his_std) then
+     if(i.le.4 .or. i.eq.6) msg='<'//trim(mycall)//'> '//trim(hiscall)
+     if(i.ge.7) msg=trim(mycall)//' <'//trim(hiscall)//'>'
+  endif
+  j0=len(trim(msg))+2
+  if(i.eq.2) msg(j0:j0+2)='RRR'
+  if(i.eq.3) msg(j0:j0+3)='RR73'
+  if(i.eq.4) msg(j0:j0+1)='73'
+  if(i.eq.5) then
+     if(his_std) msg='CQ '//trim(hiscall)//' '//hisgrid(1:4)
+     if(.not.his_std) msg='CQ '//trim(hiscall)
+  endif
+  if(i.eq.6 .and. his_std) msg(j0:j0+3)=hisgrid(1:4)
+  if(i.ge.7 .and. i.le.206) then
+     isnr = -50 + (i-7)/2
+     if(iand(i,1).eq.1) then
+        write(msg(j0:j0+2),'(i3.2)') isnr
+        if(msg(j0:j0).eq.' ') msg(j0:j0)='+'
+     else
+        write(msg(j0:j0+3),'("R",i3.2)') isnr
+        if(msg(j0+1:j0+1).eq.' ') msg(j0+1:j0+1)='+'
+     endif
+  endif
+
+  if(abs(isnr).gt.30) msg=''
+
+  return
+end subroutine getmsg
+! ---- END WSJT-X 3.0.2 ADDITION ----
 
 end module ft8_a7

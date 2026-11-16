@@ -228,6 +228,7 @@ fn decode_file(path: &str, frontend: Frontend, activity: bool) -> std::io::Resul
             ap_cq_only: false, // stock: all AP hypotheses
             activity,          // stock off: no Special Operating Activity (`--activity` sets it)
             partial: false,    // full slot audio, not the early partial pass
+            jtdx: None,
         };
         let mut decs = src.decode_a7(&req, true); // authoritative boundary pass
         decs.sort_by(|a, b| {

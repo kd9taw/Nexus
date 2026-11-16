@@ -55,6 +55,8 @@ impl Over {
             })
         });
         let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        // The standard decoder's full pass: these scenes time its passes.
+        standard_ft8_decoder(&engine);
         let period_ms = {
             let mut e = engine.lock().unwrap();
             e.set_license_class("extra");

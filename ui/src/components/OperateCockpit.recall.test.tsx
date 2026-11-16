@@ -103,6 +103,7 @@ const askLog = vi.fn(async (q: LogQuestion) => (await import('../features/logAns
 // itself needs. vi.mock replaces the whole module, so anything omitted is `undefined` at
 // the call site — `resolveEntity` learned that the hard way in CockpitRecall.test.tsx.
 vi.mock('../api', () => ({
+  setDxBox: vi.fn(async () => undefined),
   // The card asks the engine: one question per call it shows, answered over `engineLog`'s log.
   askLog: (q: LogQuestion) => askLog(q),
   qrzLookup: (...a: unknown[]) => qrzLookup(...(a as [])),

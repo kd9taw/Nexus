@@ -1,10 +1,18 @@
-//! Safe Rust wrapper over `libtempo`'s native FT4 decoder.
+//! Safe Rust wrapper over `libtempo`'s native FT4 decoders.
 //!
 //! FT4 (WSJT-X) is the fast contest sibling of FT8: 7.5 s T/R, 4-GFSK, 103
-//! channel symbols, LDPC(174,91) + CRC-14. This wraps the vendored WSJT-X GPL
-//! decoder (`ft4_decode_frame` in `ft4_cabi.f90`), which drives the clean OO
-//! `ft4_decoder` (getcandidates4 → sync4d → get_ft4_bitmetrics → decode174_91 →
-//! subtract).
+//! channel symbols, LDPC(174,91) + CRC-14. Two decoders are linked:
+//!
+//! * **Standard**: the vendored WSJT-X 3.0.2 decoder (`ft4_decode_frame` in `ft4_cabi.f90`),
+//!   which drives the clean OO `ft4_decoder` (getcandidates4 → sync4d → get_ft4_bitmetrics →
+//!   decode174_91 → subtract). [`decode_frame`] / [`decode_frame_streaming`].
+//! * **JTDX-style**: JTDX 2.2.159's FT4 decoder (`ft4_jtdx_decode_frame_cb` in
+//!   `ft4jtdx_cabi.f90`): up to 100 candidates at sync 1.2, BP 40 iterations then OSD depth 3,
+//!   a DT search centred on the running average DT of earlier periods, and JTDX's false-decode
+//!   checks against the ALLCALL7 callsign database. [`decode_frame_jtdx`] /
+//!   [`decode_frame_streaming_jtdx`]. It carries that average DT from period to period;
+//!   [`reset_jtdx`] clears it, as JTDX does on a mode change. Every decode either decoder reports
+//!   passed the CRC: JTDX's FT4 has no unchecked ("hint") decodes.
 //!
 //! # Thread safety
 //! Not thread-safe; serializes behind [`tempo_fast_sys::MODEM_LOCK`] — the single lock
@@ -34,6 +42,10 @@ pub struct Decode {
     pub nap: i32,
     /// Decode quality (1.0 = perfect).
     pub qual: f32,
+    /// A decode Nexus does not act on by itself: shown, marked, never auto-sequenced, auto-logged
+    /// or uploaded; the operator can still click it. Only the JTDX-style decoder sets it, on an
+    /// OSD decode of low quality (`ft4jtdx_cabi.f90`); the Standard decoder never does.
+    pub unchecked: bool,
 }
 
 // Stock WSJT-X allows 200 decodes per period (decodedtext MAXDEC); matching it
@@ -126,6 +138,7 @@ pub fn decode_frame(
     ap_cq_only: bool,
 ) -> Vec<Decode> {
     decode_frame_impl(
+        Engine::Standard,
         iwave,
         nfa,
         nfb,
@@ -137,6 +150,91 @@ pub fn decode_frame(
         ap_cq_only,
         None,
     )
+}
+
+/// [`decode_frame`] with the JTDX-style decoder (see the crate header). `ap_cq_only` is JTDX's
+/// "stop hint": AP restricted to the CQ hypothesis, as for the Standard decoder. `swl` is JTDX's
+/// SWL mode: a wider DT search, about -1.2..+1.7 s where the default is -1.0..+1.4 s (both
+/// shifted by the running average DT).
+///
+/// # Panics
+/// Panics if `iwave.len() < NMAX`.
+#[allow(clippy::too_many_arguments)]
+pub fn decode_frame_jtdx(
+    iwave: &[i16],
+    nfa: i32,
+    nfb: i32,
+    ndepth: i32,
+    mycall: &str,
+    hiscall: &str,
+    nqso_progress: i32,
+    nfqso: i32,
+    ap_cq_only: bool,
+    swl: bool,
+) -> Vec<Decode> {
+    decode_frame_impl(
+        Engine::Jtdx { swl },
+        iwave,
+        nfa,
+        nfb,
+        ndepth,
+        mycall,
+        hiscall,
+        nqso_progress,
+        nfqso,
+        ap_cq_only,
+        None,
+    )
+}
+
+/// [`decode_frame_streaming`] with the JTDX-style decoder: each decode is handed to `found` the
+/// moment the decoder finds it, the candidates within 20 Hz of `nfqso` first, as JTDX orders
+/// them. The same rules for `found` apply.
+///
+/// # Panics
+/// Panics if `iwave.len() < NMAX`, or if `found` panicked.
+#[allow(clippy::too_many_arguments)]
+pub fn decode_frame_streaming_jtdx(
+    iwave: &[i16],
+    nfa: i32,
+    nfb: i32,
+    ndepth: i32,
+    mycall: &str,
+    hiscall: &str,
+    nqso_progress: i32,
+    nfqso: i32,
+    ap_cq_only: bool,
+    swl: bool,
+    found: &mut dyn FnMut(&Decode),
+) -> Vec<Decode> {
+    decode_frame_impl(
+        Engine::Jtdx { swl },
+        iwave,
+        nfa,
+        nfb,
+        ndepth,
+        mycall,
+        hiscall,
+        nqso_progress,
+        nfqso,
+        ap_cq_only,
+        Some(found),
+    )
+}
+
+/// Clear the JTDX-style decoder's running average DT, as JTDX does on a mode change. Call it
+/// when the radio changes mode; the next period's DT search is centred on 0 again.
+pub fn reset_jtdx() {
+    let _guard = modem_lock();
+    // SAFETY: no arguments; the modem lock is held, on the thread its state lives on.
+    ft8::on_decoder_thread_wait(|| unsafe { tempo_fast_sys::ft4_jtdx_reset() })
+}
+
+/// Which linked decoder [`decode_frame_impl`] runs.
+#[derive(Clone, Copy)]
+enum Engine {
+    Standard,
+    Jtdx { swl: bool },
 }
 
 /// [`decode_frame`], handing each decode to `found` the moment the decoder finds it, as WSJT-X's
@@ -164,6 +262,7 @@ pub fn decode_frame_streaming(
     found: &mut dyn FnMut(&Decode),
 ) -> Vec<Decode> {
     decode_frame_impl(
+        Engine::Standard,
         iwave,
         nfa,
         nfb,
@@ -206,6 +305,7 @@ unsafe extern "C" fn on_found(
 
 #[allow(clippy::too_many_arguments)]
 fn decode_frame_impl(
+    engine: Engine,
     iwave: &[i16],
     nfa: i32,
     nfb: i32,
@@ -222,6 +322,21 @@ fn decode_frame_impl(
         "decode_frame needs at least {NMAX} samples, got {}",
         iwave.len()
     );
+    if let Engine::Jtdx { swl } = engine {
+        return decode_jtdx(
+            iwave,
+            nfa,
+            nfb,
+            ndepth,
+            mycall,
+            hiscall,
+            nqso_progress,
+            nfqso,
+            ap_cq_only,
+            swl,
+            found,
+        );
+    }
     let myc = std::ffi::CString::new(mycall).unwrap_or_default();
     let hisc = std::ffi::CString::new(hiscall).unwrap_or_default();
     let mut out = vec![tempo_fast_sys::Ft4DecodeT::default(); MAX_DECODES];
@@ -229,8 +344,9 @@ fn decode_frame_impl(
     let mut stream = found.map(|found| Stream { found, panic: None });
     let n = {
         let _guard = modem_lock();
-        match stream.as_mut() {
-            None => unsafe {
+        match (engine, stream.as_mut()) {
+            (Engine::Jtdx { .. }, _) => unreachable!("the JTDX-style decoder returned above"),
+            (Engine::Standard, None) => unsafe {
                 tempo_fast_sys::ft4_decode_frame(
                     iwave.as_ptr(),
                     nfa,
@@ -245,7 +361,7 @@ fn decode_frame_impl(
                     out.len() as i32,
                 )
             },
-            Some(stream) => unsafe {
+            (Engine::Standard, Some(stream)) => unsafe {
                 tempo_fast_sys::ft4_decode_frame_cb(
                     iwave.as_ptr(),
                     nfa,
@@ -270,7 +386,123 @@ fn decode_frame_impl(
     if n <= 0 {
         return Vec::new();
     }
-    out.iter().take(n as usize).map(from_record).collect()
+    out.iter()
+        .take((n as usize).min(MAX_DECODES))
+        .map(from_record)
+        .collect()
+}
+
+/// What the decoder thread sends back while a JTDX-style decode runs.
+enum Reply {
+    /// A decode the decoder has just accepted.
+    Found(Decode),
+    /// The decode has returned: its decodes, in the decoder's order.
+    Done(Vec<Decode>),
+}
+
+/// The modem's callback for a JTDX-style decode, on the decoder thread: each decode goes to the
+/// caller's thread at once.
+unsafe extern "C" fn on_jtdx_found(
+    user: *mut std::os::raw::c_void,
+    rec: *const tempo_fast_sys::Ft8VarDecodeT,
+) -> std::os::raw::c_int {
+    if !rec.is_null() {
+        // SAFETY: `user` is the job's reply sender, alive until the decode returns; `rec` is a
+        // record the modem has just written.
+        let reply = unsafe { &*user.cast::<std::sync::mpsc::Sender<Reply>>() };
+        // The caller stops listening only after `Done`, so a send cannot fail mid-decode.
+        let _ = reply.send(Reply::Found(from_jtdx_record(unsafe { &*rec })));
+    }
+    0
+}
+
+/// The JTDX-style decode. It calls the JTDX-style FT8 decoder's false-decode checks, which share
+/// that decoder's module state and keep large arrays on the stack (they are compiled -fopenmp),
+/// so it runs on that decoder's own thread (`ft8::on_decoder_thread_wait`), as every call into
+/// that code does. That call waits until the decode returns, so a short-lived helper thread makes
+/// it while this thread hands each decode to `found` as it arrives, holding the modem lock
+/// throughout, exactly as `ft8::decode_frame_var_raw` streams.
+#[allow(clippy::too_many_arguments)]
+fn decode_jtdx(
+    iwave: &[i16],
+    nfa: i32,
+    nfb: i32,
+    ndepth: i32,
+    mycall: &str,
+    hiscall: &str,
+    nqso_progress: i32,
+    nfqso: i32,
+    ap_cq_only: bool,
+    swl: bool,
+    found: Option<&mut dyn FnMut(&Decode)>,
+) -> Vec<Decode> {
+    let myc = std::ffi::CString::new(mycall).unwrap_or_default();
+    let hisc = std::ffi::CString::new(hiscall).unwrap_or_default();
+    let iwave = iwave[..NMAX].to_vec();
+    let stream = found.is_some();
+    let _guard = modem_lock();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        ft8::on_decoder_thread_wait(move || {
+            let mut reply = tx;
+            let mut out = vec![tempo_fast_sys::Ft8VarDecodeT::default(); MAX_DECODES];
+            let cb: Option<tempo_fast_sys::Ft8VarDecodeCallback> =
+                if stream { Some(on_jtdx_found) } else { None };
+            // SAFETY: iwave holds NMAX samples and `out` MAX_DECODES records; the callback's
+            // `user` is `reply`, alive across the call; the caller holds the modem lock until it
+            // has `Done`.
+            let n = unsafe {
+                tempo_fast_sys::ft4_jtdx_decode_frame_cb(
+                    iwave.as_ptr(),
+                    nfa,
+                    nfb,
+                    ndepth,
+                    myc.as_ptr(),
+                    hisc.as_ptr(),
+                    nqso_progress,
+                    nfqso,
+                    ap_cq_only as i32,
+                    swl as i32,
+                    out.as_mut_ptr(),
+                    out.len() as i32,
+                    cb,
+                    (&mut reply as *mut std::sync::mpsc::Sender<Reply>).cast(),
+                )
+            };
+            out.truncate(n.clamp(0, MAX_DECODES as i32) as usize);
+            let _ = reply.send(Reply::Done(out.iter().map(from_jtdx_record).collect()));
+        })
+    });
+    let mut found = found;
+    let mut panic = None;
+    let all = loop {
+        match rx.recv() {
+            Ok(Reply::Found(d)) => {
+                if let (Some(found), None) = (found.as_mut(), panic.as_ref()) {
+                    if let Err(e) =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| found(&d)))
+                    {
+                        panic = Some(e);
+                    }
+                }
+            }
+            Ok(Reply::Done(all)) => break all,
+            Err(_) => break Vec::new(),
+        }
+    };
+    if let Err(e) = worker.join() {
+        std::panic::resume_unwind(e);
+    }
+    if let Some(e) = panic {
+        std::panic::resume_unwind(e);
+    }
+    all
+}
+
+/// Load the callsign database (`ALLCALL7.TXT`) from `dir` for the JTDX-style decoders' checks,
+/// once per process; see `ft8::var_load_callsign_db`. Returns whether it is valid.
+pub fn load_callsign_db(dir: &std::path::Path) -> bool {
+    ft8::var_load_callsign_db(dir)
 }
 
 /// One modem record as a [`Decode`].
@@ -283,6 +515,15 @@ fn from_record(r: &tempo_fast_sys::Ft4DecodeT) -> Decode {
         freq: r.freq,
         nap: r.nap,
         qual: r.qual,
+        unchecked: false,
+    }
+}
+
+/// One JTDX-style record (ft8var's shape: the FT4 fields, then `unchecked`) as a [`Decode`].
+fn from_jtdx_record(r: &tempo_fast_sys::Ft8VarDecodeT) -> Decode {
+    Decode {
+        unchecked: r.unchecked != 0,
+        ..from_record(&r.rec)
     }
 }
 

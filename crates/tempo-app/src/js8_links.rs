@@ -596,6 +596,7 @@ mod tests {
                 speed: Js8Speed::Normal,
             }),
             raw: Some(*word.as_bytes()),
+            unchecked: false,
         }
     }
 

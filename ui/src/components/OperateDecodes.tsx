@@ -1266,8 +1266,16 @@ const DecodeRowView = memo(function DecodeRowView({
           {d.message}
           {/* WSJT-X AP / low-confidence markers: dim trailing annotations.
               Both can appear on the same decode (AP-assisted but uncertain). */}
-          {(d.lowConf || d.ap) && (
+          {(d.lowConf || d.ap || d.unchecked) && (
             <span className="decode-confidence-markers">
+              {d.unchecked && (
+                <span
+                  className="decode-marker decode-marker-unchecked"
+                  title={t('operate.decodes.marker.unchecked.title')}
+                >
+                  ^
+                </span>
+              )}
               {d.lowConf && (
                 <span
                   className="decode-marker decode-marker-lc"

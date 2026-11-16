@@ -52,10 +52,14 @@ name = "Nexus"
 path = "src/main.rs"
 
 [lib]
-# The Tauri app logic lives in the library so it can be unit-tested and
-# (on mobile) reused as the entry point. `main.rs` is a thin wrapper.
+# The Tauri app logic lives in the library so it can be unit-tested. `main.rs` is a thin wrapper.
+# An rlib only: the template's staticlib and cdylib are Tauri's mobile entry points, and Nexus
+# builds no mobile app. A cdylib cannot take libtempo's static GNU OpenMP runtime (libgomp.a is
+# not built -fPIC and uses local-exec TLS, which `-shared` refuses: R_X86_64_TPOFF32), and the
+# runtime has to be static (tempo-fast-sys build.rs, link_openmp). The executable is PIE, which
+# takes both.
 name = "tempo_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
