@@ -28,11 +28,17 @@ const LOCALES: Record<string, { cat: Catalog; name: string; old: RegExp; formerl
 }
 /** Strings where the word is NOT the view: a verb ("Program your radios", "Programar con CHIRP") or an on-the-air
  *  awards programme (POTA/SOTA). Each is checked to still be what it is, so this list cannot hide a missed rename. */
+// N3FJP's own menu, "Settings ▸ Application Program Interface", is quoted in English in every language.
+const N3FJP_API_MENU = /Settings ▸ Application Program Interface ▸ TCP API/
 const OTHER_SENSE: Record<string, Record<string, RegExp>> = {
-  en: { 'features.program.oneLine': /^Program your radios — /, 'ota.program.aria': /^Program$/ },
-  de: {},
-  es: { 'program.chirp.title': /^Programar con CHIRP$/ },
-  fr: {},
+  en: {
+    'features.program.oneLine': /^Program your radios — /,
+    'ota.program.aria': /^Program$/,
+    'settings.n3fjp.test.refused': N3FJP_API_MENU,
+  },
+  de: { 'settings.n3fjp.test.refused': N3FJP_API_MENU },
+  es: { 'program.chirp.title': /^Programar con CHIRP$/, 'settings.n3fjp.test.refused': N3FJP_API_MENU },
+  fr: { 'settings.n3fjp.test.refused': N3FJP_API_MENU },
   ja: { 'ota.program.aria': /^プログラム$/ },
 }
 const text = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
