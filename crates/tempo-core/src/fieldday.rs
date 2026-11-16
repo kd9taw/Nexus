@@ -16,7 +16,9 @@
 //! Day's** ([`FtMessages`]): the ARRL VHF contests call `CQ TEST` and exchange the grid, as
 //! WSJT-X's NA VHF Contest mode does, and a contest WSJT-X has no mode for runs the standard
 //! messages. Field Day's own messages, and whatever any tier but FT8 and FT4 sends, are
-//! unchanged.
+//! unchanged. An operator's own contest sends the WSJT-X activity its exchange matches — Field
+//! Day's, NA VHF's, WW Digi's, the RTTY Roundup's or EU VHF's — and the standard messages
+//! otherwise ([`FtMessages::for_contest`]).
 
 use crate::message::Msg;
 use modes::Decode;
@@ -4175,6 +4177,74 @@ pub enum FtMessages {
     /// A contest WSJT-X has no activity for: the standard messages every FT8/FT4 contact
     /// outside a contest uses — a plain CQ, the grid, a report, `R` and a report, RR73, 73.
     Standard,
+    /// WSJT-X's WW Digi activity (`WW_DIGI`), an operator's own grid contest calling `CQ WW`:
+    /// [`NaVhf`](Self::NaVhf)'s messages with `CQ WW` (genCQMsg, mainwindow.cpp 9518). Tx2 is the
+    /// four-character grid in both (genStdMsgs, 9633-9634), Tx1 is off in both (8238-8248), and
+    /// both roger a grid with `R <grid>` (9111-9116). No shipped contest sends it.
+    WwDigi,
+    /// WSJT-X's ARRL RTTY Roundup activity (`RTTY`, "FT RU"), an operator's own contest whose
+    /// exchange is an RST and a serial, or an RST and a state or province, and who asked for it:
+    /// `CQ RU` (genCQMsg, mainwindow.cpp 9517), then `<to> <de> 579 <serial or state>` and its
+    /// rogered form `<to> <de> R 579 <…>` (genStdMsgs, 9638-9647, 9655-9657), the 77-bit RTTY
+    /// contest message (i3=3, packjt77.f90 `pack77_3`). Tx1 is off (8238-8248); RR73 closes and
+    /// the runner answers it with 73 (9168-9215). No shipped contest sends it: the ARRL RTTY
+    /// Roundup itself takes RTTY alone.
+    RttyRoundup,
+    /// WSJT-X's EU VHF Contest activity (`EU_VHF`), an operator's own contest whose exchange is
+    /// RST, serial and a six-character grid: `CQ TEST` (genCQMsg, mainwindow.cpp 9515), the
+    /// standard Tx1 answer (Tx1 stays on, 8250-8253), then `<to> <de> 570001 IO91NP` with BOTH
+    /// calls hashed and its rogered form (genStdMsgs, 9649-9657), the 77-bit EU VHF message
+    /// (i3=5, packjt77.f90 `pack77_5`); RR73, and 73 (processMessage, 9138-9151, 9168-9215). No
+    /// shipped contest sends it.
+    EuVhf,
+}
+
+impl FtMessages {
+    /// The messages an operator's own contest sends on FT8/FT4: the WSJT-X activity its exchange
+    /// has the shape of, as the operator chose it ([`FdRuleset::ft_activity`]), where this build
+    /// sends that activity's messages; the standard messages otherwise.
+    ///
+    /// [`FdRuleset::ft_activity`]: crate::fd_rules::FdRuleset::ft_activity
+    fn of_custom(ruleset: &crate::fd_rules::FdRuleset) -> Self {
+        use crate::fd_rules::custom::FtActivity;
+        match ruleset.ft_activity {
+            Some(FtActivity::FieldDay) => Self::FieldDay,
+            // `NA_VHF` and `ARRL_DIGI` are one set of messages on the air: `CQ TEST` (genCQMsg,
+            // mainwindow.cpp 9514 and 9519) and the four-character grid (genStdMsgs, 9633 and
+            // 9635).
+            Some(FtActivity::NaVhf) => Self::NaVhf,
+            // `WW_DIGI`: the NA VHF messages with `CQ WW` (genCQMsg, 9518; genStdMsgs, 9634).
+            Some(FtActivity::WwDigi) => Self::WwDigi,
+            // `RTTY`: asked for by the operator ([`custom::ft_activity`]).
+            //
+            // [`custom::ft_activity`]: crate::fd_rules::custom::ft_activity
+            Some(FtActivity::RttyRoundup) => Self::RttyRoundup,
+            // `EU_VHF`: RS, serial and a six-character grid, both calls hashed (genStdMsgs, 9649-9653).
+            Some(FtActivity::EuVhf) => Self::EuVhf,
+            None => Self::Standard,
+        }
+    }
+
+    /// The activity `ruleset`'s own stations run, whatever the tier: a shipped contest's by its
+    /// id ([`of_contest`](Self::of_contest)), an operator's own by its exchange
+    /// ([`of_custom`](Self::of_custom)).
+    fn activity(ruleset: &crate::fd_rules::FdRuleset) -> Self {
+        if ruleset.custom {
+            Self::of_custom(ruleset)
+        } else {
+            Self::of_contest(ruleset.event)
+        }
+    }
+
+    /// [`of_contest`](Self::of_contest) for any event id the picker can hold: an operator's own
+    /// contest, installed, by its exchange ([`of_custom`](Self::of_custom)); every other id as
+    /// [`of_contest`](Self::of_contest) has it. What a running contest reports to WSJT-X's UDP
+    /// listeners as its Special Operation Mode.
+    pub fn of_event(event: &str) -> Self {
+        crate::fd_rules::ruleset_by_id(event, crate::fd_rules::CURRENT_RULES_YEAR)
+            .filter(|rs| rs.custom)
+            .map_or_else(|| Self::of_contest(event), Self::of_custom)
+    }
 }
 
 impl FtMessages {
@@ -4199,7 +4269,19 @@ impl FtMessages {
     /// `"FT4"`, `"FT2"`, `"TempoFast"`, …): its contest's own ([`of_contest`](Self::of_contest))
     /// on FT8 and FT4, and Field Day's, unchanged, on every other tier, wherever the rules ban
     /// the mode, and in Winter Field Day.
+    ///
+    /// ⭐ **An operator's own contest never sends Field Day's messages by that fallback**: its
+    /// session has no class or section unless its exchange is Field Day's, so the fallback would
+    /// put `W9XYZ K1ABC` and two blanks on the air. It sends the standard messages there, and on
+    /// FT8 and FT4 the activity its exchange matches ([`of_custom`](Self::of_custom)).
     pub fn for_contest(ruleset: &crate::fd_rules::FdRuleset, mode: &str) -> Self {
+        if ruleset.custom {
+            return if Self::follows_contest(ruleset, mode) {
+                Self::of_custom(ruleset)
+            } else {
+                Self::Standard
+            };
+        }
         if !Self::follows_contest(ruleset, mode) {
             return Self::FieldDay;
         }
@@ -4226,27 +4308,33 @@ impl FtMessages {
     /// mode is `mode` runs WSJT-X's Field Day activity: ARRL Field Day on FT8 and FT4. Field
     /// Day's messages anywhere else (FT1, DX1, FT2, Winter Field Day, a mode the rules ban) are
     /// Nexus's own sequencer's and close as they always have.
+    /// An operator's own contest whose exchange is Field Day's runs that activity too
+    /// ([`activity`](Self::activity)).
     pub fn wsjtx_field_day(ruleset: &crate::fd_rules::FdRuleset, mode: &str) -> bool {
-        Self::follows_contest(ruleset, mode) && Self::of_contest(ruleset.event) == Self::FieldDay
+        Self::follows_contest(ruleset, mode) && Self::activity(ruleset) == Self::FieldDay
     }
 
     /// WSJT-X's own number for this activity, the Special Operation Mode its UDP Status carries
-    /// (`NetworkMessage.hpp`: 0 NONE, 1 NA VHF, 3 FIELD DAY; `mainwindow.cpp`'s
-    /// `statusUpdate` sends `m_specOp` as it is set).
+    /// (`NetworkMessage.hpp` 190-201: 0 NONE, 1 NA VHF, 3 FIELD DAY, 4 RTTY RU, 5 WW DIGI;
+    /// `mainwindow.cpp`'s `statusUpdate` sends `m_specOp` as it is set).
     pub fn special_op(self) -> u8 {
         match self {
             Self::FieldDay => 3,
             Self::NaVhf => 1,
+            Self::WwDigi => 5,
+            Self::RttyRoundup => 4,
+            Self::EuVhf => 2,
             Self::Standard => 0,
         }
     }
 
     /// The CQ a running station with these messages calls from `mycall` (`genCQMsg`,
     /// mainwindow.cpp 9466-9531): `CQ FD` with `mygrid` as Field Day has always sent it,
-    /// `CQ TEST` in the ARRL VHF contests, and where WSJT-X has no activity the CQ the operator
-    /// typed in Tx6, `dir` its direction ("" for a plain CQ), as WSJT-X's normal mode sends its
-    /// Tx6; both with `sent_grid`: the contest's own `session_grid` where it exchanges one, else
-    /// `mygrid` cut to the four characters WSJT-X sends.
+    /// `CQ TEST` in the ARRL VHF contests, `CQ WW` in WW Digi, `CQ RU` in the RTTY Roundup, and
+    /// where WSJT-X has no activity the CQ the operator typed in Tx6, `dir` its direction ("" for
+    /// a plain CQ), as WSJT-X's normal mode sends its Tx6; all with `sent_grid`: the contest's own
+    /// `session_grid` where it exchanges one, else `mygrid` cut to the four characters WSJT-X
+    /// sends.
     ///
     /// ⛔ **A nonstandard `mycall` calls WSJT-X's plain CQ, `CQ <call>`, whatever the messages.**
     /// WSJT-X's `stdCall` (mainwindow.cpp 9541-9552) decides, and for a call that fails it
@@ -4265,6 +4353,10 @@ impl FtMessages {
         let (dir, grid) = match self {
             Self::FieldDay => ("FD", mygrid.to_string()),
             Self::NaVhf => ("TEST", sent_grid(session_grid, mygrid)),
+            Self::WwDigi => ("WW", sent_grid(session_grid, mygrid)),
+            Self::RttyRoundup => ("RU", sent_grid(session_grid, mygrid)),
+            // `CQ TEST` with the grid's four characters (genCQMsg, 9515; `grid.left(4)`, 9491).
+            Self::EuVhf => ("TEST", sent_grid(session_grid, mygrid)),
             Self::Standard => (dir, sent_grid(session_grid, mygrid)),
         };
         Msg::Cq {
@@ -4284,15 +4376,58 @@ impl FtMessages {
         }
         cq.to_text()
     }
+
+    /// ⭐ **The exchange these messages carry after the two calls**, as the sequencer would send
+    /// it now from `session` (its next serial) and the Settings locator `mygrid`: what the custom
+    /// contest builder shows as "sends". Empty for the standard messages, which carry none.
+    pub fn sample_exchange(self, session: &crate::contest::ContestSession, mygrid: &str) -> String {
+        match self {
+            Self::FieldDay => format!("{} {}", session.field("CLASS"), session.field("SECTION")),
+            Self::NaVhf | Self::WwDigi => {
+                crate::qso::air_grid(&sent_grid(session.field("GRID"), mygrid))
+            }
+            // The report WSJT-X sends a station heard at +6 dB, `579`, as its own sample shows.
+            Self::RttyRoundup => format!("{} {}", contest_rst(6), roundup_word(session)),
+            Self::EuVhf => format!(
+                "{}{:04} {}",
+                &contest_rst(6)[..2],
+                eu_vhf_serial(session.serial_now().unwrap_or(1)),
+                eu_vhf_grid(session, mygrid).unwrap_or_default()
+            ),
+            Self::Standard => String::new(),
+        }
+    }
+
+    /// ⭐ **Why these messages cannot carry this station's exchange now**, in the operator's
+    /// words, or `None` where they can: what [`FieldDayStation`] refuses to send rather than send
+    /// it wrong, asked before the contest's Running or S&P is started so the operator hears it
+    /// first. `session` is the contest's (its next serial), `mygrid` the Settings locator.
+    pub fn exchange_refusal(
+        self,
+        session: &crate::contest::ContestSession,
+        mygrid: &str,
+    ) -> Option<String> {
+        match self {
+            Self::RttyRoundup => roundup_refusal(&roundup_word(session)),
+            Self::EuVhf => eu_vhf_grid(session, mygrid).err(),
+            _ => None,
+        }
+    }
 }
 
 /// The grid a contest station sends outside Field Day's messages: the contest's own GRID where it
 /// exchanges one (a rover's "I moved" changes it), else the Settings locator cut to four
 /// characters, as WSJT-X's `my_grid().left(4)` is.
+///
+/// ⚠️ **Four characters either way**: a standard message carries a four-character grid, and
+/// WSJT-X writes `my_grid().left(4)` into every one (genStdMsgs, mainwindow.cpp 9582; genCQMsg,
+/// 9491). A contest whose GRID holds six (an operator's own contest exchanging a six-character
+/// locator) would otherwise send `CQ K1ABC FN42AB`, which the packer can only send as 13
+/// characters of free text. Every shipped contest's GRID holds four, and is sent as it was.
 fn sent_grid(session_grid: &str, mygrid: &str) -> String {
     match session_grid {
         "" => crate::qso::air_grid(mygrid),
-        grid => grid.to_string(),
+        grid => grid.chars().take(4).collect(),
     }
 }
 
@@ -4348,6 +4483,16 @@ pub struct FieldDayStation {
     /// ([`FieldDayLog::mycall`]): the station's call after a change mid-contest
     /// ([`sign_as`](Self::sign_as)). The log keeps its call, so no row already in it changes.
     signed_as: Option<String>,
+    /// The report this station sent the station being worked in a contest message that carries
+    /// one (the RTTY Roundup's `579`), from the SNR it heard that station at, as WSJT-X makes
+    /// it: the row's sent RST. Cleared when the station re-arms.
+    sent_rst: Option<String>,
+    /// A caller's EU VHF exchange, remembered until their RR73 lets us log it.
+    peer_eu: Option<EuVhf>,
+    /// Why the last over the contest messages called for was not sent
+    /// ([`FtMessages::exchange_refusal`] and the packer's verdict), until the engine takes it
+    /// ([`take_refusal`](Self::take_refusal)).
+    refusal: Option<String>,
     pub log: FieldDayLog,
     pub transcript: Vec<String>,
 }
@@ -4414,6 +4559,9 @@ impl FieldDayStation {
             started_unix: None,
             row_starts: Vec::new(),
             signed_as: None,
+            sent_rst: None,
+            peer_eu: None,
+            refusal: None,
             log: FieldDayLog::new(mycall, session, band),
             transcript: Vec::new(),
         }
@@ -4441,6 +4589,9 @@ impl FieldDayStation {
             started_unix: None,
             row_starts: Vec::new(),
             signed_as: None,
+            sent_rst: None,
+            peer_eu: None,
+            refusal: None,
             log: FieldDayLog::new(mycall, session, band),
             transcript: Vec::new(),
         }
@@ -4470,6 +4621,8 @@ impl FieldDayStation {
         self.started_unix = None;
         self.peer_exch = None;
         self.peer_grid = None;
+        self.sent_rst = None;
+        self.peer_eu = None;
         if running {
             self.state = FdState::CallingCq;
             self.pending = Some(self.cq());
@@ -4505,11 +4658,22 @@ impl FieldDayStation {
     /// or my grid where the contest answers with it. This is the operator's double-click on that
     /// CQ, or a logger's Reply to it, and the only way S&P starts a contact; it answers a station
     /// already in the log too: the operator picked it. The engine never hands it a CQ these
-    /// messages cannot answer (one with no grid, outside Field Day's).
-    pub fn answer_cq(&mut self, de: &str, grid: &str) {
+    /// messages cannot answer (one with no grid, outside Field Day's and the RTTY Roundup's).
+    ///
+    /// `snr` is what the CQ was decoded at: the RTTY Roundup's answer carries a report made from
+    /// it (`579`), as WSJT-X makes its Tx2 from the double-clicked decode's report (genStdMsgs,
+    /// mainwindow.cpp 9619-9622). An answer these messages cannot carry is not sent: the station
+    /// keeps listening and says why ([`take_refusal`](Self::take_refusal)).
+    pub fn answer_cq(&mut self, de: &str, grid: &str, snr: i32) {
         let answer = match self.messages {
             FtMessages::FieldDay => self.my_exch_msg(de, false),
-            FtMessages::NaVhf | FtMessages::Standard => self.grid_answer(de),
+            FtMessages::NaVhf | FtMessages::WwDigi | FtMessages::Standard | FtMessages::EuVhf => {
+                self.grid_answer(de)
+            }
+            FtMessages::RttyRoundup => match self.roundup_over(de, false, snr) {
+                Some(over) => over,
+                None => return,
+            },
         };
         self.engage(de);
         // The standard messages never carry the runner's grid again, so its CQ's is the one
@@ -4728,7 +4892,11 @@ impl FieldDayStation {
     /// alone: no grid, which that message has no room for (`msgtype(t0a, ui->tx1)`, 9627).
     fn grid_answer(&self, to: &str) -> Msg {
         match self.messages {
-            FtMessages::Standard if !crate::message::is_std_call(self.mycall()) => {
+            // EU VHF's Tx1 is the standard Tx1 (genStdMsgs, 9599-9601), which that activity
+            // keeps switched on (8250-8253).
+            FtMessages::Standard | FtMessages::EuVhf
+                if !crate::message::is_std_call(self.mycall()) =>
+            {
                 let (to, de) = self.closing_calls(to);
                 Msg::Grid {
                     to,
@@ -4822,7 +4990,9 @@ impl FieldDayStation {
     /// Process the signals decoded this slot and advance the exchange.
     pub fn observe(&mut self, decodes: &[Decode], slot: u64) {
         match self.messages {
-            FtMessages::NaVhf => return self.observe_na_vhf(decodes, slot),
+            FtMessages::NaVhf | FtMessages::WwDigi => return self.observe_na_vhf(decodes, slot),
+            FtMessages::RttyRoundup => return self.observe_roundup(decodes, slot),
+            FtMessages::EuVhf => return self.observe_eu_vhf(decodes, slot),
             FtMessages::Standard => return self.observe_standard(decodes, slot),
             FtMessages::FieldDay => {}
         }
@@ -4990,9 +5160,10 @@ impl FieldDayStation {
         }
     }
 
-    /// [`observe`](Self::observe) in the ARRL VHF contests: WSJT-X 3.0.2's NA VHF Contest
-    /// sequence (`mainwindow.cpp`). A CQ is answered with the grid, because Tx1 is switched
-    /// off and Tx2 carries the grid (8238-8248, 9633); a caller's grid is rogered with mine as
+    /// [`observe`](Self::observe) in the ARRL VHF contests and WW Digi: WSJT-X 3.0.2's NA VHF
+    /// Contest sequence, which WW Digi runs too (`mainwindow.cpp`). A CQ is answered with the
+    /// grid, because Tx1 is switched off and Tx2 carries the grid (8238-8248, 9633-9634); a
+    /// caller's grid is rogered with mine as
     /// `R <grid>` (Tx3, 9111-9116); `R <grid>` is closed with RR73 (Tx4, 9250-9255); and the
     /// runner answers RR73 or RRR with 73 (Tx5, 9210-9215).
     fn observe_na_vhf(&mut self, decodes: &[Decode], slot: u64) {
@@ -5153,6 +5324,637 @@ impl FieldDayStation {
     }
 }
 
+// ---- WSJT-X's ARRL RTTY Roundup messages, for an operator's own contest --------------------------
+
+impl FieldDayStation {
+    /// Why the last over these messages called for was not sent, once: the engine takes it to
+    /// tell the operator, and stops a run that cannot answer its callers.
+    pub fn take_refusal(&mut self) -> Option<String> {
+        self.refusal.take()
+    }
+
+    /// Why this station's messages cannot carry its exchange now
+    /// ([`FtMessages::exchange_refusal`], from its session and locator), or `None`.
+    pub fn exchange_refusal(&self) -> Option<String> {
+        self.messages
+            .exchange_refusal(&self.log.session, &self.mygrid)
+    }
+
+    /// Bind the contest's sent exchange to `peer` before it goes to them: a serial is issued to a
+    /// station that holds none, and a station that already holds one is given it again
+    /// ([`ContestSession::working`](crate::contest::ContestSession::working)). The contact in
+    /// flight for another station is set aside first, so `peer` never inherits its number.
+    fn bind_exchange(&mut self, peer: &str) {
+        let peer = crate::message::unhash_call(peer).to_ascii_uppercase();
+        let session = &mut self.log.session;
+        if session.in_flight.as_ref().is_some_and(|f| f.peer != peer) {
+            session.park_working();
+        }
+        session.working(&peer, now_unix());
+    }
+
+    /// Refuse the over to `to` these messages called for: nothing is sent, the reason is kept for
+    /// the engine ([`take_refusal`](Self::take_refusal)).
+    fn refuse(&mut self, to: &str, why: String) {
+        self.transcript.push(format!("not sent to {to}: {why}"));
+        self.refusal = Some(why);
+    }
+
+    /// ⭐ **My RTTY Roundup over to `to`**, rogered or not: WSJT-X's Tx2 and Tx3 in its RTTY
+    /// activity (genStdMsgs, mainwindow.cpp 9638-9647, 9655-9657), `<to> <me> [R ]5n9 <exch>`,
+    /// the report made from `snr`, the SNR `to` was heard at ([`contest_rst`]), the exchange the
+    /// session's serial as four digits or its state or province ([`roundup_word`]). `None`, with
+    /// nothing bound or sent, where the message cannot carry it ([`roundup_refusal`], and the
+    /// packer's verdict on the two calls).
+    ///
+    /// ⚠️ **A nonstandard call goes in whole**, as Field Day's does
+    /// ([`my_exch_msg`](Self::my_exch_msg)): the RTTY message packs each call with `pack28`
+    /// (packjt77.f90 `pack77_3`), which hashes a nonstandard call itself, so `W9XYZ K1ABC/QRP 579
+    /// WI` goes out bit for bit as WSJT-X's `W9XYZ <K1ABC/QRP> 579 WI` (genStdMsgs `t0b`, 9597).
+    /// WSJT-X's own bracketed `<PJ4/K1ABC>` fails `chkcall` and is not the RTTY message at all;
+    /// whole, it is.
+    fn roundup_over(&mut self, to: &str, roger: bool, snr: i32) -> Option<Msg> {
+        let to = crate::message::unhash_call(to).to_string();
+        let rst = contest_rst(snr);
+        let word = roundup_word_for(&self.log.session, &to);
+        let text = format!(
+            "{to} {me} {r}{rst} {word}",
+            me = self.mycall(),
+            r = if roger { "R " } else { "" }
+        );
+        let why = roundup_refusal(&word).or_else(|| {
+            (!packs_as(&text, 3)).then(|| {
+                format!(
+                    "{to} and {} cannot both go in WSJT-X's RTTY Roundup message on FT8/FT4, so \
+                     nothing was sent to {to}.",
+                    self.mycall()
+                )
+            })
+        });
+        if let Some(why) = why {
+            self.refuse(&to, why);
+            return None;
+        }
+        self.bind_exchange(&to);
+        self.sent_rst = Some(rst);
+        Some(Msg::Other(text))
+    }
+
+    /// Log the contact with `call`, who sent `rst` and `word` (a serial or a state or province)
+    /// in the RTTY Roundup message, as the contest's two received fields; the sent side is the
+    /// exchange bound to `call` ([`bind_exchange`](Self::bind_exchange)) with the report actually
+    /// sent ([`sent_rst`](Self::sent_rst)). A call that came hashed is logged without the brackets.
+    ///
+    /// A serial is logged as its number (`0013` is `13`), as every serial a row carries is: the
+    /// message's four digits are its form on the air, not the number.
+    fn log_roundup(&mut self, call: &str, rst: &str, word: &str, slot: u64) {
+        let call = crate::message::unhash_call(call).to_string();
+        let session = &self.log.session;
+        let rx = session
+            .role()
+            .receives
+            .iter()
+            .zip([rst.to_string(), word.to_string()])
+            .filter_map(|(k, v)| {
+                let serial = session
+                    .exchange
+                    .field(k)
+                    .is_some_and(|f| matches!(f.kind, crate::contest::FieldKind::Serial { .. }));
+                let v = match v.parse::<u32>() {
+                    Ok(n) if serial => n.to_string(),
+                    _ => v,
+                };
+                session.exchange.copied(k, &v)
+            })
+            .collect();
+        let mut tx = session.tx_for_row(&call, "DIG");
+        if let Some(sent) = &self.sent_rst {
+            for v in tx.iter_mut().filter(|v| is_rst_slot(session, v.key)) {
+                v.raw = sent.clone();
+            }
+        }
+        let submode = self.log.current_submode.clone();
+        let logged = self
+            .log
+            .log_exchange_at(&call, rx, tx, "DIG", &submode, slot, now_unix());
+        self.log.session.logged(&call);
+        self.note_row_start(logged);
+        self.transcript.push(format!("logged {call} {rst} {word}"));
+    }
+
+    /// [`observe`](Self::observe) in WSJT-X's ARRL RTTY Roundup activity, an operator's own
+    /// contest that asked for it: WSJT-X 3.0.2's sequence in that activity
+    /// (`processMessage`, mainwindow.cpp).
+    ///
+    /// * A message holding `<...>` is passed by, as WSJT-X returns on one in this activity
+    ///   (9098-9099).
+    /// * Running, a caller's exchange to my call is rogered with mine, `R 579 <exch>` (Tx3,
+    ///   9152-9160); one already rogered is logged and closed with RR73 (Tx4, the same branch); a
+    ///   first call with a grid or none is answered with my exchange (Tx2, 9107-9135 and
+    ///   9315-9325), as Field Day's runner answers one.
+    /// * The runner's rogered exchange after mine is logged and closed with RR73 (Tx4); its
+    ///   exchange not rogered is rogered with mine (Tx3).
+    /// * RR73 or RRR after my rogered exchange is logged and answered with 73 (Tx5, 9168-9215).
+    /// * `TU; ` before an exchange is read past, as `DecodedText::messageWords` drops it
+    ///   (decodedtext.cpp 96).
+    ///
+    /// The report sent is made from the SNR the other station was heard at, as WSJT-X makes it.
+    fn observe_roundup(&mut self, decodes: &[Decode], slot: u64) {
+        for d in decodes {
+            if d.message.contains("<...>") {
+                continue;
+            }
+            if let Some(r) = roundup_of(&d.message) {
+                // ⛔ Running, a caller whose call is my own base call is passed by.
+                if self.state == FdState::CallingCq
+                    && crate::message::is_my_base_call(&r.de, self.mycall())
+                {
+                    continue;
+                }
+                let partner = self.to_me(&r.to) && self.from_dx(&r.de);
+                match (self.state, r.roger) {
+                    // NOTE: there is intentionally NO (Listening, Cq) auto-answer arm. S&P listens:
+                    // it never starts a contact on its own; the operator starts one through
+                    // [`answer_cq`](Self::answer_cq).
+                    (FdState::CallingCq, false) if self.to_my_call(&r.to) => {
+                        let Some(over) = self.roundup_over(&r.de, true, d.snr) else {
+                            continue;
+                        };
+                        self.engage(&r.de);
+                        self.peer_exch = Some((r.de.clone(), r.rst.clone(), r.exch.clone()));
+                        self.pending = Some(over);
+                        self.state = FdState::AwaitConfirm;
+                        self.transcript.push(format!(
+                            "caller {} {} {} → R + my exch",
+                            r.de, r.rst, r.exch
+                        ));
+                    }
+                    (FdState::CallingCq, true) if self.to_my_call(&r.to) => {
+                        // The exchange that would have gone to this caller is the one logged as
+                        // sent, as WSJT-X logs its Tx2 (`m_xSent`, 8060-8066).
+                        if self.roundup_over(&r.de, false, d.snr).is_none() {
+                            continue;
+                        }
+                        self.engage(&r.de);
+                        self.log_roundup(&r.de, &r.rst, &r.exch, slot);
+                        self.pending = Some(self.rr73(&r.de));
+                        self.state = FdState::Done;
+                    }
+                    (FdState::AwaitExchange, true) if partner => {
+                        self.log_roundup(&r.de, &r.rst, &r.exch, slot);
+                        self.pending = Some(self.rr73(&r.de));
+                        self.state = FdState::Done;
+                    }
+                    (FdState::AwaitExchange, false) if partner => {
+                        let Some(over) = self.roundup_over(&r.de, true, d.snr) else {
+                            continue;
+                        };
+                        self.peer_exch = Some((r.de.clone(), r.rst.clone(), r.exch.clone()));
+                        self.pending = Some(over);
+                        self.state = FdState::AwaitConfirm;
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            let m = Msg::parse(&d.message);
+            if self.is_my_own_caller(&m) {
+                continue;
+            }
+            match (self.state, &m) {
+                // Running: a first call with a grid (`K1ABC W9XYZ EN52`) or none → my exchange.
+                // Only a caller to my whole call ([`to_my_whole_call`](Self::to_my_whole_call)).
+                (FdState::CallingCq, Msg::Grid { to, de, .. })
+                    if self.to_my_whole_call(to)
+                        && crate::message::is_callsign(crate::message::unhash_call(de)) =>
+                {
+                    let Some(over) = self.roundup_over(de, false, d.snr) else {
+                        continue;
+                    };
+                    self.engage(de);
+                    self.pending = Some(over);
+                    self.state = FdState::AwaitExchange;
+                    self.transcript.push(format!("caller {de} → my exch"));
+                }
+                // My rogered exchange confirmed → log, and close with 73.
+                (FdState::AwaitConfirm, Msg::Rr73 { to, de } | Msg::Rrr { to, de })
+                    if self.to_me(to) && self.from_dx(de) =>
+                {
+                    if let Some((call, rst, word)) = self.peer_exch.take() {
+                        self.log_roundup(&call, &rst, &word, slot);
+                    }
+                    self.pending = Some(self.bye73(de));
+                    self.state = FdState::Done;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+// ---- WSJT-X's EU VHF Contest messages, for an operator's own contest ---------------------------
+
+impl FieldDayStation {
+    /// ⭐ **My EU VHF over to `to`**, rogered or not: WSJT-X's Tx2 and Tx3 in its EU VHF activity
+    /// (genStdMsgs, mainwindow.cpp 9649-9657), `<to> <me> [R ]<rs><serial> <grid6>` — BOTH calls
+    /// hashed, whatever they are (9651), the report's two digits made from `snr` (`rs`, 9623), the
+    /// serial issued to `to` as four digits (9652) and clamped to 2047 as WSJT-X's packer clamps
+    /// it ([`eu_vhf_serial`]), and the six-character locator (9653). `None`, with nothing bound or
+    /// sent, where the message cannot carry it (no six-character locator, or the packer's
+    /// verdict).
+    fn eu_vhf_over(&mut self, to: &str, roger: bool, snr: i32) -> Option<Msg> {
+        let to = crate::message::unhash_call(to).to_string();
+        let rs = contest_rst(snr)[..2].to_string();
+        let grid = match eu_vhf_grid(&self.log.session, &self.mygrid) {
+            Ok(grid) => grid,
+            Err(why) => {
+                self.refuse(&to, why);
+                return None;
+            }
+        };
+        let serial = eu_vhf_serial(serial_for(&self.log.session, &to).unwrap_or(1));
+        let text = format!(
+            "<{to}> <{me}> {r}{rs}{serial:04} {grid}",
+            me = self.mycall(),
+            r = if roger { "R " } else { "" }
+        );
+        if !packs_as(&text, 5) {
+            let why = format!(
+                "{to} and {} cannot go in WSJT-X's EU VHF message on FT8/FT4, so nothing was \
+                 sent to {to}.",
+                self.mycall()
+            );
+            self.refuse(&to, why);
+            return None;
+        }
+        self.bind_exchange(&to);
+        self.sent_rst = Some(rs);
+        Some(Msg::Other(text))
+    }
+
+    /// Log the contact with `call`, who sent `rs`, `serial` and `grid` in the EU VHF message, as
+    /// the contest's three received fields; the sent side is the exchange bound to `call` with the
+    /// report and the serial as they went on the air (a serial past 2047 went as 2047, which is
+    /// what the other station logs).
+    fn log_eu_vhf(&mut self, call: &str, rs: &str, serial: &str, grid: &str, slot: u64) {
+        let call = crate::message::unhash_call(call).to_string();
+        let session = &self.log.session;
+        let serial = serial
+            .parse::<u32>()
+            .map_or(serial.to_string(), |n| n.to_string());
+        let rx = session
+            .role()
+            .receives
+            .iter()
+            .zip([rs, &serial, grid])
+            .filter_map(|(k, v)| session.exchange.copied(k, v))
+            .collect();
+        let mut tx = session.tx_for_row(&call, "DIG");
+        for v in tx.iter_mut() {
+            let kind = session.exchange.field(v.key).map(|f| f.kind);
+            match kind {
+                Some(crate::contest::FieldKind::Rst { .. }) => {
+                    if let Some(sent) = &self.sent_rst {
+                        v.raw = sent.clone();
+                    }
+                }
+                Some(crate::contest::FieldKind::Serial { .. }) => {
+                    if let Ok(n) = v.raw.parse::<u32>() {
+                        v.raw = eu_vhf_serial(n).to_string();
+                    }
+                }
+                _ => {}
+            }
+        }
+        let submode = self.log.current_submode.clone();
+        let logged = self
+            .log
+            .log_exchange_at(&call, rx, tx, "DIG", &submode, slot, now_unix());
+        self.log.session.logged(&call);
+        self.note_row_start(logged);
+        self.transcript
+            .push(format!("logged {call} {rs} {serial} {grid}"));
+    }
+
+    /// [`observe`](Self::observe) in WSJT-X's EU VHF Contest activity, an operator's own contest
+    /// whose exchange is RST, serial and a six-character grid: WSJT-X 3.0.2's sequence in that
+    /// activity (`processMessage`, mainwindow.cpp).
+    ///
+    /// * A message holding `<...>` is passed by, as WSJT-X returns on one in this activity
+    ///   (9098-9099): a station whose call this decoder has not heard in full cannot be answered.
+    /// * Running, a first call to my call (the standard Tx1, with a grid or none) is answered with
+    ///   my exchange (Tx2, the EU VHF branch at 9138-9142, `nrpt==0`); a caller's exchange is rogered with
+    ///   mine (Tx3, 9147-9150), one already rogered logged and closed with RR73 (Tx4, 9144-9146).
+    /// * The runner's exchange after my Tx1 is rogered with mine (Tx3); its rogered exchange after
+    ///   mine is logged and closed with RR73 (Tx4).
+    /// * RR73 or RRR after my rogered exchange is logged and answered with 73 (Tx5, 9168-9215).
+    ///
+    /// The report sent is made from the SNR the other station was heard at, as WSJT-X makes it.
+    fn observe_eu_vhf(&mut self, decodes: &[Decode], slot: u64) {
+        for d in decodes {
+            if d.message.contains("<...>") {
+                continue;
+            }
+            if let Some(x) = eu_vhf_of(&d.message) {
+                if self.state == FdState::CallingCq
+                    && crate::message::is_my_base_call(&x.de, self.mycall())
+                {
+                    continue;
+                }
+                let partner = self.to_me(&x.to) && self.from_dx(&x.de);
+                let new_caller = self.state == FdState::CallingCq && self.to_my_call(&x.to);
+                match (self.state, x.roger) {
+                    // NOTE: there is intentionally NO (Listening, Cq) auto-answer arm. S&P listens:
+                    // it never starts a contact on its own; the operator starts one through
+                    // [`answer_cq`](Self::answer_cq).
+                    (FdState::CallingCq, false) if new_caller => {
+                        let Some(over) = self.eu_vhf_over(&x.de, true, d.snr) else {
+                            continue;
+                        };
+                        self.engage(&x.de);
+                        self.peer_eu = Some(x.clone());
+                        self.pending = Some(over);
+                        self.state = FdState::AwaitConfirm;
+                    }
+                    (FdState::CallingCq, true) if new_caller => {
+                        if self.eu_vhf_over(&x.de, false, d.snr).is_none() {
+                            continue;
+                        }
+                        self.engage(&x.de);
+                        self.log_eu_vhf(&x.de, &x.rs, &x.serial, &x.grid, slot);
+                        self.pending = Some(self.rr73(crate::message::unhash_call(&x.de)));
+                        self.state = FdState::Done;
+                    }
+                    (FdState::AwaitExchange, true) if partner => {
+                        self.log_eu_vhf(&x.de, &x.rs, &x.serial, &x.grid, slot);
+                        self.pending = Some(self.rr73(crate::message::unhash_call(&x.de)));
+                        self.state = FdState::Done;
+                    }
+                    (FdState::AwaitExchange, false) if partner => {
+                        let Some(over) = self.eu_vhf_over(&x.de, true, d.snr) else {
+                            continue;
+                        };
+                        self.peer_eu = Some(x.clone());
+                        self.pending = Some(over);
+                        self.state = FdState::AwaitConfirm;
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            let m = Msg::parse(&d.message);
+            if self.is_my_own_caller(&m) {
+                continue;
+            }
+            match (self.state, &m) {
+                // Running: the standard Tx1, with a grid or none, to my whole call → my exchange.
+                (FdState::CallingCq, Msg::Grid { to, de, .. })
+                    if self.to_my_whole_call(to)
+                        && crate::message::is_callsign(crate::message::unhash_call(de)) =>
+                {
+                    let Some(over) = self.eu_vhf_over(de, false, d.snr) else {
+                        continue;
+                    };
+                    self.engage(de);
+                    self.pending = Some(over);
+                    self.state = FdState::AwaitExchange;
+                    self.transcript.push(format!("caller {de} → my exch"));
+                }
+                // My rogered exchange confirmed → log, and close with 73.
+                (FdState::AwaitConfirm, Msg::Rr73 { to, de } | Msg::Rrr { to, de })
+                    if self.to_me(to) && self.from_dx(de) =>
+                {
+                    if let Some(x) = self.peer_eu.take() {
+                        self.log_eu_vhf(&x.de, &x.rs, &x.serial, &x.grid, slot);
+                    }
+                    self.pending = Some(self.bye73(de));
+                    self.state = FdState::Done;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// One EU VHF message as the decoder prints it (packjt77.f90 `unpack77`, i3=5, 669-694):
+/// `<to> <de> [R ]<rs><serial> <grid6>`, both calls in brackets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EuVhf {
+    to: String,
+    de: String,
+    roger: bool,
+    rs: String,
+    serial: String,
+    grid: String,
+}
+
+/// The [`EuVhf`] in `text`, or `None`: both calls hashed, the exchange six digits from `520001`
+/// to `594095` (the packer's range, packjt77.f90 1489) printed `i2,i4.4` (format 1022, 690), and a
+/// six-character locator.
+///
+/// ⚠️ Built and read HERE rather than taught to [`Msg`], as [`rogered_grid`] is.
+fn eu_vhf_of(text: &str) -> Option<EuVhf> {
+    let w: Vec<&str> = text.split_whitespace().collect();
+    let (to, de, roger, exch, grid) = match w.as_slice() {
+        [to, de, "R", exch, grid] => (*to, *de, true, *exch, *grid),
+        [to, de, exch, grid] => (*to, *de, false, *exch, *grid),
+        _ => return None,
+    };
+    let hashed = |c: &str| c.starts_with('<') && c.ends_with('>') && c.len() > 2;
+    let n: u32 = exch.parse().ok()?;
+    let exch_ok = exch.len() == 6 && (520_001..=594_095).contains(&n);
+    (hashed(to) && hashed(de) && exch_ok && is_grid6(grid)).then(|| EuVhf {
+        to: to.to_string(),
+        de: de.to_string(),
+        roger,
+        rs: exch[..2].to_string(),
+        serial: exch[2..].to_string(),
+        grid: grid.to_string(),
+    })
+}
+
+/// A six-character Maidenhead locator in the packer's own form: `A`-`R` twice, two digits,
+/// `A`-`X` twice (packjt77.f90 `pack77_5`'s `is_grid6`).
+fn is_grid6(g: &str) -> bool {
+    let b = g.as_bytes();
+    b.len() == 6
+        && (b'A'..=b'R').contains(&b[0])
+        && (b'A'..=b'R').contains(&b[1])
+        && b[2].is_ascii_digit()
+        && b[3].is_ascii_digit()
+        && (b'A'..=b'X').contains(&b[4])
+        && (b'A'..=b'X').contains(&b[5])
+}
+
+/// ⭐ **The serial the EU VHF message carries for `n`**: `n`, or 2047 above it, as WSJT-X's
+/// packer clamps it (`if(iserial.gt.2047) iserial=2047`, packjt77.f90 1511) — the maintainer's
+/// ruling is to match WSJT-X, so a serial past 2047 goes out, and is logged, as 2047.
+fn eu_vhf_serial(n: u32) -> u32 {
+    n.min(2047)
+}
+
+/// The six-character locator the EU VHF message carries — the contest's own GRID where it holds
+/// six characters, else the Settings locator's first six — or why there is none. WSJT-X sends
+/// `my_grid()` whole (genStdMsgs, 9653) and tells the operator its messages "require a
+/// 6-character locator" (mainwindow.cpp 3670-3673); Nexus refuses to send without one.
+fn eu_vhf_grid(session: &crate::contest::ContestSession, mygrid: &str) -> Result<String, String> {
+    let own = session.field("GRID").trim();
+    let grid: String = if own.is_empty() { mygrid.trim() } else { own }
+        .chars()
+        .take(6)
+        .collect::<String>()
+        .to_ascii_uppercase();
+    if is_grid6(&grid) {
+        Ok(grid)
+    } else {
+        Err(format!(
+            "WSJT-X's EU VHF message on FT8/FT4 carries a six-character locator, and yours is \
+             {grid:?}: set all six characters in Settings. Nothing was sent."
+        ))
+    }
+}
+
+/// ⭐ **WSJT-X's report in its contest messages**: `5n9`, `n` the SNR mapped onto 2 to 9 by
+/// `nn=(n+36)/6`, clamped (genStdMsgs, mainwindow.cpp 9619-9622): -30 dB is `529`, -6 is `559`,
+/// +18 and above `599`. C++'s integer division truncates toward zero, as Rust's does.
+pub fn contest_rst(snr: i32) -> String {
+    format!("5{}9", ((snr + 36) / 6).clamp(2, 9))
+}
+
+/// One RTTY Roundup message as the decoder prints it (packjt77.f90 `unpack77`, i3=3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Roundup {
+    to: String,
+    de: String,
+    roger: bool,
+    rst: String,
+    exch: String,
+}
+
+/// The [`Roundup`] in `text`, or `None`: `[TU; ]<to> <de> [R ]5n9 <exch>`, the exchange a serial
+/// of four digits or a state, province or other multiplier word of two or three characters, as
+/// `unpack77` prints them (`cserial` `i4.4`, `cmult`). `TU; ` is read past, as WSJT-X's
+/// `messageWords` drops it (decodedtext.cpp 96).
+///
+/// ⚠️ Built and read HERE rather than taught to [`Msg`], as [`rogered_grid`] is: `Msg::parse`
+/// reads every decode in the app.
+fn roundup_of(text: &str) -> Option<Roundup> {
+    let t = text.trim();
+    let t = t.strip_prefix("TU; ").unwrap_or(t);
+    let w: Vec<&str> = t.split_whitespace().collect();
+    let (to, de, roger, rst, exch) = match w.as_slice() {
+        [to, de, "R", rst, exch] => (*to, *de, true, *rst, *exch),
+        [to, de, rst, exch] => (*to, *de, false, *rst, *exch),
+        _ => return None,
+    };
+    let r = rst.as_bytes();
+    let rst_ok = r.len() == 3 && r[0] == b'5' && (b'2'..=b'9').contains(&r[1]) && r[2] == b'9';
+    let e = exch.as_bytes();
+    let exch_ok = (e.len() == 4 && e.iter().all(u8::is_ascii_digit))
+        || ((2..=3).contains(&e.len())
+            && e[0].is_ascii_uppercase()
+            && e.iter()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
+    (rst_ok
+        && exch_ok
+        && crate::message::looks_like_call(to)
+        && crate::message::looks_like_call(de))
+    .then(|| Roundup {
+        to: to.to_string(),
+        de: de.to_string(),
+        roger,
+        rst: rst.to_string(),
+        exch: exch.to_string(),
+    })
+}
+
+/// Whether `key` is a slot `session`'s exchange declares an RST.
+fn is_rst_slot(session: &crate::contest::ContestSession, key: &str) -> bool {
+    session
+        .exchange
+        .field(key)
+        .is_some_and(|f| matches!(f.kind, crate::contest::FieldKind::Rst { .. }))
+}
+
+/// The serial `session` would send `peer` now, without issuing it: the one in flight to them, the
+/// one they were given before, or the next — or `None` where the exchange has no serial.
+fn serial_for(session: &crate::contest::ContestSession, peer: &str) -> Option<u32> {
+    session.serial_now()?;
+    let peer = peer.trim().to_ascii_uppercase();
+    match &session.in_flight {
+        Some(f) if f.peer == peer => session.serial_now(),
+        _ => Some(
+            session
+                .issued
+                .get(&peer)
+                .copied()
+                .unwrap_or(session.next_serial),
+        ),
+    }
+}
+
+/// The word the RTTY Roundup message carries after the report for `session` sending to `peer`:
+/// its serial as four digits (WSJT-X's `"%4.4d"`, mainwindow.cpp 9642), or its state or
+/// province.
+fn roundup_word_for(session: &crate::contest::ContestSession, peer: &str) -> String {
+    match serial_for(session, peer) {
+        Some(n) => format!("{n:04}"),
+        None => session.field("QTH").trim().to_ascii_uppercase(),
+    }
+}
+
+/// [`roundup_word_for`] the next station: what the builder's sample shows.
+fn roundup_word(session: &crate::contest::ContestSession) -> String {
+    match session.serial_now() {
+        Some(n) => format!("{n:04}"),
+        None => session.field("QTH").trim().to_ascii_uppercase(),
+    }
+}
+
+/// ⭐ **Why the RTTY Roundup message cannot carry `word`**, in the operator's words, or `None`.
+///
+/// * A serial above 7999, or 0: the message's 13-bit exchange holds serials 1 to 7999 and reads
+///   anything above 8000 as a multiplier (packjt77.f90 `pack77_3` and `unpack77`, `nexch`).
+///   Nexus refuses rather than send another number; WSJT-X's own settings box takes 0001 to 7999
+///   (Configuration.cpp 256-258, which also turns away 0100-0109 and the like).
+/// * A state or province the packer has no multiplier for, `DX` above all: the message carries
+///   only `cmult` (packjt77.f90 `pack77_3`), and WSJT-X sends a DX station's serial instead
+///   (mainwindow.cpp 9641-9644), which this exchange has none of.
+fn roundup_refusal(word: &str) -> Option<String> {
+    if !word.is_empty() && word.bytes().all(|c| c.is_ascii_digit()) {
+        let n: u32 = word.parse().unwrap_or(0);
+        return (!(1..=7999).contains(&n)).then(|| {
+            format!(
+                "Your serial {n} cannot go in WSJT-X's RTTY Roundup message on FT8/FT4, which \
+                 carries serials 1 to 7999, so nothing was sent."
+            )
+        });
+    }
+    (!packs_as(&format!("W9XYZ K1ABC 579 {word}"), 3)).then(|| {
+        format!(
+            "Your QTH {word:?} cannot go in WSJT-X's RTTY Roundup message on FT8/FT4, which \
+             carries a US state, a Canadian province or territory, or DC (a DX station sends a \
+             serial, and this exchange has none), so nothing was sent."
+        )
+    })
+}
+
+/// Whether WSJT-X's packer makes `text` a message of type `i3` (packjt77.f90 `pack77`, through
+/// the port the transmitter uses): the check that an over built for a contest message goes out as
+/// that message and not as anything else.
+fn packs_as(text: &str, i3: u8) -> bool {
+    let text = text.to_ascii_uppercase();
+    if text.len() > 37 {
+        return false;
+    }
+    let mut msg = [b' '; 37];
+    msg[..text.len()].copy_from_slice(text.as_bytes());
+    matches!(
+        modes::wsjt77::pack::pack(&msg),
+        Ok(Some(c77)) if c77[74] * 4 + c77[75] * 2 + c77[76] == i3
+    )
+}
+
 /// `<to> <de> R <grid>` — WSJT-X's Tx3 in its grid contests (`genStdMsgs`, mainwindow.cpp
 /// 9657), a standard (i3=1) message with the R bit set.
 ///
@@ -5225,11 +6027,11 @@ pub fn run_loopback_fieldday(
             rxs.observe(&decodes, slot);
             if slot % 2 == 0 && rxs.state == FdState::Listening {
                 let cq = decodes.iter().find_map(|d| match Msg::parse(&d.message) {
-                    Msg::Cq { de, grid, .. } => Some((de, grid)),
+                    Msg::Cq { de, grid, .. } => Some((de, grid, d.snr)),
                     _ => None,
                 });
-                if let Some((de, grid)) = cq {
-                    rxs.answer_cq(&de, &grid);
+                if let Some((de, grid, snr)) = cq {
+                    rxs.answer_cq(&de, &grid, snr);
                 }
             }
             txs.after_tx();
@@ -6392,7 +7194,7 @@ mod tests {
         );
         sp.observe(&[dec("CQ W9XYZ EN37")], 0);
         assert_eq!(sp.state, FdState::Listening, "S&P answers no CQ by itself");
-        sp.answer_cq("W9XYZ", "EN37"); // the operator's double-click
+        sp.answer_cq("W9XYZ", "EN37", -10); // the operator's double-click
         assert_eq!(sp.state, FdState::AwaitExchange);
         assert_eq!(sp.outgoing().unwrap().to_text(), "W9XYZ K2DEF 2A IL");
         sp.observe(&[dec("K2DEF W9XYZ R 3A WI")], 1);
@@ -6413,7 +7215,7 @@ mod tests {
             ContestSession::field_day(FdEvent::ArrlFd, "2A", "IL"),
             "20M",
         );
-        sp.answer_cq("W9XYZ", "EN37");
+        sp.answer_cq("W9XYZ", "EN37", -10);
         // The double-click was a minute ago: a start this test can tell from the log time.
         sp.started_unix = Some(1_000);
         sp.observe(&[dec("K2DEF W9XYZ R 3A WI")], 1);
@@ -6457,7 +7259,7 @@ mod tests {
         let Msg::Cq { de, grid, .. } = Msg::parse(&cq) else {
             panic!("a CQ: {cq}");
         };
-        sp.answer_cq(&de, &grid);
+        sp.answer_cq(&de, &grid, -10);
         assert_eq!(
             sp.state,
             FdState::AwaitExchange,
@@ -6754,7 +7556,7 @@ mod tests {
         let Msg::Cq { de, grid, .. } = Msg::parse(cq) else {
             panic!("a CQ: {cq}");
         };
-        st.answer_cq(&de, &grid);
+        st.answer_cq(&de, &grid, -10);
     }
 
     /// The newest row: call, received fields, sent fields.
@@ -6934,7 +7736,7 @@ mod tests {
                 (FdState::Listening, String::new(), None),
                 "{event}: a CQ heard is not answered"
             );
-            st.answer_cq("W9XYZ", "EN37");
+            st.answer_cq("W9XYZ", "EN37", -10);
             let mut sent = Vec::new();
             for (slot, (_, reply)) in overs.iter().enumerate() {
                 sent.push(next(&st));
@@ -6975,7 +7777,7 @@ mod tests {
             assert!(st.log.log("W9XYZ", "1D", "WI", 0));
         }
         heard.observe(&[dec("CQ FD W9XYZ EN37")], 1);
-        clicked.answer_cq("W9XYZ", "EN37");
+        clicked.answer_cq("W9XYZ", "EN37", -10);
         assert_eq!(next(&heard), "", "S&P passes the CQ by");
         assert_eq!(
             next(&clicked),
@@ -6991,7 +7793,7 @@ mod tests {
     fn a_picked_contact_is_told_apart_until_the_station_rearms() {
         let session = || ContestSession::field_day(FdEvent::ArrlFd, "2B", "EMA");
         let mut clicked = FieldDayStation::search_and_pounce("K1ABC", "FN42", session(), "20M");
-        clicked.answer_cq("W9XYZ", "EN37");
+        clicked.answer_cq("W9XYZ", "EN37", -10);
         clicked.after_tx();
         clicked.observe(&[dec("K1ABC W9XYZ R 1D WI")], 1);
         clicked.after_tx();
@@ -7154,7 +7956,7 @@ mod tests {
             let session = ContestSession::field_day(event, class, "EMA");
             let mut sp = FieldDayStation::search_and_pounce(me, "FN42", session, "20M");
             sp.set_wsjtx_field_day(wsjtx);
-            sp.answer_cq("W9XYZ", "EN37");
+            sp.answer_cq("W9XYZ", "EN37", -10);
             sp.after_tx();
             sp
         };

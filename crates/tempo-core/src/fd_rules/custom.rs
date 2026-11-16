@@ -23,11 +23,11 @@
 //! ([`parse_spec`](super::parse_spec)) and the lookups read the rules table first, so a custom
 //! contest can never shadow a shipped one, nor be shadowed by a download.
 //!
-//! **FT8/FT4.** A custom contest sends WSJT-X's standard messages on FT8/FT4: its id is no
-//! activity [`FtMessages::of_contest`](crate::fieldday::FtMessages::of_contest) knows, and it never
-//! bans a mode, so [`FtMessages::for_contest`](crate::fieldday::FtMessages::for_contest) never
-//! hands it Field Day's. [`ft_shape`] NAMES the WSJT-X contest message an exchange matches, for the
-//! builder to say so; nothing on the air reads it.
+//! **FT8/FT4.** [`ft_shape`] names the WSJT-X contest message an exchange matches, and
+//! [`ft_activity`] the one the operator chose to use; on FT8 and FT4 a custom contest sends that
+//! activity's messages ([`FtMessages::for_contest`](crate::fieldday::FtMessages::for_contest)),
+//! and WSJT-X's standard messages where there is none. It never bans a mode, and on every other
+//! tier it sends the standard messages, never Field Day's.
 
 use super::{
     days_from_civil, table, validate_ruleset, EventWindow, FdRuleset, RulesetSpec,
@@ -100,9 +100,10 @@ pub struct CustomDef {
     /// `WW` (WW Digi). Read by [`ft_shape`] only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ft_cq: Option<String>,
-    /// For an RST + serial exchange: the operator ASKED for WSJT-X's ARRL RTTY Roundup messages
-    /// on FT8/FT4. The builder asks, and the answer defaults to no — an RST and a serial is the
-    /// most common club-contest exchange, and most of those are not meant to run as the Roundup.
+    /// For an RST + serial or an RST + state/province exchange: the operator ASKED for WSJT-X's
+    /// ARRL RTTY Roundup messages on FT8/FT4. The builder asks, and the answer defaults to no (the
+    /// maintainer's ruling: never automatic) — an RST and a serial is the most common club-contest
+    /// exchange, and most of those are not meant to run as the Roundup.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ft_roundup: bool,
     /// `once` (a call once per contest), `band` (once per band) or `band_mode` (once per band
@@ -226,11 +227,12 @@ pub fn ft_shape(def: &CustomDef) -> Option<FtActivity> {
     }
 }
 
-/// ⭐ **The match the operator chose to use** — [`ft_shape`], except that an RST + serial exchange
-/// is the Roundup only when the operator said so ([`CustomDef::ft_roundup`]).
+/// ⭐ **The match the operator chose to use** — [`ft_shape`], except that an exchange of the
+/// Roundup's shape (RST + serial, or RST + state/province) is the Roundup only when the operator
+/// said so ([`CustomDef::ft_roundup`]).
 pub fn ft_activity(def: &CustomDef) -> Option<FtActivity> {
     let found = ft_shape(def)?;
-    if shape(def).as_slice() == ["rst", "serial"] && !def.ft_roundup {
+    if found == FtActivity::RttyRoundup && !def.ft_roundup {
         return None;
     }
     Some(found)
@@ -750,8 +752,9 @@ fn spec_of(def: &CustomDef) -> Result<(RulesetSpec, Option<EventWindow>), String
             }],
         },
         "bonuses": [],
-        // ⚠️ Never a banned mode, FT8 and FT4 above all: `FtMessages::for_contest` hands a
-        // contest that bans the tier's mode Field Day's messages, with a blank class.
+        // ⚠️ Never a banned mode, FT8 and FT4 above all: `FtMessages::for_contest` does not
+        // follow a contest on a tier whose mode it bans, so an unticked FT mode would lose the
+        // contest messages its exchange matches.
         "banned_modes": [],
         "tempo_fd": false,
         "assistance": {"spotting_allowed": true, "cluster_allowed": true},
@@ -877,17 +880,24 @@ mod tests {
         }
     }
 
-    /// An RST + serial exchange is the Roundup on the air only when the operator asked; the other
-    /// Roundup shape and every other match need no answer.
+    /// Either Roundup shape (RST + serial, RST + state/province) is the Roundup on the air only when
+    /// the operator asked — never automatic, the default answer no (the maintainer's ruling);
+    /// every other match needs no answer.
     #[test]
-    fn rst_and_serial_is_the_roundup_only_when_asked() {
-        let mut d = def(&["FT8"], &["rst", "serial"], None);
-        assert_eq!(ft_shape(&d), Some(FtActivity::RttyRoundup));
-        assert_eq!(ft_activity(&d), None, "the default answer is no");
-        d.ft_roundup = true;
-        assert_eq!(ft_activity(&d), Some(FtActivity::RttyRoundup));
-        let d = def(&["FT8"], &["rst", "state_province"], None);
-        assert_eq!(ft_activity(&d), Some(FtActivity::RttyRoundup));
+    fn the_roundup_shapes_are_the_roundup_only_when_asked() {
+        for fields in [&["rst", "serial"][..], &["rst", "state_province"][..]] {
+            let mut d = def(&["FT8"], fields, None);
+            assert_eq!(ft_shape(&d), Some(FtActivity::RttyRoundup), "{fields:?}");
+            assert_eq!(
+                ft_activity(&d),
+                None,
+                "{fields:?}: the default answer is no"
+            );
+            d.ft_roundup = true;
+            assert_eq!(ft_activity(&d), Some(FtActivity::RttyRoundup), "{fields:?}");
+        }
+        let d = def(&["FT8"], &["fd_class", "arrl_section"], None);
+        assert_eq!(ft_activity(&d), Some(FtActivity::FieldDay));
     }
 
     #[test]

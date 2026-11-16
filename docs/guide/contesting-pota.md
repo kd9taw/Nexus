@@ -548,10 +548,31 @@ Next stays greyed while a box the step needs is empty, and the line above the bu
 station data while the contest is picked, as one word of letters, digits and `/`. It is kept on this
 computer, for that contest only, and an exported contest file never carries it. A contest that sends one will not start while it is blank.
 
-**FT8 and FT4.** A contest you build uses the standard FT8 and FT4 messages (grid and signal report)
-and does not send its exchange; the builder says so on the Exchange and Check steps. For an exchange
-of a signal report and a serial number, the builder asks whether to use WSJT-X's RTTY Roundup messages
-(CQ RU); the answer is No unless you change it, and this version sends standard messages either way.
+**FT8 and FT4.** When your contest's exchange has exactly the shape of one of WSJT-X's contest
+messages, and FT8 or FT4 is one of its modes, Nexus sends that message on FT8 and FT4, as WSJT-X does
+in the matching Special operating activity. The stations you work need the same activity set in
+WSJT-X (Settings ▸ Advanced ▸ Special operating activity). The builder names the match on the
+Exchange and Check steps, with the CQ Nexus calls and the exchange it sends.
+
+| Your exchange, in this order | WSJT-X activity | On the air |
+|---|---|---|
+| Field Day class, ARRL/RAC section | ARRL Field Day | `CQ FD K1ABC FN42`, then `W9XYZ K1ABC 2B EMA` |
+| Grid (4 characters), with "CQ TEST" chosen | NA VHF / ARRL Digi | `CQ TEST K1ABC FN42`, then the grid |
+| Grid (4 characters), with "CQ WW" chosen | WW Digi | `CQ WW K1ABC FN42`, then the grid |
+| Signal report, serial number — or signal report, state or province — and you said Yes | ARRL RTTY Roundup | `CQ RU K1ABC FN42`, then `W9XYZ K1ABC 579 0013` or `579 MA` |
+| Signal report, serial number, grid (6 characters) | EU VHF | `CQ TEST K1ABC FN42`, then `<W9XYZ> <K1ABC> 570013 FN42AB` |
+
+For a Roundup-shaped exchange the builder asks "Use RTTY Roundup messages on FT8 (CQ RU)?"; the answer
+is No unless you change it, because most club contests with that exchange are not meant to run as the
+Roundup. The report in the Roundup and EU VHF messages comes from how strongly Nexus hears the other
+station, as WSJT-X makes it (529 to 599). The Roundup message carries serials 1 to 7999 and a US
+state, Canadian province or DC; a higher serial or another QTH (DX included) is refused, at Call CQ
+or at the double-click, rather than sent wrong. EU VHF needs your six-character locator, and sends a
+serial above 2047 as 2047, exactly as WSJT-X does.
+
+Any other exchange uses the standard FT8 and FT4 messages (grid and signal report) and does not send
+its exchange; the builder says so. On any other FT-family mode (FT2, FT1, DX1) a contest you build
+sends the standard messages.
 
 **Edit, Export, Delete and Import.** Each of your contests has **Edit…**, **Export…** and **Delete**
 in the setup's list, and in Settings ▸ Contesting while it is picked. **Export…** saves the contest's

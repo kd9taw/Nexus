@@ -758,8 +758,14 @@ export interface CustomContestPreview {
   ftShape: FtActivity | null
   /** That match, when the operator chose it (an RST + serial exchange is asked). */
   ftActivity: FtActivity | null
-  /** What FT8/FT4 really send in this build: `standard` for every custom contest today. */
-  ftMessages: string
+  /** What FT8/FT4 really send in this build: `standard`, or the activity whose messages they send. */
+  ftMessages: 'standard' | FtActivity
+  /** The CQ the contest's Running calls on FT8/FT4 (`CQ RU W9XYZ EN52`); `''` with standard messages. */
+  ftCq: string
+  /** The exchange those messages carry after the calls (`579 0001`); `''` with standard messages. */
+  ftSends: string
+  /** Why those messages cannot carry this station's exchange now, verbatim; `''` when they can. */
+  ftRefusal: string
   enteredSlots: string[]
 }
 
