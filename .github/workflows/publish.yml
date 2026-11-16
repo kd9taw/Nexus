@@ -662,6 +662,11 @@ jobs:
           if old_beta:
               bver = old_beta.get("version") if isinstance(old_beta, dict) else None
               try:
+                  # The site's own rule for a beta version (release.ts): anything else, a plain
+                  # "2.0.0" or text with a newline in it, would fail the site build or reach
+                  # GITHUB_ENV below, so it is malformed and removed.
+                  if not re.fullmatch(r"\d+\.\d+\.\d+-[0-9A-Za-z.]+", bver):
+                      raise ValueError(bver)
                   keep_beta = semver_key(bver) > semver_key(ver)
                   print(f"beta {bver}: " + ("kept, still ahead of " if keep_beta
                         else "removed, at or below ") + ver)
