@@ -8346,6 +8346,13 @@ impl RadioLoop {
     /// change of the TX offset alone. Nothing is owed once the radio has confirmed that TX dial and
     /// mode for the dial.
     ///
+    /// ⛔ NOTHING IS OWED AT A DIAL NO BAND PLAN NAMES (below 160 m, between the bands, 47 GHz up):
+    /// no over can go out there, so a pre-set would only rewrite VFO B. Two such dials are never
+    /// "the same band" ([`same_named_band`]), so without this every knob step outside the bands
+    /// read as a band change and wrote VFO B once per step. Moving onto such a dial also drops a
+    /// pre-set still owed from the band before it; moving from one back into a named band owes one,
+    /// as any change of named band does.
+    ///
     /// ⛔ ONLY AT A QUIET POINT. Never with a carrier up: no over, tune or PTT of this loop's, nothing
     /// keyed by this loop or read as keyed at the radio, and at least
     /// [`crate::slot::SPLIT_PRESET_LEAD_MS`] to the next slot boundary, counted from where the tick
@@ -8389,7 +8396,9 @@ impl RadioLoop {
             if self.split_preset_seen_dial != 0
                 && !same_named_band(self.split_preset_seen_dial, dial)
             {
-                self.split_preset = Some(0);
+                self.split_preset = tempo_app::bandplan::band_for_dial(dial as f64 / 1e6)
+                    .is_some()
+                    .then_some(0);
             }
             self.split_preset_seen_dial = dial;
             self.split_preset_moved_at = now;

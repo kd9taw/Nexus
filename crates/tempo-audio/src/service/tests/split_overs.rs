@@ -3252,6 +3252,50 @@ fn a_turning_knob_pre_sets_nothing_and_a_band_change_pre_sets_once() {
     assert_eq!(presets, 1, "{change:?} {more:?}");
 }
 
+/// ⛔ A KNOB TURNED OUTSIDE THE HAM BANDS WRITES NOTHING TO VFO B. Split held on 20 m, TX on,
+/// receiving: the operator tunes below 160 m, one step per cycle (30 kHz, 50 kHz, 900 kHz). No
+/// band plan names those dials, so no over can go out there and no pre-set is owed; before, every
+/// step read as a change of band and VFO B was written once per step. Tuning on into 160 m
+/// (1.840 MHz) owes exactly one pre-set, and a step inside 160 m owes none. A band change followed
+/// at once (inside the settle) by the knob leaving the bands writes nothing either.
+#[test]
+fn a_knob_turned_off_band_pre_sets_nothing_and_coming_into_a_band_pre_sets_once() {
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    let _ = b.overs(1);
+    let knob_to = |b: &mut Bench<Hamlib>, hz: u64| {
+        let _ = b.step_to_cycle_ms(17_000.0);
+        b.radio.vfos.lock().unwrap().knob = vec![hz];
+        let writes = b.ticks(250);
+        assert_eq!(b.dial(), hz, "premise: the dial followed the knob");
+        writes
+    };
+    for hz in [30_000, 50_000, 900_000] {
+        let writes = knob_to(&mut b, hz);
+        assert!(
+            !writes.iter().any(|l| l.starts_with("I ")),
+            "VFO B written at the off-band dial {hz}: {writes:?}"
+        );
+    }
+    let into_160 = knob_to(&mut b, 1_840_000);
+    let tx_dials: Vec<&String> = into_160.iter().filter(|l| l.starts_with("I ")).collect();
+    assert_eq!(tx_dials, ["I 1839500"], "{into_160:?}");
+    let inside = knob_to(&mut b, 1_841_000);
+    assert!(
+        !inside.iter().any(|l| l.starts_with("I ")),
+        "VFO B written for a move inside 160 m: {inside:?}"
+    );
+    // The knob into 40 m, then off the bands at the next dial read, before the pre-set settled:
+    // the pre-set owed for 40 m is dropped, not written at the off-band dial.
+    let _ = b.step_to_cycle_ms(17_000.0);
+    b.radio.vfos.lock().unwrap().knob = vec![600_000, FT8_40M_DIAL];
+    let writes = b.ticks(250);
+    assert_eq!(b.dial(), 600_000, "premise: the dial followed the knob");
+    assert!(
+        !writes.iter().any(|l| l.starts_with("I ")),
+        "VFO B written after the knob left the bands: {writes:?}"
+    );
+}
+
 /// ⛔ A CLUSTER SPLIT-ON-WORK OWNS VFO B: with one set at the band change, nothing of Split
 /// Operation's is put on the radio. The control is the band change with none
 /// (`a_band_change_in_either_period_puts_the_tx_dial_on_the_radio_and_the_called_over_keys`).
