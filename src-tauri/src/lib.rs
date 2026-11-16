@@ -67554,7 +67554,9 @@ mod tests {
         };
         let mut v = serde_json::to_value(s.for_storage()).unwrap();
         assert_eq!(
-            super::settings_from_bundle(v.clone()).unwrap().license_class,
+            super::settings_from_bundle(v.clone())
+                .unwrap()
+                .license_class,
             tempo_app::settings::LicenseClass::Technician
         );
         v["licenseClass"] = serde_json::json!("zz-from-a-newer-build");
