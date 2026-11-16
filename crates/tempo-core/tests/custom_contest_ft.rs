@@ -251,6 +251,7 @@ fn heard(text: &str) -> modes::Decode {
         rv: None,
         raw: None,
         mode: None,
+        unchecked: false,
     }
 }
 
