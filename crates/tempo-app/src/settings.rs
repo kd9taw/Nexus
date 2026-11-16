@@ -2357,15 +2357,13 @@ pub struct Settings {
     pub set_rig_mode: bool,
     /// The active operating mode (Digital / Phone / CW) — the per-section rig-mode
     /// policy. Digital obeys the rig; Phone/CW force USB-LSB / CW. See [`rig_mode`].
-    #[serde(deserialize_with = "lenient_choice")]
     pub operating_mode: OperatingMode,
     /// The Keyboard section's modem ([`KeyboardModem`]), written with the section by
     /// `set_operating_mode` and kept across a Settings save exactly as `operating_mode` is.
-    #[serde(deserialize_with = "lenient_choice")]
     pub keyboard_modem: KeyboardModem,
     /// Amateur license class — drives the transmit-privilege lockout + the licensed-segment
     /// band dropdown. `Open` (default) = no restrictions (non-US). See [`LicenseClass`].
-    #[serde(default, deserialize_with = "lenient_choice")]
+    #[serde(default)]
     pub license_class: LicenseClass,
     /// The first-run wizard's "How much have you done?" answer ([`ExperienceLevel`]). `None` =
     /// never asked: a file from before the question and a first run read the same, and an
@@ -2393,7 +2391,6 @@ pub struct Settings {
     pub setup_wizard_seen: bool,
     /// How CW is keyed (CAT `send_morse` vs soundcard tone). Also picks the CW
     /// rig-mode: CAT → CW, Soundcard → a DATA submode, PKTUSB/PKTLSB (audio tone). See [`rig_mode`].
-    #[serde(deserialize_with = "lenient_choice")]
     pub cw_keyer: CwKeyerBackend,
     /// Serial port for the K1EL WinKeyer (when `cw_keyer == WinKeyer`), e.g. "COM6".
     pub winkeyer_port: String,
@@ -2647,7 +2644,7 @@ pub struct Settings {
     /// your own downlink if it is wrong**, so it is explicit, enumerated and
     /// operator-visible rather than inferred — see [`SatVfoMap`]. The downlink
     /// needs no mapping ([`Settings::sat_doppler_downlink`]).
-    #[serde(default, deserialize_with = "lenient_choice")]
+    #[serde(default)]
     pub sat_vfo_map: SatVfoMap,
     /// The radios `sat_vfo_map` has been CONFIRMED for, by `RadioProfile::id`.
     ///
@@ -2905,9 +2902,9 @@ pub struct Settings {
     /// cannot express. EMPTY by default: an upgrading install keeps exactly today's band-coverage
     /// behavior until the operator writes a rule.
     ///
-    /// Read through [`lenient_routing_rules`]: a rule whose mode or context this build does not
-    /// know is DROPPED on load, never widened.
-    #[serde(default, deserialize_with = "lenient_routing_rules")]
+    /// On load ([`forget_unknown_choices`]), a rule whose mode or context this build does not
+    /// know is DROPPED, never widened.
+    #[serde(default)]
     pub routing_rules: Vec<RoutingRule>,
     /// Fallback radio when no rule and no band coverage claims a (band, mode) — "everything else
     /// goes here". `None` (the default) = stay on the active radio, i.e. today's behavior.
@@ -2916,7 +2913,7 @@ pub struct Settings {
     /// What the screen says when the routing above switches radio by itself — see
     /// [`RadioSwitchPolicy`]. ⭐ `Tell` for a new install, `Act` (silent) for an existing file
     /// that has no key: the field's own `#[serde(default)]` is what reads a missing key as `Act`.
-    #[serde(default, deserialize_with = "lenient_choice")]
+    #[serde(default)]
     pub radio_switch_policy: RadioSwitchPolicy,
     /// "My station" profiles: Home, a portable kit, a club call ([`station_profiles`]). Empty
     /// until the operator makes one, and then not written at all, so a station that never does
@@ -2970,7 +2967,6 @@ pub struct Settings {
     pub companion_addr: String,
     /// Persisted RX signal source — native decode vs a WSJT-X/JTDX/MSHV companion
     /// stream. Restored at startup so the operator's choice survives restart.
-    #[serde(deserialize_with = "lenient_choice")]
     pub source: SourceKind,
     /// Upload heard stations to PSK Reporter.
     pub pskreporter: bool,
@@ -3473,7 +3469,7 @@ pub struct Settings {
     /// dial in 500 Hz steps. `None` = stock default (transmit at the raw audio
     /// offset); `Rig` = shifted dial on VFO B (rig split); `FakeIt` = retune the
     /// single VFO for the over and restore after (works on any CAT rig).
-    #[serde(default, deserialize_with = "lenient_choice")]
+    #[serde(default)]
     pub split_mode: SplitMode,
     /// FT8/FT4 decode depth (WSJT-X Fast/Normal/Deep = 1/2/3). Deep is the
     /// right default on modern hardware; Fast trades sensitivity for CPU.
@@ -3483,17 +3479,17 @@ pub struct Settings {
     /// multithreaded one, its port of JTDX's) or WSJT-X's standard decoder. Fast/Normal/Deep
     /// ([`Settings::decode_depth`]) are the standard decoder's; the JTDX-style decoder's are the
     /// preset's ([`Settings::jtdx_preset`]). The early pass is the standard decoder either way.
-    #[serde(default, deserialize_with = "lenient_choice")]
+    #[serde(default)]
     pub ft8_decoder: DecoderStyle,
     /// Which FT4 decoder runs the full pass of each period: the JTDX-style decoder (JTDX
     /// 2.2.159's own FT4 decoder) or WSJT-X's standard decoder. The JTDX-style one follows the
     /// same preset as FT8's ([`Settings::jtdx_preset`]): depth 3, JTDX's default, under every
     /// preset, and [`Settings::decode_depth`] under Custom; SWL as the preset sets it. The
     /// early pass is the standard decoder either way.
-    #[serde(default, deserialize_with = "lenient_choice")]
+    #[serde(default)]
     pub ft4_decoder: DecoderStyle,
     /// The JTDX-style decoder's preset ([`JtdxPreset`]). FT8's, and FT4's when it has one.
-    #[serde(default, deserialize_with = "lenient_choice")]
+    #[serde(default)]
     pub jtdx_preset: JtdxPreset,
     /// The JTDX-style decoder's knobs under [`JtdxPreset::Custom`].
     #[serde(default)]
@@ -3539,7 +3535,7 @@ pub struct Settings {
     /// WSJT-X "Special operating activity": Hound = work a DXpedition Fox
     /// (calls ≥ 1000 Hz, auto-move to the Fox's frequency for the R+report,
     /// Fox multi-payload messages split at ingest). Fox role: not yet.
-    #[serde(default, deserialize_with = "lenient_choice")]
+    #[serde(default)]
     pub special_op: SpecialOp,
     /// Operator overrides of the working-frequency table (WSJT-X Settings ▸
     /// Frequencies). Empty = the stock WSJT-X table built into the band plan.
@@ -3698,7 +3694,7 @@ pub struct Settings {
     #[serde(default = "default_jtty_ft8_fkeys")]
     pub jtty_ft8_fkeys: Vec<String>,
     /// Which of the two sets F1-F8 send (WSJT-X's "Message style").
-    #[serde(default, deserialize_with = "lenient_choice")]
+    #[serde(default)]
     pub jtty_message_style: JttyMessageStyle,
     /// RTTY **Auto call**: how long the sequencer listens before it repeats itself, in
     /// seconds (#304). This is the whole of the "CQ, listen, CQ" cadence the reporter
@@ -3910,7 +3906,7 @@ pub struct Settings {
     /// Pounce — how rare a spot must be before Nexus interrupts you the moment it appears.
     /// Defaults to all-time-new DXCC only: at a serious total an ATNO is genuinely rare, so the
     /// alert stays trustworthy. An alert that cries wolf gets ignored and is then worthless.
-    #[serde(default, deserialize_with = "lenient_choice")]
+    #[serde(default)]
     pub pounce_threshold: PounceThreshold,
 
     // --- confirmations (LoTW) ---
@@ -5030,53 +5026,72 @@ fn lenient_popup_corner<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Popup
     Ok(serde_json::from_value(serde_json::Value::deserialize(de)?).unwrap_or_default())
 }
 
-/// A CHOICE (an enum setting) read leniently: a string this build's list of choices lacks loads
-/// as the choice's default, which is also what a file without the key reads.
-///
-/// ⚠️ WHY: a newer build adds a choice (a mode, a licence class, a decoder) and writes it; going
-/// back to an older build must cost that one setting, never the file around it (see
-/// [`lenient_list`]'s WHY: the whole file set aside, the identity blank, the licence class
-/// `Open`). Only an unknown STRING is forgiven: a number or a list where a choice belongs is a
-/// broken file, not a newer one, and still fails it. Every enum-typed field reads through this;
-/// `an_unknown_choice_from_a_newer_build_costs_only_that_setting` finds the ones that do not.
-fn lenient_choice<'de, D, T>(de: D) -> Result<T, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: serde::de::DeserializeOwned + Default,
-{
-    let v = serde_json::Value::deserialize(de)?;
-    let unknown_string = v.is_string();
-    match serde_json::from_value(v) {
-        Ok(choice) => Ok(choice),
-        Err(_) if unknown_string => Ok(T::default()),
-        Err(e) => Err(serde::de::Error::custom(e)),
-    }
+/// The choices (enum settings) a settings FILE may hold a value of that this build does not know,
+/// by key, each with the test of whether this build knows a value. See [`forget_unknown_choices`].
+const FILE_CHOICES: &[(&str, KnowsValue)] = &[
+    ("cwKeyer", knows::<CwKeyerBackend>),
+    ("ft4Decoder", knows::<DecoderStyle>),
+    ("ft8Decoder", knows::<DecoderStyle>),
+    ("jtdxPreset", knows::<JtdxPreset>),
+    ("jttyMessageStyle", knows::<JttyMessageStyle>),
+    ("keyboardModem", knows::<KeyboardModem>),
+    ("licenseClass", knows::<LicenseClass>),
+    ("operatingMode", knows::<OperatingMode>),
+    ("pounceThreshold", knows::<PounceThreshold>),
+    ("radioSwitchPolicy", knows::<RadioSwitchPolicy>),
+    ("satVfoMap", knows::<SatVfoMap>),
+    ("source", knows::<crate::dto::SourceKind>),
+    ("specialOp", knows::<SpecialOp>),
+    ("splitMode", knows::<SplitMode>),
+];
+
+/// Whether a choice reads a value as one of its own ([`knows`]).
+type KnowsValue = fn(&serde_json::Value) -> bool;
+
+/// Whether `T` reads `v` as one of its values.
+fn knows<T: serde::de::DeserializeOwned>(v: &serde_json::Value) -> bool {
+    T::deserialize(v).is_ok()
 }
 
-/// [`Settings::routing_rules`] read with [`lenient_choice`]'s rule, except that a rule whose mode
-/// or context is a string this build does not know is DROPPED, not given the default.
+/// Make a settings FILE written by a newer build readable here, before [`Settings::load_at`]
+/// parses it: a choice whose value is a string this build does not know is removed, so it reads
+/// as a missing key does (its default; for `licenseClass` that is `Open`), and a routing rule
+/// whose mode or context is such a string is dropped.
 ///
-/// ⛔ WHY DROPPED: a rule's selectors mean "any" when unset, so the default would WIDEN the rule.
-/// `{bands: ["2m"], mode: <a newer mode>} -> radio 2` read as `mode: None` sends every 2 m tune
-/// to radio 2, and an unknown context reads a satellite-only rule as a terrestrial one. A rule
-/// has no off switch to load it off by, so it goes; the tune falls through to the rules below it
-/// and the band coverage, as if it had never been written. Any other broken rule (a radio that
-/// is not a number, a list that is not a list) still fails the file, as before.
-fn lenient_routing_rules<'de, D: serde::Deserializer<'de>>(
-    de: D,
-) -> Result<Vec<RoutingRule>, D::Error> {
-    fn unknown<T: serde::de::DeserializeOwned>(rule: &serde_json::Value, key: &str) -> bool {
-        rule.get(key).is_some_and(|v| {
-            v.is_string() && serde_json::from_value::<Option<T>>(v.clone()).is_err()
-        })
+/// ⚠️ WHY: a newer build adds a choice (a mode, a licence class, a decoder) and saves it. Read
+/// strictly, that one value failed the whole file, which was set aside, and the station started on
+/// defaults: identity blank, licence class `Open` (see [`lenient_list`]'s WHY). Going back to an
+/// older build must cost that one setting, never the file around it.
+///
+/// ⛔ A routing rule is DROPPED, not defaulted: its selectors mean "any" when unset, so a mode from
+/// a newer build read as `None` would send every mode on the rule's bands to its radio, and an
+/// unknown context would make a satellite-only rule a terrestrial one. A rule has no off switch to
+/// load it off by; dropped, every tune routes as if the rule had never been written.
+///
+/// ⛔ LOAD ONLY. Everything else that reads a `Settings` (a save from the screen, a backup restore,
+/// a save from afar) stays strict and refuses an unknown value, as an unknown licence class must
+/// never quietly become `Open` there. Only an unknown STRING is forgiven: a number where a choice
+/// belongs is a broken file, not a newer one, and still sets it aside.
+fn forget_unknown_choices(doc: &mut serde_json::Value) {
+    let Some(file) = doc.as_object_mut() else {
+        return;
+    };
+    let unknown = |v: &serde_json::Value, known: KnowsValue| v.is_string() && !known(v);
+    for (key, known) in FILE_CHOICES {
+        if file.get(*key).is_some_and(|v| unknown(v, *known)) {
+            file.remove(*key);
+        }
     }
-    Vec::<serde_json::Value>::deserialize(de)?
-        .into_iter()
-        .filter(|rule| {
-            !unknown::<RouteMode>(rule, "mode") && !unknown::<RouteContext>(rule, "context")
-        })
-        .map(|rule| serde_json::from_value(rule).map_err(serde::de::Error::custom))
-        .collect()
+    if let Some(serde_json::Value::Array(rules)) = file.get_mut("routingRules") {
+        rules.retain(|rule| {
+            !rule
+                .get("mode")
+                .is_some_and(|v| unknown(v, knows::<RouteMode>))
+                && !rule
+                    .get("context")
+                    .is_some_and(|v| unknown(v, knows::<RouteContext>))
+        });
+    }
 }
 
 /// [`lenient_list`]'s scalar twin: a string, or empty for any other JSON value.
@@ -5225,45 +5240,13 @@ impl PopupCorner {
 /// setting missing from this list is one that probe cannot change, and it says so.
 pub fn lenient_string_choices() -> Vec<(&'static str, Vec<String>)> {
     let wire = |v: serde_json::Value| v.as_str().map(str::to_owned).unwrap_or_default();
-    vec![
-        (
-            "popupCorner",
-            PopupCorner::ALL
-                .iter()
-                .map(|c| wire(serde_json::to_value(c).unwrap()))
-                .collect(),
-        ),
-        ("cwKeyer", choice_names::<CwKeyerBackend>()),
-        ("experienceLevel", choice_names::<ExperienceLevel>()),
-        ("ft4Decoder", choice_names::<DecoderStyle>()),
-        ("ft8Decoder", choice_names::<DecoderStyle>()),
-        ("jtdxPreset", choice_names::<JtdxPreset>()),
-        ("jttyMessageStyle", choice_names::<JttyMessageStyle>()),
-        ("keyboardModem", choice_names::<KeyboardModem>()),
-        ("licenseClass", choice_names::<LicenseClass>()),
-        ("operatingMode", choice_names::<OperatingMode>()),
-        ("pounceThreshold", choice_names::<PounceThreshold>()),
-        ("radioSwitchPolicy", choice_names::<RadioSwitchPolicy>()),
-        ("satVfoMap", choice_names::<SatVfoMap>()),
-        ("source", choice_names::<crate::dto::SourceKind>()),
-        ("specialOp", choice_names::<SpecialOp>()),
-        ("splitMode", choice_names::<SplitMode>()),
-    ]
-}
-
-/// Every wire name of the choice `T`, as serde lists them when it refuses a name it does not
-/// know (`` unknown variant `x`, expected one of `a`, `b` ``): read strictly, the type still says.
-fn choice_names<T: serde::de::DeserializeOwned>() -> Vec<String> {
-    match serde_json::from_value::<T>(serde_json::Value::String(String::new())) {
-        Ok(_) => Vec::new(),
-        Err(e) => e
-            .to_string()
-            .split('`')
-            .skip(3)
-            .step_by(2)
-            .map(str::to_owned)
+    vec![(
+        "popupCorner",
+        PopupCorner::ALL
+            .iter()
+            .map(|c| wire(serde_json::to_value(c).unwrap()))
             .collect(),
-    }
+    )]
 }
 
 /// What the operator sees when Nexus switches the active radio BY ITSELF — a band or mode the
@@ -5354,7 +5337,7 @@ pub struct RoutingRule {
     /// Bands this rule covers, e.g. `["2m", "70cm"]`. EMPTY = any band.
     pub bands: Vec<String>,
     /// Mode class this rule covers. `None` = any mode class. A mode this build does not know
-    /// drops the whole rule on load ([`lenient_routing_rules`]), since `None` would widen it.
+    /// drops the whole rule on load ([`forget_unknown_choices`]), since `None` would widen it.
     pub mode: Option<RouteMode>,
     /// `Some(Satellite)` designates this rule for satellite work: consulted only for
     /// satellite-originated tunes, above the mode rules, and never by a terrestrial tune.
@@ -5366,7 +5349,7 @@ pub struct RoutingRule {
     /// there erases the designation for good. Nothing written HERE can intercept an old
     /// deserializer; the changelog carries the operator caution (delete Satellite rules before
     /// rolling back). From this build on, a context it does not know drops the rule on load
-    /// rather than reading it as a plain mode rule ([`lenient_routing_rules`]).
+    /// rather than reading it as a plain mode rule ([`forget_unknown_choices`]).
     pub context: Option<RouteContext>,
     /// The `RadioProfile::id` to hand off to.
     pub radio: u32,
@@ -8597,7 +8580,17 @@ impl Settings {
                 tempo_core::keep_aside::keep_aside("settings", path, now_unix, &e.to_string());
                 Settings::not_a_new_install()
             }
-            Ok(text) => match serde_json::from_str(&text) {
+            // A file a newer build wrote parses once its unknown choices are forgotten
+            // ([`forget_unknown_choices`]); any other failure keeps the first error, line and all.
+            Ok(text) => match serde_json::from_str(&text).or_else(|e| {
+                match serde_json::from_str::<serde_json::Value>(&text) {
+                    Ok(mut doc) => {
+                        forget_unknown_choices(&mut doc);
+                        serde_json::from_value(doc).map_err(|_| e)
+                    }
+                    Err(_) => Err(e),
+                }
+            }) {
                 Ok(s) => {
                     #[derive(Deserialize)]
                     struct LegacyDoppler {
@@ -16982,7 +16975,9 @@ mod tests {
     /// selectors where unset means "any": read as their default, a mode from a newer build
     /// (`{bands: ["2m"], mode: <new>}`) would become every mode on 2 m, and an unknown context a
     /// plain mode rule, routing tunes to a radio the operator never sent them to. Such a rule is
-    /// dropped on load (it has no off switch to load it off by), and the rules around it keep.
+    /// dropped on load ([`forget_unknown_choices`]), so every tune, terrestrial or satellite,
+    /// routes exactly as it does in the same file without that rule. The radios cover different
+    /// bands, so a widened rule would route a tune somewhere the band coverage does not.
     #[test]
     fn an_unknown_routing_selector_drops_the_rule_never_widens_it() {
         const MODES: [RouteMode; 5] = [
@@ -16992,10 +16987,28 @@ mod tests {
             RouteMode::Cw,
             RouteMode::Rtty,
         ];
-        for key in ["mode", "context"] {
+        let rule = |context| RoutingRule {
+            bands: vec!["2m".into()],
+            mode: Some(RouteMode::Fm),
+            context,
+            radio: 2,
+        };
+        let cases = [
+            ("mode", rule(Some(RouteContext::Satellite))),
+            ("mode", rule(None)),
+            ("context", rule(Some(RouteContext::Satellite))),
+        ];
+        for (key, newer) in cases {
+            let what = format!("{key} of {newer:?}");
             let dir = scratch_dir_ready("unknown_route_selector");
             let path = dir.join("settings.json");
-            let kept = RoutingRule {
+            let radio = |id: u32, band: &str| RadioProfile {
+                id,
+                enabled: true,
+                bands: vec![band.into()],
+                ..RadioProfile::default()
+            };
+            let other = RoutingRule {
                 bands: vec!["70cm".into()],
                 mode: Some(RouteMode::Fm),
                 radio: 3,
@@ -17003,84 +17016,119 @@ mod tests {
             };
             let s = Settings {
                 mycall: "W1AW".into(),
-                routing_rules: vec![
-                    RoutingRule {
-                        bands: vec!["2m".into()],
-                        mode: Some(RouteMode::Fm),
-                        context: Some(RouteContext::Satellite),
-                        radio: 2,
-                    },
-                    kept.clone(),
-                ],
-                radios: [2, 3]
-                    .map(|id| RadioProfile {
-                        id,
-                        ..RadioProfile::default()
-                    })
-                    .to_vec(),
+                routing_rules: vec![newer.clone(), other.clone()],
+                radios: vec![radio(2, "20m"), radio(3, "2m")],
+                active_radio: 3,
                 ..Settings::default()
             };
             s.save(&path).unwrap();
-            assert_eq!(
-                Settings::load_at(&path, KEPT_AT).routing_rules,
-                s.routing_rules,
-                "{key}: CONTROL, both rules load as written"
-            );
-            let mut doc: serde_json::Value =
+            let written: serde_json::Value =
                 serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-            doc["routingRules"][0][key] = serde_json::json!("zz-from-a-newer-build");
-            std::fs::write(&path, doc.to_string()).unwrap();
-            let back = Settings::load_at(&path, KEPT_AT);
-            assert!(kept_aside_in(&dir).is_empty(), "{key}: the file loads");
-            assert_eq!(back.mycall, "W1AW", "{key}");
+            let load = |doc: &serde_json::Value| {
+                std::fs::write(&path, doc.to_string()).unwrap();
+                Settings::load_at(&path, KEPT_AT)
+            };
+            let mut with_unknown = written.clone();
+            with_unknown["routingRules"][0][key] = serde_json::json!("zz-from-a-newer-build");
+            let mut without = written.clone();
+            without["routingRules"].as_array_mut().unwrap().remove(0);
+            let (back, never) = (load(&with_unknown), load(&without));
+            assert!(kept_aside_in(&dir).is_empty(), "{what}: the file loads");
+            assert_eq!(back.mycall, "W1AW", "{what}");
             assert_eq!(
                 back.routing_rules,
-                vec![kept.clone()],
-                "{key}: only that rule goes"
+                vec![other],
+                "{what}: only that rule goes"
             );
-            // Whatever is loaded, nothing routes to radio 2 that did not before: it matched 2 m
-            // FM satellite tunes only, and now matches nothing.
-            for band in ["2m", "70cm", "20m"] {
+            for band in ["2m", "70cm", "20m", "6m"] {
                 for mode in MODES {
-                    assert!(
-                        !back
-                            .routing_rules
-                            .iter()
-                            .any(|r| r.radio == 2 && r.matches(band, mode)),
-                        "{key}: {band} {mode:?} must not route to the rule's radio"
+                    assert_eq!(
+                        back.route_radio(band, mode),
+                        never.route_radio(band, mode),
+                        "{what}: {band} {mode:?} routes as if the rule were never written"
+                    );
+                    assert_eq!(
+                        back.route_radio_satellite(band, mode),
+                        never.route_radio_satellite(band, mode),
+                        "{what}: satellite {band} {mode:?} too"
                     );
                 }
             }
-            // CONTROL: a broken entry in another way (a number for a band list) still sets the
-            // file aside, as before.
-            doc["routingRules"][0][key] = serde_json::json!(null);
-            doc["routingRules"][0]["radio"] = serde_json::json!("two");
-            std::fs::write(&path, doc.to_string()).unwrap();
-            let _ = Settings::load_at(&path, KEPT_AT);
+            // CONTROL: a rule broken in another way (a radio that is not a number) still sets
+            // the file aside.
+            let mut broken = written.clone();
+            broken["routingRules"][0]["radio"] = serde_json::json!("two");
+            let _ = load(&broken);
             assert_eq!(
                 kept_aside_in(&dir).len(),
                 1,
-                "{key}: a broken rule is no newer one"
+                "{what}: a broken rule is no newer one"
             );
             let _ = std::fs::remove_dir_all(&dir);
         }
     }
 
+    /// ⛔ AN UNKNOWN LICENCE CLASS READS AS `Open` ONLY ON LOAD. A settings file from a newer
+    /// build loads with it as `Open`, the rest kept. Everywhere else a `Settings` is read, it is
+    /// refused, as before: a save from the screen (`set_settings` takes the `Settings` serde
+    /// reads from the form), a save from afar and a backup restore (src-tauri tests the restore)
+    /// must never quietly turn an unknown class into `Open`, which lifts the band limits and the
+    /// station-profile call check. CONTROL: a licence class that is not a string (`3`) is a broken
+    /// file, not a newer one, and is set aside. The same holds for every choice a load forgives.
+    #[test]
+    fn an_unknown_licence_class_reads_as_open_only_on_load() {
+        let dir = scratch_dir_ready("unknown_licence");
+        let path = dir.join("settings.json");
+        Settings {
+            mycall: "W1AW".into(),
+            license_class: LicenseClass::Technician,
+            tx_watchdog_min: 7,
+            ..Settings::default()
+        }
+        .save(&path)
+        .unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        for (key, _) in FILE_CHOICES {
+            let mut doc = written.clone();
+            doc[*key] = serde_json::json!("zz-from-a-newer-build");
+            assert!(
+                serde_json::from_value::<Settings>(doc).is_err(),
+                "{key}: an unknown value is refused outside a load"
+            );
+        }
+        let mut doc = written.clone();
+        doc["licenseClass"] = serde_json::json!("zz-from-a-newer-build");
+        std::fs::write(&path, doc.to_string()).unwrap();
+        let back = Settings::load_at(&path, KEPT_AT);
+        assert!(kept_aside_in(&dir).is_empty(), "the file loads");
+        assert_eq!(back.license_class, LicenseClass::Open);
+        assert_eq!((back.mycall.as_str(), back.tx_watchdog_min), ("W1AW", 7));
+
+        doc["licenseClass"] = serde_json::json!(3);
+        std::fs::write(&path, doc.to_string()).unwrap();
+        let back = Settings::load_at(&path, KEPT_AT);
+        assert_eq!(back.mycall, "", "a licence class of 3 is a broken file");
+        assert_eq!(kept_aside_in(&dir).len(), 1, "and it is set aside");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ⭐ GOING BACK TO AN OLDER BUILD COSTS ONLY THE CHOICES IT DOES NOT KNOW. A newer build
     /// writes a value an older build's choice list lacks (a new mode, a new corner, a new
     /// licence class). Read strictly, that one value failed the whole file: it was set aside and
-    /// the station came up on defaults, its identity blank and its licence class `Open`. Each
-    /// choice now reads an unknown value as that setting's default, and the rest of the file
-    /// loads as written.
+    /// the station came up on defaults, its identity blank and its licence class `Open`. A load
+    /// now reads such a value as that setting's default, and the rest of the file as written.
     ///
     /// The test finds the choices itself, so a choice added later is covered without editing it:
     /// it writes a file, then puts an unknown string in each string or null value in turn
     /// (nested sections and list entries included) and loads it. A null that rejects a string
     /// for its TYPE (an unset number) is not a choice and is skipped; every other value must
     /// load without the file being set aside, keeping the distinctive values around it. A value
-    /// that loads back as something other than the unknown string is a choice, and is counted.
-    /// CONTROL: a file broken in another way (a number where a string belongs) is still set
-    /// aside.
+    /// serde refuses as an unknown choice, or reads back as something else, is a choice: it must
+    /// load as the same file without the key does (or its list entry is dropped), and the count
+    /// has a floor. Every list of entries is seeded with one, and every choice left unset is
+    /// given a value, so a choice inside either is reached too. CONTROL: a file broken in another
+    /// way (a number where a string belongs) is still set aside.
     #[test]
     fn an_unknown_choice_from_a_newer_build_costs_only_that_setting() {
         const UNKNOWN: &str = "zz-a-choice-from-a-newer-build";
@@ -17103,27 +17151,66 @@ mod tests {
         }
         let dir = scratch_dir_ready("unknown_choice");
         let path = dir.join("settings.json");
-        let base = Settings {
+        fn entry<T: serde::de::DeserializeOwned>(v: serde_json::Value) -> T {
+            serde_json::from_value(v).unwrap()
+        }
+        let mut base = Settings {
             mycall: "W1AW".into(),
             license_class: LicenseClass::Technician,
             tx_watchdog_min: 7,
-            // A list starts empty, so the walk sees inside one only through an entry: seed each
-            // list whose entries carry a choice.
-            routing_rules: vec![RoutingRule {
-                mode: Some(RouteMode::Fm),
-                context: Some(RouteContext::Satellite),
-                ..RoutingRule::default()
-            }],
+            // A list starts empty, so the walk sees inside one only through an entry: one entry
+            // in each list of entries.
+            logbook_filters: vec![entry(serde_json::json!({"name": "Mine", "filter": {}}))],
+            js8_frequencies: Some(vec![entry(serde_json::json!({"mhz": 7.078}))]),
+            js8_schedule: vec![entry(
+                serde_json::json!({"mhz": 7.078, "fromMin": 0, "untilMin": 60}),
+            )],
+            working_frequencies: vec![entry(
+                serde_json::json!({"band": "20m", "mode": "FT8", "mhz": 14.074}),
+            )],
+            voice_messages: vec![entry(
+                serde_json::json!({"slot": 1, "label": "CQ", "file": "cq.wav"}),
+            )],
             // A choice left unset is not written, so the walk sees it only when it holds one.
             experience_level: Some(ExperienceLevel::Experienced),
             ..Settings::default()
         };
+        // The radio and the station profile as a load makes them from the flat values.
+        base.ensure_radio_profiles();
+        base.ensure_station_profiles();
+        base.routing_rules = vec![RoutingRule {
+            mode: Some(RouteMode::Fm),
+            context: Some(RouteContext::Satellite),
+            radio: base.radios[0].id,
+            ..RoutingRule::default()
+        }];
+        let cw = entry(serde_json::json!({"key": "F1", "label": "CQ", "text": "CQ"}));
+        if base.macros.cw.is_empty() {
+            base.macros.cw.push(cw);
+        }
+        if base.macros.cw_profiles.is_empty() {
+            base.macros.cw_profiles.push(CwMacroProfile::default());
+        }
+        if base.macros.rtty_profiles.is_empty() {
+            base.macros
+                .rtty_profiles
+                .push(KeyboardMacroProfile::default());
+        }
+        if base.macros.psk_profiles.is_empty() {
+            base.macros
+                .psk_profiles
+                .push(KeyboardMacroProfile::default());
+        }
         base.save(&path).unwrap();
         let written: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let mut paths = Vec::new();
         leaves(&written, String::new(), &mut paths);
         assert!(paths.len() > 50, "the walk found the file's values");
+        let load = |doc: &serde_json::Value| {
+            std::fs::write(&path, serde_json::to_string_pretty(doc).unwrap()).unwrap();
+            Settings::load_at(&path, KEPT_AT)
+        };
 
         let mut choices = Vec::new();
         let mut failed = Vec::new();
@@ -17131,43 +17218,21 @@ mod tests {
             let mut doc = written.clone();
             let was_null = doc.pointer(at).unwrap().is_null();
             *doc.pointer_mut(at).unwrap() = serde_json::Value::String(UNKNOWN.into());
-            match serde_json::from_value::<Settings>(doc.clone()) {
+            let choice = match serde_json::from_value::<Settings>(doc.clone()) {
                 Err(e) if was_null && e.to_string().starts_with("invalid type") => {
                     continue; // an unset non-string value: a wrong type, not an unknown choice
                 }
-                // Read back as parsed (before load's migrations): a value that did not stay the
-                // unknown string is a choice.
+                Err(e) => e.to_string().starts_with("unknown variant"),
+                // A choice serde itself reads leniently reads back as something else.
                 Ok(parsed) => {
-                    let parsed = serde_json::to_value(&parsed).unwrap();
-                    if parsed.pointer(at).and_then(|v| v.as_str()) != Some(UNKNOWN) {
-                        choices.push(at.clone());
-                        // "That setting's default" is what the same file WITHOUT the key reads,
-                        // unless the choice's whole entry is dropped (a routing rule's selectors:
-                        // their default would widen the rule).
-                        let (parent, key) = at.rsplit_once('/').unwrap();
-                        let mut missing = written.clone();
-                        let dropped = parsed.pointer(parent).is_none();
-                        if let (false, Some(m)) = (
-                            dropped,
-                            missing.pointer_mut(parent).and_then(|p| p.as_object_mut()),
-                        ) {
-                            m.remove(&key.replace("~1", "/").replace("~0", "~"));
-                            let missing = serde_json::to_value(
-                                serde_json::from_value::<Settings>(missing).unwrap(),
-                            )
-                            .unwrap();
-                            assert_eq!(
-                                parsed.pointer(at),
-                                missing.pointer(at),
-                                "{at}: an unknown value reads as a missing key does"
-                            );
-                        }
-                    }
+                    serde_json::to_value(&parsed)
+                        .unwrap()
+                        .pointer(at)
+                        .and_then(|v| v.as_str())
+                        != Some(UNKNOWN)
                 }
-                Err(_) => {}
-            }
-            std::fs::write(&path, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
-            let back = Settings::load_at(&path, KEPT_AT);
+            };
+            let back = load(&doc);
             if !kept_aside_in(&dir).is_empty() {
                 failed.push(at.clone());
                 for k in kept_aside_in(&dir) {
@@ -17186,12 +17251,38 @@ mod tests {
                     "{at}: the licence class survives"
                 );
             }
+            if !choice {
+                continue;
+            }
+            choices.push(at.clone());
+            // "That setting's default" is what the same file WITHOUT the key loads as, unless
+            // the choice's whole list entry is dropped (a routing rule's selectors).
+            let (parent, key) = at.rsplit_once('/').unwrap();
+            let back = serde_json::to_value(&back).unwrap();
+            if back.pointer(parent).is_none() {
+                continue;
+            }
+            let mut missing = written.clone();
+            missing
+                .pointer_mut(parent)
+                .and_then(|p| p.as_object_mut())
+                .unwrap()
+                .remove(&key.replace("~1", "/").replace("~0", "~"));
+            let missing = serde_json::to_value(load(&missing)).unwrap();
+            assert_eq!(
+                back.pointer(at),
+                missing.pointer(at),
+                "{at}: an unknown value loads as a missing key does"
+            );
         }
         assert!(
             failed.is_empty(),
             "an unknown value in each of these set the whole file aside: {failed:#?}"
         );
-        eprintln!("{} choices read leniently: {choices:#?}", choices.len());
+        eprintln!(
+            "{} choices read leniently on load: {choices:#?}",
+            choices.len()
+        );
         // A floor, so a refactor that hides choices from the walk (an unseeded list, an unset
         // choice) fails here rather than quietly testing fewer. Raise it when a choice is added.
         const CHOICES_AT_LEAST: usize = 18;
@@ -17200,22 +17291,6 @@ mod tests {
             "the walk found {} choices, fewer than {CHOICES_AT_LEAST}: {choices:#?}",
             choices.len()
         );
-        // Each top-level choice names its values for whatever must try them all
-        // ([`lenient_string_choices`]), and each value it names loads as itself.
-        let named = lenient_string_choices();
-        for at in choices.iter().filter(|c| c.rfind('/') == Some(0)) {
-            let (name, values) = named
-                .iter()
-                .find(|(n, _)| *n == &at[1..])
-                .unwrap_or_else(|| panic!("{at} is missing from lenient_string_choices"));
-            assert!(values.len() > 1, "{name}: {values:?}");
-            for v in values {
-                let mut doc = written.clone();
-                doc[*name] = serde_json::json!(v);
-                let back = serde_json::to_value(serde_json::from_value::<Settings>(doc).unwrap());
-                assert_eq!(back.unwrap()[*name], serde_json::json!(v), "{name}: {v}");
-            }
-        }
         assert!(
             choices.iter().any(|c| c == "/licenseClass"),
             "the walk reached the licence class: {choices:#?}"
@@ -17224,8 +17299,7 @@ mod tests {
         // CONTROL: a wrong type for a field that is not a choice still sets the file aside.
         let mut doc = written.clone();
         *doc.pointer_mut("/mycall").unwrap() = serde_json::json!(42);
-        std::fs::write(&path, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
-        let back = Settings::load_at(&path, KEPT_AT);
+        let back = load(&doc);
         assert_eq!(back.mycall, "", "a broken file still loads as defaults");
         assert_eq!(kept_aside_in(&dir).len(), 1, "and is still set aside");
         let _ = std::fs::remove_dir_all(&dir);
