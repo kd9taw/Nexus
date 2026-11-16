@@ -138,7 +138,12 @@ is the path.
    file `release.yml` uses for the GitHub release body), otherwise it falls back to the
    release body and says in the run summary that it degraded. Write the prose before
    tagging to control that field.
-3. **The site's copy of the operator manual.** `scripts/sync-manual.mjs` syncs it from a
+3. **Known issues are public, word for word.** Every `- ` bullet under `## Known issues` in
+   `docs/RELEASE_NOTES-<base>.md` is published as written in the Beta block of
+   hamradiotools.io/download when a beta of that version is tagged, so write them for
+   testers. The list is read at the tag: changing it means a new beta tag. The final release
+   uses the same file, so edit beta-only items out before the final tag.
+4. **The site's copy of the operator manual.** `scripts/sync-manual.mjs` syncs it from a
    local Nexus checkout, which does not exist on a runner, so the site build there runs in
    verify-only mode. A manual change still ships with a hand-run site build.
 
