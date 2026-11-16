@@ -32398,6 +32398,11 @@ button.sat-chip:disabled {
 .pota-sort-pick:hover {
   border-color: var(--accent);
 }
+/* The country picker sizes to its longest name; at a narrow window the row wraps it onto a line
+   of its own, and a name longer than that line is cut by the control rather than overflowing. */
+.pota-country-pick {
+  max-width: 100%;
+}
 
 /* ── APRS cockpit ─────────────────────────────────────────────────────────── */
 .aprs-beacon {

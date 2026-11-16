@@ -1,7 +1,9 @@
 //! Parks/Summits On The Air activator-spot parsing (the "who's on the air now"
 //! hunter feed). Pure JSON→[`OtaSpot`] mapping for the two live APIs; the HTTP
 //! fetch lives in [`crate::live::pota`]. Reference validation is in
-//! `tempo_core::pota`.
+//! `tempo_core::pota`. Where an activator is, for the board's continent and country filters, is
+//! [`spot_country`]: a summit by its SOTA association, anything else by the activator's call,
+//! both through cty.dat.
 
 use serde::{Deserialize, Serialize};
 
@@ -163,6 +165,39 @@ pub fn parse_wwff_spots(json: &str) -> Vec<OtaSpot> {
             })
         })
         .collect()
+}
+
+/// Where an activator is, for the hunter board's continent and country filters: the DXCC entity
+/// (named as cty.dat names it, a WAE-only area as its DXCC entity: Sicily is Italy) and that
+/// entity's cty.dat continent code ("NA", "EU", ...).
+///
+/// A SOTA summit is placed by its association, which is the callsign prefix of the entity the
+/// summit is in ("GM/SS-001" is Scotland, "KH6/OA-001" Hawaii), so the summit settles it even
+/// when the activator signs no portable prefix. Everything else, and a summit whose association
+/// cty.dat cannot place, is placed by the activator's call through cty.dat's prefix rules, which
+/// read a portable prefix as where the operator is ("VE3/W9ABC" is Canada). A POTA reference's
+/// ISO country code or a WWFF programme prefix is not read: neither maps one-to-one onto DXCC
+/// entities (one ISO "US" holds Alaska and Hawaii), and the call already says where the
+/// activator is. A call signed maritime or aeronautical mobile (`/MM`, `/AM`) is in no entity at
+/// all, so it places nothing: cty.dat's prefix walk would read it as the home call's entity.
+/// `(None, None)` when nothing places the spot: never a guess.
+pub fn spot_country(spot: &OtaSpot) -> (Option<&'static str>, Option<&'static str>) {
+    let association = (spot.program == "SOTA")
+        .then(|| spot.reference.split_once('/').map(|(a, _)| a))
+        .flatten();
+    let call = spot.activator.trim().to_ascii_uppercase();
+    let at_sea_or_air = call.ends_with("/MM") || call.ends_with("/AM");
+    let Some(info) = association.and_then(crate::dxcc::resolve).or_else(|| {
+        (!at_sea_or_air)
+            .then(|| crate::dxcc::resolve(&call))
+            .flatten()
+    }) else {
+        return (None, None);
+    };
+    (
+        crate::dxcc::card_entity(Some(&info), None),
+        Some(info.cont).filter(|c| !c.is_empty()),
+    )
 }
 
 /// The US states and Canadian provinces in a POTA `locationDesc`, in the feed's order:
@@ -602,6 +637,102 @@ mod tests {
                 "spotTimeUnix",
                 "spotter"
             ]
+        );
+    }
+
+    fn spot(program: &str, reference: &str, activator: &str) -> OtaSpot {
+        OtaSpot {
+            program: program.into(),
+            reference: reference.into(),
+            name: String::new(),
+            activator: activator.into(),
+            freq_khz: 14_062.0,
+            mode: "CW".into(),
+            spotter: None,
+            comment: None,
+            grid: None,
+            lat: None,
+            lon: None,
+            spot_time_unix: None,
+            states: Vec::new(),
+        }
+    }
+
+    /// A plain call is placed by cty.dat's prefix rules: where the licence is from.
+    #[test]
+    fn plain_call_is_placed_by_its_prefix() {
+        assert_eq!(
+            spot_country(&spot("POTA", "US-1234", "KD9TAW")),
+            (Some("United States"), Some("NA"))
+        );
+    }
+
+    /// A portable call is placed where the activator IS: VE3/KD9TAW operates from Canada, though
+    /// the call under the stroke is a US one.
+    #[test]
+    fn portable_call_is_placed_where_the_activator_is() {
+        assert_eq!(
+            spot_country(&spot("POTA", "CA-1234", "VE3/KD9TAW")),
+            (Some("Canada"), Some("NA"))
+        );
+        assert_eq!(
+            spot_country(&spot("WWFF", "VEFF-0001", "VE3/KD9TAW/P")),
+            (Some("Canada"), Some("NA"))
+        );
+    }
+
+    /// A SOTA summit's association is a callsign prefix of the entity the summit is in, so it
+    /// places the activation even when the activator signs no portable prefix.
+    #[test]
+    fn sota_association_places_the_summit() {
+        assert_eq!(
+            spot_country(&spot("SOTA", "GM/SS-001", "KD9TAW")),
+            (Some("Scotland"), Some("EU"))
+        );
+        assert_eq!(
+            spot_country(&spot("SOTA", "VE2/ES-001", "KD9TAW")),
+            (Some("Canada"), Some("NA"))
+        );
+        // A WAE-only area counts as its DXCC entity: a Sicilian summit is in Italy.
+        assert_eq!(
+            spot_country(&spot("SOTA", "IT9/SI-001", "KD9TAW")),
+            (Some("Italy"), Some("EU"))
+        );
+    }
+
+    /// A station at sea or in the air (/MM, /AM) is in no DXCC entity: the spot is placed nowhere,
+    /// never at the home call's entity. The other operating suffixes keep the call where it was.
+    #[test]
+    fn maritime_and_aeronautical_mobile_are_placed_nowhere() {
+        assert_eq!(
+            spot_country(&spot("POTA", "US-1234", "KD9TAW/MM")),
+            (None, None)
+        );
+        assert_eq!(
+            spot_country(&spot("POTA", "US-1234", "KD9TAW/AM")),
+            (None, None)
+        );
+        assert_eq!(
+            spot_country(&spot("WWFF", "KFF-0001", "kd9taw/mm")),
+            (None, None)
+        );
+        for call in ["KD9TAW/P", "KD9TAW/M", "KD9TAW/QRP"] {
+            assert_eq!(
+                spot_country(&spot("POTA", "US-1234", call)),
+                (Some("United States"), Some("NA")),
+                "{call}"
+            );
+        }
+    }
+
+    /// Nothing cty.dat can place is placed: no guess.
+    #[test]
+    fn unresolvable_spot_has_no_country() {
+        assert_eq!(spot_country(&spot("POTA", "US-1234", "☕️")), (None, None));
+        // An association that resolves to nothing falls back to the call, which does.
+        assert_eq!(
+            spot_country(&spot("SOTA", "☕️/SS-001", "W9ABC")),
+            (Some("United States"), Some("NA"))
         );
     }
 

@@ -5393,8 +5393,12 @@ export const EN = {
   'ota.filter.mode.aria': 'Mode filter',
   'ota.filter.mode.label': 'Mode',
   'ota.filter.all': 'All',
+  'ota.filter.continent.aria': 'Continent filter',
+  'ota.filter.continent.label': 'Continent',
+  'ota.filter.country.aria': 'Country filter',
+  'ota.filter.country.label': 'Country',
   // The Connect box's Filter button (its label is the Spots board's own Filter / Filtered).
-  'ota.filter.toggle.title': 'Show or hide the band, mode and sort choices',
+  'ota.filter.toggle.title': 'Show or hide the band, mode, place and sort choices',
   // The sort picker. The <option> VALUES ('value', 'activator' …) are persisted tokens and
   // stay in the code; these are the words beside them.
   'ota.sort.aria': 'Sort spots',
@@ -5414,6 +5418,8 @@ export const EN = {
   // name, frequency, mode and band — all data, assembled in the component and never here.
   'ota.loading': 'Loading…',
   'ota.empty.filtered': 'No activators match the current filters.',
+  'ota.empty.place': 'No activators from {{place}} right now.',
+  'ota.empty.place.reset': 'Show everywhere',
   'ota.empty': 'No {{program}} activators spotted right now.',
   'ota.spot.spottedBy': 'Spotted by {{spotter}}',
   'ota.spot.bandOpen.tooltip':
