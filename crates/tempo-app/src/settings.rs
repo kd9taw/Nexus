@@ -5028,6 +5028,8 @@ fn lenient_popup_corner<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Popup
 
 /// The choices (enum settings) a settings FILE may hold a value of that this build does not know,
 /// by key, each with the test of whether this build knows a value. See [`forget_unknown_choices`].
+/// A new enum field goes here AND gets a value in the base file of the walk test
+/// (`an_unknown_choice_from_a_newer_build_costs_only_that_setting`), which goes red otherwise.
 const FILE_CHOICES: &[(&str, KnowsValue)] = &[
     ("cwKeyer", knows::<CwKeyerBackend>),
     ("ft4Decoder", knows::<DecoderStyle>),
@@ -5072,17 +5074,23 @@ fn knows<T: serde::de::DeserializeOwned>(v: &serde_json::Value) -> bool {
 /// a save from afar) stays strict and refuses an unknown value, as an unknown licence class must
 /// never quietly become `Open` there. Only an unknown STRING is forgiven: a number where a choice
 /// belongs is a broken file, not a newer one, and still sets it aside.
-fn forget_unknown_choices(doc: &mut serde_json::Value) {
+///
+/// Returns what it forgot, for the one log line [`Settings::load_at`] writes ([`Forgotten::said`]).
+fn forget_unknown_choices(doc: &mut serde_json::Value) -> Forgotten {
+    let mut forgot = Forgotten::default();
     let Some(file) = doc.as_object_mut() else {
-        return;
+        return forgot;
     };
     let unknown = |v: &serde_json::Value, known: KnowsValue| v.is_string() && !known(v);
     for (key, known) in FILE_CHOICES {
         if file.get(*key).is_some_and(|v| unknown(v, *known)) {
-            file.remove(*key);
+            if let Some(serde_json::Value::String(v)) = file.remove(*key) {
+                forgot.choices.push((*key, v));
+            }
         }
     }
     if let Some(serde_json::Value::Array(rules)) = file.get_mut("routingRules") {
+        let before = rules.len();
         rules.retain(|rule| {
             !rule
                 .get("mode")
@@ -5091,6 +5099,66 @@ fn forget_unknown_choices(doc: &mut serde_json::Value) {
                     .get("context")
                     .is_some_and(|v| unknown(v, knows::<RouteContext>))
         });
+        forgot.rules_dropped = before - rules.len();
+    }
+    forgot
+}
+
+/// What [`forget_unknown_choices`] took out of a settings file: each choice (key and the value
+/// this build did not know) and how many routing rules were dropped.
+#[derive(Debug, Default)]
+struct Forgotten {
+    choices: Vec<(&'static str, String)>,
+    rules_dropped: usize,
+}
+
+impl Forgotten {
+    /// The one log line a forgiving load writes, or `None` when nothing was forgotten. A licence
+    /// class comes first and says plainly that the class is now Open, since that lifts the band
+    /// limits: a tester reporting "my band limits are gone" must find why in the log. A value is
+    /// shown only when it is a short identifier (40 characters at most, letters, digits, `-`,
+    /// `_` and `.`); anything else is never written out, so a path or a secret cannot reach the
+    /// log.
+    fn said(&self) -> Option<String> {
+        if self.choices.is_empty() && self.rules_dropped == 0 {
+            return None;
+        }
+        let shown = |v: &str| {
+            let identifier = !v.is_empty()
+                && v.chars().count() <= 40
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+            if identifier {
+                format!("{v:?}")
+            } else {
+                "(not shown)".to_string()
+            }
+        };
+        let mut parts = Vec::new();
+        let mut choices: Vec<&(&str, String)> = self.choices.iter().collect();
+        choices.sort_by_key(|(key, _)| *key != "licenseClass");
+        for (key, v) in choices {
+            parts.push(if *key == "licenseClass" {
+                format!(
+                    "licenseClass={} (the licence class is now Open: band limits and the station \
+                     profile call check are off until it is picked again)",
+                    shown(v)
+                )
+            } else {
+                format!("{key}={}", shown(v))
+            });
+        }
+        let mut said = "settings: values from a newer Nexus were reset to defaults".to_string();
+        if !parts.is_empty() {
+            said.push_str(": ");
+            said.push_str(&parts.join(", "));
+        }
+        match self.rules_dropped {
+            0 => {}
+            1 => said.push_str("; 1 routing rule dropped"),
+            n => said.push_str(&format!("; {n} routing rules dropped")),
+        }
+        Some(said)
     }
 }
 
@@ -8582,11 +8650,18 @@ impl Settings {
             }
             // A file a newer build wrote parses once its unknown choices are forgotten
             // ([`forget_unknown_choices`]); any other failure keeps the first error, line and all.
+            // When it does, one line names what was forgotten ([`Forgotten::said`]), as the
+            // set-aside does.
             Ok(text) => match serde_json::from_str(&text).or_else(|e| {
                 match serde_json::from_str::<serde_json::Value>(&text) {
                     Ok(mut doc) => {
-                        forget_unknown_choices(&mut doc);
-                        serde_json::from_value(doc).map_err(|_| e)
+                        let forgot = forget_unknown_choices(&mut doc);
+                        let s = serde_json::from_value(doc).map_err(|_| e)?;
+                        if let Some(said) = forgot.said() {
+                            eprintln!("tempo: {said}");
+                            tempo_core::applog::warn("settings_forgiven", &said);
+                        }
+                        Ok(s)
                     }
                     Err(_) => Err(e),
                 }
@@ -17111,6 +17186,50 @@ mod tests {
         assert_eq!(back.mycall, "", "a licence class of 3 is a broken file");
         assert_eq!(kept_aside_in(&dir).len(), 1, "and it is set aside");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A forgiving load leaves one log line naming what it forgot: the licence class first and
+    /// plainly (it is now Open), each other choice with its unknown value, and the routing rules
+    /// dropped. A value that is not a short identifier (a path, something long) is never written.
+    /// CONTROL: a file with nothing to forget says nothing.
+    #[test]
+    fn a_forgiving_load_names_what_it_forgot() {
+        let mut doc = serde_json::json!({
+            "mycall": "W1AW",
+            "cwKeyer": "abc",
+            "licenseClass": "xyz",
+            "splitMode": "C:/Users/someone/secret.txt",
+            "operatingMode": "x".repeat(41),
+            "keyboardModem": "psk",
+            "routingRules": [
+                {"mode": "fm", "radio": 1},
+                {"mode": "newmode", "radio": 2},
+                {"context": "newcontext", "radio": 3},
+            ],
+        });
+        let said = forget_unknown_choices(&mut doc)
+            .said()
+            .expect("something was forgotten");
+        assert!(
+            said.starts_with(
+                "settings: values from a newer Nexus were reset to defaults: licenseClass=\"xyz\" \
+                 (the licence class is now Open"
+            ),
+            "{said}"
+        );
+        assert!(said.contains(r#"cwKeyer="abc""#), "{said}");
+        assert!(said.contains("splitMode=(not shown)"), "{said}");
+        assert!(said.contains("operatingMode=(not shown)"), "{said}");
+        assert!(!said.contains("secret") && !said.contains("xxxx"), "{said}");
+        assert!(
+            !said.contains("keyboardModem"),
+            "a known value is not forgotten: {said}"
+        );
+        assert!(said.ends_with("; 2 routing rules dropped"), "{said}");
+        assert_eq!(doc["routingRules"].as_array().unwrap().len(), 1);
+
+        let mut doc = serde_json::json!({"mycall": "W1AW", "licenseClass": "general"});
+        assert_eq!(forget_unknown_choices(&mut doc).said(), None);
     }
 
     /// ⭐ GOING BACK TO AN OLDER BUILD COSTS ONLY THE CHOICES IT DOES NOT KNOW. A newer build
