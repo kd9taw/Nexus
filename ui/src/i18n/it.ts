@@ -4699,6 +4699,7 @@ export const IT: PartialCatalog = {
   "ota.filter.country.label": "Paese",
   "ota.filter.toggle.title": "Mostra o nascondi le scelte di banda, modo, luogo e ordinamento",
   "ota.sort.aria": "Ordina gli spot",
+  "ota.sortPlace.aria": "Ordina gli spot e filtra per luogo",
   "ota.sort.label": "Ordina",
   "ota.sort.title": "Come è ordinato l'elenco degli spot",
   "ota.sort.value": "Collegabili ora",

@@ -1172,8 +1172,9 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
         )}
 
         {/* Sort (sortable-everywhere). Cards, not a column grid — so a picker rather
-            than clickable headers; the arrow flips direction. */}
-        <div className="pota-filter-row" role="group" aria-label={t('ota.sort.aria')}>
+            than clickable headers; the arrow flips direction. With the place pickers in it, the
+            group is named for both, so they are not announced as sort choices. */}
+        <div className="pota-filter-row" role="group" aria-label={canPlace ? t('ota.sortPlace.aria') : t('ota.sort.aria')}>
           <span className="pota-filter-label">{t('ota.sort.label')}</span>
           <select
             className="pota-sort-pick"

@@ -197,9 +197,23 @@ describe('Continent and country filters', () => {
     api.getOtaSpots.mockResolvedValue(FEED)
     render(<PotaSotaView snap={snap} />)
     await screen.findByText('DL1AAA')
-    const sortRow = screen.getByRole('group', { name: t('ota.sort.aria') })
+    // The row's group is named for both jobs it does, so a screen reader does not announce the
+    // place filters as sort choices.
+    const sortRow = screen.getByRole('group', { name: t('ota.sortPlace.aria') })
+    expect(screen.queryByRole('group', { name: t('ota.sort.aria') })).toBeNull()
     expect(within(sortRow).getByRole('combobox', { name: t('ota.filter.continent.aria') })).toBeTruthy()
     expect(within(sortRow).getByRole('combobox', { name: t('ota.filter.country.aria') })).toBeTruthy()
+  })
+
+  it('with no place to pick from, the row is the Sort row alone and is named so', async () => {
+    const legacy = spot('W1AW', 'US-0002', null, null)
+    delete (legacy as Partial<OtaSpot>).country
+    delete (legacy as Partial<OtaSpot>).continent
+    api.getOtaSpots.mockResolvedValue([legacy])
+    render(<PotaSotaView snap={snap} />)
+    await screen.findByText('W1AW')
+    expect(screen.getByRole('group', { name: t('ota.sort.aria') })).toBeTruthy()
+    expect(screen.queryByRole('group', { name: t('ota.sortPlace.aria') })).toBeNull()
   })
 
   it('a place on the list with a band that empties it says the filters, not the place', async () => {

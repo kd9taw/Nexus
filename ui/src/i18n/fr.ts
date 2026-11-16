@@ -5500,6 +5500,7 @@ export const FR: PartialCatalog = {
   "ota.refresh.title": "Actualiser les spots",
   "ota.sort.activator": "Activateur",
   "ota.sort.aria": "Trier les spots",
+  "ota.sortPlace.aria": "Trier les spots et filtrer par lieu",
   "ota.sort.asc.aria": "Trier par ordre croissant",
   "ota.sort.asc.title": "Croissant — cliquer pour décroissant",
   "ota.sort.band": "Bande / fréq",
