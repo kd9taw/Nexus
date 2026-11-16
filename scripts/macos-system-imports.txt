@@ -26,6 +26,9 @@
 #     _fputs, _gethostname, _getloadavg, _pthread_attr_getstacksize, _pthread_exit, _setenv,
 #     _strcasecmp, _strerror, _strtol, _strtoul and _vfprintf, each exported for arm64-macos and
 #     x86_64-macos by usr/lib/system/libsystem_c.tbd or libsystem_pthread.tbd in the macOS 12.3 SDK.
+#   - _remove came with the JTDX-style FT8 and FT4 decoders (2026-11-16): the C library's file
+#     delete, a C89 function libsystem_c exports on every macOS, pulled in by the runtime those
+#     decoders link statically (their own sources do not call it).
 #   - Every name is exported by libSystem in the macOS 11.3 SDK (usr/lib/libSystem.B.tbd and the
 #     usr/lib/system/*.tbd it re-exports) for the architecture that imports it, so it exists on
 #     macOS 12.
@@ -330,6 +333,7 @@ _realloc
 _realpath$DARWIN_EXTSN
 _recv
 _recvfrom
+_remove
 _rename
 _rmdir
 _sched_yield
