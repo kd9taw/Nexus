@@ -413,7 +413,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
   })()
 
   // The continents on the list, in the fixed NA → OC order, and the countries on it (on the chosen
-  // continent only), alphabetically. A picked one keeps its control whether or not anyone is there
+  // continent only), alphabetically. A picked one keeps its option whether or not anyone is there
   // now, as a picked band keeps its chip: a remembered filter with nothing to show it empties the
   // board with no way to see why.
   const availableContinents = CONTINENT_CODES.filter(
@@ -1171,49 +1171,6 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
           </div>
         )}
 
-        {/* Where the activator is: continent chips, then the country picker, one wrapping row. */}
-        {canPlace && (
-          <div className="pota-filter-row" role="group" aria-label={t('ota.filter.continent.aria')}>
-            <span className="pota-filter-label">{t('ota.filter.continent.label')}</span>
-            <button
-              type="button"
-              className={`filter-chip${continentFilter === 'All' ? ' active' : ''}`}
-              onClick={() => setContinentFilter('All')}
-            >
-              {t('ota.filter.all')}
-            </button>
-            {availableContinents.map((c) => (
-              <button
-                key={c}
-                type="button"
-                className={`filter-chip${continentFilter === c ? ' active' : ''}`}
-                onClick={() => {
-                  setContinentFilter(c)
-                  // A country elsewhere would empty the board the moment a continent is picked.
-                  if (!spots.some((s) => s.country === countryFilter && s.continent === c)) setCountryFilter('All')
-                }}
-              >
-                {continentName(c)}
-              </button>
-            ))}
-            <span className="pota-filter-label">{t('ota.filter.country.label')}</span>
-            <select
-              className="pota-sort-pick pota-country-pick"
-              value={countryFilter}
-              onChange={(e) => setCountryFilter(e.target.value)}
-              aria-label={t('ota.filter.country.aria')}
-            >
-              {/* The <option> VALUES are the persisted filter; a country is named as cty.dat names it. */}
-              <option value="All">{t('ota.filter.all')}</option>
-              {availableCountries.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
         {/* Sort (sortable-everywhere). Cards, not a column grid — so a picker rather
             than clickable headers; the arrow flips direction. */}
         <div className="pota-filter-row" role="group" aria-label={t('ota.sort.aria')}>
@@ -1240,6 +1197,45 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
           >
             {sortAsc ? '▲' : '▼'}
           </button>
+          {/* Where the activator is: two pickers in this row rather than a row of their own, so at
+              a narrow window they cost at most one wrapped line of the feed's height. */}
+          {canPlace && <>
+            <span className="pota-filter-label">{t('ota.filter.continent.label')}</span>
+            <select
+              className="pota-sort-pick"
+              value={continentFilter}
+              onChange={(e) => {
+                const c = e.target.value
+                setContinentFilter(c)
+                // A country elsewhere would empty the board the moment a continent is picked.
+                if (c !== 'All' && !spots.some((s) => s.country === countryFilter && s.continent === c)) setCountryFilter('All')
+              }}
+              aria-label={t('ota.filter.continent.aria')}
+            >
+              {/* The <option> VALUES are the persisted continent codes; only the labels are prose. */}
+              <option value="All">{t('ota.filter.all')}</option>
+              {availableContinents.map((c) => (
+                <option key={c} value={c}>
+                  {continentName(c)}
+                </option>
+              ))}
+            </select>
+            <span className="pota-filter-label">{t('ota.filter.country.label')}</span>
+            <select
+              className="pota-sort-pick pota-country-pick"
+              value={countryFilter}
+              onChange={(e) => setCountryFilter(e.target.value)}
+              aria-label={t('ota.filter.country.aria')}
+            >
+              {/* The <option> VALUES are the persisted filter; a country is named as cty.dat names it. */}
+              <option value="All">{t('ota.filter.all')}</option>
+              {availableCountries.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </>}
         </div>
         </>}
       </div>

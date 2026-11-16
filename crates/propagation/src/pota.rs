@@ -178,15 +178,20 @@ pub fn parse_wwff_spots(json: &str) -> Vec<OtaSpot> {
 /// read a portable prefix as where the operator is ("VE3/W9ABC" is Canada). A POTA reference's
 /// ISO country code or a WWFF programme prefix is not read: neither maps one-to-one onto DXCC
 /// entities (one ISO "US" holds Alaska and Hawaii), and the call already says where the
-/// activator is. `(None, None)` when nothing places the spot: never a guess.
+/// activator is. A call signed maritime or aeronautical mobile (`/MM`, `/AM`) is in no entity at
+/// all, so it places nothing: cty.dat's prefix walk would read it as the home call's entity.
+/// `(None, None)` when nothing places the spot: never a guess.
 pub fn spot_country(spot: &OtaSpot) -> (Option<&'static str>, Option<&'static str>) {
     let association = (spot.program == "SOTA")
         .then(|| spot.reference.split_once('/').map(|(a, _)| a))
         .flatten();
-    let Some(info) = association
-        .and_then(crate::dxcc::resolve)
-        .or_else(|| crate::dxcc::resolve(&spot.activator))
-    else {
+    let call = spot.activator.trim().to_ascii_uppercase();
+    let at_sea_or_air = call.ends_with("/MM") || call.ends_with("/AM");
+    let Some(info) = association.and_then(crate::dxcc::resolve).or_else(|| {
+        (!at_sea_or_air)
+            .then(|| crate::dxcc::resolve(&call))
+            .flatten()
+    }) else {
         return (None, None);
     };
     (
@@ -693,6 +698,31 @@ mod tests {
             spot_country(&spot("SOTA", "IT9/SI-001", "KD9TAW")),
             (Some("Italy"), Some("EU"))
         );
+    }
+
+    /// A station at sea or in the air (/MM, /AM) is in no DXCC entity: the spot is placed nowhere,
+    /// never at the home call's entity. The other operating suffixes keep the call where it was.
+    #[test]
+    fn maritime_and_aeronautical_mobile_are_placed_nowhere() {
+        assert_eq!(
+            spot_country(&spot("POTA", "US-1234", "KD9TAW/MM")),
+            (None, None)
+        );
+        assert_eq!(
+            spot_country(&spot("POTA", "US-1234", "KD9TAW/AM")),
+            (None, None)
+        );
+        assert_eq!(
+            spot_country(&spot("WWFF", "KFF-0001", "kd9taw/mm")),
+            (None, None)
+        );
+        for call in ["KD9TAW/P", "KD9TAW/M", "KD9TAW/QRP"] {
+            assert_eq!(
+                spot_country(&spot("POTA", "US-1234", call)),
+                (Some("United States"), Some("NA")),
+                "{call}"
+            );
+        }
     }
 
     /// Nothing cty.dat can place is placed: no guess.

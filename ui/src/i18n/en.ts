@@ -5398,7 +5398,7 @@ export const EN = {
   'ota.filter.country.aria': 'Country filter',
   'ota.filter.country.label': 'Country',
   // The Connect box's Filter button (its label is the Spots board's own Filter / Filtered).
-  'ota.filter.toggle.title': 'Show or hide the band, mode and sort choices',
+  'ota.filter.toggle.title': 'Show or hide the band, mode, place and sort choices',
   // The sort picker. The <option> VALUES ('value', 'activator' …) are persisted tokens and
   // stay in the code; these are the words beside them.
   'ota.sort.aria': 'Sort spots',

@@ -4835,7 +4835,7 @@ export const RU: PartialCatalog = {
   "ota.filter.continent.label": "Континент",
   "ota.filter.country.aria": "Фильтр по стране",
   "ota.filter.country.label": "Страна",
-  "ota.filter.toggle.title": "Показать или скрыть выбор диапазона, режима и сортировки",
+  "ota.filter.toggle.title": "Показать или скрыть выбор диапазона, режима, места и сортировки",
   "ota.sort.aria": "Сортировка спотов",
   "ota.sort.label": "Сортировать",
   "ota.sort.title": "Порядок списка спотов",

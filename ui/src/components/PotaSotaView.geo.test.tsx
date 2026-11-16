@@ -4,7 +4,8 @@
 // low-power station can list only the activations it can reach.
 //
 // The station places each spot (`country`, `continent`: cty.dat's entity and continent, null when
-// nothing places it); these tests take that as given. The board's job: offer only the continents
+// nothing places it); these tests take that as given. Both are pickers in the Sort row, not a row of
+// their own: a row costs the feed its height at a narrow window. The board's job: offer only the continents
 // and countries on the list now, in a fixed continent order and an alphabetical country order,
 // default to All, remember the choice per surface, show an unplaced spot under All only, and never
 // let a remembered place that is on nobody's list now hide the board without saying so and
@@ -62,8 +63,9 @@ const FEED = [
   spot('X0NONE', 'XX-0001', null, null),
 ]
 
-const continentRow = () => screen.getByRole('group', { name: t('ota.filter.continent.aria') })
+const continentPick = () => screen.getByRole('combobox', { name: t('ota.filter.continent.aria') }) as HTMLSelectElement
 const countryPick = () => screen.getByRole('combobox', { name: t('ota.filter.country.aria') }) as HTMLSelectElement
+const pickContinent = (code: string) => fireEvent.change(continentPick(), { target: { value: code } })
 const optionLabels = (sel: HTMLSelectElement) => [...sel.options].map((o) => o.textContent)
 
 beforeEach(() => {
@@ -81,8 +83,7 @@ describe('Continent and country filters', () => {
     render(<PotaSotaView snap={snap} />)
     await screen.findByText('DL1AAA')
     for (const call of ['KD9TAW', 'VE3/KD9TAW', 'G1AAA', 'X0NONE']) expect(screen.getByText(call)).toBeTruthy()
-    const all = within(continentRow()).getByRole('button', { name: t('ota.filter.all') })
-    expect(all.className).toContain('active')
+    expect(continentPick().value).toBe('All')
     expect(countryPick().value).toBe('All')
   })
 
@@ -90,10 +91,8 @@ describe('Continent and country filters', () => {
     api.getOtaSpots.mockResolvedValue(FEED)
     render(<PotaSotaView snap={snap} />)
     await screen.findByText('DL1AAA')
-    const labels = within(continentRow())
-      .getAllByRole('button')
-      .map((b) => b.textContent)
-    expect(labels).toEqual([t('ota.filter.all'), continentName('NA'), continentName('EU')])
+    expect(optionLabels(continentPick())).toEqual([t('ota.filter.all'), continentName('NA'), continentName('EU')])
+    expect([...continentPick().options].map((o) => o.value), 'the stored values are the codes').toEqual(['All', 'NA', 'EU'])
   })
 
   it('lists only the countries on the list, alphabetically, narrowed to the chosen continent', async () => {
@@ -107,7 +106,7 @@ describe('Continent and country filters', () => {
       'Fed. Rep. of Germany',
       'United States',
     ])
-    fireEvent.click(within(continentRow()).getByRole('button', { name: continentName('EU') }))
+    pickContinent('EU')
     expect(optionLabels(countryPick())).toEqual([t('ota.filter.all'), 'England', 'Fed. Rep. of Germany'])
   })
 
@@ -115,7 +114,7 @@ describe('Continent and country filters', () => {
     api.getOtaSpots.mockResolvedValue(FEED)
     render(<PotaSotaView snap={snap} />)
     await screen.findByText('DL1AAA')
-    fireEvent.click(within(continentRow()).getByRole('button', { name: continentName('NA') }))
+    pickContinent('NA')
     expect(screen.getByText('KD9TAW')).toBeTruthy()
     expect(screen.getByText('VE3/KD9TAW')).toBeTruthy()
     expect(screen.queryByText('DL1AAA')).toBeNull()
@@ -136,7 +135,7 @@ describe('Continent and country filters', () => {
     api.getOtaSpots.mockResolvedValue(FEED)
     const first = render(<PotaSotaView snap={snap} />)
     await screen.findByText('DL1AAA')
-    fireEvent.click(within(continentRow()).getByRole('button', { name: continentName('EU') }))
+    pickContinent('EU')
     fireEvent.change(countryPick(), { target: { value: 'England' } })
     expect(localStorage.getItem('nexus.ota.continentFilter')).toBe('EU')
     expect(localStorage.getItem('nexus.ota.countryFilter')).toBe('England')
@@ -163,13 +162,13 @@ describe('Continent and country filters', () => {
     expect(localStorage.getItem('nexus.ota.countryFilter')).toBe('All')
   })
 
-  it('a remembered continent on nobody’s list now says so, keeps its chip lit, and offers one click back', async () => {
+  it('a remembered continent on nobody’s list now says so, keeps its option picked, and offers one click back', async () => {
     localStorage.setItem('nexus.ota.continentFilter', 'OC')
     api.getOtaSpots.mockResolvedValue(FEED)
     render(<PotaSotaView snap={snap} />)
     expect(await screen.findByText(t('ota.empty.place', { place: continentName('OC') }))).toBeTruthy()
-    const lit = within(continentRow()).getByRole('button', { name: continentName('OC') })
-    expect(lit.className).toContain('active')
+    expect(continentPick().value).toBe('OC')
+    expect(optionLabels(continentPick())).toContain(continentName('OC'))
     fireEvent.click(screen.getByRole('button', { name: t('ota.empty.place.reset') }))
     expect(screen.getByText('DL1AAA')).toBeTruthy()
     expect(localStorage.getItem('nexus.ota.continentFilter')).toBe('All')
@@ -190,6 +189,52 @@ describe('Continent and country filters', () => {
     api.getOtaSpots.mockResolvedValue([legacy])
     render(<PotaSotaView snap={snap} />)
     await screen.findByText('W1AW')
-    expect(screen.queryByRole('group', { name: t('ota.filter.continent.aria') })).toBeNull()
+    expect(screen.queryByRole('combobox', { name: t('ota.filter.continent.aria') })).toBeNull()
+    expect(screen.queryByRole('combobox', { name: t('ota.filter.country.aria') })).toBeNull()
+  })
+
+  it('both pickers sit in the Sort row: the place filters add no row of their own', async () => {
+    api.getOtaSpots.mockResolvedValue(FEED)
+    render(<PotaSotaView snap={snap} />)
+    await screen.findByText('DL1AAA')
+    const sortRow = screen.getByRole('group', { name: t('ota.sort.aria') })
+    expect(within(sortRow).getByRole('combobox', { name: t('ota.filter.continent.aria') })).toBeTruthy()
+    expect(within(sortRow).getByRole('combobox', { name: t('ota.filter.country.aria') })).toBeTruthy()
+  })
+
+  it('a place on the list with a band that empties it says the filters, not the place', async () => {
+    // England is on the list (on 20 m); 40 m is what hides it.
+    localStorage.setItem('nexus.ota.countryFilter', 'England')
+    localStorage.setItem('nexus.ota.bandFilter', JSON.stringify(['40m']))
+    api.getOtaSpots.mockResolvedValue(FEED)
+    render(<PotaSotaView snap={snap} />)
+    expect(await screen.findByText(t('ota.empty.filtered'))).toBeTruthy()
+    expect(screen.queryByText(t('ota.empty.place', { place: 'England' }))).toBeNull()
+    expect(screen.queryByRole('button', { name: t('ota.empty.place.reset') })).toBeNull()
+  })
+
+  it('a place with a mode that empties it says the filters too', async () => {
+    localStorage.setItem('nexus.ota.continentFilter', 'EU')
+    localStorage.setItem('nexus.ota.modeFilter', 'CW')
+    api.getOtaSpots.mockResolvedValue(FEED)
+    render(<PotaSotaView snap={snap} />)
+    expect(await screen.findByText(t('ota.empty.filtered'))).toBeTruthy()
+  })
+
+  it('the Connect box’s Filter button says Filtered from a place alone', async () => {
+    localStorage.setItem('nexus.connect.ota.continentFilter', 'EU')
+    api.getOtaSpots.mockResolvedValue(FEED)
+    render(<PotaSotaView snap={snap} pane />)
+    await screen.findByText('DL1AAA')
+    const toggle = screen.getByRole('button', { name: t('spots.filter.toggle.active') })
+    expect(toggle.className).toContain('active')
+    expect(screen.queryByText('KD9TAW'), 'the place filter applies with the rows closed').toBeNull()
+  })
+
+  it('the Connect box’s Filter button is idle with every filter at All', async () => {
+    api.getOtaSpots.mockResolvedValue(FEED)
+    render(<PotaSotaView snap={snap} pane />)
+    await screen.findByText('DL1AAA')
+    expect(screen.getByRole('button', { name: t('spots.filter.toggle.idle') })).toBeTruthy()
   })
 })

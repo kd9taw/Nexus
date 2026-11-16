@@ -5796,7 +5796,7 @@ export const DE: PartialCatalog = {
   "ota.filter.continent.label": "Kontinent",
   "ota.filter.country.aria": "Länderfilter",
   "ota.filter.country.label": "Land",
-  "ota.filter.toggle.title": "Auswahl für Band, Mode und Sortierung ein- oder ausblenden",
+  "ota.filter.toggle.title": "Auswahl für Band, Mode, Ort und Sortierung ein- oder ausblenden",
   "ota.sort.aria": "Spots sortieren",
   "ota.sort.label": "Sortierung",
   "ota.sort.title": "Reihenfolge der Spot-Liste",

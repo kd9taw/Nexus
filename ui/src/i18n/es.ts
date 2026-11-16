@@ -5462,7 +5462,7 @@ export const ES: PartialCatalog = {
   "ota.filter.continent.label": "Continente",
   "ota.filter.country.aria": "Filtro de país",
   "ota.filter.country.label": "País",
-  "ota.filter.toggle.title": "Mostrar u ocultar las opciones de banda, modo y orden",
+  "ota.filter.toggle.title": "Mostrar u ocultar las opciones de banda, modo, lugar y orden",
   "ota.filter.band.aria": "Filtro de banda",
   "ota.filter.band.label": "Banda",
   "ota.filter.mode.aria": "Filtro de modo",

@@ -4490,7 +4490,7 @@ export const ZH: PartialCatalog = {
   "ota.filter.continent.label": "大洲",
   "ota.filter.country.aria": "国家筛选",
   "ota.filter.country.label": "国家",
-  "ota.filter.toggle.title": "显示或隐藏波段、模式和排序选项",
+  "ota.filter.toggle.title": "显示或隐藏波段、模式、地区和排序选项",
   "ota.sort.aria": "排序 spot",
   "ota.sort.label": "排序",
   "ota.sort.title": "spot 列表的排列方式",
