@@ -77,9 +77,10 @@ fn parse_triple(v: &str) -> Option<(u32, u32, u32)> {
 /// ever. A rule the comparator cannot read is not a rule.
 ///
 /// This is semver's precedence for the shapes we ship, not a semver implementation: build
-/// metadata (`+sha`) is not handled because nothing here produces it, and prerelease tags are
-/// compared as plain strings rather than as dot-separated identifiers.
-fn parse_version(v: &str) -> Option<(u32, u32, u32, u8, String)> {
+/// metadata (`+sha`) is not handled because nothing here produces it. The prerelease tag is
+/// compared identifier by identifier ([`PreId`]), so `-beta.10` follows `-beta.9`; compared as
+/// one string it sorted below it, and a `-beta.9` tester was never offered a later beta.
+fn parse_version(v: &str) -> Option<(u32, u32, u32, u8, Vec<PreId>)> {
     let (core, pre) = match v.split_once('-') {
         Some((core, pre)) if !pre.is_empty() => (core, Some(pre)),
         Some(_) => return None, // "1.7.1-" — a truncated tag, not a version
@@ -88,9 +89,38 @@ fn parse_version(v: &str) -> Option<(u32, u32, u32, u8, String)> {
     let (a, b, c) = parse_triple(core)?;
     // 0 sorts a prerelease BELOW the release of the same number; 1 is the release itself.
     Some(match pre {
-        Some(tag) => (a, b, c, 0, tag.to_string()),
-        None => (a, b, c, 1, String::new()),
+        Some(tag) => (
+            a,
+            b,
+            c,
+            0,
+            tag.split('.').map(PreId::parse).collect::<Option<_>>()?,
+        ),
+        None => (a, b, c, 1, Vec::new()),
     })
+}
+
+/// One dot-separated prerelease identifier, in semver's order: a numeric identifier compares as
+/// a number and sorts below every alphanumeric one, an alphanumeric one compares as text. The
+/// derived order of the variants and of a `Vec` of them is exactly that, and a longer set sorts
+/// above a shorter set it starts with (`alpha.1` > `alpha`).
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum PreId {
+    Num(u64),
+    Alpha(String),
+}
+
+impl PreId {
+    /// `None` for an empty identifier (`beta..1`, `beta.`): a malformed tag, not a version.
+    fn parse(id: &str) -> Option<PreId> {
+        if id.is_empty() {
+            None
+        } else if id.bytes().all(|b| b.is_ascii_digit()) {
+            id.parse().ok().map(PreId::Num)
+        } else {
+            Some(PreId::Alpha(id.to_string()))
+        }
+    }
 }
 
 /// True only when `latest` is a strictly newer version than `current`, compared NUMERICALLY
@@ -202,6 +232,71 @@ mod tests {
         assert!(version_is_newer("0.10.0", "0.9.0"));
         assert!(!version_is_newer("1.7.0", "1.7.0"));
         assert!(!version_is_newer("garbage", "1.7.0"));
+    }
+
+    // PRERELEASE TAGS ORDER BY SEMVER IDENTIFIERS, NOT AS ONE STRING.
+    //
+    // Betas are numbered `-beta.N`. Compared as a plain string, "beta.10" sorts BELOW "beta.9"
+    // ('1' < '9'), so a beta.9 tester would never be offered beta.10 or anything after it until
+    // the stable release. Dot-separated identifiers compare one by one: numeric ones as numbers,
+    // alphanumeric ones lexically, numeric below alphanumeric, and a longer set above a shorter
+    // set it starts with.
+    #[test]
+    fn prerelease_identifiers_compare_the_semver_way() {
+        assert!(
+            version_is_newer("1.25.0-beta.10", "1.25.0-beta.9"),
+            "beta.10 follows beta.9"
+        );
+        assert!(!version_is_newer("1.25.0-beta.9", "1.25.0-beta.10"));
+        assert!(version_is_newer("1.25.0-beta.2", "1.25.0-beta.1"));
+        assert!(!version_is_newer("1.25.0-beta.2", "1.25.0-beta.2"));
+        assert!(
+            version_is_newer("1.25.0", "1.25.0-beta.10"),
+            "the release supersedes every beta"
+        );
+        assert!(!version_is_newer("1.25.0-beta.10", "1.25.0"));
+        assert!(version_is_newer("1.25.1-beta.1", "1.25.0"));
+        assert!(!version_is_newer("1.25.0", "1.25.1-beta.1"));
+        // The rest of semver's prerelease precedence.
+        assert!(
+            version_is_newer("1.0.0-alpha.1", "1.0.0-alpha"),
+            "longer set wins"
+        );
+        assert!(
+            version_is_newer("1.0.0-alpha.beta", "1.0.0-alpha.1"),
+            "alpha above numeric"
+        );
+        assert!(version_is_newer("1.0.0-beta", "1.0.0-alpha.beta"));
+        assert!(version_is_newer("1.0.0-rc.1", "1.0.0-beta.11"));
+        // An empty identifier ("beta..1", "beta.") is malformed, never a version.
+        assert!(!version_is_newer("1.25.0-beta..1", "1.24.0"));
+        assert!(!version_is_newer("1.25.0-beta.", "1.24.0"));
+    }
+
+    #[test]
+    fn beta_channel_picks_beta_10_over_beta_9() {
+        let body = format!(
+            "[{},{}]",
+            release(
+                "v1.25.0-beta.9",
+                false,
+                true,
+                Some("https://x/beta9/latest.json")
+            ),
+            release(
+                "v1.25.0-beta.10",
+                false,
+                true,
+                Some("https://x/beta10/latest.json")
+            ),
+        );
+        assert_eq!(
+            newest_release_manifest(&body),
+            Some((
+                "1.25.0-beta.10".to_string(),
+                "https://x/beta10/latest.json".to_string()
+            ))
+        );
     }
 
     #[test]
