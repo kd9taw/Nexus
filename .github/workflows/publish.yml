@@ -30,6 +30,14 @@
 #   * Build anything. Every byte published here is downloaded from the GitHub Release, so
 #     SourceForge and the site can never disagree with what GitHub actually served.
 #
+# A PRERELEASE (v1.25.0-beta.1) TAKES THE OTHER LEG. The `publish-beta` job writes ONLY the
+# `beta` object of the site's version.json, beside `latest`, then builds, deploys and checks
+# the site the way the stable leg does. It never touches `latest` (installed apps read only
+# that key, and it must stay a plain X.Y.Z), the SourceForge mirror, FRS, the SF default
+# download or the site's displayed version. The stable `publish` job never runs for a
+# prerelease, so a beta still cannot move the feed every operator's update check reads. When a
+# stable release publishes, it drops the `beta` object if the beta is at or below it.
+#
 # TRIGGERING — THE ONE THING THAT WILL BITE YOU
 # `on: release: published` does NOT fire for a release created by another workflow using
 # the built-in GITHUB_TOKEN, and release.yml's publish job uses exactly that
@@ -118,6 +126,8 @@ jobs:
       tag: ${{ steps.rel.outputs.tag }}
       ver: ${{ steps.rel.outputs.ver }}
       proceed: ${{ steps.rel.outputs.proceed }}
+      # `stable` runs the `publish` job, `beta` (a prerelease) runs `publish-beta`. Never both.
+      channel: ${{ steps.rel.outputs.channel }}
     steps:
       # Every secret is checked in ONE pass so the operator sees the complete list rather
       # than the first failure alphabetically. The `secrets` context cannot be used in a
@@ -169,8 +179,8 @@ jobs:
           # A junk tag would propagate into a SourceForge directory name, five published
           # download URLs and the app's update feed. Refuse anything that is not vX.Y.Z, but
           # permit an optional SemVer prerelease suffix (v1.10.3-beta.1) so a prerelease tag
-          # passes format validation and reaches the isPrerelease skip below — which exits 0
-          # and moves no stable feed. Junk is still rejected.
+          # passes format validation and reaches the isPrerelease branch below — which sends it
+          # to the beta leg and moves no stable feed. Junk is still rejected.
           ver="${tag#v}"
           printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' \
             || { echo "tag '$tag' is not vX.Y.Z[-suffix] — refusing to publish it downstream"; exit 1; }
@@ -187,21 +197,22 @@ jobs:
           echo "ver=$ver" >> "$GITHUB_OUTPUT"
 
           if [ "$pre" = "true" ]; then
-            # A prerelease must not move the feeds every operator's update check reads.
-            # This is a decision, not a skipped step: it is stated in the run summary so
-            # nobody has to infer it from a grey job badge.
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            # A prerelease must not move the feeds every operator's update check reads, so it
+            # never reaches the `publish` job. It goes to `publish-beta`, which writes only the
+            # site's `beta` object. This is a decision, not a skipped step: it is stated in
+            # the run summary so nobody has to infer it from a grey job badge.
+            echo "channel=beta" >> "$GITHUB_OUTPUT"
             {
-              echo "### $tag is a prerelease — downstream publish deliberately not run"
+              echo "### $tag is a prerelease — publishing the site's Beta only"
               echo
-              echo "The SourceForge mirror/FRS upload and the hamradiotools.io update feed"
-              echo "serve every operator's 'Check for updates'. Moving them to a prerelease"
-              echo "would push a pre-production build at the whole user base."
-              echo
-              echo "To publish it anyway: mark the release as a full release, then run this"
-              echo "workflow with tag \`$tag\`."
+              echo "The SourceForge mirror/FRS upload and the \`latest\` key of the"
+              echo "hamradiotools.io update feed serve every operator's 'Check for updates'."
+              echo "Moving them to a prerelease would push a pre-production build at the whole"
+              echo "user base, so none of them is touched. Only the feed's \`beta\` object and"
+              echo "the download page's Beta block change."
             } | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 0
+          else
+            echo "channel=stable" >> "$GITHUB_OUTPUT"
           fi
           echo "proceed=true" >> "$GITHUB_OUTPUT"
           echo "publishing $tag ($ver) downstream"
@@ -261,7 +272,9 @@ jobs:
   publish:
     name: SourceForge + site
     needs: resolve
-    if: needs.resolve.outputs.proceed == 'true'
+    # Stable releases only. A prerelease goes to `publish-beta` below and never reaches a step
+    # of this job, which is what keeps it off SourceForge and out of `latest`.
+    if: needs.resolve.outputs.proceed == 'true' && needs.resolve.outputs.channel == 'stable'
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 90
@@ -612,6 +625,26 @@ jobs:
                       h.update(chunk)
               return h.hexdigest()
 
+          def semver_key(v):
+              """SemVer 2.0 precedence: a release outranks its prereleases, and prerelease
+              identifiers compare numerically when numeric (beta.10 > beta.9)."""
+              core, _, pre = v.partition("-")
+              nums = tuple(int(x) for x in core.split("."))
+              if not pre:
+                  return (nums, 1, ())
+              return (nums, 0, tuple((0, int(i), "") if i.isdigit() else (1, 0, i)
+                                     for i in pre.split(".")))
+
+          # The beta object, if one is live, survives a stable release only while it is still
+          # ahead of it: 1.25.0 shipping removes 1.25.0-beta.N (and anything older), a 1.24.1
+          # patch keeps a live 1.25.0-beta.N on the download page.
+          feed = pathlib.Path("public/nexus/version.json")
+          old_beta = json.loads(feed.read_text(encoding="utf-8")).get("beta")
+          keep_beta = bool(old_beta) and semver_key(old_beta["version"]) > semver_key(ver)
+          if old_beta:
+              print(f"beta {old_beta['version']}: " + ("kept, still ahead of " if keep_beta
+                    else "removed, at or below ") + ver)
+
           base = f"https://github.com/kd9taw/Nexus/releases/download/{tag}"
           assets = {
               "windows":       f"Nexus_{ver}_x64-setup.exe",
@@ -636,8 +669,9 @@ jobs:
                   k: {"url": f"{base}/{n}", "sha256": digest(n)} for k, n in assets.items()
               },
           }
-          pathlib.Path("public/nexus/version.json").write_text(
-              json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+          if keep_beta:
+              doc["beta"] = old_beta
+          feed.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
           # The site's own copy of the version drives the hero, the download button and the
           # manual's title on every page. It has been bumped in the same commit as
@@ -769,4 +803,363 @@ jobs:
             echo "   \`notes\` field. Put operator prose in \`docs/RELEASE_NOTES-${VER}.md\`"
             echo "   before tagging to control it."
             echo "3. The site's copy of the operator manual is not synced by CI."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------------------
+  # Publish the beta — a prerelease tag's leg, and the only thing a prerelease publishes.
+  # It writes the `beta` object of the site's version.json and deploys the site. Everything
+  # else in that file stays byte-for-byte as main has it (checked below, not assumed): above
+  # all `latest`, the key every installed app's update check reads. There is no SourceForge
+  # step in this job at all, and src/data/site.ts (the version the site advertises) is not
+  # touched. The steps mirror the stable job's site half on purpose, gate for gate; a change
+  # to one of those gates belongs in both jobs.
+  # ---------------------------------------------------------------------------------------
+  publish-beta:
+    name: Site beta only
+    needs: resolve
+    if: needs.resolve.outputs.proceed == 'true' && needs.resolve.outputs.channel == 'beta'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 60
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
+      VER: ${{ needs.resolve.outputs.ver }}
+      # Where the download page sends a tester with a problem.
+      BETA_REPORT_URL: https://github.com/kd9taw/Nexus/issues
+    steps:
+      - name: Scratch space outside the checkout
+        run: |
+          set -euo pipefail
+          echo "WORK=$RUNNER_TEMP/publish" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/publish"
+
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Gate — the tag is on main and its base matches the committed version
+        run: |
+          set -euo pipefail
+          git fetch --quiet --tags --force origin main
+          git checkout --quiet -B main origin/main
+          git merge-base --is-ancestor "$TAG" main || {
+            echo "::error::$TAG is not an ancestor of main. Betas are tagged on main; merge first."
+            exit 1
+          }
+          # The repo stays at the plain base version and the tag carries the suffix
+          # (scripts/stamp-version.sh stamps it in at build time), so v1.25.0-beta.1 must find
+          # 1.25.0 committed at the tag. Via a file, not a pipe (see the stable job).
+          base="${VER%%-*}"
+          git show "$TAG:src-tauri/tauri.conf.json" > "$WORK/tauri.conf.json"
+          conf=$(grep -m1 '"version"' "$WORK/tauri.conf.json" | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+          [ "$conf" = "$base" ] || { echo "$TAG is a beta of $base but tauri.conf.json at that tag says $conf"; exit 1; }
+          echo "tag $TAG ($VER, base $base) is an ancestor of main @ $(git rev-parse --short main)"
+
+      # The same wait as the stable job: the release is created before the Pi .debs and the
+      # rewritten SHA256SUMS.txt are attached.
+      - name: Wait for the release to carry every artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          req=$(printf '%s\n' \
+            "Nexus_${VER}_x64-setup.exe" \
+            "Nexus_${VER}_aarch64.dmg" \
+            "Nexus_${VER}_x64.dmg" \
+            "Nexus_${VER}_amd64.AppImage" \
+            "Nexus_${VER}_pc_amd64.deb" \
+            "Nexus_${VER}_pi_arm64_bookworm.deb" \
+            "Nexus_${VER}_pi_arm64_trixie.deb" \
+            "SHA256SUMS.txt")
+          mkdir -p "$WORK/poll"
+          deadline=$(( SECONDS + 1800 ))
+          while :; do
+            have=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+            missing=''
+            while read -r f; do
+              printf '%s\n' "$have" | grep -Fxq "$f" || missing="$missing $f"
+            done <<< "$req"
+
+            unsummed=''
+            if [ -z "$missing" ]; then
+              rm -f "$WORK/poll/SHA256SUMS.txt"
+              gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+                --pattern SHA256SUMS.txt --dir "$WORK/poll" --clobber
+              while read -r f; do
+                [ "$f" = "SHA256SUMS.txt" ] && continue
+                grep -Fq "  $f" "$WORK/poll/SHA256SUMS.txt" || unsummed="$unsummed $f"
+              done <<< "$req"
+              [ -z "$unsummed" ] && break
+            fi
+
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::release $TAG never became complete after 30 minutes."
+              [ -n "$missing" ]  && echo "  never attached:${missing}"
+              [ -n "$unsummed" ] && echo "  attached but absent from SHA256SUMS.txt:${unsummed}"
+              echo "  Check the Release workflow run for $TAG — publish-pi has probably failed."
+              exit 1
+            fi
+            echo "waiting (${SECONDS}s): missing=[${missing:- none}] unsummed=[${unsummed:- none}]"
+            sleep 30
+          done
+          echo "release $TAG carries the complete artifact set"
+
+      # Only the seven installers the download page lists, plus the sums: nothing here goes to
+      # SourceForge, so the signatures and updater manifests are not needed.
+      - name: Download the installers and verify every checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$WORK/dist"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$WORK/dist" --clobber \
+            --pattern "Nexus_${VER}_x64-setup.exe" --pattern "Nexus_${VER}_aarch64.dmg" \
+            --pattern "Nexus_${VER}_x64.dmg" --pattern "Nexus_${VER}_amd64.AppImage" \
+            --pattern "Nexus_${VER}_pc_amd64.deb" --pattern "Nexus_${VER}_pi_arm64_bookworm.deb" \
+            --pattern "Nexus_${VER}_pi_arm64_trixie.deb" --pattern SHA256SUMS.txt
+          cd "$WORK/dist"
+          ls -la
+          # --ignore-missing: the sums list files not downloaded here. A file that IS here and
+          # does not match still fails, and the digest step below fails on one that is absent.
+          sha256sum -c --ignore-missing SHA256SUMS.txt
+
+      - name: Site — write the beta object into version.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SITE_REPO_TOKEN: ${{ secrets.SITE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          # THE BASE GATE, as in the stable job: the tree we build must be the tree the live
+          # site came from. A beta never moves `latest`, so main's `latest` and the live one
+          # must be equal; there is no resumed-run exception to make.
+          live=$(curl -fsSL --max-time 20 -H 'Cache-Control: no-cache' \
+                   "${VERSION_URL}?cb=${GITHUB_RUN_ID}-base" \
+                 | python3 -c 'import json,sys;print(json.load(sys.stdin)["latest"])') || {
+            echo "::error::cannot read ${VERSION_URL} — refusing to deploy onto an unknown"
+            echo "base. Check that hamradiotools.io is up, then re-run."
+            exit 1
+          }
+          git clone --quiet --depth 1 --branch main \
+            "https://x-access-token:${SITE_REPO_TOKEN}@github.com/${SITE_REPO}.git" "$WORK/site"
+          committed=$(SITE_VJ="$WORK/site/public/nexus/version.json" python3 -c \
+            'import json,os;print(json.load(open(os.environ["SITE_VJ"]))["latest"])')
+          if [ "$committed" != "$live" ]; then
+            echo "::error::${SITE_REPO}@main is not the tree hamradiotools.io was built from."
+            echo "  main commits version.json  : $committed"
+            echo "  the live site serves       : $live"
+            echo "Deploying main now would publish the OLDER site over the current one. Push the"
+            echo "branch the live site was deployed from to main, then re-run this for $TAG."
+            echo "Nothing has been changed."
+            exit 1
+          fi
+          echo "site main matches the live feed ($committed) — safe to build from"
+          # The live-feed check at the end proves this did not move.
+          echo "LATEST=$committed" >> "$GITHUB_ENV"
+
+          # Release prose. release.yml names a beta's notes after its BASE version, so look
+          # for the full version first, then the base, then the release body.
+          base="${VER%%-*}"
+          notes_src=stub
+          if git show "$TAG:docs/RELEASE_NOTES-$VER.md" > "$WORK/notes.md" 2>/dev/null \
+             || git show "$TAG:docs/RELEASE_NOTES-$base.md" > "$WORK/notes.md" 2>/dev/null; then
+            notes_src=repo
+          else
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > "$WORK/notes.md"
+            [ -s "$WORK/notes.md" ] && notes_src=release-body
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json publishedAt,url > "$WORK/rel.json"
+          echo "notes source: $notes_src"
+          echo "NOTES_SRC=$notes_src" >> "$GITHUB_ENV"
+
+          # The stable job's commit-list detector, unchanged (see there for why it is one line).
+          if python3 -c "import re,sys; CC=re.compile(r'^- (feat|fix|test|docs|chore|refactor|build|ci|perf|style|revert)[(:]', re.M); sys.exit(0 if len(CC.findall(open(sys.argv[1],encoding='utf-8').read()))>=3 else 1)" "$WORK/notes.md"; then
+            echo "::error::the release prose for $TAG is an auto-generated commit list, not operator notes."
+            echo "Add docs/RELEASE_NOTES-$base.md, or gh release edit $TAG --notes-file <prose file>,"
+            echo "then re-run this workflow with the same tag."
+            exit 1
+          fi
+
+          cd "$WORK/site"
+          DIST="$WORK/dist" NOTES="$WORK/notes.md" REL="$WORK/rel.json" NOTES_SRC="$notes_src" \
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, re, sys
+
+          ver, tag = os.environ["VER"], os.environ["TAG"]
+          dist = pathlib.Path(os.environ["DIST"])
+          rel = json.load(open(os.environ["REL"], encoding="utf-8"))
+          feed = pathlib.Path("public/nexus/version.json")
+          doc = json.loads(feed.read_text(encoding="utf-8"))
+
+          def semver_key(v):
+              """SemVer 2.0 precedence, the same function as the stable job's."""
+              core, _, pre = v.partition("-")
+              nums = tuple(int(x) for x in core.split("."))
+              if not pre:
+                  return (nums, 1, ())
+              return (nums, 0, tuple((0, int(i), "") if i.isdigit() else (1, 0, i)
+                                     for i in pre.split(".")))
+
+          # A beta of a version that has already shipped, or one older than the beta already
+          # on the page, would offer testers a step backwards. Refuse both.
+          if semver_key(ver) <= semver_key(doc["latest"]):
+              sys.exit(f"{ver} is not newer than the released {doc['latest']} — not publishing it as the beta")
+          old = doc.get("beta")
+          if old and semver_key(ver) < semver_key(old["version"]):
+              sys.exit(f"{ver} is older than the live beta {old['version']} — not publishing it")
+
+          notes = pathlib.Path(os.environ["NOTES"]).read_text(encoding="utf-8").strip()
+          if os.environ["NOTES_SRC"] == "repo":
+              notes = re.sub(r"^#[^\n]*\n+", "", notes).strip()
+          if not notes:
+              notes = f"Nexus {ver}. See the release notes."
+
+          # Known issues: the bullets of the notes' "## Known issues" section, as plain
+          # one-line strings (a wrapped bullet's continuation lines are joined, and the
+          # Markdown emphasis and code marks dropped, because the page shows them as text).
+          issues, inside = [], False
+          for line in notes.splitlines():
+              if line.startswith("## "):
+                  inside = line[3:].strip().lower() == "known issues"
+                  continue
+              if not inside:
+                  continue
+              if line.startswith("- "):
+                  issues.append(line[2:].strip())
+              elif issues and line.startswith("  ") and line.strip():
+                  issues[-1] += " " + line.strip()
+          issues = [re.sub(r"\*\*|__|`", "", i) for i in issues]
+
+          def digest(name):
+              p = dist / name
+              if not p.is_file():
+                  sys.exit(f"asset missing from the download: {name}")
+              h = hashlib.sha256()
+              with p.open("rb") as f:
+                  for chunk in iter(lambda: f.read(1 << 20), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          base = f"https://github.com/kd9taw/Nexus/releases/download/{tag}"
+          assets = {
+              "windows":       f"Nexus_{ver}_x64-setup.exe",
+              "macos":         f"Nexus_{ver}_aarch64.dmg",
+              "macosIntel":    f"Nexus_{ver}_x64.dmg",
+              "linuxAppimage": f"Nexus_{ver}_amd64.AppImage",
+              "linuxDeb":      f"Nexus_{ver}_pc_amd64.deb",
+              "piBookwormDeb": f"Nexus_{ver}_pi_arm64_bookworm.deb",
+              "piTrixieDeb":   f"Nexus_{ver}_pi_arm64_trixie.deb",
+          }
+          before = {k: v for k, v in doc.items() if k != "beta"}
+          doc["beta"] = {
+              "version": ver,
+              "publishedUtc": rel["publishedAt"],
+              "notes": notes,
+              "notesUrl": rel["url"],
+              "downloads": {
+                  k: {"url": f"{base}/{n}", "sha256": digest(n)} for k, n in assets.items()
+              },
+              "knownIssues": issues,
+              "reportUrl": os.environ["BETA_REPORT_URL"],
+          }
+          # The guarantee, checked rather than assumed: nothing but `beta` differs.
+          if {k: v for k, v in doc.items() if k != "beta"} != before:
+              sys.exit("internal error: writing the beta changed another key of version.json")
+          feed.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+          print(f"version.json beta -> {ver} ({len(issues)} known issues); latest stays {doc['latest']}")
+          PY
+
+          git config user.name 'KD9TAW'
+          git config user.email 'kd9taw@protonmail.com'
+          git add public/nexus/version.json
+          if git diff --cached --quiet; then
+            echo "site beta already at $VER — nothing to commit; continuing to deploy + verify"
+          else
+            git diff --cached --stat
+            git commit --quiet -m "nexus: version.json beta to $VER"
+            git push --quiet \
+              "https://x-access-token:${SITE_REPO_TOKEN}@github.com/${SITE_REPO}.git" HEAD:main || {
+              echo "::error::push to ${SITE_REPO}@main was rejected — main moved during this"
+              echo "run. Nothing is broken; re-run this workflow for $TAG."
+              exit 1
+            }
+            echo "pushed to ${SITE_REPO}@main"
+          fi
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Site — build and deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          cd "$WORK/site"
+          npm ci
+          npm run build
+          # The built feed must carry this beta AND the unchanged `latest`.
+          python3 - <<'PY'
+          import json, os, sys
+          d = json.load(open("dist/nexus/version.json", encoding="utf-8"))
+          got = ((d.get("beta") or {}).get("version"), d.get("latest"))
+          want = (os.environ["VER"], os.environ["LATEST"])
+          if got != want:
+              sys.exit(f"built dist/nexus/version.json has (beta, latest) = {got}, want {want}")
+          PY
+          npx --yes wrangler@4 pages deploy dist \
+            --project-name="$SITE_PROJECT" --branch=main --commit-dirty=true
+
+      - name: Verify the LIVE feed carries the beta and an unmoved latest
+        run: |
+          set -euo pipefail
+          body=''
+          for attempt in $(seq 1 40); do
+            body=$(curl -fsSL --max-time 20 \
+                     -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+                     "${VERSION_URL}?cb=${GITHUB_RUN_ID}-${attempt}" 2>/dev/null || true)
+            got=$(printf '%s' "$body" | python3 -c \
+                    'import json,sys;d=json.load(sys.stdin);print((d.get("beta") or {}).get("version",""),d.get("latest",""))' \
+                    2>/dev/null || true)
+            if [ "$got" = "$VER $LATEST" ]; then
+              echo "live feed serves beta $VER with latest still $LATEST (attempt $attempt)"
+              exit 0
+            fi
+            echo "attempt $attempt: live feed serves '${got:-<unreadable>}', want '$VER $LATEST'"
+            sleep 15
+          done
+          echo "::error::${VERSION_URL} still does not serve beta $VER after ten minutes."
+          echo "wrangler exits 0 on a deploy that shipped nothing; check the Pages deployment"
+          echo "list for a PREVIEW. Last response body:"
+          printf '%s\n' "${body:-<no response>}" | head -20
+          exit 1
+
+      - name: Verify every published beta download URL resolves
+        run: |
+          set -euo pipefail
+          bad=0
+          for n in "Nexus_${VER}_x64-setup.exe" "Nexus_${VER}_aarch64.dmg" "Nexus_${VER}_x64.dmg" \
+                   "Nexus_${VER}_amd64.AppImage" \
+                   "Nexus_${VER}_pc_amd64.deb" "Nexus_${VER}_pi_arm64_bookworm.deb" \
+                   "Nexus_${VER}_pi_arm64_trixie.deb"; do
+            u="https://github.com/kd9taw/Nexus/releases/download/${TAG}/${n}"
+            code=$(curl -sIL -o /dev/null -w '%{http_code}' --max-time 30 "$u" || echo 000)
+            if [ "$code" = "200" ]; then echo "  200  $n"; else echo "  $code  $u"; bad=1; fi
+          done
+          [ "$bad" = 0 ] || { echo "a URL published in the beta object does not resolve"; exit 1; }
+
+      - name: What this did and did not do
+        if: always()
+        run: |
+          {
+            echo "### Nexus ${VER} — beta publish: ${{ job.status }}"
+            echo
+            echo "Only the \`beta\` object of hamradiotools.io/nexus/version.json and the download"
+            echo "page's Beta block move. \`latest\`, SourceForge (mirror, FRS, Default Download)"
+            echo "and the site's displayed version are untouched by design."
+            echo
+            echo "The feed's \`notes\` came from the **${NOTES_SRC:-n/a}** source; its known issues"
+            echo "are the bullets under \"## Known issues\" in those notes."
           } >> "$GITHUB_STEP_SUMMARY"
