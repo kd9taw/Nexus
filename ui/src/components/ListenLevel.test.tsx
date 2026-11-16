@@ -88,6 +88,33 @@ describe('the top bar’s listening level (#468)', () => {
     expect(stop).toHaveBeenCalledTimes(1)
   })
 
+  // #480: a rig's USB audio is set low for the decoders and does not follow its volume knob, so
+  // the level goes past 100% into up to +20 dB of boost. The old 0..1 range keeps the slider's left
+  // half exactly as it was; the right half is the boost.
+  it('the slider reaches +20 dB of boost, and the old range is unchanged', async () => {
+    const onCommit = vi.fn()
+    const { container } = render(<LL level={0.5} onCommit={onCommit} />)
+    const s = await open(container)
+    expect(s.max).toBe('2')
+    expect(s.value, 'the old default sits where it did').toBe('0.5')
+    expect(s.getAttribute('title')).toBe(t('settings.headphoneMonitor.level.hint'))
+    vi.useFakeTimers()
+    fireEvent.change(s, { target: { value: '2' } })
+    act(() => vi.advanceTimersByTime(300))
+    expect(onCommit).toHaveBeenCalledWith(10)
+    expect(s.getAttribute('aria-valuetext')).toBe('+20 dB')
+    fireEvent.change(s, { target: { value: '1' } })
+    act(() => vi.advanceTimersByTime(300))
+    expect(onCommit, 'the middle is unity').toHaveBeenLastCalledWith(1)
+  })
+
+  it('a boosted level is titled with its boost; one at or below 100% as before', () => {
+    const { container, rerender } = render(<LL level={10} onCommit={() => {}} />)
+    expect(chip(container).title).toBe(t('topbar.listen.boostTitle', { db: 20 }))
+    rerender(<LL level={1} onCommit={() => {}} />)
+    expect(chip(container).title).toBe(t('topbar.listen.title', { pct: 100 }))
+  })
+
   it('follows a level changed elsewhere (Settings) when not being dragged', () => {
     const { container, rerender } = render(<LL level={0.4} onCommit={() => {}} />)
     rerender(<LL level={0.8} onCommit={() => {}} />)

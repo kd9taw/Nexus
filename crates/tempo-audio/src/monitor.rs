@@ -445,6 +445,40 @@ impl Playout {
     }
 }
 
+/// The top of the listening level: a gain of 10, +20 dB. The level is a plain gain on the receive
+/// audio, so every level saved before the boost existed (0..1) means exactly what it did; above 1 is
+/// boost. It exists because a rig's USB codec is set low for the decoders and does not follow the
+/// radio's volume knob, so a level that stopped at unity could only make quiet audio quieter.
+pub const MONITOR_LEVEL_MAX: f32 = 10.0;
+
+/// Where the boost's limiter starts to bend, in full-scale units (about -2 dBFS).
+const LIMIT_KNEE: f32 = 0.8;
+
+/// One monitor sample: the receive sample `s` at the listening level `level`, ready for the output
+/// device (`-1.0..=1.0`). Pure, wait-free and allocation-free: it runs in the output callback.
+///
+/// At or below unity this is the plain gain it always was, hard-clamped as before (only a sample
+/// already at full scale reaches the clamp). While BOOSTING, a peak is rounded off by a soft limiter
+/// instead: a static crash or a strong signal at +20 dB would otherwise be hard-clipped into a
+/// square wave, which in headphones is a harsh buzz on every crash. Below [`LIMIT_KNEE`] the audio
+/// passes untouched; above it the level bends smoothly (`tanh`, slope 1 at the knee) towards full
+/// scale and never past it, so nothing can wrap.
+///
+/// The decoders never pass through here: the capture callback hands them its own ring before any
+/// of this, and the listening level is read by the monitor's output callback alone.
+pub fn monitor_sample(s: f32, level: f32) -> f32 {
+    let x = s * level;
+    if level <= 1.0 {
+        return x.clamp(-1.0, 1.0);
+    }
+    let a = x.abs();
+    if a <= LIMIT_KNEE {
+        return x;
+    }
+    let room = 1.0 - LIMIT_KNEE;
+    (LIMIT_KNEE + room * ((a - LIMIT_KNEE) / room).tanh()).copysign(x)
+}
+
 #[cfg(feature = "device")]
 pub use device_monitor::Monitor;
 
@@ -551,8 +585,10 @@ mod device_monitor {
             self.feed.clear();
         }
         pub fn apply(&mut self, enabled: bool, device: &str, level: f32) -> Result<(), String> {
-            self.level_bits
-                .store(level.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+            self.level_bits.store(
+                level.clamp(0.0, super::MONITOR_LEVEL_MAX).to_bits(),
+                Ordering::Relaxed,
+            );
             if !enabled {
                 self.enabled.store(false, Ordering::Release);
                 if self.out_stream.is_some() {
@@ -661,9 +697,10 @@ mod device_monitor {
                 // The capture's ring, or another source's while it is the station's (TCI audio,
                 // native Flex audio), through its jitter buffer.
                 playout.fill(&ring_cb, &feed_cb, n, |s| {
-                    // Clamped HERE, on every format including f32: unlike the TX path this is a
-                    // product of two operator-set gains and can genuinely exceed unity.
-                    let v = T::from_unit((s * level).clamp(-1.0, 1.0));
+                    // Bounded HERE, on every format including f32: unlike the TX path this is a
+                    // product of two operator-set gains, the listening level up to +20 dB of
+                    // boost, and genuinely exceeds unity (`monitor_sample` limits it).
+                    let v = T::from_unit(super::monitor_sample(s, level));
                     if let Some(frame) = frames.next() {
                         for x in frame.iter_mut() {
                             *x = v;
@@ -1630,6 +1667,96 @@ mod tests {
             0.0,
             "no audio available → silence, never a hang"
         );
+    }
+
+    /// A rig's USB codec is set low for the decoders and does not follow the radio's volume knob,
+    /// so a listening level that stops at unity can only make quiet audio quieter: the operator
+    /// heard the band "barely, even with the volume turned up" while the radio's own speaker was
+    /// loud. The level now reaches [`MONITOR_LEVEL_MAX`], +20 dB, through the real `apply`.
+    #[cfg(feature = "device")]
+    #[test]
+    fn the_listening_level_reaches_twenty_db_of_boost_through_apply() {
+        let level = Arc::new(AtomicU32::new(0.5f32.to_bits()));
+        let mut m = Monitor::new(
+            Arc::new(SpscRing::new(64)),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            level.clone(),
+            48_000,
+        );
+        let applied = |m: &mut Monitor, v: f32| {
+            m.apply(false, "", v).unwrap();
+            f32::from_bits(level.load(Ordering::Relaxed))
+        };
+        assert_eq!(applied(&mut m, 0.5), 0.5, "the old default plays as it did");
+        assert_eq!(applied(&mut m, 1.0), 1.0, "unity");
+        let max = applied(&mut m, 10.0);
+        assert!(
+            (20.0 * max.log10() - 20.0).abs() < 1e-4,
+            "the top of the range is +20 dB: {max}"
+        );
+        assert_eq!(applied(&mut m, 50.0), max, "and no further");
+        assert_eq!(applied(&mut m, -1.0), 0.0, "never below silence");
+    }
+
+    /// The level is a plain gain up to unity, exactly as it always was: 100% plays the radio's
+    /// audio as it arrives, and the old default of 50% (every settings file saved before the boost
+    /// existed) still plays at half.
+    #[test]
+    fn unity_and_the_old_default_play_as_they_always_did() {
+        for i in -100..=100 {
+            let s = i as f32 / 100.0;
+            assert_eq!(monitor_sample(s, 1.0), s, "unity is pass-through");
+            assert_eq!(
+                monitor_sample(s, 0.5),
+                s * 0.5,
+                "the old default, unchanged"
+            );
+            assert_eq!(monitor_sample(s, 0.0), 0.0, "zero is silence");
+        }
+    }
+
+    /// The top of the range is +20 dB on quiet audio, which is what a rig's USB codec sends.
+    #[test]
+    fn the_top_of_the_range_is_twenty_db_of_boost_on_quiet_audio() {
+        let s = 0.02;
+        let gain_db = 20.0 * (monitor_sample(s, MONITOR_LEVEL_MAX) / s).log10();
+        assert!((gain_db - 20.0).abs() < 1e-3, "{gain_db} dB");
+    }
+
+    /// Boosted audio never reaches past full scale, keeps its sign, and grows with the input: a
+    /// loud peak is rounded off, never wrapped into an inverted spike or folded back down.
+    #[test]
+    fn boosted_audio_is_limited_never_wrapped() {
+        let mut last = f32::NEG_INFINITY;
+        for i in -1000..=1000 {
+            let s = i as f32 / 1000.0;
+            let y = monitor_sample(s, MONITOR_LEVEL_MAX);
+            assert!(y.abs() <= 1.0, "{s} -> {y}");
+            assert!(y >= last, "monotonic at {s}: {y} after {last}");
+            assert!(y * s >= 0.0, "sign kept at {s}");
+            last = y;
+        }
+        assert!(
+            monitor_sample(1.0, MONITOR_LEVEL_MAX) > 0.99,
+            "a full-scale peak is still loud"
+        );
+        assert!(
+            monitor_sample(1.0, 2.0) > monitor_sample(0.45, 2.0),
+            "a peak stays above quieter audio"
+        );
+    }
+
+    /// The same, on a sixteen-bit output card, through the device's own sample conversion: a
+    /// boosted full-scale peak is a full-scale positive sample, not a wrapped negative one.
+    #[cfg(feature = "device")]
+    #[test]
+    fn a_boosted_peak_on_a_sixteen_bit_card_does_not_wrap() {
+        use crate::device::DeviceSample;
+        let hi = i16::from_unit(monitor_sample(1.0, MONITOR_LEVEL_MAX));
+        let lo = i16::from_unit(monitor_sample(-1.0, MONITOR_LEVEL_MAX));
+        assert!(hi > 32_000, "{hi}");
+        assert!(lo < -32_000, "{lo}");
     }
 
     #[test]

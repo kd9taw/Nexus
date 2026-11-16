@@ -8389,7 +8389,7 @@ select optgroup {
   accent-color: var(--accent);
 }
 .listen-pop-value {
-  min-width: 3ch;
+  min-width: 6ch; /* "+20 dB" (#480): the readout does not resize the popover mid-drag */
   text-align: right;
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
