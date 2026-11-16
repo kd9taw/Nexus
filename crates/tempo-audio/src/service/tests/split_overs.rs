@@ -3675,6 +3675,57 @@ fn ft8_on_a_link_that_refuses_the_data_word_keys_every_over_in_usb() {
     assert!(refused(&b, MODEL, "PKTUSB"));
 }
 
+/// ⭐ #524: A TS-480 (2028), which has no USB-data mode, set up as a new radio. Its switch "Data
+/// modes use plain SSB" starts on, so the loop never sends it a DATA word at all: not while it
+/// receives, not across a band change, and not at the key, every over keyed in USB. Hamlib refuses
+/// `PKTUSB` on a TS-480 (`ts480.c` lists no PKT mode), and before, the ladder spent up to thirty
+/// refused sets on it on every connection before landing on USB. The CONTROL is an IC-7300, which
+/// takes the word, and keeps it.
+#[test]
+fn ft8_on_a_new_ts480_is_never_sent_a_data_word_and_keys_every_over_in_usb() {
+    let mut b = data_word_bench(SplitMode::None, 2028, DataAnswer::Refuses);
+    let mut overs = b.overs(1);
+    {
+        // The band change, and CQ again on 40 m.
+        let mut e = b.engine.lock().unwrap();
+        e.set_frequency(7.074, "40m", "USB");
+        e.start_cq(None).expect("Call CQ on 40 m");
+        let _ = e.take_immediate_tx();
+    }
+    overs.extend(b.overs(2));
+    for (i, o) in overs.iter().enumerate() {
+        eprintln!("new TS-480, over {}: {o:?}", i + 1);
+        assert_eq!(
+            o.key.last().map(String::as_str),
+            Some("T 1"),
+            "over {}",
+            i + 1
+        );
+    }
+    let modes = mode_writes(&b);
+    assert!(
+        modes.iter().all(|l| !l.contains("PKT")),
+        "a DATA word reached a TS-480: {modes:?}"
+    );
+    assert_eq!(
+        modes.first().map(String::as_str),
+        Some("M USB -1"),
+        "{modes:?}"
+    );
+    assert!(
+        !refused(&b, 2028, "PKTUSB"),
+        "nothing had to be refused: the word was never sent"
+    );
+
+    let mut b = data_word_bench(SplitMode::None, 3073, DataAnswer::Takes("PKTUSB"));
+    let _ = b.overs(2);
+    assert_eq!(
+        mode_writes(&b),
+        ["M PKTUSB -1"],
+        "an IC-7300 keeps its DATA mode"
+    );
+}
+
 /// …and with Split Operation = Rig, VFO B's mode is USB too. Before, the refused `X PKTUSB` halted
 /// TX, so no over went out at all. The first over's key-time mode assert goes out where it always
 /// did (the ladder's fallback never latches it); only its word is USB now.

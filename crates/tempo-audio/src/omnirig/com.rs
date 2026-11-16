@@ -48,6 +48,9 @@ impl Drop for Apartment {
 struct RigIds {
     status: i32,
     status_str: i32,
+    /// `RigType`, the rig file this slot runs (`OmniRigClient::rig_type`). Optional: a server
+    /// without it must not fail the connect, and is sent every mode as before.
+    rig_type: Option<i32>,
     freq: i32,
     /// Per-VFO dial properties, `None` when this server does not expose them.
     ///
@@ -258,6 +261,7 @@ impl OmniRigCom {
         let ids = RigIds {
             status: dispid(&rig, "Status")?,
             status_str: dispid(&rig, "StatusStr")?,
+            rig_type: dispid(&rig, "RigType").ok(),
             freq: dispid(&rig, "Freq")?,
             freq_a: dispid(&rig, "FreqA").ok(),
             freq_b: dispid(&rig, "FreqB").ok(),
@@ -399,6 +403,13 @@ impl OmniRigClient for OmniRigCom {
             readable: self.read_opt(self.ids.readable, "the readable parameters"),
             writeable: self.read_opt(self.ids.writeable, "the writable parameters"),
         })
+    }
+
+    /// `RigType`, a `WideString` (`OmniRig_TLB.pas`): the rig file's name without `.ini`
+    /// (OmniRig `RigCmds.pas`, `ChangeFileExt(ExtractFileName(AFileName), '')`).
+    fn rig_type(&self) -> Option<String> {
+        let v = get_prop(&self.rig, self.ids.rig_type?, "the rig type").ok()?;
+        BSTR::try_from(&v).ok().map(|b| b.to_string())
     }
 
     fn select_vfo_a(&self) -> Result<(), OmniError> {

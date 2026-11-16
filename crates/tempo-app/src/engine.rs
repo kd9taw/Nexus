@@ -8772,6 +8772,13 @@ impl Engine {
         // the operating system's login entry, which neither of them changes, so taking the
         // bundle's value would leave the switch reading off while the computer still starts Nexus.
         self.settings.launch_at_login = live_launch_at_login;
+        // A FORM SAVE that gives a radio its first model starts "Data modes use plain SSB" where the
+        // model says (a radio with no DATA submode). Before `ensure_radio_profiles`, which can make
+        // the radio's profile from these very flat fields, and before the fold below carries them in.
+        // Not a restore or reset: their bundle is the whole truth, its switch included.
+        if keep_live_roster {
+            self.settings.plain_ssb_on_first_model(form_active);
+        }
         self.settings.ensure_radio_profiles();
         // Fold the form's flat rig/audio edits into the profile the FORM was editing — the flat fields
         // describe the radio SHOWN in the form, which may differ from the live active radio if a
@@ -43657,6 +43664,59 @@ mod tests {
             e.rig_mode_effective(),
             "FM",
             "mic-jack rigs get plain FM, never PKTFM and never USB"
+        );
+    }
+
+    /// ⭐ #524, through the form save: a radio given its first model, a TS-480, which has no
+    /// USB-data mode, commands FT8 in plain USB on every band, so a band change never sends the
+    /// DATA word OmniRig's TS-480 file turns into FSK-R. The radio loop's key-time assert sends this
+    /// same word (`cur_md`, read from `rig_mode_effective` each tick). An IC-7300 or FT-991A keeps
+    /// its DATA mode, and a TS-480 whose switch was saved off stays as the operator left it.
+    #[test]
+    fn a_ts480_set_up_by_a_form_save_runs_ft8_in_plain_usb_on_every_band() {
+        let ft8 = |model: u32, saved_off: bool| {
+            let mut e = Engine::new("W9XYZ", "EN61", 0);
+            e.set_license_class("extra");
+            if saved_off {
+                // A radio that already has this model, its switch saved off.
+                e.settings.rig_model = model;
+                e.settings.data_modes_plain_ssb = false;
+                e.settings.sync_active_from_flat();
+            }
+            let mut s = e.settings().clone();
+            s.rig_model = model;
+            e.apply_settings(s);
+            e.set_frequency(14.074, "20m", "USB");
+            let twenty = e.rig_mode_effective();
+            e.set_frequency(7.074, "40m", "USB");
+            (
+                twenty,
+                e.rig_mode_effective(),
+                e.settings().data_modes_plain_ssb,
+            )
+        };
+        assert_eq!(
+            ft8(2028, false),
+            ("USB".into(), "USB".into(), true),
+            "a new TS-480: plain USB, on 20 m and after the band change"
+        );
+        assert_eq!(ft8(3073, false), ("PKTUSB".into(), "PKTUSB".into(), false));
+        assert_eq!(ft8(1035, false), ("PKTUSB".into(), "PKTUSB".into(), false));
+        assert_eq!(
+            ft8(2028, true),
+            ("PKTUSB".into(), "PKTUSB".into(), false),
+            "a saved false stands"
+        );
+        let e = {
+            let mut e = Engine::new("W9XYZ", "EN61", 0);
+            let mut s = e.settings().clone();
+            s.rig_model = 2028;
+            e.apply_settings(s);
+            e
+        };
+        assert!(
+            e.settings().active_profile().unwrap().data_modes_plain_ssb,
+            "the radio's own profile carries it, so the save keeps it"
         );
     }
 

@@ -5844,6 +5844,10 @@ impl Settings {
 impl RadioProfilePatch {
     /// Copy the patch fields onto a profile, leaving its identity / bands / tune-memory alone.
     pub fn apply_to(self, p: &mut RadioProfile) {
+        // The radio's FIRST model starts "Data modes use plain SSB" where that model says, as a
+        // form save does (`Settings::plain_ssb_on_first_model`, the rule and its limits).
+        let plain_ssb_by_model =
+            p.rig_model == 0 && crate::rig_modes::plain_ssb_by_default(self.rig_model);
         p.ptt_method = self.ptt_method;
         // Was MISSING (shipped 0.18.0): the patch declared and the UI sent `ptt_serial_port`,
         // but apply_to never assigned it — so editing the dedicated RTS/DTR keying port of a
@@ -5864,7 +5868,7 @@ impl RadioProfilePatch {
         p.icom_native_cat = self.icom_native_cat;
         p.icom_data_mode = self.icom_data_mode;
         p.tx_audio_source = self.tx_audio_source;
-        p.data_modes_plain_ssb = self.data_modes_plain_ssb;
+        p.data_modes_plain_ssb = self.data_modes_plain_ssb || plain_ssb_by_model;
         p.sstv_hold_data_submode = self.sstv_hold_data_submode;
         p.aprs_data_fm = self.aprs_data_fm;
         if let Some(v) = self.pc_mic {
@@ -8498,6 +8502,10 @@ impl Settings {
         // …and whether it says if JS8 heartbeat networking is on, for the same reason: a file
         // without the key is from before the switch (`choose_js8_hb_networking_for_old_settings`).
         let mut hb_networking_saved = false;
+        // …and which radios have never had "Data modes use plain SSB" saved: a key absent from the
+        // file is a radio from before the switch, which starts where its model says
+        // (`plain_ssb_default_where_unsaved`), while a saved `false` is the operator's and stands.
+        let mut plain_ssb_unsaved: Vec<u32> = Vec::new();
         let mut s: Settings = match std::fs::read_to_string(path) {
             // Missing file: a normal first run.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings::default(),
@@ -8537,6 +8545,38 @@ impl Settings {
                         .ok()
                         .and_then(|c| c.on)
                         .is_some();
+                    #[derive(Deserialize)]
+                    struct PlainSsbRadio {
+                        #[serde(default)]
+                        id: u32,
+                        #[serde(rename = "dataModesPlainSsb")]
+                        on: Option<bool>,
+                    }
+                    #[derive(Deserialize)]
+                    struct PlainSsbSaved {
+                        #[serde(rename = "dataModesPlainSsb")]
+                        flat: Option<bool>,
+                        #[serde(default)]
+                        radios: Vec<PlainSsbRadio>,
+                    }
+                    if let Ok(saved) = serde_json::from_str::<PlainSsbSaved>(&text) {
+                        plain_ssb_unsaved = if saved.radios.is_empty() {
+                            // A file from before the roster: its one radio is made from the flat
+                            // fields below, as radio 0 (`ensure_radio_profiles`).
+                            if saved.flat.is_none() {
+                                vec![0]
+                            } else {
+                                Vec::new()
+                            }
+                        } else {
+                            saved
+                                .radios
+                                .iter()
+                                .filter(|r| r.on.is_none())
+                                .map(|r| r.id)
+                                .collect()
+                        };
+                    }
                     s
                 }
                 Err(e) => {
@@ -8738,6 +8778,9 @@ impl Settings {
             p.flex_native_pan |= flat_pan;
             p.flex_native_audio |= flat_audio;
         }
+        // Migration: "Data modes use plain SSB" for a radio that has never had it saved. Before
+        // `sync_flat_from_active`, which carries the active radio's answer into the flat mirror.
+        s.plain_ssb_default_where_unsaved(&plain_ssb_unsaved);
         s.sync_flat_from_active();
         // ⛔ A station profile id that names no profile is put back on one, with that profile's
         // call (`Settings::repair_active_station_profile`).
@@ -9271,6 +9314,37 @@ impl Settings {
             OperatingMode::Keyboard => {
                 self.plain_ssb_if_configured(if lsb { "PKTLSB" } else { "PKTUSB" })
             }
+        }
+    }
+
+    /// Where "Data modes use plain SSB" STARTS for the radios `unsaved` names, ones whose settings
+    /// file has no saved choice (written before the switch existed): on for a radio with no DATA
+    /// submode at all ([`crate::rig_modes::plain_ssb_by_default`]), off for every other. Profiles
+    /// only; the load's `sync_flat_from_active` carries the active radio's into the flat mirror.
+    fn plain_ssb_default_where_unsaved(&mut self, unsaved: &[u32]) {
+        for p in self.radios.iter_mut().filter(|p| unsaved.contains(&p.id)) {
+            p.data_modes_plain_ssb = crate::rig_modes::plain_ssb_by_default(p.rig_model);
+        }
+    }
+
+    /// A form save that gives radio `id` its FIRST model (its profile has none yet, or there is
+    /// no profile yet: a radio just added, or a first run) starts "Data modes use plain SSB" where
+    /// that model says: ON for a radio with no DATA submode
+    /// ([`crate::rig_modes::plain_ssb_by_default`]), where a DATA word cannot reach the air and
+    /// plain SSB through the accessory jack is the only path. The flat fields are the form's, so
+    /// this runs before they are folded into the profile.
+    ///
+    /// ⚠️ ONLY ON THE FIRST MODEL. A radio that already had one keeps the switch where the operator
+    /// left it, a saved `false` included, whatever model it is given next; and the switch is never
+    /// turned OFF here.
+    pub fn plain_ssb_on_first_model(&mut self, id: u32) {
+        let first = self
+            .radios
+            .iter()
+            .find(|p| p.id == id)
+            .is_none_or(|p| p.rig_model == 0);
+        if first && crate::rig_modes::plain_ssb_by_default(self.rig_model) {
+            self.data_modes_plain_ssb = true;
         }
     }
 
@@ -13319,6 +13393,132 @@ mod tests {
         s.active_radio = r2;
         s.sync_flat_from_active();
         assert!(!s.data_modes_plain_ssb, "radio 2 keeps the DATA submode");
+    }
+
+    /// ⭐ A RADIO WITH NO DATA SUBMODE STARTS IN PLAIN SSB (#524), and only where nothing was
+    /// saved. A TS-480 has no USB-data mode, so a DATA word cannot reach its air: Hamlib refuses
+    /// it, and OmniRig's TS-480 file turns it into FSK-R. A settings file with no saved choice for
+    /// a radio (one from before the switch) starts the switch where the radio's model says; a
+    /// saved `false` is the operator's and stands; a radio with a DATA mode (IC-7300, FT-991A)
+    /// stays on it.
+    #[test]
+    fn a_radio_with_no_data_submode_starts_in_plain_ssb_where_nothing_was_saved() {
+        let dir = scratch_dir("plain_ssb_by_model");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let load = |file: serde_json::Value| {
+            std::fs::write(&path, file.to_string()).unwrap();
+            Settings::load_at(&path, KEPT_AT)
+        };
+        let s = load(serde_json::json!({
+            "mycall": "W9ABC",
+            "activeRadio": 1,
+            "radios": [
+                { "id": 1, "name": "TS-480", "rigModel": 2028, "rigctldPort": 4532 },
+                { "id": 2, "name": "saved", "rigModel": 2028, "dataModesPlainSsb": false,
+                  "rigctldPort": 4534 },
+                { "id": 3, "name": "IC-7300", "rigModel": 3073, "rigctldPort": 4536 },
+                { "id": 4, "name": "FT-991A", "rigModel": 1035, "rigctldPort": 4538 },
+                { "id": 5, "name": "none yet", "rigctldPort": 4540 },
+            ],
+        }));
+        let on = |id: u32| {
+            s.radios
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap()
+                .data_modes_plain_ssb
+        };
+        assert!(on(1), "a TS-480 with nothing saved starts in plain SSB");
+        assert!(!on(2), "a saved false on a TS-480 stands");
+        assert!(!on(3) && !on(4), "radios with a DATA mode keep it");
+        assert!(!on(5), "no model, no default");
+        assert!(
+            s.data_modes_plain_ssb,
+            "the active radio's answer is the flat mirror's"
+        );
+        let mut ft8 = s.clone();
+        ft8.operating_mode = OperatingMode::Digital;
+        ft8.dial_mhz = 14.074;
+        ft8.sideband = "USB".into();
+        assert_eq!(
+            ft8.rig_mode(),
+            "USB",
+            "FT8 on the TS-480 commands USB, not PKTUSB"
+        );
+
+        // A file from before the roster carries the radio on the flat fields alone.
+        let legacy = load(serde_json::json!({ "mycall": "W9ABC", "rigModel": 2028 }));
+        assert!(legacy.data_modes_plain_ssb && legacy.radios[0].data_modes_plain_ssb);
+        let legacy_saved = load(serde_json::json!({
+            "mycall": "W9ABC", "rigModel": 2028, "dataModesPlainSsb": false,
+        }));
+        assert!(!legacy_saved.data_modes_plain_ssb, "a saved false stands");
+
+        // And the answer is saved, so it is the operator's from then on.
+        let saved = s.clone();
+        saved.save(&path).unwrap();
+        let again = Settings::load_at(&path, KEPT_AT);
+        assert!(
+            again
+                .radios
+                .iter()
+                .find(|p| p.id == 1)
+                .unwrap()
+                .data_modes_plain_ssb
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same default for a radio being set up: the save that gives a radio its FIRST model
+    /// (a radio just added, a first run) starts the switch where the model says, on both ways a
+    /// radio is saved (the flat form and the per-radio edit). A radio that already had a model
+    /// keeps the switch as it was, a `false` included, whatever model it is given next.
+    #[test]
+    fn a_radios_first_model_starts_plain_ssb_where_that_model_says() {
+        // The per-radio edit.
+        let edit = |was: u32, now: u32, plain: bool| {
+            let mut p = RadioProfile {
+                rig_model: was,
+                ..RadioProfile::default()
+            };
+            let mut patch = patch_of(&p);
+            patch.rig_model = now;
+            patch.data_modes_plain_ssb = plain;
+            patch.apply_to(&mut p);
+            p.data_modes_plain_ssb
+        };
+        assert!(edit(0, 2028, false), "a new radio made a TS-480");
+        assert!(edit(0, 3011, false), "a new radio made an IC-706MKIIG");
+        assert!(!edit(0, 3073, false), "a new IC-7300 keeps its DATA mode");
+        assert!(!edit(0, 1035, false), "a new FT-991A keeps its DATA mode");
+        assert!(!edit(2028, 2028, false), "a TS-480's saved false stands");
+        assert!(
+            !edit(3073, 2028, false),
+            "a radio that had a model keeps its switch"
+        );
+        assert!(edit(3073, 3073, true), "and a switch turned on stays on");
+
+        // The flat form.
+        let mut s = Settings::default();
+        s.ensure_radio_profiles();
+        let id = s.active_radio;
+        s.rig_model = 2028;
+        s.plain_ssb_on_first_model(id);
+        assert!(s.data_modes_plain_ssb, "first model TS-480");
+        s.sync_active_from_flat();
+        s.data_modes_plain_ssb = false;
+        s.plain_ssb_on_first_model(id);
+        assert!(
+            !s.data_modes_plain_ssb,
+            "the operator turned it off: it stays off"
+        );
+        let mut s = Settings::default();
+        s.ensure_radio_profiles();
+        s.rig_model = 3073;
+        s.plain_ssb_on_first_model(s.active_radio);
+        assert!(!s.data_modes_plain_ssb, "first model IC-7300");
     }
 
     #[test]
