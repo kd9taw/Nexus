@@ -160,7 +160,7 @@ jobs:
         uses: actions/checkout@v7
 
       # The SAME system-dependency list as the `test` job — see there for why each
-      # package is present (rigctld, for tempo-audio's suite, among them).
+      # package is present.
       - name: Install libtempo build dependencies
         run: |
           sudo apt-get update
@@ -181,6 +181,11 @@ jobs:
             libssl-dev \
             libsoup-3.0-dev \
             libhamlib-utils
+
+      # libhamlib-utils above ships `rigctld`: the tempo-audio integration
+      # suite (tests/rigctld_dummy.rs) drives the REAL CAT client against a
+      # real Hamlib dummy rig (-m 1). Without rigctld those tests self-skip,
+      # so dropping the package silently removes the coverage — keep it.
 
       - name: Set up Rust 1.93.1 toolchain (pinned — see header)
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
@@ -264,6 +269,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo run --quiet -p tempo-core --bin fd-rules-check -- crates/tempo-core/src/fd_rules.seed.json
 
+      # Clippy checks its dependencies as metadata-only units, which the shared cache (the `test`
+      # job's `cargo test` build) does not hold, so it checks them from scratch here every run: a
+      # few minutes, in the job with the most room. Moving it to `test` to cache them would add
+      # them to the cache and lengthen the slowest Rust job instead.
       - name: cargo clippy (deny warnings)
         if: ${{ !cancelled() }}
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -308,18 +317,14 @@ jobs:
             libsoup-3.0-dev \
             libhamlib-utils
 
-      # libhamlib-utils above ships `rigctld`: the tempo-audio integration
-      # suite (tests/rigctld_dummy.rs) drives the REAL CAT client against a
-      # real Hamlib dummy rig (-m 1). Without rigctld those tests self-skip,
-      # so dropping the package silently removes the coverage — keep it.
-
+      # libhamlib-utils is here only to keep the list identical: this job's crates never start
+      # rigctld. Why it is on the list at all is under the `test-audio-app` job's install step.
 
       - name: Set up Rust 1.93.1 toolchain (pinned — see header)
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
         with:
           toolchain: 1.93.1
           components: clippy, rustfmt
-
 
       # THE CARGO CACHES: restored by every run, SAVED ONLY ON MAIN. Measured 2026-10-30 on the
       # land/* runs, which reach this file by workflow_dispatch on their own branch:
@@ -1320,6 +1325,7 @@ jobs:
       - name: cargo check propagation --features live (MSRV)
         run: cargo check -p propagation --features live
 
+  # Job 4 — Supply chain: RustSec advisories, license allow-list, sources, bans.
   deny:
     name: cargo-deny (supply chain + licenses)
     runs-on: ubuntu-24.04

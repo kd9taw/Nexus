@@ -19,6 +19,10 @@
 # save them, and starting another would cancel it (ci.yml's concurrency group) before it could.
 # The keys change only when a lockfile or the Windows cross script does, so this is a run per
 # dependency change, not per push.
+# The check matches key NAMES, not the cache version actions/cache hashes the path list into: an
+# entry under the right key saved with an older path list counts as present here and restores
+# nothing in ci.yml. So a change to a cache's path list in ci.yml needs main's old entries under
+# the same keys deleted (`gh cache delete <id>`), or branches stay cold until a lockfile moves.
 
 name: CI on main
 
@@ -34,7 +38,9 @@ jobs:
     name: Run CI unless this commit already passed and main holds its caches
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    # A job's own block replaces the workflow's, so `contents: read` is restated for the checkout.
     permissions:
+      contents: read
       actions: write
     steps:
       # For hashFiles below: the keys are computed from this commit's lockfiles, as ci.yml's are.
@@ -72,12 +78,15 @@ jobs:
             fi
             busy=""
             for status in queued in_progress; do
+              # An unreadable answer counts as BUSY, the opposite of the cache lookup above: a
+              # dispatch here would cancel an in-flight main run (ci.yml's concurrency group), which
+              # may be the only run of a commit a release needs. Skipping costs a wait for the next push.
               c=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?branch=main&status=$status&per_page=100" \
-                --jq "[.workflow_runs[] | select(.head_branch == \"main\")] | length") || c=""
+                --jq "[.workflow_runs[] | select(.head_branch == \"main\")] | length") || { busy="$busy unreadable"; continue; }
               [ -n "$c" ] && [ "$c" -ge 1 ] && busy="$busy $status"
             done
             if [ -n "$busy" ]; then
-              echo "ci.yml already passed on $SHA; main lacks$missing, but a ci.yml run on main is already$busy and will save them." | tee -a "$GITHUB_STEP_SUMMARY"
+              echo "ci.yml already passed on $SHA; main lacks$missing, but the check for a ci.yml run on main already going answered:$busy. Not starting another (it would cancel that one); the next push retries." | tee -a "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
             echo "ci.yml already passed on $SHA, but main holds no cache under$missing; starting ci.yml on main to save them." | tee -a "$GITHUB_STEP_SUMMARY"
