@@ -5402,6 +5402,8 @@ export const EN = {
   // The sort picker. The <option> VALUES ('value', 'activator' …) are persisted tokens and
   // stay in the code; these are the words beside them.
   'ota.sort.aria': 'Sort spots',
+  // The same row's group name while it also holds the Continent and Country pickers.
+  'ota.sortPlace.aria': 'Sort spots and filter by place',
   'ota.sort.label': 'Sort',
   'ota.sort.title': 'How the spot list is ordered',
   'ota.sort.value': 'Workable now',

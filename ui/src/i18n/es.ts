@@ -5503,6 +5503,7 @@ export const ES: PartialCatalog = {
   "ota.refresh.title": "Actualizar los spots",
   "ota.sort.activator": "Activador",
   "ota.sort.aria": "Ordenar los spots",
+  "ota.sortPlace.aria": "Ordenar los spots y filtrar por lugar",
   "ota.sort.asc.aria": "Ordenar ascendente",
   "ota.sort.asc.title": "Ascendente — pulsa para descendente",
   "ota.sort.band": "Banda / frec.",

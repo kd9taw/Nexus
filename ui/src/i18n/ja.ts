@@ -3664,6 +3664,7 @@ export const JA: PartialCatalog = {
   "ota.filter.country.label": "国",
   "ota.filter.toggle.title": "バンド・モード・地域・並べ替えの選択を表示／非表示",
   "ota.sort.aria": "スポットの並べ替え",
+  "ota.sortPlace.aria": "スポットの並べ替えと場所での絞り込み",
   "ota.sort.label": "並べ替え",
   "ota.sort.title": "スポット一覧の並び順",
   "ota.sort.value": "今呼べる順",

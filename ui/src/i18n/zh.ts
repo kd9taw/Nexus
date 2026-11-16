@@ -4494,6 +4494,7 @@ export const ZH: PartialCatalog = {
   "ota.filter.country.label": "国家",
   "ota.filter.toggle.title": "显示或隐藏波段、模式、地区和排序选项",
   "ota.sort.aria": "排序 spot",
+  "ota.sortPlace.aria": "排序 spot 并按地点筛选",
   "ota.sort.label": "排序",
   "ota.sort.title": "spot 列表的排列方式",
   "ota.sort.value": "当前可通",
