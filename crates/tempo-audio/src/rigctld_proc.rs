@@ -4542,12 +4542,43 @@ mod tests {
             "`rigctld -l` listed only {}",
             models.len()
         );
+        // THE ASKS RUN IN PARALLEL; THE CHECKS DO NOT. Each ask is a rigctl that spends about half
+        // a second waiting (on Hamlib's open of the missing port) and almost no CPU, and asked
+        // one at a time the ~300 models made this the slowest test in the workspace: 9 to 13
+        // minutes on CI. So a fixed pool of threads asks, more than the runner has cores because
+        // the asks wait rather than compute, and each dump is kept at its model's index. The
+        // loop below then checks every model in the listed order on this thread, exactly as it
+        // did when it asked them itself.
+        const ASKERS: usize = 16;
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let mut dumps: Vec<Option<std::process::Output>> = models.iter().map(|_| None).collect();
+        std::thread::scope(|s| {
+            let workers: Vec<_> = (0..ASKERS)
+                .map(|_| {
+                    s.spawn(|| {
+                        let mut got = Vec::new();
+                        loop {
+                            let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some(m) = models.get(i) else { break };
+                            // Pointed at no port, as every show-conf ask is (`ask_show_conf`): a
+                            // bare `-L` opens the default serial port on some Hamlibs.
+                            let model = m.to_string();
+                            let args = ["-m", &model, "-L", "-r", NO_SUCH_RIG];
+                            got.push((i, run_bounded(&bin, &args, 10)));
+                        }
+                        got
+                    })
+                })
+                .collect();
+            for w in workers {
+                for (i, out) in w.join().expect("an asking thread panicked") {
+                    dumps[i] = out;
+                }
+            }
+        });
         let mut keyed_by_a_line = Vec::new();
-        for m in models {
-            // Pointed at no port, as every show-conf ask is (`ask_show_conf`): a bare `-L` opens
-            // the default serial port on some Hamlibs.
-            let model = m.to_string();
-            let Some(out) = run_bounded(&bin, &["-m", &model, "-L", "-r", NO_SUCH_RIG], 10) else {
+        for (m, out) in models.into_iter().zip(dumps) {
+            let Some(out) = out else {
                 continue;
             };
             let dump = String::from_utf8_lossy(&out.stdout);

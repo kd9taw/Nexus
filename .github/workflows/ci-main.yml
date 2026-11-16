@@ -9,6 +9,20 @@
 #
 # Only workflow_dispatch runs count: a pull_request run tests a merge tree, not this commit (see
 # scripts/require-green-ci), and ci.yml no longer runs on push.
+#
+# ONE EXCEPTION: main's build caches. ci.yml saves its cargo caches on main only (every branch can
+# read main's, and no branch can read another's), so a main that never runs ci.yml holds none: on
+# 2026-11-16 it had not run since 11-03, the test cache had been evicted, and every land/* run
+# compiled the workspace from nothing. So when main holds no cache under one of ci.yml's keys for
+# this commit, ci.yml is started on main even though the commit passed, and its jobs save their
+# caches as they finish. Not when a ci.yml run on main is already queued or running: that one will
+# save them, and starting another would cancel it (ci.yml's concurrency group) before it could.
+# The keys change only when a lockfile or the Windows cross script does, so this is a run per
+# dependency change, not per push.
+# The check matches key NAMES, not the cache version actions/cache hashes the path list into: an
+# entry under the right key saved with an older path list counts as present here and restores
+# nothing in ci.yml. So a change to a cache's path list in ci.yml needs main's old entries under
+# the same keys deleted (`gh cache delete <id>`), or branches stay cold until a lockfile moves.
 
 name: CI on main
 
@@ -21,24 +35,63 @@ permissions:
 
 jobs:
   dispatch:
-    name: Run CI unless this commit already passed
+    name: Run CI unless this commit already passed and main holds its caches
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    # A job's own block replaces the workflow's, so `contents: read` is restated for the checkout.
     permissions:
+      contents: read
       actions: write
     steps:
+      # For hashFiles below: the keys are computed from this commit's lockfiles, as ci.yml's are.
+      - name: Checkout
+        uses: actions/checkout@v7
+
       - name: Look for a passed run, else start ci.yml on main
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
+          # ci.yml's cargo cache keys for this commit, exactly as its restore steps compute them.
+          # Keep them in step with ci.yml: a key spelled differently here is never found, so main
+          # would run ci.yml on every push (wasteful, never a gap).
+          CACHE_KEYS: >-
+            ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock') }}
+            ${{ runner.os }}-cargo-features-${{ hashFiles('Cargo.lock') }}
+            ${{ runner.os }}-cargo-tauri-${{ hashFiles('src-tauri/Cargo.lock') }}
+            ${{ runner.os }}-wincross-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock', 'scripts/build-windows-cross.sh') }}
         run: |
           set -uo pipefail
           n=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&event=workflow_dispatch&status=success&per_page=100" \
             --jq "[.workflow_runs[] | select(.head_sha == \"$SHA\" and .event == \"workflow_dispatch\" and .conclusion == \"success\")] | length") || n=""
           if [ -n "$n" ] && [ "$n" -ge 1 ]; then
-            echo "ci.yml already passed on $SHA ($n run(s)); not running it again." | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 0
+            # An unreadable answer counts as missing: the cost is one extra run on main.
+            missing=""
+            for key in $CACHE_KEYS; do
+              hit=$(gh api "repos/$REPO/actions/caches?ref=refs/heads/main&key=$key&per_page=100" \
+                --jq "[.actions_caches[] | select(.key == \"$key\")] | length") || hit=""
+              [ -n "$hit" ] && [ "$hit" -ge 1 ] || missing="$missing $key"
+            done
+            if [ -z "$missing" ]; then
+              echo "ci.yml already passed on $SHA ($n run(s)) and main holds its caches; not running it again." | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            busy=""
+            for status in queued in_progress; do
+              # An unreadable answer counts as BUSY, the opposite of the cache lookup above: a
+              # dispatch here would cancel an in-flight main run (ci.yml's concurrency group), which
+              # may be the only run of a commit a release needs. Skipping costs a wait for the next push.
+              c=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?branch=main&status=$status&per_page=100" \
+                --jq "[.workflow_runs[] | select(.head_branch == \"main\")] | length") || { busy="$busy unreadable"; continue; }
+              [ -n "$c" ] && [ "$c" -ge 1 ] && busy="$busy $status"
+            done
+            if [ -n "$busy" ]; then
+              echo "ci.yml already passed on $SHA; main lacks$missing, but the check for a ci.yml run on main already going answered:$busy. Not starting another (it would cancel that one); the next push retries." | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "ci.yml already passed on $SHA, but main holds no cache under$missing; starting ci.yml on main to save them." | tee -a "$GITHUB_STEP_SUMMARY"
+            gh workflow run ci.yml --repo "$REPO" --ref main
+            exit $?
           fi
           echo "No passed ci.yml run found on $SHA (lookup result: '${n}'); starting ci.yml on main." | tee -a "$GITHUB_STEP_SUMMARY"
           gh workflow run ci.yml --repo "$REPO" --ref main

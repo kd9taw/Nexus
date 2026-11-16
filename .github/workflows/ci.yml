@@ -65,9 +65,222 @@ jobs:
   # Nothing was removed. The proof is mechanical, not a claim: `scripts/gates --list`
   # yields an identical command set before and after this split. Re-run that diff if
   # you move a step between these jobs.
+  #
+  # By 2026-11-16 `cargo test --workspace` alone had grown to 58 minutes, and the job
+  # holding it was again the whole run's critical path (62 minutes). Cargo runs test
+  # binaries one at a time, and most heavy binaries hold one to six tests, so three of
+  # the runner's four cores sat idle for most of it. So it is now three jobs, split by
+  # crate on the measured per-crate times: tempo-sstv alone (17 min of tests);
+  # tempo-audio and tempo-app (16, until the rigctl sweep stopped asking ~300 models one
+  # at a time), with fmt, the fd-rules gate and clippy beside them because that job has
+  # the room; and `--workspace` with those three crates EXCLUDED (17) for everything
+  # else, so a crate added later is covered with no edit here. scripts/gates.test.mjs
+  # holds the `-p` list of the first two jobs equal to the `--exclude` list of the third.
+  #
+  # THE SPLIT CHANGES CARGO'S FEATURE UNIFICATION, and that was checked rather than
+  # assumed. `--workspace` unifies every member's dependency features, `-p` only the
+  # named packages'. Measured with `cargo tree -e features`: the third job loses
+  # tempo-core's `test-util` and tempo-net's `icom-sim`, `flex-unbenched` and
+  # `udp-source-sim` (turned on by tempo-app's and tempo-audio's dev-dependencies), and
+  # the first two lose a few std/default features of third-party crates. Every one of
+  # those first-party features is `cfg(any(test, feature = ...))`, so the crate's own
+  # unit tests have it regardless, and no integration test of tempo-core or tempo-net
+  # uses what it gates. `cargo test ... -- --list` over the three commands names exactly
+  # the tests the single `--workspace` run named. If a crate ever gains an integration
+  # test that needs a feature only another member turns on, give it that feature in its
+  # own dev-dependencies (tempo-app and tempo-audio already do this for themselves).
 
+  # tempo-sstv alone: its loopback, legibility and resync suites are 17 of the minutes.
+  test-sstv:
+    name: Rust tests (tempo-sstv)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The SAME system-dependency list as the `test` job — see there for why each
+      # package is present. The Rust jobs must keep identical lists: they build the
+      # same libtempo, so a package added to only one of them goes red in the others
+      # on a build unrelated to the change that added it.
+      - name: Install libtempo build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gfortran \
+            libfftw3-dev \
+            libboost-dev \
+            cmake \
+            ninja-build \
+            pkg-config \
+            libasound2-dev \
+            libudev-dev \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            libsoup-3.0-dev \
+            libhamlib-utils
+
+      - name: Set up Rust 1.93.1 toolchain (pinned — see header)
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
+        with:
+          toolchain: 1.93.1
+          components: clippy, rustfmt
+
+      # The `test` job's cache, restored here and never saved here: see there.
+      - name: Restore the cargo cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git
+            target/debug/.fingerprint
+            target/debug/build
+            target/debug/deps/*.rlib
+            target/debug/deps/*.rmeta
+            target/debug/deps/*.so
+            target/debug/deps/*.d
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+
+      - name: cargo test tempo-sstv
+        run: cargo test -p tempo-sstv --no-fail-fast
+
+  # tempo-audio and tempo-app, and the quick whole-workspace checks: fmt first, so a
+  # formatting failure does not wait for a build, then the fd-rules gate and clippy.
+  test-audio-app:
+    name: Rust tests (tempo-audio, tempo-app) + fmt + clippy
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The SAME system-dependency list as the `test` job — see there for why each
+      # package is present.
+      - name: Install libtempo build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gfortran \
+            libfftw3-dev \
+            libboost-dev \
+            cmake \
+            ninja-build \
+            pkg-config \
+            libasound2-dev \
+            libudev-dev \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            libsoup-3.0-dev \
+            libhamlib-utils
+
+      # libhamlib-utils above ships `rigctld`: the tempo-audio integration
+      # suite (tests/rigctld_dummy.rs) drives the REAL CAT client against a
+      # real Hamlib dummy rig (-m 1). Without rigctld those tests self-skip,
+      # so dropping the package silently removes the coverage — keep it.
+
+      - name: Set up Rust 1.93.1 toolchain (pinned — see header)
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
+        with:
+          toolchain: 1.93.1
+          components: clippy, rustfmt
+
+      # The `test` job's cache, restored here and never saved here: see there.
+      - name: Restore the cargo cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git
+            target/debug/.fingerprint
+            target/debug/build
+            target/debug/deps/*.rlib
+            target/debug/deps/*.rmeta
+            target/debug/deps/*.so
+            target/debug/deps/*.d
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      # `cargo fmt --all` stops at the workspace boundary and src-tauri declares its
+      # OWN `[workspace]` table, so the step above has never reached it and no other
+      # job formats it either. Measured 2026-09-07, independently by two branches
+      # that both found the same number: the root step exited 0 while
+      # src-tauri/src/lib.rs carried 21 drifted regions no check could report. That
+      # also made `cargo fmt` unsafe to run in that directory, because it swept ~20
+      # unrelated reformats into whatever commit happened to be open. The sweep
+      # landed as its own commit so it could not contaminate a real diff.
+      #
+      # `--all` rather than the bare form: src-tauri is a single-package workspace
+      # today, so the two are equivalent — but if a member is ever added, the bare
+      # form silently stops covering it. Cheap and fast, so it sits beside the root
+      # fmt step: a formatting failure should not wait for a build.
+      - name: cargo fmt --check src-tauri
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
+
+      # `--no-fail-fast` on every multi-binary `cargo test`: without it cargo stops
+      # at the first test BINARY that fails, so a red run names the failures in
+      # one crate and says nothing about the others — the next push finds those.
+      # A red run must leave every failing test's name behind, once (scripts/gates
+      # reads them out of the log; CI's log is what a human reads).
+      - name: cargo test tempo-audio, tempo-app
+        run: cargo test -p tempo-audio -p tempo-app --no-fail-fast
+
+      # The fd-rules publish gate, run here on the file it exists to guard.
+      # `.github/workflows/fd-rules.yml` runs this exact command before pushing
+      # the seed to the rolling `fd-rules` Release that every install downloads,
+      # so a seed edit that the app would refuse goes red at MERGE time rather
+      # than at publish time.
+      #
+      # The gate is `crates/tempo-core/src/bin/fd-rules-check.rs`: a thin shell
+      # around `fd_rules::validate` — i.e. `parse_spec`, the very function the
+      # shipped app enforces. It replaced a SECOND validator written in node
+      # (`scripts/check-fd-rules.mjs` + `scripts/rust-serde-schema.mjs`) that was
+      # kept in step with the loader by a parity corpus. Four rounds of parity
+      # fixes each closed some divergence classes and revealed others, because
+      # agreeing with the loader byte-for-byte means reimplementing serde's
+      # derive behaviour and serde_json's lexer — presence rules, integer widths,
+      # surrogate pairing, the recursion limit, `IgnoredAny` scanning for unknown
+      # fields, and the exact error text. The last round reddened the gate on the
+      # seed's own `_provenance` prose, a file every shipped app accepts. There is
+      # one implementation now, so parity is true by construction.
+      #
+      # The corpus stayed and is walked THROUGH THIS BINARY by
+      # `cargo test -p tempo-core --test fd_rules_corpus` (in the `test` job):
+      # every refuse fixture must exit 1 with its recorded reason, every accept
+      # fixture must exit 0.
+      #
+      # `!cancelled()` on this step and clippy: they run after a red test step,
+      # so one push reports a bad seed or a lint along with the failing tests
+      # instead of leaving them for the next push (21 Oct: both were skipped).
+      - name: fd-rules publish gate on the in-repo seed
+        if: ${{ !cancelled() }}
+        run: cargo run --quiet -p tempo-core --bin fd-rules-check -- crates/tempo-core/src/fd_rules.seed.json
+
+      # Clippy checks its dependencies as metadata-only units, which the shared cache (the `test`
+      # job's `cargo test` build) does not hold, so it checks them from scratch here every run: a
+      # few minutes, in the job with the most room. Moving it to `test` to cache them would add
+      # them to the cache and lengthen the slowest Rust job instead.
+      - name: cargo clippy (deny warnings)
+        if: ${{ !cancelled() }}
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # Every other workspace crate. `--exclude`, not a list of `-p`s, so a crate added to the
+  # workspace lands here with no edit.
   test:
-    name: Rust tests + clippy
+    name: Rust tests (the rest of the workspace)
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -104,18 +317,14 @@ jobs:
             libsoup-3.0-dev \
             libhamlib-utils
 
-      # libhamlib-utils above ships `rigctld`: the tempo-audio integration
-      # suite (tests/rigctld_dummy.rs) drives the REAL CAT client against a
-      # real Hamlib dummy rig (-m 1). Without rigctld those tests self-skip,
-      # so dropping the package silently removes the coverage — keep it.
-
+      # libhamlib-utils is here only to keep the list identical: this job's crates never start
+      # rigctld. Why it is on the list at all is under the `test-audio-app` job's install step.
 
       - name: Set up Rust 1.93.1 toolchain (pinned — see header)
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
         with:
           toolchain: 1.93.1
           components: clippy, rustfmt
-
 
       # THE CARGO CACHES: restored by every run, SAVED ONLY ON MAIN. Measured 2026-10-30 on the
       # land/* runs, which reach this file by workflow_dispatch on their own branch:
@@ -125,13 +334,29 @@ jobs:
       #    other branch can ever read. That pushed the repository past GitHub's 10 GB cap, and the
       #    eviction took main's caches first, because the branch saves were newer than main's last
       #    read. Saving on main only keeps main's set alive; every branch reads it.
-      #  - The three Rust jobs shared ONE key, so the first to finish saved its build and the other
-      #    two failed with "Unable to reserve cache"; the winner's build was then restored into jobs
-      #    that compile different things. Each job has its own key now.
-      #  - Incremental state is left out. It is the largest part of target/ and cargo throws it away
-      #    for any crate whose source changed, which is every crate a run is testing; leaving it out
-      #    keeps main's set under the cap. The registry's unpacked sources are left out for the same
-      #    reason: cargo unpacks them again from registry/cache in seconds.
+      #  - Saving on main only then needs main to RUN, and by 2026-11-16 it had not run this file
+      #    since 11-03: ci-main.yml skips a commit a land/* run already passed, which is nearly
+      #    every one, so the test cache had been evicted and every land/* run compiled the
+      #    workspace cold. ci-main.yml now also starts this file on main when main holds no
+      #    cache under this commit's key, and only then.
+      #  - Two jobs saving ONE key race: the first to finish saves, the others fail with "Unable
+      #    to reserve cache". So the three test jobs share this job's key, and only this job
+      #    saves it; the other two restore it and rebuild the few dependencies their own feature
+      #    sets differ in (see the header of this family). The other Rust jobs keep their own keys.
+      #  - THE PATHS NAME WHAT IS KEPT, file kinds and not directories, because a `!` exclusion
+      #    does not work under a directory this lists. actions/cache globs the patterns WITHOUT
+      #    their descendants and hands the matches to tar, which then archives a listed directory
+      #    whole: `target` with `!target/debug/incremental` (as this read until 2026-11-16) kept
+      #    all of target/. What is kept is what a branch run can reuse: the dependencies'
+      #    libraries and metadata, build-script output, and cargo's fingerprints. What is left
+      #    out is the test executables, named `<name>-<16 hex>` with no extension: every one is
+      #    a workspace crate's, which cargo rebuilds on every run (a checkout makes every source
+      #    file newer than the cache), and measured locally they were 37 of 47 GB of
+      #    target/debug, against 4.9 GB for everything listed below. The registry's unpacked
+      #    sources are left out too: cargo unpacks them again from registry/cache in seconds.
+      #  - The path list is part of the cache's identity (actions/cache hashes it into the
+      #    entry's version), so every job that restores this key must list exactly these paths,
+      #    and the save below too, or it restores nothing.
       # A cache is speed only. A miss rebuilds from source and tests exactly the same thing.
       - name: Restore the cargo cache
         id: cargo-cache
@@ -141,74 +366,19 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git
-            target
-            !target/debug/incremental
+            target/debug/.fingerprint
+            target/debug/build
+            target/debug/deps/*.rlib
+            target/debug/deps/*.rmeta
+            target/debug/deps/*.so
+            target/debug/deps/*.d
           key: ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-test-
 
-
-      - name: cargo fmt --check
-        run: cargo fmt --all --check
-
-      # `cargo fmt --all` stops at the workspace boundary and src-tauri declares its
-      # OWN `[workspace]` table, so the step above has never reached it and no other
-      # job formats it either. Measured 2026-09-07, independently by two branches
-      # that both found the same number: the root step exited 0 while
-      # src-tauri/src/lib.rs carried 21 drifted regions no check could report. That
-      # also made `cargo fmt` unsafe to run in that directory, because it swept ~20
-      # unrelated reformats into whatever commit happened to be open. The sweep
-      # landed as its own commit so it could not contaminate a real diff.
-      #
-      # `--all` rather than the bare form: src-tauri is a single-package workspace
-      # today, so the two are equivalent — but if a member is ever added, the bare
-      # form silently stops covering it. Cheap and fast, so it sits beside the root
-      # fmt step: a formatting failure should not wait for a build.
-      - name: cargo fmt --check src-tauri
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
-
-      # `--no-fail-fast` on every multi-binary `cargo test`: without it cargo stops
-      # at the first test BINARY that fails, so a red run names the failures in
-      # one crate and says nothing about the others — the next push finds those.
-      # A red run must leave every failing test's name behind, once (scripts/gates
-      # reads them out of the log; CI's log is what a human reads).
-      - name: cargo test --workspace
-        run: cargo test --workspace --no-fail-fast
-
-      # The fd-rules publish gate, run here on the file it exists to guard.
-      # `.github/workflows/fd-rules.yml` runs this exact command before pushing
-      # the seed to the rolling `fd-rules` Release that every install downloads,
-      # so a seed edit that the app would refuse goes red at MERGE time rather
-      # than at publish time.
-      #
-      # The gate is `crates/tempo-core/src/bin/fd-rules-check.rs`: a thin shell
-      # around `fd_rules::validate` — i.e. `parse_spec`, the very function the
-      # shipped app enforces. It replaced a SECOND validator written in node
-      # (`scripts/check-fd-rules.mjs` + `scripts/rust-serde-schema.mjs`) that was
-      # kept in step with the loader by a parity corpus. Four rounds of parity
-      # fixes each closed some divergence classes and revealed others, because
-      # agreeing with the loader byte-for-byte means reimplementing serde's
-      # derive behaviour and serde_json's lexer — presence rules, integer widths,
-      # surrogate pairing, the recursion limit, `IgnoredAny` scanning for unknown
-      # fields, and the exact error text. The last round reddened the gate on the
-      # seed's own `_provenance` prose, a file every shipped app accepts. There is
-      # one implementation now, so parity is true by construction.
-      #
-      # The corpus stayed and is walked THROUGH THIS BINARY by
-      # `cargo test -p tempo-core --test fd_rules_corpus` (in the run above):
-      # every refuse fixture must exit 1 with its recorded reason, every accept
-      # fixture must exit 0.
-      #
-      # `!cancelled()` on this step and clippy: they run after a red test step,
-      # so one push reports a bad seed or a lint along with the failing tests
-      # instead of leaving them for the next push (21 Oct: both were skipped).
-      - name: fd-rules publish gate on the in-repo seed
-        if: ${{ !cancelled() }}
-        run: cargo run --quiet -p tempo-core --bin fd-rules-check -- crates/tempo-core/src/fd_rules.seed.json
-
-      - name: cargo clippy (deny warnings)
-        if: ${{ !cancelled() }}
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      # `--no-fail-fast` on every multi-binary `cargo test`: see the `test-audio-app` job.
+      - name: cargo test --workspace, less tempo-sstv, tempo-audio and tempo-app
+        run: cargo test --workspace --exclude tempo-sstv --exclude tempo-audio --exclude tempo-app --no-fail-fast
 
       # Main only, and only when every step passed: a build that stopped partway, saved under the
       # exact key, would be restored as an exact hit and never saved again until Cargo.lock moved.
@@ -222,15 +392,20 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git
-            target
-            !target/debug/incremental
+            target/debug/.fingerprint
+            target/debug/build
+            target/debug/deps/*.rlib
+            target/debug/deps/*.rmeta
+            target/debug/deps/*.so
+            target/debug/deps/*.d
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   # The feature-gated crates, which a plain `--workspace` run does not build:
   # tempo-audio's service.rs is `#[cfg(feature = "device")]` and propagation's
   # fetchers are behind `live`, so the default pass silently skips both. The
-  # 10-minute step is `cargo test tempo-audio` — its tail is one rigctl-per-model
-  # test, not a hang.
+  # slowest step is `cargo test tempo-audio`. Its tail was one rigctl-per-model
+  # test (13.7 of this job's 25 minutes on 2026-11-16) until that test asked its
+  # models in parallel; a long tail there is that test, not a hang.
 
   test-features:
     name: Rust feature-gated crates (tempo-audio, propagation)
@@ -240,9 +415,9 @@ jobs:
         uses: actions/checkout@v7
 
       # The SAME system-dependency list as the `test` job — see there for why each
-      # package is present. The three Rust jobs must keep identical lists: they build
+      # package is present. The Rust test jobs must keep identical lists: they build
       # the same libtempo, so a package added to only one of them goes red in the
-      # other two on a build unrelated to the change that added it.
+      # others on a build unrelated to the change that added it.
       # (A composite action would state this once, but `scripts/gates` reports a local
       # `uses: ./…` as UNKNOWN, which costs every local gate run its full-coverage
       # claim — a worse trade than duplication. Teaching the tool to resolve local
@@ -283,7 +458,8 @@ jobs:
           targets: aarch64-linux-android
 
 
-      # Its own key, restored everywhere and saved on main only: see the `test` job's cache.
+      # Its own key, restored everywhere and saved on main only, of the same kinds of file: see the
+      # `test` job's cache. The Android check's output is all metadata, so its directory is kept whole.
       - name: Restore the cargo cache
         id: cargo-cache
         uses: actions/cache/restore@v6
@@ -292,8 +468,13 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git
-            target
-            !target/debug/incremental
+            target/debug/.fingerprint
+            target/debug/build
+            target/debug/deps/*.rlib
+            target/debug/deps/*.rmeta
+            target/debug/deps/*.so
+            target/debug/deps/*.d
+            target/aarch64-linux-android
           key: ${{ runner.os }}-cargo-features-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-features-
@@ -361,8 +542,13 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git
-            target
-            !target/debug/incremental
+            target/debug/.fingerprint
+            target/debug/build
+            target/debug/deps/*.rlib
+            target/debug/deps/*.rmeta
+            target/debug/deps/*.so
+            target/debug/deps/*.d
+            target/aarch64-linux-android
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   # src-tauri and the native Remote controller. src-tauri declares its OWN
@@ -378,9 +564,9 @@ jobs:
         uses: actions/checkout@v7
 
       # The SAME system-dependency list as the `test` job — see there for why each
-      # package is present. The three Rust jobs must keep identical lists: they build
+      # package is present. The Rust test jobs must keep identical lists: they build
       # the same libtempo, so a package added to only one of them goes red in the
-      # other two on a build unrelated to the change that added it.
+      # others on a build unrelated to the change that added it.
       # (A composite action would state this once, but `scripts/gates` reports a local
       # `uses: ./…` as UNKNOWN, which costs every local gate run its full-coverage
       # claim — a worse trade than duplication. Teaching the tool to resolve local
@@ -419,7 +605,8 @@ jobs:
           components: clippy, rustfmt
 
 
-      # Its own key, restored everywhere and saved on main only: see the `test` job's cache. Every
+      # Its own key, restored everywhere and saved on main only, of the same kinds of file: see the
+      # `test` job's cache. Every
       # cargo command in this job, the native Remote probe's included, builds into src-tauri/target
       # (src-tauri is its own workspace), which the shared cache this replaced never held: the
       # job rebuilt src-tauri from nothing on every run, hit or miss.
@@ -431,8 +618,12 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git
-            src-tauri/target
-            !src-tauri/target/debug/incremental
+            src-tauri/target/debug/.fingerprint
+            src-tauri/target/debug/build
+            src-tauri/target/debug/deps/*.rlib
+            src-tauri/target/debug/deps/*.rmeta
+            src-tauri/target/debug/deps/*.so
+            src-tauri/target/debug/deps/*.d
           key: ${{ runner.os }}-cargo-tauri-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-tauri-
@@ -531,8 +722,12 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git
-            src-tauri/target
-            !src-tauri/target/debug/incremental
+            src-tauri/target/debug/.fingerprint
+            src-tauri/target/debug/build
+            src-tauri/target/debug/deps/*.rlib
+            src-tauri/target/debug/deps/*.rmeta
+            src-tauri/target/debug/deps/*.so
+            src-tauri/target/debug/deps/*.d
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   # The hosted page is the stream page. The old watch/control workspace and the observer view take no
@@ -672,9 +867,6 @@ jobs:
 
       - name: Build UI
         run: npm --prefix ui run build
-
-      - name: Test UI (Vitest)
-        run: npm --prefix ui test
 
       # The translator kits pin the rows they shipped. A change that removes or rewords a catalog
       # string without re-pinning the kit leaves a volunteer's verifier failing on a file they never
@@ -888,6 +1080,38 @@ jobs:
       - name: The manual's images and cross-references resolve
         run: node scripts/release-docs.mjs --push-gate
 
+  # Vitest, in two shards by vitest's own `--shard`, which deals the test FILES out by a hash of
+  # their paths. It was 24.6 of the `ui` job's 26.7 minutes on 2026-11-16 (1,573 files, 22,980
+  # tests, ~2.8 cores busy on four), and the second-slowest job of the run once the Rust tests were
+  # split. No build first: the suite reads the sources, never ui/dist.
+  #
+  # The count is stated twice, as the matrix and as `--shard`'s `/<of>`, for the reason the
+  # browser sweep's is (a runtime context would leave the step BLOCKED under scripts/gates), and
+  # scripts/gates.test.mjs holds the two equal: a matrix of two passing `/3` would leave a third of
+  # the files in no job, with both green. `fail-fast: false`, so a red run names every failing
+  # test once, as everywhere else here.
+  ui-vitest:
+    name: Web UI tests (Vitest shard ${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Install UI dependencies
+        run: npm --prefix ui ci
+
+      - name: Test UI (Vitest, this shard's files)
+        run: npm --prefix ui test -- --shard=${{ matrix.shard }}/2
+
   # The scope and waterfall in a real browser (ui/spectrum-harness/, see its README).
   #
   # jsdom never lays out and has no graphics context, so every gate in `ui` above stays green
@@ -955,9 +1179,12 @@ jobs:
   # and the files just written or restored are in the page cache when the first probe starts.
   #
   # The probes are dealt round-robin over the matrix from scripts/browser-probe's DESKTOP_ALL, which
-  # is ordered slowest first so the shards come out even. Two shards were 9.2 and 12.9 minutes on CI on
+  # is ordered so the shards come out even. Two shards were 9.2 and 12.9 minutes on CI on
   # 2026-11-04; by 2026-11-15 the probes had grown to 40 and 33, and shard 0 hit the job's 40-minute cap and
-  # was cancelled mid-run, so there are now three. The count is stated twice, as the matrix
+  # was cancelled mid-run, so there were three. Those were 21, 23-25 and 30-33 minutes on 2026-11-16
+  # (the order had gone stale), and the 79 probe-minutes cannot be dealt into three shards under ~27
+  # however they are ordered, so there are now four, dealt from the probes' own CI times: ~20 minutes
+  # each. The count is stated twice, as the matrix
   # length and as --desktop-shard's <of>, and scripts/gates.test.mjs holds the two equal. In series within a shard: each probe starts its own
   # Vite server and Chrome, and two on four cores would race each other's frames. A red does not stop
   # the shard; the end of the step names every red one.
@@ -968,7 +1195,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2]
+        shard: [0, 1, 2, 3]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1013,7 +1240,7 @@ jobs:
         run: |
           fc-match sans-serif
           fc-match monospace
-          scripts/browser-probe --desktop-shard ${{ matrix.shard }} 3
+          scripts/browser-probe --desktop-shard ${{ matrix.shard }} 4
       # Only on failure, as the browser sweep's: each red probe's log and the last picture of each of
       # its pages (a green probe's are removed as it passes).
       - name: The red probes' logs and pictures
@@ -1088,38 +1315,15 @@ jobs:
         with:
           toolchain: 1.91.0
 
-      # Restored everywhere and saved on main only: see the `test` job's cache.
-      - name: Restore the cargo cache
-        id: cargo-cache
-        uses: actions/cache/restore@v6
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git
-            target
-            !target/debug/incremental
-          key: ${{ runner.os }}-msrv-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-msrv-
-
+      # NO cargo cache, deliberately (it had one until 2026-11-16). This job checks, so it links
+      # nothing and runs no test: measured cold on 2026-11-16, its two steps took 1 min 40 s and
+      # 17 s. Its key had already been evicted when the repository passed GitHub's 10 GB cap, so
+      # it was running cold anyway, and the room is worth more to the test jobs' cache.
       - name: cargo check --workspace (MSRV)
         run: cargo check --workspace --all-targets
 
       - name: cargo check propagation --features live (MSRV)
         run: cargo check -p propagation --features live
-
-      - name: Save the cargo cache (main only)
-        if: ${{ success() && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v6
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git
-            target
-            !target/debug/incremental
-          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   # Job 4 — Supply chain: RustSec advisories, license allow-list, sources, bans.
   deny:

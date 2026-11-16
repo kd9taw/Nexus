@@ -348,14 +348,24 @@ USAGE
 
 # Every --desktop scenario, and the ONLY list that admits one: a name missing here is refused by
 # --desktop as well, so a new probe cannot be runnable by hand and missing from the desktop-probes CI
-# job, which deals this list round-robin over its shards with --desktop-shard. Slowest first, so the
-# deal balances (local seconds on 2026-11-05: toastcorner 299, digishell 330, topbar 96, waterfalls 92, logbook 67,
-# header 62, journeys 42, rttyfit 39, the rest 7-27); keep a new probe near its cost when you add it.
-# opchip (2026-11-15, 111 s locally) is LAST, not by its cost: every other probe keeps the shard it
-# had (a slot in the middle would move every probe after it to the other shard).
-DESKTOP_ALL=(toastcorner digishell alarmcell sstvlayout stopvisible topbar topbarnow waterfalls txmeterspane logbook header journeys rttyfit menustop stopabove profiles firstrun radiosetup contestsetup contestlog
-  ftline logwaiting spots atu radioswitch jtty activation clublog aprsmap callcard voicenote rotor contactcard txmeters besttimes laptopfit recallcard
-  opchip)
+# job, which deals this list round-robin over its shards with --desktop-shard (index % of).
+#
+# THE ORDER IS THE DEAL. Sorting slowest first stopped balancing once a few probes came to dominate:
+# on 2026-11-16 the three CI shards were 21, 23-25 and 30-33 minutes. The order below is four
+# shards' worth of probes, each shard's slowest first, interleaved so that index % 4 hands shard n
+# its own column back, and the columns were cut from each probe's slowest CI time over three runs
+# that day (seconds): stopvisible 593, toastcorner 447, digishell 433, topbar 361, alarmcell 316,
+# header 261, txmeterspane 252, sstvlayout 228, waterfalls 210, opchip 143, journeys 117,
+# stopabove 109, laptopfit 107, logbook 95, topbarnow 94, menustop 94, recallcard 90, txmeters 67,
+# firstrun 66, rttyfit 60, radiosetup 59, logwaiting 58, profiles 57, ftline 53, besttimes 46,
+# atu 42, radioswitch 36, the rest 11-30. That deals 1185-1187 s to each of four shards. With a
+# new probe, or when the shards drift apart again, re-cut the columns from the CI log's
+# "browser-probe: <name> passed in <n> s" lines rather than slotting it in by guess: one probe
+# added mid-list moves every probe after it to another shard.
+DESKTOP_ALL=(stopvisible toastcorner digishell topbar sstvlayout txmeterspane header alarmcell menustop journeys
+  opchip waterfalls topbarnow laptopfit stopabove logbook ftline recallcard txmeters firstrun
+  atu radiosetup rttyfit profiles clublog besttimes logwaiting radioswitch spots contestlog
+  activation aprsmap contestsetup jtty contactcard callcard rotor voicenote)
 
 SCENARIO='stream'
 SHARD=''

@@ -53,7 +53,8 @@
 //   scripts/gates                     run every gate this machine can run
 //   scripts/gates --list              print every gate CI runs, grouped by job
 //   scripts/gates --list --unrunnable print only what CANNOT run here, and why
-//   scripts/gates --job test,ui       scope to named jobs (comma-separated)
+//   scripts/gates --job test,test-sstv,test-audio-app,ui,ui-vitest
+//                                     scope to named jobs (comma-separated)
 //   scripts/gates --allow-partial     exit 0 on incomplete coverage instead of 3
 //   scripts/gates --workflow PATH     read a different workflow (used by the tests)
 //

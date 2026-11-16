@@ -19,7 +19,7 @@ and was violated anyway; transcription is the defect.
 | `scripts/gates --list` | every gate CI runs, grouped by job, with the exact command |
 | `scripts/gates` | runs the ones runnable here, bare, printing each real exit code |
 | `scripts/gates --list --unrunnable` | the jobs that **cannot** run here and why — for those, **pushing and reading the CI run IS the gate** |
-| `scripts/gates --job test,ui` | scope a batch; the output states what it did NOT run |
+| `scripts/gates --job test,test-sstv,test-audio-app,ui,ui-vitest` | scope a batch; the output states what it did NOT run |
 | `scripts/gates --allow-partial` | accept incomplete coverage deliberately (see the exit codes) |
 
 **Exit codes — `scripts/gates && git push` must not lie.** `0` every gate in the workflow ran
