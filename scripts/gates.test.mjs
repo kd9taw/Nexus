@@ -131,6 +131,58 @@ test('the desktop probe shard matrix and the shard count it passes agree', () =>
   assert.deepEqual(shards, shards.map((_, index) => index), 'shards must be 0..n-1 with no gaps');
 });
 
+// One job's text out of ci.yml, from its id to the next job's.
+const jobText = (yaml, id) => {
+  const start = yaml.indexOf(`\n  ${id}:\n`);
+  assert.ok(start >= 0, `ci.yml must have the ${id} job`);
+  const rest = yaml.slice(start + 1);
+  const next = rest.search(/\n  [A-Za-z0-9_-]+:\n/);
+  return next < 0 ? rest : rest.slice(0, next + 1);
+};
+
+// Vitest is sharded the same way, by its own `--shard=<i>/<of>`, which counts from 1: a matrix of
+// two passing `/3` leaves a third of the files in no job, and a matrix of three passing `/2` runs
+// half of them twice, with every shard green either way.
+test('the Vitest shard matrix and the shard count it passes agree', () => {
+  const job = jobText(fs.readFileSync(CI, 'utf8'), 'ui-vitest');
+  const matrix = job.match(/shard:\s*\[([^\]]*)\]/);
+  assert.ok(matrix, 'ui-vitest must declare a `shard:` matrix');
+  const shards = matrix[1].split(',').map(v => Number(v.trim()));
+  const runs = [...job.matchAll(/--shard=\$\{\{\s*matrix\.shard\s*\}\}\/(\d+)/g)];
+  assert.equal(runs.length, 1, 'ui-vitest must run vitest with `--shard=${{ matrix.shard }}/<of>` once');
+  assert.equal(
+    shards.length,
+    Number(runs[0][1]),
+    `the matrix declares ${shards.length} shard(s) but passes --shard=<i>/${runs[0][1]} — ` +
+      'test files would run in no job, or twice',
+  );
+  assert.deepEqual(shards, shards.map((_, index) => index + 1), 'shards must be 1..n with no gaps');
+});
+
+// The workspace's tests are split over three jobs: two name their crates with `-p`, and the third
+// runs `--workspace` with exactly those crates `--exclude`d, so a crate added later is covered with
+// no edit. The two lists are one fact stated twice. A crate excluded there and named nowhere would
+// have its tests run by no job at all, with all three green.
+test('the crates the split test jobs name are exactly the ones the workspace job excludes', () => {
+  const yaml = fs.readFileSync(CI, 'utf8');
+  const testRuns = (id) =>
+    [...jobText(yaml, id).matchAll(/^\s*run: (cargo test .*)$/gm)].map((m) => m[1]);
+  const named = [];
+  for (const id of ['test-sstv', 'test-audio-app']) {
+    const runs = testRuns(id);
+    assert.equal(runs.length, 1, `${id} must run one \`cargo test\``);
+    assert.doesNotMatch(runs[0], /--workspace|--features|--all-features/, `${id} must name its crates with -p alone`);
+    named.push(...[...runs[0].matchAll(/-p\s+(\S+)/g)].map((m) => m[1]));
+  }
+  const rest = testRuns('test');
+  assert.equal(rest.length, 1, 'the test job must run one `cargo test`');
+  assert.match(rest[0], /--workspace/, 'the test job must run the whole workspace, less the split crates');
+  const excluded = [...rest[0].matchAll(/--exclude\s+(\S+)/g)].map((m) => m[1]);
+  assert.ok(named.length > 0, 'the split jobs name no crate');
+  assert.equal(new Set(named).size, named.length, `a crate is named by two split jobs: ${named.join(', ')}`);
+  assert.deepEqual([...excluded].sort(), [...named].sort(), 'the excluded crates and the named crates differ');
+});
+
 test('a step added to the workflow appears in --list, with no edit to the script', () => {
   const original = fs.readFileSync(CI, 'utf8');
 
