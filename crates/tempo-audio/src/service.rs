@@ -20262,8 +20262,16 @@ impl Transport {
     /// The serial port the RTS/DTR keying line lives on: the dedicated `ptt_serial_port`
     /// when set (an SO2R controller's own COM port), else the CAT `serial_port` (the prior
     /// single-port behavior). Only meaningful when `ptt_method` is "rts"/"dtr".
+    ///
+    /// Never the CAT port under OmniRig: OmniRig holds that COM port and Nexus opens nothing
+    /// there, so a `serial_port` kept from an earlier USB setup names no keying cable. Keying it
+    /// would assert RTS/DTR on OmniRig's own port. An OmniRig radio with no PTT Serial Port has
+    /// no keying port, and its open says so (`name_a_missing_ptt_port`).
     fn ptt_port(&self) -> &str {
         if self.ptt_serial_port.trim().is_empty() {
+            if self.is_omnirig() {
+                return "";
+            }
             &self.serial_port
         } else {
             self.ptt_serial_port.trim()
@@ -31801,8 +31809,9 @@ mod tests {
         assert!(!serial.cat_available());
         assert_eq!(ptt_mode_for(&serial), PttMode::Vox);
 
-        // Serial keying on the very port an operator might also have typed as the CAT port:
-        // still OUR line, never a daemon's, because no daemon holds it.
+        // Serial keying with a CAT port left over from a USB setup (Settings hides that field
+        // under OmniRig): still OUR line, never a daemon's, because no daemon holds it. And not
+        // that port either: OmniRig holds it, so with no PTT Serial Port there is no keying port.
         t.ptt_method = "rts".into();
         t.serial_port = "COM5".into();
         t.ptt_serial_port = String::new();
@@ -31813,7 +31822,7 @@ mod tests {
         assert_eq!(
             ptt_mode_for(&t),
             PttMode::Serial {
-                port: "COM5".into(),
+                port: String::new(),
                 line: SerialLine::Rts,
             }
         );
@@ -44361,6 +44370,90 @@ mod tests {
                 probe.detail
             );
         }
+    }
+
+    /// An OmniRig station that came from a USB setup still carries that CAT COM port, which
+    /// OmniRig now holds. Keyed by RTS or DTR with no PTT Serial Port, it is a station with no
+    /// keying port: the open names the missing port, and neither the open nor the adoption of
+    /// a monitored radio keys the old CAT port.
+    #[test]
+    fn an_omnirig_rig_with_a_stale_cat_port_and_no_ptt_port_keys_nothing_and_says_so() {
+        for (method, line, serial_line) in [
+            ("rts", "RTS", SerialLine::Rts),
+            ("dtr", "DTR", SerialLine::Dtr),
+        ] {
+            let mut t = omnirig_transport(method, "");
+            t.serial_port = "COM5".into();
+            assert_eq!(
+                t.ptt_port(),
+                "",
+                "the CAT port is OmniRig's, not a keying port"
+            );
+            assert_eq!(
+                ptt_mode_for(&t),
+                PttMode::Serial {
+                    port: String::new(),
+                    line: serial_line
+                },
+                "an adopted OmniRig radio does not key the stale CAT port"
+            );
+            let (_rig, _proc, probe) = open_rig(&t, true);
+            assert!(
+                probe.detail.contains(&format!(
+                    "PTT is {line} and no PTT Serial Port is set, so nothing will transmit"
+                )),
+                "names the missing port at open: {}",
+                probe.detail
+            );
+        }
+    }
+
+    /// The controls for the stale CAT port: OmniRig with a real PTT Serial Port keys that
+    /// port, OmniRig on CAT PTT keys through OmniRig, and neither is warned.
+    #[test]
+    fn an_omnirig_rig_with_a_stale_cat_port_keys_its_ptt_port_or_cat_unwarned() {
+        let mut keyed = omnirig_transport("rts", "tempo-test-omnirig-key");
+        keyed.serial_port = "COM5".into();
+        assert_eq!(keyed.ptt_port(), "tempo-test-omnirig-key");
+        assert_eq!(
+            ptt_mode_for(&keyed),
+            PttMode::Serial {
+                port: "tempo-test-omnirig-key".into(),
+                line: SerialLine::Rts
+            }
+        );
+        let mut cat = omnirig_transport("cat", "");
+        cat.serial_port = "COM5".into();
+        assert_eq!(ptt_mode_for(&cat), cat_ptt_mode(&cat));
+        for t in [keyed, cat] {
+            let (_rig, _proc, probe) = open_rig(&t, true);
+            assert!(
+                !probe.detail.contains("no PTT Serial Port"),
+                "{}: {}",
+                t.ptt_method,
+                probe.detail
+            );
+        }
+    }
+
+    /// Off OmniRig, an empty PTT Serial Port still means the CAT port: a single-cable interface
+    /// (a Digirig) keys RTS there through its daemon, and a radio with no model keys it directly.
+    #[test]
+    fn a_serial_cat_rig_with_no_ptt_port_still_keys_its_cat_port() {
+        let mut single_cable = cat_transport(4532, None);
+        single_cable.ptt_method = "rts".into();
+        assert_eq!(single_cable.ptt_port(), "/dev/ttyUSB0");
+        assert!(keys_on_the_cat_port(&single_cable));
+        assert_eq!(ptt_mode_for(&single_cable), PttMode::Cat);
+        let mut no_model = single_cable.clone();
+        no_model.rig_model = 0;
+        assert_eq!(
+            ptt_mode_for(&no_model),
+            PttMode::Serial {
+                port: "/dev/ttyUSB0".into(),
+                line: SerialLine::Rts
+            }
+        );
     }
 
     /// Read-only launch #3/#4 (the latch): with the mode never asserted this session,
