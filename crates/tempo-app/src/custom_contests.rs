@@ -414,9 +414,21 @@ pub struct CustomPreview {
     pub ft_shape: Option<custom::FtActivity>,
     /// That match, when the operator chose to use it (an RST + serial exchange is asked).
     pub ft_activity: Option<custom::FtActivity>,
-    /// What FT8/FT4 actually send in this build, from the sequencer's own choice:
-    /// `"standard"` for every custom contest until the contest messages land.
+    /// What FT8/FT4 actually send in this build, from the sequencer's own choice
+    /// ([`FtMessages::for_contest`](tempo_core::fieldday::FtMessages::for_contest)): `"standard"`,
+    /// or the activity's name as [`custom::FtActivity`] spells it where this build sends its
+    /// messages.
     pub ft_messages: String,
+    /// The CQ the contest's Running calls on FT8/FT4 (`CQ RU W9XYZ EN52`), from the Settings call
+    /// and locator; `""` with the standard messages.
+    pub ft_cq: String,
+    /// The exchange those messages carry after the two calls (`579 0001`), as the sequencer would
+    /// send it first; `""` with the standard messages.
+    pub ft_sends: String,
+    /// Why those messages cannot carry this station's exchange with the current settings (a QTH
+    /// the RTTY Roundup message has no word for), as the station would refuse it; `""` when they
+    /// can.
+    pub ft_refusal: String,
     /// The slots the setup will ask the operator to type.
     pub entered_slots: Vec<String>,
 }
@@ -437,13 +449,18 @@ pub fn preview(
             }
         }
     };
+    use tempo_core::fieldday::FtMessages;
+    let messages = FtMessages::for_contest(rs, "FT8");
     let mut out = CustomPreview {
         ft_shape: custom::ft_shape(def),
         ft_activity: rs.ft_activity,
-        ft_messages: match tempo_core::fieldday::FtMessages::for_contest(rs, "FT8") {
-            tempo_core::fieldday::FtMessages::Standard => "standard",
-            tempo_core::fieldday::FtMessages::FieldDay => "field_day",
-            tempo_core::fieldday::FtMessages::NaVhf => "na_vhf",
+        ft_messages: match messages {
+            FtMessages::Standard => "standard",
+            FtMessages::FieldDay => "field_day",
+            FtMessages::NaVhf => "na_vhf",
+            FtMessages::WwDigi => "ww_digi",
+            FtMessages::RttyRoundup => "rtty_roundup",
+            FtMessages::EuVhf => "eu_vhf",
         }
         .to_string(),
         entered_slots: rs.entered_slots().into_iter().map(str::to_string).collect(),
@@ -459,6 +476,14 @@ pub fn preview(
             return out;
         }
     };
+    if messages != FtMessages::Standard {
+        let grid = session.field("GRID");
+        out.ft_cq = messages.cq_on_air(settings.mycall.trim(), settings.mygrid.trim(), grid);
+        out.ft_sends = messages.sample_exchange(&session, settings.mygrid.trim());
+        out.ft_refusal = messages
+            .exchange_refusal(&session, settings.mygrid.trim())
+            .unwrap_or_default();
+    }
     let sent: Vec<(String, String)> = session
         .my_exchange
         .iter()

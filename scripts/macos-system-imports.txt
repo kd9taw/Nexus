@@ -22,6 +22,13 @@
 #   - _pthread_cond_timedwait came from ci.yml's macos-imports job, whose debug link of the app
 #     imports it where the release link does not (2026-11-11); exported for arm64-macos by
 #     usr/lib/system/libsystem_pthread.tbd in the macOS 11.3 SDK.
+#   - Thirteen names came with the static GNU OpenMP runtime (libgomp, 2026-11-15): _atexit, _fputc,
+#     _fputs, _gethostname, _getloadavg, _pthread_attr_getstacksize, _pthread_exit, _setenv,
+#     _strcasecmp, _strerror, _strtol, _strtoul and _vfprintf, each exported for arm64-macos and
+#     x86_64-macos by usr/lib/system/libsystem_c.tbd or libsystem_pthread.tbd in the macOS 12.3 SDK.
+#   - _remove came with the JTDX-style FT8 and FT4 decoders (2026-11-16): the C library's file
+#     delete, a C89 function libsystem_c exports on every macOS, pulled in by the runtime those
+#     decoders link statically (their own sources do not call it).
 #   - Every name is exported by libSystem in the macOS 11.3 SDK (usr/lib/libSystem.B.tbd and the
 #     usr/lib/system/*.tbd it re-exports) for the architecture that imports it, so it exists on
 #     macOS 12.
@@ -100,6 +107,7 @@ _atan
 _atan2
 _atan2f
 _atanf
+_atexit
 _atoi
 _bind
 _bsearch
@@ -163,6 +171,8 @@ _fmod
 _fmodf
 _fork
 _fprintf
+_fputc
+_fputs
 _free
 _freeaddrinfo
 _freeifaddrs
@@ -187,8 +197,10 @@ _getentropy
 _getenv
 _geteuid
 _getgid
+_gethostname
 _gethostuuid
 _getifaddrs
+_getloadavg
 _getpagesize
 _getpeername
 _getpid
@@ -268,6 +280,7 @@ _powf
 _pread
 _printf
 _pthread_attr_destroy
+_pthread_attr_getstacksize
 _pthread_attr_init
 _pthread_attr_setstacksize
 _pthread_cond_broadcast
@@ -280,6 +293,7 @@ _pthread_cond_wait
 _pthread_create
 _pthread_detach
 _pthread_equal
+_pthread_exit
 _pthread_get_stackaddr_np
 _pthread_get_stacksize_np
 _pthread_getspecific
@@ -319,11 +333,13 @@ _realloc
 _realpath$DARWIN_EXTSN
 _recv
 _recvfrom
+_remove
 _rename
 _rmdir
 _sched_yield
 _send
 _sendto
+_setenv
 _setgid
 _setgroups
 _setpgid
@@ -350,11 +366,13 @@ _stat$INODE64
 _statfs
 _statfs$INODE64
 _statvfs
+_strcasecmp
 _strchr
 _strcmp
 _strcpy
 _strcspn
 _strdup
+_strerror
 _strerror_r
 _strlen
 _strncasecmp
@@ -368,7 +386,9 @@ _strspn
 _strtod
 _strtof
 _strtok
+_strtol
 _strtold
+_strtoul
 _strtoull
 _symlink
 _sysconf
@@ -388,6 +408,7 @@ _unlinkat
 _unlockpt
 _uselocale
 _utimes
+_vfprintf
 _vsnprintf
 _waitpid
 _write

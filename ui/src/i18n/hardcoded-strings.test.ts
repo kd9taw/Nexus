@@ -129,6 +129,10 @@ const MIGRATED = [
   // Client mode (2026-10-07) — born migrated: the banner of a computer driving another station,
   // and the words for a call it refused or could not make.
   'components/ClientBanner.tsx',
+  // Settings ▸ FT8 decoder (the JTDX-style decoder's style, presets and knobs) and its CPU-guard
+  // notice (2026-11-14), born migrated.
+  'components/JtdxDecoderFields.tsx',
+  'useFt8StepDownNotice.ts',
   'features/clientWords.ts',
   // The words for a restore refused while the radio is keyed (2026-10-29), born migrated.
   'features/restoreWords.ts',

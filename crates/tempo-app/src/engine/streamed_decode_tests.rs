@@ -26,6 +26,7 @@ fn decode(message: &str, snr: i32, freq: f32) -> modes::Decode {
         qual: 1.0,
         rv: None,
         raw: None,
+        unchecked: false,
         mode: Some(modes::ModeKind::Ft8),
     }
 }
@@ -51,6 +52,7 @@ fn result(e: &Engine, messages: &[&str], pass: DecodePass, slot: u64) -> DecodeR
         heard_on: None,
         failed: false,
         logged_adif: Vec::new(),
+        jtdx_took: None,
     }
 }
 

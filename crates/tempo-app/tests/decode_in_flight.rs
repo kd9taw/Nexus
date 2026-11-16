@@ -72,6 +72,8 @@ fn chain(mycall: &str, flow: u32, fhigh: u32) -> Engine {
         sideband: "USB".to_string(),
         decode_flow_hz: flow,
         decode_fhigh_hz: fhigh,
+        // The standard decoder: the a7 table these tests follow is its.
+        ft8_decoder: tempo_app::settings::DecoderStyle::Standard,
         ..Settings::default()
     });
     eng.set_tier(Tier::Ft8);

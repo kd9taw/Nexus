@@ -432,6 +432,15 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   interoperates with their ecosystem over the standard WSJT-X UDP protocol;
   its auto-sequencer is original Rust modeled on WSJT-X's on-air behavior.
   **Nexus is not endorsed by nor affiliated with the WSJT Development Group.** GPLv3.
+- **[JTDX](https://github.com/jtdx-project/jtdx)** (GPLv3) — **Igor Chernikov UA3DJY**, **Arvo
+  Järve ES1JA** and the JTDX team. Nexus's default FT8 decoder is JTDX's: WSJT-X 3.0's
+  multithreaded FT8 decoder (`lib/ft8var`) is the WSJT-X developers' port of the JTDX decoder,
+  and Nexus vendors that port from WSJT-X 3.0.2 at `libtempo/vendor/wsjtx/lib/ft8var/`, with the
+  JTDX callsign database `ALLCALL7.TXT` it uses to filter false decodes. JTDX's SWL mode, which
+  the port left out, is carried over from JTDX 2.2.159 itself. Nexus's **JTDX-style FT4
+  decoder** is JTDX 2.2.159's FT4 decoder, vendored at `libtempo/vendor/wsjtx/lib/ft4jtdx/`.
+  WSJT-X's standard decoders stay one setting away (Settings ▸ Digital ▸ Decoder). See
+  **[NOTICE](NOTICE)**.
 - **[qracodes](https://github.com/IV3NWV/qracodes)** — **Nico Palermo IV3NWV** / Microtelecom Srl
   (© 2016, GPL-3.0-or-later). The Q-ary Repeat-Accumulate LDPC codec that **Q65** decodes with,
   vendored at `libtempo/vendor/wsjtx/lib/qra/` with its per-file license headers intact. A separate

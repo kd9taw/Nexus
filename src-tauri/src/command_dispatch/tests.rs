@@ -367,14 +367,15 @@ fn starts_run_from_afar() -> Vec<&'static str> {
 
 /// The rest of those FT buttons: Halt, Clear DX, working a spot, Log QSO and the prompt-to-log answer, and
 /// the operator's settings (the TX and RX offsets, Hold TX freq, even or odd, skip Tx1, auto cycle,
-/// mode, band, frequency and decode depth). None keys anything.
-const FT_KEYING_NOTHING: [&str; 15] = [
+/// mode, band, frequency and decode depth) and the DX Call box. None keys anything.
+const FT_KEYING_NOTHING: [&str; 16] = [
     "clear_dx_call",
     "confirm_pending_log",
     "halt_tx",
     "log_current_qso",
     "pick_band",
     "set_decode_depth",
+    "set_dx_box",
     "set_frequency",
     "set_hold_tx_freq",
     "set_rx_offset",

@@ -272,6 +272,69 @@ Nexus is not endorsed by nor affiliated with the WSJT Development Team. The team
 WSJT-X as its trademark; Nexus's JTTY is not WSJT-X, and Nexus uses the name only to say where
 this code comes from.
 
+### JTDX — the JTDX-style FT8 and FT4 decoders (Igor Chernikov UA3DJY, Arvo Järve ES1JA and the JTDX team)
+License: **GNU GPL, version 3** (GPLv3). <https://github.com/WSJTX/wsjtx> (tag `v3.0.2`) ·
+JTDX: <https://github.com/jtdx-project/jtdx> (tag `159`), <https://sourceforge.net/projects/jtdx/>
+
+Nexus's JTDX-style decoders are **JTDX's work**. JTDX is the fork of WSJT-X by **Igor Chernikov
+(UA3DJY)** and **Arvo Järve (ES1JA)** with the JTDX team ("Copyright (C) 2001-2020 by Joe Taylor,
+K1JT. Copyright (C) 2016-2020 by Igor Chernikov UA3DJY and Arvo Järve ES1JA", JTDX's README). Its
+COPYING reads: "JTDX software is a derivative work based on the WSJT-X source code and is
+licensed under the GPL Version 3 license", with no "or any later version" grant, so everything
+below is GPL-3.0-only here. It reaches Nexus by two routes.
+
+**FT8, through WSJT-X's port.** Nexus's default FT8 decoder is the one WSJT-X 3.0 offers as
+**Decode ▸ Use multithreaded FT8 decoder**, WSJT-X's `ft8var`: a port, by the WSJT-X developers,
+of JTDX's FT8 decoder (its multi-cycle passes, its candidate search, its FT8S/FT8SD matched-filter
+decoders, its a-priori tables and its false-decode filters). Its sources,
+`libtempo/vendor/wsjtx/lib/ft8var/` (53 files), are vendored from WSJT-X at the tag `v3.0.2`, byte
+for byte, together with what they need from the rest of WSJT-X that Nexus did not already carry:
+`lib/ft8/ft8_a8d.f90`, `lib/jt65_mod6.f90`, `lib/prog_args.f90`, `lib/fftw3.f90` (FFTW's own
+Fortran constants header, as WSJT-X ships it; FFTW is GPL-2.0-or-later, compatible), and the
+callsign database `ALLCALL7.TXT` (at `libtempo/vendor/wsjtx/ALLCALL7.TXT`, shipped with Nexus),
+which the decoder reads to reject false decodes; its header calls it the "Callsign database for
+JTDX software", compiled from callsigns spotted on pskreporter.info. One file says whose it is in
+its own header (`jt65_mod6.f90`: "last time modified by Igor UA3DJY"); the port marks its own
+changes `ft8md` in comments. WSJT-X does not name JTDX in its release notes or acknowledgements,
+so Nexus credits it here and in the README.
+
+Eight of those files carry a `MODIFIED FOR NEXUS` note: `lib/77bit/packjt77.f90` and
+`lib/ft8/ft8_a7.f90` gain, unchanged and between markers, the parts of their WSJT-X 3.0.2 versions
+the decoder calls (the `*var` half of packjt77, and `getmsg`); `lib/ft8var/ft8apsetvar.f90` has its
+cache keys moved to module scope so each radio keeps its own; `lib/ft8var/subtractft8var.f90` keeps
+its filter buffer on the decoding thread's stack instead of in every thread's;
+`lib/ft8var/ft8_decodevar.f90` says which decodes were not error-checked; and `ft8_decodevar.f90`,
+`sync8var.f90`, `ft8bvar.f90`, `subtractft8var.f90` and `cwfilter.f90` gain JTDX's SWL mode.
+
+**SWL mode and FT4, from JTDX's own source.** JTDX 2.2.159, <https://github.com/jtdx-project/jtdx>
+at `master` commit `2a0e2bea8` (tag `159`, 2022-03-01):
+- **SWL mode** (a DT search of ±3.5 s, lower thresholds, a fourth metric sub-pass and a narrower
+  subtraction filter), which WSJT-X's port left out: JTDX's SWL conditions and constants from its
+  `lib/ft8_decode.f90`, `lib/sync8.f90`, `lib/ft8b.f90`, `lib/ft8v2/subtractft8.f90` and
+  `lib/cwfilter.f90` are added to the five ft8var files named above, each edit marked, and JTDX's
+  SWL subtraction filter is built in Nexus's `libtempo/ft8var_swl.f90`.
+- **The JTDX-style FT4 decoder** is JTDX's FT4 decoder, vendored at
+  `libtempo/vendor/wsjtx/lib/ft4jtdx/`: `ft4_decode.f90`; from JTDX's `lib/ft4/`: `ft4_params.f90`,
+  `getcandidates4.f90`, `ft4_baseline.f90`, `ft4_downsample.f90`, `sync4d.f90`,
+  `get_ft4_bitmetrics.f90`, `subtractft4.f90`, `osd4_174_91.f90`, and the LDPC(174,91) generator
+  and parity tables; `bpdecode174_91.f90` from JTDX's `lib/ft8v2/`; and JTDX's `normalizebmet`,
+  taken from its `lib/ft8b.f90`. They descend from WSJT-X's FT4 sources (K1JT, Steve Franke K9AN);
+  JTDX's changes are its search, its LDPC/OSD schedule, its running-average DT centring, SWL and
+  its false-decode checks. The notes of Igor UA3DJY that several carry are kept verbatim. Marked
+  modifications (each file's `MODIFIED FOR NEXUS` header lists them): routines whose names
+  WSJT-X's FT4 decoder also uses are renamed with a `_jtdx` suffix, so both decoders link into one
+  library (WSJT-X's stays as the Standard decoder); the decoder's AP cache and the downsampler's
+  spectrum move into modules, so each radio keeps its own; calls are adapted to Nexus's 77-bit
+  packer and to WSJT-X's `twkfreq1`; the false-decode checks call the `lib/ft8var` copies of
+  JTDX's checks, which share the one callsign database (`ALLCALL7.TXT`); the decoder reports the
+  full message and its AP type; and where a false-decode check rejects a decode, Nexus drops that
+  one decode (`cycle`), where JTDX abandons the rest of the period (`return`).
+
+None of these files carries a per-file copyright or licence header, like the rest of WSJT-X's
+`lib/` and like JTDX's. Nexus calls the decoders through its own wrappers (`libtempo/ft8var_cabi.f90`,
+which re-expresses the decoder dispatch in WSJT-X's `lib/decoder.f90`, the `lmultift8` block, and
+`libtempo/ft8var_hint.f90`, `libtempo/ft8var_swl.f90`), GPL-3.0-only with the rest of Nexus.
+
 ### AetherSDR — waterfall history + 3D stacked-spectrum
 License: **GNU GPL, version 3** (GPLv3). <https://github.com/aethersdr/AetherSDR>
 

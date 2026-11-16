@@ -294,7 +294,7 @@ fn run_with_a_slow_early_pass(job: WorkerJob, out: &mut dyn FnMut(WorkerOut)) {
         WorkerJob::Slot(j) => {
             let early = j.pass() == DecodePass::Early;
             let result =
-                tempo_app::engine::run_decode_job_streaming(j, &mut Slowed(&mut *out, early));
+                tempo_app::engine::run_decode_job_streaming(*j, &mut Slowed(&mut *out, early));
             out(WorkerOut::Done(result));
         }
         other => run_worker_job(other, out),

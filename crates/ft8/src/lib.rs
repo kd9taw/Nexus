@@ -16,6 +16,17 @@ use tempo_fast_sys::modem_lock;
 
 pub use tempo_fast_sys::{FT8_NMAX as NMAX, FT8_NN as NN, FT8_NZ as NZ};
 
+mod var;
+pub use tempo_fast_sys::{Ft8VarParams, OPENMP_THREAD_STACK};
+pub use var::{
+    decode_frame_var, decode_frame_var_raw, napwid_for_dial, on_decoder_thread_wait,
+    var_load_callsign_db, var_reset, var_slices, var_threads, VarRequest,
+};
+
+/// libtempo's OpenMP self-check (the runtime the multithreaded FT8 decoder runs on); see
+/// [`tempo_fast_sys::openmp_selfcheck`].
+pub use tempo_fast_sys::{openmp_selfcheck, OpenMpCheck};
+
 /// WSJT-X audio sample rate (Hz).
 pub const SAMPLE_RATE: f32 = 12_000.0;
 
@@ -36,6 +47,10 @@ pub struct Decode {
     pub nap: i32,
     /// Decode quality (1.0 = perfect).
     pub qual: f32,
+    /// No error check accepted the message: the multithreaded decoder's FT8S/FT8SD and matched
+    /// filters accept on correlation with the message they expected, without LDPC or CRC (JTDX
+    /// marks these `^`). Always false from the standard decoder.
+    pub unchecked: bool,
 }
 
 // Stock WSJT-X allows 200 decodes per period (decodedtext MAXDEC); matching it
@@ -631,6 +646,18 @@ impl Carry {
             _ => 0,
         }
     }
+
+    /// The carried early decodes, as the early pass returned them, leaving the carry empty: what a
+    /// full pass that does not start from the residual (the JTDX-style decoder's) shows first and
+    /// dedupes against.
+    pub fn take_early(&mut self) -> Vec<Decode> {
+        match std::mem::take(&mut self.state) {
+            CarryState::Empty => Vec::new(),
+            CarryState::Early(e) | CarryState::Residual(e, _) => {
+                e.records.iter().map(from_record).collect()
+            }
+        }
+    }
 }
 
 /// [`decode_frame_a7_streaming`] for a caller that keeps WSJT-X's carry between the passes of a
@@ -886,6 +913,7 @@ fn from_record(r: &tempo_fast_sys::Ft8DecodeT) -> Decode {
         freq: r.freq,
         nap: r.nap,
         qual: r.qual,
+        unchecked: false,
     }
 }
 

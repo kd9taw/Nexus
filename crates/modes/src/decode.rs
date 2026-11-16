@@ -42,6 +42,11 @@ pub struct Decode {
     /// JS8Call-rendered line) so ALL.TXT, the roster and UDP need no JS8 knowledge while the
     /// engine's JS8 adapter parses the typed word instead of re-parsing text.
     pub raw: Option<[u8; 11]>,
+    /// No error check accepted the message: the JTDX-style FT8 decoder's FT8S/FT8SD and matched
+    /// filters accept on correlation with the message they expected, without LDPC or CRC (JTDX
+    /// marks them `^`). Shown, marked; never moves an automatic QSO, never logged or reported
+    /// automatically. False from every other decoder and source.
+    pub unchecked: bool,
 }
 
 impl From<tempo_fast::Decode> for Decode {
@@ -60,6 +65,7 @@ impl From<tempo_fast::Decode> for Decode {
             // type conversion can't tell native FT1 from DX1's reuse of it.
             mode: None,
             raw: None,
+            unchecked: false,
         }
     }
 }
@@ -78,6 +84,7 @@ impl From<fst4::Decode> for Decode {
             rv: None,
             mode: None,
             raw: None,
+            unchecked: false,
         }
     }
 }
@@ -106,6 +113,7 @@ impl From<q65::Decode> for Decode {
             rv: None,
             mode: None,
             raw: None,
+            unchecked: false,
         }
     }
 }
@@ -130,6 +138,7 @@ impl From<msk144::Decode> for Decode {
             rv: None,
             mode: None,
             raw: None,
+            unchecked: false,
         }
     }
 }
@@ -161,6 +170,7 @@ impl From<ft2::Decode> for Decode {
             rv: None,
             mode: None,
             raw: None,
+            unchecked: false,
         }
     }
 }
@@ -189,6 +199,7 @@ impl From<jt65::Decode> for Decode {
             rv: None,
             mode: None,
             raw: None,
+            unchecked: false,
         }
     }
 }
@@ -218,6 +229,7 @@ impl From<wspr::Decode> for Decode {
             rv: None,
             mode: None,
             raw: None,
+            unchecked: false,
         }
     }
 }
@@ -235,6 +247,7 @@ impl From<ft8::Decode> for Decode {
             rv: None,
             mode: None,
             raw: None,
+            unchecked: d.unchecked,
         }
     }
 }
@@ -252,6 +265,8 @@ impl From<ft4::Decode> for Decode {
             rv: None,
             mode: None,
             raw: None,
+            // The JTDX-style decoder marks low-quality OSD decodes; the Standard one never does.
+            unchecked: d.unchecked,
         }
     }
 }

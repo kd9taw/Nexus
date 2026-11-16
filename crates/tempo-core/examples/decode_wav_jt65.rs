@@ -84,6 +84,7 @@ fn decode_file(path: &str, kind: ModeKind) -> Result<usize, String> {
             ap_cq_only: false,
             activity: false,
             partial: false,
+            jtdx: None,
         };
         let mut decs = src.decode(&req);
         decs.sort_by(|a, b| {

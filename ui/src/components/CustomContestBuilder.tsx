@@ -9,10 +9,13 @@
 // refusal, verbatim; this file checks only that a required box is filled before Next, and says
 // which. Nothing is installed or written until Save.
 //
-// ⭐ FT8/FT4 SAY WHAT THIS BUILD DOES. The line reads the preview's `ftMessages` — in this build
-// always standard messages, the exchange not sent — never what a matching exchange might one day do.
-// An RST + serial exchange ASKS whether to use WSJT-X's RTTY Roundup messages (`ft_roundup`),
-// defaulting to No: it is the most common club exchange, and most clubs do not mean the Roundup.
+// ⭐ FT8/FT4 SAY WHAT THIS BUILD DOES. The line reads the preview's `ftMessages`, the sequencer's own
+// choice: the WSJT-X activity whose messages this build sends for the exchange, with its CQ and
+// exchange as the station renders them, or standard messages, the exchange not sent — never what a
+// matching exchange might one day do.
+// An exchange of the RTTY Roundup's shape (RST + serial, or RST + state/province) ASKS whether to use
+// WSJT-X's RTTY Roundup messages (`ft_roundup`), defaulting to No and never automatic: an RST and a
+// serial is the most common club exchange, and most clubs do not mean the Roundup.
 //
 // ⚠️ A TYPED VALUE (age, name, text) IS NEVER IN A DEFINITION: the operator types it when the
 // contest is set up, into `Settings.contestEntered`, so an exported file carries none.
@@ -84,6 +87,9 @@ const errorText = (e: unknown) => (typeof e === 'string' ? e : e instanceof Erro
 const hasFt = (modes: readonly CustomContestMode[]) => modes.includes('FT8') || modes.includes('FT4')
 const shapeIs = (exchange: readonly CustomContestField[], ...fields: CustomContestFieldId[]) =>
   exchange.length === fields.length && exchange.every((f, i) => f.field === fields[i])
+/** An exchange of the RTTY Roundup's shape, which the builder asks about (`custom::ft_activity`). */
+const roundupShaped = (exchange: readonly CustomContestField[]) =>
+  shapeIs(exchange, 'rst', 'serial') || shapeIs(exchange, 'rst', 'state_province')
 
 /** The definition as it is saved: the FT answers only where the exchange asks them, a blank caption
  *  or short name dropped, and the id this contest is saved under. */
@@ -95,7 +101,7 @@ export function cleanCustomDef(def: CustomContestDef, id: string): CustomContest
     short: def.short?.trim() ?? '',
     exchange: def.exchange.map((f) => (f.field === 'text' && f.label?.trim() ? { field: f.field, label: f.label.trim() } : { field: f.field })),
   }
-  if (!(hasFt(def.modes) && shapeIs(def.exchange, 'rst', 'serial') && def.ft_roundup)) delete out.ft_roundup
+  if (!(hasFt(def.modes) && roundupShaped(def.exchange) && def.ft_roundup)) delete out.ft_roundup
   if (!(hasFt(def.modes) && shapeIs(def.exchange, 'grid4') && def.ft_cq)) delete out.ft_cq
   return out
 }
@@ -122,7 +128,12 @@ export function ftLine(p: CustomContestPreview): string {
     if (p.ftShape) return t('customContest.ft.standard')
     return t('customContest.ft.none')
   }
-  return t('customContest.ft.standard')
+  const line = [t('customContest.ft.landed', { activity: FT_ACTIVITY_NAMES[p.ftMessages], cq: p.ftCq, sends: p.ftSends })]
+  if (p.ftMessages === 'rtty_roundup') line.push(t('customContest.ft.limit.rttyRoundup'))
+  if (p.ftMessages === 'eu_vhf') line.push(t('customContest.ft.limit.euVhf'))
+  // The station's own refusal of this exchange with the current settings, verbatim.
+  if (p.ftRefusal) line.push(p.ftRefusal)
+  return line.join(' ')
 }
 
 /** A number box's value: a whole number, or 0 for a cleared box. */
@@ -189,7 +200,7 @@ export function CustomContestBuilder({
   const need = builderNeed(step, def)
   const good = !!preview && !previewing && preview.refusal === ''
   const ft = hasFt(def.modes)
-  const roundupAsk = ft && shapeIs(def.exchange, 'rst', 'serial')
+  const roundupAsk = ft && roundupShaped(def.exchange)
   const cqAsk = ft && shapeIs(def.exchange, 'grid4')
 
   const save = async () => {

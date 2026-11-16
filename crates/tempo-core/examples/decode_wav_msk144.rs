@@ -94,6 +94,7 @@ fn decode_file(
             ap_cq_only: false,
             activity: false,
             partial: false,
+            jtdx: None,
         };
         let mut decs = src.decode(&req);
         decs.sort_by(|a, b| {

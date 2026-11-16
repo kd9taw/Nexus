@@ -27,7 +27,20 @@
  * PASS iff zero decodes across all N frames. Any decode is printed in full so a
  * regression names the message, frequency and AP type that produced it.
  *
- * Usage: ft4_false_alarm [N]   (default below; raise it when chasing a rate)
+ * The JTDX-style decoder (ft4_jtdx_decode_frame_cb) runs the same frames when the second argument
+ * is `jtdx`, AP unrestricted and SWL off. Its false-decode checks need the callsign database, so
+ * a run without one measures the decoder with those checks passing everything (the database
+ * marked invalid), i.e. the decoder alone: the stricter case for this gate.
+ *
+ * A third argument names the directory holding ALLCALL7.TXT, loaded first as the engine does,
+ * which measures the JTDX-style decoder as an operator runs it.
+ *
+ * The JTDX-style decoder marks the decodes Nexus will not act on by itself (`unchecked`: shown,
+ * never auto-sequenced, auto-logged or uploaded). Its gate counts only the UNMARKED ones as
+ * failures, the decodes that would reach the log on their own; marked ones are printed and
+ * counted separately.
+ *
+ * Usage: ft4_false_alarm [N] [jtdx [DIR]]   (N default below; raise it when chasing a rate)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,6 +70,12 @@ static void trim(char *s) {
 
 int main(int argc, char **argv) {
     int nframes = DEFAULT_FRAMES;
+    const int jtdx = (argc > 2 && strcmp(argv[2], "jtdx") == 0);
+    if (jtdx && argc > 3) {
+        ft8var_set_share_dir(argv[3], (int)strlen(argv[3]));
+        printf("callsign database %s: %s\n", argv[3],
+               ft8var_load_callsign_db() ? "loaded" : "NOT loaded");
+    }
     if (argc > 1) {
         nframes = atoi(argv[1]);
         if (nframes <= 0) {
@@ -68,16 +87,18 @@ int main(int argc, char **argv) {
     static int16_t iwave[FT4_NMAX];
     const int MAXOUT = 64;
     ft4_decode_t out[64];
+    static ft8var_decode_t vout[64];
 
     const char *mycall  = "KD9TAW";
     const char *hiscall = "W1AW";
     const int   nfqso   = 1500;
 
-    printf("FT4 false-alarm test: %d AWGN-only frames, ndepth=3, "
+    printf("FT4 false-alarm test (%s decoder): %d AWGN-only frames, ndepth=3, "
            "AP armed (mycall=%s hiscall=%s nfqso=%d Hz, nqso_progress cycling 0-5)\n",
-           nframes, mycall, hiscall, nfqso);
+           jtdx ? "JTDX-style" : "Standard", nframes, mycall, hiscall, nfqso);
 
     int total_false = 0;
+    int total_marked = 0;
     int frames_with_decodes = 0;
 
     for (int f = 0; f < nframes; f++) {
@@ -92,34 +113,46 @@ int main(int argc, char **argv) {
         int nqso_progress = f % 6;
         /* lapcqonly=0: AP unrestricted (all hypotheses), the worst case this
          * gate exists to measure. Do not narrow it to shrink a regression. */
-        int ndec = ft4_decode_frame(iwave, 200, 2900, 3, mycall, hiscall,
-                                    nqso_progress, nfqso, /*lapcqonly*/0,
-                                    out, MAXOUT);
+        int ndec = jtdx
+            ? ft4_jtdx_decode_frame_cb(iwave, 200, 2900, 3, mycall, hiscall,
+                                       nqso_progress, nfqso, /*stophint*/0, /*swl*/0,
+                                       vout, MAXOUT, NULL, NULL)
+            : ft4_decode_frame(iwave, 200, 2900, 3, mycall, hiscall,
+                               nqso_progress, nfqso, /*lapcqonly*/0,
+                               out, MAXOUT);
         if (ndec < 0) {
             printf("RESULT: FAIL (decoder error on frame %d, ndec=%d)\n", f, ndec);
             return 1;
         }
         if (ndec == 0) continue;
+        if (jtdx)
+            /* ft8var_decode_t is ft4_decode_t's fields, then `unchecked`. */
+            for (int i = 0; i < ndec && i < MAXOUT; i++) memcpy(&out[i], &vout[i], sizeof out[i]);
 
         frames_with_decodes++;
-        total_false += ndec;
         for (int i = 0; i < ndec && i < MAXOUT; i++) {
+            const int marked = jtdx && vout[i].unchecked;
+            if (marked) total_marked++; else total_false++;
             char m[40];
             strncpy(m, out[i].message, sizeof(m) - 1);
             m[sizeof(m) - 1] = '\0';
             trim(m);
-            printf("  FALSE frame=%d nqso_progress=%d sync=%.2f snr=%d dt=%.2f s "
+            printf("  %s frame=%d nqso_progress=%d sync=%.2f snr=%d dt=%.2f s "
                    "freq=%.1f Hz nap=%d qual=%.2f msg='%s'\n",
-                   f, nqso_progress, out[i].sync, out[i].snr, out[i].dt,
+                   marked ? "MARKED" : "FALSE", f, nqso_progress, out[i].sync, out[i].snr, out[i].dt,
                    out[i].freq, out[i].nap, out[i].qual, m);
         }
+        if (ndec > MAXOUT) total_false += ndec - MAXOUT;   /* unseen, so not known marked */
     }
 
     printf("%d false decode(s) across %d frames (%d frame(s) affected)\n",
            total_false, nframes, frames_with_decodes);
+    if (jtdx)
+        printf("%d more marked unchecked (shown, never acted on by Nexus itself)\n", total_marked);
 
     if (total_false == 0) {
-        printf("RESULT: PASS (no decodes from noise)\n");
+        printf(total_marked ? "RESULT: PASS (no unmarked decodes from noise)\n"
+                            : "RESULT: PASS (no decodes from noise)\n");
         return 0;
     }
     printf("RESULT: FAIL (decoder produced %d decode(s) from pure noise — "

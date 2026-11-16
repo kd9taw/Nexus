@@ -12,3 +12,5 @@ workspace = true
 
 [dependencies]
 tempo-fast-sys = { path = "../tempo-fast-sys" }
+# The JTDX-style decoder runs on the JTDX-style FT8 decoder's thread and shares its callsign database.
+ft8 = { path = "../ft8" }

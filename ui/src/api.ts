@@ -758,8 +758,14 @@ export interface CustomContestPreview {
   ftShape: FtActivity | null
   /** That match, when the operator chose it (an RST + serial exchange is asked). */
   ftActivity: FtActivity | null
-  /** What FT8/FT4 really send in this build: `standard` for every custom contest today. */
-  ftMessages: string
+  /** What FT8/FT4 really send in this build: `standard`, or the activity whose messages they send. */
+  ftMessages: 'standard' | FtActivity
+  /** The CQ the contest's Running calls on FT8/FT4 (`CQ RU W9XYZ EN52`); `''` with standard messages. */
+  ftCq: string
+  /** The exchange those messages carry after the calls (`579 0001`); `''` with standard messages. */
+  ftSends: string
+  /** Why those messages cannot carry this station's exchange now, verbatim; `''` when they can. */
+  ftRefusal: string
   enteredSlots: string[]
 }
 
@@ -1679,6 +1685,12 @@ export async function qsoResend(): Promise<AppSnapshot> {
  * Calling CQ with nobody in the contact, only the start time is reset. Returns the fresh snapshot. */
 export async function clearDxCall(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('clear_dx_call', {})
+}
+
+/** The DX Call and DX Grid boxes as they now read. Only the JTDX-style FT8 decoder reads them, as
+ * WSJT-X gives its decoder the DX call whenever the box holds one: nothing is sent, no QSO moves. */
+export async function setDxBox(call: string, grid: string): Promise<void> {
+  return invoke<void>('set_dx_box', { call, grid })
 }
 
 /** Operator in-QSO free text (WSJT-X Tx5): override the next transmission with

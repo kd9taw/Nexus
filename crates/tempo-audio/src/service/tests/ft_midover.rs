@@ -154,6 +154,8 @@ impl<B: AudioBackend + Default> Qso<B> {
             mycall: "KD9TAW".into(),
             mygrid: "EN52".into(),
             write_all_txt: true,
+            // The standard decoder's full pass: these scenes time its passes.
+            ft8_decoder: tempo_app::settings::DecoderStyle::Standard,
             ..Default::default()
         };
         settings(&mut base);

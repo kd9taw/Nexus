@@ -1,6 +1,7 @@
-# The external symbols the macOS app's static gcc runtimes import: libgfortran.a, libquadmath.a
-# and libemutls_w.a from Homebrew's gcc, which crates/tempo-fast-sys/build.rs links into the app.
-# Each name here was reviewed against macOS 12 on 2026-10-30, the app's minimum macOS.
+# The external symbols the macOS app's static gcc runtimes import: libgfortran.a, libquadmath.a,
+# libgomp.a and libemutls_w.a from Homebrew's gcc, which crates/tempo-fast-sys/build.rs links into
+# the app. Each name here was reviewed against macOS 12 on 2026-10-30 (libgomp.a's on 2026-11-14),
+# the app's minimum macOS.
 #
 # scripts/check-macho-bundle.mjs --archive fails the release on any import NOT on this list
 # (release.yml runs it on both macOS legs before signing). Objects in those archives are built
@@ -56,6 +57,7 @@ ___modti3
 ___multc3
 ___multf3
 ___netf2
+___sprintf_chk
 ___stderrp
 ___stdinp
 ___stdoutp
@@ -94,6 +96,7 @@ _atanh
 _atanhf
 _atanhl
 _atanl
+_atexit
 _atoi
 _bsearch
 _cabs
@@ -109,6 +112,7 @@ _cexpl
 _chdir
 _chmod
 _clock
+_clock_getres
 _clock_gettime
 _clog
 _clogf
@@ -126,6 +130,10 @@ _csinl
 _csqrt
 _csqrtf
 _csqrtl
+_dlclose
+_dlerror
+_dlopen
+_dlsym
 _dup
 _exit
 _exp
@@ -152,6 +160,7 @@ _fmodf
 _fmodl
 _fprintf
 _fputc
+_fputs
 _free
 _freelocale
 _fstat
@@ -165,6 +174,7 @@ _getenv
 _geteuid
 _getgid
 _gethostname
+_getloadavg
 _getpagesize
 _getpid
 _getpwuid_r
@@ -202,13 +212,21 @@ _munmap
 _newlocale
 _open
 _perror
+_posix_memalign
 _posix_spawn
+_pthread_attr_destroy
+_pthread_attr_getstacksize
+_pthread_attr_init
+_pthread_attr_setstacksize
 _pthread_cond_broadcast
 _pthread_cond_destroy
 _pthread_cond_init
+_pthread_cond_signal
 _pthread_cond_wait
 _pthread_create
+_pthread_detach
 _pthread_equal
+_pthread_exit
 _pthread_getspecific
 _pthread_join
 _pthread_key_create
@@ -253,6 +271,7 @@ _sqrtl
 _sscanf
 _stat
 _stat$INODE64
+_strcasecmp
 _strchr
 _strcmp
 _strdup
@@ -266,9 +285,12 @@ _strnlen
 _strrchr
 _strtod
 _strtof
+_strtol
 _strtold
+_strtoul
 _strtoull
 _symlink
+_sysconf
 _system
 _tan
 _tanf
@@ -281,6 +303,7 @@ _ttyname_r
 _umask
 _unlink
 _uselocale
+_vfprintf
 _vsnprintf
 _waitpid
 _write

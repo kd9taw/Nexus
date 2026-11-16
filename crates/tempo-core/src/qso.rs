@@ -1896,6 +1896,7 @@ mod start_context_tests {
             qual: 1.0,
             rv: None,
             raw: None,
+            unchecked: false,
             mode: None,
         }]);
         assert_eq!(s.state, State::Done);
@@ -1913,6 +1914,7 @@ mod start_context_tests {
             qual: 1.0,
             rv: None,
             raw: None,
+            unchecked: false,
             mode: None,
         }
     }
@@ -2757,6 +2759,7 @@ mod harq_seq_tests {
             qual: 1.0,
             rv: None,
             raw: None,
+            unchecked: false,
             mode: None,
         }
     }
@@ -2915,6 +2918,7 @@ mod report_refresh_tests {
             qual: 1.0,
             rv: None,
             raw: None,
+            unchecked: false,
             mode: None,
         }
     }

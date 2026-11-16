@@ -274,6 +274,7 @@ fn all_txt_names_each_js8_frames_speed_with_js8calls_letter() {
         rv: None,
         mode: Some(modes::ModeKind::Js8 { speed }),
         raw: Some(*word_of("2Wu+WEWCuiZG", 3).as_bytes()),
+        unchecked: false,
     };
     // The audio of the period that began 2026-01-22 23:58:30 UTC.
     const SLOT: u64 = 1_769_126_310 / 15 + 1;
@@ -296,6 +297,7 @@ fn all_txt_names_each_js8_frames_speed_with_js8calls_letter() {
         heard_on: None,
         failed: false,
         logged_adif: Vec::new(),
+        jtdx_took: None,
     });
     assert!(
         matches!(applied, DecodeApplied::Early { n: 5 }),

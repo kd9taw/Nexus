@@ -61,6 +61,7 @@ fn station(tag: &str, on: bool, mode: &str) -> (std::path::PathBuf, Arc<Mutex<En
     );
     std::fs::write(dir.join("fd.adi"), journal).expect("the journal");
     let mut e = Engine::new("K2DEF", "FN31", 0);
+    super::decode_in_flight::pin_standard_ft8(&mut e);
     e.attach_log_store(store);
     e.set_fd_log_path(dir.join("fd.adi"));
     e.log_qso(rec("K9NEW", now - 1_800));

@@ -72,6 +72,7 @@ mod tests {
             qual: 1.0,
             rv: None,
             raw: None,
+            unchecked: false,
             mode: None,
         };
         e.app.inbox.roster.observe(&heard, 0);

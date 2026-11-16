@@ -21,6 +21,7 @@ const PERIOD_START_MS_OF_DAY: u32 = (22 * 3600 + 13 * 60 + 15) * 1000;
 /// W1AW's CQ heard in the 22:13:15 period, on an FT8 station.
 fn heard_in_the_period() -> Engine {
     let mut e = Engine::new("K2DEF", "FN31", 0);
+    super::decode_in_flight::pin_standard_ft8(&mut e);
     e.set_tier(Tier::Ft8);
     assert!(
         e.ingest(&ft8_frame("CQ W1AW FN31"), SLOT) >= 1,
@@ -96,6 +97,7 @@ fn a_decode_goes_out_stamped_with_its_period_start_whenever_it_is_sent() {
 #[test]
 fn all_txt_stamps_the_same_period_start() {
     let mut e = Engine::new("K2DEF", "FN31", 0);
+    super::decode_in_flight::pin_standard_ft8(&mut e);
     let mut s = e.settings().clone();
     s.write_all_txt = true;
     e.apply_settings(s);

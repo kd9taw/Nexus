@@ -502,5 +502,6 @@ fn req_for<'a>(
         ap_cq_only: false, // stock: all AP hypotheses
         activity: false,
         partial,
+        jtdx: None,
     }
 }

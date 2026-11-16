@@ -73,6 +73,10 @@ pub struct DecodeRequest<'a> {
     /// re-decode is NEITHER — it runs over the retained FULL audio and must
     /// keep the deep passes it is invoked to get.
     pub partial: bool,
+    /// The JTDX-style decoder (WSJT-X 3.0.2's multithreaded one, `lib/ft8var`) for this request's
+    /// FT8 full pass, or `None` for the standard decoder. Read only by FT8 on the authoritative
+    /// full pass (`a7_final`, not `partial`); every other pass and mode ignores it.
+    pub jtdx: Option<&'a crate::JtdxRequest>,
 }
 
 impl<'a> DecodeRequest<'a> {
@@ -93,6 +97,7 @@ impl<'a> DecodeRequest<'a> {
             ap_cq_only: false, // stock WSJT-X: all AP hypotheses
             activity: false,   // stock WSJT-X: no Special Operating Activity
             partial: false,    // full frame
+            jtdx: None,        // the standard decoder
         }
     }
 }
@@ -299,6 +304,20 @@ impl SignalSource for NativeSource {
             }
         }
         let kind = self.mode.kind();
+        // The JTDX-style decoder runs the authoritative full pass when the request asks for it
+        // and the mode has one (FT8); the early pass and the F6 re-decode stay the standard
+        // decoder, as WSJT-X runs them ([`Mode::decode_frame_var`]).
+        if let Some(jtdx) = req.jtdx.filter(|_| a7_final && !req.partial) {
+            if let Some(mut decs) =
+                self.mode
+                    .decode_frame_var(req, jtdx, &mut self.carry, &mut Tagged { kind, sink })
+            {
+                for d in &mut decs {
+                    d.mode = Some(kind);
+                }
+                return decs;
+            }
+        }
         // With this decoder's carry: FT8's full pass starts from the early pass's residual, as
         // WSJT-X's does ([`Mode::decode_frame_carry`]).
         let mut decs = self.mode.decode_frame_carry(
@@ -509,6 +528,7 @@ impl WsjtxUdpSource {
                     // A companion (UDP) row is never a native JS8 decode: no Word87 crosses
                     // the wire, so the typed carrier stays None. Only `Js8Mode` sets it.
                     raw: None,
+                    unchecked: false,
                 });
                 true
             }

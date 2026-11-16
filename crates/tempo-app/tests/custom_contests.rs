@@ -316,6 +316,112 @@ fn the_preview_renders_from_the_real_compiler_session_and_exporter() {
     assert_eq!(p.entered_slots, ["AGE"]);
 }
 
+/// ⭐ The builder's FT8/FT4 line says what this build sends for each exchange shape: the activity's
+/// own CQ and exchange where it sends that activity's messages, nothing where it sends the standard
+/// ones. Rendered here, from the sequencer's own choice and builders.
+#[test]
+fn the_preview_names_the_ft_messages_this_build_sends() {
+    let mut settings = Engine::new("W9XYZ", "EN52ab", 0).settings().clone();
+    settings.fd_class = "2B".into();
+    settings.fd_section = "WI".into();
+    settings.contest_qth_state = "IL".into();
+    /// `(id, exchange, CQ word, messages, the CQ, the exchange sent)`.
+    type Case<'a> = (
+        &'a str,
+        &'a [&'a str],
+        Option<&'a str>,
+        &'a str,
+        &'a str,
+        &'a str,
+    );
+    let cases: &[Case] = &[
+        (
+            "custom_pv_fd",
+            &["fd_class", "arrl_section"],
+            None,
+            "field_day",
+            "CQ FD W9XYZ EN52",
+            "2B WI",
+        ),
+        (
+            "custom_pv_navhf",
+            &["grid4"],
+            Some("TEST"),
+            "na_vhf",
+            "CQ TEST W9XYZ EN52",
+            "EN52",
+        ),
+        (
+            "custom_pv_ww",
+            &["grid4"],
+            Some("WW"),
+            "ww_digi",
+            "CQ WW W9XYZ EN52",
+            "EN52",
+        ),
+        (
+            "custom_pv_ru",
+            &["rst", "serial"],
+            None,
+            "rtty_roundup",
+            "CQ RU W9XYZ EN52",
+            "579 0001",
+        ),
+        (
+            "custom_pv_ru_qth",
+            &["rst", "state_province"],
+            None,
+            "rtty_roundup",
+            "CQ RU W9XYZ EN52",
+            "579 IL",
+        ),
+        (
+            "custom_pv_eu",
+            &["rst", "serial", "grid6"],
+            None,
+            "eu_vhf",
+            "CQ TEST W9XYZ EN52",
+            "570001 EN52AB",
+        ),
+        (
+            "custom_pv_none",
+            &["rst", "cq_zone"],
+            None,
+            "standard",
+            "",
+            "",
+        ),
+    ];
+    for (i, (id, fields, cq, messages, ft_cq, sends)) in cases.iter().enumerate() {
+        let mut d = def(id, &format!("APP-PV-{i}"), fields);
+        d.modes = vec!["FT8".into()];
+        d.ft_cq = cq.map(str::to_string);
+        // Yes to the RTTY Roundup messages; no other shape reads the answer.
+        d.ft_roundup = true;
+        let p = custom_contests::preview(&d, &settings, NOW);
+        assert_eq!(p.refusal, "", "{id}");
+        assert_eq!(
+            (
+                p.ft_messages.as_str(),
+                p.ft_cq.as_str(),
+                p.ft_sends.as_str()
+            ),
+            (*messages, *ft_cq, *sends),
+            "{id}"
+        );
+        assert_eq!(p.ft_refusal, "", "{id}");
+    }
+    // A QTH the RTTY Roundup message has no word for is said in the preview, as the station
+    // would refuse it on the air.
+    settings.contest_qth_state = "DX".into();
+    let mut d = def("custom_pv_ru_dx", "APP-PV-DX", &["rst", "state_province"]);
+    d.modes = vec!["FT8".into()];
+    d.ft_roundup = true;
+    let p = custom_contests::preview(&d, &settings, NOW);
+    assert_eq!(p.ft_messages, "rtty_roundup");
+    assert!(p.ft_refusal.contains("Your QTH \"DX\""), "{p:?}");
+}
+
 /// Write a contest file holding `entries`, as a raw JSON list.
 fn write_file(path: &std::path::Path, entries: Vec<serde_json::Value>) {
     let file = serde_json::json!({"version": 1, "contests": entries});
