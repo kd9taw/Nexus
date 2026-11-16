@@ -45964,6 +45964,12 @@ struct OtaSpotDto {
     /// Those of [`Self::states`] a contact here would add to Worked All States on this spot's
     /// band. See [`ota_needed_states`].
     needed_states: Vec<String>,
+    /// The DXCC entity the activator is in, as cty.dat names it, and its continent code ("NA"),
+    /// for the board's country and continent filters: [`propagation::pota::spot_country`].
+    /// `null` when nothing places the spot. Here rather than on the spot for the reason
+    /// [`Self::states`] is.
+    country: Option<&'static str>,
+    continent: Option<&'static str>,
 }
 
 /// What the LOG decides about one hunter-feed row. See [`ota_log_flags`].
@@ -46188,8 +46194,11 @@ async fn get_ota_spots(
             let band_open = propagation::Band::from_mhz(sp.freq_khz / 1000.0)
                 .map(|b| open_bands.contains(b.label()))
                 .unwrap_or(false);
+            let (country, continent) = propagation::pota::spot_country(&sp);
             OtaSpotDto {
                 states: sp.states.clone(),
+                country,
+                continent,
                 spot: sp,
                 new_park: flags.new_park,
                 hunted_today: flags.hunted_today,
@@ -67783,6 +67792,33 @@ mod tests {
             spot_time_unix: None,
             states: Vec::new(),
         }
+    }
+
+    /// The board row says where the activator is, camelCase beside the spot's own keys, and
+    /// `null` (never a guess) for a call nothing places.
+    #[test]
+    fn ota_row_carries_country_and_continent() {
+        let row = |activator: &str| {
+            let sp = ota_spot(activator, "CA-1234");
+            let (country, continent) = propagation::pota::spot_country(&sp);
+            serde_json::to_value(crate::OtaSpotDto {
+                states: Vec::new(),
+                spot: sp,
+                new_park: false,
+                hunted_today: false,
+                band_open: false,
+                needed_states: Vec::new(),
+                country,
+                continent,
+            })
+            .expect("serializes")
+        };
+        let placed = row("VE3/KD9TAW");
+        assert_eq!(placed["country"], "Canada");
+        assert_eq!(placed["continent"], "NA");
+        assert_eq!(placed["activator"], "VE3/KD9TAW", "the spot's keys stay flat");
+        let unplaced = row("☕️");
+        assert!(unplaced["country"].is_null() && unplaced["continent"].is_null());
     }
 
     /// An engine whose log holds one phone contact with `call` at `when`, carrying `park` as the

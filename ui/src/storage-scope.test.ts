@@ -79,6 +79,8 @@ export const PER_SURFACE = [
   // Connect's POTA/SOTA box keeps its OWN copy of the board's filters (PotaSotaView OTA_KEYS.box),
   // per window like the view's `nexus.ota.*` below: a chip in the box never moves the view's.
   'nexus.connect.ota.bandFilter',
+  'nexus.connect.ota.continentFilter',
+  'nexus.connect.ota.countryFilter',
   'nexus.connect.ota.hideWorked',
   'nexus.connect.ota.modeFilter',
   'nexus.connect.ota.onlyNew',
@@ -141,6 +143,9 @@ export const PER_SURFACE = [
   'nexus.operate.waterfallCalls',
   'nexus.operateLayout',
   'nexus.ota.bandFilter',
+  // The continent and country filters: what THIS board shows, like the band and mode beside them.
+  'nexus.ota.continentFilter',
+  'nexus.ota.countryFilter',
   // Hide worked today: a statement about what THIS board shows, like the filters beside it — a
   // POTA board and a SOTA board in two windows may answer it differently.
   'nexus.ota.hideWorked',
@@ -601,11 +606,13 @@ const INDIRECT: Record<string, string[]> = {
     'nexus.connect.neededFilters',
   ],
   // The POTA/SOTA board's filters, read and written through its key table (OTA_KEYS): the view's
-  // own seven, or the Connect box's seven.
+  // own nine, or the Connect box's nine.
   'components/PotaSotaView.tsx:keys': [
     'nexus.ota.program',
     'nexus.ota.bandFilter',
     'nexus.ota.modeFilter',
+    'nexus.ota.continentFilter',
+    'nexus.ota.countryFilter',
     'nexus.ota.sortKey',
     'nexus.ota.sortAsc',
     'nexus.ota.hideWorked',
@@ -613,6 +620,8 @@ const INDIRECT: Record<string, string[]> = {
     'nexus.connect.ota.program',
     'nexus.connect.ota.bandFilter',
     'nexus.connect.ota.modeFilter',
+    'nexus.connect.ota.continentFilter',
+    'nexus.connect.ota.countryFilter',
     'nexus.connect.ota.sortKey',
     'nexus.connect.ota.sortAsc',
     'nexus.connect.ota.hideWorked',

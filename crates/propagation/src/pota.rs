@@ -1,7 +1,9 @@
 //! Parks/Summits On The Air activator-spot parsing (the "who's on the air now"
 //! hunter feed). Pure JSON→[`OtaSpot`] mapping for the two live APIs; the HTTP
 //! fetch lives in [`crate::live::pota`]. Reference validation is in
-//! `tempo_core::pota`.
+//! `tempo_core::pota`. Where an activator is, for the board's continent and country filters, is
+//! [`spot_country`]: a summit by its SOTA association, anything else by the activator's call,
+//! both through cty.dat.
 
 use serde::{Deserialize, Serialize};
 
@@ -163,6 +165,34 @@ pub fn parse_wwff_spots(json: &str) -> Vec<OtaSpot> {
             })
         })
         .collect()
+}
+
+/// Where an activator is, for the hunter board's continent and country filters: the DXCC entity
+/// (named as cty.dat names it, a WAE-only area as its DXCC entity: Sicily is Italy) and that
+/// entity's cty.dat continent code ("NA", "EU", ...).
+///
+/// A SOTA summit is placed by its association, which is the callsign prefix of the entity the
+/// summit is in ("GM/SS-001" is Scotland, "KH6/OA-001" Hawaii), so the summit settles it even
+/// when the activator signs no portable prefix. Everything else, and a summit whose association
+/// cty.dat cannot place, is placed by the activator's call through cty.dat's prefix rules, which
+/// read a portable prefix as where the operator is ("VE3/W9ABC" is Canada). A POTA reference's
+/// ISO country code or a WWFF programme prefix is not read: neither maps one-to-one onto DXCC
+/// entities (one ISO "US" holds Alaska and Hawaii), and the call already says where the
+/// activator is. `(None, None)` when nothing places the spot: never a guess.
+pub fn spot_country(spot: &OtaSpot) -> (Option<&'static str>, Option<&'static str>) {
+    let association = (spot.program == "SOTA")
+        .then(|| spot.reference.split_once('/').map(|(a, _)| a))
+        .flatten();
+    let Some(info) = association
+        .and_then(crate::dxcc::resolve)
+        .or_else(|| crate::dxcc::resolve(&spot.activator))
+    else {
+        return (None, None);
+    };
+    (
+        crate::dxcc::card_entity(Some(&info), None),
+        Some(info.cont).filter(|c| !c.is_empty()),
+    )
 }
 
 /// The US states and Canadian provinces in a POTA `locationDesc`, in the feed's order:
@@ -602,6 +632,77 @@ mod tests {
                 "spotTimeUnix",
                 "spotter"
             ]
+        );
+    }
+
+    fn spot(program: &str, reference: &str, activator: &str) -> OtaSpot {
+        OtaSpot {
+            program: program.into(),
+            reference: reference.into(),
+            name: String::new(),
+            activator: activator.into(),
+            freq_khz: 14_062.0,
+            mode: "CW".into(),
+            spotter: None,
+            comment: None,
+            grid: None,
+            lat: None,
+            lon: None,
+            spot_time_unix: None,
+            states: Vec::new(),
+        }
+    }
+
+    /// A plain call is placed by cty.dat's prefix rules: where the licence is from.
+    #[test]
+    fn plain_call_is_placed_by_its_prefix() {
+        assert_eq!(
+            spot_country(&spot("POTA", "US-1234", "KD9TAW")),
+            (Some("United States"), Some("NA"))
+        );
+    }
+
+    /// A portable call is placed where the activator IS: VE3/KD9TAW operates from Canada, though
+    /// the call under the stroke is a US one.
+    #[test]
+    fn portable_call_is_placed_where_the_activator_is() {
+        assert_eq!(
+            spot_country(&spot("POTA", "CA-1234", "VE3/KD9TAW")),
+            (Some("Canada"), Some("NA"))
+        );
+        assert_eq!(
+            spot_country(&spot("WWFF", "VEFF-0001", "VE3/KD9TAW/P")),
+            (Some("Canada"), Some("NA"))
+        );
+    }
+
+    /// A SOTA summit's association is a callsign prefix of the entity the summit is in, so it
+    /// places the activation even when the activator signs no portable prefix.
+    #[test]
+    fn sota_association_places_the_summit() {
+        assert_eq!(
+            spot_country(&spot("SOTA", "GM/SS-001", "KD9TAW")),
+            (Some("Scotland"), Some("EU"))
+        );
+        assert_eq!(
+            spot_country(&spot("SOTA", "VE2/ES-001", "KD9TAW")),
+            (Some("Canada"), Some("NA"))
+        );
+        // A WAE-only area counts as its DXCC entity: a Sicilian summit is in Italy.
+        assert_eq!(
+            spot_country(&spot("SOTA", "IT9/SI-001", "KD9TAW")),
+            (Some("Italy"), Some("EU"))
+        );
+    }
+
+    /// Nothing cty.dat can place is placed: no guess.
+    #[test]
+    fn unresolvable_spot_has_no_country() {
+        assert_eq!(spot_country(&spot("POTA", "US-1234", "☕️")), (None, None));
+        // An association that resolves to nothing falls back to the call, which does.
+        assert_eq!(
+            spot_country(&spot("SOTA", "☕️/SS-001", "W9ABC")),
+            (Some("United States"), Some("NA"))
         );
     }
 

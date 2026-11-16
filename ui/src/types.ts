@@ -1433,6 +1433,12 @@ export interface OtaSpot {
   /** Those of `states` a contact here would add to Worked All States on this spot's band: the
    *  station's need scorer, from the log. The row lights its state when any is listed. */
   neededStates?: string[]
+  /** Where the activator is: the DXCC entity as cty.dat names it ("Canada" for VE3/KD9TAW, a
+   *  summit by its SOTA association) and its continent code ("NA", "EU", "SA", "AF", "AS", "OC").
+   *  null when the station could not place the spot; absent on a station that does not send it.
+   *  The board's continent and country filters show such a row under All only. */
+  country?: string | null
+  continent?: string | null
 }
 
 /** One activator placed for the Connect map's parks layer (`get_ota_map_spots`).

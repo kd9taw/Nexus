@@ -46,6 +46,8 @@ import { activationParks, isLegacyUsRef, mixedCallsNote, parkProgress } from '..
 import { ActivationOverDialog } from './ActivationOverDialog'
 import { stationProfileName } from './StationProfiles'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { CONTINENT_CODES } from '../features/dxccGeo'
+import { continentName } from './CountryExclude'
 import { POTA_SPOTS, SOTA_SPOTS, WWFF_SPOTS, refreshFeed, useFeed, useFeedAsking } from '../features/connectFeeds'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
@@ -95,6 +97,8 @@ const OTA_KEYS = {
     program: 'nexus.ota.program',
     bandFilter: 'nexus.ota.bandFilter',
     modeFilter: 'nexus.ota.modeFilter',
+    continentFilter: 'nexus.ota.continentFilter',
+    countryFilter: 'nexus.ota.countryFilter',
     sort: 'nexus.ota.sortKey',
     sortAsc: 'nexus.ota.sortAsc',
     hideWorked: 'nexus.ota.hideWorked',
@@ -104,6 +108,8 @@ const OTA_KEYS = {
     program: 'nexus.connect.ota.program',
     bandFilter: 'nexus.connect.ota.bandFilter',
     modeFilter: 'nexus.connect.ota.modeFilter',
+    continentFilter: 'nexus.connect.ota.continentFilter',
+    countryFilter: 'nexus.connect.ota.countryFilter',
     sort: 'nexus.connect.ota.sortKey',
     sortAsc: 'nexus.connect.ota.sortAsc',
     hideWorked: 'nexus.connect.ota.hideWorked',
@@ -322,10 +328,32 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
   useEffect(() => {
     surfaceSet(keys.modeFilter, modeFilter)
   }, [keys, modeFilter])
-  // A box's band, mode and sort rows open on its Filter button (the `pane` note above), and the
-  // button says "Filtered" while a band or a mode is hiding rows, so a short list explains itself.
+  // Where the activator is — a continent code or 'All', and a country (cty.dat's entity name) or
+  // 'All' — so a low-power station lists only what it can reach. Both default to All, and are
+  // stored raw like the mode. A continent code that names no continent falls back to All; a
+  // remembered place nobody is in right now is kept, its control shows it, and the empty board
+  // says so with the way back (below).
+  const [continentFilter, setContinentFilter] = useState<string>(() => {
+    const raw = surfaceGet(keys.continentFilter)
+    return raw != null && CONTINENT_CODES.includes(raw) ? raw : 'All'
+  })
+  useEffect(() => {
+    surfaceSet(keys.continentFilter, continentFilter)
+  }, [keys, continentFilter])
+  const [countryFilter, setCountryFilter] = useState<string>(() => surfaceGet(keys.countryFilter) || 'All')
+  useEffect(() => {
+    surfaceSet(keys.countryFilter, countryFilter)
+  }, [keys, countryFilter])
+  // A box's band, mode, place and sort rows open on its Filter button (the `pane` note above), and
+  // the button says "Filtered" while a band, a mode or a place is hiding rows, so a short list
+  // explains itself.
   const [filtersOpen, setFiltersOpen] = useState(false)
-  const narrowed = bandFilter.length > 0 || modeFilter !== 'All'
+  // The place filters apply only when the rows can answer: a station that sends no place (an
+  // older one, observed) has no row of them, and a board that cannot tell hides nothing.
+  const canPlace = spots.some((s) => s.country !== undefined || s.continent !== undefined)
+  const continentOn = canPlace && continentFilter !== 'All'
+  const countryOn = canPlace && countryFilter !== 'All'
+  const narrowed = bandFilter.length > 0 || modeFilter !== 'All' || continentOn || countryOn
 
   // Fetch now — the Refresh button, and the worked parks an import just changed: each programme this
   // board shows, shared with every board that shows it.
@@ -384,6 +412,34 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
     return result
   })()
 
+  // The continents on the list, in the fixed NA → OC order, and the countries on it (on the chosen
+  // continent only), alphabetically. A picked one keeps its control whether or not anyone is there
+  // now, as a picked band keeps its chip: a remembered filter with nothing to show it empties the
+  // board with no way to see why.
+  const availableContinents = CONTINENT_CODES.filter(
+    (c) => c === continentFilter || spots.some((s) => s.continent === c),
+  )
+  const availableCountries = (() => {
+    const seen = new Set<string>()
+    for (const s of spots) {
+      if (s.country && (continentFilter === 'All' || s.continent === continentFilter)) seen.add(s.country)
+    }
+    if (countryFilter !== 'All') seen.add(countryFilter)
+    return [...seen].sort((a, b) => a.localeCompare(b))
+  })()
+  const atPlace = (s: OtaSpot) =>
+    (!continentOn || s.continent === continentFilter) && (!countryOn || s.country === countryFilter)
+  // Nobody at the picked place is on this programme's list at all: the place, not a band or a mode,
+  // is what empties the board, and the empty board names it.
+  const placeEmpty =
+    (continentOn || countryOn) &&
+    !spots.some((s) => (program === 'Both' || s.program === program) && atPlace(s))
+  const placeShown = countryOn ? countryFilter : continentName(continentFilter)
+  const resetPlace = () => {
+    setContinentFilter('All')
+    setCountryFilter('All')
+  }
+
   // Filter + sort
   const inScope = spots.filter((s) => {
     // Always honor the selected program — guards against stale spots lingering from the
@@ -392,6 +448,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
     if (program !== 'Both' && s.program !== program) return false
     if (bandFilter.length > 0 && !bandFilter.includes(bandFromKhz(s.freqKhz))) return false
     if (modeFilter !== 'All' && spotDisplayMode(s.mode) !== modeFilter) return false
+    if (!atPlace(s)) return false
     return true
   })
   // The chip renders only when the rows can ANSWER: an observed station's feed carries no flag,
@@ -1114,6 +1171,49 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
           </div>
         )}
 
+        {/* Where the activator is: continent chips, then the country picker, one wrapping row. */}
+        {canPlace && (
+          <div className="pota-filter-row" role="group" aria-label={t('ota.filter.continent.aria')}>
+            <span className="pota-filter-label">{t('ota.filter.continent.label')}</span>
+            <button
+              type="button"
+              className={`filter-chip${continentFilter === 'All' ? ' active' : ''}`}
+              onClick={() => setContinentFilter('All')}
+            >
+              {t('ota.filter.all')}
+            </button>
+            {availableContinents.map((c) => (
+              <button
+                key={c}
+                type="button"
+                className={`filter-chip${continentFilter === c ? ' active' : ''}`}
+                onClick={() => {
+                  setContinentFilter(c)
+                  // A country elsewhere would empty the board the moment a continent is picked.
+                  if (!spots.some((s) => s.country === countryFilter && s.continent === c)) setCountryFilter('All')
+                }}
+              >
+                {continentName(c)}
+              </button>
+            ))}
+            <span className="pota-filter-label">{t('ota.filter.country.label')}</span>
+            <select
+              className="pota-sort-pick pota-country-pick"
+              value={countryFilter}
+              onChange={(e) => setCountryFilter(e.target.value)}
+              aria-label={t('ota.filter.country.aria')}
+            >
+              {/* The <option> VALUES are the persisted filter; a country is named as cty.dat names it. */}
+              <option value="All">{t('ota.filter.all')}</option>
+              {availableCountries.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {/* Sort (sortable-everywhere). Cards, not a column grid — so a picker rather
             than clickable headers; the arrow flips direction. */}
         <div className="pota-filter-row" role="group" aria-label={t('ota.sort.aria')}>
@@ -1155,7 +1255,14 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
               ? t('ota.empty.notNew', { count: notNewHidden })
             : workedHidden > 0
               ? t('ota.empty.worked', { count: workedHidden })
-            : bandFilter.length > 0 || modeFilter !== 'All'
+            : placeEmpty
+              ? <>
+                  {t('ota.empty.place', { place: placeShown })}{' '}
+                  <button type="button" className="filter-chip" onClick={resetPlace}>
+                    {t('ota.empty.place.reset')}
+                  </button>
+                </>
+            : narrowed
               ? t('ota.empty.filtered')
               : t('ota.empty', {
                   program: program !== 'Both' ? program : observed ? t('ota.programs.both') : t('ota.programs.all'),
