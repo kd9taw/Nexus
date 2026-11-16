@@ -415,6 +415,10 @@ if [ -n "$DSHARD" ]; then
   for i in "${!DESKTOP_ALL[@]}"; do [ $((i % DSHARDS)) = "$DSHARD" ] && mine+=("${DESKTOP_ALL[$i]}"); done
   [ ${#mine[@]} -gt 0 ] || { echo "browser-probe: desktop shard $DSHARD of $DSHARDS selects no scenario" >&2; exit 2; }
   echo "browser-probe: desktop shard $DSHARD of $DSHARDS: ${#mine[@]} of ${#DESKTOP_ALL[@]} scenarios (${mine[*]}) against $("${CHROME_BIN:-google-chrome}" --version 2>/dev/null || echo Chrome)"
+  # Each probe is capped to catch a hang, not to race a slow one. The slowest probe's CI time
+  # (stopvisible, 593 s on 2026-11-16) sat 7 s under the old 600 s cap and timed out on a
+  # loaded runner; keep the cap at least half again above the slowest probe in the list above.
+  PROBE_CAP_S=900
   red=()
   for s in "${mine[@]}"; do
     t0=$SECONDS
@@ -422,10 +426,10 @@ if [ -n "$DSHARD" ]; then
     if [ -n "$ART" ]; then
       # The pictures: browser-runtime.mjs captures every open page as the probe stops its Chrome.
       mkdir -p "$ART/$s"
-      NEXUS_PROBE_SHOTS="$ART/$s" LOGBOOK_PROBE_SHOTS="$ART/$s" timeout 600 "$0" --desktop "$s" 2>&1 | tee "$ART/$s/probe.log"
+      NEXUS_PROBE_SHOTS="$ART/$s" LOGBOOK_PROBE_SHOTS="$ART/$s" timeout "$PROBE_CAP_S" "$0" --desktop "$s" 2>&1 | tee "$ART/$s/probe.log"
       rc=${PIPESTATUS[0]}
     else
-      timeout 600 "$0" --desktop "$s"; rc=$?
+      timeout "$PROBE_CAP_S" "$0" --desktop "$s"; rc=$?
     fi
     echo "::endgroup::"
     if [ "$rc" = 0 ]; then
