@@ -42832,6 +42832,31 @@ mod tests {
         );
     }
 
+    /// A loopback port where a connect is refused at once, on every machine. A free port such as
+    /// 1 is not that everywhere: under WSL2's mirrored networking a connect to a free 127.0.0.1
+    /// port outside Linux's own ephemeral range is handed to Windows and dropped, so it waits out
+    /// the deadline and Nexus rightly says nothing answered in time, not that nothing listens.
+    /// This port is bound by the test process and never listened on, so the local kernel refuses
+    /// it, and no other socket can take it, for the life of the test process.
+    fn refused_port() -> u16 {
+        static HELD: std::sync::OnceLock<(u16, socket2::Socket)> = std::sync::OnceLock::new();
+        HELD.get_or_init(|| {
+            use socket2::{Domain, Socket, Type};
+            let socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
+            socket
+                .bind(&std::net::SocketAddr::from(([127, 0, 0, 1], 0)).into())
+                .unwrap();
+            let port = socket.local_addr().unwrap().as_socket().unwrap().port();
+            (port, socket)
+        })
+        .0
+    }
+
+    /// [`refused_port`] as an address.
+    fn refused_addr() -> String {
+        format!("127.0.0.1:{}", refused_port())
+    }
+
     fn cat_transport(rigctld_port: u16, broker_self_port: Option<u16>) -> Transport {
         Transport {
             radio_label: LogLabel(radio_label("", 1035)),
@@ -43665,7 +43690,7 @@ mod tests {
     /// A rigctld Nexus started for a NET rigctl radio on `COM4`, alive and answering nothing useful,
     /// as Hamlib's does: Test CAT and the first trip of the breaker both say what is wrong, and
     /// neither reopens the radio. The other half of the pair is a valid address, under the same
-    /// daemon: the same two moments say nothing of the kind. Port 1 is one nothing listens on.
+    /// daemon: the same two moments say nothing of the kind. Nothing listens on [`refused_addr`].
     #[test]
     #[cfg(unix)]
     fn test_cat_and_a_tripped_breaker_keep_the_serial_port_words() {
@@ -43700,7 +43725,7 @@ mod tests {
             state.last_rig_poll = 0.0;
             state.last_freq_poll = 0.0;
             state.last_smeter_poll = 0.0;
-            let mut rig = Rig::rigctld("127.0.0.1:1");
+            let mut rig = Rig::rigctld(&refused_addr());
             let mut opens = 0;
             let mut tick = 0.0f64;
             let mut step = |state: &mut RadioLoop, rig: &mut Rig, opens: &mut usize| {
@@ -43741,7 +43766,7 @@ mod tests {
         assert!(test_cat.starts_with(&words), "Test CAT said: {test_cat}");
         assert!(tripped.starts_with(&words), "the status said: {tripped}");
         assert_eq!(opens, 0);
-        let (test_cat, tripped, opens) = run("network", "", "127.0.0.1:1");
+        let (test_cat, tripped, opens) = run("network", "", &refused_addr());
         assert!(
             !test_cat.contains("NET rigctl"),
             "Test CAT said: {test_cat}"
@@ -44055,25 +44080,23 @@ mod tests {
     /// Test CAT names the address Nexus dials when nothing answers there. A rigctld shared at a NET
     /// rigctl Network Address (wfview's, closed since) is not on rigctld TCP Port, and naming that
     /// port sent the operator to look for a rigctld Nexus never used. Every other rig Nexus builds
-    /// dials 127.0.0.1 at rigctld TCP Port, and its sentence is unchanged. Port 1 is one nothing
-    /// listens on.
+    /// dials 127.0.0.1 at rigctld TCP Port, and its sentence is unchanged. Nothing listens on
+    /// [`refused_addr`].
     #[test]
     fn test_cat_names_the_address_nexus_dials_when_nothing_answers_there() {
         let mut shared = cat_transport(4534, None);
         shared.rig_model = 2; // NET rigctl
         shared.rig_conn = "network".into();
-        shared.rig_addr = "127.0.0.1:1".into();
-        let ours = cat_transport(1, None);
+        shared.rig_addr = refused_addr();
+        let ours = cat_transport(refused_port(), None);
         let sentence = |t: &Transport| {
-            let mut rig = Rig::with_control(Some("127.0.0.1:1".into()), PttMode::Cat);
+            let mut rig = Rig::with_control(Some(refused_addr()), PttMode::Cat);
             probe_cat(&mut rig, t).detail
         };
+        let refused = format!("rigctld is not reachable on {}.", refused_addr());
         assert_eq!(
             (sentence(&shared), sentence(&ours)),
-            (
-                "rigctld is not reachable on 127.0.0.1:1.".to_string(),
-                "rigctld is not reachable on 127.0.0.1:1.".to_string(),
-            )
+            (refused.clone(), refused)
         );
     }
 
@@ -49370,7 +49393,7 @@ mod tests {
                 .spawn()
                 .unwrap();
             (
-                Rig::with_control(Some("127.0.0.1:1".into()), PttMode::Cat),
+                Rig::with_control(Some(refused_addr()), PttMode::Cat),
                 Some(CatDaemon::Spawned(
                     crate::rigctld_proc::RigctldProc::from_child_for_test(alive),
                 )),
@@ -49402,10 +49425,7 @@ mod tests {
         state.rigctld_proc = Some(CatDaemon::Spawned(
             crate::rigctld_proc::RigctldProc::from_child_for_test(alive),
         ));
-        (
-            state,
-            Rig::with_control(Some("127.0.0.1:1".into()), PttMode::Cat),
-        )
+        (state, Rig::with_control(Some(refused_addr()), PttMode::Cat))
     }
 
     /// ⛔ THE SILENCE WATCH WAITS FOR AN OVER OF OURS. `operator_keyed` is what the RADIO reports,
