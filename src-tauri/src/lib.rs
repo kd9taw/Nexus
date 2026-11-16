@@ -67861,7 +67861,10 @@ mod tests {
         let placed = row("VE3/KD9TAW");
         assert_eq!(placed["country"], "Canada");
         assert_eq!(placed["continent"], "NA");
-        assert_eq!(placed["activator"], "VE3/KD9TAW", "the spot's keys stay flat");
+        assert_eq!(
+            placed["activator"], "VE3/KD9TAW",
+            "the spot's keys stay flat"
+        );
         let unplaced = row("☕️");
         assert!(unplaced["country"].is_null() && unplaced["continent"].is_null());
     }
