@@ -28,9 +28,11 @@ const XRAY_URL: &str = "https://services.swpc.noaa.gov/json/goes/primary/xrays-6
 /// Daily Geomagnetic Data (DGD.txt): thirty days of daily A and K, issued 00:30 UT.
 const DGD_URL: &str = "https://services.swpc.noaa.gov/text/daily-geomagnetic-indices.txt";
 
-/// The most any of this module's products is read to. The largest, the six-hour X-ray file, was
-/// 163 KB on 2026-11-02 (the 1-minute Kp 28 KB, D-RAP 42 KB, the rest under 25 KB): 1 MB is
-/// about six times the biggest, and a server that sends more is refused, never read to the end.
+/// The most any of this module's products is read to. The largest, the observed-SSN history
+/// (every day since 1996), was 478 KB on 2026-11-16 and grows about 17 KB a year; the six-hour
+/// X-ray file was 163 KB on 2026-11-02 (the 1-minute Kp 28 KB, D-RAP 42 KB, the rest under
+/// 25 KB). 1 MB is about twice the biggest, and a server that sends more is refused, never read
+/// to the end.
 const SWPC_REPLY_BYTES: u64 = 1024 * 1024;
 
 /// The client every fetch here uses: HTTPS only, on [`builder`]'s timeout and redirect policy.
@@ -294,6 +296,18 @@ pub fn fetch_daily_solar_indices() -> Result<crate::solar_indices::DailySolarInd
         .ok_or_else(|| "daily solar indices: no dated row in the response".to_string())
 }
 
+/// SWPC's observed daily sunspot numbers, oldest first, including a running count for today. See
+/// [`crate::solar_indices`] for which record is today's; this is only the wire. A body with no
+/// dated record is an error, so the command keeps what it held.
+pub fn fetch_observed_ssn() -> Result<Vec<crate::solar_indices::ObservedSsn>, String> {
+    let body = get_text(
+        &client()?,
+        "https://services.swpc.noaa.gov/json/solar-cycle/swpc_observed_ssn.json",
+    )?;
+    crate::solar_indices::parse_observed_ssn(&body)
+        .ok_or_else(|| "observed sunspot numbers: no dated record in the response".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -485,5 +499,23 @@ mod tests {
             newest.sfi,
             newest.ssn
         );
+    }
+
+    /// The observed-SSN JSON through the real client: still at this URL, in a shape that parses,
+    /// newest record within the last two days.
+    #[test]
+    #[ignore = "network: services.swpc.noaa.gov"]
+    fn live_observed_ssn_arrives_and_parses() {
+        let r = fetch_observed_ssn().expect("SWPC answered with a file that parses");
+        let newest = r.last().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert!(
+            now - newest.day_unix < 2 * 86_400,
+            "newest record {newest:?}"
+        );
+        println!("SWPC observed SSN: {} records, newest {newest:?}", r.len());
     }
 }

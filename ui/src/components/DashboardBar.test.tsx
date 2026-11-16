@@ -200,6 +200,19 @@ describe('the bar', () => {
     expect(indexDay('SFI')).toBeNull()
   })
 
+  it("today's running count rides in the SSN hover; the bar's value stays yesterday's final", async () => {
+    const fetchedAt = TODAY + 17 * 3600
+    const f = { ...daily(30, (i) => (i === 29 ? { ssn: 121 } : {})), today: { dayUnix: TODAY, ssn: 95, fetchedAt } }
+    vi.mocked(getSolarIndices).mockResolvedValue(f)
+    render(<DashboardBar call="KD9TAW" grid="EN52" prop={snapshot()} />)
+    await act(async () => {})
+    expect(indexValue('SSN')).toBe('121')
+    expect(indexDay('SSN')).toBe(dayLabel(f.days[29].dayUnix))
+    const caption = t('connect.solar.caption', { from: dayLabel(f.days[0].dayUnix), to: dayLabel(f.days[29].dayUnix) })
+    const todayLine = `${t('connect.solar.today', { index: 'SSN', value: '95', time: '17:00Z' })} ${t('connect.solar.today.note')}`
+    expect(indexItem('SSN')?.getAttribute('title')).toBe(`${caption}\n${todayLine}`)
+  })
+
   it('a newest day with no count shows the last day that has one, dated as THAT day', async () => {
     const f = daily(30, (i) => (i === 29 ? { ssn: null } : i === 28 ? { ssn: 44 } : {}))
     vi.mocked(getSolarIndices).mockResolvedValue(f)

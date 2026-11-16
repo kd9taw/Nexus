@@ -1575,6 +1575,19 @@ export interface DailySolarIndex {
  *  arrived, which the Space Wx box says rather than draw a line. */
 export interface DailySolarIndices {
   days: DailySolarIndex[]
+  /** Today's running sunspot count from NOAA's observed-SSN file, or null/absent: no row for the
+   *  current UTC day yet, the file has not arrived, or an older station. Never one of `days`. */
+  today?: SsnToday | null
+}
+
+/** The current UTC day's sunspot count so far. NOAA revises it during the day, so it travels
+ *  with the time the station fetched it. */
+export interface SsnToday {
+  /** 00:00 UTC of the day the count is for, Unix seconds. */
+  dayUnix: number
+  ssn: number
+  /** When the station fetched it, Unix seconds. */
+  fetchedAt: number
 }
 
 /** The operator's current activation state (POTA/SOTA). */

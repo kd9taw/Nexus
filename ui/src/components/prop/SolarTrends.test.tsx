@@ -7,7 +7,7 @@
 // nothing. The file's rows carry their own dates, so the block can always say how old its
 // newest day is — and it must.
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, cleanup, waitFor } from '@testing-library/react'
+import { render, cleanup, waitFor, act } from '@testing-library/react'
 import type { DailySolarIndex, DailySolarIndices } from '../../types'
 
 const api = vi.hoisted(() => ({
@@ -110,5 +110,95 @@ describe('the 30-day trends', () => {
     const { container } = await mount(new Error('no station'))
     await waitFor(() => expect(container.querySelector('.swx-trend-none')).not.toBeNull())
     expect(container.querySelector('svg')).toBeNull()
+  })
+})
+
+// Today's running count (NOAA's observed-SSN file): beside yesterday's final value, never in
+// place of it, and only while it is today's. It has a line of its own, value first, so neither
+// it nor the caption above (whose stale warning must keep its date) is cut to make room.
+describe("today's sunspot number so far", () => {
+  const FETCHED = TODAY + 3600 + 4 * 60
+  /** The fetch time as the box writes it: UTC HH:MMZ, as the space-weather chips write theirs. */
+  const Z = (unix: number) => new Date(unix * 1000).toISOString().slice(11, 16) + 'Z'
+  const todayEl = (c: HTMLElement) => c.querySelector('.swx-trend-today')
+
+  it("shows today's value and UTC fetch time on a line of its own, beside yesterday's final count", async () => {
+    const f = { ...file(30, 1, (i) => (i === 29 ? { ssn: 121 } : {})), today: { dayUnix: TODAY, ssn: 95, fetchedAt: FETCHED } }
+    const { container } = await mount(f)
+    await waitFor(() => expect(todayEl(container)).not.toBeNull())
+    const el = todayEl(container)!
+    const time = Z(FETCHED)
+    // Value first, in the part that never shortens; the trailing note is the only part that may.
+    expect(el.querySelector('.swx-trend-today-v')?.textContent).toBe(t('connect.solar.today', { index: 'SSN', value: '95', time }))
+    expect(el.querySelector('.swx-trend-today-v')?.textContent).toContain('95 · ' + time)
+    expect(el.querySelector('.swx-trend-today-k')?.textContent).toBe(t('connect.solar.today.note'))
+    expect(el.getAttribute('title')).toBe(t('connect.solar.today.title', { time }))
+    // Yesterday's final count is still the SSN line's value, dated as yesterday.
+    const ssn = row(container, 'SSN')!
+    expect(ssn.querySelector('.swx-trend-v')?.textContent).toBe('121')
+    expect(ssn.querySelector('.swx-trend-d')?.textContent).toBe(dayLabel(TODAY - DAY))
+    // The caption is exactly what it is without a today count, and does not hold it.
+    const head = container.querySelector('.swx-trend-head')!
+    expect(head.textContent).toBe(t('connect.solar.caption', { from: dayLabel(f.days[0].dayUnix), to: dayLabel(TODAY - DAY) }))
+    expect(head.contains(el)).toBe(false)
+  })
+
+  it("a stuck daily file's warning keeps its date beside a current today", async () => {
+    const f = { ...file(30, 5), today: { dayUnix: TODAY, ssn: 95, fetchedAt: FETCHED } }
+    const { container } = await mount(f)
+    await waitFor(() => expect(todayEl(container)).not.toBeNull())
+    const head = container.querySelector('.swx-trend-head')!
+    expect(head.classList.contains('stale')).toBe(true)
+    expect(head.textContent).toBe(t('connect.solar.stale', { date: dayLabel(f.days[29].dayUnix) }))
+  })
+
+  it('shows yesterday only, with no error, when there is no today', async () => {
+    for (const today of [undefined, null]) {
+      const f = { ...file(30, 1), today }
+      const { container } = await mount(f)
+      await waitFor(() => expect(row(container, 'SSN')).not.toBeNull())
+      expect(todayEl(container)).toBeNull()
+      expect(container.querySelector('.swx-trend-head')!.textContent).toBe(
+        t('connect.solar.caption', { from: dayLabel(f.days[0].dayUnix), to: dayLabel(f.days[29].dayUnix) }),
+      )
+      cleanup()
+    }
+  })
+
+  it("drops a held count once the UTC day has turned, or once the file has that day's final", async () => {
+    // Fetched before midnight, served after it: yesterday's partial count is not today's.
+    const turned = { ...file(30, 1), today: { dayUnix: TODAY - DAY, ssn: 83, fetchedAt: TODAY - 60 } }
+    const a = await mount(turned)
+    await waitFor(() => expect(row(a.container, 'SSN')).not.toBeNull())
+    expect(todayEl(a.container)).toBeNull()
+    cleanup()
+    // The daily file already carries today as a finished day: its value is the one to show.
+    const finished = { ...file(30, 0), today: { dayUnix: TODAY, ssn: 83, fetchedAt: TODAY + 60 } }
+    const c = await mount(finished)
+    await waitFor(() => expect(row(c.container, 'SSN')).not.toBeNull())
+    expect(todayEl(c.container)).toBeNull()
+    cleanup()
+    // Control: the same count dated today is shown.
+    const current = { ...file(30, 1), today: { dayUnix: TODAY, ssn: 83, fetchedAt: TODAY + 60 } }
+    const b = await mount(current)
+    await waitFor(() => expect(todayEl(b.container)).not.toBeNull())
+  })
+
+  it('takes the count down at 00:00 UTC on screen, without waiting for the next fetch', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const day = Date.UTC(2026, 10, 16) / 1000
+      vi.setSystemTime(new Date((day + DAY - 30) * 1000)) // 23:59:30Z
+      const days: DailySolarIndex[] = Array.from({ length: 30 }, (_, i) => ({ dayUnix: day - (30 - i) * DAY, sfi: 100, ssn: 40 }))
+      const { container } = await mount({ days, today: { dayUnix: day, ssn: 95, fetchedAt: day + 82_800 } })
+      await waitFor(() => expect(todayEl(container)).not.toBeNull())
+      await act(async () => {
+        vi.advanceTimersByTime(31_000) // 00:00:01Z, no new fetch
+      })
+      expect(todayEl(container)).toBeNull()
+      expect(row(container, 'SSN')!.querySelector('.swx-trend-v')?.textContent).toBe('40')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -56,7 +56,7 @@ import {
   type WxKey,
 } from '../propViz'
 import { provLabel } from './connect/paneFormat'
-import { dayLabel, newest, trendsCaption, useSolarIndices } from './prop/SolarTrends'
+import { dayLabel, newest, todaySoFar, todayWords, trendsCaption, useSolarIndices } from './prop/SolarTrends'
 import { agoLabel } from './prop/SpaceWxGauges'
 import { getWindowBehind, setWindowBehind, type WindowBehind } from '../api'
 import { withErrorToast } from '../toast'
@@ -89,11 +89,14 @@ export interface BarIndex {
  * hover words are the gauges' own impact lines. Order: SFI, K, SSN, A, as a wall clock reads
  * them, then X-ray and the solar-wind speed, which is a dash while DSCOVR's plasma feed is out.
  * SSN is the newest day of NOAA's daily file that has a count (`daily`), dated as that day and
- * hovered with the Space Wx box's own caption for the file; a dash while there is none.
+ * hovered with the Space Wx box's own caption for the file; a dash while there is none. Today's
+ * running count, while it is today's, rides in that hover as the box words it, never as the value.
  */
 export function barIndices(wx: SpaceWxView, daily?: DailySolarIndices | null, fc?: KpForecast | null): BarIndex[] {
   const now = Date.now()
   const ssn = daily && daily.days.length > 0 ? newest(daily.days, (d) => d.ssn) : null
+  const today = daily ? todaySoFar(daily, now) : null
+  const todayLine = today ? todayWords(today) : null
   const windKms = windSpeedKms(wx, now)
   /** One snapshot index under the honesty rule (the gauges' own, see propViz `wxReading`).
    *  `marks`: the index can carry the storm mark (Kp and X-ray), only while fresh. */
@@ -120,7 +123,12 @@ export function barIndices(wx: SpaceWxView, daily?: DailySolarIndices | null, fc
     index(NAME.sfi, 'sfi', wx.sfi.toFixed(0), sfiImpact(wx.sfi), false),
     kpIndex(),
     daily && ssn
-      ? { key: NAME.ssn, value: ssn.value.toFixed(0), day: dayLabel(ssn.dayUnix), title: trendsCaption(daily.days).text }
+      ? {
+          key: NAME.ssn,
+          value: ssn.value.toFixed(0),
+          day: dayLabel(ssn.dayUnix),
+          title: trendsCaption(daily.days).text + (todayLine ? `\n${todayLine.text} ${todayLine.note}` : ''),
+        }
       : { key: NAME.ssn, value: DASH, title: '' },
     index(NAME.a, 'a', wx.aIndex.toFixed(0), aImpact(wx.aIndex), false, wx.aDay != null ? dayLabel(wx.aDay) : undefined),
     index(NAME.xray, 'xray', wx.xrayClass.replace('-class', ''), xrayImpact(wx.xrayClass), true),

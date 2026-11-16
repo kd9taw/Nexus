@@ -948,6 +948,26 @@ button.nb-chip:hover {
   color: var(--text-dim);
   white-space: nowrap;
 }
+/* Today's running count, a line of its own under the SSN line. The value and time never shorten;
+   only the trailing note gives way, so the line stays one line at any width. */
+.swx-trend-today {
+  display: flex;
+  gap: var(--space-1);
+  min-width: 0;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.swx-trend-today-v {
+  flex: none;
+  color: var(--text);
+}
+.swx-trend-today-k {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .swx-trend-none {
   margin: 0;
   padding-top: var(--space-2);
