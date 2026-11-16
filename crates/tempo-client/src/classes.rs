@@ -72,6 +72,8 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("callbook_update_take_end",       RunsHere,    "The end of an update this computer ran, reported once by its own Logbook; an update runs only from the shack."),
     ("cancel_confirmation_check",      RunsAtShack, "Drops the confirmation check the shack holds; changes nothing."),
     ("cancel_voice_recording",         RunsHere,    "Drops a voice message being recorded on this computer's microphone."),
+    ("cat_trace",                      RunsAtShack, "Turns the shack's CAT trace on or off; it is written to the shack's diagnostic log and sends the radio nothing."),
+    ("cat_trace_status",               RunsAtShack, "The shack's CAT trace state."),
     ("check_beta_update",              RunsHere,    "This computer's own updater."),
     ("check_for_update",               RunsHere,    "This computer's own updater."),
     ("check_logbook",                  RunsAtShack, "Checks the shack's logbook for problems; changes nothing."),

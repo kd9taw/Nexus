@@ -24366,6 +24366,27 @@ fn civ_diagnostic_status() -> String {
     tempo_audio::civ::diag::status().unwrap_or_default()
 }
 
+/// Turn Record CAT traffic on or off ([`tempo_audio::cat_trace`]): the frequency, mode, split,
+/// VFO and PTT commands Nexus sends the radio, into the diagnostic log, for at most 30 minutes.
+/// Returns the seconds the trace has left, 0 when it is off. Not a setting: it is off at every
+/// launch, so a trace left running never survives a restart.
+#[tauri::command]
+fn cat_trace(enable: bool) -> u64 {
+    if enable {
+        tempo_audio::cat_trace::start();
+    } else {
+        tempo_audio::cat_trace::stop();
+    }
+    cat_trace_status()
+}
+
+/// The seconds Record CAT traffic has left, or 0 when it is off (and once it has turned itself
+/// off), for the Settings switch to show the real state.
+#[tauri::command]
+fn cat_trace_status() -> u64 {
+    tempo_audio::cat_trace::time_left().map_or(0, |left| left.as_secs().max(1))
+}
+
 /// Transmit an open broadcast (FT8-style "to all") free-text message. `afar`: as
 /// [`set_tx_enabled`]'s.
 #[tauri::command(async)]
@@ -53998,6 +54019,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         save_text_as,
         save_png_to_downloads,
         civ_diagnostic_log,
+        cat_trace,
+        cat_trace_status,
         all_txt_location,
         winlink_mailbox_list,
         winlink_message,

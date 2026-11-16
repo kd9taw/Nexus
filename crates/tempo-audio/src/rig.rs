@@ -1248,6 +1248,16 @@ impl Rig {
             end_by_deadline,
             &mut read,
         );
+        // The CAT trace, once the exchange is over: nothing is added before the write or between
+        // the write and its reply.
+        if crate::cat_trace::is_on() {
+            crate::cat_trace::exchange(
+                self.control.as_deref(),
+                line,
+                sent,
+                result.as_deref().map_err(|e| e.kind()),
+            );
+        }
         let owed = read.count;
         self.owed_answers_read(&read.answers);
         if owed > 0 {
@@ -1882,6 +1892,14 @@ impl Rig {
         };
         if !on && result.is_ok() {
             self.keyed = false;
+        }
+        // A keying edge with no CAT command for the trace to see, recorded once it is done.
+        if crate::cat_trace::is_on() {
+            match &self.ptt_mode {
+                PttMode::Vox => crate::cat_trace::ptt_event(on, "VOX (nothing sent)"),
+                PttMode::Serial { .. } => crate::cat_trace::ptt_event(on, "serial line"),
+                PttMode::Cat | PttMode::CatData => {}
+            }
         }
         result
     }
@@ -3192,6 +3210,118 @@ mod tests {
                 "RPRT 0\n".to_string()
             }
         }
+    }
+
+    /// A rigctld that keeps every byte it was sent, in order, over every connection: `f` answers
+    /// a dial, `t` not keyed, everything else `RPRT 0`.
+    fn mock_rigctld_bytes() -> (String, Arc<Mutex<Vec<u8>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let bytes = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let bytes_w = bytes.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut buf = [0u8; 256];
+                let mut line = Vec::new();
+                loop {
+                    let n = match stream.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => n,
+                    };
+                    bytes_w.lock().unwrap().extend_from_slice(&buf[..n]);
+                    for &b in &buf[..n] {
+                        if b != b'\n' {
+                            line.push(b);
+                            continue;
+                        }
+                        let reply = match line.first() {
+                            Some(b'f') => "14074123\n",
+                            Some(b't') => "0\n",
+                            _ => "RPRT 0\n",
+                        };
+                        line.clear();
+                        if stream.write_all(reply.as_bytes()).is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+        (addr, bytes)
+    }
+
+    /// The same session of radio control, from a new connection: every command the trace
+    /// records, and two it must not (Morse text, a power level).
+    fn traced_session(addr: &str) {
+        let mut rig = Rig::rigctld(addr);
+        rig.set_freq(14_074_123).unwrap();
+        rig.set_mode("PKTUSB", 3000).unwrap();
+        rig.set_split(true, "VFOB").unwrap();
+        rig.set_split_freq(14_076_000).unwrap();
+        rig.set_vfo("VFOA").unwrap();
+        rig.ptt(true).unwrap();
+        rig.ptt(false).unwrap();
+        assert_eq!(rig.read_freq().unwrap(), 14_074_123);
+        rig.send_morse("CQ W1AW").unwrap();
+        rig.set_power(0.5).unwrap();
+    }
+
+    #[test]
+    fn the_cat_trace_sends_the_radio_identical_bytes() {
+        // Diagnostics only: with the trace on, the radio is sent exactly what it is sent with
+        // the trace off, byte for byte, and the trace writes radio control and nothing else.
+        let _one = crate::cat_trace::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        // The mock keeps a line's bytes before it answers it, and every command waited for its
+        // answer: all of a session is in hand once it returns.
+        let settled = |bytes: &Arc<Mutex<Vec<u8>>>| bytes.lock().unwrap().clone();
+        crate::cat_trace::stop();
+        let (off_addr, off_bytes) = mock_rigctld_bytes();
+        traced_session(&off_addr);
+        let off = settled(&off_bytes);
+
+        crate::cat_trace::start();
+        let (on_addr, on_bytes) = mock_rigctld_bytes();
+        traced_session(&on_addr);
+        crate::cat_trace::stop();
+        let on = settled(&on_bytes);
+
+        assert!(!off.is_empty());
+        assert_eq!(
+            String::from_utf8_lossy(&on),
+            String::from_utf8_lossy(&off),
+            "the trace changed what the radio was sent"
+        );
+        let captured = crate::cat_trace::CAPTURED.lock().unwrap().clone();
+        for sent in [
+            "F 14074123 -> RPRT 0",
+            "M PKTUSB 3000 -> RPRT 0",
+            "S 1 VFOB -> RPRT 0",
+            "I 14076000 -> RPRT 0",
+            "V VFOA -> RPRT 0",
+            "T 1 -> RPRT 0",
+            "T 0 -> RPRT 0",
+            "f -> 14074123",
+        ] {
+            assert!(
+                captured.iter().any(|l| l.contains(sent)),
+                "{sent:?} is not in the trace: {captured:#?}"
+            );
+        }
+        assert!(
+            captured
+                .iter()
+                .any(|l| l.contains("other command (not recorded)")),
+            "{captured:#?}"
+        );
+        assert!(
+            !captured
+                .iter()
+                .any(|l| l.contains("W1AW") || l.contains("RFPOWER")),
+            "the trace wrote more than radio control: {captured:#?}"
+        );
     }
 
     /// [`mock_rigctld`], but delivering each reply ONE LINE AT A TIME with `gap_ms` between

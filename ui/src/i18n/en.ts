@@ -10740,6 +10740,15 @@ export const EN = {
   'settings.integrations.qsoWav.path':
     'Saved in <code>{{path}}</code>, created the first time you record.',
   'settings.integrations.qsoWav.reveal': 'Open recordings folder',
+  'settings.integrations.catTrace.label': 'Record CAT traffic',
+  'settings.integrations.catTrace.hint':
+    'Writes the frequency, mode, split, VFO and PTT commands Nexus sends the radio, and its answers, into the diagnostic log, and nothing else. What the radio is sent does not change. Turns itself off after 30 minutes and is off whenever Nexus starts.',
+  'settings.integrations.catTrace.recording': {
+    one: 'Recording CAT traffic: {{count}} minute left. Reproduce the problem, then send the diagnostic log.',
+    other:
+      'Recording CAT traffic: {{count}} minutes left. Reproduce the problem, then send the diagnostic log.',
+  },
+  'settings.integrations.catTrace.failed': 'Could not turn Record CAT traffic on or off',
   // The <option> VALUES ('none', 'decodes', 'all') are persisted tokens and stay in the panel.
   'settings.integrations.saveWav.label': 'Save received audio (.wav per period)',
   'settings.integrations.saveWav.none': 'None (default)',
