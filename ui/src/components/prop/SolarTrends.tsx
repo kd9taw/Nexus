@@ -19,20 +19,21 @@
 //
 // TODAY SO FAR. The file's days are finished UTC days, so its newest count is yesterday's. The
 // station also reads NOAA's observed-SSN file, which carries a running count for today that NOAA
-// revises during the day (`DailySolarIndices.today`). It shows on the caption line, never in the
-// SSN line or as its value: "SSN today so far 95 · 2:04 PM", with the fetch time in the
-// operator's own clock format. It shows only while it is the current UTC day's and newer than the
-// file's newest day (`todaySoFar`); otherwise the box shows yesterday's count alone, with no
-// notice — a missing running count is ordinary just after 00:00 UTC. On the caption line it never
-// adds height: the line does not wrap and the count shortens with an ellipsis, its full wording
-// in the hover.
+// revises during the day (`DailySolarIndices.today`). It gets a line of its own under the SSN
+// line, value first: "SSN today 95 · 21:04Z (so far)", the fetch time in UTC as the space-weather
+// chips write theirs. The value and time never shorten; only the trailing note gives way to an
+// ellipsis, so the line is one line at any width and the caption above keeps its own words (a
+// stuck file's warning keeps its date). It shows only while it is the current UTC day's and newer
+// than the file's newest day (`todaySoFar`), and leaves the screen at 00:00 UTC on its own;
+// otherwise the box shows yesterday's count alone, with no notice — a missing running count is
+// ordinary just after 00:00 UTC.
 //
 // The dashboard bar shows the same count (components/DashboardBar.tsx): it reads the file through
 // `useSolarIndices`, picks the day with `newest` and words its hover with `trendsCaption`, so the
 // bar and this block cannot show two different counts or dates for one file.
+import { useEffect, useState } from 'react'
 import type { DailySolarIndex, DailySolarIndices, SsnToday } from '../../types'
 import { SOLAR_INDICES, useFeed } from '../../features/connectFeeds'
-import { localHm } from '../../features/bestTimes'
 import { t } from '../../i18n'
 
 /** The index names — technical tokens, the same on every ham's screen (SpaceWxGauges' rule). */
@@ -137,11 +138,19 @@ export function todaySoFar(ix: DailySolarIndices, nowMs = Date.now()): SsnToday 
   return t0.dayUnix > newestDay ? t0 : null
 }
 
-/** The running count's line text and hover: "SSN today so far 95 · 2:04 PM". */
-export function todayWords(today: SsnToday): { text: string; title: string } {
-  const time = localHm(today.fetchedAt)
+/** `HH:MMZ`, as the space-weather chips beside this box write a time (FlareChip, CapsChips). */
+function hmZ(unix: number): string {
+  const d = new Date(unix * 1000)
+  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}Z`
+}
+
+/** The running count's words: the value and fetch time ("SSN today 95 · 21:04Z"), the note that
+ * may shorten ("(so far)"), and the hover. */
+export function todayWords(today: SsnToday): { text: string; note: string; title: string } {
+  const time = hmZ(today.fetchedAt)
   return {
     text: t('connect.solar.today', { index: SSN, value: today.ssn.toFixed(0), time }),
+    note: t('connect.solar.today.note'),
     title: t('connect.solar.today.title', { time }),
   }
 }
@@ -158,6 +167,14 @@ export function useSolarIndices(): DailySolarIndices | null | undefined {
 export function SolarTrends() {
   // undefined = still asking (nothing drawn yet); null = nothing to show.
   const ix = useSolarIndices()
+  // Today's count leaves at 00:00 UTC even when no fetch or snapshot re-renders the box then.
+  const shownDay = ix ? (todaySoFar(ix)?.dayUnix ?? null) : null
+  const [, rerender] = useState(0)
+  useEffect(() => {
+    if (shownDay == null) return
+    const id = window.setTimeout(() => rerender((n) => n + 1), (shownDay + DAY_S) * 1000 - Date.now())
+    return () => window.clearTimeout(id)
+  }, [shownDay])
 
   if (ix === undefined) return null
   if (!ix || ix.days.length === 0) return <p className="swx-trend-none">{t('connect.solar.unavailable')}</p>
@@ -168,18 +185,15 @@ export function SolarTrends() {
   const words = today ? todayWords(today) : null
   return (
     <div className="swx-trends">
-      {words ? (
-        <div className={`swx-trend-head has-today${caption.stale ? ' stale' : ''}`}>
-          <span className="swx-trend-cap">{caption.text}</span>
-          <span className="swx-trend-today" title={words.title}>
-            {words.text}
-          </span>
-        </div>
-      ) : (
-        <div className={`swx-trend-head${caption.stale ? ' stale' : ''}`}>{caption.text}</div>
-      )}
+      <div className={`swx-trend-head${caption.stale ? ' stale' : ''}`}>{caption.text}</div>
       <TrendRow index={SFI} days={days} pick={(d) => d.sfi} />
       <TrendRow index={SSN} days={days} pick={(d) => d.ssn} />
+      {words && (
+        <div className="swx-trend-today" title={words.title}>
+          <span className="swx-trend-today-v">{words.text}</span>
+          <span className="swx-trend-today-k">{words.note}</span>
+        </div>
+      )}
     </div>
   )
 }

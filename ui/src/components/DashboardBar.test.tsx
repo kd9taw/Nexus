@@ -25,7 +25,6 @@ vi.mock('../api', () => ({
 import { getSolarIndices, getWindowBehind, setWindowBehind } from '../api'
 import { DashboardBar, StayBehindToggle, barIndices } from './DashboardBar'
 import { dayLabel } from './prop/SolarTrends'
-import { localHm } from '../features/bestTimes'
 import { t } from '../i18n'
 
 const WX = {
@@ -210,7 +209,7 @@ describe('the bar', () => {
     expect(indexValue('SSN')).toBe('121')
     expect(indexDay('SSN')).toBe(dayLabel(f.days[29].dayUnix))
     const caption = t('connect.solar.caption', { from: dayLabel(f.days[0].dayUnix), to: dayLabel(f.days[29].dayUnix) })
-    const todayLine = t('connect.solar.today', { index: 'SSN', value: '95', time: localHm(fetchedAt) })
+    const todayLine = `${t('connect.solar.today', { index: 'SSN', value: '95', time: '17:00Z' })} ${t('connect.solar.today.note')}`
     expect(indexItem('SSN')?.getAttribute('title')).toBe(`${caption}\n${todayLine}`)
   })
 

@@ -96,6 +96,7 @@ export function barIndices(wx: SpaceWxView, daily?: DailySolarIndices | null, fc
   const now = Date.now()
   const ssn = daily && daily.days.length > 0 ? newest(daily.days, (d) => d.ssn) : null
   const today = daily ? todaySoFar(daily, now) : null
+  const todayLine = today ? todayWords(today) : null
   const windKms = windSpeedKms(wx, now)
   /** One snapshot index under the honesty rule (the gauges' own, see propViz `wxReading`).
    *  `marks`: the index can carry the storm mark (Kp and X-ray), only while fresh. */
@@ -126,7 +127,7 @@ export function barIndices(wx: SpaceWxView, daily?: DailySolarIndices | null, fc
           key: NAME.ssn,
           value: ssn.value.toFixed(0),
           day: dayLabel(ssn.dayUnix),
-          title: trendsCaption(daily.days).text + (today ? `\n${todayWords(today).text}` : ''),
+          title: trendsCaption(daily.days).text + (todayLine ? `\n${todayLine.text} ${todayLine.note}` : ''),
         }
       : { key: NAME.ssn, value: DASH, title: '' },
     index(NAME.a, 'a', wx.aIndex.toFixed(0), aImpact(wx.aIndex), false, wx.aDay != null ? dayLabel(wx.aDay) : undefined),
