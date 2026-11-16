@@ -9315,20 +9315,6 @@ impl Settings {
         }
     }
 
-    /// Map a DATA submode to its plain-SSB equivalent when this radio is configured for
-    /// [`RadioProfile::data_modes_plain_ssb`]. Identity otherwise, and identity for anything
-    /// that is not a DATA submode — notably RTTY-FSK, which commands the rig's own `RTTY`
-    /// mode and has no SSB equivalent to fall back to.
-    ///
-    /// ⚠️ Read the warning on `RadioProfile::data_modes_plain_ssb` before touching this: for a
-    /// normally-wired rig, plain SSB on a soundcard mode transmits NO RF. This exists for
-    /// mic-jack interfaces, and it is off by default for everyone else.
-    ///
-    /// ⭐ THE SECOND REASON, AND IT NEEDS NO SWITCH: this radio's link has SHOWN it does not take
-    /// the DATA word ([`crate::rig_modes`]): it refused it, or Hamlib answered the set and the
-    /// radio still read back the plain sideband. Through Hamlib's SDR Console backend (2056) the
-    /// word goes out as `MDD;`, which SDR Console rejects at every key-down. Only the SSB words
-    /// are judged; nothing judged changes nothing.
     /// Where "Data modes use plain SSB" STARTS for the radios `unsaved` names, ones whose settings
     /// file has no saved choice (written before the switch existed): on for a radio with no DATA
     /// submode at all ([`crate::rig_modes::plain_ssb_by_default`]), off for every other. Profiles
@@ -9360,6 +9346,20 @@ impl Settings {
         }
     }
 
+    /// Map a DATA submode to its plain-SSB equivalent when this radio is configured for
+    /// [`RadioProfile::data_modes_plain_ssb`]. Identity otherwise, and identity for anything
+    /// that is not a DATA submode — notably RTTY-FSK, which commands the rig's own `RTTY`
+    /// mode and has no SSB equivalent to fall back to.
+    ///
+    /// ⚠️ Read the warning on `RadioProfile::data_modes_plain_ssb` before touching this: for a
+    /// normally-wired rig, plain SSB on a soundcard mode transmits NO RF. This exists for
+    /// mic-jack interfaces, and it is off by default for everyone else.
+    ///
+    /// ⭐ THE SECOND REASON, AND IT NEEDS NO SWITCH: this radio's link has SHOWN it does not take
+    /// the DATA word ([`crate::rig_modes`]): it refused it, or Hamlib answered the set and the
+    /// radio still read back the plain sideband. Through Hamlib's SDR Console backend (2056) the
+    /// word goes out as `MDD;`, which SDR Console rejects at every key-down. Only the SSB words
+    /// are judged; nothing judged changes nothing.
     pub(crate) fn plain_ssb_if_configured(&self, m: &str) -> String {
         if !self.data_modes_plain_ssb && !self.link_refusals.refused(self.rig_model, m) {
             return m.to_string();
