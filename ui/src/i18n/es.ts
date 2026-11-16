@@ -10061,7 +10061,7 @@ export const ES: PartialCatalog = {
   "topbar.tier.ft2.title": "FT2 — el modo rápido por slots de Decodium (3.75 s), FT4 con el tiempo de símbolo a la mitad. Transmite y recibe. Sin ajustes: el periodo es fijo",
   "topbar.tier.ft4.title": "FT4 estándar de WSJT-X (7.5 s)",
   "topbar.tier.ft8.title": "FT8 estándar de WSJT-X (15 s)",
-  "topbar.tier.jt65.title": "JT65 — EME clásico, 60 s. Solo recepción en esta build (la transmisión está desactivada a la espera de un arreglo). Submodo en Ajustes ▸ JT65",
+  "topbar.tier.jt65.title": "JT65 — EME clásico, 60 s. Transmite y recibe. Submodo en Ajustes ▸ JT65",
   "topbar.tier.msk144.title": "MSK144 — meteor scatter. Transmite casi todo el periodo (así funciona el modo). Periodo en Ajustes ▸ MSK144",
   "topbar.tier.q65.title": "Q65 — EME / scatter en VHF+. Transmite y recibe. Periodo y submodo en Ajustes ▸ Q65",
   "topbar.tier.tempoDeep.title": "Nivel robusto no coherente — aguanta el fading (15 s)",

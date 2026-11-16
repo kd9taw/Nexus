@@ -10022,7 +10022,7 @@ export const JA: PartialCatalog = {
   "topbar.tier.wspr.title": "WSPR伝搬ビーコン — 2 min間隔。スケジュールに従って送信します。送信率と出力は設定 ▸ ビーコン(WSPR & FST4W)で",
   "topbar.tier.q65.title": "Q65 — EME / VHF以上のスキャッター。送受信対応。周期とサブモードは設定 ▸ Q65で",
   "topbar.tier.msk144.title": "MSK144 — 流星散乱。周期のほぼ全体で送信します(このモードの仕様です)。周期は設定 ▸ MSK144で",
-  "topbar.tier.jt65.title": "JT65 — 定番のEMEモード、60 s。このビルドでは受信のみ(送信は修正まで無効)。サブモードは設定 ▸ JT65で",
+  "topbar.tier.jt65.title": "JT65 — 定番のEMEモード、60 s。送受信対応。サブモードは設定 ▸ JT65で",
   "topbar.tier.fst4.title": "FST4 — 低速の微弱信号QSOモード(LF/MF)。送受信対応",
   "topbar.tier.fst4w.title": "FST4W — LF/MFビーコン。スケジュールに従って送信します。送信率と出力は設定 ▸ ビーコン(WSPR & FST4W)で。ハッシュ化コールは<...>と表示されます",
   "topbar.rxOnly.why": "このモードはNexusでは受信専用です — デコードのみで送信しません",

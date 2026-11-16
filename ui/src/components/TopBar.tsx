@@ -37,11 +37,12 @@ const RX = 'RX'
 const OP = 'OP'
 const REC = 'REC'
 
-/** The tier pills in the top bar. FT8/FT4 transmit; the six WSJT-X modes below
- *  them are DECODE-ONLY (modes::tx_mode refuses them in the engine) and carry a
- *  dashed edge so that is visible before the operator tries to call CQ rather
- *  than after. Order is deliberate: the two Tempo tiers, then the two production
- *  FT modes, then the receive-only set roughly by how often they get used.
+/** The tier pills in the top bar. Order is deliberate: the two Tempo tiers, then the
+ *  production FT modes, then the other WSJT-X modes roughly by how often they get used.
+ *  A tier that cannot transmit (`isRxOnly`, the one list mirroring the modes' declared
+ *  capability) is marked RX with a receive-only style and tooltip, so that is visible before
+ *  the operator tries to call CQ rather than after. The mark is read from that list, never
+ *  set per pill: a per-pill flag kept JT65 marked receive-only long after it could transmit.
  *
  *  Where a title points into Settings it names the SECTION, never the tab: a pill is a tier
  *  selector, so these five cannot become deep links, and a tab name in a sentence nobody can
@@ -51,14 +52,18 @@ const REC = 'REC'
  *  prose and resolve through the catalog when the pill renders (a resolved constant would
  *  freeze the first locale loaded). */
 /** A pill's tooltip, read where it renders: the pill's own, and its item in the folded menu. */
-const tierTitle = (p: { titleKey: MessageKey }) => t(p.titleKey)
+const tierTitle = (p: { tier: Tier; titleKey: MessageKey }) => {
+  const title = t(p.titleKey)
+  return isRxOnly(p.tier) ? `${title}\n${t('topbar.rxOnly.why')}` : title
+}
+/** A pill's tag: RX on a tier that cannot transmit, else its own. */
+const pillSmall = (p: { tier: Tier; small?: string }) => (isRxOnly(p.tier) ? 'RX' : p.small)
 
 const TIER_PILLS: {
   tier: Tier
   small?: string
   name: string
   titleKey: MessageKey
-  rxOnly?: boolean
 }[] = [
   { tier: 'TempoFast', small: 'Tempo', name: 'Fast', titleKey: 'topbar.tier.tempoFast.title' },
   { tier: 'TempoDeep', small: 'Tempo', name: 'Deep', titleKey: 'topbar.tier.tempoDeep.title' },
@@ -68,7 +73,7 @@ const TIER_PILLS: {
   { tier: 'WSPR', name: 'WSPR', small: 'BCN', titleKey: 'topbar.tier.wspr.title' },
   { tier: 'Q65', name: 'Q65', titleKey: 'topbar.tier.q65.title' },
   { tier: 'MSK144', name: 'MSK144', titleKey: 'topbar.tier.msk144.title' },
-  { tier: 'JT65', name: 'JT65', small: 'RX', rxOnly: true, titleKey: 'topbar.tier.jt65.title' },
+  { tier: 'JT65', name: 'JT65', titleKey: 'topbar.tier.jt65.title' },
   { tier: 'FST4', name: 'FST4', titleKey: 'topbar.tier.fst4.title' },
   { tier: 'FST4W', name: 'FST4W', small: 'BCN', titleKey: 'topbar.tier.fst4w.title' },
 ]
@@ -456,10 +461,10 @@ export function TopBar({
   const modeButton = (
     <button
       type="button"
-      className={`tier-btn active tier-menu-btn${fold ? ' tier-menu-folded' : ''}${currentPill?.rxOnly ? ' rx-only' : ''}`}
+      className={`tier-btn active tier-menu-btn${fold ? ' tier-menu-folded' : ''}${currentPill && isRxOnly(currentPill.tier) ? ' rx-only' : ''}`}
       title={t('topbar.tier.aria')}
     >
-      {currentPill?.small ? <small>{currentPill.small}</small> : null}
+      {currentPill && pillSmall(currentPill) ? <small>{pillSmall(currentPill)}</small> : null}
       {currentPill?.name ?? tier}
       <ChevronDown size={12} aria-hidden="true" />
     </button>
@@ -784,13 +789,13 @@ export function TopBar({
             key={p.tier}
             type="button"
             className={`tier-btn${tier === p.tier ? ' active' : ''}${
-              p.rxOnly ? ' rx-only' : ''
+              isRxOnly(p.tier) ? ' rx-only' : ''
             }`}
             aria-pressed={tier === p.tier}
             onClick={() => onTierChange(p.tier)}
             title={tierTitle(p)}
           >
-            {p.small ? <small>{p.small}</small> : null}
+            {pillSmall(p) ? <small>{pillSmall(p)}</small> : null}
             {p.name}
           </button>
         ))}
@@ -806,7 +811,7 @@ export function TopBar({
             trigger={modeButton}
             items={TIER_PILLS.map((p) => ({
               label: p.name,
-              icon: p.small ? <small>{p.small}</small> : undefined,
+              icon: pillSmall(p) ? <small>{pillSmall(p)}</small> : undefined,
               title: tierTitle(p),
               onSelect: () => onTierChange(p.tier),
             }))}
