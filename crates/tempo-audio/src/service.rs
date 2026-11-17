@@ -12992,25 +12992,46 @@ impl RadioLoop {
                             // voided the old acknowledgement, so the key-time gate was judging
                             // the RX dial: an out-of-privilege `I` reached the transmitting
                             // radio and the drop came a tick later. Judged here, at the write,
-                            // whoever asked; refused like an undrivable mapping. Unkeyed, the
+                            // whoever asked, by the key-time gate itself
+                            // (`Engine::split_tx_allowed`), on the receiver it would ride.
+                            // Refused, nothing is sent and the split the radio has stands, in
+                            // Nexus too (`Engine::split_refused_while_keyed`). Unkeyed, the
                             // key-time gate judges the acknowledged split before anything keys.
+                            //
+                            // ⚠️ A front-panel PTT is seen through the polled `rig_keyed`, up to
+                            // a poll interval late: a split landing inside that window is
+                            // written as unkeyed, and the key-time gate's mask on the next pass
+                            // is what then stands.
                             let keyed = self.operator_keyed()
                                 || self.manual_ptt_applied
                                 || now < self.cw_keying_until;
                             let tx_vfo = {
-                                let eng = engine_lock(engine);
-                                if keyed && !eng.split_tx_allowed(tx_mhz) {
-                                    Err(SPLIT_KEYED_OUTSIDE_PRIVILEGES.to_string())
-                                } else {
-                                    eng.sat_split_tx_vfo(tx_hz, cat_backend)
+                                let mut eng = engine_lock(engine);
+                                match eng.sat_split_tx_vfo(tx_hz, cat_backend) {
+                                    Ok(vfo) => {
+                                        let rx = if vfo == "Sub" {
+                                            tempo_app::dualrx::ReceiverId::Sub
+                                        } else {
+                                            tempo_app::dualrx::ReceiverId::Main
+                                        };
+                                        if keyed && !eng.split_tx_allowed(tx_mhz, rx) {
+                                            eng.split_refused_while_keyed(tx_mhz);
+                                            Err((SPLIT_KEYED_OUTSIDE_PRIVILEGES.to_string(), true))
+                                        } else {
+                                            Ok(vfo)
+                                        }
+                                    }
+                                    Err(reason) => Err((reason, false)),
                                 }
                             };
                             match tx_vfo {
-                                Err(reason) => {
-                                    // The mapping itself is undrivable, or the
-                                    // dial is outside the licence while keyed:
-                                    // nothing was (or will be) sent, and the
-                                    // desired state must not outlive the refusal.
+                                // Refused while keyed: the engine has already put the standing
+                                // split back. Only the reason is shown.
+                                Err((reason, true)) => retune_note = Some(reason),
+                                Err((reason, false)) => {
+                                    // The mapping itself is undrivable: nothing
+                                    // was (or will be) sent, and the desired
+                                    // state must not outlive the refusal.
                                     {
                                         let mut eng = engine_lock(engine);
                                         eng.split_rejected(tx_mhz);
@@ -13184,6 +13205,9 @@ impl RadioLoop {
                                 );
                             } else {
                                 self.split_on_sub = false;
+                            }
+                            if cleared {
+                                engine_lock(engine).rig_split_cleared();
                             }
                             self.last_split_mode = None;
                         }
@@ -46274,6 +46298,65 @@ mod tests {
         assert_eq!(
             split, None,
             "the refused split is dropped, not left pending"
+        );
+    }
+
+    /// ⛔ A SPLIT REFUSED AT THE WRITE LEAVES THE RADIO'S SPLIT STANDING, IN NEXUS TOO. Split on at
+    /// 14.345, the radio keyed at its front panel (a rig-reported PTT), then a spot's "UP 9" past
+    /// the 20 m edge. The radio gets nothing new; Nexus still holds 14.345 (the badge, and the
+    /// gate's acknowledgement), and a later QSY sends `S 0` as for any split. Routed through the
+    /// rig-rejected path, Nexus showed simplex and judged the dial while the radio stayed split,
+    /// and no QSY sent `S 0` again.
+    #[test]
+    fn a_split_refused_while_keyed_leaves_the_standing_split_in_nexus_and_the_radio() {
+        let (addr, seen) = recording_rigctld_stub();
+        let engine = engine_on(3073);
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.license_class = tempo_app::settings::LicenseClass::Extra;
+            e.apply_settings(s);
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.340, "20m", "USB");
+        }
+        split_ticks(
+            &engine,
+            Rig::rigctld(&addr),
+            vec![
+                |_, _| {},
+                |e, _| e.request_operator_split(Some(14.345)).unwrap(),
+                |e, s| {
+                    s.rig_keyed = true;
+                    e.work_spot_split("phone", 14.340, "20m", Some(9.0));
+                },
+                |e, s| {
+                    s.rig_keyed = false;
+                    let snap = e.snapshot();
+                    assert_eq!(
+                        e.split_tx_mhz(),
+                        Some(14.345),
+                        "Nexus keeps the radio's split"
+                    );
+                    assert!(
+                        (snap.radio.tx_emission_mhz.unwrap_or(0.0) - 14.345).abs() < 1e-9,
+                        "the gate judges the split the radio has: {:?}",
+                        snap.radio.tx_emission_mhz
+                    );
+                    e.set_frequency(7.200, "40m", "LSB");
+                },
+            ],
+        );
+        let wire: Vec<String> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|l| l.trim().to_string())
+            .filter(|l| l.starts_with("S ") || l.starts_with("I "))
+            .collect();
+        assert_eq!(
+            wire,
+            vec!["S 1 VFOB", "I 14345000", "S 0 VFOA"],
+            "nothing new; then S 0"
         );
     }
 

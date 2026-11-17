@@ -1,6 +1,7 @@
 //! The operator's split +/- and the licence: a press that would put the transmitter outside the
 //! operator's privileges is refused when it is made, and never queued for the radio.
 use super::*;
+use crate::dualrx::ReceiverId;
 use crate::settings::LicenseClass;
 
 /// An Extra in Phone at 14.340 USB, split off.
@@ -62,10 +63,135 @@ fn split_off_is_never_refused() {
     assert!(e.request_operator_split(None).is_ok());
 }
 
-/// The radio loop's check before it writes a split TX frequency into a keyed radio.
 #[test]
-fn the_loop_check_judges_the_split_and_its_xit() {
-    let e = station();
-    assert!(e.split_tx_allowed(14.345));
-    assert!(!e.split_tx_allowed(14.349));
+fn a_refused_press_with_no_split_leaves_simplex() {
+    let mut e = station();
+    assert!(e.request_operator_split(Some(14.351)).is_err());
+    assert_eq!(e.split_tx_mhz(), None);
+    assert_eq!(e.take_split_request(), None);
+}
+
+/// The check is the key-time gate itself: what it allows, the gate then keys, and what it
+/// refuses, the gate would refuse, with the acknowledgement it borrowed put back.
+#[test]
+fn the_check_is_the_key_time_gate_and_leaves_the_acknowledgement_alone() {
+    let mut e = station();
+    e.rig_split_applied(14_342_000);
+    assert!(e.split_tx_allowed(14.345, ReceiverId::Main));
+    assert!(!e.split_tx_allowed(14.349, ReceiverId::Main));
+    assert_eq!(
+        e.tx_emission_mhz(),
+        14.342,
+        "the acknowledgement is unchanged"
+    );
+}
+
+/// XIT, both ways, as the gate judges a split with XIT.
+#[test]
+fn the_check_judges_xit() {
+    let mut e = station();
+    e.request_xit(3_000);
+    assert!(
+        !e.split_tx_allowed(14.347, ReceiverId::Main),
+        "14.347 + 3 kHz runs past 14.350"
+    );
+    assert!(e.split_tx_allowed(14.344, ReceiverId::Main));
+}
+
+/// ⛔ THE FM REPEATER SHIFT. A Technician on a 6 m machine at 51.200 with a 1 MHz minus shift
+/// transmits 50.200. A split to 51.050 transmits 50.050, in the CW-only bottom of 6 m: the gate
+/// refuses it, so the press must. A copy that judged the carrier alone allowed it.
+#[test]
+fn the_check_judges_the_fm_repeater_shift() {
+    let mut e = Engine::new("W9XYZ", "EN52", 0);
+    e.set_license_class("technician");
+    e.repeater_tune(51.200, "minus", 1_000_000, 0.0)
+        .expect("a 50.200 input is legal");
+    assert!(
+        e.split_tx_allowed(51.300, ReceiverId::Main),
+        "control: input 50.300"
+    );
+    assert!(
+        !e.split_tx_allowed(51.050, ReceiverId::Main),
+        "input 50.050 is CW only"
+    );
+    assert_eq!(
+        e.request_operator_split(Some(51.050)),
+        Err(SPLIT_REFUSED_PRIVILEGES.to_string())
+    );
+}
+
+/// ⛔ THE SUB UPLINK'S BOTH-SIDES RULE. An IC-9700 pass whose uplink mode the operator took back:
+/// Nexus commands the uplink no word, so both sides of the carrier must be legal. 144.1005 is
+/// legal above and not below (the PSK31 edge bird's row in the gate table), so a split there on
+/// the Sub is refused. The dial's own word alone would have allowed it.
+#[test]
+fn the_check_judges_the_sub_uplinks_unknown_side() {
+    use super::tx_gate_table::{released_on_the_sub, RS44};
+    let mut e = released_on_the_sub(
+        "keyboard",
+        crate::settings::CwKeyerBackend::Cat,
+        "afsk",
+        RS44,
+    );
+    assert!(e.tx_allowed(), "control: RS-44 on the Sub keys");
+    assert!(
+        e.split_tx_allowed(145.965, ReceiverId::Sub),
+        "control: the uplink itself"
+    );
+    assert!(!e.split_tx_allowed(144.1005, ReceiverId::Sub));
+}
+
+/// ⛔ A SPLIT REFUSED AT THE WRITE NEVER DROPS NEXUS TO SIMPLEX while the radio stays split. The
+/// split the radio has, and its acknowledgement, are put back; with none, both stay simplex.
+#[test]
+fn a_split_refused_at_the_write_puts_the_standing_split_back() {
+    let mut e = station();
+    assert!(e.request_operator_split(Some(14.345)).is_ok());
+    let _ = e.take_split_request();
+    e.rig_split_applied(14_345_000);
+    // A spot's "UP 9" past the edge, the loop refusing it while keyed.
+    e.work_spot_split("phone", 14.340, "20m", Some(9.0));
+    assert_eq!(e.take_split_request(), Some(Some(14.349)));
+    e.split_refused_while_keyed(14.349);
+    assert_eq!(
+        e.split_tx_mhz(),
+        Some(14.345),
+        "the badge shows the split the radio has"
+    );
+    assert_eq!(
+        e.tx_emission_mhz(),
+        14.345,
+        "the gate judges where the radio transmits"
+    );
+    assert_eq!(
+        e.take_split_request(),
+        None,
+        "the refused request is discarded"
+    );
+    // A later QSY returns the radio to simplex, as for any split.
+    e.set_frequency(7.200, "40m", "LSB");
+    assert_eq!(e.take_split_request(), Some(None));
+}
+
+#[test]
+fn a_split_refused_at_the_write_with_none_standing_stays_simplex() {
+    let mut e = station();
+    e.request_split(Some(14.349));
+    let _ = e.take_split_request();
+    e.split_refused_while_keyed(14.349);
+    assert_eq!(e.split_tx_mhz(), None);
+    assert_eq!(e.tx_emission_mhz(), 14.340, "simplex: the dial");
+}
+
+/// Once the radio is back on simplex, nothing stands to be put back.
+#[test]
+fn simplex_applied_clears_the_standing_split() {
+    let mut e = station();
+    e.rig_split_applied(14_345_000);
+    e.rig_split_cleared();
+    e.request_split(Some(14.349));
+    let _ = e.take_split_request();
+    e.split_refused_while_keyed(14.349);
+    assert_eq!(e.split_tx_mhz(), None);
 }

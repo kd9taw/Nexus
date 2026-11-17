@@ -109,8 +109,8 @@ impl Engine {
             if crate::bandplan::band_for_dial(tx) != Some(self.settings.band.as_str()) {
                 return Err(Reason::InvalidAction);
             }
-            let xit = self.xit_offset_mhz();
-            if !self.remote_emission_allowed(tx) || !self.remote_emission_allowed(tx + xit) {
+            // The key-time gate's own verdict of this split, as the local press asks it.
+            if !self.split_tx_allowed(tx, crate::dualrx::ReceiverId::Main) {
                 return Err(Reason::OutsidePrivileges);
             }
         }
