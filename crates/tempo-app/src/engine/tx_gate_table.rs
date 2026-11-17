@@ -155,7 +155,9 @@ fn sat_pass_with(
     e.set_license_class(class);
     e.set_operating_mode(section, false);
     e.set_sat_transponder(Some(("TEST|linear".into(), 0, tp)));
-    e.sat_tune_nominal(down, 1_000_000);
+    // Unjudged: the gate rows build out-of-licence uplinks on purpose, to prove the KEY refuses
+    // them (the pick itself now refuses them when asked).
+    e.sat_tune_nominal_unjudged(down, 1_000_000);
     e
 }
 

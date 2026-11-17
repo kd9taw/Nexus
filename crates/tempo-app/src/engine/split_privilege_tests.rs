@@ -368,3 +368,65 @@ fn a_refused_request_after_a_qsy_stays_queued_for_the_unkey() {
         "kept, for the first unkeyed tick"
     );
 }
+
+/// An IC-9700 on the native daemon, Main = downlink / Sub = uplink confirmed, General, Phone,
+/// holding `tp`: a pass about to be picked.
+fn ic9700_holding(tp: tempo_core::doppler::Transponder) -> Engine {
+    let mut e = Engine::new("W9XYZ", "EN52", 0);
+    e.settings.ensure_radio_profiles();
+    e.settings.rig_model = 3081;
+    e.settings.rig_conn = "serial".to_string();
+    e.settings.rig_addr = String::new();
+    e.settings.icom_native_cat = true;
+    e.settings.sync_active_from_flat();
+    let ids: Vec<u32> = e.settings.radios.iter().map(|p| p.id).collect();
+    for id in ids {
+        e.settings
+            .confirm_sat_uplink(id, crate::settings::SatVfoMap::MainDownSubUp);
+    }
+    e.set_license_class("general");
+    e.set_operating_mode("phone", false);
+    e.set_sat_transponder(Some(("TEST|linear".into(), 0, tp)));
+    e
+}
+
+/// ⛔ A PICK'S FIRST UPLINK IS JUDGED WHEN IT IS ASKED, on the receiver it rides. A bird whose
+/// uplink sits in 2 m's CW-only bottom (144.05) has no phone uplink a General may use: the pick
+/// queues no split and the rail says why. RS-44's uplink is queued as before.
+#[test]
+fn a_picks_first_uplink_outside_the_licence_is_refused_when_asked() {
+    let edge = tempo_core::doppler::Transponder {
+        uplink_centre_hz: 144_050_000,
+        downlink_centre_hz: 435_640_000,
+        invert: true,
+        half_width_hz: 0,
+    };
+    let mut e = ic9700_holding(edge);
+    let binding = e.sat_tune_nominal(tempo_core::doppler::DownlinkClass::Usb, 1_000_000);
+    assert_eq!(e.split_tx_mhz(), None, "no uplink queued");
+    assert!(
+        !matches!(e.take_split_request(), Some(Some(_))),
+        "nothing for the radio loop to write"
+    );
+    assert_eq!(binding.pending_uplink_mhz, None);
+    assert_eq!(binding.note.as_deref(), Some(SPLIT_REFUSED_PRIVILEGES));
+
+    // The same bird through the unjudged harness constructor: the uplink is queued, and the KEY
+    // refuses it. So the request-time refusal is the gate's own answer, given earlier.
+    let mut un = ic9700_holding(edge);
+    un.sat_tune_nominal_unjudged(tempo_core::doppler::DownlinkClass::Usb, 1_000_000);
+    let up = un.split_tx_mhz().expect("unjudged: queued");
+    un.rig_split_applied_on((up * 1e6).round() as u64, ReceiverId::Sub);
+    assert!(
+        !un.tx_allowed(),
+        "the key-time gate refuses that uplink too"
+    );
+
+    let mut rs = ic9700_holding(super::tx_gate_table::RS44);
+    let binding = rs.sat_tune_nominal(tempo_core::doppler::DownlinkClass::Usb, 1_000_000);
+    assert!(
+        binding.pending_uplink_mhz.is_some(),
+        "control: an in-band uplink is queued"
+    );
+    assert!(matches!(rs.take_split_request(), Some(Some(_))));
+}

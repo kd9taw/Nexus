@@ -24871,10 +24871,39 @@ Pick the one you operate from on the Contesting tab in Settings.",
     ///
     /// `now_ms` stamps the seed described below; pass the same clock the track
     /// loop feeds [`Self::sat_doppler_tick`].
+    ///
+    /// # The uplink is judged when it is asked
+    ///
+    /// ⛔ Like every other split ([`Self::split_tx_allowed`]): a pick whose first uplink the
+    /// licence would refuse queues no split, and the rail says why. Before, the uplink was
+    /// written and judged only at the key and, while keyed, at the write; in the gap before the
+    /// radio loop polls a front-panel key it went out to a transmitting radio.
     pub fn sat_tune_nominal(
         &mut self,
         class: tempo_core::doppler::DownlinkClass,
         now_ms: u64,
+    ) -> SatBinding {
+        self.sat_tune_nominal_with(class, now_ms, true)
+    }
+
+    /// [`Self::sat_tune_nominal`] with the request-time judgement of the uplink skipped: the
+    /// key-time gate's own tests build an acknowledged out-of-licence uplink through the real pick
+    /// to prove the gate refuses it, which the request-time judgement no longer lets a pick do.
+    /// Test-only; nothing in the app can reach it.
+    #[cfg(test)]
+    pub(crate) fn sat_tune_nominal_unjudged(
+        &mut self,
+        class: tempo_core::doppler::DownlinkClass,
+        now_ms: u64,
+    ) -> SatBinding {
+        self.sat_tune_nominal_with(class, now_ms, false)
+    }
+
+    fn sat_tune_nominal_with(
+        &mut self,
+        class: tempo_core::doppler::DownlinkClass,
+        now_ms: u64,
+        judge_uplink: bool,
     ) -> SatBinding {
         let fm = class.is_fm();
         // `simplex: false` here is not a claim about the bird: this refusal
@@ -25111,8 +25140,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // rig to simplex (leftover pile-up split must not shift the next
             // frequency), which would drop a split written first.
             let up_mhz = want.uplink_hz as f64 / 1_000_000.0;
-            self.request_split(Some(up_mhz));
-            binding.pending_uplink_mhz = Some(up_mhz);
+            let rx = self.sat_split_rx_for(want.uplink_hz);
+            if !judge_uplink || self.split_tx_allowed(up_mhz, rx) {
+                self.request_split(Some(up_mhz));
+                binding.pending_uplink_mhz = Some(up_mhz);
+            } else {
+                binding.note = Some(SPLIT_REFUSED_PRIVILEGES.to_string());
+            }
         }
         // Name the rig the writes are ACTUALLY headed to, not the one routing
         // picked. The two come apart under an uplink-only mapping: no downlink
@@ -84444,7 +84478,9 @@ mod digital_side_licence_tests {
     /// daemon — which VFO the uplink rides, and the rig's acknowledgement. Returns that VFO.
     fn work_pass(e: &mut Engine, tp: Transponder, down: DownlinkClass) -> &'static str {
         e.set_sat_transponder(Some(("TEST|linear".into(), 0, tp)));
-        e.sat_tune_nominal(down, 1_000_000);
+        // Unjudged: these sweeps build out-of-licence uplinks on purpose, to prove the KEY
+        // refuses them (the pick itself now refuses them when asked).
+        e.sat_tune_nominal_unjudged(down, 1_000_000);
         let up_mhz = e
             .split_tx_mhz()
             .expect("the pick queued the uplink on the split");
