@@ -380,6 +380,25 @@ pub(crate) fn keep_the_shacks_credential_addresses_while_watched(
     }
 }
 
+/// ⛔ While a stream watches the station's screen (`watched`), a settings save made there keeps
+/// each of [`SECRET_SETTINGS`] as the shack has it, as a save from afar does
+/// ([`keep_the_shacks_secret_settings`]), whether or not the form's read without them rides in the
+/// save: a crafted or older form cannot write a key of its own, nor blank the shack's. With no
+/// stream the save is taken as it came.
+pub(crate) fn keep_the_shacks_secret_settings_while_watched(
+    shack: &tempo_app::settings::Settings,
+    save: &mut tempo_app::settings::Settings,
+    watched: bool,
+) {
+    if !watched {
+        return;
+    }
+    let mut shack = shack.clone();
+    for (_, field) in SECRET_SETTINGS {
+        field(save).clone_from(field(&mut shack));
+    }
+}
+
 /// The addresses the shack sends a stored key or password to, by their names on the wire: set at
 /// the station only while a stream watches its screen
 /// ([`keep_the_shacks_credential_addresses_while_watched`]), as they are from afar.

@@ -185,11 +185,13 @@ function mutatesCredentials(cmd: string): boolean {
  *  watches the station's screen (the station's own refusal, `nexusClient:atShackOnly`). */
 export const AT_SHACK_ONLY = 'atShackOnly'
 
-/** That refusal, said in the operator's language and matched by its `code`, never by its words. */
+/** That refusal, said in the operator's language and matched by its `code`, never by its words.
+ *  The words suit both who can meet it: the operator at the station, while its screen is streamed,
+ *  and whoever presses through the stream: saved keys are locked until the stream ends. */
 export class AtShackOnly extends Error {
   readonly code = AT_SHACK_ONLY
   constructor() {
-    super(t('remote.lan.atShackOnly'))
+    super(t('remote.lan.keysLockedWhileStreamed'))
   }
 }
 

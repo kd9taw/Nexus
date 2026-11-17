@@ -12,10 +12,11 @@
 //! WHICH COMMANDS: every row of the class table (`tempo_client::classes`) that is set at the shack
 //! only ([`Class::RefusedHere`]) for a credential's sake, by its reason, read at run time, so a new
 //! credential command is refused the day its row is written. One row is let through:
-//! [`STREAM_MAY_ASK`].
+//! [`STREAM_MAY_ASK`]. And one read that is no credential is refused too, because it can show
+//! one: [`STREAM_MAY_NOT_READ`].
 //!
-//! The refusal is `nexusClient:atShackOnly` ([`AT_SHACK_ONLY`]), which the page words as "Only at
-//! the station itself".
+//! The refusal is `nexusClient:atShackOnly` ([`AT_SHACK_ONLY`]), which the page words as saved keys
+//! being locked while the screen is streamed.
 
 use tauri::ipc::Invoke;
 use tauri::{Manager, Runtime};
@@ -31,17 +32,23 @@ pub(crate) const AT_SHACK_ONLY: &str = "atShackOnly";
 /// would stop the notice at the shack for as long as the app is open.
 pub(crate) const STREAM_MAY_ASK: [&str; 1] = ["keys_to_confirm"];
 
-/// Whether `cmd` is refused while a stream watches: a class-table row set at the shack only, whose
-/// reason is a credential, and not [`STREAM_MAY_ASK`].
+/// What a watched screen may not read though it is no credential command: the Connections log,
+/// whose lines carry the services' own words, and those have carried keys. The streamed picture
+/// would show them to whoever watches.
+pub(crate) const STREAM_MAY_NOT_READ: [&str; 1] = ["get_connection_log"];
+
+/// Whether `cmd` is refused while a stream watches: [`STREAM_MAY_NOT_READ`], and a class-table row
+/// set at the shack only whose reason is a credential, but not [`STREAM_MAY_ASK`].
 pub(crate) fn refused_while_watched(cmd: &str) -> bool {
-    !STREAM_MAY_ASK.contains(&cmd)
-        && tempo_client::classes::CLASSES
-            .iter()
-            .any(|(row, class, why)| {
-                *row == cmd
-                    && *class == Class::RefusedHere
-                    && why.to_ascii_lowercase().contains("credential")
-            })
+    STREAM_MAY_NOT_READ.contains(&cmd)
+        || !STREAM_MAY_ASK.contains(&cmd)
+            && tempo_client::classes::CLASSES
+                .iter()
+                .any(|(row, class, why)| {
+                    *row == cmd
+                        && *class == Class::RefusedHere
+                        && why.to_ascii_lowercase().contains("credential")
+                })
 }
 
 /// The app's handler `commands`, with every [`refused_while_watched`] command refused while the
@@ -140,6 +147,17 @@ mod tests {
         for cmd in STREAM_MAY_ASK {
             assert!(rows.contains(&cmd), "{cmd} is a credential row");
         }
+        for cmd in STREAM_MAY_NOT_READ {
+            assert!(
+                !rows.contains(&cmd),
+                "{cmd} is no credential row: it is refused by name"
+            );
+            assert_eq!(
+                crate::command_classes::class_of(cmd),
+                Some(Class::RefusedHere),
+                "{cmd} is a row the table keeps at the shack"
+            );
+        }
     }
 
     /// ⛔ While a stream watches, every credential row is refused, in the page's words, and never
@@ -183,6 +201,30 @@ mod tests {
                 "CONTROL, stream gone: {cmd}"
             );
         }
+    }
+
+    /// ⛔ While a stream watches, the Connections log is not read: its lines have carried keys,
+    /// and the streamed picture would show them. CONTROL: it is read before and after.
+    #[test]
+    fn the_connections_log_is_not_read_while_a_stream_watches() {
+        let watched = Watched::default();
+        let (_app, main) = app(&watched);
+        assert_eq!(
+            call(&main, "get_connection_log"),
+            Ok(json!("ran")),
+            "CONTROL: no stream"
+        );
+        let stream = watched.watching();
+        assert_eq!(
+            call(&main, "get_connection_log"),
+            Err(json!(format!("nexusClient:{AT_SHACK_ONLY}")))
+        );
+        drop(stream);
+        assert_eq!(
+            call(&main, "get_connection_log"),
+            Ok(json!("ran")),
+            "CONTROL: stream gone"
+        );
     }
 
     /// The app's own handler goes through [`guarded`], once, around the whole list, so no

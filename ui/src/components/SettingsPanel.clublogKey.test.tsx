@@ -105,7 +105,7 @@ async function tell(on: boolean) {
 }
 
 
-async function open(settings: Record<string, unknown>, watched?: boolean) {
+async function open(settings: Record<string, unknown>, watched?: boolean, target = 'confirmations') {
   if (watched === undefined) {
     api.get('getSettings').mockImplementation(() =>
       Promise.resolve({ ...defaultSettings, mycall: 'KD9TAW', ...settings } as never),
@@ -116,7 +116,7 @@ async function open(settings: Record<string, unknown>, watched?: boolean) {
   }
   render(
     <SettingsPanel
-      target="confirmations"
+      target={target}
       activeRadioId={0}
       scale={1 as never}
       scaleMode={'auto' as never}
@@ -129,6 +129,7 @@ async function open(settings: Record<string, unknown>, watched?: boolean) {
       features={features}
     />,
   )
+  if (target !== 'confirmations') return { input: null as never, reveal: () => null }
   const label = await screen.findByText(t('settings.confirmations.clublog.apiKey.label'))
   const field = label.closest('label') as HTMLLabelElement
   const input = field.querySelector('input') as HTMLInputElement
@@ -254,6 +255,47 @@ describe('the ClubLog key while a stream watches the station', () => {
     expect(document.querySelector('[data-set-at-station="cloudlogUrl"]')).not.toBeNull()
     await tell(false)
     await waitFor(() => expect(url().disabled).toBe(false))
+  })
+
+  it('a save shows the station\'s Cloudlog address when the stream locked it after it was typed', async () => {
+    await open({ clublogApiKey: KEY, cloudlogUrl: 'https://log.shack.example' }, false)
+    const url = () => document.querySelector('[data-setting="cloudlogUrl"]') as HTMLInputElement
+    fireEvent.change(url(), { target: { value: 'https://collector.example' } })
+    await tell(true)
+    await waitFor(() => expect(url().disabled).toBe(true))
+    expect(url().value, 'typed before the lock').toBe('https://collector.example')
+    const save = (await screen.findAllByRole('button', { name: t('settings.panel.save') })).find(
+      (b) => (b as HTMLButtonElement).type === 'submit',
+    ) as HTMLButtonElement
+    fireEvent.click(save)
+    // The station kept its own; the form shows it after the save, and says so.
+    await waitFor(() => expect(url().value).toBe('https://log.shack.example'))
+    expect(vi.mocked(pushToast)).toHaveBeenCalledWith(t('settings.stationOnly.kept'), 'info')
+  })
+
+  it('CONTROL: unwatched, a typed Cloudlog address stays as typed after a save', async () => {
+    await open({ clublogApiKey: KEY, cloudlogUrl: 'https://log.shack.example' }, false)
+    const url = () => document.querySelector('[data-setting="cloudlogUrl"]') as HTMLInputElement
+    fireEvent.change(url(), { target: { value: 'https://collector.example' } })
+    const save = (await screen.findAllByRole('button', { name: t('settings.panel.save') })).find(
+      (b) => (b as HTMLButtonElement).type === 'submit',
+    ) as HTMLButtonElement
+    fireEvent.click(save)
+    await waitFor(() => expect(api.get('getSettings').mock.calls.length).toBeGreaterThan(1))
+    expect(url().value).toBe('https://collector.example')
+    expect(vi.mocked(pushToast)).not.toHaveBeenCalledWith(t('settings.stationOnly.kept'), 'info')
+  })
+
+  it('hides the Connections log while watched, and shows it again once the stream has ended', async () => {
+    const line = { tsUnix: 1_700_000_000, connector: 'Cloudlog', level: 'info', message: 'FAKE-LINE-0001' }
+    api.get('getConnectionLog').mockImplementation(() =>
+      watching.on ? Promise.reject(new Error('refused')) : Promise.resolve([line]),
+    )
+    await open({}, false, 'services')
+    await waitFor(() => expect(document.body.innerHTML).toContain('FAKE-LINE-0001'))
+    await tell(true)
+    await waitFor(() => expect(document.body.innerHTML).not.toContain('FAKE-LINE-0001'))
+    expect(screen.getByText(t('settings.connections.log.watched'))).toBeTruthy()
   })
 
   it('CONTROL: unwatched, the station screen reveals as before', async () => {

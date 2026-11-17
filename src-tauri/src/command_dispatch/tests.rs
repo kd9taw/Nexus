@@ -1685,6 +1685,40 @@ fn a_save_while_a_stream_watches_keeps_where_the_shack_sends_its_keys() {
     assert_eq!(patch.icom_lan_host, "203.0.113.7", "CONTROL: no stream");
 }
 
+/// ⛔ While a stream watches, a save keeps the ClubLog key and a Cloudlog key waiting for the
+/// keychain as the shack has them, with no read marker in the save to say its form was read without
+/// them. CONTROL: with no stream, the save's own key is taken.
+#[test]
+fn a_save_while_a_stream_watches_keeps_the_shacks_stored_keys() {
+    let shack = tempo_app::settings::Settings {
+        clublog_api_key: "FAKE-SHACK-KEY".into(),
+        cloudlog_key: "FAKE-PENDING-KEY".into(),
+        ..Default::default()
+    };
+    let mut asked = shack.clone();
+    asked.clublog_api_key = "FAKE-PLANTED-KEY".into();
+    asked.cloudlog_key = String::new();
+    assert!(
+        asked.unknown.get(SAVED_AT_THE_STATION).is_none(),
+        "no read marker"
+    );
+    let mut save = asked.clone();
+    keep_the_shacks_settings(&shack, &mut save, None);
+    keep_the_shacks_secret_settings_while_watched(&shack, &mut save, true);
+    assert_eq!(
+        (save.clublog_api_key.as_str(), save.cloudlog_key.as_str()),
+        ("FAKE-SHACK-KEY", "FAKE-PENDING-KEY"),
+        "while watched, the shack's keys"
+    );
+    let mut save = asked.clone();
+    keep_the_shacks_settings(&shack, &mut save, None);
+    keep_the_shacks_secret_settings_while_watched(&shack, &mut save, false);
+    assert_eq!(
+        save.clublog_api_key, "FAKE-PLANTED-KEY",
+        "CONTROL: no stream"
+    );
+}
+
 /// ⛔ The licence class, which decides where the station may transmit, is set at the shack only:
 /// its own command is refused from afar, as a save from afar keeps it.
 #[test]

@@ -18670,11 +18670,14 @@ fn set_settings(
     command_dispatch::keep_the_shacks_settings(&shack, &mut settings, afar.as_ref());
     // ⛔ While a stream watches the station's screen, nothing on this call says who pressed Save, so
     // where the shack sends its stored keys stays as it is, as from afar.
+    let watched = watched.live();
     command_dispatch::keep_the_shacks_credential_addresses_while_watched(
         &shack,
         &mut settings,
-        watched.live(),
+        watched,
     );
+    // ...and the stored keys the form carries, read without them or not.
+    command_dispatch::keep_the_shacks_secret_settings_while_watched(&shack, &mut settings, watched);
     let engine = state.inner().clone();
     // A form save: the ENGINE's roster wins, so a stale panel cannot revert a rig just added.
     let snap = apply_and_persist(
@@ -24009,6 +24012,10 @@ mod live_key_hold_tests {
                 < at("keep_the_shacks_credential_addresses_while_watched(")
         );
         assert!(at("watched.live()") < at("apply_and_persist("));
+        assert!(
+            at("keep_the_shacks_settings(") < at("keep_the_shacks_secret_settings_while_watched(")
+        );
+        assert!(at("keep_the_shacks_secret_settings_while_watched(") < at("apply_and_persist("));
         assert!(at("apply_and_persist(") < at("let_go_of_waits_with_no_key("));
     }
 }

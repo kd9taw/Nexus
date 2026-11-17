@@ -1752,7 +1752,12 @@ export function SettingsPanel({
   useEffect(() => {
     let live = true
     const load = () => {
-      getConnectionLog().then((l) => live && setConnLog(l)).catch(() => {})
+      // Refused while a stream watches this screen (its lines have carried keys): none is shown.
+      getConnectionLog()
+        .then((l) => live && setConnLog(l))
+        .catch((e: unknown) => {
+          if (live && (e as { code?: unknown } | null)?.code === AT_SHACK_ONLY) setConnLog([])
+        })
       getClusterNodes().then((n) => live && setClusterNodes(n)).catch(() => {})
       getAssistanceJournal().then((l) => live && setAssistLog(l ?? [])).catch(() => {})
     }
@@ -1843,6 +1848,8 @@ export function SettingsPanel({
   const watchedSeen = useRef(watched)
   useEffect(() => {
     if (watched) setClublogKeyShown(false)
+    // The Connections log goes too: the station does not send it while watched.
+    if (watched) setConnLog([])
     if (watchedSeen.current === watched) return
     watchedSeen.current = watched
     let live = true
@@ -3520,6 +3527,8 @@ export function SettingsPanel({
     // Every save moves whatever the backend derives from the saved settings — today the
     // contest role preview, which is why it reads this rather than the form.
     setSavedTick((n) => n + 1)
+    // What this Save changes, against the form as it was read: asked again below, of the station.
+    const changed = changedSince(savedRef.current, next) as Record<string, unknown>
     if (editingRadioId != null && editingRadioId !== next.activeRadio) {
       // `withActiveRadioConfig` puts the ACTIVE radio's own config back in the flat fields, so
       // the backend's flat→active fold is a no-op and the edited radio's ports/model/audio
@@ -3545,20 +3554,31 @@ export function SettingsPanel({
     // re-opened for Edit, and the operating radio's went back at the next save of the other one.
     // The station's record of the TX cards, too: the "" a pick put there asked for one read, at this
     // Save, and must not ride a later save, when the cards may have been renumbered since.
-    const { radios, txCardModels } = await getSettings()
+    const read = await getSettings()
+    const { radios, txCardModels } = read
     // …and the radio on the form's "Data modes use plain SSB" as the station now holds it: the save
     // that gives a radio its first model starts it ON for a radio with no DATA mode (a TS-480), so
     // the switch shows what that radio will be commanded in.
     const shown = radios?.find((r) => r.id === (editingRadioId ?? next.activeRadio))
     const plainSsb = shown ? { dataModesPlainSsb: shown.dataModesPlainSsb } : {}
-    setForm((prev) => (prev ? { ...prev, radios, txCardModels, ...plainSsb } : prev))
+    // A setting this Save changed that the station keeps as it has it (set at the station only:
+    // from afar, or while its screen is streamed; its field was locked after it was typed in) shows
+    // the station's value now, a radio's from that radio, never the one typed, and says so.
+    const kept: Record<string, unknown> = {}
+    for (const key of read.stationOnlySettings ?? []) {
+      if (!(key in changed)) continue
+      const from = (shown && key in shown ? shown : read) as unknown as Record<string, unknown>
+      if (from[key] !== (next as unknown as Record<string, unknown>)[key]) kept[key] = from[key]
+    }
+    if (Object.keys(kept).length > 0) pushToast(t('settings.stationOnly.kept'), 'info')
+    setForm((prev) => (prev ? { ...prev, radios, txCardModels, ...plainSsb, ...kept } : prev))
     // The baseline the next Save is diffed against (`saveForm`) holds the radio fields as the form
     // now holds them: the radio on the form, whichever it is, so only the operator's next edit of it
     // reads as a change. (The station-wide save of a form showing another radio leaves the radio
     // fields out, so the radio in use's drive and gain, moved in the cockpit since, are not sent.)
     // Test CAT and Auto-test save through here too, so the radio fields move here for every caller;
     // `commitSave` then takes the whole of what this returns.
-    const saved = { ...next, radios, txCardModels, ...plainSsb }
+    const saved = { ...next, radios, txCardModels, ...plainSsb, ...kept }
     if (savedRef.current) savedRef.current = { ...savedRef.current, ...radioPatch(saved), radios, txCardModels }
     return saved
   }
@@ -13029,7 +13049,11 @@ export function SettingsPanel({
                 // From a computer driving a station the log is never read (it stays at the station),
                 // so empty there is not "no events yet".
                 <p className="conn-log-empty">
-                  {drivesAnotherStation() ? t('settings.connections.log.atStation') : t('settings.connections.log.empty')}
+                  {drivesAnotherStation()
+                    ? t('settings.connections.log.atStation')
+                    : watched
+                      ? t('settings.connections.log.watched')
+                      : t('settings.connections.log.empty')}
                 </p>
               ) : (
                 <ul className="conn-log-list">

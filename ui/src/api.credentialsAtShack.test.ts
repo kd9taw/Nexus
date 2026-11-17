@@ -63,7 +63,7 @@ const CREDENTIALS: [string, () => Promise<unknown>][] = [
 describe('credentials are saved and forgotten at the station only', () => {
   it.each(CREDENTIALS)('%s through a stream is refused and never sent', async (_cmd, call) => {
     stream.on = true
-    await expect(call()).rejects.toMatchObject({ code: 'atShackOnly', message: t('remote.lan.atShackOnly') })
+    await expect(call()).rejects.toMatchObject({ code: 'atShackOnly', message: t('remote.lan.keysLockedWhileStreamed') })
     expect(sent).toEqual([])
   })
 
@@ -139,7 +139,7 @@ describe('the station refuses credentials while a stream watches its screen', ()
     }
     await expect(api.answerSavedKey(null, true, 'https://log.example.invalid')).rejects.toMatchObject({
       code: api.AT_SHACK_ONLY,
-      message: t('remote.lan.atShackOnly'),
+      message: t('remote.lan.keysLockedWhileStreamed'),
     })
   })
 })

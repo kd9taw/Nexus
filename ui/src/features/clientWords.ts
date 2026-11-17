@@ -13,7 +13,7 @@ export function clientWords(code: string): string {
     case 'unclassed': return t('client.refused.unclassed')
     case 'runsHere': return t('client.refused.runsHere')
     case 'shackOnly': return t('client.refused.shackOnly')
-    case 'atShackOnly': return t('remote.lan.atShackOnly')
+    case 'atShackOnly': return t('remote.lan.keysLockedWhileStreamed')
     case 'transmitNotYet': return t('client.refused.transmitNotYet')
     case 'heldPress': return t('client.refused.heldPress')
     case 'noStopRoad': return t('client.refused.noStopRoad')
