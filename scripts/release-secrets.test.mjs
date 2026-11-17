@@ -23,6 +23,8 @@
 //      runner that builds nothing. macOS is the one exception (see SIGNS_IN_BUNDLER).
 //   6. Every artifact a job downloads is uploaded by a job it needs, so splitting a job cannot
 //      leave a later step reading a file nothing hands it.
+//   7. The updater signing step's script, run against a stand-in signer, signs both installers
+//      and refuses every signature a client would reject (see "The signing step's own checks").
 //
 // WHAT IT CANNOT CHECK. Step scoping keeps a key out of a build's environment. It is not a
 // boundary against code that sets out to find the key: a hosted runner is handed the secrets
@@ -43,6 +45,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const WORKFLOW =
@@ -780,6 +784,96 @@ test('a signature made without the version is reported', () => {
   const planted = plant(TEXT, '--app-version "$ver" "$exe"', '"$exe"');
   const { bare } = unboundSignatures(readWorkflow(planted));
   assert.ok(bare.some((c) => c.line.includes('"$exe"')), `the NSIS signature without --app-version was not reported: ${JSON.stringify(bare)}`);
+});
+
+// ---- The signing step's own checks, run ----------------------------------------------------------
+// The step's script, run as Actions runs it (`bash -e`), against a stand-in signer that writes
+// minisign-shaped signatures (tauri base64-wraps the whole minisign file: an untrusted comment, the
+// signature line "ED" + 8-byte key id + 64 bytes, the trusted comment, the global signature) and a
+// tauri.conf.json carrying a public key of the same shape. No real key is involved.
+//
+// The runner can start a step with SIGPIPE ignored, so a writer whose reader has already exited
+// gets "Broken pipe" back and fails, and `pipefail` fails the step with it: that is how 1.25.0's
+// dry run lost this step to "base64: Broken pipe" when `od -N8` stopped reading. A `base64`
+// stand-in on PATH reproduces it every time: it ignores SIGPIPE and holds back its last byte for a
+// moment, so any reader in the step that stops before end of input is caught writing to a closed
+// pipe.
+const KEY_ID = Buffer.from('bb5ce776e8c10751', 'hex');
+const minisign = (lines) => Buffer.from(lines.join('\n') + '\n').toString('base64');
+const pubkeyFor = (id) => minisign(['untrusted comment: minisign public key: X', Buffer.concat([Buffer.from('Ed'), id, Buffer.alloc(32, 7)]).toString('base64')]);
+
+function runSignStep({ signId = KEY_ID, signVersion = '1.25.0', writeSig = true, sigInThePast = false, arrivedSigned = false, pubkey = pubkeyFor(KEY_ID) } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nexus-sign-step-'));
+  try {
+    const at = (...p) => path.join(dir, ...p);
+    for (const d of ['unsigned', 'signer', 'src-tauri', 'bin']) fs.mkdirSync(at(d));
+    fs.writeFileSync(at('src-tauri', 'tauri.conf.json'), JSON.stringify({ version: '1.25.0', plugins: { updater: { pubkey } } }, null, 2));
+    const past = new Date(Date.now() - 3600e3);
+    for (const f of ['Nexus_1.25.0_x64-setup.exe', 'Nexus_1.25.0_amd64.AppImage']) {
+      fs.writeFileSync(at('unsigned', f), 'installer');
+      fs.utimesSync(at('unsigned', f), past, past);
+      if (arrivedSigned) fs.writeFileSync(at('unsigned', `${f}.sig`), 'x');
+    }
+    // The signature line carries a 0x0a byte, as a real signature often does.
+    fs.writeFileSync(at('sig.b64'), minisign([
+      'untrusted comment: signature from tauri secret key',
+      Buffer.concat([Buffer.from('ED'), signId, Buffer.alloc(30, 1), Buffer.from('\n'), Buffer.alloc(33, 2)]).toString('base64'),
+      `trusted comment: timestamp:1763000000\tfile:installer\tversion:${signVersion}`,
+      Buffer.alloc(64, 3).toString('base64'),
+    ]));
+    // `cargo-tauri signer sign --app-version V FILE` writes FILE.sig.
+    fs.writeFileSync(at('signer', 'cargo-tauri'), [
+      '#!/bin/bash',
+      'f="${@: -1}"',
+      writeSig ? `cp "${at('sig.b64')}" "$f.sig"` : ':',
+      writeSig && sigInThePast ? 'touch -d "2 hours ago" "$f.sig"' : ':',
+      '',
+    ].join('\n'));
+    const real = spawnSync('bash', ['-c', 'command -v base64'], { encoding: 'utf8' }).stdout.trim();
+    fs.writeFileSync(at('bin', 'base64'), [
+      '#!/bin/bash',
+      "trap '' PIPE",
+      't=$(mktemp)',
+      `"${real}" "$@" > "$t" || exit 1`,
+      'n=$(wc -c < "$t")',
+      'if [ "$n" -gt 1 ]; then head -c "$((n - 1))" "$t" || exit 1; sleep 0.3; fi',
+      'tail -c 1 "$t" || exit 1',
+      'rm -f "$t"',
+      '',
+    ].join('\n'));
+    fs.chmodSync(at('bin', 'base64'), 0o755);
+    const r = spawnSync('bash', ['-e', '-c', findStep(WF, 'sign-updaters', SIGN_STEP).run], {
+      cwd: dir,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${at('bin')}:${process.env.PATH}`, TAURI_SIGNING_PRIVATE_KEY: 'stand-in', TAURI_SIGNING_PRIVATE_KEY_PASSWORD: '' },
+    });
+    return { status: r.status, out: `${r.stdout}${r.stderr}`, sigs: fs.existsSync(at('sigs')) ? fs.readdirSync(at('sigs')).sort() : [] };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('the signing step signs both installers, even when a pipe writer outlives its reader', () => {
+  const r = runSignStep();
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /signed for self-update with key bb5ce776e8c10751 \(version 1\.25\.0\)/);
+  assert.deepEqual(r.sigs, ['Nexus_1.25.0_amd64.AppImage.sig', 'Nexus_1.25.0_x64-setup.exe.sig']);
+});
+
+test('the signing step refuses every signature clients would not accept', () => {
+  const refused = (opts, needle) => {
+    const r = runSignStep(opts);
+    assert.notEqual(r.status, 0, `accepted ${JSON.stringify(opts)}:\n${r.out}`);
+    assert.ok(r.out.includes(needle), `refused ${JSON.stringify(opts)} for the wrong reason. Expected "${needle}", got:\n${r.out}`);
+  };
+  refused({ signId: Buffer.from('0102030405060708', 'hex') }, 'is signed by key 0102030405060708, but clients trust bb5ce776e8c10751');
+  refused({ signVersion: '1.24.0' }, 'does not bind version 1.25.0');
+  refused({ writeSig: false }, 'signing produced no .sig beside');
+  refused({ sigInThePast: true }, 'the .sig is older than');
+  refused({ arrivedSigned: true }, 'arrived with a .sig');
+  refused({ pubkey: '' }, 'no updater public key in tauri.conf.json');
+  // A public key too short to hold a key id is refused, not read as a shorter id.
+  refused({ pubkey: minisign(['untrusted comment: minisign public key: X', Buffer.from('Ed0102').toString('base64')]) }, 'no updater public key in tauri.conf.json');
 });
 
 // ---- Pinned downloads --------------------------------------------------------------------------
