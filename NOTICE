@@ -305,9 +305,9 @@ cache keys moved to module scope so each radio keeps its own; `lib/ft8var/subtra
 its filter buffer on the decoding thread's stack instead of in every thread's;
 `lib/ft8var/ft8_decodevar.f90` says which decodes were not error-checked; and `ft8_decodevar.f90`,
 `sync8var.f90`, `ft8bvar.f90`, `subtractft8var.f90` and `cwfilter.f90` gain JTDX's SWL mode.
-`ft8_decodevar.f90` and `ft8bvar.f90` also bound the period's decode lists (`allmessages(200)`,
-`even`/`odd(130)`, `msgsrcvd(130)`), which upstream fills with no check against their size: a
-decode past a full list is dropped (`libtempo/jtdx_decode_cap.f90`). The same bound is kept by
+`ft8_decodevar.f90` and `ft8bvar.f90` also bound the period's decode list (`allmessages(200)`) and
+message-base lists (`even`/`odd(130)`, `msgsrcvd(130)`), which upstream fills with no check
+against their size: an entry past a full list is dropped (`libtempo/jtdx_decode_cap.f90`). The same bound is kept by
 `lib/ft8/ft8_a7.f90`'s a7 table (200 entries per sequence) and, outside this decoder, by WSJT-X's
 FT4 and FST4 decoders' `decodes(100)` (`lib/ft4_decode.f90`, `lib/fst4_decode.f90`), each edit
 marked in its file.

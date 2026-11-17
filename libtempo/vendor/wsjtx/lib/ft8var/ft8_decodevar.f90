@@ -1,7 +1,7 @@
 ! MODIFIED FOR NEXUS (KD9TAW, 2026): before each call of the decode callback, the module flag
 ! ft8var_hint%lhintdec says whether the message came from a decoder with no error check (FT8S/FT8SD
 ! or a matched filter: lft8s/lft8sd, where JTDX prints '^'), so Nexus can mark it and keep it out of
-! automatic sequencing and logging. Three assignments and a `use`; nothing else changes.
+! automatic sequencing and logging. Three assignments and a `use`.
 ! ALSO MODIFIED FOR NEXUS: JTDX's SWL mode, which WSJT-X's port left out (JTDX 2.2.159
 ! lib/ft8_decode.f90): a +/-3.5 s DT search, the low sync thresholds, subtraction on the third pass
 ! of one cycle. `lswl` is ft8var_swl's (libtempo/ft8var_swl.f90). With SWL off nothing changes.

@@ -262,9 +262,17 @@ Eight files carry a `MODIFIED FOR NEXUS` note, and a refresh must re-apply each:
   `ft8bvar.f90`, `subtractft8var.f90` and `cwfilter.f90` gain JTDX's `swl` conditions on
   `ft8var_swl%lswl` (`libtempo/ft8var_swl.f90`, which lists them). With SWL off they decode as
   upstream.
-- `ft8_decodevar.f90` and `ft8bvar.f90` stop adding to the period's decode lists
-  (`allmessages(200)`, `even`/`odd(130)`, `msgsrcvd(130)`) once they are full, where upstream
-  writes past them (`libtempo/jtdx_decode_cap.f90`). Below the bound they decode as upstream.
+- `ft8_decodevar.f90` and `ft8bvar.f90` stop adding to the period's decode list
+  (`allmessages(200)`) and message-base lists (`even`/`odd(130)`, `msgsrcvd(130)`) once they are
+  full, where upstream writes past them (`libtempo/jtdx_decode_cap.f90`). Below the bound they
+  decode as upstream.
+
+Outside this decoder, WSJT-X's Standard FT4 and FST4 decoders keep the same bound on their
+period's `decodes(100)` list, each edit marked `MODIFIED FOR NEXUS` in its file:
+- `lib/ft4_decode.f90`: a new decode with the list full ends the period, where upstream writes
+  past the array.
+- `lib/fst4_decode.f90`: a full list takes no more, like a duplicate, where upstream writes past
+  the array.
 
 Nexus drives the decoder through `libtempo/ft8var_cabi.f90`, which re-expresses WSJT-X's
 `lib/decoder.f90` dispatch; `scripts/ft8var-parity.py` holds it to `jt9 -8 -M -N 1`.
