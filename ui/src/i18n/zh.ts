@@ -10271,7 +10271,7 @@ export const ZH: PartialCatalog = {
   "keyConfirm.label": "待确认的已保存密钥",
   "keyConfirm.cloudlog": "要对 {{address}} 使用你保存的 Cloudlog 密钥吗？",
   "keyConfirm.icomLan": "要对 {{address}} 使用你为 {{radio}} 保存的密码吗？",
-  "keyConfirm.why": "恢复设置时设定了这个地址，而保存的密钥可能属于另一个地址。在你做出选择之前，不会用它发送任何内容。",
+  "keyConfirm.why": "更改或恢复设置时设定了这个地址，而保存的密钥可能属于另一个地址。在你做出选择之前，不会用它发送任何内容。",
   "keyConfirm.use": "使用",
   "keyConfirm.remove": "移除",
   "keyConfirm.notRemoved.cloudlog": "Nexus 未能移除你保存的 Cloudlog 密钥。它绝不会被发送。请再试一次「移除」。",

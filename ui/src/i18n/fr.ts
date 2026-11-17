@@ -678,7 +678,7 @@ export const FR: PartialCatalog = {
   "keyConfirm.label": "Clés enregistrées à confirmer",
   "keyConfirm.cloudlog": "Utiliser votre clé Cloudlog enregistrée avec {{address}} ?",
   "keyConfirm.icomLan": "Utiliser votre mot de passe enregistré pour {{radio}} avec {{address}} ?",
-  "keyConfirm.why": "Une restauration des paramètres a défini cette adresse, et la clé enregistrée peut être celle d’une autre. Rien n’est envoyé avec elle tant que vous n’avez pas choisi.",
+  "keyConfirm.why": "Une modification ou une restauration des paramètres a défini cette adresse, et la clé enregistrée peut être celle d’une autre. Rien n’est envoyé avec elle tant que vous n’avez pas choisi.",
   "keyConfirm.use": "Utiliser",
   "keyConfirm.remove": "Supprimer",
   "keyConfirm.notRemoved.cloudlog": "Nexus n’a pas pu supprimer votre clé Cloudlog enregistrée. Elle n’est jamais envoyée. Réessayez « Supprimer ».",

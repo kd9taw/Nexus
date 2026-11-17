@@ -8386,7 +8386,7 @@ export const IT: PartialCatalog = {
   "keyConfirm.label": "Chiavi salvate da confermare",
   "keyConfirm.cloudlog": "Usare la tua chiave Cloudlog salvata con {{address}}?",
   "keyConfirm.icomLan": "Usare la password salvata per {{radio}} con {{address}}?",
-  "keyConfirm.why": "Un ripristino delle impostazioni ha impostato questo indirizzo, e la chiave salvata potrebbe essere per un altro. Non viene inviato nulla con essa finché non scegli.",
+  "keyConfirm.why": "Una modifica o un ripristino delle impostazioni ha impostato questo indirizzo, e la chiave salvata potrebbe essere per un altro. Non viene inviato nulla con essa finché non scegli.",
   "keyConfirm.use": "Usa",
   "keyConfirm.remove": "Rimuovi",
   "keyConfirm.notRemoved.cloudlog": "Nexus non è riuscito a rimuovere la tua chiave Cloudlog salvata. Non viene mai inviata. Riprova Rimuovi.",

@@ -778,7 +778,7 @@ export const EN = {
   "keyConfirm.label": "Saved keys to confirm",
   "keyConfirm.cloudlog": "Use your saved Cloudlog key with {{address}}?",
   "keyConfirm.icomLan": "Use your saved password for {{radio}} with {{address}}?",
-  "keyConfirm.why": "A settings restore set this address, and the saved key may be for another. Nothing is sent with it until you choose.",
+  "keyConfirm.why": "A settings change or restore set this address, and the saved key may be for another. Nothing is sent with it until you choose.",
   "keyConfirm.use": "Use",
   "keyConfirm.remove": "Remove",
   "keyConfirm.notRemoved.cloudlog": "Nexus could not remove your saved Cloudlog key. It is never sent. Try Remove again.",

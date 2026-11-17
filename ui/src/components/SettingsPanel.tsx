@@ -88,6 +88,7 @@ import {
   setQrzLogbookKey,
   setQrzPassword,
   uploadBacklog,
+  AT_SHACK_ONLY,
   setRepeaterbookToken,
   setRxGain,
   setSettings,
@@ -1848,7 +1849,13 @@ export function SettingsPanel({
     void getSettings()
       .then((s) => {
         if (!live) return
-        const keys = { clublogApiKey: s.clublogApiKey, secretsSavedAtStation: s.secretsSavedAtStation }
+        // ...and, while watched, the addresses those keys go to are the station's: the read names
+        // them, and the form shows each read-only.
+        const keys = {
+          clublogApiKey: s.clublogApiKey,
+          secretsSavedAtStation: s.secretsSavedAtStation,
+          stationOnlySettings: s.stationOnlySettings,
+        }
         setForm((prev) => (prev ? { ...prev, ...keys } : prev))
         if (savedRef.current) savedRef.current = { ...savedRef.current, ...keys }
       })
@@ -3814,8 +3821,8 @@ export function SettingsPanel({
       owed = await uploadBacklog(service)
     } catch (err) {
       // Refused through a stream: the save stops here. It would go out after this await, when the
-      // stream's press is over and nothing is left to refuse it by.
-      if (err === t('remote.lan.atShackOnly')) throw err
+      // stream's press is over and nothing is left to refuse it by. Matched by its code.
+      if ((err as { code?: unknown } | null)?.code === AT_SHACK_ONLY) throw err
       return undefined
     }
     if (owed == null) return undefined

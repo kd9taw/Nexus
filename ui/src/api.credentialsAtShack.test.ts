@@ -63,7 +63,7 @@ const CREDENTIALS: [string, () => Promise<unknown>][] = [
 describe('credentials are saved and forgotten at the station only', () => {
   it.each(CREDENTIALS)('%s through a stream is refused and never sent', async (_cmd, call) => {
     stream.on = true
-    await expect(call()).rejects.toBe(t('remote.lan.atShackOnly'))
+    await expect(call()).rejects.toMatchObject({ code: 'atShackOnly', message: t('remote.lan.atShackOnly') })
     expect(sent).toEqual([])
   })
 
@@ -128,4 +128,34 @@ describe('every credential command the class table keeps at the shack is refused
       expect(api.refusedThroughStream(cmd)).toBe(true)
     },
   )
+})
+
+describe('the station refuses credentials while a stream watches its screen', () => {
+  it("its refusal reaches the caller as the same typed refusal, in the same words", async () => {
+    ;(window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+      invoke: async () => {
+        throw 'nexusClient:atShackOnly'
+      },
+    }
+    await expect(api.answerSavedKey(null, true, 'https://log.example.invalid')).rejects.toMatchObject({
+      code: api.AT_SHACK_ONLY,
+      message: t('remote.lan.atShackOnly'),
+    })
+  })
+})
+
+describe('the saved-key notice tells Settings when a key is forgotten', () => {
+  it('Use or Remove fires the credentials-changed event, as a clear does', async () => {
+    let told = 0
+    const tell = () => { told += 1 }
+    window.addEventListener(api.CREDENTIALS_CHANGED, tell)
+    try {
+      await api.answerSavedKey(1, false, '192.0.2.7')
+      expect(told).toBe(1)
+      await api.keysToConfirm()
+      expect(told, 'CONTROL: a read changes nothing').toBe(1)
+    } finally {
+      window.removeEventListener(api.CREDENTIALS_CHANGED, tell)
+    }
+  })
 })

@@ -663,7 +663,7 @@ export const DE: PartialCatalog = {
   "keyConfirm.label": "Gespeicherte Schlüssel bestätigen",
   "keyConfirm.cloudlog": "Ihren gespeicherten Cloudlog-Schlüssel mit {{address}} verwenden?",
   "keyConfirm.icomLan": "Ihr gespeichertes Passwort für {{radio}} mit {{address}} verwenden?",
-  "keyConfirm.why": "Eine Wiederherstellung der Einstellungen hat diese Adresse gesetzt, und der gespeicherte Schlüssel kann für eine andere sein. Bis Sie wählen, wird nichts damit gesendet.",
+  "keyConfirm.why": "Eine Änderung oder Wiederherstellung der Einstellungen hat diese Adresse gesetzt, und der gespeicherte Schlüssel kann für eine andere sein. Bis Sie wählen, wird nichts damit gesendet.",
   "keyConfirm.use": "Verwenden",
   "keyConfirm.remove": "Entfernen",
   "keyConfirm.notRemoved.cloudlog": "Nexus konnte Ihren gespeicherten Cloudlog-Schlüssel nicht entfernen. Er wird nie gesendet. Versuchen Sie „Entfernen“ erneut.",

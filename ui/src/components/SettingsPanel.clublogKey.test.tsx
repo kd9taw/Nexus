@@ -92,7 +92,10 @@ function station(settings: Record<string, unknown>) {
   api.get('getSettings').mockImplementation(() =>
     Promise.resolve({
       ...defaultSettings, mycall: 'KD9TAW', ...settings,
-      ...(watching.on ? { clublogApiKey: '', secretsSavedAtStation: { clublogApiKey: true, cloudlogKey: false } } : {}),
+      ...(watching.on ? {
+        clublogApiKey: '', secretsSavedAtStation: { clublogApiKey: true, cloudlogKey: false },
+        stationOnlySettings: ['cloudlogUrl', 'fdJoinAddr', 'icomLanHost', 'icomLanPort'],
+      } : {}),
     } as never),
   )
 }
@@ -240,6 +243,17 @@ describe('the ClubLog key while a stream watches the station', () => {
     expect(input.value).toBe('')
     expect(input.placeholder).toBe(reason())
     expect(document.body.innerHTML).not.toContain(KEY)
+  })
+
+  it('locks the Cloudlog address while watched, and frees it once the stream has ended', async () => {
+    await open({ clublogApiKey: KEY, cloudlogUrl: 'https://log.shack.example' }, false)
+    const url = () => document.querySelector('[data-setting="cloudlogUrl"]') as HTMLInputElement
+    expect(url().disabled, 'CONTROL: at the station, unwatched').toBe(false)
+    await tell(true)
+    await waitFor(() => expect(url().disabled).toBe(true))
+    expect(document.querySelector('[data-set-at-station="cloudlogUrl"]')).not.toBeNull()
+    await tell(false)
+    await waitFor(() => expect(url().disabled).toBe(false))
   })
 
   it('CONTROL: unwatched, the station screen reveals as before', async () => {

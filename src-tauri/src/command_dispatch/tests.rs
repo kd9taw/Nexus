@@ -1633,6 +1633,58 @@ fn a_radio_edit_from_afar_keeps_that_radios_icom_address() {
     );
 }
 
+/// ⛔ While a stream watches the station's screen, a save made there keeps where the shack sends its
+/// keys, as one from afar does, and so does one radio's edit; the addresses kept are exactly the
+/// ones the read says are set at the station. CONTROL: with no stream the save is taken.
+#[test]
+fn a_save_while_a_stream_watches_keeps_where_the_shack_sends_its_keys() {
+    let shack = shack_that_sends_keys();
+    let mut save = save_pointing_elsewhere(&shack, 1);
+    keep_the_shacks_credential_addresses_while_watched(&shack, &mut save, true);
+    assert_eq!(
+        key_destinations(&save),
+        (
+            "https://log.shack.example".to_string(),
+            "192.168.1.10:42073".to_string(),
+            "192.168.1.51".to_string(),
+            50011
+        ),
+        "while watched, where the shack sends its keys changed"
+    );
+    let asked = save_pointing_elsewhere(&shack, 1);
+    let mut kept = asked.clone();
+    keep_the_shacks_credential_addresses_while_watched(&shack, &mut kept, true);
+    let mut names = moved(&kept, &asked);
+    names.sort();
+    names.dedup();
+    let mut said: Vec<String> = CREDENTIAL_ADDRESS_SETTINGS
+        .iter()
+        .map(|n| n.to_string())
+        .collect();
+    said.sort();
+    assert_eq!(names, said, "the read names what the save keeps");
+    let mut save = save_pointing_elsewhere(&shack, 1);
+    keep_the_shacks_credential_addresses_while_watched(&shack, &mut save, false);
+    assert_eq!(
+        save.cloudlog_url, "https://collector.example",
+        "CONTROL: no stream"
+    );
+
+    let mut patch: tempo_app::settings::RadioProfilePatch =
+        serde_json::from_value(serde_json::to_value(&shack.radios[1]).unwrap()).unwrap();
+    patch.icom_lan_host = "203.0.113.7".into();
+    patch.icom_lan_port = 50099;
+    let asked = patch.clone();
+    keep_the_shacks_radio_icom_address_while_watched(&shack, 1, &mut patch, true);
+    assert_eq!(
+        (patch.icom_lan_host.as_str(), patch.icom_lan_port),
+        ("192.168.1.51", 50011)
+    );
+    let mut patch = asked;
+    keep_the_shacks_radio_icom_address_while_watched(&shack, 1, &mut patch, false);
+    assert_eq!(patch.icom_lan_host, "203.0.113.7", "CONTROL: no stream");
+}
+
 /// ⛔ The licence class, which decides where the station may transmit, is set at the shack only:
 /// its own command is refused from afar, as a save from afar keeps it.
 #[test]

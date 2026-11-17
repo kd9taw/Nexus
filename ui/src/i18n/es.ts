@@ -678,7 +678,7 @@ export const ES: PartialCatalog = {
   "keyConfirm.label": "Claves guardadas por confirmar",
   "keyConfirm.cloudlog": "¿Usar tu clave de Cloudlog guardada con {{address}}?",
   "keyConfirm.icomLan": "¿Usar tu contraseña guardada de {{radio}} con {{address}}?",
-  "keyConfirm.why": "Una restauración de la configuración puso esta dirección, y la clave guardada puede ser de otra. No se envía nada con ella hasta que elijas.",
+  "keyConfirm.why": "Un cambio o una restauración de la configuración puso esta dirección, y la clave guardada puede ser de otra. No se envía nada con ella hasta que elijas.",
   "keyConfirm.use": "Usar",
   "keyConfirm.remove": "Quitar",
   "keyConfirm.notRemoved.cloudlog": "Nexus no pudo quitar tu clave de Cloudlog guardada. Nunca se envía. Vuelve a probar «Quitar».",

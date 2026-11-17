@@ -175,9 +175,22 @@ export const CREDENTIALS_CHANGED = 'nexus-credentials-changed'
 
 /** Commands that add or remove a stored secret. Matched by SHAPE, so a new connector's
  *  `set_x_password` / `clear_x` is covered the day it is added and not the day someone
- *  remembers to extend a list. */
+ *  remembers to extend a list; and the saved-key notice's answer, whose Remove forgets one. */
 function mutatesCredentials(cmd: string): boolean {
   return /^set_[a-z0-9_]+_(password|key|token|code)$/.test(cmd) || /^clear_[a-z0-9_]+$/.test(cmd)
+    || cmd === 'answer_saved_key'
+}
+
+/** The code of a credential command refused because it came through a stream, or because a stream
+ *  watches the station's screen (the station's own refusal, `nexusClient:atShackOnly`). */
+export const AT_SHACK_ONLY = 'atShackOnly'
+
+/** That refusal, said in the operator's language and matched by its `code`, never by its words. */
+export class AtShackOnly extends Error {
+  readonly code = AT_SHACK_ONLY
+  constructor() {
+    super(t('remote.lan.atShackOnly'))
+  }
 }
 
 /** The credential commands whose name has no connector's shape: Use or Remove on a saved key that
@@ -220,6 +233,7 @@ async function httpInvoke<T>(base: string, cmd: string, args?: Record<string, un
  *  it came. */
 function worded(error: unknown): never {
   const code = typeof error === 'string' ? /^nexusClient:([A-Za-z]+)$/.exec(error)?.[1] : undefined
+  if (code === AT_SHACK_ONLY) throw new AtShackOnly()
   throw code === undefined ? error : clientWords(code)
 }
 
@@ -228,7 +242,7 @@ function worded(error: unknown): never {
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   // Only at the station itself: a credential saved or forgotten through a stream is refused, in
   // words its caller shows. Read before anything awaits, while the stream's dispatch is running.
-  if (refusedThroughStream(cmd) && isStreamInput()) throw t('remote.lan.atShackOnly')
+  if (refusedThroughStream(cmd) && isStreamInput()) throw new AtShackOnly()
   const tv = typeof window !== 'undefined' ? window.__NEXUS_TV_RPC__ : undefined
   const out = isTauri() ? ((await bridge()(cmd, args).catch(worded)) as T)
     : tv ? await httpInvoke<T>(tv, cmd, args)
@@ -6193,7 +6207,7 @@ export async function clientStatus(): Promise<ClientStatus | null> {
 }
 
 /** One saved key the station holds back until the operator confirms it for the address it would
- *  go to (a settings restore set that address where the station had none): Cloudlog's
+ *  go to (a settings change or restore set that address): Cloudlog's
  *  (`radioId` null) or a radio's Icom network password. Never the key, nor anything about it. */
 export interface KeyToConfirm {
   radioId: number | null

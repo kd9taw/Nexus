@@ -668,7 +668,7 @@ export const JA: PartialCatalog = {
   "keyConfirm.label": "確認が必要な保存済みキー",
   "keyConfirm.cloudlog": "保存済みの Cloudlog キーを {{address}} で使いますか？",
   "keyConfirm.icomLan": "{{radio}} の保存済みパスワードを {{address}} で使いますか？",
-  "keyConfirm.why": "設定の復元でこのアドレスが設定されましたが、保存済みのキーは別のアドレス用かもしれません。選ぶまで、このキーでは何も送信しません。",
+  "keyConfirm.why": "設定の変更または復元でこのアドレスが設定されましたが、保存済みのキーは別のアドレス用かもしれません。選ぶまで、このキーでは何も送信しません。",
   "keyConfirm.use": "使う",
   "keyConfirm.remove": "削除",
   "keyConfirm.notRemoved.cloudlog": "保存済みの Cloudlog キーを削除できませんでした。このキーが送信されることはありません。もう一度「削除」を押してください。",

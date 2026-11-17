@@ -152,6 +152,9 @@ mod solar_regions;
 /// two files, and when they drifted every gallery preview silently went blank.
 #[cfg(test)]
 mod sstv_scope_test;
+/// ⛔ While a stream watches the station's screen, every credential command is refused, from any
+/// window: the one choke point is the app's handler (`app_commands`).
+mod stream_credentials;
 /// The optional street map's packs: sizing, download, removal, and the byte reads its renderer
 /// makes. Thin glue over `crates/street-map`.
 mod street_map;
@@ -18548,8 +18551,11 @@ fn settings_read(
     SettingsRead {
         settings: s,
         saved_at_the_station,
-        // From afar, which settings the save keeps as the shack has them, so the form says so.
-        set_at_the_station: command_dispatch::station_only_settings(afar, shack),
+        // From afar, which settings the save keeps as the shack has them, so the form says so; and
+        // while a stream watches the station's own screen, the addresses its stored keys go to
+        // (`command_dispatch::keep_the_shacks_credential_addresses_while_watched`).
+        set_at_the_station: command_dispatch::station_only_settings(afar, shack)
+            .or_else(|| watched.then(|| command_dispatch::CREDENTIAL_ADDRESS_SETTINGS.to_vec())),
     }
 }
 
@@ -18639,11 +18645,16 @@ fn factory_settings() -> Settings {
 /// the station transmit by itself, those that guard a transmission and the program it runs to sign
 /// a LoTW upload (`command_dispatch::keep_the_shacks_transmit_settings`), the addresses the shack
 /// sends a stored key or password to (`command_dispatch::keep_the_shacks_credential_addresses`), and
-/// the stored keys themselves (`command_dispatch::keep_the_shacks_secret_settings`).
+/// the stored keys themselves (`command_dispatch::keep_the_shacks_secret_settings`). `watched`:
+/// while a stream watches the station's screen, the save keeps where the shack sends its stored keys
+/// as one from afar does
+/// (`command_dispatch::keep_the_shacks_credential_addresses_while_watched`). A save that points a
+/// saved key at a new address holds it for the operator ([`hold_keys_whose_address_moved`]).
 #[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 fn set_settings(
     state: State<'_, SharedEngine>,
+    watched: State<'_, remote_service::stream::Watched>,
     spots: State<'_, SharedSpots>,
     live_paths: State<'_, SharedLivePaths>,
     region_paths: State<'_, SharedRegionPaths>,
@@ -18655,13 +18666,18 @@ fn set_settings(
     // From a computer driving the station, the shack's own transmit settings and guards stay, and
     // so do the program the shack runs to sign a LoTW upload, where the shack sends its stored keys
     // and passwords, and the stored keys themselves.
-    command_dispatch::keep_the_shacks_settings(
-        engine_lock(&state).settings(),
+    let shack = engine_lock(&state).settings().clone();
+    command_dispatch::keep_the_shacks_settings(&shack, &mut settings, afar.as_ref());
+    // ⛔ While a stream watches the station's screen, nothing on this call says who pressed Save, so
+    // where the shack sends its stored keys stays as it is, as from afar.
+    command_dispatch::keep_the_shacks_credential_addresses_while_watched(
+        &shack,
         &mut settings,
-        afar.as_ref(),
+        watched.live(),
     );
+    let engine = state.inner().clone();
     // A form save: the ENGINE's roster wins, so a stale panel cannot revert a rig just added.
-    apply_and_persist(
+    let snap = apply_and_persist(
         state,
         spots,
         live_paths,
@@ -18670,7 +18686,9 @@ fn set_settings(
         cache,
         settings,
         false,
-    )
+    )?;
+    let_go_of_waits_with_no_key(&engine, &shack, change_keychain);
+    Ok(snap)
 }
 
 /// The body of a settings save, with ONE thing parameterised: who owns the roster.
@@ -18870,6 +18888,8 @@ fn save_and_publish(
                 eng.apply_restored_settings(settings);
             } else {
                 eng.apply_settings(settings);
+                // ⛔ In the same hold as the move: a saved key never goes to the new address first.
+                hold_keys_whose_address_moved(eng, &before);
             }
             note_tx_cards(eng, &before);
             // The claim follows the radio's port: a save that moved it lets go of the old port and
@@ -23710,6 +23730,289 @@ fn icom_password_dropped(name: &str) -> String {
     )
 }
 
+/// The saved keys a live save or radio edit (`before` to `after`) points at an address it was not
+/// typed for: Cloudlog's when its URL is set and is another than before ([`service_address`]), and
+/// each radio's Icom network password when its host is set and its host (any case) or port is
+/// another than before, or the radio is new. A restore has its own rules ([`address_moved`]).
+fn keys_whose_address_moved(
+    before: &Settings,
+    after: &Settings,
+) -> tempo_app::settings::KeysToConfirm {
+    let cloudlog = !after.cloudlog_url.trim().is_empty()
+        && service_address(&after.cloudlog_url) != service_address(&before.cloudlog_url);
+    let icom_lan = after
+        .radios
+        .iter()
+        .filter(|r| {
+            let host = r.icom_lan_host.trim();
+            !host.is_empty()
+                && before.radios.iter().find(|p| p.id == r.id).is_none_or(|p| {
+                    !p.icom_lan_host.trim().eq_ignore_ascii_case(host)
+                        || p.icom_lan_port != r.icom_lan_port
+                })
+        })
+        .map(|r| r.id)
+        .collect();
+    tempo_app::settings::KeysToConfirm {
+        cloudlog,
+        icom_lan,
+        ..Default::default()
+    }
+}
+
+/// ⛔ A live save or radio edit that points a saved key at a new address
+/// ([`keys_whose_address_moved`]) holds that key for the operator, as a restore does
+/// ([`tempo_app::settings::Settings::keys_to_confirm`]): nothing is sent with it until they choose
+/// Use at the shack, or type it again. Called with the engine lock held from the move on, so no
+/// upload or sign-in reads the key for the new address first. Whether a key is saved at all needs
+/// the keychain, which is never read under that lock: [`let_go_of_waits_with_no_key`] lets go of
+/// a wait for a key that is not there, once the lock is released.
+fn hold_keys_whose_address_moved(eng: &mut Engine, before: &Settings) {
+    let moved = keys_whose_address_moved(before, eng.settings());
+    if moved.is_empty() {
+        return;
+    }
+    let mut keys = eng.keys_to_confirm().clone();
+    keys.cloudlog |= moved.cloudlog;
+    for id in moved.icom_lan {
+        if !keys.icom_lan_waits(id) {
+            keys.icom_lan.push(id);
+        }
+    }
+    eng.set_keys_to_confirm(keys);
+}
+
+/// After a live save or radio edit from `before`: each key whose address it moved
+/// ([`keys_whose_address_moved`]) and that `keychain` says is not saved waits no more, so a first
+/// address typed in, with no key yet, asks nothing. A Cloudlog key still waiting to move to the
+/// keychain is saved, and so is a key the keychain cannot answer for (fail closed); a key that
+/// waits because removing it failed waits on.
+fn let_go_of_waits_with_no_key(
+    engine: &SharedEngine,
+    before: &Settings,
+    mut keychain: impl FnMut(KeychainChange) -> Result<bool, String>,
+) {
+    let (moved, pending) = {
+        let eng = engine_lock(engine);
+        (
+            keys_whose_address_moved(before, eng.settings()),
+            !eng.settings().cloudlog_key.trim().is_empty(),
+        )
+    };
+    if moved.is_empty() {
+        return;
+    }
+    let mut none_saved =
+        |account: &str| matches!(keychain(KeychainChange::Holds(account)), Ok(false));
+    let cloudlog_free = moved.cloudlog && !pending && none_saved(CLOUDLOG_KEYCHAIN_USER);
+    let radios_free: Vec<u32> = moved
+        .icom_lan
+        .into_iter()
+        .filter(|&id| none_saved(&icom_lan_account(id)))
+        .collect();
+    if !cloudlog_free && radios_free.is_empty() {
+        return;
+    }
+    let mut eng = engine_lock(engine);
+    let held = eng.keys_to_confirm().clone();
+    let mut keys = held.clone();
+    if cloudlog_free && !held.not_removed(None) {
+        keys.cloudlog = false;
+    }
+    keys.icom_lan
+        .retain(|&id| !radios_free.contains(&id) || held.not_removed(Some(id)));
+    if keys != held {
+        eng.set_keys_to_confirm(keys);
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: failed to persist settings: {e}")
+        });
+    }
+}
+
+#[cfg(test)]
+mod live_key_hold_tests {
+    //! A live save or radio edit that points a saved key at a new address holds it for the
+    //! operator, and a stream cannot point one anywhere at all.
+    use super::*;
+
+    const SHACK_LOG: &str = "https://log.shack.example";
+    const ELSEWHERE: &str = "https://collector.example";
+
+    /// A station with a Cloudlog address and one Icom network radio at a known address.
+    fn station() -> SharedEngine {
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W1AW", "FN31", 0),
+        ));
+        {
+            let mut e = engine_lock(&engine);
+            let mut s = e.settings().clone();
+            s.cloudlog_url = SHACK_LOG.into();
+            s.ensure_radio_profiles();
+            s.radios[0].icom_lan_host = "192.168.1.50".into();
+            s.sync_flat_from_active();
+            e.apply_restored_settings(s);
+        }
+        engine
+    }
+
+    fn keys(engine: &SharedEngine) -> tempo_app::settings::KeysToConfirm {
+        engine_lock(engine).keys_to_confirm().clone()
+    }
+
+    /// The live radio's edit, as the per-radio page sends it, with its Icom host set to `host`.
+    fn radio_patch(engine: &SharedEngine, host: &str) -> tempo_app::settings::RadioProfilePatch {
+        let radio = engine_lock(engine).settings().radios[0].clone();
+        let mut patch: tempo_app::settings::RadioProfilePatch =
+            serde_json::from_value(serde_json::to_value(&radio).unwrap()).unwrap();
+        patch.icom_lan_host = host.into();
+        patch
+    }
+
+    /// ⛔ A form save that moves the Cloudlog URL holds the saved key in the same hold as the move:
+    /// no upload reads it for the new address until the operator chooses Use. CONTROL: a save that
+    /// moves no address, or only respells it, holds nothing.
+    #[test]
+    fn a_save_that_moves_the_cloudlog_address_holds_its_key() {
+        let engine = station();
+        let mut same = engine_lock(&engine).settings().clone();
+        same.cloudlog_url = format!("{SHACK_LOG}/");
+        save_and_publish(&engine, same, false).expect("saved");
+        assert!(keys(&engine).is_empty(), "CONTROL: the same address");
+        let mut moved = engine_lock(&engine).settings().clone();
+        moved.cloudlog_url = ELSEWHERE.into();
+        save_and_publish(&engine, moved, false).expect("saved");
+        assert!(keys(&engine).cloudlog, "the key waits for the operator");
+        assert_eq!(
+            cloudlog_key_to_send(&engine, || panic!("the key is never read while it waits")),
+            Err(CLOUDLOG_KEY_WAITS.to_string())
+        );
+        assert_eq!(
+            engine_lock(&engine).settings().cloudlog_url,
+            ELSEWHERE,
+            "the save landed"
+        );
+    }
+
+    /// ⛔ A radio edit that moves its Icom network address holds the radio's password: it does not
+    /// sign in there until the operator chooses Use. CONTROL: an edit that keeps the address.
+    #[test]
+    fn a_radio_edit_that_moves_the_icom_address_holds_its_password() {
+        let engine = station();
+        let id = engine_lock(&engine).settings().radios[0].id;
+        update_radio_profile_in(
+            &engine,
+            id,
+            radio_patch(&engine, "192.168.1.50"),
+            None,
+            false,
+        )
+        .expect("edited");
+        assert!(keys(&engine).is_empty(), "CONTROL: the same address");
+        update_radio_profile_in(
+            &engine,
+            id,
+            radio_patch(&engine, "203.0.113.7"),
+            None,
+            false,
+        )
+        .expect("edited");
+        assert!(keys(&engine).icom_lan_waits(id), "the password waits");
+        struct NoVault;
+        impl IcomLanVault for NoVault {
+            fn get(&self, _: u32) -> Result<Option<String>, String> {
+                panic!("the password is never read while it waits")
+            }
+            fn set(&self, _: u32, _: &str) -> Result<(), String> {
+                unreachable!()
+            }
+            fn clear(&self, _: u32) -> Result<(), String> {
+                unreachable!()
+            }
+        }
+        assert_eq!(
+            icom_lan_password_for_login(&engine, &NoVault, id),
+            Err(ICOM_PASSWORD_WAITS.to_string())
+        );
+    }
+
+    /// ⛔ While a stream watches the station's screen, a radio edit made there keeps the Icom
+    /// address its password goes to, and so holds nothing. CONTROL: with no stream it is taken.
+    #[test]
+    fn a_radio_edit_while_watched_keeps_the_icom_address() {
+        let engine = station();
+        let id = engine_lock(&engine).settings().radios[0].id;
+        update_radio_profile_in(&engine, id, radio_patch(&engine, "203.0.113.7"), None, true)
+            .expect("edited");
+        assert_eq!(
+            engine_lock(&engine).settings().radios[0].icom_lan_host,
+            "192.168.1.50"
+        );
+        assert!(keys(&engine).is_empty());
+        update_radio_profile_in(
+            &engine,
+            id,
+            radio_patch(&engine, "203.0.113.7"),
+            None,
+            false,
+        )
+        .expect("edited");
+        assert_eq!(
+            engine_lock(&engine).settings().radios[0].icom_lan_host,
+            "203.0.113.7",
+            "CONTROL: no stream"
+        );
+    }
+
+    /// A wait for a key the keychain does not hold is let go at once, so a first address typed in
+    /// asks nothing; one the keychain holds, or cannot answer for, waits on.
+    #[test]
+    fn a_wait_for_no_saved_key_is_let_go() {
+        for (answer, waits) in [
+            (Ok(false), false),
+            (Ok(true), true),
+            (Err("locked".to_string()), true),
+        ] {
+            let engine = station();
+            let before = engine_lock(&engine).settings().clone();
+            let mut moved = before.clone();
+            moved.cloudlog_url = ELSEWHERE.into();
+            save_and_publish(&engine, moved, false).expect("saved");
+            let answer = answer.clone();
+            let_go_of_waits_with_no_key(&engine, &before, |change| match change {
+                KeychainChange::Holds(account) => {
+                    assert_eq!(account, CLOUDLOG_KEYCHAIN_USER);
+                    answer.clone()
+                }
+                _ => panic!("only asked whether a key is saved"),
+            });
+            assert_eq!(
+                keys(&engine).cloudlog,
+                waits,
+                "keychain answered {answer:?}"
+            );
+        }
+    }
+
+    /// The set_settings command keeps the key addresses while watched, after every keep from
+    /// afar, and lets go of a wait for no key once its save is through.
+    #[test]
+    fn set_settings_keeps_the_key_addresses_while_watched() {
+        let src = include_str!("lib.rs");
+        let body = &src[src.find("\nfn set_settings(").expect("set_settings") + 1..];
+        let body = &body[..body.find("\n}\n").expect("its end")];
+        let at = |needle: &str| {
+            body.find(needle)
+                .unwrap_or_else(|| panic!("set_settings has {needle}"))
+        };
+        assert!(
+            at("keep_the_shacks_settings(")
+                < at("keep_the_shacks_credential_addresses_while_watched(")
+        );
+        assert!(at("watched.live()") < at("apply_and_persist("));
+        assert!(at("apply_and_persist(") < at("let_go_of_waits_with_no_key("));
+    }
+}
+
 /// One change a restore makes to the keychain ([`change_keychain`]).
 enum KeychainChange<'a> {
     /// Remove the entry under this account.
@@ -23758,8 +24061,8 @@ fn change_keychain(change: KeychainChange) -> Result<bool, String> {
 
 /// What the Connections log and a refused upload say while the Cloudlog key waits for the
 /// operator ([`tempo_app::settings::Settings::keys_to_confirm`]).
-const CLOUDLOG_KEY_WAITS: &str = "Cloudlog/Wavelog uploads wait: a settings restore set this \
-     address, and the API key saved here may be for another. Choose Use or Remove in the notice \
+const CLOUDLOG_KEY_WAITS: &str = "Cloudlog/Wavelog uploads wait: a settings change or restore \
+     set this address, and the API key saved here may be for another. Choose Use or Remove in the notice \
      at the top of the window.";
 
 /// Why Use is refused for the saved password of a radio no longer on the roster.
@@ -23768,8 +24071,8 @@ const ICOM_PASSWORD_OF_NO_RADIO: &str = "That radio is no longer on the roster, 
 
 /// What an Icom network radio says when it does not sign in because its password waits for the
 /// operator ([`tempo_app::settings::Settings::keys_to_confirm`]).
-const ICOM_PASSWORD_WAITS: &str = "Not signed in: a settings restore set this radio's address, \
-     and the network password saved here may be for another. Choose Use or Remove in the notice \
+const ICOM_PASSWORD_WAITS: &str = "Not signed in: a settings change or restore set this radio's \
+     address, and the network password saved here may be for another. Choose Use or Remove in the notice \
      at the top of the window.";
 
 /// Why a Cloudlog request was not sent when the settings it was built from changed while its key
@@ -30495,29 +30798,49 @@ struct RoutePreview {
 /// that would put a daemon on a NET rigctl radio's Network Address, in words naming the port.
 /// `afar`: from a computer driving the station, the edit keeps the radio's PTT method and port as
 /// the shack has them (`command_dispatch::keep_the_shacks_radio_ptt`), and the Icom network address
-/// its stored password goes to (`command_dispatch::keep_the_shacks_radio_icom_address`).
+/// its stored password goes to (`command_dispatch::keep_the_shacks_radio_icom_address`). `watched`:
+/// while a stream watches the station's screen, the edit keeps that address too
+/// (`command_dispatch::keep_the_shacks_radio_icom_address_while_watched`). An edit that points a
+/// saved password at a new address holds it for the operator ([`hold_keys_whose_address_moved`]).
 #[tauri::command(async)]
 fn update_radio_profile(
     state: State<'_, SharedEngine>,
+    watched: State<'_, remote_service::stream::Watched>,
     id: u32,
-    mut patch: tempo_app::settings::RadioProfilePatch,
+    patch: tempo_app::settings::RadioProfilePatch,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    command_dispatch::keep_the_shacks_radio_ptt(eng.settings(), id, &mut patch, afar.as_ref());
-    command_dispatch::keep_the_shacks_radio_icom_address(
+    let (snap, before) = update_radio_profile_in(&state, id, patch, afar.as_ref(), watched.live())?;
+    let_go_of_waits_with_no_key(&state, &before, change_keychain);
+    Ok(snap)
+}
+
+/// [`update_radio_profile`] with the engine lock held: the snapshot, and the settings before it.
+fn update_radio_profile_in(
+    state: &SharedEngine,
+    id: u32,
+    mut patch: tempo_app::settings::RadioProfilePatch,
+    afar: Option<&command_dispatch::Afar>,
+    watched: bool,
+) -> Result<(AppSnapshot, Settings), String> {
+    let mut eng = engine_lock(state);
+    command_dispatch::keep_the_shacks_radio_ptt(eng.settings(), id, &mut patch, afar);
+    command_dispatch::keep_the_shacks_radio_icom_address(eng.settings(), id, &mut patch, afar);
+    command_dispatch::keep_the_shacks_radio_icom_address_while_watched(
         eng.settings(),
         id,
         &mut patch,
-        afar.as_ref(),
+        watched,
     );
     let before = eng.settings().clone();
     eng.update_radio_profile(id, patch)?;
+    // ⛔ In the same hold as the move: a saved password never goes to the new address first.
+    hold_keys_whose_address_moved(&mut eng, &before);
     note_tx_cards(&mut eng, &before);
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: update_radio_profile save failed: {e}")
     });
-    Ok(eng.snapshot())
+    Ok((eng.snapshot(), before))
 }
 
 /// Record the sound card of each TX audio device a save just chose (`Settings::tx_card_models`),
@@ -30548,7 +30871,7 @@ mod tx_card_record_tests {
         for (sig, apply) in [
             ("fn save_and_publish(", "eng.apply_settings(settings);"),
             (
-                "fn update_radio_profile(",
+                "fn update_radio_profile_in(",
                 "eng.update_radio_profile(id, patch)?;",
             ),
         ] {
@@ -54639,7 +54962,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
     // A test build's road switch brings its one command; a shipped build has none of it.
     #[cfg(feature = "bench-road-switch")]
     let commands = bench_road_switch::with_its_command(commands);
-    commands
+    // ⛔ Around the whole list: while a stream watches, no credential command runs.
+    stream_credentials::guarded(commands)
 }
 
 /// The context the app is built in: its configuration and its frontend, embedded once for the
@@ -75542,9 +75866,11 @@ mod secrets_toward_remote_tests {
             true,
             "the screen is not told the station has its key saved: {text}"
         );
-        assert!(
-            during.get(command_dispatch::SET_AT_THE_STATION).is_none(),
-            "at the shack nothing is set at the station: {text}"
+        // ...and the form is told the addresses those keys go to are the station's meanwhile.
+        assert_eq!(
+            during[command_dispatch::SET_AT_THE_STATION],
+            serde_json::json!(command_dispatch::CREDENTIAL_ADDRESS_SETTINGS),
+            "while watched, the key addresses are set at the station: {text}"
         );
         drop(stream);
         let after = read();
@@ -75553,6 +75879,10 @@ mod secrets_toward_remote_tests {
             "CONTROL: stream gone"
         );
         assert!(after.get(command_dispatch::SAVED_AT_THE_STATION).is_none());
+        assert!(
+            after.get(command_dispatch::SET_AT_THE_STATION).is_none(),
+            "CONTROL: stream gone, nothing is set at the station"
+        );
     }
 
     /// ⛔ A settings read from afar carries no stored key, says by value which the station has

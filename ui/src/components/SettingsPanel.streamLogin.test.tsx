@@ -142,6 +142,23 @@ describe('a login whose save asks a question first is saved at the station only'
     expect(sent).not.toContain('upload_backlog')
   })
 
+  // While a stream watches, the station itself refuses the question, whoever pressed Save; the
+  // refusal is known by its code, and stops the save as the page's own does.
+  it.each(LOGINS)('%s is never sent when the station refuses the question', async (cmd, placeholder) => {
+    ;(window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+      invoke: async (c: string) => {
+        sent.push(c)
+        if (c === 'upload_backlog') throw 'nexusClient:atShackOnly'
+        return null
+      },
+    }
+    renderPanel()
+    await save(placeholder, false)
+    await waitFor(() => expect(sent).toContain('upload_backlog'))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(sent).not.toContain(cmd)
+  })
+
   it.each(LOGINS)('%s at the station is sent', async (cmd, placeholder) => {
     renderPanel()
     await save(placeholder, false)

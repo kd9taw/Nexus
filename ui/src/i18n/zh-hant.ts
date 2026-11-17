@@ -10273,7 +10273,7 @@ export const ZH_HANT: PartialCatalog = {
   "keyConfirm.label": "待確認的已儲存金鑰",
   "keyConfirm.cloudlog": "要對 {{address}} 使用你儲存的 Cloudlog 金鑰嗎？",
   "keyConfirm.icomLan": "要對 {{address}} 使用你為 {{radio}} 儲存的密碼嗎？",
-  "keyConfirm.why": "恢復設定時設定了這個地址，而儲存的金鑰可能屬於另一個地址。在你做出選擇之前，不會用它傳送任何內容。",
+  "keyConfirm.why": "變更或恢復設定時設定了這個地址，而儲存的金鑰可能屬於另一個地址。在你做出選擇之前，不會用它傳送任何內容。",
   "keyConfirm.use": "使用",
   "keyConfirm.remove": "移除",
   "keyConfirm.notRemoved.cloudlog": "Nexus 未能移除你儲存的 Cloudlog 金鑰。它絕不會被發送。請再試一次「移除」。",
