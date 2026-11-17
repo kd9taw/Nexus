@@ -193,7 +193,7 @@ pub(super) fn loop_applies_sat_split(e: &mut Engine, cat: SatCatBackend) -> Opti
 /// An IC-9700 pass, General, whose uplink rides the Sub and whose mode the operator then took
 /// back mid-pass: the one state in which Nexus commands the uplink no word, in `section` with the
 /// given CW keyer and RTTY backend.
-fn released_on_the_sub(
+pub(super) fn released_on_the_sub(
     section: &str,
     keyer: CwKeyerBackend,
     rtty: &str,

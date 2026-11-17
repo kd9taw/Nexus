@@ -447,8 +447,22 @@ impl Engine {
     /// [`Self::tx_source_verdict`] for a data over keyed as `frame` ([`Engine::tx_allowed_for`]):
     /// a JS8 heartbeat on its own spot.
     pub(crate) fn tx_source_verdict_for(&self, frame: DataFrame) -> TxSourceVerdict {
-        let class = self.settings.license_class;
         let judged = self.tx_allowed_as_for(self.settings.operating_mode, frame);
+        self.source_verdict(frame, judged)
+    }
+
+    /// [`Self::tx_source_verdict_for`] with the connection refusal masked out: the LICENCE's
+    /// verdict alone, every other term the same ([`Engine::licence_allows_as_for`]). What a
+    /// proposed split is judged by ([`Engine::split_tx_allowed`]).
+    pub(crate) fn licence_verdict_for(&self, frame: DataFrame) -> TxSourceVerdict {
+        let judged = self.licence_allows_as_for(self.settings.operating_mode, frame);
+        self.source_verdict(frame, judged)
+    }
+
+    /// The verdict on the TX source, given `judged`, the gate's answer for the frequencies the
+    /// next over is emitted on: Main's as it is, the Sub's with the side-unknown rule added.
+    fn source_verdict(&self, frame: DataFrame, judged: bool) -> TxSourceVerdict {
+        let class = self.settings.license_class;
         let Some(up) = self.sub_uplink() else {
             return TxSourceVerdict {
                 source: ReceiverId::Main,

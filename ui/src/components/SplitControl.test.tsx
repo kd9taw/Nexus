@@ -69,6 +69,33 @@ describe('the split control', () => {
     expect(tx).toBeGreaterThan(14.025) // the General CW floor he was locked out by
   })
 
+  /// The backend refuses a press that would leave the licence, with the reason: the operator
+  /// is told that reason, and the readout stays on the offset the radio really has.
+  it('shows a licence refusal as it is and keeps the real offset', async () => {
+    const onError = vi.fn()
+    const refusal = 'Split not set: that transmit frequency is outside your license privileges.'
+    setSplit.mockRejectedValueOnce(refusal)
+    render(<SplitControl snap={snapWith(14.02)} onError={onError} />)
+    fireEvent.click(screen.getByRole('button', { name: '+' }))
+    await waitFor(() => expect(onError).toHaveBeenCalledWith(refusal))
+    await waitFor(() => expect(screen.getByText('+5')).toBeTruthy())
+  })
+
+  /// Two quick presses, the first accepted (the radio moves to +6) and the second refused: the
+  /// readout lands on +6, the radio's offset, not on the +5 the refused press was made from.
+  it('a refusal after an accepted press shows the accepted offset', async () => {
+    const onError = vi.fn()
+    let reject: (e: unknown) => void = () => {}
+    setSplit.mockImplementationOnce(() => new Promise((_, r) => { reject = r }))
+    const { rerender } = render(<SplitControl snap={snapWith(14.02)} onError={onError} />)
+    fireEvent.click(screen.getByRole('button', { name: '+' }))
+    // The first press's answer arrives: the radio is at +6.
+    rerender(<SplitControl snap={snapWith(14.021)} onError={onError} />)
+    reject('Split not set: that transmit frequency is outside your license privileges.')
+    await waitFor(() => expect(onError).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getByText('+6')).toBeTruthy())
+  })
+
   it('reports a failure instead of looking like a dead button', async () => {
     const onError = vi.fn()
     setSplit.mockRejectedValueOnce(new Error('rig refused'))

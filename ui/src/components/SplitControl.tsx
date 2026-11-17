@@ -61,6 +61,9 @@ export function SplitControl({ snap, onSnap, onError, unavailable }: Props) {
   const [splitOffsetKhz, setSplitOffsetKhz] = useState(5)
   const splitTxMhz = snap.radio.splitTxMhz ?? null
   const splitOn = splitTxMhz != null
+  // What a refusal resets the readout from: the radio as last rendered.
+  const latestRadio = useRef(snap.radio)
+  latestRadio.current = snap.radio
 
   // When split turns on externally — a pile-up spot programming "UP 5" — adopt the rig's real
   // offset so the readout and the next bump start from the truth, not a stale default.
@@ -72,10 +75,21 @@ export function SplitControl({ snap, onSnap, onError, unavailable }: Props) {
     wasSplitOn.current = splitOn
   }, [splitOn, splitTxMhz, snap.radio.dialMhz])
 
+  // A press the licence refuses (outside the operator's privileges, past a band edge) is refused
+  // by the backend with its reason, which is shown as it is; and the readout goes back to the
+  // offset the radio really has, so it never shows a split that was not set.
   const applySplitTx = (offsetKhz: number) =>
     setSplit(snap.radio.dialMhz + offsetKhz / 1000)
       .then((s) => onSnap?.(s))
-      .catch(failed(t('phone.split.setFailed')))
+      .catch((e: unknown) => {
+        onError?.(typeof e === 'string' && e ? e : t('phone.split.setFailed'))
+        // The LATEST snapshot, not the one this press was made from: after an accepted press
+        // and a refused one in quick succession, the radio is on the accepted one.
+        const radio = latestRadio.current
+        if (radio.splitTxMhz != null) {
+          setSplitOffsetKhz(Math.round((radio.splitTxMhz - radio.dialMhz) * 1000))
+        }
+      })
 
   const toggleSplit = () =>
     splitOn

@@ -36,7 +36,9 @@ use tempo_core::timing::{now_unix_ms, SlotClock};
 use crate::backend::AudioBackend;
 use crate::device::CpalBackend;
 use crate::frames::RxRing;
-use crate::rig::tuning::{hamlib_mode_width, passband_for, retune_passband, same_named_band};
+use crate::rig::tuning::{
+    hamlib_mode_width, newcat_split_tx_write, passband_for, retune_passband, same_named_band,
+};
 use crate::rig::{FuncSet, PttMode, Rig, SerialLine};
 use crate::rigctld_proc::{spawn_rigctld, RigctldProc};
 
@@ -48,6 +50,16 @@ mod remote_radio;
 mod remote_selection;
 mod selection_connection;
 use monitor_claims::{RadioClaim, RadioClaims};
+
+/// Why a split TX dial was not written into a keyed radio: it is outside the licence
+/// (the radio loop's split apply).
+/// Why transmit is held after a split OFF the radio did not confirm (the radio loop's simplex
+/// apply, [`Engine::rig_split_unknown`]).
+const SPLIT_OFF_UNCONFIRMED: &str = "The radio did not confirm split OFF, so transmit is held \
+     until it does: change frequency, or turn SPLIT on and off, to send it again.";
+const SPLIT_KEYED_OUTSIDE_PRIVILEGES: &str =
+    "Split not set while transmitting: that transmit frequency is outside your license \
+     privileges.";
 
 /// The daemon serving the rigctld protocol on a radio's TCP port: Hamlib's spawned
 /// `rigctld` (classic), or Nexus's own native CI-V daemon (`icom_native_cat` — same
@@ -84,6 +96,10 @@ impl CatDaemon {
             CatDaemon::IcomLan(d) => d.is_alive(),
             CatDaemon::Tci(d) => d.is_alive(),
         }
+    }
+    /// Is this Hamlib's own rigctld, the one Nexus spawned?
+    fn is_hamlib(&self) -> bool {
+        matches!(self, CatDaemon::Spawned(_))
     }
     /// The native daemon, when that's what this is (scope drain / enable) — the one carried over
     /// the Icom network session too, so the scope, the Sub levels and the receiver naming work
@@ -12981,10 +12997,49 @@ impl RadioLoop {
                             } else {
                                 SatCatBackend::Hamlib
                             };
-                            let tx_vfo =
-                                { engine_lock(engine).sat_split_tx_vfo(tx_hz, cat_backend) };
+                            // ⛔ NEVER A SPLIT OUTSIDE THE LICENCE INTO A KEYED RADIO. Under a
+                            // held PTT (or the front panel's, or a CW message the rig is
+                            // sending) this write goes out at once, and the request it serves
+                            // voided the old acknowledgement, so the key-time gate was judging
+                            // the RX dial: an out-of-privilege `I` reached the transmitting
+                            // radio and the drop came a tick later. Judged here, at the write,
+                            // whoever asked, by the key-time gate itself
+                            // (`Engine::split_tx_allowed`), on the receiver it would ride.
+                            // Refused, nothing is sent and the split the radio has stands, in
+                            // Nexus too (`Engine::split_refused_while_keyed`). Unkeyed, the
+                            // key-time gate judges the acknowledged split before anything keys.
+                            //
+                            // ⚠️ A front-panel PTT is seen through the polled `rig_keyed`, up to
+                            // a poll interval late: a split landing inside that window is
+                            // written as unkeyed, and the key-time gate's mask on the next pass
+                            // is what then stands.
+                            let keyed = self.operator_keyed()
+                                || self.manual_ptt_applied
+                                || now < self.cw_keying_until;
+                            let tx_vfo = {
+                                let mut eng = engine_lock(engine);
+                                match eng.sat_split_tx_vfo(tx_hz, cat_backend) {
+                                    Ok(vfo) => {
+                                        let rx = if vfo == "Sub" {
+                                            tempo_app::dualrx::ReceiverId::Sub
+                                        } else {
+                                            tempo_app::dualrx::ReceiverId::Main
+                                        };
+                                        if keyed && !eng.split_tx_allowed(tx_mhz, rx) {
+                                            eng.split_refused_while_keyed(tx_mhz);
+                                            Err((SPLIT_KEYED_OUTSIDE_PRIVILEGES.to_string(), true))
+                                        } else {
+                                            Ok(vfo)
+                                        }
+                                    }
+                                    Err(reason) => Err((reason, false)),
+                                }
+                            };
                             match tx_vfo {
-                                Err(reason) => {
+                                // Refused while keyed: the engine has already put the standing
+                                // split back. Only the reason is shown.
+                                Err((reason, true)) => retune_note = Some(reason),
+                                Err((reason, false)) => {
                                     // The mapping itself is undrivable: nothing
                                     // was (or will be) sent, and the desired
                                     // state must not outlive the refusal.
@@ -13001,6 +13056,31 @@ impl RadioLoop {
                                     let set = rig
                                         .set_split(true, tx_vfo)
                                         .and_then(|()| rig.set_split_freq(tx_hz));
+                                    // On a Hamlib newcat Yaesu, VFO B written by the radio's own
+                                    // `FB` too: Hamlib 4.7.1 may take the `I` and send nothing
+                                    // ([`newcat_split_tx_write`]). Only behind Hamlib (Nexus's
+                                    // spawned rigctld, or one already running); Nexus's own
+                                    // daemons write every `I`. A miss changes nothing here: the
+                                    // `I` was acknowledged, which is all this path had before.
+                                    if set.is_ok()
+                                        && tx_vfo == "VFOB"
+                                        && rig.has_control()
+                                        && self
+                                            .rigctld_proc
+                                            .as_ref()
+                                            .is_none_or(CatDaemon::is_hamlib)
+                                    {
+                                        if let Some(raw) =
+                                            newcat_split_tx_write(self.applied.rig_model, tx_hz)
+                                        {
+                                            if !rig.send_raw_set(&raw) {
+                                                crate::civ::diag::note(
+                                                    "split: rigctld did not take the raw VFO B \
+                                                     write after the split frequency",
+                                                );
+                                            }
+                                        }
+                                    }
                                     let ok = set.is_ok();
                                     retune_note = Some(if ok {
                                         self.split_on_sub = tx_vfo == "Sub";
@@ -13119,9 +13199,13 @@ impl RadioLoop {
                             // BAND is released the same way it was engaged: the
                             // backend leaves satellite mode (firing `0F 00` at a rig
                             // in satellite mode would strand it there).
-                            let cleared = rig
-                                .set_split(false, if self.split_on_sub { "Sub" } else { "VFOA" })
-                                .is_ok();
+                            // A link that cannot control split at all (`RPRT -11`/`-4`) has no
+                            // split to leave: that is simplex, as WSJT-X takes it.
+                            let cleared = if self.split_on_sub {
+                                rig.set_split(false, "Sub").is_ok()
+                            } else {
+                                rig.set_split_where_available(false, "VFOA").is_ok()
+                            };
                             if self.split_on_sub && !cleared {
                                 // The rig would NOT leave satellite mode — it is
                                 // still in it, TX still exits the Sub band, and
@@ -13136,6 +13220,16 @@ impl RadioLoop {
                                 );
                             } else {
                                 self.split_on_sub = false;
+                            }
+                            if cleared {
+                                engine_lock(engine).rig_split_cleared();
+                            } else if !self.split_on_sub {
+                                // ⛔ A LOST OR REFUSED `S 0` IS NOT SIMPLEX. The radio may still
+                                // be split, on a TX frequency nothing now vouches for: the split
+                                // is UNKNOWN, and the gate refuses until a write settles it
+                                // (`Engine::rig_split_unknown`). The next QSY sends `S 0` again.
+                                engine_lock(engine).rig_split_unknown();
+                                retune_note = Some(SPLIT_OFF_UNCONFIRMED.to_string());
                             }
                             self.last_split_mode = None;
                         }
@@ -46353,6 +46447,367 @@ mod tests {
                 "model {model}: control — the downlink is received in FM-D: {lines:?}"
             );
         }
+    }
+
+    /// The loop ticks once per entry of `between`, which runs on the engine first, on ONE loop
+    /// state that keeps its rig between ticks: the shape a run of split +/- presses arrives in.
+    fn split_ticks(
+        engine: &Arc<Mutex<Engine>>,
+        rig: Rig,
+        between: Vec<fn(&mut Engine, &mut RadioLoop)>,
+    ) {
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let eng = Arc::clone(engine);
+        std::thread::Builder::new()
+            .name("split-ticks".into())
+            .spawn(move || {
+                let mut rig = rig;
+                let mut backend = MockBackend::new();
+                let mut state = loop_state_for(&eng);
+                let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+                let mut station = StationSinks::new();
+                for f in between {
+                    f(&mut eng.lock().unwrap(), &mut state);
+                    state.last_rig_poll = -1000.0; // the heavy poll is due (at now = 0)
+                    state
+                        .step(
+                            &eng,
+                            &mut backend,
+                            &mut rig,
+                            &sinks,
+                            0.0,
+                            &mut ra,
+                            &mut rr,
+                            &mut station,
+                        )
+                        .unwrap();
+                }
+                let _ = done_tx.send(());
+            })
+            .unwrap();
+        done_rx
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the loop ticks wedged or panicked (its own message is above)");
+    }
+
+    /// The split +/- presses, as the radio loop sends them through Hamlib: split on at 14.235,
+    /// one press, then two presses inside one tick. Every press reaches the wire and the two
+    /// coalesce to the last; `model` is the Hamlib model the radio is set to.
+    fn split_presses_on_the_wire(model: u32) -> Vec<String> {
+        let (addr, seen) = recording_rigctld_stub();
+        let engine = engine_on(model);
+        engine.lock().unwrap().set_operating_mode("phone", false);
+        split_ticks(
+            &engine,
+            Rig::rigctld(&addr),
+            vec![
+                |_, _| {},
+                |e, _| e.request_split(Some(14.235)),
+                |e, _| e.request_split(Some(14.236)),
+                |e, _| {
+                    e.request_split(Some(14.237));
+                    e.request_split(Some(14.238));
+                },
+            ],
+        );
+        let lines = seen.lock().unwrap().clone();
+        lines
+            .iter()
+            .map(|l| l.trim().to_string())
+            .filter(|l| l.starts_with("S ") || l.starts_with("I ") || l.starts_with("W FB"))
+            .collect()
+    }
+
+    /// ⭐ A SPLIT +/- ON A HAMLIB YAESU WRITES VFO B ITSELF, after the `I`. Hamlib 4.7.1 (the
+    /// bundled rigctld) answers `I` with `RPRT 0` and sends nothing when its cached VFO B
+    /// already equals the request (`rig_set_split_freq`, "freq set not needed"; on the FT-991
+    /// also `ft991_set_split_freq`'s own VFO B cache check). Hamlib issue 1966 is the report and
+    /// PR 2265 the fix, which shipped after 4.7.1. The raw `FB` is the command that fix makes
+    /// Hamlib send.
+    #[test]
+    fn a_split_press_on_a_hamlib_newcat_yaesu_writes_vfo_b_after_the_i() {
+        for model in [1035u32, 1049, 1042, 1040] {
+            assert_eq!(
+                split_presses_on_the_wire(model),
+                vec![
+                    "S 1 VFOB",
+                    "I 14235000",
+                    "W FB014235000; 0",
+                    "S 1 VFOB",
+                    "I 14236000",
+                    "W FB014236000; 0",
+                    "S 1 VFOB",
+                    "I 14238000",
+                    "W FB014238000; 0",
+                ],
+                "model {model}"
+            );
+        }
+    }
+
+    /// CONTROL: any other Hamlib radio gets exactly what it got before: `S` and `I` per press.
+    #[test]
+    fn a_split_press_on_any_other_hamlib_radio_is_unchanged() {
+        for model in [3073u32, 2014, 1051] {
+            assert_eq!(
+                split_presses_on_the_wire(model),
+                vec![
+                    "S 1 VFOB",
+                    "I 14235000",
+                    "S 1 VFOB",
+                    "I 14236000",
+                    "S 1 VFOB",
+                    "I 14238000",
+                ],
+                "model {model}"
+            );
+        }
+    }
+
+    /// An Extra in Phone at 14.340 USB with TX armed and PTT held, on a Hamlib stub: what the
+    /// radio loop writes for the split requests `between` makes, tick by tick, and the split the
+    /// engine is left believing. The first tick keys the radio.
+    fn keyed_split_wire(
+        between: Vec<fn(&mut Engine, &mut RadioLoop)>,
+    ) -> (Vec<String>, Option<f64>) {
+        let (addr, seen) = recording_rigctld_stub();
+        let engine = engine_on(3073);
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.license_class = tempo_app::settings::LicenseClass::Extra;
+            e.apply_settings(s);
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.340, "20m", "USB");
+            e.set_tx_enabled(true);
+            e.set_ptt(true);
+            assert!(e.manual_ptt(), "precondition: PTT is held in privileges");
+        }
+        let mut ticks: Vec<fn(&mut Engine, &mut RadioLoop)> = vec![|_, _| {}];
+        ticks.extend(between);
+        split_ticks(&engine, Rig::rigctld(&addr), ticks);
+        let wire = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|l| l.trim().to_string())
+            .filter(|l| l.starts_with("S ") || l.starts_with("I ") || l.starts_with("T "))
+            .collect();
+        let split = engine.lock().unwrap().split_tx_mhz();
+        (wire, split)
+    }
+
+    /// ⛔ A SPLIT PAST THE BAND EDGE IS NEVER WRITTEN INTO A KEYED RADIO. Under a held PTT the
+    /// loop writes a split request at once, and the new request had voided the old
+    /// acknowledgement, so the gate judged the RX dial until the rig acknowledged the new TX dial:
+    /// the out-of-band `I` went to the transmitting radio, and the PTT drop came a tick later.
+    /// A request from any source (a spot's "UP n" here, `request_split`) is checked again at
+    /// the write.
+    #[test]
+    fn a_held_ptt_never_gets_a_split_past_the_band_edge() {
+        let (wire, split) = keyed_split_wire(vec![|e, _| e.request_split(Some(14.349))]);
+        assert!(
+            wire.iter().any(|l| l == "T 1"),
+            "precondition: the radio keyed: {wire:?}"
+        );
+        assert!(
+            !wire
+                .iter()
+                .any(|l| l.starts_with("I ") || l.starts_with("S 1")),
+            "no split written into the keyed radio: {wire:?}"
+        );
+        assert_eq!(
+            split, None,
+            "the refused split is dropped, not left pending"
+        );
+    }
+
+    /// ⛔ A SPLIT REFUSED AT THE WRITE LEAVES THE RADIO'S SPLIT STANDING, IN NEXUS TOO. Split on at
+    /// 14.345, the radio keyed at its front panel (a rig-reported PTT), then a split request past
+    /// the 20 m edge. The radio gets nothing new; Nexus still holds 14.345 (the badge, and the
+    /// gate's acknowledgement), and a later QSY sends `S 0` as for any split. Routed through the
+    /// rig-rejected path, Nexus showed simplex and judged the dial while the radio stayed split,
+    /// and no QSY sent `S 0` again.
+    #[test]
+    fn a_split_refused_while_keyed_leaves_the_standing_split_in_nexus_and_the_radio() {
+        let (addr, seen) = recording_rigctld_stub();
+        let engine = engine_on(3073);
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.license_class = tempo_app::settings::LicenseClass::Extra;
+            e.apply_settings(s);
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.340, "20m", "USB");
+        }
+        split_ticks(
+            &engine,
+            Rig::rigctld(&addr),
+            vec![
+                |_, _| {},
+                |e, _| e.request_operator_split(Some(14.345)).unwrap(),
+                |e, s| {
+                    // A request no check saw when it was asked (every source in this build is
+                    // judged then; `request_split` is the one-shot they all feed).
+                    s.rig_keyed = true;
+                    e.request_split(Some(14.349));
+                },
+                |e, s| {
+                    s.rig_keyed = false;
+                    let snap = e.snapshot();
+                    assert_eq!(
+                        e.split_tx_mhz(),
+                        Some(14.345),
+                        "Nexus keeps the radio's split"
+                    );
+                    assert!(
+                        (snap.radio.tx_emission_mhz.unwrap_or(0.0) - 14.345).abs() < 1e-9,
+                        "the gate judges the split the radio has: {:?}",
+                        snap.radio.tx_emission_mhz
+                    );
+                    e.set_frequency(7.200, "40m", "LSB");
+                },
+            ],
+        );
+        let wire: Vec<String> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|l| l.trim().to_string())
+            .filter(|l| l.starts_with("S ") || l.starts_with("I "))
+            .collect();
+        assert_eq!(
+            wire,
+            vec!["S 1 VFOB", "I 14345000", "S 0 VFOA"],
+            "nothing new; then S 0"
+        );
+    }
+
+    /// ⛔ THE FRONT-PANEL POLL GAP. The radio keyed at its own front panel, and the loop has not
+    /// polled it yet (`rig_keyed` false): a spot's "UP 9" past the edge must still write nothing,
+    /// because it is refused when it is asked, not only when the loop knows the radio is keyed.
+    #[test]
+    fn a_spot_split_past_the_edge_writes_nothing_even_before_the_loop_sees_a_key() {
+        let (addr, seen) = recording_rigctld_stub();
+        let engine = engine_on(3073);
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.license_class = tempo_app::settings::LicenseClass::Extra;
+            e.apply_settings(s);
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.340, "20m", "USB");
+        }
+        split_ticks(
+            &engine,
+            Rig::rigctld(&addr),
+            vec![
+                |_, _| {},
+                |e, s| {
+                    assert!(!s.rig_keyed, "precondition: the loop has not seen the key");
+                    e.work_spot_split("phone", 14.340, "20m", Some(9.0));
+                },
+                |_, _| {},
+            ],
+        );
+        let lines = seen.lock().unwrap().clone();
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.trim().starts_with("I ") || l.trim() == "S 1 VFOB"),
+            "no split written: {lines:?}"
+        );
+        assert_eq!(engine.lock().unwrap().split_tx_mhz(), None);
+    }
+
+    /// A rigctld that answers `RPRT -9` to a split OFF and `RPRT 0` to everything else, logging
+    /// every line.
+    fn split_off_refusing_rigctld_stub() -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let rec = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let Ok(mut out) = stream.try_clone() else {
+                    return;
+                };
+                for line in BufReader::new(stream).lines() {
+                    let Ok(line) = line else { break };
+                    let reply: &[u8] = if line.trim().starts_with("S 0") {
+                        b"RPRT -9\n"
+                    } else {
+                        b"RPRT 0\n"
+                    };
+                    rec.lock().unwrap().push(line);
+                    if out.write_all(reply).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, seen)
+    }
+
+    /// ⛔ A SPLIT OFF THE RADIO REFUSED IS NOT SIMPLEX. The radio may still be split: transmit is
+    /// held (the split is unknown), the operator is told, and the next QSY sends `S 0` again.
+    #[test]
+    fn a_refused_split_off_holds_transmit_and_is_sent_again_at_the_next_qsy() {
+        let (addr, seen) = split_off_refusing_rigctld_stub();
+        let engine = engine_on(3073);
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.license_class = tempo_app::settings::LicenseClass::Extra;
+            e.apply_settings(s);
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.340, "20m", "USB");
+        }
+        split_ticks(
+            &engine,
+            Rig::rigctld(&addr),
+            vec![
+                |_, _| {},
+                |e, _| e.request_operator_split(Some(14.345)).unwrap(),
+                |e, _| {
+                    assert!(e.tx_allowed(), "precondition: the split keys");
+                    e.set_frequency(14.300, "20m", "USB");
+                },
+                |e, _| {
+                    assert!(!e.tx_allowed(), "an unconfirmed split OFF holds transmit");
+                    e.set_frequency(14.310, "20m", "USB");
+                },
+            ],
+        );
+        let offs = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|l| l.trim().starts_with("S 0"))
+            .count();
+        assert_eq!(offs, 2, "the second QSY sends S 0 again");
+    }
+
+    /// CONTROL: an in-privilege press under the same held PTT is written at once, as before.
+    #[test]
+    fn a_held_ptt_still_gets_an_in_band_split_at_once() {
+        let (wire, split) = keyed_split_wire(vec![|e, _| e.request_split(Some(14.345))]);
+        assert!(wire.iter().any(|l| l == "I 14345000"), "{wire:?}");
+        assert_eq!(split, Some(14.345));
+    }
+
+    /// During Nexus's own over the split is held, not written, whatever it is (it is written on
+    /// the first tick after, where the key-time gate judges it before anything keys again).
+    #[test]
+    fn a_nexus_keyed_over_holds_every_split_until_it_ends() {
+        let (wire, split) = keyed_split_wire(vec![|e, s| {
+            s.tx_until_ms = Some(60_000.0);
+            e.request_split(Some(14.349));
+        }]);
+        assert!(!wire.iter().any(|l| l.starts_with("I ")), "{wire:?}");
+        assert_eq!(split, Some(14.349), "held for after the over, not dropped");
     }
 
     #[test]

@@ -32228,11 +32228,13 @@ fn set_agc(state: State<'_, SharedEngine>, speed: String) -> Result<AppSnapshot,
 }
 
 /// Set (`Some`) or clear (`None`) the desired split TX dial (MHz); the radio loop applies it.
-/// `Some(tx)` = TX split to that dial (e.g. "up 5"), `None` = back to simplex.
+/// `Some(tx)` = TX split to that dial (e.g. "up 5"), `None` = back to simplex. A TX dial the
+/// licence would refuse is refused here with the reason, and nothing reaches the radio
+/// (`Engine::request_operator_split`).
 #[tauri::command(async)]
 fn set_split(state: State<'_, SharedEngine>, tx_mhz: Option<f64>) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    eng.request_split(tx_mhz);
+    eng.request_operator_split(tx_mhz)?;
     Ok(eng.snapshot())
 }
 
