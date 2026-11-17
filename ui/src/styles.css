@@ -16977,6 +16977,20 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-color: var(--state-weak);
   color: var(--state-weak);
 }
+/* A row of BUTTONS only, whose labels together can be wider than the column (Settings ▸
+   Services ▸ Confirmations ▸ LoTW Sync: "Download confirmations" + "Download everything
+   again", #532). The base row cannot wrap and each button keeps its full text width, so in a
+   narrow track the pair ran out of its grid column and over the field beside it. Here the row
+   wraps, and a button may shrink to the column with its label wrapping, so no line of it can
+   leave the track at any width or in a longer language. A modifier, not a change to the base
+   row: the base row's other users pair an input with a button and want one line. */
+.settings-input-row--wrap {
+  flex-wrap: wrap;
+}
+.settings-input-row--wrap .settings-refresh {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
 
 /* Dual-radio: "which radio you're configuring" banner (Rig + Audio tabs). */
 .radio-config-banner {

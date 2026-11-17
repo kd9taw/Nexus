@@ -13923,7 +13923,7 @@ export function SettingsPanel({
                   <span className="settings-label">
                     {t('settings.confirmations.lotw.sync.label')}
                   </span>
-                  <div className="settings-input-row">
+                  <div className="settings-input-row settings-input-row--wrap">
                     <button
                       type="button"
                       className="settings-refresh"
