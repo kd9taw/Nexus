@@ -26,29 +26,98 @@
 //! mitigation is `deepcw::warm_cpu_cache_probe`.
 //!
 //! On a GUI-subsystem child (TQSL, Nexus relaunching itself) the flag is ignored by Windows, so
-//! routing those through here changes nothing. Off Windows it is a plain `Command::new`.
+//! routing those through here changes nothing.
+//!
+//! **The Linux AppImage is the other reason a spawn needs one home (#531).** The AppImage starts
+//! Nexus with its own directories put first on `LD_LIBRARY_PATH`, `PATH`, `XDG_DATA_DIRS` and a
+//! dozen GTK, GIO, GStreamer and Python variables, all pointing inside the mounted bundle
+//! (`$APPDIR`). A host program Nexus starts inherits all of it, so Fedora's TQSL loaded the
+//! bundle's older libnghttp2 beside the system libcurl that needs a newer one, and died with exit
+//! 127 the day Fedora updated curl. [`command`] therefore hands a host program the environment
+//! with every entry inside `$APPDIR` taken out ([`host_env_changes`]). A program that itself
+//! lives inside the bundle (the bundled Hamlib tools, Nexus relaunching itself) keeps the
+//! AppImage environment it was built for. Outside an AppImage there is no `$APPDIR` and nothing
+//! changes.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
+use std::path::Path;
 use std::process::Command;
 
 /// Windows `CREATE_NO_WINDOW` process-creation flag: run a console program with no console.
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-/// `std::process::Command::new(program)`, with no console window on Windows.
+/// `std::process::Command::new(program)`, with no console window on Windows, and without the
+/// AppImage's own library and data paths when Nexus runs as an AppImage and `program` is a host
+/// program (see [`host_env_changes`]).
 ///
 /// Everything else — args, env, cwd, stdio — is left to the caller exactly as `Command::new`
 /// leaves it. A caller that needs more creation flags must OR them with `CREATE_NO_WINDOW`,
 /// because `creation_flags` replaces the value rather than adding to it.
 pub fn command(program: impl AsRef<OsStr>) -> Command {
-    #[allow(unused_mut)] // mutated only on Windows
+    let program = program.as_ref();
     let mut cmd = Command::new(program);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
+    for (key, value) in host_env_changes(program, std::env::vars_os()) {
+        match value {
+            Some(v) => cmd.env(key, v),
+            None => cmd.env_remove(key),
+        };
+    }
     cmd
+}
+
+/// The environment changes a spawn of `program` needs so that it runs on the HOST's libraries,
+/// given this process's environment `vars`: each `(name, Some(value))` is to be set and each
+/// `(name, None)` removed. Empty when `$APPDIR` is unset, empty or relative (not an AppImage),
+/// and empty when `program` is a path inside `$APPDIR` (the opt-out for what the bundle carries).
+///
+/// Every variable is treated as a `:`-separated path list. One holding no entry inside `$APPDIR`
+/// is left exactly as it is; one holding some loses those entries (and any empty entry, which the
+/// loader reads as the current directory), keeping the rest in order; one with nothing left is
+/// removed, `$APPDIR` itself included. That covers what the AppImage runner sets
+/// (`LD_LIBRARY_PATH`, `PATH`, `PYTHONHOME`, `QT_PLUGIN_PATH`, `GST_PLUGIN_SYSTEM_PATH`...) and
+/// what the linuxdeploy GTK and GStreamer hooks set (`GTK_PATH`, `GDK_PIXBUF_MODULE_FILE`,
+/// `GIO_EXTRA_MODULES`, `GSETTINGS_SCHEMA_DIR`, `XDG_DATA_DIRS`...) without a list to keep in
+/// step with those scripts. The mount is created when the AppImage starts, so no value the
+/// operator set before then can point inside it. Values that are not paths (`GDK_BACKEND=x11`,
+/// `GTK_THEME`) are left alone: they choose a look, not which libraries load.
+pub fn host_env_changes(
+    program: &OsStr,
+    vars: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Vec<(OsString, Option<OsString>)> {
+    let vars: Vec<(OsString, OsString)> = vars.into_iter().collect();
+    let Some(appdir) = vars
+        .iter()
+        .find(|(k, _)| k == "APPDIR")
+        .map(|(_, v)| Path::new(v))
+        .filter(|d| d.is_absolute())
+    else {
+        return Vec::new();
+    };
+    if Path::new(program).starts_with(appdir) {
+        return Vec::new();
+    }
+    let mut changes = Vec::new();
+    for (key, value) in &vars {
+        let entries: Vec<_> = std::env::split_paths(value).collect();
+        if !entries.iter().any(|e| e.starts_with(appdir)) {
+            continue;
+        }
+        let host: Vec<_> = entries
+            .into_iter()
+            .filter(|e| !e.as_os_str().is_empty() && !e.starts_with(appdir))
+            .collect();
+        // `join_paths` fails only on an entry holding the separator, which `split_paths` cannot
+        // produce; treat that impossibility as "nothing left" rather than keep a bundle path.
+        let kept = std::env::join_paths(host).ok().filter(|v| !v.is_empty());
+        changes.push((key.clone(), kept));
+    }
+    changes
 }
 
 /// Run `cmd.exe` with `cmd_args` as its arguments under Windows' administrator prompt, wait for
@@ -167,6 +236,165 @@ mod elevation_tests {
         if !cfg!(windows) {
             assert!(!run_elevated("/c exit 0"));
         }
+    }
+}
+
+#[cfg(test)]
+mod appimage_env_tests {
+    use super::host_env_changes;
+    use std::ffi::OsString;
+
+    const APPDIR: &str = "/tmp/.mount_NexusAb12";
+
+    fn env(pairs: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+        pairs.iter().map(|(k, v)| (k.into(), v.into())).collect()
+    }
+
+    fn change<'a>(
+        changes: &'a [(OsString, Option<OsString>)],
+        key: &str,
+    ) -> Option<&'a Option<OsString>> {
+        changes.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+    }
+
+    /// #531: TQSL from the AppImage loaded the bundle's libnghttp2. Every entry under `$APPDIR`
+    /// comes off the library path and the operator's own entries stay, in order.
+    #[test]
+    fn a_host_program_loses_the_bundles_library_entries_and_keeps_the_hosts() {
+        let e = env(&[
+            ("APPDIR", APPDIR),
+            ("APPIMAGE", "/home/op/Nexus_1.25.0_amd64.AppImage"),
+            (
+                "LD_LIBRARY_PATH",
+                "/tmp/.mount_NexusAb12/usr/lib/:/tmp/.mount_NexusAb12/usr/lib/x86_64-linux-gnu/:/opt/sdr/lib",
+            ),
+            ("PATH", "/tmp/.mount_NexusAb12/usr/bin/:/usr/local/bin:/usr/bin"),
+            ("XDG_DATA_DIRS", "/tmp/.mount_NexusAb12/usr/share:/usr/share:/usr/local/share"),
+            ("HOME", "/home/op"),
+            ("GDK_BACKEND", "x11"),
+        ]);
+        let c = host_env_changes("/usr/bin/tqsl".as_ref(), e);
+        assert_eq!(
+            change(&c, "LD_LIBRARY_PATH"),
+            Some(&Some("/opt/sdr/lib".into()))
+        );
+        assert_eq!(
+            change(&c, "PATH"),
+            Some(&Some("/usr/local/bin:/usr/bin".into()))
+        );
+        assert_eq!(
+            change(&c, "XDG_DATA_DIRS"),
+            Some(&Some("/usr/share:/usr/local/share".into()))
+        );
+        assert_eq!(
+            change(&c, "APPDIR"),
+            Some(&None),
+            "the bundle's own root is not the host's"
+        );
+        // Untouched: nothing in them points into the bundle.
+        for k in ["APPIMAGE", "HOME", "GDK_BACKEND"] {
+            assert_eq!(change(&c, k), None, "{k} must be left alone");
+        }
+    }
+
+    /// The AppImage runner appends the operator's original value after a `:`, so an operator with
+    /// no LD_LIBRARY_PATH of their own leaves a trailing empty entry, which the loader reads as
+    /// "the current directory". Nothing of theirs is left, so the variable goes entirely, and so
+    /// do the GTK start-up hook's single-path variables (GDK_PIXBUF_MODULE_FILE, GTK_PATH...).
+    #[test]
+    fn a_variable_with_nothing_of_the_hosts_left_is_unset() {
+        let e = env(&[
+            ("APPDIR", APPDIR),
+            ("LD_LIBRARY_PATH", "/tmp/.mount_NexusAb12/usr/lib/:/tmp/.mount_NexusAb12/lib64/:"),
+            (
+                "GDK_PIXBUF_MODULE_FILE",
+                "/tmp/.mount_NexusAb12/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache",
+            ),
+            ("GIO_EXTRA_MODULES", "/tmp/.mount_NexusAb12/usr/lib/x86_64-linux-gnu/gio/modules"),
+            ("GTK_PATH", "/tmp/.mount_NexusAb12/usr/lib/x86_64-linux-gnu/gtk-3.0"),
+            ("PYTHONHOME", "/tmp/.mount_NexusAb12/usr/"),
+        ]);
+        let c = host_env_changes("tqsl".as_ref(), e);
+        for k in [
+            "LD_LIBRARY_PATH",
+            "GDK_PIXBUF_MODULE_FILE",
+            "GIO_EXTRA_MODULES",
+            "GTK_PATH",
+            "PYTHONHOME",
+        ] {
+            assert_eq!(change(&c, k), Some(&None), "{k} must be unset");
+        }
+    }
+
+    /// A sibling directory whose name merely starts with the mount's name is not inside it.
+    #[test]
+    fn only_paths_inside_the_bundle_count() {
+        let e = env(&[
+            ("APPDIR", "/tmp/.mount_NexusAb12/"),
+            (
+                "LD_LIBRARY_PATH",
+                "/tmp/.mount_NexusAb12x/usr/lib:/tmp/.mount_NexusAb12/usr/lib",
+            ),
+        ]);
+        let c = host_env_changes("/usr/bin/tqsl".as_ref(), e);
+        assert_eq!(
+            change(&c, "LD_LIBRARY_PATH"),
+            Some(&Some("/tmp/.mount_NexusAb12x/usr/lib".into()))
+        );
+    }
+
+    /// Outside an AppImage nothing changes, whatever the environment holds.
+    #[test]
+    fn outside_an_appimage_nothing_changes() {
+        let e = env(&[
+            ("LD_LIBRARY_PATH", "/opt/sdr/lib:"),
+            ("PATH", "/usr/bin"),
+            ("GTK_PATH", "/usr/lib/gtk-3.0"),
+        ]);
+        assert!(host_env_changes("/usr/bin/tqsl".as_ref(), e.clone()).is_empty());
+        // An empty or relative APPDIR names no bundle.
+        let mut empty = e.clone();
+        empty.push(("APPDIR".into(), "".into()));
+        assert!(host_env_changes("/usr/bin/tqsl".as_ref(), empty).is_empty());
+        let mut rel = e;
+        rel.push(("APPDIR".into(), "usr".into()));
+        assert!(host_env_changes("/usr/bin/tqsl".as_ref(), rel).is_empty());
+    }
+
+    /// The opt-out: a program that lives INSIDE the bundle (the bundled Hamlib tools under
+    /// usr/lib/Nexus/resources/hamlib, Nexus relaunching itself from usr/bin) is ours and keeps
+    /// the environment the AppImage built for it.
+    #[test]
+    fn a_program_bundled_in_the_appimage_keeps_its_environment() {
+        let e = env(&[
+            ("APPDIR", APPDIR),
+            (
+                "LD_LIBRARY_PATH",
+                "/tmp/.mount_NexusAb12/usr/lib/:/opt/sdr/lib",
+            ),
+            (
+                "GTK_PATH",
+                "/tmp/.mount_NexusAb12/usr/lib/x86_64-linux-gnu/gtk-3.0",
+            ),
+        ]);
+        for bundled in [
+            "/tmp/.mount_NexusAb12/usr/lib/Nexus/resources/hamlib/rigctld",
+            "/tmp/.mount_NexusAb12/usr/bin/Nexus",
+        ] {
+            assert!(
+                host_env_changes(bundled.as_ref(), e.clone()).is_empty(),
+                "{bundled} is bundled and keeps the AppImage environment"
+            );
+        }
+    }
+
+    /// `command` applies the plan; outside an AppImage (this test process) it adds nothing.
+    #[test]
+    fn command_outside_an_appimage_leaves_the_environment_alone() {
+        if std::env::var_os("APPDIR").is_some() {
+            return; // a test run from inside an AppImage cannot say this
+        }
+        assert_eq!(super::command("tqsl").get_envs().count(), 0);
     }
 }
 
