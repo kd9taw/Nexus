@@ -6,6 +6,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as api from './api'
 import { t } from './i18n'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const stream = vi.hoisted(() => ({ on: false }))
 vi.mock('./remote-native/stream-input', async (importOriginal) => ({
@@ -28,7 +31,8 @@ afterEach(() => {
   delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
 })
 
-/** Every credential the Settings panel saves or forgets, with the command each sends. */
+/** Every credential the Settings panel saves or forgets, the saved-key notice's Use and Remove,
+ *  and the question a login save asks first, with the command each sends. */
 const CREDENTIALS: [string, () => Promise<unknown>][] = [
   ['set_lotw_password', () => api.setLotwPassword('fake-pw')],
   ['clear_lotw_password', () => api.clearLotwPassword()],
@@ -51,6 +55,9 @@ const CREDENTIALS: [string, () => Promise<unknown>][] = [
   ['set_cloudlog_key', () => api.setCloudlogKey('fake-key')],
   ['clear_cloudlog_key', () => api.clearCloudlogKey()],
   ['set_repeaterbook_token', () => api.setRepeaterbookToken('fake-token')],
+  ['answer_saved_key', () => api.answerSavedKey(1, true, '192.0.2.7')],
+  ['answer_saved_key', () => api.answerSavedKey(null, false, 'https://log.example.invalid')],
+  ['upload_backlog', () => api.uploadBacklog('qrz')],
 ]
 
 describe('credentials are saved and forgotten at the station only', () => {
@@ -71,4 +78,54 @@ describe('credentials are saved and forgotten at the station only', () => {
     await api.clearHuntTarget()
     expect(sent).toEqual(['set_settings', 'clear_hunt_target'])
   })
+
+  it('CONTROL: the saved-key notice still asks which keys wait through a stream', async () => {
+    stream.on = true
+    await api.keysToConfirm()
+    expect(sent).toEqual(['keys_to_confirm'])
+  })
+})
+
+// The list above is kept by hand; the one below is not. The remote client's class table
+// (crates/tempo-client/src/classes.rs) already names every command that only the shack's own screen
+// may make, with its reason; a streamed screen is not the shack's own screen either, so every row
+// there that is refused for a credential's sake is refused through a stream too. A new credential
+// command gets its row the day it is registered (src-tauri's class tests fail without one), and
+// this turns red the same day if the stream would still send it.
+const here = dirname(fileURLToPath(import.meta.url))
+const CLASSES_RS = readFileSync(resolve(here, '../../crates/tempo-client/src/classes.rs'), 'utf8')
+const ROW = /^\s*\("([a-z0-9_]+)",\s*(\w+),\s*"((?:[^"\\]|\\.)*)"\),\s*$/gm
+const rows = [...CLASSES_RS.matchAll(ROW)].map(([, cmd, cls, why]) => ({ cmd, cls, why }))
+const CREDENTIAL_ROWS = rows
+  .filter((r) => r.cls === 'RefusedHere' && /credential/i.test(r.why))
+  .map((r) => r.cmd)
+
+/** Credential rows a stream may still send, each with why. Kept short on purpose: an entry here
+ *  is a decision, and the test below holds each one to being a row the table really has. */
+const STREAM_MAY_SEND: Record<string, string> = {
+  // Which saved keys wait, by radio name and address, never the key: the same notice the stream
+  // already shows in its picture of the shack's screen. The notice asks it on a timer; a refusal
+  // would stop the notice asking at the shack as well, for as long as the app is open.
+  keys_to_confirm: 'a read that says no secret, and is on the streamed screen already',
+}
+
+describe('every credential command the class table keeps at the shack is refused through a stream', () => {
+  it('reads the whole table', () => {
+    const lines = CLASSES_RS.split('\n').filter((l) => /^\s*\("[a-z0-9_]+",/.test(l)).length
+    expect(rows.length).toBe(lines)
+    expect(rows.length).toBeGreaterThan(500)
+    // The rows the hand-kept list names are among them, so the filter is reading the right text.
+    for (const [cmd] of CREDENTIALS) expect(CREDENTIAL_ROWS).toContain(cmd)
+  })
+
+  it('names no exemption the table does not have', () => {
+    for (const cmd of Object.keys(STREAM_MAY_SEND)) expect(CREDENTIAL_ROWS).toContain(cmd)
+  })
+
+  it.each(CREDENTIAL_ROWS.filter((cmd) => !(cmd in STREAM_MAY_SEND)))(
+    '%s is refused through a stream',
+    (cmd) => {
+      expect(api.refusedThroughStream(cmd)).toBe(true)
+    },
+  )
 })

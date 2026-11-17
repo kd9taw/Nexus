@@ -3812,7 +3812,10 @@ export function SettingsPanel({
     let owed: number | null
     try {
       owed = await uploadBacklog(service)
-    } catch {
+    } catch (err) {
+      // Refused through a stream: the save stops here. It would go out after this await, when the
+      // stream's press is over and nothing is left to refuse it by.
+      if (err === t('remote.lan.atShackOnly')) throw err
       return undefined
     }
     if (owed == null) return undefined
@@ -3827,8 +3830,8 @@ export function SettingsPanel({
 
   const onSaveEqslPassword = async () => {
     if (!eqslPw) return
-    const sendOld = await askSendOld('eqsl', 'eQSL')
     const ok = await withErrorToast(async () => {
+      const sendOld = await askSendOld('eqsl', 'eQSL')
       await setEqslPassword(eqslPw, sendOld)
       return true
     }, t('settings.connections.eqsl.password.saveFailed'))
@@ -3959,8 +3962,8 @@ export function SettingsPanel({
 
   const onSaveQrzLogbookKey = async () => {
     if (!qrzKey) return
-    const sendOld = await askSendOld('qrz', 'QRZ Logbook')
     const ok = await withErrorToast(async () => {
+      const sendOld = await askSendOld('qrz', 'QRZ Logbook')
       await setQrzLogbookKey(qrzKey, sendOld)
       return true
     }, t('settings.connections.qrz.key.saveFailed'))
@@ -4010,8 +4013,8 @@ export function SettingsPanel({
 
   const onSaveClublogPassword = async () => {
     if (!clublogPw) return
-    const sendOld = await askSendOld('clublog', 'ClubLog')
     const ok = await withErrorToast(async () => {
+      const sendOld = await askSendOld('clublog', 'ClubLog')
       await setClublogPassword(clublogPw, sendOld)
       return true
     }, t('settings.connections.clublog.password.saveFailed'))

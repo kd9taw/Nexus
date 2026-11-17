@@ -180,11 +180,18 @@ function mutatesCredentials(cmd: string): boolean {
   return /^set_[a-z0-9_]+_(password|key|token|code)$/.test(cmd) || /^clear_[a-z0-9_]+$/.test(cmd)
 }
 
-/** Commands that save or forget one stored password, key, token or code: each at the station's
- *  own screen only, never through a stream of it ([`invoke`]). Matched by SHAPE, as
- *  `mutatesCredentials` is, so a new connector's is refused the day it is added. */
-function storesACredential(cmd: string): boolean {
-  return /^(set|clear)_[a-z0-9_]+_(password|key|token|code)$/.test(cmd)
+/** The credential commands whose name has no connector's shape: Use or Remove on a saved key that
+ *  waits (Use lets the key go to an address), and the question a login save asks before it saves. */
+const CREDENTIAL_ANSWERS = new Set(['answer_saved_key', 'upload_backlog'])
+
+/** Commands that save, forget or let go of a stored password, key, token or code: each at the
+ *  station's own screen only, never through a stream of it ([`invoke`]). A connector's save and
+ *  clear are matched by SHAPE, as `mutatesCredentials` is, so a new connector's is refused the day
+ *  it is added. The class table's credential rows (crates/tempo-client/src/classes.rs) are the
+ *  list this must cover; `api.credentialsAtShack.test.ts` reads that table and fails on a row this
+ *  misses. */
+export function refusedThroughStream(cmd: string): boolean {
+  return /^(set|clear)_[a-z0-9_]+_(password|key|token|code)$/.test(cmd) || CREDENTIAL_ANSWERS.has(cmd)
 }
 
 /** The TV entry sets this to its RPC base ('/connect/rpc') before anything invokes.
@@ -221,7 +228,7 @@ function worded(error: unknown): never {
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   // Only at the station itself: a credential saved or forgotten through a stream is refused, in
   // words its caller shows. Read before anything awaits, while the stream's dispatch is running.
-  if (storesACredential(cmd) && isStreamInput()) throw t('remote.lan.atShackOnly')
+  if (refusedThroughStream(cmd) && isStreamInput()) throw t('remote.lan.atShackOnly')
   const tv = typeof window !== 'undefined' ? window.__NEXUS_TV_RPC__ : undefined
   const out = isTauri() ? ((await bridge()(cmd, args).catch(worded)) as T)
     : tv ? await httpInvoke<T>(tv, cmd, args)
