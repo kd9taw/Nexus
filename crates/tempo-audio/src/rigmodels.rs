@@ -514,6 +514,279 @@ pub fn hamlib_ptt_mic_data(model: u32) -> bool {
     PTT_MIC_DATA_RIGS.contains(&model)
 }
 
+/// The Hamlib models that **cannot send CW over CAT**: their driver has no `send_morse`, so
+/// rigctld's `b <text>` (Hamlib's `rig_send_morse`) answers `-RIG_ENAVAIL` (`RPRT -11`) every
+/// time and the CAT keyer can never key them. Every Xiegu model of Hamlib 4.7.1 is one (its
+/// `rigs/icom/xiegu.c` has never had a `send_morse`), and so are the older Icoms, Kenwoods and
+/// Yaesus the CW settings hint already warns about.
+///
+/// MEASURED over every model of the bundled Hamlib 4.7.1 by `scripts/gen-hamlib-send-morse.mjs`
+/// (the `Can send Morse:` line of `rigctl -m <model> -u`, Hamlib's own answer), into
+/// `tests/fixtures/hamlib_send_morse.json`, which the test holds this list to exactly.
+///
+/// ⚠️ IT IS ABOUT THE RIG MODEL PICKED, NOT THE RADIO. An operator who picks an Icom model for a
+/// Xiegu (as DXLab advises) is on that Icom's driver, which has a `send_morse`, and whether the
+/// radio keys from it is the radio's firmware to say. So every sentence built on this list names
+/// the rig model, never the radio.
+pub const CAT_CW_NO_MORSE_RIGS: &[u32] = &[
+    4,     // FLRig FLRig
+    5,     // TRXManager TRXManager 5.7.630+
+    8,     // N3FJP ACLog
+    9,     // Airspy SDR#/gpredict
+    10,    // N2ADR James Ahlstrom Quisk
+    11,    // GQRX GQRX
+    1001,  // Yaesu FT-847
+    1002,  // Yaesu FT-1000
+    1003,  // Yaesu FT-1000D
+    1004,  // Yaesu FT-1000MP MARK-V
+    1005,  // Yaesu FT-747GX
+    1006,  // Yaesu FT-757GX
+    1007,  // Yaesu FT-757GXII
+    1009,  // Yaesu FT-767GX
+    1010,  // Yaesu FT-736R
+    1011,  // Yaesu FT-840
+    1013,  // Yaesu FT-900
+    1014,  // Yaesu FT-920
+    1015,  // Yaesu FT-890
+    1016,  // Yaesu FT-990
+    1017,  // Yaesu FRG-100
+    1018,  // Yaesu FRG-9600
+    1019,  // Yaesu FRG-8800
+    1020,  // Yaesu FT-817
+    1021,  // Yaesu FT-100
+    1022,  // Yaesu FT-857
+    1023,  // Yaesu FT-897
+    1024,  // Yaesu FT-1000MP
+    1025,  // Yaesu FT-1000MP MARK-V Field
+    1026,  // Yaesu VR-5000
+    1031,  // Yaesu FT-980
+    1033,  // Vertex Standard VX-1700
+    1038,  // Yaesu FT-847UNI
+    1039,  // Yaesu FT-600
+    1041,  // Yaesu FT-818
+    1043,  // Yaesu FT-897D
+    1045,  // M0NKA mcHF QRP
+    1047,  // Yaesu FT-650
+    1048,  // Yaesu FT-990 Old Rom
+    2001,  // Kenwood TS-50S
+    2002,  // Kenwood TS-440S
+    2003,  // Kenwood TS-450S
+    2005,  // Kenwood TS-690S
+    2006,  // Kenwood TS-711
+    2007,  // Kenwood TS-790
+    2008,  // Kenwood TS-811
+    2009,  // Kenwood TS-850
+    2011,  // Kenwood TS-940S
+    2012,  // Kenwood TS-950S
+    2013,  // Kenwood TS-950SDX
+    2015,  // Kenwood R-5000
+    2017,  // Kenwood TH-D7A
+    2019,  // Kenwood TH-F6A
+    2020,  // Kenwood TH-F7E
+    2022,  // Kenwood TS-930
+    2023,  // Kenwood TH-G71
+    2024,  // Kenwood TS-680S
+    2025,  // Kenwood TS-140S
+    2026,  // Kenwood TM-D700
+    2027,  // Kenwood TM-V7
+    2030,  // Kenwood TRC-80
+    2032,  // SigFox Transfox
+    2033,  // Kenwood TH-D72A
+    2034,  // Kenwood TM-D710(G)
+    2035,  // Kenwood TM-V71(A)
+    2038,  // Elecraft XG3
+    2042,  // Kenwood TH-D74
+    2046,  // Hilberling PT-8000A
+    2049,  // Malachite DSP
+    2056,  // SDR Radio SDRConsole
+    2057,  // QRPLabs QMX
+    3002,  // Icom IC-1275
+    3003,  // Icom IC-271
+    3004,  // Icom IC-275
+    3005,  // Icom IC-375
+    3006,  // Icom IC-471
+    3007,  // Icom IC-475
+    3008,  // Icom IC-575
+    3009,  // Icom IC-706
+    3010,  // Icom IC-706MkII
+    3011,  // Icom IC-706MkIIG
+    3012,  // Icom IC-707
+    3013,  // Icom IC-718
+    3014,  // Icom IC-725
+    3015,  // Icom IC-726
+    3016,  // Icom IC-728
+    3017,  // Icom IC-729
+    3019,  // Icom IC-735
+    3020,  // Icom IC-736
+    3021,  // Icom IC-737
+    3022,  // Icom IC-738
+    3023,  // Icom IC-746
+    3024,  // Icom IC-751
+    3026,  // Icom IC-756
+    3027,  // Icom IC-756PRO
+    3028,  // Icom IC-761
+    3029,  // Icom IC-765
+    3030,  // Icom IC-775
+    3031,  // Icom IC-781
+    3032,  // Icom IC-820H
+    3034,  // Icom IC-821H
+    3035,  // Icom IC-970
+    3036,  // Icom IC-R10
+    3037,  // Icom IC-R71
+    3038,  // Icom IC-R72
+    3039,  // Icom IC-R75
+    3040,  // Icom IC-R7000
+    3041,  // Icom IC-R7100
+    3042,  // Icom IC-R8500
+    3043,  // Icom IC-R9000
+    3044,  // Icom IC-910
+    3045,  // Icom IC-78
+    3046,  // Icom IC-746PRO
+    3047,  // Icom IC-756PROII
+    3051,  // Ten-Tec Omni VI Plus
+    3052,  // Optoelectronics OptoScan535
+    3053,  // Optoelectronics OptoScan456
+    3054,  // Icom IC ID-1
+    3055,  // Icom IC-703
+    3057,  // Icom IC-756PROIII
+    3058,  // Icom IC-R20
+    3060,  // Icom IC-7000
+    3061,  // Icom IC-7200
+    3064,  // Ten-Tec Delta II
+    3065,  // Icom IC-92D
+    3066,  // Icom IC-R9500
+    3068,  // Icom IC-9100
+    3069,  // Icom IC-RX7
+    3071,  // Icom ID-5100
+    3072,  // Icom IC-2730
+    3074,  // Microtelecom Perseus
+    3076,  // Xiegu X108G
+    3077,  // Icom IC-R6
+    3079,  // Icom IC-R8600
+    3080,  // Icom IC-R30
+    3082,  // Icom ID-4100
+    3083,  // Icom ID-31
+    3084,  // Icom ID-51
+    3086,  // Icom IC-F8101
+    3087,  // Xiegu X6100
+    3088,  // Xiegu G90
+    3089,  // Xiegu X5105
+    3091,  // Xiegu X6200
+    3093,  // Icom ID-52A/E PLUS
+    4001,  // Icom IC-PCR1000
+    4002,  // Icom IC-PCR100
+    4003,  // Icom IC-PCR1500
+    4004,  // Icom IC-PCR2500
+    5001,  // AOR AR8200
+    5002,  // AOR AR8000
+    5003,  // AOR AR7030
+    5004,  // AOR AR5000
+    5005,  // AOR AR3030
+    5006,  // AOR AR3000A
+    5008,  // AOR AR2700
+    5013,  // AOR AR8600
+    5014,  // AOR AR5000A
+    5015,  // AOR AR7030 Plus
+    5016,  // AOR SR2200
+    6001,  // JRC JST-145
+    6002,  // JRC JST-245
+    6005,  // JRC NRD-525
+    6006,  // JRC NRD-535D
+    6007,  // JRC NRD-545 DSP
+    8001,  // Uniden BC780xlt
+    8002,  // Uniden BC245xlt
+    8003,  // Uniden BC895xlt
+    8004,  // Radio Shack PRO-2052
+    8006,  // Uniden BC250D
+    8010,  // Uniden BCD-396T
+    8011,  // Uniden BCD-996T
+    8012,  // Uniden BC898T
+    9001,  // Drake R-8
+    9002,  // Drake R-8A
+    9003,  // Drake R-8B
+    10004, // Lowe HF-235
+    11003, // Racal RA6790/GM
+    11005, // Racal RA3702
+    12004, // Watkins-Johnson WJ-8888
+    14002, // Skanti TRP8000
+    14004, // Skanti TRP 8255 S R
+    16001, // Ten-Tec TT-550
+    16002, // Ten-Tec TT-538 Jupiter
+    16003, // Ten-Tec RX-320
+    16004, // Ten-Tec RX-340
+    16005, // Ten-Tec RX-350
+    16007, // Ten-Tec TT-516 Argonaut V
+    16009, // Ten-Tec TT-585 Paragon
+    16011, // Ten-Tec TT-588 Omni VII
+    16012, // Ten-Tec RX-331
+    16013, // Ten-Tec TT-599 Eagle
+    17001, // Alinco DX-77
+    17002, // Alinco DX-SR8
+    18001, // Kachina 505DSP
+    22001, // TAPR DSP-10
+    23001, // FlexRadio SDR-1000
+    23003, // DTTS Microwave Society DttSP IPC 20200319.0
+    23004, // DTTS Microwave Society DttSP UDP 20200319.0
+    24001, // RFT EKD-500
+    25001, // Elektor Elektor 3/04
+    25002, // SAT-Schneider DRT1
+    25006, // AmQRP DDS-60
+    25008, // mRS miniVNA
+    25009, // SoftRock Si570 AVR-USB
+    25011, // KTH-SDR kit Si570 PIC-USB
+    25012, // FiFi FiFi-SDR
+    25013, // AMSAT-UK FUNcube Dongle
+    25014, // N2ADR HiQSDR
+    25015, // Funkamateur FA-SDR
+    25016, // AE9RB Si570 Peaberry V1
+    25017, // AE9RB Si570 Peaberry V2
+    25018, // AMSAT-UK FUNcube Dongle Pro+
+    25019, // HobbyPCB RS-HFIQ
+    27001, // Rohde&Schwarz ESMC
+    27002, // Rohde&Schwarz EB200
+    27003, // Rohde&Schwarz XK2100
+    27004, // Rohde&Schwarz EK895/6
+    27005, // Rohde&Schwarz XK852
+    28001, // Philips/Simoco PRM8060
+    29001, // ADAT www.adat.ch ADT-200A
+    30001, // Icom IC-M700PRO
+    30002, // Icom IC-M802
+    30003, // Icom IC-M710
+    30004, // Icom IC-M803
+    31001, // Dorji DRA818V
+    31002, // Dorji DRA818U
+    32001, // Barrett 2050
+    32002, // Barrett 950
+    32003, // Barrett 4050
+    32004, // Rhode&Schwarz 4100
+    33001, // ELAD FDM-DUO
+    34001, // CODAN Envoy
+    34002, // CODAN NGT
+    34003, // CODAN 2110
+    35001, // GOMSPACE GS100
+    36001, // MDS 4710
+    36002, // MDS 9710
+    37001, // AnyTone D578A
+    38001, // Micom Micom 2/3
+    39001, // Commradio CTX-10
+    40001, // GUOHETEC PMR-171
+    40002, // GUOHETEC Q900
+    41001, // Bunzee Labs Simple CAT
+    42001, // Harris PRC-138
+];
+
+/// Can this rig model's Hamlib send CW over CAT at all? See [`CAT_CW_NO_MORSE_RIGS`].
+pub fn hamlib_can_send_morse(model: u32) -> bool {
+    !CAT_CW_NO_MORSE_RIGS.contains(&model)
+}
+
+/// [`CAT_CW_NO_MORSE_RIGS`] for the settings UI, across the Tauri boundary as a list for
+/// [`portless_rig_models`]'s reason; the UI must not keep a copy, since the list is re-measured at
+/// every Hamlib bump.
+pub fn cat_cw_no_morse_rig_models() -> Vec<u32> {
+    CAT_CW_NO_MORSE_RIGS.to_vec()
+}
+
 /// The rigctld (verb, token) pairs Nexus must NEVER send to this model's Hamlib driver, because
 /// the driver turns them into something other than what the radio's own CAT manual defines. The
 /// connection refuses them before a byte is written ([`crate::rig::Rig::set_never_send`]).
@@ -1930,6 +2203,76 @@ mod tests {
             !hamlib_ptt_mic_data(1033),
             "VX-1700: its DATA key is a stub"
         );
+    }
+
+    /// `CAT_CW_NO_MORSE_RIGS` is exactly what the bundled Hamlib reports, generated and not typed:
+    /// every model of 4.7.1 read, and the ones whose `-u` says `Can send Morse: N` listed.
+    #[test]
+    fn the_no_morse_rigs_are_exactly_the_measured_ones() {
+        use std::collections::BTreeSet;
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/hamlib_send_morse.json"))
+                .expect("the fixture parses");
+        assert!(
+            fixture["hamlib"]
+                .as_str()
+                .is_some_and(|v| v.starts_with("Hamlib 4.7.1 ")),
+            "the fixture comes from the bundled Hamlib 4.7.1: {}",
+            fixture["hamlib"]
+        );
+        assert!(
+            fixture["models"].as_u64().is_some_and(|n| n >= 300),
+            "every model was read, not a handful: {}",
+            fixture["models"]
+        );
+        // The only models with no answer: NET rigctl (2), whose `-u` opens the rigctld at the far
+        // end and whose `b` is that rigctld's to answer, and three that `-l` lists but Hamlib
+        // cannot initialise ("Unknown rig num"). None of them is claimed unable to send.
+        let unread: BTreeSet<u64> = fixture["unread"]
+            .as_array()
+            .expect("the fixture's unread")
+            .iter()
+            .map(|m| m.as_u64().expect("a model"))
+            .collect();
+        assert_eq!(unread, BTreeSet::from([2, 15009, 25003, 25007]), "unread");
+        let measured: BTreeSet<u32> = fixture["noMorse"]
+            .as_array()
+            .expect("the fixture's noMorse")
+            .iter()
+            .map(|r| r["model"].as_u64().expect("a model") as u32)
+            .collect();
+        let listed: BTreeSet<u32> = CAT_CW_NO_MORSE_RIGS.iter().copied().collect();
+        assert_eq!(
+            listed, measured,
+            "CAT_CW_NO_MORSE_RIGS must be the fixture's noMorse — run \
+             `node scripts/gen-hamlib-send-morse.mjs`"
+        );
+        // By name, so a mis-typed number cannot hide in the set: every Xiegu cannot, and the
+        // radios the CAT keyer is known to key can.
+        for (m, who) in [
+            (3076, "X108G"),
+            (3087, "X6100"),
+            (3088, "G90"),
+            (3089, "X5105"),
+            (3091, "X6200"),
+        ] {
+            assert!(!hamlib_can_send_morse(m), "Xiegu {who} ({m})");
+        }
+        for (m, who) in [
+            (3073, "IC-7300"),
+            (1042, "FTDX10"),
+            (1035, "FT-991/991A"),
+            (2037, "TS-590SG"),
+            (2036, "SmartSDR"),
+            (2, "NET rigctl"),
+        ] {
+            assert!(hamlib_can_send_morse(m), "{who} ({m}) keys CW over CAT");
+        }
+        // The unproven caution and this list never name the same model: one says "may not
+        // key", the other "cannot", and a model cannot be both.
+        for m in cat_cw_unproven_rig_models() {
+            assert!(hamlib_can_send_morse(m), "{m} is unproven, not unable");
+        }
     }
 
     /// The never-send table: the FTX-1's three mis-mapped tokens in both directions, the RF power

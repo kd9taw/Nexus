@@ -1,0 +1,988 @@
+{
+  "hamlib": "Hamlib 4.7.1 2026-04-15T20:20:01Z SHA=d042479a9 64-bit",
+  "models": 312,
+  "noMorse": [
+    {
+      "model": 4,
+      "name": "FLRig FLRig"
+    },
+    {
+      "model": 5,
+      "name": "TRXManager TRXManager 5.7.630+"
+    },
+    {
+      "model": 8,
+      "name": "N3FJP ACLog"
+    },
+    {
+      "model": 9,
+      "name": "Airspy SDR#/gpredict"
+    },
+    {
+      "model": 10,
+      "name": "N2ADR James Ahlstrom Quisk"
+    },
+    {
+      "model": 11,
+      "name": "GQRX GQRX"
+    },
+    {
+      "model": 1001,
+      "name": "Yaesu FT-847"
+    },
+    {
+      "model": 1002,
+      "name": "Yaesu FT-1000"
+    },
+    {
+      "model": 1003,
+      "name": "Yaesu FT-1000D"
+    },
+    {
+      "model": 1004,
+      "name": "Yaesu FT-1000MP MARK-V"
+    },
+    {
+      "model": 1005,
+      "name": "Yaesu FT-747GX"
+    },
+    {
+      "model": 1006,
+      "name": "Yaesu FT-757GX"
+    },
+    {
+      "model": 1007,
+      "name": "Yaesu FT-757GXII"
+    },
+    {
+      "model": 1009,
+      "name": "Yaesu FT-767GX"
+    },
+    {
+      "model": 1010,
+      "name": "Yaesu FT-736R"
+    },
+    {
+      "model": 1011,
+      "name": "Yaesu FT-840"
+    },
+    {
+      "model": 1013,
+      "name": "Yaesu FT-900"
+    },
+    {
+      "model": 1014,
+      "name": "Yaesu FT-920"
+    },
+    {
+      "model": 1015,
+      "name": "Yaesu FT-890"
+    },
+    {
+      "model": 1016,
+      "name": "Yaesu FT-990"
+    },
+    {
+      "model": 1017,
+      "name": "Yaesu FRG-100"
+    },
+    {
+      "model": 1018,
+      "name": "Yaesu FRG-9600"
+    },
+    {
+      "model": 1019,
+      "name": "Yaesu FRG-8800"
+    },
+    {
+      "model": 1020,
+      "name": "Yaesu FT-817"
+    },
+    {
+      "model": 1021,
+      "name": "Yaesu FT-100"
+    },
+    {
+      "model": 1022,
+      "name": "Yaesu FT-857"
+    },
+    {
+      "model": 1023,
+      "name": "Yaesu FT-897"
+    },
+    {
+      "model": 1024,
+      "name": "Yaesu FT-1000MP"
+    },
+    {
+      "model": 1025,
+      "name": "Yaesu FT-1000MP MARK-V Field"
+    },
+    {
+      "model": 1026,
+      "name": "Yaesu VR-5000"
+    },
+    {
+      "model": 1031,
+      "name": "Yaesu FT-980"
+    },
+    {
+      "model": 1033,
+      "name": "Vertex Standard VX-1700"
+    },
+    {
+      "model": 1038,
+      "name": "Yaesu FT-847UNI"
+    },
+    {
+      "model": 1039,
+      "name": "Yaesu FT-600"
+    },
+    {
+      "model": 1041,
+      "name": "Yaesu FT-818"
+    },
+    {
+      "model": 1043,
+      "name": "Yaesu FT-897D"
+    },
+    {
+      "model": 1045,
+      "name": "M0NKA mcHF QRP"
+    },
+    {
+      "model": 1047,
+      "name": "Yaesu FT-650"
+    },
+    {
+      "model": 1048,
+      "name": "Yaesu FT-990 Old Rom"
+    },
+    {
+      "model": 2001,
+      "name": "Kenwood TS-50S"
+    },
+    {
+      "model": 2002,
+      "name": "Kenwood TS-440S"
+    },
+    {
+      "model": 2003,
+      "name": "Kenwood TS-450S"
+    },
+    {
+      "model": 2005,
+      "name": "Kenwood TS-690S"
+    },
+    {
+      "model": 2006,
+      "name": "Kenwood TS-711"
+    },
+    {
+      "model": 2007,
+      "name": "Kenwood TS-790"
+    },
+    {
+      "model": 2008,
+      "name": "Kenwood TS-811"
+    },
+    {
+      "model": 2009,
+      "name": "Kenwood TS-850"
+    },
+    {
+      "model": 2011,
+      "name": "Kenwood TS-940S"
+    },
+    {
+      "model": 2012,
+      "name": "Kenwood TS-950S"
+    },
+    {
+      "model": 2013,
+      "name": "Kenwood TS-950SDX"
+    },
+    {
+      "model": 2015,
+      "name": "Kenwood R-5000"
+    },
+    {
+      "model": 2017,
+      "name": "Kenwood TH-D7A"
+    },
+    {
+      "model": 2019,
+      "name": "Kenwood TH-F6A"
+    },
+    {
+      "model": 2020,
+      "name": "Kenwood TH-F7E"
+    },
+    {
+      "model": 2022,
+      "name": "Kenwood TS-930"
+    },
+    {
+      "model": 2023,
+      "name": "Kenwood TH-G71"
+    },
+    {
+      "model": 2024,
+      "name": "Kenwood TS-680S"
+    },
+    {
+      "model": 2025,
+      "name": "Kenwood TS-140S"
+    },
+    {
+      "model": 2026,
+      "name": "Kenwood TM-D700"
+    },
+    {
+      "model": 2027,
+      "name": "Kenwood TM-V7"
+    },
+    {
+      "model": 2030,
+      "name": "Kenwood TRC-80"
+    },
+    {
+      "model": 2032,
+      "name": "SigFox Transfox"
+    },
+    {
+      "model": 2033,
+      "name": "Kenwood TH-D72A"
+    },
+    {
+      "model": 2034,
+      "name": "Kenwood TM-D710(G)"
+    },
+    {
+      "model": 2035,
+      "name": "Kenwood TM-V71(A)"
+    },
+    {
+      "model": 2038,
+      "name": "Elecraft XG3"
+    },
+    {
+      "model": 2042,
+      "name": "Kenwood TH-D74"
+    },
+    {
+      "model": 2046,
+      "name": "Hilberling PT-8000A"
+    },
+    {
+      "model": 2049,
+      "name": "Malachite DSP"
+    },
+    {
+      "model": 2056,
+      "name": "SDR Radio SDRConsole"
+    },
+    {
+      "model": 2057,
+      "name": "QRPLabs QMX"
+    },
+    {
+      "model": 3002,
+      "name": "Icom IC-1275"
+    },
+    {
+      "model": 3003,
+      "name": "Icom IC-271"
+    },
+    {
+      "model": 3004,
+      "name": "Icom IC-275"
+    },
+    {
+      "model": 3005,
+      "name": "Icom IC-375"
+    },
+    {
+      "model": 3006,
+      "name": "Icom IC-471"
+    },
+    {
+      "model": 3007,
+      "name": "Icom IC-475"
+    },
+    {
+      "model": 3008,
+      "name": "Icom IC-575"
+    },
+    {
+      "model": 3009,
+      "name": "Icom IC-706"
+    },
+    {
+      "model": 3010,
+      "name": "Icom IC-706MkII"
+    },
+    {
+      "model": 3011,
+      "name": "Icom IC-706MkIIG"
+    },
+    {
+      "model": 3012,
+      "name": "Icom IC-707"
+    },
+    {
+      "model": 3013,
+      "name": "Icom IC-718"
+    },
+    {
+      "model": 3014,
+      "name": "Icom IC-725"
+    },
+    {
+      "model": 3015,
+      "name": "Icom IC-726"
+    },
+    {
+      "model": 3016,
+      "name": "Icom IC-728"
+    },
+    {
+      "model": 3017,
+      "name": "Icom IC-729"
+    },
+    {
+      "model": 3019,
+      "name": "Icom IC-735"
+    },
+    {
+      "model": 3020,
+      "name": "Icom IC-736"
+    },
+    {
+      "model": 3021,
+      "name": "Icom IC-737"
+    },
+    {
+      "model": 3022,
+      "name": "Icom IC-738"
+    },
+    {
+      "model": 3023,
+      "name": "Icom IC-746"
+    },
+    {
+      "model": 3024,
+      "name": "Icom IC-751"
+    },
+    {
+      "model": 3026,
+      "name": "Icom IC-756"
+    },
+    {
+      "model": 3027,
+      "name": "Icom IC-756PRO"
+    },
+    {
+      "model": 3028,
+      "name": "Icom IC-761"
+    },
+    {
+      "model": 3029,
+      "name": "Icom IC-765"
+    },
+    {
+      "model": 3030,
+      "name": "Icom IC-775"
+    },
+    {
+      "model": 3031,
+      "name": "Icom IC-781"
+    },
+    {
+      "model": 3032,
+      "name": "Icom IC-820H"
+    },
+    {
+      "model": 3034,
+      "name": "Icom IC-821H"
+    },
+    {
+      "model": 3035,
+      "name": "Icom IC-970"
+    },
+    {
+      "model": 3036,
+      "name": "Icom IC-R10"
+    },
+    {
+      "model": 3037,
+      "name": "Icom IC-R71"
+    },
+    {
+      "model": 3038,
+      "name": "Icom IC-R72"
+    },
+    {
+      "model": 3039,
+      "name": "Icom IC-R75"
+    },
+    {
+      "model": 3040,
+      "name": "Icom IC-R7000"
+    },
+    {
+      "model": 3041,
+      "name": "Icom IC-R7100"
+    },
+    {
+      "model": 3042,
+      "name": "Icom IC-R8500"
+    },
+    {
+      "model": 3043,
+      "name": "Icom IC-R9000"
+    },
+    {
+      "model": 3044,
+      "name": "Icom IC-910"
+    },
+    {
+      "model": 3045,
+      "name": "Icom IC-78"
+    },
+    {
+      "model": 3046,
+      "name": "Icom IC-746PRO"
+    },
+    {
+      "model": 3047,
+      "name": "Icom IC-756PROII"
+    },
+    {
+      "model": 3051,
+      "name": "Ten-Tec Omni VI Plus"
+    },
+    {
+      "model": 3052,
+      "name": "Optoelectronics OptoScan535"
+    },
+    {
+      "model": 3053,
+      "name": "Optoelectronics OptoScan456"
+    },
+    {
+      "model": 3054,
+      "name": "Icom IC ID-1"
+    },
+    {
+      "model": 3055,
+      "name": "Icom IC-703"
+    },
+    {
+      "model": 3057,
+      "name": "Icom IC-756PROIII"
+    },
+    {
+      "model": 3058,
+      "name": "Icom IC-R20"
+    },
+    {
+      "model": 3060,
+      "name": "Icom IC-7000"
+    },
+    {
+      "model": 3061,
+      "name": "Icom IC-7200"
+    },
+    {
+      "model": 3064,
+      "name": "Ten-Tec Delta II"
+    },
+    {
+      "model": 3065,
+      "name": "Icom IC-92D"
+    },
+    {
+      "model": 3066,
+      "name": "Icom IC-R9500"
+    },
+    {
+      "model": 3068,
+      "name": "Icom IC-9100"
+    },
+    {
+      "model": 3069,
+      "name": "Icom IC-RX7"
+    },
+    {
+      "model": 3071,
+      "name": "Icom ID-5100"
+    },
+    {
+      "model": 3072,
+      "name": "Icom IC-2730"
+    },
+    {
+      "model": 3074,
+      "name": "Microtelecom Perseus"
+    },
+    {
+      "model": 3076,
+      "name": "Xiegu X108G"
+    },
+    {
+      "model": 3077,
+      "name": "Icom IC-R6"
+    },
+    {
+      "model": 3079,
+      "name": "Icom IC-R8600"
+    },
+    {
+      "model": 3080,
+      "name": "Icom IC-R30"
+    },
+    {
+      "model": 3082,
+      "name": "Icom ID-4100"
+    },
+    {
+      "model": 3083,
+      "name": "Icom ID-31"
+    },
+    {
+      "model": 3084,
+      "name": "Icom ID-51"
+    },
+    {
+      "model": 3086,
+      "name": "Icom IC-F8101"
+    },
+    {
+      "model": 3087,
+      "name": "Xiegu X6100"
+    },
+    {
+      "model": 3088,
+      "name": "Xiegu G90"
+    },
+    {
+      "model": 3089,
+      "name": "Xiegu X5105"
+    },
+    {
+      "model": 3091,
+      "name": "Xiegu X6200"
+    },
+    {
+      "model": 3093,
+      "name": "Icom ID-52A/E PLUS"
+    },
+    {
+      "model": 4001,
+      "name": "Icom IC-PCR1000"
+    },
+    {
+      "model": 4002,
+      "name": "Icom IC-PCR100"
+    },
+    {
+      "model": 4003,
+      "name": "Icom IC-PCR1500"
+    },
+    {
+      "model": 4004,
+      "name": "Icom IC-PCR2500"
+    },
+    {
+      "model": 5001,
+      "name": "AOR AR8200"
+    },
+    {
+      "model": 5002,
+      "name": "AOR AR8000"
+    },
+    {
+      "model": 5003,
+      "name": "AOR AR7030"
+    },
+    {
+      "model": 5004,
+      "name": "AOR AR5000"
+    },
+    {
+      "model": 5005,
+      "name": "AOR AR3030"
+    },
+    {
+      "model": 5006,
+      "name": "AOR AR3000A"
+    },
+    {
+      "model": 5008,
+      "name": "AOR AR2700"
+    },
+    {
+      "model": 5013,
+      "name": "AOR AR8600"
+    },
+    {
+      "model": 5014,
+      "name": "AOR AR5000A"
+    },
+    {
+      "model": 5015,
+      "name": "AOR AR7030 Plus"
+    },
+    {
+      "model": 5016,
+      "name": "AOR SR2200"
+    },
+    {
+      "model": 6001,
+      "name": "JRC JST-145"
+    },
+    {
+      "model": 6002,
+      "name": "JRC JST-245"
+    },
+    {
+      "model": 6005,
+      "name": "JRC NRD-525"
+    },
+    {
+      "model": 6006,
+      "name": "JRC NRD-535D"
+    },
+    {
+      "model": 6007,
+      "name": "JRC NRD-545 DSP"
+    },
+    {
+      "model": 8001,
+      "name": "Uniden BC780xlt"
+    },
+    {
+      "model": 8002,
+      "name": "Uniden BC245xlt"
+    },
+    {
+      "model": 8003,
+      "name": "Uniden BC895xlt"
+    },
+    {
+      "model": 8004,
+      "name": "Radio Shack PRO-2052"
+    },
+    {
+      "model": 8006,
+      "name": "Uniden BC250D"
+    },
+    {
+      "model": 8010,
+      "name": "Uniden BCD-396T"
+    },
+    {
+      "model": 8011,
+      "name": "Uniden BCD-996T"
+    },
+    {
+      "model": 8012,
+      "name": "Uniden BC898T"
+    },
+    {
+      "model": 9001,
+      "name": "Drake R-8"
+    },
+    {
+      "model": 9002,
+      "name": "Drake R-8A"
+    },
+    {
+      "model": 9003,
+      "name": "Drake R-8B"
+    },
+    {
+      "model": 10004,
+      "name": "Lowe HF-235"
+    },
+    {
+      "model": 11003,
+      "name": "Racal RA6790/GM"
+    },
+    {
+      "model": 11005,
+      "name": "Racal RA3702"
+    },
+    {
+      "model": 12004,
+      "name": "Watkins-Johnson WJ-8888"
+    },
+    {
+      "model": 14002,
+      "name": "Skanti TRP8000"
+    },
+    {
+      "model": 14004,
+      "name": "Skanti TRP 8255 S R"
+    },
+    {
+      "model": 16001,
+      "name": "Ten-Tec TT-550"
+    },
+    {
+      "model": 16002,
+      "name": "Ten-Tec TT-538 Jupiter"
+    },
+    {
+      "model": 16003,
+      "name": "Ten-Tec RX-320"
+    },
+    {
+      "model": 16004,
+      "name": "Ten-Tec RX-340"
+    },
+    {
+      "model": 16005,
+      "name": "Ten-Tec RX-350"
+    },
+    {
+      "model": 16007,
+      "name": "Ten-Tec TT-516 Argonaut V"
+    },
+    {
+      "model": 16009,
+      "name": "Ten-Tec TT-585 Paragon"
+    },
+    {
+      "model": 16011,
+      "name": "Ten-Tec TT-588 Omni VII"
+    },
+    {
+      "model": 16012,
+      "name": "Ten-Tec RX-331"
+    },
+    {
+      "model": 16013,
+      "name": "Ten-Tec TT-599 Eagle"
+    },
+    {
+      "model": 17001,
+      "name": "Alinco DX-77"
+    },
+    {
+      "model": 17002,
+      "name": "Alinco DX-SR8"
+    },
+    {
+      "model": 18001,
+      "name": "Kachina 505DSP"
+    },
+    {
+      "model": 22001,
+      "name": "TAPR DSP-10"
+    },
+    {
+      "model": 23001,
+      "name": "FlexRadio SDR-1000"
+    },
+    {
+      "model": 23003,
+      "name": "DTTS Microwave Society DttSP IPC 20200319.0"
+    },
+    {
+      "model": 23004,
+      "name": "DTTS Microwave Society DttSP UDP 20200319.0"
+    },
+    {
+      "model": 24001,
+      "name": "RFT EKD-500"
+    },
+    {
+      "model": 25001,
+      "name": "Elektor Elektor 3/04"
+    },
+    {
+      "model": 25002,
+      "name": "SAT-Schneider DRT1"
+    },
+    {
+      "model": 25006,
+      "name": "AmQRP DDS-60"
+    },
+    {
+      "model": 25008,
+      "name": "mRS miniVNA"
+    },
+    {
+      "model": 25009,
+      "name": "SoftRock Si570 AVR-USB"
+    },
+    {
+      "model": 25011,
+      "name": "KTH-SDR kit Si570 PIC-USB"
+    },
+    {
+      "model": 25012,
+      "name": "FiFi FiFi-SDR"
+    },
+    {
+      "model": 25013,
+      "name": "AMSAT-UK FUNcube Dongle"
+    },
+    {
+      "model": 25014,
+      "name": "N2ADR HiQSDR"
+    },
+    {
+      "model": 25015,
+      "name": "Funkamateur FA-SDR"
+    },
+    {
+      "model": 25016,
+      "name": "AE9RB Si570 Peaberry V1"
+    },
+    {
+      "model": 25017,
+      "name": "AE9RB Si570 Peaberry V2"
+    },
+    {
+      "model": 25018,
+      "name": "AMSAT-UK FUNcube Dongle Pro+"
+    },
+    {
+      "model": 25019,
+      "name": "HobbyPCB RS-HFIQ"
+    },
+    {
+      "model": 27001,
+      "name": "Rohde&Schwarz ESMC"
+    },
+    {
+      "model": 27002,
+      "name": "Rohde&Schwarz EB200"
+    },
+    {
+      "model": 27003,
+      "name": "Rohde&Schwarz XK2100"
+    },
+    {
+      "model": 27004,
+      "name": "Rohde&Schwarz EK895/6"
+    },
+    {
+      "model": 27005,
+      "name": "Rohde&Schwarz XK852"
+    },
+    {
+      "model": 28001,
+      "name": "Philips/Simoco PRM8060"
+    },
+    {
+      "model": 29001,
+      "name": "ADAT www.adat.ch ADT-200A"
+    },
+    {
+      "model": 30001,
+      "name": "Icom IC-M700PRO"
+    },
+    {
+      "model": 30002,
+      "name": "Icom IC-M802"
+    },
+    {
+      "model": 30003,
+      "name": "Icom IC-M710"
+    },
+    {
+      "model": 30004,
+      "name": "Icom IC-M803"
+    },
+    {
+      "model": 31001,
+      "name": "Dorji DRA818V"
+    },
+    {
+      "model": 31002,
+      "name": "Dorji DRA818U"
+    },
+    {
+      "model": 32001,
+      "name": "Barrett 2050"
+    },
+    {
+      "model": 32002,
+      "name": "Barrett 950"
+    },
+    {
+      "model": 32003,
+      "name": "Barrett 4050"
+    },
+    {
+      "model": 32004,
+      "name": "Rhode&Schwarz 4100"
+    },
+    {
+      "model": 33001,
+      "name": "ELAD FDM-DUO"
+    },
+    {
+      "model": 34001,
+      "name": "CODAN Envoy"
+    },
+    {
+      "model": 34002,
+      "name": "CODAN NGT"
+    },
+    {
+      "model": 34003,
+      "name": "CODAN 2110"
+    },
+    {
+      "model": 35001,
+      "name": "GOMSPACE GS100"
+    },
+    {
+      "model": 36001,
+      "name": "MDS 4710"
+    },
+    {
+      "model": 36002,
+      "name": "MDS 9710"
+    },
+    {
+      "model": 37001,
+      "name": "AnyTone D578A"
+    },
+    {
+      "model": 38001,
+      "name": "Micom Micom 2/3"
+    },
+    {
+      "model": 39001,
+      "name": "Commradio CTX-10"
+    },
+    {
+      "model": 40001,
+      "name": "GUOHETEC PMR-171"
+    },
+    {
+      "model": 40002,
+      "name": "GUOHETEC Q900"
+    },
+    {
+      "model": 41001,
+      "name": "Bunzee Labs Simple CAT"
+    },
+    {
+      "model": 42001,
+      "name": "Harris PRC-138"
+    }
+  ],
+  "unread": [
+    2,
+    15009,
+    25003,
+    25007
+  ]
+}

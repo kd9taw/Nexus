@@ -5524,6 +5524,15 @@ export async function getCatCwUnprovenRigModels(): Promise<number[]> {
   return invoke<number[]>('get_cat_cw_unproven_rig_models')
 }
 
+/** Rig models whose Hamlib has no `send_morse`, so the CAT keyer can never key them (every Xiegu
+ *  model, and many older rigs). Drives a notice on the CW settings page naming the keyers that
+ *  can. Measured from the bundled Hamlib and kept in Rust (`rigmodels::CAT_CW_NO_MORSE_RIGS`);
+ *  fetched, not copied here. An empty array means the rule could not be read, and no notice is
+ *  shown. */
+export async function getCatCwNoMorseRigModels(): Promise<number[]> {
+  return invoke<number[]>('get_cat_cw_no_morse_rig_models')
+}
+
 /** Models whose Hamlib CAT PTT can choose the radio's MIC or DATA input — the only ones Settings
  *  offers "Transmit audio source (CAT PTT): Rear/Data" on (#381). The set is measured from the
  *  bundled Hamlib and lives in Rust (`rigmodels::PTT_MIC_DATA_RIGS`); fetched, not copied here.
