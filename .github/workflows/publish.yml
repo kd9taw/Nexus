@@ -613,8 +613,12 @@ jobs:
             exit 1
           fi
 
+          # The CHANGELOG at the tag feeds the site's /whats-new pages (below).
+          git show "$TAG:CHANGELOG.md" > "$WORK/CHANGELOG.md"
+
           cd "$WORK/site"
           DIST="$WORK/dist" NOTES="$WORK/notes.md" REL="$WORK/rel.json" NOTES_SRC="$notes_src" \
+          CHANGELOG="$WORK/CHANGELOG.md" \
           python3 - <<'PY'
           import hashlib, json, os, pathlib, re, sys
 
@@ -716,11 +720,24 @@ jobs:
                        " — the site repo changed shape; fix this workflow, not the site")
           site_ts.write_text(new, encoding="utf-8")
           print(f"version.json -> {ver}, nexusVersion -> {ver}")
+
+          # The site's /whats-new pages render the CHANGELOG's released sections from
+          # src/data/changelog.md. Refresh it in this same commit, from the CHANGELOG at the
+          # tag with its [Unreleased] section cut out, so unreleased prose never reaches the
+          # site (the site's parser skips it too). This job runs for stable releases only.
+          log = pathlib.Path(os.environ["CHANGELOG"]).read_text(encoding="utf-8")
+          released = re.sub(r"^## \[Unreleased\].*?(?=^## \[|\Z)", "", log, count=1, flags=re.S | re.M)
+          if "## [Unreleased]" in released or not re.search(r"^## \[\d+\.\d+\.\d+\]", released, re.M):
+              sys.exit("CHANGELOG.md at the tag has no released sections or a second [Unreleased] — not copying it")
+          if not re.search(rf"^## \[{re.escape(ver)}\]", released, re.M):
+              print(f"::warning::CHANGELOG.md at {tag} has no [{ver}] section; /whats-new shows the newest one it has")
+          pathlib.Path("src/data/changelog.md").write_text(released, encoding="utf-8")
+          print("src/data/changelog.md refreshed from the CHANGELOG at the tag")
           PY
 
           git config user.name 'KD9TAW'
           git config user.email 'kd9taw@protonmail.com'
-          git add public/nexus/version.json src/data/site.ts
+          git add public/nexus/version.json src/data/site.ts src/data/changelog.md
           if git diff --cached --quiet; then
             # A re-run over an already-bumped site. Not an error — and the deploy and live
             # verification below still run, because "committed" is not "served".
@@ -761,6 +778,11 @@ jobs:
           # dropped public/ would otherwise deploy green and serve the old feed.
           grep -q "\"latest\": \"${VER}\"" dist/nexus/version.json \
             || { echo "built dist/nexus/version.json is not $VER:"; head -5 dist/nexus/version.json; exit 1; }
+          # The release's own /whats-new page, once the site has those pages. A warning, as in
+          # the copy step: the downloads and the feed are right without it.
+          if [ -d src/pages/whats-new ] && [ ! -f "dist/whats-new/$VER/index.html" ]; then
+            echo "::warning::the built site has no /whats-new/$VER/ page — is [$VER] in the CHANGELOG at $TAG?"
+          fi
 
           # --branch=main is the difference between a production deploy and a preview that
           # exits 0 and changes nothing. wrangler is pinned to its major so a CLI release
