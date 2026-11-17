@@ -310,3 +310,61 @@ fn an_unconfirmed_split_off_holds_transmit_until_it_is_settled() {
     e.rig_split_cleared();
     assert!(e.tx_allowed(), "settled: simplex at 14.300 keys");
 }
+
+/// The same for the other connection refusal: a station profile on another licensee's call while
+/// a licence class is set. It refuses Nexus's keys; it never approves a split.
+#[test]
+fn a_station_profile_refusal_never_approves_a_split() {
+    let mut e = Engine::new("KD9TAW", "EN52", 0);
+    assert!(e.set_license_class("extra"));
+    e.set_operating_mode("phone", false);
+    e.set_frequency(14.340, "20m", "USB");
+    let club = crate::settings::StationProfile {
+        name: "Club".into(),
+        call: "W9ABC".into(),
+        grid: "EN52".into(),
+        ..crate::settings::StationProfile::default()
+    };
+    let club = e.save_station_profile(club).unwrap();
+    e.switch_station_profile(&club).unwrap();
+    let _ = e.take_split_request();
+    assert_eq!(
+        e.connection_tx_refusal(),
+        Some(crate::settings::STATION_PROFILE_CALL_TX_REFUSED),
+        "precondition: the profile's call refuses keys"
+    );
+    assert!(!e.split_tx_allowed(14.349, ReceiverId::Main));
+    assert_eq!(
+        e.request_operator_split(Some(14.349)),
+        Err(SPLIT_REFUSED_PRIVILEGES.to_string())
+    );
+    assert_eq!(e.take_split_request(), None, "nothing queued");
+    assert!(
+        e.split_tx_allowed(14.345, ReceiverId::Main),
+        "control: in privileges"
+    );
+}
+
+/// ⚠️ A REQUEST MADE AFTER A QSY, REFUSED WHILE KEYED, IS KEPT FOR THE UNKEY: the QSY's return to
+/// simplex was replaced by it, so discarding it would leave the radio on the old VFO B, on the
+/// old band, after the dial moves. The acknowledgement the radio really has is put back meanwhile.
+#[test]
+fn a_refused_request_after_a_qsy_stays_queued_for_the_unkey() {
+    let mut e = station();
+    e.rig_split_applied(14_345_000);
+    // Cross-band: a QSY to 40 m, then a split request there that the loop refuses while keyed.
+    e.set_frequency(7.200, "40m", "LSB");
+    e.request_split(Some(7.301));
+    assert_eq!(e.take_split_request(), Some(Some(7.301)));
+    e.split_refused_while_keyed(7.301);
+    assert_eq!(
+        e.tx_emission_mhz(),
+        14.345,
+        "the gate judges the VFO B the radio still has"
+    );
+    assert_eq!(
+        e.take_split_request(),
+        Some(Some(7.301)),
+        "kept, for the first unkeyed tick"
+    );
+}

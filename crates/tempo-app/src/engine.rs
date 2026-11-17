@@ -2313,6 +2313,9 @@ struct StandingSplit {
     hz: u64,
     rx: crate::dualrx::ReceiverId,
     sat_uplink_acked_hz: Option<u64>,
+    /// The RX dial (Hz) when the rig acknowledged it: a request made after a QSY from here is
+    /// the new frequency's, and must not be thrown away ([`Engine::split_refused_while_keyed`]).
+    dial_hz: u64,
 }
 
 /// The engine seen with a PROPOSED split in place of the acknowledged one, for the key-time gate
@@ -12601,14 +12604,11 @@ impl Engine {
     }
 
     /// The receiver a satellite split at `tx_hz` rides, for judging it before it is written: the
-    /// one the acknowledged split rides when there is one (a Doppler step moves the same VFO),
-    /// otherwise the Sub where the native daemon would put it there
-    /// ([`Self::sat_split_tx_vfo`]); behind Hamlib such a split is refused before the wire, so
-    /// judging it as the Sub refuses nothing that could be sent.
+    /// answer [`Self::sat_split_tx_vfo`] gives the radio loop, Sub for "Sub", Main otherwise.
+    /// Asked as the native daemon, the one backend that writes a Sub uplink; behind Hamlib such
+    /// a split is refused before the wire, so judging it as the Sub refuses nothing that could
+    /// be sent.
     fn sat_split_rx_for(&self, tx_hz: u64) -> crate::dualrx::ReceiverId {
-        if self.tx_split_confirmed_hz.is_some() {
-            return self.tx_split_confirmed_rx;
-        }
         match self.sat_split_tx_vfo(tx_hz, SatCatBackend::NativeCiv) {
             Ok("Sub") => crate::dualrx::ReceiverId::Sub,
             _ => crate::dualrx::ReceiverId::Main,
@@ -12626,9 +12626,19 @@ impl Engine {
     ///
     /// A request made since the loop took this one stays queued; the acknowledgement is put back
     /// either way, because the radio did not move.
+    ///
+    /// ⚠️ AND A REQUEST MADE AFTER A QSY IS KEPT, queued until the key is up. The QSY returned the
+    /// split to simplex and the request replaced that return; discarding it lost both, and after
+    /// the unkey the dial went out while the radio kept transmitting on the old VFO B, on a
+    /// cross-band spot the old band. Kept, it is written unkeyed and the key-time gate judges it
+    /// before anything keys again; the acknowledgement still names the old VFO B meanwhile,
+    /// which is where the radio transmits.
     pub fn split_refused_while_keyed(&mut self, tx_mhz: f64) {
         let standing = self.split_standing;
-        if !self.split_dirty {
+        let dial_moved = standing.is_some_and(|s| s.dial_hz != self.settings.dial_hz());
+        if dial_moved {
+            self.split_dirty = true;
+        } else if !self.split_dirty {
             self.split_tx_mhz = standing.map(|s| s.hz as f64 / 1e6);
         }
         self.tx_split_confirmed_hz = standing.map(|s| s.hz);
@@ -25380,6 +25390,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             hz: tx_hz,
             rx,
             sat_uplink_acked_hz: self.sat_uplink_acked_hz,
+            dial_hz: self.settings.dial_hz(),
         });
         if let Some(b) = self.sat_binding.as_mut() {
             if b.pending_uplink_mhz
