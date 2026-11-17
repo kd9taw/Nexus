@@ -34,6 +34,8 @@ body:
         - Linux (.deb)
         - Linux (AppImage)
         - Raspberry Pi (arm64 .deb)
+        - macOS (Apple Silicon .dmg)
+        - macOS (Intel .dmg)
         - Built from source
     validations:
       required: true

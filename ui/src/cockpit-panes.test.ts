@@ -2166,3 +2166,40 @@ describe('NOTHING PARKED COVERS STOP TX: the bottom surface squeezes into the ro
     expect(v([...strip.slice(0, -1), ['cockpit-qso', 'cockpit-ftstrip', 'panel', 'tx']], 'position')?.value).toBe('sticky')
   })
 })
+
+describe('Settings ▸ Services ▸ Confirmations: the LoTW Sync buttons stay inside their column (#532)', () => {
+  // The two buttons ("Download confirmations", "Download everything again") shared a flex row that
+  // could not wrap, each at its full text width. In a column narrower than the pair the row ran out
+  // of its grid track and over the Station Location field beside it — width-driven, worse in a
+  // longer language. The row now wraps, and a button may shrink (its text wrapping) rather than
+  // stand wider than the column, so neither line can leave the track at any width.
+  const VIEWPORTS = ['xs', 'sm', 'md', 'lg', 'xl'] as const
+  const at = (vp: string) => [
+    new Set([`[data-viewport='${vp}']`]),
+    new Set(['settings-grid']),
+    new Set(['settings-field']),
+    new Set(['settings-input-row', 'settings-input-row--wrap']),
+  ]
+  for (const vp of VIEWPORTS) {
+    it(`at ${vp} the row wraps and a button can shrink to the column`, () => {
+      const row = at(vp)
+      const display = chainWinner(row, blockDecl('display'))
+      expect(display?.value, `\`${display?.sheet}: ${display?.selector}\``).toBe('flex')
+      const wrap = chainWinner(row, blockDecl('flex-wrap'))
+      expect(wrap?.value, `\`${wrap?.sheet}: ${wrap?.selector}\` decides whether the buttons wrap`).toBe('wrap')
+      const button = [...row, new Set(['settings-refresh'])]
+      const flex = chainWinner(button, blockDecl('flex'))
+      expect(flex?.value, `\`${flex?.sheet}: ${flex?.selector}\` — a button that cannot shrink stands wider than a narrow column`).toBe('0 1 auto')
+      const max = chainWinner(button, blockDecl('max-width'))
+      expect(max?.value, `\`${max?.sheet}: ${max?.selector}\``).toBe('100%')
+      const ws = chainWinner(button, blockDecl('white-space'))
+      expect(ws?.value ?? 'normal', `\`${ws?.sheet}: ${ws?.selector}\` — a label that cannot wrap cannot shrink`).not.toBe('nowrap')
+    })
+  }
+
+  it('control: every other input row keeps its one-line layout, and its buttons their width', () => {
+    const row = [new Set(['settings-grid']), new Set(['settings-field']), new Set(['settings-input-row'])]
+    expect(chainWinner(row, blockDecl('flex-wrap'))).toBeNull()
+    expect(chainWinner([...row, new Set(['settings-refresh'])], blockDecl('flex'))?.value).toBe('0 0 auto')
+  })
+})

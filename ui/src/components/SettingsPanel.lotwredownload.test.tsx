@@ -329,3 +329,15 @@ describe('one confirmation download at a time, as on the Logbook', () => {
     expect(api.get('downloadLotwReport')).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('the two LoTW download buttons share a row that wraps (#532)', () => {
+  // The row's layout is computed in cockpit-panes.test.ts from the class this asserts; a row
+  // without it does not wrap, and in a narrow column runs over Station Location beside it.
+  it('both buttons sit in one row carrying the wrapping modifier', async () => {
+    const again = await openLotw()
+    const row = again.parentElement!
+    expect(row.classList.contains('settings-input-row')).toBe(true)
+    expect(row.classList.contains('settings-input-row--wrap')).toBe(true)
+    expect(within(row).getByRole('button', { name: 'Download confirmations' })).toBeTruthy()
+  })
+})

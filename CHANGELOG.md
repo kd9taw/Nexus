@@ -5,6 +5,12 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Settings ▸ Services ▸ Confirmations: the LoTW download buttons no longer cover Station Location** (#532). In a narrow column (a smaller window, a larger text size, or a longer language) **Download confirmations** and **Download everything again** ran past their column and over the **LoTW station location** box beside it. They now wrap onto a second line instead, and a label wraps inside its button before the button would leave the column.
+- The GitHub bug report form now lists macOS (Apple Silicon and Intel) under Platform.
+
 ## [1.25.0] — 2026-11-16
 
 ### Added
