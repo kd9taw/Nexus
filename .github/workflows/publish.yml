@@ -613,8 +613,13 @@ jobs:
             exit 1
           fi
 
-          # The CHANGELOG at the tag feeds the site's /whats-new pages (below).
-          git show "$TAG:CHANGELOG.md" > "$WORK/CHANGELOG.md"
+          # The CHANGELOG at the tag feeds the site's /whats-new pages (below). Non-fatal, like
+          # the copy itself: SourceForge already has this release, so a docs page must never stop
+          # the feed from moving. An empty file takes the copy's refusal path.
+          git show "$TAG:CHANGELOG.md" > "$WORK/CHANGELOG.md" 2>/dev/null || {
+            echo "::warning::could not read CHANGELOG.md at $TAG — /whats-new keeps its previous notes"
+            : > "$WORK/CHANGELOG.md"
+          }
 
           cd "$WORK/site"
           DIST="$WORK/dist" NOTES="$WORK/notes.md" REL="$WORK/rel.json" NOTES_SRC="$notes_src" \
@@ -723,16 +728,42 @@ jobs:
 
           # The site's /whats-new pages render the CHANGELOG's released sections from
           # src/data/changelog.md. Refresh it in this same commit, from the CHANGELOG at the
-          # tag with its [Unreleased] section cut out, so unreleased prose never reaches the
+          # tag with every Unreleased section cut out, so unreleased prose never reaches the
           # site (the site's parser skips it too). This job runs for stable releases only.
-          log = pathlib.Path(os.environ["CHANGELOG"]).read_text(encoding="utf-8")
-          released = re.sub(r"^## \[Unreleased\].*?(?=^## \[|\Z)", "", log, count=1, flags=re.S | re.M)
-          if "## [Unreleased]" in released or not re.search(r"^## \[\d+\.\d+\.\d+\]", released, re.M):
-              sys.exit("CHANGELOG.md at the tag has no released sections or a second [Unreleased] — not copying it")
-          if not re.search(rf"^## \[{re.escape(ver)}\]", released, re.M):
-              print(f"::warning::CHANGELOG.md at {tag} has no [{ver}] section; /whats-new shows the newest one it has")
-          pathlib.Path("src/data/changelog.md").write_text(released, encoding="utf-8")
-          print("src/data/changelog.md refreshed from the CHANGELOG at the tag")
+          #
+          # NON-FATAL, like the beta read above: SourceForge already has this release, so a
+          # CHANGELOG the copy cannot use must never stop the feed from moving (and a re-run
+          # would read the same file at the same tag). Anything wrong is a warning, and the
+          # site's copy is left exactly as it was: /whats-new keeps the previous notes rather
+          # than a copy the site's build would refuse after the push.
+          def released_changelog(log):
+              # An Unreleased heading in any spelling (lowercase, extra spaces, no brackets),
+              # through to the next "## [" heading or the end. Anchored to a line start, so a
+              # released bullet that merely quotes the heading is left alone.
+              unrel = r"^##[ \t]+\[?unreleased\]?[^\n]*(?:\n|\Z)(?:.*?)(?=^##[ \t]+\[|\Z)"
+              out = re.sub(unrel, "", log, flags=re.S | re.M | re.I)
+              if re.search(r"^##[ \t]+\[?unreleased", out, re.M | re.I):
+                  return None, "an Unreleased heading survived the cut"
+              versions = re.findall(r"^## \[(\d+\.\d+\.\d+)\]", out, re.M)
+              if not versions:
+                  return None, "it has no released section"
+              dupes = sorted({v for v in versions if versions.count(v) > 1})
+              if dupes:
+                  return None, f"it repeats a version heading ({', '.join(dupes)})"
+              return out, None
+          try:
+              released, why = released_changelog(
+                  pathlib.Path(os.environ["CHANGELOG"]).read_text(encoding="utf-8"))
+          except Exception as e:  # a docs page never stops the feed
+              released, why = None, f"it could not be read ({e})"
+          if released is None:
+              print(f"::warning::not refreshing the site's CHANGELOG copy: {why}. "
+                    "/whats-new keeps its previous notes; the feed moves as normal.")
+          else:
+              if not re.search(rf"^## \[{re.escape(ver)}\]", released, re.M):
+                  print(f"::warning::CHANGELOG.md at {tag} has no [{ver}] section; /whats-new shows the newest one it has")
+              pathlib.Path("src/data/changelog.md").write_text(released, encoding="utf-8")
+              print("src/data/changelog.md refreshed from the CHANGELOG at the tag")
           PY
 
           git config user.name 'KD9TAW'
@@ -744,7 +775,7 @@ jobs:
             echo "site already at $VER — nothing to commit; continuing to deploy + verify"
           else
             git diff --cached --stat
-            git commit --quiet -m "nexus: version.json to $VER"
+            git commit --quiet -m "nexus: version.json and the CHANGELOG copy to $VER"
             git push --quiet \
               "https://x-access-token:${SITE_REPO_TOKEN}@github.com/${SITE_REPO}.git" HEAD:main || {
               echo "::error::push to ${SITE_REPO}@main was rejected — main moved during this"
