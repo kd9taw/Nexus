@@ -46,12 +46,12 @@ jobs:
           Get-ChildItem $dbg -Filter *.exe -ErrorAction SilentlyContinue | Select-Object Name | Format-Table -AutoSize
           Get-Command procdump -ErrorAction SilentlyContinue
 
-      - name: Plain launch x3 (reproduce) + the app's logs + the Windows error record
+      - name: Plain launch x5 (reproduce) + the app's logs + the Windows error record
         shell: pwsh
         continue-on-error: true
         run: |
           $exe = (Get-ChildItem "$env:LOCALAPPDATA" -Recurse -Depth 3 -Filter 'Nexus.exe' | Select-Object -First 1).FullName
-          for ($i = 1; $i -le 3; $i++) {
+          for ($i = 1; $i -le 5; $i++) {
             $t0 = Get-Date
             $p = Start-Process -FilePath $exe -PassThru
             $null = $p.WaitForExit(60000)
