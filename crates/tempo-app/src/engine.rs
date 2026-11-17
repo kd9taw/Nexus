@@ -9297,6 +9297,14 @@ impl Engine {
         self.settings.qrz_last_sync_unix = unix;
     }
 
+    /// Move the whole-book QRZ fetch's resume point (persisted by the caller), the same narrow
+    /// mutation as [`Self::set_qrz_sync_cursor`]: the next page's `AFTERLOGID` and when the fetch
+    /// began, or `(0, 0)` once its last page is merged.
+    pub fn set_qrz_fetch_cursor(&mut self, after_logid: u64, started_unix: u64) {
+        self.settings.qrz_fetch_after_logid = after_logid;
+        self.settings.qrz_fetch_started_unix = started_unix;
+    }
+
     /// Record the sound card each TX audio device is on ([`Settings::tx_card_models`], persisted by
     /// the caller), as `tempo_audio::notify_sound::tx_card_models_after` works it out after a save.
     /// The narrow write, for the same reason as [`set_qrz_sync_cursor`](Self::set_qrz_sync_cursor).
@@ -37740,6 +37748,7 @@ contact yourself."
         self.settings.lotw_sweep_year = 0;
         self.settings.lotw_sweep_since.clear();
         self.settings.eqsl_last_sync.clear();
+        self.set_qrz_fetch_cursor(0, 0);
         removed
     }
 

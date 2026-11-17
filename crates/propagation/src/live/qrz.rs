@@ -22,7 +22,7 @@ use std::time::Duration;
 /// password, the session key, or the raw transport error. `app_version` names the Nexus build in
 /// the User-Agent ([`user_agent`]).
 pub fn fetch(url: &str, app_version: &str) -> Result<String, String> {
-    let client = client()?;
+    let client = client(CALLBOOK_TIMEOUT)?;
     let request = get_request(&client, url, app_version)?;
     read_callbook_body(client.execute(request).map_err(redact)?)
 }
@@ -32,16 +32,27 @@ pub fn fetch(url: &str, app_version: &str) -> Result<String, String> {
 /// API key, so it must NEVER be logged; transport errors echo the URL (no secret)
 /// only, and are redacted regardless.
 pub fn post_form(url: &str, app_version: &str, body: String) -> Result<String, String> {
-    let client = client()?;
+    let client = client(LOGBOOK_TIMEOUT)?;
     let request = post_request(&client, url, app_version, body)?;
     read_logbook_body(client.execute(request).map_err(redact)?)
 }
 
-/// The most a QRZ Logbook answer is read to. A FETCH with no `MODSINCE` (Logbook sync's first
-/// run, Check confirmations ▸ QRZ) returns the WHOLE book as one ADIF blob, unpaged, with QRZ's
-/// own fields on every record and the tag brackets HTML-entity-encoded: about 1–1.5 KB a contact.
-/// 256 MB holds a 100 000-contact book about twice over. The callbook limit is far too small here.
+/// The most a QRZ Logbook answer is read to. A FETCH with no option returns the WHOLE book as one
+/// ADIF blob, unpaged, with QRZ's own fields on every record and the tag brackets
+/// HTML-entity-encoded: about 1–1.5 KB a contact. Nexus asks for a whole book 250 contacts a page
+/// now (#525), but a MODSINCE delta after a long gap is still one answer of any size, and 256 MB
+/// holds a 100 000-contact book about twice over. The callbook limit is far too small here.
 const LOGBOOK_REPLY_BYTES: u64 = 256 * 1024 * 1024;
+
+/// How long a callbook lookup or login may take, start to finish: a few kilobytes of XML.
+const CALLBOOK_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How long ONE Logbook API request may take, start to finish (#525). The bound used to be the
+/// callbook's 20 s, and a first sync asked for the whole book in one request, so a 35 000-contact
+/// book could never arrive in time. A whole book now comes a page of 250 contacts at a time
+/// (about 300 KB), each page its own request with this bound, so the bound no longer grows with
+/// the book; it is wide enough for QRZ to search a big book for one page on a slow line.
+const LOGBOOK_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// What Nexus calls itself to QRZ: `Nexus/<version>`, the app's own name and version and nothing
 /// else. QRZ asks every application for an identifiable User-Agent and may restrict a generic one;
@@ -144,9 +155,12 @@ impl tempo_core::qrz_correct::QrzLogbook for LogbookApi {
     }
 }
 
-fn client() -> Result<reqwest::blocking::Client, String> {
+/// The HTTPS client every QRZ request goes out on, each request bounded by `timeout` and its
+/// connection by the callbook's bound.
+fn client(timeout: Duration) -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(20))
+        .timeout(timeout)
+        .connect_timeout(CALLBOOK_TIMEOUT)
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -232,7 +246,7 @@ mod tests {
     /// version, and nothing that identifies the operator.
     #[test]
     fn every_qrz_request_names_nexus_and_its_version_only() {
-        let client = client().expect("client");
+        let client = client(CALLBOOK_TIMEOUT).expect("client");
         let lookup = get_request(
             &client,
             "https://xmldata.qrz.com/xml/current/?s=KEY&callsign=AA7BQ",
