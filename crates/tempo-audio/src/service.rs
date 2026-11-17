@@ -5785,6 +5785,13 @@ impl RadioLoop {
         }
     }
 
+    /// Is CAT served by a Hamlib rigctld, so the rig model's Hamlib driver is what answers `b`?
+    /// The one Nexus spawned, or one already running that it shares (no daemon of its own).
+    /// Nexus's own CI-V, OmniRig, Flex, Icom network and TCI daemons are not Hamlib's driver.
+    fn cat_is_hamlib(&self) -> bool {
+        matches!(self.rigctld_proc, None | Some(CatDaemon::Spawned(_)))
+    }
+
     /// ⚠️ THE RIG IS TRANSMITTING AND NEXUS DID NOT ASK — the whole answer, from
     /// both of the things that can know it. Every guard that withholds a write
     /// because the operator is keyed asks THIS, never `rig_keyed` alone.
@@ -13649,40 +13656,16 @@ impl RadioLoop {
                                 eng.cw_key_refused();
                                 eng.set_cw_keyer_error(Some(why));
                             } else {
-                                // A dead CAT link is CAT being down, not the rig saying no: the
-                                // word never reached a radio, and another keyer is not the fix.
-                                // With CAT up, a rig model whose Hamlib has no send_morse
-                                // (`rigmodels::CAT_CW_NO_MORSE_RIGS`) can never be keyed by
-                                // CAT, so it is told the keyers that can. The sentence names the
-                                // rig MODEL: the radio may key from another model's driver.
-                                let cat_ok = self.cat_ok;
-                                let no_morse = !crate::rigmodels::hamlib_can_send_morse(
-                                    self.applied.rig_model,
+                                // What the CW screen says is the link's and the backend's to
+                                // decide ([`cat_cw_error_line`]); nothing here changes keying.
+                                let (cat_ok, link) = (self.cat_ok, self.cat_link());
+                                let hamlib_model =
+                                    self.cat_is_hamlib().then_some(self.applied.rig_model);
+                                eng.set_cw_keyer_error(
+                                    cw_err.map(|e| {
+                                        cat_cw_error_line(&e, cat_ok, &link, hamlib_model)
+                                    }),
                                 );
-                                eng.set_cw_keyer_error(cw_err.map(|e| {
-                                    if cat_cw_link_down(&e, cat_ok) {
-                                        return format!(
-                                            "CAT isn't connected to the radio, so CW from text \
-                                             can't be keyed. Check that no other program has the \
-                                             radio's COM port open and that the COM port in \
-                                             Settings ▸ Radio ▸ Rig & CAT matches the radio, then \
-                                             press Test CAT. ({e})"
-                                        );
-                                    }
-                                    if no_morse {
-                                        return format!(
-                                            "CW can't be keyed over CAT with this rig model: its \
-                                             Hamlib driver has no CW keying (send_morse). Choose \
-                                             the Serial keyline (DTR/RTS) or Soundcard keyer in \
-                                             Settings ▸ CW. ({e})"
-                                        );
-                                    }
-                                    format!(
-                                        "Your rig didn't accept CAT CW keying (Hamlib send_morse) \
-                                         — {e}. Use the WinKeyer keyer, or the Soundcard keyer \
-                                         (which needs Nexus's audio routed to the rig)."
-                                    )
-                                }));
                             }
                         }
                     }
@@ -20932,6 +20915,61 @@ fn cat_cw_link_down(e: &std::io::Error, cat_ok: Option<bool>) -> bool {
         || (cat_ok == Some(false) && e.kind() != Other)
 }
 
+/// The CW screen's line for a CAT CW word that failed with `e`, in order:
+/// 1. the CAT LINK is down ([`cat_cw_link_down`]): CAT is not connected, with the check that
+///    fits how CAT reaches the radio (`link`), and no other keyer offered, since none is the fix;
+/// 2. CAT is a Hamlib rigctld (`hamlib_model` is its rig model) and that model's Hamlib has no
+///    `send_morse` ([`crate::rigmodels::CAT_CW_NO_MORSE_RIGS`]): CW can't be keyed over CAT with
+///    this rig MODEL (the radio may key from another model's driver), and the keyers that can;
+/// 3. otherwise the rig refused, in its own words (#332).
+///
+/// Nexus's own daemons (TCI, OmniRig, Flex, Icom network, CI-V) are not Hamlib's driver, so the
+/// Hamlib sentence is never theirs: their refusal reads as the rig's.
+fn cat_cw_error_line(
+    e: &std::io::Error,
+    cat_ok: Option<bool>,
+    link: &CatLink,
+    hamlib_model: Option<u32>,
+) -> String {
+    if cat_cw_link_down(e, cat_ok) {
+        let check = match link {
+            CatLink::Civ | CatLink::HamlibSerial => "Check that no other program has the radio's \
+                 COM port open and that the COM port in Settings ▸ Radio ▸ Rig & CAT matches the \
+                 radio"
+                .to_string(),
+            CatLink::Network(addr) => format!(
+                "Check the network connection, and that the program serving CAT at {addr} (the \
+                 Network Address in Settings ▸ Radio ▸ Rig & CAT) is running"
+            ),
+            CatLink::Tci => "Check that the SDR program is running with its TCI server on, and \
+                 that the SDR program address and TCI port in Settings ▸ Radio ▸ Rig & CAT match \
+                 it"
+            .to_string(),
+            CatLink::Flex | CatLink::IcomLan => "Check the network connection to the radio, and \
+                 that the radio's address in Settings ▸ Radio ▸ Rig & CAT is right"
+                .to_string(),
+            CatLink::OmniRig => {
+                "Check that OmniRig is running and set up for this radio".to_string()
+            }
+        };
+        return format!(
+            "CAT isn't connected to the radio, so CW from text can't be keyed. {check}, then \
+             press Test CAT. ({e})"
+        );
+    }
+    if hamlib_model.is_some_and(|m| !crate::rigmodels::hamlib_can_send_morse(m)) {
+        return format!(
+            "CW can't be keyed over CAT with this rig model: its Hamlib driver has no CW keying \
+             (send_morse). Choose the Serial keyline (DTR/RTS) or Soundcard keyer in \
+             Settings ▸ CW. ({e})"
+        );
+    }
+    format!(
+        "Your rig didn't accept CAT CW keying (Hamlib send_morse) — {e}. Use the WinKeyer \
+         keyer, or the Soundcard keyer (which needs Nexus's audio routed to the rig)."
+    )
+}
+
 /// Is `port` a typed absolute path (macOS, Linux) whose file is there right now? The presence
 /// half the enumeration cannot supply for a virtual port ([`RadioLoop::port_watch`]). A
 /// real serial device's node goes away when it is unplugged, so this cannot hold one present
@@ -25102,6 +25140,82 @@ mod tests {
             icom.starts_with("Your rig didn't accept CAT CW keying (Hamlib send_morse) — ")
                 && icom.contains("RPRT -11"),
             "a real refusal keeps the rig's own wording, quoted: {icom}"
+        );
+    }
+
+    /// ⛔ THE CAT-DOWN ADVICE FITS HOW CAT REACHES THE RADIO. A refused connection on a COM-port
+    /// rig is a port another program holds or a COM number that changed; on TCI, a network
+    /// rigctld, Nexus's Flex or Icom network client, or OmniRig, there is no COM port of Nexus's
+    /// to check, and the place to look is the SDR program, the network or OmniRig. Every link
+    /// says CAT is down and Test CAT, and none offers another keyer.
+    #[test]
+    fn the_cat_down_advice_names_the_link_cat_actually_uses() {
+        let refused = || std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+        let line = |link: &CatLink| cat_cw_error_line(&refused(), None, link, Some(3073));
+        let net = || CatLink::Network("192.168.1.20:4532".into());
+        for (link, says) in [
+            (CatLink::HamlibSerial, "COM port"),
+            (CatLink::Civ, "COM port"),
+            (net(), "network connection"),
+            (net(), "192.168.1.20:4532"),
+            (net(), "Network Address"),
+            (
+                CatLink::Tci,
+                "SDR program is running with its TCI server on",
+            ),
+            (CatLink::Tci, "TCI port"),
+            (CatLink::Flex, "network connection to the radio"),
+            (CatLink::IcomLan, "network connection to the radio"),
+            (CatLink::OmniRig, "OmniRig is running"),
+        ] {
+            let l = line(&link);
+            assert!(
+                l.starts_with("CAT isn't connected to the radio"),
+                "{link:?}: {l}"
+            );
+            assert!(l.contains(says), "{link:?} says {says:?}: {l}");
+            assert!(l.contains("Test CAT"), "{link:?}: {l}");
+            for wrong in ["WinKeyer", "Soundcard", "didn't accept"] {
+                assert!(!l.contains(wrong), "{link:?} not {wrong:?}: {l}");
+            }
+            if !matches!(link, CatLink::HamlibSerial | CatLink::Civ) {
+                assert!(
+                    !l.contains("COM port"),
+                    "{link:?} has no COM port of Nexus's: {l}"
+                );
+            }
+        }
+    }
+
+    /// ⛔ THE "NO SEND_MORSE IN THIS RIG MODEL'S HAMLIB DRIVER" SENTENCE IS ONLY HAMLIB'S. With a
+    /// Hamlib rigctld serving CAT, a listed model (the G90) is told CW can't be keyed over CAT
+    /// with this rig model; on Nexus's own daemons (TCI with SDR Console's model, a model left
+    /// over under OmniRig), the driver answering `b` is not Hamlib's, so their refusal keeps the
+    /// rig's own wording. Order: a dead link outranks the model.
+    #[test]
+    fn the_no_send_morse_sentence_is_said_only_when_hamlib_serves_cat() {
+        let refused = || std::io::Error::other("rigctld error for \"b TEST\\n\": \"RPRT -11\\n\"");
+        let hamlib = cat_cw_error_line(&refused(), Some(true), &CatLink::HamlibSerial, Some(3088));
+        assert!(
+            hamlib.starts_with("CW can't be keyed over CAT with this rig model"),
+            "Hamlib, G90: {hamlib}"
+        );
+        for (link, model) in [(CatLink::Tci, 2056), (CatLink::OmniRig, 3088)] {
+            let own = cat_cw_error_line(&refused(), Some(true), &link, None);
+            assert!(
+                own.starts_with("Your rig didn't accept CAT CW keying") && own.contains("RPRT -11"),
+                "{link:?} on {model}: not Hamlib's driver, the rig's own words: {own}"
+            );
+        }
+        let down = cat_cw_error_line(
+            &std::io::Error::from(std::io::ErrorKind::ConnectionRefused),
+            None,
+            &CatLink::HamlibSerial,
+            Some(3088),
+        );
+        assert!(
+            down.starts_with("CAT isn't connected"),
+            "a dead link first: {down}"
         );
     }
 

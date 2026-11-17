@@ -271,7 +271,12 @@ describe('CAT keying that cannot report its own failure says so up front', () =>
  * picked for the same radio is another driver, and may key.
  */
 describe('a rig model whose Hamlib cannot send Morse says so where the keyer is chosen', () => {
-  async function openCwOnRig(cwKeyer: string, rigModel: number, noMorse: number[] = [3088]) {
+  async function openCwOnRig(
+    cwKeyer: string,
+    rigModel: number,
+    noMorse: number[] = [3088],
+    rigConn = 'serial',
+  ) {
     api.get('getCatCwNoMorseRigModels').mockImplementation(() => Promise.resolve(noMorse))
     api.get('getSettings').mockImplementation(() =>
       Promise.resolve({
@@ -280,6 +285,7 @@ describe('a rig model whose Hamlib cannot send Morse says so where the keyer is 
         mygrid: 'EN52',
         cwKeyer,
         rigModel,
+        rigConn,
       } as never),
     )
     renderPanel()
@@ -313,6 +319,20 @@ describe('a rig model whose Hamlib cannot send Morse says so where the keyer is 
     await openCwOnRig('cat', 3088, [])
     expect(notice()).toBeNull()
   })
+
+  // The sentence is about HAMLIB's driver, so it belongs only where Hamlib's rigctld serves CAT:
+  // a network rigctld does; OmniRig, TCI and the Icom network client are not Hamlib's driver.
+  it("says it on a network rigctld, which is Hamlib's", async () => {
+    await openCwOnRig('cat', 3088, [3088], 'network')
+    await screen.findByText(/can't be keyed over CAT with this rig model/i)
+  })
+
+  for (const rigConn of ['omnirig', 'tci', 'icomlan']) {
+    it(`stays silent on ${rigConn}, whose driver is not Hamlib's`, async () => {
+      await openCwOnRig('cat', 3088, [3088], rigConn)
+      expect(notice()).toBeNull()
+    })
+  }
 })
 
 /**

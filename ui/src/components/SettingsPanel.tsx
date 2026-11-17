@@ -10420,8 +10420,13 @@ export function SettingsPanel({
                     its `b` is refused every time, so the CAT keyer can never key it. Measured from
                     the bundled Hamlib (`rigmodels::CAT_CW_NO_MORSE_RIGS`). Worded about the rig
                     MODEL, never the radio: the radio may key from another model's driver. A
-                    notice, not a block, and only while the CAT keyer is the one chosen. */}
-                {(form.cwKeyer ?? 'cat') === 'cat' && catCwNoMorseModels.includes(form.rigModel) && (
+                    notice, not a block, and only while the CAT keyer is the one chosen. Only on a
+                    connection Hamlib's rigctld serves: on OmniRig, TCI or the Icom network client
+                    the driver answering is not Hamlib's, so the sentence would not be true there
+                    (the radio loop's CW error makes the same split). */}
+                {(form.cwKeyer ?? 'cat') === 'cat' &&
+                  !['omnirig', 'tci', 'icomlan'].includes(form.rigConn ?? 'serial') &&
+                  catCwNoMorseModels.includes(form.rigModel) && (
                   <span className="settings-warn" role="status">
                     ⚠ <T k="settings.cw.keyer.noMorse" tags={{ b: <strong /> }} />
                   </span>
