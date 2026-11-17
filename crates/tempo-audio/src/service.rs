@@ -36,7 +36,9 @@ use tempo_core::timing::{now_unix_ms, SlotClock};
 use crate::backend::AudioBackend;
 use crate::device::CpalBackend;
 use crate::frames::RxRing;
-use crate::rig::tuning::{hamlib_mode_width, passband_for, retune_passband, same_named_band};
+use crate::rig::tuning::{
+    hamlib_mode_width, newcat_split_tx_write, passband_for, retune_passband, same_named_band,
+};
 use crate::rig::{FuncSet, PttMode, Rig, SerialLine};
 use crate::rigctld_proc::{spawn_rigctld, RigctldProc};
 
@@ -84,6 +86,10 @@ impl CatDaemon {
             CatDaemon::IcomLan(d) => d.is_alive(),
             CatDaemon::Tci(d) => d.is_alive(),
         }
+    }
+    /// Is this Hamlib's own rigctld, the one Nexus spawned?
+    fn is_hamlib(&self) -> bool {
+        matches!(self, CatDaemon::Spawned(_))
     }
     /// The native daemon, when that's what this is (scope drain / enable) — the one carried over
     /// the Icom network session too, so the scope, the Sub levels and the receiver naming work
@@ -12994,6 +13000,31 @@ impl RadioLoop {
                                     let set = rig
                                         .set_split(true, tx_vfo)
                                         .and_then(|()| rig.set_split_freq(tx_hz));
+                                    // On a Hamlib newcat Yaesu, VFO B written by the radio's own
+                                    // `FB` too: Hamlib 4.7.1 may take the `I` and send nothing
+                                    // ([`newcat_split_tx_write`]). Only behind Hamlib (Nexus's
+                                    // spawned rigctld, or one already running); Nexus's own
+                                    // daemons write every `I`. A miss changes nothing here: the
+                                    // `I` was acknowledged, which is all this path had before.
+                                    if set.is_ok()
+                                        && tx_vfo == "VFOB"
+                                        && rig.has_control()
+                                        && self
+                                            .rigctld_proc
+                                            .as_ref()
+                                            .is_none_or(CatDaemon::is_hamlib)
+                                    {
+                                        if let Some(raw) =
+                                            newcat_split_tx_write(self.applied.rig_model, tx_hz)
+                                        {
+                                            if !rig.send_raw_set(&raw) {
+                                                crate::civ::diag::note(
+                                                    "split: rigctld did not take the raw VFO B \
+                                                     write after the split frequency",
+                                                );
+                                            }
+                                        }
+                                    }
                                     let ok = set.is_ok();
                                     retune_note = Some(if ok {
                                         self.split_on_sub = tx_vfo == "Sub";
@@ -46045,6 +46076,117 @@ mod tests {
             assert!(
                 lines.iter().any(|l| l.trim().starts_with("M PKTFM")),
                 "model {model}: control — the downlink is received in FM-D: {lines:?}"
+            );
+        }
+    }
+
+    /// The loop ticks once per entry of `between`, which runs on the engine first, on ONE loop
+    /// state that keeps its rig between ticks: the shape a run of split +/- presses arrives in.
+    fn split_ticks(engine: &Arc<Mutex<Engine>>, rig: Rig, between: Vec<fn(&mut Engine)>) {
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let eng = Arc::clone(engine);
+        std::thread::Builder::new()
+            .name("split-ticks".into())
+            .spawn(move || {
+                let mut rig = rig;
+                let mut backend = MockBackend::new();
+                let mut state = loop_state_for(&eng);
+                let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+                let mut station = StationSinks::new();
+                for f in between {
+                    f(&mut eng.lock().unwrap());
+                    state.last_rig_poll = -1000.0; // the heavy poll is due (at now = 0)
+                    state
+                        .step(
+                            &eng,
+                            &mut backend,
+                            &mut rig,
+                            &sinks,
+                            0.0,
+                            &mut ra,
+                            &mut rr,
+                            &mut station,
+                        )
+                        .unwrap();
+                }
+                let _ = done_tx.send(());
+            })
+            .unwrap();
+        done_rx
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the loop ticks wedged or panicked (its own message is above)");
+    }
+
+    /// The split +/- presses, as the radio loop sends them through Hamlib: split on at 14.235,
+    /// one press, then two presses inside one tick. Every press reaches the wire and the two
+    /// coalesce to the last; `model` is the Hamlib model the radio is set to.
+    fn split_presses_on_the_wire(model: u32) -> Vec<String> {
+        let (addr, seen) = recording_rigctld_stub();
+        let engine = engine_on(model);
+        engine.lock().unwrap().set_operating_mode("phone", false);
+        split_ticks(
+            &engine,
+            Rig::rigctld(&addr),
+            vec![
+                |_| {},
+                |e| e.request_split(Some(14.235)),
+                |e| e.request_split(Some(14.236)),
+                |e| {
+                    e.request_split(Some(14.237));
+                    e.request_split(Some(14.238));
+                },
+            ],
+        );
+        let lines = seen.lock().unwrap().clone();
+        lines
+            .iter()
+            .map(|l| l.trim().to_string())
+            .filter(|l| l.starts_with("S ") || l.starts_with("I ") || l.starts_with("W FB"))
+            .collect()
+    }
+
+    /// ⭐ A SPLIT +/- ON A HAMLIB YAESU WRITES VFO B ITSELF, after the `I`. Hamlib 4.7.1 (the
+    /// bundled rigctld) answers `I` with `RPRT 0` and sends nothing when its cached VFO B
+    /// already equals the request (`rig_set_split_freq`, "freq set not needed"; on the FT-991
+    /// also `ft991_set_split_freq`'s own VFO B cache check). Hamlib issue 1966 is the report and
+    /// PR 2265 the fix, which shipped after 4.7.1. The raw `FB` is the command that fix makes
+    /// Hamlib send.
+    #[test]
+    fn a_split_press_on_a_hamlib_newcat_yaesu_writes_vfo_b_after_the_i() {
+        for model in [1035u32, 1049, 1042, 1040] {
+            assert_eq!(
+                split_presses_on_the_wire(model),
+                vec![
+                    "S 1 VFOB",
+                    "I 14235000",
+                    "W FB014235000; 0",
+                    "S 1 VFOB",
+                    "I 14236000",
+                    "W FB014236000; 0",
+                    "S 1 VFOB",
+                    "I 14238000",
+                    "W FB014238000; 0",
+                ],
+                "model {model}"
+            );
+        }
+    }
+
+    /// CONTROL: any other Hamlib radio gets exactly what it got before: `S` and `I` per press.
+    #[test]
+    fn a_split_press_on_any_other_hamlib_radio_is_unchanged() {
+        for model in [3073u32, 2014, 1051] {
+            assert_eq!(
+                split_presses_on_the_wire(model),
+                vec![
+                    "S 1 VFOB",
+                    "I 14235000",
+                    "S 1 VFOB",
+                    "I 14236000",
+                    "S 1 VFOB",
+                    "I 14238000",
+                ],
+                "model {model}"
             );
         }
     }

@@ -45,6 +45,29 @@ pub(crate) fn hamlib_mode_width(md: &str, rig_model: u32, width: i32) -> i32 {
     }
 }
 
+/// The raw CAT write that puts VFO B on `tx_hz` for Hamlib model `rig_model`, sent after a split
+/// `I`, or `None` where the `I` is left alone.
+///
+/// ⭐ HAMLIB 4.7.1 CAN ANSWER A SPLIT `I` WITH `RPRT 0` AND SEND NOTHING. `rig_set_split_freq`
+/// reads the TX VFO first and returns at once ("freq set not needed") when the read, which may be
+/// answered from Hamlib's cache, equals the request; the FT-991's `ft991_set_split_freq` makes the
+/// same check against its cached VFO B a second time. Hamlib issue 1966 is the report (the TX VFO
+/// stayed where it was and every call said it succeeded), and PR 2265 the fix, merged after 4.7.1
+/// shipped. The bundled rigctld is 4.7.1, and a split +/- on a Yaesu did not reach the radio
+/// until split was turned off and on.
+///
+/// `FB` plus nine digits is the command that fix makes Hamlib send for these radios (newcat
+/// `newcat_set_freq`, VFO B), so the radio gets the same bytes, without the skip in front of them.
+/// On the FTDX101 VFO B is the Sub, which is where newcat puts the split TX.
+///
+/// NEWCAT radios with nine frequency digits only: FT-991/A (1035), FT-891 (1036), FTDX101D
+/// (1040), FTDX10 (1042), FTDX101MP (1044), FT-710 (1049). The FTX-1 (1051) has its own driver,
+/// which re-reads `FB` instead of trusting the cache. The FT-450 takes `FB` only for the selected
+/// VFO, and the eight-digit newcat radios were not checked, so all of those are left alone.
+pub(crate) fn newcat_split_tx_write(rig_model: u32, tx_hz: u64) -> Option<String> {
+    matches!(rig_model, 1035 | 1036 | 1040 | 1042 | 1044 | 1049).then(|| format!("FB{tx_hz:09};"))
+}
+
 /// Are `a` and `b` (Hz) on the SAME NAMED amateur band — i.e. does a retune between them
 /// cross no band boundary?
 ///

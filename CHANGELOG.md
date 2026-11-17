@@ -5,6 +5,11 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Split +/- on a Yaesu reaches the radio as you press it.** With split on, pressing **+** or **−** beside SPLIT could leave the radio transmitting on the old frequency until you turned split off and on again. The Hamlib version Nexus bundles can accept the new TX frequency and not send it to the radio. On the FT-991/FT-991A, FT-891, FT-710, FTDX10 and FTDX101D/MP, Nexus now sets VFO B (the Sub on the FTDX101) directly with each press. Other radios work as before.
+
 ## [1.25.0] — 2026-11-16
 
 ### Added
