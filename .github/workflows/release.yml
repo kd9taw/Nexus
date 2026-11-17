@@ -732,14 +732,21 @@ jobs:
           signer/cargo-tauri signer sign --app-version "$ver" "$exe" >/dev/null
           signer/cargo-tauri signer sign --app-version "$ver" "$app" >/dev/null
           # A key id: bytes 2..9 of the second line of a minisign key or signature file, which
-          # tauri base64-wraps whole.
-          keyid() { base64 -d | sed -n 2p | base64 -d | od -An -tx1 -j2 -N8 | tr -d ' \n'; }
-          want=$(jq -r .plugins.updater.pubkey src-tauri/tauri.conf.json | keyid)
+          # tauri base64-wraps whole. Every reader in it reads to the end of its input: the runner
+          # can start this step with SIGPIPE ignored, so a reader that stops early (`od -N8` did)
+          # hands its writer "Broken pipe", and pipefail fails the release on a good signature.
+          # The id is cut out of the whole hex dump instead, and is exactly 16 hex digits or none.
+          keyid() {
+            local hex
+            hex=$(base64 -d | sed -n 2p | base64 -d | od -An -tx1 -v | tr -d ' \n')
+            [ "${#hex}" -ge 20 ] && printf '%s' "${hex:4:16}"
+          }
+          want=$(jq -r .plugins.updater.pubkey src-tauri/tauri.conf.json | keyid) || want=
           [ -n "$want" ] || { echo "no updater public key in tauri.conf.json"; exit 1; }
           for f in "$exe" "$app"; do
             [ -s "$f.sig" ] || { echo "signing produced no .sig beside $f"; exit 1; }
             [ "$f.sig" -nt "$f" ] || { echo "the .sig is older than $f; refusing"; exit 1; }
-            got=$(keyid < "$f.sig")
+            got=$(keyid < "$f.sig") || got=
             [ "$got" = "$want" ] || { echo "$f.sig is signed by key $got, but clients trust $want; refusing"; exit 1; }
             # The trusted comment is "timestamp:…<TAB>file:…<TAB>version:…", the version last.
             case "$(base64 -d < "$f.sig" | sed -n 3p)" in
