@@ -211,6 +211,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("get_call_history",               RunsAtShack, "The call-history file the shack imported, for the contest strip."),
     ("get_call_history_status",        RunsAtShack, "Which call-history file the shack holds."),
     ("get_call_stats",                 RunsAtShack, "From the shack's logbook."),
+    ("get_cat_cw_no_morse_rig_models", RunsAtShack, "The rig catalog, for the shack's rig setup."),
     ("get_cat_cw_unproven_rig_models", RunsAtShack, "The rig catalog, for the shack's rig setup."),
     ("get_cluster_nodes",              RunsAtShack, "The shack's DX-cluster nodes."),
     ("get_confirmation_diagnostics",   RunsAtShack, "From the shack's logbook."),

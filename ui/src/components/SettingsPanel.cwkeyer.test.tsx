@@ -264,6 +264,58 @@ describe('CAT keying that cannot report its own failure says so up front', () =>
 })
 
 /**
+ * ⭐ A RIG MODEL WHOSE HAMLIB HAS NO SEND_MORSE (field report, a Xiegu: CW never keyed by CAT).
+ * Every Xiegu model of the bundled Hamlib answers the CAT keyer's `b` with "feature not available"
+ * every time (`rigmodels::CAT_CW_NO_MORSE_RIGS`, measured). The CW settings say so plainly where
+ * the keyer is chosen, and name the two keyers that can, worded about the rig MODEL: an Icom model
+ * picked for the same radio is another driver, and may key.
+ */
+describe('a rig model whose Hamlib cannot send Morse says so where the keyer is chosen', () => {
+  async function openCwOnRig(cwKeyer: string, rigModel: number, noMorse: number[] = [3088]) {
+    api.get('getCatCwNoMorseRigModels').mockImplementation(() => Promise.resolve(noMorse))
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve({
+        ...defaultSettings,
+        mycall: 'KD9TAW',
+        mygrid: 'EN52',
+        cwKeyer,
+        rigModel,
+      } as never),
+    )
+    renderPanel()
+    fireEvent.click(await screen.findByRole('tab', { name: 'CW' }))
+    await screen.findByText('Keyer backend')
+  }
+  const notice = () => screen.queryByText(/can't be keyed over CAT with this rig model/i)
+
+  it('says it on a Xiegu G90 with the CAT keyer, and names the keyers that can', async () => {
+    await openCwOnRig('cat', 3088)
+    const text =
+      (await screen.findByText(/can't be keyed over CAT with this rig model/i)).closest('span')
+        ?.textContent ?? ''
+    expect(text).toMatch(/Serial keyline \(DTR\/RTS\)/)
+    expect(text).toMatch(/Soundcard/)
+    // About the model picked, never the radio: another model's driver may key the same radio.
+    expect(text).not.toMatch(/this radio/i)
+  })
+
+  it('stays silent on a model whose Hamlib can send Morse', async () => {
+    await openCwOnRig('cat', 3073)
+    expect(notice()).toBeNull()
+  })
+
+  it('stays silent when another keyer is chosen', async () => {
+    await openCwOnRig('serial', 3088)
+    expect(notice()).toBeNull()
+  })
+
+  it('shows nothing when the rule could not be read', async () => {
+    await openCwOnRig('cat', 3088, [])
+    expect(notice()).toBeNull()
+  })
+})
+
+/**
  * ⭐ THE SAME FIELD REPORT, third symptom: "Soundcard activated caused radio to switch from CW-U
  * to USB, and had to manually change it back."
  *

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **CW by CAT says when CAT itself is down, instead of blaming the radio.** If Nexus cannot reach the radio over CAT at all (most often because another program has the radio's COM port open, or the radio's COM port number has changed), the CW screen used to say your rig didn't accept CAT CW keying and suggested another keyer, which sent you the wrong way. It now says CAT isn't connected to the radio, so CW from text can't be keyed, and asks you to check that no other program has the radio's COM port open and that the COM port in Settings ▸ Radio ▸ Rig & CAT matches the radio, then press Test CAT. A radio that really refuses CAT CW keying still gets the old message, with the radio's own answer quoted. Keying itself is unchanged.
+- **CW by CAT says when your rig model can't key CW over CAT at all.** Hamlib, which Nexus uses for CAT, has no CW keying for some rig models, including every Xiegu model, so the CAT keyer can never key CW with them. When you pick the CAT keyer with one of those rig models, Settings ▸ CW now says CW can't be keyed over CAT with this rig model and suggests the Serial keyline (DTR/RTS) or Soundcard keyer. Sending CW by CAT with such a model shows the same advice on the CW screen. The list comes from the Hamlib bundled with Nexus. It depends on the rig model you pick, not the radio: another model's driver may key the same radio. Keying itself is unchanged.
 
 ## [1.25.0] — 2026-11-16
 

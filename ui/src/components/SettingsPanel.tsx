@@ -70,6 +70,7 @@ import {
   getAllRigModels,
   getPortlessRigModels,
   getCatCwUnprovenRigModels,
+  getCatCwNoMorseRigModels,
   getPttMicDataRigModels,
   getAudioDevices,
   getBandPlan,
@@ -1517,6 +1518,9 @@ export function SettingsPanel({
   /** Models whose CAT CW keyer is unproven and cannot report its own failure, from the backend.
    *  Empty = rule unread, and no caution is shown. Notice only — never blocks a save. */
   const [catCwUnprovenModels, setCatCwUnprovenModels] = useState<number[]>([])
+  /** Rig models whose Hamlib has no send_morse, so the CAT keyer can never key them, from the
+   *  backend. Empty = rule unread, and no notice is shown. Notice only — never blocks a save. */
+  const [catCwNoMorseModels, setCatCwNoMorseModels] = useState<number[]>([])
   /** Models whose CAT PTT can key the radio's MIC or DATA input (#381), from the backend. Empty =
    *  rule unread, and no radio is offered "Transmit audio source", so every one keys Front/Mic. */
   const [pttMicDataModels, setPttMicDataModels] = useState<number[]>([])
@@ -2164,6 +2168,10 @@ export function SettingsPanel({
     // off a keyer that works for him.
     getCatCwUnprovenRigModels()
       .then((m) => mounted && Array.isArray(m) && setCatCwUnprovenModels(m))
+      .catch(() => {})
+    // The backend's "this rig model's Hamlib cannot send Morse" rule, fetched once, the same way.
+    getCatCwNoMorseRigModels()
+      .then((m) => mounted && Array.isArray(m) && setCatCwNoMorseModels(m))
       .catch(() => {})
     // The backend's "this radio's CAT PTT can choose MIC or DATA" rule (#381), fetched once. On
     // failure it stays empty and the choice is not offered: the radio keys as it always has.
@@ -10406,6 +10414,16 @@ export function SettingsPanel({
                 {(form.cwKeyer ?? 'cat') === 'cat' && catCwUnprovenModels.includes(form.rigModel) && (
                   <span className="settings-warn" role="status">
                     ⚠ <T k="settings.cw.keyer.unproven" tags={{ b: <strong /> }} />
+                  </span>
+                )}
+                {/* THIS RIG MODEL'S HAMLIB CANNOT SEND MORSE (every Xiegu model, many older rigs):
+                    its `b` is refused every time, so the CAT keyer can never key it. Measured from
+                    the bundled Hamlib (`rigmodels::CAT_CW_NO_MORSE_RIGS`). Worded about the rig
+                    MODEL, never the radio: the radio may key from another model's driver. A
+                    notice, not a block, and only while the CAT keyer is the one chosen. */}
+                {(form.cwKeyer ?? 'cat') === 'cat' && catCwNoMorseModels.includes(form.rigModel) && (
+                  <span className="settings-warn" role="status">
+                    ⚠ <T k="settings.cw.keyer.noMorse" tags={{ b: <strong /> }} />
                   </span>
                 )}
                 {/* A FLEX OVER SMARTSDR CAT (model 2036) HAS NO DOCUMENTED CW STOP: Esc stops Nexus,

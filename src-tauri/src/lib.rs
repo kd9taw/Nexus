@@ -31457,6 +31457,25 @@ fn get_cat_cw_unproven_rig_models() -> Vec<u32> {
     }
 }
 
+/// Rig models whose Hamlib has no `send_morse`, so the CAT keyer can never key them — the CW
+/// settings page says so, and names the keyers that can, when the operator has picked the CAT
+/// keyer on one of them. Measured from the bundled Hamlib:
+/// [`tempo_audio::rigmodels::CAT_CW_NO_MORSE_RIGS`].
+///
+/// An empty result means "could not be determined" (built without the `radio` feature), and the
+/// form shows no notice, in the same direction as the unproven rule above.
+#[tauri::command]
+fn get_cat_cw_no_morse_rig_models() -> Vec<u32> {
+    #[cfg(feature = "radio")]
+    {
+        tempo_audio::rigmodels::cat_cw_no_morse_rig_models()
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        Vec::new()
+    }
+}
+
 /// Models whose Hamlib CAT PTT can choose the radio's MIC or DATA input — the only ones the Rig &
 /// CAT settings offer "Transmit audio source (CAT PTT): Rear/Data" on (#381). See
 /// [`tempo_audio::rigmodels::PTT_MIC_DATA_RIGS`] for the measurement.
@@ -54603,6 +54622,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         get_all_rig_models,
         get_portless_rig_models,
         get_cat_cw_unproven_rig_models,
+        get_cat_cw_no_morse_rig_models,
         get_ptt_mic_data_rig_models,
         amp_command,
         get_band_plan,

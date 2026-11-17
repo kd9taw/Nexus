@@ -13651,7 +13651,14 @@ impl RadioLoop {
                             } else {
                                 // A dead CAT link is CAT being down, not the rig saying no: the
                                 // word never reached a radio, and another keyer is not the fix.
+                                // With CAT up, a rig model whose Hamlib has no send_morse
+                                // (`rigmodels::CAT_CW_NO_MORSE_RIGS`) can never be keyed by
+                                // CAT, so it is told the keyers that can. The sentence names the
+                                // rig MODEL: the radio may key from another model's driver.
                                 let cat_ok = self.cat_ok;
+                                let no_morse = !crate::rigmodels::hamlib_can_send_morse(
+                                    self.applied.rig_model,
+                                );
                                 eng.set_cw_keyer_error(cw_err.map(|e| {
                                     if cat_cw_link_down(&e, cat_ok) {
                                         return format!(
@@ -13660,6 +13667,14 @@ impl RadioLoop {
                                              radio's COM port open and that the COM port in \
                                              Settings ▸ Radio ▸ Rig & CAT matches the radio, then \
                                              press Test CAT. ({e})"
+                                        );
+                                    }
+                                    if no_morse {
+                                        return format!(
+                                            "CW can't be keyed over CAT with this rig model: its \
+                                             Hamlib driver has no CW keying (send_morse). Choose \
+                                             the Serial keyline (DTR/RTS) or Soundcard keyer in \
+                                             Settings ▸ CW. ({e})"
                                         );
                                     }
                                     format!(
@@ -25014,6 +25029,80 @@ mod tests {
                 "a dead link is not the rig refusing, and another keyer is not the fix: {said}"
             );
         }
+    }
+
+    /// ⛔ ON A RIG MODEL WHOSE HAMLIB CANNOT SEND MORSE, THE CW SCREEN SAYS SO AND NAMES THE KEYERS
+    /// THAT CAN. Every Xiegu model of the bundled Hamlib has no `send_morse`, so with CAT up its
+    /// `b` is `RPRT -11` every time (`rigmodels::CAT_CW_NO_MORSE_RIGS`). "Your rig didn't accept"
+    /// left the operator to guess; the sentence now says CW can't be keyed over CAT with this rig
+    /// MODEL (an Icom model picked for a Xiegu is another driver) and names the Serial keyline and
+    /// the Soundcard keyer. CONTROL: the same refusal on a model whose Hamlib can send keeps the
+    /// rig's own wording, quoted.
+    #[test]
+    fn a_cat_keyer_on_a_rig_model_with_no_send_morse_names_the_keyers_that_can() {
+        let said_for = |model: u32| -> String {
+            let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                // The model in the settings the loop is built from, so it sees no rig change.
+                let mut s = e.settings().clone();
+                s.rig_model = model;
+                e.apply_settings(s);
+                e.set_license_class("extra");
+                e.set_cw_keyer("cat", 600.0);
+                e.set_operating_mode("cw", false);
+                e.set_frequency(7.03, "40m", "CW");
+                e.send_cw("TEST");
+            }
+            let (addr, log) = mock_rigctld_refusing(7_030_000, &["b"]);
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let mut state = loop_state_for(&engine);
+            assert_eq!(
+                state.applied.rig_model, model,
+                "premise: the loop's rig model"
+            );
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    100.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            assert!(
+                log.lock().unwrap().iter().any(|l| l.starts_with("b TEST")),
+                "premise: the CAT keyer sent the word on a live link — {:?}",
+                log.lock().unwrap()
+            );
+            let said = engine.lock().unwrap().cw_keyer_error();
+            said.expect("a refused word must say so")
+        };
+
+        let xiegu = said_for(3088); // Xiegu G90
+        assert!(
+            xiegu.starts_with("CW can't be keyed over CAT with this rig model"),
+            "the CW screen says the rig model cannot: {xiegu}"
+        );
+        for keyer in ["Serial keyline (DTR/RTS)", "Soundcard"] {
+            assert!(xiegu.contains(keyer), "names {keyer:?}: {xiegu}");
+        }
+        for wrong in ["didn't accept", "CAT isn't connected", "this radio"] {
+            assert!(!xiegu.contains(wrong), "not {wrong:?}: {xiegu}");
+        }
+
+        let icom = said_for(3073); // IC-7300, whose Hamlib can send
+        assert!(
+            icom.starts_with("Your rig didn't accept CAT CW keying (Hamlib send_morse) — ")
+                && icom.contains("RPRT -11"),
+            "a real refusal keeps the rig's own wording, quoted: {icom}"
+        );
     }
 
     /// Every `b <word>` (Hamlib send_morse) a rig was sent: the CAT keyer's wire.
