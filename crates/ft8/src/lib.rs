@@ -20,12 +20,11 @@ mod var;
 pub use tempo_fast_sys::{Ft8VarParams, OPENMP_THREAD_STACK};
 pub use var::{
     decode_frame_var, decode_frame_var_raw, napwid_for_dial, on_decoder_thread_wait,
-    var_load_callsign_db, var_reset, var_slices, var_threads, VarRequest,
+    openmp_selfcheck, var_load_callsign_db, var_reset, var_slices, var_threads, VarRequest,
 };
 
-/// libtempo's OpenMP self-check (the runtime the multithreaded FT8 decoder runs on); see
-/// [`tempo_fast_sys::openmp_selfcheck`].
-pub use tempo_fast_sys::{openmp_selfcheck, OpenMpCheck};
+/// What [`openmp_selfcheck`] found (the runtime the multithreaded FT8 decoder runs on).
+pub use tempo_fast_sys::OpenMpCheck;
 
 /// WSJT-X audio sample rate (Hz).
 pub const SAMPLE_RATE: f32 = 12_000.0;

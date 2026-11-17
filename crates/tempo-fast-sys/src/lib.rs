@@ -1648,7 +1648,7 @@ extern "C" {
     pub fn jtdx_set_decode_caps(nft8: c_int, nft4: c_int);
 }
 
-/// What [`openmp_selfcheck`] found: the OpenMP runtime libtempo links is present and runs.
+/// What [`openmp_probe_on_this_thread`] found: the OpenMP runtime libtempo links is present and runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpenMpCheck {
     /// Threads asked for.
@@ -1675,37 +1675,31 @@ extern "C" {
 /// gets 2 MiB unless it asks. So a thread that calls such code is spawned with this size.
 pub const OPENMP_THREAD_STACK: usize = 10 << 20;
 
-/// Run libtempo's OpenMP self-check with `requested` threads (see `libtempo/omp_probe.f90`), on a
-/// thread of its own with [`OPENMP_THREAD_STACK`], as a decode thread must be.
+/// Run libtempo's OpenMP self-check with `requested` threads (see `libtempo/omp_probe.f90`) ON THE
+/// CALLING THREAD, which then becomes the master of an OpenMP team.
+///
+/// ⛔ Call it only from a thread that lives as long as the process and has
+/// [`OPENMP_THREAD_STACK`]: `ft8::openmp_selfcheck` runs it on ft8var's decoder thread. A thread
+/// that has started a parallel region must never exit on Windows. There, with libgomp and
+/// winpthreads linked statically into a MinGW image, libgomp's thread-exit destructor
+/// (`gomp_free_thread`, run from winpthreads' TLS callback) reads that thread's emulated-TLS block
+/// after MinGW's emutls destructor has freed it: a use-after-free that corrupts the heap. The
+/// 1.25.0 dry run died of exactly that (STATUS_HEAP_CORRUPTION at launch) when this probe ran on a
+/// short-lived thread of its own.
 ///
 /// It touches no modem state, so it takes no [`MODEM_LOCK`]. A broken runtime link fails the
 /// build; a worker stack too small for the multithreaded FT8 decoder crashes here, where the
 /// cause is plain, rather than inside a decode.
-pub fn openmp_selfcheck(requested: i32) -> OpenMpCheck {
+pub fn openmp_probe_on_this_thread(requested: i32) -> OpenMpCheck {
     let requested = requested.max(1);
-    let probe = move || {
-        let (mut ran, mut max_threads) = (0, 0);
-        // SAFETY: two out-pointers to locals; the probe reads and writes nothing else of ours.
-        unsafe { tempo_omp_probe(requested, &mut ran, &mut max_threads) };
-        OpenMpCheck {
-            requested,
-            ran,
-            max_threads,
-        }
-    };
-    std::thread::Builder::new()
-        .name("openmp-probe".into())
-        .stack_size(OPENMP_THREAD_STACK)
-        .spawn(probe)
-        .and_then(|t| {
-            t.join()
-                .map_err(|_| std::io::Error::other("the OpenMP probe panicked"))
-        })
-        .unwrap_or(OpenMpCheck {
-            requested,
-            ran: 0,
-            max_threads: 0,
-        })
+    let (mut ran, mut max_threads) = (0, 0);
+    // SAFETY: two out-pointers to locals; the probe reads and writes nothing else of ours.
+    unsafe { tempo_omp_probe(requested, &mut ran, &mut max_threads) };
+    OpenMpCheck {
+        requested,
+        ran,
+        max_threads,
+    }
 }
 
 /// The manifest gate's scanners, compiled into the TEST target only.
@@ -1752,24 +1746,6 @@ mod tests {
         assert_eq!(offset_of!(Ft8VarParams, mybcall), 188);
         assert_eq!(offset_of!(Ft8VarParams, hisbcall), 200);
         assert_eq!(offset_of!(Ft8VarParams, hisgrid), 212);
-    }
-
-    /// libtempo's OpenMP runtime links, starts a team of the size asked for, and every worker has
-    /// the 4 MB of stack the multithreaded FT8 decoder's arrays need (omp_env.c sets WSJT-X's
-    /// OMP_STACKSIZE of 10M before libgomp starts; without it a worker would crash here).
-    #[test]
-    fn openmp_runtime_runs_a_team_with_decoder_sized_stacks() {
-        let check = openmp_selfcheck(4);
-        assert_eq!(check.ran, 4, "{check:?}");
-        assert!(check.max_threads >= 1, "{check:?}");
-        if std::env::var_os("OMP_STACKSIZE").is_some_and(|v| v != "10M") {
-            return; // an operator's own setting is left alone, by design
-        }
-        assert_eq!(
-            std::env::var("OMP_STACKSIZE").as_deref(),
-            Ok("10M"),
-            "libtempo's constructor sets WSJT-X's worker stack size before libgomp reads it"
-        );
     }
 
     /// Lock the C-ABI byte layout of `Ft1DecodeT` to `ft1_decode_t` in

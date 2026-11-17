@@ -461,6 +461,18 @@ pub fn var_load_callsign_db(dir: &Path) -> bool {
     })
 }
 
+/// libtempo's OpenMP self-check (`tempo_fast_sys::openmp_probe_on_this_thread`), run on the
+/// decoder thread: `requested` threads each work through a 4 MB stack array.
+///
+/// On the decoder thread because a thread that has started an OpenMP parallel region must live as
+/// long as the process: on Windows, libgomp's thread-exit cleanup of a statically linked MinGW
+/// image reads freed thread-local memory and corrupts the heap (see that function). Run on a
+/// thread of its own, the check killed the 1.25.0 dry run's build at launch. It touches no modem
+/// state, so it takes no modem lock; the decoder thread runs one job at a time.
+pub fn openmp_selfcheck(requested: i32) -> tempo_fast_sys::OpenMpCheck {
+    on_decoder_thread_wait(move || tempo_fast_sys::openmp_probe_on_this_thread(requested))
+}
+
 /// What WSJT-X resets when the mode changes (`decoder.f90:190-196`): the average DT and the
 /// decoder's callsign hash tables. Call where the standard decoder's a7 table is reset.
 pub fn var_reset() {
