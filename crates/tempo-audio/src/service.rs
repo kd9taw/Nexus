@@ -53,6 +53,10 @@ use monitor_claims::{RadioClaim, RadioClaims};
 
 /// Why a split TX dial was not written into a keyed radio: it is outside the licence
 /// (the radio loop's split apply).
+/// Why transmit is held after a split OFF the radio did not confirm (the radio loop's simplex
+/// apply, [`Engine::rig_split_unknown`]).
+const SPLIT_OFF_UNCONFIRMED: &str = "The radio did not confirm split OFF, so transmit is held \
+     until it does: change frequency, or turn SPLIT on and off, to send it again.";
 const SPLIT_KEYED_OUTSIDE_PRIVILEGES: &str =
     "Split not set while transmitting: that transmit frequency is outside your license \
      privileges.";
@@ -13188,9 +13192,13 @@ impl RadioLoop {
                             // BAND is released the same way it was engaged: the
                             // backend leaves satellite mode (firing `0F 00` at a rig
                             // in satellite mode would strand it there).
-                            let cleared = rig
-                                .set_split(false, if self.split_on_sub { "Sub" } else { "VFOA" })
-                                .is_ok();
+                            // A link that cannot control split at all (`RPRT -11`/`-4`) has no
+                            // split to leave: that is simplex, as WSJT-X takes it.
+                            let cleared = if self.split_on_sub {
+                                rig.set_split(false, "Sub").is_ok()
+                            } else {
+                                rig.set_split_where_available(false, "VFOA").is_ok()
+                            };
                             if self.split_on_sub && !cleared {
                                 // The rig would NOT leave satellite mode — it is
                                 // still in it, TX still exits the Sub band, and
@@ -13208,6 +13216,13 @@ impl RadioLoop {
                             }
                             if cleared {
                                 engine_lock(engine).rig_split_cleared();
+                            } else if !self.split_on_sub {
+                                // ⛔ A LOST OR REFUSED `S 0` IS NOT SIMPLEX. The radio may still
+                                // be split, on a TX frequency nothing now vouches for: the split
+                                // is UNKNOWN, and the gate refuses until a write settles it
+                                // (`Engine::rig_split_unknown`). The next QSY sends `S 0` again.
+                                engine_lock(engine).rig_split_unknown();
+                                retune_note = Some(SPLIT_OFF_UNCONFIRMED.to_string());
                             }
                             self.last_split_mode = None;
                         }
@@ -46302,7 +46317,7 @@ mod tests {
     }
 
     /// ⛔ A SPLIT REFUSED AT THE WRITE LEAVES THE RADIO'S SPLIT STANDING, IN NEXUS TOO. Split on at
-    /// 14.345, the radio keyed at its front panel (a rig-reported PTT), then a spot's "UP 9" past
+    /// 14.345, the radio keyed at its front panel (a rig-reported PTT), then a split request past
     /// the 20 m edge. The radio gets nothing new; Nexus still holds 14.345 (the badge, and the
     /// gate's acknowledgement), and a later QSY sends `S 0` as for any split. Routed through the
     /// rig-rejected path, Nexus showed simplex and judged the dial while the radio stayed split,
@@ -46326,8 +46341,10 @@ mod tests {
                 |_, _| {},
                 |e, _| e.request_operator_split(Some(14.345)).unwrap(),
                 |e, s| {
+                    // A request no check saw when it was asked (every source in this build is
+                    // judged then; `request_split` is the one-shot they all feed).
                     s.rig_keyed = true;
-                    e.work_spot_split("phone", 14.340, "20m", Some(9.0));
+                    e.request_split(Some(14.349));
                 },
                 |e, s| {
                     s.rig_keyed = false;
@@ -46358,6 +46375,113 @@ mod tests {
             vec!["S 1 VFOB", "I 14345000", "S 0 VFOA"],
             "nothing new; then S 0"
         );
+    }
+
+    /// ⛔ THE FRONT-PANEL POLL GAP. The radio keyed at its own front panel, and the loop has not
+    /// polled it yet (`rig_keyed` false): a spot's "UP 9" past the edge must still write nothing,
+    /// because it is refused when it is asked, not only when the loop knows the radio is keyed.
+    #[test]
+    fn a_spot_split_past_the_edge_writes_nothing_even_before_the_loop_sees_a_key() {
+        let (addr, seen) = recording_rigctld_stub();
+        let engine = engine_on(3073);
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.license_class = tempo_app::settings::LicenseClass::Extra;
+            e.apply_settings(s);
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.340, "20m", "USB");
+        }
+        split_ticks(
+            &engine,
+            Rig::rigctld(&addr),
+            vec![
+                |_, _| {},
+                |e, s| {
+                    assert!(!s.rig_keyed, "precondition: the loop has not seen the key");
+                    e.work_spot_split("phone", 14.340, "20m", Some(9.0));
+                },
+                |_, _| {},
+            ],
+        );
+        let lines = seen.lock().unwrap().clone();
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.trim().starts_with("I ") || l.trim() == "S 1 VFOB"),
+            "no split written: {lines:?}"
+        );
+        assert_eq!(engine.lock().unwrap().split_tx_mhz(), None);
+    }
+
+    /// A rigctld that answers `RPRT -9` to a split OFF and `RPRT 0` to everything else, logging
+    /// every line.
+    fn split_off_refusing_rigctld_stub() -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let rec = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let Ok(mut out) = stream.try_clone() else {
+                    return;
+                };
+                for line in BufReader::new(stream).lines() {
+                    let Ok(line) = line else { break };
+                    let reply: &[u8] = if line.trim().starts_with("S 0") {
+                        b"RPRT -9\n"
+                    } else {
+                        b"RPRT 0\n"
+                    };
+                    rec.lock().unwrap().push(line);
+                    if out.write_all(reply).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, seen)
+    }
+
+    /// ⛔ A SPLIT OFF THE RADIO REFUSED IS NOT SIMPLEX. The radio may still be split: transmit is
+    /// held (the split is unknown), the operator is told, and the next QSY sends `S 0` again.
+    #[test]
+    fn a_refused_split_off_holds_transmit_and_is_sent_again_at_the_next_qsy() {
+        let (addr, seen) = split_off_refusing_rigctld_stub();
+        let engine = engine_on(3073);
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.license_class = tempo_app::settings::LicenseClass::Extra;
+            e.apply_settings(s);
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.340, "20m", "USB");
+        }
+        split_ticks(
+            &engine,
+            Rig::rigctld(&addr),
+            vec![
+                |_, _| {},
+                |e, _| e.request_operator_split(Some(14.345)).unwrap(),
+                |e, _| {
+                    assert!(e.tx_allowed(), "precondition: the split keys");
+                    e.set_frequency(14.300, "20m", "USB");
+                },
+                |e, _| {
+                    assert!(!e.tx_allowed(), "an unconfirmed split OFF holds transmit");
+                    e.set_frequency(14.310, "20m", "USB");
+                },
+            ],
+        );
+        let offs = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|l| l.trim().starts_with("S 0"))
+            .count();
+        assert_eq!(offs, 2, "the second QSY sends S 0 again");
     }
 
     /// CONTROL: an in-privilege press under the same held PTT is written at once, as before.

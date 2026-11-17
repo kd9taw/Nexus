@@ -2314,6 +2314,47 @@ struct StandingSplit {
     rx: crate::dualrx::ReceiverId,
     sat_uplink_acked_hz: Option<u64>,
 }
+
+/// The engine seen with a PROPOSED split in place of the acknowledged one, for the key-time gate
+/// to judge ([`Engine::split_tx_allowed`]). It reads as the engine (`Deref`), and its `Drop` puts
+/// the acknowledgement back, so no early return or panic can leave a proposal standing as if the
+/// rig had acknowledged it.
+struct ProposedSplit<'a> {
+    engine: &'a mut Engine,
+    held: (Option<u64>, crate::dualrx::ReceiverId, Option<u64>),
+}
+
+impl<'a> ProposedSplit<'a> {
+    fn new(engine: &'a mut Engine, tx_hz: u64, rx: crate::dualrx::ReceiverId) -> Self {
+        let held = (
+            engine.tx_split_confirmed_hz,
+            engine.tx_split_confirmed_rx,
+            engine.sat_uplink_acked_hz,
+        );
+        engine.tx_split_confirmed_hz = Some(tx_hz);
+        engine.tx_split_confirmed_rx = rx;
+        engine.sat_uplink_acked_hz = engine.sat_uplink_acked_for(tx_hz);
+        Self { engine, held }
+    }
+}
+
+impl std::ops::Deref for ProposedSplit<'_> {
+    type Target = Engine;
+    fn deref(&self) -> &Engine {
+        self.engine
+    }
+}
+
+impl Drop for ProposedSplit<'_> {
+    fn drop(&mut self) {
+        let e = &mut *self.engine;
+        (
+            e.tx_split_confirmed_hz,
+            e.tx_split_confirmed_rx,
+            e.sat_uplink_acked_hz,
+        ) = self.held;
+    }
+}
 const CW_ARMED_CW_PRIVILEGES: &str =
     "Not sent: where it would key is outside your license's CW privileges.";
 const CW_ARMED_EMPTY: &str = "Not sent: the message is empty.";
@@ -4841,6 +4882,11 @@ pub struct Engine {
     /// the write puts back ([`Engine::split_refused_while_keyed`]): nothing was sent, so this is
     /// still exactly where the radio transmits.
     split_standing: Option<StandingSplit>,
+    /// The radio did not confirm a split OFF ([`Engine::rig_split_unknown`]): it may still be
+    /// split, on a TX frequency nothing vouches for, so the gate refuses
+    /// ([`TxFreqVerdict::SplitUnverified`]) until a split write settles it. A QSY sends `S 0`
+    /// again for it.
+    split_unknown: bool,
     /// What the RIG last said about its own split, and when (unix secs): `(on, tx_hz, at)`.
     ///
     /// Written only from a capability-verified NATIVE read (`SplitDetect::Native`) — never from
@@ -7975,6 +8021,7 @@ impl Engine {
             tx_split_confirmed_rx: crate::dualrx::ReceiverId::Main,
             sat_uplink_acked_hz: None,
             split_standing: None,
+            split_unknown: false,
             observed_split: None,
             observed_split_held_since: None,
             split_dirty: false,
@@ -9860,7 +9907,9 @@ impl Engine {
         self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
         self.observed_split = None; // …and what the rig said about the OLD dial says nothing here
         self.split_standing = None; // …and the split the OLD radio had is not the new one's
-        if self.split_tx_mhz.take().is_some() {
+                                    // The new radio gets `S 0` (below) when either was in doubt.
+        let was_unknown = std::mem::take(&mut self.split_unknown);
+        if self.split_tx_mhz.take().is_some() || was_unknown {
             self.split_dirty = true;
         }
         // ⚠️ AND THE CLARIFIER BELIEFS, for the split's reason. RIT/XIT is a write-only
@@ -10505,7 +10554,7 @@ impl Engine {
         // pile-up must never silently shift TX on the next frequency.
         self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
         self.observed_split = None; // …and what the rig said about the OLD dial says nothing here
-        if self.split_tx_mhz.take().is_some() {
+        if self.split_tx_mhz.take().is_some() || self.split_unknown {
             self.split_dirty = true;
         }
         self.sync_fd_band();
@@ -10621,7 +10670,7 @@ impl Engine {
         // transmitting off-frequency — and the SPLIT badge would lie about the offset.
         self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
         self.observed_split = None; // …and what the rig said about the OLD dial says nothing here
-        if self.split_tx_mhz.take().is_some() {
+        if self.split_tx_mhz.take().is_some() || self.split_unknown {
             self.split_dirty = true;
         }
         // A cross-band knob QSY is a leave-event for the per-(band, mode) dial memory
@@ -12122,8 +12171,18 @@ impl Engine {
         // must not key FM onto an SSB spot).
         self.sideband_override = None;
         if let Some(up) = split_up_khz {
-            self.split_tx_mhz = Some(freq_mhz + up / 1000.0 - off);
-            self.split_dirty = true;
+            // ⛔ JUDGED WHEN IT IS ASKED, like the operator's press: a split outside the licence
+            // is never queued, keyed or not (the loop sees a front-panel key only at its next
+            // poll, and cannot unkey it). The QSY still happens, and its own return to simplex
+            // stands; the CAT status says why the split was not set.
+            let tx = freq_mhz + up / 1000.0 - off;
+            if self.split_tx_allowed(tx, crate::dualrx::ReceiverId::Main) {
+                self.split_tx_mhz = Some(tx);
+                self.split_dirty = true;
+            } else {
+                let ok = self.cat_status.0;
+                self.set_cat_status(ok, SPLIT_REFUSED_PRIVILEGES.to_string());
+            }
         }
         // Navigation hint: working a spot should land the operator IN the matching
         // cockpit, whichever window the click came from (a pop-out board can't
@@ -12530,28 +12589,30 @@ impl Engine {
     /// passed it and was then refused at the key. The press, the radio loop's write while keyed
     /// and the Remote's split admission all ask this, so none of them can disagree with the key.
     ///
-    /// A connection that refuses every transmission refuses this split's too, at the key; it is
-    /// not a licence refusal, so it does not refuse the split here.
+    /// The CONNECTION refusal is masked out, never turned into an answer: the licence verdict is
+    /// computed as it is for any key ([`Self::licence_allows_as_for`]). Nothing is mutated past
+    /// this call: the borrowed acknowledgement is put back by a guard, even on a panic
+    /// ([`ProposedSplit`]).
     pub fn split_tx_allowed(&mut self, tx_mhz: f64, rx: crate::dualrx::ReceiverId) -> bool {
-        if self.connection_tx_refusal().is_some() {
-            return true;
-        }
         let tx_hz = (tx_mhz * 1e6).round() as u64;
-        let held = (
-            self.tx_split_confirmed_hz,
-            self.tx_split_confirmed_rx,
-            self.sat_uplink_acked_hz,
-        );
-        self.tx_split_confirmed_hz = Some(tx_hz);
-        self.tx_split_confirmed_rx = rx;
-        self.sat_uplink_acked_hz = self.sat_uplink_acked_for(tx_hz);
-        let allowed = self.tx_source_verdict().tx_allowed;
-        (
-            self.tx_split_confirmed_hz,
-            self.tx_split_confirmed_rx,
-            self.sat_uplink_acked_hz,
-        ) = held;
-        allowed
+        let proposed = ProposedSplit::new(self, tx_hz, rx);
+        let frame = proposed.tx_data_frame();
+        proposed.licence_verdict_for(frame).tx_allowed
+    }
+
+    /// The receiver a satellite split at `tx_hz` rides, for judging it before it is written: the
+    /// one the acknowledged split rides when there is one (a Doppler step moves the same VFO),
+    /// otherwise the Sub where the native daemon would put it there
+    /// ([`Self::sat_split_tx_vfo`]); behind Hamlib such a split is refused before the wire, so
+    /// judging it as the Sub refuses nothing that could be sent.
+    fn sat_split_rx_for(&self, tx_hz: u64) -> crate::dualrx::ReceiverId {
+        if self.tx_split_confirmed_hz.is_some() {
+            return self.tx_split_confirmed_rx;
+        }
+        match self.sat_split_tx_vfo(tx_hz, SatCatBackend::NativeCiv) {
+            Ok("Sub") => crate::dualrx::ReceiverId::Sub,
+            _ => crate::dualrx::ReceiverId::Main,
+        }
     }
 
     /// A split the radio loop REFUSED to write into a keyed radio ([`Self::split_tx_allowed`]):
@@ -12588,6 +12649,16 @@ impl Engine {
     /// The radio loop put the radio back to simplex: no split stands any more.
     pub fn rig_split_cleared(&mut self) {
         self.split_standing = None;
+        self.split_unknown = false;
+    }
+
+    /// The radio loop's `S 0` was not confirmed (no answer, or refused): the split is UNKNOWN,
+    /// never taken as simplex and never as the split it had. The gate refuses until a write
+    /// settles it ([`Self::split_unknown`]).
+    pub fn rig_split_unknown(&mut self) {
+        self.split_standing = None;
+        self.tx_split_confirmed_hz = None;
+        self.split_unknown = true;
     }
 
     /// Set (`Some(tx_mhz)`) or clear (`None`) the DESIRED split TX dial from the operator/UI;
@@ -25229,6 +25300,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // The rig is not split. Anything we believed it had acknowledged is void.
             self.tx_split_confirmed_hz = None;
             self.split_standing = None;
+            self.split_unknown = false;
         }
     }
 
@@ -25303,6 +25375,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // identity `sat_tx_mode_for_split` checks on to an uplink the loop has not written yet,
         // while the rig still transmits on this one ([`Self::sat_uplink_word`]).
         self.sat_uplink_acked_hz = self.sat_uplink_acked_for(tx_hz);
+        self.split_unknown = false;
         self.split_standing = Some(StandingSplit {
             hz: tx_hz,
             rx,
@@ -26087,13 +26160,6 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if let Some(hz) = c.downlink_hz {
             self.steer_sat_dial(hz as f64 / 1_000_000.0);
         }
-        if let Some(hz) = c.uplink_hz {
-            // The uplink rides the SPLIT TX dial — the same mechanism a
-            // cluster "work split" uses, so the radio loop applies it through
-            // the existing one-shot rather than a second parallel path.
-            self.split_tx_mhz = Some(hz as f64 / 1_000_000.0);
-            self.split_dirty = true;
-        }
         if let Some(st) = self.sat_tune.as_mut() {
             st.sent = dop::SentTuning {
                 downlink_hz: c.downlink_hz.unwrap_or(st.sent.downlink_hz),
@@ -26101,6 +26167,25 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 at_ms: now_ms,
                 sent: true,
             };
+        }
+        if let Some(hz) = c.uplink_hz {
+            // ⛔ JUDGED WHEN IT IS ASKED, on the receiver it rides, after `sent` names it the
+            // uplink (so the gate judges it in the uplink's own word, as it will at the key).
+            // Refused, nothing is queued: the uplink the radio has stands, and the rail says why.
+            // `sent` keeps the step, as for any step the loop has not applied yet: the radio is
+            // corrected again once a step is back in privileges. In-band steps under PTT are
+            // queued exactly as before.
+            let mhz = hz as f64 / 1_000_000.0;
+            let rx = self.sat_split_rx_for(hz);
+            if self.split_tx_allowed(mhz, rx) {
+                // The uplink rides the SPLIT TX dial — the same mechanism a
+                // cluster "work split" uses, so the radio loop applies it through
+                // the existing one-shot rather than a second parallel path.
+                self.split_tx_mhz = Some(mhz);
+                self.split_dirty = true;
+            } else if let Some(b) = self.sat_binding.as_mut() {
+                b.note = Some(SPLIT_REFUSED_PRIVILEGES.to_string());
+            }
         }
         Some(c)
     }
@@ -31298,9 +31383,25 @@ contact yourself."
         om: crate::settings::OperatingMode,
         judge: impl Fn(f64) -> bool,
     ) -> bool {
-        if self.connection_tx_refusal_as(om).is_some() {
-            return false;
-        }
+        self.connection_tx_refusal_as(om).is_none() && self.licence_frequencies(judge)
+    }
+
+    /// [`Self::tx_allowed_as_for`] with the CONNECTION refusal left out: the licence's verdict
+    /// alone, every frequency term the same function. What a proposed split is judged by
+    /// ([`Self::split_tx_allowed`]): a connection that refuses Nexus's own keys still leaves a
+    /// front-panel PTT on the air, on whatever split Nexus wrote, so it can never stand in for the
+    /// licence's answer in either direction.
+    pub(crate) fn licence_allows_as_for(
+        &self,
+        om: crate::settings::OperatingMode,
+        frame: DataFrame,
+    ) -> bool {
+        self.licence_frequencies(|mhz| self.emission_in_use_allowed_as(om, mhz, frame))
+    }
+
+    /// [`Self::every_tx_frequency`]'s frequency half: does `judge` pass every frequency the next
+    /// over is emitted on, the connection aside?
+    fn licence_frequencies(&self, judge: impl Fn(f64) -> bool) -> bool {
         // The rig says split and we cannot say where it transmits — refuse rather than judge
         // the dial, which under split is an unrelated number.
         if self.tx_freq_verdict() == TxFreqVerdict::SplitUnverified {
@@ -31424,6 +31525,10 @@ contact yourself."
     pub(crate) fn tx_freq_verdict(&self) -> TxFreqVerdict {
         if let Some(hz) = self.tx_split_confirmed_hz {
             return TxFreqVerdict::Split(hz as f64 / 1e6);
+        }
+        // A split OFF the radio did not confirm: it may still be split, and nothing says where.
+        if self.split_unknown {
+            return TxFreqVerdict::SplitUnverified;
         }
         match self.observed_split {
             // The rig told us it is split. Whether that GRANTS anything depends on the opt-in,
