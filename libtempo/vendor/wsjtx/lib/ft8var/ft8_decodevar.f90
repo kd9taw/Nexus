@@ -5,6 +5,9 @@
 ! ALSO MODIFIED FOR NEXUS: JTDX's SWL mode, which WSJT-X's port left out (JTDX 2.2.159
 ! lib/ft8_decode.f90): a +/-3.5 s DT search, the low sync thresholds, subtraction on the third pass
 ! of one cycle. `lswl` is ft8var_swl's (libtempo/ft8var_swl.f90). With SWL off nothing changes.
+! ALSO MODIFIED FOR NEXUS: the period's decode list allmessages(200) and the merge into even/odd(130)
+! are bounded (libtempo/jtdx_decode_cap.f90): a decode past a full list is dropped, where upstream
+! writes past the array. Below the bound nothing changes.
 module ft8_decodevar
 
   logical ltry_a8
@@ -38,6 +41,7 @@ contains
     use ft8_a7
     use ft8var_hint, only: lhintdec
     use ft8var_swl, only: lswl
+    use jtdx_decode_cap, only: ncapft8
 
     use ft8_mod1, only : ndecodes,allmessages,allsnrs,allfreq,odd,even,nmsg,    &
          lastrxmsg,lasthcall,calldteven,calldtodd,incall,oddcopy,evencopy,      &
@@ -335,6 +339,9 @@ contains
                 endif
                 
                 if(.not.ldupe) then
+! MODIFIED FOR NEXUS: the list is full, so this decode and any after it are dropped; upstream
+! writes past allmessages(200).
+                   if(ndecodes.ge.min(size(allmessages),ncapft8)) exit
                    if(.not.lFreeText .and. k.eq.1) call extract_callvar(msg37,call2)
 !!!$omp critical(update_arrays)
                    ndecodes=ndecodes+1
@@ -483,6 +490,10 @@ contains
 
     if(nmsgloc.gt.0) then
 !$omp critical(update_structures)
+! MODIFIED FOR NEXUS: several threads each add up to 129 here; what does not fit in even/odd(130)
+! is dropped, where upstream writes past them.
+       if(levenint) nmsgloc=min(nmsgloc,size(even)-nmsg)
+       if(loddint) nmsgloc=min(nmsgloc,size(odd)-nmsg)
        if(levenint) then
           even(nmsg+1:nmsg+nmsgloc)%msg=eventmp(1:nmsgloc)%msg
           even(nmsg+1:nmsg+nmsgloc)%freq=eventmp(1:nmsgloc)%freq

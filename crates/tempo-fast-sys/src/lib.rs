@@ -1641,6 +1641,11 @@ extern "C" {
 
     /// The frequency slice each of `n` threads decodes: `lo[0..n]`, `hi[0..n]`.
     pub fn ft8var_slices(nfa: c_int, nfb: c_int, n: c_int, lo: *mut c_int, hi: *mut c_int);
+
+    /// FOR TESTS: lower the JTDX-style FT8 / FT4 decoders' per-period decode-list bound
+    /// (`libtempo/jtdx_decode_cap.f90`); a value <= 0 restores the list's size (200 / 100), which
+    /// is the bound the app always runs with. Process-global: never call it during a decode.
+    pub fn jtdx_set_decode_caps(nft8: c_int, nft4: c_int);
 }
 
 /// What [`openmp_selfcheck`] found: the OpenMP runtime libtempo links is present and runs.

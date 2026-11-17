@@ -597,6 +597,9 @@ contains
                         if(decodes(i).eq.msg) idupe=1
                      enddo
                      if(idupe.eq.1) goto 800
+! MODIFIED FOR NEXUS: a full list takes no more, like a duplicate; upstream writes past
+! decodes(100). Below the bound nothing changes.
+                     if(ndecodes.ge.size(decodes)) goto 800
                      ndecodes=ndecodes+1
                      decodes(ndecodes)=msg
 

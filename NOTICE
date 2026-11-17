@@ -305,6 +305,12 @@ cache keys moved to module scope so each radio keeps its own; `lib/ft8var/subtra
 its filter buffer on the decoding thread's stack instead of in every thread's;
 `lib/ft8var/ft8_decodevar.f90` says which decodes were not error-checked; and `ft8_decodevar.f90`,
 `sync8var.f90`, `ft8bvar.f90`, `subtractft8var.f90` and `cwfilter.f90` gain JTDX's SWL mode.
+`ft8_decodevar.f90` and `ft8bvar.f90` also bound the period's decode lists (`allmessages(200)`,
+`even`/`odd(130)`, `msgsrcvd(130)`), which upstream fills with no check against their size: a
+decode past a full list is dropped (`libtempo/jtdx_decode_cap.f90`). The same bound is kept by
+`lib/ft8/ft8_a7.f90`'s a7 table (200 entries per sequence) and, outside this decoder, by WSJT-X's
+FT4 and FST4 decoders' `decodes(100)` (`lib/ft4_decode.f90`, `lib/fst4_decode.f90`), each edit
+marked in its file.
 
 **SWL mode and FT4, from JTDX's own source.** JTDX 2.2.159, <https://github.com/jtdx-project/jtdx>
 at `master` commit `2a0e2bea8` (tag `159`, 2022-03-01):
@@ -328,7 +334,8 @@ at `master` commit `2a0e2bea8` (tag `159`, 2022-03-01):
   packer and to WSJT-X's `twkfreq1`; the false-decode checks call the `lib/ft8var` copies of
   JTDX's checks, which share the one callsign database (`ALLCALL7.TXT`); the decoder reports the
   full message and its AP type; and where a false-decode check rejects a decode, Nexus drops that
-  one decode (`cycle`), where JTDX abandons the rest of the period (`return`).
+  one decode (`cycle`), where JTDX abandons the rest of the period (`return`); and a new decode
+  with the period's `decodes(100)` list full ends the period, where JTDX writes past the array.
 
 None of these files carries a per-file copyright or licence header, like the rest of WSJT-X's
 `lib/` and like JTDX's. Nexus calls the decoders through its own wrappers (`libtempo/ft8var_cabi.f90`,
