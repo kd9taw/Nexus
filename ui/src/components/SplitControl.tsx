@@ -72,10 +72,18 @@ export function SplitControl({ snap, onSnap, onError, unavailable }: Props) {
     wasSplitOn.current = splitOn
   }, [splitOn, splitTxMhz, snap.radio.dialMhz])
 
+  // A press the licence refuses (outside the operator's privileges, past a band edge) is refused
+  // by the backend with its reason, which is shown as it is; and the readout goes back to the
+  // offset the radio really has, so it never shows a split that was not set.
   const applySplitTx = (offsetKhz: number) =>
     setSplit(snap.radio.dialMhz + offsetKhz / 1000)
       .then((s) => onSnap?.(s))
-      .catch(failed(t('phone.split.setFailed')))
+      .catch((e: unknown) => {
+        onError?.(typeof e === 'string' && e ? e : t('phone.split.setFailed'))
+        if (splitTxMhz != null) {
+          setSplitOffsetKhz(Math.round((splitTxMhz - snap.radio.dialMhz) * 1000))
+        }
+      })
 
   const toggleSplit = () =>
     splitOn

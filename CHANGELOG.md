@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Split +/- can no longer move your transmit frequency outside your license.** A press that would put the transmit frequency past a band edge or outside your privileges is now refused, with a message saying so, and the split stays where it was. Before, if you were holding PTT, the radio could be sent the out-of-privilege frequency, and Nexus unkeyed only a moment later. A split from any other source, such as a spot's "UP 5", is now also never written to the radio while you are transmitting if it would be outside your license.
 - **Split +/- on a Yaesu reaches the radio as you press it.** With split on, pressing **+** or **−** beside SPLIT could leave the radio transmitting on the old frequency until you turned split off and on again. The Hamlib version Nexus bundles can accept the new TX frequency and not send it to the radio. On the FT-991/FT-991A, FT-891, FT-710, FTDX10 and FTDX101D/MP, Nexus now sets VFO B (the Sub on the FTDX101) directly with each press. Other radios work as before.
 
 ## [1.25.0] — 2026-11-16

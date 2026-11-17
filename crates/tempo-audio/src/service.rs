@@ -51,6 +51,12 @@ mod remote_selection;
 mod selection_connection;
 use monitor_claims::{RadioClaim, RadioClaims};
 
+/// Why a split TX dial was not written into a keyed radio: it is outside the licence
+/// (the radio loop's split apply).
+const SPLIT_KEYED_OUTSIDE_PRIVILEGES: &str =
+    "Split not set while transmitting: that transmit frequency is outside your license \
+     privileges.";
+
 /// The daemon serving the rigctld protocol on a radio's TCP port: Hamlib's spawned
 /// `rigctld` (classic), or Nexus's own native CI-V daemon (`icom_native_cat` — same
 /// protocol on the same port, plus the scope waveform + transceive the Hamlib path
@@ -12980,13 +12986,31 @@ impl RadioLoop {
                             } else {
                                 SatCatBackend::Hamlib
                             };
-                            let tx_vfo =
-                                { engine_lock(engine).sat_split_tx_vfo(tx_hz, cat_backend) };
+                            // ⛔ NEVER A SPLIT OUTSIDE THE LICENCE INTO A KEYED RADIO. Under a
+                            // held PTT (or the front panel's, or a CW message the rig is
+                            // sending) this write goes out at once, and the request it serves
+                            // voided the old acknowledgement, so the key-time gate was judging
+                            // the RX dial: an out-of-privilege `I` reached the transmitting
+                            // radio and the drop came a tick later. Judged here, at the write,
+                            // whoever asked; refused like an undrivable mapping. Unkeyed, the
+                            // key-time gate judges the acknowledged split before anything keys.
+                            let keyed = self.operator_keyed()
+                                || self.manual_ptt_applied
+                                || now < self.cw_keying_until;
+                            let tx_vfo = {
+                                let eng = engine_lock(engine);
+                                if keyed && !eng.split_tx_allowed(tx_mhz) {
+                                    Err(SPLIT_KEYED_OUTSIDE_PRIVILEGES.to_string())
+                                } else {
+                                    eng.sat_split_tx_vfo(tx_hz, cat_backend)
+                                }
+                            };
                             match tx_vfo {
                                 Err(reason) => {
-                                    // The mapping itself is undrivable: nothing
-                                    // was (or will be) sent, and the desired
-                                    // state must not outlive the refusal.
+                                    // The mapping itself is undrivable, or the
+                                    // dial is outside the licence while keyed:
+                                    // nothing was (or will be) sent, and the
+                                    // desired state must not outlive the refusal.
                                     {
                                         let mut eng = engine_lock(engine);
                                         eng.split_rejected(tx_mhz);
@@ -46082,7 +46106,11 @@ mod tests {
 
     /// The loop ticks once per entry of `between`, which runs on the engine first, on ONE loop
     /// state that keeps its rig between ticks: the shape a run of split +/- presses arrives in.
-    fn split_ticks(engine: &Arc<Mutex<Engine>>, rig: Rig, between: Vec<fn(&mut Engine)>) {
+    fn split_ticks(
+        engine: &Arc<Mutex<Engine>>,
+        rig: Rig,
+        between: Vec<fn(&mut Engine, &mut RadioLoop)>,
+    ) {
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let eng = Arc::clone(engine);
         std::thread::Builder::new()
@@ -46094,7 +46122,7 @@ mod tests {
                 let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
                 let mut station = StationSinks::new();
                 for f in between {
-                    f(&mut eng.lock().unwrap());
+                    f(&mut eng.lock().unwrap(), &mut state);
                     state.last_rig_poll = -1000.0; // the heavy poll is due (at now = 0)
                     state
                         .step(
@@ -46128,10 +46156,10 @@ mod tests {
             &engine,
             Rig::rigctld(&addr),
             vec![
-                |_| {},
-                |e| e.request_split(Some(14.235)),
-                |e| e.request_split(Some(14.236)),
-                |e| {
+                |_, _| {},
+                |e, _| e.request_split(Some(14.235)),
+                |e, _| e.request_split(Some(14.236)),
+                |e, _| {
                     e.request_split(Some(14.237));
                     e.request_split(Some(14.238));
                 },
@@ -46189,6 +46217,84 @@ mod tests {
                 "model {model}"
             );
         }
+    }
+
+    /// An Extra in Phone at 14.340 USB with TX armed and PTT held, on a Hamlib stub: what the
+    /// radio loop writes for the split requests `between` makes, tick by tick, and the split the
+    /// engine is left believing. The first tick keys the radio.
+    fn keyed_split_wire(
+        between: Vec<fn(&mut Engine, &mut RadioLoop)>,
+    ) -> (Vec<String>, Option<f64>) {
+        let (addr, seen) = recording_rigctld_stub();
+        let engine = engine_on(3073);
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.license_class = tempo_app::settings::LicenseClass::Extra;
+            e.apply_settings(s);
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.340, "20m", "USB");
+            e.set_tx_enabled(true);
+            e.set_ptt(true);
+            assert!(e.manual_ptt(), "precondition: PTT is held in privileges");
+        }
+        let mut ticks: Vec<fn(&mut Engine, &mut RadioLoop)> = vec![|_, _| {}];
+        ticks.extend(between);
+        split_ticks(&engine, Rig::rigctld(&addr), ticks);
+        let wire = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|l| l.trim().to_string())
+            .filter(|l| l.starts_with("S ") || l.starts_with("I ") || l.starts_with("T "))
+            .collect();
+        let split = engine.lock().unwrap().split_tx_mhz();
+        (wire, split)
+    }
+
+    /// ⛔ A SPLIT PAST THE BAND EDGE IS NEVER WRITTEN INTO A KEYED RADIO. Under a held PTT the
+    /// loop writes a split request at once, and the new request had voided the old
+    /// acknowledgement, so the gate judged the RX dial until the rig acknowledged the new TX dial:
+    /// the out-of-band `I` went to the transmitting radio, and the PTT drop came a tick later.
+    /// A request from any source (a spot's "UP n" here, `request_split`) is checked again at
+    /// the write.
+    #[test]
+    fn a_held_ptt_never_gets_a_split_past_the_band_edge() {
+        let (wire, split) = keyed_split_wire(vec![|e, _| e.request_split(Some(14.349))]);
+        assert!(
+            wire.iter().any(|l| l == "T 1"),
+            "precondition: the radio keyed: {wire:?}"
+        );
+        assert!(
+            !wire
+                .iter()
+                .any(|l| l.starts_with("I ") || l.starts_with("S 1")),
+            "no split written into the keyed radio: {wire:?}"
+        );
+        assert_eq!(
+            split, None,
+            "the refused split is dropped, not left pending"
+        );
+    }
+
+    /// CONTROL: an in-privilege press under the same held PTT is written at once, as before.
+    #[test]
+    fn a_held_ptt_still_gets_an_in_band_split_at_once() {
+        let (wire, split) = keyed_split_wire(vec![|e, _| e.request_split(Some(14.345))]);
+        assert!(wire.iter().any(|l| l == "I 14345000"), "{wire:?}");
+        assert_eq!(split, Some(14.345));
+    }
+
+    /// During Nexus's own over the split is held, not written, whatever it is (it is written on
+    /// the first tick after, where the key-time gate judges it before anything keys again).
+    #[test]
+    fn a_nexus_keyed_over_holds_every_split_until_it_ends() {
+        let (wire, split) = keyed_split_wire(vec![|e, s| {
+            s.tx_until_ms = Some(60_000.0);
+            e.request_split(Some(14.349));
+        }]);
+        assert!(!wire.iter().any(|l| l.starts_with("I ")), "{wire:?}");
+        assert_eq!(split, Some(14.349), "held for after the over, not dropped");
     }
 
     #[test]

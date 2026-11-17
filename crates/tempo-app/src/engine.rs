@@ -199,6 +199,9 @@ mod reply_arms_tests;
 mod restore_session_tests;
 #[cfg(test)]
 mod rtty_sideband_tests;
+/// The operator's split +/- refused where it would leave the licence.
+#[cfg(test)]
+mod split_privilege_tests;
 /// "My station" profiles: switching, the log stamp, the activation's pick, the licence refusal.
 mod station_profiles;
 #[cfg(test)]
@@ -2298,6 +2301,10 @@ const CW_ARMED_NOT_CW: &str = "Not sent: this is not the CW screen.";
 const CW_ARMED_TX_OFF: &str = "Not sent: TX is off, and Enter never turns it on. Send with an \
      F-key to turn TX back on.";
 const CW_ARMED_PRIVILEGES: &str = "Not sent: this frequency is outside your license privileges.";
+/// The operator's split press that would put the transmitter outside the licence
+/// ([`Engine::request_operator_split`]).
+pub const SPLIT_REFUSED_PRIVILEGES: &str =
+    "Split not set: that transmit frequency is outside your license privileges.";
 const CW_ARMED_CW_PRIVILEGES: &str =
     "Not sent: where it would key is outside your license's CW privileges.";
 const CW_ARMED_EMPTY: &str = "Not sent: the message is empty.";
@@ -12473,6 +12480,34 @@ impl Engine {
         }
         // The rig refused: whatever we thought it acknowledged is no longer true.
         self.tx_split_confirmed_hz = None;
+    }
+
+    /// The operator's own split press (the cockpits' SPLIT and +/-): [`Self::request_split`],
+    /// except that a TX dial the licence would refuse is REFUSED here, and nothing is queued for
+    /// the radio. Clearing the split is never refused.
+    ///
+    /// ⛔ THE GATE USED TO SEE THIS PRESS ONLY AT THE NEXT KEY. Under a PTT already held, the
+    /// radio loop writes a split request at once (it must, for a satellite uplink's Doppler), and
+    /// [`Self::request_split`] voids the old acknowledgement, so until the rig acknowledged the new
+    /// dial the gate judged the RX dial: a + past the band edge reached the transmitting radio,
+    /// and the drop came a tick after the write. Refused at the press, it never gets that far;
+    /// the loop's own check ([`Self::split_tx_allowed`]) covers every other source of a split.
+    pub fn request_operator_split(&mut self, tx_mhz: Option<f64>) -> Result<(), String> {
+        if let Some(tx) = tx_mhz {
+            if !self.split_tx_allowed(tx) {
+                return Err(SPLIT_REFUSED_PRIVILEGES.to_string());
+            }
+        }
+        self.request_split(tx_mhz);
+        Ok(())
+    }
+
+    /// Would the licence let the transmitter out on split TX dial `tx_mhz`, clarifier included?
+    /// The same key-time judgement the gate makes of a split, asked of a dial not yet written:
+    /// the carrier and the carrier plus XIT, as the Remote's split admission asks it.
+    pub fn split_tx_allowed(&self, tx_mhz: f64) -> bool {
+        self.emission_in_use_allowed(tx_mhz)
+            && self.emission_in_use_allowed(tx_mhz + self.xit_offset_mhz())
     }
 
     /// Set (`Some(tx_mhz)`) or clear (`None`) the DESIRED split TX dial from the operator/UI;
