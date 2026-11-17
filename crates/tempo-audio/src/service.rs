@@ -13649,7 +13649,19 @@ impl RadioLoop {
                                 eng.cw_key_refused();
                                 eng.set_cw_keyer_error(Some(why));
                             } else {
+                                // A dead CAT link is CAT being down, not the rig saying no: the
+                                // word never reached a radio, and another keyer is not the fix.
+                                let cat_ok = self.cat_ok;
                                 eng.set_cw_keyer_error(cw_err.map(|e| {
+                                    if cat_cw_link_down(&e, cat_ok) {
+                                        return format!(
+                                            "CAT isn't connected to the radio, so CW from text \
+                                             can't be keyed. Check that no other program has the \
+                                             radio's COM port open and that the COM port in \
+                                             Settings ▸ Radio ▸ Rig & CAT matches the radio, then \
+                                             press Test CAT. ({e})"
+                                        );
+                                    }
                                     format!(
                                         "Your rig didn't accept CAT CW keying (Hamlib send_morse) \
                                          — {e}. Use the WinKeyer keyer, or the Soundcard keyer \
@@ -20886,6 +20898,25 @@ fn is_link_fault(e: &std::io::Error) -> bool {
     ) || crate::rig::cat_unreachable(e)
 }
 
+/// Did a CAT CW `send_morse` fail because the CAT LINK is down, rather than the rig refusing it?
+/// A connection refused, reset or lost (the rigctld Nexus launched has exited, so its port refuses
+/// every connect: Windows os error 10061), or any failure but a refusal while the loop already
+/// holds CAT down (`cat_ok`). A rig's own `RPRT` refusal on a live link (`ErrorKind::Other`) is
+/// the rig saying no, and keeps its own wording.
+fn cat_cw_link_down(e: &std::io::Error, cat_ok: Option<bool>) -> bool {
+    use std::io::ErrorKind::*;
+    matches!(
+        e.kind(),
+        ConnectionRefused
+            | ConnectionReset
+            | ConnectionAborted
+            | BrokenPipe
+            | NotConnected
+            | UnexpectedEof
+    ) || crate::rig::cat_unreachable(e)
+        || (cat_ok == Some(false) && e.kind() != Other)
+}
+
 /// Is `port` a typed absolute path (macOS, Linux) whose file is there right now? The presence
 /// half the enumeration cannot supply for a virtual port ([`RadioLoop::port_watch`]). A
 /// real serial device's node goes away when it is unplugged, so this cannot hold one present
@@ -24902,6 +24933,10 @@ mod tests {
              read the same: {err}"
         );
         assert!(
+            err.starts_with("Your rig didn't accept CAT CW keying (Hamlib send_morse) — "),
+            "a live link's refusal is the rig's, and says so: {err}"
+        );
+        assert!(
             err.contains("Soundcard keyer"),
             "…and the operator still gets told what to do instead: {err}"
         );
@@ -24911,6 +24946,74 @@ mod tests {
             "control: a rig that TAKES the word raises nothing — otherwise the assertion \
              above would pass on a warning that is always on"
         );
+    }
+
+    /// ⛔ A CAT KEYER WHOSE CAT LINK IS DOWN SAYS CAT IS DOWN, NOT THAT THE RIG REFUSED. The
+    /// rigctld Nexus launched has exited (it could not open the radio's COM port), so the CAT port
+    /// refuses every connection (Windows os error 10061). The send never reached a radio, so "your
+    /// rig didn't accept CAT CW keying" blamed the radio, and its advice to switch keyers sent the
+    /// operator away from the real fault: CAT. The CW screen names CAT, the COM port and Test CAT,
+    /// and offers no other keyer. A live link's refusal keeps the rig's own wording (the test
+    /// above).
+    #[test]
+    fn a_cat_keyer_on_a_dead_cat_link_says_cat_is_down_not_that_the_rig_refused() {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_cw_keyer("cat", 600.0);
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.03, "40m", "CW");
+            e.send_cw("TEST");
+        }
+        // A port nothing listens on: bound, then closed, so a connect is refused.
+        let addr = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().to_string()
+        };
+        assert_eq!(
+            std::net::TcpStream::connect(&addr)
+                .map_err(|e| e.kind())
+                .err(),
+            Some(std::io::ErrorKind::ConnectionRefused),
+            "premise: the CAT port refuses the connection"
+        );
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let _ = state.step(
+            &engine,
+            &mut backend,
+            &mut rig,
+            &sinks,
+            100.0,
+            &mut ra,
+            &mut rr,
+            &mut station,
+        );
+        let said = engine
+            .lock()
+            .unwrap()
+            .cw_keyer_error()
+            .expect("a CAT keyer that sent nothing must say so");
+        assert!(
+            said.starts_with("CAT isn't connected to the radio, so CW from text can't be keyed."),
+            "the CW screen names CAT being down: {said}"
+        );
+        for advice in ["COM port", "Settings ▸ Radio ▸ Rig & CAT", "Test CAT"] {
+            assert!(
+                said.contains(advice),
+                "the CW screen says {advice:?}: {said}"
+            );
+        }
+        for wrong in ["didn't accept", "WinKeyer", "Soundcard"] {
+            assert!(
+                !said.contains(wrong),
+                "a dead link is not the rig refusing, and another keyer is not the fix: {said}"
+            );
+        }
     }
 
     /// Every `b <word>` (Hamlib send_morse) a rig was sent: the CAT keyer's wire.

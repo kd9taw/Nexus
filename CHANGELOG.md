@@ -5,6 +5,11 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **CW by CAT says when CAT itself is down, instead of blaming the radio.** If Nexus cannot reach the radio over CAT at all (most often because another program has the radio's COM port open, or the radio's COM port number has changed), the CW screen used to say your rig didn't accept CAT CW keying and suggested another keyer, which sent you the wrong way. It now says CAT isn't connected to the radio, so CW from text can't be keyed, and asks you to check that no other program has the radio's COM port open and that the COM port in Settings ▸ Radio ▸ Rig & CAT matches the radio, then press Test CAT. A radio that really refuses CAT CW keying still gets the old message, with the radio's own answer quoted. Keying itself is unchanged.
+
 ## [1.25.0] — 2026-11-16
 
 ### Added
