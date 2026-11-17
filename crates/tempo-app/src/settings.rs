@@ -4037,6 +4037,18 @@ pub struct Settings {
     /// 0 = never, which makes the next run a full seeding fetch.
     #[serde(default)]
     pub qrz_last_sync_unix: u64,
+    /// Where a whole-book QRZ fetch in progress resumes: the `AFTERLOGID` of the next page it
+    /// has not yet merged. 0 = no whole-book fetch in progress. The whole book comes down
+    /// 250 contacts a page (#525); each page is merged and saved before this moves past it, so a
+    /// fetch cut off by a network drop or a quit picks up where it stopped instead of starting
+    /// over. A cursor of this log's: never carried by a profile, cleared with the log.
+    #[serde(default)]
+    pub qrz_fetch_after_logid: u64,
+    /// Unix seconds the whole-book fetch in progress began. It becomes
+    /// [`Self::qrz_last_sync_unix`] when the last page lands, so the deltas that follow reach
+    /// back to the start of the fetch and nothing QRZ changed while it ran is missed.
+    #[serde(default)]
+    pub qrz_fetch_started_unix: u64,
     /// ClubLog account email (NOT a callsign). The app-password lives in the OS
     /// keychain; the email (non-secret) and the api key live here.
     pub clublog_email: String,
@@ -7492,6 +7504,8 @@ impl Default for Settings {
             qrz_auto_sync: false,
             qrz_sync_hours: default_qrz_sync_hours(),
             qrz_last_sync_unix: 0,
+            qrz_fetch_after_logid: 0,
+            qrz_fetch_started_unix: 0,
             clublog_email: String::new(),
             clublog_callsign: String::new(),
             clublog_api_key: String::new(),

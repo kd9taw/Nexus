@@ -725,9 +725,90 @@ pub struct QrzFetch {
 
 /// Build the body of a QRZ Logbook **FETCH** request — pulls the operator's own logbook back
 /// down. The bare form fetches the whole book; QRZ streams it as one ADIF blob in the response
-/// `ADIF` field. Carries the API key — never log it.
+/// `ADIF` field, which a big book cannot deliver in time, so Nexus asks for the whole book by
+/// [`build_fetch_page_body`] instead. Carries the API key — never log it.
 pub fn build_fetch_body(api_key: &str) -> String {
     format!("KEY={}&ACTION=FETCH", pct(api_key.trim()))
+}
+
+/// How many records one page of a whole-book FETCH asks for: the page QRZ's Logbook API guide
+/// recommends.
+pub const FETCH_PAGE_MAX: usize = 250;
+
+/// One PAGE of the whole book (#525): at most [`FETCH_PAGE_MAX`] records whose logid
+/// (`APP_QRZLOG_LOGID`) is `after_logid` or more. The first page starts at 0; each next one at
+/// [`fetch_page_verdict`]'s answer.
+///
+/// ⭐ **Why the whole book is never asked for in one FETCH any more.** QRZ sends the answer as
+/// one ADIF blob, about 1-1.5 KB a contact, and a 35 000-contact book did not arrive inside the
+/// transport's time bound, so every first sync of a big logbook timed out. QRZ's guide says so
+/// itself ("downloading the entire book in one transaction may timeout") and gives this paging,
+/// `MAX:250,AFTERLOGID:0`, as "the easiest way".
+///
+/// The two options travel in one `OPTION`, comma-separated, as the guide's paging section and its
+/// usage note ("a comma separated list of colon separated name:value pairs") both write them.
+/// [`build_fetch_since_body`] explains why every other request sends one option alone; the
+/// paging section is the one place the guide gives a combination in full. Carries the API key —
+/// never log it.
+pub fn build_fetch_page_body(api_key: &str, after_logid: u64) -> String {
+    format!(
+        "KEY={}&ACTION=FETCH&OPTION={}",
+        pct(api_key.trim()),
+        pct(&format!("MAX:{FETCH_PAGE_MAX},AFTERLOGID:{after_logid}")),
+    )
+}
+
+/// What one page of the whole book says about the rest ([`fetch_page_verdict`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchPage {
+    /// The book ends with this page.
+    Last,
+    /// More may follow: the next page starts at this logid.
+    Next(u64),
+}
+
+/// A page that cannot be built on ([`fetch_page_verdict`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageFault {
+    /// Fewer records than QRZ said it sent: the answer was cut off.
+    CutShort,
+    /// A full page whose logids do not reach `after_logid`, or that carries none: asking for the
+    /// next page from there would bring this one back, forever.
+    NoProgress,
+}
+
+/// Whether `page`, QRZ's answer to [`build_fetch_page_body`] from `after_logid`, ends the book,
+/// and where the next page starts if not. A refusal is the caller's to tell apart first
+/// (`ok` false and not [`QrzFetch::nothing_matched`]).
+///
+/// As QRZ's guide says: a page of fewer than [`FETCH_PAGE_MAX`] records is the last, and the next
+/// page asks from one past the highest `APP_QRZLOG_LOGID` this one returned. "Nothing matched"
+/// is the last page too: a book an exact number of pages long ends with it. The guide's `COUNT`
+/// is "the number of records matching", which may be this page's or every record from
+/// `after_logid` on, so a page is whole when it holds either that many or a full page of them.
+/// A page holding MORE than a page's worth is a QRZ that ignored `MAX` and sent the rest of the
+/// book: the last page.
+pub fn fetch_page_verdict(page: &QrzFetch, after_logid: u64) -> Result<FetchPage, PageFault> {
+    if page.nothing_matched {
+        return Ok(FetchPage::Last);
+    }
+    let records = crate::logbook::parse_adif(&page.adif);
+    let said = page.count as usize;
+    if records.len() != said && records.len() != said.min(FETCH_PAGE_MAX) {
+        return Err(PageFault::CutShort);
+    }
+    if records.len() != FETCH_PAGE_MAX {
+        return Ok(FetchPage::Last);
+    }
+    records
+        .iter()
+        .filter_map(|r| crate::logbook::extra_field(r, "APP_QRZLOG_LOGID"))
+        .filter_map(|id| id.trim().parse::<u64>().ok())
+        .max()
+        .filter(|&top| top >= after_logid)
+        .and_then(|top| top.checked_add(1))
+        .map(FetchPage::Next)
+        .ok_or(PageFault::NoProgress)
 }
 
 /// A DELTA fetch: only records QRZ has touched since `since_date` (`YYYY-MM-DD`, UTC).
@@ -2064,6 +2145,88 @@ mod tests {
         // Cut at the end of a record, or inside one: fewer records than the count.
         assert!(!is_whole_fetch(&answer(3, two)));
         assert!(!is_whole_fetch(&answer(2, &two[..two.len() - 8])));
+    }
+
+    /// #525: a whole book is asked for a page at a time, as QRZ's Logbook API guide recommends
+    /// ("MAX:250,AFTERLOGID:0", options comma-separated), never as one unpaged FETCH.
+    #[test]
+    fn a_page_asks_for_250_records_from_a_logid() {
+        assert_eq!(
+            build_fetch_page_body(" abc123 ", 0),
+            "KEY=abc123&ACTION=FETCH&OPTION=MAX%3A250%2CAFTERLOGID%3A0"
+        );
+        let b = build_fetch_page_body("abc123", 130_877_826);
+        assert!(
+            b.ends_with("OPTION=MAX%3A250%2CAFTERLOGID%3A130877826"),
+            "{b}"
+        );
+        assert_eq!(b.matches("OPTION=").count(), 1, "one OPTION carrying both");
+        assert!(!b.contains("STATUS"), "must not filter to confirmed-only");
+    }
+
+    /// `n` QRZ records with logids `first`, `first + 2`, ... (QRZ's logids have gaps), as a FETCH
+    /// answer whose COUNT is `count`.
+    fn page(first: u64, n: usize, count: usize) -> QrzFetch {
+        let adif: String = (0..n as u64)
+            .map(|i| {
+                let id = (first + 2 * i).to_string();
+                format!(
+                    "&lt;CALL:4&gt;W1AW&lt;QSO_DATE:8&gt;20240101&lt;TIME_ON:4&gt;1200\
+                     &lt;APP_QRZLOG_LOGID:{}&gt;{id}&lt;eor&gt;\n",
+                    id.len()
+                )
+            })
+            .collect();
+        parse_fetch(&format!("RESULT=OK&COUNT={count}&ADIF={adif}"))
+    }
+
+    /// A full page names the next one: one past the highest logid it holds.
+    #[test]
+    fn a_full_page_names_the_next_page_after_its_highest_logid() {
+        let full = page(1_000, FETCH_PAGE_MAX, FETCH_PAGE_MAX);
+        assert_eq!(
+            fetch_page_verdict(&full, 0),
+            Ok(FetchPage::Next(1_000 + 2 * 249 + 1))
+        );
+        // QRZ's COUNT may be every record matching rather than this page's: still a full page.
+        let of_many = page(1_000, FETCH_PAGE_MAX, 34_610);
+        assert_eq!(fetch_page_verdict(&of_many, 0), Ok(FetchPage::Next(1_499)));
+    }
+
+    /// Fewer than a page's worth ends the book, as does QRZ's "nothing matched" (a book that is
+    /// an exact number of pages long ends with one).
+    #[test]
+    fn a_short_page_or_nothing_matched_ends_the_book() {
+        assert_eq!(fetch_page_verdict(&page(5, 3, 3), 5), Ok(FetchPage::Last));
+        assert_eq!(fetch_page_verdict(&page(5, 0, 0), 5), Ok(FetchPage::Last));
+        let none = parse_fetch("RESULT=FAIL&COUNT=0");
+        assert!(none.nothing_matched);
+        assert_eq!(fetch_page_verdict(&none, 77), Ok(FetchPage::Last));
+    }
+
+    /// A page with fewer records than QRZ said it sent was cut off, and a full page that does not
+    /// move past where it started would be asked for forever.
+    #[test]
+    fn a_cut_or_stuck_page_is_a_fault() {
+        assert_eq!(
+            fetch_page_verdict(&page(5, 3, 4), 5),
+            Err(PageFault::CutShort)
+        );
+        assert_eq!(
+            fetch_page_verdict(&page(5, FETCH_PAGE_MAX - 1, FETCH_PAGE_MAX), 5),
+            Err(PageFault::CutShort)
+        );
+        // Every logid below where the page started: QRZ ignored AFTERLOGID.
+        let behind = page(1, FETCH_PAGE_MAX, FETCH_PAGE_MAX);
+        assert_eq!(
+            fetch_page_verdict(&behind, 10_000),
+            Err(PageFault::NoProgress)
+        );
+        // No logid at all on a full page: nowhere to go next.
+        let rows =
+            "&lt;CALL:4&gt;W1AW&lt;QSO_DATE:8&gt;20240101&lt;eor&gt;\n".repeat(FETCH_PAGE_MAX);
+        let bare = parse_fetch(&format!("RESULT=OK&COUNT={FETCH_PAGE_MAX}&ADIF={rows}"));
+        assert_eq!(fetch_page_verdict(&bare, 0), Err(PageFault::NoProgress));
     }
 
     #[test]

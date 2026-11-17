@@ -46,6 +46,10 @@ const NEVER_IMPORT: readonly string[] = [
   'radios',
   'activeRadio',
   'qrzLastSyncUnix',
+  // Where a whole QRZ logbook download left off, and when it began: imported from a machine
+  // part-way through one, the next sync would start mid-book and never fetch the pages before.
+  'qrzFetchAfterLogid',
+  'qrzFetchStartedUnix',
   'eqslLastSync',
   // The LoTW DOWNLOAD cursor — the third of the same family, and the one that was missing.
   // A cursor means "I already have everything up to here", which is true of the machine that

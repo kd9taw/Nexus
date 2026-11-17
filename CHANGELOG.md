@@ -5,6 +5,11 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **QRZ sync works with a big logbook (#525).** The first Sync from QRZ, and Logbook ▸ Check confirmations ▸ QRZ, asked QRZ for the whole logbook in one go and gave up after 20 seconds, so a logbook of tens of thousands of contacts always timed out. Nexus now downloads it 250 contacts at a time, as QRZ recommends, and gives each part a minute. Each part is added to your log as it arrives, so if the download is interrupted, by the network or by closing Nexus, the next sync carries on where it stopped instead of starting again. Once the whole logbook is in, the automatic sync asks QRZ only for what changed since. A large logbook still takes a few minutes the first time.
+
 ## [1.25.0] — 2026-11-16
 
 ### Added

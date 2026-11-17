@@ -35749,32 +35749,44 @@ fn whole_eqsl_download(body: String) -> Result<String, String> {
     Ok(body)
 }
 
-/// QRZ's answer to the FETCH, whole or not at all: its book, every record QRZ says it sent. A
-/// check of part of the book would take a confirmation that was cut off for a misplaced one, so
-/// an answer that stops short checks nothing. A refusal is said in QRZ's own words, which may echo
-/// the request and its key: without the key ([`qrz_words_without_key`]), and screen and session
-/// only, as [`sync_qrz`] treats them.
+/// QRZ's whole book, every page of it ([`qrz_book_pages`]), or nothing at all: a check of part of
+/// the book would take a confirmation that was cut off for a misplaced one, so a page that stops
+/// short checks nothing. A refusal is said in QRZ's own words, which may echo the request and its
+/// key: without the key ([`qrz_words_without_key`]), and screen and session only, as [`sync_qrz`]
+/// treats them.
 ///
 /// An empty book checks nothing either, and says so. QRZ answers a FETCH that matched nothing with
 /// a FAIL ([`tempo_core::qrz::QrzFetch::nothing_matched`]), which is no refused key; and a check
 /// never reads "QRZ holds none of these" off a book that may be the wrong one.
-fn whole_qrz_book(answer: &str, key: &str) -> Result<String, String> {
-    let fetched = tempo_core::qrz::parse_fetch(answer);
-    if fetched.nothing_matched {
+fn whole_qrz_book(
+    key: &str,
+    post: &dyn Fn(String) -> Result<String, String>,
+) -> Result<String, String> {
+    let mut book = String::new();
+    let mut empty = true;
+    let cut_short =
+        "QRZ's logbook download stopped before its end, so nothing was checked. Try again.";
+    qrz_book_pages(key, 0, post, cut_short, &mut |page, _| {
+        empty &= page.nothing_matched;
+        book.push_str(adif_without_header(&page.adif));
+        Ok(())
+    })
+    .map_err(|f| f.message.into_string())?;
+    if empty {
         return Err(
             "QRZ's logbook for this API key holds no contacts, so nothing was checked.".to_string(),
         );
     }
-    if !fetched.ok {
-        return Err(qrz_fetch_refused(fetched.reason, key).message.into_string());
+    Ok(book)
+}
+
+/// `adif` from its first record on: whatever header a page carries is dropped, so pages can be
+/// put end to end as one book.
+fn adif_without_header(adif: &str) -> &str {
+    match adif.to_ascii_lowercase().find("<eoh>") {
+        Some(at) => &adif[at + "<eoh>".len()..],
+        None => adif,
     }
-    if !tempo_core::qrz::is_whole_fetch(&fetched) {
-        return Err(
-            "QRZ's logbook download stopped before its end, so nothing was checked. Try again."
-                .to_string(),
-        );
-    }
-    Ok(fetched.adif)
 }
 
 /// Logbook ▸ Check confirmations, LoTW: its whole confirmation history and its whole own-QSO
@@ -35831,20 +35843,17 @@ fn eqsl_check_on(
     Ok((inbox, check))
 }
 
-/// Logbook ▸ Check confirmations, QRZ: its whole book, asked for with one bare FETCH (the request
-/// Sync from QRZ sends: Nexus sends QRZ one option at a time, and paging would take two at once,
-/// which is untested) and posted by `post`, then checked against the log read with the Engine
-/// lock released ([`tempo_app::station::check_qrz_confirmations`]). The transport's time bound is
-/// Sync's. It moves no sync cursor and writes nothing. The book, which Apply merges, and the check.
+/// Logbook ▸ Check confirmations, QRZ: its whole book, asked for a page at a time as Sync from
+/// QRZ asks for it ([`whole_qrz_book`]) and posted by `post`, then checked against the log read
+/// with the Engine lock released ([`tempo_app::station::check_qrz_confirmations`]). The
+/// transport's time bound is per page. It moves no sync cursor and writes nothing. The book,
+/// which Apply merges, and the check.
 fn qrz_check_on(
     engine: &SharedEngine,
     access: &QrzAccess,
     post: &dyn Fn(String) -> Result<String, String>,
 ) -> Result<(String, tempo_app::station::ServiceCheck), String> {
-    let book = whole_qrz_book(
-        &post(tempo_core::qrz::build_fetch_body(&access.key))?,
-        &access.key,
-    )?;
+    let book = whole_qrz_book(&access.key, post)?;
     let plan = tempo_app::engine::log_plan(engine);
     let check =
         tempo_app::station::check_qrz_confirmations(&plan, &book, access.owncall.as_deref())?;
@@ -41359,6 +41368,12 @@ const QRZ_SYNC_NOT_SAVED: ConnDetail = conn_detail!(
     "the sync merged QRZ's logbook into yours, but Nexus could not confirm the result was saved \
      to disk. This session's connection log has the reason."
 );
+/// A page of QRZ's book stopped short of what QRZ said it sent, or did not move on. Nexus's own
+/// words.
+const QRZ_SYNC_CUT_SHORT: ConnDetail = conn_detail!(
+    "QRZ's logbook download stopped before its end. The pages that arrived before it are merged \
+     and kept, and the next sync carries on from where it stopped."
+);
 /// QRZ answered and refused. The class; never QRZ's wording, which is the leak.
 const QRZ_SYNC_REFUSED: ConnDetail = conn_detail!(
     "QRZ took the request and refused it — check the Logbook API key in Settings ▸ Services ▸ \
@@ -41472,13 +41487,161 @@ fn qrz_sync_answer(resp: &str, key: &str) -> Result<tempo_core::qrz::QrzFetch, Q
     }
 }
 
-/// The QRZ pull. `since_unix` = the last SUCCESSFUL automatic sync, which turns this
-/// into a MODSINCE delta; `None` fetches the whole logbook (the manual button, and the
-/// first automatic run, which seeds the high-water).
+/// What [`qrz_book_pages`] hands each page to: the page, and where the next one starts (`None`
+/// after the last).
+type QrzPageSink<'a> =
+    dyn FnMut(&tempo_core::qrz::QrzFetch, Option<u64>) -> Result<(), QrzSyncFailure> + 'a;
+
+/// Every page of QRZ's book from logid `after` to its end (#525), each posted by `post`
+/// ([`tempo_core::qrz::build_fetch_page_body`]) and handed to `page` with where the page after it
+/// starts, `None` for the last. Stops at the first failure: QRZ unreachable, QRZ refusing
+/// ([`qrz_sync_answer`]), a page cut short or one that does not move on (`cut_short` is what the
+/// operator is told then), or `page` itself.
+///
+/// The first page that answers "nothing matched" ends the book: an empty book, or one an exact
+/// number of pages long.
+fn qrz_book_pages(
+    key: &str,
+    mut after: u64,
+    post: &dyn Fn(String) -> Result<String, String>,
+    cut_short: &str,
+    page: &mut QrzPageSink<'_>,
+) -> Result<(), QrzSyncFailure> {
+    use tempo_core::qrz::FetchPage;
+    loop {
+        let resp = post(tempo_core::qrz::build_fetch_page_body(key, after)).map_err(|message| {
+            QrzSyncFailure {
+                detail: QRZ_SYNC_UNREACHABLE,
+                message: ScreenReason::new(message),
+            }
+        })?;
+        let fetched = qrz_sync_answer(&resp, key)?;
+        let next = match tempo_core::qrz::fetch_page_verdict(&fetched, after) {
+            Ok(FetchPage::Last) => None,
+            Ok(FetchPage::Next(n)) => Some(n),
+            Err(_) => {
+                return Err(QrzSyncFailure {
+                    detail: QRZ_SYNC_CUT_SHORT,
+                    message: ScreenReason::new(cut_short.to_string()),
+                })
+            }
+        };
+        page(&fetched, next)?;
+        match next {
+            Some(n) => after = n,
+            None => return Ok(()),
+        }
+    }
+}
+
+/// Merge `adif`, from QRZ, into the log. `wait` is the operator's sync: it makes the merge again
+/// when the store turns it back (another window changed a contact it read first), where the
+/// hourly one leaves that to its next run. `durable` waits for the merge to reach the disk.
+fn merge_qrz_download(
+    engine: &SharedEngine,
+    adif: &str,
+    wait: bool,
+    durable: bool,
+) -> Result<LotwSyncResult, QrzSyncFailure> {
+    // Planned with the Engine lock released and made under it (SPEC-2 v3 C19).
+    let merge = || tempo_app::logwrite::merge_qrz_report(engine, adif);
+    let (made, merged) = if wait {
+        tempo_app::logwrite::until_written(merge)
+    } else {
+        merge()
+    };
+    let (added, summary) = made.map_err(|e| QrzSyncFailure {
+        detail: QRZ_SYNC_NOT_MERGED,
+        message: ScreenReason::new(e),
+    })?;
+    if durable {
+        merged
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .map_err(|e| QrzSyncFailure {
+                detail: QRZ_SYNC_NOT_SAVED,
+                message: ScreenReason::new(durability_failed(e)),
+            })?;
+    }
+    let mut result: LotwSyncResult = summary.into();
+    result.added = added;
+    Ok(result)
+}
+
+/// `more`'s counts added to `total`'s, for a sync merged a page at a time.
+fn add_sync_counts(total: &mut LotwSyncResult, more: LotwSyncResult) {
+    total.matched += more.matched;
+    total.newly_confirmed += more.newly_confirmed;
+    total.newly_confirmed_any += more.newly_confirmed_any;
+    total.newly_credited += more.newly_credited;
+    total.newly_submitted += more.newly_submitted;
+    total.promoted += more.promoted;
+    total.added += more.added;
+    total.orphans.extend(more.orphans);
+}
+
+/// Move the whole-book fetch's resume point and save it, the narrow way
+/// ([`tempo_app::engine::Engine::set_qrz_fetch_cursor`]). `None` is the book's end: the resume
+/// point clears, and the delta high-water becomes the moment the fetch began.
+fn save_qrz_fetch_cursor(engine: &SharedEngine, next: Option<u64>, started: u64) {
+    let mut eng = engine_lock(engine);
+    match next {
+        Some(after) => eng.set_qrz_fetch_cursor(after, started),
+        None => {
+            eng.set_qrz_fetch_cursor(0, 0);
+            eng.set_qrz_sync_cursor(started);
+        }
+    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("[qrz-sync] settings save failed: {e}")
+    });
+}
+
+/// The whole book, a page at a time (#525), each page merged and on the disk before the resume
+/// point ([`Settings::qrz_fetch_after_logid`]) moves past it, so a fetch cut off part-way, by
+/// the network, QRZ or a quit, carries on from that page next time instead of starting over.
+/// A fetch begins at the resume point when there is one, else at logid 0, and when its last page
+/// lands the delta high-water becomes the moment it began ([`save_qrz_fetch_cursor`]), so the
+/// hourly sync goes on with MODSINCE deltas that miss nothing QRZ changed while it ran.
+fn sync_qrz_book(
+    engine: &SharedEngine,
+    key: &str,
+    post: &dyn Fn(String) -> Result<String, String>,
+    wait: bool,
+) -> Result<LotwSyncResult, QrzSyncFailure> {
+    let (resume, began) = {
+        let eng = engine_lock(engine);
+        let s = eng.settings();
+        (s.qrz_fetch_after_logid, s.qrz_fetch_started_unix)
+    };
+    let started = if resume > 0 && began > 0 {
+        began
+    } else {
+        now_unix().max(0) as u64
+    };
+    let mut total: Option<LotwSyncResult> = None;
+    let cut_short = "QRZ's logbook download stopped before its end. The pages that arrived \
+                     before it are merged, and the next sync carries on from there.";
+    qrz_book_pages(key, resume, post, cut_short, &mut |page, next| {
+        let merged = merge_qrz_download(engine, &page.adif, wait, true)?;
+        match total.as_mut() {
+            Some(t) => add_sync_counts(t, merged),
+            None => total = Some(merged),
+        }
+        save_qrz_fetch_cursor(engine, next, started);
+        Ok(())
+    })?;
+    // `qrz_book_pages` hands over at least one page before it returns Ok.
+    Ok(total.unwrap_or_else(|| tempo_core::reconcile::ReconcileSummary::default().into()))
+}
+
+/// The QRZ pull. `since_unix` = the last SUCCESSFUL sync, which turns this into a MODSINCE delta;
+/// `None` fetches the whole logbook (the manual button), as does a first sync, and a sync whose
+/// whole-book fetch was cut off part-way carries on with it ([`sync_qrz_book`]).
 ///
 /// The delta is what makes an hourly timer defensible: a full FETCH returns the entire
 /// logbook every run, which is fine for a button press and rude against QRZ's servers
-/// twenty-four times a day.
+/// twenty-four times a day. A delta that lands moves the high-water to the moment it was asked
+/// for.
 fn sync_qrz_since(
     engine: &SharedEngine,
     since_unix: Option<u64>,
@@ -41499,52 +41662,280 @@ fn sync_qrz_since(
                     .to_string(),
             ),
         })?;
-    // Build + send the FETCH; the body carries the key, so it's dropped right after.
-    let resp = {
-        // One day of overlap: MODSINCE is DATE granularity, so a run just after
-        // midnight UTC that asked for its own date would miss anything QRZ stamped
-        // late on the previous day. Re-reading a day is free — reconcile is idempotent.
-        let body = match tempo_core::qrz::fetch_since_date(since_unix.filter(|&t| t > 0), 1) {
-            Some(d) => tempo_core::qrz::build_fetch_since_body(&key, &d),
-            None => tempo_core::qrz::build_fetch_body(&key),
-        };
+    // The body carries the key; the transport never logs it.
+    let post = |body: String| {
         propagation::live::qrz::post_form(
             tempo_core::qrz::QRZ_LOGBOOK_URL,
             env!("CARGO_PKG_VERSION"),
             body,
         )
-        .map_err(|message| QrzSyncFailure {
+    };
+    sync_qrz_with(engine, &key, &post, since_unix, wait)
+}
+
+/// [`sync_qrz_since`] past the keychain, with QRZ reached through `post`.
+fn sync_qrz_with(
+    engine: &SharedEngine,
+    key: &str,
+    post: &dyn Fn(String) -> Result<String, String>,
+    since_unix: Option<u64>,
+    wait: bool,
+) -> Result<LotwSyncResult, QrzSyncFailure> {
+    let resuming = engine_lock(engine).settings().qrz_fetch_after_logid > 0;
+    // One day of overlap: MODSINCE is DATE granularity, so a run just after
+    // midnight UTC that asked for its own date would miss anything QRZ stamped
+    // late on the previous day. Re-reading a day is free — reconcile is idempotent.
+    let since = tempo_core::qrz::fetch_since_date(since_unix.filter(|&t| t > 0), 1);
+    let Some(date) = since.filter(|_| !resuming) else {
+        return sync_qrz_book(engine, key, post, wait);
+    };
+    let asked = now_unix().max(0) as u64;
+    let resp = post(tempo_core::qrz::build_fetch_since_body(key, &date)).map_err(|message| {
+        QrzSyncFailure {
             detail: QRZ_SYNC_UNREACHABLE,
             message: ScreenReason::new(message),
-        })?
-    };
-    let fetched = qrz_sync_answer(&resp, &key)?;
-    // Planned with the Engine lock released and made under it (SPEC-2 v3 C19).
-    let merge = || tempo_app::logwrite::merge_qrz_report(engine, &fetched.adif);
-    // The operator's sync makes it again when the store turns it back (another window changed
-    // a contact it read first); the hourly one leaves that to its next run.
-    let (made, merged) = if wait {
-        tempo_app::logwrite::until_written(merge)
-    } else {
-        merge()
-    };
-    let (added, summary) = made.map_err(|e| QrzSyncFailure {
-        detail: QRZ_SYNC_NOT_MERGED,
-        message: ScreenReason::new(e),
+        }
     })?;
-    // The operator's sync button waits for the merge to reach the disk; the hourly automatic
-    // sync does not (its next run would find the same state either way).
-    if wait {
-        merged
-            .wait(tempo_app::logstore::DURABLE_WAIT)
-            .map_err(|e| QrzSyncFailure {
-                detail: QRZ_SYNC_NOT_SAVED,
-                message: ScreenReason::new(durability_failed(e)),
-            })?;
+    let fetched = qrz_sync_answer(&resp, key)?;
+    // The operator's sync waits for the merge to reach the disk; the hourly automatic sync does
+    // not (its next run would find the same state either way).
+    let result = merge_qrz_download(engine, &fetched.adif, wait, wait)?;
+    {
+        // The NARROW mutation — never `apply_settings` for one field: its heavyweight reset
+        // (mode → Chat, TX queue cleared) evaporated an in-flight QSO once an hour with nothing
+        // on screen saying why (#54; the 1.0.5 "intermittent mode drift" field report).
+        let mut eng = engine_lock(engine);
+        eng.set_qrz_sync_cursor(asked);
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("[qrz-sync] settings save failed: {e}")
+        });
     }
-    let mut result: LotwSyncResult = summary.into();
-    result.added = added;
     Ok(result)
+}
+
+/// #525: a whole QRZ book comes down a page at a time, against a fake QRZ that serves a book by
+/// the paging options its guide documents. Nothing here reaches QRZ or reads a key.
+#[cfg(test)]
+mod qrz_paged_sync_tests {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+
+    const KEY: &str = "not-a-key";
+
+    /// A fake QRZ Logbook holding `size` contacts, logids 1000, 1003, 1006, ... (QRZ's have gaps).
+    /// A page FETCH answers with at most MAX records whose logid is AFTERLOGID or more; a MODSINCE
+    /// FETCH answers "nothing matched". `fail_at` makes that request (counted from 1) fail as a
+    /// dropped connection does. Every AFTERLOGID asked for is kept, and every body.
+    struct FakeBook {
+        size: usize,
+        fail_at: Cell<Option<usize>>,
+        asked: RefCell<Vec<u64>>,
+        posted: RefCell<Vec<String>>,
+    }
+
+    fn logid(i: usize) -> u64 {
+        1_000 + 3 * i as u64
+    }
+
+    /// Contact `i` of the book: its own call, so no two are one contact.
+    fn row(i: usize) -> String {
+        let call = format!(
+            "K{}{}{}",
+            i % 10,
+            (b'A' + (i / 10 % 26) as u8) as char,
+            (b'A' + (i / 260 % 26) as u8) as char
+        );
+        let id = logid(i).to_string();
+        format!(
+            "<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260901<TIME_ON:6>{:02}{:02}00\
+             <APP_QRZLOG_LOGID:{}>{id}<eor>\n",
+            call.len(),
+            i / 60 % 24,
+            i % 60,
+            id.len()
+        )
+    }
+
+    impl FakeBook {
+        fn of(size: usize) -> Self {
+            Self {
+                size,
+                fail_at: Cell::new(None),
+                asked: RefCell::default(),
+                posted: RefCell::default(),
+            }
+        }
+
+        fn post(&self, body: String) -> Result<String, String> {
+            self.posted.borrow_mut().push(body.clone());
+            if self.fail_at.get() == Some(self.posted.borrow().len()) {
+                return Err("QRZ: the connection was reset".into());
+            }
+            let option = body
+                .split('&')
+                .find_map(|p| p.strip_prefix("OPTION="))
+                .unwrap_or("")
+                .replace("%3A", ":")
+                .replace("%2C", ",");
+            if option.starts_with("MODSINCE:") {
+                return Ok("RESULT=FAIL&COUNT=0".into());
+            }
+            let mut max = usize::MAX;
+            let mut after = 0;
+            for opt in option.split(',') {
+                match opt.split_once(':') {
+                    Some(("MAX", n)) => max = n.parse().expect("MAX"),
+                    Some(("AFTERLOGID", n)) => after = n.parse().expect("AFTERLOGID"),
+                    _ => panic!("an option this fake does not serve: {opt}"),
+                }
+            }
+            self.asked.borrow_mut().push(after);
+            let page: Vec<String> = (0..self.size)
+                .filter(|&i| logid(i) >= after)
+                .take(max)
+                .map(row)
+                .collect();
+            if page.is_empty() {
+                return Ok("RESULT=FAIL&COUNT=0".into());
+            }
+            Ok(format!(
+                "RESULT=OK&COUNT={}&ADIF={}",
+                page.len(),
+                page.concat().replace('<', "&lt;").replace('>', "&gt;")
+            ))
+        }
+    }
+
+    fn contacts(engine: &SharedEngine) -> usize {
+        let rows = engine.lock().unwrap().log_rows();
+        let mut n = 0;
+        rows.each_record(std::time::Duration::from_secs(10), &mut |_| {
+            n += 1;
+            std::ops::ControlFlow::Continue(())
+        })
+        .expect("the store reads");
+        n
+    }
+
+    /// (resume logid, when the fetch began, the delta high-water)
+    fn cursors(engine: &SharedEngine) -> (u64, u64, u64) {
+        let eng = engine.lock().unwrap();
+        let s = eng.settings();
+        (
+            s.qrz_fetch_after_logid,
+            s.qrz_fetch_started_unix,
+            s.qrz_last_sync_unix,
+        )
+    }
+
+    fn sync(engine: &SharedEngine, qrz: &FakeBook, since: Option<u64>) -> Result<usize, String> {
+        sync_qrz_with(engine, KEY, &|b| qrz.post(b), since, true)
+            .map(|r| r.added)
+            .map_err(|f| f.message.into_string())
+    }
+
+    /// A three-page book (250 + 250 + 120) comes down whole: three FETCHes, each starting one past
+    /// the highest logid of the page before, the short third page ending it. Then the sync moves
+    /// to MODSINCE deltas.
+    #[test]
+    fn a_three_page_book_is_fetched_whole_page_by_page() {
+        let (dir, engine) = crate::durable_command_tests::engine_on_store("qrz-pages", 0);
+        let qrz = FakeBook::of(620);
+        let before = now_unix() as u64;
+        assert_eq!(sync(&engine, &qrz, None), Ok(620));
+        assert_eq!(
+            *qrz.asked.borrow(),
+            [0, logid(249) + 1, logid(499) + 1],
+            "the page boundaries"
+        );
+        for body in qrz.posted.borrow().iter() {
+            assert!(body.contains("OPTION=MAX%3A250%2CAFTERLOGID%3A"), "{body}");
+        }
+        assert_eq!(contacts(&engine), 620);
+        let (resume, began, high_water) = cursors(&engine);
+        assert_eq!((resume, began), (0, 0), "no fetch left in progress");
+        assert!(high_water >= before, "the deltas start from the fetch");
+        // The next sync is a delta, not another whole book.
+        assert_eq!(sync(&engine, &qrz, Some(high_water)), Ok(0));
+        assert_eq!(qrz.asked.borrow().len(), 3, "no page asked for again");
+        assert!(qrz.posted.borrow()[3].contains("OPTION=MODSINCE%3A"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A book an exact number of pages long ends on QRZ's "nothing matched"; one shorter than a
+    /// page is one FETCH.
+    #[test]
+    fn a_short_page_or_nothing_matched_ends_the_fetch() {
+        let (dir, engine) = crate::durable_command_tests::engine_on_store("qrz-exact", 0);
+        let qrz = FakeBook::of(500);
+        assert_eq!(sync(&engine, &qrz, None), Ok(500));
+        assert_eq!(*qrz.asked.borrow(), [0, logid(249) + 1, logid(499) + 1]);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let (dir, engine) = crate::durable_command_tests::engine_on_store("qrz-short", 0);
+        let qrz = FakeBook::of(7);
+        assert_eq!(sync(&engine, &qrz, None), Ok(7));
+        assert_eq!(*qrz.asked.borrow(), [0]);
+        assert_eq!(cursors(&engine).0, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A fetch cut off part-way keeps the pages it merged and carries on from the next one, and
+    /// the deltas that follow reach back to when the FIRST attempt began.
+    #[test]
+    fn an_interrupted_fetch_resumes_where_it_stopped() {
+        let (dir, engine) = crate::durable_command_tests::engine_on_store("qrz-resume", 0);
+        let qrz = FakeBook::of(620);
+        qrz.fail_at.set(Some(2));
+        assert!(sync(&engine, &qrz, None).is_err());
+        assert_eq!(contacts(&engine), 250, "the first page is kept");
+        let (resume, began, high_water) = cursors(&engine);
+        assert_eq!(resume, logid(249) + 1, "it resumes at the second page");
+        assert!(began > 0);
+        assert_eq!(high_water, 0, "no delta until the book is whole");
+
+        // The hourly sync's call: it carries on with the book.
+        qrz.asked.borrow_mut().clear();
+        assert_eq!(sync(&engine, &qrz, Some(0)), Ok(370));
+        assert_eq!(*qrz.asked.borrow(), [logid(249) + 1, logid(499) + 1]);
+        assert_eq!(contacts(&engine), 620);
+        assert_eq!(cursors(&engine), (0, 0, began));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A page with fewer records than QRZ says it sent (the second, cut off inside its last
+    /// record) stops the fetch where it is.
+    #[test]
+    fn a_page_cut_short_stops_the_fetch_and_keeps_its_place() {
+        let (dir, engine) = crate::durable_command_tests::engine_on_store("qrz-cut", 0);
+        let qrz = FakeBook::of(620);
+        let cut = |body: String| {
+            let answer = qrz.post(body)?;
+            Ok(if qrz.asked.borrow().len() == 2 {
+                answer[..answer.len() - 20].to_string()
+            } else {
+                answer
+            })
+        };
+        let failed =
+            sync_qrz_with(&engine, KEY, &cut, None, true).expect_err("the cut page is refused");
+        assert!(failed
+            .message
+            .on_screen()
+            .contains("stopped before its end"));
+        assert_eq!(contacts(&engine), 250);
+        assert_eq!(cursors(&engine).0, logid(249) + 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Check confirmations ▸ QRZ reads the whole book a page at a time too.
+    #[test]
+    fn the_confirmation_check_reads_every_page() {
+        let qrz = FakeBook::of(620);
+        let book = whole_qrz_book(KEY, &|b| qrz.post(b)).expect("the book");
+        assert_eq!(tempo_core::logbook::parse_adif(&book).len(), 620);
+        assert_eq!(*qrz.asked.borrow(), [0, logid(249) + 1, logid(499) + 1]);
+    }
 }
 
 // ----- QRZ.com / HamQTH.com callsign lookup (session-key XML APIs) -----------
@@ -52992,19 +53383,10 @@ fn start_on_the_logbook(
                 continue;
             }
             // HTTP off the engine lock (the lock is taken inside, around the merge).
+            // The sync moves the high-water itself: a delta to when it asked, a whole-book
+            // fetch to when it began, once its last page lands (`sync_qrz_with`).
             match sync_qrz_since(&sync_engine, Some(last), false) {
                 Ok(r) => {
-                    {
-                        // The NARROW mutation — never `apply_settings` for one field: its
-                        // heavyweight reset (mode → Chat, TX queue cleared) evaporated an
-                        // in-flight QSO once an hour with nothing on screen saying why
-                        // (#54; the 1.0.5 "intermittent mode drift" field report).
-                        let mut eng = engine_lock(&sync_engine);
-                        eng.set_qrz_sync_cursor(now);
-                        persist_settings(eng.settings().clone(), |e| {
-                            eprintln!("[qrz-sync] settings save failed: {e}")
-                        });
-                    }
                     // Quiet unless something actually changed — an hourly "0 new"
                     // line would bury the log it shares with everything else.
                     if r.added > 0 || r.newly_confirmed_any > 0 {
@@ -69676,8 +70058,8 @@ mod tests {
         );
         assert_eq!(
             *qrz.posted.borrow(),
-            ["KEY=not-a-key&ACTION=FETCH"],
-            "one bare FETCH of the whole book, and nothing else"
+            ["KEY=not-a-key&ACTION=FETCH&OPTION=MAX%3A250%2CAFTERLOGID%3A0"],
+            "the whole book's one page (it is short), and nothing else"
         );
         let asked = lotw.asked.borrow();
         assert_eq!(asked.len(), 2, "two downloads, and nothing else: {asked:?}");
@@ -76035,7 +76417,11 @@ mod secrets_toward_remote_tests {
                 .map(|f| f.message.into_string())
                 .unwrap_or_default()
         };
-        let check_refusal = |resp: &str| whole_qrz_book(resp, QRZ_KEY).err().unwrap_or_default();
+        let check_refusal = |resp: &str| {
+            whole_qrz_book(QRZ_KEY, &|_| Ok(resp.to_string()))
+                .err()
+                .unwrap_or_default()
+        };
         for (path, said) in [
             ("qrz_push_qso", &push_reason as &dyn Fn(&str) -> String),
             ("sync_qrz", &sync_refusal),

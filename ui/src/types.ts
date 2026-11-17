@@ -6448,6 +6448,10 @@ export interface Settings {
   qrzSyncHours: number
   /** Unix seconds of the last successful automatic pull; 0 = never. */
   qrzLastSyncUnix: number
+  /** The AFTERLOGID a whole QRZ logbook download in progress resumes from; 0 = none. */
+  qrzFetchAfterLogid: number
+  /** Unix seconds that download began. */
+  qrzFetchStartedUnix: number
   /** ClubLog account email (not a callsign); app-password is in the keychain. */
   clublogEmail: string
   /** ClubLog logbook callsign to upload into (empty → your callsign). */
