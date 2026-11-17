@@ -5,6 +5,11 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Linux AppImage: LoTW uploads work again on Fedora (#531).** Programs Nexus starts, TQSL among them, picked up the libraries packed inside the AppImage instead of your system's, so after Fedora's recent curl update TQSL stopped with exit 127 and an `nghttp2` symbol error. Nexus now starts outside programs with your system's own libraries and settings; the Hamlib tools packed inside the AppImage keep the AppImage's. If you set up the `env -u LD_LIBRARY_PATH` script as your TQSL path, it can stay or you can point the TQSL path back at `tqsl`. Other installs are unchanged.
+
 ## [1.25.0] — 2026-11-16
 
 ### Added
