@@ -77,7 +77,7 @@ Provenance and the marked modifications are in `NOTICE`.
 
 | File | JTDX source | Changed for Nexus |
 |---|---|---|
-| `ft4_decode_jtdx.f90` | `lib/ft4_decode.f90` | yes: renames, call sites, AP-cache module, callback (see its header) |
+| `ft4_decode_jtdx.f90` | `lib/ft4_decode.f90` | yes: renames, call sites, AP-cache module, callback, decode-list bound (see its header) |
 | `ft4_params.f90` | `lib/ft4/ft4_params.f90` | no (include-only) |
 | `getcandidates4_jtdx.f90` | `lib/ft4/getcandidates4.f90` | renamed only |
 | `ft4_baseline_jtdx.f90` | `lib/ft4/ft4_baseline.f90` | renamed only |
@@ -261,6 +261,9 @@ Eight files carry a `MODIFIED FOR NEXUS` note, and a refresh must re-apply each:
   `ft8bvar.f90`, `subtractft8var.f90` and `cwfilter.f90` gain JTDX's `swl` conditions on
   `ft8var_swl%lswl` (`libtempo/ft8var_swl.f90`, which lists them). With SWL off they decode as
   upstream.
+- `ft8_decodevar.f90` and `ft8bvar.f90` stop adding to the period's decode lists
+  (`allmessages(200)`, `even`/`odd(130)`, `msgsrcvd(130)`) once they are full, where upstream
+  writes past them (`libtempo/jtdx_decode_cap.f90`). Below the bound they decode as upstream.
 
 Nexus drives the decoder through `libtempo/ft8var_cabi.f90`, which re-expresses WSJT-X's
 `lib/decoder.f90` dispatch; `scripts/ft8var-parity.py` holds it to `jt9 -8 -M -N 1`.

@@ -25,6 +25,9 @@
 !   which Nexus marks the decodes it will not act on by itself (ft4jtdx_cabi.f90).
 ! * The ' R ' false-decode check skips the one decode it rejects, as its sibling checks do, where
 !   JTDX returns from the decoder and loses the rest of the period (see the comment there).
+! * Decode-list bound. A new decode with decodes(100) full ends the period's decoding
+!   (libtempo/jtdx_decode_cap.f90), where JTDX writes past the array. Below the bound nothing
+!   changes.
 !
 module ft4_decode_jtdx_apstate
 ! MODIFIED FOR NEXUS: the SAVEd AP codeword cache and its callsign key, hoisted out of decode
@@ -66,6 +69,7 @@ contains
     use ft4_mod1, only : nFT4decd,nfafilt,nfbfilt,lfilter,lhidetest,lhidetelemetry
     use ft8_mod1, only : sumxdtt,avexdt,mycall,hiscall
     use ft4_decode_jtdx_apstate, only : apbits,mycall0,hiscall0
+    use jtdx_decode_cap, only : ncapft4
     include 'ft4_params.f90'
     class(ft4_decoder_jtdx), intent(inout) :: this
     procedure(ft4_decode_jtdx_callback) :: callback
@@ -366,6 +370,8 @@ contains
               idupe=0
               do i=1,ndecodes; if(decodes(i).eq.message) idupe=1; enddo
               if(idupe.eq.1) exit
+! MODIFIED FOR NEXUS: the list is full, so the period ends here; JTDX writes past decodes(100).
+              if(ndecodes.ge.min(size(decodes),ncapft4)) return
               ndecodes=ndecodes+1; decodes(ndecodes)=message
               if(snr.gt.0.0) then; xsnr=10*log10(snr)-14.8; else; xsnr=-21.0; endif
               nsnr=nint(max(-21.0,xsnr))

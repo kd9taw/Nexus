@@ -1,6 +1,8 @@
 ! MODIFIED FOR NEXUS (KD9TAW, 2026): JTDX's SWL mode, which WSJT-X's port left out, carried over from
 ! JTDX 2.2.159 where JTDX has `swl` and this file does not (JTDX lib/ft8b.f90: deep sync, two weak sub-passes, the fourth metric sub-pass, no CQ/MyCall signal-level gates). `lswl` is ft8var_swl's
 ! (libtempo/ft8var_swl.f90 says what SWL changes, and where). With SWL off nothing changes.
+! ALSO MODIFIED FOR NEXUS: the period's list of received message bases, msgsrcvd(130), stops
+! growing when full, where upstream writes past it. Below the bound nothing changes.
 subroutine ft8bvar(newdat1,nQSOProgress,nfqso,nftx,napwid,lsubtract,npos,freqsub, &
      tmpcqdec,tmpmyc,nagainfil,iaptype,f1,xdt,nbadcrc,lft8sdec,msg37,msg37_2,     &
      xsnr,stophint,nthr,lFreeText,ipass,lft8subpass,lspecial,lcqcand,ncqsignal,   &
@@ -2840,8 +2842,10 @@ subroutine ft8bvar(newdat1,nQSOProgress,nfqso,nftx,napwid,lsubtract,npos,freqsub
         return
      endif
 
+! MODIFIED FOR NEXUS: `ncount.lt.size(msgsrcvd)`, so a full list stops growing; upstream writes
+! past msgsrcvd(130).
      if(.not.ldupemsg .and. i3.eq.1 .and. .not.lft8sd .and. .not.lft8s .and.    &
-          msg37(1:3).ne.'CQ ') then
+          msg37(1:3).ne.'CQ ' .and. ncount.lt.size(msgsrcvd)) then
         ispc1=index(msg37,' ')
         ispc2=index(msg37((ispc1+1):),' ')+ispc1
         ncount=ncount+1

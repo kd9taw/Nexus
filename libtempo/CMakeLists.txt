@@ -166,6 +166,7 @@ set(LIBTEMPO_SOURCES
     #     ldpc_174_91_c_reordered_parity. All compiled -fopenmp (LIBTEMPO_OPENMP_SOURCES).
     ${CMAKE_CURRENT_SOURCE_DIR}/ft8var_hint.f90
     ${CMAKE_CURRENT_SOURCE_DIR}/ft8var_swl.f90
+    ${CMAKE_CURRENT_SOURCE_DIR}/jtdx_decode_cap.f90   # the FT8/FT4 decode-list bound
     ${CMAKE_CURRENT_SOURCE_DIR}/ft8var_cabi.f90
     ${LIB}/ft8var/agccft8.f90
     ${LIB}/ft8var/baddatavar.f90
