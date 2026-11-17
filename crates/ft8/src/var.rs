@@ -450,7 +450,7 @@ pub fn decode_frame_var(
 /// report). Returns whether the callsign database is valid: without it ft8var filters nothing
 /// against it.
 pub fn var_load_callsign_db(dir: &Path) -> bool {
-    let path = dir.to_string_lossy().into_owned();
+    let path = plain_path_for_fortran(&dir.to_string_lossy()).into_owned();
     let _guard = modem_lock();
     on_decoder_thread_wait(move || {
         // SAFETY: a byte buffer and its length; the caller holds the modem lock.
@@ -471,6 +471,36 @@ pub fn var_load_callsign_db(dir: &Path) -> bool {
 /// state, so it takes no modem lock; the decoder thread runs one job at a time.
 pub fn openmp_selfcheck(requested: i32) -> tempo_fast_sys::OpenMpCheck {
     on_decoder_thread_wait(move || tempo_fast_sys::openmp_probe_on_this_thread(requested))
+}
+
+/// `path` as the Fortran side can open files under it: without a Windows verbatim prefix.
+///
+/// Tauri hands the resource folder over in verbatim form on Windows (`\\?\C:\...`). A verbatim
+/// path is passed to the file system untouched, with no `/` translated, and the decoder opens
+/// `<folder>/ALLCALL7.TXT` (WSJT-X's `cwfilter.f90`), so under one the callsign database was never
+/// found. `\\?\C:\...` becomes `C:\...` and `\\?\UNC\server\...` becomes `\\server\...`,
+/// unless the plain form with that file name would pass Windows' 260-character path limit, which a
+/// verbatim path exists to avoid; then the path is left as it is. Anything else is passed as it is.
+fn plain_path_for_fortran(path: &str) -> std::borrow::Cow<'_, str> {
+    const MAX_PATH: usize = 260;
+    const FILE: &str = "/ALLCALL7.TXT";
+    let plain: std::borrow::Cow<'_, str> = if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}").into()
+    } else if let Some(rest) = path.strip_prefix(r"\\?\") {
+        let b = rest.as_bytes();
+        if b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\' {
+            rest.into()
+        } else {
+            return path.into();
+        }
+    } else {
+        return path.into();
+    };
+    if plain.len() + FILE.len() < MAX_PATH {
+        plain
+    } else {
+        path.into()
+    }
 }
 
 /// What WSJT-X resets when the mode changes (`decoder.f90:190-196`): the average DT and the
@@ -502,8 +532,36 @@ pub fn var_slices(nfa: i32, nfb: i32, n: usize) -> Vec<(i32, i32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{marked, noise_shape, swl_noise_shape};
+    use super::{marked, noise_shape, plain_path_for_fortran, swl_noise_shape};
     use crate::Decode;
+
+    /// The app's resource folder on Windows comes as a verbatim `\\?\` path, and the decoder
+    /// opens `<folder>/ALLCALL7.TXT` with a forward slash, which a verbatim path takes literally:
+    /// every Windows launch logged the callsign database as missing. The folder reaches Fortran in
+    /// its plain form; a path that is plain already, or too long for one, is passed as it is.
+    #[test]
+    fn a_verbatim_windows_folder_reaches_the_decoder_plain() {
+        let res = r"\\?\C:\Users\op\AppData\Local\Nexus\resources\ft8var";
+        assert_eq!(
+            plain_path_for_fortran(res),
+            r"C:\Users\op\AppData\Local\Nexus\resources\ft8var"
+        );
+        assert_eq!(
+            plain_path_for_fortran(r"\\?\UNC\shack-pc\nexus\resources\ft8var"),
+            r"\\shack-pc\nexus\resources\ft8var"
+        );
+        for plain in [
+            r"C:\Program Files\Nexus\resources\ft8var",
+            r"\\shack-pc\nexus\ft8var",
+            "/usr/lib/nexus/resources/ft8var",
+            "/Applications/Nexus.app/Contents/Resources/resources/ft8var",
+        ] {
+            assert_eq!(plain_path_for_fortran(plain), plain);
+        }
+        // Too long to open without the prefix: left verbatim (no plain form of it exists).
+        let long = format!(r"\\?\C:\{}\ft8var", "d".repeat(300));
+        assert_eq!(plain_path_for_fortran(&long), long);
+    }
 
     /// SWL mode's wider search found these in fresh noise (seeds 50000+), each passing the CRC:
     /// telemetry (i3=0 n3=5, shown as up to 18 hex digits) and a nonstandard call beside an
