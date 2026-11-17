@@ -7972,6 +7972,56 @@ struct AssistanceEvent {
 const ASSISTANCE_JOURNAL_CAP: usize = 500;
 static ASSISTANCE_JOURNAL: Mutex<Vec<AssistanceEvent>> = Mutex::new(Vec::new());
 
+/// Test builds only: held by every test that runs a settings save that publishes
+/// ([`save_and_publish`] through to its end: the log level, the LoTW window, the assistance mirror
+/// and this journal, all process-wide), and by the test that asserts a refused save publishes none
+/// of them. Tests run in parallel, and one save's journal row lands in another test's count.
+#[cfg(test)]
+pub(crate) fn publishing_saves() -> std::sync::MutexGuard<'static, ()> {
+    static PUBLISHING: Mutex<()> = Mutex::new(());
+    PUBLISHING.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Every test in this file that runs a settings save, or reads the assistance journal, holds
+/// [`publishing_saves`]: a new one that forgets would make another test's count move again.
+#[test]
+fn every_test_that_saves_holds_the_publishing_lock() {
+    let src = include_str!("lib.rs");
+    let mut missing = Vec::new();
+    for test in src.split("#[test]").skip(1) {
+        let body = &test[..test
+            .find("\n    }\n")
+            .or_else(|| test.find("\n}\n"))
+            .unwrap_or(test.len())];
+        let name = body
+            .split("fn ")
+            .nth(1)
+            .and_then(|r| r.split('(').next())
+            .unwrap_or("?");
+        if name == "every_test_that_saves_holds_the_publishing_lock" {
+            continue;
+        }
+        let saves = [
+            "save_and_publish(",
+            "journal_assistance(",
+            "ASSISTANCE_JOURNAL",
+        ]
+        .iter()
+        .any(|needle| {
+            // A call, not a test that reads this file and quotes the name.
+            body.match_indices(needle)
+                .any(|(at, _)| !body[..at].ends_with('"') && !body[..at].ends_with("fn "))
+        });
+        if saves && !body.contains("publishing_saves()") {
+            missing.push(name.to_string());
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "take publishing_saves() in: {missing:?}"
+    );
+}
+
 fn assistance_journal_path() -> PathBuf {
     settings_path()
         .parent()
@@ -18975,6 +19025,7 @@ mod contest_session_tests {
     /// assistance mirror and its journal, the QTH the spot ranking reads.
     #[test]
     fn a_settings_save_refused_for_a_busy_logbook_changes_nothing() {
+        let _publishing = super::publishing_saves();
         let (dir, engine) = super::durable_command_tests::engine_on_store("save-refused", 3);
         let hold = held_up(&engine, &dir);
         assert_eq!(
@@ -19042,6 +19093,7 @@ mod contest_session_tests {
     /// the same form with the pick left alone reads nothing and meets the clash.
     #[test]
     fn a_save_that_switches_the_contest_reads_its_rows_before_anything_else() {
+        let _publishing = super::publishing_saves();
         let (dir, engine) = super::durable_command_tests::engine_on_store("save-switch", 3);
         let mut station = engine_lock(&engine).settings().clone();
         station.radios = vec![
@@ -22576,6 +22628,7 @@ mod contest_session_tests {
     /// rigctld TCP Port as 4533. Nothing the save would apply, persist or publish moves.
     #[test]
     fn a_settings_save_that_puts_a_daemon_on_a_net_rigctl_address_is_refused() {
+        let _publishing = super::publishing_saves();
         let (dir, engine) = super::durable_command_tests::engine_on_store("port-clash", 0);
         let mut station = engine_lock(&engine).settings().clone();
         station.radios = vec![
@@ -23876,6 +23929,7 @@ mod live_key_hold_tests {
     /// moves no address, or only respells it, holds nothing.
     #[test]
     fn a_save_that_moves_the_cloudlog_address_holds_its_key() {
+        let _publishing = publishing_saves();
         let engine = station();
         let mut same = engine_lock(&engine).settings().clone();
         same.cloudlog_url = format!("{SHACK_LOG}/");
@@ -23970,6 +24024,7 @@ mod live_key_hold_tests {
     /// asks nothing; one the keychain holds, or cannot answer for, waits on.
     #[test]
     fn a_wait_for_no_saved_key_is_let_go() {
+        let _publishing = publishing_saves();
         for (answer, waits) in [
             (Ok(false), false),
             (Ok(true), true),
@@ -68686,6 +68741,7 @@ mod tests {
     /// reason: it would change the call the run sends under. Idle, it goes.
     #[test]
     fn a_reset_mid_run_is_refused_with_profiles() {
+        let _publishing = crate::publishing_saves();
         let (engine, _) = station_with_a_park_profile();
         {
             let mut e = engine_lock(&engine);
@@ -68745,6 +68801,7 @@ mod tests {
     /// settings apply, which is what saving the profile the station is on still runs.
     #[test]
     fn saving_a_profile_the_station_is_not_on_keeps_the_planned_over() {
+        let _publishing = crate::publishing_saves();
         let (engine, park) = station_with_a_park_profile();
         let plan_cq = |engine: &SharedEngine, slot: u64| {
             engine_lock(engine)
@@ -68792,6 +68849,7 @@ mod tests {
     /// the form's.
     #[test]
     fn a_stale_form_save_binds_the_feeds_to_the_stations_call() {
+        let _publishing = crate::publishing_saves();
         let (engine, park) = station_with_a_park_profile();
         let stale = engine_lock(&engine).settings().clone();
         engine_lock(&engine).switch_station_profile(&park).unwrap();
