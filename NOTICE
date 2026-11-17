@@ -307,7 +307,10 @@ its filter buffer on the decoding thread's stack instead of in every thread's;
 `sync8var.f90`, `ft8bvar.f90`, `subtractft8var.f90` and `cwfilter.f90` gain JTDX's SWL mode.
 `ft8_decodevar.f90` and `ft8bvar.f90` also bound the period's decode lists (`allmessages(200)`,
 `even`/`odd(130)`, `msgsrcvd(130)`), which upstream fills with no check against their size: a
-decode past a full list is dropped (`libtempo/jtdx_decode_cap.f90`).
+decode past a full list is dropped (`libtempo/jtdx_decode_cap.f90`). The same bound is kept by
+`lib/ft8/ft8_a7.f90`'s a7 table (200 entries per sequence) and, outside this decoder, by WSJT-X's
+FT4 and FST4 decoders' `decodes(100)` (`lib/ft4_decode.f90`, `lib/fst4_decode.f90`), each edit
+marked in its file.
 
 **SWL mode and FT4, from JTDX's own source.** JTDX 2.2.159, <https://github.com/jtdx-project/jtdx>
 at `master` commit `2a0e2bea8` (tag `159`, 2022-03-01):

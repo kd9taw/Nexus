@@ -1,5 +1,6 @@
 ! MODIFIED FOR NEXUS (KD9TAW, 2026): getmsg is ADDED at the end of this module, copied unchanged
-! from WSJT-X 3.0.2 (see the note there). Nothing else in this file is changed.
+! from WSJT-X 3.0.2 (see the note there). ALSO MODIFIED FOR NEXUS: ft8_a7_save stops counting a
+! full table (see the note there). Nothing else in this file is changed.
 module ft8_a7
 
   parameter(MAXDEC=200)
@@ -43,6 +44,10 @@ subroutine ft8_a7_save(nutc,dt,f,msg)
   jseq=j
 
 ! Add this decode to current table for this sequence
+! MODIFIED FOR NEXUS: a full table takes no more and its count stays at MAXDEC. Upstream counts on
+! past MAXDEC while it skips the write, and every reader of ndec (the do loop below, the slot
+! swap) then indexes past the table. Below the bound nothing changes.
+  if(ndec(j,1).ge.MAXDEC) return
   ndec(j,1)=ndec(j,1)+1                  !Number of decodes in this sequence
   i=ndec(j,1)                            !i is index of a new table entry
   if(i.gt.MAXDEC) return                 !Prevent table overflow (indexes start at 1)

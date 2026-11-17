@@ -489,6 +489,9 @@ contains
                         if(decodes(i).eq.message) idupe=1
                      enddo
                      if(idupe.eq.1) exit
+! MODIFIED FOR NEXUS: the list is full, so the period ends here; upstream writes past
+! decodes(100). Below the bound nothing changes.
+                     if(ndecodes.ge.size(decodes)) return
                      ndecodes=ndecodes+1
                      decodes(ndecodes)=message
                      if(snr.gt.0.0) then

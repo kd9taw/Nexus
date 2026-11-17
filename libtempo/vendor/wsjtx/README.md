@@ -248,7 +248,8 @@ Eight files carry a `MODIFIED FOR NEXUS` note, and a refresh must re-apply each:
   callsign hash tables and the `pack77var`/`unpack77var` family), unchanged, between
   `BEGIN/END WSJT-X 3.0.2 *var ADDITION` markers; this copy is older and had none of it.
 - `lib/ft8/ft8_a7.f90` gains WSJT-X 3.0.2's `getmsg` (called by `ft8_a8d.f90`), unchanged,
-  between markers.
+  between markers; and `ft8_a7_save` stops counting at the table's 200 entries, where upstream
+  counts on past them and its readers then index past the table.
 - `lib/ft8var/ft8apsetvar.f90`: the SAVEd keys of its AP-mask cache move to a module,
   `ft8apsetvar_state`, so the per-radio decoder context can carry them with the masks.
 - `lib/ft8var/subtractft8var.f90`: its filter buffer `cfilt` is an ordinary local instead of
