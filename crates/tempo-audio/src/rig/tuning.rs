@@ -64,6 +64,9 @@ pub(crate) fn hamlib_mode_width(md: &str, rig_model: u32, width: i32) -> i32 {
 /// (1040), FTDX10 (1042), FTDX101MP (1044), FT-710 (1049). The FTX-1 (1051) has its own driver,
 /// which re-reads `FB` instead of trusting the cache. The FT-450 takes `FB` only for the selected
 /// VFO, and the eight-digit newcat radios were not checked, so all of those are left alone.
+///
+/// Built with the `device` feature only: its one caller is the radio loop in `service`.
+#[cfg(feature = "device")]
 pub(crate) fn newcat_split_tx_write(rig_model: u32, tx_hz: u64) -> Option<String> {
     matches!(rig_model, 1035 | 1036 | 1040 | 1042 | 1044 | 1049).then(|| format!("FB{tx_hz:09};"))
 }
