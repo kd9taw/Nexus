@@ -481,6 +481,9 @@ pub fn openmp_selfcheck(requested: i32) -> tempo_fast_sys::OpenMpCheck {
 /// found. `\\?\C:\...` becomes `C:\...` and `\\?\UNC\server\...` becomes `\\server\...`,
 /// unless the plain form with that file name would pass Windows' 260-character path limit, which a
 /// verbatim path exists to avoid; then the path is left as it is. Anything else is passed as it is.
+///
+/// ⚠️ A known limit this does not lift: the Fortran runtime opens files through the ANSI code
+/// page, so a folder whose name has characters outside it still cannot be opened.
 fn plain_path_for_fortran(path: &str) -> std::borrow::Cow<'_, str> {
     const MAX_PATH: usize = 260;
     const FILE: &str = "/ALLCALL7.TXT";
