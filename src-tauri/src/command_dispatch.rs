@@ -361,6 +361,55 @@ pub(crate) fn keep_the_shacks_credential_addresses(
     if afar.is_none() {
         return;
     }
+    keep_credential_addresses(shack, save);
+}
+
+/// ⛔ While a stream watches the station's screen (`watched`), a settings save made there, which
+/// reaches the station as the shack's own, keeps where the shack sends its stored keys and
+/// passwords as a save from afar does ([`keep_the_shacks_credential_addresses`]), whoever pressed
+/// Save: nothing on the call says whether it was the stream. The read says so beside the form
+/// ([`CREDENTIAL_ADDRESS_SETTINGS`]), which shows each read-only meanwhile. With no stream the save
+/// is taken as it came.
+pub(crate) fn keep_the_shacks_credential_addresses_while_watched(
+    shack: &tempo_app::settings::Settings,
+    save: &mut tempo_app::settings::Settings,
+    watched: bool,
+) {
+    if watched {
+        keep_credential_addresses(shack, save);
+    }
+}
+
+/// ⛔ While a stream watches the station's screen (`watched`), a settings save made there keeps
+/// each of [`SECRET_SETTINGS`] as the shack has it, as a save from afar does
+/// ([`keep_the_shacks_secret_settings`]), whether or not the form's read without them rides in the
+/// save: a crafted or older form cannot write a key of its own, nor blank the shack's. With no
+/// stream the save is taken as it came.
+pub(crate) fn keep_the_shacks_secret_settings_while_watched(
+    shack: &tempo_app::settings::Settings,
+    save: &mut tempo_app::settings::Settings,
+    watched: bool,
+) {
+    if !watched {
+        return;
+    }
+    let mut shack = shack.clone();
+    for (_, field) in SECRET_SETTINGS {
+        field(save).clone_from(field(&mut shack));
+    }
+}
+
+/// The addresses the shack sends a stored key or password to, by their names on the wire: set at
+/// the station only while a stream watches its screen
+/// ([`keep_the_shacks_credential_addresses_while_watched`]), as they are from afar.
+pub(crate) const CREDENTIAL_ADDRESS_SETTINGS: [&str; 4] =
+    ["cloudlogUrl", "fdJoinAddr", "icomLanHost", "icomLanPort"];
+
+/// [`keep_the_shacks_credential_addresses`]'s keep itself.
+fn keep_credential_addresses(
+    shack: &tempo_app::settings::Settings,
+    save: &mut tempo_app::settings::Settings,
+) {
     save.cloudlog_url = shack.cloudlog_url.clone();
     save.fd_join_addr = shack.fd_join_addr.clone();
     let edited = (!save.radios.is_empty())
@@ -384,9 +433,31 @@ pub(crate) fn keep_the_shacks_radio_icom_address(
     patch: &mut tempo_app::settings::RadioProfilePatch,
     afar: Option<&Afar>,
 ) {
-    if afar.is_none() {
-        return;
+    if afar.is_some() {
+        keep_radio_icom_address(shack, id, patch);
     }
+}
+
+/// ⛔ While a stream watches the station's screen (`watched`), one radio's edit made there keeps
+/// the Icom network address its stored password goes to, as an edit from afar does
+/// ([`keep_the_shacks_radio_icom_address`]). With no stream the patch is taken as it came.
+pub(crate) fn keep_the_shacks_radio_icom_address_while_watched(
+    shack: &tempo_app::settings::Settings,
+    id: u32,
+    patch: &mut tempo_app::settings::RadioProfilePatch,
+    watched: bool,
+) {
+    if watched {
+        keep_radio_icom_address(shack, id, patch);
+    }
+}
+
+/// [`keep_the_shacks_radio_icom_address`]'s keep itself.
+fn keep_radio_icom_address(
+    shack: &tempo_app::settings::Settings,
+    id: u32,
+    patch: &mut tempo_app::settings::RadioProfilePatch,
+) {
     if let Some(radio) = shack.radios.iter().find(|p| p.id == id) {
         patch.icom_lan_host = radio.icom_lan_host.clone();
         patch.icom_lan_port = radio.icom_lan_port;
