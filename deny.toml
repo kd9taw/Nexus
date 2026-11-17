@@ -46,6 +46,11 @@ ignore = [
     "RUSTSEC-2026-0370", # zvariant
     "RUSTSEC-2026-0371", # zbus_names
     "RUSTSEC-2026-0372", # zvariant_derive
+    # chrono: flagged unmaintained (all versions; no safe upgrade). Reached through sgp4's
+    # TLE date handling in the propagation crate (satellite passes), where it parses dates
+    # from the satellite element sets Nexus downloads. No vulnerability is named. It goes
+    # when sgp4 moves to `time` or `jiff`, or Nexus replaces sgp4's date parsing itself.
+    "RUSTSEC-2026-0543", # chrono
     # ---- A VERSION match where the vulnerable data is not present. ----
     # webpki-roots 0.26.11 (src-tauri, through tokio-tungstenite) is a semver-trick shim: its
     # whole content is `pub use parent::TLS_SERVER_ROOTS` from webpki-roots 1.x, which both
