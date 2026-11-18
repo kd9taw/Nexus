@@ -128,7 +128,17 @@ jobs:
     permissions:
       contents: read
       actions: read
+    # When this run started, for publish: an updater signature older than this run is refused, so
+    # a signed file from an earlier run of the same version (a re-pushed tag) cannot be swapped in.
+    # A job output survives "re-run failed jobs", so a re-run of publish keeps the same window.
+    outputs:
+      started: ${{ steps.start.outputs.started }}
     steps:
+      # FIRST, before anything that can wait: this job starts with the run.
+      - name: Record when this run started
+        id: start
+        run: echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -1771,6 +1781,7 @@ jobs:
         env:
           # Whether the key exists, not the key: without it nothing was signed (a fork).
           SIGNING_KEY_PRESENT: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          RUN_STARTED: ${{ needs.ci-evidence.outputs.started }}
         run: |
           set -euo pipefail
           if [ "$SIGNING_KEY_PRESENT" != true ]; then
@@ -1780,9 +1791,11 @@ jobs:
           signed=("dist/Nexus_${ver}_x64-setup.exe" "dist/Nexus_${ver}_amd64.AppImage")
           for t in dist/Nexus_"${ver}"_*.app.tar.gz; do signed+=("$t"); done
           # Each signature must also be FOR this release: this file name, this version, and made in
-          # this run (24 h covers the longest run). Otherwise an older installer swapped in with its
-          # own valid .sig would pass. See the script's header for the macOS tarball's name.
-          node scripts/verify-updater-sigs.mjs --version "$ver" --not-before "$(( $(date +%s) - 86400 ))" \
+          # this run (ci-evidence's start, less 300 s for clock skew between runners). Otherwise an
+          # older installer swapped in with its own valid .sig would pass. See the script's header
+          # for the macOS tarball's name.
+          [[ "$RUN_STARTED" =~ ^[0-9]+$ ]] || { echo "no run start time from ci-evidence"; exit 1; }
+          node scripts/verify-updater-sigs.mjs --version "$ver" --not-before "$(( RUN_STARTED - 300 ))" \
             src-tauri/tauri.conf.json "${signed[@]}"
 
       - name: Derive + cross-check the version

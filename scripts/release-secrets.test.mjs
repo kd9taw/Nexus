@@ -831,7 +831,7 @@ const now = () => Math.floor(Date.now() / 1000);
 const tauriComment = (name, ver, ts = now()) =>
   `timestamp:${ts}\tfile:${name.endsWith('.app.tar.gz') ? 'Nexus.app.tar.gz' : name}\tversion:${ver}`;
 
-function runPublishGather({ text = TEXT, legs = ['aarch64', 'x64'], key = true, tamper = null, dropSig = null, comments = {} } = {}) {
+function runPublishGather({ text = TEXT, legs = ['aarch64', 'x64'], key = true, tamper = null, dropSig = null, comments = {}, runStarted = now() - 600 } = {}) {
   const wf = readWorkflow(text);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'publish-gather-'));
   try {
@@ -862,7 +862,12 @@ function runPublishGather({ text = TEXT, legs = ['aarch64', 'x64'], key = true, 
       if (name !== dropSig) fs.writeFileSync(path.join(sigDir, `${name}.sig`), k.sign(fs.readFileSync(file), comments[name] ?? tauriComment(name, v)));
       if (name === tamper) fs.appendFileSync(file, 'replaced after signing');
     }
-    const env = { ...process.env, GITHUB_REF_NAME: `v${v}`, SIGNING_KEY_PRESENT: String(key) };
+    const env = {
+      ...process.env,
+      GITHUB_REF_NAME: `v${v}`,
+      SIGNING_KEY_PRESENT: String(key),
+      RUN_STARTED: String(runStarted),
+    };
     const missing = [];
     let status = 0;
     let stderr = '';
@@ -919,6 +924,35 @@ test('publish refuses an installer or bundle that is not the one that was signed
   }
   const unsigned = runPublishGather({ dropSig: 'Nexus_9.9.9_aarch64.app.tar.gz' });
   assert.notEqual(unsigned.status, 0, 'publish passed a macOS bundle with no signature');
+});
+
+const stepId = (s) => s?.entries.find((e) => e.path.length === 5 && e.path[4] === 'id')?.value;
+
+// The replay window is this run: ci-evidence, the first job, records when it started, and publish
+// takes that (less a margin) as the earliest a signature may have been made.
+function runStartWiring(wf) {
+  const v = [];
+  const started = wf.entries.find((e) => e.path.join('.') === 'jobs.ci-evidence.outputs.started')?.value;
+  if (started !== '${{ steps.start.outputs.started }}') v.push('ci-evidence does not output started from its start step');
+  if (stepId(wf.jobs.get('ci-evidence').steps[0]) !== 'start') v.push("the start time is not ci-evidence's first step");
+  const verify = wf.jobs.get('publish').steps.find((s) => s?.name === VERIFY_SIGS);
+  if (verify?.env.get('RUN_STARTED') !== '${{ needs.ci-evidence.outputs.started }}') v.push("publish's signature step is not handed the run start as RUN_STARTED");
+  return v;
+}
+
+test('publish is handed the time this run started, from ci-evidence', () => {
+  assert.deepEqual(runStartWiring(WF), []);
+});
+
+test('publish refuses a signature made before this run started', () => {
+  // Inside the old 24 h window but before this run's start: a signature from an earlier run of the
+  // same version (a re-pushed tag), which a re-run of publish in THIS run must never accept.
+  const exe = 'Nexus_9.9.9_x64-setup.exe';
+  const runStarted = now() - 3600;
+  const r = runPublishGather({ runStarted, comments: { [exe]: tauriComment(exe, '9.9.9', runStarted - 301) } });
+  assert.notEqual(r.status, 0, 'publish passed a signature from before this run');
+  const skew = runPublishGather({ runStarted, comments: { [exe]: tauriComment(exe, '9.9.9', runStarted - 299) } });
+  assert.equal(skew.status, 0, `publish refused a signature inside the 300 s margin: ${skew.stderr}`);
 });
 
 test('publish refuses an older installer swapped in with its own valid signature', () => {
