@@ -15,13 +15,40 @@
 // must still reach the window from inside this group. A press outside closes it, except inside a
 // popup one of the controls opened (it portals out of the group).
 //
+// WHICH WAY IT OPENS (a beta tester's report): on the side with room, RIGHTWARD FIRST. Always right-aligned
+// to the button, the group opened off the window's left edge (−441 px at 1920x1080 with the Dashboard rail)
+// whenever the header wrapped and put ⋯ at the start of its second line. On open, and on a window resize
+// while open, `placeOverflow` compares the button's box, the group's width and the cockpit's own box
+// (`main`, so the mode bar and the window's edges both bound it): rightward if it fits there, else
+// leftward, else slid back inside from its start. The sides themselves are cockpit-panes.css's
+// (`.ch-overflow-start`); this only picks one, and the one offset it writes is converted to the group's
+// own (zoomed) units from its measured box, so `--ui-zoom` needs no arithmetic here.
+//
 // ⛔ NOTHING THAT KEYS OR STOPS A TRANSMISSION MAY BE PASSED HERE. PTT, Stop TX, Tune, the TX latch,
 // Send and the macro keys live in the dock and the TX strip, outside every fold (THE STOP LINE,
 // cockpit-panes.css); split is a configuration control (SplitControl's header says why it is not a
 // stop), and REC records audio.
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 
 const MORE = '⋯'
+
+/** A horizontal extent on screen, in viewport px. */
+export interface Span {
+  left: number
+  right: number
+}
+
+/**
+ * Where the group opens, from the button's box, the group's width and the box it must stay inside (all
+ * viewport px): `start` (its left edge on the button's, opening rightward) when that fits, else `end`
+ * (its right edge on the button's, as before) when that fits, else `start` slid back by `offset` px so
+ * its far edge meets the bound's, never past the bound's start.
+ */
+export function placeOverflow(anchor: Span, panelW: number, bound: Span): { side: 'start' | 'end'; offset: number } {
+  if (anchor.left + panelW <= bound.right) return { side: 'start', offset: 0 }
+  if (anchor.right - panelW >= bound.left) return { side: 'end', offset: 0 }
+  return { side: 'start', offset: Math.max(bound.left, bound.right - panelW) - anchor.left }
+}
 
 export function HeaderOverflow({
   label,
@@ -42,6 +69,33 @@ export function HeaderOverflow({
   const button = useRef<HTMLButtonElement>(null)
   const group = useRef<HTMLDivElement>(null)
   const focusFirst = useRef(false)
+  const wrap = useRef<HTMLDivElement>(null)
+  /** The side it opens on, and the slide in the group's own CSS px (null: not yet measured, `end`). */
+  const [place, setPlace] = useState<{ side: 'start' | 'end'; offset: number } | null>(null)
+
+  useLayoutEffect(() => {
+    if (!open) return
+    const measure = () => {
+      const panel = group.current
+      const box = wrap.current
+      if (!panel || !box) return
+      const a = box.getBoundingClientRect()
+      const p = panel.getBoundingClientRect()
+      if (p.width === 0) return
+      const main = box.closest('main')?.getBoundingClientRect()
+      const bound = { left: Math.max(0, main?.left ?? 0), right: Math.min(window.innerWidth, main?.right ?? window.innerWidth) }
+      const next = placeOverflow(a, p.width, bound)
+      // The slide is written in the group's own units: its laid-out width against its width on screen.
+      const cs = getComputedStyle(panel)
+      const px = (v: string) => parseFloat(v) || 0
+      const laidOut = px(cs.width) + px(cs.paddingLeft) + px(cs.paddingRight) + px(cs.borderLeftWidth) + px(cs.borderRightWidth)
+      const offset = next.offset && laidOut > 0 ? (next.offset * laidOut) / p.width : 0
+      setPlace((old) => (old && old.side === next.side && Math.abs(old.offset - offset) < 0.5 ? old : { side: next.side, offset }))
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [open])
 
   useEffect(() => {
     if (!open) return
@@ -65,7 +119,7 @@ export function HeaderOverflow({
   }, [open])
 
   return (
-    <div className="ch-overflow">
+    <div ref={wrap} className="ch-overflow">
       <button
         ref={button}
         type="button"
@@ -100,7 +154,8 @@ export function HeaderOverflow({
         id={id}
         role="group"
         aria-label={label}
-        className={`ch-overflow-panel${open ? ' ch-overflow-open' : ''}`}
+        className={`ch-overflow-panel${open ? ' ch-overflow-open' : ''}${place?.side === 'start' ? ' ch-overflow-start' : ''}`}
+        style={place?.offset ? ({ '--ch-overflow-offset': `${place.offset}px` } as CSSProperties) : undefined}
         hidden={!open}
         onKeyDown={(e) => {
           if (e.key !== 'Escape') return

@@ -1161,7 +1161,9 @@
 }
 /* THE CW AND PHONE HEADERS' ⋯ (components/HeaderOverflow), at md and lg: memories, the rotator, split
    and REC behind one button, so the header is one row. Its group stands OUT OF FLOW under the button,
-   right-aligned to it, over the scope: opening it moves no control in the header, the TX strip or the
+   on the side with room, rightward first (HeaderOverflow `placeOverflow` picks; `.ch-overflow-start`,
+   later in this sheet, is the rightward side and its one slide, `--ch-overflow-offset`, for a group
+   that fits on neither side), over the scope: opening it moves no control in the header, the TX strip or the
    dock, and covers none of them but the scope's top edge (the strip is below the scope). Opaque, and
    over the strip's sticky level (4) and the region's dividers (3). It wraps its controls rather than
    run past the window (`--vw-eff`, never a raw vw). Hidden while closed (`display: none`, so it is out
@@ -1190,6 +1192,13 @@
 }
 .ch-overflow-open {
   display: flex;
+}
+/* …opening rightward: its start on the button's, slid back inside the cockpit where neither side fits.
+   Right-aligned to the button (the base rule) it opened off the window's left edge whenever the header
+   wrapped and put ⋯ at the start of a line. */
+.ch-overflow-start {
+  left: var(--ch-overflow-offset, 0px);
+  right: auto;
 }
 /* …and the CW speed slider, half as long where the header folds (a placement input styles.css's
    `.cw-wpm input[type='range']` reads, falling back to its stock 160 px). Its thumb is the same
